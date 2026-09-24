@@ -83,7 +83,7 @@ export function evaluate(snap, cfg, paneSince, now = Date.now(), policy = null) 
       alerts.push({
         key: 'machine:load', severity: 'warn', scope: 'all',
         title: `CPU load high: ${m.load[1]} (5 min) on ${m.cpus} cores`,
-        text: `The 5-minute load average is ${m.load[1]} on ${m.cpus} cores. Start no new worker and no full test suite until it drops. Run one full suite at a time, and limit test runners to two threads (for example vitest --maxWorkers=2).`,
+        text: `The 5-minute load average is ${m.load[1]} on ${m.cpus} cores. Start no new worker and no full test suite until it drops. Run one full suite at a time, and limit test runners to two threads (the flag for each runner is in the kit skill, section Machine load).`,
       });
     }
   }

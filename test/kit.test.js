@@ -301,7 +301,7 @@ test('worker start load warning names the load, the limit, and the actions', asy
   assert.equal(loadWarning({}), null);
   const text = loadWarning({ load: { fiveMinute: 84.2, cpus: 10, limit: 20 } });
   assert.match(text, /5-minute load is 84\.2 on 10 cores; the limit is 20/);
-  assert.match(text, /--maxWorkers=2/);
+  assert.match(text, /two runner threads/);
   assert.match(text, /full test suite/);
 });
 

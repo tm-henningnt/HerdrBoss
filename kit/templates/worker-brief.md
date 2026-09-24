@@ -78,7 +78,7 @@ Run only the scoped acceptance commands named in this brief or task contract.
 
 Do not run the full repository suite on a shared machine unless the project instructions require it.
 
-Limit the test runner to two worker threads, for example `vitest run --maxWorkers=2`. Other projects use the same machine.
+Limit the test runner to two worker threads. Other projects use the same machine. Use the form that the project instructions name. For Vitest 2 with the forks pool, use `--poolOptions.forks.maxForks=2 --poolOptions.forks.minForks=1`; `--maxWorkers=2` fails there.
 
 Record each command and its exact result.
 

@@ -87,7 +87,7 @@ export function loadWarning(rules) {
     `Warning: the machine is overloaded. The 5-minute load is ${load.fiveMinute} on ${load.cpus} cores; the limit is ${load.limit}.`,
     'The worker starts, but it competes with the running work of every project. Before you continue:',
     '  1. Wait for the load to drop below the limit if the task can wait. Check it with `uptime` or ~/.herdr-boss/bulletin.md.',
-    '  2. In the brief, tell the worker to run focused tests only, with at most two runner threads (for example `vitest run --maxWorkers=2`).',
+    '  2. In the brief, tell the worker to run focused tests only, with at most two runner threads. The flag for each runner is in the kit skill, section "Machine load".',
     '  3. Do not start a full test suite until the load is below the limit.',
   ].join('\n');
 }

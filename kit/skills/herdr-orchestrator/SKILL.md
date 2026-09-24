@@ -219,7 +219,10 @@ herdr agent prompt <orch-pane> "WORKER REPORT <name>: <done|blocked|stopped>. Re
 - All projects share one machine. A full test suite usually starts one test thread per CPU core.
 - Run at most one full suite per project at a time. Queue the next full suite until the current one ends.
 - Tell workers to run focused tests while they work. Run the full suite yourself once per integration.
-- Give every worker brief a thread limit for its test runner, for example `vitest run --maxWorkers=2`.
+- Give every worker brief a thread limit of two for its test runner. The flag depends on the runner version and the configured pool; check it in the project first.
+  - Vitest with the threads pool, or Vitest 3 and later: `vitest run --maxWorkers=2`.
+  - Vitest 2 with the forks pool: `vitest run --poolOptions.forks.maxForks=2 --poolOptions.forks.minForks=1`. `--maxWorkers=2` fails there with an unhandled error, and no tests run.
+  - Record the form that works in the project's instructions.
 - Read the machine load in the bulletin before each dispatch.
 - When the 5-minute load is more than 2 × the core count, start no new worker and no full suite.
 
