@@ -19,6 +19,14 @@ const USAGE = `herdr-boss <command>
   install               Install and start the launchd agent.
   uninstall             Stop and remove the launchd agent.
   logs                  Show the server log.
+  policy show|set FILE  Show or replace the local resource policy.
+  usage record FILE     Add measured or unmeasured project usage.
+  usage summary         Summarize project and provider usage.
+  browser request SLUG [--reserve]  Reserve or launch a persistent project browser.
+  browser list          List registered browser sessions.
+  handoff plan PANE --to KIND [--mode migrate|fresh]
+  handoff prepare PANE --to KIND [--mode migrate|fresh]
+  handoff activate ID --confirmed
   worker ...            Start, collect, or list workers.
   worktree prune        List safe worktree removals.
   ledger ...            Append or check delegated-run records.
@@ -42,6 +50,46 @@ async function main() {
   }
   const cfg = loadConfig();
   switch (cmd) {
+    case 'policy': {
+      const { loadPolicy, savePolicy } = await import('./control.js');
+      if (args[0] === 'show' && args.length === 1) console.log(JSON.stringify(loadPolicy(), null, 2));
+      else if (args[0] === 'set' && args.length === 2) {
+        const { loadModels } = await import('./kit/config.js');
+        const errors = savePolicy(JSON.parse(fs.readFileSync(args[1], 'utf8')), loadModels());
+        if (errors.length) throw new Error(errors.join('\n'));
+        console.log('Policy saved. The service will apply it on its next tick.');
+      } else throw new Error('Usage: policy show | policy set FILE');
+      break;
+    }
+    case 'usage': {
+      const { recordUsage, usageSummary } = await import('./usage.js');
+      if (args[0] === 'summary' && args.length === 1) console.log(JSON.stringify(usageSummary(), null, 2));
+      else if (args[0] === 'record' && args.length === 2) {
+        const result = recordUsage(JSON.parse(fs.readFileSync(args[1], 'utf8')));
+        if (result.errors.length) throw new Error(result.errors.join('\n'));
+        console.log(result.duplicate ? 'Usage event already recorded.' : 'Usage recorded.');
+      } else throw new Error('Usage: usage record FILE | usage summary');
+      break;
+    }
+    case 'browser': {
+      const { requestBrowser, listBrowserSessions, browserStatus } = await import('./browser-pool.js');
+      if (args[0] === 'list' && args.length === 1) console.log(JSON.stringify(await Promise.all(Object.values(listBrowserSessions()).map(browserStatus)), null, 2));
+      else if (args[0] === 'request' && args[1] && (args.length === 2 || args[2] === '--reserve')) console.log(JSON.stringify(await requestBrowser(args[1], { launch: !args.includes('--reserve') }), null, 2));
+      else throw new Error('Usage: browser request SLUG [--reserve] | browser list');
+      break;
+    }
+    case 'handoff': {
+      const { planHandoff, prepareHandoff, activateHandoff, listHandoffs } = await import('./handoff.js');
+      const [action, target] = args;
+      if (action === 'list') { console.log(JSON.stringify(listHandoffs(), null, 2)); break; }
+      if (action === 'activate') { console.log(JSON.stringify(activateHandoff(target, { confirmed: args.includes('--confirmed') }), null, 2)); break; }
+      const value = (flag, fallback) => { const i = args.indexOf(flag); return i < 0 ? fallback : args[i + 1]; };
+      const to = value('--to');
+      if (!target || !to || !['plan', 'prepare'].includes(action)) throw new Error('Usage: handoff plan|prepare PANE --to KIND [--mode migrate|fresh] [--model MODEL]');
+      const options = { mode: value('--mode', 'migrate'), model: value('--model', null), force: args.includes('--force') };
+      console.log(JSON.stringify(action === 'plan' ? planHandoff(target, to, options) : prepareHandoff(target, to, options), null, 2));
+      break;
+    }
     case 'serve': {
       const { serve } = await import('./server.js');
       serve(cfg);

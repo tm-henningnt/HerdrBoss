@@ -6,6 +6,12 @@ const $crumbs = document.getElementById('crumbs');
 
 let state = null;
 let lastRender = '';
+let models = {};
+let usage = null;
+let browserSessions = [];
+let policyDraft = null;
+let policyDirty = false;
+let saveMessage = '';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const code = (s) => esc(s).replace(/`([^`]+)`/g, '<code>$1</code>');
@@ -29,6 +35,98 @@ function clock(iso) {
   const d = new Date(iso);
   const t = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
   return d.toDateString() === new Date().toDateString() ? t : `${d.toLocaleDateString([], { weekday: 'short', day: 'numeric' })} ${t}`;
+}
+
+const clone = (x) => JSON.parse(JSON.stringify(x));
+function ensureDraft(s) {
+  if (policyDraft || !s.policy || !s.control) return;
+  policyDraft = clone(s.policy);
+  const projects = Object.values(s.control.projects);
+  if (!projects.length) return;
+  for (const slug of Object.keys(policyDraft.projects)) if (!s.control.projects[slug]) policyDraft.projects[slug].share = 0;
+  const saved = projects.map((p) => policyDraft.projects[p.slug]?.share);
+  const shares = saved.every((x) => Number.isInteger(x)) && saved.reduce((a, b) => a + b, 0) === 100
+    ? saved : projects.map((_p, i) => Math.floor(100 / projects.length) + (i < 100 % projects.length ? 1 : 0));
+  projects.forEach((p, i) => {
+    policyDraft.projects[p.slug] ||= { share: shares[i], mode: p.mode, excludedKinds: [], excludedModels: [] };
+    policyDraft.projects[p.slug].share = shares[i];
+  });
+}
+
+function rebalance(changed, value) {
+  const entries = Object.entries(policyDraft.projects).filter(([slug]) => state.control.projects[slug]);
+  const rest = entries.filter(([slug]) => slug !== changed);
+  policyDraft.projects[changed].share = Number(value);
+  if (!rest.length) { policyDraft.projects[changed].share = 100; return; }
+  const total = rest.reduce((n, [, p]) => n + p.share, 0);
+  const slots = 100 - Number(value);
+  const parts = rest.map(([slug, p]) => ({ slug, raw: slots * (total ? p.share / total : 1 / rest.length) }));
+  let left = slots;
+  for (const p of parts) { policyDraft.projects[p.slug].share = Math.floor(p.raw); left -= Math.floor(p.raw); }
+  parts.sort((a, b) => (b.raw % 1) - (a.raw % 1));
+  for (let i = 0; i < left; i++) policyDraft.projects[parts[i % parts.length].slug].share++;
+}
+
+function controlBlock(s) {
+  ensureDraft(s);
+  if (!policyDraft || !s.control) return '';
+  const d = policyDraft;
+  const projects = Object.values(s.control.projects);
+  const providerRows = Object.keys(d.providerModes).map((p) => `<label class="setting-line"><span>${esc(PROVIDERS[p] || p)} quota</span><select data-provider="${p}"><option value="managed" ${d.providerModes[p] === 'managed' ? 'selected' : ''}>Manage pace</option><option value="ignore" ${d.providerModes[p] === 'ignore' ? 'selected' : ''}>Ignore quota</option></select></label>`).join('');
+  const kindRows = Object.keys(models).map((kind) => {
+    const enabled = d.allowedKinds.includes(kind);
+    return `<div class="model-kind"><label><input type="checkbox" data-kind="${kind}" ${enabled ? 'checked' : ''}> ${esc(kind)}</label><details><summary>Models</summary><div class="model-list">${(models[kind].allowedModels || []).map((model) => `<label><input type="checkbox" data-global-model="${esc(model)}" ${!d.excludedModels.includes(model) ? 'checked' : ''}> ${esc(model)}</label>`).join('')}</div></details></div>`;
+  }).join('');
+  const projectRows = projects.map((p) => {
+    const x = d.projects[p.slug] || { share: 0, mode: 'auto', excludedKinds: [], excludedModels: [] };
+    const availableKinds = d.allowedKinds;
+    const projectModels = [...new Set(availableKinds.flatMap((k) => models[k]?.allowedModels || []))].filter((m) => !d.excludedModels.includes(m));
+    return `<div class="allocation-row" data-project-row="${esc(p.slug)}">
+      <div class="allocation-name"><b>${esc(p.label)}</b><small>${p.running}/${p.slots} working slots · ${p.idle ? 'idle' : 'active'}</small></div>
+      <input type="range" min="0" max="100" step="1" value="${x.share}" data-share="${esc(p.slug)}" aria-label="${esc(p.label)} allocation">
+      <strong class="num share-value">${x.share}%</strong>
+      <select data-mode="${esc(p.slug)}" aria-label="${esc(p.label)} activity mode">${['auto','active','idle','paused'].map((m) => `<option value="${m}" ${x.mode === m ? 'selected' : ''}>${m}</option>`).join('')}</select>
+      <details class="project-exclude"><summary>Exclude kinds / models</summary><div class="exclude-grid">${availableKinds.map((k) => `<label><input type="checkbox" data-exclude-kind="${esc(p.slug)}:${k}" ${x.excludedKinds.includes(k) ? 'checked' : ''}> ${esc(k)}</label>`).join('')}
+      ${projectModels.map((m) => `<label><input type="checkbox" data-exclude-model="${esc(p.slug)}:${esc(m)}" ${x.excludedModels.includes(m) ? 'checked' : ''}> ${esc(m)}</label>`).join('')}</div></details>
+    </div>`;
+  }).join('');
+  return `<section id="control-plane"><h2>Control plane <span class="sub">local policy · allocation is advisory, global worker cap is enforced at dispatch</span></h2>
+    <div class="panel control-shell">
+      <div class="control-grid">
+        <div><h3>Capacity &amp; handover</h3>
+          <label class="setting-line"><span>Maximum working agents</span><input type="number" min="1" max="64" value="${d.maxWorkers}" data-policy-number="maxWorkers"></label>
+          <label class="setting-line"><span>Borrow idle shares</span><input type="checkbox" data-policy-bool="borrowIdle" ${d.borrowIdle ? 'checked' : ''}></label>
+          <label class="setting-line"><span>Idle after minutes</span><input type="number" min="0" max="1440" value="${d.idleMinutes}" data-policy-number="idleMinutes"></label>
+          <label class="setting-line"><span>Orchestrator reserve %</span><input type="number" min="0" max="80" value="${d.reservePercent}" data-policy-number="reservePercent"></label>
+          <label class="setting-line"><span>Handover lead minutes</span><input type="number" min="0" max="10080" value="${d.handoffLeadMinutes}" data-policy-number="handoffLeadMinutes"></label>
+        </div><div><h3>Subscriptions</h3>${providerRows}</div>
+        <div><h3>Available harnesses &amp; models</h3><div class="model-kinds">${kindRows}</div></div>
+      </div>
+      <div class="allocations"><h3>Project shares <span class="sub">drag one slider; the rest rebalance</span></h3>${projectRows}</div>
+      <div class="control-actions"><span>${esc(saveMessage || `${s.control.runningWorkers}/${d.maxWorkers} workers active · ${policyDirty ? 'unsaved changes' : 'saved'}`)}</span><button id="save-policy" ${policyDirty ? '' : 'disabled'}>Apply policy</button></div>
+    </div></section>`;
+}
+
+function handoffBlock(s) {
+  const items = s.control?.handoffs || [];
+  if (!items.length) return '';
+  return `<section><h2>Handover candidates <span class="sub">prepare a successor before a quota runs out</span></h2><div class="grid cols-3">${items.map((h) => `<div class="panel handoff-card"><b>${esc(h.project)}</b><span class="tag">${esc(h.provider)} ${h.window.usedPercent}%</span><p>${h.target ? `Suggested: ${esc(h.target.kind)} / ${esc(h.target.model)}` : 'No available alternate model under current policy.'}</p><code>herdr-boss handoff plan ${esc(h.pane)} --to ${esc(h.target?.kind || 'codex')}</code><small>Review the plan, then run <code>handoff prepare</code>. The old pane keeps control until activation.</small></div>`).join('')}</div></section>`;
+}
+
+function projectResources(s) {
+  const projects = Object.values(s.control?.projects || {});
+  const sessions = browserSessions;
+  const summary = usage?.byProject || {};
+  return `<section><h2>Project resources <span class="sub">dedicated browsers and recorded work</span></h2><div class="grid cols-3">${projects.map((p) => {
+    const b = sessions.find((x) => x.project === p.slug);
+    const u = summary[p.slug];
+    return `<div class="panel resource-card"><b>${esc(p.label)}</b><div>Allocation <strong>${p.slots}</strong> · running <strong>${p.running}</strong>${p.idle ? ' · idle' : ''}</div>
+      <div>Browser ${b ? `<span class="mono">:${b.port}</span> · ${b.profileVerified ? 'ready' : b.reachable ? 'port conflict' : 'offline'}` : 'none'}</div>
+      <div>Runs ${u?.runs || 0} · measured tokens ${u?.measuredRuns || 0}/${u?.runs || 0}${u?.inputTokens ? ` · input ${u.inputTokens.toLocaleString()}` : ''}</div>
+      <button data-browser-request="${esc(p.slug)}">${b?.profileVerified ? 'Show browser details' : 'Request browser'}</button>
+      ${b ? `<small class="mono">http://127.0.0.1:${b.port} · ${esc(b.profile)}</small>` : ''}
+    </div>`;
+  }).join('')}</div></section>`;
 }
 
 // ---------- Overview ----------
@@ -58,7 +156,8 @@ function quotaCard(q) {
   const extras = [];
   if (q.credits?.remaining != null) extras.push(`${q.credits.remaining} credits`);
   if (q.resetCredits) extras.push(`${q.resetCredits} reset credit${q.resetCredits > 1 ? 's' : ''}`);
-  return `<div class="panel provider"><div class="provider-head"><b>${esc(name)}</b><span class="tag">${esc(extras.join(' · ') || q.plan || '')}</span></div>${wins}</div>`;
+  const trend = usage?.quotaTrend?.[q.provider] || [];
+  return `<div class="panel provider"><div class="provider-head"><b>${esc(name)}</b><span class="tag">${esc(extras.join(' · ') || q.plan || '')}</span></div>${wins}${trend.length > 1 ? `<div class="win-foot">Weekly use trend · last ${Math.min(24, Math.round(trend.length / 12))}h${spark(trend.map((x) => x.usedPercent), 100)}</div>` : ''}</div>`;
 }
 
 function spark(values, max) {
@@ -165,10 +264,13 @@ function eventsBlock(s) {
 function overview(s) {
   $crumbs.innerHTML = '';
   return [
+    controlBlock(s),
     rulesBlock(s),
+    handoffBlock(s),
     `<section><h2>Quotas <span class="sub">codexbar · ${ago(s.quotasAt)} · tick marks expected use at even pace</span></h2><div class="grid cols-3">${(s.quotas || []).map(quotaCard).join('')}</div></section>`,
     `<section class="two"><div><h2>Machine</h2>${machineCard(s)}</div><div><h2>Browsers &amp; MCP <span class="sub">owner found from the process tree</span></h2>${browsersBlock(s) || '<div class="panel empty">None running.</div>'}</div></section>`,
     projectsBlock(s),
+    projectResources(s),
     workspacesBlock(s),
     `<section><h2>Activity <span class="sub">prompts sent, processes terminated, notifications</span></h2>${eventsBlock(s)}</section>`,
     s.errors?.length ? `<div class="warnbox">${esc(s.errors.join(' · '))}</div>` : '',
@@ -214,12 +316,89 @@ function project(s, slug) {
 
 function render() {
   if (!state) return;
+  if (!policyDirty) policyDraft = null;
+  if (policyDirty && document.activeElement?.closest?.('#control-plane')) {
+    $updated.textContent = `updated ${ago(state.updatedAt)}`;
+    return;
+  }
   const m = /^\/p\/([^/]+)/.exec(location.pathname);
   const html = m ? project(state, decodeURIComponent(m[1])) : overview(state);
   if (html !== lastRender) { $app.innerHTML = html; lastRender = html; }
   $updated.textContent = `updated ${ago(state.updatedAt)}`;
   $push.textContent = state.push ? 'prompts on' : 'prompts off';
 }
+
+function updateShares() {
+  for (const [slug, p] of Object.entries(policyDraft.projects)) {
+    const row = [...document.querySelectorAll('[data-project-row]')].find((x) => x.dataset.projectRow === slug);
+    if (!row) continue;
+    row.querySelector('[data-share]').value = p.share;
+    row.querySelector('.share-value').textContent = `${p.share}%`;
+  }
+}
+
+document.addEventListener('input', (e) => {
+  if (!e.target.closest('#control-plane') || !policyDraft) return;
+  const el = e.target;
+  if (el.dataset.share) { rebalance(el.dataset.share, el.value); updateShares(); }
+  if (el.dataset.policyNumber) policyDraft[el.dataset.policyNumber] = Number(el.value);
+  policyDirty = true;
+  saveMessage = '';
+  document.getElementById('save-policy').disabled = false;
+});
+
+document.addEventListener('change', (e) => {
+  if (!e.target.closest('#control-plane') || !policyDraft) return;
+  const el = e.target;
+  const d = policyDraft;
+  if (el.dataset.policyBool) d[el.dataset.policyBool] = el.checked;
+  if (el.dataset.provider) d.providerModes[el.dataset.provider] = el.value;
+  if (el.dataset.mode) d.projects[el.dataset.mode].mode = el.value;
+  if (el.dataset.kind) {
+    d.allowedKinds = el.checked ? [...new Set([...d.allowedKinds, el.dataset.kind])] : d.allowedKinds.filter((x) => x !== el.dataset.kind);
+    if (!el.checked) for (const p of Object.values(d.projects)) p.excludedKinds = p.excludedKinds.filter((x) => x !== el.dataset.kind);
+  }
+  if (el.dataset.globalModel) {
+    const m = el.dataset.globalModel;
+    d.excludedModels = el.checked ? d.excludedModels.filter((x) => x !== m) : [...new Set([...d.excludedModels, m])];
+    if (!el.checked) for (const p of Object.values(d.projects)) p.excludedModels = p.excludedModels.filter((x) => x !== m);
+  }
+  for (const [key, attr] of [['excludeKind', 'excludedKinds'], ['excludeModel', 'excludedModels']]) if (el.dataset[key]) {
+    const [slug, value] = el.dataset[key].split(':');
+    d.projects[slug][attr] = el.checked ? [...new Set([...d.projects[slug][attr], value])] : d.projects[slug][attr].filter((x) => x !== value);
+  }
+  policyDirty = true;
+  document.getElementById('save-policy').disabled = false;
+});
+
+document.addEventListener('click', async (e) => {
+  if (e.target.id === 'save-policy' && policyDraft) {
+    e.target.disabled = true;
+    try {
+      const response = await fetch('/api/policy', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(policyDraft) });
+      const result = await response.json();
+      if (!response.ok) throw new Error((result.errors || [result.error]).join(' '));
+      policyDraft = result.policy;
+      policyDirty = false;
+      saveMessage = 'Policy saved';
+      state.policy = result.policy;
+      state.control = result.control;
+      lastRender = '';
+      render();
+    } catch (error) { saveMessage = error.message; e.target.disabled = false; e.target.previousElementSibling.textContent = saveMessage; }
+  }
+  if (e.target.dataset.browserRequest) {
+    const slug = e.target.dataset.browserRequest;
+    e.target.disabled = true;
+    try {
+      const response = await fetch('/api/browser-sessions/request', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ project: slug }) });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Browser request failed.');
+      await refreshExtras();
+      alert(`Browser for ${slug}: port ${result.port}\nProfile: ${result.profile}\n${result.profileVerified ? 'Ready' : 'Starting or needs inspection'}`);
+    } catch (error) { alert(error.message); } finally { e.target.disabled = false; }
+  }
+});
 
 document.addEventListener('click', (e) => {
   const a = e.target.closest('a[href^="/"]');
@@ -238,5 +417,15 @@ function connect() {
   es.onopen = () => $dot.classList.add('on');
   es.onerror = () => { $dot.classList.remove('on'); $updated.textContent = 'reconnecting…'; };
 }
+async function refreshExtras() {
+  const results = await Promise.allSettled(['/api/models', '/api/usage', '/api/browser-sessions'].map((url) => fetch(url).then((r) => r.json())));
+  if (results[0].status === 'fulfilled') models = results[0].value;
+  if (results[1].status === 'fulfilled') usage = results[1].value;
+  if (results[2].status === 'fulfilled') browserSessions = results[2].value;
+  lastRender = '';
+  render();
+}
 connect();
+refreshExtras();
+setInterval(refreshExtras, 30000);
 setInterval(render, 10000);

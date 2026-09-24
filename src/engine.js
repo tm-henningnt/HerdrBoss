@@ -5,6 +5,10 @@ import { DATA_DIR } from './config.js';
 import { collectHerdr, collectQuotas, collectMachine, collectProcesses, findBrowsers, run } from './collect.js';
 import { evaluate, renderBulletin, fmtDuration } from './rules.js';
 import { listProjects } from './projects.js';
+import { loadModels } from './kit/config.js';
+import { loadPolicy, deriveControl } from './control.js';
+import { recordQuotaSnapshot } from './usage.js';
+import { listBrowserSessions } from './browser-pool.js';
 
 const MEMORY_FILE = path.join(DATA_DIR, 'memory.json');
 const STATE_FILE = path.join(DATA_DIR, 'state.json');
@@ -36,6 +40,7 @@ export class Engine extends EventEmitter {
       this.events = fs.readFileSync(EVENTS_FILE, 'utf8').trim().split('\n').slice(-200).map((l) => JSON.parse(l));
     } catch {}
     this.running = false;
+    this.models = loadModels();
   }
 
   log(type, text, extra = {}) {
@@ -59,8 +64,12 @@ export class Engine extends EventEmitter {
         collectProcesses().catch((e) => { errors.push(`ps: ${e.message}`); return new Map(); }),
         refreshQuotas ? collectQuotas().catch((e) => { errors.push(`codexbar: ${e.message}`); return null; }) : null,
       ]);
-      if (quotas) { this.quotas = quotas; this.quotasAt = now; }
-      const browsers = findBrowsers(procs, herdr?.panes || [], this.cfg.sharedBrowsers);
+      if (quotas) { this.quotas = quotas; this.quotasAt = now; recordQuotaSnapshot(quotas, new Date(now).toISOString()); }
+      const managedBrowsers = Object.values(listBrowserSessions());
+      const browsers = findBrowsers(procs, herdr?.panes || [], [
+        ...this.cfg.sharedBrowsers,
+        ...managedBrowsers.map((b) => ({ port: b.port, profile: b.profile, label: `Managed browser: ${b.project}` })),
+      ]);
 
       this.trackPaneStatus(herdr, now);
       if (machine) {
@@ -75,31 +84,66 @@ export class Engine extends EventEmitter {
         machine,
         herdr,
         browsers,
+        managedBrowsers,
         errors,
       };
+      snap.projects = listProjects();
+      const policy = loadPolicy();
+      const control = deriveControl(snap, policy, this.models, this.memory.paneSince, now);
+      snap.policy = policy;
+      snap.control = control;
       if (this.act) await this.reap(browsers);
-      const evaluation = evaluate(snap, this.cfg, this.memory.paneSince, now);
+      const evaluation = evaluate(snap, this.cfg, this.memory.paneSince, now, policy);
+      for (const h of control.handoffs) {
+        const p = control.projects[h.project];
+        evaluation.alerts.push({
+          key: `handoff:${h.workspace}:${h.provider}:${h.window.resetsAt}`,
+          severity: h.window.usedPercent >= 98 ? 'critical' : 'warn',
+          scope: p.slug === 'herdrboss' ? 'user' : h.workspace,
+          suppressPrompt: h.window.usedPercent >= 98,
+          title: `Prepare ${h.project} orchestrator handover`,
+          text: `${h.provider} is at ${h.window.usedPercent}% in its ${h.window.label} window. Prepare a ${h.target ? `${h.target.kind} (${h.target.model})` : 'different-provider'} successor before the orchestrator runs out. Use herdr-boss handoff plan ${h.pane} --to ${h.target?.kind || 'codex'}, then handoff prepare after review. Keep the current orchestrator until the successor is ready.`,
+        });
+      }
+      for (const p of Object.values(control.projects)) if (p.running > p.slots && !p.idle) evaluation.alerts.push({
+        key: `allocation:${p.workspace}:${p.slots}`, severity: 'info', scope: p.workspace,
+        title: `${p.label} uses ${p.running}/${p.slots} worker slots`,
+        text: `${p.label} has ${p.running} working agents; its current allocation is ${p.slots}. Let current work finish, then delay new workers until within allocation.`,
+      });
+      for (const b of managedBrowsers) {
+        if (!b.launchedAt || now - Date.parse(b.launchedAt) < 120000) continue;
+        if (browsers.some((x) => x.kind === 'automation-chrome' && x.port === String(b.port) && x.profile === b.profile)) continue;
+        const p = control.projects[b.project];
+        evaluation.alerts.push({
+          key: `browser:managed-down:${b.project}:${b.port}`, severity: 'warn', scope: p?.workspace || 'user',
+          title: `${b.project} browser is offline`,
+          text: `The recorded browser for ${b.project} on port ${b.port} is offline. Request it again with herdr-boss browser request ${b.project} before browser work.`,
+        });
+      }
       snap.alerts = evaluation.alerts;
       snap.advice = evaluation.advice;
       const quotaAlerts = evaluation.alerts.filter((alert) => alert.key.startsWith('quota:'));
       const criticalProviders = new Set(quotaAlerts.filter((alert) => alert.severity === 'critical').map((alert) => alert.key.split(':')[1]));
       const limitedProviders = new Set(quotaAlerts.map((alert) => alert.key.split(':')[1]));
-      const avoidKinds = [...new Set([...criticalProviders].flatMap((provider) => this.cfg.providerKinds[provider] || []))];
-      const preferredKinds = [...new Set(Object.entries(this.cfg.providerKinds)
-        .filter(([provider]) => !limitedProviders.has(provider))
-        .flatMap(([, kinds]) => kinds))];
+      const avoidKinds = [...new Set([...criticalProviders].filter((provider) => provider === 'codex' || provider === 'claude'))];
+      const preferredKinds = Object.keys(control.globalAllowed).filter((kind) => control.globalAllowed[kind].some((model) => {
+        const provider = kind === 'codex' || kind === 'claude' ? kind : model.startsWith('opencode-go/') ? 'opencodego' : null;
+        return !provider || !limitedProviders.has(provider);
+      }));
       writeJson(path.join(DATA_DIR, 'rules.json'), {
         updatedAt: snap.updatedAt,
         avoidKinds,
+        avoidProviders: Object.keys(control.pressures).filter((provider) => control.pressures[provider] || control.risks[provider]),
         preferredKinds,
         memFreePercent: machine?.memFreePercent ?? null,
         notes: evaluation.advice,
+        policy,
+        control: { runningWorkers: control.runningWorkers, maxWorkers: control.maxWorkers, projects: control.projects },
       });
       snap.paneSince = this.memory.paneSince;
       snap.history = this.memory.history || [];
       snap.push = this.push;
       if (this.act) await this.deliver(evaluation.alerts, herdr, now);
-      snap.projects = listProjects();
       snap.events = this.events.slice(-60);
 
       this.state = snap;
@@ -155,6 +199,7 @@ export class Engine extends EventEmitter {
     if (this.push) {
       const perPane = new Map();
       for (const a of alerts) {
+        if (a.suppressPrompt || a.scope === 'user') continue;
         const targets = a.scope === 'all' ? orchs : orchs.filter((o) => o.workspace === a.scope);
         for (const o of targets) {
           const rec = this.memory.pushes[`${a.key}@${o.id}`];

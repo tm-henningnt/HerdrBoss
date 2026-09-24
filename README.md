@@ -119,7 +119,19 @@ Put overrides in `~/.herdr-boss/config.json`. Restart the service after a change
 
 Orchestrators do not build their own dashboards. They publish a status file, and Herdr Boss renders it at `/p/<slug>`. See [docs/project-status.md](docs/project-status.md).
 
-Copy [docs/orchestrator-instructions.md](docs/orchestrator-instructions.md) into the CLAUDE.md or AGENTS.md file of each project that has an orchestrator.
+Use [docs/orchestrator-instructions.md](docs/orchestrator-instructions.md) to add the shared orchestrator instructions to each project's CLAUDE.md or AGENTS.md.
+
+## Local resource control
+
+The dashboard has a Control plane section. Set the global working-agent cap, available harnesses and models, provider quota modes, project shares, and per-project exclusions there. Sliders rebalance the other open projects so the shares total 100%. Idle projects lend their shares when borrowing is enabled. `auto` means no worker is working and the orchestrator has been idle for the configured interval. `paused` is an explicit stop. The project share is advisory; `worker start` enforces the global cap and disabled models. `--force` can override quota and capacity warnings but cannot enable a globally disabled model.
+
+The policy lives in `~/.herdr-boss/policy.json`. Use `herdr-boss policy show` or `herdr-boss policy set <file>` without the dashboard. Provider modes are `managed` and `ignore`. `ignore` skips pacing and handover alerts for that provider.
+
+When an orchestrator's quota is near its reserve or will run out within the handover lead time, Herdr Boss shows a successor recommendation and sends a notice while the source quota can still serve it. Use `herdr-boss handoff plan <pane> --to codex`. Then use `handoff prepare` to start a successor in a separate tab. Review the successor's report. Use `handoff activate <id> --confirmed` to move the `orch` or `boss` label. The old pane stays as standby. `--mode migrate` uses [session-migrate](https://github.com/xhluca/session-migrate) when a native session can be converted; `--mode fresh` bootstraps from project files and the source pane. Migration moves conversation history. It does not move credentials, hooks, or runtime configuration.
+
+Each project can request a persistent Chrome profile with `herdr-boss browser request <slug>`. Herdr Boss assigns a port from 9223–9299 and records the profile in `~/.herdr-boss/browser-sessions.json`. `browser list` shows the port and verifies the profile. Use `--reserve` to allocate without launching Chrome. Port 9222 remains the protected legacy shared browser.
+
+`worker collect --record` adds one project usage event with the worker's model, provider, duration, outcome, gate, and optional measured tokens. Orchestrators can add measured events with `herdr-boss usage record <file>`. `herdr-boss usage summary` and the dashboard show coverage separately from token totals. CodexBar quota percentages are stored in `~/.herdr-boss/quota-history.jsonl`. These measurements help evaluate allocation rules without pretending that global quota percentages are exact project token counts.
 
 ## HTTP API
 
@@ -127,10 +139,14 @@ Copy [docs/orchestrator-instructions.md](docs/orchestrator-instructions.md) into
 |---|---|
 | `GET /api/state` | The current snapshot. |
 | `GET /api/events` | Server-sent events. Each snapshot is an event named `state`. |
+| `GET /api/policy`, `PUT /api/policy` | Read or replace the local resource policy. |
+| `GET /api/models` | Harness and model allow-list for the controls. |
+| `GET /api/usage`, `POST /api/usage` | Read usage summaries or record a project event. |
+| `GET /api/browser-sessions`, `POST /api/browser-sessions/request` | Inspect or request a dedicated browser. |
 | `POST /api/tick` | Collect now and return the snapshot. |
 | `GET /api/projects` | All project status files. |
 | `PUT /api/projects/<slug>` | Validate and write a project status file. |
 | `DELETE /api/projects/<slug>` | Delete a project status file. |
 | `GET /bulletin.md` | The current bulletin. |
 
-The server listens on 127.0.0.1 only.
+The server listens on 127.0.0.1 only. To use it from another device, put Tailscale Serve in front of the local listener; the server accepts same-origin requests addressed to a `.ts.net` host.

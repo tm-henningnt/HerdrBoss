@@ -20,7 +20,7 @@ export function fmtTime(iso) {
 }
 
 // alert: { key, severity: info|warn|critical, scope: 'all' | <workspace id> | 'user', title, text }
-export function evaluate(snap, cfg, paneSince, now = Date.now()) {
+export function evaluate(snap, cfg, paneSince, now = Date.now(), policy = null) {
   const alerts = [];
   const advice = [];
   const avoidKinds = new Set();
@@ -28,18 +28,20 @@ export function evaluate(snap, cfg, paneSince, now = Date.now()) {
   // ----- Quotas -----
   for (const q of snap.quotas || []) {
     if (q.error) continue;
+    if (policy?.providerModes?.[q.provider] === 'ignore') continue;
     const name = providerName(q.provider);
     for (const w of q.windows) {
       if (w.extra) continue;
       const reset = fmtTime(w.resetsAt);
-      const kinds = cfg.providerKinds[q.provider] || [];
+      const kinds = q.provider === 'opencodego' ? [] : cfg.providerKinds[q.provider] || [];
+      const lane = q.provider === 'opencodego' ? 'OpenCode Go models' : `${kinds.join('/') || name} agents`;
       if (w.usedPercent >= cfg.quota.criticalPercent) {
         kinds.forEach((k) => avoidKinds.add(k));
         alerts.push({
           key: `quota:${q.provider}:${w.key}:critical:${w.resetsAt}`,
           severity: 'critical', scope: 'all',
           title: `${name} ${w.label.toLowerCase()} quota at ${w.usedPercent}%`,
-          text: `${name} ${w.label.toLowerCase()} quota is at ${w.usedPercent}% and resets ${reset}. Do not start new ${kinds.join('/') || name} agents before then. Send new work to another provider.`,
+          text: `${name} ${w.label.toLowerCase()} quota is at ${w.usedPercent}% and resets ${reset}. Do not start new ${lane} before then. Send new work to another provider.`,
         });
       } else if (w.usedPercent >= cfg.quota.warnPercent) {
         alerts.push({
@@ -155,6 +157,10 @@ export function renderBulletin(snap, evaluation, cfg) {
     L.push(`- Memory: ${m.memFreePercent}% free of ${m.memTotalGB} GB; swap used ${m.swapUsedMB} MB`);
     const ab = (snap.browsers || []).filter((b) => b.kind === 'automation-chrome').length;
     L.push(`- Automation browsers: ${ab}`);
+  }
+  if (snap.control) {
+    L.push('', '## Worker allocation', '', `- ${snap.control.runningWorkers}/${snap.control.maxWorkers} working agents globally.`);
+    for (const p of Object.values(snap.control.projects)) L.push(`- ${p.label}: ${p.running}/${p.slots} slots (${Math.round(p.share)}% share${p.idle ? ', idle' : ''}). Allowed kinds: ${Object.keys(snap.control.globalAllowed).filter((k) => !p.excludedKinds.includes(k)).join(', ') || 'none'}.`);
   }
   const info = evaluation.alerts.filter((a) => a.severity === 'info');
   if (info.length) { L.push('', '## Notices', ''); info.forEach((a) => L.push(`- [${a.scope}] ${a.text}`)); }

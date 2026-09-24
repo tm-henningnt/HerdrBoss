@@ -47,6 +47,8 @@ description: Use when coordinating delegated workers with Herdr Boss, writing wo
 
 - Read [the model lanes](../../models.md) before selecting a kind or model.
 - Read `~/.herdr-boss/bulletin.md` before each new dispatch.
+- Follow the current global worker cap and your project's share in the bulletin.
+- Use `--force` only for an authorized quota or capacity override. It cannot enable globally disabled kinds or models.
 - Obey the bulletin's preferred and avoided kinds.
 - Use `herdr-boss models` to inspect the configured model options.
 - Treat `kit/models.json` as the source of truth for the machine allow-list.
@@ -231,6 +233,9 @@ herdr agent prompt <orch-pane> "WORKER REPORT <name>: <done|blocked|stopped>. Re
 ## Run ledger and evidence tiers
 
 - Record every delegated run in the configured run ledger.
+- Use `herdr-boss worker collect <name> --record` to add a project usage event when the review is complete.
+- Record measured token counts in `.worker/report.json` under `usage` when the harness provides them.
+- Leave unknown token counts as `null`; do not estimate them from CodexBar percentages.
 - Record failed, timed-out, abandoned, and successful runs.
 - Record issue, model, surface, worktree, times, outcome, tool activity, changed paths, gate, defects, rework, and evidence tier.
 - Append a run with `herdr-boss ledger append --entry <file>`.
@@ -249,6 +254,10 @@ herdr agent prompt <orch-pane> "WORKER REPORT <name>: <done|blocked|stopped>. Re
 - Do not reply to the notice.
 - Do not start work that the bulletin marks as avoided unless you use an allowed override.
 - Publish project status through Herdr Boss.
+- Request a dedicated persistent browser with `herdr-boss browser request <project-slug>` before browser work.
+- Use the returned port and profile for that project. Do not stop another project's browser.
+- When your harness quota threatens the orchestrator, run `herdr-boss handoff plan <your-pane> --to <kind>`.
+- Use `handoff prepare` to start a successor. Review its output before `handoff activate <id> --confirmed`.
 - Use `herdr-boss publish <slug> <file>` for a validated status file.
 - Follow `docs/project-status.md` for the status schema.
 - Update status at session start, worker completion, blockage, human gate, and session end.

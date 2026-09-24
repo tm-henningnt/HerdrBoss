@@ -5,6 +5,10 @@ import { fileURLToPath } from 'node:url';
 import { Engine } from './engine.js';
 import { PROJECTS_DIR, DATA_DIR } from './config.js';
 import { writeProject, listProjects } from './projects.js';
+import { loadModels } from './kit/config.js';
+import { loadPolicy, savePolicy } from './control.js';
+import { recordUsage, usageSummary } from './usage.js';
+import { requestBrowser, listBrowserSessions, browserStatus } from './browser-pool.js';
 
 const PUBLIC = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const DOCS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'docs');
@@ -22,6 +26,20 @@ function readBody(req, limit = 1024 * 1024) {
     req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
     req.on('error', reject);
   });
+}
+
+function allowedRequest(req) {
+  const host = req.headers.host || '';
+  const hostname = host.replace(/:\d+$/, '').toLowerCase();
+  if (!['localhost', '127.0.0.1', '[::1]'].includes(hostname) && !hostname.endsWith('.ts.net')) return false;
+  const origin = req.headers.origin;
+  if (origin && new URL(origin).host.toLowerCase() !== host.toLowerCase()) return false;
+  return req.headers['sec-fetch-site'] !== 'cross-site';
+}
+
+async function jsonBody(req) {
+  if (!req.headers['content-type']?.startsWith('application/json')) throw new Error('Content-Type must be application/json.');
+  return JSON.parse(await readBody(req));
 }
 
 export function serve(cfg) {
@@ -49,7 +67,30 @@ export function serve(cfg) {
     const url = new URL(req.url, 'http://x');
     const p = url.pathname;
     try {
+      if (!allowedRequest(req)) return send(res, 403, { error: 'This local control plane requires a local or Tailscale host and a same-origin request.' });
       if (p === '/api/state') return send(res, 200, engine.state || {});
+      if (p === '/api/models' && req.method === 'GET') return send(res, 200, loadModels().kinds);
+      if (p === '/api/policy' && req.method === 'GET') return send(res, 200, loadPolicy());
+      if (p === '/api/policy' && req.method === 'PUT') {
+        const errors = savePolicy(await jsonBody(req), loadModels());
+        if (errors.length) return send(res, 400, { ok: false, errors });
+        const state = await engine.tick();
+        return send(res, 200, { ok: true, policy: loadPolicy(), control: state.control });
+      }
+      if (p === '/api/usage' && req.method === 'GET') return send(res, 200, usageSummary());
+      if (p === '/api/usage' && req.method === 'POST') {
+        const result = recordUsage(await jsonBody(req));
+        return send(res, result.errors.length ? 400 : 200, { ok: !result.errors.length, ...result });
+      }
+      if (p === '/api/browser-sessions' && req.method === 'GET') {
+        const sessions = await Promise.all(Object.values(listBrowserSessions()).map(browserStatus));
+        return send(res, 200, sessions);
+      }
+      if (p === '/api/browser-sessions/request' && req.method === 'POST') {
+        const body = await jsonBody(req);
+        if (!engine.state?.control?.projects?.[body.project]) return send(res, 400, { error: 'Unknown open project.' });
+        return send(res, 200, await requestBrowser(body.project, { launch: body.launch !== false }));
+      }
       if (p === '/api/events') {
         res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' });
         res.write(`retry: 3000\n\n`);
@@ -64,7 +105,7 @@ export function serve(cfg) {
       const pm = /^\/api\/projects\/([^/]+)$/.exec(p);
       if (pm && (req.method === 'PUT' || req.method === 'POST')) {
         let data;
-        try { data = JSON.parse(await readBody(req)); } catch (e) { return send(res, 400, { ok: false, errors: [`invalid JSON: ${e.message}`] }); }
+        try { data = await jsonBody(req); } catch (e) { return send(res, 400, { ok: false, errors: [`invalid JSON: ${e.message}`] }); }
         const errors = writeProject(pm[1], data);
         return send(res, errors.length ? 400 : 200, { ok: !errors.length, errors });
       }
@@ -83,7 +124,7 @@ export function serve(cfg) {
       if (req.method === 'GET' && !p.startsWith('/api/')) return send(res, 200, fs.readFileSync(path.join(PUBLIC, 'index.html')), TYPES['.html']);
       send(res, 404, { error: 'not found' });
     } catch (e) {
-      send(res, 500, { error: e.message });
+      send(res, e instanceof SyntaxError || e.message.includes('Content-Type') ? 400 : 500, { error: e.message });
     }
   });
 

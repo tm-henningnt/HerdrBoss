@@ -179,6 +179,43 @@ h2 .sub { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(
   .board { grid-template-columns: repeat(5, 78vw); }
 }
 
+/* Resource control plane */
+.control-shell { display: grid; gap: 16px; }
+.control-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; }
+.control-shell h3 { margin: 0 0 10px; font-size: 13px; letter-spacing: .02em; }
+.setting-line { display: flex; justify-content: space-between; align-items: center; gap: 12px; min-height: 33px; font-size: 12.5px; color: var(--muted); }
+.setting-line input[type="number"] { width: 76px; }
+.setting-line select { min-width: 120px; }
+.control-shell input[type="number"], .control-shell select { background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 5px; padding: 5px 7px; font: 12px var(--mono); }
+.control-shell input[type="checkbox"], .control-shell input[type="range"] { accent-color: var(--accent); }
+.model-kinds { display: grid; gap: 5px; }
+.model-kind { display: flex; gap: 12px; align-items: baseline; font-size: 12.5px; }
+.model-kind details { color: var(--muted); }
+.model-kind summary { cursor: pointer; }
+.model-list { display: grid; gap: 3px; padding: 6px 0; max-width: 270px; }
+.model-list label, .exclude-grid label { font: 11px var(--mono); overflow-wrap: anywhere; }
+.allocations { border-top: 1px solid var(--line); padding-top: 14px; }
+.allocation-row { display: grid; grid-template-columns: minmax(160px, 1.1fr) minmax(130px, 2fr) 48px 96px minmax(150px, 1fr); gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.allocation-name { display: grid; }
+.allocation-name b { font-size: 12.5px; }
+.allocation-name small { color: var(--faint); font-size: 11px; }
+.share-value { text-align: right; }
+.project-exclude summary { cursor: pointer; font-size: 11.5px; color: var(--muted); }
+.exclude-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; padding: 8px 0; max-height: 180px; overflow: auto; }
+.control-actions { display: flex; justify-content: flex-end; align-items: center; gap: 12px; font-size: 12px; color: var(--muted); }
+button { border: 1px solid var(--accent); border-radius: 6px; background: var(--accent); color: #fff; padding: 7px 11px; font: 600 12px var(--sans); cursor: pointer; }
+button:hover { filter: brightness(1.08); } button:disabled { opacity: .5; cursor: default; }
+.handoff-card { display: grid; gap: 6px; align-content: start; }
+.handoff-card p { margin: 0; color: var(--muted); }
+.handoff-card code { font: 11px var(--mono); overflow-wrap: anywhere; }
+.handoff-card small { color: var(--faint); }
+.resource-card { display: grid; gap: 6px; align-content: start; font-size: 12px; }
+.resource-card b { font-size: 14px; }
+.resource-card button { justify-self: start; margin-top: 4px; }
+.resource-card small { color: var(--faint); overflow-wrap: anywhere; }
+@media (max-width: 900px) { .control-grid { grid-template-columns: 1fr 1fr; } .allocation-row { grid-template-columns: 1fr 2fr 45px 90px; } .project-exclude { grid-column: 1 / -1; } }
+@media (max-width: 620px) { .control-grid { grid-template-columns: 1fr; } .allocation-row { grid-template-columns: 1fr 1fr 40px; } .allocation-row select { grid-column: 2 / 4; } }
+
 .pill, .tag { flex-shrink: 0; }
 .tag:empty { display: none; }
 .provider, .ws-grid > .panel { align-content: start; }

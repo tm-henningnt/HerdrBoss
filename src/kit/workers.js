@@ -3,6 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { appendDelegatedRun, compareChangedPaths, gitChangedPaths, gitLog, readJson, validateAllowedPaths, validateWorkerReport } from './orchestration.js';
+import { recordUsage } from '../usage.js';
+import { providerFor } from '../control.js';
 
 const NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
 const BRIEF_SLOTS = new Set([
@@ -208,6 +210,20 @@ export function startWorker(name, options, {
     output(`Warning: --force overrides Herdr Boss rules for ${options.kind}.`);
   }
   const { model, effort, launchArgs } = validateSelection(options.kind, options, modelConfig, config);
+  const policy = rules.policy;
+  const projectPolicy = policy?.projects?.[config.slug];
+  if (policy) {
+    if (!policy.allowedKinds?.includes(options.kind)) throw new Error(`${options.kind} is disabled globally by Herdr Boss.`);
+    if (policy.excludedModels?.includes(model)) throw new Error(`${model} is disabled globally by Herdr Boss.`);
+    if (projectPolicy?.excludedKinds?.includes(options.kind) || projectPolicy?.excludedModels?.includes(model)) throw new Error(`${options.kind}/${model} is excluded for project ${config.slug}.`);
+    if (projectPolicy?.mode === 'paused' && !options.force) throw new Error(`Project ${config.slug} is paused. Use --force only for an authorized override.`);
+  }
+  const provider = providerFor(options.kind, model);
+  if (provider && rules.avoidProviders?.includes(provider) && !options.force) throw new Error(`${provider} is ahead of quota pace or near exhaustion; choose another model or use --force.`);
+  if (rules.control?.runningWorkers >= rules.control?.maxWorkers && !options.force) throw new Error(`Global worker limit (${rules.control.maxWorkers}) is reached; wait or use --force.`);
+  const projectSlots = rules.control?.projects?.[config.slug];
+  if (projectSlots?.effectiveMode === 'paused' && !options.force) throw new Error(`Project ${config.slug} is paused. Use --force only for an authorized override.`);
+  if (projectSlots && projectSlots.running >= projectSlots.slots && !options.force) output(`Notice: ${config.slug} uses ${projectSlots.running}/${projectSlots.slots} allocated slots. This share is advisory; global limit still applies.`);
   const allowedErrors = validateAllowedPaths(options.allow ?? []);
   if (allowedErrors.length) throw new Error(allowedErrors.join('\n'));
   if (!options.allow?.length) throw new Error('Give at least one --allow path (use --allow . only for an explicitly unrestricted task).');
@@ -407,6 +423,17 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
     run.finishedAt = entry.endedAt;
     run.outcome = entry.outcome;
     writeJsonAtomic(file, run);
+    const usage = reportJson.usage || {};
+    const recorded = recordUsage({
+      id: `worker:${config.slug}:${name}:${run.startedAt}`,
+      project: config.slug, workspace: run.pane?.split(':')[0] || null,
+      kind: run.kind, model: run.model, provider: providerFor(run.kind, run.model) || 'unmetered-or-unknown',
+      startedAt: run.startedAt, endedAt: entry.endedAt, outcome: entry.outcome,
+      gatePassed: entry.independentGate.passed, issue: run.issue,
+      inputTokens: usage.inputTokens ?? null, outputTokens: usage.outputTokens ?? null,
+      cachedTokens: usage.cachedTokens ?? null, cost: usage.cost ?? null,
+    });
+    if (recorded.errors.length) output(`Warning: usage was not recorded: ${recorded.errors.join(' ')}`);
   }
   return summary;
 }

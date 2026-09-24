@@ -99,13 +99,16 @@ Include these fields in the JSON report:
   "commands": ["<command and result>"],
   "evidenceTier": ["unit"],
   "unverified": [],
-  "stoppedEarly": false
+  "stoppedEarly": false,
+  "usage": { "inputTokens": null, "outputTokens": null, "cachedTokens": null, "cost": null }
 }
 ```
 
 Use the supplied issue ID when the brief has one. Use `null` for work without an issue.
 
 Replace `unit` with the evidence tier that the project and report validator accept.
+
+Fill `usage` only with values measured by the worker's harness. Leave unknown values as `null`.
 
 List changed paths, exact commands and results, evidence tier, remaining risks, and open questions in the human report.
 
