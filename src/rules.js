@@ -82,7 +82,7 @@ export function evaluate(snap, cfg, paneSince, now = Date.now()) {
   // ----- Browsers -----
   const paneById = new Map((snap.herdr?.panes || []).map((p) => [p.id, p]));
   for (const b of snap.browsers || []) {
-    if (b.kind !== 'automation-chrome') continue;
+    if (b.kind !== 'automation-chrome' || b.shared) continue;
     const desc = `Chrome pid ${b.pid}${b.headless ? ' (headless)' : ''}${b.port ? `, port ${b.port}` : ''}${b.profile ? `, profile ${b.profile}` : ''}, age ${fmtDuration(b.age)}, ${b.rssMB} MB`;
     if (b.pane) {
       const p = paneById.get(b.pane);
@@ -102,6 +102,15 @@ export function evaluate(snap, cfg, paneSince, now = Date.now()) {
         text: `An automation browser has no owner process: ${desc}. If one of your workers started it and does not need it, close it with \`kill ${b.pid}\`.`,
       });
     }
+  }
+
+  for (const s of cfg.sharedBrowsers || []) {
+    const up = (snap.browsers || []).some((b) => b.kind === 'automation-chrome' && b.shared === s.label);
+    if (!up) alerts.push({
+      key: `browser:shared-down:${s.port || s.profile}`, severity: 'warn', scope: 'user',
+      title: `${s.label} is not running`,
+      text: `${s.label}${s.port ? ` (port ${s.port})` : ''} is not running. Browser workers that need the signed-in session cannot run until the Owner starts it and signs in again.`,
+    });
   }
 
   // ----- Stale workers -----

@@ -162,7 +162,7 @@ function ownerPane(pid, procs, shellToPane) {
   return cur && shellToPane.has(cur.pid) ? shellToPane.get(cur.pid) : null;
 }
 
-export function findBrowsers(procs, panes) {
+export function findBrowsers(procs, panes, shared = []) {
   const shellToPane = new Map(panes.filter((p) => p.shellPid).map((p) => [p.shellPid, p.id]));
   const children = new Map();
   for (const p of procs.values()) {
@@ -194,6 +194,7 @@ export function findBrowsers(procs, panes) {
       profile,
       port,
       headless: /--headless/.test(p.cmd),
+      shared: shared.find((s) => (s.port && String(s.port) === port) || (s.profile && s.profile === profile))?.label || null,
     });
   }
   return result.sort((a, b) => b.age - a.age);

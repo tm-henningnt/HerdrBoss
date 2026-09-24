@@ -60,7 +60,7 @@ export class Engine extends EventEmitter {
         refreshQuotas ? collectQuotas().catch((e) => { errors.push(`codexbar: ${e.message}`); return null; }) : null,
       ]);
       if (quotas) { this.quotas = quotas; this.quotasAt = now; }
-      const browsers = findBrowsers(procs, herdr?.panes || []);
+      const browsers = findBrowsers(procs, herdr?.panes || [], this.cfg.sharedBrowsers);
 
       this.trackPaneStatus(herdr, now);
       if (machine) {
@@ -113,7 +113,12 @@ export class Engine extends EventEmitter {
   async reap(browsers) {
     const c = this.cfg.browsers;
     if (!c.reapOrphanDaemons) return;
-    const victims = browsers.filter((b) => b.kind === 'agent-browser-daemon' && b.orphan && b.children === 0 && b.cpu < 1 && b.age >= c.orphanDaemonMinAgeSeconds);
+    // A daemon can hold a browser that it started as a detached process. Keep every daemon
+    // that started up to 10 minutes before a running automation browser.
+    const chromes = browsers.filter((b) => b.kind === 'automation-chrome');
+    const holdsBrowser = (d) => chromes.some((b) => b.age <= d.age && d.age - b.age <= 600);
+    const victims = browsers.filter((b) => b.kind === 'agent-browser-daemon' && b.orphan && b.children === 0 && b.cpu < 1
+      && b.age >= c.orphanDaemonMinAgeSeconds && !holdsBrowser(b));
     if (!victims.length) return;
     for (const v of victims) { try { process.kill(v.pid, 'SIGTERM'); } catch {} }
     this.log('reap', `Terminated ${victims.length} orphaned agent-browser daemon(s): ${victims.map((v) => `${v.pid} (${fmtDuration(v.age)})`).join(', ')}`);

@@ -33,8 +33,11 @@ Then it applies rules and writes three files to `~/.herdr-boss/`:
 | The 5-minute load is more than 2 × the core count | Prompt all orchestrators and notify the user. |
 | An idle worker still owns an automation browser after 30 minutes | Prompt the orchestrator of that workspace. |
 | An automation browser has no owner and is older than 1 hour | Prompt all orchestrators. Herdr Boss does not terminate browsers. |
+| A shared browser (`sharedBrowsers` in the configuration) is not running | Notify the user. |
 | A worker has been idle for more than 2 hours | Prompt the orchestrator of that workspace. |
-| An `agent-browser` daemon has no parent and no children and is older than 2 hours | Terminate the daemon. |
+| An `agent-browser` daemon has no parent and no children and is older than 2 hours | Terminate the daemon. Herdr Boss keeps a daemon that started up to 10 minutes before a running automation browser, because that daemon can own the browser. |
+
+Herdr Boss never reports or touches a browser in `sharedBrowsers`. The default is the Chrome on port 9222, which holds the signed-in Qlik tenant session.
 
 Herdr Boss sends a prompt only to a pane with the label `orch`, and only when that agent is `idle` or `done`. It sends the same alert to the same pane at most once in 6 hours. It sends it again sooner only when the severity increases. It sends a user notification once for each alert.
 

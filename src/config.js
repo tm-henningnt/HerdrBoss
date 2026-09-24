@@ -17,6 +17,8 @@ const DEFAULTS = {
   alertCooldownSeconds: 6 * 3600,
   quota: { warnPercent: 90, criticalPercent: 98 },
   machine: { memFreeWarnPercent: 15, loadWarnFactor: 2 },
+  // Long-lived browsers that hold sign-in sessions. Never reported, never touched.
+  sharedBrowsers: [{ port: 9222, label: 'Shared signed-in Chrome (Qlik tenant)' }],
   browsers: {
     // Terminate agent-browser daemons with no parent, no children and this minimum age.
     reapOrphanDaemons: true,
