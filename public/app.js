@@ -3,12 +3,22 @@ const $dot = document.getElementById('dot');
 const $updated = document.getElementById('updated');
 const $push = document.getElementById('push');
 const $crumbs = document.getElementById('crumbs');
+const $nav = document.getElementById('primary-nav');
 
 let state = null;
 let lastRender = '';
 let models = {};
 let usage = null;
 let browserSessions = [];
+let handoffRecords = [];
+const handoffPlans = {};
+const handoffModes = {};
+const handoffTargets = {};
+const handoffModels = {};
+const handoffOutputs = {};
+const handoffReviewed = new Set();
+const handoffBusy = new Set();
+const handoffMessages = {};
 let policyDraft = null;
 let policyDirty = false;
 let saveMessage = '';
@@ -90,7 +100,7 @@ function controlBlock(s) {
       ${projectModels.map((m) => `<label><input type="checkbox" data-exclude-model="${esc(p.slug)}:${esc(m)}" ${x.excludedModels.includes(m) ? 'checked' : ''}> ${esc(m)}</label>`).join('')}</div></details>
     </div>`;
   }).join('');
-  return `<section id="control-plane"><h2>Control plane <span class="sub">local policy · allocation is advisory, global worker cap is enforced at dispatch</span></h2>
+  return `<section id="control-plane"><h2>Policy settings <span class="sub">project shares are advisory · the worker CLI enforces the global cap</span></h2>
     <div class="panel control-shell">
       <div class="control-grid">
         <div><h3>Capacity &amp; handover</h3>
@@ -108,21 +118,42 @@ function controlBlock(s) {
 }
 
 function handoffBlock(s) {
-  const items = s.control?.handoffs || [];
-  if (!items.length) return '';
-  return `<section><h2>Handover candidates <span class="sub">prepare a successor before a quota runs out</span></h2><div class="grid cols-3">${items.map((h) => `<div class="panel handoff-card"><b>${esc(h.project)}</b><span class="tag">${esc(h.provider)} ${h.window.usedPercent}%</span><p>${h.target ? `Suggested: ${esc(h.target.kind)} / ${esc(h.target.model)}` : 'No available alternate model under current policy.'}</p><code>herdr-boss handoff plan ${esc(h.pane)} --to ${esc(h.target?.kind || 'codex')}</code><small>Review the plan, then run <code>handoff prepare</code>. The old pane keeps control until activation.</small></div>`).join('')}</div></section>`;
+  const candidates = s.control?.handoffs || [];
+  const prepared = handoffRecords.filter((x) => x.status === 'prepared');
+  const cards = [
+    ...prepared.map((item) => {
+      const output = handoffOutputs[item.id];
+      return `<article class="handoff-item panel"><div class="handoff-head"><div><b>${esc(s.control?.projects?.[item.project]?.label || item.project)}</b><p>Successor prepared · ${esc(item.toKind)} / ${esc(item.model)}</p></div><span class="tag">Awaiting review</span></div>
+        <p>The source orchestrator still controls this project. Inspect the successor's response before transferring the label.</p>
+        <div class="action-row"><button type="button" data-handoff-output="${esc(item.id)}" ${handoffBusy.has(item.id) ? 'disabled' : ''}>Inspect successor</button><span class="inline-feedback" role="status">${esc(handoffMessages[item.id] || item.promptError || '')}</span></div>
+        ${output != null ? `<pre class="handoff-output">${esc(output)}</pre><label class="review-check"><input type="checkbox" data-handoff-reviewed="${esc(item.id)}" ${handoffReviewed.has(item.id) ? 'checked' : ''}> I have reviewed the successor's response</label><button type="button" data-handoff-activate="${esc(item.id)}" ${!handoffReviewed.has(item.id) || handoffBusy.has(item.id) ? 'disabled' : ''}>Confirm activation</button>` : ''}
+      </article>`;
+    }),
+    ...candidates.filter((h) => !prepared.some((x) => x.sourcePane === h.pane)).map((h) => {
+      const eligible = Object.entries(s.control.globalAllowed || {}).filter(([kind]) => kind !== h.fromKind && !s.control.projects[h.project]?.excludedKinds.includes(kind)).map(([kind, names]) => [kind, names.filter((model) => !s.control.projects[h.project]?.excludedModels.includes(model) && !s.control.risks?.[model.startsWith('opencode-go/') ? 'opencodego' : kind])]).filter(([, names]) => names.length);
+      const target = handoffTargets[h.pane] || (eligible.some(([kind]) => kind === h.target?.kind) ? h.target.kind : eligible[0]?.[0]) || '';
+      const availableModels = eligible.find(([kind]) => kind === target)?.[1] || [];
+      const model = availableModels.includes(handoffModels[h.pane]) ? handoffModels[h.pane] : availableModels.includes(h.target?.model) ? h.target.model : availableModels[0] || '';
+      const mode = handoffModes[h.pane] || (['codex', 'claude'].includes(target) ? 'migrate' : 'fresh');
+      const plan = handoffPlans[h.pane];
+      return `<article class="handoff-item panel"><div class="handoff-head"><div><b>${esc(s.control.projects[h.project]?.label || h.project)}</b><p>${esc(h.fromKind)} is at ${h.window.usedPercent}% · ${esc(h.window.label)} quota</p></div><span class="tag">Handover needed</span></div>
+        <p>Prepare another orchestrator before this provider becomes unavailable. The current pane remains in charge until activation.</p>
+        <div class="handoff-controls"><label>Successor<select data-handoff-target="${esc(h.pane)}">${eligible.map(([kind]) => `<option value="${esc(kind)}" ${kind === target ? 'selected' : ''}>${esc(kind)}</option>`).join('')}</select></label><label>Model<select data-handoff-model="${esc(h.pane)}">${availableModels.map((name) => `<option value="${esc(name)}" ${name === model ? 'selected' : ''}>${esc(name)}</option>`).join('')}</select></label><label>Start from<select data-handoff-mode="${esc(h.pane)}"><option value="migrate" ${mode === 'migrate' ? 'selected' : ''}>Migrated session</option><option value="fresh" ${mode === 'fresh' ? 'selected' : ''}>Fresh bootstrap</option></select></label></div>
+        <div class="action-row"><button type="button" data-handoff-plan="${esc(h.pane)}" ${!eligible.length || handoffBusy.has(h.pane) ? 'disabled' : ''}>Plan handover</button>${plan && (mode === 'fresh' || plan.migration?.available) ? `<button type="button" data-handoff-prepare="${esc(h.pane)}" ${handoffBusy.has(h.pane) ? 'disabled' : ''}>Prepare successor</button>` : ''}<span class="inline-feedback" role="status">${esc(handoffMessages[h.pane] || '')}</span></div>
+        ${plan ? `<div class="plan-result">${plan.mode === 'fresh' ? 'Fresh bootstrap: the successor will read project files and the source pane.' : plan.migration?.available ? `Migration available · ${plan.migration.records ?? '?'} records · ${plan.migration.warnings ?? 0} warnings.` : `Migration unavailable: ${esc(plan.migration?.error || 'unknown reason')}. Choose fresh bootstrap and plan again.`}</div>` : ''}
+      </article>`;
+    }),
+  ];
+  return `<section class="handoff-section"><div class="section-head"><h2>Project continuity</h2><span>${cards.length ? `${cards.length} need review` : 'No handovers pending'}</span></div>${cards.length ? `<div class="handoff-list">${cards.join('')}</div>` : '<p class="empty">No orchestrator handovers need action.</p>'}</section>`;
 }
 
 function projectResources(s) {
   const projects = Object.values(s.control?.projects || {});
   const sessions = browserSessions;
-  const summary = usage?.byProject || {};
-  return `<section><h2>Project resources <span class="sub">dedicated browsers and recorded work</span></h2><div class="grid cols-3">${projects.map((p) => {
+  return `<section><h2>Project browsers <span class="sub">one recorded profile and debugging port per project</span></h2><div class="grid cols-3">${projects.map((p) => {
     const b = sessions.find((x) => x.project === p.slug);
-    const u = summary[p.slug];
     return `<div class="panel resource-card"><b>${esc(p.label)}</b><div>Allocation <strong>${p.slots}</strong> · running <strong>${p.running}</strong>${p.idle ? ' · idle' : ''}</div>
       <div>Browser ${b ? `<span class="mono">:${b.port}</span> · ${b.profileVerified ? 'ready' : b.reachable ? 'port conflict' : 'offline'}` : 'none'}</div>
-      <div>Runs ${u?.runs || 0} · measured tokens ${u?.measuredRuns || 0}/${u?.runs || 0}${u?.inputTokens ? ` · input ${u.inputTokens.toLocaleString()}` : ''}</div>
       <button data-browser-request="${esc(p.slug)}">${b?.profileVerified ? 'Show browser details' : 'Request browser'}</button>
       ${b ? `<small class="mono">http://127.0.0.1:${b.port} · ${esc(b.profile)}</small>` : ''}
     </div>`;
@@ -137,7 +168,7 @@ function rulesBlock(s) {
   for (const a of s.advice || []) rows.push(`<div class="rule advice"><span class="sev">advice</span><div>${code(a)}</div></div>`);
   for (const a of s.alerts || []) if (a.severity === 'info') rows.push(`<div class="rule"><span class="sev">notice</span><div>${code(a.text)} <span class="tag">${esc(a.scope)}</span></div></div>`);
   if (!rows.length) rows.push(`<div class="rule ok"><span class="sev">ok</span><div>No restrictions. All quotas and machine resources are within limits.</div></div>`);
-  return `<section><h2>Rules now <span class="sub">orchestrators read these from <a href="/bulletin.md">bulletin.md</a></span></h2><div class="rules">${rows.join('')}</div></section>`;
+  return `<section id="guidance"><h2>Current guidance <span class="sub">also published to orchestrators in <a href="/bulletin.md">bulletin.md</a></span></h2><div class="rules">${rows.join('')}</div></section>`;
 }
 
 function quotaCard(q) {
@@ -261,20 +292,64 @@ function eventsBlock(s) {
   return `<div class="panel">${ev.length ? `<ul class="events">${ev.map((e) => `<li><span class="t">${new Date(e.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })}</span><span class="ty ${esc(e.type)}">${esc(e.type)}</span><span>${esc(e.text)}</span></li>`).join('')}</ul>` : '<div class="empty">No activity yet.</div>'}</div>`;
 }
 
+function quotaSummary(s) {
+  return `<section class="quota-summary"><div class="section-head"><h2>Subscriptions</h2><a href="/analytics#quotas">All quota windows →</a></div><div class="quota-summary-grid">${(s.quotas || []).map((q) => {
+    const w = q.windows?.find((x) => x.key === 'secondary') || q.windows?.find((x) => !x.extra);
+    return `<div class="quota-summary-item"><span>${esc(PROVIDERS[q.provider] || q.provider)}</span><strong class="${w?.usedPercent >= 90 ? 'text-crit' : ''}">${w ? `${w.usedPercent}%` : '–'}</strong><small>${q.error ? esc(q.error) : w ? `${esc(w.label)} · resets ${clock(w.resetsAt)}` : 'No quota data'}</small></div>`;
+  }).join('')}</div></section>`;
+}
+
+function attentionBlock(s) {
+  const alerts = (s.alerts || []).filter((a) => ['warn', 'critical'].includes(a.severity) && !a.key?.startsWith('handoff:'));
+  if (s.errors?.length) alerts.unshift({ key: 'collection', severity: 'warn', title: 'Some status data is unavailable', text: s.errors.join(' · ') });
+  return `<section class="attention-section"><div class="section-head"><h2>Needs attention</h2><span>${alerts.length ? `${alerts.length} alerts` : 'Clear'}</span></div>${alerts.length ? `<div class="attention-list">${alerts.map((a) => `<article class="attention-item ${esc(a.severity)}"><span class="severity-dot" aria-hidden="true"></span><div><b>${esc(a.title || a.severity)}</b><p>${esc(a.text)}</p></div><a href="${a.key?.startsWith('quota:') ? '/allocation' : '/analytics#guidance'}">${a.key?.startsWith('quota:') ? 'Adjust policy' : 'Details'}</a></article>`).join('')}</div>` : '<div class="calm-state">No resource alerts need action. Project orchestrators can continue within the current policy.</div>'}</section>`;
+}
+
+function fleetBlock(s) {
+  const projects = Object.values(s.control?.projects || {});
+  return `<section class="fleet-section"><div class="section-head"><h2>Projects</h2><a href="/analytics#agents">Live agents →</a></div><div class="fleet-table-wrap"><table class="fleet-table"><thead><tr><th>Project</th><th>Orchestrator</th><th>Workers</th><th>Policy</th><th>Published status</th></tr></thead><tbody>${projects.map((p) => {
+    const published = (s.projects || []).find((x) => x.slug === p.slug);
+    const detail = published ? `/p/${p.slug}` : '/analytics#agents';
+    return `<tr><td><a href="${esc(detail)}"><strong>${esc(p.label)}</strong></a><small>${esc(p.workspace)}</small></td><td>${p.orch ? `<span class="status-inline"><span class="st ${esc(p.orch.status)}"></span>${esc(p.orch.kind)} · ${esc(p.orch.status)}</span>` : '<span class="text-crit">Missing</span>'}</td><td class="mono">${p.running} / ${p.slots}</td><td>${esc(p.effectiveMode === 'paused' ? 'Paused' : p.idle ? 'Idle · lending' : `${Math.round(p.share)}% share`)}</td><td>${published ? `${esc(published.status || published.phase || 'Published')}<small>updated ${ago(published.updated)}</small>` : '<span class="muted">Not published</span>'}</td></tr>`;
+  }).join('')}</tbody></table></div></section>`;
+}
+
 function overview(s) {
-  $crumbs.innerHTML = '';
+  const handovers = (s.control?.handoffs || []).length + handoffRecords.filter((x) => x.status === 'prepared' && !(s.control?.handoffs || []).some((h) => h.pane === x.sourcePane)).length;
+  const alertCount = (s.alerts || []).filter((a) => ['warn', 'critical'].includes(a.severity) && !a.key?.startsWith('handoff:')).length;
   return [
-    controlBlock(s),
-    rulesBlock(s),
-    handoffBlock(s),
-    `<section><h2>Quotas <span class="sub">codexbar · ${ago(s.quotasAt)} · tick marks expected use at even pace</span></h2><div class="grid cols-3">${(s.quotas || []).map(quotaCard).join('')}</div></section>`,
-    `<section class="two"><div><h2>Machine</h2>${machineCard(s)}</div><div><h2>Browsers &amp; MCP <span class="sub">owner found from the process tree</span></h2>${browsersBlock(s) || '<div class="panel empty">None running.</div>'}</div></section>`,
-    projectsBlock(s),
-    projectResources(s),
-    workspacesBlock(s),
-    `<section><h2>Activity <span class="sub">prompts sent, processes terminated, notifications</span></h2>${eventsBlock(s)}</section>`,
-    s.errors?.length ? `<div class="warnbox">${esc(s.errors.join(' · '))}</div>` : '',
+    `<header class="page-intro"><div><h1>Overview</h1><p>${alertCount || handovers ? `${alertCount} resource alert${alertCount === 1 ? '' : 's'} · ${handovers} handover${handovers === 1 ? '' : 's'} to review` : 'Projects are operating within the current resource policy.'}</p></div><div class="capacity-readout"><strong>${s.control?.runningWorkers ?? 0}<span> / ${s.control?.maxWorkers ?? '–'}</span></strong><small>working agents</small><a href="/allocation">Adjust allocation →</a></div></header>`,
+    `<div class="overview-action-grid">${attentionBlock(s)}${handoffBlock(s)}</div>`,
+    fleetBlock(s),
+    quotaSummary(s),
   ].join('');
+}
+
+function allocationView(s) {
+  return [
+    '<header class="page-intro"><div><h1>Resource allocation</h1><p>Set capacity, subscription availability, and the share each project can use.</p></div></header>',
+    controlBlock(s),
+    projectResources(s),
+  ].join('');
+}
+
+function analyticsView(s) {
+  return [
+    '<header class="page-intro"><div><h1>Analytics</h1><p>Quota pace, measured usage, machine health, agents, and the event trail.</p></div></header>',
+    '<nav class="section-nav" aria-label="Analytics sections"><a href="#quotas">Quotas</a><a href="#usage">Usage</a><a href="#machine">Machine</a><a href="#agents">Agents</a><a href="#events">Activity</a></nav>',
+    `<section id="quotas"><div class="section-head"><h2>Quota windows</h2><span>CodexBar · updated ${ago(s.quotasAt)}</span></div><div class="grid cols-3">${(s.quotas || []).map(quotaCard).join('')}</div></section>`,
+    usageBlock(),
+    `<section id="machine"><h2>Machine health</h2><div class="two"><div>${machineCard(s)}</div><div><h3>Browsers &amp; MCP</h3>${browsersBlock(s) || '<div class="panel empty">None running.</div>'}</div></div></section>`,
+    `<div id="agents">${workspacesBlock(s)}</div>`,
+    projectsBlock(s),
+    rulesBlock(s),
+    `<section id="events"><h2>Activity log</h2>${eventsBlock(s)}</section>`,
+  ].join('');
+}
+
+function usageBlock() {
+  const rows = Object.entries(usage?.byProject || {});
+  return `<section id="usage"><div class="section-head"><h2>Recorded project usage</h2><span>Measured runs are a subset of recorded runs</span></div>${rows.length ? `<div class="fleet-table-wrap"><table class="fleet-table"><thead><tr><th>Project</th><th>Runs</th><th>Measured</th><th>Input</th><th>Output</th><th>Work time</th></tr></thead><tbody>${rows.map(([slug, x]) => `<tr><td><strong>${esc(slug)}</strong></td><td class="mono">${x.runs}</td><td class="mono">${x.measuredRuns} / ${x.runs}</td><td class="mono">${x.inputTokens.toLocaleString()}</td><td class="mono">${x.outputTokens.toLocaleString()}</td><td class="mono">${Math.round(x.workMinutes)} min</td></tr>`).join('')}</tbody></table></div>` : '<div class="calm-state">No worker runs have been recorded yet. Orchestrators add them with <code>herdr-boss worker collect --record</code>.</div>'}</section>`;
 }
 
 // ---------- Project page ----------
@@ -317,12 +392,18 @@ function project(s, slug) {
 function render() {
   if (!state) return;
   if (!policyDirty) policyDraft = null;
-  if (policyDirty && document.activeElement?.closest?.('#control-plane')) {
+  if (policyDirty && location.pathname === '/allocation' && document.activeElement?.closest?.('#control-plane')) {
     $updated.textContent = `updated ${ago(state.updatedAt)}`;
     return;
   }
   const m = /^\/p\/([^/]+)/.exec(location.pathname);
-  const html = m ? project(state, decodeURIComponent(m[1])) : overview(state);
+  const route = m ? 'project' : location.pathname === '/allocation' ? 'allocation' : location.pathname === '/analytics' ? 'analytics' : 'overview';
+  const html = route === 'project' ? project(state, decodeURIComponent(m[1])) : route === 'allocation' ? allocationView(state) : route === 'analytics' ? analyticsView(state) : overview(state);
+  if (route !== 'project') $crumbs.innerHTML = '';
+  for (const a of $nav.querySelectorAll('a')) {
+    if (a.dataset.nav === (route === 'project' ? 'overview' : route)) a.setAttribute('aria-current', 'page');
+    else a.removeAttribute('aria-current');
+  }
   if (html !== lastRender) { $app.innerHTML = html; lastRender = html; }
   $updated.textContent = `updated ${ago(state.updatedAt)}`;
   $push.textContent = state.push ? 'prompts on' : 'prompts off';
@@ -348,6 +429,21 @@ document.addEventListener('input', (e) => {
 });
 
 document.addEventListener('change', (e) => {
+  if (e.target.dataset.handoffTarget || e.target.dataset.handoffMode || e.target.dataset.handoffModel) {
+    const pane = e.target.dataset.handoffTarget || e.target.dataset.handoffMode || e.target.dataset.handoffModel;
+    if (e.target.dataset.handoffTarget) { handoffTargets[pane] = e.target.value; delete handoffModels[pane]; }
+    else if (e.target.dataset.handoffModel) handoffModels[pane] = e.target.value;
+    else handoffModes[pane] = e.target.value;
+    delete handoffPlans[pane]; delete handoffMessages[pane];
+    lastRender = ''; render();
+    return;
+  }
+  if (e.target.dataset.handoffReviewed) {
+    if (e.target.checked) handoffReviewed.add(e.target.dataset.handoffReviewed);
+    else handoffReviewed.delete(e.target.dataset.handoffReviewed);
+    lastRender = ''; render();
+    return;
+  }
   if (!e.target.closest('#control-plane') || !policyDraft) return;
   const el = e.target;
   const d = policyDraft;
@@ -371,7 +467,60 @@ document.addEventListener('change', (e) => {
   document.getElementById('save-policy').disabled = false;
 });
 
+async function postJson(url, body) {
+  const response = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || (result.errors || []).join(' ') || 'The request failed.');
+  return result;
+}
+
+async function runHandoffAction(action, key) {
+  if (handoffBusy.has(key)) return;
+  const h = state.control?.handoffs?.find((x) => x.pane === key);
+  const item = handoffRecords.find((x) => x.id === key);
+  const selectedTarget = [...document.querySelectorAll('[data-handoff-target]')].find((x) => x.dataset.handoffTarget === key)?.value;
+  const selectedModel = [...document.querySelectorAll('[data-handoff-model]')].find((x) => x.dataset.handoffModel === key)?.value;
+  const selectedMode = [...document.querySelectorAll('[data-handoff-mode]')].find((x) => x.dataset.handoffMode === key)?.value;
+  if (action === 'activate' && !confirm(`Activate the prepared ${item?.toKind || ''} orchestrator for ${item?.project || key}? The current pane will become standby.`)) return;
+  handoffBusy.add(key);
+  handoffMessages[key] = action === 'plan' ? 'Checking session migration…' : action === 'prepare' ? 'Starting successor…' : action === 'output' ? 'Reading successor…' : 'Activating…';
+  lastRender = ''; render();
+  try {
+    if (action === 'plan' || action === 'prepare') {
+      if (!h) throw new Error('This handover is no longer current. Refresh the dashboard.');
+      const body = { project: h.project, pane: h.pane, to: selectedTarget, model: selectedModel, mode: selectedMode };
+      if (action === 'plan') {
+        const plan = await postJson('/api/handoffs/plan', body);
+        handoffPlans[key] = plan;
+        handoffMessages[key] = plan.migration && !plan.migration.available ? 'Migration unavailable; choose Fresh bootstrap.' : 'Plan ready for review.';
+      } else {
+        if (!handoffPlans[key]) throw new Error('Plan this handover first.');
+        const prepared = await postJson('/api/handoffs/prepare', body);
+        handoffRecords = await fetch('/api/handoffs').then((r) => r.json());
+        handoffMessages[prepared.id] = prepared.promptError ? `Successor started. Prompt needs inspection: ${prepared.promptError}` : 'Successor started. Inspect its response before activation.';
+      }
+    } else if (action === 'output') {
+      const result = await fetch(`/api/handoffs/output?id=${encodeURIComponent(key)}`).then(async (response) => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Could not read successor.');
+        return data;
+      });
+      handoffOutputs[key] = result.output;
+      handoffMessages[key] = 'Review the output below before confirming activation.';
+    } else if (action === 'activate') {
+      await postJson('/api/handoffs/activate', { id: key, confirmed: true });
+      handoffRecords = await fetch('/api/handoffs').then((r) => r.json());
+      await fetch('/api/tick', { method: 'POST' });
+      handoffMessages[key] = 'Handover activated.';
+    }
+  } catch (error) { handoffMessages[key] = error.message; }
+  finally { handoffBusy.delete(key); lastRender = ''; render(); }
+}
+
 document.addEventListener('click', async (e) => {
+  for (const [action, attr] of [['plan', 'handoffPlan'], ['prepare', 'handoffPrepare'], ['output', 'handoffOutput'], ['activate', 'handoffActivate']]) {
+    if (e.target.dataset[attr]) { await runHandoffAction(action, e.target.dataset[attr]); return; }
+  }
   if (e.target.id === 'save-policy' && policyDraft) {
     e.target.disabled = true;
     try {
@@ -407,9 +556,10 @@ document.addEventListener('click', (e) => {
   history.pushState(null, '', a.getAttribute('href'));
   lastRender = '';
   render();
-  scrollTo(0, 0);
+  if (location.hash) requestAnimationFrame(() => document.getElementById(location.hash.slice(1))?.scrollIntoView());
+  else scrollTo(0, 0);
 });
-addEventListener('popstate', () => { lastRender = ''; render(); });
+addEventListener('popstate', () => { lastRender = ''; render(); if (location.hash) requestAnimationFrame(() => document.getElementById(location.hash.slice(1))?.scrollIntoView()); });
 
 function connect() {
   const es = new EventSource('/api/events');
@@ -418,10 +568,11 @@ function connect() {
   es.onerror = () => { $dot.classList.remove('on'); $updated.textContent = 'reconnecting…'; };
 }
 async function refreshExtras() {
-  const results = await Promise.allSettled(['/api/models', '/api/usage', '/api/browser-sessions'].map((url) => fetch(url).then((r) => r.json())));
+  const results = await Promise.allSettled(['/api/models', '/api/usage', '/api/browser-sessions', '/api/handoffs'].map((url) => fetch(url).then((r) => r.json())));
   if (results[0].status === 'fulfilled') models = results[0].value;
   if (results[1].status === 'fulfilled') usage = results[1].value;
   if (results[2].status === 'fulfilled') browserSessions = results[2].value;
+  if (results[3].status === 'fulfilled') handoffRecords = results[3].value;
   lastRender = '';
   render();
 }

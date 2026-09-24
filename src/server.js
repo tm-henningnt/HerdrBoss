@@ -1,7 +1,10 @@
 import http from 'node:http';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { Engine } from './engine.js';
 import { PROJECTS_DIR, DATA_DIR } from './config.js';
 import { writeProject, listProjects } from './projects.js';
@@ -9,10 +12,24 @@ import { loadModels } from './kit/config.js';
 import { loadPolicy, savePolicy } from './control.js';
 import { recordUsage, usageSummary } from './usage.js';
 import { requestBrowser, listBrowserSessions, browserStatus } from './browser-pool.js';
+import { listHandoffs } from './handoff.js';
 
 const PUBLIC = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const DOCS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'docs');
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.md': 'text/markdown; charset=utf-8' };
+const execFileAsync = promisify(execFile);
+
+async function handoffCommand(args) {
+  try {
+    const { stdout } = await execFileAsync(process.execPath, [fileURLToPath(new URL('./cli.js', import.meta.url)), 'handoff', ...args], {
+      timeout: 180000, maxBuffer: 8 * 1024 * 1024,
+      env: { ...process.env, PATH: `${path.join(os.homedir(), '.local/bin')}:${process.env.PATH || ''}` },
+    });
+    return JSON.parse(stdout);
+  } catch (error) {
+    throw new Error(String(error.stderr || error.message).trim().slice(0, 800));
+  }
+}
 
 function send(res, code, body, type = 'application/json; charset=utf-8') {
   res.writeHead(code, { 'content-type': type, 'cache-control': 'no-store' });
@@ -91,6 +108,32 @@ export function serve(cfg) {
         if (!engine.state?.control?.projects?.[body.project]) return send(res, 400, { error: 'Unknown open project.' });
         return send(res, 200, await requestBrowser(body.project, { launch: body.launch !== false }));
       }
+      if (p === '/api/handoffs' && req.method === 'GET') return send(res, 200, listHandoffs());
+      if (p === '/api/handoffs/output' && req.method === 'GET') {
+        const item = listHandoffs().find((x) => x.id === url.searchParams.get('id'));
+        if (!item) return send(res, 404, { error: 'Handover not found.' });
+        const { stdout } = await execFileAsync('herdr', ['agent', 'read', item.newPane, '--lines', '90', '--format', 'text'], { timeout: 15000, maxBuffer: 1024 * 1024 });
+        return send(res, 200, { id: item.id, output: stdout.slice(-16000) });
+      }
+      if (p === '/api/handoffs/plan' && req.method === 'POST') {
+        const body = await jsonBody(req);
+        if (!engine.state?.control?.projects?.[body.project]?.orch || engine.state.control.projects[body.project].orch.pane !== body.pane) return send(res, 400, { error: 'Unknown current orchestrator pane.' });
+        if (!['codex', 'claude', 'opencode', 'pi'].includes(body.to) || !['migrate', 'fresh'].includes(body.mode) || typeof body.model !== 'string') return send(res, 400, { error: 'Choose a target harness, model, and handover mode.' });
+        return send(res, 200, await handoffCommand(['plan', body.pane, '--to', body.to, '--model', body.model, '--mode', body.mode]));
+      }
+      if (p === '/api/handoffs/prepare' && req.method === 'POST') {
+        const body = await jsonBody(req);
+        if (!engine.state?.control?.projects?.[body.project]?.orch || engine.state.control.projects[body.project].orch.pane !== body.pane) return send(res, 400, { error: 'Unknown current orchestrator pane.' });
+        if (!['codex', 'claude', 'opencode', 'pi'].includes(body.to) || !['migrate', 'fresh'].includes(body.mode) || typeof body.model !== 'string') return send(res, 400, { error: 'Choose a target harness, model, and handover mode.' });
+        if (listHandoffs().some((x) => x.sourcePane === body.pane && x.status === 'prepared')) return send(res, 409, { error: 'A successor is already prepared for this orchestrator.' });
+        return send(res, 200, await handoffCommand(['prepare', body.pane, '--to', body.to, '--model', body.model, '--mode', body.mode]));
+      }
+      if (p === '/api/handoffs/activate' && req.method === 'POST') {
+        const body = await jsonBody(req);
+        const item = listHandoffs().find((x) => x.id === body.id && x.status === 'prepared');
+        if (!item || body.confirmed !== true) return send(res, 400, { error: 'Review the prepared successor and confirm activation.' });
+        return send(res, 200, await handoffCommand(['activate', item.id, '--confirmed']));
+      }
       if (p === '/api/events') {
         res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' });
         res.write(`retry: 3000\n\n`);
@@ -124,7 +167,7 @@ export function serve(cfg) {
       if (req.method === 'GET' && !p.startsWith('/api/')) return send(res, 200, fs.readFileSync(path.join(PUBLIC, 'index.html')), TYPES['.html']);
       send(res, 404, { error: 'not found' });
     } catch (e) {
-      send(res, e instanceof SyntaxError || e.message.includes('Content-Type') ? 400 : 500, { error: e.message });
+      send(res, e instanceof SyntaxError || e.message.includes('Content-Type') || p.startsWith('/api/handoffs/') ? 400 : 500, { error: e.message });
     }
   });
 
