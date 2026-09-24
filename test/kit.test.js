@@ -233,3 +233,64 @@ test('worker start records a real dispatch before prompting and verifies activit
   assert.ok(calls.some((args) => args[0] === 'agent' && args[1] === 'prompt'));
   assert.equal(fs.readFileSync(path.join(result.worktree, '.worker', 'brief.md'), 'utf8'), 'Worker demo: x');
 });
+
+test('worker start submits a brief that was typed but not sent', () => {
+  const root = temporaryRepo();
+  const template = path.join(root, 'brief-template.md');
+  fs.writeFileSync(template, 'Worker {{name}}: {{task}}');
+  fs.writeFileSync(path.join(root, '.herdr-boss.json'), JSON.stringify({ briefTemplate: template }));
+  const config = loadProjectConfig({ cwd: root });
+  const rulesFile = path.join(root, 'rules.json');
+  fs.writeFileSync(rulesFile, JSON.stringify({ updatedAt: new Date().toISOString(), avoidKinds: [] }));
+  const calls = [];
+  let status = 'idle';
+  const herdr = (args) => {
+    calls.push(args.slice(0, 2).join(' '));
+    if (args[0] === 'agent' && args[1] === 'list') return { agents: [] };
+    if (args[0] === 'tab' && args[1] === 'list') return { tabs: [{ tab_id: 'ws:t1', workspace_id: 'ws', label: 'Workers' }] };
+    if (args[0] === 'pane' && args[1] === 'list') return { panes: [{ pane_id: 'ws:p1', workspace_id: 'ws', tab_id: 'ws:t1', width: 160, height: 45 }] };
+    if (args[0] === 'pane' && args[1] === 'split') return { pane: { pane_id: 'ws:p2' } };
+    if (args[0] === 'agent' && args[1] === 'start') return {};
+    if (args[0] === 'agent' && args[1] === 'prompt') throw new Error('agent_prompt_stalled');
+    if (args[0] === 'agent' && args[1] === 'get') return { agent: { agent_status: status } };
+    if (args[0] === 'agent' && args[1] === 'send-keys') { assert.deepEqual(args.slice(2), ['demo', 'enter']); status = 'working'; return {}; }
+    throw new Error(`Unexpected Herdr call: ${args.join(' ')}`);
+  };
+  const output = [];
+  startWorker('demo', { kind: 'claude', task: 'x', allow: ['src/'] }, {
+    config, models: loadModels(), herdr, output: (line) => output.push(line),
+    readText: () => '❯ Read .worker/brief.md in your working directory and execute it.', wait: () => {},
+    env: { HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'ws', HERDR_PANE_ID: 'ws:orch' }, rulesFile,
+  });
+  assert.equal(calls.filter((call) => call === 'agent prompt').length, 1);
+  assert.ok(calls.includes('agent send-keys'));
+  assert.ok(output.some((line) => line.startsWith('Sent Enter to demo')));
+});
+
+test('worker start resends a brief that never reached the agent', () => {
+  const root = temporaryRepo();
+  const template = path.join(root, 'brief-template.md');
+  fs.writeFileSync(template, 'Worker {{name}}: {{task}}');
+  fs.writeFileSync(path.join(root, '.herdr-boss.json'), JSON.stringify({ briefTemplate: template }));
+  const config = loadProjectConfig({ cwd: root });
+  const rulesFile = path.join(root, 'rules.json');
+  fs.writeFileSync(rulesFile, JSON.stringify({ updatedAt: new Date().toISOString(), avoidKinds: [] }));
+  let prompts = 0;
+  const herdr = (args) => {
+    if (args[0] === 'agent' && args[1] === 'list') return { agents: [] };
+    if (args[0] === 'tab' && args[1] === 'list') return { tabs: [{ tab_id: 'ws:t1', workspace_id: 'ws', label: 'Workers' }] };
+    if (args[0] === 'pane' && args[1] === 'list') return { panes: [{ pane_id: 'ws:p1', workspace_id: 'ws', tab_id: 'ws:t1', width: 160, height: 45 }] };
+    if (args[0] === 'pane' && args[1] === 'split') return { pane: { pane_id: 'ws:p2' } };
+    if (args[0] === 'agent' && args[1] === 'start') return {};
+    if (args[0] === 'agent' && args[1] === 'prompt') { prompts++; if (prompts === 1) throw new Error('agent_prompt_stalled'); return {}; }
+    if (args[0] === 'agent' && args[1] === 'get') return { agent: { agent_status: 'idle' } };
+    throw new Error(`Unexpected Herdr call: ${args.join(' ')}`);
+  };
+  const output = [];
+  startWorker('demo', { kind: 'claude', task: 'x', allow: ['src/'] }, {
+    config, models: loadModels(), herdr, output: (line) => output.push(line), readText: () => '❯ ', wait: () => {},
+    env: { HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'ws', HERDR_PANE_ID: 'ws:orch' }, rulesFile,
+  });
+  assert.equal(prompts, 2);
+  assert.ok(output.some((line) => line.startsWith('Resent the brief prompt to demo')));
+});

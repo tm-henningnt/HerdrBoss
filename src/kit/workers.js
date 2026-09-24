@@ -51,22 +51,31 @@ function readAgentText(name) {
 
 function pause(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
 
-// An agent can report ready before its input box accepts text, and then drop the prompt.
-// Resend once, and only when the agent is idle and its pane shows no trace of the brief line.
+// An agent can report ready before its input box works. The prompt is then lost, or typed but not submitted.
+// Resend once when the pane shows no trace of the brief line. When it shows the line, send Enter once:
+// Enter submits unsent input and does nothing in an empty input box.
 function deliverBrief(name, herdr, readText, wait) {
-  for (let attempt = 1; ; attempt++) {
+  const settled = () => {
+    const status = herdr(['agent', 'get', name]);
+    return ['working', 'blocked'].includes((status.agent ?? status).agent_status);
+  };
+  let resent = false;
+  for (;;) {
+    let promptError;
     try {
       herdr(['agent', 'prompt', name, BRIEF_PROMPT, '--wait', '--timeout', '20000']);
-      return attempt;
-    } catch (promptError) {
-      const status = herdr(['agent', 'get', name]);
-      const agent = status.agent ?? status;
-      if (agent.agent_status === 'working' || agent.agent_status === 'blocked') return attempt;
-      let seen = true;
-      try { seen = readText(name).includes('.worker/brief.md'); } catch {}
-      if (attempt >= 2 || seen) throw promptError;
-      wait(3000);
-    }
+      return resent ? 'resent' : 'sent';
+    } catch (error) { promptError = error; }
+    if (settled()) return resent ? 'resent' : 'sent';
+    let seen = true;
+    try { seen = readText(name).includes('.worker/brief.md'); } catch {}
+    if (!seen && !resent) { resent = true; wait(3000); continue; }
+    if (!seen) throw promptError;
+    // The status check below decides the result, so an unparsable send-keys response does not abort.
+    try { herdr(['agent', 'send-keys', name, 'enter']); } catch {}
+    wait(3000);
+    if (settled()) return 'submitted';
+    throw promptError;
   }
 }
 
@@ -353,7 +362,9 @@ export function startWorker(name, options, {
       startedAt: new Date(now).toISOString(),
     };
     writeJsonAtomic(recordFile, record);
-    if (deliverBrief(name, herdr, readText, wait) > 1) output(`Resent the brief prompt to ${name}: the first prompt did not reach the agent.`);
+    const delivery = deliverBrief(name, herdr, readText, wait);
+    if (delivery === 'resent') output(`Resent the brief prompt to ${name}: the first prompt did not reach the agent.`);
+    if (delivery === 'submitted') output(`Sent Enter to ${name}: the brief prompt was typed but not submitted.`);
     return { ...record, recordFile, dryRun: false };
   } catch (error) {
     if (!agentStarted && placement) {
