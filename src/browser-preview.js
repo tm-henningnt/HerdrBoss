@@ -20,29 +20,60 @@ function displayUrl(value) {
   catch { return String(value || '').slice(0, 160); }
 }
 
+async function browserEndpoint(session) {
+  const response = await fetch(`http://127.0.0.1:${session.port}/json/version`, { signal: AbortSignal.timeout(3000) });
+  if (!response.ok) throw new Error('Could not reach the browser control endpoint.');
+  const endpoint = new URL((await response.json()).webSocketDebuggerUrl);
+  if (endpoint.protocol !== 'ws:' || !['127.0.0.1', 'localhost', '[::1]'].includes(endpoint.hostname) || Number(endpoint.port) !== session.port) throw new Error('Browser returned an unexpected debugging endpoint.');
+  endpoint.hostname = '127.0.0.1';
+  return endpoint.href;
+}
+
+// Chrome marks a page as attached while a DevTools client, such as an agent's browser driver, holds a session on it.
+async function attachedTargets(session) {
+  const result = await command(await browserEndpoint(session), 'Target.getTargets');
+  return new Set((result?.targetInfos || []).filter((info) => info.type === 'page' && info.attached).map((info) => info.targetId));
+}
+
 export async function listBrowserTabs(project) {
   const session = await verifiedSession(project);
-  return (await targets(session)).map((entry) => ({ id: entry.id, title: entry.title || 'Untitled page', url: entry.url }));
+  const pages = await targets(session);
+  let attached = null;
+  try { attached = await attachedTargets(session); } catch {}
+  return pages.map((entry) => ({ id: entry.id, title: entry.title || 'Untitled page', url: entry.url, attached: attached ? attached.has(entry.id) : null }));
+}
+
+export async function tabAttached(project, tabId) {
+  if (!tabId) return false;
+  return (await attachedTargets(await verifiedSession(project))).has(tabId);
+}
+
+// A background tab gives the Owner a page of their own without changing any agent's tab.
+export async function browserNewTab(project) {
+  const session = await verifiedSession(project);
+  const result = await command(await browserEndpoint(session), 'Target.createTarget', { url: 'about:blank', background: true });
+  if (!result?.targetId) throw new Error('Browser did not open a new tab.');
+  return { id: result.targetId };
 }
 
 async function pageTarget(project, tabId) {
   const session = await verifiedSession(project);
   const pages = await targets(session);
   const target = tabId ? pages.find((entry) => entry.id === tabId) : pages.find((entry) => /^https?:/.test(entry.url)) || pages[0];
-  if (!target) throw new Error('No inspectable page is open in this browser.');
+  if (!target) throw new Error(tabId ? 'The selected tab is no longer open. Reload the tab list.' : 'No inspectable page is open in this browser.');
   const endpoint = new URL(target.webSocketDebuggerUrl);
   if (endpoint.protocol !== 'ws:' || !['127.0.0.1', 'localhost', '[::1]'].includes(endpoint.hostname) || Number(endpoint.port) !== session.port) throw new Error('Browser returned an unexpected debugging endpoint.');
   endpoint.hostname = '127.0.0.1';
   return endpoint.href;
 }
 
-function commands(endpoint, requests) {
+function commands(endpoint, requests, timeoutMs = 8000, timeoutMessage = null) {
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(endpoint);
     let settled = false;
     let index = 0;
     const results = [];
-    const timer = setTimeout(() => finish(new Error('Browser command timed out.')), 8000);
+    const timer = setTimeout(() => finish(new Error(timeoutMessage || `Browser command ${requests[index]?.method || ''} timed out after ${timeoutMs / 1000} s.`)), timeoutMs);
     function finish(error, result) {
       if (settled) return;
       settled = true;
@@ -67,12 +98,13 @@ function commands(endpoint, requests) {
   });
 }
 
-async function command(endpoint, method, params = {}) {
-  return (await commands(endpoint, [{ method, params }]))[0];
+async function command(endpoint, method, params = {}, timeoutMs, timeoutMessage) {
+  return (await commands(endpoint, [{ method, params }], timeoutMs, timeoutMessage))[0];
 }
 
 export async function browserScreenshot(project, tabId) {
-  const result = await command(await pageTarget(project, tabId), 'Page.captureScreenshot', { format: 'jpeg', quality: 72, captureBeyondViewport: false, fromSurface: true });
+  const result = await command(await pageTarget(project, tabId), 'Page.captureScreenshot', { format: 'jpeg', quality: 72, captureBeyondViewport: false, fromSurface: true },
+    15000, 'The page did not return a screenshot within 15 s. It can be loading, busy, or showing a dialog. Refresh again, or choose another tab.');
   if (!result?.data) throw new Error('Browser returned no screenshot.');
   const image = Buffer.from(result.data, 'base64');
   if (image.length > 8 * 1024 * 1024) throw new Error('Browser screenshot is too large.');

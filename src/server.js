@@ -12,7 +12,7 @@ import { loadModels } from './kit/config.js';
 import { loadPolicy, savePolicy } from './control.js';
 import { recordUsage, usageSummary } from './usage.js';
 import { requestBrowser, listBrowserSessions, browserStatus, setBrowserWindowSize, closeBrowser, restartBrowser } from './browser-pool.js';
-import { listBrowserTabs, browserScreenshot, browserNavigate, browserNavigationState, browserHistoryAction, browserClick, browserInsertText, browserKey } from './browser-preview.js';
+import { listBrowserTabs, browserScreenshot, browserNavigate, browserNavigationState, browserHistoryAction, browserClick, browserInsertText, browserKey, browserNewTab, tabAttached } from './browser-preview.js';
 import { listHandoffs } from './handoff.js';
 import { roamgateAvailable, roamgateUrl } from './roamgate.js';
 import { createAccessControl, loginPage } from './access.js';
@@ -61,6 +61,14 @@ function allowedRequest(req, pathname) {
     catch { return false; }
   }
   return req.headers['sec-fetch-site'] !== 'cross-site' || (req.method === 'GET' && !pathname.startsWith('/api/') && req.headers['sec-fetch-mode'] === 'navigate' && req.headers['sec-fetch-dest'] === 'document');
+}
+
+// Dashboard control of a tab that an agent holds needs explicit confirmation. Agent CLI commands do not pass through here.
+async function attachedGuard(body) {
+  if (body.confirmAttached === true) return null;
+  try { if (await tabAttached(body.project, body.tab)) return { error: 'An agent is using this tab. Navigation or input can disturb its work. Confirm to continue, or open a new tab.', attached: true }; }
+  catch {}
+  return null;
 }
 
 async function jsonBody(req) {
@@ -161,24 +169,36 @@ export function serve(cfg) {
       if (p === '/api/browser-sessions/navigate' && req.method === 'POST') {
         const body = await jsonBody(req);
         if (!engine.state?.control?.projects?.[body.project]) return send(res, 404, { error: 'Unknown open project.' });
+        const guard = await attachedGuard(body);
+        if (guard) return send(res, 409, guard);
         try { return send(res, 200, await browserNavigate(body.project, body.tab, body.url)); }
         catch (e) { return send(res, 409, { error: e.message }); }
       }
       if (p === '/api/browser-sessions/history' && req.method === 'POST') {
         const body = await jsonBody(req);
         if (!engine.state?.control?.projects?.[body.project]) return send(res, 404, { error: 'Unknown open project.' });
+        const guard = await attachedGuard(body);
+        if (guard) return send(res, 409, guard);
         try { return send(res, 200, await browserHistoryAction(body.project, body.tab, body.action)); }
         catch (e) { return send(res, 409, { error: e.message }); }
       }
       if (p === '/api/browser-sessions/input' && req.method === 'POST') {
         const body = await jsonBody(req);
         if (!engine.state?.control?.projects?.[body.project]) return send(res, 404, { error: 'Unknown open project.' });
+        const guard = await attachedGuard(body);
+        if (guard) return send(res, 409, guard);
         try {
           if (body.type === 'click') return send(res, 200, await browserClick(body.project, body.tab, body.x, body.y));
           if (body.type === 'text') return send(res, 200, await browserInsertText(body.project, body.tab, body.text));
           if (body.type === 'key') return send(res, 200, await browserKey(body.project, body.tab, body.key));
           return send(res, 400, { error: 'Unknown browser input type.' });
         } catch (e) { return send(res, 409, { error: e.message }); }
+      }
+      if (p === '/api/browser-sessions/new-tab' && req.method === 'POST') {
+        const body = await jsonBody(req);
+        if (!engine.state?.control?.projects?.[body.project]) return send(res, 404, { error: 'Unknown open project.' });
+        try { return send(res, 200, await browserNewTab(body.project)); }
+        catch (e) { return send(res, 409, { error: e.message }); }
       }
       if (p === '/api/browser-sessions/close' && req.method === 'POST') {
         const body = await jsonBody(req);

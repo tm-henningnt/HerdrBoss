@@ -20,6 +20,9 @@ const browserPreviewMessages = {};
 const browserPreviewFrames = {};
 let browserPreviewsInitialized = false;
 const browserTabs = {};
+const browserTabsAt = {};
+// Tabs where the Owner confirmed control although an agent is attached. Kept for this page load only.
+const browserConfirmedTabs = new Set();
 const browserSelectedTab = {};
 const browserNavigation = {};
 const browserAddressDraft = {};
@@ -63,7 +66,7 @@ const previewInterval = (slug) => PREVIEW_INTERVALS.includes(Number(browserPrevi
 function browserTabLabel(tab) {
   let location = tab.url;
   try { const url = new URL(tab.url); location = `${url.hostname}${url.pathname}`; } catch {}
-  return `${String(tab.title || 'Untitled page').slice(0, 42)} · ${String(location || '').slice(0, 70)}`;
+  return `${tab.attached ? 'Agent · ' : ''}${String(tab.title || 'Untitled page').slice(0, 42)} · ${String(location || '').slice(0, 70)}`;
 }
 const code = (s) => esc(s).replace(/`([^`]+)`/g, '<code>$1</code>');
 const PROVIDERS = { claude: 'Claude', codex: 'Codex', opencodego: 'OpenCode Go' };
@@ -235,7 +238,7 @@ function browserResources(s) {
     return `<article class="panel browser-card ${b?.profileVerified ? 'browser-card-active' : 'browser-card-idle'}"><div class="browser-card-head"><div><h3>${esc(p.label)}</h3><p>${b ? `<span class="mono">:${b.port}</span> · ${b.profileVerified ? 'ready' : b.reachable ? 'port conflict' : 'offline'} · ${b.headless ? 'headless' : 'visible'}` : 'No browser running'}</p></div>${b?.profileVerified ? `<div class="browser-head-actions"><button type="button" class="browser-preview-toggle" data-browser-preview="${esc(p.slug)}">${preview ? 'Hide preview' : 'Show preview'}</button><details class="browser-manage" data-browser-manage="${esc(p.slug)}" ${browserManageOpen.has(p.slug) ? 'open' : ''}><summary>Manage</summary><div class="browser-manage-content"><div class="browser-actions"><button type="button" data-browser-restart="${esc(p.slug)}" data-browser-mode="${b.headless ? 'visible' : 'headless'}">Restart ${b.headless ? 'visible' : 'headless'}</button><label class="browser-restore"><input type="checkbox" data-browser-restore="${esc(p.slug)}" checked> Reopen current page</label><button type="button" data-browser-close="${esc(p.slug)}">Close browser</button></div><form class="browser-size" data-browser-size="${esc(p.slug)}"><label>Next launch size <input type="number" name="width" min="320" max="3840" value="${size.width}" aria-label="${esc(p.label)} window width"> × <input type="number" name="height" min="240" max="2160" value="${size.height}" aria-label="${esc(p.label)} window height"> px</label><button type="submit">Save size</button></form><details class="browser-record"><summary>Connection and profile</summary><small class="mono">http://127.0.0.1:${b.port}<br>${esc(b.profile)}</small></details></div></details></div>` : '<span class="tag">Available</span>'}</div>
       ${!b?.profileVerified ? `<div class="browser-actions"><button type="button" data-browser-request="${esc(p.slug)}" data-browser-mode="visible">Open visible</button><button type="button" data-browser-request="${esc(p.slug)}" data-browser-mode="headless">Open headless</button></div>` : ''}
       ${browserMessages[p.slug] ? `<small class="inline-feedback" role="status">${esc(browserMessages[p.slug])}</small>` : ''}
-      ${preview ? `<div class="browser-preview"><div class="browser-preview-tools"><select data-browser-tab="${esc(p.slug)}" aria-label="${esc(p.label)} browser page">${tabs.map((tab) => `<option value="${esc(tab.id)}" ${tab.id === browserSelectedTab[p.slug] ? 'selected' : ''}>${esc(browserTabLabel(tab))}</option>`).join('')}</select><button type="button" data-browser-refresh="${esc(p.slug)}">Refresh</button><label class="browser-live-toggle"><input type="checkbox" data-browser-live="${esc(p.slug)}" ${browserPreviewLive.has(p.slug) ? 'checked' : ''}> Live</label><label class="browser-live-rate">Every <select data-browser-interval="${esc(p.slug)}" aria-label="${esc(p.label)} live refresh interval">${PREVIEW_INTERVALS.map((ms) => `<option value="${ms}" ${ms === previewInterval(p.slug) ? 'selected' : ''}>${ms / 1000}s</option>`).join('')}</select></label></div>
+      ${preview ? `<div class="browser-preview"><div class="browser-preview-tools"><select data-browser-tab="${esc(p.slug)}" aria-label="${esc(p.label)} browser page">${tabs.map((tab) => `<option value="${esc(tab.id)}" ${tab.id === browserSelectedTab[p.slug] ? 'selected' : ''}>${esc(browserTabLabel(tab))}</option>`).join('')}</select><button type="button" data-browser-refresh="${esc(p.slug)}">Refresh</button><button type="button" data-browser-new-tab="${esc(p.slug)}" title="Open a blank tab of your own. Agent tabs stay unchanged.">New tab</button><label class="browser-live-toggle"><input type="checkbox" data-browser-live="${esc(p.slug)}" ${browserPreviewLive.has(p.slug) ? 'checked' : ''}> Live</label><label class="browser-live-rate">Every <select data-browser-interval="${esc(p.slug)}" aria-label="${esc(p.label)} live refresh interval">${PREVIEW_INTERVALS.map((ms) => `<option value="${ms}" ${ms === previewInterval(p.slug) ? 'selected' : ''}>${ms / 1000}s</option>`).join('')}</select></label></div>
         <form class="browser-navigate" data-browser-navigate="${esc(p.slug)}"><button type="button" data-browser-history="back" data-browser-project="${esc(p.slug)}" ${browserNavigation[p.slug]?.canGoBack ? '' : 'disabled'}>Back</button><button type="button" data-browser-history="forward" data-browser-project="${esc(p.slug)}" ${browserNavigation[p.slug]?.canGoForward ? '' : 'disabled'}>Forward</button><button type="button" data-browser-history="home" data-browser-project="${esc(p.slug)}" ${tabs.length ? '' : 'disabled'}>Home</button><input type="text" name="url" value="${esc(browserAddressDraft[p.slug] ?? browserNavigation[p.slug]?.url ?? tabs.find((tab) => tab.id === browserSelectedTab[p.slug])?.url ?? '')}" placeholder="Enter a web address" aria-label="${esc(p.label)} browser address" autocomplete="off" spellcheck="false" required><button type="submit" ${tabs.length ? '' : 'disabled'}>Go</button></form>
         ${browserPreviewUrls[p.slug] ? `<button type="button" class="browser-image-button" data-browser-expand="${esc(p.slug)}" aria-label="Expand ${esc(p.label)} browser screenshot"><img data-browser-image="${esc(p.slug)}" src="${browserPreviewUrls[p.slug]}" alt="Current browser page in ${esc(p.label)}"></button>` : '<div class="browser-preview-empty">No screenshot yet</div>'}
         <small class="inline-feedback" data-browser-preview-message="${esc(p.slug)}" role="status">${esc(browserPreviewMessages[p.slug] || '')}</small></div>` : ''}
@@ -277,13 +280,16 @@ async function refreshBrowserPreview(slug, reloadTabs = false) {
   if (!browserPreviewOpen.has(slug) || browserPreviewPending.has(slug)) return;
   browserPreviewPending.add(slug);
   try {
-    if (reloadTabs || !browserTabs[slug]) {
+    // Agents open and close tabs, so reload the list on request and at least every 10 s.
+    if (reloadTabs || !browserTabs[slug] || Date.now() - (browserTabsAt[slug] || 0) > 10000) {
       const response = await fetch(`/api/browser-sessions/tabs?project=${encodeURIComponent(slug)}`);
       const tabs = await response.json();
       if (!response.ok) throw new Error(tabs.error || 'Could not list browser pages.');
+      const changed = JSON.stringify(tabs) !== JSON.stringify(browserTabs[slug]);
       browserTabs[slug] = tabs;
-      if (!tabs.some((tab) => tab.id === browserSelectedTab[slug])) browserSelectedTab[slug] = tabs[0]?.id;
-      lastRender = ''; render();
+      browserTabsAt[slug] = Date.now();
+      if (!tabs.some((tab) => tab.id === browserSelectedTab[slug])) { browserSelectedTab[slug] = tabs[0]?.id; delete browserNavigation[slug]; }
+      if (changed) { lastRender = ''; render(); }
     }
     if (!browserSelectedTab[slug]) throw new Error('No inspectable page is open in this browser.');
     const params = new URLSearchParams({ project: slug, tab: browserSelectedTab[slug] });
@@ -300,7 +306,8 @@ async function refreshBrowserPreview(slug, reloadTabs = false) {
     if (previous) URL.revokeObjectURL(previous);
     browserPreviewFrames[slug] = (browserPreviewFrames[slug] || 0) + 1;
     const viewerActive = viewer.open && viewer.dataset.project === slug;
-    previewMessage(slug, `${browserPreviewLive.has(slug) || viewerActive ? 'Live' : 'Captured'} · frame ${browserPreviewFrames[slug]} · ${new Date().toLocaleTimeString()}`);
+    const agentTab = browserTabs[slug]?.find((tab) => tab.id === browserSelectedTab[slug])?.attached;
+    previewMessage(slug, `${browserPreviewLive.has(slug) || viewerActive ? 'Live' : 'Captured'} · frame ${browserPreviewFrames[slug]} · ${new Date().toLocaleTimeString()}${agentTab ? ' · an agent is using this tab' : ''}`);
     try { await refreshBrowserNavigation(slug); } catch (error) { previewMessage(slug, error.message); }
   } catch (error) { previewMessage(slug, error.message); }
   finally { browserPreviewPending.delete(slug); }
@@ -834,8 +841,20 @@ document.addEventListener('change', (e) => {
 async function postJson(url, body) {
   const response = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
   const result = await response.json();
-  if (!response.ok) throw new Error(result.error || (result.errors || []).join(' ') || 'The request failed.');
+  if (!response.ok) throw Object.assign(new Error(result.error || (result.errors || []).join(' ') || 'The request failed.'), { attached: result.attached === true });
   return result;
+}
+
+// Navigation and input on a tab that an agent holds need one confirmation per tab.
+async function postBrowserAction(url, body) {
+  const key = `${body.project}:${body.tab}`;
+  try { return await postJson(url, { ...body, confirmAttached: browserConfirmedTabs.has(key) }); }
+  catch (error) {
+    if (!error.attached) throw error;
+    if (!confirm('An agent is using this tab. Navigation or input can disturb its work.\n\nControl this tab anyway? Choose Cancel and use New tab for a page of your own.')) throw new Error('Cancelled: an agent is using this tab.');
+    browserConfirmedTabs.add(key);
+    return postJson(url, { ...body, confirmAttached: true });
+  }
 }
 
 function scheduleViewerRefresh(slug) {
@@ -849,7 +868,7 @@ function queueViewerInput(input) {
   const tab = viewer.dataset.tab;
   viewerInputQueue = viewerInputQueue.catch(() => {}).then(async () => {
     try {
-      await postJson('/api/browser-sessions/input', { project, tab, ...input });
+      await postBrowserAction('/api/browser-sessions/input', { project, tab, ...input });
       scheduleViewerRefresh(project);
     } catch (error) { previewMessage(project, error.message); }
   });
@@ -889,7 +908,7 @@ document.addEventListener('submit', async (e) => {
       browserMessages[sizeSlug] = 'Size saved for the next browser launch. Close and reopen the browser to apply it.';
       await refreshExtras();
     } else {
-      await postJson('/api/browser-sessions/navigate', { project: navigateSlug, tab: browserSelectedTab[navigateSlug], url: form.elements.url.value });
+      await postBrowserAction('/api/browser-sessions/navigate', { project: navigateSlug, tab: browserSelectedTab[navigateSlug], url: form.elements.url.value });
       delete browserAddressDraft[navigateSlug];
       previewMessage(navigateSlug, 'Opening page…');
       setTimeout(() => refreshBrowserPreview(navigateSlug, true), 800);
@@ -951,7 +970,7 @@ document.addEventListener('click', async (e) => {
     const action = e.target.dataset.browserHistory;
     e.target.disabled = true;
     try {
-      const result = await postJson('/api/browser-sessions/history', { project: slug, tab: browserSelectedTab[slug], action });
+      const result = await postBrowserAction('/api/browser-sessions/history', { project: slug, tab: browserSelectedTab[slug], action });
       delete browserAddressDraft[slug];
       browserNavigation[slug] = { ...browserNavigation[slug], url: result.url };
       previewMessage(slug, `${action === 'home' ? 'Opening home' : action === 'back' ? 'Going back' : 'Going forward'}…`);
@@ -1003,6 +1022,19 @@ document.addEventListener('click', async (e) => {
     return;
   }
   if (e.target.dataset.browserRefresh) { await refreshBrowserPreview(e.target.dataset.browserRefresh, true); return; }
+  if (e.target.dataset.browserNewTab) {
+    const slug = e.target.dataset.browserNewTab;
+    e.target.disabled = true;
+    try {
+      const result = await postJson('/api/browser-sessions/new-tab', { project: slug });
+      browserSelectedTab[slug] = result.id;
+      delete browserNavigation[slug]; delete browserAddressDraft[slug];
+      await refreshBrowserPreview(slug, true);
+      previewMessage(slug, 'Opened a new tab. Enter a web address and press Go.');
+    } catch (error) { previewMessage(slug, error.message); }
+    finally { e.target.disabled = false; }
+    return;
+  }
   if (e.target.dataset.browserClose || e.target.dataset.browserRestart) {
     const restart = Boolean(e.target.dataset.browserRestart);
     const slug = e.target.dataset.browserClose || e.target.dataset.browserRestart;
