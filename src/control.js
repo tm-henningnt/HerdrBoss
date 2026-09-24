@@ -13,7 +13,7 @@ export const POLICY_DEFAULTS = {
   autoHandoverPercent: 98,
   orchestratorLadder: [
     { kind: 'codex', model: 'gpt-6-luna', effort: 'xhigh' },
-    { kind: 'claude', model: 'claude-opus-5.5', effort: null },
+    { kind: 'claude', model: 'claude-opus-5-5', effort: null },
     { kind: 'pi', model: 'opencode-go/deepseek-v4.1-flash', effort: null },
   ],
   allowedKinds: ['codex', 'claude', 'opencode', 'pi'],

@@ -9,8 +9,8 @@
       "launchArgs": ["-m", "{{model}}", "-c", "model_reasoning_effort={{effort}}"]
     },
     "claude": {
-      "defaultModel": "claude-opus-5.5",
-      "allowedModels": ["claude-opus-5.5", "claude-opus-5"],
+      "defaultModel": "claude-opus-5-5",
+      "allowedModels": ["claude-opus-5-5", "claude-opus-5"],
       "allowedEfforts": [],
       "defaultEffort": null,
       "launchArgs": ["--model", "{{model}}"]

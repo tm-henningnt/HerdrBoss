@@ -13,7 +13,7 @@ The observed order from lower to higher cost is:
 1. Free `opencode/` models, including Muse Spark and Mimo.
 2. `opencode-go/deepseek-v4.1-flash`.
 3. Codex `gpt-6-luna`.
-4. Claude `claude-opus-5.5` and Codex Sol.
+4. Claude `claude-opus-5-5` and Codex Sol.
 5. Codex Astra.
 
 Treat this order as a routing hint.
@@ -24,7 +24,7 @@ Provider quota, task fit, availability, and review effort affect the real cost.
 
 | Kind and model | Best fit | Limits |
 | --- | --- | --- |
-| `claude`, `claude-opus-5.5` | Visual judgment, browser work, hosted review, and product coherence. | Quota is scarce. Reserve it for work that needs judgment. |
+| `claude`, `claude-opus-5-5` | Visual judgment, browser work, hosted review, and product coherence. | Quota is scarce. Reserve it for work that needs judgment. |
 | `codex`, `gpt-6-luna` | Core seams, algorithms, cross-cutting changes, and takeovers. | Review root causes and pixel claims. Long sessions can stop without a final report. |
 | `pi`, `opencode-go/deepseek-v4.1-flash` | Economical research and fully specified mechanical work. | Shared Go quota can stop every worker on that provider. Pin the model and verify results. |
 | `pi`, `opencode-go/muse-spark-1.3-contributor` | Cheap bounded implementation, docs, copy, and read-only diagnosis. | Source records disagree on its success rate. Keep the task atomic and inspect every path. |

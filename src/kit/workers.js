@@ -43,6 +43,33 @@ export function createHerdrRunner(exec = (args) => execFileSync('herdr', args, {
   return (args) => parseHerdrJson(exec(args));
 }
 
+const BRIEF_PROMPT = 'Read .worker/brief.md in your working directory and execute it.';
+
+function readAgentText(name) {
+  return execFileSync('herdr', ['agent', 'read', name, '--source', 'recent-unwrapped', '--lines', '60'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+}
+
+function pause(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
+
+// An agent can report ready before its input box accepts text, and then drop the prompt.
+// Resend once, and only when the agent is idle and its pane shows no trace of the brief line.
+function deliverBrief(name, herdr, readText, wait) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      herdr(['agent', 'prompt', name, BRIEF_PROMPT, '--wait', '--timeout', '20000']);
+      return attempt;
+    } catch (promptError) {
+      const status = herdr(['agent', 'get', name]);
+      const agent = status.agent ?? status;
+      if (agent.agent_status === 'working' || agent.agent_status === 'blocked') return attempt;
+      let seen = true;
+      try { seen = readText(name).includes('.worker/brief.md'); } catch {}
+      if (attempt >= 2 || seen) throw promptError;
+      wait(3000);
+    }
+  }
+}
+
 function listFrom(value, key) {
   if (Array.isArray(value)) return value;
   if (Array.isArray(value?.[key])) return value[key];
@@ -181,7 +208,7 @@ function renderStartPlan(plan) {
     `   $ herdr agent start ${displayArg(plan.name)} --kind ${displayArg(plan.kind)} --pane ${displayArg(plan.paneId)} -- ${plan.launchArgs.map(displayArg).join(' ')}`,
     `8. Write run record: ${plan.recordFile}`,
     `9. Send task prompt and observe agent activity:`,
-    `   $ herdr agent prompt ${displayArg(plan.name)} "Read .worker/brief.md in your working directory and execute it."`,
+    `   $ herdr agent prompt ${displayArg(plan.name)} "${BRIEF_PROMPT}"`,
   ];
   return lines.join('\n');
 }
@@ -194,6 +221,8 @@ export function startWorker(name, options, {
   rulesFile,
   now = Date.now(),
   output = console.log,
+  readText = readAgentText,
+  wait = pause,
 } = {}) {
   if (!NAME_PATTERN.test(name)) throw new Error('Worker name must match [a-z][a-z0-9-]{0,31}.');
   if (env.HERDR_ENV !== '1') throw new Error('Run worker start from a Herdr-managed pane (HERDR_ENV=1).');
@@ -324,14 +353,7 @@ export function startWorker(name, options, {
       startedAt: new Date(now).toISOString(),
     };
     writeJsonAtomic(recordFile, record);
-    try {
-      herdr(['agent', 'prompt', name, 'Read .worker/brief.md in your working directory and execute it.', '--wait', '--timeout', '20000']);
-    } catch (promptError) {
-      // A timeout can mean the agent is still working. Inspect it before deciding.
-      const status = herdr(['agent', 'get', name]);
-      const agent = status.agent ?? status;
-      if (agent.agent_status !== 'working' && agent.agent_status !== 'blocked') throw promptError;
-    }
+    if (deliverBrief(name, herdr, readText, wait) > 1) output(`Resent the brief prompt to ${name}: the first prompt did not reach the agent.`);
     return { ...record, recordFile, dryRun: false };
   } catch (error) {
     if (!agentStarted && placement) {
