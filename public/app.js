@@ -21,6 +21,12 @@ const browserPreviewFrames = {};
 let browserPreviewsInitialized = false;
 const browserTabs = {};
 const browserTabsAt = {};
+// View mode per browser: 'tab' shows one focused tab with controls; 'grid' shows every tab and no controls.
+const BROWSER_VIEW_KEY = 'herdr-boss.browser-view-modes';
+const browserViewModes = (() => { try { const value = JSON.parse(localStorage.getItem(BROWSER_VIEW_KEY)); return value && typeof value === 'object' && !Array.isArray(value) ? value : {}; } catch { return {}; } })();
+const browserGridUrls = {};
+const browserGridErrors = {};
+const gridMode = (slug) => browserViewModes[slug] === 'grid';
 // Tabs where the Owner confirmed control although an agent is attached. Kept for this page load only.
 const browserConfirmedTabs = new Set();
 const browserSelectedTab = {};
@@ -227,6 +233,47 @@ function handoffBlock(s, projectSlug = null) {
   return `<section class="handoff-section"><div class="section-head"><h2>Project continuity</h2><span>${cards.length ? projectSlug && !prepared.length && !candidates.some((h) => h.window) ? 'Start when needed' : `${cards.length} need review` : 'No handovers pending'}</span></div>${cards.length ? `<div class="handoff-list">${cards.join('')}</div>` : empty}</section>`;
 }
 
+function browserViewToggle(slug, withProject = true) {
+  const attr = withProject ? ` data-browser-project="${esc(slug)}"` : '';
+  return `<div class="browser-view-toggle" role="group" aria-label="Browser view"><button type="button" data-browser-view="tab"${attr} aria-pressed="${!gridMode(slug)}">One tab</button><button type="button" data-browser-view="grid"${attr} aria-pressed="${gridMode(slug)}">All tabs</button></div>`;
+}
+
+function browserGridMarkup(slug) {
+  const tabs = browserTabs[slug] || [];
+  if (!tabs.length) return '<div class="browser-preview-empty">No tabs are open.</div>';
+  const cols = Math.ceil(Math.sqrt(tabs.length));
+  return `<div class="browser-tab-grid" style="--cols:${cols};--rows:${Math.ceil(tabs.length / cols)}">${tabs.map((tab) => {
+    const url = browserGridUrls[slug]?.[tab.id];
+    return `<button type="button" class="browser-tab-tile" data-browser-focus-tab="${esc(slug)}" data-tab="${esc(tab.id)}" title="Show only this tab">${url
+      ? `<img data-browser-grid-image="${esc(slug)}" data-tab="${esc(tab.id)}" src="${url}" alt="${esc(tab.title || 'Browser tab')}">`
+      : `<span class="browser-tile-empty">${esc(browserGridErrors[slug]?.[tab.id] || 'Capturing…')}</span>`}<span class="browser-tile-label">${esc(browserTabLabel(tab))}</span></button>`;
+  }).join('')}</div>`;
+}
+
+// The expanded view hides every browser control in grid mode.
+function syncViewerMode() {
+  const viewer = document.getElementById('browser-viewer');
+  const slug = viewer.dataset.project;
+  if (!slug) return;
+  const grid = gridMode(slug);
+  viewer.classList.toggle('grid-mode', grid);
+  viewer.querySelector('#browser-viewer-grid').innerHTML = grid ? browserGridMarkup(slug) : '';
+  for (const button of viewer.querySelectorAll('.browser-viewer-head [data-browser-view]')) button.setAttribute('aria-pressed', String(button.dataset.browserView === (grid ? 'grid' : 'tab')));
+  if (grid) {
+    viewer.querySelector('#browser-viewer-control').checked = false;
+    for (const control of viewer.querySelectorAll('.browser-viewer-controls input, .browser-viewer-controls button')) control.disabled = true;
+  } else viewer.dataset.tab = browserSelectedTab[slug] || '';
+}
+
+function setBrowserView(slug, mode) {
+  browserViewModes[slug] = mode;
+  try { localStorage.setItem(BROWSER_VIEW_KEY, JSON.stringify(browserViewModes)); } catch {}
+  lastRender = ''; render();
+  const viewer = document.getElementById('browser-viewer');
+  if (viewer.open && viewer.dataset.project === slug) syncViewerMode();
+  refreshBrowserPreview(slug, true);
+}
+
 function browserResources(s) {
   const projects = Object.values(s.control?.projects || {});
   const sessions = browserSessions;
@@ -238,9 +285,9 @@ function browserResources(s) {
     return `<article class="panel browser-card ${b?.profileVerified ? 'browser-card-active' : 'browser-card-idle'}"><div class="browser-card-head"><div><h3>${esc(p.label)}</h3><p>${b ? `<span class="mono">:${b.port}</span> · ${b.profileVerified ? 'ready' : b.reachable ? 'port conflict' : 'offline'} · ${b.headless ? 'headless' : 'visible'}` : 'No browser running'}</p></div>${b?.profileVerified ? `<div class="browser-head-actions"><button type="button" class="browser-preview-toggle" data-browser-preview="${esc(p.slug)}">${preview ? 'Hide preview' : 'Show preview'}</button><details class="browser-manage" data-browser-manage="${esc(p.slug)}" ${browserManageOpen.has(p.slug) ? 'open' : ''}><summary>Manage</summary><div class="browser-manage-content"><div class="browser-actions"><button type="button" data-browser-restart="${esc(p.slug)}" data-browser-mode="${b.headless ? 'visible' : 'headless'}">Restart ${b.headless ? 'visible' : 'headless'}</button><label class="browser-restore"><input type="checkbox" data-browser-restore="${esc(p.slug)}" checked> Reopen current page</label><button type="button" data-browser-close="${esc(p.slug)}">Close browser</button></div><form class="browser-size" data-browser-size="${esc(p.slug)}"><label>Next launch size <input type="number" name="width" min="320" max="3840" value="${size.width}" aria-label="${esc(p.label)} window width"> × <input type="number" name="height" min="240" max="2160" value="${size.height}" aria-label="${esc(p.label)} window height"> px</label><button type="submit">Save size</button></form><details class="browser-record"><summary>Connection and profile</summary><small class="mono">http://127.0.0.1:${b.port}<br>${esc(b.profile)}</small></details></div></details></div>` : '<span class="tag">Available</span>'}</div>
       ${!b?.profileVerified ? `<div class="browser-actions"><button type="button" data-browser-request="${esc(p.slug)}" data-browser-mode="visible">Open visible</button><button type="button" data-browser-request="${esc(p.slug)}" data-browser-mode="headless">Open headless</button></div>` : ''}
       ${browserMessages[p.slug] ? `<small class="inline-feedback" role="status">${esc(browserMessages[p.slug])}</small>` : ''}
-      ${preview ? `<div class="browser-preview"><div class="browser-preview-tools"><select data-browser-tab="${esc(p.slug)}" aria-label="${esc(p.label)} browser page">${tabs.map((tab) => `<option value="${esc(tab.id)}" ${tab.id === browserSelectedTab[p.slug] ? 'selected' : ''}>${esc(browserTabLabel(tab))}</option>`).join('')}</select><button type="button" data-browser-refresh="${esc(p.slug)}">Refresh</button><button type="button" data-browser-new-tab="${esc(p.slug)}" title="Open a blank tab of your own. Agent tabs stay unchanged.">New tab</button><label class="browser-live-toggle"><input type="checkbox" data-browser-live="${esc(p.slug)}" ${browserPreviewLive.has(p.slug) ? 'checked' : ''}> Live</label><label class="browser-live-rate">Every <select data-browser-interval="${esc(p.slug)}" aria-label="${esc(p.label)} live refresh interval">${PREVIEW_INTERVALS.map((ms) => `<option value="${ms}" ${ms === previewInterval(p.slug) ? 'selected' : ''}>${ms / 1000}s</option>`).join('')}</select></label></div>
-        <form class="browser-navigate" data-browser-navigate="${esc(p.slug)}"><button type="button" data-browser-history="back" data-browser-project="${esc(p.slug)}" ${browserNavigation[p.slug]?.canGoBack ? '' : 'disabled'}>Back</button><button type="button" data-browser-history="forward" data-browser-project="${esc(p.slug)}" ${browserNavigation[p.slug]?.canGoForward ? '' : 'disabled'}>Forward</button><button type="button" data-browser-history="home" data-browser-project="${esc(p.slug)}" ${tabs.length ? '' : 'disabled'}>Home</button><input type="text" name="url" value="${esc(browserAddressDraft[p.slug] ?? browserNavigation[p.slug]?.url ?? tabs.find((tab) => tab.id === browserSelectedTab[p.slug])?.url ?? '')}" placeholder="Enter a web address" aria-label="${esc(p.label)} browser address" autocomplete="off" spellcheck="false" required><button type="submit" ${tabs.length ? '' : 'disabled'}>Go</button></form>
-        ${browserPreviewUrls[p.slug] ? `<button type="button" class="browser-image-button" data-browser-expand="${esc(p.slug)}" aria-label="Expand ${esc(p.label)} browser screenshot"><img data-browser-image="${esc(p.slug)}" src="${browserPreviewUrls[p.slug]}" alt="Current browser page in ${esc(p.label)}"></button>` : '<div class="browser-preview-empty">No screenshot yet</div>'}
+      ${preview ? `<div class="browser-preview"><div class="browser-preview-tools">${browserViewToggle(p.slug)}${gridMode(p.slug) ? `<span class="browser-grid-count">${tabs.length} tab${tabs.length === 1 ? '' : 's'}</span>` : `<select data-browser-tab="${esc(p.slug)}" aria-label="${esc(p.label)} browser page">${tabs.map((tab) => `<option value="${esc(tab.id)}" ${tab.id === browserSelectedTab[p.slug] ? 'selected' : ''}>${esc(browserTabLabel(tab))}</option>`).join('')}</select>`}<button type="button" data-browser-refresh="${esc(p.slug)}">Refresh</button>${gridMode(p.slug) ? `<button type="button" data-browser-expand="${esc(p.slug)}">Expand</button>` : `<button type="button" data-browser-new-tab="${esc(p.slug)}" title="Open a blank tab of your own. Agent tabs stay unchanged.">New tab</button>`}<label class="browser-live-toggle"><input type="checkbox" data-browser-live="${esc(p.slug)}" ${browserPreviewLive.has(p.slug) ? 'checked' : ''}> Live</label><label class="browser-live-rate">Every <select data-browser-interval="${esc(p.slug)}" aria-label="${esc(p.label)} live refresh interval">${PREVIEW_INTERVALS.map((ms) => `<option value="${ms}" ${ms === previewInterval(p.slug) ? 'selected' : ''}>${ms / 1000}s</option>`).join('')}</select></label></div>
+        ${gridMode(p.slug) ? browserGridMarkup(p.slug) : `<form class="browser-navigate" data-browser-navigate="${esc(p.slug)}"><button type="button" data-browser-history="back" data-browser-project="${esc(p.slug)}" ${browserNavigation[p.slug]?.canGoBack ? '' : 'disabled'}>Back</button><button type="button" data-browser-history="forward" data-browser-project="${esc(p.slug)}" ${browserNavigation[p.slug]?.canGoForward ? '' : 'disabled'}>Forward</button><button type="button" data-browser-history="home" data-browser-project="${esc(p.slug)}" ${tabs.length ? '' : 'disabled'}>Home</button><input type="text" name="url" value="${esc(browserAddressDraft[p.slug] ?? browserNavigation[p.slug]?.url ?? tabs.find((tab) => tab.id === browserSelectedTab[p.slug])?.url ?? '')}" placeholder="Enter a web address" aria-label="${esc(p.label)} browser address" autocomplete="off" spellcheck="false" required><button type="submit" ${tabs.length ? '' : 'disabled'}>Go</button></form>
+        ${browserPreviewUrls[p.slug] ? `<button type="button" class="browser-image-button" data-browser-expand="${esc(p.slug)}" aria-label="Expand ${esc(p.label)} browser screenshot"><img data-browser-image="${esc(p.slug)}" src="${browserPreviewUrls[p.slug]}" alt="Current browser page in ${esc(p.label)}"></button>` : '<div class="browser-preview-empty">No screenshot yet</div>'}`}
         <small class="inline-feedback" data-browser-preview-message="${esc(p.slug)}" role="status">${esc(browserPreviewMessages[p.slug] || '')}</small></div>` : ''}
     </article>`;
   }).join('');
@@ -276,6 +323,34 @@ async function refreshBrowserNavigation(slug) {
   }
 }
 
+async function captureBrowserGrid(slug) {
+  const tabs = browserTabs[slug] || [];
+  const urls = browserGridUrls[slug] ||= {};
+  const errors = browserGridErrors[slug] = {};
+  let rebuild = false;
+  await Promise.all(tabs.map(async (tab) => {
+    try {
+      const params = new URLSearchParams({ project: slug, tab: tab.id });
+      const response = await fetch(`/api/browser-sessions/screenshot?${params}`, { cache: 'no-store' });
+      if (!response.ok) { const result = await response.json(); throw new Error(result.error || 'Screenshot failed.'); }
+      const next = URL.createObjectURL(await response.blob());
+      const previous = urls[tab.id];
+      urls[tab.id] = next;
+      const images = [...document.querySelectorAll('[data-browser-grid-image]')].filter((el) => el.dataset.browserGridImage === slug && el.dataset.tab === tab.id);
+      if (!images.length) rebuild = true;
+      for (const image of images) image.src = next;
+      if (previous) URL.revokeObjectURL(previous);
+    } catch (error) { errors[tab.id] = error.message; rebuild = true; }
+  }));
+  for (const id of Object.keys(urls)) if (!tabs.some((tab) => tab.id === id)) { URL.revokeObjectURL(urls[id]); delete urls[id]; rebuild = true; }
+  const viewer = document.getElementById('browser-viewer');
+  const viewerActive = viewer.open && viewer.dataset.project === slug;
+  if (rebuild) { lastRender = ''; render(); if (viewerActive) syncViewerMode(); }
+  browserPreviewFrames[slug] = (browserPreviewFrames[slug] || 0) + 1;
+  const failed = Object.keys(errors).length;
+  previewMessage(slug, `${browserPreviewLive.has(slug) || viewerActive ? 'Live' : 'Captured'} · all ${tabs.length} tabs · frame ${browserPreviewFrames[slug]} · ${new Date().toLocaleTimeString()}${failed ? ` · ${failed} failed` : ''}`);
+}
+
 async function refreshBrowserPreview(slug, reloadTabs = false) {
   if (!browserPreviewOpen.has(slug) || browserPreviewPending.has(slug)) return;
   browserPreviewPending.add(slug);
@@ -289,8 +364,13 @@ async function refreshBrowserPreview(slug, reloadTabs = false) {
       browserTabs[slug] = tabs;
       browserTabsAt[slug] = Date.now();
       if (!tabs.some((tab) => tab.id === browserSelectedTab[slug])) { browserSelectedTab[slug] = tabs[0]?.id; delete browserNavigation[slug]; }
-      if (changed) { lastRender = ''; render(); }
+      if (changed) {
+        lastRender = ''; render();
+        const viewer = document.getElementById('browser-viewer');
+        if (viewer.open && viewer.dataset.project === slug && gridMode(slug)) syncViewerMode();
+      }
     }
+    if (gridMode(slug)) { await captureBrowserGrid(slug); return; }
     if (!browserSelectedTab[slug]) throw new Error('No inspectable page is open in this browser.');
     const params = new URLSearchParams({ project: slug, tab: browserSelectedTab[slug] });
     const response = await fetch(`/api/browser-sessions/screenshot?${params}`, { cache: 'no-store' });
@@ -302,7 +382,7 @@ async function refreshBrowserPreview(slug, reloadTabs = false) {
     if (image) image.src = next;
     else { lastRender = ''; render(); }
     const viewer = document.getElementById('browser-viewer');
-    if (viewer.open && viewer.dataset.project === slug) viewer.querySelector('img').src = next;
+    if (viewer.open && viewer.dataset.project === slug) viewer.querySelector(':scope > img').src = next;
     if (previous) URL.revokeObjectURL(previous);
     browserPreviewFrames[slug] = (browserPreviewFrames[slug] || 0) + 1;
     const viewerActive = viewer.open && viewer.dataset.project === slug;
@@ -720,7 +800,7 @@ document.addEventListener('pointerup', (e) => { if (e.target.dataset?.dragging) 
 document.addEventListener('pointercancel', (e) => { if (e.target.dataset?.dragging) delete e.target.dataset.dragging; });
 document.addEventListener('keydown', (e) => {
   const viewer = document.getElementById('browser-viewer');
-  if (viewer.open && e.target === viewer.querySelector('img') && viewer.querySelector('#browser-viewer-control').checked) {
+  if (viewer.open && e.target === viewer.querySelector(':scope > img') && viewer.querySelector('#browser-viewer-control').checked) {
     if (e.key === 'Escape') return;
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'a') {
       e.preventDefault(); flushViewerText(); queueViewerInput({ type: 'key', key: 'SelectAll' }); return;
@@ -769,7 +849,7 @@ document.addEventListener('change', (e) => {
   if (e.target.id === 'browser-viewer-control') {
     const viewer = document.getElementById('browser-viewer');
     for (const control of viewer.querySelectorAll('.browser-viewer-controls input, .browser-viewer-controls button')) control.disabled = !e.target.checked;
-    if (e.target.checked) viewer.querySelector('img')?.focus();
+    if (e.target.checked) viewer.querySelector(':scope > img')?.focus();
     else { viewerTextBuffer = ''; clearTimeout(viewerTextTimer); viewer.querySelector('#browser-viewer-text').value = ''; }
     return;
   }
@@ -982,7 +1062,7 @@ document.addEventListener('click', async (e) => {
   if (e.target.dataset.browserViewerKey) {
     flushViewerText(); queueViewerInput({ type: 'key', key: e.target.dataset.browserViewerKey }); return;
   }
-  const viewerImage = document.querySelector('#browser-viewer img');
+  const viewerImage = document.querySelector('#browser-viewer > img');
   if (e.target === viewerImage) {
     viewerImage.focus();
     const viewer = document.getElementById('browser-viewer');
@@ -995,7 +1075,7 @@ document.addEventListener('click', async (e) => {
   if (e.target.closest?.('[data-browser-expand]')) {
     const slug = e.target.closest('[data-browser-expand]').dataset.browserExpand;
     const viewer = document.getElementById('browser-viewer');
-    let image = viewer.querySelector('img');
+    let image = viewer.querySelector(':scope > img');
     if (!image) { image = document.createElement('img'); viewer.append(image); }
     image.src = browserPreviewUrls[slug];
     image.alt = `${slug} browser screenshot`;
@@ -1010,7 +1090,9 @@ document.addEventListener('click', async (e) => {
     form.querySelector('[data-browser-history="back"]').disabled = !browserNavigation[slug]?.canGoBack;
     form.querySelector('[data-browser-history="forward"]').disabled = !browserNavigation[slug]?.canGoForward;
     viewer.showModal();
-    refreshBrowserNavigation(slug).catch((error) => previewMessage(slug, error.message));
+    syncViewerMode();
+    if (gridMode(slug)) refreshBrowserPreview(slug);
+    else refreshBrowserNavigation(slug).catch((error) => previewMessage(slug, error.message));
     return;
   }
   if (e.target.dataset.browserPreview) {
@@ -1019,6 +1101,18 @@ document.addEventListener('click', async (e) => {
     else browserPreviewOpen.add(slug);
     lastRender = ''; render();
     if (browserPreviewOpen.has(slug)) await refreshBrowserPreview(slug, true);
+    return;
+  }
+  if (e.target.dataset.browserView) {
+    setBrowserView(e.target.dataset.browserProject || document.getElementById('browser-viewer').dataset.project, e.target.dataset.browserView);
+    return;
+  }
+  const tile = e.target.closest?.('[data-browser-focus-tab]');
+  if (tile) {
+    const slug = tile.dataset.browserFocusTab;
+    browserSelectedTab[slug] = tile.dataset.tab;
+    delete browserNavigation[slug]; delete browserAddressDraft[slug];
+    setBrowserView(slug, 'tab');
     return;
   }
   if (e.target.dataset.browserRefresh) { await refreshBrowserPreview(e.target.dataset.browserRefresh, true); return; }

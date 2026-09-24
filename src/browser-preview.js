@@ -102,9 +102,21 @@ async function command(endpoint, method, params = {}, timeoutMs, timeoutMessage)
   return (await commands(endpoint, [{ method, params }], timeoutMs, timeoutMessage))[0];
 }
 
-export async function browserScreenshot(project, tabId) {
+// Parallel screenshots of different tabs in one Chrome block each other, so capture one tab at a time per browser.
+const captureQueues = new Map();
+function oneAtATime(project, task) {
+  const next = (captureQueues.get(project) || Promise.resolve()).then(task, task);
+  captureQueues.set(project, next.catch(() => {}));
+  return next;
+}
+
+export function browserScreenshot(project, tabId) {
+  return oneAtATime(project, () => captureTab(project, tabId));
+}
+
+async function captureTab(project, tabId) {
   const result = await command(await pageTarget(project, tabId), 'Page.captureScreenshot', { format: 'jpeg', quality: 72, captureBeyondViewport: false, fromSurface: true },
-    15000, 'The page did not return a screenshot within 15 s. It can be loading, busy, or showing a dialog. Refresh again, or choose another tab.');
+    15000, 'The page did not return a screenshot within 15 s. It can be loading, busy, or showing a dialog, or an agent can be taking its own screenshot of this browser. Refresh again, or choose another tab.');
   if (!result?.data) throw new Error('Browser returned no screenshot.');
   const image = Buffer.from(result.data, 'base64');
   if (image.length > 8 * 1024 * 1024) throw new Error('Browser screenshot is too large.');
