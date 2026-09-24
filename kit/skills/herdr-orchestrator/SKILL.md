@@ -175,7 +175,7 @@ herdr agent prompt <orch-pane> "WORKER REPORT <name>: <done|blocked|stopped>. Re
 - Review generated artifacts directly.
 - Read [the dedicated browser service](../../browser-service.md) before browser work. Use [the shared-browser rules](../../shared-browser.md) only for an explicitly assigned legacy session.
 - Keep each evidence tier separate.
-- Use the evidence tiers configured by the project.
+- Use the evidence tiers configured by the project. Set them in `evidenceTiers` in `.herdr-boss.json`; the kit rejects every other tier.
 - Use `herdr-boss check --report <file>` to validate a worker report.
 - Use `herdr-boss check --worktree <dir> --allow <path>` to check worktree scope.
 - Use `herdr-boss worker collect <name>` after independent review.

@@ -34,7 +34,7 @@ function tiers(value, errors, allowedTiers) {
   const list = Array.isArray(value) ? value : [value];
   if (!list.length) errors.push('evidenceTier must not be empty.');
   list.forEach((tier, index) => {
-    if (!allowedTiers.includes(tier)) errors.push(`evidenceTier[${index}] is unknown: ${String(tier)}.`);
+    if (!allowedTiers.includes(tier)) errors.push(`evidenceTier[${index}] is unknown: ${String(tier)}. Allowed tiers: ${allowedTiers.join(', ') || '(none)'}. Set the project's tiers in evidenceTiers in .herdr-boss.json at the repository root.`);
   });
 }
 

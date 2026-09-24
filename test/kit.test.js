@@ -354,3 +354,9 @@ test('project setup must be a non-empty command', () => {
   fs.writeFileSync(path.join(root, '.herdr-boss.json'), JSON.stringify({ setup: '  ' }));
   assert.throws(() => loadProjectConfig({ cwd: root }), /setup must be null or a non-empty shell command/);
 });
+
+test('an unknown evidence tier names the allowed tiers and the project setting', async () => {
+  const { validateWorkerReport } = await import('../src/kit/orchestration.js');
+  const errors = validateWorkerReport({ evidenceTier: ['owner-proxy'] }, { evidenceTiers: ['local', 'owner'] });
+  assert.ok(errors.some((error) => /evidenceTier\[0\] is unknown: owner-proxy\. Allowed tiers: local, owner\. Set the project's tiers in evidenceTiers in \.herdr-boss\.json/.test(error)));
+});
