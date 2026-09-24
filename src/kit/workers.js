@@ -92,6 +92,16 @@ export function loadWarning(rules) {
   ].join('\n');
 }
 
+function runSetupCommand(command, cwd, timeoutMs) {
+  return execFileSync('/bin/sh', ['-c', command], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024 });
+}
+
+function setupFailure(error, command, timeoutSeconds) {
+  const tail = String(error.stderr || error.stdout || '').trim().split('\n').slice(-15).join('\n');
+  const reason = error.signal === 'SIGTERM' ? `did not finish within ${timeoutSeconds} s` : `failed with exit code ${error.status ?? 'unknown'}`;
+  return new Error(`Project setup \`${command}\` ${reason}. No agent was started.${tail ? `\n${tail}` : ''}`);
+}
+
 function listFrom(value, key) {
   if (Array.isArray(value)) return value;
   if (Array.isArray(value?.[key])) return value[key];
@@ -224,6 +234,7 @@ function renderStartPlan(plan) {
     ...(plan.noWorktree ? [] : [`   $ git worktree add -b ${displayArg(plan.branch)} ${displayArg(plan.worktree)} ${displayArg(plan.base)}`]),
     `   Append /.worker/ to ${plan.excludeFile}`,
     `5. Render brief: ${plan.worktree}/.worker/brief.md from ${plan.template}`,
+    ...(plan.setup ? [`   Run project setup in the worktree (timeout ${plan.setupTimeoutSeconds} s):`, `   $ ${plan.setup}`] : []),
     `6. Place worker in workspace ${plan.workspaceId}:`,
     `   $ herdr ${plan.paneCommand.map(displayArg).join(' ')}`,
     `7. Start agent:`,
@@ -245,6 +256,7 @@ export function startWorker(name, options, {
   output = console.log,
   readText = readAgentText,
   wait = pause,
+  runSetup = runSetupCommand,
 } = {}) {
   if (!NAME_PATTERN.test(name)) throw new Error('Worker name must match [a-z][a-z0-9-]{0,31}.');
   if (env.HERDR_ENV !== '1') throw new Error('Run worker start from a Herdr-managed pane (HERDR_ENV=1).');
@@ -324,6 +336,8 @@ export function startWorker(name, options, {
     name, kind: options.kind, model, effort, rulesFile: rulesPath, rulesStale: staleRules,
     noWorktree: !!options.noWorktree, worktree, branch, base, template: config.briefTemplatePath,
     workspaceId, paneId, paneCommand, launchArgs, recordFile, excludeFile,
+    // A worker in the current worktree uses its existing dependencies, so setup runs only for a new worktree.
+    setup: options.noWorktree ? null : config.setup ?? null, setupTimeoutSeconds: config.setupTimeoutSeconds ?? 900,
   };
   if (options.dryRun) {
     output(renderStartPlan(plan));
@@ -353,6 +367,13 @@ export function startWorker(name, options, {
     addExclude(worktree);
     fs.mkdirSync(path.join(worktree, '.worker'), { recursive: true });
     fs.writeFileSync(path.join(worktree, '.worker', 'brief.md'), brief);
+    if (plan.setup) {
+      output(`Running project setup in ${worktree}: ${plan.setup}`);
+      const started = Date.now();
+      try { runSetup(plan.setup, worktree, plan.setupTimeoutSeconds * 1000); }
+      catch (error) { throw setupFailure(error, plan.setup, plan.setupTimeoutSeconds); }
+      output(`Project setup finished in ${Math.round((Date.now() - started) / 1000)} s.`);
+    }
     placement = chooseWorkerPane(workspaceId, worktree, herdr);
     paneId = placement.paneId;
     try {

@@ -18,6 +18,9 @@ export const PROJECT_DEFAULTS = Object.freeze({
   runsDir: '.orchestration/runs',
   briefTemplate: null,
   allowedModels: null,
+  // Shell command that worker start runs in each new worktree before the agent starts, for example "npm ci --prefer-offline".
+  setup: null,
+  setupTimeoutSeconds: 900,
 });
 
 export function findGitRoot(cwd = process.cwd()) {
@@ -52,6 +55,8 @@ export function loadProjectConfig({ cwd = process.cwd(), file = '.herdr-boss.jso
   if (config.allowedModels !== null && (!Array.isArray(config.allowedModels) || config.allowedModels.some((model) => typeof model !== 'string'))) {
     throw new Error('allowedModels must be null or an array of model names.');
   }
+  if (config.setup !== null && (typeof config.setup !== 'string' || !config.setup.trim())) throw new Error('setup must be null or a non-empty shell command.');
+  if (!Number.isInteger(config.setupTimeoutSeconds) || config.setupTimeoutSeconds < 10) throw new Error('setupTimeoutSeconds must be an integer of 10 or more.');
   if (!Array.isArray(config.evidenceTiers) || config.evidenceTiers.length === 0 || config.evidenceTiers.some((tier) => typeof tier !== 'string')) {
     throw new Error('evidenceTiers must be a non-empty array of strings.');
   }

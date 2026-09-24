@@ -110,6 +110,14 @@ The model list excludes experimental entries that appear in only one project's n
 13. Run `herdr-boss worktree prune` to list removable worktrees.
 14. Add `--apply` only when you want to remove clean, merged worktrees without live panes.
 
+A new worktree has no untracked files, so it has no installed dependencies. Set `setup` in `.herdr-boss.json` to a shell command that `worker start` runs in each new worktree before the agent starts:
+
+```json
+{ "setup": "npm ci --prefer-offline --no-audit --no-fund", "setupTimeoutSeconds": 900 }
+```
+
+The command runs with the worktree as its working directory. It does not run with `--no-worktree`. When the command fails or does not finish in time, `worker start` prints the last output lines, starts no agent, and removes the new worktree and branch. A dependency install is heavy work on a shared machine: prefer a command that uses the package cache, and check the load warning before you start several workers.
+
 Use `herdr-boss gh issue create`, `comment`, or `edit` with `--body-file` to run a safe GitHub issue command.
 Use `herdr-boss tick` to refresh the machine worker rules.
 

@@ -304,3 +304,53 @@ test('worker start load warning names the load, the limit, and the actions', asy
   assert.match(text, /--maxWorkers=2/);
   assert.match(text, /full test suite/);
 });
+
+function setupFixture(setup) {
+  const root = temporaryRepo();
+  const template = path.join(root, 'brief-template.md');
+  fs.writeFileSync(template, 'Worker {{name}}: {{task}}');
+  fs.writeFileSync(path.join(root, '.herdr-boss.json'), JSON.stringify({ briefTemplate: template, setup }));
+  const config = loadProjectConfig({ cwd: root });
+  const rulesFile = path.join(root, 'rules.json');
+  fs.writeFileSync(rulesFile, JSON.stringify({ updatedAt: new Date().toISOString(), avoidKinds: [] }));
+  const calls = [];
+  const herdr = (args) => {
+    calls.push(args.slice(0, 2).join(' '));
+    if (args[0] === 'agent' && args[1] === 'list') return { agents: [] };
+    if (args[0] === 'tab' && args[1] === 'list') return { tabs: [{ tab_id: 'ws:t1', workspace_id: 'ws', label: 'Workers' }] };
+    if (args[0] === 'pane' && args[1] === 'list') return { panes: [{ pane_id: 'ws:p1', workspace_id: 'ws', tab_id: 'ws:t1', width: 160, height: 45 }] };
+    if (args[0] === 'pane' && args[1] === 'split') return { pane: { pane_id: 'ws:p2' } };
+    if (args[0] === 'pane' && args[1] === 'close') return {};
+    if (args[0] === 'agent' && (args[1] === 'start' || args[1] === 'prompt')) return {};
+    throw new Error(`Unexpected Herdr call: ${args.join(' ')}`);
+  };
+  const env = { HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'ws', HERDR_PANE_ID: 'ws:orch' };
+  return { root, config, rulesFile, calls, herdr, env };
+}
+
+test('worker start runs the project setup in the new worktree before the agent starts', () => {
+  const f = setupFixture('npm ci --prefer-offline');
+  const setupCalls = [];
+  const result = startWorker('demo', { kind: 'codex', task: 'x', allow: ['src/'] }, {
+    config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+    runSetup: (command, cwd, timeout) => { setupCalls.push({ command, cwd, timeout, agentStarted: f.calls.includes('agent start') }); return ''; },
+  });
+  assert.deepEqual(setupCalls, [{ command: 'npm ci --prefer-offline', cwd: result.worktree, timeout: 900000, agentStarted: false }]);
+  assert.ok(f.calls.includes('agent start'));
+});
+
+test('worker start stops before any agent when project setup fails, and removes the worktree', () => {
+  const f = setupFixture('npm ci');
+  assert.throws(() => startWorker('demo', { kind: 'codex', task: 'x', allow: ['src/'] }, {
+    config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+    runSetup: () => { throw Object.assign(new Error('failed'), { status: 1, stderr: 'npm ERR! missing lockfile' }); },
+  }), /Project setup `npm ci` failed with exit code 1\. No agent was started\.\nnpm ERR! missing lockfile/);
+  assert.ok(!f.calls.includes('agent start'));
+  assert.ok(!fs.existsSync(f.config.worktreePath('demo')));
+});
+
+test('project setup must be a non-empty command', () => {
+  const root = temporaryRepo();
+  fs.writeFileSync(path.join(root, '.herdr-boss.json'), JSON.stringify({ setup: '  ' }));
+  assert.throws(() => loadProjectConfig({ cwd: root }), /setup must be null or a non-empty shell command/);
+});
