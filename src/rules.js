@@ -19,6 +19,13 @@ export function fmtTime(iso) {
   return sameDay ? t : `${d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })} ${t}`;
 }
 
+// Broadcast alerts go only to orchestrators whose workspace has a working or blocked non-orchestrator agent.
+// An idle orchestrator in a quiet project has no work to adjust, and a prompt would only spend its tokens.
+export function broadcastTargets(orchs, panes) {
+  const busy = new Set((panes || []).filter((p) => p.agent && !p.orch && ['working', 'blocked'].includes(p.status)).map((p) => p.workspace));
+  return orchs.filter((o) => busy.has(o.workspace));
+}
+
 // alert: { key, severity: info|warn|critical, scope: 'all' | <workspace id> | 'user', title, text }
 export function evaluate(snap, cfg, paneSince, now = Date.now(), policy = null) {
   const alerts = [];

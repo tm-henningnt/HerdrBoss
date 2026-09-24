@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
 import { DATA_DIR } from './config.js';
 import { collectHerdr, collectQuotas, collectMachine, collectProcesses, findBrowsers, run } from './collect.js';
-import { evaluate, renderBulletin, fmtDuration, providerName } from './rules.js';
+import { evaluate, renderBulletin, fmtDuration, providerName, broadcastTargets } from './rules.js';
 import { listProjects } from './projects.js';
 import { loadModels } from './kit/config.js';
 import { loadPolicy, deriveControl, providerFor, pickSuccessor } from './control.js';
@@ -352,9 +352,11 @@ export class Engine extends EventEmitter {
     // Prompts to orchestrators, grouped per pane.
     if (this.push) {
       const perPane = new Map();
+      const broadcast = broadcastTargets(orchs, herdr?.panes);
       for (const a of alerts) {
         if (a.suppressPrompt || a.scope === 'user') continue;
-        const targets = a.scope === 'all' ? orchs : orchs.filter((o) => o.workspace === a.scope);
+        // A skipped broadcast stays unsent, so it reaches the orchestrator when its workers become active.
+        const targets = a.scope === 'all' ? broadcast : orchs.filter((o) => o.workspace === a.scope);
         for (const o of targets) {
           const rec = this.memory.pushes[`${a.key}@${o.id}`];
           const due = !rec || (!a.once && now - rec.at > cooldown) || SEV[a.severity] > SEV[rec.severity];

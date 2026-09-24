@@ -3,6 +3,7 @@ import test from 'node:test';
 import { deriveControl, POLICY_DEFAULTS, providerFor, validatePolicy } from '../src/control.js';
 import { validateUsage, usageSummary } from '../src/usage.js';
 import { loadModels } from '../src/kit/config.js';
+import { broadcastTargets } from '../src/rules.js';
 
 const models = loadModels();
 const policy = (patch = {}) => ({ ...structuredClone(POLICY_DEFAULTS), ...patch });
@@ -61,4 +62,16 @@ test('usage summary distinguishes recorded runs from measured tokens', () => {
   assert.equal(rows.byProject.a.runs, 2);
   assert.equal(rows.byProject.a.measuredRuns, 1);
   assert.equal(rows.byProject.a.inputTokens, 100);
+});
+
+test('broadcast notices skip orchestrators in workspaces without active agents', () => {
+  const orchs = [{ id: 'w1:p1', workspace: 'w1' }, { id: 'w2:p1', workspace: 'w2' }, { id: 'w3:p1', workspace: 'w3' }];
+  const panes = [
+    { id: 'w1:p1', workspace: 'w1', agent: 'claude', orch: true, status: 'working' },
+    { id: 'w1:p2', workspace: 'w1', agent: 'pi', orch: false, status: 'idle' },
+    { id: 'w2:p2', workspace: 'w2', agent: 'codex', orch: false, status: 'working' },
+    { id: 'w3:p2', workspace: 'w3', agent: 'claude', orch: false, status: 'blocked' },
+    { id: 'w3:p3', workspace: 'w3', agent: null, orch: false, status: null },
+  ];
+  assert.deepEqual(broadcastTargets(orchs, panes).map((o) => o.id), ['w2:p1', 'w3:p1']);
 });

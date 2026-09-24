@@ -39,7 +39,7 @@ Then it applies rules and writes three files to `~/.herdr-boss/`:
 
 Herdr Boss never terminates a configured shared browser. It reports one as missing only when listed in `sharedBrowsers`. Port 9222 is reserved for an optional legacy shared browser; new installations have no shared-browser alert by default.
 
-Herdr Boss sends a prompt only to a pane with the label `orch`, and only when that agent is `idle` or `done`. It sends the same alert to the same pane at most once in 6 hours. It sends it again sooner only when the severity increases. It sends a user notification once for each alert.
+Herdr Boss sends a prompt only to a pane with the label `orch`, and only when that agent is `idle` or `done`. A notice for all orchestrators, such as a quota or machine load alert, goes only to orchestrators whose workspace has a worker agent that is `working` or `blocked`. An orchestrator in a quiet project gets the notice when one of its workers becomes active, if the alert is still present. It sends the same alert to the same pane at most once in 6 hours. It sends it again sooner only when the severity increases. It sends a user notification once for each alert.
 
 ## Label an orchestrator
 
