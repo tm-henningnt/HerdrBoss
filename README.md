@@ -60,7 +60,8 @@ The pane label stays when the agent in the pane restarts. An agent name (`herdr 
 Node 22 or later, `herdr`, and `codexbar` must be in `/opt/homebrew/bin`.
 
 1. Run `bin/herdr-boss install`. This installs the launchd agent `no.tallmaker.herdr-boss` and starts it.
-2. Open http://127.0.0.1:4477.
+2. Put `bin/herdr-boss` on your `PATH`. For this machine, link it with `ln -s "$(pwd)/bin/herdr-boss" ~/.local/bin/herdr-boss`.
+3. Open http://127.0.0.1:4477.
 
 To remove it, run `bin/herdr-boss uninstall`.
 
@@ -72,6 +73,30 @@ To remove it, run `bin/herdr-boss uninstall`.
 | `herdr-boss tick` | Collect once and print the alerts. It sends nothing and terminates nothing. |
 | `herdr-boss publish <slug> <file>` | Validate a project status file and install it. |
 | `herdr-boss logs` | Show the last 100 lines of the server log. |
+
+## Kit commands
+
+Use Herdr Boss commands to start and track project workers.
+Run `herdr-boss kit-path` to find the shared skill, templates, and model policy.
+The model list excludes experimental entries that appear in only one project's notes.
+
+1. Add `.herdr-boss.json` to the project root when the project needs custom values.
+2. Run `herdr-boss models` to see the allowed agent models.
+3. Run `herdr-boss worker start <name> --kind <kind> --task "<task>"` to start a worker.
+4. Add `--allow <path>` for each path that the worker may change.
+5. Add `--issue <number>` to link the work to an issue.
+6. Add `--dry-run` to print the plan without making changes.
+7. Run `herdr-boss worker list` to see active worker records.
+8. Run `herdr-boss worker collect <name>` to read a worker report and check its scope.
+9. Add `--record --outcome done --gate-passed` to append a successful run to the ledger.
+10. Run `herdr-boss ledger check` to validate the ledger.
+11. Run `herdr-boss check --report <file>` to validate a worker report.
+12. Run `herdr-boss check --worktree <directory> --allow <path>` to check changed paths.
+13. Run `herdr-boss worktree prune` to list removable worktrees.
+14. Add `--apply` only when you want to remove clean, merged worktrees without live panes.
+
+Use `herdr-boss gh issue create`, `comment`, or `edit` with `--body-file` to run a safe GitHub issue command.
+Use `herdr-boss tick` to refresh the machine worker rules.
 
 ## Configuration
 

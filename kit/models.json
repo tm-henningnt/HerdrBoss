@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "kinds": {
+    "codex": {
+      "defaultModel": "gpt-6-luna",
+      "allowedModels": ["gpt-6-luna", "gpt-6-sol", "gpt-6-astra"],
+      "allowedEfforts": ["low", "medium", "high", "xhigh"],
+      "defaultEffort": "xhigh",
+      "launchArgs": ["-m", "{{model}}", "-c", "model_reasoning_effort={{effort}}"]
+    },
+    "claude": {
+      "defaultModel": "claude-opus-5.5",
+      "allowedModels": ["claude-opus-5.5", "claude-opus-5"],
+      "allowedEfforts": [],
+      "defaultEffort": null,
+      "launchArgs": ["--model", "{{model}}"]
+    },
+    "opencode": {
+      "defaultModel": "opencode/big-pickle",
+      "allowedModels": [
+        "opencode/big-pickle",
+        "opencode/ling-3.0-flash-fin-free",
+        "opencode/mimo-v2.6-flash-free",
+        "opencode/muse-spark-1.2-contributor-free",
+        "opencode/muse-spark-1.3-contributor-free",
+        "opencode/nemotron-3-ultra-free",
+        "opencode/nemotron-3.5-lightning-free",
+        "opencode/space-bunny-free",
+        "opencode-go/deepseek-v4.1-flash"
+      ],
+      "allowedEfforts": [],
+      "defaultEffort": null,
+      "launchArgs": ["-m", "{{model}}"]
+    },
+    "pi": {
+      "defaultModel": "opencode-go/muse-spark-1.3-contributor",
+      "allowedModels": [
+        "opencode-go/deepseek-v4.1-flash",
+        "opencode-go/mimo-v2.6-flash",
+        "opencode-go/muse-spark-1.3-contributor",
+        "opencode-go/space-bunny-free"
+      ],
+      "allowedEfforts": [],
+      "defaultEffort": null,
+      "launchArgs": [
+        "--model", "{{model}}",
+        "--models", "{{model}}",
+        "--no-extensions",
+        "-e", "~/.pi/agent/extensions/herdr-agent-state.ts"
+      ]
+    }
+  }
+}

@@ -1,0 +1,23 @@
+## Herdr Boss orchestration
+
+- Use the Herdr Boss orchestrator skill when you coordinate workers or resume an unknown project state.
+- Run `herdr-boss kit-path` to find the shared kit repository. Use its path for the files below.
+- Read `kit/skills/herdr-orchestrator/SKILL.md` there.
+- Read `kit/models.md` before selecting a worker kind or model.
+- Use `kit/models.json` as the source of truth for the model allow-list.
+- Read `~/.herdr-boss/bulletin.md` before each worker dispatch.
+- Read `kit/shared-browser.md` before using a shared signed-in browser.
+- Keep the orchestrator pane labeled `orch`.
+- Use `herdr-boss worker start` to start workers.
+- Use lowercase, unique worker names.
+- Give every worker one bounded task and exact allowed paths.
+- Keep Git branches, worktrees, commits, and merges under orchestrator control.
+- Wait on workers or events. Do not poll panes in a tight loop.
+- Treat `working`, `blocked`, `idle`, `done`, and `unknown` as distinct states.
+- Require `.worker/report.md`, `.worker/report.json`, and a `WORKER REPORT` message.
+- Inspect each worker diff and run acceptance commands independently.
+- Keep evidence tiers separate. Local checks do not prove hosted or Owner acceptance.
+- Publish project status through Herdr Boss. Do not build a separate project dashboard.
+- Keep project-specific rules in this file: product direction, issue sources, acceptance gates, release policy, and browser procedures.
+- Keep project terminology, data, architecture decisions, and human escalation rules here.
+- Use `docs/orchestrator-instructions.md` to find this section and its installation notes.

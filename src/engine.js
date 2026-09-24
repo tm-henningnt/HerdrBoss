@@ -81,6 +81,20 @@ export class Engine extends EventEmitter {
       const evaluation = evaluate(snap, this.cfg, this.memory.paneSince, now);
       snap.alerts = evaluation.alerts;
       snap.advice = evaluation.advice;
+      const quotaAlerts = evaluation.alerts.filter((alert) => alert.key.startsWith('quota:'));
+      const criticalProviders = new Set(quotaAlerts.filter((alert) => alert.severity === 'critical').map((alert) => alert.key.split(':')[1]));
+      const limitedProviders = new Set(quotaAlerts.map((alert) => alert.key.split(':')[1]));
+      const avoidKinds = [...new Set([...criticalProviders].flatMap((provider) => this.cfg.providerKinds[provider] || []))];
+      const preferredKinds = [...new Set(Object.entries(this.cfg.providerKinds)
+        .filter(([provider]) => !limitedProviders.has(provider))
+        .flatMap(([, kinds]) => kinds))];
+      writeJson(path.join(DATA_DIR, 'rules.json'), {
+        updatedAt: snap.updatedAt,
+        avoidKinds,
+        preferredKinds,
+        memFreePercent: machine?.memFreePercent ?? null,
+        notes: evaluation.advice,
+      });
       snap.paneSince = this.memory.paneSince;
       snap.history = this.memory.history || [];
       snap.push = this.push;

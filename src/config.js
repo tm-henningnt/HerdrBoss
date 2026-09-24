@@ -28,7 +28,7 @@ const DEFAULTS = {
   },
   workers: { staleIdleMinutes: 120 },
   // codexbar provider -> herdr agent kinds that consume it.
-  providerKinds: { claude: ['claude'], codex: ['codex'], opencodego: ['opencode'] },
+  providerKinds: { claude: ['claude'], codex: ['codex'], opencodego: ['opencode', 'pi'] },
   orchestratorLabel: 'orch',
 };
 

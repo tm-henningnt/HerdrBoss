@@ -19,10 +19,27 @@ const USAGE = `herdr-boss <command>
   install               Install and start the launchd agent.
   uninstall             Stop and remove the launchd agent.
   logs                  Show the server log.
+  worker ...            Start, collect, or list workers.
+  worktree prune        List safe worktree removals.
+  ledger ...            Append or check delegated-run records.
+  check ...             Validate worker handoffs and scope.
+  gh issue ...          Run safe GitHub issue commands.
+  models                Show allowed worker models.
+  kit-path              Print the shared kit directory.
 `;
 
 async function main() {
   const [cmd, ...args] = process.argv.slice(2);
+  if (cmd === 'kit-path') {
+    const { KIT_ROOT } = await import('./kit/config.js');
+    console.log(KIT_ROOT);
+    return;
+  }
+  if (['worker', 'worktree', 'ledger', 'check', 'gh', 'models'].includes(cmd)) {
+    const { runKitCommand } = await import('./kit/cli.js');
+    runKitCommand(cmd, args);
+    return;
+  }
   const cfg = loadConfig();
   switch (cmd) {
     case 'serve': {
@@ -92,4 +109,4 @@ async function main() {
   }
 }
 
-main().catch((e) => { console.error(e.message); process.exit(1); });
+main().catch((e) => { console.error(e.message); process.exit(e.exitCode ?? 1); });
