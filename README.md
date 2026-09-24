@@ -117,7 +117,7 @@ Put overrides in `~/.herdr-boss/config.json`. Restart the service after a change
 
 ## Shared project dashboards
 
-Orchestrators do not build their own dashboards. They publish a status file, and Herdr Boss renders it at `/p/<slug>`. See [docs/project-status.md](docs/project-status.md).
+Orchestrators do not build their own dashboards. They publish a status file, and Herdr Boss renders it on `/projects/<slug>`. See [docs/project-status.md](docs/project-status.md).
 
 Use [docs/orchestrator-instructions.md](docs/orchestrator-instructions.md) to add the shared orchestrator instructions to each project's CLAUDE.md or AGENTS.md.
 
@@ -128,6 +128,12 @@ The dashboard opens on an Overview with resource alerts, pending handovers, proj
 The policy lives in `~/.herdr-boss/policy.json`. Use `herdr-boss policy show` or `herdr-boss policy set <file>` without the dashboard. Provider modes are `managed` and `ignore`. `ignore` skips pacing and handover alerts for that provider.
 
 When an orchestrator's quota is near its reserve or will run out within the handover lead time, Herdr Boss shows a successor recommendation and sends a notice while the source quota can still serve it. Every open project's detail page also offers a handover before an alert is suggested. Choose a successor harness, model, and start mode; Plan checks whether migration is available, Prepare starts a successor in a separate tab, and Inspect successor shows its response. Review that response and confirm activation to move the `orch` or `boss` label. The old pane stays as standby. The same flow is available through `herdr-boss handoff plan <pane> --to codex`, `handoff prepare`, and `handoff activate <id> --confirmed`. `--mode migrate` uses [session-migrate](https://github.com/xhluca/session-migrate) when a native session can be converted; `--mode fresh` bootstraps from project files and the source pane. Migration moves conversation history. It does not move credentials, hooks, or runtime configuration.
+
+Allocation can enable automatic handover, which is off by default. Boss prepares a successor when the current orchestrator's provider reaches its reserve or projected handover window. It prefers session migration when available, otherwise starts a fresh bootstrap. The successor must call `herdr-boss handoff ready <id>` after reviewing its state. Boss activates only after that signal, an idle successor, fresh quota data, and the configured usage percentage (98% by default). If there is no eligible alternative or preparation fails, Boss leaves the current orchestrator in control and records the failure in Logs. Disabling automatic handover stops pending automatic activation.
+
+If an orchestrator agent has already stopped at the quota limit but its labeled pane remains, Boss uses the last recorded harness and prepares a fresh successor from the project files and source pane. Recovery from a deleted pane still requires manual intervention.
+
+At activation, the successor receives the current workspace agent pane roster. Boss then sends the former orchestrator and existing worker agents a one time handover notice when each pane is idle or done, so running tasks are not interrupted. Peers that close before becoming idle need no notice.
 
 Each project can request a persistent Chrome profile with `herdr-boss browser request <slug>`. Herdr Boss assigns a port from 9223–9299 and records the profile in `~/.herdr-boss/browser-sessions.json`. `browser list` shows the port and verifies the profile. Use `--reserve` to allocate without launching Chrome. Port 9222 remains the protected legacy shared browser.
 

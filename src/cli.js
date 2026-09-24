@@ -27,6 +27,7 @@ const USAGE = `herdr-boss <command>
   handoff plan PANE --to KIND [--mode migrate|fresh]
   handoff prepare PANE --to KIND [--mode migrate|fresh]
   handoff activate ID --confirmed
+  handoff ready ID      Signal automatic successor readiness.
   worker ...            Start, collect, or list workers.
   worktree prune        List safe worktree removals.
   ledger ...            Append or check delegated-run records.
@@ -79,14 +80,15 @@ async function main() {
       break;
     }
     case 'handoff': {
-      const { planHandoff, prepareHandoff, activateHandoff, listHandoffs } = await import('./handoff.js');
+      const { planHandoff, prepareHandoff, activateHandoff, markHandoffReady, listHandoffs } = await import('./handoff.js');
       const [action, target] = args;
       if (action === 'list') { console.log(JSON.stringify(listHandoffs(), null, 2)); break; }
       if (action === 'activate') { console.log(JSON.stringify(activateHandoff(target, { confirmed: args.includes('--confirmed') }), null, 2)); break; }
+      if (action === 'ready') { console.log(JSON.stringify(markHandoffReady(target), null, 2)); break; }
       const value = (flag, fallback) => { const i = args.indexOf(flag); return i < 0 ? fallback : args[i + 1]; };
       const to = value('--to');
       if (!target || !to || !['plan', 'prepare'].includes(action)) throw new Error('Usage: handoff plan|prepare PANE --to KIND [--mode migrate|fresh] [--model MODEL]');
-      const options = { mode: value('--mode', 'migrate'), model: value('--model', null), force: args.includes('--force') };
+      const options = { mode: value('--mode', 'migrate'), model: value('--model', null), force: args.includes('--force'), auto: args.includes('--auto') };
       console.log(JSON.stringify(action === 'plan' ? planHandoff(target, to, options) : prepareHandoff(target, to, options), null, 2));
       break;
     }
@@ -111,7 +113,7 @@ async function main() {
       const text = file === '-' ? fs.readFileSync(0, 'utf8') : fs.readFileSync(file, 'utf8');
       const errors = writeProject(slug, JSON.parse(text));
       if (errors.length) { console.error(errors.join('\n')); process.exit(1); }
-      console.log(`published http://${cfg.host}:${cfg.port}/p/${slug}`);
+      console.log(`published http://${cfg.host}:${cfg.port}/projects/${slug}`);
       break;
     }
     case 'install': {

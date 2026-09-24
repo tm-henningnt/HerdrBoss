@@ -125,7 +125,7 @@ export function serve(cfg) {
         const body = await jsonBody(req);
         if (!engine.state?.control?.projects?.[body.project]?.orch || engine.state.control.projects[body.project].orch.pane !== body.pane) return send(res, 400, { error: 'Unknown current orchestrator pane.' });
         if (!['codex', 'claude', 'opencode', 'pi'].includes(body.to) || !['migrate', 'fresh'].includes(body.mode) || typeof body.model !== 'string') return send(res, 400, { error: 'Choose a target harness, model, and handover mode.' });
-        if (listHandoffs().some((x) => x.sourcePane === body.pane && x.status === 'prepared')) return send(res, 409, { error: 'A successor is already prepared for this orchestrator.' });
+        if (listHandoffs().some((x) => x.sourcePane === body.pane && ['prepared', 'preparing', 'needs-inspection'].includes(x.status))) return send(res, 409, { error: 'A successor exists for this orchestrator. Inspect it before preparing another.' });
         return send(res, 200, await handoffCommand(['prepare', body.pane, '--to', body.to, '--model', body.model, '--mode', body.mode]));
       }
       if (p === '/api/handoffs/activate' && req.method === 'POST') {

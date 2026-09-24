@@ -1,19 +1,22 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
 import { DATA_DIR } from './config.js';
 import { collectHerdr, collectQuotas, collectMachine, collectProcesses, findBrowsers, run } from './collect.js';
-import { evaluate, renderBulletin, fmtDuration } from './rules.js';
+import { evaluate, renderBulletin, fmtDuration, providerName } from './rules.js';
 import { listProjects } from './projects.js';
 import { loadModels } from './kit/config.js';
-import { loadPolicy, deriveControl } from './control.js';
+import { loadPolicy, deriveControl, providerFor } from './control.js';
 import { recordQuotaSnapshot } from './usage.js';
 import { listBrowserSessions } from './browser-pool.js';
+import { listHandoffs } from './handoff.js';
 
 const MEMORY_FILE = path.join(DATA_DIR, 'memory.json');
 const STATE_FILE = path.join(DATA_DIR, 'state.json');
 const BULLETIN_FILE = path.join(DATA_DIR, 'bulletin.md');
 const EVENTS_FILE = path.join(DATA_DIR, 'events.jsonl');
+const CLI_FILE = fileURLToPath(new URL('./cli.js', import.meta.url));
 const SEV = { info: 0, warn: 1, critical: 2 };
 
 function readJson(file, fallback) {
@@ -92,8 +95,51 @@ export class Engine extends EventEmitter {
       const control = deriveControl(snap, policy, this.models, this.memory.paneSince, now);
       snap.policy = policy;
       snap.control = control;
+      this.memory.lastOrchestrators ||= {};
+      for (const p of Object.values(control.projects)) if (p.orch?.kind) this.memory.lastOrchestrators[p.workspace] = { pane: p.orch.pane, kind: p.orch.kind, project: p.slug };
       if (this.act) await this.reap(browsers);
       const evaluation = evaluate(snap, this.cfg, this.memory.paneSince, now, policy);
+      this.memory.quotaRecoveries ||= {};
+      // Older records used the reset timestamp as part of the key. Codexbar can
+      // adjust that timestamp by a minute, so consolidate them by provider/window.
+      for (const [id, recovery] of Object.entries(this.memory.quotaRecoveries)) {
+        const parts = id.split(':');
+        if (parts.length < 3) continue;
+        const key = `${parts[0]}:${parts[1]}`;
+        if (!this.memory.quotaRecoveries[key] || recovery.at < this.memory.quotaRecoveries[key].at) {
+          this.memory.quotaRecoveries[key] = { ...recovery, resetsAt: parts.slice(2).join(':') };
+        }
+        delete this.memory.quotaRecoveries[id];
+      }
+      for (const [id, recovery] of Object.entries(this.memory.quotaRecoveries)) if (now - recovery.at > 7 * 86400 * 1000) delete this.memory.quotaRecoveries[id];
+      for (const q of snap.quotas) {
+        if (q.error) continue;
+        for (const w of q.windows || []) {
+          if (w.extra || w.usedPercent >= this.cfg.quota.warnPercent) continue;
+          const id = `${q.provider}:${w.key}`;
+          const recovery = this.memory.quotaRecoveries[id];
+          if (recovery && now - recovery.at < 2 * 3600 * 1000 && Math.abs(Date.parse(w.resetsAt) - Date.parse(recovery.resetsAt)) < 3600 * 1000) continue;
+          const old = this.state?.quotas?.find((x) => x.provider === q.provider)?.windows?.find((x) => x.key === w.key);
+          const priorWarning = old?.usedPercent >= this.cfg.quota.warnPercent && Date.parse(w.resetsAt) > Date.parse(old.resetsAt);
+          const pushedWarning = Object.entries(this.memory.pushes || {}).some(([key, push]) =>
+            key.startsWith(`quota:${q.provider}:${w.key}:`) &&
+            (key.includes(':warn:') || key.includes(':critical:')) &&
+            now - push.at < 2 * 3600 * 1000 &&
+            Date.parse(w.resetsAt) > Date.parse(key.split('@')[0].split(':').slice(4).join(':')));
+          if (priorWarning || pushedWarning) this.memory.quotaRecoveries[id] = {
+            at: now, resetsAt: w.resetsAt,
+            text: `${providerName(q.provider)} ${w.label.toLowerCase()} quota has reset to ${w.usedPercent}%. The previous quota restriction is cleared. New agents may use this provider again within the current allocation policy.`,
+          };
+        }
+      }
+      for (const [id, recovery] of Object.entries(this.memory.quotaRecoveries)) {
+        if (now - recovery.at > 2 * 3600 * 1000) continue;
+        const [provider, window] = id.split(':');
+        const current = snap.quotas.find((q) => q.provider === provider && !q.error)?.windows?.find((w) => w.key === window);
+        if (!current || current.usedPercent >= this.cfg.quota.warnPercent || Math.abs(Date.parse(current.resetsAt) - Date.parse(recovery.resetsAt)) >= 3600 * 1000) continue;
+        evaluation.alerts.push({ key: `quota:recovered:${id}:${recovery.resetsAt}`, severity: 'info', scope: 'all',
+          title: 'Quota restriction cleared', text: recovery.text });
+      }
       for (const h of control.handoffs) {
         const p = control.projects[h.project];
         evaluation.alerts.push({
@@ -122,7 +168,7 @@ export class Engine extends EventEmitter {
       }
       snap.alerts = evaluation.alerts;
       snap.advice = evaluation.advice;
-      const quotaAlerts = evaluation.alerts.filter((alert) => alert.key.startsWith('quota:'));
+      const quotaAlerts = evaluation.alerts.filter((alert) => alert.key.startsWith('quota:') && alert.severity !== 'info');
       const criticalProviders = new Set(quotaAlerts.filter((alert) => alert.severity === 'critical').map((alert) => alert.key.split(':')[1]));
       const limitedProviders = new Set(quotaAlerts.map((alert) => alert.key.split(':')[1]));
       const avoidKinds = [...new Set([...criticalProviders].filter((provider) => provider === 'codex' || provider === 'claude'))];
@@ -143,14 +189,23 @@ export class Engine extends EventEmitter {
       snap.paneSince = this.memory.paneSince;
       snap.history = this.memory.history || [];
       snap.push = this.push;
+      fs.writeFileSync(BULLETIN_FILE, renderBulletin(snap, evaluation, this.cfg));
       if (this.act) await this.deliver(evaluation.alerts, herdr, now);
       snap.events = this.events.slice(-60);
 
       this.state = snap;
       writeJson(STATE_FILE, snap);
-      fs.writeFileSync(BULLETIN_FILE, renderBulletin(snap, evaluation, this.cfg));
       writeJson(MEMORY_FILE, this.memory);
       this.emit('state', snap);
+      if (this.act && this.push) {
+        try { await this.notifyHandoffPeers(herdr, now); }
+        catch (e) { this.log('error', `Handover peer notice check failed: ${e.message}`); }
+      }
+      if (this.act && policy.autoHandover) {
+        try { await this.autoHandover(control, herdr, policy, now); }
+        catch (e) { this.log('error', `Automatic handover check failed: ${e.message}`); }
+      }
+      writeJson(MEMORY_FILE, this.memory);
       return snap;
     } finally {
       this.running = false;
@@ -180,6 +235,94 @@ export class Engine extends EventEmitter {
     if (!victims.length) return;
     for (const v of victims) { try { process.kill(v.pid, 'SIGTERM'); } catch {} }
     this.log('reap', `Terminated ${victims.length} orphaned agent-browser daemon(s): ${victims.map((v) => `${v.pid} (${fmtDuration(v.age)})`).join(', ')}`);
+  }
+
+  async autoHandover(control, herdr, policy, now) {
+    // Never switch labels using stale quota data or a guessed successor state.
+    if (!this.quotasAt || now - this.quotasAt > (this.cfg.quotaSeconds + this.cfg.tickSeconds) * 1000) return;
+    this.memory.autoHandoverAttempts ||= {};
+    for (const [key, at] of Object.entries(this.memory.autoHandoverAttempts)) if (now - at > 7 * 86400 * 1000) delete this.memory.autoHandoverAttempts[key];
+    const records = listHandoffs();
+    for (const item of records.filter((x) => x.status === 'prepared' && x.automatic && x.readyAt && !x.promptError)) {
+      const provider = providerFor(item.fromKind || this.memory.lastOrchestrators?.[item.workspace]?.kind, null);
+      const quota = this.quotas.find((q) => q.provider === provider && !q.error);
+      if (!quota?.windows?.some((w) => !w.extra && w.usedPercent >= policy.autoHandoverPercent)) continue;
+      const target = herdr?.panes?.find((p) => p.id === item.newPane);
+      const source = herdr?.panes?.find((p) => p.id === item.sourcePane);
+      if (target?.agent !== item.toKind || !['idle', 'done'].includes(target.status) || source?.label !== item.label) continue;
+      const key = `activate:${item.id}`;
+      if (now - (this.memory.autoHandoverAttempts[key] || 0) < 60000) continue;
+      this.memory.autoHandoverAttempts[key] = now;
+      writeJson(MEMORY_FILE, this.memory);
+      try {
+        await run(process.execPath, [CLI_FILE, 'handoff', 'activate', item.id, '--confirmed'], { timeout: 180000 });
+        this.log('handoff', `Automatically activated ${item.toKind} successor for ${item.project}`, { project: item.project, pane: item.newPane });
+      } catch (e) { this.log('error', `Automatic activation for ${item.project} failed: ${String(e.stderr || e.message).slice(0, 300)}`); }
+    }
+    const stopped = Object.values(control.projects).flatMap((p) => {
+      const last = this.memory.lastOrchestrators[p.workspace];
+      if (!p.orch || p.orch.kind || last?.pane !== p.orch.pane) return [];
+      const provider = providerFor(last.kind, null);
+      const window = this.quotas.find((q) => q.provider === provider && !q.error)?.windows?.find((w) => !w.extra && w.usedPercent >= policy.autoHandoverPercent);
+      if (!window || policy.providerModes[provider] === 'ignore') return [];
+      const alternatives = Object.entries(control.globalAllowed).flatMap(([kind, names]) => names
+        .filter((model) => !p.excludedKinds.includes(kind) && !p.excludedModels.includes(model) && providerFor(kind, model) !== provider && !control.risks[providerFor(kind, model)])
+        .map((model) => ({ kind, model })));
+      return [{ project: p.slug, pane: p.orch.pane, fromKind: last.kind, sessionId: null, window, target: alternatives[0] || null }];
+    });
+    for (const h of [...control.handoffs, ...stopped]) {
+      if (records.some((x) => x.sourcePane === h.pane && ['prepared', 'preparing', 'needs-inspection'].includes(x.status))) continue;
+      if (!h.target) {
+        const key = `no-target:${h.pane}:${h.window.resetsAt}`;
+        if (!this.memory.autoHandoverAttempts[key]) {
+          this.memory.autoHandoverAttempts[key] = now;
+          this.log('error', `Automatic handover for ${h.project} has no eligible alternative provider`, { project: h.project });
+        }
+        continue;
+      }
+      const key = `prepare:${h.pane}`;
+      if (now - (this.memory.autoHandoverAttempts[key] || 0) < 15 * 60000) continue;
+      this.memory.autoHandoverAttempts[key] = now;
+      writeJson(MEMORY_FILE, this.memory);
+      try {
+        const mode = ['codex', 'claude'].includes(h.target.kind) && h.sessionId ? 'migrate' : 'fresh';
+        const args = [CLI_FILE, 'handoff', 'plan', h.pane, '--to', h.target.kind, '--model', h.target.model, '--mode', mode];
+        const plan = JSON.parse(await run(process.execPath, args, { timeout: 180000 }));
+        const chosen = mode === 'migrate' && !plan.migration?.available ? 'fresh' : mode;
+        const prepared = JSON.parse(await run(process.execPath,
+          [CLI_FILE, 'handoff', 'prepare', h.pane, '--to', h.target.kind, '--model', h.target.model, '--mode', chosen, '--auto'],
+          { timeout: 300000 }));
+        this.log('handoff', `Automatically prepared ${h.target.kind} successor for ${h.project}; awaiting readiness`, { project: h.project, pane: prepared.newPane });
+      } catch (e) {
+        const reason = String(e.stderr || e.message).slice(0, 300);
+        this.log('error', `Automatic preparation for ${h.project} failed: ${reason}`);
+      }
+    }
+  }
+
+  async notifyHandoffPeers(herdr, now) {
+    this.memory.handoffPeerNotices ||= {};
+    this.memory.handoffPeerAttempts ||= {};
+    const panes = new Map((herdr?.panes || []).map((p) => [p.id, p]));
+    for (const item of listHandoffs().filter((x) => x.status === 'active' && now - Date.parse(x.activatedAt) < 7 * 86400 * 1000)) {
+      for (const id of item.peerPanes || []) {
+        const key = `${item.id}@${id}`;
+        if (this.memory.handoffPeerNotices[key] || now - (this.memory.handoffPeerAttempts[key] || 0) < 60000) continue;
+        const pane = panes.get(id);
+        if (!pane?.agent || !['idle', 'done'].includes(pane.status)) continue;
+        this.memory.handoffPeerAttempts[key] = now;
+        const text = id === item.sourcePane
+          ? `[herdr-boss] Handover complete. You are now standby. Orchestrator pane ${item.newPane} controls ${item.project}; do not dispatch new work. Share any remaining context with the successor.`
+          : `[herdr-boss] ${item.project} has a new orchestrator in pane ${item.newPane} (${item.toKind}). Continue your assigned task and report completion and blockers to that pane. The previous orchestrator pane ${item.sourcePane} is standby.`;
+        try {
+          await run('herdr', ['agent', 'prompt', id, text]);
+          this.memory.handoffPeerNotices[key] = now;
+          this.log('push', `Notified ${id} of ${item.project} orchestrator handover`, { pane: id, project: item.project });
+        } catch (e) { this.log('error', `Handover notice to ${id} failed: ${String(e.stderr || e.message).slice(0, 200)}`); }
+      }
+    }
+    for (const [key, at] of Object.entries(this.memory.handoffPeerNotices)) if (now - at > 8 * 86400 * 1000) delete this.memory.handoffPeerNotices[key];
+    for (const [key, at] of Object.entries(this.memory.handoffPeerAttempts)) if (now - at > 8 * 86400 * 1000) delete this.memory.handoffPeerAttempts[key];
   }
 
   async deliver(alerts, herdr, now) {

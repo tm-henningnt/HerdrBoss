@@ -1,6 +1,6 @@
 # Project status files
 
-Herdr Boss shows one dashboard for all projects. Do not build a project dashboard. Publish a status file. The Boss dashboard renders it at `http://127.0.0.1:4477/p/<slug>`.
+Herdr Boss shows one dashboard for all projects. Do not build a project dashboard. Publish a status file. The Boss dashboard renders it at `http://127.0.0.1:4477/projects/<slug>`.
 
 ## Publish a status file
 

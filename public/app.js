@@ -110,6 +110,9 @@ function controlBlock(s) {
           <label class="setting-line"><span>Idle after minutes</span><input type="number" min="0" max="1440" value="${d.idleMinutes}" data-policy-number="idleMinutes"></label>
           <label class="setting-line"><span>Orchestrator reserve %</span><input type="number" min="0" max="80" value="${d.reservePercent}" data-policy-number="reservePercent"></label>
           <label class="setting-line"><span>Handover lead minutes</span><input type="number" min="0" max="10080" value="${d.handoffLeadMinutes}" data-policy-number="handoffLeadMinutes"></label>
+          <label class="setting-line"><span>Automatic handover</span><input type="checkbox" data-policy-bool="autoHandover" ${d.autoHandover ? 'checked' : ''}></label>
+          <label class="setting-line"><span>Activate at quota used %</span><input type="number" min="90" max="100" value="${d.autoHandoverPercent}" data-policy-number="autoHandoverPercent"></label>
+          <p class="setting-help">When enabled, Boss prepares a successor at the reserve limit and activates it at this quota level after the successor reports ready. The source stays in control until then.</p>
         </div><div><h3>Subscriptions</h3>${providerRows}</div>
         <div><h3>Available harnesses &amp; models</h3><div class="model-kinds">${kindRows}</div></div>
       </div>
@@ -122,14 +125,14 @@ function handoffBlock(s, projectSlug = null) {
   const candidates = (s.control?.handoffs || []).filter((h) => !projectSlug || h.project === projectSlug);
   const project = projectSlug && s.control?.projects?.[projectSlug];
   if (project?.orch && !candidates.length) candidates.push({ project: projectSlug, pane: project.orch.pane, fromKind: project.orch.kind, target: null, window: null });
-  const prepared = handoffRecords.filter((x) => x.status === 'prepared' && (!projectSlug || x.project === projectSlug));
+  const prepared = handoffRecords.filter((x) => ['prepared', 'preparing', 'needs-inspection'].includes(x.status) && (!projectSlug || x.project === projectSlug));
   const cards = [
     ...prepared.map((item) => {
       const output = handoffOutputs[item.id];
-      return `<article class="handoff-item panel"><div class="handoff-head"><div><b>${esc(s.control?.projects?.[item.project]?.label || item.project)}</b><p>Successor prepared · ${esc(item.toKind)} / ${esc(item.model)}</p></div><span class="tag">Awaiting review</span></div>
-        <p>The source orchestrator still controls this project. Inspect the successor's response before transferring the label.</p>
+      return `<article class="handoff-item panel"><div class="handoff-head"><div><b>${esc(s.control?.projects?.[item.project]?.label || item.project)}</b><p>Successor ${item.status === 'prepared' ? 'prepared' : 'needs inspection'} · ${esc(item.toKind)} / ${esc(item.model)}</p></div><span class="tag">${item.status !== 'prepared' ? 'Inspect pane' : item.automatic ? item.readyAt ? 'Ready for automatic activation' : 'Awaiting successor readiness' : 'Awaiting review'}</span></div>
+        <p>${item.status !== 'prepared' ? `Preparation stopped. Inspect pane ${esc(item.newPane)} before taking further action.` : item.automatic ? 'Automatic handover is enabled. The source remains in control until the successor reports ready and the quota reaches the activation level. You can inspect and activate it sooner.' : 'The source orchestrator still controls this project. Inspect the successor\'s response before transferring the label.'}</p>
         <div class="action-row"><button type="button" data-handoff-output="${esc(item.id)}" ${handoffBusy.has(item.id) ? 'disabled' : ''}>Inspect successor</button><span class="inline-feedback" role="status">${esc(handoffMessages[item.id] || item.promptError || '')}</span></div>
-        ${output != null ? `<pre class="handoff-output">${esc(output)}</pre><label class="review-check"><input type="checkbox" data-handoff-reviewed="${esc(item.id)}" ${handoffReviewed.has(item.id) ? 'checked' : ''}> I have reviewed the successor's response</label><button type="button" data-handoff-activate="${esc(item.id)}" ${!handoffReviewed.has(item.id) || handoffBusy.has(item.id) ? 'disabled' : ''}>Confirm activation</button>` : ''}
+        ${output != null ? `<pre class="handoff-output">${esc(output)}</pre>${item.status === 'prepared' ? `<label class="review-check"><input type="checkbox" data-handoff-reviewed="${esc(item.id)}" ${handoffReviewed.has(item.id) ? 'checked' : ''}> I have reviewed the successor's response</label><button type="button" data-handoff-activate="${esc(item.id)}" ${!handoffReviewed.has(item.id) || handoffBusy.has(item.id) ? 'disabled' : ''}>Confirm activation</button>` : ''}` : ''}
       </article>`;
     }),
     ...candidates.filter((h) => !prepared.some((x) => x.sourcePane === h.pane)).map((h) => {
@@ -276,7 +279,7 @@ function agentInventory(s) {
     const slug = project?.slug;
     const work = panes.filter((p) => !p.orch);
     const mode = project?.effectiveMode === 'paused' ? 'Paused' : project?.idle ? 'Idle' : 'Active';
-    return `<section class="workspace-row"><header class="workspace-row-head"><div class="workspace-title"><h2>${slug ? `<a href="/p/${esc(slug)}">${esc(w.label)}</a>` : esc(w.label)}</h2><span class="mono">${esc(w.id)}</span></div><div class="workspace-context"><span>${mode}</span><span>${work.length} worker${work.length === 1 ? '' : 's'}</span>${slug ? `<a href="/p/${esc(slug)}">Project details →</a>` : ''}</div></header>
+    return `<section class="workspace-row"><header class="workspace-row-head"><div class="workspace-title"><h2>${slug ? `<a href="/projects/${esc(slug)}">${esc(w.label)}</a>` : esc(w.label)}</h2><span class="mono">${esc(w.id)}</span></div><div class="workspace-context"><span>${mode}</span><span>${work.length} worker${work.length === 1 ? '' : 's'}</span>${slug ? `<a href="/projects/${esc(slug)}">Project details →</a>` : ''}</div></header>
       <div class="workspace-row-body"><div class="workspace-role"><h3>Orchestrator</h3>${orch ? agentProfile(orch, s) : '<div class="missing-orch">No labeled orchestrator. Label its Herdr pane <code>orch</code> to supervise this project.</div>'}</div>
       <div class="workspace-role workspace-workers"><h3>Workers <span>${work.length}</span></h3>${work.length ? `<ul>${work.map((p) => `<li>${agentProfile(p, s)}</li>`).join('')}</ul>` : '<p class="workspace-empty">No worker agents in this workspace.</p>'}</div></div></section>`;
   }).join('');
@@ -295,18 +298,43 @@ function segBar(c) {
     <div class="legend">${STATUSES.filter((k) => c[k]).map((k) => `<span style="--c:var(--${k === 'todo' ? 'faint' : k === 'doing' ? 'info' : k === 'review' ? 'accent' : k === 'blocked' ? 'crit' : 'ok'})">${STATUS_LABEL[k]} ${c[k]}</span>`).join('')}</div>`;
 }
 
-function projectsBlock(s) {
-  const list = s.projects || [];
-  const body = list.length
-    ? `<div class="grid cols-3">${list.map((p) => `<a class="panel proj" href="/p/${esc(p.slug)}">
-        <div class="proj-head"><b>${esc(p.project)}</b><span class="tag">${esc(p.phase || p.status || '')}</span></div>
-        ${p.summary ? `<p>${esc(p.summary)}</p>` : ''}
-        ${segBar(taskCounts(p))}
-        ${p.errors ? `<div class="warnbox">${esc(p.errors.join('; '))}</div>` : ''}
-        <div class="win-foot">updated ${ago(p.updated)}</div>
-      </a>`).join('')}</div>`
-    : `<div class="panel empty">No project status files yet. Orchestrators publish them to <code>~/.herdr-boss/projects/&lt;slug&gt;.json</code>. See <a href="/docs/project-status.md">the schema</a>.</div>`;
-  return `<section><h2>Projects <span class="sub">published by orchestrators</span></h2>${body}</section>`;
+function projectSlugs(s) {
+  const open = Object.keys(s.control?.projects || {});
+  return open.length ? open : (s.projects || []).map((p) => p.slug);
+}
+
+function defaultProject(s) {
+  const live = s.control?.projects || {};
+  const published = new Set((s.projects || []).map((p) => p.slug));
+  return projectSlugs(s).sort((a, b) => {
+    const rank = (slug) => {
+      const p = live[slug];
+      return [p && p.effectiveMode !== 'paused' && !p.idle ? 1 : 0, p?.running || 0, p?.slots || 0, published.has(slug) ? 1 : 0, p?.share || 0];
+    };
+    const x = rank(a), y = rank(b);
+    for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return y[i] - x[i];
+    return a.localeCompare(b);
+  })[0];
+}
+
+function projectSelector(s, selected) {
+  const live = s.control?.projects || {};
+  const published = new Map((s.projects || []).map((p) => [p.slug, p]));
+  const slugs = [...new Set([...projectSlugs(s), selected].filter(Boolean))];
+  if (!slugs.length) return '<div class="panel empty">No projects are open. Orchestrators can publish a status file to make project details available.</div>';
+  return `<nav class="project-selector-grid" aria-label="Select project">${slugs.map((slug) => {
+    const p = published.get(slug), l = live[slug];
+    const mode = l?.effectiveMode === 'paused' ? 'Paused' : l?.idle ? 'Idle' : l ? 'Active' : 'Published';
+    const name = p?.project || l?.label || slug;
+    return `<a class="panel proj project-selector ${slug === selected ? 'selected' : ''}" href="/projects/${esc(slug)}" ${slug === selected ? 'aria-current="page"' : ''}>
+      <div class="proj-head"><b>${esc(name)}</b><span class="tag">${esc(mode)}</span></div>
+      <div class="project-selector-meta"><span>${esc(p?.status || p?.phase || 'No status published')}</span><span>${l ? `${l.running} / ${l.slots} workers` : 'No live allocation'}</span></div>
+      ${p?.summary ? `<p>${esc(p.summary)}</p>` : ''}
+      ${p ? segBar(taskCounts(p)) : ''}
+      ${p?.errors?.length ? `<span class="project-card-error">${p.errors.length} status issue${p.errors.length === 1 ? '' : 's'}</span>` : ''}
+      <div class="win-foot">${p ? `updated ${ago(p.updated)}` : 'Awaiting project status'}</div>
+    </a>`;
+  }).join('')}</nav>`;
 }
 
 function browsersBlock(s) {
@@ -350,13 +378,13 @@ function fleetBlock(s) {
   const projects = Object.values(s.control?.projects || {});
   return `<section class="fleet-section"><div class="section-head"><h2>Projects</h2><a href="/agents">Live agents →</a></div><div class="fleet-table-wrap"><table class="fleet-table"><thead><tr><th>Project</th><th>Orchestrator</th><th>Workers</th><th>Policy</th><th>Published status</th></tr></thead><tbody>${projects.map((p) => {
     const published = (s.projects || []).find((x) => x.slug === p.slug);
-    const detail = `/p/${p.slug}`;
+    const detail = `/projects/${p.slug}`;
     return `<tr><td><a href="${esc(detail)}"><strong>${esc(p.label)}</strong></a><small>${esc(p.workspace)}</small></td><td>${p.orch ? `<span class="status-inline"><span class="st ${esc(p.orch.status)}"></span>${esc(p.orch.kind)} · ${esc(p.orch.status)}</span>` : '<span class="text-crit">Missing</span>'}</td><td class="mono">${p.running} / ${p.slots}</td><td>${esc(p.effectiveMode === 'paused' ? 'Paused' : p.idle ? 'Idle · lending' : `${Math.round(p.share)}% share`)}</td><td>${published ? `${esc(published.status || published.phase || 'Published')}<small>updated ${ago(published.updated)}</small>` : '<span class="muted">Not published</span>'}</td></tr>`;
   }).join('')}</tbody></table></div></section>`;
 }
 
 function overview(s) {
-  const handovers = (s.control?.handoffs || []).length + handoffRecords.filter((x) => x.status === 'prepared' && !(s.control?.handoffs || []).some((h) => h.pane === x.sourcePane)).length;
+  const handovers = (s.control?.handoffs || []).length + handoffRecords.filter((x) => ['prepared', 'preparing', 'needs-inspection'].includes(x.status) && !(s.control?.handoffs || []).some((h) => h.pane === x.sourcePane)).length;
   const alertCount = (s.alerts || []).filter((a) => ['warn', 'critical'].includes(a.severity) && !a.key?.startsWith('handoff:')).length;
   return [
     `<header class="page-intro"><div><h1>Overview</h1><p>${alertCount || handovers ? `${alertCount} resource alert${alertCount === 1 ? '' : 's'} · ${handovers} handover${handovers === 1 ? '' : 's'} to review` : 'Projects are operating within the current resource policy.'}</p></div><div class="capacity-readout"><strong>${s.control?.runningWorkers ?? 0}<span> / ${s.control?.maxWorkers ?? '–'}</span></strong><small>working agents</small><a href="/allocation">Adjust allocation →</a></div></header>`,
@@ -391,6 +419,16 @@ function agentsView(s) {
   ].join('');
 }
 
+function projectsView(s, slug) {
+  const selected = slug || defaultProject(s);
+  $crumbs.innerHTML = selected ? `/ <a href="/projects">projects</a> / ${esc((s.projects || []).find((p) => p.slug === selected)?.project || s.control?.projects?.[selected]?.label || selected)}` : '';
+  return [
+    '<header class="page-intro"><div><h1>Projects</h1><p>Select a project to inspect its status, work, agents, and orchestrator handover.</p></div></header>',
+    projectSelector(s, selected),
+    selected ? `<div class="project-detail" id="project-detail">${project(s, selected)}</div>` : '',
+  ].join('');
+}
+
 function logsView(s) {
   return [
     '<header class="page-intro"><div><h1>Logs &amp; guidance</h1><p>Current instructions sent to orchestrators and recent Boss activity.</p></div></header>',
@@ -405,7 +443,7 @@ function usageBlock() {
   const runs = rows.reduce((n, [, x]) => n + x.runs, 0);
   const measured = rows.reduce((n, [, x]) => n + x.measuredRuns, 0);
   const minutes = rows.reduce((n, [, x]) => n + x.workMinutes, 0);
-  return `<section id="usage"><div class="section-head"><h2>Work recorded</h2><span>Measured runs are a subset of recorded runs</span></div><div class="usage-metrics"><div><strong>${runs}</strong><span>worker runs</span></div><div><strong>${measured} / ${runs}</strong><span>with token counts</span></div><div><strong>${Math.round(minutes)}</strong><span>work minutes</span></div></div>${rows.length ? `<div class="fleet-table-wrap"><table class="fleet-table"><thead><tr><th>Project</th><th>Runs</th><th>Measured</th><th>Input</th><th>Output</th><th>Work time</th></tr></thead><tbody>${rows.map(([slug, x]) => `<tr><td><a href="/p/${esc(slug)}"><strong>${esc(state.control?.projects?.[slug]?.label || slug)}</strong></a></td><td class="mono">${x.runs}</td><td class="mono">${x.measuredRuns} / ${x.runs}</td><td class="mono">${x.inputTokens.toLocaleString()}</td><td class="mono">${x.outputTokens.toLocaleString()}</td><td class="mono">${Math.round(x.workMinutes)} min</td></tr>`).join('')}</tbody></table></div>` : '<div class="calm-state">No worker runs have been recorded yet. Orchestrators add them with <code>herdr-boss worker collect --record</code>.</div>'}</section>`;
+  return `<section id="usage"><div class="section-head"><h2>Work recorded</h2><span>Measured runs are a subset of recorded runs</span></div><div class="usage-metrics"><div><strong>${runs}</strong><span>worker runs</span></div><div><strong>${measured} / ${runs}</strong><span>with token counts</span></div><div><strong>${Math.round(minutes)}</strong><span>work minutes</span></div></div>${rows.length ? `<div class="fleet-table-wrap"><table class="fleet-table"><thead><tr><th>Project</th><th>Runs</th><th>Measured</th><th>Input</th><th>Output</th><th>Work time</th></tr></thead><tbody>${rows.map(([slug, x]) => `<tr><td><a href="/projects/${esc(slug)}"><strong>${esc(state.control?.projects?.[slug]?.label || slug)}</strong></a></td><td class="mono">${x.runs}</td><td class="mono">${x.measuredRuns} / ${x.runs}</td><td class="mono">${x.inputTokens.toLocaleString()}</td><td class="mono">${x.outputTokens.toLocaleString()}</td><td class="mono">${Math.round(x.workMinutes)} min</td></tr>`).join('')}</tbody></table></div>` : '<div class="calm-state">No worker runs have been recorded yet. Orchestrators add them with <code>herdr-boss worker collect --record</code>.</div>'}</section>`;
 }
 
 function providerUsageBlock() {
@@ -415,7 +453,7 @@ function providerUsageBlock() {
 
 function recentUsageBlock() {
   const rows = usage?.recent || [];
-  return `<section><div class="section-head"><h2>Recent recorded work</h2><span>Latest ${rows.length} runs</span></div>${rows.length ? `<div class="fleet-table-wrap"><table class="fleet-table"><thead><tr><th>Finished</th><th>Project</th><th>Harness / model</th><th>Outcome</th><th>Tokens</th></tr></thead><tbody>${rows.map((r) => `<tr><td>${esc(clock(r.endedAt))}</td><td><a href="/p/${esc(r.project)}">${esc(r.project)}</a></td><td>${esc(r.kind)}<small>${esc(r.model)}</small></td><td>${esc(r.outcome)}</td><td class="mono">${r.inputTokens != null || r.outputTokens != null ? `${(r.inputTokens || 0).toLocaleString()} in · ${(r.outputTokens || 0).toLocaleString()} out` : 'unmeasured'}</td></tr>`).join('')}</tbody></table></div>` : '<div class="calm-state">No run history yet.</div>'}</section>`;
+  return `<section><div class="section-head"><h2>Recent recorded work</h2><span>Latest ${rows.length} runs</span></div>${rows.length ? `<div class="fleet-table-wrap"><table class="fleet-table"><thead><tr><th>Finished</th><th>Project</th><th>Harness / model</th><th>Outcome</th><th>Tokens</th></tr></thead><tbody>${rows.map((r) => `<tr><td>${esc(clock(r.endedAt))}</td><td><a href="/projects/${esc(r.project)}">${esc(r.project)}</a></td><td>${esc(r.kind)}<small>${esc(r.model)}</small></td><td>${esc(r.outcome)}</td><td class="mono">${r.inputTokens != null || r.outputTokens != null ? `${(r.inputTokens || 0).toLocaleString()} in · ${(r.outputTokens || 0).toLocaleString()} out` : 'unmeasured'}</td></tr>`).join('')}</tbody></table></div>` : '<div class="calm-state">No run history yet.</div>'}</section>`;
 }
 
 // ---------- Project page ----------
@@ -424,7 +462,6 @@ function project(s, slug) {
   const published = (s.projects || []).find((x) => x.slug === slug);
   const live = s.control?.projects?.[slug];
   const p = published || (live ? { slug, project: live.label, workspace: live.workspace, tasks: [] } : null);
-  $crumbs.innerHTML = `/ <a href="/">overview</a> / ${esc(p?.project || slug)}`;
   if (!p) return `<div class="panel empty">No open project "${esc(slug)}".</div>`;
   const panes = s.herdr?.panes || [];
   const byName = new Map(panes.filter((x) => x.name).map((x) => [x.name, x]));
@@ -465,12 +502,14 @@ function render() {
     $updated.textContent = `updated ${ago(state.updatedAt)}`;
     return;
   }
-  const m = /^\/p\/([^/]+)/.exec(location.pathname);
-  const route = m ? 'project' : ['allocation', 'agents', 'analytics', 'logs'].includes(location.pathname.slice(1)) ? location.pathname.slice(1) : 'overview';
-  const html = route === 'project' ? project(state, decodeURIComponent(m[1])) : route === 'allocation' ? allocationView(state) : route === 'agents' ? agentsView(state) : route === 'analytics' ? analyticsView(state) : route === 'logs' ? logsView(state) : overview(state);
-  if (route !== 'project') $crumbs.innerHTML = '';
+  const legacy = /^\/p\/([^/]+)\/?$/.exec(location.pathname);
+  if (legacy) history.replaceState(null, '', `/projects/${legacy[1]}`);
+  const m = /^\/projects\/([^/]+)\/?$/.exec(location.pathname);
+  const route = m || location.pathname === '/projects' ? 'projects' : ['allocation', 'agents', 'analytics', 'logs'].includes(location.pathname.slice(1)) ? location.pathname.slice(1) : 'overview';
+  const html = route === 'projects' ? projectsView(state, m ? decodeURIComponent(m[1]) : null) : route === 'allocation' ? allocationView(state) : route === 'agents' ? agentsView(state) : route === 'analytics' ? analyticsView(state) : route === 'logs' ? logsView(state) : overview(state);
+  if (route !== 'projects') $crumbs.innerHTML = '';
   for (const a of $nav.querySelectorAll('a')) {
-    if (a.dataset.nav === (route === 'project' ? 'overview' : route)) a.setAttribute('aria-current', 'page');
+    if (a.dataset.nav === route) a.setAttribute('aria-current', 'page');
     else a.removeAttribute('aria-current');
   }
   if (html !== lastRender) { $app.innerHTML = html; lastRender = html; }

@@ -1,7 +1,8 @@
 import { execFile } from 'node:child_process';
 import os from 'node:os';
+import path from 'node:path';
 
-const PATH = ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin', process.env.PATH].join(':');
+const PATH = [path.join(os.homedir(), '.local/bin'), '/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin', process.env.PATH].join(':');
 
 export function run(cmd, args, { timeout = 30000 } = {}) {
   return new Promise((resolve, reject) => {

@@ -160,6 +160,7 @@ export function renderBulletin(snap, evaluation, cfg) {
   }
   if (snap.control) {
     L.push('', '## Worker allocation', '', `- ${snap.control.runningWorkers}/${snap.control.maxWorkers} working agents globally.`);
+    L.push(`- Automatic orchestrator handover: ${snap.policy?.autoHandover ? `enabled; prepare at reserve, activate at ${snap.policy.autoHandoverPercent}% after successor readiness` : 'off'}.`);
     for (const p of Object.values(snap.control.projects)) L.push(`- ${p.label}: ${p.running}/${p.slots} slots (${Math.round(p.share)}% share${p.idle ? ', idle' : ''}). Allowed kinds: ${Object.keys(snap.control.globalAllowed).filter((k) => !p.excludedKinds.includes(k)).join(', ') || 'none'}.`);
   }
   const info = evaluation.alerts.filter((a) => a.severity === 'info');

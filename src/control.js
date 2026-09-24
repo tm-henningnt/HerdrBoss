@@ -9,6 +9,8 @@ export const POLICY_DEFAULTS = {
   idleMinutes: 15,
   reservePercent: 15,
   handoffLeadMinutes: 180,
+  autoHandover: false,
+  autoHandoverPercent: 98,
   allowedKinds: ['codex', 'claude', 'opencode', 'pi'],
   excludedModels: [],
   providerModes: { codex: 'managed', claude: 'managed', opencodego: 'managed' },
@@ -35,6 +37,8 @@ export function validatePolicy(value, models) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return ['policy must be an object.'];
   if (!Number.isInteger(value.maxWorkers) || value.maxWorkers < 1 || value.maxWorkers > 64) errors.push('maxWorkers must be an integer from 1 to 64.');
   if (typeof value.borrowIdle !== 'boolean') errors.push('borrowIdle must be boolean.');
+  if (typeof value.autoHandover !== 'boolean') errors.push('autoHandover must be boolean.');
+  if (!Number.isInteger(value.autoHandoverPercent) || value.autoHandoverPercent < 90 || value.autoHandoverPercent > 100) errors.push('autoHandoverPercent must be an integer from 90 to 100.');
   for (const [key, max] of [['idleMinutes', 1440], ['reservePercent', 80], ['handoffLeadMinutes', 10080]]) {
     if (!Number.isInteger(value[key]) || value[key] < 0 || value[key] > max) errors.push(`${key} must be an integer from 0 to ${max}.`);
   }
