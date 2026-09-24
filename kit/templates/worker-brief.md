@@ -78,6 +78,8 @@ Run only the scoped acceptance commands named in this brief or task contract.
 
 Do not run the full repository suite on a shared machine unless the project instructions require it.
 
+Limit the test runner to two worker threads, for example `vitest run --maxWorkers=2`. Other projects use the same machine.
+
 Record each command and its exact result.
 
 If a gate is unavailable, report the reason and leave it unverified.

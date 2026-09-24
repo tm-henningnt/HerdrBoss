@@ -214,6 +214,15 @@ herdr agent prompt <orch-pane> "WORKER REPORT <name>: <done|blocked|stopped>. Re
 - Inspect the full changed-path list before staging or integrating work.
 - Do not narrow a commit so far that required new files are omitted.
 
+## Machine load
+
+- All projects share one machine. A full test suite usually starts one test thread per CPU core.
+- Run at most one full suite per project at a time. Queue the next full suite until the current one ends.
+- Tell workers to run focused tests while they work. Run the full suite yourself once per integration.
+- Give every worker brief a thread limit for its test runner, for example `vitest run --maxWorkers=2`.
+- Read the machine load in the bulletin before each dispatch.
+- When the 5-minute load is more than 2 × the core count, start no new worker and no full suite.
+
 ## Git and worktree hygiene
 
 - The orchestrator owns Git topology and history.
