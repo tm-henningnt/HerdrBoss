@@ -1,7 +1,6 @@
 const $app = document.getElementById('app');
 const $dot = document.getElementById('dot');
 const $updated = document.getElementById('updated');
-const $push = document.getElementById('push');
 const $crumbs = document.getElementById('crumbs');
 const $nav = document.getElementById('primary-nav');
 
@@ -19,6 +18,8 @@ const handoffOutputs = {};
 const handoffReviewed = new Set();
 const handoffBusy = new Set();
 const handoffMessages = {};
+let quotaExpanded = false;
+let machineExpanded = false;
 let policyDraft = null;
 let policyDirty = false;
 let saveMessage = '';
@@ -117,9 +118,11 @@ function controlBlock(s) {
     </div></section>`;
 }
 
-function handoffBlock(s) {
-  const candidates = s.control?.handoffs || [];
-  const prepared = handoffRecords.filter((x) => x.status === 'prepared');
+function handoffBlock(s, projectSlug = null) {
+  const candidates = (s.control?.handoffs || []).filter((h) => !projectSlug || h.project === projectSlug);
+  const project = projectSlug && s.control?.projects?.[projectSlug];
+  if (project?.orch && !candidates.length) candidates.push({ project: projectSlug, pane: project.orch.pane, fromKind: project.orch.kind, target: null, window: null });
+  const prepared = handoffRecords.filter((x) => x.status === 'prepared' && (!projectSlug || x.project === projectSlug));
   const cards = [
     ...prepared.map((item) => {
       const output = handoffOutputs[item.id];
@@ -130,21 +133,22 @@ function handoffBlock(s) {
       </article>`;
     }),
     ...candidates.filter((h) => !prepared.some((x) => x.sourcePane === h.pane)).map((h) => {
-      const eligible = Object.entries(s.control.globalAllowed || {}).filter(([kind]) => kind !== h.fromKind && !s.control.projects[h.project]?.excludedKinds.includes(kind)).map(([kind, names]) => [kind, names.filter((model) => !s.control.projects[h.project]?.excludedModels.includes(model) && !s.control.risks?.[model.startsWith('opencode-go/') ? 'opencodego' : kind])]).filter(([, names]) => names.length);
+      const eligible = Object.entries(s.control.globalAllowed || {}).filter(([kind]) => (projectSlug || kind !== h.fromKind) && !s.control.projects[h.project]?.excludedKinds.includes(kind)).map(([kind, names]) => [kind, names.filter((model) => !s.control.projects[h.project]?.excludedModels.includes(model) && !s.control.risks?.[model.startsWith('opencode-go/') ? 'opencodego' : kind])]).filter(([, names]) => names.length);
       const target = handoffTargets[h.pane] || (eligible.some(([kind]) => kind === h.target?.kind) ? h.target.kind : eligible[0]?.[0]) || '';
       const availableModels = eligible.find(([kind]) => kind === target)?.[1] || [];
       const model = availableModels.includes(handoffModels[h.pane]) ? handoffModels[h.pane] : availableModels.includes(h.target?.model) ? h.target.model : availableModels[0] || '';
       const mode = handoffModes[h.pane] || (['codex', 'claude'].includes(target) ? 'migrate' : 'fresh');
       const plan = handoffPlans[h.pane];
-      return `<article class="handoff-item panel"><div class="handoff-head"><div><b>${esc(s.control.projects[h.project]?.label || h.project)}</b><p>${esc(h.fromKind)} is at ${h.window.usedPercent}% · ${esc(h.window.label)} quota</p></div><span class="tag">Handover needed</span></div>
-        <p>Prepare another orchestrator before this provider becomes unavailable. The current pane remains in charge until activation.</p>
+      return `<article class="handoff-item panel"><div class="handoff-head"><div><b>${esc(s.control.projects[h.project]?.label || h.project)}</b><p>${h.window ? `${esc(h.fromKind)} is at ${h.window.usedPercent}% · ${esc(h.window.label)} quota` : `Current orchestrator · ${esc(h.fromKind)} · ${esc(h.pane)}`}</p></div><span class="tag">${h.window ? 'Handover needed' : 'Manual handover'}</span></div>
+        <p>${h.window ? 'Prepare another orchestrator before this provider becomes unavailable.' : 'Start a successor when you want to change harnesses or refresh this orchestrator.'} The current pane remains in charge until activation.</p>
         <div class="handoff-controls"><label>Successor<select data-handoff-target="${esc(h.pane)}">${eligible.map(([kind]) => `<option value="${esc(kind)}" ${kind === target ? 'selected' : ''}>${esc(kind)}</option>`).join('')}</select></label><label>Model<select data-handoff-model="${esc(h.pane)}">${availableModels.map((name) => `<option value="${esc(name)}" ${name === model ? 'selected' : ''}>${esc(name)}</option>`).join('')}</select></label><label>Start from<select data-handoff-mode="${esc(h.pane)}"><option value="migrate" ${mode === 'migrate' ? 'selected' : ''}>Migrated session</option><option value="fresh" ${mode === 'fresh' ? 'selected' : ''}>Fresh bootstrap</option></select></label></div>
         <div class="action-row"><button type="button" data-handoff-plan="${esc(h.pane)}" ${!eligible.length || handoffBusy.has(h.pane) ? 'disabled' : ''}>Plan handover</button>${plan && (mode === 'fresh' || plan.migration?.available) ? `<button type="button" data-handoff-prepare="${esc(h.pane)}" ${handoffBusy.has(h.pane) ? 'disabled' : ''}>Prepare successor</button>` : ''}<span class="inline-feedback" role="status">${esc(handoffMessages[h.pane] || '')}</span></div>
         ${plan ? `<div class="plan-result">${plan.mode === 'fresh' ? 'Fresh bootstrap: the successor will read project files and the source pane.' : plan.migration?.available ? `Migration available · ${plan.migration.records ?? '?'} records · ${plan.migration.warnings ?? 0} warnings.` : `Migration unavailable: ${esc(plan.migration?.error || 'unknown reason')}. Choose fresh bootstrap and plan again.`}</div>` : ''}
       </article>`;
     }),
   ];
-  return `<section class="handoff-section"><div class="section-head"><h2>Project continuity</h2><span>${cards.length ? `${cards.length} need review` : 'No handovers pending'}</span></div>${cards.length ? `<div class="handoff-list">${cards.join('')}</div>` : '<p class="empty">No orchestrator handovers need action.</p>'}</section>`;
+  const empty = projectSlug && !project?.orch ? '<div class="calm-state">No labeled orchestrator is available for this workspace. Label its pane <code>orch</code> in Herdr before planning a handover.</div>' : '<p class="empty">No orchestrator handovers need action.</p>';
+  return `<section class="handoff-section"><div class="section-head"><h2>Project continuity</h2><span>${cards.length ? projectSlug && !prepared.length && !candidates.some((h) => h.window) ? 'Start when needed' : `${cards.length} need review` : 'No handovers pending'}</span></div>${cards.length ? `<div class="handoff-list">${cards.join('')}</div>` : empty}</section>`;
 }
 
 function projectResources(s) {
@@ -202,20 +206,13 @@ function spark(values, max) {
 
 function machineCard(s) {
   const m = s.machine;
-  if (!m) return `<div class="panel"><div class="err">No machine data.</div></div>`;
+  if (!m) return `<div class="err">No machine data.</div>`;
   const hist = s.history || [];
-  const br = s.browsers || [];
-  const chrome = br.filter((b) => b.kind === 'automation-chrome');
-  const mcp = br.filter((b) => b.kind.endsWith('-mcp'));
-  const daemons = br.filter((b) => b.kind === 'agent-browser-daemon');
-  return `<div class="panel">
-    <div class="stats">
+  return `<div class="stats">
       <div class="stat"><div class="k">Load (1 / 5 / 15 min)</div><div class="v">${m.load[0]} <small>${m.load[1]} / ${m.load[2]} · ${m.cpus} cores</small></div>${spark(hist.map((x) => x.load), m.cpus)}</div>
       <div class="stat"><div class="k">Memory free</div><div class="v">${m.memFreePercent ?? '–'}<small>% of ${m.memTotalGB} GB</small></div>${spark(hist.map((x) => 100 - (x.mem ?? 0)), 100 - 15)}</div>
       <div class="stat"><div class="k">Swap used</div><div class="v">${m.swapUsedMB != null ? (m.swapUsedMB / 1024).toFixed(1) : '–'}<small> GB</small></div></div>
-      <div class="stat"><div class="k">Automation browsers · MCP · daemons</div><div class="v">${chrome.length} <small>· ${mcp.length} · ${daemons.length}</small></div></div>
-    </div>
-  </div>`;
+    </div>`;
 }
 
 function agentRow(p, s) {
@@ -279,12 +276,12 @@ function projectsBlock(s) {
 }
 
 function browsersBlock(s) {
-  const br = (s.browsers || []).filter((b) => b.kind !== 'agent-browser-daemon' || b.age > 3600);
+  const br = s.browsers || [];
   if (!br.length) return '';
   const pane = (id) => s.herdr?.panes.find((p) => p.id === id);
-  return `<div class="panel"><table class="browsers"><thead><tr><th>Kind</th><th>PID</th><th>Owner</th><th>Age</th><th>MB</th></tr></thead><tbody>
+  return `<table class="browsers"><thead><tr><th>Process</th><th>PID</th><th>Owner</th><th>Age</th><th>MB</th></tr></thead><tbody>
     ${br.map((b) => { const p = pane(b.pane); return `<tr><td>${esc(b.kind)}${b.headless ? ' (headless)' : ''}${b.port ? ` :${b.port}` : ''}</td><td class="mono">${b.pid}</td><td>${p ? esc(p.name || p.id) : b.shared ? `<span title="${esc(b.shared)}">shared</span>` : b.orphan ? '<span class="stale">orphan</span>' : '–'}</td><td class="mono">${dur(b.age)}</td><td class="mono">${b.rssMB}</td></tr>`; }).join('')}
-  </tbody></table></div>`;
+  </tbody></table>`;
 }
 
 function eventsBlock(s) {
@@ -293,23 +290,33 @@ function eventsBlock(s) {
 }
 
 function quotaSummary(s) {
-  return `<section class="quota-summary"><div class="section-head"><h2>Subscriptions</h2><a href="/analytics#quotas">All quota windows →</a></div><div class="quota-summary-grid">${(s.quotas || []).map((q) => {
+  const strip = (s.quotas || []).map((q) => {
     const w = q.windows?.find((x) => x.key === 'secondary') || q.windows?.find((x) => !x.extra);
-    return `<div class="quota-summary-item"><span>${esc(PROVIDERS[q.provider] || q.provider)}</span><strong class="${w?.usedPercent >= 90 ? 'text-crit' : ''}">${w ? `${w.usedPercent}%` : '–'}</strong><small>${q.error ? esc(q.error) : w ? `${esc(w.label)} · resets ${clock(w.resetsAt)}` : 'No quota data'}</small></div>`;
-  }).join('')}</div></section>`;
+    return `<span class="quota-summary-item"><span>${esc(PROVIDERS[q.provider] || q.provider)}</span><strong class="${w?.usedPercent >= 90 ? 'text-crit' : ''}">${w ? `${w.usedPercent}%` : '–'}</strong><small>${q.error ? esc(q.error) : w ? `${esc(w.label)} · resets ${clock(w.resetsAt)}` : 'No quota data'}</small></span>`;
+  }).join('');
+  return `<section class="quota-summary"><div class="section-head"><h2>Subscriptions</h2><span>Updated ${ago(s.quotasAt)}</span></div><details data-quota-detail ${quotaExpanded ? 'open' : ''}><summary><span class="quota-summary-grid">${strip}</span><span class="fold-hint">Details</span></summary><div class="quota-foldout">${(s.quotas || []).map(quotaCard).join('')}</div></details></section>`;
+}
+
+function machineSummary(s) {
+  const m = s.machine;
+  const browsers = s.browsers || [];
+  const automation = browsers.filter((b) => b.kind === 'automation-chrome').length;
+  const daemons = browsers.filter((b) => b.kind === 'agent-browser-daemon').length;
+  const body = m ? `<span>Load <b class="mono">${esc(m.load?.[0] ?? '–')}</b> / ${esc(m.cpus)} cores</span><span>Free memory <b class="mono">${esc(m.memFreePercent ?? '–')}%</b></span><span>Swap <b class="mono">${m.swapUsedMB == null ? '–' : `${(m.swapUsedMB / 1024).toFixed(1)} GB`}</b></span><span>Browsers <b class="mono">${automation}</b> · daemons <b class="mono">${daemons}</b></span>` : '<span>Machine data unavailable</span>';
+  return `<section class="machine-summary"><div class="section-head"><h2>Machine health</h2><span>Automation processes: Chrome, browser MCP, and agent-browser daemons</span></div><details data-machine-detail ${machineExpanded ? 'open' : ''}><summary>${body}<span class="fold-hint">Details</span></summary><div class="machine-foldout"><div>${machineCard(s)}</div><div>${browsersBlock(s) || '<div class="empty">No tracked automation processes.</div>'}</div></div></details></section>`;
 }
 
 function attentionBlock(s) {
   const alerts = (s.alerts || []).filter((a) => ['warn', 'critical'].includes(a.severity) && !a.key?.startsWith('handoff:'));
   if (s.errors?.length) alerts.unshift({ key: 'collection', severity: 'warn', title: 'Some status data is unavailable', text: s.errors.join(' · ') });
-  return `<section class="attention-section"><div class="section-head"><h2>Needs attention</h2><span>${alerts.length ? `${alerts.length} alerts` : 'Clear'}</span></div>${alerts.length ? `<div class="attention-list">${alerts.map((a) => `<article class="attention-item ${esc(a.severity)}"><span class="severity-dot" aria-hidden="true"></span><div><b>${esc(a.title || a.severity)}</b><p>${esc(a.text)}</p></div><a href="${a.key?.startsWith('quota:') ? '/allocation' : '/analytics#guidance'}">${a.key?.startsWith('quota:') ? 'Adjust policy' : 'Details'}</a></article>`).join('')}</div>` : '<div class="calm-state">No resource alerts need action. Project orchestrators can continue within the current policy.</div>'}</section>`;
+  return `<section class="attention-section"><div class="section-head"><h2>Needs attention</h2><span>${alerts.length ? `${alerts.length} alerts` : 'Clear'}</span></div>${alerts.length ? `<div class="attention-list">${alerts.map((a) => `<article class="attention-item ${esc(a.severity)}"><span class="severity-dot" aria-hidden="true"></span><div><b>${esc(a.title || a.severity)}</b><p>${esc(a.text)}</p></div><a href="${a.key?.startsWith('quota:') ? '/allocation' : '/logs#guidance'}">${a.key?.startsWith('quota:') ? 'Adjust policy' : 'Details'}</a></article>`).join('')}</div>` : '<div class="calm-state">No resource alerts need action. Project orchestrators can continue within the current policy.</div>'}</section>`;
 }
 
 function fleetBlock(s) {
   const projects = Object.values(s.control?.projects || {});
-  return `<section class="fleet-section"><div class="section-head"><h2>Projects</h2><a href="/analytics#agents">Live agents →</a></div><div class="fleet-table-wrap"><table class="fleet-table"><thead><tr><th>Project</th><th>Orchestrator</th><th>Workers</th><th>Policy</th><th>Published status</th></tr></thead><tbody>${projects.map((p) => {
+  return `<section class="fleet-section"><div class="section-head"><h2>Projects</h2><a href="/agents">Live agents →</a></div><div class="fleet-table-wrap"><table class="fleet-table"><thead><tr><th>Project</th><th>Orchestrator</th><th>Workers</th><th>Policy</th><th>Published status</th></tr></thead><tbody>${projects.map((p) => {
     const published = (s.projects || []).find((x) => x.slug === p.slug);
-    const detail = published ? `/p/${p.slug}` : '/analytics#agents';
+    const detail = `/p/${p.slug}`;
     return `<tr><td><a href="${esc(detail)}"><strong>${esc(p.label)}</strong></a><small>${esc(p.workspace)}</small></td><td>${p.orch ? `<span class="status-inline"><span class="st ${esc(p.orch.status)}"></span>${esc(p.orch.kind)} · ${esc(p.orch.status)}</span>` : '<span class="text-crit">Missing</span>'}</td><td class="mono">${p.running} / ${p.slots}</td><td>${esc(p.effectiveMode === 'paused' ? 'Paused' : p.idle ? 'Idle · lending' : `${Math.round(p.share)}% share`)}</td><td>${published ? `${esc(published.status || published.phase || 'Published')}<small>updated ${ago(published.updated)}</small>` : '<span class="muted">Not published</span>'}</td></tr>`;
   }).join('')}</tbody></table></div></section>`;
 }
@@ -322,6 +329,7 @@ function overview(s) {
     `<div class="overview-action-grid">${attentionBlock(s)}${handoffBlock(s)}</div>`,
     fleetBlock(s),
     quotaSummary(s),
+    machineSummary(s),
   ].join('');
 }
 
@@ -335,13 +343,24 @@ function allocationView(s) {
 
 function analyticsView(s) {
   return [
-    '<header class="page-intro"><div><h1>Analytics</h1><p>Quota pace, measured usage, machine health, agents, and the event trail.</p></div></header>',
-    '<nav class="section-nav" aria-label="Analytics sections"><a href="#quotas">Quotas</a><a href="#usage">Usage</a><a href="#machine">Machine</a><a href="#agents">Agents</a><a href="#events">Activity</a></nav>',
-    `<section id="quotas"><div class="section-head"><h2>Quota windows</h2><span>CodexBar · updated ${ago(s.quotasAt)}</span></div><div class="grid cols-3">${(s.quotas || []).map(quotaCard).join('')}</div></section>`,
+    '<header class="page-intro"><div><h1>Analytics</h1><p>Recorded work by project and provider. Token totals include only runs with measured tokens.</p></div></header>',
     usageBlock(),
-    `<section id="machine"><h2>Machine health</h2><div class="two"><div>${machineCard(s)}</div><div><h3>Browsers &amp; MCP</h3>${browsersBlock(s) || '<div class="panel empty">None running.</div>'}</div></div></section>`,
-    `<div id="agents">${workspacesBlock(s)}</div>`,
-    projectsBlock(s),
+    providerUsageBlock(),
+    recentUsageBlock(),
+  ].join('');
+}
+
+function agentsView(s) {
+  return [
+    '<header class="page-intro"><div><h1>Live agents</h1><p>Current orchestrators and workers in each Herdr workspace.</p></div></header>',
+    workspacesBlock(s),
+  ].join('');
+}
+
+function logsView(s) {
+  return [
+    '<header class="page-intro"><div><h1>Logs &amp; guidance</h1><p>Current instructions sent to orchestrators and recent Boss activity.</p></div></header>',
+    `<div class="notice-status"><strong>Automatic orchestrator notices: ${s.push ? 'on' : 'off'}</strong><span>${s.push ? 'HerdrBoss can prompt idle orchestrators about resource issues.' : 'HerdrBoss is collecting status without prompting orchestrators.'}</span></div>`,
     rulesBlock(s),
     `<section id="events"><h2>Activity log</h2>${eventsBlock(s)}</section>`,
   ].join('');
@@ -349,15 +368,30 @@ function analyticsView(s) {
 
 function usageBlock() {
   const rows = Object.entries(usage?.byProject || {});
-  return `<section id="usage"><div class="section-head"><h2>Recorded project usage</h2><span>Measured runs are a subset of recorded runs</span></div>${rows.length ? `<div class="fleet-table-wrap"><table class="fleet-table"><thead><tr><th>Project</th><th>Runs</th><th>Measured</th><th>Input</th><th>Output</th><th>Work time</th></tr></thead><tbody>${rows.map(([slug, x]) => `<tr><td><strong>${esc(slug)}</strong></td><td class="mono">${x.runs}</td><td class="mono">${x.measuredRuns} / ${x.runs}</td><td class="mono">${x.inputTokens.toLocaleString()}</td><td class="mono">${x.outputTokens.toLocaleString()}</td><td class="mono">${Math.round(x.workMinutes)} min</td></tr>`).join('')}</tbody></table></div>` : '<div class="calm-state">No worker runs have been recorded yet. Orchestrators add them with <code>herdr-boss worker collect --record</code>.</div>'}</section>`;
+  const runs = rows.reduce((n, [, x]) => n + x.runs, 0);
+  const measured = rows.reduce((n, [, x]) => n + x.measuredRuns, 0);
+  const minutes = rows.reduce((n, [, x]) => n + x.workMinutes, 0);
+  return `<section id="usage"><div class="section-head"><h2>Work recorded</h2><span>Measured runs are a subset of recorded runs</span></div><div class="usage-metrics"><div><strong>${runs}</strong><span>worker runs</span></div><div><strong>${measured} / ${runs}</strong><span>with token counts</span></div><div><strong>${Math.round(minutes)}</strong><span>work minutes</span></div></div>${rows.length ? `<div class="fleet-table-wrap"><table class="fleet-table"><thead><tr><th>Project</th><th>Runs</th><th>Measured</th><th>Input</th><th>Output</th><th>Work time</th></tr></thead><tbody>${rows.map(([slug, x]) => `<tr><td><a href="/p/${esc(slug)}"><strong>${esc(state.control?.projects?.[slug]?.label || slug)}</strong></a></td><td class="mono">${x.runs}</td><td class="mono">${x.measuredRuns} / ${x.runs}</td><td class="mono">${x.inputTokens.toLocaleString()}</td><td class="mono">${x.outputTokens.toLocaleString()}</td><td class="mono">${Math.round(x.workMinutes)} min</td></tr>`).join('')}</tbody></table></div>` : '<div class="calm-state">No worker runs have been recorded yet. Orchestrators add them with <code>herdr-boss worker collect --record</code>.</div>'}</section>`;
+}
+
+function providerUsageBlock() {
+  const rows = Object.entries(usage?.byProvider || {});
+  return `<section><div class="section-head"><h2>By provider</h2><span>Recorded work, not subscription balance</span></div>${rows.length ? `<div class="fleet-table-wrap"><table class="fleet-table"><thead><tr><th>Provider</th><th>Runs</th><th>Measured</th><th>Input</th><th>Output</th><th>Work time</th></tr></thead><tbody>${rows.map(([provider, x]) => `<tr><td><strong>${esc(PROVIDERS[provider] || provider)}</strong></td><td class="mono">${x.runs}</td><td class="mono">${x.measuredRuns} / ${x.runs}</td><td class="mono">${x.inputTokens.toLocaleString()}</td><td class="mono">${x.outputTokens.toLocaleString()}</td><td class="mono">${Math.round(x.workMinutes)} min</td></tr>`).join('')}</tbody></table></div>` : '<div class="calm-state">Provider usage will appear as worker runs are recorded.</div>'}</section>`;
+}
+
+function recentUsageBlock() {
+  const rows = usage?.recent || [];
+  return `<section><div class="section-head"><h2>Recent recorded work</h2><span>Latest ${rows.length} runs</span></div>${rows.length ? `<div class="fleet-table-wrap"><table class="fleet-table"><thead><tr><th>Finished</th><th>Project</th><th>Harness / model</th><th>Outcome</th><th>Tokens</th></tr></thead><tbody>${rows.map((r) => `<tr><td>${esc(clock(r.endedAt))}</td><td><a href="/p/${esc(r.project)}">${esc(r.project)}</a></td><td>${esc(r.kind)}<small>${esc(r.model)}</small></td><td>${esc(r.outcome)}</td><td class="mono">${r.inputTokens != null || r.outputTokens != null ? `${(r.inputTokens || 0).toLocaleString()} in · ${(r.outputTokens || 0).toLocaleString()} out` : 'unmeasured'}</td></tr>`).join('')}</tbody></table></div>` : '<div class="calm-state">No run history yet.</div>'}</section>`;
 }
 
 // ---------- Project page ----------
 
 function project(s, slug) {
-  const p = (s.projects || []).find((x) => x.slug === slug);
+  const published = (s.projects || []).find((x) => x.slug === slug);
+  const live = s.control?.projects?.[slug];
+  const p = published || (live ? { slug, project: live.label, workspace: live.workspace, tasks: [] } : null);
   $crumbs.innerHTML = `/ <a href="/">overview</a> / ${esc(p?.project || slug)}`;
-  if (!p) return `<div class="panel empty">No project "${esc(slug)}". It appears when <code>~/.herdr-boss/projects/${esc(slug)}.json</code> exists.</div>`;
+  if (!p) return `<div class="panel empty">No open project "${esc(slug)}".</div>`;
   const panes = s.herdr?.panes || [];
   const byName = new Map(panes.filter((x) => x.name).map((x) => [x.name, x]));
   const phases = p.phases?.length ? `<ol class="phases">${p.phases.map((ph) => {
@@ -378,8 +412,9 @@ function project(s, slug) {
   const ws = p.workspace && s.herdr?.workspaces.find((w) => w.id === p.workspace || w.label === p.workspace);
   const wsBlock = ws ? workspacesBlock({ ...s, herdr: { ...s.herdr, workspaces: [ws] } }) : '';
   return [
-    `<section class="phead"><h1>${esc(p.project)}</h1>${p.summary ? `<p>${esc(p.summary)}</p>` : ''}${phases}<div class="win-foot">updated ${ago(p.updated)}${p.status ? ` · ${esc(p.status)}` : ''}</div></section>`,
+    `<section class="phead"><h1>${esc(p.project)}</h1>${p.summary ? `<p>${esc(p.summary)}</p>` : ''}${phases}<div class="win-foot">${published ? `updated ${ago(p.updated)}${p.status ? ` · ${esc(p.status)}` : ''}` : 'No project status published yet'}</div></section>`,
     p.errors ? `<div class="warnbox">${esc(p.errors.join('; '))}</div>` : '',
+    handoffBlock(s, slug),
     metrics,
     board,
     links || notes ? `<section class="two">${notes}${links}</section>` : '',
@@ -397,8 +432,8 @@ function render() {
     return;
   }
   const m = /^\/p\/([^/]+)/.exec(location.pathname);
-  const route = m ? 'project' : location.pathname === '/allocation' ? 'allocation' : location.pathname === '/analytics' ? 'analytics' : 'overview';
-  const html = route === 'project' ? project(state, decodeURIComponent(m[1])) : route === 'allocation' ? allocationView(state) : route === 'analytics' ? analyticsView(state) : overview(state);
+  const route = m ? 'project' : ['allocation', 'agents', 'analytics', 'logs'].includes(location.pathname.slice(1)) ? location.pathname.slice(1) : 'overview';
+  const html = route === 'project' ? project(state, decodeURIComponent(m[1])) : route === 'allocation' ? allocationView(state) : route === 'agents' ? agentsView(state) : route === 'analytics' ? analyticsView(state) : route === 'logs' ? logsView(state) : overview(state);
   if (route !== 'project') $crumbs.innerHTML = '';
   for (const a of $nav.querySelectorAll('a')) {
     if (a.dataset.nav === (route === 'project' ? 'overview' : route)) a.setAttribute('aria-current', 'page');
@@ -406,8 +441,12 @@ function render() {
   }
   if (html !== lastRender) { $app.innerHTML = html; lastRender = html; }
   $updated.textContent = `updated ${ago(state.updatedAt)}`;
-  $push.textContent = state.push ? 'prompts on' : 'prompts off';
 }
+
+document.addEventListener('toggle', (e) => {
+  if (e.target.matches?.('[data-quota-detail]')) quotaExpanded = e.target.open;
+  if (e.target.matches?.('[data-machine-detail]')) machineExpanded = e.target.open;
+}, true);
 
 function updateShares() {
   for (const [slug, p] of Object.entries(policyDraft.projects)) {
@@ -476,14 +515,14 @@ async function postJson(url, body) {
 
 async function runHandoffAction(action, key) {
   if (handoffBusy.has(key)) return;
-  const h = state.control?.handoffs?.find((x) => x.pane === key);
+  const h = state.control?.handoffs?.find((x) => x.pane === key) || Object.values(state.control?.projects || {}).filter((p) => p.orch?.pane === key).map((p) => ({ project: p.slug, pane: key, fromKind: p.orch.kind }))[0];
   const item = handoffRecords.find((x) => x.id === key);
   const selectedTarget = [...document.querySelectorAll('[data-handoff-target]')].find((x) => x.dataset.handoffTarget === key)?.value;
   const selectedModel = [...document.querySelectorAll('[data-handoff-model]')].find((x) => x.dataset.handoffModel === key)?.value;
   const selectedMode = [...document.querySelectorAll('[data-handoff-mode]')].find((x) => x.dataset.handoffMode === key)?.value;
   if (action === 'activate' && !confirm(`Activate the prepared ${item?.toKind || ''} orchestrator for ${item?.project || key}? The current pane will become standby.`)) return;
   handoffBusy.add(key);
-  handoffMessages[key] = action === 'plan' ? 'Checking session migration…' : action === 'prepare' ? 'Starting successor…' : action === 'output' ? 'Reading successor…' : 'Activating…';
+  handoffMessages[key] = action === 'plan' ? 'Planning handover…' : action === 'prepare' ? 'Starting successor…' : action === 'output' ? 'Reading successor…' : 'Activating…';
   lastRender = ''; render();
   try {
     if (action === 'plan' || action === 'prepare') {

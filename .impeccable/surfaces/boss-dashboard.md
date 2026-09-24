@@ -6,14 +6,16 @@ The owner should understand the state of their project fleet within one viewport
 
 ## Structure
 
-- Overview (`/`): concise capacity and quota status, actionable attention, staged handovers, and a compact project roster. The first viewport must answer: Is anything urgent? Which project or provider is affected? What can I do now?
+- Overview (`/`): concise capacity, actionable attention, suggested and prepared handovers, and a compact project roster. Abbreviated subscription and machine bars sit at the bottom. One subscription expander reveals all provider quota windows together; machine health folds out to processes and history. The first viewport must answer: Is anything urgent? Which project or provider is affected? What can I do now?
 - Allocation (`/allocation`): the existing policy controls and dedicated browser requests, grouped by capacity, subscriptions, and project shares. The save state stays visible while editing.
-- Analytics (`/analytics`): full quota windows and trends, usage coverage and totals, machine and browser processes, live workspaces, advice, and activity history. Provide in-page wayfinding for these deeper sections.
-- Project detail (`/p/<slug>`): preserve each published task board and live agents, with a route back to Overview.
+- Agents (`/agents`): live Herdr workspaces and agents.
+- Analytics (`/analytics`): actual recorded worker usage and measurement coverage by project and provider, plus recent runs. State empty coverage honestly until orchestrators record data.
+- Logs (`/logs`): current guidance and Boss activity.
+- Project detail (`/p/<slug>`): preserve each published task board and live agents, with a route back to Overview. Every open workspace has a page and can plan a handover even without a quota alert or published status.
 
 ## Interaction
 
-A handover alert offers Plan, Prepare, inspect successor output, and Confirm activation in that order. Preparing creates a successor but leaves the source pane in control. The UI must show migration failure and a fresh bootstrap choice. Activation requires an explicit confirmation after the user can read the successor's output.
+A suggested or manually initiated handover offers Plan, Prepare, inspect successor output, and Confirm activation in that order. Preparing creates a successor but leaves the source pane in control. The UI must show migration failure and a fresh bootstrap choice. Activation requires an explicit confirmation after the user can read the successor's output.
 
 ## Visual continuity
 
