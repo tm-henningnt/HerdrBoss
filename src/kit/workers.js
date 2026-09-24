@@ -79,6 +79,19 @@ function deliverBrief(name, herdr, readText, wait) {
   }
 }
 
+// The machine load only warns. Orchestrators decide whether a worker is worth starting on a loaded machine.
+export function loadWarning(rules) {
+  const load = rules?.load;
+  if (!load || !Number.isFinite(load.fiveMinute) || !Number.isFinite(load.limit) || load.fiveMinute <= load.limit) return null;
+  return [
+    `Warning: the machine is overloaded. The 5-minute load is ${load.fiveMinute} on ${load.cpus} cores; the limit is ${load.limit}.`,
+    'The worker starts, but it competes with the running work of every project. Before you continue:',
+    '  1. Wait for the load to drop below the limit if the task can wait. Check it with `uptime` or ~/.herdr-boss/bulletin.md.',
+    '  2. In the brief, tell the worker to run focused tests only, with at most two runner threads (for example `vitest run --maxWorkers=2`).',
+    '  3. Do not start a full test suite until the load is below the limit.',
+  ].join('\n');
+}
+
 function listFrom(value, key) {
   if (Array.isArray(value)) return value;
   if (Array.isArray(value?.[key])) return value[key];
@@ -241,6 +254,8 @@ export function startWorker(name, options, {
   const rules = readRules(rulesPath);
   const staleRules = rulesWarning(rules, now);
   if (staleRules) output(`Warning: Herdr Boss rules are older than 10 minutes or have no valid timestamp: ${rulesPath}`);
+  const overload = loadWarning(rules);
+  if (overload) output(overload);
   if (!options.kind) throw new Error('--kind is required.');
   if (rules.avoidKinds !== undefined && !Array.isArray(rules.avoidKinds)) throw new Error(`Herdr Boss rules avoidKinds must be an array: ${rulesPath}`);
   if ((rules.avoidKinds ?? []).includes(options.kind)) {

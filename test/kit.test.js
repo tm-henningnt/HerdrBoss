@@ -294,3 +294,13 @@ test('worker start resends a brief that never reached the agent', () => {
   assert.equal(prompts, 2);
   assert.ok(output.some((line) => line.startsWith('Resent the brief prompt to demo')));
 });
+
+test('worker start load warning names the load, the limit, and the actions', async () => {
+  const { loadWarning } = await import('../src/kit/workers.js');
+  assert.equal(loadWarning({ load: { fiveMinute: 12, cpus: 10, limit: 20 } }), null);
+  assert.equal(loadWarning({}), null);
+  const text = loadWarning({ load: { fiveMinute: 84.2, cpus: 10, limit: 20 } });
+  assert.match(text, /5-minute load is 84\.2 on 10 cores; the limit is 20/);
+  assert.match(text, /--maxWorkers=2/);
+  assert.match(text, /full test suite/);
+});

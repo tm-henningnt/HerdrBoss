@@ -194,6 +194,7 @@ export class Engine extends EventEmitter {
         avoidProviders: Object.keys(control.pressures).filter((provider) => control.pressures[provider] || control.risks[provider]),
         preferredKinds,
         memFreePercent: machine?.memFreePercent ?? null,
+        load: machine ? { oneMinute: machine.load[0], fiveMinute: machine.load[1], cpus: machine.cpus, limit: machine.cpus * this.cfg.machine.loadWarnFactor } : null,
         notes: evaluation.advice,
         browsers: managedBrowsers.map((b) => ({ project: b.project, port: b.port, profile: b.profile, headless: !!b.headless, windowSize: b.windowSize || { width: 1280, height: 800 }, ready: browsers.some((x) => x.kind === 'automation-chrome' && x.port === String(b.port) && x.profile === b.profile) })),
         policy,
