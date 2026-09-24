@@ -1,0 +1,13 @@
+{
+  "name": "herdr-boss",
+  "version": "0.1.0",
+  "description": "Resource supervisor and shared dashboard for Herdr orchestrators",
+  "type": "module",
+  "private": true,
+  "bin": { "herdr-boss": "bin/herdr-boss" },
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node src/cli.js serve",
+    "tick": "node src/cli.js tick"
+  }
+}
