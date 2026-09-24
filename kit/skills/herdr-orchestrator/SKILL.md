@@ -146,7 +146,7 @@ herdr-boss worker start <name> --kind <kind> --task-file <file> --allow <path>
 - Start a fresh worker for a different scope, worktree, or model fit.
 - Close a worker pane after verification when no related task remains.
 - Close only browser sessions that the worker owns.
-- Follow [the shared-browser rules](../../shared-browser.md) for attached sessions.
+- For project browser work, follow [the dedicated browser service](../../browser-service.md). Use [the shared-browser rules](../../shared-browser.md) only when a legacy shared session is explicitly assigned.
 - Never stop the Herdr server or kill the main Herdr process to recover a worker.
 
 ## Worker completion signalling
@@ -173,7 +173,7 @@ herdr agent prompt <orch-pane> "WORKER REPORT <name>: <done|blocked|stopped>. Re
 - Confirm that every changed path is allowed.
 - Run the acceptance commands independently.
 - Review generated artifacts directly.
-- Use [the shared-browser rules](../../shared-browser.md) before browser work.
+- Read [the dedicated browser service](../../browser-service.md) before browser work. Use [the shared-browser rules](../../shared-browser.md) only for an explicitly assigned legacy session.
 - Keep each evidence tier separate.
 - Use the evidence tiers configured by the project.
 - Use `herdr-boss check --report <file>` to validate a worker report.
@@ -250,12 +250,15 @@ herdr agent prompt <orch-pane> "WORKER REPORT <name>: <done|blocked|stopped>. Re
 ## Herdr Boss notices and status
 
 - Read `~/.herdr-boss/bulletin.md` before each new worker dispatch.
+- Check your project on the Boss dashboard or in `herdr-boss policy show` when capacity, provider availability, or handover changes. The dashboard's Allocation view is the Owner's control plane; apply its saved worker cap, project share, exclusions, and succession ladder.
 - Act on a `[herdr-boss]` notice that concerns your current work.
 - Do not reply to the notice.
 - Do not start work that the bulletin marks as avoided unless you use an allowed override.
 - Publish project status through Herdr Boss.
 - Request a dedicated persistent browser with `herdr-boss browser request <project-slug>` before browser work.
 - Use the returned port and profile for that project. Do not stop another project's browser.
+- Give browser workers the project slug and a tab ID. For simple screenshots, navigation, clicks, text, and keys, use [the project browser service](../../browser-service.md). Have the Owner enter credentials through the dashboard.
+- Use the dedicated browser for your project. Port 9222 is only for a legacy shared session when the Owner explicitly assigns it. Coordinate tabs within your project and avoid stopping a browser another worker is using.
 - When your harness quota threatens the orchestrator, run `herdr-boss handoff plan <your-pane> --to <kind>`.
 - Use `handoff prepare` to start a successor. Review its output before `handoff activate <id> --confirmed`.
 - Use `herdr-boss publish <slug> <file>` for a validated status file.
@@ -264,7 +267,7 @@ herdr agent prompt <orch-pane> "WORKER REPORT <name>: <done|blocked|stopped>. Re
 - Do not build a separate project dashboard.
 - Keep Herdr as live execution state and the issue tracker as durable work state.
 - Keep the orchestrator pane labeled `orch` so Herdr Boss can find it.
-- Use `[the project section template](../../templates/agents-section.md)` to install shared rules in a project `AGENTS.md`.
+- Use [the project section template](../../templates/agents-section.md) to install shared rules in a project `AGENTS.md`.
 - Keep product contracts, acceptance commands, and project-specific browser procedures in the project files.
 
 ## Escalation and parking

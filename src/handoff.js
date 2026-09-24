@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { DATA_DIR } from './config.js';
@@ -9,7 +10,8 @@ const FILE = path.join(DATA_DIR, 'handoffs.json');
 const TARGETS = new Set(['codex', 'claude', 'pi', 'opencode']);
 
 function call(command, args, cwd) {
-  return execFileSync(command, args, { cwd, encoding: 'utf8', timeout: 120000, maxBuffer: 8 * 1024 * 1024 });
+  return execFileSync(command, args, { cwd, encoding: 'utf8', timeout: 120000, maxBuffer: 8 * 1024 * 1024,
+    env: { ...process.env, PATH: `${path.join(os.homedir(), '.local/bin')}${path.delimiter}${process.env.PATH || ''}` } });
 }
 function herdr(args) {
   const response = JSON.parse(call('herdr', args));
@@ -26,7 +28,7 @@ function sourcePane(id, { allowStopped = false } = {}) {
   return pane;
 }
 
-export function planHandoff(id, toKind, { mode = 'migrate', model = null, force = false } = {}) {
+export function planHandoff(id, toKind, { mode = 'migrate', model = null, effort = null, force = false } = {}) {
   if (!TARGETS.has(toKind)) throw new Error(`Unsupported target kind: ${toKind}.`);
   if (!['migrate', 'fresh'].includes(mode)) throw new Error('mode must be migrate or fresh.');
   const pane = sourcePane(id, { allowStopped: mode === 'fresh' });
@@ -35,6 +37,7 @@ export function planHandoff(id, toKind, { mode = 'migrate', model = null, force 
   const policy = loadPolicy();
   if (!policy.allowedKinds.includes(toKind) || policy.excludedModels.includes(targetModel)) throw new Error('Target is disabled by global policy.');
   if (!models[toKind].allowedModels.includes(targetModel)) throw new Error('Target model is not in the allow-list.');
+  if (effort != null && !models[toKind].allowedEfforts.includes(effort)) throw new Error('Target effort is not in the allow-list.');
   const state = readFile(path.join(DATA_DIR, 'state.json'), {});
   const project = Object.values(state.control?.projects || {}).find((p) => p.workspace === pane.workspace_id);
   const slug = project?.slug || path.basename(pane.cwd).toLowerCase();
@@ -43,7 +46,7 @@ export function planHandoff(id, toKind, { mode = 'migrate', model = null, force 
   const provider = providerFor(toKind, targetModel);
   if (!force && provider && state.control?.risks?.[provider]) throw new Error(`${provider} is near exhaustion; use another target or --force.`);
   const sessionId = pane.agent_session?.kind === 'id' ? pane.agent_session.value : null;
-  const result = { sourcePane: id, workspace: pane.workspace_id, cwd: pane.cwd, project: slug, label: pane.label, fromKind: pane.agent, sessionId, toKind, model: targetModel, mode, provider, migration: null };
+  const result = { sourcePane: id, workspace: pane.workspace_id, cwd: pane.cwd, project: slug, label: pane.label, fromKind: pane.agent, sessionId, toKind, model: targetModel, effort: effort || models[toKind].defaultEffort || null, mode, provider, migration: null };
   if (mode === 'migrate') {
     if (!sessionId) result.migration = { available: false, error: 'Herdr has no native session ID for this pane.' };
     else if (!['codex', 'claude'].includes(toKind)) result.migration = { available: false, error: 'Automated resume is available for Codex and Claude targets. Use fresh mode for other kinds.' };
@@ -60,7 +63,7 @@ export function prepareHandoff(id, toKind, options = {}) {
   const plan = planHandoff(id, toKind, options);
   if (plan.mode === 'migrate' && !plan.migration?.available) throw new Error(`Session migration is unavailable: ${plan.migration?.error}. Use --mode fresh.`);
   const policy = loadModels().kinds[toKind];
-  const launchArgs = policy.launchArgs.map((arg) => arg.replaceAll('{{model}}', plan.model).replaceAll('{{effort}}', policy.defaultEffort || ''));
+  const launchArgs = policy.launchArgs.map((arg) => arg.replaceAll('{{model}}', plan.model).replaceAll('{{effort}}', plan.effort || ''));
   let migratedId = null;
   if (plan.mode === 'migrate') {
     const r = JSON.parse(call('session-migrate', ['transfer', plan.sessionId, '--from', plan.fromKind, '--to', toKind, '--cwd', plan.cwd], plan.cwd));

@@ -7,7 +7,8 @@ export const PROJECTS_DIR = path.join(DATA_DIR, 'projects');
 
 const DEFAULTS = {
   port: 4477,
-  host: '127.0.0.1',
+  host: '0.0.0.0',
+  access: { tokenFile: path.join(DATA_DIR, 'access-token') },
   // Seconds between collection passes.
   tickSeconds: 30,
   quotaSeconds: 300,
@@ -17,8 +18,8 @@ const DEFAULTS = {
   alertCooldownSeconds: 6 * 3600,
   quota: { warnPercent: 90, criticalPercent: 98 },
   machine: { memFreeWarnPercent: 15, loadWarnFactor: 2 },
-  // Long-lived browsers that hold sign-in sessions. Never reported, never touched.
-  sharedBrowsers: [{ port: 9222, label: 'Shared signed-in Chrome (Qlik tenant)' }],
+  // Optional legacy shared browsers. Only alert about explicitly configured entries.
+  sharedBrowsers: [],
   browsers: {
     // Terminate agent-browser daemons with no parent, no children and this minimum age.
     reapOrphanDaemons: true,
@@ -30,6 +31,7 @@ const DEFAULTS = {
   // codexbar provider -> herdr agent kinds that consume it.
   providerKinds: { claude: ['claude'], codex: ['codex'], opencodego: ['opencode', 'pi'] },
   orchestratorLabel: 'orch',
+  roamgate: { port: 8787, tokenFile: path.join(os.homedir(), '.config/roamgate/auth-token') },
 };
 
 function merge(a, b) {

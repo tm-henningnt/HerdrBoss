@@ -1,6 +1,6 @@
 # Shared signed-in browser
 
-The Chrome instance on CDP port `9222` is shared by several projects.
+Some installations explicitly configure a legacy shared Chrome instance on CDP port `9222`. Use it only if your orchestrator assigns it. Otherwise use the [dedicated project browser service](browser-service.md).
 
 Treat its window, process, profile, and existing tabs as shared infrastructure.
 

@@ -80,7 +80,6 @@ export function evaluate(snap, cfg, paneSince, now = Date.now(), policy = null) 
       });
     }
   }
-
   // ----- Browsers -----
   const paneById = new Map((snap.herdr?.panes || []).map((p) => [p.id, p]));
   for (const b of snap.browsers || []) {
@@ -157,6 +156,14 @@ export function renderBulletin(snap, evaluation, cfg) {
     L.push(`- Memory: ${m.memFreePercent}% free of ${m.memTotalGB} GB; swap used ${m.swapUsedMB} MB`);
     const ab = (snap.browsers || []).filter((b) => b.kind === 'automation-chrome').length;
     L.push(`- Automation browsers: ${ab}`);
+  }
+  if (snap.managedBrowsers?.length) {
+    L.push('', '## Project browsers', '');
+    for (const b of snap.managedBrowsers) {
+      const ready = (snap.browsers || []).some((x) => x.kind === 'automation-chrome' && x.port === String(b.port) && x.profile === b.profile);
+      const size = b.windowSize || { width: 1280, height: 800 };
+      L.push(`- ${b.project}: ${ready ? 'ready' : 'offline'} (${b.headless ? 'headless' : 'visible'}); next launch ${size.width}×${size.height}; CDP http://127.0.0.1:${b.port}; profile ${b.profile}. Use \`herdr-boss browser tabs ${b.project}\` and \`herdr-boss browser screenshot ${b.project} --tab <id>\` for simple browser work; see \`kit/browser-service.md\` for input commands. Do not stop another project's browser.`);
+    }
   }
   if (snap.control) {
     L.push('', '## Worker allocation', '', `- ${snap.control.runningWorkers}/${snap.control.maxWorkers} working agents globally.`);

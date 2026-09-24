@@ -3,17 +3,40 @@ const $dot = document.getElementById('dot');
 const $updated = document.getElementById('updated');
 const $crumbs = document.getElementById('crumbs');
 const $nav = document.getElementById('primary-nav');
+const $roamgate = document.getElementById('roamgate-link');
 
 let state = null;
 let lastRender = '';
 let models = {};
 let usage = null;
 let browserSessions = [];
+const browserMessages = {};
+const browserPreviewOpen = new Set();
+const browserPreviewLive = new Set();
+const browserManageOpen = new Set();
+const browserPreviewPending = new Set();
+const browserPreviewUrls = {};
+const browserPreviewMessages = {};
+const browserPreviewFrames = {};
+let browserPreviewsInitialized = false;
+const browserTabs = {};
+const browserSelectedTab = {};
+const browserNavigation = {};
+const browserAddressDraft = {};
+const PREVIEW_INTERVALS = [1500, 3000, 5000, 10000, 30000];
+const PREVIEW_INTERVAL_KEY = 'herdr-boss.browser-preview-intervals';
+const browserPreviewIntervals = (() => { try { const value = JSON.parse(localStorage.getItem(PREVIEW_INTERVAL_KEY)); return value && typeof value === 'object' && !Array.isArray(value) ? value : {}; } catch { return {}; } })();
+const browserNextRefresh = {};
+let viewerInputQueue = Promise.resolve();
+let viewerTextBuffer = '';
+let viewerTextTimer = null;
+let viewerRefreshTimer = null;
 let handoffRecords = [];
 const handoffPlans = {};
 const handoffModes = {};
 const handoffTargets = {};
 const handoffModels = {};
+const handoffEfforts = {};
 const handoffOutputs = {};
 const handoffReviewed = new Set();
 const handoffBusy = new Set();
@@ -24,7 +47,24 @@ let policyDraft = null;
 let policyDirty = false;
 let saveMessage = '';
 
+function markPolicyDirty() {
+  policyDirty = true;
+  saveMessage = '';
+  const actions = document.querySelector('.control-actions');
+  if (actions) {
+    actions.classList.add('pending');
+    actions.querySelector('[data-policy-status]').textContent = 'Unsaved changes · Apply policy to keep them';
+    actions.querySelector('#save-policy').disabled = false;
+  }
+}
+
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const previewInterval = (slug) => PREVIEW_INTERVALS.includes(Number(browserPreviewIntervals[slug])) ? Number(browserPreviewIntervals[slug]) : 1500;
+function browserTabLabel(tab) {
+  let location = tab.url;
+  try { const url = new URL(tab.url); location = `${url.hostname}${url.pathname}`; } catch {}
+  return `${String(tab.title || 'Untitled page').slice(0, 42)} · ${String(location || '').slice(0, 70)}`;
+}
 const code = (s) => esc(s).replace(/`([^`]+)`/g, '<code>$1</code>');
 const PROVIDERS = { claude: 'Claude', codex: 'Codex', opencodego: 'OpenCode Go' };
 const STATUSES = ['todo', 'doing', 'review', 'blocked', 'done'];
@@ -64,18 +104,23 @@ function ensureDraft(s) {
   });
 }
 
-function rebalance(changed, value) {
-  const entries = Object.entries(policyDraft.projects).filter(([slug]) => state.control.projects[slug]);
-  const rest = entries.filter(([slug]) => slug !== changed);
-  policyDraft.projects[changed].share = Number(value);
-  if (!rest.length) { policyDraft.projects[changed].share = 100; return; }
-  const total = rest.reduce((n, [, p]) => n + p.share, 0);
-  const slots = 100 - Number(value);
-  const parts = rest.map(([slug, p]) => ({ slug, raw: slots * (total ? p.share / total : 1 / rest.length) }));
-  let left = slots;
-  for (const p of parts) { policyDraft.projects[p.slug].share = Math.floor(p.raw); left -= Math.floor(p.raw); }
-  parts.sort((a, b) => (b.raw % 1) - (a.raw % 1));
-  for (let i = 0; i < left; i++) policyDraft.projects[parts[i % parts.length].slug].share++;
+function allocationProjects() { return Object.values(state?.control?.projects || {}); }
+function moveBoundary(index, position) {
+  const projects = allocationProjects();
+  if (!policyDraft || index < 0 || index >= projects.length - 1) return;
+  const left = projects.slice(0, index).reduce((sum, p) => sum + policyDraft.projects[p.slug].share, 0);
+  const share = Math.max(0, Math.min(100 - left, Math.round(position) - left));
+  const right = projects.slice(index + 1);
+  const remaining = 100 - left - share;
+  const total = right.reduce((sum, p) => sum + policyDraft.projects[p.slug].share, 0);
+  const parts = right.map((p, order) => ({ slug: p.slug, order, raw: remaining * (total ? policyDraft.projects[p.slug].share / total : 1 / right.length) }));
+  policyDraft.projects[projects[index].slug].share = share;
+  let spare = remaining;
+  for (const part of parts) { policyDraft.projects[part.slug].share = Math.floor(part.raw); spare -= Math.floor(part.raw); }
+  parts.sort((a, b) => (b.raw % 1) - (a.raw % 1) || a.order - b.order);
+  for (let i = 0; i < spare; i++) policyDraft.projects[parts[i].slug].share++;
+  updateShares();
+  markPolicyDirty();
 }
 
 function controlBlock(s) {
@@ -83,18 +128,34 @@ function controlBlock(s) {
   if (!policyDraft || !s.control) return '';
   const d = policyDraft;
   const projects = Object.values(s.control.projects);
+  const shareColors = ['var(--accent)', 'var(--info)', 'var(--ok)', 'var(--warn)', 'var(--muted)'];
+  let cumulative = 0;
+  const shareSegments = projects.map((p, i) => `<div class="allocation-segment" data-segment="${esc(p.slug)}" style="width:${d.projects[p.slug]?.share || 0}%;background:${shareColors[i % shareColors.length]}" title="${esc(p.label)}: ${d.projects[p.slug]?.share || 0}%"></div>`).join('');
+  const shareHandles = projects.slice(0, -1).map((p, i) => {
+    const minimum = cumulative;
+    cumulative += d.projects[p.slug]?.share || 0;
+    return `<button type="button" class="allocation-handle" data-boundary="${i}" role="slider" aria-label="${esc(p.label)} allocation boundary" aria-valuemin="${minimum}" aria-valuemax="100" aria-valuenow="${cumulative}" aria-valuetext="${esc(p.label)} ${d.projects[p.slug]?.share || 0} percent" style="left:${cumulative}%"></button>`;
+  }).join('');
   const providerRows = Object.keys(d.providerModes).map((p) => `<label class="setting-line"><span>${esc(PROVIDERS[p] || p)} quota</span><select data-provider="${p}"><option value="managed" ${d.providerModes[p] === 'managed' ? 'selected' : ''}>Manage pace</option><option value="ignore" ${d.providerModes[p] === 'ignore' ? 'selected' : ''}>Ignore quota</option></select></label>`).join('');
   const kindRows = Object.keys(models).map((kind) => {
     const enabled = d.allowedKinds.includes(kind);
     return `<div class="model-kind"><label><input type="checkbox" data-kind="${kind}" ${enabled ? 'checked' : ''}> ${esc(kind)}</label><details><summary>Models</summary><div class="model-list">${(models[kind].allowedModels || []).map((model) => `<label><input type="checkbox" data-global-model="${esc(model)}" ${!d.excludedModels.includes(model) ? 'checked' : ''}> ${esc(model)}</label>`).join('')}</div></details></div>`;
+  }).join('');
+  const ladderRows = (d.orchestratorLadder || []).map((rung, i) => {
+    const cfg = models[rung.kind] || { allowedModels: [rung.model], allowedEfforts: [] };
+    return `<div class="succession-row"><span class="num">${i + 1}</span>
+      <select data-ladder-kind="${i}" aria-label="Choice ${i + 1} harness">${Object.keys(models).map((kind) => `<option value="${esc(kind)}" ${kind === rung.kind ? 'selected' : ''}>${esc(kind)}</option>`).join('')}</select>
+      <select data-ladder-model="${i}" aria-label="Choice ${i + 1} model">${cfg.allowedModels.map((model) => `<option value="${esc(model)}" ${model === rung.model ? 'selected' : ''}>${esc(model)}</option>`).join('')}</select>
+      ${cfg.allowedEfforts.length ? `<select data-ladder-effort="${i}" aria-label="Choice ${i + 1} reasoning effort">${cfg.allowedEfforts.map((effort) => `<option value="${esc(effort)}" ${effort === (rung.effort || cfg.defaultEffort) ? 'selected' : ''}>${esc(effort)}</option>`).join('')}</select>` : '<span class="sub">Default effort</span>'}
+      <div class="succession-actions"><button type="button" data-ladder-up="${i}" aria-label="Move choice ${i + 1} up" ${i ? '' : 'disabled'}>↑</button><button type="button" data-ladder-down="${i}" aria-label="Move choice ${i + 1} down" ${i === d.orchestratorLadder.length - 1 ? 'disabled' : ''}>↓</button><button type="button" data-ladder-remove="${i}" aria-label="Remove choice ${i + 1}" ${d.orchestratorLadder.length === 1 ? 'disabled' : ''}>Remove</button></div>
+    </div>`;
   }).join('');
   const projectRows = projects.map((p) => {
     const x = d.projects[p.slug] || { share: 0, mode: 'auto', excludedKinds: [], excludedModels: [] };
     const availableKinds = d.allowedKinds;
     const projectModels = [...new Set(availableKinds.flatMap((k) => models[k]?.allowedModels || []))].filter((m) => !d.excludedModels.includes(m));
     return `<div class="allocation-row" data-project-row="${esc(p.slug)}">
-      <div class="allocation-name"><b>${esc(p.label)}</b><small>${p.running}/${p.slots} working slots · ${p.idle ? 'idle' : 'active'}</small></div>
-      <input type="range" min="0" max="100" step="1" value="${x.share}" data-share="${esc(p.slug)}" aria-label="${esc(p.label)} allocation">
+      <div class="allocation-name"><b><i class="allocation-swatch" style="background:${shareColors[projects.indexOf(p) % shareColors.length]}"></i>${esc(p.label)}</b><small>${p.running}/${p.slots} working slots · ${p.idle ? 'idle' : 'active'}</small></div>
       <strong class="num share-value">${x.share}%</strong>
       <select data-mode="${esc(p.slug)}" aria-label="${esc(p.label)} activity mode">${['auto','active','idle','paused'].map((m) => `<option value="${m}" ${x.mode === m ? 'selected' : ''}>${m}</option>`).join('')}</select>
       <details class="project-exclude"><summary>Exclude kinds / models</summary><div class="exclude-grid">${availableKinds.map((k) => `<label><input type="checkbox" data-exclude-kind="${esc(p.slug)}:${k}" ${x.excludedKinds.includes(k) ? 'checked' : ''}> ${esc(k)}</label>`).join('')}
@@ -111,13 +172,20 @@ function controlBlock(s) {
           <label class="setting-line"><span>Orchestrator reserve %</span><input type="number" min="0" max="80" value="${d.reservePercent}" data-policy-number="reservePercent"></label>
           <label class="setting-line"><span>Handover lead minutes</span><input type="number" min="0" max="10080" value="${d.handoffLeadMinutes}" data-policy-number="handoffLeadMinutes"></label>
           <label class="setting-line"><span>Automatic handover</span><input type="checkbox" data-policy-bool="autoHandover" ${d.autoHandover ? 'checked' : ''}></label>
+          <p class="setting-help">Apply policy to save this choice.</p>
           <label class="setting-line"><span>Activate at quota used %</span><input type="number" min="90" max="100" value="${d.autoHandoverPercent}" data-policy-number="autoHandoverPercent"></label>
           <p class="setting-help">When enabled, Boss prepares a successor at the reserve limit and activates it at this quota level after the successor reports ready. The source stays in control until then.</p>
         </div><div><h3>Subscriptions</h3>${providerRows}</div>
         <div><h3>Available harnesses &amp; models</h3><div class="model-kinds">${kindRows}</div></div>
       </div>
-      <div class="allocations"><h3>Project shares <span class="sub">drag one slider; the rest rebalance</span></h3>${projectRows}</div>
-      <div class="control-actions"><span>${esc(saveMessage || `${s.control.runningWorkers}/${d.maxWorkers} workers active · ${policyDirty ? 'unsaved changes' : 'saved'}`)}</span><button id="save-policy" ${policyDirty ? '' : 'disabled'}>Apply policy</button></div>
+      <div class="succession"><div class="section-head"><h3>Orchestrator succession</h3><button type="button" data-ladder-add ${d.orchestratorLadder?.length >= 20 ? 'disabled' : ''}>Add choice</button></div>
+        <p class="setting-help">Automatic handover tries these choices in order, skipping the current provider, unavailable quotas, and global or project exclusions. Choices outside this list are never selected automatically.</p>
+        <div class="succession-list">${ladderRows}</div></div>
+      <div class="allocations"><h3>Project shares <span class="sub">drag a boundary; only projects to its right rebalance</span></h3>
+        <div class="allocation-bar" aria-label="Project allocation, 0 to 100 percent">${shareSegments}${shareHandles}</div>
+        <div class="allocation-scale"><span>0%</span><span>100%</span></div>
+        ${projectRows}</div>
+      <div class="control-actions ${policyDirty ? 'pending' : ''}"><span data-policy-status role="status">${esc(saveMessage || (policyDirty ? 'Unsaved changes · Apply policy to keep them' : `${s.control.runningWorkers}/${d.maxWorkers} workers active · policy saved`))}</span><button id="save-policy" ${policyDirty ? '' : 'disabled'}>Apply policy</button></div>
     </div></section>`;
 }
 
@@ -140,11 +208,13 @@ function handoffBlock(s, projectSlug = null) {
       const target = handoffTargets[h.pane] || (eligible.some(([kind]) => kind === h.target?.kind) ? h.target.kind : eligible[0]?.[0]) || '';
       const availableModels = eligible.find(([kind]) => kind === target)?.[1] || [];
       const model = availableModels.includes(handoffModels[h.pane]) ? handoffModels[h.pane] : availableModels.includes(h.target?.model) ? h.target.model : availableModels[0] || '';
+      const efforts = models[target]?.allowedEfforts || [];
+      const effort = efforts.includes(handoffEfforts[h.pane]) ? handoffEfforts[h.pane] : efforts.includes(h.target?.effort) ? h.target.effort : models[target]?.defaultEffort;
       const mode = handoffModes[h.pane] || (['codex', 'claude'].includes(target) ? 'migrate' : 'fresh');
       const plan = handoffPlans[h.pane];
       return `<article class="handoff-item panel"><div class="handoff-head"><div><b>${esc(s.control.projects[h.project]?.label || h.project)}</b><p>${h.window ? `${esc(h.fromKind)} is at ${h.window.usedPercent}% · ${esc(h.window.label)} quota` : `Current orchestrator · ${esc(h.fromKind)} · ${esc(h.pane)}`}</p></div><span class="tag">${h.window ? 'Handover needed' : 'Manual handover'}</span></div>
         <p>${h.window ? 'Prepare another orchestrator before this provider becomes unavailable.' : 'Start a successor when you want to change harnesses or refresh this orchestrator.'} The current pane remains in charge until activation.</p>
-        <div class="handoff-controls"><label>Successor<select data-handoff-target="${esc(h.pane)}">${eligible.map(([kind]) => `<option value="${esc(kind)}" ${kind === target ? 'selected' : ''}>${esc(kind)}</option>`).join('')}</select></label><label>Model<select data-handoff-model="${esc(h.pane)}">${availableModels.map((name) => `<option value="${esc(name)}" ${name === model ? 'selected' : ''}>${esc(name)}</option>`).join('')}</select></label><label>Start from<select data-handoff-mode="${esc(h.pane)}"><option value="migrate" ${mode === 'migrate' ? 'selected' : ''}>Migrated session</option><option value="fresh" ${mode === 'fresh' ? 'selected' : ''}>Fresh bootstrap</option></select></label></div>
+        <div class="handoff-controls"><label>Successor<select data-handoff-target="${esc(h.pane)}">${eligible.map(([kind]) => `<option value="${esc(kind)}" ${kind === target ? 'selected' : ''}>${esc(kind)}</option>`).join('')}</select></label><label>Model<select data-handoff-model="${esc(h.pane)}">${availableModels.map((name) => `<option value="${esc(name)}" ${name === model ? 'selected' : ''}>${esc(name)}</option>`).join('')}</select></label>${efforts.length ? `<label>Effort<select data-handoff-effort="${esc(h.pane)}">${efforts.map((name) => `<option value="${esc(name)}" ${name === effort ? 'selected' : ''}>${esc(name)}</option>`).join('')}</select></label>` : ''}<label>Start from<select data-handoff-mode="${esc(h.pane)}"><option value="migrate" ${mode === 'migrate' ? 'selected' : ''}>Migrated session</option><option value="fresh" ${mode === 'fresh' ? 'selected' : ''}>Fresh bootstrap</option></select></label></div>
         <div class="action-row"><button type="button" data-handoff-plan="${esc(h.pane)}" ${!eligible.length || handoffBusy.has(h.pane) ? 'disabled' : ''}>Plan handover</button>${plan && (mode === 'fresh' || plan.migration?.available) ? `<button type="button" data-handoff-prepare="${esc(h.pane)}" ${handoffBusy.has(h.pane) ? 'disabled' : ''}>Prepare successor</button>` : ''}<span class="inline-feedback" role="status">${esc(handoffMessages[h.pane] || '')}</span></div>
         ${plan ? `<div class="plan-result">${plan.mode === 'fresh' ? 'Fresh bootstrap: the successor will read project files and the source pane.' : plan.migration?.available ? `Migration available · ${plan.migration.records ?? '?'} records · ${plan.migration.warnings ?? 0} warnings.` : `Migration unavailable: ${esc(plan.migration?.error || 'unknown reason')}. Choose fresh bootstrap and plan again.`}</div>` : ''}
       </article>`;
@@ -154,17 +224,86 @@ function handoffBlock(s, projectSlug = null) {
   return `<section class="handoff-section"><div class="section-head"><h2>Project continuity</h2><span>${cards.length ? projectSlug && !prepared.length && !candidates.some((h) => h.window) ? 'Start when needed' : `${cards.length} need review` : 'No handovers pending'}</span></div>${cards.length ? `<div class="handoff-list">${cards.join('')}</div>` : empty}</section>`;
 }
 
-function projectResources(s) {
+function browserResources(s) {
   const projects = Object.values(s.control?.projects || {});
   const sessions = browserSessions;
-  return `<section><h2>Project browsers <span class="sub">one recorded profile and debugging port per project</span></h2><div class="grid cols-3">${projects.map((p) => {
+  const cards = (group) => group.map((p) => {
     const b = sessions.find((x) => x.project === p.slug);
-    return `<div class="panel resource-card"><b>${esc(p.label)}</b><div>Allocation <strong>${p.slots}</strong> · running <strong>${p.running}</strong>${p.idle ? ' · idle' : ''}</div>
-      <div>Browser ${b ? `<span class="mono">:${b.port}</span> · ${b.profileVerified ? 'ready' : b.reachable ? 'port conflict' : 'offline'}` : 'none'}</div>
-      <button data-browser-request="${esc(p.slug)}">${b?.profileVerified ? 'Show browser details' : 'Request browser'}</button>
-      ${b ? `<small class="mono">http://127.0.0.1:${b.port} · ${esc(b.profile)}</small>` : ''}
-    </div>`;
-  }).join('')}</div></section>`;
+    const tabs = browserTabs[p.slug] || [];
+    const size = b?.windowSize || { width: 1280, height: 800 };
+    const preview = browserPreviewOpen.has(p.slug);
+    return `<article class="panel browser-card ${b?.profileVerified ? 'browser-card-active' : 'browser-card-idle'}"><div class="browser-card-head"><div><h3>${esc(p.label)}</h3><p>${b ? `<span class="mono">:${b.port}</span> · ${b.profileVerified ? 'ready' : b.reachable ? 'port conflict' : 'offline'} · ${b.headless ? 'headless' : 'visible'}` : 'No browser running'}</p></div>${b?.profileVerified ? `<div class="browser-head-actions"><button type="button" class="browser-preview-toggle" data-browser-preview="${esc(p.slug)}">${preview ? 'Hide preview' : 'Show preview'}</button><details class="browser-manage" data-browser-manage="${esc(p.slug)}" ${browserManageOpen.has(p.slug) ? 'open' : ''}><summary>Manage</summary><div class="browser-manage-content"><div class="browser-actions"><button type="button" data-browser-restart="${esc(p.slug)}" data-browser-mode="${b.headless ? 'visible' : 'headless'}">Restart ${b.headless ? 'visible' : 'headless'}</button><label class="browser-restore"><input type="checkbox" data-browser-restore="${esc(p.slug)}" checked> Reopen current page</label><button type="button" data-browser-close="${esc(p.slug)}">Close browser</button></div><form class="browser-size" data-browser-size="${esc(p.slug)}"><label>Next launch size <input type="number" name="width" min="320" max="3840" value="${size.width}" aria-label="${esc(p.label)} window width"> × <input type="number" name="height" min="240" max="2160" value="${size.height}" aria-label="${esc(p.label)} window height"> px</label><button type="submit">Save size</button></form><details class="browser-record"><summary>Connection and profile</summary><small class="mono">http://127.0.0.1:${b.port}<br>${esc(b.profile)}</small></details></div></details></div>` : '<span class="tag">Available</span>'}</div>
+      ${!b?.profileVerified ? `<div class="browser-actions"><button type="button" data-browser-request="${esc(p.slug)}" data-browser-mode="visible">Open visible</button><button type="button" data-browser-request="${esc(p.slug)}" data-browser-mode="headless">Open headless</button></div>` : ''}
+      ${browserMessages[p.slug] ? `<small class="inline-feedback" role="status">${esc(browserMessages[p.slug])}</small>` : ''}
+      ${preview ? `<div class="browser-preview"><div class="browser-preview-tools"><select data-browser-tab="${esc(p.slug)}" aria-label="${esc(p.label)} browser page">${tabs.map((tab) => `<option value="${esc(tab.id)}" ${tab.id === browserSelectedTab[p.slug] ? 'selected' : ''}>${esc(browserTabLabel(tab))}</option>`).join('')}</select><button type="button" data-browser-refresh="${esc(p.slug)}">Refresh</button><label class="browser-live-toggle"><input type="checkbox" data-browser-live="${esc(p.slug)}" ${browserPreviewLive.has(p.slug) ? 'checked' : ''}> Live</label><label class="browser-live-rate">Every <select data-browser-interval="${esc(p.slug)}" aria-label="${esc(p.label)} live refresh interval">${PREVIEW_INTERVALS.map((ms) => `<option value="${ms}" ${ms === previewInterval(p.slug) ? 'selected' : ''}>${ms / 1000}s</option>`).join('')}</select></label></div>
+        <form class="browser-navigate" data-browser-navigate="${esc(p.slug)}"><button type="button" data-browser-history="back" data-browser-project="${esc(p.slug)}" ${browserNavigation[p.slug]?.canGoBack ? '' : 'disabled'}>Back</button><button type="button" data-browser-history="forward" data-browser-project="${esc(p.slug)}" ${browserNavigation[p.slug]?.canGoForward ? '' : 'disabled'}>Forward</button><button type="button" data-browser-history="home" data-browser-project="${esc(p.slug)}" ${tabs.length ? '' : 'disabled'}>Home</button><input type="text" name="url" value="${esc(browserAddressDraft[p.slug] ?? browserNavigation[p.slug]?.url ?? tabs.find((tab) => tab.id === browserSelectedTab[p.slug])?.url ?? '')}" placeholder="Enter a web address" aria-label="${esc(p.label)} browser address" autocomplete="off" spellcheck="false" required><button type="submit" ${tabs.length ? '' : 'disabled'}>Go</button></form>
+        ${browserPreviewUrls[p.slug] ? `<button type="button" class="browser-image-button" data-browser-expand="${esc(p.slug)}" aria-label="Expand ${esc(p.label)} browser screenshot"><img data-browser-image="${esc(p.slug)}" src="${browserPreviewUrls[p.slug]}" alt="Current browser page in ${esc(p.label)}"></button>` : '<div class="browser-preview-empty">No screenshot yet</div>'}
+        <small class="inline-feedback" data-browser-preview-message="${esc(p.slug)}" role="status">${esc(browserPreviewMessages[p.slug] || '')}</small></div>` : ''}
+    </article>`;
+  }).join('');
+  const active = projects.filter((p) => sessions.find((b) => b.project === p.slug)?.profileVerified);
+  const inactive = projects.filter((p) => !sessions.find((b) => b.project === p.slug)?.profileVerified);
+  return `<section class="browser-fleet"><div class="section-head"><h2>Running browsers</h2><span>${active.length} active</span></div>${active.length ? `<div class="browser-grid">${cards(active)}</div>` : '<p class="empty">No project browsers are running.</p>'}</section><section class="browser-fleet"><div class="section-head"><h2>Other projects</h2><span>${inactive.length} available</span></div>${inactive.length ? `<div class="browser-idle-grid">${cards(inactive)}</div>` : '<p class="empty">Every open project has a browser.</p>'}</section>`;
+}
+
+function previewMessage(slug, message) {
+  browserPreviewMessages[slug] = message;
+  const label = [...document.querySelectorAll('[data-browser-preview-message]')].find((el) => el.dataset.browserPreviewMessage === slug);
+  if (label) label.textContent = message;
+  const viewer = document.getElementById('browser-viewer');
+  if (viewer.open && viewer.dataset.project === slug) viewer.querySelector('#browser-viewer-status').textContent = message;
+}
+
+async function refreshBrowserNavigation(slug) {
+  const tab = browserSelectedTab[slug];
+  if (!tab) return;
+  const params = new URLSearchParams({ project: slug, tab });
+  const response = await fetch(`/api/browser-sessions/navigation?${params}`, { cache: 'no-store' });
+  const value = await response.json();
+  if (!response.ok) throw new Error(value.error || 'Could not read browser history.');
+  if (browserSelectedTab[slug] !== tab) return;
+  browserNavigation[slug] = value;
+  const viewer = document.getElementById('browser-viewer');
+  for (const form of [document.querySelector(`[data-browser-navigate="${slug}"]`), viewer.open && viewer.dataset.project === slug ? viewer.querySelector('#browser-viewer-navigate') : null]) {
+    if (!form) continue;
+    const input = form.elements.url;
+    if (document.activeElement !== input && browserAddressDraft[slug] === undefined) input.value = value.url;
+    form.querySelector('[data-browser-history="back"]').disabled = !value.canGoBack;
+    form.querySelector('[data-browser-history="forward"]').disabled = !value.canGoForward;
+  }
+}
+
+async function refreshBrowserPreview(slug, reloadTabs = false) {
+  if (!browserPreviewOpen.has(slug) || browserPreviewPending.has(slug)) return;
+  browserPreviewPending.add(slug);
+  try {
+    if (reloadTabs || !browserTabs[slug]) {
+      const response = await fetch(`/api/browser-sessions/tabs?project=${encodeURIComponent(slug)}`);
+      const tabs = await response.json();
+      if (!response.ok) throw new Error(tabs.error || 'Could not list browser pages.');
+      browserTabs[slug] = tabs;
+      if (!tabs.some((tab) => tab.id === browserSelectedTab[slug])) browserSelectedTab[slug] = tabs[0]?.id;
+      lastRender = ''; render();
+    }
+    if (!browserSelectedTab[slug]) throw new Error('No inspectable page is open in this browser.');
+    const params = new URLSearchParams({ project: slug, tab: browserSelectedTab[slug] });
+    const response = await fetch(`/api/browser-sessions/screenshot?${params}`, { cache: 'no-store' });
+    if (!response.ok) { const result = await response.json(); throw new Error(result.error || 'Screenshot failed.'); }
+    const next = URL.createObjectURL(await response.blob());
+    const previous = browserPreviewUrls[slug];
+    browserPreviewUrls[slug] = next;
+    const image = [...document.querySelectorAll('[data-browser-image]')].find((el) => el.dataset.browserImage === slug);
+    if (image) image.src = next;
+    else { lastRender = ''; render(); }
+    const viewer = document.getElementById('browser-viewer');
+    if (viewer.open && viewer.dataset.project === slug) viewer.querySelector('img').src = next;
+    if (previous) URL.revokeObjectURL(previous);
+    browserPreviewFrames[slug] = (browserPreviewFrames[slug] || 0) + 1;
+    const viewerActive = viewer.open && viewer.dataset.project === slug;
+    previewMessage(slug, `${browserPreviewLive.has(slug) || viewerActive ? 'Live' : 'Captured'} · frame ${browserPreviewFrames[slug]} · ${new Date().toLocaleTimeString()}`);
+    try { await refreshBrowserNavigation(slug); } catch (error) { previewMessage(slug, error.message); }
+  } catch (error) { previewMessage(slug, error.message); }
+  finally { browserPreviewPending.delete(slug); }
 }
 
 // ---------- Overview ----------
@@ -399,7 +538,13 @@ function allocationView(s) {
   return [
     '<header class="page-intro"><div><h1>Resource allocation</h1><p>Set capacity, subscription availability, and the share each project can use.</p></div></header>',
     controlBlock(s),
-    projectResources(s),
+  ].join('');
+}
+
+function browsersView(s) {
+  return [
+    '<header class="page-intro"><div><h1>Project browsers</h1><p>Dedicated profiles, live page previews, and controls for each project.</p></div></header>',
+    browserResources(s),
   ].join('');
 }
 
@@ -495,18 +640,18 @@ function project(s, slug) {
 
 // ---------- Render loop ----------
 
-function render() {
+function render(force = false) {
   if (!state) return;
   if (!policyDirty) policyDraft = null;
-  if (policyDirty && location.pathname === '/allocation' && document.activeElement?.closest?.('#control-plane')) {
+  if (!force && policyDirty && location.pathname === '/allocation' && document.activeElement?.closest?.('#control-plane')) {
     $updated.textContent = `updated ${ago(state.updatedAt)}`;
     return;
   }
   const legacy = /^\/p\/([^/]+)\/?$/.exec(location.pathname);
   if (legacy) history.replaceState(null, '', `/projects/${legacy[1]}`);
   const m = /^\/projects\/([^/]+)\/?$/.exec(location.pathname);
-  const route = m || location.pathname === '/projects' ? 'projects' : ['allocation', 'agents', 'analytics', 'logs'].includes(location.pathname.slice(1)) ? location.pathname.slice(1) : 'overview';
-  const html = route === 'projects' ? projectsView(state, m ? decodeURIComponent(m[1]) : null) : route === 'allocation' ? allocationView(state) : route === 'agents' ? agentsView(state) : route === 'analytics' ? analyticsView(state) : route === 'logs' ? logsView(state) : overview(state);
+  const route = m || location.pathname === '/projects' ? 'projects' : ['allocation', 'agents', 'browsers', 'analytics', 'logs'].includes(location.pathname.slice(1)) ? location.pathname.slice(1) : 'overview';
+  const html = route === 'projects' ? projectsView(state, m ? decodeURIComponent(m[1]) : null) : route === 'allocation' ? allocationView(state) : route === 'agents' ? agentsView(state) : route === 'browsers' ? browsersView(state) : route === 'analytics' ? analyticsView(state) : route === 'logs' ? logsView(state) : overview(state);
   if (route !== 'projects') $crumbs.innerHTML = '';
   for (const a of $nav.querySelectorAll('a')) {
     if (a.dataset.nav === route) a.setAttribute('aria-current', 'page');
@@ -519,32 +664,140 @@ function render() {
 document.addEventListener('toggle', (e) => {
   if (e.target.matches?.('[data-quota-detail]')) quotaExpanded = e.target.open;
   if (e.target.matches?.('[data-machine-detail]')) machineExpanded = e.target.open;
+  if (e.target.dataset?.browserManage) {
+    if (e.target.open) browserManageOpen.add(e.target.dataset.browserManage);
+    else browserManageOpen.delete(e.target.dataset.browserManage);
+  }
 }, true);
 
 function updateShares() {
+  const projects = allocationProjects();
+  let cumulative = 0;
+  const bar = document.querySelector('.allocation-bar');
+  if (!bar) return;
+  for (const [index, p] of projects.entries()) {
+    const share = policyDraft.projects[p.slug].share;
+    const segment = [...bar.querySelectorAll('[data-segment]')].find((x) => x.dataset.segment === p.slug);
+    if (segment) { segment.style.width = `${share}%`; segment.title = `${p.label}: ${share}%`; }
+    const handle = bar.querySelector(`[data-boundary="${index}"]`);
+    if (handle) {
+      handle.style.left = `${cumulative + share}%`;
+      handle.setAttribute('aria-valuemin', String(cumulative));
+      handle.setAttribute('aria-valuenow', String(cumulative + share));
+      handle.setAttribute('aria-valuetext', `${p.label} ${share} percent`);
+    }
+    cumulative += share;
+  }
   for (const [slug, p] of Object.entries(policyDraft.projects)) {
     const row = [...document.querySelectorAll('[data-project-row]')].find((x) => x.dataset.projectRow === slug);
     if (!row) continue;
-    row.querySelector('[data-share]').value = p.share;
     row.querySelector('.share-value').textContent = `${p.share}%`;
   }
 }
 
+document.addEventListener('pointerdown', (e) => {
+  const handle = e.target.closest?.('[data-boundary]');
+  if (!handle || !policyDraft) return;
+  e.preventDefault();
+  handle.focus();
+  handle.dataset.dragging = 'true';
+  handle.setPointerCapture(e.pointerId);
+});
+document.addEventListener('pointermove', (e) => {
+  const handle = e.target.closest?.('[data-boundary][data-dragging="true"]');
+  if (!handle) return;
+  const rect = handle.closest('.allocation-bar').getBoundingClientRect();
+  moveBoundary(Number(handle.dataset.boundary), (e.clientX - rect.left) / rect.width * 100);
+});
+document.addEventListener('pointerup', (e) => { if (e.target.dataset?.dragging) delete e.target.dataset.dragging; });
+document.addEventListener('pointercancel', (e) => { if (e.target.dataset?.dragging) delete e.target.dataset.dragging; });
+document.addEventListener('keydown', (e) => {
+  const viewer = document.getElementById('browser-viewer');
+  if (viewer.open && e.target === viewer.querySelector('img') && viewer.querySelector('#browser-viewer-control').checked) {
+    if (e.key === 'Escape') return;
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'a') {
+      e.preventDefault(); flushViewerText(); queueViewerInput({ type: 'key', key: 'SelectAll' }); return;
+    }
+    if (!e.metaKey && !e.ctrlKey && !e.altKey && e.key.length === 1) {
+      e.preventDefault(); viewerTextBuffer += e.key;
+      clearTimeout(viewerTextTimer);
+      viewerTextTimer = setTimeout(flushViewerText, 80);
+      return;
+    }
+    if (['Tab', 'Enter', 'Backspace', 'Delete', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(e.key)) {
+      e.preventDefault(); flushViewerText(); queueViewerInput({ type: 'key', key: e.key }); return;
+    }
+  }
+  const handle = e.target.closest?.('[data-boundary]');
+  if (!handle || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
+  e.preventDefault();
+  const index = Number(handle.dataset.boundary);
+  const value = Number(handle.getAttribute('aria-valuenow'));
+  moveBoundary(index, e.key === 'Home' ? Number(handle.getAttribute('aria-valuemin')) : e.key === 'End' ? 100 : value + (e.key === 'ArrowRight' ? 1 : -1));
+});
+
 document.addEventListener('input', (e) => {
+  const addressForm = e.target.closest?.('.browser-navigate');
+  if (addressForm && e.target.name === 'url') {
+    const slug = addressForm.dataset.browserNavigate || document.getElementById('browser-viewer').dataset.project;
+    if (slug) browserAddressDraft[slug] = e.target.value;
+    return;
+  }
   if (!e.target.closest('#control-plane') || !policyDraft) return;
   const el = e.target;
-  if (el.dataset.share) { rebalance(el.dataset.share, el.value); updateShares(); }
   if (el.dataset.policyNumber) policyDraft[el.dataset.policyNumber] = Number(el.value);
-  policyDirty = true;
-  saveMessage = '';
-  document.getElementById('save-policy').disabled = false;
+  markPolicyDirty();
 });
 
 document.addEventListener('change', (e) => {
-  if (e.target.dataset.handoffTarget || e.target.dataset.handoffMode || e.target.dataset.handoffModel) {
-    const pane = e.target.dataset.handoffTarget || e.target.dataset.handoffMode || e.target.dataset.handoffModel;
-    if (e.target.dataset.handoffTarget) { handoffTargets[pane] = e.target.value; delete handoffModels[pane]; }
+  if (e.target.dataset.browserInterval) {
+    const slug = e.target.dataset.browserInterval;
+    const interval = Number(e.target.value);
+    if (!PREVIEW_INTERVALS.includes(interval)) return;
+    browserPreviewIntervals[slug] = interval;
+    browserNextRefresh[slug] = Date.now() + interval;
+    try { localStorage.setItem(PREVIEW_INTERVAL_KEY, JSON.stringify(browserPreviewIntervals)); } catch {}
+    return;
+  }
+  if (e.target.id === 'browser-viewer-control') {
+    const viewer = document.getElementById('browser-viewer');
+    for (const control of viewer.querySelectorAll('.browser-viewer-controls input, .browser-viewer-controls button')) control.disabled = !e.target.checked;
+    if (e.target.checked) viewer.querySelector('img')?.focus();
+    else { viewerTextBuffer = ''; clearTimeout(viewerTextTimer); viewer.querySelector('#browser-viewer-text').value = ''; }
+    return;
+  }
+  if (e.target.dataset.browserLive) {
+    const slug = e.target.dataset.browserLive;
+    if (e.target.checked) { browserPreviewLive.add(slug); browserNextRefresh[slug] = Date.now() + previewInterval(slug); refreshBrowserPreview(slug); }
+    else { browserPreviewLive.delete(slug); delete browserNextRefresh[slug]; }
+    return;
+  }
+  if (e.target.dataset.browserTab) {
+    const slug = e.target.dataset.browserTab;
+    browserSelectedTab[slug] = e.target.value;
+    delete browserNavigation[slug];
+    delete browserAddressDraft[slug];
+    refreshBrowserPreview(slug);
+    return;
+  }
+  if (e.target.dataset.ladderKind !== undefined || e.target.dataset.ladderModel !== undefined || e.target.dataset.ladderEffort !== undefined) {
+    const i = Number(e.target.dataset.ladderKind ?? e.target.dataset.ladderModel ?? e.target.dataset.ladderEffort);
+    const rung = policyDraft?.orchestratorLadder?.[i];
+    if (!rung) return;
+    if (e.target.dataset.ladderKind !== undefined) {
+      rung.kind = e.target.value;
+      rung.model = models[rung.kind].defaultModel;
+      rung.effort = models[rung.kind].defaultEffort || null;
+    } else if (e.target.dataset.ladderModel !== undefined) rung.model = e.target.value;
+    else rung.effort = e.target.value;
+    policyDirty = true; saveMessage = ''; lastRender = ''; render(true);
+    return;
+  }
+  if (e.target.dataset.handoffTarget || e.target.dataset.handoffMode || e.target.dataset.handoffModel || e.target.dataset.handoffEffort) {
+    const pane = e.target.dataset.handoffTarget || e.target.dataset.handoffMode || e.target.dataset.handoffModel || e.target.dataset.handoffEffort;
+    if (e.target.dataset.handoffTarget) { handoffTargets[pane] = e.target.value; delete handoffModels[pane]; delete handoffEfforts[pane]; }
     else if (e.target.dataset.handoffModel) handoffModels[pane] = e.target.value;
+    else if (e.target.dataset.handoffEffort) handoffEfforts[pane] = e.target.value;
     else handoffModes[pane] = e.target.value;
     delete handoffPlans[pane]; delete handoffMessages[pane];
     lastRender = ''; render();
@@ -575,8 +828,7 @@ document.addEventListener('change', (e) => {
     const [slug, value] = el.dataset[key].split(':');
     d.projects[slug][attr] = el.checked ? [...new Set([...d.projects[slug][attr], value])] : d.projects[slug][attr].filter((x) => x !== value);
   }
-  policyDirty = true;
-  document.getElementById('save-policy').disabled = false;
+  markPolicyDirty();
 });
 
 async function postJson(url, body) {
@@ -586,6 +838,68 @@ async function postJson(url, body) {
   return result;
 }
 
+function scheduleViewerRefresh(slug) {
+  clearTimeout(viewerRefreshTimer);
+  viewerRefreshTimer = setTimeout(() => refreshBrowserPreview(slug), 350);
+}
+
+function queueViewerInput(input) {
+  const viewer = document.getElementById('browser-viewer');
+  const project = viewer.dataset.project;
+  const tab = viewer.dataset.tab;
+  viewerInputQueue = viewerInputQueue.catch(() => {}).then(async () => {
+    try {
+      await postJson('/api/browser-sessions/input', { project, tab, ...input });
+      scheduleViewerRefresh(project);
+    } catch (error) { previewMessage(project, error.message); }
+  });
+  return viewerInputQueue;
+}
+
+function flushViewerText() {
+  clearTimeout(viewerTextTimer);
+  if (!viewerTextBuffer) return;
+  const text = viewerTextBuffer;
+  viewerTextBuffer = '';
+  queueViewerInput({ type: 'text', text });
+}
+
+document.addEventListener('submit', async (e) => {
+  if (e.target.id === 'browser-viewer-text-form') {
+    e.preventDefault();
+    const input = document.getElementById('browser-viewer-text');
+    const text = input.value;
+    input.value = '';
+    if (text && document.getElementById('browser-viewer-control').checked) {
+      flushViewerText();
+      queueViewerInput({ type: 'text', text });
+    }
+    return;
+  }
+  const sizeSlug = e.target.dataset.browserSize;
+  const navigateSlug = e.target.dataset.browserNavigate || (e.target.id === 'browser-viewer-navigate' ? document.getElementById('browser-viewer').dataset.project : null);
+  if (!sizeSlug && !navigateSlug) return;
+  e.preventDefault();
+  const form = e.target;
+  const button = form.querySelector('button[type="submit"]');
+  button.disabled = true;
+  try {
+    if (sizeSlug) {
+      await postJson('/api/browser-sessions/window-size', { project: sizeSlug, width: Number(form.elements.width.value), height: Number(form.elements.height.value) });
+      browserMessages[sizeSlug] = 'Size saved for the next browser launch. Close and reopen the browser to apply it.';
+      await refreshExtras();
+    } else {
+      await postJson('/api/browser-sessions/navigate', { project: navigateSlug, tab: browserSelectedTab[navigateSlug], url: form.elements.url.value });
+      delete browserAddressDraft[navigateSlug];
+      previewMessage(navigateSlug, 'Opening page…');
+      setTimeout(() => refreshBrowserPreview(navigateSlug, true), 800);
+    }
+  } catch (error) {
+    if (sizeSlug) { browserMessages[sizeSlug] = error.message; lastRender = ''; render(); }
+    else previewMessage(navigateSlug, error.message);
+  } finally { button.disabled = false; }
+});
+
 async function runHandoffAction(action, key) {
   if (handoffBusy.has(key)) return;
   const h = state.control?.handoffs?.find((x) => x.pane === key) || Object.values(state.control?.projects || {}).filter((p) => p.orch?.pane === key).map((p) => ({ project: p.slug, pane: key, fromKind: p.orch.kind }))[0];
@@ -593,6 +907,7 @@ async function runHandoffAction(action, key) {
   const selectedTarget = [...document.querySelectorAll('[data-handoff-target]')].find((x) => x.dataset.handoffTarget === key)?.value;
   const selectedModel = [...document.querySelectorAll('[data-handoff-model]')].find((x) => x.dataset.handoffModel === key)?.value;
   const selectedMode = [...document.querySelectorAll('[data-handoff-mode]')].find((x) => x.dataset.handoffMode === key)?.value;
+  const selectedEffort = [...document.querySelectorAll('[data-handoff-effort]')].find((x) => x.dataset.handoffEffort === key)?.value;
   if (action === 'activate' && !confirm(`Activate the prepared ${item?.toKind || ''} orchestrator for ${item?.project || key}? The current pane will become standby.`)) return;
   handoffBusy.add(key);
   handoffMessages[key] = action === 'plan' ? 'Planning handover…' : action === 'prepare' ? 'Starting successor…' : action === 'output' ? 'Reading successor…' : 'Activating…';
@@ -600,7 +915,7 @@ async function runHandoffAction(action, key) {
   try {
     if (action === 'plan' || action === 'prepare') {
       if (!h) throw new Error('This handover is no longer current. Refresh the dashboard.');
-      const body = { project: h.project, pane: h.pane, to: selectedTarget, model: selectedModel, mode: selectedMode };
+      const body = { project: h.project, pane: h.pane, to: selectedTarget, model: selectedModel, mode: selectedMode, effort: selectedEffort || null };
       if (action === 'plan') {
         const plan = await postJson('/api/handoffs/plan', body);
         handoffPlans[key] = plan;
@@ -630,6 +945,104 @@ async function runHandoffAction(action, key) {
 }
 
 document.addEventListener('click', async (e) => {
+  if (e.target.id === 'browser-viewer-close') { document.getElementById('browser-viewer').close(); return; }
+  if (e.target.dataset.browserHistory) {
+    const slug = e.target.dataset.browserProject || document.getElementById('browser-viewer').dataset.project;
+    const action = e.target.dataset.browserHistory;
+    e.target.disabled = true;
+    try {
+      const result = await postJson('/api/browser-sessions/history', { project: slug, tab: browserSelectedTab[slug], action });
+      delete browserAddressDraft[slug];
+      browserNavigation[slug] = { ...browserNavigation[slug], url: result.url };
+      previewMessage(slug, `${action === 'home' ? 'Opening home' : action === 'back' ? 'Going back' : 'Going forward'}…`);
+      setTimeout(() => refreshBrowserPreview(slug, true), 500);
+    } catch (error) { previewMessage(slug, error.message); }
+    finally { e.target.disabled = false; }
+    return;
+  }
+  if (e.target.dataset.browserViewerKey) {
+    flushViewerText(); queueViewerInput({ type: 'key', key: e.target.dataset.browserViewerKey }); return;
+  }
+  const viewerImage = document.querySelector('#browser-viewer img');
+  if (e.target === viewerImage) {
+    viewerImage.focus();
+    const viewer = document.getElementById('browser-viewer');
+    if (!viewer.querySelector('#browser-viewer-control').checked) return;
+    flushViewerText();
+    const rect = viewerImage.getBoundingClientRect();
+    queueViewerInput({ type: 'click', x: Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)), y: Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height)) });
+    return;
+  }
+  if (e.target.closest?.('[data-browser-expand]')) {
+    const slug = e.target.closest('[data-browser-expand]').dataset.browserExpand;
+    const viewer = document.getElementById('browser-viewer');
+    let image = viewer.querySelector('img');
+    if (!image) { image = document.createElement('img'); viewer.append(image); }
+    image.src = browserPreviewUrls[slug];
+    image.alt = `${slug} browser screenshot`;
+    image.tabIndex = 0;
+    viewer.dataset.project = slug;
+    viewer.dataset.tab = browserSelectedTab[slug];
+    viewer.querySelector('#browser-viewer-control').checked = false;
+    for (const control of viewer.querySelectorAll('.browser-viewer-controls input, .browser-viewer-controls button')) control.disabled = true;
+    viewer.querySelector('#browser-viewer-status').textContent = browserPreviewMessages[slug] || '';
+    const form = viewer.querySelector('#browser-viewer-navigate');
+    form.elements.url.value = browserAddressDraft[slug] ?? browserNavigation[slug]?.url ?? browserTabs[slug]?.find((tab) => tab.id === browserSelectedTab[slug])?.url ?? '';
+    form.querySelector('[data-browser-history="back"]').disabled = !browserNavigation[slug]?.canGoBack;
+    form.querySelector('[data-browser-history="forward"]').disabled = !browserNavigation[slug]?.canGoForward;
+    viewer.showModal();
+    refreshBrowserNavigation(slug).catch((error) => previewMessage(slug, error.message));
+    return;
+  }
+  if (e.target.dataset.browserPreview) {
+    const slug = e.target.dataset.browserPreview;
+    if (browserPreviewOpen.has(slug)) { browserPreviewOpen.delete(slug); browserPreviewLive.delete(slug); delete browserNextRefresh[slug]; }
+    else browserPreviewOpen.add(slug);
+    lastRender = ''; render();
+    if (browserPreviewOpen.has(slug)) await refreshBrowserPreview(slug, true);
+    return;
+  }
+  if (e.target.dataset.browserRefresh) { await refreshBrowserPreview(e.target.dataset.browserRefresh, true); return; }
+  if (e.target.dataset.browserClose || e.target.dataset.browserRestart) {
+    const restart = Boolean(e.target.dataset.browserRestart);
+    const slug = e.target.dataset.browserClose || e.target.dataset.browserRestart;
+    const restorePage = document.querySelector(`[data-browser-restore="${slug}"]`)?.checked !== false;
+    e.target.disabled = true;
+    browserMessages[slug] = restart ? 'Restarting browser…' : 'Closing browser…';
+    lastRender = ''; render();
+    try {
+      const result = await postJson(`/api/browser-sessions/${restart ? 'restart' : 'close'}`, { project: slug, ...(restart ? { headless: e.target.dataset.browserMode === 'headless', restorePage, tab: browserSelectedTab[slug] || null } : {}) });
+      browserMessages[slug] = restart ? `Ready on port ${result.port} · ${result.headless ? 'headless' : 'visible'}${result.restoreError ? ` · Page could not reopen: ${result.restoreError}` : ''}` : 'Browser closed. Its profile is saved.';
+      browserPreviewOpen.delete(slug);
+      browserPreviewLive.delete(slug);
+      delete browserNextRefresh[slug];
+      delete browserTabs[slug];
+      delete browserNavigation[slug];
+      delete browserAddressDraft[slug];
+      if (browserPreviewUrls[slug]) URL.revokeObjectURL(browserPreviewUrls[slug]);
+      delete browserPreviewUrls[slug];
+      await refreshExtras();
+      if (restart) { browserPreviewOpen.add(slug); lastRender = ''; render(); await refreshBrowserPreview(slug, true); }
+    } catch (error) { browserMessages[slug] = error.message; lastRender = ''; render(); }
+    return;
+  }
+  if (e.target.dataset.ladderAdd !== undefined || e.target.dataset.ladderUp !== undefined || e.target.dataset.ladderDown !== undefined || e.target.dataset.ladderRemove !== undefined) {
+    const list = policyDraft?.orchestratorLadder;
+    if (!list) return;
+    if (e.target.dataset.ladderAdd !== undefined) {
+      const kind = Object.keys(models).find((k) => models[k].allowedModels.some((m) => !list.some((r) => r.kind === k && r.model === m))) || Object.keys(models)[0];
+      if (!kind) return;
+      const cfg = models[kind];
+      const model = cfg.allowedModels.find((m) => !list.some((r) => r.kind === kind && r.model === m)) || cfg.defaultModel;
+      list.push({ kind, model, effort: cfg.defaultEffort || null });
+    } else {
+      const i = Number(e.target.dataset.ladderUp ?? e.target.dataset.ladderDown ?? e.target.dataset.ladderRemove);
+      if (e.target.dataset.ladderRemove !== undefined) list.splice(i, 1);
+      else { const next = i + (e.target.dataset.ladderUp !== undefined ? -1 : 1); [list[i], list[next]] = [list[next], list[i]]; }
+    }
+    policyDirty = true; saveMessage = ''; lastRender = ''; render(true);
+    return;
+  }
   for (const [action, attr] of [['plan', 'handoffPlan'], ['prepare', 'handoffPrepare'], ['output', 'handoffOutput'], ['activate', 'handoffActivate']]) {
     if (e.target.dataset[attr]) { await runHandoffAction(action, e.target.dataset[attr]); return; }
   }
@@ -650,14 +1063,16 @@ document.addEventListener('click', async (e) => {
   }
   if (e.target.dataset.browserRequest) {
     const slug = e.target.dataset.browserRequest;
+    const headless = e.target.dataset.browserMode === 'headless';
     e.target.disabled = true;
     try {
-      const response = await fetch('/api/browser-sessions/request', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ project: slug }) });
+      const response = await fetch('/api/browser-sessions/request', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ project: slug, headless }) });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || 'Browser request failed.');
+      browserMessages[slug] = `${result.profileVerified ? 'Ready' : 'Starting'} on port ${result.port}. Profile: ${result.profile}`;
       await refreshExtras();
-      alert(`Browser for ${slug}: port ${result.port}\nProfile: ${result.profile}\n${result.profileVerified ? 'Ready' : 'Starting or needs inspection'}`);
-    } catch (error) { alert(error.message); } finally { e.target.disabled = false; }
+      if (result.profileVerified) { browserPreviewOpen.add(slug); lastRender = ''; render(); await refreshBrowserPreview(slug, true); }
+    } catch (error) { browserMessages[slug] = error.message; lastRender = ''; render(); } finally { e.target.disabled = false; }
   }
 });
 
@@ -668,10 +1083,11 @@ document.addEventListener('click', (e) => {
   history.pushState(null, '', a.getAttribute('href'));
   lastRender = '';
   render();
+  if (location.pathname === '/browsers') for (const slug of browserPreviewOpen) if (!browserPreviewUrls[slug]) refreshBrowserPreview(slug, true);
   if (location.hash) requestAnimationFrame(() => document.getElementById(location.hash.slice(1))?.scrollIntoView());
   else scrollTo(0, 0);
 });
-addEventListener('popstate', () => { lastRender = ''; render(); if (location.hash) requestAnimationFrame(() => document.getElementById(location.hash.slice(1))?.scrollIntoView()); });
+addEventListener('popstate', () => { lastRender = ''; render(); if (location.pathname === '/browsers') for (const slug of browserPreviewOpen) if (!browserPreviewUrls[slug]) refreshBrowserPreview(slug, true); if (location.hash) requestAnimationFrame(() => document.getElementById(location.hash.slice(1))?.scrollIntoView()); });
 
 function connect() {
   const es = new EventSource('/api/events');
@@ -679,16 +1095,50 @@ function connect() {
   es.onopen = () => $dot.classList.add('on');
   es.onerror = () => { $dot.classList.remove('on'); $updated.textContent = 'reconnecting…'; };
 }
+async function refreshRoamgate() {
+  try {
+    const response = await fetch('/api/roamgate');
+    const status = await response.json();
+    $roamgate.hidden = !response.ok || !status.available;
+  } catch { $roamgate.hidden = true; }
+}
 async function refreshExtras() {
   const results = await Promise.allSettled(['/api/models', '/api/usage', '/api/browser-sessions', '/api/handoffs'].map((url) => fetch(url).then((r) => r.json())));
   if (results[0].status === 'fulfilled') models = results[0].value;
   if (results[1].status === 'fulfilled') usage = results[1].value;
-  if (results[2].status === 'fulfilled') browserSessions = results[2].value;
+  if (results[2].status === 'fulfilled') {
+    browserSessions = results[2].value;
+    if (!browserPreviewsInitialized) {
+      for (const browser of browserSessions) if (browser.profileVerified) browserPreviewOpen.add(browser.project);
+      browserPreviewsInitialized = true;
+    }
+  }
   if (results[3].status === 'fulfilled') handoffRecords = results[3].value;
   lastRender = '';
   render();
+  if (location.pathname === '/browsers') for (const slug of browserPreviewOpen) if (!browserPreviewUrls[slug]) refreshBrowserPreview(slug, true);
 }
 connect();
 refreshExtras();
+refreshRoamgate();
 setInterval(refreshExtras, 30000);
+setInterval(refreshRoamgate, 30000);
+setInterval(() => {
+  if (document.hidden || location.pathname !== '/browsers') return;
+  const active = new Set(browserPreviewLive);
+  const viewer = document.getElementById('browser-viewer');
+  if (viewer.open && viewer.dataset.project) active.add(viewer.dataset.project);
+  const now = Date.now();
+  for (const slug of active) if (now >= (browserNextRefresh[slug] || 0)) {
+    browserNextRefresh[slug] = now + previewInterval(slug);
+    refreshBrowserPreview(slug);
+  }
+}, 500);
+document.getElementById('browser-viewer').addEventListener('close', () => {
+  viewerTextBuffer = '';
+  clearTimeout(viewerTextTimer);
+  clearTimeout(viewerRefreshTimer);
+  document.getElementById('browser-viewer-text').value = '';
+  document.getElementById('browser-viewer-control').checked = false;
+});
 setInterval(render, 10000);

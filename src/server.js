@@ -11,8 +11,11 @@ import { writeProject, listProjects } from './projects.js';
 import { loadModels } from './kit/config.js';
 import { loadPolicy, savePolicy } from './control.js';
 import { recordUsage, usageSummary } from './usage.js';
-import { requestBrowser, listBrowserSessions, browserStatus } from './browser-pool.js';
+import { requestBrowser, listBrowserSessions, browserStatus, setBrowserWindowSize, closeBrowser, restartBrowser } from './browser-pool.js';
+import { listBrowserTabs, browserScreenshot, browserNavigate, browserNavigationState, browserHistoryAction, browserClick, browserInsertText, browserKey } from './browser-preview.js';
 import { listHandoffs } from './handoff.js';
+import { roamgateAvailable, roamgateUrl } from './roamgate.js';
+import { createAccessControl, loginPage } from './access.js';
 
 const PUBLIC = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const DOCS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'docs');
@@ -32,7 +35,7 @@ async function handoffCommand(args) {
 }
 
 function send(res, code, body, type = 'application/json; charset=utf-8') {
-  res.writeHead(code, { 'content-type': type, 'cache-control': 'no-store' });
+  res.writeHead(code, { 'content-type': type, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' });
   res.end(typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body));
 }
 
@@ -45,13 +48,19 @@ function readBody(req, limit = 1024 * 1024) {
   });
 }
 
-function allowedRequest(req) {
+function allowedRequest(req, pathname) {
   const host = req.headers.host || '';
   const hostname = host.replace(/:\d+$/, '').toLowerCase();
-  if (!['localhost', '127.0.0.1', '[::1]'].includes(hostname) && !hostname.endsWith('.ts.net')) return false;
+  const localAddresses = Object.values(os.networkInterfaces()).flat().filter(Boolean).map((iface) => iface.address.toLowerCase());
+  if (!['localhost', '127.0.0.1', '[::1]'].includes(hostname) && !hostname.endsWith('.ts.net') && !localAddresses.includes(hostname.replace(/^\[|\]$/g, ''))) return false;
   const origin = req.headers.origin;
-  if (origin && new URL(origin).host.toLowerCase() !== host.toLowerCase()) return false;
-  return req.headers['sec-fetch-site'] !== 'cross-site';
+  if (origin === 'null') {
+    if (pathname !== '/login' || req.method !== 'POST' || !['same-origin', 'none', undefined].includes(req.headers['sec-fetch-site'])) return false;
+  } else if (origin) {
+    try { if (new URL(origin).host.toLowerCase() !== host.toLowerCase()) return false; }
+    catch { return false; }
+  }
+  return req.headers['sec-fetch-site'] !== 'cross-site' || (req.method === 'GET' && !pathname.startsWith('/api/') && req.headers['sec-fetch-mode'] === 'navigate' && req.headers['sec-fetch-dest'] === 'document');
 }
 
 async function jsonBody(req) {
@@ -60,6 +69,7 @@ async function jsonBody(req) {
 }
 
 export function serve(cfg) {
+  const access = createAccessControl(cfg.access.tokenFile);
   const engine = new Engine(cfg);
   const clients = new Set();
 
@@ -84,8 +94,29 @@ export function serve(cfg) {
     const url = new URL(req.url, 'http://x');
     const p = url.pathname;
     try {
-      if (!allowedRequest(req)) return send(res, 403, { error: 'This local control plane requires a local or Tailscale host and a same-origin request.' });
+      if (!allowedRequest(req, p)) return send(res, 403, { error: 'This control plane requires a local interface or Tailscale host and a same-origin request.' });
+      if (p === '/login' && req.method === 'GET') return send(res, 200, loginPage(), 'text/html; charset=utf-8');
+      if (p === '/login' && req.method === 'POST') {
+        const body = await readBody(req, 4096);
+        const result = access.login(req, new URLSearchParams(body).get('token'));
+        if (!result.ok) return send(res, result.limited ? 429 : 401, loginPage('invalid'), 'text/html; charset=utf-8');
+        res.writeHead(303, { location: '/', 'set-cookie': result.cookie, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' });
+        return res.end();
+      }
+      if (!access.authorized(req, res)) {
+        if (req.method === 'GET' && !p.startsWith('/api/') && (req.headers.accept || '').includes('text/html')) {
+          res.writeHead(303, { location: '/login', 'cache-control': 'no-store' });
+          return res.end();
+        }
+        return send(res, 401, { error: 'Access token required.' });
+      }
       if (p === '/api/state') return send(res, 200, engine.state || {});
+      if (p === '/api/roamgate' && req.method === 'GET') return send(res, 200, { available: await roamgateAvailable(cfg) });
+      if (p === '/roamgate' && req.method === 'GET') {
+        if (!(await roamgateAvailable(cfg))) return send(res, 503, { error: 'Roamgate is unavailable.' });
+        res.writeHead(302, { location: roamgateUrl(req.headers.host, cfg), 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' });
+        return res.end();
+      }
       if (p === '/api/models' && req.method === 'GET') return send(res, 200, loadModels().kinds);
       if (p === '/api/policy' && req.method === 'GET') return send(res, 200, loadPolicy());
       if (p === '/api/policy' && req.method === 'PUT') {
@@ -103,10 +134,70 @@ export function serve(cfg) {
         const sessions = await Promise.all(Object.values(listBrowserSessions()).map(browserStatus));
         return send(res, 200, sessions);
       }
+      if (p === '/api/browser-sessions/tabs' && req.method === 'GET') {
+        const project = url.searchParams.get('project');
+        if (!engine.state?.control?.projects?.[project]) return send(res, 404, { error: 'Unknown open project.' });
+        try { return send(res, 200, await listBrowserTabs(project)); }
+        catch (e) { return send(res, 409, { error: e.message }); }
+      }
+      if (p === '/api/browser-sessions/screenshot' && req.method === 'GET') {
+        const project = url.searchParams.get('project');
+        if (!engine.state?.control?.projects?.[project]) return send(res, 404, { error: 'Unknown open project.' });
+        try { return send(res, 200, await browserScreenshot(project, url.searchParams.get('tab')), 'image/jpeg'); }
+        catch (e) { return send(res, 409, { error: e.message }); }
+      }
+      if (p === '/api/browser-sessions/navigation' && req.method === 'GET') {
+        const project = url.searchParams.get('project');
+        if (!engine.state?.control?.projects?.[project]) return send(res, 404, { error: 'Unknown open project.' });
+        try { return send(res, 200, await browserNavigationState(project, url.searchParams.get('tab'))); }
+        catch (e) { return send(res, 409, { error: e.message }); }
+      }
+      if (p === '/api/browser-sessions/window-size' && req.method === 'POST') {
+        const body = await jsonBody(req);
+        if (!engine.state?.control?.projects?.[body.project]) return send(res, 404, { error: 'Unknown open project.' });
+        try { return send(res, 200, setBrowserWindowSize(body.project, body.width, body.height)); }
+        catch (e) { return send(res, 400, { error: e.message }); }
+      }
+      if (p === '/api/browser-sessions/navigate' && req.method === 'POST') {
+        const body = await jsonBody(req);
+        if (!engine.state?.control?.projects?.[body.project]) return send(res, 404, { error: 'Unknown open project.' });
+        try { return send(res, 200, await browserNavigate(body.project, body.tab, body.url)); }
+        catch (e) { return send(res, 409, { error: e.message }); }
+      }
+      if (p === '/api/browser-sessions/history' && req.method === 'POST') {
+        const body = await jsonBody(req);
+        if (!engine.state?.control?.projects?.[body.project]) return send(res, 404, { error: 'Unknown open project.' });
+        try { return send(res, 200, await browserHistoryAction(body.project, body.tab, body.action)); }
+        catch (e) { return send(res, 409, { error: e.message }); }
+      }
+      if (p === '/api/browser-sessions/input' && req.method === 'POST') {
+        const body = await jsonBody(req);
+        if (!engine.state?.control?.projects?.[body.project]) return send(res, 404, { error: 'Unknown open project.' });
+        try {
+          if (body.type === 'click') return send(res, 200, await browserClick(body.project, body.tab, body.x, body.y));
+          if (body.type === 'text') return send(res, 200, await browserInsertText(body.project, body.tab, body.text));
+          if (body.type === 'key') return send(res, 200, await browserKey(body.project, body.tab, body.key));
+          return send(res, 400, { error: 'Unknown browser input type.' });
+        } catch (e) { return send(res, 409, { error: e.message }); }
+      }
+      if (p === '/api/browser-sessions/close' && req.method === 'POST') {
+        const body = await jsonBody(req);
+        if (!engine.state?.control?.projects?.[body.project]) return send(res, 404, { error: 'Unknown open project.' });
+        try { return send(res, 200, await closeBrowser(body.project)); }
+        catch (e) { return send(res, 409, { error: e.message }); }
+      }
+      if (p === '/api/browser-sessions/restart' && req.method === 'POST') {
+        const body = await jsonBody(req);
+        if (!engine.state?.control?.projects?.[body.project]) return send(res, 404, { error: 'Unknown open project.' });
+        try { return send(res, 200, await restartBrowser(body.project, body.headless, { restorePage: body.restorePage !== false, tabId: body.tab || null })); }
+        catch (e) { return send(res, 409, { error: e.message }); }
+      }
       if (p === '/api/browser-sessions/request' && req.method === 'POST') {
         const body = await jsonBody(req);
         if (!engine.state?.control?.projects?.[body.project]) return send(res, 400, { error: 'Unknown open project.' });
-        return send(res, 200, await requestBrowser(body.project, { launch: body.launch !== false }));
+        if (body.headless != null && typeof body.headless !== 'boolean') return send(res, 400, { error: 'headless must be boolean.' });
+        try { return send(res, 200, await requestBrowser(body.project, { launch: body.launch !== false, headless: body.headless ?? null })); }
+        catch (e) { return send(res, 409, { error: e.message }); }
       }
       if (p === '/api/handoffs' && req.method === 'GET') return send(res, 200, listHandoffs());
       if (p === '/api/handoffs/output' && req.method === 'GET') {
@@ -119,14 +210,14 @@ export function serve(cfg) {
         const body = await jsonBody(req);
         if (!engine.state?.control?.projects?.[body.project]?.orch || engine.state.control.projects[body.project].orch.pane !== body.pane) return send(res, 400, { error: 'Unknown current orchestrator pane.' });
         if (!['codex', 'claude', 'opencode', 'pi'].includes(body.to) || !['migrate', 'fresh'].includes(body.mode) || typeof body.model !== 'string') return send(res, 400, { error: 'Choose a target harness, model, and handover mode.' });
-        return send(res, 200, await handoffCommand(['plan', body.pane, '--to', body.to, '--model', body.model, '--mode', body.mode]));
+        return send(res, 200, await handoffCommand(['plan', body.pane, '--to', body.to, '--model', body.model, '--mode', body.mode, ...(body.effort ? ['--effort', body.effort] : [])]));
       }
       if (p === '/api/handoffs/prepare' && req.method === 'POST') {
         const body = await jsonBody(req);
         if (!engine.state?.control?.projects?.[body.project]?.orch || engine.state.control.projects[body.project].orch.pane !== body.pane) return send(res, 400, { error: 'Unknown current orchestrator pane.' });
         if (!['codex', 'claude', 'opencode', 'pi'].includes(body.to) || !['migrate', 'fresh'].includes(body.mode) || typeof body.model !== 'string') return send(res, 400, { error: 'Choose a target harness, model, and handover mode.' });
         if (listHandoffs().some((x) => x.sourcePane === body.pane && ['prepared', 'preparing', 'needs-inspection'].includes(x.status))) return send(res, 409, { error: 'A successor exists for this orchestrator. Inspect it before preparing another.' });
-        return send(res, 200, await handoffCommand(['prepare', body.pane, '--to', body.to, '--model', body.model, '--mode', body.mode]));
+        return send(res, 200, await handoffCommand(['prepare', body.pane, '--to', body.to, '--model', body.model, '--mode', body.mode, ...(body.effort ? ['--effort', body.effort] : [])]));
       }
       if (p === '/api/handoffs/activate' && req.method === 'POST') {
         const body = await jsonBody(req);

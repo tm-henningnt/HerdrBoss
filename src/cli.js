@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { loadConfig, DATA_DIR } from './config.js';
 import { writeProject } from './projects.js';
 
@@ -22,10 +23,19 @@ const USAGE = `herdr-boss <command>
   policy show|set FILE  Show or replace the local resource policy.
   usage record FILE     Add measured or unmeasured project usage.
   usage summary         Summarize project and provider usage.
-  browser request SLUG [--reserve]  Reserve or launch a persistent project browser.
+  browser request SLUG [--reserve] [--headless|--visible]  Reserve or launch a persistent project browser.
+  browser size SLUG WIDTH HEIGHT  Save window size for the next browser launch.
+  browser close SLUG      Gracefully close a managed browser, keeping its profile.
+  browser restart SLUG --headless|--visible [--no-restore]  Switch mode and restore the current page.
   browser list          List registered browser sessions.
-  handoff plan PANE --to KIND [--mode migrate|fresh]
-  handoff prepare PANE --to KIND [--mode migrate|fresh]
+  browser tabs SLUG      List the pages in a managed browser.
+  browser screenshot SLUG [--tab ID]  Save a private JPEG and print its path.
+  browser navigate SLUG URL [--tab ID]  Open an HTTP(S) page.
+  browser click SLUG X% Y% [--tab ID]  Click at screenshot-relative percentages.
+  browser text SLUG --stdin [--tab ID]  Send text from standard input without echoing it.
+  browser key SLUG KEY [--tab ID]  Send Tab, Enter, Backspace, arrow keys, etc.
+  handoff plan PANE --to KIND [--mode migrate|fresh] [--model MODEL] [--effort EFFORT]
+  handoff prepare PANE --to KIND [--mode migrate|fresh] [--model MODEL] [--effort EFFORT]
   handoff activate ID --confirmed
   handoff ready ID      Signal automatic successor readiness.
   worker ...            Start, collect, or list workers.
@@ -73,10 +83,67 @@ async function main() {
       break;
     }
     case 'browser': {
-      const { requestBrowser, listBrowserSessions, browserStatus } = await import('./browser-pool.js');
+      const { requestBrowser, listBrowserSessions, browserStatus, setBrowserWindowSize, closeBrowser, restartBrowser } = await import('./browser-pool.js');
+      const { listBrowserTabs, browserScreenshot, browserNavigate, browserClick, browserInsertText, browserKey } = await import('./browser-preview.js');
+      const tabOption = (rest) => {
+        if (!rest.length) return null;
+        if (rest.length !== 2 || rest[0] !== '--tab' || !rest[1]) throw new Error('Use --tab ID to select a browser page.');
+        return rest[1];
+      };
+      const selectedTab = async (project, rest) => {
+        const requested = tabOption(rest);
+        const tabs = await listBrowserTabs(project);
+        if (!tabs.length) throw new Error('No browser page is open.');
+        if (requested) {
+          if (!tabs.some((tab) => tab.id === requested)) throw new Error('That tab is no longer open. Run browser tabs again.');
+          return requested;
+        }
+        if (tabs.length !== 1) throw new Error('Several pages are open. Run browser tabs and specify --tab ID.');
+        return tabs[0].id;
+      };
+      const percent = (value) => {
+        const match = /^(?:100(?:\.0+)?|\d{1,2}(?:\.\d+)?)%$/.exec(value || '');
+        if (!match) throw new Error('Click coordinates must be percentages from 0% to 100%, for example 42% 65%.');
+        return Number(value.slice(0, -1)) / 100;
+      };
       if (args[0] === 'list' && args.length === 1) console.log(JSON.stringify(await Promise.all(Object.values(listBrowserSessions()).map(browserStatus)), null, 2));
-      else if (args[0] === 'request' && args[1] && (args.length === 2 || args[2] === '--reserve')) console.log(JSON.stringify(await requestBrowser(args[1], { launch: !args.includes('--reserve') }), null, 2));
-      else throw new Error('Usage: browser request SLUG [--reserve] | browser list');
+      else if (args[0] === 'size' && args.length === 4) console.log(JSON.stringify(setBrowserWindowSize(args[1], Number(args[2]), Number(args[3])), null, 2));
+      else if (args[0] === 'close' && args.length === 2) console.log(JSON.stringify(await closeBrowser(args[1]), null, 2));
+      else if (args[0] === 'restart' && [3, 4].includes(args.length) && ['--headless', '--visible'].includes(args[2]) && (args.length === 3 || args[3] === '--no-restore')) console.log(JSON.stringify(await restartBrowser(args[1], args[2] === '--headless', { restorePage: !args.includes('--no-restore') }), null, 2));
+      else if (args[0] === 'tabs' && args.length === 2) {
+        const tabs = await listBrowserTabs(args[1]);
+        console.log(JSON.stringify(tabs.map((tab) => ({ id: tab.id, title: tab.title, url: (() => { try { const url = new URL(tab.url); return ['http:', 'https:'].includes(url.protocol) ? `${url.origin}${url.pathname}` : url.href; } catch { return ''; } })() })), null, 2));
+      }
+      else if (args[0] === 'screenshot' && args[1]) {
+        const tab = await selectedTab(args[1], args.slice(2));
+        const image = await browserScreenshot(args[1], tab);
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-boss-browser-'));
+        const file = path.join(dir, `${args[1]}-${randomBytes(4).toString('hex')}.jpg`);
+        fs.writeFileSync(file, image, { flag: 'wx', mode: 0o600 });
+        console.log(file);
+      }
+      else if (args[0] === 'navigate' && args[1] && args[2]) {
+        const tab = await selectedTab(args[1], args.slice(3));
+        console.log(JSON.stringify(await browserNavigate(args[1], tab, args[2])));
+      }
+      else if (args[0] === 'click' && args[1] && args[2] && args[3]) {
+        const tab = await selectedTab(args[1], args.slice(4));
+        await browserClick(args[1], tab, percent(args[2]), percent(args[3]));
+        console.log('Click sent.');
+      }
+      else if (args[0] === 'text' && args[1] && args[2] === '--stdin') {
+        const tab = await selectedTab(args[1], args.slice(3));
+        await browserInsertText(args[1], tab, fs.readFileSync(0, 'utf8'));
+        console.log('Text sent.');
+      }
+      else if (args[0] === 'key' && args[1] && args[2]) {
+        const tab = await selectedTab(args[1], args.slice(3));
+        await browserKey(args[1], tab, args[2]);
+        console.log('Key sent.');
+      }
+      else if (args[0] === 'request' && args[1] && args.includes('--headless') && args.includes('--visible')) throw new Error('Choose either --headless or --visible.');
+      else if (args[0] === 'request' && args[1] && args.slice(2).every((flag) => ['--reserve', '--headless', '--visible'].includes(flag))) console.log(JSON.stringify(await requestBrowser(args[1], { launch: !args.includes('--reserve'), headless: args.includes('--headless') ? true : args.includes('--visible') ? false : null }), null, 2));
+      else throw new Error('Usage: browser request|size|close|restart|list|tabs|screenshot|navigate|click|text|key. Run herdr-boss without arguments for details.');
       break;
     }
     case 'handoff': {
@@ -88,7 +155,7 @@ async function main() {
       const value = (flag, fallback) => { const i = args.indexOf(flag); return i < 0 ? fallback : args[i + 1]; };
       const to = value('--to');
       if (!target || !to || !['plan', 'prepare'].includes(action)) throw new Error('Usage: handoff plan|prepare PANE --to KIND [--mode migrate|fresh] [--model MODEL]');
-      const options = { mode: value('--mode', 'migrate'), model: value('--model', null), force: args.includes('--force'), auto: args.includes('--auto') };
+      const options = { mode: value('--mode', 'migrate'), model: value('--model', null), effort: value('--effort', null), force: args.includes('--force'), auto: args.includes('--auto') };
       console.log(JSON.stringify(action === 'plan' ? planHandoff(target, to, options) : prepareHandoff(target, to, options), null, 2));
       break;
     }

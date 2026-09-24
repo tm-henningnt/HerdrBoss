@@ -143,11 +143,10 @@ Run ledger and evidence
 
 Browser work
 
-- Read kit/shared-browser.md before using the shared signed-in browser.
+- Read kit/browser-service.md for dedicated project browsers. Use kit/shared-browser.md only if a legacy shared browser is explicitly assigned.
 - Pin a tab ID in every command.
-- Never close the shared window, kill its process, or run `agent-browser close` on an attached session.
-- Probe a fresh tab before any recovery decision.
-- Keep CDP timeouts near 25 seconds.
+- Do not close or restart a project browser while another worker is using it.
+- For an explicitly assigned legacy shared browser, never close its window or kill its process. Probe a fresh tab before asking the orchestrator to recover it.
 - Follow the project browser and evidence contract for all other details.
 
 Human gates

@@ -7,7 +7,7 @@ import { collectHerdr, collectQuotas, collectMachine, collectProcesses, findBrow
 import { evaluate, renderBulletin, fmtDuration, providerName } from './rules.js';
 import { listProjects } from './projects.js';
 import { loadModels } from './kit/config.js';
-import { loadPolicy, deriveControl, providerFor } from './control.js';
+import { loadPolicy, deriveControl, providerFor, pickSuccessor } from './control.js';
 import { recordQuotaSnapshot } from './usage.js';
 import { listBrowserSessions } from './browser-pool.js';
 import { listHandoffs } from './handoff.js';
@@ -70,6 +70,7 @@ export class Engine extends EventEmitter {
       if (quotas) { this.quotas = quotas; this.quotasAt = now; recordQuotaSnapshot(quotas, new Date(now).toISOString()); }
       const managedBrowsers = Object.values(listBrowserSessions());
       const browsers = findBrowsers(procs, herdr?.panes || [], [
+        { port: 9222, label: 'Protected legacy browser' },
         ...this.cfg.sharedBrowsers,
         ...managedBrowsers.map((b) => ({ port: b.port, profile: b.profile, label: `Managed browser: ${b.project}` })),
       ]);
@@ -148,7 +149,9 @@ export class Engine extends EventEmitter {
           scope: p.slug === 'herdrboss' ? 'user' : h.workspace,
           suppressPrompt: h.window.usedPercent >= 98,
           title: `Prepare ${h.project} orchestrator handover`,
-          text: `${h.provider} is at ${h.window.usedPercent}% in its ${h.window.label} window. Prepare a ${h.target ? `${h.target.kind} (${h.target.model})` : 'different-provider'} successor before the orchestrator runs out. Use herdr-boss handoff plan ${h.pane} --to ${h.target?.kind || 'codex'}, then handoff prepare after review. Keep the current orchestrator until the successor is ready.`,
+          text: h.target
+            ? `${h.provider} is at ${h.window.usedPercent}% in its ${h.window.label} window. Prepare a ${h.target.kind} (${h.target.model}${h.target.effort ? `, ${h.target.effort}` : ''}) successor before the orchestrator runs out. Use herdr-boss handoff plan ${h.pane} --to ${h.target.kind} --model ${h.target.model}${h.target.effort ? ` --effort ${h.target.effort}` : ''}, then handoff prepare after review. Keep the current orchestrator until the successor is ready.`
+            : `${h.provider} is at ${h.window.usedPercent}% in its ${h.window.label} window, but no eligible choice remains in the orchestrator succession ladder. Review Allocation and prepare a successor manually before this quota runs out.`,
         });
       }
       for (const p of Object.values(control.projects)) if (p.running > p.slots && !p.idle) evaluation.alerts.push({
@@ -157,8 +160,17 @@ export class Engine extends EventEmitter {
         text: `${p.label} has ${p.running} working agents; its current allocation is ${p.slots}. Let current work finish, then delay new workers until within allocation.`,
       });
       for (const b of managedBrowsers) {
+        const running = browsers.some((x) => x.kind === 'automation-chrome' && x.port === String(b.port) && x.profile === b.profile);
+        if (running && b.launchedAt && now - Date.parse(b.launchedAt) < 86400000) {
+          const p = control.projects[b.project];
+          if (p?.workspace) evaluation.alerts.push({
+            key: `browser:managed-ready:${b.project}:${b.launchedAt}`, severity: 'info', once: true, scope: p.workspace,
+            title: `${b.project} browser is ready`,
+            text: `Browser for ${b.project} is ready (${b.headless ? 'headless' : 'visible'}) on port ${b.port}. Use herdr-boss browser tabs ${b.project} to find a page, then herdr-boss browser screenshot ${b.project} --tab <id> for a private JPEG. Browser service commands are in the Herdr Boss kit.`,
+          });
+        }
         if (!b.launchedAt || now - Date.parse(b.launchedAt) < 120000) continue;
-        if (browsers.some((x) => x.kind === 'automation-chrome' && x.port === String(b.port) && x.profile === b.profile)) continue;
+        if (running) continue;
         const p = control.projects[b.project];
         evaluation.alerts.push({
           key: `browser:managed-down:${b.project}:${b.port}`, severity: 'warn', scope: p?.workspace || 'user',
@@ -183,6 +195,7 @@ export class Engine extends EventEmitter {
         preferredKinds,
         memFreePercent: machine?.memFreePercent ?? null,
         notes: evaluation.advice,
+        browsers: managedBrowsers.map((b) => ({ project: b.project, port: b.port, profile: b.profile, headless: !!b.headless, windowSize: b.windowSize || { width: 1280, height: 800 }, ready: browsers.some((x) => x.kind === 'automation-chrome' && x.port === String(b.port) && x.profile === b.profile) })),
         policy,
         control: { runningWorkers: control.runningWorkers, maxWorkers: control.maxWorkers, projects: control.projects },
       });
@@ -265,10 +278,7 @@ export class Engine extends EventEmitter {
       const provider = providerFor(last.kind, null);
       const window = this.quotas.find((q) => q.provider === provider && !q.error)?.windows?.find((w) => !w.extra && w.usedPercent >= policy.autoHandoverPercent);
       if (!window || policy.providerModes[provider] === 'ignore') return [];
-      const alternatives = Object.entries(control.globalAllowed).flatMap(([kind, names]) => names
-        .filter((model) => !p.excludedKinds.includes(kind) && !p.excludedModels.includes(model) && providerFor(kind, model) !== provider && !control.risks[providerFor(kind, model)])
-        .map((model) => ({ kind, model })));
-      return [{ project: p.slug, pane: p.orch.pane, fromKind: last.kind, sessionId: null, window, target: alternatives[0] || null }];
+      return [{ project: p.slug, pane: p.orch.pane, fromKind: last.kind, sessionId: null, window, target: pickSuccessor(p, last.kind, provider, policy, control) }];
     });
     for (const h of [...control.handoffs, ...stopped]) {
       if (records.some((x) => x.sourcePane === h.pane && ['prepared', 'preparing', 'needs-inspection'].includes(x.status))) continue;
@@ -286,11 +296,12 @@ export class Engine extends EventEmitter {
       writeJson(MEMORY_FILE, this.memory);
       try {
         const mode = ['codex', 'claude'].includes(h.target.kind) && h.sessionId ? 'migrate' : 'fresh';
-        const args = [CLI_FILE, 'handoff', 'plan', h.pane, '--to', h.target.kind, '--model', h.target.model, '--mode', mode];
+        const effort = h.target.effort ? ['--effort', h.target.effort] : [];
+        const args = [CLI_FILE, 'handoff', 'plan', h.pane, '--to', h.target.kind, '--model', h.target.model, '--mode', mode, ...effort];
         const plan = JSON.parse(await run(process.execPath, args, { timeout: 180000 }));
         const chosen = mode === 'migrate' && !plan.migration?.available ? 'fresh' : mode;
         const prepared = JSON.parse(await run(process.execPath,
-          [CLI_FILE, 'handoff', 'prepare', h.pane, '--to', h.target.kind, '--model', h.target.model, '--mode', chosen, '--auto'],
+          [CLI_FILE, 'handoff', 'prepare', h.pane, '--to', h.target.kind, '--model', h.target.model, '--mode', chosen, ...effort, '--auto'],
           { timeout: 300000 }));
         this.log('handoff', `Automatically prepared ${h.target.kind} successor for ${h.project}; awaiting readiness`, { project: h.project, pane: prepared.newPane });
       } catch (e) {
@@ -346,7 +357,7 @@ export class Engine extends EventEmitter {
         const targets = a.scope === 'all' ? orchs : orchs.filter((o) => o.workspace === a.scope);
         for (const o of targets) {
           const rec = this.memory.pushes[`${a.key}@${o.id}`];
-          const due = !rec || now - rec.at > cooldown || SEV[a.severity] > SEV[rec.severity];
+          const due = !rec || (!a.once && now - rec.at > cooldown) || SEV[a.severity] > SEV[rec.severity];
           if (!due) continue;
           if (!perPane.has(o.id)) perPane.set(o.id, { o, list: [] });
           perPane.get(o.id).list.push(a);

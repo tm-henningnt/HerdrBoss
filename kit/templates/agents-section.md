@@ -7,7 +7,7 @@
 - Use `kit/models.json` as the source of truth for the model allow-list.
 - Read `~/.herdr-boss/bulletin.md` before each worker dispatch.
 - Follow its worker cap, project share, and provider pacing rules. Use an authorized override only when needed.
-- Read `kit/shared-browser.md` before using a shared signed-in browser.
+- Read `kit/browser-service.md` for project browser commands. Read `kit/shared-browser.md` only if an optional legacy shared browser is explicitly assigned.
 - Keep the orchestrator pane labeled `orch`.
 - Use `herdr-boss worker start` to start workers.
 - Use lowercase, unique worker names.
@@ -20,6 +20,8 @@
 - Keep evidence tiers separate. Local checks do not prove hosted or Owner acceptance.
 - Publish project status through Herdr Boss. Do not build a separate project dashboard.
 - Use `herdr-boss browser request <project-slug>` for a dedicated browser. Keep its recorded profile and port.
+- Use only this project's browser unless the Owner explicitly assigns a legacy shared session.
+- Coordinate tab ownership with the orchestrator before sending browser input.
 - Record measured worker usage in `.worker/report.json` and run `herdr-boss worker collect --record` after review.
 - Prepare a successor with `herdr-boss handoff plan` and `handoff prepare` when the orchestrator's quota is at risk.
 - Keep project-specific rules in this file: product direction, issue sources, acceptance gates, release policy, and browser procedures.

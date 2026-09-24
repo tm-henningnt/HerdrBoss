@@ -11,6 +11,11 @@ export const POLICY_DEFAULTS = {
   handoffLeadMinutes: 180,
   autoHandover: false,
   autoHandoverPercent: 98,
+  orchestratorLadder: [
+    { kind: 'codex', model: 'gpt-6-luna', effort: 'xhigh' },
+    { kind: 'claude', model: 'claude-opus-5.5', effort: null },
+    { kind: 'pi', model: 'opencode-go/deepseek-v4.1-flash', effort: null },
+  ],
   allowedKinds: ['codex', 'claude', 'opencode', 'pi'],
   excludedModels: [],
   providerModes: { codex: 'managed', claude: 'managed', opencodego: 'managed' },
@@ -45,6 +50,17 @@ export function validatePolicy(value, models) {
   subset(value.allowedKinds, KINDS, 'allowedKinds', errors);
   const allModels = new Set(Object.values(models.kinds).flatMap((k) => k.allowedModels));
   subset(value.excludedModels, allModels, 'excludedModels', errors);
+  if (!Array.isArray(value.orchestratorLadder) || !value.orchestratorLadder.length || value.orchestratorLadder.length > 20) errors.push('orchestratorLadder must contain 1 to 20 choices.');
+  else {
+    const seen = new Set();
+    for (const [index, rung] of value.orchestratorLadder.entries()) {
+      const cfg = models.kinds[rung?.kind];
+      if (!cfg?.allowedModels.includes(rung?.model) || (rung?.effort != null && !cfg.allowedEfforts.includes(rung.effort)) || (!cfg.allowedEfforts.length && rung?.effort != null)) errors.push(`Invalid orchestrator choice at rank ${index + 1}.`);
+      const key = `${rung?.kind}:${rung?.model}:${rung?.effort || ''}`;
+      if (seen.has(key)) errors.push(`Duplicate orchestrator choice at rank ${index + 1}.`);
+      seen.add(key);
+    }
+  }
   if (!value.providerModes || typeof value.providerModes !== 'object' || Array.isArray(value.providerModes)) errors.push('providerModes must be an object.');
   else for (const [provider, mode] of Object.entries(value.providerModes)) if (!PROVIDERS.has(provider) || !['managed', 'ignore'].includes(mode)) errors.push(`invalid provider mode: ${provider}.`);
   if (!value.projects || typeof value.projects !== 'object' || Array.isArray(value.projects)) errors.push('projects must be an object.');
@@ -76,6 +92,18 @@ export function providerFor(kind, model) {
   if (kind === 'codex' || kind === 'claude') return kind;
   if (model?.startsWith('opencode-go/')) return 'opencodego';
   return null; // free or unmeasured lane
+}
+
+export function pickSuccessor(project, currentKind, currentProvider, policy, control) {
+  for (const rung of policy.orchestratorLadder || []) {
+    const provider = providerFor(rung.kind, rung.model);
+    if (rung.kind === currentKind || (currentProvider && provider === currentProvider) ||
+        !control.globalAllowed[rung.kind]?.includes(rung.model) ||
+        project.excludedKinds.includes(rung.kind) || project.excludedModels.includes(rung.model) ||
+        (provider && control.risks[provider])) continue;
+    return { ...rung, provider: provider || 'unmetered' };
+  }
+  return null;
 }
 
 export function workspaceProjects(snap) {
@@ -153,8 +181,7 @@ export function deriveControl(snap, policy, models, paneSince = {}, now = Date.n
     const currentProvider = providerFor(p.orch.kind, null);
     const window = risks[currentProvider];
     if (!window) continue;
-    const alternatives = Object.entries(globalAllowed).flatMap(([kind, names]) => names.filter((name) => kind !== p.orch.kind && !p.excludedKinds.includes(kind) && !p.excludedModels.includes(name) && !risks[providerFor(kind, name)]).map((model) => ({ kind, model, provider: providerFor(kind, model) || 'unmetered' })));
-    const preferred = alternatives.sort((a, b) => ['codex', 'claude', 'pi', 'opencode'].indexOf(a.kind) - ['codex', 'claude', 'pi', 'opencode'].indexOf(b.kind))[0] || null;
+    const preferred = pickSuccessor(p, p.orch.kind, currentProvider, policy, { globalAllowed, risks });
     handoffs.push({ project: p.slug, workspace: p.workspace, pane: p.orch.pane, fromKind: p.orch.kind, sessionId: p.orch.sessionId, provider: currentProvider, window, target: preferred });
   }
   return { projects: result, runningWorkers: working.length, maxWorkers: policy.maxWorkers, globalAllowed, risks, pressures, handoffs };
