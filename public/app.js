@@ -249,6 +249,40 @@ function workspacesBlock(s) {
   return `<section><h2>Workspaces <span class="sub">live from Herdr</span></h2><div class="ws-grid">${cards}</div></section>`;
 }
 
+function agentProfile(p, s) {
+  const since = s.paneSince?.[p.id]?.since;
+  const elapsed = since ? dur((Date.now() - since) / 1000) : null;
+  const staleWorker = !p.orch && ['idle', 'done'].includes(p.status) && since && Date.now() - since > 7200000;
+  const processes = (s.browsers || []).filter((b) => b.pane === p.id);
+  const name = p.name || p.agent || 'Agent';
+  const task = p.title || 'No current title';
+  return `<div class="agent-profile">
+    <div class="agent-profile-main"><span class="st ${esc(p.status || 'unknown')}" aria-hidden="true"></span><strong>${esc(name)}</strong>${p.name && p.agent ? `<span class="agent-kind">${esc(p.agent)}</span>` : ''}<span class="agent-state ${staleWorker ? 'stale' : ''}">${esc(p.status || 'unknown')}${elapsed ? ` · ${elapsed}` : ''}</span></div>
+    <p class="agent-profile-task">${esc(task)}</p>
+    <div class="agent-profile-meta"><span>Pane <code>${esc(p.id)}</code></span><span>Tab <code>${esc(p.tab || '–')}</code></span>${processes.length ? `<span title="${esc(processes.map((x) => `${x.kind} PID ${x.pid}`).join('\n'))}">${processes.length} tracked process${processes.length === 1 ? '' : 'es'}</span>` : ''}${staleWorker ? '<span class="stale">Idle over 2h</span>' : ''}</div>
+  </div>`;
+}
+
+function agentInventory(s) {
+  const h = s.herdr;
+  if (!h) return '<div class="calm-state">Herdr workspace data is unavailable.</div>';
+  const agents = h.panes.filter((p) => p.agent);
+  const workers = agents.filter((p) => !p.orch);
+  const summary = `<div class="agents-totals"><span><strong>${h.workspaces.length}</strong> workspaces</span><span><strong>${agents.length - workers.length}</strong> orchestrators</span><span><strong>${workers.length}</strong> workers</span><span><strong>${agents.filter((p) => p.status === 'working').length}</strong> working</span></div>`;
+  const rows = h.workspaces.map((w) => {
+    const panes = agents.filter((p) => p.workspace === w.id);
+    const orch = panes.find((p) => p.orch);
+    const project = Object.values(s.control?.projects || {}).find((p) => p.workspace === w.id);
+    const slug = project?.slug;
+    const work = panes.filter((p) => !p.orch);
+    const mode = project?.effectiveMode === 'paused' ? 'Paused' : project?.idle ? 'Idle' : 'Active';
+    return `<section class="workspace-row"><header class="workspace-row-head"><div class="workspace-title"><h2>${slug ? `<a href="/p/${esc(slug)}">${esc(w.label)}</a>` : esc(w.label)}</h2><span class="mono">${esc(w.id)}</span></div><div class="workspace-context"><span>${mode}</span><span>${work.length} worker${work.length === 1 ? '' : 's'}</span>${slug ? `<a href="/p/${esc(slug)}">Project details →</a>` : ''}</div></header>
+      <div class="workspace-row-body"><div class="workspace-role"><h3>Orchestrator</h3>${orch ? agentProfile(orch, s) : '<div class="missing-orch">No labeled orchestrator. Label its Herdr pane <code>orch</code> to supervise this project.</div>'}</div>
+      <div class="workspace-role workspace-workers"><h3>Workers <span>${work.length}</span></h3>${work.length ? `<ul>${work.map((p) => `<li>${agentProfile(p, s)}</li>`).join('')}</ul>` : '<p class="workspace-empty">No worker agents in this workspace.</p>'}</div></div></section>`;
+  }).join('');
+  return `${summary}<div class="workspace-list">${rows || '<div class="calm-state">No Herdr workspaces are open.</div>'}</div>`;
+}
+
 function taskCounts(p) {
   const c = Object.fromEntries(STATUSES.map((k) => [k, 0]));
   for (const t of p.tasks || []) c[t.status || 'todo']++;
@@ -352,8 +386,8 @@ function analyticsView(s) {
 
 function agentsView(s) {
   return [
-    '<header class="page-intro"><div><h1>Live agents</h1><p>Current orchestrators and workers in each Herdr workspace.</p></div></header>',
-    workspacesBlock(s),
+    '<header class="page-intro"><div><h1>Live agents</h1><p>Orchestrators and workers across the open Herdr workspaces.</p></div></header>',
+    agentInventory(s),
   ].join('');
 }
 

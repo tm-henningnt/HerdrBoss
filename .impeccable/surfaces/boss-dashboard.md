@@ -8,7 +8,7 @@ The owner should understand the state of their project fleet within one viewport
 
 - Overview (`/`): concise capacity, actionable attention, suggested and prepared handovers, and a compact project roster. Abbreviated subscription and machine bars sit at the bottom. One subscription expander reveals all provider quota windows together; machine health folds out to processes and history. The first viewport must answer: Is anything urgent? Which project or provider is affected? What can I do now?
 - Allocation (`/allocation`): the existing policy controls and dedicated browser requests, grouped by capacity, subscriptions, and project shares. The save state stays visible while editing.
-- Agents (`/agents`): live Herdr workspaces and agents.
+- Agents (`/agents`): full-width workspace rows with the orchestrator and workers in separate columns. Show current titles, pane and tab IDs, elapsed status, and owned automation processes without truncating the task title. Keep a compact live count at the top and preserve the smaller workspace view inside project detail pages.
 - Analytics (`/analytics`): actual recorded worker usage and measurement coverage by project and provider, plus recent runs. State empty coverage honestly until orchestrators record data.
 - Logs (`/logs`): current guidance and Boss activity.
 - Project detail (`/p/<slug>`): preserve each published task board and live agents, with a route back to Overview. Every open workspace has a page and can plan a handover even without a quota alert or published status.

@@ -111,6 +111,48 @@ h2 .sub { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(
 .stale { color: var(--warn) !important; }
 .noorch { font-size: 12px; color: var(--faint); margin-top: 8px; }
 
+/* Live agents inventory */
+.agents-totals { display: flex; flex-wrap: wrap; gap: 8px 28px; padding: 2px 0 4px; color: var(--muted); font-size: 12.5px; }
+.agents-totals strong { color: var(--text); font: 650 16px var(--mono); margin-right: 4px; }
+.workspace-list { display: grid; gap: 14px; }
+.workspace-row { min-width: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.workspace-row-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; padding: 13px 18px; border-bottom: 1px solid var(--line); background: var(--panel-2); }
+.workspace-title { display: flex; align-items: baseline; gap: 11px; min-width: 0; }
+.workspace-title h2 { margin: 0; color: var(--text); font-size: 16px; font-weight: 650; letter-spacing: -.01em; text-transform: none; }
+.workspace-title h2 a { text-decoration: none; }
+.workspace-title h2 a:hover, .workspace-context a:hover { color: var(--accent); }
+.workspace-title > span { color: var(--muted); font-size: 11.5px; }
+.workspace-context { display: flex; align-items: baseline; gap: 8px 18px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.workspace-context a { color: var(--accent); font-weight: 600; text-decoration: none; }
+.workspace-row-body { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); }
+.workspace-role { min-width: 0; padding: 16px 18px 18px; }
+.workspace-role + .workspace-role { border-left: 1px solid var(--line); }
+.workspace-role h3 { display: flex; align-items: baseline; gap: 7px; margin: 0 0 10px; color: var(--muted); font-size: 11px; font-weight: 650; letter-spacing: .05em; text-transform: uppercase; }
+.workspace-role h3 span { color: var(--faint); font: 500 11px var(--mono); }
+.workspace-workers ul { list-style: none; margin: 0; padding: 0; }
+.workspace-workers li + li { padding-top: 12px; margin-top: 12px; border-top: 1px solid var(--line); }
+.agent-profile-main { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.agent-profile-main strong { font-size: 14px; font-weight: 650; }
+.agent-profile-main .st { flex: 0 0 8px; }
+.agent-kind { color: var(--muted); font-size: 11.5px; }
+.agent-state { margin-left: auto; color: var(--muted); font: 12px var(--mono); white-space: nowrap; }
+.agent-profile-task { margin: 7px 0 8px 16px; color: var(--text); font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; }
+.agent-profile-meta { display: flex; flex-wrap: wrap; gap: 3px 14px; margin-left: 16px; color: var(--muted); font-size: 11.5px; }
+.agent-profile-meta code, .missing-orch code { color: var(--text); font: 11px var(--mono); }
+.workspace-empty, .missing-orch { margin: 0; color: var(--muted); font-size: 13px; }
+
+@media (max-width: 900px) {
+  .workspace-row-body { grid-template-columns: 1fr; }
+  .workspace-role + .workspace-role { border-left: 0; border-top: 1px solid var(--line); }
+}
+@media (max-width: 620px) {
+  .workspace-row-head { align-items: start; flex-direction: column; gap: 5px; }
+  .workspace-context { flex-wrap: wrap; white-space: normal; }
+  .workspace-role { padding: 14px 16px; }
+  .agent-profile-main { flex-wrap: wrap; }
+  .agent-state { margin-left: 0; }
+}
+
 /* Projects */
 .proj { display: grid; gap: 10px; text-decoration: none; transition: border-color 0.15s; }
 .proj:hover { border-color: var(--accent); }
