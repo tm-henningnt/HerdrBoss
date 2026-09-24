@@ -60,11 +60,9 @@ h2 .sub { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(
 
 /* Rules banner */
 .rules { display: grid; gap: 6px; }
-.rule { display: grid; grid-template-columns: 76px 1fr; gap: 12px; align-items: start; padding: 10px 14px; border-radius: 8px; background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--info); }
-.rule.critical { border-left-color: var(--crit); background: color-mix(in srgb, var(--crit) 7%, var(--panel)); }
-.rule.warn { border-left-color: var(--warn); background: color-mix(in srgb, var(--warn) 7%, var(--panel)); }
-.rule.advice { border-left-color: var(--accent); }
-.rule.ok { border-left-color: var(--ok); }
+.rule { display: grid; grid-template-columns: 76px 1fr; gap: 12px; align-items: start; padding: 10px 14px; border-radius: 8px; background: var(--panel); border: 1px solid var(--line); }
+.rule.critical { background: color-mix(in srgb, var(--crit) 7%, var(--panel)); }
+.rule.warn { background: color-mix(in srgb, var(--warn) 7%, var(--panel)); }
 .sev { font: 600 11px var(--mono); text-transform: uppercase; letter-spacing: 0.04em; padding-top: 2px; color: var(--muted); }
 .rule.critical .sev { color: var(--crit); } .rule.warn .sev { color: var(--warn); } .rule.ok .sev { color: var(--ok); } .rule.advice .sev { color: var(--accent); }
 
