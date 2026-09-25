@@ -8,7 +8,7 @@ export const PROJECTS_DIR = path.join(DATA_DIR, 'projects');
 const DEFAULTS = {
   port: 4477,
   host: '0.0.0.0',
-  access: { tokenFile: path.join(DATA_DIR, 'access-token') },
+  access: { tokenFile: path.join(DATA_DIR, 'access-token'), sessionDays: 30 },
   // Seconds between collection passes.
   tickSeconds: 30,
   quotaSeconds: 300,

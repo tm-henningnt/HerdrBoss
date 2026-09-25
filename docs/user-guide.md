@@ -99,7 +99,7 @@ Put overrides in `~/.herdr-boss/config.json`, then restart the service.
   "port": 4477,
   "host": "0.0.0.0",
   "push": true,
-  "access": { "tokenFile": "/Users/you/.herdr-boss/access-token" },
+  "access": { "tokenFile": "/Users/you/.herdr-boss/access-token", "sessionDays": 30 },
   "quota": { "warnPercent": 90, "criticalPercent": 98 },
   "machine": { "memFreeWarnPercent": 15, "loadWarnFactor": 2 },
   "browsers": { "reapOrphanDaemons": true, "orphanDaemonMinAgeSeconds": 7200, "staleOwnedMinutes": 30 },
@@ -116,7 +116,7 @@ The server listens on all local interfaces. Requests from `127.0.0.1` need no lo
 1. Open `http://<LAN-or-Tailscale-IP>:4477` on the other device.
 2. Enter the token from `~/.herdr-boss/access-token`. Herdr Boss creates this file on first start.
 
-The session lasts 12 hours and renews while the page is open. API clients can send `Authorization: Bearer <token>` instead.
+The session lasts 30 days and renews while the device uses the dashboard. It survives a service restart. Set `access.sessionDays` to change the length. The server stores only hashes of session IDs, in `~/.herdr-boss/sessions.json`. A new token signs every device out. The login form lets a password manager, such as the iPhone keychain, save the token. API clients can send `Authorization: Bearer <token>` instead.
 
 - Tailscale encrypts traffic between tailnet devices. LAN access uses plain HTTP; use it only on a trusted network.
 - Set `host` to `127.0.0.1` to turn off remote access.

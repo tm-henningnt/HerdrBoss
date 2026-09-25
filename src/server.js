@@ -77,7 +77,7 @@ async function jsonBody(req) {
 }
 
 export function serve(cfg) {
-  const access = createAccessControl(cfg.access.tokenFile);
+  const access = createAccessControl(cfg.access.tokenFile, { sessionDays: cfg.access.sessionDays });
   const engine = new Engine(cfg);
   const clients = new Set();
 

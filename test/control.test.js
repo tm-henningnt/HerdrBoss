@@ -186,3 +186,26 @@ test('a load alert goes to the projects that cause it and the bulletin groups pr
   const bulletin = renderBulletin(snap, evaluation, cfg);
   assert.match(bulletin, /## Project rules\n\n### Alpha\n\n- The 5-minute load average/);
 });
+
+test('a remote session survives a restart, and a new token signs every device out', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { createAccessControl } = await import('../src/access.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-access-'));
+  const tokenFile = path.join(dir, 'access-token');
+  const first = createAccessControl(tokenFile);
+  const token = fs.readFileSync(tokenFile, 'utf8').trim();
+  const req = (cookie) => ({ socket: { remoteAddress: '10.0.0.2' }, headers: { host: '10.0.0.1:4477', cookie } });
+  const res = { setHeader() {} };
+  const login = first.login(req(), token);
+  assert.equal(login.ok, true);
+  assert.match(login.cookie, /SameSite=Lax/);
+  assert.match(login.cookie, /Max-Age=2592000/);
+  const cookie = login.cookie.split(';')[0];
+  assert.doesNotMatch(fs.readFileSync(path.join(dir, 'sessions.json'), 'utf8'), new RegExp(cookie.split('=')[1]));
+  assert.equal(createAccessControl(tokenFile).authorized(req(cookie), res), true);
+  fs.writeFileSync(tokenFile, `${'b'.repeat(64)}\n`);
+  assert.equal(createAccessControl(tokenFile).authorized(req(cookie), res), false);
+  assert.equal(first.login(req(), 'wrong').ok, false);
+});
