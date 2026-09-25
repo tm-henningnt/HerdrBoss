@@ -713,7 +713,7 @@ const isDone = (t) => (t.status || 'todo') === 'done';
 const STATUS_COLOR = { todo: 'faint', doing: 'info', review: 'accent', blocked: 'crit', done: 'ok' };
 
 // Phone layout: a top menu, collapsed project sections, and compact cards and tables.
-const phoneMedia = window.matchMedia('(max-width: 760px)');
+const phoneMedia = window.matchMedia('(max-width: 760px), (pointer: coarse) and (max-height: 500px)');
 const isPhone = () => phoneMedia.matches;
 const FOLD_PREFIX = 'herdr-boss.project-folds.';
 function foldState(slug) {
@@ -966,7 +966,7 @@ const HELP = {
     <h3>Groups and specs</h3><p>Progress per release or phase, and the work under each spec.</p>
     <h3>Tasks and All work</h3><p>The board groups tasks by status; Done shows the latest 10 until you show completed work. The list sorts and filters all work.</p>
     <h3>Project continuity</h3><p>Plan a handover to another harness. Prepare starts a successor that only reads and reports. Inspect its answer, then confirm activation.</p>
-    <h3>Phone</h3><p>On a screen up to 760 px wide, the long sections start collapsed. Select a section title to open it. The dashboard remembers each open section for this project during the session. Overall progress and the frontier stay open.</p>
+    <h3>Phone</h3><p>On a phone, the long sections start collapsed. Select a section title to open it. The dashboard remembers each open section for this project during the session. Overall progress and the frontier stay open.</p>
     <p>The data comes from the project's status file. When a section is missing, the orchestrator has not published those fields.</p>`],
   allocation: ['Allocation', `
     <p>The resource policy for all projects. Changes are a draft until you select <b>Apply policy</b>.</p>
