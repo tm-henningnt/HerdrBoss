@@ -7,7 +7,7 @@ import test from 'node:test';
 import { loadModels, loadProjectConfig, PROJECT_DEFAULTS } from '../src/kit/config.js';
 import { appendDelegatedRun, compareChangedPaths, gitChangedPaths, readDelegatedRuns, validateAllowedPaths, validateDelegatedRun, validateWorkerReport } from '../src/kit/orchestration.js';
 import { buildGhArgs } from '../src/kit/gh.js';
-import { collectWorker, renderBrief, startWorker } from '../src/kit/workers.js';
+import { collectWorker, parseWorktreeCwdProcesses, renderBrief, startWorker } from '../src/kit/workers.js';
 import { classifyWorktrees, pruneWorktrees } from '../src/kit/worktrees.js';
 import { usageProvider } from '../src/usage.js';
 
@@ -53,6 +53,19 @@ const validRun = {
   rework: [],
   evidenceTier: ['unit'],
 };
+
+test('worker process check finds only cwd paths inside the exact worktree', () => {
+  const worktree = path.resolve('/tmp/worker-tree');
+  const output = [
+    'p101', 'cnode', `n${worktree}/test/server.test.js`,
+    'p102', 'cnpm', `n${worktree}-other`,
+    'p103', 'czsh', `n${worktree}`,
+  ].join('\n');
+  assert.deepEqual(parseWorktreeCwdProcesses(output, worktree), [
+    { pid: 101, command: 'node', cwd: `${worktree}/test/server.test.js` },
+    { pid: 103, command: 'zsh', cwd: worktree },
+  ]);
+});
 
 test('project config finds the git root and applies contract defaults', () => {
   const root = temporaryRepo();
@@ -675,6 +688,9 @@ test('worker collect ignores the worker report files in the scope check and the 
     changedPaths: ['.orchestration/runs/own-files.json', `${run.workerDir}/report.md`, `${run.workerDir}/report.json`],
     commands: ['focused check'], evidenceTier: ['unit'], unverified: [], stoppedEarly: false,
   }));
+  assert.throws(() => collectWorker('own-files', { record: true, outcome: 'done', gatePassed: true }, {
+    config: f.config, output: () => {}, listWorktreeProcesses: () => [{ pid: 99, command: 'node', cwd: f.root }],
+  }), /still has processes in its worktree.*pid 99/);
   const summary = collectWorker('own-files', { record: true, outcome: 'done', gatePassed: true }, {
     config: f.config, output: () => {}, recordUsageFn: () => ({ errors: [], duplicate: false }),
   });

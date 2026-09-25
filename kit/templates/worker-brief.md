@@ -100,6 +100,8 @@ Record each command and its exact result.
 
 If a gate is unavailable, report the reason and leave it unverified.
 
+Stop every test or server process you start before you write either report. Before collection, the orchestrator checks for processes whose current working directory is this worktree and asks you to stop any leftovers.
+
 ## Reports
 
 Write the human report to `{{reportPath}}`.

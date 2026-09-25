@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
-import { DATA_DIR, dashboardUrl } from './config.js';
+import { DATA_DIR, LIVE_DATA_DIR, dashboardUrl } from './config.js';
 import { collectHerdr, collectQuotas, collectMachine, collectProcesses, findBrowsers, cpuUse, run } from './collect.js';
 import { evaluate, renderBulletin, fmtDuration, providerName, broadcastTargets } from './rules.js';
 import { listProjects } from './projects.js';
@@ -32,8 +32,12 @@ export class Engine extends EventEmitter {
   constructor(cfg, { push = cfg.push, act = true } = {}) {
     super();
     this.cfg = cfg;
-    this.push = push;
-    this.act = act; // false: collect and evaluate only (no reaping, notifications or prompts)
+    const guardReasons = [];
+    if (process.env.NODE_TEST_CONTEXT) guardReasons.push('NODE_TEST_CONTEXT is set');
+    if (DATA_DIR !== LIVE_DATA_DIR) guardReasons.push(`data directory ${DATA_DIR} is not the configured live data directory ${LIVE_DATA_DIR}`);
+    const actionsAllowed = guardReasons.length === 0 || process.env.HERDR_BOSS_ALLOW_ACTIONS === '1';
+    this.push = actionsAllowed && push;
+    this.act = actionsAllowed && act; // false: collect and evaluate only (no reaping, notifications or prompts)
     this.memory = readJson(MEMORY_FILE, { paneSince: {}, pushes: {}, notified: {} });
     this.quotas = null;
     this.quotasAt = 0;
@@ -44,6 +48,7 @@ export class Engine extends EventEmitter {
     } catch {}
     this.running = false;
     this.models = loadModels();
+    if (!actionsAllowed) this.log('guard', `Actions and push disabled: ${guardReasons.join('; ')}. Set HERDR_BOSS_ALLOW_ACTIONS=1 to override.`);
   }
 
   log(type, text, extra = {}) {
