@@ -6,7 +6,12 @@ const $nav = document.getElementById('primary-nav');
 const $roamgate = document.getElementById('roamgate-link');
 const $navMenu = document.getElementById('nav-menu');
 const $navMenuLabel = document.getElementById('nav-menu-label');
-const NAV_LABEL = { overview: 'Overview', projects: 'Projects', allocation: 'Allocation', agents: 'Agents', browsers: 'Browsers', analytics: 'Analytics', logs: 'Logs' };
+const NAV_LABEL = { overview: 'Overview', projects: 'Projects', allocation: 'Allocation', settings: 'Settings', agents: 'Agents', browsers: 'Browsers', analytics: 'Analytics', logs: 'Logs' };
+const settingsLink = document.createElement('a');
+settingsLink.href = '/settings';
+settingsLink.dataset.nav = 'settings';
+settingsLink.textContent = 'Settings';
+$nav.insertBefore(settingsLink, $nav.querySelector('[data-nav="allocation"]')?.nextSibling || null);
 function setNavMenu(open) {
   $nav.classList.toggle('open', open);
   $navMenu.setAttribute('aria-expanded', String(open));
@@ -172,11 +177,6 @@ function controlBlock(s) {
     cumulative += d.projects[p.slug]?.share || 0;
     return `<button type="button" class="allocation-handle" data-boundary="${i}" role="slider" aria-label="${esc(p.label)} allocation boundary" aria-valuemin="${minimum}" aria-valuemax="100" aria-valuenow="${cumulative}" aria-valuetext="${esc(p.label)} ${d.projects[p.slug]?.share || 0} percent" style="left:${cumulative}%"></button>`;
   }).join('');
-  const providerRows = Object.keys(d.providerModes).map((p) => `<label class="setting-line"><span>${esc(PROVIDERS[p] || p)} quota</span><select data-provider="${p}"><option value="managed" ${d.providerModes[p] === 'managed' ? 'selected' : ''}>Manage pace</option><option value="ignore" ${d.providerModes[p] === 'ignore' ? 'selected' : ''}>Ignore quota</option></select></label>`).join('');
-  const kindRows = Object.keys(models).map((kind) => {
-    const enabled = d.allowedKinds.includes(kind);
-    return `<div class="model-kind"><label><input type="checkbox" data-kind="${kind}" ${enabled ? 'checked' : ''}> ${esc(kind)}</label><details><summary>Models</summary><div class="model-list">${(models[kind].allowedModels || []).map((model) => `<label><input type="checkbox" data-global-model="${esc(model)}" ${!d.excludedModels.includes(model) ? 'checked' : ''}> ${esc(model)}</label>`).join('')}</div></details></div>`;
-  }).join('');
   const ladderRows = (d.orchestratorLadder || []).map((rung, i) => {
     const cfg = models[rung.kind] || { allowedModels: [rung.model], allowedEfforts: [] };
     return `<div class="succession-row"><span class="num">${i + 1}</span>
@@ -213,8 +213,7 @@ function controlBlock(s) {
           <p class="setting-help">Apply policy to save this choice.</p>
           <label class="setting-line"><span>Activate at quota used %</span><input type="number" min="90" max="100" value="${d.autoHandoverPercent}" data-policy-number="autoHandoverPercent"></label>
           <p class="setting-help">When enabled, Boss prepares a successor at the reserve limit and activates it at this quota level after the successor reports ready. The source stays in control until then.</p>
-        </div><div><h3>Subscriptions</h3>${providerRows}</div>
-        <div><h3>Available harnesses &amp; models</h3><div class="model-kinds">${kindRows}</div></div>
+        </div>
       </div>
       <div class="succession"><div class="section-head"><h3>Orchestrator succession</h3><button type="button" data-ladder-add ${d.orchestratorLadder?.length >= 20 ? 'disabled' : ''}>Add choice</button></div>
         <p class="setting-help">Automatic handover tries these choices in order, skipping the current provider, unavailable quotas, and global or project exclusions. Choices outside this list are never selected automatically.</p>
@@ -225,6 +224,19 @@ function controlBlock(s) {
         ${projectRows}</div>
       <div class="control-actions ${policyDirty ? 'pending' : ''}"><span data-policy-status role="status">${esc(saveMessage || (policyDirty ? 'Unsaved changes · Apply policy to keep them' : `${s.control.runningWorkers}/${d.maxWorkers} workers active · policy saved`))}</span><button id="save-policy" ${policyDirty ? '' : 'disabled'}>Apply policy</button></div>
     </div></section>`;
+}
+
+function settingsView(s) {
+  ensureDraft(s);
+  if (!policyDraft) return '';
+  const d = policyDraft;
+  const kinds = Object.entries(models || {});
+  const allModels = [...new Set(kinds.flatMap(([, cfg]) => cfg.allowedModels || []))];
+  const availability = kinds.map(([kind, cfg]) => `<section class="settings-kind"><h3>${esc(kind)}</h3><label class="setting-line"><span>Harness available</span><input type="checkbox" data-kind="${esc(kind)}" ${d.allowedKinds.includes(kind) ? 'checked' : ''}></label><label class="setting-line"><span>Preferred model</span><select data-preferred-model="${esc(kind)}"><option value="">Use harness default (${esc(cfg.defaultModel)})</option>${(cfg.allowedModels || []).map((model) => `<option value="${esc(model)}" ${d.preferredModels?.[kind] === model ? 'selected' : ''}>${esc(model)}</option>`).join('')}</select></label><p class="setting-help">Models: ${(cfg.allowedModels || []).map(esc).join(', ')}</p></section>`).join('');
+  const modelRows = allModels.map((model) => `<label class="model-availability"><input type="checkbox" data-global-model="${esc(model)}" ${!d.excludedModels.includes(model) ? 'checked' : ''}> <span>${esc(model)}</span></label>`).join('');
+  const providerRows = Object.keys(d.providerModes).map((p) => `<label class="setting-line"><span>${esc(PROVIDERS[p] || p)} quota mode</span><select data-provider="${esc(p)}"><option value="managed" ${d.providerModes[p] === 'managed' ? 'selected' : ''}>Manage pace</option><option value="ignore" ${d.providerModes[p] === 'ignore' ? 'selected' : ''}>Ignore quota</option></select></label>`).join('');
+  const routes = allModels.map((model) => `<label class="setting-line route-line"><span>${esc(model)}</span><select data-model-provider="${esc(model)}" aria-label="Provider for ${esc(model)}"><option value="unmetered" ${d.modelProviders?.[model] === null ? 'selected' : ''}>Unmetered</option>${Object.entries(PROVIDERS).map(([provider, label]) => `<option value="${provider}" ${d.modelProviders?.[model] === provider ? 'selected' : ''}>${esc(label)}</option>`).join('')}</select></label>`).join('');
+  return `<header class="page-intro"><div><h1>Settings</h1><p>Choose available harnesses and models, preferred models, quota modes, and provider routes.</p></div></header><section id="settings-plane" class="control-shell"><div class="control-grid settings-grid"><section class="panel"><h2>Harnesses and preferred models</h2><div class="settings-kinds">${availability}</div></section><section class="panel"><h2>Provider quota modes</h2>${providerRows}<p class="setting-help">Ignore quota turns off pacing and handover alerts for that provider.</p></section></div><section class="panel"><h2>Available models</h2><p class="setting-help">Clear a model box to disable that model for every project.</p><div class="model-availability-list">${modelRows}</div></section><section class="panel"><h2>Model provider routes</h2><p class="setting-help">Choose which provider quota applies to each model. Use Unmetered when no quota applies.</p><div class="model-routes">${routes}</div></section><div class="control-actions ${policyDirty ? 'pending' : ''}"><span data-policy-status role="status" aria-live="polite">${esc(saveMessage || (policyDirty ? 'Unsaved changes · Apply policy to keep them' : 'Policy saved'))}</span><button id="save-policy" ${policyDirty ? '' : 'disabled'}>Apply policy</button></div></section>`;
 }
 
 function handoffBlock(s, projectSlug = null) {
@@ -671,7 +683,7 @@ function overview(s) {
 
 function allocationView(s) {
   return [
-    '<header class="page-intro"><div><h1>Resource allocation</h1><p>Set capacity, subscription availability, and the share each project can use.</p></div></header>',
+    '<header class="page-intro"><div><h1>Resource allocation</h1><p>Set worker capacity, project shares, exclusions, and orchestrator succession.</p></div></header>',
     controlBlock(s),
   ].join('');
 }
@@ -1007,13 +1019,15 @@ const HELP = {
   allocation: ['Allocation', `
     <p>The resource policy for all projects. Changes are a draft until you select <b>Apply policy</b>.</p>
     <h3>Capacity and handover</h3><p>The global limit of working agents, idle lending, the quota reserve, and automatic handover with its activation level.</p>
-    <h3>Subscriptions</h3><p><b>Manage pace</b> applies pacing and handover alerts. <b>Ignore quota</b> turns them off for that provider.</p>
-    <h3>Harnesses and models</h3><p>Clear a box to disable a harness or model for every project.</p>
     <h3>Orchestrator succession</h3><p>The ranked successors for automatic handover. Use the arrows to change the order. Unlisted choices are never selected automatically.</p>
     <h3>Project shares</h3><p>Drag a boundary on the bar, or focus it and use the arrow keys. Projects to the left stay fixed; the rest share the remainder. A share is advisory. The mode sets a project to auto, active, idle, or paused.</p>
     <p>The <b>set share</b> is the share in your policy draft. The bar widths show it. The <b>effective share</b> is the number of worker slots the project has now, divided by the applied maximum of working agents. It changes only after you select <b>Apply policy</b>.</p>
     <p>A bar label such as <b>30% · 2</b> shows the set share and the effective slots. A narrow segment shows fewer labels; its tooltip shows all values.</p>
     <p>An idle project is faded. A paused project is faded and striped. When <b>Borrow idle shares</b> is on, an idle project lends its slots to active projects, so an idle project can have 0 effective slots.</p>`],
+  settings: ['Settings', `
+    <p>Choose the harnesses and models that workers can use. Choose a preferred model for each harness, a quota mode for each provider, and a provider route for each model.</p>
+    <p>An empty preferred model uses the harness default. Choose <b>Unmetered</b> when a model has no provider quota.</p>
+    <p>Changes stay in a draft until you select <b>Apply policy</b>. A rejected save shows the server error and keeps your draft.</p>`],
   agents: ['Agents', `
     <p>Every Herdr workspace with its orchestrator and workers, live from Herdr.</p>
     <p>A status dot shows working, blocked, idle, or done. Idle and done agents are ready for input; they have not always finished their task. Rows with the <b>orch</b> or <b>boss</b> label are orchestrators.</p>`],
@@ -1072,15 +1086,15 @@ document.addEventListener('click', (e) => {
 function render(force = false) {
   if (!state) return;
   if (!policyDirty) policyDraft = null;
-  if (!force && policyDirty && location.pathname === '/allocation' && document.activeElement?.closest?.('#control-plane')) {
+  if (!force && policyDirty && ['/allocation', '/settings'].includes(location.pathname) && document.activeElement?.closest?.('#control-plane, #settings-plane')) {
     $updated.textContent = `updated ${ago(state.updatedAt)}`;
     return;
   }
   const legacy = /^\/p\/([^/]+)\/?$/.exec(location.pathname);
   if (legacy) history.replaceState(null, '', `/projects/${legacy[1]}`);
   const m = /^\/projects\/([^/]+)\/?$/.exec(location.pathname);
-  const route = m || location.pathname === '/projects' ? 'projects' : ['allocation', 'agents', 'browsers', 'analytics', 'logs'].includes(location.pathname.slice(1)) ? location.pathname.slice(1) : 'overview';
-  const html = route === 'projects' ? projectsView(state, m ? decodeURIComponent(m[1]) : null) : route === 'allocation' ? allocationView(state) : route === 'agents' ? agentsView(state) : route === 'browsers' ? browsersView(state) : route === 'analytics' ? analyticsView(state) : route === 'logs' ? logsView(state) : overview(state);
+  const route = m || location.pathname === '/projects' ? 'projects' : ['allocation', 'settings', 'agents', 'browsers', 'analytics', 'logs'].includes(location.pathname.slice(1)) ? location.pathname.slice(1) : 'overview';
+  const html = route === 'projects' ? projectsView(state, m ? decodeURIComponent(m[1]) : null) : route === 'allocation' ? allocationView(state) : route === 'settings' ? settingsView(state) : route === 'agents' ? agentsView(state) : route === 'browsers' ? browsersView(state) : route === 'analytics' ? analyticsView(state) : route === 'logs' ? logsView(state) : overview(state);
   $navMenuLabel.textContent = NAV_LABEL[route] || 'Menu';
   if (route !== 'projects') $crumbs.innerHTML = '';
   for (const a of $nav.querySelectorAll('a')) {
@@ -1186,7 +1200,7 @@ document.addEventListener('input', (e) => {
     if (slug) browserAddressDraft[slug] = e.target.value;
     return;
   }
-  if (!e.target.closest('#control-plane') || !policyDraft) return;
+  if (!e.target.closest('#control-plane, #settings-plane') || !policyDraft) return;
   const el = e.target;
   if (el.dataset.policyNumber) policyDraft[el.dataset.policyNumber] = Number(el.value);
   markPolicyDirty();
@@ -1268,11 +1282,21 @@ document.addEventListener('change', (e) => {
     lastRender = ''; render();
     return;
   }
-  if (!e.target.closest('#control-plane') || !policyDraft) return;
+  if (!e.target.closest('#control-plane, #settings-plane') || !policyDraft) return;
   const el = e.target;
   const d = policyDraft;
   if (el.dataset.policyBool) d[el.dataset.policyBool] = el.checked;
   if (el.dataset.provider) d.providerModes[el.dataset.provider] = el.value;
+  if (el.dataset.preferredModel) {
+    d.preferredModels ||= {};
+    if (el.value) d.preferredModels[el.dataset.preferredModel] = el.value;
+    else delete d.preferredModels[el.dataset.preferredModel];
+  }
+  if (el.dataset.modelProvider) {
+    d.modelProviders ||= {};
+    if (el.value === 'unmetered') d.modelProviders[el.dataset.modelProvider] = null;
+    else d.modelProviders[el.dataset.modelProvider] = el.value;
+  }
   if (el.dataset.mode) d.projects[el.dataset.mode].mode = el.value;
   if (el.dataset.kind) {
     d.allowedKinds = el.checked ? [...new Set([...d.allowedKinds, el.dataset.kind])] : d.allowedKinds.filter((x) => x !== el.dataset.kind);
@@ -1548,7 +1572,7 @@ document.addEventListener('click', async (e) => {
     try {
       const response = await fetch('/api/policy', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(policyDraft) });
       const result = await response.json();
-      if (!response.ok) throw new Error((result.errors || [result.error]).join(' '));
+      if (!response.ok) throw new Error((result.errors || [result.error || 'The policy could not be saved.']).join(' '));
       policyDraft = result.policy;
       policyDirty = false;
       saveMessage = 'Policy saved';
@@ -1556,7 +1580,7 @@ document.addEventListener('click', async (e) => {
       state.control = result.control;
       lastRender = '';
       render();
-    } catch (error) { saveMessage = error.message; e.target.disabled = false; e.target.previousElementSibling.textContent = saveMessage; }
+    } catch (error) { saveMessage = error.message; e.target.disabled = false; e.target.previousElementSibling.textContent = saveMessage; e.target.previousElementSibling.setAttribute('role', 'alert'); }
   }
   if (e.target.dataset.browserRequest) {
     const slug = e.target.dataset.browserRequest;
