@@ -509,11 +509,14 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
   if (run.issue != null && reportJson.issue !== run.issue) throw new Error(`Report issue ${reportJson.issue} does not match run issue ${run.issue}.`);
   if (reportJson.branch !== run.branch) throw new Error(`Report branch ${reportJson.branch} does not match run branch ${run.branch}.`);
   const log = gitLog(run.worktree, run.base);
-  const changed = gitChangedPaths(run.worktree, run.base);
-    const reportScope = compareChangedPaths(reportJson.changedPaths, run.allowedPaths ?? []);
+  // The worker's own brief and report files live under .worker/ and never count as changed product paths.
+  const ownFile = (item) => item === '.worker' || String(item).startsWith('.worker/');
+  const reported = (reportJson.changedPaths || []).filter((item) => !ownFile(item));
+  const changed = gitChangedPaths(run.worktree, run.base).filter((item) => !ownFile(item));
+    const reportScope = compareChangedPaths(reported, run.allowedPaths ?? []);
     const actualScope = compareChangedPaths(changed, run.allowedPaths ?? []);
     const scopeErrors = [...new Set([...reportScope, ...actualScope])];
-    const omitted = changed.filter((item) => !reportJson.changedPaths.includes(item));
+    const omitted = changed.filter((item) => !reported.includes(item));
   const summary = {
     name,
     issue: reportJson.issue,
@@ -522,7 +525,7 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
     branch: run.branch,
     worktree: run.worktree,
     commits: log ? log.split('\n') : [],
-    reportedPaths: reportJson.changedPaths,
+    reportedPaths: reported,
     actualPaths: changed,
     outOfScope: scopeErrors,
     report: reportMd,
@@ -542,7 +545,7 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
       timedOut: false,
       // null means unknown. A harness that counts tool calls can report usage.toolCalls.
       toolCalls: Number.isSafeInteger(reportJson.usage?.toolCalls) && reportJson.usage.toolCalls >= 0 ? reportJson.usage.toolCalls : null,
-      changedPaths: reportJson.changedPaths,
+      changedPaths: reported,
       independentGate: { passed: !!options.gatePassed, command: 'Independent gate result supplied by orchestrator; command and evidence are in the worker report and review.' },
       defectsFound: Array.from({ length: options.defects ?? 0 }, (_value, index) => `defect ${index + 1}`),
       rework: Array.from({ length: options.rework ?? 0 }, (_value, index) => `rework ${index + 1}`),

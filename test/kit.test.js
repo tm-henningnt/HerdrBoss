@@ -477,3 +477,26 @@ test('scratch creates a durable project folder under the Herdr Boss directory an
   }
   assert.deepEqual(fs.readdirSync(path.join(dir, 'scratch')), ['herdrboss']);
 });
+
+test('worker collect ignores the worker report files in the scope check and the ledger', () => {
+  const f = setupFixture(null);
+  fs.writeFileSync(f.rulesFile, JSON.stringify({ policy: { allowedKinds: ['codex'], excludedModels: [] } }));
+  git(f.root, 'add', '-A');
+  git(f.root, 'commit', '--allow-empty', '-m', 'fixture configuration');
+  const run = startWorker('own-files', { kind: 'codex', task: 'x', allow: ['.orchestration/runs/'], noWorktree: true }, {
+    config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+  });
+  const reportDir = path.join(run.worktree, run.workerDir);
+  fs.writeFileSync(path.join(reportDir, 'report.md'), 'Done.\n');
+  fs.writeFileSync(path.join(reportDir, 'report.json'), JSON.stringify({
+    issue: null, branch: run.branch, worktree: run.worktree,
+    changedPaths: ['.orchestration/runs/own-files.json', `${run.workerDir}/report.md`, `${run.workerDir}/report.json`],
+    commands: ['focused check'], evidenceTier: ['unit'], unverified: [], stoppedEarly: false,
+  }));
+  const summary = collectWorker('own-files', { record: true, outcome: 'done', gatePassed: true }, {
+    config: f.config, output: () => {}, recordUsageFn: () => ({ errors: [], duplicate: false }),
+  });
+  assert.deepEqual(summary.reportedPaths, ['.orchestration/runs/own-files.json']);
+  const entry = JSON.parse(fs.readFileSync(f.config.ledgerPath, 'utf8').trim());
+  assert.deepEqual(entry.changedPaths, ['.orchestration/runs/own-files.json']);
+});
