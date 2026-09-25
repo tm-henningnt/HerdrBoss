@@ -295,6 +295,7 @@ function syncViewerMode() {
   if (grid) {
     viewer.querySelector('#browser-viewer-control').checked = false;
     for (const control of viewer.querySelectorAll('.browser-viewer-controls input, .browser-viewer-controls button')) control.disabled = true;
+    browserRefreshStopped(slug);
   } else viewer.dataset.tab = browserSelectedTab[slug] || '';
 }
 
@@ -327,6 +328,20 @@ function browserResources(s) {
   const active = projects.filter((p) => sessions.find((b) => b.project === p.slug)?.profileVerified);
   const inactive = projects.filter((p) => !sessions.find((b) => b.project === p.slug)?.profileVerified);
   return `<section class="browser-fleet"><div class="section-head"><h2>Running browsers</h2><span>${active.length} active</span></div>${active.length ? `<div class="browser-grid">${cards(active)}</div>` : '<p class="empty">No project browsers are running.</p>'}</section><section class="browser-fleet"><div class="section-head"><h2>Other projects</h2><span>${inactive.length} available</span></div>${inactive.length ? `<div class="browser-idle-grid">${cards(inactive)}</div>` : '<p class="empty">Every open project has a browser.</p>'}</section>`;
+}
+
+// Refresh repeats only for the card-level Live setting or while Control browser is on in the large view.
+function browserRefreshActive(slug) {
+  const viewer = document.getElementById('browser-viewer');
+  return browserPreviewLive.has(slug) || (viewer.open && viewer.dataset.project === slug && viewer.querySelector('#browser-viewer-control').checked);
+}
+
+// Stop the timer and relabel the last status when no refresh source remains.
+function browserRefreshStopped(slug) {
+  if (browserRefreshActive(slug)) return;
+  delete browserNextRefresh[slug];
+  const message = browserPreviewMessages[slug];
+  if (message?.startsWith('Live · ')) previewMessage(slug, `Captured${message.slice(4)}`);
 }
 
 function previewMessage(slug, message) {
@@ -381,7 +396,7 @@ async function captureBrowserGrid(slug) {
   if (rebuild) { lastRender = ''; render(); if (viewerActive) syncViewerMode(); }
   browserPreviewFrames[slug] = (browserPreviewFrames[slug] || 0) + 1;
   const failed = Object.keys(errors).length;
-  previewMessage(slug, `${browserPreviewLive.has(slug) || viewerActive ? 'Live' : 'Captured'} · all ${tabs.length} tabs · frame ${browserPreviewFrames[slug]} · ${new Date().toLocaleTimeString()}${failed ? ` · ${failed} failed` : ''}`);
+  previewMessage(slug, `${browserRefreshActive(slug) ? 'Live' : 'Captured'} · all ${tabs.length} tabs · frame ${browserPreviewFrames[slug]} · ${new Date().toLocaleTimeString()}${failed ? ` · ${failed} failed` : ''}`);
 }
 
 async function refreshBrowserPreview(slug, reloadTabs = false) {
@@ -418,9 +433,8 @@ async function refreshBrowserPreview(slug, reloadTabs = false) {
     if (viewer.open && viewer.dataset.project === slug) viewer.querySelector(':scope > img').src = next;
     if (previous) URL.revokeObjectURL(previous);
     browserPreviewFrames[slug] = (browserPreviewFrames[slug] || 0) + 1;
-    const viewerActive = viewer.open && viewer.dataset.project === slug;
     const agentTab = browserTabs[slug]?.find((tab) => tab.id === browserSelectedTab[slug])?.attached;
-    previewMessage(slug, `${browserPreviewLive.has(slug) || viewerActive ? 'Live' : 'Captured'} · frame ${browserPreviewFrames[slug]} · ${new Date().toLocaleTimeString()}${agentTab ? ' · an agent is using this tab' : ''}`);
+    previewMessage(slug, `${browserRefreshActive(slug) ? 'Live' : 'Captured'} · frame ${browserPreviewFrames[slug]} · ${new Date().toLocaleTimeString()}${agentTab ? ' · an agent is using this tab' : ''}`);
     try { await refreshBrowserNavigation(slug); } catch (error) { previewMessage(slug, error.message); }
   } catch (error) { previewMessage(slug, error.message); }
   finally { browserPreviewPending.delete(slug); }
@@ -1006,9 +1020,9 @@ const HELP = {
   browsers: ['Browsers', `
     <p>One persistent Chrome per project. Agents drive it; you can watch and help.</p>
     <h3>Start and manage</h3><p><b>Open visible</b> or <b>Open headless</b> starts the browser. <b>Manage</b> restarts it in the other mode, closes it, or sets the window size for the next launch.</p>
-    <h3>Preview</h3><p><b>One tab</b> shows the selected tab with its address bar. <b>All tabs</b> shows every tab in one grid, without controls; select a tile to focus it. <b>Live</b> refreshes at the chosen interval.</p>
+    <h3>Preview</h3><p><b>One tab</b> shows the selected tab with its address bar. <b>All tabs</b> shows every tab in one grid, without controls; select a tile to focus it. <b>Live</b> refreshes at the chosen interval. Without <b>Live</b>, the preview shows the last capture; <b>Refresh</b> takes a new one.</p>
     <h3>Tabs</h3><p><b>Agent</b> marks a tab an agent uses. Screenshots never change a page. Navigation and input on an agent tab ask for confirmation first. <b>Hidden</b> marks a tab that is not visible; some web apps do not draw there. <b>New tab</b> opens a page of your own.</p>
-    <h3>Control</h3><p>Select the screenshot to open the large view. Turn on <b>Control browser</b>, then click the image and type. Paste long text or a password into the masked field. On a phone the large view is full screen and the image fills the height. The text field and key controls appear only while <b>Control browser</b> is on.</p>`],
+    <h3>Control</h3><p>Select the screenshot to open the large view. The large view shows a still image of the last capture. Turn on <b>Control browser</b> or <b>Live</b> to refresh it at the chosen interval. Turn on <b>Control browser</b>, then click the image and type. Paste long text or a password into the masked field. On a phone the large view is full screen and the image fills the height. The text field and key controls appear only while <b>Control browser</b> is on.</p>`],
   analytics: ['Analytics', `
     <p>Recorded worker runs per project and provider: duration, outcome, and measured tokens.</p>
     <p>Token totals include only runs that report tokens. Coverage shows how many runs have measurements. Quota percentages are global per provider; they are not project token counts.</p>`],
@@ -1200,14 +1214,21 @@ document.addEventListener('change', (e) => {
   if (e.target.id === 'browser-viewer-control') {
     const viewer = document.getElementById('browser-viewer');
     for (const control of viewer.querySelectorAll('.browser-viewer-controls input, .browser-viewer-controls button')) control.disabled = !e.target.checked;
-    if (e.target.checked) viewer.querySelector(':scope > img')?.focus();
-    else { viewerTextBuffer = ''; clearTimeout(viewerTextTimer); viewer.querySelector('#browser-viewer-text').value = ''; }
+    const slug = viewer.dataset.project;
+    if (e.target.checked) {
+      viewer.querySelector(':scope > img')?.focus();
+      browserNextRefresh[slug] = Date.now() + previewInterval(slug);
+      refreshBrowserPreview(slug);
+    } else {
+      viewerTextBuffer = ''; clearTimeout(viewerTextTimer); viewer.querySelector('#browser-viewer-text').value = '';
+      browserRefreshStopped(slug);
+    }
     return;
   }
   if (e.target.dataset.browserLive) {
     const slug = e.target.dataset.browserLive;
     if (e.target.checked) { browserPreviewLive.add(slug); browserNextRefresh[slug] = Date.now() + previewInterval(slug); refreshBrowserPreview(slug); }
-    else { browserPreviewLive.delete(slug); delete browserNextRefresh[slug]; }
+    else { browserPreviewLive.delete(slug); browserRefreshStopped(slug); }
     return;
   }
   if (e.target.dataset.browserTab) {
@@ -1442,8 +1463,7 @@ document.addEventListener('click', async (e) => {
     form.querySelector('[data-browser-history="forward"]').disabled = !browserNavigation[slug]?.canGoForward;
     viewer.showModal();
     syncViewerMode();
-    if (gridMode(slug)) refreshBrowserPreview(slug);
-    else refreshBrowserNavigation(slug).catch((error) => previewMessage(slug, error.message));
+    if (!gridMode(slug)) refreshBrowserNavigation(slug).catch((error) => previewMessage(slug, error.message));
     return;
   }
   if (e.target.dataset.browserPreview) {
@@ -1604,7 +1624,7 @@ setInterval(() => {
   if (document.hidden || location.pathname !== '/browsers') return;
   const active = new Set(browserPreviewLive);
   const viewer = document.getElementById('browser-viewer');
-  if (viewer.open && viewer.dataset.project) active.add(viewer.dataset.project);
+  if (viewer.dataset.project && browserRefreshActive(viewer.dataset.project)) active.add(viewer.dataset.project);
   const now = Date.now();
   for (const slug of active) if (now >= (browserNextRefresh[slug] || 0)) {
     browserNextRefresh[slug] = now + previewInterval(slug);
@@ -1617,5 +1637,7 @@ document.getElementById('browser-viewer').addEventListener('close', () => {
   clearTimeout(viewerRefreshTimer);
   document.getElementById('browser-viewer-text').value = '';
   document.getElementById('browser-viewer-control').checked = false;
+  const slug = document.getElementById('browser-viewer').dataset.project;
+  if (slug) browserRefreshStopped(slug);
 });
 setInterval(render, 10000);

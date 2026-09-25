@@ -93,6 +93,10 @@ Each project can have one persistent Chrome profile. Request it with `herdr-boss
 - A website or identity provider decides how long a login lasts. Sign in through the dashboard when a login is needed.
 - Herdr Boss never stops a browser that it did not start. Port 9222 is kept for an optional legacy shared browser.
 
+On the Browsers page, **Show preview** captures a screenshot of the selected tab. The preview shows a still image until the next capture. **Live** refreshes it at the interval that you select.
+
+Select the screenshot to open the large view. The large view shows the last capture as a still image. Turn on **Control browser** to refresh the large view at the selected interval and to send clicks and keys. Turn off **Control browser** to stop that refresh. **Live** continues to refresh while it is on. The status shows **Live** while a refresh repeats and **Captured** at other times. In **All tabs** mode, **Control browser** is not available.
+
 Agent commands and tab rules are in [the browser service](../kit/browser-service.md).
 
 ## Project status pages
