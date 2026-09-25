@@ -83,6 +83,37 @@ function deliverBrief(name, herdr, readText, wait) {
   return deliverPrompt(name, BRIEF_PROMPT, '.worker/brief.md', { herdr, readText, wait });
 }
 
+function inAbout(iso, now) {
+  const ms = Date.parse(iso) - now;
+  if (!Number.isFinite(ms)) return 'an unknown time';
+  const minutes = Math.max(1, Math.round(ms / 60000));
+  return minutes < 90 ? `${minutes} min` : `${Math.round(minutes / 60)} h`;
+}
+
+export function describeLane(provider, lane, now = Date.now()) {
+  if (!lane || lane.state === 'open') return `${provider} open`;
+  if (lane.state === 'unknown') return `${provider} unknown (no quota data)`;
+  const numbers = `${lane.usedPercent}% used${lane.expectedPercent != null ? ` against ${lane.expectedPercent}% expected` : ''} in the ${lane.window} window`;
+  if (lane.state === 'reserve') return `${provider} near exhaustion: ${numbers}; resets in ${inAbout(lane.backOnPaceAt, now)}`;
+  return `${provider} ahead of pace: ${numbers}; back on pace in about ${inAbout(lane.backOnPaceAt, now)} if unused`;
+}
+
+// Decide whether a worker on this provider may start. Returns { error } or { warning } or {}.
+export function providerGate(provider, rules, { force = false, now = Date.now() } = {}) {
+  if (!provider || !rules.avoidProviders?.includes(provider)) return {};
+  const lane = rules.lanes?.[provider];
+  const detail = lane ? describeLane(provider, lane, now) : `${provider} is ahead of quota pace or near exhaustion`;
+  if (force) return { warning: `Warning: --force overrides the quota guard: ${detail}.` };
+  if (lane?.state === 'pace' && rules.leastOverProvider === provider) {
+    return { warning: `Notice: every metered provider is over pace. ${detail}. It is the least over, so the worker starts. Keep the task small and record the reason in the run.` };
+  }
+  const open = Object.entries(rules.lanes || {}).filter(([, value]) => value.state === 'open').map(([name]) => name);
+  const next = open.length ? `Open providers: ${open.join(', ')}.`
+    : rules.leastOverProvider ? `Every metered provider is over pace; ${rules.leastOverProvider} is the least over and starts without --force.`
+      : 'No metered provider is open; free models do not count against a quota.';
+  return { error: `${detail}. ${next} Use --force only for an authorized override.` };
+}
+
 // The machine load only warns. Orchestrators decide whether a worker is worth starting on a loaded machine.
 export function loadWarning(rules) {
   const load = rules?.load;
@@ -288,7 +319,9 @@ export function startWorker(name, options, {
     if (projectPolicy?.mode === 'paused' && !options.force) throw new Error(`Project ${config.slug} is paused. Use --force only for an authorized override.`);
   }
   const provider = providerFor(options.kind, model);
-  if (provider && rules.avoidProviders?.includes(provider) && !options.force) throw new Error(`${provider} is ahead of quota pace or near exhaustion; choose another model or use --force.`);
+  const gate = providerGate(provider, rules, { force: options.force, now });
+  if (gate.error) throw new Error(gate.error);
+  if (gate.warning) output(gate.warning);
   if (rules.control?.runningWorkers >= rules.control?.maxWorkers && !options.force) throw new Error(`Global worker limit (${rules.control.maxWorkers}) is reached; wait or use --force.`);
   const projectSlots = rules.control?.projects?.[config.slug];
   if (projectSlots?.effectiveMode === 'paused' && !options.force) throw new Error(`Project ${config.slug} is paused. Use --force only for an authorized override.`);

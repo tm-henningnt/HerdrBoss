@@ -224,6 +224,9 @@ herdr agent prompt <orch-pane> "WORKER REPORT <name>: <done|blocked|stopped>. Re
   - Vitest 2 with the forks pool: `vitest run --poolOptions.forks.maxForks=2 --poolOptions.forks.minForks=1`. `--maxWorkers=2` fails there with an unhandled error, and no tests run.
   - Record the form that works in the project's instructions.
 - Read the machine load in the bulletin before each dispatch.
+- Run `herdr-boss lanes` to see each quota provider in one line: open, ahead of pace, or near exhaustion.
+- Prefer an open provider. When every metered provider is ahead of pace, `worker start` allows the least-over provider without `--force`. Keep that task small.
+- A quota window whose reset time has passed shows "reset, not yet measured" until the next reading. Do not use its old percentage as a reason for `--force`.
 - When the 5-minute load is more than 2 × the core count, start no new worker and no full suite.
 
 ## Git and worktree hygiene

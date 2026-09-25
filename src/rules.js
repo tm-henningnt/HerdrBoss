@@ -154,7 +154,19 @@ export function renderBulletin(snap, evaluation, cfg) {
   L.push('', '## Quotas', '', '| Provider | Window | Used | Expected | Resets |', '|---|---|---|---|---|');
   for (const q of snap.quotas || []) {
     if (q.error) continue;
-    for (const w of q.windows) L.push(`| ${providerName(q.provider)} | ${w.label} | ${w.usedPercent}% | ${w.expectedPercent ?? '–'}${w.expectedPercent != null ? '%' : ''} | ${fmtTime(w.resetsAt)} |`);
+    for (const w of q.windows) {
+      const reset = w.resetsAt && Date.parse(w.resetsAt) <= Date.parse(snap.updatedAt || Date.now());
+      L.push(`| ${providerName(q.provider)} | ${w.label} | ${reset ? 'reset, not yet measured' : `${w.usedPercent}%`} | ${reset ? '–' : `${w.expectedPercent ?? '–'}${w.expectedPercent != null ? '%' : ''}`} | ${fmtTime(w.resetsAt)} |`);
+    }
+  }
+  if (snap.lanes && Object.keys(snap.lanes).length) {
+    L.push('', '## Provider lanes', '');
+    for (const [provider, lane] of Object.entries(snap.lanes)) {
+      const back = lane.backOnPaceAt ? ` Back ${lane.state === 'reserve' ? 'at reset' : 'on pace if unused'} about ${fmtTime(lane.backOnPaceAt)}.` : '';
+      const text = lane.state === 'open' ? 'open.' : lane.state === 'unknown' ? 'unknown: no quota data.'
+        : `${lane.state === 'reserve' ? 'near exhaustion' : 'ahead of pace'}: ${lane.usedPercent}% used${lane.expectedPercent != null ? ` against ${lane.expectedPercent}% expected` : ''} in the ${lane.window} window.${back}`;
+      L.push(`- ${providerName(provider)}: ${text}${lane.state === 'pace' && snap.leastOverProvider === provider ? ' Every metered provider is over pace; this one is the least over, and worker start allows it.' : ''}`);
+    }
   }
   const m = snap.machine;
   if (m) {

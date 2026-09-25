@@ -127,17 +127,51 @@ function distribute(slots, weights) {
   return result;
 }
 
-function quotaRisk(q, policy) {
+// A window whose reset time has passed is unmeasured until the next reading, so its old percentage does not count.
+const liveWindow = (w, now) => !w.extra && Number.isFinite(w.usedPercent) && !(w.resetsAt && Date.parse(w.resetsAt) <= now);
+
+function quotaRisk(q, policy, now = Date.now()) {
   if (policy.providerModes[q.provider] === 'ignore' || q.error) return null;
-  const windows = (q.windows || []).filter((w) => !w.extra && Number.isFinite(w.usedPercent));
+  const windows = (q.windows || []).filter((w) => liveWindow(w, now));
   const risk = windows.filter((w) => w.usedPercent >= 100 - policy.reservePercent || (w.willLast === false && w.etaSeconds != null && w.etaSeconds <= policy.handoffLeadMinutes * 60));
   return risk.sort((a, b) => b.usedPercent - a.usedPercent)[0] || null;
 }
 
-function quotaPressure(q, policy) {
+function quotaPressure(q, policy, now = Date.now()) {
   if (policy.providerModes[q.provider] === 'ignore' || q.error) return null;
-  return (q.windows || []).filter((w) => !w.extra && w.willLast === false && w.usedPercent >= 50)
+  return (q.windows || []).filter((w) => liveWindow(w, now) && w.willLast === false && w.usedPercent >= 50)
     .sort((a, b) => b.usedPercent - a.usedPercent)[0] || null;
+}
+
+// One state per metered provider: open, pace (ahead of quota pace), reserve (near exhaustion), or unknown.
+export function laneStatus(quotas, policy, now = Date.now()) {
+  const lanes = {};
+  for (const q of quotas || []) {
+    const resetWindows = (q.windows || []).filter((w) => !w.extra && w.resetsAt && Date.parse(w.resetsAt) <= now).map((w) => w.label);
+    if (q.error) { lanes[q.provider] = { state: 'unknown', reason: String(q.error).slice(0, 200), resetWindows }; continue; }
+    if (policy.providerModes[q.provider] === 'ignore') { lanes[q.provider] = { state: 'open', ignored: true, resetWindows }; continue; }
+    const risk = quotaRisk(q, policy, now);
+    const w = risk || quotaPressure(q, policy, now);
+    if (!w) { lanes[q.provider] = { state: 'open', resetWindows }; continue; }
+    const overPercent = Number.isFinite(w.expectedPercent) ? w.usedPercent - w.expectedPercent : null;
+    const resetAt = Date.parse(w.resetsAt) || Infinity;
+    // Expected use grows by 100% per window, so an unused provider catches up at that rate.
+    const backOnPaceMs = risk ? resetAt
+      : overPercent != null && overPercent > 0 && w.windowMinutes ? Math.min(now + (overPercent / 100) * w.windowMinutes * 60000, resetAt) : resetAt;
+    lanes[q.provider] = {
+      state: risk ? 'reserve' : 'pace', window: w.label, usedPercent: w.usedPercent, expectedPercent: w.expectedPercent ?? null,
+      overPercent, backOnPaceAt: Number.isFinite(backOnPaceMs) ? new Date(backOnPaceMs).toISOString() : null, resetWindows,
+    };
+  }
+  return lanes;
+}
+
+// When no metered provider is open, the least-over provider that is only ahead of pace may start without --force.
+export function leastOverProvider(lanes) {
+  const metered = Object.entries(lanes).filter(([, lane]) => lane.state !== 'unknown');
+  if (!metered.length || metered.some(([, lane]) => lane.state === 'open')) return null;
+  const pace = metered.filter(([, lane]) => lane.state === 'pace' && lane.overPercent != null).sort((a, b) => a[1].overPercent - b[1].overPercent);
+  return pace[0]?.[0] ?? null;
 }
 
 export function deriveControl(snap, policy, models, paneSince = {}, now = Date.now()) {
@@ -172,8 +206,8 @@ export function deriveControl(snap, policy, models, paneSince = {}, now = Date.n
     const borrowed = distribute(lent, activeWeights);
     for (const [slug, count] of Object.entries(borrowed)) result[slug].slots += count;
   }
-  const risks = Object.fromEntries((snap.quotas || []).map((q) => [q.provider, quotaRisk(q, policy)]));
-  const pressures = Object.fromEntries((snap.quotas || []).map((q) => [q.provider, quotaPressure(q, policy)]));
+  const risks = Object.fromEntries((snap.quotas || []).map((q) => [q.provider, quotaRisk(q, policy, now)]));
+  const pressures = Object.fromEntries((snap.quotas || []).map((q) => [q.provider, quotaPressure(q, policy, now)]));
   const globalAllowed = Object.fromEntries(Object.entries(models.kinds).filter(([kind]) => policy.allowedKinds.includes(kind)).map(([kind, cfg]) => [kind, cfg.allowedModels.filter((m) => !policy.excludedModels.includes(m))]));
   const handoffs = [];
   for (const p of Object.values(result)) {

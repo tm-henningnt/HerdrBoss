@@ -94,3 +94,44 @@ test('the idle-worker notice skips a prepared handover successor', async () => {
   assert.match(stale.text, /w1:p7/);
   assert.doesNotMatch(stale.text, /w1:p6/);
 });
+
+test('lane status marks pace and reserve, skips reset windows, and names the least-over provider', async () => {
+  const { laneStatus, leastOverProvider } = await import('../src/control.js');
+  const now = Date.parse('2026-09-25T10:00:00Z');
+  const quotas = [
+    { provider: 'codex', windows: [{ label: 'Weekly', usedPercent: 53, expectedPercent: 43, willLast: false, windowMinutes: 10080, resetsAt: '2026-09-29T09:00:00Z' }] },
+    { provider: 'opencodego', windows: [{ label: 'Weekly', usedPercent: 69, expectedPercent: 63, willLast: false, windowMinutes: 10080, resetsAt: '2026-09-27T23:00:00Z' }] },
+    { provider: 'claude', windows: [{ label: 'Session', usedPercent: 93, expectedPercent: 40, willLast: false, windowMinutes: 300, resetsAt: '2026-09-25T09:59:00Z' }] },
+  ];
+  const lanes = laneStatus(quotas, policy(), now);
+  assert.equal(lanes.codex.state, 'pace');
+  assert.equal(lanes.codex.overPercent, 10);
+  // 10% over a 7-day window is 16.8 hours of catch-up when unused.
+  assert.equal(Date.parse(lanes.codex.backOnPaceAt) - now, 0.1 * 10080 * 60000);
+  assert.equal(lanes.claude.state, 'open');
+  assert.deepEqual(lanes.claude.resetWindows, ['Session']);
+  assert.equal(leastOverProvider(lanes), null);
+  lanes.claude = { state: 'reserve', overPercent: 50 };
+  assert.equal(leastOverProvider(lanes), 'opencodego');
+});
+
+test('worker start gate lets the least-over provider start and refuses the others with numbers', async () => {
+  const { providerGate } = await import('../src/kit/workers.js');
+  const now = Date.parse('2026-09-25T10:00:00Z');
+  const rules = {
+    avoidProviders: ['codex', 'opencodego', 'claude'],
+    leastOverProvider: 'opencodego',
+    lanes: {
+      codex: { state: 'pace', window: 'Weekly', usedPercent: 53, expectedPercent: 43, overPercent: 10, backOnPaceAt: '2026-09-26T02:48:00Z' },
+      opencodego: { state: 'pace', window: 'Weekly', usedPercent: 69, expectedPercent: 63, overPercent: 6, backOnPaceAt: '2026-09-25T20:00:00Z' },
+      claude: { state: 'reserve', window: 'Session', usedPercent: 90, expectedPercent: 60, overPercent: 30, backOnPaceAt: '2026-09-25T15:00:00Z' },
+    },
+  };
+  assert.match(providerGate('opencodego', rules, { now }).warning, /every metered provider is over pace.*least over/);
+  const refused = providerGate('codex', rules, { now }).error;
+  assert.match(refused, /codex ahead of pace: 53% used against 43% expected in the Weekly window; back on pace in about 17 h if unused/);
+  assert.match(refused, /opencodego is the least over/);
+  assert.match(providerGate('claude', rules, { now }).error, /claude near exhaustion/);
+  assert.match(providerGate('claude', rules, { now, force: true }).warning, /--force overrides the quota guard/);
+  assert.deepEqual(providerGate('pi', { avoidProviders: [] }, { now }), {});
+});

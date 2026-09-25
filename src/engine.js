@@ -7,7 +7,7 @@ import { collectHerdr, collectQuotas, collectMachine, collectProcesses, findBrow
 import { evaluate, renderBulletin, fmtDuration, providerName, broadcastTargets } from './rules.js';
 import { listProjects } from './projects.js';
 import { loadModels } from './kit/config.js';
-import { loadPolicy, deriveControl, providerFor, pickSuccessor } from './control.js';
+import { loadPolicy, deriveControl, providerFor, pickSuccessor, laneStatus, leastOverProvider } from './control.js';
 import { recordQuotaSnapshot } from './usage.js';
 import { listBrowserSessions } from './browser-pool.js';
 import { listHandoffs } from './handoff.js';
@@ -94,6 +94,8 @@ export class Engine extends EventEmitter {
       snap.projects = listProjects();
       const policy = loadPolicy();
       const control = deriveControl(snap, policy, this.models, this.memory.paneSince, now);
+      snap.lanes = laneStatus(snap.quotas, policy, now);
+      snap.leastOverProvider = leastOverProvider(snap.lanes);
       snap.policy = policy;
       snap.control = control;
       this.memory.lastOrchestrators ||= {};
@@ -195,6 +197,8 @@ export class Engine extends EventEmitter {
         updatedAt: snap.updatedAt,
         avoidKinds,
         avoidProviders: Object.keys(control.pressures).filter((provider) => control.pressures[provider] || control.risks[provider]),
+        lanes: snap.lanes,
+        leastOverProvider: snap.leastOverProvider,
         preferredKinds,
         memFreePercent: machine?.memFreePercent ?? null,
         load: machine ? { oneMinute: machine.load[0], fiveMinute: machine.load[1], cpus: machine.cpus, limit: machine.cpus * this.cfg.machine.loadWarnFactor } : null,
