@@ -10,7 +10,7 @@ import { loadModels } from './kit/config.js';
 import { loadPolicy, deriveControl, providerFor, pickSuccessor, laneStatus, leastOverProvider } from './control.js';
 import { recordQuotaSnapshot } from './usage.js';
 import { listBrowserSessions } from './browser-pool.js';
-import { listHandoffs } from './handoff.js';
+import { listHandoffs, expireHandoff } from './handoff.js';
 
 const MEMORY_FILE = path.join(DATA_DIR, 'memory.json');
 const STATE_FILE = path.join(DATA_DIR, 'state.json');
@@ -160,6 +160,28 @@ export class Engine extends EventEmitter {
             ? `${h.provider} is at ${h.window.usedPercent}% in its ${h.window.label} window. Prepare a ${h.target.kind} (${h.target.model}${h.target.effort ? `, ${h.target.effort}` : ''}) successor before the orchestrator runs out. Use herdr-boss handoff plan ${h.pane} --to ${h.target.kind} --model ${h.target.model}${h.target.effort ? ` --effort ${h.target.effort}` : ''}, then handoff prepare after review. Keep the current orchestrator until the successor is ready.`
             : `${h.provider} is at ${h.window.usedPercent}% in its ${h.window.label} window, but no eligible choice remains in the orchestrator succession ladder. Review Allocation and prepare a successor manually before this quota runs out.`,
         });
+      }
+      let handoffRecords = [];
+      try { handoffRecords = listHandoffs(); } catch {}
+      for (const h of handoffRecords) {
+        if (['prepared', 'needs-inspection'].includes(h.status) && h.promptError) evaluation.alerts.push({
+          key: `successor:prompt:${h.id}`, severity: 'warn', once: true, scope: h.workspace || 'user',
+          title: `${h.project} successor did not get its prompt`,
+          text: `The bootstrap prompt did not reach the proposed successor ${h.id} in pane ${h.newPane}. It cannot report ready, so automatic activation cannot happen. Read the pane with herdr agent read ${h.newPane}, then send the prompt again or close the pane and prepare a new successor.`,
+        });
+        // Expire an automatic successor two hours after preparation when its source provider is no longer at risk.
+        const sourceProvider = providerFor(h.fromKind, null);
+        if (h.status === 'prepared' && h.automatic && now - Date.parse(h.preparedAt) > 2 * 3600000 && !control.risks[sourceProvider]) {
+          const expired = this.act ? expireHandoff(h.id, `${sourceProvider || 'the source provider'} is no longer near its limit`) : null;
+          if (expired) {
+            this.log('handoff', `Expired unused successor ${h.id} in pane ${h.newPane}`, { project: h.project, pane: h.newPane });
+            evaluation.alerts.push({
+              key: `successor:expired:${h.id}`, severity: 'info', once: true, scope: h.workspace || 'user',
+              title: `${h.project} successor expired`,
+              text: `The prepared successor ${h.id} in pane ${h.newPane} expired: ${expired.expiredReason}. Close that pane when you do not need it. Boss prepares a new successor if the quota comes near its limit again.`,
+            });
+          }
+        }
       }
       for (const p of Object.values(control.projects)) if (p.running > p.slots && !p.idle) evaluation.alerts.push({
         key: `allocation:${p.workspace}:${p.slots}`, severity: 'info', scope: p.workspace,

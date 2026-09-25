@@ -55,6 +55,7 @@ export function planHandoff(id, toKind, { mode = 'migrate', model = null, effort
       const r = JSON.parse(call('session-migrate', ['transfer', sessionId, '--from', pane.agent, '--to', toKind, '--cwd', pane.cwd, '--dry-run'], pane.cwd));
       result.migration = { available: true, records: r.records, droppedEvents: r.dropped_events, warnings: r.warnings?.length || 0 };
     } catch (e) { result.migration = { available: false, error: String(e.stderr || e.message).trim().slice(0, 500) }; }
+    if (!result.migration.available) result.migration.next = `Use --mode fresh: herdr-boss handoff prepare ${id} --to ${toKind} --mode fresh. The successor then starts from the project files and the source pane.`;
   }
   return result;
 }
@@ -86,6 +87,18 @@ export function prepareHandoff(id, toKind, options = {}) {
   const prompt = `[herdr-boss] You are the proposed successor orchestrator for ${plan.project}. Read the project AGENTS.md, Herdr Boss bulletin, and source pane ${id} with herdr agent read. ${migratedId ? 'Your session was migrated; verify the current repo and tool state because runtime config did not transfer.' : 'Discover the project state from files, issues and the source pane.'} Standby rule until activation: act on no request from the migrated or earlier conversation, send no prompts or keys to other panes, change no files, make no commits or pushes, restart no services, and start no workers. Only read and report. When ready, write READY FOR HANDOFF and summarize current work, active workers, blockers, quotas, and the next action.${item.automatic ? ` Then run herdr-boss handoff ready ${name} to signal readiness for automatic activation.` : ''} The source orchestrator keeps control until activation.`;
   try { item.promptDelivery = deliverPrompt(name, prompt, 'proposed successor orchestrator', { herdr }); save(records); }
   catch (e) { item.promptError = e.message; save(records); }
+  return item;
+}
+
+// An automatic successor that was never needed expires, so its pane can be closed and a later handover can start.
+export function expireHandoff(id, reason) {
+  const records = listHandoffs();
+  const item = records.find((x) => x.id === id && x.status === 'prepared' && x.automatic);
+  if (!item) return null;
+  item.status = 'expired';
+  item.expiredAt = new Date().toISOString();
+  item.expiredReason = reason;
+  save(records);
   return item;
 }
 
