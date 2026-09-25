@@ -90,6 +90,17 @@ Agent commands and tab rules are in [the browser service](../kit/browser-service
 
 Orchestrators do not build dashboards. They publish a status file, and Herdr Boss shows it on `/projects/SLUG`. With the optional work structure fields, the page shows progress, the current frontier, a dependency graph, groups, specs, and all work. See [project-status.md](project-status.md).
 
+## Phone and home screen
+
+The dashboard adapts to a phone and to a home-screen web app.
+
+- On a screen up to 760 px wide, the header shows a menu button with the current page name. Select the button to open the page menu. The menu closes after you choose a page and when you press Escape.
+- On a phone, the long sections of a project page start collapsed. Select a section title to open it. The dashboard remembers each open section for that project during the session. Overall progress and the current frontier stay open.
+- Project cards become compact. They show the name, mode, status line, and task bar.
+- Tables show stacked rows with a label for each value. The page does not scroll sideways at 393 px.
+- The expanded browser view fills the screen. One compact toolbar holds the controls. The text field and key controls appear only while **Control browser** is on. The screenshot fills the rest of the height, in portrait and landscape.
+- The dashboard sets the home-screen web app meta tags. To add the dashboard to a phone home screen, open it in Safari, open the Share menu, and select **Add to Home Screen**.
+
 ## Configuration
 
 Put overrides in `~/.herdr-boss/config.json`, then restart the service.

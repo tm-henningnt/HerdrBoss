@@ -4,6 +4,13 @@ const $updated = document.getElementById('updated');
 const $crumbs = document.getElementById('crumbs');
 const $nav = document.getElementById('primary-nav');
 const $roamgate = document.getElementById('roamgate-link');
+const $navMenu = document.getElementById('nav-menu');
+const $navMenuLabel = document.getElementById('nav-menu-label');
+const NAV_LABEL = { overview: 'Overview', projects: 'Projects', allocation: 'Allocation', agents: 'Agents', browsers: 'Browsers', analytics: 'Analytics', logs: 'Logs' };
+function setNavMenu(open) {
+  $nav.classList.toggle('open', open);
+  $navMenu.setAttribute('aria-expanded', String(open));
+}
 
 let state = null;
 let lastRender = '';
@@ -230,7 +237,11 @@ function handoffBlock(s, projectSlug = null) {
     }),
   ];
   const empty = projectSlug && !project?.orch ? '<div class="calm-state">No labeled orchestrator is available for this workspace. Label its pane <code>orch</code> in Herdr before planning a handover.</div>' : '<p class="empty">No orchestrator handovers need action.</p>';
-  return `<section class="handoff-section"><div class="section-head"><h2>Project continuity</h2><span>${cards.length ? projectSlug && !prepared.length && !candidates.some((h) => h.window) ? 'Start when needed' : `${cards.length} need review` : 'No handovers pending'}</span></div>${cards.length ? `<div class="handoff-list">${cards.join('')}</div>` : empty}</section>`;
+  const countText = cards.length ? (projectSlug && !prepared.length && !candidates.some((h) => h.window) ? 'Start when needed' : `${cards.length} need review`) : 'No handovers pending';
+  const head = `<div class="section-head"><h2>Project continuity</h2><span>${countText}</span></div>`;
+  const body = cards.length ? `<div class="handoff-list">${cards.join('')}</div>` : empty;
+  if (!projectSlug) return `<section class="handoff-section">${head}${body}</section>`;
+  return collapsible({ slug: projectSlug, key: 'continuity', className: 'handoff-section', head, title: 'Project continuity', count: countText, body });
 }
 
 function browserViewToggle(slug, withProject = true) {
@@ -462,7 +473,7 @@ function agentRow(p, s) {
   </li>`;
 }
 
-function workspacesBlock(s) {
+function workspacesBlock(s, slug) {
   const h = s.herdr;
   if (!h) return '';
   const cards = h.workspaces.map((w) => {
@@ -476,7 +487,7 @@ function workspacesBlock(s) {
       ${hasOrch ? '' : `<div class="noorch">No orchestrator. Label one with <code>herdr pane rename &lt;pane&gt; orch</code>.</div>`}
     </div>`;
   }).join('');
-  return `<section><h2>Workspaces <span class="sub">live from Herdr</span></h2><div class="ws-grid">${cards}</div></section>`;
+  return collapsible({ slug, key: 'workspaces', head: '<h2>Workspaces <span class="sub">live from Herdr</span></h2>', title: 'Workspaces', count: `${h.workspaces.length}`, body: `<div class="ws-grid">${cards}</div>` });
 }
 
 function agentProfile(p, s) {
@@ -569,7 +580,7 @@ function browsersBlock(s) {
   if (!br.length) return '';
   const pane = (id) => s.herdr?.panes.find((p) => p.id === id);
   return `<table class="browsers"><thead><tr><th>Process</th><th>PID</th><th>Owner</th><th>Age</th><th>MB</th></tr></thead><tbody>
-    ${br.map((b) => { const p = pane(b.pane); return `<tr><td>${esc(b.kind)}${b.headless ? ' (headless)' : ''}${b.port ? ` :${b.port}` : ''}</td><td class="mono">${b.pid}</td><td>${p ? esc(p.name || p.id) : b.shared ? `<span title="${esc(b.shared)}">shared</span>` : b.orphan ? '<span class="stale">orphan</span>' : '–'}</td><td class="mono">${dur(b.age)}</td><td class="mono">${b.rssMB}</td></tr>`; }).join('')}
+    ${br.map((b) => { const p = pane(b.pane); return `<tr><td data-label="Process">${esc(b.kind)}${b.headless ? ' (headless)' : ''}${b.port ? ` :${b.port}` : ''}</td><td class="mono" data-label="PID">${b.pid}</td><td data-label="Owner">${p ? esc(p.name || p.id) : b.shared ? `<span title="${esc(b.shared)}">shared</span>` : b.orphan ? '<span class="stale">orphan</span>' : '–'}</td><td class="mono" data-label="Age">${dur(b.age)}</td><td class="mono" data-label="MB">${b.rssMB}</td></tr>`; }).join('')}
   </tbody></table>`;
 }
 
@@ -606,7 +617,7 @@ function fleetBlock(s) {
   return `<section class="fleet-section"><div class="section-head"><h2>Projects</h2><a href="/agents">Live agents →</a></div>${projectSelector(s, null)}<div class="fleet-table-wrap"><table class="fleet-table"><thead><tr><th>Project</th><th>Orchestrator</th><th>Workers</th><th>Policy</th><th>Published status</th></tr></thead><tbody>${projects.map((p) => {
     const published = (s.projects || []).find((x) => x.slug === p.slug);
     const detail = `/projects/${p.slug}`;
-    return `<tr><td><a href="${esc(detail)}"><strong>${esc(p.label)}</strong></a><small>${esc(p.workspace)}</small></td><td>${p.orch ? `<span class="status-inline"><span class="st ${esc(p.orch.status)}"></span>${esc(p.orch.kind)} · ${esc(p.orch.status)}</span>` : '<span class="text-crit">Missing</span>'}</td><td class="mono">${p.running} / ${p.slots}</td><td>${esc(p.effectiveMode === 'paused' ? 'Paused' : p.idle ? 'Idle · lending' : `${Math.round(p.share)}% share`)}</td><td>${published ? `${esc(published.status || published.phase || 'Published')}<small>updated ${ago(published.updated)}</small>` : '<span class="muted">Not published</span>'}</td></tr>`;
+    return `<tr><td data-label="Project"><a href="${esc(detail)}"><strong>${esc(p.label)}</strong></a><small>${esc(p.workspace)}</small></td><td data-label="Orchestrator">${p.orch ? `<span class="status-inline"><span class="st ${esc(p.orch.status)}"></span>${esc(p.orch.kind)} · ${esc(p.orch.status)}</span>` : '<span class="text-crit">Missing</span>'}</td><td class="mono" data-label="Workers">${p.running} / ${p.slots}</td><td data-label="Policy">${esc(p.effectiveMode === 'paused' ? 'Paused' : p.idle ? 'Idle · lending' : `${Math.round(p.share)}% share`)}</td><td data-label="Published status">${published ? `${esc(published.status || published.phase || 'Published')}<small>updated ${ago(published.updated)}</small>` : '<span class="muted">Not published</span>'}</td></tr>`;
   }).join('')}</tbody></table></div></section>`;
 }
 
@@ -676,17 +687,17 @@ function usageBlock() {
   const runs = rows.reduce((n, [, x]) => n + x.runs, 0);
   const measured = rows.reduce((n, [, x]) => n + x.measuredRuns, 0);
   const minutes = rows.reduce((n, [, x]) => n + x.workMinutes, 0);
-  return `<section id="usage"><div class="section-head"><h2>Work recorded</h2><span>Measured runs are a subset of recorded runs</span></div><div class="usage-metrics"><div><strong>${runs}</strong><span>worker runs</span></div><div><strong>${measured} / ${runs}</strong><span>with token counts</span></div><div><strong>${Math.round(minutes)}</strong><span>work minutes</span></div></div>${rows.length ? `<div class="fleet-table-wrap"><table class="fleet-table"><thead><tr><th>Project</th><th>Runs</th><th>Measured</th><th>Input</th><th>Output</th><th>Work time</th></tr></thead><tbody>${rows.map(([slug, x]) => `<tr><td><a href="/projects/${esc(slug)}"><strong>${esc(state.control?.projects?.[slug]?.label || slug)}</strong></a></td><td class="mono">${x.runs}</td><td class="mono">${x.measuredRuns} / ${x.runs}</td><td class="mono">${x.inputTokens.toLocaleString()}</td><td class="mono">${x.outputTokens.toLocaleString()}</td><td class="mono">${Math.round(x.workMinutes)} min</td></tr>`).join('')}</tbody></table></div>` : '<div class="calm-state">No worker runs have been recorded yet. Orchestrators add them with <code>herdr-boss worker collect --record</code>.</div>'}</section>`;
+  return `<section id="usage"><div class="section-head"><h2>Work recorded</h2><span>Measured runs are a subset of recorded runs</span></div><div class="usage-metrics"><div><strong>${runs}</strong><span>worker runs</span></div><div><strong>${measured} / ${runs}</strong><span>with token counts</span></div><div><strong>${Math.round(minutes)}</strong><span>work minutes</span></div></div>${rows.length ? `<div class="fleet-table-wrap"><table class="fleet-table"><thead><tr><th>Project</th><th>Runs</th><th>Measured</th><th>Input</th><th>Output</th><th>Work time</th></tr></thead><tbody>${rows.map(([slug, x]) => `<tr><td data-label="Project"><a href="/projects/${esc(slug)}"><strong>${esc(state.control?.projects?.[slug]?.label || slug)}</strong></a></td><td class="mono" data-label="Runs">${x.runs}</td><td class="mono" data-label="Measured">${x.measuredRuns} / ${x.runs}</td><td class="mono" data-label="Input">${x.inputTokens.toLocaleString()}</td><td class="mono" data-label="Output">${x.outputTokens.toLocaleString()}</td><td class="mono" data-label="Work time">${Math.round(x.workMinutes)} min</td></tr>`).join('')}</tbody></table></div>` : '<div class="calm-state">No worker runs have been recorded yet. Orchestrators add them with <code>herdr-boss worker collect --record</code>.</div>'}</section>`;
 }
 
 function providerUsageBlock() {
   const rows = Object.entries(usage?.byProvider || {});
-  return `<section><div class="section-head"><h2>By provider</h2><span>Recorded work, not subscription balance</span></div>${rows.length ? `<div class="fleet-table-wrap"><table class="fleet-table"><thead><tr><th>Provider</th><th>Runs</th><th>Measured</th><th>Input</th><th>Output</th><th>Work time</th></tr></thead><tbody>${rows.map(([provider, x]) => `<tr><td><strong>${esc(PROVIDERS[provider] || provider)}</strong></td><td class="mono">${x.runs}</td><td class="mono">${x.measuredRuns} / ${x.runs}</td><td class="mono">${x.inputTokens.toLocaleString()}</td><td class="mono">${x.outputTokens.toLocaleString()}</td><td class="mono">${Math.round(x.workMinutes)} min</td></tr>`).join('')}</tbody></table></div>` : '<div class="calm-state">Provider usage will appear as worker runs are recorded.</div>'}</section>`;
+  return `<section><div class="section-head"><h2>By provider</h2><span>Recorded work, not subscription balance</span></div>${rows.length ? `<div class="fleet-table-wrap"><table class="fleet-table"><thead><tr><th>Provider</th><th>Runs</th><th>Measured</th><th>Input</th><th>Output</th><th>Work time</th></tr></thead><tbody>${rows.map(([provider, x]) => `<tr><td data-label="Provider"><strong>${esc(PROVIDERS[provider] || provider)}</strong></td><td class="mono" data-label="Runs">${x.runs}</td><td class="mono" data-label="Measured">${x.measuredRuns} / ${x.runs}</td><td class="mono" data-label="Input">${x.inputTokens.toLocaleString()}</td><td class="mono" data-label="Output">${x.outputTokens.toLocaleString()}</td><td class="mono" data-label="Work time">${Math.round(x.workMinutes)} min</td></tr>`).join('')}</tbody></table></div>` : '<div class="calm-state">Provider usage will appear as worker runs are recorded.</div>'}</section>`;
 }
 
 function recentUsageBlock() {
   const rows = usage?.recent || [];
-  return `<section><div class="section-head"><h2>Recent recorded work</h2><span>Latest ${rows.length} runs</span></div>${rows.length ? `<div class="fleet-table-wrap"><table class="fleet-table"><thead><tr><th>Finished</th><th>Project</th><th>Harness / model</th><th>Outcome</th><th>Tokens</th></tr></thead><tbody>${rows.map((r) => `<tr><td>${esc(clock(r.endedAt))}</td><td><a href="/projects/${esc(r.project)}">${esc(r.project)}</a></td><td>${esc(r.kind)}<small>${esc(r.model)}</small></td><td>${esc(r.outcome)}</td><td class="mono">${r.inputTokens != null || r.outputTokens != null ? `${(r.inputTokens || 0).toLocaleString()} in · ${(r.outputTokens || 0).toLocaleString()} out` : 'unmeasured'}</td></tr>`).join('')}</tbody></table></div>` : '<div class="calm-state">No run history yet.</div>'}</section>`;
+  return `<section><div class="section-head"><h2>Recent recorded work</h2><span>Latest ${rows.length} runs</span></div>${rows.length ? `<div class="fleet-table-wrap"><table class="fleet-table"><thead><tr><th>Finished</th><th>Project</th><th>Harness / model</th><th>Outcome</th><th>Tokens</th></tr></thead><tbody>${rows.map((r) => `<tr><td data-label="Finished">${esc(clock(r.endedAt))}</td><td data-label="Project"><a href="/projects/${esc(r.project)}">${esc(r.project)}</a></td><td data-label="Harness / model">${esc(r.kind)}<small>${esc(r.model)}</small></td><td data-label="Outcome">${esc(r.outcome)}</td><td class="mono" data-label="Tokens">${r.inputTokens != null || r.outputTokens != null ? `${(r.inputTokens || 0).toLocaleString()} in · ${(r.outputTokens || 0).toLocaleString()} out` : 'unmeasured'}</td></tr>`).join('')}</tbody></table></div>` : '<div class="calm-state">No run history yet.</div>'}</section>`;
 }
 
 // ---------- Project page ----------
@@ -700,6 +711,28 @@ const safeUrl = (url) => (/^https?:\/\//i.test(String(url || '')) ? String(url) 
 const byId = (a, b) => String(a.id ?? '').localeCompare(String(b.id ?? ''), undefined, { numeric: true });
 const isDone = (t) => (t.status || 'todo') === 'done';
 const STATUS_COLOR = { todo: 'faint', doing: 'info', review: 'accent', blocked: 'crit', done: 'ok' };
+
+// Phone layout: a top menu, collapsed project sections, and compact cards and tables.
+const phoneMedia = window.matchMedia('(max-width: 760px)');
+const isPhone = () => phoneMedia.matches;
+const FOLD_PREFIX = 'herdr-boss.project-folds.';
+function foldState(slug) {
+  try { const value = JSON.parse(sessionStorage.getItem(FOLD_PREFIX + slug)); return value && typeof value === 'object' && !Array.isArray(value) ? value : {}; } catch { return {}; }
+}
+function foldOpen(slug, key) { return foldState(slug)[key] === true; }
+function setFoldOpen(slug, key, open) {
+  const value = foldState(slug);
+  value[key] = open;
+  try { sessionStorage.setItem(FOLD_PREFIX + slug, JSON.stringify(value)); } catch {}
+}
+// A long project section stays a plain section on a desktop. On a phone it becomes a details element that remembers its open state for the session.
+function collapsible({ slug, key, className = '', head = '', title, count = '', controls = '', body }) {
+  if (!isPhone()) return `<section${className ? ` class="${esc(className)}"` : ''}>${head}${body}</section>`;
+  const open = foldOpen(slug, key);
+  return `<details class="fold-phone${className ? ` ${esc(className)}` : ''}" data-project-fold="${esc(slug)}" data-fold-key="${esc(key)}"${open ? ' open' : ''}>`
+    + `<summary class="fold-summary"><h2>${esc(title)}${count ? ` <span class="sub">${esc(count)}</span>` : ''}</h2><span class="fold-chevron" aria-hidden="true"></span></summary>`
+    + `<div class="fold-body">${controls}${body}</div></details>`;
+}
 
 // Current frontier: open work whose known blockers are all done. Next: open work that waits only on the current frontier.
 // An orchestrator can set tasks[].frontier itself; then the Boss uses that and derives nothing.
@@ -745,9 +778,9 @@ function programBlock(m) {
     <div class="panel"><h2>Next <span class="sub">${m.explicit ? 'set by the orchestrator' : 'waits only on the current frontier'}</span></h2>${list(m.next, 'Nothing waits only on the current frontier.')}</div></section>`;
 }
 
-function groupsBlock(m) {
+function groupsBlock(m, slug) {
   if (!(m.groups.length > 1 || (m.groups[0] && m.groups[0].id))) return '';
-  return `<section><h2>Groups <span class="sub">releases or phases in the published order</span></h2><div class="group-grid">${m.groups.map((g) => {
+  const body = `<div class="group-grid">${m.groups.map((g) => {
     const items = m.tasks.filter((t) => (g.id ? t.group === g.id : !t.group || !m.groups.some((x) => x.id && x.id === t.group)));
     if (!items.length && !g.id) return '';
     const open = items.filter((t) => !isDone(t)).sort(byId);
@@ -755,19 +788,21 @@ function groupsBlock(m) {
     return `<article class="panel group-card"><div class="proj-head"><b>${esc(g.title)}</b>${open.some((t) => m.current.has(t)) ? '<span class="tag">active</span>' : !open.length && items.length ? '<span class="tag">complete</span>' : ''}</div>
       ${progressBar(items.length - open.length, items.length)}${g.note ? `<p>${esc(g.note)}</p>` : ''}${refs ? `<small>${refs}</small>` : ''}
       ${open.length ? `<ul class="chip-list">${open.slice(0, 8).map((t) => taskChip(t, m.current.has(t) ? ' current' : '')).join('')}</ul>${open.length > 8 ? `<small>+${open.length - 8} more open</small>` : ''}` : ''}</article>`;
-  }).join('')}</div></section>`;
+  }).join('')}</div>`;
+  return collapsible({ slug, key: 'groups', head: '<h2>Groups <span class="sub">releases or phases in the published order</span></h2>', title: 'Groups', count: `${m.groups.length}`, body });
 }
 
-function specsBlock(m) {
+function specsBlock(m, slug) {
   const specs = m.tasks.filter((t) => t.kind === 'spec').sort(byId);
   if (!specs.length) return '';
-  return `<section><h2>Specs <span class="sub">${specs.length} · progress of the work under each spec</span></h2><div class="spec-list">${specs.map((spec) => {
+  const body = `<div class="spec-list">${specs.map((spec) => {
     const children = m.tasks.filter((t) => t.parent && t.parent === spec.id);
     const done = children.filter(isDone).length;
     const url = safeUrl(spec.url);
     return `<article class="panel spec-row"><div><span class="st-badge s-${esc(spec.status || 'todo')}">${esc(STATUS_LABEL[spec.status || 'todo'] || spec.status)}</span> ${spec.id ? `<b>${esc(spec.id)}</b> ` : ''}${url ? `<a href="${esc(url)}" target="_blank" rel="noreferrer">${esc(spec.title)}</a>` : esc(spec.title)}</div>
       ${children.length ? progressBar(done, children.length) : '<small class="muted">No work linked with parent</small>'}</article>`;
-  }).join('')}</div></section>`;
+  }).join('')}</div>`;
+  return collapsible({ slug, key: 'specs', head: `<h2>Specs <span class="sub">${specs.length} · progress of the work under each spec</span></h2>`, title: 'Specs', count: `${specs.length}`, body });
 }
 
 // Layered dependency graph: each column holds tasks whose blockers sit in earlier columns. Arrows run from blocker to dependent.
@@ -824,12 +859,12 @@ function dependencyGraph(m, slug) {
       <text x="${x + 9}" y="${y + 35}" class="dep-title">${esc(t.title.length > 24 ? `${t.title.slice(0, 23)}…` : t.title)}</text><title>${esc(`${t.id} ${t.title} (${STATUS_LABEL[t.status || 'todo']})`)}</title>`;
     return url ? `<a href="${esc(url)}" target="_blank" rel="noreferrer">${body}</a>` : `<g>${body}</g>`;
   }).join('');
-  return `<section class="dep-section"><div class="section-head"><h2>Dependencies <span class="sub">arrows run from blocker to dependent · columns show order</span></h2>
-    <label class="inline-toggle"><input type="checkbox" data-project-done="${esc(slug)}" ${view.showDone ? 'checked' : ''}> Show completed work</label></div>
-    <div class="dep-legend"><span class="s-todo">To do</span><span class="s-doing">In progress</span><span class="s-review">Review</span><span class="s-blocked">Blocked</span><span class="s-done">Done</span><span class="current">Current frontier</span><span class="next">Next</span></div>
+  const toggle = `<label class="inline-toggle"><input type="checkbox" data-project-done="${esc(slug)}" ${view.showDone ? 'checked' : ''}> Show completed work</label>`;
+  const body = `<div class="dep-legend"><span class="s-todo">To do</span><span class="s-doing">In progress</span><span class="s-review">Review</span><span class="s-blocked">Blocked</span><span class="s-done">Done</span><span class="current">Current frontier</span><span class="next">Next</span></div>
     <div class="panel dep-scroll"><svg class="dep-graph" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="Dependency graph with ${nodes.length} tasks">
       <defs><marker id="dep-arrow-${esc(slug)}" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L8,4 L0,8 z" class="dep-arrow"></path></marker></defs>${paths}${boxes}</svg></div>
-    ${truncated ? '<small class="muted">The graph shows the first 90 open tasks. Filter the issue list below for the rest.</small>' : ''}</section>`;
+    ${truncated ? '<small class="muted">The graph shows the first 90 open tasks. Filter the issue list below for the rest.</small>' : ''}`;
+  return collapsible({ slug, key: 'dependencies', className: 'dep-section', head: `<div class="section-head"><h2>Dependencies <span class="sub">arrows run from blocker to dependent · columns show order</span></h2>${toggle}</div>`, title: 'Dependencies', count: `${edges.length}`, controls: `<div class="fold-controls">${toggle}</div>`, body });
 }
 
 function issueTable(m, slug) {
@@ -845,23 +880,24 @@ function issueTable(m, slug) {
   };
   rows = rows.sort(sorts[view.sort] || sorts.order);
   const groups = m.groups.filter((g) => g.id);
-  return `<section><div class="section-head"><h2>All work <span class="sub">${rows.length} shown of ${m.tasks.length}</span></h2><div class="issue-tools">
+  const tools = `<div class="issue-tools">
     <label>Sort <select data-project-sort="${esc(slug)}">${[['order', 'Frontier first'], ['id', 'ID'], ['status', 'Status'], ['updated', 'Recently updated']].map(([v, l]) => `<option value="${v}" ${view.sort === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
     ${groups.length ? `<label>Group <select data-project-group="${esc(slug)}"><option value="all">All groups</option>${groups.map((g) => `<option value="${esc(g.id)}" ${view.group === g.id ? 'selected' : ''}>${esc(g.title)}</option>`).join('')}</select></label>` : ''}
-    <label class="inline-toggle"><input type="checkbox" data-project-done="${esc(slug)}" ${view.showDone ? 'checked' : ''}> Show completed</label></div></div>
-    <div class="panel issue-table-wrap"><table class="issue-table"><thead><tr><th>ID</th><th>Title</th><th>Status</th><th>Group</th><th>Blocked by</th><th>Labels</th><th>Updated</th></tr></thead><tbody>${rows.map((t) => {
+    <label class="inline-toggle"><input type="checkbox" data-project-done="${esc(slug)}" ${view.showDone ? 'checked' : ''}> Show completed</label></div>`;
+  const table = `<div class="panel issue-table-wrap"><table class="issue-table"><thead><tr><th>ID</th><th>Title</th><th>Status</th><th>Group</th><th>Blocked by</th><th>Labels</th><th>Updated</th></tr></thead><tbody>${rows.map((t) => {
       const url = safeUrl(t.url);
       const waits = m.openBlockers(t);
       const group = m.groups.find((g) => g.id && g.id === t.group);
-      return `<tr class="${m.current.has(t) ? 'row-current' : ''}"><td class="mono">${esc(t.id || '')}</td><td>${url ? `<a href="${esc(url)}" target="_blank" rel="noreferrer">${esc(t.title)}</a>` : esc(t.title)}${t.kind ? ` <span class="tag">${esc(t.kind)}</span>` : ''}${m.current.has(t) ? ' <span class="tag current">current</span>' : m.next.has(t) ? ' <span class="tag">next</span>' : ''}</td><td><span class="st-badge s-${esc(t.status || 'todo')}">${esc(STATUS_LABEL[t.status || 'todo'] || t.status)}</span></td><td>${esc(group?.title || '')}</td><td class="mono">${(t.blockedBy || []).map((id) => `<span class="${waits.includes(id) ? 'text-crit' : 'muted'}">${esc(id)}</span>`).join(' ')}</td><td>${(t.labels || []).map((l) => `<span class="tag">${esc(l)}</span>`).join(' ')}</td><td class="mono">${t.updated ? esc(ago(t.updated)) : ''}</td></tr>`;
-    }).join('') || '<tr><td colspan="7" class="muted">No work matches the filter.</td></tr>'}</tbody></table></div></section>`;
+      return `<tr class="${m.current.has(t) ? 'row-current' : ''}"><td class="mono" data-label="ID">${esc(t.id || '')}</td><td data-label="Title">${url ? `<a href="${esc(url)}" target="_blank" rel="noreferrer">${esc(t.title)}</a>` : esc(t.title)}${t.kind ? ` <span class="tag">${esc(t.kind)}</span>` : ''}${m.current.has(t) ? ' <span class="tag current">current</span>' : m.next.has(t) ? ' <span class="tag">next</span>' : ''}</td><td data-label="Status"><span class="st-badge s-${esc(t.status || 'todo')}">${esc(STATUS_LABEL[t.status || 'todo'] || t.status)}</span></td><td data-label="Group">${esc(group?.title || '')}</td><td class="mono" data-label="Blocked by">${(t.blockedBy || []).map((id) => `<span class="${waits.includes(id) ? 'text-crit' : 'muted'}">${esc(id)}</span>`).join(' ')}</td><td data-label="Labels">${(t.labels || []).map((l) => `<span class="tag">${esc(l)}</span>`).join(' ')}</td><td class="mono" data-label="Updated">${t.updated ? esc(ago(t.updated)) : ''}</td></tr>`;
+    }).join('') || '<tr><td colspan="7" class="muted" data-label="">No work matches the filter.</td></tr>'}</tbody></table></div>`;
+  return collapsible({ slug, key: 'work', head: `<div class="section-head"><h2>All work <span class="sub">${rows.length} shown of ${m.tasks.length}</span></h2>${tools}</div>`, title: 'All work', count: `${rows.length} of ${m.tasks.length}`, controls: tools, body: table });
 }
 
 function gatesRisksBlock(p) {
   const gates = Array.isArray(p.gates) ? p.gates : [];
   const risks = Array.isArray(p.risks) ? p.risks : [];
   if (!gates.length && !risks.length) return '';
-  return `<section class="two">${gates.length ? `<div class="panel"><h2>Human gates</h2><table class="issue-table"><thead><tr><th>Gate</th><th>Needs</th><th>Evidence</th><th>Status</th></tr></thead><tbody>${gates.map((g) => `<tr><td>${g.id ? `<b class="mono">${esc(g.id)}</b> ` : ''}${esc(g.title)}</td><td>${esc(g.needs || '')}</td><td>${esc(g.evidence || '')}</td><td>${esc(g.status || '')}</td></tr>`).join('')}</tbody></table></div>` : ''}
+  return `<section class="two">${gates.length ? `<div class="panel"><h2>Human gates</h2><table class="issue-table"><thead><tr><th>Gate</th><th>Needs</th><th>Evidence</th><th>Status</th></tr></thead><tbody>${gates.map((g) => `<tr><td data-label="Gate">${g.id ? `<b class="mono">${esc(g.id)}</b> ` : ''}${esc(g.title)}</td><td data-label="Needs">${esc(g.needs || '')}</td><td data-label="Evidence">${esc(g.evidence || '')}</td><td data-label="Status">${esc(g.status || '')}</td></tr>`).join('')}</tbody></table></div>` : ''}
     ${risks.length ? `<div class="panel"><h2>Risks</h2><ul class="notes">${risks.map((r) => `<li>${code(r)}</li>`).join('')}</ul></div>` : ''}</section>`;
 }
 
@@ -887,15 +923,15 @@ function project(s, slug) {
     const list = (p.tasks || []).filter((t) => (t.status || 'todo') === k);
     return k === 'done' && !view.showDone ? list.sort((a, b) => String(b.updated || '').localeCompare(String(a.updated || ''))).slice(0, 10) : list;
   };
-  const board = (p.tasks || []).length ? `<section><h2>Tasks <span class="sub">${(p.tasks || []).length} total · worker status is live from Herdr${!view.showDone && c.done > 10 ? ` · Done shows the latest 10 of ${c.done}` : ''}</span></h2><div class="board">${STATUSES.map((k) => `<div class="col" style="--c:var(--${colors[k]})"><h3><span>${STATUS_LABEL[k]}</span><span class="num">${c[k]}</span></h3>
+  const board = (p.tasks || []).length ? collapsible({ slug, key: 'board', head: `<h2>Tasks <span class="sub">${(p.tasks || []).length} total · worker status is live from Herdr${!view.showDone && c.done > 10 ? ` · Done shows the latest 10 of ${c.done}` : ''}</span></h2>`, title: 'Tasks', count: `${(p.tasks || []).length}`, body: `<div class="board">${STATUSES.map((k) => `<div class="col" style="--c:var(--${colors[k]})"><h3><span>${STATUS_LABEL[k]}</span><span class="num">${c[k]}</span></h3>
       ${columnTasks(k).map((t) => {
         const w = t.worker && byName.get(t.worker);
         return `<div class="task">${t.id ? `<span class="id">${esc(t.id)}</span>` : ''}<span class="title">${esc(t.title)}</span>${t.note ? `<span class="note">${esc(t.note)}</span>` : ''}${t.worker ? `<span class="w"><span class="st ${w ? w.status : 'shell'}"></span>${esc(t.worker)}${w ? ` · ${esc(w.status)}` : ' · not running'}</span>` : ''}</div>`;
-      }).join('')}</div>`).join('')}</div></section>` : '';
+      }).join('')}</div>`).join('')}</div>` }) : '';
   const links = p.links?.length ? `<div class="panel"><h2>Links</h2><ul class="links">${p.links.map((l) => safeUrl(l.url) ? `<li><a href="${esc(safeUrl(l.url))}" target="_blank" rel="noreferrer">${esc(l.label || l.url)}</a></li>` : `<li>${esc(l.label || '')}</li>`).join('')}</ul></div>` : '';
   const notes = p.notes?.length ? `<div class="panel"><h2>Notes</h2><ul class="notes">${p.notes.map((n) => `<li>${code(n)}</li>`).join('')}</ul></div>` : '';
   const ws = p.workspace && s.herdr?.workspaces.find((w) => w.id === p.workspace || w.label === p.workspace);
-  const wsBlock = ws ? workspacesBlock({ ...s, herdr: { ...s.herdr, workspaces: [ws] } }) : '';
+  const wsBlock = ws ? workspacesBlock({ ...s, herdr: { ...s.herdr, workspaces: [ws] } }, slug) : '';
   return [
     `<section class="phead"><h1>${esc(p.project)}</h1>${p.summary ? `<p>${esc(p.summary)}</p>` : ''}${phases}<div class="win-foot">${published ? `updated ${ago(p.updated)}${p.status ? ` · ${esc(p.status)}` : ''}` : 'No project status published yet'}${p.git && typeof p.git === 'object' ? ` · <span class="mono">${esc(p.git.branch || '')}${p.git.commit ? ` @ ${esc(String(p.git.commit).slice(0, 12))}` : ''}${p.git.dirty ? ' · uncommitted changes' : ''}</span>` : ''}</div></section>`,
     p.errors ? `<div class="warnbox">${esc(p.errors.join('; '))}</div>` : '',
@@ -903,8 +939,8 @@ function project(s, slug) {
     metrics,
     programBlock(work),
     dependencyGraph(work, slug),
-    groupsBlock(work),
-    specsBlock(work),
+    groupsBlock(work, slug),
+    specsBlock(work, slug),
     board,
     issueTable(work, slug),
     gatesRisksBlock(p),
@@ -930,6 +966,7 @@ const HELP = {
     <h3>Groups and specs</h3><p>Progress per release or phase, and the work under each spec.</p>
     <h3>Tasks and All work</h3><p>The board groups tasks by status; Done shows the latest 10 until you show completed work. The list sorts and filters all work.</p>
     <h3>Project continuity</h3><p>Plan a handover to another harness. Prepare starts a successor that only reads and reports. Inspect its answer, then confirm activation.</p>
+    <h3>Phone</h3><p>On a screen up to 760 px wide, the long sections start collapsed. Select a section title to open it. The dashboard remembers each open section for this project during the session. Overall progress and the frontier stay open.</p>
     <p>The data comes from the project's status file. When a section is missing, the orchestrator has not published those fields.</p>`],
   allocation: ['Allocation', `
     <p>The resource policy for all projects. Changes are a draft until you select <b>Apply policy</b>.</p>
@@ -946,7 +983,7 @@ const HELP = {
     <h3>Start and manage</h3><p><b>Open visible</b> or <b>Open headless</b> starts the browser. <b>Manage</b> restarts it in the other mode, closes it, or sets the window size for the next launch.</p>
     <h3>Preview</h3><p><b>One tab</b> shows the selected tab with its address bar. <b>All tabs</b> shows every tab in one grid, without controls; select a tile to focus it. <b>Live</b> refreshes at the chosen interval.</p>
     <h3>Tabs</h3><p><b>Agent</b> marks a tab an agent uses. Screenshots never change a page. Navigation and input on an agent tab ask for confirmation first. <b>Hidden</b> marks a tab that is not visible; some web apps do not draw there. <b>New tab</b> opens a page of your own.</p>
-    <h3>Control</h3><p>Select the screenshot to open the large view. Turn on <b>Control browser</b>, then click the image and type. Paste long text or a password into the masked field.</p>`],
+    <h3>Control</h3><p>Select the screenshot to open the large view. Turn on <b>Control browser</b>, then click the image and type. Paste long text or a password into the masked field. On a phone the large view is full screen and the image fills the height. The text field and key controls appear only while <b>Control browser</b> is on.</p>`],
   analytics: ['Analytics', `
     <p>Recorded worker runs per project and provider: duration, outcome, and measured tokens.</p>
     <p>Token totals include only runs that report tokens. Coverage shows how many runs have measurements. Quota percentages are global per provider; they are not project token counts.</p>`],
@@ -965,7 +1002,7 @@ function currentRoute() {
 function fillHelp() {
   const [title, body] = HELP[currentRoute()] || HELP.overview;
   document.getElementById('help-title').textContent = `${title} help`;
-  document.getElementById('help-body').innerHTML = `${body}<p class="help-more">Commands and setup: <code>docs/cli.md</code> and <code>docs/user-guide.md</code> in the Herdr Boss repository.</p>`;
+  document.getElementById('help-body').innerHTML = `${body}<p class="help-more">On a screen up to 760 px wide, use the menu button at the top to change pages. Commands and setup: <code>docs/cli.md</code> and <code>docs/user-guide.md</code> in the Herdr Boss repository.</p>`;
 }
 
 function setHelp(open) {
@@ -978,7 +1015,18 @@ function setHelp(open) {
 
 document.getElementById('help-toggle').addEventListener('click', () => setHelp(document.getElementById('help-panel').hidden));
 document.getElementById('help-close').addEventListener('click', () => setHelp(false));
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !document.getElementById('help-panel').hidden && !document.getElementById('browser-viewer').open) setHelp(false); });
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  if ($nav.classList.contains('open')) { setNavMenu(false); return; }
+  if (!document.getElementById('help-panel').hidden && !document.getElementById('browser-viewer').open) setHelp(false);
+});
+$navMenu.addEventListener('click', () => setNavMenu(!$nav.classList.contains('open')));
+$nav.addEventListener('click', (e) => { if (e.target.closest('a')) setNavMenu(false); });
+document.addEventListener('click', (e) => {
+  if (!$nav.classList.contains('open')) return;
+  if (e.target.closest?.('#nav-menu') || e.target.closest?.('#primary-nav')) return;
+  setNavMenu(false);
+});
 
 // ---------- Render loop ----------
 
@@ -994,6 +1042,7 @@ function render(force = false) {
   const m = /^\/projects\/([^/]+)\/?$/.exec(location.pathname);
   const route = m || location.pathname === '/projects' ? 'projects' : ['allocation', 'agents', 'browsers', 'analytics', 'logs'].includes(location.pathname.slice(1)) ? location.pathname.slice(1) : 'overview';
   const html = route === 'projects' ? projectsView(state, m ? decodeURIComponent(m[1]) : null) : route === 'allocation' ? allocationView(state) : route === 'agents' ? agentsView(state) : route === 'browsers' ? browsersView(state) : route === 'analytics' ? analyticsView(state) : route === 'logs' ? logsView(state) : overview(state);
+  $navMenuLabel.textContent = NAV_LABEL[route] || 'Menu';
   if (route !== 'projects') $crumbs.innerHTML = '';
   for (const a of $nav.querySelectorAll('a')) {
     if (a.dataset.nav === route) a.setAttribute('aria-current', 'page');
@@ -1011,7 +1060,11 @@ document.addEventListener('toggle', (e) => {
     if (e.target.open) browserManageOpen.add(e.target.dataset.browserManage);
     else browserManageOpen.delete(e.target.dataset.browserManage);
   }
+  if (e.target.dataset?.projectFold) setFoldOpen(e.target.dataset.projectFold, e.target.dataset.foldKey, e.target.open);
 }, true);
+
+// Re-render when the viewport crosses the phone breakpoint, so the desktop and phone treatments swap.
+phoneMedia.addEventListener('change', () => { lastRender = ''; render(); });
 
 function updateShares() {
   const projects = allocationProjects();
