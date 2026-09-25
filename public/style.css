@@ -497,3 +497,5 @@ section[id], div[id="agents"] { scroll-margin-top: 105px; }
 #browser-viewer .browser-tile-label { font-size: 14px; }
 #browser-viewer.grid-mode .browser-viewer-head > label, #browser-viewer.grid-mode #browser-viewer-navigate, #browser-viewer.grid-mode .browser-viewer-controls, #browser-viewer.grid-mode .browser-viewer-help, #browser-viewer.grid-mode > img { display: none; }
 #browser-viewer:not(.grid-mode) #browser-viewer-grid { display: none; }
+
+.fleet-section .project-selector-grid { margin-bottom: 14px; }
