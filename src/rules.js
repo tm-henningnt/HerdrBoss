@@ -80,11 +80,25 @@ export function evaluate(snap, cfg, paneSince, now = Date.now(), policy = null) 
       });
     }
     if (m.load[1] > m.cpus * cfg.machine.loadWarnFactor) {
-      alerts.push({
-        key: 'machine:load', severity: 'warn', scope: 'all',
-        title: `CPU load high: ${m.load[1]} (5 min) on ${m.cpus} cores`,
-        text: `The 5-minute load average is ${m.load[1]} on ${m.cpus} cores. Start no new worker and no full test suite until it drops. Run one full suite at a time, and limit test runners to two threads (the flag for each runner is in the kit skill, section Machine load).`,
-      });
+      const advice = 'Start no new worker and no full test suite until it drops. Run one full suite at a time, and limit test runners to two threads (the flag for each runner is in the kit skill, section Machine load).';
+      const label = (ws) => snap.herdr?.workspaces?.find((w) => w.id === ws)?.label || ws;
+      const top = (use) => use.top.map((g) => `${g.label}${g.count > 1 ? ` ×${g.count}` : ''} ${g.cpu}%`).join(', ');
+      // A project that uses at least one core gets its own notice; the others are not woken.
+      const sources = Object.entries(snap.cpuUse || {}).filter(([ws, use]) => ws !== 'other' && use.cpu >= 100).sort((a, b) => b[1].cpu - a[1].cpu);
+      const summary = sources.map(([ws, use]) => `${label(ws)} ${use.cpu}% (${top(use)})`).join('; ');
+      const title = `CPU load high: ${m.load[1]} (5 min) on ${m.cpus} cores`;
+      if (sources.length) {
+        for (const [ws, use] of sources) alerts.push({
+          key: `machine:load:${ws}`, severity: 'warn', scope: ws, title,
+          text: `The 5-minute load average is ${m.load[1]} on ${m.cpus} cores. Your project uses about ${use.cpu}% CPU now (1 core = 100%): ${top(use)}. ${advice}`,
+        });
+        alerts.push({ key: 'machine:load', severity: 'warn', scope: 'user', title, text: `The 5-minute load average is ${m.load[1]} on ${m.cpus} cores. CPU by project now: ${summary}.${snap.cpuUse?.other?.cpu >= 100 ? ` Other processes: ${top(snap.cpuUse.other)}.` : ''}` });
+      } else {
+        alerts.push({
+          key: 'machine:load', severity: 'warn', scope: 'all', title,
+          text: `The 5-minute load average is ${m.load[1]} on ${m.cpus} cores.${snap.cpuUse?.other ? ` The largest processes are outside the projects: ${top(snap.cpuUse.other)}.` : ''} ${advice}`,
+        });
+      }
     }
   }
   // ----- Browsers -----
@@ -148,9 +162,22 @@ export function renderBulletin(snap, evaluation, cfg) {
   L.push(`# Herdr Boss bulletin`, '', `Updated: ${new Date(snap.updatedAt).toISOString()}`, '');
   L.push('Read this file before you start new workers. Obey the rules below.', '');
   L.push('## Rules now', '');
-  const rules = [...evaluation.advice, ...evaluation.alerts.filter((a) => a.severity !== 'info').map((a) => a.text)];
+  const serious = evaluation.alerts.filter((a) => a.severity !== 'info');
+  const shared = serious.filter((a) => a.scope === 'all' || a.scope === 'user');
+  const rules = [...evaluation.advice, ...shared.map((a) => a.text)];
   if (rules.length) rules.forEach((r) => L.push(`- ${r}`));
   else L.push('- No restrictions. All providers and machine resources are within limits.');
+  // Rules for one project stay under that project, so an orchestrator reads only its own.
+  const byProject = new Map();
+  for (const a of serious.filter((x) => x.scope !== 'all' && x.scope !== 'user')) {
+    const name = snap.herdr?.workspaces?.find((w) => w.id === a.scope)?.label || a.scope;
+    if (!byProject.has(name)) byProject.set(name, []);
+    byProject.get(name).push(a.text);
+  }
+  if (byProject.size) {
+    L.push('', '## Project rules', '');
+    for (const [name, texts] of byProject) { L.push(`### ${name}`, ''); texts.forEach((t) => L.push(`- ${t}`)); L.push(''); }
+  }
   L.push('', '## Quotas', '', '| Provider | Window | Used | Expected | Resets |', '|---|---|---|---|---|');
   for (const q of snap.quotas || []) {
     if (q.error) continue;

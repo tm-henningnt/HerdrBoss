@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
 import { DATA_DIR } from './config.js';
-import { collectHerdr, collectQuotas, collectMachine, collectProcesses, findBrowsers, run } from './collect.js';
+import { collectHerdr, collectQuotas, collectMachine, collectProcesses, findBrowsers, cpuUse, run } from './collect.js';
 import { evaluate, renderBulletin, fmtDuration, providerName, broadcastTargets } from './rules.js';
 import { listProjects } from './projects.js';
 import { loadModels } from './kit/config.js';
@@ -94,6 +94,8 @@ export class Engine extends EventEmitter {
       snap.projects = listProjects();
       const policy = loadPolicy();
       const control = deriveControl(snap, policy, this.models, this.memory.paneSince, now);
+      const profileWorkspaces = Object.fromEntries(managedBrowsers.map((b) => [b.profile, control.projects[b.project]?.workspace]).filter(([, ws]) => ws));
+      snap.cpuUse = cpuUse(procs, herdr?.panes || [], profileWorkspaces);
       snap.lanes = laneStatus(snap.quotas, policy, now);
       snap.leastOverProvider = leastOverProvider(snap.lanes);
       snap.policy = policy;

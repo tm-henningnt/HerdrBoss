@@ -154,3 +154,35 @@ test('project status validation accepts work structure and rejects unsafe or mal
   assert.ok(errors.some((e) => /tasks\[1\]\.url must start with http/.test(e)));
   assert.ok(errors.some((e) => /links\[0\]\.url must start with http/.test(e)));
 });
+
+test('CPU use counts pane processes and project browsers per workspace', async () => {
+  const { cpuUse } = await import('../src/collect.js');
+  const procs = new Map([
+    [10, { pid: 10, ppid: 1, cpu: 0, cmd: '/bin/zsh' }],
+    [11, { pid: 11, ppid: 10, cpu: 90, cmd: 'node (vitest 1)' }],
+    [12, { pid: 12, ppid: 10, cpu: 80, cmd: 'node (vitest 2)' }],
+    [20, { pid: 20, ppid: 1, cpu: 70, cmd: '/Applications/Google Chrome.app/Contents/Frameworks/Helper --type=renderer --user-data-dir=/p/viz' }],
+    [30, { pid: 30, ppid: 1, cpu: 40, cmd: '/usr/bin/other' }],
+  ]);
+  const use = cpuUse(procs, [{ id: 'w1:p1', workspace: 'w1', shellPid: 10 }], { '/p/viz': 'w2' });
+  assert.deepEqual(use.w1, { cpu: 170, top: [{ label: 'vitest', cpu: 170, count: 2 }] });
+  assert.equal(use.w2.top[0].label, 'Chrome');
+  assert.equal(use.other.cpu, 40);
+});
+
+test('a load alert goes to the projects that cause it and the bulletin groups project rules', async () => {
+  const { evaluate, renderBulletin } = await import('../src/rules.js');
+  const cfg = { quota: { warnPercent: 90, criticalPercent: 98 }, machine: { memFreeWarnPercent: 15, loadWarnFactor: 2 }, browsers: { staleOwnedMinutes: 30 }, workers: { staleIdleMinutes: 120 }, sharedBrowsers: [] };
+  const snap = {
+    updatedAt: new Date().toISOString(),
+    machine: { load: [40, 35, 30], cpus: 10, memFreePercent: 50 },
+    herdr: { workspaces: [{ id: 'w1', label: 'Alpha' }, { id: 'w2', label: 'Beta' }], panes: [] },
+    cpuUse: { w1: { cpu: 420, top: [{ label: 'vitest', cpu: 400, count: 9 }] }, w2: { cpu: 30, top: [] } },
+  };
+  const evaluation = evaluate(snap, cfg, {}, Date.now());
+  const load = evaluation.alerts.filter((a) => a.key.startsWith('machine:load'));
+  assert.deepEqual(load.map((a) => a.scope).sort(), ['user', 'w1']);
+  assert.match(load.find((a) => a.scope === 'w1').text, /Your project uses about 420% CPU now .*vitest ×9 400%/);
+  const bulletin = renderBulletin(snap, evaluation, cfg);
+  assert.match(bulletin, /## Project rules\n\n### Alpha\n\n- The 5-minute load average/);
+});

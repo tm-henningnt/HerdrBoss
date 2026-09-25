@@ -164,6 +164,45 @@ function ownerPane(pid, procs, shellToPane) {
   return cur && shellToPane.has(cur.pid) ? shellToPane.get(cur.pid) : null;
 }
 
+function processLabel(cmd) {
+  if (/Google Chrome|Chromium|chrome-headless-shell/.test(cmd)) return 'Chrome';
+  const titled = /^node \((\w[\w-]*)/.exec(cmd);
+  if (titled) return titled[1];
+  const [first = '', second = ''] = cmd.split(' ');
+  const base = first.split('/').pop();
+  if (base === 'node' && second) return second.split('/').pop().replace(/\.m?js$/, '');
+  return base;
+}
+
+// CPU per Herdr workspace: processes under a pane shell count for that pane's workspace, and a project
+// browser counts for its project through the profile directory. The result names the largest process groups.
+export function cpuUse(procs, panes, profileProjects = {}) {
+  const shellToPane = new Map(panes.filter((p) => p.shellPid).map((p) => [p.shellPid, p.id]));
+  const paneWorkspace = new Map(panes.map((p) => [p.id, p.workspace]));
+  const use = {};
+  for (const p of procs.values()) {
+    if (!(p.cpu > 0)) continue;
+    let key = null;
+    const pane = ownerPane(p.pid, procs, shellToPane);
+    if (pane) key = paneWorkspace.get(pane) || null;
+    // A browser helper process can lack the profile flag, so look for it up the parent chain too.
+    for (let cur = p, hops = 0; !key && cur && hops < 6; cur = procs.get(cur.ppid), hops += 1) {
+      const profile = /--user-data-dir=(\S+)/.exec(cur.cmd)?.[1];
+      if (profile && profileProjects[profile]) key = profileProjects[profile];
+    }
+    key ||= 'other';
+    const entry = (use[key] ||= { cpu: 0, groups: {} });
+    entry.cpu += p.cpu;
+    const label = processLabel(p.cmd);
+    const group = (entry.groups[label] ||= { label, cpu: 0, count: 0 });
+    group.cpu += p.cpu; group.count += 1;
+  }
+  return Object.fromEntries(Object.entries(use).map(([key, entry]) => [key, {
+    cpu: Math.round(entry.cpu),
+    top: Object.values(entry.groups).sort((a, b) => b.cpu - a.cpu).slice(0, 3).map((g) => ({ label: g.label, cpu: Math.round(g.cpu), count: g.count })),
+  }]));
+}
+
 export function findBrowsers(procs, panes, shared = []) {
   const shellToPane = new Map(panes.filter((p) => p.shellPid).map((p) => [p.shellPid, p.id]));
   const children = new Map();
