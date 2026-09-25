@@ -75,3 +75,22 @@ test('broadcast notices skip orchestrators in workspaces without active agents',
   ];
   assert.deepEqual(broadcastTargets(orchs, panes).map((o) => o.id), ['w2:p1', 'w3:p1']);
 });
+
+test('the idle-worker notice skips a prepared handover successor', async () => {
+  const { evaluate } = await import('../src/rules.js');
+  const cfg = { quota: { warnPercent: 90, criticalPercent: 98 }, machine: { memFreeWarnPercent: 15, loadWarnFactor: 2 }, browsers: { staleOwnedMinutes: 30 }, workers: { staleIdleMinutes: 120 }, sharedBrowsers: [] };
+  const now = Date.now();
+  const since = now - 3 * 3600000;
+  const snap = {
+    herdr: { panes: [
+      { id: 'w1:p6', workspace: 'w1', agent: 'codex', orch: false, status: 'done' },
+      { id: 'w1:p7', workspace: 'w1', agent: 'pi', orch: false, status: 'idle' },
+    ] },
+    standbyPanes: ['w1:p6'],
+  };
+  const { alerts } = evaluate(snap, cfg, { 'w1:p6': { since }, 'w1:p7': { since } }, now);
+  const stale = alerts.find((a) => a.key.startsWith('workers:stale:'));
+  assert.ok(stale);
+  assert.match(stale.text, /w1:p7/);
+  assert.doesNotMatch(stale.text, /w1:p6/);
+});

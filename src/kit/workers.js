@@ -52,9 +52,9 @@ function readAgentText(name) {
 function pause(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
 
 // An agent can report ready before its input box works. The prompt is then lost, or typed but not submitted.
-// Resend once when the pane shows no trace of the brief line. When it shows the line, send Enter once:
+// Resend once when the pane shows no trace of the marker text. When it shows the marker, send Enter once:
 // Enter submits unsent input and does nothing in an empty input box.
-function deliverBrief(name, herdr, readText, wait) {
+export function deliverPrompt(name, text, marker, { herdr, readText = readAgentText, wait = pause }) {
   const settled = () => {
     const status = herdr(['agent', 'get', name]);
     return ['working', 'blocked'].includes((status.agent ?? status).agent_status);
@@ -63,12 +63,12 @@ function deliverBrief(name, herdr, readText, wait) {
   for (;;) {
     let promptError;
     try {
-      herdr(['agent', 'prompt', name, BRIEF_PROMPT, '--wait', '--timeout', '20000']);
+      herdr(['agent', 'prompt', name, text, '--wait', '--timeout', '20000']);
       return resent ? 'resent' : 'sent';
     } catch (error) { promptError = error; }
     if (settled()) return resent ? 'resent' : 'sent';
     let seen = true;
-    try { seen = readText(name).includes('.worker/brief.md'); } catch {}
+    try { seen = readText(name).includes(marker); } catch {}
     if (!seen && !resent) { resent = true; wait(3000); continue; }
     if (!seen) throw promptError;
     // The status check below decides the result, so an unparsable send-keys response does not abort.
@@ -77,6 +77,10 @@ function deliverBrief(name, herdr, readText, wait) {
     if (settled()) return 'submitted';
     throw promptError;
   }
+}
+
+function deliverBrief(name, herdr, readText, wait) {
+  return deliverPrompt(name, BRIEF_PROMPT, '.worker/brief.md', { herdr, readText, wait });
 }
 
 // The machine load only warns. Orchestrators decide whether a worker is worth starting on a loaded machine.

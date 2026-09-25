@@ -99,6 +99,9 @@ export class Engine extends EventEmitter {
       this.memory.lastOrchestrators ||= {};
       for (const p of Object.values(control.projects)) if (p.orch?.kind) this.memory.lastOrchestrators[p.workspace] = { pane: p.orch.pane, kind: p.orch.kind, project: p.slug };
       if (this.act) await this.reap(browsers);
+      // A prepared successor waits idle by design, so the idle-worker rule skips it.
+      try { snap.standbyPanes = listHandoffs().filter((h) => ['preparing', 'prepared', 'needs-inspection'].includes(h.status)).map((h) => h.newPane); }
+      catch { snap.standbyPanes = []; }
       const evaluation = evaluate(snap, this.cfg, this.memory.paneSince, now, policy);
       this.memory.quotaRecoveries ||= {};
       // Older records used the reset timestamp as part of the key. Codexbar can
