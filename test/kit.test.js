@@ -184,6 +184,7 @@ test('worker start dry-run prints the plan and makes no worktree or agent change
   const calls = [];
   const herdr = (args) => {
     calls.push(args);
+    if (args[0] === 'pane' && args[1] === 'get') return { pane: { pane_id: 'ws:orch', workspace_id: 'ws', label: 'orch' } };
     if (args[0] === 'agent') return { agents: [] };
     if (args[0] === 'tab') return { tabs: [{ tab_id: 'ws:t1', workspace_id: 'ws', label: 'Workers' }] };
     if (args[0] === 'pane') return { panes: [{ pane_id: 'ws:p1', workspace_id: 'ws', tab_id: 'ws:t1', width: 160, height: 45 }] };
@@ -211,6 +212,49 @@ test('worker start dry-run prints the plan and makes no worktree or agent change
   assert.throws(() => startWorker('demo-routed', { kind: 'codex', model: 'gpt-6-sol', task: 'x', allow: ['src/'], dryRun: true }, {
     config, models, herdr, env: { HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'ws', HERDR_PANE_ID: 'ws:orch' }, rulesFile, output: () => {},
   }), /claude is ahead of quota pace or near exhaustion/);
+});
+
+test('worker start validates the caller pane and uses it for placement and reporting', () => {
+  const f = setupFixture(null);
+  const template = path.join(f.root, 'brief-template.md');
+  fs.writeFileSync(template, 'Report target: {{orchPane}}');
+  fs.writeFileSync(path.join(f.root, '.herdr-boss.json'), JSON.stringify({ briefTemplate: template }));
+  const config = loadProjectConfig({ cwd: f.root });
+  const calls = [];
+  const herdr = (args) => {
+    calls.push(args);
+    if (args[0] === 'pane' && args[1] === 'get') return { pane: { pane_id: 'ws:orch', workspace_id: 'ws', label: 'orch' } };
+    return f.herdr(args);
+  };
+  const result = startWorker('caller-valid', { kind: 'codex', task: 'x', allow: ['src/'] }, {
+    config, models: loadModels(), herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+  });
+  assert.equal(fs.readFileSync(path.join(result.worktree, '.worker', 'brief.md'), 'utf8'), 'Report target: ws:orch');
+  assert.ok(calls.some((args) => args.join(' ') === 'tab list --workspace ws'));
+  assert.ok(calls.some((args) => args.join(' ') === 'pane get ws:orch'));
+
+  for (const [name, env, pane, options, message] of [
+    ['caller-no-pane', { ...f.env, HERDR_PANE_ID: undefined }, { pane_id: 'ws:orch', workspace_id: 'ws', label: 'orch' }, {}, /HERDR_PANE_ID is required/],
+    ['caller-no-workspace', { ...f.env, HERDR_WORKSPACE_ID: undefined }, { pane_id: 'ws:orch', workspace_id: 'ws', label: 'orch' }, {}, /HERDR_WORKSPACE_ID is required/],
+    ['caller-id', f.env, { pane_id: 'ws:someone-else', workspace_id: 'ws', label: 'orch' }, {}, /differs from HERDR_PANE_ID/],
+    ['caller-workspace', { ...f.env, HERDR_WORKSPACE_ID: 'other' }, { pane_id: 'ws:orch', workspace_id: 'ws', label: 'orch' }, {}, /workspace/],
+    ['caller-label', f.env, { pane_id: 'ws:orch', workspace_id: 'ws', label: 'worker' }, {}, /label/],
+    ['caller-orch', f.env, { pane_id: 'ws:orch', workspace_id: 'ws', label: 'orch' }, { orch: 'ws:other' }, /--orch must match/],
+  ]) {
+    const before = new Set(fs.readdirSync(path.dirname(f.root)));
+    const callsBefore = f.calls.length;
+    const rejectedHerdr = (args) => {
+      if (args[0] === 'pane' && args[1] === 'get') return { pane };
+      return f.herdr(args);
+    };
+    assert.throws(() => startWorker(name, { kind: 'codex', task: 'x', allow: ['src/'], ...options }, {
+      config, models: loadModels(), herdr: rejectedHerdr, env, rulesFile: f.rulesFile, output: () => {},
+    }), (error) => message.test(error.message) && /Pass explicit HERDR_PANE_ID and HERDR_WORKSPACE_ID values/.test(error.message) && /restart the Codex session/.test(error.message));
+    assert.equal(fs.existsSync(config.worktreePath(name)), false);
+    assert.equal(fs.existsSync(path.join(config.runsPath, `${name}.json`)), false);
+    assert.ok(!f.calls.slice(callsBefore).includes('agent start'));
+    assert.deepEqual(new Set(fs.readdirSync(path.dirname(f.root))), before);
+  }
 });
 
 test('worker collect --record uses the provider recorded at start, including null routes', () => {
@@ -266,6 +310,7 @@ test('worker start records a real dispatch before prompting and verifies activit
   const calls = [];
   const herdr = (args) => {
     calls.push(args);
+    if (args[0] === 'pane' && args[1] === 'get') return { pane: { pane_id: 'ws:orch', workspace_id: 'ws', label: 'orch' } };
     if (args[0] === 'agent' && args[1] === 'list') return { agents: [] };
     if (args[0] === 'tab' && args[1] === 'list') return { tabs: [{ tab_id: 'ws:t1', workspace_id: 'ws', label: 'Workers' }] };
     if (args[0] === 'pane' && args[1] === 'list') return { panes: [{ pane_id: 'ws:p1', workspace_id: 'ws', tab_id: 'ws:t1', width: 160, height: 45 }] };
@@ -299,6 +344,7 @@ test('worker start submits a brief that was typed but not sent', () => {
   let status = 'idle';
   const herdr = (args) => {
     calls.push(args.slice(0, 2).join(' '));
+    if (args[0] === 'pane' && args[1] === 'get') return { pane: { pane_id: 'ws:orch', workspace_id: 'ws', label: 'orch' } };
     if (args[0] === 'agent' && args[1] === 'list') return { agents: [] };
     if (args[0] === 'tab' && args[1] === 'list') return { tabs: [{ tab_id: 'ws:t1', workspace_id: 'ws', label: 'Workers' }] };
     if (args[0] === 'pane' && args[1] === 'list') return { panes: [{ pane_id: 'ws:p1', workspace_id: 'ws', tab_id: 'ws:t1', width: 160, height: 45 }] };
@@ -330,6 +376,7 @@ test('worker start resends a brief that never reached the agent', () => {
   fs.writeFileSync(rulesFile, JSON.stringify({ updatedAt: new Date().toISOString(), avoidKinds: [] }));
   let prompts = 0;
   const herdr = (args) => {
+    if (args[0] === 'pane' && args[1] === 'get') return { pane: { pane_id: 'ws:orch', workspace_id: 'ws', label: 'orch' } };
     if (args[0] === 'agent' && args[1] === 'list') return { agents: [] };
     if (args[0] === 'tab' && args[1] === 'list') return { tabs: [{ tab_id: 'ws:t1', workspace_id: 'ws', label: 'Workers' }] };
     if (args[0] === 'pane' && args[1] === 'list') return { panes: [{ pane_id: 'ws:p1', workspace_id: 'ws', tab_id: 'ws:t1', width: 160, height: 45 }] };
@@ -400,6 +447,7 @@ function setupFixture(setup) {
   const calls = [];
   const herdr = (args) => {
     calls.push(args.slice(0, 2).join(' '));
+    if (args[0] === 'pane' && args[1] === 'get') return { pane: { pane_id: 'ws:orch', workspace_id: 'ws', label: 'orch' } };
     if (args[0] === 'agent' && args[1] === 'list') return { agents: [] };
     if (args[0] === 'tab' && args[1] === 'list') return { tabs: [{ tab_id: 'ws:t1', workspace_id: 'ws', label: 'Workers' }] };
     if (args[0] === 'pane' && args[1] === 'list') return { panes: [{ pane_id: 'ws:p1', workspace_id: 'ws', tab_id: 'ws:t1', width: 160, height: 45 }] };

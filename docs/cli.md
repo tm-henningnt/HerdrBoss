@@ -54,7 +54,7 @@ Create a branch and worktree, write the brief, open a pane in the `Workers` tab,
 | `--effort EFFORT` | A reasoning effort, where the kind supports it. |
 | `--issue N` | The issue number. |
 | `--base BRANCH` | The base branch. The default is `baseBranch` in `.herdr-boss.json`. |
-| `--orch PANE` | The orchestrator pane for reports. The default is the current pane. |
+| `--orch PANE` | The verified caller pane for reports. If set, it must match `HERDR_PANE_ID`. |
 | `--no-worktree` | Use the current checkout. The worker gets `.worker/NAME/` for its brief and reports. |
 | `--dry-run` | Print the plan. Change nothing. |
 | `--force` | Override quota, capacity, and paused-project refusals. It cannot enable a disabled model. |

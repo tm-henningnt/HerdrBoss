@@ -157,6 +157,28 @@ function getWorkspace(value) { return value.workspace_id ?? value.workspaceId ??
 function getTab(value) { return value.tab_id ?? value.tabId ?? null; }
 function getPane(value) { return value.pane_id ?? value.paneId ?? value.id ?? null; }
 
+function callerValidationError(reason) {
+  return new Error(`Cannot verify the caller pane: ${reason} A shared Codex app-server daemon can pass another pane's environment. Pass explicit HERDR_PANE_ID and HERDR_WORKSPACE_ID values, or restart the Codex session. Do not stop the shared daemon.`);
+}
+
+function verifyCallerPane(env, herdr, requestedOrch) {
+  const paneId = env.HERDR_PANE_ID;
+  if (!paneId) throw callerValidationError('HERDR_PANE_ID is required.');
+  const workspaceId = env.HERDR_WORKSPACE_ID;
+  if (!workspaceId) throw callerValidationError('HERDR_WORKSPACE_ID is required.');
+  let response;
+  try { response = herdr(['pane', 'get', paneId]); }
+  catch (error) { throw callerValidationError(`Herdr could not read pane ${paneId}: ${error.message}`); }
+  const pane = response?.pane ?? response;
+  const returnedId = getPane(pane);
+  if (returnedId !== paneId) throw callerValidationError(`The returned pane ID (${returnedId ?? '(missing)'}) differs from HERDR_PANE_ID (${paneId}).`);
+  if (!['orch', 'boss'].includes(pane.label)) throw callerValidationError(`The caller pane label must be exactly orch or boss; received ${pane.label ?? '(missing)'}.`);
+  const paneWorkspace = getWorkspace(pane);
+  if (workspaceId !== paneWorkspace) throw callerValidationError(`HERDR_WORKSPACE_ID (${workspaceId}) differs from the pane workspace (${paneWorkspace ?? '(missing)'}).`);
+  if (requestedOrch != null && requestedOrch !== returnedId) throw callerValidationError(`--orch must match the verified caller pane (${returnedId}).`);
+  return { paneId: returnedId, workspaceId: paneWorkspace };
+}
+
 function findDimensions(value, seen = new Set()) {
   if (!value || typeof value !== 'object' || seen.has(value)) return null;
   seen.add(value);
@@ -304,6 +326,7 @@ export function startWorker(name, options, {
 } = {}) {
   if (!NAME_PATTERN.test(name)) throw new Error('Worker name must match [a-z][a-z0-9-]{0,31}.');
   if (env.HERDR_ENV !== '1') throw new Error('Run worker start from a Herdr-managed pane (HERDR_ENV=1).');
+  const caller = verifyCallerPane(env, herdr, options.orch);
   const liveAgents = checkLiveName(name, herdr);
   const modelConfig = models ?? JSON.parse(fs.readFileSync(new URL('../../kit/models.json', import.meta.url), 'utf8'));
   const rulesPath = rulesFile ?? path.join(env.HERDR_BOSS_DIR || path.join(os.homedir(), '.herdr-boss'), 'rules.json');
@@ -355,9 +378,7 @@ export function startWorker(name, options, {
   if (!options.noWorktree && fs.existsSync(worktree)) throw new Error(`Worktree path already exists: ${worktree}.`);
   if (!options.noWorktree && branchExists(config.root, branch)) throw new Error(`Branch already exists: ${branch}.`);
 
-  const workspaceId = env.HERDR_WORKSPACE_ID;
-  if (!workspaceId) throw new Error('HERDR_WORKSPACE_ID is required to place a worker in the caller workspace.');
-  if (!(options.orch ?? env.HERDR_PANE_ID)) throw new Error('Use --orch or run from an orchestrator pane with HERDR_PANE_ID.');
+  const workspaceId = caller.workspaceId;
   const tabs = listFrom(herdr(['tab', 'list', '--workspace', workspaceId]), 'tabs');
   const hasWorkersTab = tabs.some((tab) => tab.label === 'Workers' && getWorkspace(tab) === workspaceId);
   let paneId = null;
@@ -395,7 +416,7 @@ export function startWorker(name, options, {
 
   const reportPath = path.join(worktree, plan.workerDir, 'report.md');
   const reportJsonPath = path.join(worktree, plan.workerDir, 'report.json');
-  const orchPane = options.orch ?? env.HERDR_PANE_ID ?? '(none)';
+  const orchPane = caller.paneId;
   const orchName = getName(liveAgents.find((agent) => getPane(agent) === orchPane)) ?? '(none)';
   const template = fs.readFileSync(config.briefTemplatePath, 'utf8');
   const brief = renderBrief(template, {
