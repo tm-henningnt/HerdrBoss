@@ -20,6 +20,7 @@ const USAGE = `herdr-boss <command>
   install               Install and start the launchd agent.
   uninstall             Stop and remove the launchd agent.
   logs                  Show the server log.
+  lanes                 Print one line per quota provider: open, ahead of pace, or near exhaustion.
   policy show|set FILE  Show or replace the local resource policy.
   usage record FILE     Add measured or unmeasured project usage.
   usage summary         Summarize project and provider usage.
@@ -61,6 +62,14 @@ async function main() {
   }
   const cfg = loadConfig();
   switch (cmd) {
+    case 'lanes': {
+      const { describeLane } = await import('./kit/workers.js');
+      const rules = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'rules.json'), 'utf8'));
+      const lanes = rules.lanes || {};
+      if (!Object.keys(lanes).length) throw new Error('No lane data yet. Wait for the next Herdr Boss tick.');
+      for (const [provider, lane] of Object.entries(lanes)) console.log(`${describeLane(provider, lane)}${rules.leastOverProvider === provider ? ' (least over; worker start allows it)' : ''}`);
+      break;
+    }
     case 'policy': {
       const { loadPolicy, savePolicy } = await import('./control.js');
       if (args[0] === 'show' && args.length === 1) console.log(JSON.stringify(loadPolicy(), null, 2));
@@ -184,7 +193,12 @@ async function main() {
       break;
     }
     case 'install': {
-      const node = process.execPath;
+      // A package manager upgrade removes a versioned path such as .../Cellar/node/<version>/bin/node.
+      // Prefer a stable link on PATH that points to the same binary, so the service survives an upgrade.
+      const stable = ['/opt/homebrew/bin/node', '/usr/local/bin/node'].find((candidate) => {
+        try { return fs.realpathSync(candidate) === fs.realpathSync(process.execPath); } catch { return false; }
+      });
+      const node = stable || process.execPath;
       const log = path.join(DATA_DIR, 'server.log');
       const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
