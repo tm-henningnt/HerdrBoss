@@ -571,3 +571,6 @@ section[id], div[id="agents"] { scroll-margin-top: 105px; }
 .help-body p { margin: 0 0 8px; color: var(--muted); }
 .help-body b { color: var(--text); font-weight: 600; }
 .help-more { margin-top: 18px !important; padding-top: 12px; border-top: 1px solid var(--line); font-size: 12.5px; }
+.project-detail { min-width: 0; max-width: 100%; }
+.project-detail > * { min-width: 0; max-width: 100%; }
+.dep-scroll, .issue-table-wrap { max-width: 100%; }
