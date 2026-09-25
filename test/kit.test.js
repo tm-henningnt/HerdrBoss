@@ -373,3 +373,14 @@ test('worker collect --record names every missing flag at once with a hint from 
 test('the rendered brief lists the project evidence tiers', () => {
   assert.equal(renderBrief('Tiers: {{evidenceTiers}}', { evidenceTiers: 'local, hosted-ui, owner' }), 'Tiers: local, hosted-ui, owner');
 });
+
+test('worker start puts the project thread limit flag in the brief', () => {
+  const f = setupFixture(null);
+  const cfgFile = path.join(f.root, '.herdr-boss.json');
+  const template = path.join(f.root, 'brief-template.md');
+  fs.writeFileSync(template, 'Limit: {{threadLimit}}');
+  fs.writeFileSync(cfgFile, JSON.stringify({ briefTemplate: template, testThreadsFlag: '--poolOptions.forks.maxForks=2' }));
+  const config = loadProjectConfig({ cwd: f.root });
+  const result = startWorker('demo', { kind: 'codex', task: 'x', allow: ['src/'] }, { config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {} });
+  assert.equal(fs.readFileSync(path.join(result.worktree, '.worker', 'brief.md'), 'utf8'), 'Limit: Add `--poolOptions.forks.maxForks=2` to each test runner command.');
+});

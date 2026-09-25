@@ -108,6 +108,8 @@ herdr-boss worker start <name> --kind <kind> --task-file <file> --allow <path>
 - Tell the worker not to create, close, assign, or rewrite issues.
 - Tell the worker not to start other agents.
 - Do not leave implicit paths, version assumptions, or acceptance criteria.
+- List the decisions already made in the task, under the heading "Decisions already made". Workers do not reopen them.
+- Set `testThreadsFlag` in `.herdr-boss.json` to the thread limit flag that works for the project's test runner. `worker start` puts it in every brief.
 - Require the worker to report changed paths, commands, results, evidence tier, risks, and questions.
 - Require the worker to write `.worker/report.md` and `.worker/report.json`.
 - Use the JSON fields `issue`, `branch`, `worktree`, `changedPaths`, `commands`, `evidenceTier`, `unverified`, and `stoppedEarly`.

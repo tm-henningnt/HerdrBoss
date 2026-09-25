@@ -116,7 +116,7 @@ A new worktree has no untracked files, so it has no installed dependencies. Set 
 { "setup": "npm ci --prefer-offline --no-audit --no-fund", "setupTimeoutSeconds": 900 }
 ```
 
-The command runs with the worktree as its working directory. It does not run with `--no-worktree`. When the command fails or does not finish in time, `worker start` prints the last output lines, starts no agent, and removes the new worktree and branch. A dependency install is heavy work on a shared machine: prefer a command that uses the package cache, and check the load warning before you start several workers.
+Set `testThreadsFlag` to the flag that limits the project's test runner to two threads, for example `"--maxWorkers=2"`. `worker start` puts it in every brief. The command runs with the worktree as its working directory. It does not run with `--no-worktree`. When the command fails or does not finish in time, `worker start` prints the last output lines, starts no agent, and removes the new worktree and branch. A dependency install is heavy work on a shared machine: prefer a command that uses the package cache, and check the load warning before you start several workers.
 
 Use `herdr-boss gh issue create`, `comment`, or `edit` with `--body-file` to run a safe GitHub issue command.
 Use `herdr-boss tick` to refresh the machine worker rules.

@@ -58,6 +58,14 @@ Do not weaken acceptance criteria or remove an existing test to get a pass.
 
 Keep each change inside the allowed paths.
 
+The task can list decisions already made. Do not reopen them.
+
+When you change a shared contract, such as copy, a schema, or a public API, update every snapshot and test assertion that it reaches in the same change.
+
+In tests, wait for a condition. Do not wait for a fixed time.
+
+Quote the heredoc delimiter (`<<'EOF'`) when the body holds Markdown, backticks, or `$`.
+
 Ask the orchestrator when a decision is outside the brief.
 
 Stop that decision path while you wait for an answer.
@@ -76,9 +84,9 @@ Save the artifact path and state what the pixels show.
 
 Run only the scoped acceptance commands named in this brief or task contract.
 
-Do not run the full repository suite on a shared machine unless the project instructions require it.
+Do not run the full suite or the project's verify script unless this brief names it.
 
-Limit the test runner to two worker threads. Other projects use the same machine. Use the form that the project instructions name. For Vitest 2 with the forks pool, use `--poolOptions.forks.maxForks=2 --poolOptions.forks.minForks=1`; `--maxWorkers=2` fails there.
+Limit the test runner to two worker threads. Other projects use the same machine. {{threadLimit}}
 
 Record each command and its exact result.
 

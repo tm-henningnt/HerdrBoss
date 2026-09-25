@@ -9,7 +9,7 @@ import { providerFor } from '../control.js';
 const NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
 const BRIEF_SLOTS = new Set([
   'name', 'kind', 'model', 'effort', 'project', 'repo', 'worktree', 'branch', 'base', 'issue', 'task',
-  'allowedPaths', 'reportPath', 'reportJsonPath', 'orchPane', 'orchName', 'bulletinPath', 'date', 'evidenceTiers',
+  'allowedPaths', 'reportPath', 'reportJsonPath', 'orchPane', 'orchName', 'bulletinPath', 'date', 'evidenceTiers', 'threadLimit',
 ]);
 
 function git(root, args, { encoding = 'utf8' } = {}) {
@@ -392,6 +392,9 @@ export function startWorker(name, options, {
     orchPane, orchName, bulletinPath: path.join(env.HERDR_BOSS_DIR || path.join(os.homedir(), '.herdr-boss'), 'bulletin.md'),
     date: new Date(now).toISOString().slice(0, 10),
     evidenceTiers: (config.evidenceTiers || []).join(', '),
+    threadLimit: config.testThreadsFlag
+      ? `Add \`${config.testThreadsFlag}\` to each test runner command.`
+      : 'Use the form that the project instructions name. For Vitest 2 with the forks pool, use `--poolOptions.forks.maxForks=2 --poolOptions.forks.minForks=1`; `--maxWorkers=2` fails there. For Vitest 3 and later, use `--maxWorkers=2`.',
   });
 
   let createdWorktree = false;
