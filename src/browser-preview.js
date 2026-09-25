@@ -35,12 +35,24 @@ async function attachedTargets(session) {
   return new Set((result?.targetInfos || []).filter((info) => info.type === 'page' && info.attached).map((info) => info.targetId));
 }
 
+// A page in a shared headless window becomes hidden when another tab opens there, and some web apps then stop drawing.
+async function pageVisibility(entry, port) {
+  try {
+    const endpoint = new URL(entry.webSocketDebuggerUrl);
+    if (endpoint.protocol !== 'ws:' || Number(endpoint.port) !== port) return null;
+    endpoint.hostname = '127.0.0.1';
+    const result = await command(endpoint.href, 'Runtime.evaluate', { expression: 'document.visibilityState', returnByValue: true }, 2000);
+    return typeof result?.result?.value === 'string' ? result.result.value : null;
+  } catch { return null; }
+}
+
 export async function listBrowserTabs(project) {
   const session = await verifiedSession(project);
   const pages = await targets(session);
   let attached = null;
   try { attached = await attachedTargets(session); } catch {}
-  return pages.map((entry) => ({ id: entry.id, title: entry.title || 'Untitled page', url: entry.url, attached: attached ? attached.has(entry.id) : null }));
+  const visibility = await Promise.all(pages.map((entry) => pageVisibility(entry, session.port)));
+  return pages.map((entry, index) => ({ id: entry.id, title: entry.title || 'Untitled page', url: entry.url, attached: attached ? attached.has(entry.id) : null, visibility: visibility[index] }));
 }
 
 export async function tabAttached(project, tabId) {
@@ -48,12 +60,31 @@ export async function tabAttached(project, tabId) {
   return (await attachedTargets(await verifiedSession(project))).has(tabId);
 }
 
-// A background tab gives the Owner a page of their own without changing any agent's tab.
-export async function browserNewTab(project) {
+function tabUrl(value) {
+  const input = String(value || '').trim();
+  if (!input || input === 'about:blank') return 'about:blank';
+  let url;
+  try { url = new URL(/^https?:\/\//i.test(input) ? input : `https://${input}`); } catch { throw new Error('Enter a valid web address.'); }
+  if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Only http and https pages can be opened.');
+  return url.href;
+}
+
+// A tab in its own window stays visible in a headless browser, so each worker can have one without hiding another.
+// It opens in the background, so the Owner's focus and every agent tab stay unchanged.
+export async function browserNewTab(project, url = 'about:blank') {
   const session = await verifiedSession(project);
-  const result = await command(await browserEndpoint(session), 'Target.createTarget', { url: 'about:blank', background: true });
+  const result = await command(await browserEndpoint(session), 'Target.createTarget', { url: tabUrl(url), newWindow: true, background: true });
   if (!result?.targetId) throw new Error('Browser did not open a new tab.');
   return { id: result.targetId };
+}
+
+export async function browserCloseTab(project, tabId, { force = false } = {}) {
+  const session = await verifiedSession(project);
+  if (!(await targets(session)).some((entry) => entry.id === tabId)) throw new Error('That tab is no longer open. Run browser tabs again.');
+  if (!force && (await attachedTargets(session)).has(tabId)) throw new Error('An agent is attached to this tab. Close it when that agent is done, or pass --force.');
+  const result = await command(await browserEndpoint(session), 'Target.closeTarget', { targetId: tabId });
+  if (result?.success === false) throw new Error('Browser did not close the tab.');
+  return { closed: tabId };
 }
 
 async function pageTarget(project, tabId) {

@@ -72,7 +72,7 @@ const previewInterval = (slug) => PREVIEW_INTERVALS.includes(Number(browserPrevi
 function browserTabLabel(tab) {
   let location = tab.url;
   try { const url = new URL(tab.url); location = `${url.hostname}${url.pathname}`; } catch {}
-  return `${tab.attached ? 'Agent · ' : ''}${String(tab.title || 'Untitled page').slice(0, 42)} · ${String(location || '').slice(0, 70)}`;
+  return `${tab.attached ? 'Agent · ' : ''}${tab.visibility === 'hidden' ? 'Hidden · ' : ''}${String(tab.title || 'Untitled page').slice(0, 42)} · ${String(location || '').slice(0, 70)}`;
 }
 const code = (s) => esc(s).replace(/`([^`]+)`/g, '<code>$1</code>');
 const PROVIDERS = { claude: 'Claude', codex: 'Codex', opencodego: 'OpenCode Go' };

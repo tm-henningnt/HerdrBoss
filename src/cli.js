@@ -29,7 +29,9 @@ const USAGE = `herdr-boss <command>
   browser close SLUG      Gracefully close a managed browser, keeping its profile.
   browser restart SLUG --headless|--visible [--no-restore]  Switch mode and restore the current page.
   browser list          List registered browser sessions.
-  browser tabs SLUG      List the pages in a managed browser.
+  browser tabs SLUG      List the pages, their visibility, and whether an agent is attached.
+  browser tab new SLUG [URL]  Open a tab in its own background window and print its ID.
+  browser tab close SLUG --tab ID [--force]  Close a tab; refuses a tab an agent is attached to.
   browser screenshot SLUG [--tab ID]  Save a private JPEG and print its path.
   browser navigate SLUG URL [--tab ID]  Open an HTTP(S) page.
   browser click SLUG X% Y% [--tab ID]  Click at screenshot-relative percentages.
@@ -93,7 +95,7 @@ async function main() {
     }
     case 'browser': {
       const { requestBrowser, listBrowserSessions, browserStatus, setBrowserWindowSize, closeBrowser, restartBrowser } = await import('./browser-pool.js');
-      const { listBrowserTabs, browserScreenshot, browserNavigate, browserClick, browserInsertText, browserKey } = await import('./browser-preview.js');
+      const { listBrowserTabs, browserScreenshot, browserNavigate, browserClick, browserInsertText, browserKey, browserNewTab, browserCloseTab } = await import('./browser-preview.js');
       const tabOption = (rest) => {
         if (!rest.length) return null;
         if (rest.length !== 2 || rest[0] !== '--tab' || !rest[1]) throw new Error('Use --tab ID to select a browser page.');
@@ -121,8 +123,10 @@ async function main() {
       else if (args[0] === 'restart' && [3, 4].includes(args.length) && ['--headless', '--visible'].includes(args[2]) && (args.length === 3 || args[3] === '--no-restore')) console.log(JSON.stringify(await restartBrowser(args[1], args[2] === '--headless', { restorePage: !args.includes('--no-restore') }), null, 2));
       else if (args[0] === 'tabs' && args.length === 2) {
         const tabs = await listBrowserTabs(args[1]);
-        console.log(JSON.stringify(tabs.map((tab) => ({ id: tab.id, title: tab.title, url: (() => { try { const url = new URL(tab.url); return ['http:', 'https:'].includes(url.protocol) ? `${url.origin}${url.pathname}` : url.href; } catch { return ''; } })() })), null, 2));
+        console.log(JSON.stringify(tabs.map((tab) => ({ id: tab.id, title: tab.title, url: (() => { try { const url = new URL(tab.url); return ['http:', 'https:'].includes(url.protocol) ? `${url.origin}${url.pathname}` : url.href; } catch { return ''; } })(), visibility: tab.visibility, agentAttached: tab.attached })), null, 2));
       }
+      else if (args[0] === 'tab' && args[1] === 'new' && args[2] && args.length <= 4) console.log(JSON.stringify(await browserNewTab(args[2], args[3])));
+      else if (args[0] === 'tab' && args[1] === 'close' && args[2] && args[3] === '--tab' && args[4] && (args.length === 5 || (args.length === 6 && args[5] === '--force'))) console.log(JSON.stringify(await browserCloseTab(args[2], args[4], { force: args[5] === '--force' })));
       else if (args[0] === 'screenshot' && args[1]) {
         const tab = await selectedTab(args[1], args.slice(2));
         const image = await browserScreenshot(args[1], tab);
@@ -152,7 +156,7 @@ async function main() {
       }
       else if (args[0] === 'request' && args[1] && args.includes('--headless') && args.includes('--visible')) throw new Error('Choose either --headless or --visible.');
       else if (args[0] === 'request' && args[1] && args.slice(2).every((flag) => ['--reserve', '--headless', '--visible'].includes(flag))) console.log(JSON.stringify(await requestBrowser(args[1], { launch: !args.includes('--reserve'), headless: args.includes('--headless') ? true : args.includes('--visible') ? false : null }), null, 2));
-      else throw new Error('Usage: browser request|size|close|restart|list|tabs|screenshot|navigate|click|text|key. Run herdr-boss without arguments for details.');
+      else throw new Error('Usage: browser request|size|close|restart|list|tabs|tab new|tab close|screenshot|navigate|click|text|key. Run herdr-boss without arguments for details.');
       break;
     }
     case 'handoff': {
