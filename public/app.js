@@ -691,6 +691,180 @@ function recentUsageBlock() {
 
 // ---------- Project page ----------
 
+// ---------- Project work: frontier, dependencies, groups, specs ----------
+// Orchestrators publish these fields (docs/project-status.md). The Boss only derives views from them.
+
+const projectViews = {};
+const projectView = (slug) => (projectViews[slug] ||= { showDone: false, sort: 'order', group: 'all' });
+const safeUrl = (url) => (/^https?:\/\//i.test(String(url || '')) ? String(url) : null);
+const byId = (a, b) => String(a.id ?? '').localeCompare(String(b.id ?? ''), undefined, { numeric: true });
+const isDone = (t) => (t.status || 'todo') === 'done';
+const STATUS_COLOR = { todo: 'faint', doing: 'info', review: 'accent', blocked: 'crit', done: 'ok' };
+
+// Current frontier: open work whose known blockers are all done. Next: open work that waits only on the current frontier.
+// An orchestrator can set tasks[].frontier itself; then the Boss uses that and derives nothing.
+function workModel(p) {
+  const tasks = (p.tasks || []).filter((t) => t && t.title);
+  const map = new Map(tasks.filter((t) => t.id).map((t) => [t.id, t]));
+  const openBlockers = (t) => (t.blockedBy || []).filter((id) => map.has(id) && !isDone(map.get(id)));
+  const explicit = tasks.some((t) => t.frontier);
+  const current = new Set(), next = new Set();
+  for (const t of tasks) {
+    if (isDone(t)) continue;
+    if (explicit) { if (t.frontier === 'current') current.add(t); else if (t.frontier === 'next') next.add(t); continue; }
+    if (t.status !== 'blocked' && openBlockers(t).length === 0) current.add(t);
+  }
+  if (!explicit) for (const t of tasks) {
+    if (isDone(t) || current.has(t)) continue;
+    const waits = openBlockers(t);
+    if (waits.length && waits.every((id) => current.has(map.get(id)))) next.add(t);
+  }
+  const groups = [...(Array.isArray(p.groups) ? p.groups : [])];
+  if (tasks.some((t) => !t.group || !groups.some((g) => g.id === t.group))) groups.push({ id: '', title: 'Other work' });
+  return { tasks, map, openBlockers, current, next, groups, explicit };
+}
+
+function taskChip(t, extra = '') {
+  const url = safeUrl(t.url);
+  const label = `${t.id ? `<b>${esc(t.id)}</b> ` : ''}${esc(t.title)}`;
+  return `<li class="task-chip s-${esc(t.status || 'todo')}${extra}">${url ? `<a href="${esc(url)}" target="_blank" rel="noreferrer">${label}</a>` : label}</li>`;
+}
+
+function progressBar(done, total) {
+  const pct = total ? Math.round((done / total) * 100) : 0;
+  return `<div class="work-bar" role="img" aria-label="${done} of ${total} done"><i style="width:${pct}%"></i></div><small class="num">${done} / ${total} done · ${pct}%</small>`;
+}
+
+function programBlock(m) {
+  if (!m.tasks.length) return '';
+  const done = m.tasks.filter(isDone).length;
+  const waiting = m.tasks.filter((t) => !isDone(t) && (t.status === 'blocked' || m.openBlockers(t).length)).length;
+  const list = (set, empty) => set.size ? `<ul class="chip-list">${[...set].sort(byId).slice(0, 12).map((t) => taskChip(t)).join('')}</ul>${set.size > 12 ? `<small>+${set.size - 12} more</small>` : ''}` : `<p class="muted">${empty}</p>`;
+  return `<section class="program"><div class="panel program-total"><h2>Overall progress</h2>${progressBar(done, m.tasks.length)}<small>${m.tasks.length - done} open · ${waiting} waiting on a blocker</small></div>
+    <div class="panel"><h2>Current frontier <span class="sub">${m.explicit ? 'set by the orchestrator' : 'open, no open blockers'}</span></h2>${list(m.current, 'No open work is ready.')}</div>
+    <div class="panel"><h2>Next <span class="sub">${m.explicit ? 'set by the orchestrator' : 'waits only on the current frontier'}</span></h2>${list(m.next, 'Nothing waits only on the current frontier.')}</div></section>`;
+}
+
+function groupsBlock(m) {
+  if (!(m.groups.length > 1 || (m.groups[0] && m.groups[0].id))) return '';
+  return `<section><h2>Groups <span class="sub">releases or phases in the published order</span></h2><div class="group-grid">${m.groups.map((g) => {
+    const items = m.tasks.filter((t) => (g.id ? t.group === g.id : !t.group || !m.groups.some((x) => x.id && x.id === t.group)));
+    if (!items.length && !g.id) return '';
+    const open = items.filter((t) => !isDone(t)).sort(byId);
+    const refs = (Array.isArray(g.refs) ? g.refs : []).map((r) => safeUrl(r.url) ? `<a href="${esc(safeUrl(r.url))}" target="_blank" rel="noreferrer">${esc(r.label)}</a>` : `<span class="mono">${esc(r.label)}</span>`).join(' · ');
+    return `<article class="panel group-card"><div class="proj-head"><b>${esc(g.title)}</b>${open.some((t) => m.current.has(t)) ? '<span class="tag">active</span>' : !open.length && items.length ? '<span class="tag">complete</span>' : ''}</div>
+      ${progressBar(items.length - open.length, items.length)}${g.note ? `<p>${esc(g.note)}</p>` : ''}${refs ? `<small>${refs}</small>` : ''}
+      ${open.length ? `<ul class="chip-list">${open.slice(0, 8).map((t) => taskChip(t, m.current.has(t) ? ' current' : '')).join('')}</ul>${open.length > 8 ? `<small>+${open.length - 8} more open</small>` : ''}` : ''}</article>`;
+  }).join('')}</div></section>`;
+}
+
+function specsBlock(m) {
+  const specs = m.tasks.filter((t) => t.kind === 'spec').sort(byId);
+  if (!specs.length) return '';
+  return `<section><h2>Specs <span class="sub">${specs.length} · progress of the work under each spec</span></h2><div class="spec-list">${specs.map((spec) => {
+    const children = m.tasks.filter((t) => t.parent && t.parent === spec.id);
+    const done = children.filter(isDone).length;
+    const url = safeUrl(spec.url);
+    return `<article class="panel spec-row"><div><span class="st-badge s-${esc(spec.status || 'todo')}">${esc(STATUS_LABEL[spec.status || 'todo'] || spec.status)}</span> ${spec.id ? `<b>${esc(spec.id)}</b> ` : ''}${url ? `<a href="${esc(url)}" target="_blank" rel="noreferrer">${esc(spec.title)}</a>` : esc(spec.title)}</div>
+      ${children.length ? progressBar(done, children.length) : '<small class="muted">No work linked with parent</small>'}</article>`;
+  }).join('')}</div></section>`;
+}
+
+// Layered dependency graph: each column holds tasks whose blockers sit in earlier columns. Arrows run from blocker to dependent.
+function dependencyGraph(m, slug) {
+  const view = projectView(slug);
+  const edges = m.tasks.flatMap((t) => (t.blockedBy || []).filter((id) => m.map.has(id)).map((id) => [id, t.id]));
+  if (!edges.length) return '';
+  const linked = new Set(edges.flat());
+  let nodes = m.tasks.filter((t) => t.id && linked.has(t.id));
+  if (!view.showDone) {
+    // Keep completed tasks only as the direct blockers of open work, so the open chain keeps its context.
+    const keep = new Set(nodes.filter((t) => !isDone(t)).map((t) => t.id));
+    for (const t of nodes) if (!isDone(t)) for (const id of t.blockedBy || []) if (m.map.has(id)) keep.add(id);
+    nodes = nodes.filter((t) => keep.has(t.id));
+  }
+  const truncated = nodes.length > 90;
+  if (truncated) nodes = nodes.filter((t) => !isDone(t)).slice(0, 90);
+  const inSet = new Set(nodes.map((t) => t.id));
+  const layer = new Map();
+  const visiting = new Set();
+  const depth = (t) => {
+    if (layer.has(t.id)) return layer.get(t.id);
+    if (visiting.has(t.id)) return 0; // a cycle in published data; break it here
+    visiting.add(t.id);
+    const blockers = (t.blockedBy || []).filter((id) => inSet.has(id));
+    const d = blockers.length ? 1 + Math.max(...blockers.map((id) => depth(m.map.get(id)))) : 0;
+    visiting.delete(t.id);
+    layer.set(t.id, d);
+    return d;
+  };
+  nodes.forEach(depth);
+  const groupOrder = new Map(m.groups.map((g, i) => [g.id, i]));
+  const columns = [];
+  for (const t of nodes) (columns[layer.get(t.id)] ||= []).push(t);
+  for (const col of columns) col?.sort((a, b) => (groupOrder.get(a.group) ?? 99) - (groupOrder.get(b.group) ?? 99) || byId(a, b));
+  const W = 168, H = 46, GX = 56, GY = 12, PAD = 8;
+  const pos = new Map();
+  columns.forEach((col, x) => (col || []).forEach((t, y) => pos.set(t.id, { x: PAD + x * (W + GX), y: PAD + y * (H + GY) })));
+  const width = PAD * 2 + columns.length * (W + GX) - GX;
+  const height = PAD * 2 + Math.max(...columns.map((c) => c?.length || 0)) * (H + GY) - GY;
+  const paths = edges.filter(([a, b]) => pos.has(a) && pos.has(b)).map(([a, b]) => {
+    const s = pos.get(a), e = pos.get(b);
+    const x1 = s.x + W, y1 = s.y + H / 2, x2 = e.x, y2 = e.y + H / 2, mid = (x1 + x2) / 2;
+    const open = !isDone(m.map.get(a));
+    return `<path class="dep-edge${open ? ' open' : ''}" d="M${x1},${y1} C${mid},${y1} ${mid},${y2} ${x2 - 4},${y2}" marker-end="url(#dep-arrow-${esc(slug)})"></path>`;
+  }).join('');
+  const boxes = nodes.map((t) => {
+    const { x, y } = pos.get(t.id);
+    const role = m.current.has(t) ? ' current' : m.next.has(t) ? ' next' : '';
+    const hidden = (t.blockedBy || []).filter((id) => !inSet.has(id) && !(m.map.has(id) && isDone(m.map.get(id)))).length;
+    const url = safeUrl(t.url);
+    const body = `<rect class="dep-node s-${esc(t.status || 'todo')}${role}" x="${x}" y="${y}" width="${W}" height="${H}" rx="6"></rect>
+      <text x="${x + 9}" y="${y + 18}" class="dep-id">${esc(t.id)}${role ? ` · ${role.trim()}` : ''}${hidden ? ` · +${hidden} external` : ''}</text>
+      <text x="${x + 9}" y="${y + 35}" class="dep-title">${esc(t.title.length > 24 ? `${t.title.slice(0, 23)}…` : t.title)}</text><title>${esc(`${t.id} ${t.title} (${STATUS_LABEL[t.status || 'todo']})`)}</title>`;
+    return url ? `<a href="${esc(url)}" target="_blank" rel="noreferrer">${body}</a>` : `<g>${body}</g>`;
+  }).join('');
+  return `<section class="dep-section"><div class="section-head"><h2>Dependencies <span class="sub">arrows run from blocker to dependent · columns show order</span></h2>
+    <label class="inline-toggle"><input type="checkbox" data-project-done="${esc(slug)}" ${view.showDone ? 'checked' : ''}> Show completed work</label></div>
+    <div class="dep-legend"><span class="s-todo">To do</span><span class="s-doing">In progress</span><span class="s-review">Review</span><span class="s-blocked">Blocked</span><span class="s-done">Done</span><span class="current">Current frontier</span><span class="next">Next</span></div>
+    <div class="panel dep-scroll"><svg class="dep-graph" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="Dependency graph with ${nodes.length} tasks">
+      <defs><marker id="dep-arrow-${esc(slug)}" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L8,4 L0,8 z" class="dep-arrow"></path></marker></defs>${paths}${boxes}</svg></div>
+    ${truncated ? '<small class="muted">The graph shows the first 90 open tasks. Filter the issue list below for the rest.</small>' : ''}</section>`;
+}
+
+function issueTable(m, slug) {
+  if (!m.tasks.length) return '';
+  const view = projectView(slug);
+  const rank = (t) => (m.current.has(t) ? 0 : m.next.has(t) ? 1 : isDone(t) ? 3 : 2);
+  let rows = m.tasks.filter((t) => (view.showDone || !isDone(t)) && (view.group === 'all' || (t.group || '') === view.group));
+  const sorts = {
+    order: (a, b) => rank(a) - rank(b) || byId(a, b),
+    id: byId,
+    updated: (a, b) => String(b.updated || '').localeCompare(String(a.updated || '')),
+    status: (a, b) => STATUSES.indexOf(a.status || 'todo') - STATUSES.indexOf(b.status || 'todo') || byId(a, b),
+  };
+  rows = rows.sort(sorts[view.sort] || sorts.order);
+  const groups = m.groups.filter((g) => g.id);
+  return `<section><div class="section-head"><h2>All work <span class="sub">${rows.length} shown of ${m.tasks.length}</span></h2><div class="issue-tools">
+    <label>Sort <select data-project-sort="${esc(slug)}">${[['order', 'Frontier first'], ['id', 'ID'], ['status', 'Status'], ['updated', 'Recently updated']].map(([v, l]) => `<option value="${v}" ${view.sort === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+    ${groups.length ? `<label>Group <select data-project-group="${esc(slug)}"><option value="all">All groups</option>${groups.map((g) => `<option value="${esc(g.id)}" ${view.group === g.id ? 'selected' : ''}>${esc(g.title)}</option>`).join('')}</select></label>` : ''}
+    <label class="inline-toggle"><input type="checkbox" data-project-done="${esc(slug)}" ${view.showDone ? 'checked' : ''}> Show completed</label></div></div>
+    <div class="panel issue-table-wrap"><table class="issue-table"><thead><tr><th>ID</th><th>Title</th><th>Status</th><th>Group</th><th>Blocked by</th><th>Labels</th><th>Updated</th></tr></thead><tbody>${rows.map((t) => {
+      const url = safeUrl(t.url);
+      const waits = m.openBlockers(t);
+      const group = m.groups.find((g) => g.id && g.id === t.group);
+      return `<tr class="${m.current.has(t) ? 'row-current' : ''}"><td class="mono">${esc(t.id || '')}</td><td>${url ? `<a href="${esc(url)}" target="_blank" rel="noreferrer">${esc(t.title)}</a>` : esc(t.title)}${t.kind ? ` <span class="tag">${esc(t.kind)}</span>` : ''}${m.current.has(t) ? ' <span class="tag current">current</span>' : m.next.has(t) ? ' <span class="tag">next</span>' : ''}</td><td><span class="st-badge s-${esc(t.status || 'todo')}">${esc(STATUS_LABEL[t.status || 'todo'] || t.status)}</span></td><td>${esc(group?.title || '')}</td><td class="mono">${(t.blockedBy || []).map((id) => `<span class="${waits.includes(id) ? 'text-crit' : 'muted'}">${esc(id)}</span>`).join(' ')}</td><td>${(t.labels || []).map((l) => `<span class="tag">${esc(l)}</span>`).join(' ')}</td><td class="mono">${t.updated ? esc(ago(t.updated)) : ''}</td></tr>`;
+    }).join('') || '<tr><td colspan="7" class="muted">No work matches the filter.</td></tr>'}</tbody></table></div></section>`;
+}
+
+function gatesRisksBlock(p) {
+  const gates = Array.isArray(p.gates) ? p.gates : [];
+  const risks = Array.isArray(p.risks) ? p.risks : [];
+  if (!gates.length && !risks.length) return '';
+  return `<section class="two">${gates.length ? `<div class="panel"><h2>Human gates</h2><table class="issue-table"><thead><tr><th>Gate</th><th>Needs</th><th>Evidence</th><th>Status</th></tr></thead><tbody>${gates.map((g) => `<tr><td>${g.id ? `<b class="mono">${esc(g.id)}</b> ` : ''}${esc(g.title)}</td><td>${esc(g.needs || '')}</td><td>${esc(g.evidence || '')}</td><td>${esc(g.status || '')}</td></tr>`).join('')}</tbody></table></div>` : ''}
+    ${risks.length ? `<div class="panel"><h2>Risks</h2><ul class="notes">${risks.map((r) => `<li>${code(r)}</li>`).join('')}</ul></div>` : ''}</section>`;
+}
+
 function project(s, slug) {
   const published = (s.projects || []).find((x) => x.slug === slug);
   const live = s.control?.projects?.[slug];
@@ -705,22 +879,35 @@ function project(s, slug) {
   }).join('')}</ol>` : p.phase ? `<div><span class="tag">${esc(p.phase)}</span></div>` : '';
   const metrics = p.metrics?.length ? `<section class="metrics">${p.metrics.map((m) => `<div class="panel metric"><div class="k">${esc(m.label)}</div><div class="v">${esc(m.value)}</div>${m.detail ? `<div class="d">${esc(m.detail)}</div>` : ''}</div>`).join('')}</section>` : '';
   const c = taskCounts(p);
-  const colors = { todo: 'faint', doing: 'info', review: 'accent', blocked: 'crit', done: 'ok' };
-  const board = (p.tasks || []).length ? `<section><h2>Tasks <span class="sub">${(p.tasks || []).length} total · worker status is live from Herdr</span></h2><div class="board">${STATUSES.map((k) => `<div class="col" style="--c:var(--${colors[k]})"><h3><span>${STATUS_LABEL[k]}</span><span class="num">${c[k]}</span></h3>
-      ${(p.tasks || []).filter((t) => (t.status || 'todo') === k).map((t) => {
+  const colors = STATUS_COLOR;
+  const work = workModel(p);
+  const view = projectView(slug);
+  // The Done column can hold hundreds of closed issues; show the latest ten unless completed work is on.
+  const columnTasks = (k) => {
+    const list = (p.tasks || []).filter((t) => (t.status || 'todo') === k);
+    return k === 'done' && !view.showDone ? list.sort((a, b) => String(b.updated || '').localeCompare(String(a.updated || ''))).slice(0, 10) : list;
+  };
+  const board = (p.tasks || []).length ? `<section><h2>Tasks <span class="sub">${(p.tasks || []).length} total · worker status is live from Herdr${!view.showDone && c.done > 10 ? ` · Done shows the latest 10 of ${c.done}` : ''}</span></h2><div class="board">${STATUSES.map((k) => `<div class="col" style="--c:var(--${colors[k]})"><h3><span>${STATUS_LABEL[k]}</span><span class="num">${c[k]}</span></h3>
+      ${columnTasks(k).map((t) => {
         const w = t.worker && byName.get(t.worker);
         return `<div class="task">${t.id ? `<span class="id">${esc(t.id)}</span>` : ''}<span class="title">${esc(t.title)}</span>${t.note ? `<span class="note">${esc(t.note)}</span>` : ''}${t.worker ? `<span class="w"><span class="st ${w ? w.status : 'shell'}"></span>${esc(t.worker)}${w ? ` · ${esc(w.status)}` : ' · not running'}</span>` : ''}</div>`;
       }).join('')}</div>`).join('')}</div></section>` : '';
-  const links = p.links?.length ? `<div class="panel"><h2>Links</h2><ul class="links">${p.links.map((l) => `<li><a href="${esc(l.url)}" target="_blank" rel="noreferrer">${esc(l.label || l.url)}</a></li>`).join('')}</ul></div>` : '';
+  const links = p.links?.length ? `<div class="panel"><h2>Links</h2><ul class="links">${p.links.map((l) => safeUrl(l.url) ? `<li><a href="${esc(safeUrl(l.url))}" target="_blank" rel="noreferrer">${esc(l.label || l.url)}</a></li>` : `<li>${esc(l.label || '')}</li>`).join('')}</ul></div>` : '';
   const notes = p.notes?.length ? `<div class="panel"><h2>Notes</h2><ul class="notes">${p.notes.map((n) => `<li>${code(n)}</li>`).join('')}</ul></div>` : '';
   const ws = p.workspace && s.herdr?.workspaces.find((w) => w.id === p.workspace || w.label === p.workspace);
   const wsBlock = ws ? workspacesBlock({ ...s, herdr: { ...s.herdr, workspaces: [ws] } }) : '';
   return [
-    `<section class="phead"><h1>${esc(p.project)}</h1>${p.summary ? `<p>${esc(p.summary)}</p>` : ''}${phases}<div class="win-foot">${published ? `updated ${ago(p.updated)}${p.status ? ` · ${esc(p.status)}` : ''}` : 'No project status published yet'}</div></section>`,
+    `<section class="phead"><h1>${esc(p.project)}</h1>${p.summary ? `<p>${esc(p.summary)}</p>` : ''}${phases}<div class="win-foot">${published ? `updated ${ago(p.updated)}${p.status ? ` · ${esc(p.status)}` : ''}` : 'No project status published yet'}${p.git && typeof p.git === 'object' ? ` · <span class="mono">${esc(p.git.branch || '')}${p.git.commit ? ` @ ${esc(String(p.git.commit).slice(0, 12))}` : ''}${p.git.dirty ? ' · uncommitted changes' : ''}</span>` : ''}</div></section>`,
     p.errors ? `<div class="warnbox">${esc(p.errors.join('; '))}</div>` : '',
     handoffBlock(s, slug),
     metrics,
+    programBlock(work),
+    dependencyGraph(work, slug),
+    groupsBlock(work),
+    specsBlock(work),
     board,
+    issueTable(work, slug),
+    gatesRisksBlock(p),
     links || notes ? `<section class="two">${notes}${links}</section>` : '',
     wsBlock,
   ].join('');
@@ -838,6 +1025,15 @@ document.addEventListener('input', (e) => {
 });
 
 document.addEventListener('change', (e) => {
+  const projectControl = e.target.dataset?.projectDone || e.target.dataset?.projectSort || e.target.dataset?.projectGroup;
+  if (projectControl) {
+    const view = projectView(projectControl);
+    if (e.target.dataset.projectDone) view.showDone = e.target.checked;
+    if (e.target.dataset.projectSort) view.sort = e.target.value;
+    if (e.target.dataset.projectGroup) view.group = e.target.value;
+    lastRender = ''; render();
+    return;
+  }
   if (e.target.dataset.browserInterval) {
     const slug = e.target.dataset.browserInterval;
     const interval = Number(e.target.value);

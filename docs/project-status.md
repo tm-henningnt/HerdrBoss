@@ -61,6 +61,47 @@ Only `project` is required. Omit the fields that you do not use.
 | `links[]` | object | `label` and `url`. |
 | `notes[]` | string | Short notes. Backticks show as code. |
 
+## Work structure: dependencies, groups, and specs
+
+These fields are optional. With them, the project page shows overall progress, the current and next frontier, a dependency graph, progress per group and per spec, and a sortable list of all work, open and completed.
+
+Publish every tracked issue as a task, including closed issues with `"status": "done"`. The page limits the Done column of the board to the latest 10 tasks until the viewer selects **Show completed**.
+
+```json
+{
+  "groups": [
+    { "id": "1.0", "title": "Release 1.0", "note": "Core map and export.", "refs": [{ "label": "docs/ReleasePlan.md" }] },
+    { "id": "2.0", "title": "Release 2.0" }
+  ],
+  "tasks": [
+    { "id": "70", "title": "Event log spec", "status": "done", "kind": "spec", "group": "1.0", "url": "https://github.com/org/repo/issues/70" },
+    { "id": "74", "title": "Parse event log", "status": "doing", "group": "1.0", "parent": "70", "blockedBy": ["70"], "labels": ["ready-for-agent"], "updated": "2026-09-25T08:00:00Z" },
+    { "id": "75", "title": "Render graph", "status": "todo", "group": "1.0", "parent": "70", "blockedBy": ["74"] }
+  ],
+  "gates": [{ "id": "G1", "title": "Owner visual review", "needs": "Owner looks at the hosted sheet", "evidence": "owner", "status": "waiting" }],
+  "risks": ["The hosted tenant quota can block the gate."],
+  "git": { "branch": "main", "commit": "4f1c2ab", "dirty": false }
+}
+```
+
+| Field | Type | Meaning |
+|---|---|---|
+| `tasks[].blockedBy` | string[] | IDs of the tasks that must be done first. Use the GitHub native issue dependencies or the "blocked by" links in the issues. The graph draws an arrow from each blocker to the task. |
+| `tasks[].parent` | string | The ID of the parent task. The specs section counts the work under each spec by this field. |
+| `tasks[].kind` | string | A task class, for example `spec`, `impl`, `bug`, or `gate`. Tasks with `spec` show in the specs section. |
+| `tasks[].group` | string | The `id` of a group in `groups[]`. |
+| `tasks[].frontier` | string | `current` or `next`. Set it when the project defines its frontier itself. When no task has this field, the Boss derives it: current work is open and has no open blocker; next work waits only on current work. |
+| `tasks[].url` | string | An `http` or `https` link to the issue. |
+| `tasks[].labels` | string[] | Issue labels. |
+| `tasks[].assignee` | string | The person or agent assigned to the issue. |
+| `tasks[].updated` | string | The ISO time of the last change. The list can sort by it. |
+| `groups[]` | object | `id` and `title` are required. `note` is one line. `refs[]` holds `label` and an optional `http(s)` `url`, for example a roadmap section. Publish groups in their delivery order. |
+| `gates[]` | object | A human gate: `title` is required; `id`, `needs`, `evidence`, and `status` are optional. |
+| `risks[]` | string[] | Open risks. |
+| `git` | object | `branch`, `commit`, and `dirty` (boolean). |
+
+Task IDs must be unique. A `blockedBy` ID that is not in `tasks[]` counts as external: the graph notes it on the task and does not draw it. Links in `links[]`, `tasks[].url`, and `groups[].refs[].url` must start with `http://` or `https://`.
+
 Herdr Boss sets `updated` when you publish with method 2 or 3. With method 1, the dashboard uses the file modification time.
 
 ## Remove a project

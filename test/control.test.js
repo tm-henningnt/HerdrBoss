@@ -135,3 +135,22 @@ test('worker start gate lets the least-over provider start and refuses the other
   assert.match(providerGate('claude', rules, { now, force: true }).warning, /--force overrides the quota guard/);
   assert.deepEqual(providerGate('pi', { avoidProviders: [] }, { now }), {});
 });
+
+test('project status validation accepts work structure and rejects unsafe or malformed fields', async () => {
+  const { validateProject } = await import('../src/projects.js');
+  assert.deepEqual(validateProject({
+    project: 'Demo',
+    groups: [{ id: '1.0', title: 'Release 1.0', refs: [{ label: 'docs/Plan.md' }] }],
+    tasks: [{ id: '1', title: 'Spec', kind: 'spec', status: 'done' }, { id: '2', title: 'Build', parent: '1', blockedBy: ['1'], group: '1.0', url: 'https://example.com/2' }],
+    gates: [{ title: 'Owner review' }], risks: ['Quota'], git: { branch: 'main', commit: 'abc', dirty: false },
+  }), []);
+  const errors = validateProject({
+    project: 'Demo',
+    tasks: [{ id: '1', title: 'A', blockedBy: '2' }, { id: '1', title: 'B', url: 'javascript:alert(1)' }],
+    links: [{ label: 'x', url: 'javascript:alert(1)' }],
+  });
+  assert.ok(errors.some((e) => /blockedBy must be an array/.test(e)));
+  assert.ok(errors.some((e) => /task IDs must be unique/.test(e)));
+  assert.ok(errors.some((e) => /tasks\[1\]\.url must start with http/.test(e)));
+  assert.ok(errors.some((e) => /links\[0\]\.url must start with http/.test(e)));
+});
