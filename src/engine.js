@@ -153,7 +153,8 @@ export class Engine extends EventEmitter {
         evaluation.alerts.push({
           key: `handoff:${h.workspace}:${h.provider}:${h.window.resetsAt}`,
           severity: h.window.usedPercent >= 98 ? 'critical' : 'warn',
-          scope: p.slug === 'herdrboss' ? 'user' : h.workspace,
+          // The Boss's own handover goes to the Owner, not to the Boss pane itself.
+          scope: (herdr?.panes || []).some((x) => x.id === h.pane && x.label === 'boss') ? 'user' : h.workspace,
           suppressPrompt: h.window.usedPercent >= 98,
           title: `Prepare ${h.project} orchestrator handover`,
           text: h.target

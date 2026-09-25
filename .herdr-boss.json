@@ -1,0 +1,10 @@
+{
+  "baseBranch": "main",
+  "evidenceTiers": [
+    "unit",
+    "local-browser",
+    "live-service",
+    "owner"
+  ],
+  "testThreadsFlag": "--test-concurrency=2"
+}

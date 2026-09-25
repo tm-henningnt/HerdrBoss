@@ -4,10 +4,15 @@
   "description": "Resource supervisor and shared dashboard for Herdr orchestrators",
   "type": "module",
   "private": true,
-  "bin": { "herdr-boss": "bin/herdr-boss" },
-  "engines": { "node": ">=22" },
+  "bin": {
+    "herdr-boss": "bin/herdr-boss"
+  },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "start": "node src/cli.js serve",
-    "tick": "node src/cli.js tick"
+    "tick": "node src/cli.js tick",
+    "test": "node --test --test-concurrency=2 test/"
   }
 }
