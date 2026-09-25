@@ -112,7 +112,7 @@ Each project has one persistent Chrome profile on a port from 9223 to 9299. Add 
 | `browser tabs SLUG` | Tabs with ID, title, URL, visibility, and whether an agent is attached. |
 | `browser tab new SLUG [URL]` | Open a tab in its own background window. Prints the ID. |
 | `browser tab close SLUG --tab ID [--force]` | Close a tab. Refuses a tab an agent is attached to unless `--force`. |
-| `browser screenshot SLUG [--tab ID]` | Save a private JPEG and print its path. |
+| `browser screenshot SLUG [--tab ID] [--out DIR]` | Save a private JPEG and print its path. Use `$TMPDIR` by default, or select a directory with `--out DIR`. |
 | `browser navigate SLUG URL [--tab ID]` | Open an `http` or `https` page. |
 | `browser click SLUG X% Y% [--tab ID]` | Click at a position relative to the screenshot. |
 | `browser text SLUG --stdin [--tab ID]` | Type text from standard input. The text is not echoed. |
@@ -123,6 +123,8 @@ id=$(herdr-boss browser tab new tmprocessmining | jq -r .id)
 herdr-boss browser navigate tmprocessmining https://example.com --tab "$id"
 herdr-boss browser screenshot tmprocessmining --tab "$id"
 ```
+
+The screenshot command writes under `$TMPDIR` when it is set. Otherwise, it creates a safe temporary directory. Pass `--out DIR` to choose an output directory. This option overrides `$TMPDIR` and can be used with `--tab`.
 
 ## Orchestrator handover
 

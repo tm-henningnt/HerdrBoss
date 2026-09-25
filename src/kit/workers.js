@@ -495,6 +495,7 @@ export function startWorker(name, options, {
     }
     addExclude(worktree);
     fs.mkdirSync(path.join(worktree, plan.workerDir), { recursive: true });
+    fs.mkdirSync(path.join(worktree, '.worker', 'tmp'), { recursive: true });
     fs.writeFileSync(path.join(worktree, plan.workerDir, 'brief.md'), brief);
     if (plan.setup) {
       output(`Running project setup in ${worktree}: ${plan.setup}`);
