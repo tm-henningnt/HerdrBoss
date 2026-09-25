@@ -18,6 +18,8 @@ The observed order from lower to higher cost is:
 
 Treat this order as a routing hint.
 
+Prefer an unmetered model for bounded, well-specified work while a metered provider is ahead of pace. Reserve metered models for work that needs judgment. Read the unmetered lane in `herdr-boss lanes`; a worker-start refusal or least-over notice lists your project's unmetered alternatives first.
+
 Provider quota, task fit, availability, and review effort affect the real cost.
 
 ## Task lanes

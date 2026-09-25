@@ -22,18 +22,22 @@ export const POLICY_DEFAULTS = {
   providerModes: { codex: 'managed', claude: 'managed', opencodego: 'managed' },
   preferredModels: {},
   modelProviders: {},
+  // A pacing goal is the most percent of a live quota window the Owner wants to use by its reset.
+  // It is keyed by provider and by the stable window key from quota collection. An absent goal means 100%.
+  pacingGoals: {},
   projects: {},
 };
 
 const SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const KINDS = new Set(POLICY_DEFAULTS.allowedKinds);
 const PROVIDERS = new Set(Object.keys(POLICY_DEFAULTS.providerModes));
+const WINDOW_KEYS = new Set(['primary', 'secondary', 'tertiary']);
 
 export function loadPolicy() {
   let saved = {};
   try { saved = JSON.parse(fs.readFileSync(FILE, 'utf8')); }
   catch (e) { if (e.code !== 'ENOENT') throw e; }
-  return { ...POLICY_DEFAULTS, ...saved, machine: { ...POLICY_DEFAULTS.machine, ...saved.machine }, providerModes: { ...POLICY_DEFAULTS.providerModes, ...saved.providerModes }, preferredModels: saved.preferredModels || {}, modelProviders: saved.modelProviders || {}, projects: saved.projects || {} };
+  return { ...POLICY_DEFAULTS, ...saved, machine: { ...POLICY_DEFAULTS.machine, ...saved.machine }, providerModes: { ...POLICY_DEFAULTS.providerModes, ...saved.providerModes }, preferredModels: saved.preferredModels || {}, modelProviders: saved.modelProviders || {}, pacingGoals: saved.pacingGoals || {}, projects: saved.projects || {} };
 }
 
 export function machineLimits(machine, policy) {
@@ -86,6 +90,13 @@ export function validatePolicy(value, models) {
   }
   if (!value.providerModes || typeof value.providerModes !== 'object' || Array.isArray(value.providerModes)) errors.push('providerModes must be an object.');
   else for (const [provider, mode] of Object.entries(value.providerModes)) if (!PROVIDERS.has(provider) || !['managed', 'ignore'].includes(mode)) errors.push(`invalid provider mode: ${provider}.`);
+  if (!value.pacingGoals || typeof value.pacingGoals !== 'object' || Array.isArray(value.pacingGoals)) errors.push('pacingGoals must be an object.');
+  else for (const [provider, windows] of Object.entries(value.pacingGoals)) {
+    if (!PROVIDERS.has(provider) || !windows || typeof windows !== 'object' || Array.isArray(windows)) { errors.push(`invalid pacingGoals entry for ${provider}.`); continue; }
+    for (const [key, percent] of Object.entries(windows)) {
+      if (!WINDOW_KEYS.has(key) || !Number.isInteger(percent) || percent < 0 || percent > 100) errors.push(`pacingGoals.${provider}.${key} must be a whole percentage from 0 to 100.`);
+    }
+  }
   if (!value.projects || typeof value.projects !== 'object' || Array.isArray(value.projects)) errors.push('projects must be an object.');
   else for (const [slug, project] of Object.entries(value.projects)) {
     if (!SLUG.test(slug) || !project || typeof project !== 'object' || Array.isArray(project)) { errors.push(`invalid project: ${slug}.`); continue; }
@@ -165,14 +176,33 @@ function quotaRisk(q, policy, now = Date.now()) {
   return risk.sort((a, b) => b.usedPercent - a.usedPercent)[0] || null;
 }
 
-// How far a window is ahead of pace; without expected use, its usage percentage.
-const paceScore = (w) => Number.isFinite(w.expectedPercent) ? w.usedPercent - w.expectedPercent : w.usedPercent;
+// A goal below 100 lowers the expected-use curve, so the window reaches the goal at its reset instead of full quota.
+export function pacingGoal(policy, provider, key) {
+  const percent = policy?.pacingGoals?.[provider]?.[key];
+  return Number.isInteger(percent) ? percent : 100;
+}
 
-// Any live window that will not last makes its provider ahead of pace. The lane reports the worst of them.
+// The expected-use percentage at the current time, scaled by the goal. Null when no pace forecast exists.
+export function adjustedExpectedPercent(policy, provider, window) {
+  if (!Number.isFinite(window?.expectedPercent)) return null;
+  return window.expectedPercent * pacingGoal(policy, provider, window.key) / 100;
+}
+
+// A live window is ahead of pace when it will not last to reset, or when its use is above the goal-adjusted expected use.
+export function aheadOfQuotaPace(policy, provider, window) {
+  if (!window) return false;
+  const expected = adjustedExpectedPercent(policy, provider, window);
+  return window.willLast === false || (expected != null && window.usedPercent > expected);
+}
+
+// How far a window is ahead of pace; without expected use, its usage percentage.
+const paceScore = (w, expected) => expected != null ? w.usedPercent - expected : w.usedPercent;
+
+// Any live window that is ahead of pace makes its provider ahead of pace. The lane reports the worst of them.
 function quotaPressure(q, policy, now = Date.now()) {
   if (policy.providerModes[q.provider] === 'ignore' || q.error) return null;
-  return (q.windows || []).filter((w) => liveWindow(w, now) && w.willLast === false)
-    .sort((a, b) => paceScore(b) - paceScore(a))[0] || null;
+  return (q.windows || []).filter((w) => liveWindow(w, now) && aheadOfQuotaPace(policy, q.provider, w))
+    .sort((a, b) => paceScore(b, adjustedExpectedPercent(policy, q.provider, b)) - paceScore(a, adjustedExpectedPercent(policy, q.provider, a)))[0] || null;
 }
 
 // One state per metered provider: open, pace (ahead of quota pace), reserve (near exhaustion), or unknown.
@@ -185,13 +215,15 @@ export function laneStatus(quotas, policy, now = Date.now()) {
     const risk = quotaRisk(q, policy, now);
     const w = risk || quotaPressure(q, policy, now);
     if (!w) { lanes[q.provider] = { state: 'open', resetWindows }; continue; }
-    const overPercent = Number.isFinite(w.expectedPercent) ? w.usedPercent - w.expectedPercent : null;
+    const expectedPercent = adjustedExpectedPercent(policy, q.provider, w);
+    const overPercent = expectedPercent != null ? w.usedPercent - expectedPercent : null;
     const resetAt = Date.parse(w.resetsAt) || Infinity;
-    // Expected use grows by 100% per window, so an unused provider catches up at that rate.
+    // The goal is reached at the reset, so an unused provider catches up at the goal rate. A zero goal never catches up.
+    const goal = pacingGoal(policy, q.provider, w.key);
     const backOnPaceMs = risk ? resetAt
-      : overPercent != null && overPercent > 0 && w.windowMinutes ? Math.min(now + (overPercent / 100) * w.windowMinutes * 60000, resetAt) : resetAt;
+      : overPercent != null && overPercent > 0 && w.windowMinutes && goal > 0 ? Math.min(now + (overPercent / goal) * w.windowMinutes * 60000, resetAt) : resetAt;
     lanes[q.provider] = {
-      state: risk ? 'reserve' : 'pace', window: w.label, usedPercent: w.usedPercent, expectedPercent: w.expectedPercent ?? null,
+      state: risk ? 'reserve' : 'pace', window: w.label, usedPercent: w.usedPercent, expectedPercent,
       overPercent, backOnPaceAt: Number.isFinite(backOnPaceMs) ? new Date(backOnPaceMs).toISOString() : null, resetWindows,
     };
   }
@@ -199,11 +231,37 @@ export function laneStatus(quotas, policy, now = Date.now()) {
 }
 
 // When no metered provider is open, the least-over provider that is only ahead of pace may start without --force.
+// The unmetered lane is not a metered provider, so it never changes this choice.
 export function leastOverProvider(lanes) {
-  const metered = Object.entries(lanes).filter(([, lane]) => lane.state !== 'unknown');
+  const metered = Object.entries(lanes).filter(([, lane]) => !lane.unmetered && lane.state !== 'unknown');
   if (!metered.length || metered.some(([, lane]) => lane.state === 'open')) return null;
   const pace = metered.filter(([, lane]) => lane.state === 'pace' && lane.overPercent != null).sort((a, b) => a[1].overPercent - b[1].overPercent);
   return pace[0]?.[0] ?? null;
+}
+
+// One always-open lane that lists every permitted unmetered model, grouped by project and harness.
+// A model is unmetered when the configured route and the provider rules give it no metered provider.
+export function unmeteredLane(models, policy, projects = {}) {
+  const byProject = {};
+  for (const [slug, project] of Object.entries(projects)) {
+    const kinds = {};
+    for (const kind of policy.allowedKinds || []) {
+      const config = models.kinds[kind];
+      if (!config || (project.excludedKinds || []).includes(kind)) continue;
+      const permitted = (config.allowedModels || []).filter((model) =>
+        !(policy.excludedModels || []).includes(model)
+        && !(project.excludedModels || []).includes(model)
+        && providerFor(kind, model, policy) === null);
+      if (permitted.length) kinds[kind] = permitted;
+    }
+    if (Object.keys(kinds).length) byProject[slug] = kinds;
+  }
+  return { state: 'open', unmetered: true, byProject };
+}
+
+// A short one-line description of the unmetered lane for the CLI and the bulletin.
+export function unmeteredSummary(lane) {
+  return Object.entries(lane?.byProject || {}).map(([slug, kinds]) => `${slug}: ${Object.entries(kinds).map(([kind, names]) => `${kind} (${names.join(', ')})`).join(', ')}`).join('; ');
 }
 
 export function deriveControl(snap, policy, models, paneSince = {}, now = Date.now()) {

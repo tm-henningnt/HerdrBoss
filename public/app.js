@@ -239,7 +239,20 @@ function settingsView(s) {
   const machine = d.machine || {};
   const machineNumber = (key, label, max, nullable = false) => `<label class="setting-line"><span>${label}</span><input type="number" min="0" max="${max}" ${nullable ? 'step="any" placeholder="Disabled"' : ''} value="${machine[key] ?? ''}" data-policy-machine="${key}"></label>`;
   const machineSettings = `<section class="panel"><h2>Machine</h2><p class="setting-help">The Owner is away after the idle period. Missing idle data means present. CPU is a percent of total machine capacity.</p>${machineNumber('ownerAwayMinutes', 'Owner away after minutes', 1440)}${machineNumber('presentCpuPercent', 'CPU limit while present %', 100)}${machineNumber('awayCpuPercent', 'CPU limit while away %', 100, true)}${machineNumber('presentLoadFactor', 'Present load backstop × cores', 128, true)}${machineNumber('awayLoadFactor', 'Away load backstop × cores', 128, true)}<label class="setting-line"><span>Notice cooldown seconds</span><input type="number" min="0" max="604800" value="${machine.alertCooldownSeconds}" data-policy-machine="alertCooldownSeconds"></label></section>`;
-  return `<header class="page-intro"><div><h1>Settings</h1><p>Choose available harnesses and models, preferred models, quota modes, provider routes, and machine limits.</p></div></header><section id="settings-plane" class="control-shell"><div class="control-grid settings-grid"><section class="panel"><h2>Harnesses and preferred models</h2><div class="settings-kinds">${availability}</div></section><section class="panel"><h2>Provider quota modes</h2>${providerRows}<p class="setting-help">Ignore quota turns off pacing and handover alerts for that provider.</p></section></div><section class="panel"><h2>Available models</h2><p class="setting-help">Clear a model box to disable that model for every project.</p><div class="model-availability-list">${modelRows}</div></section><section class="panel"><h2>Model provider routes</h2><p class="setting-help">Choose which provider quota applies to each model. Use Unmetered when no quota applies.</p><div class="model-routes">${routes}</div></section>${machineSettings}<div class="control-actions ${policyDirty ? 'pending' : ''}"><span data-policy-status role="status" aria-live="polite">${esc(saveMessage || (policyDirty ? 'Unsaved changes · Apply policy to keep them' : 'Policy saved'))}</span><button id="save-policy" ${policyDirty ? '' : 'disabled'}>Apply policy</button></div></section>`;
+  // A goal exists only for a live, measured window with a stable key. Extra model-only windows do not get one.
+  const goalWindows = [];
+  for (const q of s.quotas || []) {
+    if (q.error) continue;
+    for (const w of q.windows || []) if (!w.extra && w.key != null) goalWindows.push({ provider: q.provider, key: w.key, label: w.label });
+  }
+  const goalRows = goalWindows.length
+    ? goalWindows.map(({ provider, key, label }) => {
+      const value = d.pacingGoals?.[provider]?.[key];
+      return `<label class="setting-line"><span>${esc(PROVIDERS[provider] || provider)} ${esc(label)} goal %</span><input type="number" min="0" max="100" step="1" placeholder="100" value="${value ?? ''}" data-pacing-goal="${esc(provider)}:${esc(key)}"></label>`;
+    }).join('')
+    : '<p class="setting-help">No measured quota window is available yet. Herdr Boss shows a goal input after the next quota reading.</p>';
+  const goalsPanel = `<section class="panel"><h2>Quota pacing goals</h2><p class="setting-help">A goal is the most percent of a window that you want to use by its reset. The expected-use pace scales to the goal. Leave a field blank for 100%.</p><div class="model-routes">${goalRows}</div></section>`;
+  return `<header class="page-intro"><div><h1>Settings</h1><p>Choose available harnesses and models, preferred models, quota modes, quota pacing goals, provider routes, and machine limits.</p></div></header><section id="settings-plane" class="control-shell"><div class="control-grid settings-grid"><section class="panel"><h2>Harnesses and preferred models</h2><div class="settings-kinds">${availability}</div></section><section class="panel"><h2>Provider quota modes</h2>${providerRows}<p class="setting-help">Ignore quota turns off pacing and handover alerts for that provider.</p></section></div><section class="panel"><h2>Available models</h2><p class="setting-help">Clear a model box to disable that model for every project.</p><div class="model-availability-list">${modelRows}</div></section><section class="panel"><h2>Model provider routes</h2><p class="setting-help">Choose which provider quota applies to each model. Use Unmetered when no quota applies.</p><div class="model-routes">${routes}</div></section>${goalsPanel}${machineSettings}<div class="control-actions ${policyDirty ? 'pending' : ''}"><span data-policy-status role="status" aria-live="polite">${esc(saveMessage || (policyDirty ? 'Unsaved changes · Apply policy to keep them' : 'Policy saved'))}</span><button id="save-policy" ${policyDirty ? '' : 'disabled'}>Apply policy</button></div></section>`;
 }
 
 function handoffBlock(s, projectSlug = null) {
@@ -1028,7 +1041,8 @@ const HELP = {
     <p>A bar label such as <b>30% · 2</b> shows the set share and the effective slots. A narrow segment shows fewer labels; its tooltip shows all values.</p>
     <p>An idle project is faded. A paused project is faded and striped. When <b>Borrow idle shares</b> is on, an idle project lends its slots to active projects, so an idle project can have 0 effective slots.</p>`],
   settings: ['Settings', `
-    <p>Choose the harnesses and models that workers can use. Choose a preferred model for each harness, a quota mode for each provider, a provider route for each model, and machine limits for Owner present and away states.</p>
+    <p>Choose the harnesses and models that workers can use. Choose a preferred model for each harness, a quota mode for each provider, a quota pacing goal for each measured window, a provider route for each model, and machine limits for Owner present and away states.</p>
+    <h3>Quota pacing goals</h3><p>A goal is the most percent of a quota window that you want to use by its reset. Herdr Boss scales the expected-use pace to the goal, so a goal of 80% makes the expected curve reach 80% at the reset. An empty field means 100%. A window that is above its goal pace has an "ahead of pace" lane.</p>
     <p>The Machine section sets CPU limits, 5-minute load backstops, the Owner idle period, and the notice cooldown. Herdr blocks dispatch when total sampled CPU exceeds its active limit or the 5-minute load average exceeds its active backstop. Leave the away CPU limit or either load backstop blank to disable it. Apply policy to save these settings.</p>
     <p>An empty preferred model uses the harness default. Choose <b>Unmetered</b> when a model has no provider quota.</p>
     <p>Changes stay in a draft until you select <b>Apply policy</b>. A rejected save shows the server error and keeps your draft.</p>`],
@@ -1208,6 +1222,15 @@ document.addEventListener('input', (e) => {
   const el = e.target;
   if (el.dataset.policyNumber) policyDraft[el.dataset.policyNumber] = Number(el.value);
   if (el.dataset.policyMachine) { policyDraft.machine ||= {}; policyDraft.machine[el.dataset.policyMachine] = el.value === '' ? null : Number(el.value); }
+  if (el.dataset.pacingGoal) {
+    const [provider, key] = el.dataset.pacingGoal.split(':');
+    policyDraft.pacingGoals ||= {};
+    policyDraft.pacingGoals[provider] ||= {};
+    if (el.value === '') {
+      delete policyDraft.pacingGoals[provider][key];
+      if (!Object.keys(policyDraft.pacingGoals[provider]).length) delete policyDraft.pacingGoals[provider];
+    } else policyDraft.pacingGoals[provider][key] = Number(el.value);
+  }
   markPolicyDirty();
 });
 

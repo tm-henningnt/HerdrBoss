@@ -7,7 +7,7 @@ import { collectHerdr, collectQuotas, collectMachine, collectProcesses, findBrow
 import { evaluate, renderBulletin, fmtDuration, providerName, broadcastTargets } from './rules.js';
 import { listProjects } from './projects.js';
 import { loadModels } from './kit/config.js';
-import { loadPolicy, deriveControl, providerFor, pickSuccessor, laneStatus, leastOverProvider, machineLimits } from './control.js';
+import { loadPolicy, deriveControl, providerFor, pickSuccessor, laneStatus, leastOverProvider, machineLimits, unmeteredLane } from './control.js';
 import { recordQuotaSnapshot } from './usage.js';
 import { listBrowserSessions } from './browser-pool.js';
 import { listHandoffs, expireHandoff } from './handoff.js';
@@ -102,6 +102,8 @@ export class Engine extends EventEmitter {
         snap.machine.limits = machineLimits(snap.machine, policy);
       }
       snap.lanes = laneStatus(snap.quotas, policy, now);
+      // The unmetered lane is always open and lists permitted free models. It never affects least-over selection.
+      snap.lanes.unmetered = unmeteredLane(this.models, policy, control.projects);
       snap.leastOverProvider = leastOverProvider(snap.lanes);
       snap.policy = policy;
       snap.control = control;

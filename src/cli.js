@@ -20,7 +20,7 @@ const USAGE = `herdr-boss <command>
   install               Install and start the launchd agent.
   uninstall             Stop and remove the launchd agent.
   logs                  Show the server log.
-  lanes                 Print one line per quota provider: open, ahead of pace, or near exhaustion.
+  lanes                 Print one line per quota provider and the unmetered models lane.
   scratch SLUG          Create the durable scratch folder of a project and print its path.
   policy show|set FILE  Show or replace the local resource policy.
   usage record FILE     Add measured or unmeasured project usage.
@@ -73,13 +73,16 @@ async function main() {
   const cfg = loadConfig();
   switch (cmd) {
     case 'lanes': {
-      const { describeLane, describeMachine } = await import('./kit/workers.js');
+      const { describeLane, describeMachine, describeUnmetered } = await import('./kit/workers.js');
       const rules = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'rules.json'), 'utf8'));
       const machineStatus = describeMachine(rules);
       if (machineStatus) console.log(machineStatus);
       const lanes = rules.lanes || {};
       if (!Object.keys(lanes).length) throw new Error('No lane data yet. Wait for the next Herdr Boss tick.');
-      for (const [provider, lane] of Object.entries(lanes)) console.log(`${describeLane(provider, lane)}${rules.leastOverProvider === provider ? ' (least over; worker start allows it)' : ''}`);
+      for (const [provider, lane] of Object.entries(lanes)) {
+        if (lane.unmetered) { console.log(describeUnmetered(lane)); continue; }
+        console.log(`${describeLane(provider, lane)}${rules.leastOverProvider === provider ? ' (least over; worker start allows it)' : ''}`);
+      }
       break;
     }
     case 'policy': {

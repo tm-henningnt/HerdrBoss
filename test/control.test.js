@@ -358,3 +358,109 @@ test('the lane names the worst window by pace, not the highest-used window', asy
   assert.equal(unexpected.codex.window, 'Weekly');
   assert.equal(unexpected.codex.overPercent, null);
 });
+
+test('pacing goals default to 100 percent and validate as whole percentages', () => {
+  assert.deepEqual(POLICY_DEFAULTS.pacingGoals, {});
+  assert.deepEqual(validatePolicy(policy({ pacingGoals: { codex: { primary: 80 }, claude: { secondary: 0 } } }), models), []);
+  assert.match(validatePolicy(policy({ pacingGoals: { codex: { weekly: 80 } } }), models).join(' '), /pacingGoals/);
+  assert.match(validatePolicy(policy({ pacingGoals: { codex: { primary: 101 } } }), models).join(' '), /pacingGoals/);
+  assert.match(validatePolicy(policy({ pacingGoals: { codex: { primary: 80.5 } } }), models).join(' '), /pacingGoals/);
+  assert.match(validatePolicy(policy({ pacingGoals: { other: { primary: 80 } } }), models).join(' '), /pacingGoals/);
+  assert.match(validatePolicy(policy({ pacingGoals: [] }), models).join(' '), /pacingGoals/);
+});
+
+test('a pacing goal makes a willLast window ahead of pace and scales its numbers', async () => {
+  const { laneStatus } = await import('../src/control.js');
+  const now = Date.parse('2026-09-25T10:00:00Z');
+  const quotas = [{ provider: 'codex', windows: [{ key: 'primary', label: 'Weekly', usedPercent: 45, expectedPercent: 50, willLast: true, windowMinutes: 10080, resetsAt: '2026-09-29T09:00:00Z' }] }];
+  assert.equal(laneStatus(quotas, policy(), now).codex.state, 'open');
+  const lane = laneStatus(quotas, policy({ pacingGoals: { codex: { primary: 80 } } }), now).codex;
+  assert.equal(lane.state, 'pace');
+  assert.equal(lane.expectedPercent, 40);
+  assert.equal(lane.overPercent, 5);
+  assert.equal(Date.parse(lane.backOnPaceAt) - now, 5 / 80 * 10080 * 60000);
+});
+
+test('least-over ordering uses the goal-adjusted pace score', async () => {
+  const { laneStatus, leastOverProvider, deriveControl } = await import('../src/control.js');
+  const now = Date.parse('2026-09-25T10:00:00Z');
+  const quotas = [
+    { provider: 'codex', windows: [{ key: 'primary', label: 'Weekly', usedPercent: 45, expectedPercent: 43, willLast: false, windowMinutes: 10080, resetsAt: '2026-09-29T09:00:00Z' }] },
+    { provider: 'claude', windows: [{ key: 'secondary', label: 'Weekly', usedPercent: 63, expectedPercent: 58, willLast: false, windowMinutes: 10080, resetsAt: '2026-10-01T18:00:00Z' }] },
+  ];
+  assert.equal(leastOverProvider(laneStatus(quotas, policy(), now)), 'codex');
+  const goal = policy({ pacingGoals: { codex: { primary: 40 } } });
+  assert.equal(leastOverProvider(laneStatus(quotas, goal, now)), 'claude');
+  // The worst window of a provider also ranks by the adjusted pace, not the raw pace.
+  const windows = [{ provider: 'codex', windows: [
+    { key: 'primary', label: 'Weekly', usedPercent: 45, expectedPercent: 43, willLast: false, windowMinutes: 10080, resetsAt: '2026-09-29T09:00:00Z' },
+    { key: 'secondary', label: 'Monthly', usedPercent: 60, expectedPercent: 50, willLast: false, windowMinutes: 43200, resetsAt: '2026-10-23T09:00:00Z' },
+  ] }];
+  assert.equal(deriveControl({ ...snapshot(), quotas: windows }, policy(), models, {}, now).pressures.codex.label, 'Monthly');
+  assert.equal(deriveControl({ ...snapshot(), quotas: windows }, policy({ pacingGoals: { codex: { primary: 10 } } }), models, {}, now).pressures.codex.label, 'Weekly');
+});
+
+test('a pacing goal stays inert for an ignored provider and after a reset', async () => {
+  const { laneStatus, deriveControl } = await import('../src/control.js');
+  const now = Date.parse('2026-09-25T10:00:00Z');
+  const live = [{ provider: 'codex', windows: [{ key: 'primary', label: 'Weekly', usedPercent: 45, expectedPercent: 30, willLast: true, windowMinutes: 10080, resetsAt: '2026-09-29T09:00:00Z' }] }];
+  const ignored = policy({ providerModes: { ...POLICY_DEFAULTS.providerModes, codex: 'ignore' }, pacingGoals: { codex: { primary: 50 } } });
+  const ignoredLane = laneStatus(live, ignored, now).codex;
+  assert.equal(ignoredLane.state, 'open');
+  assert.equal(ignoredLane.ignored, true);
+  const expired = [{ provider: 'codex', windows: [{ key: 'primary', label: 'Weekly', usedPercent: 95, expectedPercent: 50, willLast: false, windowMinutes: 10080, resetsAt: '2026-09-25T09:00:00Z' }] }];
+  const goal = policy({ pacingGoals: { codex: { primary: 50 } } });
+  const lane = laneStatus(expired, goal, now).codex;
+  assert.equal(lane.state, 'open');
+  assert.deepEqual(lane.resetWindows, ['Weekly']);
+  const control = deriveControl({ ...snapshot(), quotas: expired }, goal, models, {}, now);
+  assert.equal(control.risks.codex, null);
+  assert.equal(control.pressures.codex, null);
+});
+
+test('a near-exhaustion window keeps its reserve state under a goal', async () => {
+  const { laneStatus } = await import('../src/control.js');
+  const now = Date.parse('2026-09-25T10:00:00Z');
+  const quotas = [{ provider: 'codex', windows: [{ key: 'primary', label: 'Weekly', usedPercent: 90, expectedPercent: 10, willLast: false, windowMinutes: 10080, resetsAt: '2026-09-29T09:00:00Z' }] }];
+  const lane = laneStatus(quotas, policy({ pacingGoals: { codex: { primary: 50 } } }), now).codex;
+  assert.equal(lane.state, 'reserve');
+});
+
+test('the unmetered lane lists permitted models after global and project exclusions', async () => {
+  const { unmeteredLane } = await import('../src/control.js');
+  const projects = { a: { excludedKinds: [], excludedModels: [] }, b: { excludedKinds: ['opencode'], excludedModels: [] } };
+  const lane = unmeteredLane(models, policy({ excludedModels: ['opencode/big-pickle'] }), projects);
+  assert.equal(lane.state, 'open');
+  assert.equal(lane.unmetered, true);
+  assert.ok(lane.byProject.a.opencode.includes('opencode/space-bunny-free'));
+  assert.ok(!lane.byProject.a.opencode.includes('opencode/big-pickle'));
+  assert.equal(lane.byProject.a.pi, undefined);
+  assert.equal(lane.byProject.b, undefined);
+  const projectModel = unmeteredLane(models, policy(), { a: { excludedKinds: [], excludedModels: ['opencode/space-bunny-free'] } });
+  assert.ok(!projectModel.byProject.a.opencode.includes('opencode/space-bunny-free'));
+  const routed = unmeteredLane(models, policy({ modelProviders: { 'opencode/space-bunny-free': 'codex' } }), projects);
+  assert.ok(!routed.byProject.a.opencode.includes('opencode/space-bunny-free'));
+  const kindsOff = unmeteredLane(models, policy({ allowedKinds: ['pi'] }), projects);
+  assert.equal(kindsOff.byProject.a, undefined);
+});
+
+test('least-over selection skips the unmetered lane', async () => {
+  const { laneStatus, leastOverProvider, unmeteredLane } = await import('../src/control.js');
+  const now = Date.parse('2026-09-25T10:00:00Z');
+  const quotas = [
+    { provider: 'codex', windows: [{ key: 'primary', label: 'Weekly', usedPercent: 45, expectedPercent: 43, willLast: false, windowMinutes: 10080, resetsAt: '2026-09-29T09:00:00Z' }] },
+    { provider: 'claude', windows: [{ key: 'secondary', label: 'Weekly', usedPercent: 63, expectedPercent: 58, willLast: false, windowMinutes: 10080, resetsAt: '2026-10-01T18:00:00Z' }] },
+  ];
+  const lanes = laneStatus(quotas, policy(), now);
+  lanes.unmetered = unmeteredLane(models, policy(), { a: { excludedKinds: [], excludedModels: [] } });
+  assert.equal(leastOverProvider(lanes), 'codex');
+});
+
+test('the bulletin shows the unmetered lane in Provider lanes', async () => {
+  const { renderBulletin } = await import('../src/rules.js');
+  const cfg = { quota: { warnPercent: 90, criticalPercent: 98 }, machine: { memFreeWarnPercent: 15, loadWarnFactor: 2 }, browsers: { staleOwnedMinutes: 30 }, workers: { staleIdleMinutes: 120 }, sharedBrowsers: [] };
+  const snap = { ...snapshot(), updatedAt: '2026-09-25T00:00:00Z', lanes: { codex: { state: 'open' }, unmetered: { state: 'open', unmetered: true, byProject: { a: { opencode: ['opencode/space-bunny-free'] } } } }, policy: policy() };
+  const bulletin = renderBulletin(snap, { alerts: [], advice: [] }, cfg);
+  assert.match(bulletin, /Unmetered: open/);
+  assert.match(bulletin, /opencode\/space-bunny-free/);
+});
