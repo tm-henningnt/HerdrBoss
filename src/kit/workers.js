@@ -290,6 +290,43 @@ function chooseWorkerPane(workspaceId, worktree, herdr) {
   return { paneId, tabId: getTab(workerTab), command, createdTab: false, createdPane: true };
 }
 
+function waitForWorkerPane(paneId, workspaceId, worktree, herdr, wait) {
+  const intervalMs = 250;
+  const timeoutMs = 20_000;
+  let elapsedMs = 0;
+  while (elapsedMs <= timeoutMs) {
+    try {
+      const response = herdr(['pane', 'get', paneId]);
+      const pane = response?.pane ?? response;
+      const paneReady = getPane(pane) === paneId
+        && getWorkspace(pane) === workspaceId
+        && pane.foreground_cwd === worktree;
+      const agents = listFrom(herdr(['agent', 'list']), 'agents');
+      const occupied = agents.some((agent) => getPane(agent) === paneId);
+      if (paneReady && !occupied) {
+        const processResponse = herdr(['pane', 'process-info', '--pane', paneId]);
+        const info = processResponse?.process_info ?? processResponse;
+        const shellPid = Number(info?.shell_pid);
+        const foregroundOwnsShell = Number.isFinite(shellPid) && shellPid > 0
+          && (Number(info.foreground_process_group_id) === shellPid
+            || listFrom(info.foreground_processes, 'processes').some((process) => Number(process.pid) === shellPid));
+        if (foregroundOwnsShell) return;
+      }
+    } catch {}
+    if (elapsedMs === timeoutMs) break;
+    const delay = Math.min(intervalMs, timeoutMs - elapsedMs);
+    wait(delay);
+    elapsedMs += delay;
+  }
+  throw new Error(`Worker pane ${paneId} did not become an available shell in workspace ${workspaceId} at ${worktree} within 20 seconds.`);
+}
+
+function isAgentPaneBusy(error) {
+  if (error?.code === 'agent_pane_busy') return true;
+  return /"code"\s*:\s*"agent_pane_busy"/.test(String(error?.stderr ?? ''))
+    || /agent_pane_busy/.test(String(error?.message ?? ''));
+}
+
 function renderStartPlan(plan) {
   const lines = [
     `1. Validate agent name: ${plan.name}`,
@@ -450,12 +487,21 @@ export function startWorker(name, options, {
     }
     placement = chooseWorkerPane(workspaceId, worktree, herdr);
     paneId = placement.paneId;
+    if (placement.createdPane || placement.createdTab) waitForWorkerPane(paneId, workspaceId, worktree, herdr, wait);
     try {
       herdr(['agent', 'start', name, '--kind', options.kind, '--pane', paneId, '--', ...launchArgs]);
     } catch (startError) {
       // Herdr can report agent_not_ready while leaving a blocked agent in the pane.
       try { agentStarted = listFrom(herdr(['agent', 'list']), 'agents').some((agent) => getName(agent) === name); } catch {}
-      throw startError;
+      if (!agentStarted && isAgentPaneBusy(startError)) {
+        wait(500);
+        try {
+          herdr(['agent', 'start', name, '--kind', options.kind, '--pane', paneId, '--', ...launchArgs]);
+        } catch (retryError) {
+          try { agentStarted = listFrom(herdr(['agent', 'list']), 'agents').some((agent) => getName(agent) === name); } catch {}
+          throw retryError;
+        }
+      } else throw startError;
     }
     agentStarted = true;
     const record = {
