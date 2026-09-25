@@ -6,6 +6,8 @@ import os from 'node:os';
 import path from 'node:path';
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-preview-test-'));
+const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-preview-home-'));
+process.env.HOME = homeDir;
 process.env.HERDR_BOSS_DIR = dataDir;
 process.env.HERDR_BOSS_PORT = '0';
 
@@ -38,6 +40,7 @@ test('read-only preview allows reads and rejects all API methods that can change
   t.after(async () => {
     await close();
     fs.rmSync(dataDir, { recursive: true, force: true });
+    fs.rmSync(homeDir, { recursive: true, force: true });
   });
   await new Promise((resolve, reject) => {
     server.once('listening', resolve);
@@ -88,4 +91,43 @@ test('read-only preview allows reads and rejects all API methods that can change
   await close();
   assert.equal(server.listening, false, 'close stops the HTTP server');
   assert.equal(engine.tickCalls, 1, 'close clears the recurring tick timer');
+
+  const customTokenFile = path.join(dataDir, 'custom-access-token');
+  fs.writeFileSync(path.join(dataDir, 'config.json'), JSON.stringify({ access: { tokenFile: customTokenFile } }));
+  const customCfg = loadConfig();
+  customCfg.host = '127.0.0.1';
+  customCfg.port = 0;
+  customCfg.tickSeconds = 3600;
+  const customServer = serve(customCfg, {
+    readOnlyPreview: true,
+    createEngine: (_config, actions) => {
+      const customEngine = new EventEmitter();
+      customEngine.act = actions.act;
+      customEngine.push = actions.push;
+      customEngine.state = {};
+      customEngine.tick = async () => customEngine.state;
+      customEngine.log = () => {};
+      return customEngine;
+    },
+  });
+  t.after(async () => { await customServer.close(); });
+  await new Promise((resolve, reject) => {
+    customServer.server.once('listening', resolve);
+    customServer.server.once('error', reject);
+  });
+  const token = fs.readFileSync(customTokenFile, 'utf8').trim();
+  const login = await fetch(`http://127.0.0.1:${customServer.server.address().port}/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ token }),
+    redirect: 'manual',
+  });
+  assert.equal(login.status, 303);
+  const privateSessions = path.join(homeDir, '.config', 'herdr-boss', 'sessions.json');
+  assert.equal(fs.existsSync(customTokenFile), true, 'the configured custom token path stays active');
+  assert.equal(fs.existsSync(privateSessions), true, 'sessions use the private config directory');
+  assert.equal(fs.existsSync(path.join(path.dirname(customTokenFile), 'sessions.json')), false, 'sessions are not stored beside the custom token');
+  assert.equal(fs.statSync(path.dirname(privateSessions)).mode & 0o777, 0o700);
+  assert.equal(fs.statSync(privateSessions).mode & 0o777, 0o600);
+  await customServer.close();
 });

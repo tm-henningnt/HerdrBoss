@@ -4,11 +4,15 @@ import path from 'node:path';
 
 export const DATA_DIR = process.env.HERDR_BOSS_DIR || path.join(os.homedir(), '.herdr-boss');
 export const PROJECTS_DIR = path.join(DATA_DIR, 'projects');
+const HOME_DIR = process.env.HOME || os.homedir();
+export const PRIVATE_ACCESS_DIR = path.join(HOME_DIR, '.config', 'herdr-boss');
+export const DEFAULT_TOKEN_FILE = path.join(PRIVATE_ACCESS_DIR, 'access-token');
+export const DEFAULT_SESSION_FILE = path.join(PRIVATE_ACCESS_DIR, 'sessions.json');
 
 const DEFAULTS = {
   port: 4477,
   host: '0.0.0.0',
-  access: { tokenFile: path.join(DATA_DIR, 'access-token'), sessionDays: 30 },
+  access: { tokenFile: DEFAULT_TOKEN_FILE, sessionDays: 30 },
   // Seconds between collection passes.
   tickSeconds: 30,
   quotaSeconds: 300,
@@ -53,6 +57,28 @@ export function loadConfig() {
   let user = {};
   try { user = JSON.parse(fs.readFileSync(file, 'utf8')); } catch {}
   const cfg = merge(DEFAULTS, user);
+  const legacyToken = path.join(DATA_DIR, 'access-token');
+  const legacySessions = path.join(DATA_DIR, 'sessions.json');
+  if (cfg.access.tokenFile === legacyToken) cfg.access.tokenFile = DEFAULT_TOKEN_FILE;
+  if (cfg.access.tokenFile === DEFAULT_TOKEN_FILE) {
+    if (fs.existsSync(legacyToken) || fs.existsSync(legacySessions)) {
+      fs.mkdirSync(PRIVATE_ACCESS_DIR, { recursive: true, mode: 0o700 });
+      fs.chmodSync(PRIVATE_ACCESS_DIR, 0o700);
+    }
+    for (const [legacy, target] of [[legacyToken, DEFAULT_TOKEN_FILE], [legacySessions, DEFAULT_SESSION_FILE]]) {
+      if (!fs.existsSync(target) && fs.existsSync(legacy)) {
+        try { fs.renameSync(legacy, target); } catch (error) { if (error.code !== 'EXDEV') throw error; }
+      }
+      if (fs.existsSync(target)) {
+        fs.chmodSync(target, 0o600);
+        if (fs.existsSync(legacy)) fs.unlinkSync(legacy);
+      }
+    }
+    if (user.access?.tokenFile === legacyToken) {
+      user.access.tokenFile = DEFAULT_TOKEN_FILE;
+      fs.writeFileSync(file, `${JSON.stringify(user, null, 2)}\n`, { mode: 0o600 });
+    }
+  }
   if (process.env.HERDR_BOSS_PUSH === '0') cfg.push = false;
   if (process.env.HERDR_BOSS_PORT) cfg.port = Number(process.env.HERDR_BOSS_PORT);
   return cfg;

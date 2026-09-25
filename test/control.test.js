@@ -31,6 +31,46 @@ test('policy only permits project exclusions from global availability', () => {
   assert.match(validatePolicy(p, models).join(' '), /globally available kinds/);
 });
 
+test('access credentials use private defaults and migrate legacy files once', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-credentials-home-'));
+  const data = path.join(home, 'shared-data');
+  const privateDir = path.join(home, '.config', 'herdr-boss');
+  const legacyToken = path.join(data, 'access-token');
+  const legacySessions = path.join(data, 'sessions.json');
+  fs.mkdirSync(data);
+  fs.writeFileSync(legacyToken, `${'a'.repeat(64)}\n`, { mode: 0o600 });
+  fs.writeFileSync(legacySessions, JSON.stringify({ token: 'f'.repeat(64), sessions: { ['e'.repeat(64)]: 1234567890123 } }), { mode: 0o600 });
+  const configUrl = new URL('../src/config.js', import.meta.url).href;
+  const script = `import { loadConfig } from ${JSON.stringify(configUrl)}; console.log(JSON.stringify(loadConfig().access));`;
+  const run = () => JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', script], {
+    env: { ...process.env, HOME: home, HERDR_BOSS_DIR: data }, encoding: 'utf8',
+  }));
+  const config = run();
+  assert.equal(config.tokenFile, path.join(privateDir, 'access-token'));
+  assert.equal(fs.readFileSync(config.tokenFile, 'utf8'), `${'a'.repeat(64)}\n`);
+  assert.equal(fs.existsSync(path.join(privateDir, 'sessions.json')), true);
+  assert.equal(path.join(path.dirname(config.tokenFile), 'sessions.json'), path.join(privateDir, 'sessions.json'));
+  assert.equal(fs.existsSync(legacyToken), false);
+  assert.equal(fs.existsSync(legacySessions), false);
+  assert.equal(fs.statSync(privateDir).mode & 0o777, 0o700);
+  assert.equal(fs.statSync(config.tokenFile).mode & 0o777, 0o600);
+  run();
+  assert.equal(fs.readFileSync(config.tokenFile, 'utf8'), `${'a'.repeat(64)}\n`);
+  fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({ push: false, access: { tokenFile: legacyToken, sessionDays: 11 } }));
+  fs.writeFileSync(legacyToken, `${'b'.repeat(64)}\n`, { mode: 0o600 });
+  const migratedConfig = run();
+  assert.equal(migratedConfig.tokenFile, config.tokenFile);
+  assert.equal(migratedConfig.sessionDays, 11);
+  assert.equal(fs.readFileSync(config.tokenFile, 'utf8'), `${'a'.repeat(64)}\n`);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(data, 'config.json'), 'utf8')), {
+    push: false, access: { tokenFile: config.tokenFile, sessionDays: 11 },
+  });
+  const custom = path.join(home, 'custom-token');
+  fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({ access: { tokenFile: custom } }));
+  assert.equal(run().tokenFile, custom);
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
 test('machine policy defaults and validates owner and CPU limits', () => {
   assert.equal(POLICY_DEFAULTS.machine.ownerAwayMinutes, 10);
   assert.equal(POLICY_DEFAULTS.machine.presentCpuPercent, 70);
@@ -295,8 +335,9 @@ test('a remote session survives a restart, and a new token signs every device ou
   const path = await import('node:path');
   const { createAccessControl } = await import('../src/access.js');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-access-'));
+  fs.chmodSync(dir, 0o755);
   const tokenFile = path.join(dir, 'access-token');
-  const first = createAccessControl(tokenFile);
+  const first = createAccessControl(tokenFile, { privateDirectory: true });
   const token = fs.readFileSync(tokenFile, 'utf8').trim();
   const req = (cookie) => ({ socket: { remoteAddress: '10.0.0.2' }, headers: { host: '10.0.0.1:4477', cookie } });
   const res = { setHeader() {} };
@@ -306,6 +347,15 @@ test('a remote session survives a restart, and a new token signs every device ou
   assert.match(login.cookie, /Max-Age=2592000/);
   const cookie = login.cookie.split(';')[0];
   assert.doesNotMatch(fs.readFileSync(path.join(dir, 'sessions.json'), 'utf8'), new RegExp(cookie.split('=')[1]));
+  assert.equal(fs.statSync(dir).mode & 0o777, 0o700);
+  assert.equal(fs.statSync(tokenFile).mode & 0o777, 0o600);
+  assert.equal(fs.statSync(path.join(dir, 'sessions.json')).mode & 0o777, 0o600);
+  assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(path.join(dir, 'sessions.json'), 'utf8'))).sort(), ['sessions', 'token']);
+  fs.chmodSync(tokenFile, 0o644);
+  fs.chmodSync(path.join(dir, 'sessions.json'), 0o644);
+  createAccessControl(tokenFile);
+  assert.equal(fs.statSync(tokenFile).mode & 0o777, 0o600);
+  assert.equal(fs.statSync(path.join(dir, 'sessions.json')).mode & 0o777, 0o600);
   assert.equal(createAccessControl(tokenFile).authorized(req(cookie), res), true);
   fs.writeFileSync(tokenFile, `${'b'.repeat(64)}\n`);
   assert.equal(createAccessControl(tokenFile).authorized(req(cookie), res), false);
