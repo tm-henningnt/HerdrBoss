@@ -254,7 +254,7 @@ herdr agent prompt <orch-pane> "WORKER REPORT <name>: <done|blocked|stopped>. Re
 - Record failed, timed-out, abandoned, and successful runs.
 - Record issue, model, surface, worktree, times, outcome, tool activity, changed paths, gate, defects, rework, and evidence tier.
 - Append a run with `herdr-boss ledger append --entry <file>`.
-- Check ledger records with `herdr-boss ledger check`.
+- Check ledger records with `herdr-boss ledger check`. Add `--runs` to find run records with no ledger entry; run it before a handover and before you publish status.
 - Treat the ledger as operational telemetry, not acceptance evidence.
 - Use the evidence tiers configured by the project.
 - Keep unit, integration, local-browser, hosted, and Owner evidence distinct when the project uses those tiers.

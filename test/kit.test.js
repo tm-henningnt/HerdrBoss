@@ -360,3 +360,16 @@ test('an unknown evidence tier names the allowed tiers and the project setting',
   const errors = validateWorkerReport({ evidenceTier: ['owner-proxy'] }, { evidenceTiers: ['local', 'owner'] });
   assert.ok(errors.some((error) => /evidenceTier\[0\] is unknown: owner-proxy\. Allowed tiers: local, owner\. Set the project's tiers in evidenceTiers in \.herdr-boss\.json/.test(error)));
 });
+
+test('worker collect --record names every missing flag at once with a hint from the report', async () => {
+  const { recordFlagErrors } = await import('../src/kit/workers.js');
+  const missing = recordFlagErrors({ record: true }, { stoppedEarly: true });
+  assert.equal(missing.length, 2);
+  assert.match(missing[0], /--outcome done\|partial\|failed \(the report says stoppedEarly: true/);
+  assert.match(missing[1], /exactly one of --gate-passed or --gate-failed/);
+  assert.deepEqual(recordFlagErrors({ record: true, outcome: 'done', gatePassed: true }), []);
+});
+
+test('the rendered brief lists the project evidence tiers', () => {
+  assert.equal(renderBrief('Tiers: {{evidenceTiers}}', { evidenceTiers: 'local, hosted-ui, owner' }), 'Tiers: local, hosted-ui, owner');
+});

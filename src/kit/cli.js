@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { loadModels, loadProjectConfig } from './config.js';
@@ -11,7 +12,7 @@ const USAGE = `Kit commands:
   worker collect <name> [--record --outcome done|partial|failed --gate-passed|--gate-failed]
   worker list
   worktree prune [--apply]
-  ledger append --entry FILE | ledger check
+  ledger append --entry FILE | ledger check [--runs]
   check --report FILE | --run FILE | --worktree DIR --allow PATH...
   gh issue create|comment|edit ... --body-file FILE
   models [--kind KIND]
@@ -116,8 +117,8 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
 
   if (command === 'ledger') {
     const [action, ...rest] = argv;
-    const { flags } = parseArgs(rest);
-    knownFlags(flags, ['entry', 'file']);
+    const { flags } = parseArgs(rest, { boolean: ['--runs'] });
+    knownFlags(flags, ['entry', 'file', 'runs']);
     const ledgerPath = flags.file ? filePath(config.root, flags.file) : config.ledgerPath;
     if (action === 'append' && flags.entry) {
       const entry = readJson(filePath(config.root, flags.entry));
@@ -127,10 +128,23 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
     }
     if (action === 'check') {
       const runs = readDelegatedRuns(ledgerPath, { evidenceTiers: config.evidenceTiers });
+      if (flags.runs) {
+        // Every run record needs a ledger entry for its worktree, except a worker that is still running.
+        const recorded = new Set(runs.map((run) => path.resolve(run.worktree)));
+        let live = new Set();
+        try { live = new Set((herdr(['agent', 'list']).agents || []).map((agent) => agent.name).filter(Boolean)); } catch {}
+        const records = (fs.existsSync(config.runsPath) ? fs.readdirSync(config.runsPath) : []).filter((file) => file.endsWith('.json'))
+          .map((file) => readJson(path.join(config.runsPath, file)));
+        const running = records.filter((record) => live.has(record.name) && !record.finishedAt);
+        const missing = records.filter((record) => !recorded.has(path.resolve(record.worktree)) && !running.includes(record));
+        if (missing.length) fail(`ledger: ${missing.length} run record(s) have no ledger entry:\n${missing.map((record) => `- ${record.name} (${record.worktree}, started ${record.startedAt})`).join('\n')}\nRecord each one with herdr-boss worker collect <name> --record, or append it with herdr-boss ledger append --entry FILE.`, 1);
+        output(`ledger: PASS (${runs.length} entries; ${records.length} run records, ${running.length} still running)`);
+        return runs;
+      }
       output(`ledger: PASS (${runs.length} entries)`);
       return runs;
     }
-    fail('Usage: ledger append --entry FILE | ledger check');
+    fail('Usage: ledger append --entry FILE | ledger check [--runs]');
   }
 
   if (command === 'check') {

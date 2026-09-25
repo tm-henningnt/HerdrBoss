@@ -9,7 +9,7 @@ import { providerFor } from '../control.js';
 const NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
 const BRIEF_SLOTS = new Set([
   'name', 'kind', 'model', 'effort', 'project', 'repo', 'worktree', 'branch', 'base', 'issue', 'task',
-  'allowedPaths', 'reportPath', 'reportJsonPath', 'orchPane', 'orchName', 'bulletinPath', 'date',
+  'allowedPaths', 'reportPath', 'reportJsonPath', 'orchPane', 'orchName', 'bulletinPath', 'date', 'evidenceTiers',
 ]);
 
 function git(root, args, { encoding = 'utf8' } = {}) {
@@ -391,6 +391,7 @@ export function startWorker(name, options, {
     issue: options.issue ?? null, task, allowedPaths: options.allow ?? [], reportPath, reportJsonPath,
     orchPane, orchName, bulletinPath: path.join(env.HERDR_BOSS_DIR || path.join(os.homedir(), '.herdr-boss'), 'bulletin.md'),
     date: new Date(now).toISOString().slice(0, 10),
+    evidenceTiers: (config.evidenceTiers || []).join(', '),
   });
 
   let createdWorktree = false;
@@ -469,11 +470,28 @@ function readRun(config, name) {
   return { file, run };
 }
 
+// Name every missing --record flag at once, with a hint from the worker report. The orchestrator still decides.
+export function recordFlagErrors(options, reportJson = {}) {
+  const missing = [];
+  if (!['done', 'partial', 'failed'].includes(options.outcome)) {
+    const hint = reportJson.stoppedEarly === true ? 'the report says stoppedEarly: true, which usually means --outcome partial' : 'the report says the worker did not stop early; use --outcome done unless your review found otherwise';
+    missing.push(`--outcome done|partial|failed (${hint})`);
+  }
+  if (options.gatePassed === options.gateFailed) missing.push('exactly one of --gate-passed or --gate-failed (the result of your own run of the acceptance commands)');
+  if (!Number.isSafeInteger(options.defects ?? 0) || (options.defects ?? 0) < 0) missing.push('--defects as a non-negative integer');
+  if (!Number.isSafeInteger(options.rework ?? 0) || (options.rework ?? 0) < 0) missing.push('--rework as a non-negative integer');
+  return missing;
+}
+
 export function collectWorker(name, options, { config, now = Date.now(), output = console.log } = {}) {
   const { file, run } = readRun(config, name);
   if (run.finishedAt) throw new Error(`Run ${name} is already marked finished at ${run.finishedAt}.`);
   const reportDir = path.join(run.worktree, '.worker');
   const reportJson = readJson(path.join(reportDir, 'report.json'));
+  if (options.record) {
+    const missing = recordFlagErrors(options, reportJson);
+    if (missing.length) throw new Error(`--record needs:\n- ${missing.join('\n- ')}`);
+  }
   const reportMd = fs.readFileSync(path.join(reportDir, 'report.md'), 'utf8');
   const errors = validateWorkerReport(reportJson, { evidenceTiers: config.evidenceTiers });
   if (errors.length) throw new Error(`Invalid worker report:\n- ${errors.join('\n- ')}`);
@@ -505,10 +523,6 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
     if (scopeErrors.length) throw new Error(`Worker ${name} changed paths outside its allowed scope: ${scopeErrors.join(', ')}.`);
     if (omitted.length) throw new Error(`Worker ${name} omitted changed paths from its report: ${omitted.join(', ')}.`);
   if (options.record) {
-    if (!['done', 'partial', 'failed'].includes(options.outcome)) throw new Error('--record requires --outcome done|partial|failed.');
-    if (options.gatePassed === options.gateFailed) throw new Error('--record requires exactly one of --gate-passed or --gate-failed.');
-    if (!Number.isSafeInteger(options.defects ?? 0) || (options.defects ?? 0) < 0) throw new Error('--defects must be a non-negative integer.');
-    if (!Number.isSafeInteger(options.rework ?? 0) || (options.rework ?? 0) < 0) throw new Error('--rework must be a non-negative integer.');
     const entry = {
       issue: run.issue,
       model: run.model,
@@ -518,7 +532,8 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
       endedAt: new Date(now).toISOString(),
       outcome: options.outcome,
       timedOut: false,
-      toolCalls: null,
+      // null means unknown. A harness that counts tool calls can report usage.toolCalls.
+      toolCalls: Number.isSafeInteger(reportJson.usage?.toolCalls) && reportJson.usage.toolCalls >= 0 ? reportJson.usage.toolCalls : null,
       changedPaths: reportJson.changedPaths,
       independentGate: { passed: !!options.gatePassed, command: 'Independent gate result supplied by orchestrator; command and evidence are in the worker report and review.' },
       defectsFound: Array.from({ length: options.defects ?? 0 }, (_value, index) => `defect ${index + 1}`),

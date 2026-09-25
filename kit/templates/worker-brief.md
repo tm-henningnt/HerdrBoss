@@ -99,16 +99,16 @@ Include these fields in the JSON report:
   "worktree": "",
   "changedPaths": [],
   "commands": ["<command and result>"],
-  "evidenceTier": ["unit"],
+  "evidenceTier": ["<tier>"],
   "unverified": [],
   "stoppedEarly": false,
-  "usage": { "inputTokens": null, "outputTokens": null, "cachedTokens": null, "cost": null }
+  "usage": { "inputTokens": null, "outputTokens": null, "cachedTokens": null, "cost": null, "toolCalls": null }
 }
 ```
 
 Use the supplied issue ID when the brief has one. Use `null` for work without an issue.
 
-Replace `unit` with the evidence tier that the project and report validator accept.
+Replace `<tier>` with one or more of the evidence tiers of this project: {{evidenceTiers}}. The report validator rejects every other tier.
 
 Fill `usage` only with values measured by the worker's harness. Leave unknown values as `null`.
 
