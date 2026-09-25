@@ -913,6 +913,73 @@ function project(s, slug) {
   ].join('');
 }
 
+// ---------- Help panel ----------
+// Short notes for each page. They say what the page shows and how to use it; the CLI and setup are in docs/.
+
+const HELP = {
+  overview: ['Overview', `
+    <p>The state of all projects and shared resources at one glance.</p>
+    <h3>Needs attention</h3><p>Warnings and critical alerts: quotas, memory, machine load. <b>Details</b> opens the rule text in Logs.</p>
+    <h3>Handovers</h3><p>Orchestrators whose quota comes near its reserve, and successors that wait for review. Open the project to plan, inspect, or activate a handover.</p>
+    <h3>Projects</h3><p>A card per project with its published status and task mix. The table shows the orchestrator, workers in use against the share, and the policy mode. Select a project for its details.</p>
+    <h3>Subscriptions and machine health</h3><p>Select a bar to open all quota windows, or the processes and load history.</p>`],
+  projects: ['Projects', `
+    <p>Select a project card. The detail below it shows what the orchestrator published and what runs now.</p>
+    <h3>Progress and frontier</h3><p><b>Current frontier</b> is open work with no open blocker. <b>Next</b> waits only on the current frontier. The orchestrator can set both itself.</p>
+    <h3>Dependencies</h3><p>Columns show the order. An arrow runs from a blocker to the work that waits on it. Current work has an orange border; next work has a dashed border. Select a box to open the issue. <b>Show completed work</b> adds finished tasks.</p>
+    <h3>Groups and specs</h3><p>Progress per release or phase, and the work under each spec.</p>
+    <h3>Tasks and All work</h3><p>The board groups tasks by status; Done shows the latest 10 until you show completed work. The list sorts and filters all work.</p>
+    <h3>Project continuity</h3><p>Plan a handover to another harness. Prepare starts a successor that only reads and reports. Inspect its answer, then confirm activation.</p>
+    <p>The data comes from the project's status file. When a section is missing, the orchestrator has not published those fields.</p>`],
+  allocation: ['Allocation', `
+    <p>The resource policy for all projects. Changes are a draft until you select <b>Apply policy</b>.</p>
+    <h3>Capacity and handover</h3><p>The global limit of working agents, idle lending, the quota reserve, and automatic handover with its activation level.</p>
+    <h3>Subscriptions</h3><p><b>Manage pace</b> applies pacing and handover alerts. <b>Ignore quota</b> turns them off for that provider.</p>
+    <h3>Harnesses and models</h3><p>Clear a box to disable a harness or model for every project.</p>
+    <h3>Orchestrator succession</h3><p>The ranked successors for automatic handover. Use the arrows to change the order. Unlisted choices are never selected automatically.</p>
+    <h3>Project shares</h3><p>Drag a boundary on the bar, or focus it and use the arrow keys. Projects to the left stay fixed; the rest share the remainder. A share is advisory. The mode sets a project to auto, active, idle, or paused.</p>`],
+  agents: ['Agents', `
+    <p>Every Herdr workspace with its orchestrator and workers, live from Herdr.</p>
+    <p>A status dot shows working, blocked, idle, or done. Idle and done agents are ready for input; they have not always finished their task. Rows with the <b>orch</b> or <b>boss</b> label are orchestrators.</p>`],
+  browsers: ['Browsers', `
+    <p>One persistent Chrome per project. Agents drive it; you can watch and help.</p>
+    <h3>Start and manage</h3><p><b>Open visible</b> or <b>Open headless</b> starts the browser. <b>Manage</b> restarts it in the other mode, closes it, or sets the window size for the next launch.</p>
+    <h3>Preview</h3><p><b>One tab</b> shows the selected tab with its address bar. <b>All tabs</b> shows every tab in one grid, without controls; select a tile to focus it. <b>Live</b> refreshes at the chosen interval.</p>
+    <h3>Tabs</h3><p><b>Agent</b> marks a tab an agent uses. Screenshots never change a page. Navigation and input on an agent tab ask for confirmation first. <b>Hidden</b> marks a tab that is not visible; some web apps do not draw there. <b>New tab</b> opens a page of your own.</p>
+    <h3>Control</h3><p>Select the screenshot to open the large view. Turn on <b>Control browser</b>, then click the image and type. Paste long text or a password into the masked field.</p>`],
+  analytics: ['Analytics', `
+    <p>Recorded worker runs per project and provider: duration, outcome, and measured tokens.</p>
+    <p>Token totals include only runs that report tokens. Coverage shows how many runs have measurements. Quota percentages are global per provider; they are not project token counts.</p>`],
+  logs: ['Logs', `
+    <p>The top line tells whether Herdr Boss sends notices to orchestrators.</p>
+    <p>The guidance section shows the rules in force now, the same text as the bulletin that orchestrators read.</p>
+    <p><b>Activity log</b> lists prompts sent to orchestrators, notifications, handovers, and stopped processes, newest first.</p>`],
+};
+
+function currentRoute() {
+  if (/^\/(projects|p)(\/|$)/.test(location.pathname)) return 'projects';
+  const name = location.pathname.slice(1);
+  return HELP[name] ? name : 'overview';
+}
+
+function fillHelp() {
+  const [title, body] = HELP[currentRoute()] || HELP.overview;
+  document.getElementById('help-title').textContent = `${title} help`;
+  document.getElementById('help-body').innerHTML = `${body}<p class="help-more">Commands and setup: <code>docs/cli.md</code> and <code>docs/user-guide.md</code> in the Herdr Boss repository.</p>`;
+}
+
+function setHelp(open) {
+  const panel = document.getElementById('help-panel');
+  const toggle = document.getElementById('help-toggle');
+  if (open) { fillHelp(); panel.hidden = false; requestAnimationFrame(() => panel.classList.add('open')); document.getElementById('help-close').focus(); }
+  else { panel.classList.remove('open'); panel.hidden = true; if (document.activeElement && panel.contains(document.activeElement)) toggle.focus(); }
+  toggle.setAttribute('aria-expanded', String(open));
+}
+
+document.getElementById('help-toggle').addEventListener('click', () => setHelp(document.getElementById('help-panel').hidden));
+document.getElementById('help-close').addEventListener('click', () => setHelp(false));
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !document.getElementById('help-panel').hidden && !document.getElementById('browser-viewer').open) setHelp(false); });
+
 // ---------- Render loop ----------
 
 function render(force = false) {
@@ -933,6 +1000,7 @@ function render(force = false) {
     else a.removeAttribute('aria-current');
   }
   if (html !== lastRender) { $app.innerHTML = html; lastRender = html; }
+  if (!document.getElementById('help-panel').hidden) fillHelp();
   $updated.textContent = `updated ${ago(state.updatedAt)}`;
 }
 
