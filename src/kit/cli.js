@@ -4,13 +4,14 @@ import { execFileSync } from 'node:child_process';
 import { loadModels, loadProjectConfig } from './config.js';
 import { appendDelegatedRun, compareChangedPaths, gitStatusPaths, readDelegatedRuns, readJson, validateAllowedPaths, validateDelegatedRun, validateWorkerReport } from './orchestration.js';
 import { buildGhArgs } from './gh.js';
-import { collectWorker, createHerdrRunner, listWorkers, startWorker } from './workers.js';
+import { collectWorker, createHerdrRunner, listWorkers, parkWorker, startWorker } from './workers.js';
 import { pruneWorktrees } from './worktrees.js';
 
 const USAGE = `Kit commands:
   worker start <name> --kind <kind> (--task TEXT | --task-file FILE) [options]
   worker collect <name> [--record --outcome done|partial|failed --gate-passed|--gate-failed]
   worker list
+  worker park <name> --reason TEXT | worker unpark <name>
   worktree prune [--apply]
   ledger append --entry FILE | ledger check [--runs]
   check --report FILE | --run FILE | --worktree DIR --allow PATH...
@@ -85,6 +86,12 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
         dryRun: flags.dryrun,
         force: flags.force,
       }, { config, models: modelConfig, herdr, env, output });
+    }
+    if (action === 'park' || action === 'unpark') {
+      const { positional, flags } = parseArgs(rest);
+      if (positional.length !== 1) fail(`Usage: worker ${action} <name>${action === 'park' ? ' --reason TEXT' : ''}`);
+      knownFlags(flags, action === 'park' ? ['reason'] : []);
+      return parkWorker(positional[0], { reason: flags.reason, unpark: action === 'unpark' }, { config, herdr, output });
     }
     if (action === 'collect') {
       const { positional, flags } = parseArgs(rest, { boolean: ['--record', '--gate-passed', '--gate-failed'] });

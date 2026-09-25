@@ -86,7 +86,8 @@ herdr-boss worker start <name> --kind <kind> --task-file <file> --allow <path>
 - Pass `--model` and `--effort` only when the route needs them.
 - Pass `--issue` when the work belongs to a tracked issue.
 - Pass `--base` only when the project needs a non-default base branch.
-- Use `--no-worktree` only when the orchestrator has chosen shared-tree work.
+- Use `--no-worktree` only when the orchestrator has chosen shared-tree work. Each such worker gets its own `.worker/<name>/` folder for its brief and reports.
+- Run `herdr-boss worker park <name> --reason TEXT` for a worker that waits on purpose, for example for the Owner. Idle notices then skip it. Run `worker unpark <name>` when it resumes.
 - Use `--dry-run` to inspect a planned dispatch without starting it.
 - Use `--force` only when the bulletin blocks a kind and the work must continue.
 - Record why you overrode an avoided kind.

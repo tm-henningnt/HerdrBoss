@@ -193,7 +193,8 @@ export class Engine extends EventEmitter {
         if (running && b.launchedAt && now - Date.parse(b.launchedAt) < 86400000) {
           const p = control.projects[b.project];
           if (p?.workspace) evaluation.alerts.push({
-            key: `browser:managed-ready:${b.project}:${b.launchedAt}`, severity: 'info', once: true, scope: p.workspace,
+            // One notice per port and mode, so a restart in the same mode does not repeat it.
+            key: `browser:managed-ready:${b.project}:${b.port}:${b.headless ? 'headless' : 'visible'}`, severity: 'info', once: true, scope: p.workspace,
             title: `${b.project} browser is ready`,
             text: `Browser for ${b.project} is ready (${b.headless ? 'headless' : 'visible'}) on port ${b.port}. Use herdr-boss browser tabs ${b.project} to find a page, then herdr-boss browser screenshot ${b.project} --tab <id> for a private JPEG. Browser service commands are in the Herdr Boss kit.`,
           });

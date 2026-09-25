@@ -384,3 +384,26 @@ test('worker start puts the project thread limit flag in the brief', () => {
   const result = startWorker('demo', { kind: 'codex', task: 'x', allow: ['src/'] }, { config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {} });
   assert.equal(fs.readFileSync(path.join(result.worktree, '.worker', 'brief.md'), 'utf8'), 'Limit: Add `--poolOptions.forks.maxForks=2` to each test runner command.');
 });
+
+test('workers that share a checkout each get their own brief folder', () => {
+  const f = setupFixture(null);
+  const prompts = [];
+  const herdr = (args) => { if (args[0] === 'agent' && args[1] === 'prompt') { prompts.push(args[3]); return {}; } return f.herdr(args); };
+  const result = startWorker('demo', { kind: 'codex', task: 'x', allow: ['src/'], noWorktree: true }, { config: f.config, models: loadModels(), herdr, env: f.env, rulesFile: f.rulesFile, output: () => {} });
+  assert.equal(result.workerDir, '.worker/demo');
+  assert.ok(fs.existsSync(path.join(result.worktree, '.worker', 'demo', 'brief.md')));
+  assert.equal(prompts[0], 'Read .worker/demo/brief.md in your working directory and execute it.');
+});
+
+test('worker park labels the pane parked and records the reason; unpark clears it', async () => {
+  const { parkWorker } = await import('../src/kit/workers.js');
+  const f = setupFixture(null);
+  startWorker('demo', { kind: 'codex', task: 'x', allow: ['src/'] }, { config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {} });
+  const renames = [];
+  const herdr = (args) => { renames.push(args.slice(2)); return {}; };
+  const parked = parkWorker('demo', { reason: 'Owner review' }, { config: f.config, herdr, output: () => {} });
+  assert.equal(parked.parked.reason, 'Owner review');
+  parkWorker('demo', { unpark: true }, { config: f.config, herdr, output: () => {} });
+  assert.deepEqual(renames, [['ws:p2', 'parked'], ['ws:p2', '--clear']]);
+  assert.throws(() => parkWorker('demo', {}, { config: f.config, herdr, output: () => {} }), /needs --reason/);
+});

@@ -101,7 +101,7 @@ The model list excludes experimental entries that appear in only one project's n
 4. Add `--allow <path>` for each path that the worker may change.
 5. Add `--issue <number>` to link the work to an issue.
 6. Add `--dry-run` to print the plan without making changes.
-7. Run `herdr-boss worker list` to see active worker records.
+7. Run `herdr-boss worker list` to see active worker records. Run `herdr-boss worker park <name> --reason TEXT` for a worker that waits on purpose; idle notices skip a parked worker until `worker unpark <name>`.
 8. Run `herdr-boss worker collect <name>` to read a worker report and check its scope.
 9. Add `--record --outcome done --gate-passed` to append a successful run to the ledger.
 10. Run `herdr-boss ledger check` to validate the ledger.

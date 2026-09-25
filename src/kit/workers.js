@@ -43,7 +43,9 @@ export function createHerdrRunner(exec = (args) => execFileSync('herdr', args, {
   return (args) => parseHerdrJson(exec(args));
 }
 
-const BRIEF_PROMPT = 'Read .worker/brief.md in your working directory and execute it.';
+// A worker in its own worktree uses .worker/. Workers that share a checkout (--no-worktree) each use .worker/<name>/.
+const workerDirName = (name, shared) => (shared ? `.worker/${name}` : '.worker');
+const briefPrompt = (dir) => `Read ${dir}/brief.md in your working directory and execute it.`;
 
 function readAgentText(name) {
   return execFileSync('herdr', ['agent', 'read', name, '--source', 'recent-unwrapped', '--lines', '60'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
@@ -79,8 +81,8 @@ export function deliverPrompt(name, text, marker, { herdr, readText = readAgentT
   }
 }
 
-function deliverBrief(name, herdr, readText, wait) {
-  return deliverPrompt(name, BRIEF_PROMPT, '.worker/brief.md', { herdr, readText, wait });
+function deliverBrief(name, herdr, readText, wait, dir = '.worker') {
+  return deliverPrompt(name, briefPrompt(dir), `${dir}/brief.md`, { herdr, readText, wait });
 }
 
 function inAbout(iso, now) {
@@ -268,7 +270,7 @@ function renderStartPlan(plan) {
     `4. Create worktree: ${plan.noWorktree ? '(disabled; use current worktree)' : plan.worktree}`,
     ...(plan.noWorktree ? [] : [`   $ git worktree add -b ${displayArg(plan.branch)} ${displayArg(plan.worktree)} ${displayArg(plan.base)}`]),
     `   Append /.worker/ to ${plan.excludeFile}`,
-    `5. Render brief: ${plan.worktree}/.worker/brief.md from ${plan.template}`,
+    `5. Render brief: ${plan.worktree}/${plan.workerDir}/brief.md from ${plan.template}`,
     ...(plan.setup ? [`   Run project setup in the worktree (timeout ${plan.setupTimeoutSeconds} s):`, `   $ ${plan.setup}`] : []),
     `6. Place worker in workspace ${plan.workspaceId}:`,
     `   $ herdr ${plan.paneCommand.map(displayArg).join(' ')}`,
@@ -276,7 +278,7 @@ function renderStartPlan(plan) {
     `   $ herdr agent start ${displayArg(plan.name)} --kind ${displayArg(plan.kind)} --pane ${displayArg(plan.paneId)} -- ${plan.launchArgs.map(displayArg).join(' ')}`,
     `8. Write run record: ${plan.recordFile}`,
     `9. Send task prompt and observe agent activity:`,
-    `   $ herdr agent prompt ${displayArg(plan.name)} "${BRIEF_PROMPT}"`,
+    `   $ herdr agent prompt ${displayArg(plan.name)} "${briefPrompt(plan.workerDir)}"`,
   ];
   return lines.join('\n');
 }
@@ -375,14 +377,15 @@ export function startWorker(name, options, {
     workspaceId, paneId, paneCommand, launchArgs, recordFile, excludeFile,
     // A worker in the current worktree uses its existing dependencies, so setup runs only for a new worktree.
     setup: options.noWorktree ? null : config.setup ?? null, setupTimeoutSeconds: config.setupTimeoutSeconds ?? 900,
+    workerDir: workerDirName(name, !!options.noWorktree),
   };
   if (options.dryRun) {
     output(renderStartPlan(plan));
     return { ...plan, dryRun: true };
   }
 
-  const reportPath = path.join(worktree, '.worker', 'report.md');
-  const reportJsonPath = path.join(worktree, '.worker', 'report.json');
+  const reportPath = path.join(worktree, plan.workerDir, 'report.md');
+  const reportJsonPath = path.join(worktree, plan.workerDir, 'report.json');
   const orchPane = options.orch ?? env.HERDR_PANE_ID ?? '(none)';
   const orchName = getName(liveAgents.find((agent) => getPane(agent) === orchPane)) ?? '(none)';
   const template = fs.readFileSync(config.briefTemplatePath, 'utf8');
@@ -406,8 +409,8 @@ export function startWorker(name, options, {
       createdWorktree = true;
     }
     addExclude(worktree);
-    fs.mkdirSync(path.join(worktree, '.worker'), { recursive: true });
-    fs.writeFileSync(path.join(worktree, '.worker', 'brief.md'), brief);
+    fs.mkdirSync(path.join(worktree, plan.workerDir), { recursive: true });
+    fs.writeFileSync(path.join(worktree, plan.workerDir, 'brief.md'), brief);
     if (plan.setup) {
       output(`Running project setup in ${worktree}: ${plan.setup}`);
       const started = Date.now();
@@ -435,11 +438,12 @@ export function startWorker(name, options, {
       branch,
       base,
       pane: paneId,
+      workerDir: plan.workerDir,
       allowedPaths: options.allow ?? [],
       startedAt: new Date(now).toISOString(),
     };
     writeJsonAtomic(recordFile, record);
-    const delivery = deliverBrief(name, herdr, readText, wait);
+    const delivery = deliverBrief(name, herdr, readText, wait, plan.workerDir);
     if (delivery === 'resent') output(`Resent the brief prompt to ${name}: the first prompt did not reach the agent.`);
     if (delivery === 'submitted') output(`Sent Enter to ${name}: the brief prompt was typed but not submitted.`);
     return { ...record, recordFile, dryRun: false };
@@ -489,7 +493,7 @@ export function recordFlagErrors(options, reportJson = {}) {
 export function collectWorker(name, options, { config, now = Date.now(), output = console.log } = {}) {
   const { file, run } = readRun(config, name);
   if (run.finishedAt) throw new Error(`Run ${name} is already marked finished at ${run.finishedAt}.`);
-  const reportDir = path.join(run.worktree, '.worker');
+  const reportDir = path.join(run.worktree, run.workerDir || '.worker');
   const reportJson = readJson(path.join(reportDir, 'report.json'));
   if (options.record) {
     const missing = recordFlagErrors(options, reportJson);
@@ -560,6 +564,25 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
     if (recorded.errors.length) output(`Warning: usage was not recorded: ${recorded.errors.join(' ')}`);
   }
   return summary;
+}
+
+// A parked worker waits on purpose, for example for the Owner. Its pane label tells Herdr Boss to leave it out of idle notices.
+export function parkWorker(name, { reason = null, unpark = false } = {}, { config, herdr = createHerdrRunner(), output = console.log } = {}) {
+  const { file, run } = readRun(config, name);
+  if (run.finishedAt) throw new Error(`Run ${name} is already finished.`);
+  if (!run.pane) throw new Error(`Run ${name} has no pane.`);
+  if (unpark) {
+    herdr(['pane', 'rename', run.pane, '--clear']);
+    delete run.parked;
+    output(`Worker ${name} is active again. Idle notices include pane ${run.pane}.`);
+  } else {
+    if (!reason) throw new Error('worker park needs --reason TEXT.');
+    herdr(['pane', 'rename', run.pane, 'parked']);
+    run.parked = { reason, at: new Date().toISOString() };
+    output(`Worker ${name} is parked: ${reason}. Idle notices skip pane ${run.pane}.`);
+  }
+  writeJsonAtomic(file, run);
+  return run;
 }
 
 export function listWorkers(config, { herdr = createHerdrRunner(), output = console.log } = {}) {
