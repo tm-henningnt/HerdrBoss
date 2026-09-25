@@ -16,6 +16,8 @@ Then it applies its rules and writes these files to `~/.herdr-boss/`:
 | `events.jsonl` | Prompts, notifications, handovers, and stopped processes. |
 | `policy.json` | The resource policy that you set on the Allocation page. |
 
+`herdr-boss scratch <slug>` creates `~/.herdr-boss/scratch/<slug>/` for the orchestrator files of a project. Herdr Boss does not delete this folder.
+
 Herdr Boss is a script. It uses no LLM and no tokens.
 
 ## Orchestrators
@@ -52,8 +54,10 @@ A notice is a prompt to an `orch` pane. Herdr Boss sends it only when that agent
 `herdr-boss lanes` and the bulletin section "Provider lanes" show each metered provider:
 
 - **open**: use it.
-- **ahead of pace**: the provider uses its quota faster than the window allows. The lane shows when it is back on pace if it is not used.
+- **ahead of pace**: at least one live window of the provider will run out before its reset at the current rate. The used percentage does not change this. The lane shows when it is back on pace if it is not used.
 - **near exhaustion**: the quota is inside the reserve. Only `--force` can use it.
+
+A provider is open only when every live, measured window is on pace. Extra windows, such as a model-only window, do not count. When several windows are ahead of pace, the lane names the worst one: the window with the most use above its expected use. A window without an expected value ranks by its used percentage.
 
 When every metered provider is ahead of pace, `worker start` allows the least-over provider. A window whose reset time has passed shows "reset, not yet measured" until the next reading.
 

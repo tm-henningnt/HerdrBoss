@@ -407,3 +407,20 @@ test('worker park labels the pane parked and records the reason; unpark clears i
   assert.deepEqual(renames, [['ws:p2', 'parked'], ['ws:p2', '--clear']]);
   assert.throws(() => parkWorker('demo', {}, { config: f.config, herdr, output: () => {} }), /needs --reason/);
 });
+
+test('scratch creates a durable project folder under the Herdr Boss directory and prints its path', () => {
+  const cli = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'src', 'cli.js');
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-scratch-')));
+  const env = { ...process.env, HERDR_BOSS_DIR: dir };
+  const run = (...args) => execFileSync(process.execPath, [cli, 'scratch', ...args], { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  const expected = path.join(dir, 'scratch', 'herdrboss');
+  assert.equal(run('herdrboss'), expected);
+  assert.equal(fs.statSync(expected).isDirectory(), true);
+  fs.writeFileSync(path.join(expected, 'brief.md'), 'keep\n');
+  assert.equal(run('herdrboss'), expected);
+  assert.equal(fs.readFileSync(path.join(expected, 'brief.md'), 'utf8'), 'keep\n');
+  for (const bad of [['../escape'], ['Upper'], [], ['a', 'b']]) {
+    assert.throws(() => run(...bad), (error) => error.status !== 0 && /Usage: scratch <slug>/.test(error.stderr));
+  }
+  assert.deepEqual(fs.readdirSync(path.join(dir, 'scratch')), ['herdrboss']);
+});

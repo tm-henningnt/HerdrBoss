@@ -25,7 +25,7 @@ launchctl kickstart -k gui/$(id -u)/no.tallmaker.herdr-boss
 
 | Command | Action |
 |---|---|
-| `herdr-boss lanes` | One line per quota provider: open, ahead of pace, or near exhaustion, with the time until it recovers. |
+| `herdr-boss lanes` | One line per quota provider: open, ahead of pace, or near exhaustion. Each line names the window that sets the state and the time until it recovers. |
 | `herdr-boss models [--kind KIND]` | The allowed harnesses, models, and efforts from `kit/models.json`. |
 | `herdr-boss policy show` | Print the resource policy (`~/.herdr-boss/policy.json`). |
 | `herdr-boss policy set FILE` | Validate and replace the policy. The service applies it on the next tick. |
@@ -37,6 +37,7 @@ launchctl kickstart -k gui/$(id -u)/no.tallmaker.herdr-boss
 | Command | Action |
 |---|---|
 | `herdr-boss publish SLUG FILE` | Validate a status file and install it for `/projects/SLUG`. Use `-` for standard input. Schema: [project-status.md](project-status.md). |
+| `herdr-boss scratch SLUG` | Create `~/.herdr-boss/scratch/SLUG/` if it does not exist, and print its absolute path. `HERDR_BOSS_DIR` replaces `~/.herdr-boss`. |
 
 ## Workers
 
@@ -58,7 +59,7 @@ Create a branch and worktree, write the brief, open a pane in the `Workers` tab,
 | `--dry-run` | Print the plan. Change nothing. |
 | `--force` | Override quota, capacity, and paused-project refusals. It cannot enable a disabled model. |
 
-`worker start` refuses a provider that is ahead of pace or near exhaustion. When every metered provider is ahead of pace, it allows the least-over one with a notice. It warns when the machine load is above the limit.
+`worker start` refuses a provider that is ahead of pace or near exhaustion. The refusal names the same window as `herdr-boss lanes`. When every metered provider is ahead of pace, it allows the least-over one with a notice. It warns when the machine load is above the limit.
 
 ```sh
 herdr-boss worker start fix-74 --kind claude --task-file brief.md --allow src/parse/ --issue 74

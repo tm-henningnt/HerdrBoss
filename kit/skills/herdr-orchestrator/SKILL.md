@@ -65,6 +65,7 @@ description: Use when coordinating delegated workers with Herdr Boss, writing wo
 - Retry one provider overload on a different lane.
 - Record the failed attempt before you redispatch unfinished work.
 - Keep the brief, report, and worker files inside the worker worktree.
+- Keep orchestrator files in the project scratch folder: source briefs, wait scripts, and project status files. Run `herdr-boss scratch <project-slug>` to create the folder and print its path. Do not use `/private/tmp` or `/tmp` for these files. macOS can delete files there.
 
 ## Starting a worker
 
@@ -227,7 +228,8 @@ herdr agent prompt <orch-pane> "WORKER REPORT <name>: <done|blocked|stopped>. Re
   - Vitest 2 with the forks pool: `vitest run --poolOptions.forks.maxForks=2 --poolOptions.forks.minForks=1`. `--maxWorkers=2` fails there with an unhandled error, and no tests run.
   - Record the form that works in the project's instructions.
 - Read the machine load in the bulletin before each dispatch.
-- Run `herdr-boss lanes` to see each quota provider in one line: open, ahead of pace, or near exhaustion.
+- Run `herdr-boss lanes` to see each quota provider in one line: open, ahead of pace, or near exhaustion. The line names the window that sets the state.
+- A provider is ahead of pace when any live window will not last until its reset, also at low usage.
 - Prefer an open provider. When every metered provider is ahead of pace, `worker start` allows the least-over provider without `--force`. Keep that task small.
 - A quota window whose reset time has passed shows "reset, not yet measured" until the next reading. Do not use its old percentage as a reason for `--force`.
 - When the 5-minute load is more than 2 × the core count, start no new worker and no full suite.

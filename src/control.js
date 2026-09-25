@@ -137,10 +137,14 @@ function quotaRisk(q, policy, now = Date.now()) {
   return risk.sort((a, b) => b.usedPercent - a.usedPercent)[0] || null;
 }
 
+// How far a window is ahead of pace; without expected use, its usage percentage.
+const paceScore = (w) => Number.isFinite(w.expectedPercent) ? w.usedPercent - w.expectedPercent : w.usedPercent;
+
+// Any live window that will not last makes its provider ahead of pace. The lane reports the worst of them.
 function quotaPressure(q, policy, now = Date.now()) {
   if (policy.providerModes[q.provider] === 'ignore' || q.error) return null;
-  return (q.windows || []).filter((w) => liveWindow(w, now) && w.willLast === false && w.usedPercent >= 50)
-    .sort((a, b) => b.usedPercent - a.usedPercent)[0] || null;
+  return (q.windows || []).filter((w) => liveWindow(w, now) && w.willLast === false)
+    .sort((a, b) => paceScore(b) - paceScore(a))[0] || null;
 }
 
 // One state per metered provider: open, pace (ahead of quota pace), reserve (near exhaustion), or unknown.

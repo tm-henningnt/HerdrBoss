@@ -209,3 +209,50 @@ test('a remote session survives a restart, and a new token signs every device ou
   assert.equal(createAccessControl(tokenFile).authorized(req(cookie), res), false);
   assert.equal(first.login(req(), 'wrong').ok, false);
 });
+
+test('a live window that will not last is ahead of pace at any usage level', async () => {
+  const { laneStatus, leastOverProvider } = await import('../src/control.js');
+  const { describeLane } = await import('../src/kit/workers.js');
+  const now = Date.parse('2026-09-25T16:00:00Z');
+  const quotas = [
+    { provider: 'claude', windows: [
+      { label: 'Session', usedPercent: 13, expectedPercent: 15, willLast: true, windowMinutes: 300, resetsAt: '2026-09-25T19:59:00Z' },
+      { label: 'Weekly', usedPercent: 42, expectedPercent: 12, willLast: false, windowMinutes: 10080, resetsAt: '2026-10-01T18:59:00Z' },
+      { label: 'Fable only', usedPercent: 0, willLast: true, extra: true, resetsAt: '2026-10-01T19:00:00Z' },
+    ] },
+    { provider: 'codex', windows: [{ label: 'Weekly', usedPercent: 54, expectedPercent: 47, willLast: false, windowMinutes: 10080, resetsAt: '2026-09-29T09:24:00Z' }] },
+  ];
+  const lanes = laneStatus(quotas, policy(), now);
+  assert.equal(lanes.claude.state, 'pace');
+  assert.equal(lanes.claude.window, 'Weekly');
+  assert.equal(lanes.claude.overPercent, 30);
+  assert.match(describeLane('claude', lanes.claude, now), /^claude ahead of pace: 42% used against 12% expected in the Weekly window/);
+  // Codex is 7 points over and Claude 30, so the least-over rule still picks Codex.
+  assert.equal(leastOverProvider(lanes), 'codex');
+  const control = deriveControl({ ...snapshot(), quotas }, policy(), models, {}, now);
+  assert.equal(control.pressures.claude.label, 'Weekly');
+});
+
+test('the lane names the worst window by pace, not the highest-used window', async () => {
+  const { laneStatus } = await import('../src/control.js');
+  const { providerGate } = await import('../src/kit/workers.js');
+  const now = Date.parse('2026-09-25T16:00:00Z');
+  const quotas = [{ provider: 'opencodego', windows: [
+    { label: '5-hour', usedPercent: 20, expectedPercent: 5, willLast: false, windowMinutes: 300, resetsAt: '2026-09-25T20:29:00Z' },
+    { label: 'Weekly', usedPercent: 76, expectedPercent: 67, willLast: false, windowMinutes: 10080, resetsAt: '2026-09-27T23:59:00Z' },
+    { label: 'Monthly', usedPercent: 38, expectedPercent: 6, willLast: false, windowMinutes: 43200, resetsAt: '2026-10-23T16:57:00Z' },
+  ] }];
+  const lanes = laneStatus(quotas, policy(), now);
+  assert.equal(lanes.opencodego.state, 'pace');
+  assert.equal(lanes.opencodego.window, 'Monthly');
+  assert.equal(lanes.opencodego.overPercent, 32);
+  const refused = providerGate('opencodego', { avoidProviders: ['opencodego'], lanes, leastOverProvider: null }, { now }).error;
+  assert.match(refused, /^opencodego ahead of pace: 38% used against 6% expected in the Monthly window/);
+  // Without expected use, the usage percentage ranks the windows.
+  const unexpected = laneStatus([{ provider: 'codex', windows: [
+    { label: 'Session', usedPercent: 30, willLast: false, resetsAt: '2026-09-25T20:00:00Z' },
+    { label: 'Weekly', usedPercent: 45, willLast: false, resetsAt: '2026-09-29T09:24:00Z' },
+  ] }], policy(), now);
+  assert.equal(unexpected.codex.window, 'Weekly');
+  assert.equal(unexpected.codex.overPercent, null);
+});

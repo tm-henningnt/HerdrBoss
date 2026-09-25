@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { loadConfig, DATA_DIR, dashboardUrl } from './config.js';
-import { writeProject } from './projects.js';
+import { writeProject, SLUG } from './projects.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const LABEL = 'no.tallmaker.herdr-boss';
@@ -21,6 +21,7 @@ const USAGE = `herdr-boss <command>
   uninstall             Stop and remove the launchd agent.
   logs                  Show the server log.
   lanes                 Print one line per quota provider: open, ahead of pace, or near exhaustion.
+  scratch SLUG          Create the durable scratch folder of a project and print its path.
   policy show|set FILE  Show or replace the local resource policy.
   usage record FILE     Add measured or unmeasured project usage.
   usage summary         Summarize project and provider usage.
@@ -55,6 +56,13 @@ async function main() {
   if (cmd === 'kit-path') {
     const { KIT_ROOT } = await import('./kit/config.js');
     console.log(KIT_ROOT);
+    return;
+  }
+  if (cmd === 'scratch') {
+    if (args.length !== 1 || !SLUG.test(args[0])) throw new Error('Usage: scratch <slug>. The slug must match [a-z0-9][a-z0-9-]*.');
+    const dir = path.join(DATA_DIR, 'scratch', args[0]);
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    console.log(path.resolve(dir));
     return;
   }
   if (['worker', 'worktree', 'ledger', 'check', 'gh', 'models'].includes(cmd)) {
