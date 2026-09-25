@@ -14,7 +14,7 @@ HerdrBoss is the resource supervisor, shared dashboard, and orchestration kit fo
 - Do not push. The Boss asks the Owner and pushes.
 - The launchd service runs from the `main` working tree of this checkout. A change on `main` goes live for every project at the next restart.
 - Never stop, close, or restart a browser that another project uses. Never touch the Chrome on port 9222.
-- Never print a secret to a pane or a report. Read `~/.herdr-boss/access-token` only when a check needs it, and do not print its value.
+- Never print a secret to a pane or a report. The default token and all session files are stored in `~/.config/herdr-boss/`; an explicit `access.tokenFile` path stays configured. Agents must not read the private directory. Use temporary `HOME` and `HERDR_BOSS_DIR` fixtures for credential tests.
 
 ## Build and test
 

@@ -6,7 +6,7 @@ import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { Engine } from './engine.js';
-import { PROJECTS_DIR, DATA_DIR } from './config.js';
+import { PROJECTS_DIR, DATA_DIR, DEFAULT_SESSION_FILE, PRIVATE_ACCESS_DIR } from './config.js';
 import { writeProject, listProjects } from './projects.js';
 import { loadModels } from './kit/config.js';
 import { loadPolicy, savePolicy } from './control.js';
@@ -77,7 +77,11 @@ async function jsonBody(req) {
 }
 
 export function serve(cfg, { readOnlyPreview = false, createEngine = (config, options) => new Engine(config, options) } = {}) {
-  const access = createAccessControl(cfg.access.tokenFile, { sessionDays: cfg.access.sessionDays });
+  const access = createAccessControl(cfg.access.tokenFile, {
+    sessionFile: DEFAULT_SESSION_FILE,
+    sessionDays: cfg.access.sessionDays,
+    privateDirectory: PRIVATE_ACCESS_DIR,
+  });
   const engine = readOnlyPreview ? createEngine(cfg, { push: false, act: false }) : createEngine(cfg);
   const clients = new Set();
   let closed = false;

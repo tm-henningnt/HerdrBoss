@@ -25,15 +25,18 @@ function loadSessions(file, tokenHash) {
 }
 
 function saveSessions(file, tokenHash, sessions) {
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const tmp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify({ token: tokenHash, sessions: Object.fromEntries(sessions) }), { mode: 0o600 });
   fs.renameSync(tmp, file);
+  fs.chmodSync(file, 0o600);
 }
 
 function loadToken(file) {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   try { fs.writeFileSync(file, `${randomBytes(32).toString('hex')}\n`, { flag: 'wx', mode: 0o600 }); }
   catch (error) { if (error.code !== 'EEXIST') throw error; }
+  fs.chmodSync(file, 0o600);
   const token = fs.readFileSync(file, 'utf8').trim();
   if (token.length < 32) throw new Error('The remote access token must contain at least 32 characters.');
   return Buffer.from(token);
@@ -49,10 +52,16 @@ function loopback(req) {
   return ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress) && ['127.0.0.1', 'localhost', '[::1]'].includes(host);
 }
 
-export function createAccessControl(tokenFile, { sessionFile = path.join(path.dirname(tokenFile), 'sessions.json'), sessionDays = 30 } = {}) {
+export function createAccessControl(tokenFile, { sessionFile = path.join(path.dirname(tokenFile), 'sessions.json'), sessionDays = 30, privateDirectory = false } = {}) {
+  if (privateDirectory) {
+    const directory = typeof privateDirectory === 'string' ? privateDirectory : path.dirname(tokenFile);
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    fs.chmodSync(directory, 0o700);
+  }
   const token = loadToken(tokenFile);
   const tokenHash = hash(token);
   const sessionMs = Math.max(1, Number(sessionDays) || 30) * DAY_MS;
+  try { fs.chmodSync(sessionFile, 0o600); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   const sessions = loadSessions(sessionFile, tokenHash);
   const attempts = new Map();
   const persist = () => { try { saveSessions(sessionFile, tokenHash, sessions); } catch {} };
