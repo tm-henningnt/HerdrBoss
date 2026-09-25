@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { deriveControl, POLICY_DEFAULTS, providerFor, selectModel, validatePolicy } from '../src/control.js';
 import { validateUsage, usageProvider, usageSummary } from '../src/usage.js';
 import { loadModels } from '../src/kit/config.js';
@@ -25,6 +29,49 @@ test('policy only permits project exclusions from global availability', () => {
   assert.deepEqual(validatePolicy(p, models), []);
   p.allowedKinds = ['claude'];
   assert.match(validatePolicy(p, models).join(' '), /globally available kinds/);
+});
+
+test('machine policy defaults and validates owner and CPU limits', () => {
+  assert.equal(POLICY_DEFAULTS.machine.ownerAwayMinutes, 10);
+  assert.equal(POLICY_DEFAULTS.machine.presentCpuPercent, 70);
+  assert.equal(POLICY_DEFAULTS.machine.awayCpuPercent, 95);
+  assert.equal(POLICY_DEFAULTS.machine.alertCooldownSeconds, 21600);
+  assert.deepEqual(validatePolicy(policy(), models), []);
+  assert.match(validatePolicy(policy({ machine: { ...POLICY_DEFAULTS.machine, presentCpuPercent: 101 } }), models).join(' '), /presentCpuPercent/);
+  assert.deepEqual(validatePolicy(policy({ machine: { ...POLICY_DEFAULTS.machine, awayCpuPercent: null, awayLoadFactor: null } }), models), []);
+  assert.match(validatePolicy(policy({ machine: { ...POLICY_DEFAULTS.machine, alertCooldownSeconds: -1 } }), models).join(' '), /machine.alertCooldownSeconds/);
+});
+
+test('policy defaults override legacy machine and cooldown config values', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-policy-'));
+  fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ machine: { loadWarnFactor: 0 }, alertCooldownSeconds: 1 }));
+  const controlUrl = new URL('../src/control.js', import.meta.url).href;
+  const script = `import { loadPolicy } from ${JSON.stringify(controlUrl)}; console.log(JSON.stringify(loadPolicy().machine));`;
+  const machine = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', script], {
+    env: { ...process.env, HERDR_BOSS_DIR: dir }, encoding: 'utf8',
+  }));
+  assert.equal(machine.presentLoadFactor, 3);
+  assert.equal(machine.alertCooldownSeconds, 21600);
+});
+
+test('machine load guard reports active CPU and load limits', async () => {
+  const { machineLimits } = await import('../src/control.js');
+  assert.deepEqual(machineLimits({ cpus: 8, load: [1, 4, 5], ownerIdleMinutes: 11, cpuUse: { a: { cpu: 400 } } }, policy()), {
+    owner: 'away', cpuPercent: 50, cpuLimit: 95, fiveMinute: 4, loadLimit: 64,
+  });
+  assert.equal(machineLimits({ cpus: 8, load: [1, 4, 5], ownerIdleMinutes: null, cpuUse: { a: { cpu: 560 } } }, policy()).owner, 'present');
+  assert.equal(machineLimits({ cpus: 8, load: [1, 4, 5], ownerIdleMinutes: 0, cpuUse: {} }, policy()).loadLimit, 24);
+  const disabled = machineLimits({ cpus: 8, load: [1, 4, 5], ownerIdleMinutes: 11, cpuUse: {}, }, policy({ machine: { ...POLICY_DEFAULTS.machine, awayCpuPercent: null, awayLoadFactor: null } }));
+  assert.equal(disabled.cpuLimit, null);
+  assert.equal(disabled.loadLimit, null);
+  assert.equal(disabled.cpuPercent, 0);
+});
+
+test('Owner idle time parses HIDIdleTime nanoseconds and rejects missing or invalid readings', async () => {
+  const { parseOwnerIdleMinutes } = await import('../src/collect.js');
+  assert.equal(parseOwnerIdleMinutes('"HIDIdleTime" = 600000000000'), 10);
+  assert.equal(parseOwnerIdleMinutes('no reading'), null);
+  assert.equal(parseOwnerIdleMinutes('"HIDIdleTime" = -1'), null);
 });
 
 test('idle borrowing reallocates slots and quota risk offers a different harness', () => {
@@ -228,6 +275,18 @@ test('a load alert goes to the projects that cause it and the bulletin groups pr
   assert.match(load.find((a) => a.scope === 'w1').text, /Your project uses about 420% CPU now .*vitest ×9 400%/);
   const bulletin = renderBulletin(snap, evaluation, cfg);
   assert.match(bulletin, /## Project rules\n\n### Alpha\n\n- The 5-minute load average/);
+});
+
+test('bulletin shows Owner state, normalized CPU limit, load backstop, and stop action', async () => {
+  const { evaluate, renderBulletin } = await import('../src/rules.js');
+  const cfg = { quota: { warnPercent: 90, criticalPercent: 98 }, machine: { memFreeWarnPercent: 15, loadWarnFactor: 2 }, browsers: { staleOwnedMinutes: 30 }, workers: { staleIdleMinutes: 120 }, sharedBrowsers: [], providerKinds: { claude: ['claude'], codex: ['codex'], opencodego: ['pi'] } };
+  const p = policy();
+  const snap = { ...snapshot(), updatedAt: '2026-09-25T00:00:00Z', machine: { load: [1, 4, 5], cpus: 8, memFreePercent: 50, memTotalGB: 16, swapUsedMB: 0,
+    limits: { owner: 'present', cpuPercent: 75, cpuLimit: 70, fiveMinute: 4, loadLimit: 24 } }, cpuUse: {}, browsers: [], managedBrowsers: [], control: { projects: {}, runningWorkers: 0, maxWorkers: 8 }, policy: p };
+  const evaluation = evaluate(snap, cfg, {}, Date.parse(snap.updatedAt), p);
+  const bulletin = renderBulletin(snap, evaluation, cfg);
+  assert.match(bulletin, /Owner: present; machine CPU 75% \/ active limit 70%; 5-minute load 4 \/ active backstop 24/);
+  assert.match(bulletin, /stop new workers and full test suites/);
 });
 
 test('a remote session survives a restart, and a new token signs every device out', async () => {

@@ -116,17 +116,24 @@ export function providerGate(provider, rules, { force = false, now = Date.now() 
   return { error: `${detail}. ${next} Use --force only for an authorized override.` };
 }
 
-// The machine load only warns. Orchestrators decide whether a worker is worth starting on a loaded machine.
+export function describeMachine(rules) {
+  const machine = rules?.machine;
+  if (!machine) return null;
+  const cpu = Number.isFinite(machine.cpuPercent) ? `${machine.cpuPercent.toFixed(1)}%` : 'unknown';
+  const load = Number.isFinite(machine.fiveMinute) ? machine.fiveMinute : 'unknown';
+  const exceeded = (Number.isFinite(machine.cpuPercent) && Number.isFinite(machine.cpuLimit) && machine.cpuPercent > machine.cpuLimit)
+    || (Number.isFinite(machine.fiveMinute) && Number.isFinite(machine.loadLimit) && machine.fiveMinute > machine.loadLimit);
+  return `Machine: Owner ${machine.owner || 'unknown'}; CPU ${cpu} / limit ${machine.cpuLimit == null ? 'disabled' : `${machine.cpuLimit}%`}; 5-minute load ${load} / backstop ${machine.loadLimit ?? 'disabled'}${exceeded ? '. Stop new workers and full test suites.' : ''}`;
+}
+
+// The active machine CPU limit and enabled load backstop refuse starts, including with --force.
 export function loadWarning(rules) {
-  const load = rules?.load;
-  if (!load || !Number.isFinite(load.fiveMinute) || !Number.isFinite(load.limit) || load.fiveMinute <= load.limit) return null;
-  return [
-    `Warning: the machine is overloaded. The 5-minute load is ${load.fiveMinute} on ${load.cpus} cores; the limit is ${load.limit}.`,
-    'The worker starts, but it competes with the running work of every project. Before you continue:',
-    '  1. Wait for the load to drop below the limit if the task can wait. Check it with `uptime` or ~/.herdr-boss/bulletin.md.',
-    '  2. In the brief, tell the worker to run focused tests only, with at most two runner threads. The flag for each runner is in the kit skill, section "Machine load".',
-    '  3. Do not start a full test suite until the load is below the limit.',
-  ].join('\n');
+  const machine = rules?.machine;
+  if (!machine) return null;
+  const cpuExceeded = Number.isFinite(machine.cpuPercent) && Number.isFinite(machine.cpuLimit) && machine.cpuPercent > machine.cpuLimit;
+  const loadExceeded = Number.isFinite(machine.fiveMinute) && Number.isFinite(machine.loadLimit) && machine.fiveMinute > machine.loadLimit;
+  if (!cpuExceeded && !loadExceeded) return null;
+  return `Machine limit exceeded. ${describeMachine(rules)} --force cannot bypass this refusal.`;
 }
 
 function runSetupCommand(command, cwd, timeoutMs) {
@@ -303,8 +310,10 @@ export function startWorker(name, options, {
   const rules = readRules(rulesPath);
   const staleRules = rulesWarning(rules, now);
   if (staleRules) output(`Warning: Herdr Boss rules are older than 10 minutes or have no valid timestamp: ${rulesPath}`);
+  const machineStatus = describeMachine(rules);
+  if (machineStatus) output(machineStatus);
   const overload = loadWarning(rules);
-  if (overload) output(overload);
+  if (overload) throw new Error(overload);
   if (!options.kind) throw new Error('--kind is required.');
   if (rules.avoidKinds !== undefined && !Array.isArray(rules.avoidKinds)) throw new Error(`Herdr Boss rules avoidKinds must be an array: ${rulesPath}`);
   if ((rules.avoidKinds ?? []).includes(options.kind)) {

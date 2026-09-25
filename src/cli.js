@@ -73,8 +73,10 @@ async function main() {
   const cfg = loadConfig();
   switch (cmd) {
     case 'lanes': {
-      const { describeLane } = await import('./kit/workers.js');
+      const { describeLane, describeMachine } = await import('./kit/workers.js');
       const rules = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'rules.json'), 'utf8'));
+      const machineStatus = describeMachine(rules);
+      if (machineStatus) console.log(machineStatus);
       const lanes = rules.lanes || {};
       if (!Object.keys(lanes).length) throw new Error('No lane data yet. Wait for the next Herdr Boss tick.');
       for (const [provider, lane] of Object.entries(lanes)) console.log(`${describeLane(provider, lane)}${rules.leastOverProvider === provider ? ' (least over; worker start allows it)' : ''}`);

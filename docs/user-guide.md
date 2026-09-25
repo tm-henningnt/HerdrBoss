@@ -40,12 +40,14 @@ To add the shared rules to a project, follow [orchestrator-instructions.md](orch
 | A quota window is at 90% or more | Warning notice. |
 | A quota runs out before its reset at the current pace | The provider lane is "ahead of pace". `worker start` refuses it. |
 | Free memory is below 15% | Warning notice. |
-| The 5-minute load is above 2 × the core count | Warning notice to the projects that cause the load, with their top processes. |
+| Active machine CPU limit or enabled 5-minute load backstop is exceeded | Stop new workers and full test suites. `worker start` refuses the dispatch, including with `--force`. |
 | An idle worker still owns an automation browser after 30 minutes | Notice to that project. |
 | A worker is idle for more than 2 hours | Notice to that project. Parked workers and prepared successors are skipped. |
 | An `agent-browser` daemon has no parent, no children, and is older than 2 hours | Herdr Boss stops the daemon. It never stops a browser. |
 
-A notice is a prompt to an `orch` pane. Herdr Boss sends it only when that agent is `idle` or `done`, and at most once in 6 hours per alert and pane. It sends it sooner only when the severity increases. A notice for all orchestrators goes only to projects with a worker that is `working` or `blocked`. You get a desktop notification once for each warning.
+A notice is a prompt to an `orch` pane. Herdr Boss sends it only when that agent is `idle` or `done`, and no more than the configured cooldown per alert and pane. It sends it sooner only when the severity increases. A notice for all orchestrators goes only to projects with a worker that is `working` or `blocked`. You get a desktop notification once for each warning.
+
+The notice cooldown is saved as `machine.alertCooldownSeconds` in `policy.json`. Its default is 21600 seconds (6 hours). This policy value takes precedence over the legacy top-level `alertCooldownSeconds` value in `config.json`.
 
 `HERDR_BOSS_PUSH=0` turns off prompts for one run.
 
@@ -63,7 +65,11 @@ When every metered provider is ahead of pace, `worker start` allows the least-ov
 
 ## Settings and allocation
 
-The Settings page controls the available harnesses and models, preferred models, provider quota modes, and model-to-provider routes. Herdr Boss takes every harness and model choice from `kit/models.json`.
+The Settings page controls the available harnesses and models, preferred models, provider quota modes, model-to-provider routes, and machine limits. Herdr Boss takes every harness and model choice from `kit/models.json`.
+
+The Machine section saves its settings in `policy.json`. Herdr Boss reads Owner idle time from macOS `IOHIDSystem`. The default away time is 10 minutes. Missing or invalid idle data means the Owner is present. CPU is total sampled process CPU, including other processes, divided by core count. The default CPU limits are 70% while present and 95% while away. Set the away CPU limit to blank to disable it. The default 5-minute load backstops are 3 times the core count while present and 8 times while away. Set a load backstop to blank to disable it. The load average stays visible when a backstop is disabled.
+
+Policy settings take precedence over legacy `config.json` values. The old `machine.loadWarnFactor` field does not control machine guards. The `machine.alertCooldownSeconds` policy value takes precedence over the legacy top-level `alertCooldownSeconds` field for notice delivery.
 
 Clear a harness or model box to disable it for every project. Choose a preferred model for a harness. Worker start and handoff use it when you omit an explicit model. An empty choice uses the harness default.
 

@@ -349,13 +349,44 @@ test('worker start resends a brief that never reached the agent', () => {
 });
 
 test('worker start load warning names the load, the limit, and the actions', async () => {
-  const { loadWarning } = await import('../src/kit/workers.js');
-  assert.equal(loadWarning({ load: { fiveMinute: 12, cpus: 10, limit: 20 } }), null);
+  const { describeMachine, loadWarning } = await import('../src/kit/workers.js');
+  assert.equal(loadWarning({ machine: { owner: 'present', cpuPercent: 12, cpuLimit: 70, fiveMinute: 12, loadLimit: 20 } }), null);
   assert.equal(loadWarning({}), null);
-  const text = loadWarning({ load: { fiveMinute: 84.2, cpus: 10, limit: 20 } });
-  assert.match(text, /5-minute load is 84\.2 on 10 cores; the limit is 20/);
-  assert.match(text, /two runner threads/);
-  assert.match(text, /full test suite/);
+  const text = loadWarning({ machine: { owner: 'away', cpuPercent: 98, cpuLimit: 95, fiveMinute: 84.2, loadLimit: null } });
+  assert.match(describeMachine({ machine: { owner: 'away', cpuPercent: 98, cpuLimit: 95, fiveMinute: 84.2, loadLimit: null } }), /Owner away; CPU 98\.0% \/ limit 95%; 5-minute load 84\.2 \/ backstop disabled/);
+  assert.match(text, /CPU 98\.0% \/ limit 95%/);
+  assert.match(text, /5-minute load 84\.2 \/ backstop disabled/);
+  assert.match(text, /--force cannot bypass/);
+  assert.match(loadWarning({ machine: { owner: 'present', cpuLimit: 70, fiveMinute: 25, loadLimit: 24 } }), /CPU unknown/);
+});
+
+test('worker start refuses machine limits even with --force', () => {
+  const f = setupFixture(null);
+  fs.writeFileSync(f.rulesFile, JSON.stringify({ updatedAt: new Date().toISOString(), machine: { owner: 'present', cpuPercent: 71, cpuLimit: 70, fiveMinute: 1, loadLimit: null } }));
+  const output = [];
+  assert.throws(() => startWorker('machine-refused', { kind: 'codex', task: 'x', allow: ['src/'], force: true }, {
+    config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: (line) => output.push(line),
+  }), /--force cannot bypass this refusal/);
+  assert.match(output.join('\n'), /Owner present; CPU 71\.0% \/ limit 70%/);
+  assert.ok(!f.calls.includes('agent start'));
+});
+
+test('worker start refuses the enabled load backstop even with --force', () => {
+  const f = setupFixture(null);
+  fs.writeFileSync(f.rulesFile, JSON.stringify({ updatedAt: new Date().toISOString(), machine: { owner: 'present', cpuPercent: 20, cpuLimit: 70, fiveMinute: 25, loadLimit: 24 } }));
+  assert.throws(() => startWorker('load-refused', { kind: 'codex', task: 'x', allow: ['src/'], force: true }, {
+    config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+  }), /--force cannot bypass this refusal/);
+  assert.ok(!f.calls.includes('agent start'));
+});
+
+test('lanes prints active machine thresholds and load when the backstop is disabled', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-lanes-'));
+  fs.writeFileSync(path.join(dir, 'rules.json'), JSON.stringify({ machine: { owner: 'away', cpuPercent: 90, cpuLimit: 95, fiveMinute: 80, loadLimit: null }, lanes: { codex: { state: 'open' } } }));
+  const cli = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'src', 'cli.js');
+  const output = execFileSync(process.execPath, [cli, 'lanes'], { env: { ...process.env, HERDR_BOSS_DIR: dir }, encoding: 'utf8' });
+  assert.match(output, /Owner away; CPU 90\.0% \/ limit 95%; 5-minute load 80 \/ backstop disabled/);
+  assert.match(output, /codex open/);
 });
 
 function setupFixture(setup) {

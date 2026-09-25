@@ -101,22 +101,32 @@ export async function collectQuotas() {
 // ---------- Machine ----------
 
 export async function collectMachine() {
-  const [mp, swap] = await Promise.all([
+  const [mp, swap, idle] = await Promise.all([
     run('memory_pressure', []).catch(() => ''),
     run('sysctl', ['-n', 'vm.swapusage']).catch(() => ''),
+    run('ioreg', ['-c', 'IOHIDSystem']).catch(() => ''),
   ]);
   const free = /free percentage:\s*(\d+)%/.exec(mp);
   const sw = /used = ([\d.]+)M/.exec(swap);
   const swTotal = /total = ([\d.]+)M/.exec(swap);
+  const ownerIdleMinutes = parseOwnerIdleMinutes(idle);
   const [l1, l5, l15] = os.loadavg();
   return {
     cpus: os.cpus().length,
+    ownerIdleMinutes,
     memTotalGB: +(os.totalmem() / 2 ** 30).toFixed(1),
     memFreePercent: free ? Number(free[1]) : null,
     swapUsedMB: sw ? Math.round(Number(sw[1])) : null,
     swapTotalMB: swTotal ? Math.round(Number(swTotal[1])) : null,
     load: [l1, l5, l15].map((x) => +x.toFixed(2)),
   };
+}
+
+export function parseOwnerIdleMinutes(text) {
+  const match = /"HIDIdleTime"\s*=\s*(\d+)/.exec(text || '');
+  if (!match) return null;
+  const ns = Number(match[1]);
+  return Number.isSafeInteger(ns) && ns >= 0 ? ns / 60e9 : null;
 }
 
 // ---------- Processes / browsers ----------

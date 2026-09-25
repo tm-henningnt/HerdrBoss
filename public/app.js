@@ -236,7 +236,10 @@ function settingsView(s) {
   const modelRows = allModels.map((model) => `<label class="model-availability"><input type="checkbox" data-global-model="${esc(model)}" ${!d.excludedModels.includes(model) ? 'checked' : ''}> <span>${esc(model)}</span></label>`).join('');
   const providerRows = Object.keys(d.providerModes).map((p) => `<label class="setting-line"><span>${esc(PROVIDERS[p] || p)} quota mode</span><select data-provider="${esc(p)}"><option value="managed" ${d.providerModes[p] === 'managed' ? 'selected' : ''}>Manage pace</option><option value="ignore" ${d.providerModes[p] === 'ignore' ? 'selected' : ''}>Ignore quota</option></select></label>`).join('');
   const routes = allModels.map((model) => `<label class="setting-line route-line"><span>${esc(model)}</span><select data-model-provider="${esc(model)}" aria-label="Provider for ${esc(model)}"><option value="unmetered" ${d.modelProviders?.[model] === null ? 'selected' : ''}>Unmetered</option>${Object.entries(PROVIDERS).map(([provider, label]) => `<option value="${provider}" ${d.modelProviders?.[model] === provider ? 'selected' : ''}>${esc(label)}</option>`).join('')}</select></label>`).join('');
-  return `<header class="page-intro"><div><h1>Settings</h1><p>Choose available harnesses and models, preferred models, quota modes, and provider routes.</p></div></header><section id="settings-plane" class="control-shell"><div class="control-grid settings-grid"><section class="panel"><h2>Harnesses and preferred models</h2><div class="settings-kinds">${availability}</div></section><section class="panel"><h2>Provider quota modes</h2>${providerRows}<p class="setting-help">Ignore quota turns off pacing and handover alerts for that provider.</p></section></div><section class="panel"><h2>Available models</h2><p class="setting-help">Clear a model box to disable that model for every project.</p><div class="model-availability-list">${modelRows}</div></section><section class="panel"><h2>Model provider routes</h2><p class="setting-help">Choose which provider quota applies to each model. Use Unmetered when no quota applies.</p><div class="model-routes">${routes}</div></section><div class="control-actions ${policyDirty ? 'pending' : ''}"><span data-policy-status role="status" aria-live="polite">${esc(saveMessage || (policyDirty ? 'Unsaved changes · Apply policy to keep them' : 'Policy saved'))}</span><button id="save-policy" ${policyDirty ? '' : 'disabled'}>Apply policy</button></div></section>`;
+  const machine = d.machine || {};
+  const machineNumber = (key, label, max, nullable = false) => `<label class="setting-line"><span>${label}</span><input type="number" min="0" max="${max}" ${nullable ? 'step="any" placeholder="Disabled"' : ''} value="${machine[key] ?? ''}" data-policy-machine="${key}"></label>`;
+  const machineSettings = `<section class="panel"><h2>Machine</h2><p class="setting-help">The Owner is away after the idle period. Missing idle data means present. CPU is a percent of total machine capacity.</p>${machineNumber('ownerAwayMinutes', 'Owner away after minutes', 1440)}${machineNumber('presentCpuPercent', 'CPU limit while present %', 100)}${machineNumber('awayCpuPercent', 'CPU limit while away %', 100, true)}${machineNumber('presentLoadFactor', 'Present load backstop × cores', 128, true)}${machineNumber('awayLoadFactor', 'Away load backstop × cores', 128, true)}<label class="setting-line"><span>Notice cooldown seconds</span><input type="number" min="0" max="604800" value="${machine.alertCooldownSeconds}" data-policy-machine="alertCooldownSeconds"></label></section>`;
+  return `<header class="page-intro"><div><h1>Settings</h1><p>Choose available harnesses and models, preferred models, quota modes, provider routes, and machine limits.</p></div></header><section id="settings-plane" class="control-shell"><div class="control-grid settings-grid"><section class="panel"><h2>Harnesses and preferred models</h2><div class="settings-kinds">${availability}</div></section><section class="panel"><h2>Provider quota modes</h2>${providerRows}<p class="setting-help">Ignore quota turns off pacing and handover alerts for that provider.</p></section></div><section class="panel"><h2>Available models</h2><p class="setting-help">Clear a model box to disable that model for every project.</p><div class="model-availability-list">${modelRows}</div></section><section class="panel"><h2>Model provider routes</h2><p class="setting-help">Choose which provider quota applies to each model. Use Unmetered when no quota applies.</p><div class="model-routes">${routes}</div></section>${machineSettings}<div class="control-actions ${policyDirty ? 'pending' : ''}"><span data-policy-status role="status" aria-live="polite">${esc(saveMessage || (policyDirty ? 'Unsaved changes · Apply policy to keep them' : 'Policy saved'))}</span><button id="save-policy" ${policyDirty ? '' : 'disabled'}>Apply policy</button></div></section>`;
 }
 
 function handoffBlock(s, projectSlug = null) {
@@ -1025,7 +1028,8 @@ const HELP = {
     <p>A bar label such as <b>30% · 2</b> shows the set share and the effective slots. A narrow segment shows fewer labels; its tooltip shows all values.</p>
     <p>An idle project is faded. A paused project is faded and striped. When <b>Borrow idle shares</b> is on, an idle project lends its slots to active projects, so an idle project can have 0 effective slots.</p>`],
   settings: ['Settings', `
-    <p>Choose the harnesses and models that workers can use. Choose a preferred model for each harness, a quota mode for each provider, and a provider route for each model.</p>
+    <p>Choose the harnesses and models that workers can use. Choose a preferred model for each harness, a quota mode for each provider, a provider route for each model, and machine limits for Owner present and away states.</p>
+    <p>The Machine section sets CPU limits, 5-minute load backstops, the Owner idle period, and the notice cooldown. Herdr blocks dispatch when total sampled CPU exceeds its active limit or the 5-minute load average exceeds its active backstop. Leave the away CPU limit or either load backstop blank to disable it. Apply policy to save these settings.</p>
     <p>An empty preferred model uses the harness default. Choose <b>Unmetered</b> when a model has no provider quota.</p>
     <p>Changes stay in a draft until you select <b>Apply policy</b>. A rejected save shows the server error and keeps your draft.</p>`],
   agents: ['Agents', `
@@ -1203,6 +1207,7 @@ document.addEventListener('input', (e) => {
   if (!e.target.closest('#control-plane, #settings-plane') || !policyDraft) return;
   const el = e.target;
   if (el.dataset.policyNumber) policyDraft[el.dataset.policyNumber] = Number(el.value);
+  if (el.dataset.policyMachine) { policyDraft.machine ||= {}; policyDraft.machine[el.dataset.policyMachine] = el.value === '' ? null : Number(el.value); }
   markPolicyDirty();
 });
 
@@ -1285,6 +1290,7 @@ document.addEventListener('change', (e) => {
   if (!e.target.closest('#control-plane, #settings-plane') || !policyDraft) return;
   const el = e.target;
   const d = policyDraft;
+  if (el.dataset.policyMachine) { d.machine ||= {}; d.machine[el.dataset.policyMachine] = el.value === '' ? null : Number(el.value); }
   if (el.dataset.policyBool) d[el.dataset.policyBool] = el.checked;
   if (el.dataset.provider) d.providerModes[el.dataset.provider] = el.value;
   if (el.dataset.preferredModel) {

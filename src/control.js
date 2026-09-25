@@ -4,6 +4,7 @@ import { DATA_DIR } from './config.js';
 
 const FILE = path.join(DATA_DIR, 'policy.json');
 export const POLICY_DEFAULTS = {
+  machine: { ownerAwayMinutes: 10, presentCpuPercent: 70, awayCpuPercent: 95, presentLoadFactor: 3, awayLoadFactor: 8, alertCooldownSeconds: 21600 },
   maxWorkers: 8,
   borrowIdle: true,
   idleMinutes: 15,
@@ -32,7 +33,16 @@ export function loadPolicy() {
   let saved = {};
   try { saved = JSON.parse(fs.readFileSync(FILE, 'utf8')); }
   catch (e) { if (e.code !== 'ENOENT') throw e; }
-  return { ...POLICY_DEFAULTS, ...saved, providerModes: { ...POLICY_DEFAULTS.providerModes, ...saved.providerModes }, preferredModels: saved.preferredModels || {}, modelProviders: saved.modelProviders || {}, projects: saved.projects || {} };
+  return { ...POLICY_DEFAULTS, ...saved, machine: { ...POLICY_DEFAULTS.machine, ...saved.machine }, providerModes: { ...POLICY_DEFAULTS.providerModes, ...saved.providerModes }, preferredModels: saved.preferredModels || {}, modelProviders: saved.modelProviders || {}, projects: saved.projects || {} };
+}
+
+export function machineLimits(machine, policy) {
+  const away = Number.isFinite(machine.ownerIdleMinutes) && machine.ownerIdleMinutes >= policy.machine.ownerAwayMinutes;
+  const cpu = Number.isFinite(machine.cpuTotalSample) ? machine.cpuTotalSample : Object.values(machine.cpuUse || {}).reduce((sum, value) => sum + (Number(value.cpu) || 0), 0);
+  const cores = machine.cpus || 1;
+  const factor = away ? policy.machine.awayLoadFactor : policy.machine.presentLoadFactor;
+  return { owner: away ? 'away' : 'present', cpuPercent: cpu / cores, cpuLimit: away ? policy.machine.awayCpuPercent : policy.machine.presentCpuPercent,
+    fiveMinute: machine.load?.[1] ?? null, loadLimit: factor == null ? null : cores * factor };
 }
 
 function subset(value, set, field, errors) {
@@ -45,6 +55,13 @@ export function validatePolicy(value, models) {
   if (!Number.isInteger(value.maxWorkers) || value.maxWorkers < 1 || value.maxWorkers > 64) errors.push('maxWorkers must be an integer from 1 to 64.');
   if (typeof value.borrowIdle !== 'boolean') errors.push('borrowIdle must be boolean.');
   if (typeof value.autoHandover !== 'boolean') errors.push('autoHandover must be boolean.');
+  if (!value.machine || typeof value.machine !== 'object' || Array.isArray(value.machine)) errors.push('machine must be an object.');
+  else {
+    if (!Number.isInteger(value.machine.alertCooldownSeconds) || value.machine.alertCooldownSeconds < 0 || value.machine.alertCooldownSeconds > 604800) errors.push('machine.alertCooldownSeconds must be an integer from 0 to 604800.');
+    for (const key of ['ownerAwayMinutes', 'presentCpuPercent']) if (!Number.isInteger(value.machine[key]) || value.machine[key] < 0 || value.machine[key] > (key === 'ownerAwayMinutes' ? 1440 : 100)) errors.push(`machine.${key} is out of range.`);
+    if (value.machine.awayCpuPercent !== null && (!Number.isInteger(value.machine.awayCpuPercent) || value.machine.awayCpuPercent < 0 || value.machine.awayCpuPercent > 100)) errors.push('machine.awayCpuPercent must be null or an integer from 0 to 100.');
+    for (const key of ['presentLoadFactor', 'awayLoadFactor']) if (value.machine[key] !== null && (!Number.isFinite(value.machine[key]) || value.machine[key] < 0 || value.machine[key] > 128)) errors.push(`machine.${key} must be null or a number from 0 to 128.`);
+  }
   if (!Number.isInteger(value.autoHandoverPercent) || value.autoHandoverPercent < 90 || value.autoHandoverPercent > 100) errors.push('autoHandoverPercent must be an integer from 90 to 100.');
   for (const [key, max] of [['idleMinutes', 1440], ['reservePercent', 80], ['handoffLeadMinutes', 10080]]) {
     if (!Number.isInteger(value[key]) || value[key] < 0 || value[key] > max) errors.push(`${key} must be an integer from 0 to ${max}.`);
@@ -85,7 +102,7 @@ export function validatePolicy(value, models) {
 }
 
 export function savePolicy(value, models) {
-  const merged = { ...POLICY_DEFAULTS, ...value, providerModes: { ...POLICY_DEFAULTS.providerModes, ...value.providerModes } };
+  const merged = { ...POLICY_DEFAULTS, ...value, machine: { ...POLICY_DEFAULTS.machine, ...value.machine }, providerModes: { ...POLICY_DEFAULTS.providerModes, ...value.providerModes } };
   const errors = validatePolicy(merged, models);
   if (errors.length) return errors;
   const tmp = `${FILE}.${process.pid}.tmp`;

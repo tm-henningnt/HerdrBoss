@@ -7,7 +7,7 @@ import { collectHerdr, collectQuotas, collectMachine, collectProcesses, findBrow
 import { evaluate, renderBulletin, fmtDuration, providerName, broadcastTargets } from './rules.js';
 import { listProjects } from './projects.js';
 import { loadModels } from './kit/config.js';
-import { loadPolicy, deriveControl, providerFor, pickSuccessor, laneStatus, leastOverProvider } from './control.js';
+import { loadPolicy, deriveControl, providerFor, pickSuccessor, laneStatus, leastOverProvider, machineLimits } from './control.js';
 import { recordQuotaSnapshot } from './usage.js';
 import { listBrowserSessions } from './browser-pool.js';
 import { listHandoffs, expireHandoff } from './handoff.js';
@@ -96,6 +96,11 @@ export class Engine extends EventEmitter {
       const control = deriveControl(snap, policy, this.models, this.memory.paneSince, now);
       const profileWorkspaces = Object.fromEntries(managedBrowsers.map((b) => [b.profile, control.projects[b.project]?.workspace]).filter(([, ws]) => ws));
       snap.cpuUse = cpuUse(procs, herdr?.panes || [], profileWorkspaces);
+      if (machine) {
+        snap.machine.cpuUse = snap.cpuUse;
+        snap.machine.cpuTotalSample = [...procs.values()].reduce((sum, proc) => sum + Math.max(0, proc.cpu), 0);
+        snap.machine.limits = machineLimits(snap.machine, policy);
+      }
       snap.lanes = laneStatus(snap.quotas, policy, now);
       snap.leastOverProvider = leastOverProvider(snap.lanes);
       snap.policy = policy;
@@ -227,7 +232,8 @@ export class Engine extends EventEmitter {
         leastOverProvider: snap.leastOverProvider,
         preferredKinds,
         memFreePercent: machine?.memFreePercent ?? null,
-        load: machine ? { oneMinute: machine.load[0], fiveMinute: machine.load[1], cpus: machine.cpus, limit: machine.cpus * this.cfg.machine.loadWarnFactor } : null,
+        load: machine ? { oneMinute: machine.load[0], fiveMinute: machine.load[1], cpus: machine.cpus, limit: machineLimits(snap.machine, policy).loadLimit } : null,
+        machine: snap.machine?.limits || null,
         notes: evaluation.advice,
         browsers: managedBrowsers.map((b) => ({ project: b.project, port: b.port, profile: b.profile, headless: !!b.headless, windowSize: b.windowSize || { width: 1280, height: 800 }, ready: browsers.some((x) => x.kind === 'automation-chrome' && x.port === String(b.port) && x.profile === b.profile) })),
         policy,
@@ -372,7 +378,7 @@ export class Engine extends EventEmitter {
   }
 
   async deliver(alerts, herdr, now) {
-    const cooldown = this.cfg.alertCooldownSeconds * 1000;
+    const cooldown = loadPolicy().machine.alertCooldownSeconds * 1000;
     const orchs = (herdr?.panes || []).filter((p) => p.orch && p.agent);
     const active = new Set(alerts.map((a) => a.key));
 

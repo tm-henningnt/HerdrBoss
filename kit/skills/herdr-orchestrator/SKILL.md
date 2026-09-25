@@ -232,7 +232,7 @@ herdr agent prompt <orch-pane> "WORKER REPORT <name>: <done|blocked|stopped>. Re
 - A provider is ahead of pace when any live window will not last until its reset, also at low usage.
 - Prefer an open provider. When every metered provider is ahead of pace, `worker start` allows the least-over provider without `--force`. Keep that task small.
 - A quota window whose reset time has passed shows "reset, not yet measured" until the next reading. Do not use its old percentage as a reason for `--force`.
-- Obey the load limit that the bulletin reports. It is a setting that the Owner changes. Start no new worker and no full suite only while the bulletin says the load is over that limit. Do not apply a fixed limit of your own.
+- Read the Owner state, CPU limit, and 5-minute load backstop in the bulletin before dispatch. Stop new workers and full test suites while either active machine limit is exceeded. `worker start` enforces both limits, including when `--force` is set. Keep the load average visible when its backstop is disabled. Do not apply a fixed limit of your own.
 
 ## Git and worktree hygiene
 

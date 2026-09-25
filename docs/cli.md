@@ -25,7 +25,7 @@ launchctl kickstart -k gui/$(id -u)/no.tallmaker.herdr-boss
 
 | Command | Action |
 |---|---|
-| `herdr-boss lanes` | One line per quota provider: open, ahead of pace, or near exhaustion. Each line names the window that sets the state and the time until it recovers. |
+| `herdr-boss lanes` | Show the active Owner state, machine CPU and threshold, 5-minute load and backstop, then one line per quota provider. |
 | `herdr-boss models [--kind KIND]` | The allowed harnesses, models, and efforts from `kit/models.json`. |
 | `herdr-boss policy show` | Print the resource policy (`~/.herdr-boss/policy.json`). |
 | `herdr-boss policy set FILE` | Validate and replace the policy. The service applies it on the next tick. |
@@ -59,7 +59,7 @@ Create a branch and worktree, write the brief, open a pane in the `Workers` tab,
 | `--dry-run` | Print the plan. Change nothing. |
 | `--force` | Override quota, capacity, and paused-project refusals. It cannot enable a disabled model. |
 
-`worker start` refuses a provider that is ahead of pace or near exhaustion. The refusal names the same window as `herdr-boss lanes`. When every metered provider is ahead of pace, it allows the least-over one with a notice. It warns when the machine load is above the limit.
+`worker start` refuses a provider that is ahead of pace or near exhaustion. The refusal names the same window as `herdr-boss lanes`. When every metered provider is ahead of pace, it allows the least-over one with a notice. It refuses dispatch when the active CPU limit or enabled load backstop is exceeded. `--force` cannot bypass a machine refusal.
 
 Policy may set `preferredModels` by harness and `modelProviders` by allowed model. A preferred model must be in that harness's allow-list. A provider route must be `codex`, `claude`, `opencodego`, or `null` for an unmetered model. Explicit `--model` and handoff `--model` choices take precedence.
 

@@ -1,5 +1,6 @@
 // Turns a snapshot into alerts and bulletin advice. Pure functions, no side effects.
 import { dashboardUrl } from './config.js';
+import { machineLimits } from './control.js';
 
 const PROVIDER_NAMES = { claude: 'Claude', codex: 'Codex', opencodego: 'OpenCode Go' };
 export const providerName = (p) => PROVIDER_NAMES[p] || p;
@@ -73,6 +74,8 @@ export function evaluate(snap, cfg, paneSince, now = Date.now(), policy = null) 
   // ----- Machine -----
   const m = snap.machine;
   if (m) {
+    const limits = m.limits || (policy ? machineLimits({ ...m, cpuUse: snap.cpuUse }, policy) : null);
+    const cpuPercent = limits ? Number(limits.cpuPercent.toFixed(1)) : null;
     if (m.memFreePercent != null && m.memFreePercent < cfg.machine.memFreeWarnPercent) {
       alerts.push({
         key: 'machine:mem', severity: m.memFreePercent < cfg.machine.memFreeWarnPercent / 2 ? 'critical' : 'warn', scope: 'all',
@@ -80,24 +83,26 @@ export function evaluate(snap, cfg, paneSince, now = Date.now(), policy = null) 
         text: `System memory is ${m.memFreePercent}% free. Do not start new browser or test workers. Close finished workers and their browsers.`,
       });
     }
-    if (m.load[1] > m.cpus * cfg.machine.loadWarnFactor) {
+    const cpuExceeded = !!limits && limits.cpuLimit != null && limits.cpuPercent > limits.cpuLimit;
+    const loadExceeded = limits ? limits.loadLimit != null && m.load[1] > limits.loadLimit : m.load[1] > m.cpus * cfg.machine.loadWarnFactor;
+    if (cpuExceeded || loadExceeded) {
       const advice = 'Start no new worker and no full test suite until it drops. Run one full suite at a time, and limit test runners to two threads (the flag for each runner is in the kit skill, section Machine load).';
       const label = (ws) => snap.herdr?.workspaces?.find((w) => w.id === ws)?.label || ws;
       const top = (use) => use.top.map((g) => `${g.label}${g.count > 1 ? ` ×${g.count}` : ''} ${g.cpu}%`).join(', ');
       // A project that uses at least one core gets its own notice; the others are not woken.
       const sources = Object.entries(snap.cpuUse || {}).filter(([ws, use]) => ws !== 'other' && use.cpu >= 100).sort((a, b) => b[1].cpu - a[1].cpu);
       const summary = sources.map(([ws, use]) => `${label(ws)} ${use.cpu}% (${top(use)})`).join('; ');
-      const title = `CPU load high: ${m.load[1]} (5 min) on ${m.cpus} cores`;
+      const title = cpuExceeded ? `Machine CPU high: ${cpuPercent}% of capacity (limit ${limits.cpuLimit}%)` : `CPU load high: ${m.load[1]} (5 min) on ${m.cpus} cores`;
       if (sources.length) {
         for (const [ws, use] of sources) alerts.push({
           key: `machine:load:${ws}`, severity: 'warn', scope: ws, title,
-          text: `The 5-minute load average is ${m.load[1]} on ${m.cpus} cores. Your project uses about ${use.cpu}% CPU now (1 core = 100%): ${top(use)}. ${advice}`,
+          text: limits ? `Machine CPU is ${cpuPercent}% of total capacity (active limit ${limits.cpuLimit ?? 'disabled'}${limits.cpuLimit == null ? '' : '%' }, Owner ${limits.owner}); 5-minute load is ${m.load[1]}${limits.loadLimit == null ? ' (backstop disabled)' : ` (backstop ${limits.loadLimit})`}. Your project uses about ${use.cpu}% CPU (1 core = 100%): ${top(use)}. ${advice}` : `The 5-minute load average is ${m.load[1]} on ${m.cpus} cores. Your project uses about ${use.cpu}% CPU now (1 core = 100%): ${top(use)}. ${advice}`,
         });
-        alerts.push({ key: 'machine:load', severity: 'warn', scope: 'user', title, text: `The 5-minute load average is ${m.load[1]} on ${m.cpus} cores. CPU by project now: ${summary}.${snap.cpuUse?.other?.cpu >= 100 ? ` Other processes: ${top(snap.cpuUse.other)}.` : ''}` });
+        alerts.push({ key: 'machine:load', severity: 'warn', scope: 'user', title, text: limits ? `Owner ${limits.owner}; machine CPU ${cpuPercent}% (active limit ${limits.cpuLimit == null ? 'disabled' : `${limits.cpuLimit}%`}). 5-minute load ${m.load[1]}${limits.loadLimit == null ? ' (backstop disabled)' : ` (backstop ${limits.loadLimit})`}. CPU by project: ${summary}.` : `The 5-minute load average is ${m.load[1]} on ${m.cpus} cores. CPU by project now: ${summary}.${snap.cpuUse?.other?.cpu >= 100 ? ` Other processes: ${top(snap.cpuUse.other)}.` : ''}` });
       } else {
         alerts.push({
           key: 'machine:load', severity: 'warn', scope: 'all', title,
-          text: `The 5-minute load average is ${m.load[1]} on ${m.cpus} cores.${snap.cpuUse?.other ? ` The largest processes are outside the projects: ${top(snap.cpuUse.other)}.` : ''} ${advice}`,
+          text: `${limits ? `Owner ${limits.owner}; machine CPU ${cpuPercent}% (active limit ${limits.cpuLimit == null ? 'disabled' : `${limits.cpuLimit}%`}). 5-minute load ${m.load[1]}${limits.loadLimit == null ? ' (backstop disabled)' : ` (backstop ${limits.loadLimit})`}.` : `The 5-minute load average is ${m.load[1]} on ${m.cpus} cores.`}${snap.cpuUse?.other ? ` The largest processes are outside the projects: ${top(snap.cpuUse.other)}.` : ''} ${advice}`,
         });
       }
     }
@@ -200,6 +205,9 @@ export function renderBulletin(snap, evaluation, cfg) {
   if (m) {
     L.push('', '## Machine', '');
     L.push(`- Load: ${m.load.join(' / ')} on ${m.cpus} cores`);
+    const limits = m.limits;
+    if (limits) L.push(`- Owner: ${limits.owner}; machine CPU ${Number(limits.cpuPercent.toFixed(1))}% / active limit ${limits.cpuLimit == null ? 'disabled' : `${limits.cpuLimit}%`}; 5-minute load ${limits.fiveMinute} / active backstop ${limits.loadLimit == null ? 'disabled' : limits.loadLimit}.`);
+    if (limits && ((limits.cpuLimit != null && limits.cpuPercent > limits.cpuLimit) || (limits.loadLimit != null && limits.fiveMinute > limits.loadLimit))) L.push('- Machine limit exceeded: stop new workers and full test suites until no active machine limit is exceeded.');
     L.push(`- Memory: ${m.memFreePercent}% free of ${m.memTotalGB} GB; swap used ${m.swapUsedMB} MB`);
     const ab = (snap.browsers || []).filter((b) => b.kind === 'automation-chrome').length;
     L.push(`- Automation browsers: ${ab}`);
