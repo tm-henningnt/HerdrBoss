@@ -14,7 +14,7 @@ Then it applies its rules and writes these files to `~/.herdr-boss/`:
 | `rules.json` | The same rules for scripts. `worker start` reads it. |
 | `state.json` | The full snapshot that the dashboard shows. |
 | `events.jsonl` | Prompts, notifications, handovers, and stopped processes. |
-| `policy.json` | The resource policy that you set on the Allocation page. |
+| `policy.json` | The resource policy that you set on the Settings and Allocation pages. |
 
 `herdr-boss scratch <slug>` creates `~/.herdr-boss/scratch/<slug>/` for the orchestrator files of a project. Herdr Boss does not delete this folder.
 
@@ -61,13 +61,19 @@ A provider is open only when every live, measured window is on pace. Extra windo
 
 When every metered provider is ahead of pace, `worker start` allows the least-over provider. A window whose reset time has passed shows "reset, not yet measured" until the next reading.
 
-## Allocation and policy
+## Settings and allocation
 
-The Allocation page sets the global worker limit, the available harnesses and models, the quota mode for each provider, the share for each project, and project exclusions. The project share is advisory. `worker start` enforces the global limit and the disabled models. Select **Apply policy** to save a change.
+The Settings page controls the available harnesses and models, preferred models, provider quota modes, and model-to-provider routes. Herdr Boss takes every harness and model choice from `kit/models.json`.
 
-The policy can also set `preferredModels` by harness. Worker start and handoff use this model when you omit an explicit model. Each preferred model must be in that harness's allow-list. Set `modelProviders` to route an allowed model to `codex`, `claude`, or `opencodego`. Set its value to `null` when it is unmetered. If no route is set, Herdr Boss uses the existing harness and model prefix rules. Old policy files can omit both fields.
+Clear a harness or model box to disable it for every project. Choose a preferred model for a harness. Worker start and handoff use it when you omit an explicit model. An empty choice uses the harness default.
 
-A provider in `ignore` mode has no pacing and no handover alerts.
+Choose **Manage pace** to apply quota pacing and handover alerts. Choose **Ignore quota** to turn them off for that provider. A provider in `ignore` mode has no pacing and no handover alerts.
+
+Choose `codex`, `claude`, or `opencodego` to route a model to a provider quota. Choose **Unmetered** to store `null`. If no route is set, Herdr Boss uses the existing harness and model prefix rules. Old policy files can omit `preferredModels` and `modelProviders`.
+
+Both pages keep policy edits in a draft. Select **Apply policy** to save the draft. A rejected save shows the server error and keeps the draft.
+
+The Allocation page sets the global worker limit, project shares and exclusions, and orchestrator succession. The project share is advisory. `worker start` enforces the global limit and the disabled harnesses and models.
 
 Each project has two share values:
 
