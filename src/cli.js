@@ -14,7 +14,7 @@ const PLIST = path.join(os.homedir(), 'Library', 'LaunchAgents', `${LABEL}.plist
 
 const USAGE = `herdr-boss <command>
 
-  serve                 Run the collector loop and the dashboard server.
+  serve [--read-only-preview] Run the collector loop and the dashboard server.
   tick [--json]         Collect once and print alerts. Sends nothing, terminates nothing.
   publish <slug> <file> Validate a project status file and install it. Use "-" for stdin.
   install               Install and start the launchd agent.
@@ -183,8 +183,9 @@ async function main() {
       break;
     }
     case 'serve': {
+      if (args.some((arg) => arg !== '--read-only-preview') || args.length > 1) throw new Error('Usage: serve [--read-only-preview]');
       const { serve } = await import('./server.js');
-      serve(cfg);
+      serve(cfg, { readOnlyPreview: args.includes('--read-only-preview') });
       break;
     }
     case 'tick': {

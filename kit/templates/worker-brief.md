@@ -40,6 +40,8 @@ Read the current worktree state before editing.
 
 Read the Herdr Boss bulletin at `{{bulletinPath}}`.
 
+For dashboard previews, run `HERDR_BOSS_DIR="$(mktemp -d)" HERDR_BOSS_PORT=4478 npm start -- --read-only-preview`. Choose an unused local port if 4478 is busy.
+
 Use the task below as the complete work order:
 
 {{task}}

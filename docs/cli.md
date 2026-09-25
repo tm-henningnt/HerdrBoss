@@ -11,6 +11,7 @@ Run project commands (`worker`, `worktree`, `ledger`, `check`, `gh`) from inside
 | `herdr-boss install` | Install and start the macOS launchd agent `no.tallmaker.herdr-boss`. Run it again after you move the repository. |
 | `herdr-boss uninstall` | Stop and remove the launchd agent. |
 | `herdr-boss serve` | Run the collector and the dashboard in the foreground. |
+| `herdr-boss serve --read-only-preview` | Run a dashboard preview. This mode allows API reads and blocks API changes, prompts, notifications, process reaping, handovers, and browser launches. |
 | `herdr-boss tick [--json]` | Collect once and print alerts. Sends no prompt and stops no process. `--json` prints the full snapshot. |
 | `herdr-boss logs` | Print the last 100 lines of the server log. |
 | `herdr-boss kit-path` | Print the path of the shared kit (skill, templates, model list). |
@@ -20,6 +21,14 @@ Restart the service after a configuration change:
 ```sh
 launchctl kickstart -k gui/$(id -u)/no.tallmaker.herdr-boss
 ```
+
+Start a dashboard preview with temporary data and a separate local port:
+
+```sh
+HERDR_BOSS_DIR="$(mktemp -d)" HERDR_BOSS_PORT=4478 npm start -- --read-only-preview
+```
+
+Choose an unused local port if 4478 is busy.
 
 ## Resources and policy
 

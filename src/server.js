@@ -76,10 +76,14 @@ async function jsonBody(req) {
   return JSON.parse(await readBody(req));
 }
 
-export function serve(cfg) {
+export function serve(cfg, { readOnlyPreview = false, createEngine = (config, options) => new Engine(config, options) } = {}) {
   const access = createAccessControl(cfg.access.tokenFile, { sessionDays: cfg.access.sessionDays });
-  const engine = new Engine(cfg);
+  const engine = readOnlyPreview ? createEngine(cfg, { push: false, act: false }) : createEngine(cfg);
   const clients = new Set();
+  let closed = false;
+  let timer;
+  let tickPromise;
+  let debounce;
 
   const broadcast = (event, data) => {
     const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -88,8 +92,7 @@ export function serve(cfg) {
   engine.on('state', (s) => broadcast('state', s));
 
   // Push project edits to clients without waiting for the next tick.
-  let debounce;
-  fs.watch(PROJECTS_DIR, () => {
+  const projectsWatcher = fs.watch(PROJECTS_DIR, () => {
     clearTimeout(debounce);
     debounce = setTimeout(() => {
       if (!engine.state) return;
@@ -97,12 +100,18 @@ export function serve(cfg) {
       broadcast('state', engine.state);
     }, 300);
   });
+  projectsWatcher.on('error', (error) => {
+    if (!closed) engine.log('error', `Project watcher failed: ${error.message}`);
+  });
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://x');
     const p = url.pathname;
     try {
       if (!allowedRequest(req, p)) return send(res, 403, { error: 'This control plane requires a local interface or Tailscale host and a same-origin request.' });
+      if (readOnlyPreview && p.startsWith('/api/') && !['GET', 'HEAD'].includes(req.method)) {
+        return send(res, 403, { error: 'This read-only preview does not allow changes.' });
+      }
       if (p === '/login' && req.method === 'GET') return send(res, 200, loginPage(), 'text/html; charset=utf-8');
       if (p === '/login' && req.method === 'POST') {
         const body = await readBody(req, 4096);
@@ -286,10 +295,27 @@ export function serve(cfg) {
     console.log(`herdr-boss: http://${cfg.host}:${cfg.port} (push ${engine.push ? 'on' : 'off'})`);
   });
 
+  server.on('close', () => {
+    closed = true;
+    clearTimeout(timer);
+    clearTimeout(debounce);
+    projectsWatcher.close();
+  });
   const loop = async () => {
-    try { await engine.tick(); } catch (e) { engine.log('error', `tick failed: ${e.message}`); console.error(e); }
-    setTimeout(loop, cfg.tickSeconds * 1000);
+    try {
+      tickPromise = engine.tick();
+      await tickPromise;
+    } catch (e) { engine.log('error', `tick failed: ${e.message}`); console.error(e); }
+    finally { tickPromise = null; }
+    if (!closed) timer = setTimeout(loop, cfg.tickSeconds * 1000);
   };
   loop();
-  return { server, engine };
+  const close = async () => {
+    for (const client of clients) client.end();
+    if (server.listening) {
+      await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+    if (tickPromise) await tickPromise.catch(() => {});
+  };
+  return { server, engine, close };
 }
