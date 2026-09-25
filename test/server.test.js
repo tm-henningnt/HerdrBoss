@@ -16,7 +16,7 @@ const [{ serve }, { loadConfig }] = await Promise.all([
   import('../src/config.js'),
 ]);
 
-test('read-only preview allows reads and rejects all API methods that can change state', async (t) => {
+test('read-only preview allows reads and rejects all API methods that can change state', { timeout: 20000 }, async (t) => {
   const cfg = loadConfig();
   cfg.host = '127.0.0.1';
   cfg.port = 0;

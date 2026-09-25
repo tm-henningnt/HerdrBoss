@@ -16,6 +16,26 @@ function git(root, args, { encoding = 'utf8' } = {}) {
   return execFileSync('git', ['-C', root, ...args], { encoding });
 }
 
+export function parseWorktreeCwdProcesses(output, worktree) {
+  const root = path.resolve(worktree);
+  const processes = [];
+  let processInfo = null;
+  for (const line of output.split('\n')) {
+    if (line.startsWith('p')) {
+      if (processInfo?.cwd && (processInfo.cwd === root || processInfo.cwd.startsWith(`${root}${path.sep}`))) processes.push(processInfo);
+      processInfo = { pid: Number(line.slice(1)), command: null, cwd: null };
+    } else if (processInfo && line.startsWith('c')) processInfo.command = line.slice(1);
+    else if (processInfo && line.startsWith('n')) processInfo.cwd = line.slice(1);
+  }
+  if (processInfo?.cwd && (processInfo.cwd === root || processInfo.cwd.startsWith(`${root}${path.sep}`))) processes.push(processInfo);
+  return processes;
+}
+
+function worktreeCwdProcesses(worktree) {
+  const output = execFileSync('lsof', ['-a', '-d', 'cwd', '-Fpcn'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  return parseWorktreeCwdProcesses(output, worktree);
+}
+
 function displayArg(value) {
   if (/^[a-zA-Z0-9_./:=,@+-]+$/.test(value)) return value;
   return `'${value.replaceAll("'", "'\\''")}'`;
@@ -586,7 +606,7 @@ export function recordFlagErrors(options, reportJson = {}) {
   return missing;
 }
 
-export function collectWorker(name, options, { config, now = Date.now(), output = console.log, recordUsageFn = recordUsage } = {}) {
+export function collectWorker(name, options, { config, now = Date.now(), output = console.log, recordUsageFn = recordUsage, listWorktreeProcesses = worktreeCwdProcesses } = {}) {
   const { file, run } = readRun(config, name);
   if (run.finishedAt) throw new Error(`Run ${name} is already marked finished at ${run.finishedAt}.`);
   const reportDir = path.join(run.worktree, run.workerDir || '.worker');
@@ -601,6 +621,8 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
   if (path.resolve(reportJson.worktree) !== path.resolve(run.worktree)) throw new Error(`Report worktree ${reportJson.worktree} does not match run worktree ${run.worktree}.`);
   const actualBranch = git(run.worktree, ['branch', '--show-current']).trim();
   if (actualBranch !== run.branch) throw new Error(`Worktree branch ${actualBranch || '(detached)'} does not match run branch ${run.branch}.`);
+  const leftovers = listWorktreeProcesses(run.worktree).filter((process) => !['bash', 'fish', 'sh', 'zsh'].includes(process.command));
+  if (leftovers.length) throw new Error(`Worker ${name} still has processes in its worktree: ${leftovers.map((process) => `${process.command || 'unknown'} (pid ${process.pid}, cwd ${process.cwd})`).join('; ')}. Stop them before collection.`);
   if (run.issue != null && reportJson.issue !== run.issue) throw new Error(`Report issue ${reportJson.issue} does not match run issue ${run.issue}.`);
   if (reportJson.branch !== run.branch) throw new Error(`Report branch ${reportJson.branch} does not match run branch ${run.branch}.`);
   const log = gitLog(run.worktree, run.base);

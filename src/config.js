@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-export const DATA_DIR = process.env.HERDR_BOSS_DIR || path.join(os.homedir(), '.herdr-boss');
+export const LIVE_DATA_DIR = path.resolve(process.env.HERDR_BOSS_LIVE_DIR || path.join(os.homedir(), '.herdr-boss'));
+export const DATA_DIR = path.resolve(process.env.HERDR_BOSS_DIR || LIVE_DATA_DIR);
 export const PROJECTS_DIR = path.join(DATA_DIR, 'projects');
 const HOME_DIR = process.env.HOME || os.homedir();
 export const PRIVATE_ACCESS_DIR = path.join(HOME_DIR, '.config', 'herdr-boss');
