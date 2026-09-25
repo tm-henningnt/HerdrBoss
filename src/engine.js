@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
-import { DATA_DIR } from './config.js';
+import { DATA_DIR, dashboardUrl } from './config.js';
 import { collectHerdr, collectQuotas, collectMachine, collectProcesses, findBrowsers, cpuUse, run } from './collect.js';
 import { evaluate, renderBulletin, fmtDuration, providerName, broadcastTargets } from './rules.js';
 import { listProjects } from './projects.js';
@@ -404,7 +404,7 @@ export class Engine extends EventEmitter {
         const text = [
           '[herdr-boss] Resource notice. Act on it if it concerns your work. You do not need to reply to me.',
           ...list.map((a) => `- ${a.text}`),
-          `Current rules: ${path.join(DATA_DIR, 'bulletin.md')}. Dashboard: http://${this.cfg.host}:${this.cfg.port}`,
+          `Current rules: ${path.join(DATA_DIR, 'bulletin.md')}. Dashboard: ${dashboardUrl(this.cfg)}`,
         ].join('\n');
         try {
           await run('herdr', ['agent', 'prompt', o.id, text]);

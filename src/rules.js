@@ -1,4 +1,5 @@
 // Turns a snapshot into alerts and bulletin advice. Pure functions, no side effects.
+import { dashboardUrl } from './config.js';
 
 const PROVIDER_NAMES = { claude: 'Claude', codex: 'Codex', opencodego: 'OpenCode Go' };
 export const providerName = (p) => PROVIDER_NAMES[p] || p;
@@ -218,6 +219,6 @@ export function renderBulletin(snap, evaluation, cfg) {
   }
   const info = evaluation.alerts.filter((a) => a.severity === 'info');
   if (info.length) { L.push('', '## Notices', ''); info.forEach((a) => L.push(`- [${a.scope}] ${a.text}`)); }
-  L.push('', `Dashboard: http://${cfg.host}:${cfg.port}`, '');
+  L.push('', `Dashboard: ${dashboardUrl(cfg)}`, '');
   return L.join('\n');
 }

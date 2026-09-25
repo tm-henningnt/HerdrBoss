@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { loadConfig, DATA_DIR } from './config.js';
+import { loadConfig, DATA_DIR, dashboardUrl } from './config.js';
 import { writeProject } from './projects.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -193,7 +193,7 @@ async function main() {
       const text = file === '-' ? fs.readFileSync(0, 'utf8') : fs.readFileSync(file, 'utf8');
       const errors = writeProject(slug, JSON.parse(text));
       if (errors.length) { console.error(errors.join('\n')); process.exit(1); }
-      console.log(`published http://${cfg.host}:${cfg.port}/projects/${slug}`);
+      console.log(`published ${dashboardUrl(cfg)}/projects/${slug}`);
       break;
     }
     case 'install': {
@@ -225,7 +225,7 @@ async function main() {
       try { execFileSync('launchctl', ['bootout', `gui/${process.getuid()}`, PLIST], { stdio: 'ignore' }); } catch {}
       fs.writeFileSync(PLIST, plist);
       execFileSync('launchctl', ['bootstrap', `gui/${process.getuid()}`, PLIST]);
-      console.log(`installed ${PLIST}\ndashboard http://${cfg.host}:${cfg.port}`);
+      console.log(`installed ${PLIST}\ndashboard ${dashboardUrl(cfg)}`);
       break;
     }
     case 'uninstall': {

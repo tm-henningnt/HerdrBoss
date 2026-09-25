@@ -42,6 +42,11 @@ function merge(a, b) {
   return out;
 }
 
+// A server that listens on all interfaces is not reachable at 0.0.0.0, so links use the loopback address.
+export function dashboardUrl(cfg) {
+  return `http://${['0.0.0.0', '::', ''].includes(cfg.host) ? '127.0.0.1' : cfg.host}:${cfg.port}`;
+}
+
 export function loadConfig() {
   fs.mkdirSync(PROJECTS_DIR, { recursive: true });
   const file = path.join(DATA_DIR, 'config.json');
