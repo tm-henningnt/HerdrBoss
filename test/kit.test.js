@@ -666,3 +666,39 @@ test('worker collect ignores the worker report files in the scope check and the 
   const entry = JSON.parse(fs.readFileSync(f.config.ledgerPath, 'utf8').trim());
   assert.deepEqual(entry.changedPaths, ['.orchestration/runs/own-files.json']);
 });
+
+test('worker start gate puts unmetered alternatives before least-over guidance', async () => {
+  const { providerGate } = await import('../src/kit/workers.js');
+  const now = Date.parse('2026-09-25T10:00:00Z');
+  const lanes = {
+    codex: { state: 'pace', window: 'Weekly', usedPercent: 60, expectedPercent: 50, overPercent: 10, backOnPaceAt: '2026-09-26T02:48:00Z' },
+    opencodego: { state: 'pace', window: 'Weekly', usedPercent: 69, expectedPercent: 63, overPercent: 6, backOnPaceAt: '2026-09-25T20:00:00Z' },
+    unmetered: { state: 'open', unmetered: true, byProject: { herdrboss: { opencode: ['opencode/big-pickle', 'opencode/space-bunny-free'] } } },
+  };
+  const rules = { avoidProviders: ['codex', 'opencodego'], leastOverProvider: 'opencodego', lanes };
+  const refused = providerGate('codex', rules, { now, project: 'herdrboss' }).error;
+  assert.match(refused, /Unmetered alternatives for herdrboss: opencode \(opencode\/big-pickle, opencode\/space-bunny-free\)\./);
+  assert.ok(refused.indexOf('Unmetered alternatives') < refused.indexOf('opencodego is the least over'));
+  const filtered = providerGate('codex', rules, { now, project: 'herdrboss', allowedModels: ['opencode/big-pickle'] }).error;
+  assert.match(filtered, /Unmetered alternatives for herdrboss: opencode \(opencode\/big-pickle\)\./);
+  assert.doesNotMatch(filtered, /space-bunny-free/);
+  const least = providerGate('opencodego', rules, { now, project: 'herdrboss' }).warning;
+  assert.match(least, /Unmetered alternatives/);
+  assert.doesNotMatch(providerGate('codex', rules, { now, project: 'other' }).error, /Unmetered alternatives/);
+});
+
+test('lanes prints the unmetered alternatives lane', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-lanes-goal-'));
+  fs.writeFileSync(path.join(dir, 'rules.json'), JSON.stringify({
+    updatedAt: new Date().toISOString(),
+    lanes: {
+      codex: { state: 'pace', window: 'Weekly', usedPercent: 60, expectedPercent: 50, overPercent: 10, backOnPaceAt: new Date(Date.now() + 3600000).toISOString() },
+      unmetered: { state: 'open', unmetered: true, byProject: { herdrboss: { opencode: ['opencode/space-bunny-free'] } } },
+    },
+    leastOverProvider: null,
+  }));
+  const cli = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'src', 'cli.js');
+  const output = execFileSync(process.execPath, [cli, 'lanes'], { env: { ...process.env, HERDR_BOSS_DIR: dir }, encoding: 'utf8' });
+  assert.match(output, /codex ahead of pace/);
+  assert.match(output, /unmetered open: herdrboss: opencode \(opencode\/space-bunny-free\)/);
+});

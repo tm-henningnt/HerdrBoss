@@ -54,6 +54,7 @@ description: Use when coordinating delegated workers with Herdr Boss, writing wo
 - Treat `kit/models.json` as the source of truth for the machine allow-list.
 - Choose a worker kind from task fit, current availability, quota, and evidence needs.
 - Choose a low-cost lane for a small, fully specified task with a clear local gate.
+- Prefer an unmetered model for bounded, well-specified work while a metered provider is ahead of pace. Reserve metered models for work that needs judgment.
 - Choose a stronger lane for cross-cutting work, hard diagnosis, or costly rework risk.
 - Choose a visual reviewer for work that needs visual judgment.
 - Choose a browser-capable lane when the task requires a live browser.
@@ -62,7 +63,7 @@ description: Use when coordinating delegated workers with Herdr Boss, writing wo
 - Probe an unfamiliar lane with a harmless prompt before sending a long brief.
 - Limit a shared cheap provider lane to two concurrent workers.
 - Serialize work when two workers would edit the same shared module.
-- Retry one provider overload on a different lane.
+- Retry one provider overload on a different lane. A provider overload includes a free model; the retry goes to a different lane.
 - Record the failed attempt before you redispatch unfinished work.
 - Keep the brief, report, and worker files inside the worker worktree.
 - Keep orchestrator files in the project scratch folder: source briefs, wait scripts, and project status files. Run `herdr-boss scratch <project-slug>` to create the folder and print its path. Do not use `/private/tmp` or `/tmp` for these files. macOS can delete files there.
@@ -229,7 +230,8 @@ herdr agent prompt <orch-pane> "WORKER REPORT <name>: <done|blocked|stopped>. Re
   - Record the form that works in the project's instructions.
 - Read the machine load in the bulletin before each dispatch.
 - Run `herdr-boss lanes` to see each quota provider in one line: open, ahead of pace, or near exhaustion. The line names the window that sets the state.
-- A provider is ahead of pace when any live window will not last until its reset, also at low usage.
+- A provider is ahead of pace when any live window will not last until its reset, also at low usage, or when its use is above its goal-adjusted expected percentage. A quota pacing goal lowers the expected-use curve; an absent goal means 100%.
+- The lanes output has an always-open unmetered lane. Prefer it for bounded, well-specified work while metered lanes are ahead of pace. A worker-start refusal or least-over notice lists your project's unmetered alternatives first.
 - Prefer an open provider. When every metered provider is ahead of pace, `worker start` allows the least-over provider without `--force`. Keep that task small.
 - A quota window whose reset time has passed shows "reset, not yet measured" until the next reading. Do not use its old percentage as a reason for `--force`.
 - Read the Owner state, CPU limit, and 5-minute load backstop in the bulletin before dispatch. Stop new workers and full test suites while either active machine limit is exceeded. `worker start` enforces both limits, including when `--force` is set. Keep the load average visible when its backstop is disabled. Do not apply a fixed limit of your own.

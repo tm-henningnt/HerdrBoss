@@ -4,7 +4,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { appendDelegatedRun, compareChangedPaths, gitChangedPaths, gitLog, readJson, validateAllowedPaths, validateWorkerReport } from './orchestration.js';
 import { recordUsage } from '../usage.js';
-import { providerFor, selectModel } from '../control.js';
+import { providerFor, selectModel, unmeteredSummary } from '../control.js';
 
 const NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
 const BRIEF_SLOTS = new Set([
@@ -100,20 +100,38 @@ export function describeLane(provider, lane, now = Date.now()) {
   return `${provider} ahead of pace: ${numbers}; back on pace in about ${inAbout(lane.backOnPaceAt, now)} if unused`;
 }
 
+export function describeUnmetered(lane) {
+  const summary = unmeteredSummary(lane);
+  return summary ? `unmetered open: ${summary}` : 'unmetered open; no unmetered models are available after exclusions';
+}
+
+// The current project's permitted unmetered models, after its allow-list. Empty when none apply.
+function unmeteredAlternatives(rules, project, allowedModels) {
+  const kinds = project && rules.lanes?.unmetered?.byProject?.[project];
+  if (!kinds) return '';
+  const entries = Object.entries(kinds).map(([kind, names]) => {
+    const permitted = allowedModels == null ? names : names.filter((model) => allowedModels.includes(model));
+    return permitted.length ? `${kind} (${permitted.join(', ')})` : null;
+  }).filter(Boolean);
+  return entries.length ? `Unmetered alternatives for ${project}: ${entries.join('; ')}.` : '';
+}
+
 // Decide whether a worker on this provider may start. Returns { error } or { warning } or {}.
-export function providerGate(provider, rules, { force = false, now = Date.now() } = {}) {
+export function providerGate(provider, rules, { force = false, now = Date.now(), project = null, allowedModels = null } = {}) {
   if (!provider || !rules.avoidProviders?.includes(provider)) return {};
   const lane = rules.lanes?.[provider];
   const detail = lane ? describeLane(provider, lane, now) : `${provider} is ahead of quota pace or near exhaustion`;
-  if (force) return { warning: `Warning: --force overrides the quota guard: ${detail}.` };
+  const alternatives = unmeteredAlternatives(rules, project, allowedModels);
+  const lead = alternatives ? ` ${alternatives}` : '';
+  if (force) return { warning: `Warning: --force overrides the quota guard: ${detail}.${lead}` };
   if (lane?.state === 'pace' && rules.leastOverProvider === provider) {
-    return { warning: `Notice: every metered provider is over pace. ${detail}. It is the least over, so the worker starts. Keep the task small and record the reason in the run.` };
+    return { warning: `Notice: every metered provider is over pace. ${detail}.${lead} It is the least over, so the worker starts. Keep the task small and record the reason in the run.` };
   }
-  const open = Object.entries(rules.lanes || {}).filter(([, value]) => value.state === 'open').map(([name]) => name);
+  const open = Object.entries(rules.lanes || {}).filter(([, value]) => !value.unmetered && value.state === 'open').map(([name]) => name);
   const next = open.length ? `Open providers: ${open.join(', ')}.`
     : rules.leastOverProvider ? `Every metered provider is over pace; ${rules.leastOverProvider} is the least over and starts without --force.`
       : 'No metered provider is open; free models do not count against a quota.';
-  return { error: `${detail}. ${next} Use --force only for an authorized override.` };
+  return { error: `${detail}.${lead} ${next} Use --force only for an authorized override.` };
 }
 
 export function describeMachine(rules) {
@@ -390,7 +408,7 @@ export function startWorker(name, options, {
     if (projectPolicy?.mode === 'paused' && !options.force) throw new Error(`Project ${config.slug} is paused. Use --force only for an authorized override.`);
   }
   const provider = providerFor(options.kind, model, policy);
-  const gate = providerGate(provider, rules, { force: options.force, now });
+  const gate = providerGate(provider, rules, { force: options.force, now, project: config.slug, allowedModels: config.allowedModels });
   if (gate.error) throw new Error(gate.error);
   if (gate.warning) output(gate.warning);
   if (rules.control?.runningWorkers >= rules.control?.maxWorkers && !options.force) throw new Error(`Global worker limit (${rules.control.maxWorkers}) is reached; wait or use --force.`);

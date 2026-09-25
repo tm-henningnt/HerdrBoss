@@ -1,6 +1,6 @@
 // Turns a snapshot into alerts and bulletin advice. Pure functions, no side effects.
 import { dashboardUrl } from './config.js';
-import { machineLimits } from './control.js';
+import { machineLimits, unmeteredSummary } from './control.js';
 
 const PROVIDER_NAMES = { claude: 'Claude', codex: 'Codex', opencodego: 'OpenCode Go' };
 export const providerName = (p) => PROVIDER_NAMES[p] || p;
@@ -195,6 +195,11 @@ export function renderBulletin(snap, evaluation, cfg) {
   if (snap.lanes && Object.keys(snap.lanes).length) {
     L.push('', '## Provider lanes', '');
     for (const [provider, lane] of Object.entries(snap.lanes)) {
+      if (lane.unmetered) {
+        const summary = unmeteredSummary(lane);
+        L.push(`- Unmetered: open.${summary ? ` ${summary}.` : ''}`);
+        continue;
+      }
       const back = lane.backOnPaceAt ? ` Back ${lane.state === 'reserve' ? 'at reset' : 'on pace if unused'} about ${fmtTime(lane.backOnPaceAt)}.` : '';
       const text = lane.state === 'open' ? 'open.' : lane.state === 'unknown' ? 'unknown: no quota data.'
         : `${lane.state === 'reserve' ? 'near exhaustion' : 'ahead of pace'}: ${lane.usedPercent}% used${lane.expectedPercent != null ? ` against ${lane.expectedPercent}% expected` : ''} in the ${lane.window} window.${back}`;

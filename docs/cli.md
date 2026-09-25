@@ -34,7 +34,7 @@ Choose an unused local port if 4478 is busy.
 
 | Command | Action |
 |---|---|
-| `herdr-boss lanes` | Show the active Owner state, machine CPU and threshold, 5-minute load and backstop, then one line per quota provider. |
+| `herdr-boss lanes` | Show the active Owner state, machine CPU and threshold, 5-minute load and backstop, then one line per quota provider, then the unmetered models lane. |
 | `herdr-boss models [--kind KIND]` | The allowed harnesses, models, and efforts from `kit/models.json`. |
 | `herdr-boss policy show` | Print the resource policy (`~/.herdr-boss/policy.json`). |
 | `herdr-boss policy set FILE` | Validate and replace the policy. The service applies it on the next tick. |
@@ -68,9 +68,9 @@ Create a branch and worktree, write the brief, open a pane in the `Workers` tab,
 | `--dry-run` | Print the plan. Change nothing. |
 | `--force` | Override quota, capacity, and paused-project refusals. It cannot enable a disabled model. |
 
-`worker start` refuses a provider that is ahead of pace or near exhaustion. The refusal names the same window as `herdr-boss lanes`. When every metered provider is ahead of pace, it allows the least-over one with a notice. It refuses dispatch when the active CPU limit or enabled load backstop is exceeded. `--force` cannot bypass a machine refusal.
+`worker start` refuses a provider that is ahead of pace or near exhaustion. The refusal names the same window as `herdr-boss lanes`. When every metered provider is ahead of pace, it allows the least-over one with a notice. A refusal or least-over notice lists the current project's unmetered alternatives first, then names the least-over metered provider. It refuses dispatch when the active CPU limit or enabled load backstop is exceeded. `--force` cannot bypass a machine refusal.
 
-Policy may set `preferredModels` by harness and `modelProviders` by allowed model. A preferred model must be in that harness's allow-list. A provider route must be `codex`, `claude`, `opencodego`, or `null` for an unmetered model. Explicit `--model` and handoff `--model` choices take precedence.
+Policy may set `preferredModels` by harness, `modelProviders` by allowed model, and `pacingGoals` by provider and window key (`primary`, `secondary`, or `tertiary`). A preferred model must be in that harness's allow-list. A provider route must be `codex`, `claude`, `opencodego`, or `null` for an unmetered model. A pacing goal is a whole percentage from 0 to 100; an absent goal means 100%. Explicit `--model` and handoff `--model` choices take precedence.
 
 ```sh
 herdr-boss worker start fix-74 --kind claude --task-file brief.md --allow src/parse/ --issue 74

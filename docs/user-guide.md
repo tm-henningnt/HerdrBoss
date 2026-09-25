@@ -38,7 +38,7 @@ To add the shared rules to a project, follow [orchestrator-instructions.md](orch
 |---|---|
 | A quota window is at 98% or more | Critical notice. The bulletin tells orchestrators to avoid that kind. |
 | A quota window is at 90% or more | Warning notice. |
-| A quota runs out before its reset at the current pace | The provider lane is "ahead of pace". `worker start` refuses it. |
+| A quota runs out before its reset at the current pace, or its use is above the goal-adjusted pace | The provider lane is "ahead of pace". `worker start` refuses it. |
 | Free memory is below 15% | Warning notice. |
 | Active machine CPU limit or enabled 5-minute load backstop is exceeded | Stop new workers and full test suites. `worker start` refuses the dispatch, including with `--force`. |
 | An idle worker still owns an automation browser after 30 minutes | Notice to that project. |
@@ -56,16 +56,20 @@ The notice cooldown is saved as `machine.alertCooldownSeconds` in `policy.json`.
 `herdr-boss lanes` and the bulletin section "Provider lanes" show each metered provider:
 
 - **open**: use it.
-- **ahead of pace**: at least one live window of the provider will run out before its reset at the current rate. The used percentage does not change this. The lane shows when it is back on pace if it is not used.
+- **ahead of pace**: a live window will not last to its reset, or its use is above its goal-adjusted expected use. The lane shows when it is back on pace if it is not used.
 - **near exhaustion**: the quota is inside the reserve. Only `--force` can use it.
 
-A provider is open only when every live, measured window is on pace. Extra windows, such as a model-only window, do not count. When several windows are ahead of pace, the lane names the worst one: the window with the most use above its expected use. A window without an expected value ranks by its used percentage.
+A provider is open only when every live, measured window is on pace. Extra windows, such as a model-only window, do not count. When several windows are ahead of pace, the lane names the worst one: the window with the most use above its goal-adjusted expected use. A window without an expected value ranks by its used percentage.
 
-When every metered provider is ahead of pace, `worker start` allows the least-over provider. A window whose reset time has passed shows "reset, not yet measured" until the next reading.
+A **quota pacing goal** is the most percent of a window that you want to use by its reset. Herdr Boss scales the window's expected-use pace by `goal / 100`, so a goal of 80% makes the expected curve reach 80% at the reset. An unset goal means 100%, which preserves the normal pace. A goal does not change the reserve or near-exhaustion rules, which use the actual used percentage. A goal has no effect on a provider in `ignore` mode. A window whose reset time has passed starts fresh; usage does not carry across a reset.
+
+The same output has one **unmetered** lane. It is always open and lists every permitted unmetered model by project and harness, after global and project exclusions. An unmetered model has no metered provider route. The unmetered lane never changes least-over selection, avoid-provider rules, quota warnings, or quota accounting.
+
+When every metered provider is ahead of pace, `worker start` allows the least-over provider. A refusal or warning names the current project's unmetered alternatives first, then the least-over metered provider. A window whose reset time has passed shows "reset, not yet measured" until the next reading.
 
 ## Settings and allocation
 
-The Settings page controls the available harnesses and models, preferred models, provider quota modes, model-to-provider routes, and machine limits. Herdr Boss takes every harness and model choice from `kit/models.json`.
+The Settings page controls the available harnesses and models, preferred models, provider quota modes, quota pacing goals, model-to-provider routes, and machine limits. Herdr Boss takes every harness and model choice from `kit/models.json`.
 
 The Machine section saves its settings in `policy.json`. Herdr Boss reads Owner idle time from macOS `IOHIDSystem`. The default away time is 10 minutes. Missing or invalid idle data means the Owner is present. CPU is total sampled process CPU, including other processes, divided by core count. The default CPU limits are 70% while present and 95% while away. Set the away CPU limit to blank to disable it. The default 5-minute load backstops are 3 times the core count while present and 8 times while away. Set a load backstop to blank to disable it. The load average stays visible when a backstop is disabled.
 
@@ -75,7 +79,9 @@ Clear a harness or model box to disable it for every project. Choose a preferred
 
 Choose **Manage pace** to apply quota pacing and handover alerts. Choose **Ignore quota** to turn them off for that provider. A provider in `ignore` mode has no pacing and no handover alerts.
 
-Choose `codex`, `claude`, or `opencodego` to route a model to a provider quota. Choose **Unmetered** to store `null`. If no route is set, Herdr Boss uses the existing harness and model prefix rules. Old policy files can omit `preferredModels` and `modelProviders`.
+Set a **quota pacing goal** for each measured window. The field shows the provider and the window label, such as `Codex Weekly goal %`. A blank field means 100%. Enter a whole percentage from 0 through 100. `pacingGoals` in `policy.json` stores the value by provider and by the window key (`primary`, `secondary`, or `tertiary`). Clearing the field removes that goal and restores 100%.
+
+Choose `codex`, `claude`, or `opencodego` to route a model to a provider quota. Choose **Unmetered** to store `null`. If no route is set, Herdr Boss uses the existing harness and model prefix rules. Old policy files can omit `preferredModels`, `modelProviders`, and `pacingGoals`.
 
 Both pages keep policy edits in a draft. Select **Apply policy** to save the draft. A rejected save shows the server error and keeps the draft.
 
