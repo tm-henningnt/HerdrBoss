@@ -38,7 +38,7 @@ Read the project instructions and task sources that define the acceptance contra
 
 Read the current worktree state before editing.
 
-Read the Herdr Boss bulletin at `{{bulletinPath}}`.
+Do not read files under `~/.herdr-boss/`. That directory holds credentials. The orchestrator applies the Herdr Boss rules, and this brief contains the rules that you need.
 
 For dashboard previews, run `HERDR_BOSS_DIR="$(mktemp -d)" HERDR_BOSS_PORT=4478 npm start -- --read-only-preview`. Choose an unused local port if 4478 is busy.
 
