@@ -68,9 +68,13 @@ In tests, wait for a condition. Do not wait for a fixed time.
 
 Quote the heredoc delimiter (`<<'EOF'`) when the body holds Markdown, backticks, or `$`.
 
-Ask the orchestrator when a decision is outside the brief.
+Ask the orchestrator when a decision is outside the brief, or when you miss a file, an instruction, an access right, or a tool. Do not guess, and do not look for the answer outside this worktree. Send one message without `--wait`:
 
-Stop that decision path while you wait for an answer.
+```sh
+herdr agent prompt {{orchPane}} "WORKER QUESTION {{name}}: <what you need and why>"
+```
+
+Then stop that path and wait. The orchestrator answers with a new prompt in this pane. Continue with other parts of the task while you wait, when they do not depend on the answer.
 
 ## Image budget
 

@@ -153,6 +153,13 @@ herdr-boss worker start <name> --kind <kind> --task-file <file> --allow <path>
 - For project browser work, follow [the dedicated browser service](../../browser-service.md). Use [the shared-browser rules](../../shared-browser.md) only when a legacy shared session is explicitly assigned.
 - Never stop the Herdr server or kill the main Herdr process to recover a worker.
 
+## Worker questions
+
+- A worker sends `WORKER QUESTION <name>: ...` when it misses a file, an instruction, an access right, or a decision.
+- Answer it with `herdr agent prompt <name> "..."`. Put missing files into the worker worktree; do not point the worker outside it.
+- When the question is a product decision, decide it within the project rules, or escalate it to the Owner and tell the worker to wait.
+- Add the answer to the next brief of the same kind, so the next worker does not need to ask.
+
 ## Worker completion signalling
 
 - Require the worker to save both report files before sending its completion message.
