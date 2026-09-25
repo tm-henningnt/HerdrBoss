@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { deriveControl, POLICY_DEFAULTS, providerFor, validatePolicy } from '../src/control.js';
-import { validateUsage, usageSummary } from '../src/usage.js';
+import { deriveControl, POLICY_DEFAULTS, providerFor, selectModel, validatePolicy } from '../src/control.js';
+import { validateUsage, usageProvider, usageSummary } from '../src/usage.js';
 import { loadModels } from '../src/kit/config.js';
 import { broadcastTargets } from '../src/rules.js';
 
@@ -49,10 +49,53 @@ test('ignore quota disables handoff while preserving observed usage', () => {
   assert.equal(result.risks.claude, null);
 });
 
+test('handoff target checks use the configured model route', () => {
+  const routed = policy({ modelProviders: { 'gpt-6-luna': 'claude' } });
+  const result = deriveControl(snapshot(), routed, models, {}, Date.parse('2026-09-24T17:00:00Z'));
+  assert.equal(result.handoffs[0].target.kind, 'pi');
+  assert.equal(result.handoffs[0].target.provider, 'opencodego');
+});
+
+test('current orchestrator provider falls back to its preferred model route', () => {
+  const p = policy({ preferredModels: { codex: 'gpt-6-sol' }, modelProviders: { 'gpt-6-sol': 'claude' } });
+  const result = deriveControl(snapshot(), p, models, {}, Date.parse('2026-09-24T17:00:00Z'));
+  const handoff = result.handoffs.find((item) => item.fromKind === 'codex');
+  assert.equal(handoff.provider, 'claude');
+  assert.equal(handoff.target.kind, 'pi');
+});
+
 test('provider routing separates free OpenCode from OpenCode Go', () => {
   assert.equal(providerFor('opencode', 'opencode/big-pickle'), null);
   assert.equal(providerFor('pi', 'opencode-go/deepseek-v4.1-flash'), 'opencodego');
   assert.equal(providerFor('codex', 'gpt-6-luna'), 'codex');
+});
+
+test('policy validates preferred models and explicit provider routes', () => {
+  const p = policy({ preferredModels: { codex: 'gpt-6-sol' }, modelProviders: { 'gpt-6-sol': 'claude' } });
+  assert.deepEqual(validatePolicy(p, models), []);
+  assert.match(validatePolicy(policy({ preferredModels: { codex: 'claude-sonnet-4-5' } }), models).join(' '), /preferredModels/);
+  assert.match(validatePolicy(policy({ modelProviders: { 'unknown-model': 'codex' } }), models).join(' '), /modelProviders/);
+  assert.match(validatePolicy(policy({ modelProviders: { 'gpt-6-luna': 'other' } }), models).join(' '), /modelProviders/);
+});
+
+test('model provider override applies while legacy policy keeps inferred routing', () => {
+  assert.equal(providerFor('codex', 'gpt-6-luna'), 'codex');
+  assert.equal(providerFor('codex', 'gpt-6-luna', { modelProviders: { 'gpt-6-luna': 'claude' } }), 'claude');
+  assert.equal(providerFor('opencode', 'opencode/big-pickle', { modelProviders: { 'opencode/big-pickle': null } }), null);
+});
+
+test('usage attribution prefers an explicit provider over changed policy routes', () => {
+  const changedRoute = { modelProviders: { 'gpt-6-luna': 'opencodego' } };
+  assert.equal(usageProvider({ kind: 'codex', model: 'gpt-6-luna', provider: 'claude' }, changedRoute), 'claude');
+  assert.equal(usageProvider({ kind: 'codex', model: 'gpt-6-luna', provider: null }, changedRoute), 'unmetered-or-unknown');
+  assert.equal(usageProvider({ kind: 'codex', model: 'gpt-6-luna' }, { modelProviders: { 'gpt-6-luna': 'claude' } }), 'claude');
+  assert.equal(usageProvider({ kind: 'codex', model: 'gpt-6-luna' }, {}), 'codex');
+});
+
+test('preferred model selection preserves explicit choices and legacy defaults', () => {
+  assert.equal(selectModel('codex', null, models, { preferredModels: { codex: 'gpt-6-sol' } }), 'gpt-6-sol');
+  assert.equal(selectModel('codex', 'gpt-6-astra', models, { preferredModels: { codex: 'gpt-6-sol' } }), 'gpt-6-astra');
+  assert.equal(selectModel('codex', null, models, {}), models.kinds.codex.defaultModel);
 });
 
 test('usage summary distinguishes recorded runs from measured tokens', () => {

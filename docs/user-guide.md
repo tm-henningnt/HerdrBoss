@@ -65,6 +65,8 @@ When every metered provider is ahead of pace, `worker start` allows the least-ov
 
 The Allocation page sets the global worker limit, the available harnesses and models, the quota mode for each provider, the share for each project, and project exclusions. The project share is advisory. `worker start` enforces the global limit and the disabled models. Select **Apply policy** to save a change.
 
+The policy can also set `preferredModels` by harness. Worker start and handoff use this model when you omit an explicit model. Each preferred model must be in that harness's allow-list. Set `modelProviders` to route an allowed model to `codex`, `claude`, or `opencodego`. Set its value to `null` when it is unmetered. If no route is set, Herdr Boss uses the existing harness and model prefix rules. Old policy files can omit both fields.
+
 A provider in `ignore` mode has no pacing and no handover alerts.
 
 Each project has two share values:

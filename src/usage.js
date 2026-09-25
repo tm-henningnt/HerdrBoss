@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { DATA_DIR } from './config.js';
-import { providerFor } from './control.js';
+import { loadPolicy, providerFor } from './control.js';
 
 const FILE = path.join(DATA_DIR, 'usage.jsonl');
 const QUOTAS_FILE = path.join(DATA_DIR, 'quota-history.jsonl');
@@ -25,13 +25,19 @@ export function readUsage(limit = null) {
   return (limit == null ? lines : lines.slice(-limit)).map((line) => JSON.parse(line));
 }
 
+export function usageProvider(event, policy = loadPolicy()) {
+  if (Object.hasOwn(event, 'provider')) return event.provider ?? 'unmetered-or-unknown';
+  if (Object.hasOwn(policy.modelProviders || {}, event.model)) return policy.modelProviders[event.model] ?? 'unmetered-or-unknown';
+  return providerFor(event.kind, event.model, policy) ?? 'unmetered-or-unknown';
+}
+
 export function recordUsage(event) {
   const errors = validateUsage(event);
   if (errors.length) return { errors };
   const e = {
     inputTokens: null, outputTokens: null, cachedTokens: null, cost: null,
     ...event,
-    provider: event.provider ?? providerFor(event.kind, event.model) ?? 'unmetered-or-unknown',
+    provider: usageProvider(event),
     recordedAt: new Date().toISOString(),
   };
   if (e.id && readUsage().some((old) => old.id === e.id)) return { errors: [], duplicate: true };

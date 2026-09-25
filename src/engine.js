@@ -171,7 +171,7 @@ export class Engine extends EventEmitter {
           text: `The bootstrap prompt did not reach the proposed successor ${h.id} in pane ${h.newPane}. It cannot report ready, so automatic activation cannot happen. Read the pane with herdr agent read ${h.newPane}, then send the prompt again or close the pane and prepare a new successor.`,
         });
         // Expire an automatic successor two hours after preparation when its source provider is no longer at risk.
-        const sourceProvider = providerFor(h.fromKind, null);
+        const sourceProvider = providerFor(h.fromKind, policy.preferredModels?.[h.fromKind] ?? this.models.kinds[h.fromKind]?.defaultModel, policy);
         if (h.status === 'prepared' && h.automatic && now - Date.parse(h.preparedAt) > 2 * 3600000 && !control.risks[sourceProvider]) {
           const expired = this.act ? expireHandoff(h.id, `${sourceProvider || 'the source provider'} is no longer near its limit`) : null;
           if (expired) {
@@ -216,7 +216,7 @@ export class Engine extends EventEmitter {
       const limitedProviders = new Set(quotaAlerts.map((alert) => alert.key.split(':')[1]));
       const avoidKinds = [...new Set([...criticalProviders].filter((provider) => provider === 'codex' || provider === 'claude'))];
       const preferredKinds = Object.keys(control.globalAllowed).filter((kind) => control.globalAllowed[kind].some((model) => {
-        const provider = kind === 'codex' || kind === 'claude' ? kind : model.startsWith('opencode-go/') ? 'opencodego' : null;
+        const provider = providerFor(kind, model, policy);
         return !provider || !limitedProviders.has(provider);
       }));
       writeJson(path.join(DATA_DIR, 'rules.json'), {
@@ -291,7 +291,8 @@ export class Engine extends EventEmitter {
     for (const [key, at] of Object.entries(this.memory.autoHandoverAttempts)) if (now - at > 7 * 86400 * 1000) delete this.memory.autoHandoverAttempts[key];
     const records = listHandoffs();
     for (const item of records.filter((x) => x.status === 'prepared' && x.automatic && x.readyAt && !x.promptError)) {
-      const provider = providerFor(item.fromKind || this.memory.lastOrchestrators?.[item.workspace]?.kind, null);
+      const sourceKind = item.fromKind || this.memory.lastOrchestrators?.[item.workspace]?.kind;
+      const provider = providerFor(sourceKind, policy.preferredModels?.[sourceKind] ?? this.models.kinds[sourceKind]?.defaultModel, policy);
       const quota = this.quotas.find((q) => q.provider === provider && !q.error);
       if (!quota?.windows?.some((w) => !w.extra && w.usedPercent >= policy.autoHandoverPercent)) continue;
       const target = herdr?.panes?.find((p) => p.id === item.newPane);
@@ -309,7 +310,7 @@ export class Engine extends EventEmitter {
     const stopped = Object.values(control.projects).flatMap((p) => {
       const last = this.memory.lastOrchestrators[p.workspace];
       if (!p.orch || p.orch.kind || last?.pane !== p.orch.pane) return [];
-      const provider = providerFor(last.kind, null);
+      const provider = providerFor(last.kind, policy.preferredModels?.[last.kind] ?? this.models.kinds[last.kind]?.defaultModel, policy);
       const window = this.quotas.find((q) => q.provider === provider && !q.error)?.windows?.find((w) => !w.extra && w.usedPercent >= policy.autoHandoverPercent);
       if (!window || policy.providerModes[provider] === 'ignore') return [];
       return [{ project: p.slug, pane: p.orch.pane, fromKind: last.kind, sessionId: null, window, target: pickSuccessor(p, last.kind, provider, policy, control) }];

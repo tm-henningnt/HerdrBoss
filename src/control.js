@@ -19,6 +19,8 @@ export const POLICY_DEFAULTS = {
   allowedKinds: ['codex', 'claude', 'opencode', 'pi'],
   excludedModels: [],
   providerModes: { codex: 'managed', claude: 'managed', opencodego: 'managed' },
+  preferredModels: {},
+  modelProviders: {},
   projects: {},
 };
 
@@ -30,7 +32,7 @@ export function loadPolicy() {
   let saved = {};
   try { saved = JSON.parse(fs.readFileSync(FILE, 'utf8')); }
   catch (e) { if (e.code !== 'ENOENT') throw e; }
-  return { ...POLICY_DEFAULTS, ...saved, providerModes: { ...POLICY_DEFAULTS.providerModes, ...saved.providerModes }, projects: saved.projects || {} };
+  return { ...POLICY_DEFAULTS, ...saved, providerModes: { ...POLICY_DEFAULTS.providerModes, ...saved.providerModes }, preferredModels: saved.preferredModels || {}, modelProviders: saved.modelProviders || {}, projects: saved.projects || {} };
 }
 
 function subset(value, set, field, errors) {
@@ -49,6 +51,10 @@ export function validatePolicy(value, models) {
   }
   subset(value.allowedKinds, KINDS, 'allowedKinds', errors);
   const allModels = new Set(Object.values(models.kinds).flatMap((k) => k.allowedModels));
+  if (!value.preferredModels || typeof value.preferredModels !== 'object' || Array.isArray(value.preferredModels)) errors.push('preferredModels must be an object.');
+  else for (const [kind, model] of Object.entries(value.preferredModels)) if (!models.kinds[kind]?.allowedModels.includes(model)) errors.push(`Invalid preferredModels choice for ${kind}.`);
+  if (!value.modelProviders || typeof value.modelProviders !== 'object' || Array.isArray(value.modelProviders)) errors.push('modelProviders must be an object.');
+  else for (const [model, provider] of Object.entries(value.modelProviders)) if (!allModels.has(model) || (provider !== null && !PROVIDERS.has(provider))) errors.push(`Invalid modelProviders route for ${model}.`);
   subset(value.excludedModels, allModels, 'excludedModels', errors);
   if (!Array.isArray(value.orchestratorLadder) || !value.orchestratorLadder.length || value.orchestratorLadder.length > 20) errors.push('orchestratorLadder must contain 1 to 20 choices.');
   else {
@@ -88,15 +94,20 @@ export function savePolicy(value, models) {
   return [];
 }
 
-export function providerFor(kind, model) {
+export function providerFor(kind, model, policy = null) {
+  if (model && policy?.modelProviders && Object.hasOwn(policy.modelProviders, model)) return policy.modelProviders[model];
   if (kind === 'codex' || kind === 'claude') return kind;
   if (model?.startsWith('opencode-go/')) return 'opencodego';
   return null; // free or unmeasured lane
 }
 
+export function selectModel(kind, explicitModel, models, policy = null) {
+  return explicitModel ?? policy?.preferredModels?.[kind] ?? models.kinds[kind]?.defaultModel;
+}
+
 export function pickSuccessor(project, currentKind, currentProvider, policy, control) {
   for (const rung of policy.orchestratorLadder || []) {
-    const provider = providerFor(rung.kind, rung.model);
+    const provider = providerFor(rung.kind, rung.model, policy);
     if (rung.kind === currentKind || (currentProvider && provider === currentProvider) ||
         !control.globalAllowed[rung.kind]?.includes(rung.model) ||
         project.excludedKinds.includes(rung.kind) || project.excludedModels.includes(rung.model) ||
@@ -216,7 +227,8 @@ export function deriveControl(snap, policy, models, paneSince = {}, now = Date.n
   const handoffs = [];
   for (const p of Object.values(result)) {
     if (!p.orch) continue;
-    const currentProvider = providerFor(p.orch.kind, null);
+    const currentKindConfig = models.kinds[p.orch.kind];
+    const currentProvider = providerFor(p.orch.kind, policy.preferredModels?.[p.orch.kind] ?? currentKindConfig?.defaultModel, policy);
     const window = risks[currentProvider];
     if (!window) continue;
     const preferred = pickSuccessor(p, p.orch.kind, currentProvider, policy, { globalAllowed, risks });

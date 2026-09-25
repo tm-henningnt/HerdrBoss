@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { DATA_DIR } from './config.js';
 import { deliverPrompt } from './kit/workers.js';
 import { loadModels } from './kit/config.js';
-import { loadPolicy, providerFor } from './control.js';
+import { loadPolicy, providerFor, selectModel } from './control.js';
 
 const FILE = path.join(DATA_DIR, 'handoffs.json');
 const TARGETS = new Set(['codex', 'claude', 'pi', 'opencode']);
@@ -34,8 +34,8 @@ export function planHandoff(id, toKind, { mode = 'migrate', model = null, effort
   if (!['migrate', 'fresh'].includes(mode)) throw new Error('mode must be migrate or fresh.');
   const pane = sourcePane(id, { allowStopped: mode === 'fresh' });
   const models = loadModels().kinds;
-  const targetModel = model || models[toKind].defaultModel;
   const policy = loadPolicy();
+  const targetModel = selectModel(toKind, model, { kinds: models }, policy);
   if (!policy.allowedKinds.includes(toKind) || policy.excludedModels.includes(targetModel)) throw new Error('Target is disabled by global policy.');
   if (!models[toKind].allowedModels.includes(targetModel)) throw new Error('Target model is not in the allow-list.');
   if (effort != null && !models[toKind].allowedEfforts.includes(effort)) throw new Error('Target effort is not in the allow-list.');
@@ -44,7 +44,7 @@ export function planHandoff(id, toKind, { mode = 'migrate', model = null, effort
   const slug = project?.slug || path.basename(pane.cwd).toLowerCase();
   const settings = policy.projects[slug];
   if (settings?.excludedKinds?.includes(toKind) || settings?.excludedModels?.includes(targetModel)) throw new Error('Target is excluded for this project.');
-  const provider = providerFor(toKind, targetModel);
+  const provider = providerFor(toKind, targetModel, policy);
   if (!force && provider && state.control?.risks?.[provider]) throw new Error(`${provider} is near exhaustion; use another target or --force.`);
   const sessionId = pane.agent_session?.kind === 'id' ? pane.agent_session.value : null;
   const result = { sourcePane: id, workspace: pane.workspace_id, cwd: pane.cwd, project: slug, label: pane.label, fromKind: pane.agent, sessionId, toKind, model: targetModel, effort: effort || models[toKind].defaultEffort || null, mode, provider, migration: null };

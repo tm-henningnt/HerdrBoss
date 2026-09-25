@@ -4,7 +4,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { appendDelegatedRun, compareChangedPaths, gitChangedPaths, gitLog, readJson, validateAllowedPaths, validateWorkerReport } from './orchestration.js';
 import { recordUsage } from '../usage.js';
-import { providerFor } from '../control.js';
+import { providerFor, selectModel } from '../control.js';
 
 const NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
 const BRIEF_SLOTS = new Set([
@@ -180,10 +180,10 @@ function readRules(file) {
   }
 }
 
-function validateSelection(kind, options, models, config) {
+function validateSelection(kind, options, models, config, resourcePolicy = null) {
   const policy = models.kinds[kind];
   if (!policy) throw new Error(`Unknown agent kind: ${kind}. Choose one of ${Object.keys(models.kinds).join(', ')}.`);
-  const model = options.model ?? policy.defaultModel;
+  const model = selectModel(kind, options.model, models, resourcePolicy);
   if (!policy.allowedModels.includes(model)) throw new Error(`Model ${model} is not allowed for ${kind}.`);
   if (config.allowedModels !== null && !config.allowedModels.includes(model)) throw new Error(`Project ${config.slug} does not allow model ${model}.`);
   const effort = options.effort ?? policy.defaultEffort;
@@ -311,8 +311,8 @@ export function startWorker(name, options, {
     if (!options.force) throw new Error(`Herdr Boss rules avoid ${options.kind}; pass --force to override.`);
     output(`Warning: --force overrides Herdr Boss rules for ${options.kind}.`);
   }
-  const { model, effort, launchArgs } = validateSelection(options.kind, options, modelConfig, config);
   const policy = rules.policy;
+  const { model, effort, launchArgs } = validateSelection(options.kind, options, modelConfig, config, policy);
   const projectPolicy = policy?.projects?.[config.slug];
   if (policy) {
     if (!policy.allowedKinds?.includes(options.kind)) throw new Error(`${options.kind} is disabled globally by Herdr Boss.`);
@@ -320,7 +320,7 @@ export function startWorker(name, options, {
     if (projectPolicy?.excludedKinds?.includes(options.kind) || projectPolicy?.excludedModels?.includes(model)) throw new Error(`${options.kind}/${model} is excluded for project ${config.slug}.`);
     if (projectPolicy?.mode === 'paused' && !options.force) throw new Error(`Project ${config.slug} is paused. Use --force only for an authorized override.`);
   }
-  const provider = providerFor(options.kind, model);
+  const provider = providerFor(options.kind, model, policy);
   const gate = providerGate(provider, rules, { force: options.force, now });
   if (gate.error) throw new Error(gate.error);
   if (gate.warning) output(gate.warning);
@@ -432,6 +432,7 @@ export function startWorker(name, options, {
       name,
       kind: options.kind,
       model,
+      provider,
       effort,
       issue: options.issue == null ? null : Number(options.issue),
       worktree,
@@ -490,7 +491,7 @@ export function recordFlagErrors(options, reportJson = {}) {
   return missing;
 }
 
-export function collectWorker(name, options, { config, now = Date.now(), output = console.log } = {}) {
+export function collectWorker(name, options, { config, now = Date.now(), output = console.log, recordUsageFn = recordUsage } = {}) {
   const { file, run } = readRun(config, name);
   if (run.finishedAt) throw new Error(`Run ${name} is already marked finished at ${run.finishedAt}.`);
   const reportDir = path.join(run.worktree, run.workerDir || '.worker');
@@ -547,21 +548,22 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
       rework: Array.from({ length: options.rework ?? 0 }, (_value, index) => `rework ${index + 1}`),
       evidenceTier: reportJson.evidenceTier,
     };
-    appendDelegatedRun(config.ledgerPath, entry, { evidenceTiers: config.evidenceTiers });
-    run.finishedAt = entry.endedAt;
-    run.outcome = entry.outcome;
-    writeJsonAtomic(file, run);
     const usage = reportJson.usage || {};
-    const recorded = recordUsage({
+    const provider = Object.hasOwn(run, 'provider') ? run.provider : providerFor(run.kind, run.model);
+    const recorded = recordUsageFn({
       id: `worker:${config.slug}:${name}:${run.startedAt}`,
       project: config.slug, workspace: run.pane?.split(':')[0] || null,
-      kind: run.kind, model: run.model, provider: providerFor(run.kind, run.model) || 'unmetered-or-unknown',
+      kind: run.kind, model: run.model, provider,
       startedAt: run.startedAt, endedAt: entry.endedAt, outcome: entry.outcome,
       gatePassed: entry.independentGate.passed, issue: run.issue,
       inputTokens: usage.inputTokens ?? null, outputTokens: usage.outputTokens ?? null,
       cachedTokens: usage.cachedTokens ?? null, cost: usage.cost ?? null,
     });
     if (recorded.errors.length) output(`Warning: usage was not recorded: ${recorded.errors.join(' ')}`);
+    appendDelegatedRun(config.ledgerPath, entry, { evidenceTiers: config.evidenceTiers });
+    run.finishedAt = entry.endedAt;
+    run.outcome = entry.outcome;
+    writeJsonAtomic(file, run);
   }
   return summary;
 }

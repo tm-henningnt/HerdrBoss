@@ -7,8 +7,9 @@ import test from 'node:test';
 import { loadModels, loadProjectConfig, PROJECT_DEFAULTS } from '../src/kit/config.js';
 import { appendDelegatedRun, compareChangedPaths, gitChangedPaths, readDelegatedRuns, validateAllowedPaths, validateDelegatedRun, validateWorkerReport } from '../src/kit/orchestration.js';
 import { buildGhArgs } from '../src/kit/gh.js';
-import { renderBrief, startWorker } from '../src/kit/workers.js';
+import { collectWorker, renderBrief, startWorker } from '../src/kit/workers.js';
 import { classifyWorktrees, pruneWorktrees } from '../src/kit/worktrees.js';
+import { usageProvider } from '../src/usage.js';
 
 function git(cwd, ...args) {
   return execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -178,7 +179,7 @@ test('worker start dry-run prints the plan and makes no worktree or agent change
   fs.writeFileSync(configFile, JSON.stringify({ briefTemplate: template }));
   const config = loadProjectConfig({ cwd: root });
   const rulesFile = path.join(root, 'rules.json');
-  fs.writeFileSync(rulesFile, JSON.stringify({ updatedAt: '2026-09-24T12:00:00.000Z', avoidKinds: [], preferredKinds: ['codex'], memFreePercent: 50, notes: [] }));
+  fs.writeFileSync(rulesFile, JSON.stringify({ updatedAt: '2026-09-24T12:00:00.000Z', avoidKinds: [], preferredKinds: ['codex'], memFreePercent: 50, notes: [], policy: { allowedKinds: ['codex'], excludedModels: [], preferredModels: { codex: 'gpt-6-sol' } } }));
   const models = loadModels();
   const calls = [];
   const herdr = (args) => {
@@ -194,12 +195,64 @@ test('worker start dry-run prints the plan and makes no worktree or agent change
   });
   assert.equal(result.dryRun, true);
   assert.match(output.join('\n'), /git worktree add -b demo/);
+  assert.match(output.join('\n'), /Validate kind\/model\/effort: codex \/ gpt-6-sol/);
   assert.match(output.join('\n'), /herdr pane split ws:p1 --direction right --cwd/);
   assert.match(output.join('\n'), /Read \.worker\/brief\.md in your working directory and execute it/);
   assert.ok(calls.some((call) => call.join(' ') === 'agent list'));
   assert.ok(!fs.existsSync(config.worktreePath('demo')));
   assert.ok(!fs.existsSync(path.join(config.runsPath, 'demo.json')));
   assert.deepEqual(git(root, 'branch', '--show-current'), 'main');
+  const explicitOutput = [];
+  startWorker('demo-explicit', { kind: 'codex', model: 'gpt-6-astra', task: 'x', allow: ['src/'], dryRun: true }, {
+    config, models, herdr, env: { HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'ws', HERDR_PANE_ID: 'ws:orch' }, rulesFile, now: Date.parse('2026-09-24T12:00:00Z'), output: (text) => explicitOutput.push(text),
+  });
+  assert.match(explicitOutput.join('\n'), /Validate kind\/model\/effort: codex \/ gpt-6-astra/);
+  fs.writeFileSync(rulesFile, JSON.stringify({ avoidProviders: ['claude'], policy: { allowedKinds: ['codex'], excludedModels: [], modelProviders: { 'gpt-6-sol': 'claude' } } }));
+  assert.throws(() => startWorker('demo-routed', { kind: 'codex', model: 'gpt-6-sol', task: 'x', allow: ['src/'], dryRun: true }, {
+    config, models, herdr, env: { HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'ws', HERDR_PANE_ID: 'ws:orch' }, rulesFile, output: () => {},
+  }), /claude is ahead of quota pace or near exhaustion/);
+});
+
+test('worker collect --record uses the provider recorded at start, including null routes', () => {
+  for (const [name, route, expected, failUsage] of [['collect-routed', 'claude', 'claude', false], ['collect-free', null, null, false], ['collect-failure', 'claude', 'claude', true]]) {
+    const f = setupFixture(null);
+    const model = 'gpt-6-luna';
+    fs.writeFileSync(f.rulesFile, JSON.stringify({ policy: { allowedKinds: ['codex'], excludedModels: [], modelProviders: { [model]: route } } }));
+    git(f.root, 'add', '-A');
+    git(f.root, 'commit', '--allow-empty', '-m', 'fixture configuration');
+    const run = startWorker(name, { kind: 'codex', model, task: 'x', allow: ['.orchestration/runs/'], noWorktree: true }, {
+      config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+    });
+    const reportDir = path.join(run.worktree, run.workerDir);
+    fs.writeFileSync(path.join(reportDir, 'report.md'), 'Done.\n');
+    fs.writeFileSync(path.join(reportDir, 'report.json'), JSON.stringify({
+      issue: null, branch: run.branch, worktree: run.worktree, changedPaths: [`.orchestration/runs/${name}.json`], commands: ['focused check'],
+      evidenceTier: ['unit'], unverified: [], stoppedEarly: false,
+    }));
+    const changedPolicy = { modelProviders: { [model]: 'opencodego' } };
+    const usage = [];
+    const collect = () => collectWorker(name, { record: true, outcome: 'done', gatePassed: true }, {
+      config: f.config, now: Date.parse('2026-09-25T17:00:00Z'), output: () => {},
+      recordUsageFn: (event) => {
+        usage.push({ ...event, recordedProvider: usageProvider(event, changedPolicy) });
+        if (failUsage) throw new Error('usage write failed');
+        return { errors: [], duplicate: false };
+      },
+    });
+    if (failUsage) {
+      assert.throws(collect, /usage write failed/);
+      assert.equal(JSON.parse(fs.readFileSync(run.recordFile, 'utf8')).finishedAt, undefined);
+      assert.equal(fs.existsSync(f.config.ledgerPath), false);
+      continue;
+    }
+    collect();
+    const savedRun = JSON.parse(fs.readFileSync(run.recordFile, 'utf8'));
+    assert.equal(savedRun.provider, expected);
+    assert.equal(savedRun.finishedAt, '2026-09-25T17:00:00.000Z');
+    assert.equal(usage[0].provider, expected);
+    assert.equal(usage[0].recordedProvider, expected ?? 'unmetered-or-unknown');
+    assert.equal(fs.readFileSync(f.config.ledgerPath, 'utf8').trim().split('\n').length, 1);
+  }
 });
 
 test('worker start records a real dispatch before prompting and verifies activity', () => {

@@ -61,6 +61,8 @@ Create a branch and worktree, write the brief, open a pane in the `Workers` tab,
 
 `worker start` refuses a provider that is ahead of pace or near exhaustion. The refusal names the same window as `herdr-boss lanes`. When every metered provider is ahead of pace, it allows the least-over one with a notice. It warns when the machine load is above the limit.
 
+Policy may set `preferredModels` by harness and `modelProviders` by allowed model. A preferred model must be in that harness's allow-list. A provider route must be `codex`, `claude`, `opencodego`, or `null` for an unmetered model. Explicit `--model` and handoff `--model` choices take precedence.
+
 ```sh
 herdr-boss worker start fix-74 --kind claude --task-file brief.md --allow src/parse/ --issue 74
 ```
