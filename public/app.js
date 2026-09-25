@@ -121,6 +121,22 @@ function ensureDraft(s) {
 }
 
 function allocationProjects() { return Object.values(state?.control?.projects || {}); }
+// Effective values come from the applied control state; the set share comes from the policy draft.
+function compactPercent(x) { return x === 0 || x >= 10 ? String(Math.round(x)) : String(Math.round(x * 10) / 10); }
+function allocationActivity(p) { return p.effectiveMode === 'paused' ? 'paused' : p.idle ? 'idle' : 'active'; }
+function effectiveAllocation(p) {
+  const slots = p.slots || 0;
+  const max = state?.policy?.maxWorkers || 0;
+  return { slots, percent: compactPercent(max ? slots / max * 100 : 0) };
+}
+function segmentText(p, share) {
+  const eff = effectiveAllocation(p);
+  const activity = allocationActivity(p);
+  return {
+    title: `${p.label}: set share ${share}% · effective ${eff.percent}% · ${eff.slots} slot${eff.slots === 1 ? '' : 's'}${activity === 'active' ? '' : ` · ${activity}`}`,
+    value: `${p.label}: set share ${share} percent, ${eff.slots} effective slot${eff.slots === 1 ? '' : 's'}${activity === 'active' ? '' : `, ${activity}`}`,
+  };
+}
 function moveBoundary(index, position) {
   const projects = allocationProjects();
   if (!policyDraft || index < 0 || index >= projects.length - 1) return;
@@ -146,7 +162,11 @@ function controlBlock(s) {
   const projects = Object.values(s.control.projects);
   const shareColors = ['var(--accent)', 'var(--info)', 'var(--ok)', 'var(--warn)', 'var(--muted)'];
   let cumulative = 0;
-  const shareSegments = projects.map((p, i) => `<div class="allocation-segment" data-segment="${esc(p.slug)}" style="width:${d.projects[p.slug]?.share || 0}%;background:${shareColors[i % shareColors.length]}" title="${esc(p.label)}: ${d.projects[p.slug]?.share || 0}%"></div>`).join('');
+  const shareSegments = projects.map((p, i) => {
+    const share = d.projects[p.slug]?.share || 0;
+    const text = segmentText(p, share);
+    return `<div class="allocation-segment ${allocationActivity(p)}" data-segment="${esc(p.slug)}" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${share}" aria-label="${esc(p.label)} set share" aria-valuetext="${esc(text.value)}" style="width:${share}%;background-color:${shareColors[i % shareColors.length]}" title="${esc(text.title)}"><span class="allocation-label" aria-hidden="true"><span class="allocation-share">${share}%</span><span class="allocation-slots"> · ${effectiveAllocation(p).slots}</span></span></div>`;
+  }).join('');
   const shareHandles = projects.slice(0, -1).map((p, i) => {
     const minimum = cumulative;
     cumulative += d.projects[p.slug]?.share || 0;
@@ -170,9 +190,11 @@ function controlBlock(s) {
     const x = d.projects[p.slug] || { share: 0, mode: 'auto', excludedKinds: [], excludedModels: [] };
     const availableKinds = d.allowedKinds;
     const projectModels = [...new Set(availableKinds.flatMap((k) => models[k]?.allowedModels || []))].filter((m) => !d.excludedModels.includes(m));
-    return `<div class="allocation-row" data-project-row="${esc(p.slug)}">
-      <div class="allocation-name"><b><i class="allocation-swatch" style="background:${shareColors[projects.indexOf(p) % shareColors.length]}"></i>${esc(p.label)}</b><small>${p.running}/${p.slots} working slots · ${p.idle ? 'idle' : 'active'}</small></div>
-      <strong class="num share-value">${x.share}%</strong>
+    const eff = effectiveAllocation(p);
+    const activity = allocationActivity(p);
+    return `<div class="allocation-row ${activity}" data-project-row="${esc(p.slug)}">
+      <div class="allocation-name"><b><i class="allocation-swatch" style="background-color:${shareColors[projects.indexOf(p) % shareColors.length]}"></i>${esc(p.label)}</b><small>${p.running}/${p.slots} working slots · ${activity}</small></div>
+      <div class="share-values"><span><small>Set</small><strong class="num share-value">${x.share}%</strong></span><span title="Applied state: ${esc(p.label)} has ${eff.slots} of ${state.policy?.maxWorkers ?? 0} worker slots now"><small>Effective</small><strong class="num">${eff.percent}% · ${eff.slots} slot${eff.slots === 1 ? '' : 's'}</strong></span></div>
       <select data-mode="${esc(p.slug)}" aria-label="${esc(p.label)} activity mode">${['auto','active','idle','paused'].map((m) => `<option value="${m}" ${x.mode === m ? 'selected' : ''}>${m}</option>`).join('')}</select>
       <details class="project-exclude"><summary>Exclude kinds / models</summary><div class="exclude-grid">${availableKinds.map((k) => `<label><input type="checkbox" data-exclude-kind="${esc(p.slug)}:${k}" ${x.excludedKinds.includes(k) ? 'checked' : ''}> ${esc(k)}</label>`).join('')}
       ${projectModels.map((m) => `<label><input type="checkbox" data-exclude-model="${esc(p.slug)}:${esc(m)}" ${x.excludedModels.includes(m) ? 'checked' : ''}> ${esc(m)}</label>`).join('')}</div></details>
@@ -197,8 +219,8 @@ function controlBlock(s) {
       <div class="succession"><div class="section-head"><h3>Orchestrator succession</h3><button type="button" data-ladder-add ${d.orchestratorLadder?.length >= 20 ? 'disabled' : ''}>Add choice</button></div>
         <p class="setting-help">Automatic handover tries these choices in order, skipping the current provider, unavailable quotas, and global or project exclusions. Choices outside this list are never selected automatically.</p>
         <div class="succession-list">${ladderRows}</div></div>
-      <div class="allocations"><h3>Project shares <span class="sub">drag a boundary; only projects to its right rebalance</span></h3>
-        <div class="allocation-bar" aria-label="Project allocation, 0 to 100 percent">${shareSegments}${shareHandles}</div>
+      <div class="allocations"><h3>Project shares <span class="sub">drag a boundary; only projects to its right rebalance · labels show set share · effective slots</span></h3>
+        <div class="allocation-bar" role="group" aria-label="Project allocation, 0 to 100 percent">${shareSegments}${shareHandles}</div>
         <div class="allocation-scale"><span>0%</span><span>100%</span></div>
         ${projectRows}</div>
       <div class="control-actions ${policyDirty ? 'pending' : ''}"><span data-policy-status role="status">${esc(saveMessage || (policyDirty ? 'Unsaved changes · Apply policy to keep them' : `${s.control.runningWorkers}/${d.maxWorkers} workers active · policy saved`))}</span><button id="save-policy" ${policyDirty ? '' : 'disabled'}>Apply policy</button></div>
@@ -974,7 +996,10 @@ const HELP = {
     <h3>Subscriptions</h3><p><b>Manage pace</b> applies pacing and handover alerts. <b>Ignore quota</b> turns them off for that provider.</p>
     <h3>Harnesses and models</h3><p>Clear a box to disable a harness or model for every project.</p>
     <h3>Orchestrator succession</h3><p>The ranked successors for automatic handover. Use the arrows to change the order. Unlisted choices are never selected automatically.</p>
-    <h3>Project shares</h3><p>Drag a boundary on the bar, or focus it and use the arrow keys. Projects to the left stay fixed; the rest share the remainder. A share is advisory. The mode sets a project to auto, active, idle, or paused.</p>`],
+    <h3>Project shares</h3><p>Drag a boundary on the bar, or focus it and use the arrow keys. Projects to the left stay fixed; the rest share the remainder. A share is advisory. The mode sets a project to auto, active, idle, or paused.</p>
+    <p>The <b>set share</b> is the share in your policy draft. The bar widths show it. The <b>effective share</b> is the number of worker slots the project has now, divided by the applied maximum of working agents. It changes only after you select <b>Apply policy</b>.</p>
+    <p>A bar label such as <b>30% · 2</b> shows the set share and the effective slots. A narrow segment shows fewer labels; its tooltip shows all values.</p>
+    <p>An idle project is faded. A paused project is faded and striped. When <b>Borrow idle shares</b> is on, an idle project lends its slots to active projects, so an idle project can have 0 effective slots.</p>`],
   agents: ['Agents', `
     <p>Every Herdr workspace with its orchestrator and workers, live from Herdr.</p>
     <p>A status dot shows working, blocked, idle, or done. Idle and done agents are ready for input; they have not always finished their task. Rows with the <b>orch</b> or <b>boss</b> label are orchestrators.</p>`],
@@ -1074,7 +1099,15 @@ function updateShares() {
   for (const [index, p] of projects.entries()) {
     const share = policyDraft.projects[p.slug].share;
     const segment = [...bar.querySelectorAll('[data-segment]')].find((x) => x.dataset.segment === p.slug);
-    if (segment) { segment.style.width = `${share}%`; segment.title = `${p.label}: ${share}%`; }
+    if (segment) {
+      const text = segmentText(p, share);
+      segment.style.width = `${share}%`;
+      segment.title = text.title;
+      segment.setAttribute('aria-valuenow', String(share));
+      segment.setAttribute('aria-valuetext', text.value);
+      const label = segment.querySelector('.allocation-share');
+      if (label) label.textContent = `${share}%`;
+    }
     const handle = bar.querySelector(`[data-boundary="${index}"]`);
     if (handle) {
       handle.style.left = `${cumulative + share}%`;

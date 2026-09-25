@@ -63,6 +63,15 @@ The Allocation page sets the global worker limit, the available harnesses and mo
 
 A provider in `ignore` mode has no pacing and no handover alerts.
 
+Each project has two share values:
+
+- The **set share** is the share in the policy draft. The bar widths show the set share. Drag a boundary or use the arrow keys to change it.
+- The **effective share** is the number of worker slots that the project has now, divided by the applied maximum of working agents. The **effective slots** are that number of slots. These values come from the applied policy. They change only after you select **Apply policy**.
+
+A bar segment shows its set share and its effective slots, for example `30% · 2`. A narrow segment shows only the set share or no label. Its tooltip shows all values.
+
+An idle project is faded in the bar and in its row. A paused project is faded and striped. When **Borrow idle shares** is on, each idle project lends its slots to the active projects. An idle project can then have 0 effective slots while its set share stays the same.
+
 ## Orchestrator handover
 
 When an orchestrator's quota comes near its reserve, Herdr Boss recommends a successor.
