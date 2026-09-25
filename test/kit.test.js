@@ -512,9 +512,11 @@ test('worker start refuses the enabled load backstop even with --force', () => {
 
 test('lanes prints active machine thresholds and load when the backstop is disabled', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-lanes-'));
+  const home = path.join(dir, 'home');
+  fs.mkdirSync(home, { recursive: true });
   fs.writeFileSync(path.join(dir, 'rules.json'), JSON.stringify({ machine: { owner: 'away', cpuPercent: 90, cpuLimit: 95, fiveMinute: 80, loadLimit: null }, lanes: { codex: { state: 'open' } } }));
   const cli = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'src', 'cli.js');
-  const output = execFileSync(process.execPath, [cli, 'lanes'], { env: { ...process.env, HERDR_BOSS_DIR: dir }, encoding: 'utf8' });
+  const output = execFileSync(process.execPath, [cli, 'lanes'], { env: { ...process.env, HOME: home, HERDR_BOSS_DIR: dir }, encoding: 'utf8' });
   assert.match(output, /Owner away; CPU 90\.0% \/ limit 95%; 5-minute load 80 \/ backstop disabled/);
   assert.match(output, /codex open/);
 });
@@ -556,6 +558,20 @@ test('worker start runs the project setup in the new worktree before the agent s
   });
   assert.deepEqual(setupCalls, [{ command: 'npm ci --prefer-offline', cwd: result.worktree, timeout: 900000, agentStarted: false }]);
   assert.ok(f.calls.includes('agent start'));
+});
+
+test('worker start creates its temporary directory before it starts the agent', () => {
+  const f = setupFixture(null);
+  const herdr = (args) => {
+    if (args[0] === 'agent' && args[1] === 'start') {
+      assert.ok(fs.statSync(path.join(f.config.worktreePath('demo'), '.worker', 'tmp')).isDirectory());
+    }
+    return f.herdr(args);
+  };
+  const result = startWorker('demo', { kind: 'codex', task: 'x', allow: ['src/'] }, {
+    config: f.config, models: loadModels(), herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+  });
+  assert.ok(fs.statSync(path.join(result.worktree, '.worker', 'tmp')).isDirectory());
 });
 
 test('worker start stops before any agent when project setup fails, and removes the worktree', () => {
@@ -689,6 +705,8 @@ test('worker start gate puts unmetered alternatives before least-over guidance',
 
 test('lanes prints the unmetered alternatives lane', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-lanes-goal-'));
+  const home = path.join(dir, 'home');
+  fs.mkdirSync(home, { recursive: true });
   fs.writeFileSync(path.join(dir, 'rules.json'), JSON.stringify({
     updatedAt: new Date().toISOString(),
     lanes: {
@@ -698,7 +716,7 @@ test('lanes prints the unmetered alternatives lane', () => {
     leastOverProvider: null,
   }));
   const cli = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'src', 'cli.js');
-  const output = execFileSync(process.execPath, [cli, 'lanes'], { env: { ...process.env, HERDR_BOSS_DIR: dir }, encoding: 'utf8' });
+  const output = execFileSync(process.execPath, [cli, 'lanes'], { env: { ...process.env, HOME: home, HERDR_BOSS_DIR: dir }, encoding: 'utf8' });
   assert.match(output, /codex ahead of pace/);
   assert.match(output, /unmetered open: herdrboss: opencode \(opencode\/space-bunny-free\)/);
 });

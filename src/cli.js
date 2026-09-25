@@ -4,7 +4,6 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
 import { loadConfig, DATA_DIR, dashboardUrl } from './config.js';
 import { writeProject, SLUG } from './projects.js';
 
@@ -33,7 +32,7 @@ const USAGE = `herdr-boss <command>
   browser tabs SLUG      List the pages, their visibility, and whether an agent is attached.
   browser tab new SLUG [URL]  Open a tab in its own background window and print its ID.
   browser tab close SLUG --tab ID [--force]  Close a tab; refuses a tab an agent is attached to.
-  browser screenshot SLUG [--tab ID]  Save a private JPEG and print its path.
+  browser screenshot SLUG [--tab ID] [--out DIR]  Save a private JPEG and print its path.
   browser navigate SLUG URL [--tab ID]  Open an HTTP(S) page.
   browser click SLUG X% Y% [--tab ID]  Click at screenshot-relative percentages.
   browser text SLUG --stdin [--tab ID]  Send text from standard input without echoing it.
@@ -107,6 +106,7 @@ async function main() {
       break;
     }
     case 'browser': {
+      const { parseScreenshotOptions, saveBrowserScreenshot } = await import('./browser-output.js');
       const { requestBrowser, listBrowserSessions, browserStatus, setBrowserWindowSize, closeBrowser, restartBrowser } = await import('./browser-pool.js');
       const { listBrowserTabs, browserScreenshot, browserNavigate, browserClick, browserInsertText, browserKey, browserNewTab, browserCloseTab } = await import('./browser-preview.js');
       const tabOption = (rest) => {
@@ -141,12 +141,10 @@ async function main() {
       else if (args[0] === 'tab' && args[1] === 'new' && args[2] && args.length <= 4) console.log(JSON.stringify(await browserNewTab(args[2], args[3])));
       else if (args[0] === 'tab' && args[1] === 'close' && args[2] && args[3] === '--tab' && args[4] && (args.length === 5 || (args.length === 6 && args[5] === '--force'))) console.log(JSON.stringify(await browserCloseTab(args[2], args[4], { force: args[5] === '--force' })));
       else if (args[0] === 'screenshot' && args[1]) {
-        const tab = await selectedTab(args[1], args.slice(2));
+        const screenshotOptions = parseScreenshotOptions(args.slice(2));
+        const tab = await selectedTab(args[1], screenshotOptions.tab ? ['--tab', screenshotOptions.tab] : []);
         const image = await browserScreenshot(args[1], tab);
-        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-boss-browser-'));
-        const file = path.join(dir, `${args[1]}-${randomBytes(4).toString('hex')}.jpg`);
-        fs.writeFileSync(file, image, { flag: 'wx', mode: 0o600 });
-        console.log(file);
+        console.log(saveBrowserScreenshot(image, { out: screenshotOptions.out }));
       }
       else if (args[0] === 'navigate' && args[1] && args[2]) {
         const tab = await selectedTab(args[1], args.slice(3));

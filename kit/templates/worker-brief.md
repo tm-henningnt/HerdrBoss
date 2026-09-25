@@ -38,9 +38,11 @@ Read the project instructions and task sources that define the acceptance contra
 
 Read the current worktree state before editing.
 
-Do not read files under `~/.herdr-boss/`. That directory holds credentials. The orchestrator applies the Herdr Boss rules, and this brief contains the rules that you need.
+Everything needed for this task is in the worktree and this brief. Do not read or write outside the worktree except for commands named in this brief.
 
-For dashboard previews, run `HERDR_BOSS_DIR="$(mktemp -d)" HERDR_BOSS_PORT=4478 npm start -- --read-only-preview`. Choose an unused local port if 4478 is busy.
+Run commands from the worktree root with `TMPDIR="$PWD/.worker/tmp"`. Put captures, logs, and scratch files in `.worker/tmp/`.
+
+For dashboard previews, run `mkdir -p .worker/tmp/herdr-boss && TMPDIR="$PWD/.worker/tmp" HERDR_BOSS_DIR="$PWD/.worker/tmp/herdr-boss" HERDR_BOSS_PORT=4478 npm start -- --read-only-preview`. Choose an unused local port if 4478 is busy.
 
 Use the task below as the complete work order:
 
