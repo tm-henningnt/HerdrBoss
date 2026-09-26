@@ -239,10 +239,10 @@ herdr agent prompt <orch-pane> "WORKER REPORT <name>: <done|blocked|stopped>. Re
   - Vitest 2 with the forks pool: `vitest run --poolOptions.forks.maxForks=2 --poolOptions.forks.minForks=1`. `--maxWorkers=2` fails there with an unhandled error, and no tests run.
   - Record the form that works in the project's instructions.
 - Read the machine load in the bulletin before each dispatch.
-- Run `herdr-boss lanes` to see each quota provider in one line: open, ahead of pace, or near exhaustion. The line names the window that sets the state.
+- Run `herdr-boss lanes` to see each quota provider in one line: open, ahead of pace, near exhaustion, or exhausted until its reset. The line names the window that sets the state. When several windows are exhausted, the lane uses the latest reset.
 - A provider is ahead of pace when any live window will not last until its reset, also at low usage, or when its use is above its goal-adjusted expected percentage. A quota pacing goal lowers the expected-use curve; an absent goal means 100%.
 - The lanes output has an always-open unmetered lane. Prefer it for bounded, well-specified work while metered lanes are ahead of pace. A worker-start refusal or least-over notice lists your project's unmetered alternatives first.
-- Prefer an open provider. When every metered provider is ahead of pace, `worker start` allows the least-over provider without `--force`. Keep that task small.
+- Prefer an open provider. Ignore quota mode disables pacing below 100% but does not make an exhausted provider usable. `worker start` refuses an exhausted provider unless you use the explicit `--force` override. When every metered provider is ahead of pace, `worker start` allows the least-over provider without `--force`. Keep that task small.
 - A quota window whose reset time has passed shows "reset, not yet measured" until the next reading. Do not use its old percentage as a reason for `--force`.
 - Read the Owner state, CPU limit, and 5-minute load backstop in the bulletin before dispatch. Stop new workers and full test suites while either active machine limit is exceeded. `worker start` enforces both limits, including when `--force` is set. Keep the load average visible when its backstop is disabled. Do not apply a fixed limit of your own.
 

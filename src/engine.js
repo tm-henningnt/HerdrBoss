@@ -234,7 +234,7 @@ export class Engine extends EventEmitter {
       writeJson(path.join(DATA_DIR, 'rules.json'), {
         updatedAt: snap.updatedAt,
         avoidKinds,
-        avoidProviders: Object.keys(control.pressures).filter((provider) => control.pressures[provider] || control.risks[provider]),
+        avoidProviders: Object.keys(snap.lanes).filter((provider) => control.pressures[provider] || control.risks[provider] || snap.lanes[provider].state === 'exhausted'),
         lanes: snap.lanes,
         leastOverProvider: snap.leastOverProvider,
         preferredKinds,

@@ -119,6 +119,7 @@ function inAbout(iso, now) {
 export function describeLane(provider, lane, now = Date.now()) {
   if (!lane || lane.state === 'open') return `${provider} open`;
   if (lane.state === 'unknown') return `${provider} unknown (no quota data)`;
+  if (lane.state === 'exhausted') return `${provider} exhausted: ${lane.usedPercent}% used in the ${lane.window} window; exhausted until ${lane.resetAt || 'an unknown time'}`;
   const numbers = `${lane.usedPercent}% used${lane.expectedPercent != null ? ` against ${lane.expectedPercent}% expected` : ''} in the ${lane.window} window`;
   if (lane.state === 'reserve') return `${provider} near exhaustion: ${numbers}; resets in ${inAbout(lane.backOnPaceAt, now)}`;
   return `${provider} ahead of pace: ${numbers}; back on pace in about ${inAbout(lane.backOnPaceAt, now)} if unused`;
@@ -148,6 +149,11 @@ export function providerGate(provider, rules, { force = false, now = Date.now(),
   const alternatives = unmeteredAlternatives(rules, project, allowedModels);
   const lead = alternatives ? ` ${alternatives}` : '';
   if (force) return { warning: `Warning: --force overrides the quota guard: ${detail}.${lead}` };
+  if (lane?.state === 'exhausted') {
+    const open = Object.entries(rules.lanes || {}).filter(([, value]) => !value.unmetered && value.state === 'open').map(([name]) => name);
+    const next = open.length ? `Open providers: ${open.join(', ')}.` : 'No metered provider is open; free models do not count against a quota.';
+    return { error: `${detail}.${lead} ${next} Use --force only for an authorized override.` };
+  }
   if (lane?.state === 'pace' && rules.leastOverProvider === provider) {
     return { warning: `Notice: every metered provider is over pace. ${detail}.${lead} It is the least over, so the worker starts. Keep the task small and record the reason in the run.` };
   }
