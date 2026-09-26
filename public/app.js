@@ -126,6 +126,12 @@ function ensureDraft(s) {
 }
 
 function allocationProjects() { return Object.values(state?.control?.projects || {}); }
+const SHARE_COLORS = ['var(--accent)', 'var(--info)', 'var(--ok)', 'var(--warn)', 'var(--muted)'];
+// The project order of projectSlugs sets the bar segments, the project cards, and the card accents.
+function allocationColor(s, slug) {
+  const i = Object.keys(s.control?.projects || {}).indexOf(slug);
+  return i < 0 ? null : SHARE_COLORS[i % SHARE_COLORS.length];
+}
 // Effective values come from the applied control state; the set share comes from the policy draft.
 function compactPercent(x) { return x === 0 || x >= 10 ? String(Math.round(x)) : String(Math.round(x * 10) / 10); }
 function allocationActivity(p) { return p.effectiveMode === 'paused' ? 'paused' : p.idle ? 'idle' : 'active'; }
@@ -141,6 +147,18 @@ function segmentText(p, share) {
     title: `${p.label}: set share ${share}% · effective ${eff.percent}% · ${eff.slots} slot${eff.slots === 1 ? '' : 's'}${activity === 'active' ? '' : ` · ${activity}`}`,
     value: `${p.label}: set share ${share} percent, ${eff.slots} effective slot${eff.slots === 1 ? '' : 's'}${activity === 'active' ? '' : `, ${activity}`}`,
   };
+}
+function allocationSegment(s, p, share) {
+  const text = segmentText(p, share);
+  return `<div class="allocation-segment ${allocationActivity(p)}" data-segment="${esc(p.slug)}" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${share}" aria-label="${esc(p.label)} set share" aria-valuetext="${esc(text.value)}" style="width:${share}%;background-color:${allocationColor(s, p.slug)}" title="${esc(text.title)}"><span class="allocation-label" aria-hidden="true"><span class="allocation-share">${share}%</span><span class="allocation-slots"> · ${effectiveAllocation(p).slots}</span></span></div>`;
+}
+// The read-only summary shows the applied shares. The Allocation page shows the editable draft.
+function allocationSummary(s) {
+  const live = s.control?.projects || {};
+  const projects = projectSlugs(s).map((slug) => live[slug]).filter(Boolean);
+  if (!projects.length) return '';
+  const segments = projects.map((p) => allocationSegment(s, p, Number(compactPercent(p.share || 0)))).join('');
+  return `<div class="allocation-summary"><div class="allocation-bar" role="group" aria-label="Applied project allocation, 0 to 100 percent, in project card order">${segments}</div><a href="/allocation">Adjust allocation →</a></div>`;
 }
 function moveBoundary(index, position) {
   const projects = allocationProjects();
@@ -165,13 +183,8 @@ function controlBlock(s) {
   if (!policyDraft || !s.control) return '';
   const d = policyDraft;
   const projects = Object.values(s.control.projects);
-  const shareColors = ['var(--accent)', 'var(--info)', 'var(--ok)', 'var(--warn)', 'var(--muted)'];
   let cumulative = 0;
-  const shareSegments = projects.map((p, i) => {
-    const share = d.projects[p.slug]?.share || 0;
-    const text = segmentText(p, share);
-    return `<div class="allocation-segment ${allocationActivity(p)}" data-segment="${esc(p.slug)}" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${share}" aria-label="${esc(p.label)} set share" aria-valuetext="${esc(text.value)}" style="width:${share}%;background-color:${shareColors[i % shareColors.length]}" title="${esc(text.title)}"><span class="allocation-label" aria-hidden="true"><span class="allocation-share">${share}%</span><span class="allocation-slots"> · ${effectiveAllocation(p).slots}</span></span></div>`;
-  }).join('');
+  const shareSegments = projects.map((p) => allocationSegment(s, p, d.projects[p.slug]?.share || 0)).join('');
   const shareHandles = projects.slice(0, -1).map((p, i) => {
     const minimum = cumulative;
     cumulative += d.projects[p.slug]?.share || 0;
@@ -193,7 +206,7 @@ function controlBlock(s) {
     const eff = effectiveAllocation(p);
     const activity = allocationActivity(p);
     return `<div class="allocation-row ${activity}" data-project-row="${esc(p.slug)}">
-      <div class="allocation-name"><b><i class="allocation-swatch" style="background-color:${shareColors[projects.indexOf(p) % shareColors.length]}"></i>${esc(p.label)}</b><small>${p.running}/${p.slots} working slots · ${activity}</small></div>
+      <div class="allocation-name"><b><i class="allocation-swatch" style="background-color:${allocationColor(s, p.slug)}"></i>${esc(p.label)}</b><small>${p.running}/${p.slots} working slots · ${activity}</small></div>
       <div class="share-values"><span><small>Set</small><strong class="num share-value">${x.share}%</strong></span><span title="Applied state: ${esc(p.label)} has ${eff.slots} of ${state.policy?.maxWorkers ?? 0} worker slots now"><small>Effective</small><strong class="num">${eff.percent}% · ${eff.slots} slot${eff.slots === 1 ? '' : 's'}</strong></span></div>
       <select data-mode="${esc(p.slug)}" aria-label="${esc(p.label)} activity mode">${['auto','active','idle','paused'].map((m) => `<option value="${m}" ${x.mode === m ? 'selected' : ''}>${m}</option>`).join('')}</select>
       <details class="project-exclude"><summary>Exclude kinds / models</summary><div class="exclude-grid">${availableKinds.map((k) => `<label><input type="checkbox" data-exclude-kind="${esc(p.slug)}:${k}" ${x.excludedKinds.includes(k) ? 'checked' : ''}> ${esc(k)}</label>`).join('')}
@@ -628,7 +641,8 @@ function projectSelector(s, selected) {
     const p = published.get(slug), l = live[slug];
     const mode = l?.effectiveMode === 'paused' ? 'Paused' : l?.idle ? 'Idle' : l ? 'Active' : 'Published';
     const name = p?.project || l?.label || slug;
-    return `<a class="panel proj project-selector ${slug === selected ? 'selected' : ''}" href="/projects/${esc(slug)}" ${slug === selected ? 'aria-current="page"' : ''}>
+    const color = allocationColor(s, slug);
+    return `<a class="panel proj project-selector ${slug === selected ? 'selected' : ''} ${color ? `has-allocation ${allocationActivity(l)}` : ''}" href="/projects/${esc(slug)}" ${slug === selected ? 'aria-current="page"' : ''} ${color ? `style="--allocation-color:${color}"` : ''}>
       <div class="proj-head"><b>${esc(name)}</b><span class="tag">${esc(mode)}</span></div>
       <div class="project-selector-meta"><span>${esc(p?.status || p?.phase || 'No status published')}</span><span>${l ? `${l.running} / ${l.slots} workers` : 'No live allocation'}</span></div>
       ${p?.summary ? `<p>${esc(p.summary)}</p>` : ''}
@@ -678,7 +692,7 @@ function attentionBlock(s) {
 
 function fleetBlock(s) {
   const projects = Object.values(s.control?.projects || {});
-  return `<section class="fleet-section"><div class="section-head"><h2>Projects</h2><a href="/agents">Live agents →</a></div>${projectSelector(s, null)}<div class="fleet-table-wrap"><table class="fleet-table"><thead><tr><th>Project</th><th>Orchestrator</th><th>Workers</th><th>Policy</th><th>Published status</th></tr></thead><tbody>${projects.map((p) => {
+  return `<section class="fleet-section"><div class="section-head"><h2>Projects</h2><a href="/agents">Live agents →</a></div>${allocationSummary(s)}${projectSelector(s, null)}<div class="fleet-table-wrap"><table class="fleet-table"><thead><tr><th>Project</th><th>Orchestrator</th><th>Workers</th><th>Policy</th><th>Published status</th></tr></thead><tbody>${projects.map((p) => {
     const published = (s.projects || []).find((x) => x.slug === p.slug);
     const detail = `/projects/${p.slug}`;
     return `<tr><td data-label="Project"><a href="${esc(detail)}"><strong>${esc(p.label)}</strong></a><small>${esc(p.workspace)}</small></td><td data-label="Orchestrator">${p.orch ? `<span class="status-inline"><span class="st ${esc(p.orch.status)}"></span>${esc(p.orch.kind)} · ${esc(p.orch.status)}</span>` : '<span class="text-crit">Missing</span>'}</td><td class="mono" data-label="Workers">${p.running} / ${p.slots}</td><td data-label="Policy">${esc(p.effectiveMode === 'paused' ? 'Paused' : p.idle ? 'Idle · lending' : `${Math.round(p.share)}% share`)}</td><td data-label="Published status">${published ? `${esc(published.status || published.phase || 'Published')}<small>updated ${ago(published.updated)}</small>` : '<span class="muted">Not published</span>'}</td></tr>`;
@@ -732,6 +746,7 @@ function projectsView(s, slug) {
   $crumbs.innerHTML = selected ? `/ <a href="/projects">projects</a> / ${esc((s.projects || []).find((p) => p.slug === selected)?.project || s.control?.projects?.[selected]?.label || selected)}` : '';
   return [
     '<header class="page-intro"><div><h1>Projects</h1><p>Select a project to inspect its status, work, agents, and orchestrator handover.</p></div></header>',
+    allocationSummary(s),
     projectSelector(s, selected),
     selected ? `<div class="project-detail" id="project-detail">${project(s, selected)}</div>` : '',
   ].join('');
@@ -1021,10 +1036,11 @@ const HELP = {
     <p>The state of all projects and shared resources at one glance.</p>
     <h3>Needs attention</h3><p>Warnings and critical alerts: quotas, memory, machine load. <b>Details</b> opens the rule text in Logs.</p>
     <h3>Handovers</h3><p>Orchestrators whose quota comes near its reserve, and successors that wait for review. Open the project to plan, inspect, or activate a handover.</p>
-    <h3>Projects</h3><p>A card per project with its published status and task mix. The table shows the orchestrator, workers in use against the share, and the policy mode. Select a project for its details.</p>
+    <h3>Projects</h3><p>The bar above the cards shows the applied share of each project, in card order. Its colors match the top edge of each card. A label such as <b>30% · 2</b> shows the share and the effective slots; the tooltip shows all values. Change the shares on the Allocation page.</p><p>A card per project with its published status and task mix. The table shows the orchestrator, workers in use against the share, and the policy mode. Select a project for its details.</p>
     <h3>Subscriptions and machine health</h3><p>Select a bar to open all quota windows, or the processes and load history.</p>`],
   projects: ['Projects', `
     <p>Select a project card. The detail below it shows what the orchestrator published and what runs now.</p>
+    <p>The bar above the cards shows the applied share and the effective slots of each project, in card order. Its colors match the top edge of each card. An idle project is faded. A paused project is faded and striped.</p>
     <h3>Progress and frontier</h3><p><b>Current frontier</b> is open work with no open blocker. <b>Next</b> waits only on the current frontier. The orchestrator can set both itself.</p>
     <h3>Dependencies</h3><p>Columns show the order. An arrow runs from a blocker to the work that waits on it. Current work has an orange border; next work has a dashed border. Select a box to open the issue. <b>Show completed work</b> adds finished tasks.</p>
     <h3>Groups and specs</h3><p>Progress per release or phase, and the work under each spec.</p>
