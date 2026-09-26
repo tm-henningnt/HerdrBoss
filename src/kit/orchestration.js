@@ -30,6 +30,37 @@ export function validateAllowedPaths(allowedPaths) {
   return errors;
 }
 
+// A worker may never own the .worker directory: it holds briefs and reports, not product files.
+// macOS volumes are case-insensitive, so .worker, .WORKER, and .Worker all address it.
+function scopeRelativePath(value, field, errors) {
+  const before = errors.length;
+  relativePath(value, field, errors);
+  if (errors.length !== before) return;
+  const first = normalize(value).replace(/^\.\/+/, '').split('/')[0];
+  if (first.toLowerCase() === '.worker') errors.push(`${field} must not be inside .worker: ${value}.`);
+}
+
+// Shared scope rules for `worker allow` paths and their ledger history items.
+export function validateScopePaths(paths, { field = 'paths' } = {}) {
+  const errors = [];
+  if (!Array.isArray(paths) || paths.length === 0) return [`${field} must be a non-empty array of repository-relative paths.`];
+  paths.forEach((item, index) => scopeRelativePath(item, `${field}[${index}]`, errors));
+  return errors;
+}
+
+function scopeExtensions(value, errors) {
+  if (value === undefined) return;
+  if (!Array.isArray(value)) { errors.push('scopeExtensions must be an array.'); return; }
+  value.forEach((entry, index) => {
+    const label = `scopeExtensions[${index}]`;
+    if (!isObject(entry)) { errors.push(`${label} must be an object.`); return; }
+    errors.push(...validateScopePaths(entry.paths, { field: `${label}.paths` }));
+    if (!isText(entry.reason)) errors.push(`${label}.reason must be a non-empty string.`);
+    if (!isText(entry.at) || !Number.isFinite(Date.parse(entry.at))) errors.push(`${label}.at must be a timestamp string.`);
+    if (!isText(entry.by)) errors.push(`${label}.by must be a non-empty caller pane.`);
+  });
+}
+
 function tiers(value, errors, allowedTiers) {
   const list = Array.isArray(value) ? value : [value];
   if (!list.length) errors.push('evidenceTier must not be empty.');
@@ -73,6 +104,7 @@ export function validateDelegatedRun(run, { evidenceTiers = [] } = {}) {
   for (const field of ['defectsFound', 'rework']) stringList(run[field], field, errors);
   if (!isObject(run.independentGate) || typeof run.independentGate.passed !== 'boolean') errors.push('independentGate must be an object with boolean passed.');
   tiers(run.evidenceTier, errors, evidenceTiers);
+  scopeExtensions(run.scopeExtensions, errors);
   return errors;
 }
 

@@ -7,7 +7,7 @@ import test from 'node:test';
 import { loadModels, loadProjectConfig, PROJECT_DEFAULTS } from '../src/kit/config.js';
 import { appendDelegatedRun, compareChangedPaths, gitChangedPaths, readDelegatedRuns, validateAllowedPaths, validateDelegatedRun, validateWorkerReport } from '../src/kit/orchestration.js';
 import { buildGhArgs } from '../src/kit/gh.js';
-import { collectWorker, createHerdrRunner, parseWorktreeCwdProcesses, renderBrief, startWorker } from '../src/kit/workers.js';
+import { allowWorkerScope, collectWorker, createHerdrRunner, parseWorktreeCwdProcesses, renderBrief, startWorker } from '../src/kit/workers.js';
 import { classifyWorktrees, pruneWorktrees } from '../src/kit/worktrees.js';
 import { usageProvider } from '../src/usage.js';
 
@@ -918,4 +918,168 @@ test('lanes prints the unmetered alternatives lane', () => {
   const output = execFileSync(process.execPath, [cli, 'lanes'], { env: { ...process.env, HOME: home, HERDR_BOSS_DIR: dir }, encoding: 'utf8' });
   assert.match(output, /codex ahead of pace/);
   assert.match(output, /unmetered open: herdrboss: opencode \(opencode\/space-bunny-free\)/);
+});
+
+test('worker allow records verified scope extensions and appends history without duplicates', () => {
+  const f = setupFixture(null);
+  startWorker('scope-ext', { kind: 'codex', task: 'x', allow: ['src/'], noWorktree: true }, {
+    config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+  });
+  const recordFile = path.join(f.config.runsPath, 'scope-ext.json');
+  const first = allowWorkerScope('scope-ext', { paths: ['docs/a.md', 'test/'], reason: 'docs needed' }, {
+    config: f.config, herdr: f.herdr, env: f.env, now: Date.parse('2026-09-26T10:00:00Z'), output: () => {},
+  });
+  assert.deepEqual(first.allowedPaths, ['src/', 'docs/a.md', 'test/']);
+  assert.deepEqual(first.scopeExtensions, [{
+    paths: ['docs/a.md', 'test/'], reason: 'docs needed', at: '2026-09-26T10:00:00.000Z', by: 'ws:orch',
+  }]);
+  const second = allowWorkerScope('scope-ext', { paths: ['src/', 'docs/b.md'], reason: 'more docs' }, {
+    config: f.config, herdr: f.herdr, env: f.env, now: Date.parse('2026-09-26T10:05:00Z'), output: () => {},
+  });
+  assert.deepEqual(second.allowedPaths, ['src/', 'docs/a.md', 'test/', 'docs/b.md']);
+  assert.equal(second.scopeExtensions.length, 2);
+  assert.deepEqual(second.scopeExtensions[1], {
+    paths: ['src/', 'docs/b.md'], reason: 'more docs', at: '2026-09-26T10:05:00.000Z', by: 'ws:orch',
+  });
+  assert.deepEqual(JSON.parse(fs.readFileSync(recordFile, 'utf8')).scopeExtensions, second.scopeExtensions);
+
+  const bossHerdr = (args) => (args[0] === 'pane' && args[1] === 'get'
+    ? { pane: { pane_id: 'ws:boss', workspace_id: 'ws', label: 'boss' } }
+    : f.herdr(args));
+  const boss = allowWorkerScope('scope-ext', { paths: ['docs/c.md'], reason: 'boss approval' }, {
+    config: f.config, herdr: bossHerdr, env: { ...f.env, HERDR_PANE_ID: 'ws:boss' }, output: () => {},
+  });
+  assert.equal(boss.scopeExtensions.at(-1).by, 'ws:boss');
+
+  // An in-repository symlink to a normal directory keeps its allowed behavior.
+  fs.mkdirSync(path.join(f.root, 'real-docs'));
+  fs.symlinkSync('real-docs', path.join(f.root, 'docs-link'));
+  const linked = allowWorkerScope('scope-ext', { paths: ['docs-link/a.md'], reason: 'in-repo link' }, {
+    config: f.config, herdr: f.herdr, env: f.env, output: () => {},
+  });
+  assert.ok(linked.allowedPaths.includes('docs-link/a.md'));
+});
+
+test('worker allow refuses invalid requests without changing the run record', () => {
+  const f = setupFixture(null);
+  startWorker('scope-refuse', { kind: 'codex', task: 'x', allow: ['src/'], noWorktree: true }, {
+    config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+  });
+  const recordFile = path.join(f.config.runsPath, 'scope-refuse.json');
+  const before = fs.readFileSync(recordFile, 'utf8');
+  const base = { config: f.config, herdr: f.herdr, env: f.env, output: () => {} };
+  const wrongPane = (args) => (args[0] === 'pane' && args[1] === 'get'
+    ? { pane: { pane_id: 'ws:orch', workspace_id: 'ws', label: 'worker' } }
+    : f.herdr(args));
+  const cases = [
+    [{ ...base, env: { ...f.env, HERDR_ENV: undefined } }, ['docs/a.md'], 'reason', /HERDR_ENV=1/],
+    [{ ...base, env: { ...f.env, HERDR_PANE_ID: undefined } }, ['docs/a.md'], 'reason', /HERDR_PANE_ID is required/],
+    [{ ...base, herdr: wrongPane }, ['docs/a.md'], 'reason', /label must be exactly orch or boss/],
+    [base, ['docs/a.md'], '', /needs --reason/],
+    [base, [], 'reason', /at least one path/],
+    [base, ['/etc/passwd'], 'reason', /stay inside the repository/],
+    [base, ['../outside'], 'reason', /stay inside the repository/],
+    [base, ['.worker'], 'reason', /must not be inside \.worker/],
+    [base, ['.worker/notes.md'], 'reason', /must not be inside \.worker/],
+    [base, ['.WORKER/report.md'], 'reason', /must not be inside \.worker/],
+    [base, ['.Worker/report.md'], 'reason', /must not be inside \.worker/],
+    [base, ['.WORKER'], 'reason', /must not be inside \.worker/],
+  ];
+  for (const [options, paths, reason, message] of cases) {
+    assert.throws(() => allowWorkerScope('scope-refuse', { paths, reason }, options), message);
+    assert.equal(fs.readFileSync(recordFile, 'utf8'), before);
+  }
+  fs.symlinkSync(os.tmpdir(), path.join(f.root, 'escape'));
+  assert.throws(() => allowWorkerScope('scope-refuse', { paths: ['escape/file.md'], reason: 'reason' }, base), /resolves outside the repository/);
+  assert.equal(fs.readFileSync(recordFile, 'utf8'), before);
+
+  // A repository symlink alias into .worker is refused, including a missing descendant below the link.
+  fs.symlinkSync('.worker', path.join(f.root, 'worker-alias'));
+  for (const pathItem of ['worker-alias', 'worker-alias/notes.md', 'worker-alias/deep/missing/notes.md']) {
+    assert.throws(() => allowWorkerScope('scope-refuse', { paths: [pathItem], reason: 'reason' }, base), /resolves into \.worker/);
+    assert.equal(fs.readFileSync(recordFile, 'utf8'), before);
+  }
+
+  // A case-insensitive volume makes a .WORKER alias address the protected directory too.
+  fs.symlinkSync('.WORKER', path.join(f.root, 'worker-upper'));
+  for (const pathItem of ['worker-upper', 'worker-upper/report.md', 'worker-upper/deep/missing/report.md']) {
+    assert.throws(() => allowWorkerScope('scope-refuse', { paths: [pathItem], reason: 'reason' }, base), /resolves into \.worker/);
+    assert.equal(fs.readFileSync(recordFile, 'utf8'), before);
+  }
+
+  // A symlink to an outside path that does not exist yet is still refused.
+  fs.symlinkSync(path.join(os.tmpdir(), 'herdr-missing-outside-target'), path.join(f.root, 'broken-outside'));
+  assert.throws(() => allowWorkerScope('scope-refuse', { paths: ['broken-outside/file.md'], reason: 'reason' }, base), /resolves outside the repository/);
+  assert.equal(fs.readFileSync(recordFile, 'utf8'), before);
+
+  const record = JSON.parse(before);
+  record.finishedAt = '2026-09-26T11:00:00.000Z';
+  fs.writeFileSync(recordFile, JSON.stringify(record));
+  assert.throws(() => allowWorkerScope('scope-refuse', { paths: ['docs/a.md'], reason: 'reason' }, base), /already finished/);
+});
+
+test('worker collect uses approved scope extensions and copies them to the ledger', () => {
+  const f = setupFixture(null);
+  git(f.root, 'add', '-A');
+  git(f.root, 'commit', '--allow-empty', '-m', 'fixture configuration');
+  const run = startWorker('scope-collect', { kind: 'codex', task: 'x', allow: ['src/', '.orchestration/runs/'], noWorktree: true }, {
+    config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+  });
+  fs.writeFileSync(path.join(f.root, 'docs-approved.md'), 'approved\n');
+  const reportDir = path.join(run.worktree, run.workerDir);
+  fs.writeFileSync(path.join(reportDir, 'report.md'), 'Done.\n');
+  fs.writeFileSync(path.join(reportDir, 'report.json'), JSON.stringify({
+    issue: null, branch: run.branch, worktree: run.worktree,
+    changedPaths: ['.orchestration/runs/scope-collect.json', 'docs-approved.md'],
+    commands: ['focused check'], evidenceTier: ['unit'], unverified: [], stoppedEarly: false,
+  }));
+  assert.throws(() => collectWorker('scope-collect', {}, {
+    config: f.config, output: () => {}, listWorktreeProcesses: () => [],
+  }), /outside its allowed scope.*docs-approved\.md/);
+  allowWorkerScope('scope-collect', { paths: ['docs-approved.md'], reason: 'small docs fix' }, {
+    config: f.config, herdr: f.herdr, env: f.env, now: Date.parse('2026-09-26T12:00:00Z'), output: () => {},
+  });
+  const lines = [];
+  const summary = collectWorker('scope-collect', { record: true, outcome: 'done', gatePassed: true }, {
+    config: f.config, now: Date.parse('2026-09-26T12:30:00Z'), output: (text) => lines.push(text),
+    recordUsageFn: () => ({ errors: [], duplicate: false }), listWorktreeProcesses: () => [],
+  });
+  assert.deepEqual(summary.scopeExtensions, [{
+    paths: ['docs-approved.md'], reason: 'small docs fix', at: '2026-09-26T12:00:00.000Z', by: 'ws:orch',
+  }]);
+  assert.match(lines.join('\n'), /"scopeExtensions"/);
+  const entry = JSON.parse(fs.readFileSync(f.config.ledgerPath, 'utf8').trim());
+  assert.deepEqual(entry.scopeExtensions, summary.scopeExtensions);
+});
+
+test('ledger validation keeps old entries valid and rejects malformed scope extensions', () => {
+  assert.deepEqual(validateDelegatedRun(validRun, { evidenceTiers: tiers }), []);
+  const good = { ...validRun, scopeExtensions: [{ paths: ['docs/a.md'], reason: 'needed', at: '2026-09-26T10:00:00.000Z', by: 'ws:orch' }] };
+  assert.deepEqual(validateDelegatedRun(good, { evidenceTiers: tiers }), []);
+  const bad = (patch) => validateDelegatedRun({ ...validRun, scopeExtensions: patch }, { evidenceTiers: tiers });
+  assert.ok(bad('nope').some((error) => error.includes('scopeExtensions must be an array')));
+  assert.ok(bad([{ reason: 'r', at: '2026-09-26T10:00:00.000Z', by: 'ws:orch' }]).some((error) => error.includes('.paths must be a non-empty array')));
+  assert.ok(bad([{ paths: [], reason: 'r', at: '2026-09-26T10:00:00.000Z', by: 'ws:orch' }]).some((error) => error.includes('.paths must be a non-empty array')));
+  assert.ok(bad([{ paths: ['/etc/passwd'], reason: 'r', at: '2026-09-26T10:00:00.000Z', by: 'ws:orch' }]).some((error) => error.includes('stay inside')));
+  assert.ok(bad([{ paths: ['.worker/x'], reason: 'r', at: '2026-09-26T10:00:00.000Z', by: 'ws:orch' }]).some((error) => error.includes('inside .worker')));
+  assert.ok(bad([{ paths: ['.WORKER/report.md'], reason: 'r', at: '2026-09-26T10:00:00.000Z', by: 'ws:orch' }]).some((error) => error.includes('inside .worker')));
+  assert.ok(bad([{ paths: ['a.md'], reason: '', at: '2026-09-26T10:00:00.000Z', by: 'ws:orch' }]).some((error) => error.includes('.reason must be a non-empty')));
+  assert.ok(bad([{ paths: ['a.md'], reason: 'r', at: 'nope', by: 'ws:orch' }]).some((error) => error.includes('.at must be a timestamp')));
+  assert.ok(bad([{ paths: ['a.md'], reason: 'r', at: '2026-09-26T10:00:00.000Z', by: '' }]).some((error) => error.includes('.by must be a non-empty')));
+});
+
+test('worker allow CLI parses paths and reason and rejects missing or unknown options', async () => {
+  const { runKitCommand } = await import('../src/kit/cli.js');
+  const f = setupFixture(null);
+  startWorker('scope-cli', { kind: 'codex', task: 'x', allow: ['src/'], noWorktree: true }, {
+    config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+  });
+  const options = { config: f.config, herdr: f.herdr, env: f.env, output: () => {} };
+  runKitCommand('worker', ['allow', 'scope-cli', 'docs/a.md', 'docs/b.md', '--reason', 'docs approval'], options);
+  const record = JSON.parse(fs.readFileSync(path.join(f.config.runsPath, 'scope-cli.json'), 'utf8'));
+  assert.deepEqual(record.allowedPaths, ['src/', 'docs/a.md', 'docs/b.md']);
+  assert.equal(record.scopeExtensions[0].reason, 'docs approval');
+  assert.throws(() => runKitCommand('worker', ['allow', 'scope-cli', '--reason', 'r'], options), /Usage: worker allow/);
+  assert.throws(() => runKitCommand('worker', ['allow', 'scope-cli', 'docs/a.md'], options), /needs --reason/);
+  assert.throws(() => runKitCommand('worker', ['allow', 'scope-cli', 'docs/a.md', '--reason', 'r', '--bogus', 'x'], options), /Unknown option/);
 });

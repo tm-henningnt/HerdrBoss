@@ -158,6 +158,9 @@ herdr-boss worker start <name> --kind <kind> --task-file <file> --allow <path>
 
 - A worker sends `WORKER QUESTION <name>: ...` when it misses a file, an instruction, an access right, or a decision.
 - Answer it with `herdr agent prompt <name> "..."`. Put missing files into the worker worktree; do not point the worker outside it.
+- Approve extra scope with `herdr-boss worker allow <name> <path>... --reason TEXT`. A prompt or message alone does not change the approved paths.
+- The verified `orch` or `boss` pane must run `worker allow`. It records the caller, reason, time, and paths in the run.
+- `worker collect` uses the approved paths and copies the approval history into the ledger entry.
 - When the question is a product decision, decide it within the project rules, or escalate it to the Owner and tell the worker to wait.
 - Add the answer to the next brief of the same kind, so the next worker does not need to ask.
 
