@@ -31,6 +31,69 @@ test('policy only permits project exclusions from global availability', () => {
   assert.match(validatePolicy(p, models).join(' '), /globally available kinds/);
 });
 
+// A child process gives every call fresh module state, so the data directory and the private paths follow the
+// temporary HOME.
+function loadAccess(home, data, { migrate = false } = {}) {
+  const configUrl = new URL('../src/config.js', import.meta.url).href;
+  const script = `import { ${migrate ? 'loadConfig, migrateAccessFiles' : 'loadConfig'} } from ${JSON.stringify(configUrl)};
+const cfg = loadConfig();
+${migrate ? 'migrateAccessFiles(cfg);' : ''}
+console.log(JSON.stringify(cfg.access));`;
+  return JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', script], {
+    env: { ...process.env, HOME: home, HERDR_BOSS_DIR: data }, encoding: 'utf8',
+  }));
+}
+
+const legacySessionState = JSON.stringify({ token: 'f'.repeat(64), sessions: { ['e'.repeat(64)]: 1234567890123 } });
+
+test('loadConfig leaves legacy credential files and the stored config alone', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-loadconfig-home-'));
+  const data = path.join(home, 'shared-data');
+  const privateDir = path.join(home, '.config', 'herdr-boss');
+  const legacyToken = path.join(data, 'access-token');
+  const legacySessions = path.join(data, 'sessions.json');
+  const configFile = path.join(data, 'config.json');
+  const storedConfig = `${JSON.stringify({ push: false, access: { tokenFile: legacyToken, sessionDays: 11 } }, null, 2)}\n`;
+  fs.mkdirSync(data);
+  fs.writeFileSync(legacyToken, `${'a'.repeat(64)}\n`, { mode: 0o644 });
+  fs.writeFileSync(legacySessions, legacySessionState, { mode: 0o644 });
+  fs.writeFileSync(configFile, storedConfig, { mode: 0o644 });
+  for (const file of [legacyToken, legacySessions, configFile]) fs.chmodSync(file, 0o644);
+  const access = loadAccess(home, data);
+  assert.equal(access.tokenFile, path.join(privateDir, 'access-token'), 'the private default is the effective token path');
+  assert.equal(access.sessionDays, 11);
+  assert.equal(fs.existsSync(path.join(data, 'projects')), true, 'loadConfig still creates the projects directory');
+  assert.equal(fs.existsSync(privateDir), false, 'loadConfig does not create the private access directory');
+  assert.equal(fs.readFileSync(legacyToken, 'utf8'), `${'a'.repeat(64)}\n`, 'loadConfig does not move the legacy token');
+  assert.equal(fs.readFileSync(legacySessions, 'utf8'), legacySessionState, 'loadConfig does not move the legacy sessions');
+  assert.equal(fs.statSync(legacyToken).mode & 0o777, 0o644, 'loadConfig does not chmod the legacy token');
+  assert.equal(fs.statSync(legacySessions).mode & 0o777, 0o644, 'loadConfig does not chmod the legacy sessions');
+  assert.equal(fs.readFileSync(configFile, 'utf8'), storedConfig, 'loadConfig does not rewrite the stored config');
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('loadConfig leaves existing private credential files alone', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-loadconfig-home-'));
+  const data = path.join(home, 'shared-data');
+  const privateDir = path.join(home, '.config', 'herdr-boss');
+  const tokenFile = path.join(privateDir, 'access-token');
+  const sessionFile = path.join(privateDir, 'sessions.json');
+  fs.mkdirSync(data);
+  fs.mkdirSync(privateDir, { recursive: true });
+  fs.writeFileSync(tokenFile, `${'a'.repeat(64)}\n`, { mode: 0o644 });
+  fs.writeFileSync(sessionFile, legacySessionState, { mode: 0o644 });
+  fs.chmodSync(tokenFile, 0o644);
+  fs.chmodSync(sessionFile, 0o644);
+  loadAccess(home, data);
+  loadAccess(home, data);
+  assert.equal(fs.readFileSync(tokenFile, 'utf8'), `${'a'.repeat(64)}\n`, 'loadConfig does not rewrite the token');
+  assert.equal(fs.readFileSync(sessionFile, 'utf8'), legacySessionState, 'loadConfig does not rewrite the sessions');
+  assert.equal(fs.statSync(tokenFile).mode & 0o777, 0o644, 'loadConfig does not chmod the token');
+  assert.equal(fs.statSync(sessionFile).mode & 0o777, 0o644, 'loadConfig does not chmod the sessions');
+  assert.equal(fs.statSync(privateDir).mode & 0o777, 0o755, 'loadConfig does not chmod the private access directory');
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
 test('access credentials use private defaults and migrate legacy files once', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-credentials-home-'));
   const data = path.join(home, 'shared-data');
@@ -40,11 +103,7 @@ test('access credentials use private defaults and migrate legacy files once', ()
   fs.mkdirSync(data);
   fs.writeFileSync(legacyToken, `${'a'.repeat(64)}\n`, { mode: 0o600 });
   fs.writeFileSync(legacySessions, JSON.stringify({ token: 'f'.repeat(64), sessions: { ['e'.repeat(64)]: 1234567890123 } }), { mode: 0o600 });
-  const configUrl = new URL('../src/config.js', import.meta.url).href;
-  const script = `import { loadConfig } from ${JSON.stringify(configUrl)}; console.log(JSON.stringify(loadConfig().access));`;
-  const run = () => JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', script], {
-    env: { ...process.env, HOME: home, HERDR_BOSS_DIR: data }, encoding: 'utf8',
-  }));
+  const run = () => loadAccess(home, data, { migrate: true });
   const config = run();
   assert.equal(config.tokenFile, path.join(privateDir, 'access-token'));
   assert.equal(fs.readFileSync(config.tokenFile, 'utf8'), `${'a'.repeat(64)}\n`);
