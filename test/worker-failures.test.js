@@ -18,13 +18,18 @@ test('worker failure matching returns only a fixed case-insensitive label', () =
   for (const [line, label] of [
     ['API ERROR: sk-secret-token', 'API Error'],
     ['request got 401 unauthorized', '401'],
+    ['HTTP 401', '401'],
+    ['status 401', '401'],
     ['HTTP 429; retry later', '429'],
     ['Connection Lost', 'Connection lost'],
     ['usage LIMIT reached', 'usage limit'],
+    ['usage limit exceeded', 'usage limit'],
+    ['hit your usage limit', 'usage limit'],
     ['RATE LIMIT exceeded', 'rate limit'],
     ['provider overloaded', 'overloaded'],
     ['FREE USAGE EXCEEDED. Retry in 5h 48m.', 'Free usage exceeded'],
   ]) assert.equal(matchWorkerFailure([line]), label);
+  for (const line of ['401', 'usage limit']) assert.equal(matchWorkerFailure([line]), null);
   assert.equal(matchWorkerFailure(['all good']), null);
 });
 
@@ -204,4 +209,20 @@ test('report inspection accepts metadata only and ignores non-files and stale re
   assert.deepEqual(calls, ['/work/.worker/report.json', '/work/.worker/alpha/report.json']);
   assert.deepEqual(result.notices, []);
   assert.equal(result.observed['ws:p1'].firstSeen, 500);
+});
+
+test('worker failure matching ignores Tip lines and requires error forms for 401 and usage limits', () => {
+  for (const [screen, label] of [
+    ['401 Unauthorized', '401'],
+    ['HTTP 401', '401'],
+    ['status 401', '401'],
+    ['usage limit reached', 'usage limit'],
+    ['usage limit exceeded', 'usage limit'],
+    ['hit your usage limit', 'usage limit'],
+    ['Tip: Check when your usage limits reset', null],
+    ['401', null],
+    ['usage limit', null],
+    ['other text\n  tIP: 401 Unauthorized', null],
+    ['Tip: Check usage limits\nAPI Error: request failed', 'API Error'],
+  ]) assert.equal(matchWorkerFailure(screen), label, screen);
 });
