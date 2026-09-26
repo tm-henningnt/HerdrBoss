@@ -16,24 +16,78 @@ function git(root, args, { encoding = 'utf8' } = {}) {
   return execFileSync('git', ['-C', root, ...args], { encoding });
 }
 
-export function parseWorktreeCwdProcesses(output, worktree) {
-  const root = path.resolve(worktree);
+function parseCwdProcesses(output) {
   const processes = [];
   let processInfo = null;
   for (const line of output.split('\n')) {
     if (line.startsWith('p')) {
-      if (processInfo?.cwd && (processInfo.cwd === root || processInfo.cwd.startsWith(`${root}${path.sep}`))) processes.push(processInfo);
-      processInfo = { pid: Number(line.slice(1)), command: null, cwd: null };
+      if (processInfo?.cwd) processes.push(processInfo);
+      processInfo = { pid: Number(line.slice(1)), ppid: null, command: null, cwd: null };
     } else if (processInfo && line.startsWith('c')) processInfo.command = line.slice(1);
+    else if (processInfo && line.startsWith('R')) processInfo.ppid = Number(line.slice(1)) || null;
     else if (processInfo && line.startsWith('n')) processInfo.cwd = line.slice(1);
   }
-  if (processInfo?.cwd && (processInfo.cwd === root || processInfo.cwd.startsWith(`${root}${path.sep}`))) processes.push(processInfo);
+  if (processInfo?.cwd) processes.push(processInfo);
   return processes;
 }
 
+export function parseWorktreeCwdProcesses(output, worktree) {
+  const root = path.resolve(worktree);
+  return parseCwdProcesses(output).filter(({ cwd }) => cwd === root || cwd.startsWith(`${root}${path.sep}`));
+}
+
+export function filterCollectProcesses(processes, { worktree, shellPid = null }) {
+  const root = path.resolve(worktree);
+  const inTree = processes.filter((item) => item.cwd && (path.resolve(item.cwd) === root || path.resolve(item.cwd).startsWith(`${root}${path.sep}`)));
+  const byPid = new Map(processes.map((item) => [Number(item.pid), item]));
+  const daemon = (item) => /(?:^|\/)Codex\.app\/Contents\/Resources\/app-server-daemon(?:\s|$)/.test(String(item.executable ?? item.args ?? ''));
+  const workerRuntime = (item) => {
+    const visited = new Set();
+    let current = item;
+    while (current && !visited.has(Number(current.pid))) {
+      if (Number(current.pid) === Number(shellPid) && Number(shellPid) > 0) return true;
+      visited.add(Number(current.pid));
+      current = byPid.get(Number(current.ppid));
+    }
+    return false;
+  };
+  const sharedRuntime = (item) => {
+    const visited = new Set();
+    let current = item;
+    while (current && !visited.has(Number(current.pid))) {
+      if (daemon(current)) return true;
+      visited.add(Number(current.pid));
+      current = byPid.get(Number(current.ppid));
+    }
+    return false;
+  };
+  const workload = (item) => /(?:\bnode\s+--test\b|\b(?:jest|vitest|mocha|playwright)\b|\b(?:nodemon|watcher|watchpack|chokidar)\b|\b(?:vite|webpack|next)\s+(?:dev|serve)\b|\b(?:server|serve)\.js\b)/i.test(String(item.args ?? ''));
+  return inTree.filter((item) => {
+    if (Number(item.ppid) === 1 || workload(item)) return true;
+    if (daemon(item) || sharedRuntime(item) || workerRuntime(item)) return false;
+    return true;
+  });
+}
+
 function worktreeCwdProcesses(worktree) {
-  const output = execFileSync('lsof', ['-a', '-d', 'cwd', '-Fpcn'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-  return parseWorktreeCwdProcesses(output, worktree);
+  const output = execFileSync('lsof', ['-a', '-d', 'cwd', '-FpcnR'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  const processes = parseCwdProcesses(output);
+  for (const item of processes) {
+    if (!/^app-server/.test(item.command ?? '')) continue;
+    try {
+      item.executable = execFileSync('lsof', ['-a', '-p', String(item.pid), '-d', 'txt', '-Fn'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch {}
+  }
+  return processes;
+}
+
+function workerPaneShellPid(paneId, herdr) {
+  try {
+    const response = herdr(['pane', 'process-info', '--pane', paneId]);
+    const info = response?.process_info ?? response;
+    const pid = Number(info?.shell_pid);
+    return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
+  } catch { return null; }
 }
 
 function displayArg(value) {
@@ -523,6 +577,7 @@ export function startWorker(name, options, {
   const task = options.taskFile ? fs.readFileSync(path.resolve(options.taskFile), 'utf8').trimEnd() : options.task;
   if (!task?.trim()) throw new Error('Task text must not be empty.');
   const base = options.base ?? config.baseBranch;
+  const baseCommit = git(config.root, ['rev-parse', base]).trim();
   const branch = options.noWorktree ? git(config.root, ['branch', '--show-current']).trim() : name;
   if (!branch) throw new Error('--no-worktree requires the current worktree to have a named branch.');
   const worktree = options.noWorktree ? config.root : config.worktreePath(name);
@@ -614,6 +669,7 @@ export function startWorker(name, options, {
     placement = chooseWorkerPane(workspaceId, worktree, herdr);
     paneId = placement.paneId;
     waitForWorkerPane(paneId, workspaceId, worktree, herdr, wait);
+    const shellPid = workerPaneShellPid(paneId, herdr);
     try {
       herdr(['agent', 'start', name, '--kind', options.kind, '--pane', paneId, '--timeout', String(plan.agentStartTimeoutMs), '--', ...launchArgs]);
     } catch (startError) {
@@ -640,6 +696,8 @@ export function startWorker(name, options, {
       worktree,
       branch,
       base,
+      baseCommit,
+      shellPid,
       pane: paneId,
       workerDir: plan.workerDir,
       allowedPaths: options.allow ?? [],
@@ -671,7 +729,7 @@ export function startWorker(name, options, {
         error.message += ` Failed-start branch ${branch} was kept because its worktree could not be removed.`;
       } else {
         let uniqueCommits;
-        try { uniqueCommits = git(config.root, ['rev-list', `${base}..${branch}`]).trim(); }
+        try { uniqueCommits = git(config.root, ['rev-list', `${baseCommit}..${branch}`]).trim(); }
         catch (cleanupError) {
           error.message += ` Failed-start branch ${branch} was kept because its commits against base ${base} could not be checked: ${cleanupError.message}`;
         }
@@ -804,15 +862,17 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
   if (path.resolve(reportJson.worktree) !== path.resolve(run.worktree)) throw new Error(`Report worktree ${reportJson.worktree} does not match run worktree ${run.worktree}.`);
   const actualBranch = git(run.worktree, ['branch', '--show-current']).trim();
   if (actualBranch !== run.branch) throw new Error(`Worktree branch ${actualBranch || '(detached)'} does not match run branch ${run.branch}.`);
-  const leftovers = listWorktreeProcesses(run.worktree).filter((process) => !['bash', 'fish', 'sh', 'zsh'].includes(process.command));
-  if (leftovers.length) throw new Error(`Worker ${name} still has processes in its worktree: ${leftovers.map((process) => `${process.command || 'unknown'} (pid ${process.pid}, cwd ${process.cwd})`).join('; ')}. Stop them before collection.`);
+  const processList = listWorktreeProcesses(run.worktree);
+  const leftovers = filterCollectProcesses(processList, { worktree: run.worktree, shellPid: run.shellPid });
+  if (leftovers.length) throw new Error(`Worker ${name} still has processes in its worktree: ${leftovers.map((process) => `${process.command || 'unknown'} (pid ${process.pid}, ppid ${process.ppid ?? 'unknown'}, cwd ${process.cwd})`).join('; ')}. Stop them before collection.`);
   if (run.issue != null && reportJson.issue !== run.issue) throw new Error(`Report issue ${reportJson.issue} does not match run issue ${run.issue}.`);
   if (reportJson.branch !== run.branch) throw new Error(`Report branch ${reportJson.branch} does not match run branch ${run.branch}.`);
-  const log = gitLog(run.worktree, run.base);
+  const baseRef = run.baseCommit || run.base;
+  const log = gitLog(run.worktree, baseRef);
   // The worker's own brief and report files live under .worker/ and never count as changed product paths.
   const ownFile = (item) => item === '.worker' || String(item).startsWith('.worker/');
   const reported = (reportJson.changedPaths || []).filter((item) => !ownFile(item));
-  const changed = gitChangedPaths(run.worktree, run.base).filter((item) => !ownFile(item));
+  const changed = gitChangedPaths(run.worktree, baseRef).filter((item) => !ownFile(item));
     const reportScope = compareChangedPaths(reported, run.allowedPaths ?? []);
     const actualScope = compareChangedPaths(changed, run.allowedPaths ?? []);
     const scopeErrors = [...new Set([...reportScope, ...actualScope])];

@@ -7,7 +7,7 @@ import test from 'node:test';
 import { loadModels, loadProjectConfig, PROJECT_DEFAULTS } from '../src/kit/config.js';
 import { appendDelegatedRun, compareChangedPaths, gitChangedPaths, readDelegatedRuns, validateAllowedPaths, validateDelegatedRun, validateWorkerReport } from '../src/kit/orchestration.js';
 import { buildGhArgs } from '../src/kit/gh.js';
-import { allowWorkerScope, collectWorker, createHerdrRunner, parseWorktreeCwdProcesses, renderBrief, startWorker } from '../src/kit/workers.js';
+import { allowWorkerScope, collectWorker, createHerdrRunner, filterCollectProcesses, parseWorktreeCwdProcesses, renderBrief, startWorker } from '../src/kit/workers.js';
 import { classifyWorktrees, pruneWorktrees } from '../src/kit/worktrees.js';
 import { usageProvider } from '../src/usage.js';
 
@@ -57,14 +57,30 @@ const validRun = {
 test('worker process check finds only cwd paths inside the exact worktree', () => {
   const worktree = path.resolve('/tmp/worker-tree');
   const output = [
-    'p101', 'cnode', `n${worktree}/test/server.test.js`,
-    'p102', 'cnpm', `n${worktree}-other`,
-    'p103', 'czsh', `n${worktree}`,
+    'p101', 'R10', 'cnode', `n${worktree}/test/server.test.js`,
+    'p102', 'R1', 'cnpm', `n${worktree}-other`,
+    'p103', 'R1', 'czsh', `n${worktree}`,
   ].join('\n');
   assert.deepEqual(parseWorktreeCwdProcesses(output, worktree), [
-    { pid: 101, command: 'node', cwd: `${worktree}/test/server.test.js` },
-    { pid: 103, command: 'zsh', cwd: worktree },
+    { pid: 101, ppid: 10, command: 'node', cwd: `${worktree}/test/server.test.js` },
+    { pid: 103, ppid: 1, command: 'zsh', cwd: worktree },
   ]);
+});
+
+test('worker process collection excludes worker runtime and shared daemon but flags workloads and unknown ancestry', () => {
+  const cwd = path.resolve('/tmp/worker-tree');
+  const processes = [
+    { pid: 10, ppid: 1, command: 'zsh', cwd },
+    { pid: 11, ppid: 10, command: 'node', args: 'codex worker runtime', cwd },
+    { pid: 12, ppid: 9, command: 'app-server-daemon', executable: 'n/Applications/Codex.app/Contents/Resources/app-server-daemon', cwd },
+    { pid: 13, ppid: 12, command: 'node', args: 'shared tool runtime', cwd },
+    { pid: 20, ppid: 11, command: 'node', args: 'node --test test/a.test.js', cwd },
+    { pid: 21, ppid: 11, command: 'node', args: 'node server.js', cwd },
+    { pid: 22, ppid: 11, command: 'node', args: 'watcher --watch src', cwd },
+    { pid: 23, ppid: 1, command: 'node', args: 'unknown process', cwd },
+  ];
+  assert.deepEqual(filterCollectProcesses(processes, { worktree: cwd, shellPid: 10 }).map(({ pid }) => pid), [10, 20, 21, 22, 23]);
+  assert.deepEqual(filterCollectProcesses(processes, { worktree: cwd }).map(({ pid }) => pid), [10, 11, 20, 21, 22, 23]);
 });
 
 test('project config finds the git root and applies contract defaults', () => {
@@ -309,6 +325,7 @@ test('worker collect --record uses the provider recorded at start, including nul
     const usage = [];
     const collect = () => collectWorker(name, { record: true, outcome: 'done', gatePassed: true }, {
       config: f.config, now: Date.parse('2026-09-25T17:00:00Z'), output: () => {},
+      listWorktreeProcesses: () => [],
       recordUsageFn: (event) => {
         usage.push({ ...event, recordedProvider: usageProvider(event, changedPolicy) });
         if (failUsage) throw new Error('usage write failed');
@@ -366,6 +383,35 @@ test('worker start records a real dispatch before prompting and verifies activit
   assert.equal(result.pane, 'ws:p2');
   assert.ok(calls.some((args) => args[0] === 'agent' && args[1] === 'prompt'));
   assert.equal(fs.readFileSync(path.join(result.worktree, '.worker', 'brief.md'), 'utf8'), 'Worker demo: x');
+});
+
+test('worker collect keeps changed paths stable after the base branch merges the worker', () => {
+  const f = setupFixture(null);
+  const baseCommit = git(f.root, 'rev-parse', 'main');
+  const run = startWorker('stable-base', { kind: 'codex', task: 'x', allow: ['src/'] }, {
+    config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+  });
+  const runRecord = JSON.parse(fs.readFileSync(run.recordFile, 'utf8'));
+  assert.equal(runRecord.base, 'main');
+  assert.equal(runRecord.baseCommit, baseCommit);
+  fs.mkdirSync(path.join(run.worktree, 'src'));
+  fs.writeFileSync(path.join(run.worktree, 'src', 'change.js'), 'export const changed = true;\n');
+  git(run.worktree, 'add', 'src/change.js');
+  git(run.worktree, 'commit', '-m', 'worker change');
+  const reportDir = path.join(run.worktree, '.worker');
+  fs.writeFileSync(path.join(reportDir, 'report.md'), 'Done.\n');
+  fs.writeFileSync(path.join(reportDir, 'report.json'), JSON.stringify({
+    issue: null, branch: run.branch, worktree: run.worktree, changedPaths: ['src/change.js'],
+    commands: ['focused check'], evidenceTier: ['unit'], unverified: [], stoppedEarly: false,
+  }));
+  const collect = () => collectWorker('stable-base', {}, {
+    config: f.config, output: () => {}, listWorktreeProcesses: () => [],
+  });
+  const beforeMerge = collect();
+  git(f.root, 'merge', '--ff-only', run.branch);
+  const afterMerge = collect();
+  assert.deepEqual(beforeMerge.actualPaths, ['src/change.js']);
+  assert.deepEqual(afterMerge.actualPaths, beforeMerge.actualPaths);
 });
 
 test('worker start waits for a ready shell and retries agent_pane_busy once', () => {
@@ -921,7 +967,7 @@ test('worker collect ignores the worker report files in the scope check and the 
     config: f.config, output: () => {}, listWorktreeProcesses: () => [{ pid: 99, command: 'node', cwd: f.root }],
   }), /still has processes in its worktree.*pid 99/);
   const summary = collectWorker('own-files', { record: true, outcome: 'done', gatePassed: true }, {
-    config: f.config, output: () => {}, recordUsageFn: () => ({ errors: [], duplicate: false }),
+    config: f.config, output: () => {}, recordUsageFn: () => ({ errors: [], duplicate: false }), listWorktreeProcesses: () => [],
   });
   assert.deepEqual(summary.reportedPaths, ['.orchestration/runs/own-files.json']);
   const entry = JSON.parse(fs.readFileSync(f.config.ledgerPath, 'utf8').trim());
