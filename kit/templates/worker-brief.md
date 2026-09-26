@@ -78,6 +78,8 @@ herdr agent prompt {{orchPane}} "WORKER QUESTION {{name}}: <what you need and wh
 
 Then stop that path and wait. The orchestrator answers with a new prompt in this pane. Continue with other parts of the task while you wait, when they do not depend on the answer.
 
+If the Herdr command for `WORKER REPORT` or `WORKER QUESTION` fails, record the failed command and reason in the worker report, then stop. Do not look for a workaround outside the worktree. Boss monitors report metadata and will notify the orchestrator when a report is written.
+
 ## Image budget
 
 View at most 10 screenshots during this session.

@@ -91,3 +91,55 @@ test('worker list can surface only matching failed-pane state', () => {
   assert.equal(workerStatusFromState('w1:p2', { herdr: { panes: [{ id: 'w1:p2', status: 'failed' }] } }), 'failed');
   assert.equal(workerStatusFromState('w1:p3', { herdr: { panes: [{ id: 'w1:p2', status: 'failed' }] } }), null);
 });
+
+test('report notices use first-seen metadata for both paths and ignore orchestrators', async () => {
+  const { inspectWorkerReports } = await import('../src/worker-failures.js');
+  const panes = [
+    { id: 'ws:p1', workspace: 'ws', cwd: '/work/a', name: 'alpha', agent: 'codex', status: 'working' },
+    { id: 'ws:p2', workspace: 'ws', cwd: '/work/b', name: 'beta', agent: 'pi', status: 'idle' },
+    { id: 'ws:p3', workspace: 'ws', cwd: '/work/c', name: 'orch', agent: 'codex', status: 'working', orch: true },
+  ];
+  const files = new Map([
+    ['/work/a/.worker/report.json', { isFile: true, mtimeMs: 101 }],
+    ['/work/b/.worker/beta/report.json', { isFile: true, mtimeMs: 102 }],
+    ['/work/c/.worker/report.json', { isFile: true, mtimeMs: 999 }],
+  ]);
+  const calls = [];
+  const stat = (file) => { calls.push(file); return files.get(file) || null; };
+  const first = inspectWorkerReports(panes, {}, 100, stat);
+  assert.deepEqual(first.notices.map(({ text, scope }) => [text, scope]), [
+    ['Worker alpha in pane ws:p1 wrote its report: /work/a/.worker/report.json', 'ws'],
+    ['Worker beta in pane ws:p2 wrote its report: /work/b/.worker/beta/report.json', 'ws'],
+  ]);
+  assert.deepEqual(calls, [
+    '/work/a/.worker/report.json', '/work/a/.worker/alpha/report.json',
+    '/work/b/.worker/report.json', '/work/b/.worker/beta/report.json',
+  ]);
+  const changedStatus = inspectWorkerReports(panes.map((pane) => ({ ...pane, status: 'blocked' })), first.observed, 200, stat);
+  assert.deepEqual(changedStatus.notices.map((notice) => notice.key), first.notices.map((notice) => notice.key));
+  const changedIdentity = inspectWorkerReports([
+    { ...panes[0], agent: 'pi', name: 'renamed', sessionId: 'new-session' },
+  ], first.observed, 150, stat);
+  assert.equal(changedIdentity.observed['ws:p1'].firstSeen, 100);
+  assert.equal(changedIdentity.notices[0].text, 'Worker renamed in pane ws:p1 wrote its report: /work/a/.worker/report.json');
+  files.set('/work/a/.worker/report.json', { isFile: true, mtimeMs: 201 });
+  const edited = inspectWorkerReports(panes, changedStatus.observed, 202, stat);
+  assert.equal(edited.notices.length, 2);
+  assert.ok(edited.notices.some((notice) => notice.key.endsWith(':201')
+    && notice.text === 'Worker alpha in pane ws:p1 wrote its report: /work/a/.worker/report.json'));
+});
+
+test('report inspection accepts metadata only and ignores non-files and stale reports', async () => {
+  const { inspectWorkerReports } = await import('../src/worker-failures.js');
+  const pane = { id: 'ws:p1', workspace: 'ws', cwd: '/work', name: 'alpha', agent: 'codex' };
+  const calls = [];
+  const result = inspectWorkerReports([pane], {}, 500, (file) => {
+    calls.push(file);
+    if (file === '/work/.worker/report.json') return { isFile: false, mtimeMs: 900 };
+    if (file === '/work/.worker/alpha/report.json') return { isFile: true, mtimeMs: 499 };
+    return null;
+  });
+  assert.deepEqual(calls, ['/work/.worker/report.json', '/work/.worker/alpha/report.json']);
+  assert.deepEqual(result.notices, []);
+  assert.equal(result.observed['ws:p1'].firstSeen, 500);
+});

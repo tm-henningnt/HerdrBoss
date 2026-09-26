@@ -11,7 +11,7 @@ import { loadPolicy, clearExpiredOneOffGoals, deriveControl, providerFor, pickSu
 import { recordQuotaSnapshot } from './usage.js';
 import { listBrowserSessions } from './browser-pool.js';
 import { listHandoffs, expireHandoff } from './handoff.js';
-import { inspectWorkerTransitions, applyWorkerFailureStatuses } from './worker-failures.js';
+import { inspectWorkerTransitions, inspectWorkerReports, applyWorkerFailureStatuses } from './worker-failures.js';
 
 const MEMORY_FILE = path.join(DATA_DIR, 'memory.json');
 const STATE_FILE = path.join(DATA_DIR, 'state.json');
@@ -113,6 +113,10 @@ export class Engine extends EventEmitter {
       ) : { observed: this.memory.workerObserved || {}, failures: this.memory.workerFailures || {}, notices: [] };
       this.memory.workerObserved = workerTransitions.observed;
       this.memory.workerFailures = workerTransitions.failures;
+      const reportTransitions = herdr ? inspectWorkerReports(
+        herdr.panes, this.memory.workerReportObserved, now,
+      ) : { observed: this.memory.workerReportObserved || {}, notices: [] };
+      this.memory.workerReportObserved = reportTransitions.observed;
       if (machine) {
         const h = (this.memory.history ||= []);
         h.push({ t: now, load: machine.load[0], mem: machine.memFreePercent });
@@ -155,6 +159,7 @@ export class Engine extends EventEmitter {
       catch { snap.standbyPanes = []; }
       const evaluation = evaluate(snap, this.cfg, this.memory.paneSince, now, policy);
       evaluation.alerts.push(...workerTransitions.notices);
+      evaluation.alerts.push(...reportTransitions.notices);
       this.memory.quotaRecoveries ||= {};
       // Older records used the reset timestamp as part of the key. Codexbar can
       // adjust that timestamp by a minute, so consolidate them by provider/window.

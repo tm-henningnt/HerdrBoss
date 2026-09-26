@@ -123,6 +123,9 @@ test('brief rendering fills known slots and rejects an unknown slot', () => {
   }), 'Worker demo in sample: do the work / - src/\n- test/');
   assert.equal(renderBrief('Issue {{issue}}', {}), 'Issue (none)');
   assert.throws(() => renderBrief('Bad {{notAContractSlot}}', {}), /Unknown brief template slot/);
+  const template = fs.readFileSync(path.resolve('kit/templates/worker-brief.md'), 'utf8');
+  assert.match(template, /WORKER REPORT.*WORKER QUESTION.*fails, record the failed command and reason in the worker report, then stop/s);
+  assert.match(template, /Boss monitors report metadata and will notify the orchestrator/);
 });
 
 test('worker report and delegated run validation enforce their handoff schemas', () => {
