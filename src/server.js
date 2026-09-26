@@ -143,7 +143,7 @@ export function serve(cfg, { readOnlyPreview = false, createEngine = (config, op
       if (p === '/api/models' && req.method === 'GET') return send(res, 200, loadModels().kinds);
       if (p === '/api/policy' && req.method === 'GET') return send(res, 200, loadPolicy());
       if (p === '/api/policy' && req.method === 'PUT') {
-        const errors = savePolicy(await jsonBody(req), loadModels());
+        const errors = savePolicy(await jsonBody(req), loadModels(), { quotas: engine.state?.quotas || [], now: Date.now() });
         if (errors.length) return send(res, 400, { ok: false, errors });
         const state = await engine.tick();
         return send(res, 200, { ok: true, policy: loadPolicy(), control: state.control });

@@ -30,7 +30,7 @@ export const POLICY_DEFAULTS = {
   disabledModels: {},
   // The provider quota for a model in one harness. A null route is unmetered.
   harnessRoutes: {},
-  // A pacing goal is the most percent of a live quota window the Owner wants to use by its reset.
+  // A pacing goal is the most percent of a live quota window the Owner wants to use by its end.
   // It is keyed by provider and by the stable window key from quota collection. An absent goal means 100%.
   pacingGoals: {},
   projects: {},
@@ -202,8 +202,14 @@ export function validatePolicy(value, models) {
   if (!value.pacingGoals || typeof value.pacingGoals !== 'object' || Array.isArray(value.pacingGoals)) errors.push('pacingGoals must be an object.');
   else for (const [provider, windows] of Object.entries(value.pacingGoals)) {
     if (!PROVIDERS.has(provider) || !windows || typeof windows !== 'object' || Array.isArray(windows)) { errors.push(`invalid pacingGoals entry for ${provider}.`); continue; }
-    for (const [key, percent] of Object.entries(windows)) {
+    for (const [key, goal] of Object.entries(windows)) {
+      const percent = isObject(goal) ? goal.percent : goal;
       if (!WINDOW_KEYS.has(key) || !Number.isInteger(percent) || percent < 0 || percent > 100) errors.push(`pacingGoals.${provider}.${key} must be a whole percentage from 0 to 100.`);
+      if (!isObject(goal)) continue;
+      if (Object.keys(goal).some((field) => !['percent', 'end'].includes(field))) errors.push(`pacingGoals.${provider}.${key} has an unknown field.`);
+      const end = goal.end;
+      if (end === undefined) continue;
+      if (!isObject(end) || (end.type === 'at' && (typeof end.at !== 'string' || !Number.isFinite(Date.parse(end.at)) || new Date(end.at).toISOString() !== end.at || Object.keys(end).some((field) => !['type', 'at', 'resetAt'].includes(field)) || (end.resetAt !== undefined && (typeof end.resetAt !== 'string' || !Number.isFinite(Date.parse(end.resetAt)) || new Date(end.resetAt).toISOString() !== end.resetAt)))) || (end.type === 'hoursBeforeReset' && (!Number.isSafeInteger(end.hours) || end.hours < 1 || Object.keys(end).some((field) => !['type', 'hours'].includes(field)))) || !['at', 'hoursBeforeReset'].includes(end.type)) errors.push(`pacingGoals.${provider}.${key}.end must be an ISO time or a positive whole number of hours before reset.`);
     }
   }
   if (!value.projects || typeof value.projects !== 'object' || Array.isArray(value.projects)) errors.push('projects must be an object.');
@@ -221,16 +227,64 @@ export function validatePolicy(value, models) {
   return errors;
 }
 
-export function savePolicy(value, models) {
+function writePolicy(value, file) {
+  const { ignoredRoutes: _derived, ...stored } = value;
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, `${JSON.stringify(stored, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
+  fs.renameSync(tmp, file);
+}
+
+export function savePolicy(value, models, { file = FILE, quotas = null, now = Date.now() } = {}) {
   // ignoredRoutes is derived at load time, so a draft that carries it back does not store it.
   const { ignoredRoutes: _derived, ...stored } = value || {};
   const merged = { ...POLICY_DEFAULTS, ...stored, machine: { ...POLICY_DEFAULTS.machine, ...stored.machine }, providerModes: { ...POLICY_DEFAULTS.providerModes, ...stored.providerModes } };
   const errors = validatePolicy(merged, models);
+  if (quotas) errors.push(...validatePacingGoalEnds(merged, quotas, now));
   if (errors.length) return errors;
-  const tmp = `${FILE}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, `${JSON.stringify(merged, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
-  fs.renameSync(tmp, FILE);
+  if (quotas) for (const [provider, windows] of Object.entries(merged.pacingGoals || {})) for (const [key, goal] of Object.entries(windows || {})) {
+    if (goal?.end?.type !== 'at') continue;
+    const window = quotas.find((q) => q.provider === provider && !q.error)?.windows?.find((w) => w.key === key && !w.extra);
+    goal.end.resetAt = new Date(window.resetsAt).toISOString();
+  }
+  writePolicy(merged, file);
   return [];
+}
+
+export function validatePacingGoalEnds(policy, quotas, now = Date.now()) {
+  const errors = [];
+  for (const [provider, windows] of Object.entries(policy.pacingGoals || {})) for (const [key, goal] of Object.entries(windows || {})) {
+    if (!isObject(goal?.end)) continue;
+    const window = (quotas || []).find((q) => q.provider === provider && !q.error)?.windows?.find((w) => w.key === key && !w.extra);
+    const reset = Date.parse(window?.resetsAt);
+    const start = reset - window?.windowMinutes * 60000;
+    const end = pacingGoalEnd(policy, provider, window);
+    const name = `${provider} ${window?.label || key}`;
+    if (!Number.isFinite(reset) || !Number.isFinite(start)) errors.push(`${name}: wait for a measured quota window before setting an end.`);
+    else if (goal.end.type === 'at' && goal.end.resetAt && Date.parse(goal.end.resetAt) !== reset) errors.push(`${name}: the quota window reset. Refresh the policy before saving.`);
+    else if (!Number.isFinite(end) || end <= now) errors.push(`${name}: the goal end must be after now.`);
+    else if (end > reset) errors.push(`${name}: the goal end must be at or before reset.`);
+    else if (end <= start) errors.push(`${name}: the goal end must be after the window start.`);
+  }
+  return errors;
+}
+
+// Remove a one-off goal when its time passes or the collector moves to another window reset.
+export function clearExpiredOneOffGoals(policy, quotas, now = Date.now(), { file = FILE, log = () => {} } = {}) {
+  const cleared = [];
+  for (const [provider, windows] of Object.entries(policy.pacingGoals || {})) for (const [key, goal] of Object.entries(windows || {})) {
+    if (goal?.end?.type !== 'at') continue;
+    const window = (quotas || []).find((q) => q.provider === provider && !q.error)?.windows?.find((w) => w.key === key && !w.extra);
+    const resetChanged = goal.end.resetAt && window?.resetsAt && Date.parse(goal.end.resetAt) !== Date.parse(window.resetsAt);
+    if (Date.parse(goal.end.at) > now && !resetChanged) continue;
+    delete windows[key];
+    if (!Object.keys(windows).length) delete policy.pacingGoals[provider];
+    cleared.push(`${provider}/${key}`);
+  }
+  if (cleared.length) {
+    writePolicy(policy, file);
+    for (const name of cleared) log(`Cleared one-off pacing goal ${name}.`);
+  }
+  return cleared;
 }
 
 export function providerFor(kind, model, policy = null) {
@@ -298,21 +352,43 @@ function quotaExhaustion(q, now = Date.now()) {
 
 // A goal below 100 lowers the expected-use curve, so the window reaches the goal at its reset instead of full quota.
 export function pacingGoal(policy, provider, key) {
-  const percent = policy?.pacingGoals?.[provider]?.[key];
+  const value = policy?.pacingGoals?.[provider]?.[key];
+  const percent = isObject(value) ? value.percent : value;
   return Number.isInteger(percent) ? percent : 100;
 }
 
+export function pacingGoalEnd(policy, provider, window) {
+  const end = policy?.pacingGoals?.[provider]?.[window?.key]?.end;
+  if (!end || !Number.isFinite(Date.parse(window?.resetsAt))) return null;
+  const reset = Date.parse(window.resetsAt);
+  return end.type === 'at' ? Date.parse(end.at) : end.type === 'hoursBeforeReset' ? reset - end.hours * 3600000 : null;
+}
+
+export function goalSummary(goals) {
+  return (goals || []).map(({ label, percent, end, resolvedEnd }) => {
+    const time = Number.isFinite(resolvedEnd) ? new Intl.DateTimeFormat('en', { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }).format(resolvedEnd) : null;
+    const finish = !end ? 'by reset' : end.type === 'hoursBeforeReset' ? `${end.hours} h before reset${time ? ` (${time})` : ''}` : `by ${time || end.at}`;
+    return `${String(label).toLowerCase()}: goal ${percent}% ${finish}`;
+  }).join('; ');
+}
+
 // The expected-use percentage at the current time, scaled by the goal. Null when no pace forecast exists.
-export function adjustedExpectedPercent(policy, provider, window) {
+export function adjustedExpectedPercent(policy, provider, window, now = Date.now()) {
+  const end = pacingGoalEnd(policy, provider, window);
+  const reset = Date.parse(window?.resetsAt);
+  const start = reset - window?.windowMinutes * 60000;
+  if (Number.isFinite(end) && Number.isFinite(start) && end > start) {
+    return pacingGoal(policy, provider, window.key) * Math.min(1, Math.max(0, (now - start) / (end - start)));
+  }
   if (!Number.isFinite(window?.expectedPercent)) return null;
   return window.expectedPercent * pacingGoal(policy, provider, window.key) / 100;
 }
 
 // A live window is ahead of pace when it will not last to reset, or when its use is above the goal-adjusted expected use.
-export function aheadOfQuotaPace(policy, provider, window) {
+export function aheadOfQuotaPace(policy, provider, window, now = Date.now()) {
   if (!window) return false;
-  const expected = adjustedExpectedPercent(policy, provider, window);
-  return window.willLast === false || (expected != null && window.usedPercent > expected);
+  const expected = adjustedExpectedPercent(policy, provider, window, now);
+  return (pacingGoalEnd(policy, provider, window) == null && window.willLast === false) || (expected != null && window.usedPercent > expected);
 }
 
 // How far a window is ahead of pace; without expected use, its usage percentage.
@@ -321,35 +397,43 @@ const paceScore = (w, expected) => expected != null ? w.usedPercent - expected :
 // Any live window that is ahead of pace makes its provider ahead of pace. The lane reports the worst of them.
 function quotaPressure(q, policy, now = Date.now()) {
   if (policy.providerModes[q.provider] === 'ignore' || q.error) return null;
-  return (q.windows || []).filter((w) => liveWindow(w, now) && aheadOfQuotaPace(policy, q.provider, w))
-    .sort((a, b) => paceScore(b, adjustedExpectedPercent(policy, q.provider, b)) - paceScore(a, adjustedExpectedPercent(policy, q.provider, a)))[0] || null;
+  return (q.windows || []).filter((w) => liveWindow(w, now) && aheadOfQuotaPace(policy, q.provider, w, now))
+    .sort((a, b) => paceScore(b, adjustedExpectedPercent(policy, q.provider, b, now)) - paceScore(a, adjustedExpectedPercent(policy, q.provider, a, now)))[0] || null;
 }
 
 // One state per metered provider: open, pace (ahead of quota pace), reserve (near exhaustion), or unknown.
 export function laneStatus(quotas, policy, now = Date.now()) {
   const lanes = {};
   for (const q of quotas || []) {
+    const goals = (q.windows || []).filter((w) => !w.extra && Object.hasOwn(policy.pacingGoals?.[q.provider] || {}, w.key)).map((w) => ({
+      label: w.label, percent: pacingGoal(policy, q.provider, w.key), end: policy.pacingGoals[q.provider][w.key]?.end || null,
+      resolvedEnd: pacingGoalEnd(policy, q.provider, w),
+    }));
     const resetWindows = (q.windows || []).filter((w) => !w.extra && w.resetsAt && Date.parse(w.resetsAt) <= now).map((w) => w.label);
-    if (q.error) { lanes[q.provider] = { state: 'unknown', reason: String(q.error).slice(0, 200), resetWindows }; continue; }
+    if (q.error) { lanes[q.provider] = { state: 'unknown', reason: String(q.error).slice(0, 200), resetWindows, goals }; continue; }
     const exhausted = quotaExhaustion(q, now);
     if (exhausted) {
-      lanes[q.provider] = { state: 'exhausted', window: exhausted.label, usedPercent: exhausted.usedPercent, resetAt: exhausted.resetsAt || null, resetWindows };
+      lanes[q.provider] = { state: 'exhausted', window: exhausted.label, usedPercent: exhausted.usedPercent, resetAt: exhausted.resetsAt || null, resetWindows, goals };
       continue;
     }
-    if (policy.providerModes[q.provider] === 'ignore') { lanes[q.provider] = { state: 'open', ignored: true, resetWindows }; continue; }
+    if (policy.providerModes[q.provider] === 'ignore') { lanes[q.provider] = { state: 'open', ignored: true, resetWindows, goals }; continue; }
     const risk = quotaRisk(q, policy, now);
     const w = risk || quotaPressure(q, policy, now);
-    if (!w) { lanes[q.provider] = { state: 'open', resetWindows }; continue; }
-    const expectedPercent = adjustedExpectedPercent(policy, q.provider, w);
+    if (!w) { lanes[q.provider] = { state: 'open', resetWindows, goals }; continue; }
+    const expectedPercent = adjustedExpectedPercent(policy, q.provider, w, now);
     const overPercent = expectedPercent != null ? w.usedPercent - expectedPercent : null;
     const resetAt = Date.parse(w.resetsAt) || Infinity;
-    // The goal is reached at the reset, so an unused provider catches up at the goal rate. A zero goal never catches up.
+    // An unused provider catches up along the configured goal line. A zero goal never catches up.
     const goal = pacingGoal(policy, q.provider, w.key);
+    const end = pacingGoalEnd(policy, q.provider, w);
+    const start = resetAt - w.windowMinutes * 60000;
     const backOnPaceMs = risk ? resetAt
-      : overPercent != null && overPercent > 0 && w.windowMinutes && goal > 0 ? Math.min(now + (overPercent / goal) * w.windowMinutes * 60000, resetAt) : resetAt;
+      : overPercent != null && overPercent > 0 && goal > 0 && Number.isFinite(end) && Number.isFinite(start) && w.usedPercent <= goal
+        ? Math.min(start + w.usedPercent / goal * (end - start), resetAt)
+        : overPercent != null && overPercent > 0 && w.windowMinutes && goal > 0 && !Number.isFinite(end) ? Math.min(now + (overPercent / goal) * w.windowMinutes * 60000, resetAt) : resetAt;
     lanes[q.provider] = {
       state: risk ? 'reserve' : 'pace', window: w.label, usedPercent: w.usedPercent, expectedPercent,
-      overPercent, backOnPaceAt: Number.isFinite(backOnPaceMs) ? new Date(backOnPaceMs).toISOString() : null, resetWindows,
+      overPercent, backOnPaceAt: Number.isFinite(backOnPaceMs) ? new Date(backOnPaceMs).toISOString() : null, resetWindows, goals,
     };
   }
   return lanes;

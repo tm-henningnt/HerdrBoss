@@ -4,7 +4,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { appendDelegatedRun, compareChangedPaths, gitChangedPaths, gitLog, readJson, validateAllowedPaths, validateScopePaths, validateWorkerReport } from './orchestration.js';
 import { recordUsage } from '../usage.js';
-import { mergeModels, modelEnabled, providerFor, selectModel, unmeteredSummary } from '../control.js';
+import { goalSummary, mergeModels, modelEnabled, providerFor, selectModel, unmeteredSummary } from '../control.js';
 import { DATA_DIR } from '../config.js';
 import { workerStatusFromState } from '../worker-failures.js';
 
@@ -173,12 +173,14 @@ function inAbout(iso, now) {
 }
 
 export function describeLane(provider, lane, now = Date.now()) {
-  if (!lane || lane.state === 'open') return `${provider} open`;
-  if (lane.state === 'unknown') return `${provider} unknown (no quota data)`;
-  if (lane.state === 'exhausted') return `${provider} exhausted: ${lane.usedPercent}% used in the ${lane.window} window; exhausted until ${lane.resetAt || 'an unknown time'}`;
+  const goals = goalSummary(lane?.goals);
+  const suffix = goals ? `; ${goals}` : '';
+  if (!lane || lane.state === 'open') return `${provider} open${suffix}`;
+  if (lane.state === 'unknown') return `${provider} unknown (no quota data)${suffix}`;
+  if (lane.state === 'exhausted') return `${provider} exhausted: ${lane.usedPercent}% used in the ${lane.window} window; exhausted until ${lane.resetAt || 'an unknown time'}${suffix}`;
   const numbers = `${lane.usedPercent}% used${lane.expectedPercent != null ? ` against ${lane.expectedPercent}% expected` : ''} in the ${lane.window} window`;
-  if (lane.state === 'reserve') return `${provider} near exhaustion: ${numbers}; resets in ${inAbout(lane.backOnPaceAt, now)}`;
-  return `${provider} ahead of pace: ${numbers}; back on pace in about ${inAbout(lane.backOnPaceAt, now)} if unused`;
+  if (lane.state === 'reserve') return `${provider} near exhaustion: ${numbers}; resets in ${inAbout(lane.backOnPaceAt, now)}${suffix}`;
+  return `${provider} ahead of pace: ${numbers}; back on pace in about ${inAbout(lane.backOnPaceAt, now)} if unused${suffix}`;
 }
 
 export function describeUnmetered(lane, project = null) {

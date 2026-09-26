@@ -146,7 +146,7 @@ test('the policy API saves per-harness model assignments and rejects unsafe mode
   const { server, close } = serve(cfg, {
     createEngine: () => {
       const engine = new EventEmitter();
-      engine.state = { control: null };
+      engine.state = { control: null, quotas: [{ provider: 'codex', windows: [{ key: 'primary', label: 'Daily', windowMinutes: 1440, resetsAt: new Date(Date.now() + 12 * 3600000).toISOString() }] }] };
       engine.tick = async () => engine.state;
       engine.log = () => {};
       return engine;
@@ -206,6 +206,20 @@ test('the policy API saves per-harness model assignments and rejects unsafe mode
   assert.equal(overriddenPolicy.modelProviders['gpt-6-sol'], 'claude', 'the raw legacy route is kept');
   assert.deepEqual(overriddenPolicy.ignoredRoutes, {}, 'the override makes the legacy route compatible');
   assert.equal(JSON.parse(fs.readFileSync(path.join(dataDir, 'policy.json'), 'utf8')).ignoredRoutes, undefined, 'the derived field is not stored');
+  const resetAt = (await (await fetch(`${base}/api/state`)).json()).quotas[0].windows[0].resetsAt;
+  const timed = { ...draft, pacingGoals: { codex: { primary: { percent: 80, end: { type: 'at', at: new Date(Date.now() + 6 * 3600000).toISOString() } } } } };
+  const acceptedGoal = await put(timed);
+  assert.equal(acceptedGoal.status, 200);
+  assert.equal((await acceptedGoal.json()).policy.pacingGoals.codex.primary.end.resetAt, resetAt);
+  for (const [bad, reason] of [
+    [new Date(Date.now() - 3600000).toISOString(), /after now/],
+    [new Date(Date.parse(resetAt) + 3600000).toISOString(), /at or before reset/],
+  ]) {
+    const rejectedGoal = await put({ ...timed, pacingGoals: { codex: { primary: { percent: 80, end: { type: 'at', at: bad } } } } });
+    assert.equal(rejectedGoal.status, 400);
+    assert.match((await rejectedGoal.json()).errors.join(' '), reason);
+  }
+  assert.equal((await (await fetch(`${base}/api/policy`)).json()).pacingGoals.codex.primary.end.resetAt, resetAt, 'a rejected end keeps the saved goal');
   const catalog = await (await fetch(`${base}/api/models`)).json();
   assert.ok(!catalog.pi.allowedModels.includes('opencode-go/glm-5.2'), 'the model catalog endpoint stays the kit catalog');
 });

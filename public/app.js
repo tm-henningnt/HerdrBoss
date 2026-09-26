@@ -360,6 +360,30 @@ function harnessSection(kind, cfg, d) {
   </section>`;
 }
 
+function localDateTime(iso) {
+  const date = new Date(iso);
+  if (!Number.isFinite(date.getTime())) return '';
+  const two = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())}T${two(date.getHours())}:${two(date.getMinutes())}`;
+}
+
+function pacingDraftError(draft, quotas, now = Date.now()) {
+  for (const [provider, windows] of Object.entries(draft.pacingGoals || {})) for (const [key, goal] of Object.entries(windows || {})) {
+    if (!goal?.end) continue;
+    const window = (quotas || []).find((q) => q.provider === provider && !q.error)?.windows?.find((w) => w.key === key && !w.extra);
+    const reset = Date.parse(window?.resetsAt);
+    const start = reset - window?.windowMinutes * 60000;
+    const end = goal.end.type === 'at' ? Date.parse(goal.end.at) : reset - goal.end.hours * 3600000;
+    const name = `${PROVIDERS[provider] || provider} ${window?.label || key}`;
+    if (goal.end.type === 'hoursBeforeReset' && (!Number.isSafeInteger(goal.end.hours) || goal.end.hours < 1)) return `${name}: enter a positive whole number of hours before reset.`;
+    if (!Number.isFinite(reset) || !Number.isFinite(start)) return `${name}: wait for a measured quota window before setting an end.`;
+    if (!Number.isFinite(end) || end <= now) return `${name}: the goal end must be after now.`;
+    if (end > reset) return `${name}: the goal end must be at or before reset.`;
+    if (end <= start) return `${name}: the goal end must be after the window start.`;
+  }
+  return null;
+}
+
 function settingsView(s) {
   ensureDraft(s);
   if (!policyDraft) return '';
@@ -377,15 +401,20 @@ function settingsView(s) {
   const goalWindows = [];
   for (const q of s.quotas || []) {
     if (q.error) continue;
-    for (const w of q.windows || []) if (!w.extra && w.key != null) goalWindows.push({ provider: q.provider, key: w.key, label: w.label });
+    for (const w of q.windows || []) if (!w.extra && w.key != null) goalWindows.push({ provider: q.provider, key: w.key, label: w.label, resetsAt: w.resetsAt });
   }
   const goalRows = goalWindows.length
-    ? goalWindows.map(({ provider, key, label }) => {
+    ? goalWindows.map(({ provider, key, label, resetsAt }) => {
       const value = d.pacingGoals?.[provider]?.[key];
-      return `<label class="setting-line"><span>${esc(PROVIDERS[provider] || provider)} ${esc(label)} goal %</span><input type="number" min="0" max="100" step="1" placeholder="100" value="${value ?? ''}" data-pacing-goal="${esc(provider)}:${esc(key)}"></label>`;
+      const percent = typeof value === 'object' ? value.percent : value;
+      const end = typeof value === 'object' ? value.end : null;
+      const id = `${esc(provider)}:${esc(key)}`;
+      const kind = end?.type || 'reset';
+      const endValue = kind === 'at' ? localDateTime(end.at) : end?.hours ?? '';
+      return `<div class="setting-line" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));align-items:end;margin-bottom:12px"><label style="display:grid;gap:4px"><span>${esc(PROVIDERS[provider] || provider)} ${esc(label)} goal %</span><input type="number" min="0" max="100" step="1" placeholder="100" value="${percent ?? ''}" data-pacing-goal="${id}"></label><label style="display:grid;gap:4px"><span>Goal end</span><select data-pacing-end-type="${id}"><option value="reset" ${kind === 'reset' ? 'selected' : ''}>At reset</option><option value="at" ${kind === 'at' ? 'selected' : ''}>One-off local date and time</option><option value="hoursBeforeReset" ${kind === 'hoursBeforeReset' ? 'selected' : ''}>Hours before reset, every window</option></select></label>${kind === 'at' ? `<label style="display:grid;gap:4px"><span>Local date and time</span><input type="datetime-local" value="${esc(endValue)}" data-pacing-end-value="${id}"></label>` : kind === 'hoursBeforeReset' ? `<label style="display:grid;gap:4px"><span>Whole hours before reset</span><input type="number" min="1" step="1" value="${esc(endValue)}" data-pacing-end-value="${id}"></label>` : ''}<span class="setting-help" style="grid-column:1/-1">Resets ${esc(resetsAt || 'unknown')}${end ? ` · Goal ${esc(percent)}% ${kind === 'at' ? `by ${esc(localDateTime(end.at) || 'choose a time')}` : `${esc(end.hours)} h before reset`}` : ''}</span></div>`;
     }).join('')
     : '<p class="setting-help">No measured quota window yet. A goal field appears after the next quota reading.</p>';
-  const quotaPanel = `<section class="panel"><h2>Provider quotas</h2><h3>Quota mode</h3>${providerRows}<p class="setting-help">Ignore quota turns off pacing and handover alerts for that provider.</p><h3 class="quota-goals">Pacing goals</h3><p class="setting-help">The most percent of a window to use by its reset. Blank means 100%.</p>${goalRows}</section>`;
+  const quotaPanel = `<section class="panel"><h2>Provider quotas</h2><h3>Quota mode</h3>${providerRows}<p class="setting-help">Ignore quota turns off pacing and handover alerts for that provider.</p><h3 class="quota-goals">Pacing goals</h3><p class="setting-help">The most percent of a window to use by its end. Blank means 100%. A one-off end uses your local time. A recurring end is a whole number of hours before reset.</p>${goalRows}</section>`;
   return `<header class="page-intro"><div><h1>Settings</h1><p>Assign models and provider routes in each harness. Set provider quotas and machine limits below.</p></div></header><section id="settings-plane" class="control-shell"><section class="panel"><h2>Harnesses</h2><p class="setting-help harness-help">Clear a model box to stop that harness from using it. The same model in another harness keeps its own box and provider.</p>${ignoredCount ? `<p class="setting-help harness-help" role="note" style="color: var(--warn)">${ignoredCount} legacy provider route${ignoredCount === 1 ? ' is' : 's are'} not compatible with ${ignoredCount === 1 ? 'its harness' : 'their harnesses'}. Herdr Boss treats ${ignoredCount === 1 ? 'it' : 'them'} as Unmetered. Choose a provider in each marked row before you apply the policy.</p>` : ''}<div class="harness-grid">${harnesses}</div></section><div class="settings-grid">${quotaPanel}${machineSettings}</div><div class="control-actions ${policyDirty ? 'pending' : ''}"><span data-policy-status role="status" aria-live="polite">${esc(saveMessage || (policyDirty ? 'Unsaved changes · Apply policy to keep them' : 'Policy saved'))}</span><button id="save-policy" ${policyDirty ? '' : 'disabled'}>Apply policy</button></div></section>`;
 }
 
@@ -1196,7 +1225,7 @@ const HELP = {
     <p>An old <code>modelProviders</code> route can send a Codex or Claude model to another provider. Herdr Boss ignores that route and treats the model as Unmetered in that harness. The row shows <b>Ignored</b> and a note. Choose a provider in the row to store a compatible route for that harness. Apply policy refuses a save while an available Codex or Claude harness still has an ignored route.</p>
     <p>A model can be in more than one harness. Each harness keeps its own box and provider for it, so a change in one harness does not change another.</p>
     <h3>Add a model</h3><p>Type a model string in a harness section and select <b>Add model</b>. Use letters, digits, dots, underscores, slashes, and hyphens. Spaces and shell characters are refused. A new model is marked <b>local</b>, starts unmetered, and is stored in the local policy, not in <code>kit/models.json</code>. Select <b>Remove</b> to delete a local model.</p>
-    <h3>Provider quotas</h3><p>Choose <b>Manage pace</b> or <b>Ignore quota</b> for each provider. Ignore quota turns off pacing and handover warnings below 100%. A live window at 100% or more still exhausts the provider until its reset, and worker start refuses it unless you use <code>--force</code>. A pacing goal is the most percent of a quota window that you want to use by its reset. Herdr Boss scales the expected-use pace to the goal. An empty field means 100%.</p>
+    <h3>Provider quotas</h3><p>Choose <b>Manage pace</b> or <b>Ignore quota</b> for each provider. Ignore quota turns off pacing and handover warnings below 100%. A live window at 100% or more still exhausts the provider until its reset, and worker start refuses it unless you use <code>--force</code>. Enter a whole pacing goal percent from 0 to 100. Leave it blank for 100%. Choose <b>At reset</b>, a one-off local date and time, or whole hours before each reset. A goal end must be after now, after the window start, and no later than reset. A one-off goal clears after its time or window reset. A recurring end stays in later windows.</p>
     <p>The Machine section sets the guard, CPU limits, 5-minute load backstops, the Owner idle period, disk warning thresholds, and the notice cooldown. Turn the guard off to stop CPU and load warnings and worker-start blocks. Choose a pause length to suspend those rules until the expiry time. Select <b>Resume guard</b> to end a pause early. Memory and disk warnings stay on.</p>
     <p>Disk free space is measured on the filesystem that contains the Herdr Boss data directory. The warning threshold defaults to 20 GB free. The critical threshold defaults to 5 GB free. Free percent is information only. Herdr Boss shows it to one decimal place. Disk notices go to the project orchestrator when that project has linked worker worktrees. They include linked and prunable counts.</p>
     <p>When the guard is active, Herdr Boss blocks a worker start if total sampled CPU exceeds its configured limit or the 5-minute load average exceeds its configured backstop. Leave the away CPU limit or either load backstop blank to disable that threshold.</p>
@@ -1379,14 +1408,19 @@ document.addEventListener('input', (e) => {
   const el = e.target;
   if (el.dataset.policyNumber) policyDraft[el.dataset.policyNumber] = Number(el.value);
   if (el.dataset.policyMachine) { policyDraft.machine ||= {}; policyDraft.machine[el.dataset.policyMachine] = el.value === '' ? null : Number(el.value); }
-  if (el.dataset.pacingGoal) {
-    const [provider, key] = el.dataset.pacingGoal.split(':');
+  if (el.dataset.pacingGoal || el.dataset.pacingEndValue) {
+    const [provider, key] = (el.dataset.pacingGoal || el.dataset.pacingEndValue).split(':');
     policyDraft.pacingGoals ||= {};
     policyDraft.pacingGoals[provider] ||= {};
-    if (el.value === '') {
+    const old = policyDraft.pacingGoals[provider][key];
+    if (el.dataset.pacingGoal && el.value === '') {
       delete policyDraft.pacingGoals[provider][key];
       if (!Object.keys(policyDraft.pacingGoals[provider]).length) delete policyDraft.pacingGoals[provider];
-    } else policyDraft.pacingGoals[provider][key] = Number(el.value);
+    } else if (el.dataset.pacingGoal) {
+      policyDraft.pacingGoals[provider][key] = typeof old === 'object' ? { ...old, percent: Number(el.value) } : Number(el.value);
+    } else if (typeof old === 'object' && old.end?.type === 'at') {
+      old.end.at = el.value && Number.isFinite(new Date(el.value).getTime()) ? new Date(el.value).toISOString() : '';
+    } else if (typeof old === 'object' && old.end?.type === 'hoursBeforeReset') old.end.hours = el.value === '' ? null : Number(el.value);
   }
   markPolicyDirty();
 });
@@ -1474,6 +1508,17 @@ document.addEventListener('change', (e) => {
   if (!e.target.closest('#control-plane, #settings-plane') || !policyDraft || e.target.dataset.addModelInput) return;
   const el = e.target;
   const d = policyDraft;
+  if (el.dataset.pacingEndType) {
+    const [provider, key] = el.dataset.pacingEndType.split(':');
+    d.pacingGoals ||= {};
+    d.pacingGoals[provider] ||= {};
+    const old = d.pacingGoals[provider][key];
+    const percent = typeof old === 'object' ? old.percent : old ?? 100;
+    d.pacingGoals[provider][key] = el.value === 'reset' ? percent : { percent, end: el.value === 'at' ? { type: 'at', at: '' } : { type: 'hoursBeforeReset', hours: null } };
+    markPolicyDirty();
+    lastRender = ''; render(true);
+    return;
+  }
   if (el.dataset.policyMachine) { d.machine ||= {}; d.machine[el.dataset.policyMachine] = el.value === '' ? null : Number(el.value); }
   if (el.dataset.policyMachineBool) { d.machine ||= {}; d.machine[el.dataset.policyMachineBool] = el.checked; }
   if (el.dataset.policyBool) d[el.dataset.policyBool] = el.checked;
@@ -1864,6 +1909,8 @@ document.addEventListener('click', async (e) => {
   if (e.target.id === 'save-policy' && policyDraft) {
     e.target.disabled = true;
     try {
+      const pacingError = pacingDraftError(policyDraft, state?.quotas);
+      if (pacingError) throw new Error(pacingError);
       const response = await fetch('/api/policy', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(policyDraft) });
       const result = await response.json();
       if (!response.ok) throw new Error((result.errors || [result.error || 'The policy could not be saved.']).join(' '));

@@ -661,6 +661,97 @@ test('a pacing goal makes a willLast window ahead of pace and scales its numbers
   assert.equal(Date.parse(lane.backOnPaceAt) - now, 5 / 80 * 10080 * 60000);
 });
 
+test('timed pacing goals use the live window start and end for pace and recovery', async () => {
+  const { adjustedExpectedPercent, laneStatus } = await import('../src/control.js');
+  const now = Date.parse('2026-09-25T12:00:00Z');
+  const window = { key: 'primary', label: 'Daily', usedPercent: 40, expectedPercent: 50, willLast: true,
+    windowMinutes: 1440, resetsAt: '2026-09-26T00:00:00Z' };
+  const timed = policy({ pacingGoals: { codex: { primary: { percent: 80, end: { type: 'at', at: '2026-09-25T18:00:00.000Z' } } } } });
+  assert.ok(Math.abs(adjustedExpectedPercent(timed, 'codex', window, now) - 80 * 12 / 18) < 1e-10);
+  window.willLast = false;
+  assert.equal(laneStatus([{ provider: 'codex', windows: [window] }], timed, now).codex.state, 'open', 'a timed goal uses its line for pace even when the reset forecast is negative');
+  window.usedPercent = 60;
+  const lane = laneStatus([{ provider: 'codex', windows: [window] }], timed, now).codex;
+  assert.equal(lane.state, 'pace');
+  assert.ok(Math.abs(lane.overPercent - (60 - 80 * 12 / 18)) < 1e-10);
+  assert.equal(lane.backOnPaceAt, '2026-09-25T13:30:00.000Z');
+  assert.equal(adjustedExpectedPercent(timed, 'codex', window, Date.parse('2026-09-25T19:00:00Z')), 80);
+});
+
+test('timed goals rank the worst window and the least-over provider', async () => {
+  const { deriveControl, laneStatus, leastOverProvider } = await import('../src/control.js');
+  const now = Date.parse('2026-09-25T12:00:00Z');
+  const quotas = [
+    { provider: 'codex', windows: [
+      { key: 'primary', label: 'Daily', usedPercent: 60, expectedPercent: 50, willLast: true, windowMinutes: 1440, resetsAt: '2026-09-26T00:00:00Z' },
+      { key: 'secondary', label: 'Weekly', usedPercent: 70, expectedPercent: 50, willLast: true, windowMinutes: 10080, resetsAt: '2026-09-29T00:00:00Z' },
+    ] },
+    { provider: 'claude', windows: [{ key: 'primary', label: 'Daily', usedPercent: 55, expectedPercent: 50, willLast: true, windowMinutes: 1440, resetsAt: '2026-09-26T00:00:00Z' }] },
+  ];
+  const timed = policy({ pacingGoals: { codex: { primary: { percent: 80, end: { type: 'at', at: '2026-09-25T18:00:00.000Z' } } } } });
+  assert.equal(deriveControl({ ...snapshot(), quotas }, timed, models, {}, now).pressures.codex.label, 'Weekly');
+  assert.equal(leastOverProvider(laneStatus(quotas, timed, now)), 'claude');
+});
+
+test('recurring goal resolves against each new reset and keeps its offset', async () => {
+  const { adjustedExpectedPercent } = await import('../src/control.js');
+  const goal = policy({ pacingGoals: { codex: { primary: { percent: 80, end: { type: 'hoursBeforeReset', hours: 6 } } } } });
+  for (const [reset, now] of [['2026-09-26T00:00:00Z', '2026-09-25T12:00:00Z'], ['2026-09-27T00:00:00Z', '2026-09-26T12:00:00Z']]) {
+    const window = { key: 'primary', expectedPercent: 50, windowMinutes: 1440, resetsAt: reset };
+    assert.ok(Math.abs(adjustedExpectedPercent(goal, 'codex', window, Date.parse(now)) - 80 * 12 / 18) < 1e-10);
+  }
+});
+
+test('timed goal validation checks end against now, start, and reset', async () => {
+  const { validatePacingGoalEnds } = await import('../src/control.js');
+  const now = Date.parse('2026-09-25T12:00:00Z');
+  const quotas = [{ provider: 'codex', windows: [{ key: 'primary', label: 'Daily', windowMinutes: 1440, resetsAt: '2026-09-26T00:00:00Z' }] }];
+  const at = (time) => policy({ pacingGoals: { codex: { primary: { percent: 80, end: { type: 'at', at: time } } } } });
+  assert.deepEqual(validatePacingGoalEnds(at('2026-09-25T18:00:00.000Z'), quotas, now), []);
+  assert.match(validatePacingGoalEnds(at('2026-09-25T11:00:00.000Z'), quotas, now).join(' '), /after now/);
+  assert.match(validatePacingGoalEnds(at('2026-09-26T01:00:00.000Z'), quotas, now).join(' '), /at or before reset/);
+  const offset = (hours) => policy({ pacingGoals: { codex: { primary: { percent: 80, end: { type: 'hoursBeforeReset', hours } } } } });
+  assert.match(validatePacingGoalEnds(offset(25), quotas, Date.parse('2026-09-24T00:00:00Z')).join(' '), /after the window start/);
+  assert.deepEqual(validatePacingGoalEnds(offset(6), quotas, now), []);
+  assert.match(validatePolicy(offset(0), models).join(' '), /positive whole number/);
+  assert.deepEqual(validatePolicy(at('2026-09-25T18:00:00.000Z'), models), []);
+});
+
+test('one-off goals clear at their end or window reset, persist, and log once', async () => {
+  const { clearExpiredOneOffGoals, savePolicy } = await import('../src/control.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-goal-end-'));
+  const file = path.join(dir, 'policy.json');
+  try {
+    const saved = policy({ pacingGoals: {
+      codex: { primary: { percent: 70, end: { type: 'at', at: '2026-09-25T12:00:00.000Z', resetAt: '2026-09-26T00:00:00.000Z' } } },
+      claude: { primary: { percent: 80, end: { type: 'at', at: '2026-09-25T18:00:00.000Z', resetAt: '2026-09-26T00:00:00.000Z' } }, secondary: { percent: 50, end: { type: 'hoursBeforeReset', hours: 6 } } },
+    } });
+    assert.deepEqual(savePolicy(saved, models, { file }), []);
+    const quotas = [
+      { provider: 'codex', windows: [{ key: 'primary', resetsAt: '2026-09-26T00:00:00Z' }] },
+      { provider: 'claude', windows: [{ key: 'primary', resetsAt: '2026-09-27T00:00:00.000Z' }] },
+    ];
+    const logs = [];
+    assert.deepEqual(clearExpiredOneOffGoals(saved, quotas, Date.parse('2026-09-25T13:00:00Z'), { file, log: (line) => logs.push(line) }), ['codex/primary', 'claude/primary']);
+    assert.deepEqual(clearExpiredOneOffGoals(loadPolicy({ file }), quotas, Date.parse('2026-09-25T13:00:00Z'), { file, log: (line) => logs.push(line) }), []);
+    assert.equal(logs.length, 2);
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).pacingGoals, { claude: { secondary: { percent: 50, end: { type: 'hoursBeforeReset', hours: 6 } } } });
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('configured goals appear in lanes and bulletin while providers are open', async () => {
+  const { laneStatus } = await import('../src/control.js');
+  const { describeLane } = await import('../src/kit/workers.js');
+  const now = Date.parse('2026-09-25T12:00:00Z');
+  const quotas = [{ provider: 'claude', windows: [{ key: 'primary', label: 'Weekly', usedPercent: 10, expectedPercent: 50, windowMinutes: 10080, resetsAt: '2026-09-29T00:00:00Z' }] }];
+  const goals = policy({ pacingGoals: { claude: { primary: { percent: 80, end: { type: 'hoursBeforeReset', hours: 6 } } } } });
+  const lanes = laneStatus(quotas, goals, now);
+  assert.equal(lanes.claude.state, 'open');
+  assert.match(describeLane('claude', lanes.claude, now), /weekly: goal 80% 6 h before reset \(/);
+  const bulletin = renderBulletin({ ...snapshot(), updatedAt: new Date(now).toISOString(), quotas, lanes }, { alerts: [], advice: [] }, {});
+  assert.match(bulletin, /weekly: goal 80% 6 h before reset \(/);
+});
+
 test('least-over ordering uses the goal-adjusted pace score', async () => {
   const { laneStatus, leastOverProvider, deriveControl } = await import('../src/control.js');
   const now = Date.parse('2026-09-25T10:00:00Z');
