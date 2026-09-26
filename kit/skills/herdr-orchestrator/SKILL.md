@@ -75,7 +75,7 @@ description: Use when coordinating delegated workers with Herdr Boss, writing wo
 - Label the orchestrator pane `orch` with `herdr pane rename "$HERDR_PANE_ID" orch`.
 - Use a lowercase, unique worker name.
 - Keep each name within the Herdr agent name limit.
-- Use a separate Herdr tab named `Workers` for worker panes.
+- Give each worker a separate Herdr tab labelled `W <name>` in the verified caller workspace. The tab has one root pane. Do not reuse a shared tab or split a pane.
 - Use separate worktrees for parallel changes.
 - Give parallel changes separate branches and worktrees with independent scopes.
 - Use one writer per shared module.
@@ -128,7 +128,7 @@ herdr-boss worker start <name> --kind <kind> --task-file <file> --allow <path>
 - Use `herdr agent` commands for recognized agent lifecycle and prompts.
 - Use `herdr pane` commands for shells and raw terminal control.
 - Never run `herdr pane run` in a pane occupied by an agent.
-- Create a pane with `--cwd <dir>` when it must start in another worktree.
+- Create one `W <name>` tab in the verified caller workspace for each worker. Give it one root pane with `--cwd <dir>` for the worker worktree. Do not reuse a shared tab or split a pane.
 - Send the complete brief only after the worker pane is ready.
 - Wait for an agent instead of polling it.
 - Use `herdr agent wait <name> --until idle --timeout <ms>` for long work.
@@ -136,7 +136,7 @@ herdr-boss worker start <name> --kind <kind> --task-file <file> --allow <path>
 - Use `herdr pane wait-output <pane> --match <text>` when a command produces the event.
 - Do not reread an unchanged pane in a loop.
 - Use `herdr agent get` and `herdr agent read` to inspect a worker state or dialog.
-- Read a blocked dialog before answering it.
+- Read the complete worker dialog before answering it. If the full dialog is not readable, reject it and let the worker ask through `WORKER QUESTION`.
 - Use `herdr agent explain <name>` when state detection fails.
 - Use `herdr notification show` only for information the human must see.
 - Treat `working` as active work.

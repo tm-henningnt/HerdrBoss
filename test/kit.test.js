@@ -239,8 +239,10 @@ test('worker start dry-run prints the plan and makes no worktree or agent change
   assert.equal(result.dryRun, true);
   assert.match(output.join('\n'), /git worktree add -b demo/);
   assert.match(output.join('\n'), /Validate kind\/model\/effort: codex \/ gpt-6-sol/);
-  assert.match(output.join('\n'), /herdr pane split ws:p1 --direction right --cwd/);
-  assert.match(output.join('\n'), /herdr agent start demo --kind codex --pane '<new-pane-id>' --timeout 90000 --/);
+  assert.match(output.join('\n'), /herdr tab create --workspace ws --label 'W demo' --cwd/);
+  assert.match(output.join('\n'), /Root pane: <new-root-pane-id>/);
+  assert.match(output.join('\n'), /herdr agent start demo --kind codex --pane '<new-root-pane-id>' --timeout 90000 --/);
+  assert.ok(!output.join('\n').includes('pane split'));
   assert.match(output.join('\n'), /Read \.worker\/brief\.md in your working directory and execute it/);
   assert.ok(calls.some((call) => call.join(' ') === 'agent list'));
   assert.ok(!fs.existsSync(config.worktreePath('demo')));
@@ -368,9 +370,9 @@ test('worker start records a real dispatch before prompting and verifies activit
     if (args[0] === 'pane' && args[1] === 'process-info') return { process_info: { shell_pid: 10, foreground_process_group_id: 10 } };
     if (args[0] === 'pane' && args[1] === 'read') return { text: '% ' };
     if (args[0] === 'agent' && args[1] === 'list') return { agents: [] };
-    if (args[0] === 'tab' && args[1] === 'list') return { tabs: [{ tab_id: 'ws:t1', workspace_id: 'ws', label: 'Workers' }] };
-    if (args[0] === 'pane' && args[1] === 'list') return { panes: [{ pane_id: 'ws:p1', workspace_id: 'ws', tab_id: 'ws:t1', width: 160, height: 45 }] };
-    if (args[0] === 'pane' && args[1] === 'split') return { pane: { pane_id: 'ws:p2' } };
+    if (args[0] === 'tab' && args[1] === 'list') return { tabs: [{ tab_id: 'ws:t1', workspace_id: 'ws', label: 'Workers' }, { tab_id: 'ws:t2', workspace_id: 'ws', label: 'W demo' }] };
+    if (args[0] === 'pane' && args[1] === 'list') return { panes: [{ pane_id: 'ws:p2', workspace_id: 'ws', tab_id: 'ws:t2' }] };
+    if (args[0] === 'tab' && args[1] === 'create') return { tab: { tab_id: 'ws:t2' } };
     if (args[0] === 'agent' && args[1] === 'start') return {};
     if (args[0] === 'agent' && args[1] === 'prompt') {
       assert.ok(fs.existsSync(path.join(config.runsPath, 'demo.json')));
@@ -417,7 +419,7 @@ test('worker collect keeps changed paths stable after the base branch merges the
   assert.deepEqual(afterMerge.actualPaths, beforeMerge.actualPaths);
 });
 
-test('worker start waits for a ready shell and retries agent_pane_busy once', () => {
+test('worker start creates a dedicated tab beside an existing Workers tab and retries agent_pane_busy once', () => {
   const root = temporaryRepo();
   const template = path.join(root, 'brief-template.md');
   fs.writeFileSync(template, 'Worker {{name}}: {{task}}');
@@ -426,6 +428,7 @@ test('worker start waits for a ready shell and retries agent_pane_busy once', ()
   const rulesFile = path.join(root, 'rules.json');
   fs.writeFileSync(rulesFile, JSON.stringify({ updatedAt: new Date().toISOString(), avoidKinds: [] }));
   const calls = [];
+  let tabCreated = false;
   let paneReads = 0;
   let starts = 0;
   let prompts = 0;
@@ -440,9 +443,9 @@ test('worker start waits for a ready shell and retries agent_pane_busy once', ()
     if (args[0] === 'pane' && args[1] === 'process-info') return { process_info: { shell_pid: 10, foreground_process_group_id: 10 } };
     if (args[0] === 'pane' && args[1] === 'read') return { text: '% ' };
     if (args[0] === 'agent' && args[1] === 'list') return { agents: [] };
-    if (args[0] === 'tab' && args[1] === 'list') return { tabs: [{ tab_id: 'ws:t1', workspace_id: 'ws', label: 'Workers' }] };
-    if (args[0] === 'pane' && args[1] === 'list') return { panes: [{ pane_id: 'ws:p1', workspace_id: 'ws', tab_id: 'ws:t1', width: 160, height: 45 }] };
-    if (args[0] === 'pane' && args[1] === 'split') return { pane: { pane_id: 'ws:p2' } };
+    if (args[0] === 'tab' && args[1] === 'list') return { tabs: [{ tab_id: 'ws:t1', workspace_id: 'ws', label: 'Workers' }, ...(tabCreated ? [{ tab_id: 'ws:t2', workspace_id: 'ws', label: 'W demo' }] : [])] };
+    if (args[0] === 'pane' && args[1] === 'list') return { panes: tabCreated ? [{ pane_id: 'ws:p2', workspace_id: 'ws', tab_id: 'ws:t2' }] : [{ pane_id: 'ws:p1', workspace_id: 'ws', tab_id: 'ws:t1' }] };
+    if (args[0] === 'tab' && args[1] === 'create') { tabCreated = true; return { tab: { tab_id: 'ws:t2' } }; }
     if (args[0] === 'agent' && args[1] === 'start') { starts++; if (starts === 1) throw new Error('agent_pane_busy'); return {}; }
     if (args[0] === 'agent' && args[1] === 'prompt') { prompts++; return {}; }
     throw new Error(`Unexpected Herdr call: ${args.join(' ')}`);
@@ -452,13 +455,17 @@ test('worker start waits for a ready shell and retries agent_pane_busy once', ()
     env: { HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'ws', HERDR_PANE_ID: 'ws:orch' }, rulesFile,
   });
   assert.equal(result.pane, 'ws:p2');
+  assert.ok(calls.some((args) => args[0] === 'tab' && args[1] === 'create' && args.includes('W demo')));
+  assert.ok(!calls.some((args) => args[0] === 'pane' && args[1] === 'split'));
   assert.equal(starts, 2);
   assert.equal(prompts, 1);
   assert.ok(waits >= 1);
   assert.ok(paneReads >= 2);
-  const split = calls.find((args) => args[0] === 'pane' && args[1] === 'split');
-  assert.ok(split.includes('DISABLE_UPDATE_PROMPT=true'));
-  assert.ok(split.includes('DISABLE_AUTO_UPDATE=true'));
+  const created = calls.find((args) => args[0] === 'tab' && args[1] === 'create');
+  assert.ok(created.includes('DISABLE_UPDATE_PROMPT=true'));
+  assert.ok(created.includes('DISABLE_AUTO_UPDATE=true'));
+  assert.ok(created.includes('--no-focus'));
+  assert.ok(!calls.some((args) => args[0] === 'tab' && args[1] === 'close'));
 });
 
 test('worker start waits for a stable shell in a new tab and rechecks before a timed busy retry', () => {
@@ -482,7 +489,7 @@ test('worker start waits for a stable shell in a new tab and rechecks before a t
       return { pane: { pane_id: 'ws:p2', workspace_id: 'ws', foreground_cwd: config.worktreePath('demo') } };
     }
     if (args[0] === 'agent' && args[1] === 'list') return { agents: [] };
-    if (args[0] === 'tab' && args[1] === 'list') return { tabs: tabCreated ? [{ tab_id: 'ws:t2', workspace_id: 'ws', label: 'Workers' }] : [] };
+    if (args[0] === 'tab' && args[1] === 'list') return { tabs: tabCreated ? [{ tab_id: 'ws:t2', workspace_id: 'ws', label: 'W demo' }] : [] };
     if (args[0] === 'tab' && args[1] === 'create') {
       assert.ok(args.includes('DISABLE_UPDATE_PROMPT=true'));
       assert.ok(args.includes('DISABLE_AUTO_UPDATE=true'));
@@ -539,18 +546,14 @@ test('worker start stops at an interactive shell question before typing the laun
       ? { pane: { pane_id: 'ws:orch', workspace_id: 'ws', label: 'orch' } }
       : { pane: { pane_id: args[2], workspace_id: 'ws', foreground_cwd: config.worktreePath('question') } };
     if (args[0] === 'agent' && args[1] === 'list') return { agents: [] };
-    if (args[0] === 'tab' && args[1] === 'list') return { tabs: [{ tab_id: 'ws:t1', workspace_id: 'ws', label: 'Workers' }] };
-    if (args[0] === 'pane' && args[1] === 'list') return { panes: [{ pane_id: 'ws:p1', workspace_id: 'ws', tab_id: 'ws:t1' }] };
-    if (args[0] === 'pane' && args[1] === 'split') {
-      assert.ok(args.includes('DISABLE_UPDATE_PROMPT=true'));
-      assert.ok(args.includes('DISABLE_AUTO_UPDATE=true'));
-      return { pane: { pane_id: 'ws:p2' } };
-    }
+    if (args[0] === 'tab' && args[1] === 'list') return { tabs: [{ tab_id: 'ws:t1', workspace_id: 'ws', label: 'Workers' }, { tab_id: 'ws:t2', workspace_id: 'ws', label: 'W question' }] };
+    if (args[0] === 'pane' && args[1] === 'list') return { panes: [{ pane_id: 'ws:p2', workspace_id: 'ws', tab_id: 'ws:t2' }] };
     if (args[0] === 'pane' && args[1] === 'process-info') return { process_info: {
       shell_pid: 10, foreground_process_group_id: 10, foreground_processes: [{ pid: 10, name: 'zsh' }],
     } };
     if (args[0] === 'pane' && args[1] === 'read') return { text: 'Would you like to update? [Y/n]\n' };
-    if (args[0] === 'pane' && args[1] === 'close') { paneClosed = true; return {}; }
+    if (args[0] === 'tab' && args[1] === 'create') return { tab: { tab_id: 'ws:t2' } };
+    if (args[0] === 'tab' && args[1] === 'close') { paneClosed = args[2] === 'ws:t2'; return {}; }
     if (args[0] === 'agent' && args[1] === 'start') { starts++; return {}; }
     throw new Error(`Unexpected Herdr call: ${args.join(' ')}`);
   };
@@ -575,7 +578,8 @@ test('worker start cleans up the pane and worktree when the busy retry fails', (
   const rulesFile = path.join(root, 'rules.json');
   fs.writeFileSync(rulesFile, JSON.stringify({ updatedAt: new Date().toISOString(), avoidKinds: [] }));
   let starts = 0;
-  let paneClosed = false;
+  let tabClosed = false;
+  const closedTabs = [];
   const herdr = (args) => {
     if (args[0] === 'pane' && args[1] === 'get') return args[2] === 'ws:orch'
       ? { pane: { pane_id: 'ws:orch', workspace_id: 'ws', label: 'orch' } }
@@ -583,10 +587,10 @@ test('worker start cleans up the pane and worktree when the busy retry fails', (
     if (args[0] === 'pane' && args[1] === 'process-info') return { process_info: { shell_pid: 10, foreground_process_group_id: 10 } };
     if (args[0] === 'pane' && args[1] === 'read') return { text: '% ' };
     if (args[0] === 'agent' && args[1] === 'list') return { agents: [] };
-    if (args[0] === 'tab' && args[1] === 'list') return { tabs: [{ tab_id: 'ws:t1', workspace_id: 'ws', label: 'Workers' }] };
-    if (args[0] === 'pane' && args[1] === 'list') return { panes: [{ pane_id: 'ws:p1', workspace_id: 'ws', tab_id: 'ws:t1', width: 160, height: 45 }] };
-    if (args[0] === 'pane' && args[1] === 'split') return { pane: { pane_id: 'ws:p2' } };
-    if (args[0] === 'pane' && args[1] === 'close') { paneClosed = true; return {}; }
+    if (args[0] === 'tab' && args[1] === 'list') return { tabs: [{ tab_id: 'ws:t1', workspace_id: 'ws', label: 'Workers' }, { tab_id: 'ws:t2', workspace_id: 'ws', label: 'W demo' }] };
+    if (args[0] === 'pane' && args[1] === 'list') return { panes: [{ pane_id: 'ws:p2', workspace_id: 'ws', tab_id: 'ws:t2' }] };
+    if (args[0] === 'tab' && args[1] === 'create') return { tab: { tab_id: 'ws:t2' } };
+    if (args[0] === 'tab' && args[1] === 'close') { closedTabs.push(args[2]); tabClosed = args[2] === 'ws:t2'; return {}; }
     if (args[0] === 'agent' && args[1] === 'start') { starts++; throw new Error('agent_pane_busy'); }
     throw new Error(`Unexpected Herdr call: ${args.join(' ')}`);
   };
@@ -595,7 +599,8 @@ test('worker start cleans up the pane and worktree when the busy retry fails', (
     env: { HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'ws', HERDR_PANE_ID: 'ws:orch' }, rulesFile,
   }), /agent_pane_busy/);
   assert.equal(starts, 2);
-  assert.equal(paneClosed, true);
+  assert.equal(tabClosed, true);
+  assert.deepEqual(closedTabs, ['ws:t2']);
   assert.equal(fs.existsSync(config.worktreePath('demo')), false);
 });
 
@@ -617,9 +622,9 @@ test('failed worker start deletes only its empty branch from a non-main base', (
       ? { pane: { pane_id: 'ws:orch', workspace_id: 'ws', label: 'orch' } }
       : { pane: { pane_id: args[2], workspace_id: 'ws', foreground_cwd: '/not-ready' } };
     if (args[0] === 'agent' && args[1] === 'list') return { agents: [] };
-    if (args[0] === 'tab' && args[1] === 'list') return { tabs: [{ tab_id: 'ws:t1', workspace_id: 'ws', label: 'Workers' }] };
-    if (args[0] === 'pane' && args[1] === 'list') return { panes: [{ pane_id: 'ws:p1', workspace_id: 'ws', tab_id: 'ws:t1' }] };
-    if (args[0] === 'pane' && args[1] === 'split') return { pane: { pane_id: 'ws:p2' } };
+    if (args[0] === 'tab' && args[1] === 'list') return { tabs: [{ tab_id: 'ws:t1', workspace_id: 'ws', label: 'Workers' }, { tab_id: 'ws:t2', workspace_id: 'ws', label: 'W empty-branch' }, { tab_id: 'ws:t3', workspace_id: 'ws', label: 'W setup-failed' }] };
+    if (args[0] === 'pane' && args[1] === 'list') return { panes: [{ pane_id: 'ws:p2', workspace_id: 'ws', tab_id: 'ws:t2' }, { pane_id: 'ws:p3', workspace_id: 'ws', tab_id: 'ws:t3' }] };
+    if (args[0] === 'tab' && args[1] === 'create') return { tab: { tab_id: 'ws:t2' } };
     if (args[0] === 'pane' && args[1] === 'close') return {};
     throw new Error(`Unexpected Herdr call: ${args.join(' ')}`);
   };
@@ -672,9 +677,9 @@ test('worker start submits a brief that was typed but not sent', () => {
     if (args[0] === 'pane' && args[1] === 'process-info') return { process_info: { shell_pid: 10, foreground_process_group_id: 10 } };
     if (args[0] === 'pane' && args[1] === 'read') return { text: '% ' };
     if (args[0] === 'agent' && args[1] === 'list') return { agents: [] };
-    if (args[0] === 'tab' && args[1] === 'list') return { tabs: [{ tab_id: 'ws:t1', workspace_id: 'ws', label: 'Workers' }] };
-    if (args[0] === 'pane' && args[1] === 'list') return { panes: [{ pane_id: 'ws:p1', workspace_id: 'ws', tab_id: 'ws:t1', width: 160, height: 45 }] };
-    if (args[0] === 'pane' && args[1] === 'split') return { pane: { pane_id: 'ws:p2' } };
+    if (args[0] === 'tab' && args[1] === 'list') return { tabs: [{ tab_id: 'ws:t1', workspace_id: 'ws', label: 'Workers' }, { tab_id: 'ws:t2', workspace_id: 'ws', label: 'W demo' }] };
+    if (args[0] === 'pane' && args[1] === 'list') return { panes: [{ pane_id: 'ws:p2', workspace_id: 'ws', tab_id: 'ws:t2' }] };
+    if (args[0] === 'tab' && args[1] === 'create') return { tab: { tab_id: 'ws:t2' } };
     if (args[0] === 'agent' && args[1] === 'start') return {};
     if (args[0] === 'agent' && args[1] === 'prompt') throw new Error('agent_prompt_stalled');
     if (args[0] === 'agent' && args[1] === 'get') return { agent: { agent_status: status } };
@@ -708,9 +713,9 @@ test('worker start resends a brief that never reached the agent', () => {
     if (args[0] === 'pane' && args[1] === 'process-info') return { process_info: { shell_pid: 10, foreground_process_group_id: 10 } };
     if (args[0] === 'pane' && args[1] === 'read') return { text: '% ' };
     if (args[0] === 'agent' && args[1] === 'list') return { agents: [] };
-    if (args[0] === 'tab' && args[1] === 'list') return { tabs: [{ tab_id: 'ws:t1', workspace_id: 'ws', label: 'Workers' }] };
-    if (args[0] === 'pane' && args[1] === 'list') return { panes: [{ pane_id: 'ws:p1', workspace_id: 'ws', tab_id: 'ws:t1', width: 160, height: 45 }] };
-    if (args[0] === 'pane' && args[1] === 'split') return { pane: { pane_id: 'ws:p2' } };
+    if (args[0] === 'tab' && args[1] === 'list') return { tabs: [{ tab_id: 'ws:t1', workspace_id: 'ws', label: 'Workers' }, { tab_id: 'ws:t2', workspace_id: 'ws', label: 'W demo' }] };
+    if (args[0] === 'pane' && args[1] === 'list') return { panes: [{ pane_id: 'ws:p2', workspace_id: 'ws', tab_id: 'ws:t2' }] };
+    if (args[0] === 'tab' && args[1] === 'create') return { tab: { tab_id: 'ws:t2' } };
     if (args[0] === 'agent' && args[1] === 'start') return {};
     if (args[0] === 'agent' && args[1] === 'prompt') { prompts++; if (prompts === 1) throw new Error('agent_prompt_stalled'); return {}; }
     if (args[0] === 'agent' && args[1] === 'get') return { agent: { agent_status: 'idle' } };
@@ -829,9 +834,9 @@ function setupFixture(setup) {
     if (args[0] === 'pane' && args[1] === 'process-info') return { process_info: { shell_pid: 10, foreground_process_group_id: 10 } };
     if (args[0] === 'pane' && args[1] === 'read') return { text: '% ' };
     if (args[0] === 'agent' && args[1] === 'list') return { agents: [] };
-    if (args[0] === 'tab' && args[1] === 'list') return { tabs: [{ tab_id: 'ws:t1', workspace_id: 'ws', label: 'Workers' }] };
-    if (args[0] === 'pane' && args[1] === 'list') return { panes: [{ pane_id: 'ws:p1', workspace_id: 'ws', tab_id: 'ws:t1', width: 160, height: 45 }] };
-    if (args[0] === 'pane' && args[1] === 'split') { paneCwd = args[args.indexOf('--cwd') + 1]; return { pane: { pane_id: 'ws:p2' } }; }
+    if (args[0] === 'tab' && args[1] === 'list') return { tabs: [{ tab_id: 'ws:t1', workspace_id: 'ws', label: 'Workers' }, { tab_id: 'ws:t2', workspace_id: 'ws', label: 'W demo' }] };
+    if (args[0] === 'pane' && args[1] === 'list') return { panes: [{ pane_id: 'ws:p2', workspace_id: 'ws', tab_id: 'ws:t2' }] };
+    if (args[0] === 'tab' && args[1] === 'create') { paneCwd = args[args.indexOf('--cwd') + 1]; return { tab: { tab_id: 'ws:t2' } }; }
     if (args[0] === 'pane' && args[1] === 'close') return {};
     if (args[0] === 'agent' && (args[1] === 'start' || args[1] === 'prompt')) return {};
     throw new Error(`Unexpected Herdr call: ${args.join(' ')}`);

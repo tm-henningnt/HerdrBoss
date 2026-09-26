@@ -58,7 +58,7 @@ When `NODE_TEST_CONTEXT` is set, or the data directory differs from the configur
 
 ### `worker start NAME`
 
-Create a branch and worktree, write the brief, open a pane in the `Workers` tab, start the agent, and send the brief.
+Create a branch and worktree, write the brief, create a dedicated `W <name>` tab with one root pane, start the agent, and send the brief. Each worker uses its own tab in the verified caller workspace.
 
 `worker start` waits for the shell prompt or a stable shell screen. It sets `DISABLE_UPDATE_PROMPT=true` and `DISABLE_AUTO_UPDATE=true` in new panes. If it finds an interactive question, it stops and tells the orchestrator to answer it in a shell once.
 
