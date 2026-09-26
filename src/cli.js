@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
-import { loadConfig, DATA_DIR, dashboardUrl } from './config.js';
+import { loadConfig, assertPreviewDataDir, DATA_DIR, dashboardUrl } from './config.js';
 import { writeProject, SLUG } from './projects.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -69,6 +69,8 @@ async function main() {
     runKitCommand(cmd, args);
     return;
   }
+  // Refuse an unsafe preview before loadConfig() creates or migrates a data directory.
+  if (cmd === 'serve' && args.includes('--read-only-preview')) assertPreviewDataDir();
   const cfg = loadConfig();
   switch (cmd) {
     case 'lanes': {

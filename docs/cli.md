@@ -11,7 +11,7 @@ Run project commands (`worker`, `worktree`, `ledger`, `check`, `gh`) from inside
 | `herdr-boss install` | Install and start the macOS launchd agent `no.tallmaker.herdr-boss`. Run it again after you move the repository. |
 | `herdr-boss uninstall` | Stop and remove the launchd agent. |
 | `herdr-boss serve` | Run the collector and the dashboard in the foreground. |
-| `herdr-boss serve --read-only-preview` | Run a dashboard preview. This mode allows API reads and blocks API changes, prompts, notifications, process reaping, handovers, and browser launches. |
+| `herdr-boss serve --read-only-preview` | Run a dashboard preview. This mode allows API reads and blocks API changes, prompts, notifications, process reaping, handovers, and browser launches. It needs a `HERDR_BOSS_DIR` that the service does not use. |
 | `herdr-boss tick [--json]` | Collect once and print alerts. Sends no prompt and stops no process. `--json` prints the full snapshot. |
 | `herdr-boss logs` | Print the last 100 lines of the server log. |
 | `herdr-boss kit-path` | Print the path of the shared kit (skill, templates, model list). |
@@ -31,6 +31,8 @@ HERDR_BOSS_DIR="$(mktemp -d)" HERDR_BOSS_PORT=4478 npm start -- --read-only-prev
 Choose an unused local port if 4478 is busy.
 
 `HERDR_BOSS_DIR` selects the data directory. The live data directory defaults to `~/.herdr-boss`. Set `HERDR_BOSS_LIVE_DIR` when the service uses another live directory.
+
+A preview collects and evaluates, so it writes `state.json`, `rules.json`, `bulletin.md`, and quota history into its data directory. A preview therefore requires `HERDR_BOSS_DIR` to name a separate directory that the service does not use. The directory does not have to be empty. A directory that holds files from an earlier preview is valid. The command refuses to start when `HERDR_BOSS_DIR` is unset, when it resolves to the live data directory, when it resolves to `~/.herdr-boss`, or when a symlink in the path resolves to either of them. The refusal happens before the command creates or migrates a data directory. Use a separate `HERDR_BOSS_LIVE_DIR` value in the preview process to point the check at another live directory.
 
 When `NODE_TEST_CONTEXT` is set, or the data directory differs from the configured live directory, the Engine disables prompts, notifications, process reaping, and handovers. Set `HERDR_BOSS_ALLOW_ACTIONS=1` only when you intentionally need these actions outside the live service.
 
