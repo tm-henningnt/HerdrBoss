@@ -158,20 +158,31 @@ export function providerGate(provider, rules, { force = false, now = Date.now(),
   return { error: `${detail}.${lead} ${next} Use --force only for an authorized override.` };
 }
 
+function machineGuardState(machine, now = Date.now()) {
+  if (machine.guardEnabled === false || machine.guardState === 'off') return 'off';
+  const pauseAt = machine.guardPausedUntil == null ? NaN : Date.parse(machine.guardPausedUntil);
+  if (Number.isFinite(pauseAt) && pauseAt > now) return 'paused';
+  return 'active';
+}
+
 export function describeMachine(rules) {
   const machine = rules?.machine;
   if (!machine) return null;
+  const guardState = machineGuardState(machine);
+  const guardActive = guardState === 'active';
   const cpu = Number.isFinite(machine.cpuPercent) ? `${machine.cpuPercent.toFixed(1)}%` : 'unknown';
   const load = Number.isFinite(machine.fiveMinute) ? machine.fiveMinute : 'unknown';
-  const exceeded = (Number.isFinite(machine.cpuPercent) && Number.isFinite(machine.cpuLimit) && machine.cpuPercent > machine.cpuLimit)
-    || (Number.isFinite(machine.fiveMinute) && Number.isFinite(machine.loadLimit) && machine.fiveMinute > machine.loadLimit);
-  return `Machine: Owner ${machine.owner || 'unknown'}; CPU ${cpu} / limit ${machine.cpuLimit == null ? 'disabled' : `${machine.cpuLimit}%`}; 5-minute load ${load} / backstop ${machine.loadLimit ?? 'disabled'}${exceeded ? '. Stop new workers and full test suites.' : ''}`;
+  const exceeded = guardActive && ((Number.isFinite(machine.cpuPercent) && Number.isFinite(machine.cpuLimit) && machine.cpuPercent > machine.cpuLimit)
+    || (Number.isFinite(machine.fiveMinute) && Number.isFinite(machine.loadLimit) && machine.fiveMinute > machine.loadLimit));
+  const guardText = guardState === 'paused' ? `paused until ${machine.guardPausedUntil}` : guardState;
+  const threshold = guardActive ? '' : 'configured ';
+  return `Machine guard ${guardText}. Owner ${machine.owner || 'unknown'}; CPU ${cpu} / ${threshold}limit ${machine.cpuLimit == null ? 'disabled' : `${machine.cpuLimit}%`}; 5-minute load ${load} / ${threshold}backstop ${machine.loadLimit ?? 'disabled'}${exceeded ? '. Stop new workers and full test suites.' : ''}`;
 }
 
 // The active machine CPU limit and enabled load backstop refuse starts, including with --force.
 export function loadWarning(rules) {
   const machine = rules?.machine;
-  if (!machine) return null;
+  if (!machine || machineGuardState(machine) !== 'active') return null;
   const cpuExceeded = Number.isFinite(machine.cpuPercent) && Number.isFinite(machine.cpuLimit) && machine.cpuPercent > machine.cpuLimit;
   const loadExceeded = Number.isFinite(machine.fiveMinute) && Number.isFinite(machine.loadLimit) && machine.fiveMinute > machine.loadLimit;
   if (!cpuExceeded && !loadExceeded) return null;

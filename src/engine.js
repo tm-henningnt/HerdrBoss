@@ -104,7 +104,7 @@ export class Engine extends EventEmitter {
       if (machine) {
         snap.machine.cpuUse = snap.cpuUse;
         snap.machine.cpuTotalSample = [...procs.values()].reduce((sum, proc) => sum + Math.max(0, proc.cpu), 0);
-        snap.machine.limits = machineLimits(snap.machine, policy);
+        snap.machine.limits = machineLimits(snap.machine, policy, now);
       }
       snap.lanes = laneStatus(snap.quotas, policy, now);
       // The unmetered lane is always open and lists permitted free models. It never affects least-over selection.
@@ -239,7 +239,7 @@ export class Engine extends EventEmitter {
         leastOverProvider: snap.leastOverProvider,
         preferredKinds,
         memFreePercent: machine?.memFreePercent ?? null,
-        load: machine ? { oneMinute: machine.load[0], fiveMinute: machine.load[1], cpus: machine.cpus, limit: machineLimits(snap.machine, policy).loadLimit } : null,
+        load: machine ? { oneMinute: machine.load[0], fiveMinute: machine.load[1], cpus: machine.cpus, limit: machineLimits(snap.machine, policy, now).loadLimit } : null,
         machine: snap.machine?.limits || null,
         notes: evaluation.advice,
         browsers: managedBrowsers.map((b) => ({ project: b.project, port: b.port, profile: b.profile, headless: !!b.headless, windowSize: b.windowSize || { width: 1280, height: 800 }, ready: browsers.some((x) => x.kind === 'automation-chrome' && x.port === String(b.port) && x.profile === b.profile) })),

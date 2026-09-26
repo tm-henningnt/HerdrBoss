@@ -270,7 +270,8 @@ test('worker start validates the caller pane and uses it for placement and repor
     ['caller-label', f.env, { pane_id: 'ws:orch', workspace_id: 'ws', label: 'worker' }, {}, /label/],
     ['caller-orch', f.env, { pane_id: 'ws:orch', workspace_id: 'ws', label: 'orch' }, { orch: 'ws:other' }, /--orch must match/],
   ]) {
-    const before = new Set(fs.readdirSync(path.dirname(f.root)));
+    const fixtureEntries = new Set(fs.readdirSync(f.root));
+    const fixtureStatus = git(f.root, 'status', '--porcelain');
     const callsBefore = f.calls.length;
     const rejectedHerdr = (args) => {
       if (args[0] === 'pane' && args[1] === 'get') return { pane };
@@ -282,7 +283,9 @@ test('worker start validates the caller pane and uses it for placement and repor
     assert.equal(fs.existsSync(config.worktreePath(name)), false);
     assert.equal(fs.existsSync(path.join(config.runsPath, `${name}.json`)), false);
     assert.ok(!f.calls.slice(callsBefore).includes('agent start'));
-    assert.deepEqual(new Set(fs.readdirSync(path.dirname(f.root))), before);
+    assert.ok(!f.calls.slice(callsBefore).some((call) => ['pane split', 'tab create', 'agent start'].includes(call)), 'invalid caller creates no worker-side Herdr resources');
+    assert.equal(git(f.root, 'status', '--porcelain'), fixtureStatus, 'invalid caller does not change the fixture repository');
+    assert.deepEqual(new Set(fs.readdirSync(f.root)), fixtureEntries, 'invalid caller leaves its isolated fixture paths unchanged');
   }
 });
 
@@ -678,11 +681,32 @@ test('worker start load warning names the load, the limit, and the actions', asy
   assert.equal(loadWarning({ machine: { owner: 'present', cpuPercent: 12, cpuLimit: 70, fiveMinute: 12, loadLimit: 20 } }), null);
   assert.equal(loadWarning({}), null);
   const text = loadWarning({ machine: { owner: 'away', cpuPercent: 98, cpuLimit: 95, fiveMinute: 84.2, loadLimit: null } });
-  assert.match(describeMachine({ machine: { owner: 'away', cpuPercent: 98, cpuLimit: 95, fiveMinute: 84.2, loadLimit: null } }), /Owner away; CPU 98\.0% \/ limit 95%; 5-minute load 84\.2 \/ backstop disabled/);
+  assert.match(describeMachine({ machine: { owner: 'away', cpuPercent: 98, cpuLimit: 95, fiveMinute: 84.2, loadLimit: null } }), /^Machine guard active\. Owner away; CPU 98\.0% \/ limit 95%; 5-minute load 84\.2 \/ backstop disabled/);
   assert.match(text, /CPU 98\.0% \/ limit 95%/);
   assert.match(text, /5-minute load 84\.2 \/ backstop disabled/);
   assert.match(text, /--force cannot bypass/);
   assert.match(loadWarning({ machine: { owner: 'present', cpuLimit: 70, fiveMinute: 25, loadLimit: 24 } }), /CPU unknown/);
+  assert.match(loadWarning({ machine: { owner: 'present', cpuPercent: 80, cpuLimit: 70, fiveMinute: 1, loadLimit: null, guardState: 'paused', guardEnabled: true, guardPausedUntil: new Date(Date.now() - 1000).toISOString() } }), /Machine limit exceeded/, 'an expired pause activates the guard again');
+});
+
+test('worker start reports off and paused machine guards and ignores their CPU/load limits', () => {
+  const future = new Date(Date.now() + 3600000).toISOString();
+  for (const [name, guardState, guardEnabled, guardPausedUntil, expected] of [
+    ['guard-off', 'off', false, null, /Machine guard off/],
+    ['guard-paused', 'paused', true, future, /Machine guard paused until/],
+  ]) {
+    const f = setupFixture(null);
+    fs.writeFileSync(f.rulesFile, JSON.stringify({ updatedAt: new Date().toISOString(), machine: {
+      owner: 'present', cpuPercent: 99, cpuLimit: 70, fiveMinute: 99, loadLimit: 24,
+      guardState, guardEnabled, guardPausedUntil, guardActive: false,
+    }, lanes: { codex: { state: 'open' } } }));
+    const output = [];
+    assert.doesNotThrow(() => startWorker(name, { kind: 'codex', task: 'x', allow: ['src/'], dryRun: true }, {
+      config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: (line) => output.push(line),
+    }));
+    assert.match(output.join('\n'), expected);
+    assert.match(output.join('\n'), /CPU 99\.0% \/ configured limit 70%; 5-minute load 99 \/ configured backstop 24/);
+  }
 });
 
 test('worker start refuses machine limits even with --force', () => {
@@ -713,7 +737,29 @@ test('lanes prints active machine thresholds and load when the backstop is disab
   const cli = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'src', 'cli.js');
   const output = execFileSync(process.execPath, [cli, 'lanes'], { env: { ...process.env, HOME: home, HERDR_BOSS_DIR: dir }, encoding: 'utf8' });
   assert.match(output, /Owner away; CPU 90\.0% \/ limit 95%; 5-minute load 80 \/ backstop disabled/);
+  assert.match(output, /Machine guard active/);
   assert.match(output, /codex open/);
+});
+
+test('lanes reports active, off, and paused machine guard states', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-lanes-guard-'));
+  const home = path.join(dir, 'home');
+  fs.mkdirSync(home, { recursive: true });
+  const rulesFile = path.join(dir, 'rules.json');
+  const cli = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'src', 'cli.js');
+  for (const [guardState, guardEnabled, guardPausedUntil, text] of [
+    ['active', true, null, /Machine guard active/],
+    ['off', false, null, /Machine guard off/],
+    ['paused', true, new Date(Date.now() + 3600000).toISOString(), /Machine guard paused until/],
+  ]) {
+    fs.writeFileSync(rulesFile, JSON.stringify({ machine: {
+      owner: 'present', cpuPercent: 90, cpuLimit: 70, fiveMinute: 30, loadLimit: 24,
+      guardState, guardEnabled, guardPausedUntil,
+    }, lanes: { codex: { state: 'open' } } }));
+    const output = execFileSync(process.execPath, [cli, 'lanes'], { env: { ...process.env, HOME: home, HERDR_BOSS_DIR: dir }, encoding: 'utf8' });
+    assert.match(output, text);
+  }
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 function setupFixture(setup) {
