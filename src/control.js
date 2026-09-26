@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { DATA_DIR } from './config.js';
+import { loadModels } from './kit/config.js';
 
 const FILE = path.join(DATA_DIR, 'policy.json');
 export const POLICY_DEFAULTS = {
@@ -21,7 +22,14 @@ export const POLICY_DEFAULTS = {
   excludedModels: [],
   providerModes: { codex: 'managed', claude: 'managed', opencodego: 'managed' },
   preferredModels: {},
+  // A legacy route by model. A route in harnessRoutes for the same harness takes precedence.
   modelProviders: {},
+  // Local model strings that the Owner adds to one harness, beside the kit/models.json catalog.
+  extraModels: {},
+  // Models that one harness does not use. excludedModels still disables a model for every harness.
+  disabledModels: {},
+  // The provider quota for a model in one harness. A null route is unmetered.
+  harnessRoutes: {},
   // A pacing goal is the most percent of a live quota window the Owner wants to use by its reset.
   // It is keyed by provider and by the stable window key from quota collection. An absent goal means 100%.
   pacingGoals: {},
@@ -32,12 +40,67 @@ const SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const KINDS = new Set(POLICY_DEFAULTS.allowedKinds);
 const PROVIDERS = new Set(Object.keys(POLICY_DEFAULTS.providerModes));
 const WINDOW_KEYS = new Set(['primary', 'secondary', 'tertiary']);
+// A model string holds letters, digits, dots, underscores, slashes, and hyphens. It starts with a letter or digit.
+export const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/;
 
-export function loadPolicy() {
+const isObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
+
+// The kit catalog plus the valid local extra models of each harness. Extras keep the harness launch arguments and efforts.
+export function mergeModels(models, policy = null) {
+  const extra = isObject(policy?.extraModels) ? policy.extraModels : {};
+  return { ...models, kinds: Object.fromEntries(Object.entries(models.kinds).map(([kind, cfg]) => {
+    const added = [...new Set((Array.isArray(extra[kind]) ? extra[kind] : []).filter((model) => typeof model === 'string' && MODEL_ID.test(model) && !cfg.allowedModels.includes(model)))];
+    return [kind, added.length ? { ...cfg, allowedModels: [...cfg.allowedModels, ...added] } : cfg];
+  })) };
+}
+
+// Codex and Claude run only their own subscription models, so a route there is that provider or unmetered (null).
+// Open harnesses can route a model to any provider.
+export function harnessProviders(kind) {
+  return kind === 'codex' || kind === 'claude' ? [kind, null] : [...[...PROVIDERS].sort(), null];
+}
+
+// A model is enabled for a harness unless the global list or the list of that harness disables it.
+export function modelEnabled(kind, model, policy = null) {
+  if ((policy?.excludedModels || []).includes(model)) return false;
+  const disabled = policy?.disabledModels?.[kind];
+  return !(Array.isArray(disabled) && disabled.includes(model));
+}
+
+// Legacy modelProviders routes that a Codex or Claude harness cannot use and that no harnessRoutes entry overrides.
+// The result maps a harness to its models, and the provider of each conflict is in modelProviders.
+export function legacyRouteConflicts(policy, models, kinds = ['codex', 'claude']) {
+  const catalog = mergeModels(models, policy);
+  const conflicts = {};
+  for (const kind of kinds) {
+    const allowed = harnessProviders(kind);
+    const routes = isObject(policy?.harnessRoutes?.[kind]) ? policy.harnessRoutes[kind] : {};
+    for (const model of catalog.kinds[kind]?.allowedModels || []) {
+      if (!isObject(policy?.modelProviders) || !Object.hasOwn(policy.modelProviders, model) || Object.hasOwn(routes, model)) continue;
+      if (!allowed.includes(policy.modelProviders[model])) (conflicts[kind] ||= []).push(model);
+    }
+  }
+  return conflicts;
+}
+
+const warnedRoutes = new Set();
+
+// A saved policy always loads. An incompatible legacy route is kept in modelProviders for Settings,
+// and ignoredRoutes makes providerFor treat it as unmetered for that harness. Each conflict warns once per process.
+export function loadPolicy({ file = FILE, models = null, warn = (text) => console.warn(text) } = {}) {
   let saved = {};
-  try { saved = JSON.parse(fs.readFileSync(FILE, 'utf8')); }
+  try { saved = JSON.parse(fs.readFileSync(file, 'utf8')); }
   catch (e) { if (e.code !== 'ENOENT') throw e; }
-  return { ...POLICY_DEFAULTS, ...saved, machine: { ...POLICY_DEFAULTS.machine, ...saved.machine }, providerModes: { ...POLICY_DEFAULTS.providerModes, ...saved.providerModes }, preferredModels: saved.preferredModels || {}, modelProviders: saved.modelProviders || {}, pacingGoals: saved.pacingGoals || {}, projects: saved.projects || {} };
+  const { ignoredRoutes: _derived, ...stored } = saved;
+  const policy = { ...POLICY_DEFAULTS, ...stored, machine: { ...POLICY_DEFAULTS.machine, ...stored.machine }, providerModes: { ...POLICY_DEFAULTS.providerModes, ...stored.providerModes }, preferredModels: stored.preferredModels || {}, modelProviders: stored.modelProviders || {}, extraModels: stored.extraModels || {}, disabledModels: stored.disabledModels || {}, harnessRoutes: stored.harnessRoutes || {}, pacingGoals: stored.pacingGoals || {}, projects: stored.projects || {} };
+  policy.ignoredRoutes = legacyRouteConflicts(policy, models ?? loadModels());
+  for (const [kind, list] of Object.entries(policy.ignoredRoutes)) for (const model of list) {
+    const key = `${file}:${kind}/${model}:${policy.modelProviders[model]}`;
+    if (warnedRoutes.has(key)) continue;
+    warnedRoutes.add(key);
+    warn(`herdr-boss: policy route ${kind}/${model} -> ${policy.modelProviders[model]} is incompatible with ${kind}. Herdr Boss treats it as Unmetered. Choose a provider for this row in Settings.`);
+  }
+  return policy;
 }
 
 export function machineLimits(machine, policy) {
@@ -71,7 +134,34 @@ export function validatePolicy(value, models) {
     if (!Number.isInteger(value[key]) || value[key] < 0 || value[key] > max) errors.push(`${key} must be an integer from 0 to ${max}.`);
   }
   subset(value.allowedKinds, KINDS, 'allowedKinds', errors);
-  const allModels = new Set(Object.values(models.kinds).flatMap((k) => k.allowedModels));
+  const extraModels = value.extraModels ?? {};
+  if (!isObject(extraModels)) errors.push('extraModels must be an object.');
+  else for (const [kind, list] of Object.entries(extraModels)) {
+    if (!models.kinds[kind] || !Array.isArray(list)) { errors.push(`Invalid extraModels entry for ${kind}.`); continue; }
+    for (const model of list) if (typeof model !== 'string' || !MODEL_ID.test(model)) errors.push(`Invalid extraModels string for ${kind}: ${JSON.stringify(model)?.slice(0, 80)}.`);
+    if (new Set(list).size !== list.length || list.some((model) => models.kinds[kind].allowedModels.includes(model))) errors.push(`extraModels for ${kind} must be unique and not repeat the catalog.`);
+  }
+  const catalog = mergeModels(models, value);
+  const allModels = new Set(Object.values(catalog.kinds).flatMap((k) => k.allowedModels));
+  const disabledModels = value.disabledModels ?? {};
+  if (!isObject(disabledModels)) errors.push('disabledModels must be an object.');
+  else for (const [kind, list] of Object.entries(disabledModels)) subset(list, new Set(catalog.kinds[kind]?.allowedModels || []), `disabledModels.${kind}`, errors);
+  const harnessRoutes = value.harnessRoutes ?? {};
+  if (!isObject(harnessRoutes)) errors.push('harnessRoutes must be an object.');
+  else for (const [kind, routes] of Object.entries(harnessRoutes)) {
+    if (!catalog.kinds[kind] || !isObject(routes)) { errors.push(`Invalid harnessRoutes entry for ${kind}.`); continue; }
+    const allowed = harnessProviders(kind);
+    for (const [model, provider] of Object.entries(routes)) {
+      if (!catalog.kinds[kind].allowedModels.includes(model) || (provider !== null && !PROVIDERS.has(provider))) errors.push(`Invalid harnessRoutes route for ${kind}/${model}.`);
+      else if (!allowed.includes(provider)) errors.push(`harnessRoutes: ${kind}/${model} cannot use ${provider}. Choose ${allowed.map((x) => x ?? 'null (unmetered)').join(' or ')}.`);
+    }
+  }
+  const enabledKinds = ['codex', 'claude'].filter((kind) => Array.isArray(value.allowedKinds) && value.allowedKinds.includes(kind));
+  if (isObject(value.modelProviders) && isObject(harnessRoutes)) for (const [kind, list] of Object.entries(legacyRouteConflicts(value, models, enabledKinds))) {
+    const allowed = harnessProviders(kind).map((x) => x ?? 'null (unmetered)').join(' or ');
+    for (const model of list) errors.push(`modelProviders: ${kind}/${model} inherits ${value.modelProviders[model]}. Choose ${allowed} in harnessRoutes.${kind}.`);
+  }
+  models = catalog;
   if (!value.preferredModels || typeof value.preferredModels !== 'object' || Array.isArray(value.preferredModels)) errors.push('preferredModels must be an object.');
   else for (const [kind, model] of Object.entries(value.preferredModels)) if (!models.kinds[kind]?.allowedModels.includes(model)) errors.push(`Invalid preferredModels choice for ${kind}.`);
   if (!value.modelProviders || typeof value.modelProviders !== 'object' || Array.isArray(value.modelProviders)) errors.push('modelProviders must be an object.');
@@ -105,7 +195,7 @@ export function validatePolicy(value, models) {
     subset(project.excludedKinds, KINDS, `${slug}.excludedKinds`, errors);
     subset(project.excludedModels, allModels, `${slug}.excludedModels`, errors);
     if (Array.isArray(project.excludedKinds) && project.excludedKinds.some((kind) => !value.allowedKinds?.includes(kind))) errors.push(`${slug}.excludedKinds may only list globally available kinds.`);
-    if (Array.isArray(project.excludedModels) && project.excludedModels.some((model) => value.excludedModels?.includes(model) || !value.allowedKinds?.some((kind) => models.kinds[kind]?.allowedModels.includes(model)))) errors.push(`${slug}.excludedModels may only list globally available models.`);
+    if (Array.isArray(project.excludedModels) && project.excludedModels.some((model) => !value.allowedKinds?.some((kind) => models.kinds[kind]?.allowedModels.includes(model) && modelEnabled(kind, model, value)))) errors.push(`${slug}.excludedModels may only list globally available models.`);
   }
   const total = Object.values(value.projects || {}).reduce((sum, p) => sum + (Number.isInteger(p?.share) ? p.share : 0), 0);
   if (total > 100) errors.push('Project shares must total at most 100%.');
@@ -113,7 +203,9 @@ export function validatePolicy(value, models) {
 }
 
 export function savePolicy(value, models) {
-  const merged = { ...POLICY_DEFAULTS, ...value, machine: { ...POLICY_DEFAULTS.machine, ...value.machine }, providerModes: { ...POLICY_DEFAULTS.providerModes, ...value.providerModes } };
+  // ignoredRoutes is derived at load time, so a draft that carries it back does not store it.
+  const { ignoredRoutes: _derived, ...stored } = value || {};
+  const merged = { ...POLICY_DEFAULTS, ...stored, machine: { ...POLICY_DEFAULTS.machine, ...stored.machine }, providerModes: { ...POLICY_DEFAULTS.providerModes, ...stored.providerModes } };
   const errors = validatePolicy(merged, models);
   if (errors.length) return errors;
   const tmp = `${FILE}.${process.pid}.tmp`;
@@ -123,6 +215,9 @@ export function savePolicy(value, models) {
 }
 
 export function providerFor(kind, model, policy = null) {
+  const routes = policy?.harnessRoutes?.[kind];
+  if (model && isObject(routes) && Object.hasOwn(routes, model)) return routes[model];
+  if (model && Array.isArray(policy?.ignoredRoutes?.[kind]) && policy.ignoredRoutes[kind].includes(model)) return null;
   if (model && policy?.modelProviders && Object.hasOwn(policy.modelProviders, model)) return policy.modelProviders[model];
   if (kind === 'codex' || kind === 'claude') return kind;
   if (model?.startsWith('opencode-go/')) return 'opencodego';
@@ -241,7 +336,8 @@ export function leastOverProvider(lanes) {
 
 // One always-open lane that lists every permitted unmetered model, grouped by project and harness.
 // A model is unmetered when the configured route and the provider rules give it no metered provider.
-export function unmeteredLane(models, policy, projects = {}) {
+export function unmeteredLane(baseModels, policy, projects = {}) {
+  const models = mergeModels(baseModels, policy);
   const byProject = {};
   for (const [slug, project] of Object.entries(projects)) {
     const kinds = {};
@@ -249,7 +345,7 @@ export function unmeteredLane(models, policy, projects = {}) {
       const config = models.kinds[kind];
       if (!config || (project.excludedKinds || []).includes(kind)) continue;
       const permitted = (config.allowedModels || []).filter((model) =>
-        !(policy.excludedModels || []).includes(model)
+        modelEnabled(kind, model, policy)
         && !(project.excludedModels || []).includes(model)
         && providerFor(kind, model, policy) === null);
       if (permitted.length) kinds[kind] = permitted;
@@ -264,7 +360,8 @@ export function unmeteredSummary(lane) {
   return Object.entries(lane?.byProject || {}).map(([slug, kinds]) => `${slug}: ${Object.entries(kinds).map(([kind, names]) => `${kind} (${names.join(', ')})`).join(', ')}`).join('; ');
 }
 
-export function deriveControl(snap, policy, models, paneSince = {}, now = Date.now()) {
+export function deriveControl(snap, policy, baseModels, paneSince = {}, now = Date.now()) {
+  const models = mergeModels(baseModels, policy);
   const projects = workspaceProjects(snap);
   const panes = snap.herdr?.panes || [];
   const settings = {};
@@ -298,7 +395,7 @@ export function deriveControl(snap, policy, models, paneSince = {}, now = Date.n
   }
   const risks = Object.fromEntries((snap.quotas || []).map((q) => [q.provider, quotaRisk(q, policy, now)]));
   const pressures = Object.fromEntries((snap.quotas || []).map((q) => [q.provider, quotaPressure(q, policy, now)]));
-  const globalAllowed = Object.fromEntries(Object.entries(models.kinds).filter(([kind]) => policy.allowedKinds.includes(kind)).map(([kind, cfg]) => [kind, cfg.allowedModels.filter((m) => !policy.excludedModels.includes(m))]));
+  const globalAllowed = Object.fromEntries(Object.entries(models.kinds).filter(([kind]) => policy.allowedKinds.includes(kind)).map(([kind, cfg]) => [kind, cfg.allowedModels.filter((m) => modelEnabled(kind, m, policy))]));
   const handoffs = [];
   for (const p of Object.values(result)) {
     if (!p.orch) continue;

@@ -1083,3 +1083,48 @@ test('worker allow CLI parses paths and reason and rejects missing or unknown op
   assert.throws(() => runKitCommand('worker', ['allow', 'scope-cli', 'docs/a.md'], options), /needs --reason/);
   assert.throws(() => runKitCommand('worker', ['allow', 'scope-cli', 'docs/a.md', '--reason', 'r', '--bogus', 'x'], options), /Unknown option/);
 });
+
+test('worker start merges extra models into the harness allow-list and applies per-harness state', () => {
+  const f = setupFixture(null);
+  const extra = 'opencode-go/glm-5.2';
+  const write = (policy) => fs.writeFileSync(f.rulesFile, JSON.stringify({ updatedAt: new Date().toISOString(), policy: { allowedKinds: ['codex', 'pi', 'opencode'], excludedModels: [], ...policy } }));
+  const start = (name, options) => {
+    const output = [];
+    const result = startWorker(name, { task: 'x', allow: ['src/'], dryRun: true, ...options }, {
+      config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: (line) => output.push(line),
+    });
+    return { result, output: output.join('\n') };
+  };
+  write({ extraModels: { pi: [extra] }, harnessRoutes: { pi: { [extra]: null } } });
+  const { result, output } = start('extra-pi', { kind: 'pi', model: extra });
+  assert.equal(result.model, extra);
+  assert.deepEqual(result.launchArgs.slice(0, 4), ['--model', extra, '--models', extra]);
+  assert.match(output, new RegExp(`Validate kind/model/effort: pi / ${extra.replace('.', '\\.')}`));
+  assert.throws(() => start('extra-opencode', { kind: 'opencode', model: extra }), /not allowed for opencode/);
+  assert.throws(() => start('extra-effort', { kind: 'pi', model: extra, effort: 'high' }), /Effort high is not allowed for pi/);
+
+  write({ extraModels: { pi: [extra] }, preferredModels: { pi: extra } });
+  assert.equal(start('extra-preferred', { kind: 'pi' }).result.model, extra);
+
+  const shared = 'opencode-go/deepseek-v4.1-flash';
+  write({ disabledModels: { opencode: [shared] } });
+  assert.throws(() => start('shared-off', { kind: 'opencode', model: shared }), /disabled for opencode/);
+  assert.equal(start('shared-on', { kind: 'pi', model: shared }).result.model, shared);
+
+  write({ extraModels: { pi: ['bad;model'] } });
+  assert.throws(() => start('bad-extra', { kind: 'pi', model: 'bad;model' }), /not allowed for pi/);
+
+  fs.writeFileSync(f.rulesFile, JSON.stringify({ updatedAt: new Date().toISOString(), avoidProviders: ['opencodego'], policy: { allowedKinds: ['pi'], excludedModels: [], extraModels: { pi: [extra] }, harnessRoutes: { pi: { [extra]: 'opencodego' } } } }));
+  assert.throws(() => start('extra-routed', { kind: 'pi', model: extra }), /opencodego is ahead of quota pace/);
+});
+
+test('the models command lists extra models from the local policy', async () => {
+  const { runKitCommand } = await import('../src/kit/cli.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-models-'));
+  const rulesFile = path.join(dir, 'rules.json');
+  fs.writeFileSync(rulesFile, JSON.stringify({ policy: { extraModels: { pi: ['opencode-go/glm-5.2'] } } }));
+  const result = runKitCommand('models', ['--kind', 'pi'], { output: () => {}, rulesFile });
+  assert.ok(result.pi.allowedModels.includes('opencode-go/glm-5.2'));
+  const missing = runKitCommand('models', [], { output: () => {}, rulesFile: path.join(dir, 'absent.json') });
+  assert.deepEqual(missing.pi.allowedModels, loadModels().kinds.pi.allowedModels);
+});

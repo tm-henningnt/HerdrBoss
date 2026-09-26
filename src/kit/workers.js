@@ -4,7 +4,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { appendDelegatedRun, compareChangedPaths, gitChangedPaths, gitLog, readJson, validateAllowedPaths, validateScopePaths, validateWorkerReport } from './orchestration.js';
 import { recordUsage } from '../usage.js';
-import { providerFor, selectModel, unmeteredSummary } from '../control.js';
+import { mergeModels, modelEnabled, providerFor, selectModel, unmeteredSummary } from '../control.js';
 
 const NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
 const BRIEF_SLOTS = new Set([
@@ -480,11 +480,13 @@ export function startWorker(name, options, {
     output(`Warning: --force overrides Herdr Boss rules for ${options.kind}.`);
   }
   const policy = rules.policy;
-  const { model, effort, launchArgs } = validateSelection(options.kind, options, modelConfig, config, policy);
+  // Local extra models from the policy join the harness allow-list and use its launch arguments.
+  const { model, effort, launchArgs } = validateSelection(options.kind, options, mergeModels(modelConfig, policy), config, policy);
   const projectPolicy = policy?.projects?.[config.slug];
   if (policy) {
     if (!policy.allowedKinds?.includes(options.kind)) throw new Error(`${options.kind} is disabled globally by Herdr Boss.`);
     if (policy.excludedModels?.includes(model)) throw new Error(`${model} is disabled globally by Herdr Boss.`);
+    if (!modelEnabled(options.kind, model, policy)) throw new Error(`${model} is disabled for ${options.kind} by Herdr Boss.`);
     if (projectPolicy?.excludedKinds?.includes(options.kind) || projectPolicy?.excludedModels?.includes(model)) throw new Error(`${options.kind}/${model} is excluded for project ${config.slug}.`);
     if (projectPolicy?.mode === 'paused' && !options.force) throw new Error(`Project ${config.slug} is paused. Use --force only for an authorized override.`);
   }

@@ -217,7 +217,7 @@ test('provider routing separates free OpenCode from OpenCode Go', () => {
 });
 
 test('policy validates preferred models and explicit provider routes', () => {
-  const p = policy({ preferredModels: { codex: 'gpt-6-sol' }, modelProviders: { 'gpt-6-sol': 'claude' } });
+  const p = policy({ preferredModels: { codex: 'gpt-6-sol' }, modelProviders: { 'gpt-6-sol': null, 'opencode-go/deepseek-v4.1-flash': 'claude' } });
   assert.deepEqual(validatePolicy(p, models), []);
   assert.match(validatePolicy(policy({ preferredModels: { codex: 'claude-sonnet-4-5' } }), models).join(' '), /preferredModels/);
   assert.match(validatePolicy(policy({ modelProviders: { 'unknown-model': 'codex' } }), models).join(' '), /modelProviders/);
@@ -572,4 +572,172 @@ test('the bulletin shows the unmetered lane in Provider lanes', async () => {
   const bulletin = renderBulletin(snap, { alerts: [], advice: [] }, cfg);
   assert.match(bulletin, /Unmetered: open/);
   assert.match(bulletin, /opencode\/space-bunny-free/);
+});
+
+test('extra models join only their harness allow-list and keep that harness launch rules', async () => {
+  const { mergeModels } = await import('../src/control.js');
+  const base = structuredClone(models.kinds.pi.allowedModels);
+  const p = policy({ extraModels: { pi: ['opencode-go/glm-5.2'] }, preferredModels: { pi: 'opencode-go/glm-5.2' } });
+  const merged = mergeModels(models, p);
+  assert.deepEqual(merged.kinds.pi.allowedModels, [...base, 'opencode-go/glm-5.2']);
+  assert.ok(!merged.kinds.opencode.allowedModels.includes('opencode-go/glm-5.2'));
+  assert.deepEqual(merged.kinds.pi.launchArgs, models.kinds.pi.launchArgs);
+  assert.deepEqual(merged.kinds.pi.allowedEfforts, models.kinds.pi.allowedEfforts);
+  assert.deepEqual(models.kinds.pi.allowedModels, base, 'the base catalog is not changed');
+  assert.deepEqual(mergeModels(merged, p).kinds.pi.allowedModels, merged.kinds.pi.allowedModels, 'merging twice adds nothing');
+  assert.deepEqual(validatePolicy(p, models), []);
+  assert.deepEqual(validatePolicy(policy({ orchestratorLadder: [{ kind: 'pi', model: 'opencode-go/glm-5.2', effort: null }], extraModels: { pi: ['opencode-go/glm-5.2'] } }), models), []);
+});
+
+test('extra model strings reject whitespace, shell syntax, duplicates, and unknown harnesses', () => {
+  for (const bad of ['has space', 'a;rm', '$(id)', '`id`', 'a\nb', 'a\tb', '', '-rf', '.hidden', 'a|b', 'a&b', 'a>b', "a'b", 'a"b', 'a\\b', 'x'.repeat(129), 42, null]) {
+    assert.match(validatePolicy(policy({ extraModels: { pi: [bad] } }), models).join(' '), /extraModels/, `rejects ${JSON.stringify(bad)}`);
+  }
+  for (const good of ['opencode-go/glm-5.2', 'vendor/Model_2.1-mini', 'gpt-7']) assert.deepEqual(validatePolicy(policy({ extraModels: { codex: [good] } }), models), [], `accepts ${good}`);
+  assert.match(validatePolicy(policy({ extraModels: { pi: ['x/a', 'x/a'] } }), models).join(' '), /extraModels/);
+  assert.match(validatePolicy(policy({ extraModels: { pi: [models.kinds.pi.allowedModels[0]] } }), models).join(' '), /extraModels/);
+  assert.match(validatePolicy(policy({ extraModels: { unknown: ['x/a'] } }), models).join(' '), /extraModels/);
+  assert.match(validatePolicy(policy({ extraModels: ['x/a'] }), models).join(' '), /extraModels/);
+  assert.match(validatePolicy(policy({ preferredModels: { opencode: 'x/only-pi' }, extraModels: { pi: ['x/only-pi'] } }), models).join(' '), /preferredModels/);
+});
+
+test('a model under two harnesses has an independent enabled state and provider route in each', async () => {
+  const { modelEnabled, unmeteredLane } = await import('../src/control.js');
+  const shared = 'opencode-go/deepseek-v4.1-flash';
+  assert.ok(models.kinds.opencode.allowedModels.includes(shared) && models.kinds.pi.allowedModels.includes(shared));
+  const p = policy({ disabledModels: { opencode: [shared] }, harnessRoutes: { pi: { [shared]: null } } });
+  assert.deepEqual(validatePolicy(p, models), []);
+  assert.equal(modelEnabled('opencode', shared, p), false);
+  assert.equal(modelEnabled('pi', shared, p), true);
+  assert.equal(providerFor('pi', shared, p), null);
+  assert.equal(providerFor('opencode', shared, p), 'opencodego');
+  const control = deriveControl(snapshot(), p, models, {}, Date.parse('2026-09-24T17:00:00Z'));
+  assert.ok(!control.globalAllowed.opencode.includes(shared));
+  assert.ok(control.globalAllowed.pi.includes(shared));
+  const lane = unmeteredLane(models, p, { a: { excludedKinds: [], excludedModels: [] } });
+  assert.ok(lane.byProject.a.pi.includes(shared));
+  assert.ok(!lane.byProject.a.opencode.includes(shared));
+
+  const extra = 'vendor/shared-extra';
+  const q = policy({ extraModels: { pi: [extra], opencode: [extra] }, harnessRoutes: { opencode: { [extra]: 'opencodego' } }, disabledModels: { pi: [extra] } });
+  assert.deepEqual(validatePolicy(q, models), []);
+  assert.equal(providerFor('opencode', extra, q), 'opencodego');
+  assert.equal(providerFor('pi', extra, q), null, 'a new model starts unmetered');
+  const extraControl = deriveControl(snapshot(), q, models, {}, Date.parse('2026-09-24T17:00:00Z'));
+  assert.ok(extraControl.globalAllowed.opencode.includes(extra));
+  assert.ok(!extraControl.globalAllowed.pi.includes(extra));
+});
+
+test('per-harness assignments validate the harness, the model, and the provider', () => {
+  assert.match(validatePolicy(policy({ harnessRoutes: { codex: { 'gpt-6-luna': 'other' } } }), models).join(' '), /harnessRoutes/);
+  assert.match(validatePolicy(policy({ harnessRoutes: { claude: { 'gpt-6-luna': 'codex' } } }), models).join(' '), /harnessRoutes/);
+  assert.match(validatePolicy(policy({ harnessRoutes: { nope: { 'gpt-6-luna': 'codex' } } }), models).join(' '), /harnessRoutes/);
+  assert.match(validatePolicy(policy({ harnessRoutes: { codex: [] } }), models).join(' '), /harnessRoutes/);
+  assert.match(validatePolicy(policy({ disabledModels: { claude: ['gpt-6-luna'] } }), models).join(' '), /disabledModels/);
+  assert.match(validatePolicy(policy({ disabledModels: { codex: ['gpt-6-luna', 'gpt-6-luna'] } }), models).join(' '), /disabledModels/);
+  assert.match(validatePolicy(policy({ disabledModels: { codex: 'gpt-6-luna' } }), models).join(' '), /disabledModels/);
+  assert.deepEqual(validatePolicy(policy({ harnessRoutes: { codex: { 'gpt-6-luna': null } }, disabledModels: { codex: ['gpt-6-sol'] } }), models), []);
+});
+
+test('legacy global exclusions and routes keep working beside per-harness assignments', async () => {
+  const { modelEnabled } = await import('../src/control.js');
+  const shared = 'opencode-go/deepseek-v4.1-flash';
+  const legacy = { ...structuredClone(POLICY_DEFAULTS), excludedModels: [shared], modelProviders: { [shared]: null } };
+  delete legacy.extraModels; delete legacy.disabledModels; delete legacy.harnessRoutes;
+  assert.deepEqual(validatePolicy(legacy, models), []);
+  assert.equal(modelEnabled('pi', shared, legacy), false);
+  assert.equal(modelEnabled('opencode', shared, legacy), false);
+  assert.equal(providerFor('pi', shared, legacy), null);
+  const mixed = policy({ modelProviders: { [shared]: null }, harnessRoutes: { opencode: { [shared]: 'opencodego' } } });
+  assert.equal(providerFor('opencode', shared, mixed), 'opencodego', 'a harness route takes precedence');
+  assert.equal(providerFor('pi', shared, mixed), null, 'the legacy route stays for the other harness');
+  assert.equal(usageProvider({ kind: 'opencode', model: shared }, mixed), 'opencodego');
+  assert.equal(usageProvider({ kind: 'pi', model: shared }, mixed), 'unmetered-or-unknown');
+});
+
+test('a project may exclude a model that at least one available harness enables', () => {
+  const shared = 'opencode-go/deepseek-v4.1-flash';
+  const project = { share: 100, mode: 'auto', excludedKinds: [], excludedModels: [shared] };
+  assert.deepEqual(validatePolicy(policy({ disabledModels: { opencode: [shared] }, projects: { a: project } }), models), []);
+  assert.match(validatePolicy(policy({ disabledModels: { opencode: [shared], pi: [shared] }, projects: { a: project } }), models).join(' '), /a\.excludedModels/);
+  assert.deepEqual(validatePolicy(policy({ extraModels: { pi: ['vendor/x'] }, projects: { a: { ...project, excludedModels: ['vendor/x'] } } }), models), []);
+});
+
+test('handoff targets use the merged allow-list and the per-harness enabled state', async () => {
+  const { handoffTarget } = await import('../src/handoff.js');
+  const extra = 'vendor/pi-extra';
+  const p = policy({ extraModels: { pi: [extra] }, disabledModels: { codex: ['gpt-6-sol'] }, harnessRoutes: { pi: { [extra]: 'opencodego' } } });
+  const target = handoffTarget('pi', { model: extra }, p, models);
+  assert.equal(target.model, extra);
+  assert.equal(target.provider, 'opencodego');
+  assert.deepEqual(target.launchArgs.slice(0, 4), ['--model', extra, '--models', extra]);
+  assert.throws(() => handoffTarget('opencode', { model: extra }, p, models), /allow-list/);
+  assert.throws(() => handoffTarget('codex', { model: 'gpt-6-sol' }, p, models), /disabled for codex/);
+  assert.equal(handoffTarget('codex', { model: 'gpt-6-astra', effort: 'high' }, p, models).launchArgs.join(' '), '-m gpt-6-astra -c model_reasoning_effort=high');
+  assert.throws(() => handoffTarget('codex', { model: 'gpt-6-luna' }, policy({ excludedModels: ['gpt-6-luna'] }), models), /global policy/);
+  assert.throws(() => handoffTarget('pi', { model: 'bad model' }, policy({ extraModels: { pi: ['bad model'] } }), models), /allow-list/);
+});
+
+test('harness routes permit only the compatible provider or unmetered for Codex and Claude', async () => {
+  const { harnessProviders } = await import('../src/control.js');
+  assert.deepEqual(harnessProviders('codex'), ['codex', null]);
+  assert.deepEqual(harnessProviders('claude'), ['claude', null]);
+  assert.deepEqual(harnessProviders('opencode'), ['claude', 'codex', 'opencodego', null]);
+  assert.deepEqual(harnessProviders('pi'), ['claude', 'codex', 'opencodego', null]);
+  for (const [kind, model, provider] of [['codex', 'gpt-6-luna', 'claude'], ['codex', 'gpt-6-luna', 'opencodego'], ['claude', 'claude-opus-5-5', 'codex'], ['claude', 'claude-opus-5-5', 'opencodego']]) {
+    const errors = validatePolicy(policy({ harnessRoutes: { [kind]: { [model]: provider } } }), models).join(' ');
+    assert.match(errors, new RegExp(`harnessRoutes: ${kind}/${model} cannot use ${provider}`), `${kind} refuses ${provider}`);
+    assert.match(errors, new RegExp(`Choose ${kind} or null \\(unmetered\\)`));
+  }
+  assert.deepEqual(validatePolicy(policy({
+    extraModels: { codex: ['gpt-7'], claude: ['claude-next'], pi: ['vendor/x'] },
+    harnessRoutes: { codex: { 'gpt-6-luna': 'codex', 'gpt-7': null }, claude: { 'claude-opus-5': 'claude', 'claude-next': null }, pi: { 'vendor/x': 'claude' }, opencode: { 'opencode/big-pickle': 'codex' } },
+  }), models), [], 'compatible, unmetered, and open-harness routes are accepted');
+  assert.deepEqual(validatePolicy(policy({ modelProviders: { 'opencode-go/deepseek-v4.1-flash': 'codex' } }), models), [], 'open harnesses accept any legacy route');
+});
+
+test('saving rejects an incompatible effective legacy route unless the harness has a compatible override', () => {
+  const errors = validatePolicy(policy({ modelProviders: { 'gpt-6-sol': 'claude' } }), models).join(' ');
+  assert.match(errors, /modelProviders: codex\/gpt-6-sol inherits claude\. Choose codex or null \(unmetered\) in harnessRoutes\.codex\./);
+  assert.match(validatePolicy(policy({ modelProviders: { 'claude-opus-5': 'opencodego' } }), models).join(' '), /claude\/claude-opus-5 inherits opencodego\. Choose claude or null/);
+  assert.deepEqual(validatePolicy(policy({ modelProviders: { 'gpt-6-sol': 'claude' }, harnessRoutes: { codex: { 'gpt-6-sol': 'codex' } } }), models), []);
+  assert.deepEqual(validatePolicy(policy({ modelProviders: { 'gpt-6-sol': 'claude' }, harnessRoutes: { codex: { 'gpt-6-sol': null } } }), models), []);
+  assert.deepEqual(validatePolicy(policy({ modelProviders: { 'gpt-6-sol': 'claude' }, allowedKinds: ['claude', 'pi'] }), models), [], 'a disabled harness does not block a save');
+  assert.deepEqual(validatePolicy(policy({ modelProviders: { 'claude-opus-5-5': 'claude' } }), models), [], 'the compatible live route stays valid');
+});
+
+test('loading treats an incompatible legacy route as unmetered, keeps the raw value, and warns once', async (t) => {
+  const { loadPolicy } = await import('../src/control.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-policy-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'policy.json');
+  const warnings = [];
+  const warn = (text) => warnings.push(text);
+  fs.writeFileSync(file, JSON.stringify({ modelProviders: { 'gpt-6-astra': 'claude', 'claude-opus-5-5': 'claude', 'opencode-go/mimo-v2.6-flash': 'codex' } }));
+  const loaded = loadPolicy({ file, models, warn });
+  assert.equal(loaded.modelProviders['gpt-6-astra'], 'claude', 'the raw value stays');
+  assert.deepEqual(loaded.ignoredRoutes, { codex: ['gpt-6-astra'] });
+  assert.equal(providerFor('codex', 'gpt-6-astra', loaded), null);
+  assert.equal(providerFor('claude', 'claude-opus-5-5', loaded), 'claude');
+  assert.equal(providerFor('pi', 'opencode-go/mimo-v2.6-flash', loaded), 'codex');
+  assert.equal(usageProvider({ kind: 'codex', model: 'gpt-6-astra' }, loaded), 'unmetered-or-unknown');
+  const control = deriveControl(snapshot(), loaded, models, {}, Date.parse('2026-09-24T17:00:00Z'));
+  assert.ok(control.globalAllowed.codex.includes('gpt-6-astra'), 'the policy still loads and runs');
+  loadPolicy({ file, models, warn });
+  loadPolicy({ file, models, warn });
+  assert.equal(warnings.length, 1, 'the warning appears once');
+  assert.match(warnings[0], /codex\/gpt-6-astra.*claude.*Unmetered/);
+
+  fs.writeFileSync(file, JSON.stringify({ modelProviders: { 'claude-opus-5-5': 'claude' } }));
+  const quiet = [];
+  const compatible = loadPolicy({ file, models, warn: (text) => quiet.push(text) });
+  assert.deepEqual(compatible.ignoredRoutes, {});
+  assert.deepEqual(quiet, []);
+  assert.equal(providerFor('claude', 'claude-opus-5-5', compatible), 'claude');
+
+  fs.writeFileSync(file, JSON.stringify({ modelProviders: { 'gpt-6-astra': 'claude' }, harnessRoutes: { codex: { 'gpt-6-astra': 'codex' } } }));
+  const overridden = loadPolicy({ file, models, warn: (text) => quiet.push(text) });
+  assert.deepEqual(overridden.ignoredRoutes, {});
+  assert.equal(providerFor('codex', 'gpt-6-astra', overridden), 'codex');
+  assert.deepEqual(quiet, []);
 });

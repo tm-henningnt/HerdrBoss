@@ -69,19 +69,57 @@ When every metered provider is ahead of pace, `worker start` allows the least-ov
 
 ## Settings and allocation
 
-The Settings page controls the available harnesses and models, preferred models, provider quota modes, quota pacing goals, model-to-provider routes, and machine limits. Herdr Boss takes every harness and model choice from `kit/models.json`.
+The Settings page has one section for each harness. A harness section holds the harness availability, the preferred model, and one row for each model. Provider quota modes, quota pacing goals, and machine limits are below the harness sections.
+
+The model catalog is `kit/models.json`. The local policy can add model strings to one harness. Herdr Boss merges these extra models into the allow-list of that harness in worker start, handoff plan and prepare, the lanes and the bulletin, Settings, Allocation, and `herdr-boss models`. An extra model uses the launch arguments and effort rules of its harness.
 
 The Machine section saves its settings in `policy.json`. Herdr Boss reads Owner idle time from macOS `IOHIDSystem`. The default away time is 10 minutes. Missing or invalid idle data means the Owner is present. CPU is total sampled process CPU, including other processes, divided by core count. The default CPU limits are 70% while present and 95% while away. Set the away CPU limit to blank to disable it. The default 5-minute load backstops are 3 times the core count while present and 8 times while away. Set a load backstop to blank to disable it. The load average stays visible when a backstop is disabled.
 
 Policy settings take precedence over legacy `config.json` values. The old `machine.loadWarnFactor` field does not control machine guards. The `machine.alertCooldownSeconds` policy value takes precedence over the legacy top-level `alertCooldownSeconds` field for notice delivery.
 
-Clear a harness or model box to disable it for every project. Choose a preferred model for a harness. Worker start and handoff use it when you omit an explicit model. An empty choice uses the harness default.
+Clear the **Available** box of a harness to disable that harness for every project. Choose a preferred model for a harness. Worker start and handoff use it when you omit an explicit model. An empty choice uses the harness default.
+
+Each model row has a box and a provider route. Clear the box to disable the model in that harness for every project. A model can be in more than one harness. Each harness keeps its own box and its own route for the model, so a change in one harness does not change another harness.
+
+To add a model, type its string in the harness section and select **Add model**. A model string has 1 to 128 characters. It starts with a letter or a digit. It holds only letters, digits, dots (`.`), underscores (`_`), slashes (`/`), and hyphens (`-`). The server refuses whitespace and shell or control characters. A new model shows the **local** tag and starts unmetered. Select **Remove** to delete a local model. Remove also deletes its route, its disabled entry, its preferred-model choice, and its orchestrator succession choices.
 
 Choose **Manage pace** to apply quota pacing and handover alerts. Choose **Ignore quota** to turn them off for that provider. A provider in `ignore` mode has no pacing and no handover alerts.
 
 Set a **quota pacing goal** for each measured window. The field shows the provider and the window label, such as `Codex Weekly goal %`. A blank field means 100%. Enter a whole percentage from 0 through 100. `pacingGoals` in `policy.json` stores the value by provider and by the window key (`primary`, `secondary`, or `tertiary`). Clearing the field removes that goal and restores 100%.
 
-Choose `codex`, `claude`, or `opencodego` to route a model to a provider quota. Choose **Unmetered** to store `null`. If no route is set, Herdr Boss uses the existing harness and model prefix rules. Old policy files can omit `preferredModels`, `modelProviders`, and `pacingGoals`.
+Choose a provider to route a model to its quota. Choose **Unmetered** to store `null`.
+
+The provider choices depend on the harness:
+
+| Harness | Provider choices |
+| --- | --- |
+| `codex` | Codex, Unmetered |
+| `claude` | Claude, Unmetered |
+| `opencode`, `pi` | Claude, Codex, OpenCode Go, Unmetered |
+
+Codex uses OpenAI subscription models, and Claude uses Anthropic subscription models. The server refuses a `harnessRoutes` entry that sends a Codex model to Claude or OpenCode Go, or a Claude model to Codex or OpenCode Go. The error names the harness, the model, and the permitted choices, for example `harnessRoutes: codex/gpt-6-luna cannot use claude. Choose codex or null (unmetered).` The same rule applies to a legacy `modelProviders` route that a Codex or Claude harness inherits:
+
+- **Load:** an incompatible legacy route never stops a policy from loading. Herdr Boss keeps the raw `modelProviders` value. It treats the model as Unmetered in that harness when no `harnessRoutes` entry overrides the route. Worker start, handoff, lanes, the bulletin, and usage records all use this unmetered result. The service log shows one warning for each such route. `policy show` and the API list these routes in the derived `ignoredRoutes` field. Herdr Boss does not store `ignoredRoutes`.
+- **Settings:** the row shows **Ignored** and a note that names the ignored provider. Choose a provider in the row to store a compatible route in `harnessRoutes` for that harness. The page cannot restore the incompatible route.
+- **Save:** Apply policy and `policy set` refuse a policy in which an available Codex or Claude harness inherits an incompatible legacy route without an override. The error names the harness, the model, and the permitted choices, for example `modelProviders: codex/gpt-6-sol inherits claude. Choose codex or null (unmetered) in harnessRoutes.codex.` A harness that is not available does not block a save. Herdr Boss finds the provider of a model in a harness in this order:
+
+1. The route of that harness and model in `harnessRoutes`.
+2. The route of the model in `modelProviders`, for all harnesses.
+3. The harness rule: `codex` and `claude` use their own provider quotas.
+4. The prefix rule: an `opencode-go/` model uses the OpenCode Go quota.
+5. Otherwise, the model is unmetered.
+
+`policy.json` stores the model settings in these fields:
+
+| Field | Shape | Meaning |
+| --- | --- | --- |
+| `extraModels` | `{ "pi": ["vendor/model"] }` | Local model strings for each harness. |
+| `disabledModels` | `{ "opencode": ["vendor/model"] }` | Models that one harness does not use. |
+| `harnessRoutes` | `{ "pi": { "vendor/model": null } }` | The provider route of a model in one harness. |
+| `excludedModels` | `["vendor/model"]` | Models that no harness uses. |
+| `modelProviders` | `{ "vendor/model": "codex" }` | The route of a model in every harness without its own route. |
+
+Old policy files can omit all of these fields and `preferredModels` and `pacingGoals`. Herdr Boss keeps `excludedModels` and `modelProviders` values. When you enable a model in one harness and `excludedModels` lists it, Settings removes it from `excludedModels` and adds it to `disabledModels` for each other harness that lists it.
 
 Both pages keep policy edits in a draft. Select **Apply policy** to save the draft. A rejected save shows the server error and keeps the draft.
 
