@@ -8,7 +8,7 @@ import { loadModels, loadProjectConfig, PROJECT_DEFAULTS } from '../src/kit/conf
 import { appendDelegatedRun, compareChangedPaths, gitChangedPaths, readDelegatedRuns, validateAllowedPaths, validateDelegatedRun, validateWorkerReport } from '../src/kit/orchestration.js';
 import { buildGhArgs } from '../src/kit/gh.js';
 import { runKitCommand } from '../src/kit/cli.js';
-import { allowWorkerScope, collectWorker, createHerdrRunner, filterCollectProcesses, listWorkers, parseWorktreeCwdProcesses, renderBrief, startWorker } from '../src/kit/workers.js';
+import { allowWorkerScope, collectWorker, createHerdrRunner, filterCollectProcesses, listWorkers, parseWorktreeCwdProcesses, renderBrief, startWorker, waitForWorkerPane } from '../src/kit/workers.js';
 import { classifyWorktrees, pruneWorktrees } from '../src/kit/worktrees.js';
 import { usageProvider } from '../src/usage.js';
 
@@ -116,6 +116,28 @@ test('Herdr runner returns plain pane-read text without JSON parsing', () => {
     return '% ';
   });
   assert.deepEqual(runner(['pane', 'read', 'ws:p2', '--source', 'visible', '--lines', '40', '--format', 'text']), { text: '% ' });
+});
+
+test('worker pane readiness recognizes Oh My Zsh git prompt marks', () => {
+  for (const prompt of ['➜  TmProcessMining git:(main) ✗', '➜  TmProcessMining git:(main) ✔']) {
+    let reads = 0;
+    const herdr = (args) => {
+      if (args[0] === 'pane' && args[1] === 'get') return { pane: { pane_id: 'ws:p2', workspace_id: 'ws', foreground_cwd: '/worktree' } };
+      if (args[0] === 'agent' && args[1] === 'list') return { agents: [] };
+      if (args[0] === 'pane' && args[1] === 'process-info') return { process_info: { shell_pid: 42, foreground_processes: [{ pid: 42 }] } };
+      if (args[0] === 'pane' && args[1] === 'read') { reads++; return { text: `${prompt}\n` }; }
+      throw new Error(`Unexpected Herdr call: ${args.join(' ')}`);
+    };
+    waitForWorkerPane('ws:p2', 'ws', '/worktree', herdr, () => assert.fail('a recognized prompt must return immediately'));
+    assert.equal(reads, 1, `${prompt} must be recognized as a prompt`);
+  }
+});
+
+test('worker pane readiness uses its configured timeout', () => {
+  let waits = 0;
+  const herdr = () => { throw new Error('pane is not ready'); };
+  assert.throws(() => waitForWorkerPane('ws:p2', 'ws', '/worktree', herdr, () => { waits++; }, { timeoutMs: 90_000 }), /within 90 seconds/);
+  assert.equal(waits, 360);
 });
 
 test('brief rendering fills known slots and rejects an unknown slot', () => {
