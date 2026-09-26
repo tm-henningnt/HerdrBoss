@@ -1159,6 +1159,27 @@ test('ignored quota exhaustion closes the lane and excludes it from dispatch and
   assert.equal(deriveControl({ ...snapshot(), quotas }, ignored, models, {}, now).risks.opencodego.usedPercent, 100, 'ignore mode keeps live handover risk');
 });
 
+test('successor selection skips an actively exhausted free model and keeps available or expired rungs eligible', async () => {
+  const { pickSuccessor } = await import('../src/control.js');
+  const policy = structuredClone(POLICY_DEFAULTS);
+  policy.orchestratorLadder = [
+    { kind: 'pi', model: 'opencode-go/deepseek-v4.1-flash' },
+    { kind: 'codex', model: 'gpt-6-luna' },
+  ];
+  policy.harnessRoutes = { pi: { 'opencode-go/deepseek-v4.1-flash': null } };
+  const project = { excludedKinds: [], excludedModels: [] };
+  const control = {
+    globalAllowed: { pi: ['opencode-go/deepseek-v4.1-flash'], codex: ['gpt-6-luna'] },
+    risks: {}, exhausted: {},
+  };
+  const now = Date.parse('2026-09-26T12:00:00.000Z');
+  const exhausted = { 'opencode-go/deepseek-v4.1-flash': { model: 'opencode-go/deepseek-v4.1-flash', retryAt: now + 60000 } };
+
+  assert.equal(pickSuccessor(project, 'claude', 'claude', policy, { ...control, exhaustedFreeModels: exhausted }, now).kind, 'codex');
+  assert.equal(pickSuccessor(project, 'claude', 'claude', policy, control, now).kind, 'pi');
+  assert.equal(pickSuccessor(project, 'claude', 'claude', policy, { ...control, exhaustedFreeModels: exhausted }, now + 60000).kind, 'pi');
+});
+
 test('a near-exhaustion window keeps its reserve state under a goal', async () => {
   const { laneStatus } = await import('../src/control.js');
   const now = Date.parse('2026-09-25T10:00:00Z');

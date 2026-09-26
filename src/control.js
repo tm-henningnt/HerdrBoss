@@ -344,12 +344,13 @@ export function selectModel(kind, explicitModel, models, policy = null) {
   return explicitModel ?? policy?.preferredModels?.[kind] ?? models.kinds[kind]?.defaultModel;
 }
 
-export function pickSuccessor(project, currentKind, currentProvider, policy, control) {
+export function pickSuccessor(project, currentKind, currentProvider, policy, control, now = Date.now()) {
   for (const rung of policy.orchestratorLadder || []) {
     const provider = providerFor(rung.kind, rung.model, policy);
     if (rung.kind === currentKind || (currentProvider && provider === currentProvider) ||
         !control.globalAllowed[rung.kind]?.includes(rung.model) ||
         project.excludedKinds.includes(rung.kind) || project.excludedModels.includes(rung.model) ||
+        (!provider && Number.isFinite(control.exhaustedFreeModels?.[rung.model]?.retryAt) && control.exhaustedFreeModels[rung.model].retryAt > now) ||
         (provider && (control.risks[provider] || control.exhausted?.[provider]))) continue;
     return { ...rung, provider: provider || 'unmetered' };
   }
@@ -574,7 +575,7 @@ function displayUnmeteredModel(model) {
   return model.startsWith('opencode/') ? model.slice('opencode/'.length) : model;
 }
 
-export function deriveControl(snap, policy, baseModels, paneSince = {}, now = Date.now()) {
+export function deriveControl(snap, policy, baseModels, paneSince = {}, now = Date.now(), exhaustedFreeModels = {}) {
   const models = mergeModels(baseModels, policy);
   const workspaces = workspaceProjects(snap, policy);
   const projects = workspaces.filter((workspace) => !workspace.excluded);
@@ -619,7 +620,7 @@ export function deriveControl(snap, policy, baseModels, paneSince = {}, now = Da
     const currentProvider = providerFor(p.orch.kind, policy.preferredModels?.[p.orch.kind] ?? currentKindConfig?.defaultModel, policy);
     const window = risks[currentProvider];
     if (!window) continue;
-    const preferred = pickSuccessor(p, p.orch.kind, currentProvider, policy, { globalAllowed, risks, exhausted });
+    const preferred = pickSuccessor(p, p.orch.kind, currentProvider, policy, { globalAllowed, risks, exhausted, exhaustedFreeModels }, now);
     handoffs.push({ project: p.slug, workspace: p.workspace, pane: p.orch.pane, fromKind: p.orch.kind, sessionId: p.orch.sessionId, provider: currentProvider, window, target: preferred });
   }
   let bossHandoff = null;
@@ -629,7 +630,7 @@ export function deriveControl(snap, policy, baseModels, paneSince = {}, now = Da
     const currentProvider = kindConfig && providerFor(bossPane.agent, policy.preferredModels?.[bossPane.agent] ?? kindConfig.defaultModel, policy);
     const window = risks[currentProvider] || null;
     const bossProject = { excludedKinds: [], excludedModels: [] };
-    const target = kindConfig ? pickSuccessor(bossProject, bossPane.agent, currentProvider, policy, { globalAllowed, risks, exhausted }) : null;
+    const target = kindConfig ? pickSuccessor(bossProject, bossPane.agent, currentProvider, policy, { globalAllowed, risks, exhausted, exhaustedFreeModels }, now) : null;
     bossHandoff = {
       project: 'Boss', label: 'Boss', boss: true, workspace: bossPane.workspace, pane: bossPane.id,
       fromKind: bossPane.agent || null, sessionId: bossPane.agent ? bossPane.sessionId || (bossPane.agent_session?.kind === 'id' ? bossPane.agent_session.value : null) : null,
