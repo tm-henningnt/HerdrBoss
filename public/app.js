@@ -1253,7 +1253,7 @@ const HELP = {
     <p>Changes stay in a draft until you select <b>Apply policy</b>. A rejected save shows the server error and keeps your draft.</p>`],
   agents: ['Agents', `
     <p>Every Herdr workspace with its orchestrator and workers, live from Herdr.</p>
-    <p>A status dot shows working, blocked, failed, idle, or done. Failed means the last visible worker output matched a known provider error. Herdr Boss reads only the last eight visible lines when a worker first appears idle or done, or changes into either state. It sends the matched error label, worker name, and pane ID to the project orchestrator. Blocked workers get a notice after five minutes. Idle and done agents are ready for input; they have not always finished their task. Rows with the <b>orch</b> or <b>boss</b> label are orchestrators.</p>`],
+    <p>A status dot shows working, blocked, failed, idle, or done. Failed means the last visible worker output matched a known provider error, including <b>Free usage exceeded</b>. Herdr Boss reads only the last eight visible lines when a worker first appears idle or done, or changes into either state. It sends the matched error label, worker name, and pane ID to the project orchestrator. Blocked workers get a notice after five minutes. Idle and done agents are ready for input; they have not always finished their task. Rows with the <b>orch</b> or <b>boss</b> label are orchestrators.</p>`],
   browsers: ['Browsers', `
     <p>One persistent Chrome per project. Agents drive it; you can watch and help.</p>
     <h3>Start and manage</h3><p><b>Open visible</b> or <b>Open headless</b> starts the browser. <b>Manage</b> restarts it in the other mode, closes it, or sets the window size for the next launch.</p>

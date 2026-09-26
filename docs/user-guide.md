@@ -50,7 +50,7 @@ To add the shared rules to a project, follow [orchestrator-instructions.md](orch
 | A non-orchestrator worker stays blocked for more than 5 minutes | Notice its project orchestrator with the worker name and pane ID. |
 | A worker first appears idle or done, or changes into either state | Herdr Boss reads only the last 8 visible pane lines. A known provider error marks the worker failed and sends the orchestrator its name, pane ID, and fixed error label. |
 
-The failure labels are `API Error`, `401`, `429`, `Connection lost`, `usage limit`, `rate limit`, and `overloaded`. Matching ignores letter case. Herdr Boss stores and sends only the matched label. It does not store or forward pane output. A failed status clears when the same pane starts working or a different worker uses the pane. A later failure creates a new notice.
+The failure labels are `API Error`, `401`, `429`, `Connection lost`, `usage limit`, `rate limit`, `overloaded`, and `Free usage exceeded`. Matching ignores letter case. Herdr Boss stores and sends only the matched label and a parsed retry time. It does not store or forward pane output. A failed status clears when the same pane starts working or a different worker uses the pane. A later failure creates a new notice. A valid free-usage retry time exhausts the matching unmetered model until that time. The unmetered lane lists it separately from available models.
 
 A notice is a prompt to an `orch` pane. Herdr Boss normally sends it only when that agent is `idle` or `done`, and no more than the configured cooldown per alert and pane. It sends it sooner only when the severity increases. Worker failure notices send immediately, including when the orchestrator is `working`. A notice for all orchestrators goes only to projects with a worker that is `working` or `blocked`. You get a desktop notification once for each warning.
 
@@ -73,7 +73,7 @@ A **quota pacing goal** is the most percent of a window that you want to use by 
 
 Choose a one-off local date and time, or choose a recurring number of whole hours before reset. Herdr Boss stores a one-off time as an ISO timestamp. It deletes that whole goal when the time passes or the quota window resets. It keeps a recurring offset for later windows. A goal end must be after now, after the current window start, and no later than its reset. `herdr-boss lanes` and the bulletin show the goal and its end while the provider is open or restricted.
 
-The same output has one **unmetered** lane. It is always open and lists every permitted unmetered model by project and harness, after global and project exclusions. An unmetered model has no metered provider route. The unmetered lane never changes least-over selection, avoid-provider rules, quota warnings, or quota accounting.
+The same output has one **unmetered** lane. It is always open and lists every permitted unmetered model by project and harness, after global and project exclusions. An unmetered model has no metered provider route. It lists models with an active free-usage retry separately with their retry time. The unmetered lane never changes least-over selection, avoid-provider rules, quota warnings, or quota accounting.
 
 When every metered provider is ahead of pace, `worker start` allows the least-over provider. A refusal or warning names the current project's unmetered alternatives first, then the least-over metered provider. A window whose reset time has passed shows "reset, not yet measured" until the next reading.
 

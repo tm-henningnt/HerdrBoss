@@ -1333,7 +1333,7 @@ test('lanes prints the unmetered alternatives lane', () => {
     lanes: {
       codex: { state: 'pace', window: 'Weekly', usedPercent: 60, expectedPercent: 50, overPercent: 10, backOnPaceAt: new Date(Date.now() + 3600000).toISOString() },
       opencodego: { state: 'exhausted', window: 'Monthly', usedPercent: 100, resetAt: '2026-10-23T09:00:00Z' },
-      unmetered: { state: 'open', unmetered: true, byProject: { herdrboss: { opencode: ['opencode/space-bunny-free'] } } },
+      unmetered: { state: 'open', unmetered: true, byProject: { herdrboss: { opencode: ['opencode/space-bunny-free'] } }, exhausted: [{ model: 'opencode/big-pickle', projects: ['herdrboss'], retryAt: Date.parse('2026-09-26T15:48:00Z') }] },
     },
     leastOverProvider: null,
   }));
@@ -1342,6 +1342,7 @@ test('lanes prints the unmetered alternatives lane', () => {
   assert.match(output, /codex ahead of pace/);
   assert.match(output, /opencodego exhausted: 100% used in the Monthly window; exhausted until 2026-10-23T09:00:00Z/);
   assert.ok(output.split('\n').includes('unmetered open: opencode: space-bunny-free'));
+  assert.ok(output.split('\n').includes('unmetered exhausted: opencode/big-pickle until 2026-09-26T15:48:00.000Z'));
 });
 
 test('lanes filters unmetered output to the configured checkout project', () => {
@@ -1353,12 +1354,14 @@ test('lanes filters unmetered output to the configured checkout project', () => 
   fs.writeFileSync(path.join(checkout, '.herdr-boss.json'), JSON.stringify({ slug: 'beta' }));
   fs.writeFileSync(path.join(dir, 'rules.json'), JSON.stringify({ lanes: {
     codex: { state: 'open' },
-    unmetered: { state: 'open', unmetered: true, byProject: { alpha: { opencode: ['opencode/a'] }, beta: { opencode: ['opencode/b'] } } },
+    unmetered: { state: 'open', unmetered: true, byProject: { alpha: { opencode: [] }, beta: { opencode: ['opencode/c'] } }, exhausted: [{ model: 'opencode/a', projects: ['alpha'], retryAt: Date.parse('2026-09-26T15:48:00Z') }, { model: 'opencode/b', projects: ['beta'], retryAt: Date.parse('2026-09-26T16:48:00Z') }] },
   } }));
   const cli = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'src', 'cli.js');
   const output = execFileSync(process.execPath, [cli, 'lanes'], { cwd: checkout, env: { ...process.env, HOME: home, HERDR_BOSS_DIR: dir }, encoding: 'utf8' });
-  assert.ok(output.split('\n').includes('unmetered open: opencode: b'));
+  assert.ok(output.split('\n').includes('unmetered open: opencode: c'));
   assert.doesNotMatch(output, /opencode\/a|alpha/);
+  assert.match(output, /unmetered exhausted: opencode\/b until/);
+  assert.doesNotMatch(output, /opencode\/a until/);
 });
 
 test('lanes keeps global unmetered summary in a Git checkout without project config', () => {

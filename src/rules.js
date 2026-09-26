@@ -234,7 +234,8 @@ export function renderBulletin(snap, evaluation, cfg) {
     for (const [provider, lane] of Object.entries(snap.lanes)) {
       if (lane.unmetered) {
         const summary = unmeteredSummary(lane);
-        L.push(`- Unmetered: open${summary ? `: ${summary}` : ''}.`);
+        const exhausted = (lane.exhausted || []).map((item) => `${item.model} until ${fmtTime(new Date(item.retryAt).toISOString())}`).sort();
+        L.push(`- Unmetered: open${summary ? `: ${summary}` : ''}.${exhausted.length ? ` Exhausted models: ${exhausted.join('; ')}.` : ''}`);
         continue;
       }
       const back = lane.backOnPaceAt ? ` Back ${lane.state === 'reserve' ? 'at reset' : 'on pace if unused'} about ${fmtTime(lane.backOnPaceAt)}.` : '';

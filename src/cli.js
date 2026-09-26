@@ -90,7 +90,13 @@ async function main() {
       const lanes = rules.lanes || {};
       if (!Object.keys(lanes).length) throw new Error('No lane data yet. Wait for the next Herdr Boss tick.');
       for (const [provider, lane] of Object.entries(lanes)) {
-        if (lane.unmetered) { console.log(describeUnmetered(lane, project)); continue; }
+        if (lane.unmetered) {
+          console.log(describeUnmetered(lane, project));
+          const exhausted = (lane.exhausted || []).filter((item) => !project || item.projects?.includes(project))
+            .map((item) => `${item.model} until ${new Date(item.retryAt).toISOString()}`).sort();
+          if (exhausted.length) console.log(`unmetered exhausted: ${exhausted.join('; ')}`);
+          continue;
+        }
         console.log(`${describeLane(provider, lane)}${rules.leastOverProvider === provider ? ' (least over; worker start allows it)' : ''}`);
       }
       break;

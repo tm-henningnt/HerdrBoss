@@ -3,6 +3,10 @@ import assert from 'node:assert/strict';
 
 import {
   matchWorkerFailure,
+  parseFreeUsageRetryTime,
+  resolveFreeUsageRun,
+  activeFreeModelExhaustions,
+  extendFreeModelExhaustion,
   shouldReadWorkerScreen,
   applyWorkerFailureStatuses,
   blockedWorkerAlerts,
@@ -19,8 +23,66 @@ test('worker failure matching returns only a fixed case-insensitive label', () =
     ['usage LIMIT reached', 'usage limit'],
     ['RATE LIMIT exceeded', 'rate limit'],
     ['provider overloaded', 'overloaded'],
+    ['FREE USAGE EXCEEDED. Retry in 5h 48m.', 'Free usage exceeded'],
   ]) assert.equal(matchWorkerFailure([line]), label);
   assert.equal(matchWorkerFailure(['all good']), null);
+});
+
+test('free usage retry parser accepts fixed-clock relative and absolute times only when future', () => {
+  const now = Date.parse('2026-09-26T10:00:00.000Z');
+  assert.equal(parseFreeUsageRetryTime('Free usage exceeded. retry in 5h 48m', now), now + 5 * 3600000 + 48 * 60000);
+  assert.equal(parseFreeUsageRetryTime('Free usage exceeded. retry at 2026-09-26T15:48:00Z', now), Date.parse('2026-09-26T15:48:00Z'));
+  assert.equal(parseFreeUsageRetryTime('Free usage exceeded. retry in 5 hours-ish', now), null);
+  assert.equal(parseFreeUsageRetryTime('Free usage exceeded.', now), null);
+  assert.equal(parseFreeUsageRetryTime('Free usage exceeded. retry at 2026-09-26T09:00:00Z', now), null);
+  assert.equal(parseFreeUsageRetryTime('Free usage exceeded. retry at 2026-02-30T15:48:00Z', now), null);
+});
+
+test('free usage failure stores only its fixed label and parsed retry time', async () => {
+  const pane = { id: 'w1:p2', workspace: 'w1', name: 'worker-a', agent: 'codex', status: 'idle' };
+  const result = await inspectWorkerTransitions([pane], {}, {}, async () => 'Free usage exceeded. retry in 5h 48m. secret=do-not-store', Date.parse('2026-09-26T10:00:00Z'));
+  assert.equal(result.failures['w1:p2'].label, 'Free usage exceeded');
+  assert.equal(result.failures['w1:p2'].retryAt, Date.parse('2026-09-26T15:48:00Z'));
+  assert.doesNotMatch(JSON.stringify(result), /secret|do-not-store|retry in/);
+});
+
+test('free usage model association requires matching recorded name and pane and an unmetered route', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { execFileSync } = await import('node:child_process');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'free-run-'));
+  const checkout = path.join(root, 'checkout');
+  const worker = path.join(root, 'worker');
+  fs.mkdirSync(checkout);
+  execFileSync('git', ['init', '-b', 'main', checkout], { stdio: 'ignore' });
+  fs.writeFileSync(path.join(checkout, '.herdr-boss.json'), JSON.stringify({ slug: 'sample', runsDir: '.worker/runs' }));
+  fs.writeFileSync(path.join(checkout, 'tracked.txt'), 'tracked');
+  execFileSync('git', ['-C', checkout, 'add', '.herdr-boss.json', 'tracked.txt'], { stdio: 'ignore' });
+  execFileSync('git', ['-C', checkout, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-m', 'fixture'], { stdio: 'ignore' });
+  execFileSync('git', ['-C', checkout, 'worktree', 'add', '-b', 'worker-a', worker], { stdio: 'ignore' });
+  fs.mkdirSync(path.join(checkout, '.worker/runs'), { recursive: true });
+  const record = path.join(checkout, '.worker/runs', 'worker-a.json');
+  const pane = { id: 'w1:p2', name: 'W worker-a', cwd: worker };
+  fs.writeFileSync(record, JSON.stringify({ name: 'worker-a', pane: pane.id, kind: 'opencode', model: 'opencode/free', worktree: worker }));
+  assert.equal(resolveFreeUsageRun(pane, { providerFor: () => null, policy: {} }), null);
+  assert.deepEqual(resolveFreeUsageRun(pane, { providerFor: () => null, policy: {}, runsCwd: checkout }), { project: 'sample', kind: 'opencode', model: 'opencode/free' });
+  assert.equal(resolveFreeUsageRun(pane, { providerFor: () => 'opencodego', policy: {}, runsCwd: checkout }), null);
+  fs.writeFileSync(record, JSON.stringify({ name: 'worker-a', pane: 'other:pane', kind: 'opencode', model: 'opencode/free', worktree: worker }));
+  assert.equal(resolveFreeUsageRun(pane, { providerFor: () => null, policy: {}, runsCwd: checkout }), null);
+  fs.writeFileSync(record, JSON.stringify({ name: 'worker-a', pane: pane.id, kind: 'opencode', model: 'opencode/free', worktree: worker, finishedAt: '2026-09-26T09:00:00Z' }));
+  assert.equal(resolveFreeUsageRun(pane, { providerFor: () => null, policy: {}, runsCwd: checkout }), null);
+});
+
+test('free model exhaustion extends to the latest retry and expires at the retry time', () => {
+  const association = { project: 'sample', kind: 'opencode', model: 'opencode/free' };
+  const first = extendFreeModelExhaustion({}, association, 5000, 1000);
+  const extended = extendFreeModelExhaustion(first, { ...association, project: 'another-project', kind: 'pi' }, 9000, 2000);
+  const older = extendFreeModelExhaustion(extended, association, 7000, 3000);
+  const key = 'opencode/free';
+  assert.equal(older[key].retryAt, 9000);
+  assert.deepEqual(Object.keys(activeFreeModelExhaustions(older, 8999)), [key]);
+  assert.deepEqual(activeFreeModelExhaustions(older, 9000), {});
 });
 
 test('worker screen reads happen only on first observation or idle/done transitions', () => {

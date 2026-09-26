@@ -497,9 +497,10 @@ export function leastOverProvider(lanes) {
 
 // One always-open lane that lists every permitted unmetered model, grouped by project and harness.
 // A model is unmetered when the configured route and the provider rules give it no metered provider.
-export function unmeteredLane(baseModels, policy, projects = {}) {
+export function unmeteredLane(baseModels, policy, projects = {}, exhaustedModels = {}) {
   const models = mergeModels(baseModels, policy);
   const byProject = {};
+  const applicable = new Map();
   const projectModes = {};
   for (const [slug, project] of Object.entries(projects)) {
     const mode = project.effectiveMode || project.mode || 'auto';
@@ -512,12 +513,24 @@ export function unmeteredLane(baseModels, policy, projects = {}) {
         modelEnabled(kind, model, policy)
         && !(project.excludedModels || []).includes(model)
         && providerFor(kind, model, policy) === null);
-      if (permitted.length) kinds[kind] = permitted;
+      const available = permitted.filter((model) => {
+        const exhaustion = exhaustedModels[model];
+        if (!exhaustion) return true;
+        const entry = applicable.get(model) || { model, retryAt: exhaustion.retryAt, projects: [], kinds: [] };
+        entry.retryAt = Math.max(entry.retryAt || 0, exhaustion.retryAt || 0);
+        if (!entry.projects.includes(slug)) entry.projects.push(slug);
+        if (!entry.kinds.includes(kind)) entry.kinds.push(kind);
+        applicable.set(model, entry);
+        return false;
+      });
+      if (available.length) kinds[kind] = available;
     }
     byProject[slug] = kinds;
     projectModes[slug] = mode;
   }
-  return { state: 'open', unmetered: true, byProject, projectModes };
+  const exhausted = [...applicable.values()].sort((a, b) => a.model.localeCompare(b.model));
+  for (const entry of exhausted) { entry.projects.sort(); entry.kinds.sort(); }
+  return { state: 'open', unmetered: true, byProject, projectModes, exhausted };
 }
 
 // A short one-line description of the unmetered lane for the CLI and the bulletin.

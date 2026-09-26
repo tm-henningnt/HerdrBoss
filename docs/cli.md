@@ -40,7 +40,7 @@ When `NODE_TEST_CONTEXT` is set, or the data directory differs from the configur
 
 | Command | Action |
 |---|---|
-| `herdr-boss lanes` | Show the active Owner state, machine CPU and threshold, 5-minute load and backstop, then one line per quota provider. Show common unmetered models once by harness with project exceptions; show only this project's models inside a configured checkout. |
+| `herdr-boss lanes` | Show the active Owner state, machine CPU and threshold, 5-minute load and backstop, then one line per quota provider. Show common unmetered models once by harness with project exceptions, followed by exhausted free models and retry times; show only this project's models inside a configured checkout. |
 | `herdr-boss models [--kind KIND]` | The allowed harnesses, models, and efforts from `kit/models.json`. |
 | `herdr-boss policy show` | Print the resource policy (`~/.herdr-boss/policy.json`). |
 | `herdr-boss policy set FILE` | Validate and replace the policy. The service applies it on the next tick. |

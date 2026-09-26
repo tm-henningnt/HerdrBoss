@@ -90,6 +90,75 @@ console.log(JSON.stringify({ calls, scans: scans.map(({ worktreeCounts, orphaned
   assert.ok(result.scans[5].errors.some((error) => /herdr: snapshot unavailable/.test(error)));
 });
 
+test('Engine exhausts a free model from its orchestrator run record across the project until retry', (t) => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-engine-free-exhaustion-'));
+  t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+  const engineUrl = new URL('../src/engine.js', import.meta.url).href;
+  const configUrl = new URL('../src/config.js', import.meta.url).href;
+  const script = `
+import fs from 'node:fs';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { Engine } from ${JSON.stringify(engineUrl)};
+import { loadConfig } from ${JSON.stringify(configUrl)};
+const data = process.env.HERDR_BOSS_DIR;
+const checkout = path.join(data, 'checkout');
+const worker = path.join(data, 'worker');
+fs.mkdirSync(checkout, { recursive: true });
+execFileSync('git', ['init', '-b', 'main', checkout], { stdio: 'ignore' });
+fs.writeFileSync(path.join(checkout, '.herdr-boss.json'), JSON.stringify({ slug: 'sample', runsDir: '.orchestration/runs' }));
+fs.writeFileSync(path.join(checkout, 'tracked.txt'), 'tracked');
+execFileSync('git', ['-C', checkout, 'add', '.herdr-boss.json', 'tracked.txt'], { stdio: 'ignore' });
+execFileSync('git', ['-C', checkout, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-m', 'fixture'], { stdio: 'ignore' });
+execFileSync('git', ['-C', checkout, 'worktree', 'add', '-b', 'worker-a', worker], { stdio: 'ignore' });
+fs.mkdirSync(path.join(checkout, '.orchestration/runs'), { recursive: true });
+const retryAt = Date.parse('2026-09-26T15:48:00.000Z');
+fs.writeFileSync(path.join(checkout, '.orchestration/runs/worker-a.json'), JSON.stringify({
+  name: 'worker-a', kind: 'opencode', model: 'opencode/big-pickle', worktree: worker, pane: 'w1:p2', startedAt: '2026-09-26T09:00:00.000Z',
+}));
+fs.mkdirSync(path.join(data, 'projects'), { recursive: true });
+fs.writeFileSync(path.join(data, 'projects/sample.json'), JSON.stringify({ project: 'Sample', workspace: 'w1' }));
+let now = Date.parse('2026-09-26T10:00:00.000Z');
+Date.now = () => now;
+const panes = [
+  { id: 'w1:p1', workspace: 'w1', workspaceLabel: 'Sample', label: 'orch', orch: true, agent: 'codex', status: 'working', cwd: checkout },
+  { id: 'w1:p2', workspace: 'w1', workspaceLabel: 'Sample', orch: false, agent: 'opencode', name: 'worker-a', status: 'idle', cwd: worker },
+];
+const engine = new Engine(loadConfig(), { push: false, act: false, collectors: {
+  collectHerdr: async () => ({ workspaces: [{ id: 'w1', label: 'Sample' }], panes }),
+  readWorkerScreen: async () => 'Free usage exceeded. Retry in 5h 48m. raw-token=do-not-save',
+  collectMachine: async () => null,
+  collectProcesses: async () => new Map(),
+  collectQuotas: async () => [],
+  collectWorktreeCounts: async () => ({}),
+  collectCwdProcesses: async () => [],
+  collectMissingWorktreeProcesses: async () => [],
+} });
+const first = await engine.tick();
+const firstMemory = JSON.parse(fs.readFileSync(path.join(data, 'memory.json'), 'utf8'));
+now = retryAt;
+const second = await engine.tick();
+console.log(JSON.stringify({
+  failed: first.herdr.panes.find((pane) => pane.id === 'w1:p2').status,
+  exhausted: first.lanes.unmetered.exhausted,
+  availableBeforeRetry: first.lanes.unmetered.byProject.sample.opencode,
+  rememberedModels: firstMemory.exhaustedFreeModels,
+  availableAtRetry: second.lanes.unmetered.byProject.sample.opencode,
+  exhaustedAtRetry: second.lanes.unmetered.exhausted,
+}));
+`;
+  const result = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', script], {
+    env: { ...process.env, HOME: temp, HERDR_BOSS_DIR: path.join(temp, 'data'), HERDR_BOSS_LIVE_DIR: path.join(temp, 'live'), NODE_TEST_CONTEXT: '1' },
+    encoding: 'utf8',
+  }));
+  assert.equal(result.failed, 'failed');
+  assert.deepEqual(result.exhausted.map(({ model, retryAt, projects }) => [model, retryAt, projects]), [['opencode/big-pickle', Date.parse('2026-09-26T15:48:00.000Z'), ['sample']]]);
+  assert.ok(!result.availableBeforeRetry.includes('opencode/big-pickle'));
+  assert.equal(result.rememberedModels['opencode/big-pickle'].retryAt, Date.parse('2026-09-26T15:48:00.000Z'));
+  assert.ok(result.availableAtRetry.includes('opencode/big-pickle'));
+  assert.deepEqual(result.exhaustedAtRetry, []);
+});
+
 test('policy only permits project exclusions from global availability', () => {
   const p = policy({ projects: { a: { share: 100, mode: 'auto', excludedKinds: ['codex'], excludedModels: [] } } });
   assert.deepEqual(validatePolicy(p, models), []);
@@ -1113,6 +1182,23 @@ test('the unmetered lane lists permitted models after global and project exclusi
   assert.deepEqual(kindsOff.byProject.a, {});
 });
 
+test('the unmetered lane filters active exhausted models and restores them at retry time', async () => {
+  const { unmeteredLane } = await import('../src/control.js');
+  const projects = { a: { excludedKinds: [], excludedModels: [] }, b: { excludedKinds: [], excludedModels: [] } };
+  const model = 'opencode/space-bunny-free';
+  const sharedModels = structuredClone(models);
+  sharedModels.kinds.pi.allowedModels.push(model);
+  const active = unmeteredLane(sharedModels, policy(), projects, { [model]: { model, retryAt: 5000 } });
+  assert.ok(!active.byProject.a.opencode.includes('opencode/space-bunny-free'));
+  assert.ok(!active.byProject.b.opencode.includes('opencode/space-bunny-free'));
+  assert.ok(!(active.byProject.a.pi || []).includes('opencode/space-bunny-free'));
+  assert.ok(!(active.byProject.b.pi || []).includes('opencode/space-bunny-free'));
+  assert.ok(active.byProject.a.opencode.includes('opencode/big-pickle'));
+  assert.deepEqual(active.exhausted.map(({ model, retryAt, projects: affected, kinds }) => [model, retryAt, affected, kinds]), [[model, 5000, ['a', 'b'], ['opencode', 'pi']]]);
+  const recovered = unmeteredLane(models, policy(), projects, {});
+  assert.ok(recovered.byProject.a.opencode.includes('opencode/space-bunny-free'));
+});
+
 test('unmetered summary prints common models once and differing active projects as exceptions', async () => {
   const { unmeteredSummary } = await import('../src/control.js');
   const lane = { byProject: {
@@ -1146,9 +1232,9 @@ test('least-over selection skips the unmetered lane', async () => {
 test('the bulletin shows the unmetered lane in Provider lanes', async () => {
   const { renderBulletin } = await import('../src/rules.js');
   const cfg = { quota: { warnPercent: 90, criticalPercent: 98 }, machine: { memFreeWarnPercent: 15, loadWarnFactor: 2 }, browsers: { staleOwnedMinutes: 30 }, workers: { staleIdleMinutes: 120 }, sharedBrowsers: [] };
-  const snap = { ...snapshot(), updatedAt: '2026-09-25T00:00:00Z', lanes: { codex: { state: 'open' }, unmetered: { state: 'open', unmetered: true, byProject: { a: { opencode: ['opencode/space-bunny-free'] } } } }, policy: policy() };
+  const snap = { ...snapshot(), updatedAt: '2026-09-25T00:00:00Z', lanes: { codex: { state: 'open' }, unmetered: { state: 'open', unmetered: true, byProject: { a: { opencode: ['opencode/space-bunny-free'] } }, exhausted: [{ model: 'opencode/big-pickle', projects: ['a'], retryAt: Date.parse('2026-09-26T05:48:00Z') }] } }, policy: policy() };
   const bulletin = renderBulletin(snap, { alerts: [], advice: [] }, cfg);
-  assert.ok(bulletin.includes('- Unmetered: open: opencode: space-bunny-free.'));
+  assert.match(bulletin, /- Unmetered: open: opencode: space-bunny-free\. Exhausted models: opencode\/big-pickle until /);
   const exceptionSnap = { ...snap, lanes: { unmetered: { state: 'open', unmetered: true, byProject: { alpha: { opencode: ['opencode/a'] }, beta: { opencode: ['opencode/a'] }, gamma: { opencode: [] } } } } };
   const exceptionBulletin = renderBulletin(exceptionSnap, { alerts: [], advice: [] }, cfg);
   assert.ok(exceptionBulletin.includes('- Unmetered: open: opencode: a; exceptions: gamma (opencode: none).'));

@@ -11,7 +11,7 @@ import { loadPolicy, clearExpiredOneOffGoals, deriveControl, migrateWorkspacePol
 import { recordQuotaSnapshot } from './usage.js';
 import { listBrowserSessions } from './browser-pool.js';
 import { listHandoffs, expireHandoff, expireMissingHandoffs } from './handoff.js';
-import { inspectWorkerTransitions, inspectWorkerReports, applyWorkerFailureStatuses } from './worker-failures.js';
+import { inspectWorkerTransitions, inspectWorkerReports, applyWorkerFailureStatuses, resolveFreeUsageRun, activeFreeModelExhaustions, extendFreeModelExhaustion } from './worker-failures.js';
 
 const MEMORY_FILE = path.join(DATA_DIR, 'memory.json');
 const STATE_FILE = path.join(DATA_DIR, 'state.json');
@@ -136,10 +136,11 @@ export class Engine extends EventEmitter {
       this.trackPaneStatus(herdr, now);
       const workerTransitions = herdr ? await inspectWorkerTransitions(
         herdr.panes, this.memory.workerObserved, this.memory.workerFailures,
-        (args) => run('herdr', args, { timeout: 10000 }), now,
+        this.collectors.readWorkerScreen || ((args) => run('herdr', args, { timeout: 10000 })), now,
       ) : { observed: this.memory.workerObserved || {}, failures: this.memory.workerFailures || {}, notices: [] };
       this.memory.workerObserved = workerTransitions.observed;
       this.memory.workerFailures = workerTransitions.failures;
+      this.memory.exhaustedFreeModels ||= {};
       const reportTransitions = herdr ? inspectWorkerReports(
         herdr.panes, this.memory.workerReportObserved, now,
       ) : { observed: this.memory.workerReportObserved || {}, notices: [] };
@@ -163,6 +164,22 @@ export class Engine extends EventEmitter {
       };
       snap.projects = listProjects();
       const policy = migrateWorkspacePolicy(loadPolicy(), snap, { file: POLICY_FILE });
+      this.memory.exhaustedFreeModels = activeFreeModelExhaustions(this.memory.exhaustedFreeModels, now);
+      for (const pane of herdr?.panes || []) {
+        const failure = workerTransitions.failures[pane.id];
+        if (failure?.label !== 'Free usage exceeded' || !Number.isFinite(failure.retryAt) || failure.retryAt <= now) continue;
+        const checkoutPaths = [...new Set([
+          ...herdr.panes.filter((candidate) => candidate.workspace === pane.workspace && candidate.orch && candidate.cwd).map((candidate) => candidate.cwd),
+          pane.cwd,
+        ])];
+        let association = null;
+        for (const runsCwd of checkoutPaths) {
+          association = resolveFreeUsageRun(pane, { providerFor, policy, runsCwd });
+          if (association) break;
+        }
+        if (!association) continue;
+        this.memory.exhaustedFreeModels = extendFreeModelExhaustion(this.memory.exhaustedFreeModels, association, failure.retryAt, now);
+      }
       clearExpiredOneOffGoals(policy, snap.quotas, now, { log: (message) => this.log('policy', message) });
       const control = deriveControl(snap, policy, this.models, this.memory.paneSince, now);
       snap.herdr = herdr ? { ...herdr, panes: applyWorkerFailureStatuses(herdr.panes, workerTransitions.failures) } : herdr;
@@ -175,7 +192,7 @@ export class Engine extends EventEmitter {
       }
       snap.lanes = laneStatus(snap.quotas, policy, now);
       // The unmetered lane is always open and lists permitted free models. It never affects least-over selection.
-      snap.lanes.unmetered = unmeteredLane(this.models, policy, control.projects);
+      snap.lanes.unmetered = unmeteredLane(this.models, policy, control.projects, this.memory.exhaustedFreeModels);
       snap.leastOverProvider = leastOverProvider(snap.lanes);
       snap.policy = policy;
       snap.control = control;
