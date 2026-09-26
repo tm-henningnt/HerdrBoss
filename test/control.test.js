@@ -9,7 +9,8 @@ import * as controlModule from '../src/control.js';
 import { validateUsage, usageProvider, usageSummary } from '../src/usage.js';
 import { loadModels } from '../src/kit/config.js';
 import { broadcastTargets, evaluate, renderBulletin } from '../src/rules.js';
-import { alertPromptDue, orchestratorCanReceiveNotice, pruneInactiveDiskPromptRecords } from '../src/engine.js';
+import { alertPromptDue, Engine, orchestratorCanReceiveNotice, pruneInactiveDiskPromptRecords } from '../src/engine.js';
+import { collectMissingWorktreeProcesses } from '../src/collect.js';
 
 const models = loadModels();
 const policy = (patch = {}) => ({ ...structuredClone(POLICY_DEFAULTS), ...patch });
@@ -24,6 +25,69 @@ const snapshot = () => ({
     ],
   },
   quotas: [{ provider: 'claude', windows: [{ key: 'secondary', label: 'Weekly', usedPercent: 88, willLast: false, etaSeconds: 3000, resetsAt: '2026-09-25T00:00:00Z' }] }],
+});
+
+test('engine caches orphaned worktree scans until the worktree scan interval and keeps the last success on error', (t) => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-engine-scan-cache-'));
+  t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+  const engineUrl = new URL('../src/engine.js', import.meta.url).href;
+  const configUrl = new URL('../src/config.js', import.meta.url).href;
+  const script = `
+import { Engine } from ${JSON.stringify(engineUrl)};
+import { loadConfig } from ${JSON.stringify(configUrl)};
+let now = Date.parse('2026-09-26T12:00:00.000Z');
+Date.now = () => now;
+const calls = { herdr: 0, counts: 0, cwd: 0, missing: 0 };
+const engine = new Engine(loadConfig(), { push: false, act: false, collectors: {
+  collectHerdr: async () => {
+    calls.herdr += 1;
+    if (calls.herdr === 6) throw new Error('snapshot unavailable');
+    return { panes: [], workspaces: [] };
+  },
+  collectMachine: async () => null,
+  collectProcesses: async () => new Map(),
+  collectQuotas: async () => null,
+  collectWorktreeCounts: async () => ({ scan: ++calls.counts }),
+  collectCwdProcesses: async () => { calls.cwd += 1; return []; },
+  collectMissingWorktreeProcesses: async () => {
+    calls.missing += 1;
+    if (calls.missing === 2) throw new Error('scheduled scan failed');
+    return [{ pid: 100 + calls.missing, ppid: 1, cwd: '/tmp/missing/file', worktree: '/tmp/missing', workspace: 'w1' }];
+  },
+} });
+const scans = [];
+scans.push(await engine.tick());
+now += 1000;
+scans.push(await engine.tick());
+now += 5 * 60 * 1000;
+scans.push(await engine.tick());
+now += 1000;
+scans.push(await engine.tick());
+now += 5 * 60 * 1000;
+scans.push(await engine.tick());
+now += 5 * 60 * 1000;
+scans.push(await engine.tick());
+console.log(JSON.stringify({ calls, scans: scans.map(({ worktreeCounts, orphanedWorktreeProcesses, errors }) => ({ worktreeCounts, orphanedWorktreeProcesses, errors })) }));
+`;
+  const result = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', script], {
+    env: { ...process.env, HOME: temp, HERDR_BOSS_DIR: path.join(temp, 'data'), NODE_TEST_CONTEXT: '1' },
+    encoding: 'utf8',
+  }));
+
+  assert.deepEqual(result.calls, { herdr: 6, counts: 3, cwd: 3, missing: 3 });
+  assert.deepEqual(result.scans[0].worktreeCounts, { scan: 1 });
+  assert.deepEqual(result.scans[1].worktreeCounts, { scan: 1 });
+  assert.deepEqual(result.scans[1].orphanedWorktreeProcesses, result.scans[0].orphanedWorktreeProcesses);
+  assert.deepEqual(result.scans[2].worktreeCounts, { scan: 2 });
+  assert.deepEqual(result.scans[2].orphanedWorktreeProcesses, result.scans[1].orphanedWorktreeProcesses);
+  assert.ok(result.scans[2].errors.some((error) => /missing worktree process check: scheduled scan failed/.test(error)));
+  assert.deepEqual(result.scans[3].worktreeCounts, { scan: 2 });
+  assert.deepEqual(result.scans[3].orphanedWorktreeProcesses, result.scans[1].orphanedWorktreeProcesses);
+  assert.deepEqual(result.scans[4].worktreeCounts, { scan: 3 });
+  assert.equal(result.scans[4].orphanedWorktreeProcesses[0].pid, 103);
+  assert.deepEqual(result.scans[5].worktreeCounts, { scan: 3 });
+  assert.deepEqual(result.scans[5].orphanedWorktreeProcesses, result.scans[4].orphanedWorktreeProcesses);
+  assert.ok(result.scans[5].errors.some((error) => /herdr: snapshot unavailable/.test(error)));
 });
 
 test('policy only permits project exclusions from global availability', () => {
@@ -405,6 +469,65 @@ test('disk warnings use disk thresholds with guard off and target worktree proje
   const warningAgain = evaluate(snap, cfg, {}, now, policy()).alerts.find((alert) => alert.key.startsWith('machine:disk:'));
   assert.equal(warningAgain.severity, 'warn');
   assert.equal(warningAgain.key, percentText.key, 'a later recovery transition returns to the warning level');
+});
+
+test('orphaned processes in removed worktrees notify only their project orchestrator once', () => {
+  const snap = snapshot();
+  snap.herdr.workspaces.push({ id: 'w-boss', label: 'Boss' });
+  snap.herdr.panes.push({ id: 'w-boss:p1', workspace: 'w-boss', label: 'boss', orch: true, agent: 'codex', status: 'working' });
+  snap.orphanedWorktreeProcesses = [
+    { pid: 801, ppid: 1, command: '/usr/bin/node --token secret-value', cwd: '/projects/a-wt-old/src', worktree: '/projects/a-wt-old', workspace: 'w1' },
+    { pid: 801, ppid: 1, command: '/usr/bin/node --token secret-value', cwd: '/projects/a-wt-old/src', worktree: '/projects/a-wt-old', workspace: 'w1' },
+    { pid: 802, ppid: 1, command: 'zsh', cwd: '/projects/boss-wt-old', worktree: '/projects/boss-wt-old', workspace: 'w-boss' },
+  ];
+  const cfg = { quota: { warnPercent: 90, criticalPercent: 98 }, machine: { memFreeWarnPercent: 15, loadWarnFactor: 2 }, providerKinds: {}, browsers: {}, workers: {} };
+  const alerts = evaluate(snap, cfg, {}, Date.parse('2026-09-26T12:00:00Z'), policy()).alerts;
+  const orphanAlerts = alerts.filter((alert) => alert.key.startsWith('worktree:orphan:'));
+  assert.equal(orphanAlerts.length, 1);
+  assert.equal(orphanAlerts[0].scope, 'w1');
+  assert.equal(orphanAlerts[0].severity, 'warn');
+  assert.equal(orphanAlerts[0].once, true);
+  assert.match(orphanAlerts[0].text, /node.*pid 801.*ppid 1/);
+  assert.match(orphanAlerts[0].text, /cwd \/projects\/a-wt-old\/src/);
+  assert.ok(!orphanAlerts[0].text.includes('secret-value'));
+  assert.ok(!['all', 'user', 'w-boss'].includes(orphanAlerts[0].scope));
+});
+
+test('missing worktree process collection uses exact paths and ignores non-orphans', async (t) => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-orphan-worktree-')));
+  const missing = path.join(path.dirname(root), `${path.basename(root)}-wt-removed`);
+  const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  git(root, 'init', '-b', 'main');
+  git(root, 'config', 'user.name', 'Test User');
+  git(root, 'config', 'user.email', 'test@example.invalid');
+  fs.writeFileSync(path.join(root, 'README.md'), 'seed\n');
+  git(root, 'add', 'README.md');
+  git(root, 'commit', '-m', 'seed');
+  git(root, 'worktree', 'add', '-b', 'removed', missing, 'main');
+  fs.rmSync(missing, { recursive: true, force: true });
+  t.after(() => {
+    try { git(root, 'worktree', 'prune'); } catch {}
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(missing, { recursive: true, force: true });
+  });
+  const panes = [
+    { orch: true, label: 'orch', workspaceLabel: 'Project A', workspace: 'w1', cwd: root },
+    { orch: true, label: 'orch', workspaceLabel: 'Project A', workspace: 'w1', cwd: root },
+    { orch: true, label: 'orch', workspaceLabel: 'Boss', workspace: 'w-boss', cwd: root },
+  ];
+  const processes = [
+    { pid: 811, ppid: 1, command: 'node', cwd: path.join(missing, 'src') },
+    { pid: 812, ppid: 1, command: 'zsh', cwd: `${missing}-neighbor` },
+    { pid: 813, ppid: 8, command: 'node', cwd: path.join(missing, 'worker') },
+  ];
+  const calls = [];
+  const runner = async (command, args) => {
+    calls.push(args.join(' '));
+    return execFileSync(command, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  };
+  const result = await collectMissingWorktreeProcesses(panes, processes, { runner });
+  assert.deepEqual(result, [{ pid: 811, ppid: 1, command: 'node', cwd: path.join(missing, 'src'), worktree: missing, workspace: 'w1' }]);
+  assert.equal(calls.filter((call) => call.includes('rev-parse')).length, 1, 'the same repository is checked once');
 });
 
 test('disk prompts send on level transitions and recovery, but not after same-level cooldown', () => {

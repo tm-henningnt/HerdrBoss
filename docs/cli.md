@@ -97,6 +97,16 @@ herdr-boss worker start fix-74 --kind claude --task-file brief.md --allow src/pa
 | `worker unpark NAME` | Clear the park mark. |
 | `worker allow NAME PATH... --reason TEXT` | Approve extra paths for a running worker after a `WORKER QUESTION`. |
 
+### Project locks
+
+| Command | Action |
+|---|---|
+| `lock acquire NAME [--wait SECONDS]` | Acquire a lock for this Git repository. `--wait` accepts a whole number of seconds. |
+| `lock release NAME` | Release a lock owned by this pane, or a stale lock. |
+| `lock list` | List locks and show whether each owner is live or stale. |
+
+Lock names are one path-safe token. Every linked worktree of the same Git repository uses the same locks. Herdr Boss stores lock records in a private `locks` directory under its data directory. Each record names the owner pane, its shell PID, the safe acquire command, and the acquisition time. Herdr Boss marks a lock stale when the owner PID has exited or the pane has closed. A new owner can take over a stale lock. Herdr Boss prints a notice when it does. A different pane cannot release an active lock. Herdr Boss fails closed if it cannot confirm pane state.
+
 ### `worker allow NAME PATH...`
 
 Approve extra scope after a worker asks a question. Only the verified `orch` or `boss` pane may approve. `worker allow` requires `HERDR_ENV=1` and verifies the caller pane with the same checks as `worker start`.
@@ -106,6 +116,8 @@ The paths must be repository-relative and inside the worker worktree. It refuses
 `worker collect` uses the approved paths. Its summary and ledger entry include the approval history. A prompt or message alone does not change the approved paths.
 
 Collection records the run before merge. After a successful `--record`, merge the branch, then run `herdr-boss worktree prune --apply` to remove worktrees that pass the safe checks. Collection does not prune worktrees.
+
+`worktree prune` checks the current working directory of processes in every existing worktree it could remove. It also reports parent-PID-1 processes that still use a missing or prunable worktree path. It never removes a worktree while a matching process runs. It blocks all removals when it cannot scan processes. It does not remove dirty, unmerged, primary, live-pane, or uninspectable worktrees.
 
 ```sh
 herdr-boss worker allow fix-74 docs/parse.md --reason "the fix also needs the parser docs"
@@ -120,10 +132,10 @@ herdr-boss worker allow fix-74 docs/parse.md --reason "the fix also needs the pa
 | `check --report FILE` | Validate a worker report (`report.json`). |
 | `check --run FILE` | Validate one ledger entry. |
 | `check --worktree DIR --allow PATH...` | Check that the worktree changes only allowed paths. |
-| `worktree prune [--apply]` | List worktrees that are clean, merged, and have no live pane. `--apply` removes them. |
+| `worktree prune [--apply]` | List worktrees that pass the safe checks and show processes in removal candidates. `--apply` removes only worktrees with no blocking process. |
 | `gh issue create\|comment\|edit ... --body-file FILE` | Run a GitHub issue command. An inline `--body` is refused. |
 
-An unknown tool-call count stays `null`. The ledger accepts `null` as unknown. If TmProcessMining reports entries 281, 283, or 285 as invalid because an older kit rejects `null`, install a HerdrBoss kit version that accepts `null`, then run `herdr-boss ledger check` again. This check reads the ledger. Do not replace `null` with `0` or edit the TmProcessMining ledger.
+An unknown tool-call count stays `null`. The ledger accepts `null` as unknown. If an older kit rejects `null`, install a HerdrBoss kit version that accepts `null`, then run `herdr-boss ledger check` again. This check reads the ledger. Do not replace `null` with `0` or edit the ledger.
 
 ## Browsers
 

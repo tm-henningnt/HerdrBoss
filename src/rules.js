@@ -36,6 +36,26 @@ export function evaluate(snap, cfg, paneSince, now = Date.now(), policy = null) 
   const avoidKinds = new Set();
   alerts.push(...blockedWorkerAlerts(snap, paneSince, now));
 
+  const orphanedPairs = new Set();
+  const workspaceLabels = new Map((snap.herdr?.workspaces || []).map((workspace) => [workspace.id, workspace.label]));
+  for (const process of snap.orphanedWorktreeProcesses || []) {
+    const workspace = process.workspace;
+    const pair = `${process.pid}\0${process.worktree}`;
+    if (Number(process.ppid) !== 1 || !workspace || !process.worktree || !process.cwd || orphanedPairs.has(pair)) continue;
+    if (/^boss$/i.test(workspaceLabels.get(workspace) || '')) continue;
+    const orchestrator = (snap.herdr?.panes || []).some((pane) => pane.workspace === workspace && pane.orch && !/^boss$/i.test(pane.label || ''));
+    if (!orchestrator) continue;
+    orphanedPairs.add(pair);
+    const executable = String(process.command || 'unknown').trim().split(/\s+/, 1)[0];
+    const command = executable.split(/[\\/]/).pop() || 'unknown';
+    alerts.push({
+      key: `worktree:orphan:${process.pid}:${process.worktree}`,
+      severity: 'warn', scope: workspace, once: true,
+      title: `Process remains in a removed worktree`,
+      text: `Process ${command} (pid ${process.pid}, ppid 1) still has cwd ${process.cwd} inside missing worktree ${process.worktree}. Check it before you prune the worktree record.`,
+    });
+  }
+
   // ----- Quotas -----
   for (const q of snap.quotas || []) {
     if (q.error) continue;

@@ -43,6 +43,9 @@ const USAGE = `herdr-boss <command>
   handoff activate ID --confirmed
   handoff ready ID      Signal automatic successor readiness.
   worker ...            Start, collect, or list workers.
+  lock acquire <name> [--wait SECONDS]  Acquire a project lock.
+  lock release <name>   Release a project lock.
+  lock list             List project locks.
   worktree prune        List safe worktree removals.
   ledger ...            Append or check delegated-run records.
   check ...             Validate worker handoffs and scope.
@@ -65,7 +68,7 @@ async function main() {
     console.log(path.resolve(dir));
     return;
   }
-  if (['worker', 'worktree', 'ledger', 'check', 'gh', 'models'].includes(cmd)) {
+  if (['worker', 'lock', 'worktree', 'ledger', 'check', 'gh', 'models'].includes(cmd)) {
     const { runKitCommand } = await import('./kit/cli.js');
     runKitCommand(cmd, args);
     return;

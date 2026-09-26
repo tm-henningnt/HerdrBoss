@@ -18,7 +18,7 @@ function git(root, args, { encoding = 'utf8' } = {}) {
   return execFileSync('git', ['-C', root, ...args], { encoding });
 }
 
-function parseCwdProcesses(output) {
+export function parseCwdProcesses(output) {
   const processes = [];
   let processInfo = null;
   for (const line of output.split('\n')) {
@@ -71,9 +71,13 @@ export function filterCollectProcesses(processes, { worktree, shellPid = null })
   });
 }
 
-function worktreeCwdProcesses(worktree) {
+export function listCwdProcesses() {
   const output = execFileSync('lsof', ['-a', '-d', 'cwd', '-FpcnR'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-  const processes = parseCwdProcesses(output);
+  return parseCwdProcesses(output);
+}
+
+function worktreeCwdProcesses(worktree) {
+  const processes = listCwdProcesses();
   for (const item of processes) {
     if (!/^app-server/.test(item.command ?? '')) continue;
     try {
@@ -279,7 +283,7 @@ function callerValidationError(reason) {
   return new Error(`Cannot verify the caller pane: ${reason} A shared Codex app-server daemon can pass another pane's environment. Pass explicit HERDR_PANE_ID and HERDR_WORKSPACE_ID values, or restart the Codex session. Do not stop the shared daemon.`);
 }
 
-function verifyCallerPane(env, herdr, requestedOrch) {
+export function verifyCallerPane(env, herdr, requestedOrch = null) {
   const paneId = env.HERDR_PANE_ID;
   if (!paneId) throw callerValidationError('HERDR_PANE_ID is required.');
   const workspaceId = env.HERDR_WORKSPACE_ID;

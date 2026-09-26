@@ -167,6 +167,65 @@ export async function collectWorktreeCounts(panes, { now = Date.now(), runner = 
   return result;
 }
 
+function worktreePaths(output, cwd) {
+  return output.split(/\r?\n/).filter((line) => line.startsWith('worktree '))
+    .map((line) => path.resolve(cwd, line.slice('worktree '.length)));
+}
+
+function pathContains(root, candidate) {
+  const relative = path.relative(path.resolve(root), path.resolve(candidate));
+  return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
+}
+
+function definitelyMissing(file) {
+  try { fs.statSync(file); return false; }
+  catch (error) {
+    if (error.code === 'ENOENT') return true;
+    throw error;
+  }
+}
+
+// Return only parent-PID-1 processes that still have a cwd in a missing Git worktree.
+export async function collectMissingWorktreeProcesses(panes, processes, { runner = run } = {}) {
+  const repos = new Map();
+  const seenCwds = new Set();
+  for (const pane of panes || []) {
+    if (!pane.orch || pane.label === 'boss' || /^boss$/i.test(pane.workspaceLabel || '') || !pane.cwd || !pane.workspace) continue;
+    let paneCwd = path.resolve(pane.cwd);
+    try { paneCwd = fs.realpathSync(pane.cwd); } catch {}
+    if (seenCwds.has(paneCwd)) continue;
+    seenCwds.add(paneCwd);
+    const commonPath = path.resolve((await runner('git', ['-C', pane.cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir'], { timeout: 3000 })).trim());
+    let common = commonPath;
+    try { common = fs.realpathSync(commonPath); } catch {}
+    if (!repos.has(common)) repos.set(common, { cwd: pane.cwd, workspace: pane.workspace });
+  }
+
+  const result = [];
+  const seen = new Set();
+  for (const [common, repo] of repos) {
+    const listed = await runner('git', ['-C', repo.cwd, 'worktree', 'list', '--porcelain'], { timeout: 3000 });
+    for (const worktree of worktreePaths(listed, repo.cwd)) {
+      if (!definitelyMissing(worktree)) continue;
+      for (const process of processes || []) {
+        if (Number(process.ppid) !== 1 || !process.cwd || !pathContains(worktree, process.cwd)) continue;
+        const id = `${common}\0${worktree}\0${Number(process.pid)}`;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        result.push({
+          pid: Number(process.pid),
+          ppid: 1,
+          command: path.basename(String(process.command || 'unknown')).split(/\s/, 1)[0].slice(0, 80) || 'unknown',
+          cwd: process.cwd,
+          worktree,
+          workspace: repo.workspace,
+        });
+      }
+    }
+  }
+  return result;
+}
+
 export function parseOwnerIdleMinutes(text) {
   const match = /"HIDIdleTime"\s*=\s*(\d+)/.exec(text || '');
   if (!match) return null;
@@ -175,6 +234,27 @@ export function parseOwnerIdleMinutes(text) {
 }
 
 // ---------- Processes / browsers ----------
+
+function parseCwdProcesses(output) {
+  const processes = [];
+  let current = null;
+  const finish = () => { if (current?.cwd) processes.push(current); };
+  for (const line of output.split(/\r?\n/)) {
+    if (line.startsWith('p')) {
+      finish();
+      current = { pid: Number(line.slice(1)), ppid: null, command: null, cwd: null };
+    } else if (current && line.startsWith('c')) current.command = line.slice(1);
+    else if (current && line.startsWith('R')) current.ppid = Number(line.slice(1)) || null;
+    else if (current && line.startsWith('n')) current.cwd = line.slice(1);
+  }
+  finish();
+  return processes;
+}
+
+export async function collectCwdProcesses() {
+  const output = await run('lsof', ['-a', '-d', 'cwd', '-FpcnR']);
+  return parseCwdProcesses(output);
+}
 
 function parseEtime(s) {
   // [[dd-]hh:]mm:ss

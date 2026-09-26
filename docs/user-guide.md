@@ -15,6 +15,7 @@ Then it applies its rules and writes these files to `~/.herdr-boss/`:
 | `state.json` | The full snapshot that the dashboard shows. |
 | `events.jsonl` | Prompts, notifications, handovers, and stopped processes. |
 | `policy.json` | The resource policy that you set on the Settings and Allocation pages. |
+| `locks/` | Private project lock records. Each Git repository has a separate directory. |
 
 `herdr-boss scratch <slug>` creates `~/.herdr-boss/scratch/<slug>/` for the orchestrator files of a project. Herdr Boss does not delete this folder.
 
@@ -45,6 +46,7 @@ To add the shared rules to a project, follow [orchestrator-instructions.md](orch
 | An idle worker still owns an automation browser after 30 minutes | Notice to that project. |
 | A worker is idle for more than 2 hours | Notice to that project. Parked workers and prepared successors are skipped. |
 | An `agent-browser` daemon has no parent, no children, and is older than 2 hours | Herdr Boss stops the daemon. It never stops a browser. |
+| A parent-PID-1 process has its current working directory in a missing worktree | Notice that project's `orch` workspace. Do not notify the Boss workspace. |
 | A non-orchestrator worker stays blocked for more than 5 minutes | Notice its project orchestrator with the worker name and pane ID. |
 | A worker first appears idle or done, or changes into either state | Herdr Boss reads only the last 8 visible pane lines. A known provider error marks the worker failed and sends the orchestrator its name, pane ID, and fixed error label. |
 
@@ -232,7 +234,21 @@ When Roamgate runs and its token file exists, the header shows a **Roamgate** li
 
 ## Usage records
 
-`worker collect --record` records one usage event per worker run before merge. An unknown tool-call count stays `null`, and the ledger accepts `null` as unknown. If TmProcessMining reports entries 281, 283, or 285 as invalid because an older kit rejects `null`, install a HerdrBoss kit version that accepts `null`, then run `herdr-boss ledger check` again. This check reads the ledger. Do not replace `null` with `0` or edit the TmProcessMining ledger. After a successful collection, Herdr Boss prints a reminder to merge the branch and then run `herdr-boss worktree prune --apply`. Collection does not remove a worktree. `herdr-boss usage record FILE` adds measured events. The Analytics page shows recorded usage and its coverage. Quota percentages are global per provider. They are not project token counts.
+`worker collect --record` records one usage event per worker run before merge. An unknown tool-call count stays `null`, and the ledger accepts `null` as unknown. If an older kit rejects `null`, install a HerdrBoss kit version that accepts `null`, then run `herdr-boss ledger check` again. This check reads the ledger. Do not replace `null` with `0` or edit the ledger. After a successful collection, Herdr Boss prints a reminder to merge the branch and then run `herdr-boss worktree prune --apply`. Collection does not remove a worktree. `herdr-boss usage record FILE` adds measured events. The Analytics page shows recorded usage and its coverage. Quota percentages are global per provider. They are not project token counts.
+
+## Project locks and worktree cleanup
+
+Use a project lock when one task must finish before another task starts in the same Git repository. Run the commands from a verified `orch` or `boss` pane:
+
+```sh
+herdr-boss lock acquire release-review
+herdr-boss lock list
+herdr-boss lock release release-review
+```
+
+All linked worktrees of one repository share its locks. Herdr Boss keeps lock files in a private `locks` directory under its data directory. A lock records its name, owner pane, pane shell PID, safe acquire command, and acquisition time. Release a lock from its owner pane. Another pane can release it only after the owner PID has exited or the owner pane has closed. Herdr Boss marks that lock as stale. Use `--wait SECONDS` to wait for an active lock. Enter a whole non-negative number. Herdr Boss takes over a stale lock and prints its previous pane and PID.
+
+Before it removes a worktree, `herdr-boss worktree prune --apply` checks for processes whose current working directory is inside that worktree. It reports parent-PID-1 processes in missing or prunable worktree paths. Stop those processes before cleanup. Herdr Boss removes no worktrees if it cannot scan process directories. It also keeps worktrees that are dirty, unmerged, primary, used by a live pane, or uninspectable. Herdr Boss sends a notice about a parent-PID-1 process in a removed worktree only to that repository's `orch` workspace.
 
 ## HTTP API
 

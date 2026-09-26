@@ -7,6 +7,7 @@ import { appendDelegatedRun, compareChangedPaths, gitStatusPaths, readDelegatedR
 import { buildGhArgs } from './gh.js';
 import { allowWorkerScope, collectWorker, createHerdrRunner, listWorkers, parkWorker, startWorker } from './workers.js';
 import { pruneWorktrees } from './worktrees.js';
+import { acquireProjectLock, listProjectLocks, releaseProjectLock } from './locks.js';
 
 const USAGE = `Kit commands:
   worker start <name> --kind <kind> (--task TEXT | --task-file FILE) [options]
@@ -14,6 +15,7 @@ const USAGE = `Kit commands:
   worker list
   worker park <name> --reason TEXT | worker unpark <name>
   worker allow <name> <path>... --reason TEXT
+  lock acquire <name> [--wait SECONDS] | lock release <name> | lock list
   worktree prune [--apply]
   ledger append --entry FILE | ledger check [--runs]
   check --report FILE | --run FILE | --worktree DIR --allow PATH...
@@ -61,7 +63,7 @@ function rulesPolicy(file) {
   catch { return null; }
 }
 
-function commandKit(command, argv, { output = console.log, env = process.env, herdr = createHerdrRunner(), config: injectedConfig = null, rulesFile = DEFAULT_RULES_FILE } = {}) {
+function commandKit(command, argv, { output = console.log, env = process.env, herdr = createHerdrRunner(), config: injectedConfig = null, rulesFile = DEFAULT_RULES_FILE, lockDataDir, now, pause, pidAlive } = {}) {
   if (command === 'models') {
     const modelConfig = mergeModels(loadModels(), rulesPolicy(rulesFile));
     const { positional, flags } = parseArgs(argv);
@@ -74,6 +76,33 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
 
   const config = injectedConfig ?? loadProjectConfig();
   const modelConfig = command === 'worker' ? loadModels() : null;
+  if (command === 'lock') {
+    const [action, ...rest] = argv;
+    if (action === 'acquire') {
+      const { positional, flags } = parseArgs(rest);
+      if (positional.length !== 1) fail('Usage: lock acquire <name> [--wait SECONDS]');
+      knownFlags(flags, ['wait']);
+      const waitSeconds = flags.wait === undefined ? null : Number(flags.wait);
+      if (waitSeconds !== null && (!/^\d+$/.test(flags.wait) || !Number.isSafeInteger(waitSeconds))) {
+        fail('--wait must be a whole non-negative number of seconds.');
+      }
+      return acquireProjectLock(positional[0], {
+        config, env, herdr, dataDir: lockDataDir, waitSeconds, output, now, pause, pidAlive,
+      });
+    }
+    if (action === 'release') {
+      const { positional, flags } = parseArgs(rest);
+      if (positional.length !== 1 || Object.keys(flags).length) fail('Usage: lock release <name>');
+      return releaseProjectLock(positional[0], {
+        config, env, herdr, dataDir: lockDataDir, output, pidAlive,
+      });
+    }
+    if (action === 'list') {
+      if (rest.length) fail('Usage: lock list');
+      return listProjectLocks({ config, env, herdr, dataDir: lockDataDir, output, pidAlive });
+    }
+    fail('Usage: lock acquire <name> [--wait SECONDS] | lock release <name> | lock list');
+  }
   if (command === 'worker') {
     const [action, ...rest] = argv;
     if (action === 'start') {

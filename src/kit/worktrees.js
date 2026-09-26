@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { createHerdrRunner } from './workers.js';
+import { createHerdrRunner, listCwdProcesses } from './workers.js';
 
 function git(root, args, options = {}) {
   return execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', ...options });
@@ -34,6 +34,11 @@ function cwdIsInWorktree(cwd, worktree) {
   const current = pathKey(cwd);
   const relative = path.relative(root, current);
   return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
+}
+
+function shortCommand(command) {
+  const executable = String(command || 'unknown').trim().split(/\s+/, 1)[0];
+  return path.basename(executable).slice(0, 80) || 'unknown';
 }
 
 function isAncestor(repoRoot, ancestor, descendant) {
@@ -83,14 +88,41 @@ export function formatAge(milliseconds) {
   return `${Math.floor(milliseconds / 60000)}m`;
 }
 
-export function pruneWorktrees(config, { apply = false, herdr = createHerdrRunner(), output = console.log, now = Date.now() } = {}) {
+export function pruneWorktrees(config, { apply = false, herdr = createHerdrRunner(), output = console.log, now = Date.now(), listProcesses = listCwdProcesses } = {}) {
   const panesResponse = herdr(['pane', 'list']);
   const panes = Array.isArray(panesResponse) ? panesResponse : panesResponse.panes ?? [];
-  const worktrees = classifyWorktrees(config, { panes, now });
+  let processes = [];
+  let processScanError = null;
+  try {
+    processes = listProcesses();
+    if (!Array.isArray(processes)) throw new Error('process scan returned an invalid result');
+  } catch (error) {
+    processScanError = error.message || String(error);
+    output(`Process scan failed: ${processScanError}; no worktrees can be removed.`);
+  }
+  const classified = classifyWorktrees(config, { panes, now });
+  const worktrees = classified.map((worktree) => {
+    const matches = processScanError ? [] : processes.filter((process) => {
+      if (!process.cwd || !cwdIsInWorktree(process.cwd, worktree.path)) return false;
+      if (worktree.exists && worktree.removable) return true;
+      return (!worktree.exists || worktree.prunable) && Number(process.ppid) === 1;
+    }).map(({ pid, ppid, command, cwd }) => ({ pid, ppid, command: shortCommand(command), cwd }));
+    const processBlocked = matches.length > 0;
+    return {
+      ...worktree,
+      processes: matches,
+      processBlocked,
+      processScanError,
+      removable: worktree.removable && !processBlocked && !processScanError,
+    };
+  });
   for (const worktree of worktrees) {
     const cleanState = worktree.exists ? (worktree.clean ? 'clean' : 'dirty') : 'missing';
-    const state = [worktree.merged ? 'merged' : 'unmerged', cleanState, worktree.livePane ? 'live pane' : 'no live pane', worktree.removable ? 'eligible' : (worktree.isPrimary ? 'primary' : 'keep')].join(', ');
+    const state = [worktree.merged ? 'merged' : 'unmerged', cleanState, worktree.livePane ? 'live pane' : 'no live pane', worktree.processBlocked ? 'process in worktree' : (worktree.processScanError ? 'process scan failed' : 'no blocking process'), worktree.removable ? 'eligible' : (worktree.isPrimary ? 'primary' : 'keep')].join(', ');
     output(`${worktree.path} [${worktree.branch ?? 'detached'}] ${state}, age ${worktree.age}`);
+    for (const process of worktree.processes) {
+      output(`  Process: ${process.command} (pid ${process.pid}, ppid ${process.ppid ?? 'unknown'}, cwd ${process.cwd})`);
+    }
   }
   if (apply) {
     for (const worktree of worktrees.filter((item) => item.removable)) {

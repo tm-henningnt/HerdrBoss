@@ -217,6 +217,212 @@ test('worktree apply removes a clean merged worker tree in a temporary repo', ()
   assert.ok(output.some((line) => line.includes(`Removed ${safe}`)));
 });
 
+test('worktree prune blocks live cwd processes, missing-worktree orphans, and failed scans', (t) => {
+  const root = temporaryRepo();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const safe = path.join(path.dirname(root), `${path.basename(root)}-wt-process`);
+  git(root, 'switch', '-c', 'process-safe');
+  fs.writeFileSync(path.join(root, 'safe.txt'), 'merged\n');
+  git(root, 'add', 'safe.txt');
+  git(root, 'commit', '-m', 'safe change');
+  git(root, 'switch', 'main');
+  git(root, 'merge', '--no-ff', 'process-safe', '-m', 'merge safe');
+  git(root, 'worktree', 'add', safe, 'process-safe');
+  const config = loadProjectConfig({ cwd: root });
+  const live = [];
+  const kept = pruneWorktrees(config, {
+    apply: true,
+    herdr: () => ({ panes: [] }),
+    listProcesses: () => [{ pid: 321, ppid: 44, command: 'node --token should-not-print', cwd: path.join(safe, 'src') }],
+    output: (line) => live.push(line),
+  });
+  assert.equal(kept.find((item) => item.path === safe).removable, false);
+  assert.equal(kept.find((item) => item.path === safe).processBlocked, true);
+  assert.equal(kept.find((item) => item.path === safe).processes[0].pid, 321);
+  assert.equal(fs.existsSync(safe), true);
+  assert.ok(live.some((line) => line.includes(`node (pid 321, ppid 44, cwd ${path.join(safe, 'src')})`)));
+  assert.ok(!live.join('\n').includes('should-not-print'));
+
+  fs.rmSync(safe, { recursive: true, force: true });
+  const orphanLines = [];
+  const orphaned = pruneWorktrees(config, {
+    apply: true,
+    herdr: () => ({ panes: [] }),
+    listProcesses: () => [{ pid: 322, ppid: 1, command: 'zsh', cwd: path.join(safe, 'deleted-subdir') }],
+    output: (line) => orphanLines.push(line),
+  });
+  const missing = orphaned.find((item) => item.path === safe);
+  assert.equal(missing.exists, false);
+  assert.equal(missing.processBlocked, true);
+  assert.deepEqual(missing.processes.map((item) => item.pid), [322]);
+  assert.ok(orphanLines.some((line) => line.includes(`zsh (pid 322, ppid 1, cwd ${path.join(safe, 'deleted-subdir')})`)));
+  assert.ok(git(root, 'worktree', 'list', '--porcelain').includes(safe), 'the missing worktree record stays available for inspection');
+
+  const failedLines = [];
+  const afterFailure = pruneWorktrees(config, {
+    apply: true,
+    herdr: () => ({ panes: [] }),
+    listProcesses: () => { throw new Error('lsof unavailable'); },
+    output: (line) => failedLines.push(line),
+  });
+  assert.equal(afterFailure.find((item) => item.path === safe).processScanError, 'lsof unavailable');
+  assert.ok(failedLines.some((line) => /Process scan failed.*no worktrees can be removed/.test(line)));
+});
+
+test('project locks enforce pane ownership, wait, stale takeover, and safe release', (t) => {
+  const root = temporaryRepo('herdr-lock-');
+  const linked = path.join(path.dirname(root), `${path.basename(root)}-linked`);
+  git(root, 'worktree', 'add', '-b', 'linked-lock-test', linked, 'main');
+  t.after(() => {
+    try { git(root, 'worktree', 'remove', '--force', linked); } catch {}
+    try { git(root, 'branch', '-D', 'linked-lock-test'); } catch {}
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(linked, { recursive: true, force: true });
+  });
+  const config = loadProjectConfig({ cwd: root });
+  const linkedConfig = loadProjectConfig({ cwd: linked });
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-lock-data-'));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const livePanes = new Set(['ws:orch-a', 'ws:orch-b']);
+  const livePids = new Set([501, 502]);
+  let caller = 'ws:orch-a';
+  let sleepCount = 0;
+  const calls = [];
+  const herdr = (args) => {
+    calls.push(args.join(' '));
+    if (args[0] === 'pane' && args[1] === 'get') return { pane: { pane_id: args[2], workspace_id: 'ws', label: 'orch' } };
+    if (args[0] === 'pane' && args[1] === 'process-info') return { process_info: { shell_pid: args.at(-1) === 'ws:orch-a' ? 501 : 502 } };
+    if (args[0] === 'pane' && args[1] === 'list') return { panes: [...livePanes].map((pane_id) => ({ pane_id })) };
+    throw new Error(`Unexpected Herdr call: ${args.join(' ')}`);
+  };
+  const options = (projectConfig = config) => ({
+    config: projectConfig,
+    lockDataDir: dataDir,
+    env: { HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'ws', HERDR_PANE_ID: caller },
+    herdr,
+    pidAlive: (pid) => livePids.has(pid),
+    output: () => {},
+    now: () => Date.parse('2026-09-26T12:00:00.000Z'),
+    pause: () => {
+      sleepCount += 1;
+      caller = 'ws:orch-a';
+      runKitCommand('lock', ['release', 'deploy'], options(config));
+      caller = 'ws:orch-b';
+    },
+  });
+  const output = [];
+  caller = 'ws:orch-a';
+  const created = runKitCommand('lock', ['acquire', 'deploy'], { ...options(), output: (line) => output.push(line) });
+  assert.equal(created.ownerPane, 'ws:orch-a');
+  assert.equal(created.pid, 501);
+  assert.equal(created.command, 'herdr-boss lock acquire deploy');
+  assert.equal(created.acquiredAt, '2026-09-26T12:00:00.000Z');
+  assert.throws(() => runKitCommand('lock', ['acquire', 'deploy'], { ...options(), config: linkedConfig }), /held by active pane ws:orch-a \(PID 501/i);
+  caller = 'ws:orch-b';
+  assert.throws(() => runKitCommand('lock', ['release', 'deploy'], { ...options(), config: linkedConfig }), /active lock.*another pane/i);
+  const waited = runKitCommand('lock', ['acquire', 'deploy', '--wait', '2'], { ...options(linkedConfig), output: (line) => output.push(line) });
+  assert.equal(waited.ownerPane, 'ws:orch-b');
+  assert.equal(sleepCount, 1);
+  assert.ok(calls.includes('pane get ws:orch-b'));
+  assert.equal(fs.statSync(path.join(dataDir, 'locks')).mode & 0o777, 0o700);
+  const repositoryLocksDir = path.join(dataDir, 'locks', fs.readdirSync(path.join(dataDir, 'locks'))[0]);
+  assert.equal(fs.statSync(repositoryLocksDir).mode & 0o777, 0o700);
+  assert.equal(fs.statSync(path.join(repositoryLocksDir, 'deploy.json')).mode & 0o777, 0o600);
+  const listed = runKitCommand('lock', ['list'], { ...options(linkedConfig), output: (line) => output.push(line) });
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0].ownerPane, 'ws:orch-b');
+  assert.equal(listed[0].state, 'live');
+  const permissionDenied = runKitCommand('lock', ['list'], {
+    ...options(linkedConfig),
+    pidAlive: () => { const error = new Error('permission denied'); error.code = 'EPERM'; throw error; },
+    output: () => {},
+  });
+  assert.equal(permissionDenied[0].state, 'live');
+  const herdrUnavailable = (args) => {
+    if (args[0] === 'pane' && args[1] === 'list') throw new Error('pane service unavailable');
+    return herdr(args);
+  };
+  assert.throws(() => runKitCommand('lock', ['list'], { ...options(linkedConfig), herdr: herdrUnavailable, output: () => {} }), /pane service unavailable/);
+  caller = 'ws:orch-a';
+  assert.throws(() => runKitCommand('lock', ['release', 'deploy'], options()), /active lock.*another pane/i);
+  livePids.delete(502);
+  caller = 'ws:orch-a';
+  const stale = runKitCommand('lock', ['list'], { ...options(), output: () => {} });
+  assert.equal(stale[0].state, 'stale');
+  const takeover = runKitCommand('lock', ['acquire', 'deploy'], { ...options(), output: (line) => output.push(line) });
+  assert.equal(takeover.ownerPane, 'ws:orch-a');
+  assert.equal(takeover.state, 'live');
+  assert.ok(output.some((line) => /NOTICE.*taking over stale lock.*ws:orch-b.*502/i.test(line)));
+  caller = 'ws:orch-b';
+  assert.throws(() => runKitCommand('lock', ['release', 'deploy'], options()), /active lock.*another pane/i);
+  caller = 'ws:orch-a';
+  runKitCommand('lock', ['release', 'deploy'], options());
+  assert.equal(runKitCommand('lock', ['list'], { ...options(), output: () => {} }).length, 0);
+  runKitCommand('lock', ['acquire', 'closed-pane'], options());
+  livePanes.delete('ws:orch-a');
+  const closedPaneLock = runKitCommand('lock', ['list'], { ...options(), output: () => {} });
+  assert.equal(closedPaneLock[0].state, 'stale');
+  caller = 'ws:orch-b';
+  assert.equal(runKitCommand('lock', ['acquire', 'closed-pane'], options()).ownerPane, 'ws:orch-b');
+  runKitCommand('lock', ['release', 'closed-pane'], options());
+  assert.throws(() => runKitCommand('lock', ['acquire', '../unsafe'], options()), /lock name.*path-safe/i);
+  assert.throws(() => runKitCommand('lock', ['acquire', 'deploy', '--wait', '1.5'], options()), /whole non-negative number/i);
+});
+
+test('a concurrent lock mutation cannot replace an observed stale lock during takeover', (t) => {
+  const root = temporaryRepo('herdr-lock-race-');
+  const config = loadProjectConfig({ cwd: root });
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-lock-race-data-'));
+  t.after(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  const livePanes = new Set(['ws:orch-a', 'ws:orch-b', 'ws:orch-stale']);
+  const livePids = new Set([701, 702, 703]);
+  const pids = { 'ws:orch-a': 701, 'ws:orch-b': 702, 'ws:orch-stale': 703 };
+  let caller = 'ws:orch-stale';
+  let competingAcquireTried = false;
+  let competingAcquireError;
+  const herdr = (args) => {
+    if (args[0] === 'pane' && args[1] === 'get') return { pane: { pane_id: args[2], workspace_id: 'ws', label: 'orch' } };
+    if (args[0] === 'pane' && args[1] === 'process-info') return { process_info: { shell_pid: pids[args.at(-1)] } };
+    if (args[0] === 'pane' && args[1] === 'list') {
+      if (!competingAcquireTried) {
+        competingAcquireTried = true;
+        caller = 'ws:orch-b';
+        try { runKitCommand('lock', ['acquire', 'deploy'], options()); }
+        catch (error) { competingAcquireError = error; }
+        finally { caller = 'ws:orch-a'; }
+      }
+      return { panes: [...livePanes].map((pane_id) => ({ pane_id })) };
+    }
+    throw new Error(`Unexpected Herdr call: ${args.join(' ')}`);
+  };
+  const options = () => ({
+    config,
+    lockDataDir: dataDir,
+    env: { HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'ws', HERDR_PANE_ID: caller },
+    herdr,
+    pidAlive: (pid) => livePids.has(pid),
+    output: () => {},
+    now: () => Date.parse('2026-09-26T12:00:00.000Z'),
+  });
+
+  runKitCommand('lock', ['acquire', 'deploy'], options());
+  livePanes.delete('ws:orch-stale');
+  caller = 'ws:orch-a';
+  const takeover = runKitCommand('lock', ['acquire', 'deploy'], options());
+
+  assert.match(competingAcquireError?.message || '', /lock operation is already in progress/i);
+  assert.equal(takeover.ownerPane, 'ws:orch-a');
+  caller = 'ws:orch-b';
+  assert.throws(() => runKitCommand('lock', ['acquire', 'deploy'], options()), /held by active pane ws:orch-a/i);
+  const listed = runKitCommand('lock', ['list'], { ...options(), output: () => {} });
+  assert.equal(listed[0].ownerPane, 'ws:orch-a');
+  assert.equal(listed[0].state, 'live');
+});
+
 test('worker start dry-run prints the plan and makes no worktree or agent changes', () => {
   const root = temporaryRepo();
   const template = path.join(root, 'brief-template.md');

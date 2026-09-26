@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
 import { DATA_DIR, LIVE_DATA_DIR, dashboardUrl } from './config.js';
-import { collectHerdr, collectQuotas, collectMachine, collectProcesses, collectWorktreeCounts, findBrowsers, cpuUse, run } from './collect.js';
+import { collectHerdr, collectQuotas, collectMachine, collectProcesses, collectCwdProcesses, collectMissingWorktreeProcesses, collectWorktreeCounts, findBrowsers, cpuUse, run } from './collect.js';
 import { evaluate, renderBulletin, fmtDuration, providerName, broadcastTargets } from './rules.js';
 import { listProjects } from './projects.js';
 import { loadModels } from './kit/config.js';
@@ -20,6 +20,7 @@ const EVENTS_FILE = path.join(DATA_DIR, 'events.jsonl');
 const CLI_FILE = fileURLToPath(new URL('./cli.js', import.meta.url));
 const SEV = { info: 0, warn: 1, critical: 2 };
 const POLICY_FILE = path.join(DATA_DIR, 'policy.json');
+const WORKTREE_SCAN_INTERVAL_MS = 5 * 60 * 1000;
 
 function handoffCandidates(control) {
   return [...(control.handoffs || []), ...(control.bossHandoff ? [control.bossHandoff] : [])];
@@ -54,7 +55,7 @@ function writeJson(file, data) {
 }
 
 export class Engine extends EventEmitter {
-  constructor(cfg, { push = cfg.push, act = true } = {}) {
+  constructor(cfg, { push = cfg.push, act = true, collectors = {} } = {}) {
     super();
     this.cfg = cfg;
     const guardReasons = [];
@@ -68,6 +69,17 @@ export class Engine extends EventEmitter {
     this.quotasAt = 0;
     this.worktreeCounts = {};
     this.worktreeCountsAt = 0;
+    this.orphanedWorktreeProcesses = [];
+    this.collectors = {
+      collectHerdr,
+      collectQuotas,
+      collectMachine,
+      collectProcesses,
+      collectCwdProcesses,
+      collectMissingWorktreeProcesses,
+      collectWorktreeCounts,
+      ...collectors,
+    };
     this.state = readJson(STATE_FILE, null);
     this.events = [];
     try {
@@ -95,18 +107,23 @@ export class Engine extends EventEmitter {
       const refreshQuotas = !this.quotas || now - this.quotasAt > this.cfg.quotaSeconds * 1000;
       let currentHerdrSnapshot = false;
       const [herdr, machine, procs, quotas] = await Promise.all([
-        collectHerdr(this.cfg.orchestratorLabel).then((snapshot) => { currentHerdrSnapshot = true; return snapshot; }).catch((e) => { errors.push(`herdr: ${e.message}`); return this.state?.herdr || null; }),
-        collectMachine(DATA_DIR).catch((e) => { errors.push(`machine: ${e.message}`); return null; }),
-        collectProcesses().catch((e) => { errors.push(`ps: ${e.message}`); return new Map(); }),
-        refreshQuotas ? collectQuotas().catch((e) => { errors.push(`codexbar: ${e.message}`); return null; }) : null,
+        this.collectors.collectHerdr(this.cfg.orchestratorLabel).then((snapshot) => { currentHerdrSnapshot = true; return snapshot; }).catch((e) => { errors.push(`herdr: ${e.message}`); return this.state?.herdr || null; }),
+        this.collectors.collectMachine(DATA_DIR).catch((e) => { errors.push(`machine: ${e.message}`); return null; }),
+        this.collectors.collectProcesses().catch((e) => { errors.push(`ps: ${e.message}`); return new Map(); }),
+        refreshQuotas ? this.collectors.collectQuotas().catch((e) => { errors.push(`codexbar: ${e.message}`); return null; }) : null,
       ]);
       if (this.act && currentHerdrSnapshot) {
         try { expireMissingHandoffs(herdr?.panes); }
         catch (e) { errors.push(`handoffs: ${e.message}`); }
       }
-      if (herdr && now - this.worktreeCountsAt >= 5 * 60 * 1000) {
-        this.worktreeCounts = await collectWorktreeCounts(herdr.panes, { now }).catch(() => this.worktreeCounts);
+      if (herdr && currentHerdrSnapshot && now - this.worktreeCountsAt >= WORKTREE_SCAN_INTERVAL_MS) {
         this.worktreeCountsAt = now;
+        try { this.worktreeCounts = await this.collectors.collectWorktreeCounts(herdr.panes, { now }); }
+        catch (error) { errors.push(`worktree count scan: ${error.message}`); }
+        try {
+          const cwdProcesses = await this.collectors.collectCwdProcesses();
+          this.orphanedWorktreeProcesses = await this.collectors.collectMissingWorktreeProcesses(herdr.panes, cwdProcesses);
+        } catch (error) { errors.push(`missing worktree process check: ${error.message}`); }
       }
       if (quotas) { this.quotas = quotas; this.quotasAt = now; recordQuotaSnapshot(quotas, new Date(now).toISOString()); }
       const managedBrowsers = Object.values(listBrowserSessions());
@@ -138,6 +155,7 @@ export class Engine extends EventEmitter {
         quotas: this.quotas || [],
         machine,
         worktreeCounts: this.worktreeCounts,
+        orphanedWorktreeProcesses: this.orphanedWorktreeProcesses,
         herdr,
         browsers,
         managedBrowsers,

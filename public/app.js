@@ -1215,7 +1215,7 @@ function project(s, slug) {
 const HELP = {
   overview: ['Overview', `
     <p>The state of all projects and shared resources at one glance.</p>
-    <h3>Needs attention</h3><p>Warnings and critical alerts: quotas, memory, machine load. <b>Details</b> opens the rule text in Logs.</p>
+    <h3>Needs attention</h3><p>Warnings and critical alerts: quotas, memory, machine load, and orphaned worktree processes. <b>Details</b> opens the rule text in Logs.</p>
     <h3>Handovers</h3><p>Orchestrators whose quota comes near its reserve, and successors that wait for review. Open the project to plan, inspect, or activate a handover.</p>
     <h3>Projects</h3><p>The bar above the cards shows the applied share of each project, in card order. Its colors match the top edge of each card. A label such as <b>30% · 2</b> shows the share and the effective slots; the tooltip shows all values. Change the shares on the Allocation page.</p><p>A card per project with its published status and task mix. The table shows the orchestrator, workers in use against the share, and the policy mode. Select a project for its details.</p>
     <h3>Subscriptions and machine health</h3><p>Select a bar to open all quota windows, or the processes and load history. The Machine guard switch turns CPU and load warnings and worker-start blocks on or off. Choose a pause length to suspend those rules for a time; select <b>Resume guard</b> to end a pause early. Memory and disk warnings stay on. Disk space reports the filesystem that contains the Herdr Boss data directory.</p>`],
