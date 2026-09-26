@@ -67,6 +67,8 @@ let machineExpanded = false;
 let policyDraft = null;
 let policyDirty = false;
 let saveMessage = '';
+let machineGuardBusy = false;
+let machineGuardMessage = '';
 
 function markPolicyDirty() {
   policyDirty = true;
@@ -107,6 +109,60 @@ function clock(iso) {
   const d = new Date(iso);
   const t = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
   return d.toDateString() === new Date().toDateString() ? t : `${d.toLocaleDateString([], { weekday: 'short', day: 'numeric' })} ${t}`;
+}
+
+function machineGuardMode(machine = {}, now = Date.now()) {
+  if (machine.guardEnabled === false) return 'off';
+  const pauseAt = machine.guardPausedUntil == null ? NaN : Date.parse(machine.guardPausedUntil);
+  return Number.isFinite(pauseAt) && pauseAt > now ? 'paused' : 'active';
+}
+
+function machineGuardUntilText(untilAt) {
+  return untilAt ? ` until ${new Date(untilAt).toLocaleString()}` : '';
+}
+
+async function updateOverviewMachineGuard(action, hours = 1, enabled = null) {
+  if (machineGuardBusy) return;
+  machineGuardBusy = true;
+  machineGuardMessage = 'Saving machine guard…';
+  lastRender = '';
+  render(true);
+  try {
+    if (action === 'pause' && (!Number.isInteger(hours) || hours < 1 || hours > 24)) throw new Error('Choose a pause from 1 to 24 hours.');
+    const currentResponse = await fetch('/api/policy');
+    const current = await currentResponse.json();
+    if (!currentResponse.ok) throw new Error(current.error || 'The policy could not be read.');
+    current.machine ||= {};
+    if (action === 'toggle') current.machine.guardEnabled = !!enabled;
+    else if (action === 'pause') {
+      current.machine.guardEnabled = true;
+      current.machine.guardPausedUntil = new Date(Date.now() + hours * 3600000).toISOString();
+    } else {
+      current.machine.guardEnabled = true;
+      current.machine.guardPausedUntil = null;
+    }
+    const response = await fetch('/api/policy', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(current) });
+    const result = await response.json();
+    if (!response.ok) throw new Error((result.errors || [result.error || 'The machine guard could not be updated.']).join(' '));
+    state.policy = result.policy;
+    if (result.control) state.control = result.control;
+    if (policyDraft) {
+      if (!policyDirty) policyDraft = clone(result.policy);
+      else {
+        policyDraft.machine ||= {};
+        policyDraft.machine.guardEnabled = result.policy.machine.guardEnabled;
+        policyDraft.machine.guardPausedUntil = result.policy.machine.guardPausedUntil;
+      }
+    }
+    const machine = result.policy.machine;
+    const mode = machineGuardMode(machine);
+    machineGuardMessage = `Machine guard ${mode}${mode === 'paused' ? machineGuardUntilText(machine.guardPausedUntil) : ''}.`;
+  } catch (error) { machineGuardMessage = error.message; }
+  finally {
+    machineGuardBusy = false;
+    lastRender = '';
+    render(true);
+  }
 }
 
 const clone = (x) => JSON.parse(JSON.stringify(x));
@@ -313,7 +369,10 @@ function settingsView(s) {
   const providerRows = Object.keys(d.providerModes).map((p) => `<label class="setting-line"><span>${esc(PROVIDERS[p] || p)}</span><select data-provider="${esc(p)}" aria-label="${esc(PROVIDERS[p] || p)} quota mode"><option value="managed" ${d.providerModes[p] === 'managed' ? 'selected' : ''}>Manage pace</option><option value="ignore" ${d.providerModes[p] === 'ignore' ? 'selected' : ''}>Ignore quota</option></select></label>`).join('');
   const machine = d.machine || {};
   const machineNumber = (key, label, max, nullable = false) => `<label class="setting-line"><span>${label}</span><input type="number" min="0" max="${max}" ${nullable ? 'step="any" placeholder="Disabled"' : ''} value="${machine[key] ?? ''}" data-policy-machine="${key}"></label>`;
-  const machineSettings = `<section class="panel"><h2>Machine</h2><p class="setting-help">The Owner is away after the idle period. CPU is a percent of total machine capacity.</p>${machineNumber('ownerAwayMinutes', 'Owner away after minutes', 1440)}${machineNumber('presentCpuPercent', 'CPU limit while present %', 100)}${machineNumber('awayCpuPercent', 'CPU limit while away %', 100, true)}${machineNumber('presentLoadFactor', 'Present load backstop × cores', 128, true)}${machineNumber('awayLoadFactor', 'Away load backstop × cores', 128, true)}<label class="setting-line"><span>Notice cooldown seconds</span><input type="number" min="0" max="604800" value="${machine.alertCooldownSeconds}" data-policy-machine="alertCooldownSeconds"></label></section>`;
+  const guardMode = machineGuardMode(machine);
+  const pauseHours = [1, 2, 4, 8, 12, 24].map((hours) => `<option value="${hours}">${hours} hour${hours === 1 ? '' : 's'}</option>`).join('');
+  const machineGuardSettings = `<div class="machine-guard-controls"><label class="setting-line"><span>Machine guard · ${guardMode}${guardMode === 'paused' ? esc(machineGuardUntilText(machine.guardPausedUntil)) : ''}</span><input type="checkbox" role="switch" aria-label="Machine guard enabled" data-policy-machine-bool="guardEnabled" ${machine.guardEnabled ? 'checked' : ''}></label><div class="action-row"><label class="setting-line"><span>Pause for</span><select aria-label="Machine guard pause duration" data-machine-pause-hours>${pauseHours}</select></label><button type="button" data-machine-guard-draft="pause">Pause guard</button>${guardMode === 'active' ? '' : '<button type="button" data-machine-guard-draft="resume">Resume guard</button>'}</div><p class="setting-help">${esc(machineGuardMessage || (guardMode === 'paused' ? `The guard resumes ${machineGuardUntilText(machine.guardPausedUntil).slice(7)}.` : guardMode === 'off' ? 'CPU and load limits do not block worker starts while the guard is off.' : 'CPU and load limits block worker starts while the guard is active.'))}</p></div>`;
+  const machineSettings = `<section class="panel"><h2>Machine</h2><p class="setting-help">The Owner is away after the idle period. CPU is a percent of total machine capacity.</p>${machineGuardSettings}${machineNumber('ownerAwayMinutes', 'Owner away after minutes', 1440)}${machineNumber('presentCpuPercent', 'CPU limit while present %', 100)}${machineNumber('awayCpuPercent', 'CPU limit while away %', 100, true)}${machineNumber('presentLoadFactor', 'Present load backstop × cores', 128, true)}${machineNumber('awayLoadFactor', 'Away load backstop × cores', 128, true)}<label class="setting-line"><span>Notice cooldown seconds</span><input type="number" min="0" max="604800" value="${machine.alertCooldownSeconds}" data-policy-machine="alertCooldownSeconds"></label></section>`;
   // A goal exists only for a live, measured window with a stable key. Extra model-only windows do not get one.
   const goalWindows = [];
   for (const q of s.quotas || []) {
@@ -588,8 +647,12 @@ function machineCard(s) {
   const m = s.machine;
   if (!m) return `<div class="err">No machine data.</div>`;
   const hist = s.history || [];
+  const limits = m.limits || {};
+  const guardMode = machineGuardMode(s.policy?.machine || limits);
   return `<div class="stats">
-      <div class="stat"><div class="k">Load (1 / 5 / 15 min)</div><div class="v">${m.load[0]} <small>${m.load[1]} / ${m.load[2]} · ${m.cpus} cores</small></div>${spark(hist.map((x) => x.load), m.cpus)}</div>
+      <div class="stat"><div class="k">Machine guard</div><div class="v">${esc(guardMode)}<small>${guardMode === 'paused' ? esc(machineGuardUntilText(limits.guardPausedUntil || s.policy?.machine?.guardPausedUntil)) : `Owner ${esc(limits.owner || 'unknown')}`}</small></div></div>
+      <div class="stat"><div class="k">CPU / ${guardMode === 'active' ? 'limit' : 'configured limit'}</div><div class="v">${Number.isFinite(limits.cpuPercent) ? limits.cpuPercent.toFixed(1) : '–'}%<small>${limits.cpuLimit == null ? 'disabled' : `${limits.cpuLimit}%`}</small></div></div>
+      <div class="stat"><div class="k">Load (1 / 5 / 15 min)</div><div class="v">${m.load[0]} <small>${m.load[1]} / ${m.load[2]} · ${m.cpus} cores; ${guardMode === 'active' ? 'backstop' : 'configured backstop'} ${limits.loadLimit ?? 'disabled'}</small></div>${spark(hist.map((x) => x.load), m.cpus)}</div>
       <div class="stat"><div class="k">Memory free</div><div class="v">${m.memFreePercent ?? '–'}<small>% of ${m.memTotalGB} GB</small></div>${spark(hist.map((x) => 100 - (x.mem ?? 0)), 100 - 15)}</div>
       <div class="stat"><div class="k">Swap used</div><div class="v">${m.swapUsedMB != null ? (m.swapUsedMB / 1024).toFixed(1) : '–'}<small> GB</small></div></div>
     </div>`;
@@ -742,8 +805,14 @@ function machineSummary(s) {
   const browsers = s.browsers || [];
   const automation = browsers.filter((b) => b.kind === 'automation-chrome').length;
   const daemons = browsers.filter((b) => b.kind === 'agent-browser-daemon').length;
-  const body = m ? `<span>Load <b class="mono">${esc(m.load?.[0] ?? '–')}</b> / ${esc(m.cpus)} cores</span><span>Free memory <b class="mono">${esc(m.memFreePercent ?? '–')}%</b></span><span>Swap <b class="mono">${m.swapUsedMB == null ? '–' : `${(m.swapUsedMB / 1024).toFixed(1)} GB`}</b></span><span>Browsers <b class="mono">${automation}</b> · daemons <b class="mono">${daemons}</b></span>` : '<span>Machine data unavailable</span>';
-  return `<section class="machine-summary"><div class="section-head"><h2>Machine health</h2><span>Automation processes: Chrome, browser MCP, and agent-browser daemons</span></div><details data-machine-detail ${machineExpanded ? 'open' : ''}><summary>${body}<span class="fold-hint">Details</span></summary><div class="machine-foldout"><div>${machineCard(s)}</div><div>${browsersBlock(s) || '<div class="empty">No tracked automation processes.</div>'}</div></div></details></section>`;
+  const limits = m?.limits || {};
+  const machinePolicy = s.policy?.machine || limits;
+  const guardMode = machineGuardMode(machinePolicy);
+  const threshold = guardMode === 'active' ? 'limit' : 'configured limit';
+  const guardControls = `<div class="machine-guard-controls"><label class="setting-line"><span>Machine guard · ${guardMode}${guardMode === 'paused' ? esc(machineGuardUntilText(machinePolicy.guardPausedUntil)) : ''}</span><input type="checkbox" role="switch" aria-label="Machine guard enabled" data-overview-guard-toggle ${machinePolicy.guardEnabled !== false ? 'checked' : ''} ${machineGuardBusy ? 'disabled' : ''}></label><div class="action-row"><label class="setting-line"><span>Pause for</span><select aria-label="Machine guard pause duration" data-overview-pause-hours ${machineGuardBusy ? 'disabled' : ''}>${[1, 2, 4, 8, 12, 24].map((hours) => `<option value="${hours}">${hours} hour${hours === 1 ? '' : 's'}</option>`).join('')}</select></label><button type="button" data-overview-guard-action="pause" ${machineGuardBusy ? 'disabled' : ''}>Pause guard</button>${guardMode === 'active' ? '' : `<button type="button" data-overview-guard-action="resume" ${machineGuardBusy ? 'disabled' : ''}>Resume guard</button>`}</div><p class="setting-help" role="status" aria-live="polite">${esc(machineGuardMessage || (guardMode === 'paused' ? `The guard resumes ${machineGuardUntilText(machinePolicy.guardPausedUntil).slice(7)}.` : guardMode === 'off' ? 'CPU and load limits do not block worker starts while the guard is off.' : 'CPU and load limits block worker starts while the guard is active.'))}</p></div>`;
+  const cpu = Number.isFinite(limits.cpuPercent) ? `${limits.cpuPercent.toFixed(1)}%` : '–';
+  const body = m ? `<span>Guard <b>${esc(guardMode)}${guardMode === 'paused' ? esc(machineGuardUntilText(machinePolicy.guardPausedUntil)) : ''}</b></span><span>Owner <b>${esc(limits.owner || 'unknown')}</b></span><span>CPU <b class="mono">${cpu}</b> / ${threshold} ${limits.cpuLimit == null ? 'disabled' : `${limits.cpuLimit}%`}</span><span>5-minute load <b class="mono">${esc(m.load?.[1] ?? '–')}</b> / ${guardMode === 'active' ? 'backstop' : 'configured backstop'} ${limits.loadLimit ?? 'disabled'}</span><span>Free memory <b class="mono">${esc(m.memFreePercent ?? '–')}%</b></span><span>Browsers <b class="mono">${automation}</b> · daemons <b class="mono">${daemons}</b></span>` : '<span>Machine data unavailable</span>';
+  return `<section class="machine-summary"><div class="section-head"><h2>Machine health</h2><span>Automation processes: Chrome, browser MCP, and agent-browser daemons</span></div>${guardControls}<details data-machine-detail ${machineExpanded ? 'open' : ''}><summary>${body}<span class="fold-hint">Details</span></summary><div class="machine-foldout"><div>${machineCard(s)}</div><div>${browsersBlock(s) || '<div class="empty">No tracked automation processes.</div>'}</div></div></details></section>`;
 }
 
 function attentionBlock(s) {
@@ -1099,7 +1168,7 @@ const HELP = {
     <h3>Needs attention</h3><p>Warnings and critical alerts: quotas, memory, machine load. <b>Details</b> opens the rule text in Logs.</p>
     <h3>Handovers</h3><p>Orchestrators whose quota comes near its reserve, and successors that wait for review. Open the project to plan, inspect, or activate a handover.</p>
     <h3>Projects</h3><p>The bar above the cards shows the applied share of each project, in card order. Its colors match the top edge of each card. A label such as <b>30% · 2</b> shows the share and the effective slots; the tooltip shows all values. Change the shares on the Allocation page.</p><p>A card per project with its published status and task mix. The table shows the orchestrator, workers in use against the share, and the policy mode. Select a project for its details.</p>
-    <h3>Subscriptions and machine health</h3><p>Select a bar to open all quota windows, or the processes and load history.</p>`],
+    <h3>Subscriptions and machine health</h3><p>Select a bar to open all quota windows, or the processes and load history. The Machine guard switch turns CPU and load warnings and worker-start blocks on or off. Choose a pause length to suspend those rules for a time; select <b>Resume guard</b> to end a pause early. Memory warnings stay on.</p>`],
   projects: ['Projects', `
     <p>Select a project card. The detail below it shows what the orchestrator published and what runs now.</p>
     <p>The bar above the cards shows the applied share and the effective slots of each project, in card order. Its colors match the top edge of each card. An idle project is faded. A paused project is faded and striped.</p>
@@ -1127,7 +1196,8 @@ const HELP = {
     <p>A model can be in more than one harness. Each harness keeps its own box and provider for it, so a change in one harness does not change another.</p>
     <h3>Add a model</h3><p>Type a model string in a harness section and select <b>Add model</b>. Use letters, digits, dots, underscores, slashes, and hyphens. Spaces and shell characters are refused. A new model is marked <b>local</b>, starts unmetered, and is stored in the local policy, not in <code>kit/models.json</code>. Select <b>Remove</b> to delete a local model.</p>
     <h3>Provider quotas</h3><p>Choose <b>Manage pace</b> or <b>Ignore quota</b> for each provider. A pacing goal is the most percent of a quota window that you want to use by its reset. Herdr Boss scales the expected-use pace to the goal. An empty field means 100%.</p>
-    <p>The Machine section sets CPU limits, 5-minute load backstops, the Owner idle period, and the notice cooldown. Herdr blocks dispatch when total sampled CPU exceeds its active limit or the 5-minute load average exceeds its active backstop. Leave the away CPU limit or either load backstop blank to disable it.</p>
+    <p>The Machine section sets the guard, CPU limits, 5-minute load backstops, the Owner idle period, and the notice cooldown. Turn the guard off to stop CPU and load warnings and worker-start blocks. Choose a pause length to suspend those rules until the expiry time. Select <b>Resume guard</b> to end a pause early. Memory warnings stay on.</p>
+    <p>When the guard is active, Herdr Boss blocks a worker start if total sampled CPU exceeds its configured limit or the 5-minute load average exceeds its configured backstop. Leave the away CPU limit or either load backstop blank to disable that threshold.</p>
     <p>Changes stay in a draft until you select <b>Apply policy</b>. A rejected save shows the server error and keeps your draft.</p>`],
   agents: ['Agents', `
     <p>Every Herdr workspace with its orchestrator and workers, live from Herdr.</p>
@@ -1320,6 +1390,10 @@ document.addEventListener('input', (e) => {
 });
 
 document.addEventListener('change', (e) => {
+  if (e.target.matches?.('[data-overview-guard-toggle]')) {
+    updateOverviewMachineGuard('toggle', 1, e.target.checked);
+    return;
+  }
   const projectControl = e.target.dataset?.projectDone || e.target.dataset?.projectSort || e.target.dataset?.projectGroup;
   if (projectControl) {
     const view = projectView(projectControl);
@@ -1399,6 +1473,7 @@ document.addEventListener('change', (e) => {
   const el = e.target;
   const d = policyDraft;
   if (el.dataset.policyMachine) { d.machine ||= {}; d.machine[el.dataset.policyMachine] = el.value === '' ? null : Number(el.value); }
+  if (el.dataset.policyMachineBool) { d.machine ||= {}; d.machine[el.dataset.policyMachineBool] = el.checked; }
   if (el.dataset.policyBool) d[el.dataset.policyBool] = el.checked;
   if (el.dataset.provider) d.providerModes[el.dataset.provider] = el.value;
   if (el.dataset.preferredModel) {
@@ -1629,6 +1704,30 @@ async function runHandoffAction(action, key) {
 }
 
 document.addEventListener('click', async (e) => {
+  if (e.target.dataset.machineGuardDraft) {
+    if (!policyDraft) return;
+    policyDraft.machine ||= {};
+    if (e.target.dataset.machineGuardDraft === 'pause') {
+      const hours = Number(document.querySelector('[data-machine-pause-hours]')?.value || 1);
+      if (!Number.isInteger(hours) || hours < 1 || hours > 24) { machineGuardMessage = 'Choose a pause from 1 to 24 hours.'; lastRender = ''; render(true); return; }
+      policyDraft.machine.guardEnabled = true;
+      policyDraft.machine.guardPausedUntil = new Date(Date.now() + hours * 3600000).toISOString();
+    } else {
+      policyDraft.machine.guardEnabled = true;
+      policyDraft.machine.guardPausedUntil = null;
+    }
+    machineGuardMessage = '';
+    policyDirty = true;
+    saveMessage = '';
+    lastRender = '';
+    render(true);
+    return;
+  }
+  if (e.target.dataset.overviewGuardAction) {
+    const hours = Number(document.querySelector('[data-overview-pause-hours]')?.value || 1);
+    await updateOverviewMachineGuard(e.target.dataset.overviewGuardAction, hours);
+    return;
+  }
   if (e.target.id === 'browser-viewer-close') { document.getElementById('browser-viewer').close(); return; }
   if (e.target.dataset.browserHistory) {
     const slug = e.target.dataset.browserProject || document.getElementById('browser-viewer').dataset.project;

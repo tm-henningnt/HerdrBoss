@@ -4,10 +4,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { deriveControl, POLICY_DEFAULTS, providerFor, selectModel, validatePolicy } from '../src/control.js';
+import { deriveControl, loadPolicy, machineLimits, POLICY_DEFAULTS, providerFor, selectModel, validatePolicy } from '../src/control.js';
 import { validateUsage, usageProvider, usageSummary } from '../src/usage.js';
 import { loadModels } from '../src/kit/config.js';
-import { broadcastTargets } from '../src/rules.js';
+import { broadcastTargets, evaluate, renderBulletin } from '../src/rules.js';
 
 const models = loadModels();
 const policy = (patch = {}) => ({ ...structuredClone(POLICY_DEFAULTS), ...patch });
@@ -131,6 +131,8 @@ test('access credentials use private defaults and migrate legacy files once', ()
 });
 
 test('machine policy defaults and validates owner and CPU limits', () => {
+  assert.equal(POLICY_DEFAULTS.machine.guardEnabled, true);
+  assert.equal(POLICY_DEFAULTS.machine.guardPausedUntil, null);
   assert.equal(POLICY_DEFAULTS.machine.ownerAwayMinutes, 10);
   assert.equal(POLICY_DEFAULTS.machine.presentCpuPercent, 70);
   assert.equal(POLICY_DEFAULTS.machine.awayCpuPercent, 95);
@@ -139,6 +141,46 @@ test('machine policy defaults and validates owner and CPU limits', () => {
   assert.match(validatePolicy(policy({ machine: { ...POLICY_DEFAULTS.machine, presentCpuPercent: 101 } }), models).join(' '), /presentCpuPercent/);
   assert.deepEqual(validatePolicy(policy({ machine: { ...POLICY_DEFAULTS.machine, awayCpuPercent: null, awayLoadFactor: null } }), models), []);
   assert.match(validatePolicy(policy({ machine: { ...POLICY_DEFAULTS.machine, alertCooldownSeconds: -1 } }), models).join(' '), /machine.alertCooldownSeconds/);
+  assert.match(validatePolicy(policy({ machine: { ...POLICY_DEFAULTS.machine, guardEnabled: 'yes' } }), models).join(' '), /machine.guardEnabled/);
+  assert.match(validatePolicy(policy({ machine: { ...POLICY_DEFAULTS.machine, guardPausedUntil: 'later' } }), models).join(' '), /machine.guardPausedUntil/);
+});
+
+test('saved legacy off tuple migrates to guard off and restores Owner thresholds', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-policy-migration-'));
+  const file = path.join(dir, 'policy.json');
+  fs.writeFileSync(file, JSON.stringify({ machine: {
+    presentCpuPercent: 100, awayCpuPercent: null, presentLoadFactor: null, awayLoadFactor: null,
+    ownerAwayMinutes: 5, alertCooldownSeconds: 21600,
+  } }));
+  const migrated = loadPolicy({ file, models }).machine;
+  assert.equal(migrated.guardEnabled, false);
+  assert.equal(migrated.presentCpuPercent, 95);
+  assert.equal(migrated.awayCpuPercent, 95);
+  assert.equal(migrated.presentLoadFactor, 3);
+  assert.equal(migrated.awayLoadFactor, 8);
+  assert.equal(migrated.ownerAwayMinutes, 5);
+  assert.equal(migrated.alertCooldownSeconds, 21600);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('saved policy outside the exact legacy off tuple migrates on and keeps thresholds', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-policy-migration-'));
+  const file = path.join(dir, 'policy.json');
+  const machine = { presentCpuPercent: 100, awayCpuPercent: null, presentLoadFactor: 3, awayLoadFactor: null, ownerAwayMinutes: 7, alertCooldownSeconds: 20 };
+  fs.writeFileSync(file, JSON.stringify({ machine }));
+  const migrated = loadPolicy({ file, models }).machine;
+  assert.equal(migrated.guardEnabled, true);
+  for (const [key, value] of Object.entries(machine)) assert.equal(migrated[key], value, `${key} stays unchanged`);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('saved guard fields and thresholds stay unchanged when guardEnabled is present', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-policy-migration-'));
+  const file = path.join(dir, 'policy.json');
+  const machine = { guardEnabled: false, guardPausedUntil: '2026-09-26T13:00:00.000Z', presentCpuPercent: 99, awayCpuPercent: null, presentLoadFactor: 2, awayLoadFactor: null, ownerAwayMinutes: 5, alertCooldownSeconds: 21600 };
+  fs.writeFileSync(file, JSON.stringify({ machine }));
+  assert.deepEqual(loadPolicy({ file, models }).machine, { ...POLICY_DEFAULTS.machine, ...machine });
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test('policy defaults override legacy machine and cooldown config values', () => {
@@ -155,8 +197,10 @@ test('policy defaults override legacy machine and cooldown config values', () =>
 
 test('machine load guard reports active CPU and load limits', async () => {
   const { machineLimits } = await import('../src/control.js');
-  assert.deepEqual(machineLimits({ cpus: 8, load: [1, 4, 5], ownerIdleMinutes: 11, cpuUse: { a: { cpu: 400 } } }, policy()), {
+  const now = Date.parse('2026-09-26T12:00:00Z');
+  assert.deepEqual(machineLimits({ cpus: 8, load: [1, 4, 5], ownerIdleMinutes: 11, cpuUse: { a: { cpu: 400 } } }, policy(), now), {
     owner: 'away', cpuPercent: 50, cpuLimit: 95, fiveMinute: 4, loadLimit: 64,
+    guardEnabled: true, guardPausedUntil: null, guardState: 'active', guardActive: true,
   });
   assert.equal(machineLimits({ cpus: 8, load: [1, 4, 5], ownerIdleMinutes: null, cpuUse: { a: { cpu: 560 } } }, policy()).owner, 'present');
   assert.equal(machineLimits({ cpus: 8, load: [1, 4, 5], ownerIdleMinutes: 0, cpuUse: {} }, policy()).loadLimit, 24);
@@ -164,6 +208,56 @@ test('machine load guard reports active CPU and load limits', async () => {
   assert.equal(disabled.cpuLimit, null);
   assert.equal(disabled.loadLimit, null);
   assert.equal(disabled.cpuPercent, 0);
+  const high = { cpus: 8, load: [1, 100, 5], ownerIdleMinutes: 0, cpuTotalSample: 800 };
+  const off = machineLimits(high, policy({ machine: { ...POLICY_DEFAULTS.machine, guardEnabled: false } }), now);
+  assert.equal(off.guardState, 'off');
+  assert.equal(off.guardActive, false);
+  assert.equal(off.cpuLimit, 70);
+  assert.equal(off.loadLimit, 24);
+  const pause = new Date(now + 3600000).toISOString();
+  const paused = machineLimits(high, policy({ machine: { ...POLICY_DEFAULTS.machine, guardPausedUntil: pause } }), now);
+  assert.equal(paused.guardState, 'paused');
+  assert.equal(paused.guardActive, false);
+  assert.equal(paused.guardPausedUntil, pause);
+  assert.equal(machineLimits(high, policy({ machine: { ...POLICY_DEFAULTS.machine, guardPausedUntil: pause } }), now + 3600001).guardState, 'active');
+});
+
+test('machine CPU and load alerts follow guard state while memory alerts stay independent', () => {
+  const now = Date.parse('2026-09-26T12:00:00Z');
+  const cfg = { quota: { warnPercent: 90, criticalPercent: 98 }, machine: { memFreeWarnPercent: 15, loadWarnFactor: 2 }, providerKinds: {} };
+  const snap = { ...snapshot(), machine: { cpus: 4, load: [12, 20, 8], memFreePercent: 4, memTotalGB: 16, swapUsedMB: 0, cpuTotalSample: 400, ownerIdleMinutes: 0 }, cpuUse: {} };
+  const active = evaluate(snap, cfg, {}, now, policy()).alerts;
+  assert.ok(active.some((alert) => alert.key === 'machine:load'));
+  const off = evaluate(snap, cfg, {}, now, policy({ machine: { ...POLICY_DEFAULTS.machine, guardEnabled: false } })).alerts;
+  assert.ok(!off.some((alert) => alert.key.startsWith('machine:load')));
+  assert.ok(off.some((alert) => alert.key === 'machine:mem'));
+  const paused = evaluate(snap, cfg, {}, now, policy({ machine: { ...POLICY_DEFAULTS.machine, guardPausedUntil: new Date(now + 60000).toISOString() } })).alerts;
+  assert.ok(!paused.some((alert) => alert.key.startsWith('machine:load')));
+  assert.ok(paused.some((alert) => alert.key === 'machine:mem'));
+});
+
+test('bulletin states the machine guard mode and retains measured machine limits', () => {
+  const cfg = { dashboardPort: 4477 };
+  const snap = { ...snapshot(), updatedAt: '2026-09-26T12:00:00Z', quotas: [], lanes: {},
+    machine: { load: [9, 10, 8], cpus: 4, memFreePercent: 40, memTotalGB: 16, swapUsedMB: 0,
+      limits: { owner: 'present', cpuPercent: 65, cpuLimit: 70, fiveMinute: 10, loadLimit: 12, guardEnabled: true, guardPausedUntil: null, guardState: 'active', guardActive: true } } };
+  const bulletin = renderBulletin(snap, { alerts: [], advice: [] }, cfg);
+  assert.match(bulletin, /Guard: active/);
+  assert.match(bulletin, /Owner: present; machine CPU 65% \/ active limit 70%; 5-minute load 10 \/ active backstop 12/);
+  snap.machine.load = [9, 13, 8];
+  snap.machine.limits = { ...snap.machine.limits, cpuPercent: 75, fiveMinute: 13 };
+  snap.machine.limits = { ...snap.machine.limits, guardState: 'off', guardActive: false, guardEnabled: false };
+  const offBulletin = renderBulletin(snap, { alerts: [], advice: [] }, cfg);
+  assert.match(offBulletin, /Guard: off/);
+  assert.match(offBulletin, /No quota or active machine restrictions/);
+  assert.doesNotMatch(offBulletin, /machine resources are within limits/i);
+  snap.machine.limits = { ...snap.machine.limits, guardState: 'paused', guardActive: false, guardEnabled: true, guardPausedUntil: '2026-09-26T13:00:00Z' };
+  const pausedBulletin = renderBulletin(snap, { alerts: [], advice: [] }, cfg);
+  assert.match(pausedBulletin, /Guard: paused until 2026-09-26T13:00:00Z/);
+  assert.match(pausedBulletin, /No quota or active machine restrictions/);
+  assert.doesNotMatch(pausedBulletin, /machine resources are within limits/i);
+  assert.match(pausedBulletin, /configured limit 70%/);
+  assert.doesNotMatch(pausedBulletin, /Machine limit exceeded/);
 });
 
 test('Owner idle time parses HIDIdleTime nanoseconds and rejects missing or invalid readings', async () => {

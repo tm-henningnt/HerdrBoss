@@ -74,7 +74,7 @@ export function evaluate(snap, cfg, paneSince, now = Date.now(), policy = null) 
   // ----- Machine -----
   const m = snap.machine;
   if (m) {
-    const limits = m.limits || (policy ? machineLimits({ ...m, cpuUse: snap.cpuUse }, policy) : null);
+    const limits = m.limits || (policy ? machineLimits({ ...m, cpuUse: snap.cpuUse }, policy, now) : null);
     const cpuPercent = limits ? Number(limits.cpuPercent.toFixed(1)) : null;
     if (m.memFreePercent != null && m.memFreePercent < cfg.machine.memFreeWarnPercent) {
       alerts.push({
@@ -83,8 +83,9 @@ export function evaluate(snap, cfg, paneSince, now = Date.now(), policy = null) 
         text: `System memory is ${m.memFreePercent}% free. Do not start new browser or test workers. Close finished workers and their browsers.`,
       });
     }
-    const cpuExceeded = !!limits && limits.cpuLimit != null && limits.cpuPercent > limits.cpuLimit;
-    const loadExceeded = limits ? limits.loadLimit != null && m.load[1] > limits.loadLimit : m.load[1] > m.cpus * cfg.machine.loadWarnFactor;
+    const guardActive = limits ? (limits.guardActive ?? (limits.guardState ? limits.guardState === 'active' : true)) : true;
+    const cpuExceeded = guardActive && !!limits && limits.cpuLimit != null && limits.cpuPercent > limits.cpuLimit;
+    const loadExceeded = guardActive && (limits ? limits.loadLimit != null && m.load[1] > limits.loadLimit : m.load[1] > m.cpus * cfg.machine.loadWarnFactor);
     if (cpuExceeded || loadExceeded) {
       const advice = 'Start no new worker and no full test suite until it drops. Run one full suite at a time, and limit test runners to two threads (the flag for each runner is in the kit skill, section Machine load).';
       const label = (ws) => snap.herdr?.workspaces?.find((w) => w.id === ws)?.label || ws;
@@ -172,7 +173,7 @@ export function renderBulletin(snap, evaluation, cfg) {
   const shared = serious.filter((a) => a.scope === 'all' || a.scope === 'user');
   const rules = [...evaluation.advice, ...shared.map((a) => a.text)];
   if (rules.length) rules.forEach((r) => L.push(`- ${r}`));
-  else L.push('- No restrictions. All providers and machine resources are within limits.');
+  else L.push('- No quota or active machine restrictions.');
   // Rules for one project stay under that project, so an orchestrator reads only its own.
   const byProject = new Map();
   for (const a of serious.filter((x) => x.scope !== 'all' && x.scope !== 'user')) {
@@ -211,8 +212,14 @@ export function renderBulletin(snap, evaluation, cfg) {
     L.push('', '## Machine', '');
     L.push(`- Load: ${m.load.join(' / ')} on ${m.cpus} cores`);
     const limits = m.limits;
-    if (limits) L.push(`- Owner: ${limits.owner}; machine CPU ${Number(limits.cpuPercent.toFixed(1))}% / active limit ${limits.cpuLimit == null ? 'disabled' : `${limits.cpuLimit}%`}; 5-minute load ${limits.fiveMinute} / active backstop ${limits.loadLimit == null ? 'disabled' : limits.loadLimit}.`);
-    if (limits && ((limits.cpuLimit != null && limits.cpuPercent > limits.cpuLimit) || (limits.loadLimit != null && limits.fiveMinute > limits.loadLimit))) L.push('- Machine limit exceeded: stop new workers and full test suites until no active machine limit is exceeded.');
+    if (limits) {
+      const guardState = limits.guardState || (limits.guardEnabled === false ? 'off' : 'active');
+      const guardText = guardState === 'paused' ? `paused until ${limits.guardPausedUntil}` : guardState;
+      const threshold = limits.guardActive === false ? 'configured' : 'active';
+      L.push(`- Guard: ${guardText}.`);
+      L.push(`- Owner: ${limits.owner}; machine CPU ${Number(limits.cpuPercent.toFixed(1))}% / ${threshold} limit ${limits.cpuLimit == null ? 'disabled' : `${limits.cpuLimit}%`}; 5-minute load ${limits.fiveMinute} / ${threshold} backstop ${limits.loadLimit == null ? 'disabled' : limits.loadLimit}.`);
+    }
+    if (limits?.guardActive !== false && limits && ((limits.cpuLimit != null && limits.cpuPercent > limits.cpuLimit) || (limits.loadLimit != null && limits.fiveMinute > limits.loadLimit))) L.push('- Machine limit exceeded: stop new workers and full test suites until no active machine limit is exceeded.');
     L.push(`- Memory: ${m.memFreePercent}% free of ${m.memTotalGB} GB; swap used ${m.swapUsedMB} MB`);
     const ab = (snap.browsers || []).filter((b) => b.kind === 'automation-chrome').length;
     L.push(`- Automation browsers: ${ab}`);

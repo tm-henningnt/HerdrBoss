@@ -5,7 +5,7 @@ import { loadModels } from './kit/config.js';
 
 const FILE = path.join(DATA_DIR, 'policy.json');
 export const POLICY_DEFAULTS = {
-  machine: { ownerAwayMinutes: 10, presentCpuPercent: 70, awayCpuPercent: 95, presentLoadFactor: 3, awayLoadFactor: 8, alertCooldownSeconds: 21600 },
+  machine: { guardEnabled: true, guardPausedUntil: null, ownerAwayMinutes: 10, presentCpuPercent: 70, awayCpuPercent: 95, presentLoadFactor: 3, awayLoadFactor: 8, alertCooldownSeconds: 21600 },
   maxWorkers: 8,
   borrowIdle: true,
   idleMinutes: 15,
@@ -92,7 +92,17 @@ export function loadPolicy({ file = FILE, models = null, warn = (text) => consol
   try { saved = JSON.parse(fs.readFileSync(file, 'utf8')); }
   catch (e) { if (e.code !== 'ENOENT') throw e; }
   const { ignoredRoutes: _derived, ...stored } = saved;
-  const policy = { ...POLICY_DEFAULTS, ...stored, machine: { ...POLICY_DEFAULTS.machine, ...stored.machine }, providerModes: { ...POLICY_DEFAULTS.providerModes, ...stored.providerModes }, preferredModels: stored.preferredModels || {}, modelProviders: stored.modelProviders || {}, extraModels: stored.extraModels || {}, disabledModels: stored.disabledModels || {}, harnessRoutes: stored.harnessRoutes || {}, pacingGoals: stored.pacingGoals || {}, projects: stored.projects || {} };
+  const savedMachine = isObject(stored.machine) ? stored.machine : {};
+  const machine = { ...POLICY_DEFAULTS.machine, ...savedMachine };
+  if (!Object.hasOwn(savedMachine, 'guardEnabled')) {
+    const legacyOff = savedMachine.presentCpuPercent === 100 && savedMachine.awayCpuPercent === null &&
+      savedMachine.presentLoadFactor === null && savedMachine.awayLoadFactor === null;
+    machine.guardEnabled = !legacyOff;
+    if (legacyOff) Object.assign(machine, {
+      presentCpuPercent: 95, awayCpuPercent: 95, presentLoadFactor: 3, awayLoadFactor: 8,
+    });
+  }
+  const policy = { ...POLICY_DEFAULTS, ...stored, machine, providerModes: { ...POLICY_DEFAULTS.providerModes, ...stored.providerModes }, preferredModels: stored.preferredModels || {}, modelProviders: stored.modelProviders || {}, extraModels: stored.extraModels || {}, disabledModels: stored.disabledModels || {}, harnessRoutes: stored.harnessRoutes || {}, pacingGoals: stored.pacingGoals || {}, projects: stored.projects || {} };
   policy.ignoredRoutes = legacyRouteConflicts(policy, models ?? loadModels());
   for (const [kind, list] of Object.entries(policy.ignoredRoutes)) for (const model of list) {
     const key = `${file}:${kind}/${model}:${policy.modelProviders[model]}`;
@@ -103,13 +113,18 @@ export function loadPolicy({ file = FILE, models = null, warn = (text) => consol
   return policy;
 }
 
-export function machineLimits(machine, policy) {
+export function machineLimits(machine, policy, now = Date.now()) {
   const away = Number.isFinite(machine.ownerIdleMinutes) && machine.ownerIdleMinutes >= policy.machine.ownerAwayMinutes;
   const cpu = Number.isFinite(machine.cpuTotalSample) ? machine.cpuTotalSample : Object.values(machine.cpuUse || {}).reduce((sum, value) => sum + (Number(value.cpu) || 0), 0);
   const cores = machine.cpus || 1;
   const factor = away ? policy.machine.awayLoadFactor : policy.machine.presentLoadFactor;
+  const guardEnabled = policy.machine.guardEnabled === true;
+  const guardPausedUntil = policy.machine.guardPausedUntil ?? null;
+  const pauseAt = guardPausedUntil == null ? NaN : Date.parse(guardPausedUntil);
+  const guardState = !guardEnabled ? 'off' : Number.isFinite(pauseAt) && pauseAt > now ? 'paused' : 'active';
   return { owner: away ? 'away' : 'present', cpuPercent: cpu / cores, cpuLimit: away ? policy.machine.awayCpuPercent : policy.machine.presentCpuPercent,
-    fiveMinute: machine.load?.[1] ?? null, loadLimit: factor == null ? null : cores * factor };
+    fiveMinute: machine.load?.[1] ?? null, loadLimit: factor == null ? null : cores * factor,
+    guardEnabled, guardPausedUntil, guardState, guardActive: guardState === 'active' };
 }
 
 function subset(value, set, field, errors) {
@@ -124,6 +139,9 @@ export function validatePolicy(value, models) {
   if (typeof value.autoHandover !== 'boolean') errors.push('autoHandover must be boolean.');
   if (!value.machine || typeof value.machine !== 'object' || Array.isArray(value.machine)) errors.push('machine must be an object.');
   else {
+    if (typeof value.machine.guardEnabled !== 'boolean') errors.push('machine.guardEnabled must be boolean.');
+    const pause = value.machine.guardPausedUntil;
+    if (pause !== null && (typeof pause !== 'string' || !Number.isFinite(Date.parse(pause)) || new Date(pause).toISOString() !== pause)) errors.push('machine.guardPausedUntil must be null or a valid ISO timestamp.');
     if (!Number.isInteger(value.machine.alertCooldownSeconds) || value.machine.alertCooldownSeconds < 0 || value.machine.alertCooldownSeconds > 604800) errors.push('machine.alertCooldownSeconds must be an integer from 0 to 604800.');
     for (const key of ['ownerAwayMinutes', 'presentCpuPercent']) if (!Number.isInteger(value.machine[key]) || value.machine[key] < 0 || value.machine[key] > (key === 'ownerAwayMinutes' ? 1440 : 100)) errors.push(`machine.${key} is out of range.`);
     if (value.machine.awayCpuPercent !== null && (!Number.isInteger(value.machine.awayCpuPercent) || value.machine.awayCpuPercent < 0 || value.machine.awayCpuPercent > 100)) errors.push('machine.awayCpuPercent must be null or an integer from 0 to 100.');

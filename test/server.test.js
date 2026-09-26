@@ -161,8 +161,11 @@ test('the policy API saves per-harness model assignments and rejects unsafe mode
   const shared = 'opencode-go/deepseek-v4.1-flash';
   const current = await (await fetch(`${base}/api/policy`)).json();
   assert.deepEqual([current.extraModels, current.disabledModels, current.harnessRoutes], [{}, {}, {}], 'a policy without the new fields reads as empty assignments');
+  assert.equal(current.machine.guardEnabled, true, 'the fresh policy enables the guard explicitly');
+  assert.equal(current.machine.guardPausedUntil, null);
   const draft = {
     ...current,
+    machine: { ...current.machine, guardEnabled: false, guardPausedUntil: '2026-09-26T13:00:00.000Z' },
     modelProviders: { [shared]: null },
     extraModels: { pi: ['opencode-go/glm-5.2'] },
     disabledModels: { opencode: [shared] },
@@ -176,6 +179,14 @@ test('the policy API saves per-harness model assignments and rejects unsafe mode
   assert.deepEqual(stored.disabledModels, draft.disabledModels);
   assert.deepEqual(stored.harnessRoutes, draft.harnessRoutes);
   assert.deepEqual(stored.modelProviders, draft.modelProviders, 'the legacy route stays');
+  assert.equal(stored.machine.guardEnabled, false);
+  assert.equal(stored.machine.guardPausedUntil, draft.machine.guardPausedUntil);
+  const invalidGuard = await put({ ...draft, machine: { ...draft.machine, guardEnabled: 'off' } });
+  assert.equal(invalidGuard.status, 400);
+  assert.match((await invalidGuard.json()).errors.join(' '), /machine.guardEnabled/);
+  const invalidPause = await put({ ...draft, machine: { ...draft.machine, guardPausedUntil: 'tomorrow' } });
+  assert.equal(invalidPause.status, 400);
+  assert.match((await invalidPause.json()).errors.join(' '), /machine.guardPausedUntil/);
   const rejected = await put({ ...draft, extraModels: { pi: ['glm; rm -rf ~'] } });
   assert.equal(rejected.status, 400);
   assert.match((await rejected.json()).errors.join(' '), /extraModels/);
