@@ -67,8 +67,13 @@ export function extendFreeModelExhaustion(existing, association, retryAt, now = 
 
 export function matchWorkerFailure(lines) {
   const text = Array.isArray(lines) ? lines.join('\n') : String(lines ?? '');
-  const lower = text.toLowerCase();
-  return WORKER_FAILURE_LABELS.find((label) => lower.includes(label.toLowerCase())) || null;
+  const content = text.split(/\r?\n/).map((line) => line.trim()).filter((line) => !/^tip:/i.test(line)).join('\n');
+  const lower = content.toLowerCase();
+  return WORKER_FAILURE_LABELS.find((label) => {
+    if (label === '401') return /\b(?:http\s+401|status\s+401|401\s+unauthorized)\b/i.test(content);
+    if (label === 'usage limit') return /\b(?:usage\s+limit\s+(?:reached|exceeded)|hit\s+your\s+usage\s+limit)\b/i.test(content);
+    return lower.includes(label.toLowerCase());
+  }) || null;
 }
 
 export function shouldReadWorkerScreen(previous, pane) {
