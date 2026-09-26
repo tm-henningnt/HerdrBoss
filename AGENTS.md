@@ -8,6 +8,8 @@ HerdrBoss is the resource supervisor, shared dashboard, and orchestration kit fo
 - The **HerdrBoss orchestrator** runs in the pane labeled `orch` in the `HerdrBoss` workspace. It develops this repository through workers.
 - The orchestrator reports finished work, kit changes, and questions to the Boss pane with `herdr agent prompt <boss-pane> "..."`, without `--wait`. The Boss decides when to tell the other projects.
 
+Settle implementation and design details, naming, thresholds, test design, scope extensions inside your project, and review findings within your project rules and the Owner decisions you already have. Do not ask the Boss about them. Ask the Boss only for: a conflict with an Owner decision or between projects, a change that affects other projects or the shared kit behavior for others, credentials or security, destructive or irreversible actions outside your project, and product-direction decisions. Report to the Boss only when a task is merged and live, or when you are blocked, in one or two lines.
+
 ## Safety rules
 
 - This repository is public: https://github.com/tm-henningnt/HerdrBoss. Before each commit, read the full diff for secrets, tokens, local file contents, and details from other projects: client names, tenant URLs, app IDs, and business data. Do not commit such content.
