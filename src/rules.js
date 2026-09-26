@@ -83,15 +83,17 @@ export function evaluate(snap, cfg, paneSince, now = Date.now(), policy = null) 
         text: `System memory is ${m.memFreePercent}% free. Do not start new browser or test workers. Close finished workers and their browsers.`,
       });
     }
-    if (Number.isFinite(m.diskFreeBytes) && Number.isFinite(m.diskFreePercent) && policy?.machine) {
+    if (Number.isFinite(m.diskFreeBytes) && policy?.machine) {
       const freeGB = m.diskFreeBytes / 2 ** 30;
       const critical = freeGB < policy.machine.diskCriticalFreeGB;
-      if (critical || m.diskFreePercent < policy.machine.diskWarnFreePercent || freeGB < policy.machine.diskWarnFreeGB) {
+      if (critical || freeGB < policy.machine.diskWarnFreeGB) {
+        const freePercent = Number.isFinite(m.diskFreePercent) ? `${m.diskFreePercent.toFixed(1)}%` : 'unknown percent';
         for (const [workspace, counts] of Object.entries(snap.worktreeCounts || {})) {
           if (!(counts.linked > 0)) continue;
-          alerts.push({ key: `machine:disk:${workspace}`, severity: critical ? 'critical' : 'warn', scope: workspace,
-            title: `Disk space low: ${freeGB.toFixed(1)} GB free (${m.diskFreePercent}%)`,
-            text: `The Herdr Boss data filesystem has ${freeGB.toFixed(1)} GB (${m.diskFreePercent}%) free. This project has ${counts.linked} linked worker worktree(s), including ${counts.prunable} missing/prunable. After reviewing merged work, run \`herdr-boss worktree prune --apply\` to remove safe worktrees.` });
+          const severity = critical ? 'critical' : 'warn';
+          alerts.push({ key: `machine:disk:${workspace}:${severity}`, severity, scope: workspace,
+            title: `Disk space low: ${freeGB.toFixed(1)} GB free (${freePercent})`,
+            text: `The Herdr Boss data filesystem has ${freeGB.toFixed(1)} GB (${freePercent}) free. This project has ${counts.linked} linked worker worktree(s), including ${counts.prunable} missing/prunable. After reviewing merged work, run \`herdr-boss worktree prune --apply\` to remove safe worktrees.` });
         }
       }
     }

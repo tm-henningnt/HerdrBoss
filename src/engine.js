@@ -19,6 +19,20 @@ const EVENTS_FILE = path.join(DATA_DIR, 'events.jsonl');
 const CLI_FILE = fileURLToPath(new URL('./cli.js', import.meta.url));
 const SEV = { info: 0, warn: 1, critical: 2 };
 
+export function alertPromptDue(alert, record, now, cooldown) {
+  if (!record) return true;
+  if (SEV[alert.severity] > SEV[record.severity]) return true;
+  return !alert.key.startsWith('machine:disk:') && !alert.once && now - record.at > cooldown;
+}
+
+export function pruneInactiveDiskPromptRecords(records, activeAlerts) {
+  const active = activeAlerts instanceof Set ? activeAlerts : new Set(activeAlerts || []);
+  return Object.fromEntries(Object.entries(records || {}).filter(([recordKey]) => {
+    const alertKey = recordKey.split('@')[0];
+    return !alertKey.startsWith('machine:disk:') || active.has(alertKey);
+  }));
+}
+
 function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; }
 }
@@ -411,10 +425,14 @@ export class Engine extends EventEmitter {
       for (const a of alerts) {
         if (a.suppressPrompt || a.scope === 'user') continue;
         // A skipped broadcast stays unsent, so it reaches the orchestrator when its workers become active.
-        const targets = a.scope === 'all' ? broadcast : orchs.filter((o) => o.workspace === a.scope);
+        let targets = a.scope === 'all' ? broadcast : orchs.filter((o) => o.workspace === a.scope);
+        if (a.key.startsWith('machine:disk:')) {
+          const projectOrch = targets.find((o) => o.label === 'orch');
+          targets = projectOrch ? [projectOrch] : targets.filter((o) => o.label !== 'boss').slice(0, 1);
+        }
         for (const o of targets) {
           const rec = this.memory.pushes[`${a.key}@${o.id}`];
-          const due = !rec || (!a.once && now - rec.at > cooldown) || SEV[a.severity] > SEV[rec.severity];
+          const due = alertPromptDue(a, rec, now, cooldown);
           if (!due) continue;
           if (!perPane.has(o.id)) perPane.set(o.id, { o, list: [] });
           perPane.get(o.id).list.push(a);
@@ -440,6 +458,7 @@ export class Engine extends EventEmitter {
 
     // Forget alerts that cleared more than a week ago.
     const week = 7 * 86400 * 1000;
+    this.memory.pushes = pruneInactiveDiskPromptRecords(this.memory.pushes, active);
     for (const [k, v] of Object.entries(this.memory.pushes)) if (!active.has(k.split('@')[0]) && now - v.at > week) delete this.memory.pushes[k];
     for (const [k, at] of Object.entries(this.memory.notified)) if (!active.has(k) && now - at > week) delete this.memory.notified[k];
     // Allow a cleared machine alert to notify again when it returns.

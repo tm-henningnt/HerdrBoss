@@ -20,11 +20,29 @@ test('worktree counts deduplicate common repositories and cache results', async 
   };
   const panes = [{ orch: true, workspace: 'a', cwd: '/repo' }, { orch: true, workspace: 'b', cwd: '/repo-wt' }];
   const first = await collectWorktreeCounts(panes, { now: 1000, runner });
-  assert.deepEqual(first, { a: { linked: 2, prunable: 1 }, b: { linked: 2, prunable: 1 } });
+  assert.deepEqual(first, { a: { linked: 2, prunable: 1 } });
   assert.equal(calls.filter((args) => args.includes('list')).length, 1);
   calls.length = 0;
   await collectWorktreeCounts(panes, { now: 2000, runner });
   assert.equal(calls.filter((args) => args.includes('list')).length, 0);
+});
+
+test('worktree counts exclude Boss panes and attribute a shared repository once to its orch workspace', async () => {
+  const calls = [];
+  const runner = async (_cmd, args) => {
+    calls.push(args);
+    if (args.includes('--git-common-dir')) return '/repo/.git\n';
+    if (args.includes('list')) return 'worktree /repo\nHEAD a\n\nworktree /repo-wt\nHEAD b\n';
+    throw new Error('unexpected');
+  };
+  const panes = [
+    { orch: true, label: 'orch', workspaceLabel: 'Boss', workspace: 'wBoss', cwd: '/repo' },
+    { orch: true, label: 'orch', workspace: 'wB', cwd: '/repo-wt' },
+    { orch: false, workspace: 'wOther', cwd: '/repo' },
+  ];
+  assert.deepEqual(await collectWorktreeCounts(panes, { now: 4000000, runner }), { wB: { linked: 1, prunable: 0 } });
+  assert.equal(calls.filter((args) => args.includes('--git-common-dir')).length, 1);
+  assert.equal(calls.filter((args) => args.includes('list')).length, 1);
 });
 
 test('failed Git worktree listing skips that project', async () => {

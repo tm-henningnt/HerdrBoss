@@ -39,11 +39,13 @@ export async function collectHerdr(orchLabel) {
     } catch {}
   }));
   const tabLabel = Object.fromEntries(tabs.tabs.map((t) => [t.tab_id, t.label]));
+  const workspaceLabel = Object.fromEntries(ws.workspaces.map((w) => [w.workspace_id, w.label]));
   return {
     workspaces: ws.workspaces.map((w) => ({ id: w.workspace_id, label: w.label, status: w.agent_status, panes: w.pane_count, tabs: w.tab_count })),
     panes: panes.panes.map((p) => ({
       id: p.pane_id,
       workspace: p.workspace_id,
+      workspaceLabel: workspaceLabel[p.workspace_id] || null,
       tab: p.tab_id,
       tabLabel: tabLabel[p.tab_id] || null,
       label: p.label || null,
@@ -136,12 +138,11 @@ const WORKTREE_CACHE_MS = 5 * 60 * 1000;
 export async function collectWorktreeCounts(panes, { now = Date.now(), runner = run } = {}) {
   const repos = new Map();
   for (const pane of panes || []) {
-    if (!pane.orch || !pane.cwd || !pane.workspace) continue;
+    if (!pane.orch || pane.label === 'boss' || /^boss$/i.test(pane.workspaceLabel || '') || !pane.cwd || !pane.workspace) continue;
     try {
       const commonPath = path.resolve((await runner('git', ['-C', pane.cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir'], { timeout: 3000 })).trim());
       const common = fs.existsSync(commonPath) ? fs.realpathSync(commonPath) : commonPath;
-      if (!repos.has(common)) repos.set(common, { cwd: pane.cwd, workspaces: new Set() });
-      repos.get(common).workspaces.add(pane.workspace);
+      if (!repos.has(common)) repos.set(common, { cwd: pane.cwd, workspace: pane.workspace });
     } catch {}
   }
   const result = {};
@@ -161,7 +162,7 @@ export async function collectWorktreeCounts(panes, { now = Date.now(), runner = 
         while (worktreeCache.size > 64) worktreeCache.delete(worktreeCache.keys().next().value);
       } catch { worktreeCache.delete(common); continue; }
     }
-    for (const workspace of repo.workspaces) result[workspace] = { linked: cached.linked, prunable: cached.prunable };
+    result[repo.workspace] = { linked: cached.linked, prunable: cached.prunable };
   }
   return result;
 }

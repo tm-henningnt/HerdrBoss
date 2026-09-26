@@ -8,6 +8,7 @@ import { deriveControl, loadPolicy, machineLimits, POLICY_DEFAULTS, providerFor,
 import { validateUsage, usageProvider, usageSummary } from '../src/usage.js';
 import { loadModels } from '../src/kit/config.js';
 import { broadcastTargets, evaluate, renderBulletin } from '../src/rules.js';
+import { alertPromptDue, pruneInactiveDiskPromptRecords } from '../src/engine.js';
 
 const models = loadModels();
 const policy = (patch = {}) => ({ ...structuredClone(POLICY_DEFAULTS), ...patch });
@@ -137,7 +138,7 @@ test('machine policy defaults and validates owner and CPU limits', () => {
   assert.equal(POLICY_DEFAULTS.machine.presentCpuPercent, 70);
   assert.equal(POLICY_DEFAULTS.machine.awayCpuPercent, 95);
   assert.equal(POLICY_DEFAULTS.machine.alertCooldownSeconds, 21600);
-  assert.equal(POLICY_DEFAULTS.machine.diskWarnFreePercent, 10);
+  assert.equal('diskWarnFreePercent' in POLICY_DEFAULTS.machine, false);
   assert.equal(POLICY_DEFAULTS.machine.diskWarnFreeGB, 20);
   assert.equal(POLICY_DEFAULTS.machine.diskCriticalFreeGB, 5);
   assert.deepEqual(validatePolicy(policy(), models), []);
@@ -146,7 +147,7 @@ test('machine policy defaults and validates owner and CPU limits', () => {
   assert.match(validatePolicy(policy({ machine: { ...POLICY_DEFAULTS.machine, alertCooldownSeconds: -1 } }), models).join(' '), /machine.alertCooldownSeconds/);
   assert.match(validatePolicy(policy({ machine: { ...POLICY_DEFAULTS.machine, guardEnabled: 'yes' } }), models).join(' '), /machine.guardEnabled/);
   assert.match(validatePolicy(policy({ machine: { ...POLICY_DEFAULTS.machine, guardPausedUntil: 'later' } }), models).join(' '), /machine.guardPausedUntil/);
-  assert.match(validatePolicy(policy({ machine: { ...POLICY_DEFAULTS.machine, diskWarnFreePercent: 101 } }), models).join(' '), /diskWarnFreePercent/);
+  assert.deepEqual(validatePolicy(policy({ machine: { ...POLICY_DEFAULTS.machine, diskWarnFreePercent: 101 } }), models), []);
 });
 
 test('saved legacy off tuple migrates to guard off and restores Owner thresholds', () => {
@@ -253,11 +254,43 @@ test('disk warnings use disk thresholds with guard off and target worktree proje
   assert.equal(alerts[0].severity, 'warn');
   snap.machine.diskFreeBytes = 50 * 2 ** 30;
   snap.machine.diskFreePercent = 9.9;
-  const percentAlert = evaluate(snap, cfg, {}, now, policy({ machine: { ...POLICY_DEFAULTS.machine, guardEnabled: false } })).alerts.find((alert) => alert.key === 'machine:disk:w1');
-  assert.equal(percentAlert.severity, 'warn', 'the percent limit applies even when free GB exceeds its warning threshold');
+  const percentOnly = evaluate(snap, cfg, {}, now, policy({ machine: { ...POLICY_DEFAULTS.machine, guardEnabled: false } })).alerts;
+  assert.equal(percentOnly.some((alert) => alert.key.startsWith('machine:disk:')), false, 'percent alone does not trigger a warning');
+  snap.machine.diskFreeBytes = 18 * 2 ** 30;
+  snap.machine.diskFreePercent = 9.9;
+  const percentText = evaluate(snap, cfg, {}, now, policy()).alerts.find((alert) => alert.key.startsWith('machine:disk:'));
+  assert.match(percentText.title, /\(9\.9%\)/);
+  assert.match(percentText.text, /\(9\.9%\)/);
   snap.machine.diskFreeBytes = 4 * 2 ** 30;
   snap.machine.diskFreePercent = 2;
-  assert.equal(evaluate(snap, cfg, {}, now, policy()).alerts.find((alert) => alert.key === 'machine:disk:w1').severity, 'critical');
+  const critical = evaluate(snap, cfg, {}, now, policy()).alerts.find((alert) => alert.key.startsWith('machine:disk:'));
+  assert.equal(critical.severity, 'critical');
+  assert.notEqual(critical.key, percentText.key, 'level transitions use a distinct alert key');
+  snap.machine.diskFreeBytes = 30 * 2 ** 30;
+  assert.equal(evaluate(snap, cfg, {}, now, policy()).alerts.some((alert) => alert.key.startsWith('machine:disk:')), false, 'recovery clears the disk alert');
+  snap.machine.diskFreeBytes = 18 * 2 ** 30;
+  const warningAgain = evaluate(snap, cfg, {}, now, policy()).alerts.find((alert) => alert.key.startsWith('machine:disk:'));
+  assert.equal(warningAgain.severity, 'warn');
+  assert.equal(warningAgain.key, percentText.key, 'a later recovery transition returns to the warning level');
+});
+
+test('disk prompts send on level transitions and recovery, but not after same-level cooldown', () => {
+  const warning = { key: 'machine:disk:w1:warn', severity: 'warn' };
+  const critical = { key: 'machine:disk:w1:critical', severity: 'critical' };
+  const sent = { at: 1000, severity: 'warn' };
+  assert.equal(alertPromptDue(warning, sent, 1000 + 7 * 60 * 60 * 1000, 6 * 60 * 60 * 1000), false);
+  assert.equal(alertPromptDue(critical, null, 2000, 6 * 60 * 60 * 1000), true);
+  const warningKey = `${warning.key}@w1:p1`;
+  const criticalKey = `${critical.key}@w1:p1`;
+  const records = { [warningKey]: sent, 'quota:claude@w1:p1': { at: 1000, severity: 'warn' } };
+  const afterLevelChange = pruneInactiveDiskPromptRecords(records, new Set([critical.key]));
+  assert.equal(warningKey in afterLevelChange, false, 'the warning record is removed at the critical transition');
+  assert.equal('quota:claude@w1:p1' in afterLevelChange, true, 'unrelated prompt records stay intact');
+  assert.equal(alertPromptDue(critical, null, 2000, 6 * 60 * 60 * 1000), true);
+  assert.equal(alertPromptDue(warning, afterLevelChange[warningKey], 3000, 6 * 60 * 60 * 1000), true, 'a warning crossing is due after a level transition');
+  const afterRecovery = pruneInactiveDiskPromptRecords({ [warningKey]: sent, [criticalKey]: { at: 2000, severity: 'critical' } }, new Set());
+  assert.deepEqual(afterRecovery, {});
+  assert.equal(alertPromptDue(warning, afterRecovery[warningKey], 3000, 6 * 60 * 60 * 1000), true, 'a warning crossing is due after recovery');
 });
 
 test('bulletin states the machine guard mode and retains measured machine limits', () => {
