@@ -10,7 +10,7 @@ function writeExecutable(file, source) {
   fs.chmodSync(file, 0o755);
 }
 
-function handoffFixture(t, { shell = '% ', delayShell = false, paneListFails = false, sourceKind = 'codex', sessionId = null, busyAttempts = 0 } = {}) {
+function handoffFixture(t, { shell = '% ', delayShell = false, paneListFails = false, sourceKind = 'codex', sessionId = null, busyAttempts = 0, existingPane = null } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-boss-handoff-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const bin = path.join(root, '.local', 'bin');
@@ -36,7 +36,7 @@ if (args[0] === 'pane' && args[1] === 'get' && args[2] !== 'ws:p1') result = { p
 } };
 if (args[0] === 'pane' && args[1] === 'list') {
   if (process.env.TEST_PANE_LIST_FAIL === '1') process.exit(1);
-  result = { panes: [{ pane_id: 'ws:p1', workspace_id: 'ws' }] };
+  result = { panes: [{ pane_id: 'ws:p1', workspace_id: 'ws' }, ...(process.env.TEST_EXISTING_PANE ? [{ pane_id: process.env.TEST_EXISTING_PANE, workspace_id: 'ws' }] : [])] };
 }
 if (args[0] === 'tab' && args[1] === 'create') result = { root_pane: { pane_id: 'ws:p2' } };
 if (args[0] === 'agent' && args[1] === 'list') result = { agents: [] };
@@ -91,6 +91,7 @@ exec node "$(dirname "$0")/session-migrate.cjs" "$@"
       TEST_SHELL: shell,
       TEST_DELAY_SHELL: delayShell ? '1' : '0',
       TEST_PANE_LIST_FAIL: paneListFails ? '1' : '0',
+      ...(existingPane ? { TEST_EXISTING_PANE: existingPane } : {}),
       TEST_SOURCE_KIND: sourceKind,
       ...(sessionId ? { TEST_SESSION_ID: sessionId } : {}),
     },
@@ -131,6 +132,12 @@ test('expireMissingHandoffs records absent successors from an explicit pane snap
 function runHandoffCli(root, args, env) {
   const cliPath = new URL('../src/cli.js', import.meta.url).pathname;
   return execFileSync(process.execPath, [cliPath, ...args], {
+    cwd: path.join(root, 'project'), env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+  });
+}
+
+function runHandoffModule(root, source, env) {
+  return execFileSync(process.execPath, ['--input-type=module', '-e', source], {
     cwd: path.join(root, 'project'), env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
   });
 }
@@ -210,6 +217,84 @@ test('handoff prepare expires missing successors only after a successful pane li
   const agentStart = calls.findIndex((args) => args[0] === 'agent' && args[1] === 'start');
   assert.ok(processInfo >= 0 && shellRead > processInfo && agentStart > shellRead, 'the successor shell must be checked before agent start');
   assert.equal(Number(fs.readFileSync(f.processInfoFile, 'utf8')) >= 2, true, 'readiness must wait until the shell is foreground');
+});
+
+test('handoff readiness gets a 90-second budget', (t) => {
+  const f = handoffFixture(t);
+  const handoffUrl = new URL('../src/handoff.js', import.meta.url).href;
+  const workersUrl = new URL('../src/kit/workers.js', import.meta.url).href;
+  const source = `import { prepareHandoff } from ${JSON.stringify(handoffUrl)};
+import { waitForWorkerPane } from ${JSON.stringify(workersUrl)};
+const timeouts = [];
+const waitForPane = (...args) => {
+  timeouts.push(args[5].timeoutMs);
+  return waitForWorkerPane(args[0], args[1], args[2], args[3], () => {}, args[5]);
+};
+const item = prepareHandoff('ws:p1', 'pi', { mode: 'fresh' }, { waitForPane });
+console.log(JSON.stringify({ status: item.status, timeouts }));`;
+  const result = JSON.parse(runHandoffModule(f.root, source, f.env));
+  assert.equal(result.status, 'prepared');
+  assert.deepEqual(result.timeouts, [90_000]);
+});
+
+test('handoff prepare resumes the same needs-inspection record and pane', (t) => {
+  const existingPane = 'ws:p9';
+  const f = handoffFixture(t, { existingPane });
+  const recordsFile = path.join(f.root, 'handoffs.json');
+  fs.writeFileSync(recordsFile, JSON.stringify([{
+    id: 'handoff-existing', sourcePane: 'ws:p1', workspace: 'ws', cwd: f.project,
+    project: 'project', toKind: 'pi', model: 'opencode-go/muse-spark-1.3-contributor', effort: null,
+    mode: 'fresh', provider: 'claude', migratedId: null, newPane: existingPane,
+    status: 'needs-inspection', automatic: false, promptError: 'shell was still starting',
+  }]));
+  const result = JSON.parse(runHandoffCli(f.root, ['handoff', 'prepare', 'ws:p1', '--to', 'pi', '--mode', 'fresh'], f.env));
+  assert.equal(result.status, 'prepared');
+  assert.equal(result.id, 'handoff-existing');
+  assert.equal(result.newPane, existingPane);
+  const records = JSON.parse(fs.readFileSync(recordsFile, 'utf8'));
+  assert.equal(records.length, 1);
+  assert.equal(records[0].id, 'handoff-existing');
+  assert.equal(records[0].newPane, existingPane);
+  assert.equal(records[0].status, 'prepared');
+  const calls = fs.readFileSync(f.callsFile, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+  assert.equal(calls.some((args) => args[0] === 'tab' && args[1] === 'create'), false);
+  const [start] = calls.filter((args) => args[0] === 'agent' && args[1] === 'start');
+  assert.equal(start[start.indexOf('--pane') + 1], existingPane);
+  assert.equal(start[2], 'handoff-existing');
+  const [prompt] = calls.filter((args) => args[0] === 'agent' && args[1] === 'prompt');
+  assert.equal(prompt[2], 'handoff-existing');
+  assert.match(prompt[3], /proposed successor orchestrator/);
+  assert.equal(records[0].promptDelivery, 'sent');
+});
+
+test('handoff prepare keeps a resumable record after its existing pane fails readiness', (t) => {
+  const existingPane = 'ws:p9';
+  const f = handoffFixture(t, { existingPane });
+  const recordsFile = path.join(f.root, 'handoffs.json');
+  fs.writeFileSync(recordsFile, JSON.stringify([{
+    id: 'handoff-existing', sourcePane: 'ws:p1', workspace: 'ws', cwd: f.project,
+    project: 'project', toKind: 'pi', model: 'opencode-go/muse-spark-1.3-contributor', effort: null,
+    mode: 'fresh', provider: 'opencodego', migratedId: null, newPane: existingPane,
+    status: 'needs-inspection', automatic: false,
+  }]));
+  const handoffUrl = new URL('../src/handoff.js', import.meta.url).href;
+  const source = `import { listHandoffs, prepareHandoff } from ${JSON.stringify(handoffUrl)};
+let error = null;
+try {
+  prepareHandoff('ws:p1', 'pi', { mode: 'fresh' }, { waitForPane: () => { throw new Error('readiness timed out'); } });
+} catch (failure) { error = failure.message; }
+console.log(JSON.stringify({ error, records: listHandoffs() }));`;
+  const result = JSON.parse(runHandoffModule(f.root, source, f.env));
+  assert.match(result.error, /Existing successor pane ws:p9 could not become ready/);
+  assert.match(result.error, /needs-inspection record is preserved/);
+  assert.equal(result.records.length, 1);
+  assert.equal(result.records[0].id, 'handoff-existing');
+  assert.equal(result.records[0].newPane, existingPane);
+  assert.equal(result.records[0].status, 'needs-inspection');
+  assert.match(result.records[0].promptError, /readiness timed out/);
+  const calls = fs.readFileSync(f.callsFile, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+  assert.equal(calls.some((args) => args[0] === 'tab' && args[1] === 'create'), false);
+  assert.equal(calls.some((args) => args[0] === 'agent' && args[1] === 'start'), false);
 });
 
 test('handoff prepare retries agent_pane_busy once after checking shell readiness again', (t) => {

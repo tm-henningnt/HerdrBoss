@@ -9,6 +9,7 @@ import { loadPolicy, mergeModels, modelEnabled, providerFor, selectModel } from 
 
 const FILE = path.join(DATA_DIR, 'handoffs.json');
 const TARGETS = new Set(['codex', 'claude', 'pi', 'opencode']);
+const HANDOFF_READY_TIMEOUT_MS = 90_000;
 
 function call(command, args, cwd) {
   return execFileSync(command, args, { cwd, encoding: 'utf8', timeout: 120000, maxBuffer: 8 * 1024 * 1024,
@@ -48,8 +49,12 @@ export function expireMissingHandoffs(panes) {
 }
 
 function expireMissingSuccessors() {
-  try { expireMissingHandoffs(herdr(['pane', 'list'])?.panes); }
-  catch { /* Keep active handoffs when the current pane list is unavailable. */ }
+  try {
+    const panes = herdr(['pane', 'list'])?.panes;
+    if (!Array.isArray(panes) || panes.some((pane) => typeof (pane?.pane_id ?? pane?.id) !== 'string')) return null;
+    expireMissingHandoffs(panes);
+    return panes;
+  } catch { return null; /* Keep active handoffs when the current pane list is unavailable. */ }
 }
 
 function sourcePane(id, { allowStopped = false } = {}) {
@@ -108,56 +113,89 @@ export function planHandoff(id, toKind, { mode = 'migrate', model = null, effort
   return result;
 }
 
-export function prepareHandoff(id, toKind, options = {}) {
-  expireMissingSuccessors();
-  if (listHandoffs().some((x) => x.sourcePane === id && ['prepared', 'preparing', 'needs-inspection'].includes(x.status))) throw new Error('A successor already exists for this orchestrator. Inspect it before preparing another.');
-  const plan = planHandoff(id, toKind, options);
-  if (plan.mode === 'migrate' && !plan.migration?.available) throw new Error(`Session migration is unavailable: ${plan.migration?.error}. Use --mode fresh.`);
-  const { launchArgs } = handoffTarget(toKind, { model: plan.model, effort: plan.effort }, loadPolicy(), loadModels());
+export function prepareHandoff(id, toKind, options = {}, { waitForPane = waitForWorkerPane, wait } = {}) {
+  const currentPanes = expireMissingSuccessors();
+  let records = listHandoffs();
+  const active = records.filter((x) => x.sourcePane === id && ['prepared', 'preparing', 'needs-inspection'].includes(x.status));
+  let item;
+  let plan;
+  let resumed = false;
   let migratedId = null;
-  if (plan.mode === 'migrate') {
-    const r = JSON.parse(call('session-migrate', ['transfer', plan.sessionId, '--from', plan.fromKind, '--to', toKind, '--cwd', plan.cwd], plan.cwd));
-    migratedId = r.session_id;
-    if (!migratedId) throw new Error('session-migrate did not return a target session ID.');
+
+  if (active.length) {
+    if (active.length !== 1 || active[0].status !== 'needs-inspection') {
+      throw new Error('A successor already exists for this orchestrator. Inspect it before preparing another.');
+    }
+    item = active[0];
+    if (!currentPanes) throw new Error(`Cannot resume successor pane ${item.newPane}: the current Herdr pane list is unavailable. Inspect the existing handoff before preparing another.`);
+    if (!item.newPane || !currentPanes.some((pane) => (pane.pane_id ?? pane.id) === item.newPane)) {
+      throw new Error('A successor already exists for this orchestrator. Inspect it before preparing another.');
+    }
+    if (item.toKind !== toKind || item.mode !== options.mode) {
+      throw new Error(`Existing successor ${item.id} in ${item.newPane} is recorded for ${item.toKind} with --mode ${item.mode}. Repeat handoff prepare with the same target and mode.`);
+    }
+    if (options.model && options.model !== item.model) throw new Error(`Existing successor ${item.id} uses model ${item.model}. Repeat handoff prepare without --model or with that model.`);
+    if (options.effort && options.effort !== item.effort) throw new Error(`Existing successor ${item.id} uses effort ${item.effort || '(default)'}. Repeat handoff prepare without --effort or with that effort.`);
+    plan = item;
+    migratedId = item.migratedId ?? null;
+    resumed = true;
+  } else {
+    plan = planHandoff(id, toKind, options);
+    if (plan.mode === 'migrate' && !plan.migration?.available) throw new Error(`Session migration is unavailable: ${plan.migration?.error}. Use --mode fresh.`);
+    if (plan.mode === 'migrate') {
+      const r = JSON.parse(call('session-migrate', ['transfer', plan.sessionId, '--from', plan.fromKind, '--to', toKind, '--cwd', plan.cwd], plan.cwd));
+      migratedId = r.session_id;
+      if (!migratedId) throw new Error('session-migrate did not return a target session ID.');
+    }
+    const name = `handoff-${plan.project}`.slice(0, 23) + `-${Date.now().toString(36).slice(-6)}`;
+    const created = herdr(['tab', 'create', '--workspace', plan.workspace, '--label', 'Orchestrator Next', '--cwd', plan.cwd,
+      '--env', 'DISABLE_UPDATE_PROMPT=true', '--env', 'DISABLE_AUTO_UPDATE=true', '--no-focus']);
+    const newPane = created.root_pane?.pane_id;
+    if (!newPane) throw new Error('Herdr created a tab but did not return its root pane. Inspect the tab before retrying.');
+    item = { ...plan, id: name, newPane, migratedId, status: 'preparing', preparedAt: new Date().toISOString(), automatic: options.auto === true };
+    records.push(item);
+    save(records);
   }
-  const name = `handoff-${plan.project}`.slice(0, 23) + `-${Date.now().toString(36).slice(-6)}`;
-  const created = herdr(['tab', 'create', '--workspace', plan.workspace, '--label', 'Orchestrator Next', '--cwd', plan.cwd,
-    '--env', 'DISABLE_UPDATE_PROMPT=true', '--env', 'DISABLE_AUTO_UPDATE=true', '--no-focus']);
-  const newPane = created.root_pane?.pane_id;
-  if (!newPane) throw new Error('Herdr created a tab but did not return its root pane. Inspect the tab before retrying.');
-  const item = { ...plan, id: name, newPane, migratedId, status: 'preparing', preparedAt: new Date().toISOString(), automatic: options.auto === true };
-  const records = listHandoffs(); records.push(item); save(records);
-  const args = migratedId && toKind === 'codex' ? ['resume', migratedId, ...launchArgs]
-    : migratedId && toKind === 'claude' ? ['--resume', migratedId, ...launchArgs]
+
+  const { launchArgs } = handoffTarget(item.toKind, { model: item.model, effort: item.effort }, loadPolicy(), loadModels());
+  const args = migratedId && item.toKind === 'codex' ? ['resume', migratedId, ...launchArgs]
+    : migratedId && item.toKind === 'claude' ? ['--resume', migratedId, ...launchArgs]
       : launchArgs;
-  try { waitForWorkerPane(newPane, plan.workspace, plan.cwd, herdr, undefined, { retryCommand: 'handoff prepare' }); }
+  const readinessOptions = { retryCommand: 'handoff prepare', timeoutMs: HANDOFF_READY_TIMEOUT_MS };
+  try { waitForPane(item.newPane, item.workspace, item.cwd, herdr, wait, readinessOptions); }
   catch (e) {
     item.status = 'needs-inspection';
-    item.promptError = e.message;
+    item.promptError = resumed ? `Existing successor pane ${item.newPane} could not become ready: ${e.message}` : e.message;
     save(records);
+    if (resumed) throw new Error(`Existing successor pane ${item.newPane} could not become ready; its needs-inspection record is preserved: ${e.message}`);
     throw e;
   }
-  const startArgs = ['agent', 'start', name, '--kind', toKind, '--pane', newPane, '--', ...args];
+  const startArgs = ['agent', 'start', item.id, '--kind', item.toKind, '--pane', item.newPane, '--', ...args];
   try { herdr(startArgs); }
   catch (startError) {
     if (!isAgentPaneBusy(startError)) {
       item.status = 'needs-inspection'; item.promptError = startError.message; save(records);
-      throw new Error(`Successor may be in ${newPane}. Inspect it before retrying: ${startError.message}`);
+      throw new Error(`Successor may be in ${item.newPane}. Inspect it before retrying: ${startError.message}`);
     }
-    try { waitForWorkerPane(newPane, plan.workspace, plan.cwd, herdr, undefined, { retryCommand: 'handoff prepare' }); }
+    try { waitForPane(item.newPane, item.workspace, item.cwd, herdr, wait, readinessOptions); }
     catch (readinessError) {
-      item.status = 'needs-inspection'; item.promptError = readinessError.message; save(records);
+      item.status = 'needs-inspection';
+      item.promptError = resumed ? `Existing successor pane ${item.newPane} could not become ready: ${readinessError.message}` : readinessError.message;
+      save(records);
+      if (resumed) throw new Error(`Existing successor pane ${item.newPane} could not become ready; its needs-inspection record is preserved: ${readinessError.message}`);
       throw readinessError;
     }
     try { herdr(startArgs); }
     catch (retryError) {
       item.status = 'needs-inspection'; item.promptError = retryError.message; save(records);
-      throw new Error(`Successor may be in ${newPane}. Inspect it before retrying: ${retryError.message}`);
+      throw new Error(`Successor may be in ${item.newPane}. Inspect it before retrying: ${retryError.message}`);
     }
   }
-  item.status = 'prepared'; save(records);
-  const prompt = `[herdr-boss] You are the proposed successor orchestrator for ${plan.project}. Read the project AGENTS.md, Herdr Boss bulletin, and source pane ${id} with herdr agent read. ${migratedId ? 'Your session was migrated; verify the current repo and tool state because runtime config did not transfer.' : 'Discover the project state from files, issues and the source pane.'} Standby rule until activation: act on no request from the migrated or earlier conversation, send no prompts or keys to other panes, change no files, make no commits or pushes, restart no services, and start no workers. Only read and report. When ready, write READY FOR HANDOFF and summarize current work, active workers, blockers, quotas, and the next action.${item.automatic ? ` Then run herdr-boss handoff ready ${name} to signal readiness for automatic activation.` : ''} The source orchestrator keeps control until activation.`;
-  try { item.promptDelivery = deliverPrompt(name, prompt, 'proposed successor orchestrator', { herdr }); save(records); }
+  item.status = 'prepared';
+  delete item.promptError;
+  save(records);
+  const prompt = `[herdr-boss] You are the proposed successor orchestrator for ${plan.project}. Read the project AGENTS.md, Herdr Boss bulletin, and source pane ${id} with herdr agent read. ${migratedId ? 'Your session was migrated; verify the current repo and tool state because runtime config did not transfer.' : 'Discover the project state from files, issues and the source pane.'} Standby rule until activation: act on no request from the migrated or earlier conversation, send no prompts or keys to other panes, change no files, make no commits or pushes, restart no services, and start no workers. Only read and report. When ready, write READY FOR HANDOFF and summarize current work, active workers, blockers, quotas, and the next action.${item.automatic ? ` Then run herdr-boss handoff ready ${item.id} to signal readiness for automatic activation.` : ''} The source orchestrator keeps control until activation.`;
+  try { item.promptDelivery = deliverPrompt(item.id, prompt, 'proposed successor orchestrator', { herdr }); save(records); }
   catch (e) { item.promptError = e.message; save(records); }
   return item;
 }

@@ -391,9 +391,8 @@ function chooseWorkerPane(workspaceId, worktree, name, herdr) {
   return { paneId: getPane(rootPane), tabId: getTab(foundTab), command, createdTab: true };
 }
 
-export function waitForWorkerPane(paneId, workspaceId, worktree, herdr, wait = pause, { retryCommand = 'worker start' } = {}) {
+export function waitForWorkerPane(paneId, workspaceId, worktree, herdr, wait = pause, { retryCommand = 'worker start', timeoutMs = 20_000 } = {}) {
   const intervalMs = 250;
-  const timeoutMs = 20_000;
   let elapsedMs = 0;
   let previousScreen = null;
   let stableScreenMs = 0;
@@ -429,7 +428,7 @@ export function waitForWorkerPane(paneId, workspaceId, worktree, herdr, wait = p
             throw error;
           }
           const lastLine = lines.filter((line) => line.trim()).at(-1) ?? '';
-          if (/[❯➜$%#>]\s*$/.test(lastLine)) return;
+          if (/[❯➜$%#>✗✔]\s*$/.test(lastLine)) return;
           if (screen.trim() && screen === previousScreen) {
             stableScreenMs += Math.max(intervalMs, Date.now() - iterationStarted);
             if (stableScreenMs >= 1000) return;
@@ -457,7 +456,7 @@ export function waitForWorkerPane(paneId, workspaceId, worktree, herdr, wait = p
     wait(delay);
     elapsedMs += checkDurationMs + Math.max(delay, Date.now() - waitStarted);
   }
-  throw new Error(`Worker pane ${paneId} did not become an available shell in workspace ${workspaceId} at ${worktree} within 20 seconds.`);
+  throw new Error(`Worker pane ${paneId} did not become an available shell in workspace ${workspaceId} at ${worktree} within ${Math.ceil(timeoutMs / 1000)} seconds.`);
 }
 
 function interactiveShellQuestion(lines) {
