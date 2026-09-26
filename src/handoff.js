@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { DATA_DIR } from './config.js';
 import { deliverPrompt } from './kit/workers.js';
 import { loadModels } from './kit/config.js';
-import { loadPolicy, providerFor, selectModel } from './control.js';
+import { loadPolicy, mergeModels, modelEnabled, providerFor, selectModel } from './control.js';
 
 const FILE = path.join(DATA_DIR, 'handoffs.json');
 const TARGETS = new Set(['codex', 'claude', 'pi', 'opencode']);
@@ -29,25 +29,37 @@ function sourcePane(id, { allowStopped = false } = {}) {
   return pane;
 }
 
+// Check a successor choice against the kit catalog, the local extra models, and the per-harness state.
+export function handoffTarget(toKind, { model = null, effort = null } = {}, policy, baseModels) {
+  const models = mergeModels(baseModels, policy).kinds;
+  const cfg = models[toKind];
+  if (!cfg) throw new Error(`Unsupported target kind: ${toKind}.`);
+  const targetModel = selectModel(toKind, model, { kinds: models }, policy);
+  if (!policy.allowedKinds.includes(toKind) || (policy.excludedModels || []).includes(targetModel)) throw new Error('Target is disabled by global policy.');
+  if (!cfg.allowedModels.includes(targetModel)) throw new Error('Target model is not in the allow-list.');
+  if (!modelEnabled(toKind, targetModel, policy)) throw new Error(`Target model is disabled for ${toKind}.`);
+  if (effort != null && !cfg.allowedEfforts.includes(effort)) throw new Error('Target effort is not in the allow-list.');
+  const targetEffort = effort || cfg.defaultEffort || null;
+  const launchArgs = cfg.launchArgs.map((arg) => arg.replaceAll('{{model}}', targetModel).replaceAll('{{effort}}', targetEffort || ''));
+  return { model: targetModel, effort: targetEffort, provider: providerFor(toKind, targetModel, policy), launchArgs };
+}
+
 export function planHandoff(id, toKind, { mode = 'migrate', model = null, effort = null, force = false } = {}) {
   if (!TARGETS.has(toKind)) throw new Error(`Unsupported target kind: ${toKind}.`);
   if (!['migrate', 'fresh'].includes(mode)) throw new Error('mode must be migrate or fresh.');
   const pane = sourcePane(id, { allowStopped: mode === 'fresh' });
-  const models = loadModels().kinds;
   const policy = loadPolicy();
-  const targetModel = selectModel(toKind, model, { kinds: models }, policy);
-  if (!policy.allowedKinds.includes(toKind) || policy.excludedModels.includes(targetModel)) throw new Error('Target is disabled by global policy.');
-  if (!models[toKind].allowedModels.includes(targetModel)) throw new Error('Target model is not in the allow-list.');
-  if (effort != null && !models[toKind].allowedEfforts.includes(effort)) throw new Error('Target effort is not in the allow-list.');
+  const target = handoffTarget(toKind, { model, effort }, policy, loadModels());
+  const targetModel = target.model;
   const state = readFile(path.join(DATA_DIR, 'state.json'), {});
   const project = Object.values(state.control?.projects || {}).find((p) => p.workspace === pane.workspace_id);
   const slug = project?.slug || path.basename(pane.cwd).toLowerCase();
   const settings = policy.projects[slug];
   if (settings?.excludedKinds?.includes(toKind) || settings?.excludedModels?.includes(targetModel)) throw new Error('Target is excluded for this project.');
-  const provider = providerFor(toKind, targetModel, policy);
+  const { provider } = target;
   if (!force && provider && state.control?.risks?.[provider]) throw new Error(`${provider} is near exhaustion; use another target or --force.`);
   const sessionId = pane.agent_session?.kind === 'id' ? pane.agent_session.value : null;
-  const result = { sourcePane: id, workspace: pane.workspace_id, cwd: pane.cwd, project: slug, label: pane.label, fromKind: pane.agent, sessionId, toKind, model: targetModel, effort: effort || models[toKind].defaultEffort || null, mode, provider, migration: null };
+  const result = { sourcePane: id, workspace: pane.workspace_id, cwd: pane.cwd, project: slug, label: pane.label, fromKind: pane.agent, sessionId, toKind, model: targetModel, effort: target.effort, mode, provider, migration: null };
   if (mode === 'migrate') {
     if (!sessionId) result.migration = { available: false, error: 'Herdr has no native session ID for this pane.' };
     else if (!['codex', 'claude'].includes(toKind)) result.migration = { available: false, error: 'Automated resume is available for Codex and Claude targets. Use fresh mode for other kinds.' };
@@ -64,8 +76,7 @@ export function prepareHandoff(id, toKind, options = {}) {
   if (listHandoffs().some((x) => x.sourcePane === id && ['prepared', 'preparing', 'needs-inspection'].includes(x.status))) throw new Error('A successor already exists for this orchestrator. Inspect it before preparing another.');
   const plan = planHandoff(id, toKind, options);
   if (plan.mode === 'migrate' && !plan.migration?.available) throw new Error(`Session migration is unavailable: ${plan.migration?.error}. Use --mode fresh.`);
-  const policy = loadModels().kinds[toKind];
-  const launchArgs = policy.launchArgs.map((arg) => arg.replaceAll('{{model}}', plan.model).replaceAll('{{effort}}', plan.effort || ''));
+  const { launchArgs } = handoffTarget(toKind, { model: plan.model, effort: plan.effort }, loadPolicy(), loadModels());
   let migratedId = null;
   if (plan.mode === 'migrate') {
     const r = JSON.parse(call('session-migrate', ['transfer', plan.sessionId, '--from', plan.fromKind, '--to', toKind, '--cwd', plan.cwd], plan.cwd));

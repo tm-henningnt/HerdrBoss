@@ -131,3 +131,70 @@ test('read-only preview allows reads and rejects all API methods that can change
   assert.equal(fs.statSync(privateSessions).mode & 0o777, 0o600);
   await customServer.close();
 });
+
+test('the policy API saves per-harness model assignments and rejects unsafe model strings', { timeout: 20000 }, async (t) => {
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.mkdirSync(homeDir, { recursive: true });
+  t.after(() => {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  });
+  const cfg = loadConfig();
+  cfg.host = '127.0.0.1';
+  cfg.port = 0;
+  cfg.tickSeconds = 3600;
+  const { server, close } = serve(cfg, {
+    createEngine: () => {
+      const engine = new EventEmitter();
+      engine.state = { control: null };
+      engine.tick = async () => engine.state;
+      engine.log = () => {};
+      return engine;
+    },
+  });
+  t.after(async () => { await close(); });
+  await new Promise((resolve, reject) => {
+    server.once('listening', resolve);
+    server.once('error', reject);
+  });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const shared = 'opencode-go/deepseek-v4.1-flash';
+  const current = await (await fetch(`${base}/api/policy`)).json();
+  assert.deepEqual([current.extraModels, current.disabledModels, current.harnessRoutes], [{}, {}, {}], 'a policy without the new fields reads as empty assignments');
+  const draft = {
+    ...current,
+    modelProviders: { [shared]: null },
+    extraModels: { pi: ['opencode-go/glm-5.2'] },
+    disabledModels: { opencode: [shared] },
+    harnessRoutes: { pi: { 'opencode-go/glm-5.2': 'opencodego' } },
+  };
+  const put = (body) => fetch(`${base}/api/policy`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const saved = await put(draft);
+  assert.equal(saved.status, 200);
+  const stored = (await saved.json()).policy;
+  assert.deepEqual(stored.extraModels, draft.extraModels);
+  assert.deepEqual(stored.disabledModels, draft.disabledModels);
+  assert.deepEqual(stored.harnessRoutes, draft.harnessRoutes);
+  assert.deepEqual(stored.modelProviders, draft.modelProviders, 'the legacy route stays');
+  const rejected = await put({ ...draft, extraModels: { pi: ['glm; rm -rf ~'] } });
+  assert.equal(rejected.status, 400);
+  assert.match((await rejected.json()).errors.join(' '), /extraModels/);
+  assert.deepEqual((await (await fetch(`${base}/api/policy`)).json()).extraModels, draft.extraModels, 'a rejected save keeps the stored policy');
+  const crossed = await put({ ...draft, harnessRoutes: { ...draft.harnessRoutes, codex: { 'gpt-6-luna': 'claude' } } });
+  assert.equal(crossed.status, 400);
+  assert.match((await crossed.json()).errors.join(' '), /harnessRoutes: codex\/gpt-6-luna cannot use claude\. Choose codex or null \(unmetered\)\./);
+  const compatible = await put({ ...draft, harnessRoutes: { ...draft.harnessRoutes, codex: { 'gpt-6-luna': null }, claude: { 'claude-opus-5-5': 'claude' } } });
+  assert.equal(compatible.status, 200);
+  assert.deepEqual((await compatible.json()).policy.harnessRoutes.codex, { 'gpt-6-luna': null });
+  const inherited = await put({ ...draft, modelProviders: { ...draft.modelProviders, 'gpt-6-sol': 'claude' } });
+  assert.equal(inherited.status, 400);
+  assert.match((await inherited.json()).errors.join(' '), /modelProviders: codex\/gpt-6-sol inherits claude\. Choose codex or null \(unmetered\) in harnessRoutes\.codex\./);
+  const overridden = await put({ ...draft, modelProviders: { ...draft.modelProviders, 'gpt-6-sol': 'claude', 'claude-opus-5-5': 'claude' }, harnessRoutes: { ...draft.harnessRoutes, codex: { 'gpt-6-sol': 'codex' } }, ignoredRoutes: { codex: ['gpt-6-sol'] } });
+  assert.equal(overridden.status, 200);
+  const overriddenPolicy = (await overridden.json()).policy;
+  assert.equal(overriddenPolicy.modelProviders['gpt-6-sol'], 'claude', 'the raw legacy route is kept');
+  assert.deepEqual(overriddenPolicy.ignoredRoutes, {}, 'the override makes the legacy route compatible');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dataDir, 'policy.json'), 'utf8')).ignoredRoutes, undefined, 'the derived field is not stored');
+  const catalog = await (await fetch(`${base}/api/models`)).json();
+  assert.ok(!catalog.pi.allowedModels.includes('opencode-go/glm-5.2'), 'the model catalog endpoint stays the kit catalog');
+});

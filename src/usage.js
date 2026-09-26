@@ -27,7 +27,6 @@ export function readUsage(limit = null) {
 
 export function usageProvider(event, policy = loadPolicy()) {
   if (Object.hasOwn(event, 'provider')) return event.provider ?? 'unmetered-or-unknown';
-  if (Object.hasOwn(policy.modelProviders || {}, event.model)) return policy.modelProviders[event.model] ?? 'unmetered-or-unknown';
   return providerFor(event.kind, event.model, policy) ?? 'unmetered-or-unknown';
 }
 

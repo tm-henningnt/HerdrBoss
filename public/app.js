@@ -191,7 +191,7 @@ function controlBlock(s) {
     return `<button type="button" class="allocation-handle" data-boundary="${i}" role="slider" aria-label="${esc(p.label)} allocation boundary" aria-valuemin="${minimum}" aria-valuemax="100" aria-valuenow="${cumulative}" aria-valuetext="${esc(p.label)} ${d.projects[p.slug]?.share || 0} percent" style="left:${cumulative}%"></button>`;
   }).join('');
   const ladderRows = (d.orchestratorLadder || []).map((rung, i) => {
-    const cfg = models[rung.kind] || { allowedModels: [rung.model], allowedEfforts: [] };
+    const cfg = models[rung.kind] ? { ...models[rung.kind], allowedModels: kindModels(rung.kind, d) } : { allowedModels: [rung.model], allowedEfforts: [] };
     return `<div class="succession-row"><span class="num">${i + 1}</span>
       <select data-ladder-kind="${i}" aria-label="Choice ${i + 1} harness">${Object.keys(models).map((kind) => `<option value="${esc(kind)}" ${kind === rung.kind ? 'selected' : ''}>${esc(kind)}</option>`).join('')}</select>
       <select data-ladder-model="${i}" aria-label="Choice ${i + 1} model">${cfg.allowedModels.map((model) => `<option value="${esc(model)}" ${model === rung.model ? 'selected' : ''}>${esc(model)}</option>`).join('')}</select>
@@ -202,7 +202,7 @@ function controlBlock(s) {
   const projectRows = projects.map((p) => {
     const x = d.projects[p.slug] || { share: 0, mode: 'auto', excludedKinds: [], excludedModels: [] };
     const availableKinds = d.allowedKinds;
-    const projectModels = [...new Set(availableKinds.flatMap((k) => models[k]?.allowedModels || []))].filter((m) => !d.excludedModels.includes(m));
+    const projectModels = [...new Set(availableKinds.flatMap((k) => kindModels(k, d).filter((m) => modelOn(k, m, d))))];
     const eff = effectiveAllocation(p);
     const activity = allocationActivity(p);
     return `<div class="allocation-row ${activity}" data-project-row="${esc(p.slug)}">
@@ -239,19 +239,81 @@ function controlBlock(s) {
     </div></section>`;
 }
 
+// A model string holds letters, digits, dots, underscores, slashes, and hyphens. The server applies the same rule.
+const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/;
+const settingsMessages = {};
+// The kit catalog of a harness plus the local extra models in the policy draft.
+function kindModels(kind, d = policyDraft) {
+  const base = models[kind]?.allowedModels || [];
+  return [...base, ...(d?.extraModels?.[kind] || []).filter((model) => !base.includes(model))];
+}
+// The global exclusion list and the list of the harness each disable a model.
+function modelOn(kind, model, d = policyDraft) {
+  return !(d?.excludedModels || []).includes(model) && !(d?.disabledModels?.[kind] || []).includes(model);
+}
+// The same precedence as providerFor on the server: harness route, legacy model route, then harness and prefix rules.
+// The provider of a legacy modelProviders route that this harness cannot use and that no harness route overrides.
+// The server treats such a route as unmetered at load time and refuses it at save time.
+function ignoredLegacyRoute(kind, model, d = policyDraft) {
+  if (d?.harnessRoutes?.[kind] && Object.hasOwn(d.harnessRoutes[kind], model)) return null;
+  if (!d?.modelProviders || !Object.hasOwn(d.modelProviders, model)) return null;
+  const legacy = d.modelProviders[model];
+  return legacy !== null && !harnessProviders(kind).includes(legacy) ? legacy : null;
+}
+function routeFor(kind, model, d = policyDraft) {
+  const routes = d?.harnessRoutes?.[kind];
+  if (routes && Object.hasOwn(routes, model)) return routes[model];
+  if (ignoredLegacyRoute(kind, model, d)) return null;
+  if (d?.modelProviders && Object.hasOwn(d.modelProviders, model)) return d.modelProviders[model];
+  if (kind === 'codex' || kind === 'claude') return kind;
+  return model.startsWith('opencode-go/') ? 'opencodego' : null;
+}
+// Codex and Claude run only their own subscription models. Open harnesses can use any provider. The server applies the same rule.
+function harnessProviders(kind) {
+  return kind === 'codex' || kind === 'claude' ? [kind] : Object.keys(PROVIDERS);
+}
+// A project may exclude only a model that an available harness enables, so drop the other exclusions.
+function pruneProjectModels(d) {
+  const enabled = new Set(d.allowedKinds.flatMap((kind) => kindModels(kind, d).filter((model) => modelOn(kind, model, d))));
+  for (const p of Object.values(d.projects)) p.excludedModels = (p.excludedModels || []).filter((model) => enabled.has(model));
+}
+
+function harnessSection(kind, cfg, d) {
+  const extras = d.extraModels?.[kind] || [];
+  const list = kindModels(kind, d);
+  const providers = harnessProviders(kind);
+  const rows = list.map((model) => {
+    const route = routeFor(kind, model, d);
+    const ignored = ignoredLegacyRoute(kind, model, d);
+    const local = extras.includes(model);
+    const noteId = `route-note-${kind}-${model}`.replace(/[^A-Za-z0-9_-]/g, '-');
+    const choices = providers.map((provider) => PROVIDERS[provider]).concat('Unmetered').join(' or ');
+    // An ignored legacy route has a placeholder that cannot be chosen again, so any choice stores a compatible harness route.
+    return `<li class="harness-model"><label><input type="checkbox" data-harness-model="${esc(kind)}" data-model="${esc(model)}" ${modelOn(kind, model, d) ? 'checked' : ''}> <span>${esc(model)}</span>${local ? ' <span class="tag">local</span>' : ''}</label>
+      <select data-harness-route="${esc(kind)}" data-model="${esc(model)}" aria-label="Provider for ${esc(model)} in ${esc(kind)}" ${ignored ? `aria-describedby="${noteId}"` : ''}>${ignored ? '<option value="" disabled selected data-ignored-route>Ignored</option>' : ''}<option value="unmetered" ${route === null && !ignored ? 'selected' : ''}>Unmetered</option>${providers.map((provider) => `<option value="${provider}" ${route === provider ? 'selected' : ''}>${esc(PROVIDERS[provider])}</option>`).join('')}</select>
+      ${local ? `<button type="button" class="quiet" data-remove-model="${esc(kind)}" data-model="${esc(model)}" aria-label="Remove ${esc(model)} from ${esc(kind)}">Remove</button>` : '<span aria-hidden="true"></span>'}
+      ${ignored ? `<p class="setting-help" id="${noteId}" data-route-note style="grid-column: 1 / -1; max-width: none; margin: 0 0 6px; color: var(--warn)">The legacy route to ${esc(PROVIDERS[ignored] || ignored)} is ignored. ${esc(kind)} treats this model as Unmetered. Choose ${esc(choices)}, then Apply policy.</p>` : ''}</li>`;
+  }).join('');
+  return `<section class="harness" data-harness="${esc(kind)}" aria-labelledby="harness-${esc(kind)}">
+    <div class="harness-head"><h3 id="harness-${esc(kind)}">${esc(kind)}</h3><label><input type="checkbox" data-kind="${esc(kind)}" ${d.allowedKinds.includes(kind) ? 'checked' : ''}> Available</label></div>
+    <label class="setting-line"><span>Preferred model</span><select data-preferred-model="${esc(kind)}"><option value="">Harness default (${esc(cfg.defaultModel)})</option>${list.map((model) => `<option value="${esc(model)}" ${d.preferredModels?.[kind] === model ? 'selected' : ''}>${esc(model)}</option>`).join('')}</select></label>
+    <div class="harness-columns" aria-hidden="true"><span>Model</span><span>Provider</span></div>
+    <ul class="harness-models">${rows}</ul>
+    <form class="add-model" data-add-model="${esc(kind)}"><input name="model" data-add-model-input="${esc(kind)}" autocomplete="off" spellcheck="false" placeholder="vendor/model-id" aria-label="New model string for ${esc(kind)}" maxlength="128"><button type="submit" class="quiet">Add model</button></form>
+    <p class="inline-feedback" role="status" data-settings-message="${esc(kind)}">${esc(settingsMessages[kind] || '')}</p>
+  </section>`;
+}
+
 function settingsView(s) {
   ensureDraft(s);
   if (!policyDraft) return '';
   const d = policyDraft;
-  const kinds = Object.entries(models || {});
-  const allModels = [...new Set(kinds.flatMap(([, cfg]) => cfg.allowedModels || []))];
-  const availability = kinds.map(([kind, cfg]) => `<section class="settings-kind"><h3>${esc(kind)}</h3><label class="setting-line"><span>Harness available</span><input type="checkbox" data-kind="${esc(kind)}" ${d.allowedKinds.includes(kind) ? 'checked' : ''}></label><label class="setting-line"><span>Preferred model</span><select data-preferred-model="${esc(kind)}"><option value="">Use harness default (${esc(cfg.defaultModel)})</option>${(cfg.allowedModels || []).map((model) => `<option value="${esc(model)}" ${d.preferredModels?.[kind] === model ? 'selected' : ''}>${esc(model)}</option>`).join('')}</select></label><p class="setting-help">Models: ${(cfg.allowedModels || []).map(esc).join(', ')}</p></section>`).join('');
-  const modelRows = allModels.map((model) => `<label class="model-availability"><input type="checkbox" data-global-model="${esc(model)}" ${!d.excludedModels.includes(model) ? 'checked' : ''}> <span>${esc(model)}</span></label>`).join('');
-  const providerRows = Object.keys(d.providerModes).map((p) => `<label class="setting-line"><span>${esc(PROVIDERS[p] || p)} quota mode</span><select data-provider="${esc(p)}"><option value="managed" ${d.providerModes[p] === 'managed' ? 'selected' : ''}>Manage pace</option><option value="ignore" ${d.providerModes[p] === 'ignore' ? 'selected' : ''}>Ignore quota</option></select></label>`).join('');
-  const routes = allModels.map((model) => `<label class="setting-line route-line"><span>${esc(model)}</span><select data-model-provider="${esc(model)}" aria-label="Provider for ${esc(model)}"><option value="unmetered" ${d.modelProviders?.[model] === null ? 'selected' : ''}>Unmetered</option>${Object.entries(PROVIDERS).map(([provider, label]) => `<option value="${provider}" ${d.modelProviders?.[model] === provider ? 'selected' : ''}>${esc(label)}</option>`).join('')}</select></label>`).join('');
+  const harnesses = Object.entries(models || {}).map(([kind, cfg]) => harnessSection(kind, cfg, d)).join('');
+  const ignoredCount = Object.keys(models || {}).reduce((n, kind) => n + kindModels(kind, d).filter((model) => ignoredLegacyRoute(kind, model, d)).length, 0);
+  const providerRows = Object.keys(d.providerModes).map((p) => `<label class="setting-line"><span>${esc(PROVIDERS[p] || p)}</span><select data-provider="${esc(p)}" aria-label="${esc(PROVIDERS[p] || p)} quota mode"><option value="managed" ${d.providerModes[p] === 'managed' ? 'selected' : ''}>Manage pace</option><option value="ignore" ${d.providerModes[p] === 'ignore' ? 'selected' : ''}>Ignore quota</option></select></label>`).join('');
   const machine = d.machine || {};
   const machineNumber = (key, label, max, nullable = false) => `<label class="setting-line"><span>${label}</span><input type="number" min="0" max="${max}" ${nullable ? 'step="any" placeholder="Disabled"' : ''} value="${machine[key] ?? ''}" data-policy-machine="${key}"></label>`;
-  const machineSettings = `<section class="panel"><h2>Machine</h2><p class="setting-help">The Owner is away after the idle period. Missing idle data means present. CPU is a percent of total machine capacity.</p>${machineNumber('ownerAwayMinutes', 'Owner away after minutes', 1440)}${machineNumber('presentCpuPercent', 'CPU limit while present %', 100)}${machineNumber('awayCpuPercent', 'CPU limit while away %', 100, true)}${machineNumber('presentLoadFactor', 'Present load backstop × cores', 128, true)}${machineNumber('awayLoadFactor', 'Away load backstop × cores', 128, true)}<label class="setting-line"><span>Notice cooldown seconds</span><input type="number" min="0" max="604800" value="${machine.alertCooldownSeconds}" data-policy-machine="alertCooldownSeconds"></label></section>`;
+  const machineSettings = `<section class="panel"><h2>Machine</h2><p class="setting-help">The Owner is away after the idle period. CPU is a percent of total machine capacity.</p>${machineNumber('ownerAwayMinutes', 'Owner away after minutes', 1440)}${machineNumber('presentCpuPercent', 'CPU limit while present %', 100)}${machineNumber('awayCpuPercent', 'CPU limit while away %', 100, true)}${machineNumber('presentLoadFactor', 'Present load backstop × cores', 128, true)}${machineNumber('awayLoadFactor', 'Away load backstop × cores', 128, true)}<label class="setting-line"><span>Notice cooldown seconds</span><input type="number" min="0" max="604800" value="${machine.alertCooldownSeconds}" data-policy-machine="alertCooldownSeconds"></label></section>`;
   // A goal exists only for a live, measured window with a stable key. Extra model-only windows do not get one.
   const goalWindows = [];
   for (const q of s.quotas || []) {
@@ -263,9 +325,9 @@ function settingsView(s) {
       const value = d.pacingGoals?.[provider]?.[key];
       return `<label class="setting-line"><span>${esc(PROVIDERS[provider] || provider)} ${esc(label)} goal %</span><input type="number" min="0" max="100" step="1" placeholder="100" value="${value ?? ''}" data-pacing-goal="${esc(provider)}:${esc(key)}"></label>`;
     }).join('')
-    : '<p class="setting-help">No measured quota window is available yet. Herdr Boss shows a goal input after the next quota reading.</p>';
-  const goalsPanel = `<section class="panel"><h2>Quota pacing goals</h2><p class="setting-help">A goal is the most percent of a window that you want to use by its reset. The expected-use pace scales to the goal. Leave a field blank for 100%.</p><div class="model-routes">${goalRows}</div></section>`;
-  return `<header class="page-intro"><div><h1>Settings</h1><p>Choose available harnesses and models, preferred models, quota modes, quota pacing goals, provider routes, and machine limits.</p></div></header><section id="settings-plane" class="control-shell"><div class="control-grid settings-grid"><section class="panel"><h2>Harnesses and preferred models</h2><div class="settings-kinds">${availability}</div></section><section class="panel"><h2>Provider quota modes</h2>${providerRows}<p class="setting-help">Ignore quota turns off pacing and handover alerts for that provider.</p></section></div><section class="panel"><h2>Available models</h2><p class="setting-help">Clear a model box to disable that model for every project.</p><div class="model-availability-list">${modelRows}</div></section><section class="panel"><h2>Model provider routes</h2><p class="setting-help">Choose which provider quota applies to each model. Use Unmetered when no quota applies.</p><div class="model-routes">${routes}</div></section>${goalsPanel}${machineSettings}<div class="control-actions ${policyDirty ? 'pending' : ''}"><span data-policy-status role="status" aria-live="polite">${esc(saveMessage || (policyDirty ? 'Unsaved changes · Apply policy to keep them' : 'Policy saved'))}</span><button id="save-policy" ${policyDirty ? '' : 'disabled'}>Apply policy</button></div></section>`;
+    : '<p class="setting-help">No measured quota window yet. A goal field appears after the next quota reading.</p>';
+  const quotaPanel = `<section class="panel"><h2>Provider quotas</h2><h3>Quota mode</h3>${providerRows}<p class="setting-help">Ignore quota turns off pacing and handover alerts for that provider.</p><h3 class="quota-goals">Pacing goals</h3><p class="setting-help">The most percent of a window to use by its reset. Blank means 100%.</p>${goalRows}</section>`;
+  return `<header class="page-intro"><div><h1>Settings</h1><p>Assign models and provider routes in each harness. Set provider quotas and machine limits below.</p></div></header><section id="settings-plane" class="control-shell"><section class="panel"><h2>Harnesses</h2><p class="setting-help harness-help">Clear a model box to stop that harness from using it. The same model in another harness keeps its own box and provider.</p>${ignoredCount ? `<p class="setting-help harness-help" role="note" style="color: var(--warn)">${ignoredCount} legacy provider route${ignoredCount === 1 ? ' is' : 's are'} not compatible with ${ignoredCount === 1 ? 'its harness' : 'their harnesses'}. Herdr Boss treats ${ignoredCount === 1 ? 'it' : 'them'} as Unmetered. Choose a provider in each marked row before you apply the policy.</p>` : ''}<div class="harness-grid">${harnesses}</div></section><div class="settings-grid">${quotaPanel}${machineSettings}</div><div class="control-actions ${policyDirty ? 'pending' : ''}"><span data-policy-status role="status" aria-live="polite">${esc(saveMessage || (policyDirty ? 'Unsaved changes · Apply policy to keep them' : 'Policy saved'))}</span><button id="save-policy" ${policyDirty ? '' : 'disabled'}>Apply policy</button></div></section>`;
 }
 
 function handoffBlock(s, projectSlug = null) {
@@ -1057,10 +1119,15 @@ const HELP = {
     <p>A bar label such as <b>30% · 2</b> shows the set share and the effective slots. A narrow segment shows fewer labels; its tooltip shows all values.</p>
     <p>An idle project is faded. A paused project is faded and striped. When <b>Borrow idle shares</b> is on, an idle project lends its slots to active projects, so an idle project can have 0 effective slots.</p>`],
   settings: ['Settings', `
-    <p>Choose the harnesses and models that workers can use. Choose a preferred model for each harness, a quota mode for each provider, a quota pacing goal for each measured window, a provider route for each model, and machine limits for Owner present and away states.</p>
-    <h3>Quota pacing goals</h3><p>A goal is the most percent of a quota window that you want to use by its reset. Herdr Boss scales the expected-use pace to the goal, so a goal of 80% makes the expected curve reach 80% at the reset. An empty field means 100%. A window that is above its goal pace has an "ahead of pace" lane.</p>
-    <p>The Machine section sets CPU limits, 5-minute load backstops, the Owner idle period, and the notice cooldown. Herdr blocks dispatch when total sampled CPU exceeds its active limit or the 5-minute load average exceeds its active backstop. Leave the away CPU limit or either load backstop blank to disable it. Apply policy to save these settings.</p>
-    <p>An empty preferred model uses the harness default. Choose <b>Unmetered</b> when a model has no provider quota.</p>
+    <p>Each harness section holds the models and provider routes of that harness. Provider quotas and machine limits are below the harnesses.</p>
+    <h3>Harnesses</h3><p>Clear <b>Available</b> to stop all workers from using a harness. The preferred model is the model that worker start and handover use when no model is given. An empty choice uses the harness default.</p>
+    <p>Each model row has a box and a provider. Clear the box to stop that harness from using the model. Choose a provider to count the model against that provider quota. Choose <b>Unmetered</b> when no quota applies.</p>
+    <p>A Codex row offers only <b>Codex</b> and <b>Unmetered</b>. A Claude row offers only <b>Claude</b> and <b>Unmetered</b>. Opencode and Pi rows offer <b>Claude</b>, <b>Codex</b>, <b>OpenCode Go</b>, and <b>Unmetered</b>. </p>
+    <p>An old <code>modelProviders</code> route can send a Codex or Claude model to another provider. Herdr Boss ignores that route and treats the model as Unmetered in that harness. The row shows <b>Ignored</b> and a note. Choose a provider in the row to store a compatible route for that harness. Apply policy refuses a save while an available Codex or Claude harness still has an ignored route.</p>
+    <p>A model can be in more than one harness. Each harness keeps its own box and provider for it, so a change in one harness does not change another.</p>
+    <h3>Add a model</h3><p>Type a model string in a harness section and select <b>Add model</b>. Use letters, digits, dots, underscores, slashes, and hyphens. Spaces and shell characters are refused. A new model is marked <b>local</b>, starts unmetered, and is stored in the local policy, not in <code>kit/models.json</code>. Select <b>Remove</b> to delete a local model.</p>
+    <h3>Provider quotas</h3><p>Choose <b>Manage pace</b> or <b>Ignore quota</b> for each provider. A pacing goal is the most percent of a quota window that you want to use by its reset. Herdr Boss scales the expected-use pace to the goal. An empty field means 100%.</p>
+    <p>The Machine section sets CPU limits, 5-minute load backstops, the Owner idle period, and the notice cooldown. Herdr blocks dispatch when total sampled CPU exceeds its active limit or the 5-minute load average exceeds its active backstop. Leave the away CPU limit or either load backstop blank to disable it.</p>
     <p>Changes stay in a draft until you select <b>Apply policy</b>. A rejected save shows the server error and keeps your draft.</p>`],
   agents: ['Agents', `
     <p>Every Herdr workspace with its orchestrator and workers, live from Herdr.</p>
@@ -1234,6 +1301,8 @@ document.addEventListener('input', (e) => {
     if (slug) browserAddressDraft[slug] = e.target.value;
     return;
   }
+  // The new-model field is not a policy value until Add model accepts it.
+  if (e.target.dataset?.addModelInput) { e.target.removeAttribute('aria-invalid'); return; }
   if (!e.target.closest('#control-plane, #settings-plane') || !policyDraft) return;
   const el = e.target;
   if (el.dataset.policyNumber) policyDraft[el.dataset.policyNumber] = Number(el.value);
@@ -1326,7 +1395,7 @@ document.addEventListener('change', (e) => {
     lastRender = ''; render();
     return;
   }
-  if (!e.target.closest('#control-plane, #settings-plane') || !policyDraft) return;
+  if (!e.target.closest('#control-plane, #settings-plane') || !policyDraft || e.target.dataset.addModelInput) return;
   const el = e.target;
   const d = policyDraft;
   if (el.dataset.policyMachine) { d.machine ||= {}; d.machine[el.dataset.policyMachine] = el.value === '' ? null : Number(el.value); }
@@ -1337,20 +1406,37 @@ document.addEventListener('change', (e) => {
     if (el.value) d.preferredModels[el.dataset.preferredModel] = el.value;
     else delete d.preferredModels[el.dataset.preferredModel];
   }
-  if (el.dataset.modelProvider) {
-    d.modelProviders ||= {};
-    if (el.value === 'unmetered') d.modelProviders[el.dataset.modelProvider] = null;
-    else d.modelProviders[el.dataset.modelProvider] = el.value;
+  if (el.dataset.harnessRoute) {
+    const kind = el.dataset.harnessRoute;
+    d.harnessRoutes ||= {};
+    d.harnessRoutes[kind] ||= {};
+    // Each choice stores a compatible harness route, which overrides an ignored legacy route.
+    d.harnessRoutes[kind][el.dataset.model] = el.value === 'unmetered' ? null : el.value;
+    el.querySelector('[data-ignored-route]')?.remove();
+    el.closest('.harness-model')?.querySelector('[data-route-note]')?.remove();
+    el.removeAttribute('aria-describedby');
   }
   if (el.dataset.mode) d.projects[el.dataset.mode].mode = el.value;
   if (el.dataset.kind) {
     d.allowedKinds = el.checked ? [...new Set([...d.allowedKinds, el.dataset.kind])] : d.allowedKinds.filter((x) => x !== el.dataset.kind);
     if (!el.checked) for (const p of Object.values(d.projects)) p.excludedKinds = p.excludedKinds.filter((x) => x !== el.dataset.kind);
+    pruneProjectModels(d);
   }
-  if (el.dataset.globalModel) {
-    const m = el.dataset.globalModel;
-    d.excludedModels = el.checked ? d.excludedModels.filter((x) => x !== m) : [...new Set([...d.excludedModels, m])];
-    if (!el.checked) for (const p of Object.values(d.projects)) p.excludedModels = p.excludedModels.filter((x) => x !== m);
+  if (el.dataset.harnessModel) {
+    const kind = el.dataset.harnessModel;
+    const m = el.dataset.model;
+    d.disabledModels ||= {};
+    if (!el.checked) d.disabledModels[kind] = [...new Set([...(d.disabledModels[kind] || []), m])];
+    else {
+      // A legacy global exclusion becomes one entry for each other harness, so enabling the model here changes no other harness.
+      if (d.excludedModels.includes(m)) {
+        d.excludedModels = d.excludedModels.filter((x) => x !== m);
+        for (const other of Object.keys(models)) if (other !== kind && kindModels(other, d).includes(m)) d.disabledModels[other] = [...new Set([...(d.disabledModels[other] || []), m])];
+      }
+      d.disabledModels[kind] = (d.disabledModels[kind] || []).filter((x) => x !== m);
+    }
+    for (const k of Object.keys(d.disabledModels)) if (!d.disabledModels[k].length) delete d.disabledModels[k];
+    pruneProjectModels(d);
   }
   for (const [key, attr] of [['excludeKind', 'excludedKinds'], ['excludeModel', 'excludedModels']]) if (el.dataset[key]) {
     const [slug, value] = el.dataset[key].split(':');
@@ -1358,6 +1444,59 @@ document.addEventListener('change', (e) => {
   }
   markPolicyDirty();
 });
+
+function settingsRerender(kind, focus) {
+  lastRender = ''; render(true);
+  document.querySelector(focus)?.focus();
+  const status = document.querySelector(`[data-settings-message="${kind}"]`);
+  if (status) status.textContent = settingsMessages[kind] || '';
+}
+
+// A new model joins only this harness. It starts enabled and unmetered.
+function addExtraModel(kind, model) {
+  const d = policyDraft;
+  if (!d || !models[kind]) return;
+  if (!MODEL_ID.test(model)) settingsMessages[kind] = 'Use letters, digits, dots, underscores, slashes, or hyphens. Start with a letter or digit. No spaces.';
+  else if (kindModels(kind, d).includes(model)) settingsMessages[kind] = `${model} is already in ${kind}.`;
+  else {
+    d.extraModels ||= {};
+    d.extraModels[kind] = [...(d.extraModels[kind] || []), model];
+    d.harnessRoutes ||= {};
+    d.harnessRoutes[kind] = { ...(d.harnessRoutes[kind] || {}), [model]: null };
+    settingsMessages[kind] = `Added ${model} as unmetered. Apply policy to keep it.`;
+    policyDirty = true; saveMessage = '';
+    settingsRerender(kind, `[data-add-model-input="${kind}"]`);
+    return;
+  }
+  const input = document.querySelector(`[data-add-model-input="${kind}"]`);
+  const status = document.querySelector(`[data-settings-message="${kind}"]`);
+  if (status) status.textContent = settingsMessages[kind];
+  input?.setAttribute('aria-invalid', 'true');
+  input?.focus();
+}
+
+// Removing a local model also removes its route, its disabled entry, its preferred choice, and its succession choices.
+function removeExtraModel(kind, model) {
+  const d = policyDraft;
+  if (!d?.extraModels?.[kind]?.includes(model)) return;
+  const ladder = (d.orchestratorLadder || []).filter((rung) => !(rung.kind === kind && rung.model === model));
+  if (!ladder.length) {
+    settingsMessages[kind] = `${model} is the only succession choice. Add another choice on the Allocation page first.`;
+    const status = document.querySelector(`[data-settings-message="${kind}"]`);
+    if (status) status.textContent = settingsMessages[kind];
+    return;
+  }
+  d.orchestratorLadder = ladder;
+  d.extraModels[kind] = d.extraModels[kind].filter((x) => x !== model);
+  if (!d.extraModels[kind].length) delete d.extraModels[kind];
+  if (d.harnessRoutes?.[kind]) delete d.harnessRoutes[kind][model];
+  if (d.disabledModels?.[kind]) d.disabledModels[kind] = d.disabledModels[kind].filter((x) => x !== model);
+  if (d.preferredModels?.[kind] === model) delete d.preferredModels[kind];
+  pruneProjectModels(d);
+  settingsMessages[kind] = `Removed ${model}. Apply policy to keep this change.`;
+  policyDirty = true; saveMessage = '';
+  settingsRerender(kind, `[data-add-model-input="${kind}"]`);
+}
 
 async function postJson(url, body) {
   const response = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
@@ -1405,6 +1544,11 @@ function flushViewerText() {
 }
 
 document.addEventListener('submit', async (e) => {
+  if (e.target.dataset.addModel) {
+    e.preventDefault();
+    addExtraModel(e.target.dataset.addModel, e.target.elements.model.value.trim());
+    return;
+  }
   if (e.target.id === 'browser-viewer-text-form') {
     e.preventDefault();
     const input = document.getElementById('browser-viewer-text');
@@ -1592,14 +1736,18 @@ document.addEventListener('click', async (e) => {
     } catch (error) { browserMessages[slug] = error.message; lastRender = ''; render(); }
     return;
   }
+  if (e.target.dataset.removeModel && policyDraft) {
+    removeExtraModel(e.target.dataset.removeModel, e.target.dataset.model);
+    return;
+  }
   if (e.target.dataset.ladderAdd !== undefined || e.target.dataset.ladderUp !== undefined || e.target.dataset.ladderDown !== undefined || e.target.dataset.ladderRemove !== undefined) {
     const list = policyDraft?.orchestratorLadder;
     if (!list) return;
     if (e.target.dataset.ladderAdd !== undefined) {
-      const kind = Object.keys(models).find((k) => models[k].allowedModels.some((m) => !list.some((r) => r.kind === k && r.model === m))) || Object.keys(models)[0];
+      const kind = Object.keys(models).find((k) => kindModels(k).some((m) => !list.some((r) => r.kind === k && r.model === m))) || Object.keys(models)[0];
       if (!kind) return;
       const cfg = models[kind];
-      const model = cfg.allowedModels.find((m) => !list.some((r) => r.kind === kind && r.model === m)) || cfg.defaultModel;
+      const model = kindModels(kind).find((m) => !list.some((r) => r.kind === kind && r.model === m)) || cfg.defaultModel;
       list.push({ kind, model, effort: cfg.defaultEffort || null });
     } else {
       const i = Number(e.target.dataset.ladderUp ?? e.target.dataset.ladderDown ?? e.target.dataset.ladderRemove);
@@ -1621,6 +1769,7 @@ document.addEventListener('click', async (e) => {
       policyDraft = result.policy;
       policyDirty = false;
       saveMessage = 'Policy saved';
+      for (const kind of Object.keys(settingsMessages)) delete settingsMessages[kind];
       state.policy = result.policy;
       state.control = result.control;
       lastRender = '';
