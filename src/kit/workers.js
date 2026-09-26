@@ -5,6 +5,8 @@ import { execFileSync } from 'node:child_process';
 import { appendDelegatedRun, compareChangedPaths, gitChangedPaths, gitLog, readJson, validateAllowedPaths, validateScopePaths, validateWorkerReport } from './orchestration.js';
 import { recordUsage } from '../usage.js';
 import { mergeModels, modelEnabled, providerFor, selectModel, unmeteredSummary } from '../control.js';
+import { DATA_DIR } from '../config.js';
+import { workerStatusFromState } from '../worker-failures.js';
 
 const NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
 const BRIEF_SLOTS = new Set([
@@ -953,15 +955,17 @@ export function parkWorker(name, { reason = null, unpark = false } = {}, { confi
   return run;
 }
 
-export function listWorkers(config, { herdr = createHerdrRunner(), output = console.log } = {}) {
+export function listWorkers(config, { herdr = createHerdrRunner(), output = console.log, stateFile = path.join(DATA_DIR, 'state.json') } = {}) {
   const live = listFrom(herdr(['agent', 'list']), 'agents');
+  let state = null;
+  try { state = JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch {}
   let records = [];
   try {
     records = fs.readdirSync(config.runsPath).filter((name) => name.endsWith('.json')).map((file) => readJson(path.join(config.runsPath, file)));
   } catch (error) { if (error.code !== 'ENOENT') throw error; }
   const rows = records.filter((record) => !record.finishedAt).map((record) => {
     const agent = live.find((item) => getName(item) === record.name);
-    return { ...record, agentStatus: agent?.agent_status ?? agent?.status ?? 'not live' };
+    return { ...record, agentStatus: workerStatusFromState(record.pane, state, record) || agent?.agent_status || agent?.status || 'not live' };
   });
   output(JSON.stringify(rows, null, 2));
   return rows;

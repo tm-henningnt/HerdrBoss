@@ -102,7 +102,7 @@ h2 .sub { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(
 .agent .who span { color: var(--muted); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agent .meta { font: 12px var(--mono); color: var(--faint); white-space: nowrap; text-align: right; }
 .st { width: 8px; height: 8px; border-radius: 50%; background: var(--idle); }
-.st.working { background: var(--info); } .st.blocked { background: var(--warn); } .st.done { background: var(--ok); } .st.unknown { background: var(--faint); } .st.shell { background: transparent; border: 1.5px solid var(--faint); }
+.st.working { background: var(--info); } .st.blocked { background: var(--warn); } .st.failed { background: var(--crit); } .st.done { background: var(--ok); } .st.unknown { background: var(--faint); } .st.shell { background: transparent; border: 1.5px solid var(--faint); }
 .st.working { animation: blink 1.4s ease-in-out infinite; }
 @keyframes blink { 50% { opacity: 0.35; } }
 @media (prefers-reduced-motion: reduce) { .st.working { animation: none; } }

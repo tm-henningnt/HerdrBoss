@@ -8,7 +8,7 @@ import { deriveControl, loadPolicy, machineLimits, POLICY_DEFAULTS, providerFor,
 import { validateUsage, usageProvider, usageSummary } from '../src/usage.js';
 import { loadModels } from '../src/kit/config.js';
 import { broadcastTargets, evaluate, renderBulletin } from '../src/rules.js';
-import { alertPromptDue, pruneInactiveDiskPromptRecords } from '../src/engine.js';
+import { alertPromptDue, orchestratorCanReceiveNotice, pruneInactiveDiskPromptRecords } from '../src/engine.js';
 
 const models = loadModels();
 const policy = (patch = {}) => ({ ...structuredClone(POLICY_DEFAULTS), ...patch });
@@ -293,6 +293,12 @@ test('disk prompts send on level transitions and recovery, but not after same-le
   assert.equal(alertPromptDue(warning, afterRecovery[warningKey], 3000, 6 * 60 * 60 * 1000), true, 'a warning crossing is due after recovery');
 });
 
+test('worker failure notices can reach a working orchestrator immediately', () => {
+  assert.equal(orchestratorCanReceiveNotice({ status: 'working' }, [{ immediate: true }]), true);
+  assert.equal(orchestratorCanReceiveNotice({ status: 'working' }, [{ immediate: false }]), false);
+  assert.equal(alertPromptDue({ immediate: true }, null, 1000, 6000), true);
+});
+
 test('bulletin states the machine guard mode and retains measured machine limits', () => {
   const cfg = { dashboardPort: 4477 };
   const snap = { ...snapshot(), updatedAt: '2026-09-26T12:00:00Z', quotas: [], lanes: {},
@@ -434,6 +440,19 @@ test('the idle-worker notice skips a prepared handover successor', async () => {
   assert.ok(stale);
   assert.match(stale.text, /w1:p7/);
   assert.doesNotMatch(stale.text, /w1:p6/);
+});
+
+test('blocked-worker rule starts only after five minutes', async () => {
+  const { evaluate } = await import('../src/rules.js');
+  const cfg = { quota: { warnPercent: 90, criticalPercent: 98 }, machine: { memFreeWarnPercent: 15, loadWarnFactor: 2 }, browsers: { staleOwnedMinutes: 30 }, workers: { staleIdleMinutes: 120 }, sharedBrowsers: [] };
+  const now = 1_000_000;
+  const snap = { herdr: { panes: [{ id: 'w1:p2', workspace: 'w1', name: 'worker-a', agent: 'codex', status: 'blocked' }] } };
+  const before = evaluate(snap, cfg, { 'w1:p2': { since: now - 299_999 } }, now).alerts;
+  assert.equal(before.some((alert) => alert.key === 'workers:blocked:w1:p2'), false);
+  const after = evaluate(snap, cfg, { 'w1:p2': { since: now - 300_001 } }, now).alerts;
+  const alert = after.find((item) => item.key === 'workers:blocked:w1:p2');
+  assert.ok(alert);
+  assert.match(alert.text, /worker-a.*w1:p2/);
 });
 
 test('lane status marks pace and reserve, skips reset windows, and names the least-over provider', async () => {

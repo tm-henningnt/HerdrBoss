@@ -45,8 +45,12 @@ To add the shared rules to a project, follow [orchestrator-instructions.md](orch
 | An idle worker still owns an automation browser after 30 minutes | Notice to that project. |
 | A worker is idle for more than 2 hours | Notice to that project. Parked workers and prepared successors are skipped. |
 | An `agent-browser` daemon has no parent, no children, and is older than 2 hours | Herdr Boss stops the daemon. It never stops a browser. |
+| A non-orchestrator worker stays blocked for more than 5 minutes | Notice its project orchestrator with the worker name and pane ID. |
+| A worker first appears idle or done, or changes into either state | Herdr Boss reads only the last 8 visible pane lines. A known provider error marks the worker failed and sends the orchestrator its name, pane ID, and fixed error label. |
 
-A notice is a prompt to an `orch` pane. Herdr Boss sends it only when that agent is `idle` or `done`, and no more than the configured cooldown per alert and pane. It sends it sooner only when the severity increases. A notice for all orchestrators goes only to projects with a worker that is `working` or `blocked`. You get a desktop notification once for each warning.
+The failure labels are `API Error`, `401`, `429`, `Connection lost`, `usage limit`, `rate limit`, and `overloaded`. Matching ignores letter case. Herdr Boss stores and sends only the matched label. It does not store or forward pane output. A failed status clears when the same pane starts working or a different worker uses the pane. A later failure creates a new notice.
+
+A notice is a prompt to an `orch` pane. Herdr Boss normally sends it only when that agent is `idle` or `done`, and no more than the configured cooldown per alert and pane. It sends it sooner only when the severity increases. Worker failure notices send immediately, including when the orchestrator is `working`. A notice for all orchestrators goes only to projects with a worker that is `working` or `blocked`. You get a desktop notification once for each warning.
 
 The notice cooldown is saved as `machine.alertCooldownSeconds` in `policy.json`. Its default is 21600 seconds (6 hours). This policy value takes precedence over the legacy top-level `alertCooldownSeconds` value in `config.json`.
 

@@ -11,6 +11,7 @@ import { loadPolicy, deriveControl, providerFor, pickSuccessor, laneStatus, leas
 import { recordQuotaSnapshot } from './usage.js';
 import { listBrowserSessions } from './browser-pool.js';
 import { listHandoffs, expireHandoff } from './handoff.js';
+import { inspectWorkerTransitions, applyWorkerFailureStatuses } from './worker-failures.js';
 
 const MEMORY_FILE = path.join(DATA_DIR, 'memory.json');
 const STATE_FILE = path.join(DATA_DIR, 'state.json');
@@ -20,9 +21,14 @@ const CLI_FILE = fileURLToPath(new URL('./cli.js', import.meta.url));
 const SEV = { info: 0, warn: 1, critical: 2 };
 
 export function alertPromptDue(alert, record, now, cooldown) {
+  if (alert.immediate) return !record;
   if (!record) return true;
   if (SEV[alert.severity] > SEV[record.severity]) return true;
   return !alert.key.startsWith('machine:disk:') && !alert.once && now - record.at > cooldown;
+}
+
+export function orchestratorCanReceiveNotice(orch, alerts) {
+  return orch.status === 'idle' || orch.status === 'done' || alerts.some((alert) => alert.immediate);
 }
 
 export function pruneInactiveDiskPromptRecords(records, activeAlerts) {
@@ -101,6 +107,12 @@ export class Engine extends EventEmitter {
       ]);
 
       this.trackPaneStatus(herdr, now);
+      const workerTransitions = herdr ? await inspectWorkerTransitions(
+        herdr.panes, this.memory.workerObserved, this.memory.workerFailures,
+        (args) => run('herdr', args, { timeout: 10000 }), now,
+      ) : { observed: this.memory.workerObserved || {}, failures: this.memory.workerFailures || {}, notices: [] };
+      this.memory.workerObserved = workerTransitions.observed;
+      this.memory.workerFailures = workerTransitions.failures;
       if (machine) {
         const h = (this.memory.history ||= []);
         h.push({ t: now, load: machine.load[0], mem: machine.memFreePercent });
@@ -120,6 +132,7 @@ export class Engine extends EventEmitter {
       snap.projects = listProjects();
       const policy = loadPolicy();
       const control = deriveControl(snap, policy, this.models, this.memory.paneSince, now);
+      snap.herdr = herdr ? { ...herdr, panes: applyWorkerFailureStatuses(herdr.panes, workerTransitions.failures) } : herdr;
       const profileWorkspaces = Object.fromEntries(managedBrowsers.map((b) => [b.profile, control.projects[b.project]?.workspace]).filter(([, ws]) => ws));
       snap.cpuUse = cpuUse(procs, herdr?.panes || [], profileWorkspaces);
       if (machine) {
@@ -140,6 +153,7 @@ export class Engine extends EventEmitter {
       try { snap.standbyPanes = listHandoffs().filter((h) => ['preparing', 'prepared', 'needs-inspection'].includes(h.status)).map((h) => h.newPane); }
       catch { snap.standbyPanes = []; }
       const evaluation = evaluate(snap, this.cfg, this.memory.paneSince, now, policy);
+      evaluation.alerts.push(...workerTransitions.notices);
       this.memory.quotaRecoveries ||= {};
       // Older records used the reset timestamp as part of the key. Codexbar can
       // adjust that timestamp by a minute, so consolidate them by provider/window.
@@ -439,7 +453,7 @@ export class Engine extends EventEmitter {
         }
       }
       for (const { o, list } of perPane.values()) {
-        if (o.status !== 'idle' && o.status !== 'done') continue; // retry next tick
+        if (!orchestratorCanReceiveNotice(o, list)) continue; // retry next tick
         list.sort((x, y) => SEV[y.severity] - SEV[x.severity]);
         const text = [
           '[herdr-boss] Resource notice. Act on it if it concerns your work. You do not need to reply to me.',

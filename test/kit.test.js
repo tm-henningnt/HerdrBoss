@@ -7,7 +7,7 @@ import test from 'node:test';
 import { loadModels, loadProjectConfig, PROJECT_DEFAULTS } from '../src/kit/config.js';
 import { appendDelegatedRun, compareChangedPaths, gitChangedPaths, readDelegatedRuns, validateAllowedPaths, validateDelegatedRun, validateWorkerReport } from '../src/kit/orchestration.js';
 import { buildGhArgs } from '../src/kit/gh.js';
-import { allowWorkerScope, collectWorker, createHerdrRunner, filterCollectProcesses, parseWorktreeCwdProcesses, renderBrief, startWorker } from '../src/kit/workers.js';
+import { allowWorkerScope, collectWorker, createHerdrRunner, filterCollectProcesses, listWorkers, parseWorktreeCwdProcesses, renderBrief, startWorker } from '../src/kit/workers.js';
 import { classifyWorktrees, pruneWorktrees } from '../src/kit/worktrees.js';
 import { usageProvider } from '../src/usage.js';
 
@@ -1224,4 +1224,18 @@ test('the models command lists extra models from the local policy', async () => 
   assert.ok(result.pi.allowedModels.includes('opencode-go/glm-5.2'));
   const missing = runKitCommand('models', [], { output: () => {}, rulesFile: path.join(dir, 'absent.json') });
   assert.deepEqual(missing.pi.allowedModels, loadModels().kinds.pi.allowedModels);
+});
+
+test('worker list reports the failed status from the Boss snapshot', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-worker-list-'));
+  const runsPath = path.join(dir, 'runs');
+  fs.mkdirSync(runsPath);
+  fs.writeFileSync(path.join(runsPath, 'worker-a.json'), JSON.stringify({ name: 'worker-a', pane: 'w1:p2' }));
+  const stateFile = path.join(dir, 'state.json');
+  fs.writeFileSync(stateFile, JSON.stringify({ herdr: { panes: [{ id: 'w1:p2', status: 'failed' }] } }));
+  const rows = listWorkers({ runsPath }, {
+    herdr: (args) => args[0] === 'agent' && args[1] === 'list' ? { agents: [{ name: 'worker-a', agent_status: 'idle' }] } : {},
+    output: () => {}, stateFile,
+  });
+  assert.equal(rows[0].agentStatus, 'failed');
 });

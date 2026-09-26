@@ -1,6 +1,7 @@
 // Turns a snapshot into alerts and bulletin advice. Pure functions, no side effects.
 import { dashboardUrl } from './config.js';
 import { machineLimits, unmeteredSummary } from './control.js';
+import { blockedWorkerAlerts } from './worker-failures.js';
 
 const PROVIDER_NAMES = { claude: 'Claude', codex: 'Codex', opencodego: 'OpenCode Go' };
 export const providerName = (p) => PROVIDER_NAMES[p] || p;
@@ -33,6 +34,7 @@ export function evaluate(snap, cfg, paneSince, now = Date.now(), policy = null) 
   const alerts = [];
   const advice = [];
   const avoidKinds = new Set();
+  alerts.push(...blockedWorkerAlerts(snap, paneSince, now));
 
   // ----- Quotas -----
   for (const q of snap.quotas || []) {
