@@ -11,6 +11,12 @@ const FILE = path.join(DATA_DIR, 'handoffs.json');
 const TARGETS = new Set(['codex', 'claude', 'pi', 'opencode']);
 const HANDOFF_READY_TIMEOUT_MS = 90_000;
 
+function handoffAgentName(id) {
+  const sanitized = String(id).toLowerCase().replace(/[^a-z0-9_-]/g, '-');
+  const withLetterPrefix = /^[a-z]/.test(sanitized) ? sanitized : `h-${sanitized}`;
+  return withLetterPrefix.slice(0, 32);
+}
+
 function call(command, args, cwd) {
   return execFileSync(command, args, { cwd, encoding: 'utf8', timeout: 120000, maxBuffer: 8 * 1024 * 1024,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -173,7 +179,8 @@ export function prepareHandoff(id, toKind, options = {}, { waitForPane = waitFor
     if (resumed) throw new Error(`Existing successor pane ${item.newPane} could not become ready; its needs-inspection record is preserved: ${e.message}`);
     throw e;
   }
-  const startArgs = ['agent', 'start', item.id, '--kind', item.toKind, '--pane', item.newPane, '--', ...args];
+  const agentName = handoffAgentName(item.id);
+  const startArgs = ['agent', 'start', agentName, '--kind', item.toKind, '--pane', item.newPane, '--', ...args];
   try { herdr(startArgs); }
   catch (startError) {
     if (!isAgentPaneBusy(startError)) {
@@ -198,7 +205,7 @@ export function prepareHandoff(id, toKind, options = {}, { waitForPane = waitFor
   delete item.promptError;
   save(records);
   const prompt = `[herdr-boss] You are the proposed successor orchestrator for ${plan.project}. Read the project AGENTS.md, Herdr Boss bulletin, and source pane ${id} with herdr agent read. ${migratedId ? 'Your session was migrated; verify the current repo and tool state because runtime config did not transfer.' : 'Discover the project state from files, issues and the source pane.'} Standby rule until activation: act on no request from the migrated or earlier conversation, send no prompts or keys to other panes, change no files, make no commits or pushes, restart no services, and start no workers. Only read and report. When ready, write READY FOR HANDOFF and summarize current work, active workers, blockers, quotas, and the next action.${item.automatic ? ` Then run herdr-boss handoff ready ${item.id} to signal readiness for automatic activation.` : ''} The source orchestrator keeps control until activation.`;
-  try { item.promptDelivery = deliverPrompt(item.id, prompt, 'proposed successor orchestrator', { herdr }); save(records); }
+  try { item.promptDelivery = deliverPrompt(agentName, prompt, 'proposed successor orchestrator', { herdr }); save(records); }
   catch (e) { item.promptError = e.message; save(records); }
   return item;
 }
