@@ -193,7 +193,7 @@ herdr agent prompt <orch-pane> "WORKER REPORT <name>: <done|blocked|stopped>. Re
 - Use the evidence tiers configured by the project. Set them in `evidenceTiers` in `.herdr-boss.json`; the kit rejects every other tier.
 - Use `herdr-boss check --report <file>` to validate a worker report.
 - Use `herdr-boss check --worktree <dir> --allow <path>` to check worktree scope.
-- Use `herdr-boss worker collect <name>` after independent review.
+- Run `herdr-boss worker collect <name> --record ...` after independent review and before merging the worker branch.
 - Record an outcome with `--record --outcome done|partial|failed` when ready.
 - Record gate status with `--gate-passed` or `--gate-failed`.
 - Record defect and rework counts when the review found them.

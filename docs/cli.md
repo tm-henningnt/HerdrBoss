@@ -62,6 +62,8 @@ Create a branch and worktree, write the brief, open a pane in the `Workers` tab,
 
 `worker start` waits for the shell prompt or a stable shell screen. It sets `DISABLE_UPDATE_PROMPT=true` and `DISABLE_AUTO_UPDATE=true` in new panes. If it finds an interactive question, it stops and tells the orchestrator to answer it in a shell once.
 
+`worker start` saves the resolved base commit in the run record. Review the worker, then collect it with `--record` before you merge its branch. Collection uses that saved commit so changed paths stay stable after the merge.
+
 | Option | Meaning |
 |---|---|
 | `--kind KIND` | Required. `codex`, `claude`, `opencode`, or `pi`. |
