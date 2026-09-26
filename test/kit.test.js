@@ -404,6 +404,9 @@ test('worker start waits for a ready shell and retries agent_pane_busy once', ()
   assert.equal(prompts, 1);
   assert.ok(waits >= 1);
   assert.ok(paneReads >= 2);
+  const split = calls.find((args) => args[0] === 'pane' && args[1] === 'split');
+  assert.ok(split.includes('DISABLE_UPDATE_PROMPT=true'));
+  assert.ok(split.includes('DISABLE_AUTO_UPDATE=true'));
 });
 
 test('worker start waits for a stable shell in a new tab and rechecks before a timed busy retry', () => {
@@ -428,7 +431,12 @@ test('worker start waits for a stable shell in a new tab and rechecks before a t
     }
     if (args[0] === 'agent' && args[1] === 'list') return { agents: [] };
     if (args[0] === 'tab' && args[1] === 'list') return { tabs: tabCreated ? [{ tab_id: 'ws:t2', workspace_id: 'ws', label: 'Workers' }] : [] };
-    if (args[0] === 'tab' && args[1] === 'create') { tabCreated = true; return { tab: { tab_id: 'ws:t2' } }; }
+    if (args[0] === 'tab' && args[1] === 'create') {
+      assert.ok(args.includes('DISABLE_UPDATE_PROMPT=true'));
+      assert.ok(args.includes('DISABLE_AUTO_UPDATE=true'));
+      tabCreated = true;
+      return { tab: { tab_id: 'ws:t2' } };
+    }
     if (args[0] === 'pane' && args[1] === 'list') return { panes: [{ pane_id: 'ws:p2', workspace_id: 'ws', tab_id: 'ws:t2' }] };
     if (args[0] === 'pane' && args[1] === 'process-info') return { process_info: {
       shell_pid: 10,
@@ -462,6 +470,48 @@ test('worker start waits for a stable shell in a new tab and rechecks before a t
   assert.ok(calls.findIndex((args) => args[0] === 'tab' && args[1] === 'create') < firstStart);
   assert.ok(calls.slice(firstStart + 1, secondStart).some((args) => args[0] === 'pane' && args[1] === 'get' && args[2] === 'ws:p2'));
   assert.ok(calls.slice(firstStart + 1, secondStart).some((args) => args[0] === 'pane' && args[1] === 'read'));
+});
+
+test('worker start stops at an interactive shell question before typing the launch command', () => {
+  const root = temporaryRepo();
+  const template = path.join(root, 'brief-template.md');
+  fs.writeFileSync(template, 'Worker {{name}}: {{task}}');
+  fs.writeFileSync(path.join(root, '.herdr-boss.json'), JSON.stringify({ briefTemplate: template }));
+  const config = loadProjectConfig({ cwd: root });
+  const rulesFile = path.join(root, 'rules.json');
+  fs.writeFileSync(rulesFile, JSON.stringify({ updatedAt: new Date().toISOString(), avoidKinds: [] }));
+  let starts = 0;
+  let paneClosed = false;
+  const herdr = (args) => {
+    if (args[0] === 'pane' && args[1] === 'get') return args[2] === 'ws:orch'
+      ? { pane: { pane_id: 'ws:orch', workspace_id: 'ws', label: 'orch' } }
+      : { pane: { pane_id: args[2], workspace_id: 'ws', foreground_cwd: config.worktreePath('question') } };
+    if (args[0] === 'agent' && args[1] === 'list') return { agents: [] };
+    if (args[0] === 'tab' && args[1] === 'list') return { tabs: [{ tab_id: 'ws:t1', workspace_id: 'ws', label: 'Workers' }] };
+    if (args[0] === 'pane' && args[1] === 'list') return { panes: [{ pane_id: 'ws:p1', workspace_id: 'ws', tab_id: 'ws:t1' }] };
+    if (args[0] === 'pane' && args[1] === 'split') {
+      assert.ok(args.includes('DISABLE_UPDATE_PROMPT=true'));
+      assert.ok(args.includes('DISABLE_AUTO_UPDATE=true'));
+      return { pane: { pane_id: 'ws:p2' } };
+    }
+    if (args[0] === 'pane' && args[1] === 'process-info') return { process_info: {
+      shell_pid: 10, foreground_process_group_id: 10, foreground_processes: [{ pid: 10, name: 'zsh' }],
+    } };
+    if (args[0] === 'pane' && args[1] === 'read') return { text: 'Would you like to update? [Y/n]\n' };
+    if (args[0] === 'pane' && args[1] === 'close') { paneClosed = true; return {}; }
+    if (args[0] === 'agent' && args[1] === 'start') { starts++; return {}; }
+    throw new Error(`Unexpected Herdr call: ${args.join(' ')}`);
+  };
+  assert.throws(() => startWorker('question', { kind: 'codex', task: 'x', allow: ['src/'] }, {
+    config, models: loadModels(), herdr, wait: () => assert.fail('must stop without waiting'), rulesFile,
+    env: { HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'ws', HERDR_PANE_ID: 'ws:orch' },
+  }), (error) => error.code === 'worker_pane_interactive_question'
+    && /Would you like to update\? \[Y\/n\]/.test(error.message)
+    && /Answer it in a shell once/.test(error.message));
+  assert.equal(starts, 0);
+  assert.equal(paneClosed, true);
+  assert.equal(fs.existsSync(config.worktreePath('question')), false);
+  assert.equal(git(root, 'branch', '--list', 'question'), '');
 });
 
 test('worker start cleans up the pane and worktree when the busy retry fails', () => {

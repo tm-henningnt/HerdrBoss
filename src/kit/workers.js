@@ -298,7 +298,11 @@ function chooseWorkerPane(workspaceId, worktree, herdr) {
   const tabs = listFrom(herdr(['tab', 'list', '--workspace', workspaceId]), 'tabs');
   const workerTab = tabs.find((tab) => tab.label === 'Workers' && getWorkspace(tab) === workspaceId);
   if (!workerTab) {
-    const created = herdr(['tab', 'create', '--workspace', workspaceId, '--label', 'Workers', '--cwd', worktree, '--no-focus']);
+    const command = [
+      'tab', 'create', '--workspace', workspaceId, '--label', 'Workers', '--cwd', worktree,
+      '--env', 'DISABLE_UPDATE_PROMPT=true', '--env', 'DISABLE_AUTO_UPDATE=true', '--no-focus',
+    ];
+    const created = herdr(command);
     const tabId = getTab(created) ?? created.tab?.tab_id ?? created.id;
     const freshTabs = listFrom(herdr(['tab', 'list', '--workspace', workspaceId]), 'tabs');
     const foundTab = freshTabs.find((tab) => (tab.tab_id === tabId || tab.label === 'Workers') && getWorkspace(tab) === workspaceId);
@@ -309,7 +313,7 @@ function chooseWorkerPane(workspaceId, worktree, herdr) {
       try { herdr(['tab', 'close', getTab(foundTab)]); } catch {}
       throw new Error('The new Workers tab has no root pane.');
     }
-    return { paneId: getPane(rootPane), tabId: getTab(foundTab), command: ['tab', 'create', '--workspace', workspaceId, '--label', 'Workers', '--cwd', worktree, '--no-focus'], createdTab: true };
+    return { paneId: getPane(rootPane), tabId: getTab(foundTab), command, createdTab: true };
   }
 
   const panes = listFrom(herdr(['pane', 'list', '--workspace', workspaceId]), 'panes').filter((pane) => getTab(pane) === getTab(workerTab));
@@ -320,7 +324,10 @@ function chooseWorkerPane(workspaceId, worktree, herdr) {
     try { dimensions = findDimensions(herdr(['pane', 'layout', '--pane', getPane(source)])); } catch {}
   }
   const direction = dimensions && dimensions.height > dimensions.width ? 'down' : 'right';
-  const command = ['pane', 'split', getPane(source), '--direction', direction, '--cwd', worktree, '--no-focus'];
+  const command = [
+    'pane', 'split', getPane(source), '--direction', direction, '--cwd', worktree,
+    '--env', 'DISABLE_UPDATE_PROMPT=true', '--env', 'DISABLE_AUTO_UPDATE=true', '--no-focus',
+  ];
   const result = herdr(command);
   const paneId = result.pane_id ?? result.paneId ?? result.pane?.pane_id ?? result.new_pane_id;
   if (!paneId) {
@@ -362,7 +369,14 @@ function waitForWorkerPane(paneId, workspaceId, worktree, herdr, wait) {
           const screen = typeof screenResponse === 'string'
             ? screenResponse
             : screenResponse?.text ?? screenResponse?.output ?? '';
-          const lastLine = String(screen).replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '').split(/\r?\n/).map((line) => line.trimEnd()).filter((line) => line.trim()).at(-1) ?? '';
+          const lines = String(screen).replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '').split(/\r?\n/).map((line) => line.trimEnd());
+          const question = interactiveShellQuestion(lines);
+          if (question) {
+            const error = new Error(`Worker pane ${paneId} is waiting at an interactive question: ${question}. Answer it in a shell once, then retry worker start.`);
+            error.code = 'worker_pane_interactive_question';
+            throw error;
+          }
+          const lastLine = lines.filter((line) => line.trim()).at(-1) ?? '';
           if (/[❯➜$%#>]\s*$/.test(lastLine)) return;
           if (screen.trim() && screen === previousScreen) {
             stableScreenMs += Math.max(intervalMs, Date.now() - iterationStarted);
@@ -379,7 +393,8 @@ function waitForWorkerPane(paneId, workspaceId, worktree, herdr, wait) {
         previousScreen = null;
         stableScreenMs = 0;
       }
-    } catch {
+    } catch (error) {
+      if (error?.code === 'worker_pane_interactive_question') throw error;
       previousScreen = null;
       stableScreenMs = 0;
     }
@@ -391,6 +406,18 @@ function waitForWorkerPane(paneId, workspaceId, worktree, herdr, wait) {
     elapsedMs += checkDurationMs + Math.max(delay, Date.now() - waitStarted);
   }
   throw new Error(`Worker pane ${paneId} did not become an available shell in workspace ${workspaceId} at ${worktree} within 20 seconds.`);
+}
+
+function interactiveShellQuestion(lines) {
+  for (let index = lines.length - 1; index >= 0; index--) {
+    const line = lines[index].trim();
+    if (/\[(?:y\/n|n\/y)\]\s*$/i.test(line)) {
+      const previous = lines[index - 1]?.trim();
+      return previous?.endsWith('?') ? `${previous} ${line}` : line;
+    }
+    if (/\?\s*$/.test(line)) return line;
+  }
+  return null;
 }
 
 function isAgentPaneBusy(error) {
@@ -502,10 +529,16 @@ export function startWorker(name, options, {
         try { dimensions = findDimensions(herdr(['pane', 'layout', '--pane', getPane(source)])); } catch {}
       }
       const direction = dimensions && dimensions.height > dimensions.width ? 'down' : 'right';
-      paneCommand = ['pane', 'split', getPane(source), '--direction', direction, '--cwd', worktree, '--no-focus'];
+      paneCommand = [
+        'pane', 'split', getPane(source), '--direction', direction, '--cwd', worktree,
+        '--env', 'DISABLE_UPDATE_PROMPT=true', '--env', 'DISABLE_AUTO_UPDATE=true', '--no-focus',
+      ];
       paneId = '<new-pane-id>';
     } else {
-      paneCommand = ['tab', 'create', '--workspace', workspaceId, '--label', 'Workers', '--cwd', worktree, '--no-focus'];
+      paneCommand = [
+        'tab', 'create', '--workspace', workspaceId, '--label', 'Workers', '--cwd', worktree,
+        '--env', 'DISABLE_UPDATE_PROMPT=true', '--env', 'DISABLE_AUTO_UPDATE=true', '--no-focus',
+      ];
       paneId = '<new-root-pane-id>';
     }
   }
