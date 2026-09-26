@@ -91,8 +91,37 @@ test('project config finds the git root and applies contract defaults', () => {
   assert.equal(config.root, root);
   assert.equal(config.slug, path.basename(root).toLowerCase());
   assert.equal(config.imageBudget, 10);
+  assert.deepEqual(config.artifactChecks, []);
   for (const [key, value] of Object.entries(PROJECT_DEFAULTS)) assert.deepEqual(config[key], value);
   assert.equal(config.worktreePath('worker'), path.join(path.dirname(root), `${path.basename(root)}-wt-worker`));
+});
+
+test('project config validates artifact check patterns', () => {
+  const root = temporaryRepo();
+  const configFile = path.join(root, '.herdr-boss.json');
+  const artifactChecks = [{ artifacts: 'docs/gallery/**/*.png', sources: 'extensions/**/src/**' }];
+  fs.writeFileSync(configFile, JSON.stringify({ artifactChecks }));
+  assert.deepEqual(loadProjectConfig({ cwd: root }).artifactChecks, artifactChecks);
+
+  for (const invalid of [
+    null,
+    'docs/gallery/**/*.png',
+    [{}],
+    [{ artifacts: 'out/*.png' }],
+    [{ artifacts: 'out/*.png', sources: '' }],
+    [{ artifacts: '../out/*.png', sources: 'src/**' }],
+    [{ artifacts: '/tmp/out/*.png', sources: 'src/**' }],
+    [{ artifacts: 'C:/out/*.png', sources: 'src/**' }],
+    [{ artifacts: 'out\\*.png', sources: 'src/**' }],
+    [{ artifacts: 'out//*.png', sources: 'src/**' }],
+    [{ artifacts: 'out/***/x.png', sources: 'src/**' }],
+    [{ artifacts: 'out/**suffix.png', sources: 'src/**' }],
+    [{ artifacts: 'out/?.png', sources: 'src/**' }],
+    [{ artifacts: 'out/*.png', sources: 'src/**', unexpected: true }],
+  ]) {
+    fs.writeFileSync(configFile, JSON.stringify({ artifactChecks: invalid }));
+    assert.throws(() => loadProjectConfig({ cwd: root }), /artifactChecks/);
+  }
 });
 
 test('project config reads overrides and rejects malformed allowedModels', () => {
@@ -749,6 +778,95 @@ test('worker collect keeps changed paths stable after the base branch merges the
   const afterMerge = collect();
   assert.deepEqual(beforeMerge.actualPaths, ['src/change.js']);
   assert.deepEqual(afterMerge.actualPaths, beforeMerge.actualPaths);
+});
+
+test('worker collection warns only for stale or missing artifacts in explicitly done reports', () => {
+  const cases = [
+    { name: 'fresh-artifacts', status: 'done', sourceTime: 20_000_000, artifactTime: 30_000_000, warning: false },
+    { name: 'stale-artifacts', status: 'done', sourceTime: 30_000_000, artifactTime: 20_000_000, warning: true },
+    { name: 'missing-artifacts', status: 'done', sourceTime: 30_000_000, artifactTime: null, warning: true },
+    { name: 'described-done-artifacts', status: 'done', statusLine: 'Status: done. Artifact generation finished.', sourceTime: 30_000_000, artifactTime: 20_000_000, warning: true },
+    { name: 'doneish-artifacts', status: 'doneish', sourceTime: 30_000_000, artifactTime: 20_000_000, warning: false },
+    { name: 'done-partial-artifacts', status: 'done', statusLine: 'Status: done-partial', sourceTime: 30_000_000, artifactTime: 20_000_000, warning: false },
+    { name: 'partial-artifacts', status: 'partial', sourceTime: 30_000_000, artifactTime: 20_000_000, warning: false },
+    { name: 'failed-artifacts', status: 'failed', sourceTime: 30_000_000, artifactTime: 20_000_000, warning: false },
+  ];
+  for (const scenario of cases) {
+    const f = setupFixture(null);
+    let run;
+    try {
+      fs.writeFileSync(path.join(f.root, '.herdr-boss.json'), JSON.stringify({
+        briefTemplate: path.join(f.root, 'brief-template.md'),
+        artifactChecks: [{ artifacts: 'docs/gallery/**/*.png', sources: 'extensions/**/src/**' }],
+      }));
+      f.config = loadProjectConfig({ cwd: f.root });
+      git(f.root, 'add', '.herdr-boss.json');
+      git(f.root, 'commit', '-m', 'configure artifact checks');
+      run = startWorker(scenario.name, {
+        kind: 'codex', task: 'x', allow: ['extensions/', 'docs/gallery/'],
+      }, { config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {} });
+
+      const sourcePath = path.join(run.worktree, 'extensions', 'team', 'src', 'entry.js');
+      const artifactPath = path.join(run.worktree, 'docs', 'gallery', 'card.png');
+      fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+      fs.writeFileSync(sourcePath, 'export const source = true;\n');
+      const changedPaths = ['extensions/team/src/entry.js'];
+      if (scenario.artifactTime !== null) {
+        fs.mkdirSync(path.dirname(artifactPath), { recursive: true });
+        fs.writeFileSync(artifactPath, 'image');
+        changedPaths.push('docs/gallery/card.png');
+      }
+      git(run.worktree, 'add', ...changedPaths);
+      git(run.worktree, 'commit', '-m', 'worker artifacts');
+      const setMtime = (file, time) => fs.utimesSync(file, time / 1000, time / 1000);
+      setMtime(sourcePath, scenario.sourceTime);
+      if (scenario.artifactTime !== null) setMtime(artifactPath, scenario.artifactTime);
+
+      const reportDir = path.join(run.worktree, '.worker');
+      const reportMd = `${scenario.statusLine ?? `Status: ${scenario.status}`}\n`;
+      const reportJson = JSON.stringify({
+        issue: null,
+        branch: run.branch,
+        worktree: run.worktree,
+        changedPaths,
+        commands: ['focused check'],
+        evidenceTier: ['unit'],
+        unverified: [],
+        stoppedEarly: scenario.status !== 'done',
+      });
+      fs.writeFileSync(path.join(reportDir, 'report.md'), reportMd);
+      fs.writeFileSync(path.join(reportDir, 'report.json'), reportJson);
+      const output = [];
+      const recordOptions = scenario.name === 'stale-artifacts'
+        ? { record: true, outcome: 'done', gatePassed: true }
+        : {};
+      const summary = collectWorker(scenario.name, recordOptions, {
+        config: f.config,
+        output: (line) => output.push(line),
+        listWorktreeProcesses: () => [],
+        recordUsageFn: () => ({ errors: [], duplicate: false }),
+      });
+      assert.equal(fs.readFileSync(path.join(reportDir, 'report.md'), 'utf8'), reportMd);
+      assert.equal(fs.readFileSync(path.join(reportDir, 'report.json'), 'utf8'), reportJson);
+      assert.equal(summary.artifactWarnings.length > 0, scenario.warning, scenario.name);
+      if (scenario.warning) {
+        assert.match(summary.artifactWarnings[0], /docs\/gallery\/\*\*\/\*\.png/);
+        assert.match(summary.artifactWarnings[0], /extensions\/\*\*\/src\/\*\*/);
+        assert.ok(output.some((line) => line.includes(summary.artifactWarnings[0])), 'collection output must show every warning');
+      } else {
+        assert.deepEqual(summary.artifactWarnings, []);
+      }
+      if (scenario.name === 'stale-artifacts') {
+        const ledger = readDelegatedRuns(f.config.ledgerPath, { evidenceTiers: f.config.evidenceTiers });
+        assert.equal(ledger[0].independentGate.passed, true, 'artifact warnings must not change the independent gate result');
+      }
+    } finally {
+      if (run) {
+        try { git(f.root, 'worktree', 'remove', '--force', run.worktree); } catch {}
+      }
+      fs.rmSync(f.root, { recursive: true, force: true });
+    }
+  }
 });
 
 test('worker start creates a dedicated tab beside an existing Workers tab and retries agent_pane_busy once', () => {

@@ -94,11 +94,13 @@ herdr-boss worker start fix-74 --kind claude --task-file brief.md --allow src/pa
 | Command | Action |
 |---|---|
 | `worker list` | Unfinished run records with the live agent status. |
-| `worker collect NAME` | Read the worker report and check its changed paths against `--allow`. |
+| `worker collect NAME` | Read the worker report, check its changed paths against `--allow`, and report configured stale-artifact warnings. |
 | `worker collect NAME --record --outcome done\|partial\|failed --gate-passed\|--gate-failed [--defects N] [--rework N]` | Also append the run to the ledger and record usage. After success, merge the branch, then prune safe worktrees. |
 | `worker park NAME --reason TEXT` | Mark a worker that waits on purpose. Idle notices skip it. |
 | `worker unpark NAME` | Clear the park mark. |
 | `worker allow NAME PATH... --reason TEXT` | Approve extra paths for a running worker after a `WORKER QUESTION`. |
+
+`worker collect` checks artifacts when a `report.md` line starts with `Status: done` and the next character is whitespace, punctuation, or the end of the line. It accepts lines such as `Status: done.` and `Status: done — checks complete`. It ignores `Status: doneish`, `Status: done-partial`, `Status: partial`, and `Status: failed`. It compares the newest matching source file with the oldest matching artifact file. It warns when a source is newer or when sources match but no artifacts do. It prints each warning and includes the warnings in the `artifactWarnings` summary field. A warning does not change the independent gate result. The orchestrator decides whether the gate passed.
 
 ### Project locks
 
@@ -205,3 +207,6 @@ If a `needs-inspection` record still has a pane in the current Herdr pane list, 
 | `setupTimeoutSeconds` | `900` | The time limit for `setup`. |
 | `agentStartTimeoutMs` | `90000` | The time limit for `herdr agent start`, from 1 to 300000 milliseconds. |
 | `testThreadsFlag` | none | The flag that limits the test runner to two threads. It goes into every brief. |
+| `artifactChecks` | `[]` | Generated artifact and source globs to check during worker collection. |
+
+Each `artifactChecks` rule has `artifacts` and `sources` repository-relative POSIX globs. `*` matches within one path segment. `**` matches zero or more path segments. Herdr Boss rejects absolute paths, parent traversal, backslashes, empty patterns, and malformed rules.
