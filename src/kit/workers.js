@@ -18,6 +18,85 @@ function git(root, args, { encoding = 'utf8' } = {}) {
   return execFileSync('git', ['-C', root, ...args], { encoding });
 }
 
+function globSegmentMatches(pattern, segment) {
+  const escaped = pattern.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&').replaceAll('\\*', '[^/]*');
+  return new RegExp(`^${escaped}$`).test(segment);
+}
+
+function matchingRegularFiles(root, pattern) {
+  const segments = pattern.split('/');
+  const matches = new Map();
+  const visit = (directory, patternIndex) => {
+    if (patternIndex >= segments.length) return;
+    let entries;
+    try {
+      entries = fs.readdirSync(directory, { withFileTypes: true });
+    } catch (error) {
+      if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return;
+      throw error;
+    }
+    const segment = segments[patternIndex];
+    if (segment === '**') {
+      visit(directory, patternIndex + 1);
+      for (const entry of entries) {
+        if (entry.name === '.git' && directory === root) continue;
+        const file = path.join(directory, entry.name);
+        if (entry.isDirectory()) visit(file, patternIndex);
+        else if (entry.isFile() && patternIndex === segments.length - 1) {
+          const relative = path.relative(root, file).split(path.sep).join('/');
+          try {
+            const stat = fs.statSync(file);
+            if (stat.isFile()) matches.set(relative, stat.mtimeMs);
+          } catch (error) {
+            if (error.code !== 'ENOENT') throw error;
+          }
+        }
+      }
+      return;
+    }
+    const finalSegment = patternIndex === segments.length - 1;
+    for (const entry of entries) {
+      if (entry.name === '.git' && directory === root) continue;
+      if (!globSegmentMatches(segment, entry.name)) continue;
+      const file = path.join(directory, entry.name);
+      if (entry.isDirectory() && !finalSegment) visit(file, patternIndex + 1);
+      else if (entry.isFile() && finalSegment) {
+        try {
+          const stat = fs.statSync(file);
+          if (stat.isFile()) {
+            const relative = path.relative(root, file).split(path.sep).join('/');
+            matches.set(relative, stat.mtimeMs);
+          }
+        } catch (error) {
+          if (error.code !== 'ENOENT') throw error;
+        }
+      }
+    }
+  };
+  visit(root, 0);
+  return [...matches].map(([file, mtimeMs]) => ({ file, mtimeMs }));
+}
+
+function collectArtifactWarnings(worktree, reportMd, artifactChecks = []) {
+  if (!/^Status: done(?=$|[\s\p{P}])(?!-[\p{L}\p{N}_-])/mu.test(reportMd)) return [];
+  const warnings = [];
+  for (const rule of artifactChecks) {
+    const sources = matchingRegularFiles(worktree, rule.sources);
+    if (!sources.length) continue;
+    const artifacts = matchingRegularFiles(worktree, rule.artifacts);
+    if (!artifacts.length) {
+      warnings.push(`No files match artifacts "${rule.artifacts}" while sources match "${rule.sources}".`);
+      continue;
+    }
+    const latestSource = sources.reduce((latest, item) => Math.max(latest, item.mtimeMs), -Infinity);
+    const oldestArtifact = artifacts.reduce((oldest, item) => Math.min(oldest, item.mtimeMs), Infinity);
+    if (latestSource > oldestArtifact) {
+      warnings.push(`Artifacts matching "${rule.artifacts}" may be stale because sources matching "${rule.sources}" are newer.`);
+    }
+  }
+  return warnings;
+}
+
 export function parseCwdProcesses(output) {
   const processes = [];
   let processInfo = null;
@@ -895,9 +974,11 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
     actualPaths: changed,
     outOfScope: scopeErrors,
     scopeExtensions: run.scopeExtensions ?? [],
+    artifactWarnings: collectArtifactWarnings(run.worktree, reportMd, config.artifactChecks ?? []),
     report: reportMd,
   };
     output(JSON.stringify(summary, null, 2));
+    for (const warning of summary.artifactWarnings) output(`Warning: ${warning}`);
     if (scopeErrors.length) throw new Error(`Worker ${name} changed paths outside its allowed scope: ${scopeErrors.join(', ')}.`);
     if (omitted.length) throw new Error(`Worker ${name} omitted changed paths from its report: ${omitted.join(', ')}.`);
   if (options.record) {

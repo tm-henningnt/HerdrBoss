@@ -25,7 +25,35 @@ export const PROJECT_DEFAULTS = Object.freeze({
   setupTimeoutSeconds: 900,
   agentStartTimeoutMs: 90000,
   imageBudget: 10,
+  artifactChecks: [],
 });
+
+function validateArtifactPattern(pattern, label) {
+  if (typeof pattern !== 'string' || pattern.length === 0) throw new Error(`${label} must be a non-empty repository-relative POSIX glob.`);
+  if (pattern.includes('\\') || /[\u0000-\u001f\u007f]/.test(pattern)) throw new Error(`${label} must not contain backslashes or control characters.`);
+  if (path.posix.isAbsolute(pattern) || /^[A-Za-z]:\//.test(pattern)) throw new Error(`${label} must not be absolute.`);
+  const segments = pattern.split('/');
+  if (segments.some((segment) => segment === '' || segment === '.' || segment === '..')) {
+    throw new Error(`${label} must not contain empty, current-directory, or parent-directory segments.`);
+  }
+  if (segments.some((segment) => segment !== '**' && segment.includes('**'))) throw new Error(`${label} may use ** only as a complete path segment.`);
+  if (/[?\[\]{}]/.test(pattern)) throw new Error(`${label} supports only * and ** glob operators.`);
+}
+
+function validateArtifactChecks(artifactChecks) {
+  if (!Array.isArray(artifactChecks)) throw new Error('artifactChecks must be an array of { artifacts, sources } rules.');
+  artifactChecks.forEach((rule, index) => {
+    const label = `artifactChecks[${index}]`;
+    if (!rule || typeof rule !== 'object' || Array.isArray(rule)
+      || Object.keys(rule).length !== 2
+      || !Object.hasOwn(rule, 'artifacts')
+      || !Object.hasOwn(rule, 'sources')) {
+      throw new Error(`${label} must contain only artifacts and sources patterns.`);
+    }
+    validateArtifactPattern(rule.artifacts, `${label}.artifacts`);
+    validateArtifactPattern(rule.sources, `${label}.sources`);
+  });
+}
 
 export function findGitRoot(cwd = process.cwd()) {
   try {
@@ -61,6 +89,7 @@ export function loadProjectConfig({ cwd = process.cwd(), file = '.herdr-boss.jso
   }
   if (config.setup !== null && (typeof config.setup !== 'string' || !config.setup.trim())) throw new Error('setup must be null or a non-empty shell command.');
   if (config.testThreadsFlag !== null && (typeof config.testThreadsFlag !== 'string' || !config.testThreadsFlag.trim())) throw new Error('testThreadsFlag must be null or a non-empty string.');
+  validateArtifactChecks(config.artifactChecks);
   if (!Number.isInteger(config.setupTimeoutSeconds) || config.setupTimeoutSeconds < 10) throw new Error('setupTimeoutSeconds must be an integer of 10 or more.');
   if (!Number.isInteger(config.agentStartTimeoutMs) || config.agentStartTimeoutMs < 1 || config.agentStartTimeoutMs > 300000) {
     throw new Error('agentStartTimeoutMs must be an integer from 1 to 300000.');
