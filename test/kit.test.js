@@ -90,6 +90,7 @@ test('project config finds the git root and applies contract defaults', () => {
   const config = loadProjectConfig({ cwd: path.join(root, 'nested') });
   assert.equal(config.root, root);
   assert.equal(config.slug, path.basename(root).toLowerCase());
+  assert.equal(config.imageBudget, 10);
   for (const [key, value] of Object.entries(PROJECT_DEFAULTS)) assert.deepEqual(config[key], value);
   assert.equal(config.worktreePath('worker'), path.join(path.dirname(root), `${path.basename(root)}-wt-worker`));
 });
@@ -107,6 +108,17 @@ test('project config reads overrides and rejects malformed allowedModels', () =>
   for (const invalid of [0, 300001, 1.5, '90000']) {
     fs.writeFileSync(path.join(root, '.herdr-boss.json'), JSON.stringify({ agentStartTimeoutMs: invalid }));
     assert.throws(() => loadProjectConfig({ cwd: root }), /agentStartTimeoutMs must be an integer from 1 to 300000/);
+  }
+});
+
+test('project imageBudget defaults to ten and accepts only positive integers', () => {
+  const root = temporaryRepo();
+  assert.equal(loadProjectConfig({ cwd: root }).imageBudget, 10);
+  fs.writeFileSync(path.join(root, '.herdr-boss.json'), JSON.stringify({ imageBudget: 4 }));
+  assert.equal(loadProjectConfig({ cwd: root }).imageBudget, 4);
+  for (const imageBudget of [0, -1, 1.5, '10', null]) {
+    fs.writeFileSync(path.join(root, '.herdr-boss.json'), JSON.stringify({ imageBudget }));
+    assert.throws(() => loadProjectConfig({ cwd: root }), /imageBudget must be a positive integer/);
   }
 });
 
@@ -508,7 +520,7 @@ test('worker start validates the caller pane and uses it for placement and repor
   const result = startWorker('caller-valid', { kind: 'codex', task: 'x', allow: ['src/'] }, {
     config, models: loadModels(), herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
   });
-  assert.equal(fs.readFileSync(path.join(result.worktree, '.worker', 'brief.md'), 'utf8'), 'Report target: ws:orch');
+  assert.equal(fs.readFileSync(path.join(result.worktree, '.worker', 'brief.md'), 'utf8'), 'Report target: ws:orch\n\n## Worker start details\n\nScreenshot budget: 10 screenshots. The project setting overrides the kit default.');
   assert.ok(calls.some((args) => args.join(' ') === 'tab list --workspace ws'));
   assert.ok(calls.some((args) => args.join(' ') === 'pane get ws:orch'));
 
@@ -707,7 +719,7 @@ test('worker start records a real dispatch before prompting and verifies activit
   });
   assert.equal(result.pane, 'ws:p2');
   assert.ok(calls.some((args) => args[0] === 'agent' && args[1] === 'prompt'));
-  assert.equal(fs.readFileSync(path.join(result.worktree, '.worker', 'brief.md'), 'utf8'), 'Worker demo: x');
+  assert.equal(fs.readFileSync(path.join(result.worktree, '.worker', 'brief.md'), 'utf8'), 'Worker demo: x\n\n## Worker start details\n\nScreenshot budget: 10 screenshots. The project setting overrides the kit default.');
 });
 
 test('worker collect keeps changed paths stable after the base branch merges the worker', () => {
@@ -922,6 +934,67 @@ test('worker start cleans up the pane and worktree when the busy retry fails', (
   assert.equal(tabClosed, true);
   assert.deepEqual(closedTabs, ['ws:t2']);
   assert.equal(fs.existsSync(config.worktreePath('demo')), false);
+});
+
+test('worker start final output line reports failure after cleanup', () => {
+  const f = setupFixture(null);
+  const output = [];
+  const herdr = (args) => {
+    if (args[0] === 'agent' && args[1] === 'start') throw new Error('agent_pane_busy');
+    return f.herdr(args);
+  };
+  assert.throws(() => startWorker('demo', { kind: 'codex', task: 'x', allow: ['src/'] }, {
+    config: f.config, models: loadModels(), herdr, env: f.env, rulesFile: f.rulesFile, wait: () => {}, output: (line) => output.push(line),
+  }), (error) => /START FAILED: agent_pane_busy$/.test(error.message) && /cleanup/.test(error.message));
+});
+
+test('worker start copies nested repository inputs before sending the prompt', () => {
+  const f = setupFixture(null);
+  fs.mkdirSync(path.join(f.root, 'fixtures', 'one'), { recursive: true });
+  fs.mkdirSync(path.join(f.root, 'docs', 'nested'), { recursive: true });
+  fs.writeFileSync(path.join(f.root, 'fixtures', 'one', 'a.txt'), 'a');
+  fs.writeFileSync(path.join(f.root, 'docs', 'nested', 'b.txt'), 'b');
+  const herdr = (args) => {
+    if (args[0] === 'agent' && args[1] === 'prompt') {
+      const workerRoot = f.config.worktreePath('demo');
+      assert.equal(fs.readFileSync(path.join(workerRoot, '.worker/inputs/fixtures/one/a.txt'), 'utf8'), 'a');
+      assert.equal(fs.readFileSync(path.join(workerRoot, '.worker/inputs/docs/nested/b.txt'), 'utf8'), 'b');
+    }
+    return f.herdr(args);
+  };
+  const result = runKitCommand('worker', ['start', 'demo', '--kind', 'codex', '--task', 'x', '--allow', 'src/', '--copy', 'fixtures/one/a.txt', '--copy', path.join(f.root, 'docs/nested/b.txt')], {
+    config: f.config, herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+  });
+  const brief = fs.readFileSync(path.join(result.worktree, '.worker/brief.md'), 'utf8');
+  assert.match(brief, /\.worker\/inputs\/fixtures\/one\/a\.txt/);
+  assert.equal(brief.match(/\.worker\/inputs\/fixtures\/one\/a\.txt/g)?.length, 1);
+});
+
+test('custom worker brief gets missing budget and copied input details', () => {
+  const f = setupFixture(null);
+  const template = path.join(f.root, 'custom-brief.md');
+  fs.writeFileSync(template, 'Custom task: {{task}}');
+  fs.mkdirSync(path.join(f.root, 'materials', 'nested'), { recursive: true });
+  fs.writeFileSync(path.join(f.root, 'materials', 'nested', 'source.txt'), 'input');
+  fs.writeFileSync(path.join(f.root, '.herdr-boss.json'), JSON.stringify({ briefTemplate: template, imageBudget: 5 }));
+  const config = loadProjectConfig({ cwd: f.root });
+  const result = startWorker('custom', { kind: 'codex', task: 'x', allow: ['src/'], copy: ['materials/nested/source.txt'] }, {
+    config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+  });
+  const brief = fs.readFileSync(path.join(result.worktree, '.worker/brief.md'), 'utf8');
+  assert.match(brief, /Screenshot budget: 5 screenshots/);
+  assert.match(brief, /The project setting overrides the kit default\./);
+  assert.match(brief, /\.worker\/inputs\/materials\/nested\/source\.txt/);
+});
+
+test('worker start rejects unsafe copied inputs without sending a prompt', () => {
+  const f = setupFixture(null);
+  let prompted = false;
+  const herdr = (args) => { if (args[0] === 'agent' && args[1] === 'prompt') prompted = true; return f.herdr(args); };
+  assert.throws(() => runKitCommand('worker', ['start', 'demo', '--kind', 'codex', '--task', 'x', '--allow', 'src/', '--copy', '../outside'], {
+    config: f.config, herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+  }), (error) => /inside the repository/.test(error.message) && /START FAILED:/.test(error.message));
+  assert.equal(prompted, false);
 });
 
 test('failed worker start deletes only its empty branch from a non-main base', () => {
@@ -1139,7 +1212,7 @@ test('lanes reports active, off, and paused machine guard states', () => {
 function setupFixture(setup) {
   const root = temporaryRepo();
   const template = path.join(root, 'brief-template.md');
-  fs.writeFileSync(template, 'Worker {{name}}: {{task}}');
+  fs.writeFileSync(template, 'Worker {{name}}: {{task}} Inputs: {{copyPaths}}');
   fs.writeFileSync(path.join(root, '.herdr-boss.json'), JSON.stringify({ briefTemplate: template, setup }));
   const config = loadProjectConfig({ cwd: root });
   const rulesFile = path.join(root, 'rules.json');
@@ -1225,6 +1298,25 @@ test('the rendered brief lists the project evidence tiers', () => {
   assert.equal(renderBrief('Tiers: {{evidenceTiers}}', { evidenceTiers: 'local, hosted-ui, owner' }), 'Tiers: local, hosted-ui, owner');
 });
 
+test('worker brief shows the effective screenshot budget and project precedence', () => {
+  const f = setupFixture(null);
+  const template = path.join(f.root, 'brief-template.md');
+  fs.writeFileSync(template, 'Budget {{imageBudget}}. The project setting overrides the kit default.');
+  fs.writeFileSync(path.join(f.root, '.herdr-boss.json'), JSON.stringify({ imageBudget: 6, briefTemplate: template }));
+  const config = loadProjectConfig({ cwd: f.root });
+  const result = startWorker('budget', { kind: 'codex', task: 'x', allow: ['src/'] }, {
+    config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+  });
+  assert.equal(fs.readFileSync(path.join(result.worktree, '.worker/brief.md'), 'utf8'), 'Budget 6. The project setting overrides the kit default.');
+});
+
+test('default worker brief renders the effective screenshot budget', () => {
+  const template = fs.readFileSync(path.resolve('kit/templates/worker-brief.md'), 'utf8');
+  const brief = renderBrief(template, { imageBudget: 3 });
+  assert.match(brief, /View at most 3 screenshots during this session\./);
+  assert.doesNotMatch(brief, /View at most 10 screenshots during this session\./);
+});
+
 test('worker start puts the project thread limit flag in the brief', () => {
   const f = setupFixture(null);
   const cfgFile = path.join(f.root, '.herdr-boss.json');
@@ -1233,7 +1325,7 @@ test('worker start puts the project thread limit flag in the brief', () => {
   fs.writeFileSync(cfgFile, JSON.stringify({ briefTemplate: template, testThreadsFlag: '--poolOptions.forks.maxForks=2' }));
   const config = loadProjectConfig({ cwd: f.root });
   const result = startWorker('demo', { kind: 'codex', task: 'x', allow: ['src/'] }, { config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {} });
-  assert.equal(fs.readFileSync(path.join(result.worktree, '.worker', 'brief.md'), 'utf8'), 'Limit: Add `--poolOptions.forks.maxForks=2` to each test runner command.');
+  assert.equal(fs.readFileSync(path.join(result.worktree, '.worker', 'brief.md'), 'utf8'), 'Limit: Add `--poolOptions.forks.maxForks=2` to each test runner command.\n\n## Worker start details\n\nScreenshot budget: 10 screenshots. The project setting overrides the kit default.');
 });
 
 test('workers that share a checkout each get their own brief folder', () => {

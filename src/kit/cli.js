@@ -106,10 +106,10 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
   if (command === 'worker') {
     const [action, ...rest] = argv;
     if (action === 'start') {
-      const { positional, flags } = parseArgs(rest, { boolean: ['--no-worktree', '--dry-run', '--force'], repeat: ['--allow'] });
+      const { positional, flags } = parseArgs(rest, { boolean: ['--no-worktree', '--dry-run', '--force'], repeat: ['--allow', '--copy'] });
       if (positional.length !== 1) fail('Usage: worker start <name> --kind <kind> --task TEXT [options]');
-      knownFlags(flags, ['kind', 'model', 'effort', 'issue', 'task', 'taskfile', 'allow', 'base', 'orch', 'noworktree', 'dryrun', 'force']);
-      return startWorker(positional[0], {
+      knownFlags(flags, ['kind', 'model', 'effort', 'issue', 'task', 'taskfile', 'allow', 'copy', 'base', 'orch', 'noworktree', 'dryrun', 'force']);
+      try { return startWorker(positional[0], {
         kind: flags.kind,
         model: flags.model,
         effort: flags.effort,
@@ -117,12 +117,17 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
         task: flags.task,
         taskFile: flags.taskfile,
         allow: flags.allow ?? [],
+        copy: flags.copy ?? [],
         base: flags.base,
         orch: flags.orch,
         noWorktree: flags.noworktree,
         dryRun: flags.dryrun,
         force: flags.force,
-      }, { config, models: modelConfig, herdr, env, output });
+      }, { config, models: modelConfig, herdr, env, output }); }
+      catch (error) {
+        if (!/\nSTART FAILED: /.test(error.message)) error.message = `${error.message}\nSTART FAILED: ${error.message.split('\n')[0]}`;
+        throw error;
+      }
     }
     if (action === 'park' || action === 'unpark') {
       const { positional, flags } = parseArgs(rest);
