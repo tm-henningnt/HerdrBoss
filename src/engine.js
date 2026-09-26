@@ -182,7 +182,7 @@ export class Engine extends EventEmitter {
         this.memory.exhaustedFreeModels = extendFreeModelExhaustion(this.memory.exhaustedFreeModels, association, failure.retryAt, now);
       }
       clearExpiredOneOffGoals(policy, snap.quotas, now, { log: (message) => this.log('policy', message) });
-      const control = deriveControl(snap, policy, this.models, this.memory.paneSince, now);
+      const control = deriveControl(snap, policy, this.models, this.memory.paneSince, now, this.memory.exhaustedFreeModels);
       snap.herdr = herdr ? { ...herdr, panes: applyWorkerFailureStatuses(herdr.panes, workerTransitions.failures) } : herdr;
       const profileWorkspaces = Object.fromEntries(managedBrowsers.map((b) => [b.profile, control.projects[b.project]?.workspace]).filter(([, ws]) => ws));
       snap.cpuUse = cpuUse(procs, herdr?.panes || [], profileWorkspaces);
@@ -413,7 +413,7 @@ export class Engine extends EventEmitter {
       const provider = providerFor(last.kind, policy.preferredModels?.[last.kind] ?? this.models.kinds[last.kind]?.defaultModel, policy);
       const window = this.quotas.find((q) => q.provider === provider && !q.error)?.windows?.find((w) => !w.extra && w.usedPercent >= policy.autoHandoverPercent);
       if (!window) return [];
-      return [{ project: p.slug, pane: p.orch.pane, fromKind: last.kind, sessionId: null, window, target: pickSuccessor(p, last.kind, provider, policy, control) }];
+      return [{ project: p.slug, pane: p.orch.pane, fromKind: last.kind, sessionId: null, window, target: pickSuccessor(p, last.kind, provider, policy, { ...control, exhaustedFreeModels: this.memory.exhaustedFreeModels }, now) }];
     });
     const stoppedBoss = (herdr?.panes || []).filter((pane) => pane.label === 'boss' && !pane.agent).flatMap((pane) => {
       const last = this.memory.lastOrchestrators[pane.workspace];
@@ -422,7 +422,7 @@ export class Engine extends EventEmitter {
       const window = this.quotas.find((q) => q.provider === provider && !q.error)?.windows?.find((w) => !w.extra && w.usedPercent >= policy.autoHandoverPercent);
       if (!window) return [];
       const project = { excludedKinds: [], excludedModels: [] };
-      return [{ project: 'Boss', label: 'Boss', boss: true, workspace: pane.workspace, pane: pane.id, fromKind: last.kind, sessionId: null, window, target: pickSuccessor(project, last.kind, provider, policy, control) }];
+      return [{ project: 'Boss', label: 'Boss', boss: true, workspace: pane.workspace, pane: pane.id, fromKind: last.kind, sessionId: null, window, target: pickSuccessor(project, last.kind, provider, policy, { ...control, exhaustedFreeModels: this.memory.exhaustedFreeModels }, now) }];
     });
     for (const h of [...handoffCandidates(control), ...stopped, ...stoppedBoss]) {
       if (!h.window) continue;

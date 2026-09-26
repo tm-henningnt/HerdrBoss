@@ -58,9 +58,14 @@ function runScenario(t, scenario) {
   const policy = structuredClone(POLICY_DEFAULTS);
   policy.autoHandover = true;
   policy.providerModes.claude = 'ignore';
+  if (scenario.ladder) {
+    policy.orchestratorLadder = scenario.ladder;
+    policy.harnessRoutes = { pi: { 'opencode-go/deepseek-v4.1-flash': null } };
+  }
   fs.writeFileSync(path.join(dir, 'policy.json'), JSON.stringify(policy));
   fs.writeFileSync(path.join(dir, 'memory.json'), JSON.stringify({
     paneSince: {}, pushes: {}, notified: {}, lastOrchestrators: scenario.lastOrchestrators,
+    exhaustedFreeModels: scenario.exhaustedFreeModels || {},
   }));
   fs.writeFileSync(path.join(dir, 'handoffs.json'), JSON.stringify(scenario.handoffs || []));
 
@@ -107,6 +112,76 @@ test('Ignore quota still prepares successors for stopped project orchestrators a
   assert.deepEqual(boss.calls.map(({ args }) => args.slice(1, 3)), [['handoff', 'plan'], ['handoff', 'prepare']]);
   assert.equal(boss.calls[0].args[3], 'w-boss:p1');
   assert.equal(boss.calls[1].args[3], 'w-boss:p1');
+});
+
+test('automatic stopped project and Boss handovers skip actively exhausted free successor models', { timeout: 30000 }, (t) => {
+  const common = {
+    usedPercent: 98,
+    ladder: [
+      { kind: 'pi', model: 'opencode-go/deepseek-v4.1-flash' },
+      { kind: 'codex', model: 'gpt-6-luna', effort: 'xhigh' },
+    ],
+    exhaustedFreeModels: {
+      'opencode-go/deepseek-v4.1-flash': { model: 'opencode-go/deepseek-v4.1-flash', retryAt: Date.parse('2026-09-26T12:01:00.000Z') },
+    },
+  };
+  const project = runScenario(t, {
+    ...common,
+    lastOrchestrators: { 'w-alpha': { pane: 'w-alpha:p1', kind: 'claude', project: 'alpha' } },
+    herdr: {
+      workspaces: [{ id: 'w-alpha', label: 'Alpha' }],
+      panes: [{ id: 'w-alpha:p1', workspace: 'w-alpha', label: 'orch', orch: true, agent: null, status: null }],
+    },
+  });
+  const boss = runScenario(t, {
+    ...common,
+    lastOrchestrators: { 'w-boss': { pane: 'w-boss:p1', kind: 'claude', project: 'Boss', boss: true } },
+    herdr: {
+      workspaces: [{ id: 'w-boss', label: 'Boss' }],
+      panes: [{ id: 'w-boss:p1', workspace: 'w-boss', label: 'boss', orch: false, agent: null, status: null }],
+    },
+  });
+
+  for (const result of [project, boss]) {
+    const plan = result.calls.find(({ args }) => args[2] === 'plan');
+    assert.ok(plan);
+    assert.equal(plan.args[plan.args.indexOf('--to') + 1], 'codex');
+    assert.equal(plan.args[plan.args.indexOf('--model') + 1], 'gpt-6-luna');
+  }
+});
+
+test('automatic proactive project and Boss handovers skip actively exhausted free successor models', { timeout: 30000 }, (t) => {
+  const common = {
+    usedPercent: 98,
+    ladder: [
+      { kind: 'pi', model: 'opencode-go/deepseek-v4.1-flash' },
+      { kind: 'codex', model: 'gpt-6-luna', effort: 'xhigh' },
+    ],
+    exhaustedFreeModels: {
+      'opencode-go/deepseek-v4.1-flash': { model: 'opencode-go/deepseek-v4.1-flash', retryAt: Date.parse('2026-09-26T12:01:00.000Z') },
+    },
+  };
+  const project = runScenario(t, {
+    ...common,
+    herdr: {
+      workspaces: [{ id: 'w-alpha', label: 'Alpha' }],
+      panes: [{ id: 'w-alpha:p1', workspace: 'w-alpha', label: 'orch', orch: true, agent: 'claude', status: 'working', sessionId: 'source-session' }],
+    },
+  });
+  const boss = runScenario(t, {
+    ...common,
+    herdr: {
+      workspaces: [{ id: 'w-boss', label: 'Boss' }],
+      panes: [{ id: 'w-boss:p1', workspace: 'w-boss', label: 'boss', orch: false, agent: 'claude', status: 'working', sessionId: 'boss-session' }],
+    },
+  });
+
+  for (const result of [project, boss]) {
+    const plan = result.calls.find(({ args }) => args[2] === 'plan');
+    assert.ok(plan);
+    assert.equal(plan.args[plan.args.indexOf('--to') + 1], 'codex');
+    assert.equal(plan.args[plan.args.indexOf('--model') + 1], 'gpt-6-luna');
+  }
 });
 
 test('Ignore quota activates a prepared successor at the configured live quota threshold', { timeout: 30000 }, (t) => {
