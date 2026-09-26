@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
 import { DATA_DIR, LIVE_DATA_DIR, dashboardUrl } from './config.js';
-import { collectHerdr, collectQuotas, collectMachine, collectProcesses, findBrowsers, cpuUse, run } from './collect.js';
+import { collectHerdr, collectQuotas, collectMachine, collectProcesses, collectWorktreeCounts, findBrowsers, cpuUse, run } from './collect.js';
 import { evaluate, renderBulletin, fmtDuration, providerName, broadcastTargets } from './rules.js';
 import { listProjects } from './projects.js';
 import { loadModels } from './kit/config.js';
@@ -41,6 +41,8 @@ export class Engine extends EventEmitter {
     this.memory = readJson(MEMORY_FILE, { paneSince: {}, pushes: {}, notified: {} });
     this.quotas = null;
     this.quotasAt = 0;
+    this.worktreeCounts = {};
+    this.worktreeCountsAt = 0;
     this.state = readJson(STATE_FILE, null);
     this.events = [];
     try {
@@ -68,10 +70,14 @@ export class Engine extends EventEmitter {
       const refreshQuotas = !this.quotas || now - this.quotasAt > this.cfg.quotaSeconds * 1000;
       const [herdr, machine, procs, quotas] = await Promise.all([
         collectHerdr(this.cfg.orchestratorLabel).catch((e) => { errors.push(`herdr: ${e.message}`); return this.state?.herdr || null; }),
-        collectMachine().catch((e) => { errors.push(`machine: ${e.message}`); return null; }),
+        collectMachine(DATA_DIR).catch((e) => { errors.push(`machine: ${e.message}`); return null; }),
         collectProcesses().catch((e) => { errors.push(`ps: ${e.message}`); return new Map(); }),
         refreshQuotas ? collectQuotas().catch((e) => { errors.push(`codexbar: ${e.message}`); return null; }) : null,
       ]);
+      if (herdr && now - this.worktreeCountsAt >= 5 * 60 * 1000) {
+        this.worktreeCounts = await collectWorktreeCounts(herdr.panes, { now }).catch(() => this.worktreeCounts);
+        this.worktreeCountsAt = now;
+      }
       if (quotas) { this.quotas = quotas; this.quotasAt = now; recordQuotaSnapshot(quotas, new Date(now).toISOString()); }
       const managedBrowsers = Object.values(listBrowserSessions());
       const browsers = findBrowsers(procs, herdr?.panes || [], [
@@ -91,6 +97,7 @@ export class Engine extends EventEmitter {
         quotasAt: this.quotasAt ? new Date(this.quotasAt).toISOString() : null,
         quotas: this.quotas || [],
         machine,
+        worktreeCounts: this.worktreeCounts,
         herdr,
         browsers,
         managedBrowsers,

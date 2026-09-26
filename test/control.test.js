@@ -137,12 +137,16 @@ test('machine policy defaults and validates owner and CPU limits', () => {
   assert.equal(POLICY_DEFAULTS.machine.presentCpuPercent, 70);
   assert.equal(POLICY_DEFAULTS.machine.awayCpuPercent, 95);
   assert.equal(POLICY_DEFAULTS.machine.alertCooldownSeconds, 21600);
+  assert.equal(POLICY_DEFAULTS.machine.diskWarnFreePercent, 10);
+  assert.equal(POLICY_DEFAULTS.machine.diskWarnFreeGB, 20);
+  assert.equal(POLICY_DEFAULTS.machine.diskCriticalFreeGB, 5);
   assert.deepEqual(validatePolicy(policy(), models), []);
   assert.match(validatePolicy(policy({ machine: { ...POLICY_DEFAULTS.machine, presentCpuPercent: 101 } }), models).join(' '), /presentCpuPercent/);
   assert.deepEqual(validatePolicy(policy({ machine: { ...POLICY_DEFAULTS.machine, awayCpuPercent: null, awayLoadFactor: null } }), models), []);
   assert.match(validatePolicy(policy({ machine: { ...POLICY_DEFAULTS.machine, alertCooldownSeconds: -1 } }), models).join(' '), /machine.alertCooldownSeconds/);
   assert.match(validatePolicy(policy({ machine: { ...POLICY_DEFAULTS.machine, guardEnabled: 'yes' } }), models).join(' '), /machine.guardEnabled/);
   assert.match(validatePolicy(policy({ machine: { ...POLICY_DEFAULTS.machine, guardPausedUntil: 'later' } }), models).join(' '), /machine.guardPausedUntil/);
+  assert.match(validatePolicy(policy({ machine: { ...POLICY_DEFAULTS.machine, diskWarnFreePercent: 101 } }), models).join(' '), /diskWarnFreePercent/);
 });
 
 test('saved legacy off tuple migrates to guard off and restores Owner thresholds', () => {
@@ -236,12 +240,33 @@ test('machine CPU and load alerts follow guard state while memory alerts stay in
   assert.ok(paused.some((alert) => alert.key === 'machine:mem'));
 });
 
+test('disk warnings use disk thresholds with guard off and target worktree projects', () => {
+  const now = Date.parse('2026-09-26T12:00:00Z');
+  const cfg = { quota: { warnPercent: 90, criticalPercent: 98 }, machine: { memFreeWarnPercent: 15, loadWarnFactor: 2 }, providerKinds: {} };
+  const snap = { ...snapshot(), machine: { cpus: 4, load: [0, 0, 0], memFreePercent: 50, diskFreeBytes: 12 * 2 ** 30, diskFreePercent: 30 }, worktreeCounts: { w1: { linked: 3, prunable: 1 } } };
+  const alerts = evaluate(snap, cfg, {}, now, policy({ machine: { ...POLICY_DEFAULTS.machine, guardEnabled: false } })).alerts;
+  assert.equal(alerts.length, 1);
+  assert.equal(alerts[0].scope, 'w1');
+  assert.match(alerts[0].text, /3 linked worker worktree/);
+  assert.match(alerts[0].text, /1 missing\/prunable/);
+  assert.match(alerts[0].text, /herdr-boss worktree prune --apply/);
+  assert.equal(alerts[0].severity, 'warn');
+  snap.machine.diskFreeBytes = 50 * 2 ** 30;
+  snap.machine.diskFreePercent = 9.9;
+  const percentAlert = evaluate(snap, cfg, {}, now, policy({ machine: { ...POLICY_DEFAULTS.machine, guardEnabled: false } })).alerts.find((alert) => alert.key === 'machine:disk:w1');
+  assert.equal(percentAlert.severity, 'warn', 'the percent limit applies even when free GB exceeds its warning threshold');
+  snap.machine.diskFreeBytes = 4 * 2 ** 30;
+  snap.machine.diskFreePercent = 2;
+  assert.equal(evaluate(snap, cfg, {}, now, policy()).alerts.find((alert) => alert.key === 'machine:disk:w1').severity, 'critical');
+});
+
 test('bulletin states the machine guard mode and retains measured machine limits', () => {
   const cfg = { dashboardPort: 4477 };
   const snap = { ...snapshot(), updatedAt: '2026-09-26T12:00:00Z', quotas: [], lanes: {},
-    machine: { load: [9, 10, 8], cpus: 4, memFreePercent: 40, memTotalGB: 16, swapUsedMB: 0,
+    machine: { load: [9, 10, 8], cpus: 4, memFreePercent: 40, memTotalGB: 16, swapUsedMB: 0, diskFreeBytes: 18 * 2 ** 30, diskFreePercent: 18.4,
       limits: { owner: 'present', cpuPercent: 65, cpuLimit: 70, fiveMinute: 10, loadLimit: 12, guardEnabled: true, guardPausedUntil: null, guardState: 'active', guardActive: true } } };
   const bulletin = renderBulletin(snap, { alerts: [], advice: [] }, cfg);
+  assert.match(bulletin, /Disk free: 18.0 GB \(18.4%\) free on the data volume/);
   assert.match(bulletin, /Guard: active/);
   assert.match(bulletin, /Owner: present; machine CPU 65% \/ active limit 70%; 5-minute load 10 \/ active backstop 12/);
   snap.machine.load = [9, 13, 8];

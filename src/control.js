@@ -5,7 +5,7 @@ import { loadModels } from './kit/config.js';
 
 const FILE = path.join(DATA_DIR, 'policy.json');
 export const POLICY_DEFAULTS = {
-  machine: { guardEnabled: true, guardPausedUntil: null, ownerAwayMinutes: 10, presentCpuPercent: 70, awayCpuPercent: 95, presentLoadFactor: 3, awayLoadFactor: 8, alertCooldownSeconds: 21600 },
+  machine: { guardEnabled: true, guardPausedUntil: null, ownerAwayMinutes: 10, presentCpuPercent: 70, awayCpuPercent: 95, presentLoadFactor: 3, awayLoadFactor: 8, diskWarnFreePercent: 10, diskWarnFreeGB: 20, diskCriticalFreeGB: 5, alertCooldownSeconds: 21600 },
   maxWorkers: 8,
   borrowIdle: true,
   idleMinutes: 15,
@@ -146,6 +146,7 @@ export function validatePolicy(value, models) {
     for (const key of ['ownerAwayMinutes', 'presentCpuPercent']) if (!Number.isInteger(value.machine[key]) || value.machine[key] < 0 || value.machine[key] > (key === 'ownerAwayMinutes' ? 1440 : 100)) errors.push(`machine.${key} is out of range.`);
     if (value.machine.awayCpuPercent !== null && (!Number.isInteger(value.machine.awayCpuPercent) || value.machine.awayCpuPercent < 0 || value.machine.awayCpuPercent > 100)) errors.push('machine.awayCpuPercent must be null or an integer from 0 to 100.');
     for (const key of ['presentLoadFactor', 'awayLoadFactor']) if (value.machine[key] !== null && (!Number.isFinite(value.machine[key]) || value.machine[key] < 0 || value.machine[key] > 128)) errors.push(`machine.${key} must be null or a number from 0 to 128.`);
+    for (const [key, max] of [['diskWarnFreePercent', 100], ['diskWarnFreeGB', 1048576], ['diskCriticalFreeGB', 1048576]]) if (!Number.isFinite(value.machine[key]) || value.machine[key] < 0 || value.machine[key] > max) errors.push(`machine.${key} must be a number from 0 to ${max}.`);
   }
   if (!Number.isInteger(value.autoHandoverPercent) || value.autoHandoverPercent < 90 || value.autoHandoverPercent > 100) errors.push('autoHandoverPercent must be an integer from 90 to 100.');
   for (const [key, max] of [['idleMinutes', 1440], ['reservePercent', 80], ['handoffLeadMinutes', 10080]]) {

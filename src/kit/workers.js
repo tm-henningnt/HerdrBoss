@@ -929,6 +929,7 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
     run.finishedAt = entry.endedAt;
     run.outcome = entry.outcome;
     writeJsonAtomic(file, run);
+    output(`After you merge ${run.branch}, remove the worktree with herdr-boss worktree prune --apply`);
   }
   return summary;
 }
