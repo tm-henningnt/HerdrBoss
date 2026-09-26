@@ -55,7 +55,7 @@ function writeJson(file, data) {
 }
 
 export class Engine extends EventEmitter {
-  constructor(cfg, { push = cfg.push, act = true, collectors = {} } = {}) {
+  constructor(cfg, { push = cfg.push, act = true, collectors = {}, handoffRunner = run } = {}) {
     super();
     this.cfg = cfg;
     const guardReasons = [];
@@ -80,6 +80,7 @@ export class Engine extends EventEmitter {
       collectWorktreeCounts,
       ...collectors,
     };
+    this.handoffRunner = handoffRunner;
     this.state = readJson(STATE_FILE, null);
     this.events = [];
     try {
@@ -402,7 +403,7 @@ export class Engine extends EventEmitter {
       this.memory.autoHandoverAttempts[key] = now;
       writeJson(MEMORY_FILE, this.memory);
       try {
-        await run(process.execPath, [CLI_FILE, 'handoff', 'activate', item.id, '--confirmed'], { timeout: 180000 });
+        await this.handoffRunner(process.execPath, [CLI_FILE, 'handoff', 'activate', item.id, '--confirmed'], { timeout: 180000 });
         this.log('handoff', `Automatically activated ${item.toKind} successor for ${item.label || item.project}`, item.boss ? { workspace: item.workspace, pane: item.newPane } : { project: item.project, pane: item.newPane });
       } catch (e) { this.log('error', `Automatic activation for ${item.label || item.project} failed: ${String(e.stderr || e.message).slice(0, 300)}`); }
     }
@@ -411,7 +412,7 @@ export class Engine extends EventEmitter {
       if (!p.orch || p.orch.kind || last?.pane !== p.orch.pane) return [];
       const provider = providerFor(last.kind, policy.preferredModels?.[last.kind] ?? this.models.kinds[last.kind]?.defaultModel, policy);
       const window = this.quotas.find((q) => q.provider === provider && !q.error)?.windows?.find((w) => !w.extra && w.usedPercent >= policy.autoHandoverPercent);
-      if (!window || policy.providerModes[provider] === 'ignore') return [];
+      if (!window) return [];
       return [{ project: p.slug, pane: p.orch.pane, fromKind: last.kind, sessionId: null, window, target: pickSuccessor(p, last.kind, provider, policy, control) }];
     });
     const stoppedBoss = (herdr?.panes || []).filter((pane) => pane.label === 'boss' && !pane.agent).flatMap((pane) => {
@@ -419,7 +420,7 @@ export class Engine extends EventEmitter {
       if (!last?.kind || last.pane !== pane.id) return [];
       const provider = providerFor(last.kind, policy.preferredModels?.[last.kind] ?? this.models.kinds[last.kind]?.defaultModel, policy);
       const window = this.quotas.find((q) => q.provider === provider && !q.error)?.windows?.find((w) => !w.extra && w.usedPercent >= policy.autoHandoverPercent);
-      if (!window || policy.providerModes[provider] === 'ignore') return [];
+      if (!window) return [];
       const project = { excludedKinds: [], excludedModels: [] };
       return [{ project: 'Boss', label: 'Boss', boss: true, workspace: pane.workspace, pane: pane.id, fromKind: last.kind, sessionId: null, window, target: pickSuccessor(project, last.kind, provider, policy, control) }];
     });
@@ -442,9 +443,9 @@ export class Engine extends EventEmitter {
         const mode = ['codex', 'claude'].includes(h.target.kind) && h.sessionId ? 'migrate' : 'fresh';
         const effort = h.target.effort ? ['--effort', h.target.effort] : [];
         const args = [CLI_FILE, 'handoff', 'plan', h.pane, '--to', h.target.kind, '--model', h.target.model, '--mode', mode, ...effort];
-        const plan = JSON.parse(await run(process.execPath, args, { timeout: 180000 }));
+        const plan = JSON.parse(await this.handoffRunner(process.execPath, args, { timeout: 180000 }));
         const chosen = mode === 'migrate' && !plan.migration?.available ? 'fresh' : mode;
-        const prepared = JSON.parse(await run(process.execPath,
+        const prepared = JSON.parse(await this.handoffRunner(process.execPath,
           [CLI_FILE, 'handoff', 'prepare', h.pane, '--to', h.target.kind, '--model', h.target.model, '--mode', chosen, ...effort, '--auto'],
           { timeout: 300000 }));
         this.log('handoff', `Automatically prepared ${h.target.kind} successor for ${h.label || h.project}; awaiting readiness`, h.boss ? { workspace: h.workspace, pane: prepared.newPane } : { project: h.project, pane: prepared.newPane });

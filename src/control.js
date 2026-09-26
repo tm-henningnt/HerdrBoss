@@ -385,7 +385,7 @@ function distribute(slots, weights) {
 const liveWindow = (w, now) => !w.extra && Number.isFinite(w.usedPercent) && !(w.resetsAt && Date.parse(w.resetsAt) <= now);
 
 function quotaRisk(q, policy, now = Date.now()) {
-  if (policy.providerModes[q.provider] === 'ignore' || q.error) return null;
+  if (q.error) return null;
   const windows = (q.windows || []).filter((w) => liveWindow(w, now));
   const risk = windows.filter((w) => w.usedPercent >= 100 - policy.reservePercent || (w.willLast === false && w.etaSeconds != null && w.etaSeconds <= policy.handoffLeadMinutes * 60));
   return risk.sort((a, b) => b.usedPercent - a.usedPercent)[0] || null;
