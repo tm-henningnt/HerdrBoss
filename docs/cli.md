@@ -93,6 +93,19 @@ herdr-boss worker start fix-74 --kind claude --task-file brief.md --allow src/pa
 | `worker collect NAME --record --outcome done\|partial\|failed --gate-passed\|--gate-failed [--defects N] [--rework N]` | Also append the run to the ledger and record usage. |
 | `worker park NAME --reason TEXT` | Mark a worker that waits on purpose. Idle notices skip it. |
 | `worker unpark NAME` | Clear the park mark. |
+| `worker allow NAME PATH... --reason TEXT` | Approve extra paths for a running worker after a `WORKER QUESTION`. |
+
+### `worker allow NAME PATH...`
+
+Approve extra scope after a worker asks a question. Only the verified `orch` or `boss` pane may approve. `worker allow` requires `HERDR_ENV=1` and verifies the caller pane with the same checks as `worker start`.
+
+The paths must be repository-relative and inside the worker worktree. It refuses an absolute path, a parent traversal, a path that resolves outside the repository through a symlink, and every path under `.worker/`. It refuses the whole request when any path is invalid, and it refuses a finished run. A valid approval adds the new paths to the run's allowed paths and appends a history item with the paths, the reason, the time, and the verified caller pane.
+
+`worker collect` uses the approved paths. Its summary and ledger entry include the approval history. A prompt or message alone does not change the approved paths.
+
+```sh
+herdr-boss worker allow fix-74 docs/parse.md --reason "the fix also needs the parser docs"
+```
 
 ## Ledger, checks, and worktrees
 

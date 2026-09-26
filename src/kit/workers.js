@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { appendDelegatedRun, compareChangedPaths, gitChangedPaths, gitLog, readJson, validateAllowedPaths, validateWorkerReport } from './orchestration.js';
+import { appendDelegatedRun, compareChangedPaths, gitChangedPaths, gitLog, readJson, validateAllowedPaths, validateScopePaths, validateWorkerReport } from './orchestration.js';
 import { recordUsage } from '../usage.js';
 import { providerFor, selectModel, unmeteredSummary } from '../control.js';
 
@@ -669,6 +669,86 @@ export function startWorker(name, options, {
   }
 }
 
+const MAX_SCOPE_SYMLINK_HOPS = 40;
+
+// Walk a lexically inside-repository path and follow each symlink by hand.
+// existsSync hides a dangling symlink and realpathSync hides its missing target, so resolve
+// every component with lstat: a symlink to .worker or outside must be refused even when its
+// target does not exist yet.
+function resolveScopeTarget(root, target) {
+  const queue = path.relative(root, target).split(path.sep).filter(Boolean);
+  let resolved = root;
+  let hops = 0;
+  while (queue.length) {
+    const part = queue.shift();
+    if (part === '.') continue;
+    if (part === '..') { resolved = path.dirname(resolved); continue; }
+    const candidate = path.join(resolved, part);
+    let stats;
+    try { stats = fs.lstatSync(candidate); }
+    catch (error) {
+      // A missing component ends the walk. No symlink exists below it, so the rest is lexical.
+      if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return { real: path.join(resolved, part, ...queue) };
+      // Any other error is unknown. Fail closed instead of accepting the path.
+      return { error: `Path ${target} could not be resolved: ${error.message}` };
+    }
+    if (!stats.isSymbolicLink()) { resolved = candidate; continue; }
+    hops += 1;
+    if (hops > MAX_SCOPE_SYMLINK_HOPS) return { error: `Path ${target} has too many symbolic links.` };
+    let link;
+    try { link = fs.readlinkSync(candidate); }
+    catch (error) { return { error: `Path ${target} could not be resolved: ${error.message}` }; }
+    if (path.isAbsolute(link)) resolved = path.parse(link).root;
+    queue.unshift(...link.split(path.sep).filter(Boolean));
+  }
+  return { real: resolved };
+}
+
+// Repository-relative scope paths must also resolve inside the worktree and outside .worker.
+// A symlink can point at either the .worker directory or a target outside the repository.
+function scopeEscapeErrors(worktree, paths) {
+  const errors = validateScopePaths(paths);
+  if (errors.length) return errors;
+  const root = fs.realpathSync(worktree);
+  const workerDir = path.join(root, '.worker').toLowerCase();
+  for (const item of paths) {
+    const result = resolveScopeTarget(root, path.resolve(root, item));
+    if (result.error) { errors.push(result.error); continue; }
+    const real = result.real.toLowerCase();
+    if (real === workerDir || real.startsWith(`${workerDir}${path.sep}`)) {
+      errors.push(`Path ${item} resolves into .worker.`);
+      continue;
+    }
+    if (real !== root.toLowerCase() && !real.startsWith(`${root.toLowerCase()}${path.sep}`)) errors.push(`Path ${item} resolves outside the repository.`);
+  }
+  return errors;
+}
+
+// The verified orchestrator or boss pane approves extra worker scope after a WORKER QUESTION.
+export function allowWorkerScope(name, { paths = [], reason = null } = {}, {
+  config,
+  herdr = createHerdrRunner(),
+  env = process.env,
+  now = Date.now(),
+  output = console.log,
+} = {}) {
+  if (env.HERDR_ENV !== '1') throw new Error('Run worker allow from a Herdr-managed pane (HERDR_ENV=1).');
+  const caller = verifyCallerPane(env, herdr, null);
+  const { file, run } = readRun(config, name);
+  if (run.finishedAt) throw new Error(`Run ${name} is already finished at ${run.finishedAt}. Refuse changes to a finished run.`);
+  if (!reason || !String(reason).trim()) throw new Error('worker allow needs --reason TEXT.');
+  if (!paths.length) throw new Error('worker allow needs at least one path.');
+  const scopeErrors = scopeEscapeErrors(run.worktree, paths);
+  if (scopeErrors.length) throw new Error(scopeErrors.join('\n'));
+  const allowedPaths = run.allowedPaths ?? [];
+  for (const item of paths) if (!allowedPaths.includes(item)) allowedPaths.push(item);
+  run.allowedPaths = allowedPaths;
+  run.scopeExtensions = [...(run.scopeExtensions ?? []), { paths: [...paths], reason, at: new Date(now).toISOString(), by: caller.paneId }];
+  writeJsonAtomic(file, run);
+  output(`Worker ${name} may now change: ${paths.join(', ')}.`);
+  return run;
+}
+
 function readRun(config, name) {
   if (!NAME_PATTERN.test(name)) throw new Error('Worker name must match [a-z][a-z0-9-]{0,31}.');
   const file = path.join(config.runsPath, `${name}.json`);
@@ -729,6 +809,7 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
     reportedPaths: reported,
     actualPaths: changed,
     outOfScope: scopeErrors,
+    scopeExtensions: run.scopeExtensions ?? [],
     report: reportMd,
   };
     output(JSON.stringify(summary, null, 2));
@@ -751,6 +832,7 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
       defectsFound: Array.from({ length: options.defects ?? 0 }, (_value, index) => `defect ${index + 1}`),
       rework: Array.from({ length: options.rework ?? 0 }, (_value, index) => `rework ${index + 1}`),
       evidenceTier: reportJson.evidenceTier,
+      scopeExtensions: run.scopeExtensions ?? [],
     };
     const usage = reportJson.usage || {};
     const provider = Object.hasOwn(run, 'provider') ? run.provider : providerFor(run.kind, run.model);

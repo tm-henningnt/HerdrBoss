@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { loadModels, loadProjectConfig } from './config.js';
 import { appendDelegatedRun, compareChangedPaths, gitStatusPaths, readDelegatedRuns, readJson, validateAllowedPaths, validateDelegatedRun, validateWorkerReport } from './orchestration.js';
 import { buildGhArgs } from './gh.js';
-import { collectWorker, createHerdrRunner, listWorkers, parkWorker, startWorker } from './workers.js';
+import { allowWorkerScope, collectWorker, createHerdrRunner, listWorkers, parkWorker, startWorker } from './workers.js';
 import { pruneWorktrees } from './worktrees.js';
 
 const USAGE = `Kit commands:
@@ -12,6 +12,7 @@ const USAGE = `Kit commands:
   worker collect <name> [--record --outcome done|partial|failed --gate-passed|--gate-failed]
   worker list
   worker park <name> --reason TEXT | worker unpark <name>
+  worker allow <name> <path>... --reason TEXT
   worktree prune [--apply]
   ledger append --entry FILE | ledger check [--runs]
   check --report FILE | --run FILE | --worktree DIR --allow PATH...
@@ -53,7 +54,7 @@ function knownFlags(flags, allowed) {
   if (unknown.length) fail(`Unknown option: --${unknown[0]}.`);
 }
 
-function commandKit(command, argv, { output = console.log, env = process.env, herdr = createHerdrRunner() } = {}) {
+function commandKit(command, argv, { output = console.log, env = process.env, herdr = createHerdrRunner(), config: injectedConfig = null } = {}) {
   if (command === 'models') {
     const modelConfig = loadModels();
     const { positional, flags } = parseArgs(argv);
@@ -64,7 +65,7 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
     return result;
   }
 
-  const config = loadProjectConfig();
+  const config = injectedConfig ?? loadProjectConfig();
   const modelConfig = command === 'worker' ? loadModels() : null;
   if (command === 'worker') {
     const [action, ...rest] = argv;
@@ -106,11 +107,18 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
         rework: flags.rework == null ? 0 : Number(flags.rework),
       }, { config, output });
     }
+    if (action === 'allow') {
+      const { positional, flags } = parseArgs(rest);
+      knownFlags(flags, ['reason']);
+      if (positional.length < 2) fail('Usage: worker allow <name> <path>... --reason TEXT');
+      const [name, ...paths] = positional;
+      return allowWorkerScope(name, { paths, reason: flags.reason }, { config, herdr, env, output });
+    }
     if (action === 'list') {
       if (rest.length) fail('Usage: worker list');
       return listWorkers(config, { herdr, output });
     }
-    fail('Usage: worker start|collect|list');
+    fail('Usage: worker start|collect|list|park|unpark|allow');
   }
 
   if (command === 'worktree') {
