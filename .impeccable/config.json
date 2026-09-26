@@ -1,3 +1,18 @@
 {
-  "buildPath": "code"
+  "buildPath": "code",
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "side-tab",
+        "value": "*",
+        "files": [
+          "public/style.css"
+        ],
+        "createdAt": "2026-09-26T01:14:15.303Z",
+        "reason": "Owner requested D4 project-card top accents that match allocation-bar segments; detector line 171 reports that intentional 4px top stripe."
+      }
+    ]
+  }
 }
