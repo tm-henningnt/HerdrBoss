@@ -23,6 +23,7 @@ export const PROJECT_DEFAULTS = Object.freeze({
   // Flag that limits the test runner to two threads, for example "--maxWorkers=2". worker start puts it in the brief.
   testThreadsFlag: null,
   setupTimeoutSeconds: 900,
+  agentStartTimeoutMs: 90000,
 });
 
 export function findGitRoot(cwd = process.cwd()) {
@@ -60,6 +61,9 @@ export function loadProjectConfig({ cwd = process.cwd(), file = '.herdr-boss.jso
   if (config.setup !== null && (typeof config.setup !== 'string' || !config.setup.trim())) throw new Error('setup must be null or a non-empty shell command.');
   if (config.testThreadsFlag !== null && (typeof config.testThreadsFlag !== 'string' || !config.testThreadsFlag.trim())) throw new Error('testThreadsFlag must be null or a non-empty string.');
   if (!Number.isInteger(config.setupTimeoutSeconds) || config.setupTimeoutSeconds < 10) throw new Error('setupTimeoutSeconds must be an integer of 10 or more.');
+  if (!Number.isInteger(config.agentStartTimeoutMs) || config.agentStartTimeoutMs < 1 || config.agentStartTimeoutMs > 300000) {
+    throw new Error('agentStartTimeoutMs must be an integer from 1 to 300000.');
+  }
   if (!Array.isArray(config.evidenceTiers) || config.evidenceTiers.length === 0 || config.evidenceTiers.some((tier) => typeof tier !== 'string')) {
     throw new Error('evidenceTiers must be a non-empty array of strings.');
   }

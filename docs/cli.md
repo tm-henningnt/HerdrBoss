@@ -159,4 +159,5 @@ The screenshot command writes under `$TMPDIR` when it is set. Otherwise, it crea
 | `allowedModels` | all | Limit the models this project may use. |
 | `setup` | none | A shell command that runs in each new worktree before the agent starts, for example `npm ci --prefer-offline`. |
 | `setupTimeoutSeconds` | `900` | The time limit for `setup`. |
+| `agentStartTimeoutMs` | `90000` | The time limit for `herdr agent start`, from 1 to 300000 milliseconds. |
 | `testThreadsFlag` | none | The flag that limits the test runner to two threads. It goes into every brief. |

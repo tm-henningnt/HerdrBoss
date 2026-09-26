@@ -60,7 +60,11 @@ function parseHerdrJson(stdout) {
 }
 
 export function createHerdrRunner(exec = (args) => execFileSync('herdr', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })) {
-  return (args) => parseHerdrJson(exec(args));
+  return (args) => {
+    const stdout = exec(args);
+    if (args[0] === 'pane' && args[1] === 'read') return { text: stdout };
+    return parseHerdrJson(stdout);
+  };
 }
 
 // A worker in its own worktree uses .worker/. Workers that share a checkout (--no-worktree) each use .worker/<name>/.
@@ -332,7 +336,10 @@ function waitForWorkerPane(paneId, workspaceId, worktree, herdr, wait) {
   const intervalMs = 250;
   const timeoutMs = 20_000;
   let elapsedMs = 0;
+  let previousScreen = null;
+  let stableScreenMs = 0;
   while (elapsedMs <= timeoutMs) {
+    const iterationStarted = Date.now();
     try {
       const response = herdr(['pane', 'get', paneId]);
       const pane = response?.pane ?? response;
@@ -345,16 +352,43 @@ function waitForWorkerPane(paneId, workspaceId, worktree, herdr, wait) {
         const processResponse = herdr(['pane', 'process-info', '--pane', paneId]);
         const info = processResponse?.process_info ?? processResponse;
         const shellPid = Number(info?.shell_pid);
-        const foregroundOwnsShell = Number.isFinite(shellPid) && shellPid > 0
-          && (Number(info.foreground_process_group_id) === shellPid
-            || listFrom(info.foreground_processes, 'processes').some((process) => Number(process.pid) === shellPid));
-        if (foregroundOwnsShell) return;
+        const foregroundProcesses = listFrom(info.foreground_processes, 'processes');
+        const shellIsForeground = Number.isFinite(shellPid) && shellPid > 0
+          && (foregroundProcesses.length
+            ? foregroundProcesses.some((process) => Number(process.pid) === shellPid)
+            : Number(info.foreground_process_group_id) === shellPid);
+        if (shellIsForeground) {
+          const screenResponse = herdr(['pane', 'read', paneId, '--source', 'visible', '--lines', '40', '--format', 'text']);
+          const screen = typeof screenResponse === 'string'
+            ? screenResponse
+            : screenResponse?.text ?? screenResponse?.output ?? '';
+          const lastLine = String(screen).replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '').split(/\r?\n/).map((line) => line.trimEnd()).filter((line) => line.trim()).at(-1) ?? '';
+          if (/[❯➜$%#>]\s*$/.test(lastLine)) return;
+          if (screen.trim() && screen === previousScreen) {
+            stableScreenMs += Math.max(intervalMs, Date.now() - iterationStarted);
+            if (stableScreenMs >= 1000) return;
+          } else {
+            previousScreen = screen;
+            stableScreenMs = 0;
+          }
+        } else {
+          previousScreen = null;
+          stableScreenMs = 0;
+        }
+      } else {
+        previousScreen = null;
+        stableScreenMs = 0;
       }
-    } catch {}
+    } catch {
+      previousScreen = null;
+      stableScreenMs = 0;
+    }
     if (elapsedMs === timeoutMs) break;
     const delay = Math.min(intervalMs, timeoutMs - elapsedMs);
+    const checkDurationMs = Date.now() - iterationStarted;
+    const waitStarted = Date.now();
     wait(delay);
-    elapsedMs += delay;
+    elapsedMs += checkDurationMs + Math.max(delay, Date.now() - waitStarted);
   }
   throw new Error(`Worker pane ${paneId} did not become an available shell in workspace ${workspaceId} at ${worktree} within 20 seconds.`);
 }
@@ -379,7 +413,7 @@ function renderStartPlan(plan) {
     `6. Place worker in workspace ${plan.workspaceId}:`,
     `   $ herdr ${plan.paneCommand.map(displayArg).join(' ')}`,
     `7. Start agent:`,
-    `   $ herdr agent start ${displayArg(plan.name)} --kind ${displayArg(plan.kind)} --pane ${displayArg(plan.paneId)} -- ${plan.launchArgs.map(displayArg).join(' ')}`,
+    `   $ herdr agent start ${displayArg(plan.name)} --kind ${displayArg(plan.kind)} --pane ${displayArg(plan.paneId)} --timeout ${plan.agentStartTimeoutMs} -- ${plan.launchArgs.map(displayArg).join(' ')}`,
     `8. Write run record: ${plan.recordFile}`,
     `9. Send task prompt and observe agent activity:`,
     `   $ herdr agent prompt ${displayArg(plan.name)} "${briefPrompt(plan.workerDir)}"`,
@@ -482,6 +516,7 @@ export function startWorker(name, options, {
     workspaceId, paneId, paneCommand, launchArgs, recordFile, excludeFile,
     // A worker in the current worktree uses its existing dependencies, so setup runs only for a new worktree.
     setup: options.noWorktree ? null : config.setup ?? null, setupTimeoutSeconds: config.setupTimeoutSeconds ?? 900,
+    agentStartTimeoutMs: config.agentStartTimeoutMs ?? 90000,
     workerDir: workerDirName(name, !!options.noWorktree),
   };
   if (options.dryRun) {
@@ -526,16 +561,16 @@ export function startWorker(name, options, {
     }
     placement = chooseWorkerPane(workspaceId, worktree, herdr);
     paneId = placement.paneId;
-    if (placement.createdPane || placement.createdTab) waitForWorkerPane(paneId, workspaceId, worktree, herdr, wait);
+    waitForWorkerPane(paneId, workspaceId, worktree, herdr, wait);
     try {
-      herdr(['agent', 'start', name, '--kind', options.kind, '--pane', paneId, '--', ...launchArgs]);
+      herdr(['agent', 'start', name, '--kind', options.kind, '--pane', paneId, '--timeout', String(plan.agentStartTimeoutMs), '--', ...launchArgs]);
     } catch (startError) {
       // Herdr can report agent_not_ready while leaving a blocked agent in the pane.
       try { agentStarted = listFrom(herdr(['agent', 'list']), 'agents').some((agent) => getName(agent) === name); } catch {}
       if (!agentStarted && isAgentPaneBusy(startError)) {
-        wait(500);
+        waitForWorkerPane(paneId, workspaceId, worktree, herdr, wait);
         try {
-          herdr(['agent', 'start', name, '--kind', options.kind, '--pane', paneId, '--', ...launchArgs]);
+          herdr(['agent', 'start', name, '--kind', options.kind, '--pane', paneId, '--timeout', String(plan.agentStartTimeoutMs), '--', ...launchArgs]);
         } catch (retryError) {
           try { agentStarted = listFrom(herdr(['agent', 'list']), 'agents').some((agent) => getName(agent) === name); } catch {}
           throw retryError;
@@ -573,11 +608,27 @@ export function startWorker(name, options, {
       }
     }
     if (createdWorktree && !agentStarted) {
+      let worktreeRemoved = false;
       try {
         git(config.root, ['worktree', 'remove', worktree]);
-        git(config.root, ['branch', '-d', branch]);
+        worktreeRemoved = true;
       } catch (cleanupError) {
-        error.message += ` (cleanup also failed: ${cleanupError.message})`;
+        error.message += ` (worktree cleanup also failed: ${cleanupError.message})`;
+      }
+      if (!worktreeRemoved) {
+        error.message += ` Failed-start branch ${branch} was kept because its worktree could not be removed.`;
+      } else {
+        let uniqueCommits;
+        try { uniqueCommits = git(config.root, ['rev-list', `${base}..${branch}`]).trim(); }
+        catch (cleanupError) {
+          error.message += ` Failed-start branch ${branch} was kept because its commits against base ${base} could not be checked: ${cleanupError.message}`;
+        }
+        if (uniqueCommits) {
+          error.message += ` Failed-start branch ${branch} was kept because it has commits beyond base ${base}.`;
+        } else if (uniqueCommits === '') {
+          try { git(config.root, ['branch', '-D', branch]); }
+          catch (cleanupError) { error.message += ` Failed-start branch ${branch} could not be deleted: ${cleanupError.message}`; }
+        }
       }
     }
     if (agentStarted) error.message += ` Agent ${name} may still be running in pane ${paneId}; inspect it before retrying.`;

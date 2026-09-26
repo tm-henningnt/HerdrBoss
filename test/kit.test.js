@@ -7,7 +7,7 @@ import test from 'node:test';
 import { loadModels, loadProjectConfig, PROJECT_DEFAULTS } from '../src/kit/config.js';
 import { appendDelegatedRun, compareChangedPaths, gitChangedPaths, readDelegatedRuns, validateAllowedPaths, validateDelegatedRun, validateWorkerReport } from '../src/kit/orchestration.js';
 import { buildGhArgs } from '../src/kit/gh.js';
-import { collectWorker, parseWorktreeCwdProcesses, renderBrief, startWorker } from '../src/kit/workers.js';
+import { collectWorker, createHerdrRunner, parseWorktreeCwdProcesses, renderBrief, startWorker } from '../src/kit/workers.js';
 import { classifyWorktrees, pruneWorktrees } from '../src/kit/worktrees.js';
 import { usageProvider } from '../src/usage.js';
 
@@ -79,13 +79,26 @@ test('project config finds the git root and applies contract defaults', () => {
 
 test('project config reads overrides and rejects malformed allowedModels', () => {
   const root = temporaryRepo();
-  fs.writeFileSync(path.join(root, '.herdr-boss.json'), JSON.stringify({ slug: 'example', baseBranch: 'trunk', allowedModels: ['gpt-6-luna'] }));
+  fs.writeFileSync(path.join(root, '.herdr-boss.json'), JSON.stringify({ slug: 'example', baseBranch: 'trunk', allowedModels: ['gpt-6-luna'], agentStartTimeoutMs: 120000 }));
   const config = loadProjectConfig({ cwd: root });
   assert.equal(config.slug, 'example');
   assert.equal(config.baseBranch, 'trunk');
   assert.deepEqual(config.allowedModels, ['gpt-6-luna']);
+  assert.equal(config.agentStartTimeoutMs, 120000);
   fs.writeFileSync(path.join(root, '.herdr-boss.json'), JSON.stringify({ allowedModels: 'gpt-6-luna' }));
   assert.throws(() => loadProjectConfig({ cwd: root }), /allowedModels must be null or an array/);
+  for (const invalid of [0, 300001, 1.5, '90000']) {
+    fs.writeFileSync(path.join(root, '.herdr-boss.json'), JSON.stringify({ agentStartTimeoutMs: invalid }));
+    assert.throws(() => loadProjectConfig({ cwd: root }), /agentStartTimeoutMs must be an integer from 1 to 300000/);
+  }
+});
+
+test('Herdr runner returns plain pane-read text without JSON parsing', () => {
+  const runner = createHerdrRunner((args) => {
+    assert.deepEqual(args, ['pane', 'read', 'ws:p2', '--source', 'visible', '--lines', '40', '--format', 'text']);
+    return '% ';
+  });
+  assert.deepEqual(runner(['pane', 'read', 'ws:p2', '--source', 'visible', '--lines', '40', '--format', 'text']), { text: '% ' });
 });
 
 test('brief rendering fills known slots and rejects an unknown slot', () => {
@@ -211,6 +224,7 @@ test('worker start dry-run prints the plan and makes no worktree or agent change
   assert.match(output.join('\n'), /git worktree add -b demo/);
   assert.match(output.join('\n'), /Validate kind\/model\/effort: codex \/ gpt-6-sol/);
   assert.match(output.join('\n'), /herdr pane split ws:p1 --direction right --cwd/);
+  assert.match(output.join('\n'), /herdr agent start demo --kind codex --pane '<new-pane-id>' --timeout 90000 --/);
   assert.match(output.join('\n'), /Read \.worker\/brief\.md in your working directory and execute it/);
   assert.ok(calls.some((call) => call.join(' ') === 'agent list'));
   assert.ok(!fs.existsSync(config.worktreePath('demo')));
@@ -329,6 +343,7 @@ test('worker start records a real dispatch before prompting and verifies activit
       ? { pane: { pane_id: 'ws:orch', workspace_id: 'ws', label: 'orch' } }
       : { pane: { pane_id: args[2], workspace_id: 'ws', foreground_cwd: config.worktreePath('demo') } };
     if (args[0] === 'pane' && args[1] === 'process-info') return { process_info: { shell_pid: 10, foreground_process_group_id: 10 } };
+    if (args[0] === 'pane' && args[1] === 'read') return { text: '% ' };
     if (args[0] === 'agent' && args[1] === 'list') return { agents: [] };
     if (args[0] === 'tab' && args[1] === 'list') return { tabs: [{ tab_id: 'ws:t1', workspace_id: 'ws', label: 'Workers' }] };
     if (args[0] === 'pane' && args[1] === 'list') return { panes: [{ pane_id: 'ws:p1', workspace_id: 'ws', tab_id: 'ws:t1', width: 160, height: 45 }] };
@@ -371,6 +386,7 @@ test('worker start waits for a ready shell and retries agent_pane_busy once', ()
       return { pane: { pane_id: 'ws:p2', workspace_id: 'ws', foreground_cwd: paneReads < 2 ? '/tmp/starting' : config.worktreePath('demo') } };
     }
     if (args[0] === 'pane' && args[1] === 'process-info') return { process_info: { shell_pid: 10, foreground_process_group_id: 10 } };
+    if (args[0] === 'pane' && args[1] === 'read') return { text: '% ' };
     if (args[0] === 'agent' && args[1] === 'list') return { agents: [] };
     if (args[0] === 'tab' && args[1] === 'list') return { tabs: [{ tab_id: 'ws:t1', workspace_id: 'ws', label: 'Workers' }] };
     if (args[0] === 'pane' && args[1] === 'list') return { panes: [{ pane_id: 'ws:p1', workspace_id: 'ws', tab_id: 'ws:t1', width: 160, height: 45 }] };
@@ -386,8 +402,66 @@ test('worker start waits for a ready shell and retries agent_pane_busy once', ()
   assert.equal(result.pane, 'ws:p2');
   assert.equal(starts, 2);
   assert.equal(prompts, 1);
-  assert.ok(waits >= 2);
+  assert.ok(waits >= 1);
   assert.ok(paneReads >= 2);
+});
+
+test('worker start waits for a stable shell in a new tab and rechecks before a timed busy retry', () => {
+  const root = temporaryRepo();
+  const template = path.join(root, 'brief-template.md');
+  fs.writeFileSync(template, 'Worker {{name}}: {{task}}');
+  fs.writeFileSync(path.join(root, '.herdr-boss.json'), JSON.stringify({ briefTemplate: template, agentStartTimeoutMs: 120000 }));
+  const config = loadProjectConfig({ cwd: root });
+  const rulesFile = path.join(root, 'rules.json');
+  fs.writeFileSync(rulesFile, JSON.stringify({ updatedAt: new Date().toISOString(), avoidKinds: [] }));
+  const calls = [];
+  let tabCreated = false;
+  let shellReady = false;
+  let starts = 0;
+  let waits = 0;
+  let paneReads = 0;
+  const herdr = (args) => {
+    calls.push(args);
+    if (args[0] === 'pane' && args[1] === 'get') {
+      if (args[2] === 'ws:orch') return { pane: { pane_id: 'ws:orch', workspace_id: 'ws', label: 'orch' } };
+      return { pane: { pane_id: 'ws:p2', workspace_id: 'ws', foreground_cwd: config.worktreePath('demo') } };
+    }
+    if (args[0] === 'agent' && args[1] === 'list') return { agents: [] };
+    if (args[0] === 'tab' && args[1] === 'list') return { tabs: tabCreated ? [{ tab_id: 'ws:t2', workspace_id: 'ws', label: 'Workers' }] : [] };
+    if (args[0] === 'tab' && args[1] === 'create') { tabCreated = true; return { tab: { tab_id: 'ws:t2' } }; }
+    if (args[0] === 'pane' && args[1] === 'list') return { panes: [{ pane_id: 'ws:p2', workspace_id: 'ws', tab_id: 'ws:t2' }] };
+    if (args[0] === 'pane' && args[1] === 'process-info') return { process_info: {
+      shell_pid: 10,
+      foreground_process_group_id: 10,
+      foreground_processes: [{ pid: shellReady ? 10 : 11, name: shellReady ? 'zsh' : 'login' }],
+    } };
+    if (args[0] === 'pane' && args[1] === 'read') { paneReads++; return { text: 'Starting interactive shell...' }; }
+    if (args[0] === 'agent' && args[1] === 'start') {
+      starts++;
+      assert.deepEqual(args.slice(3, 9), ['--kind', 'codex', '--pane', 'ws:p2', '--timeout', '120000']);
+      if (starts === 1) {
+        shellReady = false;
+        throw Object.assign(new Error('agent_pane_busy'), { code: 'agent_pane_busy' });
+      }
+      return {};
+    }
+    if (args[0] === 'agent' && args[1] === 'prompt') return {};
+    throw new Error(`Unexpected Herdr call: ${args.join(' ')}`);
+  };
+  const result = startWorker('demo', { kind: 'codex', task: 'x', allow: ['src/'] }, {
+    config, models: loadModels(), herdr, wait: () => { waits++; shellReady = true; },
+    env: { HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'ws', HERDR_PANE_ID: 'ws:orch' }, rulesFile,
+  });
+  assert.equal(result.pane, 'ws:p2');
+  assert.equal(starts, 2);
+  assert.ok(waits >= 8, `expected separate one-second readiness waits, got ${waits}`);
+  assert.ok(paneReads >= 10, `expected stable screen reads before both starts, got ${paneReads}`);
+  const startCalls = calls.map((args, index) => [args, index]).filter(([args]) => args[0] === 'agent' && args[1] === 'start');
+  const firstStart = startCalls[0][1];
+  const secondStart = startCalls[1][1];
+  assert.ok(calls.findIndex((args) => args[0] === 'tab' && args[1] === 'create') < firstStart);
+  assert.ok(calls.slice(firstStart + 1, secondStart).some((args) => args[0] === 'pane' && args[1] === 'get' && args[2] === 'ws:p2'));
+  assert.ok(calls.slice(firstStart + 1, secondStart).some((args) => args[0] === 'pane' && args[1] === 'read'));
 });
 
 test('worker start cleans up the pane and worktree when the busy retry fails', () => {
@@ -405,6 +479,7 @@ test('worker start cleans up the pane and worktree when the busy retry fails', (
       ? { pane: { pane_id: 'ws:orch', workspace_id: 'ws', label: 'orch' } }
       : { pane: { pane_id: args[2], workspace_id: 'ws', foreground_cwd: config.worktreePath('demo') } };
     if (args[0] === 'pane' && args[1] === 'process-info') return { process_info: { shell_pid: 10, foreground_process_group_id: 10 } };
+    if (args[0] === 'pane' && args[1] === 'read') return { text: '% ' };
     if (args[0] === 'agent' && args[1] === 'list') return { agents: [] };
     if (args[0] === 'tab' && args[1] === 'list') return { tabs: [{ tab_id: 'ws:t1', workspace_id: 'ws', label: 'Workers' }] };
     if (args[0] === 'pane' && args[1] === 'list') return { panes: [{ pane_id: 'ws:p1', workspace_id: 'ws', tab_id: 'ws:t1', width: 160, height: 45 }] };
@@ -420,6 +495,61 @@ test('worker start cleans up the pane and worktree when the busy retry fails', (
   assert.equal(starts, 2);
   assert.equal(paneClosed, true);
   assert.equal(fs.existsSync(config.worktreePath('demo')), false);
+});
+
+test('failed worker start deletes only its empty branch from a non-main base', () => {
+  const root = temporaryRepo();
+  git(root, 'switch', '-c', 'integrate/wave-18');
+  fs.writeFileSync(path.join(root, 'integration.txt'), 'integration base\n');
+  git(root, 'add', 'integration.txt');
+  git(root, 'commit', '-m', 'integration base');
+  git(root, 'switch', 'main');
+  const template = path.join(root, 'brief-template.md');
+  fs.writeFileSync(template, 'Worker {{name}}: {{task}}');
+  const configFile = path.join(root, '.herdr-boss.json');
+  fs.writeFileSync(configFile, JSON.stringify({ baseBranch: 'integrate/wave-18', briefTemplate: template }));
+  const rulesFile = path.join(root, 'rules.json');
+  fs.writeFileSync(rulesFile, JSON.stringify({ updatedAt: new Date().toISOString(), avoidKinds: [] }));
+  const herdr = (args) => {
+    if (args[0] === 'pane' && args[1] === 'get') return args[2] === 'ws:orch'
+      ? { pane: { pane_id: 'ws:orch', workspace_id: 'ws', label: 'orch' } }
+      : { pane: { pane_id: args[2], workspace_id: 'ws', foreground_cwd: '/not-ready' } };
+    if (args[0] === 'agent' && args[1] === 'list') return { agents: [] };
+    if (args[0] === 'tab' && args[1] === 'list') return { tabs: [{ tab_id: 'ws:t1', workspace_id: 'ws', label: 'Workers' }] };
+    if (args[0] === 'pane' && args[1] === 'list') return { panes: [{ pane_id: 'ws:p1', workspace_id: 'ws', tab_id: 'ws:t1' }] };
+    if (args[0] === 'pane' && args[1] === 'split') return { pane: { pane_id: 'ws:p2' } };
+    if (args[0] === 'pane' && args[1] === 'close') return {};
+    throw new Error(`Unexpected Herdr call: ${args.join(' ')}`);
+  };
+  const startUntilReadinessFails = (name, config, runSetup) => assert.throws(() => startWorker(name, {
+    kind: 'codex', task: 'x', allow: ['src/'],
+  }, {
+    config, models: loadModels(), herdr, wait: () => {}, runSetup, rulesFile,
+    env: { HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'ws', HERDR_PANE_ID: 'ws:orch' },
+  }), /did not become an available shell/);
+
+  let config = loadProjectConfig({ cwd: root });
+  startUntilReadinessFails('empty-branch', config);
+  assert.equal(git(root, 'branch', '--list', 'empty-branch'), '');
+  assert.equal(fs.existsSync(config.worktreePath('empty-branch')), false);
+
+  fs.writeFileSync(configFile, JSON.stringify({ baseBranch: 'integrate/wave-18', briefTemplate: template, setup: 'commit fixture change' }));
+  config = loadProjectConfig({ cwd: root });
+  let failure;
+  try {
+    startWorker('branch-with-work', { kind: 'codex', task: 'x', allow: ['src/'] }, {
+      config, models: loadModels(), herdr, wait: () => {}, rulesFile,
+      env: { HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'ws', HERDR_PANE_ID: 'ws:orch' },
+      runSetup: (_command, worktree) => {
+        fs.writeFileSync(path.join(worktree, 'worker-change.txt'), 'keep branch\n');
+        git(worktree, 'add', 'worker-change.txt');
+        git(worktree, 'commit', '-m', 'worker change');
+      },
+    });
+  } catch (error) { failure = error; }
+  assert.match(failure?.message ?? '', /Failed-start branch branch-with-work was kept because it has commits beyond base integrate\/wave-18/);
+  assert.match(git(root, 'branch', '--list', 'branch-with-work'), /branch-with-work/);
+  assert.equal(fs.existsSync(config.worktreePath('branch-with-work')), false);
 });
 
 test('worker start submits a brief that was typed but not sent', () => {
@@ -438,6 +568,7 @@ test('worker start submits a brief that was typed but not sent', () => {
       ? { pane: { pane_id: 'ws:orch', workspace_id: 'ws', label: 'orch' } }
       : { pane: { pane_id: args[2], workspace_id: 'ws', foreground_cwd: config.worktreePath('demo') } };
     if (args[0] === 'pane' && args[1] === 'process-info') return { process_info: { shell_pid: 10, foreground_process_group_id: 10 } };
+    if (args[0] === 'pane' && args[1] === 'read') return { text: '% ' };
     if (args[0] === 'agent' && args[1] === 'list') return { agents: [] };
     if (args[0] === 'tab' && args[1] === 'list') return { tabs: [{ tab_id: 'ws:t1', workspace_id: 'ws', label: 'Workers' }] };
     if (args[0] === 'pane' && args[1] === 'list') return { panes: [{ pane_id: 'ws:p1', workspace_id: 'ws', tab_id: 'ws:t1', width: 160, height: 45 }] };
@@ -473,6 +604,7 @@ test('worker start resends a brief that never reached the agent', () => {
       ? { pane: { pane_id: 'ws:orch', workspace_id: 'ws', label: 'orch' } }
       : { pane: { pane_id: args[2], workspace_id: 'ws', foreground_cwd: config.worktreePath('demo') } };
     if (args[0] === 'pane' && args[1] === 'process-info') return { process_info: { shell_pid: 10, foreground_process_group_id: 10 } };
+    if (args[0] === 'pane' && args[1] === 'read') return { text: '% ' };
     if (args[0] === 'agent' && args[1] === 'list') return { agents: [] };
     if (args[0] === 'tab' && args[1] === 'list') return { tabs: [{ tab_id: 'ws:t1', workspace_id: 'ws', label: 'Workers' }] };
     if (args[0] === 'pane' && args[1] === 'list') return { panes: [{ pane_id: 'ws:p1', workspace_id: 'ws', tab_id: 'ws:t1', width: 160, height: 45 }] };
@@ -550,6 +682,7 @@ function setupFixture(setup) {
       ? { pane: { pane_id: 'ws:orch', workspace_id: 'ws', label: 'orch' } }
       : { pane: { pane_id: args[2], workspace_id: 'ws', foreground_cwd: paneCwd } };
     if (args[0] === 'pane' && args[1] === 'process-info') return { process_info: { shell_pid: 10, foreground_process_group_id: 10 } };
+    if (args[0] === 'pane' && args[1] === 'read') return { text: '% ' };
     if (args[0] === 'agent' && args[1] === 'list') return { agents: [] };
     if (args[0] === 'tab' && args[1] === 'list') return { tabs: [{ tab_id: 'ws:t1', workspace_id: 'ws', label: 'Workers' }] };
     if (args[0] === 'pane' && args[1] === 'list') return { panes: [{ pane_id: 'ws:p1', workspace_id: 'ws', tab_id: 'ws:t1', width: 160, height: 45 }] };
