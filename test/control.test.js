@@ -671,11 +671,16 @@ test('idle borrowing reallocates slots and quota risk offers a different harness
   assert.equal(result.handoffs[0].sessionId, 's1');
 });
 
-test('ignore quota disables handoff while preserving observed usage', () => {
+test('ignore quota keeps handover risk while leaving the provider lane open', () => {
   const p = policy({ providerModes: { ...POLICY_DEFAULTS.providerModes, claude: 'ignore' } });
-  const result = deriveControl(snapshot(), p, models);
-  assert.deepEqual(result.handoffs, []);
-  assert.equal(result.risks.claude, null);
+  const now = Date.parse('2026-09-24T17:00:00Z');
+  const snap = snapshot();
+  const result = deriveControl(snap, p, models, {}, now);
+  const lane = controlModule.laneStatus(snap.quotas, p, now).claude;
+  assert.equal(result.risks.claude?.usedPercent, 88);
+  assert.equal(result.handoffs.some((item) => item.pane === 'w1:p1'), true);
+  assert.equal(lane.state, 'open');
+  assert.equal(lane.ignored, true);
 });
 
 test('handoff target checks use the configured model route', () => {
@@ -1151,7 +1156,7 @@ test('ignored quota exhaustion closes the lane and excludes it from dispatch and
   const expired = [{ provider: 'opencodego', windows: [{ label: 'Weekly', usedPercent: 100, resetsAt: '2026-09-25T09:00:00Z' }] }];
   assert.equal(laneStatus(expired, ignored, now).opencodego.state, 'open');
   assert.equal(laneStatus([{ provider: 'opencodego', windows: [{ label: 'Weekly', usedPercent: 99, resetsAt: resetAt }] }], ignored, now).opencodego.state, 'open');
-  assert.equal(deriveControl({ ...snapshot(), quotas }, ignored, models, {}, now).risks.opencodego, null, 'ignore mode does not create pacing or handover risk');
+  assert.equal(deriveControl({ ...snapshot(), quotas }, ignored, models, {}, now).risks.opencodego.usedPercent, 100, 'ignore mode keeps live handover risk');
 });
 
 test('a near-exhaustion window keeps its reserve state under a goal', async () => {
