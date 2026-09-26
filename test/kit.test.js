@@ -323,8 +323,9 @@ test('worker collect --record uses the provider recorded at start, including nul
     }));
     const changedPolicy = { modelProviders: { [model]: 'opencodego' } };
     const usage = [];
+    const output = [];
     const collect = () => collectWorker(name, { record: true, outcome: 'done', gatePassed: true }, {
-      config: f.config, now: Date.parse('2026-09-25T17:00:00Z'), output: () => {},
+      config: f.config, now: Date.parse('2026-09-25T17:00:00Z'), output: (line) => output.push(line),
       listWorktreeProcesses: () => [],
       recordUsageFn: (event) => {
         usage.push({ ...event, recordedProvider: usageProvider(event, changedPolicy) });
@@ -345,6 +346,8 @@ test('worker collect --record uses the provider recorded at start, including nul
     assert.equal(usage[0].provider, expected);
     assert.equal(usage[0].recordedProvider, expected ?? 'unmetered-or-unknown');
     assert.equal(fs.readFileSync(f.config.ledgerPath, 'utf8').trim().split('\n').length, 1);
+    assert.ok(output.includes(`After you merge ${run.branch}, remove the worktree with herdr-boss worktree prune --apply`));
+    assert.throws(() => collect(), /already marked finished/);
   }
 });
 

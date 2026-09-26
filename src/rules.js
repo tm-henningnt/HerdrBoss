@@ -83,6 +83,18 @@ export function evaluate(snap, cfg, paneSince, now = Date.now(), policy = null) 
         text: `System memory is ${m.memFreePercent}% free. Do not start new browser or test workers. Close finished workers and their browsers.`,
       });
     }
+    if (Number.isFinite(m.diskFreeBytes) && Number.isFinite(m.diskFreePercent) && policy?.machine) {
+      const freeGB = m.diskFreeBytes / 2 ** 30;
+      const critical = freeGB < policy.machine.diskCriticalFreeGB;
+      if (critical || m.diskFreePercent < policy.machine.diskWarnFreePercent || freeGB < policy.machine.diskWarnFreeGB) {
+        for (const [workspace, counts] of Object.entries(snap.worktreeCounts || {})) {
+          if (!(counts.linked > 0)) continue;
+          alerts.push({ key: `machine:disk:${workspace}`, severity: critical ? 'critical' : 'warn', scope: workspace,
+            title: `Disk space low: ${freeGB.toFixed(1)} GB free (${m.diskFreePercent}%)`,
+            text: `The Herdr Boss data filesystem has ${freeGB.toFixed(1)} GB (${m.diskFreePercent}%) free. This project has ${counts.linked} linked worker worktree(s), including ${counts.prunable} missing/prunable. After reviewing merged work, run \`herdr-boss worktree prune --apply\` to remove safe worktrees.` });
+        }
+      }
+    }
     const guardActive = limits ? (limits.guardActive ?? (limits.guardState ? limits.guardState === 'active' : true)) : true;
     const cpuExceeded = guardActive && !!limits && limits.cpuLimit != null && limits.cpuPercent > limits.cpuLimit;
     const loadExceeded = guardActive && (limits ? limits.loadLimit != null && m.load[1] > limits.loadLimit : m.load[1] > m.cpus * cfg.machine.loadWarnFactor);
@@ -212,6 +224,10 @@ export function renderBulletin(snap, evaluation, cfg) {
   if (m) {
     L.push('', '## Machine', '');
     L.push(`- Load: ${m.load.join(' / ')} on ${m.cpus} cores`);
+    const disk = Number.isFinite(m.diskFreeBytes) && Number.isFinite(m.diskFreePercent)
+      ? `${(m.diskFreeBytes / 2 ** 30).toFixed(1)} GB (${m.diskFreePercent.toFixed(1)}%) free`
+      : 'unavailable';
+    L.push(`- Disk free: ${disk} on the data volume.`);
     const limits = m.limits;
     if (limits) {
       const guardState = limits.guardState || (limits.guardEnabled === false ? 'off' : 'active');

@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
+import fs from 'node:fs';
 
 const PATH = [path.join(os.homedir(), '.local/bin'), '/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin', process.env.PATH].join(':');
 
@@ -100,7 +101,7 @@ export async function collectQuotas() {
 
 // ---------- Machine ----------
 
-export async function collectMachine() {
+export async function collectMachine(dataDir = os.homedir()) {
   const [mp, swap, idle] = await Promise.all([
     run('memory_pressure', []).catch(() => ''),
     run('sysctl', ['-n', 'vm.swapusage']).catch(() => ''),
@@ -111,6 +112,13 @@ export async function collectMachine() {
   const swTotal = /total = ([\d.]+)M/.exec(swap);
   const ownerIdleMinutes = parseOwnerIdleMinutes(idle);
   const [l1, l5, l15] = os.loadavg();
+  let diskFreeBytes = null, diskTotalBytes = null, diskFreePercent = null;
+  try {
+    const disk = await fs.promises.statfs(dataDir);
+    diskFreeBytes = Number(disk.bavail) * Number(disk.bsize);
+    diskTotalBytes = Number(disk.blocks) * Number(disk.bsize);
+    if (diskTotalBytes > 0) diskFreePercent = diskFreeBytes / diskTotalBytes * 100;
+  } catch {}
   return {
     cpus: os.cpus().length,
     ownerIdleMinutes,
@@ -118,8 +126,44 @@ export async function collectMachine() {
     memFreePercent: free ? Number(free[1]) : null,
     swapUsedMB: sw ? Math.round(Number(sw[1])) : null,
     swapTotalMB: swTotal ? Math.round(Number(swTotal[1])) : null,
+    diskFreeBytes, diskTotalBytes, diskFreePercent,
     load: [l1, l5, l15].map((x) => +x.toFixed(2)),
   };
+}
+
+const worktreeCache = new Map();
+const WORKTREE_CACHE_MS = 5 * 60 * 1000;
+export async function collectWorktreeCounts(panes, { now = Date.now(), runner = run } = {}) {
+  const repos = new Map();
+  for (const pane of panes || []) {
+    if (!pane.orch || !pane.cwd || !pane.workspace) continue;
+    try {
+      const commonPath = path.resolve((await runner('git', ['-C', pane.cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir'], { timeout: 3000 })).trim());
+      const common = fs.existsSync(commonPath) ? fs.realpathSync(commonPath) : commonPath;
+      if (!repos.has(common)) repos.set(common, { cwd: pane.cwd, workspaces: new Set() });
+      repos.get(common).workspaces.add(pane.workspace);
+    } catch {}
+  }
+  const result = {};
+  for (const [common, repo] of repos) {
+    let cached = worktreeCache.get(common);
+    if (!cached || now - cached.at >= WORKTREE_CACHE_MS) {
+      try {
+        const out = await runner('git', ['-C', repo.cwd, 'worktree', 'list', '--porcelain'], { timeout: 3000 });
+        const entries = out.trim().split(/\n\n+/).filter(Boolean);
+        let linked = 0, prunable = 0;
+        for (const entry of entries.slice(1)) {
+          linked += 1;
+          if (/\nprunable(?: |$)/.test(`\n${entry}`)) prunable += 1;
+        }
+        cached = { at: now, linked, prunable };
+        worktreeCache.set(common, cached);
+        while (worktreeCache.size > 64) worktreeCache.delete(worktreeCache.keys().next().value);
+      } catch { worktreeCache.delete(common); continue; }
+    }
+    for (const workspace of repo.workspaces) result[workspace] = { linked: cached.linked, prunable: cached.prunable };
+  }
+  return result;
 }
 
 export function parseOwnerIdleMinutes(text) {
