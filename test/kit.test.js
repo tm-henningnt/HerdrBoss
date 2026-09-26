@@ -956,6 +956,7 @@ test('lanes prints the unmetered alternatives lane', () => {
     updatedAt: new Date().toISOString(),
     lanes: {
       codex: { state: 'pace', window: 'Weekly', usedPercent: 60, expectedPercent: 50, overPercent: 10, backOnPaceAt: new Date(Date.now() + 3600000).toISOString() },
+      opencodego: { state: 'exhausted', window: 'Monthly', usedPercent: 100, resetAt: '2026-10-23T09:00:00Z' },
       unmetered: { state: 'open', unmetered: true, byProject: { herdrboss: { opencode: ['opencode/space-bunny-free'] } } },
     },
     leastOverProvider: null,
@@ -963,6 +964,7 @@ test('lanes prints the unmetered alternatives lane', () => {
   const cli = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'src', 'cli.js');
   const output = execFileSync(process.execPath, [cli, 'lanes'], { env: { ...process.env, HOME: home, HERDR_BOSS_DIR: dir }, encoding: 'utf8' });
   assert.match(output, /codex ahead of pace/);
+  assert.match(output, /opencodego exhausted: 100% used in the Monthly window; exhausted until 2026-10-23T09:00:00Z/);
   assert.match(output, /unmetered open: herdrboss: opencode \(opencode\/space-bunny-free\)/);
 });
 

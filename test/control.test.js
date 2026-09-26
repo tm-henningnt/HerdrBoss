@@ -621,6 +621,46 @@ test('a pacing goal stays inert for an ignored provider and after a reset', asyn
   assert.equal(control.pressures.codex, null);
 });
 
+test('ignored quota exhaustion closes the lane and excludes it from dispatch and succession until the latest reset', async () => {
+  const { laneStatus, leastOverProvider, pickSuccessor, deriveControl } = await import('../src/control.js');
+  const { providerGate, describeLane } = await import('../src/kit/workers.js');
+  const now = Date.parse('2026-09-25T10:00:00Z');
+  const resetAt = '2026-09-29T09:00:00Z';
+  const quotas = [{ provider: 'opencodego', windows: [
+    { key: 'primary', label: 'Weekly', usedPercent: 100, expectedPercent: 40, resetsAt: '2026-09-27T09:00:00Z' },
+    { key: 'secondary', label: 'Monthly', usedPercent: 100, expectedPercent: 50, resetsAt: resetAt },
+    { key: 'tertiary', label: 'Extra', usedPercent: 100, extra: true, resetsAt: '2026-10-01T00:00:00Z' },
+  ] }];
+  const ignored = policy({ providerModes: { ...POLICY_DEFAULTS.providerModes, opencodego: 'ignore' } });
+  const lanes = laneStatus(quotas, ignored, now);
+  assert.equal(lanes.opencodego.state, 'exhausted');
+  assert.equal(lanes.opencodego.window, 'Monthly');
+  assert.equal(lanes.opencodego.resetAt, resetAt);
+  assert.equal(leastOverProvider({ ...lanes, codex: { state: 'pace', overPercent: 1 } }), 'codex');
+  assert.match(describeLane('opencodego', lanes.opencodego, now), /exhausted until 2026-09-29T09:00:00Z/);
+  const bulletin = renderBulletin({ ...snapshot(), updatedAt: new Date(now).toISOString(), lanes }, { alerts: [], advice: [] }, { dashboardPort: 4477 });
+  assert.match(bulletin, /exhausted until 2026-09-29T09:00:00Z/);
+  const refusal = providerGate('opencodego', { avoidProviders: ['opencodego'], leastOverProvider: null, lanes }, { now }).error;
+  assert.match(refusal, /exhausted until 2026-09-29T09:00:00Z/);
+  assert.match(providerGate('opencodego', { avoidProviders: ['opencodego'], lanes }, { now, force: true }).warning, /--force overrides/);
+
+  const targetPolicy = policy({ orchestratorLadder: [
+    { kind: 'pi', model: 'opencode-go/deepseek-v4.1-flash' },
+    { kind: 'codex', model: 'gpt-6-luna' },
+  ] });
+  const project = { excludedKinds: [], excludedModels: [] };
+  const successor = pickSuccessor(project, 'claude', 'claude', targetPolicy, {
+    globalAllowed: { pi: ['opencode-go/deepseek-v4.1-flash'], codex: ['gpt-6-luna'] },
+    risks: {}, exhausted: { opencodego: { resetAt } },
+  });
+  assert.equal(successor.kind, 'codex');
+
+  const expired = [{ provider: 'opencodego', windows: [{ label: 'Weekly', usedPercent: 100, resetsAt: '2026-09-25T09:00:00Z' }] }];
+  assert.equal(laneStatus(expired, ignored, now).opencodego.state, 'open');
+  assert.equal(laneStatus([{ provider: 'opencodego', windows: [{ label: 'Weekly', usedPercent: 99, resetsAt: resetAt }] }], ignored, now).opencodego.state, 'open');
+  assert.equal(deriveControl({ ...snapshot(), quotas }, ignored, models, {}, now).risks.opencodego, null, 'ignore mode does not create pacing or handover risk');
+});
+
 test('a near-exhaustion window keeps its reserve state under a goal', async () => {
   const { laneStatus } = await import('../src/control.js');
   const now = Date.parse('2026-09-25T10:00:00Z');

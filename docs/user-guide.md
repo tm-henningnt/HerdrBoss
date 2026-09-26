@@ -38,6 +38,7 @@ To add the shared rules to a project, follow [orchestrator-instructions.md](orch
 |---|---|
 | A quota window is at 98% or more | Critical notice. The bulletin tells orchestrators to avoid that kind. |
 | A quota window is at 90% or more | Warning notice. |
+| A live quota window is at 100% or more | The provider lane is exhausted until the latest reset among its exhausted windows. `worker start` refuses it unless you use `--force`. |
 | A quota runs out before its reset at the current pace, or its use is above the goal-adjusted pace | The provider lane is "ahead of pace". `worker start` refuses it. |
 | Free memory is below 15% | Warning notice. |
 | Active machine CPU limit or enabled 5-minute load backstop is exceeded | Stop new workers and full test suites. `worker start` refuses the dispatch, including with `--force`. |
@@ -58,8 +59,9 @@ The notice cooldown is saved as `machine.alertCooldownSeconds` in `policy.json`.
 - **open**: use it.
 - **ahead of pace**: a live window will not last to its reset, or its use is above its goal-adjusted expected use. The lane shows when it is back on pace if it is not used.
 - **near exhaustion**: the quota is inside the reserve. Only `--force` can use it.
+- **exhausted**: a live window is at 100% or more. The lane shows its label and reset time. Only `--force` can use it.
 
-A provider is open only when every live, measured window is on pace. Extra windows, such as a model-only window, do not count. When several windows are ahead of pace, the lane names the worst one: the window with the most use above its goal-adjusted expected use. A window without an expected value ranks by its used percentage.
+A provider is open only when every live, measured window is on pace and no live window is exhausted. Extra windows, such as a model-only window, do not count. When several windows are ahead of pace, the lane names the worst one: the window with the most use above its goal-adjusted expected use. A window without an expected value ranks by its used percentage. When several windows are exhausted, the lane shows the one with the latest reset.
 
 A **quota pacing goal** is the most percent of a window that you want to use by its reset. Herdr Boss scales the window's expected-use pace by `goal / 100`, so a goal of 80% makes the expected curve reach 80% at the reset. An unset goal means 100%, which preserves the normal pace. A goal does not change the reserve or near-exhaustion rules, which use the actual used percentage. A goal has no effect on a provider in `ignore` mode. A window whose reset time has passed starts fresh; usage does not carry across a reset.
 
@@ -89,7 +91,7 @@ Each model row has a box and a provider route. Clear the box to disable the mode
 
 To add a model, type its string in the harness section and select **Add model**. A model string has 1 to 128 characters. It starts with a letter or a digit. It holds only letters, digits, dots (`.`), underscores (`_`), slashes (`/`), and hyphens (`-`). The server refuses whitespace and shell or control characters. A new model shows the **local** tag and starts unmetered. Select **Remove** to delete a local model. Remove also deletes its route, its disabled entry, its preferred-model choice, and its orchestrator succession choices.
 
-Choose **Manage pace** to apply quota pacing and handover alerts. Choose **Ignore quota** to turn them off for that provider. A provider in `ignore` mode has no pacing and no handover alerts.
+Choose **Manage pace** to apply quota pacing and handover alerts. Choose **Ignore quota** to turn them off for that provider. Ignore mode does not pace windows below 100% or create pacing and handover warnings. A live window at 100% or more still exhausts the provider until its reset. Worker start refuses an exhausted provider unless you use `--force`.
 
 Set a **quota pacing goal** for each measured window. The field shows the provider and the window label, such as `Codex Weekly goal %`. A blank field means 100%. Enter a whole percentage from 0 through 100. `pacingGoals` in `policy.json` stores the value by provider and by the window key (`primary`, `secondary`, or `tertiary`). Clearing the field removes that goal and restores 100%.
 
