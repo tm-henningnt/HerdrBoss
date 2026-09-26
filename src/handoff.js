@@ -17,7 +17,10 @@ function call(command, args, cwd) {
     env: { ...process.env, PATH: `${path.join(os.homedir(), '.local/bin')}${path.delimiter}${process.env.PATH || ''}` } });
 }
 function herdr(args) {
-  const response = JSON.parse(call('herdr', args));
+  const stdout = call('herdr', args);
+  // pane read prints text, not JSON; the readiness check expects { text }.
+  if (args[0] === 'pane' && args[1] === 'read') return { text: stdout };
+  const response = JSON.parse(stdout);
   if (response.error) {
     const error = new Error(response.error.message || String(response.error));
     if (response.error.code) error.code = response.error.code;

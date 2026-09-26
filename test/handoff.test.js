@@ -54,7 +54,8 @@ if (args[0] === 'pane' && args[1] === 'process-info') {
   const foregroundPid = process.env.TEST_DELAY_SHELL === '1' && count === 1 ? 11 : 10;
   result = { process_info: { shell_pid: 10, foreground_processes: [{ pid: foregroundPid, name: foregroundPid === 10 ? 'zsh' : 'login' }] } };
 }
-if (args[0] === 'pane' && args[1] === 'read') result = { text: process.env.TEST_SHELL };
+// Real herdr prints pane read --format text as plain text, not JSON.
+if (args[0] === 'pane' && args[1] === 'read') { process.stdout.write(process.env.TEST_SHELL || ''); process.exit(0); }
 console.log(JSON.stringify({ result }));
 `);
   writeExecutable(path.join(bin, 'herdr'), `#!/bin/sh
