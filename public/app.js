@@ -239,6 +239,7 @@ function controlBlock(s) {
   if (!policyDraft || !s.control) return '';
   const d = policyDraft;
   const projects = Object.values(s.control.projects);
+  const workspaces = s.control.workspaces || [];
   let cumulative = 0;
   const shareSegments = projects.map((p) => allocationSegment(s, p, d.projects[p.slug]?.share || 0)).join('');
   const shareHandles = projects.slice(0, -1).map((p, i) => {
@@ -269,6 +270,10 @@ function controlBlock(s) {
       ${projectModels.map((m) => `<label><input type="checkbox" data-exclude-model="${esc(p.slug)}:${esc(m)}" ${x.excludedModels.includes(m) ? 'checked' : ''}> ${esc(m)}</label>`).join('')}</div></details>
     </div>`;
   }).join('');
+  const workspaceRows = workspaces.map((workspace) => {
+    const excluded = workspace.boss || (d.excludedWorkspaces || []).some((entry) => entry === workspace.label || entry === workspace.workspace);
+    return `<label class="setting-line workspace-exclusion"><span>${esc(workspace.label)}${workspace.boss ? ' · automatically excluded while the boss pane is present' : ''}</span><input type="checkbox" data-workspace-exclusion="${esc(workspace.label)}" aria-label="${esc(workspace.label)} is not a project" ${excluded ? 'checked' : ''} ${workspace.boss ? 'disabled' : ''}></label>`;
+  }).join('');
   return `<section id="control-plane"><h2>Policy settings <span class="sub">project shares are advisory · the worker CLI enforces the global cap</span></h2>
     <div class="panel control-shell">
       <div class="control-grid">
@@ -288,6 +293,7 @@ function controlBlock(s) {
         <p class="setting-help">Automatic handover tries these choices in order, skipping the current provider, unavailable quotas, and global or project exclusions. Choices outside this list are never selected automatically.</p>
         <div class="succession-list">${ladderRows}</div></div>
       <div class="allocations"><h3>Project shares <span class="sub">drag a boundary; only projects to its right rebalance · labels show set share · effective slots</span></h3>
+        <div class="workspace-exclusions"><h4>Workspace projects</h4><p class="setting-help">Clear a workspace switch to include it as a project. The Boss workspace stays excluded while its pane is labelled <code>boss</code>.</p>${workspaceRows || '<p class="empty">No live workspaces.</p>'}</div>
         <div class="allocation-bar" role="group" aria-label="Project allocation, 0 to 100 percent">${shareSegments}${shareHandles}</div>
         <div class="allocation-scale"><span>0%</span><span>100%</span></div>
         ${projectRows}</div>
@@ -419,14 +425,14 @@ function settingsView(s) {
 }
 
 function handoffBlock(s, projectSlug = null) {
-  const candidates = (s.control?.handoffs || []).filter((h) => !projectSlug || h.project === projectSlug);
+  const candidates = [...(s.control?.handoffs || []), ...(s.control?.bossHandoff ? [s.control.bossHandoff] : [])].filter((h) => !projectSlug || h.project === projectSlug);
   const project = projectSlug && s.control?.projects?.[projectSlug];
   if (project?.orch && !candidates.length) candidates.push({ project: projectSlug, pane: project.orch.pane, fromKind: project.orch.kind, target: null, window: null });
   const prepared = handoffRecords.filter((x) => ['prepared', 'preparing', 'needs-inspection'].includes(x.status) && (!projectSlug || x.project === projectSlug));
   const cards = [
     ...prepared.map((item) => {
       const output = handoffOutputs[item.id];
-      return `<article class="handoff-item panel"><div class="handoff-head"><div><b>${esc(s.control?.projects?.[item.project]?.label || item.project)}</b><p>Successor ${item.status === 'prepared' ? 'prepared' : 'needs inspection'} · ${esc(item.toKind)} / ${esc(item.model)}</p></div><span class="tag">${item.status !== 'prepared' ? 'Inspect pane' : item.automatic ? item.readyAt ? 'Ready for automatic activation' : 'Awaiting successor readiness' : 'Awaiting review'}</span></div>
+      return `<article class="handoff-item panel"><div class="handoff-head"><div><b>${esc(item.displayLabel || s.control?.projects?.[item.project]?.label || item.project)}</b><p>Successor ${item.status === 'prepared' ? 'prepared' : 'needs inspection'} · ${esc(item.toKind)} / ${esc(item.model)}</p></div><span class="tag">${item.status !== 'prepared' ? 'Inspect pane' : item.automatic ? item.readyAt ? 'Ready for automatic activation' : 'Awaiting successor readiness' : 'Awaiting review'}</span></div>
         <p>${item.status !== 'prepared' ? `Preparation stopped. Inspect pane ${esc(item.newPane)} before taking further action.` : item.automatic ? 'Automatic handover is enabled. The source remains in control until the successor reports ready and the quota reaches the activation level. You can inspect and activate it sooner.' : 'The source orchestrator still controls this project. Inspect the successor\'s response before transferring the label.'}</p>
         <div class="action-row"><button type="button" data-handoff-output="${esc(item.id)}" ${handoffBusy.has(item.id) ? 'disabled' : ''}>Inspect successor</button><span class="inline-feedback" role="status">${esc(handoffMessages[item.id] || item.promptError || '')}</span></div>
         ${output != null ? `<pre class="handoff-output">${esc(output)}</pre>${item.status === 'prepared' ? `<label class="review-check"><input type="checkbox" data-handoff-reviewed="${esc(item.id)}" ${handoffReviewed.has(item.id) ? 'checked' : ''}> I have reviewed the successor's response</label><button type="button" data-handoff-activate="${esc(item.id)}" ${!handoffReviewed.has(item.id) || handoffBusy.has(item.id) ? 'disabled' : ''}>Confirm activation</button>` : ''}` : ''}
@@ -439,11 +445,20 @@ function handoffBlock(s, projectSlug = null) {
       const model = availableModels.includes(handoffModels[h.pane]) ? handoffModels[h.pane] : availableModels.includes(h.target?.model) ? h.target.model : availableModels[0] || '';
       const efforts = models[target]?.allowedEfforts || [];
       const effort = efforts.includes(handoffEfforts[h.pane]) ? handoffEfforts[h.pane] : efforts.includes(h.target?.effort) ? h.target.effort : models[target]?.defaultEffort;
-      const mode = handoffModes[h.pane] || (['codex', 'claude'].includes(target) ? 'migrate' : 'fresh');
+      const mode = handoffModes[h.pane] || h.defaultMode || (['codex', 'claude'].includes(target) ? 'migrate' : 'fresh');
+      const modeOptions = h.defaultMode === 'fresh'
+        ? '<option value="fresh" selected>Fresh bootstrap</option>'
+        : `<option value="migrate" ${mode === 'migrate' ? 'selected' : ''}>Migrated session</option><option value="fresh" ${mode === 'fresh' ? 'selected' : ''}>Fresh bootstrap</option>`;
       const plan = handoffPlans[h.pane];
-      return `<article class="handoff-item panel"><div class="handoff-head"><div><b>${esc(s.control.projects[h.project]?.label || h.project)}</b><p>${h.window ? `${esc(h.fromKind)} is at ${h.window.usedPercent}% · ${esc(h.window.label)} quota` : `Current orchestrator · ${esc(h.fromKind)} · ${esc(h.pane)}`}</p></div><span class="tag">${h.window ? 'Handover needed' : 'Manual handover'}</span></div>
-        <p>${h.window ? 'Prepare another orchestrator before this provider becomes unavailable.' : 'Start a successor when you want to change harnesses or refresh this orchestrator.'} The current pane remains in charge until activation.</p>
-        <div class="handoff-controls"><label>Successor<select data-handoff-target="${esc(h.pane)}">${eligible.map(([kind]) => `<option value="${esc(kind)}" ${kind === target ? 'selected' : ''}>${esc(kind)}</option>`).join('')}</select></label><label>Model<select data-handoff-model="${esc(h.pane)}">${availableModels.map((name) => `<option value="${esc(name)}" ${name === model ? 'selected' : ''}>${esc(name)}</option>`).join('')}</select></label>${efforts.length ? `<label>Effort<select data-handoff-effort="${esc(h.pane)}">${efforts.map((name) => `<option value="${esc(name)}" ${name === effort ? 'selected' : ''}>${esc(name)}</option>`).join('')}</select></label>` : ''}<label>Start from<select data-handoff-mode="${esc(h.pane)}"><option value="migrate" ${mode === 'migrate' ? 'selected' : ''}>Migrated session</option><option value="fresh" ${mode === 'fresh' ? 'selected' : ''}>Fresh bootstrap</option></select></label></div>
+      const sourceDescription = h.defaultMode === 'fresh'
+        ? `Boss pane is present · no active agent · ${esc(h.pane)}`
+        : h.window ? `${esc(h.fromKind)} is at ${h.window.usedPercent}% · ${esc(h.window.label)} quota` : `Current orchestrator · ${esc(h.fromKind)} · ${esc(h.pane)}`;
+      const handoffDescription = h.defaultMode === 'fresh'
+        ? 'Start a fresh successor from this workspace and source pane.'
+        : h.window ? 'Prepare another orchestrator before this provider becomes unavailable.' : 'Start a successor when you want to change harnesses or refresh this orchestrator.';
+      return `<article class="handoff-item panel"><div class="handoff-head"><div><b>${esc(h.label || s.control.projects[h.project]?.label || h.project)}</b><p>${sourceDescription}</p></div><span class="tag">${h.window ? 'Handover needed' : 'Manual handover'}</span></div>
+        <p>${handoffDescription} ${h.defaultMode === 'fresh' ? '' : 'The current pane remains in charge until activation.'}</p>
+        <div class="handoff-controls"><label>Successor<select data-handoff-target="${esc(h.pane)}">${eligible.map(([kind]) => `<option value="${esc(kind)}" ${kind === target ? 'selected' : ''}>${esc(kind)}</option>`).join('')}</select></label><label>Model<select data-handoff-model="${esc(h.pane)}">${availableModels.map((name) => `<option value="${esc(name)}" ${name === model ? 'selected' : ''}>${esc(name)}</option>`).join('')}</select></label>${efforts.length ? `<label>Effort<select data-handoff-effort="${esc(h.pane)}">${efforts.map((name) => `<option value="${esc(name)}" ${name === effort ? 'selected' : ''}>${esc(name)}</option>`).join('')}</select></label>` : ''}<label>Start from<select data-handoff-mode="${esc(h.pane)}">${modeOptions}</select></label></div>
         <div class="action-row"><button type="button" data-handoff-plan="${esc(h.pane)}" ${!eligible.length || handoffBusy.has(h.pane) ? 'disabled' : ''}>Plan handover</button>${plan && (mode === 'fresh' || plan.migration?.available) ? `<button type="button" data-handoff-prepare="${esc(h.pane)}" ${handoffBusy.has(h.pane) ? 'disabled' : ''}>Prepare successor</button>` : ''}<span class="inline-feedback" role="status">${esc(handoffMessages[h.pane] || '')}</span></div>
         ${plan ? `<div class="plan-result">${plan.mode === 'fresh' ? 'Fresh bootstrap: the successor will read project files and the source pane.' : plan.migration?.available ? `Migration available · ${plan.migration.records ?? '?'} records · ${plan.migration.warnings ?? 0} warnings.` : `Migration unavailable: ${esc(plan.migration?.error || 'unknown reason')}. Choose fresh bootstrap and plan again.`}</div>` : ''}
       </article>`;
@@ -691,16 +706,17 @@ function machineCard(s) {
 function agentRow(p, s) {
   const since = s.paneSince?.[p.id]?.since;
   const idleSec = since && (p.status === 'idle' || p.status === 'done') ? (Date.now() - since) / 1000 : null;
-  const stale = idleSec != null && idleSec > 7200 && !p.orch;
+  const stale = idleSec != null && idleSec > 7200 && !p.orch && p.label !== 'boss';
   const browsers = (s.browsers || []).filter((b) => b.pane === p.id);
   const bTag = browsers.length ? ` <span class="tag" title="${esc(browsers.map((b) => `${b.kind} pid ${b.pid}`).join('\n'))}">${browsers.length} browser${browsers.length > 1 ? 's' : ''}</span>` : '';
   const who = p.name || p.agent || 'shell';
   const kind = p.name && p.agent ? p.agent : '';
   const status = p.agent ? p.status : 'shell';
   const meta = p.agent ? `${status}${since ? ` ${dur((Date.now() - since) / 1000)}` : ''}` : 'shell';
-  return `<li class="agent ${p.orch ? 'orch' : ''}" title="${esc(p.cwd)}">
+  const isOrchestrator = p.orch || p.label === 'boss';
+  return `<li class="agent ${isOrchestrator ? 'orch' : ''}" title="${esc(p.cwd)}">
     <span class="st ${status}"></span>
-    <div class="who">${p.orch ? '<span class="pill">orch</span>' : ''}<b>${esc(who)}</b>${kind ? `<span class="pill ghost">${esc(kind)}</span>` : ''}<span>${esc(p.title)}</span>${bTag}</div>
+    <div class="who">${isOrchestrator ? `<span class="pill">${p.label === 'boss' ? 'boss' : 'orch'}</span>` : ''}<b>${esc(who)}</b>${kind ? `<span class="pill ghost">${esc(kind)}</span>` : ''}<span>${esc(p.title)}</span>${bTag}</div>
     <span class="meta ${stale ? 'stale' : ''}">${esc(p.id.split(':')[1])} · ${esc(meta)}</span>
   </li>`;
 }
@@ -711,10 +727,11 @@ function workspacesBlock(s, slug) {
   const cards = h.workspaces.map((w) => {
     const panes = h.panes.filter((p) => p.workspace === w.id && (p.agent || p.orch));
     panes.sort((a, b) => (b.orch - a.orch) || String(a.tab).localeCompare(String(b.tab)));
-    const hasOrch = panes.some((p) => p.orch);
-    const working = panes.filter((p) => p.status === 'working').length;
+    const hasOrch = panes.some((p) => p.orch || p.label === 'boss');
+    const excluded = (s.policy?.excludedWorkspaces || []).some((entry) => entry === w.label || entry === w.id) || panes.some((p) => p.label === 'boss');
+    const working = panes.filter((p) => p.status === 'working' && p.label !== 'boss').length;
     return `<div class="panel">
-      <div class="ws-head"><b>${esc(w.label)}</b><span class="tag">${esc(w.id)} · ${panes.length} agent${panes.length === 1 ? '' : 's'}${working ? ` · ${working} working` : ''}</span></div>
+      <div class="ws-head"><b>${esc(w.label)}</b><span class="tag">${excluded ? 'Not a project · ' : ''}${esc(w.id)} · ${panes.length} agent${panes.length === 1 ? '' : 's'}${working ? ` · ${working} working` : ''}</span></div>
       <ul class="agents">${panes.map((p) => agentRow(p, s)).join('') || '<li class="empty">No agents.</li>'}</ul>
       ${hasOrch ? '' : `<div class="noorch">No orchestrator. Label one with <code>herdr pane rename &lt;pane&gt; orch</code>.</div>`}
     </div>`;
@@ -725,12 +742,13 @@ function workspacesBlock(s, slug) {
 function agentProfile(p, s) {
   const since = s.paneSince?.[p.id]?.since;
   const elapsed = since ? dur((Date.now() - since) / 1000) : null;
-  const staleWorker = !p.orch && ['idle', 'done'].includes(p.status) && since && Date.now() - since > 7200000;
+  const staleWorker = !p.orch && p.label !== 'boss' && ['idle', 'done'].includes(p.status) && since && Date.now() - since > 7200000;
   const processes = (s.browsers || []).filter((b) => b.pane === p.id);
   const name = p.name || p.agent || 'Agent';
   const task = p.title || 'No current title';
+  const isOrchestrator = p.orch || p.label === 'boss';
   return `<div class="agent-profile">
-    <div class="agent-profile-main"><span class="st ${esc(p.status || 'unknown')}" aria-hidden="true"></span><strong>${esc(name)}</strong>${p.name && p.agent ? `<span class="agent-kind">${esc(p.agent)}</span>` : ''}<span class="agent-state ${staleWorker ? 'stale' : ''}">${esc(p.status || 'unknown')}${elapsed ? ` · ${elapsed}` : ''}</span></div>
+    <div class="agent-profile-main"><span class="st ${esc(p.status || 'unknown')}" aria-hidden="true"></span><strong>${esc(name)}</strong>${isOrchestrator ? `<span class="pill">${p.label === 'boss' ? 'boss' : 'orch'}</span>` : ''}${p.name && p.agent ? `<span class="agent-kind">${esc(p.agent)}</span>` : ''}<span class="agent-state ${staleWorker ? 'stale' : ''}">${esc(p.status || 'unknown')}${elapsed ? ` · ${elapsed}` : ''}</span></div>
     <p class="agent-profile-task">${esc(task)}</p>
     <div class="agent-profile-meta"><span>Pane <code>${esc(p.id)}</code></span><span>Tab <code>${esc(p.tab || '–')}</code></span>${processes.length ? `<span title="${esc(processes.map((x) => `${x.kind} PID ${x.pid}`).join('\n'))}">${processes.length} tracked process${processes.length === 1 ? '' : 'es'}</span>` : ''}${staleWorker ? '<span class="stale">Idle over 2h</span>' : ''}</div>
   </div>`;
@@ -740,16 +758,17 @@ function agentInventory(s) {
   const h = s.herdr;
   if (!h) return '<div class="calm-state">Herdr workspace data is unavailable.</div>';
   const agents = h.panes.filter((p) => p.agent);
-  const workers = agents.filter((p) => !p.orch);
-  const summary = `<div class="agents-totals"><span><strong>${h.workspaces.length}</strong> workspaces</span><span><strong>${agents.length - workers.length}</strong> orchestrators</span><span><strong>${workers.length}</strong> workers</span><span><strong>${agents.filter((p) => p.status === 'working').length}</strong> working</span><span><strong>${agents.filter((p) => p.status === 'failed').length}</strong> failed</span></div>`;
+  const workers = agents.filter((p) => !p.orch && p.label !== 'boss');
+  const summary = `<div class="agents-totals"><span><strong>${h.workspaces.length}</strong> workspaces</span><span><strong>${agents.length - workers.length}</strong> orchestrators</span><span><strong>${workers.length}</strong> workers</span><span><strong>${agents.filter((p) => p.status === 'working' && p.label !== 'boss').length}</strong> working</span><span><strong>${agents.filter((p) => p.status === 'failed').length}</strong> failed</span></div>`;
   const rows = h.workspaces.map((w) => {
     const panes = agents.filter((p) => p.workspace === w.id);
-    const orch = panes.find((p) => p.orch);
+    const orch = panes.find((p) => p.orch || p.label === 'boss');
     const project = Object.values(s.control?.projects || {}).find((p) => p.workspace === w.id);
     const slug = project?.slug;
-    const work = panes.filter((p) => !p.orch);
-    const mode = project?.effectiveMode === 'paused' ? 'Paused' : project?.idle ? 'Idle' : 'Active';
-    return `<section class="workspace-row"><header class="workspace-row-head"><div class="workspace-title"><h2>${slug ? `<a href="/projects/${esc(slug)}">${esc(w.label)}</a>` : esc(w.label)}</h2><span class="mono">${esc(w.id)}</span></div><div class="workspace-context"><span>${mode}</span><span>${work.length} worker${work.length === 1 ? '' : 's'}</span>${slug ? `<a href="/projects/${esc(slug)}">Project details →</a>` : ''}</div></header>
+    const excluded = panes.some((p) => p.label === 'boss') || (s.policy?.excludedWorkspaces || []).some((entry) => entry === w.id || entry === w.label);
+    const work = panes.filter((p) => !p.orch && p.label !== 'boss');
+    const mode = !project && excluded ? 'Not a project' : project?.effectiveMode === 'paused' ? 'Paused' : project?.idle ? 'Idle' : 'Active';
+    return `<section class="workspace-row"><header class="workspace-row-head"><div class="workspace-title"><h2>${slug ? `<a href="/projects/${esc(slug)}">${esc(w.label)}</a>` : esc(w.label)}</h2><span class="mono">${esc(w.id)}</span>${!project && excluded ? '<span class="tag">Not a project</span>' : ''}</div><div class="workspace-context"><span>${mode}</span><span>${work.length} worker${work.length === 1 ? '' : 's'}</span>${slug ? `<a href="/projects/${esc(slug)}">Project details →</a>` : ''}</div></header>
       <div class="workspace-row-body"><div class="workspace-role"><h3>Orchestrator</h3>${orch ? agentProfile(orch, s) : '<div class="missing-orch">No labeled orchestrator. Label its Herdr pane <code>orch</code> to supervise this project.</div>'}</div>
       <div class="workspace-role workspace-workers"><h3>Workers <span>${work.length}</span></h3>${work.length ? `<ul>${work.map((p) => `<li>${agentProfile(p, s)}</li>`).join('')}</ul>` : '<p class="workspace-empty">No worker agents in this workspace.</p>'}</div></div></section>`;
   }).join('');
@@ -770,7 +789,7 @@ function segBar(c) {
 
 function projectSlugs(s) {
   const open = Object.keys(s.control?.projects || {});
-  return open.length ? open : (s.projects || []).map((p) => p.slug);
+  return s.control ? open : (s.projects || []).map((p) => p.slug);
 }
 
 function defaultProject(s) {
@@ -861,7 +880,8 @@ function fleetBlock(s) {
 }
 
 function overview(s) {
-  const handovers = (s.control?.handoffs || []).length + handoffRecords.filter((x) => ['prepared', 'preparing', 'needs-inspection'].includes(x.status) && !(s.control?.handoffs || []).some((h) => h.pane === x.sourcePane)).length;
+  const currentHandoffs = [...(s.control?.handoffs || []), ...(s.control?.bossHandoff ? [s.control.bossHandoff] : [])];
+  const handovers = currentHandoffs.length + handoffRecords.filter((x) => ['prepared', 'preparing', 'needs-inspection'].includes(x.status) && !currentHandoffs.some((h) => h.pane === x.sourcePane)).length;
   const alertCount = (s.alerts || []).filter((a) => ['warn', 'critical'].includes(a.severity) && !a.key?.startsWith('handoff:')).length;
   return [
     `<header class="page-intro"><div><h1>Overview</h1><p>${alertCount || handovers ? `${alertCount} resource alert${alertCount === 1 ? '' : 's'} · ${handovers} handover${handovers === 1 ? '' : 's'} to review` : 'Projects are operating within the current resource policy.'}</p></div><div class="capacity-readout"><strong>${s.control?.runningWorkers ?? 0}<span> / ${s.control?.maxWorkers ?? '–'}</span></strong><small>working agents</small><a href="/allocation">Adjust allocation →</a></div></header>`,
@@ -903,7 +923,7 @@ function agentsView(s) {
 }
 
 function projectsView(s, slug) {
-  const selected = slug || defaultProject(s);
+  const selected = slug && projectSlugs(s).includes(slug) ? slug : defaultProject(s);
   $crumbs.innerHTML = selected ? `/ <a href="/projects">projects</a> / ${esc((s.projects || []).find((p) => p.slug === selected)?.project || s.control?.projects?.[selected]?.label || selected)}` : '';
   return [
     '<header class="page-intro"><div><h1>Projects</h1><p>Select a project to inspect its status, work, agents, and orchestrator handover.</p></div></header>',
@@ -1213,6 +1233,7 @@ const HELP = {
     <p>The resource policy for all projects. Changes are a draft until you select <b>Apply policy</b>.</p>
     <h3>Capacity and handover</h3><p>The global limit of working agents, idle lending, the quota reserve, and automatic handover with its activation level.</p>
     <h3>Orchestrator succession</h3><p>The ranked successors for automatic handover. Use the arrows to change the order. Unlisted choices are never selected automatically.</p>
+    <h3>Workspace projects</h3><p>Clear a workspace switch to include that workspace as a project. An excluded workspace stays on Agents and shows <b>Not a project</b>. It gets no project share or worker slots. Herdr Boss stores workspace labels and resolves saved Herdr IDs to labels. The Boss workspace stays excluded while a pane is labelled <code>boss</code>.</p>
     <h3>Project shares</h3><p>Drag a boundary on the bar, or focus it and use the arrow keys. Projects to the left stay fixed; the rest share the remainder. A share is advisory. The mode sets a project to auto, active, idle, or paused.</p>
     <p>The <b>set share</b> is the share in your policy draft. The bar widths show it. The <b>effective share</b> is the number of worker slots the project has now, divided by the applied maximum of working agents. It changes only after you select <b>Apply policy</b>.</p>
     <p>A bar label such as <b>30% · 2</b> shows the set share and the effective slots. A narrow segment shows fewer labels; its tooltip shows all values.</p>
@@ -1508,6 +1529,15 @@ document.addEventListener('change', (e) => {
   if (!e.target.closest('#control-plane, #settings-plane') || !policyDraft || e.target.dataset.addModelInput) return;
   const el = e.target;
   const d = policyDraft;
+  if (el.dataset.workspaceExclusion !== undefined) {
+    const label = el.dataset.workspaceExclusion;
+    const workspace = (state.control.workspaces || []).find((item) => item.label === label);
+    d.excludedWorkspaces = (d.excludedWorkspaces || []).filter((entry) => entry !== label && entry !== workspace?.workspace);
+    if (el.checked) d.excludedWorkspaces.push(label);
+    markPolicyDirty();
+    lastRender = ''; render(true);
+    return;
+  }
   if (el.dataset.pacingEndType) {
     const [provider, key] = el.dataset.pacingEndType.split(':');
     d.pacingGoals ||= {};
@@ -1708,13 +1738,13 @@ document.addEventListener('submit', async (e) => {
 
 async function runHandoffAction(action, key) {
   if (handoffBusy.has(key)) return;
-  const h = state.control?.handoffs?.find((x) => x.pane === key) || Object.values(state.control?.projects || {}).filter((p) => p.orch?.pane === key).map((p) => ({ project: p.slug, pane: key, fromKind: p.orch.kind }))[0];
+  const h = state.control?.handoffs?.find((x) => x.pane === key) || (state.control?.bossHandoff?.pane === key ? state.control.bossHandoff : null) || Object.values(state.control?.projects || {}).filter((p) => p.orch?.pane === key).map((p) => ({ project: p.slug, pane: key, fromKind: p.orch.kind }))[0];
   const item = handoffRecords.find((x) => x.id === key);
   const selectedTarget = [...document.querySelectorAll('[data-handoff-target]')].find((x) => x.dataset.handoffTarget === key)?.value;
   const selectedModel = [...document.querySelectorAll('[data-handoff-model]')].find((x) => x.dataset.handoffModel === key)?.value;
   const selectedMode = [...document.querySelectorAll('[data-handoff-mode]')].find((x) => x.dataset.handoffMode === key)?.value;
   const selectedEffort = [...document.querySelectorAll('[data-handoff-effort]')].find((x) => x.dataset.handoffEffort === key)?.value;
-  if (action === 'activate' && !confirm(`Activate the prepared ${item?.toKind || ''} orchestrator for ${item?.project || key}? The current pane will become standby.`)) return;
+  if (action === 'activate' && !confirm(`Activate the prepared ${item?.toKind || ''} orchestrator for ${item?.displayLabel || item?.project || key}? The current pane will become standby.`)) return;
   handoffBusy.add(key);
   handoffMessages[key] = action === 'plan' ? 'Planning handover…' : action === 'prepare' ? 'Starting successor…' : action === 'output' ? 'Reading successor…' : 'Activating…';
   lastRender = ''; render();

@@ -223,3 +223,81 @@ test('the policy API saves per-harness model assignments and rejects unsafe mode
   const catalog = await (await fetch(`${base}/api/models`)).json();
   assert.ok(!catalog.pi.allowedModels.includes('opencode-go/glm-5.2'), 'the model catalog endpoint stays the kit catalog');
 });
+
+test('handoff API accepts a live boss-labeled pane without a project control entry', { timeout: 30000 }, async (t) => {
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.mkdirSync(homeDir, { recursive: true });
+  const bin = path.join(homeDir, '.local', 'bin');
+  fs.mkdirSync(bin, { recursive: true });
+  const herdr = path.join(bin, 'herdr');
+  fs.writeFileSync(herdr, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+let result = {};
+if (args[0] === 'pane' && args[1] === 'get') result = { pane: {
+  pane_id: args[2], workspace_id: 'ws-boss', label: 'boss', agent: 'codex',
+  cwd: process.cwd(), agent_session: { kind: 'id', value: 'boss-session' },
+} };
+if (args[0] === 'tab' && args[1] === 'create') result = { root_pane: { pane_id: 'ws-boss:p2' } };
+if (args[0] === 'agent' && args[1] === 'get') result = { agent_status: 'working' };
+console.log(JSON.stringify({ result }));
+`);
+  fs.chmodSync(herdr, 0o755);
+  fs.writeFileSync(path.join(dataDir, 'policy.json'), JSON.stringify({ projects: {} }));
+  fs.writeFileSync(path.join(dataDir, 'state.json'), JSON.stringify({ control: { projects: {}, risks: {} } }));
+  const cfg = loadConfig();
+  cfg.host = '127.0.0.1';
+  cfg.port = 0;
+  cfg.tickSeconds = 3600;
+  const bossHandoff = { pane: 'ws-boss:p1', workspace: 'ws-boss', label: 'Boss' };
+  let engine;
+  const { server, close } = serve(cfg, {
+    createEngine: () => {
+      engine = new EventEmitter();
+      engine.state = {
+        control: { projects: {}, bossHandoff },
+        herdr: { panes: [{ id: bossHandoff.pane, workspace: bossHandoff.workspace, label: 'boss' }] },
+        quotas: [],
+      };
+      engine.tick = async () => engine.state;
+      engine.log = () => {};
+      return engine;
+    },
+  });
+  t.after(async () => {
+    await close();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  });
+  await new Promise((resolve, reject) => {
+    server.once('listening', resolve);
+    server.once('error', reject);
+  });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const body = { project: 'Boss', pane: bossHandoff.pane, to: 'pi', model: 'opencode-go/deepseek-v4.1-flash', mode: 'fresh' };
+  const request = (route, requestBody = body) => fetch(`${base}${route}`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(requestBody),
+  });
+  const planResponse = await request('/api/handoffs/plan');
+  const planText = await planResponse.text();
+  assert.equal(planResponse.status, 200, planText);
+  const plan = JSON.parse(planText);
+  assert.equal(plan.boss, true);
+  assert.equal(plan.project, 'Boss');
+  const wrongPane = await request('/api/handoffs/plan', { ...body, pane: 'ws-boss:p9' });
+  assert.equal(wrongPane.status, 400, 'the Boss path still requires the current boss pane');
+  assert.match((await wrongPane.json()).error, /Unknown current orchestrator pane/);
+  engine.state.herdr.panes[0].label = 'orch';
+  const wrongLabel = await request('/api/handoffs/plan');
+  assert.equal(wrongLabel.status, 400, 'the Boss path requires the exact boss label');
+  assert.match((await wrongLabel.json()).error, /Unknown current orchestrator pane/);
+  engine.state.herdr.panes[0].label = 'boss';
+  const prepareResponse = await request('/api/handoffs/prepare');
+  const prepareText = await prepareResponse.text();
+  assert.equal(prepareResponse.status, 200, prepareText);
+  const prepared = JSON.parse(prepareText);
+  assert.equal(prepared.boss, true);
+  assert.equal(prepared.sourcePane, bossHandoff.pane);
+  assert.equal(prepared.status, 'prepared');
+  await close();
+  assert.equal(server.listening, false, 'the API integration stops its server');
+});

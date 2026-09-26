@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { deriveControl, loadPolicy, machineLimits, POLICY_DEFAULTS, providerFor, selectModel, validatePolicy } from '../src/control.js';
+import * as controlModule from '../src/control.js';
 import { validateUsage, usageProvider, usageSummary } from '../src/usage.js';
 import { loadModels } from '../src/kit/config.js';
 import { broadcastTargets, evaluate, renderBulletin } from '../src/rules.js';
@@ -30,6 +31,138 @@ test('policy only permits project exclusions from global availability', () => {
   assert.deepEqual(validatePolicy(p, models), []);
   p.allowedKinds = ['claude'];
   assert.match(validatePolicy(p, models).join(' '), /globally available kinds/);
+});
+
+test('workspace exclusion policy validates unique non-empty workspace labels', () => {
+  assert.deepEqual(validatePolicy(policy({ excludedWorkspaces: ['Build', 'Research'] }), models), []);
+  assert.match(validatePolicy(policy({ excludedWorkspaces: ['Build', 'Build'] }), models).join(' '), /excludedWorkspaces/);
+  assert.match(validatePolicy(policy({ excludedWorkspaces: ['  '] }), models).join(' '), /excludedWorkspaces/);
+  assert.match(validatePolicy(policy({ excludedWorkspaces: [4] }), models).join(' '), /excludedWorkspaces/);
+});
+
+test('old policies load with an empty workspace exclusion list', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-policy-workspaces-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'policy.json');
+  fs.writeFileSync(file, JSON.stringify({ projects: {} }));
+  assert.deepEqual(loadPolicy({ file, models, warn: () => {} }).excludedWorkspaces, []);
+});
+
+test('excluded workspaces do not receive project control or slots by label or Herdr ID', () => {
+  const snap = snapshot();
+  const byLabel = deriveControl(snap, policy({ maxWorkers: 6, excludedWorkspaces: ['B'] }), models);
+  assert.equal(Object.hasOwn(byLabel.projects, 'b'), false);
+  assert.equal(byLabel.runningWorkers, 1, 'the live worker still counts against global capacity');
+  const byId = deriveControl(snap, policy({ maxWorkers: 6, excludedWorkspaces: ['w2'] }), models);
+  assert.equal(Object.hasOwn(byId.projects, 'b'), false);
+  assert.equal(byId.projects.a.slots, 6);
+});
+
+test('Boss workspace migrates by pane label and preserves remaining project share proportions', (t) => {
+  assert.equal(typeof controlModule.migrateWorkspacePolicy, 'function');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-boss-policy-migration-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'policy.json');
+  const snap = snapshot();
+  snap.herdr.workspaces.push({ id: 'w-boss', label: 'Boss' });
+  snap.herdr.panes.push({ id: 'w-boss:p1', workspace: 'w-boss', label: 'boss', agent: 'codex', status: 'working' });
+  const oldPolicy = policy({ projects: {
+    boss: { share: 20, mode: 'auto', excludedKinds: [], excludedModels: [] },
+    a: { share: 50, mode: 'auto', excludedKinds: [], excludedModels: [] },
+    b: { share: 30, mode: 'auto', excludedKinds: [], excludedModels: [] },
+  }, excludedWorkspaces: ['w1'] });
+  fs.writeFileSync(file, JSON.stringify(oldPolicy));
+  const migrated = controlModule.migrateWorkspacePolicy(oldPolicy, snap, { file });
+  assert.ok(migrated.excludedWorkspaces.includes('Boss'));
+  assert.ok(migrated.excludedWorkspaces.includes('A'), 'a saved Herdr ID becomes its current label');
+  assert.equal(Object.hasOwn(migrated.projects, 'boss'), false);
+  assert.deepEqual([migrated.projects.a.share, migrated.projects.b.share], [63, 37]);
+  const persisted = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.ok(persisted.excludedWorkspaces.includes('Boss'));
+  assert.equal(Object.hasOwn(persisted.projects, 'boss'), false);
+});
+
+test('Boss policy migration does not run without a live boss-labeled pane', () => {
+  assert.equal(typeof controlModule.migrateWorkspacePolicy, 'function');
+  const snap = snapshot();
+  snap.herdr.workspaces.push({ id: 'w-boss', label: 'Boss' });
+  const oldPolicy = policy({ projects: {
+    boss: { share: 20, mode: 'auto', excludedKinds: [], excludedModels: [] },
+    a: { share: 50, mode: 'auto', excludedKinds: [], excludedModels: [] },
+    b: { share: 30, mode: 'auto', excludedKinds: [], excludedModels: [] },
+  } });
+  const migrated = controlModule.migrateWorkspacePolicy(oldPolicy, snap);
+  assert.equal(migrated.excludedWorkspaces.includes('Boss'), false);
+  assert.equal(migrated.projects.boss.share, 20);
+  assert.deepEqual([migrated.projects.a.share, migrated.projects.b.share], [50, 30]);
+});
+
+test('workspace migration keeps derived ignored routes and does not rewrite an unchanged policy', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-policy-migration-routes-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'policy.json');
+  const snap = snapshot();
+  snap.herdr.workspaces.push({ id: 'w-boss', label: 'Boss' });
+  snap.herdr.panes.push({ id: 'w-boss:p1', workspace: 'w-boss', label: 'boss', agent: 'codex', status: 'working' });
+  fs.writeFileSync(file, JSON.stringify(policy({
+    preferredModels: { codex: 'gpt-6-astra' },
+    modelProviders: { 'gpt-6-astra': 'claude' },
+    projects: {
+      boss: { share: 20, mode: 'auto', excludedKinds: [], excludedModels: [] },
+      a: { share: 50, mode: 'auto', excludedKinds: [], excludedModels: [] },
+      b: { share: 30, mode: 'auto', excludedKinds: [], excludedModels: [] },
+    },
+  })));
+  const loaded = loadPolicy({ file, models, warn: () => {} });
+  assert.deepEqual(loaded.ignoredRoutes, { codex: ['gpt-6-astra'] });
+
+  const migrated = controlModule.migrateWorkspacePolicy(loaded, snap, { file });
+  assert.deepEqual(migrated.ignoredRoutes, loaded.ignoredRoutes);
+  assert.equal(providerFor('codex', 'gpt-6-astra', migrated), null);
+  const result = deriveControl(snap, migrated, models, {}, Date.parse('2026-09-24T17:00:00Z'));
+  assert.equal(result.handoffs.some((item) => item.pane === 'w2:p1'), false, 'the ignored route must not restore a Claude quota handover for Codex');
+  const persisted = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(Object.hasOwn(persisted, 'ignoredRoutes'), false, 'derived routes stay out of the policy file');
+
+  const inode = fs.statSync(file).ino;
+  const reloaded = loadPolicy({ file, models, warn: () => {} });
+  const repeated = controlModule.migrateWorkspacePolicy(reloaded, snap, { file });
+  assert.deepEqual(repeated.ignoredRoutes, reloaded.ignoredRoutes);
+  assert.equal(fs.statSync(file).ino, inode, 'an unchanged migration does not rewrite the policy file');
+});
+
+test('Boss handover candidate survives without a Boss project entry', () => {
+  const snap = {
+    projects: [],
+    herdr: {
+      workspaces: [{ id: 'w-boss', label: 'Boss' }],
+      panes: [{ id: 'w-boss:p1', workspace: 'w-boss', label: 'boss', agent: 'codex', status: 'working', sessionId: 'boss-session' }],
+    },
+    quotas: [{ provider: 'codex', windows: [{ key: 'primary', label: 'Weekly', usedPercent: 94, willLast: false, etaSeconds: 3000, resetsAt: '2026-09-27T00:00:00Z' }] }],
+  };
+  const p = policy({ excludedWorkspaces: ['Boss'], projects: {} });
+  const result = deriveControl(snap, p, models);
+  assert.deepEqual(Object.keys(result.projects), []);
+  assert.equal(result.bossHandoff?.pane, 'w-boss:p1');
+  assert.equal(result.bossHandoff?.label, 'Boss');
+  assert.equal(result.bossHandoff?.sessionId, 'boss-session');
+});
+
+test('Boss manual handover remains available in fresh mode when its pane has no agent', () => {
+  const snap = {
+    projects: [],
+    herdr: {
+      workspaces: [{ id: 'w-boss', label: 'Boss' }],
+      panes: [{ id: 'w-boss:p1', workspace: 'w-boss', label: 'boss', agent: null, status: 'done' }],
+    },
+    quotas: [],
+  };
+  const result = deriveControl(snap, policy({ excludedWorkspaces: ['Boss'], projects: {} }), models);
+  assert.equal(result.bossHandoff?.pane, 'w-boss:p1');
+  assert.equal(result.bossHandoff?.boss, true);
+  assert.equal(result.bossHandoff?.fromKind, null);
+  assert.equal(result.bossHandoff?.sessionId, null);
+  assert.equal(result.bossHandoff?.defaultMode, 'fresh');
 });
 
 // A child process gives every call fresh module state, so the data directory and the private paths follow the

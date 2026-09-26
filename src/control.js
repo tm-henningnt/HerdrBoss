@@ -33,6 +33,8 @@ export const POLICY_DEFAULTS = {
   // A pacing goal is the most percent of a live quota window the Owner wants to use by its end.
   // It is keyed by provider and by the stable window key from quota collection. An absent goal means 100%.
   pacingGoals: {},
+  // Stable Herdr workspace labels that do not represent projects.
+  excludedWorkspaces: [],
   projects: {},
 };
 
@@ -102,7 +104,7 @@ export function loadPolicy({ file = FILE, models = null, warn = (text) => consol
       presentCpuPercent: 95, awayCpuPercent: 95, presentLoadFactor: 3, awayLoadFactor: 8,
     });
   }
-  const policy = { ...POLICY_DEFAULTS, ...stored, machine, providerModes: { ...POLICY_DEFAULTS.providerModes, ...stored.providerModes }, preferredModels: stored.preferredModels || {}, modelProviders: stored.modelProviders || {}, extraModels: stored.extraModels || {}, disabledModels: stored.disabledModels || {}, harnessRoutes: stored.harnessRoutes || {}, pacingGoals: stored.pacingGoals || {}, projects: stored.projects || {} };
+  const policy = { ...POLICY_DEFAULTS, ...stored, machine, providerModes: { ...POLICY_DEFAULTS.providerModes, ...stored.providerModes }, preferredModels: stored.preferredModels || {}, modelProviders: stored.modelProviders || {}, extraModels: stored.extraModels || {}, disabledModels: stored.disabledModels || {}, harnessRoutes: stored.harnessRoutes || {}, pacingGoals: stored.pacingGoals || {}, excludedWorkspaces: Array.isArray(stored.excludedWorkspaces) ? stored.excludedWorkspaces : [], projects: stored.projects || {} };
   policy.ignoredRoutes = legacyRouteConflicts(policy, models ?? loadModels());
   for (const [kind, list] of Object.entries(policy.ignoredRoutes)) for (const model of list) {
     const key = `${file}:${kind}/${model}:${policy.modelProviders[model]}`;
@@ -153,6 +155,9 @@ export function validatePolicy(value, models) {
     if (!Number.isInteger(value[key]) || value[key] < 0 || value[key] > max) errors.push(`${key} must be an integer from 0 to ${max}.`);
   }
   subset(value.allowedKinds, KINDS, 'allowedKinds', errors);
+  if (!Array.isArray(value.excludedWorkspaces) || value.excludedWorkspaces.some((label) => typeof label !== 'string' || !label.trim() || label !== label.trim() || label.length > 256) || new Set(value.excludedWorkspaces).size !== value.excludedWorkspaces.length) {
+    errors.push('excludedWorkspaces must be a list of unique non-empty workspace labels.');
+  }
   const extraModels = value.extraModels ?? {};
   if (!isObject(extraModels)) errors.push('extraModels must be an object.');
   else for (const [kind, list] of Object.entries(extraModels)) {
@@ -234,6 +239,44 @@ function writePolicy(value, file) {
   fs.renameSync(tmp, file);
 }
 
+// Resolve saved workspace IDs to stable labels and migrate the legacy Boss project entry
+// only when Herdr confirms a pane with the special "boss" label.
+export function migrateWorkspacePolicy(value, snap, { file = null } = {}) {
+  const ignoredRoutes = value?.ignoredRoutes;
+  const { ignoredRoutes: _derived, ...stored } = value || {};
+  const next = {
+    ...stored,
+    excludedWorkspaces: Array.isArray(stored.excludedWorkspaces) ? stored.excludedWorkspaces : [],
+    projects: isObject(stored.projects) ? Object.fromEntries(Object.entries(stored.projects).map(([slug, project]) => [slug, isObject(project) ? { ...project } : project])) : {},
+  };
+  const labelsById = new Map((snap?.herdr?.workspaces || []).filter((workspace) => workspace.id && workspace.label).map((workspace) => [workspace.id, workspace.label]));
+  next.excludedWorkspaces = [...new Set(next.excludedWorkspaces.map((entry) => labelsById.get(entry) || entry))];
+
+  const bossPane = (snap?.herdr?.panes || []).find((pane) => pane.label === 'boss');
+  const bossWorkspace = labelsById.get(bossPane?.workspace);
+  if (bossPane && bossWorkspace) {
+    next.excludedWorkspaces = [...new Set([...next.excludedWorkspaces, bossWorkspace])];
+    if (Object.hasOwn(next.projects, 'boss')) {
+      delete next.projects.boss;
+      const entries = Object.entries(next.projects);
+      const shares = entries.map(([slug, project]) => ({ slug, project, share: project?.share }));
+      const total = shares.reduce((sum, item) => sum + (Number.isInteger(item.share) && item.share >= 0 && item.share <= 100 ? item.share : 0), 0);
+      if (total > 0 && shares.every((item) => Number.isInteger(item.share) && item.share >= 0 && item.share <= 100)) {
+        const normalized = shares.map((item) => ({ ...item, exact: item.share * 100 / total }));
+        for (const item of normalized) item.project.share = Math.floor(item.exact);
+        let left = 100 - normalized.reduce((sum, item) => sum + item.project.share, 0);
+        normalized.sort((a, b) => (b.exact % 1) - (a.exact % 1) || a.slug.localeCompare(b.slug));
+        for (const item of normalized) if (left-- > 0) item.project.share++;
+      }
+    }
+  }
+
+  // Compare only persisted fields. ignoredRoutes is derived by loadPolicy and must not trigger a write each tick.
+  const changed = JSON.stringify(stored) !== JSON.stringify(next);
+  if (changed && file) writePolicy(next, file);
+  return ignoredRoutes === undefined ? next : { ...next, ignoredRoutes };
+}
+
 export function savePolicy(value, models, { file = FILE, quotas = null, now = Date.now() } = {}) {
   // ignoredRoutes is derived at load time, so a draft that carries it back does not store it.
   const { ignoredRoutes: _derived, ...stored } = value || {};
@@ -313,12 +356,16 @@ export function pickSuccessor(project, currentKind, currentProvider, policy, con
   return null;
 }
 
-export function workspaceProjects(snap) {
+export function workspaceProjects(snap, policy = POLICY_DEFAULTS) {
   const byWorkspace = new Map((snap.projects || []).filter((p) => p.workspace).map((p) => [p.workspace, p.slug]));
+  const excluded = new Set(policy?.excludedWorkspaces || []);
+  const bossWorkspaces = new Set((snap.herdr?.panes || []).filter((pane) => pane.label === 'boss').map((pane) => pane.workspace));
   return (snap.herdr?.workspaces || []).map((w) => ({
     slug: byWorkspace.get(w.id) || w.label.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-|-$/g, ''),
     workspace: w.id,
     label: w.label,
+    excluded: bossWorkspaces.has(w.id) || excluded.has(w.label) || excluded.has(w.id),
+    boss: bossWorkspaces.has(w.id),
   }));
 }
 
@@ -516,7 +563,8 @@ function displayUnmeteredModel(model) {
 
 export function deriveControl(snap, policy, baseModels, paneSince = {}, now = Date.now()) {
   const models = mergeModels(baseModels, policy);
-  const projects = workspaceProjects(snap);
+  const workspaces = workspaceProjects(snap, policy);
+  const projects = workspaces.filter((workspace) => !workspace.excluded);
   const panes = snap.herdr?.panes || [];
   const settings = {};
   const weights = {};
@@ -561,5 +609,20 @@ export function deriveControl(snap, policy, baseModels, paneSince = {}, now = Da
     const preferred = pickSuccessor(p, p.orch.kind, currentProvider, policy, { globalAllowed, risks, exhausted });
     handoffs.push({ project: p.slug, workspace: p.workspace, pane: p.orch.pane, fromKind: p.orch.kind, sessionId: p.orch.sessionId, provider: currentProvider, window, target: preferred });
   }
-  return { projects: result, runningWorkers: working.length, maxWorkers: policy.maxWorkers, globalAllowed, risks, exhausted, pressures, handoffs };
+  let bossHandoff = null;
+  const bossPane = panes.find((pane) => pane.label === 'boss');
+  if (bossPane) {
+    const kindConfig = models.kinds[bossPane.agent];
+    const currentProvider = kindConfig && providerFor(bossPane.agent, policy.preferredModels?.[bossPane.agent] ?? kindConfig.defaultModel, policy);
+    const window = risks[currentProvider] || null;
+    const bossProject = { excludedKinds: [], excludedModels: [] };
+    const target = kindConfig ? pickSuccessor(bossProject, bossPane.agent, currentProvider, policy, { globalAllowed, risks, exhausted }) : null;
+    bossHandoff = {
+      project: 'Boss', label: 'Boss', boss: true, workspace: bossPane.workspace, pane: bossPane.id,
+      fromKind: bossPane.agent || null, sessionId: bossPane.agent ? bossPane.sessionId || (bossPane.agent_session?.kind === 'id' ? bossPane.agent_session.value : null) : null,
+      provider: currentProvider, window, target,
+      ...(!bossPane.agent ? { defaultMode: 'fresh' } : {}),
+    };
+  }
+  return { projects: result, workspaces, runningWorkers: working.length, maxWorkers: policy.maxWorkers, globalAllowed, risks, exhausted, pressures, handoffs, bossHandoff };
 }

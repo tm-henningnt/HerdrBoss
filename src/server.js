@@ -34,6 +34,14 @@ async function handoffCommand(args) {
   }
 }
 
+function handoffSourceMatches(state, body) {
+  const project = state?.control?.projects?.[body.project];
+  if (project?.orch?.pane === body.pane) return true;
+  const boss = state?.control?.bossHandoff;
+  const pane = state?.herdr?.panes?.find((item) => item.id === body.pane);
+  return body.project === 'Boss' && boss?.pane === body.pane && pane?.label === 'boss' && pane.workspace === boss.workspace;
+}
+
 function send(res, code, body, type = 'application/json; charset=utf-8') {
   res.writeHead(code, { 'content-type': type, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' });
   res.end(typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body));
@@ -243,13 +251,13 @@ export function serve(cfg, { readOnlyPreview = false, createEngine = (config, op
       }
       if (p === '/api/handoffs/plan' && req.method === 'POST') {
         const body = await jsonBody(req);
-        if (!engine.state?.control?.projects?.[body.project]?.orch || engine.state.control.projects[body.project].orch.pane !== body.pane) return send(res, 400, { error: 'Unknown current orchestrator pane.' });
+        if (!handoffSourceMatches(engine.state, body)) return send(res, 400, { error: 'Unknown current orchestrator pane.' });
         if (!['codex', 'claude', 'opencode', 'pi'].includes(body.to) || !['migrate', 'fresh'].includes(body.mode) || typeof body.model !== 'string') return send(res, 400, { error: 'Choose a target harness, model, and handover mode.' });
         return send(res, 200, await handoffCommand(['plan', body.pane, '--to', body.to, '--model', body.model, '--mode', body.mode, ...(body.effort ? ['--effort', body.effort] : [])]));
       }
       if (p === '/api/handoffs/prepare' && req.method === 'POST') {
         const body = await jsonBody(req);
-        if (!engine.state?.control?.projects?.[body.project]?.orch || engine.state.control.projects[body.project].orch.pane !== body.pane) return send(res, 400, { error: 'Unknown current orchestrator pane.' });
+        if (!handoffSourceMatches(engine.state, body)) return send(res, 400, { error: 'Unknown current orchestrator pane.' });
         if (!['codex', 'claude', 'opencode', 'pi'].includes(body.to) || !['migrate', 'fresh'].includes(body.mode) || typeof body.model !== 'string') return send(res, 400, { error: 'Choose a target harness, model, and handover mode.' });
         if (listHandoffs().some((x) => x.sourcePane === body.pane && ['prepared', 'preparing', 'needs-inspection'].includes(x.status))) return send(res, 409, { error: 'A successor exists for this orchestrator. Inspect it before preparing another.' });
         return send(res, 200, await handoffCommand(['prepare', body.pane, '--to', body.to, '--model', body.model, '--mode', body.mode, ...(body.effort ? ['--effort', body.effort] : [])]));

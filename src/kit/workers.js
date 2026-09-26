@@ -516,10 +516,17 @@ export function startWorker(name, options, {
   if (!NAME_PATTERN.test(name)) throw new Error('Worker name must match [a-z][a-z0-9-]{0,31}.');
   if (env.HERDR_ENV !== '1') throw new Error('Run worker start from a Herdr-managed pane (HERDR_ENV=1).');
   const caller = verifyCallerPane(env, herdr, options.orch);
-  const liveAgents = checkLiveName(name, herdr);
   const modelConfig = models ?? JSON.parse(fs.readFileSync(new URL('../../kit/models.json', import.meta.url), 'utf8'));
   const rulesPath = rulesFile ?? path.join(env.HERDR_BOSS_DIR || path.join(os.homedir(), '.herdr-boss'), 'rules.json');
   const rules = readRules(rulesPath);
+  const callerWorkspace = Array.isArray(rules.control?.workspaces)
+    ? rules.control.workspaces.find((workspace) => workspace?.workspace === caller.workspaceId && workspace.excluded)
+    : null;
+  if (callerWorkspace) {
+    const label = callerWorkspace.label || caller.workspaceId;
+    throw new Error(`Workspace ${label} (${caller.workspaceId}) is excluded and has no worker slots.`);
+  }
+  const liveAgents = checkLiveName(name, herdr);
   const staleRules = rulesWarning(rules, now);
   if (staleRules) output(`Warning: Herdr Boss rules are older than 10 minutes or have no valid timestamp: ${rulesPath}`);
   const machineStatus = describeMachine(rules);

@@ -52,14 +52,15 @@ export function planHandoff(id, toKind, { mode = 'migrate', model = null, effort
   const target = handoffTarget(toKind, { model, effort }, policy, loadModels());
   const targetModel = target.model;
   const state = readFile(path.join(DATA_DIR, 'state.json'), {});
-  const project = Object.values(state.control?.projects || {}).find((p) => p.workspace === pane.workspace_id);
-  const slug = project?.slug || path.basename(pane.cwd).toLowerCase();
-  const settings = policy.projects[slug];
+  const boss = pane.label === 'boss';
+  const project = boss ? null : Object.values(state.control?.projects || {}).find((p) => p.workspace === pane.workspace_id);
+  const slug = boss ? 'Boss' : project?.slug || path.basename(pane.cwd).toLowerCase();
+  const settings = boss ? null : policy.projects[slug];
   if (settings?.excludedKinds?.includes(toKind) || settings?.excludedModels?.includes(targetModel)) throw new Error('Target is excluded for this project.');
   const { provider } = target;
   if (!force && provider && state.control?.risks?.[provider]) throw new Error(`${provider} is near exhaustion; use another target or --force.`);
   const sessionId = pane.agent_session?.kind === 'id' ? pane.agent_session.value : null;
-  const result = { sourcePane: id, workspace: pane.workspace_id, cwd: pane.cwd, project: slug, label: pane.label, fromKind: pane.agent, sessionId, toKind, model: targetModel, effort: target.effort, mode, provider, migration: null };
+  const result = { sourcePane: id, workspace: pane.workspace_id, cwd: pane.cwd, project: slug, label: pane.label, displayLabel: boss ? 'Boss' : project?.label || slug, boss, fromKind: pane.agent, sessionId, toKind, model: targetModel, effort: target.effort, mode, provider, migration: null };
   if (mode === 'migrate') {
     if (!sessionId) result.migration = { available: false, error: 'Herdr has no native session ID for this pane.' };
     else if (!['codex', 'claude'].includes(toKind)) result.migration = { available: false, error: 'Automated resume is available for Codex and Claude targets. Use fresh mode for other kinds.' };
@@ -144,7 +145,8 @@ export function activateHandoff(id, { confirmed = false } = {}) {
   } catch { item.peerPanes = [item.sourcePane]; }
   save(records);
   const roster = item.peerPanes.length ? ` Existing agent panes in your workspace: ${item.peerPanes.join(', ')}.` : ' No other agents remain in your workspace.';
-  try { herdr(['agent', 'prompt', item.newPane, `[herdr-boss] Handover activated. You now control this project.${roster} The previous orchestrator pane ${item.sourcePane} is standby. Read the current Herdr Boss bulletin, check each agent's work, and resume orchestration within the current policy.`]); }
+  const responsibility = item.boss ? 'Herdr Boss orchestration' : `the ${item.project} project`;
+  try { herdr(['agent', 'prompt', item.newPane, `[herdr-boss] Handover activated. You now control ${responsibility}.${roster} The previous orchestrator pane ${item.sourcePane} is standby. Read the current Herdr Boss bulletin, check each agent's work, and resume orchestration within the current policy.`]); }
   catch (e) { item.activationPromptError = String(e.stderr || e.message).slice(0, 500); save(records); }
   return item;
 }

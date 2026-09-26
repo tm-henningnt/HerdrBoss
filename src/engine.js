@@ -7,7 +7,7 @@ import { collectHerdr, collectQuotas, collectMachine, collectProcesses, collectW
 import { evaluate, renderBulletin, fmtDuration, providerName, broadcastTargets } from './rules.js';
 import { listProjects } from './projects.js';
 import { loadModels } from './kit/config.js';
-import { loadPolicy, clearExpiredOneOffGoals, deriveControl, providerFor, pickSuccessor, laneStatus, leastOverProvider, machineLimits, unmeteredLane } from './control.js';
+import { loadPolicy, clearExpiredOneOffGoals, deriveControl, migrateWorkspacePolicy, providerFor, pickSuccessor, laneStatus, leastOverProvider, machineLimits, unmeteredLane } from './control.js';
 import { recordQuotaSnapshot } from './usage.js';
 import { listBrowserSessions } from './browser-pool.js';
 import { listHandoffs, expireHandoff } from './handoff.js';
@@ -19,6 +19,11 @@ const BULLETIN_FILE = path.join(DATA_DIR, 'bulletin.md');
 const EVENTS_FILE = path.join(DATA_DIR, 'events.jsonl');
 const CLI_FILE = fileURLToPath(new URL('./cli.js', import.meta.url));
 const SEV = { info: 0, warn: 1, critical: 2 };
+const POLICY_FILE = path.join(DATA_DIR, 'policy.json');
+
+function handoffCandidates(control) {
+  return [...(control.handoffs || []), ...(control.bossHandoff ? [control.bossHandoff] : [])];
+}
 
 export function alertPromptDue(alert, record, now, cooldown) {
   if (alert.immediate) return !record;
@@ -134,7 +139,7 @@ export class Engine extends EventEmitter {
         errors,
       };
       snap.projects = listProjects();
-      const policy = loadPolicy();
+      const policy = migrateWorkspacePolicy(loadPolicy(), snap, { file: POLICY_FILE });
       clearExpiredOneOffGoals(policy, snap.quotas, now, { log: (message) => this.log('policy', message) });
       const control = deriveControl(snap, policy, this.models, this.memory.paneSince, now);
       snap.herdr = herdr ? { ...herdr, panes: applyWorkerFailureStatuses(herdr.panes, workerTransitions.failures) } : herdr;
@@ -153,6 +158,7 @@ export class Engine extends EventEmitter {
       snap.control = control;
       this.memory.lastOrchestrators ||= {};
       for (const p of Object.values(control.projects)) if (p.orch?.kind) this.memory.lastOrchestrators[p.workspace] = { pane: p.orch.pane, kind: p.orch.kind, project: p.slug };
+      for (const pane of herdr?.panes || []) if (pane.label === 'boss' && pane.agent) this.memory.lastOrchestrators[pane.workspace] = { pane: pane.id, kind: pane.agent, project: 'Boss', label: 'Boss', boss: true };
       if (this.act) await this.reap(browsers);
       // A prepared successor waits idle by design, so the idle-worker rule skips it.
       try { snap.standbyPanes = listHandoffs().filter((h) => ['preparing', 'prepared', 'needs-inspection'].includes(h.status)).map((h) => h.newPane); }
@@ -201,15 +207,14 @@ export class Engine extends EventEmitter {
         evaluation.alerts.push({ key: `quota:recovered:${id}:${recovery.resetsAt}`, severity: 'info', scope: 'all',
           title: 'Quota restriction cleared', text: recovery.text });
       }
-      for (const h of control.handoffs) {
-        const p = control.projects[h.project];
+      for (const h of handoffCandidates(control).filter((candidate) => candidate.window)) {
         evaluation.alerts.push({
           key: `handoff:${h.workspace}:${h.provider}:${h.window.resetsAt}`,
           severity: h.window.usedPercent >= 98 ? 'critical' : 'warn',
           // The Boss's own handover goes to the Owner, not to the Boss pane itself.
-          scope: (herdr?.panes || []).some((x) => x.id === h.pane && x.label === 'boss') ? 'user' : h.workspace,
+          scope: h.boss || (herdr?.panes || []).some((x) => x.id === h.pane && x.label === 'boss') ? 'user' : h.workspace,
           suppressPrompt: h.window.usedPercent >= 98,
-          title: `Prepare ${h.project} orchestrator handover`,
+          title: `Prepare ${h.label || h.project} orchestrator handover`,
           text: h.target
             ? `${h.provider} is at ${h.window.usedPercent}% in its ${h.window.label} window. Prepare a ${h.target.kind} (${h.target.model}${h.target.effort ? `, ${h.target.effort}` : ''}) successor before the orchestrator runs out. Use herdr-boss handoff plan ${h.pane} --to ${h.target.kind} --model ${h.target.model}${h.target.effort ? ` --effort ${h.target.effort}` : ''}, then handoff prepare after review. Keep the current orchestrator until the successor is ready.`
             : `${h.provider} is at ${h.window.usedPercent}% in its ${h.window.label} window, but no eligible choice remains in the orchestrator succession ladder. Review Allocation and prepare a successor manually before this quota runs out.`,
@@ -219,7 +224,7 @@ export class Engine extends EventEmitter {
       try { handoffRecords = listHandoffs(); } catch {}
       for (const h of handoffRecords) {
         if (['prepared', 'needs-inspection'].includes(h.status) && h.promptError) evaluation.alerts.push({
-          key: `successor:prompt:${h.id}`, severity: 'warn', once: true, scope: h.workspace || 'user',
+          key: `successor:prompt:${h.id}`, severity: 'warn', once: true, scope: h.boss || h.label === 'boss' ? 'user' : h.workspace || 'user',
           title: `${h.project} successor did not get its prompt`,
           text: `The bootstrap prompt did not reach the proposed successor ${h.id} in pane ${h.newPane}. It cannot report ready, so automatic activation cannot happen. Read the pane with herdr agent read ${h.newPane}, then send the prompt again or close the pane and prepare a new successor.`,
         });
@@ -228,10 +233,10 @@ export class Engine extends EventEmitter {
         if (h.status === 'prepared' && h.automatic && now - Date.parse(h.preparedAt) > 2 * 3600000 && !control.risks[sourceProvider]) {
           const expired = this.act ? expireHandoff(h.id, `${sourceProvider || 'the source provider'} is no longer near its limit`) : null;
           if (expired) {
-            this.log('handoff', `Expired unused successor ${h.id} in pane ${h.newPane}`, { project: h.project, pane: h.newPane });
+            this.log('handoff', `Expired unused successor ${h.id} in pane ${h.newPane}`, h.boss || h.label === 'boss' ? { workspace: h.workspace, pane: h.newPane } : { project: h.project, pane: h.newPane });
             evaluation.alerts.push({
-              key: `successor:expired:${h.id}`, severity: 'info', once: true, scope: h.workspace || 'user',
-              title: `${h.project} successor expired`,
+              key: `successor:expired:${h.id}`, severity: 'info', once: true, scope: h.boss || h.label === 'boss' ? 'user' : h.workspace || 'user',
+              title: `${h.displayLabel || h.project} successor expired`,
               text: `The prepared successor ${h.id} in pane ${h.newPane} expired: ${expired.expiredReason}. Close that pane when you do not need it. Boss prepares a new successor if the quota comes near its limit again.`,
             });
           }
@@ -285,7 +290,7 @@ export class Engine extends EventEmitter {
         notes: evaluation.advice,
         browsers: managedBrowsers.map((b) => ({ project: b.project, port: b.port, profile: b.profile, headless: !!b.headless, windowSize: b.windowSize || { width: 1280, height: 800 }, ready: browsers.some((x) => x.kind === 'automation-chrome' && x.port === String(b.port) && x.profile === b.profile) })),
         policy,
-        control: { runningWorkers: control.runningWorkers, maxWorkers: control.maxWorkers, projects: control.projects },
+        control: { runningWorkers: control.runningWorkers, maxWorkers: control.maxWorkers, projects: control.projects, workspaces: control.workspaces },
       });
       snap.paneSince = this.memory.paneSince;
       snap.history = this.memory.history || [];
@@ -358,8 +363,8 @@ export class Engine extends EventEmitter {
       writeJson(MEMORY_FILE, this.memory);
       try {
         await run(process.execPath, [CLI_FILE, 'handoff', 'activate', item.id, '--confirmed'], { timeout: 180000 });
-        this.log('handoff', `Automatically activated ${item.toKind} successor for ${item.project}`, { project: item.project, pane: item.newPane });
-      } catch (e) { this.log('error', `Automatic activation for ${item.project} failed: ${String(e.stderr || e.message).slice(0, 300)}`); }
+        this.log('handoff', `Automatically activated ${item.toKind} successor for ${item.label || item.project}`, item.boss ? { workspace: item.workspace, pane: item.newPane } : { project: item.project, pane: item.newPane });
+      } catch (e) { this.log('error', `Automatic activation for ${item.label || item.project} failed: ${String(e.stderr || e.message).slice(0, 300)}`); }
     }
     const stopped = Object.values(control.projects).flatMap((p) => {
       const last = this.memory.lastOrchestrators[p.workspace];
@@ -369,13 +374,23 @@ export class Engine extends EventEmitter {
       if (!window || policy.providerModes[provider] === 'ignore') return [];
       return [{ project: p.slug, pane: p.orch.pane, fromKind: last.kind, sessionId: null, window, target: pickSuccessor(p, last.kind, provider, policy, control) }];
     });
-    for (const h of [...control.handoffs, ...stopped]) {
+    const stoppedBoss = (herdr?.panes || []).filter((pane) => pane.label === 'boss' && !pane.agent).flatMap((pane) => {
+      const last = this.memory.lastOrchestrators[pane.workspace];
+      if (!last?.kind || last.pane !== pane.id) return [];
+      const provider = providerFor(last.kind, policy.preferredModels?.[last.kind] ?? this.models.kinds[last.kind]?.defaultModel, policy);
+      const window = this.quotas.find((q) => q.provider === provider && !q.error)?.windows?.find((w) => !w.extra && w.usedPercent >= policy.autoHandoverPercent);
+      if (!window || policy.providerModes[provider] === 'ignore') return [];
+      const project = { excludedKinds: [], excludedModels: [] };
+      return [{ project: 'Boss', label: 'Boss', boss: true, workspace: pane.workspace, pane: pane.id, fromKind: last.kind, sessionId: null, window, target: pickSuccessor(project, last.kind, provider, policy, control) }];
+    });
+    for (const h of [...handoffCandidates(control), ...stopped, ...stoppedBoss]) {
+      if (!h.window) continue;
       if (records.some((x) => x.sourcePane === h.pane && ['prepared', 'preparing', 'needs-inspection'].includes(x.status))) continue;
       if (!h.target) {
         const key = `no-target:${h.pane}:${h.window.resetsAt}`;
         if (!this.memory.autoHandoverAttempts[key]) {
           this.memory.autoHandoverAttempts[key] = now;
-          this.log('error', `Automatic handover for ${h.project} has no eligible alternative provider`, { project: h.project });
+          this.log('error', `Automatic handover for ${h.label || h.project} has no eligible alternative provider`, h.boss ? { workspace: h.workspace, pane: h.pane } : { project: h.project });
         }
         continue;
       }
@@ -392,10 +407,10 @@ export class Engine extends EventEmitter {
         const prepared = JSON.parse(await run(process.execPath,
           [CLI_FILE, 'handoff', 'prepare', h.pane, '--to', h.target.kind, '--model', h.target.model, '--mode', chosen, ...effort, '--auto'],
           { timeout: 300000 }));
-        this.log('handoff', `Automatically prepared ${h.target.kind} successor for ${h.project}; awaiting readiness`, { project: h.project, pane: prepared.newPane });
+        this.log('handoff', `Automatically prepared ${h.target.kind} successor for ${h.label || h.project}; awaiting readiness`, h.boss ? { workspace: h.workspace, pane: prepared.newPane } : { project: h.project, pane: prepared.newPane });
       } catch (e) {
         const reason = String(e.stderr || e.message).slice(0, 300);
-        this.log('error', `Automatic preparation for ${h.project} failed: ${reason}`);
+        this.log('error', `Automatic preparation for ${h.label || h.project} failed: ${reason}`);
       }
     }
   }
@@ -404,7 +419,7 @@ export class Engine extends EventEmitter {
     this.memory.handoffPeerNotices ||= {};
     this.memory.handoffPeerAttempts ||= {};
     const panes = new Map((herdr?.panes || []).map((p) => [p.id, p]));
-    for (const item of listHandoffs().filter((x) => x.status === 'active' && now - Date.parse(x.activatedAt) < 7 * 86400 * 1000)) {
+    for (const item of listHandoffs().filter((x) => !x.boss && x.status === 'active' && now - Date.parse(x.activatedAt) < 7 * 86400 * 1000)) {
       for (const id of item.peerPanes || []) {
         const key = `${item.id}@${id}`;
         if (this.memory.handoffPeerNotices[key] || now - (this.memory.handoffPeerAttempts[key] || 0) < 60000) continue;

@@ -137,7 +137,9 @@ Old policy files can omit all of these fields and `preferredModels` and `pacingG
 
 Both pages keep policy edits in a draft. Select **Apply policy** to save the draft. A rejected save shows the server error and keeps the draft.
 
-The Allocation page sets the global worker limit, project shares and exclusions, and orchestrator succession. The project share is advisory. `worker start` enforces the global limit and the disabled harnesses and models.
+The Allocation page sets the global worker limit, workspace project status, project shares and exclusions, and orchestrator succession. The project share is advisory. `worker start` enforces the global limit and the disabled harnesses and models.
+
+Use the workspace switches above the project shares to include or exclude a live workspace. An excluded workspace stays visible on Agents with the marker **Not a project**. It does not appear on Projects or Overview. It has no project share or worker slots. Herdr Boss stores excluded workspace labels. It resolves a saved Herdr ID to its current label when possible. A workspace with a pane labelled `boss` is excluded automatically while that pane is present. Herdr Boss removes the legacy `policy.projects.boss` entry and redistributes other project shares in the same proportions.
 
 Each project has two share values:
 
@@ -150,7 +152,7 @@ An idle project is faded in the bar and in its row. A paused project is faded an
 
 ## Orchestrator handover
 
-When an orchestrator's quota comes near its reserve, Herdr Boss recommends a successor.
+When an orchestrator's quota comes near its reserve, Herdr Boss recommends a successor. The Boss pane uses the same handover path by its `boss` label. Its quota notice goes to the Owner. The Boss workspace stays out of project shares and project notices.
 
 1. Plan the handover on the project page, or run `herdr-boss handoff plan`.
 2. Prepare the successor. It starts in a new tab and only reads and reports.

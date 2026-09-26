@@ -310,6 +310,53 @@ test('worker start validates the caller pane and uses it for placement and repor
   }
 });
 
+test('worker start refuses excluded caller workspace before creating worktree, tab, or agent', (t) => {
+  const f = setupFixture(null);
+  t.after(() => {
+    const worktree = f.config.worktreePath('excluded-caller');
+    try { if (fs.existsSync(worktree)) git(f.root, 'worktree', 'remove', '--force', worktree); } catch {}
+    try { git(f.root, 'branch', '-D', 'excluded-caller'); } catch {}
+    fs.rmSync(path.join(f.config.runsPath, 'excluded-caller.json'), { force: true });
+    fs.rmSync(f.root, { recursive: true, force: true });
+  });
+  const workspaceId = 'workspace-excluded';
+  const workspaceLabel = 'Research Room';
+  fs.writeFileSync(f.rulesFile, JSON.stringify({
+    updatedAt: new Date().toISOString(),
+    avoidKinds: [],
+    policy: {
+      allowedKinds: ['codex'], excludedModels: [], preferredModels: { codex: 'gpt-6-luna' },
+      projects: { [f.config.slug]: { share: 100, mode: 'auto', excludedKinds: [], excludedModels: [] } },
+    },
+    control: {
+      runningWorkers: 0, maxWorkers: 8,
+      projects: { [f.config.slug]: { running: 0, slots: 8, effectiveMode: 'active' } },
+      workspaces: [{ workspace: workspaceId, label: workspaceLabel, excluded: true }],
+    },
+  }));
+  const calls = [];
+  const herdr = (args) => {
+    calls.push(args);
+    if (args[0] === 'pane' && args[1] === 'get' && args[2] === 'ws:orch') {
+      return { pane: { pane_id: 'ws:orch', workspace_id: workspaceId, label: 'orch' } };
+    }
+    if (args[0] === 'tab' && args[1] === 'create') throw new Error('Test guard: unexpected tab creation.');
+    return f.herdr(args);
+  };
+  let failure;
+  try {
+    startWorker('excluded-caller', { kind: 'codex', task: 'x', allow: ['src/'], force: true }, {
+      config: f.config, models: loadModels(), herdr, env: { ...f.env, HERDR_WORKSPACE_ID: workspaceId }, rulesFile: f.rulesFile, output: () => {},
+    });
+  } catch (error) { failure = error; }
+  assert.ok(failure, 'worker start must refuse the excluded workspace');
+  assert.match(failure.message, new RegExp(`${workspaceLabel}.*has no worker slots`));
+  assert.equal(fs.existsSync(f.config.worktreePath('excluded-caller')), false);
+  assert.throws(() => git(f.root, 'show-ref', '--verify', 'refs/heads/excluded-caller'));
+  assert.equal(calls.some((args) => args[0] === 'tab' && args[1] === 'create'), false);
+  assert.equal(calls.some((args) => args[0] === 'agent' && args[1] === 'start'), false);
+});
+
 test('worker collect --record uses the provider recorded at start, including null routes', () => {
   for (const [name, route, expected, failUsage] of [['collect-routed', 'claude', 'claude', false], ['collect-free', null, null, false], ['collect-failure', 'claude', 'claude', true]]) {
     const f = setupFixture(null);
