@@ -2,13 +2,47 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-export const LIVE_DATA_DIR = path.resolve(process.env.HERDR_BOSS_LIVE_DIR || path.join(os.homedir(), '.herdr-boss'));
+const DEFAULT_DATA_DIR = path.resolve(path.join(os.homedir(), '.herdr-boss'));
+export const LIVE_DATA_DIR = path.resolve(process.env.HERDR_BOSS_LIVE_DIR || DEFAULT_DATA_DIR);
 export const DATA_DIR = path.resolve(process.env.HERDR_BOSS_DIR || LIVE_DATA_DIR);
 export const PROJECTS_DIR = path.join(DATA_DIR, 'projects');
 const HOME_DIR = process.env.HOME || os.homedir();
 export const PRIVATE_ACCESS_DIR = path.join(HOME_DIR, '.config', 'herdr-boss');
 export const DEFAULT_TOKEN_FILE = path.join(PRIVATE_ACCESS_DIR, 'access-token');
 export const DEFAULT_SESSION_FILE = path.join(PRIVATE_ACCESS_DIR, 'sessions.json');
+
+// fs.realpathSync() needs an existing path. Resolve the deepest existing ancestor, then re-attach the rest, so a path
+// whose final directory does not exist still compares by its real path.
+function resolveAlias(target) {
+  const missing = [];
+  let current = path.resolve(target);
+  for (;;) {
+    try {
+      const real = fs.realpathSync(current);
+      return missing.length ? path.join(real, ...[...missing].reverse()) : real;
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      const parent = path.dirname(current);
+      if (parent === current) return path.resolve(target);
+      missing.push(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+// A preview tick writes state.json, rules.json, bulletin.md, and quota history. Refuse a preview that would write them
+// into the service data directory. Compare real paths, so a symlink cannot point the preview at that directory. A data
+// directory that holds files from an earlier preview is allowed. Call this before loadConfig() and before serve() write
+// any file.
+export function assertPreviewDataDir() {
+  const separate = 'Set HERDR_BOSS_DIR to a separate directory that the service does not use.';
+  const cost = `A read-only preview writes state.json, rules.json, bulletin.md, and quota history. ${separate}`;
+  if (!process.env.HERDR_BOSS_DIR) throw new Error(cost);
+  const data = resolveAlias(DATA_DIR);
+  if (data === resolveAlias(LIVE_DATA_DIR)) throw new Error(`${cost} HERDR_BOSS_DIR is the live service data directory ${data}.`);
+  if (data === resolveAlias(DEFAULT_DATA_DIR)) throw new Error(`${cost} HERDR_BOSS_DIR is the default service data directory ${data}.`);
+  return DATA_DIR;
+}
 
 const DEFAULTS = {
   port: 4477,
