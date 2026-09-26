@@ -11,7 +11,7 @@ import { workerStatusFromState } from '../worker-failures.js';
 const NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
 const BRIEF_SLOTS = new Set([
   'name', 'kind', 'model', 'effort', 'project', 'repo', 'worktree', 'branch', 'base', 'issue', 'task',
-  'allowedPaths', 'reportPath', 'reportJsonPath', 'orchPane', 'orchName', 'bulletinPath', 'date', 'evidenceTiers', 'threadLimit',
+  'allowedPaths', 'reportPath', 'reportJsonPath', 'orchPane', 'orchName', 'bulletinPath', 'date', 'evidenceTiers', 'threadLimit', 'imageBudget', 'copyPaths',
 ]);
 
 function git(root, args, { encoding = 'utf8' } = {}) {
@@ -108,6 +108,7 @@ export function renderBrief(template, slots) {
     const value = slots[name];
     if (value === undefined || value === null || value === '') return '(none)';
     if (name === 'allowedPaths' && Array.isArray(value)) return value.length ? value.map((item) => `- ${item}`).join('\n') : '(none)';
+    if (name === 'copyPaths' && Array.isArray(value)) return value.length ? value.map((item) => `- ${item}`).join('\n') : '(none)';
     return String(value);
   });
 }
@@ -568,6 +569,21 @@ export function startWorker(name, options, {
   if (options.issue != null && (!/^\d+$/.test(String(options.issue)) || Number(options.issue) <= 0)) throw new Error('--issue must be a positive integer.');
   const task = options.taskFile ? fs.readFileSync(path.resolve(options.taskFile), 'utf8').trimEnd() : options.task;
   if (!task?.trim()) throw new Error('Task text must not be empty.');
+  const copyFiles = (options.copy ?? []).map((input) => {
+    const source = path.resolve(config.root, input);
+    const relative = path.relative(config.root, source);
+    if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error(`Copy path ${input} must be inside the repository.`);
+    let stats;
+    try { stats = fs.lstatSync(source); } catch { throw new Error(`Copy path ${input} does not exist.`); }
+    if (!stats.isFile() || stats.isSymbolicLink()) throw new Error(`Copy path ${input} must be a regular file.`);
+    const realRoot = fs.realpathSync(config.root);
+    const realSource = fs.realpathSync(source);
+    const realRelative = path.relative(realRoot, realSource);
+    if (!realRelative || realRelative.startsWith(`..${path.sep}`) || path.isAbsolute(realRelative)) throw new Error(`Copy path ${input} must be inside the repository.`);
+    return { source, relative: realRelative.split(path.sep).join('/') };
+  });
+  const destinations = copyFiles.map(({ relative }) => relative);
+  if (new Set(destinations).size !== destinations.length) throw new Error('Copy paths have a destination collision.');
   const base = options.base ?? config.baseBranch;
   const baseCommit = git(config.root, ['rev-parse', base]).trim();
   const branch = options.noWorktree ? git(config.root, ['branch', '--show-current']).trim() : name;
@@ -597,6 +613,7 @@ export function startWorker(name, options, {
     setup: options.noWorktree ? null : config.setup ?? null, setupTimeoutSeconds: config.setupTimeoutSeconds ?? 900,
     agentStartTimeoutMs: config.agentStartTimeoutMs ?? 90000,
     workerDir: workerDirName(name, !!options.noWorktree),
+    copyFiles,
   };
   if (options.dryRun) {
     output(renderStartPlan(plan));
@@ -608,16 +625,26 @@ export function startWorker(name, options, {
   const orchPane = caller.paneId;
   const orchName = getName(liveAgents.find((agent) => getPane(agent) === orchPane)) ?? '(none)';
   const template = fs.readFileSync(config.briefTemplatePath, 'utf8');
-  const brief = renderBrief(template, {
+  const briefSlots = {
     name, kind: options.kind, model, effort, project: config.slug, repo: config.root, worktree, branch, base,
     issue: options.issue ?? null, task, allowedPaths: options.allow ?? [], reportPath, reportJsonPath,
     orchPane, orchName, bulletinPath: path.join(env.HERDR_BOSS_DIR || path.join(os.homedir(), '.herdr-boss'), 'bulletin.md'),
     date: new Date(now).toISOString().slice(0, 10),
     evidenceTiers: (config.evidenceTiers || []).join(', '),
+    imageBudget: config.imageBudget ?? 10,
+    copyPaths: copyFiles.map(({ relative }) => path.posix.join(plan.workerDir, 'inputs', relative)),
     threadLimit: config.testThreadsFlag
       ? `Add \`${config.testThreadsFlag}\` to each test runner command.`
       : 'Use the form that the project instructions name. For Vitest 2 with the forks pool, use `--poolOptions.forks.maxForks=2 --poolOptions.forks.minForks=1`; `--maxWorkers=2` fails there. For Vitest 3 and later, use `--maxWorkers=2`.',
-  });
+  };
+  const missingBriefDetails = [];
+  if (!/{{\s*imageBudget\s*}}/.test(template)) {
+    missingBriefDetails.push(`Screenshot budget: ${briefSlots.imageBudget} screenshots. The project setting overrides the kit default.`);
+  }
+  if (briefSlots.copyPaths.length && !/{{\s*copyPaths\s*}}/.test(template)) {
+    missingBriefDetails.push(`Copied inputs:\n${briefSlots.copyPaths.map((item) => `- ${item}`).join('\n')}`);
+  }
+  const brief = `${renderBrief(template, briefSlots)}${missingBriefDetails.length ? `\n\n## Worker start details\n\n${missingBriefDetails.join('\n\n')}` : ''}`;
 
   let createdWorktree = false;
   let agentStarted = false;
@@ -630,6 +657,12 @@ export function startWorker(name, options, {
     addExclude(worktree);
     fs.mkdirSync(path.join(worktree, plan.workerDir), { recursive: true });
     fs.mkdirSync(path.join(worktree, '.worker', 'tmp'), { recursive: true });
+    for (const file of copyFiles) {
+      const destination = path.join(worktree, plan.workerDir, 'inputs', ...file.relative.split('/'));
+      fs.mkdirSync(path.dirname(destination), { recursive: true });
+      if (fs.existsSync(destination)) throw new Error(`Copy destination already exists: ${destination}.`);
+      fs.copyFileSync(file.source, destination, fs.constants.COPYFILE_EXCL);
+    }
     fs.writeFileSync(path.join(worktree, plan.workerDir, 'brief.md'), brief);
     if (plan.setup) {
       output(`Running project setup in ${worktree}: ${plan.setup}`);
@@ -681,6 +714,7 @@ export function startWorker(name, options, {
     if (delivery === 'submitted') output(`Sent Enter to ${name}: the brief prompt was typed but not submitted.`);
     return { ...record, recordFile, dryRun: false };
   } catch (error) {
+    const failedReason = error.message;
     if (!agentStarted && placement) {
       try {
         if (placement.createdTab) herdr(['tab', 'close', placement.tabId]);
@@ -713,6 +747,7 @@ export function startWorker(name, options, {
       }
     }
     if (agentStarted) error.message += ` Agent ${name} may still be running in pane ${paneId}; inspect it before retrying.`;
+    error.message = `${error.message}\nSTART FAILED: ${failedReason.split('\n')[0]}`;
     throw error;
   }
 }

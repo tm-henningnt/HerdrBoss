@@ -15,6 +15,9 @@ The orchestrator retains implementation order, issue authority, cross-task decis
 - Base: `{{base}}`
 - Issue: `{{issue}}`
 - Date: `{{date}}`
+- Screenshot budget: {{imageBudget}} screenshots. The project setting overrides the kit default.
+- Copied inputs:
+{{copyPaths}}
 
 ## Edit scope
 
@@ -82,7 +85,7 @@ If the Herdr command for `WORKER REPORT` or `WORKER QUESTION` fails, record the 
 
 ## Image budget
 
-View at most 10 screenshots during this session.
+View at most {{imageBudget}} screenshots during this session.
 
 View one screenshot at a time.
 

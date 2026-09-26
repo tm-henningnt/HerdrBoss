@@ -69,6 +69,7 @@ Create a branch and worktree, write the brief, create a dedicated `W <name>` tab
 | `--kind KIND` | Required. `codex`, `claude`, `opencode`, or `pi`. |
 | `--task TEXT` or `--task-file FILE` | Required. The work order for the brief. |
 | `--allow PATH` | A path that the worker may change. Repeat for each path. |
+| `--copy PATH` | Copy a regular repository file into `.worker/inputs/` before the agent starts. Repeat for each file. Keep its repository subdirectories. |
 | `--model MODEL` | A model from `herdr-boss models`. The default is the kind's default model. |
 | `--effort EFFORT` | A reasoning effort, where the kind supports it. |
 | `--issue N` | The issue number. |
@@ -77,6 +78,8 @@ Create a branch and worktree, write the brief, create a dedicated `W <name>` tab
 | `--no-worktree` | Use the current checkout. The worker gets `.worker/NAME/` for its brief and reports. |
 | `--dry-run` | Print the plan. Change nothing. |
 | `--force` | Override quota, capacity, and paused-project refusals. It cannot enable a disabled model. |
+
+Set `imageBudget` in `.herdr-boss.json` to a positive integer to set the project's screenshot budget. The default is 10. The project setting overrides the kit default. A failed start ends with `START FAILED: <reason>` after cleanup details.
 
 `worker start` refuses a provider that is ahead of pace, near exhaustion, or exhausted. An exhausted lane shows its window and reset time; when several windows are exhausted, it uses the latest reset. `--force` remains the explicit quota override. Ignore quota mode disables pacing and handover warnings below 100%, but it does not make an exhausted provider usable. When every metered provider is ahead of pace, it allows the least-over one with a notice. A refusal or least-over notice lists the current project's unmetered alternatives first, then names the least-over metered provider. It refuses dispatch when the active CPU limit or enabled load backstop is exceeded. `--force` cannot bypass a machine refusal.
 

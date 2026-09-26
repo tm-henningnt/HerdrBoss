@@ -24,6 +24,7 @@ export const PROJECT_DEFAULTS = Object.freeze({
   testThreadsFlag: null,
   setupTimeoutSeconds: 900,
   agentStartTimeoutMs: 90000,
+  imageBudget: 10,
 });
 
 export function findGitRoot(cwd = process.cwd()) {
@@ -64,6 +65,7 @@ export function loadProjectConfig({ cwd = process.cwd(), file = '.herdr-boss.jso
   if (!Number.isInteger(config.agentStartTimeoutMs) || config.agentStartTimeoutMs < 1 || config.agentStartTimeoutMs > 300000) {
     throw new Error('agentStartTimeoutMs must be an integer from 1 to 300000.');
   }
+  if (!Number.isInteger(config.imageBudget) || config.imageBudget < 1) throw new Error('imageBudget must be a positive integer.');
   if (!Array.isArray(config.evidenceTiers) || config.evidenceTiers.length === 0 || config.evidenceTiers.some((tier) => typeof tier !== 'string')) {
     throw new Error('evidenceTiers must be a non-empty array of strings.');
   }
