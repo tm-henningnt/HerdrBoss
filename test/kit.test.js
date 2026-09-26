@@ -11,6 +11,7 @@ import { runKitCommand } from '../src/kit/cli.js';
 import { allowWorkerScope, collectWorker, createHerdrRunner, filterCollectProcesses, listWorkers, parseWorktreeCwdProcesses, renderBrief, startWorker, waitForWorkerPane } from '../src/kit/workers.js';
 import { classifyWorktrees, pruneWorktrees } from '../src/kit/worktrees.js';
 import { usageProvider } from '../src/usage.js';
+import { validateProject } from '../src/projects.js';
 
 function git(cwd, ...args) {
   return execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -26,6 +27,18 @@ function temporaryRepo(prefix = 'herdr-kit-') {
   git(root, 'commit', '-m', 'seed');
   return root;
 }
+
+test('project status accepts a durable goal and rejects invalid goal values', () => {
+  const valid = { project: 'Example', goal: 'Preserve the Owner direction.' };
+  assert.deepEqual(validateProject(valid), []);
+  assert.deepEqual(validateProject({ project: 'Example' }), []);
+  for (const goal of [null, 42, {}, [], '', '   ', '\n\t']) {
+    assert.ok(validateProject({ project: 'Example', goal }).some((error) => error.includes('goal')),
+      `expected ${JSON.stringify(goal)} to be rejected`);
+  }
+  assert.ok(validateProject({ project: 'Example', goal: 'x'.repeat(1001) }).some((error) => error.includes('goal')));
+  assert.deepEqual(validateProject({ project: 'Example', goal: 'x'.repeat(1000) }), []);
+});
 
 const tiers = ['unit', 'integration', 'local-browser', 'hosted', 'owner'];
 const validReport = {

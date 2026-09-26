@@ -12,6 +12,7 @@ export function validateProject(p) {
   const errs = [];
   if (!p || typeof p !== 'object') return ['body must be a JSON object'];
   if (typeof p.project !== 'string' || !p.project) errs.push('"project" (string) is required');
+  if (Object.hasOwn(p, 'goal') && (typeof p.goal !== 'string' || !p.goal.trim() || p.goal.length > 1000)) errs.push('"goal" must be a non-empty string of at most 1000 characters');
   if (p.tasks != null && !Array.isArray(p.tasks)) errs.push('"tasks" must be an array');
   for (const [i, t] of (p.tasks || []).entries()) {
     if (!t || typeof t.title !== 'string') errs.push(`tasks[${i}].title (string) is required`);

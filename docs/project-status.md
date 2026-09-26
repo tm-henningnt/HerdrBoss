@@ -25,6 +25,7 @@ Only `project` is required. Omit the fields that you do not use.
   "project": "TmProcessMining",
   "workspace": "w9",
   "summary": "One sentence that tells what the project does now.",
+  "goal": "The durable Owner direction for this project.",
   "status": "on-track",
   "phase": "Build",
   "phases": ["Plan", "Build", "Review", "Release"],
@@ -49,6 +50,7 @@ Only `project` is required. Omit the fields that you do not use.
 | `project` | string | The display name. Required. |
 | `workspace` | string | The Herdr workspace ID or label. The project page then shows the live agents of that workspace. |
 | `summary` | string | One sentence. |
+| `goal` | string | Optional durable Owner direction. Use a non-empty string of at most 1000 characters. Each status publication must keep the current value until the Owner changes or clears it. Omit the field to clear it. The next H26 handover slice will include this value in the successor record and startup prompt. |
 | `status` | string | Free text, for example `on-track`, `at-risk`, `blocked`, `done`. |
 | `phase` | string | The current phase. When `phases` contains this value, the page shows a phase bar. |
 | `phases` | string[] | All phases in order. |
