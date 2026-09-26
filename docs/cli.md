@@ -123,6 +123,8 @@ herdr-boss worker allow fix-74 docs/parse.md --reason "the fix also needs the pa
 | `worktree prune [--apply]` | List worktrees that are clean, merged, and have no live pane. `--apply` removes them. |
 | `gh issue create\|comment\|edit ... --body-file FILE` | Run a GitHub issue command. An inline `--body` is refused. |
 
+An unknown tool-call count stays `null`. The ledger accepts `null` as unknown. If TmProcessMining reports entries 281, 283, or 285 as invalid because an older kit rejects `null`, install a HerdrBoss kit version that accepts `null`, then run `herdr-boss ledger check` again. This check reads the ledger. Do not replace `null` with `0` or edit the TmProcessMining ledger.
+
 ## Browsers
 
 Each project has one persistent Chrome profile on a port from 9223 to 9299. Add `--tab ID` to page commands when the browser has several tabs; `browser tabs` lists the IDs.
@@ -162,6 +164,10 @@ The screenshot command writes under `$TMPDIR` when it is set. Otherwise, it crea
 | `handoff list` | All handover records. |
 
 `--mode migrate` (the default) converts the session with `session-migrate`. When that is not possible, use `--mode fresh`; the successor starts from the project files and the source pane. `--force` allows a target provider near exhaustion.
+
+`handoff plan` reports when Claude session migration is unavailable because the active graph has an ancestry cycle. Use the suggested `--mode fresh` command, or choose another safe fallback. Do not treat that result as a migrated session.
+
+`handoff prepare` waits for the new pane's foreground shell and a prompt or a stable screen before it starts the agent. If agent start reports `agent_pane_busy`, it checks shell readiness again and retries once. It stops at an interactive question and tells you to answer it in a shell once, then retry `handoff prepare`. The new tab disables update prompts and automatic updates. Each active engine tick expires `preparing` or `needs-inspection` records only when a successful current pane list does not contain their successor pane. `handoff prepare` repeats this check before retrying. A failed pane list keeps those records active. Herdr Boss does not close a pane when it expires a record.
 
 ## Project settings (`.herdr-boss.json`)
 

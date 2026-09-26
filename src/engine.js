@@ -10,7 +10,7 @@ import { loadModels } from './kit/config.js';
 import { loadPolicy, clearExpiredOneOffGoals, deriveControl, migrateWorkspacePolicy, providerFor, pickSuccessor, laneStatus, leastOverProvider, machineLimits, unmeteredLane } from './control.js';
 import { recordQuotaSnapshot } from './usage.js';
 import { listBrowserSessions } from './browser-pool.js';
-import { listHandoffs, expireHandoff } from './handoff.js';
+import { listHandoffs, expireHandoff, expireMissingHandoffs } from './handoff.js';
 import { inspectWorkerTransitions, inspectWorkerReports, applyWorkerFailureStatuses } from './worker-failures.js';
 
 const MEMORY_FILE = path.join(DATA_DIR, 'memory.json');
@@ -93,12 +93,17 @@ export class Engine extends EventEmitter {
     const now = Date.now();
     try {
       const refreshQuotas = !this.quotas || now - this.quotasAt > this.cfg.quotaSeconds * 1000;
+      let currentHerdrSnapshot = false;
       const [herdr, machine, procs, quotas] = await Promise.all([
-        collectHerdr(this.cfg.orchestratorLabel).catch((e) => { errors.push(`herdr: ${e.message}`); return this.state?.herdr || null; }),
+        collectHerdr(this.cfg.orchestratorLabel).then((snapshot) => { currentHerdrSnapshot = true; return snapshot; }).catch((e) => { errors.push(`herdr: ${e.message}`); return this.state?.herdr || null; }),
         collectMachine(DATA_DIR).catch((e) => { errors.push(`machine: ${e.message}`); return null; }),
         collectProcesses().catch((e) => { errors.push(`ps: ${e.message}`); return new Map(); }),
         refreshQuotas ? collectQuotas().catch((e) => { errors.push(`codexbar: ${e.message}`); return null; }) : null,
       ]);
+      if (this.act && currentHerdrSnapshot) {
+        try { expireMissingHandoffs(herdr?.panes); }
+        catch (e) { errors.push(`handoffs: ${e.message}`); }
+      }
       if (herdr && now - this.worktreeCountsAt >= 5 * 60 * 1000) {
         this.worktreeCounts = await collectWorktreeCounts(herdr.panes, { now }).catch(() => this.worktreeCounts);
         this.worktreeCountsAt = now;

@@ -391,7 +391,7 @@ function chooseWorkerPane(workspaceId, worktree, name, herdr) {
   return { paneId: getPane(rootPane), tabId: getTab(foundTab), command, createdTab: true };
 }
 
-function waitForWorkerPane(paneId, workspaceId, worktree, herdr, wait) {
+export function waitForWorkerPane(paneId, workspaceId, worktree, herdr, wait = pause, { retryCommand = 'worker start' } = {}) {
   const intervalMs = 250;
   const timeoutMs = 20_000;
   let elapsedMs = 0;
@@ -424,7 +424,7 @@ function waitForWorkerPane(paneId, workspaceId, worktree, herdr, wait) {
           const lines = String(screen).replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '').split(/\r?\n/).map((line) => line.trimEnd());
           const question = interactiveShellQuestion(lines);
           if (question) {
-            const error = new Error(`Worker pane ${paneId} is waiting at an interactive question: ${question}. Answer it in a shell once, then retry worker start.`);
+            const error = new Error(`Worker pane ${paneId} is waiting at an interactive question: ${question}. Answer it in a shell once, then retry ${retryCommand}.`);
             error.code = 'worker_pane_interactive_question';
             throw error;
           }
@@ -472,7 +472,7 @@ function interactiveShellQuestion(lines) {
   return null;
 }
 
-function isAgentPaneBusy(error) {
+export function isAgentPaneBusy(error) {
   if (error?.code === 'agent_pane_busy') return true;
   return /"code"\s*:\s*"agent_pane_busy"/.test(String(error?.stderr ?? ''))
     || /agent_pane_busy/.test(String(error?.message ?? ''));

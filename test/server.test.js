@@ -235,8 +235,13 @@ const args = process.argv.slice(2);
 let result = {};
 if (args[0] === 'pane' && args[1] === 'get') result = { pane: {
   pane_id: args[2], workspace_id: 'ws-boss', label: 'boss', agent: 'codex',
-  cwd: process.cwd(), agent_session: { kind: 'id', value: 'boss-session' },
+  cwd: process.cwd(), foreground_cwd: process.cwd(), agent_session: { kind: 'id', value: 'boss-session' },
 } };
+if (args[0] === 'pane' && args[1] === 'process-info') result = { process_info: {
+  shell_pid: 10, foreground_process_group_id: 10, foreground_processes: [{ pid: 10, name: 'zsh' }],
+} };
+if (args[0] === 'pane' && args[1] === 'read') result = { text: '% ' };
+if (args[0] === 'agent' && args[1] === 'list') result = { agents: [] };
 if (args[0] === 'tab' && args[1] === 'create') result = { root_pane: { pane_id: 'ws-boss:p2' } };
 if (args[0] === 'agent' && args[1] === 'get') result = { agent_status: 'working' };
 console.log(JSON.stringify({ result }));

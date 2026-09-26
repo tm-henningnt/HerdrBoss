@@ -7,6 +7,7 @@ import test from 'node:test';
 import { loadModels, loadProjectConfig, PROJECT_DEFAULTS } from '../src/kit/config.js';
 import { appendDelegatedRun, compareChangedPaths, gitChangedPaths, readDelegatedRuns, validateAllowedPaths, validateDelegatedRun, validateWorkerReport } from '../src/kit/orchestration.js';
 import { buildGhArgs } from '../src/kit/gh.js';
+import { runKitCommand } from '../src/kit/cli.js';
 import { allowWorkerScope, collectWorker, createHerdrRunner, filterCollectProcesses, listWorkers, parseWorktreeCwdProcesses, renderBrief, startWorker } from '../src/kit/workers.js';
 import { classifyWorktrees, pruneWorktrees } from '../src/kit/worktrees.js';
 import { usageProvider } from '../src/usage.js';
@@ -401,6 +402,47 @@ test('worker collect --record uses the provider recorded at start, including nul
     assert.ok(output.includes(`After you merge ${run.branch}, remove the worktree with herdr-boss worktree prune --apply`));
     assert.throws(() => collect(), /already marked finished/);
   }
+});
+
+test('worker collection, ledger append, and ledger check preserve unknown tool calls as null', () => {
+  const f = setupFixture(null);
+  git(f.root, 'add', '-A');
+  git(f.root, 'commit', '--allow-empty', '-m', 'fixture configuration');
+  const run = startWorker('collect-unknown-tools', {
+    kind: 'codex', task: 'x', allow: ['.orchestration/runs/'], noWorktree: true,
+  }, { config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {} });
+  const reportDir = path.join(run.worktree, run.workerDir);
+  fs.writeFileSync(path.join(reportDir, 'report.md'), 'Tool-call count is unknown.\n');
+  fs.writeFileSync(path.join(reportDir, 'report.json'), JSON.stringify({
+    issue: null,
+    branch: run.branch,
+    worktree: run.worktree,
+    changedPaths: [`.orchestration/runs/${run.name}.json`],
+    commands: ['focused check'],
+    evidenceTier: ['unit'],
+    unverified: [],
+    stoppedEarly: false,
+    usage: { toolCalls: null },
+  }));
+  collectWorker('collect-unknown-tools', { record: true, outcome: 'done', gatePassed: true }, {
+    config: f.config,
+    now: Date.parse('2026-09-25T17:00:00Z'),
+    output: () => {},
+    listWorktreeProcesses: () => [],
+    recordUsageFn: () => ({ errors: [], duplicate: false }),
+  });
+  const collected = readDelegatedRuns(f.config.ledgerPath, { evidenceTiers: f.config.evidenceTiers });
+  assert.equal(collected[0].toolCalls, null);
+
+  const manual = { ...validRun, issue: null, worktree: path.join(f.root, 'manual-run'), toolCalls: null };
+  const entryFile = path.join(f.root, 'manual-run.json');
+  fs.writeFileSync(entryFile, JSON.stringify(manual));
+  runKitCommand('ledger', ['append', '--entry', entryFile], { config: f.config, output: () => {} });
+  const output = [];
+  const checked = runKitCommand('ledger', ['check'], { config: f.config, output: (line) => output.push(line) });
+  assert.equal(checked.length, 2);
+  assert.ok(checked.every((entry) => entry.toolCalls === null));
+  assert.deepEqual(output, [`ledger: PASS (${checked.length} entries)`]);
 });
 
 test('worker start records a real dispatch before prompting and verifies activity', () => {

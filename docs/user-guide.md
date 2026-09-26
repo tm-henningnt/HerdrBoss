@@ -159,7 +159,11 @@ When an orchestrator's quota comes near its reserve, Herdr Boss recommends a suc
 3. Inspect the successor's response.
 4. Confirm activation. The label moves to the successor, and the old pane becomes `standby`.
 
+Preparation waits for the new pane's foreground shell and a prompt or a stable screen before Herdr Boss starts the agent. If agent start reports `agent_pane_busy`, Herdr Boss checks shell readiness again and retries once. If the pane shows an interactive question, answer it in a shell once, then retry `handoff prepare`. The new tab disables update prompts and automatic updates. Each active engine tick expires a `preparing` or `needs-inspection` record only when a successful current pane list does not contain its successor pane. `handoff prepare` repeats this check before retrying. A failed pane list keeps the record active. Expiring a record does not close a pane.
+
 Migration moves the conversation history with [session-migrate](https://github.com/xhluca/session-migrate). It does not move credentials, hooks, or runtime settings. A fresh successor starts from the project files and the source pane.
+
+When `handoff plan` reports that Claude migration is unavailable because the active graph has an ancestry cycle, use its `--mode fresh` command or another safe fallback. The result does not mean the session was migrated.
 
 **Automatic handover** is off by default. Turn it on in Allocation, and rank the successor choices under **Orchestrator succession**. Herdr Boss then prepares a successor at the reserve, waits for it to run `herdr-boss handoff ready`, and activates it at the set quota level (98% by default). An automatic successor that was not needed expires two hours after preparation when its source provider is no longer near its limit.
 
@@ -228,7 +232,7 @@ When Roamgate runs and its token file exists, the header shows a **Roamgate** li
 
 ## Usage records
 
-`worker collect --record` records one usage event per worker run before merge. After a successful collection, it prints a reminder to merge the branch and then run `herdr-boss worktree prune --apply`. Collection does not remove a worktree. `herdr-boss usage record FILE` adds measured events. The Analytics page shows recorded usage and its coverage. Quota percentages are global per provider. They are not project token counts.
+`worker collect --record` records one usage event per worker run before merge. An unknown tool-call count stays `null`, and the ledger accepts `null` as unknown. If TmProcessMining reports entries 281, 283, or 285 as invalid because an older kit rejects `null`, install a HerdrBoss kit version that accepts `null`, then run `herdr-boss ledger check` again. This check reads the ledger. Do not replace `null` with `0` or edit the TmProcessMining ledger. After a successful collection, Herdr Boss prints a reminder to merge the branch and then run `herdr-boss worktree prune --apply`. Collection does not remove a worktree. `herdr-boss usage record FILE` adds measured events. The Analytics page shows recorded usage and its coverage. Quota percentages are global per provider. They are not project token counts.
 
 ## HTTP API
 
