@@ -755,13 +755,33 @@ test('the unmetered lane lists permitted models after global and project exclusi
   assert.ok(lane.byProject.a.opencode.includes('opencode/space-bunny-free'));
   assert.ok(!lane.byProject.a.opencode.includes('opencode/big-pickle'));
   assert.equal(lane.byProject.a.pi, undefined);
-  assert.equal(lane.byProject.b, undefined);
+  assert.deepEqual(lane.byProject.b, {});
+  const paused = unmeteredLane(models, policy(), { stopped: { mode: 'paused', excludedKinds: [], excludedModels: [] } });
+  assert.equal(paused.byProject.stopped, undefined, 'paused projects do not enter the unmetered lane');
   const projectModel = unmeteredLane(models, policy(), { a: { excludedKinds: [], excludedModels: ['opencode/space-bunny-free'] } });
   assert.ok(!projectModel.byProject.a.opencode.includes('opencode/space-bunny-free'));
   const routed = unmeteredLane(models, policy({ modelProviders: { 'opencode/space-bunny-free': 'codex' } }), projects);
   assert.ok(!routed.byProject.a.opencode.includes('opencode/space-bunny-free'));
   const kindsOff = unmeteredLane(models, policy({ allowedKinds: ['pi'] }), projects);
-  assert.equal(kindsOff.byProject.a, undefined);
+  assert.deepEqual(kindsOff.byProject.a, {});
+});
+
+test('unmetered summary prints common models once and differing active projects as exceptions', async () => {
+  const { unmeteredSummary } = await import('../src/control.js');
+  const lane = { byProject: {
+    alpha: { opencode: ['opencode/a', 'opencode/b'], pi: ['pi:a'] },
+    beta: { opencode: ['opencode/a', 'opencode/b'], pi: ['pi:a'] },
+    gamma: { opencode: ['opencode/a'] },
+    paused: { opencode: ['opencode/a', 'opencode/b'], pi: ['pi:a'] },
+  }, projectModes: { alpha: 'active', beta: 'auto', gamma: 'active', paused: 'paused' } };
+  assert.equal(unmeteredSummary(lane), 'opencode: a, b; pi: pi:a; exceptions: gamma (opencode: -b; pi: none)');
+  assert.equal(unmeteredSummary(lane, 'gamma'), 'opencode: a');
+  assert.equal(unmeteredSummary({ byProject: {
+    alpha: { opencode: ['opencode/big-pickle', 'opencode/space-bunny-free'] },
+    beta: { opencode: ['opencode/big-pickle', 'opencode/space-bunny-free'] },
+    gamma: { opencode: ['opencode/big-pickle'] },
+  } }), 'opencode: big-pickle, space-bunny-free; exceptions: gamma (opencode: -space-bunny-free)');
+  assert.equal(unmeteredSummary({ byProject: { alpha: { opencode: ['opencode/a'] }, empty: {} }, projectModes: { alpha: 'active', empty: 'active' } }), 'opencode: a; exceptions: empty (opencode: none)');
 });
 
 test('least-over selection skips the unmetered lane', async () => {
@@ -781,8 +801,10 @@ test('the bulletin shows the unmetered lane in Provider lanes', async () => {
   const cfg = { quota: { warnPercent: 90, criticalPercent: 98 }, machine: { memFreeWarnPercent: 15, loadWarnFactor: 2 }, browsers: { staleOwnedMinutes: 30 }, workers: { staleIdleMinutes: 120 }, sharedBrowsers: [] };
   const snap = { ...snapshot(), updatedAt: '2026-09-25T00:00:00Z', lanes: { codex: { state: 'open' }, unmetered: { state: 'open', unmetered: true, byProject: { a: { opencode: ['opencode/space-bunny-free'] } } } }, policy: policy() };
   const bulletin = renderBulletin(snap, { alerts: [], advice: [] }, cfg);
-  assert.match(bulletin, /Unmetered: open/);
-  assert.match(bulletin, /opencode\/space-bunny-free/);
+  assert.ok(bulletin.includes('- Unmetered: open: opencode: space-bunny-free.'));
+  const exceptionSnap = { ...snap, lanes: { unmetered: { state: 'open', unmetered: true, byProject: { alpha: { opencode: ['opencode/a'] }, beta: { opencode: ['opencode/a'] }, gamma: { opencode: [] } } } } };
+  const exceptionBulletin = renderBulletin(exceptionSnap, { alerts: [], advice: [] }, cfg);
+  assert.ok(exceptionBulletin.includes('- Unmetered: open: opencode: a; exceptions: gamma (opencode: none).'));
 });
 
 test('extra models join only their harness allow-list and keep that harness launch rules', async () => {

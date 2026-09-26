@@ -1001,6 +1001,8 @@ test('lanes prints the unmetered alternatives lane', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-lanes-goal-'));
   const home = path.join(dir, 'home');
   fs.mkdirSync(home, { recursive: true });
+  const checkout = path.join(dir, 'checkout'); fs.mkdirSync(checkout); execFileSync('git', ['init', '-b', 'main', checkout], { stdio: 'ignore' });
+  fs.writeFileSync(path.join(checkout, '.herdr-boss.json'), JSON.stringify({ slug: 'herdrboss' }));
   fs.writeFileSync(path.join(dir, 'rules.json'), JSON.stringify({
     updatedAt: new Date().toISOString(),
     lanes: {
@@ -1011,10 +1013,59 @@ test('lanes prints the unmetered alternatives lane', () => {
     leastOverProvider: null,
   }));
   const cli = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'src', 'cli.js');
-  const output = execFileSync(process.execPath, [cli, 'lanes'], { env: { ...process.env, HOME: home, HERDR_BOSS_DIR: dir }, encoding: 'utf8' });
+  const output = execFileSync(process.execPath, [cli, 'lanes'], { cwd: checkout, env: { ...process.env, HOME: home, HERDR_BOSS_DIR: dir }, encoding: 'utf8' });
   assert.match(output, /codex ahead of pace/);
   assert.match(output, /opencodego exhausted: 100% used in the Monthly window; exhausted until 2026-10-23T09:00:00Z/);
-  assert.match(output, /unmetered open: herdrboss: opencode \(opencode\/space-bunny-free\)/);
+  assert.ok(output.split('\n').includes('unmetered open: opencode: space-bunny-free'));
+});
+
+test('lanes filters unmetered output to the configured checkout project', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-lanes-project-'));
+  const home = path.join(dir, 'home');
+  const checkout = path.join(dir, 'checkout');
+  fs.mkdirSync(home, { recursive: true }); fs.mkdirSync(checkout, { recursive: true });
+  execFileSync('git', ['init', '-b', 'main', checkout], { stdio: 'ignore' });
+  fs.writeFileSync(path.join(checkout, '.herdr-boss.json'), JSON.stringify({ slug: 'beta' }));
+  fs.writeFileSync(path.join(dir, 'rules.json'), JSON.stringify({ lanes: {
+    codex: { state: 'open' },
+    unmetered: { state: 'open', unmetered: true, byProject: { alpha: { opencode: ['opencode/a'] }, beta: { opencode: ['opencode/b'] } } },
+  } }));
+  const cli = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'src', 'cli.js');
+  const output = execFileSync(process.execPath, [cli, 'lanes'], { cwd: checkout, env: { ...process.env, HOME: home, HERDR_BOSS_DIR: dir }, encoding: 'utf8' });
+  assert.ok(output.split('\n').includes('unmetered open: opencode: b'));
+  assert.doesNotMatch(output, /opencode\/a|alpha/);
+});
+
+test('lanes keeps global unmetered summary in a Git checkout without project config', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-lanes-no-config-'));
+  const home = path.join(dir, 'home');
+  const checkout = path.join(dir, 'checkout');
+  fs.mkdirSync(home, { recursive: true }); fs.mkdirSync(checkout, { recursive: true });
+  execFileSync('git', ['init', '-b', 'main', checkout], { stdio: 'ignore' });
+  fs.writeFileSync(path.join(dir, 'rules.json'), JSON.stringify({ lanes: {
+    codex: { state: 'open' },
+    unmetered: { state: 'open', unmetered: true, byProject: { alpha: { opencode: ['opencode/a'] }, beta: { opencode: ['opencode/a'] } } },
+  } }));
+  const cli = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'src', 'cli.js');
+  const output = execFileSync(process.execPath, [cli, 'lanes'], { cwd: checkout, env: { ...process.env, HOME: home, HERDR_BOSS_DIR: dir }, encoding: 'utf8' });
+  assert.ok(output.split('\n').includes('unmetered open: opencode: a'));
+});
+
+test('lanes prints compact model deltas in project exceptions', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-lanes-delta-'));
+  const home = path.join(dir, 'home');
+  const checkout = path.join(dir, 'checkout');
+  fs.mkdirSync(home, { recursive: true }); fs.mkdirSync(checkout, { recursive: true });
+  execFileSync('git', ['init', '-b', 'main', checkout], { stdio: 'ignore' });
+  fs.writeFileSync(path.join(dir, 'rules.json'), JSON.stringify({ lanes: { unmetered: { state: 'open', unmetered: true, byProject: {
+    alpha: { opencode: ['opencode/big-pickle', 'opencode/space-bunny-free'] },
+    beta: { opencode: ['opencode/big-pickle', 'opencode/space-bunny-free'] },
+    gamma: { opencode: ['opencode/big-pickle'] },
+    delta: { opencode: ['opencode/big-pickle', 'opencode/space-bunny-free'] },
+  } } } }));
+  const cli = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'src', 'cli.js');
+  const output = execFileSync(process.execPath, [cli, 'lanes'], { cwd: checkout, env: { ...process.env, HOME: home, HERDR_BOSS_DIR: dir }, encoding: 'utf8' });
+  assert.ok(output.split('\n').includes('unmetered open: opencode: big-pickle, space-bunny-free; exceptions: gamma (opencode: -space-bunny-free)'), output);
 });
 
 test('worker allow records verified scope extensions and appends history without duplicates', () => {

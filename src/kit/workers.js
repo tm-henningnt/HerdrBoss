@@ -181,8 +181,9 @@ export function describeLane(provider, lane, now = Date.now()) {
   return `${provider} ahead of pace: ${numbers}; back on pace in about ${inAbout(lane.backOnPaceAt, now)} if unused`;
 }
 
-export function describeUnmetered(lane) {
-  const summary = unmeteredSummary(lane);
+export function describeUnmetered(lane, project = null) {
+  const summary = unmeteredSummary(lane, project);
+  if (project && !Object.hasOwn(lane?.byProject || {}, project)) return 'unmetered open; no unmetered models are available after exclusions';
   return summary ? `unmetered open: ${summary}` : 'unmetered open; no unmetered models are available after exclusions';
 }
 

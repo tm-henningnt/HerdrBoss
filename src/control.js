@@ -369,7 +369,10 @@ export function leastOverProvider(lanes) {
 export function unmeteredLane(baseModels, policy, projects = {}) {
   const models = mergeModels(baseModels, policy);
   const byProject = {};
+  const projectModes = {};
   for (const [slug, project] of Object.entries(projects)) {
+    const mode = project.effectiveMode || project.mode || 'auto';
+    if (mode === 'paused') continue;
     const kinds = {};
     for (const kind of policy.allowedKinds || []) {
       const config = models.kinds[kind];
@@ -380,14 +383,51 @@ export function unmeteredLane(baseModels, policy, projects = {}) {
         && providerFor(kind, model, policy) === null);
       if (permitted.length) kinds[kind] = permitted;
     }
-    if (Object.keys(kinds).length) byProject[slug] = kinds;
+    byProject[slug] = kinds;
+    projectModes[slug] = mode;
   }
-  return { state: 'open', unmetered: true, byProject };
+  return { state: 'open', unmetered: true, byProject, projectModes };
 }
 
 // A short one-line description of the unmetered lane for the CLI and the bulletin.
-export function unmeteredSummary(lane) {
-  return Object.entries(lane?.byProject || {}).map(([slug, kinds]) => `${slug}: ${Object.entries(kinds).map(([kind, names]) => `${kind} (${names.join(', ')})`).join(', ')}`).join('; ');
+export function unmeteredSummary(lane, project = null) {
+  const byProject = lane?.byProject || {};
+  const slugs = Object.keys(byProject).filter((slug) => !project || slug === project).filter((slug) => lane?.projectModes?.[slug] !== 'paused').sort();
+  if (!slugs.length) return null;
+  const kinds = [...new Set(slugs.flatMap((slug) => Object.keys(byProject[slug] || {})))].sort();
+  const common = {};
+  for (const kind of kinds) {
+    const sets = slugs.map((slug) => [...(byProject[slug][kind] || [])].map(displayUnmeteredModel).sort());
+    if (sets.some((set) => set.length)) {
+      const counts = new Map();
+      for (const set of sets) { const key = JSON.stringify(set); counts.set(key, (counts.get(key) || 0) + 1); }
+      const selected = [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0];
+      common[kind] = JSON.parse(selected[0]);
+    }
+  }
+  const format = (sets) => Object.keys(sets).sort().filter((kind) => sets[kind]?.length).map((kind) => `${kind}: ${sets[kind].map(displayUnmeteredModel).sort().join(', ')}`).join('; ');
+  if (project) return format(byProject[project] || {});
+  const commonText = format(common);
+  const exceptions = slugs.map((slug) => {
+    const deltas = {};
+    for (const kind of kinds) {
+      const baseline = common[kind] || [];
+      const actual = [...(byProject[slug][kind] || [])].map(displayUnmeteredModel).sort();
+      const baselineSet = new Set(baseline), actualSet = new Set(actual);
+      const changes = [
+        ...baseline.filter((model) => !actualSet.has(model)).map((model) => `-${model}`),
+        ...actual.filter((model) => !baselineSet.has(model)).map((model) => `+${model}`),
+      ];
+      if (changes.length) deltas[kind] = actual.length ? changes : ['none'];
+    }
+    return Object.keys(deltas).length ? `${slug} (${Object.keys(deltas).sort().map((kind) => `${kind}: ${deltas[kind].join(', ')}`).join('; ')})` : null;
+  }).filter(Boolean);
+  const exceptionText = exceptions.join('; ');
+  return `${commonText || 'no unmetered models'}${exceptionText ? `; exceptions: ${exceptionText}` : ''}`;
+}
+
+function displayUnmeteredModel(model) {
+  return model.startsWith('opencode/') ? model.slice('opencode/'.length) : model;
 }
 
 export function deriveControl(snap, policy, baseModels, paneSince = {}, now = Date.now()) {

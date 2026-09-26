@@ -214,7 +214,7 @@ export function renderBulletin(snap, evaluation, cfg) {
     for (const [provider, lane] of Object.entries(snap.lanes)) {
       if (lane.unmetered) {
         const summary = unmeteredSummary(lane);
-        L.push(`- Unmetered: open.${summary ? ` ${summary}.` : ''}`);
+        L.push(`- Unmetered: open${summary ? `: ${summary}` : ''}.`);
         continue;
       }
       const back = lane.backOnPaceAt ? ` Back ${lane.state === 'reserve' ? 'at reset' : 'on pace if unused'} about ${fmtTime(lane.backOnPaceAt)}.` : '';

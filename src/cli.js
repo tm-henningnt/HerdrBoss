@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { loadConfig, migrateAccessFiles, assertPreviewDataDir, DATA_DIR, dashboardUrl } from './config.js';
 import { writeProject, SLUG } from './projects.js';
+import { loadProjectConfig } from './kit/config.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const LABEL = 'no.tallmaker.herdr-boss';
@@ -76,12 +77,17 @@ async function main() {
     case 'lanes': {
       const { describeLane, describeMachine, describeUnmetered } = await import('./kit/workers.js');
       const rules = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'rules.json'), 'utf8'));
+      let project = null;
+      try {
+        const config = loadProjectConfig();
+        if (fs.existsSync(config.configPath)) project = config.slug;
+      } catch {}
       const machineStatus = describeMachine(rules);
       if (machineStatus) console.log(machineStatus);
       const lanes = rules.lanes || {};
       if (!Object.keys(lanes).length) throw new Error('No lane data yet. Wait for the next Herdr Boss tick.');
       for (const [provider, lane] of Object.entries(lanes)) {
-        if (lane.unmetered) { console.log(describeUnmetered(lane)); continue; }
+        if (lane.unmetered) { console.log(describeUnmetered(lane, project)); continue; }
         console.log(`${describeLane(provider, lane)}${rules.leastOverProvider === provider ? ' (least over; worker start allows it)' : ''}`);
       }
       break;
