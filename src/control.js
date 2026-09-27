@@ -583,7 +583,7 @@ export function unmeteredClosedParts(lane, formatTime = (ms) => new Date(ms).toI
     groups.set(key, group);
   }
   for (const group of [...groups.values()].sort((a, b) => `${a.kind}:${a.provider}`.localeCompare(`${b.kind}:${b.provider}`))) {
-    if (group.reason === 'no-credential') parts.push(`Unmetered ${group.kind} ${group.provider}/ models: unavailable. Pi has no credential for the ${group.provider} provider. Adding one is the Owner's decision.`);
+    if (group.reason === 'no-credential') parts.push(`Unmetered ${group.kind} ${group.provider}/ models: unavailable. Pi has no credential for the ${group.provider} provider.`);
     else parts.push(`Unmetered ${group.kind} ${group.models.sort().join(', ')}: unavailable. \`pi --list-models\` does not list ${group.models.length === 1 ? 'it' : 'them'}.`);
   }
   for (const item of (lane?.exhaustedLanes || []).filter(applies)) {

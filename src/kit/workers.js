@@ -283,7 +283,7 @@ export function unmeteredGate(kind, model, provider, rules, { force = false, now
   if (kind === 'pi' && Array.isArray(rules?.piModels?.models) && !rules.piModels.models.includes(model)) {
     const [missing] = unavailablePiModels([model], rules.piModels);
     const reason = missing.reason === 'no-credential'
-      ? `Pi has no credential for the ${missing.provider} provider. Adding one is the Owner's decision.`
+      ? `Pi has no credential for the ${missing.provider} provider.`
       : 'Pi does not list this model.';
     return { error: `pi cannot run ${model}: the last pi --list-models result does not list it. ${reason} --force cannot bypass this refusal.` };
   }

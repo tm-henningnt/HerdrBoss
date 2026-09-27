@@ -14,15 +14,10 @@ import { collectMissingWorktreeProcesses } from '../src/collect.js';
 
 const models = loadModels();
 const policy = (patch = {}) => ({ ...structuredClone(POLICY_DEFAULTS), ...patch });
-const zenPiModels = [
-  'opencode/big-pickle',
-  'opencode/ling-3.0-flash-fin-free',
-  'opencode/mimo-v2.6-flash-free',
-  'opencode/muse-spark-1.2-contributor-free',
-  'opencode/muse-spark-1.3-contributor-free',
-  'opencode/nemotron-3-ultra-free',
-  'opencode/nemotron-3.5-lightning-free',
-];
+// Fixture unmetered Pi models. The kit Pi allow-list holds only metered opencode-go/ models.
+const fixturePiModels = ['fixturezen/free-a', 'fixturezen/free-b'];
+const fixtureModels = structuredClone(models);
+fixtureModels.kinds.pi.allowedModels.push(...fixturePiModels);
 const snapshot = () => ({
   projects: [{ slug: 'a', workspace: 'w1' }, { slug: 'b', workspace: 'w2' }],
   herdr: {
@@ -163,7 +158,7 @@ console.log(JSON.stringify({
     encoding: 'utf8',
   }));
   assert.equal(result.failed, 'failed');
-  assert.deepEqual(result.exhausted.map(({ model, retryAt, projects }) => [model, retryAt, projects]), [['opencode/big-pickle', Date.parse('2026-09-26T15:48:00.000Z'), ['sample']]]);
+  assert.deepEqual(result.exhausted, [], 'the exhausted opencode lane covers its only harness, so no per-model line remains');
   assert.equal(result.availableBeforeRetry, undefined, 'the free-usage limit closes every unmetered opencode model');
   assert.deepEqual(result.exhaustedLanes, [{ kind: 'opencode', retryAt: Date.parse('2026-09-26T15:48:00.000Z'), retryKnown: true, reason: 'free usage exceeded', projects: ['sample'] }]);
   assert.deepEqual(result.rememberedLanes, { opencode: { kind: 'opencode', retryAt: Date.parse('2026-09-26T15:48:00.000Z'), retryKnown: true, at: Date.parse('2026-09-26T10:00:00.000Z') } });
@@ -1220,23 +1215,23 @@ test('a near-exhaustion window keeps its reserve state under a goal', async () =
 test('the unmetered lane lists permitted models after global and project exclusions', async () => {
   const { unmeteredLane } = await import('../src/control.js');
   const projects = { a: { excludedKinds: [], excludedModels: [] }, b: { excludedKinds: ['opencode'], excludedModels: [] } };
-  const lane = unmeteredLane(models, policy({ excludedModels: ['opencode/big-pickle'] }), projects);
+  const lane = unmeteredLane(fixtureModels, policy({ excludedModels: ['opencode/big-pickle', 'fixturezen/free-a'] }), projects);
   assert.equal(lane.state, 'open');
   assert.equal(lane.unmetered, true);
   assert.ok(lane.byProject.a.opencode.includes('opencode/space-bunny-free'));
   assert.ok(!lane.byProject.a.opencode.includes('opencode/big-pickle'));
-  assert.deepEqual([...(lane.byProject.a.pi || [])].sort(), zenPiModels.filter((model) => model !== 'opencode/big-pickle').sort());
+  assert.deepEqual(lane.byProject.a.pi, ['fixturezen/free-b']);
   assert.equal(lane.byProject.b.opencode, undefined, 'an excluded kind drops that harness from the lane');
-  assert.deepEqual([...(lane.byProject.b.pi || [])].sort(), zenPiModels.filter((model) => model !== 'opencode/big-pickle').sort());
+  assert.deepEqual(lane.byProject.b.pi, ['fixturezen/free-b']);
   const paused = unmeteredLane(models, policy(), { stopped: { mode: 'paused', excludedKinds: [], excludedModels: [] } });
   assert.equal(paused.byProject.stopped, undefined, 'paused projects do not enter the unmetered lane');
   const projectModel = unmeteredLane(models, policy(), { a: { excludedKinds: [], excludedModels: ['opencode/space-bunny-free'] } });
   assert.ok(!projectModel.byProject.a.opencode.includes('opencode/space-bunny-free'));
   const routed = unmeteredLane(models, policy({ modelProviders: { 'opencode/space-bunny-free': 'codex' } }), projects);
   assert.ok(!routed.byProject.a.opencode.includes('opencode/space-bunny-free'));
-  const kindsOff = unmeteredLane(models, policy({ allowedKinds: ['pi'] }), projects);
+  const kindsOff = unmeteredLane(fixtureModels, policy({ allowedKinds: ['pi'] }), projects);
   assert.equal(kindsOff.byProject.a.opencode, undefined);
-  assert.deepEqual([...(kindsOff.byProject.a.pi || [])].sort(), [...zenPiModels].sort());
+  assert.deepEqual([...(kindsOff.byProject.a.pi || [])].sort(), [...fixturePiModels].sort());
 });
 
 test('the unmetered lane filters active exhausted models and restores them at retry time', async () => {
@@ -1256,23 +1251,22 @@ test('the unmetered lane filters active exhausted models and restores them at re
   assert.ok(recovered.byProject.a.opencode.includes('opencode/space-bunny-free'));
 });
 
-test('Pi accepts the verified unmetered OpenCode Zen catalog models', async () => {
+test('free opencode/ models run only in the opencode harness', async () => {
   const { unmeteredLane, providerFor } = await import('../src/control.js');
   const { handoffTarget } = await import('../src/handoff.js');
-  for (const model of zenPiModels) {
-    assert.ok(models.kinds.pi.allowedModels.includes(model), `${model} is in the Pi allow-list`);
-    assert.equal(providerFor('pi', model, policy()), null, `${model} is unmetered for Pi`);
-  }
-  assert.ok(!models.kinds.pi.allowedModels.includes('opencode/space-bunny-free'), 'space-bunny-free has no Pi catalog entry');
+  const zen = models.kinds.opencode.allowedModels.filter((model) => model.startsWith('opencode/'));
+  assert.ok(zen.includes('opencode/mimo-v2.6-flash-free'));
+  for (const model of zen) assert.ok(!models.kinds.pi.allowedModels.includes(model), `${model} is not in the Pi allow-list`);
+  assert.ok(models.kinds.pi.allowedModels.every((model) => model.startsWith('opencode-go/')), 'Pi holds only opencode-go/ models');
+  for (const model of models.kinds.pi.allowedModels) assert.equal(providerFor('pi', model, policy()), 'opencodego', `${model} uses the opencode-go credential`);
   assert.equal(models.kinds.pi.defaultModel, 'opencode-go/muse-spark-1.3-contributor', 'the Pi default is unchanged');
   const lane = unmeteredLane(models, policy(), { a: { excludedKinds: [], excludedModels: [] } });
-  assert.deepEqual([...(lane.byProject.a.pi || [])].sort(), [...zenPiModels].sort(), 'the unmetered lane lists them for Pi');
-  assert.ok(!(lane.byProject.a.pi || []).includes('opencode/space-bunny-free'));
-  const target = handoffTarget('pi', { model: 'opencode/mimo-v2.6-flash-free' }, policy(), models);
+  assert.equal(lane.byProject.a.pi, undefined, 'the unmetered lane lists no Pi model');
+  assert.ok(lane.byProject.a.opencode.includes('opencode/mimo-v2.6-flash-free'));
+  assert.throws(() => handoffTarget('pi', { model: 'opencode/mimo-v2.6-flash-free' }, policy(), models), /allow-list/);
+  const target = handoffTarget('opencode', { model: 'opencode/mimo-v2.6-flash-free' }, policy(), models);
   assert.equal(target.model, 'opencode/mimo-v2.6-flash-free');
   assert.equal(target.provider, null, 'handoff keeps the model unmetered');
-  assert.deepEqual(target.launchArgs.slice(0, 4), ['--model', 'opencode/mimo-v2.6-flash-free', '--models', 'opencode/mimo-v2.6-flash-free']);
-  assert.throws(() => handoffTarget('pi', { model: 'opencode/space-bunny-free' }, policy(), models), /allow-list/);
 });
 
 test('unmetered summary prints common models once and differing active projects as exceptions', async () => {

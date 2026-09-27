@@ -31,7 +31,6 @@ Provider quota, task fit, availability, and review effort affect the real cost.
 | `pi`, `opencode-go/deepseek-v4.1-flash` | Economical research and fully specified mechanical work. | Shared Go quota can stop every worker on that provider. Pin the model and verify results. |
 | `pi`, `opencode-go/muse-spark-1.3-contributor` | Cheap bounded implementation, docs, copy, and read-only diagnosis. | Source records disagree on its success rate. Keep the task atomic and inspect every path. |
 | `pi`, `opencode-go/space-bunny-free` | Bounded audits and review-only work. | Evidence is limited. Verify each finding at its source. |
-| `pi`, free `opencode/` models | The same bounded work as the OpenCode harness, launched through Pi. | Catalog support does not guarantee a configured account or live provider availability. Pin the model. |
 | `opencode`, free `opencode/` models | Exact one-file changes with a clear gate. | Use only small, mechanical briefs. Permission prompts and provider overload can stop work. |
 
 Free `opencode/` models recorded in the source include:
@@ -47,9 +46,9 @@ Free `opencode/` models recorded in the source include:
 
 This list is descriptive only. `models.json` decides which models workers may use.
 
-Pi uses the first seven entries of that list. They are in the installed Pi catalog and start unmetered in the Pi harness. `opencode/space-bunny-free` has no Pi catalog entry, so it stays out of the Pi allow-list.
+Free `opencode/` models run only in the OpenCode harness. The Pi allow-list holds only `opencode-go/` models.
 
-Catalog membership means the installed Pi provider knows the model ID. It does not mean an account is configured or that the provider is live. Herdr Boss hides a Pi model that `pi --list-models` does not list. Confirm a worker start before you rely on a model.
+Herdr Boss hides a Pi model that `pi --list-models` does not list. Confirm a worker start before you rely on a model.
 
 Prefer DeepSeek for substantial mechanical work when both DeepSeek and Muse Spark are available.
 
@@ -73,7 +72,7 @@ pi --model <model> --models <same-model> --no-extensions -e ~/.pi/agent/extensio
 
 Do not let model cycling select an unapproved model.
 
-Read the bulletin before you choose a free Pi model. Pi lists only the models that it can use. Herdr Boss runs `pi --list-models` and hides each Pi model that it does not list. `worker start` refuses such a model, and `--force` does not bypass the refusal. A missing provider means that Pi has no credential for it. Do not add a credential or run `/login`. Adding a credential is the Owner's decision.
+Read the bulletin before you choose a Pi model. Pi lists only the models that it can use. Herdr Boss runs `pi --list-models` and hides each Pi model that it does not list. `worker start` refuses such a model, and `--force` does not bypass the refusal. A missing provider means that Pi has no credential for it.
 
 ### OpenCode
 

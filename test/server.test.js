@@ -224,7 +224,7 @@ test('the policy API saves per-harness model assignments and rejects unsafe mode
   assert.ok(!catalog.pi.allowedModels.includes('opencode-go/glm-5.2'), 'the model catalog endpoint stays the kit catalog');
 });
 
-test('the model catalog endpoint exposes the verified unmetered OpenCode Zen models for Pi', { timeout: 20000 }, async (t) => {
+test('the model catalog endpoint lists free opencode/ models only for the opencode harness', { timeout: 20000 }, async (t) => {
   fs.mkdirSync(dataDir, { recursive: true });
   fs.mkdirSync(homeDir, { recursive: true });
   t.after(() => {
@@ -251,17 +251,8 @@ test('the model catalog endpoint exposes the verified unmetered OpenCode Zen mod
   });
   const base = `http://127.0.0.1:${server.address().port}`;
   const catalog = await (await fetch(`${base}/api/models`)).json();
-  const supported = [
-    'opencode/big-pickle',
-    'opencode/ling-3.0-flash-fin-free',
-    'opencode/mimo-v2.6-flash-free',
-    'opencode/muse-spark-1.2-contributor-free',
-    'opencode/muse-spark-1.3-contributor-free',
-    'opencode/nemotron-3-ultra-free',
-    'opencode/nemotron-3.5-lightning-free',
-  ];
-  for (const model of supported) assert.ok(catalog.pi.allowedModels.includes(model), `${model} is listed for Pi`);
-  assert.ok(!catalog.pi.allowedModels.includes('opencode/space-bunny-free'), 'space-bunny-free stays out of Pi');
+  assert.deepEqual(catalog.pi.allowedModels.filter((model) => model.startsWith('opencode/')), [], 'Pi lists no free opencode/ model');
+  assert.ok(catalog.opencode.allowedModels.includes('opencode/big-pickle'), 'the opencode harness lists its free models');
   assert.equal(catalog.pi.defaultModel, 'opencode-go/muse-spark-1.3-contributor', 'the Pi default is unchanged');
   await close();
 });

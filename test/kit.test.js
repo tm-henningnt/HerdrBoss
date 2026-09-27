@@ -1874,7 +1874,7 @@ test('worker start merges extra models into the harness allow-list and applies p
   assert.throws(() => start('extra-routed', { kind: 'pi', model: extra }), /opencodego is ahead of quota pace/);
 });
 
-test('worker start selects the verified unmetered OpenCode Zen models in the Pi harness', () => {
+test('worker start refuses free opencode/ models in the Pi harness', () => {
   const f = setupFixture(null);
   fs.writeFileSync(f.rulesFile, JSON.stringify({ updatedAt: new Date().toISOString(), policy: { allowedKinds: ['codex', 'pi', 'opencode'], excludedModels: [] } }));
   const start = (name, options) => {
@@ -1884,14 +1884,15 @@ test('worker start selects the verified unmetered OpenCode Zen models in the Pi 
     });
     return { result, output: lines.join('\n') };
   };
-  for (const model of ['opencode/big-pickle', 'opencode/mimo-v2.6-flash-free', 'opencode/nemotron-3.5-lightning-free']) {
-    const { result, output } = start('zen-pi', { kind: 'pi', model });
-    assert.equal(result.model, model);
-    assert.deepEqual(result.launchArgs.slice(0, 4), ['--model', model, '--models', model]);
-    assert.match(output, new RegExp(`Validate kind/model/effort: pi / ${model.replace(/[.]/g, '\\$&')}`));
+  for (const model of ['opencode/big-pickle', 'opencode/mimo-v2.6-flash-free', 'opencode/nemotron-3.5-lightning-free', 'opencode/space-bunny-free']) {
+    assert.throws(() => start('zen-pi', { kind: 'pi', model }), /not allowed for pi/, `${model} runs only in the opencode harness`);
   }
-  assert.equal(start('zen-pi-default', { kind: 'pi' }).result.model, 'opencode-go/muse-spark-1.3-contributor', 'the Pi default is unchanged');
-  assert.throws(() => start('bunny-pi', { kind: 'pi', model: 'opencode/space-bunny-free' }), /not allowed for pi/);
+  const model = 'opencode-go/deepseek-v4.1-flash';
+  const { result, output } = start('go-pi', { kind: 'pi', model });
+  assert.equal(result.model, model);
+  assert.deepEqual(result.launchArgs.slice(0, 4), ['--model', model, '--models', model]);
+  assert.match(output, new RegExp(`Validate kind/model/effort: pi / ${model.replace(/[.]/g, '\\$&')}`));
+  assert.equal(start('go-pi-default', { kind: 'pi' }).result.model, 'opencode-go/muse-spark-1.3-contributor', 'the Pi default is unchanged');
 });
 
 test('the models command lists extra models from the local policy', async () => {
@@ -1962,12 +1963,12 @@ test('lanes describes unavailable Pi models and an exhausted free lane for the p
   const retryAt = Date.parse('2026-09-27T17:45:00Z');
   const lane = {
     state: 'open', unmetered: true, byProject: { herdrboss: { pi: ['opencode-go/space-bunny-free'] }, other: {} }, exhausted: [],
-    unavailable: [{ kind: 'pi', model: 'opencode/big-pickle', provider: 'opencode', reason: 'no-credential', projects: ['herdrboss'] }],
+    unavailable: [{ kind: 'pi', model: 'fixturezen/free-a', provider: 'fixturezen', reason: 'no-credential', projects: ['herdrboss'] }],
     exhaustedLanes: [{ kind: 'opencode', retryAt, retryKnown: false, reason: 'free usage exceeded', projects: ['herdrboss'] }],
   };
   assert.deepEqual(describeUnmetered(lane, 'herdrboss').split('\n'), [
     'unmetered open: pi: opencode-go/space-bunny-free',
-    "Unmetered pi opencode/ models: unavailable. Pi has no credential for the opencode provider. Adding one is the Owner's decision.",
+    'Unmetered pi fixturezen/ models: unavailable. Pi has no credential for the fixturezen provider.',
     'Unmetered opencode: exhausted (free usage exceeded); retry after 2026-09-27T17:45:00.000Z (reset time unknown).',
   ]);
   assert.equal(describeUnmetered(lane, 'other').split('\n').length, 1, 'closed parts of another project are not shown');
