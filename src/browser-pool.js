@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import net from 'node:net';
-import { spawn } from 'node:child_process';
+import { spawn as spawnProcess } from 'node:child_process';
 import { DATA_DIR } from './config.js';
 import { collectProcesses } from './collect.js';
 
@@ -9,6 +9,28 @@ const FILE = path.join(DATA_DIR, 'browser-sessions.json');
 const PROFILE_ROOT = path.join(DATA_DIR, 'browser-profiles');
 const SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const DEFAULT_SIZE = { width: 1280, height: 800 };
+const CDP_TIMEOUT_MS = 2000;
+
+// Tests replace the network, process table, signal, and launch functions through the options object.
+function deps(options) {
+  const o = options && typeof options === 'object' ? options : {};
+  return {
+    fetch: o.fetch || globalThis.fetch,
+    collectProcesses: o.collectProcesses || collectProcesses,
+    kill: o.kill || ((pid, signal) => process.kill(pid, signal)),
+    spawn: o.spawn || spawnProcess,
+  };
+}
+
+// A hung Chrome still accepts TCP connections on its debugging port, so only an HTTP answer proves it responds.
+export async function cdpResponds(port, { fetch = globalThis.fetch } = {}) {
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(CDP_TIMEOUT_MS) });
+    if (response.status !== 200) return false;
+    await response.json();
+    return true;
+  } catch { return false; }
+}
 
 export function validWindowSize(width, height) {
   return Number.isInteger(width) && width >= 320 && width <= 3840 && Number.isInteger(height) && height >= 240 && height <= 2160;
@@ -35,7 +57,7 @@ function portOpen(port) {
   });
 }
 
-async function askBrowserToClose(session) {
+async function askBrowserToClose(session, fetch) {
   const response = await fetch(`http://127.0.0.1:${session.port}/json/version`, { signal: AbortSignal.timeout(3000) });
   if (!response.ok) throw new Error('Could not reach Chrome’s browser control endpoint.');
   const info = await response.json();
@@ -68,11 +90,18 @@ async function askBrowserToClose(session) {
   });
 }
 
-export async function browserStatus(session) {
+export function browserOwner(processes, session) {
+  return [...processes.values()].find((p) => p.cmd.includes(`--remote-debugging-port=${session.port}`) && p.cmd.includes(`--user-data-dir=${session.profile}`) && !p.cmd.includes('--type='));
+}
+
+// The second argument is an options object. Array.map passes an index there, which deps() ignores.
+export async function browserStatus(session, options) {
+  const d = deps(options);
   const reachable = await portOpen(session.port);
-  const processes = await collectProcesses();
-  const owner = [...processes.values()].find((p) => p.cmd.includes(`--remote-debugging-port=${session.port}`) && p.cmd.includes(`--user-data-dir=${session.profile}`) && !p.cmd.includes('--type='));
-  return { ...session, windowSize: session.windowSize || DEFAULT_SIZE, reachable, profileVerified: reachable && !!owner, processPresent: !!owner,
+  const owner = browserOwner(await d.collectProcesses(), session);
+  const profileVerified = reachable && !!owner;
+  const responsive = profileVerified && await cdpResponds(session.port, d);
+  return { ...session, windowSize: session.windowSize || DEFAULT_SIZE, reachable, profileVerified, responsive, processPresent: !!owner,
     headless: owner ? /--headless(?:=|\s|$)/.test(owner.cmd) : !!session.headless, pid: owner?.pid ?? session.pid };
 }
 
@@ -86,35 +115,51 @@ export function setBrowserWindowSize(project, width, height) {
   return sessions[project];
 }
 
-export async function closeBrowser(project) {
+export async function closeBrowser(project, options = {}) {
   if (!SLUG.test(project)) throw new Error('project must be a slug.');
+  const d = deps(options);
   const session = listBrowserSessions()[project];
   if (!session) throw new Error('No project browser is registered.');
-  let status = await browserStatus(session);
+  let status = await browserStatus(session, d);
   if (status.reachable && !status.profileVerified) throw new Error(`Port ${session.port} belongs to another process. It was not touched.`);
   if (!status.processPresent && !status.reachable) return { ...status, closed: true };
   if (!status.profileVerified) throw new Error('Could not verify Chrome’s browser control endpoint. Close the browser manually; it was not touched.');
-  await askBrowserToClose(session);
+  let closeFailed = !status.responsive;
+  if (!closeFailed) {
+    try { await askBrowserToClose(session, d.fetch); } catch { closeFailed = true; }
+  }
+  if (closeFailed) {
+    // Check the owner again just before the signal. Only a process with both the port flag and the profile path gets SIGTERM.
+    const owner = browserOwner(await d.collectProcesses(), session);
+    if (owner) {
+      try { d.kill(owner.pid, 'SIGTERM'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
+    }
+  }
   for (let attempt = 0; attempt < 32; attempt++) {
     await new Promise((resolve) => setTimeout(resolve, 250));
-    status = await browserStatus(session);
+    status = await browserStatus(session, d);
     if (!status.processPresent && !status.reachable) return { ...status, closed: true };
   }
-  throw new Error('Chrome did not exit after its close command. Inspect it before relaunching; it was not force-killed.');
+  throw new Error('Chrome did not exit after its close command or SIGTERM. Inspect it before relaunching; it was not force-killed.');
 }
 
-export async function restartBrowser(project, headless, { restorePage = true, tabId = null } = {}) {
+export async function restartBrowser(project, headless, options = {}) {
+  const { restorePage = true, tabId = null } = options;
   if (typeof headless !== 'boolean') throw new Error('Choose visible or headless mode.');
+  const d = deps(options);
   let pageUrl = null;
-  if (restorePage) {
+  const session = listBrowserSessions()[project];
+  // A browser that does not respond cannot list its pages, so the restart skips the restore.
+  const responsive = restorePage && session ? (await browserStatus(session, d)).responsive : false;
+  if (restorePage && responsive) {
     const { listBrowserTabs } = await import('./browser-preview.js');
     const tabs = await listBrowserTabs(project);
     const selected = tabId ? tabs.find((tab) => tab.id === tabId) : tabs.find((tab) => /^https?:\/\//i.test(tab.url));
     if (tabId && !selected) throw new Error('The selected page is no longer open. Refresh the preview before restarting.');
     if (selected && /^https?:\/\//i.test(selected.url)) pageUrl = selected.url;
   }
-  await closeBrowser(project);
-  const status = await requestBrowser(project, { headless });
+  await closeBrowser(project, d);
+  const status = await requestBrowser(project, { ...options, headless });
   if (!pageUrl) return { ...status, restoredPage: false };
   try {
     const { listBrowserTabs, browserNavigate } = await import('./browser-preview.js');
@@ -126,15 +171,18 @@ export async function restartBrowser(project, headless, { restorePage = true, ta
   }
 }
 
-export async function requestBrowser(project, { launch = true, headless = null, chromePath = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' } = {}) {
+export async function requestBrowser(project, options = {}) {
+  const { launch = true, headless = null, chromePath = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' } = options;
   if (!SLUG.test(project)) throw new Error('project must be a slug.');
+  const d = deps(options);
   if (headless !== null && typeof headless !== 'boolean') throw new Error('headless must be boolean when supplied.');
   const sessions = listBrowserSessions();
   const existing = sessions[project];
   const useHeadless = headless ?? !!existing?.headless;
   if (existing) {
-    const status = await browserStatus(existing);
+    const status = await browserStatus(existing, d);
     if (status.reachable && !status.profileVerified) throw new Error(`Port ${existing.port} belongs to a different process. Inspect it before reuse.`);
+    // A verified browser that does not respond is returned as it is. Launching a second Chrome on the same profile would fail.
     if (status.profileVerified) {
       if (launch && status.headless !== useHeadless) throw new Error(`Browser for ${project} is running ${status.headless ? 'headless' : 'visibly'}. Close it before relaunching ${useHeadless ? 'headless' : 'visibly'} with the same profile.`);
       return status;
@@ -157,7 +205,7 @@ export async function requestBrowser(project, { launch = true, headless = null, 
   save(sessions);
   if (launch) {
     if (!fs.existsSync(chromePath)) throw new Error(`Chrome executable not found: ${chromePath}`);
-    const child = spawn(chromePath, [
+    const child = d.spawn(chromePath, [
       `--remote-debugging-port=${port}`, '--remote-debugging-address=127.0.0.1',
       `--user-data-dir=${profile}`, `--window-size=${windowSize.width},${windowSize.height}`, '--no-first-run', '--no-default-browser-check',
       ...(useHeadless ? ['--headless'] : []), 'about:blank',
@@ -169,5 +217,5 @@ export async function requestBrowser(project, { launch = true, headless = null, 
     save(sessions);
   }
   for (let attempt = 0; attempt < 12 && !(await portOpen(port)); attempt++) await new Promise((resolve) => setTimeout(resolve, 250));
-  return browserStatus(session);
+  return browserStatus(session, d);
 }
