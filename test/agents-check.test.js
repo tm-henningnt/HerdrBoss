@@ -129,6 +129,7 @@ test('a prohibition line for port 9222 or a process command is not drift', () =>
 test('the shared Workers tab is not drift', () => {
   assert.deepEqual(check(file('Workers run as panes in the shared `Workers` tab.')), []);
   assert.deepEqual(check(file('Open workers in the Workers tab.')), []);
+  assert.deepEqual(check(file('Worker panes also open in the `Workers 2` and `Workers 3` tabs.')), []);
 });
 
 test('stale text inside the block does not give warnings', () => {

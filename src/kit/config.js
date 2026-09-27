@@ -25,6 +25,8 @@ export const PROJECT_DEFAULTS = Object.freeze({
   setupTimeoutSeconds: 900,
   agentStartTimeoutMs: 90000,
   imageBudget: 10,
+  // The most worker panes that worker start puts in one Workers tab.
+  workerPanesPerTab: 3,
   artifactChecks: [],
 });
 
@@ -95,6 +97,9 @@ export function loadProjectConfig({ cwd = process.cwd(), file = '.herdr-boss.jso
     throw new Error('agentStartTimeoutMs must be an integer from 1 to 300000.');
   }
   if (!Number.isInteger(config.imageBudget) || config.imageBudget < 1) throw new Error('imageBudget must be a positive integer.');
+  if (!Number.isInteger(config.workerPanesPerTab) || config.workerPanesPerTab < 1 || config.workerPanesPerTab > 6) {
+    throw new Error('workerPanesPerTab must be an integer from 1 to 6.');
+  }
   if (!Array.isArray(config.evidenceTiers) || config.evidenceTiers.length === 0 || config.evidenceTiers.some((tier) => typeof tier !== 'string')) {
     throw new Error('evidenceTiers must be a non-empty array of strings.');
   }
