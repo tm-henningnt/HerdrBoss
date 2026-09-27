@@ -1,6 +1,6 @@
 // Turns a snapshot into alerts and bulletin advice. Pure functions, no side effects.
 import { dashboardUrl } from './config.js';
-import { goalSummary, machineLimits, unmeteredSummary } from './control.js';
+import { goalSummary, machineLimits, POLICY_DEFAULTS, unmeteredSummary } from './control.js';
 import { blockedWorkerAlerts } from './worker-failures.js';
 
 const PROVIDER_NAMES = { claude: 'Claude', codex: 'Codex', opencodego: 'OpenCode Go' };
@@ -29,12 +29,75 @@ export function broadcastTargets(orchs, panes) {
   return orchs.filter((o) => busy.has(o.workspace));
 }
 
+// A task key component that is safe inside an alert key.
+function taskKeyPart(task) {
+  const source = String(task?.id || task?.title || '').trim();
+  return source.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'task';
+}
+
+const OPEN_TASK_STATUS = new Set(['todo', 'doing', 'review']);
+const FRONTIER_RANK = { current: 0, next: 2 };
+
+// Open work whose blockers are all done in the same status file. An unknown blocker stays unresolved.
+// The current frontier wins, then work without a frontier value, then the next frontier. File order breaks a tie.
+function actionableTask(tasks) {
+  const list = Array.isArray(tasks) ? tasks : [];
+  const byId = new Map(list.filter((task) => task?.id).map((task) => [task.id, task]));
+  let best = null;
+  for (const task of list) {
+    if (!task || !OPEN_TASK_STATUS.has(task.status)) continue;
+    if (!(task.blockedBy || []).every((id) => byId.get(id)?.status === 'done')) continue;
+    const rank = FRONTIER_RANK[task.frontier] ?? 1;
+    if (!best || rank < best.rank) best = { task, rank };
+  }
+  return best?.task || null;
+}
+
+// One scoped notice per project: an orchestrator that stayed idle while its published status still has ready work.
+function idleOrchestratorNudges(snap, paneSince = {}, now = Date.now(), policy = null) {
+  const control = snap.control?.projects;
+  if (!control) return [];
+  const idleMs = (Number.isFinite(policy?.idleMinutes) ? policy.idleMinutes : POLICY_DEFAULTS.idleMinutes) * 60000;
+  const panes = snap.herdr?.panes || [];
+  const labels = new Map((snap.herdr?.workspaces || []).map((w) => [w.id, w.label]));
+  const notices = [];
+  for (const entry of Object.values(control)) {
+    const mode = entry?.effectiveMode ?? entry?.mode;
+    if (mode !== 'auto' && mode !== 'active') continue;
+    const workspace = entry.workspace;
+    const label = labels.get(workspace) || entry.label || workspace;
+    if (!workspace || /^boss$/i.test(label)) continue;
+    const published = (snap.projects || []).find((p) => p.slug === entry.slug) || (snap.projects || []).find((p) => p.workspace === workspace);
+    if (!published) continue;
+    const orch = panes.find((p) => p.workspace === workspace && p.orch && !/^boss$/i.test(p.label || ''));
+    if (!orch || (orch.status !== 'idle' && orch.status !== 'done')) continue;
+    const since = paneSince[orch.id]?.since;
+    if (!Number.isFinite(since) || now - since < idleMs) continue;
+    const local = panes.filter((p) => p.workspace === workspace);
+    if (local.some((p) => p.agent && !p.orch && ['working', 'blocked', 'failed'].includes(p.status))) continue;
+    const task = actionableTask(published.tasks);
+    if (!task) continue;
+    const ready = local.filter((p) => p.agent && !p.orch && ['idle', 'done'].includes(p.status));
+    const names = ready.map((p) => p.name || p.agent || p.id);
+    const minutes = Math.round((now - since) / 60000);
+    const ref = `task ${task.id ? `${task.id} ` : ''}"${task.title}"`;
+    notices.push({
+      key: `nudge:idle:${entry.slug || taskKeyPart(label)}:${taskKeyPart(task)}`,
+      severity: 'info', scope: workspace,
+      title: `Orchestrator idle with ready work in ${label}`,
+      text: `The ${label} orchestrator has been idle for ${minutes} minutes while ${ref} is ready. ${names.length ? `Resume an idle or done worker (${names.join(', ')}) or start suitable work.` : 'Start suitable work.'}`,
+    });
+  }
+  return notices;
+}
+
 // alert: { key, severity: info|warn|critical, scope: 'all' | <workspace id> | 'user', title, text }
 export function evaluate(snap, cfg, paneSince, now = Date.now(), policy = null) {
   const alerts = [];
   const advice = [];
   const avoidKinds = new Set();
   alerts.push(...blockedWorkerAlerts(snap, paneSince, now));
+  alerts.push(...idleOrchestratorNudges(snap, paneSince, now, policy));
 
   const orphanedPairs = new Set();
   const workspaceLabels = new Map((snap.herdr?.workspaces || []).map((workspace) => [workspace.id, workspace.label]));

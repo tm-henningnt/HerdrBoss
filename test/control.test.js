@@ -1433,3 +1433,146 @@ test('loading treats an incompatible legacy route as unmetered, keeps the raw va
   assert.equal(providerFor('codex', 'gpt-6-astra', overridden), 'codex');
   assert.deepEqual(quiet, []);
 });
+
+// ----- Idle orchestrator nudges -----
+
+const NUDGE_NOW = Date.parse('2026-09-27T12:00:00Z');
+const NUDGE_CFG = { quota: { warnPercent: 90, criticalPercent: 98 }, machine: { memFreeWarnPercent: 15, loadWarnFactor: 2 }, providerKinds: {}, browsers: { staleOwnedMinutes: 30 }, workers: { staleIdleMinutes: 120 }, sharedBrowsers: [] };
+
+function nudgeFixture({ tasks = [], mode = 'auto', effectiveMode = mode, orchStatus = 'idle', workers = [], workspace = 'w1', workspaceLabel = 'HerdrBoss', slug = 'herdrboss' } = {}) {
+  return {
+    projects: [{ slug, workspace, project: 'HerdrBoss', tasks }],
+    control: { projects: { [slug]: { slug, workspace, label: 'HerdrBoss', mode, effectiveMode, orch: { pane: `${workspace}:p1`, status: orchStatus } } } },
+    herdr: {
+      workspaces: [{ id: workspace, label: workspaceLabel }],
+      panes: [
+        { id: `${workspace}:p1`, workspace, orch: true, label: 'orch', agent: 'claude', status: orchStatus, sessionId: 's1' },
+        ...workers,
+      ],
+    },
+    quotas: [],
+    browsers: [],
+  };
+}
+
+const nudgeAlerts = (snap, paneSince, now = NUDGE_NOW) =>
+  evaluate(snap, NUDGE_CFG, paneSince, now, policy({ idleMinutes: 15 })).alerts.filter((a) => a.key.startsWith('nudge:'));
+
+test('the idle-orchestrator nudge starts at the idle threshold and names the ready task', () => {
+  const snap = nudgeFixture({ tasks: [{ id: '74', title: 'Parse event log', status: 'todo' }] });
+  assert.deepEqual(nudgeAlerts(snap, { 'w1:p1': { since: NUDGE_NOW - 15 * 60000 + 1 } }), [], 'no nudge just before the threshold');
+  const [alert] = nudgeAlerts(snap, { 'w1:p1': { since: NUDGE_NOW - 15 * 60000 - 1 } });
+  assert.ok(alert, 'a nudge just after the threshold');
+  assert.equal(alert.severity, 'info');
+  assert.equal(alert.scope, 'w1');
+  assert.equal(alert.immediate, undefined, 'the nudge waits for the normal cooldown');
+  assert.equal(alert.once, undefined);
+  assert.match(alert.text, /idle for 15 minutes/);
+  assert.match(alert.text, /task 74 "Parse event log"/);
+  assert.match(alert.text, /Start suitable work/);
+  assert.doesNotMatch(JSON.stringify(alert), /herdr-boss publish/, 'the notice does not quote project notes');
+});
+
+test('the nudge key stays stable per project and task while a new next task prompts again', () => {
+  const first = nudgeAlerts(nudgeFixture({ tasks: [{ id: '74', title: 'Parse event log', status: 'todo' }] }), { 'w1:p1': { since: NUDGE_NOW - 20 * 60000 } })[0];
+  const again = nudgeAlerts(nudgeFixture({ tasks: [{ id: '74', title: 'Parse event log', status: 'todo' }] }), { 'w1:p1': { since: NUDGE_NOW - 25 * 60000 } });
+  assert.equal(again.length, 1);
+  assert.equal(again[0].key, first.key, 'the same project and task keep one key');
+  const other = nudgeAlerts(nudgeFixture({ tasks: [{ id: '75', title: 'Render graph', status: 'todo' }] }), { 'w1:p1': { since: NUDGE_NOW - 20 * 60000 } })[0];
+  assert.notEqual(other.key, first.key, 'a changed next task gets a new key');
+  const cooldown = 6 * 3600 * 1000;
+  const records = { [`${first.key}@w1:p1`]: { at: NUDGE_NOW, severity: 'info' } };
+  assert.equal(alertPromptDue(first, null, NUDGE_NOW, cooldown), true, 'the first nudge is due');
+  assert.equal(alertPromptDue(first, records[`${first.key}@w1:p1`], NUDGE_NOW + 3600 * 1000, cooldown), false, 'a repeated key waits for the cooldown');
+  assert.equal(alertPromptDue(first, records[`${first.key}@w1:p1`], NUDGE_NOW + 7 * 3600 * 1000, cooldown), true, 'the cooldown expires');
+  assert.equal(alertPromptDue(other, records[`${other.key}@w1:p1`] || null, NUDGE_NOW + 3600 * 1000, cooldown), true, 'the new next task prompts before the cooldown ends');
+});
+
+test('the nudge ranks actionable tasks by frontier and keeps status-file order inside a rank', () => {
+  const ranked = nudgeFixture({ tasks: [
+    { id: 'next1', title: 'Later work', status: 'todo', frontier: 'next' },
+    { id: 'plain1', title: 'Plain one', status: 'todo' },
+    { id: 'cur1', title: 'Now work', status: 'doing', frontier: 'current' },
+    { id: 'cur2', title: 'Second current', status: 'todo', frontier: 'current' },
+    { id: 'plain2', title: 'Plain two', status: 'todo' },
+  ] });
+  assert.match(nudgeAlerts(ranked, { 'w1:p1': { since: NUDGE_NOW - 20 * 60000 } })[0].key, /:cur1$/, 'the current frontier wins');
+  const withoutCurrent = nudgeFixture({ tasks: [
+    { id: 'next1', title: 'Later work', status: 'todo', frontier: 'next' },
+    { id: 'plain2', title: 'Plain two', status: 'todo' },
+    { id: 'plain1', title: 'Plain one', status: 'todo' },
+  ] });
+  assert.match(nudgeAlerts(withoutCurrent, { 'w1:p1': { since: NUDGE_NOW - 20 * 60000 } })[0].key, /:plain2$/, 'a task without a frontier ranks before next and keeps file order');
+  const onlyNext = nudgeFixture({ tasks: [{ id: 'plain1', title: 'Plain one', status: 'done' }, { id: 'next1', title: 'Later work', status: 'todo', frontier: 'next' }] });
+  assert.match(nudgeAlerts(onlyNext, { 'w1:p1': { since: NUDGE_NOW - 20 * 60000 } })[0].key, /:next1$/, 'next work is the last rank');
+});
+
+test('a task is actionable only when every blocker is done in the same project', () => {
+  const tasks = [
+    { id: '70', title: 'Event log spec', status: 'done' },
+    { id: '74', title: 'Parse event log', status: 'todo', blockedBy: ['70'] },
+    { id: '75', title: 'Render graph', status: 'todo', blockedBy: ['74'] },
+    { id: '76', title: 'Export to PNG', status: 'todo', blockedBy: ['99'] },
+    { id: '77', title: 'Wait for review', status: 'blocked' },
+  ];
+  assert.match(nudgeAlerts(nudgeFixture({ tasks }), { 'w1:p1': { since: NUDGE_NOW - 20 * 60000 } })[0].key, /:74$/, 'a done blocker releases its task');
+  const finished = tasks.map((t) => t.id === '74' ? { ...t, status: 'done' } : t);
+  assert.match(nudgeAlerts(nudgeFixture({ tasks: finished }), { 'w1:p1': { since: NUDGE_NOW - 20 * 60000 } })[0].key, /:75$/, 'the next dependent task becomes actionable');
+  const unresolved = tasks.filter((t) => t.id === '70');
+  assert.deepEqual(nudgeAlerts(nudgeFixture({ tasks: unresolved }), { 'w1:p1': { since: NUDGE_NOW - 20 * 60000 } }), [], 'an unknown blocker is unresolved');
+  const explicitly = tasks.filter((t) => t.id === '77');
+  assert.deepEqual(nudgeAlerts(nudgeFixture({ tasks: explicitly }), { 'w1:p1': { since: NUDGE_NOW - 20 * 60000 } }), [], 'a blocked task is not actionable');
+});
+
+test('the nudge skips paused and idle projects and the Boss workspace', () => {
+  const tasks = [{ id: '74', title: 'Parse event log', status: 'todo' }];
+  const since = { 'w1:p1': { since: NUDGE_NOW - 20 * 60000 } };
+  assert.equal(nudgeAlerts(nudgeFixture({ tasks, mode: 'paused' }), since).length, 0, 'a paused project is skipped');
+  assert.equal(nudgeAlerts(nudgeFixture({ tasks, mode: 'idle' }), since).length, 0, 'an idle project is skipped');
+  assert.equal(nudgeAlerts(nudgeFixture({ tasks, mode: 'auto', effectiveMode: 'paused' }), since).length, 0, 'a published paused status is skipped');
+  assert.equal(nudgeAlerts(nudgeFixture({ tasks, mode: 'auto', workspace: 'w-boss', workspaceLabel: 'Boss', slug: 'boss' }), { 'w-boss:p1': { since: NUDGE_NOW - 20 * 60000 } }).length, 0, 'the Boss workspace is skipped');
+  assert.equal(nudgeAlerts(nudgeFixture({ tasks, mode: 'active' }), since).length, 1, 'an active project is nudged');
+});
+
+test('the nudge waits for a quiet workspace and an idle or done orchestrator', () => {
+  const tasks = [{ id: '74', title: 'Parse event log', status: 'todo' }];
+  const since = { 'w1:p1': { since: NUDGE_NOW - 20 * 60000 } };
+  for (const status of ['working', 'blocked', 'failed']) {
+    const workers = [{ id: 'w1:p2', workspace: 'w1', orch: false, agent: 'codex', name: `worker-${status}`, status }];
+    assert.equal(nudgeAlerts(nudgeFixture({ tasks, workers }), since).length, 0, `a ${status} worker stops the nudge`);
+  }
+  assert.equal(nudgeAlerts(nudgeFixture({ tasks, orchStatus: 'working' }), since).length, 0, 'a working orchestrator is not nudged');
+  const idleWorker = { id: 'w1:p2', workspace: 'w1', orch: false, agent: 'codex', name: 'h27nudges', status: 'idle' };
+  const [alert] = nudgeAlerts(nudgeFixture({ tasks, orchStatus: 'done', workers: [idleWorker] }), since);
+  assert.ok(alert, 'a done orchestrator with an idle worker is nudged');
+  assert.match(alert.text, /Resume an idle or done worker \(h27nudges\)/);
+  const finishedWorker = { ...idleWorker, status: 'done' };
+  const doneOnly = nudgeAlerts(nudgeFixture({ tasks, workers: [finishedWorker] }), since);
+  assert.equal(doneOnly.length, 1, 'a done-only worker does not stop the nudge');
+  assert.match(doneOnly[0].text, /Resume an idle or done worker \(h27nudges\)/, 'a done worker is named as resumable');
+});
+
+test('a task without an ID gets a stable safe key derived from its title', () => {
+  const tasks = [
+    { title: 'Export to PNG / SVG (v2)!', status: 'todo' },
+    { title: 'Render graph', status: 'todo' },
+  ];
+  const [alert] = nudgeAlerts(nudgeFixture({ tasks }), { 'w1:p1': { since: NUDGE_NOW - 20 * 60000 } });
+  assert.equal(alert.key, 'nudge:idle:herdrboss:export-to-png-svg-v2', 'punctuation collapses to safe key characters');
+  assert.doesNotMatch(alert.key, /[^a-z0-9:._-]/, 'the key holds only safe characters');
+  assert.match(alert.text, /task "Export to PNG \/ SVG \(v2\)!"/, 'the notice still shows the full title');
+  const again = nudgeAlerts(nudgeFixture({ tasks }), { 'w1:p1': { since: NUDGE_NOW - 25 * 60000 } });
+  assert.equal(again[0].key, alert.key, 'the derived key stays stable across evaluations');
+  const otherTitle = nudgeAlerts(nudgeFixture({ tasks: [{ title: 'Render graph', status: 'todo' }] }), { 'w1:p1': { since: NUDGE_NOW - 20 * 60000 } });
+  assert.equal(otherTitle[0].key, 'nudge:idle:herdrboss:render-graph', 'a different title gets its own key');
+});
+
+test('no nudge goes out when the published status has no actionable work', () => {
+  const since = { 'w1:p1': { since: NUDGE_NOW - 20 * 60000 } };
+  assert.deepEqual(nudgeAlerts(nudgeFixture({ tasks: [] }), since), [], 'an empty task list');
+  assert.deepEqual(nudgeAlerts(nudgeFixture({ tasks: [{ id: '74', title: 'Parse event log', status: 'done' }] }), since), [], 'only finished tasks');
+  assert.deepEqual(nudgeAlerts(nudgeFixture({ tasks: [{ title: 'Untitled work' }] }), since), [], 'a task without a status');
+  const snap = nudgeFixture({ tasks: [{ id: '74', title: 'Parse event log', status: 'todo' }] });
+  delete snap.projects;
+  assert.deepEqual(nudgeAlerts(snap, since), [], 'no published status file');
+});
