@@ -78,10 +78,12 @@ function herdr(args) {
   let stdout;
   try { stdout = call('herdr', args); }
   catch (e) {
-    // The installed CLI exits 1 on an error and prints the JSON error envelope on stdout.
-    let response;
-    try { response = JSON.parse(e.stdout); } catch { throw e; }
-    if (response?.error && typeof response.error === 'object') throw herdrError(response.error);
+    // The installed CLI exits 1 on an error and prints the JSON error envelope on stderr.
+    for (const stream of [e.stderr, e.stdout]) {
+      let response;
+      try { response = JSON.parse(stream); } catch { continue; }
+      if (response?.error && typeof response.error === 'object') throw herdrError(response.error);
+    }
     throw e;
   }
   // pane read prints text, not JSON; the readiness check expects { text }.
