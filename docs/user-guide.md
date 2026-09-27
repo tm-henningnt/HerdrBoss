@@ -6,6 +6,15 @@ This guide tells how Herdr Boss works and how to set it up. For commands and opt
 
 Every 30 seconds, Herdr Boss reads Herdr workspaces and agents, machine load and memory, and automation browsers and their owner panes. Every 5 minutes, it reads subscription quotas with `codexbar usage --format json`.
 
+The quota read runs beside the 30-second cycle. A slow `codexbar` does not delay the other reads. A later cycle applies the result. Only one quota read runs at a time. Herdr Boss stops `codexbar` after 240 seconds.
+
+When a quota read fails, Herdr Boss keeps the last good quotas. The dashboard shows the error only when no quotas are younger than 15 minutes. The error text tells the cause:
+
+- `codexbar timed out after 240 s`: the read took longer than 240 seconds.
+- `codexbar exited with code N`: `codexbar` failed. The text adds the first line of its error output when there is one.
+
+At start, Herdr Boss loads the saved quotas from `state.json` when they are younger than 15 minutes. The dashboard shows "Quotas from HH:MM" for these saved quotas until the first new read succeeds. Automatic handover does not use saved quotas.
+
 Then it applies its rules and writes these files to `~/.herdr-boss/`:
 
 | File | Content |

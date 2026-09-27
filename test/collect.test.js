@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { collectMachine, collectWorktreeCounts } from '../src/collect.js';
+import { collectMachine, collectQuotas, collectWorktreeCounts } from '../src/collect.js';
 
 test('machine snapshot measures free space on the supplied data filesystem', async () => {
   const machine = await collectMachine(process.cwd());
@@ -51,4 +51,27 @@ test('failed Git worktree listing skips that project', async () => {
     throw new Error('git unavailable');
   };
   assert.deepEqual(await collectWorktreeCounts([{ orch: true, workspace: 'failed', cwd: '/failed' }], { now: 900000, runner }), {});
+});
+
+test('a codexbar timeout reports the timeout and the read waits 240 seconds', async () => {
+  let options;
+  const runner = async (_cmd, _args, opts) => {
+    options = opts;
+    throw Object.assign(new Error('Command failed: codexbar usage --format json'), { killed: true, signal: 'SIGTERM', code: null, stderr: '' });
+  };
+  await assert.rejects(collectQuotas({ runner }), { message: 'codexbar timed out after 240 s' });
+  assert.equal(options.timeout, 240000);
+});
+
+test('a codexbar non-zero exit reports the exit code and the first stderr line', async () => {
+  const fail = (stderr) => async () => { throw Object.assign(new Error('Command failed: codexbar usage --format json'), { killed: false, signal: null, code: 2, stderr }); };
+  await assert.rejects(collectQuotas({ runner: fail('login expired\nsecond line\n') }), { message: 'codexbar exited with code 2: login expired' });
+  await assert.rejects(collectQuotas({ runner: fail('\n') }), { message: 'codexbar exited with code 2' });
+});
+
+test('collectQuotas parses the codexbar rows from the runner', async () => {
+  const runner = async () => JSON.stringify([{ provider: 'codex', usage: { primary: { usedPercent: 12, resetsAt: 'r', windowMinutes: 300 } } }]);
+  const [row] = await collectQuotas({ runner });
+  assert.equal(row.provider, 'codex');
+  assert.equal(row.windows[0].usedPercent, 12);
 });

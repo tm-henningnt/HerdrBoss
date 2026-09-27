@@ -83,8 +83,22 @@ export async function collectHerdr(orchLabel) {
 
 // ---------- Quotas ----------
 
-export async function collectQuotas() {
-  const out = await run('codexbar', ['usage', '--format', 'json'], { timeout: 90000 });
+const QUOTA_TIMEOUT_MS = 240000;
+
+// Replace the generic "Command failed" text with the cause: a timeout or the exit code.
+export function codexbarError(err, timeoutMs = QUOTA_TIMEOUT_MS) {
+  if (err?.killed || err?.signal) return `codexbar timed out after ${Math.round(timeoutMs / 1000)} s`;
+  if (Number.isInteger(err?.code)) {
+    const line = String(err.stderr || '').split(/\r?\n/).map((x) => x.trim()).find(Boolean);
+    return `codexbar exited with code ${err.code}${line ? `: ${line}` : ''}`;
+  }
+  return `codexbar failed: ${err?.message || err}`;
+}
+
+export async function collectQuotas({ runner = run } = {}) {
+  let out;
+  try { out = await runner('codexbar', ['usage', '--format', 'json'], { timeout: QUOTA_TIMEOUT_MS }); }
+  catch (err) { throw new Error(codexbarError(err)); }
   const rows = JSON.parse(out);
   return rows.map((r) => {
     if (r.error) return { provider: r.provider, error: r.error.message };
