@@ -8,7 +8,8 @@ import { buildGhArgs } from './gh.js';
 import { allowWorkerScope, collectWorker, createHerdrRunner, listWorkers, parkWorker, startWorker } from './workers.js';
 import { pruneWorktrees } from './worktrees.js';
 import { acquireProjectLock, listProjectLocks, releaseProjectLock } from './locks.js';
-import { agentsBlock, checkAgentsFile, rulesPolicy } from './agents-check.js';
+import { agentsBlock, checkAgentsFile, installKit, kitRevision, rulesPolicy } from './agents-check.js';
+import { listProjects } from '../projects.js';
 
 const USAGE = `Kit commands:
   worker start <name> --kind <kind> (--task TEXT | --task-file FILE) [options]
@@ -21,6 +22,8 @@ const USAGE = `Kit commands:
   ledger append --entry FILE | ledger check [--runs]
   check --report FILE | --run FILE | --worktree DIR --allow PATH...
   check agents [FILE]
+  check kit
+  kit install [--no-hook]
   kit block
   gh issue create|comment|edit ... --body-file FILE
   models [--kind KIND]
@@ -78,10 +81,37 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
   }
 
   if (command === 'kit') {
-    if (argv.length !== 1 || argv[0] !== 'block') fail('Usage: kit block');
-    const result = agentsBlock();
-    output(result.block.trimEnd());
+    const usage = 'Usage: kit install [--no-hook] | kit block';
+    if (argv[0] === 'block') {
+      // kit block prints the AGENTS.md stub, for old instructions.
+      if (argv.length !== 1) fail(usage);
+      const result = agentsBlock();
+      output(result.block.trimEnd());
+      return result;
+    }
+    if (argv[0] !== 'install' || argv.slice(1).some((flag) => flag !== '--no-hook') || argv.length > 2) fail(usage);
+    const root = injectedConfig?.root ?? findGitRoot();
+    const result = installKit(root, { hook: !argv.includes('--no-hook') });
+    for (const file of result.written) output(`wrote ${file}`);
+    for (const file of result.unchanged) output(`unchanged ${file}`);
+    output(`kit install: kit revision ${result.revision}, stub ${result.hash}, in ${root}`);
     return result;
+  }
+
+  if (command === 'check' && argv[0] === 'kit') {
+    if (argv.length !== 1) fail('Usage: check kit');
+    const current = kitRevision();
+    const rows = listProjects().map((project) => {
+      const loaded = typeof project.kitRevision === 'string' && project.kitRevision ? project.kitRevision : null;
+      const state = !loaded ? 'not published' : loaded === current ? 'current' : 'old';
+      const c = project.agentsCheck;
+      const counts = c && Number.isInteger(c.errors) && Number.isInteger(c.warnings) ? `${c.errors} errors, ${c.warnings} warnings` : 'not published';
+      output(`${project.slug}: kit revision ${loaded ?? 'none'} (${state}); agents check ${counts}`);
+      return { slug: project.slug, kitRevision: loaded, state, agentsCheck: c ?? null };
+    });
+    const stale = rows.filter((row) => row.state !== 'current').length;
+    output(`check kit: ${stale ? 'FAIL' : 'PASS'} (current revision ${current}; ${rows.length} projects, ${stale} not current)`);
+    return { current, projects: rows, exitCode: stale ? 1 : 0 };
   }
 
   if (command === 'check' && argv[0] === 'agents') {

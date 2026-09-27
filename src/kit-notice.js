@@ -1,22 +1,24 @@
 // Kit change notice: after a service restart, tell each project orchestrator which kit commits
 // arrived since the last notice. The engine reads git once at start. There are no timers.
+import { kitRevision } from './kit/agents-check.js';
 
+// 'kit' includes kit/templates/project-kit.md and kit/templates/agents-stub.md.
 export const KIT_PATHS = Object.freeze(['kit', 'src/kit', 'docs/orchestrator-instructions.md']);
 const MAX_SUBJECTS = 10;
 const MAX_SUBJECT_LENGTH = 90;
 const MAX_TEXT_LENGTH = 1199;
 const PENDING_MS = 7 * 86400 * 1000;
-const TAIL = '. Run herdr-boss check agents, and reinstall the block with herdr-boss kit block if it reports an old block.';
+const TAIL = '. Run herdr-boss kit install, then re-read docs/orchestration/herdr-boss.md now; your loaded copy is stale.';
 
 function shortSubject(subject) {
   const text = String(subject || '').replace(/\s+/g, ' ').trim();
   return text.length > MAX_SUBJECT_LENGTH ? `${text.slice(0, MAX_SUBJECT_LENGTH - 3)}...` : text;
 }
 
-// commits: [{ hash, subject }], newest first.
-export function formatKitNotice(commits) {
+// commits: [{ hash, subject }], newest first. revision is the kit revision of HEAD.
+export function formatKitNotice(commits, revision = kitRevision()) {
   const shown = commits.slice(0, MAX_SUBJECTS).map((c) => shortSubject(c.subject));
-  const head = `[herdr-boss] Kit updated (${commits.length} change(s)): `;
+  const head = `[herdr-boss] Kit revision ${revision ?? 'unknown'} (${commits.length} change(s)): `;
   const list = () => [...shown, ...(commits.length > shown.length ? [`and ${commits.length - shown.length} more`] : [])].join('; ');
   while (shown.length > 1 && head.length + list().length + TAIL.length > MAX_TEXT_LENGTH) shown.pop();
   return `${head}${list()}${TAIL}`;

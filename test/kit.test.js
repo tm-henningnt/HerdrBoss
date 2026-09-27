@@ -2093,13 +2093,76 @@ test('publish stores the AGENTS.md drift counts and still publishes', () => {
   const cli = fileURLToPath(new URL('../src/cli.js', import.meta.url));
   const result = spawnSync(process.execPath, [cli, 'publish', 'demo', status], { cwd: repo, env, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stderr, /^warning: AGENTS\.md error line 1: no begin marker/m);
+  assert.match(result.stderr, /^warning: AGENTS\.md error line 1: no Herdr Boss stub; run herdr-boss kit install/m);
+  assert.match(result.stderr, /^warning: AGENTS\.md error line 1: docs\/orchestration\/herdr-boss\.md is missing/m);
   assert.match(result.stderr, /^warning: AGENTS\.md warn line 2: .*pane ID/m);
   const stored = JSON.parse(fs.readFileSync(path.join(dataDir, 'projects', 'demo.json'), 'utf8'));
   assert.deepEqual({ ...stored.agentsCheck, checkedAt: undefined }, { checkedAt: undefined, errors: 2, warnings: 1, file: 'AGENTS.md' });
   assert.ok(!Number.isNaN(Date.parse(stored.agentsCheck.checkedAt)));
   assert.ok(!JSON.stringify(stored).includes('w1:p2'), 'the record holds counts only, no file text');
   assert.ok(validateProject({ project: 'x', agentsCheck: { errors: -1, warnings: 0 } }).some((error) => error.includes('agentsCheck')));
+});
+
+test('the project status accepts an optional 12-hex kitRevision', () => {
+  assert.deepEqual(validateProject({ project: 'x', kitRevision: 'abcdef012345' }), []);
+  assert.deepEqual(validateProject({ project: 'x' }), []);
+  for (const bad of ['', 'ABCDEF012345', 'abc', 12, 'abcdef0123456', { v: 1 }]) {
+    assert.ok(validateProject({ project: 'x', kitRevision: bad }).some((error) => error.includes('kitRevision')), JSON.stringify(bad));
+  }
+});
+
+test('the listed projects carry the current kit revision for the project page', async () => {
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-list-kit-')));
+  const dataDir = path.join(home, 'boss');
+  fs.mkdirSync(path.join(dataDir, 'projects'), { recursive: true });
+  fs.writeFileSync(path.join(dataDir, 'projects', 'demo.json'), JSON.stringify({ project: 'Demo', kitRevision: 'abcdef012345' }));
+  const { projectKit } = await import('../src/kit/agents-check.js');
+  const script = "import('./src/projects.js').then((m) => process.stdout.write(JSON.stringify(m.listProjects())))";
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], { cwd: fileURLToPath(new URL('..', import.meta.url)), env: { ...process.env, HOME: home, HERDR_BOSS_DIR: dataDir }, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  const [row] = JSON.parse(result.stdout);
+  assert.equal(row.kitRevision, 'abcdef012345');
+  assert.equal(row.currentKitRevision, projectKit().revision);
+});
+
+test('check kit lists each published project with its kit revision and check counts', async () => {
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-check-kit-')));
+  const dataDir = path.join(home, 'boss');
+  fs.mkdirSync(path.join(dataDir, 'projects'), { recursive: true });
+  const { projectKit } = await import('../src/kit/agents-check.js');
+  const current = projectKit().revision;
+  const write = (slug, data) => fs.writeFileSync(path.join(dataDir, 'projects', `${slug}.json`), JSON.stringify({ project: slug, ...data }));
+  write('alpha', { kitRevision: current, agentsCheck: { errors: 0, warnings: 2, file: 'AGENTS.md' } });
+  write('beta', { kitRevision: 'abcdef012345', agentsCheck: { errors: 1, warnings: 0, file: 'AGENTS.md' } });
+  write('gamma', {});
+  const cli = fileURLToPath(new URL('../src/cli.js', import.meta.url));
+  const env = { ...process.env, HOME: home, HERDR_BOSS_DIR: dataDir, TMPDIR: home };
+  const result = spawnSync(process.execPath, [cli, 'check', 'kit'], { cwd: home, env, encoding: 'utf8' });
+  assert.equal(result.status, 1, result.stderr);
+  assert.deepEqual(result.stdout.trimEnd().split('\n'), [
+    `alpha: kit revision ${current} (current); agents check 0 errors, 2 warnings`,
+    'beta: kit revision abcdef012345 (old); agents check 1 errors, 0 warnings',
+    'gamma: kit revision none (not published); agents check not published',
+    `check kit: FAIL (current revision ${current}; 3 projects, 2 not current)`,
+  ]);
+
+  write('beta', { kitRevision: current });
+  fs.rmSync(path.join(dataDir, 'projects', 'gamma.json'));
+  const pass = spawnSync(process.execPath, [cli, 'check', 'kit'], { cwd: home, env, encoding: 'utf8' });
+  assert.equal(pass.status, 0, pass.stderr);
+  assert.match(pass.stdout, /check kit: PASS \(current revision [0-9a-f]{12}; 2 projects, 0 not current\)/);
+});
+
+test('publish keeps the kitRevision of the status file', () => {
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-publish-kit-')));
+  const status = path.join(home, 'status.json');
+  fs.writeFileSync(status, JSON.stringify({ project: 'Demo', kitRevision: 'abcdef012345' }));
+  const dataDir = path.join(home, 'boss');
+  const env = { ...process.env, HOME: home, HERDR_BOSS_DIR: dataDir, TMPDIR: home };
+  const cli = fileURLToPath(new URL('../src/cli.js', import.meta.url));
+  const result = spawnSync(process.execPath, [cli, 'publish', 'demo', status], { cwd: home, env, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dataDir, 'projects', 'demo.json'), 'utf8')).kitRevision, 'abcdef012345');
 });
 
 test('worker start warns about AGENTS.md drift and still starts', () => {
@@ -2118,6 +2181,9 @@ test('the project page shows the AGENTS.md drift line and its help', () => {
   assert.match(app, /AGENTS\.md drift: \$\{errors\} errors, \$\{warnings\} warnings\. Run <span class="mono">herdr-boss check agents<\/span>\./);
   assert.match(app, /agentsDriftLine\(p\.agentsCheck\)/);
   assert.match(app, /<h3>AGENTS\.md drift<\/h3>/);
+  assert.match(app, /Kit revision \$\{esc\(loaded\)\}, current \$\{esc\(current\)\}/);
+  assert.match(app, /kitRevisionLine\(p\)/);
+  assert.match(app, /<h3>Kit revision<\/h3>/);
 });
 
 test('lanes describes unavailable Pi models and an exhausted free lane for the project', async () => {

@@ -2,11 +2,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { PROJECTS_DIR } from './config.js';
+import { kitRevision } from './kit/agents-check.js';
 
 export const SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const TASK_STATUS = new Set(['todo', 'doing', 'review', 'blocked', 'done']);
 const FRONTIER = new Set(['current', 'next']);
 const WEB_URL = /^https?:\/\//i;
+const KIT_REVISION = /^[0-9a-f]{12}$/;
 
 export function validateProject(p) {
   const errs = [];
@@ -41,11 +43,14 @@ export function validateProject(p) {
     const c = p.agentsCheck;
     if (typeof c !== 'object' || Array.isArray(c) || !Number.isInteger(c.errors) || c.errors < 0 || !Number.isInteger(c.warnings) || c.warnings < 0) errs.push('"agentsCheck" must be an object with errors and warnings (non-negative integers)');
   }
+  if (p.kitRevision != null && (typeof p.kitRevision !== 'string' || !KIT_REVISION.test(p.kitRevision))) errs.push('"kitRevision" must be the 12 hex characters of a kit revision');
   if (p.git != null && (typeof p.git !== 'object' || Array.isArray(p.git))) errs.push('"git" must be an object with branch, commit, and dirty');
   return errs;
 }
 
 export function listProjects() {
+  // currentKitRevision is not part of the status file. The project page compares it with kitRevision.
+  const currentKitRevision = kitRevision();
   let files = [];
   try { files = fs.readdirSync(PROJECTS_DIR).filter((f) => f.endsWith('.json')); } catch {}
   return files.map((f) => {
@@ -54,9 +59,9 @@ export function listProjects() {
     try {
       const data = JSON.parse(fs.readFileSync(file, 'utf8'));
       const errors = validateProject(data);
-      return { slug, ...data, updated: data.updated || fs.statSync(file).mtime.toISOString(), errors: errors.length ? errors : undefined };
+      return { slug, ...data, currentKitRevision, updated: data.updated || fs.statSync(file).mtime.toISOString(), errors: errors.length ? errors : undefined };
     } catch (e) {
-      return { slug, project: slug, errors: [`invalid JSON: ${e.message}`] };
+      return { slug, project: slug, currentKitRevision, errors: [`invalid JSON: ${e.message}`] };
     }
   }).sort((a, b) => a.project.localeCompare(b.project));
 }

@@ -2,6 +2,7 @@
 import { dashboardUrl } from './config.js';
 import { goalSummary, machineLimits, POLICY_DEFAULTS, unmeteredClosedParts, unmeteredSummary } from './control.js';
 import { blockedWorkerAlerts } from './worker-failures.js';
+import { kitRevision } from './kit/agents-check.js';
 
 const PROVIDER_NAMES = { claude: 'Claude', codex: 'Codex', opencodego: 'OpenCode Go' };
 export const providerName = (p) => PROVIDER_NAMES[p] || p;
@@ -268,7 +269,7 @@ export function evaluate(snap, cfg, paneSince, now = Date.now(), policy = null) 
 
 export function renderBulletin(snap, evaluation, cfg) {
   const L = [];
-  L.push(`# Herdr Boss bulletin`, '', `Updated: ${new Date(snap.updatedAt).toISOString()}`, '');
+  L.push(`# Herdr Boss bulletin`, '', `Updated: ${new Date(snap.updatedAt).toISOString()}`, `Kit revision: ${kitRevision() ?? 'unknown'}`, '');
   L.push('Read this file before you start new workers. Obey the rules below.', '');
   L.push('## Rules now', '');
   const serious = evaluation.alerts.filter((a) => a.severity !== 'info');
