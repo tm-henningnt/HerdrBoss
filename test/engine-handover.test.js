@@ -43,6 +43,9 @@ const engine = new Engine(cfg, {
   },
 });
 engine.deliver = async () => {};
+// The quota read runs beside the tick. Finish one read first, so the tick applies its quotas.
+engine.readQuotas();
+await engine.quotaRead;
 await engine.tick();
 console.log(JSON.stringify({ calls, collectorCalls, control: engine.state.control, lanes: engine.state.lanes }));
 `;

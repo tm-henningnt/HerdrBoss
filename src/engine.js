@@ -25,6 +25,8 @@ const POLICY_FILE = path.join(DATA_DIR, 'policy.json');
 const WORKTREE_SCAN_INTERVAL_MS = 5 * 60 * 1000;
 const CLONE_SWEEP_INTERVAL_MS = 10 * 60 * 1000;
 const PI_MODELS_INTERVAL_MS = 15 * 60 * 1000;
+// Quotas younger than this are shown without the codexbar error, and saved quotas this young load at start.
+const QUOTA_CACHE_MS = 15 * 60 * 1000;
 
 function handoffCandidates(control) {
   return [...(control.handoffs || []), ...(control.bossHandoff ? [control.bossHandoff] : [])];
@@ -81,6 +83,10 @@ export class Engine extends EventEmitter {
     this.memory = readJson(MEMORY_FILE, { paneSince: {}, pushes: {}, notified: {} });
     this.quotas = null;
     this.quotasAt = 0;
+    this.quotasCached = false;
+    this.quotaRead = null;
+    this.quotaResult = null;
+    this.quotaError = null;
     this.worktreeCounts = {};
     this.worktreeCountsAt = 0;
     this.orphanedWorktreeProcesses = [];
@@ -107,6 +113,12 @@ export class Engine extends EventEmitter {
     this.kitRoot = kitRoot;
     this.kitNoticeRead = false;
     this.state = readJson(STATE_FILE, null);
+    const savedAt = Date.parse(this.state?.quotasAt);
+    if (Array.isArray(this.state?.quotas) && this.state.quotas.length && Number.isFinite(savedAt) && Date.now() - savedAt < QUOTA_CACHE_MS) {
+      this.quotas = this.state.quotas;
+      this.quotasAt = savedAt;
+      this.quotasCached = true;
+    }
     this.events = [];
     try {
       this.events = fs.readFileSync(EVENTS_FILE, 'utf8').trim().split('\n').slice(-200).map((l) => JSON.parse(l));
@@ -130,13 +142,14 @@ export class Engine extends EventEmitter {
     const errors = [];
     const now = Date.now();
     try {
-      const refreshQuotas = !this.quotas || now - this.quotasAt > this.cfg.quotaSeconds * 1000;
+      this.applyQuotaResult();
+      if (!this.quotas || now - this.quotasAt > this.cfg.quotaSeconds * 1000) this.readQuotas();
       // Pi lists only the models it can use. A failed run keeps the last good result; no result means availability is unknown.
       const refreshPiModels = !Number.isFinite(this.piModelsCheckedAt) || now - this.piModelsCheckedAt >= PI_MODELS_INTERVAL_MS;
       if (refreshPiModels) this.piModelsCheckedAt = now;
       let currentHerdrSnapshot = false;
       let currentPaneList = false;
-      const [herdr, machine, procs, quotas] = await Promise.all([
+      const [herdr, machine, procs] = await Promise.all([
         this.collectors.collectHerdr(this.cfg.orchestratorLabel).then((snapshot) => {
           currentHerdrSnapshot = true;
           currentPaneList = Array.isArray(snapshot?.panes);
@@ -144,7 +157,6 @@ export class Engine extends EventEmitter {
         }).catch((e) => { errors.push(`herdr: ${e.message}`); return this.state?.herdr || null; }),
         this.collectors.collectMachine(DATA_DIR).catch((e) => { errors.push(`machine: ${e.message}`); return null; }),
         this.collectors.collectProcesses().catch((e) => { errors.push(`ps: ${e.message}`); return new Map(); }),
-        refreshQuotas ? this.collectors.collectQuotas().catch((e) => { errors.push(`codexbar: ${e.message}`); return null; }) : null,
         refreshPiModels ? this.collectors.collectPiModels({ now }).then((result) => {
           if (Array.isArray(result?.models)) this.memory.piModels = { at: Number.isFinite(result.at) ? result.at : now, models: [...result.models] };
         }).catch(() => {}) : null,
@@ -175,7 +187,7 @@ export class Engine extends EventEmitter {
           this.orphanedWorktreeProcesses = await this.collectors.collectMissingWorktreeProcesses(herdr.panes, cwdProcesses);
         } catch (error) { errors.push(`missing worktree process check: ${error.message}`); }
       }
-      if (quotas) { this.quotas = quotas; this.quotasAt = now; recordQuotaSnapshot(quotas, new Date(now).toISOString()); }
+      if (this.quotaError && !(this.quotas && now - this.quotasAt < QUOTA_CACHE_MS)) errors.push(this.quotaError);
       const browserSessions = Object.values(listBrowserSessions());
       const browsers = findBrowsers(procs, herdr?.panes || [], [
         { port: 9222, label: 'Protected legacy browser' },
@@ -209,6 +221,7 @@ export class Engine extends EventEmitter {
         updatedAt: new Date(now).toISOString(),
         quotasAt: this.quotasAt ? new Date(this.quotasAt).toISOString() : null,
         quotas: this.quotas || [],
+        quotasCached: this.quotasCached,
         machine,
         worktreeCounts: this.worktreeCounts,
         orphanedWorktreeProcesses: this.orphanedWorktreeProcesses,
@@ -467,6 +480,38 @@ export class Engine extends EventEmitter {
     this.log('reap', `Terminated ${victims.length} orphaned agent-browser daemon(s): ${victims.map((v) => `${v.pid} (${fmtDuration(v.age)})`).join(', ')}`);
   }
 
+  // The quota read runs beside the tick, because codexbar can take minutes on a loaded machine.
+  // A later tick applies the result. Only one read runs at a time.
+  readQuotas() {
+    if (this.quotaRead) return this.quotaRead;
+    let read;
+    try { read = Promise.resolve(this.collectors.collectQuotas()); } catch (error) { read = Promise.reject(error); }
+    this.quotaRead = read.then(
+      (quotas) => { this.quotaResult = { quotas, at: Date.now() }; },
+      (error) => {
+        const message = String(error?.message || error);
+        this.quotaResult = { error: /^codexbar\b/.test(message) ? message : `codexbar: ${message}` };
+      },
+    ).finally(() => { this.quotaRead = null; });
+    return this.quotaRead;
+  }
+
+  applyQuotaResult() {
+    const result = this.quotaResult;
+    if (!result) return;
+    this.quotaResult = null;
+    if (result.error || !Array.isArray(result.quotas)) {
+      // A failed read keeps the last good quotas.
+      this.quotaError = result.error || 'codexbar: no quota rows';
+      return;
+    }
+    this.quotas = result.quotas;
+    this.quotasAt = result.at;
+    this.quotasCached = false;
+    this.quotaError = null;
+    recordQuotaSnapshot(result.quotas, new Date(result.at).toISOString());
+  }
+
   // The sweep runs beside the tick, because deleting many clones can take longer than one tick.
   sweepClones(now) {
     if (this.cfg.browsers?.sweepCodeSignClones === false || this.cloneSweepRunning || now - this.cloneSweepAt < CLONE_SWEEP_INTERVAL_MS) return null;
@@ -485,7 +530,7 @@ export class Engine extends EventEmitter {
 
   async autoHandover(control, herdr, policy, now) {
     // Never switch labels using stale quota data or a guessed successor state.
-    if (!this.quotasAt || now - this.quotasAt > (this.cfg.quotaSeconds + this.cfg.tickSeconds) * 1000) return;
+    if (!this.quotasAt || this.quotasCached || now - this.quotasAt > (this.cfg.quotaSeconds + this.cfg.tickSeconds) * 1000) return;
     this.memory.autoHandoverAttempts ||= {};
     for (const [key, at] of Object.entries(this.memory.autoHandoverAttempts)) if (now - at > 7 * 86400 * 1000) delete this.memory.autoHandoverAttempts[key];
     const records = listHandoffs();
