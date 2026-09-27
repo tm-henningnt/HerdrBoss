@@ -74,7 +74,7 @@ description: Use when coordinating delegated workers with Herdr Boss, writing wo
 
 - Read [the model lanes](../../models.md) before selecting a kind or model.
 - Read `~/.herdr-boss/bulletin.md` before each new dispatch.
-- Follow the current global worker cap and your project's share in the bulletin.
+- Follow the current global worker cap and your project's effective slots in the bulletin. The effective slots include borrowed slots. Start workers up to your effective slots.
 - Use `--force` only for an authorized quota or capacity override. It cannot enable globally disabled kinds or models.
 - Obey the bulletin's preferred and avoided kinds.
 - Use `herdr-boss models` to inspect the configured model options.

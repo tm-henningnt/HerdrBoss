@@ -352,6 +352,16 @@ export function describeMachine(rules) {
   return `Machine guard ${guardText}. Owner ${machine.owner || 'unknown'}; CPU ${cpu} / ${threshold}limit ${machine.cpuLimit == null ? 'disabled' : `${machine.cpuLimit}%`}; 5-minute load ${load} / ${threshold}backstop ${machine.loadLimit ?? 'disabled'}${exceeded ? '. Stop new workers and full test suites.' : ''}`;
 }
 
+// One bulletin line for the project: effective slots with the borrowed or lent count, global use, and the machine load.
+export function allocationSummary(rules, slug) {
+  const control = rules?.control;
+  const p = control?.projects?.[slug];
+  if (!p) return null;
+  const loan = p.borrowed ? ` (+${p.borrowed} borrowed)` : p.lent ? ` (${p.lent} lent)` : '';
+  const load = Number.isFinite(rules.machine?.fiveMinute) ? rules.machine.fiveMinute : 'unknown';
+  return `Allocation for ${slug}: ${p.running}/${p.slots} effective slots${loan}; ${control.runningWorkers ?? 'unknown'}/${control.maxWorkers ?? 'unknown'} working agents globally; 5-minute load ${load}.`;
+}
+
 // The active machine CPU limit and enabled load backstop refuse starts, including with --force.
 export function loadWarning(rules) {
   const machine = rules?.machine;
@@ -731,7 +741,9 @@ export function startWorker(name, options, {
   if (rules.control?.runningWorkers >= rules.control?.maxWorkers && !options.force) throw new Error(`Global worker limit (${rules.control.maxWorkers}) is reached; wait or use --force.`);
   const projectSlots = rules.control?.projects?.[config.slug];
   if (projectSlots?.effectiveMode === 'paused' && !options.force) throw new Error(`Project ${config.slug} is paused. Use --force only for an authorized override.`);
-  if (projectSlots && projectSlots.running >= projectSlots.slots && !options.force) output(`Notice: ${config.slug} uses ${projectSlots.running}/${projectSlots.slots} allocated slots. This share is advisory; global limit still applies.`);
+  const summary = allocationSummary(rules, config.slug);
+  if (summary) output(summary);
+  if (projectSlots && projectSlots.running >= projectSlots.slots && !options.force) output(`Notice: ${config.slug} uses ${projectSlots.running}/${projectSlots.slots} effective slots. This share is advisory; global limit still applies.`);
   const allowedErrors = validateAllowedPaths(options.allow ?? []);
   if (allowedErrors.length) throw new Error(allowedErrors.join('\n'));
   if (!options.allow?.length) throw new Error('Give at least one --allow path (use --allow . only for an explicitly unrestricted task).');

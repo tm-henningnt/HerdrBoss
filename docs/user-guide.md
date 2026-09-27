@@ -218,7 +218,18 @@ Each project has two share values:
 
 A bar segment shows its set share and its effective slots, for example `30% · 2`. A narrow segment shows only the set share or no label. Its tooltip shows all values.
 
-An idle project is faded in the bar and in its row. A paused project is faded and striped. When **Borrow idle shares** is on, each idle project lends its slots to the active projects. An idle project can then have 0 effective slots while its set share stays the same.
+An idle project is faded in the bar and in its row. A paused project is faded and striped.
+
+The **base slots** of a project are its set share of the global worker limit. When **Borrow idle shares** (`borrowIdle`) is on, a project lends its unused base slots to the projects that use all their slots:
+
+- An idle or paused project lends all its base slots.
+- Another project lends its base slots minus its running workers. It keeps a reserve of 1 slot when its orchestrator is `working` or `blocked`. It keeps no reserve when its orchestrator is `idle` or `done`.
+- A project is a borrower when its running workers are equal to or more than its base slots minus its reserve. Herdr Boss gives the lent slots to the borrowers by share.
+- When no project is a borrower, no project lends.
+
+The effective slots are the base slots minus the lent slots plus the borrowed slots. The bulletin shows them on each project line, for example `Viz: 4/6 slots (40% share, +1 borrowed)` or `HerdrBoss: 0/1 slots (15% share, 1 lent)`. Borrowed slots are real capacity. An orchestrator can start workers up to its effective slots. The global limit still applies. The set share stays the same. Clear **Borrow idle shares** to stop all lending.
+
+`worker start` prints one allocation line for the project: the running workers, the effective slots, the borrowed or lent count, the global use, and the 5-minute load. When the project uses all its effective slots, `worker start` also prints an advisory notice. The notice does not stop the start.
 
 ## Orchestrator handover
 
