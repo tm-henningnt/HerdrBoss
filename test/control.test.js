@@ -772,6 +772,22 @@ test('the idle-worker notice skips a prepared handover successor', async () => {
   assert.doesNotMatch(stale.text, /w1:p6/);
 });
 
+test('the idle-worker notice skips former orchestrators labeled orch previous and boss previous', async () => {
+  const { evaluate } = await import('../src/rules.js');
+  const cfg = { quota: { warnPercent: 90, criticalPercent: 98 }, machine: { memFreeWarnPercent: 15, loadWarnFactor: 2 }, browsers: { staleOwnedMinutes: 30 }, workers: { staleIdleMinutes: 120 }, sharedBrowsers: [] };
+  const now = Date.now();
+  const since = now - 3 * 3600000;
+  const snap = { herdr: { panes: [
+    { id: 'w1:p1', workspace: 'w1', label: 'orch previous', agent: 'claude', orch: false, status: 'idle' },
+    { id: 'w1:p3', workspace: 'w1', label: null, agent: 'pi', orch: false, status: 'idle' },
+    { id: 'wb:p1', workspace: 'wb', label: 'boss previous', agent: 'claude', orch: false, status: 'done' },
+  ] } };
+  const { alerts } = evaluate(snap, cfg, { 'w1:p1': { since }, 'w1:p3': { since }, 'wb:p1': { since } }, now);
+  const stale = alerts.filter((a) => a.key.startsWith('workers:stale:'));
+  assert.deepEqual(stale.map((a) => a.key), ['workers:stale:w1:w1:p3']);
+  assert.doesNotMatch(stale[0].text, /w1:p1\b/);
+});
+
 test('blocked-worker rule starts only after five minutes', async () => {
   const { evaluate } = await import('../src/rules.js');
   const cfg = { quota: { warnPercent: 90, criticalPercent: 98 }, machine: { memFreeWarnPercent: 15, loadWarnFactor: 2 }, browsers: { staleOwnedMinutes: 30 }, workers: { staleIdleMinutes: 120 }, sharedBrowsers: [] };

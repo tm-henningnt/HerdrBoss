@@ -1834,7 +1834,7 @@ test('worker list reports the failed status from the Boss snapshot', () => {
   fs.mkdirSync(runsPath);
   fs.writeFileSync(path.join(runsPath, 'worker-a.json'), JSON.stringify({ name: 'worker-a', pane: 'w1:p2' }));
   const stateFile = path.join(dir, 'state.json');
-  fs.writeFileSync(stateFile, JSON.stringify({ herdr: { panes: [{ id: 'w1:p2', status: 'failed' }] } }));
+  fs.writeFileSync(stateFile, JSON.stringify({ herdr: { panes: [{ id: 'w1:p2', status: 'failed', agent: 'codex' }] } }));
   const rows = listWorkers({ runsPath }, {
     herdr: (args) => args[0] === 'agent' && args[1] === 'list' ? { agents: [{ name: 'worker-a', agent_status: 'idle' }] } : {},
     output: () => {}, stateFile,

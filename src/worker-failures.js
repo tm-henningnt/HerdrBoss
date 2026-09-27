@@ -86,8 +86,14 @@ export function matchWorkerFailure(lines) {
   }) || null;
 }
 
+// Orchestrator and Boss panes, current or previous, are not workers.
+const NON_WORKER_LABELS = new Set(['orch', 'boss', 'orch previous', 'boss previous']);
+export function isWorkerPane(pane) {
+  return Boolean(pane?.agent) && !pane.orch && !NON_WORKER_LABELS.has(pane.label);
+}
+
 export function shouldReadWorkerScreen(previous, pane) {
-  if (!pane?.agent || pane.orch) return false;
+  if (!isWorkerPane(pane)) return false;
   // A working pane is read on every tick, so a provider failure that appears during work is caught.
   if (pane.status === 'working') return true;
   if (!['idle', 'done'].includes(pane.status)) return false;
@@ -113,7 +119,7 @@ export function inspectWorkerReports(panes, observed, now = Date.now(), getMetad
   const nextObserved = {};
   const notices = [];
   for (const pane of panes || []) {
-    if (!pane?.agent || pane.orch || pane.label === 'orch' || pane.label === 'boss') continue;
+    if (!isWorkerPane(pane)) continue;
     const prior = observed?.[pane.id];
     const firstSeen = Number.isFinite(prior?.firstSeen) ? prior.firstSeen : now;
     nextObserved[pane.id] = {
@@ -149,7 +155,7 @@ export async function inspectWorkerTransitions(panes, observed, existingFailures
   const live = new Map((panes || []).map((pane) => [pane.id, pane]));
   for (const [id, failure] of Object.entries(failures)) {
     const pane = live.get(id);
-    if (!pane || pane.agent !== failure.agent || (pane.name || null) !== (failure.name || null)
+    if (!pane || !isWorkerPane(pane) || pane.agent !== failure.agent || (pane.name || null) !== (failure.name || null)
       || (pane.sessionId || null) !== (failure.sessionId || null)) delete failures[id];
   }
   for (const pane of panes || []) {
@@ -197,7 +203,7 @@ export async function inspectWorkerTransitions(panes, observed, existingFailures
 export function applyWorkerFailureStatuses(panes, failures) {
   return (panes || []).map((pane) => {
     const failure = failures?.[pane.id];
-    if (!failure || !pane.agent || pane.agent !== failure.agent || (pane.name || null) !== (failure.name || null)
+    if (!failure || !isWorkerPane(pane) || pane.agent !== failure.agent || (pane.name || null) !== (failure.name || null)
       || (pane.sessionId || null) !== (failure.sessionId || null)) return pane;
     return { ...pane, status: 'failed', failureLabel: failure.label };
   });
@@ -205,7 +211,7 @@ export function applyWorkerFailureStatuses(panes, failures) {
 
 export function blockedWorkerAlerts(snap, paneSince, now = Date.now()) {
   return (snap.herdr?.panes || []).flatMap((pane) => {
-    if (!pane.agent || pane.orch || pane.label === 'boss' || pane.status !== 'blocked') return [];
+    if (!isWorkerPane(pane) || pane.status !== 'blocked') return [];
     const since = paneSince?.[pane.id]?.since;
     if (!Number.isFinite(since) || now - since <= 5 * 60 * 1000) return [];
     const name = pane.name || pane.agent;
@@ -219,6 +225,8 @@ export function blockedWorkerAlerts(snap, paneSince, now = Date.now()) {
 
 export function workerStatusFromState(paneId, state, worker = null) {
   const pane = state?.herdr?.panes?.find((item) => item.id === paneId);
+  // A stale run record can match an orchestrator or Boss pane, current or previous. Those panes are not workers.
+  if (!isWorkerPane(pane)) return null;
   if (worker?.name && pane?.name && worker.name !== pane.name) return null;
   if (worker?.kind && pane?.agent && worker.kind !== pane.agent) return null;
   const status = pane?.status;

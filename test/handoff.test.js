@@ -640,3 +640,179 @@ test('dashboard offers Prepare after an unavailable migration plan', () => {
   assert.match(source, /\$\{plan\s*\?\s*`<button type="button" data-handoff-prepare=/);
   assert.match(source, /Migration unavailable:[^`]*Prepare will use fresh mode/);
 });
+
+// A fake Herdr CLI for activation. It prints the installed CLI's JSON envelope with raw pane fields.
+function activationFixture(t, { boss = false, failPrompts = [], paneListFails = false, record = {}, extraPanes = [] } = {}) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-boss-activate-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const bin = path.join(root, '.local', 'bin');
+  fs.mkdirSync(path.join(root, 'project'), { recursive: true });
+  fs.mkdirSync(bin, { recursive: true });
+  const callsFile = path.join(root, 'herdr-calls.jsonl');
+  const ws = boss ? 'wb' : 'ws';
+  const panes = [
+    { pane_id: `${ws}:p1`, workspace_id: ws, label: boss ? 'boss' : 'orch', agent: 'claude', agent_status: 'working' },
+    { pane_id: `${ws}:p2`, workspace_id: ws, label: null, agent: 'codex', agent_status: 'idle' },
+    { pane_id: `${ws}:p3`, workspace_id: ws, label: null, agent: 'pi', agent_status: 'working' },
+    { pane_id: `${ws}:p4`, workspace_id: ws, label: null, agent: null, agent_status: null },
+    { pane_id: 'other:p1', workspace_id: 'other', label: boss ? 'orch' : 'boss', agent: 'claude', agent_status: 'idle' },
+    ...extraPanes,
+  ];
+  writeExecutable(path.join(bin, 'herdr.cjs'), `
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+fs.appendFileSync(process.env.TEST_CALLS, JSON.stringify(args) + '\\n');
+const panes = JSON.parse(process.env.TEST_PANES);
+let result = {};
+if (args[0] === 'pane' && args[1] === 'get') result = { pane: panes.find((pane) => pane.pane_id === args[2]) || null };
+if (args[0] === 'pane' && args[1] === 'list') {
+  if (process.env.TEST_PANE_LIST_FAIL === '1') process.exit(1);
+  result = { panes };
+}
+if (args[0] === 'agent' && args[1] === 'prompt' && JSON.parse(process.env.TEST_FAIL_PROMPTS).includes(args[2])) {
+  console.log(JSON.stringify({ id: 'cli:agent:prompt', error: { code: 'pane_not_found', message: 'Pane not found.' } }));
+  process.exit(0);
+}
+console.log(JSON.stringify({ id: 'cli:' + args.slice(0, 2).join(':'), result }));
+`);
+  writeExecutable(path.join(bin, 'herdr'), `#!/bin/sh
+exec node "$(dirname "$0")/herdr.cjs" "$@"
+`);
+  fs.writeFileSync(path.join(root, 'handoffs.json'), JSON.stringify([{
+    id: 'handoff-activate', sourcePane: `${ws}:p1`, workspace: ws, cwd: path.join(root, 'project'),
+    project: boss ? 'Boss' : 'alpha', label: boss ? 'boss' : 'orch', displayLabel: boss ? 'Boss' : 'Alpha', boss,
+    fromKind: 'claude', sessionId: 'source-session', toKind: 'codex', model: 'gpt-6-luna', effort: 'xhigh',
+    mode: 'fresh', requestedMode: 'migrate', migrationFallbackReason: 'Session migration unavailable: test',
+    provider: 'openai', migratedId: null, newPane: `${ws}:p2`, status: 'prepared', automatic: false,
+    preparedAt: '2026-09-27T10:00:00.000Z',
+    ...(boss ? {} : { ownerGoal: 'Ship the release safely.', sourceContext: 'Earlier safe context' }),
+    ...record,
+  }]));
+  const env = {
+    ...process.env, HOME: root, HERDR_BOSS_DIR: root, PATH: `${bin}${path.delimiter}${process.env.PATH || ''}`,
+    TEST_CALLS: callsFile, TEST_PANES: JSON.stringify(panes), TEST_FAIL_PROMPTS: JSON.stringify(failPrompts),
+    TEST_PANE_LIST_FAIL: paneListFails ? '1' : '0',
+  };
+  const handoffUrl = new URL('../src/handoff.js', import.meta.url).href;
+  const activate = () => JSON.parse(runHandoffModule(root, `import { activateHandoff } from ${JSON.stringify(handoffUrl)};
+console.log(JSON.stringify(activateHandoff('handoff-activate', { confirmed: true })));`, env));
+  const calls = () => fs.readFileSync(callsFile, 'utf8').trim().split('\n').map(JSON.parse);
+  const prompts = () => Object.fromEntries(calls().filter((args) => args[0] === 'agent' && args[1] === 'prompt').map((args) => [args[2], args[3]]));
+  return { root, ws, activate, calls, prompts };
+}
+
+test('project activation labels the successor orch and the previous pane orch previous', (t) => {
+  const f = activationFixture(t);
+  const item = f.activate();
+  const renames = f.calls().filter((args) => args[0] === 'pane' && args[1] === 'rename');
+  assert.deepEqual(renames, [['pane', 'rename', 'ws:p1', 'orch previous'], ['pane', 'rename', 'ws:p2', 'orch']]);
+  assert.equal(f.calls().some((args) => args.includes('standby')), false);
+  assert.equal(item.status, 'active');
+  assert.ok(Number.isFinite(Date.parse(item.activatedAt)));
+  assert.deepEqual(item.activation, { at: item.activatedAt, sourcePane: 'ws:p1', successorPane: 'ws:p2', sourceLabel: 'orch previous', successorLabel: 'orch' });
+  assert.equal(item.sourcePane, 'ws:p1');
+  assert.equal(item.newPane, 'ws:p2');
+  assert.deepEqual(item.peerPanes, ['ws:p3']);
+  // The H26 B2 goal and source context stay in the active record.
+  assert.equal(item.ownerGoal, 'Ship the release safely.');
+  assert.equal(item.sourceContext, 'Earlier safe context');
+  const stored = JSON.parse(fs.readFileSync(path.join(f.root, 'handoffs.json'), 'utf8'))[0];
+  assert.deepEqual(stored.activation, item.activation);
+  assert.equal(stored.ownerGoal, 'Ship the release safely.');
+});
+
+test('Boss activation labels the successor boss and the previous pane boss previous', (t) => {
+  const f = activationFixture(t, { boss: true });
+  const item = f.activate();
+  const renames = f.calls().filter((args) => args[0] === 'pane' && args[1] === 'rename');
+  assert.deepEqual(renames, [['pane', 'rename', 'wb:p1', 'boss previous'], ['pane', 'rename', 'wb:p2', 'boss']]);
+  assert.deepEqual(item.activation, { at: item.activatedAt, sourcePane: 'wb:p1', successorPane: 'wb:p2', sourceLabel: 'boss previous', successorLabel: 'boss' });
+  assert.equal(Object.hasOwn(item, 'ownerGoal'), false);
+});
+
+test('activation keeps its confirmation and readiness checks', (t) => {
+  const f = activationFixture(t, { record: { newPane: 'ws:p3' , toKind: 'pi' } });
+  const handoffUrl = new URL('../src/handoff.js', import.meta.url).href;
+  assert.throws(() => runHandoffModule(f.root, `import { activateHandoff } from ${JSON.stringify(handoffUrl)}; activateHandoff('handoff-activate');`, { ...process.env, HOME: f.root, HERDR_BOSS_DIR: f.root }), /--confirmed/);
+  assert.throws(() => f.activate(), /not settled and ready/);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.root, 'handoffs.json'), 'utf8'))[0].status, 'prepared');
+});
+
+test('project activation prompts the successor and the previous agent with both pane IDs', (t) => {
+  const f = activationFixture(t);
+  const item = f.activate();
+  const prompts = f.prompts();
+  const successor = prompts['ws:p2'];
+  assert.match(successor, /Your pane ID is ws:p2/);
+  assert.match(successor, /previous orchestrator is pane ws:p1/);
+  assert.match(successor, /orch previous/);
+  assert.match(successor, /started your session fresh as codex \(gpt-6-luna, xhigh\) because session migration was unavailable/);
+  assert.match(successor, /redacted, bounded snapshot of the source pane and the current Owner goal/);
+  assert.match(successor, /final summary/);
+  assert.match(successor, /herdr agent read ws:p1/);
+  assert.match(successor, /Take over the current work/);
+  assert.match(successor, /Use your pane ID ws:p2 in worker briefs, worker reports, and messages/);
+  assert.match(successor, /ws:p3/);
+  const previous = prompts['ws:p1'];
+  assert.match(previous, /no longer own orchestration of alpha/);
+  assert.match(previous, /Pane ws:p2 is the new orchestrator/);
+  assert.match(previous, /concise final summary for the successor/);
+  assert.match(previous, /reply to every later request only with: "The alpha orchestrator is now pane ws:p2\."/);
+  assert.doesNotMatch(previous, /standby/i);
+  assert.ok(item.previousPromptAt);
+  assert.equal(Object.hasOwn(item, 'previousPromptError'), false);
+  const order = f.calls().filter((args) => args[1] === 'prompt').map((args) => args[2]);
+  assert.deepEqual(order, ['ws:p1', 'ws:p2']);
+});
+
+test('migrated activation tells the successor how session-migrate built its session', (t) => {
+  const f = activationFixture(t, { record: { mode: 'migrate', requestedMode: undefined, migrationFallbackReason: undefined, migratedId: 'migrated-session' } });
+  f.activate();
+  assert.match(f.prompts()['ws:p2'], /migrating the claude conversation \(session source-session\) to codex session migrated-session with session-migrate/);
+});
+
+test('Boss activation uses Boss and Owner wording for the previous agent', (t) => {
+  const f = activationFixture(t, { boss: true });
+  f.activate();
+  const prompts = f.prompts();
+  assert.match(prompts['wb:p2'], /You now control Herdr Boss orchestration/);
+  assert.match(prompts['wb:p2'], /previous Boss is pane wb:p1/);
+  assert.match(prompts['wb:p2'], /Your pane ID is wb:p2/);
+  assert.match(prompts['wb:p1'], /You are no longer the Herdr Boss/);
+  assert.match(prompts['wb:p1'], /Pane wb:p2 is the new Boss/);
+  assert.match(prompts['wb:p1'], /final summary for the new Boss/);
+  assert.match(prompts['wb:p1'], /later request from the Owner or an orchestrator only with: "The Boss is now pane wb:p2\."/);
+});
+
+test('a failed previous-agent prompt does not stop activation and stays eligible for retry', (t) => {
+  const f = activationFixture(t, { failPrompts: ['ws:p1'] });
+  const item = f.activate();
+  assert.equal(item.status, 'active');
+  assert.match(item.previousPromptError, /Pane not found/);
+  assert.ok(f.prompts()['ws:p2']);
+});
+
+test('dashboard and CLI docs describe the activation labels without standby', () => {
+  const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const cli = fs.readFileSync(new URL('../docs/cli.md', import.meta.url), 'utf8');
+  const confirmLine = app.split('\n').find((line) => line.includes("action === 'activate' && !confirm("));
+  assert.match(confirmLine, /becomes orch, and the current pane becomes orch previous/);
+  assert.match(confirmLine, /becomes boss, and the current pane becomes boss previous/);
+  assert.doesNotMatch(confirmLine, /standby/);
+  const help = app.split('\n').find((line) => line.includes('<h3>Project continuity</h3>'));
+  assert.match(help, /<b>orch previous<\/b>/);
+  assert.match(help, /<b>boss previous<\/b>/);
+  assert.match(help, /Boss-workspace peers and the Owner/);
+  const row = cli.split('\n').find((line) => line.startsWith('| `handoff activate'));
+  assert.match(row, /`orch previous`/);
+  assert.match(row, /`boss previous`/);
+  assert.doesNotMatch(row, /standby/);
+});
+
+test('a successive activation leaves earlier previous-role panes out of its worker peers', (t) => {
+  const project = activationFixture(t, { extraPanes: [{ pane_id: 'ws:p0', workspace_id: 'ws', label: 'orch previous', agent: 'claude', agent_status: 'idle' }] });
+  assert.deepEqual(project.activate().peerPanes, ['ws:p3']);
+  assert.doesNotMatch(project.prompts()['ws:p2'], /ws:p0/);
+  const boss = activationFixture(t, { boss: true, extraPanes: [{ pane_id: 'wb:p0', workspace_id: 'wb', label: 'boss previous', agent: 'claude', agent_status: 'idle' }] });
+  assert.deepEqual(boss.activate().peerPanes, ['wb:p3']);
+});

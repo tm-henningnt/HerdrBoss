@@ -244,7 +244,8 @@ export function evaluate(snap, cfg, paneSince, now = Date.now(), policy = null) 
   // ----- Stale workers -----
   const staleByWs = new Map();
   for (const p of snap.herdr?.panes || []) {
-    if (!p.agent || p.orch || p.label === 'boss' || p.label === 'parked' || snap.standbyPanes?.includes(p.id)) continue;
+    // A former orchestrator pane (orch previous, boss previous) is not a worker.
+    if (!p.agent || p.orch || ['boss', 'parked', 'orch previous', 'boss previous'].includes(p.label) || snap.standbyPanes?.includes(p.id)) continue;
     if (p.status !== 'idle' && p.status !== 'done') continue;
     const mins = (now - (paneSince[p.id]?.since || now)) / 60000;
     if (mins < cfg.workers.staleIdleMinutes) continue;

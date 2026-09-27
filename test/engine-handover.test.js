@@ -210,3 +210,272 @@ test('Ignore quota activates a prepared successor at the configured live quota t
   assert.deepEqual(atThreshold.collectorCalls, { herdr: 1, processes: 1, quotas: 1 });
   assert.equal(atThreshold.calls.some(({ args }) => args[2] === 'activate' && args[3] === 'prepared-1'), true);
 });
+
+// The notice probe runs several engine ticks against fake Herdr snapshots and a fake Herdr runner.
+const noticeProbe = `
+import { Engine } from './src/engine.js';
+import { loadConfig } from './src/config.js';
+const input = JSON.parse(process.env.H26_SCENARIO);
+let now = Date.parse(input.ticks[0].at);
+Date.now = () => now;
+let tick = input.ticks[0];
+const calls = [];
+const cfg = loadConfig();
+cfg.push = true;
+cfg.browsers.reapOrphanDaemons = false;
+const engine = new Engine(cfg, {
+  push: true,
+  act: true,
+  collectors: {
+    collectHerdr: async () => tick.herdr,
+    collectMachine: async () => null,
+    collectProcesses: async () => new Map(),
+    collectQuotas: async () => [],
+    collectWorktreeCounts: async () => ({}),
+    collectCwdProcesses: async () => [],
+    collectMissingWorktreeProcesses: async () => [],
+    readWorkerScreen: async () => '',
+  },
+  handoffRunner: async () => { throw new Error('unexpected handoff command'); },
+  herdrRunner: async (command, args) => {
+    calls.push({ tick: tick.at, command, args });
+    const recipient = args[0] === 'notification' ? 'owner' : args[2];
+    const id = 'cli:' + args[0] + ':' + args[1];
+    if ((tick.fail || []).includes(recipient)) throw Object.assign(new Error('fake failure'), { stderr: 'Pane not found.' });
+    // The installed CLI can print an error envelope and exit with status 0.
+    if ((tick.errorEnvelope || []).includes(recipient)) return JSON.stringify({ id, error: { code: 'pane_not_found', message: 'Pane not found.' } }) + '\\n';
+    if (Object.hasOwn(tick.stdout || {}, recipient)) return tick.stdout[recipient];
+    return JSON.stringify({ id, result: {} }) + '\\n';
+  },
+});
+engine.deliver = async () => {};
+for (const next of input.ticks) {
+  tick = next;
+  now = Date.parse(next.at);
+  await engine.tick();
+}
+console.log(JSON.stringify({ calls, notices: engine.memory.handoffPeerNotices }));
+`;
+
+function runNoticeScenario(t, { handoffs, ticks }) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-notice-handover-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(dir, 'projects'), { recursive: true });
+  // A stray Herdr call fails and is recorded instead of reaching a real pane.
+  const bin = path.join(dir, 'bin');
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, 'herdr'), `#!/bin/sh\necho "$@" >> "${path.join(dir, 'stray-herdr')}"\nexit 1\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(dir, 'policy.json'), JSON.stringify(structuredClone(POLICY_DEFAULTS)));
+  fs.writeFileSync(path.join(dir, 'memory.json'), JSON.stringify({ paneSince: {}, pushes: {}, notified: {} }));
+  fs.writeFileSync(path.join(dir, 'handoffs.json'), JSON.stringify(handoffs));
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', noticeProbe], {
+    cwd: repo,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      HOME: dir,
+      PATH: `${bin}${path.delimiter}${process.env.PATH || ''}`,
+      HERDR_BOSS_DIR: dir,
+      HERDR_BOSS_LIVE_DIR: dir,
+      HERDR_BOSS_ALLOW_ACTIONS: '1',
+      NODE_TEST_CONTEXT: '',
+      H26_SCENARIO: JSON.stringify({ ticks }),
+    },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout.trim());
+  output.records = JSON.parse(fs.readFileSync(path.join(dir, 'handoffs.json'), 'utf8'));
+  assert.equal(fs.existsSync(path.join(dir, 'stray-herdr')), false, 'the engine called a Herdr binary outside the fake runner');
+  return output;
+}
+
+// Normalized collectHerdr panes, as the engine sees them.
+const pane = (id, workspace, { label = null, agent = 'codex', status = 'idle' } = {}) => ({ id, workspace, label, orch: label === 'orch' || label === 'boss', agent, status });
+
+const projectRecord = {
+  id: 'handoff-alpha', project: 'alpha', displayLabel: 'Alpha', workspace: 'w-alpha', label: 'orch', boss: false,
+  sourcePane: 'w-alpha:p1', newPane: 'w-alpha:p2', fromKind: 'claude', toKind: 'codex', status: 'active',
+  activatedAt: '2026-09-27T12:00:00.000Z', peerPanes: ['w-alpha:p3', 'w-alpha:p4'],
+  ownerGoal: 'Ship the release safely.', sourceContext: 'Earlier safe context',
+};
+const projectPanes = [
+  pane('w-alpha:p1', 'w-alpha', { label: 'orch previous', agent: 'claude' }),
+  pane('w-alpha:p2', 'w-alpha', { label: 'orch' }),
+  pane('w-alpha:p3', 'w-alpha'),
+  pane('w-alpha:p4', 'w-alpha', { agent: 'pi' }),
+  pane('w-boss:p1', 'w-boss', { label: 'boss', agent: 'claude' }),
+  pane('w-other:p1', 'w-other', { label: 'orch', agent: 'claude' }),
+];
+const herdrSnapshot = (panes) => ({ workspaces: [...new Set(panes.map((p) => p.workspace))].map((id) => ({ id, label: id })), panes });
+
+test('project handover notifies its workspace workers and the Boss in another workspace once', { timeout: 30000 }, (t) => {
+  const result = runNoticeScenario(t, {
+    handoffs: [projectRecord],
+    ticks: [
+      { at: '2026-09-27T12:01:00.000Z', herdr: herdrSnapshot(projectPanes) },
+      { at: '2026-09-27T12:03:00.000Z', herdr: herdrSnapshot(projectPanes) },
+    ],
+  });
+  const prompts = result.calls.filter(({ args }) => args[0] === 'agent' && args[1] === 'prompt');
+  assert.deepEqual(prompts.map(({ args }) => args[2]).sort(), ['w-alpha:p3', 'w-alpha:p4', 'w-boss:p1']);
+  assert.ok(prompts.every(({ tick }) => tick === '2026-09-27T12:01:00.000Z'));
+  const text = Object.fromEntries(prompts.map(({ args }) => [args[2], args[3]]));
+  assert.match(text['w-alpha:p3'], /new orchestrator in pane w-alpha:p2/);
+  assert.match(text['w-alpha:p3'], /WORKER REPORT and WORKER QUESTION messages to w-alpha:p2, not to w-alpha:p1/);
+  assert.match(text['w-boss:p1'], /Alpha has a new orchestrator in pane w-alpha:p2/);
+  assert.match(text['w-boss:p1'], /orch previous/);
+  assert.equal(result.calls.some(({ args }) => args[0] === 'notification'), false);
+  assert.deepEqual(Object.keys(result.notices).sort(), ['handoff-alpha@w-alpha:p3', 'handoff-alpha@w-alpha:p4', 'handoff-alpha@w-boss:p1']);
+  // The H26 B2 goal and source context stay in the record.
+  assert.equal(result.records[0].ownerGoal, 'Ship the release safely.');
+  assert.equal(result.records[0].sourceContext, 'Earlier safe context');
+});
+
+test('Boss handover notifies its workspace peers and the Owner, not project orchestrators', { timeout: 30000 }, (t) => {
+  const record = {
+    id: 'handoff-boss', project: 'Boss', displayLabel: 'Boss', workspace: 'w-boss', label: 'boss', boss: true,
+    sourcePane: 'w-boss:p1', newPane: 'w-boss:p2', fromKind: 'claude', toKind: 'codex', status: 'active',
+    activatedAt: '2026-09-27T12:00:00.000Z', peerPanes: ['w-boss:p3'],
+  };
+  const panes = [
+    pane('w-boss:p1', 'w-boss', { label: 'boss previous', agent: 'claude' }),
+    pane('w-boss:p2', 'w-boss', { label: 'boss' }),
+    pane('w-boss:p3', 'w-boss'),
+    pane('w-alpha:p1', 'w-alpha', { label: 'orch', agent: 'claude' }),
+  ];
+  const result = runNoticeScenario(t, {
+    handoffs: [record],
+    ticks: [
+      { at: '2026-09-27T12:01:00.000Z', herdr: herdrSnapshot(panes) },
+      { at: '2026-09-27T12:03:00.000Z', herdr: herdrSnapshot(panes) },
+    ],
+  });
+  const prompts = result.calls.filter(({ args }) => args[0] === 'agent' && args[1] === 'prompt');
+  assert.deepEqual(prompts.map(({ args }) => args[2]), ['w-boss:p3']);
+  assert.match(prompts[0].args[3], /Herdr Boss is now pane w-boss:p2/);
+  const owner = result.calls.filter(({ args }) => args[0] === 'notification');
+  assert.equal(owner.length, 1);
+  assert.deepEqual(owner[0].args.slice(0, 2), ['notification', 'show']);
+  assert.match(owner[0].args[2], /Boss handover/);
+  assert.match(owner[0].args[owner[0].args.indexOf('--body') + 1], /The Boss is now pane w-boss:p2/);
+  assert.deepEqual(Object.keys(result.notices).sort(), ['handoff-boss@owner', 'handoff-boss@w-boss:p3']);
+});
+
+test('handover notices retry an unavailable or failed recipient and never repeat a delivered one', { timeout: 30000 }, (t) => {
+  const busyBoss = projectPanes.map((p) => (p.id === 'w-boss:p1' ? { ...p, status: 'working' } : p));
+  const withoutWorker = projectPanes.filter((p) => p.id !== 'w-alpha:p4');
+  const result = runNoticeScenario(t, {
+    handoffs: [{ ...projectRecord, previousPromptError: 'Pane not found.' }],
+    ticks: [
+      // The Boss is working, p4 is absent, and the prompt to p3 fails.
+      { at: '2026-09-27T12:01:00.000Z', herdr: herdrSnapshot(withoutWorker.map((p) => (p.id === 'w-boss:p1' ? { ...p, status: 'working' } : p))), fail: ['w-alpha:p3'] },
+      // Inside the one-minute retry wait, p3 is not tried again.
+      { at: '2026-09-27T12:01:30.000Z', herdr: herdrSnapshot(busyBoss) },
+      { at: '2026-09-27T12:03:00.000Z', herdr: herdrSnapshot(projectPanes) },
+      { at: '2026-09-27T12:05:00.000Z', herdr: herdrSnapshot(projectPanes) },
+    ],
+  });
+  const prompts = result.calls.filter(({ args }) => args[0] === 'agent' && args[1] === 'prompt');
+  const byPane = (id) => prompts.filter(({ args }) => args[2] === id).map(({ tick }) => tick);
+  assert.deepEqual(byPane('w-alpha:p3'), ['2026-09-27T12:01:00.000Z', '2026-09-27T12:03:00.000Z']);
+  assert.deepEqual(byPane('w-alpha:p4'), ['2026-09-27T12:01:30.000Z']);
+  assert.deepEqual(byPane('w-boss:p1'), ['2026-09-27T12:03:00.000Z']);
+  // The previous-agent prompt failed at activation, so the engine delivers it once.
+  assert.deepEqual(byPane('w-alpha:p1'), ['2026-09-27T12:01:00.000Z']);
+  assert.match(prompts.find(({ args }) => args[2] === 'w-alpha:p1').args[3], /no longer own orchestration of alpha/);
+  assert.deepEqual(Object.keys(result.notices).sort(), ['handoff-alpha@w-alpha:p1', 'handoff-alpha@w-alpha:p3', 'handoff-alpha@w-alpha:p4', 'handoff-alpha@w-boss:p1']);
+});
+
+test('an error envelope with exit status 0 is a failed notice that stays eligible for retry', { timeout: 30000 }, (t) => {
+  const project = runNoticeScenario(t, {
+    handoffs: [projectRecord],
+    ticks: [
+      { at: '2026-09-27T12:01:00.000Z', herdr: herdrSnapshot(projectPanes), errorEnvelope: ['w-alpha:p3', 'w-boss:p1'] },
+      { at: '2026-09-27T12:03:00.000Z', herdr: herdrSnapshot(projectPanes) },
+      { at: '2026-09-27T12:05:00.000Z', herdr: herdrSnapshot(projectPanes) },
+    ],
+  });
+  const prompts = project.calls.filter(({ args }) => args[0] === 'agent' && args[1] === 'prompt');
+  const byPane = (id) => prompts.filter(({ args }) => args[2] === id).map(({ tick }) => tick);
+  assert.deepEqual(byPane('w-alpha:p3'), ['2026-09-27T12:01:00.000Z', '2026-09-27T12:03:00.000Z']);
+  assert.deepEqual(byPane('w-boss:p1'), ['2026-09-27T12:01:00.000Z', '2026-09-27T12:03:00.000Z']);
+  assert.deepEqual(byPane('w-alpha:p4'), ['2026-09-27T12:01:00.000Z']);
+  assert.equal(project.notices['handoff-alpha@w-alpha:p3'], Date.parse('2026-09-27T12:03:00.000Z'));
+  assert.equal(project.notices['handoff-alpha@w-boss:p1'], Date.parse('2026-09-27T12:03:00.000Z'));
+  assert.equal(project.notices['handoff-alpha@w-alpha:p4'], Date.parse('2026-09-27T12:01:00.000Z'));
+
+  const record = {
+    id: 'handoff-boss', project: 'Boss', displayLabel: 'Boss', workspace: 'w-boss', label: 'boss', boss: true,
+    sourcePane: 'w-boss:p1', newPane: 'w-boss:p2', fromKind: 'claude', toKind: 'codex', status: 'active',
+    activatedAt: '2026-09-27T12:00:00.000Z', peerPanes: [],
+  };
+  const panes = [pane('w-boss:p1', 'w-boss', { label: 'boss previous', agent: 'claude' }), pane('w-boss:p2', 'w-boss', { label: 'boss' })];
+  const boss = runNoticeScenario(t, {
+    handoffs: [record],
+    ticks: [
+      { at: '2026-09-27T12:01:00.000Z', herdr: herdrSnapshot(panes), errorEnvelope: ['owner'] },
+      { at: '2026-09-27T12:01:30.000Z', herdr: herdrSnapshot(panes) },
+      { at: '2026-09-27T12:03:00.000Z', herdr: herdrSnapshot(panes) },
+      { at: '2026-09-27T12:05:00.000Z', herdr: herdrSnapshot(panes) },
+    ],
+  });
+  const owner = boss.calls.filter(({ args }) => args[0] === 'notification').map(({ tick }) => tick);
+  assert.deepEqual(owner, ['2026-09-27T12:01:00.000Z', '2026-09-27T12:03:00.000Z']);
+  assert.deepEqual(boss.notices, { 'handoff-boss@owner': Date.parse('2026-09-27T12:03:00.000Z') });
+});
+
+test('a successive handover sends no worker notice to earlier previous-role panes', { timeout: 30000 }, (t) => {
+  // The second handover moved orch from p2 to p5. p1 is the first handover's orch previous pane.
+  const panes = [
+    pane('w-alpha:p1', 'w-alpha', { label: 'orch previous', agent: 'claude' }),
+    pane('w-alpha:p2', 'w-alpha', { label: 'orch previous' }),
+    pane('w-alpha:p3', 'w-alpha'),
+    pane('w-alpha:p5', 'w-alpha', { label: 'orch', agent: 'pi' }),
+    pane('w-other:p1', 'w-other', { label: 'boss previous', agent: 'claude' }),
+    pane('w-boss:p1', 'w-boss', { label: 'boss', agent: 'claude' }),
+  ];
+  const second = { ...projectRecord, id: 'handoff-alpha-2', sourcePane: 'w-alpha:p2', newPane: 'w-alpha:p5', toKind: 'pi' };
+  const result = runNoticeScenario(t, {
+    handoffs: [
+      { ...second, peerPanes: null },
+      // An older record may still list a pane that is now a previous-role pane.
+      { ...second, id: 'handoff-alpha-legacy', peerPanes: ['w-alpha:p1', 'w-alpha:p3'] },
+    ],
+    ticks: [{ at: '2026-09-27T12:01:00.000Z', herdr: herdrSnapshot(panes) }],
+  });
+  const prompts = result.calls.filter(({ args }) => args[0] === 'agent' && args[1] === 'prompt').map(({ args }) => args[2]);
+  assert.equal(prompts.includes('w-alpha:p1'), false);
+  assert.equal(prompts.includes('w-other:p1'), false);
+  assert.deepEqual(prompts.filter((id) => id === 'w-alpha:p3').length, 2);
+  assert.deepEqual(Object.keys(result.notices).sort(), [
+    'handoff-alpha-2@w-alpha:p3', 'handoff-alpha-2@w-boss:p1', 'handoff-alpha-legacy@w-alpha:p3', 'handoff-alpha-legacy@w-boss:p1',
+  ]);
+});
+
+test('an exit-zero plain, empty, or result-free success is recorded once', { timeout: 30000 }, (t) => {
+  const record = {
+    id: 'handoff-boss', project: 'Boss', displayLabel: 'Boss', workspace: 'w-boss', label: 'boss', boss: true,
+    sourcePane: 'w-boss:p1', newPane: 'w-boss:p2', fromKind: 'claude', toKind: 'codex', status: 'active',
+    activatedAt: '2026-09-27T12:00:00.000Z', peerPanes: ['w-boss:p3', 'w-boss:p4'],
+  };
+  const panes = [
+    pane('w-boss:p1', 'w-boss', { label: 'boss previous', agent: 'claude' }),
+    pane('w-boss:p2', 'w-boss', { label: 'boss' }),
+    pane('w-boss:p3', 'w-boss'),
+    pane('w-boss:p4', 'w-boss', { agent: 'pi' }),
+  ];
+  const stdout = { owner: '', 'w-boss:p3': 'Notification sent.\n', 'w-boss:p4': '{"id":"cli:agent:prompt"}\n' };
+  const result = runNoticeScenario(t, {
+    handoffs: [record],
+    ticks: [
+      { at: '2026-09-27T12:01:00.000Z', herdr: herdrSnapshot(panes), stdout },
+      { at: '2026-09-27T12:03:00.000Z', herdr: herdrSnapshot(panes), stdout },
+    ],
+  });
+  const sent = result.calls.map(({ tick, args }) => [tick, args[0] === 'notification' ? 'owner' : args[2]]);
+  assert.deepEqual(sent.sort(), [
+    ['2026-09-27T12:01:00.000Z', 'owner'], ['2026-09-27T12:01:00.000Z', 'w-boss:p3'], ['2026-09-27T12:01:00.000Z', 'w-boss:p4'],
+  ]);
+  const at = Date.parse('2026-09-27T12:01:00.000Z');
+  assert.deepEqual(result.notices, { 'handoff-boss@owner': at, 'handoff-boss@w-boss:p3': at, 'handoff-boss@w-boss:p4': at });
+});

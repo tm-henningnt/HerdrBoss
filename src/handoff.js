@@ -301,6 +301,54 @@ export function markHandoffReady(id) {
   return item;
 }
 
+function handoffRole(item) { return item.boss || item.label === 'boss' ? 'boss' : 'orch'; }
+// A pane from an earlier handover keeps a previous-role label and is not a worker peer.
+const PREVIOUS_LABELS = new Set(['orch previous', 'boss previous']);
+
+function sessionConstruction(item) {
+  const target = `${item.toKind} (${item.model}${item.effort ? `, ${item.effort}` : ''})`;
+  if (item.migratedId) return `Herdr Boss built your session by migrating the ${item.fromKind} conversation${item.sessionId ? ` (session ${item.sessionId})` : ''} to ${item.toKind} session ${item.migratedId} with session-migrate. Runtime config did not transfer.`;
+  const carried = [item.sourceContext ? 'a redacted, bounded snapshot of the source pane' : null, item.ownerGoal ? 'the current Owner goal' : null].filter(Boolean);
+  return `Herdr Boss started your session fresh as ${target}${item.requestedMode === 'migrate' ? ' because session migration was unavailable' : ''}. Your preparation prompt carried ${carried.length ? carried.join(' and ') : 'no source pane history'}.`;
+}
+
+// The previous agent gets this prompt at activation, and the engine repeats it once if that prompt failed.
+export function previousAgentPrompt(item) {
+  const role = handoffRole(item);
+  if (role === 'boss') return `[herdr-boss] Handover activated. You are no longer the Herdr Boss. Pane ${item.newPane} is the new Boss, labeled boss. Your pane ${item.sourcePane} is now labeled boss previous. Send no prompts to orchestrators, start no workers, and push nothing. Write a concise final summary for the new Boss: Owner requests in progress, project state, pending pushes, blockers, and the next action. After that summary, reply to every later request from the Owner or an orchestrator only with: "The Boss is now pane ${item.newPane}."`;
+  return `[herdr-boss] Handover activated. You no longer own orchestration of ${item.project}. Pane ${item.newPane} is the new orchestrator, labeled orch. Your pane ${item.sourcePane} is now labeled orch previous. Start no workers, dispatch no work, and send no prompts to workers. Write a concise final summary for the successor: current work, active workers, blockers, and the next action. After that summary, reply to every later request only with: "The ${item.project} orchestrator is now pane ${item.newPane}."`;
+}
+
+function successorPrompt(item) {
+  const boss = handoffRole(item) === 'boss';
+  const previous = boss ? 'previous Boss' : 'previous orchestrator';
+  const roster = item.peerPanes?.length ? ` Other agent panes in your workspace: ${item.peerPanes.join(', ')}.` : Array.isArray(item.peerPanes) ? ' No other agents remain in your workspace.' : '';
+  return `[herdr-boss] Handover activated. You now control ${boss ? 'Herdr Boss orchestration' : `the ${item.project} project`}. Your pane ID is ${item.newPane}, labeled ${item.activation.successorLabel}. The ${previous} is pane ${item.sourcePane}, now labeled ${item.activation.sourceLabel}. ${sessionConstruction(item)}${roster} The standby rule no longer applies. The ${previous} was asked to write a final summary for you. Read it with herdr agent read ${item.sourcePane} when it is available. Take over the current work. Use your pane ID ${item.newPane} in worker briefs, worker reports, and messages. Read the current Herdr Boss bulletin, check each agent's work, and resume orchestration within the current policy.`;
+}
+
+// Notices that the engine delivers after activation. A prompt needs a current agent pane; the Owner gets a Herdr notification.
+export function handoffNotices(item, panes = []) {
+  const boss = handoffRole(item) === 'boss';
+  const skip = new Set([item.newPane, item.sourcePane]);
+  for (const pane of panes) if (PREVIOUS_LABELS.has(pane.label)) skip.add(pane.id);
+  const peers = Array.isArray(item.peerPanes) ? item.peerPanes
+    : panes.filter((pane) => pane.workspace === item.workspace && pane.agent).map((pane) => pane.id);
+  const notices = peers.filter((id) => !skip.has(id)).map((pane) => ({
+    key: `${item.id}@${pane}`, pane,
+    text: boss
+      ? `[herdr-boss] The Herdr Boss is now pane ${item.newPane} (${item.toKind}). The previous Boss pane ${item.sourcePane} is labeled boss previous. Send Boss messages and reports to ${item.newPane}.`
+      : `[herdr-boss] ${item.project} has a new orchestrator in pane ${item.newPane} (${item.toKind}). Continue your assigned task. Send WORKER REPORT and WORKER QUESTION messages to ${item.newPane}, not to ${item.sourcePane}. The previous pane is labeled orch previous.`,
+  }));
+  if (boss) notices.push({ key: `${item.id}@owner`, owner: true, title: 'Herdr Boss: Boss handover',
+    text: `The Boss is now pane ${item.newPane} (${item.toKind}). The previous Boss pane ${item.sourcePane} is labeled boss previous.` });
+  else for (const pane of panes.filter((p) => p.label === 'boss' && p.agent && !skip.has(p.id))) notices.push({
+    key: `${item.id}@${pane.id}`, pane: pane.id,
+    text: `[herdr-boss] ${item.displayLabel || item.project} has a new orchestrator in pane ${item.newPane} (${item.toKind}). The previous pane ${item.sourcePane} is labeled orch previous. Send ${item.project} messages to ${item.newPane}.`,
+  });
+  if (item.previousPromptError) notices.push({ key: `${item.id}@${item.sourcePane}`, pane: item.sourcePane, text: previousAgentPrompt(item) });
+  return notices;
+}
+
 export function activateHandoff(id, { confirmed = false } = {}) {
   if (!confirmed) throw new Error('Review the successor output, then pass --confirmed.');
   const records = listHandoffs();
@@ -308,20 +356,23 @@ export function activateHandoff(id, { confirmed = false } = {}) {
   if (!item) throw new Error('Prepared handoff not found.');
   const target = herdr(['pane', 'get', item.newPane]).pane;
   if (target?.agent !== item.toKind || !['idle', 'done'].includes(target.agent_status)) throw new Error('Successor is not settled and ready.');
-  const oldLabel = item.label;
-  herdr(['pane', 'rename', item.sourcePane, 'standby']);
-  try { herdr(['pane', 'rename', item.newPane, oldLabel]); }
-  catch (e) { try { herdr(['pane', 'rename', item.sourcePane, oldLabel]); } catch {} throw e; }
+  const role = handoffRole(item);
+  const sourceLabel = `${role} previous`;
+  herdr(['pane', 'rename', item.sourcePane, sourceLabel]);
+  try { herdr(['pane', 'rename', item.newPane, role]); }
+  catch (e) { try { herdr(['pane', 'rename', item.sourcePane, item.label]); } catch {} throw e; }
   item.status = 'active'; item.activatedAt = new Date().toISOString();
+  item.activation = { at: item.activatedAt, sourcePane: item.sourcePane, successorPane: item.newPane, sourceLabel, successorLabel: role };
   try {
     item.peerPanes = herdr(['pane', 'list']).panes
-      .filter((pane) => pane.workspace_id === item.workspace && pane.pane_id !== item.newPane && pane.agent)
+      .filter((pane) => pane.workspace_id === item.workspace && ![item.newPane, item.sourcePane].includes(pane.pane_id) && pane.agent && !PREVIOUS_LABELS.has(pane.label))
       .map((pane) => pane.pane_id);
-  } catch { item.peerPanes = [item.sourcePane]; }
+  } catch { item.peerPanes = null; /* The engine uses its current pane snapshot instead. */ }
   save(records);
-  const roster = item.peerPanes.length ? ` Existing agent panes in your workspace: ${item.peerPanes.join(', ')}.` : ' No other agents remain in your workspace.';
-  const responsibility = item.boss ? 'Herdr Boss orchestration' : `the ${item.project} project`;
-  try { herdr(['agent', 'prompt', item.newPane, `[herdr-boss] Handover activated. You now control ${responsibility}.${roster} The previous orchestrator pane ${item.sourcePane} is standby. Read the current Herdr Boss bulletin, check each agent's work, and resume orchestration within the current policy.`]); }
+  try { herdr(['agent', 'prompt', item.sourcePane, previousAgentPrompt(item)]); item.previousPromptAt = new Date().toISOString(); }
+  catch (e) { item.previousPromptError = String(e.stderr || e.message).slice(0, 500); }
+  save(records);
+  try { herdr(['agent', 'prompt', item.newPane, successorPrompt(item)]); }
   catch (e) { item.activationPromptError = String(e.stderr || e.message).slice(0, 500); save(records); }
   return item;
 }

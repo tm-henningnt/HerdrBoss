@@ -165,8 +165,21 @@ test('the Agents snapshot boundary exposes a failed status for display', () => {
 });
 
 test('worker list can surface only matching failed-pane state', () => {
-  assert.equal(workerStatusFromState('w1:p2', { herdr: { panes: [{ id: 'w1:p2', status: 'failed' }] } }), 'failed');
-  assert.equal(workerStatusFromState('w1:p3', { herdr: { panes: [{ id: 'w1:p2', status: 'failed' }] } }), null);
+  // A failed pane always has an agent: applyWorkerFailureStatuses marks only agent panes.
+  assert.equal(workerStatusFromState('w1:p2', { herdr: { panes: [{ id: 'w1:p2', agent: 'codex', status: 'failed' }] } }), 'failed');
+  assert.equal(workerStatusFromState('w1:p3', { herdr: { panes: [{ id: 'w1:p2', agent: 'codex', status: 'failed' }] } }), null);
+});
+
+test('worker list reports no failed status for previous-role panes from a stale run record', () => {
+  const state = { herdr: { panes: [
+    { id: 'w1:p1', label: 'orch previous', orch: false, name: 'worker-a', agent: 'codex', status: 'failed' },
+    { id: 'wb:p1', label: 'boss previous', orch: false, name: 'worker-a', agent: 'codex', status: 'failed' },
+    { id: 'w1:p3', label: null, orch: false, name: 'worker-a', agent: 'codex', status: 'failed' },
+  ] } };
+  const run = { name: 'worker-a', kind: 'codex' };
+  assert.equal(workerStatusFromState('w1:p1', state, run), null);
+  assert.equal(workerStatusFromState('wb:p1', state, run), null);
+  assert.equal(workerStatusFromState('w1:p3', state, run), 'failed');
 });
 
 test('report notices use first-seen metadata for both paths and ignore orchestrators', async () => {
@@ -337,4 +350,38 @@ test('a later absolute retry timestamp extends the deadline without a new notice
   const earlier = await inspectWorkerTransitions([pane], later.observed, later.failures,
     async () => 'Free usage exceeded. retry at 2026-09-27T12:30:00Z', Date.parse('2026-09-27T11:02:00Z'));
   assert.equal(earlier.failures['w1:p2'].retryAt, laterDeadline, 'an earlier timestamp never shortens the deadline');
+});
+
+test('previous-role panes are left out of worker screen reads, reports, blocked alerts, and failure status', async () => {
+  const { inspectWorkerReports } = await import('../src/worker-failures.js');
+  const now = 1_000_000;
+  const panes = [
+    { id: 'w1:p1', workspace: 'w1', cwd: '/work/old-orch', label: 'orch previous', orch: false, agent: 'claude', status: 'working' },
+    { id: 'wb:p1', workspace: 'wb', cwd: '/work/old-boss', label: 'boss previous', orch: false, agent: 'claude', status: 'blocked' },
+    { id: 'w1:p3', workspace: 'w1', cwd: '/work/worker', label: null, orch: false, name: 'worker-a', agent: 'codex', status: 'blocked' },
+  ];
+  for (const pane of panes.slice(0, 2)) {
+    for (const status of ['working', 'idle', 'done']) assert.equal(shouldReadWorkerScreen(null, { ...pane, status }), false);
+  }
+  assert.equal(shouldReadWorkerScreen(null, { ...panes[2], status: 'working' }), true);
+
+  const reads = [];
+  const transitions = await inspectWorkerTransitions(panes.map((pane) => ({ ...pane, status: 'working' })), {}, {
+    'wb:p1': { agent: 'claude', name: null, sessionId: null, label: '429', at: now - 10 },
+  }, async (args) => { reads.push(args[2]); return 'HTTP 429; retry later'; }, now);
+  assert.deepEqual(reads, ['w1:p3']);
+  assert.deepEqual(Object.keys(transitions.failures), ['w1:p3']);
+  assert.deepEqual(transitions.notices.map((notice) => notice.key), [`workers:failed:w1:p3:${now}`]);
+
+  const failures = Object.fromEntries(panes.map((pane) => [pane.id, { agent: pane.agent, name: pane.name || null, label: '429' }]));
+  assert.deepEqual(applyWorkerFailureStatuses(panes, failures).map((pane) => pane.status), ['working', 'blocked', 'failed']);
+
+  const paneSince = Object.fromEntries(panes.map((pane) => [pane.id, { status: pane.status, since: now - 600_000 }]));
+  const blockedSnap = { herdr: { panes: panes.map((pane) => ({ ...pane, status: 'blocked' })) } };
+  assert.deepEqual(blockedWorkerAlerts(blockedSnap, paneSince, now).map((alert) => alert.key), ['workers:blocked:w1:p3']);
+
+  const stat = (file) => ({ isFile: true, mtimeMs: file.endsWith('/.worker/report.json') ? 200 : Number.NaN });
+  const reports = inspectWorkerReports(panes, {}, 100, stat);
+  assert.deepEqual(Object.keys(reports.observed), ['w1:p3']);
+  assert.deepEqual(reports.notices.map((notice) => notice.text), ['Worker worker-a in pane w1:p3 wrote its report: /work/worker/.worker/report.json']);
 });

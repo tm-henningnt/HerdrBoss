@@ -10,7 +10,7 @@ import { loadModels } from './kit/config.js';
 import { loadPolicy, clearExpiredOneOffGoals, deriveControl, migrateWorkspacePolicy, providerFor, pickSuccessor, laneStatus, leastOverProvider, machineLimits, unmeteredLane } from './control.js';
 import { recordQuotaSnapshot } from './usage.js';
 import { listBrowserSessions } from './browser-pool.js';
-import { listHandoffs, expireHandoff, expireMissingHandoffs } from './handoff.js';
+import { listHandoffs, expireHandoff, expireMissingHandoffs, handoffNotices } from './handoff.js';
 import { inspectWorkerTransitions, inspectWorkerReports, applyWorkerFailureStatuses, resolveFreeUsageRun, activeFreeModelExhaustions, extendFreeModelExhaustion } from './worker-failures.js';
 
 const MEMORY_FILE = path.join(DATA_DIR, 'memory.json');
@@ -45,6 +45,16 @@ export function pruneInactiveDiskPromptRecords(records, activeAlerts) {
   }));
 }
 
+// The Herdr CLI can print an error envelope and exit with status 0. Only that envelope is a failure;
+// other exit-zero output, including plain text or no output, is a success.
+function checkHerdrResponse(stdout) {
+  let response;
+  try { response = JSON.parse(stdout); } catch { return; }
+  if (response && typeof response === 'object' && response.error) {
+    throw new Error(response.error.message || JSON.stringify(response.error));
+  }
+}
+
 function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; }
 }
@@ -55,7 +65,7 @@ function writeJson(file, data) {
 }
 
 export class Engine extends EventEmitter {
-  constructor(cfg, { push = cfg.push, act = true, collectors = {}, handoffRunner = run } = {}) {
+  constructor(cfg, { push = cfg.push, act = true, collectors = {}, handoffRunner = run, herdrRunner = run } = {}) {
     super();
     this.cfg = cfg;
     const guardReasons = [];
@@ -81,6 +91,7 @@ export class Engine extends EventEmitter {
       ...collectors,
     };
     this.handoffRunner = handoffRunner;
+    this.herdrRunner = herdrRunner;
     this.state = readJson(STATE_FILE, null);
     this.events = [];
     try {
@@ -345,7 +356,7 @@ export class Engine extends EventEmitter {
       writeJson(STATE_FILE, snap);
       writeJson(MEMORY_FILE, this.memory);
       this.emit('state', snap);
-      if (this.act && this.push) {
+      if (this.act) {
         try { await this.notifyHandoffPeers(herdr, now); }
         catch (e) { this.log('error', `Handover peer notice check failed: ${e.message}`); }
       }
@@ -460,22 +471,25 @@ export class Engine extends EventEmitter {
   async notifyHandoffPeers(herdr, now) {
     this.memory.handoffPeerNotices ||= {};
     this.memory.handoffPeerAttempts ||= {};
-    const panes = new Map((herdr?.panes || []).map((p) => [p.id, p]));
-    for (const item of listHandoffs().filter((x) => !x.boss && x.status === 'active' && now - Date.parse(x.activatedAt) < 7 * 86400 * 1000)) {
-      for (const id of item.peerPanes || []) {
-        const key = `${item.id}@${id}`;
+    const current = herdr?.panes || [];
+    const panes = new Map(current.map((p) => [p.id, p]));
+    for (const item of listHandoffs().filter((x) => x.status === 'active' && now - Date.parse(x.activatedAt) < 7 * 86400 * 1000)) {
+      for (const notice of handoffNotices(item, current)) {
+        const { key } = notice;
         if (this.memory.handoffPeerNotices[key] || now - (this.memory.handoffPeerAttempts[key] || 0) < 60000) continue;
-        const pane = panes.get(id);
-        if (!pane?.agent || !['idle', 'done'].includes(pane.status)) continue;
+        // An agent prompt needs push and a settled agent pane; an unavailable recipient stays eligible.
+        if (!notice.owner) {
+          const pane = panes.get(notice.pane);
+          if (!this.push || !pane?.agent || !['idle', 'done'].includes(pane.status)) continue;
+        }
         this.memory.handoffPeerAttempts[key] = now;
-        const text = id === item.sourcePane
-          ? `[herdr-boss] Handover complete. You are now standby. Orchestrator pane ${item.newPane} controls ${item.project}; do not dispatch new work. Share any remaining context with the successor.`
-          : `[herdr-boss] ${item.project} has a new orchestrator in pane ${item.newPane} (${item.toKind}). Continue your assigned task and report completion and blockers to that pane. The previous orchestrator pane ${item.sourcePane} is standby.`;
+        const recipient = notice.owner ? 'the Owner' : notice.pane;
         try {
-          await run('herdr', ['agent', 'prompt', id, text]);
+          const args = notice.owner ? ['notification', 'show', notice.title, '--body', notice.text, '--sound', 'none'] : ['agent', 'prompt', notice.pane, notice.text];
+          checkHerdrResponse(await this.herdrRunner('herdr', args));
           this.memory.handoffPeerNotices[key] = now;
-          this.log('push', `Notified ${id} of ${item.project} orchestrator handover`, { pane: id, project: item.project });
-        } catch (e) { this.log('error', `Handover notice to ${id} failed: ${String(e.stderr || e.message).slice(0, 200)}`); }
+          this.log(notice.owner ? 'notify' : 'push', `Notified ${recipient} of ${item.displayLabel || item.project} orchestrator handover`, notice.owner ? {} : { pane: notice.pane, project: item.project });
+        } catch (e) { this.log('error', `Handover notice to ${recipient} failed: ${String(e.stderr || e.message).slice(0, 200)}`); }
       }
     }
     for (const [key, at] of Object.entries(this.memory.handoffPeerNotices)) if (now - at > 8 * 86400 * 1000) delete this.memory.handoffPeerNotices[key];
