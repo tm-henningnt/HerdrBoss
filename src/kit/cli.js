@@ -7,7 +7,7 @@ import { appendDelegatedRun, compareChangedPaths, gitStatusPaths, readDelegatedR
 import { buildGhArgs } from './gh.js';
 import { allowWorkerScope, collectWorker, createHerdrRunner, listWorkers, parkWorker, startWorker } from './workers.js';
 import { pruneWorktrees } from './worktrees.js';
-import { acquireProjectLock, listProjectLocks, releaseProjectLock } from './locks.js';
+import { acquireProjectLock, listProjectLocks, pushWithLock, releaseProjectLock } from './locks.js';
 import { agentsBlock, checkAgentsFile, installKit, kitRevision, rulesPolicy } from './agents-check.js';
 import { listProjects } from '../projects.js';
 
@@ -18,6 +18,7 @@ const USAGE = `Kit commands:
   worker park <name> --reason TEXT | worker unpark <name>
   worker allow <name> <path>... --reason TEXT
   lock acquire <name> [--wait SECONDS] | lock release <name> | lock list
+  push [git push arguments]
   worktree prune [--apply]
   ledger append --entry FILE | ledger check [--runs]
   check --report FILE | --run FILE | --worktree DIR --allow PATH...
@@ -63,7 +64,7 @@ function knownFlags(flags, allowed) {
   if (unknown.length) fail(`Unknown option: --${unknown[0]}.`);
 }
 
-function commandKit(command, argv, { output = console.log, env = process.env, herdr = createHerdrRunner(), config: injectedConfig = null, rulesFile = DEFAULT_RULES_FILE, lockDataDir, now, pause, pidAlive } = {}) {
+function commandKit(command, argv, { output = console.log, env = process.env, herdr = createHerdrRunner(), config: injectedConfig = null, rulesFile = DEFAULT_RULES_FILE, lockDataDir, now, pause, pidAlive, pushStdio } = {}) {
   if (command === 'models') {
     const modelConfig = mergeModels(loadModels(), rulesPolicy(rulesFile));
     const { positional, flags } = parseArgs(argv);
@@ -153,6 +154,10 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
       return listProjectLocks({ config, env, herdr, dataDir: lockDataDir, output, pidAlive });
     }
     fail('Usage: lock acquire <name> [--wait SECONDS] | lock release <name> | lock list');
+  }
+  if (command === 'push') {
+    // All arguments go to git push unchanged.
+    return pushWithLock(argv, { config, env, herdr, dataDir: lockDataDir, output, now, pause, pidAlive, stdio: pushStdio });
   }
   if (command === 'worker') {
     const [action, ...rest] = argv;

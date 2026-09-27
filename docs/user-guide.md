@@ -416,7 +416,18 @@ herdr-boss lock list
 herdr-boss lock release release-review
 ```
 
-All linked worktrees of one repository share its locks. Herdr Boss keeps lock files in a private `locks` directory under its data directory. A lock records its name, owner pane, pane shell PID, safe acquire command, and acquisition time. Release a lock from its owner pane. Another pane can release it only after the owner PID has exited or the owner pane has closed. Herdr Boss marks that lock as stale. Use `--wait SECONDS` to wait for an active lock. Enter a whole non-negative number. Herdr Boss takes over a stale lock and prints its previous pane and PID.
+All linked worktrees of one repository share its locks. The `full-suite` lock is machine-wide. All repositories on this machine share it, and `lock list` shows its scope as `machine`. Herdr Boss keeps lock files in a private `locks` directory under its data directory. A lock records its name, owner pane, pane shell PID, safe acquire command, and acquisition time. Release a lock from its owner pane. Another pane can release it only after the owner PID has exited or the owner pane has closed. Herdr Boss marks that lock as stale. Use `--wait SECONDS` to wait for an active lock. Enter a whole non-negative number. Herdr Boss takes over a stale lock and prints its previous pane and PID.
+
+Take the machine-wide lock around every full test suite run and every push whose hook runs the full suite: run `herdr-boss lock acquire full-suite --wait 1800`, run the suite or the push, then run `herdr-boss lock release full-suite`. Use `herdr-boss push` for a push; it takes the lock when a pre-push hook exists. There is no load threshold.
+
+```sh
+herdr-boss lock acquire full-suite --wait 1800
+npm test
+herdr-boss lock release full-suite
+herdr-boss push origin main
+```
+
+`herdr-boss push` takes the lock only when a pre-push hook exists. It releases the lock also when the push fails, and it returns the exit code of `git push`.
 
 Before it removes a worktree, `herdr-boss worktree prune --apply` checks for processes whose current working directory is inside that worktree. It reports parent-PID-1 processes in missing or prunable worktree paths. Stop those processes before cleanup. Herdr Boss removes no worktrees if it cannot scan process directories. It also keeps worktrees that are dirty, unmerged, primary, used by a live pane, or uninspectable. Herdr Boss sends a notice about a parent-PID-1 process in a removed worktree only to that repository's `orch` workspace.
 

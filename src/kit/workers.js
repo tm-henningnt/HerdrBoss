@@ -481,10 +481,12 @@ function rulesWarning(rules, now = Date.now()) {
 const WORKERS_TAB = 'Workers';
 
 // A Codex worker pane needs HERDR_ENV, or the agent in it cannot run Herdr commands. Other kinds keep the pane environment they had.
-function workerPaneEnv(kind) {
+// TMPDIR and HERDR_WORKTREE are absolute, so a worker that changes folder still reaches its own .worker files.
+function workerPaneEnv(kind, worktree, tmpDir) {
   return [
     ...(kind === 'codex' ? ['--env', 'HERDR_ENV=1'] : []),
     '--env', 'DISABLE_UPDATE_PROMPT=true', '--env', 'DISABLE_AUTO_UPDATE=true', '--no-focus',
+    '--env', `TMPDIR=${tmpDir}`, '--env', `HERDR_WORKTREE=${path.resolve(worktree)}`,
   ];
 }
 
@@ -506,10 +508,10 @@ function findWorkersTab(workspaceId, herdr) {
   return { tabs, tab, panes, source };
 }
 
-function workerPanePlan(workspaceId, worktree, kind, herdr) {
+function workerPanePlan(workspaceId, worktree, kind, herdr, tmpDir) {
   const found = findWorkersTab(workspaceId, herdr);
   if (!found.tab) {
-    return { ...found, command: ['tab', 'create', '--workspace', workspaceId, '--label', WORKERS_TAB, '--cwd', worktree, ...workerPaneEnv(kind)] };
+    return { ...found, command: ['tab', 'create', '--workspace', workspaceId, '--label', WORKERS_TAB, '--cwd', worktree, ...workerPaneEnv(kind, worktree, tmpDir)] };
   }
   if (!found.source) throw new Error(`The ${WORKERS_TAB} tab ${getTab(found.tab)} has no pane to split.`);
   let dimensions = findDimensions(found.source);
@@ -517,11 +519,11 @@ function workerPanePlan(workspaceId, worktree, kind, herdr) {
     try { dimensions = findDimensions(herdr(['pane', 'layout', '--pane', getPane(found.source)])); } catch {}
   }
   const direction = dimensions && dimensions.height > dimensions.width ? 'down' : 'right';
-  return { ...found, command: ['pane', 'split', getPane(found.source), '--direction', direction, '--cwd', worktree, ...workerPaneEnv(kind)] };
+  return { ...found, command: ['pane', 'split', getPane(found.source), '--direction', direction, '--cwd', worktree, ...workerPaneEnv(kind, worktree, tmpDir)] };
 }
 
-function chooseWorkerPane(workspaceId, worktree, kind, herdr) {
-  const plan = workerPanePlan(workspaceId, worktree, kind, herdr);
+function chooseWorkerPane(workspaceId, worktree, kind, herdr, tmpDir) {
+  const plan = workerPanePlan(workspaceId, worktree, kind, herdr, tmpDir);
   const { command } = plan;
   if (!plan.tab) {
     const created = herdr(command);
@@ -765,10 +767,12 @@ export function startWorker(name, options, {
   if (!options.noWorktree && branchExists(config.root, branch)) throw new Error(`Branch already exists: ${branch}.`);
 
   const workspaceId = caller.workspaceId;
+  const workerDir = workerDirName(name, !!options.noWorktree);
+  const tmpDir = path.join(path.resolve(worktree), workerDir, 'tmp');
   let paneId = null;
   let paneCommand;
   if (options.dryRun) {
-    paneCommand = workerPanePlan(workspaceId, worktree, options.kind, herdr).command;
+    paneCommand = workerPanePlan(workspaceId, worktree, options.kind, herdr, tmpDir).command;
     paneId = paneCommand[0] === 'pane' ? '<new-pane-id>' : '<new-root-pane-id>';
   }
 
@@ -779,7 +783,7 @@ export function startWorker(name, options, {
     // A worker in the current worktree uses its existing dependencies, so setup runs only for a new worktree.
     setup: options.noWorktree ? null : config.setup ?? null, setupTimeoutSeconds: config.setupTimeoutSeconds ?? 900,
     agentStartTimeoutMs: config.agentStartTimeoutMs ?? 90000,
-    workerDir: workerDirName(name, !!options.noWorktree),
+    workerDir, tmpDir,
     copyFiles,
   };
   if (options.dryRun) {
@@ -823,7 +827,7 @@ export function startWorker(name, options, {
     }
     addExclude(worktree);
     fs.mkdirSync(path.join(worktree, plan.workerDir), { recursive: true });
-    fs.mkdirSync(path.join(worktree, '.worker', 'tmp'), { recursive: true });
+    fs.mkdirSync(plan.tmpDir, { recursive: true });
     for (const file of copyFiles) {
       const destination = path.join(worktree, plan.workerDir, 'inputs', ...file.relative.split('/'));
       fs.mkdirSync(path.dirname(destination), { recursive: true });
@@ -838,7 +842,7 @@ export function startWorker(name, options, {
       catch (error) { throw setupFailure(error, plan.setup, plan.setupTimeoutSeconds); }
       output(`Project setup finished in ${Math.round((Date.now() - started) / 1000)} s.`);
     }
-    placement = chooseWorkerPane(workspaceId, worktree, options.kind, herdr);
+    placement = chooseWorkerPane(workspaceId, worktree, options.kind, herdr, plan.tmpDir);
     paneId = placement.paneId;
     waitForWorkerPane(paneId, workspaceId, worktree, herdr, wait);
     const shellPid = workerPaneShellPid(paneId, herdr);

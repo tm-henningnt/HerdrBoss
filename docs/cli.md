@@ -114,11 +114,16 @@ herdr-boss worker start fix-74 --kind claude --task-file brief.md --allow src/pa
 
 | Command | Action |
 |---|---|
-| `lock acquire NAME [--wait SECONDS]` | Acquire a lock for this Git repository. `--wait` accepts a whole number of seconds. |
+| `lock acquire NAME [--wait SECONDS]` | Acquire a lock. `full-suite` is a machine lock. Other names are locks for this Git repository. `--wait` accepts a whole number of seconds. |
 | `lock release NAME` | Release a lock owned by this pane, or a stale lock. |
-| `lock list` | List locks and show whether each owner is live or stale. |
+| `lock list` | List the locks of this Git repository and the machine locks. Show the scope, `repository` or `machine`, and whether each owner is live or stale. |
+| `push [ARGS...]` | Run `git push ARGS...`. When a pre-push hook exists, take the `full-suite` lock with `--wait 1800` first, and release it after the push. |
 
-Lock names are one path-safe token. Every linked worktree of the same Git repository uses the same locks. Herdr Boss stores lock records in a private `locks` directory under its data directory. Each record names the owner pane, its shell PID, the safe acquire command, and the acquisition time. Herdr Boss marks a lock stale when the owner PID has exited or the pane has closed. A new owner can take over a stale lock. Herdr Boss prints a notice when it does. A different pane cannot release an active lock. Herdr Boss fails closed if it cannot confirm pane state.
+Lock names are one path-safe token. Every linked worktree of the same Git repository uses the same locks. The `full-suite` lock is machine-wide: all repositories on this machine share it. Herdr Boss stores lock records in a private `locks` directory under its data directory. It stores machine locks in `locks/machine/`. Each record names the owner pane, its shell PID, the safe acquire command, and the acquisition time. Herdr Boss marks a lock stale when the owner PID has exited or the pane has closed. A new owner can take over a stale lock. Herdr Boss prints a notice when it does. A different pane cannot release an active lock. Herdr Boss fails closed if it cannot confirm pane state.
+
+Take the machine-wide lock around every full test suite run and every push whose hook runs the full suite: run `herdr-boss lock acquire full-suite --wait 1800`, run the suite or the push, then run `herdr-boss lock release full-suite`. Use `herdr-boss push` for a push; it takes the lock when a pre-push hook exists. There is no load threshold.
+
+`herdr-boss push` finds a pre-push hook in two ways. A `pre-push` file exists at `git rev-parse --git-path hooks/pre-push`, which respects `core.hooksPath`. Or a husky or lefthook config names `pre-push`. With a hook, it takes `full-suite`, runs `git push`, and releases the lock also when the push fails. With no hook, it runs `git push` and takes no lock. It prints which case it used. Its exit code is the exit code of `git push`. Only a verified `orch` or `boss` pane can run it.
 
 ### `worker allow NAME PATH...`
 

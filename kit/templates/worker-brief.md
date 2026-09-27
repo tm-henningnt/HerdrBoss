@@ -43,9 +43,13 @@ Read the current worktree state before editing.
 
 Everything needed for this task is in the worktree and this brief. Do not read or write outside the worktree except for commands named in this brief.
 
-Run commands from the worktree root with `TMPDIR="$PWD/.worker/tmp"`. Put captures, logs, and scratch files in `.worker/tmp/`.
+`worker start` sets `TMPDIR` and `HERDR_WORKTREE` in this pane to absolute paths. `HERDR_WORKTREE` is the worktree root. `TMPDIR` is the temporary folder of this worker.
 
-For dashboard previews, run `mkdir -p .worker/tmp/herdr-boss && TMPDIR="$PWD/.worker/tmp" HERDR_BOSS_DIR="$PWD/.worker/tmp/herdr-boss" HERDR_BOSS_PORT=4478 npm start -- --read-only-preview`. Choose an unused local port if 4478 is busy.
+Put captures, logs, and scratch files in `"$TMPDIR"`. Write other worker files to `"$HERDR_WORKTREE/.worker/..."`. These paths stay correct after you change the current folder.
+
+Never use `../` to reach `.worker` or a path outside the worktree.
+
+For dashboard previews, run `mkdir -p "$TMPDIR/herdr-boss" && HERDR_BOSS_DIR="$TMPDIR/herdr-boss" HERDR_BOSS_PORT=4478 npm start -- --read-only-preview`. Choose an unused local port if 4478 is busy.
 
 Use the task below as the complete work order:
 

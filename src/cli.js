@@ -46,7 +46,8 @@ const USAGE = `herdr-boss <command>
   worker ...            Start, collect, or list workers.
   lock acquire <name> [--wait SECONDS]  Acquire a project lock.
   lock release <name>   Release a project lock.
-  lock list             List project locks.
+  lock list             List project locks with their scope.
+  push [git push arguments]  Run git push. Take the full-suite lock when a pre-push hook exists.
   worktree prune        List safe worktree removals.
   ledger ...            Append or check delegated-run records.
   check ...             Validate worker handoffs and scope.
@@ -73,7 +74,7 @@ async function main() {
     console.log(path.resolve(dir));
     return;
   }
-  if (['worker', 'lock', 'worktree', 'ledger', 'check', 'gh', 'models', 'kit'].includes(cmd)) {
+  if (['worker', 'lock', 'push', 'worktree', 'ledger', 'check', 'gh', 'models', 'kit'].includes(cmd)) {
     const { runKitCommand } = await import('./kit/cli.js');
     const result = runKitCommand(cmd, args);
     if (result?.exitCode) process.exitCode = result.exitCode;
