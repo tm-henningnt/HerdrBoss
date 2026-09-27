@@ -39,13 +39,15 @@ const OPEN_TASK_STATUS = new Set(['todo', 'doing', 'review']);
 const FRONTIER_RANK = { current: 0, next: 2 };
 
 // Open work whose blockers are all done in the same status file. An unknown blocker stays unresolved.
+// A task in a held group is not actionable.
 // The current frontier wins, then work without a frontier value, then the next frontier. File order breaks a tie.
-function actionableTask(tasks) {
+function actionableTask(tasks, groups) {
   const list = Array.isArray(tasks) ? tasks : [];
+  const held = new Set((Array.isArray(groups) ? groups : []).filter((group) => group?.held === true).map((group) => group.id));
   const byId = new Map(list.filter((task) => task?.id).map((task) => [task.id, task]));
   let best = null;
   for (const task of list) {
-    if (!task || !OPEN_TASK_STATUS.has(task.status)) continue;
+    if (!task || !OPEN_TASK_STATUS.has(task.status) || held.has(task.group)) continue;
     if (!(task.blockedBy || []).every((id) => byId.get(id)?.status === 'done')) continue;
     const rank = FRONTIER_RANK[task.frontier] ?? 1;
     if (!best || rank < best.rank) best = { task, rank };
@@ -75,7 +77,7 @@ function idleOrchestratorNudges(snap, paneSince = {}, now = Date.now(), policy =
     if (!Number.isFinite(since) || now - since < idleMs) continue;
     const local = panes.filter((p) => p.workspace === workspace);
     if (local.some((p) => p.agent && !p.orch && ['working', 'blocked', 'failed'].includes(p.status))) continue;
-    const task = actionableTask(published.tasks);
+    const task = actionableTask(published.tasks, published.groups);
     if (!task) continue;
     const ready = local.filter((p) => p.agent && !p.orch && ['idle', 'done'].includes(p.status));
     const names = ready.map((p) => p.name || p.agent || p.id);
@@ -133,14 +135,14 @@ export function evaluate(snap, cfg, paneSince, now = Date.now(), policy = null) 
         kinds.forEach((k) => avoidKinds.add(k));
         alerts.push({
           key: `quota:${q.provider}:${w.key}:critical:${w.resetsAt}`,
-          severity: 'critical', scope: 'all',
+          severity: 'critical', scope: 'all', prompt: false,
           title: `${name} ${w.label.toLowerCase()} quota at ${w.usedPercent}%`,
           text: `${name} ${w.label.toLowerCase()} quota is at ${w.usedPercent}% and resets ${reset}. Do not start new ${lane} before then. Send new work to another provider.`,
         });
       } else if (w.usedPercent >= cfg.quota.warnPercent) {
         alerts.push({
           key: `quota:${q.provider}:${w.key}:warn:${w.resetsAt}`,
-          severity: 'warn', scope: 'all',
+          severity: 'warn', scope: 'all', prompt: false,
           title: `${name} ${w.label.toLowerCase()} quota at ${w.usedPercent}%`,
           text: `${name} ${w.label.toLowerCase()} quota is at ${w.usedPercent}% and resets ${reset}. Use ${name} only for work that needs it.`,
         });

@@ -168,7 +168,8 @@ export function inspectWorkerReports(panes, observed, now = Date.now(), getMetad
       let metadata;
       try { metadata = getMetadata(absoluteReportPath); } catch { continue; }
       if (!metadata?.isFile || !Number.isFinite(metadata.mtimeMs) || metadata.mtimeMs <= firstSeen) continue;
-      const key = `workers:report:${absoluteReportPath}:${metadata.mtimeMs}`;
+      // One notice per report path. A rewrite of the same report changes only its mtime.
+      const key = `workers:report:${absoluteReportPath}`;
       notices.push({
         key, severity: 'info', scope: pane.workspace, immediate: true,
         title: `Worker ${workerName} wrote its report`,

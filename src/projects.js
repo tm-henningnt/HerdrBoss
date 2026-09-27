@@ -31,6 +31,7 @@ export function validateProject(p) {
   for (const k of ['metrics', 'links', 'notes', 'phases', 'groups', 'gates', 'risks']) if (p[k] != null && !Array.isArray(p[k])) errs.push(`"${k}" must be an array`);
   for (const [i, g] of (Array.isArray(p.groups) ? p.groups : []).entries()) {
     if (!g || typeof g.id !== 'string' || typeof g.title !== 'string') errs.push(`groups[${i}] needs id and title (strings)`);
+    if (g?.held != null && typeof g.held !== 'boolean') errs.push(`groups[${i}].held must be true or false`);
     for (const [j, r] of (Array.isArray(g?.refs) ? g.refs : []).entries()) if (!r || typeof r.label !== 'string' || (r.url != null && !WEB_URL.test(r.url))) errs.push(`groups[${i}].refs[${j}] needs a label and an optional http(s) url`);
   }
   for (const [i, g] of (Array.isArray(p.gates) ? p.gates : []).entries()) if (!g || typeof g.title !== 'string') errs.push(`gates[${i}].title (string) is required`);

@@ -73,7 +73,7 @@ Publish every tracked issue as a task, including closed issues with `"status": "
 {
   "groups": [
     { "id": "1.0", "title": "Release 1.0", "note": "Core map and export.", "refs": [{ "label": "docs/ReleasePlan.md" }] },
-    { "id": "2.0", "title": "Release 2.0" }
+    { "id": "2.0", "title": "Release 2.0", "held": true }
   ],
   "tasks": [
     { "id": "70", "title": "Event log spec", "status": "done", "kind": "spec", "group": "1.0", "url": "https://github.com/org/repo/issues/70" },
@@ -98,6 +98,7 @@ Publish every tracked issue as a task, including closed issues with `"status": "
 | `tasks[].assignee` | string | The person or agent assigned to the issue. |
 | `tasks[].updated` | string | The ISO time of the last change. The list can sort by it. |
 | `groups[]` | object | `id` and `title` are required. `note` is one line. `refs[]` holds `label` and an optional `http(s)` `url`, for example a roadmap section. Publish groups in their delivery order. |
+| `groups[].held` | boolean | Optional. `true` holds the group. The idle-orchestrator nudge does not name a task in a held group. The default is `false`. |
 | `gates[]` | object | A human gate: `title` is required; `id`, `needs`, `evidence`, and `status` are optional. |
 | `risks[]` | string[] | Open risks. |
 | `git` | object | `branch`, `commit`, and `dirty` (boolean). |
