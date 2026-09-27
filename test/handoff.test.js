@@ -115,7 +115,10 @@ test('expireMissingHandoffs records absent successors from an explicit pane snap
     { id: 'stale-preparing', newPane: 'ws:p2', status: 'preparing' },
     { id: 'stale-inspection', newPane: 'ws:p4', status: 'needs-inspection' },
     { id: 'live', newPane: 'ws:p3', status: 'preparing' },
-    { id: 'prepared', newPane: 'ws:p5', status: 'prepared' },
+    { id: 'stale-prepared', newPane: 'ws:p5', status: 'prepared' },
+    { id: 'live-prepared', newPane: 'ws:p1', status: 'prepared' },
+    { id: 'active', newPane: 'ws:p6', status: 'active' },
+    { id: 'activated', newPane: 'ws:p7', status: 'activated' },
   ]));
   const handoffUrl = new URL('../src/handoff.js', import.meta.url).href;
   const script = `import { expireMissingHandoffs, listHandoffs } from ${JSON.stringify(handoffUrl)};
@@ -127,15 +130,17 @@ test('expireMissingHandoffs records absent successors from an explicit pane snap
     env: { ...process.env, HOME: root, HERDR_BOSS_DIR: root, TEST_PANES: JSON.stringify([{ id: 'ws:p1' }, { pane_id: 'ws:p3' }]) },
     encoding: 'utf8',
   }));
-  assert.deepEqual(result.expired, ['stale-preparing', 'stale-inspection']);
+  assert.deepEqual(result.expired, ['stale-preparing', 'stale-inspection', 'stale-prepared']);
   assert.deepEqual(result.invalidSnapshotExpired, []);
-  for (const item of result.records.slice(0, 2)) {
+  for (const item of [...result.records.slice(0, 2), result.records[3]]) {
     assert.equal(item.status, 'expired');
     assert.ok(Number.isFinite(Date.parse(item.expiredAt)));
     assert.match(item.expiredReason, new RegExp(`${item.newPane}.*current Herdr pane list`));
   }
   assert.equal(result.records[2].status, 'preparing');
-  assert.equal(result.records[3].status, 'prepared');
+  assert.equal(result.records[4].status, 'prepared');
+  assert.equal(result.records[5].status, 'active');
+  assert.equal(result.records[6].status, 'activated');
 });
 
 function runHandoffCli(root, args, env) {

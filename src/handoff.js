@@ -93,7 +93,7 @@ export function expireMissingHandoffs(panes) {
   const expired = [];
   let changed = false;
   for (const item of records) {
-    if (!['preparing', 'needs-inspection'].includes(item.status) || !item.newPane || live.has(item.newPane)) continue;
+    if (!['prepared', 'preparing', 'needs-inspection'].includes(item.status) || !item.newPane || live.has(item.newPane)) continue;
     item.status = 'expired';
     item.expiredAt = expiredAt;
     item.expiredReason = `Successor pane ${item.newPane} was absent from the current Herdr pane list.`;
