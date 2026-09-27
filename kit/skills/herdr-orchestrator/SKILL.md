@@ -101,7 +101,7 @@ description: Use when coordinating delegated workers with Herdr Boss, writing wo
 - Label the orchestrator pane `orch` with `herdr pane rename "$HERDR_PANE_ID" orch`.
 - Use a lowercase, unique worker name.
 - Keep each name within the Herdr agent name limit.
-- Give each worker a separate Herdr tab labelled `W <name>` in the verified caller workspace. The tab has one root pane. Do not reuse a shared tab or split a pane.
+- Put each worker in a pane of the shared tab labelled `Workers` in the verified caller workspace. `herdr-boss worker start` splits the new pane from the newest worker pane in that tab. When the tab is missing, it creates the tab, and the first worker uses its root pane.
 - Use separate worktrees for parallel changes.
 - Give parallel changes separate branches and worktrees with independent scopes.
 - Use one writer per shared module.
@@ -157,14 +157,15 @@ herdr-boss worker start <name> --kind <kind> --task-file <file> --allow <path>
 - Use `herdr agent` commands for recognized agent lifecycle and prompts.
 - Use `herdr pane` commands for shells and raw terminal control.
 - Never run `herdr pane run` in a pane occupied by an agent.
-- Create one `W <name>` tab in the verified caller workspace for each worker. Give it one root pane with `--cwd <dir>` for the worker worktree. Do not reuse a shared tab or split a pane.
+- Keep all worker panes in the one `Workers` tab of the verified caller workspace. Give each worker pane `--cwd <dir>` for the worker worktree.
 - Send the complete brief only after the worker pane is ready.
 - Wait for an agent instead of polling it.
 - Use `herdr agent wait <name> --until idle --timeout <ms>` for long work.
 - Use `herdr agent prompt <name> "<brief>" --wait --timeout <ms>` for short bounded work.
 - Use `herdr pane wait-output <pane> --match <text>` when a command produces the event.
 - Do not reread an unchanged pane in a loop.
-- Use `herdr agent get` and `herdr agent read` to inspect a worker state or dialog.
+- Use `herdr agent get` to inspect a worker state.
+- Read a worker dialog or screen with `herdr agent read <name> --source recent-unwrapped`. This source joins wrapped lines. Do not reject a dialog because the pane is narrow.
 - Read the complete worker dialog before answering it. If the full dialog is not readable, reject it and let the worker ask through `WORKER QUESTION`.
 - Use `herdr agent explain <name>` when state detection fails.
 - Use `herdr notification show` only for information the human must see.

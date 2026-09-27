@@ -63,7 +63,6 @@ test('stale orchestration text outside the block gives warnings', () => {
   const cases = [
     ['Run `herdr agent start worker-a` for a worker.', /herdr agent start/],
     ['Use `herdr pane split` for a new pane.', /herdr pane split/],
-    ['Open workers in the `Workers` tab.', /Workers.*tab/],
     ['Run `npm run dashboard:update` after each task.', /dashboard:update/],
     ['Attach to Chrome on port 9222.', /9222/],
     ['Run `pgrep -f vite` to find the server.', /process/],
@@ -85,6 +84,11 @@ test('a prohibition line for port 9222 or a process command is not drift', () =>
   assert.deepEqual(check(file('- Do not use `ps aux` with the output printed.')), []);
   const hits = only(check(file('- Use the Chrome on port 9222.')), 'warn', /port 9222/);
   assert.equal(hits[0].line, 2);
+});
+
+test('the shared Workers tab is not drift', () => {
+  assert.deepEqual(check(file('Workers run as panes in the shared `Workers` tab.')), []);
+  assert.deepEqual(check(file('Open workers in the Workers tab.')), []);
 });
 
 test('stale text inside the block does not give warnings', () => {

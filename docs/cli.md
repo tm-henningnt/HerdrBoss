@@ -60,11 +60,13 @@ When `NODE_TEST_CONTEXT` is set, or the data directory differs from the configur
 
 ### `worker start NAME`
 
-Create a branch and worktree, write the brief, create a dedicated `W <name>` tab with one root pane, start the agent, and send the brief. Each worker uses its own tab in the verified caller workspace.
+Create a branch and worktree, write the brief, add a worker pane, start the agent, and send the brief. All workers share one tab labelled `Workers` in the verified caller workspace.
+
+When the `Workers` tab exists, `worker start` runs `herdr pane split` from the newest pane in that tab. When the tab is missing, it runs `herdr tab create --label Workers`, and the worker uses the root pane of the new tab. If more than one tab has the label `Workers`, it uses the first. If the start fails before the agent starts, `worker start` closes only its own pane. It closes the `Workers` tab only when the same start created that tab.
 
 `worker start` waits for the shell prompt or a stable shell screen. It sets `DISABLE_UPDATE_PROMPT=true` and `DISABLE_AUTO_UPDATE=true` in new panes. If it finds an interactive question, it stops and tells the orchestrator to answer it in a shell once.
 
-`worker start` sets `HERDR_ENV=1` in a new pane when `--kind` is `codex`. The agent in that pane then runs Herdr commands. Panes for the other kinds keep the pane environment that Herdr gives them. The dry-run plan prints the same `herdr tab create` command.
+`worker start` sets `HERDR_ENV=1` in a new pane when `--kind` is `codex`. The agent in that pane then runs Herdr commands. Panes for the other kinds keep the pane environment that Herdr gives them. The dry-run plan prints the same `herdr pane split` or `herdr tab create` command.
 
 `worker start` saves the resolved base commit in the run record. Review the worker, then collect it with `--record` before you merge its branch. Collection uses that saved commit so changed paths stay stable after the merge.
 
@@ -167,7 +169,7 @@ herdr-boss worker allow fix-74 docs/parse.md --reason "the fix also needs the pa
 | `error` | The file has no begin marker, no end marker, or more than one block. |
 | `error` | The block hash is not the current hash. Run `herdr-boss kit block` and replace the block. |
 | `error` | The block body does not match its own hash. The block was edited by hand. |
-| `warn` | Outside the block: `herdr agent start`, `herdr pane split`, a `Workers` tab, or `dashboard:update`. |
+| `warn` | Outside the block: `herdr agent start`, `herdr pane split`, or `dashboard:update`. |
 | `warn` | Outside the block: port `9222`, or `pgrep -f`, `ps aux`, or `ps -ef` in a command. A line with `do not`, `don't`, or `never` is a safety rule and is not a finding. |
 | `warn` | Outside the block: a fixed pane ID such as `w1:p2`, or a dated line. Move it to `docs/orchestration/memory.md`. |
 | `warn` | A model ID that starts with `gpt-`, `claude-`, `opencode/`, `opencode-go/`, `deepseek`, or `muse-spark` and is not in the merged model list. The merged list is the same list that `herdr-boss models` shows. |
