@@ -28,16 +28,17 @@ function fixture(t, prefix) {
   git(root, 'commit', '-m', 'seed');
   const config = loadProjectConfig({ cwd: root });
   const calls = [];
+  const livePanes = ['ws:orch'];
   const herdr = (args) => {
     calls.push(args.join(' '));
     if (args[0] === 'pane' && args[1] === 'get') return { pane: { pane_id: args[2], workspace_id: 'ws', label: args[2] === 'ws:worker' ? 'worker' : 'orch' } };
     if (args[0] === 'pane' && args[1] === 'process-info') return { process_info: { shell_pid: 601 } };
-    if (args[0] === 'pane' && args[1] === 'list') return { panes: [{ pane_id: 'ws:orch' }] };
+    if (args[0] === 'pane' && args[1] === 'list') return { panes: livePanes.map((pane_id) => ({ pane_id })) };
     throw new Error(`Unexpected Herdr call: ${args.join(' ')}`);
   };
   const lines = [];
-  const options = (pane = 'ws:orch') => ({
-    config,
+  const options = (pane = 'ws:orch', paneConfig = config) => ({
+    config: paneConfig,
     lockDataDir: dataDir,
     env: { HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'ws', HERDR_PANE_ID: pane },
     herdr,
@@ -54,7 +55,7 @@ function fixture(t, prefix) {
     fs.chmodSync(hook, 0o755);
   };
   const hookSaw = () => fs.readFileSync(path.join(base, 'hook-saw'), 'utf8').trim();
-  return { base, root, remote, dataDir, config, calls, lines, options, lockFile, writeHook, hookSaw };
+  return { base, root, remote, dataDir, config, calls, lines, livePanes, options, lockFile, writeHook, hookSaw };
 }
 
 test('herdr-boss push takes and releases the full-suite lock around a push with a pre-push hook', (t) => {
@@ -117,4 +118,60 @@ test('herdr-boss push requires an orch or boss caller pane', (t) => {
   f.writeHook(path.join(f.root, '.git', 'hooks'));
   assert.throws(() => runKitCommand('push', ['origin', 'main'], f.options('ws:worker')), /orch or boss/);
   assert.throws(() => git(f.remote, 'rev-parse', '--verify', 'main'));
+});
+
+// A worker has a linked worktree and a run record in the orchestrator checkout.
+function workerFixture(t, prefix, run = {}) {
+  const f = fixture(t, prefix);
+  const worktree = path.join(f.base, 'wt-w1');
+  git(f.root, 'worktree', 'add', '-b', 'w1', worktree, 'main');
+  const runsDir = path.join(f.root, '.orchestration', 'runs');
+  fs.mkdirSync(runsDir, { recursive: true });
+  const writeRun = (fields) => fs.writeFileSync(path.join(runsDir, 'w1.json'), JSON.stringify({
+    name: 'w1', kind: 'claude', model: 'claude-opus-5-5', worktree, pane: 'ws:worker', startedAt: '2026-09-27T10:00:00.000Z', ...fields,
+  }));
+  if (run !== null) writeRun(run);
+  f.livePanes.push('ws:worker');
+  const workerConfig = loadProjectConfig({ cwd: worktree });
+  return { ...f, worktree, workerConfig, writeRun, worker: () => f.options('ws:worker', workerConfig) };
+}
+
+test('a worker pane with a live run record can acquire and release the full-suite lock', (t) => {
+  const f = workerFixture(t, 'herdr-worker-lock-');
+  const acquired = runKitCommand('lock', ['acquire', 'full-suite', '--wait', '5'], f.worker());
+  assert.equal(acquired.ownerPane, 'ws:worker');
+  assert.equal(fs.existsSync(f.lockFile), true);
+  assert.throws(() => runKitCommand('lock', ['acquire', 'full-suite'], f.options()), /held by active pane ws:worker/);
+  runKitCommand('lock', ['release', 'full-suite'], f.worker());
+  assert.equal(fs.existsSync(f.lockFile), false);
+});
+
+test('a worker pane cannot take another lock name', (t) => {
+  const f = workerFixture(t, 'herdr-worker-other-');
+  assert.throws(() => runKitCommand('lock', ['acquire', 'deploy'], f.worker()), /orch or boss/);
+  assert.throws(() => runKitCommand('lock', ['release', 'deploy'], f.worker()), /orch or boss/);
+});
+
+test('a worker pane without a run record is refused the full-suite lock', (t) => {
+  const f = workerFixture(t, 'herdr-worker-norun-', null);
+  assert.throws(() => runKitCommand('lock', ['acquire', 'full-suite'], f.worker()), /orch or boss.*live worker run/);
+  f.writeRun({ pane: 'ws:other' });
+  assert.throws(() => runKitCommand('lock', ['acquire', 'full-suite'], f.worker()), /live worker run/);
+  assert.equal(fs.existsSync(f.lockFile), false);
+});
+
+test('a worker pane with a finished run record is refused the full-suite lock', (t) => {
+  const f = workerFixture(t, 'herdr-worker-finished-', { finishedAt: '2026-09-27T11:00:00.000Z' });
+  assert.throws(() => runKitCommand('lock', ['acquire', 'full-suite'], f.worker()), /live worker run/);
+  assert.equal(fs.existsSync(f.lockFile), false);
+});
+
+test('a stale worker lock is taken over after the worker pane is gone', (t) => {
+  const f = workerFixture(t, 'herdr-worker-stale-');
+  runKitCommand('lock', ['acquire', 'full-suite'], f.worker());
+  f.livePanes.splice(f.livePanes.indexOf('ws:worker'), 1);
+  const takeover = runKitCommand('lock', ['acquire', 'full-suite'], f.options());
+  assert.equal(takeover.ownerPane, 'ws:orch');
+  assert.ok(f.lines.some((line) => /NOTICE.*stale lock full-suite.*ws:worker/i.test(line)), f.lines.join('\n'));
+  runKitCommand('lock', ['release', 'full-suite'], f.options());
 });
