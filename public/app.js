@@ -6,7 +6,7 @@ const $nav = document.getElementById('primary-nav');
 const $roamgate = document.getElementById('roamgate-link');
 const $navMenu = document.getElementById('nav-menu');
 const $navMenuLabel = document.getElementById('nav-menu-label');
-const NAV_LABEL = { overview: 'Overview', projects: 'Projects', allocation: 'Allocation', settings: 'Settings', agents: 'Agents', browsers: 'Browsers', analytics: 'Analytics', logs: 'Logs' };
+const NAV_LABEL = { overview: 'Overview', projects: 'Projects', allocation: 'Allocation', organization: 'Organization', settings: 'Settings', agents: 'Agents', browsers: 'Browsers', analytics: 'Analytics', logs: 'Logs' };
 const settingsLink = document.createElement('a');
 settingsLink.href = '/settings';
 settingsLink.dataset.nav = 'settings';
@@ -922,6 +922,163 @@ function agentsView(s) {
   ].join('');
 }
 
+// ---------- Organization ----------
+// A read-only chart from existing state: Owner, Boss, project orchestrators, and their workers.
+// Pane titles, pane output, and preferred models are not facts about an agent, so the chart does not use them.
+
+const orgOpen = new Set();
+const NOT_REPORTED = 'Not reported';
+const HANDOFF_OPEN = ['preparing', 'prepared', 'needs-inspection'];
+
+// A successor is prepared only when the record is prepared, its source is the current role pane, and its pane is live.
+function orgSuccessor(s, sourcePane) {
+  if (!sourcePane) return null;
+  const panes = s.herdr?.panes || [];
+  const record = handoffRecords.find((x) => x.status === 'prepared' && x.sourcePane === sourcePane && x.newPane && panes.some((p) => p.id === x.newPane));
+  return record ? { record, pane: panes.find((p) => p.id === record.newPane) } : null;
+}
+
+function orgHandover(s, sourcePane, risk) {
+  const records = handoffRecords.filter((x) => HANDOFF_OPEN.includes(x.status) && sourcePane && x.sourcePane === sourcePane);
+  if (orgSuccessor(s, sourcePane)) return 'Successor prepared';
+  if (records.some((x) => x.status === 'needs-inspection')) return 'Successor needs inspection';
+  if (records.some((x) => x.status === 'preparing')) return 'Successor preparing';
+  if (records.some((x) => x.status === 'prepared')) return 'Prepared record without a live successor pane';
+  if (risk?.window) return `Handover needed · ${risk.window.usedPercent}% of ${risk.window.label || 'quota'}`;
+  return 'No handover';
+}
+
+// Codex and Claude always use their own subscription, so their quota is known without a model. Other harnesses are not.
+function orgQuota(s, kind) {
+  if (!['codex', 'claude'].includes(kind)) return NOT_REPORTED;
+  const q = (s.quotas || []).find((x) => x.provider === kind);
+  if (!q || q.error) return NOT_REPORTED;
+  const w = q.windows?.find((x) => x.key === 'secondary') || q.windows?.find((x) => !x.extra);
+  return w ? `${PROVIDERS[kind]} ${w.usedPercent}% · ${w.label}` : NOT_REPORTED;
+}
+
+function orgSince(s, pane) {
+  const since = s.paneSince?.[pane.id]?.since;
+  return since ? dur((Date.now() - since) / 1000) : null;
+}
+
+// The published task that names this worker. The chart does not read a task from the pane title.
+function orgWorkerTask(published, pane) {
+  if (!pane.name) return null;
+  return (published?.tasks || []).find((t) => t && t.worker === pane.name && !isDone(t)) || null;
+}
+
+function orgFacts(rows) {
+  return `<dl class="org-facts">${rows.filter(Boolean).map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v ?? NOT_REPORTED)}</dd></div>`).join('')}</dl>`;
+}
+
+function orgNode({ id, role, name, status, summary, facts, className = '' }) {
+  const open = orgOpen.has(id);
+  const domId = `org-detail-${id.replace(/[^A-Za-z0-9_-]/g, '-')}`;
+  return `<article class="org-node ${esc(className)}"><div class="org-node-head"><span class="st ${esc(status || 'unknown')}" aria-hidden="true"></span><span class="pill">${esc(role)}</span><strong>${esc(name)}</strong></div>
+    <p class="org-node-summary">${summary.filter(Boolean).map((x) => `<span>${esc(x)}</span>`).join('')}</p>
+    <button type="button" class="quiet org-toggle" data-org-node="${esc(id)}" aria-expanded="${open}" aria-controls="${domId}">${open ? 'Hide details' : 'Details'}<span class="visually-hidden"> for ${esc(name)}</span></button>
+    <div class="org-detail" id="${domId}" ${open ? '' : 'hidden'}>${orgFacts(facts)}</div></article>`;
+}
+
+function orgAgentFacts(s, pane, extra = []) {
+  return [
+    ['Pane', pane.id],
+    ['Harness', pane.agent || NOT_REPORTED],
+    ['Model', NOT_REPORTED],
+    ['State', pane.status || NOT_REPORTED],
+    ['In state for', orgSince(s, pane) || NOT_REPORTED],
+    ...extra,
+  ];
+}
+
+function orgWorkers(s, panes, published, ownerId) {
+  if (!panes.length) return '<p class="org-empty">No workers.</p>';
+  return `<ul class="org-workers">${panes.map((pane) => {
+    const task = orgWorkerTask(published, pane);
+    const name = pane.name || pane.agent || pane.id;
+    return `<li>${orgNode({
+      id: `${ownerId}:${pane.id}`, role: pane.label || 'worker', name, status: pane.status, className: 'org-worker',
+      summary: [pane.agent || NOT_REPORTED, pane.status || NOT_REPORTED, task?.id ? `Task ${task.id}` : 'Task not reported'],
+      facts: orgAgentFacts(s, pane, [['Agent name', pane.name || NOT_REPORTED], ['Task ID', task?.id || NOT_REPORTED], ['Task title', task?.title || NOT_REPORTED], ['Task status', task ? STATUS_LABEL[task.status || 'todo'] || task.status : NOT_REPORTED]]),
+    })}</li>`;
+  }).join('')}</ul>`;
+}
+
+function orgReserve(s, successor, ownerId) {
+  if (!successor) return '';
+  const { record, pane } = successor;
+  return `<div class="org-reserve">${orgNode({
+    id: `${ownerId}:reserve`, role: 'reserve', name: `Successor · ${record.toKind || pane.agent || 'agent'}`, status: pane.status, className: 'org-reserve-node',
+    summary: [record.toKind || NOT_REPORTED, pane.status || NOT_REPORTED, record.automatic ? 'Automatic' : 'Awaiting review'],
+    facts: orgAgentFacts(s, pane, [['Start model', record.model || NOT_REPORTED], ['Prepared', record.preparedAt ? clock(record.preparedAt) : NOT_REPORTED], ['Reported ready', record.readyAt ? clock(record.readyAt) : 'No']]).filter(([k]) => k !== 'Model'),
+  })}</div>`;
+}
+
+function organizationView(s) {
+  const panes = s.herdr?.panes || [];
+  const agents = panes.filter((p) => p.agent);
+  // A successor of an active handoff record and a previous orchestrator are not workers. A successor shows as a reserve only after the prepared and live checks.
+  const successorPanes = new Set(handoffRecords.filter((x) => HANDOFF_OPEN.includes(x.status) && x.newPane).map((x) => x.newPane));
+  const PREVIOUS_ROLES = ['orch previous', 'boss previous'];
+  const workersIn = (workspace) => agents.filter((p) => p.workspace === workspace && !p.orch && p.label !== 'boss' && !PREVIOUS_ROLES.includes(p.label) && !successorPanes.has(p.id));
+  const owner = s.machine?.limits?.owner;
+  const ownerText = owner === 'present' ? 'At the Mac' : owner === 'away' ? 'Away' : NOT_REPORTED;
+  const ownerNode = orgNode({ id: 'owner', role: 'owner', name: 'Owner', status: owner === 'present' ? 'done' : owner === 'away' ? 'idle' : 'unknown', className: 'org-owner', summary: [ownerText], facts: [['Presence', ownerText], ['Source', 'Machine idle time']] });
+
+  const boss = panes.find((p) => p.label === 'boss');
+  const bossRisk = s.control?.bossHandoff;
+  const bossSuccessor = boss ? orgSuccessor(s, boss.id) : null;
+  const bossNode = boss ? orgNode({
+    id: 'boss', role: 'boss', name: 'Boss', status: boss.status, className: 'org-boss',
+    summary: [boss.agent || 'No agent', boss.status || NOT_REPORTED, orgHandover(s, boss.id, bossRisk)],
+    facts: orgAgentFacts(s, boss, [['Workspace', boss.workspaceLabel || boss.workspace], ['Quota use', orgQuota(s, boss.agent)], ['Handover', orgHandover(s, boss.id, bossRisk)]]),
+  }) : '<article class="org-node org-boss org-missing"><strong>Boss</strong><p class="org-node-summary"><span>No pane is labeled <code>boss</code>.</span></p></article>';
+  const bossWorkers = boss ? workersIn(boss.workspace) : [];
+
+  const live = s.control?.projects || {};
+  const projects = projectSlugs(s).map((slug) => live[slug]).filter(Boolean);
+  const hidden = (s.control?.workspaces || []).filter((w) => w.excluded && !w.boss).length;
+  const columns = projects.map((p) => {
+    const published = (s.projects || []).find((x) => x.slug === p.slug);
+    const orch = p.orch && panes.find((x) => x.id === p.orch.pane);
+    const risk = (s.control?.handoffs || []).find((h) => h.project === p.slug);
+    const current = (published?.tasks || []).filter((t) => t && t.title && t.status === 'doing');
+    const taskText = current.length ? `${current[0].id ? `${current[0].id} · ` : ''}${current[0].title}${current.length > 1 ? ` (+${current.length - 1} more)` : ''}` : NOT_REPORTED;
+    const slots = `${p.running} / ${p.slots} slots · ${Math.round(p.share || 0)}% share`;
+    const handover = orgHandover(s, p.orch?.pane, risk);
+    const mode = p.effectiveMode === 'paused' ? 'Paused' : p.idle ? 'Idle' : 'Active';
+    const node = orgNode({
+      id: `project:${p.slug}`, role: 'orch', name: p.label, status: orch?.status || (p.orch ? p.orch.status : 'unknown'),
+      summary: [orch ? `${orch.agent || 'No agent'} · ${orch.status || NOT_REPORTED}` : 'No orchestrator', slots],
+      facts: [
+        ['Project', p.label],
+        ['Mode', mode],
+        ['Orchestrator pane', p.orch?.pane || 'None labeled orch'],
+        ['Harness', orch?.agent || NOT_REPORTED],
+        ['Model', NOT_REPORTED],
+        ['State', orch?.status || NOT_REPORTED],
+        ['In state for', orch ? orgSince(s, orch) || NOT_REPORTED : NOT_REPORTED],
+        ['Current task', taskText],
+        ['Worker slots', slots],
+        ['Handover', handover],
+        ['Published status', published ? `${published.status || published.phase || 'Published'} · updated ${ago(published.updated)}` : 'Not published'],
+      ],
+    });
+    return `<section class="org-column" aria-label="${esc(p.label)}"><div class="org-lead">${node}${orgReserve(s, orgSuccessor(s, p.orch?.pane), `project:${p.slug}`)}</div><p class="org-current"><span>Current task</span> ${esc(taskText)}</p>${orgWorkers(s, workersIn(p.workspace), published, `project:${p.slug}`)}<a class="org-link" href="/projects/${esc(p.slug)}">Project details →</a></section>`;
+  }).join('');
+
+  return [
+    '<header class="page-intro"><div><h1>Organization</h1><p>Read-only chart of the Owner, the Boss, project orchestrators, and workers. Select <b>Details</b> on a node to see its recorded values.</p></div></header>',
+    `<section class="org-chart" aria-label="Organization chart">
+      <ol class="org-tier" aria-label="Owner"><li>${ownerNode}</li></ol>
+      <ol class="org-tier" aria-label="Boss"><li><div class="org-lead">${bossNode}${orgReserve(s, bossSuccessor, 'boss')}</div>${boss ? `<div class="org-boss-workers"><h2>Boss workspace workers <span class="sub">${bossWorkers.length}</span></h2>${orgWorkers(s, bossWorkers, null, 'boss')}</div>` : ''}</li></ol>
+      <div class="org-tier org-projects" aria-label="Projects">${columns || '<p class="calm-state">No open projects.</p>'}</div>
+    </section>`,
+    `<p class="org-note">${hidden ? `${hidden} workspace${hidden === 1 ? ' is' : 's are'} marked not a project and ${hidden === 1 ? 'is' : 'are'} not shown. ` : ''}Herdr Boss does not receive the model of a running agent, so the chart shows <b>Not reported</b>.</p>`,
+  ].join('');
+}
+
 function projectsView(s, slug) {
   const selected = slug && projectSlugs(s).includes(slug) ? slug : defaultProject(s);
   $crumbs.innerHTML = selected ? `/ <a href="/projects">projects</a> / ${esc((s.projects || []).find((p) => p.slug === selected)?.project || s.control?.projects?.[selected]?.label || selected)}` : '';
@@ -1253,6 +1410,14 @@ const HELP = {
     <p>Disk free space is measured on the filesystem that contains the Herdr Boss data directory. The warning threshold defaults to 20 GB free. The critical threshold defaults to 5 GB free. Free percent is information only. Herdr Boss shows it to one decimal place. Disk notices go to the project orchestrator when that project has linked worker worktrees. They include linked and prunable counts.</p>
     <p>When the guard is active, Herdr Boss blocks a worker start if total sampled CPU exceeds its configured limit or the 5-minute load average exceeds its configured backstop. Leave the away CPU limit or either load backstop blank to disable that threshold.</p>
     <p>Changes stay in a draft until you select <b>Apply policy</b>. A rejected save shows the server error and keeps your draft.</p>`],
+  organization: ['Organization', `
+    <p>A read-only chart of the organization, from top to bottom: the Owner, the Boss, one orchestrator for each project, and the workers under each orchestrator. The page cannot send messages or change resources.</p>
+    <h3>Nodes</h3><p><b>Owner</b> shows <b>At the Mac</b> or <b>Away</b> from the machine idle time. <b>Boss</b> shows the pane labeled <code>boss</code>, its harness and state, the quota use of a Codex or Claude harness, and the handover state. The Boss workspace workers are below the Boss.</p>
+    <p>Each project node shows the orchestrator pane, harness, and state, the first published task with status <b>doing</b>, the worker slots in use against the slots and share, and the handover state. The projects use the project order. A workspace marked not a project has no node.</p>
+    <p>A worker node shows the agent name, harness, and state. The task ID comes from the published task whose <b>worker</b> field names that agent.</p>
+    <h3>Reserve</h3><p>A <b>reserve</b> node shows a prepared successor. It appears only when a handoff record is prepared, its source is the current orchestrator or Boss pane, and the successor pane is live. A recommended successor is not a reserve.</p>
+    <h3>Details</h3><p>Select <b>Details</b> on a node to show its recorded values. Select <b>Hide details</b> to close them.</p>
+    <h3>Data limits</h3><p><b>Not reported</b> means that the current state does not hold the value. Herdr Boss does not receive the model of a running agent. The page does not read a task from a pane title. It shows no pane output, messages, or secrets.</p>`],
   agents: ['Agents', `
     <p>Every Herdr workspace with its orchestrator and workers, live from Herdr.</p>
     <p>A status dot shows working, blocked, failed, idle, or done. Failed means the last visible worker output matched a known provider error, including <b>Free usage exceeded</b>. Herdr Boss reads only the last eight visible lines: on every tick while a worker is working, and when a worker first appears idle or done or changes into either state. A worker can show failed while Herdr still reports it working; the engine then does not count it as a running worker. The failed status clears when a later read shows no known failure, or when a different worker uses the pane. Herdr Boss sends the matched error label, worker name, and pane ID to the project orchestrator. Blocked workers get a notice after five minutes. Idle and done agents are ready for input; they have not always finished their task. Rows with the <b>orch</b> or <b>boss</b> label are orchestrators.</p>
@@ -1319,8 +1484,8 @@ function render(force = false) {
   const legacy = /^\/p\/([^/]+)\/?$/.exec(location.pathname);
   if (legacy) history.replaceState(null, '', `/projects/${legacy[1]}`);
   const m = /^\/projects\/([^/]+)\/?$/.exec(location.pathname);
-  const route = m || location.pathname === '/projects' ? 'projects' : ['allocation', 'settings', 'agents', 'browsers', 'analytics', 'logs'].includes(location.pathname.slice(1)) ? location.pathname.slice(1) : 'overview';
-  const html = route === 'projects' ? projectsView(state, m ? decodeURIComponent(m[1]) : null) : route === 'allocation' ? allocationView(state) : route === 'settings' ? settingsView(state) : route === 'agents' ? agentsView(state) : route === 'browsers' ? browsersView(state) : route === 'analytics' ? analyticsView(state) : route === 'logs' ? logsView(state) : overview(state);
+  const route = m || location.pathname === '/projects' ? 'projects' : ['allocation', 'settings', 'organization', 'agents', 'browsers', 'analytics', 'logs'].includes(location.pathname.slice(1)) ? location.pathname.slice(1) : 'overview';
+  const html = route === 'projects' ? projectsView(state, m ? decodeURIComponent(m[1]) : null) : route === 'allocation' ? allocationView(state) : route === 'settings' ? settingsView(state) : route === 'organization' ? organizationView(state) : route === 'agents' ? agentsView(state) : route === 'browsers' ? browsersView(state) : route === 'analytics' ? analyticsView(state) : route === 'logs' ? logsView(state) : overview(state);
   $navMenuLabel.textContent = NAV_LABEL[route] || 'Menu';
   if (route !== 'projects') $crumbs.innerHTML = '';
   for (const a of $nav.querySelectorAll('a')) {
@@ -1782,6 +1947,15 @@ async function runHandoffAction(action, key) {
   } catch (error) { handoffMessages[key] = error.message; }
   finally { handoffBusy.delete(key); lastRender = ''; render(); }
 }
+
+document.addEventListener('click', (e) => {
+  const toggle = e.target.closest?.('[data-org-node]');
+  if (!toggle) return;
+  const id = toggle.dataset.orgNode;
+  if (orgOpen.has(id)) orgOpen.delete(id); else orgOpen.add(id);
+  lastRender = ''; render(true);
+  document.querySelector(`[data-org-node="${CSS.escape(id)}"]`)?.focus();
+});
 
 document.addEventListener('click', async (e) => {
   if (e.target.dataset.machineGuardDraft) {

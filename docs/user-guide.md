@@ -217,6 +217,27 @@ Agent commands and tab rules are in [the browser service](../kit/browser-service
 
 Orchestrators do not build dashboards. They publish a status file, and Herdr Boss shows it on `/projects/SLUG`. With the optional work structure fields, the page shows progress, the current frontier, a dependency graph, groups, specs, and all work. See [project-status.md](project-status.md).
 
+## Organization page
+
+The `/organization` page shows the organization as a read-only chart. The chart has four levels:
+
+1. The **Owner** node shows **At the Mac** or **Away**. The value comes from the machine idle time.
+2. The **Boss** node shows the pane labeled `boss`, its harness, state, quota use, and handover state. The workers in the Boss workspace are below it.
+3. Each **project** node shows the orchestrator pane, harness, and state. It also shows the current task, the worker slots in use against the slots and share, and the handover state. The nodes use the project order.
+4. Each **worker** node shows the agent name, harness, state, and task ID.
+
+Select **Details** on a node to show its recorded values. The page cannot send messages or change resources.
+
+The page uses only the state that the dashboard already loads. These limits apply:
+
+- The page shows **Not reported** when the state does not hold a value.
+- Herdr Boss does not receive the model of a running agent. The page does not use a preferred model as the model of an agent.
+- The current task is the first published task with status `doing`. The worker task is the open published task whose `worker` field names that agent. The page does not read a task from a pane title.
+- Quota use shows only for a Codex or Claude harness, because each of these harnesses uses only its own subscription.
+- A **reserve** node shows a prepared successor only when a prepared handoff record names the current orchestrator or Boss pane as its source and the successor pane is live. A recommended successor does not show as a reserve.
+- A workspace marked not a project has no project node. The Boss workspace shows as the Boss node.
+- The page shows no pane output, message content, or secrets.
+
 ## Phone and home screen
 
 The dashboard adapts to a phone and to a home-screen web app.
