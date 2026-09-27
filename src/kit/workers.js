@@ -5,14 +5,15 @@ import { execFileSync } from 'node:child_process';
 import { appendDelegatedRun, compareChangedPaths, gitChangedPaths, gitLog, readJson, validateAllowedPaths, validateScopePaths, validateWorkerReport } from './orchestration.js';
 import { recordUsage } from '../usage.js';
 import { goalSummary, mergeModels, modelEnabled, providerFor, selectModel, unavailablePiModels, unmeteredClosedParts, unmeteredSummary } from '../control.js';
-import { DATA_DIR } from '../config.js';
+import { DATA_DIR, loadConfig } from '../config.js';
 import { workerStatusFromState } from '../worker-failures.js';
 import { checkAgentsFile } from './agents-check.js';
+import { acquireLeaseFor, dropLeases, setLeasePane } from '../leases.js';
 
 const NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
 const BRIEF_SLOTS = new Set([
   'name', 'kind', 'model', 'effort', 'project', 'repo', 'worktree', 'branch', 'base', 'issue', 'task',
-  'allowedPaths', 'reportPath', 'reportJsonPath', 'orchPane', 'orchName', 'bulletinPath', 'date', 'evidenceTiers', 'threadLimit', 'imageBudget', 'copyPaths',
+  'allowedPaths', 'reportPath', 'reportJsonPath', 'orchPane', 'orchName', 'bulletinPath', 'date', 'evidenceTiers', 'threadLimit', 'imageBudget', 'copyPaths', 'leases',
 ]);
 
 function git(root, args, { encoding = 'utf8' } = {}) {
@@ -492,11 +493,13 @@ const WORKERS_TAB = 'Workers';
 
 // A Codex worker pane needs HERDR_ENV, or the agent in it cannot run Herdr commands. Other kinds keep the pane environment they had.
 // TMPDIR and HERDR_WORKTREE are absolute, so a worker that changes folder still reaches its own .worker files.
-function workerPaneEnv(kind, worktree, tmpDir) {
+// Each leased item becomes one more variable, for example HERDR_SERVE_PORT=8001.
+function workerPaneEnv(kind, worktree, tmpDir, leaseEnv = []) {
   return [
     ...(kind === 'codex' ? ['--env', 'HERDR_ENV=1'] : []),
     '--env', 'DISABLE_UPDATE_PROMPT=true', '--env', 'DISABLE_AUTO_UPDATE=true', '--no-focus',
     '--env', `TMPDIR=${tmpDir}`, '--env', `HERDR_WORKTREE=${path.resolve(worktree)}`,
+    ...leaseEnv.flatMap((lease) => ['--env', `${lease.env}=${lease.item}`]),
   ];
 }
 
@@ -546,21 +549,21 @@ function findWorkersTab(workspaceId, herdr, cap = WORKER_PANES_PER_TAB) {
   return { tabs, tab: null, label: workersTabLabel(number), panes: [], source: null, cap };
 }
 
-function workerPanePlan(workspaceId, worktree, kind, herdr, tmpDir, cap) {
+function workerPanePlan(workspaceId, worktree, kind, herdr, tmpDir, cap, leaseEnv = []) {
   const found = findWorkersTab(workspaceId, herdr, cap);
   if (!found.tab) {
-    return { ...found, command: ['tab', 'create', '--workspace', workspaceId, '--label', found.label, '--cwd', worktree, ...workerPaneEnv(kind, worktree, tmpDir)] };
+    return { ...found, command: ['tab', 'create', '--workspace', workspaceId, '--label', found.label, '--cwd', worktree, ...workerPaneEnv(kind, worktree, tmpDir, leaseEnv)] };
   }
   let dimensions = findDimensions(found.source);
   if (!dimensions) {
     try { dimensions = findDimensions(herdr(['pane', 'layout', '--pane', getPane(found.source)])); } catch {}
   }
   const direction = dimensions && dimensions.height > dimensions.width ? 'down' : 'right';
-  return { ...found, command: ['pane', 'split', getPane(found.source), '--direction', direction, '--cwd', worktree, ...workerPaneEnv(kind, worktree, tmpDir)] };
+  return { ...found, command: ['pane', 'split', getPane(found.source), '--direction', direction, '--cwd', worktree, ...workerPaneEnv(kind, worktree, tmpDir, leaseEnv)] };
 }
 
-function chooseWorkerPane(workspaceId, worktree, kind, herdr, tmpDir, cap) {
-  const plan = workerPanePlan(workspaceId, worktree, kind, herdr, tmpDir, cap);
+function chooseWorkerPane(workspaceId, worktree, kind, herdr, tmpDir, cap, leaseEnv = []) {
+  const plan = workerPanePlan(workspaceId, worktree, kind, herdr, tmpDir, cap, leaseEnv);
   const { command } = plan;
   if (!plan.tab) {
     const created = herdr(command);
@@ -684,6 +687,7 @@ function renderStartPlan(plan) {
     ...(plan.noWorktree ? [] : [`   $ git worktree add -b ${displayArg(plan.branch)} ${displayArg(plan.worktree)} ${displayArg(plan.base)}`]),
     `   Append /.worker/ to ${plan.excludeFile}`,
     `5. Render brief: ${plan.worktree}/${plan.workerDir}/brief.md from ${plan.template}`,
+    ...plan.leasePools.map((pool) => `   Lease one item of pool ${pool} and pass it in the pane environment`),
     ...(plan.setup ? [`   Run project setup in the worktree (timeout ${plan.setupTimeoutSeconds} s):`, `   $ ${plan.setup}`] : []),
     `6. Place worker in ${plan.paneTab} of workspace ${plan.workspaceId}:`,
     `   $ herdr ${plan.paneCommand.map(displayArg).join(' ')}`,
@@ -707,6 +711,22 @@ function agentsDrift(root, rulesFile) {
   } catch { return null; }
 }
 
+// The lease pools come from the Herdr Boss config.json. A test passes its own pools and data directory.
+function resolveLeaseContext(leaseOptions) {
+  if (leaseOptions?.pools) return { dataDir: DATA_DIR, probeTcp: undefined, ...leaseOptions };
+  const cfg = loadConfig();
+  if (cfg.resourcePoolErrors.length) throw new Error(`The resourcePools setting in the Herdr Boss config.json is invalid:\n- ${cfg.resourcePoolErrors.join('\n- ')}`);
+  return { dataDir: DATA_DIR, probeTcp: undefined, ...leaseOptions, pools: cfg.resourcePools };
+}
+
+function releaseStartLeases(leases, name, config, leaseContext) {
+  if (!leases.length) return;
+  const taken = new Set(leases.map((lease) => `${lease.pool}\n${lease.item}`));
+  try {
+    dropLeases((lease) => lease.project === config.slug && lease.worker === name && taken.has(`${lease.pool}\n${lease.item}`), { dataDir: leaseContext.dataDir });
+  } catch {}
+}
+
 export function startWorker(name, options, {
   config,
   models,
@@ -718,6 +738,7 @@ export function startWorker(name, options, {
   readText = readAgentText,
   wait = pause,
   runSetup = runSetupCommand,
+  leaseOptions = null,
 } = {}) {
   if (!NAME_PATTERN.test(name)) throw new Error('Worker name must match [a-z][a-z0-9-]{0,31}.');
   if (env.HERDR_ENV !== '1') throw new Error('Run worker start from a Herdr-managed pane (HERDR_ENV=1).');
@@ -804,6 +825,15 @@ export function startWorker(name, options, {
   if (fs.existsSync(recordFile)) throw new Error(`Run record already exists: ${recordFile}.`);
   if (!options.noWorktree && fs.existsSync(worktree)) throw new Error(`Worktree path already exists: ${worktree}.`);
   if (!options.noWorktree && branchExists(config.root, branch)) throw new Error(`Branch already exists: ${branch}.`);
+  const leasePools = options.lease ?? [];
+  for (const [index, pool] of leasePools.entries()) {
+    if (leasePools.indexOf(pool) !== index) throw new Error(`--lease ${pool} may be used only once.`);
+  }
+  const leaseContext = leasePools.length ? resolveLeaseContext(leaseOptions) : null;
+  if (leaseContext) {
+    const unknown = leasePools.find((pool) => !leaseContext.pools.some((candidate) => candidate.name === pool));
+    if (unknown) throw new Error(`Unknown resource pool ${unknown}. Pools: ${leaseContext.pools.map((candidate) => candidate.name).join(', ') || '(none)'}.`);
+  }
 
   const workspaceId = caller.workspaceId;
   const workerDir = workerDirName(name, !!options.noWorktree);
@@ -830,17 +860,40 @@ export function startWorker(name, options, {
     agentStartTimeoutMs: config.agentStartTimeoutMs ?? 90000,
     workerDir, tmpDir,
     copyFiles,
+    leasePools,
   };
   if (options.dryRun) {
     output(renderStartPlan(plan));
     return { ...plan, dryRun: true };
   }
 
+  // Read and check the brief template first, so a bad template cannot fail the start after the leases are taken.
+  const template = fs.readFileSync(config.briefTemplatePath, 'utf8');
+  renderBrief(template, {});
+  // Take the leases before the worktree or the pane exists, so an empty pool stops the start with no side effect.
+  const leases = [];
+  const leaseNotices = [];
+  const leaseLog = (item) => leaseNotices.push(`Reclaimed lease ${item.pool} ${item.item} of ${item.project}: ${item.reason}.`);
+  try {
+    for (const poolName of leasePools) {
+      const pool = leaseContext.pools.find((candidate) => candidate.name === poolName);
+      const lease = acquireLeaseFor(poolName, { project: config.slug, worker: name, pane: null, runFile: recordFile }, {
+        pools: leaseContext.pools, dataDir: leaseContext.dataDir, probeTcp: leaseContext.probeTcp, now, log: leaseLog,
+      });
+      leases.push({ pool: poolName, item: lease.item, env: pool.env });
+    }
+  } catch (error) {
+    releaseStartLeases(leases, name, config, leaseContext);
+    error.message = `${error.message}\nSTART FAILED: ${error.message.split('\n')[0]}`;
+    throw error;
+  }
+  for (const notice of leaseNotices) output(notice);
+  for (const lease of leases) output(`Leased ${lease.pool} ${lease.item} as ${lease.env}.`);
+
   const reportPath = path.join(worktree, plan.workerDir, 'report.md');
   const reportJsonPath = path.join(worktree, plan.workerDir, 'report.json');
   const orchPane = caller.paneId;
   const orchName = getName(liveAgents.find((agent) => getPane(agent) === orchPane)) ?? '(none)';
-  const template = fs.readFileSync(config.briefTemplatePath, 'utf8');
   const briefSlots = {
     name, kind: options.kind, model, effort, project: config.slug, repo: config.root, worktree, branch, base,
     issue: options.issue ?? null, task, allowedPaths: options.allow ?? [], reportPath, reportJsonPath,
@@ -849,6 +902,7 @@ export function startWorker(name, options, {
     evidenceTiers: (config.evidenceTiers || []).join(', '),
     imageBudget: config.imageBudget ?? 10,
     copyPaths: copyFiles.map(({ relative }) => path.posix.join(plan.workerDir, 'inputs', relative)),
+    leases: leases.length ? `${leases.map((lease) => `\`${lease.env}=${lease.item}\` (pool \`${lease.pool}\`)`).join(', ')}. Use only these.` : null,
     threadLimit: config.testThreadsFlag
       ? `Add \`${config.testThreadsFlag}\` to each test runner command.`
       : 'Use the form that the project instructions name. For Vitest 2 with the forks pool, use `--poolOptions.forks.maxForks=2 --poolOptions.forks.minForks=1`; `--maxWorkers=2` fails there. For Vitest 3 and later, use `--maxWorkers=2`.',
@@ -857,6 +911,7 @@ export function startWorker(name, options, {
   if (!/{{\s*imageBudget\s*}}/.test(template)) {
     missingBriefDetails.push(`Screenshot budget: ${briefSlots.imageBudget} screenshots. The project setting overrides the kit default.`);
   }
+  if (leases.length && !/{{\s*leases\s*}}/.test(template)) missingBriefDetails.push(`Leased resources: ${briefSlots.leases}`);
   if (briefSlots.copyPaths.length && !/{{\s*copyPaths\s*}}/.test(template)) {
     missingBriefDetails.push(`Copied inputs:\n${briefSlots.copyPaths.map((item) => `- ${item}`).join('\n')}`);
   }
@@ -887,8 +942,9 @@ export function startWorker(name, options, {
       catch (error) { throw setupFailure(error, plan.setup, plan.setupTimeoutSeconds); }
       output(`Project setup finished in ${Math.round((Date.now() - started) / 1000)} s.`);
     }
-    placement = chooseWorkerPane(workspaceId, worktree, options.kind, herdr, plan.tmpDir, paneCap);
+    placement = chooseWorkerPane(workspaceId, worktree, options.kind, herdr, plan.tmpDir, paneCap, leases);
     paneId = placement.paneId;
+    for (const lease of leases) setLeasePane(lease.pool, lease.item, paneId, { dataDir: leaseContext.dataDir });
     waitForWorkerPane(paneId, workspaceId, worktree, herdr, wait);
     const shellPid = workerPaneShellPid(paneId, herdr);
     try {
@@ -922,6 +978,7 @@ export function startWorker(name, options, {
       pane: paneId,
       workerDir: plan.workerDir,
       allowedPaths: options.allow ?? [],
+      ...(leases.length ? { leases } : {}),
       startedAt: new Date(now).toISOString(),
     };
     writeJsonAtomic(recordFile, record);
@@ -964,6 +1021,7 @@ export function startWorker(name, options, {
         }
       }
     }
+    if (!agentStarted) releaseStartLeases(leases, name, config, leaseContext);
     if (agentStarted) error.message += ` Agent ${name} may still be running in pane ${paneId}; inspect it before retrying.`;
     error.message = `${error.message}\nSTART FAILED: ${failedReason.split('\n')[0]}`;
     throw error;
@@ -1071,7 +1129,7 @@ export function recordFlagErrors(options, reportJson = {}) {
   return missing;
 }
 
-export function collectWorker(name, options, { config, now = Date.now(), output = console.log, recordUsageFn = recordUsage, listWorktreeProcesses = worktreeCwdProcesses } = {}) {
+export function collectWorker(name, options, { config, now = Date.now(), output = console.log, recordUsageFn = recordUsage, listWorktreeProcesses = worktreeCwdProcesses, leaseDataDir = DATA_DIR } = {}) {
   const { file, run } = readRun(config, name);
   if (run.finishedAt) throw new Error(`Run ${name} is already marked finished at ${run.finishedAt}.`);
   const reportDir = path.join(run.worktree, run.workerDir || '.worker');
@@ -1155,6 +1213,11 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
     run.finishedAt = entry.endedAt;
     run.outcome = entry.outcome;
     writeJsonAtomic(file, run);
+    if (run.leases?.length) {
+      const taken = new Set(run.leases.map((lease) => `${lease.pool}\n${lease.item}`));
+      const released = dropLeases((lease) => lease.project === config.slug && lease.worker === name && taken.has(`${lease.pool}\n${lease.item}`), { dataDir: leaseDataDir });
+      for (const lease of released) output(`Released lease ${lease.pool} ${lease.item}.`);
+    }
     output(`After you merge ${run.branch}, remove the worktree with herdr-boss worktree prune --apply`);
   }
   return summary;

@@ -49,6 +49,7 @@ description: Use when coordinating delegated workers with Herdr Boss, writing wo
 - Before each push, read the full diff for tokens, secrets, local paths with private content, and client or tenant names from other projects.
 - Push one change set at a time.
 - Take the machine-wide lock around every full test suite run and every push whose hook runs the full suite: run `herdr-boss lock acquire full-suite --wait 1800`, run the suite or the push, then run `herdr-boss lock release full-suite`. Use `herdr-boss push` for a push; it takes the lock when a pre-push hook exists. There is no load threshold.
+- Lease a shared resource with `herdr-boss lease acquire POOL` or `worker start --lease POOL`. Never pick a port from a pool by hand.
 - Send a deployment or release that spends money to the Owner through the Boss.
 - Treat a request that the Owner types into your pane as an Owner decision. Record it in the memory file.
 - The kit and the Boss take precedence over conflicting project text. Report a conflict to the Boss.

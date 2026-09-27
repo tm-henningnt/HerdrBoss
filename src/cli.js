@@ -47,6 +47,9 @@ const USAGE = `herdr-boss <command>
   lock acquire <name> [--wait SECONDS]  Acquire a project lock.
   lock release <name>   Release a project lock.
   lock list             List project locks with their scope.
+  lease acquire POOL [--for SLUG|WORKER] [--prefer ITEM] [--ttl MINUTES]  Lease one pool item and print it.
+  lease release POOL ITEM  Release a lease of your project; the Boss can release any lease.
+  lease list [POOL]     Print the pool items and their leases as JSON.
   push [git push arguments]  Run git push. Take the full-suite lock when a pre-push hook exists.
   suite [--wait SECONDS] [--keep NAME]... -- <command...>  Run a full test suite inside the full-suite lock, without tokens in its environment.
   worktree prune        List safe worktree removals.
@@ -221,6 +224,46 @@ async function main() {
       if (!target || !to || !['plan', 'prepare'].includes(action)) throw new Error('Usage: handoff plan|prepare PANE --to KIND [--mode migrate|fresh] [--model MODEL]');
       const options = { mode: value('--mode', 'migrate'), model: value('--model', null), effort: value('--effort', null), force: args.includes('--force'), auto: args.includes('--auto') };
       console.log(JSON.stringify(action === 'plan' ? planHandoff(target, to, options) : prepareHandoff(target, to, options), null, 2));
+      break;
+    }
+    case 'lease': {
+      const { acquireLease, releaseLease, listLeases } = await import('./leases.js');
+      if (cfg.resourcePoolErrors.length) throw new Error(`The resourcePools setting in ${path.join(DATA_DIR, 'config.json')} is invalid:\n- ${cfg.resourcePoolErrors.join('\n- ')}`);
+      const [action, ...rest] = args;
+      const usage = 'Usage: lease acquire POOL [--for SLUG|WORKER] [--prefer ITEM] [--ttl MINUTES] | lease release POOL ITEM | lease list [POOL]';
+      if (action === 'list') {
+        if (rest.length > 1) throw new Error(usage);
+        listLeases({ pools: cfg.resourcePools, pool: rest[0] ?? null });
+        break;
+      }
+      if (!['acquire', 'release'].includes(action)) throw new Error(usage);
+      const { createHerdrRunner } = await import('./kit/workers.js');
+      let project = null;
+      try { project = loadProjectConfig(); } catch {}
+      const log = (item) => console.error(`Reclaimed lease ${item.pool} ${item.item} of ${item.project}: ${item.reason}.`);
+      const common = { pools: cfg.resourcePools, config: project, herdr: createHerdrRunner(), log };
+      if (action === 'release') {
+        if (rest.length !== 2) throw new Error(usage);
+        releaseLease(rest[0], rest[1], common);
+        break;
+      }
+      const flags = {};
+      const positional = [];
+      for (let index = 0; index < rest.length; index += 1) {
+        const token = rest[index];
+        if (!token.startsWith('--')) { positional.push(token); continue; }
+        if (!['--for', '--prefer', '--ttl'].includes(token)) throw new Error(`Unknown option: ${token}. ${usage}`);
+        if (token in flags) throw new Error(`${token} may be used only once.`);
+        const value = rest[++index];
+        if (value === undefined || value.startsWith('--')) throw new Error(`${token} needs a value.`);
+        flags[token] = value;
+      }
+      if (positional.length !== 1) throw new Error(usage);
+      if (flags['--ttl'] !== undefined && !/^\d+$/.test(flags['--ttl'])) throw new Error('--ttl must be a positive whole number of minutes.');
+      acquireLease(positional[0], {
+        ...common, forTarget: flags['--for'] ?? null, prefer: flags['--prefer'] ?? null,
+        ttlMinutes: flags['--ttl'] === undefined ? null : Number(flags['--ttl']),
+      });
       break;
     }
     case 'serve': {

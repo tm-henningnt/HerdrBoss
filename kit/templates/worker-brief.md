@@ -18,6 +18,7 @@ The orchestrator retains implementation order, issue authority, cross-task decis
 - Screenshot budget: {{imageBudget}} screenshots. The project setting overrides the kit default.
 - Copied inputs:
 {{copyPaths}}
+- Leased resources: {{leases}}
 
 ## Process safety
 
