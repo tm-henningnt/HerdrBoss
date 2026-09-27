@@ -7,6 +7,7 @@ import { recordUsage } from '../usage.js';
 import { goalSummary, mergeModels, modelEnabled, providerFor, selectModel, unmeteredSummary } from '../control.js';
 import { DATA_DIR } from '../config.js';
 import { workerStatusFromState } from '../worker-failures.js';
+import { checkAgentsFile } from './agents-check.js';
 
 const NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
 const BRIEF_SLOTS = new Set([
@@ -589,6 +590,16 @@ function renderStartPlan(plan) {
   return lines.join('\n');
 }
 
+// A one-line warning when the project AGENTS.md has drift findings. The check never refuses a start.
+function agentsDrift(root, rulesFile) {
+  const file = root && path.join(root, 'AGENTS.md');
+  if (!file || !fs.existsSync(file)) return null;
+  try {
+    const result = checkAgentsFile(file, { rulesFile, relative: 'AGENTS.md' });
+    return result.findings.length ? `Warning: AGENTS.md drift: ${result.errors} errors, ${result.warnings} warnings. Run herdr-boss check agents.` : null;
+  } catch { return null; }
+}
+
 export function startWorker(name, options, {
   config,
   models,
@@ -630,6 +641,8 @@ export function startWorker(name, options, {
   const policy = rules.policy;
   // Local extra models from the policy join the harness allow-list and use its launch arguments.
   const { model, effort, launchArgs } = validateSelection(options.kind, options, mergeModels(modelConfig, policy), config, policy);
+  const agentsWarning = agentsDrift(config.root, rulesPath);
+  if (agentsWarning) output(agentsWarning);
   const projectPolicy = policy?.projects?.[config.slug];
   if (policy) {
     if (!policy.allowedKinds?.includes(options.kind)) throw new Error(`${options.kind} is disabled globally by Herdr Boss.`);

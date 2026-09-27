@@ -49,6 +49,8 @@ const USAGE = `herdr-boss <command>
   worktree prune        List safe worktree removals.
   ledger ...            Append or check delegated-run records.
   check ...             Validate worker handoffs and scope.
+  check agents [FILE]   Check AGENTS.md for an old kit block and stale orchestration text.
+  kit block             Print the marked Herdr Boss block for AGENTS.md.
   gh issue ...          Run safe GitHub issue commands.
   models                Show allowed worker models.
   kit-path              Print the shared kit directory.
@@ -68,9 +70,10 @@ async function main() {
     console.log(path.resolve(dir));
     return;
   }
-  if (['worker', 'lock', 'worktree', 'ledger', 'check', 'gh', 'models'].includes(cmd)) {
+  if (['worker', 'lock', 'worktree', 'ledger', 'check', 'gh', 'models', 'kit'].includes(cmd)) {
     const { runKitCommand } = await import('./kit/cli.js');
-    runKitCommand(cmd, args);
+    const result = runKitCommand(cmd, args);
+    if (result?.exitCode) process.exitCode = result.exitCode;
     return;
   }
   // Refuse an unsafe preview before loadConfig() creates the data directory.
@@ -221,7 +224,18 @@ async function main() {
       const [slug, file] = args;
       if (!slug || !file) { console.error('usage: herdr-boss publish <slug> <file|->'); process.exit(2); }
       const text = file === '-' ? fs.readFileSync(0, 'utf8') : fs.readFileSync(file, 'utf8');
-      const errors = writeProject(slug, JSON.parse(text));
+      const data = JSON.parse(text);
+      // Check AGENTS.md at the Git top level. Findings are warnings here; the status still publishes.
+      let agentsFile = null;
+      try { agentsFile = path.join(execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(), 'AGENTS.md'); } catch {}
+      if (agentsFile && fs.existsSync(agentsFile) && data && typeof data === 'object' && !Array.isArray(data)) {
+        const { checkAgentsFile } = await import('./kit/agents-check.js');
+        const result = checkAgentsFile(agentsFile, { rulesFile: path.join(DATA_DIR, 'rules.json'), relative: 'AGENTS.md' });
+        for (const line of result.lines) console.error(`warning: AGENTS.md ${line}`);
+        if (result.findings.length) console.error(`warning: ${result.summary}. Run herdr-boss check agents.`);
+        data.agentsCheck = { checkedAt: new Date().toISOString(), errors: result.errors, warnings: result.warnings, file: result.file };
+      }
+      const errors = writeProject(slug, data);
       if (errors.length) { console.error(errors.join('\n')); process.exit(1); }
       console.log(`published ${dashboardUrl(cfg)}/projects/${slug}`);
       break;

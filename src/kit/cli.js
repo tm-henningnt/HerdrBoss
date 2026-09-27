@@ -1,13 +1,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { DEFAULT_RULES_FILE, loadModels, loadProjectConfig } from './config.js';
+import { DEFAULT_RULES_FILE, findGitRoot, loadModels, loadProjectConfig } from './config.js';
 import { mergeModels } from '../control.js';
 import { appendDelegatedRun, compareChangedPaths, gitStatusPaths, readDelegatedRuns, readJson, validateAllowedPaths, validateDelegatedRun, validateWorkerReport } from './orchestration.js';
 import { buildGhArgs } from './gh.js';
 import { allowWorkerScope, collectWorker, createHerdrRunner, listWorkers, parkWorker, startWorker } from './workers.js';
 import { pruneWorktrees } from './worktrees.js';
 import { acquireProjectLock, listProjectLocks, releaseProjectLock } from './locks.js';
+import { agentsBlock, checkAgentsFile, rulesPolicy } from './agents-check.js';
 
 const USAGE = `Kit commands:
   worker start <name> --kind <kind> (--task TEXT | --task-file FILE) [options]
@@ -19,6 +20,8 @@ const USAGE = `Kit commands:
   worktree prune [--apply]
   ledger append --entry FILE | ledger check [--runs]
   check --report FILE | --run FILE | --worktree DIR --allow PATH...
+  check agents [FILE]
+  kit block
   gh issue create|comment|edit ... --body-file FILE
   models [--kind KIND]
 `;
@@ -57,21 +60,39 @@ function knownFlags(flags, allowed) {
   if (unknown.length) fail(`Unknown option: --${unknown[0]}.`);
 }
 
-// The local policy copy in the rules file. A missing or unreadable file gives no extra models.
-function rulesPolicy(file) {
-  try { return JSON.parse(fs.readFileSync(file, 'utf8'))?.policy ?? null; }
-  catch { return null; }
-}
-
 function commandKit(command, argv, { output = console.log, env = process.env, herdr = createHerdrRunner(), config: injectedConfig = null, rulesFile = DEFAULT_RULES_FILE, lockDataDir, now, pause, pidAlive } = {}) {
   if (command === 'models') {
     const modelConfig = mergeModels(loadModels(), rulesPolicy(rulesFile));
     const { positional, flags } = parseArgs(argv);
     if (positional.length || Object.keys(flags).some((key) => key !== 'kind')) fail('Usage: models [--kind KIND]');
     if (flags.kind && !modelConfig.kinds[flags.kind]) fail(`Unknown model kind: ${flags.kind}.`);
-    const result = flags.kind ? { [flags.kind]: modelConfig.kinds[flags.kind] } : modelConfig.kinds;
+    // localModels lists the models that come from the policy extraModels and not from kit/models.json.
+    const base = loadModels().kinds;
+    const kinds = Object.fromEntries(Object.entries(modelConfig.kinds).map(([kind, cfg]) => {
+      const localModels = cfg.allowedModels.filter((model) => !base[kind]?.allowedModels.includes(model));
+      return [kind, localModels.length ? { ...cfg, localModels } : cfg];
+    }));
+    const result = flags.kind ? { [flags.kind]: kinds[flags.kind] } : kinds;
     output(JSON.stringify(result, null, 2));
     return result;
+  }
+
+  if (command === 'kit') {
+    if (argv.length !== 1 || argv[0] !== 'block') fail('Usage: kit block');
+    const result = agentsBlock();
+    output(result.block.trimEnd());
+    return result;
+  }
+
+  if (command === 'check' && argv[0] === 'agents') {
+    if (argv.length > 2 || argv.slice(1).some((value) => value.startsWith('--'))) fail('Usage: check agents [FILE]');
+    const root = argv[1] ? null : (injectedConfig?.root ?? findGitRoot());
+    const file = argv[1] ? path.resolve(argv[1]) : path.join(root, 'AGENTS.md');
+    if (!fs.existsSync(file)) fail(`No such file: ${file}`, 1);
+    const result = checkAgentsFile(file, { rulesFile, relative: argv[1] ?? 'AGENTS.md' });
+    for (const line of result.lines) output(line);
+    output(`check agents: ${result.errors ? 'FAIL' : 'PASS'} (${result.summary})`);
+    return { ...result, exitCode: result.errors ? 1 : 0 };
   }
 
   const config = injectedConfig ?? loadProjectConfig();
