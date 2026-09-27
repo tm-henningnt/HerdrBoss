@@ -127,5 +127,24 @@ export function loadModels(file = MODELS_FILE) {
   if (!models || typeof models !== 'object' || !models.kinds || typeof models.kinds !== 'object') {
     throw new Error(`${file} must contain a kinds object.`);
   }
+  for (const [kind, cfg] of Object.entries(models.kinds)) {
+    if (!cfg || typeof cfg !== 'object') continue;
+    if (Object.hasOwn(cfg, 'contextTokens') && !positiveInteger(cfg.contextTokens)) throw new Error(`${file}: ${kind}.contextTokens must be a positive integer.`);
+    if (Object.hasOwn(cfg, 'contextTokensByModel')) {
+      const byModel = cfg.contextTokensByModel;
+      if (!byModel || typeof byModel !== 'object' || Array.isArray(byModel) || !Object.values(byModel).every(positiveInteger)) {
+        throw new Error(`${file}: ${kind}.contextTokensByModel must map model names to positive integers.`);
+      }
+    }
+  }
   return models;
+}
+
+function positiveInteger(value) { return Number.isInteger(value) && value > 0; }
+
+// The context window of a model in tokens, or null when the catalog does not give one.
+export function contextTokensFor(models, kind, model) {
+  const cfg = models?.kinds?.[kind];
+  if (!cfg) return null;
+  return cfg.contextTokensByModel?.[model] ?? cfg.contextTokens ?? null;
 }

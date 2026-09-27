@@ -69,6 +69,28 @@ console.log(JSON.stringify({ result }));
 exec node "$(dirname "$0")/herdr.cjs" "$@"
 `);
   writeExecutable(path.join(bin, 'session-migrate.cjs'), `
+const fs = require('node:fs');
+const path = require('node:path');
+if (process.env.TEST_MIGRATE_CALLS) fs.appendFileSync(process.env.TEST_MIGRATE_CALLS, JSON.stringify(process.argv.slice(2)) + '\\n');
+const homeIndex = process.argv.indexOf('--home');
+if (homeIndex !== -1 && process.env.TEST_MIGRATE_HOMES) {
+  const home = process.argv[homeIndex + 1];
+  fs.appendFileSync(process.env.TEST_MIGRATE_HOMES, home + '\\n');
+  const failures = Number(process.env.TEST_MEASURE_FAILURES || 0);
+  const count = fs.readFileSync(process.env.TEST_MIGRATE_HOMES, 'utf8').trim().split('\\n').length;
+  if (count <= failures) {
+    process.stderr.write('source session changed while it was being read; retry\\n');
+    process.exit(2);
+  }
+  const dir = path.join(home, '.codex', 'sessions', '2026', '09', '27');
+  fs.mkdirSync(dir, { recursive: true });
+  const bytes = Number(process.env.TEST_CONVERTED_BYTES || 1000);
+  fs.writeFileSync(path.join(dir, 'rollout-a.jsonl'), 'x'.repeat(Math.floor(bytes / 2)));
+  fs.writeFileSync(path.join(dir, 'rollout-b.jsonl'), 'x'.repeat(bytes - Math.floor(bytes / 2)));
+  fs.writeFileSync(path.join(dir, 'index.json'), 'y'.repeat(5000000));
+  console.log(JSON.stringify({ session_id: 'measured-session', records: 244, output: path.join(dir, 'rollout-a.jsonl') }));
+  process.exit(0);
+}
 if (process.env.TEST_MIGRATION_CYCLE === '1' || (process.env.TEST_TRANSFER_FAIL === '1' && !process.argv.includes('--dry-run'))) {
   process.stderr.write(process.env.TEST_MIGRATION_ERROR || (process.env.TEST_DRY_RUN_SECRET && process.argv.includes('--dry-run') ? 'Migration failed: api_key=fixture_dry_secret\\n' : 'Claude active graph contains an ancestry cycle\\n'));
   process.exit(1);
@@ -86,8 +108,12 @@ exec node "$(dirname "$0")/session-migrate.cjs" "$@"
     callsFile,
     processInfoFile,
     agentStartFile,
+    migrateHomesFile: path.join(root, 'migrate-homes.txt'),
+    migrateCallsFile: path.join(root, 'migrate-calls.jsonl'),
     env: {
       ...process.env,
+      TEST_MIGRATE_CALLS: path.join(root, 'migrate-calls.jsonl'),
+      TEST_MIGRATE_HOMES: path.join(root, 'migrate-homes.txt'),
       HOME: root,
       HERDR_BOSS_DIR: root,
       PATH: `${bin}${path.delimiter}${process.env.PATH || ''}`,
@@ -480,6 +506,105 @@ for (const [reason, env] of [
   assert.match(result.migrationFallbackReason, /.+/);
   assert.match(result.sourceContext, /Useful prior work/);
 });
+
+function measuredHomes(f) {
+  if (!fs.existsSync(f.migrateHomesFile)) return [];
+  return fs.readFileSync(f.migrateHomesFile, 'utf8').trim().split('\n').filter(Boolean);
+}
+
+function assertHomesDeleted(f, count) {
+  const homes = measuredHomes(f);
+  assert.equal(homes.length, count);
+  for (const home of homes) {
+    assert.ok(path.isAbsolute(home));
+    assert.equal(fs.existsSync(home), false, `temporary home ${home} must be deleted`);
+  }
+}
+
+test('a small converted session fits the target window and keeps migrate mode', (t) => {
+  const f = handoffFixture(t, { sourceKind: 'claude', sessionId: 'old-session' });
+  const env = { ...f.env, TEST_CONVERTED_BYTES: '480000' };
+  const plan = JSON.parse(runHandoffCli(f.root, ['handoff', 'plan', 'ws:p1', '--to', 'codex', '--mode', 'migrate'], env));
+  assert.equal(plan.migration.available, true);
+  assert.deepEqual(plan.migration.fit, { bytes: 480000, estimatedTokens: 120000, contextTokens: 200000, limitTokens: 120000, fits: true, sizeKnown: true });
+  assert.equal(plan.migration.next, undefined);
+  for (const home of measuredHomes(f)) assert.ok(home.startsWith(os.tmpdir()), `${home} must be under the temporary directory`);
+  const record = JSON.parse(runHandoffCli(f.root, ['handoff', 'prepare', 'ws:p1', '--to', 'codex', '--mode', 'migrate'], env));
+  assert.equal(record.mode, 'migrate');
+  assert.equal(record.migratedId, 'migrated-session');
+  assert.equal(Object.hasOwn(record, 'migrationFallbackReason'), false);
+  assertHomesDeleted(f, 2);
+});
+
+test('a converted session over 60 percent of the window gives fresh mode with the size error', (t) => {
+  const f = handoffFixture(t, { sourceKind: 'claude', sessionId: 'old-session' });
+  const env = { ...f.env, TEST_CONVERTED_BYTES: '480001', TEST_SOURCE_TEXT: 'Useful prior work' };
+  const sizeError = 'Migrated session is too large for the target window: about 120001 tokens against a limit of 120000.';
+  const plan = JSON.parse(runHandoffCli(f.root, ['handoff', 'plan', 'ws:p1', '--to', 'codex', '--mode', 'migrate'], env));
+  assert.equal(plan.migration.available, false);
+  assert.equal(plan.migration.error, sizeError);
+  assert.equal(plan.migration.fit.fits, false);
+  assert.match(plan.migration.next, /Prepare will use fresh mode automatically/);
+  const record = JSON.parse(runHandoffCli(f.root, ['handoff', 'prepare', 'ws:p1', '--to', 'codex', '--mode', 'migrate'], env));
+  assert.equal(record.mode, 'fresh');
+  assert.equal(record.requestedMode, 'migrate');
+  assert.equal(record.migratedId, null);
+  assert.equal(record.migrationFallbackReason, sizeError);
+  assert.equal(record.migration.error, sizeError);
+  assert.equal(record.migration.fit.fits, false);
+  assert.match(record.sourceContext, /Useful prior work/);
+  const transfers = handoffMigrateCalls(f).filter((args) => !args.includes('--dry-run') && !args.includes('--home'));
+  assert.equal(transfers.length, 0, 'prepare must not run the real transfer for a session that does not fit');
+  assertHomesDeleted(f, 2);
+});
+
+test('a failed measuring transfer retries once, then keeps migration available with a warning', (t) => {
+  const f = handoffFixture(t, { sourceKind: 'claude', sessionId: 'old-session' });
+  const env = { ...f.env, TEST_MEASURE_FAILURES: '2' };
+  const plan = JSON.parse(runHandoffCli(f.root, ['handoff', 'plan', 'ws:p1', '--to', 'codex', '--mode', 'migrate'], env));
+  assert.equal(plan.migration.available, true);
+  assert.deepEqual(plan.migration.fit, { bytes: null, estimatedTokens: null, contextTokens: 200000, limitTokens: 120000, fits: null, sizeKnown: false });
+  assert.match(plan.migration.warning, /size.*unknown/i);
+  assertHomesDeleted(f, 2);
+});
+
+test('a measuring transfer that fails once succeeds on its retry', (t) => {
+  const f = handoffFixture(t, { sourceKind: 'claude', sessionId: 'old-session' });
+  const env = { ...f.env, TEST_MEASURE_FAILURES: '1', TEST_CONVERTED_BYTES: '4000' };
+  const plan = JSON.parse(runHandoffCli(f.root, ['handoff', 'plan', 'ws:p1', '--to', 'codex', '--mode', 'migrate'], env));
+  assert.equal(plan.migration.available, true);
+  assert.equal(plan.migration.fit.sizeKnown, true);
+  assert.equal(plan.migration.fit.estimatedTokens, 1000);
+  assertHomesDeleted(f, 2);
+});
+
+test('a size fallback tells the successor the reason at activation', (t) => {
+  const reason = 'Migrated session is too large for the target window: about 130000 tokens against a limit of 120000.';
+  const f = activationFixture(t, { record: { migrationFallbackReason: reason, migration: { available: false, error: reason, fit: { bytes: 520000, estimatedTokens: 130000, contextTokens: 200000, limitTokens: 120000, fits: false, sizeKnown: true } } } });
+  f.activate();
+  const successor = f.prompts()['ws:p2'];
+  assert.match(successor, /started your session fresh as codex \(gpt-6-luna, xhigh\) because session migration was unavailable/);
+  assert.ok(successor.includes(reason), 'the successor prompt must carry the size reason');
+});
+
+test('a non-size fallback keeps its activation wording without a size reason', (t) => {
+  const f = activationFixture(t);
+  f.activate();
+  assert.doesNotMatch(f.prompts()['ws:p2'], /too large for the target window/);
+});
+
+test('migrationFit keeps an unknown window or size open and applies the 60 percent limit', async () => {
+  const { migrationFit } = await import('../src/handoff.js');
+  assert.deepEqual(migrationFit(4000, null), { bytes: 4000, estimatedTokens: 1000, contextTokens: null, limitTokens: null, fits: null, sizeKnown: true });
+  assert.deepEqual(migrationFit(null, 200000), { bytes: null, estimatedTokens: null, contextTokens: 200000, limitTokens: 120000, fits: null, sizeKnown: false });
+  assert.equal(migrationFit(480000, 200000).fits, true);
+  assert.equal(migrationFit(480001, 200000).fits, false);
+  assert.equal(migrationFit(3, 200000).estimatedTokens, 1);
+});
+
+function handoffMigrateCalls(f) {
+  return fs.existsSync(f.migrateCallsFile) ? fs.readFileSync(f.migrateCallsFile, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse) : [];
+}
 
 test('a credential-bearing migration dry-run error is redacted in plan, record, and prompt', (t) => {
   const f = handoffFixture(t, { sessionId: 'old-session' });

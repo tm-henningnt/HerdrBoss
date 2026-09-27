@@ -5,7 +5,7 @@ import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { loadModels, loadProjectConfig, PROJECT_DEFAULTS } from '../src/kit/config.js';
+import { contextTokensFor, loadModels, loadProjectConfig, PROJECT_DEFAULTS } from '../src/kit/config.js';
 import { appendDelegatedRun, compareChangedPaths, gitChangedPaths, readDelegatedRuns, validateAllowedPaths, validateDelegatedRun, validateWorkerReport } from '../src/kit/orchestration.js';
 import { buildGhArgs } from '../src/kit/gh.js';
 import { runKitCommand } from '../src/kit/cli.js';
@@ -96,6 +96,47 @@ test('worker process collection excludes worker runtime and shared daemon but fl
   ];
   assert.deepEqual(filterCollectProcesses(processes, { worktree: cwd, shellPid: 10 }).map(({ pid }) => pid), [10, 20, 21, 22, 23]);
   assert.deepEqual(filterCollectProcesses(processes, { worktree: cwd }).map(({ pid }) => pid), [10, 11, 20, 21, 22, 23]);
+});
+
+function writeModelsFile(t, kinds) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-boss-models-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const file = path.join(root, 'models.json');
+  fs.writeFileSync(file, JSON.stringify({ version: 1, kinds }));
+  return file;
+}
+
+const MODEL_KIND = { defaultModel: 'm1', allowedModels: ['m1', 'm2'], allowedEfforts: [], defaultEffort: null, launchArgs: ['--model', '{{model}}'] };
+
+test('the kit catalog sets a 200000-token window for claude and codex only', () => {
+  const models = loadModels();
+  assert.equal(models.kinds.claude.contextTokens, 200000);
+  assert.equal(models.kinds.codex.contextTokens, 200000);
+  for (const kind of ['pi', 'opencode']) assert.equal(Object.hasOwn(models.kinds[kind], 'contextTokens'), false);
+  assert.equal(contextTokensFor(models, 'codex', models.kinds.codex.defaultModel), 200000);
+  assert.equal(contextTokensFor(models, 'pi', models.kinds.pi.defaultModel), null);
+});
+
+test('contextTokensByModel overrides the kind window for one model', (t) => {
+  const file = writeModelsFile(t, { claude: { ...MODEL_KIND, contextTokens: 200000, contextTokensByModel: { m2: 1000000 } } });
+  const models = loadModels(file);
+  assert.equal(contextTokensFor(models, 'claude', 'm2'), 1000000);
+  assert.equal(contextTokensFor(models, 'claude', 'm1'), 200000);
+  assert.equal(contextTokensFor(models, 'missing', 'm1'), null);
+});
+
+test('a models file without contextTokens stays valid', (t) => {
+  const models = loadModels(writeModelsFile(t, { claude: { ...MODEL_KIND } }));
+  assert.equal(contextTokensFor(models, 'claude', 'm1'), null);
+});
+
+test('loadModels refuses an invalid contextTokens or contextTokensByModel', (t) => {
+  for (const value of [0, -1, 1.5, '200000', null, true]) {
+    assert.throws(() => loadModels(writeModelsFile(t, { claude: { ...MODEL_KIND, contextTokens: value } })), /claude\.contextTokens must be a positive integer/);
+  }
+  for (const value of [[], 'x', null, { m1: 0 }, { m1: '5' }]) {
+    assert.throws(() => loadModels(writeModelsFile(t, { claude: { ...MODEL_KIND, contextTokensByModel: value } })), /claude\.contextTokensByModel/);
+  }
 });
 
 test('project config finds the git root and applies contract defaults', () => {

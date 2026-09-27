@@ -4,7 +4,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { DATA_DIR } from './config.js';
 import { deliverPrompt, isAgentPaneBusy, waitForWorkerPane } from './kit/workers.js';
-import { loadModels } from './kit/config.js';
+import { contextTokensFor, loadModels } from './kit/config.js';
 import { loadPolicy, mergeModels, modelEnabled, providerFor, selectModel } from './control.js';
 
 const FILE = path.join(DATA_DIR, 'handoffs.json');
@@ -13,6 +13,8 @@ const HANDOFF_READY_TIMEOUT_MS = 90_000;
 const CONTEXT_UNAVAILABLE = '[Source pane context unavailable.]';
 const TRUNCATION_MARKER = '[Source pane context truncated]';
 const GOAL_MAX_LENGTH = 1000;
+// A measuring transfer gets a shorter budget, so the dry run and two attempts fit the dashboard's 180-second plan request.
+const MEASURE_TIMEOUT_MS = 45_000;
 
 // The published status contract allows a non-empty string of at most 1000 characters.
 function validOwnerGoal(goal) {
@@ -64,8 +66,8 @@ function handoffAgentName(id) {
   return withLetterPrefix.slice(0, 32);
 }
 
-function call(command, args, cwd) {
-  return execFileSync(command, args, { cwd, encoding: 'utf8', timeout: 120000, maxBuffer: 8 * 1024 * 1024,
+function call(command, args, cwd, { timeout = 120000 } = {}) {
+  return execFileSync(command, args, { cwd, encoding: 'utf8', timeout, maxBuffer: 8 * 1024 * 1024,
     stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, PATH: `${path.join(os.homedir(), '.local/bin')}${path.delimiter}${process.env.PATH || ''}` } });
 }
@@ -145,12 +147,50 @@ export function handoffTarget(toKind, { model = null, effort = null } = {}, poli
   return { model: targetModel, effort: targetEffort, provider: providerFor(toKind, targetModel, policy), launchArgs };
 }
 
+function jsonlBytes(dir) {
+  let total = 0;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const file = path.join(dir, entry.name);
+    if (entry.isDirectory()) total += jsonlBytes(file);
+    else if (entry.isFile() && entry.name.endsWith('.jsonl')) total += fs.statSync(file).size;
+  }
+  return total;
+}
+
+// Convert the session into a temporary home and return the byte size of its .jsonl files, or null.
+// A live source session can change while session-migrate reads it, so a failed attempt runs once more.
+function measureMigratedBytes(transferArgs, cwd) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-boss-migrate-size-'));
+    try {
+      call('session-migrate', [...transferArgs, '--home', home], cwd, { timeout: MEASURE_TIMEOUT_MS });
+      return jsonlBytes(home);
+    } catch {
+      // Retry once, then report the size as unknown.
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  }
+  return null;
+}
+
+// A migrated session fits when its estimated tokens are at most 60% of the target window.
+// Four bytes per token overestimates the tokens, which is the safe direction.
+export function migrationFit(bytes, contextTokens) {
+  const limitTokens = contextTokens ? Math.floor(contextTokens * 3 / 5) : null;
+  const sizeKnown = Number.isFinite(bytes);
+  const estimatedTokens = sizeKnown ? Math.ceil(bytes / 4) : null;
+  const fits = sizeKnown && limitTokens != null ? estimatedTokens <= limitTokens : null;
+  return { bytes: sizeKnown ? bytes : null, estimatedTokens, contextTokens: contextTokens ?? null, limitTokens, fits, sizeKnown };
+}
+
 export function planHandoff(id, toKind, { mode = 'migrate', model = null, effort = null, force = false } = {}) {
   if (!TARGETS.has(toKind)) throw new Error(`Unsupported target kind: ${toKind}.`);
   if (!['migrate', 'fresh'].includes(mode)) throw new Error('mode must be migrate or fresh.');
   const pane = sourcePane(id, { allowStopped: mode === 'fresh' });
   const policy = loadPolicy();
-  const target = handoffTarget(toKind, { model, effort }, policy, loadModels());
+  const models = loadModels();
+  const target = handoffTarget(toKind, { model, effort }, policy, models);
   const targetModel = target.model;
   const state = readFile(path.join(DATA_DIR, 'state.json'), {});
   const boss = pane.label === 'boss';
@@ -166,8 +206,19 @@ export function planHandoff(id, toKind, { mode = 'migrate', model = null, effort
     if (!sessionId) result.migration = { available: false, error: 'Herdr has no native session ID for this pane.' };
     else if (!['codex', 'claude'].includes(toKind)) result.migration = { available: false, error: 'Automated resume is available for Codex and Claude targets. Use fresh mode for other kinds.' };
     else try {
-      const r = JSON.parse(call('session-migrate', ['transfer', sessionId, '--from', pane.agent, '--to', toKind, '--cwd', pane.cwd, '--dry-run'], pane.cwd));
+      const transferArgs = ['transfer', sessionId, '--from', pane.agent, '--to', toKind, '--cwd', pane.cwd];
+      const r = JSON.parse(call('session-migrate', [...transferArgs, '--dry-run'], pane.cwd));
       result.migration = { available: true, records: r.records, droppedEvents: r.dropped_events, warnings: r.warnings?.length || 0 };
+      const fit = migrationFit(measureMigratedBytes(transferArgs, pane.cwd), contextTokensFor(models, toKind, targetModel));
+      result.migration.fit = fit;
+      if (fit.fits === false) {
+        result.migration.available = false;
+        result.migration.error = `Migrated session is too large for the target window: about ${fit.estimatedTokens} tokens against a limit of ${fit.limitTokens}.`;
+      } else if (!fit.sizeKnown) {
+        result.migration.warning = 'The migrated session size is unknown because the measuring transfer failed twice. Migration stays available, but the session may not fit the target window.';
+      } else if (fit.fits == null) {
+        result.migration.warning = `kit/models.json gives no contextTokens for ${toKind} ${targetModel}. Migration stays available, but the session size was not compared with the target window.`;
+      }
     } catch (e) {
       const detail = String(e.stderr || e.message).trim();
       const error = detail.includes('Claude active graph contains an ancestry cycle')
@@ -215,7 +266,9 @@ export function prepareHandoff(id, toKind, options = {}, { waitForPane = waitFor
   } else {
     plan = planHandoff(id, toKind, options);
     let migrationFallbackReason;
-    if (plan.mode === 'migrate' && !plan.migration?.available) migrationFallbackReason = `Session migration unavailable: ${redactContext(String(plan.migration?.error || 'unknown reason'))}`;
+    // The plan error already says why the session does not fit, so the record keeps it unchanged.
+    if (plan.mode === 'migrate' && plan.migration?.fit?.fits === false) migrationFallbackReason = plan.migration.error;
+    else if (plan.mode === 'migrate' && !plan.migration?.available) migrationFallbackReason = `Session migration unavailable: ${redactContext(String(plan.migration?.error || 'unknown reason'))}`;
     if (plan.mode === 'migrate') {
       if (!migrationFallbackReason) try {
         const r = JSON.parse(call('session-migrate', ['transfer', plan.sessionId, '--from', plan.fromKind, '--to', toKind, '--cwd', plan.cwd], plan.cwd));
@@ -226,7 +279,7 @@ export function prepareHandoff(id, toKind, options = {}, { waitForPane = waitFor
     const requestedMode = plan.mode;
     if (migrationFallbackReason) {
       plan.mode = 'fresh';
-      plan.migration = { available: false, error: migrationFallbackReason };
+      plan.migration = { available: false, error: migrationFallbackReason, ...(plan.migration?.fit ? { fit: plan.migration.fit } : {}) };
     }
     const context = plan.mode === 'fresh' ? sourceContext(id) : undefined;
     const goal = ownerGoal(plan.project, plan.boss);
@@ -334,7 +387,8 @@ function sessionConstruction(item) {
   const target = `${item.toKind} (${item.model}${item.effort ? `, ${item.effort}` : ''})`;
   if (item.migratedId) return `Herdr Boss built your session by migrating the ${item.fromKind} conversation${item.sessionId ? ` (session ${item.sessionId})` : ''} to ${item.toKind} session ${item.migratedId} with session-migrate. Runtime config did not transfer.`;
   const carried = [item.sourceContext ? 'a redacted, bounded snapshot of the source pane' : null, item.ownerGoal ? 'the current Owner goal' : null].filter(Boolean);
-  return `Herdr Boss started your session fresh as ${target}${item.requestedMode === 'migrate' ? ' because session migration was unavailable' : ''}. Your preparation prompt carried ${carried.length ? carried.join(' and ') : 'no source pane history'}.`;
+  const sizeReason = item.migration?.fit?.fits === false && item.migrationFallbackReason ? ` ${item.migrationFallbackReason}` : '';
+  return `Herdr Boss started your session fresh as ${target}${item.requestedMode === 'migrate' ? ' because session migration was unavailable' : ''}.${sizeReason} Your preparation prompt carried ${carried.length ? carried.join(' and ') : 'no source pane history'}.`;
 }
 
 // The previous agent gets this prompt at activation, and the engine repeats it once if that prompt failed.

@@ -6,14 +6,16 @@
       "allowedModels": ["gpt-6-luna", "gpt-6-sol", "gpt-6-astra"],
       "allowedEfforts": ["low", "medium", "high", "xhigh"],
       "defaultEffort": "xhigh",
-      "launchArgs": ["-m", "{{model}}", "-c", "model_reasoning_effort={{effort}}"]
+      "launchArgs": ["-m", "{{model}}", "-c", "model_reasoning_effort={{effort}}"],
+      "contextTokens": 200000
     },
     "claude": {
       "defaultModel": "claude-opus-5-5",
       "allowedModels": ["claude-opus-5-5", "claude-opus-5"],
       "allowedEfforts": [],
       "defaultEffort": null,
-      "launchArgs": ["--model", "{{model}}"]
+      "launchArgs": ["--model", "{{model}}"],
+      "contextTokens": 200000
     },
     "opencode": {
       "defaultModel": "opencode/big-pickle",
