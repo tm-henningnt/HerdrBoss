@@ -2202,3 +2202,117 @@ test('lanes describes unavailable Pi models and an exhausted free lane for the p
   assert.equal(describeUnmetered(lane, 'other').split('\n').length, 1, 'closed parts of another project are not shown');
   assert.match(describeUnmetered({ ...lane, state: 'closed', byProject: { herdrboss: {} } }, 'herdrboss'), /^unmetered closed: no unmetered model can start/);
 });
+
+test('the full-suite lock is machine-wide and other lock names stay per repository', (t) => {
+  const first = temporaryRepo('herdr-machine-lock-a-');
+  const second = temporaryRepo('herdr-machine-lock-b-');
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-machine-lock-data-'));
+  t.after(() => [first, second, dataDir].forEach((dir) => fs.rmSync(dir, { recursive: true, force: true })));
+  const firstConfig = loadProjectConfig({ cwd: first });
+  const secondConfig = loadProjectConfig({ cwd: second });
+  const pids = { 'ws:orch-a': 801, 'ws:orch-b': 802 };
+  let caller = 'ws:orch-a';
+  const herdr = (args) => {
+    if (args[0] === 'pane' && args[1] === 'get') return { pane: { pane_id: args[2], workspace_id: 'ws', label: 'orch' } };
+    if (args[0] === 'pane' && args[1] === 'process-info') return { process_info: { shell_pid: pids[args.at(-1)] } };
+    if (args[0] === 'pane' && args[1] === 'list') return { panes: Object.keys(pids).map((pane_id) => ({ pane_id })) };
+    throw new Error(`Unexpected Herdr call: ${args.join(' ')}`);
+  };
+  const lines = [];
+  const options = (config) => ({
+    config,
+    lockDataDir: dataDir,
+    env: { HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'ws', HERDR_PANE_ID: caller },
+    herdr,
+    pidAlive: () => true,
+    output: (line) => lines.push(line),
+  });
+
+  const machine = runKitCommand('lock', ['acquire', 'full-suite'], options(firstConfig));
+  assert.equal(machine.scope, 'machine');
+  assert.ok(fs.existsSync(path.join(dataDir, 'locks', 'machine', 'full-suite.json')));
+  caller = 'ws:orch-b';
+  assert.throws(() => runKitCommand('lock', ['acquire', 'full-suite'], options(secondConfig)), /held by active pane ws:orch-a/);
+  assert.throws(() => runKitCommand('lock', ['release', 'full-suite'], options(secondConfig)), /active lock.*another pane/i);
+
+  caller = 'ws:orch-a';
+  const deployA = runKitCommand('lock', ['acquire', 'deploy'], options(firstConfig));
+  assert.equal(deployA.scope, 'repository');
+  caller = 'ws:orch-b';
+  const deployB = runKitCommand('lock', ['acquire', 'deploy'], options(secondConfig));
+  assert.equal(deployB.ownerPane, 'ws:orch-b', 'a deploy lock in another repository is separate');
+
+  lines.length = 0;
+  const listed = runKitCommand('lock', ['list'], options(secondConfig));
+  assert.deepEqual(listed.map((lock) => [lock.name, lock.scope, lock.ownerPane]), [
+    ['deploy', 'repository', 'ws:orch-b'],
+    ['full-suite', 'machine', 'ws:orch-a'],
+  ]);
+  assert.ok(lines.some((line) => /^full-suite .*machine/.test(line)), lines.join('\n'));
+  assert.ok(lines.some((line) => /^deploy .*repository/.test(line)), lines.join('\n'));
+
+  caller = 'ws:orch-a';
+  runKitCommand('lock', ['release', 'full-suite'], options(secondConfig));
+  assert.equal(fs.existsSync(path.join(dataDir, 'locks', 'machine', 'full-suite.json')), false);
+  caller = 'ws:orch-b';
+  assert.equal(runKitCommand('lock', ['acquire', 'full-suite'], options(secondConfig)).ownerPane, 'ws:orch-b');
+});
+
+test('worker start gives the pane absolute TMPDIR and HERDR_WORKTREE paths and creates the folder', () => {
+  const root = temporaryRepo();
+  const template = path.join(root, 'brief-template.md');
+  fs.writeFileSync(template, 'Worker {{name}}: {{task}}');
+  fs.writeFileSync(path.join(root, '.herdr-boss.json'), JSON.stringify({ briefTemplate: template }));
+  const config = loadProjectConfig({ cwd: root });
+  const rulesFile = path.join(root, 'rules.json');
+  fs.writeFileSync(rulesFile, JSON.stringify({ updatedAt: new Date().toISOString(), avoidKinds: [] }));
+  const creates = [];
+  let paneCwd = root;
+  const herdr = (args) => {
+    if (args[0] === 'pane' && args[1] === 'get') return args[2] === 'ws:orch'
+      ? { pane: { pane_id: 'ws:orch', workspace_id: 'ws', label: 'orch' } }
+      : { pane: { pane_id: 'ws:p2', workspace_id: 'ws', foreground_cwd: paneCwd } };
+    if (args[0] === 'pane' && args[1] === 'process-info') return { process_info: { shell_pid: 10, foreground_process_group_id: 10 } };
+    if (args[0] === 'pane' && args[1] === 'read') return { text: '% ' };
+    if (args[0] === 'pane' && args[1] === 'list') return { panes: [{ pane_id: 'ws:p1', workspace_id: 'ws', tab_id: 'ws:t1', width: 160, height: 45 }] };
+    if (args[0] === 'agent' && args[1] === 'list') return { agents: [] };
+    if (args[0] === 'tab' && args[1] === 'list') return { tabs: [{ tab_id: 'ws:t1', workspace_id: 'ws', label: 'Workers' }] };
+    if (args[0] === 'pane' && args[1] === 'split') {
+      creates.push(args);
+      paneCwd = args[args.indexOf('--cwd') + 1];
+      return { pane: { pane_id: 'ws:p2' } };
+    }
+    if (args[0] === 'agent' && (args[1] === 'start' || args[1] === 'prompt')) return {};
+    throw new Error(`Unexpected Herdr call: ${args.join(' ')}`);
+  };
+  const env = { HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'ws', HERDR_PANE_ID: 'ws:orch' };
+  const start = (name, options) => startWorker(name, { kind: 'opencode', task: 'x', allow: ['src/'], ...options }, { config, models: loadModels(), herdr, env, rulesFile, wait: () => {}, output: () => {} });
+  const envValues = (args) => Object.fromEntries(args.flatMap((arg, index) => (args[index - 1] === '--env' ? [arg.split(/=(.*)/s).slice(0, 2)] : [])));
+
+  const run = start('abspaths', {});
+  const values = envValues(creates.at(-1));
+  assert.ok(path.isAbsolute(run.worktree));
+  assert.equal(values.HERDR_WORKTREE, run.worktree);
+  assert.equal(values.TMPDIR, path.join(run.worktree, '.worker', 'tmp'));
+  assert.ok(fs.statSync(values.TMPDIR).isDirectory());
+
+  const shared = start('sharedpaths', { noWorktree: true });
+  const sharedValues = envValues(creates.at(-1));
+  assert.equal(shared.worktree, root);
+  assert.equal(sharedValues.HERDR_WORKTREE, root);
+  assert.equal(sharedValues.TMPDIR, path.join(root, '.worker', 'sharedpaths', 'tmp'));
+  assert.ok(fs.statSync(sharedValues.TMPDIR).isDirectory());
+});
+
+test('the worker brief template uses absolute worker paths and the kit names no load threshold', () => {
+  const template = fs.readFileSync(path.resolve('kit/templates/worker-brief.md'), 'utf8');
+  assert.doesNotMatch(template, /\$PWD\/\.worker/);
+  assert.match(template, /"\$TMPDIR"/);
+  assert.match(template, /"\$HERDR_WORKTREE\/\.worker\//);
+  assert.match(template, /Never use `\.\.\/`/);
+  const grep = spawnSync('grep', ['-rn', 'load average is under 30', 'kit', 'docs'], { encoding: 'utf8' });
+  assert.equal(grep.stdout, '');
+  for (const file of ['kit/templates/project-kit.md', 'kit/skills/herdr-orchestrator/SKILL.md', 'docs/user-guide.md', 'docs/cli.md']) {
+    assert.match(fs.readFileSync(path.resolve(file), 'utf8'), /herdr-boss lock acquire full-suite --wait 1800/, file);
+  }
+});

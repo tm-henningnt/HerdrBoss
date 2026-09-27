@@ -1,12 +1,17 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { DATA_DIR } from '../config.js';
 import { createHerdrRunner, verifyCallerPane } from './workers.js';
 
 const LOCK_NAME = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/;
 const COMMAND = (name) => `herdr-boss lock acquire ${name}`;
+// A machine lock is shared by all repositories on this machine. Other lock names are per repository.
+const MACHINE_LOCKS = new Set(['full-suite']);
+export const FULL_SUITE_LOCK = 'full-suite';
+const PUSH_LOCK_WAIT_SECONDS = 1800;
+const scopeFor = (name) => (MACHINE_LOCKS.has(name) ? 'machine' : 'repository');
 
 function validateName(name) {
   if (typeof name !== 'string' || !LOCK_NAME.test(name)) {
@@ -20,32 +25,36 @@ function gitCommonDir(root) {
   return fs.realpathSync(value);
 }
 
-function lockDirectory(commonDir, dataDir) {
-  const locksRoot = path.join(dataDir, 'locks');
-  fs.mkdirSync(locksRoot, { recursive: true, mode: 0o700 });
-  fs.chmodSync(locksRoot, 0o700);
-  const key = crypto.createHash('sha256').update(commonDir).digest('hex');
-  const directory = path.join(locksRoot, key);
+function privateDirectory(directory) {
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   fs.chmodSync(directory, 0o700);
   return directory;
 }
 
-function readRecord(file, commonDir) {
+function lockDirectory(commonDir, dataDir, scope = 'repository') {
+  const locksRoot = privateDirectory(path.join(dataDir, 'locks'));
+  if (scope === 'machine') return privateDirectory(path.join(locksRoot, 'machine'));
+  const key = crypto.createHash('sha256').update(commonDir).digest('hex');
+  return privateDirectory(path.join(locksRoot, key));
+}
+
+function readRecord(file, commonDir, scope = 'repository') {
   let value;
   try { value = JSON.parse(fs.readFileSync(file, 'utf8')); }
   catch (error) {
     if (error.code === 'ENOENT') return null;
     throw new Error(`Cannot read lock record ${path.basename(file)}: ${error.message}`);
   }
-  if (!value || value.gitCommonDir !== commonDir || typeof value.ownerPane !== 'string'
+  const machine = scope === 'machine';
+  if (!value || (machine ? value.scope !== 'machine' || typeof value.gitCommonDir !== 'string' : value.gitCommonDir !== commonDir)
+    || (machine && !MACHINE_LOCKS.has(value.name)) || typeof value.ownerPane !== 'string'
     || !Number.isSafeInteger(value.pid) || value.pid <= 0 || typeof value.name !== 'string'
     || !LOCK_NAME.test(value.name) || value.name !== path.basename(file, '.json')
     || value.command !== COMMAND(value.name) || typeof value.acquiredAt !== 'string'
     || !Number.isFinite(Date.parse(value.acquiredAt))) {
     throw new Error(`Lock record ${path.basename(file)} is invalid. Refusing to change it.`);
   }
-  return value;
+  return { ...value, scope };
 }
 
 function paneIds(herdr) {
@@ -110,10 +119,10 @@ function withMutationLock(directory, operation) {
   finally { fs.rmdirSync(guard); }
 }
 
-function lockContext(config, dataDir) {
+function lockContext(config, dataDir, scope = 'repository') {
   const commonDir = gitCommonDir(config.root);
-  const directory = lockDirectory(commonDir, dataDir);
-  return { commonDir, directory };
+  const directory = lockDirectory(commonDir, dataDir, scope);
+  return { commonDir, directory, scope };
 }
 
 function callerFor(env, herdr) {
@@ -154,7 +163,7 @@ export function acquireProjectLock(name, {
   }
   const caller = callerFor(env, herdr);
   const pid = shellPidFor(caller.paneId, herdr);
-  const { commonDir, directory } = lockContext(config, dataDir);
+  const { commonDir, directory, scope } = lockContext(config, dataDir, scopeFor(name));
   const file = path.join(directory, `${name}.json`);
   const deadline = waitSeconds === null ? null : BigInt(timeValue(now)) + BigInt(waitSeconds) * 1000n;
 
@@ -163,7 +172,7 @@ export function acquireProjectLock(name, {
     let staleRecord = null;
     try {
       const acquired = withMutationLock(directory, () => {
-        const previous = readRecord(file, commonDir);
+        const previous = readRecord(file, commonDir, scope);
         if (previous && lockIsLive(previous, { herdr, pidAlive })) {
           activeRecord = previous;
           return null;
@@ -180,9 +189,10 @@ export function acquireProjectLock(name, {
           pid,
           command: COMMAND(name),
           acquiredAt: new Date(timeValue(now)).toISOString(),
+          ...(scope === 'machine' ? { scope } : {}),
         };
         writeNewRecord(file, record);
-        return { ...record, state: 'live' };
+        return { ...record, scope, state: 'live' };
       });
       if (acquired) {
         if (staleRecord) output(`NOTICE: Taking over stale lock ${name} from pane ${staleRecord.ownerPane} (PID ${staleRecord.pid}).`);
@@ -216,10 +226,10 @@ export function releaseProjectLock(name, {
 } = {}) {
   validateName(name);
   const caller = callerFor(env, herdr);
-  const { commonDir, directory } = lockContext(config, dataDir);
+  const { commonDir, directory, scope } = lockContext(config, dataDir, scopeFor(name));
   const file = path.join(directory, `${name}.json`);
   return withMutationLock(directory, () => {
-    const record = readRecord(file, commonDir);
+    const record = readRecord(file, commonDir, scope);
     if (!record) throw new Error(`Lock ${name} does not exist.`);
     if (record.ownerPane !== caller.paneId && lockIsLive(record, { herdr, pidAlive })) {
       throw new Error(`Cannot release active lock ${name} owned by another pane (${record.ownerPane}, PID ${record.pid}).`);
@@ -239,14 +249,76 @@ export function listProjectLocks({
   pidAlive = pidIsAlive,
 } = {}) {
   callerFor(env, herdr);
-  const { commonDir, directory } = lockContext(config, dataDir);
-  const locks = fs.readdirSync(directory).filter((file) => file.endsWith('.json')).sort().map((fileName) => {
-    const record = readRecord(path.join(directory, fileName), commonDir);
-    return { ...record, state: lockIsLive(record, { herdr, pidAlive }) ? 'live' : 'stale' };
+  const locks = ['repository', 'machine'].flatMap((scope) => {
+    const { commonDir, directory } = lockContext(config, dataDir, scope);
+    return fs.readdirSync(directory).filter((file) => file.endsWith('.json')).sort().map((fileName) => {
+      const record = readRecord(path.join(directory, fileName), commonDir, scope);
+      return { ...record, state: lockIsLive(record, { herdr, pidAlive }) ? 'live' : 'stale' };
+    });
   });
   if (!locks.length) output('No project locks.');
   for (const lock of locks) {
-    output(`${lock.name}: pane ${lock.ownerPane}, PID ${lock.pid}, ${lock.command}, ${lock.acquiredAt}, ${lock.state}`);
+    output(`${lock.name} (${lock.scope}): pane ${lock.ownerPane}, PID ${lock.pid}, ${lock.command}, ${lock.acquiredAt}, ${lock.state}`);
   }
   return locks;
+}
+
+function readText(file) {
+  try { return fs.readFileSync(file, 'utf8'); }
+  catch (error) {
+    if (error.code === 'ENOENT' || error.code === 'EISDIR') return null;
+    throw error;
+  }
+}
+
+// A push runs the full suite when a pre-push hook exists in the effective hooks path, or when a husky or lefthook config names pre-push.
+export function findPrePushHook(root) {
+  const hookPath = execFileSync('git', ['-C', root, 'rev-parse', '--git-path', 'hooks/pre-push'], { encoding: 'utf8' }).trim();
+  const hook = path.resolve(root, hookPath);
+  if (fs.existsSync(hook) && fs.statSync(hook).isFile()) return hook;
+  const huskyHook = path.join(root, '.husky', 'pre-push');
+  if (fs.existsSync(huskyHook) && fs.statSync(huskyHook).isFile()) return huskyHook;
+  const packageText = readText(path.join(root, 'package.json'));
+  if (packageText) {
+    let manifest = null;
+    try { manifest = JSON.parse(packageText); } catch {}
+    if (manifest?.husky?.hooks?.['pre-push']) return path.join(root, 'package.json');
+  }
+  for (const name of ['.huskyrc', '.huskyrc.json', '.huskyrc.js', 'husky.config.js',
+    'lefthook.yml', 'lefthook.yaml', 'lefthook.json', 'lefthook.toml', '.lefthook.yml', '.lefthook.yaml', '.lefthook.json', '.lefthook.toml',
+    'lefthook-local.yml', '.lefthook-local.yml']) {
+    const text = readText(path.join(root, name));
+    if (text && /(^|[^\w-])pre-push([^\w-]|$)/.test(text)) return path.join(root, name);
+  }
+  return null;
+}
+
+export function pushWithLock(args, {
+  config,
+  env = process.env,
+  herdr = createHerdrRunner(),
+  dataDir = DATA_DIR,
+  output = console.log,
+  now = Date.now,
+  pause = defaultPause,
+  pidAlive = pidIsAlive,
+  stdio = 'inherit',
+} = {}) {
+  callerFor(env, herdr);
+  const push = () => {
+    const result = spawnSync('git', ['push', ...args], { cwd: config.root, stdio });
+    if (result.error) throw new Error(`Cannot run git push: ${result.error.message}`);
+    return result.status ?? 1;
+  };
+  const hook = findPrePushHook(config.root);
+  if (!hook) {
+    output('push: no pre-push hook found. Pushing without a lock.');
+    return { exitCode: push(), locked: false, hook: null };
+  }
+  output(`push: pre-push hook found at ${hook}. Taking lock ${FULL_SUITE_LOCK}.`);
+  acquireProjectLock(FULL_SUITE_LOCK, { config, env, herdr, dataDir, waitSeconds: PUSH_LOCK_WAIT_SECONDS, output, now, pause, pidAlive });
+  let exitCode;
+  try { exitCode = push(); }
+  finally { releaseProjectLock(FULL_SUITE_LOCK, { config, env, herdr, dataDir, output, pidAlive }); }
+  return { exitCode, locked: true, hook };
 }
