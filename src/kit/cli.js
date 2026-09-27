@@ -13,7 +13,7 @@ import { agentsBlock, checkAgentsFile, installKit, kitRevision, rulesPolicy } fr
 import { listProjects } from '../projects.js';
 
 const USAGE = `Kit commands:
-  worker start <name> --kind <kind> (--task TEXT | --task-file FILE) [options]
+  worker start <name> --kind <kind> (--task TEXT | --task-file FILE) [--lease POOL]... [options]
   worker collect <name> [--record --outcome done|partial|failed --gate-passed|--gate-failed]
   worker list
   worker park <name> --reason TEXT | worker unpark <name>
@@ -179,9 +179,9 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
   if (command === 'worker') {
     const [action, ...rest] = argv;
     if (action === 'start') {
-      const { positional, flags } = parseArgs(rest, { boolean: ['--no-worktree', '--dry-run', '--force'], repeat: ['--allow', '--copy'] });
+      const { positional, flags } = parseArgs(rest, { boolean: ['--no-worktree', '--dry-run', '--force'], repeat: ['--allow', '--copy', '--lease'] });
       if (positional.length !== 1) fail('Usage: worker start <name> --kind <kind> --task TEXT [options]');
-      knownFlags(flags, ['kind', 'model', 'effort', 'issue', 'task', 'taskfile', 'allow', 'copy', 'base', 'orch', 'noworktree', 'dryrun', 'force']);
+      knownFlags(flags, ['kind', 'model', 'effort', 'issue', 'task', 'taskfile', 'allow', 'copy', 'lease', 'base', 'orch', 'noworktree', 'dryrun', 'force']);
       try { return startWorker(positional[0], {
         kind: flags.kind,
         model: flags.model,
@@ -191,6 +191,7 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
         taskFile: flags.taskfile,
         allow: flags.allow ?? [],
         copy: flags.copy ?? [],
+        lease: flags.lease ?? [],
         base: flags.base,
         orch: flags.orch,
         noWorktree: flags.noworktree,

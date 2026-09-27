@@ -2445,3 +2445,28 @@ test('the worker brief template uses absolute worker paths and the kit names no 
     assert.match(fs.readFileSync(path.resolve(file), 'utf8'), /herdr-boss lock acquire full-suite --wait 1800/, file);
   }
 });
+
+test('the brief template has the leased resources line and the kit names the lease rule', () => {
+  const template = fs.readFileSync(path.resolve('kit/templates/worker-brief.md'), 'utf8');
+  assert.match(template, /^- Leased resources: {{leases}}$/m);
+  const rendered = renderBrief('Leased resources: {{leases}}', { leases: '`HERDR_SERVE_PORT=47100` (pool `serve-ports`). Use only these.' });
+  assert.equal(rendered, 'Leased resources: `HERDR_SERVE_PORT=47100` (pool `serve-ports`). Use only these.');
+  assert.equal(renderBrief('Leased resources: {{leases}}', {}), 'Leased resources: (none)');
+  const rule = 'Lease a shared resource with `herdr-boss lease acquire POOL` or `worker start --lease POOL`. Never pick a port from a pool by hand.';
+  for (const file of ['kit/skills/herdr-orchestrator/SKILL.md', 'docs/user-guide.md']) assert.ok(fs.readFileSync(path.resolve(file), 'utf8').includes(rule), file);
+});
+
+test('worker start dry-run names each lease pool and takes no lease', () => {
+  const f = setupFixture(null);
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-kit-lease-'));
+  const pools = [{ name: 'serve-ports', items: ['47100'], split: {}, env: 'HERDR_SERVE_PORT', ttlMinutes: 240, check: null, graceMinutes: 10 }];
+  const output = [];
+  startWorker('lease-plan', { kind: 'codex', task: 'x', allow: ['src/'], lease: ['serve-ports'], dryRun: true }, {
+    config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: (line) => output.push(line), leaseOptions: { dataDir, pools },
+  });
+  assert.match(output.join('\n'), /Lease one item of pool serve-ports and pass it in the pane environment/);
+  assert.equal(fs.existsSync(path.join(dataDir, 'leases.json')), false);
+  assert.throws(() => startWorker('lease-unknown', { kind: 'codex', task: 'x', allow: ['src/'], lease: ['gpu'], dryRun: true }, {
+    config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {}, leaseOptions: { dataDir, pools },
+  }), /Unknown resource pool gpu/);
+});

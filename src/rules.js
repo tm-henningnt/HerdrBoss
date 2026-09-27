@@ -3,6 +3,7 @@ import { dashboardUrl } from './config.js';
 import { goalSummary, machineLimits, POLICY_DEFAULTS, unmeteredClosedParts, unmeteredSummary } from './control.js';
 import { blockedWorkerAlerts } from './worker-failures.js';
 import { kitRevision } from './kit/agents-check.js';
+import { leaseBulletinLines } from './leases.js';
 
 const PROVIDER_NAMES = { claude: 'Claude', codex: 'Codex', opencodego: 'OpenCode Go' };
 export const providerName = (p) => PROVIDER_NAMES[p] || p;
@@ -348,6 +349,11 @@ export function renderBulletin(snap, evaluation, cfg) {
       }
       L.push(`- ${b.project}: ${state} (${b.headless ? 'headless' : 'visible'}); next launch ${size.width}×${size.height}; CDP http://127.0.0.1:${b.port}; profile ${b.profile}. Use \`herdr-boss browser tabs ${b.project}\` and \`herdr-boss browser screenshot ${b.project} --tab <id>\` for simple browser work; see \`kit/browser-service.md\` for input commands. Do not stop another project's browser.`);
     }
+  }
+  const leases = snap.resourceLeases;
+  if (leases && (leases.pools?.length || leases.errors?.length)) {
+    L.push('', '## Resource leases', '');
+    L.push(...leaseBulletinLines(leases, Date.parse(snap.updatedAt)));
   }
   if (snap.control) {
     L.push('', '## Worker allocation', '', `- ${snap.control.runningWorkers}/${snap.control.maxWorkers} working agents globally.`);

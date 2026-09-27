@@ -392,7 +392,10 @@ Put overrides in `~/.herdr-boss/config.json`, then restart the service.
   "browsers": { "reapOrphanDaemons": true, "orphanDaemonMinAgeSeconds": 7200, "staleOwnedMinutes": 30, "sweepCodeSignClones": true },
   "workers": { "staleIdleMinutes": 120 },
   "roamgate": { "port": 8787, "tokenFile": "/Users/you/.config/roamgate/auth-token" },
-  "providerKinds": { "claude": ["claude"], "codex": ["codex"], "opencodego": ["opencode", "pi"] }
+  "providerKinds": { "claude": ["claude"], "codex": ["codex"], "opencodego": ["opencode", "pi"] },
+  "resourcePools": [
+    { "name": "serve-ports", "range": "8000-8004", "split": { "herdrboss": ["8000", "8001"] }, "env": "HERDR_SERVE_PORT", "ttlMinutes": 240, "check": "tcp", "graceMinutes": 10 }
+  ]
 }
 ```
 
@@ -416,6 +419,35 @@ When Roamgate runs and its token file exists, the header shows a **Roamgate** li
 When a `report.md` line starts with `Status: done` and the next character is whitespace, punctuation, or the end of the line, collection checks each configured artifact rule. It accepts lines such as `Status: done.` and `Status: done — checks complete`. It ignores `Status: doneish`, `Status: done-partial`, `Status: partial`, and `Status: failed`. Collection warns when the newest source file is newer than the oldest artifact file, or when matching sources have no matching artifacts. It prints each warning and includes it in the `artifactWarnings` summary field. The warning does not change the independent gate result. The orchestrator decides whether the gate passed.
 
 `worker collect --record` records one usage event per worker run before merge. An unknown tool-call count stays `null`, and the ledger accepts `null` as unknown. If an older kit reports a ledger entry with `null` as invalid, install a HerdrBoss kit version that accepts `null`, then run `herdr-boss ledger check` again. This check reads the ledger. Do not replace `null` with `0` or edit the ledger entry. After a successful collection, Herdr Boss prints a reminder to merge the branch and then run `herdr-boss worktree prune --apply`. Collection does not remove a worktree. `herdr-boss usage record FILE` adds measured events. The Analytics page shows recorded usage and its coverage. Quota percentages are global per provider. They are not project token counts.
+
+## Resource leases
+
+A resource pool is a set of scarce items that several projects share, for example local serve ports. A project leases one item, uses it, and releases it. Herdr Boss keeps the leases in `leases.json` in its data directory, with mode `0600`. Each change holds the mutation lock of the machine locks.
+
+Lease a shared resource with `herdr-boss lease acquire POOL` or `worker start --lease POOL`. Never pick a port from a pool by hand. The commands are in [Resource leases](cli.md#resource-leases).
+
+Define each pool in `resourcePools` in `~/.herdr-boss/config.json`:
+
+| Key | Meaning |
+|---|---|
+| `name` | Required. A slug of lowercase letters, digits, and hyphens. |
+| `items` or `range` | Required. Use exactly one. `items` is an array of strings. `range` is `"LOW-HIGH"` and gives each integer from LOW to HIGH. |
+| `split` | Optional. Project slugs to item lists. Each item must be in the pool and in one list only. A project takes its own items first. |
+| `env` | Required. The variable that `worker start --lease` sets in the worker pane. |
+| `ttlMinutes` | The lease time. The default is 240. |
+| `check` | `"tcp"` or `null`. `"tcp"` means that each item is a local port. The default is `null`. |
+| `graceMinutes` | The time after the lease start before the TCP check starts. The default is 10. |
+
+Herdr Boss validates the pools when it loads the config. An invalid pool list gives no pools. The lease commands then fail and name each error, and the bulletin shows each error. Do not put a secret in a pool. An unknown key is an error.
+
+Herdr Boss reclaims a lease on each service tick and before each `lease acquire` or `lease release`. It reclaims a lease when one of these conditions is true:
+
+- The pane of the lease is not in a successful Herdr pane list.
+- The run record of the worker has `finishedAt`.
+- The time `expiresAt` of the lease is in the past.
+- The pool has `"check": "tcp"`, the grace time is over, and nothing listens on `127.0.0.1:<item>` on two checks in a row.
+
+Herdr Boss logs one `lease` event for each reclaimed lease, with the pool, the item, the project, and the reason. The bulletin has a `Resource leases` section with one line for each pool. The line shows each item with its holder, its age, and `borrowed`, or `free`.
 
 ## Project locks and worktree cleanup
 

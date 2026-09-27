@@ -10,6 +10,7 @@ import { loadModels, KIT_ROOT } from './kit/config.js';
 import { loadPolicy, clearExpiredOneOffGoals, deriveControl, migrateWorkspacePolicy, providerFor, pickSuccessor, laneStatus, leastOverProvider, machineLimits, unmeteredLane, unavailablePiModels, mergeModels } from './control.js';
 import { recordQuotaSnapshot } from './usage.js';
 import { listBrowserSessions, cdpResponds } from './browser-pool.js';
+import { readLeases, reclaimLeases, publicLease, tcpListening } from './leases.js';
 import { codeSignCloneDir, sweepCodeSignClones } from './clone-sweep.js';
 import { listHandoffs, saveHandoffs, supersedeHandoffs, expireHandoff, expireMissingHandoffs, handoffNotices } from './handoff.js';
 import { readKitNotice, pendingKitAlert, isKitAlert, kitNoticeTargets } from './kit-notice.js';
@@ -123,6 +124,7 @@ export class Engine extends EventEmitter {
       collectMissingWorktreeProcesses,
       collectWorktreeCounts,
       cdpResponds,
+      probeTcp: tcpListening,
       codeSignCloneDir,
       sweepCodeSignClones,
       // A test engine does not run the real pi unless a test injects a collector.
@@ -222,6 +224,20 @@ export class Engine extends EventEmitter {
         return { ...b, responsive: matched ? await this.collectors.cdpResponds(b.port) : false };
       }));
 
+      // Reclaim leases on an acting tick. A pane is gone only when the pane list of this tick succeeded.
+      if (this.act && this.cfg.resourcePools?.length) {
+        try {
+          reclaimLeases({
+            pools: this.cfg.resourcePools, dataDir: DATA_DIR, now, probeTcp: this.collectors.probeTcp, waitMs: 0,
+            panes: currentHerdrSnapshot && currentPaneList ? new Set(herdr.panes.map((pane) => pane.id)) : null,
+            log: (item) => this.log('lease', `Reclaimed ${item.pool} ${item.item} of ${item.project}${item.worker ? `/${item.worker}` : ''}: ${item.reason}`, { pool: item.pool, item: item.item, project: item.project, reason: item.reason }),
+          });
+        } catch (e) { if (e.code !== 'ELOCKBUSY') errors.push(`leases: ${e.message}`); }
+      }
+      let leaseStore = { leases: [] };
+      try { leaseStore = readLeases(DATA_DIR); } catch (e) { errors.push(`leases: ${e.message}`); }
+      const resourceLeases = { pools: this.cfg.resourcePools || [], errors: this.cfg.resourcePoolErrors || [], leases: leaseStore.leases.map(publicLease) };
+
       this.trackPaneStatus(herdr, now);
       const workerTransitions = herdr ? await inspectWorkerTransitions(
         herdr.panes, this.memory.workerObserved, this.memory.workerFailures,
@@ -250,6 +266,7 @@ export class Engine extends EventEmitter {
         herdr,
         browsers,
         managedBrowsers,
+        resourceLeases,
         errors,
       };
       snap.projects = listProjects();

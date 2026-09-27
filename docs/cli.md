@@ -80,6 +80,7 @@ Set `workerPanesPerTab` in `.herdr-boss.json` to change the pane limit for each 
 | `--task TEXT` or `--task-file FILE` | Required. The work order for the brief. |
 | `--allow PATH` | A path that the worker may change. Repeat for each path. |
 | `--copy PATH` | Copy a regular repository file into `.worker/inputs/` before the agent starts. Repeat for each file. Keep its repository subdirectories. |
+| `--lease POOL` | Lease one item of a resource pool for the worker. Repeat for each pool. See [Resource leases](#resource-leases). |
 | `--model MODEL` | A model from `herdr-boss models`. The default is the kind's default model. |
 | `--effort EFFORT` | A reasoning effort, where the kind supports it. |
 | `--issue N` | The issue number. |
@@ -107,7 +108,7 @@ herdr-boss worker start fix-74 --kind claude --task-file brief.md --allow src/pa
 |---|---|
 | `worker list` | Unfinished run records with the live agent status. |
 | `worker collect NAME` | Read the worker report, check its changed paths against `--allow`, and report configured stale-artifact warnings. |
-| `worker collect NAME --record --outcome done\|partial\|failed --gate-passed\|--gate-failed [--defects N] [--rework N]` | Also append the run to the ledger and record usage. After success, merge the branch, then prune safe worktrees. |
+| `worker collect NAME --record --outcome done\|partial\|failed --gate-passed\|--gate-failed [--defects N] [--rework N]` | Also append the run to the ledger, record usage, and release the leases of the worker. After success, merge the branch, then prune safe worktrees. |
 | `worker park NAME --reason TEXT` | Mark a worker that waits on purpose. Idle notices skip it. |
 | `worker unpark NAME` | Clear the park mark. |
 | `worker allow NAME PATH... --reason TEXT` | Approve extra paths for a running worker after a `WORKER QUESTION`. |
@@ -149,6 +150,40 @@ Collection records the run before merge. After a successful `--record`, merge th
 ```sh
 herdr-boss worker allow fix-74 docs/parse.md --reason "the fix also needs the parser docs"
 ```
+
+### Resource leases
+
+| Command | Action |
+|---|---|
+| `lease acquire POOL [--for SLUG\|WORKER] [--prefer ITEM] [--ttl MINUTES]` | Lease one free item of the pool. Print the item on its own line on standard output. |
+| `lease release POOL ITEM` | Release a lease of your project. The Boss can release any lease. |
+| `lease list [POOL]` | Print each pool item and its lease as JSON. A free item has `"lease": null`. |
+
+Define the pools in `resourcePools` in `~/.herdr-boss/config.json`. See [Resource leases](user-guide.md#resource-leases) in the user guide.
+
+Only a verified `orch` or `boss` pane, or a worker pane with a live run record, can run `lease acquire` and `lease release`. The worker rule is the same as for the `full-suite` lock.
+
+- Without `--for`, the lease belongs to the project of the current checkout. A worker pane leases for its own worker.
+- `--for WORKER` records a live worker of the project of the orchestrator.
+- `--for SLUG` records a project. Only the Boss pane can use it.
+- `--ttl MINUTES` sets the lease time. The default is `ttlMinutes` of the pool.
+
+`lease acquire` chooses an item in this order:
+
+1. The `--prefer` item, when it is free.
+2. A free item in the `split` list of the project.
+3. A free item that is in no `split` list.
+4. A free item in the `split` list of another project. The lease has `"borrowed": true`.
+
+A borrowed lease stays until it is released or reclaimed. When no item is free, `lease acquire` exits with code 3 and lists the holders on standard error.
+
+```sh
+PORT="$(herdr-boss lease acquire serve-ports)"
+npm run serve -- --port "$PORT"
+herdr-boss lease release serve-ports "$PORT"
+```
+
+`worker start --lease POOL` leases one item before it creates the worktree or the pane. It sets the variable `env` of the pool in the worker pane, for example `HERDR_SERVE_PORT=8001`. It records the lease in the run record and in the brief. When the pool has no free item, the start fails with exit code 3 and creates nothing. When the start fails later, it releases the lease. `worker collect NAME --record` releases the leases of the worker.
 
 ## Ledger, checks, and worktrees
 

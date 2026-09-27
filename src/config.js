@@ -97,11 +97,86 @@ const DEFAULTS = {
     staleOwnedMinutes: 30,
   },
   workers: { staleIdleMinutes: 120 },
+  // Shared resources that projects lease, for example local serve ports. See validateResourcePools().
+  resourcePools: [],
   // codexbar provider -> herdr agent kinds that consume it.
   providerKinds: { claude: ['claude'], codex: ['codex'], opencodego: ['opencode', 'pi'] },
   orchestratorLabel: 'orch',
   roamgate: { port: 8787, tokenFile: path.join(os.homedir(), '.config/roamgate/auth-token') },
 };
+
+const POOL_KEYS = new Set(['name', 'items', 'range', 'split', 'env', 'ttlMinutes', 'check', 'graceMinutes']);
+const POOL_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
+const POOL_ITEM = /^[A-Za-z0-9._:-]{1,64}$/;
+const PROJECT_SLUG = /^[a-z0-9][a-z0-9-]*$/;
+const ENV_NAME = /^[A-Z_][A-Z0-9_]{0,63}$/;
+const MAX_POOL_ITEMS = 1000;
+const isPort = (item) => /^\d{1,5}$/.test(item) && Number(item) >= 1 && Number(item) <= 65535;
+
+// Validate the resourcePools setting. Return the normalized pools and one message for each error.
+// A pool holds only names, items, and limits. An unknown key is an error, so a pool cannot carry a secret.
+export function validateResourcePools(value) {
+  if (!Array.isArray(value)) return { pools: [], errors: ['resourcePools must be an array.'] };
+  const errors = [];
+  const pools = [];
+  const names = new Set();
+  value.forEach((pool, index) => {
+    const label = `resourcePools[${index}]`;
+    if (!pool || typeof pool !== 'object' || Array.isArray(pool)) { errors.push(`${label} must be an object.`); return; }
+    const before = errors.length;
+    for (const key of Object.keys(pool)) if (!POOL_KEYS.has(key)) errors.push(`${label} has an unknown key ${key}.`);
+    if (typeof pool.name !== 'string' || !POOL_NAME.test(pool.name)) errors.push(`${label}.name must be a slug of lowercase letters, digits, and hyphens.`);
+    else if (names.has(pool.name)) errors.push(`${label}.name ${pool.name} is a duplicate.`);
+    else names.add(pool.name);
+    let items = [];
+    if ((pool.items === undefined) === (pool.range === undefined)) errors.push(`${label} must have exactly one of items or range.`);
+    else if (pool.items !== undefined) {
+      if (!Array.isArray(pool.items) || !pool.items.length) errors.push(`${label}.items must be a non-empty array of strings.`);
+      else {
+        pool.items.forEach((item, itemIndex) => {
+          if (typeof item !== 'string') errors.push(`${label}.items[${itemIndex}] must be a string.`);
+          else if (!POOL_ITEM.test(item)) errors.push(`${label}.items[${itemIndex}] must be one token of 1 to 64 letters, digits, dots, colons, underscores, or hyphens.`);
+          else if (items.includes(item)) errors.push(`${label}.items has a duplicate: ${item}.`);
+          else items.push(item);
+        });
+      }
+    } else {
+      const match = typeof pool.range === 'string' ? /^(\d{1,9})-(\d{1,9})$/.exec(pool.range) : null;
+      const low = match ? Number(match[1]) : NaN;
+      const high = match ? Number(match[2]) : NaN;
+      if (!match || low > high) errors.push(`${label}.range must be "LOW-HIGH" with integers and LOW not above HIGH.`);
+      else if (high - low + 1 > MAX_POOL_ITEMS) errors.push(`${label}.range must give at most ${MAX_POOL_ITEMS} items.`);
+      else for (let item = low; item <= high; item += 1) items.push(String(item));
+    }
+    const split = {};
+    if (pool.split !== undefined) {
+      if (!pool.split || typeof pool.split !== 'object' || Array.isArray(pool.split)) errors.push(`${label}.split must be an object of project slugs to item arrays.`);
+      else {
+        const owner = new Map();
+        for (const [slug, list] of Object.entries(pool.split)) {
+          if (!PROJECT_SLUG.test(slug)) { errors.push(`${label}.split key ${slug} must be a project slug.`); continue; }
+          if (!Array.isArray(list)) { errors.push(`${label}.split.${slug} must be an array of pool items.`); continue; }
+          split[slug] = [];
+          for (const item of list) {
+            if (typeof item !== 'string' || !items.includes(item)) errors.push(`${label}.split.${slug} item ${item} is not in the pool.`);
+            else if (owner.has(item)) errors.push(`${label}.split item ${item} is in more than one split.`);
+            else { owner.set(item, slug); split[slug].push(item); }
+          }
+        }
+      }
+    }
+    if (typeof pool.env !== 'string' || !ENV_NAME.test(pool.env)) errors.push(`${label}.env must be an environment variable name of uppercase letters, digits, and underscores.`);
+    const ttlMinutes = pool.ttlMinutes ?? 240;
+    if (!Number.isSafeInteger(ttlMinutes) || ttlMinutes < 1) errors.push(`${label}.ttlMinutes must be a positive integer.`);
+    const graceMinutes = pool.graceMinutes ?? 10;
+    if (!Number.isSafeInteger(graceMinutes) || graceMinutes < 0) errors.push(`${label}.graceMinutes must be a non-negative integer.`);
+    const check = pool.check ?? null;
+    if (check !== null && check !== 'tcp') errors.push(`${label}.check must be "tcp" or null.`);
+    if (check === 'tcp') for (const item of items.filter((entry) => !isPort(entry))) errors.push(`${label}.check "tcp" needs port items; ${item} is not a port.`);
+    if (errors.length === before) pools.push({ name: pool.name, items, split, env: pool.env, ttlMinutes, check, graceMinutes });
+  });
+  return { pools, errors };
+}
 
 function merge(a, b) {
   const out = { ...a };
@@ -125,6 +200,10 @@ export function loadConfig() {
   // A stored legacy tokenFile names the data directory. Report the private default in memory. Only
   // migrateAccessFiles() writes the new setting.
   if (cfg.access.tokenFile === path.join(DATA_DIR, 'access-token')) cfg.access.tokenFile = DEFAULT_TOKEN_FILE;
+  // An invalid pool list gives no pools. The lease commands and the bulletin name each error.
+  const pools = validateResourcePools(cfg.resourcePools);
+  cfg.resourcePools = pools.errors.length ? [] : pools.pools;
+  cfg.resourcePoolErrors = pools.errors;
   if (process.env.HERDR_BOSS_PUSH === '0') cfg.push = false;
   if (process.env.HERDR_BOSS_PORT) cfg.port = Number(process.env.HERDR_BOSS_PORT);
   return cfg;
