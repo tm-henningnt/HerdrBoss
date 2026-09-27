@@ -8,6 +8,9 @@ Keep the current facts that every HerdrBoss orchestrator needs at start and resu
 - 2026-09-27: Never stop, close, or restart a browser that another project uses. Never touch the Chrome on port 9222. Source: AGENTS.md.
 - 2026-09-27: Store decisions and facts in project files, not only in a Claude or Codex memory. Source: Owner, through the Boss task B4.
 - 2026-09-27: Approved B6 fixes: delete the recorded code-sign clone after a SIGTERM close; tell agents to use the project browser or Chromium for dashboard checks; sweep orphaned `code_sign_clone` folders on each engine tick. Never touch a clone of a running Chrome. Never touch the Chrome on port 9222. Source: Owner, through the Boss.
+- 2026-09-27: Orchestrators decide product and design details themselves. They escalate only a real conflict with a recorded Owner decision, after they check this file and the issue history. Source: Owner, through the Boss.
+- 2026-09-27: The Owner has no opinion on playwright-cli or agent-browser. The kit prefers the project browser for checks and does not ban other tools. Source: Owner, through the Boss.
+- 2026-09-27: Free `opencode/` models run only in the `opencode` harness. Pi needs only the `opencode-go` credential, which it has. Source: Owner, through the Boss.
 
 ## Holds and freezes
 
