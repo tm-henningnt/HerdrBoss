@@ -6,12 +6,13 @@ import { DATA_DIR, LIVE_DATA_DIR, dashboardUrl } from './config.js';
 import { collectHerdr, collectQuotas, collectMachine, collectProcesses, collectCwdProcesses, collectMissingWorktreeProcesses, collectWorktreeCounts, collectPiModels, findBrowsers, cpuUse, run } from './collect.js';
 import { evaluate, renderBulletin, fmtDuration, providerName, broadcastTargets } from './rules.js';
 import { listProjects } from './projects.js';
-import { loadModels } from './kit/config.js';
+import { loadModels, KIT_ROOT } from './kit/config.js';
 import { loadPolicy, clearExpiredOneOffGoals, deriveControl, migrateWorkspacePolicy, providerFor, pickSuccessor, laneStatus, leastOverProvider, machineLimits, unmeteredLane, unavailablePiModels, mergeModels } from './control.js';
 import { recordQuotaSnapshot } from './usage.js';
 import { listBrowserSessions, cdpResponds } from './browser-pool.js';
 import { codeSignCloneDir, sweepCodeSignClones } from './clone-sweep.js';
 import { listHandoffs, saveHandoffs, supersedeHandoffs, expireHandoff, expireMissingHandoffs, handoffNotices } from './handoff.js';
+import { readKitNotice, pendingKitAlert, isKitAlert, kitNoticeTargets } from './kit-notice.js';
 import { inspectWorkerTransitions, inspectWorkerReports, applyWorkerFailureStatuses, resolveFreeUsageRun, activeFreeModelExhaustions, extendFreeModelExhaustion, activeFreeLaneExhaustions, extendFreeLaneExhaustion, freeUsageLaneRetry } from './worker-failures.js';
 
 const MEMORY_FILE = path.join(DATA_DIR, 'memory.json');
@@ -68,7 +69,7 @@ function writeJson(file, data) {
 }
 
 export class Engine extends EventEmitter {
-  constructor(cfg, { push = cfg.push, act = true, collectors = {}, handoffRunner = run, herdrRunner = run } = {}) {
+  constructor(cfg, { push = cfg.push, act = true, collectors = {}, handoffRunner = run, herdrRunner = run, gitRunner = (args) => run('git', args, { timeout: 10000 }), kitRoot = KIT_ROOT } = {}) {
     super();
     this.cfg = cfg;
     const guardReasons = [];
@@ -102,6 +103,9 @@ export class Engine extends EventEmitter {
     };
     this.handoffRunner = handoffRunner;
     this.herdrRunner = herdrRunner;
+    this.gitRunner = gitRunner;
+    this.kitRoot = kitRoot;
+    this.kitNoticeRead = false;
     this.state = readJson(STATE_FILE, null);
     this.events = [];
     try {
@@ -268,6 +272,14 @@ export class Engine extends EventEmitter {
       const evaluation = evaluate(snap, this.cfg, this.memory.paneSince, now, policy);
       evaluation.alerts.push(...workerTransitions.notices);
       evaluation.alerts.push(...reportTransitions.notices);
+      if (this.act) {
+        if (!this.kitNoticeRead) {
+          this.kitNoticeRead = true;
+          await this.readKitNotice(now);
+        }
+        const kitAlert = pendingKitAlert(this.memory.kitNotice, now);
+        if (kitAlert) evaluation.alerts.push(kitAlert);
+      }
       this.memory.quotaRecoveries ||= {};
       // Older records used the reset timestamp as part of the key. Codexbar can
       // adjust that timestamp by a minute, so consolidate them by provider/window.
@@ -419,6 +431,15 @@ export class Engine extends EventEmitter {
     } finally {
       this.running = false;
     }
+  }
+
+  // Runs once per service start: git reads only, no timers.
+  async readKitNotice(now) {
+    const result = await readKitNotice({ root: this.kitRoot, stored: this.memory.kitNotice, git: this.gitRunner, now });
+    if (result.state) this.memory.kitNotice = result.state;
+    if (result.event) this.log('kit', result.event);
+    if (result.alert) this.log('kit', `Queued kit notice ${result.alert.key} for each project orchestrator`);
+    return result;
   }
 
   trackPaneStatus(herdr, now) {
@@ -700,6 +721,8 @@ export class Engine extends EventEmitter {
         if (a.suppressPrompt || a.scope === 'user') continue;
         // A skipped broadcast stays unsent, so it reaches the orchestrator when its workers become active.
         let targets = a.scope === 'all' ? broadcast : orchs.filter((o) => o.workspace === a.scope);
+        // A kit notice goes to every project orchestrator, also one without active workers.
+        if (isKitAlert(a)) targets = kitNoticeTargets(orchs);
         if (a.key.startsWith('machine:disk:')) {
           const projectOrch = targets.find((o) => o.label === 'orch');
           targets = projectOrch ? [projectOrch] : targets.filter((o) => o.label !== 'boss').slice(0, 1);
@@ -721,7 +744,7 @@ export class Engine extends EventEmitter {
           `Current rules: ${path.join(DATA_DIR, 'bulletin.md')}. Dashboard: ${dashboardUrl(this.cfg)}`,
         ].join('\n');
         try {
-          await run('herdr', ['agent', 'prompt', o.id, text]);
+          await this.herdrRunner('herdr', ['agent', 'prompt', o.id, text]);
           for (const a of list) this.memory.pushes[`${a.key}@${o.id}`] = { at: now, severity: a.severity };
           this.log('push', `Sent ${list.length} notice(s) to ${o.id} (${o.workspace})`, { pane: o.id, titles: list.map((a) => a.title) });
         } catch (e) {

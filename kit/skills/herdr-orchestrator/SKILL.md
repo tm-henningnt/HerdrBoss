@@ -315,6 +315,7 @@ herdr agent prompt <orch-pane> "WORKER REPORT <name>: <done|blocked|stopped>. Re
 - Check your project on the Boss dashboard or in `herdr-boss policy show` when capacity, provider availability, or handover changes. The dashboard's Allocation view is the Owner's control plane; apply its saved worker cap, project share, exclusions, and succession ladder.
 - Act on a `[herdr-boss]` notice that concerns your current work.
 - Do not reply to the notice.
+- Act on a `Kit updated` notice: run `herdr-boss check agents`. If it reports an old block, reinstall the block with `herdr-boss kit block`.
 - Do not start work that the bulletin marks as avoided unless you use an allowed override.
 - Publish project status through Herdr Boss.
 - Request a dedicated persistent browser with `herdr-boss browser request <project-slug>` before browser work.
