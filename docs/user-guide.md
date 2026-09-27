@@ -207,6 +207,30 @@ Each project can have one persistent Chrome profile. Request it with `herdr-boss
 - A website or identity provider decides how long a login lasts. Sign in through the dashboard when a login is needed.
 - Herdr Boss never stops a browser that it did not start. Port 9222 is kept for an optional legacy shared browser.
 
+### Browser states
+
+Herdr Boss shows one state for each project browser:
+
+| State | Meaning |
+|---|---|
+| ready | Chrome runs with the project port and profile. `GET /json/version` on the port returns HTTP 200 with JSON within 2 seconds. |
+| not responding | Chrome runs with the project port and profile, and the port accepts connections. `GET /json/version` does not answer within 2 seconds. |
+| offline | No Chrome process runs with the project port and profile. |
+| port conflict | Another process uses the port. Herdr Boss does not touch it. |
+
+A "not responding" browser shows **Restart** and **Close browser** under **Manage**. It has no preview. The bulletin shows the same state for agents.
+
+To recover a "not responding" browser, use **Restart** or **Close browser** on the Browsers page. The CLI commands are `herdr-boss browser restart SLUG --headless|--visible` and `herdr-boss browser close SLUG`. A restart of a "not responding" browser does not reopen the current page.
+
+Close works as follows:
+
+1. Herdr Boss sends the CDP command `Browser.close` to a responsive browser.
+2. If the browser is not responding, or `Browser.close` fails, Herdr Boss sends SIGTERM to the Chrome main process. This process has both `--remote-debugging-port=PORT` and `--user-data-dir=PROFILE` and no `--type=` flag.
+3. Herdr Boss waits up to 8 seconds for the process to exit.
+4. If the process does not exit, the close fails with a "did not exit" error. Herdr Boss never sends SIGKILL. Inspect the process before you relaunch the browser.
+
+Herdr Boss never sends a signal to a process that does not match both the port and the profile.
+
 On the Browsers page, **Show preview** captures a screenshot of the selected tab. The preview shows a still image until the next capture. **Live** refreshes it at the interval that you select.
 
 Select the screenshot to open the large view. The large view shows the last capture as a still image. Turn on **Control browser** to refresh the large view at the selected interval and to send clicks and keys. Turn off **Control browser** to stop that refresh. **Live** continues to refresh while it is on. The status shows **Live** while a refresh repeats and **Captured** at other times. In **All tabs** mode, **Control browser** is not available.

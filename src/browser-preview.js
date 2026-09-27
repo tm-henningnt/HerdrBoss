@@ -5,6 +5,7 @@ async function verifiedSession(project) {
   if (!session) throw new Error('No project browser is registered.');
   const status = await browserStatus(session);
   if (!status.profileVerified) throw new Error('The project browser is offline or its debugging port belongs to another process.');
+  if (!status.responsive) throw new Error('The project browser is not responding. Restart or close it on the Browsers page.');
   return session;
 }
 

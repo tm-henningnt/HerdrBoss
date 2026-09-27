@@ -9,7 +9,7 @@ import { listProjects } from './projects.js';
 import { loadModels } from './kit/config.js';
 import { loadPolicy, clearExpiredOneOffGoals, deriveControl, migrateWorkspacePolicy, providerFor, pickSuccessor, laneStatus, leastOverProvider, machineLimits, unmeteredLane } from './control.js';
 import { recordQuotaSnapshot } from './usage.js';
-import { listBrowserSessions } from './browser-pool.js';
+import { listBrowserSessions, cdpResponds } from './browser-pool.js';
 import { listHandoffs, expireHandoff, expireMissingHandoffs, handoffNotices } from './handoff.js';
 import { inspectWorkerTransitions, inspectWorkerReports, applyWorkerFailureStatuses, resolveFreeUsageRun, activeFreeModelExhaustions, extendFreeModelExhaustion } from './worker-failures.js';
 
@@ -88,6 +88,7 @@ export class Engine extends EventEmitter {
       collectCwdProcesses,
       collectMissingWorktreeProcesses,
       collectWorktreeCounts,
+      cdpResponds,
       ...collectors,
     };
     this.handoffRunner = handoffRunner;
@@ -145,12 +146,17 @@ export class Engine extends EventEmitter {
         } catch (error) { errors.push(`missing worktree process check: ${error.message}`); }
       }
       if (quotas) { this.quotas = quotas; this.quotasAt = now; recordQuotaSnapshot(quotas, new Date(now).toISOString()); }
-      const managedBrowsers = Object.values(listBrowserSessions());
+      const browserSessions = Object.values(listBrowserSessions());
       const browsers = findBrowsers(procs, herdr?.panes || [], [
         { port: 9222, label: 'Protected legacy browser' },
         ...this.cfg.sharedBrowsers,
-        ...managedBrowsers.map((b) => ({ port: b.port, profile: b.profile, label: `Managed browser: ${b.project}` })),
+        ...browserSessions.map((b) => ({ port: b.port, profile: b.profile, label: `Managed browser: ${b.project}` })),
       ]);
+      // Probe only a browser whose process matches its port and profile. The probes run in parallel, so a hung browser delays the tick by at most 2 seconds.
+      const managedBrowsers = await Promise.all(browserSessions.map(async (b) => {
+        const matched = browsers.some((x) => x.kind === 'automation-chrome' && x.port === String(b.port) && x.profile === b.profile);
+        return { ...b, responsive: matched ? await this.collectors.cdpResponds(b.port) : false };
+      }));
 
       this.trackPaneStatus(herdr, now);
       const workerTransitions = herdr ? await inspectWorkerTransitions(
@@ -309,7 +315,7 @@ export class Engine extends EventEmitter {
       });
       for (const b of managedBrowsers) {
         const running = browsers.some((x) => x.kind === 'automation-chrome' && x.port === String(b.port) && x.profile === b.profile);
-        if (running && b.launchedAt && now - Date.parse(b.launchedAt) < 86400000) {
+        if (running && b.responsive && b.launchedAt && now - Date.parse(b.launchedAt) < 86400000) {
           const p = control.projects[b.project];
           if (p?.workspace) evaluation.alerts.push({
             // One notice per port and mode, so a restart in the same mode does not repeat it.
@@ -348,7 +354,7 @@ export class Engine extends EventEmitter {
         load: machine ? { oneMinute: machine.load[0], fiveMinute: machine.load[1], cpus: machine.cpus, limit: machineLimits(snap.machine, policy, now).loadLimit } : null,
         machine: snap.machine?.limits || null,
         notes: evaluation.advice,
-        browsers: managedBrowsers.map((b) => ({ project: b.project, port: b.port, profile: b.profile, headless: !!b.headless, windowSize: b.windowSize || { width: 1280, height: 800 }, ready: browsers.some((x) => x.kind === 'automation-chrome' && x.port === String(b.port) && x.profile === b.profile) })),
+        browsers: managedBrowsers.map((b) => ({ project: b.project, port: b.port, profile: b.profile, headless: !!b.headless, windowSize: b.windowSize || { width: 1280, height: 800 }, ready: browsers.some((x) => x.kind === 'automation-chrome' && x.port === String(b.port) && x.profile === b.profile), responsive: b.responsive })),
         policy,
         control: { runningWorkers: control.runningWorkers, maxWorkers: control.maxWorkers, projects: control.projects, workspaces: control.workspaces },
       });
