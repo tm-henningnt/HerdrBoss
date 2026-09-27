@@ -199,6 +199,7 @@ h2 .sub { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(
 
 /* Project page */
 .phead { display: grid; gap: 6px; }
+.phead .owner-goal { min-width: 0; overflow-wrap: anywhere; }
 .phead h1 { margin: 0; font-size: 26px; letter-spacing: -0.02em; }
 .phead p { margin: 0; color: var(--muted); max-width: 80ch; }
 .phases { display: flex; flex-wrap: wrap; gap: 0; list-style: none; padding: 0; margin: 4px 0 0; }
