@@ -15,9 +15,12 @@ Keep the current facts that every HerdrBoss orchestrator needs at start and resu
 
 - 2026-09-27: The HerdrBoss orchestrator maintains the Herdr Boss kit, its skills, and its templates, and edits them directly. Other orchestrators send kit change requests to the Boss, which decides whether to relay them. Source: Owner, in pane wB:p28.
 
+- 2026-09-27: The Future group (O2 Messaging, O3 Look and phone, O4 Owner mailbox) is open for work. The HerdrBoss orchestrator decides the order. Source: Owner, through the Boss.
+
 ## Holds and freezes
 
-- 2026-09-27: Do not start the tasks in the Future group (O2, O3, O4) before the current plan is complete. Lifted by: the Owner or the Boss.
+None.
+
 
 ## Standing rules
 
