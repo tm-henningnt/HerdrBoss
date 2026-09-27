@@ -70,8 +70,9 @@ To add the shared rules to a project, follow [orchestrator-instructions.md](orch
 
 | Condition | Action |
 |---|---|
-| A quota window is at 98% or more | Critical notice. The bulletin tells orchestrators to avoid that kind. |
-| A quota window is at 90% or more | Warning notice. |
+| A quota window is at 98% or more | Critical notice in the bulletin only. The bulletin tells orchestrators to avoid that kind. |
+| A quota window is at 90% or more | Warning notice in the bulletin only. |
+| A quota window that had a warning resets below 90% | `Quota restriction cleared` notice in the bulletin only. |
 | A live quota window is at 100% or more | The provider lane is exhausted until the latest reset among its exhausted windows. `worker start` refuses it unless you use `--force`. |
 | A quota runs out before its reset at the current pace, or its use is above the goal-adjusted pace | The provider lane is "ahead of pace". `worker start` refuses it. |
 | Free memory is below 15% | Warning notice. |
@@ -84,6 +85,8 @@ To add the shared rules to a project, follow [orchestrator-instructions.md](orch
 | An `orch` pane stays `idle` or `done` for the configured idle minutes while its published status has an actionable task | Notice that project with the task ID and title. |
 | The service starts, and the checked-out branch has new commits that change `kit/`, `src/kit/`, or `docs/orchestrator-instructions.md` | One `Kit updated` notice to each project orchestrator, with up to 10 commit subjects, newest first. Do not notify the Boss workspace. |
 | A worker is working, first appears idle or done, or changes into either state | Herdr Boss reads only the last 8 visible pane lines. A known provider error marks the worker failed and sends the orchestrator its name, pane ID, and fixed error label. |
+| A worker writes `.worker/report.json` or `.worker/<name>/report.json` after its pane first appears | One notice per report file path. A rewrite of the same file sends no new notice. |
+| A managed project browser starts and responds | `browser is ready` notice in the bulletin only. |
 
 The failure labels are `API Error`, `401`, `429`, `Connection lost`, `usage limit`, `rate limit`, `overloaded`, and `Free usage exceeded`. Matching ignores letter case and ignores each line whose trimmed text starts with `Tip:`. The matcher requires error forms for `401` (`401 Unauthorized`, `HTTP 401`, or `status 401`) and `usage limit` (`usage limit reached`, `usage limit exceeded`, or `hit your usage limit`). Herdr Boss stores and sends only the matched label and a parsed retry time. It does not store or forward pane output. Herdr Boss reads a working pane on every engine tick, so a failure is found while the worker still works. A matched worker shows the failed status in the snapshot even when Herdr reports it working. The engine then does not count it as running, so its slot becomes free. A failure found in a working pane clears when a later read shows no known failure. A failure found on an idle or done pane clears when that pane starts working and a later read shows no known failure. Any failed status clears when a different worker uses the pane. A later failure creates a new notice. A valid free-usage retry time exhausts the matching unmetered model until that time. The unmetered lane lists it separately from available models. A `Free usage exceeded` failure of an `opencode` worker with an unmetered model also exhausts the whole `opencode` free lane. This closes every unmetered model of the `opencode` harness. The lane uses the parsed retry time. Without a parsed retry time, the lane closes for 1 hour after the failure, and the lane shows that the reset time is unknown. A later absolute retry time in the same pane extends the exhaustion to that time. Herdr Boss measures a relative retry time from the first observation of the failure.
 
@@ -91,9 +94,17 @@ An idle-orchestrator nudge reads the published project status file. Herdr Boss s
 
 A task is actionable when its status is `todo`, `doing`, or `review` and every ID in its `blockedBy` list is `done` in the same project. An unknown blocker stays unresolved. A task with status `blocked` is never actionable. Herdr Boss picks one actionable task: current frontier first, then a task without a frontier value, then next frontier. Status-file order decides a tie.
 
+A task in a group with `"held": true` is not actionable. The nudge then names the next actionable task outside the held group, or sends no notice.
+
 The notice names the task ID and title. Resume an idle or done worker on that task, or start suitable work yourself. The notice uses one key per project and task, so the normal notice cooldown limits repeats. A different next task gets a new key and can prompt again.
 
-A notice is a prompt to an `orch` pane. Herdr Boss normally sends it only when that agent is `idle` or `done`, and no more than the configured cooldown per alert and pane. It sends it sooner only when the severity increases. Worker failure notices send immediately, including when the orchestrator is `working`. A notice for all orchestrators goes only to projects with a worker that is `working` or `blocked`.
+A notice is a prompt to an `orch` pane. Herdr Boss normally sends it only when that agent is `idle` or `done`, and no more than the configured cooldown per alert and pane. It sends it sooner only when the severity increases. An immediate notice with severity `warn` or `critical` also goes to a `working` orchestrator. Worker failure notices are of this type. An immediate `info` notice, for example a worker report notice, waits until the orchestrator is `idle` or `done`. A notice for all orchestrators goes only to projects with a worker that is `working` or `blocked`.
+
+Some notices are in the bulletin only and are never sent as a prompt. These are the quota notices at 90% and 98%, the `Quota restriction cleared` notice, and the `browser is ready` notice. The alert source marks each of them with `prompt: false`. Worker failure, blocked-worker, kit, handover, disk, and machine-limit notices are sent as prompts.
+
+A pane gets at most one prompt with `info` notices in 60 minutes. Other `info` notices for that pane wait in that time. The next allowed prompt sends all waiting `info` notices together, one line each. It shows at most 8 of these lines, then one `and N more` line. The bulletin lists all notices. The hourly limit does not apply to `warn` and `critical` notices. A `warn` or `critical` prompt inside the hour does not include the waiting `info` notices.
+
+Herdr does not show a draft or an open dialog in a pane. Herdr Boss does not detect them. An agent that waits for input has the status `blocked`, and Herdr Boss sends it no prompt except an immediate `warn` or `critical` notice.
 
 The kit notice goes to every project orchestrator, also when the project has no active workers. The Boss workspace does not get it. When the engine starts, it reads Git once in the directory that the service runs from. It runs no timers and no model calls. It stores the last notified commit as `kitNotice` in `memory.json`. On the first start, it stores `HEAD` and sends nothing. When Git fails, or the stored commit is not an ancestor of `HEAD`, it stores `HEAD`, sends nothing, and logs one `kit` event. Each orchestrator gets the notice once, when its pane is `idle` or `done`. The notice stays pending for 7 days. The read-only preview does not read Git and does not send or store the notice. When you get a kit notice, run `herdr-boss check agents`. If it reports an old block, reinstall the block with `herdr-boss kit block`. You get a desktop notification once for each warning.
 

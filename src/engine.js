@@ -39,8 +39,30 @@ export function alertPromptDue(alert, record, now, cooldown) {
   return !alert.key.startsWith('machine:disk:') && !alert.once && now - record.at > cooldown;
 }
 
+// An immediate notice of warn or higher reaches a working orchestrator. Other notices wait until it is idle or done.
 export function orchestratorCanReceiveNotice(orch, alerts) {
-  return orch.status === 'idle' || orch.status === 'done' || alerts.some((alert) => alert.immediate);
+  return orch.status === 'idle' || orch.status === 'done' || alerts.some(skipsIdleGate);
+}
+
+const skipsIdleGate = (alert) => !!alert.immediate && SEV[alert.severity] >= SEV.warn;
+
+// A pane gets at most one prompt with info notices in this interval.
+export const INFO_PROMPT_INTERVAL_MS = 60 * 60 * 1000;
+const INFO_PROMPT_LINES = 8;
+
+// Bulletin-only alert sources: they set prompt: false, so deliver sends no pane prompt for them.
+export function quotaRecoveredAlert(id, recovery) {
+  return { key: `quota:recovered:${id}:${recovery.resetsAt}`, severity: 'info', scope: 'all', prompt: false,
+    title: 'Quota restriction cleared', text: recovery.text };
+}
+
+export function browserReadyAlert(b, workspace) {
+  return {
+    // One notice per port and mode, so a restart in the same mode does not repeat it.
+    key: `browser:managed-ready:${b.project}:${b.port}:${b.headless ? 'headless' : 'visible'}`, severity: 'info', once: true, scope: workspace, prompt: false,
+    title: `${b.project} browser is ready`,
+    text: `Browser for ${b.project} is ready (${b.headless ? 'headless' : 'visible'}) on port ${b.port}. Use herdr-boss browser tabs ${b.project} to find a page, then herdr-boss browser screenshot ${b.project} --tab <id> for a private JPEG. Browser service commands are in the Herdr Boss kit.`,
+  };
 }
 
 export function pruneInactiveDiskPromptRecords(records, activeAlerts) {
@@ -331,8 +353,7 @@ export class Engine extends EventEmitter {
         const [provider, window] = id.split(':');
         const current = snap.quotas.find((q) => q.provider === provider && !q.error)?.windows?.find((w) => w.key === window);
         if (!current || current.usedPercent >= this.cfg.quota.warnPercent || Math.abs(Date.parse(current.resetsAt) - Date.parse(recovery.resetsAt)) >= 3600 * 1000) continue;
-        evaluation.alerts.push({ key: `quota:recovered:${id}:${recovery.resetsAt}`, severity: 'info', scope: 'all',
-          title: 'Quota restriction cleared', text: recovery.text });
+        evaluation.alerts.push(quotaRecoveredAlert(id, recovery));
       }
       for (const h of handoffCandidates(control).filter((candidate) => candidate.window)) {
         evaluation.alerts.push({
@@ -340,7 +361,7 @@ export class Engine extends EventEmitter {
           severity: h.window.usedPercent >= 98 ? 'critical' : 'warn',
           // The Boss's own handover goes to the Owner, not to the Boss pane itself.
           scope: h.boss || (herdr?.panes || []).some((x) => x.id === h.pane && x.label === 'boss') ? 'user' : h.workspace,
-          suppressPrompt: h.window.usedPercent >= 98,
+          ...(h.window.usedPercent >= 98 ? { prompt: false } : {}),
           title: `Prepare ${h.label || h.project} orchestrator handover`,
           text: h.target
             ? `${h.provider} is at ${h.window.usedPercent}% in its ${h.window.label} window. Prepare a ${h.target.kind} (${h.target.model}${h.target.effort ? `, ${h.target.effort}` : ''}) successor before the orchestrator runs out. Use herdr-boss handoff plan ${h.pane} --to ${h.target.kind} --model ${h.target.model}${h.target.effort ? ` --effort ${h.target.effort}` : ''}, then handoff prepare after review. Keep the current orchestrator until the successor is ready.`
@@ -378,12 +399,7 @@ export class Engine extends EventEmitter {
         const running = browsers.some((x) => x.kind === 'automation-chrome' && x.port === String(b.port) && x.profile === b.profile);
         if (running && b.responsive && b.launchedAt && now - Date.parse(b.launchedAt) < 86400000) {
           const p = control.projects[b.project];
-          if (p?.workspace) evaluation.alerts.push({
-            // One notice per port and mode, so a restart in the same mode does not repeat it.
-            key: `browser:managed-ready:${b.project}:${b.port}:${b.headless ? 'headless' : 'visible'}`, severity: 'info', once: true, scope: p.workspace,
-            title: `${b.project} browser is ready`,
-            text: `Browser for ${b.project} is ready (${b.headless ? 'headless' : 'visible'}) on port ${b.port}. Use herdr-boss browser tabs ${b.project} to find a page, then herdr-boss browser screenshot ${b.project} --tab <id> for a private JPEG. Browser service commands are in the Herdr Boss kit.`,
-          });
+          if (p?.workspace) evaluation.alerts.push(browserReadyAlert(b, p.workspace));
         }
         if (!b.launchedAt || now - Date.parse(b.launchedAt) < 120000) continue;
         if (running) continue;
@@ -763,7 +779,7 @@ export class Engine extends EventEmitter {
       const perPane = new Map();
       const broadcast = broadcastTargets(orchs, herdr?.panes);
       for (const a of alerts) {
-        if (a.suppressPrompt || a.scope === 'user') continue;
+        if (a.prompt === false || a.scope === 'user') continue;
         // A skipped broadcast stays unsent, so it reaches the orchestrator when its workers become active.
         let targets = a.scope === 'all' ? broadcast : orchs.filter((o) => o.workspace === a.scope);
         // A kit notice goes to every project orchestrator, also one without active workers.
@@ -780,17 +796,28 @@ export class Engine extends EventEmitter {
           perPane.get(o.id).list.push(a);
         }
       }
-      for (const { o, list } of perPane.values()) {
-        if (!orchestratorCanReceiveNotice(o, list)) continue; // retry next tick
-        list.sort((x, y) => SEV[y.severity] - SEV[x.severity]);
+      this.memory.infoPrompts ||= {};
+      for (const { o, list: due } of perPane.values()) {
+        // A notice that cannot go out now stays unsent, so it is due again at the next tick.
+        if (!orchestratorCanReceiveNotice(o, due)) continue;
+        const settled = o.status === 'idle' || o.status === 'done';
+        const urgent = due.filter((a) => SEV[a.severity] >= SEV.warn && (settled || skipsIdleGate(a)));
+        const infoAllowed = settled && now - (this.memory.infoPrompts[o.id] || 0) >= INFO_PROMPT_INTERVAL_MS;
+        const info = infoAllowed ? due.filter((a) => SEV[a.severity] < SEV.warn) : [];
+        if (!urgent.length && !info.length) continue;
+        urgent.sort((x, y) => SEV[y.severity] - SEV[x.severity]);
+        const list = [...urgent, ...info];
         const text = [
           '[herdr-boss] Resource notice. Act on it if it concerns your work. You do not need to reply to me.',
-          ...list.map((a) => `- ${a.text}`),
+          ...urgent.map((a) => `- ${a.text}`),
+          ...info.slice(0, INFO_PROMPT_LINES).map((a) => `- ${a.text}`),
+          ...(info.length > INFO_PROMPT_LINES ? [`- and ${info.length - INFO_PROMPT_LINES} more`] : []),
           `Current rules: ${path.join(DATA_DIR, 'bulletin.md')}. Dashboard: ${dashboardUrl(this.cfg)}`,
         ].join('\n');
         try {
           await this.herdrRunner('herdr', ['agent', 'prompt', o.id, text]);
           for (const a of list) this.memory.pushes[`${a.key}@${o.id}`] = { at: now, severity: a.severity };
+          if (info.length) this.memory.infoPrompts[o.id] = now;
           this.log('push', `Sent ${list.length} notice(s) to ${o.id} (${o.workspace})`, { pane: o.id, titles: list.map((a) => a.title) });
         } catch (e) {
           this.log('error', `Prompt to ${o.id} failed: ${(e.stderr || e.message).slice(0, 200)}`);
@@ -803,6 +830,7 @@ export class Engine extends EventEmitter {
     this.memory.pushes = pruneInactiveDiskPromptRecords(this.memory.pushes, active);
     for (const [k, v] of Object.entries(this.memory.pushes)) if (!active.has(k.split('@')[0]) && now - v.at > week) delete this.memory.pushes[k];
     for (const [k, at] of Object.entries(this.memory.notified)) if (!active.has(k) && now - at > week) delete this.memory.notified[k];
+    for (const [pane, at] of Object.entries(this.memory.infoPrompts || {})) if (now - at > INFO_PROMPT_INTERVAL_MS) delete this.memory.infoPrompts[pane];
     // Allow a cleared machine alert to notify again when it returns.
     for (const k of Object.keys(this.memory.notified)) if (k.startsWith('machine:') && !active.has(k)) delete this.memory.notified[k];
   }

@@ -627,8 +627,9 @@ test('disk prompts send on level transitions and recovery, but not after same-le
 });
 
 test('worker failure notices can reach a working orchestrator immediately', () => {
-  assert.equal(orchestratorCanReceiveNotice({ status: 'working' }, [{ immediate: true }]), true);
-  assert.equal(orchestratorCanReceiveNotice({ status: 'working' }, [{ immediate: false }]), false);
+  assert.equal(orchestratorCanReceiveNotice({ status: 'working' }, [{ immediate: true, severity: 'warn' }]), true);
+  assert.equal(orchestratorCanReceiveNotice({ status: 'working' }, [{ immediate: true, severity: 'info' }]), false);
+  assert.equal(orchestratorCanReceiveNotice({ status: 'working' }, [{ immediate: false, severity: 'warn' }]), false);
   assert.equal(alertPromptDue({ immediate: true }, null, 1000, 6000), true);
 });
 

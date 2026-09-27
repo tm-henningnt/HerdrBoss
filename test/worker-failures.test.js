@@ -215,8 +215,9 @@ test('report notices use first-seen metadata for both paths and ignore orchestra
   files.set('/work/a/.worker/report.json', { isFile: true, mtimeMs: 201 });
   const edited = inspectWorkerReports(panes, changedStatus.observed, 202, stat);
   assert.equal(edited.notices.length, 2);
-  assert.ok(edited.notices.some((notice) => notice.key.endsWith(':201')
+  assert.ok(edited.notices.some((notice) => notice.key === 'workers:report:/work/a/.worker/report.json'
     && notice.text === 'Worker alpha in pane ws:p1 wrote its report: /work/a/.worker/report.json'));
+  assert.deepEqual(edited.notices.map((notice) => notice.key), first.notices.map((notice) => notice.key), 'an edited report keeps its key');
 });
 
 test('report inspection accepts metadata only and ignores non-files and stale reports', async () => {
