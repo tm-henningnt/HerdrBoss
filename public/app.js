@@ -459,8 +459,8 @@ function handoffBlock(s, projectSlug = null) {
       return `<article class="handoff-item panel"><div class="handoff-head"><div><b>${esc(h.label || s.control.projects[h.project]?.label || h.project)}</b><p>${sourceDescription}</p></div><span class="tag">${h.window ? 'Handover needed' : 'Manual handover'}</span></div>
         <p>${handoffDescription} ${h.defaultMode === 'fresh' ? '' : 'The current pane remains in charge until activation.'}</p>
         <div class="handoff-controls"><label>Successor<select data-handoff-target="${esc(h.pane)}">${eligible.map(([kind]) => `<option value="${esc(kind)}" ${kind === target ? 'selected' : ''}>${esc(kind)}</option>`).join('')}</select></label><label>Model<select data-handoff-model="${esc(h.pane)}">${availableModels.map((name) => `<option value="${esc(name)}" ${name === model ? 'selected' : ''}>${esc(name)}</option>`).join('')}</select></label>${efforts.length ? `<label>Effort<select data-handoff-effort="${esc(h.pane)}">${efforts.map((name) => `<option value="${esc(name)}" ${name === effort ? 'selected' : ''}>${esc(name)}</option>`).join('')}</select></label>` : ''}<label>Start from<select data-handoff-mode="${esc(h.pane)}">${modeOptions}</select></label></div>
-        <div class="action-row"><button type="button" data-handoff-plan="${esc(h.pane)}" ${!eligible.length || handoffBusy.has(h.pane) ? 'disabled' : ''}>Plan handover</button>${plan && (mode === 'fresh' || plan.migration?.available) ? `<button type="button" data-handoff-prepare="${esc(h.pane)}" ${handoffBusy.has(h.pane) ? 'disabled' : ''}>Prepare successor</button>` : ''}<span class="inline-feedback" role="status">${esc(handoffMessages[h.pane] || '')}</span></div>
-        ${plan ? `<div class="plan-result">${plan.mode === 'fresh' ? 'Fresh bootstrap: the successor will read project files and the source pane.' : plan.migration?.available ? `Migration available · ${plan.migration.records ?? '?'} records · ${plan.migration.warnings ?? 0} warnings.` : `Migration unavailable: ${esc(plan.migration?.error || 'unknown reason')}. Choose fresh bootstrap and plan again.`}</div>` : ''}
+        <div class="action-row"><button type="button" data-handoff-plan="${esc(h.pane)}" ${!eligible.length || handoffBusy.has(h.pane) ? 'disabled' : ''}>Plan handover</button>${plan ? `<button type="button" data-handoff-prepare="${esc(h.pane)}" ${handoffBusy.has(h.pane) ? 'disabled' : ''}>Prepare successor</button>` : ''}<span class="inline-feedback" role="status">${esc(handoffMessages[h.pane] || '')}</span></div>
+        ${plan ? `<div class="plan-result">${plan.mode === 'fresh' ? 'Fresh bootstrap: the successor will read project files and the source pane.' : plan.migration?.available ? `Migration available · ${plan.migration.records ?? '?'} records · ${plan.migration.warnings ?? 0} warnings.` : `Migration unavailable: ${esc(plan.migration?.error || 'unknown reason')}. Prepare will use fresh mode.`}</div>` : ''}
       </article>`;
     }),
   ];
@@ -1227,7 +1227,7 @@ const HELP = {
     <h3>Dependencies</h3><p>Columns show the order. An arrow runs from a blocker to the work that waits on it. Current work has an orange border; next work has a dashed border. Select a box to open the issue. <b>Show completed work</b> adds finished tasks.</p>
     <h3>Groups and specs</h3><p>Progress per release or phase, and the work under each spec.</p>
     <h3>Tasks and All work</h3><p>The board groups tasks by status; Done shows the latest 10 until you show completed work. The list sorts and filters all work.</p>
-    <h3>Project continuity</h3><p>Plan a handover to another harness. Prepare starts a successor that only reads and reports. Inspect its answer, then confirm activation.</p>
+    <h3>Project continuity</h3><p>Plan a handover to another harness. Prepare copies the published Owner goal to the successor. If migration is unavailable or fails, Prepare starts fresh and records the reason. Fresh preparation captures at most 200 recent source-pane lines and 20,000 characters. It redacts likely credentials and marks the snapshot as historical context. If recent text is unavailable, it tries the visible pane; if both reads fail, it marks context unavailable. The successor only reads and reports until activation. Inspect its answer, then confirm activation.</p>
     <h3>Phone</h3><p>On a phone, the long sections start collapsed. Select a section title to open it. The dashboard remembers each open section for this project during the session. Overall progress and the frontier stay open.</p>
     <p>The data comes from the project's status file. When a section is missing, the orchestrator has not published those fields.</p>`],
   allocation: ['Allocation', `
@@ -1756,7 +1756,7 @@ async function runHandoffAction(action, key) {
       if (action === 'plan') {
         const plan = await postJson('/api/handoffs/plan', body);
         handoffPlans[key] = plan;
-        handoffMessages[key] = plan.migration && !plan.migration.available ? 'Migration unavailable; choose Fresh bootstrap.' : 'Plan ready for review.';
+        handoffMessages[key] = plan.migration && !plan.migration.available ? 'Migration unavailable; Prepare will use fresh mode.' : 'Plan ready for review.';
       } else {
         if (!handoffPlans[key]) throw new Error('Plan this handover first.');
         const prepared = await postJson('/api/handoffs/prepare', body);

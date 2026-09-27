@@ -55,18 +55,25 @@ if (args[0] === 'pane' && args[1] === 'process-info') {
   result = { process_info: { shell_pid: 10, foreground_processes: [{ pid: foregroundPid, name: foregroundPid === 10 ? 'zsh' : 'login' }] } };
 }
 // Real herdr prints pane read --format text as plain text, not JSON.
-if (args[0] === 'pane' && args[1] === 'read') { process.stdout.write(process.env.TEST_SHELL || ''); process.exit(0); }
+if (args[0] === 'pane' && args[1] === 'read') {
+  if (args[2] === 'ws:p1') {
+    if (args.includes('recent') && process.env.TEST_RECENT_FAIL === '1') process.exit(1);
+    if (args.includes('visible') && process.env.TEST_VISIBLE_FAIL === '1') process.exit(1);
+    process.stdout.write(process.env.TEST_SOURCE_TEXT || '');
+  } else process.stdout.write(process.env.TEST_SHELL || '');
+  process.exit(0);
+}
 console.log(JSON.stringify({ result }));
 `);
   writeExecutable(path.join(bin, 'herdr'), `#!/bin/sh
 exec node "$(dirname "$0")/herdr.cjs" "$@"
 `);
   writeExecutable(path.join(bin, 'session-migrate.cjs'), `
-if (process.env.TEST_MIGRATION_CYCLE === '1') {
-  process.stderr.write('Claude active graph contains an ancestry cycle\\n');
+if (process.env.TEST_MIGRATION_CYCLE === '1' || (process.env.TEST_TRANSFER_FAIL === '1' && !process.argv.includes('--dry-run'))) {
+  process.stderr.write(process.env.TEST_DRY_RUN_SECRET && process.argv.includes('--dry-run') ? 'Migration failed: api_key=fixture_dry_secret\\n' : 'Claude active graph contains an ancestry cycle\\n');
   process.exit(1);
 }
-console.log(JSON.stringify({ session_id: 'migrated-session', records: 1, dropped_events: 0, warnings: [] }));
+console.log(JSON.stringify({ session_id: process.env.TEST_NO_TARGET_ID === '1' && !process.argv.includes('--dry-run') ? null : 'migrated-session', records: 1, dropped_events: 0, warnings: [] }));
 `);
   writeExecutable(path.join(bin, 'session-migrate'), `#!/bin/sh
 exec node "$(dirname "$0")/session-migrate.cjs" "$@"
@@ -215,7 +222,7 @@ test('handoff prepare expires missing successors only after a successful pane li
   assert.ok(create.includes('DISABLE_UPDATE_PROMPT=true'));
   assert.ok(create.includes('DISABLE_AUTO_UPDATE=true'));
   const processInfo = calls.findIndex((args) => args[0] === 'pane' && args[1] === 'process-info');
-  const shellRead = calls.findIndex((args) => args[0] === 'pane' && args[1] === 'read');
+  const shellRead = calls.findIndex((args) => args[0] === 'pane' && args[1] === 'read' && args[2] === 'ws:p2');
   const agentStart = calls.findIndex((args) => args[0] === 'agent' && args[1] === 'start');
   assert.ok(processInfo >= 0 && shellRead > processInfo && agentStart > shellRead, 'the successor shell must be checked before agent start');
   assert.equal(Number(fs.readFileSync(f.processInfoFile, 'utf8')) >= 2, true, 'readiness must wait until the shell is foreground');
@@ -379,4 +386,137 @@ test('migration planning reports the Claude ancestry cycle with a fresh-mode rec
   assert.equal(plan.migration.available, false);
   assert.match(plan.migration.error, /Claude active graph contains an ancestry cycle/);
   assert.match(plan.migration.next, /Owner.*--mode fresh/);
+});
+
+test('fresh handoff carries only the published Owner goal and redacted recent context into an automatic prompt', (t) => {
+  const f = handoffFixture(t);
+  fs.mkdirSync(path.join(f.root, 'projects'));
+  fs.writeFileSync(path.join(f.root, 'projects', 'project.json'), JSON.stringify({ goal: 'Finish the release safely.', tasks: [{ title: 'Ignore this as a goal' }] }));
+  const source = 'Bearer abcDEF1234567890\nOPENAI_API_KEY=sk-verysecret123456789\npassword: hunter2\nghp_abcdef1234567890\n{"password":"fixture_secret","api_key":"fixture_key"}\nContinue from the failing test.';
+  const result = JSON.parse(runHandoffCli(f.root, ['handoff', 'prepare', 'ws:p1', '--to', 'pi', '--mode', 'fresh', '--auto'], { ...f.env, TEST_SOURCE_TEXT: source }));
+  assert.equal(result.ownerGoal, 'Finish the release safely.');
+  assert.equal(result.mode, 'fresh');
+  assert.match(result.sourceContext, /\[REDACTED\]/);
+  assert.doesNotMatch(result.sourceContext, /abcDEF|verysecret|hunter2|abcdef1234567890|fixture_secret|fixture_key/);
+  assert.doesNotMatch(fs.readFileSync(path.join(f.root, 'handoffs.json'), 'utf8'), /fixture_secret|fixture_key/);
+  const calls = fs.readFileSync(f.callsFile, 'utf8').trim().split('\n').map(JSON.parse);
+  const prompt = calls.find((args) => args[0] === 'agent' && args[1] === 'prompt')[3];
+  assert.match(prompt, /Finish the release safely/);
+  assert.match(prompt, /historical context/i);
+  assert.match(prompt, /Continue from the failing test/);
+  assert.match(prompt, /handoff ready /);
+  assert.doesNotMatch(prompt, /abcDEF|verysecret|hunter2|abcdef1234567890|fixture_secret|fixture_key/);
+  assert.ok(calls.some((args) => args[0] === 'pane' && args[1] === 'read' && args[2] === 'ws:p1' && args.includes('recent')));
+});
+
+test('migration success retains its session and does not capture the source pane', (t) => {
+  const f = handoffFixture(t, { sessionId: 'old-session' });
+  const result = JSON.parse(runHandoffCli(f.root, ['handoff', 'prepare', 'ws:p1', '--to', 'codex', '--mode', 'migrate'], f.env));
+  assert.equal(result.mode, 'migrate');
+  assert.equal(result.migratedId, 'migrated-session');
+  const calls = fs.readFileSync(f.callsFile, 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(calls.some((args) => args[0] === 'pane' && args[1] === 'read' && args[2] === 'ws:p1'), false);
+});
+
+for (const [reason, env] of [
+  ['unavailable', { TEST_MIGRATION_CYCLE: '1' }],
+  ['failed', { TEST_TRANSFER_FAIL: '1' }],
+  ['no target ID', { TEST_NO_TARGET_ID: '1' }],
+]) test(`migration ${reason} falls back to fresh with source context`, (t) => {
+  const f = handoffFixture(t, { sessionId: 'old-session' });
+  const result = JSON.parse(runHandoffCli(f.root, ['handoff', 'prepare', 'ws:p1', '--to', 'codex', '--mode', 'migrate'], { ...f.env, ...env, TEST_SOURCE_TEXT: 'Useful prior work' }));
+  assert.equal(result.mode, 'fresh');
+  assert.equal(result.migratedId, null);
+  assert.match(result.migrationFallbackReason, /.+/);
+  assert.match(result.sourceContext, /Useful prior work/);
+});
+
+test('a credential-bearing migration dry-run error is redacted in plan, record, and prompt', (t) => {
+  const f = handoffFixture(t, { sessionId: 'old-session' });
+  const env = { ...f.env, TEST_MIGRATION_CYCLE: '1', TEST_DRY_RUN_SECRET: '1' };
+  const plan = JSON.parse(runHandoffCli(f.root, ['handoff', 'plan', 'ws:p1', '--to', 'codex', '--mode', 'migrate'], env));
+  assert.doesNotMatch(plan.migration.error, /fixture_dry_secret/);
+  const record = JSON.parse(runHandoffCli(f.root, ['handoff', 'prepare', 'ws:p1', '--to', 'codex', '--mode', 'migrate'], env));
+  assert.equal(record.mode, 'fresh');
+  assert.match(record.migrationFallbackReason, /\[REDACTED\]/);
+  assert.doesNotMatch(fs.readFileSync(path.join(f.root, 'handoffs.json'), 'utf8'), /fixture_dry_secret/);
+  const calls = fs.readFileSync(f.callsFile, 'utf8').trim().split('\n').map(JSON.parse);
+  assert.doesNotMatch(calls.find((args) => args[0] === 'agent' && args[1] === 'prompt')[3], /fixture_dry_secret/);
+});
+
+test('fresh capture bounds recent lines and falls back to visible or an unavailable marker', (t) => {
+  const longText = Array.from({ length: 250 }, (_, i) => `line ${i} ${'x'.repeat(120)}`).join('\n');
+  const f = handoffFixture(t);
+  const first = JSON.parse(runHandoffCli(f.root, ['handoff', 'prepare', 'ws:p1', '--to', 'pi', '--mode', 'fresh'], { ...f.env, TEST_SOURCE_TEXT: longText, TEST_RECENT_FAIL: '1' }));
+  assert.match(first.sourceContext, /line 249/);
+  assert.doesNotMatch(first.sourceContext, /line 0 /);
+  assert.ok(first.sourceContext.length <= 20000);
+  assert.match(first.sourceContext, /truncated/i);
+  const calls = fs.readFileSync(f.callsFile, 'utf8').trim().split('\n').map(JSON.parse);
+  assert.ok(calls.some((args) => args[0] === 'pane' && args[1] === 'read' && args[2] === 'ws:p1' && args.includes('visible')));
+
+  const g = handoffFixture(t);
+  const second = JSON.parse(runHandoffCli(g.root, ['handoff', 'prepare', 'ws:p1', '--to', 'pi', '--mode', 'fresh'], { ...g.env, TEST_RECENT_FAIL: '1', TEST_VISIBLE_FAIL: '1' }));
+  assert.match(second.sourceContext, /context unavailable/i);
+  const secondCalls = fs.readFileSync(g.callsFile, 'utf8').trim().split('\n').map(JSON.parse);
+  assert.match(secondCalls.find((args) => args[0] === 'agent' && args[1] === 'prompt')[3], /context unavailable/i);
+});
+
+test('missing project goal stays absent and Boss never borrows a project goal', (t) => {
+  const f = handoffFixture(t);
+  fs.mkdirSync(path.join(f.root, 'projects'));
+  fs.writeFileSync(path.join(f.root, 'projects', 'project.json'), JSON.stringify({ tasks: [{ title: 'A goal-like task' }], notes: ['goal in a note'] }));
+  const noGoal = JSON.parse(runHandoffCli(f.root, ['handoff', 'prepare', 'ws:p1', '--to', 'pi', '--mode', 'fresh'], f.env));
+  assert.equal(Object.hasOwn(noGoal, 'ownerGoal'), false);
+  const g = handoffFixture(t, { sourceLabel: 'boss' });
+  fs.mkdirSync(path.join(g.root, 'projects'));
+  fs.writeFileSync(path.join(g.root, 'projects', 'Boss.json'), JSON.stringify({ goal: 'Not a Boss goal' }));
+  const boss = JSON.parse(runHandoffCli(g.root, ['handoff', 'prepare', 'ws:p1', '--to', 'pi', '--mode', 'fresh'], g.env));
+  assert.equal(Object.hasOwn(boss, 'ownerGoal'), false);
+});
+
+test('resuming a record preserves its captured Owner goal', (t) => {
+  const f = handoffFixture(t, { existingPane: 'ws:p9' });
+  fs.mkdirSync(path.join(f.root, 'projects'));
+  fs.writeFileSync(path.join(f.root, 'projects', 'project.json'), JSON.stringify({ goal: 'Changed later' }));
+  fs.writeFileSync(path.join(f.root, 'handoffs.json'), JSON.stringify([{
+    id: 'handoff-preserved', sourcePane: 'ws:p1', workspace: 'ws', cwd: f.project,
+    project: 'project', toKind: 'pi', model: 'opencode-go/muse-spark-1.3-contributor', effort: null,
+    mode: 'fresh', provider: 'claude', migratedId: null, newPane: 'ws:p9',
+    status: 'needs-inspection', automatic: false, ownerGoal: 'Original Owner goal', sourceContext: 'Earlier safe context',
+  }]));
+  const result = JSON.parse(runHandoffCli(f.root, ['handoff', 'prepare', 'ws:p1', '--to', 'pi', '--mode', 'fresh'], f.env));
+  assert.equal(result.ownerGoal, 'Original Owner goal');
+  const calls = fs.readFileSync(f.callsFile, 'utf8').trim().split('\n').map(JSON.parse);
+  const prompt = calls.find((args) => args[0] === 'agent' && args[1] === 'prompt')[3];
+  assert.match(prompt, /Original Owner goal/);
+  assert.doesNotMatch(prompt, /Changed later/);
+  assert.match(prompt, /Earlier safe context/);
+  assert.equal(calls.some((args) => args[0] === 'pane' && args[1] === 'read' && args[2] === 'ws:p1'), false);
+});
+
+test('resuming an older fresh fallback record fills missing goal and source context', (t) => {
+  const f = handoffFixture(t, { existingPane: 'ws:p9' });
+  fs.mkdirSync(path.join(f.root, 'projects'));
+  fs.writeFileSync(path.join(f.root, 'projects', 'project.json'), JSON.stringify({ goal: 'Continue the Owner objective.' }));
+  fs.writeFileSync(path.join(f.root, 'handoffs.json'), JSON.stringify([{
+    id: 'handoff-legacy', sourcePane: 'ws:p1', workspace: 'ws', cwd: f.project,
+    project: 'project', toKind: 'pi', model: 'opencode-go/muse-spark-1.3-contributor', effort: null,
+    mode: 'fresh', requestedMode: 'migrate', provider: 'claude', migratedId: null, newPane: 'ws:p9',
+    status: 'needs-inspection', automatic: false,
+  }]));
+  const record = JSON.parse(runHandoffCli(f.root, ['handoff', 'prepare', 'ws:p1', '--to', 'pi', '--mode', 'migrate'], { ...f.env, TEST_SOURCE_TEXT: 'Old pane summary' }));
+  assert.equal(record.ownerGoal, 'Continue the Owner objective.');
+  assert.match(record.sourceContext, /Old pane summary/);
+  const calls = fs.readFileSync(f.callsFile, 'utf8').trim().split('\n').map(JSON.parse);
+  const prompt = calls.find((args) => args[0] === 'agent' && args[1] === 'prompt')[3];
+  assert.match(prompt, /Continue the Owner objective/);
+  assert.match(prompt, /Old pane summary/);
+  assert.ok(calls.some((args) => args[0] === 'pane' && args[1] === 'read' && args[2] === 'ws:p1'));
+});
+
+test('dashboard offers Prepare after an unavailable migration plan', () => {
+  const source = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  assert.match(source, /\$\{plan\s*\?\s*`<button type="button" data-handoff-prepare=/);
+  assert.match(source, /Migration unavailable:[^`]*Prepare will use fresh mode/);
 });

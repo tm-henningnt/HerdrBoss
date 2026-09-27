@@ -180,9 +180,11 @@ The screenshot command writes under `$TMPDIR` when it is set. Otherwise, it crea
 | `handoff ready ID` | Sent by an automatic successor when it is ready. |
 | `handoff list` | All handover records. |
 
-`--mode migrate` (the default) converts the session with `session-migrate`. When that is not possible, use `--mode fresh`; the successor starts from the project files and the source pane. `--force` allows a target provider near exhaustion.
+`--mode migrate` (the default) converts the session with `session-migrate`. If migration is unavailable or transfer fails, preparation uses fresh mode and records the reason. `--mode fresh` starts the successor without a migrated session. `--force` allows a target provider near exhaustion.
 
-`handoff plan` reports when Claude session migration is unavailable because the active graph has an ancestry cycle. Use the suggested `--mode fresh` command, or choose another safe fallback. Do not treat that result as a migrated session.
+`handoff plan` reports when Claude session migration is unavailable because the active graph has an ancestry cycle. `handoff prepare` then uses fresh mode automatically.
+
+Preparation copies the optional top-level `goal` from the latest published project status into `ownerGoal` in the handoff record and successor prompt. A Boss handoff has no project goal. Fresh preparation reads at most 200 recent lines and stores at most 20,000 characters of redacted source-pane text. If the recent read fails, it tries the visible pane. If both reads fail, it records that context is unavailable. The successor prompt marks the snapshot as historical context. The successor only reads and reports until activation.
 
 `handoff prepare` waits up to 90 seconds for the new pane's foreground shell and a prompt or a stable screen before it starts the agent. Ordinary `worker start` keeps its 20-second readiness wait. If agent start reports `agent_pane_busy`, handoff checks shell readiness again and retries once. It stops at an interactive question and tells you to answer it in a shell once, then retry `handoff prepare`. The new tab disables update prompts and automatic updates. Each active engine tick expires `preparing` or `needs-inspection` records only when a successful current pane list does not contain their successor pane. `handoff prepare` repeats this check before retrying. A failed pane list keeps those records active. Herdr Boss does not close a pane when it expires a record.
 
