@@ -314,6 +314,10 @@ herdr agent prompt <orch-pane> "WORKER REPORT <name>: <done|blocked|stopped>. Re
 - Use the returned port and profile for that project. Do not stop another project's browser.
 - Give browser workers the project slug and a tab ID. For simple screenshots, navigation, clicks, text, and keys, use [the project browser service](../../browser-service.md). Have the Owner enter credentials through the dashboard.
 - Use the dedicated browser for your project. Port 9222 is only for a legacy shared session when the Owner explicitly assigns it. Coordinate tabs within your project and avoid stopping a browser another worker is using.
+- For dashboard and web checks, use the project browser: `herdr-boss browser request <slug>`, then `browser tabs`, `browser tab new`, and `browser screenshot`.
+- Do not use `playwright-cli` with the default Google Chrome for checks. Its close leaves a 720 MB code-sign clone on the disk.
+- If a task needs `playwright-cli`, use `--browser=chromium`. It needs the Chromium build that `playwright-cli install-browser chrome-for-testing` installs. Only the Owner installs shared browsers.
+- Close Chrome with `herdr-boss browser close <slug>` or CDP `Browser.close`. Never send a signal to Chrome yourself.
 - When your harness quota threatens the orchestrator, run `herdr-boss handoff plan <your-pane> --to <kind>`.
 - Use `handoff prepare` to start a successor. Review its output before `handoff activate <id> --confirmed`.
 - Use `herdr-boss publish <slug> <file>` for a validated status file.

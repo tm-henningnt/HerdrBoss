@@ -4,6 +4,7 @@ import net from 'node:net';
 import { spawn as spawnProcess } from 'node:child_process';
 import { DATA_DIR } from './config.js';
 import { collectProcesses } from './collect.js';
+import { codeSignCloneDir, listCloneNames, readProcesses, removeCodeSignClone } from './clone-sweep.js';
 
 const FILE = path.join(DATA_DIR, 'browser-sessions.json');
 const PROFILE_ROOT = path.join(DATA_DIR, 'browser-profiles');
@@ -11,7 +12,8 @@ const SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const DEFAULT_SIZE = { width: 1280, height: 800 };
 const CDP_TIMEOUT_MS = 2000;
 
-// Tests replace the network, process table, signal, and launch functions through the options object.
+// Tests replace the network, process table, signal, launch, and code-sign clone functions through the options object.
+// A cloneDir of null turns off the clone record and the clone delete.
 function deps(options) {
   const o = options && typeof options === 'object' ? options : {};
   return {
@@ -19,6 +21,9 @@ function deps(options) {
     collectProcesses: o.collectProcesses || collectProcesses,
     kill: o.kill || ((pid, signal) => process.kill(pid, signal)),
     spawn: o.spawn || spawnProcess,
+    closeViaCdp: o.closeViaCdp || askBrowserToClose,
+    cloneDir: typeof o.cloneDir === 'function' ? o.cloneDir : Object.hasOwn(o, 'cloneDir') ? () => o.cloneDir : () => codeSignCloneDir(),
+    readProcesses: o.readProcesses || readProcesses,
   };
 }
 
@@ -115,6 +120,15 @@ export function setBrowserWindowSize(project, width, height) {
   return sessions[project];
 }
 
+function clearClone(project) {
+  const sessions = listBrowserSessions();
+  if (sessions[project]?.codeSignClone) {
+    sessions[project].codeSignClone = null;
+    save(sessions);
+  }
+  return { codeSignClone: null };
+}
+
 export async function closeBrowser(project, options = {}) {
   if (!SLUG.test(project)) throw new Error('project must be a slug.');
   const d = deps(options);
@@ -122,23 +136,30 @@ export async function closeBrowser(project, options = {}) {
   if (!session) throw new Error('No project browser is registered.');
   let status = await browserStatus(session, d);
   if (status.reachable && !status.profileVerified) throw new Error(`Port ${session.port} belongs to another process. It was not touched.`);
-  if (!status.processPresent && !status.reachable) return { ...status, closed: true };
+  if (!status.processPresent && !status.reachable) return { ...status, ...clearClone(project), closed: true };
   if (!status.profileVerified) throw new Error('Could not verify Chrome’s browser control endpoint. Close the browser manually; it was not touched.');
   let closeFailed = !status.responsive;
+  let signaled = false;
   if (!closeFailed) {
-    try { await askBrowserToClose(session, d.fetch); } catch { closeFailed = true; }
+    try { await d.closeViaCdp(session, d.fetch); } catch { closeFailed = true; }
   }
   if (closeFailed) {
     // Check the owner again just before the signal. Only a process with both the port flag and the profile path gets SIGTERM.
     const owner = browserOwner(await d.collectProcesses(), session);
     if (owner) {
-      try { d.kill(owner.pid, 'SIGTERM'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
+      try { d.kill(owner.pid, 'SIGTERM'); signaled = true; } catch (error) { if (error.code !== 'ESRCH') throw error; }
     }
   }
   for (let attempt = 0; attempt < 32; attempt++) {
     await new Promise((resolve) => setTimeout(resolve, 250));
     status = await browserStatus(session, d);
-    if (!status.processPresent && !status.reachable) return { ...status, closed: true };
+    if (!status.processPresent && !status.reachable) {
+      // Chrome deletes its clone at a CDP close. After a SIGTERM, Herdr Boss deletes the recorded clone.
+      if (signaled && session.codeSignClone) {
+        try { await removeCodeSignClone({ dir: d.cloneDir(), name: session.codeSignClone, processes: d.readProcesses }); } catch {}
+      }
+      return { ...status, ...clearClone(project), closed: true };
+    }
   }
   throw new Error('Chrome did not exit after its close command or SIGTERM. Inspect it before relaunching; it was not force-killed.');
 }
@@ -200,11 +221,15 @@ export async function requestBrowser(project, options = {}) {
   const profile = path.join(PROFILE_ROOT, project);
   fs.mkdirSync(profile, { recursive: true, mode: 0o700 });
   const windowSize = existing?.windowSize || DEFAULT_SIZE;
-  const session = { project, port, profile, headless: useHeadless, windowSize, pid: null, createdAt: existing?.createdAt || new Date().toISOString(), launchedAt: null };
+  const session = { project, port, profile, headless: useHeadless, windowSize, pid: null, codeSignClone: null, createdAt: existing?.createdAt || new Date().toISOString(), launchedAt: null };
   sessions[project] = session;
   save(sessions);
+  let cloneDir = null;
+  let clonesBefore = null;
   if (launch) {
     if (!fs.existsSync(chromePath)) throw new Error(`Chrome executable not found: ${chromePath}`);
+    cloneDir = d.cloneDir();
+    clonesBefore = listCloneNames(cloneDir);
     const child = d.spawn(chromePath, [
       `--remote-debugging-port=${port}`, '--remote-debugging-address=127.0.0.1',
       `--user-data-dir=${profile}`, `--window-size=${windowSize.width},${windowSize.height}`, '--no-first-run', '--no-default-browser-check',
@@ -217,5 +242,12 @@ export async function requestBrowser(project, options = {}) {
     save(sessions);
   }
   for (let attempt = 0; attempt < 12 && !(await portOpen(port)); attempt++) await new Promise((resolve) => setTimeout(resolve, 250));
+  if (launch) {
+    // Record the clone only when exactly one new clone folder appeared during this launch.
+    const clonesAfter = clonesBefore ? listCloneNames(cloneDir) : null;
+    const added = clonesAfter ? clonesAfter.filter((name) => !clonesBefore.includes(name)) : [];
+    session.codeSignClone = added.length === 1 ? added[0] : null;
+    save(sessions);
+  }
   return browserStatus(session, d);
 }

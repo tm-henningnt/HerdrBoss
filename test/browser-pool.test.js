@@ -174,7 +174,7 @@ test('restartBrowser skips the page restore for a hung browser, closes it, and l
   };
   try {
     const result = await pool.restartBrowser('hung-restart', true, {
-      collectProcesses: machine.collectProcesses, kill, spawn, chromePath: process.execPath,
+      collectProcesses: machine.collectProcesses, kill, spawn, chromePath: process.execPath, cloneDir: null,
     });
     assert.deepEqual(machine.kills, [[4101, 'SIGTERM']]);
     assert.equal(result.restoredPage, false);
@@ -186,4 +186,115 @@ test('restartBrowser skips the page restore for a hung browser, closes it, and l
     await hung.close().catch(() => {});
     if (relaunched) await (await relaunched).close();
   }
+});
+
+// A temporary clone folder and a process list without a Chrome main process. The real clone folder is never used.
+function cloneFixture(t) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-clone-dir-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const make = (name) => { fs.mkdirSync(path.join(dir, name, 'Google Chrome.app'), { recursive: true }); return path.join(dir, name); };
+  return { dir, make, readProcesses: async () => [{ pid: 1, startedAt: 0, comm: '/sbin/launchd' }] };
+}
+
+test('a launch records the one new code-sign clone in the session', async (t) => {
+  const clones = cloneFixture(t);
+  clones.make('code_sign_clone.before1');
+  const machine = { procs: new Map() };
+  let server = null;
+  const spawn = (chrome, args) => {
+    const port = Number(args.find((a) => a.startsWith('--remote-debugging-port=')).split('=')[1]);
+    const profile = args.find((a) => a.startsWith('--user-data-dir=')).split('=')[1];
+    machine.procs.set(4301, { pid: 4301, cmd: chromeCmd(port, profile) });
+    clones.make('code_sign_clone.launch1');
+    server = versionServer(port);
+    return { pid: 4301, on() {}, unref() {} };
+  };
+  try {
+    const status = await pool.requestBrowser('clone-launch', { headless: true, chromePath: process.execPath, spawn,
+      collectProcesses: async () => new Map(machine.procs), cloneDir: clones.dir });
+    assert.equal(status.codeSignClone, 'code_sign_clone.launch1');
+    assert.equal(pool.listBrowserSessions()['clone-launch'].codeSignClone, 'code_sign_clone.launch1');
+  } finally { if (server) await (await server).close(); }
+});
+
+test('a launch that sees no new clone or several new clones records null', async (t) => {
+  const clones = cloneFixture(t);
+  for (const [project, count] of [['clone-none', 0], ['clone-many', 2]]) {
+    const machine = { procs: new Map() };
+    let server = null;
+    const spawn = (chrome, args) => {
+      const port = Number(args.find((a) => a.startsWith('--remote-debugging-port=')).split('=')[1]);
+      const profile = args.find((a) => a.startsWith('--user-data-dir=')).split('=')[1];
+      machine.procs.set(4401, { pid: 4401, cmd: chromeCmd(port, profile) });
+      for (let i = 0; i < count; i++) clones.make(`code_sign_clone.${project.replace('-', '')}${i}`);
+      server = versionServer(port);
+      return { pid: 4401, on() {}, unref() {} };
+    };
+    try {
+      const status = await pool.requestBrowser(project, { headless: true, chromePath: process.execPath, spawn,
+        collectProcesses: async () => new Map(machine.procs), cloneDir: clones.dir });
+      assert.equal(status.codeSignClone, null, project);
+    } finally { if (server) await (await server).close(); }
+  }
+});
+
+test('a SIGTERM close deletes the recorded clone and clears it from the session', async (t) => {
+  const clones = cloneFixture(t);
+  const hung = await hungServer();
+  const session = register('clone-sigterm', hung.port);
+  const folder = clones.make('code_sign_clone.sigterm');
+  const other = clones.make('code_sign_clone.others');
+  const sessions = pool.listBrowserSessions();
+  sessions['clone-sigterm'].codeSignClone = 'code_sign_clone.sigterm';
+  fs.writeFileSync(path.join(dataDir, 'browser-sessions.json'), JSON.stringify(sessions));
+  const machine = fakeMachine(session);
+  const kill = (pid, signal) => { machine.kills.push([pid, signal]); machine.procs.delete(4101); machine.procs.delete(4102); hung.close(); };
+  try {
+    const result = await pool.closeBrowser('clone-sigterm', { collectProcesses: machine.collectProcesses, kill, cloneDir: clones.dir, readProcesses: clones.readProcesses });
+    assert.equal(result.closed, true);
+    assert.deepEqual(machine.kills, [[4101, 'SIGTERM']]);
+    assert.equal(fs.existsSync(folder), false);
+    assert.equal(fs.existsSync(other), true);
+    assert.equal(pool.listBrowserSessions()['clone-sigterm'].codeSignClone, null);
+  } finally { await hung.close().catch(() => {}); }
+});
+
+test('a SIGTERM close keeps the recorded clone when a running Chrome started with it', async (t) => {
+  const clones = cloneFixture(t);
+  const hung = await hungServer();
+  const session = register('clone-owned', hung.port);
+  const folder = clones.make('code_sign_clone.owned1');
+  const sessions = pool.listBrowserSessions();
+  sessions['clone-owned'].codeSignClone = 'code_sign_clone.owned1';
+  fs.writeFileSync(path.join(dataDir, 'browser-sessions.json'), JSON.stringify(sessions));
+  const machine = fakeMachine(session);
+  const kill = (pid, signal) => { machine.kills.push([pid, signal]); machine.procs.delete(4101); machine.procs.delete(4102); hung.close(); };
+  const readProcesses = async () => [{ pid: 7, startedAt: fs.statSync(folder).birthtimeMs + 1000, comm: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' }];
+  try {
+    await pool.closeBrowser('clone-owned', { collectProcesses: machine.collectProcesses, kill, cloneDir: clones.dir, readProcesses });
+    assert.equal(fs.existsSync(folder), true);
+    assert.equal(pool.listBrowserSessions()['clone-owned'].codeSignClone, null);
+  } finally { await hung.close().catch(() => {}); }
+});
+
+test('a CDP close does not delete the recorded clone', async (t) => {
+  const clones = cloneFixture(t);
+  const server = await versionServer();
+  const session = register('clone-cdp', server.port);
+  const folder = clones.make('code_sign_clone.cdpclose');
+  const sessions = pool.listBrowserSessions();
+  sessions['clone-cdp'].codeSignClone = 'code_sign_clone.cdpclose';
+  fs.writeFileSync(path.join(dataDir, 'browser-sessions.json'), JSON.stringify(sessions));
+  const machine = fakeMachine(session);
+  let cdpCloses = 0;
+  const closeViaCdp = async () => { cdpCloses++; machine.procs.delete(4101); machine.procs.delete(4102); await server.close(); };
+  const kill = (pid, signal) => machine.kills.push([pid, signal]);
+  try {
+    const result = await pool.closeBrowser('clone-cdp', { collectProcesses: machine.collectProcesses, kill, closeViaCdp, cloneDir: clones.dir, readProcesses: clones.readProcesses });
+    assert.equal(result.closed, true);
+    assert.equal(cdpCloses, 1);
+    assert.deepEqual(machine.kills, []);
+    assert.equal(fs.existsSync(folder), true);
+    assert.equal(pool.listBrowserSessions()['clone-cdp'].codeSignClone, null);
+  } finally { await server.close().catch(() => {}); }
 });
