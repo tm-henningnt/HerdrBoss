@@ -709,7 +709,6 @@ section[id], div[id="agents"] { scroll-margin-top: 105px; }
 .org-tier + .org-tier::before { content: ""; position: absolute; top: -28px; left: 50%; width: 1px; height: 28px; background: var(--line); }
 .org-lead { display: flex; flex-wrap: wrap; justify-content: center; align-items: stretch; gap: 10px; width: 100%; min-width: 0; }
 .org-node { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; min-width: 0; flex: 1 1 220px; max-width: 360px; display: grid; gap: 6px; align-content: start; }
-.org-owner, .org-boss { border-top: 3px solid var(--accent); }
 .org-missing { color: var(--muted); }
 .org-node-head { display: flex; align-items: center; gap: 7px; min-width: 0; }
 .org-node-head strong { font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -730,7 +729,6 @@ section[id], div[id="agents"] { scroll-margin-top: 105px; }
 .org-column { display: grid; gap: 10px; min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel-2); }
 .org-column .org-lead { justify-content: stretch; }
 .org-column .org-node { max-width: none; }
-.org-column > .org-lead > .org-node { border-top: 3px solid var(--info); }
 .org-current { margin: 0; font-size: 12.5px; color: var(--text); overflow-wrap: anywhere; }
 .org-current span { color: var(--muted); }
 .org-workers { list-style: none; margin: 0; padding: 0 0 0 14px; border-left: 1px solid var(--line); display: grid; gap: 8px; min-width: 0; }
