@@ -25,10 +25,9 @@ A project browser is "not responding" when its Chrome process runs with the proj
 
 ## Browser choice for checks
 
-WARNING: Do not use `playwright-cli` with the default Google Chrome for checks. Google Chrome on macOS copies its app bundle to a code-sign clone of about 720 MB at each launch. The `playwright-cli` close leaves that clone on the disk.
-
-- For dashboard and web checks, use the project browser. Run `herdr-boss browser request <slug>`, then use `browser tabs`, `browser tab new`, and `browser screenshot`.
-- If a task needs `playwright-cli`, add `--browser=chromium`. This option needs the Chromium build that `playwright-cli install-browser chrome-for-testing` installs. Only the Owner installs shared browsers.
+- For dashboard and web checks, prefer the project browser. Run `herdr-boss browser request <slug>`, then use `browser tabs`, `browser tab new`, and `browser screenshot`.
+- `playwright-cli` and `agent-browser` are also permitted. Close their sessions when you are done.
+- Google Chrome leaves a code-sign clone when it does not exit cleanly. Herdr Boss removes orphaned clones every 10 minutes. The clones share disk blocks with the Chrome app, so they use little real space.
 - Close Chrome with `herdr-boss browser close <slug>` or the CDP command `Browser.close`. Never send a signal to Chrome yourself.
 
 Port 9222 is reserved for an optional legacy shared browser. Only use it when explicitly assigned; see [shared-browser.md](shared-browser.md).

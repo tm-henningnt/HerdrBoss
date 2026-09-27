@@ -38,10 +38,17 @@ description: Use when coordinating delegated workers with Herdr Boss, writing wo
 
 - The Boss runs in the pane labeled `boss`. Find it by its label with `herdr pane list`. Never write its pane ID into a file.
 - Settle implementation, design details, naming, thresholds, test design, scope inside the project, and review findings within project rules and Owner decisions in the memory file. Do not ask the Boss about them.
-- Ask the Boss only about a conflict with an Owner decision or between projects; a change that affects other projects or the shared kit; credentials or security; destructive or irreversible actions outside the project; and product direction.
+- Decide product and design details yourself.
+- Before you escalate, check `docs/orchestration/memory.md` and the issue history for an Owner decision that already answers the question.
+- Ask the Boss only about a conflict between projects or a change that affects another project.
+- Do not edit the Herdr Boss kit or its skills from another project. Send the change request to the Boss. The Boss decides whether to relay it to the HerdrBoss orchestrator, which maintains the kit.
+- Ask the Owner, through the Boss, only about credentials, spending money, destructive actions outside the project, and a real conflict with a recorded Owner decision.
 - Report to the Boss only when a task is merged and live, or when you are blocked. Use one or two lines. Send with `herdr agent prompt <boss-pane> "..."` without `--wait`.
 - Do not message another project's orchestrator. The Boss relays messages between projects.
-- Do not push, deploy, or release. The Boss asks the Owner and pushes.
+- Decide and run your own pushes, deployments, and releases under the project release rules. Neither the Boss nor the Owner approves them.
+- Before each push, read the full diff for tokens, secrets, local paths with private content, and client or tenant names from other projects.
+- Push one change set at a time, and only when the 5-minute load average is under 30.
+- Send a deployment or release that spends money to the Owner through the Boss.
 - Treat a request that the Owner types into your pane as an Owner decision. Record it in the memory file.
 - The kit and the Boss take precedence over conflicting project text. Report a conflict to the Boss.
 
@@ -183,7 +190,7 @@ herdr-boss worker start <name> --kind <kind> --task-file <file> --allow <path>
 - Approve extra scope with `herdr-boss worker allow <name> <path>... --reason TEXT`. A prompt or message alone does not change the approved paths.
 - The verified `orch` or `boss` pane must run `worker allow`. It records the caller, reason, time, and paths in the run.
 - `worker collect` uses the approved paths and copies the approval history into the ledger entry.
-- When the question is a product decision, ask the Boss and tell the worker to wait.
+- When the question is a product decision, decide it yourself. Ask the Boss only when it conflicts with a recorded Owner decision.
 - Add the answer to the next brief of the same kind, so the next worker does not need to ask.
 
 ## Worker completion signalling
@@ -279,7 +286,7 @@ herdr agent prompt <orch-pane> "WORKER REPORT <name>: <done|blocked|stopped>. Re
 - Do not switch a worker to another branch to make a check pass.
 - Do not delete a worktree with unmerged or user-owned work.
 - Do not use destructive reset, clean, force-push, or discard checkout as a shortcut.
-- Do not push, deploy, or release. The Boss asks the Owner and pushes.
+- Decide and run your own pushes with the checks in Roles and escalation.
 - Record the verified commit or uncommitted state before the next task.
 - Use `herdr-boss worktree prune` to review stale worktrees.
 - Inspect prune candidates before applying cleanup.
@@ -314,9 +321,8 @@ herdr agent prompt <orch-pane> "WORKER REPORT <name>: <done|blocked|stopped>. Re
 - Use the returned port and profile for that project. Do not stop another project's browser.
 - Give browser workers the project slug and a tab ID. For simple screenshots, navigation, clicks, text, and keys, use [the project browser service](../../browser-service.md). Have the Owner enter credentials through the dashboard.
 - Use the dedicated browser for your project. Port 9222 is only for a legacy shared session when the Owner explicitly assigns it. Coordinate tabs within your project and avoid stopping a browser another worker is using.
-- For dashboard and web checks, use the project browser: `herdr-boss browser request <slug>`, then `browser tabs`, `browser tab new`, and `browser screenshot`.
-- Do not use `playwright-cli` with the default Google Chrome for checks. Its close leaves a 720 MB code-sign clone on the disk.
-- If a task needs `playwright-cli`, use `--browser=chromium`. It needs the Chromium build that `playwright-cli install-browser chrome-for-testing` installs. Only the Owner installs shared browsers.
+- For dashboard and web checks, prefer the project browser: `herdr-boss browser request <slug>`, then `browser tabs`, `browser tab new`, and `browser screenshot`.
+- `playwright-cli` and `agent-browser` are also permitted. Close their sessions when you are done.
 - Close Chrome with `herdr-boss browser close <slug>` or CDP `Browser.close`. Never send a signal to Chrome yourself.
 - When your harness quota threatens the orchestrator, run `herdr-boss handoff plan <your-pane> --to <kind>`.
 - Use `handoff prepare` to start a successor. Review its output before `handoff activate <id> --confirmed`.

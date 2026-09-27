@@ -8,12 +8,14 @@ HerdrBoss is the resource supervisor, shared dashboard, and orchestration kit fo
 - The **HerdrBoss orchestrator** runs in the pane labeled `orch` in the `HerdrBoss` workspace. It develops this repository through workers.
 - The orchestrator reports finished work, kit changes, and questions to the Boss pane with `herdr agent prompt <boss-pane> "..."`, without `--wait`. The Boss decides when to tell the other projects.
 
-Settle implementation and design details, naming, thresholds, test design, scope extensions inside your project, and review findings within your project rules and the Owner decisions you already have. Do not ask the Boss about them. Ask the Boss only for: a conflict with an Owner decision or between projects, a change that affects other projects or the shared kit behavior for others, credentials or security, destructive or irreversible actions outside your project, and product-direction decisions. Report to the Boss only when a task is merged and live, or when you are blocked, in one or two lines.
+The HerdrBoss orchestrator maintains the Herdr Boss kit, its skills, and its templates. Other orchestrators do not edit them. They send change requests to the Boss, which decides whether to relay them here.
+
+Decide implementation, product, and design details, naming, thresholds, test design, scope inside this project, and review findings yourself. Before you escalate, check `docs/orchestration/memory.md` for an Owner decision that already answers the question. Report to the Boss only when a task is merged and live, or when you are blocked, in one or two lines.
 
 ## Safety rules
 
 - This repository is public: https://github.com/tm-henningnt/HerdrBoss. Before each commit, read the full diff for secrets, tokens, local file contents, and details from other projects: client names, tenant URLs, app IDs, and business data. Do not commit such content.
-- Do not push. The Boss asks the Owner and pushes.
+- Push `main` yourself after the release steps. Before each push, read the full diff for tokens, secrets, local paths with private content, and client or tenant names from other projects. Push one change set at a time, and only when the 5-minute load average is under 30.
 - The launchd service runs from the `main` working tree of this checkout. A change on `main` goes live for every project at the next restart.
 - Never stop, close, or restart a browser that another project uses. Never touch the Chrome on port 9222.
 - Never print a secret to a pane or a report. The default token and all session files are stored in `~/.config/herdr-boss/`; an explicit `access.tokenFile` path stays configured. Agents must not read the private directory. Use temporary `HOME` and `HERDR_BOSS_DIR` fixtures for credential tests.
@@ -35,6 +37,7 @@ Settle implementation and design details, naming, thresholds, test design, scope
 4. Restart the service: `launchctl kickstart -k gui/$(id -u)/no.tallmaker.herdr-boss`.
 5. Check that it serves: `curl -fsS -o /dev/null -w '%{http_code}' http://127.0.0.1:4477/api/state` must print `200` within 30 seconds.
 6. If the check fails, revert the merge, restart again, and tell the Boss.
+7. Push `main` with the checks in the safety rules.
 
 ## Documentation
 
@@ -46,7 +49,7 @@ Settle implementation and design details, naming, thresholds, test design, scope
 
 The Boss gives tasks to the orchestrator. The project status file (`herdr-boss publish herdrboss <file>`) is the backlog and the progress record. Publish it at each task boundary. There is no issue tracker for this project yet.
 
-<!-- herdr-boss:begin v=781752b73643 -->
+<!-- herdr-boss:begin v=c25faaa26a71 -->
 ## Herdr Boss orchestration
 
 - Use the Herdr Boss orchestrator skill when you coordinate workers or resume an unknown project state.
@@ -78,10 +81,13 @@ The Boss gives tasks to the orchestrator. The project status file (`herdr-boss p
 - Keep project terminology, data, and architecture decisions in `AGENTS.md`. Keep Owner decisions, holds, freezes, dated evidence, and pane facts in `docs/orchestration/memory.md`.
 - The Boss runs in the pane labeled `boss`. Find it with `herdr pane list`. Never write its pane ID into a file.
 - Settle implementation, design details, naming, thresholds, test design, project scope, and review findings within project rules and memory. Do not ask the Boss about them.
-- Ask the Boss only about conflicts with Owner decisions or between projects, changes that affect other projects or the shared kit, credentials or security, destructive or irreversible actions outside the project, and product direction.
+- Decide product and design details yourself. Before you escalate, check `docs/orchestration/memory.md` and the issue history for an Owner decision that already answers the question.
+- Ask the Boss only about a conflict between projects or a change that affects another project.
+- Do not edit the Herdr Boss kit or its skills from another project. Send the change request to the Boss. The Boss decides whether to relay it to the HerdrBoss orchestrator.
+- Ask the Owner, through the Boss, only about credentials, spending money, destructive actions outside the project, and a real conflict with a recorded Owner decision.
 - Report to the Boss only when a task is merged and live or when blocked. Use one or two lines. Run `herdr agent prompt <boss-pane> "..."` without `--wait`.
 - Do not message another project's orchestrator. The Boss relays messages between projects.
-- Do not push, deploy, or release. The Boss asks the Owner and pushes.
+- Decide and run your own pushes, deployments, and releases. Nobody approves them. Before each push, read the full diff for secrets, private local paths, and other-project client or tenant names. Push one change set at a time, with the 5-minute load under 30. Send a deployment that spends money to the Owner through the Boss.
 - Record an Owner request typed into your pane as an Owner decision in `docs/orchestration/memory.md`.
 - The kit and the Boss take precedence over conflicting project text. Report a conflict to the Boss.
 - List processes with `pgrep -l`, `ps -o pid,ppid,etime,comm`, or `herdr-boss worktree prune`.

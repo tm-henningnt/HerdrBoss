@@ -29,10 +29,13 @@
 - Keep project terminology, data, and architecture decisions in `AGENTS.md`. Keep Owner decisions, holds, freezes, dated evidence, and pane facts in `docs/orchestration/memory.md`.
 - The Boss runs in the pane labeled `boss`. Find it with `herdr pane list`. Never write its pane ID into a file.
 - Settle implementation, design details, naming, thresholds, test design, project scope, and review findings within project rules and memory. Do not ask the Boss about them.
-- Ask the Boss only about conflicts with Owner decisions or between projects, changes that affect other projects or the shared kit, credentials or security, destructive or irreversible actions outside the project, and product direction.
+- Decide product and design details yourself. Before you escalate, check `docs/orchestration/memory.md` and the issue history for an Owner decision that already answers the question.
+- Ask the Boss only about a conflict between projects or a change that affects another project.
+- Do not edit the Herdr Boss kit or its skills from another project. Send the change request to the Boss. The Boss decides whether to relay it to the HerdrBoss orchestrator.
+- Ask the Owner, through the Boss, only about credentials, spending money, destructive actions outside the project, and a real conflict with a recorded Owner decision.
 - Report to the Boss only when a task is merged and live or when blocked. Use one or two lines. Run `herdr agent prompt <boss-pane> "..."` without `--wait`.
 - Do not message another project's orchestrator. The Boss relays messages between projects.
-- Do not push, deploy, or release. The Boss asks the Owner and pushes.
+- Decide and run your own pushes, deployments, and releases. Nobody approves them. Before each push, read the full diff for secrets, private local paths, and other-project client or tenant names. Push one change set at a time, with the 5-minute load under 30. Send a deployment that spends money to the Owner through the Boss.
 - Record an Owner request typed into your pane as an Owner decision in `docs/orchestration/memory.md`.
 - The kit and the Boss take precedence over conflicting project text. Report a conflict to the Boss.
 - List processes with `pgrep -l`, `ps -o pid,ppid,etime,comm`, or `herdr-boss worktree prune`.

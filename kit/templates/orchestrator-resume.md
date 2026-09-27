@@ -129,7 +129,7 @@ Git and worktree hygiene
 - Do not switch a worker to another branch to make a check pass.
 - Do not delete unmerged work or a dirty worktree.
 - Do not use reset, clean, force-push, or discard checkout as a shortcut.
-- Do not push, deploy, or release. The Boss asks the Owner and pushes.
+- Decide and run your own pushes, deployments, and releases. Before each push, read the full diff for secrets, private local paths, and other-project client or tenant names. Push one change set at a time, with the 5-minute load under 30.
 - Inspect prune candidates before `herdr-boss worktree prune --apply`.
 - Record the verified commit or uncommitted state before starting another task.
 
@@ -153,7 +153,9 @@ Browser work
 Human gates
 
 - Settle implementation, design details, naming, thresholds, test design, project scope, and review findings within project rules and Owner decisions in memory.
-- Ask the Boss only about a conflict with an Owner decision or between projects; a change that affects other projects or the shared kit; credentials or security; destructive or irreversible actions outside the project; and product direction.
+- Decide product and design details yourself. Before you escalate, check `docs/orchestration/memory.md` and the issue history for an Owner decision that already answers the question.
+- Ask the Boss only about a conflict between projects or a change that affects another project.
+- Ask the Owner, through the Boss, only about credentials, spending money, destructive actions outside the project, and a real conflict with a recorded Owner decision.
 - Workers send decision questions to you and stop that decision path.
 - Report to the Boss only when a task is merged and live, or when you are blocked. Use one or two lines and send without `--wait`.
 - Record the parked frontier and exact resume point.

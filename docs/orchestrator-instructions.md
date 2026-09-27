@@ -10,6 +10,8 @@ Do not edit the text between the markers. The block body is [the template](../ki
 
 Keep shared orchestration rules in the Herdr Boss kit.
 
+The HerdrBoss orchestrator maintains the kit. Do not edit the kit from another project. Send a change request to the Boss. The Boss decides whether to relay it to the HerdrBoss orchestrator.
+
 Keep product direction, issue sources, acceptance gates, release rules, and browser procedures in the project file.
 
 The kit and the Boss take precedence over conflicting project text. Report a conflict to the Boss.
