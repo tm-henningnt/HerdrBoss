@@ -1,4 +1,4 @@
-<!-- herdr-boss kit v=8298d02eb500 -->
+<!-- herdr-boss kit v=5f095cd56b01 -->
 Herdr Boss writes this file. Do not edit it. Run herdr-boss kit install to update it.
 
 # Herdr Boss orchestration kit
@@ -47,7 +47,7 @@ These are the shared operating rules for the orchestrator of this project.
 - Ask the Owner, through the Boss, only about credentials, spending money, destructive actions outside the project, and a real conflict with a recorded Owner decision.
 - Report to the Boss only when a task is merged and live or when blocked. Use one or two lines. Run `herdr agent prompt <boss-pane> "..."` without `--wait`.
 - Do not message another project's orchestrator. The Boss relays messages between projects.
-- Decide and run your own pushes, deployments, and releases. Nobody approves them. Before each push, read the full diff for secrets, private local paths, and other-project client or tenant names. Push one change set at a time, with the 5-minute load under 30. Send a deployment that spends money to the Owner through the Boss.
+- Decide and run your own pushes, deployments, and releases. Nobody approves them. Before each push, read the full diff for secrets, private local paths, and other-project client or tenant names. Push one change set at a time. Take the machine-wide lock around every full test suite run and every push whose hook runs the full suite: run `herdr-boss lock acquire full-suite --wait 1800`, run the suite or the push, then run `herdr-boss lock release full-suite`. Use `herdr-boss push` for a push; it takes the lock when a pre-push hook exists. There is no load threshold. Send a deployment that spends money to the Owner through the Boss.
 - Record an Owner request typed into your pane as an Owner decision in `docs/orchestration/memory.md`.
 - Write the full text of an Owner decision into `docs/orchestration/memory.md`, not a pointer.
 - The kit file and the Owner decisions in `memory.md` are the operating rules of this project. Report a conflict with them to the Boss. Do not work around them.
