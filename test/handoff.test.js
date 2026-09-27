@@ -70,7 +70,7 @@ exec node "$(dirname "$0")/herdr.cjs" "$@"
 `);
   writeExecutable(path.join(bin, 'session-migrate.cjs'), `
 if (process.env.TEST_MIGRATION_CYCLE === '1' || (process.env.TEST_TRANSFER_FAIL === '1' && !process.argv.includes('--dry-run'))) {
-  process.stderr.write(process.env.TEST_DRY_RUN_SECRET && process.argv.includes('--dry-run') ? 'Migration failed: api_key=fixture_dry_secret\\n' : 'Claude active graph contains an ancestry cycle\\n');
+  process.stderr.write(process.env.TEST_MIGRATION_ERROR || (process.env.TEST_DRY_RUN_SECRET && process.argv.includes('--dry-run') ? 'Migration failed: api_key=fixture_dry_secret\\n' : 'Claude active graph contains an ancestry cycle\\n'));
   process.exit(1);
 }
 console.log(JSON.stringify({ session_id: process.env.TEST_NO_TARGET_ID === '1' && !process.argv.includes('--dry-run') ? null : 'migrated-session', records: 1, dropped_events: 0, warnings: [] }));
@@ -444,6 +444,24 @@ test('a credential-bearing migration dry-run error is redacted in plan, record, 
   assert.doesNotMatch(calls.find((args) => args[0] === 'agent' && args[1] === 'prompt')[3], /fixture_dry_secret/);
 });
 
+test('a quoted credential past the 500-character limit is redacted before the dry-run error is bounded', (t) => {
+  const secret = 'S'.repeat(600);
+  const failure = `Migration dry-run failed. Credential "access_token": "${secret}" was rejected by the transfer endpoint.`;
+  const f = handoffFixture(t, { sessionId: 'old-session' });
+  const env = { ...f.env, TEST_MIGRATION_CYCLE: '1', TEST_MIGRATION_ERROR: failure };
+  const plan = JSON.parse(runHandoffCli(f.root, ['handoff', 'plan', 'ws:p1', '--to', 'codex', '--mode', 'migrate'], env));
+  assert.equal(plan.migration.available, false);
+  assert.ok(plan.migration.error.length <= 500, `plan error must stay bounded, got ${plan.migration.error.length}`);
+  assert.doesNotMatch(plan.migration.error, /S{20}/, 'the credential must be redacted before the length limit');
+  const record = JSON.parse(runHandoffCli(f.root, ['handoff', 'prepare', 'ws:p1', '--to', 'codex', '--mode', 'migrate'], env));
+  assert.equal(record.mode, 'fresh');
+  assert.ok(record.migrationFallbackReason.length < 600, `fallback reason must stay bounded, got ${record.migrationFallbackReason.length}`);
+  assert.doesNotMatch(record.migrationFallbackReason, /S{20}/);
+  const saved = fs.readFileSync(path.join(f.root, 'handoffs.json'), 'utf8');
+  assert.doesNotMatch(saved, /S{20}/);
+  assert.doesNotMatch(handoffPromptCalls(f.root).join('\n'), /S{20}/);
+});
+
 test('fresh capture bounds recent lines and falls back to visible or an unavailable marker', (t) => {
   const longText = Array.from({ length: 250 }, (_, i) => `line ${i} ${'x'.repeat(120)}`).join('\n');
   const f = handoffFixture(t);
@@ -451,6 +469,7 @@ test('fresh capture bounds recent lines and falls back to visible or an unavaila
   assert.match(first.sourceContext, /line 249/);
   assert.doesNotMatch(first.sourceContext, /line 0 /);
   assert.ok(first.sourceContext.length <= 20000);
+  assert.ok(first.sourceContext.split('\n').length <= 200);
   assert.match(first.sourceContext, /truncated/i);
   const calls = fs.readFileSync(f.callsFile, 'utf8').trim().split('\n').map(JSON.parse);
   assert.ok(calls.some((args) => args[0] === 'pane' && args[1] === 'read' && args[2] === 'ws:p1' && args.includes('visible')));
@@ -460,6 +479,24 @@ test('fresh capture bounds recent lines and falls back to visible or an unavaila
   assert.match(second.sourceContext, /context unavailable/i);
   const secondCalls = fs.readFileSync(g.callsFile, 'utf8').trim().split('\n').map(JSON.parse);
   assert.match(secondCalls.find((args) => args[0] === 'agent' && args[1] === 'prompt')[3], /context unavailable/i);
+});
+
+test('the snapshot truncation marker stays inside the 200-line cap', (t) => {
+  const shortText = Array.from({ length: 250 }, (_, i) => `line ${i}`).join('\n');
+  const f = handoffFixture(t);
+  const result = JSON.parse(runHandoffCli(f.root, ['handoff', 'prepare', 'ws:p1', '--to', 'pi', '--mode', 'fresh'], { ...f.env, TEST_SOURCE_TEXT: shortText }));
+  const lines = result.sourceContext.split('\n');
+  assert.ok(lines.length <= 200, `marker plus context must stay within 200 lines, got ${lines.length}`);
+  assert.equal(lines[0], '[Source pane context truncated]');
+  assert.match(result.sourceContext, /line 249/);
+  assert.doesNotMatch(result.sourceContext, /^line 50$/m);
+  assert.ok(result.sourceContext.length <= 20000);
+  const saved = JSON.parse(fs.readFileSync(path.join(f.root, 'handoffs.json'), 'utf8'))[0];
+  assert.equal(saved.sourceContext, result.sourceContext);
+  assert.ok(saved.sourceContext.split('\n').length <= 200);
+  const [prompt] = handoffPromptCalls(f.root);
+  assert.ok(prompt.includes(result.sourceContext), 'the record snapshot must reach the prompt unchanged');
+  assert.doesNotMatch(prompt, /^line 50$/m);
 });
 
 test('missing project goal stays absent and Boss never borrows a project goal', (t) => {
@@ -473,6 +510,89 @@ test('missing project goal stays absent and Boss never borrows a project goal', 
   fs.writeFileSync(path.join(g.root, 'projects', 'Boss.json'), JSON.stringify({ goal: 'Not a Boss goal' }));
   const boss = JSON.parse(runHandoffCli(g.root, ['handoff', 'prepare', 'ws:p1', '--to', 'pi', '--mode', 'fresh'], g.env));
   assert.equal(Object.hasOwn(boss, 'ownerGoal'), false);
+});
+
+function writeProjectGoal(root, goal) {
+  fs.mkdirSync(path.join(root, 'projects'));
+  fs.writeFileSync(path.join(root, 'projects', 'project.json'), JSON.stringify({ goal }));
+}
+
+function handoffPromptCalls(root) {
+  return fs.readFileSync(path.join(root, 'herdr-calls.jsonl'), 'utf8').trim().split('\n')
+    .map((line) => JSON.parse(line))
+    .filter((args) => args[0] === 'agent' && args[1] === 'prompt')
+    .map((args) => args[3]);
+}
+
+test('handoff prepare omits a direct-installed Owner goal over the 1000-character bound', (t) => {
+  const goal = 'G'.repeat(1001);
+  const f = handoffFixture(t);
+  writeProjectGoal(f.root, goal);
+  const result = JSON.parse(runHandoffCli(f.root, ['handoff', 'prepare', 'ws:p1', '--to', 'pi', '--mode', 'fresh'], f.env));
+  assert.equal(result.status, 'prepared');
+  assert.equal(Object.hasOwn(result, 'ownerGoal'), false);
+  const saved = fs.readFileSync(path.join(f.root, 'handoffs.json'), 'utf8');
+  assert.equal(saved.includes('G'.repeat(50)), false, 'the invalid goal must not enter the saved record');
+  const [prompt] = handoffPromptCalls(f.root);
+  assert.equal(prompt.includes('G'.repeat(50)), false, 'the invalid goal must not enter the startup prompt');
+  assert.match(prompt, /proposed successor orchestrator/);
+});
+
+test('handoff prepare keeps a valid 1000-character Owner goal', (t) => {
+  const goal = 'H'.repeat(1000);
+  const f = handoffFixture(t);
+  writeProjectGoal(f.root, goal);
+  const result = JSON.parse(runHandoffCli(f.root, ['handoff', 'prepare', 'ws:p1', '--to', 'pi', '--mode', 'fresh'], f.env));
+  assert.equal(result.status, 'prepared');
+  assert.equal(result.ownerGoal, goal);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.root, 'handoffs.json'), 'utf8'))[0].ownerGoal, goal);
+  assert.ok(handoffPromptCalls(f.root).some((prompt) => prompt.includes(goal)));
+});
+
+for (const [name, goal] of [['a non-string', 42], ['a blank', '   '], ['an empty', '']]) test(`handoff prepare omits ${name} direct-installed Owner goal`, (t) => {
+  const f = handoffFixture(t);
+  writeProjectGoal(f.root, goal);
+  const result = JSON.parse(runHandoffCli(f.root, ['handoff', 'prepare', 'ws:p1', '--to', 'pi', '--mode', 'fresh'], f.env));
+  assert.equal(result.status, 'prepared');
+  assert.equal(Object.hasOwn(result, 'ownerGoal'), false);
+  const saved = fs.readFileSync(path.join(f.root, 'handoffs.json'), 'utf8');
+  assert.equal(Object.hasOwn(JSON.parse(saved)[0], 'ownerGoal'), false);
+  const [prompt] = handoffPromptCalls(f.root);
+  assert.match(prompt, /proposed successor orchestrator/);
+  assert.match(prompt, /Discover the project state from files and issues\./);
+});
+
+test('handoff prepare applies the Owner goal bound when it resumes a record', (t) => {
+  const stored = 'B'.repeat(1001);
+  const f = handoffFixture(t, { existingPane: 'ws:p9' });
+  writeProjectGoal(f.root, 'Valid published goal');
+  fs.writeFileSync(path.join(f.root, 'handoffs.json'), JSON.stringify([{
+    id: 'handoff-stale-goal', sourcePane: 'ws:p1', workspace: 'ws', cwd: f.project,
+    project: 'project', toKind: 'pi', model: 'opencode-go/muse-spark-1.3-contributor', effort: null,
+    mode: 'fresh', provider: 'claude', migratedId: null, newPane: 'ws:p9',
+    status: 'needs-inspection', automatic: false, ownerGoal: stored, sourceContext: 'Earlier safe context',
+  }]));
+  const result = JSON.parse(runHandoffCli(f.root, ['handoff', 'prepare', 'ws:p1', '--to', 'pi', '--mode', 'fresh'], f.env));
+  assert.equal(result.status, 'prepared');
+  assert.equal(result.ownerGoal, 'Valid published goal');
+  const saved = fs.readFileSync(path.join(f.root, 'handoffs.json'), 'utf8');
+  assert.equal(saved.includes('B'.repeat(50)), false, 'the invalid stored goal must not stay in the record');
+  const [prompt] = handoffPromptCalls(f.root);
+  assert.equal(prompt.includes('B'.repeat(50)), false, 'the invalid stored goal must not enter the startup prompt');
+  assert.match(prompt, /Valid published goal/);
+
+  const g = handoffFixture(t, { existingPane: 'ws:p9' });
+  fs.writeFileSync(path.join(g.root, 'handoffs.json'), JSON.stringify([{
+    id: 'handoff-stale-goal', sourcePane: 'ws:p1', workspace: 'ws', cwd: g.project,
+    project: 'project', toKind: 'pi', model: 'opencode-go/muse-spark-1.3-contributor', effort: null,
+    mode: 'fresh', provider: 'claude', migratedId: null, newPane: 'ws:p9',
+    status: 'needs-inspection', automatic: false, ownerGoal: stored,
+  }]));
+  const noPublished = JSON.parse(runHandoffCli(g.root, ['handoff', 'prepare', 'ws:p1', '--to', 'pi', '--mode', 'fresh'], g.env));
+  assert.equal(noPublished.status, 'prepared');
+  assert.equal(Object.hasOwn(noPublished, 'ownerGoal'), false);
+  assert.equal(fs.readFileSync(path.join(g.root, 'handoffs.json'), 'utf8').includes('B'.repeat(50)), false);
+  assert.equal(handoffPromptCalls(g.root).some((prompt) => prompt.includes('B'.repeat(50))), false);
 });
 
 test('resuming a record preserves its captured Owner goal', (t) => {

@@ -11,11 +11,18 @@ const FILE = path.join(DATA_DIR, 'handoffs.json');
 const TARGETS = new Set(['codex', 'claude', 'pi', 'opencode']);
 const HANDOFF_READY_TIMEOUT_MS = 90_000;
 const CONTEXT_UNAVAILABLE = '[Source pane context unavailable.]';
+const TRUNCATION_MARKER = '[Source pane context truncated]';
+const GOAL_MAX_LENGTH = 1000;
+
+// The published status contract allows a non-empty string of at most 1000 characters.
+function validOwnerGoal(goal) {
+  return typeof goal === 'string' && goal.trim().length > 0 && goal.length <= GOAL_MAX_LENGTH;
+}
 
 function ownerGoal(project, boss) {
   if (boss) return undefined;
   const goal = readFile(path.join(DATA_DIR, 'projects', `${project}.json`), {})?.goal;
-  return typeof goal === 'string' && goal.trim() ? goal : undefined;
+  return validOwnerGoal(goal) ? goal : undefined;
 }
 
 function redactContext(value) {
@@ -26,13 +33,18 @@ function redactContext(value) {
     .replace(/\b((?:[a-z][a-z0-9]*[_-])*(?:api[_-]?key|key|access[_-]?token|auth[_-]?token|token|secret|password|passwd|pwd)\s*[:=]\s*)(?:["'][^"'\r\n]*["']|[^\s,;]+)/gi, '$1[REDACTED]');
 }
 
+// The truncation marker occupies one line and its characters inside both caps.
 function boundedContext(raw) {
   const lines = redactContext(raw).split(/\r?\n/);
-  const tooManyLines = lines.length > 200;
-  let text = lines.slice(-200).join('\n');
-  const tooManyChars = text.length > 19950;
-  if (tooManyChars) text = text.slice(-19950);
-  return (tooManyLines || tooManyChars ? '[Source pane context truncated]\n' : '') + text;
+  let truncated = lines.length > 200;
+  let text = (truncated ? lines.slice(-199) : lines).join('\n');
+  if (text.length > 19950) {
+    text = text.slice(-19950);
+    truncated = true;
+    const bounded = text.split('\n');
+    if (bounded.length > 199) text = bounded.slice(-199).join('\n');
+  }
+  return truncated ? `${TRUNCATION_MARKER}\n${text}` : text;
 }
 
 function sourceContext(id) {
@@ -146,11 +158,11 @@ export function planHandoff(id, toKind, { mode = 'migrate', model = null, effort
       const r = JSON.parse(call('session-migrate', ['transfer', sessionId, '--from', pane.agent, '--to', toKind, '--cwd', pane.cwd, '--dry-run'], pane.cwd));
       result.migration = { available: true, records: r.records, droppedEvents: r.dropped_events, warnings: r.warnings?.length || 0 };
     } catch (e) {
-      const detail = String(e.stderr || e.message).trim().slice(0, 500);
+      const detail = String(e.stderr || e.message).trim();
       const error = detail.includes('Claude active graph contains an ancestry cycle')
         ? 'Claude active graph contains an ancestry cycle. Session migration is unavailable.'
-        : detail;
-      result.migration = { available: false, error: redactContext(error) };
+        : redactContext(detail).slice(0, 500);
+      result.migration = { available: false, error };
     }
     if (!result.migration.available) result.migration.next = `Prepare will use fresh mode automatically. The Owner can also use --mode fresh: herdr-boss handoff prepare ${id} --to ${toKind} --mode fresh.`;
   }
@@ -182,6 +194,7 @@ export function prepareHandoff(id, toKind, options = {}, { waitForPane = waitFor
     if (options.effort && options.effort !== item.effort) throw new Error(`Existing successor ${item.id} uses effort ${item.effort || '(default)'}. Repeat handoff prepare without --effort or with that effort.`);
     plan = item;
     migratedId = item.migratedId ?? null;
+    if (Object.hasOwn(item, 'ownerGoal') && !validOwnerGoal(item.ownerGoal)) { delete item.ownerGoal; save(records); }
     if (!Object.hasOwn(item, 'ownerGoal')) {
       const goal = ownerGoal(item.project, item.boss || item.label === 'boss');
       if (goal) item.ownerGoal = goal;
