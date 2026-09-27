@@ -65,6 +65,16 @@ export function extendFreeModelExhaustion(existing, association, retryAt, now = 
   return { ...(existing || {}), [association.model]: { model: association.model, retryAt: Math.max(prior?.retryAt || 0, retryAt) } };
 }
 
+// A repeat keeps the first observation as the anchor, so unchanged relative retry text does not
+// slide forward on every tick. A newly reported absolute timestamp is taken when it extends the deadline.
+function nextFreeUsageRetryAt(text, existing, now = Date.now()) {
+  const anchor = Number.isFinite(existing?.at) ? existing.at : now;
+  const parsed = parseFreeUsageRetryTime(text, anchor);
+  const prior = Number.isFinite(existing?.retryAt) ? existing.retryAt : null;
+  if (parsed === null) return prior;
+  return prior === null ? parsed : Math.max(prior, parsed);
+}
+
 export function matchWorkerFailure(lines) {
   const text = Array.isArray(lines) ? lines.join('\n') : String(lines ?? '');
   const content = text.split(/\r?\n/).map((line) => line.trim()).filter((line) => !/^tip:/i.test(line)).join('\n');
@@ -77,7 +87,10 @@ export function matchWorkerFailure(lines) {
 }
 
 export function shouldReadWorkerScreen(previous, pane) {
-  if (!pane?.agent || pane.orch || !['idle', 'done'].includes(pane.status)) return false;
+  if (!pane?.agent || pane.orch) return false;
+  // A working pane is read on every tick, so a provider failure that appears during work is caught.
+  if (pane.status === 'working') return true;
+  if (!['idle', 'done'].includes(pane.status)) return false;
   if (!previous) return true;
   const sameWorker = previous.id === pane.id && previous.agent === pane.agent && (previous.name || null) === (pane.name || null)
     && (previous.sessionId || null) === (pane.sessionId || null);
@@ -137,7 +150,7 @@ export async function inspectWorkerTransitions(panes, observed, existingFailures
   for (const [id, failure] of Object.entries(failures)) {
     const pane = live.get(id);
     if (!pane || pane.agent !== failure.agent || (pane.name || null) !== (failure.name || null)
-      || (pane.sessionId || null) !== (failure.sessionId || null) || pane.status === 'working') delete failures[id];
+      || (pane.sessionId || null) !== (failure.sessionId || null)) delete failures[id];
   }
   for (const pane of panes || []) {
     const prior = observed?.[pane.id];
@@ -145,11 +158,21 @@ export async function inspectWorkerTransitions(panes, observed, existingFailures
       try {
         const screen = await readScreen(workerPaneReadArgs(pane.id));
         const label = matchWorkerFailure(screen);
+        const existing = failures[pane.id];
         if (label) {
-          const retryAt = label === 'Free usage exceeded' ? parseFreeUsageRetryTime(screen, now) : null;
-          const failure = { agent: pane.agent, name: pane.name || null, sessionId: pane.sessionId || null, label, at: now,
-            ...(retryAt ? { retryAt } : {}) };
-          failures[pane.id] = failure;
+          // A repeated match keeps its first notice time, so one failure yields one notice.
+          const repeat = existing?.label === label;
+          const retryAt = label === 'Free usage exceeded'
+            ? nextFreeUsageRetryAt(screen, repeat ? existing : null, now)
+            : null;
+          const inWorkingPane = pane.status === 'working' || existing?.inWorkingPane === true;
+          failures[pane.id] = {
+            agent: pane.agent, name: pane.name || null, sessionId: pane.sessionId || null, label, at: repeat ? existing.at : now,
+            ...(retryAt ? { retryAt } : {}), ...(inWorkingPane ? { inWorkingPane: true } : {}),
+          };
+        } else if (pane.status === 'working' || existing?.inWorkingPane === true) {
+          // A failure found in a working pane clears on a clean read. An idle/done failure keeps its prior behavior.
+          delete failures[pane.id];
         }
       } catch {
         // Pane output is sensitive. Read failures are intentionally not logged.
@@ -175,7 +198,7 @@ export function applyWorkerFailureStatuses(panes, failures) {
   return (panes || []).map((pane) => {
     const failure = failures?.[pane.id];
     if (!failure || !pane.agent || pane.agent !== failure.agent || (pane.name || null) !== (failure.name || null)
-      || (pane.sessionId || null) !== (failure.sessionId || null) || pane.status === 'working') return pane;
+      || (pane.sessionId || null) !== (failure.sessionId || null)) return pane;
     return { ...pane, status: 'failed', failureLabel: failure.label };
   });
 }

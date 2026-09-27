@@ -90,13 +90,15 @@ test('free model exhaustion extends to the latest retry and expires at the retry
   assert.deepEqual(activeFreeModelExhaustions(older, 9000), {});
 });
 
-test('worker screen reads happen only on first observation or idle/done transitions', () => {
+test('worker screen reads happen on first observation, on idle/done transitions, and on every working tick', () => {
   const worker = { id: 'w1:p2', agent: 'codex', status: 'idle' };
   assert.equal(shouldReadWorkerScreen(null, worker), true);
   assert.equal(shouldReadWorkerScreen({ id: worker.id, agent: worker.agent, status: 'idle' }, worker), false);
   assert.equal(shouldReadWorkerScreen({ id: worker.id, agent: worker.agent, status: 'working' }, worker), true);
   assert.equal(shouldReadWorkerScreen({ id: worker.id, agent: 'pi', status: 'idle' }, worker), true);
-  assert.equal(shouldReadWorkerScreen({ id: worker.id, agent: worker.agent, status: 'blocked' }, { ...worker, status: 'working' }), false);
+  assert.equal(shouldReadWorkerScreen({ id: worker.id, agent: worker.agent, status: 'blocked' }, { ...worker, status: 'blocked' }), false);
+  assert.equal(shouldReadWorkerScreen({ id: worker.id, agent: worker.agent, status: 'working' }, { ...worker, status: 'working' }), true);
+  assert.equal(shouldReadWorkerScreen({ id: worker.id, agent: worker.agent, status: 'idle' }, { ...worker, status: 'blocked' }), false);
 });
 
 test('screen inspection uses the bounded visible read and never exposes screen text', async () => {
@@ -120,21 +122,29 @@ test('screen inspection uses the bounded visible read and never exposes screen t
   assert.equal(again.notices[0].key, first.notices[0].key);
   assert.doesNotMatch(JSON.stringify(again), /sk-secret-token/);
   const working = await inspectWorkerTransitions([{ ...pane, status: 'working' }], again.observed, again.failures, async () => secret, 3234);
-  assert.equal(working.failures['w1:p2'], undefined);
-  const idleAgain = await inspectWorkerTransitions([pane], working.observed, working.failures, async () => secret, 4234);
+  assert.equal(working.failures['w1:p2'].label, 'API Error', 'a failing working pane stays failed');
+  assert.equal(working.failures['w1:p2'].at, first.failures['w1:p2'].at, 'a repeated match keeps the original notice time');
+  assert.equal(working.notices[0].key, first.notices[0].key, 'a repeated match keeps one notice');
+  assert.doesNotMatch(JSON.stringify(working), /sk-secret-token/);
+  const recovered = await inspectWorkerTransitions([{ ...pane, status: 'working' }], working.observed, working.failures, async () => 'ordinary output', 4234);
+  assert.equal(recovered.failures['w1:p2'], undefined, 'a successful read clears a working failure');
+  assert.deepEqual(recovered.notices, []);
+  const idleAgain = await inspectWorkerTransitions([pane], recovered.observed, recovered.failures, async () => secret, 5234);
   assert.equal(idleAgain.notices.length, 1);
   assert.equal(idleAgain.failures['w1:p2'].label, 'API Error');
 });
 
-test('failed workers override the snapshot state and clear when working or replaced', () => {
+test('failed workers override the snapshot state and clear when the pane identity changes', () => {
   const panes = [
     { id: 'w1:p2', name: 'worker-a', agent: 'codex', status: 'idle' },
     { id: 'w1:p3', name: 'worker-b', agent: 'pi', status: 'working' },
   ];
   assert.deepEqual(applyWorkerFailureStatuses(panes, { 'w1:p2': { agent: 'codex', name: 'worker-a', label: '429' } })
     .map((p) => p.status), ['failed', 'working']);
-  assert.equal(applyWorkerFailureStatuses([{ ...panes[0], status: 'working' }], { 'w1:p2': { agent: 'codex', name: 'worker-a', label: '429' } })[0].status, 'working');
+  assert.equal(applyWorkerFailureStatuses([{ ...panes[0], status: 'working' }], { 'w1:p2': { agent: 'codex', name: 'worker-a', label: '429' } })[0].status, 'failed');
   assert.equal(applyWorkerFailureStatuses([{ ...panes[0], agent: 'pi' }], { 'w1:p2': { agent: 'codex', name: 'worker-a', label: '429' } })[0].status, 'idle');
+  assert.equal(applyWorkerFailureStatuses([{ ...panes[0], sessionId: 'other' }],
+    { 'w1:p2': { agent: 'codex', name: 'worker-a', sessionId: 's1', label: '429' } })[0].status, 'idle');
 });
 
 test('blocked workers get no notice before five minutes and a named notice after', () => {
@@ -225,4 +235,106 @@ test('worker failure matching ignores Tip lines and requires error forms for 401
     ['other text\n  tIP: 401 Unauthorized', null],
     ['Tip: Check usage limits\nAPI Error: request failed', 'API Error'],
   ]) assert.equal(matchWorkerFailure(screen), label, screen);
+});
+
+async function makeFreeRunFixture() {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { execFileSync } = await import('node:child_process');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'free-run-working-'));
+  const checkout = path.join(root, 'checkout');
+  const worktree = path.join(root, 'worker');
+  fs.mkdirSync(checkout);
+  execFileSync('git', ['init', '-b', 'main', checkout], { stdio: 'ignore' });
+  fs.writeFileSync(path.join(checkout, '.herdr-boss.json'), JSON.stringify({ slug: 'sample', runsDir: '.worker/runs' }));
+  fs.writeFileSync(path.join(checkout, 'tracked.txt'), 'tracked');
+  execFileSync('git', ['-C', checkout, 'add', '.herdr-boss.json', 'tracked.txt'], { stdio: 'ignore' });
+  execFileSync('git', ['-C', checkout, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-m', 'fixture'], { stdio: 'ignore' });
+  execFileSync('git', ['-C', checkout, 'worktree', 'add', '-b', 'worker-a', worktree], { stdio: 'ignore' });
+  fs.mkdirSync(path.join(checkout, '.worker/runs'), { recursive: true });
+  fs.writeFileSync(path.join(checkout, '.worker/runs', 'worker-a.json'), JSON.stringify({
+    name: 'worker-a', pane: 'w1:p2', kind: 'opencode', model: 'opencode/free', worktree,
+  }));
+  return { checkout, worktree };
+}
+
+test('a working pane with a known provider error becomes failed without exposing pane text', async () => {
+  const pane = { id: 'w1:p2', workspace: 'w1', name: 'worker-a', agent: 'codex', status: 'working', sessionId: 's1' };
+  const result = await inspectWorkerTransitions([pane], {}, {}, async () => 'API Error: sk-secret-token', 1000);
+  assert.equal(result.failures['w1:p2'].label, 'API Error');
+  const [applied] = applyWorkerFailureStatuses([pane], result.failures);
+  assert.equal(applied.status, 'failed');
+  assert.equal(applied.failureLabel, 'API Error');
+  assert.equal(result.notices.length, 1);
+  assert.equal(result.notices[0].title, 'Worker worker-a failed');
+  assert.doesNotMatch(JSON.stringify({ result, applied }), /sk-secret-token/);
+});
+
+test('an ordinary working pane stays working and a working failure clears after a clean read', async () => {
+  const pane = { id: 'w1:p2', workspace: 'w1', name: 'worker-a', agent: 'codex', status: 'working', sessionId: 's1' };
+  const clean = await inspectWorkerTransitions([pane], {}, {}, async () => 'still working on it', 1000);
+  assert.equal(clean.failures['w1:p2'], undefined);
+  assert.deepEqual(clean.notices, []);
+  assert.equal(applyWorkerFailureStatuses([pane], clean.failures)[0].status, 'working');
+  const failed = await inspectWorkerTransitions([pane], clean.observed, clean.failures, async () => 'HTTP 429 too many requests', 2000);
+  assert.equal(failed.failures['w1:p2'].label, '429');
+  assert.equal(applyWorkerFailureStatuses([pane], failed.failures)[0].status, 'failed');
+  const repeat = await inspectWorkerTransitions([pane], failed.observed, failed.failures, async () => 'HTTP 429 too many requests', 2600);
+  assert.equal(repeat.notices[0].key, failed.notices[0].key, 'a repeated match keeps one notice');
+  assert.equal(repeat.failures['w1:p2'].at, failed.failures['w1:p2'].at);
+  const recovered = await inspectWorkerTransitions([pane], repeat.observed, repeat.failures, async () => 'still working on it', 3200);
+  assert.equal(recovered.failures['w1:p2'], undefined);
+  assert.deepEqual(recovered.notices, []);
+  assert.equal(applyWorkerFailureStatuses([pane], recovered.failures)[0].status, 'working');
+});
+
+test('a working-pane failure clears when the pane identity changes', async () => {
+  const pane = { id: 'w1:p2', workspace: 'w1', name: 'worker-a', agent: 'codex', status: 'working', sessionId: 's1' };
+  const failed = await inspectWorkerTransitions([pane], {}, {}, async () => 'Connection lost', 1000);
+  assert.equal(failed.failures['w1:p2'].label, 'Connection lost');
+  const replaced = await inspectWorkerTransitions([{ ...pane, sessionId: 's2' }], failed.observed, failed.failures, async () => 'ordinary output', 2000);
+  assert.equal(replaced.failures['w1:p2'], undefined);
+  assert.deepEqual(replaced.notices, []);
+  assert.equal(applyWorkerFailureStatuses([{ ...pane, sessionId: 's2' }], replaced.failures)[0].status, 'working');
+});
+
+test('a free-usage failure from a working pane keeps one retry deadline and expires with it', async () => {
+  const { checkout, worktree } = await makeFreeRunFixture();
+  const now = Date.parse('2026-09-26T10:00:00Z');
+  const retryAt = Date.parse('2026-09-26T15:48:00Z');
+  const pane = { id: 'w1:p2', workspace: 'w1', name: 'W worker-a', agent: 'opencode', status: 'working', cwd: worktree };
+  const screen = 'Free usage exceeded. retry in 5h 48m';
+  const first = await inspectWorkerTransitions([pane], {}, {}, async () => screen, now);
+  assert.equal(first.failures['w1:p2'].label, 'Free usage exceeded');
+  assert.equal(first.failures['w1:p2'].retryAt, retryAt);
+  const repeat = await inspectWorkerTransitions([pane], first.observed, first.failures, async () => screen, now + 60000);
+  assert.equal(repeat.failures['w1:p2'].retryAt, retryAt, 'a repeated match keeps the first deadline');
+  assert.equal(repeat.notices[0].key, first.notices[0].key);
+  const laterTick = await inspectWorkerTransitions([pane], repeat.observed, repeat.failures, async () => screen, now + 600000);
+  assert.equal(laterTick.failures['w1:p2'].retryAt, retryAt, 'unchanged relative retry text does not slide forward');
+  assert.equal(laterTick.notices[0].key, first.notices[0].key);
+  const association = resolveFreeUsageRun(pane, { providerFor: () => null, policy: {}, runsCwd: checkout });
+  assert.deepEqual(association, { project: 'sample', kind: 'opencode', model: 'opencode/free' });
+  const exhausted = extendFreeModelExhaustion({}, association, repeat.failures['w1:p2'].retryAt, now);
+  assert.deepEqual(Object.keys(activeFreeModelExhaustions(exhausted, now)), ['opencode/free']);
+  assert.deepEqual(activeFreeModelExhaustions(exhausted, retryAt), {});
+});
+
+test('a later absolute retry timestamp extends the deadline without a new notice', async () => {
+  const pane = { id: 'w1:p2', workspace: 'w1', name: 'worker-a', agent: 'codex', status: 'working', sessionId: 's1' };
+  const firstNow = Date.parse('2026-09-27T11:00:00Z');
+  const firstDeadline = Date.parse('2026-09-27T12:00:00Z');
+  const laterDeadline = Date.parse('2026-09-27T13:00:00Z');
+  const first = await inspectWorkerTransitions([pane], {}, {}, async () => 'Free usage exceeded. retry at 2026-09-27T12:00:00Z', firstNow);
+  assert.equal(first.failures['w1:p2'].retryAt, firstDeadline);
+  const later = await inspectWorkerTransitions([pane], first.observed, first.failures,
+    async () => 'Free usage exceeded. retry at 2026-09-27T13:00:00Z', Date.parse('2026-09-27T11:01:00Z'));
+  assert.equal(later.failures['w1:p2'].retryAt, laterDeadline, 'a later absolute timestamp replaces the deadline');
+  assert.equal(later.failures['w1:p2'].at, first.failures['w1:p2'].at, 'the first observation time stays');
+  assert.equal(later.notices[0].key, first.notices[0].key, 'the notice stays deduplicated');
+  assert.doesNotMatch(JSON.stringify(later), /retry at/);
+  const earlier = await inspectWorkerTransitions([pane], later.observed, later.failures,
+    async () => 'Free usage exceeded. retry at 2026-09-27T12:30:00Z', Date.parse('2026-09-27T11:02:00Z'));
+  assert.equal(earlier.failures['w1:p2'].retryAt, laterDeadline, 'an earlier timestamp never shortens the deadline');
 });
