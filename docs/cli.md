@@ -60,9 +60,13 @@ When `NODE_TEST_CONTEXT` is set, or the data directory differs from the configur
 
 ### `worker start NAME`
 
-Create a branch and worktree, write the brief, add a worker pane, start the agent, and send the brief. All workers share one tab labelled `Workers` in the verified caller workspace.
+Create a branch and worktree, write the brief, add a worker pane, start the agent, and send the brief. Worker panes go in worker tabs in the verified caller workspace. The worker tabs have the labels `Workers`, `Workers 2`, `Workers 3`, and so on. A worker tab holds at most 3 worker panes.
 
-When the `Workers` tab exists, `worker start` runs `herdr pane split` from the newest pane in that tab. When the tab is missing, it runs `herdr tab create --label Workers`, and the worker uses the root pane of the new tab. If more than one tab has the label `Workers`, it uses the first. If the start fails before the agent starts, `worker start` closes only its own pane. It closes the `Workers` tab only when the same start created that tab.
+`worker start` counts the live panes of each worker tab in `herdr pane list`. It uses the first worker tab in label order that has fewer than 3 panes. It runs `herdr pane split` from the newest pane in that tab. When all worker tabs are full, it runs `herdr tab create` with the lowest free label, for example `--label 'Workers 2'`. The worker then uses the root pane of the new tab. A listed worker tab with 0 live panes counts as free. Herdr has no pane to split in that tab, so `worker start` creates a new tab with the same label.
+
+If the start fails before the agent starts, `worker start` closes only its own pane. It closes a worker tab only when the same start created that tab. The dry-run plan names the chosen tab, its tab ID, and its pane count, or `new tab`.
+
+Set `workerPanesPerTab` in `.herdr-boss.json` to change the pane limit for each worker tab. The value is an integer from 1 to 6. The default is 3.
 
 `worker start` waits for the shell prompt or a stable shell screen. It sets `DISABLE_UPDATE_PROMPT=true` and `DISABLE_AUTO_UPDATE=true` in new panes. If it finds an interactive question, it stops and tells the orchestrator to answer it in a shell once.
 

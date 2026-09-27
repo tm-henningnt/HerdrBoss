@@ -62,7 +62,7 @@ herdr pane rename "$HERDR_PANE_ID" orch
 
 The label stays when the agent in the pane restarts. The pane with the label `boss` is the Herdr Boss orchestrator itself.
 
-`herdr-boss worker start` puts each worker in a pane of one shared tab labelled `Workers` in the workspace of the orchestrator. The first worker creates the tab and uses its root pane. Each later worker splits from the newest pane in that tab. Read a worker dialog with `herdr agent read <name> --source recent-unwrapped`. This source joins wrapped lines, so a narrow pane still shows the complete dialog.
+`herdr-boss worker start` puts each worker in a pane of a worker tab in the workspace of the orchestrator. The worker tabs have the labels `Workers`, `Workers 2`, `Workers 3`, and so on. A worker tab holds at most 3 worker panes, so each pane stays wide enough to read. A new worker uses the first worker tab with a free slot and splits from the newest pane in that tab. When all worker tabs are full, the worker creates the tab with the lowest free label and uses its root pane. Set `workerPanesPerTab` in `.herdr-boss.json` to an integer from 1 to 6 to change the limit. Read a worker dialog with `herdr agent read <name> --source recent-unwrapped`. This source joins wrapped lines, so a narrow pane still shows the complete dialog.
 
 To add the shared rules to a project, follow [orchestrator-instructions.md](orchestrator-instructions.md). The shared process is in [the orchestrator skill](../kit/skills/herdr-orchestrator/SKILL.md).
 

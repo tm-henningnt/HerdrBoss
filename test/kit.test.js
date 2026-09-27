@@ -925,15 +925,21 @@ test('worker collection warns only for stale or missing artifacts in explicitly 
 });
 
 // A stateful fake Herdr for the shared Workers tab. It never touches the real Herdr.
-function sharedTabHerdr({ workersTab = false, failStart = false } = {}) {
+// workerTabs lists extra tabs as { label, panes }, where panes is the number of live panes in the tab.
+function sharedTabHerdr({ workersTab = false, failStart = false, workerTabs = [] } = {}) {
   const state = { calls: [], tabs: [{ tab_id: 'ws:t1', workspace_id: 'ws', label: 'Main' }, { tab_id: 'ws:t2', workspace_id: 'ws', label: 'W old' }], panes: [
     { pane_id: 'ws:orch', workspace_id: 'ws', tab_id: 'ws:t1', label: 'orch' },
     { pane_id: 'ws:p3', workspace_id: 'ws', tab_id: 'ws:t2' },
-  ], cwd: {}, nextTab: 5, nextPane: 20 };
+  ], cwd: {}, nextTab: 50, nextPane: 100 };
   if (workersTab) {
     state.tabs.push({ tab_id: 'ws:t4', workspace_id: 'ws', label: 'Workers' });
     state.panes.push({ pane_id: 'ws:p8', workspace_id: 'ws', tab_id: 'ws:t4', width: 160, height: 45 });
   }
+  workerTabs.forEach(({ label, panes }, index) => {
+    const tabId = `ws:t${10 + index}`;
+    state.tabs.push({ tab_id: tabId, workspace_id: 'ws', label });
+    for (let pane = 0; pane < panes; pane++) state.panes.push({ pane_id: `ws:p${20 + index * 10 + pane}`, workspace_id: 'ws', tab_id: tabId, width: 80, height: 45 });
+  });
   state.herdr = (args) => {
     state.calls.push(args);
     const [group, action] = args;
@@ -1066,7 +1072,7 @@ test('worker start dry-run shows the split from the Workers tab, or the tab crea
     return output.join('\n');
   };
   const split = plan(sharedTabHerdr({ workersTab: true }), 'drysplit');
-  assert.match(split, /Place worker in the Workers tab of workspace ws/);
+  assert.match(split, /Place worker in tab "Workers" \(ws:t4, 1 of 3 panes\) of workspace ws/);
   assert.match(split, /herdr pane split ws:p8 --direction right --cwd \S+drysplit --env HERDR_ENV=1 --env DISABLE_UPDATE_PROMPT=true --env DISABLE_AUTO_UPDATE=true --no-focus/);
   assert.match(split, /New pane: <new-pane-id>/);
   assert.match(split, /herdr agent start drysplit --kind codex --pane '<new-pane-id>'/);
@@ -1076,6 +1082,121 @@ test('worker start dry-run shows the split from the Workers tab, or the tab crea
   assert.match(create, /herdr tab create --workspace ws --label Workers --cwd \S+drycreate --env HERDR_ENV=1/);
   assert.match(create, /Root pane: <new-root-pane-id>/);
   assert.ok(!create.includes('pane split'));
+});
+
+function sharedTabStart(p, fake) {
+  return (name, extra = {}) => startWorker(name, { kind: 'claude', task: 'x', allow: ['src/'], ...extra }, {
+    config: p.config, models: loadModels(), herdr: fake.herdr, env: p.env, rulesFile: p.rulesFile, wait: () => {}, output: () => {},
+  });
+}
+
+const tabOf = (fake, paneId) => fake.tabs.find((tab) => tab.tab_id === fake.panes.find((pane) => pane.pane_id === paneId)?.tab_id)?.label;
+
+test('the fourth worker opens a Workers 2 tab', () => {
+  const p = sharedTabProject();
+  const fake = sharedTabHerdr();
+  const start = sharedTabStart(p, fake);
+  const runs = ['one', 'two', 'three', 'four'].map((name) => start(name));
+  assert.deepEqual(runs.map((run) => tabOf(fake, run.pane)), ['Workers', 'Workers', 'Workers', 'Workers 2']);
+  const creates = fake.calls.filter((args) => args[0] === 'tab' && args[1] === 'create');
+  assert.deepEqual(creates.map((args) => args[args.indexOf('--label') + 1]), ['Workers', 'Workers 2']);
+  const fifth = start('five');
+  assert.equal(tabOf(fake, fifth.pane), 'Workers 2');
+  const lastSplit = fake.calls.filter((args) => args[0] === 'pane' && args[1] === 'split').at(-1);
+  assert.equal(lastSplit[2], runs[3].pane, 'the split source is the newest pane of Workers 2');
+});
+
+test('a free slot in Workers is used before Workers 2', () => {
+  const p = sharedTabProject();
+  const fake = sharedTabHerdr({ workerTabs: [{ label: 'Workers 2', panes: 1 }, { label: 'Workers', panes: 2 }] });
+  const run = sharedTabStart(p, fake)('slot');
+  assert.equal(tabOf(fake, run.pane), 'Workers');
+  const split = fake.calls.find((args) => args[0] === 'pane' && args[1] === 'split');
+  assert.equal(split[2], 'ws:p31', 'the split source is the newest pane of Workers');
+  assert.ok(!fake.calls.some((args) => args[0] === 'tab' && args[1] === 'create'));
+});
+
+test('worker start creates the lowest free Workers label when every tab is full', () => {
+  const p = sharedTabProject();
+  const fake = sharedTabHerdr({ workerTabs: [{ label: 'Workers', panes: 3 }, { label: 'Workers 3', panes: 3 }] });
+  const run = sharedTabStart(p, fake)('gap');
+  assert.equal(tabOf(fake, run.pane), 'Workers 2');
+  const creates = fake.calls.filter((args) => args[0] === 'tab' && args[1] === 'create');
+  assert.equal(creates.length, 1);
+  assert.equal(creates[0][creates[0].indexOf('--label') + 1], 'Workers 2');
+});
+
+test('a listed Workers tab with no live panes counts as free and gets a new root pane', () => {
+  const p = sharedTabProject();
+  const fake = sharedTabHerdr({ workerTabs: [{ label: 'Workers', panes: 0 }, { label: 'Workers 2', panes: 1 }] });
+  const run = sharedTabStart(p, fake)('empty');
+  const creates = fake.calls.filter((args) => args[0] === 'tab' && args[1] === 'create');
+  assert.equal(creates.length, 1);
+  assert.equal(creates[0][creates[0].indexOf('--label') + 1], 'Workers');
+  assert.equal(tabOf(fake, run.pane), 'Workers');
+  assert.ok(!fake.calls.some((args) => args[0] === 'pane' && args[1] === 'split'));
+});
+
+test('workerPanesPerTab sets the pane cap for each Workers tab', () => {
+  const p = sharedTabProject();
+  fs.writeFileSync(path.join(p.root, '.herdr-boss.json'), JSON.stringify({ briefTemplate: path.join(p.root, 'brief-template.md'), workerPanesPerTab: 2 }));
+  p.config = loadProjectConfig({ cwd: p.root });
+  const fake = sharedTabHerdr({ workerTabs: [{ label: 'Workers', panes: 2 }] });
+  const run = sharedTabStart(p, fake)('cap');
+  assert.equal(tabOf(fake, run.pane), 'Workers 2');
+});
+
+test('a failed start in a full Workers tab set closes only the Workers 2 tab that it created', () => {
+  const p = sharedTabProject();
+  const fake = sharedTabHerdr({ failStart: true, workerTabs: [{ label: 'Workers', panes: 3 }] });
+  assert.throws(() => sharedTabStart(p, fake)('failnew'), /agent_not_ready/);
+  const create = fake.calls.find((args) => args[0] === 'tab' && args[1] === 'create');
+  assert.equal(create[create.indexOf('--label') + 1], 'Workers 2');
+  const closes = fake.calls.filter((args) => args[1] === 'close');
+  assert.equal(closes.length, 1);
+  assert.equal(closes[0][0], 'tab');
+  assert.notEqual(closes[0][2], 'ws:t10', 'cleanup never closes the full Workers tab');
+  assert.equal(fake.panes.filter((pane) => pane.tab_id === 'ws:t10').length, 3);
+  assert.ok(!fake.tabs.some((tab) => tab.label === 'Workers 2'));
+
+  const split = sharedTabHerdr({ failStart: true, workerTabs: [{ label: 'Workers', panes: 3 }, { label: 'Workers 2', panes: 1 }] });
+  assert.throws(() => sharedTabStart(p, split)('failpane'), /agent_not_ready/);
+  const splitCloses = split.calls.filter((args) => args[1] === 'close');
+  assert.equal(splitCloses.length, 1);
+  assert.equal(splitCloses[0][0], 'pane');
+  assert.notEqual(splitCloses[0][2], 'ws:p30');
+  assert.ok(split.tabs.some((tab) => tab.label === 'Workers 2'), 'a start that did not create Workers 2 keeps it');
+});
+
+test('worker start dry-run names the chosen Workers tab', () => {
+  const p = sharedTabProject();
+  const plan = (fake, name) => {
+    const output = [];
+    startWorker(name, { kind: 'claude', task: 'x', allow: ['src/'], dryRun: true }, {
+      config: p.config, models: loadModels(), herdr: fake.herdr, env: p.env, rulesFile: p.rulesFile, output: (line) => output.push(line),
+    });
+    assert.ok(!fake.calls.some((args) => ['create', 'split', 'close'].includes(args[1])), 'the dry run changes no tab or pane');
+    return output.join('\n');
+  };
+  const split = plan(sharedTabHerdr({ workerTabs: [{ label: 'Workers', panes: 3 }, { label: 'Workers 2', panes: 2 }] }), 'drytwo');
+  assert.match(split, /Place worker in tab "Workers 2" \(ws:t11, 2 of 3 panes\) of workspace ws/);
+  assert.match(split, /herdr pane split ws:p31 /);
+  const create = plan(sharedTabHerdr({ workerTabs: [{ label: 'Workers', panes: 3 }] }), 'drynew');
+  assert.match(create, /Place worker in tab "Workers 2" \(new tab\) of workspace ws/);
+  assert.match(create, /herdr tab create --workspace ws --label 'Workers 2' --cwd /);
+});
+
+test('project workerPanesPerTab defaults to three and accepts integers from one to six', () => {
+  const root = temporaryRepo();
+  assert.equal(loadProjectConfig({ cwd: root }).workerPanesPerTab, 3);
+  for (const workerPanesPerTab of [1, 6]) {
+    fs.writeFileSync(path.join(root, '.herdr-boss.json'), JSON.stringify({ workerPanesPerTab }));
+    assert.equal(loadProjectConfig({ cwd: root }).workerPanesPerTab, workerPanesPerTab);
+  }
+  for (const workerPanesPerTab of [0, 7, -1, 2.5, '3', null]) {
+    fs.writeFileSync(path.join(root, '.herdr-boss.json'), JSON.stringify({ workerPanesPerTab }));
+    assert.throws(() => loadProjectConfig({ cwd: root }), /workerPanesPerTab must be an integer from 1 to 6/);
+  }
 });
 
 test('worker dialog and screen reads use the recent-unwrapped source', async () => {

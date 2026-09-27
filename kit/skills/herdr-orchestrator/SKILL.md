@@ -102,7 +102,8 @@ description: Use when coordinating delegated workers with Herdr Boss, writing wo
 - Label the orchestrator pane `orch` with `herdr pane rename "$HERDR_PANE_ID" orch`.
 - Use a lowercase, unique worker name.
 - Keep each name within the Herdr agent name limit.
-- Put each worker in a pane of the shared tab labelled `Workers` in the verified caller workspace. `herdr-boss worker start` splits the new pane from the newest worker pane in that tab. When the tab is missing, it creates the tab, and the first worker uses its root pane.
+- Put each worker in a pane of a worker tab in the verified caller workspace. The worker tabs have the labels `Workers`, `Workers 2`, `Workers 3`, and so on. A worker tab holds at most 3 worker panes. The project setting `workerPanesPerTab` changes this limit.
+- `herdr-boss worker start` uses the first worker tab in label order with a free slot. It splits the new pane from the newest pane in that tab. When all worker tabs are full, it creates the tab with the lowest free label, and the worker uses its root pane.
 - Use separate worktrees for parallel changes.
 - Give parallel changes separate branches and worktrees with independent scopes.
 - Use one writer per shared module.
@@ -158,7 +159,7 @@ herdr-boss worker start <name> --kind <kind> --task-file <file> --allow <path>
 - Use `herdr agent` commands for recognized agent lifecycle and prompts.
 - Use `herdr pane` commands for shells and raw terminal control.
 - Never run `herdr pane run` in a pane occupied by an agent.
-- Keep all worker panes in the one `Workers` tab of the verified caller workspace. Give each worker pane `--cwd <dir>` for the worker worktree.
+- Keep all worker panes in the worker tabs of the verified caller workspace. Give each worker pane `--cwd <dir>` for the worker worktree.
 - Send the complete brief only after the worker pane is ready.
 - Wait for an agent instead of polling it.
 - Use `herdr agent wait <name> --until idle --timeout <ms>` for long work.
