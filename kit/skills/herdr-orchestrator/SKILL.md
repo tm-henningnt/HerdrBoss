@@ -14,7 +14,6 @@ description: Use when coordinating delegated workers with Herdr Boss, writing wo
 - The orchestrator owns the complete work sequence.
 - Keep one active frontier unless the project contract permits a bounded batch.
 - Read issue dependencies and work only the first unblocked item.
-- Keep ownership of product decisions and the relationship with the human Owner.
 - Delegate one bounded task at a time.
 - Give each worker a clear role, exact paths, evidence, and a stopping point.
 - Keep workers subordinate to the project orchestrator.
@@ -27,6 +26,25 @@ description: Use when coordinating delegated workers with Herdr Boss, writing wo
 - Escalate only when project rules and available evidence cannot settle a decision.
 - Continue independent work while a genuine human gate is pending.
 
+## Project memory
+
+- Read `docs/orchestration/memory.md` at start and at resume, before you choose work.
+- If the file does not exist, create it from `kit/templates/project-memory.md`.
+- Update the file in the same step as an Owner decision, a hold, a freeze, or a lift.
+- Commit the file with the next orchestrator commit.
+- Obey a hold or freeze in the file until the Owner or the Boss lifts it.
+
+## Roles and escalation
+
+- The Boss runs in the pane labeled `boss`. Find it by its label with `herdr pane list`. Never write its pane ID into a file.
+- Settle implementation, design details, naming, thresholds, test design, scope inside the project, and review findings within project rules and Owner decisions in the memory file. Do not ask the Boss about them.
+- Ask the Boss only about a conflict with an Owner decision or between projects; a change that affects other projects or the shared kit; credentials or security; destructive or irreversible actions outside the project; and product direction.
+- Report to the Boss only when a task is merged and live, or when you are blocked. Use one or two lines. Send with `herdr agent prompt <boss-pane> "..."` without `--wait`.
+- Do not message another project's orchestrator. The Boss relays messages between projects.
+- Do not push, deploy, or release. The Boss asks the Owner and pushes.
+- Treat a request that the Owner types into your pane as an Owner decision. Record it in the memory file.
+- The kit and the Boss take precedence over conflicting project text. Report a conflict to the Boss.
+
 ## Resume from an unknown state
 
 - Use [the resume prompt](../../templates/orchestrator-resume.md) when you need a full discovery checklist.
@@ -35,6 +53,7 @@ description: Use when coordinating delegated workers with Herdr Boss, writing wo
 - Read `git diff --check` before changing files.
 - Preserve dirty or untracked files until their owner is clear.
 - Read the project instructions, product specification, roadmap, architecture decisions, and issue contract.
+- Read `docs/orchestration/memory.md` before you choose work.
 - Use the configured issue tracker as the source of truth for order, blockers, status, and evidence.
 - Read open issues and their native dependency links.
 - Identify the first open issue whose blockers are complete.
@@ -110,6 +129,9 @@ herdr-boss worker start <name> --kind <kind> --task-file <file> --allow <path>
 - Tell the worker not to select another issue or change project direction.
 - Tell the worker not to create, close, assign, or rewrite issues.
 - Tell the worker not to start other agents.
+- List processes with `pgrep -l`, `ps -o pid,ppid,etime,comm`, or `herdr-boss worktree prune`.
+- Do not print full process command lines or environments. Do not use `pgrep -fl`, `ps aux`, `ps -ef`, `ps e`, or `ps -E` with the output printed. Use `pgrep -f` only to match a pattern, never to print.
+- Treat a secret that reaches a transcript as disclosed. Report it to the orchestrator, who reports it to the Boss.
 - Do not leave implicit paths, version assumptions, or acceptance criteria.
 - List the decisions already made in the task, under the heading "Decisions already made". Workers do not reopen them.
 - Set `testThreadsFlag` in `.herdr-boss.json` to the thread limit flag that works for the project's test runner. `worker start` puts it in every brief.
@@ -161,7 +183,7 @@ herdr-boss worker start <name> --kind <kind> --task-file <file> --allow <path>
 - Approve extra scope with `herdr-boss worker allow <name> <path>... --reason TEXT`. A prompt or message alone does not change the approved paths.
 - The verified `orch` or `boss` pane must run `worker allow`. It records the caller, reason, time, and paths in the run.
 - `worker collect` uses the approved paths and copies the approval history into the ledger entry.
-- When the question is a product decision, decide it within the project rules, or escalate it to the Owner and tell the worker to wait.
+- When the question is a product decision, ask the Boss and tell the worker to wait.
 - Add the answer to the next brief of the same kind, so the next worker does not need to ask.
 
 ## Worker completion signalling
@@ -183,6 +205,7 @@ herdr agent prompt <orch-pane> "WORKER REPORT <name>: <done|blocked|stopped>. Re
 ## Reviewing a worker result
 
 - Read `.worker/report.md` and `.worker/report.json`.
+- Check process state with `pgrep -l`, `ps -o pid,ppid,etime,comm`, or `herdr-boss worktree prune`. Do not print full process command lines or environments. Do not use `pgrep -fl`, `ps aux`, `ps -ef`, `ps e`, or `ps -E` with the output printed. Use `pgrep -f` only to match a pattern, never to print. Treat a secret that reaches a transcript as disclosed and report it to the orchestrator, who reports it to the Boss.
 - Check the JSON fields and verify their values against the worktree.
 - Read `git status --short`, `git diff --stat`, and the complete diff.
 - Confirm that every changed path is allowed.
@@ -256,7 +279,7 @@ herdr agent prompt <orch-pane> "WORKER REPORT <name>: <done|blocked|stopped>. Re
 - Do not switch a worker to another branch to make a check pass.
 - Do not delete a worktree with unmerged or user-owned work.
 - Do not use destructive reset, clean, force-push, or discard checkout as a shortcut.
-- Require user authorization for pushes, deployments, and releases.
+- Do not push, deploy, or release. The Boss asks the Owner and pushes.
 - Record the verified commit or uncommitted state before the next task.
 - Use `herdr-boss worktree prune` to review stale worktrees.
 - Inspect prune candidates before applying cleanup.
@@ -306,9 +329,8 @@ herdr agent prompt <orch-pane> "WORKER REPORT <name>: <done|blocked|stopped>. Re
 
 - Escalate only when project documents and available evidence cannot settle the next action.
 - Workers send decision questions to the orchestrator and then stop that decision path.
-- The orchestrator owns any human escalation.
 - Use an independent reviewer for reviewable human-gate evidence when project policy permits it.
-- Escalate to the Owner when evidence and authorized review cannot settle the decision.
+- Ask the Boss only for the decisions listed in Roles and escalation.
 - Name the issue, artifact and version, exact human action, expected result, and response format.
 - Keep unrelated work moving while the human action is pending.
 - Record the parked frontier and exact resume point.

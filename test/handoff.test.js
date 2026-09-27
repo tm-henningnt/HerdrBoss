@@ -418,6 +418,47 @@ test('fresh handoff carries only the published Owner goal and redacted recent co
   assert.ok(calls.some((args) => args[0] === 'pane' && args[1] === 'read' && args[2] === 'ws:p1' && args.includes('recent')));
 });
 
+test('project standby prompt names the project memory file and says it is present', (t) => {
+  const f = handoffFixture(t);
+  const memory = path.join(f.project, 'docs', 'orchestration', 'memory.md');
+  fs.mkdirSync(path.dirname(memory), { recursive: true });
+  fs.writeFileSync(memory, '## Owner decisions in force\n');
+
+  runHandoffCli(f.root, ['handoff', 'prepare', 'ws:p1', '--to', 'pi', '--mode', 'fresh'], f.env);
+
+  const calls = fs.readFileSync(f.callsFile, 'utf8').trim().split('\n').map(JSON.parse);
+  const prompt = calls.find((args) => args[0] === 'agent' && args[1] === 'prompt')[3];
+  assert.match(prompt, /docs\/orchestration\/memory\.md/);
+  assert.match(prompt, /memory file is present/i);
+});
+
+test('project standby prompt says to report when the project memory file is missing', (t) => {
+  const f = handoffFixture(t);
+
+  runHandoffCli(f.root, ['handoff', 'prepare', 'ws:p1', '--to', 'pi', '--mode', 'fresh'], f.env);
+
+  const calls = fs.readFileSync(f.callsFile, 'utf8').trim().split('\n').map(JSON.parse);
+  const prompt = calls.find((args) => args[0] === 'agent' && args[1] === 'prompt')[3];
+  assert.match(prompt, /docs\/orchestration\/memory\.md/);
+  assert.match(prompt, /memory file is missing/i);
+  assert.match(prompt, /report that it is missing/i);
+});
+
+test('Boss standby prompt uses only the private Boss memory file', (t) => {
+  const f = handoffFixture(t, { sourceLabel: 'boss' });
+  const memory = path.join(f.root, '.herdr-boss', 'boss-memory.md');
+  fs.mkdirSync(path.dirname(memory), { recursive: true });
+  fs.writeFileSync(memory, '## Roles and panes\n');
+
+  runHandoffCli(f.root, ['handoff', 'prepare', 'ws:p1', '--to', 'pi', '--mode', 'fresh'], f.env);
+
+  const calls = fs.readFileSync(f.callsFile, 'utf8').trim().split('\n').map(JSON.parse);
+  const prompt = calls.find((args) => args[0] === 'agent' && args[1] === 'prompt')[3];
+  assert.match(prompt, /~\/\.herdr-boss\/boss-memory\.md/);
+  assert.match(prompt, /memory file is present/i);
+  assert.doesNotMatch(prompt, /docs\/orchestration\/memory\.md/);
+});
+
 test('migration success retains its session and does not capture the source pane', (t) => {
   const f = handoffFixture(t, { sessionId: 'old-session' });
   const result = JSON.parse(runHandoffCli(f.root, ['handoff', 'prepare', 'ws:p1', '--to', 'codex', '--mode', 'migrate'], f.env));
@@ -773,6 +814,7 @@ test('project activation prompts the successor and the previous agent with both 
   assert.match(successor, /final summary/);
   assert.match(successor, /herdr agent read ws:p1/);
   assert.match(successor, /Take over the current work/);
+  assert.match(successor, /obey the holds and freezes in docs\/orchestration\/memory\.md/i);
   assert.match(successor, /Use your pane ID ws:p2 in worker briefs, worker reports, and messages/);
   assert.match(successor, /ws:p3/);
   const previous = prompts['ws:p1'];

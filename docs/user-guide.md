@@ -21,6 +21,24 @@ Then it applies its rules and writes these files to `~/.herdr-boss/`:
 
 Herdr Boss is a script. It uses no LLM and no tokens.
 
+## Project memory
+
+Store project memory in `docs/orchestration/memory.md`. Commit this file with the project repository.
+
+Store Boss memory in `~/.herdr-boss/boss-memory.md`. Keep this file private and never commit it.
+
+Use these five sections in this order:
+
+- `## Owner decisions in force`: Record one line per decision. Include the date (YYYY-MM-DD) and the source.
+- `## Holds and freezes`: Record one line per hold. Include its start date, scope, and the condition that lifts it. Delete the line when the hold is lifted.
+- `## Standing rules`: Record project rules that are not in `AGENTS.md` yet.
+- `## Roles and panes`: Record facts that stay true for longer than one session.
+- `## Evidence`: Record pointers to files, commits, or reports. Do not copy evidence into the file.
+
+Keep current state only. Delete a line when a decision is superseded. Git keeps history.
+
+Never store secrets, tokens, or credentials. In a public repository, do not store client names, tenant URLs, or details of other projects.
+
 ## Orchestrators
 
 Herdr Boss finds an orchestrator by its pane label `orch`. Tab names do not matter. An orchestrator can label its own pane:

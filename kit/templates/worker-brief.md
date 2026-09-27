@@ -2,7 +2,7 @@
 
 Role: delegated worker. You are NOT the project orchestrator.
 
-The orchestrator retains implementation order, issue authority, cross-task decisions, review, and human escalation.
+The orchestrator retains implementation order, issue authority, cross-task decisions, review, and questions for the Boss.
 
 - Worker: `{{name}}`
 - Kind: `{{kind}}`
@@ -104,6 +104,12 @@ Limit the test runner to two worker threads. Other projects use the same machine
 Record each command and its exact result.
 
 If a gate is unavailable, report the reason and leave it unverified.
+
+List processes with `pgrep -l`, `ps -o pid,ppid,etime,comm`, or `herdr-boss worktree prune`.
+
+Do not print full process command lines or environments. Do not use `pgrep -fl`, `ps aux`, `ps -ef`, `ps e`, or `ps -E` with the output printed. Use `pgrep -f` only to match a pattern, never to print.
+
+Treat a secret that reaches a transcript as disclosed. Report it to the orchestrator, who reports it to the Boss.
 
 Stop every test or server process you start before you write either report. Before collection, the orchestrator checks for processes whose current working directory is this worktree and asks you to stop any leftovers.
 
