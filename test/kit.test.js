@@ -174,7 +174,7 @@ test('Herdr runner returns plain pane-read text without JSON parsing', () => {
 });
 
 test('worker pane readiness recognizes Oh My Zsh git prompt marks', () => {
-  for (const prompt of ['➜  TmProcessMining git:(main) ✗', '➜  TmProcessMining git:(main) ✔']) {
+  for (const prompt of ['➜  project git:(main) ✗', '➜  project git:(main) ✔']) {
     let reads = 0;
     const herdr = (args) => {
       if (args[0] === 'pane' && args[1] === 'get') return { pane: { pane_id: 'ws:p2', workspace_id: 'ws', foreground_cwd: '/worktree' } };
