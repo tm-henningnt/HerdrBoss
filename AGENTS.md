@@ -22,7 +22,8 @@ Settle implementation and design details, naming, thresholds, test design, scope
 
 - `npm test` runs all tests, two test files at a time. There are no dependencies to install.
 - Run `node --check <file>` for each changed JavaScript file.
-- For the dashboard, check the change in a browser of your own: `playwright-cli -s=<name> open http://127.0.0.1:4477/<page>`. Add `--device="iPhone 15"` for the phone layout. Close the session when you are done.
+- For the dashboard, check the change in the project browser: run `herdr-boss browser request herdrboss`, open a tab with `herdr-boss browser tab new herdrboss http://127.0.0.1:4477/<page>`, and capture it with `herdr-boss browser screenshot herdrboss --tab <id>`. Close your tab when you are done.
+- For the phone layout, run `herdr-boss browser size herdrboss 393 852`, then `herdr-boss browser restart herdrboss --headless --no-restore`. Set the size back to 1280 by 800 when you are done.
 - For a dashboard preview, use `HERDR_BOSS_DIR="$(mktemp -d)" HERDR_BOSS_PORT=4478 npm start -- --read-only-preview`. Choose an unused local port if 4478 is busy.
 - Loopback requests need no login. Do not change `~/.herdr-boss/` data files in a test; use a temporary directory with `HERDR_BOSS_DIR`.
 
