@@ -212,8 +212,9 @@ export function createHerdrRunner(exec = (args) => execFileSync('herdr', args, {
 const workerDirName = (name, shared) => (shared ? `.worker/${name}` : '.worker');
 const briefPrompt = (dir) => `Read ${dir}/brief.md in your working directory and execute it.`;
 
-function readAgentText(name) {
-  return execFileSync('herdr', ['agent', 'read', name, '--source', 'recent-unwrapped', '--lines', '60'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+// The recent-unwrapped source joins wrapped lines, so a dialog in a narrow pane reads as complete lines.
+export function readAgentText(name, exec = execFileSync) {
+  return exec('herdr', ['agent', 'read', name, '--source', 'recent-unwrapped', '--lines', '60'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 }
 
 function pause(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
@@ -477,30 +478,75 @@ function rulesWarning(rules, now = Date.now()) {
   return !Number.isFinite(updated) || now - updated > 10 * 60 * 1000;
 }
 
+const WORKERS_TAB = 'Workers';
+
 // A Codex worker pane needs HERDR_ENV, or the agent in it cannot run Herdr commands. Other kinds keep the pane environment they had.
-function workerPaneCommand(workspaceId, worktree, name, kind) {
-  const command = ['tab', 'create', '--workspace', workspaceId, '--label', `W ${name}`, '--cwd', worktree];
-  if (kind === 'codex') command.push('--env', 'HERDR_ENV=1');
-  command.push('--env', 'DISABLE_UPDATE_PROMPT=true', '--env', 'DISABLE_AUTO_UPDATE=true', '--no-focus');
-  return command;
+function workerPaneEnv(kind) {
+  return [
+    ...(kind === 'codex' ? ['--env', 'HERDR_ENV=1'] : []),
+    '--env', 'DISABLE_UPDATE_PROMPT=true', '--env', 'DISABLE_AUTO_UPDATE=true', '--no-focus',
+  ];
 }
 
-function chooseWorkerPane(workspaceId, worktree, name, kind, herdr) {
-  const existingTabs = listFrom(herdr(['tab', 'list', '--workspace', workspaceId]), 'tabs');
-  const command = workerPaneCommand(workspaceId, worktree, name, kind);
-  const created = herdr(command);
-  const tabId = getTab(created) ?? created.tab?.tab_id ?? created.id;
-  const freshTabs = listFrom(herdr(['tab', 'list', '--workspace', workspaceId]), 'tabs');
-  const foundTab = freshTabs.find((tab) => getWorkspace(tab) === workspaceId
-    && (tab.tab_id === tabId || (tab.label === `W ${name}` && !existingTabs.some((old) => getTab(old) === getTab(tab)))));
-  if (!foundTab) throw new Error(`Herdr created tab W ${name} but did not return a tab id that can be found.`);
-  const panes = listFrom(herdr(['pane', 'list', '--workspace', workspaceId]), 'panes');
-  const rootPane = panes.find((pane) => getTab(pane) === getTab(foundTab));
-  if (!rootPane || !getPane(rootPane)) {
-    try { herdr(['tab', 'close', getTab(foundTab)]); } catch {}
-    throw new Error(`Worker tab W ${name} has no root pane.`);
+function paneOrder(pane, index) {
+  const match = /(\d+)$/.exec(getPane(pane) ?? '');
+  return match ? Number(match[1]) : index;
+}
+
+// All workers share one tab labelled Workers in the caller workspace. Split from its most recently created pane.
+function findWorkersTab(workspaceId, herdr) {
+  const tabs = listFrom(herdr(['tab', 'list', '--workspace', workspaceId]), 'tabs');
+  const tab = tabs.find((item) => item.label === WORKERS_TAB && getWorkspace(item) === workspaceId);
+  if (!tab) return { tabs, tab: null, panes: [], source: null };
+  const panes = listFrom(herdr(['pane', 'list', '--workspace', workspaceId]), 'panes').filter((pane) => getTab(pane) === getTab(tab) && getPane(pane));
+  const source = panes
+    .map((pane, index) => ({ pane, order: paneOrder(pane, index), index }))
+    .sort((a, b) => a.order - b.order || a.index - b.index)
+    .at(-1)?.pane ?? null;
+  return { tabs, tab, panes, source };
+}
+
+function workerPanePlan(workspaceId, worktree, kind, herdr) {
+  const found = findWorkersTab(workspaceId, herdr);
+  if (!found.tab) {
+    return { ...found, command: ['tab', 'create', '--workspace', workspaceId, '--label', WORKERS_TAB, '--cwd', worktree, ...workerPaneEnv(kind)] };
   }
-  return { paneId: getPane(rootPane), tabId: getTab(foundTab), command, createdTab: true };
+  if (!found.source) throw new Error(`The ${WORKERS_TAB} tab ${getTab(found.tab)} has no pane to split.`);
+  let dimensions = findDimensions(found.source);
+  if (!dimensions) {
+    try { dimensions = findDimensions(herdr(['pane', 'layout', '--pane', getPane(found.source)])); } catch {}
+  }
+  const direction = dimensions && dimensions.height > dimensions.width ? 'down' : 'right';
+  return { ...found, command: ['pane', 'split', getPane(found.source), '--direction', direction, '--cwd', worktree, ...workerPaneEnv(kind)] };
+}
+
+function chooseWorkerPane(workspaceId, worktree, kind, herdr) {
+  const plan = workerPanePlan(workspaceId, worktree, kind, herdr);
+  const { command } = plan;
+  if (!plan.tab) {
+    const created = herdr(command);
+    const tabId = getTab(created) ?? created.tab?.tab_id ?? created.id;
+    const freshTabs = listFrom(herdr(['tab', 'list', '--workspace', workspaceId]), 'tabs');
+    const foundTab = freshTabs.find((tab) => getWorkspace(tab) === workspaceId
+      && (tab.tab_id === tabId || (tab.label === WORKERS_TAB && !plan.tabs.some((old) => getTab(old) === getTab(tab)))));
+    if (!foundTab) throw new Error(`Herdr created tab ${WORKERS_TAB} but did not return a tab id that can be found.`);
+    const panes = listFrom(herdr(['pane', 'list', '--workspace', workspaceId]), 'panes');
+    const rootPane = panes.find((pane) => getTab(pane) === getTab(foundTab));
+    if (!rootPane || !getPane(rootPane)) {
+      try { herdr(['tab', 'close', getTab(foundTab)]); } catch {}
+      throw new Error(`The new ${WORKERS_TAB} tab has no root pane.`);
+    }
+    return { paneId: getPane(rootPane), tabId: getTab(foundTab), command, createdTab: true, createdPane: true };
+  }
+  const result = herdr(command);
+  let paneId = result?.pane_id ?? result?.paneId ?? result?.pane?.pane_id ?? result?.new_pane_id ?? null;
+  if (!paneId) {
+    const refreshed = listFrom(herdr(['pane', 'list', '--workspace', workspaceId]), 'panes').filter((pane) => getTab(pane) === getTab(plan.tab));
+    const added = refreshed.filter((pane) => !plan.panes.some((old) => getPane(old) === getPane(pane)));
+    if (added.length !== 1) throw new Error(`Herdr split the ${WORKERS_TAB} tab but did not return the new pane id.`);
+    paneId = getPane(added[0]);
+  }
+  return { paneId, tabId: getTab(plan.tab), command, createdTab: false, createdPane: true };
 }
 
 export function waitForWorkerPane(paneId, workspaceId, worktree, herdr, wait = pause, { retryCommand = 'worker start', timeoutMs = 20_000 } = {}) {
@@ -528,7 +574,7 @@ export function waitForWorkerPane(paneId, workspaceId, worktree, herdr, wait = p
             ? foregroundProcesses.some((process) => Number(process.pid) === shellPid)
             : Number(info.foreground_process_group_id) === shellPid);
         if (shellIsForeground) {
-          const screenResponse = herdr(['pane', 'read', paneId, '--source', 'visible', '--lines', '40', '--format', 'text']);
+          const screenResponse = herdr(['pane', 'read', paneId, '--source', 'recent-unwrapped', '--lines', '40', '--format', 'text']);
           const screen = typeof screenResponse === 'string'
             ? screenResponse
             : screenResponse?.text ?? screenResponse?.output ?? '';
@@ -600,9 +646,9 @@ function renderStartPlan(plan) {
     `   Append /.worker/ to ${plan.excludeFile}`,
     `5. Render brief: ${plan.worktree}/${plan.workerDir}/brief.md from ${plan.template}`,
     ...(plan.setup ? [`   Run project setup in the worktree (timeout ${plan.setupTimeoutSeconds} s):`, `   $ ${plan.setup}`] : []),
-    `6. Place worker in workspace ${plan.workspaceId}:`,
+    `6. Place worker in the Workers tab of workspace ${plan.workspaceId}:`,
     `   $ herdr ${plan.paneCommand.map(displayArg).join(' ')}`,
-    `   Root pane: ${plan.paneId}`,
+    `   ${plan.paneCommand[0] === 'pane' ? 'New pane' : 'Root pane'}: ${plan.paneId}`,
     `7. Start agent:`,
     `   $ herdr agent start ${displayArg(plan.name)} --kind ${displayArg(plan.kind)} --pane ${displayArg(plan.paneId)} --timeout ${plan.agentStartTimeoutMs} -- ${plan.launchArgs.map(displayArg).join(' ')}`,
     `8. Write run record: ${plan.recordFile}`,
@@ -722,8 +768,8 @@ export function startWorker(name, options, {
   let paneId = null;
   let paneCommand;
   if (options.dryRun) {
-    paneCommand = workerPaneCommand(workspaceId, worktree, name, options.kind);
-    paneId = '<new-root-pane-id>';
+    paneCommand = workerPanePlan(workspaceId, worktree, options.kind, herdr).command;
+    paneId = paneCommand[0] === 'pane' ? '<new-pane-id>' : '<new-root-pane-id>';
   }
 
   const plan = {
@@ -792,7 +838,7 @@ export function startWorker(name, options, {
       catch (error) { throw setupFailure(error, plan.setup, plan.setupTimeoutSeconds); }
       output(`Project setup finished in ${Math.round((Date.now() - started) / 1000)} s.`);
     }
-    placement = chooseWorkerPane(workspaceId, worktree, name, options.kind, herdr);
+    placement = chooseWorkerPane(workspaceId, worktree, options.kind, herdr);
     paneId = placement.paneId;
     waitForWorkerPane(paneId, workspaceId, worktree, herdr, wait);
     const shellPid = workerPaneShellPid(paneId, herdr);
@@ -838,9 +884,11 @@ export function startWorker(name, options, {
     const failedReason = error.message;
     if (!agentStarted && placement) {
       try {
+        // Close only what this start created: the Workers tab when it made the tab, or else its own pane.
         if (placement.createdTab) herdr(['tab', 'close', placement.tabId]);
+        else if (placement.createdPane) herdr(['pane', 'close', placement.paneId]);
       } catch (cleanupError) {
-        error.message += ` (Herdr tab cleanup also failed: ${cleanupError.message})`;
+        error.message += ` (Herdr pane cleanup also failed: ${cleanupError.message})`;
       }
     }
     if (createdWorktree && !agentStarted) {

@@ -162,6 +162,8 @@ function startFixture(rules, kitModels = models) {
   const herdr = (args) => {
     if (args[0] === 'pane' && args[1] === 'get') return { pane: { pane_id: 'ws:orch', workspace_id: 'ws', label: 'orch' } };
     if (args[0] === 'agent' && args[1] === 'list') return { agents: [] };
+    if (args[0] === 'tab' && args[1] === 'list') return { tabs: [] };
+    if (args[0] === 'pane' && args[1] === 'list') return { panes: [] };
     throw new Error(`Unexpected Herdr call: ${args.join(' ')}`);
   };
   const env = { HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'ws', HERDR_PANE_ID: 'ws:orch' };

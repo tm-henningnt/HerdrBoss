@@ -37,7 +37,6 @@ export function mergedModelIds(rulesFile, models = loadModels()) {
 const STALE = [
   [/\bherdr agent start\b/, 'herdr agent start is not the worker path; use herdr-boss worker start'],
   [/\bherdr pane split\b/, 'herdr pane split is not the worker path; use herdr-boss worker start'],
-  [/\bWorkers`?\s+tab\b/, 'a Workers tab is not used; herdr-boss worker start makes one tab per worker'],
   [/\bdashboard:update\b/, 'dashboard:update is not used; publish status with herdr-boss publish'],
 ];
 // A line that forbids a process command or port 9222 is a safety rule, not drift.
