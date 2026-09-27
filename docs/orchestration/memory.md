@@ -4,7 +4,7 @@ Keep the current facts that every HerdrBoss orchestrator needs at start and resu
 
 ## Owner decisions in force
 
-- 2026-09-27: The orchestrator decides and runs its own pushes. Neither the Boss nor the Owner approves them. Before each push, read the full diff for tokens, secrets, local paths with private content, and client or tenant names from other projects. Push one at a time, only when the 5-minute load is under 30. Source: Owner, through the Boss.
+- 2026-09-27: The orchestrator decides and runs its own pushes. Neither the Boss nor the Owner approves them. Before each push, read the full diff for tokens, secrets, local paths with private content, and client or tenant names from other projects. Take the machine-wide `full-suite` lock around every full test suite run and every push whose hook runs the full suite. There is no load threshold. Source: Owner, through the Boss; the lock replaced the load rule by Boss decision.
 - 2026-09-27: Escalate to the Owner, through the Boss, only credentials, spending money, destructive actions outside the project, and a real conflict with a recorded Owner decision. Source: Owner, through the Boss.
 - 2026-09-27: Never stop, close, or restart a browser that another project uses. Never touch the Chrome on port 9222. Source: AGENTS.md.
 - 2026-09-27: Store decisions and facts in project files, not only in a Claude or Codex memory. Source: Owner, through the Boss task B4.
