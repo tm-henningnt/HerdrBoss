@@ -28,3 +28,10 @@ test('bulletin marks a matched browser that answers CDP as ready', () => {
 test('bulletin marks a browser without a matched process as offline, whatever the probe says', () => {
   assert.match(bulletin({ responsive: false }, false), /- alpha: offline \(headless\)/);
 });
+
+test('bulletin shows the current kit revision in its header section', async () => {
+  const { projectKit } = await import('../src/kit/agents-check.js');
+  const text = bulletin({ responsive: true });
+  const header = text.slice(0, text.indexOf('## Rules now'));
+  assert.match(header, new RegExp(`^Kit revision: ${projectKit().revision}$`, 'm'));
+});

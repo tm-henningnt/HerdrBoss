@@ -28,7 +28,7 @@ description: Use when coordinating delegated workers with Herdr Boss, writing wo
 
 ## Project memory
 
-- Read `docs/orchestration/memory.md` at start and at resume, before you choose work.
+- Read `docs/orchestration/herdr-boss.md` and `docs/orchestration/memory.md` at start, at resume, and on each `Kit updated` notice, before you choose work.
 - If the file does not exist, create it from `kit/templates/project-memory.md`.
 - Update the file in the same step as an Owner decision, a hold, a freeze, or a lift.
 - Commit the file with the next orchestrator commit.
@@ -316,7 +316,7 @@ herdr agent prompt <orch-pane> "WORKER REPORT <name>: <done|blocked|stopped>. Re
 - Check your project on the Boss dashboard or in `herdr-boss policy show` when capacity, provider availability, or handover changes. The dashboard's Allocation view is the Owner's control plane; apply its saved worker cap, project share, exclusions, and succession ladder.
 - Act on a `[herdr-boss]` notice that concerns your current work.
 - Do not reply to the notice.
-- Act on a `Kit updated` notice: run `herdr-boss check agents`. If it reports an old block, reinstall the block with `herdr-boss kit block`.
+- Act on a `Kit updated` notice: run `herdr-boss kit install`, then re-read `docs/orchestration/herdr-boss.md`. Set `kitRevision` in the project status to its new revision. Run `herdr-boss check agents`.
 - Do not start work that the bulletin marks as avoided unless you use an allowed override.
 - Publish project status through Herdr Boss.
 - Request a dedicated persistent browser with `herdr-boss browser request <project-slug>` before browser work.
@@ -334,7 +334,7 @@ herdr agent prompt <orch-pane> "WORKER REPORT <name>: <done|blocked|stopped>. Re
 - Do not build a separate project dashboard.
 - Keep Herdr as live execution state and the issue tracker as durable work state.
 - Keep the orchestrator pane labeled `orch` so Herdr Boss can find it.
-- Use [the project section template](../../templates/agents-section.md) to install shared rules in a project `AGENTS.md`.
+- Run `herdr-boss kit install` to install the shared rules. It writes `docs/orchestration/herdr-boss.md` from [the kit template](../../templates/project-kit.md) and the `AGENTS.md` stub from [the stub template](../../templates/agents-stub.md).
 - Keep product contracts, acceptance commands, and project-specific browser procedures in the project files.
 
 ## Escalation and parking

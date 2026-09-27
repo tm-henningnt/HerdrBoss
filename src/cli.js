@@ -50,8 +50,10 @@ const USAGE = `herdr-boss <command>
   worktree prune        List safe worktree removals.
   ledger ...            Append or check delegated-run records.
   check ...             Validate worker handoffs and scope.
-  check agents [FILE]   Check AGENTS.md for an old kit block and stale orchestration text.
-  kit block             Print the marked Herdr Boss block for AGENTS.md.
+  check agents [FILE]   Check the AGENTS.md stub, the kit file, and stale orchestration text.
+  check kit             List each published project with its loaded kit revision.
+  kit install [--no-hook]  Write the kit file, the AGENTS.md stub, and the Claude SessionStart hook.
+  kit block             Print the marked Herdr Boss stub for AGENTS.md.
   gh issue ...          Run safe GitHub issue commands.
   models                Show allowed worker models.
   kit-path              Print the shared kit directory.

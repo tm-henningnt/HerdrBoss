@@ -5,12 +5,12 @@ import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { agentsBlock, blockHash, checkAgentsText } from '../src/kit/agents-check.js';
+import { agentsBlock, blockHash, checkAgentsText, checkKitText, projectKit } from '../src/kit/agents-check.js';
 import { runKitCommand } from '../src/kit/cli.js';
 import { loadModels } from '../src/kit/config.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const TEMPLATE = path.join(ROOT, 'kit', 'templates', 'agents-section.md');
+const TEMPLATE = path.join(ROOT, 'kit', 'templates', 'agents-stub.md');
 const MODELS = Object.values(loadModels().kinds).flatMap((kind) => kind.allowedModels);
 
 function current() { return agentsBlock(); }
@@ -36,27 +36,41 @@ test('a file with the current block and clean project text has no findings', () 
   assert.deepEqual(check(file('Project rules go here.', 'Run `npm test` before a merge.')), []);
 });
 
-test('a missing block, a missing end marker, and two blocks are errors', () => {
-  only(check('# Project\nNo block.\n'), 'error', /no begin marker/);
-  only(check('# Project\nNo block.\n'), 'error', /no end marker/);
+test('a missing stub, a missing marker, and two blocks are errors', () => {
+  only(check('# Project\nNo block.\n'), 'error', /no Herdr Boss stub/);
+  only(check('# Project\n<!-- herdr-boss:end -->\n'), 'error', /no begin marker; run herdr-boss kit install/);
   const noEnd = `# Project\n<!-- herdr-boss:begin v=${current().hash} -->\nbody\n`;
   only(check(noEnd), 'error', /no end marker/);
   const twice = `${file()}\n${current().block}`;
   only(check(twice), 'error', /more than one block/);
 });
 
+test('a file without markers is an error that names kit install', () => {
+  const findings = check('# Project\nNo stub.\n');
+  only(findings, 'error', /no Herdr Boss stub; run herdr-boss kit install/);
+  assert.equal(findings.filter((finding) => finding.level === 'error').length, 1);
+});
+
+test('an old full block between the markers is an error with run herdr-boss kit install', () => {
+  const body = '## Herdr Boss orchestration\n\n' + Array.from({ length: 30 }, (_, i) => `- Rule ${i}.`).join('\n');
+  const findings = check(`# Project\n<!-- herdr-boss:begin v=${blockHash(body)} -->\n${body}\n<!-- herdr-boss:end -->\n`);
+  const hits = only(findings, 'error', /old full kit block.*run herdr-boss kit install/);
+  assert.equal(hits[0].line, 2);
+  assert.equal(findings.length, 1, JSON.stringify(findings));
+});
+
 test('an old block hash and a hand-edited block are errors', () => {
   const body = fs.readFileSync(TEMPLATE, 'utf8').replace(/\r\n/g, '\n').trimEnd();
   const old = `# Project\n<!-- herdr-boss:begin v=${blockHash('old body')} -->\nold body\n<!-- herdr-boss:end -->\n`;
   const oldFindings = check(old);
-  only(oldFindings, 'error', /old kit block; run herdr-boss kit block/);
+  only(oldFindings, 'error', /old kit stub; run herdr-boss kit install/);
   assert.ok(!oldFindings.some((finding) => /edited by hand/.test(finding.message)));
   assert.equal(oldFindings[0].line, 2);
 
   const edited = `# Project\n<!-- herdr-boss:begin v=${current().hash} -->\n${body}\n- A local extra rule.\n<!-- herdr-boss:end -->\n`;
   const editedFindings = check(edited);
   only(editedFindings, 'error', /edited by hand/);
-  assert.ok(!editedFindings.some((finding) => /old kit block/.test(finding.message)));
+  assert.ok(!editedFindings.some((finding) => /old kit stub/.test(finding.message)));
 });
 
 test('stale orchestration text outside the block gives warnings', () => {
@@ -77,6 +91,32 @@ test('stale orchestration text outside the block gives warnings', () => {
     assert.equal(hits[0].line, 2, `line number for ${line}`);
     assert.ok(findings.every((finding) => finding.level === 'warn'), `only warnings for ${line}`);
   }
+});
+
+test('text that sends pushes or product decisions to the Boss or the Owner gives warnings', () => {
+  const cases = [
+    'Ask the Boss before each push.',
+    'Pushes need Owner approval.',
+    'Escalate product decisions to the Owner.',
+    'Send human decisions to the Boss.',
+    'Notify the other project orchestrators after a release.',
+    'Tell another project when the API changes.',
+    '- After a release, notify other projects.',
+  ];
+  for (const line of cases) {
+    const findings = check(file(line));
+    assert.equal(findings.length, 1, `${line}: ${JSON.stringify(findings)}`);
+    assert.equal(findings[0].level, 'warn');
+    assert.equal(findings[0].line, 2);
+    assert.match(findings[0].message, /Boss|project/);
+  }
+  for (const line of [
+    'Push `main` yourself after the release steps.',
+    'Decide product details yourself. Do not ask the Boss about them.',
+    'Do not message another project\'s orchestrator.',
+    'Report to the Boss when a task is merged and live.',
+    'The Boss decides when to tell the other projects.',
+  ]) assert.deepEqual(check(file(line)), [], line);
 });
 
 test('a prohibition line for port 9222 or a process command is not drift', () => {
@@ -123,14 +163,30 @@ test('the models command marks policy extra models in localModels', () => {
   assert.ok(!('localModels' in result.codex));
 });
 
-test('kit block prints the marked block', () => {
+test('kit block prints the marked stub', () => {
   const lines = [];
   const result = runKitCommand('kit', ['block'], { output: (line) => lines.push(line) });
   assert.equal(lines.join('\n'), current().block.trimEnd());
   assert.equal(result.hash, current().hash);
 });
 
-test('check agents exits 0 for a current block and 1 for a file without a block', () => {
+test('the kit file check finds a missing file, an old revision, and a hand edit', () => {
+  const kit = projectKit();
+  assert.deepEqual(checkKitText(kit.text, kit.revision), []);
+  only(checkKitText(null, kit.revision), 'error', /docs\/orchestration\/herdr-boss\.md is missing; run herdr-boss kit install/);
+  only(checkKitText('# Kit\nbody\n', kit.revision), 'error', /no version line; run herdr-boss kit install/);
+  const oldBody = 'old kit body';
+  const old = `<!-- herdr-boss kit v=${blockHash(oldBody)} -->\nHerdr Boss writes this file. Do not edit it. Run herdr-boss kit install to update it.\n\n${oldBody}\n`;
+  const oldFindings = checkKitText(old, kit.revision);
+  only(oldFindings, 'error', /old kit revision .*; run herdr-boss kit install/);
+  assert.ok(!oldFindings.some((finding) => /edited by hand/.test(finding.message)));
+  const edited = `${kit.text}- A local rule.\n`;
+  const editedFindings = checkKitText(edited, kit.revision);
+  only(editedFindings, 'error', /edited by hand; run herdr-boss kit install/);
+  assert.equal(editedFindings.length, 1);
+});
+
+test('check agents exits 0 for the current layout and 1 for a file without a stub', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-check-agents-'));
   const env = { ...process.env, HOME: dir, HERDR_BOSS_DIR: path.join(dir, 'boss'), TMPDIR: dir };
   const good = path.join(dir, 'good.md');
@@ -138,20 +194,27 @@ test('check agents exits 0 for a current block and 1 for a file without a block'
   fs.writeFileSync(good, file('Project rules.'));
   fs.writeFileSync(bad, '# Project\nNo block. Use pane w1:p2.\n');
   const cli = path.join(ROOT, 'src', 'cli.js');
+  const noKit = spawnSync(process.execPath, [cli, 'check', 'agents', good], { env, encoding: 'utf8' });
+  assert.equal(noKit.status, 1, noKit.stderr);
+  assert.match(noKit.stdout, /^error line 1: docs\/orchestration\/herdr-boss\.md is missing; run herdr-boss kit install/m);
+  fs.mkdirSync(path.join(dir, 'docs', 'orchestration'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'docs', 'orchestration', 'herdr-boss.md'), projectKit().text);
   const ok = spawnSync(process.execPath, [cli, 'check', 'agents', good], { env, encoding: 'utf8' });
-  assert.equal(ok.status, 0, ok.stderr);
+  assert.equal(ok.status, 0, ok.stdout + ok.stderr);
   assert.match(ok.stdout, /0 errors, 0 warnings/);
   const failed = spawnSync(process.execPath, [cli, 'check', 'agents', bad], { env, encoding: 'utf8' });
   assert.equal(failed.status, 1, failed.stderr);
-  assert.match(failed.stdout, /^error line 1: no begin marker/m);
+  assert.match(failed.stdout, /^error line 1: no Herdr Boss stub; run herdr-boss kit install/m);
   assert.match(failed.stdout, /^warn line 2: .*pane ID/m);
-  assert.match(failed.stdout, /2 errors, 1 warning/);
+  assert.match(failed.stdout, /1 error, 1 warning/);
 
   const repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-check-repo-')));
   execFileSync('git', ['init', '-q', repo]);
   fs.mkdirSync(path.join(repo, 'sub'));
+  fs.mkdirSync(path.join(repo, 'docs', 'orchestration'), { recursive: true });
+  fs.writeFileSync(path.join(repo, 'docs', 'orchestration', 'herdr-boss.md'), projectKit().text);
   fs.writeFileSync(path.join(repo, 'AGENTS.md'), file());
   const inRepo = spawnSync(process.execPath, [cli, 'check', 'agents'], { env, cwd: path.join(repo, 'sub'), encoding: 'utf8' });
-  assert.equal(inRepo.status, 0, inRepo.stderr);
+  assert.equal(inRepo.status, 0, inRepo.stdout + inRepo.stderr);
   assert.match(inRepo.stdout, /AGENTS\.md/);
 });

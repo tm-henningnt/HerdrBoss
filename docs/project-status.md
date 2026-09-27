@@ -82,7 +82,8 @@ Publish every tracked issue as a task, including closed issues with `"status": "
   ],
   "gates": [{ "id": "G1", "title": "Owner visual review", "needs": "Owner looks at the hosted sheet", "evidence": "owner", "status": "waiting" }],
   "risks": ["The hosted tenant quota can block the gate."],
-  "git": { "branch": "main", "commit": "4f1c2ab", "dirty": false }
+  "git": { "branch": "main", "commit": "4f1c2ab", "dirty": false },
+  "kitRevision": "8298d02eb500"
 }
 ```
 
@@ -102,6 +103,7 @@ Publish every tracked issue as a task, including closed issues with `"status": "
 | `gates[]` | object | A human gate: `title` is required; `id`, `needs`, `evidence`, and `status` are optional. |
 | `risks[]` | string[] | Open risks. |
 | `git` | object | `branch`, `commit`, and `dirty` (boolean). |
+| `kitRevision` | string | Optional. The kit revision that the orchestrator loaded: the `v=` value in the first line of `docs/orchestration/herdr-boss.md`. It has 12 lowercase hex characters. The project page shows a warning when it is not the current kit revision. |
 
 Task IDs must be unique. A `blockedBy` ID that is not in `tasks[]` counts as external: the graph notes it on the task and does not draw it. Links in `links[]`, `tasks[].url`, and `groups[].refs[].url` must start with `http://` or `https://`.
 

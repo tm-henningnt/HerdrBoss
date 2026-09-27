@@ -5,10 +5,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile, execFileSync, spawnSync } from 'node:child_process';
-import { formatKitNotice, readKitNotice, pendingKitAlert, kitNoticeTargets } from '../src/kit-notice.js';
+import { formatKitNotice, readKitNotice, pendingKitAlert, kitNoticeTargets, KIT_PATHS } from '../src/kit-notice.js';
+import { projectKit } from '../src/kit/agents-check.js';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const NOW = Date.parse('2026-09-27T10:00:00.000Z');
+const REV = projectKit().revision;
 
 function tmpDir(t, prefix) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -84,7 +86,7 @@ test('two kit commits and one non-kit commit give one alert with only the kit su
   assert.equal(result.alert.severity, 'info');
   assert.equal(result.alert.scope, 'all');
   assert.equal(result.alert.once, true);
-  assert.equal(result.alert.text, '[herdr-boss] Kit updated (2 change(s)): Change worker start; Change the orchestrator skill. Run herdr-boss check agents, and reinstall the block with herdr-boss kit block if it reports an old block.');
+  assert.equal(result.alert.text, `[herdr-boss] Kit revision ${REV} (2 change(s)): Change worker start; Change the orchestrator skill. Run herdr-boss kit install, then re-read docs/orchestration/herdr-boss.md now; your loaded copy is stale.`);
   assert.deepEqual(result.state.alert, result.alert);
   assert.deepEqual(git.calls, [
     ['-C', root, 'rev-parse', 'HEAD'],
@@ -102,6 +104,17 @@ test('the orchestrator instructions file counts as a kit path', async (t) => {
   assert.match(result.alert.text, /\(1 change\(s\)\): Change the orchestrator block\. Run/);
 });
 
+test('the kit and stub templates count as kit paths', async (t) => {
+  for (const file of ['kit/templates/project-kit.md', 'kit/templates/agents-stub.md']) {
+    assert.ok(KIT_PATHS.some((kitPath) => file === kitPath || file.startsWith(`${kitPath}/`)), file);
+    const root = makeRepo(t);
+    const base = gitSync(root, ['rev-parse', 'HEAD']);
+    commit(root, file, `Change ${path.basename(file)}`);
+    const result = await readKitNotice({ root, stored: { commit: base, at: 0 }, git: recordingGit(), now: NOW });
+    assert.match(result.alert.text, new RegExp(`\\(1 change\\(s\\)\\): Change ${path.basename(file).replace('.', '\\.')}\\. Run`));
+  }
+});
+
 test('only non-kit commits store HEAD and send nothing', async (t) => {
   const root = makeRepo(t);
   const base = gitSync(root, ['rev-parse', 'HEAD']);
@@ -117,15 +130,15 @@ test('more than 10 kit commits list the 10 newest and then and N more', async (t
   for (let i = 1; i <= 13; i += 1) commit(root, 'kit/models.md', `Kit change ${i}`);
   const result = await readKitNotice({ root, stored: { commit: base, at: 0 }, git: recordingGit(), now: NOW });
   const subjects = Array.from({ length: 10 }, (_, i) => `Kit change ${13 - i}`).join('; ');
-  assert.equal(result.alert.text, `[herdr-boss] Kit updated (13 change(s)): ${subjects}; and 3 more. Run herdr-boss check agents, and reinstall the block with herdr-boss kit block if it reports an old block.`);
+  assert.equal(result.alert.text, `[herdr-boss] Kit revision ${REV} (13 change(s)): ${subjects}; and 3 more. Run herdr-boss kit install, then re-read docs/orchestration/herdr-boss.md now; your loaded copy is stale.`);
 });
 
 test('the notice text stays under 1200 characters with long subjects', () => {
   const commits = Array.from({ length: 30 }, (_, i) => ({ hash: `h${i}`, subject: `${'x'.repeat(400)} ${i}` }));
-  const text = formatKitNotice(commits);
+  const text = formatKitNotice(commits, 'abcdef012345');
   assert.ok(text.length < 1200, `length ${text.length}`);
-  assert.match(text, /^\[herdr-boss\] Kit updated \(30 change\(s\)\): /);
-  assert.match(text, /; and 20 more\. Run herdr-boss check agents, and reinstall the block with herdr-boss kit block if it reports an old block\.$/);
+  assert.match(text, /^\[herdr-boss\] Kit revision abcdef012345 \(30 change\(s\)\): /);
+  assert.match(text, /; and 20 more\. Run herdr-boss kit install, then re-read docs\/orchestration\/herdr-boss\.md now; your loaded copy is stale\.$/);
 });
 
 test('a git failure sends nothing, stores HEAD, and gives one event', async (t) => {
@@ -294,6 +307,6 @@ test('the engine stores the kit notice state and logs the queued notice', { time
   ]);
   assert.equal(out.memoryKitNotice.commit, head);
   assert.equal(out.memoryKitNotice.alert.key, 'kit:ccccccc');
-  assert.match(out.memoryKitNotice.alert.text, /Kit updated \(1 change\(s\)\): Change the kit\. Run herdr-boss check agents/);
+  assert.match(out.memoryKitNotice.alert.text, /Kit revision [0-9a-f]{12} \(1 change\(s\)\): Change the kit\. Run herdr-boss kit install/);
   assert.deepEqual(out.events, ['Queued kit notice kit:ccccccc for each project orchestrator']);
 });

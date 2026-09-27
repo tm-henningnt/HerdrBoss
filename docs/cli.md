@@ -53,7 +53,7 @@ When `NODE_TEST_CONTEXT` is set, or the data directory differs from the configur
 |---|---|
 | `herdr-boss publish SLUG FILE` | Validate a status file and install it for `/projects/SLUG`. Use `-` for standard input. Schema: [project-status.md](project-status.md). |
 
-`publish` also checks `AGENTS.md` at the Git top level of the current directory, when that file exists. It prints each finding to standard error as a warning. It publishes the status in all cases. The published record gets `agentsCheck: { checkedAt, errors, warnings, file }`. The record holds only the counts and the repository-relative file name. The project page shows a warning line when `errors` or `warnings` is more than 0.
+`publish` also checks `AGENTS.md` at the Git top level of the current directory, when that file exists. It prints each finding to standard error as a warning. It publishes the status in all cases. The published record gets `agentsCheck: { checkedAt, errors, warnings, file }`. The record holds only the counts and the repository-relative file name. The project page shows a warning line when `errors` or `warnings` is more than 0. The status file can also hold `kitRevision`, the kit revision that the orchestrator loaded. The project page compares it with the current kit revision.
 | `herdr-boss scratch SLUG` | Create `~/.herdr-boss/scratch/SLUG/` if it does not exist, and print its absolute path. `HERDR_BOSS_DIR` replaces `~/.herdr-boss`. |
 
 ## Workers
@@ -145,35 +145,64 @@ herdr-boss worker allow fix-74 docs/parse.md --reason "the fix also needs the pa
 | `check --report FILE` | Validate a worker report (`report.json`). |
 | `check --run FILE` | Validate one ledger entry. |
 | `check --worktree DIR --allow PATH...` | Check that the worktree changes only allowed paths. |
-| `check agents [FILE]` | Check a project `AGENTS.md` for kit drift. `FILE` defaults to `AGENTS.md` at the Git top level of the current directory. The command prints one line per finding and a summary line. It exits 0 when there is no `error` finding, and 1 otherwise. |
-| `kit block` | Print the marked Herdr Boss block with the current hash. Paste it into the project `AGENTS.md` in place of the old block. |
+| `check agents [FILE]` | Check a project `AGENTS.md` and its kit file for kit drift. `FILE` defaults to `AGENTS.md` at the Git top level of the current directory. The kit file is `docs/orchestration/herdr-boss.md` in the directory of `FILE`. The command prints one line per finding and a summary line. It exits 0 when there is no `error` finding, and 1 otherwise. |
+| `check kit` | List each published project with its `kitRevision`, its `agentsCheck` counts, and the revision state: `current`, `old`, or `not published`. The last line is a summary with the current kit revision. The command exits 1 when a project is not current. |
+| `kit install [--no-hook]` | Install the kit in the Git top level of the current directory. The command writes the kit file, the `AGENTS.md` stub, and the Claude `SessionStart` hook. It prints `wrote FILE` for each file that it changed and `unchanged FILE` for the other files. `--no-hook` does not change `.claude/settings.json`. |
+| `kit block` | Print the marked `AGENTS.md` stub with the current hash. Old instructions use this command. Use `kit install` for a new installation. |
 | `worktree prune [--apply]` | List worktrees that pass the safe checks and show processes in removal candidates. `--apply` removes only worktrees with no blocking process. |
 | `gh issue create\|comment\|edit ... --body-file FILE` | Run a GitHub issue command. An inline `--body` is refused. |
 
-### `AGENTS.md` block and drift check
+### Kit file, `AGENTS.md` stub, and drift check
 
-`kit/templates/agents-section.md` is the block body. An installed block has this form:
+`kit install` writes three files in the project repository:
+
+| File | Content |
+|---|---|
+| `docs/orchestration/herdr-boss.md` | The kit file. The body is `kit/templates/project-kit.md`. Only Herdr Boss writes this file. |
+| `AGENTS.md` | The stub between the markers. The stub body is `kit/templates/agents-stub.md`. |
+| `.claude/settings.json` | A Claude `SessionStart` hook that prints the kit file and `docs/orchestration/memory.md`. |
+
+The kit file has this form:
+
+```
+<!-- herdr-boss kit v=<revision> -->
+Herdr Boss writes this file. Do not edit it. Run herdr-boss kit install to update it.
+
+<kit body>
+```
+
+The stub in `AGENTS.md` has this form:
 
 ```
 <!-- herdr-boss:begin v=<hash> -->
-<block body>
+<stub body>
 <!-- herdr-boss:end -->
 ```
 
-`<hash>` is the first 12 hex characters of the SHA-256 of the block body. The hash ignores CRLF line endings and trailing whitespace.
+`<revision>` is the first 12 hex characters of the SHA-256 of the kit body. `<hash>` is the same value for the stub body. Both values ignore CRLF line endings and trailing whitespace.
+
+`kit install` replaces the text between the markers, also an old full kit block. When `AGENTS.md` has no markers, the command puts the stub after the first heading. When `AGENTS.md` does not exist, the command creates it. The command refuses a file with more than one block or an incomplete block.
+
+`kit install` merges the hook into `.claude/settings.json` and keeps all other keys and hooks. It adds the hook one time. It replaces an older Herdr Boss hook, which it finds by the text `cat docs/orchestration/herdr-boss.md` in the command. It creates the file when it does not exist. It refuses a file that is not valid JSON. Codex has no equivalent hook.
+
+`kit install` computes all files before it writes. An error writes no file.
 
 `check agents` prints each finding as `LEVEL line N: message`. `LEVEL` is `error` or `warn`.
 
 | Level | Finding |
 |---|---|
-| `error` | The file has no begin marker, no end marker, or more than one block. |
-| `error` | The block hash is not the current hash. Run `herdr-boss kit block` and replace the block. |
-| `error` | The block body does not match its own hash. The block was edited by hand. |
-| `warn` | Outside the block: `herdr agent start`, `herdr pane split`, or `dashboard:update`. |
-| `warn` | Outside the block: port `9222`, or `pgrep -f`, `ps aux`, or `ps -ef` in a command. A line with `do not`, `don't`, or `never` is a safety rule and is not a finding. |
-| `warn` | Outside the block: a fixed pane ID such as `w1:p2`, or a dated line. Move it to `docs/orchestration/memory.md`. |
+| `error` | `docs/orchestration/herdr-boss.md` does not exist, has no version line, or has an old revision. Run `herdr-boss kit install`. |
+| `error` | The kit file body does not match its version line. The file was edited by hand. Run `herdr-boss kit install`. |
+| `error` | `AGENTS.md` has no stub, no begin marker, no end marker, or more than one block. |
+| `error` | An old full kit block is between the markers. Run `herdr-boss kit install`. |
+| `error` | The stub hash is not the current hash, or the stub body does not match its own hash. Run `herdr-boss kit install`. |
+| `warn` | Outside the stub: `herdr agent start`, `herdr pane split`, or `dashboard:update`. |
+| `warn` | Outside the stub: port `9222`, or `pgrep -f`, `ps aux`, or `ps -ef` in a command. A line with `do not`, `don't`, or `never` is a safety rule and is not a finding. |
+| `warn` | Outside the stub: a fixed pane ID such as `w1:p2`, or a dated line. Move it to `docs/orchestration/memory.md`. |
+| `warn` | Outside the stub: text that sends pushes, product decisions, or human decisions to the Boss or the Owner. A line with `yourself`, `nobody`, or `do not ask` is not a finding. |
+| `warn` | Outside the stub: an instruction to notify, tell, message, inform, or prompt another project. |
 | `warn` | A model ID that starts with `gpt-`, `claude-`, `opencode/`, `opencode-go/`, `deepseek`, or `muse-spark` and is not in the merged model list. The merged list is the same list that `herdr-boss models` shows. |
-| `warn` | Outside the block: three or more allowed model IDs. This is a copied model list. Use `herdr-boss models` and `herdr-boss lanes`. |
+| `warn` | Outside the stub: three or more allowed model IDs. This is a copied model list. Use `herdr-boss models` and `herdr-boss lanes`. |
 
 `worker start` runs the same check on the project `AGENTS.md`. It prints one warning line with the counts when there are findings. It starts the worker in all cases.
 
