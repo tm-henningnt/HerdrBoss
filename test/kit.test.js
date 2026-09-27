@@ -2310,6 +2310,14 @@ test('the worker brief template uses absolute worker paths and the kit names no 
   assert.match(template, /"\$TMPDIR"/);
   assert.match(template, /"\$HERDR_WORKTREE\/\.worker\//);
   assert.match(template, /Never use `\.\.\/`/);
+  const gates = template.slice(template.indexOf('## Gates on a shared machine'), template.indexOf('## Reports'));
+  assert.doesNotMatch(gates, /herdr-boss lock acquire full-suite/);
+  const processSafety = template.slice(template.indexOf('## Process safety'), template.indexOf('## Edit scope'));
+  assert.ok(template.indexOf('## Process safety') > 0 && template.indexOf('## Process safety') < template.indexOf('## Edit scope'));
+  assert.match(processSafety, /List processes only with `pgrep -l NAME` or `ps -o pid,ppid,etime,comm`\./);
+  assert.match(processSafety, /Never use `ps e`, `ps -E`, `ps eww`, `ps aux`, `ps -ef`, or `pgrep -fl`\./);
+  assert.match(processSafety, /Run a full test suite with `herdr-boss suite -- <command>`\. It takes the `full-suite` lock and removes tokens from the test environment\./);
+  assert.match(gates, /Run only the scoped acceptance commands named in this brief or task contract\./);
   const grep = spawnSync('grep', ['-rn', 'load average is under 30', 'kit', 'docs'], { encoding: 'utf8' });
   assert.equal(grep.stdout, '');
   for (const file of ['kit/templates/project-kit.md', 'kit/skills/herdr-orchestrator/SKILL.md', 'docs/user-guide.md', 'docs/cli.md']) {

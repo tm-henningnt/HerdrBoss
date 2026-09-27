@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { DATA_DIR } from '../config.js';
+import { loadProjectConfig } from './config.js';
 import { createHerdrRunner, verifyCallerPane } from './workers.js';
 
 const LOCK_NAME = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/;
@@ -125,8 +126,62 @@ function lockContext(config, dataDir, scope = 'repository') {
   return { commonDir, directory, scope };
 }
 
-function callerFor(env, herdr) {
-  return verifyCallerPane(env, herdr, null);
+function realpathOrNull(file) {
+  try { return fs.realpathSync(file); } catch { return null; }
+}
+
+function checkoutRoots(root) {
+  let listing = '';
+  try { listing = execFileSync('git', ['-C', root, 'worktree', 'list', '--porcelain'], { encoding: 'utf8' }); } catch {}
+  const roots = listing.split('\n').filter((line) => line.startsWith('worktree ')).map((line) => line.slice('worktree '.length));
+  return [...new Set([root, ...roots])];
+}
+
+// A worker run record is live when it names this pane and this worktree and has no finishedAt.
+// The records are in the runs folder of any checkout of the repository, usually the orchestrator checkout.
+function hasLiveWorkerRun(paneId, root) {
+  const worktree = realpathOrNull(root);
+  if (!worktree) return false;
+  for (const checkout of checkoutRoots(root)) {
+    let runsPath;
+    try { runsPath = realpathOrNull(loadProjectConfig({ cwd: checkout }).runsPath); } catch { continue; }
+    if (!runsPath) continue;
+    for (const file of fs.readdirSync(runsPath).filter((entry) => entry.endsWith('.json'))) {
+      const name = path.basename(file, '.json');
+      if (!/^[a-z][a-z0-9-]{0,31}$/.test(name)) continue;
+      const actual = realpathOrNull(path.join(runsPath, file));
+      if (!actual || !actual.startsWith(`${runsPath}${path.sep}`)) continue;
+      let run;
+      try { run = JSON.parse(fs.readFileSync(actual, 'utf8')); } catch { continue; }
+      if (run?.name === name && run.pane === paneId && !run.finishedAt && typeof run.worktree === 'string'
+        && realpathOrNull(run.worktree) === worktree) return true;
+    }
+  }
+  return false;
+}
+
+function workerCallerFor(env, herdr, config) {
+  const paneId = env.HERDR_PANE_ID;
+  const workspaceId = env.HERDR_WORKSPACE_ID;
+  if (!paneId || !workspaceId) return null;
+  let response;
+  try { response = herdr(['pane', 'get', paneId]); } catch { return null; }
+  const pane = response?.pane ?? response;
+  if ((pane?.pane_id ?? pane?.paneId ?? pane?.id) !== paneId) return null;
+  if ((pane.workspace_id ?? pane.workspaceId ?? pane.workspace) !== workspaceId) return null;
+  if (!hasLiveWorkerRun(paneId, config.root)) return null;
+  return { paneId, workspaceId };
+}
+
+// The full-suite lock also accepts a worker pane with a live run record. Other locks accept only orch or boss.
+function callerFor(env, herdr, { name = null, config = null } = {}) {
+  try { return verifyCallerPane(env, herdr, null); }
+  catch (error) {
+    if (name !== FULL_SUITE_LOCK || !config) throw error;
+    const worker = workerCallerFor(env, herdr, config);
+    if (worker) return worker;
+    throw new Error(`${error.message} A worker pane can take the ${FULL_SUITE_LOCK} lock only with a live worker run record for this pane and worktree.`);
+  }
 }
 
 function shellPidFor(paneId, herdr) {
@@ -161,7 +216,7 @@ export function acquireProjectLock(name, {
   if (waitSeconds !== null && (!Number.isSafeInteger(waitSeconds) || waitSeconds < 0)) {
     throw new Error('--wait must be a whole non-negative number of seconds.');
   }
-  const caller = callerFor(env, herdr);
+  const caller = callerFor(env, herdr, { name, config });
   const pid = shellPidFor(caller.paneId, herdr);
   const { commonDir, directory, scope } = lockContext(config, dataDir, scopeFor(name));
   const file = path.join(directory, `${name}.json`);
@@ -225,7 +280,7 @@ export function releaseProjectLock(name, {
   pidAlive = pidIsAlive,
 } = {}) {
   validateName(name);
-  const caller = callerFor(env, herdr);
+  const caller = callerFor(env, herdr, { name, config });
   const { commonDir, directory, scope } = lockContext(config, dataDir, scopeFor(name));
   const file = path.join(directory, `${name}.json`);
   return withMutationLock(directory, () => {

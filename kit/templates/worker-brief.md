@@ -19,6 +19,14 @@ The orchestrator retains implementation order, issue authority, cross-task decis
 - Copied inputs:
 {{copyPaths}}
 
+## Process safety
+
+List processes only with `pgrep -l NAME` or `ps -o pid,ppid,etime,comm`.
+
+Never use `ps e`, `ps -E`, `ps eww`, `ps aux`, `ps -ef`, or `pgrep -fl`. They print command lines and environments, and those can hold another session's token.
+
+Run a full test suite with `herdr-boss suite -- <command>`. It takes the `full-suite` lock and removes tokens from the test environment.
+
 ## Edit scope
 
 Edit only these paths:
