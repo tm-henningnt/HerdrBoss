@@ -56,6 +56,10 @@ Use Muse Spark only for narrow, bounded work when its model fits the task.
 
 ## Harness rules
 
+### Claude
+
+Start Claude workers with `--permission-mode auto`. The worker then uses the auto-mode classifier with the Owner's `autoMode` rules, like the orchestrators. Without it, a worker runs in the default mode and can stop on a permission dialog, also for a read-only command in its own worktree.
+
 ### Pi
 
 Pin a Pi worker to one allowed model.

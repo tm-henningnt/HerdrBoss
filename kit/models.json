@@ -14,7 +14,7 @@
       "allowedModels": ["claude-opus-5-5", "claude-opus-5"],
       "allowedEfforts": [],
       "defaultEffort": null,
-      "launchArgs": ["--model", "{{model}}"],
+      "launchArgs": ["--model", "{{model}}", "--permission-mode", "auto"],
       "contextTokens": 200000
     },
     "opencode": {
