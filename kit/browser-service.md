@@ -23,4 +23,12 @@ Browser navigation and input affect the same page other agents may use. Coordina
 
 A project browser is "not responding" when its Chrome process runs with the project port and profile, but `GET /json/version` on the port does not answer within 2 seconds. The bulletin and the Browsers page show this state. Do not use a "not responding" browser. Tab, screenshot, and input commands fail for it. Tell your orchestrator. The Owner restarts or closes it on the Browsers page. An orchestrator can run `herdr-boss browser restart <slug> --headless|--visible` or `herdr-boss browser close <slug>` for its own project only. When the browser does not respond or does not accept the close command, Herdr Boss sends SIGTERM to the Chrome main process for that port and profile. It waits up to 8 seconds and never sends SIGKILL. A restart of a "not responding" browser does not reopen the current page. Do not send signals to Chrome yourself.
 
+## Browser choice for checks
+
+WARNING: Do not use `playwright-cli` with the default Google Chrome for checks. Google Chrome on macOS copies its app bundle to a code-sign clone of about 720 MB at each launch. The `playwright-cli` close leaves that clone on the disk.
+
+- For dashboard and web checks, use the project browser. Run `herdr-boss browser request <slug>`, then use `browser tabs`, `browser tab new`, and `browser screenshot`.
+- If a task needs `playwright-cli`, add `--browser=chromium`. This option needs the Chromium build that `playwright-cli install-browser chrome-for-testing` installs. Only the Owner installs shared browsers.
+- Close Chrome with `herdr-boss browser close <slug>` or the CDP command `Browser.close`. Never send a signal to Chrome yourself.
+
 Port 9222 is reserved for an optional legacy shared browser. Only use it when explicitly assigned; see [shared-browser.md](shared-browser.md).

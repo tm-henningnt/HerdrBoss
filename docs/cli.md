@@ -11,7 +11,7 @@ Run project commands (`worker`, `worktree`, `ledger`, `check`, `gh`) from inside
 | `herdr-boss install` | Install and start the macOS launchd agent `no.tallmaker.herdr-boss`. Run it again after you move the repository. |
 | `herdr-boss uninstall` | Stop and remove the launchd agent. |
 | `herdr-boss serve` | Run the collector and the dashboard in the foreground. |
-| `herdr-boss serve --read-only-preview` | Run a dashboard preview. This mode allows API reads and blocks API changes, prompts, notifications, process reaping, handovers, and browser launches. It needs a `HERDR_BOSS_DIR` that the service does not use. |
+| `herdr-boss serve --read-only-preview` | Run a dashboard preview. This mode allows API reads and blocks API changes, prompts, notifications, process reaping, Chrome clone sweeps, handovers, and browser launches. It needs a `HERDR_BOSS_DIR` that the service does not use. |
 | `herdr-boss tick [--json]` | Collect once and print alerts. Sends no prompt and stops no process. `--json` prints the full snapshot. |
 | `herdr-boss logs` | Print the last 100 lines of the server log. |
 | `herdr-boss kit-path` | Print the path of the shared kit (skill, templates, model list). |
@@ -196,6 +196,7 @@ Each project has one persistent Chrome profile on a port from 9223 to 9299. Add 
 | `browser click SLUG X% Y% [--tab ID]` | Click at a position relative to the screenshot. |
 | `browser text SLUG --stdin [--tab ID]` | Type text from standard input. The text is not echoed. |
 | `browser key SLUG KEY [--tab ID]` | Send `Tab`, `Enter`, `Backspace`, `Delete`, `Escape`, `Home`, `End`, an arrow key, or `SelectAll`. |
+| `browser sweep-clones [--dry-run]` | Delete orphaned Chrome code-sign clones now. Prints the count and the freed GiB. `--dry-run` lists each clone by name and age and deletes nothing. |
 
 ```sh
 id=$(herdr-boss browser tab new tmprocessmining | jq -r .id)

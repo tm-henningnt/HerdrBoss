@@ -10,6 +10,7 @@ import { loadModels } from './kit/config.js';
 import { loadPolicy, clearExpiredOneOffGoals, deriveControl, migrateWorkspacePolicy, providerFor, pickSuccessor, laneStatus, leastOverProvider, machineLimits, unmeteredLane } from './control.js';
 import { recordQuotaSnapshot } from './usage.js';
 import { listBrowserSessions, cdpResponds } from './browser-pool.js';
+import { codeSignCloneDir, sweepCodeSignClones } from './clone-sweep.js';
 import { listHandoffs, expireHandoff, expireMissingHandoffs, handoffNotices } from './handoff.js';
 import { inspectWorkerTransitions, inspectWorkerReports, applyWorkerFailureStatuses, resolveFreeUsageRun, activeFreeModelExhaustions, extendFreeModelExhaustion } from './worker-failures.js';
 
@@ -21,6 +22,7 @@ const CLI_FILE = fileURLToPath(new URL('./cli.js', import.meta.url));
 const SEV = { info: 0, warn: 1, critical: 2 };
 const POLICY_FILE = path.join(DATA_DIR, 'policy.json');
 const WORKTREE_SCAN_INTERVAL_MS = 5 * 60 * 1000;
+const CLONE_SWEEP_INTERVAL_MS = 10 * 60 * 1000;
 
 function handoffCandidates(control) {
   return [...(control.handoffs || []), ...(control.bossHandoff ? [control.bossHandoff] : [])];
@@ -80,6 +82,8 @@ export class Engine extends EventEmitter {
     this.worktreeCounts = {};
     this.worktreeCountsAt = 0;
     this.orphanedWorktreeProcesses = [];
+    this.cloneSweepAt = 0;
+    this.cloneSweepRunning = false;
     this.collectors = {
       collectHerdr,
       collectQuotas,
@@ -89,6 +93,8 @@ export class Engine extends EventEmitter {
       collectMissingWorktreeProcesses,
       collectWorktreeCounts,
       cdpResponds,
+      codeSignCloneDir,
+      sweepCodeSignClones,
       ...collectors,
     };
     this.handoffRunner = handoffRunner;
@@ -226,6 +232,7 @@ export class Engine extends EventEmitter {
       for (const p of Object.values(control.projects)) if (p.orch?.kind) this.memory.lastOrchestrators[p.workspace] = { pane: p.orch.pane, kind: p.orch.kind, project: p.slug };
       for (const pane of herdr?.panes || []) if (pane.label === 'boss' && pane.agent) this.memory.lastOrchestrators[pane.workspace] = { pane: pane.id, kind: pane.agent, project: 'Boss', label: 'Boss', boss: true };
       if (this.act) await this.reap(browsers);
+      if (this.act) this.sweepClones(now);
       // A prepared successor waits idle by design, so the idle-worker rule skips it.
       try { snap.standbyPanes = listHandoffs().filter((h) => ['preparing', 'prepared', 'needs-inspection'].includes(h.status)).map((h) => h.newPane); }
       catch { snap.standbyPanes = []; }
@@ -407,6 +414,22 @@ export class Engine extends EventEmitter {
     if (!victims.length) return;
     for (const v of victims) { try { process.kill(v.pid, 'SIGTERM'); } catch {} }
     this.log('reap', `Terminated ${victims.length} orphaned agent-browser daemon(s): ${victims.map((v) => `${v.pid} (${fmtDuration(v.age)})`).join(', ')}`);
+  }
+
+  // The sweep runs beside the tick, because deleting many clones can take longer than one tick.
+  sweepClones(now) {
+    if (this.cfg.browsers?.sweepCodeSignClones === false || this.cloneSweepRunning || now - this.cloneSweepAt < CLONE_SWEEP_INTERVAL_MS) return null;
+    this.cloneSweepAt = now;
+    this.cloneSweepRunning = true;
+    return (async () => {
+      const dir = this.collectors.codeSignCloneDir();
+      if (!dir) return;
+      const result = await this.collectors.sweepCodeSignClones({ dir, now });
+      if (!result.removed.length) return;
+      const freedGiB = (result.freedBytes / 1024 ** 3).toFixed(1);
+      this.log('clone-sweep', `Deleted ${result.removed.length} orphaned Chrome code-sign clone(s) and freed ${freedGiB} GiB.`, { count: result.removed.length, freedBytes: result.freedBytes });
+    })().catch((error) => this.log('clone-sweep', `Chrome code-sign clone sweep failed: ${error.message}`))
+      .finally(() => { this.cloneSweepRunning = false; });
   }
 
   async autoHandover(control, herdr, policy, now) {

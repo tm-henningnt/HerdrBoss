@@ -252,8 +252,27 @@ Close works as follows:
 2. If the browser is not responding, or `Browser.close` fails, Herdr Boss sends SIGTERM to the Chrome main process. This process has both `--remote-debugging-port=PORT` and `--user-data-dir=PROFILE` and no `--type=` flag.
 3. Herdr Boss waits up to 8 seconds for the process to exit.
 4. If the process does not exit, the close fails with a "did not exit" error. Herdr Boss never sends SIGKILL. Inspect the process before you relaunch the browser.
+5. After a SIGTERM close, Herdr Boss deletes the code-sign clone of that launch. The next section describes the clone.
 
 Herdr Boss never sends a signal to a process that does not match both the port and the profile.
+
+### Chrome code-sign clones
+
+Google Chrome on macOS copies its app bundle to a code-sign clone of about 720 MB at each launch. The clones are in `$(getconf DARWIN_USER_TEMP_DIR)/../X/com.google.Chrome.code_sign_clone/`. Each clone is a folder `code_sign_clone.XXXXXX`. Chrome deletes its clone only at a clean shutdown with the CDP command `Browser.close`. A signal, a crash, or `playwright-cli close` leaves the clone on the disk.
+
+- At a launch, Herdr Boss records the new clone folder in the session as `codeSignClone`. It records `null` when no new clone or more than one new clone appears.
+- After a SIGTERM close, Herdr Boss deletes the recorded clone. After a `Browser.close`, Chrome deletes the clone.
+- Every 10 minutes, the service deletes orphaned clones. The dashboard preview does not delete clones.
+
+A clone is orphaned when all these conditions are true:
+
+- It is a real folder, not a symbolic link, directly in the clone folder. Its name matches `code_sign_clone.` followed by letters and digits.
+- It was created more than 1 hour ago.
+- No running Google Chrome main process started within 5 seconds of the clone creation time. This rule keeps the clone of each running Chrome, including the Chrome on port 9222.
+
+Herdr Boss reads the process list with `ps -axo pid=,lstart=,comm=`. If the read fails, it deletes nothing. The sweep never sends a signal to a process. Each sweep that deletes clones adds one event with the count and the freed space. The freed space is the change in free disk space, because a clone shares disk blocks with the app. Set `browsers.sweepCodeSignClones` to `false` to stop the sweep. Run `herdr-boss browser sweep-clones --dry-run` to list the orphaned clones.
+
+Herdr Boss uses the clone folder only when `HOME` is the home folder of the account. A process with a temporary `HOME`, such as a test, finds no clone folder.
 
 On the Browsers page, **Show preview** captures a screenshot of the selected tab. The preview shows a still image until the next capture. **Live** refreshes it at the interval that you select.
 
@@ -309,7 +328,7 @@ Put overrides in `~/.herdr-boss/config.json`, then restart the service.
   "access": { "tokenFile": "/Users/you/.config/herdr-boss/access-token", "sessionDays": 30 },
   "quota": { "warnPercent": 90, "criticalPercent": 98 },
   "machine": { "memFreeWarnPercent": 15, "loadWarnFactor": 2 },
-  "browsers": { "reapOrphanDaemons": true, "orphanDaemonMinAgeSeconds": 7200, "staleOwnedMinutes": 30 },
+  "browsers": { "reapOrphanDaemons": true, "orphanDaemonMinAgeSeconds": 7200, "staleOwnedMinutes": 30, "sweepCodeSignClones": true },
   "workers": { "staleIdleMinutes": 120 },
   "roamgate": { "port": 8787, "tokenFile": "/Users/you/.config/roamgate/auth-token" },
   "providerKinds": { "claude": ["claude"], "codex": ["codex"], "opencodego": ["opencode", "pi"] }

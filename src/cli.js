@@ -38,6 +38,7 @@ const USAGE = `herdr-boss <command>
   browser click SLUG X% Y% [--tab ID]  Click at screenshot-relative percentages.
   browser text SLUG --stdin [--tab ID]  Send text from standard input without echoing it.
   browser key SLUG KEY [--tab ID]  Send Tab, Enter, Backspace, arrow keys, etc.
+  browser sweep-clones [--dry-run]  Delete orphaned Chrome code-sign clones now; --dry-run only lists them.
   handoff plan PANE --to KIND [--mode migrate|fresh] [--model MODEL] [--effort EFFORT]
   handoff prepare PANE --to KIND [--mode migrate|fresh] [--model MODEL] [--effort EFFORT]
   handoff activate ID --confirmed
@@ -150,7 +151,20 @@ async function main() {
         if (!match) throw new Error('Click coordinates must be percentages from 0% to 100%, for example 42% 65%.');
         return Number(value.slice(0, -1)) / 100;
       };
-      if (args[0] === 'list' && args.length === 1) console.log(JSON.stringify(await Promise.all(Object.values(listBrowserSessions()).map(browserStatus)), null, 2));
+      if (args[0] === 'sweep-clones' && (args.length === 1 || (args.length === 2 && args[1] === '--dry-run'))) {
+        const { codeSignCloneDir, sweepCodeSignClones } = await import('./clone-sweep.js');
+        const { fmtDuration } = await import('./rules.js');
+        const dryRun = args[1] === '--dry-run';
+        const dir = codeSignCloneDir();
+        if (!dir) { console.log('No Chrome code-sign clone folder on this machine. Nothing to do.'); break; }
+        const result = await sweepCodeSignClones({ dir, dryRun });
+        if (result.error) throw new Error(result.error);
+        if (dryRun) {
+          for (const c of result.candidates) console.log(`${c.name}  ${fmtDuration(Math.round(c.ageMs / 1000))} old`);
+          console.log(`Dry run: ${result.candidates.length} orphaned clone(s) would be deleted. Nothing was deleted.`);
+        } else console.log(`Deleted ${result.removed.length} orphaned clone(s) and freed ${(result.freedBytes / 1024 ** 3).toFixed(1)} GiB.`);
+      }
+      else if (args[0] === 'list' && args.length === 1) console.log(JSON.stringify(await Promise.all(Object.values(listBrowserSessions()).map(browserStatus)), null, 2));
       else if (args[0] === 'size' && args.length === 4) console.log(JSON.stringify(setBrowserWindowSize(args[1], Number(args[2]), Number(args[3])), null, 2));
       else if (args[0] === 'close' && args.length === 2) console.log(JSON.stringify(await closeBrowser(args[1]), null, 2));
       else if (args[0] === 'restart' && [3, 4].includes(args.length) && ['--headless', '--visible'].includes(args[2]) && (args.length === 3 || args[3] === '--no-restore')) console.log(JSON.stringify(await restartBrowser(args[1], args[2] === '--headless', { restorePage: !args.includes('--no-restore') }), null, 2));
@@ -187,7 +201,7 @@ async function main() {
       }
       else if (args[0] === 'request' && args[1] && args.includes('--headless') && args.includes('--visible')) throw new Error('Choose either --headless or --visible.');
       else if (args[0] === 'request' && args[1] && args.slice(2).every((flag) => ['--reserve', '--headless', '--visible'].includes(flag))) console.log(JSON.stringify(await requestBrowser(args[1], { launch: !args.includes('--reserve'), headless: args.includes('--headless') ? true : args.includes('--visible') ? false : null }), null, 2));
-      else throw new Error('Usage: browser request|size|close|restart|list|tabs|tab new|tab close|screenshot|navigate|click|text|key. Run herdr-boss without arguments for details.');
+      else throw new Error('Usage: browser request|size|close|restart|list|tabs|tab new|tab close|screenshot|navigate|click|text|key|sweep-clones. Run herdr-boss without arguments for details.');
       break;
     }
     case 'handoff': {
