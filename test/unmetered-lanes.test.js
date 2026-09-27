@@ -12,6 +12,10 @@ import { activeFreeLaneExhaustions, extendFreeLaneExhaustion, freeUsageLaneRetry
 import { fmtTime, renderBulletin } from '../src/rules.js';
 
 const models = loadModels();
+// A fixture Pi model of a provider that Pi has no credential for. The kit allow-list has no such model.
+const FIXTURE_PI_MODEL = 'fixturezen/free-a';
+const fixtureModels = structuredClone(models);
+fixtureModels.kinds.pi.allowedModels.push(FIXTURE_PI_MODEL);
 const policy = (patch = {}) => ({ ...structuredClone(POLICY_DEFAULTS), ...patch });
 const projects = { a: { excludedKinds: [], excludedModels: [] } };
 const TABLE = [
@@ -51,17 +55,23 @@ test('collectPiModels runs pi --list-models and returns null on failure or a mis
   assert.equal(runCollector(temp, 'echo "opencode-go  deepseek-v4.1-flash"'), null, 'output without a header gives no result');
 });
 
+test('the Pi allow-list holds no free opencode/ model', () => {
+  assert.deepEqual(models.kinds.pi.allowedModels.filter((model) => model.startsWith('opencode/')), []);
+  assert.ok(models.kinds.pi.allowedModels.every((model) => model.startsWith('opencode-go/')));
+  assert.ok(models.kinds.opencode.allowedModels.includes('opencode/big-pickle'), 'the opencode harness keeps its free models');
+});
+
 test('a Pi model that the last good result does not list is left out of the lane and reported', () => {
   const piModels = { at: 1, models: parsePiModels(TABLE) };
-  const unavailable = unavailablePiModels(models.kinds.pi.allowedModels, piModels);
-  assert.ok(unavailable.some((item) => item.model === 'opencode/big-pickle' && item.provider === 'opencode' && item.reason === 'no-credential'));
+  const unavailable = unavailablePiModels(fixtureModels.kinds.pi.allowedModels, piModels);
+  assert.ok(unavailable.some((item) => item.model === FIXTURE_PI_MODEL && item.provider === 'fixturezen' && item.reason === 'no-credential'));
   assert.ok(!unavailable.some((item) => item.model === 'opencode-go/deepseek-v4.1-flash'));
   assert.ok(unavailable.some((item) => item.model === 'opencode-go/space-bunny-free' && item.reason === 'not-listed'), 'a missing model of a listed provider is not listed');
-  const lane = unmeteredLane(models, policy(), projects, {}, { unavailablePiModels: unavailable });
-  assert.ok(!(lane.byProject.a.pi || []).some((model) => model.startsWith('opencode/')), 'no free opencode/ model stays open for pi');
+  const lane = unmeteredLane(fixtureModels, policy(), projects, {}, { unavailablePiModels: unavailable });
+  assert.ok(!(lane.byProject.a.pi || []).includes(FIXTURE_PI_MODEL), 'the fixture model does not stay open for pi');
   assert.ok(lane.byProject.a.opencode.includes('opencode/big-pickle'), 'the check applies only to the pi kind');
-  const reported = lane.unavailable.find((item) => item.model === 'opencode/big-pickle');
-  assert.deepEqual(reported, { kind: 'pi', model: 'opencode/big-pickle', provider: 'opencode', reason: 'no-credential', projects: ['a'] });
+  const reported = lane.unavailable.find((item) => item.model === FIXTURE_PI_MODEL);
+  assert.deepEqual(reported, { kind: 'pi', model: FIXTURE_PI_MODEL, provider: 'fixturezen', reason: 'no-credential', projects: ['a'] });
   assert.equal(lane.state, 'open');
   assert.doesNotMatch(unmeteredSummary(lane), /pi:/, 'the summary does not offer a closed Pi model');
 });
@@ -69,8 +79,8 @@ test('a Pi model that the last good result does not list is left out of the lane
 test('an unknown Pi result hides no Pi model', () => {
   assert.deepEqual(unavailablePiModels(models.kinds.pi.allowedModels, null), []);
   assert.deepEqual(unavailablePiModels(models.kinds.pi.allowedModels, undefined), []);
-  const lane = unmeteredLane(models, policy(), projects, {}, { unavailablePiModels: [] });
-  assert.ok(lane.byProject.a.pi.includes('opencode/big-pickle'));
+  const lane = unmeteredLane(fixtureModels, policy(), projects, {}, { unavailablePiModels: [] });
+  assert.ok(lane.byProject.a.pi.includes(FIXTURE_PI_MODEL));
   assert.deepEqual(lane.unavailable, []);
 });
 
@@ -80,9 +90,9 @@ test('Free usage exceeded without a retry time closes the opencode lane for 1 ho
   assert.deepEqual(freeUsageLaneRetry({ label: 'Free usage exceeded', at }, at + 60000), { retryAt: at + 3600000, retryKnown: false });
   const lanes = extendFreeLaneExhaustion({}, 'opencode', { ...freeUsageLaneRetry({ label: 'Free usage exceeded', at }, at), at }, at);
   assert.deepEqual(lanes, { opencode: { kind: 'opencode', retryAt: at + 3600000, retryKnown: false, at } });
-  const lane = unmeteredLane(models, policy(), projects, {}, { exhaustedLanes: lanes, now: at + 1000 });
+  const lane = unmeteredLane(fixtureModels, policy(), projects, {}, { exhaustedLanes: lanes, now: at + 1000 });
   assert.equal(lane.byProject.a.opencode, undefined, 'every unmetered opencode model is closed');
-  assert.ok(lane.byProject.a.pi.includes('opencode/big-pickle'), 'the pi harness keeps its free models');
+  assert.ok(lane.byProject.a.pi.includes(FIXTURE_PI_MODEL), 'the pi harness keeps its unmetered models');
   assert.deepEqual(lane.exhaustedLanes, [{ kind: 'opencode', retryAt: at + 3600000, retryKnown: false, reason: 'free usage exceeded', projects: ['a'] }]);
 });
 
@@ -119,23 +129,24 @@ function bulletinFor(lane) {
 test('the bulletin lists only models that can start and one line per closed part', () => {
   const now = Date.now();
   const retryAt = now + 3600000;
-  const unavailable = unavailablePiModels(models.kinds.pi.allowedModels, { at: 1, models: parsePiModels(TABLE) });
-  const lane = unmeteredLane(models, policy(), projects, {}, {
+  const unavailable = unavailablePiModels(fixtureModels.kinds.pi.allowedModels, { at: 1, models: parsePiModels(TABLE) });
+  const lane = unmeteredLane(fixtureModels, policy(), projects, {}, {
     unavailablePiModels: unavailable,
     exhaustedLanes: { opencode: { kind: 'opencode', retryAt, retryKnown: false, at: now } }, now,
   });
   const text = bulletinFor(lane);
   const open = text.split('\n').find((line) => line.startsWith('- Unmetered: '));
   assert.ok(open, text);
-  assert.doesNotMatch(open, /big-pickle/, 'the open line lists no closed model');
+  assert.doesNotMatch(open, /free-a/, 'the open line lists no closed model');
   assert.doesNotMatch(open, /opencode:/, 'the open line lists no model of the exhausted opencode lane');
-  assert.ok(text.includes("- Unmetered pi opencode/ models: unavailable. Pi has no credential for the opencode provider. Adding one is the Owner's decision."), text);
+  assert.ok(text.split('\n').includes('- Unmetered pi fixturezen/ models: unavailable. Pi has no credential for the fixturezen provider.'), text);
+  assert.doesNotMatch(text, /Owner's decision/);
   assert.ok(text.includes(`- Unmetered opencode: exhausted (free usage exceeded); retry after ${fmtTime(new Date(retryAt).toISOString())} (reset time unknown).`), text);
   const known = bulletinFor(unmeteredLane(models, policy(), projects, {}, { exhaustedLanes: { opencode: { kind: 'opencode', retryAt, retryKnown: true, at: now } }, now }));
   assert.ok(known.includes(`- Unmetered opencode: exhausted (free usage exceeded); retry after ${fmtTime(new Date(retryAt).toISOString())}.`), known);
 });
 
-function startFixture(rules) {
+function startFixture(rules, kitModels = models) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-unmetered-start-')));
   const git = (...args) => execFileSync('git', ['-C', root, ...args], { stdio: 'ignore' });
   git('init', '-b', 'main');
@@ -155,21 +166,23 @@ function startFixture(rules) {
   };
   const env = { HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'ws', HERDR_PANE_ID: 'ws:orch' };
   const start = (name, options) => startWorker(name, { task: 'x', allow: ['src/'], dryRun: true, ...options }, {
-    config, models, herdr, env, rulesFile, output: () => {},
+    config, models: kitModels, herdr, env, rulesFile, output: () => {},
   });
   return { root, start };
 }
 
 test('worker start refuses a Pi model that pi --list-models does not list, also with --force', (t) => {
-  const f = startFixture({ piModels: { at: Date.now(), models: parsePiModels(TABLE) } });
+  const f = startFixture({ piModels: { at: Date.now(), models: parsePiModels(TABLE) } }, fixtureModels);
   t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
-  const refusal = /pi cannot run opencode\/big-pickle.*Pi has no credential for the opencode provider.*--force cannot bypass/;
-  assert.throws(() => f.start('pione', { kind: 'pi', model: 'opencode/big-pickle' }), refusal);
-  assert.throws(() => f.start('pitwo', { kind: 'pi', model: 'opencode/big-pickle', force: true }), refusal);
+  const refusal = (error) => /^pi cannot run fixturezen\/free-a: the last pi --list-models result does not list it\. Pi has no credential for the fixturezen provider\. --force cannot bypass this refusal\.$/.test(error.message);
+  assert.throws(() => f.start('pione', { kind: 'pi', model: FIXTURE_PI_MODEL }), refusal);
+  assert.throws(() => f.start('pitwo', { kind: 'pi', model: FIXTURE_PI_MODEL, force: true }), refusal);
+  assert.throws(() => f.start('pinot', { kind: 'pi', model: 'opencode-go/space-bunny-free' }), /Pi does not list this model\. --force cannot bypass/);
   assert.doesNotThrow(() => f.start('pithree', { kind: 'pi', model: 'opencode-go/deepseek-v4.1-flash' }));
-  const unknown = startFixture({});
+  assert.throws(() => f.start('pizen', { kind: 'pi', model: 'opencode/big-pickle' }), /not allowed for pi/, 'Pi refuses a free opencode/ model');
+  const unknown = startFixture({}, fixtureModels);
   t.after(() => fs.rmSync(unknown.root, { recursive: true, force: true }));
-  assert.doesNotThrow(() => unknown.start('pifour', { kind: 'pi', model: 'opencode/big-pickle' }), 'an unknown Pi result refuses nothing');
+  assert.doesNotThrow(() => unknown.start('pifour', { kind: 'pi', model: FIXTURE_PI_MODEL }), 'an unknown Pi result refuses nothing');
 });
 
 test('worker start refuses an unmetered opencode model while the opencode free lane is exhausted', (t) => {
@@ -211,6 +224,7 @@ fs.writeFileSync(path.join(checkout, '.orchestration/runs/worker-a.json'), JSON.
 }));
 fs.mkdirSync(path.join(data, 'projects'), { recursive: true });
 fs.writeFileSync(path.join(data, 'projects/sample.json'), JSON.stringify({ project: 'Sample', workspace: 'w1' }));
+fs.writeFileSync(path.join(data, 'policy.json'), JSON.stringify({ extraModels: { pi: [${JSON.stringify(FIXTURE_PI_MODEL)}] } }));
 const start = Date.parse('2026-09-27T10:00:00.000Z');
 let now = start;
 Date.now = () => now;
@@ -267,11 +281,11 @@ console.log(JSON.stringify({
   assert.deepEqual(result.laneAfterTick, [{ kind: 'opencode', retryAt: start + 3600000, retryKnown: false, reason: 'free usage exceeded', projects: ['sample'] }]);
   assert.deepEqual(result.opencodeOpen, []);
   assert.ok(!result.piOpen.some((model) => model.startsWith('opencode/')));
-  assert.ok(result.piUnavailable.includes('opencode/big-pickle'));
+  assert.ok(result.piUnavailable.includes(FIXTURE_PI_MODEL));
   assert.deepEqual(result.rememberedPi, { at: start, models: ['opencode-go/deepseek-v4.1-flash'] });
   assert.deepEqual(result.rulesPi, result.rememberedPi);
   assert.match(result.bulletin, /- Unmetered opencode: exhausted \(free usage exceeded\); retry after .* \(reset time unknown\)\./);
-  assert.match(result.bulletin, /- Unmetered pi opencode\/ models: unavailable\./);
+  assert.match(result.bulletin, /- Unmetered pi fixturezen\/ models: unavailable\. Pi has no credential for the fixturezen provider\.\n/);
   assert.equal(result.callsAt10, 1, 'the collector runs at most once every 15 minutes');
   assert.equal(result.piCalls, 3);
   assert.deepEqual(result.keptAfterFailure, result.rememberedPi, 'a failed collection keeps the last good result');

@@ -110,7 +110,7 @@ test('an unknown model ID and a copied model list give warnings', () => {
 test('the models command marks policy extra models in localModels', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-local-models-'));
   const rulesFile = path.join(dir, 'rules.json');
-  fs.writeFileSync(rulesFile, JSON.stringify({ policy: { extraModels: { claude: ['claude-sonnet-5'], pi: ['opencode/big-pickle'] } } }));
+  fs.writeFileSync(rulesFile, JSON.stringify({ policy: { extraModels: { claude: ['claude-sonnet-5'], pi: ['opencode-go/deepseek-v4.1-flash'] } } }));
   const result = runKitCommand('models', [], { output: () => {}, rulesFile });
   assert.deepEqual(result.claude.localModels, ['claude-sonnet-5']);
   assert.ok(result.claude.allowedModels.includes('claude-sonnet-5'));
