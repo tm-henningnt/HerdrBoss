@@ -238,7 +238,9 @@ export class Engine extends EventEmitter {
       clearExpiredOneOffGoals(policy, snap.quotas, now, { log: (message) => this.log('policy', message) });
       // Apply the failure status before deriving control, so a failed worker does not count as running.
       snap.herdr = herdr ? { ...herdr, panes: applyWorkerFailureStatuses(herdr.panes, workerTransitions.failures) } : herdr;
-      const control = deriveControl(snap, policy, this.models, this.memory.paneSince, now, this.memory.exhaustedFreeModels);
+      const control = deriveControl(snap, policy, this.models, this.memory.paneSince, now, this.memory.exhaustedFreeModels, {
+        exhaustedFreeLanes: this.memory.exhaustedFreeLanes, piModels: this.memory.piModels,
+      });
       const profileWorkspaces = Object.fromEntries(managedBrowsers.map((b) => [b.profile, control.projects[b.project]?.workspace]).filter(([, ws]) => ws));
       snap.cpuUse = cpuUse(procs, herdr?.panes || [], profileWorkspaces);
       if (machine) {
@@ -483,13 +485,14 @@ export class Engine extends EventEmitter {
         this.log('handoff', `Automatically activated ${item.toKind} successor for ${item.label || item.project}`, item.boss ? { workspace: item.workspace, pane: item.newPane } : { project: item.project, pane: item.newPane });
       } catch (e) { this.log('error', `Automatic activation for ${item.label || item.project} failed: ${String(e.stderr || e.message).slice(0, 300)}`); }
     }
+    const successorLimits = { exhaustedFreeModels: this.memory.exhaustedFreeModels, exhaustedFreeLanes: this.memory.exhaustedFreeLanes, piModels: this.memory.piModels };
     const stopped = Object.values(control.projects).flatMap((p) => {
       const last = this.memory.lastOrchestrators[p.workspace];
       if (!p.orch || p.orch.kind || last?.pane !== p.orch.pane) return [];
       const provider = providerFor(last.kind, policy.preferredModels?.[last.kind] ?? this.models.kinds[last.kind]?.defaultModel, policy);
       const window = this.quotas.find((q) => q.provider === provider && !q.error)?.windows?.find((w) => !w.extra && w.usedPercent >= policy.autoHandoverPercent);
       if (!window) return [];
-      return [{ project: p.slug, pane: p.orch.pane, fromKind: last.kind, sessionId: null, window, target: pickSuccessor(p, last.kind, provider, policy, { ...control, exhaustedFreeModels: this.memory.exhaustedFreeModels }, now) }];
+      return [{ project: p.slug, pane: p.orch.pane, fromKind: last.kind, sessionId: null, window, target: pickSuccessor(p, last.kind, provider, policy, { ...control, ...successorLimits }, now) }];
     });
     const stoppedBoss = (herdr?.panes || []).filter((pane) => pane.label === 'boss' && !pane.agent).flatMap((pane) => {
       const last = this.memory.lastOrchestrators[pane.workspace];
@@ -498,7 +501,7 @@ export class Engine extends EventEmitter {
       const window = this.quotas.find((q) => q.provider === provider && !q.error)?.windows?.find((w) => !w.extra && w.usedPercent >= policy.autoHandoverPercent);
       if (!window) return [];
       const project = { excludedKinds: [], excludedModels: [] };
-      return [{ project: 'Boss', label: 'Boss', boss: true, workspace: pane.workspace, pane: pane.id, fromKind: last.kind, sessionId: null, window, target: pickSuccessor(project, last.kind, provider, policy, { ...control, exhaustedFreeModels: this.memory.exhaustedFreeModels }, now) }];
+      return [{ project: 'Boss', label: 'Boss', boss: true, workspace: pane.workspace, pane: pane.id, fromKind: last.kind, sessionId: null, window, target: pickSuccessor(project, last.kind, provider, policy, { ...control, ...successorLimits }, now) }];
     });
     for (const h of [...handoffCandidates(control), ...stopped, ...stoppedBoss]) {
       if (!h.window) continue;

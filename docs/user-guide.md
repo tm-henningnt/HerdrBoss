@@ -237,6 +237,17 @@ Herdr Boss copies the optional Owner goal from the latest published project stat
 
 **Automatic handover** is off by default. Turn it on in Allocation, and rank the successor choices under **Orchestrator succession**. Herdr Boss then prepares a successor at the reserve, waits for it to run `herdr-boss handoff ready`, and activates it at the set quota level (98% by default). An automatic successor that was not needed expires two hours after preparation when its source provider is no longer near its limit.
 
+Herdr Boss recommends the first succession choice that can start. The dashboard and the automatic handover use the same choice. Herdr Boss skips a choice in these conditions:
+
+- The choice uses the harness or the provider of the current orchestrator.
+- The harness or the model is not allowed, or the project excludes it.
+- The metered provider of the model is near its limit or exhausted.
+- The unmetered model is exhausted until its retry time.
+- The harness free lane is exhausted, and the model is unmetered. The choice becomes available again at the retry time of the lane.
+- The choice is a Pi model that the last good `pi --list-models` result does not list. Without a good result, Herdr Boss does not skip a Pi model.
+
+When no choice can start, Herdr Boss recommends no successor. The automatic handover then logs that no alternative provider is eligible.
+
 ## Project browsers
 
 Each project can have one persistent Chrome profile. Request it with `herdr-boss browser request SLUG`, or open it from the Browsers page. Herdr Boss assigns a port from 9223 to 9299.
