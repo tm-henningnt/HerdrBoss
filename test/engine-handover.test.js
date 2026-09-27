@@ -308,6 +308,157 @@ const projectPanes = [
 ];
 const herdrSnapshot = (panes) => ({ workspaces: [...new Set(panes.map((p) => p.workspace))].map((id) => ({ id, label: id })), panes });
 
+const retirementProbe = `
+import { Engine } from './src/engine.js';
+import { loadConfig } from './src/config.js';
+const input = JSON.parse(process.env.H26_RETIREMENT_SCENARIO);
+let now = Date.parse(input.ticks[0].at);
+Date.now = () => now;
+let tick = input.ticks[0];
+const calls = [];
+const cfg = loadConfig(); cfg.push = true; cfg.browsers.reapOrphanDaemons = false;
+const engine = new Engine(cfg, {
+  push: true, act: input.act !== false,
+  collectors: {
+    collectHerdr: async () => { const current = input.ticks.find((item) => Date.parse(item.at) === now); if (current.unavailable) throw new Error('pane list unavailable'); if (current.snapshotValue === 'undefined') return undefined; if (current.snapshotValue === 'null') return null; return current.herdr; },
+    collectMachine: async () => null, collectProcesses: async () => new Map(), collectQuotas: async () => [],
+    collectWorktreeCounts: async () => ({}), collectCwdProcesses: async () => [], collectMissingWorktreeProcesses: async () => [], readWorkerScreen: async () => '',
+  },
+  handoffRunner: async () => { throw new Error('unexpected handoff runner call'); },
+  herdrRunner: async (command, args) => {
+    calls.push({ at: tick.at, command, args });
+    if (tick.failClose && args[0] === 'pane' && args[1] === 'close') throw new Error('fake close failed');
+    return '{}';
+  },
+});
+engine.deliver = async () => {};
+for (const next of input.ticks) { tick = next; now = Date.parse(next.at); await engine.tick(); }
+console.log(JSON.stringify({ calls, retirements: engine.memory.handoffRetirements || {} }));
+`;
+
+function runRetirementScenario(t, { record, records, panes, ticks, act = true }) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-retirement-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(dir, 'projects'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'policy.json'), JSON.stringify(structuredClone(POLICY_DEFAULTS)));
+  fs.writeFileSync(path.join(dir, 'memory.json'), JSON.stringify({ paneSince: {}, pushes: {}, notified: {} }));
+  fs.writeFileSync(path.join(dir, 'handoffs.json'), JSON.stringify(records || [record]));
+  const tickData = ticks.map((x) => ({ ...x,
+    herdr: x.unavailable || x.snapshotValue === 'undefined' ? null : x.snapshotValue === 'missing-panes' ? { workspaces: [] } : herdrSnapshot(x.panes || panes),
+  }));
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', retirementProbe], {
+    cwd: repo, encoding: 'utf8', env: { ...process.env, HOME: dir, HERDR_BOSS_DIR: dir, HERDR_BOSS_LIVE_DIR: dir,
+      HERDR_BOSS_ALLOW_ACTIONS: '1', NODE_TEST_CONTEXT: '', H26_RETIREMENT_SCENARIO: JSON.stringify({ ticks: tickData, act }),
+    },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout.trim());
+  output.records = JSON.parse(fs.readFileSync(path.join(dir, 'handoffs.json'), 'utf8'));
+  return output;
+}
+
+for (const [kind, workspace] of [['orch', 'w-alpha'], ['boss', 'w-boss']]) {
+  test(`${kind} previous pane retires only after 120 minutes with a one-time successor notice`, { timeout: 30000 }, (t) => {
+    const sourcePane = `${workspace}:p1`, newPane = `${workspace}:p2`;
+    const record = { id: `retire-${kind}`, project: kind === 'boss' ? 'Boss' : 'alpha', workspace, label: kind,
+      boss: kind === 'boss', sourcePane, newPane, status: 'active', activatedAt: '2026-09-27T12:00:00.000Z' };
+    const panes = [pane(sourcePane, workspace, { label: `${kind} previous` }), pane(newPane, workspace, { label: kind })];
+    const result = runRetirementScenario(t, { record, panes, ticks: [
+      { at: '2026-09-27T13:59:59.999Z' }, { at: '2026-09-27T14:00:00.000Z' }, { at: '2026-09-27T14:01:00.000Z' },
+    ] });
+    const closes = result.calls.filter(({ args }) => args[0] === 'pane' && args[1] === 'close');
+    assert.deepEqual(closes.map(({ args }) => args[2]), [sourcePane]);
+    assert.equal(result.calls.filter(({ args }) => args[0] === 'agent' && args[1] === 'prompt' && args[2] === newPane).length, 1);
+    assert.equal(result.records[0].retirement.outcome, 'closed');
+  });
+}
+
+test('retirement defers for absent source, unsafe pane labels, missing successor, unavailable snapshot, and act:false', { timeout: 30000 }, (t) => {
+  const record = { ...projectRecord, activatedAt: '2026-09-27T12:00:00.000Z' };
+  const due = '2026-09-27T14:00:00.000Z';
+  const current = projectPanes;
+  const cases = [
+    { panes: current.filter((p) => p.id !== record.sourcePane), expect: 0 },
+    { panes: current.map((p) => p.id === record.sourcePane ? { ...p, label: 'orch' } : p), expect: 0 },
+    { panes: current.filter((p) => p.id !== record.newPane), expect: 0 },
+    { unavailable: true, panes: [], expect: 0 },
+  ];
+  for (const scenario of cases) {
+    const result = runRetirementScenario(t, { record, panes: current, ticks: [{ at: due, ...scenario }] });
+    assert.equal(result.calls.some(({ args }) => args[0] === 'pane' && args[1] === 'close'), false);
+  }
+  const absent = runRetirementScenario(t, { record, panes: current, ticks: [{ at: due, panes: current.filter((p) => p.id !== record.sourcePane) }] });
+  assert.equal(absent.records[0].retirement.outcome, 'source-absent');
+  const disabled = runRetirementScenario(t, { record, panes: current, act: false, ticks: [{ at: due }] });
+  assert.equal(disabled.calls.some(({ args }) => args[0] === 'pane' && args[1] === 'close'), false);
+});
+
+test('resolved null, undefined, or missing-panes snapshots do not complete due retirement', { timeout: 30000 }, (t) => {
+  const record = { ...projectRecord, activatedAt: '2026-09-27T12:00:00.000Z' };
+  for (const snapshotValue of ['null', 'undefined', 'missing-panes']) {
+    const result = runRetirementScenario(t, { record, panes: projectPanes, ticks: [{ at: '2026-09-27T14:00:00.000Z', snapshotValue }] });
+    assert.equal(result.calls.some(({ args }) => args[0] === 'pane' && args[1] === 'close'), false, snapshotValue);
+    assert.equal(result.records[0].retirement, undefined, snapshotValue);
+  }
+});
+
+test('failed retirement close retries and records only one successful successor notice', { timeout: 30000 }, (t) => {
+  const record = { ...projectRecord, activatedAt: '2026-09-27T12:00:00.000Z' };
+  const result = runRetirementScenario(t, { record, panes: projectPanes, ticks: [
+    { at: '2026-09-27T14:00:00.000Z', failClose: true }, { at: '2026-09-27T14:01:00.000Z' }, { at: '2026-09-27T14:02:00.000Z' },
+  ] });
+  assert.equal(result.calls.filter(({ args }) => args[0] === 'pane' && args[1] === 'close').length, 2);
+  assert.equal(result.calls.filter(({ args }) => args[0] === 'agent' && args[1] === 'prompt' && args[2] === record.newPane).length, 1);
+  assert.equal(result.records[0].retirement.outcome, 'closed');
+});
+
+test('retirement notice waits for the confirmed successor to become idle or done', { timeout: 30000 }, (t) => {
+  const record = { ...projectRecord, activatedAt: '2026-09-27T12:00:00.000Z' };
+  const working = projectPanes.map((p) => p.id === record.newPane ? { ...p, agent: 'codex', status: 'working' } : p);
+  const idle = projectPanes.map((p) => p.id === record.newPane ? { ...p, agent: 'codex', status: 'idle' } : p);
+  const result = runRetirementScenario(t, { record, panes: projectPanes, ticks: [
+    { at: '2026-09-27T14:00:00.000Z', panes: working },
+    { at: '2026-09-27T14:01:00.000Z', panes: idle.filter((p) => p.id !== record.sourcePane) },
+    { at: '2026-09-27T14:02:00.000Z', panes: idle.filter((p) => p.id !== record.sourcePane) },
+  ] });
+  assert.equal(result.calls.filter(({ args }) => args[0] === 'pane' && args[1] === 'close').length, 1);
+  const notices = result.calls.filter(({ args }) => args[0] === 'agent' && args[1] === 'prompt' && args[2] === record.newPane);
+  assert.equal(notices.length, 1);
+  assert.equal(notices[0].at, '2026-09-27T14:01:00.000Z');
+  assert.equal(result.records[0].retirement.outcome, 'closed');
+});
+
+test('a due older handoff closes only its own verified source pane', { timeout: 30000 }, (t) => {
+  const older = { ...projectRecord, id: 'older-handoff', activatedAt: '2026-09-27T12:00:00.000Z',
+    sourcePane: 'w-alpha:p1', newPane: 'w-alpha:p2' };
+  const newer = { ...projectRecord, id: 'newer-handoff', activatedAt: '2026-09-27T13:00:00.000Z',
+    sourcePane: 'w-alpha:p2', newPane: 'w-alpha:p5' };
+  const panes = [pane('w-alpha:p1', 'w-alpha', { label: 'orch previous' }), pane('w-alpha:p2', 'w-alpha', { label: 'orch' }),
+    pane('w-alpha:p5', 'w-alpha', { label: 'orch' })];
+  const result = runRetirementScenario(t, { record: older, records: [older, newer], panes, ticks: [{ at: '2026-09-27T14:00:00.000Z' }] });
+  assert.deepEqual(result.calls.filter(({ args }) => args[0] === 'pane' && args[1] === 'close').map(({ args }) => args[2]), ['w-alpha:p1']);
+  assert.equal(result.records[0].retirement.outcome, 'closed');
+  assert.equal(result.records[1].retirement, undefined);
+  assert.equal(result.records[1].status, 'active');
+});
+
+test('retirement follows a verified active successor chain and notifies only its current pane', { timeout: 30000 }, (t) => {
+  const first = { ...projectRecord, id: 'chain-one', activatedAt: '2026-09-27T12:00:00.000Z',
+    sourcePane: 'w-alpha:p1', newPane: 'w-alpha:p2', activation: { at: '2026-09-27T12:00:00.000Z',
+      sourcePane: 'w-alpha:p1', successorPane: 'w-alpha:p2', sourceLabel: 'orch previous', successorLabel: 'orch' } };
+  const second = { ...projectRecord, id: 'chain-two', activatedAt: '2026-09-27T13:00:00.000Z',
+    sourcePane: 'w-alpha:p2', newPane: 'w-alpha:p5', activation: { at: '2026-09-27T13:00:00.000Z',
+      sourcePane: 'w-alpha:p2', successorPane: 'w-alpha:p5', sourceLabel: 'orch previous', successorLabel: 'orch' } };
+  const panes = [pane('w-alpha:p1', 'w-alpha', { label: 'orch previous' }),
+    pane('w-alpha:p2', 'w-alpha', { label: 'orch previous' }), pane('w-alpha:p5', 'w-alpha', { label: 'orch', agent: 'codex', status: 'idle' })];
+  const result = runRetirementScenario(t, { record: first, records: [first, second], panes, ticks: [{ at: '2026-09-27T14:00:00.000Z' }] });
+  assert.deepEqual(result.calls.filter(({ args }) => args[0] === 'pane' && args[1] === 'close').map(({ args }) => args[2]), ['w-alpha:p1']);
+  const notices = result.calls.filter(({ args }) => args[0] === 'agent' && args[1] === 'prompt');
+  assert.deepEqual(notices.map(({ args }) => args[2]), ['w-alpha:p5']);
+  assert.equal(result.records[0].retirement.outcome, 'closed');
+  assert.equal(result.records[1].retirement, undefined);
+});
+
 test('project handover notifies its workspace workers and the Boss in another workspace once', { timeout: 30000 }, (t) => {
   const result = runNoticeScenario(t, {
     handoffs: [projectRecord],

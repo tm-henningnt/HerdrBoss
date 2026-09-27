@@ -118,17 +118,24 @@ export class Engine extends EventEmitter {
     try {
       const refreshQuotas = !this.quotas || now - this.quotasAt > this.cfg.quotaSeconds * 1000;
       let currentHerdrSnapshot = false;
+      let currentPaneList = false;
       const [herdr, machine, procs, quotas] = await Promise.all([
-        this.collectors.collectHerdr(this.cfg.orchestratorLabel).then((snapshot) => { currentHerdrSnapshot = true; return snapshot; }).catch((e) => { errors.push(`herdr: ${e.message}`); return this.state?.herdr || null; }),
+        this.collectors.collectHerdr(this.cfg.orchestratorLabel).then((snapshot) => {
+          currentHerdrSnapshot = true;
+          currentPaneList = Array.isArray(snapshot?.panes);
+          return currentPaneList ? snapshot : null;
+        }).catch((e) => { errors.push(`herdr: ${e.message}`); return this.state?.herdr || null; }),
         this.collectors.collectMachine(DATA_DIR).catch((e) => { errors.push(`machine: ${e.message}`); return null; }),
         this.collectors.collectProcesses().catch((e) => { errors.push(`ps: ${e.message}`); return new Map(); }),
         refreshQuotas ? this.collectors.collectQuotas().catch((e) => { errors.push(`codexbar: ${e.message}`); return null; }) : null,
       ]);
-      if (this.act && currentHerdrSnapshot) {
+      if (this.act && currentHerdrSnapshot && currentPaneList) {
         try { expireMissingHandoffs(herdr?.panes); }
         catch (e) { errors.push(`handoffs: ${e.message}`); }
+        try { await this.retirePreviousOrchestrators(herdr, now); }
+        catch (e) { errors.push(`handoff retirement: ${e.message}`); }
       }
-      if (herdr && currentHerdrSnapshot && now - this.worktreeCountsAt >= WORKTREE_SCAN_INTERVAL_MS) {
+      if (herdr && currentHerdrSnapshot && currentPaneList && now - this.worktreeCountsAt >= WORKTREE_SCAN_INTERVAL_MS) {
         this.worktreeCountsAt = now;
         try { this.worktreeCounts = await this.collectors.collectWorktreeCounts(herdr.panes, { now }); }
         catch (error) { errors.push(`worktree count scan: ${error.message}`); }
@@ -494,6 +501,104 @@ export class Engine extends EventEmitter {
     }
     for (const [key, at] of Object.entries(this.memory.handoffPeerNotices)) if (now - at > 8 * 86400 * 1000) delete this.memory.handoffPeerNotices[key];
     for (const [key, at] of Object.entries(this.memory.handoffPeerAttempts)) if (now - at > 8 * 86400 * 1000) delete this.memory.handoffPeerAttempts[key];
+  }
+
+  async retirePreviousOrchestrators(herdr, now) {
+    const activeRecords = listHandoffs().filter((item) => item.status === 'active');
+    const records = activeRecords.filter((item) => Number.isFinite(Date.parse(item.activatedAt))
+      && now - Date.parse(item.activatedAt) >= 120 * 60 * 1000
+      && (!item.retirement?.completedAt || item.retirement.outcome === 'closed'));
+    const panes = new Map((herdr?.panes || []).map((pane) => [pane.id, pane]));
+    for (const item of records) {
+      const latest = listHandoffs().find((candidate) => candidate.id === item.id && candidate.status === 'active'
+        && candidate.sourcePane === item.sourcePane && candidate.newPane === item.newPane
+        && candidate.activatedAt === item.activatedAt);
+      if (!latest) continue;
+      if (latest.retirement?.completedAt) {
+        if (latest.retirement.outcome === 'closed') {
+          const role = latest.boss || latest.label === 'boss' ? 'boss' : 'orch';
+          const source = panes.get(latest.sourcePane);
+          const successor = this.resolveHandoffSuccessor(latest, activeRecords, panes, role);
+          if (!source && successor) await this.notifyRetiredSuccessor(latest, role, successor, now);
+        }
+        continue;
+      }
+      const source = panes.get(latest.sourcePane);
+      if (!source) {
+        this.recordHandoffRetirement(latest, { outcome: 'source-absent', completedAt: new Date(now).toISOString() }, now);
+        this.log('handoff', `Previous pane was already absent for handoff ${latest.id}; retirement is complete`, latest.boss
+          ? { workspace: latest.workspace, pane: latest.newPane } : { project: latest.project, pane: latest.newPane });
+        continue;
+      }
+      const role = latest.boss || latest.label === 'boss' ? 'boss' : 'orch';
+      const successor = this.resolveHandoffSuccessor(latest, activeRecords, panes, role);
+      if (source.label !== `${role} previous` || !successor) continue;
+      try {
+        checkHerdrResponse(await this.herdrRunner('herdr', ['pane', 'close', latest.sourcePane]));
+      } catch (error) {
+        this.log('error', `Could not retire previous ${role} pane for handoff ${latest.id}: ${String(error.stderr || error.message).slice(0, 200)}`,
+          latest.boss ? { workspace: latest.workspace, pane: latest.newPane } : { project: latest.project, pane: latest.newPane });
+        continue;
+      }
+      this.recordHandoffRetirement(latest, { outcome: 'closed', completedAt: new Date(now).toISOString() }, now);
+      await this.notifyRetiredSuccessor(latest, role, successor, now);
+      this.log('handoff', `Retired previous ${role} pane for handoff ${latest.id}`, latest.boss
+        ? { workspace: latest.workspace, pane: latest.sourcePane } : { project: latest.project, pane: latest.sourcePane });
+    }
+  }
+
+  resolveHandoffSuccessor(item, activeRecords, panes, role) {
+    let paneId = item.newPane;
+    const seen = new Set([item.sourcePane]);
+    while (typeof paneId === 'string' && !seen.has(paneId)) {
+      seen.add(paneId);
+      const pane = panes.get(paneId);
+      if (!pane) return null;
+      if (pane.label === role) return pane;
+      if (pane.label !== `${role} previous`) return null;
+      const next = activeRecords.find((candidate) => candidate.sourcePane === paneId
+        && candidate.id !== item.id && Date.parse(candidate.activatedAt) > Date.parse(item.activatedAt)
+        && (candidate.boss || candidate.label === 'boss' ? 'boss' : 'orch') === role
+        && candidate.activation?.sourcePane === candidate.sourcePane
+        && candidate.activation?.successorPane === candidate.newPane
+        && candidate.activation?.sourceLabel === `${role} previous`
+        && candidate.activation?.successorLabel === role);
+      if (!next) return null;
+      paneId = next.newPane;
+    }
+    return null;
+  }
+
+  async notifyRetiredSuccessor(item, role, successor, now) {
+    const noticeKey = `handoff-retirement:${item.id}`;
+    this.memory.handoffRetirementNotices ||= {};
+    if (this.memory.handoffRetirementNotices[noticeKey] || !successor?.id
+      || successor.label !== role || !successor.agent || !['idle', 'done'].includes(successor.status)) return;
+    const roleName = role === 'boss' ? 'Boss' : 'orchestrator';
+    const message = `[herdr-boss] The 120-minute handover grace period ended. The previous ${roleName} pane ${item.sourcePane} was closed. Continue using pane ${successor.id}.`;
+    try {
+      checkHerdrResponse(await this.herdrRunner('herdr', ['agent', 'prompt', successor.id, message]));
+      this.memory.handoffRetirementNotices[noticeKey] = now;
+      writeJson(MEMORY_FILE, this.memory);
+    } catch (error) {
+      this.log('error', `Retirement notice for handoff ${item.id} failed: ${String(error.stderr || error.message).slice(0, 200)}`,
+        item.boss ? { workspace: item.workspace, pane: item.newPane } : { project: item.project, pane: item.newPane });
+    }
+  }
+
+  recordHandoffRetirement(item, retirement, now) {
+    const current = listHandoffs();
+    const record = current.find((candidate) => candidate.id === item.id && candidate.status === 'active'
+      && candidate.sourcePane === item.sourcePane && candidate.newPane === item.newPane
+      && candidate.activatedAt === item.activatedAt);
+    if (!record) return false;
+    if (record.retirement?.completedAt) {
+      return false;
+    }
+    record.retirement = retirement;
+    const file = path.join(DATA_DIR, 'handoffs.json');
+    writeJson(file, current);
+    return true;
   }
 
   async deliver(alerts, herdr, now) {
