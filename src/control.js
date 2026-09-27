@@ -496,13 +496,35 @@ export function leastOverProvider(lanes) {
   return pace[0]?.[0] ?? null;
 }
 
-// One always-open lane that lists every permitted unmetered model, grouped by project and harness.
+// The Pi models that the last good `pi --list-models` result does not list. An unknown result (null) hides nothing.
+// The reason is no-credential when Pi lists no row of that provider, and not-listed otherwise.
+export function unavailablePiModels(piAllowedModels, piModels) {
+  if (!Array.isArray(piModels?.models)) return [];
+  const listed = new Set(piModels.models);
+  const providers = new Set(piModels.models.map((model) => model.split('/')[0]));
+  return (piAllowedModels || []).filter((model) => !listed.has(model)).map((model) => {
+    const provider = model.includes('/') ? model.split('/')[0] : null;
+    return { model, provider, reason: provider && !providers.has(provider) ? 'no-credential' : 'not-listed' };
+  });
+}
+
+// One lane that lists every permitted unmetered model that can start, grouped by project and harness.
 // A model is unmetered when the configured route and the provider rules give it no metered provider.
-export function unmeteredLane(baseModels, policy, projects = {}, exhaustedModels = {}) {
+// An exhausted model, an unavailable Pi model, and an exhausted harness free lane are left out and reported.
+export function unmeteredLane(baseModels, policy, projects = {}, exhaustedModels = {}, { unavailablePiModels: unavailablePi = [], exhaustedLanes = {}, now = Date.now() } = {}) {
   const models = mergeModels(baseModels, policy);
   const byProject = {};
   const applicable = new Map();
+  const unavailableEntries = new Map();
+  const laneEntries = new Map();
+  const unavailableByModel = new Map((unavailablePi || []).map((item) => [item.model, item]));
   const projectModes = {};
+  const note = (map, key, create, slug) => {
+    const entry = map.get(key) || create();
+    if (!entry.projects.includes(slug)) entry.projects.push(slug);
+    map.set(key, entry);
+    return entry;
+  };
   for (const [slug, project] of Object.entries(projects)) {
     const mode = project.effectiveMode || project.mode || 'auto';
     if (mode === 'paused') continue;
@@ -514,14 +536,22 @@ export function unmeteredLane(baseModels, policy, projects = {}, exhaustedModels
         modelEnabled(kind, model, policy)
         && !(project.excludedModels || []).includes(model)
         && providerFor(kind, model, policy) === null);
+      const laneExhaustion = exhaustedLanes?.[kind];
+      if (permitted.length && Number.isFinite(laneExhaustion?.retryAt) && laneExhaustion.retryAt > now) {
+        note(laneEntries, kind, () => ({ kind, retryAt: laneExhaustion.retryAt, retryKnown: laneExhaustion.retryKnown === true, reason: 'free usage exceeded', projects: [] }), slug);
+        continue;
+      }
       const available = permitted.filter((model) => {
+        const missing = kind === 'pi' && unavailableByModel.get(model);
+        if (missing) {
+          note(unavailableEntries, model, () => ({ kind, model, provider: missing.provider, reason: missing.reason, projects: [] }), slug);
+          return false;
+        }
         const exhaustion = exhaustedModels[model];
         if (!exhaustion) return true;
-        const entry = applicable.get(model) || { model, retryAt: exhaustion.retryAt, projects: [], kinds: [] };
+        const entry = note(applicable, model, () => ({ model, retryAt: exhaustion.retryAt, projects: [], kinds: [] }), slug);
         entry.retryAt = Math.max(entry.retryAt || 0, exhaustion.retryAt || 0);
-        if (!entry.projects.includes(slug)) entry.projects.push(slug);
         if (!entry.kinds.includes(kind)) entry.kinds.push(kind);
-        applicable.set(model, entry);
         return false;
       });
       if (available.length) kinds[kind] = available;
@@ -531,7 +561,35 @@ export function unmeteredLane(baseModels, policy, projects = {}, exhaustedModels
   }
   const exhausted = [...applicable.values()].sort((a, b) => a.model.localeCompare(b.model));
   for (const entry of exhausted) { entry.projects.sort(); entry.kinds.sort(); }
-  return { state: 'open', unmetered: true, byProject, projectModes, exhausted };
+  const unavailable = [...unavailableEntries.values()].sort((a, b) => a.model.localeCompare(b.model));
+  const lanes = [...laneEntries.values()].sort((a, b) => a.kind.localeCompare(b.kind));
+  for (const entry of [...unavailable, ...lanes]) entry.projects.sort();
+  // The lane closes only when something was left out and no unmetered model remains for any project.
+  const anyOpen = Object.values(byProject).some((kinds) => Object.keys(kinds).length);
+  const state = !anyOpen && (exhausted.length || unavailable.length || lanes.length) ? 'closed' : 'open';
+  return { state, unmetered: true, byProject, projectModes, exhausted, unavailable, exhaustedLanes: lanes };
+}
+
+// One sentence per closed part of the unmetered lane: unavailable Pi models and exhausted harness free lanes.
+// A project filter keeps only the parts that apply to that project.
+export function unmeteredClosedParts(lane, formatTime = (ms) => new Date(ms).toISOString(), project = null) {
+  const applies = (item) => !project || (item.projects || []).includes(project);
+  const parts = [];
+  const groups = new Map();
+  for (const item of (lane?.unavailable || []).filter(applies)) {
+    const key = item.reason === 'no-credential' ? `${item.kind}:${item.provider}` : `${item.kind}:not-listed`;
+    const group = groups.get(key) || { ...item, models: [] };
+    group.models.push(item.model);
+    groups.set(key, group);
+  }
+  for (const group of [...groups.values()].sort((a, b) => `${a.kind}:${a.provider}`.localeCompare(`${b.kind}:${b.provider}`))) {
+    if (group.reason === 'no-credential') parts.push(`Unmetered ${group.kind} ${group.provider}/ models: unavailable. Pi has no credential for the ${group.provider} provider. Adding one is the Owner's decision.`);
+    else parts.push(`Unmetered ${group.kind} ${group.models.sort().join(', ')}: unavailable. \`pi --list-models\` does not list ${group.models.length === 1 ? 'it' : 'them'}.`);
+  }
+  for (const item of (lane?.exhaustedLanes || []).filter(applies)) {
+    parts.push(`Unmetered ${item.kind}: exhausted (${item.reason || 'free usage exceeded'}); retry after ${formatTime(item.retryAt)}${item.retryKnown ? '' : ' (reset time unknown)'}.`);
+  }
+  return parts;
 }
 
 // A short one-line description of the unmetered lane for the CLI and the bulletin.

@@ -18,6 +18,26 @@ async function herdrJson(args) {
   return JSON.parse(out).result;
 }
 
+// ---------- Pi models ----------
+
+// `pi --list-models` prints only the models that Pi can use, as a table with a header row.
+// Returns the provider/model strings, or null when the output has no header row.
+export function parsePiModels(text) {
+  const lines = String(text ?? '').split(/\r?\n/);
+  const header = lines.findIndex((line) => /^\s*provider\s+model(\s|$)/i.test(line));
+  if (header < 0) return null;
+  return lines.slice(header + 1).map((line) => line.trim().split(/\s+/)).filter((cells) => cells.length >= 2 && cells[0] && cells[1])
+    .map(([provider, model]) => `${provider}/${model}`);
+}
+
+// The only input is the model table. Never read Pi credential files or keys here.
+export async function collectPiModels({ now = Date.now(), runner = run } = {}) {
+  try {
+    const models = parsePiModels(await runner('pi', ['--list-models'], { timeout: 30000 }));
+    return models ? { at: now, models } : null;
+  } catch { return null; }
+}
+
 // ---------- Herdr ----------
 
 const shellPidCache = new Map(); // pane_id -> shell_pid

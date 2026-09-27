@@ -1,6 +1,6 @@
 // Turns a snapshot into alerts and bulletin advice. Pure functions, no side effects.
 import { dashboardUrl } from './config.js';
-import { goalSummary, machineLimits, POLICY_DEFAULTS, unmeteredSummary } from './control.js';
+import { goalSummary, machineLimits, POLICY_DEFAULTS, unmeteredClosedParts, unmeteredSummary } from './control.js';
 import { blockedWorkerAlerts } from './worker-failures.js';
 
 const PROVIDER_NAMES = { claude: 'Claude', codex: 'Codex', opencodego: 'OpenCode Go' };
@@ -299,7 +299,9 @@ export function renderBulletin(snap, evaluation, cfg) {
       if (lane.unmetered) {
         const summary = unmeteredSummary(lane);
         const exhausted = (lane.exhausted || []).map((item) => `${item.model} until ${fmtTime(new Date(item.retryAt).toISOString())}`).sort();
-        L.push(`- Unmetered: open${summary ? `: ${summary}` : ''}.${exhausted.length ? ` Exhausted models: ${exhausted.join('; ')}.` : ''}`);
+        const exhaustedText = exhausted.length ? ` Exhausted models: ${exhausted.join('; ')}.` : '';
+        L.push(lane.state === 'closed' ? `- Unmetered: closed: no unmetered model can start.${exhaustedText}` : `- Unmetered: open${summary ? `: ${summary}` : ''}.${exhaustedText}`);
+        for (const part of unmeteredClosedParts(lane, (ms) => fmtTime(new Date(ms).toISOString()))) L.push(`- ${part}`);
         continue;
       }
       const back = lane.backOnPaceAt ? ` Back ${lane.state === 'reserve' ? 'at reset' : 'on pace if unused'} about ${fmtTime(lane.backOnPaceAt)}.` : '';
