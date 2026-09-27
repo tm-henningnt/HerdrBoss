@@ -44,6 +44,36 @@ export function assertPreviewDataDir() {
   return DATA_DIR;
 }
 
+const SANDBOX_WRITE_CODES = new Set(['EPERM', 'EACCES', 'EROFS']);
+
+// A sandbox refuses writes to the data directory. Explain the refusal instead of printing the raw error.
+export function dataNotWritableError(dir, code) {
+  const error = new Error(`Herdr Boss cannot write to ${dir} (${code}). A sandbox blocks this write. Run the same command again outside the sandbox (an escalated run).`);
+  error.code = 'DATA_NOT_WRITABLE';
+  error.exitCode = 77;
+  return error;
+}
+
+// Map a sandbox write refusal on a path inside the data directory to the sandbox error. Return other errors unchanged.
+export function sandboxWriteError(error, dir = DATA_DIR) {
+  if (!SANDBOX_WRITE_CODES.has(error?.code) || typeof error.path !== 'string') return error;
+  const relative = path.relative(path.resolve(dir), path.resolve(error.path));
+  if (relative.startsWith('..') || path.isAbsolute(relative)) return error;
+  return dataNotWritableError(dir, error.code);
+}
+
+// Create and delete a probe file, so a command that writes Herdr Boss data fails before its first side effect.
+export function assertDataWritable(dir = DATA_DIR) {
+  const probe = path.join(dir, `.write-probe.${process.pid}`);
+  try {
+    fs.writeFileSync(probe, '', { flag: 'wx' });
+    fs.unlinkSync(probe);
+  } catch (error) {
+    if (SANDBOX_WRITE_CODES.has(error.code)) throw dataNotWritableError(dir, error.code);
+    throw error;
+  }
+}
+
 const DEFAULTS = {
   port: 4477,
   host: '0.0.0.0',

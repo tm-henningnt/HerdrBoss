@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
-import { loadConfig, migrateAccessFiles, assertPreviewDataDir, DATA_DIR, dashboardUrl } from './config.js';
+import { loadConfig, migrateAccessFiles, assertPreviewDataDir, assertDataWritable, sandboxWriteError, DATA_DIR, dashboardUrl } from './config.js';
 import { writeProject, SLUG } from './projects.js';
 import { loadProjectConfig } from './kit/config.js';
 
@@ -207,6 +207,8 @@ async function main() {
     case 'handoff': {
       const { planHandoff, prepareHandoff, activateHandoff, markHandoffReady, listHandoffs } = await import('./handoff.js');
       const [action, target] = args;
+      // A sandbox cannot write handoff records. Fail before the first Herdr call or file write.
+      if (['prepare', 'activate', 'ready'].includes(action)) assertDataWritable();
       if (action === 'list') { console.log(JSON.stringify(listHandoffs(), null, 2)); break; }
       if (action === 'activate') { console.log(JSON.stringify(activateHandoff(target, { confirmed: args.includes('--confirmed') }), null, 2)); break; }
       if (action === 'ready') { console.log(JSON.stringify(markHandoffReady(target), null, 2)); break; }
@@ -303,4 +305,4 @@ async function main() {
   }
 }
 
-main().catch((e) => { console.error(e.message); process.exit(e.exitCode ?? 1); });
+main().catch((error) => { const e = sandboxWriteError(error); console.error(e.message); process.exit(e.exitCode ?? 1); });
