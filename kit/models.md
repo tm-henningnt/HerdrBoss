@@ -26,7 +26,7 @@ Provider quota, task fit, availability, and review effort affect the real cost.
 
 | Kind and model | Best fit | Limits |
 | --- | --- | --- |
-| `claude`, `claude-opus-5-5` | Visual judgment, browser work, hosted review, and product coherence. | Quota is scarce. Reserve it for work that needs judgment. |
+| `claude`, `claude-opus-5-5` | Visual judgment, browser work, hosted review, and product coherence. | Reserve it for judgment while its lane is ahead of pace; use it for implementation when it has headroom. |
 | `codex`, `gpt-6-luna` | Core seams, algorithms, cross-cutting changes, and takeovers. | Review root causes and pixel claims. Long sessions can stop without a final report. |
 | `pi`, `opencode-go/deepseek-v4.1-flash` | Economical research and fully specified mechanical work. | Shared Go quota can stop every worker on that provider. Pin the model and verify results. |
 | `pi`, `opencode-go/muse-spark-1.3-contributor` | Cheap bounded implementation, docs, copy, and read-only diagnosis. | Source records disagree on its success rate. Keep the task atomic and inspect every path. |
