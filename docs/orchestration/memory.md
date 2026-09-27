@@ -7,11 +7,11 @@ Keep the current facts that every HerdrBoss orchestrator needs at start and resu
 - 2026-09-27: The Boss asks the Owner and pushes. The HerdrBoss orchestrator does not push. Source: AGENTS.md.
 - 2026-09-27: Never stop, close, or restart a browser that another project uses. Never touch the Chrome on port 9222. Source: AGENTS.md.
 - 2026-09-27: Store decisions and facts in project files, not only in a Claude or Codex memory. Source: Owner, through the Boss task B4.
+- 2026-09-27: Approved B6 fixes: delete the recorded code-sign clone after a SIGTERM close; tell agents to use the project browser or Chromium for dashboard checks; sweep orphaned `code_sign_clone` folders on each engine tick. Never touch a clone of a running Chrome. Never touch the Chrome on port 9222. Source: Owner, through the Boss.
 
 ## Holds and freezes
 
 - 2026-09-27: Do not start the tasks in the Future group (O2, O3, O4) before the current plan is complete. Lifted by: the Owner or the Boss.
-- 2026-09-27: A machine sweep of orphaned Chrome code-sign clones outside the project waits for an Owner decision. Lifted by: an Owner decision through the Boss.
 
 ## Standing rules
 
