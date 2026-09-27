@@ -164,6 +164,10 @@ test('Boss handover planning uses the boss pane without a project control entry'
   const herdr = path.join(bin, 'herdr');
   fs.writeFileSync(herdr, `#!/usr/bin/env node
 const args = process.argv.slice(2);
+if (args[0] === 'pane' && args[1] === 'rename' && JSON.parse(process.env.TEST_FAIL_RENAMES).includes(args[2])) {
+  console.log(JSON.stringify({ id: 'cli:pane:rename', error: { code: 'rename_failed', message: 'Pane error rename_failed.' } }));
+  process.exit(0);
+}
 let result = {};
 if (args[0] === 'pane' && args[1] === 'get') result = { pane: {
   pane_id: args[2], workspace_id: 'ws-boss', label: 'boss', agent: 'codex',
@@ -646,8 +650,8 @@ test('dashboard offers Prepare after an unavailable migration plan', () => {
   assert.match(source, /Migration unavailable:[^`]*Prepare will use fresh mode/);
 });
 
-// A fake Herdr CLI for activation. It prints the installed CLI's JSON envelope with raw pane fields.
-function activationFixture(t, { boss = false, failPrompts = [], paneListFails = false, record = {}, extraPanes = [] } = {}) {
+// A fake Herdr CLI for activation. It prints the installed CLI's JSON envelope with raw pane fields and exits 1 on an error, like the installed CLI.
+function activationFixture(t, { boss = false, failPrompts = [], paneListFails = false, record = {}, extraPanes = [], paneErrors = {}, failRenames = [] } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-boss-activate-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const bin = path.join(root, '.local', 'bin');
@@ -668,6 +672,19 @@ const fs = require('node:fs');
 const args = process.argv.slice(2);
 fs.appendFileSync(process.env.TEST_CALLS, JSON.stringify(args) + '\\n');
 const panes = JSON.parse(process.env.TEST_PANES);
+const paneErrors = JSON.parse(process.env.TEST_PANE_ERRORS);
+if (args[0] === 'pane' && paneErrors[args[2]]) {
+  console.log(JSON.stringify({ id: 'cli:' + args.slice(0, 2).join(':'), error: { code: paneErrors[args[2]], message: 'Pane error ' + paneErrors[args[2]] + '.' } }));
+  process.exit(1);
+}
+if (args[0] === 'agent' && args[1] === 'prompt' && paneErrors[args[2]]) {
+  console.log(JSON.stringify({ id: 'cli:agent:prompt', error: { code: paneErrors[args[2]], message: 'Pane error ' + paneErrors[args[2]] + '.' } }));
+  process.exit(1);
+}
+if (args[0] === 'pane' && args[1] === 'rename' && JSON.parse(process.env.TEST_FAIL_RENAMES).includes(args[2])) {
+  console.log(JSON.stringify({ id: 'cli:pane:rename', error: { code: 'rename_failed', message: 'Pane error rename_failed.' } }));
+  process.exit(1);
+}
 let result = {};
 if (args[0] === 'pane' && args[1] === 'get') result = { pane: panes.find((pane) => pane.pane_id === args[2]) || null };
 if (args[0] === 'pane' && args[1] === 'list') {
@@ -676,7 +693,7 @@ if (args[0] === 'pane' && args[1] === 'list') {
 }
 if (args[0] === 'agent' && args[1] === 'prompt' && JSON.parse(process.env.TEST_FAIL_PROMPTS).includes(args[2])) {
   console.log(JSON.stringify({ id: 'cli:agent:prompt', error: { code: 'pane_not_found', message: 'Pane not found.' } }));
-  process.exit(0);
+  process.exit(1);
 }
 console.log(JSON.stringify({ id: 'cli:' + args.slice(0, 2).join(':'), result }));
 `);
@@ -696,7 +713,7 @@ exec node "$(dirname "$0")/herdr.cjs" "$@"
   const env = {
     ...process.env, HOME: root, HERDR_BOSS_DIR: root, PATH: `${bin}${path.delimiter}${process.env.PATH || ''}`,
     TEST_CALLS: callsFile, TEST_PANES: JSON.stringify(panes), TEST_FAIL_PROMPTS: JSON.stringify(failPrompts),
-    TEST_PANE_LIST_FAIL: paneListFails ? '1' : '0',
+    TEST_PANE_LIST_FAIL: paneListFails ? '1' : '0', TEST_PANE_ERRORS: JSON.stringify(paneErrors), TEST_FAIL_RENAMES: JSON.stringify(failRenames),
   };
   const handoffUrl = new URL('../src/handoff.js', import.meta.url).href;
   const activate = () => JSON.parse(runHandoffModule(root, `import { activateHandoff } from ${JSON.stringify(handoffUrl)};
@@ -795,6 +812,53 @@ test('a failed previous-agent prompt does not stop activation and stays eligible
   assert.equal(item.status, 'active');
   assert.match(item.previousPromptError, /Pane not found/);
   assert.ok(f.prompts()['ws:p2']);
+});
+
+test('activation with a gone source pane skips the source and activates the successor', (t) => {
+  const f = activationFixture(t, { paneErrors: { 'ws:p1': 'pane_not_found' } });
+  const item = f.activate();
+  assert.equal(item.status, 'active');
+  const renames = f.calls().filter((args) => args[0] === 'pane' && args[1] === 'rename');
+  assert.deepEqual(renames, [['pane', 'rename', 'ws:p2', 'orch']]);
+  const promptTargets = f.calls().filter((args) => args[0] === 'agent' && args[1] === 'prompt').map((args) => args[2]);
+  assert.deepEqual(promptTargets, ['ws:p2']);
+  const successor = f.prompts()['ws:p2'];
+  assert.match(successor, /Your pane ID is ws:p2/);
+  assert.match(successor, /previous orchestrator pane ws:p1 was closed before activation/);
+  assert.doesNotMatch(successor, /now labeled/);
+  assert.doesNotMatch(successor, /null/);
+  assert.doesNotMatch(successor, /herdr agent read ws:p1/);
+  assert.doesNotMatch(successor, /final summary/);
+  assert.deepEqual(item.activation, { at: item.activatedAt, sourcePane: 'ws:p1', successorPane: 'ws:p2', sourceLabel: null, successorLabel: 'orch', sourceMissing: true });
+  assert.equal(item.previousPromptSkipped, 'source pane gone');
+  assert.equal(Object.hasOwn(item, 'previousPromptError'), false);
+  assert.equal(Object.hasOwn(item, 'previousPromptAt'), false);
+  const stored = JSON.parse(fs.readFileSync(path.join(f.root, 'handoffs.json'), 'utf8'))[0];
+  assert.equal(stored.status, 'active');
+  assert.deepEqual(stored.activation, item.activation);
+});
+
+test('activation with a present source pane does not record sourceMissing', (t) => {
+  const item = activationFixture(t).activate();
+  assert.equal(Object.hasOwn(item.activation, 'sourceMissing'), false);
+  assert.equal(Object.hasOwn(item, 'previousPromptSkipped'), false);
+});
+
+test('a different Herdr error for the source pane stops activation', (t) => {
+  const f = activationFixture(t, { paneErrors: { 'ws:p1': 'internal_error' } });
+  assert.throws(() => f.activate(), /internal_error/);
+  assert.equal(f.calls().some((args) => args[1] === 'rename' && args[2] === 'ws:p2'), false);
+  assert.equal(f.calls().some((args) => args[1] === 'prompt'), false);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.root, 'handoffs.json'), 'utf8'))[0].status, 'prepared');
+});
+
+test('a failed successor rename with a gone source pane throws without a source rollback', (t) => {
+  const f = activationFixture(t, { paneErrors: { 'ws:p1': 'pane_not_found' }, failRenames: ['ws:p2'] });
+  assert.throws(() => f.activate(), /rename_failed/);
+  const renames = f.calls().filter((args) => args[0] === 'pane' && args[1] === 'rename');
+  assert.deepEqual(renames, [['pane', 'rename', 'ws:p2', 'orch']]);
+  assert.equal(f.calls().some((args) => args[1] === 'prompt'), false);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.root, 'handoffs.json'), 'utf8'))[0].status, 'prepared');
 });
 
 test('dashboard and CLI docs describe the activation labels without standby', () => {

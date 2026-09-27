@@ -69,16 +69,25 @@ function call(command, args, cwd) {
     stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, PATH: `${path.join(os.homedir(), '.local/bin')}${path.delimiter}${process.env.PATH || ''}` } });
 }
+function herdrError(envelope) {
+  const error = new Error(envelope.message || String(envelope));
+  if (envelope.code) error.code = envelope.code;
+  return error;
+}
 function herdr(args) {
-  const stdout = call('herdr', args);
+  let stdout;
+  try { stdout = call('herdr', args); }
+  catch (e) {
+    // The installed CLI exits 1 on an error and prints the JSON error envelope on stdout.
+    let response;
+    try { response = JSON.parse(e.stdout); } catch { throw e; }
+    if (response?.error && typeof response.error === 'object') throw herdrError(response.error);
+    throw e;
+  }
   // pane read prints text, not JSON; the readiness check expects { text }.
   if (args[0] === 'pane' && args[1] === 'read') return { text: stdout };
   const response = JSON.parse(stdout);
-  if (response.error) {
-    const error = new Error(response.error.message || String(response.error));
-    if (response.error.code) error.code = response.error.code;
-    throw error;
-  }
+  if (response.error) throw herdrError(response.error);
   return response.result;
 }
 function readFile(file, fallback) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { if (e.code === 'ENOENT') return fallback; throw e; } }
@@ -322,8 +331,12 @@ export function previousAgentPrompt(item) {
 function successorPrompt(item) {
   const boss = handoffRole(item) === 'boss';
   const previous = boss ? 'previous Boss' : 'previous orchestrator';
+  const missing = item.activation.sourceMissing === true;
+  const sourceNote = missing ? `The ${previous} pane ${item.sourcePane} was closed before activation.`
+    : `The ${previous} is pane ${item.sourcePane}, now labeled ${item.activation.sourceLabel}.`;
+  const summaryNote = missing ? '' : ` The ${previous} was asked to write a final summary for you. Read it with herdr agent read ${item.sourcePane} when it is available.`;
   const roster = item.peerPanes?.length ? ` Other agent panes in your workspace: ${item.peerPanes.join(', ')}.` : Array.isArray(item.peerPanes) ? ' No other agents remain in your workspace.' : '';
-  return `[herdr-boss] Handover activated. You now control ${boss ? 'Herdr Boss orchestration' : `the ${item.project} project`}. Your pane ID is ${item.newPane}, labeled ${item.activation.successorLabel}. The ${previous} is pane ${item.sourcePane}, now labeled ${item.activation.sourceLabel}. ${sessionConstruction(item)}${roster} The standby rule no longer applies. The ${previous} was asked to write a final summary for you. Read it with herdr agent read ${item.sourcePane} when it is available. Take over the current work. Use your pane ID ${item.newPane} in worker briefs, worker reports, and messages. Read the current Herdr Boss bulletin, check each agent's work, and resume orchestration within the current policy.`;
+  return `[herdr-boss] Handover activated. You now control ${boss ? 'Herdr Boss orchestration' : `the ${item.project} project`}. Your pane ID is ${item.newPane}, labeled ${item.activation.successorLabel}. ${sourceNote} ${sessionConstruction(item)}${roster} The standby rule no longer applies.${summaryNote} Take over the current work. Use your pane ID ${item.newPane} in worker briefs, worker reports, and messages. Read the current Herdr Boss bulletin, check each agent's work, and resume orchestration within the current policy.`;
 }
 
 // Notices that the engine delivers after activation. A prompt needs a current agent pane; the Owner gets a Herdr notification.
@@ -357,20 +370,28 @@ export function activateHandoff(id, { confirmed = false } = {}) {
   const target = herdr(['pane', 'get', item.newPane]).pane;
   if (target?.agent !== item.toKind || !['idle', 'done'].includes(target.agent_status)) throw new Error('Successor is not settled and ready.');
   const role = handoffRole(item);
-  const sourceLabel = `${role} previous`;
-  herdr(['pane', 'rename', item.sourcePane, sourceLabel]);
+  // Only pane_not_found means the Owner closed the source pane; other errors stop activation.
+  let sourceMissing = false;
+  try { herdr(['pane', 'get', item.sourcePane]); }
+  catch (e) { if (e.code !== 'pane_not_found') throw e; sourceMissing = true; }
+  const sourceLabel = sourceMissing ? null : `${role} previous`;
+  if (!sourceMissing) herdr(['pane', 'rename', item.sourcePane, sourceLabel]);
   try { herdr(['pane', 'rename', item.newPane, role]); }
-  catch (e) { try { herdr(['pane', 'rename', item.sourcePane, item.label]); } catch {} throw e; }
+  catch (e) { if (!sourceMissing) try { herdr(['pane', 'rename', item.sourcePane, item.label]); } catch {} throw e; }
   item.status = 'active'; item.activatedAt = new Date().toISOString();
   item.activation = { at: item.activatedAt, sourcePane: item.sourcePane, successorPane: item.newPane, sourceLabel, successorLabel: role };
+  if (sourceMissing) item.activation.sourceMissing = true;
   try {
     item.peerPanes = herdr(['pane', 'list']).panes
       .filter((pane) => pane.workspace_id === item.workspace && ![item.newPane, item.sourcePane].includes(pane.pane_id) && pane.agent && !PREVIOUS_LABELS.has(pane.label))
       .map((pane) => pane.pane_id);
   } catch { item.peerPanes = null; /* The engine uses its current pane snapshot instead. */ }
   save(records);
-  try { herdr(['agent', 'prompt', item.sourcePane, previousAgentPrompt(item)]); item.previousPromptAt = new Date().toISOString(); }
-  catch (e) { item.previousPromptError = String(e.stderr || e.message).slice(0, 500); }
+  if (sourceMissing) item.previousPromptSkipped = 'source pane gone';
+  else {
+    try { herdr(['agent', 'prompt', item.sourcePane, previousAgentPrompt(item)]); item.previousPromptAt = new Date().toISOString(); }
+    catch (e) { item.previousPromptError = String(e.stderr || e.message).slice(0, 500); }
+  }
   save(records);
   try { herdr(['agent', 'prompt', item.newPane, successorPrompt(item)]); }
   catch (e) { item.activationPromptError = String(e.stderr || e.message).slice(0, 500); save(records); }

@@ -180,7 +180,7 @@ The screenshot command writes under `$TMPDIR` when it is set. Otherwise, it crea
 |---|---|
 | `handoff plan PANE --to KIND [--model M] [--effort E] [--mode migrate\|fresh]` | Check the target and whether session migration is available. Changes nothing. |
 | `handoff prepare PANE --to KIND [...]` | Start a successor in a new `Orchestrator Next` tab. The source keeps control. |
-| `handoff activate ID --confirmed` | Label a project successor `orch` and the source pane `orch previous`. Label a Boss successor `boss` and the source pane `boss previous`. A project handover notifies the project workers and the Boss. A Boss handover notifies the Boss-workspace peers and the Owner. |
+| `handoff activate ID --confirmed` | Label a project successor `orch` and the source pane `orch previous`. Label a Boss successor `boss` and the source pane `boss previous`. A project handover notifies the project workers and the Boss. A Boss handover notifies the Boss-workspace peers and the Owner. If Herdr reports `pane_not_found` for the source pane, activation skips the source label and the source prompt. The successor prompt says that the source pane was closed before activation. |
 | `handoff ready ID` | Sent by an automatic successor when it is ready. |
 | `handoff list` | All handover records. |
 
