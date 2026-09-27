@@ -64,10 +64,14 @@ Disable extensions that can start unpinned subagents.
 
 Keep the Herdr state reporter enabled.
 
+Keep the Herdr guard enabled. `~/.pi/agent/extensions/herdr-guard.ts` blocks file tools outside the worktree, the temporary directories, and `~/.herdr-boss`. It blocks `git push`, `git reset --hard`, `git clean`, `git branch -D`, `git worktree remove`, `rm -rf` outside the temporary directories, `sudo`, `launchctl`, the private Herdr Boss directory, and credential files. It never asks. A blocked call returns a reason to the worker.
+
+`--no-approve` stops Pi from loading project-local settings, resources, and packages in a worker.
+
 Use this launch shape when you start Pi outside the kit command:
 
 ```sh
-pi --model <model> --models <same-model> --no-extensions -e ~/.pi/agent/extensions/herdr-agent-state.ts
+pi --model <model> --models <same-model> --no-extensions -e ~/.pi/agent/extensions/herdr-agent-state.ts -e ~/.pi/agent/extensions/herdr-guard.ts --no-approve
 ```
 
 Do not let model cycling select an unapproved model.
@@ -82,7 +86,9 @@ Run free `opencode/` models in the OpenCode harness.
 
 The OpenCode free-usage limit applies to every free model of the harness. After a `Free usage exceeded` failure, Herdr Boss closes the whole `opencode` free lane until the retry time. Without a retry time on the screen, the lane closes for 1 hour. Do not start another free `opencode` worker while the bulletin shows the lane exhausted.
 
-Read a new pane after startup and handle any permission prompt.
+Start OpenCode workers with `--agent worker`. The `worker` agent in `~/.config/opencode/opencode.json` never asks for permission. It allows routine work and denies risky actions and directories outside the worktree, the temporary directories, and `~/.herdr-boss`. A denied call returns an error to the worker.
+
+Read a new pane after startup. If a permission prompt still appears, report it to the Boss.
 
 Wait for the input box before sending the first prompt.
 
