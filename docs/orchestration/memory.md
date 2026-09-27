@@ -16,6 +16,7 @@ Keep the current facts that every HerdrBoss orchestrator needs at start and resu
 - 2026-09-27: The HerdrBoss orchestrator maintains the Herdr Boss kit, its skills, and its templates, and edits them directly. Other orchestrators send kit change requests to the Boss, which decides whether to relay them. Source: Owner, in pane wB:p28.
 
 - 2026-09-27: The Future group (O2 Messaging, O3 Look and phone, O4 Owner mailbox) is open for work. The HerdrBoss orchestrator decides the order. Source: Owner, through the Boss.
+- 2026-09-27: Split the kit from AGENTS.md. `herdr-boss kit install` writes `docs/orchestration/herdr-boss.md` with a version line; only herdr-boss writes it. AGENTS.md keeps a 6 to 8 line marked stub: read herdr-boss.md and memory.md at start, at resume, and on each Kit updated notice; use and respect the kit, notices, and Boss messages, and report problems with them to the Boss; decide details and pushes yourself; ask the Owner only about credentials, spending money, destructive actions outside the project, and a conflict with a recorded decision; open no selection dialogs. `check agents` verifies the stub, the file version, and contradictions outside them. Where possible, a Claude SessionStart hook prints herdr-boss.md into context. Source: Owner, through the Boss.
 
 ## Holds and freezes
 
