@@ -41,7 +41,7 @@ When `NODE_TEST_CONTEXT` is set, or the data directory differs from the configur
 | Command | Action |
 |---|---|
 | `herdr-boss lanes` | Show the active Owner state, machine CPU and threshold, 5-minute load and backstop, then one line per quota provider. Show common unmetered models once by harness with project exceptions, followed by exhausted free models and retry times; show only this project's models inside a configured checkout. |
-| `herdr-boss models [--kind KIND]` | The allowed harnesses, models, and efforts from `kit/models.json`. |
+| `herdr-boss models [--kind KIND]` | The allowed harnesses, models, and efforts from `kit/models.json` and the policy `extraModels`. A kind with policy models also has `localModels`. That field lists the models that come from the policy `extraModels` and not from `kit/models.json`. |
 | `herdr-boss policy show` | Print the resource policy (`~/.herdr-boss/policy.json`). |
 | `herdr-boss policy set FILE` | Validate and replace the policy. The service applies it on the next tick. |
 | `herdr-boss usage record FILE` | Add one measured or unmeasured usage event. |
@@ -52,6 +52,8 @@ When `NODE_TEST_CONTEXT` is set, or the data directory differs from the configur
 | Command | Action |
 |---|---|
 | `herdr-boss publish SLUG FILE` | Validate a status file and install it for `/projects/SLUG`. Use `-` for standard input. Schema: [project-status.md](project-status.md). |
+
+`publish` also checks `AGENTS.md` at the Git top level of the current directory, when that file exists. It prints each finding to standard error as a warning. It publishes the status in all cases. The published record gets `agentsCheck: { checkedAt, errors, warnings, file }`. The record holds only the counts and the repository-relative file name. The project page shows a warning line when `errors` or `warnings` is more than 0.
 | `herdr-boss scratch SLUG` | Create `~/.herdr-boss/scratch/SLUG/` if it does not exist, and print its absolute path. `HERDR_BOSS_DIR` replaces `~/.herdr-boss`. |
 
 ## Workers
@@ -141,8 +143,37 @@ herdr-boss worker allow fix-74 docs/parse.md --reason "the fix also needs the pa
 | `check --report FILE` | Validate a worker report (`report.json`). |
 | `check --run FILE` | Validate one ledger entry. |
 | `check --worktree DIR --allow PATH...` | Check that the worktree changes only allowed paths. |
+| `check agents [FILE]` | Check a project `AGENTS.md` for kit drift. `FILE` defaults to `AGENTS.md` at the Git top level of the current directory. The command prints one line per finding and a summary line. It exits 0 when there is no `error` finding, and 1 otherwise. |
+| `kit block` | Print the marked Herdr Boss block with the current hash. Paste it into the project `AGENTS.md` in place of the old block. |
 | `worktree prune [--apply]` | List worktrees that pass the safe checks and show processes in removal candidates. `--apply` removes only worktrees with no blocking process. |
 | `gh issue create\|comment\|edit ... --body-file FILE` | Run a GitHub issue command. An inline `--body` is refused. |
+
+### `AGENTS.md` block and drift check
+
+`kit/templates/agents-section.md` is the block body. An installed block has this form:
+
+```
+<!-- herdr-boss:begin v=<hash> -->
+<block body>
+<!-- herdr-boss:end -->
+```
+
+`<hash>` is the first 12 hex characters of the SHA-256 of the block body. The hash ignores CRLF line endings and trailing whitespace.
+
+`check agents` prints each finding as `LEVEL line N: message`. `LEVEL` is `error` or `warn`.
+
+| Level | Finding |
+|---|---|
+| `error` | The file has no begin marker, no end marker, or more than one block. |
+| `error` | The block hash is not the current hash. Run `herdr-boss kit block` and replace the block. |
+| `error` | The block body does not match its own hash. The block was edited by hand. |
+| `warn` | Outside the block: `herdr agent start`, `herdr pane split`, a `Workers` tab, or `dashboard:update`. |
+| `warn` | Outside the block: port `9222`, or `pgrep -f`, `ps aux`, or `ps -ef` in a command. A line with `do not`, `don't`, or `never` is a safety rule and is not a finding. |
+| `warn` | Outside the block: a fixed pane ID such as `w1:p2`, or a dated line. Move it to `docs/orchestration/memory.md`. |
+| `warn` | A model ID that starts with `gpt-`, `claude-`, `opencode/`, `opencode-go/`, `deepseek`, or `muse-spark` and is not in the merged model list. The merged list is the same list that `herdr-boss models` shows. |
+| `warn` | Outside the block: three or more allowed model IDs. This is a copied model list. Use `herdr-boss models` and `herdr-boss lanes`. |
+
+`worker start` runs the same check on the project `AGENTS.md`. It prints one warning line with the counts when there are findings. It starts the worker in all cases.
 
 An unknown tool-call count stays `null`. The ledger accepts `null` as unknown. If an older kit reports a ledger entry with `null` as invalid, install a HerdrBoss kit version that accepts `null`, then run `herdr-boss ledger check` again. This check reads the ledger. Do not replace `null` with `0` or edit the ledger entry.
 

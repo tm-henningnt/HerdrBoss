@@ -2,8 +2,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { loadModels, loadProjectConfig, PROJECT_DEFAULTS } from '../src/kit/config.js';
 import { appendDelegatedRun, compareChangedPaths, gitChangedPaths, readDelegatedRuns, validateAllowedPaths, validateDelegatedRun, validateWorkerReport } from '../src/kit/orchestration.js';
 import { buildGhArgs } from '../src/kit/gh.js';
@@ -1916,4 +1917,42 @@ test('worker list reports the failed status from the Boss snapshot', () => {
     output: () => {}, stateFile,
   });
   assert.equal(rows[0].agentStatus, 'failed');
+});
+
+test('publish stores the AGENTS.md drift counts and still publishes', () => {
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-publish-agents-')));
+  const repo = temporaryRepo('herdr-publish-repo-');
+  fs.writeFileSync(path.join(repo, 'AGENTS.md'), '# Project\nThe Boss is in pane w1:p2.\n');
+  const status = path.join(home, 'status.json');
+  fs.writeFileSync(status, JSON.stringify({ project: 'Demo' }));
+  const dataDir = path.join(home, 'boss');
+  const env = { ...process.env, HOME: home, HERDR_BOSS_DIR: dataDir, TMPDIR: home };
+  const cli = fileURLToPath(new URL('../src/cli.js', import.meta.url));
+  const result = spawnSync(process.execPath, [cli, 'publish', 'demo', status], { cwd: repo, env, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /^warning: AGENTS\.md error line 1: no begin marker/m);
+  assert.match(result.stderr, /^warning: AGENTS\.md warn line 2: .*pane ID/m);
+  const stored = JSON.parse(fs.readFileSync(path.join(dataDir, 'projects', 'demo.json'), 'utf8'));
+  assert.deepEqual({ ...stored.agentsCheck, checkedAt: undefined }, { checkedAt: undefined, errors: 2, warnings: 1, file: 'AGENTS.md' });
+  assert.ok(!Number.isNaN(Date.parse(stored.agentsCheck.checkedAt)));
+  assert.ok(!JSON.stringify(stored).includes('w1:p2'), 'the record holds counts only, no file text');
+  assert.ok(validateProject({ project: 'x', agentsCheck: { errors: -1, warnings: 0 } }).some((error) => error.includes('agentsCheck')));
+});
+
+test('worker start warns about AGENTS.md drift and still starts', () => {
+  const f = setupFixture(null);
+  fs.writeFileSync(path.join(f.root, 'AGENTS.md'), '# Project\nNo block.\n');
+  const lines = [];
+  const result = startWorker('drift', { kind: 'codex', task: 'x', allow: ['src/'], dryRun: true }, {
+    config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: (line) => lines.push(line),
+  });
+  assert.equal(result.dryRun, true);
+  assert.ok(lines.includes('Warning: AGENTS.md drift: 2 errors, 0 warnings. Run herdr-boss check agents.'), lines.join('\n'));
+});
+
+test('the project page shows the AGENTS.md drift line and its help', () => {
+  const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  assert.match(app, /AGENTS\.md drift: \$\{errors\} errors, \$\{warnings\} warnings\. Run <span class="mono">herdr-boss check agents<\/span>\./);
+  assert.match(app, /agentsDriftLine\(p\.agentsCheck\)/);
+  assert.match(app, /<h3>AGENTS\.md drift<\/h3>/);
 });

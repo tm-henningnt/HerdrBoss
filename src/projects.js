@@ -36,6 +36,10 @@ export function validateProject(p) {
   for (const [i, g] of (Array.isArray(p.gates) ? p.gates : []).entries()) if (!g || typeof g.title !== 'string') errs.push(`gates[${i}].title (string) is required`);
   for (const [i, r] of (Array.isArray(p.risks) ? p.risks : []).entries()) if (typeof r !== 'string') errs.push(`risks[${i}] must be a string`);
   for (const [i, l] of (Array.isArray(p.links) ? p.links : []).entries()) if (!l || typeof l.url !== 'string' || !WEB_URL.test(l.url)) errs.push(`links[${i}].url must start with http:// or https://`);
+  if (p.agentsCheck != null) {
+    const c = p.agentsCheck;
+    if (typeof c !== 'object' || Array.isArray(c) || !Number.isInteger(c.errors) || c.errors < 0 || !Number.isInteger(c.warnings) || c.warnings < 0) errs.push('"agentsCheck" must be an object with errors and warnings (non-negative integers)');
+  }
   if (p.git != null && (typeof p.git !== 'object' || Array.isArray(p.git))) errs.push('"git" must be an object with branch, commit, and dirty');
   return errs;
 }

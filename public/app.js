@@ -1326,6 +1326,14 @@ function gatesRisksBlock(p) {
     ${risks.length ? `<div class="panel"><h2>Risks</h2><ul class="notes">${risks.map((r) => `<li>${code(r)}</li>`).join('')}</ul></div>` : ''}</section>`;
 }
 
+// The drift check result that herdr-boss publish stores for the project AGENTS.md.
+function agentsDriftLine(check) {
+  const errors = Number.isInteger(check?.errors) ? check.errors : 0;
+  const warnings = Number.isInteger(check?.warnings) ? check.warnings : 0;
+  if (!errors && !warnings) return '';
+  return `<div class="warnbox">AGENTS.md drift: ${errors} errors, ${warnings} warnings. Run <span class="mono">herdr-boss check agents</span>.</div>`;
+}
+
 function project(s, slug) {
   const published = (s.projects || []).find((x) => x.slug === slug);
   const live = s.control?.projects?.[slug];
@@ -1360,6 +1368,7 @@ function project(s, slug) {
   return [
     `<section class="phead"><h1>${esc(p.project)}</h1>${p.goal ? `<div class="owner-goal"><strong>Current Owner goal</strong><p>${esc(p.goal)}</p></div>` : ''}${p.summary ? `<p>${esc(p.summary)}</p>` : ''}${phases}<div class="win-foot">${published ? `updated ${ago(p.updated)}${p.status ? ` · ${esc(p.status)}` : ''}` : 'No project status published yet'}${p.git && typeof p.git === 'object' ? ` · <span class="mono">${esc(p.git.branch || '')}${p.git.commit ? ` @ ${esc(String(p.git.commit).slice(0, 12))}` : ''}${p.git.dirty ? ' · uncommitted changes' : ''}</span>` : ''}</div></section>`,
     p.errors ? `<div class="warnbox">${esc(p.errors.join('; '))}</div>` : '',
+    agentsDriftLine(p.agentsCheck),
     handoffBlock(s, slug),
     metrics,
     programBlock(work),
@@ -1394,6 +1403,7 @@ const HELP = {
     <h3>Tasks and All work</h3><p>The board groups tasks by status; Done shows the latest 10 until you show completed work. The list sorts and filters all work.</p>
     <h3>Project continuity</h3><p>Plan a handover to another harness. Prepare copies the published Owner goal to the successor. An invalid published goal, such as a blank value or a value over 1000 characters, is omitted. If migration is unavailable or fails, Prepare starts fresh and records the reason. Fresh preparation captures at most 200 recent source-pane lines and 20,000 characters, and both caps include the truncation marker. It redacts likely credentials and marks the snapshot as historical context. If recent text is unavailable, it tries the visible pane; if both reads fail, it marks context unavailable. The successor only reads and reports until activation. Inspect its answer, then confirm activation. For a project, activation labels the successor <b>orch</b> and the old pane <b>orch previous</b>. For the Boss, it labels them <b>boss</b> and <b>boss previous</b>. Herdr Boss closes the old pane after 120 minutes when the same handoff and pane roles are still confirmed. Unavailable pane data defers retirement until a later engine tick. The successor gets one notice after retirement. The old agent is asked for a final summary for the successor. A project handover notifies the project workers and the Boss. A Boss handover notifies the Boss-workspace peers and the Owner.</p>
     <h3>Phone</h3><p>On a phone, the long sections start collapsed. Select a section title to open it. The dashboard remembers each open section for this project during the session. Overall progress and the frontier stay open.</p>
+    <h3>AGENTS.md drift</h3><p><b>AGENTS.md drift</b> shows the errors and warnings that <b>herdr-boss publish</b> found in the project AGENTS.md. An error is a missing, old, or hand-edited Herdr Boss block. A warning is stale orchestration text, such as a fixed pane ID, a dated line, or a copied model list. Run <b>herdr-boss check agents</b> in the project for each finding.</p>
     <p>The data comes from the project's status file. When a section is missing, the orchestrator has not published those fields.</p>`],
   allocation: ['Allocation', `
     <p>The resource policy for all projects. Changes are a draft until you select <b>Apply policy</b>.</p>

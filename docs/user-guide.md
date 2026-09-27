@@ -39,6 +39,10 @@ Keep current state only. Delete a line when a decision is superseded. Git keeps 
 
 Never store secrets, tokens, or credentials. In a public repository, do not store client names, tenant URLs, or details of other projects.
 
+## Kit block in AGENTS.md
+
+Each project `AGENTS.md` holds one Herdr Boss block between `<!-- herdr-boss:begin v=<hash> -->` and `<!-- herdr-boss:end -->`. The hash identifies the kit version of the block. `herdr-boss kit block` prints the current block. `herdr-boss check agents` finds an old or hand-edited block. It also finds stale orchestration text outside the block, such as fixed pane IDs, dated lines, and copied model lists. `herdr-boss publish` and `herdr-boss worker start` run the same check and warn. The project page shows the counts from the last `publish`. The commands are in [cli.md](cli.md).
+
 ## Orchestrators
 
 Herdr Boss finds an orchestrator by its pane label `orch`. Tab names do not matter. An orchestrator can label its own pane:
