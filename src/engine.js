@@ -3,16 +3,16 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
 import { DATA_DIR, LIVE_DATA_DIR, dashboardUrl } from './config.js';
-import { collectHerdr, collectQuotas, collectMachine, collectProcesses, collectCwdProcesses, collectMissingWorktreeProcesses, collectWorktreeCounts, findBrowsers, cpuUse, run } from './collect.js';
+import { collectHerdr, collectQuotas, collectMachine, collectProcesses, collectCwdProcesses, collectMissingWorktreeProcesses, collectWorktreeCounts, collectPiModels, findBrowsers, cpuUse, run } from './collect.js';
 import { evaluate, renderBulletin, fmtDuration, providerName, broadcastTargets } from './rules.js';
 import { listProjects } from './projects.js';
 import { loadModels } from './kit/config.js';
-import { loadPolicy, clearExpiredOneOffGoals, deriveControl, migrateWorkspacePolicy, providerFor, pickSuccessor, laneStatus, leastOverProvider, machineLimits, unmeteredLane } from './control.js';
+import { loadPolicy, clearExpiredOneOffGoals, deriveControl, migrateWorkspacePolicy, providerFor, pickSuccessor, laneStatus, leastOverProvider, machineLimits, unmeteredLane, unavailablePiModels, mergeModels } from './control.js';
 import { recordQuotaSnapshot } from './usage.js';
 import { listBrowserSessions, cdpResponds } from './browser-pool.js';
 import { codeSignCloneDir, sweepCodeSignClones } from './clone-sweep.js';
 import { listHandoffs, expireHandoff, expireMissingHandoffs, handoffNotices } from './handoff.js';
-import { inspectWorkerTransitions, inspectWorkerReports, applyWorkerFailureStatuses, resolveFreeUsageRun, activeFreeModelExhaustions, extendFreeModelExhaustion } from './worker-failures.js';
+import { inspectWorkerTransitions, inspectWorkerReports, applyWorkerFailureStatuses, resolveFreeUsageRun, activeFreeModelExhaustions, extendFreeModelExhaustion, activeFreeLaneExhaustions, extendFreeLaneExhaustion, freeUsageLaneRetry } from './worker-failures.js';
 
 const MEMORY_FILE = path.join(DATA_DIR, 'memory.json');
 const STATE_FILE = path.join(DATA_DIR, 'state.json');
@@ -23,6 +23,7 @@ const SEV = { info: 0, warn: 1, critical: 2 };
 const POLICY_FILE = path.join(DATA_DIR, 'policy.json');
 const WORKTREE_SCAN_INTERVAL_MS = 5 * 60 * 1000;
 const CLONE_SWEEP_INTERVAL_MS = 10 * 60 * 1000;
+const PI_MODELS_INTERVAL_MS = 15 * 60 * 1000;
 
 function handoffCandidates(control) {
   return [...(control.handoffs || []), ...(control.bossHandoff ? [control.bossHandoff] : [])];
@@ -95,6 +96,8 @@ export class Engine extends EventEmitter {
       cdpResponds,
       codeSignCloneDir,
       sweepCodeSignClones,
+      // A test engine does not run the real pi unless a test injects a collector.
+      collectPiModels: process.env.NODE_TEST_CONTEXT ? async () => null : collectPiModels,
       ...collectors,
     };
     this.handoffRunner = handoffRunner;
@@ -124,6 +127,9 @@ export class Engine extends EventEmitter {
     const now = Date.now();
     try {
       const refreshQuotas = !this.quotas || now - this.quotasAt > this.cfg.quotaSeconds * 1000;
+      // Pi lists only the models it can use. A failed run keeps the last good result; no result means availability is unknown.
+      const refreshPiModels = !Number.isFinite(this.piModelsCheckedAt) || now - this.piModelsCheckedAt >= PI_MODELS_INTERVAL_MS;
+      if (refreshPiModels) this.piModelsCheckedAt = now;
       let currentHerdrSnapshot = false;
       let currentPaneList = false;
       const [herdr, machine, procs, quotas] = await Promise.all([
@@ -135,6 +141,9 @@ export class Engine extends EventEmitter {
         this.collectors.collectMachine(DATA_DIR).catch((e) => { errors.push(`machine: ${e.message}`); return null; }),
         this.collectors.collectProcesses().catch((e) => { errors.push(`ps: ${e.message}`); return new Map(); }),
         refreshQuotas ? this.collectors.collectQuotas().catch((e) => { errors.push(`codexbar: ${e.message}`); return null; }) : null,
+        refreshPiModels ? this.collectors.collectPiModels({ now }).then((result) => {
+          if (Array.isArray(result?.models)) this.memory.piModels = { at: Number.isFinite(result.at) ? result.at : now, models: [...result.models] };
+        }).catch(() => {}) : null,
       ]);
       if (this.act && currentHerdrSnapshot && currentPaneList) {
         try { expireMissingHandoffs(herdr?.panes); }
@@ -196,9 +205,11 @@ export class Engine extends EventEmitter {
       snap.projects = listProjects();
       const policy = migrateWorkspacePolicy(loadPolicy(), snap, { file: POLICY_FILE });
       this.memory.exhaustedFreeModels = activeFreeModelExhaustions(this.memory.exhaustedFreeModels, now);
+      this.memory.exhaustedFreeLanes = activeFreeLaneExhaustions(this.memory.exhaustedFreeLanes, now);
       for (const pane of herdr?.panes || []) {
         const failure = workerTransitions.failures[pane.id];
-        if (failure?.label !== 'Free usage exceeded' || !Number.isFinite(failure.retryAt) || failure.retryAt <= now) continue;
+        const laneRetry = freeUsageLaneRetry(failure, now);
+        if (!laneRetry) continue;
         const checkoutPaths = [...new Set([
           ...herdr.panes.filter((candidate) => candidate.workspace === pane.workspace && candidate.orch && candidate.cwd).map((candidate) => candidate.cwd),
           pane.cwd,
@@ -209,7 +220,9 @@ export class Engine extends EventEmitter {
           if (association) break;
         }
         if (!association) continue;
-        this.memory.exhaustedFreeModels = extendFreeModelExhaustion(this.memory.exhaustedFreeModels, association, failure.retryAt, now);
+        if (laneRetry.retryKnown) this.memory.exhaustedFreeModels = extendFreeModelExhaustion(this.memory.exhaustedFreeModels, association, failure.retryAt, now);
+        // The OpenCode free-usage limit closes every unmetered model of the opencode harness.
+        if (association.kind === 'opencode') this.memory.exhaustedFreeLanes = extendFreeLaneExhaustion(this.memory.exhaustedFreeLanes, 'opencode', { ...laneRetry, at: failure.at }, now);
       }
       clearExpiredOneOffGoals(policy, snap.quotas, now, { log: (message) => this.log('policy', message) });
       // Apply the failure status before deriving control, so a failed worker does not count as running.
@@ -223,8 +236,11 @@ export class Engine extends EventEmitter {
         snap.machine.limits = machineLimits(snap.machine, policy, now);
       }
       snap.lanes = laneStatus(snap.quotas, policy, now);
-      // The unmetered lane is always open and lists permitted free models. It never affects least-over selection.
-      snap.lanes.unmetered = unmeteredLane(this.models, policy, control.projects, this.memory.exhaustedFreeModels);
+      // The unmetered lane lists the permitted free models that can start. It never affects least-over selection.
+      snap.lanes.unmetered = unmeteredLane(this.models, policy, control.projects, this.memory.exhaustedFreeModels, {
+        unavailablePiModels: unavailablePiModels(mergeModels(this.models, policy).kinds.pi?.allowedModels, this.memory.piModels),
+        exhaustedLanes: this.memory.exhaustedFreeLanes, now,
+      });
       snap.leastOverProvider = leastOverProvider(snap.lanes);
       snap.policy = policy;
       snap.control = control;
@@ -356,6 +372,7 @@ export class Engine extends EventEmitter {
         avoidProviders: Object.keys(snap.lanes).filter((provider) => control.pressures[provider] || control.risks[provider] || snap.lanes[provider].state === 'exhausted'),
         lanes: snap.lanes,
         leastOverProvider: snap.leastOverProvider,
+        piModels: this.memory.piModels || null,
         preferredKinds,
         memFreePercent: machine?.memFreePercent ?? null,
         load: machine ? { oneMinute: machine.load[0], fiveMinute: machine.load[1], cpus: machine.cpus, limit: machineLimits(snap.machine, policy, now).loadLimit } : null,

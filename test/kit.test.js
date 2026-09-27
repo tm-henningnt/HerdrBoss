@@ -1956,3 +1956,20 @@ test('the project page shows the AGENTS.md drift line and its help', () => {
   assert.match(app, /agentsDriftLine\(p\.agentsCheck\)/);
   assert.match(app, /<h3>AGENTS\.md drift<\/h3>/);
 });
+
+test('lanes describes unavailable Pi models and an exhausted free lane for the project', async () => {
+  const { describeUnmetered } = await import('../src/kit/workers.js');
+  const retryAt = Date.parse('2026-09-27T17:45:00Z');
+  const lane = {
+    state: 'open', unmetered: true, byProject: { herdrboss: { pi: ['opencode-go/space-bunny-free'] }, other: {} }, exhausted: [],
+    unavailable: [{ kind: 'pi', model: 'opencode/big-pickle', provider: 'opencode', reason: 'no-credential', projects: ['herdrboss'] }],
+    exhaustedLanes: [{ kind: 'opencode', retryAt, retryKnown: false, reason: 'free usage exceeded', projects: ['herdrboss'] }],
+  };
+  assert.deepEqual(describeUnmetered(lane, 'herdrboss').split('\n'), [
+    'unmetered open: pi: opencode-go/space-bunny-free',
+    "Unmetered pi opencode/ models: unavailable. Pi has no credential for the opencode provider. Adding one is the Owner's decision.",
+    'Unmetered opencode: exhausted (free usage exceeded); retry after 2026-09-27T17:45:00.000Z (reset time unknown).',
+  ]);
+  assert.equal(describeUnmetered(lane, 'other').split('\n').length, 1, 'closed parts of another project are not shown');
+  assert.match(describeUnmetered({ ...lane, state: 'closed', byProject: { herdrboss: {} } }, 'herdrboss'), /^unmetered closed: no unmetered model can start/);
+});

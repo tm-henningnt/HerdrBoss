@@ -49,7 +49,7 @@ This list is descriptive only. `models.json` decides which models workers may us
 
 Pi uses the first seven entries of that list. They are in the installed Pi catalog and start unmetered in the Pi harness. `opencode/space-bunny-free` has no Pi catalog entry, so it stays out of the Pi allow-list.
 
-Catalog membership means the installed Pi provider knows the model ID. It does not mean an account is configured or that the provider is live. Confirm a worker start before you rely on a model.
+Catalog membership means the installed Pi provider knows the model ID. It does not mean an account is configured or that the provider is live. Herdr Boss hides a Pi model that `pi --list-models` does not list. Confirm a worker start before you rely on a model.
 
 Prefer DeepSeek for substantial mechanical work when both DeepSeek and Muse Spark are available.
 
@@ -73,11 +73,15 @@ pi --model <model> --models <same-model> --no-extensions -e ~/.pi/agent/extensio
 
 Do not let model cycling select an unapproved model.
 
+Read the bulletin before you choose a free Pi model. Pi lists only the models that it can use. Herdr Boss runs `pi --list-models` and hides each Pi model that it does not list. `worker start` refuses such a model, and `--force` does not bypass the refusal. A missing provider means that Pi has no credential for it. Do not add a credential or run `/login`. Adding a credential is the Owner's decision.
+
 ### OpenCode
 
 Put the brief and report inside the worker worktree.
 
 Run free `opencode/` models in the OpenCode harness.
+
+The OpenCode free-usage limit applies to every free model of the harness. After a `Free usage exceeded` failure, Herdr Boss closes the whole `opencode` free lane until the retry time. Without a retry time on the screen, the lane closes for 1 hour. Do not start another free `opencode` worker while the bulletin shows the lane exhausted.
 
 Read a new pane after startup and handle any permission prompt.
 

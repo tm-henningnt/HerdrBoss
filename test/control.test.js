@@ -151,6 +151,8 @@ console.log(JSON.stringify({
   failed: first.herdr.panes.find((pane) => pane.id === 'w1:p2').status,
   exhausted: first.lanes.unmetered.exhausted,
   availableBeforeRetry: first.lanes.unmetered.byProject.sample.opencode,
+  exhaustedLanes: first.lanes.unmetered.exhaustedLanes,
+  rememberedLanes: firstMemory.exhaustedFreeLanes,
   rememberedModels: firstMemory.exhaustedFreeModels,
   availableAtRetry: second.lanes.unmetered.byProject.sample.opencode,
   exhaustedAtRetry: second.lanes.unmetered.exhausted,
@@ -162,7 +164,9 @@ console.log(JSON.stringify({
   }));
   assert.equal(result.failed, 'failed');
   assert.deepEqual(result.exhausted.map(({ model, retryAt, projects }) => [model, retryAt, projects]), [['opencode/big-pickle', Date.parse('2026-09-26T15:48:00.000Z'), ['sample']]]);
-  assert.ok(!result.availableBeforeRetry.includes('opencode/big-pickle'));
+  assert.equal(result.availableBeforeRetry, undefined, 'the free-usage limit closes every unmetered opencode model');
+  assert.deepEqual(result.exhaustedLanes, [{ kind: 'opencode', retryAt: Date.parse('2026-09-26T15:48:00.000Z'), retryKnown: true, reason: 'free usage exceeded', projects: ['sample'] }]);
+  assert.deepEqual(result.rememberedLanes, { opencode: { kind: 'opencode', retryAt: Date.parse('2026-09-26T15:48:00.000Z'), retryKnown: true, at: Date.parse('2026-09-26T10:00:00.000Z') } });
   assert.equal(result.rememberedModels['opencode/big-pickle'].retryAt, Date.parse('2026-09-26T15:48:00.000Z'));
   assert.ok(result.availableAtRetry.includes('opencode/big-pickle'));
   assert.deepEqual(result.exhaustedAtRetry, []);

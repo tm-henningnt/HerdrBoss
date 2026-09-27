@@ -4,7 +4,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { appendDelegatedRun, compareChangedPaths, gitChangedPaths, gitLog, readJson, validateAllowedPaths, validateScopePaths, validateWorkerReport } from './orchestration.js';
 import { recordUsage } from '../usage.js';
-import { goalSummary, mergeModels, modelEnabled, providerFor, selectModel, unmeteredSummary } from '../control.js';
+import { goalSummary, mergeModels, modelEnabled, providerFor, selectModel, unavailablePiModels, unmeteredClosedParts, unmeteredSummary } from '../control.js';
 import { DATA_DIR } from '../config.js';
 import { workerStatusFromState } from '../worker-failures.js';
 import { checkAgentsFile } from './agents-check.js';
@@ -270,8 +270,30 @@ export function describeLane(provider, lane, now = Date.now()) {
 
 export function describeUnmetered(lane, project = null) {
   const summary = unmeteredSummary(lane, project);
-  if (project && !Object.hasOwn(lane?.byProject || {}, project)) return 'unmetered open; no unmetered models are available after exclusions';
-  return summary ? `unmetered open: ${summary}` : 'unmetered open; no unmetered models are available after exclusions';
+  const closed = unmeteredClosedParts(lane, undefined, project);
+  const head = lane?.state === 'closed' ? 'unmetered closed: no unmetered model can start'
+    : project && !Object.hasOwn(lane?.byProject || {}, project) ? 'unmetered open; no unmetered models are available after exclusions'
+      : summary ? `unmetered open: ${summary}` : 'unmetered open; no unmetered models are available after exclusions';
+  return [head, ...closed].join('\n');
+}
+
+// Refuse a free model that cannot start. A Pi model that the last good `pi --list-models` result does not list
+// cannot run, so --force does not bypass it. An exhausted harness free lane yields to an authorized --force.
+export function unmeteredGate(kind, model, provider, rules, { force = false, now = Date.now(), project = null, allowedModels = null } = {}) {
+  if (kind === 'pi' && Array.isArray(rules?.piModels?.models) && !rules.piModels.models.includes(model)) {
+    const [missing] = unavailablePiModels([model], rules.piModels);
+    const reason = missing.reason === 'no-credential'
+      ? `Pi has no credential for the ${missing.provider} provider. Adding one is the Owner's decision.`
+      : 'Pi does not list this model.';
+    return { error: `pi cannot run ${model}: the last pi --list-models result does not list it. ${reason} --force cannot bypass this refusal.` };
+  }
+  if (provider !== null) return {};
+  const lane = (rules?.lanes?.unmetered?.exhaustedLanes || []).find((item) => item.kind === kind && Number.isFinite(item.retryAt) && item.retryAt > now);
+  if (!lane) return {};
+  const detail = `The ${kind} free lane is exhausted (${lane.reason || 'free usage exceeded'}); retry after ${new Date(lane.retryAt).toISOString()}${lane.retryKnown ? '' : ' (reset time unknown)'}.`;
+  if (force) return { warning: `Warning: --force overrides the free lane guard. ${detail}` };
+  const alternatives = unmeteredAlternatives(rules, project, allowedModels);
+  return { error: `${detail}${alternatives ? ` ${alternatives}` : ''} Use --force only for an authorized override.` };
 }
 
 // The current project's permitted unmetered models, after its allow-list. Empty when none apply.
@@ -652,6 +674,9 @@ export function startWorker(name, options, {
     if (projectPolicy?.mode === 'paused' && !options.force) throw new Error(`Project ${config.slug} is paused. Use --force only for an authorized override.`);
   }
   const provider = providerFor(options.kind, model, policy);
+  const freeGate = unmeteredGate(options.kind, model, provider, rules, { force: options.force, now, project: config.slug, allowedModels: config.allowedModels });
+  if (freeGate.error) throw new Error(freeGate.error);
+  if (freeGate.warning) output(freeGate.warning);
   const gate = providerGate(provider, rules, { force: options.force, now, project: config.slug, allowedModels: config.allowedModels });
   if (gate.error) throw new Error(gate.error);
   if (gate.warning) output(gate.warning);

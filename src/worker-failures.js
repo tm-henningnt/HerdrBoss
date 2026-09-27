@@ -65,6 +65,37 @@ export function extendFreeModelExhaustion(existing, association, retryAt, now = 
   return { ...(existing || {}), [association.model]: { model: association.model, retryAt: Math.max(prior?.retryAt || 0, retryAt) } };
 }
 
+// The OpenCode free-usage limit applies to the whole harness free lane, not to one model.
+// Without a parsed retry time the lane closes for this long after the failure.
+export const FREE_LANE_FALLBACK_MS = 60 * 60 * 1000;
+
+export function freeUsageLaneRetry(failure, now = Date.now()) {
+  if (failure?.label !== 'Free usage exceeded') return null;
+  if (Number.isSafeInteger(failure.retryAt) && failure.retryAt > now) return { retryAt: failure.retryAt, retryKnown: true };
+  if (!Number.isFinite(failure.at)) return null;
+  const retryAt = failure.at + FREE_LANE_FALLBACK_MS;
+  return retryAt > now ? { retryAt, retryKnown: false } : null;
+}
+
+export function activeFreeLaneExhaustions(existing, now = Date.now()) {
+  const active = {};
+  for (const item of Object.values(existing || {})) {
+    if (!Number.isSafeInteger(item?.retryAt) || !Number.isFinite(new Date(item.retryAt).getTime()) || item.retryAt <= now
+      || typeof item.kind !== 'string') continue;
+    active[item.kind] = { kind: item.kind, retryAt: item.retryAt, retryKnown: item.retryKnown === true, at: Number.isFinite(item.at) ? item.at : item.retryAt };
+  }
+  return active;
+}
+
+// A later retry time extends the lane record. A shorter one never shortens it.
+export function extendFreeLaneExhaustion(existing, kind, { retryAt, retryKnown = false, at } = {}, now = Date.now()) {
+  if (typeof kind !== 'string' || !kind || !Number.isSafeInteger(retryAt) || !Number.isFinite(new Date(retryAt).getTime()) || retryAt <= now) return existing || {};
+  const prior = existing?.[kind];
+  if (prior && prior.retryAt >= retryAt) return existing;
+  const first = Number.isFinite(prior?.at) ? prior.at : Number.isFinite(at) ? at : now;
+  return { ...(existing || {}), [kind]: { kind, retryAt, retryKnown: retryKnown === true, at: first } };
+}
+
 // A repeat keeps the first observation as the anchor, so unchanged relative retry text does not
 // slide forward on every tick. A newly reported absolute timestamp is taken when it extends the deadline.
 function nextFreeUsageRetryAt(text, existing, now = Date.now()) {
