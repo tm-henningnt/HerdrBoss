@@ -650,7 +650,7 @@ test('dashboard offers Prepare after an unavailable migration plan', () => {
   assert.match(source, /Migration unavailable:[^`]*Prepare will use fresh mode/);
 });
 
-// A fake Herdr CLI for activation. It prints the installed CLI's JSON envelope with raw pane fields and exits 1 on an error, like the installed CLI.
+// A fake Herdr CLI for activation. It prints the installed CLI's JSON envelope with raw pane fields. On an error it writes the envelope to stderr and exits 1, like the installed CLI.
 function activationFixture(t, { boss = false, failPrompts = [], paneListFails = false, record = {}, extraPanes = [], paneErrors = {}, failRenames = [] } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-boss-activate-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -674,15 +674,15 @@ fs.appendFileSync(process.env.TEST_CALLS, JSON.stringify(args) + '\\n');
 const panes = JSON.parse(process.env.TEST_PANES);
 const paneErrors = JSON.parse(process.env.TEST_PANE_ERRORS);
 if (args[0] === 'pane' && paneErrors[args[2]]) {
-  console.log(JSON.stringify({ id: 'cli:' + args.slice(0, 2).join(':'), error: { code: paneErrors[args[2]], message: 'Pane error ' + paneErrors[args[2]] + '.' } }));
+  console.error(JSON.stringify({ id: 'cli:' + args.slice(0, 2).join(':'), error: { code: paneErrors[args[2]], message: 'Pane error ' + paneErrors[args[2]] + '.' } }));
   process.exit(1);
 }
 if (args[0] === 'agent' && args[1] === 'prompt' && paneErrors[args[2]]) {
-  console.log(JSON.stringify({ id: 'cli:agent:prompt', error: { code: paneErrors[args[2]], message: 'Pane error ' + paneErrors[args[2]] + '.' } }));
+  console.error(JSON.stringify({ id: 'cli:agent:prompt', error: { code: paneErrors[args[2]], message: 'Pane error ' + paneErrors[args[2]] + '.' } }));
   process.exit(1);
 }
 if (args[0] === 'pane' && args[1] === 'rename' && JSON.parse(process.env.TEST_FAIL_RENAMES).includes(args[2])) {
-  console.log(JSON.stringify({ id: 'cli:pane:rename', error: { code: 'rename_failed', message: 'Pane error rename_failed.' } }));
+  console.error(JSON.stringify({ id: 'cli:pane:rename', error: { code: 'rename_failed', message: 'Pane error rename_failed.' } }));
   process.exit(1);
 }
 let result = {};
@@ -692,7 +692,7 @@ if (args[0] === 'pane' && args[1] === 'list') {
   result = { panes };
 }
 if (args[0] === 'agent' && args[1] === 'prompt' && JSON.parse(process.env.TEST_FAIL_PROMPTS).includes(args[2])) {
-  console.log(JSON.stringify({ id: 'cli:agent:prompt', error: { code: 'pane_not_found', message: 'Pane not found.' } }));
+  console.error(JSON.stringify({ id: 'cli:agent:prompt', error: { code: 'pane_not_found', message: 'Pane not found.' } }));
   process.exit(1);
 }
 console.log(JSON.stringify({ id: 'cli:' + args.slice(0, 2).join(':'), result }));
