@@ -33,6 +33,7 @@ const engine = new Engine(cfg, {
     collectCwdProcesses: async () => [],
     collectMissingWorktreeProcesses: async () => [],
     readWorkerScreen: async () => '',
+    collectPiModels: async () => null,
   },
   handoffRunner: async (command, args) => {
     calls.push({ command, args });
@@ -66,6 +67,8 @@ function runScenario(t, scenario) {
   fs.writeFileSync(path.join(dir, 'memory.json'), JSON.stringify({
     paneSince: {}, pushes: {}, notified: {}, lastOrchestrators: scenario.lastOrchestrators,
     exhaustedFreeModels: scenario.exhaustedFreeModels || {},
+    exhaustedFreeLanes: scenario.exhaustedFreeLanes || {},
+    ...(scenario.piModels ? { piModels: scenario.piModels } : {}),
   }));
   fs.writeFileSync(path.join(dir, 'handoffs.json'), JSON.stringify(scenario.handoffs || []));
 
@@ -182,6 +185,71 @@ test('automatic proactive project and Boss handovers skip actively exhausted fre
     assert.equal(plan.args[plan.args.indexOf('--to') + 1], 'codex');
     assert.equal(plan.args[plan.args.indexOf('--model') + 1], 'gpt-6-luna');
   }
+});
+
+const handoverShapes = {
+  stoppedProject: {
+    lastOrchestrators: { 'w-alpha': { pane: 'w-alpha:p1', kind: 'claude', project: 'alpha' } },
+    herdr: {
+      workspaces: [{ id: 'w-alpha', label: 'Alpha' }],
+      panes: [{ id: 'w-alpha:p1', workspace: 'w-alpha', label: 'orch', orch: true, agent: null, status: null }],
+    },
+  },
+  stoppedBoss: {
+    lastOrchestrators: { 'w-boss': { pane: 'w-boss:p1', kind: 'claude', project: 'Boss', boss: true } },
+    herdr: {
+      workspaces: [{ id: 'w-boss', label: 'Boss' }],
+      panes: [{ id: 'w-boss:p1', workspace: 'w-boss', label: 'boss', orch: false, agent: null, status: null }],
+    },
+  },
+  proactiveProject: {
+    herdr: {
+      workspaces: [{ id: 'w-alpha', label: 'Alpha' }],
+      panes: [{ id: 'w-alpha:p1', workspace: 'w-alpha', label: 'orch', orch: true, agent: 'claude', status: 'working', sessionId: 'source-session' }],
+    },
+  },
+  proactiveBoss: {
+    herdr: {
+      workspaces: [{ id: 'w-boss', label: 'Boss' }],
+      panes: [{ id: 'w-boss:p1', workspace: 'w-boss', label: 'boss', orch: false, agent: 'claude', status: 'working', sessionId: 'boss-session' }],
+    },
+  },
+};
+
+function assertCodexSuccessor(t, common) {
+  for (const [shape, scenario] of Object.entries(handoverShapes)) {
+    const result = runScenario(t, { ...common, ...scenario });
+    const plan = result.calls.find(({ args }) => args[2] === 'plan');
+    assert.ok(plan, shape);
+    assert.equal(plan.args[plan.args.indexOf('--to') + 1], 'codex', shape);
+    assert.equal(plan.args[plan.args.indexOf('--model') + 1], 'gpt-6-luna', shape);
+    const recommended = [...result.control.handoffs, result.control.bossHandoff].filter((item) => item?.target);
+    assert.equal(recommended.some((item) => item.target.kind !== 'codex'), false, shape);
+  }
+}
+
+test('automatic project and Boss handovers skip unmetered rungs of an exhausted free lane', { timeout: 60000 }, (t) => {
+  assertCodexSuccessor(t, {
+    usedPercent: 98,
+    ladder: [
+      { kind: 'opencode', model: 'opencode/big-pickle' },
+      { kind: 'codex', model: 'gpt-6-luna', effort: 'xhigh' },
+    ],
+    exhaustedFreeLanes: {
+      opencode: { kind: 'opencode', retryAt: Date.parse('2026-09-26T12:01:00.000Z'), retryKnown: true, at: Date.parse('2026-09-26T11:59:00.000Z') },
+    },
+  });
+});
+
+test('automatic project and Boss handovers skip a Pi rung that the last good Pi result does not list', { timeout: 60000 }, (t) => {
+  assertCodexSuccessor(t, {
+    usedPercent: 98,
+    ladder: [
+      { kind: 'pi', model: 'opencode-go/deepseek-v4.1-flash' },
+      { kind: 'codex', model: 'gpt-6-luna', effort: 'xhigh' },
+    ],
+    piModels: { at: Date.parse('2026-09-26T11:55:00.000Z'), models: ['opencode-go/mimo-v2.6-flash'] },
+  });
 });
 
 test('Ignore quota activates a prepared successor at the configured live quota threshold', { timeout: 30000 }, (t) => {

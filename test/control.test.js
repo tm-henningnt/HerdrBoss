@@ -698,6 +698,60 @@ test('handoff target checks use the configured model route', () => {
   assert.equal(result.handoffs[0].target.provider, 'opencodego');
 });
 
+const ladderSnapshot = () => {
+  const snap = snapshot();
+  snap.herdr.workspaces.push({ id: 'w3', label: 'Boss' });
+  snap.herdr.panes.push({ id: 'w3:p1', workspace: 'w3', label: 'boss', orch: false, agent: 'claude', status: 'working', sessionId: 's3' });
+  return snap;
+};
+const ladderTargets = (result) => [result.handoffs.find((item) => item.pane === 'w1:p1').target, result.bossHandoff.target]
+  .map((target) => target && `${target.kind}:${target.model}`);
+
+test('successor ladder skips unmetered rungs of an exhausted free lane until retryAt', () => {
+  const now = Date.parse('2026-09-24T17:00:00Z');
+  const p = policy({ orchestratorLadder: [
+    { kind: 'opencode', model: 'opencode/big-pickle', effort: null },
+    { kind: 'codex', model: 'gpt-6-luna', effort: 'xhigh' },
+  ] });
+  const lanes = { opencode: { kind: 'opencode', retryAt: now + 60000, retryKnown: true, at: now - 60000 } };
+  const closed = deriveControl(ladderSnapshot(), p, models, {}, now, {}, { exhaustedFreeLanes: lanes });
+  assert.deepEqual(ladderTargets(closed), ['codex:gpt-6-luna', 'codex:gpt-6-luna']);
+  const reopened = deriveControl(ladderSnapshot(), p, models, {}, now + 60000, {}, { exhaustedFreeLanes: lanes });
+  assert.deepEqual(ladderTargets(reopened), ['opencode:opencode/big-pickle', 'opencode:opencode/big-pickle']);
+  // A metered model of the same harness uses its provider quota, not the free lane.
+  const metered = policy({ orchestratorLadder: [
+    { kind: 'opencode', model: 'opencode-go/deepseek-v4.1-flash', effort: null },
+    { kind: 'codex', model: 'gpt-6-luna', effort: 'xhigh' },
+  ] });
+  const stillOpen = deriveControl(ladderSnapshot(), metered, models, {}, now, {}, { exhaustedFreeLanes: lanes });
+  assert.deepEqual(ladderTargets(stillOpen), ['opencode:opencode-go/deepseek-v4.1-flash', 'opencode:opencode-go/deepseek-v4.1-flash']);
+});
+
+test('successor ladder skips a Pi rung that the last good Pi model result does not list', () => {
+  const now = Date.parse('2026-09-24T17:00:00Z');
+  const p = policy({ orchestratorLadder: [
+    { kind: 'pi', model: 'fixturezen/free-a', effort: null },
+    { kind: 'codex', model: 'gpt-6-luna', effort: 'xhigh' },
+  ] });
+  const result = deriveControl(ladderSnapshot(), p, fixtureModels, {}, now, {}, { piModels: { at: now, models: ['fixturezen/free-b'] } });
+  assert.deepEqual(ladderTargets(result), ['codex:gpt-6-luna', 'codex:gpt-6-luna']);
+  const listed = deriveControl(ladderSnapshot(), p, fixtureModels, {}, now, {}, { piModels: { at: now, models: ['fixturezen/free-a'] } });
+  assert.deepEqual(ladderTargets(listed), ['pi:fixturezen/free-a', 'pi:fixturezen/free-a']);
+});
+
+test('successor ladder skips no Pi rung while the Pi model result is unknown', () => {
+  const now = Date.parse('2026-09-24T17:00:00Z');
+  const p = policy({ orchestratorLadder: [
+    { kind: 'pi', model: 'fixturezen/free-a', effort: null },
+    { kind: 'codex', model: 'gpt-6-luna', effort: 'xhigh' },
+  ] });
+  for (const piModels of [null, undefined, {}]) {
+    const result = deriveControl(ladderSnapshot(), p, fixtureModels, {}, now, {}, { piModels });
+    assert.deepEqual(ladderTargets(result), ['pi:fixturezen/free-a', 'pi:fixturezen/free-a']);
+  }
+  assert.deepEqual(ladderTargets(deriveControl(ladderSnapshot(), p, fixtureModels, {}, now)), ['pi:fixturezen/free-a', 'pi:fixturezen/free-a']);
+});
+
 test('current orchestrator provider falls back to its preferred model route', () => {
   const p = policy({ preferredModels: { codex: 'gpt-6-sol' }, modelProviders: { 'gpt-6-sol': 'claude' } });
   const result = deriveControl(snapshot(), p, models, {}, Date.parse('2026-09-24T17:00:00Z'));
