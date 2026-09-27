@@ -1,10 +1,11 @@
 ## Herdr Boss orchestration
 
 - Use the Herdr Boss orchestrator skill when you coordinate workers or resume an unknown project state.
+- Read `docs/orchestration/memory.md` at start and at resume, before you choose work.
 - Run `herdr-boss kit-path` to find the shared kit repository. Use its path for the files below.
 - Read `kit/skills/herdr-orchestrator/SKILL.md` there.
 - Read `kit/models.md` before selecting a worker kind or model.
-- Use `kit/models.json` as the source of truth for the model allow-list.
+- Run `herdr-boss models` and `herdr-boss lanes` for the current models and lanes. Never copy model lists or harness facts into project files.
 - Read `~/.herdr-boss/bulletin.md` before each worker dispatch.
 - Follow its worker cap, project share, and provider pacing rules. Use an authorized override only when needed.
 - Read `kit/browser-service.md` for project browser commands. Read `kit/shared-browser.md` only if an optional legacy shared browser is explicitly assigned.
@@ -25,5 +26,16 @@
 - Record measured worker usage in `.worker/report.json` and run `herdr-boss worker collect --record` after review.
 - Prepare a successor with `herdr-boss handoff plan` and `handoff prepare` when the orchestrator's quota is at risk.
 - Keep project-specific rules in this file: product direction, issue sources, acceptance gates, release policy, and browser procedures.
-- Keep project terminology, data, architecture decisions, and human escalation rules here.
+- Keep project terminology, data, and architecture decisions in `AGENTS.md`. Keep Owner decisions, holds, freezes, dated evidence, and pane facts in `docs/orchestration/memory.md`.
+- The Boss runs in the pane labeled `boss`. Find it with `herdr pane list`. Never write its pane ID into a file.
+- Settle implementation, design details, naming, thresholds, test design, project scope, and review findings within project rules and memory. Do not ask the Boss about them.
+- Ask the Boss only about conflicts with Owner decisions or between projects, changes that affect other projects or the shared kit, credentials or security, destructive or irreversible actions outside the project, and product direction.
+- Report to the Boss only when a task is merged and live or when blocked. Use one or two lines. Run `herdr agent prompt <boss-pane> "..."` without `--wait`.
+- Do not message another project's orchestrator. The Boss relays messages between projects.
+- Do not push, deploy, or release. The Boss asks the Owner and pushes.
+- Record an Owner request typed into your pane as an Owner decision in `docs/orchestration/memory.md`.
+- The kit and the Boss take precedence over conflicting project text. Report a conflict to the Boss.
+- List processes with `pgrep -l`, `ps -o pid,ppid,etime,comm`, or `herdr-boss worktree prune`.
+- Do not print full process command lines or environments. Do not use `pgrep -fl`, `ps aux`, `ps -ef`, `ps e`, or `ps -E` with the output printed. Use `pgrep -f` only to match a pattern, never to print.
+- Treat a secret that reaches a transcript as disclosed. Report it to the orchestrator, who reports it to the Boss.
 - Use `docs/orchestrator-instructions.md` to find this section and its installation notes.

@@ -6,6 +6,10 @@ Keep shared orchestration rules in the Herdr Boss kit.
 
 Keep product direction, issue sources, acceptance gates, release rules, and browser procedures in the project file.
 
+The kit and the Boss take precedence over conflicting project text. Report a conflict to the Boss.
+
+Read `docs/orchestration/memory.md` at start and at resume. Record Owner decisions, holds, and freezes there.
+
 When adopting a newer Herdr Boss kit:
 
 1. Run `herdr-boss kit-path` and compare your project's Herdr Boss section with the current [template](../kit/templates/agents-section.md). Update that section in the project's `AGENTS.md` or `CLAUDE.md` without overwriting project rules.
