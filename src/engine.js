@@ -11,7 +11,7 @@ import { loadPolicy, clearExpiredOneOffGoals, deriveControl, migrateWorkspacePol
 import { recordQuotaSnapshot } from './usage.js';
 import { listBrowserSessions, cdpResponds } from './browser-pool.js';
 import { codeSignCloneDir, sweepCodeSignClones } from './clone-sweep.js';
-import { listHandoffs, expireHandoff, expireMissingHandoffs, handoffNotices } from './handoff.js';
+import { listHandoffs, saveHandoffs, supersedeHandoffs, expireHandoff, expireMissingHandoffs, handoffNotices } from './handoff.js';
 import { inspectWorkerTransitions, inspectWorkerReports, applyWorkerFailureStatuses, resolveFreeUsageRun, activeFreeModelExhaustions, extendFreeModelExhaustion, activeFreeLaneExhaustions, extendFreeLaneExhaustion, freeUsageLaneRetry } from './worker-failures.js';
 
 const MEMORY_FILE = path.join(DATA_DIR, 'memory.json');
@@ -145,6 +145,17 @@ export class Engine extends EventEmitter {
           if (Array.isArray(result?.models)) this.memory.piModels = { at: Number.isFinite(result.at) ? result.at : now, models: [...result.models] };
         }).catch(() => {}) : null,
       ]);
+      if (this.act) {
+        try {
+          const handoffs = listHandoffs();
+          const changed = supersedeHandoffs(handoffs, now);
+          if (changed.length) {
+            saveHandoffs(handoffs);
+            for (const item of changed) this.log('handoff', `Superseded handoff ${item.id} with ${item.supersededBy}`,
+              item.boss || item.label === 'boss' ? { workspace: item.workspace, pane: item.newPane } : { project: item.project, pane: item.newPane });
+          }
+        } catch (e) { errors.push(`handoffs: ${e.message}`); }
+      }
       if (this.act && currentHerdrSnapshot && currentPaneList) {
         try { expireMissingHandoffs(herdr?.panes); }
         catch (e) { errors.push(`handoffs: ${e.message}`); }
@@ -526,10 +537,27 @@ export class Engine extends EventEmitter {
     this.memory.handoffPeerAttempts ||= {};
     const current = herdr?.panes || [];
     const panes = new Map(current.map((p) => [p.id, p]));
-    for (const item of listHandoffs().filter((x) => x.status === 'active' && now - Date.parse(x.activatedAt) < 7 * 86400 * 1000)) {
+    const records = listHandoffs();
+    const knownBossPanes = new Set(current.filter((pane) => ['boss', 'boss previous'].includes(pane.label)).map((pane) => pane.id));
+    for (const record of records) {
+      if (!(record.boss || record.label === 'boss')) continue;
+      if (typeof record.sourcePane === 'string') knownBossPanes.add(record.sourcePane);
+      if (typeof record.newPane === 'string') knownBossPanes.add(record.newPane);
+    }
+    for (const item of records.filter((x) => x.status === 'active' && now - Date.parse(x.activatedAt) < 7 * 86400 * 1000)) {
       for (const notice of handoffNotices(item, current)) {
         const { key } = notice;
-        if (this.memory.handoffPeerNotices[key] || now - (this.memory.handoffPeerAttempts[key] || 0) < 60000) continue;
+        let deliveredAt = this.memory.handoffPeerNotices[key];
+        if (!deliveredAt && key === `${item.id}@boss`) {
+          for (const pane of knownBossPanes) {
+            const legacyKey = `${item.id}@${pane}`;
+            if (!this.memory.handoffPeerNotices[legacyKey]) continue;
+            deliveredAt = this.memory.handoffPeerNotices[legacyKey];
+            this.memory.handoffPeerNotices[key] = deliveredAt;
+            break;
+          }
+        }
+        if (deliveredAt || now - (this.memory.handoffPeerAttempts[key] || 0) < 60000) continue;
         // An agent prompt needs push and a settled agent pane; an unavailable recipient stays eligible.
         if (!notice.owner) {
           const pane = panes.get(notice.pane);
@@ -550,13 +578,13 @@ export class Engine extends EventEmitter {
   }
 
   async retirePreviousOrchestrators(herdr, now) {
-    const activeRecords = listHandoffs().filter((item) => item.status === 'active');
-    const records = activeRecords.filter((item) => Number.isFinite(Date.parse(item.activatedAt))
+    const handoffs = listHandoffs().filter((item) => ['active', 'superseded'].includes(item.status));
+    const records = handoffs.filter((item) => Number.isFinite(Date.parse(item.activatedAt))
       && now - Date.parse(item.activatedAt) >= 120 * 60 * 1000
       && (!item.retirement?.completedAt || item.retirement.outcome === 'closed'));
     const panes = new Map((herdr?.panes || []).map((pane) => [pane.id, pane]));
     for (const item of records) {
-      const latest = listHandoffs().find((candidate) => candidate.id === item.id && candidate.status === 'active'
+      const latest = handoffs.find((candidate) => candidate.id === item.id && ['active', 'superseded'].includes(candidate.status)
         && candidate.sourcePane === item.sourcePane && candidate.newPane === item.newPane
         && candidate.activatedAt === item.activatedAt);
       if (!latest) continue;
@@ -564,7 +592,7 @@ export class Engine extends EventEmitter {
         if (latest.retirement.outcome === 'closed') {
           const role = latest.boss || latest.label === 'boss' ? 'boss' : 'orch';
           const source = panes.get(latest.sourcePane);
-          const successor = this.resolveHandoffSuccessor(latest, activeRecords, panes, role);
+          const successor = this.resolveHandoffSuccessor(latest, handoffs, panes, role);
           if (!source && successor) await this.notifyRetiredSuccessor(latest, role, successor, now);
         }
         continue;
@@ -577,7 +605,7 @@ export class Engine extends EventEmitter {
         continue;
       }
       const role = latest.boss || latest.label === 'boss' ? 'boss' : 'orch';
-      const successor = this.resolveHandoffSuccessor(latest, activeRecords, panes, role);
+      const successor = this.resolveHandoffSuccessor(latest, handoffs, panes, role);
       if (source.label !== `${role} previous` || !successor) continue;
       try {
         checkHerdrResponse(await this.herdrRunner('herdr', ['pane', 'close', latest.sourcePane]));
@@ -602,7 +630,8 @@ export class Engine extends EventEmitter {
       if (!pane) return null;
       if (pane.label === role) return pane;
       if (pane.label !== `${role} previous`) return null;
-      const next = activeRecords.find((candidate) => candidate.sourcePane === paneId
+      const next = activeRecords.find((candidate) => ['active', 'superseded'].includes(candidate.status)
+        && candidate.sourcePane === paneId
         && candidate.id !== item.id && Date.parse(candidate.activatedAt) > Date.parse(item.activatedAt)
         && (candidate.boss || candidate.label === 'boss' ? 'boss' : 'orch') === role
         && candidate.activation?.sourcePane === candidate.sourcePane
@@ -634,7 +663,7 @@ export class Engine extends EventEmitter {
 
   recordHandoffRetirement(item, retirement, now) {
     const current = listHandoffs();
-    const record = current.find((candidate) => candidate.id === item.id && candidate.status === 'active'
+    const record = current.find((candidate) => candidate.id === item.id && ['active', 'superseded'].includes(candidate.status)
       && candidate.sourcePane === item.sourcePane && candidate.newPane === item.newPane
       && candidate.activatedAt === item.activatedAt);
     if (!record) return false;

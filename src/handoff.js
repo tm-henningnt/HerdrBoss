@@ -95,8 +95,33 @@ function herdr(args) {
   return response.result;
 }
 function readFile(file, fallback) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { if (e.code === 'ENOENT') return fallback; throw e; } }
-function save(items) { const tmp = `${FILE}.${process.pid}.tmp`; fs.writeFileSync(tmp, `${JSON.stringify(items, null, 2)}\n`, { flag: 'wx', mode: 0o600 }); fs.renameSync(tmp, FILE); }
+export function saveHandoffs(items) { const tmp = `${FILE}.${process.pid}.tmp`; fs.writeFileSync(tmp, `${JSON.stringify(items, null, 2)}\n`, { flag: 'wx', mode: 0o600 }); fs.renameSync(tmp, FILE); }
+function save(items) { saveHandoffs(items); }
 export function listHandoffs() { return readFile(FILE, []); }
+
+export function supersedeHandoffs(records, now = Date.now()) {
+  if (!Array.isArray(records)) return [];
+  const supersededAt = new Date(now).toISOString();
+  const active = records.filter((item) => item?.status === 'active');
+  const changed = [];
+  for (const item of active) {
+    if (typeof item.newPane !== 'string') continue;
+    const activatedAt = Date.parse(item.activatedAt);
+    if (!Number.isFinite(activatedAt)) continue;
+    const successor = active.filter((candidate) => candidate !== item
+      && candidate.sourcePane === item.newPane
+      && handoffRole(candidate) === handoffRole(item)
+      && Number.isFinite(Date.parse(candidate.activatedAt))
+      && Date.parse(candidate.activatedAt) > activatedAt)
+      .sort((a, b) => Date.parse(b.activatedAt) - Date.parse(a.activatedAt))[0];
+    if (!successor) continue;
+    item.status = 'superseded';
+    item.supersededBy = successor.id;
+    item.supersededAt = supersededAt;
+    changed.push(item);
+  }
+  return changed;
+}
 
 export function expireMissingHandoffs(panes) {
   if (!Array.isArray(panes) || panes.some((pane) => typeof (pane?.pane_id ?? pane?.id) !== 'string')) return [];
@@ -417,7 +442,7 @@ export function handoffNotices(item, panes = []) {
   for (const pane of panes) if (PREVIOUS_LABELS.has(pane.label)) skip.add(pane.id);
   const peers = Array.isArray(item.peerPanes) ? item.peerPanes
     : panes.filter((pane) => pane.workspace === item.workspace && pane.agent).map((pane) => pane.id);
-  const notices = peers.filter((id) => !skip.has(id)).map((pane) => ({
+  const notices = peers.filter((id) => !skip.has(id) && (boss || !panes.some((pane) => pane.id === id && pane.label === 'boss'))).map((pane) => ({
     key: `${item.id}@${pane}`, pane,
     text: boss
       ? `[herdr-boss] The Herdr Boss is now pane ${item.newPane} (${item.toKind}). The previous Boss pane ${item.sourcePane} is labeled boss previous. Send Boss messages and reports to ${item.newPane}.`
@@ -426,7 +451,7 @@ export function handoffNotices(item, panes = []) {
   if (boss) notices.push({ key: `${item.id}@owner`, owner: true, title: 'Herdr Boss: Boss handover',
     text: `The Boss is now pane ${item.newPane} (${item.toKind}). The previous Boss pane ${item.sourcePane} is labeled boss previous.` });
   else for (const pane of panes.filter((p) => p.label === 'boss' && p.agent && !skip.has(p.id))) notices.push({
-    key: `${item.id}@${pane.id}`, pane: pane.id,
+    key: `${item.id}@boss`, pane: pane.id,
     text: `[herdr-boss] ${item.displayLabel || item.project} has a new orchestrator in pane ${item.newPane} (${item.toKind}). The previous pane ${item.sourcePane} is labeled orch previous. Send ${item.project} messages to ${item.newPane}.`,
   });
   if (item.previousPromptError) notices.push({ key: `${item.id}@${item.sourcePane}`, pane: item.sourcePane, text: previousAgentPrompt(item) });
@@ -452,6 +477,7 @@ export function activateHandoff(id, { confirmed = false } = {}) {
   item.status = 'active'; item.activatedAt = new Date().toISOString();
   item.activation = { at: item.activatedAt, sourcePane: item.sourcePane, successorPane: item.newPane, sourceLabel, successorLabel: role };
   if (sourceMissing) item.activation.sourceMissing = true;
+  supersedeHandoffs(records, Date.parse(item.activatedAt));
   try {
     item.peerPanes = herdr(['pane', 'list']).panes
       .filter((pane) => pane.workspace_id === item.workspace && ![item.newPane, item.sourcePane].includes(pane.pane_id) && pane.agent && !PREVIOUS_LABELS.has(pane.label))

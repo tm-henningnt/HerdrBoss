@@ -254,10 +254,10 @@ for (const next of input.ticks) {
   now = Date.parse(next.at);
   await engine.tick();
 }
-console.log(JSON.stringify({ calls, notices: engine.memory.handoffPeerNotices }));
+console.log(JSON.stringify({ calls, notices: engine.memory.handoffPeerNotices, events: engine.events }));
 `;
 
-function runNoticeScenario(t, { handoffs, ticks }) {
+function runNoticeScenario(t, { handoffs, ticks, notices = {} }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-notice-handover-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   fs.mkdirSync(path.join(dir, 'projects'), { recursive: true });
@@ -266,7 +266,7 @@ function runNoticeScenario(t, { handoffs, ticks }) {
   fs.mkdirSync(bin);
   fs.writeFileSync(path.join(bin, 'herdr'), `#!/bin/sh\necho "$@" >> "${path.join(dir, 'stray-herdr')}"\nexit 1\n`, { mode: 0o755 });
   fs.writeFileSync(path.join(dir, 'policy.json'), JSON.stringify(structuredClone(POLICY_DEFAULTS)));
-  fs.writeFileSync(path.join(dir, 'memory.json'), JSON.stringify({ paneSince: {}, pushes: {}, notified: {} }));
+  fs.writeFileSync(path.join(dir, 'memory.json'), JSON.stringify({ paneSince: {}, pushes: {}, notified: {}, handoffPeerNotices: notices }));
   fs.writeFileSync(path.join(dir, 'handoffs.json'), JSON.stringify(handoffs));
   const result = spawnSync(process.execPath, ['--input-type=module', '-e', noticeProbe], {
     cwd: repo,
@@ -459,6 +459,65 @@ test('retirement follows a verified active successor chain and notifies only its
   assert.equal(result.records[1].retirement, undefined);
 });
 
+test('retirement closes a superseded pane and resolves through it to the active successor', { timeout: 30000 }, (t) => {
+  const first = { ...projectRecord, id: 'chain-superseded', activatedAt: '2026-09-27T10:00:00.000Z',
+    sourcePane: 'w-alpha:p1', newPane: 'w-alpha:p2', status: 'superseded', supersededBy: 'chain-current',
+    activation: { at: '2026-09-27T10:00:00.000Z', sourcePane: 'w-alpha:p1', successorPane: 'w-alpha:p2', sourceLabel: 'orch previous', successorLabel: 'orch' } };
+  const current = { ...projectRecord, id: 'chain-current', activatedAt: '2026-09-27T12:30:00.000Z',
+    sourcePane: 'w-alpha:p2', newPane: 'w-alpha:p5',
+    activation: { at: '2026-09-27T12:30:00.000Z', sourcePane: 'w-alpha:p2', successorPane: 'w-alpha:p5', sourceLabel: 'orch previous', successorLabel: 'orch' } };
+  const panes = [pane('w-alpha:p1', 'w-alpha', { label: 'orch previous' }),
+    pane('w-alpha:p2', 'w-alpha', { label: 'orch previous' }), pane('w-alpha:p5', 'w-alpha', { label: 'orch', agent: 'codex', status: 'idle' })];
+  const result = runRetirementScenario(t, { record: first, records: [first, current], panes, ticks: [{ at: '2026-09-27T13:00:00.000Z' }] });
+  assert.deepEqual(result.calls.filter(({ args }) => args[0] === 'pane' && args[1] === 'close').map(({ args }) => args[2]), ['w-alpha:p1']);
+  assert.deepEqual(result.calls.filter(({ args }) => args[0] === 'agent' && args[1] === 'prompt').map(({ args }) => args[2]), ['w-alpha:p5']);
+  assert.equal(result.records[0].retirement.outcome, 'closed');
+  assert.equal(result.records[1].retirement, undefined);
+});
+
+test('the engine supersedes older active handoffs once and keeps the result on later ticks', { timeout: 30000 }, (t) => {
+  const older = { ...projectRecord, id: 'engine-old', activatedAt: '2026-09-27T12:00:00.000Z',
+    sourcePane: 'w-alpha:p1', newPane: 'w-alpha:p2', peerPanes: [] };
+  const newer = { ...projectRecord, id: 'engine-current', activatedAt: '2026-09-27T12:00:30.000Z',
+    sourcePane: 'w-alpha:p2', newPane: 'w-alpha:p5', peerPanes: [] };
+  const panes = [pane('w-alpha:p1', 'w-alpha', { label: 'orch previous' }),
+    pane('w-alpha:p2', 'w-alpha', { label: 'orch previous' }), pane('w-alpha:p5', 'w-alpha', { label: 'orch' })];
+  const result = runNoticeScenario(t, { handoffs: [older, newer], ticks: [
+    { at: '2026-09-27T12:01:00.000Z', herdr: herdrSnapshot(panes) },
+    { at: '2026-09-27T12:03:00.000Z', herdr: herdrSnapshot(panes) },
+  ] });
+  const updated = result.records.find(({ id }) => id === older.id);
+  assert.equal(updated.status, 'superseded');
+  assert.equal(updated.supersededBy, newer.id);
+  assert.equal(updated.supersededAt, '2026-09-27T12:01:00.000Z');
+  assert.equal(result.events.filter(({ text }) => text?.includes(`Superseded handoff ${older.id}`)).length, 1);
+});
+
+test('a superseded handoff sends no notice', { timeout: 30000 }, (t) => {
+  const superseded = { ...projectRecord, status: 'superseded', supersededBy: 'handoff-alpha-next',
+    peerPanes: ['w-alpha:p3', 'w-alpha:p4'] };
+  const result = runNoticeScenario(t, { handoffs: [superseded], ticks: [
+    { at: '2026-09-27T12:01:00.000Z', herdr: herdrSnapshot(projectPanes) },
+  ] });
+  assert.deepEqual(result.calls, []);
+  assert.deepEqual(result.notices, {});
+});
+
+test('a Boss pane change preserves a delivered canonical or legacy Boss notice', { timeout: 30000 }, (t) => {
+  const panes = projectPanes.map((entry) => entry.id === 'w-boss:p1'
+    ? { ...entry, label: 'boss previous' }
+    : entry).concat(pane('w-boss:p2', 'w-boss', { label: 'boss', agent: 'claude' }));
+  const ticks = [{ at: '2026-09-27T12:01:00.000Z', herdr: herdrSnapshot(panes) }];
+  const canonical = runNoticeScenario(t, { handoffs: [projectRecord], ticks,
+    notices: { 'handoff-alpha@boss': Date.parse('2026-09-27T12:00:00.000Z') } });
+  assert.equal(canonical.calls.some(({ args }) => args[0] === 'agent' && args[1] === 'prompt' && args[2] === 'w-boss:p2'), false);
+
+  const legacy = runNoticeScenario(t, { handoffs: [projectRecord], ticks,
+    notices: { 'handoff-alpha@w-boss:p1': Date.parse('2026-09-27T12:00:00.000Z') } });
+  assert.equal(legacy.calls.some(({ args }) => args[0] === 'agent' && args[1] === 'prompt' && args[2] === 'w-boss:p2'), false);
+  assert.equal(legacy.notices['handoff-alpha@boss'], Date.parse('2026-09-27T12:00:00.000Z'));
+});
+
 test('project handover notifies its workspace workers and the Boss in another workspace once', { timeout: 30000 }, (t) => {
   const result = runNoticeScenario(t, {
     handoffs: [projectRecord],
@@ -476,7 +535,7 @@ test('project handover notifies its workspace workers and the Boss in another wo
   assert.match(text['w-boss:p1'], /Alpha has a new orchestrator in pane w-alpha:p2/);
   assert.match(text['w-boss:p1'], /orch previous/);
   assert.equal(result.calls.some(({ args }) => args[0] === 'notification'), false);
-  assert.deepEqual(Object.keys(result.notices).sort(), ['handoff-alpha@w-alpha:p3', 'handoff-alpha@w-alpha:p4', 'handoff-alpha@w-boss:p1']);
+  assert.deepEqual(Object.keys(result.notices).sort(), ['handoff-alpha@boss', 'handoff-alpha@w-alpha:p3', 'handoff-alpha@w-alpha:p4']);
   // The H26 B2 goal and source context stay in the record.
   assert.equal(result.records[0].ownerGoal, 'Ship the release safely.');
   assert.equal(result.records[0].sourceContext, 'Earlier safe context');
@@ -534,7 +593,7 @@ test('handover notices retry an unavailable or failed recipient and never repeat
   // The previous-agent prompt failed at activation, so the engine delivers it once.
   assert.deepEqual(byPane('w-alpha:p1'), ['2026-09-27T12:01:00.000Z']);
   assert.match(prompts.find(({ args }) => args[2] === 'w-alpha:p1').args[3], /no longer own orchestration of alpha/);
-  assert.deepEqual(Object.keys(result.notices).sort(), ['handoff-alpha@w-alpha:p1', 'handoff-alpha@w-alpha:p3', 'handoff-alpha@w-alpha:p4', 'handoff-alpha@w-boss:p1']);
+  assert.deepEqual(Object.keys(result.notices).sort(), ['handoff-alpha@boss', 'handoff-alpha@w-alpha:p1', 'handoff-alpha@w-alpha:p3', 'handoff-alpha@w-alpha:p4']);
 });
 
 test('an error envelope with exit status 0 is a failed notice that stays eligible for retry', { timeout: 30000 }, (t) => {
@@ -552,7 +611,7 @@ test('an error envelope with exit status 0 is a failed notice that stays eligibl
   assert.deepEqual(byPane('w-boss:p1'), ['2026-09-27T12:01:00.000Z', '2026-09-27T12:03:00.000Z']);
   assert.deepEqual(byPane('w-alpha:p4'), ['2026-09-27T12:01:00.000Z']);
   assert.equal(project.notices['handoff-alpha@w-alpha:p3'], Date.parse('2026-09-27T12:03:00.000Z'));
-  assert.equal(project.notices['handoff-alpha@w-boss:p1'], Date.parse('2026-09-27T12:03:00.000Z'));
+  assert.equal(project.notices['handoff-alpha@boss'], Date.parse('2026-09-27T12:03:00.000Z'));
   assert.equal(project.notices['handoff-alpha@w-alpha:p4'], Date.parse('2026-09-27T12:01:00.000Z'));
 
   const record = {
@@ -599,7 +658,7 @@ test('a successive handover sends no worker notice to earlier previous-role pane
   assert.equal(prompts.includes('w-other:p1'), false);
   assert.deepEqual(prompts.filter((id) => id === 'w-alpha:p3').length, 2);
   assert.deepEqual(Object.keys(result.notices).sort(), [
-    'handoff-alpha-2@w-alpha:p3', 'handoff-alpha-2@w-boss:p1', 'handoff-alpha-legacy@w-alpha:p3', 'handoff-alpha-legacy@w-boss:p1',
+    'handoff-alpha-2@boss', 'handoff-alpha-2@w-alpha:p3', 'handoff-alpha-legacy@boss', 'handoff-alpha-legacy@w-alpha:p3',
   ]);
 });
 

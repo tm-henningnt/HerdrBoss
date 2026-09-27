@@ -817,7 +817,7 @@ test('dashboard offers Prepare after an unavailable migration plan', () => {
 });
 
 // A fake Herdr CLI for activation. It prints the installed CLI's JSON envelope with raw pane fields. On an error it writes the envelope to stderr and exits 1, like the installed CLI.
-function activationFixture(t, { boss = false, failPrompts = [], paneListFails = false, record = {}, extraPanes = [], paneErrors = {}, failRenames = [] } = {}) {
+function activationFixture(t, { boss = false, failPrompts = [], paneListFails = false, record = {}, priorRecords = [], extraPanes = [], paneErrors = {}, failRenames = [] } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-boss-activate-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const bin = path.join(root, '.local', 'bin');
@@ -866,7 +866,7 @@ console.log(JSON.stringify({ id: 'cli:' + args.slice(0, 2).join(':'), result }))
   writeExecutable(path.join(bin, 'herdr'), `#!/bin/sh
 exec node "$(dirname "$0")/herdr.cjs" "$@"
 `);
-  fs.writeFileSync(path.join(root, 'handoffs.json'), JSON.stringify([{
+  fs.writeFileSync(path.join(root, 'handoffs.json'), JSON.stringify([...priorRecords, {
     id: 'handoff-activate', sourcePane: `${ws}:p1`, workspace: ws, cwd: path.join(root, 'project'),
     project: boss ? 'Boss' : 'alpha', label: boss ? 'boss' : 'orch', displayLabel: boss ? 'Boss' : 'Alpha', boss,
     fromKind: 'claude', sessionId: 'source-session', toKind: 'codex', model: 'gpt-6-luna', effort: 'xhigh',
@@ -907,6 +907,20 @@ test('project activation labels the successor orch and the previous pane orch pr
   const stored = JSON.parse(fs.readFileSync(path.join(f.root, 'handoffs.json'), 'utf8'))[0];
   assert.deepEqual(stored.activation, item.activation);
   assert.equal(stored.ownerGoal, 'Ship the release safely.');
+});
+
+test('activation supersedes the earlier handoff from the successor source pane in the same save', (t) => {
+  const previous = {
+    id: 'handoff-previous', project: 'alpha', workspace: 'ws', label: 'orch', boss: false,
+    sourcePane: 'ws:p0', newPane: 'ws:p1', status: 'active', activatedAt: '2026-09-27T09:00:00.000Z',
+  };
+  const f = activationFixture(t, { priorRecords: [previous] });
+  const activated = f.activate();
+  const records = JSON.parse(fs.readFileSync(path.join(f.root, 'handoffs.json'), 'utf8'));
+  assert.equal(records[0].status, 'superseded');
+  assert.equal(records[0].supersededBy, activated.id);
+  assert.equal(records[0].supersededAt, activated.activatedAt);
+  assert.equal(records[1].status, 'active');
 });
 
 test('Boss activation labels the successor boss and the previous pane boss previous', (t) => {
