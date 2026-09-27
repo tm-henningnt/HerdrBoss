@@ -1817,6 +1817,26 @@ test('worker start merges extra models into the harness allow-list and applies p
   assert.throws(() => start('extra-routed', { kind: 'pi', model: extra }), /opencodego is ahead of quota pace/);
 });
 
+test('worker start selects the verified unmetered OpenCode Zen models in the Pi harness', () => {
+  const f = setupFixture(null);
+  fs.writeFileSync(f.rulesFile, JSON.stringify({ updatedAt: new Date().toISOString(), policy: { allowedKinds: ['codex', 'pi', 'opencode'], excludedModels: [] } }));
+  const start = (name, options) => {
+    const lines = [];
+    const result = startWorker(name, { task: 'x', allow: ['src/'], dryRun: true, ...options }, {
+      config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: (line) => lines.push(line),
+    });
+    return { result, output: lines.join('\n') };
+  };
+  for (const model of ['opencode/big-pickle', 'opencode/mimo-v2.6-flash-free', 'opencode/nemotron-3.5-lightning-free']) {
+    const { result, output } = start('zen-pi', { kind: 'pi', model });
+    assert.equal(result.model, model);
+    assert.deepEqual(result.launchArgs.slice(0, 4), ['--model', model, '--models', model]);
+    assert.match(output, new RegExp(`Validate kind/model/effort: pi / ${model.replace(/[.]/g, '\\$&')}`));
+  }
+  assert.equal(start('zen-pi-default', { kind: 'pi' }).result.model, 'opencode-go/muse-spark-1.3-contributor', 'the Pi default is unchanged');
+  assert.throws(() => start('bunny-pi', { kind: 'pi', model: 'opencode/space-bunny-free' }), /not allowed for pi/);
+});
+
 test('the models command lists extra models from the local policy', async () => {
   const { runKitCommand } = await import('../src/kit/cli.js');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-models-'));

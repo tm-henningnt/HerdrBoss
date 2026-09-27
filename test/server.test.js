@@ -224,6 +224,48 @@ test('the policy API saves per-harness model assignments and rejects unsafe mode
   assert.ok(!catalog.pi.allowedModels.includes('opencode-go/glm-5.2'), 'the model catalog endpoint stays the kit catalog');
 });
 
+test('the model catalog endpoint exposes the verified unmetered OpenCode Zen models for Pi', { timeout: 20000 }, async (t) => {
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.mkdirSync(homeDir, { recursive: true });
+  t.after(() => {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  });
+  const cfg = loadConfig();
+  cfg.host = '127.0.0.1';
+  cfg.port = 0;
+  cfg.tickSeconds = 3600;
+  const { server, close } = serve(cfg, {
+    createEngine: () => {
+      const engine = new EventEmitter();
+      engine.state = { control: null, quotas: [] };
+      engine.tick = async () => engine.state;
+      engine.log = () => {};
+      return engine;
+    },
+  });
+  t.after(async () => { await close(); });
+  await new Promise((resolve, reject) => {
+    server.once('listening', resolve);
+    server.once('error', reject);
+  });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const catalog = await (await fetch(`${base}/api/models`)).json();
+  const supported = [
+    'opencode/big-pickle',
+    'opencode/ling-3.0-flash-fin-free',
+    'opencode/mimo-v2.6-flash-free',
+    'opencode/muse-spark-1.2-contributor-free',
+    'opencode/muse-spark-1.3-contributor-free',
+    'opencode/nemotron-3-ultra-free',
+    'opencode/nemotron-3.5-lightning-free',
+  ];
+  for (const model of supported) assert.ok(catalog.pi.allowedModels.includes(model), `${model} is listed for Pi`);
+  assert.ok(!catalog.pi.allowedModels.includes('opencode/space-bunny-free'), 'space-bunny-free stays out of Pi');
+  assert.equal(catalog.pi.defaultModel, 'opencode-go/muse-spark-1.3-contributor', 'the Pi default is unchanged');
+  await close();
+});
+
 test('handoff API accepts a live boss-labeled pane without a project control entry', { timeout: 30000 }, async (t) => {
   fs.mkdirSync(dataDir, { recursive: true });
   fs.mkdirSync(homeDir, { recursive: true });
