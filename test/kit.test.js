@@ -931,6 +931,62 @@ test('worker start creates a dedicated tab beside an existing Workers tab and re
   assert.ok(!calls.some((args) => args[0] === 'tab' && args[1] === 'close'));
 });
 
+test('worker start sets HERDR_ENV=1 in Codex worker tabs and the dry-run plan, and only there', () => {
+  const root = temporaryRepo();
+  const template = path.join(root, 'brief-template.md');
+  fs.writeFileSync(template, 'Worker {{name}}: {{task}}');
+  fs.writeFileSync(path.join(root, '.herdr-boss.json'), JSON.stringify({ briefTemplate: template }));
+  const config = loadProjectConfig({ cwd: root });
+  const rulesFile = path.join(root, 'rules.json');
+  fs.writeFileSync(rulesFile, JSON.stringify({ updatedAt: new Date().toISOString(), avoidKinds: [] }));
+  const creates = [];
+  let created = false;
+  let paneCwd = root;
+  let paneLabel = 'Workers';
+  const herdr = (args) => {
+    if (args[0] === 'pane' && args[1] === 'get') return args[2] === 'ws:orch'
+      ? { pane: { pane_id: 'ws:orch', workspace_id: 'ws', label: 'orch' } }
+      : { pane: { pane_id: 'ws:p2', workspace_id: 'ws', foreground_cwd: paneCwd } };
+    if (args[0] === 'pane' && args[1] === 'process-info') return { process_info: { shell_pid: 10, foreground_process_group_id: 10 } };
+    if (args[0] === 'pane' && args[1] === 'read') return { text: '% ' };
+    if (args[0] === 'pane' && args[1] === 'list') return { panes: [{ pane_id: 'ws:p2', workspace_id: 'ws', tab_id: 'ws:t2' }] };
+    if (args[0] === 'agent' && args[1] === 'list') return { agents: [] };
+    if (args[0] === 'tab' && args[1] === 'list') return { tabs: [{ tab_id: 'ws:t1', workspace_id: 'ws', label: 'Workers' }, ...(created ? [{ tab_id: 'ws:t2', workspace_id: 'ws', label: paneLabel }] : [])] };
+    if (args[0] === 'tab' && args[1] === 'create') {
+      creates.push(args);
+      paneCwd = args[args.indexOf('--cwd') + 1];
+      paneLabel = args[args.indexOf('--label') + 1];
+      created = true;
+      return { tab: { tab_id: 'ws:t2' } };
+    }
+    if (args[0] === 'agent' && (args[1] === 'start' || args[1] === 'prompt')) return {};
+    throw new Error(`Unexpected Herdr call: ${args.join(' ')}`);
+  };
+  const env = { HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'ws', HERDR_PANE_ID: 'ws:orch' };
+  const start = (name, options) => startWorker(name, { task: 'x', allow: ['src/'], ...options }, { config, models: loadModels(), herdr, env, rulesFile, wait: () => {}, output: () => {} });
+
+  start('codexenv', { kind: 'codex' });
+  const codexCreate = creates.at(-1);
+  assert.ok(codexCreate.includes('HERDR_ENV=1'), `expected HERDR_ENV=1 in ${codexCreate.join(' ')}`);
+  assert.ok(codexCreate.includes('DISABLE_UPDATE_PROMPT=true'));
+  assert.ok(codexCreate.includes('DISABLE_AUTO_UPDATE=true'));
+  assert.ok(codexCreate.includes('--no-focus'));
+
+  const dryRun = [];
+  startWorker('codexenvdry', { kind: 'codex', task: 'x', allow: ['src/'], dryRun: true }, {
+    config, models: loadModels(), herdr, env, rulesFile, output: (line) => dryRun.push(line),
+  });
+  assert.match(dryRun.join('\n'), /herdr tab create .*--env HERDR_ENV=1 --env DISABLE_UPDATE_PROMPT=true --env DISABLE_AUTO_UPDATE=true --no-focus/);
+  assert.equal(creates.length, 1, 'the dry run creates no tab');
+
+  start('claudeenv', { kind: 'claude' });
+  const claudeCreate = creates.at(-1);
+  assert.ok(!claudeCreate.includes('HERDR_ENV'), `expected no HERDR_ENV in ${claudeCreate.join(' ')}`);
+  assert.ok(claudeCreate.includes('DISABLE_UPDATE_PROMPT=true'));
+  assert.ok(claudeCreate.includes('DISABLE_AUTO_UPDATE=true'));
+  assert.ok(claudeCreate.includes('--no-focus'));
+});
+
 test('worker start waits for a stable shell in a new tab and rechecks before a timed busy retry', () => {
   const root = temporaryRepo();
   const template = path.join(root, 'brief-template.md');

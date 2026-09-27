@@ -454,12 +454,17 @@ function rulesWarning(rules, now = Date.now()) {
   return !Number.isFinite(updated) || now - updated > 10 * 60 * 1000;
 }
 
-function chooseWorkerPane(workspaceId, worktree, name, herdr) {
+// A Codex worker pane needs HERDR_ENV, or the agent in it cannot run Herdr commands. Other kinds keep the pane environment they had.
+function workerPaneCommand(workspaceId, worktree, name, kind) {
+  const command = ['tab', 'create', '--workspace', workspaceId, '--label', `W ${name}`, '--cwd', worktree];
+  if (kind === 'codex') command.push('--env', 'HERDR_ENV=1');
+  command.push('--env', 'DISABLE_UPDATE_PROMPT=true', '--env', 'DISABLE_AUTO_UPDATE=true', '--no-focus');
+  return command;
+}
+
+function chooseWorkerPane(workspaceId, worktree, name, kind, herdr) {
   const existingTabs = listFrom(herdr(['tab', 'list', '--workspace', workspaceId]), 'tabs');
-  const command = [
-    'tab', 'create', '--workspace', workspaceId, '--label', `W ${name}`, '--cwd', worktree,
-    '--env', 'DISABLE_UPDATE_PROMPT=true', '--env', 'DISABLE_AUTO_UPDATE=true', '--no-focus',
-  ];
+  const command = workerPaneCommand(workspaceId, worktree, name, kind);
   const created = herdr(command);
   const tabId = getTab(created) ?? created.tab?.tab_id ?? created.id;
   const freshTabs = listFrom(herdr(['tab', 'list', '--workspace', workspaceId]), 'tabs');
@@ -679,8 +684,7 @@ export function startWorker(name, options, {
   let paneId = null;
   let paneCommand;
   if (options.dryRun) {
-    paneCommand = ['tab', 'create', '--workspace', workspaceId, '--label', `W ${name}`, '--cwd', worktree,
-      '--env', 'DISABLE_UPDATE_PROMPT=true', '--env', 'DISABLE_AUTO_UPDATE=true', '--no-focus'];
+    paneCommand = workerPaneCommand(workspaceId, worktree, name, options.kind);
     paneId = '<new-root-pane-id>';
   }
 
@@ -750,7 +754,7 @@ export function startWorker(name, options, {
       catch (error) { throw setupFailure(error, plan.setup, plan.setupTimeoutSeconds); }
       output(`Project setup finished in ${Math.round((Date.now() - started) / 1000)} s.`);
     }
-    placement = chooseWorkerPane(workspaceId, worktree, name, herdr);
+    placement = chooseWorkerPane(workspaceId, worktree, name, options.kind, herdr);
     paneId = placement.paneId;
     waitForWorkerPane(paneId, workspaceId, worktree, herdr, wait);
     const shellPid = workerPaneShellPid(paneId, herdr);
