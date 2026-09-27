@@ -263,7 +263,7 @@ function controlBlock(s) {
     const eff = effectiveAllocation(p);
     const activity = allocationActivity(p);
     return `<div class="allocation-row ${activity}" data-project-row="${esc(p.slug)}">
-      <div class="allocation-name"><b><i class="allocation-swatch" style="background-color:${allocationColor(s, p.slug)}"></i>${esc(p.label)}</b><small>${p.running}/${p.slots} working slots · ${activity}</small></div>
+      <div class="allocation-name"><b><i class="allocation-swatch" style="background-color:${allocationColor(s, p.slug)}"></i>${esc(p.label)}</b><small>${p.running}/${p.slots} working slots${p.borrowed ? ` · +${p.borrowed} borrowed` : ''}${p.lent ? ` · ${p.lent} lent` : ''} · ${activity}</small></div>
       <div class="share-values"><span><small>Set</small><strong class="num share-value">${x.share}%</strong></span><span title="Applied state: ${esc(p.label)} has ${eff.slots} of ${state.policy?.maxWorkers ?? 0} worker slots now"><small>Effective</small><strong class="num">${eff.percent}% · ${eff.slots} slot${eff.slots === 1 ? '' : 's'}</strong></span></div>
       <select data-mode="${esc(p.slug)}" aria-label="${esc(p.label)} activity mode">${['auto','active','idle','paused'].map((m) => `<option value="${m}" ${x.mode === m ? 'selected' : ''}>${m}</option>`).join('')}</select>
       <details class="project-exclude"><summary>Exclude kinds / models</summary><div class="exclude-grid">${availableKinds.map((k) => `<label><input type="checkbox" data-exclude-kind="${esc(p.slug)}:${k}" ${x.excludedKinds.includes(k) ? 'checked' : ''}> ${esc(k)}</label>`).join('')}
@@ -1421,13 +1421,14 @@ const HELP = {
     <p>The data comes from the project's status file. When a section is missing, the orchestrator has not published those fields.</p>`],
   allocation: ['Allocation', `
     <p>The resource policy for all projects. Changes are a draft until you select <b>Apply policy</b>.</p>
-    <h3>Capacity and handover</h3><p>The global limit of working agents, idle lending, the quota reserve, and automatic handover with its activation level.</p>
+    <h3>Capacity and handover</h3><p>The global limit of working agents, the lending of unused slots, the quota reserve, and automatic handover with its activation level.</p>
     <h3>Orchestrator succession</h3><p>The ranked successors for automatic handover. Use the arrows to change the order. Unlisted choices are never selected automatically.</p>
     <h3>Workspace projects</h3><p>Clear a workspace switch to include that workspace as a project. An excluded workspace stays on Agents and shows <b>Not a project</b>. It gets no project share or worker slots. Herdr Boss stores workspace labels and resolves saved Herdr IDs to labels. The Boss workspace stays excluded while a pane is labelled <code>boss</code>.</p>
     <h3>Project shares</h3><p>Drag a boundary on the bar, or focus it and use the arrow keys. Projects to the left stay fixed; the rest share the remainder. A share is advisory. The mode sets a project to auto, active, idle, or paused.</p>
     <p>The <b>set share</b> is the share in your policy draft. The bar widths show it. The <b>effective share</b> is the number of worker slots the project has now, divided by the applied maximum of working agents. It changes only after you select <b>Apply policy</b>.</p>
     <p>A bar label such as <b>30% · 2</b> shows the set share and the effective slots. A narrow segment shows fewer labels; its tooltip shows all values.</p>
-    <p>An idle project is faded. A paused project is faded and striped. When <b>Borrow idle shares</b> is on, an idle project lends its slots to active projects, so an idle project can have 0 effective slots.</p>`],
+    <p>An idle project is faded. A paused project is faded and striped.</p>
+    <p>When <b>Borrow idle shares</b> is on, a project lends its unused slots to the projects that use all their slots. An idle or paused project lends all its slots. Another project lends its base slots minus its running workers. It keeps 1 slot when its orchestrator is working or blocked. The lent slots go to the full projects by share. When no project is full, no project lends. A project row shows the borrowed or lent count. Borrowed slots are real capacity. The global limit still applies.</p>`],
   settings: ['Settings', `
     <p>Each harness section holds the models and provider routes of that harness. Provider quotas and machine limits are below the harnesses.</p>
     <h3>Harnesses</h3><p>Clear <b>Available</b> to stop all workers from using a harness. The preferred model is the model that worker start and handover use when no model is given. An empty choice uses the harness default.</p>

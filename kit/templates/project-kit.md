@@ -13,7 +13,7 @@ These are the shared operating rules for the orchestrator of this project.
 - Read `kit/models.md` before selecting a worker kind or model.
 - Run `herdr-boss models` and `herdr-boss lanes` for the current models and lanes. Never copy model lists or harness facts into project files.
 - Read `~/.herdr-boss/bulletin.md` before each worker dispatch.
-- Follow its worker cap, project share, and provider pacing rules. Use an authorized override only when needed.
+- Follow its worker cap, your project's effective slots, and provider pacing rules. The effective slots include borrowed slots. Use an authorized override only when needed.
 - Read `kit/browser-service.md` for project browser commands. Read `kit/shared-browser.md` only if an optional legacy shared browser is explicitly assigned.
 - Keep the orchestrator pane labeled `orch`.
 - Use `herdr-boss worker start` to start workers.
