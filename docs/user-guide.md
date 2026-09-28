@@ -258,6 +258,8 @@ The **base slots** of a project are its set share of the global worker limit. A 
 
 The effective slots are the base slots minus the lent slots plus the borrowed slots. Offered slots do not reduce the effective slots. The bulletin shows the effective slots on each project line, for example `Viz: 4/6 slots (40% share, +2 borrowed)`, `Docs: 0/0 slots (15% share, idle, 2 lent)`, or `HerdrBoss: 1/4 slots (30% share, 3 free for others)`. The Allocation page shows the same counts. Borrowed slots are real capacity. An orchestrator can start workers up to its effective slots. The global limit in `worker start` still caps the total number of workers. The set share stays the same. Clear **Borrow idle shares** to stop all lending.
 
+Below the policy settings, the **Resource leases** panel shows each resource pool. The head of a pool shows the count of held and free items, the lease TTL, and the reclaim rule. A row for each item shows the state (Held or Free), the holder project, the pane or worker, the lease age, and the time left. **borrowed** marks an item of another project's split. The built-in pool `project-browsers` lists only its held ports and the count of free ports. An invalid pool shows an error line. Select **Release** to give a lease back. The page names the pool, the item, the holder project, and the pane or worker, and asks you to confirm. The release removes the lease only while the holder project is still the project that the page shows. Otherwise the page reports that the lease changed, and you reload the page. A release never stops a process. A project browser that runs keeps its lease, so its **Release** button is disabled until you close the browser on the Browsers page.
+
 `worker start` prints one allocation line for the project: the running workers, the effective slots, the borrowed, lent, or free count, the global use, and the 5-minute load. When the project uses all its effective slots, `worker start` also prints an advisory notice. The notice does not stop the start.
 
 ## Orchestrator handover
@@ -333,6 +335,8 @@ Each project browser port is a lease in the built-in resource pool `project-brow
 - `browser-sessions.json` keeps the profile, the window size, the headless mode, the PID, and the code-sign clone of each project. The lease keeps only the port.
 
 Herdr Boss reclaims a project browser lease when no Chrome process has the port flag and the profile path of the project on two service ticks in a row. A "not responding" browser still has its process, so Herdr Boss does not reclaim its lease. When the process list fails on a tick, that tick does not count. A reclaim closes no browser and changes no record. The next `browser request` leases the recorded port again when it is free.
+
+The Browsers page shows the leased port and the CDP address `http://127.0.0.1:PORT` on each browser card, with a link to the lease row on the Allocation page. The card shows the lease even when the leased port differs from the recorded port. Release the lease on the Allocation page. A project browser that runs keeps its lease until you close the browser.
 
 At its first acting tick, the service writes one lease for each browser record, with the recorded port. It logs one `lease` event for each project. It does this one time for each data directory, and it changes no port.
 
@@ -698,6 +702,7 @@ The dashboard uses these routes. A request from another host needs the access to
 | `GET /api/handoffs`, `GET /api/handoffs/output?id=ID` | Handover records, and a successor's pane output. |
 | `POST /api/handoffs/plan`, `/prepare`, `/activate` | The handover steps. Activation needs `confirmed: true`. |
 | `GET`, `POST /api/browser-sessions...` | Browser list, request, tabs, screenshot, navigation, input, new tab, close, and restart. Input to an agent tab returns 409 unless the body has `confirmAttached: true`. |
+| `POST /api/leases/release` | Release a lease: `{ pool, item, project }`. Returns 409 when the lease changed. |
 | `GET /api/messages?thread=THREAD` | The records of one thread, oldest first, at most 200. |
 | `POST /api/messages` | Queue an Owner message: `{ thread, kind, text }`. `kind` is `message`, `nudge`, or `status-request`. Returns 400 for invalid input, 404 for an unknown thread, and 429 above 10 sends a minute. |
 | `POST /api/tick` | Collect now. |

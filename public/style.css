@@ -958,3 +958,42 @@ section[id], div[id="agents"] { scroll-margin-top: 105px; }
 :root[data-theme="dark"] .mail-dismiss-row button { color: var(--text); }
 :root[data-theme="dark"] button.mail-decline { color: var(--crit); }
 :root .mail-entry .mail-meta strong { color: var(--text); }
+
+/* Resource leases on the Allocation page. */
+.lease-panel { margin-top: 20px; }
+.lease-panel h2 { margin: 0; }
+.lease-pool { margin-top: 14px; }
+.lease-pool + .lease-pool { border-top: 1px solid var(--line); padding-top: 14px; }
+.lease-head { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; margin-bottom: 8px; font-size: 12.5px; color: var(--muted); }
+.lease-head b { font-size: 14px; color: var(--text); }
+.lease-table-wrap { overflow-x: auto; }
+.lease-table { width: 100%; border-collapse: collapse; text-align: left; font-size: 12.5px; }
+.lease-table th { padding: 8px 12px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 11px; font-weight: 600; white-space: nowrap; }
+.lease-table td { padding: 8px 12px; border-bottom: 1px solid var(--line); vertical-align: middle; white-space: nowrap; }
+.lease-table tr:last-child td { border-bottom: 0; }
+.lease-table td.mono { font-family: var(--mono); }
+.lease-free td { color: var(--faint); }
+.lease-action { text-align: right; }
+.lease-action button { padding: 4px 10px; }
+.lease-note { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; white-space: normal; }
+.lease-error { margin: 0 0 8px; color: var(--warn); font-size: 12.5px; }
+.lease-status { margin: 0 0 8px; color: var(--muted); font-size: 12.5px; }
+.lease-free-line { margin: 8px 0 0; color: var(--muted); font-size: 12.5px; }
+.browser-lease { margin: 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.browser-lease a { color: var(--accent); }
+
+.lease-confirm { max-width: 440px; width: calc(100% - 32px); }
+.lease-confirm h2 { margin: 0 0 10px; font-size: 16px; }
+.lease-confirm p { margin: 0 0 10px; font-size: 13.5px; }
+.lease-confirm .lease-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+@media (max-width: 760px) {
+  .lease-table thead { display: none; }
+  .lease-table, .lease-table tbody, .lease-table tr, .lease-table td { display: block; width: 100%; }
+  .lease-table tr { padding: 8px 0; border-bottom: 1px solid var(--line); }
+  .lease-table td { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; padding: 3px 0; border: 0; white-space: normal; overflow-wrap: anywhere; }
+  .lease-table td::before { content: attr(data-label); flex: 0 0 92px; color: var(--muted); font-size: 11px; font-weight: 600; }
+  .lease-table td[data-label=""] { display: block; }
+  .lease-table td[data-label=""]::before { content: none; }
+  .lease-action { text-align: left; }
+}

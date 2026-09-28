@@ -79,6 +79,7 @@ test('read-only preview allows reads and rejects all API methods that can change
     ['POST', '/api/messages'],
     ['POST', '/api/messages/read'],
     ['POST', '/api/messages/dismiss'],
+    ['POST', '/api/leases/release'],
     ['PATCH', '/api/unknown'],
     ['OPTIONS', '/api/state'],
   ];
@@ -336,6 +337,56 @@ console.log(JSON.stringify({ result }));
   assert.equal(prepared.status, 'prepared');
   await close();
   assert.equal(server.listening, false, 'the API integration stops its server');
+});
+
+test('the lease release endpoint refuses a changed lease and releases a matching one', { timeout: 20000 }, async (t) => {
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.mkdirSync(homeDir, { recursive: true });
+  t.after(() => {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  });
+  const cfg = loadConfig();
+  cfg.host = '127.0.0.1';
+  cfg.port = 0;
+  cfg.tickSeconds = 3600;
+  const { server, close } = serve(cfg, {
+    createEngine: () => {
+      const engine = new EventEmitter();
+      engine.state = { control: null, quotas: [] };
+      engine.tick = async () => engine.state;
+      engine.log = () => {};
+      return engine;
+    },
+  });
+  t.after(async () => { await close(); });
+  await new Promise((resolve, reject) => {
+    server.once('listening', resolve);
+    server.once('error', reject);
+  });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const leaseFile = path.join(dataDir, 'leases.json');
+  const seed = (project) => fs.writeFileSync(leaseFile, JSON.stringify({ leases: [{
+    pool: 'project-browsers', item: '9225', project, worker: null, pane: null, holder: 'project',
+    at: new Date().toISOString(), expiresAt: null, borrowed: false,
+  }] }));
+  const post = (body) => fetch(`${base}/api/leases/release`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+
+  assert.equal((await post({ pool: 'project-browsers', item: '9225' })).status, 400, 'the body needs pool, item, and project');
+
+  seed('beta');
+  const conflict = await post({ pool: 'project-browsers', item: '9225', project: 'alpha' });
+  assert.equal(conflict.status, 409, 'a lease of another project is a conflict');
+  assert.equal((await conflict.json()).error, 'The lease changed. Reload the page.');
+  assert.equal(JSON.parse(fs.readFileSync(leaseFile, 'utf8')).leases.length, 1, 'a conflict keeps the lease');
+
+  seed('alpha');
+  const released = await post({ pool: 'project-browsers', item: '9225', project: 'alpha' });
+  const releasedText = await released.text();
+  assert.equal(released.status, 200, releasedText);
+  assert.equal(JSON.parse(releasedText).released.item, '9225');
+  assert.deepEqual(JSON.parse(fs.readFileSync(leaseFile, 'utf8')).leases, []);
+  await close();
 });
 
 function rawRequest(base, method, route, { headers = {}, body } = {}) {
