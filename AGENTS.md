@@ -15,7 +15,7 @@ Decide implementation, product, and design details, naming, thresholds, test des
 ## Safety rules
 
 - This repository is public: https://github.com/tm-henningnt/HerdrBoss. Before each commit, read the full diff for secrets, tokens, local file contents, and details from other projects: client names, tenant URLs, app IDs, and business data. Do not commit such content.
-- Push `main` yourself after the release steps. Before each push, read the full diff for tokens, secrets, local paths with private content, and client or tenant names from other projects. Push with `herdr-boss push origin main`. It takes the machine-wide `full-suite` lock when a pre-push hook exists. Run each full `npm test` inside `herdr-boss lock acquire full-suite --wait 1800` and `herdr-boss lock release full-suite`.
+- Push `main` yourself after the release steps. Before each push, read the full diff for tokens, secrets, local paths with private content, and client or tenant names from other projects. Push with `herdr-boss push origin main`. It takes the machine-wide `full-suite` lock when a pre-push hook exists. Run each full test suite with `herdr-boss suite -- npm test`.
 - The launchd service runs from the `main` working tree of this checkout. A change on `main` goes live for every project at the next restart.
 - Never stop, close, or restart a browser that another project uses. Herdr Boss never stops a browser that it did not start.
 - Never print a secret to a pane or a report. The default token and all session files are stored in `~/.config/herdr-boss/`; an explicit `access.tokenFile` path stays configured. Agents must not read the private directory. Use temporary `HOME` and `HERDR_BOSS_DIR` fixtures for credential tests.
@@ -26,7 +26,7 @@ Decide implementation, product, and design details, naming, thresholds, test des
 - Run `node --check <file>` for each changed JavaScript file.
 - For the dashboard, check the change in the project browser: run `herdr-boss browser request herdrboss`, open a tab with `herdr-boss browser tab new herdrboss http://127.0.0.1:4477/<page>`, and capture it with `herdr-boss browser screenshot herdrboss --tab <id>`. Close your tab when you are done.
 - For the phone layout, run `herdr-boss browser size herdrboss 393 852`, then `herdr-boss browser restart herdrboss --headless --no-restore`. Set the size back to 1280 by 800 when you are done.
-- For a dashboard preview, use `HERDR_BOSS_DIR="$(mktemp -d)" HERDR_BOSS_PORT=4478 npm start -- --read-only-preview`. Choose an unused local port if 4478 is busy.
+- For a dashboard preview, use `HOME="$(mktemp -d)" HERDR_BOSS_DIR="$(mktemp -d)" HERDR_BOSS_PORT=4478 npm start -- --read-only-preview`. Choose an unused local port if 4478 is busy.
 - Loopback requests need no login. Do not change `~/.herdr-boss/` data files in a test; use a temporary directory with `HERDR_BOSS_DIR`.
 
 ## Integrate and release
