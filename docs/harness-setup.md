@@ -2,7 +2,7 @@
 
 Herdr Boss orchestration needs settings in each agent harness on the machine. This page gives each setting, the reason for it, its file, who applies it, and its risk. The templates are in [`kit/templates/harness/`](../kit/templates/harness/).
 
-`herdr-boss harness check` reads the live settings and reports each missing entry. `herdr-boss harness sync` adds the missing Codex writable roots and prints the Claude lines for the Owner. The commands are in [cli.md](cli.md#harness-settings).
+`herdr-boss harness check` reads the live settings and reports each missing entry. `herdr-boss harness sync` adds missing Codex writable roots and prints only the Claude lines that differ. The commands are in [cli.md](cli.md#harness-settings).
 
 ## Placeholders
 
@@ -45,14 +45,16 @@ Do not add a `permissions.allow` rule for `git push`. A hard allow rule skips th
 
 The `SessionStart` hook prints the kit file and the project memory at each session start. `kit install` writes it.
 
-To apply the lines:
+To apply the Claude lines:
 
-1. Run `herdr-boss harness sync`. It prints the filled `claude-automode.json`.
-2. Back up the file: `cp ~/.claude/settings.json ~/.claude/settings.json.bak`.
-3. Merge the printed `environment` lines into `autoMode.environment`.
-4. Merge the printed `allow` lines into `autoMode.allow`. Keep `"$defaults"` first.
-5. Check the file: `python3 -m json.tool ~/.claude/settings.json >/dev/null && echo OK`.
-6. Start a new Claude session. A running session can keep the old settings.
+1. Run `herdr-boss harness sync`. It compares the filled template with `autoMode` in `~/.claude/settings.json`.
+2. Back up an existing file: `cp ~/.claude/settings.json ~/.claude/settings.json.bak`.
+3. Add each `missing` line to its `environment` or `allow` array.
+4. Replace each old environment line after `now:` with the new line above it.
+5. Keep all other Owner lines. The command counts them and does not show their text.
+6. When the file or `autoMode` key is missing, add the full template to an `autoMode` object. The command says when this is the case.
+7. Check the file: `python3 -m json.tool ~/.claude/settings.json >/dev/null && echo OK`.
+8. Start a new Claude session. A running session can keep the old settings.
 
 | Risk | Effect |
 |---|---|
@@ -157,9 +159,15 @@ To apply the guard:
 
 1. It copies `~/.codex/config.toml` to `config.toml.bak-<UTC timestamp>`.
 2. It rewrites the `writable_roots` array in `[sandbox_workspace_write]`. It keeps each entry and adds each missing root at the end. It changes no other line.
-3. It prints the filled Claude `autoMode` lines. It does not edit `~/.claude/settings.json`.
+3. It reads only the `autoMode` key in `~/.claude/settings.json`. It compares its `environment` and `allow` lines with the filled template.
+4. It prints each missing line and each changed labeled environment line. It shows the old line after `now:`.
+5. It counts Owner lines that the template does not define. It does not show their text.
+6. If the file or the `autoMode` key is missing, it prints the full template and says why.
+7. It does not edit `~/.claude/settings.json`.
 
 When the section or the array is missing, or holds a comment or a value that is not a plain string, `harness sync` changes nothing. It prints the lines to add and exits 1. When no root is missing, it makes no backup. `--dry-run` prints the roots to add and writes nothing. `--codex-only` does not print the Claude lines.
+
+`harness check` checks the project line in Claude settings. It ignores other Owner lines.
 
 ## Denial counts
 
