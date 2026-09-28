@@ -95,6 +95,8 @@ const DEFAULTS = {
     orphanDaemonMinAgeSeconds: 2 * 3600,
     // Report an owned automation browser when its agent is idle for this long.
     staleOwnedMinutes: 30,
+    // Sweep old code-sign clones that no running Chrome process owns.
+    sweepCodeSignClones: true,
   },
   workers: { staleIdleMinutes: 120 },
   // A published project status older than this is stale while workers run or new commits land.
@@ -106,6 +108,27 @@ const DEFAULTS = {
   orchestratorLabel: 'orch',
   roamgate: { port: 8787, tokenFile: path.join(os.homedir(), '.config/roamgate/auth-token') },
 };
+
+const CONFIG_SOURCE = Symbol('configSource');
+const SERVICE_SETTINGS = [
+  ['Machine', 'machine.memFreeWarnPercent'],
+  ['Quota', 'quota.warnPercent'],
+  ['Quota', 'quota.criticalPercent'],
+  ['Status', 'staleStatusMinutes'],
+  ['Workers', 'workers.staleIdleMinutes'],
+  ['Browsers', 'browsers.reapOrphanDaemons'],
+  ['Browsers', 'browsers.orphanDaemonMinAgeSeconds'],
+  ['Browsers', 'browsers.staleOwnedMinutes'],
+  ['Browsers', 'browsers.sweepCodeSignClones'],
+  ['Service', 'tickSeconds'],
+  ['Service', 'quotaSeconds'],
+  ['Service', 'push'],
+  ['Service', 'alertCooldownSeconds'],
+  ['Service', 'providerKinds'],
+  ['Service', 'orchestratorLabel'],
+  ['Service', 'port'],
+  ['Service', 'host'],
+];
 
 const POOL_KEYS = new Set(['name', 'items', 'range', 'split', 'env', 'ttlMinutes', 'check', 'graceMinutes']);
 const POOL_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -188,6 +211,28 @@ function merge(a, b) {
   return out;
 }
 
+export function serviceSettingsView(cfg) {
+  const effective = merge(DEFAULTS, cfg);
+  const configured = cfg?.[CONFIG_SOURCE] || {};
+  return SERVICE_SETTINGS.map(([group, setting]) => {
+    const parts = setting.split('.');
+    let value = effective;
+    let source = configured;
+    let isConfigured = true;
+    for (const part of parts) {
+      value = value?.[part];
+      if (!source || typeof source !== 'object' || !Object.hasOwn(source, part)) isConfigured = false;
+      source = source?.[part];
+    }
+    return {
+      group,
+      setting,
+      value: value && typeof value === 'object' ? structuredClone(value) : value,
+      source: isConfigured ? 'config' : 'default',
+    };
+  });
+}
+
 // A server that listens on all interfaces is not reachable at 0.0.0.0, so links use the loopback address.
 export function dashboardUrl(cfg) {
   return `http://${['0.0.0.0', '::', ''].includes(cfg.host) ? '127.0.0.1' : cfg.host}:${cfg.port}`;
@@ -199,6 +244,7 @@ export function loadConfig() {
   let user = {};
   try { user = JSON.parse(fs.readFileSync(file, 'utf8')); } catch {}
   const cfg = merge(DEFAULTS, user);
+  Object.defineProperty(cfg, CONFIG_SOURCE, { value: user });
   // A stored legacy tokenFile names the data directory. Report the private default in memory. Only
   // migrateAccessFiles() writes the new setting.
   if (cfg.access.tokenFile === path.join(DATA_DIR, 'access-token')) cfg.access.tokenFile = DEFAULT_TOKEN_FILE;
