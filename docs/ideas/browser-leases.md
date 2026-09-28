@@ -1,6 +1,6 @@
 # Plan: project browsers on the resource lease pools
 
-Built on branch v39browserlease; waits for the Owner's merge.
+Built and merged on 2026-09-28 (V39). The rest of this file is the design record.
 
 ## Current state
 
