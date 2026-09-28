@@ -103,7 +103,7 @@ const projects = {
   beta: { slug: 'beta', workspace: 'wC', orch: { pane: 'wC:p1' } },
 };
 
-test('delivery sends only to idle or done boss and orch panes, one message per pane per tick', async (t) => {
+test('delivery sends to idle, done, and working boss and orch panes, one message per pane per tick', async (t) => {
   const dir = freshDir(t);
   const b1 = appendMessage(owner('boss', 'First for Boss.'), { dir, now });
   const b2 = appendMessage(owner('boss', 'Second for Boss.'), { dir, now: now + 1 });
@@ -115,27 +115,45 @@ test('delivery sends only to idle or done boss and orch panes, one message per p
   const log = (type, text, extra) => events.push({ type, text, ...extra });
 
   await deliverQueued({ panes: panesFor({ boss: 'idle', alpha: 'working', beta: 'blocked' }), projects, prompt, log, dir, now: now + 10 });
-  assert.deepEqual(prompts, [{ pane: 'wB:p1', text: ownerPromptText(b1) }], 'only the idle Boss gets one message');
+  assert.deepEqual(prompts, [
+    { pane: 'wB:p1', text: ownerPromptText(b1) },
+    { pane: 'wA:p1', text: ownerPromptText(a1) },
+  ], 'the idle Boss and working orchestrator each get one message');
   assert.equal(ownerPromptText(b1), `[owner] First for Boss. (Reply with: herdr-boss say --reply-to ${b1.id} "<answer>")`);
   let records = readMessages({ dir });
   const status = (id) => records.find((r) => r.id === id);
   assert.equal(status(b1.id).status, 'sent');
   assert.equal(status(b1.id).sentAt, new Date(now + 10).toISOString());
   assert.equal(status(b2.id).status, 'queued', 'the second Boss message waits for a later tick');
-  assert.equal(status(a1.id).status, 'queued', 'a working orchestrator gets no message');
+  assert.equal(status(a1.id).status, 'sent', 'a working orchestrator gets a message');
   assert.equal(status(c1.id).status, 'queued', 'a blocked orchestrator gets no message');
-  assert.equal(events.length, 1);
+  assert.equal(events.length, 2);
   assert.equal(events[0].id, b1.id);
   assert.equal(events[0].thread, 'boss');
   assert.equal(events[0].kind, 'message');
+  assert.equal(events[1].id, a1.id);
+  assert.equal(events[1].thread, 'alpha');
   assert.ok(!JSON.stringify(events).includes('First for Boss'), 'the event has no message text');
 
   prompts.length = 0;
   await deliverQueued({ panes: panesFor({ boss: 'done', alpha: 'done', beta: 'idle' }), projects, prompt, log, dir, now: now + 20 });
-  assert.deepEqual(prompts.map((p) => p.pane).sort(), ['wA:p1', 'wB:p1', 'wC:p1']);
+  assert.deepEqual(prompts.map((p) => p.pane).sort(), ['wB:p1', 'wC:p1']);
   assert.equal(prompts.find((p) => p.pane === 'wB:p1').text, ownerPromptText(b2));
   records = readMessages({ dir });
   assert.ok(records.every((r) => r.status === 'sent'));
+});
+
+test('delivery holds Owner messages for blocked, unknown, or missing target panes', async (t) => {
+  const dir = freshDir(t);
+  const boss = appendMessage(owner('boss', 'Boss is unknown.'), { dir, now });
+  const alpha = appendMessage(owner('alpha', 'Alpha is blocked.'), { dir, now: now + 1 });
+  const beta = appendMessage(owner('beta', 'Beta pane is missing.'), { dir, now: now + 2 });
+  const panes = panesFor({ boss: 'unknown', alpha: 'blocked', beta: 'idle' }).filter((pane) => pane.id !== 'wC:p1');
+  const prompts = [];
+  await deliverQueued({ panes, projects, prompt: async (pane) => { prompts.push(pane); }, dir, now });
+  assert.deepEqual(prompts, []);
+  assert.deepEqual(readMessages({ dir }).map((record) => record.status), ['queued', 'queued', 'queued']);
+  assert.deepEqual(readMessages({ dir }).map((record) => record.id), [boss.id, alpha.id, beta.id]);
 });
 
 test('delivery skips a pane without the exact label and a pane that got a notice in this tick', async (t) => {
@@ -323,6 +341,64 @@ test('mail post from the boss pane stores a report', (t) => {
   assert.equal(record.title, 'Handback');
 });
 
+test('mail close is boss-only and records an answered-through-Boss note', (t) => {
+  const boss = cliFixture(t, 'boss', 'wB', 'wB:p1');
+  const item = appendMessage({ thread: 'alpha', from: 'orch', to: 'owner', kind: 'reply', text: 'Which route?', action: 'decide', status: 'new' }, { dir: boss.data, now });
+  const result = boss.cli('mail', 'close', item.id, '--note', 'Handled with the Owner through the Boss.');
+  assert.equal(result.status, 0, result.stderr);
+  const stored = readMessages({ dir: boss.data }).find((record) => record.id === item.id);
+  assert.equal(stored.closedBy, 'boss');
+  assert.equal(stored.closeNote, 'Handled with the Owner through the Boss.');
+  assert.equal(stored.closedAt, stored.readAt);
+  assert.equal(readMessages({ dir: boss.data }).length, 1, 'closing sends nothing');
+
+  const secretItem = appendMessage({ thread: 'alpha', from: 'orch', to: 'owner', kind: 'reply', text: 'Review this?', action: 'answer', status: 'new' }, { dir: boss.data, now });
+  const secret = boss.cli('mail', 'close', secretItem.id, '--note', 'api_key=abcdef123456');
+  assert.notEqual(secret.status, 0);
+  assert.match(secret.stderr, /secret/i);
+  assert.ok(!secret.stderr.includes('abcdef123456'), 'the refusal does not print the secret');
+  assert.equal(readMessages({ dir: boss.data }).find((record) => record.id === secretItem.id).closedAt, undefined);
+
+  const orch = cliFixture(t, 'orch', 'wA', 'wA:p1');
+  const orchItem = appendMessage({ thread: 'alpha', from: 'orch', to: 'owner', kind: 'reply', text: 'Choose.', action: 'decide', status: 'new' }, { dir: orch.data, now });
+  const denied = orch.cli('mail', 'close', orchItem.id, '--note', 'Handled.');
+  assert.notEqual(denied.status, 0);
+  assert.match(denied.stderr, /boss/i);
+  assert.equal(readMessages({ dir: orch.data }).find((record) => record.id === orchItem.id).closedAt, undefined);
+
+  const unknown = boss.cli('mail', 'close', 'm-not-found', '--note', 'Handled.');
+  assert.notEqual(unknown.status, 0);
+  assert.match(unknown.stderr, /m-not-found/);
+  const repeated = boss.cli('mail', 'close', item.id, '--note', 'Again.');
+  assert.notEqual(repeated.status, 0);
+  assert.match(repeated.stderr, new RegExp(item.id));
+});
+
+test('messages relay is boss-only and relayed messages are never delivered', (t) => {
+  const boss = cliFixture(t, 'boss', 'wB', 'wB:p1');
+  const queued = appendMessage(owner('alpha', 'Relay this.'), { dir: boss.data, now });
+  const relayed = boss.cli('messages', 'relay', queued.id, '--by', 'boss');
+  assert.equal(relayed.status, 0, relayed.stderr);
+  assert.match(relayed.stdout, /relayed/i);
+  const stored = readMessages({ dir: boss.data }).find((record) => record.id === queued.id);
+  assert.equal(stored.status, 'relayed');
+  assert.ok(Number.isFinite(Date.parse(stored.relayedAt)), 'the relay records its time');
+  assert.equal(stored.relayedBy, 'boss');
+
+  const prompts = [];
+  return deliverQueued({ panes: panesFor({ boss: 'idle', alpha: 'idle', beta: 'idle' }), projects, prompt: async (pane) => { prompts.push(pane); }, dir: boss.data, now: Date.now() })
+    .then(() => assert.deepEqual(prompts, [], 'the delivery tick skips a relayed message'));
+});
+
+test('messages relay refuses an orchestrator pane and leaves Owner messages queued', (t) => {
+  const { cli, data } = cliFixture(t, 'orch', 'wA', 'wA:p1');
+  const queued = appendMessage(owner('alpha', 'Keep queued.'), { dir: data, now });
+  const result = cli('messages', 'relay', queued.id, '--by', 'boss');
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /only.*boss/i);
+  assert.equal(readMessages({ dir: data }).find((record) => record.id === queued.id).status, 'queued');
+});
+
 const engineProbe = `
 import { Engine } from './src/engine.js';
 import { loadConfig } from './src/config.js';
@@ -356,7 +432,7 @@ await engine.tick();
 console.log(JSON.stringify({ calls, records: readMessages(), events: engine.events.filter((e) => e.type === 'message'), mailbox: engine.state.mailbox }));
 `;
 
-test('an acting engine tick delivers a queued Owner message to an idle orch pane and not to a working one', (t) => {
+test('an acting engine tick delivers queued Owner messages to idle and working orch panes', (t) => {
   const root = fs.mkdtempSync(path.join(dataDir, 'engine-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const data = path.join(root, 'data');
@@ -380,11 +456,15 @@ test('an acting engine tick delivers a queued Owner message to an idle orch pane
   assert.equal(result.status, 0, result.stderr);
   const output = JSON.parse(result.stdout.trim().split('\n').at(-1));
   const prompts = output.calls.filter((args) => args[0] === 'agent' && args[1] === 'prompt');
-  assert.deepEqual(prompts, [['agent', 'prompt', 'wA:p1', ownerPromptText(toAlpha)]]);
+  assert.deepEqual(prompts, [
+    ['agent', 'prompt', 'wA:p1', ownerPromptText(toAlpha)],
+    ['agent', 'prompt', 'wC:p1', ownerPromptText(toBeta)],
+  ]);
   assert.equal(output.records.find((r) => r.id === toAlpha.id).status, 'sent');
-  assert.equal(output.records.find((r) => r.id === toBeta.id).status, 'queued');
-  assert.equal(output.events.length, 1);
+  assert.equal(output.records.find((r) => r.id === toBeta.id).status, 'sent');
+  assert.equal(output.events.length, 2);
   assert.equal(output.events[0].id, toAlpha.id);
+  assert.equal(output.events[1].id, toBeta.id);
   assert.ok(!JSON.stringify(output.events).includes('Alpha, continue.'));
-  assert.deepEqual(output.mailbox, { unread: 1, open: 2 }, 'the state holds the mailbox counts');
+  assert.deepEqual(output.mailbox, { needsYou: 1, needsYouUnread: 1, updates: 1, unread: 1, open: 1 }, 'the state holds Needs-you counts, update count, and one-release aliases');
 });

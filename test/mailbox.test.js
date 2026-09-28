@@ -15,7 +15,7 @@ process.env.HERDR_BOSS_PORT = '0';
 const messages = await import('../src/messages.js');
 const {
   appendMessage, readMessages, isMailboxItem, mailboxAction, parseChoices, mailboxCounts, mailboxView,
-  markMailboxRead, validateOwnerSend, closeMailboxItem, ownerPromptText,
+  markMailboxRead, validateOwnerSend, closeMailboxItem, closeMailboxItems, ownerPromptText,
 } = messages;
 const [{ serve }, { loadConfig }] = await Promise.all([import('../src/server.js'), import('../src/config.js')]);
 
@@ -49,6 +49,31 @@ test('the mailbox holds every reply and report to the Owner, and an item without
   for (const action of ['answer', 'approve', 'decide', 'read']) assert.equal(mailboxAction(reply('alpha', 'x', { action })), action);
 });
 
+test('the mailbox separates Needs you from Updates and counts only unopened open actions', () => {
+  const noAction = reply('alpha', 'Information without an action.');
+  delete noAction.action;
+  const records = [
+    { ...reply('alpha', 'Answer this question.', { action: 'answer' }), id: 'm-answer', at: new Date(now - 5000).toISOString() },
+    { ...reply('boss', 'Approve the plan.', { action: 'approve', readAt: new Date(now - 4000).toISOString() }), id: 'm-approve', at: new Date(now - 4000).toISOString() },
+    { ...reply('alpha', 'Choose a route.', { action: 'decide', readAt: new Date(now - 3000).toISOString(), closedAt: new Date(now - 2000).toISOString() }), id: 'm-done', at: new Date(now - 3000).toISOString() },
+    { ...noAction, id: 'm-update', at: new Date(now - 1000).toISOString() },
+    { ...reply('alpha', 'Read this note.', { action: 'read', readAt: new Date(now - 500).toISOString() }), id: 'm-read-update', at: new Date(now - 500).toISOString() },
+  ];
+
+  assert.equal(mailboxAction(noAction), 'read', 'a record without an action is information');
+  assert.deepEqual(mailboxCounts(records), {
+    needsYou: 2,
+    needsYouUnread: 1,
+    updates: 2,
+    unread: 1,
+    open: 2,
+  });
+  const view = mailboxView(records);
+  assert.deepEqual(view.needsYou.map((item) => item.id), ['m-approve', 'm-answer']);
+  assert.deepEqual(view.updates.map((item) => item.id), ['m-read-update', 'm-update']);
+  assert.deepEqual(view.done.map((item) => item.id), ['m-done']);
+});
+
 test('choices come from a Markdown list under a Choices heading', () => {
   assert.deepEqual(parseChoices('Pick one.\n\n## Choices\n\n- Ship now\n- Wait for review\n\nNot a choice.\n- Later'), ['Ship now', 'Wait for review']);
   assert.deepEqual(parseChoices('### choices:\n1. A\n2) B\n* C\n\nText after.'), ['A', 'B', 'C']);
@@ -70,18 +95,63 @@ test('the view lists open items newest first and closed items under done, with t
   const answer = appendMessage(owner('boss', 'Approved.', { replyTo: third.id }), { dir, now });
   closeMailboxItem(third.id, { dir, now });
   const records = readMessages({ dir });
-  assert.deepEqual(mailboxCounts(records), { unread: 2, open: 2 }, 'a closed item is also read');
+  assert.deepEqual(mailboxCounts(records), { needsYou: 1, needsYouUnread: 1, updates: 1, unread: 1, open: 1 }, 'updates do not count as unread actions');
   const view = mailboxView(records);
-  assert.deepEqual(view.open.map((item) => item.id), [second.id, first.id]);
+  assert.deepEqual(view.needsYou.map((item) => item.id), [second.id]);
+  assert.deepEqual(view.updates.map((item) => item.id), [first.id]);
   assert.deepEqual(view.done.map((item) => item.id), [third.id]);
-  assert.equal(view.open[0].action, 'decide');
-  assert.deepEqual(view.open[0].choices, ['Monday', 'Friday']);
-  assert.equal(view.open[1].action, 'read');
-  assert.deepEqual(view.open[1].choices, []);
+  assert.equal(view.needsYou[0].action, 'decide');
+  assert.deepEqual(view.needsYou[0].choices, ['Monday', 'Friday']);
+  assert.equal(view.updates[0].action, 'read');
+  assert.deepEqual(view.updates[0].choices, []);
   assert.equal(view.done[0].answer.id, answer.id);
   assert.equal(view.done[0].answer.text, 'Approved.');
   assert.equal(view.done[0].closedAt, new Date(now).toISOString());
   assert.equal(view.done[0].readAt, new Date(now).toISOString(), 'closing an item also marks it read');
+});
+
+test('the Boss can close open mailbox items with a safe note, without sending a message', (t) => {
+  const dir = freshDir(t);
+  const item = appendMessage(reply('alpha', 'Which route?', { action: 'decide' }), { dir, now });
+  const reportItem = appendMessage(report('Handback', 'All clear.'), { dir, now });
+
+  const result = closeMailboxItems([item.id, reportItem.id], 'Handled with the Owner through the Boss.', { by: 'boss', dir, now: now + 1000 });
+  assert.deepEqual(result, { ok: true, closed: 2 });
+  const records = readMessages({ dir });
+  for (const id of [item.id, reportItem.id]) {
+    const stored = records.find((record) => record.id === id);
+    assert.equal(stored.closedAt, new Date(now + 1000).toISOString());
+    assert.equal(stored.readAt, new Date(now + 1000).toISOString());
+    assert.equal(stored.closedBy, 'boss');
+    assert.equal(stored.closeNote, 'Handled with the Owner through the Boss.');
+  }
+  assert.equal(records.length, 2, 'closing creates no Owner message or reply');
+  assert.deepEqual(mailboxView(records).done.map((done) => done.id), [reportItem.id, item.id]);
+  assert.deepEqual(mailboxCounts(records), { needsYou: 0, needsYouUnread: 0, updates: 0, unread: 0, open: 0 });
+});
+
+test('Boss close validates its caller, note, and every open mailbox ID before changing records', (t) => {
+  const dir = freshDir(t);
+  const item = appendMessage(reply('alpha', 'Which route?', { action: 'decide' }), { dir, now });
+  const closed = appendMessage(reply('alpha', 'Already handled.', { action: 'answer', closedAt: new Date(now).toISOString() }), { dir, now });
+
+  for (const [ids, note, by, match] of [
+    [[item.id], 'Handled.', 'orch', /Boss/],
+    [[item.id], '', 'boss', /1 to 500/],
+    [[item.id], 'x'.repeat(501), 'boss', /1 to 500/],
+    [[item.id], 'api_key=abcdef123456', 'boss', /secret/i],
+    [['m-unknown'], 'Handled.', 'boss', new RegExp('m-unknown')],
+    [[closed.id], 'Handled.', 'boss', new RegExp(closed.id)],
+    [[item.id, 'm-unknown'], 'Handled.', 'boss', new RegExp('m-unknown')],
+  ]) assert.match(closeMailboxItems(ids, note, { by, dir, now }).error, match);
+
+  assert.equal(readMessages({ dir }).find((record) => record.id === item.id).closedAt, undefined, 'a refused batch changes no item');
+});
+
+test('a Boss close note is visible in the collapsed Done item summary', () => {
+  const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const template = app.slice(app.indexOf('function mailItem('), app.indexOf('function mailFind('));
+  assert.match(template, /const closeNote = done && item\.closedBy === 'boss' \? `<span class="mail-headline mail-close-note">answered through the Boss: \$\{esc\(item\.closeNote \|\| ''\)\}<\/span>` : '';/);
 });
 
 test('marking read sets readAt once, closes only read items on request, and keeps the 30-day retention', (t) => {
@@ -112,7 +182,7 @@ test('marking read sets readAt once, closes only read items on request, and keep
   assert.deepEqual(markMailboxRead({ ids: [item.id], close: true }, { dir, now: later + 2000 }), { ok: true, updated: 1 });
   records = readMessages({ dir });
   assert.equal(records.find((r) => r.id === item.id).closedAt, new Date(later + 2000).toISOString());
-  assert.deepEqual(mailboxCounts(records), { unread: 0, open: 1 });
+  assert.deepEqual(mailboxCounts(records), { needsYou: 1, needsYouUnread: 0, updates: 1, unread: 0, open: 1 });
 });
 
 test('an Owner answer names an open item of the same thread and closes it', (t) => {
@@ -185,10 +255,11 @@ test('the mailbox API lists items, marks them read behind the send gates, and an
   const post = (route, body, headers = {}) => fetch(`${base}${route}`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) });
 
   const state = await (await fetch(`${base}/api/state`)).json();
-  assert.deepEqual(state.mailbox, { unread: 4, open: 4 });
+  assert.deepEqual(state.mailbox, { needsYou: 3, needsYouUnread: 3, updates: 1, unread: 3, open: 3 });
   const list = await (await fetch(`${base}/api/mailbox`)).json();
-  assert.deepEqual(list.open.map((item) => item.id), [handback.id, answerItem.id, approve.id, decide.id]);
-  assert.deepEqual(list.open.find((item) => item.id === decide.id).choices, ['Monday', 'Friday']);
+  assert.deepEqual(list.needsYou.map((item) => item.id), [answerItem.id, approve.id, decide.id]);
+  assert.deepEqual(list.updates.map((item) => item.id), [handback.id]);
+  assert.deepEqual(list.needsYou.find((item) => item.id === decide.id).choices, ['Monday', 'Friday']);
   assert.deepEqual(list.done, []);
 
   const read = { ids: [handback.id] };
@@ -212,11 +283,11 @@ test('the mailbox API lists items, marks them read behind the send gates, and an
     headers: { host: 'mac.tail0000.ts.net', cookie, 'content-type': 'application/json', origin: 'http://mac.tail0000.ts.net' }, body: JSON.stringify(read),
   });
   assert.equal(phoneRead.status, 200, phoneRead.text);
-  assert.deepEqual(JSON.parse(phoneRead.text), { ok: true, updated: 1, mailbox: { unread: 3, open: 4 } });
+  assert.deepEqual(JSON.parse(phoneRead.text), { ok: true, updated: 1, mailbox: { needsYou: 3, needsYouUnread: 3, updates: 1, unread: 3, open: 3 } });
 
   const closeRead = await post('/api/messages/read', { ids: [handback.id], close: true });
   assert.equal(closeRead.status, 200);
-  assert.deepEqual((await closeRead.json()).mailbox, { unread: 3, open: 3 });
+  assert.deepEqual((await closeRead.json()).mailbox, { needsYou: 3, needsYouUnread: 3, updates: 1, unread: 3, open: 3 });
 
   // Answer, approve, and decide use the Owner send path with replyTo.
   const sends = [
@@ -241,10 +312,11 @@ test('the mailbox API lists items, marks them read behind the send gates, and an
   assert.equal(wrongThread.status, 404);
 
   const after = await (await fetch(`${base}/api/mailbox`)).json();
-  assert.deepEqual(after.open, []);
-  assert.deepEqual(after.done.map((item) => item.id), [handback.id, answerItem.id, approve.id, decide.id]);
+  assert.deepEqual(after.needsYou, []);
+  assert.deepEqual(after.updates.map((item) => item.id), [handback.id]);
+  assert.deepEqual(after.done.map((item) => item.id), [answerItem.id, approve.id, decide.id]);
   assert.equal(after.done.find((item) => item.id === approve.id).answer.text, 'Approved. Keep it under budget.');
-  assert.deepEqual((await (await fetch(`${base}/api/state`)).json()).mailbox, { unread: 0, open: 0 });
+  assert.deepEqual((await (await fetch(`${base}/api/state`)).json()).mailbox, { needsYou: 0, needsYouUnread: 0, updates: 1, unread: 0, open: 0 });
 });
 
 test('the read-only preview lists the mailbox and refuses the read API', { timeout: 20000 }, async (t) => {
@@ -252,4 +324,66 @@ test('the read-only preview lists the mailbox and refuses the read API', { timeo
   assert.equal((await fetch(`${base}/api/mailbox`)).status, 200);
   const response = await fetch(`${base}/api/messages/read`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ids: ['m-x'] }) });
   assert.equal(response.status, 403);
+});
+
+test('the mailbox can dismiss one or many open action items without sending an Owner message', { timeout: 20000 }, async (t) => {
+  fs.rmSync(messages.messagesFile(), { force: true });
+  const one = appendMessage(reply('alpha', 'No longer needed.', { action: 'answer' }));
+  const two = appendMessage(reply('alpha', 'Close this choice.', { action: 'decide' }));
+  const three = appendMessage(reply('boss', 'Close this approval.', { action: 'approve' }));
+  const beforeCount = readMessages().length;
+  const { base } = await startServer(t);
+  const post = (body, headers = {}) => fetch(`${base}/api/messages/dismiss`, {
+    method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body),
+  });
+
+  const crossOrigin = await post({ ids: [one.id] }, { origin: 'http://evil.example' });
+  assert.equal(crossOrigin.status, 403);
+  const single = await post({ ids: [one.id] });
+  assert.equal(single.status, 200);
+  assert.deepEqual((await single.json()).dismissed, 1);
+  const bulk = await post({ ids: [two.id, three.id] });
+  assert.equal(bulk.status, 200);
+  assert.deepEqual((await bulk.json()).dismissed, 2);
+
+  const records = readMessages();
+  assert.equal(records.length, beforeCount, 'dismissal does not create an Owner send');
+  for (const item of [one, two, three]) {
+    const stored = records.find((record) => record.id === item.id);
+    assert.ok(stored.closedAt);
+    assert.equal(stored.readAt, stored.closedAt);
+    assert.equal(stored.dismissed, true);
+  }
+  const list = await (await fetch(`${base}/api/mailbox`)).json();
+  assert.deepEqual(list.done.map((item) => item.id).sort(), [one.id, two.id, three.id].sort());
+  assert.ok(list.done.every((item) => item.dismissed));
+  assert.deepEqual(list.mailbox, { needsYou: 0, needsYouUnread: 0, updates: 0, unread: 0, open: 0 });
+});
+
+test('message and mailbox APIs expose delivery, relay, and reply state', { timeout: 20000 }, async (t) => {
+  fs.rmSync(messages.messagesFile(), { force: true });
+  const sentAt = new Date(now).toISOString();
+  const repliedAt = new Date(now + 1000).toISOString();
+  const incoming = appendMessage(owner('alpha', 'A status update.', { status: 'sent', sentAt, attempts: 1 }));
+  const replyItem = appendMessage(reply('alpha', 'I am working on it.', { action: 'decide', replyTo: incoming.id }), { now: now + 1000 });
+  const relayed = appendMessage(owner('boss', 'Already relayed.', { status: 'relayed', relayedAt: new Date(now + 2000).toISOString(), relayedBy: 'boss' }), { now: now + 2000 });
+  const { base } = await startServer(t);
+
+  const thread = await (await fetch(`${base}/api/messages?thread=alpha`)).json();
+  const view = thread.find((record) => record.id === incoming.id);
+  assert.equal(view.status, 'sent');
+  assert.equal(view.sentAt, sentAt);
+  assert.equal(view.repliedAt, repliedAt);
+  const bossThread = await (await fetch(`${base}/api/messages?thread=boss`)).json();
+  const relayView = bossThread.find((record) => record.id === relayed.id);
+  assert.equal(relayView.status, 'relayed');
+  assert.equal(relayView.relayedAt, relayed.relayedAt);
+  assert.equal(relayView.relayedBy, 'boss');
+
+  const list = await (await fetch(`${base}/api/mailbox`)).json();
+  const item = list.needsYou.find((record) => record.id === replyItem.id);
+  assert.deepEqual(item.ownerMessage, {
+    id: incoming.id, at: incoming.at, text: incoming.text, status: 'sent', sentAt, error: null,
+    relayedAt: null, relayedBy: null, repliedAt,
+  });
 });

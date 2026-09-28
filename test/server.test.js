@@ -78,6 +78,7 @@ test('read-only preview allows reads and rejects all API methods that can change
     ['POST', '/api/tick'],
     ['POST', '/api/messages'],
     ['POST', '/api/messages/read'],
+    ['POST', '/api/messages/dismiss'],
     ['PATCH', '/api/unknown'],
     ['OPTIONS', '/api/state'],
   ];

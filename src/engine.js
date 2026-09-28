@@ -500,7 +500,7 @@ export class Engine extends EventEmitter {
       snap.denials = denialSummary(readDenials(DATA_DIR), now, { pendingBytes: this.memory.denialScan?.pendingBytes || 0 });
       fs.writeFileSync(BULLETIN_FILE, renderBulletin(snap, evaluation, this.cfg));
       if (this.act) await this.deliver(evaluation.alerts, herdr, now);
-      // Owner messages need a fresh pane list, so a stale snapshot never sends to a pane that is now working.
+      // Owner messages use a fresh pane list so delivery can act on current pane status.
       if (this.act && this.push && currentPaneList) {
         try { await this.deliverOwnerMessages(herdr, control.projects, now); }
         catch (e) { errors.push(`messages: ${e.message}`); }
