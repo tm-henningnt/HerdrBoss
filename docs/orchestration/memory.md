@@ -33,6 +33,7 @@ Owner queue (credentials, billing, and Owner-applied settings):
 
 ## Standing rules
 
+- The service serves `public/` from the `main` working tree at once, but the server code only after a restart. Restart the service right after a merge that changes `public/` together with the server API, before the full suite, or the dashboard breaks until the restart.
 - Report each merge that changes the kit to the Boss in one line, written for the project orchestrators. The Boss relays it. Source: Owner, through the Boss, 2026-09-27.
 - Run the Boss tasks in the order that the Boss gives. The published project status is the plan.
 - Serialize workers that change `src/handoff.js`.
