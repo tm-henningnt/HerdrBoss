@@ -6,7 +6,7 @@ const $nav = document.getElementById('primary-nav');
 const $roamgate = document.getElementById('roamgate-link');
 const $navMenu = document.getElementById('nav-menu');
 const $navMenuLabel = document.getElementById('nav-menu-label');
-const NAV_LABEL = { overview: 'Overview', projects: 'Projects', allocation: 'Allocation', organization: 'Organization', settings: 'Settings', agents: 'Agents', browsers: 'Browsers', analytics: 'Analytics', logs: 'Logs' };
+const NAV_LABEL = { overview: 'Overview', mailbox: 'Mailbox', projects: 'Projects', allocation: 'Allocation', organization: 'Organization', settings: 'Settings', agents: 'Agents', browsers: 'Browsers', analytics: 'Analytics', logs: 'Logs' };
 const settingsLink = document.createElement('a');
 settingsLink.href = '/settings';
 settingsLink.dataset.nav = 'settings';
@@ -994,13 +994,18 @@ function messageState(m) {
   return 'Queued until the agent is idle or done';
 }
 
+// A report is safe Markdown. Every other record is escaped text.
+function messageBody(m) {
+  return m.kind === 'report'
+    ? `<div class="msg-report">${m.title && /^#{1,6}\s+(.*)/.exec(String(m.text).trimStart())?.[1]?.trim() !== m.title ? `<h3>${esc(m.title)}</h3>` : ''}${markdownHtml(m.text)}</div>`
+    : `<p class="msg-text">${esc(m.text)}</p>`;
+}
+
 function messageItem(m) {
   const sender = MESSAGE_SENDER[m.from] || m.from;
   const kind = m.kind === 'nudge' ? 'Nudge' : m.kind === 'status-request' ? 'Status request' : m.kind === 'report' ? 'Report' : '';
   const state = messageState(m);
-  const body = m.kind === 'report'
-    ? `<div class="msg-report">${m.title && /^#{1,6}\s+(.*)/.exec(String(m.text).trimStart())?.[1]?.trim() !== m.title ? `<h3>${esc(m.title)}</h3>` : ''}${markdownHtml(m.text)}</div>`
-    : `<p class="msg-text">${esc(m.text)}</p>`;
+  const body = messageBody(m);
   return `<li class="msg msg-${esc(m.from)} msg-${esc(m.status || 'new')}"><div class="msg-head"><strong>${esc(sender)}</strong>${kind ? `<span class="pill">${esc(kind)}</span>` : ''}<time datetime="${esc(m.at)}">${esc(clock(m.at))}</time></div>${body}${state ? `<p class="msg-state">${esc(state)}</p>` : ''}</li>`;
 }
 
@@ -1085,6 +1090,184 @@ document.addEventListener('click', (e) => {
   const button = e.target.closest?.('[data-messages-thread]');
   if (button) openMessages(button.dataset.messagesThread, button.dataset.messagesName);
 });
+
+// ---------- Mailbox ----------
+// Every agent reply and Boss report to the Owner. An answer uses the Owner send path with replyTo, and the server closes the item.
+// A state render replaces #app, so the typed answers live in mailDrafts and go back into the fields after each render.
+
+const MAIL_ACTION_LABEL = { answer: 'Answer', approve: 'Approve', decide: 'Decide', read: 'Read' };
+const mailbox = { open: [], done: [], loaded: false, loading: false, error: '', notice: '', counts: '', busy: false, status: {} };
+const mailOpen = new Set();
+const mailReading = new Set();
+const mailDrafts = {};
+
+function mailProject(s, item) {
+  return item.thread === 'boss' ? '' : s.control?.projects?.[item.thread]?.label || item.thread;
+}
+
+function mailHeadline(item) {
+  if (item.kind === 'report') return item.title || 'Report';
+  return String(item.text || '').split('\n').find((line) => line.trim())?.trim() || 'Reply';
+}
+
+function mailItemLabel(s, item) {
+  const project = mailProject(s, item);
+  return `${MESSAGE_SENDER[item.from] || item.from}${project ? ` · ${project}` : ''}`;
+}
+
+function mailField(item, label, max, required) {
+  const id = esc(item.id);
+  return `<label for="mail-text-${id}">${label}</label><textarea id="mail-text-${id}" data-mail-draft="${id}" maxlength="${max}" rows="3"${required ? ' required' : ''}></textarea>`;
+}
+
+function mailActions(item) {
+  const id = esc(item.id);
+  const off = mailbox.busy ? ' disabled' : '';
+  const status = `<p class="mail-status" role="status">${esc(mailbox.status[item.id] || '')}</p>`;
+  if (item.action === 'read') return `<div class="mail-actions"><div class="mail-buttons"><button type="button" data-mail-done="${id}"${off}>Mark read</button></div>${status}</div>`;
+  if (item.action === 'approve') {
+    return `<form class="mail-actions" data-mail-form="${id}">${mailField(item, 'Note (optional)', 1700, false)}
+      <div class="mail-buttons"><button type="submit" data-mail-verdict="Approved."${off}>Approve</button><button type="submit" class="mail-decline" data-mail-verdict="Declined."${off}>Decline</button></div>${status}</form>`;
+  }
+  const choices = item.action === 'decide' && item.choices?.length
+    ? `<div class="mail-choices" role="group" aria-label="Choices">${item.choices.map((choice) => `<button type="button" data-mail-choice="${esc(choice)}" data-mail-item="${id}"${off}>${esc(choice)}</button>`).join('')}</div>`
+    : '';
+  const label = item.action === 'decide' ? (choices ? 'Other answer, or a note for the choice' : 'Decision') : 'Answer';
+  return `<form class="mail-actions" data-mail-form="${id}">${choices}${mailField(item, label, choices ? 1700 : 2000, !choices)}
+    <div class="mail-buttons"><button type="submit"${off}>Send</button></div>${status}</form>`;
+}
+
+function mailDoneLine(item) {
+  if (item.answer) {
+    const state = item.answer.status === 'sent' ? 'sent' : item.answer.status === 'failed' ? 'failed' : 'queued';
+    return `<div class="mail-answer"><span class="sub">Your answer · ${esc(state)} · ${esc(clock(item.answer.at))}</span><p class="msg-text">${esc(item.answer.text)}</p></div>`;
+  }
+  return `<p class="sub mail-answer">Marked read ${esc(clock(item.closedAt))}</p>`;
+}
+
+function mailItem(s, item, done) {
+  const unread = !item.readAt;
+  const open = mailOpen.has(item.id);
+  return `<li class="mail-item${unread ? ' unread' : ''}${done ? ' done' : ''}"><details data-mail-item="${esc(item.id)}"${open ? ' open' : ''}>
+    <summary><span class="mail-meta">${unread ? '<span class="mail-dot" aria-hidden="true"></span><span class="visually-hidden">Unread. </span>' : ''}<strong>${esc(mailItemLabel(s, item))}</strong><span class="pill ghost mail-action-${esc(item.action)}">${esc(MAIL_ACTION_LABEL[item.action] || 'Read')}</span><time datetime="${esc(item.at)}">${esc(clock(item.at))}</time></span>
+      <span class="mail-headline">${item.kind === 'report' ? '<span class="pill">Report</span> ' : ''}${esc(mailHeadline(item))}</span></summary>
+    <div class="mail-body">${messageBody(item)}${done ? mailDoneLine(item) : mailActions(item)}</div>
+  </details></li>`;
+}
+
+function mailboxView(s) {
+  if (!mailbox.loaded && !mailbox.loading) loadMailbox();
+  const list = (items, done, empty) => items.length ? `<ol class="mail-list">${items.map((item) => mailItem(s, item, done)).join('')}</ol>` : `<p class="mail-empty">${empty}</p>`;
+  return [
+    '<header class="page-intro"><div><h1>Mailbox</h1><p>Replies and reports for the Owner. Open an item to read it. Answer, approve, or decide in the item.</p></div></header>',
+    `<p class="mail-notice" role="status"${mailbox.error || mailbox.notice ? '' : ' hidden'}>${esc(mailbox.error || mailbox.notice)}</p>`,
+    `<section class="mail-section"><h2>Open <span class="sub">${mailbox.open.length}</span></h2>${mailbox.loaded ? list(mailbox.open, false, 'No open items.') : '<p class="mail-empty">Loading…</p>'}</section>`,
+    `<section class="mail-section"><h2>Done <span class="sub">${mailbox.done.length}</span></h2>${mailbox.loaded ? list(mailbox.done, true, 'No closed items.') : ''}</section>`,
+  ].join('');
+}
+
+async function loadMailbox() {
+  mailbox.loading = true;
+  try {
+    const response = await fetch('/api/mailbox');
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'The mailbox could not be read.');
+    Object.assign(mailbox, { open: result.open, done: result.done, loaded: true, error: '', counts: JSON.stringify(result.mailbox) });
+    if (state) state.mailbox = result.mailbox;
+  } catch (error) { mailbox.error = error.message; }
+  finally { mailbox.loading = false; }
+  render();
+}
+
+function mailFind(id) { return mailbox.open.find((item) => item.id === id) || mailbox.done.find((item) => item.id === id); }
+
+async function mailMarkRead(item, close = false) {
+  const result = await postJson('/api/messages/read', { ids: [item.id], ...(close ? { close: true } : {}) });
+  if (state) state.mailbox = result.mailbox;
+  return result;
+}
+
+// Opening an item marks it read. A refused read, for example in the read-only preview, leaves it unread.
+async function mailOpened(item) {
+  if (item.readAt || mailReading.has(item.id)) return;
+  mailReading.add(item.id);
+  try { await mailMarkRead(item); item.readAt = new Date().toISOString(); }
+  catch (error) { mailbox.status[item.id] = error.message; }
+  finally { mailReading.delete(item.id); }
+  render();
+}
+
+async function mailSend(item, text, question) {
+  if (mailbox.busy || !confirm(question)) return;
+  mailbox.busy = true; mailbox.status[item.id] = 'Sending…'; mailbox.notice = ''; render();
+  try {
+    await postJson('/api/messages', { thread: item.thread, kind: 'message', text, replyTo: item.id });
+    delete mailDrafts[item.id];
+    delete mailbox.status[item.id];
+    mailOpen.delete(item.id);
+    mailbox.notice = `Queued for ${mailItemLabel(state || {}, item)}. Herdr Boss sends it when the agent is idle or done. The item is in Done.`;
+  } catch (error) { mailbox.status[item.id] = error.message; }
+  finally { mailbox.busy = false; }
+  await loadMailbox();
+}
+
+async function mailDone(item) {
+  if (mailbox.busy) return;
+  mailbox.busy = true; render();
+  try { await mailMarkRead(item, true); mailOpen.delete(item.id); delete mailbox.status[item.id]; mailbox.notice = 'Marked read. The item is in Done.'; }
+  catch (error) { mailbox.status[item.id] = error.message; }
+  finally { mailbox.busy = false; }
+  await loadMailbox();
+}
+
+function mailRestoreDrafts(focusId) {
+  for (const field of $app.querySelectorAll('[data-mail-draft]')) field.value = mailDrafts[field.dataset.mailDraft] || '';
+  if (focusId) document.getElementById(focusId)?.focus();
+}
+
+document.addEventListener('input', (e) => {
+  const id = e.target.dataset?.mailDraft;
+  if (id) mailDrafts[id] = e.target.value;
+});
+document.addEventListener('toggle', (e) => {
+  const id = e.target.dataset?.mailItem;
+  if (!id || !e.target.matches('details')) return;
+  if (e.target.open) { mailOpen.add(id); const item = mailFind(id); if (item) mailOpened(item); }
+  else mailOpen.delete(id);
+}, true);
+document.addEventListener('submit', (e) => {
+  const id = e.target.dataset?.mailForm;
+  if (!id) return;
+  e.preventDefault();
+  const item = mailFind(id);
+  if (!item) return;
+  const note = (mailDrafts[id] || '').trim();
+  const verdict = e.submitter?.dataset.mailVerdict;
+  const who = mailItemLabel(state || {}, item);
+  if (verdict) mailSend(item, note ? `${verdict} ${note}` : verdict, `Send "${verdict}" to ${who}?${note ? `\n\n${note}` : ''}`);
+  else if (note) mailSend(item, note, `Send this answer to ${who}?\n\n${note}`);
+});
+document.addEventListener('click', (e) => {
+  const choice = e.target.closest?.('[data-mail-choice]');
+  if (choice) {
+    const item = mailFind(choice.dataset.mailItem);
+    const note = (mailDrafts[choice.dataset.mailItem] || '').trim();
+    const text = `Choice: ${choice.dataset.mailChoice}${note ? `\n\n${note}` : ''}`;
+    if (item) mailSend(item, text, `Send this choice to ${mailItemLabel(state || {}, item)}?\n\n${text}`);
+    return;
+  }
+  const done = e.target.closest?.('[data-mail-done]');
+  if (done) { const item = mailFind(done.dataset.mailDone); if (item) mailDone(item); }
+});
+
+function updateMailboxBadge(s) {
+  const unread = s?.mailbox?.unread || 0;
+  const text = unread > 99 ? '99+' : String(unread);
+  for (const badge of document.querySelectorAll('[data-mailbox-badge]')) { badge.hidden = !unread; badge.textContent = text; }
+  const link = $nav.querySelector('[data-nav="mailbox"]');
+  if (link) link.setAttribute('aria-label', unread ? `Mailbox, ${unread} unread` : 'Mailbox');
+  $navMenu.setAttribute('aria-label', unread ? `Menu, ${unread} unread in Mailbox` : 'Menu');
+}
 
 // ---------- Organization ----------
 // A read-only chart from existing state: Owner, Boss, project orchestrators, and their workers.
@@ -1593,6 +1776,14 @@ const HELP = {
     <h3>Kit revision</h3><p><b>Kit revision</b> shows the kit revision that the orchestrator loaded, from <code>kitRevision</code> in its status file, and the current kit revision. A warning shows when they are different. The orchestrator then runs <b>herdr-boss kit install</b> and re-reads <code>docs/orchestration/herdr-boss.md</code>.</p>
     <h3>Stale status</h3><p><b>Status stale: AGE</b> shows next to the updated time when the published status is older than 2 hours and, after that publish, a worker was working in the last 2 hours or new commits landed on the project repository. A paused project is never stale. The orchestrator gets one notice for each stale status. Publish the current plan and progress to clear the mark.</p>
     <p>The data comes from the project's status file. When a section is missing, the orchestrator has not published those fields.</p>`],
+  mailbox: ['Mailbox', `
+    <p>One inbox for every reply and report to the Owner. The Boss and the project orchestrators write them with <code>herdr-boss say</code>, and the Boss posts reports with <code>herdr-boss mail post</code>. Examples are the morning handback and the items queued for the Owner.</p>
+    <h3>Items</h3><p>Each item shows the sender, the project, the time, the required action, and the title of a report or the first line of a reply. <b>Open</b> lists the items that wait for you, newest first. <b>Done</b> lists the closed items with your answer.</p>
+    <p>Select an item to open it. The open item shows the full text. A report shows as formatted Markdown. A reply shows as plain text. Opening an item marks it read.</p>
+    <h3>Actions</h3><p><b>Answer</b>: type an answer and select <b>Send</b>. <b>Approve</b>: select <b>Approve</b> or <b>Decline</b>. A note is optional. <b>Decide</b>: select a choice, or type an answer and select <b>Send</b>. The choice buttons appear when the item has a Markdown list under a <b>Choices</b> heading. <b>Read</b>: select <b>Mark read</b>.</p>
+    <p>The page asks you to confirm each send. The answer goes to the thread of the sender, the same way as a message from the Organization page. Herdr Boss sends it when the agent is idle or done. Then the item moves to <b>Done</b>.</p>
+    <h3>Unread count</h3><p>The number next to <b>Mailbox</b> in the header shows the unread items. On a phone, it also shows on the menu button.</p>
+    <p>Herdr Boss keeps the items for 30 days. A read-only preview shows the items and refuses a read or a send.</p>`],
   allocation: ['Allocation', `
     <p>The resource policy for all projects. Changes are a draft until you select <b>Apply policy</b>.</p>
     <h3>Capacity and handover</h3><p>The global limit of working agents, the lending of unused slots, the quota reserve, and automatic handover with its activation level.</p>
@@ -1699,15 +1890,21 @@ function render(force = false) {
   const legacy = /^\/p\/([^/]+)\/?$/.exec(location.pathname);
   if (legacy) history.replaceState(null, '', `/projects/${legacy[1]}`);
   const m = /^\/projects\/([^/]+)\/?$/.exec(location.pathname);
-  const route = m || location.pathname === '/projects' ? 'projects' : ['allocation', 'settings', 'organization', 'agents', 'browsers', 'analytics', 'logs'].includes(location.pathname.slice(1)) ? location.pathname.slice(1) : 'overview';
-  const html = route === 'projects' ? projectsView(state, m ? decodeURIComponent(m[1]) : null) : route === 'allocation' ? allocationView(state) : route === 'settings' ? settingsView(state) : route === 'organization' ? organizationView(state) : route === 'agents' ? agentsView(state) : route === 'browsers' ? browsersView(state) : route === 'analytics' ? analyticsView(state) : route === 'logs' ? logsView(state) : overview(state);
+  const route = m || location.pathname === '/projects' ? 'projects' : ['mailbox', 'allocation', 'settings', 'organization', 'agents', 'browsers', 'analytics', 'logs'].includes(location.pathname.slice(1)) ? location.pathname.slice(1) : 'overview';
+  const html = route === 'projects' ? projectsView(state, m ? decodeURIComponent(m[1]) : null) : route === 'mailbox' ? mailboxView(state) : route === 'allocation' ? allocationView(state) : route === 'settings' ? settingsView(state) : route === 'organization' ? organizationView(state) : route === 'agents' ? agentsView(state) : route === 'browsers' ? browsersView(state) : route === 'analytics' ? analyticsView(state) : route === 'logs' ? logsView(state) : overview(state);
   $navMenuLabel.textContent = NAV_LABEL[route] || 'Menu';
   if (route !== 'projects') $crumbs.innerHTML = '';
   for (const a of $nav.querySelectorAll('a')) {
     if (a.dataset.nav === route) a.setAttribute('aria-current', 'page');
     else a.removeAttribute('aria-current');
   }
-  if (html !== lastRender) { $app.innerHTML = html; lastRender = html; }
+  updateMailboxBadge(state);
+  if (html !== lastRender) {
+    const focusId = document.activeElement?.dataset?.mailDraft ? document.activeElement.id : null;
+    $app.innerHTML = html;
+    lastRender = html;
+    if (route === 'mailbox') mailRestoreDrafts(focusId);
+  }
   if (!document.getElementById('help-panel').hidden) fillHelp();
   $updated.textContent = `updated ${ago(state.updatedAt)}`;
 }
@@ -2376,7 +2573,11 @@ addEventListener('popstate', () => { lastRender = ''; render(); if (location.pat
 
 function connect() {
   const es = new EventSource('/api/events');
-  es.addEventListener('state', (e) => { state = JSON.parse(e.data); render(); });
+  es.addEventListener('state', (e) => {
+    state = JSON.parse(e.data);
+    render();
+    if (location.pathname === '/mailbox' && mailbox.loaded && !mailbox.loading && JSON.stringify(state.mailbox) !== mailbox.counts) loadMailbox();
+  });
   es.onopen = () => $dot.classList.add('on');
   es.onerror = () => { $dot.classList.remove('on'); $updated.textContent = 'reconnecting…'; };
 }
@@ -2400,6 +2601,7 @@ async function refreshExtras() {
   }
   if (results[3].status === 'fulfilled') handoffRecords = results[3].value;
   if (results[4].status === 'fulfilled') denials = results[4].value;
+  if (location.pathname === '/mailbox' && !mailbox.loading) await loadMailbox();
   lastRender = '';
   render();
   if (location.pathname === '/browsers') for (const slug of browserPreviewOpen) if (!browserPreviewUrls[slug]) refreshBrowserPreview(slug, true);

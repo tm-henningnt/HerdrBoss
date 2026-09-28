@@ -17,7 +17,7 @@ import { listBrowserTabs, browserScreenshot, browserNavigate, browserNavigationS
 import { listHandoffs } from './handoff.js';
 import { roamgateAvailable, roamgateUrl } from './roamgate.js';
 import { createAccessControl, loginPage } from './access.js';
-import { appendMessage, listThread, readMessages, validThread, validateOwnerSend } from './messages.js';
+import { appendMessage, closeMailboxItem, listThread, mailboxCounts, mailboxView, markMailboxRead, readMessages, validThread, validateOwnerSend } from './messages.js';
 
 const PUBLIC = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const DOCS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'docs');
@@ -107,6 +107,17 @@ export function serve(cfg, { readOnlyPreview = false, createEngine = (config, op
   };
   engine.on('state', (s) => broadcast('state', s));
 
+  // The unread count must follow a read or an answer at once, not at the next tick.
+  const refreshMailbox = (records = readMessages(), push = false) => {
+    const mailbox = mailboxCounts(records);
+    if (engine.state) {
+      const changed = JSON.stringify(engine.state.mailbox) !== JSON.stringify(mailbox);
+      engine.state.mailbox = mailbox;
+      if (push && changed) broadcast('state', engine.state);
+    }
+    return mailbox;
+  };
+
   // Push project edits to clients without waiting for the next tick.
   const projectsWatcher = fs.watch(PROJECTS_DIR, () => {
     clearTimeout(debounce);
@@ -143,7 +154,10 @@ export function serve(cfg, { readOnlyPreview = false, createEngine = (config, op
         }
         return send(res, 401, { error: 'Access token required.' });
       }
-      if (p === '/api/state') return send(res, 200, engine.state || {});
+      if (p === '/api/state') {
+        if (engine.state) refreshMailbox();
+        return send(res, 200, engine.state || {});
+      }
       if (p === '/api/roamgate' && req.method === 'GET') return send(res, 200, { available: await roamgateAvailable(cfg) });
       if (p === '/roamgate' && req.method === 'GET') {
         if (!(await roamgateAvailable(cfg))) return send(res, 503, { error: 'Roamgate is unavailable.' });
@@ -255,8 +269,19 @@ export function serve(cfg, { readOnlyPreview = false, createEngine = (config, op
         const result = validateOwnerSend(await jsonBody(req), { knownThreads, records: readMessages(), now: Date.now() });
         if (result.error) return send(res, result.status, { error: result.error });
         const message = appendMessage(result.fields);
-        engine.log('message', `Queued Owner ${message.kind} ${message.id} for ${message.thread}`, { id: message.id, thread: message.thread, kind: message.kind });
-        return send(res, 200, { ok: true, message });
+        if (message.replyTo) closeMailboxItem(message.replyTo);
+        engine.log('message', `Queued Owner ${message.kind} ${message.id} for ${message.thread}`, { id: message.id, thread: message.thread, kind: message.kind, replyTo: message.replyTo });
+        const mailbox = refreshMailbox(readMessages(), true);
+        return send(res, 200, { ok: true, message, mailbox });
+      }
+      if (p === '/api/messages/read' && req.method === 'POST') {
+        const result = markMailboxRead(await jsonBody(req));
+        if (result.error) return send(res, result.status, { error: result.error });
+        return send(res, 200, { ...result, mailbox: refreshMailbox(readMessages(), true) });
+      }
+      if (p === '/api/mailbox' && req.method === 'GET') {
+        const records = readMessages();
+        return send(res, 200, { ...mailboxView(records), mailbox: refreshMailbox(records) });
       }
       if (p === '/api/handoffs' && req.method === 'GET') return send(res, 200, listHandoffs());
       if (p === '/api/handoffs/output' && req.method === 'GET') {

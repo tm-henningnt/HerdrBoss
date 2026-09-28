@@ -353,7 +353,7 @@ const engine = new Engine(cfg, {
 });
 for (const name of ['deliver', 'reap', 'sweepClones', 'scanDenials', 'notifyHandoffPeers', 'autoHandover', 'retirePreviousOrchestrators']) engine[name] = async () => {};
 await engine.tick();
-console.log(JSON.stringify({ calls, records: readMessages(), events: engine.events.filter((e) => e.type === 'message') }));
+console.log(JSON.stringify({ calls, records: readMessages(), events: engine.events.filter((e) => e.type === 'message'), mailbox: engine.state.mailbox }));
 `;
 
 test('an acting engine tick delivers a queued Owner message to an idle orch pane and not to a working one', (t) => {
@@ -365,6 +365,8 @@ test('an acting engine tick delivers a queued Owner message to an idle orch pane
   fs.writeFileSync(path.join(data, 'projects', 'beta.json'), JSON.stringify({ project: 'Beta', workspace: 'wC', updated: new Date().toISOString() }));
   const toAlpha = appendMessage(owner('alpha', 'Alpha, continue.'), { dir: data });
   const toBeta = appendMessage(owner('beta', 'Beta, wait.'), { dir: data });
+  appendMessage({ thread: 'alpha', from: 'orch', to: 'owner', kind: 'reply', text: 'Which date?', action: 'decide', status: 'new' }, { dir: data });
+  appendMessage({ thread: 'boss', from: 'boss', to: 'owner', kind: 'report', title: 'Handback', text: '# Handback', status: 'new', readAt: new Date().toISOString() }, { dir: data });
   const herdr = {
     workspaces: [{ id: 'wA', label: 'Alpha', status: 'idle' }, { id: 'wC', label: 'Beta', status: 'working' }],
     panes: [
@@ -384,4 +386,5 @@ test('an acting engine tick delivers a queued Owner message to an idle orch pane
   assert.equal(output.events.length, 1);
   assert.equal(output.events[0].id, toAlpha.id);
   assert.ok(!JSON.stringify(output.events).includes('Alpha, continue.'));
+  assert.deepEqual(output.mailbox, { unread: 1, open: 2 }, 'the state holds the mailbox counts');
 });

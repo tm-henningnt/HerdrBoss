@@ -320,6 +320,7 @@ herdr agent prompt <orch-pane> "WORKER REPORT <name>: <done|blocked|stopped>. Re
 - Act on a `[herdr-boss]` notice that concerns your current work.
 - A prompt that starts with `[owner]` is an Owner message from the dashboard. It ends with a reply command that holds the message ID.
 - Reply to an Owner message with `herdr-boss say --reply-to <id> "<answer>"`. Keep the answer short and free of secrets.
+- Each `herdr-boss say` reply is an item in the Owner mailbox. Set `--action decide` or `--action approve` only when you need an Owner answer. The escalation rules make that rare. Leave out `--action` for a plain report.
 - Record an Owner decision from an Owner message in `docs/orchestration/memory.md`, with its full text.
 - Do not reply to the notice.
 - Act on a `Kit updated` notice: run `herdr-boss kit install`, then re-read `docs/orchestration/herdr-boss.md`. Set `kitRevision` in the project status to its new revision. Run `herdr-boss check agents`.
