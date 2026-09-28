@@ -172,7 +172,10 @@ test('releaseBrowser refuses while the project Chrome runs', async () => {
   assert.equal(browserLeases().length, 1);
 });
 
-test('herdr-boss browser release SLUG removes the lease', () => {
+// The CLI reads the process list with ps. A Codex sandbox refuses it, so this test runs only where ps works.
+const psWorks = (() => { const r = spawnSync('ps', ['-o', 'pid=', '-p', String(process.pid)], { encoding: 'utf8' }); return !r.error && r.status === 0; })();
+
+test('herdr-boss browser release SLUG removes the lease', { skip: psWorks ? false : 'the process list is not readable here (for example in a Codex sandbox)' }, () => {
   const alpha = record('alpha', 9243);
   reset({ alpha });
   leases.migrateProjectBrowserLeases({ alpha }, { dataDir, now: NOW });
