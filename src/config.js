@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 
 const DEFAULT_DATA_DIR = path.resolve(path.join(os.homedir(), '.herdr-boss'));
 export const LIVE_DATA_DIR = path.resolve(process.env.HERDR_BOSS_LIVE_DIR || DEFAULT_DATA_DIR);
@@ -231,6 +232,107 @@ export function serviceSettingsView(cfg) {
       source: isConfigured ? 'config' : 'default',
     };
   });
+}
+
+const SERVICE_SETTING_RANGES = new Map([
+  ['machine.memFreeWarnPercent', [1, 50]],
+  ['quota.warnPercent', [50, 99]],
+  ['quota.criticalPercent', [51, 100]],
+  ['staleStatusMinutes', [5, 1440]],
+  ['workers.staleIdleMinutes', [5, 1440]],
+  ['browsers.staleOwnedMinutes', [5, 1440]],
+  ['browsers.orphanDaemonMinAgeSeconds', [60, 86400]],
+]);
+const SERVICE_SETTING_BOOLEANS = new Set([
+  'browsers.reapOrphanDaemons',
+  'browsers.sweepCodeSignClones',
+]);
+
+function isRecord(value) {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function setServiceSetting(target, setting, value) {
+  const parts = setting.split('.');
+  let current = target;
+  for (const part of parts.slice(0, -1)) {
+    if (!isRecord(current[part])) current[part] = {};
+    current = current[part];
+  }
+  current[parts.at(-1)] = value;
+}
+
+function validateServiceSettingValues(changes) {
+  if (!isRecord(changes)) throw new Error('changes must be an object of setting names and values.');
+  const entries = Object.entries(changes);
+  if (!entries.length) throw new Error('At least one service setting is required.');
+  for (const [setting, value] of entries) {
+    const range = SERVICE_SETTING_RANGES.get(setting);
+    if (range) {
+      if (!Number.isSafeInteger(value) || value < range[0] || value > range[1]) {
+        throw new Error(`${setting} must be a whole number from ${range[0]} to ${range[1]}.`);
+      }
+    } else if (SERVICE_SETTING_BOOLEANS.has(setting)) {
+      if (typeof value !== 'boolean') throw new Error(`${setting} must be true or false.`);
+    } else {
+      throw new Error(`Service setting ${setting} cannot be changed.`);
+    }
+  }
+  return Object.fromEntries(entries);
+}
+
+export function validateServiceSettings(changes, currentConfig = {}) {
+  const normalized = validateServiceSettingValues(changes);
+  const effective = merge(DEFAULTS, currentConfig);
+  const warnPercent = Object.hasOwn(normalized, 'quota.warnPercent') ? normalized['quota.warnPercent'] : effective.quota?.warnPercent ?? DEFAULTS.quota.warnPercent;
+  const criticalPercent = Object.hasOwn(normalized, 'quota.criticalPercent') ? normalized['quota.criticalPercent'] : effective.quota?.criticalPercent ?? DEFAULTS.quota.criticalPercent;
+  if (warnPercent >= criticalPercent) throw new Error('quota.warnPercent must be below quota.criticalPercent.');
+  return normalized;
+}
+
+// Apply validated values to the live config and its source map so the state view changes at once.
+export function applyServiceSettings(cfg, changes) {
+  const normalized = validateServiceSettingValues(changes);
+  for (const [setting, value] of Object.entries(normalized)) {
+    setServiceSetting(cfg, setting, value);
+    const source = cfg[CONFIG_SOURCE];
+    if (isRecord(source)) setServiceSetting(source, setting, value);
+  }
+  return normalized;
+}
+
+// Write only the selected values. Rename a temporary file in the same directory to replace config.json atomically.
+export function writeServiceSettings(changes, { dataDir = DATA_DIR } = {}) {
+  const directory = path.resolve(dataDir);
+  const file = path.join(directory, 'config.json');
+  let current = {};
+  let mode = 0o600;
+  if (fs.existsSync(file)) {
+    mode = fs.statSync(file).mode & 0o7777;
+    try { current = JSON.parse(fs.readFileSync(file, 'utf8')); }
+    catch { throw new Error('config.json must contain valid JSON before settings can be saved.'); }
+    if (!isRecord(current)) throw new Error('config.json must contain a JSON object before settings can be saved.');
+  }
+  const normalized = validateServiceSettings(changes, current);
+  const updated = structuredClone(current);
+  for (const [setting, value] of Object.entries(normalized)) setServiceSetting(updated, setting, value);
+
+  const temporary = path.join(directory, `.config.json.${process.pid}.${randomUUID()}.tmp`);
+  let fd;
+  try {
+    fs.mkdirSync(directory, { recursive: true });
+    fd = fs.openSync(temporary, 'wx', mode);
+    fs.writeFileSync(fd, `${JSON.stringify(updated, null, 2)}\n`);
+    fs.fchmodSync(fd, mode);
+    fs.closeSync(fd);
+    fd = undefined;
+    fs.renameSync(temporary, file);
+  } catch (error) {
+    if (fd !== undefined) { try { fs.closeSync(fd); } catch {} }
+    try { fs.unlinkSync(temporary); } catch {}
+    throw sandboxWriteError(error, directory);
+  }
+  return normalized;
 }
 
 // A server that listens on all interfaces is not reachable at 0.0.0.0, so links use the loopback address.

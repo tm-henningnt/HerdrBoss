@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { Engine } from './engine.js';
 import { ownerReleaseLease } from './leases.js';
-import { PROJECTS_DIR, DATA_DIR, DEFAULT_SESSION_FILE, PRIVATE_ACCESS_DIR, assertPreviewDataDir } from './config.js';
+import { PROJECTS_DIR, DATA_DIR, DEFAULT_SESSION_FILE, PRIVATE_ACCESS_DIR, assertPreviewDataDir, writeServiceSettings, applyServiceSettings, serviceSettingsView } from './config.js';
 import { writeProject, listProjects } from './projects.js';
 import { loadModels } from './kit/config.js';
 import { loadPolicy, savePolicy } from './control.js';
@@ -181,6 +181,29 @@ export function serve(cfg, { readOnlyPreview = false, createEngine = (config, op
         return res.end();
       }
       if (p === '/api/models' && req.method === 'GET') return send(res, 200, loadModels().kinds);
+      if (p === '/api/settings' && req.method === 'PUT') {
+        let body;
+        try { body = await jsonBody(req); }
+        catch (error) { return send(res, 400, { ok: false, error: error.message }); }
+        if (!body || typeof body !== 'object' || Array.isArray(body) || !Object.hasOwn(body, 'changes')) {
+          return send(res, 400, { ok: false, error: 'changes must be an object of setting names and values.' });
+        }
+        let changes;
+        try { changes = writeServiceSettings(body.changes, { dataDir: DATA_DIR }); }
+        catch (error) { return send(res, error.code === 'DATA_NOT_WRITABLE' ? 500 : 400, { ok: false, error: error.message }); }
+        applyServiceSettings(cfg, changes);
+        if (engine.cfg !== cfg) applyServiceSettings(engine.cfg, changes);
+        const settings = serviceSettingsView(engine.cfg);
+        if (engine.state) {
+          engine.state.serviceSettings = settings;
+          engine.state.quotaThresholds = {
+            warnPercent: engine.cfg.quota?.warnPercent ?? 90,
+            criticalPercent: engine.cfg.quota?.criticalPercent ?? 98,
+          };
+          broadcast('state', engine.state);
+        }
+        return send(res, 200, { ok: true, settings });
+      }
       if (p === '/api/policy' && req.method === 'GET') return send(res, 200, loadPolicy());
       if (p === '/api/policy' && req.method === 'PUT') {
         const errors = savePolicy(await jsonBody(req), loadModels(), { quotas: engine.state?.quotas || [], now: Date.now() });

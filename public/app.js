@@ -314,6 +314,7 @@ function controlBlock(s) {
 // A model string holds letters, digits, dots, underscores, slashes, and hyphens. The server applies the same rule.
 const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/;
 const settingsMessages = {};
+const serviceSettingsMessages = {};
 // The kit catalog of a harness plus the local extra models in the policy draft.
 function kindModels(kind, d = policyDraft) {
   const base = models[kind]?.allowedModels || [];
@@ -444,14 +445,32 @@ function settingsView(s) {
     : '<p class="setting-help">No measured quota window yet. A goal field appears after the next quota reading.</p>';
   const quotaPanel = `<section class="panel"><h2>Provider quotas</h2><p class="setting-help">Quota warning at ${esc(warnPercent)}%, critical at ${esc(criticalPercent)}%. Set them in config.json.</p><h3>Quota mode</h3>${providerRows}<p class="setting-help">Ignore quota turns off pacing and pace warnings for worker dispatch. Handover risk and automatic handover still use live quota data.</p><h3 class="quota-goals">Pacing goals</h3><p class="setting-help">The most percent of a window to use by its end. Blank means 100%. A one-off end uses your local time. A recurring end is a whole number of hours before reset.</p>${goalRows}</section>`;
   const settingsGroups = ['Machine', 'Quota', 'Status', 'Workers', 'Browsers', 'Service'];
+  const serviceSettingRanges = {
+    'machine.memFreeWarnPercent': [1, 50],
+    'quota.warnPercent': [50, 99],
+    'quota.criticalPercent': [51, 100],
+    staleStatusMinutes: [5, 1440],
+    'workers.staleIdleMinutes': [5, 1440],
+    'browsers.staleOwnedMinutes': [5, 1440],
+    'browsers.orphanDaemonMinAgeSeconds': [60, 86400],
+  };
+  const serviceSettingBooleans = new Set(['browsers.reapOrphanDaemons', 'browsers.sweepCodeSignClones']);
   const serviceRows = settingsGroups.map((group) => {
     const groupRows = (s.serviceSettings || []).filter((item) => item.group === group).map((item) => {
       const value = item.value !== null && typeof item.value === 'object' ? JSON.stringify(item.value) : String(item.value);
-      return `<tr><th scope="row"><code>${esc(item.setting)}</code></th><td><code>${esc(value)}</code></td><td>${item.source === 'config' ? 'from config.json' : 'default'}</td></tr>`;
+      const range = serviceSettingRanges[item.setting];
+      const input = serviceSettingBooleans.has(item.setting)
+        ? `<input type="checkbox" data-service-setting="${esc(item.setting)}" data-service-group="${esc(group)}" aria-label="${esc(item.setting)}" ${item.value ? 'checked' : ''}>`
+        : range
+          ? `<input type="number" min="${range[0]}" max="${range[1]}" step="1" value="${esc(value)}" data-service-setting="${esc(item.setting)}" data-service-group="${esc(group)}" aria-label="${esc(item.setting)}">`
+          : `<code>${esc(value)}</code>`;
+      return `<tr><th scope="row"><code>${esc(item.setting)}</code></th><td>${input}</td><td>${item.source === 'config' ? 'from config.json' : 'default'}</td></tr>`;
     }).join('');
-    return `<tr class="service-settings-group"><th colspan="3" scope="colgroup">${group}</th></tr>${groupRows}`;
+    const canSave = (s.serviceSettings || []).some((item) => item.group === group && (serviceSettingRanges[item.setting] || serviceSettingBooleans.has(item.setting)));
+    const controls = canSave ? `<span class="service-settings-group-actions"><span role="status" aria-live="polite" data-service-settings-status="${esc(group)}">${esc(serviceSettingsMessages[group] || '')}</span><button type="button" data-save-service-settings="${esc(group)}">Save</button></span>` : '';
+    return `<tr class="service-settings-group"><th colspan="3" scope="colgroup"><span>${group}</span>${controls}</th></tr>${groupRows}`;
   }).join('');
-  const serviceSettings = `<section class="panel service-settings-panel"><h2>Service settings</h2><div class="service-settings-scroll"><table class="service-settings-table"><thead><tr><th scope="col">Setting</th><th scope="col">Value</th><th scope="col">Source</th></tr></thead><tbody>${serviceRows}</tbody></table></div><p class="service-settings-note">Change these values in config.json, then restart the service.</p></section>`;
+  const serviceSettings = `<section id="service-settings" class="panel service-settings-panel"><h2>Service settings</h2><div class="service-settings-scroll"><table class="service-settings-table"><thead><tr><th scope="col">Setting</th><th scope="col">Value</th><th scope="col">Source</th></tr></thead><tbody>${serviceRows}</tbody></table></div><p class="service-settings-note">Rows without inputs are read-only. Change in config.json and restart.</p></section>`;
   const settingsPanels = `${quotaPanel}${machineSettings}${serviceSettings}`;
   return `<header class="page-intro"><div><h1>Settings</h1><p>Assign models and provider routes in each harness. Set provider quotas and machine limits below.</p></div></header><section id="settings-plane" class="control-shell"><section class="panel"><h2>Harnesses</h2><p class="setting-help harness-help">Clear a model box to stop that harness from using it. The same model in another harness keeps its own box and provider.</p>${ignoredCount ? `<p class="setting-help harness-help" role="note" style="color: var(--warn)">${ignoredCount} legacy provider route${ignoredCount === 1 ? ' is' : 's are'} not compatible with ${ignoredCount === 1 ? 'its harness' : 'their harnesses'}. Herdr Boss treats ${ignoredCount === 1 ? 'it' : 'them'} as Unmetered. Choose a provider in each marked row before you apply the policy.</p>` : ''}<div class="harness-grid">${harnesses}</div></section><div class="settings-grid">${settingsPanels}</div><div class="control-actions ${policyDirty ? 'pending' : ''}"><span data-policy-status role="status" aria-live="polite">${esc(saveMessage || (policyDirty ? 'Unsaved changes · Apply policy to keep them' : 'Policy saved'))}</span><button id="save-policy" ${policyDirty ? '' : 'disabled'}>Apply policy</button></div></section>`;
 }
@@ -2612,7 +2631,7 @@ const HELP = {
     <p>Select <b>Release</b> to give a lease back. The page asks you to confirm, and names the pool, the item, the holder project, and the pane or worker. The release removes the lease only while its holder project is still the project that the page shows. Otherwise the page reports that the lease changed, and you reload the page. A release never stops a process. For a project browser that runs, the button is disabled until you close the browser on the Browsers page.</p>`],
   settings: ['Settings', `
     <p>Each harness section holds the models and provider routes of that harness. Provider quotas and machine limits are below the harnesses.</p>
-    <h3>Service settings</h3><p>This read-only table shows the values that the service uses. Each row shows whether the value comes from <code>config.json</code> or a default. Rows are grouped under Machine, Quota, Status, Workers, Browsers, and Service. Change these values in <code>config.json</code>, then restart the service.</p>
+    <h3>Service settings</h3><p>The table shows the values that the service uses. Each row shows whether the value comes from <code>config.json</code> or a default. Rows with inputs can be changed in the dashboard. Change the values in a group, then select <b>Save</b>. Herdr Boss applies saved values at once. Keep the quota warning below the critical value. Rows without inputs are read-only. Change in <code>config.json</code> and restart.</p>
     <h3>Harnesses</h3><p>Clear <b>Available</b> to stop all workers from using a harness. The preferred model is the model that worker start and handover use when no model is given. An empty choice uses the harness default.</p>
     <p>Each model row has a box and a provider. Clear the box to stop that harness from using the model. Choose a provider to count the model against that provider quota. Choose <b>Unmetered</b> when no quota applies.</p>
     <p>A Codex row offers only <b>Codex</b> and <b>Unmetered</b>. A Claude row offers only <b>Claude</b> and <b>Unmetered</b>. Opencode and Pi rows offer <b>Claude</b>, <b>Codex</b>, <b>OpenCode Go</b>, and <b>Unmetered</b>. </p>
@@ -3100,6 +3119,41 @@ function settingsRerender(kind, focus) {
   if (status) status.textContent = settingsMessages[kind] || '';
 }
 
+async function saveServiceSettings(group, button) {
+  const inputs = [...document.querySelectorAll(`[data-service-group="${CSS.escape(group)}"][data-service-setting]`)];
+  const changes = Object.fromEntries(inputs.map((input) => [
+    input.dataset.serviceSetting,
+    input.type === 'checkbox' ? input.checked : Number(input.value),
+  ]));
+  const status = document.querySelector(`[data-service-settings-status="${CSS.escape(group)}"]`);
+  button.disabled = true;
+  if (status) status.textContent = '';
+  try {
+    const response = await fetch('/api/settings', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ changes }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Service settings could not be saved.');
+    serviceSettingsMessages[group] = 'Saved.';
+    if (state) {
+      state.serviceSettings = result.settings;
+      state.quotaThresholds = {
+        warnPercent: result.settings.find(({ setting }) => setting === 'quota.warnPercent')?.value ?? state.quotaThresholds?.warnPercent ?? 90,
+        criticalPercent: result.settings.find(({ setting }) => setting === 'quota.criticalPercent')?.value ?? state.quotaThresholds?.criticalPercent ?? 98,
+      };
+      lastRender = '';
+      render();
+    } else if (status) status.textContent = 'Saved.';
+  } catch (error) {
+    serviceSettingsMessages[group] = error.message;
+    if (status) status.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+
 // A new model joins only this harness. It starts enabled and unmetered.
 function addExtraModel(kind, model) {
   const d = policyDraft;
@@ -3369,6 +3423,11 @@ document.addEventListener('click', (e) => {
 });
 
 document.addEventListener('click', async (e) => {
+  const serviceSave = e.target.closest?.('[data-save-service-settings]');
+  if (serviceSave) {
+    await saveServiceSettings(serviceSave.dataset.saveServiceSettings, serviceSave);
+    return;
+  }
   if (e.target.dataset.machineGuardDraft) {
     if (!policyDraft) return;
     policyDraft.machine ||= {};
