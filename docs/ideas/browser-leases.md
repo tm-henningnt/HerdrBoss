@@ -1,6 +1,6 @@
 # Plan: project browsers on the resource lease pools
 
-This is a plan. Nothing in it is built. Do not migrate before the Owner or the Boss approves the plan.
+Built on branch v39browserlease; waits for the Owner's merge.
 
 ## Current state
 

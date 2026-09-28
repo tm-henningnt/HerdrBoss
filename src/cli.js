@@ -28,6 +28,7 @@ const USAGE = `herdr-boss <command>
   browser request SLUG [--reserve] [--headless|--visible]  Reserve or launch a persistent project browser.
   browser size SLUG WIDTH HEIGHT  Save window size for the next browser launch.
   browser close SLUG      Gracefully close a managed browser, keeping its profile.
+  browser release SLUG    Give back the port lease of a closed project browser.
   browser restart SLUG --headless|--visible [--no-restore]  Switch mode and restore the current page.
   browser list          List registered browser sessions.
   browser tabs SLUG      List the pages, their visibility, and whether an agent is attached.
@@ -185,7 +186,7 @@ async function main() {
     }
     case 'browser': {
       const { parseScreenshotOptions, saveBrowserScreenshot } = await import('./browser-output.js');
-      const { requestBrowser, listBrowserSessions, browserStatus, setBrowserWindowSize, closeBrowser, restartBrowser } = await import('./browser-pool.js');
+      const { requestBrowser, listBrowserSessions, browserStatus, setBrowserWindowSize, closeBrowser, restartBrowser, releaseBrowser } = await import('./browser-pool.js');
       const { listBrowserTabs, browserScreenshot, browserNavigate, browserClick, browserInsertText, browserKey, browserNewTab, browserCloseTab } = await import('./browser-preview.js');
       const tabOption = (rest) => {
         if (!rest.length) return null;
@@ -224,6 +225,10 @@ async function main() {
       else if (args[0] === 'list' && args.length === 1) console.log(JSON.stringify(await Promise.all(Object.values(listBrowserSessions()).map(browserStatus)), null, 2));
       else if (args[0] === 'size' && args.length === 4) console.log(JSON.stringify(setBrowserWindowSize(args[1], Number(args[2]), Number(args[3])), null, 2));
       else if (args[0] === 'close' && args.length === 2) console.log(JSON.stringify(await closeBrowser(args[1]), null, 2));
+      else if (args[0] === 'release' && args.length === 2) {
+        const released = await releaseBrowser(args[1]);
+        console.log(`Released project browser port ${released.port} of ${released.project}.`);
+      }
       else if (args[0] === 'restart' && [3, 4].includes(args.length) && ['--headless', '--visible'].includes(args[2]) && (args.length === 3 || args[3] === '--no-restore')) console.log(JSON.stringify(await restartBrowser(args[1], args[2] === '--headless', { restorePage: !args.includes('--no-restore') }), null, 2));
       else if (args[0] === 'tabs' && args.length === 2) {
         const tabs = await listBrowserTabs(args[1]);
@@ -258,7 +263,7 @@ async function main() {
       }
       else if (args[0] === 'request' && args[1] && args.includes('--headless') && args.includes('--visible')) throw new Error('Choose either --headless or --visible.');
       else if (args[0] === 'request' && args[1] && args.slice(2).every((flag) => ['--reserve', '--headless', '--visible'].includes(flag))) console.log(JSON.stringify(await requestBrowser(args[1], { launch: !args.includes('--reserve'), headless: args.includes('--headless') ? true : args.includes('--visible') ? false : null }), null, 2));
-      else throw new Error('Usage: browser request|size|close|restart|list|tabs|tab new|tab close|screenshot|navigate|click|text|key|sweep-clones. Run herdr-boss without arguments for details.');
+      else throw new Error('Usage: browser request|size|close|release|restart|list|tabs|tab new|tab close|screenshot|navigate|click|text|key|sweep-clones. Run herdr-boss without arguments for details.');
       break;
     }
     case 'handoff': {
@@ -277,13 +282,14 @@ async function main() {
       break;
     }
     case 'lease': {
-      const { acquireLease, releaseLease, listLeases } = await import('./leases.js');
-      if (cfg.resourcePoolErrors.length) throw new Error(`The resourcePools setting in ${path.join(DATA_DIR, 'config.json')} is invalid:\n- ${cfg.resourcePoolErrors.join('\n- ')}`);
+      const { acquireLease, releaseLease, listLeases, leasePools } = await import('./leases.js');
+      const { pools, errors: poolErrors } = leasePools(cfg);
+      if (poolErrors.length) throw new Error(`The resourcePools setting in ${path.join(DATA_DIR, 'config.json')} is invalid:\n- ${poolErrors.join('\n- ')}`);
       const [action, ...rest] = args;
       const usage = 'Usage: lease acquire POOL [--for SLUG|WORKER] [--prefer ITEM] [--ttl MINUTES] | lease release POOL ITEM | lease list [POOL]';
       if (action === 'list') {
         if (rest.length > 1) throw new Error(usage);
-        listLeases({ pools: cfg.resourcePools, pool: rest[0] ?? null });
+        listLeases({ pools, pool: rest[0] ?? null });
         break;
       }
       if (!['acquire', 'release'].includes(action)) throw new Error(usage);
@@ -291,7 +297,7 @@ async function main() {
       let project = null;
       try { project = loadProjectConfig(); } catch {}
       const log = (item) => console.error(`Reclaimed lease ${item.pool} ${item.item} of ${item.project}: ${item.reason}.`);
-      const common = { pools: cfg.resourcePools, config: project, herdr: createHerdrRunner(), log };
+      const common = { pools, config: project, herdr: createHerdrRunner(), log };
       if (action === 'release') {
         if (rest.length !== 2) throw new Error(usage);
         releaseLease(rest[0], rest[1], common);

@@ -13,6 +13,32 @@ const PROJECT_SLUG = /^[a-z0-9][a-z0-9-]*$/;
 // A command waits this long for a busy mutation lock. The engine does not wait; it tries again on the next tick.
 const COMMAND_LOCK_WAIT_MS = 5000;
 const TCP_MISSES_TO_RECLAIM = 2;
+const CDP_MISSES_TO_RECLAIM = 2;
+// Port 9222 is the protected legacy browser. No pool ever leases it.
+export const PROTECTED_PORT = '9222';
+export const PROJECT_BROWSER_POOL_NAME = 'project-browsers';
+const PROJECT_BROWSER_LOW = 9223;
+const PROJECT_BROWSER_HIGH = 9299;
+
+// The built-in pool of project browser ports. A project holds its port across sessions: the lease has no pane, no worker, and no TTL.
+// Only an explicit release or the cdp check reclaims it.
+export function projectBrowserPool() {
+  const items = [];
+  for (let port = PROJECT_BROWSER_LOW; port <= PROJECT_BROWSER_HIGH; port += 1) items.push(String(port));
+  return { name: PROJECT_BROWSER_POOL_NAME, items, split: {}, env: null, ttlMinutes: null, check: 'cdp', graceMinutes: 0, holder: 'project', builtIn: true };
+}
+
+// Merge the config pools with the built-in pools. A config pool with a built-in name is an error, and then no config pool is used,
+// as for every other pool config error. The built-in pool stays.
+export function leasePools(cfg = {}) {
+  const errors = [...(cfg.resourcePoolErrors ?? [])];
+  let configPools = cfg.resourcePools ?? [];
+  if (configPools.some((pool) => pool.name === PROJECT_BROWSER_POOL_NAME)) {
+    errors.push(`resourcePools has a pool named ${PROJECT_BROWSER_POOL_NAME}. ${PROJECT_BROWSER_POOL_NAME} is a built-in pool. Rename or remove the config pool.`);
+  }
+  if (errors.length) configPools = [];
+  return { pools: [...configPools, projectBrowserPool()], errors };
+}
 
 function fail(message, exitCode = 1) {
   const error = new Error(message);
@@ -80,14 +106,25 @@ function readRunFile(file) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
 }
 
-// Decide the reclaim reason for one lease, or null to keep it. A TCP miss changes lease.tcpMisses.
-function reclaimReason(lease, { pool, panes, now, probeTcp }) {
+// Decide the reclaim reason for one lease, or null to keep it. A TCP miss changes lease.tcpMisses, and a missing browser process changes lease.cdpMisses.
+// browserProcess(lease) returns true or false when the process table is known, and null when it is not.
+function reclaimReason(lease, { pool, panes, now, probeTcp, browserProcess }) {
+  if (pool?.check === 'cdp') {
+    // A hung Chrome still has its process. Only a missing process counts, so a browser that does not respond keeps its lease.
+    const present = typeof browserProcess === 'function' ? browserProcess(lease) : null;
+    if (present === true) delete lease.cdpMisses;
+    else if (present === false) {
+      lease.cdpMisses = (lease.cdpMisses ?? 0) + 1;
+      if (lease.cdpMisses >= CDP_MISSES_TO_RECLAIM) return `no Chrome process has port ${lease.item} and the ${lease.project} profile`;
+    }
+    return null;
+  }
   if (lease.pane && panes && !panes.has(lease.pane)) return `pane ${lease.pane} is gone`;
   if (lease.worker && lease.runFile) {
     const run = readRunFile(lease.runFile);
     if (run?.name === lease.worker && run.finishedAt) return `worker ${lease.worker} finished`;
   }
-  if (Date.parse(lease.expiresAt) <= now) return 'lease expired';
+  if (lease.expiresAt != null && Date.parse(lease.expiresAt) <= now) return 'lease expired';
   if (pool?.check === 'tcp' && now - Date.parse(lease.at) >= pool.graceMinutes * 60000) {
     if (probeTcp(lease.item)) delete lease.tcpMisses;
     else {
@@ -98,11 +135,11 @@ function reclaimReason(lease, { pool, panes, now, probeTcp }) {
   return null;
 }
 
-function reclaimInStore(store, { pools, panes, now, probeTcp }) {
+function reclaimInStore(store, { pools, panes, now, probeTcp, browserProcess }) {
   const reclaimed = [];
   store.leases = store.leases.filter((lease) => {
     const pool = pools.find((candidate) => candidate.name === lease.pool);
-    const reason = reclaimReason(lease, { pool, panes, now, probeTcp });
+    const reason = reclaimReason(lease, { pool, panes, now, probeTcp, browserProcess });
     if (!reason) return true;
     reclaimed.push({ pool: lease.pool, item: lease.item, project: lease.project, worker: lease.worker ?? null, reason });
     return false;
@@ -111,9 +148,10 @@ function reclaimInStore(store, { pools, panes, now, probeTcp }) {
 }
 
 // Reclaim leases whose holder is gone. `panes` is the set of pane IDs from a successful pane list, or null.
-export function reclaimLeases({ pools, dataDir = DATA_DIR, panes = null, now = Date.now(), probeTcp = tcpListening, log = () => {}, waitMs = COMMAND_LOCK_WAIT_MS } = {}) {
+// `browserProcess` checks the leases of a cdp pool. Without it, a cdp lease is not checked.
+export function reclaimLeases({ pools, dataDir = DATA_DIR, panes = null, now = Date.now(), probeTcp = tcpListening, browserProcess = null, log = () => {}, waitMs = COMMAND_LOCK_WAIT_MS } = {}) {
   if (!fs.existsSync(path.join(dataDir, LEASES_FILE))) return { reclaimed: [] };
-  const reclaimed = changeLeases(dataDir, (store) => reclaimInStore(store, { pools, panes, now: timeValue(now), probeTcp }), waitMs);
+  const reclaimed = changeLeases(dataDir, (store) => reclaimInStore(store, { pools, panes, now: timeValue(now), probeTcp, browserProcess }), waitMs);
   for (const item of reclaimed) log(item);
   return { reclaimed };
 }
@@ -179,6 +217,13 @@ function poolNamed(pools, name) {
   return pool;
 }
 
+// The generic lease commands do not change a built-in pool. The browser commands own it.
+function commandPool(pools, name, action) {
+  const pool = poolNamed(pools, name);
+  if (pool.builtIn) throw fail(`${name} is a built-in pool. Use herdr-boss browser ${action} SLUG.`);
+  return pool;
+}
+
 function splitOwner(pool, item) {
   return Object.entries(pool.split).find(([, items]) => items.includes(item))?.[0] ?? null;
 }
@@ -188,50 +233,94 @@ function holderText(lease) {
 }
 
 // Choose an item: the preferred item when it is free, then own split items, then unsplit items, then free split items of other projects.
-function chooseItem(pool, store, project, prefer) {
+// An item in `exclude` is not chosen, except as the preferred item. Port 9222 is never chosen.
+function chooseItem(pool, store, project, prefer, exclude) {
   const taken = new Set(store.leases.filter((lease) => lease.pool === pool.name).map((lease) => lease.item));
-  const free = pool.items.filter((item) => !taken.has(item));
+  const free = pool.items.filter((item) => !taken.has(item) && item !== PROTECTED_PORT);
   if (prefer != null && free.includes(prefer)) return prefer;
+  const usable = free.filter((item) => !exclude.has(item));
   const own = pool.split[project] ?? [];
-  return free.find((item) => own.includes(item))
-    ?? free.find((item) => splitOwner(pool, item) === null)
-    ?? free[0]
+  return usable.find((item) => own.includes(item))
+    ?? usable.find((item) => splitOwner(pool, item) === null)
+    ?? usable[0]
     ?? null;
 }
 
 function emptyPoolError(pool, store) {
   const holders = store.leases.filter((lease) => lease.pool === pool.name)
-    .map((lease) => `- ${lease.item}: ${holderText(lease)}${lease.borrowed ? ' (borrowed)' : ''}, since ${lease.at}, expires ${lease.expiresAt}`);
+    .map((lease) => `- ${lease.item}: ${holderText(lease)}${lease.borrowed ? ' (borrowed)' : ''}, since ${lease.at}, expires ${lease.expiresAt ?? 'never'}`);
   return fail(`No free item in pool ${pool.name}. Holders:\n${holders.join('\n')}`, 3);
 }
 
+function leaseRecord(pool, item, holder, at, ttlMinutes) {
+  const owner = splitOwner(pool, item);
+  const minutes = ttlMinutes ?? pool.ttlMinutes;
+  return {
+    pool: pool.name,
+    item,
+    project: holder.project,
+    worker: holder.worker ?? null,
+    pane: holder.pane ?? null,
+    ...(pool.holder === 'project' ? { holder: 'project' } : {}),
+    at: new Date(at).toISOString(),
+    expiresAt: minutes == null ? null : new Date(at + minutes * 60000).toISOString(),
+    borrowed: owner !== null && owner !== holder.project,
+    ...(holder.runFile ? { runFile: holder.runFile } : {}),
+  };
+}
+
 // Take one item for a known holder. worker start calls this after it has verified the orchestrator pane.
-export function acquireLeaseFor(poolName, holder, { pools, dataDir = DATA_DIR, prefer = null, ttlMinutes = null, now = Date.now(), panes = null, probeTcp = tcpListening, log = () => {} } = {}) {
+// In a pool with project holders, a project holds at most one item. A second call returns the lease that the project holds.
+export function acquireLeaseFor(poolName, holder, { pools, dataDir = DATA_DIR, prefer = null, exclude = [], ttlMinutes = null, now = Date.now(), panes = null, probeTcp = tcpListening, browserProcess = null, log = () => {} } = {}) {
   const pool = poolNamed(pools, poolName);
+  if (prefer === PROTECTED_PORT) throw fail(`Port ${PROTECTED_PORT} is protected. No pool leases it.`);
   if (prefer != null && !pool.items.includes(prefer)) throw fail(`Item ${prefer} is not in pool ${pool.name}.`);
+  if (pool.holder === 'project' && (holder.worker || holder.pane || ttlMinutes != null)) throw fail(`Pool ${pool.name} leases to a project only, with no worker, pane, or TTL.`);
   if (ttlMinutes != null && (!Number.isSafeInteger(ttlMinutes) || ttlMinutes < 1)) throw fail('--ttl must be a positive whole number of minutes.');
   const at = timeValue(now);
+  const skip = new Set(exclude);
   const { lease, reclaimed } = changeLeases(dataDir, (store) => {
-    const reclaimedNow = reclaimInStore(store, { pools, panes, now: at, probeTcp });
-    const item = chooseItem(pool, store, holder.project, prefer);
+    const reclaimedNow = reclaimInStore(store, { pools, panes, now: at, probeTcp, browserProcess });
+    if (pool.holder === 'project') {
+      const held = store.leases.find((entry) => entry.pool === pool.name && entry.project === holder.project);
+      if (held) return { lease: held, reclaimed: reclaimedNow };
+    }
+    const item = chooseItem(pool, store, holder.project, prefer, skip);
     if (item === null) throw emptyPoolError(pool, store);
-    const owner = splitOwner(pool, item);
-    const record = {
-      pool: pool.name,
-      item,
-      project: holder.project,
-      worker: holder.worker ?? null,
-      pane: holder.pane ?? null,
-      at: new Date(at).toISOString(),
-      expiresAt: new Date(at + (ttlMinutes ?? pool.ttlMinutes) * 60000).toISOString(),
-      borrowed: owner !== null && owner !== holder.project,
-      ...(holder.runFile ? { runFile: holder.runFile } : {}),
-    };
+    const record = leaseRecord(pool, item, holder, at, ttlMinutes);
     store.leases.push(record);
     return { lease: record, reclaimed: reclaimedNow };
   });
   for (const item of reclaimed) log(item);
   return lease;
+}
+
+// Write one project browser lease for each browser record, with its recorded port. This runs once: leases.json then records the migration.
+// It does not run when a project-browsers lease exists. It changes no port. A record whose port is outside the pool or already leased is skipped.
+export function migrateProjectBrowserLeases(sessions, { dataDir = DATA_DIR, now = Date.now(), log = () => {} } = {}) {
+  const pool = projectBrowserPool();
+  const at = timeValue(now);
+  const events = [];
+  const migrated = changeLeases(dataDir, (store) => {
+    if (store.projectBrowsersMigratedAt || store.leases.some((lease) => lease.pool === pool.name)) return [];
+    const written = [];
+    for (const [project, session] of Object.entries(sessions ?? {})) {
+      const item = String(session?.port);
+      const holder = store.leases.find((lease) => lease.pool === pool.name && lease.item === item);
+      if (!pool.items.includes(item) || holder || !PROJECT_SLUG.test(project)) {
+        events.push({ pool: pool.name, item, project, skipped: true, reason: !pool.items.includes(item) ? `port ${item} is not in pool ${pool.name}` : holder ? `port ${item} is already leased to ${holder.project}` : 'the project name is not a slug' });
+        continue;
+      }
+      const record = leaseRecord(pool, item, { project }, at, null);
+      store.leases.push(record);
+      written.push(record);
+      events.push({ pool: pool.name, item, project, skipped: false });
+    }
+    store.projectBrowsersMigratedAt = new Date(at).toISOString();
+    return written;
+  }, 0);
+  for (const event of events) log(event);
+  return migrated;
 }
 
 // Change the pane of a lease, for example after worker start has placed the worker pane.
@@ -257,7 +346,7 @@ export function acquireLease(poolName, {
   pools, dataDir = DATA_DIR, config = null, env = process.env, herdr, forTarget = null, prefer = null, ttlMinutes = null,
   now = Date.now(), probeTcp = tcpListening, output = console.log, log = () => {},
 } = {}) {
-  poolNamed(pools, poolName);
+  commandPool(pools, poolName, 'request');
   const caller = verifyCaller(env, herdr, config);
   const holder = holderFor(caller, config, forTarget);
   const lease = acquireLeaseFor(poolName, holder, { pools, dataDir, prefer, ttlMinutes, now, panes: paneSet(herdr), probeTcp, log });
@@ -268,7 +357,7 @@ export function acquireLease(poolName, {
 export function releaseLease(poolName, item, {
   pools, dataDir = DATA_DIR, config = null, env = process.env, herdr, now = Date.now(), probeTcp = tcpListening, output = console.log, log = () => {},
 } = {}) {
-  poolNamed(pools, poolName);
+  commandPool(pools, poolName, 'release');
   const caller = verifyCaller(env, herdr, config);
   const project = caller.role === 'boss' ? null : projectOf(config);
   const panes = paneSet(herdr);
@@ -290,7 +379,7 @@ export function releaseLease(poolName, item, {
   return released;
 }
 
-const publicLease = ({ runFile, tcpMisses, ...lease }) => lease;
+const publicLease = ({ runFile, tcpMisses, cdpMisses, ...lease }) => lease;
 
 export function listLeases({ pools, dataDir = DATA_DIR, pool = null, output = console.log } = {}) {
   const selected = pool == null ? pools : [poolNamed(pools, pool)];
@@ -317,9 +406,17 @@ function age(milliseconds) {
 }
 
 // One bulletin line per pool: each item with its holder, age, and borrowed mark, or free.
+// A built-in pool lists only the leased items and the count of free items.
 export function leaseBulletinLines({ pools = [], leases = [], errors = [] } = {}, now = Date.now()) {
   const lines = errors.map((error) => `- Resource pool config is invalid: ${error}`);
   for (const pool of pools) {
+    if (pool.builtIn) {
+      const held = pool.items.map((item) => leases.find((candidate) => candidate.pool === pool.name && candidate.item === item)).filter(Boolean);
+      const parts = held.map((lease) => `${lease.item} ${holderText(lease)} ${age(timeValue(now) - Date.parse(lease.at))}`);
+      parts.push(`${pool.items.length - held.length} free`);
+      lines.push(`- ${pool.name} (built-in, ports ${pool.items[0]}-${pool.items.at(-1)}; use herdr-boss browser request): ${parts.join('; ')}`);
+      continue;
+    }
     const parts = pool.items.map((item) => {
       const lease = leases.find((candidate) => candidate.pool === pool.name && candidate.item === item);
       if (!lease) return `${item} free`;

@@ -310,6 +310,21 @@ Each project can have one persistent Chrome profile. Request it with `herdr-boss
 - A website or identity provider decides how long a login lasts. Sign in through the dashboard when a login is needed.
 - Herdr Boss never stops a browser that it did not start. Port 9222 is kept for an optional legacy shared browser.
 
+### Port leases
+
+Each project browser port is a lease in the built-in resource pool `project-browsers`. The pool has the ports 9223 to 9299. Port 9222 is not in the pool, and no pool leases it.
+
+- The holder of the lease is the project. The lease has no pane, no worker, and no TTL.
+- `browser request` leases the recorded port of the project. When the project has no record, it leases the lowest free port. It skips a port that the record of another project uses and a port that has a listener.
+- When another project holds the recorded port, `browser request` leases a new port and writes it to the record.
+- `browser close` keeps the lease.
+- `herdr-boss browser release SLUG` removes the lease. It refuses while the project Chrome runs. The record stays.
+- `browser-sessions.json` keeps the profile, the window size, the headless mode, the PID, and the code-sign clone of each project. The lease keeps only the port.
+
+Herdr Boss reclaims a project browser lease when no Chrome process has the port flag and the profile path of the project on two service ticks in a row. A "not responding" browser still has its process, so Herdr Boss does not reclaim its lease. When the process list fails on a tick, that tick does not count. A reclaim closes no browser and changes no record. The next `browser request` leases the recorded port again when it is free.
+
+At its first acting tick, the service writes one lease for each browser record, with the recorded port. It logs one `lease` event for each project. It does this one time for each data directory, and it changes no port.
+
 ### Browser states
 
 Herdr Boss shows one state for each project browser:
@@ -605,7 +620,9 @@ Define each pool in `resourcePools` in `~/.herdr-boss/config.json`:
 | `check` | `"tcp"` or `null`. `"tcp"` means that each item is a local port. The default is `null`. |
 | `graceMinutes` | The time after the lease start before the TCP check starts. The default is 10. |
 
-Herdr Boss validates the pools when it loads the config. An invalid pool list gives no pools. The lease commands then fail and name each error, and the bulletin shows each error. Do not put a secret in a pool. An unknown key is an error.
+The pool `project-browsers` is built in. Herdr Boss adds it to the config pools. Do not define a config pool with this name: it is an error. See [Port leases](#port-leases).
+
+Herdr Boss validates the pools when it loads the config. An invalid pool list gives no config pools. The built-in pool stays. The lease commands then fail and name each error, and the bulletin shows each error. Do not put a secret in a pool. An unknown key is an error.
 
 Herdr Boss reclaims a lease on each service tick and before each `lease acquire` or `lease release`. It reclaims a lease when one of these conditions is true:
 
@@ -613,8 +630,9 @@ Herdr Boss reclaims a lease on each service tick and before each `lease acquire`
 - The run record of the worker has `finishedAt`.
 - The time `expiresAt` of the lease is in the past.
 - The pool has `"check": "tcp"`, the grace time is over, and nothing listens on `127.0.0.1:<item>` on two checks in a row.
+- The pool is `project-browsers`, and no matching Chrome process runs on two ticks in a row. This rule is the only rule for this pool.
 
-Herdr Boss logs one `lease` event for each reclaimed lease, with the pool, the item, the project, and the reason. The bulletin has a `Resource leases` section with one line for each pool. The line shows each item with its holder, its age, and `borrowed`, or `free`.
+Herdr Boss logs one `lease` event for each reclaimed lease, with the pool, the item, the project, and the reason. The bulletin has a `Resource leases` section with one line for each pool. The line shows each item with its holder, its age, and `borrowed`, or `free`. The line of `project-browsers` shows only the leased ports and the number of free ports.
 
 ## Project locks and worktree cleanup
 

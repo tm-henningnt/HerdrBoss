@@ -10,8 +10,8 @@ import { readProjectRepos } from './harness.js';
 import { loadModels, KIT_ROOT } from './kit/config.js';
 import { loadPolicy, clearExpiredOneOffGoals, deriveControl, migrateWorkspacePolicy, providerFor, pickSuccessor, laneStatus, leastOverProvider, machineLimits, unmeteredLane, unavailablePiModels, mergeModels } from './control.js';
 import { recordQuotaSnapshot } from './usage.js';
-import { listBrowserSessions, cdpResponds } from './browser-pool.js';
-import { readLeases, reclaimLeases, publicLease, tcpListening } from './leases.js';
+import { listBrowserSessions, cdpResponds, browserProcessCheck } from './browser-pool.js';
+import { readLeases, reclaimLeases, publicLease, tcpListening, leasePools, migrateProjectBrowserLeases } from './leases.js';
 import { codeSignCloneDir, sweepCodeSignClones } from './clone-sweep.js';
 import { runDenialScan, readDenials, denialSummary, DENIAL_SCAN_INTERVAL_MS } from './denials.js';
 import { listHandoffs, saveHandoffs, supersedeHandoffs, expireHandoff, expireMissingHandoffs, handoffNotices } from './handoff.js';
@@ -182,6 +182,7 @@ export class Engine extends EventEmitter {
       if (refreshPiModels) this.piModelsCheckedAt = now;
       let currentHerdrSnapshot = false;
       let currentPaneList = false;
+      let processesKnown = false;
       const [herdr, machine, procs] = await Promise.all([
         this.collectors.collectHerdr(this.cfg.orchestratorLabel).then((snapshot) => {
           currentHerdrSnapshot = true;
@@ -189,7 +190,7 @@ export class Engine extends EventEmitter {
           return currentPaneList ? snapshot : null;
         }).catch((e) => { errors.push(`herdr: ${e.message}`); return this.state?.herdr || null; }),
         this.collectors.collectMachine(DATA_DIR).catch((e) => { errors.push(`machine: ${e.message}`); return null; }),
-        this.collectors.collectProcesses().catch((e) => { errors.push(`ps: ${e.message}`); return new Map(); }),
+        this.collectors.collectProcesses().then((table) => { processesKnown = true; return table; }).catch((e) => { errors.push(`ps: ${e.message}`); return new Map(); }),
         refreshPiModels ? this.collectors.collectPiModels({ now }).then((result) => {
           if (Array.isArray(result?.models)) this.memory.piModels = { at: Number.isFinite(result.at) ? result.at : now, models: [...result.models] };
         }).catch(() => {}) : null,
@@ -233,19 +234,34 @@ export class Engine extends EventEmitter {
         return { ...b, responsive: matched ? await this.collectors.cdpResponds(b.port) : false };
       }));
 
+      // The first acting tick writes a project browser lease for each browser record. It runs once for each data directory.
+      const { pools: resourcePools, errors: resourcePoolErrors } = leasePools(this.cfg);
+      if (this.act && !this.browserLeasesMigrated) {
+        try {
+          migrateProjectBrowserLeases(Object.fromEntries(browserSessions.map((b) => [b.project, b])), {
+            dataDir: DATA_DIR, now,
+            log: (item) => this.log('lease', item.skipped
+              ? `Did not migrate the ${item.project} browser to ${item.pool}: ${item.reason}`
+              : `Migrated the ${item.project} browser to ${item.pool} ${item.item}`, { pool: item.pool, item: item.item, project: item.project }),
+          });
+          this.browserLeasesMigrated = true;
+        } catch (e) { if (e.code !== 'ELOCKBUSY') errors.push(`leases: ${e.message}`); }
+      }
       // Reclaim leases on an acting tick. A pane is gone only when the pane list of this tick succeeded.
-      if (this.act && this.cfg.resourcePools?.length) {
+      // A project browser lease is checked only when the process list of this tick succeeded.
+      if (this.act) {
         try {
           reclaimLeases({
-            pools: this.cfg.resourcePools, dataDir: DATA_DIR, now, probeTcp: this.collectors.probeTcp, waitMs: 0,
+            pools: resourcePools, dataDir: DATA_DIR, now, probeTcp: this.collectors.probeTcp, waitMs: 0,
             panes: currentHerdrSnapshot && currentPaneList ? new Set(herdr.panes.map((pane) => pane.id)) : null,
+            browserProcess: browserProcessCheck(processesKnown ? procs : null, Object.fromEntries(browserSessions.map((b) => [b.project, b]))),
             log: (item) => this.log('lease', `Reclaimed ${item.pool} ${item.item} of ${item.project}${item.worker ? `/${item.worker}` : ''}: ${item.reason}`, { pool: item.pool, item: item.item, project: item.project, reason: item.reason }),
           });
         } catch (e) { if (e.code !== 'ELOCKBUSY') errors.push(`leases: ${e.message}`); }
       }
       let leaseStore = { leases: [] };
       try { leaseStore = readLeases(DATA_DIR); } catch (e) { errors.push(`leases: ${e.message}`); }
-      const resourceLeases = { pools: this.cfg.resourcePools || [], errors: this.cfg.resourcePoolErrors || [], leases: leaseStore.leases.map(publicLease) };
+      const resourceLeases = { pools: resourcePools, errors: resourcePoolErrors, leases: leaseStore.leases.map(publicLease) };
 
       this.trackPaneStatus(herdr, now);
       const workerTransitions = herdr ? await inspectWorkerTransitions(
