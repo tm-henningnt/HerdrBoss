@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { loadConfig, migrateAccessFiles, assertPreviewDataDir, assertDataWritable, sandboxWriteError, DATA_DIR, dashboardUrl } from './config.js';
-import { writeProject, SLUG } from './projects.js';
+import { writeProject, statusWarnings, SLUG } from './projects.js';
 import { loadProjectConfig } from './kit/config.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -382,6 +382,7 @@ async function main() {
       }
       const errors = writeProject(slug, data);
       if (errors.length) { console.error(errors.join('\n')); process.exit(1); }
+      for (const warning of statusWarnings(data)) console.error(`Warning: ${warning}`);
       console.log(`published ${dashboardUrl(cfg)}/projects/${slug}`);
       if (top) {
         // The first publish of a slug registers its repository and adds its .git to the Codex writable roots.

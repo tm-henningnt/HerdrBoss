@@ -844,11 +844,13 @@ function projectSelector(s, selected) {
     const mode = l?.effectiveMode === 'paused' ? 'Paused' : l?.idle ? 'Idle' : l ? 'Active' : 'Published';
     const name = p?.project || l?.label || slug;
     const color = allocationColor(s, slug);
+    const decisions = (p?.tasks || []).filter((t) => !isDone(t) && t.waitingOn === 'owner').length;
     return `<a class="panel proj project-selector ${slug === selected ? 'selected' : ''} ${color ? `has-allocation ${allocationActivity(l)}` : ''}" href="/projects/${esc(slug)}" ${slug === selected ? 'aria-current="page"' : ''} ${color ? `style="--allocation-color:${color}"` : ''}>
       <div class="proj-head"><b>${esc(name)}</b><span class="tag">${esc(mode)}</span></div>
       <div class="project-selector-meta"><span>${esc(p?.status || p?.phase || 'No status published')}</span><span>${l ? `${l.running} / ${l.slots} workers` : 'No live allocation'}</span></div>
       ${p?.summary ? `<p>${esc(p.summary)}</p>` : ''}
       ${p ? segBar(taskCounts(p)) : ''}
+      ${decisions ? `<span class="project-decision-count">Needs your decision ${decisions}</span>` : ''}
       ${p?.errors?.length ? `<span class="project-card-error">${p.errors.length} status issue${p.errors.length === 1 ? '' : 's'}</span>` : ''}
       <div class="win-foot">${p ? `updated ${ago(p.updated)}${staleStatusTag(s, p)}` : 'Awaiting project status'}</div>
     </a>`;
@@ -909,6 +911,14 @@ function fleetBlock(s) {
   }).join('')}</tbody></table></div></section>`;
 }
 
+// The total of open Owner waits across projects, with a link to each project group.
+function decisionSummary(s) {
+  const rows = (s.projects || []).map((p) => ({ slug: p.slug, label: p.project || p.slug, count: (p.tasks || []).filter((t) => !isDone(t) && t.waitingOn === 'owner').length })).filter((r) => r.count > 0);
+  if (!rows.length) return '';
+  const total = rows.reduce((n, r) => n + r.count, 0);
+  return `<div class="panel decisions-summary"><strong>Needs your decision <span class="num">${total}</span></strong><span>${rows.map((r) => `<a href="/projects/${esc(r.slug)}#decisions">${esc(r.label)} ${r.count}</a>`).join(' · ')}</span></div>`;
+}
+
 function overview(s) {
   const currentHandoffs = [...(s.control?.handoffs || []), ...(s.control?.bossHandoff ? [s.control.bossHandoff] : [])];
   const handovers = currentHandoffs.length + handoffRecords.filter((x) => ['prepared', 'preparing', 'needs-inspection'].includes(x.status) && !currentHandoffs.some((h) => h.pane === x.sourcePane)).length;
@@ -916,6 +926,7 @@ function overview(s) {
   return [
     `<header class="page-intro"><div><h1>Overview</h1><p>${alertCount || handovers ? `${alertCount} resource alert${alertCount === 1 ? '' : 's'} · ${handovers} handover${handovers === 1 ? '' : 's'} to review` : 'Projects are operating within the current resource policy.'}</p></div><div class="capacity-readout"><strong>${s.control?.runningWorkers ?? 0}<span> / ${s.control?.maxWorkers ?? '–'}</span></strong><small>working agents</small><a href="/allocation">Adjust allocation →</a></div></header>`,
     `<div class="overview-action-grid">${attentionBlock(s)}${handoffBlock(s)}</div>`,
+    decisionSummary(s),
     fleetBlock(s),
     quotaSummary(s),
     machineSummary(s),
@@ -1251,7 +1262,7 @@ const MAIL_ACTION_LABEL = { answer: 'Answer', approve: 'Approve', decide: 'Decid
 const MAIL_FOLDER_KEY = 'herdr-boss-mailbox-folder';
 const MAIL_FOLDERS = ['needs-you', 'updates', 'sent', 'done'];
 const MAIL_FOLDER_LABEL = { 'needs-you': 'Needs you', updates: 'Updates', sent: 'Sent', done: 'Done' };
-const mailbox = { needsYou: [], updates: [], sent: [], done: [], updatesUnread: 0, folder: null, loaded: false, loading: false, error: '', notice: '', counts: '', busy: false, status: {}, currentConversation: null, conversationRecords: [], conversationLoading: false, conversationError: '', composing: false, composeDraft: '', composeThread: 'boss', replyDraft: '' };
+const mailbox = { needsYou: [], updates: [], sent: [], done: [], updatesUnread: 0, folder: null, loaded: false, loading: false, error: '', notice: '', counts: '', busy: false, status: {}, currentConversation: null, conversationRecords: [], conversationLoading: false, conversationError: '', composing: false, composeDraft: '', composeThread: 'boss', replyDraft: '', openedDeepLink: null };
 const mailReading = new Set();
 const mailSelected = new Set();
 const mailDrafts = {};
@@ -1344,6 +1355,19 @@ function mailItem(s, item, section) {
   </button></li>`;
 }
 
+// A project page link opens one Mailbox conversation directly with ?thread= and ?conversation=.
+function openMailboxDeepLink() {
+  const params = new URLSearchParams(location.search);
+  const thread = params.get('thread');
+  const conversation = params.get('conversation');
+  if (!thread || !conversation) return;
+  const key = `${thread}:${conversation}`;
+  if (mailbox.openedDeepLink === key) return;
+  mailbox.openedDeepLink = key;
+  const item = [...mailbox.needsYou, ...mailbox.updates, ...mailbox.sent, ...mailbox.done].find((x) => x.thread === thread && (x.conversationId || x.id) === conversation);
+  openMailboxConversation(thread, conversation, item?.id);
+}
+
 function mailboxView(s) {
   if (!mailbox.loaded && !mailbox.loading) loadMailbox();
   const folder = mailboxFolderFromLocation();
@@ -1388,6 +1412,7 @@ async function loadMailbox() {
     const resolved = resolveMailboxFolder(requested, storedMailboxFolder(), mailbox.needsYou.length);
     mailbox.folder = resolved;
     saveMailboxFolder(resolved);
+    openMailboxDeepLink();
     if (!requested || !MAIL_FOLDERS.includes(requested)) history.replaceState(null, '', mailboxFolderUrl(resolved));
     for (const id of mailSelected) if (!mailbox.needsYou.some((item) => item.id === id)) mailSelected.delete(id);
     if (state) state.mailbox = result.mailbox;
@@ -2038,10 +2063,10 @@ function setFoldOpen(slug, key, open) {
   try { sessionStorage.setItem(FOLD_PREFIX + slug, JSON.stringify(value)); } catch {}
 }
 // A long project section stays a plain section on a desktop. On a phone it becomes a details element that remembers its open state for the session.
-function collapsible({ slug, key, className = '', head = '', title, count = '', controls = '', body }) {
-  if (!isPhone()) return `<section${className ? ` class="${esc(className)}"` : ''}>${head}${body}</section>`;
+function collapsible({ slug, key, className = '', head = '', title, count = '', controls = '', body, id = '' }) {
+  if (!isPhone()) return `<section${id ? ` id="${esc(id)}"` : ''}${className ? ` class="${esc(className)}"` : ''}>${head}${body}</section>`;
   const open = foldOpen(slug, key);
-  return `<details class="fold-phone${className ? ` ${esc(className)}` : ''}" data-project-fold="${esc(slug)}" data-fold-key="${esc(key)}"${open ? ' open' : ''}>`
+  return `<details${id ? ` id="${esc(id)}"` : ''} class="fold-phone${className ? ` ${esc(className)}` : ''}" data-project-fold="${esc(slug)}" data-fold-key="${esc(key)}"${open ? ' open' : ''}>`
     + `<summary class="fold-summary"><h2>${esc(title)}${count ? ` <span class="sub">${esc(count)}</span>` : ''}</h2><span class="fold-chevron" aria-hidden="true"></span></summary>`
     + `<div class="fold-body">${controls}${body}</div></details>`;
 }
@@ -2067,6 +2092,31 @@ function workModel(p) {
   const groups = [...(Array.isArray(p.groups) ? p.groups : [])];
   if (tasks.some((t) => !t.group || !groups.some((g) => g.id === t.group))) groups.push({ id: '', title: 'Other work' });
   return { tasks, map, openBlockers, current, next, groups, explicit };
+}
+
+// The short wait text of a task. A waitingOn value names the party; otherwise the open blockers are named.
+function waitText(t, m) {
+  if (isDone(t)) return '';
+  const ask = t.ask ? `: ${t.ask}` : '';
+  if (t.waitingOn === 'owner') return `waits for the Owner${ask}`;
+  if (t.waitingOn === 'boss') return `waits for the Boss${ask}`;
+  if (t.waitingOn === 'external') return `waits for an external party${ask}`;
+  const open = m.openBlockers(t);
+  if (open.length) return `waiting on ${open.map((id) => `#${id}`).join(', ')}`;
+  return '';
+}
+
+// Open work that waits on an Owner decision. Each entry links to its Mailbox conversation.
+function decisionsBlock(p, m, slug) {
+  const items = m.tasks.filter((t) => !isDone(t) && t.waitingOn === 'owner');
+  if (!items.length) return '';
+  const body = `<div class="decision-list">${items.map((t) => {
+    const mail = t.mailboxId
+      ? `<a class="decision-mail" href="/mailbox?thread=${encodeURIComponent(slug)}&conversation=${encodeURIComponent(t.mailboxId)}">Open Mailbox conversation</a>`
+      : '<span class="muted">No Mailbox item yet</span>';
+    return `<article class="decision-item"><div>${t.id ? `<b class="mono">${esc(t.id)}</b> ` : ''}<b>${esc(t.title)}</b>${t.ask ? `<p>${esc(t.ask)}</p>` : ''}</div>${mail}</article>`;
+  }).join('')}</div>`;
+  return collapsible({ slug, key: 'decisions', id: 'decisions', className: 'decision-section', head: '<div class="section-head"><h2>Needs your decision <span class="sub">open work that waits for you</span></h2></div>', title: 'Needs your decision', count: `${items.length}`, body });
 }
 
 function taskChip(t, extra = '') {
@@ -2299,7 +2349,11 @@ function issueTable(m, slug) {
       const url = safeUrl(t.url);
       const waits = m.openBlockers(t);
       const group = m.groups.find((g) => g.id && g.id === t.group);
-      return `<tr class="${m.current.has(t) ? 'row-current' : ''}"><td class="mono" data-label="ID">${esc(t.id || '')}</td><td data-label="Title">${url ? `<a href="${esc(url)}" target="_blank" rel="noreferrer">${esc(t.title)}</a>` : esc(t.title)}${t.kind ? ` <span class="tag">${esc(t.kind)}</span>` : ''}${m.current.has(t) ? ' <span class="tag current">current</span>' : m.next.has(t) ? ' <span class="tag">next</span>' : ''}</td><td data-label="Status"><span class="st-badge s-${esc(t.status || 'todo')}">${esc(STATUS_LABEL[t.status || 'todo'] || t.status)}</span></td><td data-label="Group">${esc(group?.title || '')}</td><td class="mono" data-label="Blocked by">${(t.blockedBy || []).map((id) => `<span class="${waits.includes(id) ? 'text-crit' : 'muted'}">${esc(id)}</span>`).join(' ')}</td><td data-label="Labels">${(t.labels || []).map((l) => `<span class="tag">${esc(l)}</span>`).join(' ')}</td><td class="mono" data-label="Updated">${t.updated ? esc(ago(t.updated)) : ''}</td></tr>`;
+      const wait = waitText(t, m);
+      const statusBadge = (t.status || 'todo') === 'blocked' && wait
+        ? `<span class="st-badge s-blocked">${esc(wait)}</span>`
+        : `<span class="st-badge s-${esc(t.status || 'todo')}">${esc(STATUS_LABEL[t.status || 'todo'] || t.status)}</span>${wait ? `<div class="wait">${esc(wait)}</div>` : ''}`;
+      return `<tr class="${m.current.has(t) ? 'row-current' : ''}"><td class="mono" data-label="ID">${esc(t.id || '')}</td><td data-label="Title">${url ? `<a href="${esc(url)}" target="_blank" rel="noreferrer">${esc(t.title)}</a>` : esc(t.title)}${t.kind ? ` <span class="tag">${esc(t.kind)}</span>` : ''}${m.current.has(t) ? ' <span class="tag current">current</span>' : m.next.has(t) ? ' <span class="tag">next</span>' : ''}</td><td data-label="Status">${statusBadge}</td><td data-label="Group">${esc(group?.title || '')}</td><td class="mono" data-label="Blocked by">${(t.blockedBy || []).map((id) => `<span class="${waits.includes(id) ? 'text-crit' : 'muted'}">${esc(id)}</span>`).join(' ')}</td><td data-label="Labels">${(t.labels || []).map((l) => `<span class="tag">${esc(l)}</span>`).join(' ')}</td><td class="mono" data-label="Updated">${t.updated ? esc(ago(t.updated)) : ''}</td></tr>`;
     }).join('') || '<tr><td colspan="7" class="muted" data-label="">No work matches the filter.</td></tr>'}</tbody></table></div>`;
   return collapsible({ slug, key: 'work', head: `<div class="section-head"><h2>All work <span class="sub">${rows.length} shown of ${m.tasks.length}</span></h2>${tools}</div>`, title: 'All work', count: `${rows.length} of ${m.tasks.length}`, controls: tools, body: table });
 }
@@ -2355,7 +2409,8 @@ function project(s, slug) {
   const board = (p.tasks || []).length ? collapsible({ slug, key: 'board', head: `<h2>Tasks <span class="sub">${(p.tasks || []).length} total · worker status is live from Herdr${!view.showDone && c.done > 10 ? ` · Done shows the latest 10 of ${c.done}` : ''}</span></h2>`, title: 'Tasks', count: `${(p.tasks || []).length}`, body: `<div class="board">${STATUSES.map((k) => `<div class="col" style="--c:var(--${colors[k]})"><h3><span>${STATUS_LABEL[k]}</span><span class="num">${c[k]}</span></h3>
       ${columnTasks(k).map((t) => {
         const w = t.worker && byName.get(t.worker);
-        return `<div class="task">${t.id ? `<span class="id">${esc(t.id)}</span>` : ''}<span class="title">${esc(t.title)}</span>${t.note ? `<span class="note">${esc(t.note)}</span>` : ''}${t.worker ? `<span class="w"><span class="st ${w ? w.status : 'shell'}"></span>${esc(t.worker)}${w ? ` · ${esc(w.status)}` : ' · not running'}</span>` : ''}</div>`;
+        const wait = waitText(t, work);
+        return `<div class="task">${t.id ? `<span class="id">${esc(t.id)}</span>` : ''}<span class="title">${esc(t.title)}</span>${t.note ? `<span class="note">${esc(t.note)}</span>` : ''}${wait ? `<span class="wait">${esc(wait)}</span>` : ''}${t.worker ? `<span class="w"><span class="st ${w ? w.status : 'shell'}"></span>${esc(t.worker)}${w ? ` · ${esc(w.status)}` : ' · not running'}</span>` : ''}</div>`;
       }).join('')}</div>`).join('')}</div>` }) : '';
   const links = p.links?.length ? `<div class="panel"><h2>Links</h2><ul class="links">${p.links.map((l) => safeUrl(l.url) ? `<li><a href="${esc(safeUrl(l.url))}" target="_blank" rel="noreferrer">${esc(l.label || l.url)}</a></li>` : `<li>${esc(l.label || '')}</li>`).join('')}</ul></div>` : '';
   const notes = p.notes?.length ? `<div class="panel"><h2>Notes</h2><ul class="notes">${p.notes.map((n) => `<li>${code(n)}</li>`).join('')}</ul></div>` : '';
@@ -2372,6 +2427,7 @@ function project(s, slug) {
     dependencyGraph(work, slug),
     groupsBlock(work, slug),
     specsBlock(work, slug),
+    decisionsBlock(p, work, slug),
     board,
     issueTable(work, slug),
     gatesRisksBlock(p),
@@ -2395,6 +2451,7 @@ const HELP = {
     <p><b>Current Owner goal</b> shows the durable direction set by the Owner. Keep it in every status publication until the Owner changes or clears it.</p>
     <p>The bar above the cards shows the applied share and the effective slots of each project, in card order. Its colors match the top edge of each card. An idle project is faded. A paused project is faded and striped.</p>
     <h3>Progress and frontier</h3><p><b>Current frontier</b> is open work with no open blocker. <b>Next</b> waits only on the current frontier. The orchestrator can set both itself.</p>
+    <h3>Needs your decision</h3><p>Open work that waits on you. Each item shows its ID, title, and ask, and links to its Mailbox conversation when the orchestrator set <code>mailboxId</code>. A task that waits on other tasks shows <b>waiting on #ID</b>. A task that waits on the Boss or an external party names it and shows the ask.</p>
     <h3>Dependencies</h3><p>Columns show the order. An arrow runs from a blocker to the work that waits on it. A task without links sits in the first column, after the linked tasks. Current work has an orange border; next work has a dashed border. Select a box to open the issue. <b>Show completed work</b> adds finished tasks.</p>
     <h3>Graph view</h3><p>Select <b>Fit</b> to show the whole graph. Select <b>−</b>, <b>+</b>, or <b>100%</b> to zoom. Press Ctrl or Cmd and turn the mouse wheel to zoom around the pointer. Drag the background to pan. Select <b>Full size</b> to fill the window. Select <b>Close</b> or press Escape to return.</p>
     <h3>Groups and specs</h3><p>Progress per release or phase, and the work under each spec.</p>

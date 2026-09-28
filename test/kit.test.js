@@ -2365,6 +2365,27 @@ test('publish keeps the kitRevision of the status file', () => {
   assert.equal(JSON.parse(fs.readFileSync(path.join(dataDir, 'projects', 'demo.json'), 'utf8')).kitRevision, 'abcdef012345');
 });
 
+test('publish warns about a blocked task with no blocker and an Owner wait with no Mailbox item', () => {
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-publish-wait-')));
+  const status = path.join(home, 'status.json');
+  fs.writeFileSync(status, JSON.stringify({
+    project: 'Demo',
+    tasks: [
+      { id: '12', title: 'Ship', status: 'blocked' },
+      { id: 'V12', title: 'Choose the paint', status: 'blocked', waitingOn: 'owner', ask: 'Which paint?' },
+    ],
+  }));
+  const dataDir = path.join(home, 'boss');
+  const env = { ...process.env, HOME: home, HERDR_BOSS_DIR: dataDir, TMPDIR: home };
+  const cli = fileURLToPath(new URL('../src/cli.js', import.meta.url));
+  const result = spawnSync(process.execPath, [cli, 'publish', 'demo', status], { cwd: home, env, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /^Warning: task 12 is blocked but names no blocker\. Set blockedBy or waitingOn\.$/m);
+  assert.match(result.stderr, /^Warning: task V12 waits on the Owner but has no Mailbox item\. Post one with herdr-boss mail post and set mailboxId\.$/m);
+  assert.match(result.stdout, /^published .*\/projects\/demo$/m);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dataDir, 'projects', 'demo.json'), 'utf8')).tasks.length, 2);
+});
+
 test('worker start warns about AGENTS.md drift and still starts', () => {
   const f = setupFixture(null);
   fs.writeFileSync(path.join(f.root, 'AGENTS.md'), '# Project\nNo block.\n');
@@ -2717,4 +2738,14 @@ test('Codex browser warning allows project browser commands and catches other br
   assert.match(codexBrowserWarning('codex', 'Update the gallery.'), /Codex cannot launch Chromium/);
   assert.match(codexBrowserWarning('codex', 'Use the screenshot tool.'), /Codex cannot launch Chromium/);
   assert.match(codexBrowserWarning('codex', 'Launch Chromium outside `herdr-boss browser`.'), /Codex cannot launch Chromium/);
+});
+
+test('the kit rules name waitingOn, the Mailbox id, and blockedBy', () => {
+  const rules = [
+    'Set `waitingOn: owner` only for the escalation categories.',
+    'Always post a Mailbox item that needs an Owner action, and set `mailboxId` to its id.',
+    'Use `blockedBy` for waits on other tasks.',
+  ];
+  const text = fs.readFileSync(path.resolve('kit/templates/project-kit.md'), 'utf8');
+  for (const rule of rules) assert.ok(text.includes(rule), `kit/templates/project-kit.md: ${rule}`);
 });

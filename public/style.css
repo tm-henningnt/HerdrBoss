@@ -221,6 +221,15 @@ h2 .sub { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(
 .task .title { font-weight: 550; }
 .task .note { font-size: 12.5px; color: var(--muted); }
 .task .w { display: flex; align-items: center; gap: 6px; font: 11.5px var(--mono); color: var(--muted); }
+.task .wait, .issue-table .wait { color: var(--warn); font-size: 12px; }
+.decision-list { display: grid; gap: 8px; }
+.decision-item { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 8px; background: var(--panel-2); }
+.decision-item p { margin: 4px 0 0; color: var(--text); font-size: 13px; }
+.decision-mail { flex: 0 0 auto; color: var(--accent); font-size: 12.5px; }
+.decision-section { border-left: 3px solid var(--accent); }
+.project-decision-count { display: inline-block; margin-top: 6px; padding: 1px 7px; border-radius: 99px; border: 1px solid var(--accent); color: var(--accent); font-size: 11px; }
+.decisions-summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 14px; border-left: 3px solid var(--accent); }
+.decisions-summary a { color: var(--accent); }
 .two { display: grid; gap: 12px; grid-template-columns: 1fr 1fr; }
 .links { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }
 .links a { color: var(--accent); }
