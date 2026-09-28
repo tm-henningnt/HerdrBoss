@@ -97,6 +97,8 @@ const DEFAULTS = {
     staleOwnedMinutes: 30,
   },
   workers: { staleIdleMinutes: 120 },
+  // A published project status older than this is stale while workers run or new commits land.
+  staleStatusMinutes: 120,
   // Shared resources that projects lease, for example local serve ports. See validateResourcePools().
   resourcePools: [],
   // codexbar provider -> herdr agent kinds that consume it.

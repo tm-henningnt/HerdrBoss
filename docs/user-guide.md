@@ -89,6 +89,7 @@ To add the shared rules to a project, follow [orchestrator-instructions.md](orch
 | A worker is working, first appears idle or done, or changes into either state | Herdr Boss reads only the last 8 visible pane lines. A known provider error marks the worker failed and sends the orchestrator its name, pane ID, and fixed error label. |
 | A worker writes `.worker/report.json` or `.worker/<name>/report.json` after its pane first appears | One notice per report file path. A rewrite of the same file sends no new notice. |
 | A managed project browser starts and responds | `browser is ready` notice in the bulletin only. |
+| A published project status is stale | One `info` notice to that project's `orch` pane for each stale status. The bulletin shows `Status stale since <time>.` in the project section. |
 
 The failure labels are `API Error`, `401`, `429`, `Connection lost`, `usage limit`, `rate limit`, `overloaded`, and `Free usage exceeded`. Matching ignores letter case and ignores each line whose trimmed text starts with `Tip:`. The matcher requires error forms for `401` (`401 Unauthorized`, `HTTP 401`, or `status 401`) and `usage limit` (`usage limit reached`, `usage limit exceeded`, or `hit your usage limit`). Herdr Boss stores and sends only the matched label and a parsed retry time. It does not store or forward pane output. Herdr Boss reads a working pane on every engine tick, so a failure is found while the worker still works. A matched worker shows the failed status in the snapshot even when Herdr reports it working. The engine then does not count it as running, so its slot becomes free. A failure found in a working pane clears when a later read shows no known failure. A failure found on an idle or done pane clears when that pane starts working and a later read shows no known failure. Any failed status clears when a different worker uses the pane. A later failure creates a new notice. A valid free-usage retry time exhausts the matching unmetered model until that time. The unmetered lane lists it separately from available models. A `Free usage exceeded` failure of an `opencode` worker with an unmetered model also exhausts the whole `opencode` free lane. This closes every unmetered model of the `opencode` harness. The lane uses the parsed retry time. Without a parsed retry time, the lane closes for 1 hour after the failure, and the lane shows that the reset time is unknown. A later absolute retry time in the same pane extends the exhaustion to that time. Herdr Boss measures a relative retry time from the first observation of the failure.
 
@@ -111,6 +112,15 @@ Herdr does not show a draft or an open dialog in a pane. Herdr Boss does not det
 The kit notice goes to every project orchestrator, also when the project has no active workers. The Boss workspace does not get it. When the engine starts, it reads Git once in the directory that the service runs from. It runs no timers and no model calls. It stores the last notified commit as `kitNotice` in `memory.json`. On the first start, it stores `HEAD` and sends nothing. When Git fails, or the stored commit is not an ancestor of `HEAD`, it stores `HEAD`, sends nothing, and logs one `kit` event. Each orchestrator gets the notice once, when its pane is `idle` or `done`. The notice stays pending for 7 days. The read-only preview does not read Git and does not send or store the notice. The notice text is `[herdr-boss] Kit revision <revision> (<n> change(s)): <subjects>. Run herdr-boss kit install, then re-read docs/orchestration/herdr-boss.md now; your loaded copy is stale.` When you get a kit notice, run `herdr-boss kit install` and re-read `docs/orchestration/herdr-boss.md`. Then publish the new `kitRevision`. You get a desktop notification once for each warning.
 
 The notice cooldown is saved as `machine.alertCooldownSeconds` in `policy.json`. Its default is 21600 seconds (6 hours). This policy value takes precedence over the legacy top-level `alertCooldownSeconds` value in `config.json`.
+
+A published project status is stale when both conditions are true:
+
+- Its `updated` time is more than `staleStatusMinutes` old. The default is 120 minutes. Set it in `config.json`.
+- After the `updated` time, a worker of the project was `working` in the last 2 hours, or new commits landed on the project repository.
+
+A paused project is never stale. Herdr Boss finds the repository in `project-repos.json`. A project without a repository record uses only the worker condition. Herdr Boss runs `git -C <repo> rev-parse HEAD` and `git -C <repo> log -1 --format=%cI` at most once every 10 minutes for each project. New commits landed when the HEAD commit time is after `updated`, or when `HEAD` changed after `updated`.
+
+The stale notice text is `Your published status is <age> old while <workers ran | new commits landed>. Run herdr-boss publish <slug> <file> with the current plan and progress.` The notice uses one key for each project and `updated` time. Herdr Boss sends it once, with the idle gate and the hourly `info` limit. A new publish ends the stale status. When the new status becomes stale, Herdr Boss sends a new notice.
 
 `HERDR_BOSS_PUSH=0` turns off prompts for one run.
 
@@ -346,6 +356,8 @@ Agent commands and tab rules are in [the browser service](../kit/browser-service
 ## Project status pages
 
 Orchestrators do not build dashboards. They publish a status file, and Herdr Boss shows it on `/projects/SLUG`. With the optional work structure fields, the page shows progress, the current frontier, a dependency graph, groups, specs, and all work. See [project-status.md](project-status.md).
+
+When the published status is stale, the project page and the Projects list show `Status stale: <age>` next to the updated time. The mark stays until the orchestrator publishes again. See [Rules and notices](#rules-and-notices) for the stale rule.
 
 ## Organization page
 
