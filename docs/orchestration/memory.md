@@ -24,7 +24,9 @@ Keep the current facts that every HerdrBoss orchestrator needs at start and resu
 
 None.
 
-Owner queue (credentials and billing): none.
+Owner queue (credentials, billing, and Owner-applied settings):
+
+- V22 is ready on branch `v22wtparent`, not merged. It puts new worker worktrees under `~/Projects/.herdr-wt/<repo>/<name>`. Before the merge, the Owner runs `herdr-boss harness sync` (adds `~/Projects/.herdr-wt` to the Codex `writable_roots`, with a backup) and pastes the printed Claude `autoMode` lines into `~/.claude/settings.json`. Then the HerdrBoss orchestrator merges V22.
 
 
 ## Standing rules
