@@ -139,7 +139,10 @@ test('quota, quota recovery, and browser-ready alerts are in the bulletin but pr
   const prompts = deliverRounds(t, [{ at: NOW, panes: snap.herdr.panes, alerts: [...evaluation.alerts, kept] }]);
   assert.equal(prompts.length, 1);
   assert.match(prompts[0].text, /Worker alpha \(w1:p2\) failed/, 'a worker failure stays a prompt');
-  assert.doesNotMatch(prompts[0].text, /quota|browser/i);
+  // Check only the notice lines: the prompt footer names the bulletin path, which can contain any word.
+  const noticeLines = prompts[0].text.split('\n').filter((line) => line.startsWith('- '));
+  assert.ok(noticeLines.length >= 1);
+  assert.doesNotMatch(noticeLines.join('\n'), /quota|browser/i);
 });
 
 test('the hourly budget batches info notices with an 8-line cap and warn notices bypass it', (t) => {
