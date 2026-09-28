@@ -1,7 +1,6 @@
 const $app = document.getElementById('app');
 const $dot = document.getElementById('dot');
 const $updated = document.getElementById('updated');
-const $crumbs = document.getElementById('crumbs');
 const $nav = document.getElementById('primary-nav');
 const $roamgate = document.getElementById('roamgate-link');
 const $navMenu = document.getElementById('nav-menu');
@@ -1665,7 +1664,6 @@ function orgMotion(s) {
 
 function projectsView(s, slug) {
   const selected = slug && projectSlugs(s).includes(slug) ? slug : defaultProject(s);
-  $crumbs.innerHTML = selected ? `/ <a href="/projects">projects</a> / ${esc((s.projects || []).find((p) => p.slug === selected)?.project || s.control?.projects?.[selected]?.label || selected)}` : '';
   return [
     '<header class="page-intro"><div><h1>Projects</h1><p>Select a project to inspect its status, work, agents, and orchestrator handover.</p></div></header>',
     allocationSummary(s),
@@ -2137,7 +2135,6 @@ function render(force = false) {
   const route = m || location.pathname === '/projects' ? 'projects' : ['mailbox', 'allocation', 'settings', 'organization', 'agents', 'browsers', 'analytics', 'logs'].includes(location.pathname.slice(1)) ? location.pathname.slice(1) : 'overview';
   const html = route === 'projects' ? projectsView(state, m ? decodeURIComponent(m[1]) : null) : route === 'mailbox' ? mailboxView(state) : route === 'allocation' ? allocationView(state) : route === 'settings' ? settingsView(state) : route === 'organization' ? organizationView(state) : route === 'agents' ? agentsView(state) : route === 'browsers' ? browsersView(state) : route === 'analytics' ? analyticsView(state) : route === 'logs' ? logsView(state) : overview(state);
   $navMenuLabel.textContent = NAV_LABEL[route] || 'Menu';
-  if (route !== 'projects') $crumbs.innerHTML = '';
   for (const a of $nav.querySelectorAll('a')) {
     if (a.dataset.nav === route) a.setAttribute('aria-current', 'page');
     else a.removeAttribute('aria-current');

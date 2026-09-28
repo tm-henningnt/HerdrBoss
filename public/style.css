@@ -42,8 +42,7 @@ a { color: inherit; }
 .brand { display: flex; align-items: center; flex: 0 0 auto; gap: 8px; font-weight: 650; text-decoration: none; letter-spacing: -0.01em; white-space: nowrap; }
 .brand svg { width: 20px; height: 20px; fill: none; stroke: var(--accent); stroke-width: 2; }
 .brand svg circle:first-child { fill: var(--accent); }
-#crumbs { color: var(--muted); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#crumbs a { text-decoration: none; }
+.top-spacer { flex: 1; min-width: 0; }
 .live { display: flex; align-items: center; flex: 0 0 auto; gap: 8px; color: var(--muted); font-size: 12px; white-space: nowrap; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
 .dot.on { background: var(--ok); box-shadow: 0 0 0 0 var(--ok); animation: pulse 2s infinite; }
@@ -230,7 +229,6 @@ h2 .sub { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(
 
 @media (max-width: 760px) {
   .top { padding: 10px 16px; padding-top: calc(10px + env(safe-area-inset-top)); padding-left: calc(16px + env(safe-area-inset-left)); padding-right: calc(16px + env(safe-area-inset-right)); gap: 10px; }
-  #crumbs { display: none; }
   main { padding: 16px 16px 48px; padding-left: calc(16px + env(safe-area-inset-left)); padding-right: calc(16px + env(safe-area-inset-right)); padding-bottom: calc(48px + env(safe-area-inset-bottom)); }
   .ws-grid, .cols-3 { grid-template-columns: 1fr; }
   .two { grid-template-columns: 1fr; }
