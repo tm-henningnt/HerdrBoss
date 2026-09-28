@@ -1275,6 +1275,31 @@ function updateMailboxBadge(s) {
 
 const orgOpen = new Set();
 const NOT_REPORTED = 'Not reported';
+
+// Plain is the default style. Cards is optional and only this browser remembers it.
+const ORG_STYLE_KEY = 'herdr-boss.orgStyle';
+function storedOrgStyle() {
+  try { return localStorage.getItem(ORG_STYLE_KEY) === 'cards' ? 'cards' : 'plain'; } catch { return 'plain'; }
+}
+let orgStyle = storedOrgStyle();
+function setOrgStyle(style) {
+  orgStyle = style === 'cards' ? 'cards' : 'plain';
+  try { localStorage.setItem(ORG_STYLE_KEY, orgStyle); } catch {}
+}
+const ORG_STATES = ['working', 'blocked', 'failed', 'idle', 'done'];
+const HARNESS_MARK = {
+  claude: '<svg viewBox="0 0 16 16"><path d="M8 1.5v13M1.5 8h13M3.4 3.4l9.2 9.2M12.6 3.4l-9.2 9.2"/></svg>',
+  codex: '<svg viewBox="0 0 16 16"><path d="M8 1.5l5.6 3.25v6.5L8 14.5l-5.6-3.25v-6.5z"/><path d="M5.6 6.4L7.6 8l-2 1.6M8.6 10h2"/></svg>',
+  opencode: '<svg viewBox="0 0 16 16"><path d="M5.5 2.5C3.6 2.5 4.2 7 2.5 8c1.7 1 1.1 5.5 3 5.5M10.5 2.5c1.9 0 1.3 4.5 3 5.5-1.7 1-1.1 5.5-3 5.5"/></svg>',
+  pi: '<svg viewBox="0 0 16 16"><path d="M2.5 4.5h11M6 4.5v9M10 4.5v7c0 1.3.7 2 2 2"/></svg>',
+  unknown: '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5"/><path d="M6.1 6.3a1.9 1.9 0 1 1 2.7 1.7c-.5.3-.8.7-.8 1.3v.4M8 11.5v.5"/></svg>',
+};
+const ORG_BLOCKED_ICON = '<svg class="org-alert" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.8l6.6 12H1.4z"/><path d="M8 6.2v3.6M8 11.6v.4"/></svg>';
+const orgWorkersOpen = new Set();
+// Motion: node ID to the time its reduced-motion highlight ends, and the newest event time already shown.
+const orgFlash = new Map();
+let orgEventMark = null;
+const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 const HANDOFF_OPEN = ['preparing', 'prepared', 'needs-inspection'];
 
 // A successor is prepared only when the record is prepared, its source is the current role pane, and its pane is live.
@@ -1296,11 +1321,15 @@ function orgHandover(s, sourcePane, risk) {
 }
 
 // Codex and Claude always use their own subscription, so their quota is known without a model. Other harnesses are not.
-function orgQuota(s, kind) {
-  if (!['codex', 'claude'].includes(kind)) return NOT_REPORTED;
+function orgQuotaWindow(s, kind) {
+  if (!['codex', 'claude'].includes(kind)) return null;
   const q = (s.quotas || []).find((x) => x.provider === kind);
-  if (!q || q.error) return NOT_REPORTED;
-  const w = q.windows?.find((x) => x.key === 'secondary') || q.windows?.find((x) => !x.extra);
+  if (!q || q.error) return null;
+  return q.windows?.find((x) => x.key === 'secondary') || q.windows?.find((x) => !x.extra) || null;
+}
+
+function orgQuota(s, kind) {
+  const w = orgQuotaWindow(s, kind);
   return w ? `${PROVIDERS[kind]} ${w.usedPercent}% · ${w.label}` : NOT_REPORTED;
 }
 
@@ -1319,11 +1348,19 @@ function orgFacts(rows) {
   return `<dl class="org-facts">${rows.filter(Boolean).map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v ?? NOT_REPORTED)}</dd></div>`).join('')}</dl>`;
 }
 
-function orgNode({ id, role, name, status, summary, facts, className = '', thread = null }) {
+function orgNode({ id, role, name, status, summary, facts, className = '', thread = null, agent, quota = null }) {
   const open = orgOpen.has(id);
   const domId = `org-detail-${id.replace(/[^A-Za-z0-9_-]/g, '-')}`;
-  return `<article class="org-node ${esc(className)}"><div class="org-node-head"><span class="st ${esc(status || 'unknown')}" aria-hidden="true"></span><span class="pill">${esc(role)}</span><strong>${esc(name)}</strong></div>
-    <p class="org-node-summary">${summary.filter(Boolean).map((x) => `<span>${esc(x)}</span>`).join('')}</p>
+  const cards = orgStyle === 'cards';
+  const state = ORG_STATES.includes(status) ? status : 'unknown';
+  const flash = (orgFlash.get(id) || 0) > Date.now() ? ' org-flash' : '';
+  // An agent node has a harness; the Owner node has none and keeps only its dot.
+  const kind = agent === undefined ? null : HARNESS_MARK[agent] ? agent : 'unknown';
+  const mark = cards && kind ? `<span class="org-mark" title="${esc(agent || 'Unknown harness')}" aria-hidden="true">${HARNESS_MARK[kind]}</span>` : '';
+  const alert = cards && state === 'blocked' ? ORG_BLOCKED_ICON : '';
+  const meter = cards && quota ? `<div class="org-quota" role="img" aria-label="${esc(`${PROVIDERS[agent]} quota ${quota.usedPercent}% used${quota.label ? ` · ${quota.label}` : ''}`)}"><i class="${quota.usedPercent >= 90 ? 'crit' : quota.usedPercent >= 70 ? 'warn' : ''}" style="width:${Math.max(0, Math.min(100, quota.usedPercent))}%"></i></div>` : '';
+  return `<article class="org-node ${esc(className)} org-state-${state}${flash}" data-org-id="${esc(id)}"><div class="org-node-head">${mark}<span class="st ${esc(status || 'unknown')}" aria-hidden="true"></span><span class="pill">${esc(role)}</span><strong>${esc(name)}</strong>${alert}</div>
+    ${meter}<p class="org-node-summary">${summary.filter(Boolean).map((x) => `<span>${esc(x)}</span>`).join('')}</p>
     <div class="org-actions"><button type="button" class="quiet org-toggle" data-org-node="${esc(id)}" aria-expanded="${open}" aria-controls="${domId}">${open ? 'Hide details' : 'Details'}<span class="visually-hidden"> for ${esc(name)}</span></button>${thread ? `<button type="button" class="quiet org-messages" data-messages-thread="${esc(thread)}" data-messages-name="${esc(name)}">Messages<span class="visually-hidden"> for ${esc(name)}</span></button>` : ''}</div>
     <div class="org-detail" id="${domId}" ${open ? '' : 'hidden'}>${orgFacts(facts)}</div></article>`;
 }
@@ -1339,13 +1376,18 @@ function orgAgentFacts(s, pane, extra = []) {
   ];
 }
 
+// On a phone, a worker list starts as a count button. The button expands the list.
 function orgWorkers(s, panes, published, ownerId) {
   if (!panes.length) return '<p class="org-empty">No workers.</p>';
-  return `<ul class="org-workers">${panes.map((pane) => {
+  const listId = `org-workers-${ownerId.replace(/[^A-Za-z0-9_-]/g, '-')}`;
+  const open = !isPhone() || orgWorkersOpen.has(ownerId);
+  const count = `${panes.length} worker${panes.length === 1 ? '' : 's'}`;
+  const toggle = isPhone() ? `<button type="button" class="quiet org-worker-count" data-org-workers="${esc(ownerId)}" aria-expanded="${open}" aria-controls="${listId}">${open ? `Hide ${count}` : `Show ${count}`}</button>` : '';
+  return `${toggle}<ul class="org-workers" id="${listId}" ${open ? '' : 'hidden'}>${panes.map((pane) => {
     const task = orgWorkerTask(published, pane);
     const name = pane.name || pane.agent || pane.id;
     return `<li>${orgNode({
-      id: `${ownerId}:${pane.id}`, role: pane.label || 'worker', name, status: pane.status, className: 'org-worker',
+      id: `${ownerId}:${pane.id}`, role: pane.label || 'worker', name, status: pane.status, className: 'org-worker', agent: pane.agent || null, quota: orgQuotaWindow(s, pane.agent),
       summary: [pane.agent || NOT_REPORTED, pane.status || NOT_REPORTED, task?.id ? `Task ${task.id}` : 'Task not reported'],
       facts: orgAgentFacts(s, pane, [['Agent name', pane.name || NOT_REPORTED], ['Task ID', task?.id || NOT_REPORTED], ['Task title', task?.title || NOT_REPORTED], ['Task status', task ? STATUS_LABEL[task.status || 'todo'] || task.status : NOT_REPORTED]]),
     })}</li>`;
@@ -1356,7 +1398,7 @@ function orgReserve(s, successor, ownerId) {
   if (!successor) return '';
   const { record, pane } = successor;
   return `<div class="org-reserve">${orgNode({
-    id: `${ownerId}:reserve`, role: 'reserve', name: `Successor · ${record.toKind || pane.agent || 'agent'}`, status: pane.status, className: 'org-reserve-node',
+    id: `${ownerId}:reserve`, role: 'reserve', name: `Successor · ${record.toKind || pane.agent || 'agent'}`, status: pane.status, className: 'org-reserve-node', agent: pane.agent || record.toKind || null,
     summary: [record.toKind || NOT_REPORTED, pane.status || NOT_REPORTED, record.automatic ? 'Automatic' : 'Awaiting review'],
     facts: orgAgentFacts(s, pane, [['Start model', record.model || NOT_REPORTED], ['Prepared', record.preparedAt ? clock(record.preparedAt) : NOT_REPORTED], ['Reported ready', record.readyAt ? clock(record.readyAt) : 'No']]).filter(([k]) => k !== 'Model'),
   })}</div>`;
@@ -1377,7 +1419,7 @@ function organizationView(s) {
   const bossRisk = s.control?.bossHandoff;
   const bossSuccessor = boss ? orgSuccessor(s, boss.id) : null;
   const bossNode = boss ? orgNode({
-    id: 'boss', role: 'boss', name: 'Boss', status: boss.status, className: 'org-boss', thread: 'boss',
+    id: 'boss', role: 'boss', name: 'Boss', status: boss.status, className: 'org-boss', thread: 'boss', agent: boss.agent || null, quota: orgQuotaWindow(s, boss.agent),
     summary: [boss.agent || 'No agent', boss.status || NOT_REPORTED, orgHandover(s, boss.id, bossRisk)],
     facts: orgAgentFacts(s, boss, [['Workspace', boss.workspaceLabel || boss.workspace], ['Quota use', orgQuota(s, boss.agent)], ['Handover', orgHandover(s, boss.id, bossRisk)]]),
   }) : '<article class="org-node org-boss org-missing"><strong>Boss</strong><p class="org-node-summary"><span>No pane is labeled <code>boss</code>.</span></p></article>';
@@ -1396,7 +1438,7 @@ function organizationView(s) {
     const handover = orgHandover(s, p.orch?.pane, risk);
     const mode = p.effectiveMode === 'paused' ? 'Paused' : p.idle ? 'Idle' : 'Active';
     const node = orgNode({
-      id: `project:${p.slug}`, role: 'orch', name: p.label, status: orch?.status || (p.orch ? p.orch.status : 'unknown'), thread: p.slug,
+      id: `project:${p.slug}`, role: 'orch', name: p.label, status: orch?.status || (p.orch ? p.orch.status : 'unknown'), thread: p.slug, agent: orch?.agent || null, quota: orgQuotaWindow(s, orch?.agent),
       summary: [orch ? `${orch.agent || 'No agent'} · ${orch.status || NOT_REPORTED}` : 'No orchestrator', slots],
       facts: [
         ['Project', p.label],
@@ -1416,14 +1458,109 @@ function organizationView(s) {
   }).join('');
 
   return [
-    '<header class="page-intro"><div><h1>Organization</h1><p>Chart of the Owner, the Boss, project orchestrators, and workers. Select <b>Details</b> on a node to see its recorded values. Select <b>Messages</b> to write to the Boss or an orchestrator.</p></div></header>',
-    `<section class="org-chart" aria-label="Organization chart">
+    `<header class="page-intro"><div><h1>Organization</h1><p>Chart of the Owner, the Boss, project orchestrators, and workers. Select <b>Details</b> on a node to see its recorded values. Select <b>Messages</b> to write to the Boss or an orchestrator.</p></div><div class="org-style-switch" role="group" aria-label="Chart style">${['plain', 'cards'].map((style) => `<button type="button" data-org-style="${style}" aria-pressed="${orgStyle === style}">${style === 'plain' ? 'Plain' : 'Cards'}</button>`).join('')}</div></header>`,
+    `<section class="org-chart${orgStyle === 'cards' ? ' org-cards' : ''}" aria-label="Organization chart">
       <ol class="org-tier" aria-label="Owner"><li>${ownerNode}</li></ol>
       <ol class="org-tier" aria-label="Boss"><li><div class="org-lead">${bossNode}${orgReserve(s, bossSuccessor, 'boss')}</div>${boss ? `<div class="org-boss-workers"><h2>Boss workspace workers <span class="sub">${bossWorkers.length}</span></h2>${orgWorkers(s, bossWorkers, null, 'boss')}</div>` : ''}</li></ol>
       <div class="org-tier org-projects" aria-label="Projects">${columns || '<p class="calm-state">No open projects.</p>'}</div>
     </section>`,
     `<p class="org-note">${hidden ? `${hidden} workspace${hidden === 1 ? ' is' : 's are'} marked not a project and ${hidden === 1 ? 'is' : 'are'} not shown. ` : ''}Herdr Boss does not receive the model of a running agent, so the chart shows <b>Not reported</b>.</p>`,
   ].join('');
+}
+
+// ---------- Organization motion ----------
+// A new Owner message event or a worker report notice draws a short line between two nodes. The page reads only the events in the state.
+
+// The chart node of an orchestrator or Boss pane.
+function orgLeadId(s, paneId) {
+  const project = Object.values(s.control?.projects || {}).find((p) => p.orch?.pane === paneId);
+  if (project) return `project:${project.slug}`;
+  return (s.herdr?.panes || []).some((p) => p.id === paneId && p.label === 'boss') ? 'boss' : null;
+}
+
+function orgEventLinks(s, events) {
+  const panes = s.herdr?.panes || [];
+  const links = [];
+  for (const e of events) {
+    if (e.type === 'message' && e.thread && !e.failed) links.push(['owner', e.thread === 'boss' ? 'boss' : `project:${e.thread}`]);
+    if (e.type !== 'push' || !e.pane) continue;
+    const lead = orgLeadId(s, e.pane);
+    const orch = panes.find((p) => p.id === e.pane);
+    if (!lead || !orch) continue;
+    for (const title of e.titles || []) {
+      const name = /^Worker (.+) wrote its report$/.exec(title)?.[1];
+      const worker = name && panes.find((p) => p.workspace === orch.workspace && p.id !== orch.id && (p.name || p.agent) === name);
+      if (worker) links.push([`${lead}:${worker.id}`, lead]);
+    }
+  }
+  return links.slice(-6);
+}
+
+// A hidden worker node, such as one in a collapsed phone list, uses its orchestrator node.
+function orgNodeElement(id) {
+  const find = (key) => [...document.querySelectorAll('[data-org-id]')].find((el) => el.dataset.orgId === key && el.getClientRects().length);
+  const lead = id.startsWith('boss:') || id.split(':').length > 2 ? id.slice(0, id.lastIndexOf(':')) : null;
+  return find(id) || (lead && find(lead));
+}
+
+function orgEdge(a, b) {
+  const x = (r) => r.left + r.width / 2 + scrollX;
+  if (a.top > b.bottom) return [x(a), a.top + scrollY, x(b), b.bottom + scrollY];
+  if (a.bottom < b.top) return [x(a), a.bottom + scrollY, x(b), b.top + scrollY];
+  return [x(a), a.top + a.height / 2 + scrollY, x(b), b.top + b.height / 2 + scrollY];
+}
+
+function orgDrawLink(from, to) {
+  const [x1, y1, x2, y2] = orgEdge(from.getBoundingClientRect(), to.getBoundingClientRect());
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('class', 'org-motion');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.setAttribute('width', document.documentElement.scrollWidth);
+  svg.setAttribute('height', document.documentElement.scrollHeight);
+  const line = document.createElementNS(ns, 'line');
+  for (const [k, v] of Object.entries({ x1, y1, x2, y2 })) line.setAttribute(k, v);
+  const dot = document.createElementNS(ns, 'circle');
+  dot.setAttribute('r', 4);
+  svg.append(line, dot);
+  document.body.append(svg);
+  const length = Math.hypot(x2 - x1, y2 - y1) || 1;
+  line.style.strokeDasharray = length;
+  line.animate([{ strokeDashoffset: length }, { strokeDashoffset: 0 }], { duration: 400, easing: 'ease-out', fill: 'forwards' });
+  dot.animate([{ transform: `translate(${x1}px, ${y1}px)` }, { transform: `translate(${x2}px, ${y2}px)` }], { duration: 1000, easing: 'ease-in-out', fill: 'forwards' });
+  svg.animate([{ opacity: 1, offset: 0.8 }, { opacity: 0 }], { duration: 1100 }).finished.then(() => svg.remove(), () => svg.remove());
+}
+
+// Reduced motion: a highlight on both nodes for 1 second, with no movement.
+function orgFlashNodes(ids) {
+  const until = Date.now() + 1000;
+  for (const id of ids) {
+    orgFlash.set(id, until);
+    orgNodeElement(id)?.classList.add('org-flash');
+  }
+  setTimeout(() => {
+    for (const id of ids) if ((orgFlash.get(id) || 0) <= Date.now()) {
+      orgFlash.delete(id);
+      for (const el of document.querySelectorAll('.org-flash')) if (el.dataset.orgId === id) el.classList.remove('org-flash');
+    }
+  }, 1000);
+}
+
+function orgMotion(s) {
+  const events = s.events || [];
+  const newest = events.at(-1)?.at || '';
+  // The first view of the page records the newest event and replays nothing.
+  if (orgEventMark === null) { orgEventMark = newest; return; }
+  const fresh = events.filter((e) => e.at > orgEventMark);
+  if (newest > orgEventMark) orgEventMark = newest;
+  if (orgStyle !== 'cards' || !fresh.length) return;
+  for (const [fromId, toId] of orgEventLinks(s, fresh)) {
+    const from = orgNodeElement(fromId);
+    const to = orgNodeElement(toId);
+    if (!from || !to || from === to) continue;
+    if (reducedMotion.matches) orgFlashNodes([from.dataset.orgId, to.dataset.orgId]);
+    else orgDrawLink(from, to);
+  }
 }
 
 function projectsView(s, slug) {
@@ -1815,6 +1952,10 @@ const HELP = {
     <p>A worker node shows the agent name, harness, and state. The task ID comes from the published task whose <b>worker</b> field names that agent.</p>
     <h3>Reserve</h3><p>A <b>reserve</b> node shows a prepared successor. It appears only when a handoff record is prepared, its source is the current orchestrator or Boss pane, and the successor pane is live. A recommended successor is not a reserve.</p>
     <h3>Details</h3><p>Select <b>Details</b> on a node to show its recorded values. Select <b>Hide details</b> to close them.</p>
+    <h3>Style</h3><p>The switch at the top selects the <b>Plain</b> and <b>Cards</b> styles. Plain is the default. This browser keeps your choice. If the browser cannot store it, the page uses Plain at the next load.</p>
+    <p>In Cards, each agent node has a harness mark: Claude, Codex, OpenCode, Pi, or a question mark for an unknown harness. A Codex or Claude node shows a thin bar with its quota use. A working node has a slow pulse on its border. A blocked node has the warning color and a warning icon. A failed node has the error color. An idle or done node is dimmed.</p>
+    <p>In Cards, a new Owner message draws a short line with a moving dot from the Owner to the Boss or the orchestrator for about 1 second. A new worker report notice draws a line from the worker to its orchestrator. The page uses only the events that it already loads. When your system asks for reduced motion, the page shows a 1-second highlight on both nodes and no movement.</p>
+    <h3>Phone</h3><p>On a phone, the chart has one column. Each worker list shows only a count. Select <b>Show</b> to expand the workers, and select <b>Hide</b> to collapse them.</p>
     <h3>Messages</h3><p>The Boss node and each project node have a <b>Messages</b> button. It opens the thread of that node. A thread holds the messages in both directions, oldest first.</p>
     <p>Type a message of up to 2000 characters and select <b>Send</b>. The nudge buttons send a fixed text: <b>Continue.</b>, <b>Use your free worker slots.</b>, or <b>Pause after the current task.</b> <b>Ask for status</b> asks the agent for a short status report and a new status file. The page asks you to confirm each send.</p>
     <p>A new message is <b>Queued</b>. Herdr Boss sends it only when the agent is idle or done. It never types into a working or blocked agent. Then the message is <b>Sent</b>. A <b>Failed</b> message gets up to 3 more attempts on later ticks. Herdr Boss accepts at most 10 messages a minute.</p>
@@ -1905,6 +2046,8 @@ function render(force = false) {
     lastRender = html;
     if (route === 'mailbox') mailRestoreDrafts(focusId);
   }
+  if (route === 'organization') orgMotion(state);
+  else orgEventMark = null;
   if (!document.getElementById('help-panel').hidden) fillHelp();
   $updated.textContent = `updated ${ago(state.updatedAt)}`;
 }
@@ -2359,6 +2502,17 @@ async function runHandoffAction(action, key) {
   } catch (error) { handoffMessages[key] = error.message; }
   finally { handoffBusy.delete(key); lastRender = ''; render(); }
 }
+
+document.addEventListener('click', (e) => {
+  const button = e.target.closest?.('[data-org-style], [data-org-workers]');
+  if (!button) return;
+  const selector = button.dataset.orgStyle ? `[data-org-style="${button.dataset.orgStyle}"]` : `[data-org-workers="${CSS.escape(button.dataset.orgWorkers)}"]`;
+  if (button.dataset.orgStyle) setOrgStyle(button.dataset.orgStyle);
+  else if (orgWorkersOpen.has(button.dataset.orgWorkers)) orgWorkersOpen.delete(button.dataset.orgWorkers);
+  else orgWorkersOpen.add(button.dataset.orgWorkers);
+  lastRender = ''; render(true);
+  document.querySelector(selector)?.focus();
+});
 
 document.addEventListener('click', (e) => {
   const toggle = e.target.closest?.('[data-org-node]');

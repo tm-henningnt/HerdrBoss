@@ -464,3 +464,30 @@ test('the messages API validates Owner sends, refuses cross-origin and unauthent
   assert.match((await limited.json()).error, /10/);
   assert.equal(readMessages().length, 10);
 });
+
+test('organization page offers the Plain and Cards styles, motion with a reduced-motion fallback, and a phone worker count', () => {
+  const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
+  // The switch stores the choice in localStorage behind try/catch, and Plain is the default.
+  assert.match(app, /\['plain', 'cards'\]\.map\(\(style\) => `<button type="button" data-org-style="\$\{style\}" aria-pressed=/);
+  assert.match(app, /const ORG_STYLE_KEY = 'herdr-boss\.orgStyle'/);
+  assert.match(app, /try \{ return localStorage\.getItem\(ORG_STYLE_KEY\) === 'cards' \? 'cards' : 'plain'; \} catch \{ return 'plain'; \}/);
+  assert.match(app, /try \{ localStorage\.setItem\(ORG_STYLE_KEY, orgStyle\); \} catch \{\}/);
+  // Cards show an inline-SVG mark for each harness and a quota bar for Codex and Claude.
+  for (const kind of ['claude', 'codex', 'opencode', 'pi', 'unknown']) assert.match(app, new RegExp(`\\b${kind}: '<svg`), `harness mark for ${kind}`);
+  assert.match(app, /class="org-quota"/);
+  assert.match(css, /\.org-cards \.org-state-working\b[^{]*\{[^}]*animation: org-pulse/);
+  assert.match(css, /\.org-cards \.org-state-blocked\b/);
+  assert.match(css, /\.org-cards \.org-state-failed\b/);
+  // Motion reads the loaded events and falls back to a highlight when the viewer asks for reduced motion.
+  assert.match(app, /matchMedia\('\(prefers-reduced-motion: reduce\)'\)/);
+  assert.match(app, /function orgEventLinks\(/);
+  assert.match(app, /wrote its report/);
+  assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{[^}]*\.org-cards \.org-state-working/);
+  assert.match(css, /\.org-flash\b/);
+  // On a phone, a project shows a worker count that expands, with buttons of at least 44 px.
+  assert.match(app, /data-org-workers="/);
+  assert.match(css, /\.org-worker-count\b/);
+  assert.match(css, /@media \(max-width: 760px\) \{[^@]*\.org-style-switch button[^}]*min-height: 44px/);
+  assert.match(app, /Plain<\/b> and <b>Cards/);
+});

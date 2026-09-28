@@ -743,6 +743,50 @@ section[id], div[id="agents"] { scroll-margin-top: 105px; }
 .org-note { margin: 0; color: var(--muted); font-size: 12.5px; }
 .org-boss-workers .org-empty { text-align: center; }
 
+/* Organization style switch and Cards style. Plain is the default. */
+.page-intro:has(.org-style-switch) { flex-wrap: wrap; gap: 12px 24px; }
+.org-style-switch { display: inline-flex; flex: 0 0 auto; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--panel); }
+:root .org-style-switch button { border: 0; border-radius: 0; background: transparent; color: var(--muted); padding: 6px 14px; font-weight: 600; }
+:root .org-style-switch button + button { border-left: 1px solid var(--line); }
+:root .org-style-switch button[aria-pressed="true"] { background: var(--accent); color: #fff; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .org-style-switch button[aria-pressed="true"] { color: #1d1b18; } }
+:root[data-theme="dark"] .org-style-switch button[aria-pressed="true"] { color: #1d1b18; }
+.org-worker-count { justify-self: start; }
+.org-workers[hidden] { display: none; }
+.org-cards .org-node { border-width: 1.5px; border-radius: 12px; box-shadow: 0 1px 2px color-mix(in srgb, #000 8%, transparent); }
+.org-cards .org-node-head { gap: 8px; }
+.org-mark { display: inline-grid; place-items: center; flex: 0 0 auto; width: 26px; height: 26px; border-radius: 7px; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
+.org-mark svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.org-alert { flex: 0 0 auto; width: 16px; height: 16px; margin-left: auto; fill: none; stroke: var(--warn); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.org-quota { position: relative; height: 4px; border-radius: 99px; background: var(--track); overflow: hidden; }
+.org-quota > i { position: absolute; inset: 0 auto 0 0; border-radius: 99px; background: var(--info); }
+.org-quota > i.warn { background: var(--warn); } .org-quota > i.crit { background: var(--crit); }
+.org-cards .org-state-working { border-color: var(--info); animation: org-pulse 3.2s ease-in-out infinite; }
+@keyframes org-pulse { 0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--info) 0%, transparent); } 50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--info) 28%, transparent); } }
+.org-cards .org-state-blocked { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 10%, var(--panel)); }
+.org-cards .org-state-failed { border-color: var(--crit); background: color-mix(in srgb, var(--crit) 8%, var(--panel)); }
+.org-cards .org-state-failed .org-mark { color: var(--crit); border-color: var(--crit); }
+.org-cards .org-state-idle, .org-cards .org-state-done { background: var(--panel-2); box-shadow: none; }
+.org-cards .org-state-idle .org-node-head strong, .org-cards .org-state-done .org-node-head strong { color: var(--muted); font-weight: 600; }
+.org-cards .org-state-idle .org-mark, .org-cards .org-state-done .org-mark { color: var(--muted); }
+.org-cards .org-owner { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.org-cards .org-reserve-node { border-style: dashed; }
+.org-motion { position: absolute; top: 0; left: 0; z-index: 30; pointer-events: none; overflow: visible; }
+.org-motion line { stroke: var(--accent); stroke-width: 2; stroke-linecap: round; }
+.org-motion circle { fill: var(--accent); }
+.org-flash { outline: 3px solid var(--accent); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .org-cards .org-state-working { animation: none; box-shadow: 0 0 0 2px color-mix(in srgb, var(--info) 28%, transparent); } }
+@media (max-width: 760px) {
+  .org-style-switch button, .org-actions button, .org-worker-count, .message-panel button { min-height: 44px; }
+  .org-style-switch { width: 100%; } :root .org-style-switch button { flex: 1 1 50%; }
+  .org-tier > li { width: 100%; }
+  .org-lead { flex-direction: column; flex-wrap: nowrap; }
+  .org-node, .org-reserve { flex: 0 0 auto; max-width: none; width: 100%; }
+  .org-projects { grid-template-columns: minmax(0, 1fr); }
+  .org-actions button { flex: 1 1 auto; }
+  .org-worker-count { width: 100%; }
+}
+
 /* Messages panel on the Organization page */
 .message-panel { width: min(94vw, 640px); max-height: 90vh; padding: 0; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--text); }
 .message-panel[open] { display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto auto; }
