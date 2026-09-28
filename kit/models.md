@@ -102,7 +102,7 @@ Limit a shared cheap model to two active workers.
 
 ### Codex
 
-Do not give Codex a task that launches Chromium: Playwright, performance replays, galleries, or screenshots. The Codex sandbox refuses the Chromium Mach port (`MachPortRendezvousServer`, error 1100). Give these tasks to a `claude`, `opencode`, or `pi` worker. `worker start --kind codex` prints a warning when the brief mentions browser work.
+Do not give Codex a task that launches its own Chromium: Playwright, performance replays, or galleries. The Codex sandbox refuses the Chromium Mach port (`MachPortRendezvousServer`, error 1100). Give these tasks to a `claude`, `opencode`, or `pi` worker. A Codex worker can use the `herdr-boss browser` commands on its project browser, because Herdr Boss launches that browser outside the sandbox. `worker start --kind codex` prints a warning when the brief mentions other browser work.
 
 A Codex tool shell can run under a shared app-server daemon. That shell then has the daemon environment, not the environment of the worker pane. `worker start --kind codex` passes the Herdr variables of the new pane to the agent explicitly, with `-c shell_environment_policy.set.<NAME>="<value>"`. Outside Herdr, the Owner's own Codex use does not change.
 

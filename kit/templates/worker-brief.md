@@ -134,6 +134,17 @@ Do not print full process command lines or environments. Do not use `pgrep -fl`,
 
 Treat a secret that reaches a transcript as disclosed. Report it to the orchestrator, who reports it to the Boss.
 
+For a visual check of a served page, use the project browser. Every worker kind can use it, also `codex`:
+
+1. Start the server on a free local port, or on a port from `herdr-boss lease acquire serve-ports`.
+2. Run `herdr-boss browser request <project>`.
+3. Run `herdr-boss browser tab new <project> http://127.0.0.1:<port>/<page>`. Note the tab id.
+4. Run `herdr-boss browser screenshot <project> --tab <id>`. Use `navigate`, `click`, `key`, and `text` as needed.
+5. Run `herdr-boss browser tab close <project> --tab <id>`.
+6. Stop the server. Release a leased port with `herdr-boss lease release serve-ports <port>`.
+
+Do not launch your own Chromium, Playwright, or Puppeteer from a `codex` worker.
+
 Stop every test or server process you start before you write either report. Before collection, the orchestrator checks for processes whose current working directory is this worktree and asks you to stop any leftovers.
 
 ## Reports
