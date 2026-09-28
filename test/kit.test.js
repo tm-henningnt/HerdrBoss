@@ -2470,3 +2470,10 @@ test('worker start dry-run names each lease pool and takes no lease', () => {
     config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {}, leaseOptions: { dataDir, pools },
   }), /Unknown resource pool gpu/);
 });
+
+test('worker start warns when a Codex brief mentions browser work', async () => {
+  const { codexBrowserWarning } = await import('../src/kit/workers.js');
+  assert.match(codexBrowserWarning('codex', 'Capture a screenshot with Playwright.'), /Codex cannot launch Chromium/);
+  assert.equal(codexBrowserWarning('claude', 'Capture a screenshot with Playwright.'), null);
+  assert.equal(codexBrowserWarning('codex', 'Refactor the lock module.'), null);
+});

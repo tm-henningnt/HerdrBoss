@@ -156,3 +156,7 @@ To apply the guard:
 3. It prints the filled Claude `autoMode` lines. It does not edit `~/.claude/settings.json`.
 
 When the section or the array is missing, or holds a comment or a value that is not a plain string, `harness sync` changes nothing. It prints the lines to add and exits 1. When no root is missing, it makes no backup. `--dry-run` prints the roots to add and writes nothing. `--codex-only` does not print the Claude lines.
+
+## Known limits
+
+Codex cannot launch Chromium in its sandbox. The seatbelt sandbox refuses the Chromium Mach port (`MachPortRendezvousServer`, permission denied, error 1100). Herdr Boss does not loosen the sandbox for this. Give tasks that launch a browser to a `claude`, `opencode`, or `pi` worker. `worker start --kind codex` prints a warning when the brief mentions browser work.

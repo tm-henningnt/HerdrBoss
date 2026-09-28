@@ -727,6 +727,14 @@ function releaseStartLeases(leases, name, config, leaseContext) {
   } catch {}
 }
 
+// Codex runs in the seatbelt sandbox, which refuses the Chromium Mach port (MachPortRendezvousServer, error 1100).
+// Route browser work to claude, opencode, or pi. This is a warning, not a refusal.
+const BROWSER_WORDS = /\b(playwright|chromium|chrome|browser|screenshots?|galler(y|ies)|perf replays?|puppeteer|cdp)\b/i;
+export function codexBrowserWarning(kind, task) {
+  if (kind !== 'codex' || !BROWSER_WORDS.test(String(task || ''))) return null;
+  return 'Warning: this brief mentions browser work. Codex cannot launch Chromium in its sandbox. Use --kind claude, opencode, or pi for tasks that launch a browser.';
+}
+
 export function startWorker(name, options, {
   config,
   models,
@@ -798,6 +806,8 @@ export function startWorker(name, options, {
   if (!!options.task === !!options.taskFile) throw new Error('Provide exactly one of --task or --task-file.');
   if (options.issue != null && (!/^\d+$/.test(String(options.issue)) || Number(options.issue) <= 0)) throw new Error('--issue must be a positive integer.');
   const task = options.taskFile ? fs.readFileSync(path.resolve(options.taskFile), 'utf8').trimEnd() : options.task;
+  const browserWarning = codexBrowserWarning(options.kind, task);
+  if (browserWarning) output(browserWarning);
   if (!task?.trim()) throw new Error('Task text must not be empty.');
   const copyFiles = (options.copy ?? []).map((input) => {
     const source = path.resolve(config.root, input);

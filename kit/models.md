@@ -102,6 +102,8 @@ Limit a shared cheap model to two active workers.
 
 ### Codex
 
+Do not give Codex a task that launches Chromium: Playwright, performance replays, galleries, or screenshots. The Codex sandbox refuses the Chromium Mach port (`MachPortRendezvousServer`, error 1100). Give these tasks to a `claude`, `opencode`, or `pi` worker. `worker start --kind codex` prints a warning when the brief mentions browser work.
+
 Confirm the first prompt started work.
 
 Review visual claims against the actual capture.
