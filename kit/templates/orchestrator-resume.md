@@ -144,10 +144,10 @@ Run ledger and evidence
 
 Browser work
 
-- Read kit/browser-service.md for dedicated project browsers. Use kit/shared-browser.md only if a legacy shared browser is explicitly assigned.
+- Read kit/browser-service.md for dedicated project browsers.
+- Use only this project's browser.
 - Pin a tab ID in every command.
 - Do not close or restart a project browser while another worker is using it.
-- For an explicitly assigned legacy shared browser, never close its window or kill its process. Probe a fresh tab before asking the orchestrator to recover it.
 - Follow the project browser and evidence contract for all other details.
 
 Human gates

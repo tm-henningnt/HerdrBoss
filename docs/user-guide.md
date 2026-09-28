@@ -308,7 +308,7 @@ Each project can have one persistent Chrome profile. Request it with `herdr-boss
 
 - Give each worker its own tab. `browser tab new` opens a tab in its own window, so it stays visible in a headless browser.
 - A website or identity provider decides how long a login lasts. Sign in through the dashboard when a login is needed.
-- Herdr Boss never stops a browser that it did not start. Port 9222 is kept for an optional legacy shared browser.
+- Herdr Boss never stops a browser that it did not start. Each project uses only its own browser.
 
 ### Port leases
 
@@ -362,7 +362,7 @@ A clone is orphaned when all these conditions are true:
 
 - It is a real folder, not a symbolic link, directly in the clone folder. Its name matches `code_sign_clone.` followed by letters and digits.
 - It was created more than 1 hour ago.
-- No running Google Chrome main process started within 5 seconds of the clone creation time. This rule keeps the clone of each running Chrome, including the Chrome on port 9222.
+- No running Google Chrome main process started within 5 seconds of the clone creation time. This rule keeps the clone of each running Chrome.
 
 Herdr Boss reads the process list with `ps -axo pid=,lstart=,comm=`. If the read fails, it deletes nothing. The sweep never sends a signal to a process. Each sweep that deletes clones adds one event with the count and the freed space. The freed space is the change in free disk space, because a clone shares disk blocks with the app. Set `browsers.sweepCodeSignClones` to `false` to stop the sweep. Run `herdr-boss browser sweep-clones --dry-run` to list the orphaned clones.
 

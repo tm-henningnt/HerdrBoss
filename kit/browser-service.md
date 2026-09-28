@@ -30,4 +30,4 @@ A project browser is "not responding" when its Chrome process runs with the proj
 - Google Chrome leaves a code-sign clone when it does not exit cleanly. Herdr Boss removes orphaned clones every 10 minutes. The clones share disk blocks with the Chrome app, so they use little real space.
 - Close Chrome with `herdr-boss browser close <slug>` or the CDP command `Browser.close`. Never send a signal to Chrome yourself.
 
-Port 9222 is reserved for an optional legacy shared browser. Only use it when explicitly assigned; see [shared-browser.md](shared-browser.md).
+Use only the browser of your project. Herdr Boss never stops a browser that it did not start.

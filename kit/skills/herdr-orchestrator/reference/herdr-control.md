@@ -58,10 +58,10 @@ Read this file before you inspect or control Herdr panes and agents, when a work
 
 ## Project browser
 
-- Read [the dedicated browser service](../../../browser-service.md) before browser work. Use [the shared-browser rules](../../../shared-browser.md) only for an explicitly assigned legacy session.
+- Read [the dedicated browser service](../../../browser-service.md) before browser work.
 - Request a dedicated persistent browser with `herdr-boss browser request <project-slug>` before browser work.
 - Use the returned port and profile for that project. Do not stop another project's browser.
-- Use the dedicated browser for your project. Port 9222 is only for a legacy shared session when the Owner explicitly assigns it.
+- Use only the dedicated browser of your project.
 - Coordinate tabs within your project and avoid stopping a browser another worker is using.
 - Give browser workers the project slug and a tab ID. For simple screenshots, navigation, clicks, text, and keys, use [the project browser service](../../../browser-service.md).
 - Have the Owner enter credentials through the dashboard.

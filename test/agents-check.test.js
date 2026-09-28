@@ -126,6 +126,7 @@ test('a prohibition line for port 9222 or a process command is not drift', () =>
   assert.deepEqual(check(file('- Do not use `ps aux` with the output printed.')), []);
   const hits = only(check(file('- Use the Chrome on port 9222.')), 'warn', /port 9222/);
   assert.equal(hits[0].line, 2);
+  assert.match(hits[0].message, /^port 9222 is the retired legacy browser; use herdr-boss browser request$/);
 });
 
 test('the shared Workers tab is not drift', () => {

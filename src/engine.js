@@ -30,6 +30,14 @@ const WORKTREE_SCAN_INTERVAL_MS = 5 * 60 * 1000;
 const CLONE_SWEEP_INTERVAL_MS = 10 * 60 * 1000;
 const PI_MODELS_INTERVAL_MS = 15 * 60 * 1000;
 // The stale status rule reads the HEAD of each project repository at most this often.
+// The browsers that Herdr Boss labels: configured shared browsers and managed project browsers. Herdr Boss never stops a browser that it did not start.
+export function knownBrowsers(sharedBrowsers = [], browserSessions = []) {
+  return [
+    ...sharedBrowsers,
+    ...browserSessions.map((b) => ({ port: b.port, profile: b.profile, label: `Managed browser: ${b.project}` })),
+  ];
+}
+
 export const STATUS_HEAD_INTERVAL_MS = 10 * 60 * 1000;
 // Quotas younger than this are shown without the codexbar error, and saved quotas this young load at start.
 const QUOTA_CACHE_MS = 15 * 60 * 1000;
@@ -223,11 +231,7 @@ export class Engine extends EventEmitter {
       }
       if (this.quotaError && !(this.quotas && now - this.quotasAt < QUOTA_CACHE_MS)) errors.push(this.quotaError);
       const browserSessions = Object.values(listBrowserSessions());
-      const browsers = findBrowsers(procs, herdr?.panes || [], [
-        { port: 9222, label: 'Protected legacy browser' },
-        ...this.cfg.sharedBrowsers,
-        ...browserSessions.map((b) => ({ port: b.port, profile: b.profile, label: `Managed browser: ${b.project}` })),
-      ]);
+      const browsers = findBrowsers(procs, herdr?.panes || [], knownBrowsers(this.cfg.sharedBrowsers, browserSessions));
       // Probe only a browser whose process matches its port and profile. The probes run in parallel, so a hung browser delays the tick by at most 2 seconds.
       const managedBrowsers = await Promise.all(browserSessions.map(async (b) => {
         const matched = browsers.some((x) => x.kind === 'automation-chrome' && x.port === String(b.port) && x.profile === b.profile);

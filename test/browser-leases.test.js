@@ -14,6 +14,7 @@ const pool = await import('../src/browser-pool.js');
 const leases = await import('../src/leases.js');
 const { renderBulletin } = await import('../src/rules.js');
 const { validateResourcePools } = await import('../src/config.js');
+const { knownBrowsers } = await import('../src/engine.js');
 
 const CLI = fileURLToPath(new URL('../src/cli.js', import.meta.url));
 const NOW = Date.parse('2026-09-28T12:00:00Z');
@@ -67,6 +68,13 @@ test('acquireLeaseFor refuses port 9222 in any pool', () => {
   assert.equal(leases.acquireLeaseFor('legacy', holder, { pools, dataDir, now: NOW }).item, '47200');
   assert.throws(() => leases.acquireLeaseFor('legacy', holder, { pools, dataDir, now: NOW }), /No free item in pool legacy/);
   assert.throws(() => leases.acquireLeaseFor('project-browsers', holder, { pools, dataDir, prefer: '9222', now: NOW }), /Port 9222 is protected/);
+});
+
+test('the engine has no fixed browser entry for port 9222', () => {
+  const known = knownBrowsers([], [{ port: 9230, profile: '/p/alpha', project: 'alpha' }]);
+  assert.deepEqual(known, [{ port: 9230, profile: '/p/alpha', label: 'Managed browser: alpha' }]);
+  assert.ok(!knownBrowsers([], []).some((entry) => String(entry.port) === '9222'));
+  assert.deepEqual(knownBrowsers([{ port: 9250, label: 'Signed-in browser' }], []), [{ port: 9250, label: 'Signed-in browser' }]);
 });
 
 test('a config pool named project-browsers is an error, and the built-in pool stays', () => {
