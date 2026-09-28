@@ -5,7 +5,7 @@ const $nav = document.getElementById('primary-nav');
 const $roamgate = document.getElementById('roamgate-link');
 const $navMenu = document.getElementById('nav-menu');
 const $navMenuLabel = document.getElementById('nav-menu-label');
-const NAV_LABEL = { overview: 'Overview', mailbox: 'Mailbox', agents: 'Agents', projects: 'Projects', browsers: 'Browsers', allocation: 'Allocation', analytics: 'Analytics', logs: 'Logs', settings: 'Settings' };
+const NAV_LABEL = { overview: 'Overview', mailbox: 'Mailbox', chat: 'Chat', agents: 'Agents', projects: 'Projects', browsers: 'Browsers', allocation: 'Allocation', analytics: 'Analytics', logs: 'Logs', settings: 'Settings' };
 const settingsLink = document.createElement('a');
 settingsLink.href = '/settings';
 settingsLink.dataset.nav = 'settings';
@@ -1951,6 +1951,311 @@ function updateMailboxBadge(s) {
   if (needsShortcut) needsShortcut.setAttribute('aria-label', needsCount ? `Needs you, ${needsCount} items` : 'Needs you');
 }
 
+// ---------- Chat ----------
+// One thread for the Boss and one for each project orchestrator. A chat message is a normal bubble.
+// The only write path is POST /api/messages. A read, a page, and the list are reads.
+
+const CHAT_PAGE_LIMIT = 50;
+const CHAT_MAX_LINES = 6;
+const chat = { list: [], loaded: false, loading: false, error: '', status: '', thread: null, title: '', messages: [], more: false, moreLoading: false, loadingThread: false, draft: '', pending: [], unseen: 0, busy: false, scroll: null, keepScroll: null };
+
+const chatThreadFromLocation = () => new URLSearchParams(location.search).get('thread');
+const chatUrl = (thread) => (thread ? `/chat?thread=${encodeURIComponent(thread)}` : '/chat');
+function chatFind(thread) { return chat.list.find((item) => item.thread === thread); }
+
+// The row order is the order of the API: the newest last message first, then the thread name.
+function chatSortList(list) {
+  return [...list].sort((left, right) => {
+    if (!left.last) return right.last ? 1 : left.thread.localeCompare(right.thread);
+    if (!right.last) return -1;
+    return Date.parse(right.last.at) - Date.parse(left.last.at) || left.thread.localeCompare(right.thread);
+  });
+}
+
+function chatUnreadTotal() { return chat.list.reduce((sum, item) => sum + (item.unread || 0), 0); }
+
+function chatUpdateBadge() {
+  const unread = chatUnreadTotal();
+  const text = (count) => count > 99 ? '99+' : String(count);
+  for (const badge of document.querySelectorAll('[data-chat-badge]')) { badge.hidden = !unread; badge.textContent = text(unread); }
+  const link = $nav.querySelector('[data-nav="chat"]');
+  if (link) link.setAttribute('aria-label', unread ? `Chat, ${unread} unread` : 'Chat');
+}
+
+function chatInitials(title) {
+  const words = String(title || '?').split(/[\s_-]+/).filter(Boolean);
+  return (words.length > 1 ? `${words[0][0]}${words[1][0]}` : String(title || '?').slice(0, 2)).toUpperCase();
+}
+
+function chatTitle(thread) {
+  const item = chatFind(thread);
+  if (item) return item.title;
+  if (thread === 'boss') return 'Boss';
+  return state?.control?.projects?.[thread]?.label || thread;
+}
+
+function chatView(s) {
+  if (!chat.loaded && !chat.loading) loadChats();
+  chatSyncLocation();
+  const rows = chat.list.map(chatRow).join('');
+  const list = chat.list.length
+    ? `<ul class="chat-list">${rows}</ul>`
+    : `<p class="chat-empty">${chat.loaded ? 'No chats.' : 'Loading…'}</p>`;
+  const conversation = chat.thread ? chatConversationView() : '<section class="chat-empty-state"><p>Select a chat to read it.</p></section>';
+  return [
+    '<header class="page-intro"><div><h1>Chat</h1><p>Talk with the Boss and the project orchestrators.</p></div></header>',
+    `<p class="chat-notice" role="status"${chat.error || chat.status ? '' : ' hidden'}>${esc(chat.error || chat.status)}</p>`,
+    `<div class="chat-layout${chat.thread ? ' thread-open' : ''}"><aside class="chat-list-pane" aria-label="Chats"><div class="chat-list-head"><h2>Chats<span class="sub">${chat.list.length}</span></h2></div>${list}</aside><section class="chat-conversation-pane">${conversation}</section></div>`,
+  ].join('');
+}
+
+function chatRow(item) {
+  const unread = item.unread || 0;
+  const time = item.last ? clock(item.last.at) : '';
+  const open = item.thread === chat.thread;
+  const badge = unread ? `<span class="chat-unread">${unread > 99 ? '99+' : unread}</span>` : '';
+  return `<li class="chat-item${unread ? ' unread' : ''}"><button class="chat-row" type="button" data-chat-open="${esc(item.thread)}"${open ? ' aria-current="true"' : ''} aria-label="Open the ${esc(item.title)} chat${unread ? `. ${unread} unread message${unread === 1 ? '' : 's'}` : ''}">
+    <span class="chat-avatar" aria-hidden="true">${esc(chatInitials(item.title))}</span>
+    <span class="chat-main"><span class="chat-name">${esc(item.title)}</span><span class="chat-preview">${item.last ? esc(item.last.text) : 'No messages yet.'}</span></span>
+    <span class="chat-side">${time ? `<span class="chat-time">${esc(time)}</span>` : ''}${badge}</span>
+  </button></li>`;
+}
+
+function chatConversationView() {
+  const title = chatTitle(chat.thread);
+  const bubbles = chat.loadingThread && !chat.messages.length
+    ? '<p class="chat-empty">Loading messages…</p>'
+    : chat.messages.length || chat.pending.length
+      ? `<ol class="chat-bubbles" role="log" aria-live="polite" aria-label="Messages in the ${esc(title)} chat">${[...chat.messages, ...chat.pending].map(chatBubble).join('')}</ol>`
+      : '<p class="chat-empty">No messages in this chat.</p>';
+  const older = chat.more ? `<p class="chat-more">${chat.moreLoading ? 'Loading older messages…' : 'Scroll up for older messages.'}</p>` : '';
+  const pill = chat.unseen ? `<button type="button" class="chat-new-pill" data-chat-new>${chat.unseen} new message${chat.unseen === 1 ? '' : 's'}</button>` : '';
+  return `<div class="chat-panel"><div class="chat-panel-head"><button type="button" class="chat-back" data-chat-back aria-label="Back to chats">Back</button><h2>${esc(title)}</h2></div><div class="chat-scroll" data-chat-scroll tabindex="0">${older}${bubbles}</div>${pill}<form class="chat-composer" data-chat-compose><label class="visually-hidden" for="chat-draft">Message to ${esc(title)}</label><div class="chat-composer-row"><textarea id="chat-draft" data-chat-draft maxlength="2000" rows="1" placeholder="Message…"></textarea><button type="submit"${chat.busy ? ' disabled' : ''}>Send</button></div><p class="chat-hint">Enter sends · Shift+Enter makes a new line</p></form></div>`;
+}
+
+function chatBubble(record) {
+  const owner = record.from === 'owner';
+  const sender = MESSAGE_SENDER[record.from] || record.from;
+  const state = owner ? mailDeliveryState(record) : record.action ? `Action: ${record.action}` : record.readAt ? 'read' : 'unread';
+  const tone = !owner ? '' : record.status === 'sent' || record.status === 'relayed' ? ' ok' : record.status === 'failed' ? ' fail' : '';
+  // An action item is a normal bubble for now. The Mailbox holds its buttons.
+  const action = !owner && record.action ? `<a class="chat-action-link" href="/mailbox?thread=${encodeURIComponent(record.thread)}">Open in Mailbox</a>` : '';
+  const retry = record.local && record.error ? `<p class="chat-bubble-retry"><button type="button" data-chat-retry="${esc(record.id)}">Retry</button></p>` : '';
+  return `<li class="chat-bubble${owner ? ' from-owner' : ' from-agent'}" data-chat-bubble="${esc(record.id)}"><p class="chat-bubble-text">${esc(record.text)}</p><p class="chat-bubble-meta"><span>${esc(sender)} · ${esc(clock(record.at))}</span>${state ? ` · <span class="chat-state${tone}">${esc(state)}</span>` : ''}</p>${action}${retry}</li>`;
+}
+
+async function loadChats() {
+  chat.loading = true;
+  try {
+    const response = await fetch('/api/chats');
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'The chats could not be read.');
+    chat.list = chatSortList(result);
+    chat.loaded = true;
+    chat.error = '';
+  } catch (error) { chat.error = error.message; }
+  finally { chat.loading = false; render(); }
+}
+
+async function loadChatThread(thread, { older = false } = {}) {
+  const oldest = older ? chat.messages[0] : null;
+  const before = oldest ? `&before=${encodeURIComponent(oldest.id)}` : '';
+  if (older) chat.moreLoading = true; else chat.loadingThread = true;
+  try {
+    const response = await fetch(`/api/chats/${encodeURIComponent(thread)}?limit=${CHAT_PAGE_LIMIT}${before}`);
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'The chat could not be read.');
+    if (chat.thread !== thread) return;
+    chat.messages = older ? [...result.messages, ...chat.messages] : result.messages;
+    chat.more = result.more;
+    chat.error = '';
+  } catch (error) { chat.error = error.message; }
+  finally { if (older) chat.moreLoading = false; else chat.loadingThread = false; render(); }
+}
+
+// A link, the Back control, or the browser Back button can change the open thread.
+function chatSyncLocation() {
+  const requested = chatThreadFromLocation();
+  if (requested === chat.thread) return;
+  chat.thread = requested;
+  chat.messages = [];
+  chat.more = false;
+  chat.pending = [];
+  chat.unseen = 0;
+  chat.scroll = null;
+  chat.keepScroll = null;
+  chat.status = '';
+  if (!requested) { render(); return; }
+  loadChatThread(requested);
+  chatMarkRead(requested);
+}
+
+function openChat(thread) {
+  if (chat.thread === thread) return;
+  history.pushState(null, '', chatUrl(thread));
+  chatSyncLocation();
+  render();
+}
+
+function closeChat() {
+  if (!chat.thread) return;
+  history.pushState(null, '', '/chat');
+  chatSyncLocation();
+  render();
+}
+
+// Opening a chat marks the messages to the Owner as read. A refused read, for example in the read-only preview, leaves them unread.
+async function chatMarkRead(thread) {
+  if (!(chatFind(thread)?.unread > 0)) return;
+  try {
+    const response = await fetch(`/api/chats/${encodeURIComponent(thread)}/read`, { method: 'POST' });
+    if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || 'The chat could not be marked read.');
+    const item = chatFind(thread);
+    if (item) item.unread = 0;
+    for (const record of chat.messages) if (record.to === 'owner' && !record.readAt) record.readAt = new Date().toISOString();
+  } catch (error) { chat.status = error.message; }
+  render();
+}
+
+// A re-render replaces the conversation. Keep the reading position, the draft, and the caret.
+function chatCaptureView() {
+  chatScrolled();
+  const field = $app.querySelector('[data-chat-draft]');
+  return { focus: field === document.activeElement, caret: field && document.activeElement === field ? field.selectionStart : null };
+}
+
+function chatRestoreView(view) {
+  const scroller = $app.querySelector('[data-chat-scroll]');
+  if (scroller) {
+    if (chat.keepScroll) {
+      scroller.scrollTop = chat.keepScroll.top + (scroller.scrollHeight - chat.keepScroll.height);
+      chat.scroll = scroller.scrollTop;
+      chat.keepScroll = null;
+    } else scroller.scrollTop = chat.scroll === null ? scroller.scrollHeight : chat.scroll;
+    scroller.addEventListener('scroll', chatScrolled, { passive: true });
+  }
+  const field = $app.querySelector('[data-chat-draft]');
+  if (field) {
+    field.value = chat.draft;
+    chatGrowField(field);
+    if (view?.focus) {
+      field.focus();
+      if (view.caret != null) field.setSelectionRange(view.caret, view.caret);
+    }
+  }
+}
+
+// A scroll to the top reads an older page. The reading position must stay on the same message.
+function chatScrolled() {
+  const scroller = $app.querySelector('[data-chat-scroll]');
+  if (!scroller) return;
+  if (scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 48) { chat.scroll = null; chat.unseen = 0; }
+  else chat.scroll = scroller.scrollTop;
+  if (scroller.scrollTop < 32 && chat.more && !chat.moreLoading) loadChatOlder();
+}
+
+async function loadChatOlder() {
+  const scroller = $app.querySelector('[data-chat-scroll]');
+  if (!chat.thread || !scroller || !chat.more || chat.moreLoading) return;
+  chat.keepScroll = { top: scroller.scrollTop, height: scroller.scrollHeight };
+  await loadChatThread(chat.thread, { older: true });
+}
+
+// The text area grows with the text, up to six lines.
+function chatGrowField(field) {
+  const line = parseFloat(getComputedStyle(field).lineHeight) || 20;
+  field.style.height = 'auto';
+  field.style.height = `${Math.min(field.scrollHeight, Math.round(line) * CHAT_MAX_LINES)}px`;
+}
+
+function chatUpsertRecord(record) {
+  const index = chat.messages.findIndex((item) => item.id === record.id);
+  if (index === -1) chat.messages.push(record);
+  else chat.messages[index] = record;
+  chat.messages.sort((left, right) => Date.parse(left.at) - Date.parse(right.at));
+}
+
+// The page shows a queued bubble at once. A refused send marks it failed and offers a retry.
+async function chatSend(retry = null) {
+  const thread = chat.thread;
+  const field = $app.querySelector('[data-chat-draft]');
+  const text = String(retry ? retry.text : field ? field.value : chat.draft).trim();
+  if (!thread || !text || chat.busy) return;
+  const pending = retry || { id: `local-${Date.now()}-${chat.pending.length}`, local: true, thread, from: 'owner', at: new Date().toISOString(), text, status: 'queued', error: '' };
+  pending.status = 'queued';
+  pending.error = '';
+  chat.busy = true;
+  chat.draft = '';
+  chat.status = 'Sending…';
+  if (field) field.value = '';
+  chat.pending = [...chat.pending.filter((item) => item.id !== pending.id), pending];
+  chat.scroll = null;
+  render();
+  try {
+    const result = await postJson('/api/messages', { thread, kind: 'message', text });
+    chat.pending = chat.pending.filter((item) => item.id !== pending.id);
+    chatUpsertRecord(result.message);
+    chat.status = 'Queued. Herdr Boss delivers the message when the agent is working, idle, or done.';
+  } catch (error) {
+    pending.status = 'failed';
+    pending.error = error.message;
+    chat.status = error.message;
+  } finally { chat.busy = false; render(); }
+  $app.querySelector('[data-chat-draft]')?.focus();
+}
+
+// A message change arrives on the existing event stream. The list and the open chat follow it.
+function onChatMessage(event) {
+  const record = event?.record;
+  if (!record || typeof record.id !== 'string') return;
+  const item = chatFind(record.thread);
+  if (item) {
+    item.last = { id: record.id, at: record.at, from: record.from, text: String(record.text ?? '').slice(0, 120), status: record.status ?? null };
+    if (record.to === 'owner' && record.readAt) item.unread = 0;
+    else if (event.type === 'append' && record.to === 'owner' && record.thread !== chat.thread) item.unread = (item.unread || 0) + 1;
+    chat.list = chatSortList(chat.list);
+  }
+  if (record.thread === chat.thread) {
+    const isNew = event.type === 'append' && !chat.messages.some((message) => message.id === record.id);
+    chatUpsertRecord(record);
+    // The page scrolls down only when the Owner reads the newest message. Otherwise it shows a pill.
+    if (isNew && chat.scroll !== null) chat.unseen += 1;
+  }
+  render();
+}
+
+document.addEventListener('click', (e) => {
+  const open = e.target.closest?.('[data-chat-open]');
+  if (open) { openChat(open.dataset.chatOpen); return; }
+  if (e.target.closest?.('[data-chat-back]')) { closeChat(); return; }
+  if (e.target.closest?.('[data-chat-new]')) { chat.scroll = null; chat.unseen = 0; render(); return; }
+  const retry = e.target.closest?.('[data-chat-retry]');
+  if (retry) {
+    const pending = chat.pending.find((item) => item.id === retry.dataset.chatRetry);
+    if (pending) chatSend(pending);
+  }
+});
+
+document.addEventListener('submit', (e) => {
+  if (!e.target.matches?.('[data-chat-compose]')) return;
+  e.preventDefault();
+  chatSend();
+});
+
+document.addEventListener('input', (e) => {
+  if (!e.target.matches?.('[data-chat-draft]')) return;
+  chat.draft = e.target.value;
+  chatGrowField(e.target);
+});
+
+document.addEventListener('keydown', (e) => {
+  if (!e.target.matches?.('[data-chat-draft]')) return;
+  // Enter sends the message. Shift+Enter makes a new line.
+  if (e.key !== 'Enter' || e.shiftKey) return;
+  e.preventDefault();
+  chatSend();
+});
+
 // ---------- Organization ----------
 // A read-only chart from existing state: Owner, Boss, project orchestrators, and their workers.
 // Pane titles, pane output, and preferred models are not facts about an agent, so the chart does not use them.
@@ -2818,6 +3123,17 @@ const HELP = {
     <h3>Compose</h3><p>Select <b>New message</b> to write to the Boss or a project with an <code>orch</code> pane. The page asks you to confirm before it sends. The new conversation opens in <b>Sent</b>.</p>
     <h3>Phone</h3><p>The top bar has a mail icon for unread Updates and an alert icon for open Needs-you items. Select an icon to open its folder. The desktop Mailbox badge shows unread Needs-you items.</p>
     <p>The folder pane shows the fixed limits: Herdr Boss keeps messages for 30 days and accepts at most 10 Owner messages a minute. A read-only preview shows messages and refuses a read or a send.</p>`],
+  chat: ['Chat', `
+    <p>The Chat page shows one conversation for the Boss and one for each project orchestrator. Use the Mailbox for items that need an answer, an approval, or a decision. Use the Chat for a normal conversation.</p>
+    <h3>List</h3><p>Each row shows the title, the last message on one line, the time, and the unread count. The newest chat comes first. The menu badge shows the total unread count. The list follows the message stream. It never reloads the page.</p>
+    <h3>Conversation</h3><p>Select a row to open the chat. Your messages sit on the right, and the agent messages sit on the left. Each bubble shows the text and the time. Your bubble also shows the delivery state: <b>queued</b>, <b>delivered</b>, or <b>failed</b> with the reason. Opening a chat marks the messages to you as read.</p>
+    <p>Scroll up to read older messages. The page asks for the page before the oldest message and keeps your reading position. It stops at the oldest message in the store. The store keeps messages for 30 days.</p>
+    <p>A new message goes at the bottom. The page scrolls down only when you already read the newest message. Otherwise it shows a <b>new messages</b> pill. Select the pill to go to the newest message.</p>
+    <h3>Composer</h3><p>Select <b>Send</b> or press Enter to send the message. Select Shift and press Enter to make a new line. The text area grows with the text, up to 6 lines. A message holds at most 2000 characters. The service accepts at most 10 messages a minute.</p>
+    <p>The page shows your message as <b>queued</b> at once. The stored record replaces it when the service stores it. A refused send marks the bubble <b>failed</b> and shows <b>Retry</b>. Select <b>Retry</b> to send the same text again.</p>
+    <h3>Action items</h3><p>A message from an agent with an action shows as a normal bubble. Select <b>Open in Mailbox</b> to answer it in the Mailbox.</p>
+    <h3>Phone</h3><p>The list fills the page. Select a chat to open it full screen. Select <b>Back</b> to return to the list. The buttons are at least 44 px high.</p>
+    <p>A read-only preview shows the chats and refuses a send. It also refuses a read, so the unread count stays.</p>`],
   allocation: ['Allocation', `
     <p>The resource policy for all projects. Changes are a draft until you select <b>Apply policy</b>.</p>
     <h3>Capacity and handover</h3><p>The global limit of working agents, the lending of unused slots, the quota reserve, and automatic handover with its activation level.</p>
@@ -2944,20 +3260,23 @@ function render(force = false) {
   // An old Organization link opens the Agents page in the Chart view.
   if (location.pathname === '/organization') history.replaceState(null, '', '/agents?view=chart');
   const m = /^\/projects\/([^/]+)\/?$/.exec(location.pathname);
-  const route = m || location.pathname === '/projects' ? 'projects' : ['mailbox', 'allocation', 'settings', 'agents', 'browsers', 'analytics', 'logs'].includes(location.pathname.slice(1)) ? location.pathname.slice(1) : 'overview';
-  const html = route === 'projects' ? projectsView(state, m ? decodeURIComponent(m[1]) : null) : route === 'mailbox' ? mailboxView(state) : route === 'allocation' ? allocationView(state) : route === 'settings' ? settingsView(state) : route === 'agents' ? agentsView(state) : route === 'browsers' ? browsersView(state) : route === 'analytics' ? analyticsView(state) : route === 'logs' ? logsView(state) : overview(state);
+  const route = m || location.pathname === '/projects' ? 'projects' : ['mailbox', 'chat', 'allocation', 'settings', 'agents', 'browsers', 'analytics', 'logs'].includes(location.pathname.slice(1)) ? location.pathname.slice(1) : 'overview';
+  const html = route === 'projects' ? projectsView(state, m ? decodeURIComponent(m[1]) : null) : route === 'mailbox' ? mailboxView(state) : route === 'chat' ? chatView(state) : route === 'allocation' ? allocationView(state) : route === 'settings' ? settingsView(state) : route === 'agents' ? agentsView(state) : route === 'browsers' ? browsersView(state) : route === 'analytics' ? analyticsView(state) : route === 'logs' ? logsView(state) : overview(state);
   $navMenuLabel.textContent = NAV_LABEL[route] || 'Menu';
   for (const a of $nav.querySelectorAll('a')) {
     if (a.dataset.nav === route) a.setAttribute('aria-current', 'page');
     else a.removeAttribute('aria-current');
   }
   updateMailboxBadge(state);
+  chatUpdateBadge();
   if (html !== lastRender) {
     const active = document.activeElement;
     const focusId = active?.dataset?.mailDraft || active?.matches?.('[data-mail-compose-draft], [data-mail-reply-draft]') ? active.id : null;
+    const chatViewState = route === 'chat' ? chatCaptureView() : null;
     $app.innerHTML = html;
     lastRender = html;
     if (route === 'mailbox') mailRestoreDrafts(focusId);
+    if (route === 'chat') chatRestoreView(chatViewState);
   }
   if (route === 'agents' && agentsViewMode() === 'chart') orgMotion(state);
   else orgEventMark = null;
@@ -3922,6 +4241,7 @@ function connect() {
     if (location.pathname === '/mailbox' && mailbox.loaded && !mailbox.loading && JSON.stringify(state.mailbox) !== mailbox.counts) loadMailbox();
   });
   es.onopen = () => $dot.classList.add('on');
+  es.addEventListener('message', (e) => onChatMessage(JSON.parse(e.data)));
   es.onerror = () => { $dot.classList.remove('on'); $updated.textContent = 'reconnecting…'; };
 }
 async function refreshRoamgate() {
@@ -3932,7 +4252,7 @@ async function refreshRoamgate() {
   } catch { $roamgate.hidden = true; }
 }
 async function refreshExtras() {
-  const results = await Promise.allSettled(['/api/models', '/api/usage', '/api/browser-sessions', '/api/handoffs', '/api/denials', '/api/mailbox?folder=needs-you'].map((url) => fetch(url).then((r) => r.json())));
+  const results = await Promise.allSettled(['/api/models', '/api/usage', '/api/browser-sessions', '/api/handoffs', '/api/denials', '/api/mailbox?folder=needs-you', '/api/chats'].map((url) => fetch(url).then((r) => r.json())));
   if (results[0].status === 'fulfilled') models = results[0].value;
   if (results[1].status === 'fulfilled') usage = results[1].value;
   if (results[2].status === 'fulfilled') {
@@ -3945,6 +4265,7 @@ async function refreshExtras() {
   if (results[3].status === 'fulfilled') handoffRecords = results[3].value;
   if (results[4].status === 'fulfilled') denials = results[4].value;
   if (results[5].status === 'fulfilled') mailbox.updatesUnread = results[5].value.updatesUnread || 0;
+  if (results[6].status === 'fulfilled' && Array.isArray(results[6].value)) { chat.list = chatSortList(results[6].value); chat.loaded = true; }
   if (location.pathname === '/mailbox' && !mailbox.loading) await loadMailbox();
   lastRender = '';
   render();
