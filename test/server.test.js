@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
+import { execFileSync } from 'node:child_process';
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-preview-test-'));
 const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-preview-home-'));
@@ -16,6 +17,120 @@ const [{ serve }, { loadConfig }] = await Promise.all([
   import('../src/server.js'),
   import('../src/config.js'),
 ]);
+
+test('the state API exposes only allow-listed effective service settings', { timeout: 20000 }, (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-service-settings-'));
+  const home = path.join(root, 'home');
+  const data = path.join(root, 'data');
+  const live = path.join(root, 'live');
+  fs.mkdirSync(home, { recursive: true });
+  fs.mkdirSync(data, { recursive: true });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const accessTokenPath = path.join(root, 'private-access-token');
+  const roamgateTokenPath = path.join(root, 'private-roamgate-token');
+  fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({
+    port: 0,
+    host: '127.0.0.1',
+    push: true,
+    tickSeconds: 45,
+    quotaSeconds: 420,
+    machine: { memFreeWarnPercent: 18 },
+    quota: { warnPercent: 85, criticalPercent: 97 },
+    staleStatusMinutes: 75,
+    workers: { staleIdleMinutes: 110 },
+    browsers: { reapOrphanDaemons: false, orphanDaemonMinAgeSeconds: 3600, staleOwnedMinutes: 25 },
+    providerKinds: { codex: ['codex', 'pi'] },
+    orchestratorLabel: 'orchestrator',
+    access: { tokenFile: accessTokenPath, sessionDays: 20 },
+    roamgate: { port: 8888, tokenFile: roamgateTokenPath },
+    serviceApiKey: 'must-not-enter-the-view',
+  }));
+
+  const configUrl = new URL('../src/config.js', import.meta.url).href;
+  const serverUrl = new URL('../src/server.js', import.meta.url).href;
+  const engineUrl = new URL('../src/engine.js', import.meta.url).href;
+  const script = `
+import { loadConfig, serviceSettingsView } from ${JSON.stringify(configUrl)};
+import { serve } from ${JSON.stringify(serverUrl)};
+import { Engine } from ${JSON.stringify(engineUrl)};
+const cfg = loadConfig();
+const view = serviceSettingsView(cfg);
+console.log = () => {};
+const collectors = {
+  collectHerdr: async () => ({ panes: [], workspaces: [] }),
+  collectMachine: async () => null,
+  collectProcesses: async () => new Map(),
+  collectQuotas: async () => [],
+  collectWorktreeCounts: async () => ({}),
+  collectCwdProcesses: async () => [],
+  collectMissingWorktreeProcesses: async () => [],
+  collectPiModels: async () => ({ models: [] }),
+};
+const app = serve(cfg, { readOnlyPreview: true, createEngine: (config, options) => new Engine(config, { ...options, collectors }) });
+try {
+  if (app.engine.state?.serviceSettings) {
+    // The first tick can finish before this probe starts.
+  } else {
+    await new Promise((resolve) => app.engine.once('state', resolve));
+  }
+  if (!app.server.listening) await new Promise((resolve, reject) => {
+    app.server.once('listening', resolve);
+    app.server.once('error', reject);
+  });
+  const response = await fetch('http://127.0.0.1:' + app.server.address().port + '/api/state');
+  const state = await response.json();
+  process.stdout.write(JSON.stringify({ view, state }));
+} finally {
+  await app.close();
+}
+`;
+  const result = execFileSync(process.execPath, ['--input-type=module', '-e', script], {
+    encoding: 'utf8',
+    timeout: 15000,
+    env: {
+      ...process.env,
+      HOME: home,
+      HERDR_BOSS_DIR: data,
+      HERDR_BOSS_LIVE_DIR: live,
+      HERDR_BOSS_PORT: '',
+      HERDR_BOSS_PUSH: '',
+    },
+  });
+  const { view, state } = JSON.parse(result.trim());
+  const keys = view.map((item) => item.setting);
+  assert.deepEqual(keys, [
+    'machine.memFreeWarnPercent',
+    'quota.warnPercent', 'quota.criticalPercent',
+    'staleStatusMinutes',
+    'workers.staleIdleMinutes',
+    'browsers.reapOrphanDaemons', 'browsers.orphanDaemonMinAgeSeconds', 'browsers.staleOwnedMinutes', 'browsers.sweepCodeSignClones',
+    'tickSeconds', 'quotaSeconds', 'push', 'alertCooldownSeconds', 'providerKinds', 'orchestratorLabel', 'port', 'host',
+  ]);
+  assert.deepEqual(view.map(({ source }) => source), [
+    'config', 'config', 'config', 'config', 'config', 'config', 'config', 'config', 'default',
+    'config', 'config', 'config', 'default', 'config', 'config', 'config', 'config',
+  ]);
+  assert.deepEqual(view.find(({ setting }) => setting === 'browsers.sweepCodeSignClones'), {
+    group: 'Browsers', setting: 'browsers.sweepCodeSignClones', value: true, source: 'default',
+  });
+  assert.deepEqual(state.serviceSettings, view, 'the engine puts this same view in state');
+  assert.equal(state.serviceSettings.find(({ setting }) => setting === 'providerKinds').value.codex.includes('pi'), true);
+  for (const text of [JSON.stringify(view), JSON.stringify(state)]) {
+    assert.equal(text.includes(accessTokenPath), false, 'the access token path never enters the view or API state');
+    assert.equal(text.includes(roamgateTokenPath), false, 'the Roamgate token path never enters the view or API state');
+    assert.equal(text.includes('must-not-enter-the-view'), false, 'an unlisted secret-like config value never enters the view or API state');
+  }
+  const assertSafeNames = (value) => {
+    if (Array.isArray(value)) return value.forEach(assertSafeNames);
+    if (!value || typeof value !== 'object') return;
+    for (const [name, child] of Object.entries(value)) {
+      assert.doesNotMatch(name, /token|secret|password|key/i, `service settings must not contain ${name}`);
+      assertSafeNames(child);
+    }
+  };
+  assertSafeNames(view);
+  for (const { setting } of view) assert.doesNotMatch(setting, /token|secret|password|key/i, `service settings must not include ${setting}`);
+});
 
 test('read-only preview allows reads and rejects all API methods that can change state', { timeout: 20000 }, async (t) => {
   const cfg = loadConfig();

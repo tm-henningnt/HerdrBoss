@@ -1086,3 +1086,17 @@ body.dep-full-open { overflow: hidden; }
   .lease-table td[data-label=""]::before { content: none; }
   .lease-action { text-align: left; }
 }
+
+/* Read-only service settings on the Settings page. */
+.service-settings-panel { grid-column: 1 / -1; }
+.service-settings-panel h2 { margin: 0 0 10px; }
+.service-settings-scroll { overflow-x: auto; }
+.service-settings-table { width: 100%; border-collapse: collapse; text-align: left; font-size: 12.5px; }
+.service-settings-table th, .service-settings-table td { padding: 7px 10px 7px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+.service-settings-table thead th { color: var(--muted); font-size: 11px; font-weight: 600; white-space: nowrap; }
+.service-settings-table tbody th { font-weight: 500; }
+.service-settings-table code { font: 11.5px var(--mono); overflow-wrap: anywhere; }
+.service-settings-table td:nth-child(2) { max-width: 58ch; overflow-wrap: anywhere; }
+.service-settings-table td:last-child { color: var(--muted); white-space: nowrap; }
+.service-settings-table .service-settings-group th { padding-top: 13px; color: var(--text); font-size: 11px; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; }
+.service-settings-note { margin: 12px 0 0; color: var(--muted); font-size: 12.5px; }

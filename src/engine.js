@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
-import { DATA_DIR, LIVE_DATA_DIR, dashboardUrl } from './config.js';
+import { DATA_DIR, LIVE_DATA_DIR, dashboardUrl, serviceSettingsView } from './config.js';
 import { collectHerdr, collectQuotas, collectMachine, collectProcesses, collectCwdProcesses, collectMissingWorktreeProcesses, collectWorktreeCounts, collectPiModels, findBrowsers, cpuUse, keepStaleRows, run } from './collect.js';
 import { evaluate, renderBulletin, fmtDuration, providerName, broadcastTargets, staleStatuses } from './rules.js';
 import { listProjects } from './projects.js';
@@ -294,6 +294,7 @@ export class Engine extends EventEmitter {
           warnPercent: this.cfg.quota?.warnPercent ?? 90,
           criticalPercent: this.cfg.quota?.criticalPercent ?? 98,
         },
+        serviceSettings: serviceSettingsView(this.cfg),
         quotasCached: this.quotasCached,
         machine,
         worktreeCounts: this.worktreeCounts,
