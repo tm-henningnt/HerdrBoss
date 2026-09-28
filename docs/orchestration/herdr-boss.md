@@ -1,4 +1,4 @@
-<!-- herdr-boss kit v=6591ff7d8a32 -->
+<!-- herdr-boss kit v=2638f5b83930 -->
 Herdr Boss writes this file. Do not edit it. Run herdr-boss kit install to update it.
 
 # Herdr Boss orchestration kit
@@ -14,6 +14,7 @@ These are the shared operating rules for the orchestrator of this project.
 - Run `herdr-boss kit-path` to find the shared kit repository. Use its path for the files below.
 - Read `kit/skills/herdr-orchestrator/SKILL.md` there.
 - Read `kit/models.md` before selecting a worker kind or model.
+- Give tasks that launch Chromium (Playwright, performance replays, galleries, screenshots) to `claude`, `opencode`, or `pi` workers, not to `codex`. The Codex sandbox cannot launch Chromium.
 - Run `herdr-boss models` and `herdr-boss lanes` for the current models and lanes. Never copy model lists or harness facts into project files.
 - Read `~/.herdr-boss/bulletin.md` before each worker dispatch.
 - Follow its worker cap, your project's effective slots, and provider pacing rules. The effective slots include borrowed slots. Use an authorized override only when needed.
