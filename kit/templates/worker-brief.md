@@ -136,7 +136,7 @@ Treat a secret that reaches a transcript as disclosed. Report it to the orchestr
 
 For a visual check of a served page, use the project browser. Every worker kind can use it, also `codex`:
 
-1. Start the server on a free local port, or on a port from `herdr-boss lease acquire serve-ports`.
+1. Start the server on a free local port, or on a port from `herdr-boss lease acquire serve-ports`. In a Codex shell, start it in the background with `setopt NO_BG_NICE; <server command> > .worker/tmp/serve.log 2>&1 &`. Without `NO_BG_NICE`, zsh prints `nice(5) failed: operation not permitted`, but the server still starts.
 2. Run `herdr-boss browser request <project>`.
 3. Run `herdr-boss browser tab new <project> http://127.0.0.1:<port>/<page>`. Note the tab id.
 4. Run `herdr-boss browser screenshot <project> --tab <id>`. Use `navigate`, `click`, `key`, and `text` as needed.

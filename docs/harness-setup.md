@@ -103,6 +103,17 @@ To apply the rules:
 | The `launchctl` rule | It allows a restart of the Herdr Boss service only. |
 | The `ps` allow rule | `ps` can show process arguments. The kit rule forbids a print of full command lines. |
 
+### Background commands in the Codex sandbox
+
+A Codex tool shell is zsh. zsh runs a background job (`command &`) at a lower priority, because its `BG_NICE` option is on by default. The Codex sandbox refuses that priority change, so zsh prints `nice(5) failed: operation not permitted`. The job still starts, and the exit code is 0. The message is not a failure.
+
+To start a server in the background without the message, use one of these forms:
+
+- `setopt NO_BG_NICE; npm run serve:live > .worker/tmp/serve.log 2>&1 &`
+- `bash -c 'npm run serve:live > .worker/tmp/serve.log 2>&1 &'`
+
+`nohup` does not remove the message. Check that the server answers before you use it, for example with `curl -fsS -o /dev/null -w '%{http_code}' http://127.0.0.1:<port>/`. Stop the server before you write the report.
+
 ## OpenCode
 
 | Setting | File | Applied by |
