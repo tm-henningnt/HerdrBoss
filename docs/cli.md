@@ -57,6 +57,35 @@ When `NODE_TEST_CONTEXT` is set, or the data directory differs from the configur
 
 The first `publish` of a slug registers the project. It records `{ slug, repo, remote }` in `project-repos.json` in the data folder, with mode 0600, when the Git top level exists. `repo` is the Git top level. `remote` is the `origin` URL without a user name and a password. A later publish keeps the first record. For a new slug, `publish` runs `harness sync --codex-only` and prints its result as `warning: harness sync:` lines.
 
+## Owner messages
+
+The Owner sends messages from the Organization page. The Boss and the orchestrators reply with these commands. The store is `messages.jsonl` in the data directory.
+
+| Command | Action |
+|---|---|
+| `herdr-boss say [--reply-to ID] [--action answer\|approve\|decide\|read] "TEXT"` | Write a reply for the Owner. Run it from the pane labeled `boss` or from a pane labeled `orch`. |
+| `herdr-boss messages [THREAD]` | Print the records of one thread as JSON, oldest first. Without `THREAD`, print the records of all threads. `THREAD` is `boss` or a project slug. |
+| `herdr-boss mail post --to owner [--title TEXT] [--action read\|decide\|approve\|answer] FILE` | Post a Markdown report for the Owner in the `boss` thread. Only the pane labeled `boss` can post. |
+
+`say` and `mail post` verify the caller the same way as `worker allow`:
+
+1. The pane must set `HERDR_ENV=1`, `HERDR_PANE_ID`, and `HERDR_WORKSPACE_ID`.
+2. `herdr pane get` must return the same pane ID and workspace.
+3. The pane label must be exactly `boss` or `orch`.
+
+A worker pane cannot use `say`. The command tells the worker to ask its orchestrator.
+
+The Boss writes to the `boss` thread. An orchestrator writes to the thread of the project that uses its workspace. Herdr Boss finds that project in `state.json`. `--reply-to` must name a message in the same thread.
+
+The `say` text is 1 to 4000 characters. The report file is Markdown, up to 64 KB. The report title defaults to the first Markdown heading, or to `Report`. Both commands refuse text that looks like a token, a key, or a password. The error does not print the text.
+
+Example:
+
+```sh
+herdr-boss say --reply-to m-mg3k2x1a-1f2e3d4c "Two tasks are left. The next merge is at 14:00."
+herdr-boss mail post --to owner --title "Morning handback" --action read handback.md
+```
+
 ## Harness settings
 
 | Command | Action |

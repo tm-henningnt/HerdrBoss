@@ -47,6 +47,7 @@ These are the shared operating rules for the orchestrator of this project.
 - Do not message another project's orchestrator. The Boss relays messages between projects.
 - Decide and run your own pushes, deployments, and releases. Nobody approves them. Before each push, read the full diff for secrets, private local paths, and other-project client or tenant names. Push one change set at a time. Take the machine-wide lock around every full test suite run and every push whose hook runs the full suite: run `herdr-boss lock acquire full-suite --wait 1800`, run the suite or the push, then run `herdr-boss lock release full-suite`. Use `herdr-boss push` for a push; it takes the lock when a pre-push hook exists. There is no load threshold. Send a deployment that spends money to the Owner through the Boss.
 - Record an Owner request typed into your pane as an Owner decision in `docs/orchestration/memory.md`.
+- A prompt that starts with `[owner]` is an Owner message from the dashboard. Reply with `herdr-boss say --reply-to <id> "<answer>"`. Record an Owner decision from it in `docs/orchestration/memory.md`.
 - Write the full text of an Owner decision into `docs/orchestration/memory.md`, not a pointer.
 - The kit file and the Owner decisions in `memory.md` are the operating rules of this project. Report a conflict with them to the Boss. Do not work around them.
 - List processes with `pgrep -l`, `ps -o pid,ppid,etime,comm`, or `herdr-boss worktree prune`.

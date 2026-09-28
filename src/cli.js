@@ -63,8 +63,51 @@ const USAGE = `herdr-boss <command>
   kit block             Print the marked Herdr Boss stub for AGENTS.md.
   gh issue ...          Run safe GitHub issue commands.
   models                Show allowed worker models.
+  say [--reply-to ID] [--action answer|approve|decide|read] TEXT  Reply to the Owner from the boss pane or an orch pane.
+  messages [THREAD]     Print the message records of one thread, or of all threads, as JSON.
+  mail post --to owner [--title TEXT] [--action read|decide|approve|answer] FILE  Post a Markdown report for the Owner from the boss pane.
   kit-path              Print the shared kit directory.
 `;
+
+// Parse --flag VALUE pairs. Each flag appears at most once; other tokens are positional.
+function messageFlags(args, known, usage) {
+  const flags = {};
+  const positional = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index];
+    if (!token.startsWith('--')) { positional.push(token); continue; }
+    if (!known.includes(token)) throw new Error(`Unknown option: ${token}. ${usage}`);
+    if (token in flags) throw new Error(`${token} may be used only once.`);
+    const value = args[++index];
+    if (value === undefined || value.startsWith('--')) throw new Error(`${token} needs a value.`);
+    flags[token] = value;
+  }
+  return { flags, positional };
+}
+
+async function messageCommand(cmd, args) {
+  const { sayMessage, postReport, readMessages, listThread, validThread } = await import('./messages.js');
+  if (cmd === 'messages') {
+    if (args.length > 1 || (args.length === 1 && !validThread(args[0]))) throw new Error('Usage: messages [THREAD]. THREAD is boss or a project slug.');
+    console.log(JSON.stringify(args.length ? listThread(args[0]) : readMessages(), null, 2));
+    return;
+  }
+  const { createHerdrRunner } = await import('./kit/workers.js');
+  if (cmd === 'say') {
+    const usage = 'Usage: say [--reply-to ID] [--action answer|approve|decide|read] "TEXT"';
+    const { flags, positional } = messageFlags(args, ['--reply-to', '--action'], usage);
+    if (positional.length !== 1) throw new Error(`${usage}. Quote the text as one argument.`);
+    const record = sayMessage(positional[0], { replyTo: flags['--reply-to'] ?? null, action: flags['--action'] ?? null }, { herdr: createHerdrRunner() });
+    console.log(`Message ${record.id} is in the ${record.thread} thread for the Owner.`);
+    return;
+  }
+  const usage = 'Usage: mail post --to owner [--title TEXT] [--action read|decide|approve|answer] FILE';
+  if (args[0] !== 'post') throw new Error(usage);
+  const { flags, positional } = messageFlags(args.slice(1), ['--to', '--title', '--action'], usage);
+  if (positional.length !== 1) throw new Error(usage);
+  const record = postReport(positional[0], { to: flags['--to'] ?? null, title: flags['--title'] ?? null, action: flags['--action'] ?? null }, { herdr: createHerdrRunner() });
+  console.log(`Report ${record.id} is in the boss thread for the Owner.`);
+}
 
 async function main() {
   const [cmd, ...args] = process.argv.slice(2);
@@ -78,6 +121,10 @@ async function main() {
     const dir = path.join(DATA_DIR, 'scratch', args[0]);
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     console.log(path.resolve(dir));
+    return;
+  }
+  if (['say', 'messages', 'mail'].includes(cmd)) {
+    await messageCommand(cmd, args);
     return;
   }
   if (['worker', 'lock', 'push', 'suite', 'worktree', 'ledger', 'check', 'gh', 'models', 'kit'].includes(cmd)) {

@@ -4,6 +4,7 @@ import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import http from 'node:http';
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-preview-test-'));
 const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-preview-home-'));
@@ -75,6 +76,7 @@ test('read-only preview allows reads and rejects all API methods that can change
     ['DELETE', '/api/projects/demo'],
     ['POST', '/api/usage'],
     ['POST', '/api/tick'],
+    ['POST', '/api/messages'],
     ['PATCH', '/api/unknown'],
     ['OPTIONS', '/api/state'],
   ];
@@ -338,4 +340,126 @@ console.log(JSON.stringify({ result }));
   assert.equal(prepared.status, 'prepared');
   await close();
   assert.equal(server.listening, false, 'the API integration stops its server');
+});
+
+function rawRequest(base, method, route, { headers = {}, body } = {}) {
+  const url = new URL(route, base);
+  return new Promise((resolve, reject) => {
+    const req = http.request({ host: url.hostname, port: url.port, path: `${url.pathname}${url.search}`, method, headers }, (res) => {
+      const chunks = [];
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, text: Buffer.concat(chunks).toString('utf8') }));
+    });
+    req.on('error', reject);
+    if (body !== undefined) req.write(body);
+    req.end();
+  });
+}
+
+test('the messages API validates Owner sends, refuses cross-origin and unauthenticated remote requests, and limits the rate', { timeout: 20000 }, async (t) => {
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.mkdirSync(homeDir, { recursive: true });
+  const { readMessages, STATUS_REQUEST_TEXT, NUDGES } = await import('../src/messages.js');
+  const cfg = loadConfig();
+  cfg.host = '127.0.0.1';
+  cfg.port = 0;
+  cfg.tickSeconds = 3600;
+  let engine;
+  const { server, close } = serve(cfg, {
+    createEngine: () => {
+      engine = new EventEmitter();
+      engine.state = { control: { projects: { alpha: { slug: 'alpha', workspace: 'wA', orch: { pane: 'wA:p1' } } } }, herdr: { panes: [] } };
+      engine.tick = async () => engine.state;
+      engine.log = () => {};
+      return engine;
+    },
+  });
+  t.after(async () => {
+    await close();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  });
+  await new Promise((resolve, reject) => {
+    server.once('listening', resolve);
+    server.once('error', reject);
+  });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const post = (body, headers = {}) => fetch(`${base}/api/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body),
+  });
+
+  const invalid = [
+    [{ thread: 'alpha', kind: 'message', text: '' }, 400],
+    [{ thread: 'alpha', kind: 'message', text: '   ' }, 400],
+    [{ thread: 'alpha', kind: 'message', text: 'x'.repeat(2001) }, 400],
+    [{ thread: 'alpha', kind: 'message' }, 400],
+    [{ thread: 'alpha', kind: 'nudge', text: 'Delete everything.' }, 400],
+    [{ thread: 'alpha', kind: 'reply', text: 'Hi.' }, 400],
+    [{ thread: 'Not A Slug', kind: 'message', text: 'Hi.' }, 400],
+    [{ thread: 'gamma', kind: 'message', text: 'Hi.' }, 404],
+  ];
+  for (const [body, status] of invalid) {
+    const response = await post(body);
+    assert.equal(response.status, status, JSON.stringify(body));
+    assert.ok((await response.json()).error);
+  }
+  const wrongType = await fetch(`${base}/api/messages`, { method: 'POST', headers: { 'content-type': 'text/plain' }, body: '{}' });
+  assert.equal(wrongType.status, 400);
+
+  const crossOrigin = await rawRequest(base, 'POST', '/api/messages', {
+    headers: { 'content-type': 'application/json', origin: 'http://evil.example' }, body: JSON.stringify({ thread: 'boss', kind: 'message', text: 'Hi.' }),
+  });
+  assert.equal(crossOrigin.status, 403, 'a cross-origin send is refused');
+  const crossSite = await rawRequest(base, 'POST', '/api/messages', {
+    headers: { 'content-type': 'application/json', 'sec-fetch-site': 'cross-site' }, body: JSON.stringify({ thread: 'boss', kind: 'message', text: 'Hi.' }),
+  });
+  assert.equal(crossSite.status, 403, 'a cross-site send is refused');
+  const remote = await rawRequest(base, 'POST', '/api/messages', {
+    headers: { host: 'mac.tail0000.ts.net', 'content-type': 'application/json' }, body: JSON.stringify({ thread: 'boss', kind: 'message', text: 'Hi.' }),
+  });
+  assert.equal(remote.status, 401, 'a remote send without a session is refused');
+  const remoteRead = await rawRequest(base, 'GET', '/api/messages?thread=boss', { headers: { host: 'mac.tail0000.ts.net' } });
+  assert.equal(remoteRead.status, 401, 'a remote read without a session is refused');
+  assert.deepEqual(readMessages(), [], 'no refused request reaches the store');
+
+  const token = fs.readFileSync(cfg.access.tokenFile, 'utf8').trim();
+  const login = await rawRequest(base, 'POST', '/login', {
+    headers: { host: 'mac.tail0000.ts.net', 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ token }).toString(),
+  });
+  assert.equal(login.status, 303);
+  const cookie = String(login.headers['set-cookie']).split(';')[0];
+  const remoteSend = await rawRequest(base, 'POST', '/api/messages', {
+    headers: { host: 'mac.tail0000.ts.net', cookie, 'content-type': 'application/json', origin: 'http://mac.tail0000.ts.net' },
+    body: JSON.stringify({ thread: 'boss', kind: 'message', text: 'From the phone.' }),
+  });
+  assert.equal(remoteSend.status, 200, remoteSend.text);
+
+  const sent = await post({ thread: 'alpha', kind: 'message', text: '  Please continue.  ' });
+  assert.equal(sent.status, 200);
+  const record = (await sent.json()).message;
+  assert.equal(record.thread, 'alpha');
+  assert.equal(record.from, 'owner');
+  assert.equal(record.to, 'orch');
+  assert.equal(record.status, 'queued');
+  assert.equal(record.text, 'Please continue.');
+  const nudge = await post({ thread: 'alpha', kind: 'nudge', text: NUDGES[1] });
+  assert.equal((await nudge.json()).message.text, 'Use your free worker slots.');
+  const statusRequest = await post({ thread: 'boss', kind: 'status-request' });
+  const statusRecord = (await statusRequest.json()).message;
+  assert.equal(statusRecord.text, STATUS_REQUEST_TEXT);
+  assert.equal(STATUS_REQUEST_TEXT, 'Send a short status report with herdr-boss say, and publish your status file.');
+  assert.equal(statusRecord.to, 'boss');
+
+  const thread = await fetch(`${base}/api/messages?thread=alpha`);
+  assert.equal(thread.status, 200);
+  assert.deepEqual((await thread.json()).map((m) => m.text), ['Please continue.', 'Use your free worker slots.'], 'newest last');
+  assert.equal((await fetch(`${base}/api/messages?thread=Bad Thread`)).status, 400);
+  assert.equal((await fetch(`${base}/api/messages`)).status, 400);
+
+  // Four sends so far. The rate limit allows 10 in a minute across all threads.
+  for (let i = 0; i < 6; i += 1) assert.equal((await post({ thread: i % 2 ? 'boss' : 'alpha', kind: 'message', text: `Send ${i}.` })).status, 200);
+  const limited = await post({ thread: 'boss', kind: 'message', text: 'One too many.' });
+  assert.equal(limited.status, 429);
+  assert.match((await limited.json()).error, /10/);
+  assert.equal(readMessages().length, 10);
 });

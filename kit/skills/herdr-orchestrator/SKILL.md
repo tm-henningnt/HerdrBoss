@@ -318,6 +318,9 @@ herdr agent prompt <orch-pane> "WORKER REPORT <name>: <done|blocked|stopped>. Re
 - Read `~/.herdr-boss/bulletin.md` before each new worker dispatch.
 - Check your project on the Boss dashboard or in `herdr-boss policy show` when capacity, provider availability, or handover changes. The dashboard's Allocation view is the Owner's control plane; apply its saved worker cap, project share, exclusions, and succession ladder.
 - Act on a `[herdr-boss]` notice that concerns your current work.
+- A prompt that starts with `[owner]` is an Owner message from the dashboard. It ends with a reply command that holds the message ID.
+- Reply to an Owner message with `herdr-boss say --reply-to <id> "<answer>"`. Keep the answer short and free of secrets.
+- Record an Owner decision from an Owner message in `docs/orchestration/memory.md`, with its full text.
 - Do not reply to the notice.
 - Act on a `Kit updated` notice: run `herdr-boss kit install`, then re-read `docs/orchestration/herdr-boss.md`. Set `kitRevision` in the project status to its new revision. Run `herdr-boss check agents`.
 - Do not start work that the bulletin marks as avoided unless you use an allowed override.

@@ -940,6 +940,152 @@ function agentsView(s) {
   ].join('');
 }
 
+// ---------- Messages ----------
+// One thread for the Boss and one for each project. The panel is a dialog outside #app, so a state render keeps the typed text.
+
+const MESSAGE_NUDGES = ['Continue.', 'Use your free worker slots.', 'Pause after the current task.'];
+const MESSAGE_SENDER = { owner: 'Owner', boss: 'Boss', orch: 'Orchestrator' };
+const messagePanel = { thread: null, name: '', timer: null, records: [], status: '', busy: false };
+
+// Escaped Markdown: headings, lists, fenced code, inline code, bold, and italic. Raw HTML stays text.
+function markdownHtml(source) {
+  const inline = (text) => text.split('`').map((part, index) => index % 2
+    ? `<code>${esc(part)}</code>`
+    : esc(part).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>').replace(/(^|[^*\w])\*([^*\s][^*]*)\*/g, '$1<em>$2</em>')).join('');
+  const out = [];
+  let list = null;
+  let paragraph = [];
+  let code = null;
+  const flush = () => {
+    if (paragraph.length) { out.push(`<p>${paragraph.map(inline).join(' ')}</p>`); paragraph = []; }
+    if (list) { out.push(`<${list.tag}>${list.items.map((item) => `<li>${inline(item)}</li>`).join('')}</${list.tag}>`); list = null; }
+  };
+  for (const line of String(source || '').split(/\r?\n/)) {
+    if (code) {
+      if (/^\s*```/.test(line)) { out.push(`<pre><code>${esc(code.join('\n'))}</code></pre>`); code = null; }
+      else code.push(line);
+      continue;
+    }
+    if (/^\s*```/.test(line)) { flush(); code = []; continue; }
+    const heading = /^(#{1,6})\s+(.*)$/.exec(line);
+    if (heading) { flush(); const level = Math.min(heading[1].length + 2, 6); out.push(`<h${level}>${inline(heading[2])}</h${level}>`); continue; }
+    const bullet = /^\s*[-*+]\s+(.*)$/.exec(line);
+    const numbered = /^\s*\d+[.)]\s+(.*)$/.exec(line);
+    if (bullet || numbered) {
+      const tag = bullet ? 'ul' : 'ol';
+      if (paragraph.length || (list && list.tag !== tag)) flush();
+      list ||= { tag, items: [] };
+      list.items.push((bullet || numbered)[1]);
+      continue;
+    }
+    if (!line.trim()) { flush(); continue; }
+    if (list) flush();
+    paragraph.push(line.trim());
+  }
+  if (code) out.push(`<pre><code>${esc(code.join('\n'))}</code></pre>`);
+  flush();
+  return out.join('');
+}
+
+function messageState(m) {
+  if (m.from !== 'owner') return m.action ? `Action: ${m.action}` : '';
+  if (m.status === 'sent') return `Sent ${clock(m.sentAt)}`;
+  if (m.status === 'failed') return `Failed: ${m.error || 'unknown error'} (attempt ${m.attempts || 1} of 4)`;
+  return 'Queued until the agent is idle or done';
+}
+
+function messageItem(m) {
+  const sender = MESSAGE_SENDER[m.from] || m.from;
+  const kind = m.kind === 'nudge' ? 'Nudge' : m.kind === 'status-request' ? 'Status request' : m.kind === 'report' ? 'Report' : '';
+  const state = messageState(m);
+  const body = m.kind === 'report'
+    ? `<div class="msg-report">${m.title && /^#{1,6}\s+(.*)/.exec(String(m.text).trimStart())?.[1]?.trim() !== m.title ? `<h3>${esc(m.title)}</h3>` : ''}${markdownHtml(m.text)}</div>`
+    : `<p class="msg-text">${esc(m.text)}</p>`;
+  return `<li class="msg msg-${esc(m.from)} msg-${esc(m.status || 'new')}"><div class="msg-head"><strong>${esc(sender)}</strong>${kind ? `<span class="pill">${esc(kind)}</span>` : ''}<time datetime="${esc(m.at)}">${esc(clock(m.at))}</time></div>${body}${state ? `<p class="msg-state">${esc(state)}</p>` : ''}</li>`;
+}
+
+function messageDialog() {
+  let dialog = document.getElementById('message-panel');
+  if (dialog) return dialog;
+  dialog = document.createElement('dialog');
+  dialog.id = 'message-panel';
+  dialog.className = 'message-panel';
+  dialog.setAttribute('aria-labelledby', 'message-title');
+  dialog.innerHTML = `<div class="message-head"><h2 id="message-title">Messages</h2><button type="button" data-message-close>Close</button></div>
+    <ol class="msg-thread" id="message-thread" aria-live="polite"></ol>
+    <form class="message-form" id="message-form"><label for="message-text">Message</label><textarea id="message-text" maxlength="2000" rows="3" required></textarea>
+      <div class="message-send"><span class="sub" id="message-count">0 / 2000</span><button type="submit">Send</button></div></form>
+    <div class="message-nudges" role="group" aria-label="Quick messages">${MESSAGE_NUDGES.map((text) => `<button type="button" data-message-nudge="${esc(text)}">${esc(text)}</button>`).join('')}<button type="button" data-message-status>Ask for status</button></div>
+    <p class="message-status" id="message-status" role="status"></p>`;
+  document.body.append(dialog);
+  dialog.addEventListener('close', () => { clearInterval(messagePanel.timer); messagePanel.timer = null; messagePanel.thread = null; });
+  dialog.querySelector('[data-message-close]').addEventListener('click', () => dialog.close());
+  dialog.querySelector('#message-text').addEventListener('input', (e) => { dialog.querySelector('#message-count').textContent = `${e.target.value.length} / 2000`; });
+  dialog.querySelector('#message-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const text = dialog.querySelector('#message-text').value.trim();
+    if (text) sendMessage({ kind: 'message', text }, `Send this message to ${messagePanel.name}?\n\n${text}`, true);
+  });
+  dialog.querySelector('.message-nudges').addEventListener('click', (e) => {
+    const nudge = e.target.closest('[data-message-nudge]')?.dataset.messageNudge;
+    if (nudge) sendMessage({ kind: 'nudge', text: nudge }, `Send "${nudge}" to ${messagePanel.name}?`);
+    else if (e.target.closest('[data-message-status]')) sendMessage({ kind: 'status-request' }, `Ask ${messagePanel.name} for a status report?`);
+  });
+  return dialog;
+}
+
+function renderMessages() {
+  const dialog = messageDialog();
+  dialog.querySelector('#message-title').textContent = `Messages · ${messagePanel.name}`;
+  const list = dialog.querySelector('#message-thread');
+  const atEnd = list.scrollHeight - list.scrollTop - list.clientHeight < 40;
+  list.innerHTML = messagePanel.records.length ? messagePanel.records.map(messageItem).join('') : '<li class="msg-empty">No messages in this thread.</li>';
+  if (atEnd) list.scrollTop = list.scrollHeight;
+  dialog.querySelector('#message-status').textContent = messagePanel.status;
+  for (const button of dialog.querySelectorAll('button[type="submit"], [data-message-nudge], [data-message-status]')) button.disabled = messagePanel.busy;
+}
+
+async function loadMessages() {
+  const thread = messagePanel.thread;
+  if (!thread) return;
+  try {
+    const response = await fetch(`/api/messages?thread=${encodeURIComponent(thread)}`);
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'The thread could not be read.');
+    if (messagePanel.thread !== thread) return;
+    messagePanel.records = result;
+  } catch (error) { messagePanel.status = error.message; }
+  renderMessages();
+}
+
+async function sendMessage(body, question, clear = false) {
+  if (!messagePanel.thread || messagePanel.busy || !confirm(question)) return;
+  messagePanel.busy = true; messagePanel.status = 'Sending…'; renderMessages();
+  try {
+    await postJson('/api/messages', { thread: messagePanel.thread, ...body });
+    messagePanel.status = 'Queued. Herdr Boss sends it when the agent is idle or done.';
+    if (clear) { const field = document.getElementById('message-text'); field.value = ''; field.dispatchEvent(new Event('input')); }
+  } catch (error) { messagePanel.status = error.message; }
+  finally { messagePanel.busy = false; }
+  await loadMessages();
+}
+
+function openMessages(thread, name) {
+  const dialog = messageDialog();
+  clearInterval(messagePanel.timer);
+  Object.assign(messagePanel, { thread, name, records: [], status: '', busy: false });
+  renderMessages();
+  if (!dialog.open) dialog.showModal();
+  dialog.querySelector('#message-text').focus();
+  loadMessages();
+  messagePanel.timer = setInterval(loadMessages, 10000);
+}
+
+document.addEventListener('click', (e) => {
+  const button = e.target.closest?.('[data-messages-thread]');
+  if (button) openMessages(button.dataset.messagesThread, button.dataset.messagesName);
+});
+
 // ---------- Organization ----------
 // A read-only chart from existing state: Owner, Boss, project orchestrators, and their workers.
 // Pane titles, pane output, and preferred models are not facts about an agent, so the chart does not use them.
@@ -990,12 +1136,12 @@ function orgFacts(rows) {
   return `<dl class="org-facts">${rows.filter(Boolean).map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v ?? NOT_REPORTED)}</dd></div>`).join('')}</dl>`;
 }
 
-function orgNode({ id, role, name, status, summary, facts, className = '' }) {
+function orgNode({ id, role, name, status, summary, facts, className = '', thread = null }) {
   const open = orgOpen.has(id);
   const domId = `org-detail-${id.replace(/[^A-Za-z0-9_-]/g, '-')}`;
   return `<article class="org-node ${esc(className)}"><div class="org-node-head"><span class="st ${esc(status || 'unknown')}" aria-hidden="true"></span><span class="pill">${esc(role)}</span><strong>${esc(name)}</strong></div>
     <p class="org-node-summary">${summary.filter(Boolean).map((x) => `<span>${esc(x)}</span>`).join('')}</p>
-    <button type="button" class="quiet org-toggle" data-org-node="${esc(id)}" aria-expanded="${open}" aria-controls="${domId}">${open ? 'Hide details' : 'Details'}<span class="visually-hidden"> for ${esc(name)}</span></button>
+    <div class="org-actions"><button type="button" class="quiet org-toggle" data-org-node="${esc(id)}" aria-expanded="${open}" aria-controls="${domId}">${open ? 'Hide details' : 'Details'}<span class="visually-hidden"> for ${esc(name)}</span></button>${thread ? `<button type="button" class="quiet org-messages" data-messages-thread="${esc(thread)}" data-messages-name="${esc(name)}">Messages<span class="visually-hidden"> for ${esc(name)}</span></button>` : ''}</div>
     <div class="org-detail" id="${domId}" ${open ? '' : 'hidden'}>${orgFacts(facts)}</div></article>`;
 }
 
@@ -1048,7 +1194,7 @@ function organizationView(s) {
   const bossRisk = s.control?.bossHandoff;
   const bossSuccessor = boss ? orgSuccessor(s, boss.id) : null;
   const bossNode = boss ? orgNode({
-    id: 'boss', role: 'boss', name: 'Boss', status: boss.status, className: 'org-boss',
+    id: 'boss', role: 'boss', name: 'Boss', status: boss.status, className: 'org-boss', thread: 'boss',
     summary: [boss.agent || 'No agent', boss.status || NOT_REPORTED, orgHandover(s, boss.id, bossRisk)],
     facts: orgAgentFacts(s, boss, [['Workspace', boss.workspaceLabel || boss.workspace], ['Quota use', orgQuota(s, boss.agent)], ['Handover', orgHandover(s, boss.id, bossRisk)]]),
   }) : '<article class="org-node org-boss org-missing"><strong>Boss</strong><p class="org-node-summary"><span>No pane is labeled <code>boss</code>.</span></p></article>';
@@ -1067,7 +1213,7 @@ function organizationView(s) {
     const handover = orgHandover(s, p.orch?.pane, risk);
     const mode = p.effectiveMode === 'paused' ? 'Paused' : p.idle ? 'Idle' : 'Active';
     const node = orgNode({
-      id: `project:${p.slug}`, role: 'orch', name: p.label, status: orch?.status || (p.orch ? p.orch.status : 'unknown'),
+      id: `project:${p.slug}`, role: 'orch', name: p.label, status: orch?.status || (p.orch ? p.orch.status : 'unknown'), thread: p.slug,
       summary: [orch ? `${orch.agent || 'No agent'} · ${orch.status || NOT_REPORTED}` : 'No orchestrator', slots],
       facts: [
         ['Project', p.label],
@@ -1087,7 +1233,7 @@ function organizationView(s) {
   }).join('');
 
   return [
-    '<header class="page-intro"><div><h1>Organization</h1><p>Read-only chart of the Owner, the Boss, project orchestrators, and workers. Select <b>Details</b> on a node to see its recorded values.</p></div></header>',
+    '<header class="page-intro"><div><h1>Organization</h1><p>Chart of the Owner, the Boss, project orchestrators, and workers. Select <b>Details</b> on a node to see its recorded values. Select <b>Messages</b> to write to the Boss or an orchestrator.</p></div></header>',
     `<section class="org-chart" aria-label="Organization chart">
       <ol class="org-tier" aria-label="Owner"><li>${ownerNode}</li></ol>
       <ol class="org-tier" aria-label="Boss"><li><div class="org-lead">${bossNode}${orgReserve(s, bossSuccessor, 'boss')}</div>${boss ? `<div class="org-boss-workers"><h2>Boss workspace workers <span class="sub">${bossWorkers.length}</span></h2>${orgWorkers(s, bossWorkers, null, 'boss')}</div>` : ''}</li></ol>
@@ -1472,12 +1618,17 @@ const HELP = {
     <p>When the guard is active, Herdr Boss blocks a worker start if total sampled CPU exceeds its configured limit or the 5-minute load average exceeds its configured backstop. Leave the away CPU limit or either load backstop blank to disable that threshold.</p>
     <p>Changes stay in a draft until you select <b>Apply policy</b>. A rejected save shows the server error and keeps your draft.</p>`],
   organization: ['Organization', `
-    <p>A read-only chart of the organization, from top to bottom: the Owner, the Boss, one orchestrator for each project, and the workers under each orchestrator. The page cannot send messages or change resources.</p>
+    <p>A chart of the organization, from top to bottom: the Owner, the Boss, one orchestrator for each project, and the workers under each orchestrator. The page cannot change resources. Use Settings for resources.</p>
     <h3>Nodes</h3><p><b>Owner</b> shows <b>At the Mac</b> or <b>Away</b> from the machine idle time. <b>Boss</b> shows the pane labeled <code>boss</code>, its harness and state, the quota use of a Codex or Claude harness, and the handover state. The Boss workspace workers are below the Boss.</p>
     <p>Each project node shows the orchestrator pane, harness, and state, the first published task with status <b>doing</b>, the worker slots in use against the slots and share, and the handover state. The projects use the project order. A workspace marked not a project has no node.</p>
     <p>A worker node shows the agent name, harness, and state. The task ID comes from the published task whose <b>worker</b> field names that agent.</p>
     <h3>Reserve</h3><p>A <b>reserve</b> node shows a prepared successor. It appears only when a handoff record is prepared, its source is the current orchestrator or Boss pane, and the successor pane is live. A recommended successor is not a reserve.</p>
     <h3>Details</h3><p>Select <b>Details</b> on a node to show its recorded values. Select <b>Hide details</b> to close them.</p>
+    <h3>Messages</h3><p>The Boss node and each project node have a <b>Messages</b> button. It opens the thread of that node. A thread holds the messages in both directions, oldest first.</p>
+    <p>Type a message of up to 2000 characters and select <b>Send</b>. The nudge buttons send a fixed text: <b>Continue.</b>, <b>Use your free worker slots.</b>, or <b>Pause after the current task.</b> <b>Ask for status</b> asks the agent for a short status report and a new status file. The page asks you to confirm each send.</p>
+    <p>A new message is <b>Queued</b>. Herdr Boss sends it only when the agent is idle or done. It never types into a working or blocked agent. Then the message is <b>Sent</b>. A <b>Failed</b> message gets up to 3 more attempts on later ticks. Herdr Boss accepts at most 10 messages a minute.</p>
+    <p>The Boss and the orchestrators reply with <code>herdr-boss say</code>. The Boss can post a longer report with <code>herdr-boss mail post</code>. The page shows a report as formatted Markdown. You cannot message a worker. Send a worker request to its orchestrator.</p>
+    <p>The open panel reads the thread again every 10 seconds. A read-only preview shows the threads and refuses a send.</p>
     <h3>Data limits</h3><p><b>Not reported</b> means that the current state does not hold the value. Herdr Boss does not receive the model of a running agent. The page does not read a task from a pane title. It shows no pane output, messages, or secrets.</p>`],
   agents: ['Agents', `
     <p>Every Herdr workspace with its orchestrator and workers, live from Herdr.</p>

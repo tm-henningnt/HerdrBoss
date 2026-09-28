@@ -17,6 +17,7 @@ import { listBrowserTabs, browserScreenshot, browserNavigate, browserNavigationS
 import { listHandoffs } from './handoff.js';
 import { roamgateAvailable, roamgateUrl } from './roamgate.js';
 import { createAccessControl, loginPage } from './access.js';
+import { appendMessage, listThread, readMessages, validThread, validateOwnerSend } from './messages.js';
 
 const PUBLIC = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const DOCS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'docs');
@@ -243,6 +244,19 @@ export function serve(cfg, { readOnlyPreview = false, createEngine = (config, op
         if (body.headless != null && typeof body.headless !== 'boolean') return send(res, 400, { error: 'headless must be boolean.' });
         try { return send(res, 200, await requestBrowser(body.project, { launch: body.launch !== false, headless: body.headless ?? null })); }
         catch (e) { return send(res, 409, { error: e.message }); }
+      }
+      if (p === '/api/messages' && req.method === 'GET') {
+        const thread = url.searchParams.get('thread');
+        if (!validThread(thread)) return send(res, 400, { error: 'Choose a thread: boss or a project slug.' });
+        return send(res, 200, listThread(thread));
+      }
+      if (p === '/api/messages' && req.method === 'POST') {
+        const knownThreads = new Set(['boss', ...Object.keys(engine.state?.control?.projects || {})]);
+        const result = validateOwnerSend(await jsonBody(req), { knownThreads, records: readMessages(), now: Date.now() });
+        if (result.error) return send(res, result.status, { error: result.error });
+        const message = appendMessage(result.fields);
+        engine.log('message', `Queued Owner ${message.kind} ${message.id} for ${message.thread}`, { id: message.id, thread: message.thread, kind: message.kind });
+        return send(res, 200, { ok: true, message });
       }
       if (p === '/api/handoffs' && req.method === 'GET') return send(res, 200, listHandoffs());
       if (p === '/api/handoffs/output' && req.method === 'GET') {

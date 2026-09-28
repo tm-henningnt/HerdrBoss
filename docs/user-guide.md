@@ -361,14 +361,14 @@ When the published status is stale, the project page and the Projects list show 
 
 ## Organization page
 
-The `/organization` page shows the organization as a read-only chart. The chart has four levels:
+The `/organization` page shows the organization as a chart. The chart has four levels:
 
 1. The **Owner** node shows **At the Mac** or **Away**. The value comes from the machine idle time.
 2. The **Boss** node shows the pane labeled `boss`, its harness, state, quota use, and handover state. The workers in the Boss workspace are below it.
 3. Each **project** node shows the orchestrator pane, harness, and state. It also shows the current task, the worker slots in use against the slots and share, and the handover state. The nodes use the project order.
 4. Each **worker** node shows the agent name, harness, state, and task ID.
 
-Select **Details** on a node to show its recorded values. The page cannot send messages or change resources.
+Select **Details** on a node to show its recorded values. Select **Messages** on the Boss node or on a project node to open its thread. The page cannot change resources. See [Owner messages](#owner-messages).
 
 The page uses only the state that the dashboard already loads. These limits apply:
 
@@ -378,7 +378,70 @@ The page uses only the state that the dashboard already loads. These limits appl
 - Quota use shows only for a Codex or Claude harness, because each of these harnesses uses only its own subscription.
 - A **reserve** node shows a prepared successor only when a prepared handoff record names the current orchestrator or Boss pane as its source and the successor pane is live. A recommended successor does not show as a reserve.
 - A workspace marked not a project has no project node. The Boss workspace shows as the Boss node.
-- The page shows no pane output, message content, or secrets.
+- The chart shows no pane output and no secrets. Message text shows only in the Messages panel.
+
+## Owner messages
+
+The Owner can send a message to the Boss or to a project orchestrator from the Organization page. The Boss and the orchestrators reply with `herdr-boss say`. Workers get no messages from the Owner. Send a worker request to its orchestrator.
+
+### Threads
+
+Each node has one thread. The thread `boss` holds the messages between the Owner and the Boss. The thread of a project has the project slug as its name. A thread holds the messages in both directions, oldest first. Messages to an orchestrator go directly to it. The Boss can read each thread with `herdr-boss messages THREAD`.
+
+### Send a message
+
+1. Open the Organization page.
+2. Select **Messages** on the Boss node or on a project node.
+3. Type a message of 1 to 2000 characters, and select **Send**. Or select a nudge button or **Ask for status**.
+4. Confirm the send in the browser dialog.
+
+The nudge buttons send one of these fixed texts: "Continue.", "Use your free worker slots.", or "Pause after the current task." **Ask for status** sends "Send a short status report with herdr-boss say, and publish your status file."
+
+The panel reads the thread again every 10 seconds while it is open. The page shows message text as plain text. It shows a report as Markdown: headings, lists, code, bold, and italic. It shows raw HTML as text.
+
+### Delivery
+
+A new Owner message has the status `queued`. The service sends queued messages on its acting ticks. These rules apply:
+
+- The service sends only to the pane labeled `boss` for the `boss` thread, or to the `orch` pane of the project.
+- The service sends only when the agent is `idle` or `done`. A message to a `working` or `blocked` agent stays queued.
+- The service sends at most one message to a pane in one tick. A pane that got a resource notice in the same tick waits for the next tick.
+- The prompt is `[owner] TEXT (Reply with: herdr-boss say --reply-to ID "<answer>")`.
+- After a send, the status is `sent` and `sentAt` holds the time.
+- After a Herdr error, the status is `failed` with a short error. The service tries again on later ticks, up to 3 more times.
+- The service writes one `message` event to `events.jsonl` for each send or failure. The event holds the message ID, the thread, the kind, and the pane. It does not hold the text.
+
+A read-only preview shows the threads. It refuses a send with HTTP 403 and delivers nothing.
+
+### Replies and reports
+
+An orchestrator or the Boss replies with `herdr-boss say --reply-to ID "TEXT"`. The Boss can post a longer Markdown report with `herdr-boss mail post --to owner FILE`, for example a morning handback. A reply and a report have the status `new`. The optional `--action` value tells the Owner what the item needs: `answer`, `approve`, `decide`, or `read`. See [the CLI reference](cli.md#owner-messages) for the caller checks and the limits.
+
+### Store
+
+The service keeps the messages in `messages.jsonl` in the data directory, with file mode 0600. Each line is one JSON record with these fields:
+
+| Field | Value |
+|---|---|
+| `id` | The message ID, for example `m-mg3k2x1a-1f2e3d4c`. |
+| `at` | The time of the record. |
+| `thread` | `boss` or a project slug. |
+| `from`, `to` | `owner`, `boss`, or `orch`. |
+| `kind` | `message`, `nudge`, `status-request`, `reply`, or `report`. |
+| `text` | The message text. A report holds the Markdown text. |
+| `title` | The report title. Only a report has it. |
+| `action` | `answer`, `approve`, `decide`, `read`, or `null`. |
+| `replyTo` | The ID of the message that a reply answers, or `null`. |
+| `status` | `queued`, `sent`, or `failed` for an Owner message. `new` for a reply or a report. |
+| `sentAt`, `error`, `attempts` | The delivery time, the last delivery error, and the number of send attempts of an Owner message. |
+
+Each new record is one appended line. A change to a record rewrites the file through a temporary file and a rename. Each write deletes the records that are older than 30 days. A lock file `messages.jsonl.lock` keeps the service and the commands from writing at the same time.
+
+### Limits and safety
+
+- Only a loopback request or an authenticated remote session can send. The same-origin check of the other `POST` routes applies.
+- The service accepts at most 10 Owner messages a minute across all threads. It refuses more with HTTP 429.
+- `say` and `mail post` refuse text that looks like a token, a key, or a password.
 
 ## Phone and home screen
 
@@ -521,5 +584,7 @@ The dashboard uses these routes. A request from another host needs the access to
 | `GET /api/handoffs`, `GET /api/handoffs/output?id=ID` | Handover records, and a successor's pane output. |
 | `POST /api/handoffs/plan`, `/prepare`, `/activate` | The handover steps. Activation needs `confirmed: true`. |
 | `GET`, `POST /api/browser-sessions...` | Browser list, request, tabs, screenshot, navigation, input, new tab, close, and restart. Input to an agent tab returns 409 unless the body has `confirmAttached: true`. |
+| `GET /api/messages?thread=THREAD` | The records of one thread, oldest first, at most 200. |
+| `POST /api/messages` | Queue an Owner message: `{ thread, kind, text }`. `kind` is `message`, `nudge`, or `status-request`. Returns 400 for invalid input, 404 for an unknown thread, and 429 above 10 sends a minute. |
 | `POST /api/tick` | Collect now. |
 | `GET /bulletin.md` | The current bulletin. |
