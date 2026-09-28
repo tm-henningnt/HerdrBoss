@@ -8,8 +8,9 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { DATA_DIR } from './config.js';
+import { openSqliteStore } from './sqlite-store.js';
 
 export const RETENTION_MS = 30 * 86400 * 1000;
 export const messagesFile = (dir = DATA_DIR) => path.join(dir, 'messages.jsonl');
@@ -81,12 +82,205 @@ function emitChange(listeners, type, record) {
   }
 }
 
-export function openMessageStore({ dir = DATA_DIR, backend = 'json' } = {}) {
-  if (backend !== 'json') throw new Error(`Unsupported message store backend: ${backend}`);
+function configuredBackend(dir) {
+  try {
+    const config = JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8'));
+    return config?.store?.messages ?? 'json';
+  } catch { return 'json'; }
+}
+
+function jsonVersion(dir) {
+  try { return createHash('sha256').update(fs.readFileSync(messagesFile(dir))).digest('hex'); }
+  catch (error) { if (error.code === 'ENOENT') return 'empty'; throw error; }
+}
+
+function sqliteRecords(db) {
+  return db.prepare('SELECT record FROM messages ORDER BY rowid').all().map((row) => JSON.parse(row.record));
+}
+
+function withSqliteTransaction(sqlite, fn) {
+  const { db } = sqlite;
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const result = fn(db);
+    db.exec('COMMIT');
+    sqlite.secureFiles();
+    return result;
+  } catch (error) {
+    try { db.exec('ROLLBACK'); } catch {}
+    sqlite.secureFiles();
+    throw error;
+  }
+}
+
+function replaceSqliteRecords(db, records) {
+  db.exec('DELETE FROM messages');
+  const insert = db.prepare('INSERT INTO messages(id, at, thread, record) VALUES (?, ?, ?, ?)');
+  for (const record of records) {
+    if (!record || typeof record.id !== 'string') throw new TypeError('SQLite message records need a string id.');
+    insert.run(record.id, record.at ?? null, record.thread ?? null, JSON.stringify(record));
+  }
+  db.prepare('UPDATE message_store_state SET version = version + 1 WHERE id = 1').run();
+}
+
+function readJsonl(dir) {
+  let text;
+  try { text = fs.readFileSync(messagesFile(dir), 'utf8'); }
+  catch (error) { if (error.code === 'ENOENT') return []; throw error; }
+  const records = [];
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue;
+    try { const record = JSON.parse(line); if (record && typeof record.id === 'string') records.push(record); } catch {}
+  }
+  return records;
+}
+
+function importJsonlIfEmpty(sqlite, dir) {
+  if (sqlite.db.prepare('SELECT COUNT(*) AS count FROM messages').get().count) return 0;
+  return withSqliteTransaction(sqlite, (db) => {
+    if (db.prepare('SELECT COUNT(*) AS count FROM messages').get().count) return 0;
+    const records = readJsonl(dir);
+    const insert = db.prepare('INSERT OR IGNORE INTO messages(id, at, thread, record) VALUES (?, ?, ?, ?)');
+    let count = 0;
+    for (const record of records) {
+      count += Number(insert.run(record.id, record.at ?? null, record.thread ?? null, JSON.stringify(record)).changes);
+    }
+    if (count) db.prepare('UPDATE message_store_state SET version = version + 1 WHERE id = 1').run();
+    return count;
+  });
+}
+
+export function importMessages({ dir = DATA_DIR } = {}) {
+  const sqlite = openSqliteStore({ dir });
+  return importJsonlIfEmpty(sqlite, dir);
+}
+
+export function exportMessages({ dir = DATA_DIR } = {}) {
+  const sqlite = openSqliteStore({ dir });
+  importJsonlIfEmpty(sqlite, dir);
+  const records = sqliteRecords(sqlite.db).sort(messageOrder);
+  fs.mkdirSync(dir, { recursive: true });
+  const file = messagesFile(dir);
+  const temporary = `${file}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+  fs.writeFileSync(temporary, records.map((record) => `${JSON.stringify(record)}\n`).join(''), { mode: 0o600 });
+  fs.chmodSync(temporary, 0o600);
+  fs.renameSync(temporary, file);
+  return records.length;
+}
+
+function openSqliteMessageStore(dir, key, listeners) {
+  const sqlite = openSqliteStore({ dir });
+  importJsonlIfEmpty(sqlite, dir);
+  const { db } = sqlite;
+  const all = () => fresh(sqliteRecords(db), Date.now()).sort(messageOrder);
+  const store = {
+    all,
+
+    append(fields, { now = Date.now() } = {}) {
+      const record = {
+        id: newId(now), at: new Date(now).toISOString(), thread: null, from: null, to: null, kind: null, text: '',
+        action: null, replyTo: null, status: null, sentAt: null, error: null, relayedAt: null, relayedBy: null, ...fields,
+      };
+      const shouldNotify = withSqliteTransaction(sqlite, (connection) => {
+        const records = fresh(sqliteRecords(connection), now);
+        const kept = fresh([...records, record], now).sort(messageOrder);
+        replaceSqliteRecords(connection, kept);
+        return kept.some((item) => item.id === record.id);
+      });
+      if (shouldNotify) emitChange(listeners, 'append', record);
+      return record;
+    },
+
+    update(id, patch, { now = Date.now() } = {}) {
+      const outcome = withSqliteTransaction(sqlite, (connection) => {
+        const records = sqliteRecords(connection);
+        const index = records.findIndex((record) => record.id === id);
+        if (index < 0) return { record: null, notify: false };
+        records[index] = { ...records[index], ...patch, id };
+        const updated = records[index];
+        const kept = fresh(records, now).sort(messageOrder);
+        replaceSqliteRecords(connection, kept);
+        return { record: updated, notify: kept.some((record) => record.id === id) };
+      });
+      if (outcome.notify) emitChange(listeners, 'update', outcome.record);
+      return outcome.record;
+    },
+
+    mutate(fn, { now = Date.now() } = {}) {
+      if (typeof fn !== 'function') throw new TypeError('Message store mutate needs a function.');
+      const outcome = withSqliteTransaction(sqlite, (connection) => {
+        const stored = sqliteRecords(connection);
+        const records = fresh(stored, now).sort(messageOrder);
+        const before = records.map(clone);
+        const changed = fn(records);
+        if (changed && typeof changed.then === 'function') throw new TypeError('Message store mutate needs a synchronous function.');
+        if (!changed || !Array.isArray(changed.records)) throw new TypeError('Message store mutate must return { records, result }.');
+        const after = fresh(changed.records, now).sort(messageOrder);
+        const needsWrite = stored.length !== after.length || JSON.stringify(before) !== JSON.stringify(after);
+        if (needsWrite) replaceSqliteRecords(connection, after);
+
+        const oldById = new Map(before.map((record) => [record.id, record]));
+        const events = [];
+        for (const record of after) {
+          const previous = oldById.get(record.id);
+          if (!previous) events.push({ type: 'append', record });
+          else if (JSON.stringify(previous) !== JSON.stringify(record)) events.push({ type: 'update', record });
+        }
+        return { result: changed.result, events };
+      });
+      for (const event of outcome.events) emitChange(listeners, event.type, event.record);
+      return outcome.result;
+    },
+
+    thread(thread, { limit = 200, before = null } = {}) {
+      const records = all().filter((record) => record.thread === thread);
+      let end = records.length;
+      if (before !== null) {
+        const cursor = records.findIndex((record) => record.id === before);
+        if (cursor < 0) return [];
+        end = cursor;
+      }
+      const count = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : 0;
+      return count ? records.slice(Math.max(0, end - count), end) : [];
+    },
+
+    chats() {
+      const chats = new Map();
+      for (const record of all()) {
+        if (!chats.has(record.thread)) chats.set(record.thread, { thread: record.thread, last: record, count: 0, unreadForOwner: 0 });
+        const chat = chats.get(record.thread);
+        chat.last = record;
+        chat.count += 1;
+        if (record.to === 'owner' && !record.readAt) chat.unreadForOwner += 1;
+      }
+      return [...chats.values()].sort((left, right) => messageOrder(right.last, left.last));
+    },
+
+    onChange(listener) {
+      if (typeof listener !== 'function') throw new TypeError('Message store onChange needs a function.');
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+        if (!listeners.size) listenersByStore.delete(key);
+      };
+    },
+
+    version() {
+      return db.prepare('SELECT version FROM message_store_state WHERE id = 1').get().version;
+    },
+  };
+  Object.defineProperty(store, 'close', { value: () => sqlite.close() });
+  return store;
+}
+
+export function openMessageStore({ dir = DATA_DIR, backend } = {}) {
+  backend ??= configuredBackend(dir);
+  if (!['json', 'sqlite'].includes(backend)) throw new Error(`Unsupported message store backend: ${backend}`);
   const { key, listeners } = listenersFor(dir, backend);
+  if (backend === 'sqlite') return openSqliteMessageStore(dir, key, listeners);
   const all = () => fresh(readStoredRecords(dir), Date.now()).sort(messageOrder);
 
-  return {
+  const store = {
     all,
 
     append(fields, { now = Date.now() } = {}) {
@@ -180,5 +374,9 @@ export function openMessageStore({ dir = DATA_DIR, backend = 'json' } = {}) {
         if (!listeners.size) listenersByStore.delete(key);
       };
     },
+
+    version() { return jsonVersion(dir); },
   };
+  Object.defineProperty(store, 'close', { value: () => {} });
+  return store;
 }

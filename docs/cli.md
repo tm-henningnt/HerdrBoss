@@ -59,7 +59,7 @@ The first `publish` of a slug registers the project. It records `{ slug, repo, r
 
 ## Owner messages
 
-The Owner sends messages from the Organization page. The Boss and the orchestrators reply with these commands. The store is `messages.jsonl` in the data directory.
+The Owner sends messages from the Organization page. The Boss and the orchestrators reply with these commands. The default store is `messages.jsonl` in the data directory. Set `store.messages` to `sqlite` in `config.json` to use `herdr-boss.db`.
 
 | Command | Action |
 |---|---|
@@ -68,6 +68,8 @@ The Owner sends messages from the Organization page. The Boss and the orchestrat
 | `herdr-boss messages relay ID... --by boss` | Mark queued Owner messages as relayed by the Boss. Only the pane labeled `boss` can run this command. Herdr Boss never sends a relayed message. |
 | `herdr-boss mail post --to owner [--title TEXT] [--action read\|decide\|approve\|answer] FILE` | Post a Markdown report for the Owner in the `boss` thread. Only the pane labeled `boss` can post. |
 | `herdr-boss mail close ID... --note TEXT` | Close open Mailbox items as answered through the Boss. Only the pane labeled `boss` can run this command. It sends no message. |
+| `herdr-boss store import messages` | Import `messages.jsonl` into an empty SQLite message table. Keep the JSONL file. Print the number of imported records. |
+| `herdr-boss store export messages` | Write the SQLite message records to `messages.jsonl`. Print the number of exported records. |
 
 `say`, `mail post`, `mail close`, and `messages relay` verify the caller the same way as `worker allow`:
 

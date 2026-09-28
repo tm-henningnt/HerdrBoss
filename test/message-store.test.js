@@ -26,11 +26,11 @@ function freshDir(t) {
   return dir;
 }
 
-function contractSuite(name, createStore) {
+function contractSuite(name, createStore, backend = 'json') {
   test(`${name}: all returns kept records in time order`, (t) => {
     const dir = freshDir(t);
     const store = createStore({ dir });
-    assert.deepEqual(Object.keys(store), ['all', 'append', 'update', 'mutate', 'thread', 'chats', 'onChange']);
+    assert.deepEqual(Object.keys(store), ['all', 'append', 'update', 'mutate', 'thread', 'chats', 'onChange', 'version']);
     const now = Date.now();
     store.append({ thread: 'alpha', to: 'owner', text: 'Later.' }, { now: now + 20 });
     store.append({ thread: 'alpha', to: 'owner', text: 'Earlier.' }, { now: now + 10 });
@@ -58,7 +58,7 @@ function contractSuite(name, createStore) {
         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2);
       }
       fs.writeFileSync(marker + '.attempting', '');
-      openMessageStore({ dir }).append({ thread: 'alpha', to: 'owner', text: 'Concurrent.' }, { now: Number(timestamp) });
+      openMessageStore({ dir, backend: ${JSON.stringify(backend)} }).append({ thread: 'alpha', to: 'owner', text: 'Concurrent.' }, { now: Number(timestamp) });
     `;
     const child = spawn(process.execPath, ['--input-type=module', '-e', childSource, dir, marker, String(now + 2)], {
       stdio: ['ignore', 'ignore', 'pipe'],
@@ -138,6 +138,17 @@ function contractSuite(name, createStore) {
     assert.equal(events[1].record.text, updated.text);
     assert.deepEqual(Object.keys(events[0]), ['type', 'record']);
   });
+
+  test(`${name}: version changes after a write and stays stable after a read`, (t) => {
+    const store = createStore({ dir: freshDir(t) });
+    const before = store.version();
+    assert.equal(store.version(), before);
+    store.append({ thread: 'alpha', text: 'Versioned.' });
+    const after = store.version();
+    assert.notEqual(after, before);
+    assert.equal(store.version(), after);
+  });
 }
 
 contractSuite('JSON message store', ({ dir }) => openMessageStore({ dir, backend: 'json' }));
+contractSuite('SQLite message store', ({ dir }) => openMessageStore({ dir, backend: 'sqlite' }), 'sqlite');
