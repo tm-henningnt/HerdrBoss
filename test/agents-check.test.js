@@ -5,7 +5,7 @@ import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { agentsBlock, blockHash, checkAgentsFile, checkAgentsText, checkKitText, projectKit } from '../src/kit/agents-check.js';
+import { agentsBlock, blockHash, checkAgentsFile, checkAgentsText, checkKitText, projectKit, settingsWithHook } from '../src/kit/agents-check.js';
 import { runKitCommand } from '../src/kit/cli.js';
 import { loadModels } from '../src/kit/config.js';
 
@@ -21,6 +21,26 @@ function only(findings, level, pattern) {
   assert.ok(hits.length >= 1, `expected ${level} ${pattern} in ${JSON.stringify(findings)}`);
   return hits;
 }
+
+test('kit install settings add AskUserQuestion to an existing deny list once', () => {
+  const settings = {
+    model: 'keep-this-setting',
+    permissions: { allow: ['Read'], deny: ['Bash(git push:*)'] },
+    hooks: { Notification: [{ matcher: 'permission_prompt', hooks: [{ type: 'command', command: 'notify' }] }] },
+  };
+  const installed = JSON.parse(settingsWithHook(JSON.stringify(settings)));
+  assert.deepEqual(installed.permissions, { allow: ['Read'], deny: ['Bash(git push:*)', 'AskUserQuestion'] });
+  assert.equal(installed.model, settings.model);
+  assert.deepEqual(installed.hooks.Notification, settings.hooks.Notification);
+  assert.equal(installed.hooks.SessionStart.length, 1);
+
+  const alreadyDenied = JSON.parse(settingsWithHook(JSON.stringify({ permissions: { deny: ['AskUserQuestion', 'Bash(git push:*)'] } })));
+  assert.deepEqual(alreadyDenied.permissions.deny, ['AskUserQuestion', 'Bash(git push:*)']);
+
+  const existingHook = JSON.parse(settingsWithHook(null)).hooks;
+  const upgradedHook = JSON.parse(settingsWithHook(JSON.stringify({ hooks: existingHook })));
+  assert.deepEqual(upgradedHook.permissions.deny, ['AskUserQuestion']);
+});
 
 test('the block hash is the first 12 hex characters of the normalized template SHA-256', async () => {
   const { createHash } = await import('node:crypto');

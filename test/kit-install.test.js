@@ -125,7 +125,7 @@ test('the hook merge keeps other settings and other hooks', (t) => {
   assert.equal(run(r, ['kit', 'install']).status, 0);
   assert.equal(run(r, ['kit', 'install']).status, 0);
   const merged = JSON.parse(read(r, SETTINGS));
-  assert.deepEqual(merged.permissions, settings.permissions);
+  assert.deepEqual(merged.permissions, { ...settings.permissions, deny: ['AskUserQuestion'] });
   assert.equal(merged.model, 'x');
   assert.deepEqual(merged.hooks.PreToolUse, settings.hooks.PreToolUse);
   assert.deepEqual(hooks(r).map((hook) => hook.command), ['echo other', HOOK_COMMAND]);

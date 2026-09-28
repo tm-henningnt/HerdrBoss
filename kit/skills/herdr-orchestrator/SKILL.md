@@ -5,7 +5,7 @@ description: Use when coordinating delegated workers with Herdr Boss, writing wo
 
 # Herdr orchestrator
 
-- Use this skill when you own the project's work order and coordinate workers through Herdr Boss.
+- Use this skill to coordinate delegated workers through Herdr Boss.
 - Read the project's `AGENTS.md`, product documents, and current issue before choosing work.
 - Keep project rules, product contracts, acceptance commands, and project-specific browser procedures in the project files. Use this skill for the shared orchestration process.
 
@@ -59,7 +59,7 @@ Read each file in the skill folder when its step comes:
 - Decide and run your own pushes, deployments, and releases under the project release rules. Neither the Boss nor the Owner approves them.
 - Before each push, read the full diff for tokens, secrets, local paths with private content, and client or tenant names from other projects.
 - Push one change set at a time.
-- Run a full test suite with `herdr-boss suite -- <command>`, and push with `herdr-boss push <args>`. Never take the full-suite lock with a bare lock acquire for a suite. Use `herdr-boss push` for a push; it takes the lock when a pre-push hook exists. There is no load threshold.
+- Run `herdr-boss suite -- npm test` as a background command, then wait for it and read its exit code. The tool timeout is 600 seconds. The command takes the machine-wide `full-suite` lock. Never take the full-suite lock with a bare lock acquire for a suite. Push with `herdr-boss push <args>`. Use `herdr-boss push` for a push; it takes the lock when a pre-push hook exists. There is no load threshold.
 - Lease a shared resource with `herdr-boss lease acquire POOL` or `worker start --lease POOL`. Never pick a port from a pool by hand.
 
 ### Human gates and parking
