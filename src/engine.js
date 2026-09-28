@@ -16,6 +16,7 @@ import { codeSignCloneDir, sweepCodeSignClones } from './clone-sweep.js';
 import { runDenialScan, readDenials, denialSummary, DENIAL_SCAN_INTERVAL_MS, SCAN_BUDGET_BYTES, RETAIN_DAYS, RISE_FACTOR, RISE_MIN_EVENTS } from './denials.js';
 import { listHandoffs, saveHandoffs, supersedeHandoffs, expireHandoff, expireMissingHandoffs, handoffNotices } from './handoff.js';
 import { deliverQueued, mailboxCounts, readMessages, RETENTION_MS, SEND_LIMIT_PER_MINUTE } from './messages.js';
+import { openMessageStore } from './message-store.js';
 import { readKitNotice, pendingKitAlert, isKitAlert, kitNoticeTargets } from './kit-notice.js';
 import { inspectWorkerTransitions, inspectWorkerReports, applyWorkerFailureStatuses, resolveFreeUsageRun, activeFreeModelExhaustions, extendFreeModelExhaustion, activeFreeLaneExhaustions, extendFreeLaneExhaustion, freeUsageLaneRetry } from './worker-failures.js';
 import { readLockTakeoverNotices, readMachineLocks, removeLockTakeoverNotice } from './kit/locks.js';
@@ -165,6 +166,9 @@ export class Engine extends EventEmitter {
     this.lockDataDir = lockDataDir;
     this.kitNoticeRead = false;
     this.state = readJson(STATE_FILE, null);
+    this.messageStore = openMessageStore({ dir: DATA_DIR });
+    this.messageVersion = this.messageStore.version();
+    this.messageSnapshot = new Map(this.messageStore.all().map((record) => [record.id, JSON.stringify(record)]));
     const savedAt = Date.parse(this.state?.quotasAt);
     if (Array.isArray(this.state?.quotas) && this.state.quotas.length && Number.isFinite(savedAt) && Date.now() - savedAt < QUOTA_CACHE_MS) {
       this.quotas = this.state.quotas;
@@ -197,11 +201,38 @@ export class Engine extends EventEmitter {
     this.emit('state', this.state);
   }
 
+  observeMessageChange(event) {
+    if (!event || !['append', 'update'].includes(event.type) || typeof event.record?.id !== 'string') return;
+    const serialized = JSON.stringify(event.record);
+    if (this.messageSnapshot.get(event.record.id) === serialized) return;
+    this.messageSnapshot.set(event.record.id, serialized);
+    // Keep the last tick version so a local callback cannot hide another process change.
+    this.emit('message', event);
+  }
+
+  checkMessageChanges() {
+    const version = this.messageStore.version();
+    if (version === this.messageVersion) return;
+    const records = this.messageStore.all();
+    const next = new Map();
+    for (const record of records) {
+      const serialized = JSON.stringify(record);
+      const previous = this.messageSnapshot.get(record.id);
+      if (!previous) this.emit('message', { type: 'append', record });
+      else if (previous !== serialized) this.emit('message', { type: 'update', record });
+      next.set(record.id, serialized);
+    }
+    this.messageSnapshot = next;
+    this.messageVersion = version;
+  }
+
   async tick() {
     if (this.running) return this.state;
     this.running = true;
     const errors = [];
     const now = Date.now();
+    try { this.checkMessageChanges(); }
+    catch (error) { errors.push(`messages: ${error.message}`); }
     const harness = this.readHarness(now);
     try {
       this.applyQuotaResult();

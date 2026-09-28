@@ -30,7 +30,7 @@ function contractSuite(name, createStore) {
   test(`${name}: all returns kept records in time order`, (t) => {
     const dir = freshDir(t);
     const store = createStore({ dir });
-    assert.deepEqual(Object.keys(store), ['all', 'append', 'update', 'mutate', 'thread', 'chats', 'onChange']);
+    assert.deepEqual(Object.keys(store), ['all', 'append', 'update', 'mutate', 'thread', 'chats', 'version', 'onChange']);
     const now = Date.now();
     store.append({ thread: 'alpha', to: 'owner', text: 'Later.' }, { now: now + 20 });
     store.append({ thread: 'alpha', to: 'owner', text: 'Earlier.' }, { now: now + 10 });
@@ -39,6 +39,16 @@ function contractSuite(name, createStore) {
     const kept = store.append({ thread: 'alpha', to: 'owner', text: 'Current.' }, { now: now + 30 });
     assert.deepEqual(store.all().map((record) => record.text), ['Earlier.', 'Later.', 'Current.']);
     assert.equal(store.all().at(-1).id, kept.id);
+  });
+
+  test(`${name}: version changes after an append and an update`, (t) => {
+    const store = createStore({ dir: freshDir(t) });
+    const initial = store.version();
+    const record = store.append({ thread: 'alpha', text: 'First.' });
+    const appended = store.version();
+    assert.notEqual(appended, initial);
+    store.update(record.id, { text: 'Updated.' });
+    assert.notEqual(store.version(), appended);
   });
 
   test(`${name}: mutate keeps a concurrent process append`, async (t) => {

@@ -4,11 +4,12 @@
  * Use append() or update() to change one record.
  * Use mutate() for every read-modify-write operation.
  * Use thread() to read an older page and chats() to list threads.
+ * Use version() to detect changes made by other processes.
  * Use onChange() to receive changes made by this process.
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { DATA_DIR } from './config.js';
 
 export const RETENTION_MS = 30 * 86400 * 1000;
@@ -170,6 +171,10 @@ export function openMessageStore({ dir = DATA_DIR, backend = 'json' } = {}) {
         if (record.to === 'owner' && !record.readAt) chat.unreadForOwner += 1;
       }
       return [...chats.values()].sort((left, right) => messageOrder(right.last, left.last));
+    },
+
+    version() {
+      return createHash('sha256').update(JSON.stringify(all())).digest('hex');
     },
 
     onChange(listener) {

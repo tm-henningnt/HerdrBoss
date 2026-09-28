@@ -38,6 +38,16 @@ Herdr Boss is a script. It uses no LLM and no tokens.
 
 A read-only preview accepts loopback requests only. It has no login page. It never reads, creates, or changes token or session files.
 
+## Chat API
+
+Use `GET /api/chats` to list the Boss chat and project chats with an orchestrator pane. The response gives each chat a title, a last message, and an unread count. A chat without messages has a `null` last message.
+
+Use `GET /api/chats/<thread>?limit=<n>&before=<id>` to read a chat. Set `limit` to an integer from 1 to 100. The default is 50. Set `before` to a message ID to read older messages. The response sets `more` to `true` when older messages remain.
+
+Use `POST /api/chats/<thread>/read` to mark unread messages to the Owner as read. The read-only preview refuses this request.
+
+Use `POST /api/messages` to send an Owner message. Read `GET /api/events` to receive each message change as a `message` event.
+
 ## What the dashboard manages
 
 Every setting and every resource that Herdr Boss manages is visible and settable in the dashboard, unless a good reason keeps it outside. These are the good reasons:

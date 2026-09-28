@@ -198,6 +198,7 @@ test('read-only preview allows reads and rejects all API methods that can change
     ['POST', '/api/messages'],
     ['POST', '/api/messages/read'],
     ['POST', '/api/messages/dismiss'],
+    ['POST', '/api/chats/alpha/read'],
     ['POST', '/api/leases/release'],
     ['PATCH', '/api/unknown'],
     ['OPTIONS', '/api/state'],
@@ -695,6 +696,158 @@ test('the messages API validates Owner sends, refuses cross-origin and unauthent
   assert.equal(limited.status, 429);
   assert.match((await limited.json()).error, /10/);
   assert.equal(readMessages().length, 10);
+});
+
+test('chat routes list writable threads, page messages, and mark Owner messages read', { timeout: 20000 }, async (t) => {
+  fs.rmSync(dataDir, { recursive: true, force: true });
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.mkdirSync(homeDir, { recursive: true });
+  const { openMessageStore } = await import('../src/message-store.js');
+  const store = openMessageStore({ dir: dataDir });
+  const now = Date.parse('2026-09-28T12:00:00.000Z');
+  const append = (thread, fields, offset) => store.append({ thread, ...fields }, { now: now + offset });
+  const alpha = [
+    append('alpha', { from: 'owner', to: 'orch', text: 'Alpha 0.' }, 0),
+    append('alpha', { from: 'orch', to: 'owner', kind: 'reply', text: 'Alpha 1.' }, 1),
+    append('alpha', { from: 'owner', to: 'orch', text: 'Alpha 2.' }, 2),
+    append('alpha', { from: 'orch', to: 'owner', kind: 'reply', text: 'Alpha 3.', readAt: new Date(now + 3).toISOString() }, 3),
+    append('alpha', { from: 'orch', to: 'owner', kind: 'reply', text: 'A'.repeat(150) }, 4),
+  ];
+  append('boss', { from: 'boss', to: 'owner', kind: 'reply', text: 'Boss update.' }, 3);
+  const cfg = loadConfig();
+  cfg.host = '127.0.0.1';
+  cfg.port = 0;
+  cfg.tickSeconds = 3600;
+  const { server, close } = serve(cfg, {
+    createEngine: () => {
+      const engine = new EventEmitter();
+      engine.state = { control: { projects: {
+        alpha: { project: 'Alpha Project', orch: { pane: 'wA:p1' } },
+        beta: { project: 'Beta Project', orch: { pane: 'wB:p1' } },
+        offline: { project: 'Offline Project', orch: null },
+      } } };
+      engine.tick = async () => engine.state;
+      engine.log = () => {};
+      return engine;
+    },
+  });
+  t.after(async () => {
+    await close();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  });
+  await new Promise((resolve, reject) => {
+    server.once('listening', resolve);
+    server.once('error', reject);
+  });
+  const base = `http://127.0.0.1:${server.address().port}`;
+
+  const chatsResponse = await fetch(`${base}/api/chats`);
+  assert.equal(chatsResponse.status, 200);
+  const chats = await chatsResponse.json();
+  assert.deepEqual(chats.map((chat) => [chat.thread, chat.title, chat.unread]), [
+    ['alpha', 'Alpha Project', 2], ['boss', 'Boss', 1], ['beta', 'Beta Project', 0],
+  ]);
+  assert.deepEqual(Object.keys(chats[0].last), ['id', 'at', 'from', 'text', 'status']);
+  assert.equal(chats[0].last.id, alpha[4].id);
+  assert.equal(chats[0].last.text.length, 120);
+  assert.equal(chats[2].last, null, 'a project chat appears before it has messages');
+
+  const pageResponse = await fetch(`${base}/api/chats/alpha?before=${alpha[4].id}&limit=2`);
+  assert.equal(pageResponse.status, 200);
+  const page = await pageResponse.json();
+  assert.equal(page.thread, 'alpha');
+  assert.deepEqual(page.messages.map((record) => record.text), ['Alpha 2.', 'Alpha 3.']);
+  assert.equal(page.more, true);
+  const lastPage = await fetch(`${base}/api/chats/alpha?before=${alpha[3].id}&limit=3`);
+  assert.equal((await lastPage.json()).more, false);
+  assert.equal((await fetch(`${base}/api/chats/alpha?limit=101`)).status, 400);
+
+  const marked = await fetch(`${base}/api/chats/alpha/read`, { method: 'POST' });
+  assert.equal(marked.status, 200);
+  assert.deepEqual(await marked.json(), { ok: true, updated: 2 });
+  assert.equal(store.chats().find((chat) => chat.thread === 'alpha').unreadForOwner, 0);
+});
+
+test('message events stream local changes and report a second process append once on the next tick', { timeout: 30000 }, async (t) => {
+  fs.rmSync(dataDir, { recursive: true, force: true });
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.mkdirSync(homeDir, { recursive: true });
+  const { openMessageStore } = await import('../src/message-store.js');
+  const { pathToFileURL } = await import('node:url');
+  const { once } = await import('node:events');
+  const storeEntry = pathToFileURL(path.resolve('src/message-store.js')).href;
+  const cfg = loadConfig();
+  cfg.host = '127.0.0.1';
+  cfg.port = 0;
+  cfg.tickSeconds = 3600;
+  const collectors = {
+    collectHerdr: async () => ({ panes: [], workspaces: [] }),
+    collectMachine: async () => null,
+    collectProcesses: async () => new Map(),
+    collectQuotas: async () => [],
+    collectWorktreeCounts: async () => ({}),
+    collectCwdProcesses: async () => [],
+    collectMissingWorktreeProcesses: async () => [],
+    collectPiModels: async () => ({ models: [] }),
+  };
+  let engine;
+  const { server, close } = serve(cfg, {
+    createEngine: (config, options) => {
+      engine = new Engine(config, { ...options, collectors, kitRoot: path.join(dataDir, 'kit'), lockDataDir: dataDir });
+      return engine;
+    },
+  });
+  t.after(async () => {
+    await close();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  });
+  await new Promise((resolve, reject) => {
+    server.once('listening', resolve);
+    server.once('error', reject);
+  });
+  if (!engine.state?.control) await once(engine, 'state');
+  const emitted = [];
+  engine.on('message', (event) => emitted.push(event));
+  const response = await fetch(`http://127.0.0.1:${server.address().port}/api/events`);
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  const nextMessage = async () => {
+    for (;;) {
+      let boundary = buffer.indexOf('\n\n');
+      while (boundary < 0) {
+        const { value, done } = await reader.read();
+        assert.equal(done, false, 'the event stream stays open');
+        buffer += decoder.decode(value, { stream: true });
+        boundary = buffer.indexOf('\n\n');
+      }
+      const frame = buffer.slice(0, boundary);
+      buffer = buffer.slice(boundary + 2);
+      if (!/^event: message$/m.test(frame)) continue;
+      const data = frame.split('\n').find((line) => line.startsWith('data: '));
+      return JSON.parse(data.slice(6));
+    }
+  };
+  const childSource = `import { openMessageStore } from ${JSON.stringify(storeEntry)}; openMessageStore({ dir: process.argv[1] }).append({ thread: 'alpha', from: 'orch', to: 'owner', text: 'External append.' });`;
+  execFileSync(process.execPath, ['--input-type=module', '-e', childSource, dataDir], {
+    env: { ...process.env, HOME: homeDir, HERDR_BOSS_DIR: dataDir },
+  });
+  const serviceAppendEvent = nextMessage();
+  const serviceRecord = openMessageStore({ dir: dataDir }).append({ thread: 'boss', from: 'boss', to: 'owner', text: 'Service append.' });
+  assert.deepEqual(await serviceAppendEvent, { type: 'append', record: serviceRecord });
+
+  const externalAppendEvent = nextMessage();
+  await engine.tick();
+  const externalEvent = await externalAppendEvent;
+  assert.equal(externalEvent.type, 'append');
+  assert.equal(externalEvent.record.text, 'External append.');
+  await engine.tick();
+  assert.deepEqual(emitted.map(({ type, record }) => [type, record.text]), [
+    ['append', 'Service append.'], ['append', 'External append.'],
+  ]);
+  await reader.cancel();
 });
 
 test('organization page offers the Plain and Cards styles, motion with a reduced-motion fallback, and a phone worker count', () => {
