@@ -2007,7 +2007,7 @@ test('lanes prints the shared use-now line before other lane details', (t) => {
 
   const lines = output.trim().split('\n');
   assert.match(lines[0], /^Machine guard active/);
-  assert.equal(lines[1], 'Use now: codex (below pace), opencodego (trickle 3.9%/day left today)');
+  assert.equal(lines[1], 'Use now: codex (below pace), opencodego (trickle 3.9%/day left today), unmetered (free models)');
 });
 
 test('the project kit tells orchestrators to use the bulletin Use now line', () => {

@@ -78,7 +78,7 @@ test('a trickle lane under its allowance counts as usable for least-over selecti
   }), null);
 });
 
-test('use-now lanes rank below-pace room, trickle allowance, then other open lanes', () => {
+test('use-now lanes rank below-pace room, ignored quota, trickle allowance, open, then free models', () => {
   const lanes = {
     open: { state: 'open' },
     codex: { state: 'open', roomPercent: 12 },
@@ -95,8 +95,10 @@ test('use-now lanes rank below-pace room, trickle allowance, then other open lan
   assert.deepEqual(useNowLanes(lanes), [
     { provider: 'claude', kind: 'claude', reason: 'below pace' },
     { provider: 'codex', kind: 'codex', reason: 'below pace' },
+    { provider: 'ignored', kind: 'ignored', reason: 'open, quota ignored' },
     { provider: 'opencodego', kind: 'opencode', reason: 'trickle 3.9%/day left today' },
     { provider: 'open', kind: 'open', reason: 'open' },
+    { provider: 'unmetered', kind: 'unmetered', reason: 'free models' },
   ]);
   assert.deepEqual(useNowLanes({}), []);
 });

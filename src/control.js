@@ -556,9 +556,20 @@ export function useNowLanes(lanes) {
   const belowPace = [];
   const trickle = [];
   const open = [];
+  const ignored = [];
+  const free = [];
   for (const [provider, lane] of Object.entries(lanes || {})) {
-    if (!lane || lane.unmetered || lane.ignored) continue;
+    if (!lane) continue;
     const entry = { provider, kind: USE_NOW_KINDS[provider] || provider };
+    // An ignored lane has no pacing limit, and the unmetered lane costs no quota, so both can take work.
+    if (lane.unmetered) {
+      if (lane.state === 'open') free.push({ ...entry, reason: 'free models' });
+      continue;
+    }
+    if (lane.ignored) {
+      if (lane.state === 'open') ignored.push({ ...entry, reason: 'open, quota ignored' });
+      continue;
+    }
     if (lane.state === 'open' && Number.isFinite(lane.roomPercent) && lane.roomPercent > 0) {
       belowPace.push({ ...entry, roomPercent: lane.roomPercent, reason: 'below pace' });
     } else if (lane.state === 'trickle') {
@@ -571,7 +582,7 @@ export function useNowLanes(lanes) {
     }
   }
   belowPace.sort((a, b) => b.roomPercent - a.roomPercent || a.provider.localeCompare(b.provider));
-  return [...belowPace, ...trickle, ...open].map(({ provider, kind, reason }) => ({ provider, kind, reason }));
+  return [...belowPace, ...ignored, ...trickle, ...open, ...free].map(({ provider, kind, reason }) => ({ provider, kind, reason }));
 }
 
 // When no metered provider is open or under its trickle allowance, the least-over provider that is only ahead of pace may start.
