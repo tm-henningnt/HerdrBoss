@@ -354,12 +354,12 @@ export function describeMachine(rules) {
   return `Machine guard ${guardText}. Owner ${machine.owner || 'unknown'}; CPU ${cpu} / ${threshold}limit ${machine.cpuLimit == null ? 'disabled' : `${machine.cpuLimit}%`}; 5-minute load ${load} / ${threshold}backstop ${machine.loadLimit ?? 'disabled'}${exceeded ? '. Stop new workers and full test suites.' : ''}`;
 }
 
-// One bulletin line for the project: effective slots with the borrowed or lent count, global use, and the machine load.
+// One bulletin line for the project: effective slots with the borrowed, lent, or free count, global use, and the machine load.
 export function allocationSummary(rules, slug) {
   const control = rules?.control;
   const p = control?.projects?.[slug];
   if (!p) return null;
-  const loan = p.borrowed ? ` (+${p.borrowed} borrowed)` : p.lent ? ` (${p.lent} lent)` : '';
+  const loan = p.borrowed ? ` (+${p.borrowed} borrowed)` : p.lent ? ` (${p.lent} lent)` : p.offered ? ` (${p.offered} free for others)` : '';
   const load = Number.isFinite(rules.machine?.fiveMinute) ? rules.machine.fiveMinute : 'unknown';
   return `Allocation for ${slug}: ${p.running}/${p.slots} effective slots${loan}; ${control.runningWorkers ?? 'unknown'}/${control.maxWorkers ?? 'unknown'} working agents globally; 5-minute load ${load}.`;
 }

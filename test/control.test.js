@@ -672,16 +672,16 @@ test('idle borrowing reallocates slots and quota risk offers a different harness
     b: { share: 60, mode: 'active', excludedKinds: [], excludedModels: [] },
   } });
   const now = Date.parse('2026-09-24T17:00:00Z');
-  // Project b uses 3 of its 4 base slots and keeps 1 for its working orchestrator, so it borrows.
+  // Project b uses all 4 of its base slots, so it borrows.
   const snap = snapshot();
-  snap.herdr.panes.push({ id: 'w2:p3', workspace: 'w2', orch: false, agent: 'pi', status: 'working' }, { id: 'w2:p4', workspace: 'w2', orch: false, agent: 'pi', status: 'working' });
+  snap.herdr.panes.push(...[3, 4, 5].map((n) => ({ id: `w2:p${n}`, workspace: 'w2', orch: false, agent: 'pi', status: 'working' })));
   const result = deriveControl(snap, p, models, { 'w1:p1': { status: 'idle', since: now - 11 * 60000 } }, now);
   assert.equal(result.projects.a.idle, true);
   assert.equal(result.projects.a.slots, 0);
   assert.equal(result.projects.a.lent, 2);
   assert.equal(result.projects.b.slots, 6);
   assert.equal(result.projects.b.borrowed, 2);
-  assert.equal(result.runningWorkers, 3);
+  assert.equal(result.runningWorkers, 4);
   assert.equal(result.handoffs[0].target.kind, 'codex');
   assert.equal(result.handoffs[0].sessionId, 's1');
 });

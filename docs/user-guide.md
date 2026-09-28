@@ -238,16 +238,16 @@ A bar segment shows its set share and its effective slots, for example `30% · 2
 
 An idle project is faded in the bar and in its row. A paused project is faded and striped.
 
-The **base slots** of a project are its set share of the global worker limit. When **Borrow idle shares** (`borrowIdle`) is on, a project lends its unused base slots to the projects that use all their slots:
+The **base slots** of a project are its set share of the global worker limit. A project always keeps its own base slots unless it is idle or paused. When **Borrow idle shares** (`borrowIdle`) is on, the projects with unused slots give capacity to the projects that use all their slots:
 
-- An idle or paused project lends all its base slots.
-- Another project lends its base slots minus its running workers. It keeps a reserve of 1 slot when its orchestrator is `working` or `blocked`. It keeps no reserve when its orchestrator is `idle` or `done`.
-- A project is a borrower when its running workers are equal to or more than its base slots minus its reserve. Herdr Boss gives the lent slots to the borrowers by share.
-- When no project is a borrower, no project lends.
+- An idle or paused project lends all its base slots. Its effective slots are 0 plus any borrowed slots.
+- Another project keeps all its base slots. It offers its unused slots, the base slots minus its running workers, to the borrowers. The offered slots stay in its own effective slots.
+- A project is a borrower when it is not idle and its running workers are equal to or more than its base slots. Herdr Boss adds the lent slots and the offered slots, and gives the sum to the borrowers by share.
+- When no project is a borrower, no project lends or offers slots.
 
-The effective slots are the base slots minus the lent slots plus the borrowed slots. The bulletin shows them on each project line, for example `Viz: 4/6 slots (40% share, +1 borrowed)` or `HerdrBoss: 0/1 slots (15% share, 1 lent)`. Borrowed slots are real capacity. An orchestrator can start workers up to its effective slots. The global limit still applies. The set share stays the same. Clear **Borrow idle shares** to stop all lending.
+The effective slots are the base slots minus the lent slots plus the borrowed slots. Offered slots do not reduce the effective slots. The bulletin shows the effective slots on each project line, for example `Viz: 4/6 slots (40% share, +2 borrowed)`, `Docs: 0/0 slots (15% share, idle, 2 lent)`, or `HerdrBoss: 1/4 slots (30% share, 3 free for others)`. The Allocation page shows the same counts. Borrowed slots are real capacity. An orchestrator can start workers up to its effective slots. The global limit in `worker start` still caps the total number of workers. The set share stays the same. Clear **Borrow idle shares** to stop all lending.
 
-`worker start` prints one allocation line for the project: the running workers, the effective slots, the borrowed or lent count, the global use, and the 5-minute load. When the project uses all its effective slots, `worker start` also prints an advisory notice. The notice does not stop the start.
+`worker start` prints one allocation line for the project: the running workers, the effective slots, the borrowed, lent, or free count, the global use, and the 5-minute load. When the project uses all its effective slots, `worker start` also prints an advisory notice. The notice does not stop the start.
 
 ## Orchestrator handover
 

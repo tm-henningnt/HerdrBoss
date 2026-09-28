@@ -91,7 +91,7 @@ Read each file in the skill folder when its step comes:
 
 - Read [the model lanes](../../models.md) before selecting a kind or model.
 - Read `~/.herdr-boss/bulletin.md` before each new dispatch, including its machine load.
-- Follow the current global worker cap and your project's effective slots in the bulletin. The effective slots include borrowed slots. Start workers up to your effective slots.
+- Follow the current global worker cap and your project's effective slots in the bulletin. The effective slots include borrowed slots. Your project always keeps its own base slots unless it is idle or paused. Slots marked `free for others` stay yours. Start workers up to your effective slots.
 - Obey the bulletin's preferred and avoided kinds. Do not start work that the bulletin marks as avoided unless you use an allowed override.
 - Use `--force` only for an authorized quota or capacity override, or when the bulletin blocks a kind and the work must continue. It cannot enable globally disabled kinds or models.
 - Record why you overrode an avoided kind.

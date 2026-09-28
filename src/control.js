@@ -665,18 +665,18 @@ export function deriveControl(snap, policy, baseModels, paneSince = {}, now = Da
     const mode = settings[p.slug].mode === 'auto' && published?.status === 'paused' ? 'paused' : settings[p.slug].mode;
     const isIdle = mode === 'idle' || mode === 'paused' || (mode === 'auto' && workers.length === 0 && !!orch && ['idle', 'done'].includes(orch.status) && age >= policy.idleMinutes * 60000);
     if (isIdle) idle.add(p.slug);
-    result[p.slug] = { ...p, ...settings[p.slug], effectiveMode: mode, baseSlots: base[p.slug] || 0, slots: base[p.slug] || 0, lent: 0, borrowed: 0, running: workers.length, idle: isIdle, orch: orch ? { pane: orch.id, kind: orch.agent, status: orch.status, sessionId: orch.sessionId } : null };
+    result[p.slug] = { ...p, ...settings[p.slug], effectiveMode: mode, baseSlots: base[p.slug] || 0, slots: base[p.slug] || 0, lent: 0, offered: 0, borrowed: 0, running: workers.length, idle: isIdle, orch: orch ? { pane: orch.id, kind: orch.agent, status: orch.status, sessionId: orch.sessionId } : null };
   }
-  // An idle or paused project lends all its slots. Another project lends its unused slots and keeps one for its orchestrator while it is working or blocked.
+  // An idle or paused project lends all its slots. Another project keeps its full base and offers its unused slots without losing them.
   if (policy.borrowIdle) {
-    const reserve = (p) => (['working', 'blocked'].includes(p.orch?.status) ? 1 : 0);
-    const lendable = Object.fromEntries(Object.values(result).map((p) => [p.slug, idle.has(p.slug) ? p.baseSlots : Math.max(0, p.baseSlots - p.running - reserve(p))]));
-    const borrowers = Object.values(result).filter((p) => !idle.has(p.slug) && p.running >= p.baseSlots - reserve(p));
-    const lent = Object.values(lendable).reduce((a, b) => a + b, 0);
-    if (borrowers.length && lent) {
-      const borrowed = distribute(lent, Object.fromEntries(borrowers.map((p) => [p.slug, weights[p.slug] || 1])));
+    const spare = (p) => (idle.has(p.slug) ? p.baseSlots : Math.max(0, p.baseSlots - p.running));
+    const borrowers = Object.values(result).filter((p) => !idle.has(p.slug) && p.running >= p.baseSlots);
+    const pool = Object.values(result).reduce((n, p) => n + spare(p), 0);
+    if (borrowers.length && pool) {
+      const borrowed = distribute(pool, Object.fromEntries(borrowers.map((p) => [p.slug, weights[p.slug] || 1])));
       for (const p of Object.values(result)) {
-        p.lent = lendable[p.slug];
+        if (idle.has(p.slug)) p.lent = p.baseSlots;
+        else p.offered = spare(p);
         p.borrowed = borrowed[p.slug] || 0;
         p.slots = p.baseSlots - p.lent + p.borrowed;
       }
