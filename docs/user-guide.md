@@ -107,7 +107,7 @@ To add the shared rules to a project, follow [orchestrator-instructions.md](orch
 | An `agent-browser` daemon has no parent, no children, and is older than 2 hours | Herdr Boss stops the daemon. It never stops a browser. |
 | A parent-PID-1 process has its current working directory in a missing worktree | Notice that project's `orch` workspace. Do not notify the Boss workspace. |
 | A non-orchestrator worker stays blocked for more than 5 minutes | Notice its project orchestrator with the worker name and pane ID. |
-| An `orch` pane stays `idle` or `done` for the configured idle minutes while its published status has an actionable task | Notice that project with the task ID and title. |
+| An `orch` pane stays `idle` or `done` for the configured idle minutes while its published status has an actionable task | Notice that project with the task ID and title. When the project has a free effective slot, name the first lane from **Use now**. |
 | The service starts, and the checked-out branch has new commits that change `kit/`, `src/kit/`, or `docs/orchestrator-instructions.md` | One `Kit updated` notice to each project orchestrator, with the kit revision and up to 10 commit subjects, newest first. Do not notify the Boss workspace. |
 | A worker is working, first appears idle or done, or changes into either state | Herdr Boss reads only the last 8 visible pane lines. A known provider error marks the worker failed and sends the orchestrator its name, pane ID, and fixed error label. |
 | A worker writes `.worker/report.json` or `.worker/<name>/report.json` after its pane first appears | One notice per report file path. A rewrite of the same file sends no new notice. |
@@ -122,7 +122,7 @@ A task is actionable when its status is `todo`, `doing`, or `review` and every I
 
 A task in a group with `"held": true` is not actionable. The nudge then names the next actionable task outside the held group, or sends no notice.
 
-The notice names the task ID and title. Resume an idle or done worker on that task, or start suitable work yourself. The notice uses one key per project and task, so the normal notice cooldown limits repeats. A different next task gets a new key and can prompt again.
+The notice names the task ID and title. Resume an idle or done worker on that task, or start suitable work yourself. Check **Use now** when the project has a free effective slot. If it lists a lane, start ready work on that lane's harness. The notice uses one key per project and task, so the normal notice cooldown limits repeats. A different next task gets a new key and can prompt again.
 
 A notice is a prompt to an `orch` pane. Herdr Boss normally sends it only when that agent is `idle` or `done`, and no more than the configured cooldown per alert and pane. It sends it sooner only when the severity increases. An immediate notice with severity `warn` or `critical` also goes to a `working` orchestrator. Worker failure notices are of this type. An immediate `info` notice, for example a worker report notice, waits until the orchestrator is `idle` or `done`. A notice for all orchestrators goes only to projects with a worker that is `working` or `blocked`.
 
@@ -158,6 +158,8 @@ The stale notice text is `Your published status is <age> old while <workers ran 
 - **exhausted**: a live window is at 100% or more. The lane shows its label and reset time. Only `--force` can use it.
 
 A provider is open only when every live, measured window is on pace and no live window is exhausted. Extra windows, such as a model-only window, do not count. A short window of 7 days or less still closes a trickle lane when it is ahead of pace. An exhausted or near-exhaustion window also closes the lane.
+
+The bulletin and `herdr-boss lanes` show a **Use now** line before the metered lane details. The line lists open providers below pace first, from most room to least. It lists trickle providers with allowance left next, then other open providers. Each item gives a short reason. If no metered provider can take work, use an unmetered model or wait.
 
 Herdr Boss gives a trickle lane a daily allowance. With a goal end in the future, it divides the gap to the goal percent by the days left to that end. After the goal end, it divides the unused quota percent by the days left to reset. Without a goal end, it divides the gap to the goal percent by the days left to reset. The goal percent defaults to 100%. It counts today's use from the first quota record after 00:00 UTC. After a reset, it starts from the first record after that reset. With no record for today, it counts 0% use.
 

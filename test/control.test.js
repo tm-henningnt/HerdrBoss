@@ -1688,6 +1688,23 @@ test('the idle-orchestrator nudge starts at the idle threshold and names the rea
   assert.doesNotMatch(JSON.stringify(alert), /herdr-boss publish/, 'the notice does not quote project notes');
 });
 
+test('the idle-orchestrator nudge names the first use-now harness when a slot is free', () => {
+  const snap = nudgeFixture({ tasks: [{ id: '74', title: 'Parse event log', status: 'todo' }] });
+  snap.control.projects.herdrboss.slots = 2;
+  snap.control.projects.herdrboss.running = 1;
+  snap.lanes = {
+    codex: { state: 'open', roomPercent: 8 },
+    opencodego: { state: 'trickle', allowancePercent: 5, usedTodayPercent: 1.1 },
+  };
+  const since = { 'w1:p1': { since: NUDGE_NOW - 20 * 60000 } };
+  const [alert] = nudgeAlerts(snap, since);
+
+  assert.match(alert.text, /Start ready work on codex now\./);
+  snap.control.projects.herdrboss.running = 2;
+  const full = nudgeAlerts(snap, since)[0];
+  assert.doesNotMatch(full.text, /Start ready work on/);
+});
+
 test('the nudge key stays stable per project and task while a new next task prompts again', () => {
   const first = nudgeAlerts(nudgeFixture({ tasks: [{ id: '74', title: 'Parse event log', status: 'todo' }] }), { 'w1:p1': { since: NUDGE_NOW - 20 * 60000 } })[0];
   const again = nudgeAlerts(nudgeFixture({ tasks: [{ id: '74', title: 'Parse event log', status: 'todo' }] }), { 'w1:p1': { since: NUDGE_NOW - 25 * 60000 } });

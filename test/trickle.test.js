@@ -11,7 +11,7 @@ process.env.HERDR_BOSS_LIVE_DIR = path.join(fixture, 'live');
 fs.mkdirSync(process.env.HERDR_BOSS_DIR, { recursive: true });
 test.after(() => fs.rmSync(fixture, { recursive: true, force: true }));
 
-const { deriveControl, laneStatus, leastOverProvider, POLICY_DEFAULTS } = await import('../src/control.js');
+const { deriveControl, laneStatus, leastOverProvider, POLICY_DEFAULTS, useNowLanes } = await import('../src/control.js');
 const { quotaUsageToday, readQuotaHistory } = await import('../src/usage.js');
 const { renderBulletin } = await import('../src/rules.js');
 const { describeLane, providerGate } = await import('../src/kit/workers.js');
@@ -78,6 +78,39 @@ test('a trickle lane under its allowance counts as usable for least-over selecti
   }), null);
 });
 
+test('use-now lanes rank below-pace room, trickle allowance, then other open lanes', () => {
+  const lanes = {
+    open: { state: 'open' },
+    codex: { state: 'open', roomPercent: 12 },
+    claude: { state: 'open', roomPercent: 30 },
+    ignored: { state: 'open', roomPercent: 90, ignored: true },
+    opencodego: { state: 'trickle', allowancePercent: 5, usedTodayPercent: 1.1 },
+    claudePace: { state: 'pace', overPercent: 2 },
+    reserve: { state: 'reserve' },
+    exhausted: { state: 'exhausted' },
+    unknown: { state: 'unknown' },
+    unmetered: { state: 'open', unmetered: true },
+  };
+
+  assert.deepEqual(useNowLanes(lanes), [
+    { provider: 'claude', kind: 'claude', reason: 'below pace' },
+    { provider: 'codex', kind: 'codex', reason: 'below pace' },
+    { provider: 'opencodego', kind: 'opencode', reason: 'trickle 3.9%/day left today' },
+    { provider: 'open', kind: 'open', reason: 'open' },
+  ]);
+  assert.deepEqual(useNowLanes({}), []);
+});
+
+test('open lane room uses the tightest live quota window', () => {
+  const lanes = laneStatus([{ provider: 'codex', windows: [
+    { key: 'primary', label: 'Weekly', usedPercent: 10, expectedPercent: 20, willLast: true, resetsAt: '2026-10-05T12:00:00.000Z' },
+    { key: 'secondary', label: 'Monthly', usedPercent: 30, expectedPercent: 38, willLast: true, resetsAt: '2026-10-23T12:00:00.000Z' },
+  ] }], policy(), now);
+
+  assert.equal(lanes.codex.state, 'open');
+  assert.equal(lanes.codex.roomPercent, 8);
+});
+
 test('short ahead-of-pace and exhausted weekly windows close a monthly trickle lane', () => {
   const quotas = [{ provider: 'opencodego', windows: [
     { key: 'secondary', label: 'Monthly', usedPercent: 60, expectedPercent: 10, windowMinutes: 43200,
@@ -104,6 +137,18 @@ test('bulletin and lanes show the trickle allowance and daily use', () => {
   assert.match(bulletin, /OpenCode Go: trickle \(Monthly 50% used, ahead of pace\): about 2\.0%\/day, 0\.4% used today\./);
   assert.match(describeLane('opencodego', { ...lanes.opencodego, usedTodayPercent: 0.4 }, now),
     /trickle \(Monthly 50% used, ahead of pace\): about 2\.0%\/day, 0\.4% used today/);
+});
+
+test('bulletin shows the shared use-now line and the empty guidance', () => {
+  const lanes = {
+    codex: { state: 'open', roomPercent: 8 },
+    opencodego: { state: 'trickle', allowancePercent: 5, usedTodayPercent: 1.1 },
+  };
+  const bulletin = renderBulletin({ updatedAt: new Date(now).toISOString(), quotas: [], lanes }, { alerts: [], advice: [] }, {});
+  assert.match(bulletin, /Use now: codex \(below pace\), opencodego \(trickle 3\.9%\/day left today\)/);
+
+  const empty = renderBulletin({ updatedAt: new Date(now).toISOString(), quotas: [], lanes: { codex: { state: 'pace' } } }, { alerts: [], advice: [] }, {});
+  assert.match(empty, /Use now: no metered lane; use unmetered models or wait\./);
 });
 
 test('bulletin and lanes use the shared short goal text', () => {

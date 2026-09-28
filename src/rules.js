@@ -1,6 +1,6 @@
 // Turns a snapshot into alerts and bulletin advice. Pure functions, no side effects.
 import { dashboardUrl } from './config.js';
-import { formatPacingGoalEnd, goalSummary, hasQuotaData, machineLimits, pacingGoal, pacingGoalEnd, POLICY_DEFAULTS, unmeteredClosedParts, unmeteredSummary } from './control.js';
+import { formatPacingGoalEnd, goalSummary, hasQuotaData, machineLimits, pacingGoal, pacingGoalEnd, POLICY_DEFAULTS, unmeteredClosedParts, unmeteredSummary, useNowLanes } from './control.js';
 import { blockedWorkerAlerts } from './worker-failures.js';
 import { kitRevision } from './kit/agents-check.js';
 import { leaseBulletinLines } from './leases.js';
@@ -85,11 +85,12 @@ function idleOrchestratorNudges(snap, paneSince = {}, now = Date.now(), policy =
     const names = ready.map((p) => p.name || p.agent || p.id);
     const minutes = Math.round((now - since) / 60000);
     const ref = `task ${task.id ? `${task.id} ` : ''}"${task.title}"`;
+    const firstLane = entry.slots > entry.running ? useNowLanes(snap.lanes)[0] : null;
     notices.push({
       key: `nudge:idle:${entry.slug || taskKeyPart(label)}:${taskKeyPart(task)}`,
       severity: 'info', scope: workspace,
       title: `Orchestrator idle with ready work in ${label}`,
-      text: `The ${label} orchestrator has been idle for ${minutes} minutes while ${ref} is ready. ${names.length ? `Resume an idle or done worker (${names.join(', ')}) or start suitable work.` : 'Start suitable work.'}`,
+      text: `The ${label} orchestrator has been idle for ${minutes} minutes while ${ref} is ready. ${firstLane ? `Start ready work on ${firstLane.kind} now.` : names.length ? `Resume an idle or done worker (${names.join(', ')}) or start suitable work.` : 'Start suitable work.'}`,
     });
   }
   return notices;
@@ -380,6 +381,10 @@ export function renderBulletin(snap, evaluation, cfg) {
   }
   if (snap.lanes && Object.keys(snap.lanes).length) {
     L.push('', '## Provider lanes', '');
+    const useNow = useNowLanes(snap.lanes);
+    L.push(useNow.length
+      ? `Use now: ${useNow.map(({ provider, reason }) => `${provider} (${reason})`).join(', ')}`
+      : 'Use now: no metered lane; use unmetered models or wait.');
     for (const [provider, lane] of Object.entries(snap.lanes)) {
       if (lane.unmetered) {
         const summary = unmeteredSummary(lane);
