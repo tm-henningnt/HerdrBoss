@@ -5,7 +5,7 @@ import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { contextTokensFor, loadModels, loadProjectConfig, PROJECT_DEFAULTS } from '../src/kit/config.js';
+import { checkAgentsExclude, contextTokensFor, globMatches, loadModels, loadProjectConfig, PROJECT_DEFAULTS } from '../src/kit/config.js';
 import { appendDelegatedRun, compareChangedPaths, gitChangedPaths, readDelegatedRuns, validateAllowedPaths, validateDelegatedRun, validateWorkerReport } from '../src/kit/orchestration.js';
 import { buildGhArgs } from '../src/kit/gh.js';
 import { runKitCommand } from '../src/kit/cli.js';
@@ -177,6 +177,44 @@ test('project config validates artifact check patterns', () => {
     fs.writeFileSync(configFile, JSON.stringify({ artifactChecks: invalid }));
     assert.throws(() => loadProjectConfig({ cwd: root }), /artifactChecks/);
   }
+});
+
+test('project config validates checkAgents.exclude globs', () => {
+  const root = temporaryRepo();
+  const configFile = path.join(root, '.herdr-boss.json');
+  const checkAgents = { exclude: ['.orchestration/tenant-*.md', 'docs/agents/**/generated/*.md'] };
+  fs.writeFileSync(configFile, JSON.stringify({ checkAgents }));
+  assert.deepEqual(loadProjectConfig({ cwd: root }).checkAgents, checkAgents);
+  assert.deepEqual(checkAgentsExclude(root), checkAgents.exclude);
+  fs.writeFileSync(configFile, JSON.stringify({}));
+  assert.deepEqual(checkAgentsExclude(root), []);
+
+  for (const invalid of [
+    null,
+    [],
+    { exclude: 'docs/*.md' },
+    { exclude: [''] },
+    { exclude: ['../out/*.md'] },
+    { exclude: ['/tmp/*.md'] },
+    { exclude: ['docs\\*.md'] },
+    { exclude: ['docs/**x.md'] },
+    { exclude: ['docs/?.md'] },
+    { exclude: [], unexpected: true },
+  ]) {
+    fs.writeFileSync(configFile, JSON.stringify({ checkAgents: invalid }));
+    assert.throws(() => loadProjectConfig({ cwd: root }), /checkAgents/, JSON.stringify(invalid));
+    assert.throws(() => checkAgentsExclude(root), /checkAgents/, JSON.stringify(invalid));
+  }
+});
+
+test('glob matching uses * inside a segment and ** for whole segments', () => {
+  assert.ok(globMatches('.orchestration/tenant-*.md', '.orchestration/tenant-resources.md'));
+  assert.ok(!globMatches('.orchestration/tenant-*.md', '.orchestration/deep/tenant-resources.md'));
+  assert.ok(globMatches('docs/**/*.md', 'docs/a.md'));
+  assert.ok(globMatches('docs/**/*.md', 'docs/a/b/c.md'));
+  assert.ok(globMatches('docs/**', 'docs/a/b.md'));
+  assert.ok(!globMatches('docs/*.md', 'docs/a/b.md'));
+  assert.ok(!globMatches('docs/a.md', 'docs/a.mdx'));
 });
 
 test('project config reads overrides and rejects malformed allowedModels', () => {

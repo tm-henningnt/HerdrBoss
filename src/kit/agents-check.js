@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { KIT_ROOT, loadModels } from './config.js';
+import { checkAgentsExclude, globMatches, KIT_ROOT, loadModels } from './config.js';
 import { mergeModels } from '../control.js';
 
 export const STUB_TEMPLATE = path.join(KIT_ROOT, 'kit', 'templates', 'agents-stub.md');
@@ -79,15 +79,23 @@ const PROHIBITION = /\b(?:do not|don't|never)\b/i;
 const PORT = /(?<![\w.])9222(?!\w)/;
 const PROCESS = /\bpgrep\s+-f|\bps\s+aux\b|\bps\s+-ef\b/;
 const PANE_ID = /\bw[0-9A-Za-z]+:p[0-9A-Za-z]+\b/;
-const DATE = /\b20\d\d-\d\d-\d\d\b|\b\d{1,2}\.?\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\b/;
+// A month is a whole word, so the list item "1. Decide" is not a date.
+const DATE = /\b20\d\d-\d\d-\d\d\b|\b\d{1,2}\.?\s+(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\b/;
 // A token that looks like a model ID. gpt-, claude-, deepseek, and muse-spark need a digit, so claude-code is not a model.
 const MODEL_TOKEN = /(?<![\w/.-])(?:opencode(?:-go)?\/[\w.-]+|(?:gpt-|claude-|deepseek|muse-spark)[\w.-]*\d[\w.-]*)/g;
 
-// Text outside the stub that sends pushes, product decisions, or human decisions to the Boss or the Owner.
-const SENDS_DECISION = /\bpush(?:es|ing)?\b|\bproduct decisions?\b|\bhuman decisions?\b/i;
-const BOSS_OR_OWNER = /\b(?:Boss|Owner)\b/;
-const ESCALATE = /\b(?:ask|approv\w*|escalat\w*|send|go(?:es)? to|consult|confirm|permission|sign-?off|wait for)\b/i;
-const OWN_DECISION = /\byourself\b|\bnobody\b|\b(?:do not|don't|never) ask\b/i;
+// Text outside the stub that routes a decision, a push, a release, or a product question to the Boss, the Owner, a human,
+// or the user. The line needs an ask or escalate verb, a target, and a subject, so "1. Decide the order" is not routing.
+const ROUTE_SUBJECT = /\b(?:decisions?|push(?:es)?|releases?|product questions?)\b/i;
+const ROUTE_VERB = /\b(?:ask|escalat\w*|send|report|route|get approval|wait for)\b/i;
+const ROUTE_TARGET = /\b(?:the Owner|the Boss|a human|the user)\b/i;
+// "Pushes need Owner approval" has the verb and the target in one phrase.
+const ROUTE_APPROVAL = /\b(?:Owner|Boss)(?:'s)? approval\b/;
+const OWN_DECISION = /\byourself\b|\bnobody\b/i;
+function routesDecision(line) {
+  if (!ROUTE_SUBJECT.test(line) || PROHIBITION.test(line) || OWN_DECISION.test(line)) return false;
+  return ROUTE_APPROVAL.test(line) || (ROUTE_VERB.test(line) && ROUTE_TARGET.test(line));
+}
 // The verb is an instruction: at most three words before it, so "The Boss decides when to tell other projects" is not drift.
 const NOTIFY_PROJECT = /^\s*(?:[-*]\s+|\d+\.\s+)?(?:[\w,]+\s+){0,3}?(?:notify|tell|message|inform|prompt)\b.*\b(?:other|another)\s+projects?\b/i;
 // An old full kit block between the markers: the kit heading or more lines than a stub has.
@@ -116,7 +124,7 @@ function driftFindings(lines, { models = [], skip = () => false, handoff = false
     if (PROCESS.test(line) && !PROHIBITION.test(line)) add('warn', number, 'a process command prints command lines; use pgrep -l or ps -o pid,ppid,etime,comm');
     if (PANE_ID.test(line)) add('warn', number, `fixed pane ID ${PANE_ID.exec(line)[0]}; ${MEMORY}`);
     if (DATE.test(line)) add('warn', number, `dated line; ${MEMORY}`);
-    if (SENDS_DECISION.test(line) && BOSS_OR_OWNER.test(line) && ESCALATE.test(line) && !OWN_DECISION.test(line)) {
+    if (routesDecision(line)) {
       add('warn', number, 'text sends pushes or product decisions to the Boss or the Owner; the kit makes the orchestrator decide them');
     }
     if (NOTIFY_PROJECT.test(line) && !PROHIBITION.test(line)) add('warn', number, 'text tells the orchestrator to notify another project; the Boss relays messages between projects');
@@ -196,6 +204,16 @@ export function orchestrationFiles(root) {
   return [...files].sort();
 }
 
+// A file whose first line is this marker is data that a script writes. The scan skips it.
+const DATA_MARKER = '<!-- herdr-boss: data -->';
+const STATE_FOLDER = '.orchestration/state/';
+
+// True when the scan skips an orchestration file: a checkAgents.exclude glob, the state folder, or the data marker.
+function skippedFile(relative, text, exclude) {
+  if (relative.startsWith(STATE_FOLDER) || exclude.some((pattern) => globMatches(pattern, relative))) return true;
+  return String(text).replace(/^\uFEFF/, '').split(/\r?\n/, 1)[0] === DATA_MARKER;
+}
+
 // Warnings for one orchestration file. Each finding has the file name. A file name with "handoff" is a handoff note.
 export function checkOrchestrationText(text, { file, models = [] } = {}) {
   const lines = String(text).replace(/\r\n?/g, '\n').split('\n');
@@ -205,6 +223,7 @@ export function checkOrchestrationText(text, { file, models = [] } = {}) {
 // Reads an AGENTS.md file and the kit file next to it, and checks both. relative is the file name to report.
 // The kit file is docs/orchestration/herdr-boss.md in the directory of the AGENTS.md file.
 // The check also scans the orchestration files of that directory. Their findings are warnings with a file name.
+// The scan skips the files that skippedFile names, and the summary gives their count, not their names.
 export function checkAgentsFile(file, { rulesFile, relative = file } = {}) {
   const root = path.dirname(file);
   const kitPath = path.join(root, KIT_FILE);
@@ -214,9 +233,15 @@ export function checkAgentsFile(file, { rulesFile, relative = file } = {}) {
     ...checkKitText(kitText, projectKit().revision),
     ...checkAgentsText(fs.readFileSync(file, 'utf8'), { hash: agentsBlock().hash, models }),
   ];
+  let exclude = [];
+  try { exclude = checkAgentsExclude(root); } catch (error) {
+    findings.push({ level: 'error', line: 1, file: '.herdr-boss.json', message: `.herdr-boss.json: ${error.message} Fix checkAgents.exclude.` });
+  }
+  let skipped = 0;
   for (const other of orchestrationFiles(root)) {
     let text;
     try { text = fs.readFileSync(path.join(root, other), 'utf8'); } catch { continue; }
+    if (skippedFile(other, text, exclude)) { skipped += 1; continue; }
     findings.push(...checkOrchestrationText(text, { file: other, models }));
   }
   const errors = findings.filter((finding) => finding.level === 'error').length;
@@ -226,8 +251,9 @@ export function checkAgentsFile(file, { rulesFile, relative = file } = {}) {
     findings,
     errors,
     warnings,
+    skipped,
     lines: findings.map((finding) => `${finding.level}${finding.file ? ` ${finding.file}` : ''} line ${finding.line}: ${finding.message}`),
-    summary: `${relative}: ${plural(errors, 'error')}, ${plural(warnings, 'warning')}`,
+    summary: `${relative}: ${plural(errors, 'error')}, ${plural(warnings, 'warning')}${skipped ? `; ${plural(skipped, 'file')} skipped` : ''}`,
   };
 }
 

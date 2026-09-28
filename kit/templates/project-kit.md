@@ -35,6 +35,7 @@ These are the shared operating rules for the orchestrator of this project.
 - Record measured worker usage in `.worker/report.json` and run `herdr-boss worker collect --record` after review.
 - Prepare a successor with `herdr-boss handoff plan` and `handoff prepare` when the orchestrator's quota is at risk.
 - A handoff note carries no rules and no pane IDs.
+- Mark a script-written data file with `<!-- herdr-boss: data -->` on its first line. `herdr-boss check agents` skips it.
 - Keep project-specific rules in `AGENTS.md`: product direction, issue sources, acceptance gates, release policy, and browser procedures.
 - Keep project terminology, data, and architecture decisions in `AGENTS.md`. Keep Owner decisions, holds, freezes, dated evidence, and pane facts in `docs/orchestration/memory.md`.
 - The Boss runs in the pane labeled `boss`. Find it with `herdr pane list`. Never write its pane ID into a file.
