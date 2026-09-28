@@ -12,6 +12,7 @@ const COMMAND = (name) => `herdr-boss lock acquire ${name}`;
 const MACHINE_LOCKS = new Set(['full-suite']);
 export const FULL_SUITE_LOCK = 'full-suite';
 const PUSH_LOCK_WAIT_SECONDS = 1800;
+export const MUTATION_GUARD_WAIT_MS = 5000;
 const MANUAL_LOCK_TTL_MS = 60 * 60 * 1000;
 const LOCK_KINDS = new Set(['manual', 'suite', 'push']);
 const LOCK_NOTICE_TEXT = 'Your full-suite lock expired after 60 minutes and was released. Use herdr-boss suite -- <command> next time.';
@@ -159,7 +160,7 @@ export function removeLockTakeoverNotice(id, { dataDir = DATA_DIR } = {}) {
 // The .mutation guard folder in directory makes one lock or lease change at a time. A busy guard throws ELOCKBUSY
 // with busyMessage, after waitMs of retries. src/leases.js uses the guard of the machine-scope locks.
 export function withMutationLock(directory, operation, {
-  waitMs = 0,
+  waitMs = MUTATION_GUARD_WAIT_MS,
   busyMessage = 'A project lock operation is already in progress. Retry when it finishes.',
 } = {}) {
   const guard = path.join(directory, '.mutation');
@@ -264,6 +265,11 @@ function shellPidFor(paneId, herdr) {
 function timeValue(now) {
   const value = typeof now === 'function' ? now() : now;
   return value instanceof Date ? value.getTime() : Number(value);
+}
+
+function warnLockReleaseFailure(error, output) {
+  const reason = String(error?.message ?? error).replace(/\s+/g, ' ').replace(/[. ]+$/, '');
+  output(`Warning: could not release lock ${FULL_SUITE_LOCK}: ${reason}. The lock is stale when this process ends.`);
 }
 
 const defaultPause = sleep;
@@ -488,6 +494,12 @@ export function pushWithLock(args, {
   acquireProjectLock(FULL_SUITE_LOCK, { config, env, herdr, dataDir, waitSeconds: PUSH_LOCK_WAIT_SECONDS, output, now, pause, pidAlive, kind: 'push' });
   let exitCode;
   try { exitCode = push(); }
-  finally { releaseProjectLock(FULL_SUITE_LOCK, { config, env, herdr, dataDir, output, pidAlive }); }
+  finally {
+    try { releaseProjectLock(FULL_SUITE_LOCK, { config, env, herdr, dataDir, output, pidAlive }); }
+    catch (error) {
+      warnLockReleaseFailure(error, output);
+      if (exitCode === 0) exitCode = 1;
+    }
+  }
   return { exitCode, locked: true, hook };
 }

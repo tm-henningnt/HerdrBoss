@@ -2,13 +2,60 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import test from 'node:test';
 import { loadProjectConfig } from '../src/kit/config.js';
 import { runKitCommand } from '../src/kit/cli.js';
 
 function git(cwd, ...args) {
   return execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+}
+
+function shellQuote(value) { return `'${value.replaceAll("'", "'\\''")}'`; }
+
+function installFakeGit(t, f, hook) {
+  const realGit = execFileSync('which', ['git'], { encoding: 'utf8' }).trim();
+  const bin = path.join(f.base, 'fake-bin');
+  const calls = path.join(f.base, 'fake-git-calls');
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, 'git'), [
+    '#!/bin/sh',
+    'if [ "$1" = "push" ]; then',
+    `  printf 'push\\n' >> ${shellQuote(calls)}`,
+    `  ${shellQuote(hook)} || exit $?`,
+    '  exit 0',
+    'fi',
+    `exec ${shellQuote(realGit)} "$@"`,
+    '',
+  ].join('\n'));
+  fs.chmodSync(path.join(bin, 'git'), 0o755);
+  const previousPath = process.env.PATH;
+  process.env.PATH = `${bin}${path.delimiter}${previousPath ?? ''}`;
+  t.after(() => {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+  });
+  return calls;
+}
+
+async function holdMutationGuardUntilReleased(t, directory, delayMs = 200) {
+  const guard = path.join(directory, '.mutation');
+  fs.mkdirSync(guard, { recursive: true, mode: 0o700 });
+  const script = `const fs = require('node:fs'); const guard = ${JSON.stringify(guard)}; process.stdout.write('ready\\n'); setTimeout(() => fs.rmdirSync(guard), ${delayMs});`;
+  const child = spawn(process.execPath, ['-e', script], { stdio: ['ignore', 'pipe', 'inherit'] });
+  await new Promise((resolve, reject) => {
+    child.once('error', reject);
+    child.stdout.once('data', resolve);
+  });
+  t.after(() => {
+    if (child.exitCode === null) child.kill();
+    fs.rmSync(guard, { recursive: true, force: true });
+  });
+  const done = new Promise((resolve, reject) => {
+    child.once('error', reject);
+    child.once('exit', resolve);
+  });
+  return { done };
 }
 
 // Each fixture has a clone with a bare remote in a temporary folder. The push never leaves that folder.
@@ -53,6 +100,7 @@ function fixture(t, prefix) {
     const hook = path.join(dir, 'pre-push');
     fs.writeFileSync(hook, `#!/bin/sh\nif [ -f '${lockFile}' ]; then echo locked > '${base}/hook-saw'; else echo unlocked > '${base}/hook-saw'; fi\nexit ${exitCode}\n`);
     fs.chmodSync(hook, 0o755);
+    return hook;
   };
   const hookSaw = () => fs.readFileSync(path.join(base, 'hook-saw'), 'utf8').trim();
   return { base, root, remote, dataDir, config, calls, lines, livePanes, options, lockFile, writeHook, hookSaw };
@@ -68,6 +116,54 @@ test('herdr-boss push takes and releases the full-suite lock around a push with 
   assert.equal(fs.existsSync(f.lockFile), false, 'the lock is released after the push');
   assert.equal(git(f.remote, 'rev-parse', 'main'), git(f.root, 'rev-parse', 'main'));
   assert.ok(f.lines.some((line) => /pre-push hook.*full-suite/i.test(line)), f.lines.join('\n'));
+});
+
+test('back-to-back pushes with a pre-push hook both succeed and leave no lock', (t) => {
+  const f = fixture(t, 'herdr-push-back-to-back-');
+  const hook = f.writeHook(path.join(f.root, '.git', 'hooks'));
+  const calls = installFakeGit(t, f, hook);
+
+  const first = runKitCommand('push', ['origin', 'main'], f.options());
+  const second = runKitCommand('push', ['origin', 'main'], f.options());
+
+  assert.equal(first.exitCode, 0);
+  assert.equal(second.exitCode, 0);
+  assert.equal(first.locked, true);
+  assert.equal(second.locked, true);
+  assert.equal(fs.readFileSync(calls, 'utf8'), 'push\npush\n');
+  assert.equal(f.hookSaw(), 'locked');
+  assert.equal(fs.existsSync(f.lockFile), false, 'the lock is released after both pushes');
+});
+
+test('lock acquire waits briefly for a busy mutation guard', async (t) => {
+  const f = fixture(t, 'herdr-lock-acquire-guard-');
+  const { done } = await holdMutationGuardUntilReleased(t, path.join(f.dataDir, 'locks', 'machine'));
+  const acquired = runKitCommand('lock', ['acquire', 'full-suite'], f.options());
+  await done;
+  assert.equal(acquired.ownerPane, 'ws:orch');
+  assert.equal(fs.existsSync(f.lockFile), true);
+  runKitCommand('lock', ['release', 'full-suite'], f.options());
+  assert.equal(fs.existsSync(f.lockFile), false);
+});
+
+test('lock acquire with --wait retries after the mutation guard wait ends', async (t) => {
+  const f = fixture(t, 'herdr-lock-acquire-wait-guard-');
+  const { done } = await holdMutationGuardUntilReleased(t, path.join(f.dataDir, 'locks', 'machine'), 5200);
+  const acquired = runKitCommand('lock', ['acquire', 'full-suite', '--wait', '10'], f.options());
+  await done;
+  assert.equal(acquired.ownerPane, 'ws:orch');
+  assert.equal(fs.existsSync(f.lockFile), true);
+  runKitCommand('lock', ['release', 'full-suite'], f.options());
+  assert.equal(fs.existsSync(f.lockFile), false);
+});
+
+test('lock release waits briefly for a busy mutation guard', async (t) => {
+  const f = fixture(t, 'herdr-lock-release-guard-');
+  runKitCommand('lock', ['acquire', 'full-suite'], f.options());
+  const { done } = await holdMutationGuardUntilReleased(t, path.join(f.dataDir, 'locks', 'machine'));
+  runKitCommand('lock', ['release', 'full-suite'], f.options());
+  await done;
+  assert.equal(fs.existsSync(f.lockFile), false);
 });
 
 test('push lock records the push process and kind', (t) => {
@@ -94,6 +190,31 @@ test('herdr-boss push releases the lock and passes the exit code through when th
   assert.equal(f.hookSaw(), 'locked');
   assert.equal(fs.existsSync(f.lockFile), false, 'the lock is released after a failed push');
   assert.throws(() => git(f.remote, 'rev-parse', '--verify', 'main'));
+});
+
+test('push warns when lock release stays busy and returns failure after a successful push', (t) => {
+  const f = fixture(t, 'herdr-push-release-busy-');
+  const hook = f.writeHook(path.join(f.root, '.git', 'hooks'));
+  const guard = path.join(f.dataDir, 'locks', 'machine', '.mutation');
+  fs.writeFileSync(hook, [
+    '#!/bin/sh',
+    `if [ -f '${f.lockFile}' ]; then echo locked > '${path.join(f.base, 'hook-saw')}'; else echo unlocked > '${path.join(f.base, 'hook-saw')}'; fi`,
+    `mkdir '${guard}'`,
+    'exit 0',
+    '',
+  ].join('\n'));
+  fs.chmodSync(hook, 0o755);
+  installFakeGit(t, f, hook);
+
+  const result = runKitCommand('push', ['origin', 'main'], f.options());
+
+  assert.equal(result.exitCode, 1);
+  assert.equal(f.hookSaw(), 'locked');
+  assert.equal(fs.existsSync(f.lockFile), true, 'the lock record remains for takeover after this process ends');
+  assert.deepEqual(f.lines.filter((line) => line.startsWith('Warning:')), [
+    'Warning: could not release lock full-suite: A project lock operation is already in progress. Retry when it finishes. The lock is stale when this process ends.',
+  ]);
+  fs.rmSync(guard, { recursive: true, force: true });
 });
 
 test('herdr-boss push without a hook takes no lock and passes the exit code through', (t) => {

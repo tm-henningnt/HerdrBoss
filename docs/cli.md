@@ -186,11 +186,11 @@ herdr-boss worker start fix-74 --kind claude --task-file brief.md --allow src/pa
 
 | Command | Action |
 |---|---|
-| `lock acquire NAME [--wait SECONDS]` | Acquire a manual lock. `full-suite` is a machine lock. Other names are locks for this Git repository. `--wait` accepts a whole number of seconds. |
-| `lock release NAME` | Release a lock owned by this pane, or a stale lock. |
+| `lock acquire NAME [--wait SECONDS]` | Acquire a manual lock. `full-suite` is a machine lock. Other names are locks for this Git repository. Wait up to five seconds when another lock or lease change is in progress. `--wait` accepts a whole number of seconds and waits for a held lock. |
+| `lock release NAME` | Release a lock owned by this pane, or a stale lock. Wait up to five seconds when another lock or lease change is in progress. |
 | `lock list` | List the locks of this Git repository and the machine locks. Show each lock's age, holder pane, kind, scope, and state. Show the time left for a manual `full-suite` lock. |
-| `push [ARGS...]` | Run `git push ARGS...`. When a pre-push hook exists, take and release the `full-suite` lock around the push. |
-| `suite [--wait SECONDS] [--keep NAME]... -- COMMAND...` | Take and release the `full-suite` lock around `COMMAND...`. Run the command with a clean environment. The default wait is 1800 seconds. The exit code is the exit code of the command. |
+| `push [ARGS...]` | Run `git push ARGS...`. When a pre-push hook exists, take and release the `full-suite` lock around the push. The default wait for a held lock is 1800 seconds. Wait up to five seconds for another lock or lease change. If release fails, print a warning. Keep the push exit code, or return 1 if the push succeeded. |
+| `suite [--wait SECONDS] [--keep NAME]... -- COMMAND...` | Take and release the `full-suite` lock around `COMMAND...`. Run the command with a clean environment. The default wait for a held lock is 1800 seconds. Wait up to five seconds for another lock or lease change. If release fails, print a warning. Keep the command exit code, or return 1 if the command succeeded. |
 
 Lock names are one path-safe token. Every linked worktree of the same Git repository uses the same locks. The `full-suite` lock is machine-wide: all repositories on this machine share it. Herdr Boss stores lock records in a private `locks` directory under its data directory. It stores machine locks in `locks/machine/`. Each record names the owner pane, PID, kind, safe acquire command, and acquisition time. A `suite` or `push` lock uses the PID of that command. Herdr Boss marks it stale when that process exits, even if its pane stays open. A manual `full-suite` lock uses the pane shell PID and expires after 60 minutes. The next acquire takes over an expired lock. The engine sends the former holder a warning when it sees the takeover. It also shows held machine locks in the bulletin. A different pane cannot release an active lock. Herdr Boss fails closed if it cannot confirm pane state.
 

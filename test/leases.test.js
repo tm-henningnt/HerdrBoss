@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { validateResourcePools } from '../src/config.js';
@@ -78,6 +78,26 @@ function acquire(ctx, env, options = {}) {
   return { lease, output };
 }
 
+async function holdMutationGuardUntilReleased(t, dataDir) {
+  const guard = path.join(dataDir, 'locks', 'machine', '.mutation');
+  fs.mkdirSync(guard, { recursive: true, mode: 0o700 });
+  const script = `const fs = require('node:fs'); const guard = ${JSON.stringify(guard)}; process.stdout.write('ready\\n'); setTimeout(() => fs.rmdirSync(guard), 200);`;
+  const child = spawn(process.execPath, ['-e', script], { stdio: ['ignore', 'pipe', 'inherit'] });
+  await new Promise((resolve, reject) => {
+    child.once('error', reject);
+    child.stdout.once('data', resolve);
+  });
+  t.after(() => {
+    if (child.exitCode === null) child.kill();
+    fs.rmSync(guard, { recursive: true, force: true });
+  });
+  const done = new Promise((resolve, reject) => {
+    child.once('error', reject);
+    child.once('exit', resolve);
+  });
+  return { done };
+}
+
 test('pool validation accepts items, range, and split and names each error', () => {
   const ok = validateResourcePools([
     { name: 'serve-ports', range: '8000-8004', split: { alpha: ['8000', '8001'] }, env: 'HERDR_SERVE_PORT', ttlMinutes: 240, check: 'tcp', graceMinutes: 10 },
@@ -142,6 +162,17 @@ test('acquire takes the preferred item, then own split, then unsplit, then borro
   const file = path.join(ctx.dataDir, 'leases.json');
   assert.equal(fs.statSync(file).mode & 0o777, 0o600);
   assert.deepEqual(readLeases(ctx.dataDir).leases.map((lease) => lease.item), ['47103', '47100', '47101', '47104', '47102']);
+});
+
+test('lease changes wait for the shared mutation guard', async (t) => {
+  const ctx = context();
+  const { done } = await holdMutationGuardUntilReleased(t, ctx.dataDir);
+
+  const result = acquire(ctx, ORCH);
+
+  await done;
+  assert.equal(result.lease.item, '47100');
+  assert.equal(readLeases(ctx.dataDir).leases.length, 1);
 });
 
 test('a preferred item of another project is borrowed, and --ttl sets the expiry', () => {
