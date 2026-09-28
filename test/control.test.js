@@ -635,7 +635,8 @@ test('worker failure notices can reach a working orchestrator immediately', () =
 
 test('bulletin states the machine guard mode and retains measured machine limits', () => {
   const cfg = { dashboardPort: 4477 };
-  const snap = { ...snapshot(), updatedAt: '2026-09-26T12:00:00Z', quotas: [], lanes: {},
+  // One healthy quota row: without quota data the bulletin says the data is unavailable instead of no restrictions.
+  const snap = { ...snapshot(), updatedAt: '2026-09-26T12:00:00Z', quotas: [{ provider: 'codex', windows: [] }], lanes: {},
     machine: { load: [9, 10, 8], cpus: 4, memFreePercent: 40, memTotalGB: 16, swapUsedMB: 0, diskFreeBytes: 18 * 2 ** 30, diskFreePercent: 18.4,
       limits: { owner: 'present', cpuPercent: 65, cpuLimit: 70, fiveMinute: 10, loadLimit: 12, guardEnabled: true, guardPausedUntil: null, guardState: 'active', guardActive: true } } };
   const bulletin = renderBulletin(snap, { alerts: [], advice: [] }, cfg);
@@ -1469,7 +1470,7 @@ test('handoff targets use the merged allow-list and the per-harness enabled stat
   assert.deepEqual(target.launchArgs.slice(0, 4), ['--model', extra, '--models', extra]);
   assert.throws(() => handoffTarget('opencode', { model: extra }, p, models), /allow-list/);
   assert.throws(() => handoffTarget('codex', { model: 'gpt-6-sol' }, p, models), /disabled for codex/);
-  assert.equal(handoffTarget('codex', { model: 'gpt-6-astra', effort: 'high' }, p, models).launchArgs.join(' '), '-m gpt-6-astra -c model_reasoning_effort=high');
+  assert.equal(handoffTarget('codex', { model: 'gpt-6-astra', effort: 'high' }, p, models).launchArgs.join(' '), '-m gpt-6-astra -c model_reasoning_effort=high -s workspace-write');
   assert.throws(() => handoffTarget('codex', { model: 'gpt-6-luna' }, policy({ excludedModels: ['gpt-6-luna'] }), models), /global policy/);
   assert.throws(() => handoffTarget('pi', { model: 'bad model' }, policy({ extraModels: { pi: ['bad model'] } }), models), /allow-list/);
 });
