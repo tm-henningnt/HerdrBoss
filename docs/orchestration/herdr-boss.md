@@ -1,4 +1,4 @@
-<!-- herdr-boss kit v=9db6a5a8b679 -->
+<!-- herdr-boss kit v=11e72d1470b7 -->
 Herdr Boss writes this file. Do not edit it. Run herdr-boss kit install to update it.
 
 # Herdr Boss orchestration kit
@@ -14,7 +14,8 @@ These are the shared operating rules for the orchestrator of this project.
 - Run `herdr-boss kit-path` to find the shared kit repository. Use its path for the files below.
 - Read `kit/skills/herdr-orchestrator/SKILL.md` there.
 - Read `kit/models.md` before selecting a worker kind or model.
-- Give tasks that launch Chromium (Playwright, performance replays, galleries, screenshots) to `claude`, `opencode`, or `pi` workers, not to `codex`. The Codex sandbox cannot launch Chromium.
+- Give tasks that launch their own Chromium (Playwright, performance replays, galleries) to `claude`, `opencode`, or `pi` workers, not to `codex`. The Codex sandbox cannot launch Chromium.
+- A `codex` worker can use the `herdr-boss browser` commands (`tab new`, `navigate`, `screenshot`, `click`, `key`, `text`) on its project browser. Herdr Boss runs that browser outside the sandbox. Use these commands for a visual check of a served page.
 - Run `herdr-boss models` and `herdr-boss lanes` for the current models and lanes. Never copy model lists or harness facts into project files.
 - Read `~/.herdr-boss/bulletin.md` before each worker dispatch.
 - Follow its worker cap, your project's effective slots, and provider pacing rules. The effective slots include borrowed slots. Your project always keeps its own base slots unless it is idle or paused. Use an authorized override only when needed.
