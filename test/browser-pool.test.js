@@ -31,6 +31,32 @@ async function versionServer(port = 0) {
   return { port: server.address().port, close: () => new Promise((resolve) => { server.closeAllConnections(); server.close(() => resolve()); }) };
 }
 
+// A launch picks a port from 9223 to 9299. The tests never connect to those ports: a fake network answers for them.
+// Each other port, for example an ephemeral test server, uses the real network.
+const inBrowserRange = (port) => port >= 9222 && port <= 9299;
+function realPortOpen(port) {
+  return new Promise((resolve) => {
+    const socket = net.connect({ host: '127.0.0.1', port });
+    socket.setTimeout(500);
+    socket.once('connect', () => { socket.destroy(); resolve(true); });
+    socket.once('error', () => resolve(false));
+    socket.once('timeout', () => { socket.destroy(); resolve(false); });
+  });
+}
+function fakeLaunchNet() {
+  const launched = new Set();
+  return {
+    launched,
+    portOpen: async (port) => inBrowserRange(Number(port)) ? launched.has(Number(port)) : realPortOpen(Number(port)),
+    fetch: async (url, options) => {
+      const port = Number(new URL(url).port);
+      if (!inBrowserRange(port)) return fetch(url, options);
+      if (!launched.has(port)) throw new Error('connection refused');
+      return new Response(JSON.stringify({ webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/browser/x` }), { status: 200 });
+    },
+  };
+}
+
 function register(project, port) {
   const profile = path.join(dataDir, 'browser-profiles', project);
   const sessions = pool.listBrowserSessions();
@@ -163,18 +189,18 @@ test('restartBrowser skips the page restore for a hung browser, closes it, and l
   const hung = await hungServer();
   const session = register('hung-restart', hung.port);
   const machine = fakeMachine(session);
-  let relaunched = null;
+  const launchNet = fakeLaunchNet();
   const kill = (pid, signal) => { machine.kills.push([pid, signal]); machine.procs.delete(4101); machine.procs.delete(4102); hung.close(); };
   const spawn = (chrome, args) => {
     const port = Number(args.find((a) => a.startsWith('--remote-debugging-port=')).split('=')[1]);
     const profile = args.find((a) => a.startsWith('--user-data-dir=')).split('=')[1];
     machine.procs.set(4201, { pid: 4201, cmd: chromeCmd(port, profile) });
-    relaunched = versionServer(port);
+    launchNet.launched.add(port);
     return { pid: 4201, on() {}, unref() {} };
   };
   try {
     const result = await pool.restartBrowser('hung-restart', true, {
-      collectProcesses: machine.collectProcesses, kill, spawn, chromePath: process.execPath, cloneDir: null,
+      collectProcesses: machine.collectProcesses, kill, spawn, chromePath: process.execPath, cloneDir: null, portOpen: launchNet.portOpen, fetch: launchNet.fetch,
     });
     assert.deepEqual(machine.kills, [[4101, 'SIGTERM']]);
     assert.equal(result.restoredPage, false);
@@ -184,7 +210,6 @@ test('restartBrowser skips the page restore for a hung browser, closes it, and l
     assert.equal(result.pid, 4201);
   } finally {
     await hung.close().catch(() => {});
-    if (relaunched) await (await relaunched).close();
   }
 });
 
@@ -200,41 +225,37 @@ test('a launch records the one new code-sign clone in the session', async (t) =>
   const clones = cloneFixture(t);
   clones.make('code_sign_clone.before1');
   const machine = { procs: new Map() };
-  let server = null;
+  const launchNet = fakeLaunchNet();
   const spawn = (chrome, args) => {
     const port = Number(args.find((a) => a.startsWith('--remote-debugging-port=')).split('=')[1]);
     const profile = args.find((a) => a.startsWith('--user-data-dir=')).split('=')[1];
     machine.procs.set(4301, { pid: 4301, cmd: chromeCmd(port, profile) });
     clones.make('code_sign_clone.launch1');
-    server = versionServer(port);
+    launchNet.launched.add(port);
     return { pid: 4301, on() {}, unref() {} };
   };
-  try {
-    const status = await pool.requestBrowser('clone-launch', { headless: true, chromePath: process.execPath, spawn,
-      collectProcesses: async () => new Map(machine.procs), cloneDir: clones.dir });
-    assert.equal(status.codeSignClone, 'code_sign_clone.launch1');
-    assert.equal(pool.listBrowserSessions()['clone-launch'].codeSignClone, 'code_sign_clone.launch1');
-  } finally { if (server) await (await server).close(); }
+  const status = await pool.requestBrowser('clone-launch', { headless: true, chromePath: process.execPath, spawn,
+    collectProcesses: async () => new Map(machine.procs), cloneDir: clones.dir, portOpen: launchNet.portOpen, fetch: launchNet.fetch });
+  assert.equal(status.codeSignClone, 'code_sign_clone.launch1');
+  assert.equal(pool.listBrowserSessions()['clone-launch'].codeSignClone, 'code_sign_clone.launch1');
 });
 
 test('a launch that sees no new clone or several new clones records null', async (t) => {
   const clones = cloneFixture(t);
   for (const [project, count] of [['clone-none', 0], ['clone-many', 2]]) {
     const machine = { procs: new Map() };
-    let server = null;
+    const launchNet = fakeLaunchNet();
     const spawn = (chrome, args) => {
       const port = Number(args.find((a) => a.startsWith('--remote-debugging-port=')).split('=')[1]);
       const profile = args.find((a) => a.startsWith('--user-data-dir=')).split('=')[1];
       machine.procs.set(4401, { pid: 4401, cmd: chromeCmd(port, profile) });
       for (let i = 0; i < count; i++) clones.make(`code_sign_clone.${project.replace('-', '')}${i}`);
-      server = versionServer(port);
+      launchNet.launched.add(port);
       return { pid: 4401, on() {}, unref() {} };
     };
-    try {
-      const status = await pool.requestBrowser(project, { headless: true, chromePath: process.execPath, spawn,
-        collectProcesses: async () => new Map(machine.procs), cloneDir: clones.dir });
-      assert.equal(status.codeSignClone, null, project);
-    } finally { if (server) await (await server).close(); }
+    const status = await pool.requestBrowser(project, { headless: true, chromePath: process.execPath, spawn,
+      collectProcesses: async () => new Map(machine.procs), cloneDir: clones.dir, portOpen: launchNet.portOpen, fetch: launchNet.fetch });
+    assert.equal(status.codeSignClone, null, project);
   }
 });
 
@@ -302,20 +323,18 @@ test('a CDP close does not delete the recorded clone', async (t) => {
 test('a browser launch starts Chrome in its profile folder, not in the caller folder', async (t) => {
   const clones = cloneFixture(t);
   const machine = { procs: new Map() };
-  let server = null;
+  const launchNet = fakeLaunchNet();
   let spawnOptions = null;
   const spawn = (chrome, args, options) => {
     spawnOptions = options;
     const port = Number(args.find((a) => a.startsWith('--remote-debugging-port=')).split('=')[1]);
     const profile = args.find((a) => a.startsWith('--user-data-dir=')).split('=')[1];
     machine.procs.set(4302, { pid: 4302, cmd: chromeCmd(port, profile) });
-    server = versionServer(port);
+    launchNet.launched.add(port);
     return { pid: 4302, on() {}, unref() {} };
   };
-  try {
-    const status = await pool.requestBrowser('cwd-launch', { headless: true, chromePath: process.execPath, spawn,
-      collectProcesses: async () => new Map(machine.procs), cloneDir: clones.dir });
-    assert.equal(spawnOptions.cwd, status.profile);
-    assert.notEqual(spawnOptions.cwd, process.cwd());
-  } finally { if (server) await (await server).close(); }
+  const status = await pool.requestBrowser('cwd-launch', { headless: true, chromePath: process.execPath, spawn,
+    collectProcesses: async () => new Map(machine.procs), cloneDir: clones.dir, portOpen: launchNet.portOpen, fetch: launchNet.fetch });
+  assert.equal(spawnOptions.cwd, status.profile);
+  assert.notEqual(spawnOptions.cwd, process.cwd());
 });

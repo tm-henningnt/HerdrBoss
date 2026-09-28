@@ -5,6 +5,7 @@ import { spawn as spawnProcess } from 'node:child_process';
 import { DATA_DIR } from './config.js';
 import { collectProcesses } from './collect.js';
 import { codeSignCloneDir, listCloneNames, readProcesses, removeCodeSignClone } from './clone-sweep.js';
+import { PROJECT_BROWSER_POOL_NAME, acquireLeaseFor, dropLeases, projectBrowserPool, readLeases } from './leases.js';
 
 const FILE = path.join(DATA_DIR, 'browser-sessions.json');
 const PROFILE_ROOT = path.join(DATA_DIR, 'browser-profiles');
@@ -24,6 +25,7 @@ function deps(options) {
     closeViaCdp: o.closeViaCdp || askBrowserToClose,
     cloneDir: typeof o.cloneDir === 'function' ? o.cloneDir : Object.hasOwn(o, 'cloneDir') ? () => o.cloneDir : () => codeSignCloneDir(),
     readProcesses: o.readProcesses || readProcesses,
+    portOpen: o.portOpen || portOpen,
   };
 }
 
@@ -99,10 +101,78 @@ export function browserOwner(processes, session) {
   return [...processes.values()].find((p) => p.cmd.includes(`--remote-debugging-port=${session.port}`) && p.cmd.includes(`--user-data-dir=${session.profile}`) && !p.cmd.includes('--type='));
 }
 
+const isBrowserLease = (lease) => lease.pool === PROJECT_BROWSER_POOL_NAME;
+
+function profileOf(project, sessions) {
+  return sessions[project]?.profile ?? path.join(PROFILE_ROOT, project);
+}
+
+// Return the lease check for the cdp pool: true when a Chrome process has the lease port and the project profile.
+// Return null when the process table is unknown or empty, so that a failed process collection reclaims nothing.
+export function browserProcessCheck(processes, sessions = {}) {
+  if (!processes?.size) return null;
+  return (lease) => !!browserOwner(processes, { port: Number(lease.item), profile: profileOf(lease.project, sessions) });
+}
+
+function heldBrowserLease(project) {
+  return readLeases().leases.find((lease) => isBrowserLease(lease) && lease.project === project) ?? null;
+}
+
+// Lease the recorded port of a running or reserved browser when the port is free. A port that another project leases stays as it is.
+// Return true when the project holds the recorded port, or when the port is outside the pool.
+function keepBrowserLease(project, port) {
+  const pool = projectBrowserPool();
+  const item = String(port);
+  if (!pool.items.includes(item)) return true;
+  const held = heldBrowserLease(project);
+  if (held) return held.item === item;
+  if (readLeases().leases.some((lease) => isBrowserLease(lease) && lease.item === item)) return false;
+  const lease = acquireLeaseFor(pool.name, { project }, { pools: [pool], prefer: item });
+  if (lease.item === item) return true;
+  dropLeases((entry) => isBrowserLease(entry) && entry.project === project && entry.item === lease.item);
+  return false;
+}
+
+// Lease a port for a launch: the recorded port first, then the lowest free port.
+// A port that another record uses or that has a listener is skipped. The lease is given back when no port is usable.
+async function leaseBrowserPort(project, existing, sessions, d) {
+  const pool = projectBrowserPool();
+  const exclude = new Set(Object.values(sessions).filter((s) => s.project !== project).map((s) => String(s.port)));
+  const recorded = existing && pool.items.includes(String(existing.port)) ? String(existing.port) : null;
+  for (let attempt = 0; attempt < pool.items.length; attempt++) {
+    let lease;
+    try {
+      lease = acquireLeaseFor(pool.name, { project }, { pools: [pool], prefer: recorded && !exclude.has(recorded) ? recorded : null, exclude: [...exclude] });
+    } catch (error) {
+      if (error.exitCode === 3) break;
+      throw error;
+    }
+    if (!(await d.portOpen(Number(lease.item)))) return Number(lease.item);
+    // Another process listens on the leased port. Give the lease back and try the next port.
+    dropLeases((entry) => isBrowserLease(entry) && entry.project === project && entry.item === lease.item);
+    exclude.add(lease.item);
+  }
+  throw new Error('No free browser debugging port from 9223 to 9299.');
+}
+
+// Give back the port lease of a project. The browser record, with its profile and window size, stays.
+export async function releaseBrowser(project, options = {}) {
+  if (!SLUG.test(project)) throw new Error('project must be a slug.');
+  const d = deps(options);
+  const held = heldBrowserLease(project);
+  if (!held) throw new Error(`${project} holds no project browser lease.`);
+  const port = Number(held.item);
+  if (browserOwner(await d.collectProcesses(), { port, profile: profileOf(project, listBrowserSessions()) })) {
+    throw new Error(`The ${project} Chrome still runs on port ${port}. Close the browser first with herdr-boss browser close ${project}.`);
+  }
+  dropLeases((lease) => isBrowserLease(lease) && lease.project === project && lease.item === held.item);
+  return { project, port, released: true };
+}
+
 // The second argument is an options object. Array.map passes an index there, which deps() ignores.
 export async function browserStatus(session, options) {
   const d = deps(options);
-  const reachable = await portOpen(session.port);
+  const reachable = await d.portOpen(session.port);
   const owner = browserOwner(await d.collectProcesses(), session);
   const profileVerified = reachable && !!owner;
   const responsive = profileVerified && await cdpResponds(session.port, d);
@@ -206,18 +276,14 @@ export async function requestBrowser(project, options = {}) {
     // A verified browser that does not respond is returned as it is. Launching a second Chrome on the same profile would fail.
     if (status.profileVerified) {
       if (launch && status.headless !== useHeadless) throw new Error(`Browser for ${project} is running ${status.headless ? 'headless' : 'visibly'}. Close it before relaunching ${useHeadless ? 'headless' : 'visibly'} with the same profile.`);
+      keepBrowserLease(project, existing.port);
       return status;
     }
     if (status.processPresent) throw new Error(`Chrome still owns the ${project} profile. Quit that browser fully before relaunching it.`);
-    if (!launch && headless === null) return status;
+    // A reservation keeps its record when the project holds the recorded port. Otherwise it leases a new port below.
+    if (!launch && headless === null && keepBrowserLease(project, existing.port)) return status;
   }
-  const claimed = new Set(Object.values(sessions).map((s) => s.port));
-  let port;
-  if (existing && !(await portOpen(existing.port))) port = existing.port;
-  else for (let candidate = 9223; candidate <= 9299; candidate++) {
-    if (!claimed.has(candidate) && !(await portOpen(candidate))) { port = candidate; break; }
-  }
-  if (!port) throw new Error('No free browser debugging port from 9223 to 9299.');
+  const port = await leaseBrowserPort(project, existing, sessions, d);
   const profile = path.join(PROFILE_ROOT, project);
   fs.mkdirSync(profile, { recursive: true, mode: 0o700 });
   const windowSize = existing?.windowSize || DEFAULT_SIZE;
@@ -242,8 +308,8 @@ export async function requestBrowser(project, options = {}) {
     session.launchedAt = new Date().toISOString();
     save(sessions);
   }
-  for (let attempt = 0; attempt < 12 && !(await portOpen(port)); attempt++) await new Promise((resolve) => setTimeout(resolve, 250));
   if (launch) {
+    for (let attempt = 0; attempt < 12 && !(await d.portOpen(port)); attempt++) await new Promise((resolve) => setTimeout(resolve, 250));
     // Record the clone only when exactly one new clone folder appeared during this launch.
     const clonesAfter = clonesBefore ? listCloneNames(cloneDir) : null;
     const added = clonesAfter ? clonesAfter.filter((name) => !clonesBefore.includes(name)) : [];

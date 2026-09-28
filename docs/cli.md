@@ -214,6 +214,8 @@ herdr-boss worker allow fix-74 docs/parse.md --reason "the fix also needs the pa
 
 Define the pools in `resourcePools` in `~/.herdr-boss/config.json`. See [Resource leases](user-guide.md#resource-leases) in the user guide.
 
+`lease list` also shows the built-in pool `project-browsers`. `lease acquire` and `lease release` refuse this pool. Use `browser request` and `browser release` for it. No pool leases port 9222.
+
 Only a verified `orch` or `boss` pane, or a worker pane with a live run record, can run `lease acquire` and `lease release`. The worker rule is the same as for the `full-suite` lock.
 
 - Without `--for`, the lease belongs to the project of the current checkout. A worker pane leases for its own worker.
@@ -333,14 +335,15 @@ An unknown tool-call count stays `null`. The ledger accepts `null` as unknown. I
 
 ## Browsers
 
-Each project has one persistent Chrome profile on a port from 9223 to 9299. Add `--tab ID` to page commands when the browser has several tabs; `browser tabs` lists the IDs.
+Each project has one persistent Chrome profile on a port from 9223 to 9299. The port is a lease in the built-in pool `project-browsers`. See [Port leases](user-guide.md#port-leases). Add `--tab ID` to page commands when the browser has several tabs; `browser tabs` lists the IDs.
 
 | Command | Action |
 |---|---|
 | `browser request SLUG [--headless\|--visible] [--reserve]` | Launch the project browser. `--reserve` assigns the port and profile only. |
 | `browser list` | All project browsers, ports, profiles, and state. |
 | `browser restart SLUG --headless\|--visible [--no-restore]` | Close and relaunch in the other mode. The current page reopens unless `--no-restore`. |
-| `browser close SLUG` | Close the browser. The profile stays. |
+| `browser close SLUG` | Close the browser. The profile and the port lease stay. |
+| `browser release SLUG` | Remove the port lease of the project. Refuses while the project Chrome runs. The record and the profile stay. |
 | `browser size SLUG WIDTH HEIGHT` | Window size for the next launch (320–3840 × 240–2160). |
 | `browser tabs SLUG` | Tabs with ID, title, URL, visibility, and whether an agent is attached. |
 | `browser tab new SLUG [URL]` | Open a tab in its own background window. Prints the ID. |
