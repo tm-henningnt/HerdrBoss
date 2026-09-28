@@ -1093,6 +1093,64 @@ test('timed pacing goals use the live window start and end for pace and recovery
   assert.equal(adjustedExpectedPercent(timed, 'codex', window, Date.parse('2026-09-25T19:00:00Z')), 80);
 });
 
+test('long-window trickle allowance counts to a future goal, then falls back to reset', async () => {
+  const { laneStatus } = await import('../src/control.js');
+  const reset = '2026-10-28T12:00:00.000Z';
+  const goalEnd = '2026-10-13T12:00:00.000Z'; // 360 hours before reset.
+  const quota = [{ provider: 'codex', windows: [{ key: 'primary', label: 'Monthly', usedPercent: 50,
+    expectedPercent: 15, windowMinutes: 43200, willLast: false, resetsAt: reset }] }];
+  const timed = (percent = 100) => policy({ pacingGoals: { codex: { primary: { percent, end: { type: 'at', at: goalEnd } } } } });
+
+  const beforeGoal = laneStatus(quota, timed(), Date.parse('2026-10-03T12:00:00.000Z')).codex;
+  assert.equal(beforeGoal.state, 'trickle');
+  assert.equal(beforeGoal.allowancePercent, 5);
+
+  const afterGoal = laneStatus(quota, timed(), Date.parse('2026-10-14T12:00:00.000Z')).codex;
+  assert.equal(afterGoal.state, 'trickle');
+  assert.ok(Math.abs(afterGoal.allowancePercent - (50 / 14)) < 1e-10);
+
+  const smallerGoal = laneStatus(quota, timed(80), Date.parse('2026-10-03T12:00:00.000Z')).codex;
+  assert.equal(smallerGoal.allowancePercent, 3);
+
+  const noGoalEnd = laneStatus(quota, policy(), Date.parse('2026-09-28T12:00:00.000Z')).codex;
+  assert.ok(Math.abs(noGoalEnd.allowancePercent - (50 / 30)) < 1e-10);
+});
+
+test('pacing goal text uses the short weekday date form', () => {
+  const goalEnd = Date.parse('2026-10-08T12:00:00.000Z');
+  assert.equal(controlModule.pacingGoalText({ percent: 100, end: { type: 'hoursBeforeReset', hours: 360 },
+    resolvedEnd: goalEnd }, Date.parse('2026-09-28T12:00:00.000Z')), 'goal: 100% by Thu 8 Oct');
+  assert.equal(controlModule.pacingGoalText({ percent: 80, end: { type: 'at', at: '2026-10-08T12:00:00.000Z' },
+    resolvedEnd: goalEnd }, goalEnd - 3600000), 'goal: 80% by Thu 8 Oct 14:00');
+});
+
+test('runs-out advice uses the goal percent and names a timed goal end', () => {
+  const now = Date.parse('2026-09-28T12:00:00.000Z');
+  const quotas = [{ provider: 'codex', windows: [{ key: 'primary', label: 'Monthly', usedPercent: 50,
+    expectedPercent: 30, willLast: false, etaSeconds: 3 * 86400 + 4 * 3600,
+    windowMinutes: 43200, resetsAt: '2026-10-28T12:00:00.000Z' }] }];
+  const cfg = { quota: { warnPercent: 90, criticalPercent: 98 }, providerKinds: { codex: ['codex'] },
+    machine: { memFreeWarnPercent: 15, loadWarnFactor: 2 }, browsers: {}, workers: {} };
+  const timed = policy({ pacingGoals: { codex: { primary: { percent: 100,
+    end: { type: 'at', at: '2026-10-08T12:00:00.000Z' } } } } });
+  const advice = evaluate({ quotas }, cfg, {}, now, timed).advice.join(' ');
+
+  assert.match(advice, /reaches 100% in 3d 4h, before the goal end Thu 8 Oct 14:00/);
+  assert.doesNotMatch(advice, /before the reset/);
+
+  const slowerFullQuota = [{ provider: 'codex', windows: [{ ...quotas[0].windows[0], etaSeconds: 10 * 86400 }] }];
+  const smallerGoal = policy({ pacingGoals: { codex: { primary: { percent: 80,
+    end: { type: 'at', at: '2026-10-08T12:00:00.000Z' } } } } });
+  const scaledAdvice = evaluate({ quotas: slowerFullQuota }, cfg, {}, now, smallerGoal).advice.join(' ');
+  assert.match(scaledAdvice, /reaches 80% in 6d 0h, before the goal end Thu 8 Oct 14:00/);
+
+  const canReachGoal = [{ provider: 'codex', windows: [{ ...quotas[0].windows[0], willLast: true, etaSeconds: 40 * 86400 }] }];
+  const laterEnd = policy({ pacingGoals: { codex: { primary: { percent: 80,
+    end: { type: 'at', at: '2026-10-24T12:00:00.000Z' } } } } });
+  const goalAdvice = evaluate({ quotas: canReachGoal }, cfg, {}, now, laterEnd).advice.join(' ');
+  assert.match(goalAdvice, /reaches 80% in 24d 0h, before the goal end Sat 24 Oct 14:00/);
+});
+
 test('timed goals rank the worst window and the least-over provider', async () => {
   const { deriveControl, laneStatus, leastOverProvider } = await import('../src/control.js');
   const now = Date.parse('2026-09-25T12:00:00Z');
@@ -1162,9 +1220,9 @@ test('configured goals appear in lanes and bulletin while providers are open', a
   const goals = policy({ pacingGoals: { claude: { primary: { percent: 80, end: { type: 'hoursBeforeReset', hours: 6 } } } } });
   const lanes = laneStatus(quotas, goals, now);
   assert.equal(lanes.claude.state, 'open');
-  assert.match(describeLane('claude', lanes.claude, now), /weekly: goal 80% 6 h before reset \(/);
+  assert.match(describeLane('claude', lanes.claude, now), /weekly: goal: 80% by Mon 28 Sep/);
   const bulletin = renderBulletin({ ...snapshot(), updatedAt: new Date(now).toISOString(), quotas, lanes }, { alerts: [], advice: [] }, {});
-  assert.match(bulletin, /weekly: goal 80% 6 h before reset \(/);
+  assert.match(bulletin, /weekly: goal: 80% by Mon 28 Sep/);
 });
 
 test('least-over ordering uses the goal-adjusted pace score', async () => {

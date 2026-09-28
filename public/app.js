@@ -678,13 +678,16 @@ function rulesBlock(s) {
 function quotaCard(q) {
   const name = PROVIDERS[q.provider] || q.provider;
   if (!hasQuotaData(q)) return `<div class="panel provider"><div class="provider-head"><b>${esc(name)}</b></div><div class="err">${esc(q.error)}</div></div>`;
+  const lane = state?.lanes?.[q.provider];
   const wins = q.windows.map((w) => {
-    if (w.resetsAt && Date.parse(w.resetsAt) <= Date.now()) return `<div class="win"><div class="win-row"><span>${esc(w.label)}</span><span class="muted">Reset, not yet measured</span></div><div class="bar"></div><div class="win-row win-foot"><span>The next quota reading shows the new use.</span><span>reset ${clock(w.resetsAt)}</span></div></div>`;
+    const windowGoalText = lane?.goals?.find((goal) => goal.key === w.key)?.text || '';
+    const goalLabel = windowGoalText ? ` <span class="muted">· ${esc(windowGoalText)}</span>` : '';
+    if (w.resetsAt && Date.parse(w.resetsAt) <= Date.now()) return `<div class="win"><div class="win-row"><span>${esc(w.label)}${goalLabel}</span><span class="muted">Reset, not yet measured</span></div><div class="bar"></div><div class="win-row win-foot"><span>The next quota reading shows the new use.</span><span>reset ${clock(w.resetsAt)}</span></div></div>`;
     const cls = w.usedPercent >= 98 ? 'crit' : w.usedPercent >= 90 ? 'warn' : w.willLast === false ? 'warn' : '';
     const tick = w.expectedPercent != null ? `<s style="left:calc(${Math.min(100, w.expectedPercent)}% - 1px)" title="Expected at even pace: ${w.expectedPercent}%"></s>` : '';
     const foot = w.paceSummary ? esc(w.paceSummary) : w.extra ? 'Extra window' : '';
     return `<div class="win">
-      <div class="win-row"><span>${esc(w.label)}</span><span><span class="pct">${w.usedPercent}%</span></span></div>
+      <div class="win-row"><span>${esc(w.label)}${goalLabel}</span><span><span class="pct">${w.usedPercent}%</span></span></div>
       <div class="bar"><i class="${cls}" style="width:${Math.min(100, w.usedPercent)}%"></i>${tick}</div>
       <div class="win-row win-foot"><span>${foot}</span><span>resets ${clock(w.resetsAt)} · in ${until(w.resetsAt)}</span></div>
     </div>`;
@@ -692,9 +695,9 @@ function quotaCard(q) {
   const extras = [];
   if (q.credits?.remaining != null) extras.push(`${q.credits.remaining} credits`);
   if (q.resetCredits) extras.push(`${q.resetCredits} reset credit${q.resetCredits > 1 ? 's' : ''}`);
-  const lane = state?.lanes?.[q.provider];
+  const trickleGoalText = lane?.goals?.find((goal) => goal.key === lane.windowKey)?.text || '';
   const trickle = lane?.state === 'trickle'
-    ? `<div class="win-foot">Trickle allowance: about ${lane.allowancePercent.toFixed(1)}%/day · ${(lane.usedTodayPercent || 0).toFixed(1)}% used today</div>` : '';
+    ? `<div class="win-foot">Trickle allowance: about ${lane.allowancePercent.toFixed(1)}%/day · ${(lane.usedTodayPercent || 0).toFixed(1)}% used today${trickleGoalText ? ` · ${esc(trickleGoalText)}` : ''}</div>` : '';
   const trend = usage?.quotaTrend?.[q.provider] || [];
   return `<div class="panel provider"><div class="provider-head"><b>${esc(name)}</b><span class="tag">${esc(extras.join(' · ') || q.plan || '')}</span></div>${q.stale ? `<div class="err" title="${esc(q.error)}">${esc(staleQuotaText(q))}</div>` : ''}${wins}${trickle}${trend.length > 1 ? `<div class="win-foot">Weekly use trend · last ${Math.min(24, Math.round(trend.length / 12))}h${spark(trend.map((x) => x.usedPercent), 100)}</div>` : ''}</div>`;
 }
@@ -2041,6 +2044,7 @@ const HELP = {
     <p>Pi also uses seven unmetered OpenCode Zen entries: <code>opencode/big-pickle</code>, <code>opencode/ling-3.0-flash-fin-free</code>, <code>opencode/mimo-v2.6-flash-free</code>, <code>opencode/muse-spark-1.2-contributor-free</code>, <code>opencode/muse-spark-1.3-contributor-free</code>, <code>opencode/nemotron-3-ultra-free</code>, and <code>opencode/nemotron-3.5-lightning-free</code>. They start unmetered and appear as Pi rows here. <code>opencode/space-bunny-free</code> has no Pi catalog entry, so Pi refuses it. Catalog support does not guarantee a configured account or live provider availability.</p>
     <h3>Add a model</h3><p>Type a model string in a harness section and select <b>Add model</b>. Use letters, digits, dots, underscores, slashes, and hyphens. Spaces and shell characters are refused. A new model is marked <b>local</b>, starts unmetered, and is stored in the local policy, not in <code>kit/models.json</code>. Select <b>Remove</b> to delete a local model.</p>
     <h3>Provider quotas</h3><p>Choose <b>Manage pace</b> or <b>Ignore quota</b> for each provider. Ignore quota turns off pacing and pace warnings for worker dispatch. Handover risk and automatic handover still use live quota data. A live window at 100% or more still exhausts the provider until its reset, and worker start refuses it unless you use <code>--force</code>. Enter a whole pacing goal percent from 0 to 100. Leave it blank for 100%. Choose <b>At reset</b>, a one-off local date and time, or whole hours before each reset. A goal end must be after now, after the window start, and no later than reset. A one-off goal clears after its time or window reset. A recurring end stays in later windows.</p>
+    <p>The quota card, bulletin, and lanes show each goal as <code>goal: 100% by Thu 8 Oct</code>. The text shows the time for a one-off end within 48 hours. A trickle allowance uses the goal percent and days left to a future goal end. After that end, it uses the unused quota and days left to reset. Without a goal end, it uses the goal percent and days left to reset. For a timed end, runs-out advice estimates when the rate reaches the goal percent. It names the goal end when that happens before the end.</p>
     <p>The Machine section sets the guard, CPU limits, 5-minute load backstops, the Owner idle period, disk warning thresholds, and the notice cooldown. Turn the guard off to stop CPU and load warnings and worker-start blocks. Choose a pause length to suspend those rules until the expiry time. Select <b>Resume guard</b> to end a pause early. Memory and disk warnings stay on.</p>
     <p>Disk free space is measured on the filesystem that contains the Herdr Boss data directory. The warning threshold defaults to 20 GB free. The critical threshold defaults to 5 GB free. Free percent is information only. Herdr Boss shows it to one decimal place. Disk notices go to the project orchestrator when that project has linked worker worktrees. They include linked and prunable counts.</p>
     <p>When the guard is active, Herdr Boss blocks a worker start if total sampled CPU exceeds its configured limit or the 5-minute load average exceeds its configured backstop. Leave the away CPU limit or either load backstop blank to disable that threshold.</p>

@@ -493,6 +493,14 @@ test('organization page offers the Plain and Cards styles, motion with a reduced
   assert.match(app, /Plain<\/b> and <b>Cards/);
 });
 
+test('quota cards show the shared pacing goal text in each window and the trickle footer', () => {
+  const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  assert.match(app, /lane\?\.goals\?\.find\(\(goal\) => goal\.key === w\.key\)\?\.text/);
+  assert.match(app, /const goalLabel = windowGoalText \? ` <span class="muted">· \$\{esc\(windowGoalText\)\}<\/span>`/);
+  assert.match(app, /<div class="win-row"><span>\$\{esc\(w\.label\)\}\$\{goalLabel\}/);
+  assert.match(app, /Trickle allowance: about \$\{lane\.allowancePercent\.toFixed\(1\)\}%\/day.*?\$\{esc\(trickleGoalText\)\}/s);
+});
+
 test('organization cards show an unavailable or stale quota bar, and the header keeps the brand and the updated text on one line', () => {
   const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
   const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
