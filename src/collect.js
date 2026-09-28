@@ -95,10 +95,23 @@ export function codexbarError(err, timeoutMs = QUOTA_TIMEOUT_MS) {
   return `codexbar failed: ${err?.message || err}`;
 }
 
+function partialRows(err) {
+  if (err?.killed || err?.signal || !Number.isInteger(err?.code)) return null;
+  try {
+    const rows = JSON.parse(String(err.stdout || ''));
+    return Array.isArray(rows) && rows.length && rows.every((r) => r && typeof r.provider === 'string') ? rows : null;
+  } catch { return null; }
+}
+
 export async function collectQuotas({ runner = run } = {}) {
   let out;
   try { out = await runner('codexbar', ['usage', '--format', 'json'], { timeout: QUOTA_TIMEOUT_MS }); }
-  catch (err) { throw new Error(codexbarError(err)); }
+  catch (err) {
+    // codexbar exits 1 when one provider fails, but it still prints rows for every provider. Keep the good rows.
+    const rows = partialRows(err);
+    if (!rows) throw new Error(codexbarError(err));
+    out = err.stdout;
+  }
   const rows = JSON.parse(out);
   return rows.map((r) => {
     if (r.error) return { provider: r.provider, error: r.error.message };

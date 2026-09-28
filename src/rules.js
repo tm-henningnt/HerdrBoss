@@ -276,6 +276,11 @@ export function renderBulletin(snap, evaluation, cfg) {
   const serious = evaluation.alerts.filter((a) => a.severity !== 'info');
   const shared = serious.filter((a) => a.scope === 'all' || a.scope === 'user');
   const rules = [...evaluation.advice, ...shared.map((a) => a.text)];
+  // Without quota data, pacing is blind. Say so, and never claim that no restriction applies.
+  const quotaRows = snap.quotas || [];
+  const failed = quotaRows.filter((q) => q.error).map((q) => providerName(q.provider));
+  if (!quotaRows.length) rules.unshift('Quota data unavailable: the quota collector failed. Pace work carefully until the data returns.');
+  else if (failed.length) rules.unshift(`Quota data unavailable for ${failed.join(', ')}. Pace work on those providers carefully.`);
   if (rules.length) rules.forEach((r) => L.push(`- ${r}`));
   else L.push('- No quota or active machine restrictions.');
   // Rules for one project stay under that project, so an orchestrator reads only its own.
