@@ -475,7 +475,7 @@ test('organization page offers the Plain and Cards styles, motion with a reduced
   assert.match(app, /try \{ localStorage\.setItem\(ORG_STYLE_KEY, orgStyle\); \} catch \{\}/);
   // Cards show an inline-SVG mark for each harness and a quota bar for Codex and Claude.
   for (const kind of ['claude', 'codex', 'opencode', 'pi', 'unknown']) assert.match(app, new RegExp(`\\b${kind}: '<svg`), `harness mark for ${kind}`);
-  assert.match(app, /class="org-quota"/);
+  assert.match(app, /<div class="org-quota\$\{quota\.stale \? ' stale' : ''\}" role="img"/);
   assert.match(css, /\.org-cards \.org-state-working\b[^{]*\{[^}]*animation: org-pulse/);
   assert.match(css, /\.org-cards \.org-state-blocked\b/);
   assert.match(css, /\.org-cards \.org-state-failed\b/);
@@ -490,4 +490,20 @@ test('organization page offers the Plain and Cards styles, motion with a reduced
   assert.match(css, /\.org-worker-count\b/);
   assert.match(css, /@media \(max-width: 760px\) \{[^@]*\.org-style-switch button[^}]*min-height: 44px/);
   assert.match(app, /Plain<\/b> and <b>Cards/);
+});
+
+test('organization cards show an unavailable or stale quota bar, and the header keeps the brand and the updated text on one line', () => {
+  const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
+  // A Claude or Codex card without quota data shows a muted empty bar with a label.
+  assert.match(app, /function orgQuotaMeter\(s, kind\)/);
+  assert.match(app, /aria-label="\$\{esc\(`\$\{PROVIDERS\[agent\]\} quota unavailable`\)\}"/);
+  assert.match(app, /class="org-quota-note" aria-hidden="true">quota unavailable</);
+  assert.match(app, /quota from \$\{clock\(quota\.staleSince\)\}, the last probe failed/);
+  assert.match(css, /\.org-quota\.unavailable\b/);
+  assert.match(css, /\.org-quota\.stale > i\b[^{]*\{/);
+  assert.match(css, /\.org-quota-note\b[^{]*\{[^}]*color: var\(--muted\)/);
+  // The brand and the updated text never break inside themselves.
+  assert.match(css, /\.brand \{[^}]*white-space: nowrap/);
+  assert.match(css, /\.live \{[^}]*white-space: nowrap/);
 });

@@ -39,12 +39,12 @@ a { color: inherit; }
 .num, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 
 .top { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 16px; padding: 10px 24px; padding-top: calc(10px + env(safe-area-inset-top)); padding-left: calc(24px + env(safe-area-inset-left)); padding-right: calc(24px + env(safe-area-inset-right)); background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
-.brand { display: flex; align-items: center; gap: 8px; font-weight: 650; text-decoration: none; letter-spacing: -0.01em; }
+.brand { display: flex; align-items: center; flex: 0 0 auto; gap: 8px; font-weight: 650; text-decoration: none; letter-spacing: -0.01em; white-space: nowrap; }
 .brand svg { width: 20px; height: 20px; fill: none; stroke: var(--accent); stroke-width: 2; }
 .brand svg circle:first-child { fill: var(--accent); }
 #crumbs { color: var(--muted); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #crumbs a { text-decoration: none; }
-.live { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
+.live { display: flex; align-items: center; flex: 0 0 auto; gap: 8px; color: var(--muted); font-size: 12px; white-space: nowrap; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
 .dot.on { background: var(--ok); box-shadow: 0 0 0 0 var(--ok); animation: pulse 2s infinite; }
 @keyframes pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--ok) 60%, transparent); } 70% { box-shadow: 0 0 0 6px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
@@ -424,9 +424,17 @@ button:hover { filter: brightness(1.08); } button:disabled { opacity: .5; cursor
 #primary-nav a[aria-current="page"] { color: var(--text); background: var(--panel); box-shadow: 0 1px 3px color-mix(in srgb, var(--text) 8%, transparent); }
 #primary-nav a[hidden] { display: none; }
 #roamgate-link:not([hidden]) { color: var(--text); text-decoration: underline; text-underline-offset: 2px; }
-@media (min-width: 761px) and (max-width: 950px) {
+/* The nav shrinks its gaps and item padding first. When it still does not fit, it wraps inside its own box. */
+@media (min-width: 761px) {
+  #primary-nav { flex: 0 1 auto; min-width: 0; flex-wrap: wrap; }
+}
+@media (min-width: 761px) and (max-width: 1400px) {
   .top { gap: 8px 12px; }
-  #primary-nav { flex: 1 1 360px; min-width: 0; flex-wrap: wrap; }
+  #primary-nav a { padding: 5px 8px; }
+}
+@media (min-width: 761px) and (max-width: 1240px) {
+  #primary-nav { gap: 1px; }
+  #primary-nav a { padding: 5px 6px; font-size: 12px; }
 }
 .nav-menu { display: none; align-items: center; gap: 7px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel-2); color: var(--text); font: 600 13px var(--sans); }
 .nav-menu-chevron { width: 7px; height: 7px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(45deg) translateY(-2px); transition: transform 150ms; }
@@ -761,6 +769,11 @@ section[id], div[id="agents"] { scroll-margin-top: 105px; }
 .org-quota { position: relative; height: 4px; border-radius: 99px; background: var(--track); overflow: hidden; }
 .org-quota > i { position: absolute; inset: 0 auto 0 0; border-radius: 99px; background: var(--info); }
 .org-quota > i.warn { background: var(--warn); } .org-quota > i.crit { background: var(--crit); }
+.org-quota-row { display: flex; align-items: center; gap: 8px; }
+.org-quota-row .org-quota { flex: 1 1 auto; }
+.org-quota.unavailable { background: transparent; box-shadow: inset 0 0 0 1px var(--line); }
+.org-quota.stale > i { background: var(--muted); }
+.org-quota-note { flex: 0 0 auto; color: var(--muted); font-size: 11px; line-height: 1; white-space: nowrap; }
 .org-cards .org-state-working { border-color: var(--info); animation: org-pulse 3.2s ease-in-out infinite; }
 @keyframes org-pulse { 0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--info) 0%, transparent); } 50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--info) 28%, transparent); } }
 .org-cards .org-state-blocked { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 10%, var(--panel)); }

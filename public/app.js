@@ -1332,6 +1332,23 @@ function orgQuotaWindow(s, kind) {
   return q.windows?.find((x) => x.key === 'secondary') || q.windows?.find((x) => !x.extra) || null;
 }
 
+// The Cards bar of a Codex or Claude pane. A stale row keeps its value. A missing or failed row shows as unavailable.
+function orgQuotaMeter(s, kind) {
+  if (!['codex', 'claude'].includes(kind)) return null;
+  const w = orgQuotaWindow(s, kind);
+  if (!w) return { unavailable: true };
+  const q = s.quotas.find((x) => x.provider === kind);
+  return { ...w, stale: q.stale === true, staleSince: q.staleSince };
+}
+
+function orgMeter(agent, quota) {
+  if (quota.unavailable) return `<div class="org-quota-row"><div class="org-quota unavailable" role="img" aria-label="${esc(`${PROVIDERS[agent]} quota unavailable`)}"></div><span class="org-quota-note" aria-hidden="true">quota unavailable</span></div>`;
+  const stale = quota.stale ? `quota from ${clock(quota.staleSince)}, the last probe failed` : '';
+  const label = `${PROVIDERS[agent]} quota ${quota.usedPercent}% used${quota.label ? ` · ${quota.label}` : ''}${stale ? ` · ${stale}` : ''}`;
+  const level = quota.stale ? '' : quota.usedPercent >= 90 ? 'crit' : quota.usedPercent >= 70 ? 'warn' : '';
+  return `<div class="org-quota${quota.stale ? ' stale' : ''}" role="img" aria-label="${esc(label)}"${stale ? ` title="${esc(stale)}"` : ''}><i class="${level}" style="width:${Math.max(0, Math.min(100, quota.usedPercent))}%"></i></div>`;
+}
+
 function orgQuota(s, kind) {
   const w = orgQuotaWindow(s, kind);
   return w ? `${PROVIDERS[kind]} ${w.usedPercent}% · ${w.label}` : NOT_REPORTED;
@@ -1362,7 +1379,7 @@ function orgNode({ id, role, name, status, summary, facts, className = '', threa
   const kind = agent === undefined ? null : HARNESS_MARK[agent] ? agent : 'unknown';
   const mark = cards && kind ? `<span class="org-mark" title="${esc(agent || 'Unknown harness')}" aria-hidden="true">${HARNESS_MARK[kind]}</span>` : '';
   const alert = cards && state === 'blocked' ? ORG_BLOCKED_ICON : '';
-  const meter = cards && quota ? `<div class="org-quota" role="img" aria-label="${esc(`${PROVIDERS[agent]} quota ${quota.usedPercent}% used${quota.label ? ` · ${quota.label}` : ''}`)}"><i class="${quota.usedPercent >= 90 ? 'crit' : quota.usedPercent >= 70 ? 'warn' : ''}" style="width:${Math.max(0, Math.min(100, quota.usedPercent))}%"></i></div>` : '';
+  const meter = cards && quota ? orgMeter(agent, quota) : '';
   return `<article class="org-node ${esc(className)} org-state-${state}${flash}" data-org-id="${esc(id)}"><div class="org-node-head">${mark}<span class="st ${esc(status || 'unknown')}" aria-hidden="true"></span><span class="pill">${esc(role)}</span><strong>${esc(name)}</strong>${alert}</div>
     ${meter}<p class="org-node-summary">${summary.filter(Boolean).map((x) => `<span>${esc(x)}</span>`).join('')}</p>
     <div class="org-actions"><button type="button" class="quiet org-toggle" data-org-node="${esc(id)}" aria-expanded="${open}" aria-controls="${domId}">${open ? 'Hide details' : 'Details'}<span class="visually-hidden"> for ${esc(name)}</span></button>${thread ? `<button type="button" class="quiet org-messages" data-messages-thread="${esc(thread)}" data-messages-name="${esc(name)}">Messages<span class="visually-hidden"> for ${esc(name)}</span></button>` : ''}</div>
@@ -1391,7 +1408,7 @@ function orgWorkers(s, panes, published, ownerId) {
     const task = orgWorkerTask(published, pane);
     const name = pane.name || pane.agent || pane.id;
     return `<li>${orgNode({
-      id: `${ownerId}:${pane.id}`, role: pane.label || 'worker', name, status: pane.status, className: 'org-worker', agent: pane.agent || null, quota: orgQuotaWindow(s, pane.agent),
+      id: `${ownerId}:${pane.id}`, role: pane.label || 'worker', name, status: pane.status, className: 'org-worker', agent: pane.agent || null, quota: orgQuotaMeter(s, pane.agent),
       summary: [pane.agent || NOT_REPORTED, pane.status || NOT_REPORTED, task?.id ? `Task ${task.id}` : 'Task not reported'],
       facts: orgAgentFacts(s, pane, [['Agent name', pane.name || NOT_REPORTED], ['Task ID', task?.id || NOT_REPORTED], ['Task title', task?.title || NOT_REPORTED], ['Task status', task ? STATUS_LABEL[task.status || 'todo'] || task.status : NOT_REPORTED]]),
     })}</li>`;
@@ -1423,7 +1440,7 @@ function organizationView(s) {
   const bossRisk = s.control?.bossHandoff;
   const bossSuccessor = boss ? orgSuccessor(s, boss.id) : null;
   const bossNode = boss ? orgNode({
-    id: 'boss', role: 'boss', name: 'Boss', status: boss.status, className: 'org-boss', thread: 'boss', agent: boss.agent || null, quota: orgQuotaWindow(s, boss.agent),
+    id: 'boss', role: 'boss', name: 'Boss', status: boss.status, className: 'org-boss', thread: 'boss', agent: boss.agent || null, quota: orgQuotaMeter(s, boss.agent),
     summary: [boss.agent || 'No agent', boss.status || NOT_REPORTED, orgHandover(s, boss.id, bossRisk)],
     facts: orgAgentFacts(s, boss, [['Workspace', boss.workspaceLabel || boss.workspace], ['Quota use', orgQuota(s, boss.agent)], ['Handover', orgHandover(s, boss.id, bossRisk)]]),
   }) : '<article class="org-node org-boss org-missing"><strong>Boss</strong><p class="org-node-summary"><span>No pane is labeled <code>boss</code>.</span></p></article>';
@@ -1442,7 +1459,7 @@ function organizationView(s) {
     const handover = orgHandover(s, p.orch?.pane, risk);
     const mode = p.effectiveMode === 'paused' ? 'Paused' : p.idle ? 'Idle' : 'Active';
     const node = orgNode({
-      id: `project:${p.slug}`, role: 'orch', name: p.label, status: orch?.status || (p.orch ? p.orch.status : 'unknown'), thread: p.slug, agent: orch?.agent || null, quota: orgQuotaWindow(s, orch?.agent),
+      id: `project:${p.slug}`, role: 'orch', name: p.label, status: orch?.status || (p.orch ? p.orch.status : 'unknown'), thread: p.slug, agent: orch?.agent || null, quota: orgQuotaMeter(s, orch?.agent),
       summary: [orch ? `${orch.agent || 'No agent'} · ${orch.status || NOT_REPORTED}` : 'No orchestrator', slots],
       facts: [
         ['Project', p.label],
@@ -1957,7 +1974,7 @@ const HELP = {
     <h3>Reserve</h3><p>A <b>reserve</b> node shows a prepared successor. It appears only when a handoff record is prepared, its source is the current orchestrator or Boss pane, and the successor pane is live. A recommended successor is not a reserve.</p>
     <h3>Details</h3><p>Select <b>Details</b> on a node to show its recorded values. Select <b>Hide details</b> to close them.</p>
     <h3>Style</h3><p>The switch at the top selects the <b>Plain</b> and <b>Cards</b> styles. Plain is the default. This browser keeps your choice. If the browser cannot store it, the page uses Plain at the next load.</p>
-    <p>In Cards, each agent node has a harness mark: Claude, Codex, OpenCode, Pi, or a question mark for an unknown harness. A Codex or Claude node shows a thin bar with its quota use. A working node has a slow pulse on its border. A blocked node has the warning color and a warning icon. A failed node has the error color. An idle or done node is dimmed.</p>
+    <p>In Cards, each agent node has a harness mark: Claude, Codex, OpenCode, Pi, or a question mark for an unknown harness. A Codex or Claude node shows a thin bar with its quota use. When the quota data is missing or the probe failed, the bar is empty and shows <b>quota unavailable</b>. When the last probe failed but an earlier reading exists, the bar shows that reading in a muted color. Point to the bar to see the time of the reading. A working node has a slow pulse on its border. A blocked node has the warning color and a warning icon. A failed node has the error color. An idle or done node is dimmed.</p>
     <p>In Cards, a new Owner message draws a short line with a moving dot from the Owner to the Boss or the orchestrator for about 1 second. A new worker report notice draws a line from the worker to its orchestrator. The page uses only the events that it already loads. When your system asks for reduced motion, the page shows a 1-second highlight on both nodes and no movement.</p>
     <h3>Phone</h3><p>On a phone, the chart has one column. Each worker list shows only a count. Select <b>Show</b> to expand the workers, and select <b>Hide</b> to collapse them.</p>
     <h3>Messages</h3><p>The Boss node and each project node have a <b>Messages</b> button. It opens the thread of that node. A thread holds the messages in both directions, oldest first.</p>
