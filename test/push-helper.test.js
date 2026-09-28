@@ -244,6 +244,27 @@ test('push lock records the push process and kind', (t) => {
   assert.equal(lock.ownerPane, 'ws:orch');
 });
 
+test('push lock timeout returns EX_TEMPFAIL before running git push', (t) => {
+  const f = fixture(t, 'herdr-push-lock-busy-');
+  f.writeHook(path.join(f.root, '.git', 'hooks'));
+  runKitCommand('lock', ['acquire', 'full-suite'], f.options());
+  f.livePanes.push('ws:boss');
+  let clock = Date.now();
+  let error;
+  try {
+    runKitCommand('push', ['origin', 'main'], {
+      ...f.options('ws:boss'),
+      now: () => clock,
+      pause: () => { clock += 1_800_000; },
+    });
+  } catch (caught) { error = caught; }
+  assert.equal(error?.exitCode, 75);
+  assert.match(error?.message ?? '', /^lock busy: .*ws:orch \(manual\).*queue position 1 of 1.*waited 1800 seconds/i);
+  assert.ok(f.lines.some((line) => line === 'waiting for full-suite, position 1 of 1, held by ws:orch (manual)'));
+  assert.equal(fs.existsSync(path.join(f.base, 'hook-saw')), false, 'git push does not run before it gets the lock');
+  runKitCommand('lock', ['release', 'full-suite'], f.options());
+});
+
 test('herdr-boss push releases the lock and passes the exit code through when the push fails', (t) => {
   const f = fixture(t, 'herdr-push-fail-');
   f.writeHook(path.join(f.root, '.git', 'hooks'), 1);

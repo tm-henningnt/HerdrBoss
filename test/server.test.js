@@ -133,6 +133,44 @@ try {
   for (const { setting } of view) assert.doesNotMatch(setting, /token|secret|password|key/i, `service settings must not include ${setting}`);
 });
 
+test('engine lock snapshots include live full-suite queue tickets', { timeout: 20000 }, async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-lock-queue-state-'));
+  const lockDataDir = path.join(root, 'boss-data');
+  const machineDir = path.join(lockDataDir, 'locks', 'machine');
+  const queueDir = path.join(machineDir, 'queue', 'full-suite');
+  fs.mkdirSync(queueDir, { recursive: true, mode: 0o700 });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const now = new Date();
+  fs.writeFileSync(path.join(machineDir, 'full-suite.json'), JSON.stringify({
+    name: 'full-suite', scope: 'machine', gitCommonDir: '/fixture/repo/.git', ownerPane: 'ws:holder',
+    pid: process.pid, kind: 'suite', command: 'herdr-boss lock acquire full-suite', acquiredAt: now.toISOString(),
+  }));
+  const ticketId = '00000000-0000-4000-8000-000000000002';
+  fs.writeFileSync(path.join(queueDir, `${ticketId}.json`), JSON.stringify({
+    id: ticketId, seq: 4, pane: 'ws:waiter', project: 'tmprocessmining', pid: process.pid, kind: 'suite',
+    command: 'herdr-boss lock acquire full-suite', createdAt: new Date(now.getTime() - 41 * 60 * 1000).toISOString(),
+  }));
+  const cfg = loadConfig();
+  cfg.host = '127.0.0.1';
+  cfg.port = 0;
+  const engine = new Engine(cfg, { push: false, act: false, lockDataDir, collectors: {
+    collectHerdr: async () => ({ panes: [{ id: 'ws:holder' }, { id: 'ws:waiter' }], workspaces: [] }),
+    collectMachine: async () => null,
+    collectProcesses: async () => new Map(),
+    collectQuotas: async () => [],
+    collectWorktreeCounts: async () => ({}),
+    collectCwdProcesses: async () => [],
+    collectMissingWorktreeProcesses: async () => [],
+    collectPiModels: async () => ({ models: [] }),
+  } });
+  const state = await engine.tick();
+  assert.equal(state.locks.length, 1);
+  assert.deepEqual(state.locks[0].queue.map((ticket) => [ticket.position, ticket.project, ticket.pane, ticket.kind]), [
+    [1, 'tmprocessmining', 'ws:waiter', 'suite'],
+  ]);
+  assert.ok(state.locks[0].queue[0].waitSeconds >= 41 * 60);
+});
+
 test('read-only preview allows reads and rejects all API methods that can change state', { timeout: 20000 }, async (t) => {
   const cfg = loadConfig();
   cfg.host = '127.0.0.1';

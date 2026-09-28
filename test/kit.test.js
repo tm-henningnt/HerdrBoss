@@ -2860,6 +2860,14 @@ test('the full-suite lock is machine-wide and other lock names stay per reposito
   const deployB = runKitCommand('lock', ['acquire', 'deploy'], options(secondConfig));
   assert.equal(deployB.ownerPane, 'ws:orch-b', 'a deploy lock in another repository is separate');
 
+  const queueDir = path.join(dataDir, 'locks', 'machine', 'queue', 'full-suite');
+  fs.mkdirSync(queueDir, { recursive: true, mode: 0o700 });
+  const ticketId = '00000000-0000-4000-8000-000000000001';
+  fs.writeFileSync(path.join(queueDir, `${ticketId}.json`), JSON.stringify({
+    id: ticketId, seq: 1, pane: 'ws:orch-b', project: 'tmprocessmining', pid: 802, kind: 'suite',
+    command: 'herdr-boss lock acquire full-suite', createdAt: new Date().toISOString(),
+  }));
+
   lines.length = 0;
   const listed = runKitCommand('lock', ['list'], options(secondConfig));
   assert.deepEqual(listed.map((lock) => [lock.name, lock.scope, lock.ownerPane]), [
@@ -2867,7 +2875,12 @@ test('the full-suite lock is machine-wide and other lock names stay per reposito
     ['full-suite', 'machine', 'ws:orch-a'],
   ]);
   assert.ok(lines.some((line) => /^full-suite .*machine/.test(line)), lines.join('\n'));
+  assert.deepEqual(listed[1].queue.map((ticket) => [ticket.position, ticket.project, ticket.pane, ticket.kind]), [
+    [1, 'tmprocessmining', 'ws:orch-b', 'suite'],
+  ]);
+  assert.ok(lines.some((line) => /^  Queue: 1\. tmprocessmining ws:orch-b \(suite\) \d+m$/.test(line)), lines.join('\n'));
   assert.ok(lines.some((line) => /^deploy .*repository/.test(line)), lines.join('\n'));
+  fs.unlinkSync(path.join(queueDir, `${ticketId}.json`));
 
   caller = 'ws:orch-a';
   runKitCommand('lock', ['release', 'full-suite'], options(secondConfig));
@@ -2977,9 +2990,22 @@ test('manual full-suite locks expire after an hour and the engine warns the hold
 test('the bulletin shows the current machine lock holder, kind, and age', () => {
   const text = renderBulletin({
     updatedAt: '2026-09-28T10:15:00.000Z',
-    locks: [{ name: 'full-suite', scope: 'machine', state: 'live', ownerPane: 'ws:orch', kind: 'suite', ageSeconds: 900 }],
+    locks: [{
+      name: 'full-suite', scope: 'machine', state: 'live', ownerPane: 'ws:orch', kind: 'suite', ageSeconds: 900,
+      queue: [{ position: 1, project: 'tmprocessmining', pane: 'w9:pAA', kind: 'suite', waitSeconds: 2460 }],
+    }],
   }, { alerts: [], advice: [] }, { dashboardPort: 4477 });
-  assert.match(text, /- full-suite held by ws:orch \(suite\) for 15m\./);
+  assert.match(text, /- full-suite held by ws:orch \(suite\) for 15m; queue: 1\. tmprocessmining w9:pAA 41m\./);
+});
+
+test('the allocation Locks panel renders each full-suite queue entry', () => {
+  const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  assert.match(app, /function machineLocksBlock\(s\)/);
+  assert.match(app, /ticket\.position/);
+  assert.match(app, /ticket\.project/);
+  assert.match(app, /ticket\.pane/);
+  assert.match(app, /ticket\.kind/);
+  assert.match(app, /ticket\.waitSeconds/);
 });
 
 test('worker start gives the pane absolute TMPDIR and HERDR_WORKTREE paths and creates the folder', () => {
@@ -3058,6 +3084,8 @@ test('the worker brief template uses absolute worker paths and the kit names no 
   const projectKit = fs.readFileSync(path.resolve('kit/templates/project-kit.md'), 'utf8');
   assert.match(projectKit, /Use `--read-only` for a task that changes no repository file\./);
   assert.match(projectKit, /Run each `herdr-boss browser` command and each `ps` or `pgrep` command alone\. Do not join it to other commands with `&&`, `;`, or a pipe\./);
+  assert.ok(projectKit.includes('The full-suite lock serves waiters in order. Start your suite once, and wait; do not restart it to jump the queue.'));
+  assert.ok(projectKit.includes('Exit code 75 means the lock was busy and no test ran.'));
   const userGuide = fs.readFileSync(path.resolve('docs/user-guide.md'), 'utf8');
   assert.match(userGuide, fullSuiteLockRule);
   assert.match(userGuide, /Run a full test suite with `herdr-boss suite -- <command>`/);

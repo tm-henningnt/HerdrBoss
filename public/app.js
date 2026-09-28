@@ -1022,18 +1022,22 @@ function allocationView(s) {
 
 function machineLocksBlock(s) {
   const locks = Array.isArray(s.locks) ? s.locks : [];
-  const rows = locks.map((lock) => `<tr>
+  const rows = locks.map((lock) => {
+    const queue = Array.isArray(lock.queue) ? lock.queue : [];
+    const queueRow = queue.length ? `<tr class="machine-lock-queue"><td colspan="6"><strong>Queue</strong><ol>${queue.map((ticket) => `<li>${esc(ticket.position)}. ${esc(ticket.project)} ${esc(ticket.pane)} (${esc(ticket.kind)}) ${esc(dur(ticket.waitSeconds))}</li>`).join('')}</ol></td></tr>` : '';
+    return `<tr>
     <td class="mono" data-label="Lock">${esc(lock.name)}</td>
     <td data-label="Holder">${esc(lock.project || 'Unknown project')} · ${esc(lock.ownerPane || 'Unknown pane')}</td>
     <td data-label="Kind">${esc(lock.kind)}</td>
     <td data-label="Age">${esc(dur(lock.ageSeconds))}</td>
     <td data-label="Time left">${lock.kind === 'manual' ? `${esc(until(lock.expiresAt))} left` : 'until the command ends'}</td>
     <td data-label="State"><span class="tag machine-lock-state ${lock.state === 'live' ? 'is-live' : 'is-stale'}">${esc(lock.state)}</span></td>
-  </tr>`).join('');
+  </tr>${queueRow}`;
+  }).join('');
   return `<section class="machine-lock-panel panel">
     <div class="section-head"><h2>Locks</h2><span>Machine locks</span></div>
     ${locks.length ? `<div class="machine-lock-table-wrap"><table class="machine-lock-table"><thead><tr><th>Lock</th><th>Holder</th><th>Kind</th><th>Age</th><th>Time left</th><th>State</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="machine-lock-empty">No machine locks are held.</p>'}
-    <p class="machine-lock-help">A command lock ends when its command ends. A manual lock expires after 60 minutes. Herdr Boss takes over a stale lock.</p>
+    <p class="machine-lock-help">A command lock ends when its command ends. A manual lock expires after 60 minutes. Herdr Boss takes over a stale lock. A full-suite queue shows each waiter's position, project, pane, kind, and wait time.</p>
   </section>`;
 }
 

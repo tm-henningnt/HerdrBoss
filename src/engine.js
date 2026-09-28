@@ -19,7 +19,7 @@ import { deliverQueued, mailboxCounts, readMessages, RETENTION_MS, SEND_LIMIT_PE
 import { openMessageStore } from './message-store.js';
 import { readKitNotice, pendingKitAlert, isKitAlert, kitNoticeTargets } from './kit-notice.js';
 import { inspectWorkerTransitions, inspectWorkerReports, applyWorkerFailureStatuses, resolveFreeUsageRun, activeFreeModelExhaustions, extendFreeModelExhaustion, activeFreeLaneExhaustions, extendFreeLaneExhaustion, freeUsageLaneRetry } from './worker-failures.js';
-import { readLockTakeoverNotices, readMachineLocks, removeLockTakeoverNotice } from './kit/locks.js';
+import { FULL_SUITE_LOCK, readLockQueue, readLockTakeoverNotices, readMachineLocks, removeLockTakeoverNotice } from './kit/locks.js';
 
 const MEMORY_FILE = path.join(DATA_DIR, 'memory.json');
 const STATE_FILE = path.join(DATA_DIR, 'state.json');
@@ -373,11 +373,13 @@ export class Engine extends EventEmitter {
         errors,
       };
       try {
+        const livePanes = new Set((herdr?.panes || []).map((pane) => pane.id));
+        const queue = readLockQueue({ dataDir: this.lockDataDir, livePanes, now });
         snap.locks = readMachineLocks({
           dataDir: this.lockDataDir,
-          livePanes: new Set((herdr?.panes || []).map((pane) => pane.id)),
+          livePanes,
           now,
-        });
+        }).map((lock) => lock.name === FULL_SUITE_LOCK ? { ...lock, queue } : lock);
       } catch (error) { errors.push(`locks: ${error.message}`); }
       snap.projects = listProjects();
       const policy = migrateWorkspacePolicy(loadPolicy(), snap, { file: POLICY_FILE });

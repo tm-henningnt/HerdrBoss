@@ -361,7 +361,11 @@ export function renderBulletin(snap, evaluation, cfg) {
     L.push('', '## Locks', '');
     for (const lock of heldMachineLocks) {
       const ageSeconds = lock.ageSeconds ?? Math.max(0, Math.floor((Date.parse(snap.updatedAt) - Date.parse(lock.acquiredAt)) / 1000));
-      L.push(`- ${lock.name} held by ${lock.ownerPane} (${lock.kind}) for ${fmtDuration(ageSeconds)}.`);
+      const queue = Array.isArray(lock.queue) ? lock.queue : [];
+      const queueText = queue.length
+        ? `; queue: ${queue.map((ticket) => `${ticket.position}. ${ticket.project} ${ticket.pane} ${fmtDuration(ticket.waitSeconds)}`).join(', ')}`
+        : '';
+      L.push(`- ${lock.name} held by ${lock.ownerPane} (${lock.kind}) for ${fmtDuration(ageSeconds)}${queueText}.`);
     }
   }
   // The denial trend is for the Owner, so it has its own section and never enters the project rules.
