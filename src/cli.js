@@ -345,7 +345,7 @@ async function main() {
       if (agentsFile && fs.existsSync(agentsFile) && data && typeof data === 'object' && !Array.isArray(data)) {
         const { checkAgentsFile } = await import('./kit/agents-check.js');
         const result = checkAgentsFile(agentsFile, { rulesFile: path.join(DATA_DIR, 'rules.json'), relative: 'AGENTS.md' });
-        for (const line of result.lines) console.error(`warning: AGENTS.md ${line}`);
+        for (const line of result.lines) console.error(`warning: ${line.includes(".md line") ? line : `AGENTS.md ${line}`}`);
         if (result.findings.length) console.error(`warning: ${result.summary}. Run herdr-boss check agents.`);
         data.agentsCheck = { checkedAt: new Date().toISOString(), errors: result.errors, warnings: result.warnings, file: result.file };
       }
