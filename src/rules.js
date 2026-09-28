@@ -95,6 +95,47 @@ function idleOrchestratorNudges(snap, paneSince = {}, now = Date.now(), policy =
   return notices;
 }
 
+// A working worker counts for the stale status rule for this long.
+export const STALE_STATUS_WORK_WINDOW_MS = 2 * 3600 * 1000;
+
+// Published statuses that no longer describe the work. A status is stale when its updated time is older than
+// staleStatusMinutes and, after that time, a worker was working in the last 2 hours or new commits landed.
+// snap.statusActivity[slug] holds { workedAt, landedAt } in milliseconds. A paused project is never stale.
+// prior is the result of the previous tick: an episode keeps its first stale time until a new publish.
+export function staleStatuses(snap, cfg, now = Date.now(), prior = {}) {
+  const limitMs = (Number.isFinite(cfg?.staleStatusMinutes) ? cfg.staleStatusMinutes : 120) * 60000;
+  const result = {};
+  for (const project of snap.projects || []) {
+    const updatedMs = Date.parse(project?.updated);
+    if (!project?.slug || !Number.isFinite(updatedMs) || now - updatedMs <= limitMs) continue;
+    const control = snap.control?.projects?.[project.slug];
+    if (project.status === 'paused' || (control?.effectiveMode ?? control?.mode) === 'paused') continue;
+    const activity = snap.statusActivity?.[project.slug] || {};
+    const workers = Number.isFinite(activity.workedAt) && activity.workedAt > updatedMs && now - activity.workedAt <= STALE_STATUS_WORK_WINDOW_MS;
+    const commits = Number.isFinite(activity.landedAt) && activity.landedAt > updatedMs;
+    if (!workers && !commits) continue;
+    const earlier = prior?.[project.slug];
+    result[project.slug] = {
+      slug: project.slug, workspace: control?.workspace || null, updated: project.updated,
+      since: earlier?.updated === project.updated && Number.isFinite(earlier.since) ? earlier.since : now,
+      ageSeconds: Math.floor((now - updatedMs) / 1000), workers, commits,
+    };
+  }
+  return result;
+}
+
+// One notice per project and stale episode. A new publish changes the updated time, so it starts a new key.
+function staleStatusAlerts(stale) {
+  return Object.values(stale).filter((item) => item.workspace).map((item) => {
+    const reason = [item.workers ? 'workers ran' : null, item.commits ? 'new commits landed' : null].filter(Boolean).join(' and ');
+    return {
+      key: `status:stale:${item.slug}:${item.updated}`, severity: 'info', once: true, scope: item.workspace,
+      title: `${item.slug} published status is stale`,
+      text: `Your published status is ${fmtDuration(item.ageSeconds)} old while ${reason}. Run herdr-boss publish ${item.slug} <file> with the current plan and progress.`,
+    };
+  });
+}
+
 // alert: { key, severity: info|warn|critical, scope: 'all' | <workspace id> | 'user', title, text }
 export function evaluate(snap, cfg, paneSince, now = Date.now(), policy = null) {
   const alerts = [];
@@ -102,6 +143,7 @@ export function evaluate(snap, cfg, paneSince, now = Date.now(), policy = null) 
   const avoidKinds = new Set();
   alerts.push(...blockedWorkerAlerts(snap, paneSince, now));
   alerts.push(...idleOrchestratorNudges(snap, paneSince, now, policy));
+  alerts.push(...staleStatusAlerts(snap.staleStatus || staleStatuses(snap, cfg, now)));
 
   const orphanedPairs = new Set();
   const workspaceLabels = new Map((snap.herdr?.workspaces || []).map((workspace) => [workspace.id, workspace.label]));
@@ -289,6 +331,11 @@ export function renderBulletin(snap, evaluation, cfg) {
     const name = snap.herdr?.workspaces?.find((w) => w.id === a.scope)?.label || a.scope;
     if (!byProject.has(name)) byProject.set(name, []);
     byProject.get(name).push(a.text);
+  }
+  for (const item of Object.values(snap.staleStatus || {})) {
+    const name = snap.herdr?.workspaces?.find((w) => w.id === item.workspace)?.label || item.workspace || item.slug;
+    if (!byProject.has(name)) byProject.set(name, []);
+    byProject.get(name).push(`Status stale since ${fmtTime(new Date(item.since).toISOString())}.`);
   }
   if (byProject.size) {
     L.push('', '## Project rules', '');

@@ -4,8 +4,9 @@ import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
 import { DATA_DIR, LIVE_DATA_DIR, dashboardUrl } from './config.js';
 import { collectHerdr, collectQuotas, collectMachine, collectProcesses, collectCwdProcesses, collectMissingWorktreeProcesses, collectWorktreeCounts, collectPiModels, findBrowsers, cpuUse, run } from './collect.js';
-import { evaluate, renderBulletin, fmtDuration, providerName, broadcastTargets } from './rules.js';
+import { evaluate, renderBulletin, fmtDuration, providerName, broadcastTargets, staleStatuses } from './rules.js';
 import { listProjects } from './projects.js';
+import { readProjectRepos } from './harness.js';
 import { loadModels, KIT_ROOT } from './kit/config.js';
 import { loadPolicy, clearExpiredOneOffGoals, deriveControl, migrateWorkspacePolicy, providerFor, pickSuccessor, laneStatus, leastOverProvider, machineLimits, unmeteredLane, unavailablePiModels, mergeModels } from './control.js';
 import { recordQuotaSnapshot } from './usage.js';
@@ -27,6 +28,8 @@ const POLICY_FILE = path.join(DATA_DIR, 'policy.json');
 const WORKTREE_SCAN_INTERVAL_MS = 5 * 60 * 1000;
 const CLONE_SWEEP_INTERVAL_MS = 10 * 60 * 1000;
 const PI_MODELS_INTERVAL_MS = 15 * 60 * 1000;
+// The stale status rule reads the HEAD of each project repository at most this often.
+export const STATUS_HEAD_INTERVAL_MS = 10 * 60 * 1000;
 // Quotas younger than this are shown without the codexbar error, and saved quotas this young load at start.
 const QUOTA_CACHE_MS = 15 * 60 * 1000;
 
@@ -118,6 +121,7 @@ export class Engine extends EventEmitter {
     this.cloneSweepRunning = false;
     this.denialScanAt = 0;
     this.denialScanRunning = false;
+    this.headReads = new Set();
     this.collectors = {
       collectHerdr,
       collectQuotas,
@@ -317,6 +321,11 @@ export class Engine extends EventEmitter {
       snap.leastOverProvider = leastOverProvider(snap.lanes);
       snap.policy = policy;
       snap.control = control;
+      this.recordStatusWork(control, now);
+      this.readProjectHeads(now);
+      snap.statusActivity = this.statusActivity();
+      snap.staleStatus = staleStatuses(snap, this.cfg, now, this.memory.staleStatus);
+      this.memory.staleStatus = snap.staleStatus;
       this.memory.lastOrchestrators ||= {};
       for (const p of Object.values(control.projects)) if (p.orch?.kind) this.memory.lastOrchestrators[p.workspace] = { pane: p.orch.pane, kind: p.orch.kind, project: p.slug };
       for (const pane of herdr?.panes || []) if (pane.label === 'boss' && pane.agent) this.memory.lastOrchestrators[pane.workspace] = { pane: pane.id, kind: pane.agent, project: 'Boss', label: 'Boss', boss: true };
@@ -492,6 +501,45 @@ export class Engine extends EventEmitter {
     if (result.state) this.memory.kitNotice = result.state;
     if (result.event) this.log('kit', result.event);
     if (result.alert) this.log('kit', `Queued kit notice ${result.alert.key} for each project orchestrator`);
+    return result;
+  }
+
+  // The stale status rule needs the last time each project had a working worker.
+  recordStatusWork(control, now) {
+    const activity = (this.memory.statusActivity ||= {});
+    for (const p of Object.values(control?.projects || {})) if (p.slug && p.running > 0) activity[p.slug] = { ...activity[p.slug], workedAt: now };
+    for (const [slug, item] of Object.entries(activity)) if (!(now - item.workedAt <= 7 * 86400 * 1000)) delete activity[slug];
+  }
+
+  // The HEAD read runs beside the tick, at most once every 10 minutes per project, for each project in project-repos.json.
+  // A changed HEAD, or a HEAD commit after the published updated time, means new commits landed.
+  readProjectHeads(now) {
+    const heads = (this.memory.statusHeads ||= {});
+    const repos = readProjectRepos(DATA_DIR);
+    for (const slug of Object.keys(heads)) if (!repos.some((row) => row.slug === slug)) delete heads[slug];
+    const reads = repos.filter((row) => !this.headReads.has(row.slug) && !(now - (heads[row.slug]?.checkedAt ?? -Infinity) < STATUS_HEAD_INTERVAL_MS)).map(async ({ slug, repo }) => {
+      this.headReads.add(slug);
+      heads[slug] = { ...heads[slug], checkedAt: now };
+      try {
+        const head = String(await this.gitRunner(['-C', repo, 'rev-parse', 'HEAD'])).trim();
+        const committedAt = String(await this.gitRunner(['-C', repo, 'log', '-1', '--format=%cI'])).trim();
+        const previous = heads[slug];
+        heads[slug] = { checkedAt: now, head, committedAt, changedAt: previous.head && previous.head !== head ? now : previous.changedAt ?? null };
+      } catch (error) {
+        this.log('status', `HEAD read for ${slug} failed (${error.code || 'error'}).`, { project: slug });
+      } finally { this.headReads.delete(slug); }
+    });
+    return Promise.all(reads);
+  }
+
+  // { slug: { workedAt, landedAt } } in milliseconds, for staleStatuses().
+  statusActivity() {
+    const result = {};
+    for (const [slug, item] of Object.entries(this.memory.statusActivity || {})) result[slug] = { workedAt: item.workedAt };
+    for (const [slug, item] of Object.entries(this.memory.statusHeads || {})) {
+      const times = [Date.parse(item.committedAt), item.changedAt].filter(Number.isFinite);
+      if (times.length) result[slug] = { ...result[slug], landedAt: Math.max(...times) };
+    }
     return result;
   }
 
