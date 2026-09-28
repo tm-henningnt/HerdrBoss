@@ -748,7 +748,7 @@ test('chat routes list writable threads, page messages, and mark Owner messages 
   assert.deepEqual(chats.map((chat) => [chat.thread, chat.title, chat.unread]), [
     ['alpha', 'Alpha Project', 2], ['boss', 'Boss', 1], ['beta', 'Beta Project', 0],
   ]);
-  assert.deepEqual(Object.keys(chats[0].last), ['id', 'at', 'from', 'text', 'status']);
+  assert.deepEqual(Object.keys(chats[0].last), ['id', 'at', 'from', 'channel', 'title', 'text', 'status']);
   assert.equal(chats[0].last.id, alpha[4].id);
   assert.equal(chats[0].last.text.length, 120);
   assert.equal(chats[2].last, null, 'a project chat appears before it has messages');
@@ -767,6 +767,59 @@ test('chat routes list writable threads, page messages, and mark Owner messages 
   assert.equal(marked.status, 200);
   assert.deepEqual(await marked.json(), { ok: true, updated: 2 });
   assert.equal(store.chats().find((chat) => chat.thread === 'alpha').unreadForOwner, 0);
+});
+
+test('the chat routes mark each record with its channel, and a report is not chat unread', { timeout: 20000 }, async (t) => {
+  fs.rmSync(dataDir, { recursive: true, force: true });
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.mkdirSync(homeDir, { recursive: true });
+  const { openMessageStore } = await import('../src/message-store.js');
+  const store = openMessageStore({ dir: dataDir });
+  const now = Date.parse('2026-09-28T12:00:00.000Z');
+  const append = (thread, fields, offset) => store.append({ thread, ...fields }, { now: now + offset });
+  const chatReply = append('alpha', { from: 'orch', to: 'owner', kind: 'reply', text: 'Information only.' }, 1);
+  const approve = append('alpha', { from: 'orch', to: 'owner', kind: 'reply', text: 'Approve the plan?', action: 'approve' }, 2);
+  const report = append('alpha', { from: 'boss', to: 'owner', kind: 'report', title: 'Morning handback', text: '# Morning handback' }, 3);
+  const cfg = loadConfig();
+  cfg.host = '127.0.0.1';
+  cfg.port = 0;
+  cfg.tickSeconds = 3600;
+  const { server, close } = serve(cfg, {
+    createEngine: () => {
+      const engine = new EventEmitter();
+      engine.state = { control: { projects: { alpha: { project: 'Alpha Project', orch: { pane: 'wA:p1' } } } } };
+      engine.tick = async () => engine.state;
+      engine.log = () => {};
+      return engine;
+    },
+  });
+  t.after(async () => {
+    await close();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  });
+  await new Promise((resolve, reject) => {
+    server.once('listening', resolve);
+    server.once('error', reject);
+  });
+  const base = `http://127.0.0.1:${server.address().port}`;
+
+  const page = await (await fetch(`${base}/api/chats/alpha?limit=10`)).json();
+  assert.deepEqual(page.messages.map((record) => [record.id, record.channel]), [
+    [chatReply.id, 'chat'], [approve.id, 'both'], [report.id, 'mail'],
+  ]);
+  const chats = await (await fetch(`${base}/api/chats`)).json();
+  assert.equal(chats[0].unread, 2, 'the two chat records to the Owner are unread. The report is mail.');
+  assert.equal(chats[0].last.title, 'Morning handback', 'the last record keeps the report title for the short report line');
+
+  const marked = await fetch(`${base}/api/chats/alpha/read`, { method: 'POST' });
+  assert.deepEqual(await marked.json(), { ok: true, updated: 2 });
+  const reportRecord = store.all().find((record) => record.id === report.id);
+  assert.equal(reportRecord.readAt, undefined, 'reading a chat does not mark a report read');
+  const state = await (await fetch(`${base}/api/state`)).json();
+  assert.equal(state.mailbox.mailUnread, 1, 'the report stays mail unread');
+  assert.equal(state.mailbox.chatUnread, 0);
+  assert.equal(state.mailbox.needsAction, 1, 'the approve item is open in Needs you');
 });
 
 test('message events stream local changes and report a second process append once on the next tick', { timeout: 30000 }, async (t) => {
@@ -1667,4 +1720,52 @@ test('the Chat page shows the Mailbox action cards, uses the Mailbox write route
   assert.match(app, /<h3>Action cards<\/h3>/);
   assert.match(guide, /### Action cards/);
   assert.match(guide, /The card uses the same send route as the Mailbox\./);
+});
+
+test('the top bar shows three icons with a count, and a faded icon when it has nothing to show', () => {
+  const html = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
+  const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
+  const icons = /<div class="top-icons"[\s\S]*?<\/div>/.exec(html)?.[0] || '';
+  // Three inline SVG icons: chat, mail, and needs action. Each has a badge and a link.
+  for (const [name, href] of [['chat', '/chat'], ['mail', '/mailbox?folder=updates'], ['needs-action', '/mailbox?folder=needs-you']]) {
+    assert.match(icons, new RegExp(`data-top-icon="${name}" data-empty="true" href="${href.replace('?', '\\?').replace('=', '=')}"`), `${name} links to its page`);
+    assert.match(icons, new RegExp(`data-top-badge="${name}" hidden`));
+    assert.match(icons, new RegExp(`<svg viewBox="0 0 24 24" aria-hidden="true">[\\s\\S]*?</svg>`), `${name} holds an inline SVG`);
+  }
+  assert.equal([...icons.matchAll(/data-top-icon="([^"]+)"/g)].map((m) => m[1]).join(','), 'chat,mail,needs-action');
+  // The counts come from the state. An empty icon is faded and has no badge.
+  assert.match(app, /chat: s\?\.mailbox\?\.chatUnread \?\? 0,/);
+  assert.match(app, /mail: s\?\.mailbox\?\.mailUnread \?\? 0,/);
+  assert.match(app, /'needs-action': s\?\.mailbox\?\.needsAction \?\? s\?\.mailbox\?\.open \?\? 0,/);
+  assert.match(app, /icon\.dataset\.empty = count \? 'false' : 'true';/);
+  assert.match(app, /icon\.setAttribute\('aria-label', count \? TOP_ICON_COUNT_LABEL\[name\]\(count\) : TOP_ICON_NAMES\[name\]\);/);
+  assert.match(app, /badge\.hidden = !count;/);
+  assert.match(css, /\.top-icon\[data-empty="true"\] \{ opacity: 0\.35; \}/);
+  assert.match(css, /\.top-icon-needs .top-icon-badge \{ background: var\(--warn\);/);
+  // The icons are on the desktop and on the phone.
+  assert.doesNotMatch(css, /\.top-icons \{ display: none/);
+  assert.match(css, /\.top-icon \{ width: 44px; height: 44px; \}/);
+});
+
+test('the Chat page is compact: no page heading, slim bubbles, a round send button, and a dense list', () => {
+  const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
+  // No big heading above the conversation. The header holds the avatar and the chat name.
+  assert.doesNotMatch(app, /<h1>Chat<\/h1>/);
+  assert.match(app, /<span class="chat-avatar" aria-hidden="true">\$\{esc\(chatInitials\(title\)\)\}<\/span><h2>\$\{esc\(title\)\}<\/h2>/);
+  // A slim bubble. It has no card border and the time is 11 px.
+  assert.match(css, /\.chat-bubble \{ display: grid; gap: 1px; max-width: 75%; padding: 6px 8px;/);
+  assert.doesNotMatch(css, /\.chat-bubble \{[^}]*border: 1px solid/);
+  assert.match(css, /\.chat-bubble-time \{ font-size: 11px; \}/);
+  // The composer is one line that grows to 6 lines. The send button is a round 36 px button.
+  assert.match(css, /\.chat-composer textarea \{[^}]*max-height: calc\(1\.45em \* 6\);/);
+  assert.match(css, /\.chat-send \{ flex: 0 0 auto; display: grid; place-items: center; width: 36px; height: 36px; padding: 0; border-radius: 50%;/);
+  assert.match(css, /\.chat-send \{ width: 44px; height: 44px; \}/);
+  // A dense list: each row shows the title and the time on the first line, then the last message and the unread badge.
+  assert.match(app, /<span class="chat-line-one"><span class="chat-name">\$\{esc\(item\.title\)\}<\/span>\$\{time \? `<span class="chat-time">\$\{esc\(time\)\}<\/span>` : ''\}<\/span><span class="chat-line-two"><span class="chat-preview">\$\{esc\(preview\)\}<\/span>\$\{badge\}<\/span>/);
+  assert.match(css, /\.chat-row \{[^}]*height: 52px;/);
+  // A mail report is one short line in the chat.
+  assert.match(app, /if \(record\.channel === 'mail'\) \{[\s\S]*?Report: \$\{esc\(record\.title \|\| 'Report'\)\}[\s\S]*?Open in Mailbox/);
+  assert.match(css, /\.chat-report \{/);
 });

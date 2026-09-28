@@ -85,6 +85,17 @@ export const isMailboxItem = (record) => !!record && record.to === 'owner' && (r
 export const mailboxAction = (record) => (ACTIONS.includes(record?.action) ? record.action : 'read');
 const needsOwnerAction = (record) => NEEDS_YOU_ACTIONS.has(mailboxAction(record));
 
+// The channel rule. A report is mail. A reply with an action for the Owner is in both channels. Every other record is a chat message.
+export function messageChannel(record) {
+  if (!record) return 'chat';
+  if (record.kind === 'report') return 'mail';
+  if (record.kind === 'reply' && NEEDS_YOU_ACTIONS.has(mailboxAction(record))) return 'both';
+  return 'chat';
+}
+
+// The Mailbox lists only mail records. A plain chat reply never shows in Updates.
+export const isMailRecord = (record) => isMailboxItem(record) && messageChannel(record) !== 'chat';
+
 // The choices are the Markdown list items under a heading named Choices, up to the first other line.
 export function parseChoices(text) {
   const lines = String(text ?? '').split(/\r?\n/);
@@ -102,12 +113,15 @@ export function parseChoices(text) {
   return choices;
 }
 
+// The three numbers of the top bar. chatUnread counts the chat records to the Owner, mailUnread the unread mail records, and needsAction the open action items.
 export function mailboxCounts(records) {
-  const items = records.filter(isMailboxItem);
+  const items = records.filter(isMailRecord);
   const needsYou = items.filter((item) => needsOwnerAction(item) && !item.closedAt);
   const needsYouUnread = needsYou.filter((item) => !item.readAt).length;
   const updates = items.filter((item) => !needsOwnerAction(item) && !item.closedAt && item.closedBy !== 'boss').length;
-  return { needsYou: needsYou.length, needsYouUnread, updates, unread: needsYouUnread, open: needsYou.length };
+  const chatUnread = records.filter((record) => record.to === 'owner' && !record.readAt && messageChannel(record) !== 'mail').length;
+  const mailUnread = items.filter((item) => messageChannel(item) === 'mail' && !item.readAt).length;
+  return { needsYou: needsYou.length, needsYouUnread, updates, unread: needsYouUnread, open: needsYou.length, chatUnread, mailUnread, needsAction: needsYou.length };
 }
 
 const messageOrder = (left, right) => Date.parse(left.at) - Date.parse(right.at);
@@ -185,11 +199,12 @@ export function mailboxView(records) {
     if (record.from === 'owner') owners.set(record.id, record);
     if (record.from === 'owner' && record.replyTo) answers.set(record.replyTo, record);
   }
-  const items = records.filter(isMailboxItem).reverse().map((record) => {
+  const items = records.filter(isMailRecord).reverse().map((record) => {
     const answer = answers.get(record.id);
     return {
       ...record,
       action: mailboxAction(record),
+      channel: messageChannel(record),
       choices: parseChoices(record.text),
       conversationId: conversations.get(record.id) ?? record.id,
       ownerMessage: owners.has(record.replyTo) ? deliveryView(owners.get(record.replyTo), replies) : null,

@@ -44,11 +44,11 @@ A read-only preview accepts loopback requests only. It has no login page. It nev
 
 ## Chat API
 
-Use `GET /api/chats` to list the Boss chat and project chats with an orchestrator pane. The response gives each chat a title, a last message, and an unread count. A chat without messages has a `null` last message.
+Use `GET /api/chats` to list the Boss chat and project chats with an orchestrator pane. The response gives each chat a title, a last message, and an unread count. A chat without messages has a `null` last message. The last message and each chat record have a `channel` field. The unread count leaves out a mail report.
 
-Use `GET /api/chats/<thread>?limit=<n>&before=<id>` to read a chat. Set `limit` to an integer from 1 to 100. The default is 50. Set `before` to a message ID to read older messages. The response sets `more` to `true` when older messages remain.
+Use `GET /api/chats/<thread>?limit=<n>&before=<id>` to read a chat. Set `limit` to an integer from 1 to 100. The default is 50. Set `before` to a message ID to read older messages. The response sets `more` to `true` when older messages remain. Each record has a `channel` field of `chat`, `both`, or `mail`.
 
-Use `POST /api/chats/<thread>/read` to mark unread messages to the Owner as read. The read-only preview refuses this request.
+Use `POST /api/chats/<thread>/read` to mark the unread chat records to the Owner as read. It does not mark a mail report read. The read-only preview refuses this request.
 
 Use `POST /api/messages` to send an Owner message. Read `GET /api/events` to receive each message change as a `message` event.
 
@@ -664,9 +664,19 @@ Select one or more checkboxes under **Needs you**, then select **Dismiss selecte
 
 The choices are the list items under a Markdown heading with the text `Choices`, for example `## Choices`. The list ends at the first line that is not a list item. The page shows at most 10 choices.
 
-### Unread count
+### Unread count and the top-bar icons
 
-The desktop Mailbox badge shows open Needs-you items that the Owner has not opened. The number comes from `needsYouUnread` in the `mailbox` field in `/api/state`. On a phone, the top bar has an Updates icon with the unread Updates count and an alert icon with the open Needs-you count. Select either icon to open its folder. The dashboard gets the Needs-you count through state events and reads the Updates count from the mailbox API.
+The desktop Mailbox badge shows open Needs-you items that the Owner has not opened. The number comes from `needsYouUnread` in the `mailbox` field in `/api/state`.
+
+The top bar shows three icons on a desktop and on a phone. Each icon has a count.
+
+| Icon | Count | Field in `mailbox` | Link |
+|---|---|---|---|
+| Chat | chat records to the Owner with no `readAt` | `chatUnread` | `/chat` |
+| Mail | unread mail records | `mailUnread` | `/mailbox?folder=updates` |
+| Needs action | open action items | `needsAction` | `/mailbox?folder=needs-you` |
+
+An icon with nothing to show is faded. It has opacity 0.35 and no badge. An icon with something to show has opacity 1 and a badge with the count. Its `aria-label` holds the count. The Needs-action icon uses the warning color. It is the most visible of the three.
 
 ### API
 
@@ -687,9 +697,34 @@ Both mailbox `POST` routes have the same gates as `POST /api/messages`: a loopba
 
 The Chat page at `/chat` is the conversation view of the Owner. One chat holds the messages between the Owner and the Boss. One chat holds the messages between the Owner and a project orchestrator. A worker has no chat. Use the Mailbox for items that need an answer, an approval, or a decision. Use the Chat for a normal conversation. Both pages read the same message records.
 
+The page has no large heading. Above the conversation there is one slim header. It holds the avatar of the chat and the chat name. On a phone the header also holds the **Back** control.
+
+### Channels
+
+`messageChannel(record)` in `src/messages.js` gives each record one channel.
+
+| Channel | Records | Where it shows |
+|---|---|---|
+| `chat` | a `say` reply with the action `read` or with no action, and every Owner message, nudge, and status request | Chat only |
+| `both` | a `say` reply with the action `answer`, `approve`, or `decide` | Chat, and Mailbox **Needs you** while the item is open |
+| `mail` | a report from `herdr-boss mail post` | Mailbox **Updates**, and one short line in Chat |
+
+`mailboxView()`, `mailboxFolders()`, and `mailboxCounts()` use only `mail` and `both` records. A plain chat reply never shows in Mailbox Updates.
+
+A chat message that needs an action shows in Chat with its card or its link. Its action item shows in Mailbox **Needs you**. A mail report shows in Chat as one short line: `Report: TITLE · Open in Mailbox`.
+
+### Layout
+
+The Chat is compact, in the style of a phone messenger.
+
+- A bubble has 6 to 8 px of padding and a width of at most 75%. It has no card frame. The time is 11 px and sits in the corner of the bubble.
+- The composer is one line. It grows to 6 lines. The send button is a round button of 36 px. Its touch area is 44 px on a phone.
+- A chat list row is 52 px high. The first line holds the title and the time. The second line holds the last message and the unread badge.
+- The theme sets the colors. The page keeps its contrast in the light theme and in the dark theme.
+
 ### List
 
-Each row shows the chat title, the last message on one line, the time, and the unread count. The last message is cut with an ellipsis. The chat with the newest last message comes first. A chat with no message comes after a chat with a message. The menu badge shows the total unread count of all chats.
+Each row shows the chat title and the time on the first line. The second line shows the last message on one line and the unread badge. The last message is cut with an ellipsis. A mail report shows as `Report: TITLE`. The chat with the newest last message comes first. A chat with no message comes after a chat with a message. The menu badge shows the total unread count of all chats. A mail report does not count as chat unread.
 
 The page reads `GET /api/chats`. It follows the `message` event on `GET /api/events`. It never reloads the page.
 
@@ -697,7 +732,7 @@ The page reads `GET /api/chats`. It follows the `message` event on `GET /api/eve
 
 Select a row to open the chat. The conversation shows the messages in time order. An Owner message sits on the right. An agent message sits on the left. Each bubble shows the text, the sender, and the time. An Owner bubble also shows the delivery state from the record: `queued`, `delivered`, `relayed`, or `failed` with the reason.
 
-Opening a chat calls `POST /api/chats/<thread>/read`. It marks each message to the Owner as read. The page stops the count for that chat. A read-only preview refuses the read, so the count stays.
+Opening a chat calls `POST /api/chats/<thread>/read`. It marks each chat record to the Owner as read. A mail report keeps its own read state. The page stops the count for that chat. A read-only preview refuses the read, so the count stays.
 
 Scroll up to read older messages. The page asks for the page before the oldest message while the service sets `more` to `true`. The page keeps your reading position. The 30-day retention of the store sets the oldest message that the page can show.
 
@@ -705,7 +740,7 @@ A new message goes at the bottom. The page scrolls down only when you already re
 
 ### Composer
 
-Select **Send** or press Enter to send the message. Select Shift and press Enter to make a new line. The text area grows with the text, up to 6 lines. A message holds at most 2000 characters. The service accepts at most 10 Owner messages a minute. The focus stays in the text area after a send.
+Select the round send button or press Enter to send the message. Select Shift and press Enter to make a new line. The text area grows with the text, up to 6 lines. A message holds at most 2000 characters. The service accepts at most 10 Owner messages a minute. The focus stays in the text area after a send.
 
 The page adds a `queued` bubble at once. The stored record replaces the bubble. A refused send marks the bubble `failed` and shows **Retry**. Select **Retry** to send the same text again. `POST /api/messages` is the only write path of the page.
 
@@ -746,7 +781,7 @@ On a phone, the list fills the page. Select a chat to open it full screen. Selec
 
 The dashboard adapts to a phone and to a home-screen web app.
 
-- On a screen up to 760 px wide, the header shows a menu button with the current page name, an Updates icon, and a Needs-you icon. Select an icon to open that Mailbox folder. Select the menu button to open the page menu. The menu closes after you choose a page and when you press Escape.
+- On a screen up to 760 px wide, the header shows a menu button with the current page name and the three top-bar icons. Select an icon to open the Chat or that Mailbox folder. Select the menu button to open the page menu. The menu closes after you choose a page and when you press Escape.
 - On a phone, the long sections of a project page start collapsed. Select a section title to open it. The dashboard remembers each open section for that project during the session. Overall progress and the current frontier stay open.
 - Project cards become compact. They show the name, mode, status line, and task bar.
 - Tables show stacked rows with a label for each value. The page does not scroll sideways at 393 px.

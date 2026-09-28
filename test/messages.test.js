@@ -15,7 +15,7 @@ process.env.HERDR_BOSS_DIR = dataDir;
 const messages = await import('../src/messages.js');
 const {
   appendMessage, updateMessage, readMessages, listThread, messagesFile, deliverQueued,
-  sayMessage, postReport, ownerPromptText, MAX_DELIVERY_ATTEMPTS,
+  sayMessage, postReport, ownerPromptText, messageChannel, MAX_DELIVERY_ATTEMPTS,
 } = messages;
 
 test.after(() => {
@@ -466,5 +466,25 @@ test('an acting engine tick delivers queued Owner messages to idle and working o
   assert.equal(output.events[0].id, toAlpha.id);
   assert.equal(output.events[1].id, toBeta.id);
   assert.ok(!JSON.stringify(output.events).includes('Alpha, continue.'));
-  assert.deepEqual(output.mailbox, { needsYou: 1, needsYouUnread: 1, updates: 1, unread: 1, open: 1 }, 'the state holds Needs-you counts, update count, and one-release aliases');
+  assert.deepEqual(output.mailbox, { needsYou: 1, needsYouUnread: 1, updates: 1, unread: 1, open: 1, chatUnread: 1, mailUnread: 0, needsAction: 1 }, 'the state holds the counts of the top bar, the update count, and one-release aliases');
+});
+
+test('messageChannel gives every kind and action one channel', () => {
+  const reply = (extra) => ({ thread: 'alpha', from: 'orch', to: 'owner', kind: 'reply', text: 'x', action: null, ...extra });
+  const report = (extra) => ({ thread: 'boss', from: 'boss', to: 'owner', kind: 'report', title: 'Handback', text: 'x', action: null, ...extra });
+  // A report is mail.
+  assert.equal(messageChannel(report()), 'mail');
+  assert.equal(messageChannel(report({ action: 'approve' })), 'mail', 'a report is mail whatever its action');
+  // A reply with an action for the Owner is in both channels.
+  for (const action of ['answer', 'approve', 'decide']) assert.equal(messageChannel(reply({ action })), 'both', `${action} shows in Chat and in Needs you`);
+  // Every other reply is a chat message.
+  assert.equal(messageChannel(reply()), 'chat');
+  assert.equal(messageChannel(reply({ action: 'read' })), 'chat');
+  assert.equal(messageChannel(reply({ action: 'bogus' })), 'chat');
+  // An Owner message, a nudge, and a status request are chat messages.
+  for (const kind of ['message', 'nudge', 'status-request']) {
+    assert.equal(messageChannel({ thread: 'alpha', from: 'owner', to: 'orch', kind, text: 'Continue.' }), 'chat');
+  }
+  assert.equal(messageChannel(null), 'chat');
+  assert.equal(messageChannel({ to: 'orch', from: 'owner', kind: 'message', text: 'x' }), 'chat');
 });

@@ -14,7 +14,7 @@ process.env.HERDR_BOSS_PORT = '0';
 
 const messages = await import('../src/messages.js');
 const {
-  appendMessage, readMessages, isMailboxItem, mailboxAction, parseChoices, mailboxCounts, mailboxView,
+  appendMessage, readMessages, isMailboxItem, mailboxAction, messageChannel, parseChoices, mailboxCounts, mailboxFolders, mailboxView,
   markMailboxRead, validateOwnerSend, closeMailboxItem, closeMailboxItems, ownerPromptText,
 } = messages;
 const [{ serve }, { loadConfig }] = await Promise.all([import('../src/server.js'), import('../src/config.js')]);
@@ -64,13 +64,16 @@ test('the mailbox separates Needs you from Updates and counts only unopened open
   assert.deepEqual(mailboxCounts(records), {
     needsYou: 2,
     needsYouUnread: 1,
-    updates: 2,
+    updates: 0,
     unread: 1,
     open: 2,
+    chatUnread: 2,
+    mailUnread: 0,
+    needsAction: 2,
   });
   const view = mailboxView(records);
   assert.deepEqual(view.needsYou.map((item) => item.id), ['m-approve', 'm-answer']);
-  assert.deepEqual(view.updates.map((item) => item.id), ['m-read-update', 'm-update']);
+  assert.deepEqual(view.updates.map((item) => item.id), [], 'a chat reply is not an update');
   assert.deepEqual(view.done.map((item) => item.id), ['m-done']);
 });
 
@@ -81,7 +84,7 @@ test('mailbox folders classify Owner items, sent messages, and completed items',
   const relayed = { ...owner('boss', 'Please review this.'), id: 'm-relayed', at: new Date(now - 1000).toISOString(), status: 'relayed', relayedAt: new Date(now - 500).toISOString(), relayedBy: 'boss' };
   const records = [
     { ...reply('alpha', 'Please answer.', { action: 'answer' }), id: 'm-needs', at: opened },
-    { ...reply('alpha', 'A status update.'), id: 'm-update', at: new Date(now - 3500).toISOString() },
+    { ...report('Status update', 'A status update.'), id: 'm-update', at: new Date(now - 3500).toISOString() },
     sent,
     replyToSent,
     relayed,
@@ -91,7 +94,7 @@ test('mailbox folders classify Owner items, sent messages, and completed items',
 
   const folders = messages.mailboxFolders(records);
   assert.deepEqual(folders.needsYou.map((item) => item.id), ['m-needs']);
-  assert.deepEqual(folders.updates.map((item) => item.id), ['m-reply', 'm-update']);
+  assert.deepEqual(folders.updates.map((item) => item.id), ['m-update'], 'a plain chat reply is not an update');
   assert.deepEqual(folders.sent.map((item) => item.id), ['m-relayed', 'm-sent']);
   assert.deepEqual(folders.done.map((item) => item.id), ['m-closed-report', 'm-dismissed', 'm-relayed']);
   assert.equal(folders.sent.find((item) => item.id === sent.id).repliedAt, replyToSent.at);
@@ -148,7 +151,7 @@ test('the view lists open items newest first and closed items under done, with t
   const answer = appendMessage(owner('boss', 'Approved.', { replyTo: third.id }), { dir, now });
   closeMailboxItem(third.id, { dir, now });
   const records = readMessages({ dir });
-  assert.deepEqual(mailboxCounts(records), { needsYou: 1, needsYouUnread: 1, updates: 1, unread: 1, open: 1 }, 'updates do not count as unread actions');
+  assert.deepEqual(mailboxCounts(records), { needsYou: 1, needsYouUnread: 1, updates: 1, unread: 1, open: 1, chatUnread: 1, mailUnread: 1, needsAction: 1 }, 'updates do not count as unread actions');
   const view = mailboxView(records);
   assert.deepEqual(view.needsYou.map((item) => item.id), [second.id]);
   assert.deepEqual(view.updates.map((item) => item.id), [first.id]);
@@ -180,7 +183,7 @@ test('the Boss can close open mailbox items with a safe note, without sending a 
   }
   assert.equal(records.length, 2, 'closing creates no Owner message or reply');
   assert.deepEqual(mailboxView(records).done.map((done) => done.id), [reportItem.id, item.id]);
-  assert.deepEqual(mailboxCounts(records), { needsYou: 0, needsYouUnread: 0, updates: 0, unread: 0, open: 0 });
+  assert.deepEqual(mailboxCounts(records), { needsYou: 0, needsYouUnread: 0, updates: 0, unread: 0, open: 0, chatUnread: 0, mailUnread: 0, needsAction: 0 });
 });
 
 test('Boss close validates its caller, note, and every open mailbox ID before changing records', (t) => {
@@ -235,7 +238,7 @@ test('marking read sets readAt once, closes only read items on request, and keep
   assert.deepEqual(markMailboxRead({ ids: [item.id], close: true }, { dir, now: later + 2000 }), { ok: true, updated: 1 });
   records = readMessages({ dir });
   assert.equal(records.find((r) => r.id === item.id).closedAt, new Date(later + 2000).toISOString());
-  assert.deepEqual(mailboxCounts(records), { needsYou: 1, needsYouUnread: 0, updates: 0, unread: 0, open: 1 });
+  assert.deepEqual(mailboxCounts(records), { needsYou: 1, needsYouUnread: 0, updates: 0, unread: 0, open: 1, chatUnread: 0, mailUnread: 0, needsAction: 1 });
 });
 
 test('an Owner answer names an open item of the same thread and closes it', (t) => {
@@ -308,7 +311,7 @@ test('the mailbox API lists items, marks them read behind the send gates, and an
   const post = (route, body, headers = {}) => fetch(`${base}${route}`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) });
 
   const state = await (await fetch(`${base}/api/state`)).json();
-  assert.deepEqual(state.mailbox, { needsYou: 3, needsYouUnread: 3, updates: 1, unread: 3, open: 3 });
+  assert.deepEqual(state.mailbox, { needsYou: 3, needsYouUnread: 3, updates: 1, unread: 3, open: 3, chatUnread: 3, mailUnread: 1, needsAction: 3 });
   const list = await (await fetch(`${base}/api/mailbox`)).json();
   assert.deepEqual(list.needsYou.map((item) => item.id), [answerItem.id, approve.id, decide.id]);
   assert.deepEqual(list.updates.map((item) => item.id), [handback.id]);
@@ -336,11 +339,11 @@ test('the mailbox API lists items, marks them read behind the send gates, and an
     headers: { host: 'mac.tail0000.ts.net', cookie, 'content-type': 'application/json', origin: 'http://mac.tail0000.ts.net' }, body: JSON.stringify(read),
   });
   assert.equal(phoneRead.status, 200, phoneRead.text);
-  assert.deepEqual(JSON.parse(phoneRead.text), { ok: true, updated: 1, mailbox: { needsYou: 3, needsYouUnread: 3, updates: 1, unread: 3, open: 3 } });
+  assert.deepEqual(JSON.parse(phoneRead.text), { ok: true, updated: 1, mailbox: { needsYou: 3, needsYouUnread: 3, updates: 1, unread: 3, open: 3, chatUnread: 3, mailUnread: 0, needsAction: 3 } });
 
   const closeRead = await post('/api/messages/read', { ids: [handback.id], close: true });
   assert.equal(closeRead.status, 200);
-  assert.deepEqual((await closeRead.json()).mailbox, { needsYou: 3, needsYouUnread: 3, updates: 0, unread: 3, open: 3 });
+  assert.deepEqual((await closeRead.json()).mailbox, { needsYou: 3, needsYouUnread: 3, updates: 0, unread: 3, open: 3, chatUnread: 3, mailUnread: 0, needsAction: 3 });
 
   // Answer, approve, and decide use the Owner send path with replyTo.
   const sends = [
@@ -369,7 +372,7 @@ test('the mailbox API lists items, marks them read behind the send gates, and an
   assert.deepEqual(after.updates, []);
   assert.deepEqual(after.done.map((item) => item.id), [handback.id, answerItem.id, approve.id, decide.id]);
   assert.equal(after.done.find((item) => item.id === approve.id).answer.text, 'Approved. Keep it under budget.');
-  assert.deepEqual((await (await fetch(`${base}/api/state`)).json()).mailbox, { needsYou: 0, needsYouUnread: 0, updates: 0, unread: 0, open: 0 });
+  assert.deepEqual((await (await fetch(`${base}/api/state`)).json()).mailbox, { needsYou: 0, needsYouUnread: 0, updates: 0, unread: 0, open: 0, chatUnread: 0, mailUnread: 0, needsAction: 0 });
 });
 
 test('mailbox folder and thread queries return sent state and one ordered conversation', { timeout: 20000 }, async (t) => {
@@ -447,7 +450,7 @@ test('the mailbox can dismiss one or many open action items without sending an O
   const list = await (await fetch(`${base}/api/mailbox`)).json();
   assert.deepEqual(list.done.map((item) => item.id).sort(), [one.id, two.id, three.id].sort());
   assert.ok(list.done.every((item) => item.dismissed));
-  assert.deepEqual(list.mailbox, { needsYou: 0, needsYouUnread: 0, updates: 0, unread: 0, open: 0 });
+  assert.deepEqual(list.mailbox, { needsYou: 0, needsYouUnread: 0, updates: 0, unread: 0, open: 0, chatUnread: 0, mailUnread: 0, needsAction: 0 });
 });
 
 test('message and mailbox APIs expose delivery, relay, and reply state', { timeout: 20000 }, async (t) => {
@@ -476,4 +479,57 @@ test('message and mailbox APIs expose delivery, relay, and reply state', { timeo
     id: incoming.id, at: incoming.at, text: incoming.text, status: 'sent', sentAt, error: null,
     relayedAt: null, relayedBy: null, repliedAt,
   });
+});
+
+test('a plain say reply is a chat message and never shows in Mailbox Updates', () => {
+  const records = [
+    { ...reply('alpha', 'Progress note without an action.'), id: 'm-chat', at: new Date(now - 3000).toISOString() },
+    { ...reply('alpha', 'Read this note.', { action: 'read' }), id: 'm-read', at: new Date(now - 2000).toISOString() },
+    { ...report('Handback', '# Handback'), id: 'm-report', at: new Date(now - 1000).toISOString() },
+  ];
+  assert.equal(messageChannel(records[0]), 'chat');
+  const view = mailboxView(records);
+  assert.deepEqual(view.updates.map((item) => item.id), ['m-report'], 'a chat reply is not an update, also with the action read');
+  assert.deepEqual(view.needsYou, []);
+  assert.deepEqual(view.done.map((item) => item.id), [], 'a chat reply never reaches Done through the Mailbox');
+  const folders = mailboxFolders(records);
+  assert.equal(folders.updatesUnread, 1, 'only the report counts as an unread update');
+  const counts = mailboxCounts(records);
+  assert.equal(counts.updates, 1);
+  assert.equal(counts.chatUnread, 2, 'both chat replies to the Owner are chat unread');
+  assert.equal(counts.mailUnread, 1, 'the report is mail unread');
+  assert.equal(counts.needsAction, 0);
+});
+
+test('an approve reply is in Chat and in Needs you until it closes', () => {
+  const records = [
+    { ...reply('alpha', 'Information first.'), id: 'm-chat', at: new Date(now - 3000).toISOString() },
+    { ...reply('boss', 'Approve the spend?', { action: 'approve' }), id: 'm-approve', at: new Date(now - 2000).toISOString() },
+  ];
+  assert.equal(messageChannel(records[1]), 'both');
+  const view = mailboxView(records);
+  assert.deepEqual(view.needsYou.map((item) => item.id), ['m-approve']);
+  assert.equal(view.needsYou[0].channel, 'both');
+  assert.deepEqual(view.updates.map((item) => item.id), [], 'an action reply is not an update');
+  const open = mailboxCounts(records);
+  assert.deepEqual({ chatUnread: open.chatUnread, mailUnread: open.mailUnread, needsAction: open.needsAction }, { chatUnread: 2, mailUnread: 0, needsAction: 1 });
+
+  const stamp = new Date(now - 1000).toISOString();
+  const closed = records.map((record) => (record.id === 'm-approve' ? { ...record, closedAt: stamp, readAt: stamp } : record));
+  const after = mailboxCounts(closed);
+  assert.deepEqual({ chatUnread: after.chatUnread, needsAction: after.needsAction }, { chatUnread: 1, needsAction: 0 });
+  assert.deepEqual(mailboxView(closed).done.map((item) => item.id), ['m-approve']);
+});
+
+test('the three top-bar counts ignore closed and read items', () => {
+  const records = [
+    { ...reply('alpha', 'Chat note.'), id: 'm-1', at: new Date(now - 5000).toISOString() },
+    { ...reply('alpha', 'Read note.', { action: 'read', readAt: new Date(now - 4000).toISOString() }), id: 'm-2', at: new Date(now - 4000).toISOString() },
+    { ...report('Handback', '# Handback', { readAt: new Date(now - 3000).toISOString() }), id: 'm-3', at: new Date(now - 3000).toISOString() },
+    { ...report('Second handback', '# Second'), id: 'm-4', at: new Date(now - 2000).toISOString() },
+    { ...owner('alpha', 'Continue.'), id: 'm-5', at: new Date(now - 1000).toISOString() },
+  ];
+  const counts = mailboxCounts(records);
+  assert.deepEqual({ chatUnread: counts.chatUnread, mailUnread: counts.mailUnread, needsAction: counts.needsAction }, { chatUnread: 1, mailUnread: 1, needsAction: 0 });
+  assert.deepEqual(mailboxCounts([]), { needsYou: 0, needsYouUnread: 0, updates: 0, unread: 0, open: 0, chatUnread: 0, mailUnread: 0, needsAction: 0 });
 });
