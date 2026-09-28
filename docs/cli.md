@@ -351,27 +351,29 @@ An unknown tool-call count stays `null`. The ledger accepts `null` as unknown. I
 
 Each project has one persistent Chrome profile on a port from 9223 to 9299. The port is a lease in the built-in pool `project-browsers`. See [Port leases](user-guide.md#port-leases). Add `--tab ID` to page commands when the browser has several tabs; `browser tabs` lists the IDs.
 
+In a Herdr pane, change only the browser of the project in that pane's worktree. The Boss pane can change any project browser. This rule covers browser requests, size changes, close, release, restart, tab changes, page navigation and input, and bookmark changes. The CLI checks the pane and its project. The commands `list`, `tabs`, `screenshot`, and `bookmarks SLUG list` only read data. They can read any project browser. A plain terminal with no Herdr pane keeps its current behavior. The CLI prints a warning and skips the project check.
+
 | Command | Action |
 |---|---|
-| `browser request SLUG [--headless\|--visible] [--reserve]` | Launch the project browser. `--reserve` assigns the port and profile only. |
+| `browser request SLUG [--headless\|--visible] [--reserve]` | Launch the project browser. From a Herdr pane, request your project browser or use the Boss pane. `--reserve` assigns the port and profile only. |
 | `browser list` | All project browsers, ports, profiles, and state. |
-| `browser restart SLUG --headless\|--visible [--no-restore]` | Close and relaunch in the other mode. The current page reopens unless `--no-restore`. |
-| `browser close SLUG` | Close the browser. The profile and the port lease stay. |
-| `browser release SLUG` | Remove the port lease of the project. Refuses while the project Chrome runs. The record and the profile stay. |
-| `browser size SLUG WIDTH HEIGHT` | Window size for the next launch (320–3840 × 240–2160). |
+| `browser restart SLUG --headless\|--visible [--no-restore]` | Close and relaunch in the other mode. The current page reopens unless `--no-restore`. From a Herdr pane, only that project or the Boss can run this command. |
+| `browser close SLUG` | Close the browser. The profile and the port lease stay. From a Herdr pane, only that project or the Boss can run this command. |
+| `browser release SLUG` | Remove the port lease of the project. Refuses while the project Chrome runs. The record and the profile stay. From a Herdr pane, only that project or the Boss can run this command. |
+| `browser size SLUG WIDTH HEIGHT` | Window size for the next launch (320–3840 × 240–2160). From a Herdr pane, only that project or the Boss can run this command. |
 | `browser tabs SLUG` | Tabs with ID, title, URL, visibility, and whether an agent is attached. |
-| `browser tab new SLUG [URL]` | Open a tab in its own background window. Prints the ID. |
-| `browser tab close SLUG --tab ID [--force]` | Close a tab. Refuses a tab an agent is attached to unless `--force`. |
+| `browser tab new SLUG [URL]` | Open a tab in its own background window. Prints the ID. From a Herdr pane, only that project or the Boss can run this command. |
+| `browser tab close SLUG --tab ID [--force]` | Close a tab. Refuses a tab an agent is attached to unless `--force`. From a Herdr pane, only that project or the Boss can run this command. |
 | `browser screenshot SLUG [--tab ID] [--out DIR]` | Save a private JPEG and print its path. Use `$TMPDIR` by default, or select a directory with `--out DIR`. |
-| `browser navigate SLUG URL [--tab ID]` | Open an `http` or `https` page. |
-| `browser click SLUG X% Y% [--tab ID]` | Click at a position relative to the screenshot. |
-| `browser text SLUG --stdin [--tab ID]` | Type text from standard input. The text is not echoed. |
-| `browser key SLUG KEY [--tab ID]` | Send `Tab`, `Enter`, `Backspace`, `Delete`, `Escape`, `Home`, `End`, an arrow key, or `SelectAll`. |
+| `browser navigate SLUG URL [--tab ID]` | Open an `http` or `https` page. From a Herdr pane, only that project or the Boss can run this command. |
+| `browser click SLUG X% Y% [--tab ID]` | Click at a position relative to the screenshot. From a Herdr pane, only that project or the Boss can run this command. |
+| `browser text SLUG --stdin [--tab ID]` | Type text from standard input. The text is not echoed. From a Herdr pane, only that project or the Boss can run this command. |
+| `browser key SLUG KEY [--tab ID]` | Send `Tab`, `Enter`, `Backspace`, `Delete`, `Escape`, `Home`, `End`, an arrow key, or `SelectAll`. From a Herdr pane, only that project or the Boss can run this command. |
 | `browser bookmarks SLUG list` | List the bookmarks and the start page of the project. |
-| `browser bookmarks SLUG add NAME URL` | Add one bookmark. The name has at most 60 characters. The URL must use `http` or `https` and must not hold a user name or a password. |
-| `browser bookmarks SLUG rm INDEX` | Remove the bookmark at `INDEX`. |
-| `browser bookmarks SLUG open INDEX [--new-tab]` | Open the bookmark in the current tab, or in a new tab with `--new-tab`. |
-| `browser bookmarks SLUG start URL\|none` | Set the start page of the next launch, or clear it with `none`. |
+| `browser bookmarks SLUG add NAME URL` | Add one bookmark. The name has at most 60 characters. The URL must use `http` or `https` and must not hold a user name or a password. From a Herdr pane, only that project or the Boss can run this command. |
+| `browser bookmarks SLUG rm INDEX` | Remove the bookmark at `INDEX`. From a Herdr pane, only that project or the Boss can run this command. |
+| `browser bookmarks SLUG open INDEX [--new-tab]` | Open the bookmark in the current tab, or in a new tab with `--new-tab`. From a Herdr pane, only that project or the Boss can run this command. |
+| `browser bookmarks SLUG start URL\|none` | Set the start page of the next launch, or clear it with `none`. From a Herdr pane, only that project or the Boss can run this command. |
 | `browser sweep-clones [--dry-run]` | Delete orphaned Chrome code-sign clones now. Prints the count and the freed GiB. `--dry-run` lists each clone by name and age and deletes nothing. |
 
 ```sh
