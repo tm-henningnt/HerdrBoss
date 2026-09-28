@@ -12,6 +12,23 @@ import { acquireLeaseFor, dropLeases, setLeasePane } from '../leases.js';
 import { codexShellEnvArgs } from '../harness.js';
 
 const NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
+const AGENT_READY_MARKERS = Object.freeze({
+  claude: Object.freeze({
+    inputLine: /^❯$/,
+    boxRule: /─/,
+    footerLine: /(?:auto mode|\? for shortcuts)/i,
+  }),
+  codex: Object.freeze({
+    inputLine: /^› /,
+    footerLine: /\? for shortcuts/i,
+  }),
+  opencode: null,
+  pi: null,
+});
+const KNOWN_AGENT_STATUSES = new Set(['idle', 'working', 'blocked', 'done']);
+const READY_POLL_MS = 500;
+const READY_WAIT_MS = 45_000;
+const STALLED_PROMPT_WAIT_MS = 20_000;
 const BRIEF_SLOTS = new Set([
   'name', 'kind', 'model', 'effort', 'project', 'repo', 'worktree', 'branch', 'base', 'issue', 'task',
   'allowedPaths', 'reportPath', 'reportJsonPath', 'orchPane', 'orchName', 'bulletinPath', 'herdrEnvPrefix', 'herdrBin', 'date', 'evidenceTiers', 'threadLimit', 'imageBudget', 'copyPaths', 'leases',
@@ -224,7 +241,7 @@ function parseHerdrJson(stdout) {
 export function createHerdrRunner(exec = (args) => execFileSync('herdr', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })) {
   return (args) => {
     const stdout = exec(args);
-    if (args[0] === 'pane' && args[1] === 'read') return { text: stdout };
+    if ((args[0] === 'pane' || args[0] === 'agent') && args[1] === 'read') return { text: stdout };
     return parseHerdrJson(stdout);
   };
 }
@@ -240,21 +257,71 @@ export function readAgentText(name, exec = execFileSync) {
 
 function pause(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
 
+function hasAgentReadyMarker(text, marker) {
+  if (!marker) return true;
+  const lines = String(text).split(/\r?\n/);
+  if (!lines.some((line) => marker.footerLine.test(line))) return false;
+  const promptIndex = lines.findIndex((line) => marker.inputLine.test(line));
+  if (promptIndex < 0) return false;
+  if (!marker.boxRule) return true;
+  return marker.boxRule.test(lines[promptIndex - 1] ?? '')
+    && marker.boxRule.test(lines[promptIndex + 1] ?? '');
+}
+
+export function waitForAgentReady(name, kind, { herdr, readText = readAgentText, wait = pause } = {}, timeoutMs = READY_WAIT_MS) {
+  const marker = AGENT_READY_MARKERS[kind];
+  let elapsed = 0;
+  for (;;) {
+    let statusKnown = false;
+    try {
+      const result = herdr(['agent', 'get', name]);
+      const agent = result?.agent ?? result;
+      statusKnown = KNOWN_AGENT_STATUSES.has(agent?.agent_status);
+    } catch {}
+    if (statusKnown) {
+      if (!marker) return true;
+      try {
+        if (hasAgentReadyMarker(readText(name), marker)) return true;
+      } catch {}
+    }
+    if (elapsed >= timeoutMs) return false;
+    const delay = Math.min(READY_POLL_MS, timeoutMs - elapsed);
+    wait(delay);
+    elapsed += delay;
+  }
+}
+
+function isAgentPromptStalled(error) {
+  return error?.code === 'agent_prompt_stalled'
+    || /agent_prompt_stalled/.test(String(error?.stderr ?? ''))
+    || /agent_prompt_stalled/.test(String(error?.message ?? ''));
+}
+
 // An agent can report ready before its input box works. The prompt is then lost, or typed but not submitted.
 // Resend once when the pane shows no trace of the marker text. When it shows the marker, send Enter once:
 // Enter submits unsent input and does nothing in an empty input box.
-export function deliverPrompt(name, text, marker, { herdr, readText = readAgentText, wait = pause }) {
+export function deliverPrompt(name, text, marker, { herdr, readText = readAgentText, wait = pause, kind = null }) {
   const settled = () => {
     const status = herdr(['agent', 'get', name]);
     return ['working', 'blocked'].includes((status.agent ?? status).agent_status);
   };
   let resent = false;
+  let firstError = null;
   for (;;) {
     let promptError;
     try {
       herdr(['agent', 'prompt', name, text, '--wait', '--timeout', '20000']);
-      return resent ? 'resent' : 'sent';
+      return firstError ? 'stalled-retry' : resent ? 'resent' : 'sent';
     } catch (error) { promptError = error; }
+    if (isAgentPromptStalled(promptError)) {
+      if (firstError) {
+        try { if (settled()) return 'stalled-retry'; } catch {}
+        throw new Error(`Brief prompt failed on both tries for ${name}. Try 1: ${firstError.message || firstError}. Try 2: ${promptError.message || promptError}.`);
+      }
+      firstError = promptError;
+      waitForAgentReady(name, kind, { herdr, readText, wait }, STALLED_PROMPT_WAIT_MS);
+      continue;
+    }
     if (settled()) return resent ? 'resent' : 'sent';
     let seen = true;
     try { seen = readText(name).includes(marker); } catch {}
@@ -268,8 +335,10 @@ export function deliverPrompt(name, text, marker, { herdr, readText = readAgentT
   }
 }
 
-function deliverBrief(name, herdr, readText, wait, dir = '.worker') {
-  return deliverPrompt(name, briefPrompt(dir), `${dir}/brief.md`, { herdr, readText, wait });
+function deliverBrief(name, kind, herdr, readText, wait, output, dir = '.worker') {
+  const ready = waitForAgentReady(name, kind, { herdr, readText, wait });
+  if (!ready) output(`Notice: ${name} did not show a ready prompt in 45 s; sent the brief anyway.`);
+  return deliverPrompt(name, briefPrompt(dir), `${dir}/brief.md`, { herdr, readText, wait, kind });
 }
 
 function inAbout(iso, now) {
@@ -790,7 +859,7 @@ export function startWorker(name, options, {
   rulesFile,
   now = Date.now(),
   output = console.log,
-  readText = readAgentText,
+  readText = null,
   wait = pause,
   runSetup = runSetupCommand,
   leaseOptions = null,
@@ -848,9 +917,13 @@ export function startWorker(name, options, {
   const summary = allocationSummary(rules, config.slug);
   if (summary) output(summary);
   if (projectSlots && projectSlots.running >= projectSlots.slots && !options.force) output(`Notice: ${config.slug} uses ${projectSlots.running}/${projectSlots.slots} effective slots. This share is advisory; global limit still applies.`);
-  const allowedErrors = validateAllowedPaths(options.allow ?? []);
+  const requestedPaths = options.allow ?? [];
+  if (options.readOnly && requestedPaths.length) throw new Error('--read-only cannot be used with --allow.');
+  const workerDir = workerDirName(name, !!options.noWorktree);
+  const allowedErrors = validateAllowedPaths(requestedPaths);
   if (allowedErrors.length) throw new Error(allowedErrors.join('\n'));
-  if (!options.allow?.length) throw new Error('Give at least one --allow path (use --allow . only for an explicitly unrestricted task).');
+  if (!options.readOnly && !requestedPaths.length) throw new Error('Give at least one --allow path or use --read-only.');
+  const allowedPaths = [...requestedPaths, `${workerDir}/**`];
   if (!!options.task === !!options.taskFile) throw new Error('Provide exactly one of --task or --task-file.');
   if (options.issue != null && (!/^\d+$/.test(String(options.issue)) || Number(options.issue) <= 0)) throw new Error('--issue must be a positive integer.');
   const task = options.taskFile ? fs.readFileSync(path.resolve(options.taskFile), 'utf8').trimEnd() : options.task;
@@ -894,7 +967,6 @@ export function startWorker(name, options, {
   }
 
   const workspaceId = caller.workspaceId;
-  const workerDir = workerDirName(name, !!options.noWorktree);
   const tmpDir = path.join(path.resolve(worktree), workerDir, 'tmp');
   let paneId = null;
   const paneCap = config.workerPanesPerTab ?? WORKER_PANES_PER_TAB;
@@ -915,7 +987,7 @@ export function startWorker(name, options, {
 
   const plan = {
     name, kind: options.kind, model, effort, rulesFile: rulesPath, rulesStale: staleRules,
-    noWorktree: !!options.noWorktree, worktree, branch, base, template: config.briefTemplatePath,
+    noWorktree: !!options.noWorktree, readOnly: !!options.readOnly, allowedPaths, worktree, branch, base, template: config.briefTemplatePath,
     workspaceId, paneId, paneCommand, paneTab, launchArgs, agentArgs, recordFile, excludeFile,
     // A worker in the current worktree uses its existing dependencies, so setup runs only for a new worktree.
     setup: options.noWorktree ? null : config.setup ?? null, setupTimeoutSeconds: config.setupTimeoutSeconds ?? 900,
@@ -958,7 +1030,7 @@ export function startWorker(name, options, {
   const orchName = getName(liveAgents.find((agent) => getPane(agent) === orchPane)) ?? '(none)';
   const briefSlots = {
     name, kind: options.kind, model, effort, project: config.slug, repo: config.root, worktree, branch, base,
-    issue: options.issue ?? null, task, allowedPaths: options.allow ?? [], reportPath, reportJsonPath,
+    issue: options.issue ?? null, task, allowedPaths, reportPath, reportJsonPath,
     orchPane, orchName, bulletinPath: path.join(env.HERDR_BOSS_DIR || path.join(os.homedir(), '.herdr-boss'), 'bulletin.md'),
     ...herdrCommands,
     date: new Date(now).toISOString().slice(0, 10),
@@ -979,6 +1051,10 @@ export function startWorker(name, options, {
     missingBriefDetails.push(`Copied inputs:\n${briefSlots.copyPaths.map((item) => `- ${item}`).join('\n')}`);
   }
   const brief = `${renderBrief(template, briefSlots)}${missingBriefDetails.length ? `\n\n## Worker start details\n\n${missingBriefDetails.join('\n\n')}` : ''}`;
+  const readWorkerText = readText ?? ((agentName) => {
+    const result = herdr(['agent', 'read', agentName, '--source', 'recent-unwrapped', '--lines', '60']);
+    return result?.text ?? String(result ?? '');
+  });
 
   let createdWorktree = false;
   let agentStarted = false;
@@ -1042,13 +1118,15 @@ export function startWorker(name, options, {
       shellPid,
       pane: paneId,
       workerDir: plan.workerDir,
-      allowedPaths: options.allow ?? [],
+      allowedPaths,
+      readOnly: !!options.readOnly,
       ...(leases.length ? { leases } : {}),
       startedAt: new Date(now).toISOString(),
     };
     writeJsonAtomic(recordFile, record);
-    const delivery = deliverBrief(name, herdr, readText, wait, plan.workerDir);
+    const delivery = deliverBrief(name, options.kind, herdr, readWorkerText, wait, output, plan.workerDir);
     if (delivery === 'resent') output(`Resent the brief prompt to ${name}: the first prompt did not reach the agent.`);
+    if (delivery === 'stalled-retry') output(`Resent the brief prompt to ${name} after agent_prompt_stalled.`);
     if (delivery === 'submitted') output(`Sent Enter to ${name}: the brief prompt was typed but not submitted.`);
     return { ...record, recordFile, dryRun: false };
   } catch (error) {

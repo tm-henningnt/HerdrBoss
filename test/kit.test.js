@@ -9,12 +9,16 @@ import { checkAgentsExclude, contextTokensFor, globMatches, loadModels, loadProj
 import { appendDelegatedRun, compareChangedPaths, gitChangedPaths, readDelegatedRuns, validateAllowedPaths, validateDelegatedRun, validateWorkerReport } from '../src/kit/orchestration.js';
 import { buildGhArgs } from '../src/kit/gh.js';
 import { runKitCommand } from '../src/kit/cli.js';
-import { allowWorkerScope, collectWorker, createHerdrRunner, filterCollectProcesses, listWorkers, parseWorktreeCwdProcesses, renderBrief, startWorker, waitForWorkerPane } from '../src/kit/workers.js';
+import { allowWorkerScope, collectWorker, createHerdrRunner, filterCollectProcesses, listWorkers, parseWorktreeCwdProcesses, renderBrief, startWorker, waitForAgentReady, waitForWorkerPane } from '../src/kit/workers.js';
 import { classifyWorktrees, pruneWorktrees } from '../src/kit/worktrees.js';
 import { usageProvider } from '../src/usage.js';
 import { validateProject } from '../src/projects.js';
 import { Engine } from '../src/engine.js';
 import { renderBulletin } from '../src/rules.js';
+
+const CLAUDE_READY_SCREEN = '────\n❯\n────\nauto mode';
+const CODEX_READY_SCREEN = '› Ask Codex to do anything\n? for shortcuts';
+const ALL_READY_SCREENS = `${CLAUDE_READY_SCREEN}\n${CODEX_READY_SCREEN}`;
 
 // Worker worktrees default to ~/Projects/.herdr-wt. Keep them out of the real home folder.
 const TEST_HOME = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-kit-home-')));
@@ -855,6 +859,8 @@ test('worker start records a real dispatch before prompting and verifies activit
     if (args[0] === 'pane' && args[1] === 'process-info') return { process_info: { shell_pid: 10, foreground_process_group_id: 10 } };
     if (args[0] === 'pane' && args[1] === 'read') return { text: '% ' };
     if (args[0] === 'agent' && args[1] === 'list') return { agents: [] };
+    if (args[0] === 'agent' && args[1] === 'get') return { agent: { agent_status: 'idle' } };
+    if (args[0] === 'agent' && args[1] === 'read') return { text: CODEX_READY_SCREEN };
     if (args[0] === 'tab' && args[1] === 'list') return { tabs: [{ tab_id: 'ws:t1', workspace_id: 'ws', label: 'Workers' }] };
     if (args[0] === 'pane' && args[1] === 'list') return { panes: [{ pane_id: 'ws:p1', workspace_id: 'ws', tab_id: 'ws:t1', width: 160, height: 45 }] };
     if (args[0] === 'pane' && args[1] === 'split') return { pane: { pane_id: 'ws:p2' } };
@@ -1044,6 +1050,8 @@ function sharedTabHerdr({ workersTab = false, failStart = false, workerTabs = []
       return {};
     }
     if (group === 'agent' && action === 'start') { if (failStart) throw new Error('agent_not_ready'); return {}; }
+    if (group === 'agent' && action === 'get') return { agent: { agent_status: 'idle' } };
+    if (group === 'agent' && action === 'read') return { text: ALL_READY_SCREENS };
     if (group === 'agent' && action === 'prompt') return {};
     throw new Error(`Unexpected Herdr call: ${args.join(' ')}`);
   };
@@ -1656,7 +1664,7 @@ test('worker start submits a brief that was typed but not sent', () => {
     if (args[0] === 'pane' && args[1] === 'list') return { panes: [{ pane_id: 'ws:p1', workspace_id: 'ws', tab_id: 'ws:t1', width: 160, height: 45 }] };
     if (args[0] === 'pane' && args[1] === 'split') return { pane: { pane_id: 'ws:p2' } };
     if (args[0] === 'agent' && args[1] === 'start') return {};
-    if (args[0] === 'agent' && args[1] === 'prompt') throw new Error('agent_prompt_stalled');
+    if (args[0] === 'agent' && args[1] === 'prompt') throw new Error('prompt_transport_error');
     if (args[0] === 'agent' && args[1] === 'get') return { agent: { agent_status: status } };
     if (args[0] === 'agent' && args[1] === 'send-keys') { assert.deepEqual(args.slice(2), ['demo', 'enter']); status = 'working'; return {}; }
     throw new Error(`Unexpected Herdr call: ${args.join(' ')}`);
@@ -1664,12 +1672,116 @@ test('worker start submits a brief that was typed but not sent', () => {
   const output = [];
   startWorker('demo', { kind: 'claude', task: 'x', allow: ['src/'] }, {
     config, models: loadModels(), herdr, output: (line) => output.push(line),
-    readText: () => '❯ Read .worker/brief.md in your working directory and execute it.', wait: () => {},
+    readText: () => `${CLAUDE_READY_SCREEN}\n❯ Read .worker/brief.md in your working directory and execute it.`, wait: () => {},
     env: { HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'ws', HERDR_PANE_ID: 'ws:orch' }, rulesFile,
   });
   assert.equal(calls.filter((call) => call === 'agent prompt').length, 1);
   assert.ok(calls.includes('agent send-keys'));
   assert.ok(output.some((line) => line.startsWith('Sent Enter to demo')));
+});
+
+test('worker readiness waits for the harness input marker', () => {
+  const waits = [];
+  let reads = 0;
+  const herdrCalls = [];
+  const ready = waitForAgentReady('demo', 'codex', {
+    herdr: (args) => { herdrCalls.push(args); return { agent: { agent_status: 'idle' } }; },
+    readText: () => ++reads < 3
+      ? reads === 1 ? 'Loading session...' : '› Ask Codex to do anything'
+      : CODEX_READY_SCREEN,
+    wait: (ms) => waits.push(ms),
+  });
+  assert.equal(ready, true);
+  assert.equal(reads, 3);
+  assert.deepEqual(waits, [500, 500]);
+  assert.equal(herdrCalls.length, 3);
+});
+
+test('worker readiness requires Claude input line, box rules, and footer', () => {
+  const waits = [];
+  let reads = 0;
+  const ready = waitForAgentReady('demo', 'claude', {
+    herdr: () => ({ agent: { agent_status: 'idle' } }),
+    readText: () => {
+      reads++;
+      if (reads === 1) return '❯\n────\nauto mode';
+      if (reads === 2) return '────\n❯\n────';
+      if (reads === 3) return '────\n❯ prompt\n────\nauto mode';
+      return '────\n❯\n────\n? for shortcuts';
+    },
+    wait: (ms) => waits.push(ms),
+  });
+  assert.equal(ready, true);
+  assert.equal(reads, 4);
+  assert.deepEqual(waits, [500, 500, 500]);
+  assert.equal(waitForAgentReady('demo', 'claude', {
+    herdr: () => ({ agent: { agent_status: 'idle' } }),
+    readText: () => CLAUDE_READY_SCREEN,
+    wait: () => assert.fail('auto mode is a valid Claude footer'),
+  }), true);
+});
+
+test('worker readiness uses a known status when a kind has no ready marker', () => {
+  for (const kind of ['pi', 'opencode', 'future-harness']) {
+    let reads = 0;
+    const ready = waitForAgentReady('demo', kind, {
+      herdr: () => ({ agent: { agent_status: 'blocked' } }),
+      readText: () => { reads++; return ''; },
+      wait: () => assert.fail(`${kind} should not wait after a known status`),
+    });
+    assert.equal(ready, true);
+    assert.equal(reads, 0);
+  }
+});
+
+test('worker start adds its own worker folder to allowed paths', () => {
+  const f = setupFixture(null);
+  const separate = startWorker('separate', { kind: 'codex', task: 'x', allow: ['src/'] }, {
+    config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+  });
+  assert.deepEqual(separate.allowedPaths, ['src/', '.worker/**']);
+  const shared = startWorker('shared', { kind: 'codex', task: 'x', allow: ['src/'], noWorktree: true }, {
+    config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+  });
+  assert.deepEqual(shared.allowedPaths, ['src/', '.worker/shared/**']);
+  assert.deepEqual(JSON.parse(fs.readFileSync(shared.recordFile, 'utf8')).allowedPaths, ['src/', '.worker/shared/**']);
+});
+
+test('worker start read-only mode needs no allow path and rejects one', () => {
+  const f = setupFixture(null);
+  const options = { config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {} };
+  assert.throws(() => runKitCommand('worker', ['start', 'read-only-conflict', '--kind', 'codex', '--task', 'x', '--read-only', '--allow', 'src/'], options), /--read-only cannot be used with --allow/);
+  const run = runKitCommand('worker', ['start', 'read-only', '--kind', 'codex', '--task', 'x', '--read-only'], options);
+  assert.equal(run.readOnly, true);
+  assert.deepEqual(run.allowedPaths, ['.worker/**']);
+  assert.equal(JSON.parse(fs.readFileSync(run.recordFile, 'utf8')).readOnly, true);
+  fs.writeFileSync(path.join(run.worktree, 'README.md'), 'changed outside the worker folder\n');
+  const reportDir = path.join(run.worktree, run.workerDir);
+  fs.writeFileSync(path.join(reportDir, 'report.md'), 'Status: done\n');
+  fs.writeFileSync(path.join(reportDir, 'report.json'), JSON.stringify({
+    issue: null, branch: run.branch, worktree: run.worktree, changedPaths: ['README.md'],
+    commands: ['check'], evidenceTier: ['unit'], unverified: [], stoppedEarly: false,
+  }));
+  assert.throws(() => collectWorker('read-only', {}, {
+    config: f.config, output: () => {}, listWorktreeProcesses: () => [],
+  }), /changed paths outside its allowed scope: README\.md/);
+});
+
+test('worker start sends after the ready wait and reports its timeout', () => {
+  const f = setupFixture(null);
+  let reads = 0;
+  const output = [];
+  const herdr = (args) => {
+    if (args[0] === 'agent' && args[1] === 'get') return { agent: { agent_status: 'idle' } };
+    return f.herdr(args);
+  };
+  startWorker('ready-timeout', { kind: 'claude', task: 'x', allow: ['src/'] }, {
+    config: f.config, models: loadModels(), herdr, env: f.env, rulesFile: f.rulesFile,
+    readText: () => { reads++; return 'Starting Claude...'; }, wait: () => {}, output: (line) => output.push(line),
+  });
+  assert.equal(reads, 91);
+  assert.ok(output.includes('Notice: ready-timeout did not show a ready prompt in 45 s; sent the brief anyway.'));
+  assert.ok(f.calls.includes('agent prompt'));
 });
 
 test('worker start resends a brief that never reached the agent', () => {
@@ -1692,17 +1804,95 @@ test('worker start resends a brief that never reached the agent', () => {
     if (args[0] === 'pane' && args[1] === 'list') return { panes: [{ pane_id: 'ws:p1', workspace_id: 'ws', tab_id: 'ws:t1', width: 160, height: 45 }] };
     if (args[0] === 'pane' && args[1] === 'split') return { pane: { pane_id: 'ws:p2' } };
     if (args[0] === 'agent' && args[1] === 'start') return {};
-    if (args[0] === 'agent' && args[1] === 'prompt') { prompts++; if (prompts === 1) throw new Error('agent_prompt_stalled'); return {}; }
+    if (args[0] === 'agent' && args[1] === 'prompt') { prompts++; if (prompts === 1) throw Object.assign(new Error('first agent_prompt_stalled'), { code: 'agent_prompt_stalled' }); return {}; }
     if (args[0] === 'agent' && args[1] === 'get') return { agent: { agent_status: 'idle' } };
     throw new Error(`Unexpected Herdr call: ${args.join(' ')}`);
   };
   const output = [];
   startWorker('demo', { kind: 'claude', task: 'x', allow: ['src/'] }, {
-    config, models: loadModels(), herdr, output: (line) => output.push(line), readText: () => '❯ ', wait: () => {},
+    config, models: loadModels(), herdr, output: (line) => output.push(line), readText: () => CLAUDE_READY_SCREEN, wait: () => {},
     env: { HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'ws', HERDR_PANE_ID: 'ws:orch' }, rulesFile,
   });
   assert.equal(prompts, 2);
-  assert.ok(output.some((line) => line.startsWith('Resent the brief prompt to demo')));
+  assert.ok(output.includes('Resent the brief prompt to demo after agent_prompt_stalled.'));
+});
+
+test('worker start waits for readiness before retrying a stalled brief prompt', () => {
+  const root = temporaryRepo();
+  const template = path.join(root, 'brief-template.md');
+  fs.writeFileSync(template, 'Worker {{name}}: {{task}}');
+  fs.writeFileSync(path.join(root, '.herdr-boss.json'), JSON.stringify({ briefTemplate: template }));
+  const config = loadProjectConfig({ cwd: root });
+  const rulesFile = path.join(root, 'rules.json');
+  fs.writeFileSync(rulesFile, JSON.stringify({ updatedAt: new Date().toISOString(), avoidKinds: [] }));
+  let promptCount = 0;
+  let reads = 0;
+  const waits = [];
+  const herdr = (args) => {
+    if (args[0] === 'pane' && args[1] === 'get') return args[2] === 'ws:orch'
+      ? { pane: { pane_id: 'ws:orch', workspace_id: 'ws', label: 'orch' } }
+      : { pane: { pane_id: args[2], workspace_id: 'ws', foreground_cwd: config.worktreePath('retry-ready') } };
+    if (args[0] === 'pane' && args[1] === 'process-info') return { process_info: { shell_pid: 10, foreground_process_group_id: 10 } };
+    if (args[0] === 'pane' && args[1] === 'read') return { text: '% ' };
+    if (args[0] === 'agent' && args[1] === 'list') return { agents: [] };
+    if (args[0] === 'tab' && args[1] === 'list') return { tabs: [{ tab_id: 'ws:t1', workspace_id: 'ws', label: 'Workers' }] };
+    if (args[0] === 'pane' && args[1] === 'list') return { panes: [{ pane_id: 'ws:p1', workspace_id: 'ws', tab_id: 'ws:t1', width: 160, height: 45 }] };
+    if (args[0] === 'pane' && args[1] === 'split') return { pane: { pane_id: 'ws:p2' } };
+    if (args[0] === 'agent' && args[1] === 'start') return {};
+    if (args[0] === 'agent' && args[1] === 'get') return { agent: { agent_status: 'idle' } };
+    if (args[0] === 'agent' && args[1] === 'prompt') {
+      promptCount++;
+      if (promptCount === 1) throw Object.assign(new Error('first agent_prompt_stalled'), { code: 'agent_prompt_stalled' });
+      return {};
+    }
+    throw new Error(`Unexpected Herdr call: ${args.join(' ')}`);
+  };
+  const output = [];
+  startWorker('retry-ready', { kind: 'claude', task: 'x', allow: ['src/'] }, {
+    config, models: loadModels(), herdr, output: (line) => output.push(line),
+    readText: () => ++reads === 1 || reads >= 4 ? CLAUDE_READY_SCREEN : 'Loading Claude...',
+    wait: (ms) => waits.push(ms),
+    env: { HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'ws', HERDR_PANE_ID: 'ws:orch' }, rulesFile,
+  });
+  assert.equal(promptCount, 2);
+  assert.equal(reads, 4);
+  assert.deepEqual(waits, [500, 500]);
+  assert.ok(output.includes('Resent the brief prompt to retry-ready after agent_prompt_stalled.'));
+});
+
+test('worker start reports both attempts when a stalled prompt retry fails', () => {
+  const root = temporaryRepo();
+  const template = path.join(root, 'brief-template.md');
+  fs.writeFileSync(template, 'Worker {{name}}: {{task}}');
+  fs.writeFileSync(path.join(root, '.herdr-boss.json'), JSON.stringify({ briefTemplate: template }));
+  const config = loadProjectConfig({ cwd: root });
+  const rulesFile = path.join(root, 'rules.json');
+  fs.writeFileSync(rulesFile, JSON.stringify({ updatedAt: new Date().toISOString(), avoidKinds: [] }));
+  let prompts = 0;
+  const herdr = (args) => {
+    if (args[0] === 'pane' && args[1] === 'get') return args[2] === 'ws:orch'
+      ? { pane: { pane_id: 'ws:orch', workspace_id: 'ws', label: 'orch' } }
+      : { pane: { pane_id: args[2], workspace_id: 'ws', foreground_cwd: config.worktreePath('double-stall') } };
+    if (args[0] === 'pane' && args[1] === 'process-info') return { process_info: { shell_pid: 10, foreground_process_group_id: 10 } };
+    if (args[0] === 'pane' && args[1] === 'read') return { text: '% ' };
+    if (args[0] === 'agent' && args[1] === 'list') return { agents: [] };
+    if (args[0] === 'tab' && args[1] === 'list') return { tabs: [{ tab_id: 'ws:t1', workspace_id: 'ws', label: 'Workers' }] };
+    if (args[0] === 'pane' && args[1] === 'list') return { panes: [{ pane_id: 'ws:p1', workspace_id: 'ws', tab_id: 'ws:t1', width: 160, height: 45 }] };
+    if (args[0] === 'pane' && args[1] === 'split') return { pane: { pane_id: 'ws:p2' } };
+    if (args[0] === 'agent' && args[1] === 'start') return {};
+    if (args[0] === 'agent' && args[1] === 'get') return { agent: { agent_status: 'idle' } };
+    if (args[0] === 'agent' && args[1] === 'prompt') {
+      prompts++;
+      throw Object.assign(new Error(`try-${prompts}-agent_prompt_stalled`), { code: 'agent_prompt_stalled' });
+    }
+    throw new Error(`Unexpected Herdr call: ${args.join(' ')}`);
+  };
+  assert.throws(() => startWorker('double-stall', { kind: 'claude', task: 'x', allow: ['src/'] }, {
+    config, models: loadModels(), herdr, output: () => {}, readText: () => CLAUDE_READY_SCREEN, wait: () => {},
+    env: { HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'ws', HERDR_PANE_ID: 'ws:orch' }, rulesFile,
+  }), (error) => /try-1-agent_prompt_stalled/.test(error.message)
+    && /try-2-agent_prompt_stalled/.test(error.message));
+  assert.equal(prompts, 2);
 });
 
 test('worker start load warning names the load, the limit, and the actions', async () => {
@@ -1813,6 +2003,8 @@ function setupFixture(setup) {
     if (args[0] === 'pane' && args[1] === 'list') return { panes: [{ pane_id: 'ws:p1', workspace_id: 'ws', tab_id: 'ws:t1', width: 160, height: 45 }] };
     if (args[0] === 'pane' && args[1] === 'split') { paneCwd = args[args.indexOf('--cwd') + 1]; return { pane: { pane_id: 'ws:p2' } }; }
     if (args[0] === 'pane' && args[1] === 'close') return {};
+    if (args[0] === 'agent' && args[1] === 'get') return { agent: { agent_status: 'idle' } };
+    if (args[0] === 'agent' && args[1] === 'read') return { text: ALL_READY_SCREENS };
     if (args[0] === 'agent' && (args[1] === 'start' || args[1] === 'prompt')) return {};
     throw new Error(`Unexpected Herdr call: ${args.join(' ')}`);
   };
@@ -2107,14 +2299,14 @@ test('worker allow records verified scope extensions and appends history without
   const first = allowWorkerScope('scope-ext', { paths: ['docs/a.md', 'test/'], reason: 'docs needed' }, {
     config: f.config, herdr: f.herdr, env: f.env, now: Date.parse('2026-09-26T10:00:00Z'), output: () => {},
   });
-  assert.deepEqual(first.allowedPaths, ['src/', 'docs/a.md', 'test/']);
+  assert.deepEqual(first.allowedPaths, ['src/', '.worker/scope-ext/**', 'docs/a.md', 'test/']);
   assert.deepEqual(first.scopeExtensions, [{
     paths: ['docs/a.md', 'test/'], reason: 'docs needed', at: '2026-09-26T10:00:00.000Z', by: 'ws:orch',
   }]);
   const second = allowWorkerScope('scope-ext', { paths: ['src/', 'docs/b.md'], reason: 'more docs' }, {
     config: f.config, herdr: f.herdr, env: f.env, now: Date.parse('2026-09-26T10:05:00Z'), output: () => {},
   });
-  assert.deepEqual(second.allowedPaths, ['src/', 'docs/a.md', 'test/', 'docs/b.md']);
+  assert.deepEqual(second.allowedPaths, ['src/', '.worker/scope-ext/**', 'docs/a.md', 'test/', 'docs/b.md']);
   assert.equal(second.scopeExtensions.length, 2);
   assert.deepEqual(second.scopeExtensions[1], {
     paths: ['src/', 'docs/b.md'], reason: 'more docs', at: '2026-09-26T10:05:00.000Z', by: 'ws:orch',
@@ -2255,7 +2447,7 @@ test('worker allow CLI parses paths and reason and rejects missing or unknown op
   const options = { config: f.config, herdr: f.herdr, env: f.env, output: () => {} };
   runKitCommand('worker', ['allow', 'scope-cli', 'docs/a.md', 'docs/b.md', '--reason', 'docs approval'], options);
   const record = JSON.parse(fs.readFileSync(path.join(f.config.runsPath, 'scope-cli.json'), 'utf8'));
-  assert.deepEqual(record.allowedPaths, ['src/', 'docs/a.md', 'docs/b.md']);
+  assert.deepEqual(record.allowedPaths, ['src/', '.worker/scope-cli/**', 'docs/a.md', 'docs/b.md']);
   assert.equal(record.scopeExtensions[0].reason, 'docs approval');
   assert.throws(() => runKitCommand('worker', ['allow', 'scope-cli', '--reason', 'r'], options), /Usage: worker allow/);
   assert.throws(() => runKitCommand('worker', ['allow', 'scope-cli', 'docs/a.md'], options), /needs --reason/);
@@ -2669,6 +2861,8 @@ test('worker start gives the pane absolute TMPDIR and HERDR_WORKTREE paths and c
       paneCwd = args[args.indexOf('--cwd') + 1];
       return { pane: { pane_id: 'ws:p2' } };
     }
+    if (args[0] === 'agent' && args[1] === 'get') return { agent: { agent_status: 'idle' } };
+    if (args[0] === 'agent' && args[1] === 'read') return { text: ALL_READY_SCREENS };
     if (args[0] === 'agent' && (args[1] === 'start' || args[1] === 'prompt')) return {};
     throw new Error(`Unexpected Herdr call: ${args.join(' ')}`);
   };
@@ -2717,6 +2911,7 @@ test('the worker brief template uses absolute worker paths and the kit names no 
     assert.doesNotMatch(text, /herdr-boss lock acquire full-suite/, file);
   }
   const projectKit = fs.readFileSync(path.resolve('kit/templates/project-kit.md'), 'utf8');
+  assert.match(projectKit, /Use `--read-only` for a task that changes no repository file\./);
   assert.match(projectKit, /Run each `herdr-boss browser` command and each `ps` or `pgrep` command alone\. Do not join it to other commands with `&&`, `;`, or a pipe\./);
   const userGuide = fs.readFileSync(path.resolve('docs/user-guide.md'), 'utf8');
   assert.match(userGuide, fullSuiteLockRule);
@@ -2733,6 +2928,7 @@ test('the orchestrator skill stays short and links each reference file', () => {
   const words = skill.split(/\s+/).filter(Boolean).length;
   assert.ok(words >= 2300 && words <= 2700, `SKILL.md has ${words} words`);
   assert.match(skill, /^---\nname: herdr-orchestrator\ndescription: Use when /);
+  assert.match(skill, /Use `--read-only` for a task that changes no repository file\./);
   const references = ['herdr-control.md', 'machine-and-quota.md', 'handover.md', 'ledger-and-evidence.md'];
   for (const name of references) assert.match(skill, new RegExp(`^- \\[reference/${name.replace('.', '\\.')}\\]\\(reference/${name.replace('.', '\\.')}\\): read `, 'm'), name);
   assert.match(skill, /\]\(\.\.\/\.\.\/models\.md\)/);

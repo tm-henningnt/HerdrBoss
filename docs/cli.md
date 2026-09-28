@@ -138,7 +138,8 @@ A Codex tool shell can run under a shared app-server daemon with another environ
 |---|---|
 | `--kind KIND` | Required. `codex`, `claude`, `opencode`, or `pi`. |
 | `--task TEXT` or `--task-file FILE` | Required. The work order for the brief. |
-| `--allow PATH` | A path that the worker may change. Repeat for each path. |
+| `--allow PATH` | A repository path that the worker may change. Repeat for each path. The worker can write its own `.worker/` folder without this option. |
+| `--read-only` | Allow changes in the worker's own folder only. Use this option when the task changes no repository file. Do not use it with `--allow`. |
 | `--copy PATH` | Copy a regular repository file into `.worker/inputs/` before the agent starts. Repeat for each file. Keep its repository subdirectories. |
 | `--lease POOL` | Lease one item of a resource pool for the worker. Repeat for each pool. See [Resource leases](#resource-leases). |
 | `--model MODEL` | A model from `herdr-boss models`. The default is the kind's default model. |
@@ -180,7 +181,7 @@ herdr-boss worker start fix-74 --kind claude --task-file brief.md --allow src/pa
 | `worker unpark NAME` | Clear the park mark. |
 | `worker allow NAME PATH... --reason TEXT` | Approve extra paths for a running worker after a `WORKER QUESTION`. |
 
-`worker collect` checks artifacts when a `report.md` line starts with `Status: done` and the next character is whitespace, punctuation, or the end of the line. It accepts lines such as `Status: done.` and `Status: done — checks complete`. It ignores `Status: doneish`, `Status: done-partial`, `Status: partial`, and `Status: failed`. It compares the newest matching source file with the oldest matching artifact file. It warns when a source is newer or when sources match but no artifacts do. It prints each warning and includes the warnings in the `artifactWarnings` summary field. A warning does not change the independent gate result. The orchestrator decides whether the gate passed.
+`worker collect` checks changed paths against the paths in the run record. It ignores the worker's `.worker/` folder. It checks artifacts when a `report.md` line starts with `Status: done` and the next character is whitespace, punctuation, or the end of the line. It accepts lines such as `Status: done.` and `Status: done — checks complete`. It ignores `Status: doneish`, `Status: done-partial`, `Status: partial`, and `Status: failed`. It compares the newest matching source file with the oldest matching artifact file. It warns when a source is newer or when sources match but no artifacts do. It prints each warning and includes the warnings in the `artifactWarnings` summary field. A warning does not change the independent gate result. The orchestrator decides whether the gate passed.
 
 ### Project locks
 

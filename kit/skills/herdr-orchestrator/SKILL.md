@@ -103,7 +103,7 @@ Read each file in the skill folder when its step comes:
 
 - Run at most one full suite per project at a time. Queue the next full suite until the current one ends.
 - Tell workers to run focused tests while they work. Run the full suite yourself once per integration.
-- Give every worker brief a thread limit of two for its test runner. Set `testThreadsFlag` in `.herdr-boss.json` to the flag that works for the project's test runner. `worker start` puts it in every brief.
+- Set `testThreadsFlag` in `.herdr-boss.json` to the project's two-thread flag. `worker start` adds it to every brief.
 - Find the flag for each runner in [the machine and quota rules](reference/machine-and-quota.md).
 
 ## Starting a worker
@@ -119,11 +119,13 @@ Read each file in the skill folder when its step comes:
 - Create the worker through the kit command:
 
 ```sh
-herdr-boss worker start <name> --kind <kind> --task-file <file> --allow <path>
+herdr-boss worker start <name> --kind <kind> --task-file <file> [--allow <path> | --read-only]
 ```
 
+Use `--read-only` for a task that changes no repository file.
+
 - Read [the Herdr control surface](reference/herdr-control.md) for the options of `worker start`.
-- Read the command result and verify the name, branch, worktree, pane, and brief.
+- Verify the name, branch, worktree, pane, and brief.
 - Check that the worker's pane uses the intended worktree before sending more instructions.
 
 ## The brief contract
