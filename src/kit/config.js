@@ -113,9 +113,22 @@ export function findGitRoot(cwd = process.cwd()) {
   }
 }
 
+// The main checkout of a linked worktree: the folder that holds its shared .git folder. For the main
+// checkout itself, and when git cannot tell, this is root.
+export function mainCheckoutRoot(root) {
+  try {
+    const common = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: root, encoding: 'utf8' }).trim();
+    return path.basename(common) === '.git' ? path.dirname(common) : root;
+  } catch { return root; }
+}
+
 export function loadProjectConfig({ cwd = process.cwd(), file = '.herdr-boss.json', home = os.homedir() } = {}) {
   const root = findGitRoot(cwd);
-  const configPath = path.resolve(root, file);
+  // A worker worktree can lack an untracked .herdr-boss.json. Then the main checkout's file and name apply,
+  // so a worktree folder name never becomes the project slug.
+  const mainRoot = mainCheckoutRoot(root);
+  const ownPath = path.resolve(root, file);
+  const configPath = mainRoot !== root && !fs.existsSync(ownPath) ? path.resolve(mainRoot, file) : ownPath;
   let user = {};
   try {
     user = JSON.parse(fs.readFileSync(configPath, 'utf8'));
@@ -128,7 +141,7 @@ export function loadProjectConfig({ cwd = process.cwd(), file = '.herdr-boss.jso
   }
   if (user.slug !== undefined && (typeof user.slug !== 'string' || user.slug.trim() === '')) throw new Error('slug must be a non-empty string.');
   if (user.briefTemplate !== undefined && user.briefTemplate !== null && (typeof user.briefTemplate !== 'string' || user.briefTemplate.trim() === '')) throw new Error('briefTemplate must be a non-empty path or null.');
-  const repo = path.basename(root);
+  const repo = path.basename(mainRoot);
   const config = {
     ...PROJECT_DEFAULTS,
     ...user,
@@ -159,6 +172,7 @@ export function loadProjectConfig({ cwd = process.cwd(), file = '.herdr-boss.jso
   return {
     ...config,
     root,
+    mainRoot,
     repo,
     configPath,
     worktreeParent,

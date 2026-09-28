@@ -12,47 +12,36 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const LABEL = 'no.tallmaker.herdr-boss';
 const PLIST = path.join(os.homedir(), 'Library', 'LaunchAgents', `${LABEL}.plist`);
 
-async function verifyBrowserCaller(slug, { env = process.env, herdr = null, config = null } = {}) {
-  if (!env.HERDR_PANE_ID && !env.HERDR_WORKSPACE_ID) {
+// Browser ownership follows the Herdr workspace. Any pane in a project's workspace may change that project's
+// browser. The Boss (the pane labeled boss, or any pane in the Boss workspace) may change every browser.
+async function verifyBrowserCaller(slug, { env = process.env, herdr = null } = {}) {
+  const paneId = env.HERDR_PANE_ID;
+  const workspaceId = env.HERDR_WORKSPACE_ID;
+  if (!paneId && !workspaceId) {
     console.error('Warning: no Herdr pane; the project check is skipped.');
     return;
   }
-
-  const { createHerdrRunner, verifyCallerPane } = await import('./kit/workers.js');
+  if (!paneId || !workspaceId) throw new Error('Set both HERDR_PANE_ID and HERDR_WORKSPACE_ID, or neither.');
+  const { createHerdrRunner } = await import('./kit/workers.js');
   const runner = herdr ?? createHerdrRunner();
-  let projectConfig = config;
-  let callerRole = null;
   let pane;
-
   try {
-    const caller = verifyCallerPane(env, runner, null);
-    const response = runner(['pane', 'get', caller.paneId]);
+    const response = runner(['pane', 'get', paneId]);
     pane = response?.pane ?? response;
-    callerRole = pane.label === 'boss' ? 'boss' : 'project';
-  } catch (error) {
-    const paneId = env.HERDR_PANE_ID;
-    const workspaceId = env.HERDR_WORKSPACE_ID;
-    if (!paneId || !workspaceId) throw error;
-
-    try {
-      const response = runner(['pane', 'get', paneId]);
-      pane = response?.pane ?? response;
-    } catch { throw error; }
-    const returnedId = pane.pane_id ?? pane.paneId ?? pane.id;
-    const paneWorkspace = pane.workspace_id ?? pane.workspaceId ?? pane.workspace;
-    if (returnedId !== paneId || paneWorkspace !== workspaceId) throw error;
-
-    const { hasLiveWorkerRun } = await import('./kit/locks.js');
-    projectConfig ??= loadProjectConfig();
-    if (!hasLiveWorkerRun(paneId, projectConfig.root)) throw error;
-    callerRole = 'project';
-  }
-
-  if (callerRole === 'boss') return;
-  projectConfig ??= loadProjectConfig();
-  if (projectConfig.slug !== slug) {
-    throw new Error(`The ${slug} browser belongs to project ${slug}, and this pane runs in project ${projectConfig.slug}. Only that project or the Boss can change it.`);
-  }
+  } catch (error) { throw new Error(`Herdr could not read pane ${paneId}: ${error.message}`); }
+  const returnedId = pane?.pane_id ?? pane?.paneId ?? pane?.id;
+  const paneWorkspace = pane?.workspace_id ?? pane?.workspaceId ?? pane?.workspace;
+  if (returnedId !== paneId || paneWorkspace !== workspaceId) throw new Error(`Herdr does not confirm pane ${paneId} in workspace ${workspaceId}.`);
+  if (pane.label === 'boss') return;
+  let control = {};
+  try { control = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'rules.json'), 'utf8'))?.control || {}; }
+  catch (error) { if (error.code !== 'ENOENT') throw new Error(`Could not read the Herdr Boss rules: ${error.message}`); }
+  const entry = (control.workspaces || []).find((workspace) => workspace.workspace === paneWorkspace);
+  if (entry?.boss) return;
+  const owner = entry?.slug ?? Object.entries(control.projects || {}).find(([, project]) => project?.workspace === paneWorkspace)?.[0] ?? null;
+  if (owner === slug) return;
+  const where = entry?.label ? `${entry.label} (${paneWorkspace})` : paneWorkspace;
+  throw new Error(`The ${slug} browser belongs to project ${slug}. This pane is in workspace ${where}, ${owner ? `which belongs to project ${owner}` : 'which belongs to no project'}. Only a pane in the ${slug} workspace or the Boss can change it.`);
 }
 
 const USAGE = `herdr-boss <command>

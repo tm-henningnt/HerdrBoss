@@ -374,3 +374,24 @@ test('a stale worker lock is taken over after the worker pane is gone', (t) => {
   assert.ok(f.lines.some((line) => /NOTICE.*stale lock full-suite.*ws:worker/i.test(line)), f.lines.join('\n'));
   runKitCommand('lock', ['release', 'full-suite'], f.options());
 });
+
+test('a worker in a .herdr-wt worktree without its own project file takes the lock for the main project', (t) => {
+  const f = fixture(t, 'herdr-worker-herdrwt-');
+  // Projects that git-ignore .herdr-boss.json leave the worker worktree without a copy.
+  fs.writeFileSync(path.join(f.root, '.herdr-boss.json'), JSON.stringify({ slug: 'tmalpha' }));
+  const worktree = path.join(f.base, 'Projects', '.herdr-wt', 'Alpha', 'pm1tube');
+  fs.mkdirSync(path.dirname(worktree), { recursive: true });
+  git(f.root, 'worktree', 'add', '-b', 'pm1tube', worktree, 'main');
+  const runsDir = path.join(f.root, '.orchestration', 'runs');
+  fs.mkdirSync(runsDir, { recursive: true });
+  fs.writeFileSync(path.join(runsDir, 'pm1tube.json'), JSON.stringify({
+    name: 'pm1tube', kind: 'codex', model: 'gpt-6-luna', worktree, pane: 'ws:worker', startedAt: '2026-09-27T10:00:00.000Z',
+  }));
+  f.livePanes.push('ws:worker');
+  const workerConfig = loadProjectConfig({ cwd: worktree });
+  assert.equal(workerConfig.slug, 'tmalpha');
+  const acquired = runKitCommand('lock', ['acquire', 'full-suite', '--wait', '5'], f.options('ws:worker', workerConfig));
+  assert.equal(acquired.ownerPane, 'ws:worker');
+  assert.equal(acquired.project, 'tmalpha');
+  runKitCommand('lock', ['release', 'full-suite'], f.options('ws:worker', workerConfig));
+});

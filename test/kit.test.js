@@ -2765,3 +2765,25 @@ test('a worker report can carry an optional tool suggestion', () => {
   assert.ok(brief.includes('"toolSuggestion": null'));
   assert.ok(brief.includes('**Tool suggestion**'));
 });
+
+test('project config in a .herdr-wt worker worktree resolves the main checkout project', () => {
+  const main = temporaryRepo('herdr-kit-main-');
+  // The project file is untracked, as in projects that git-ignore it, so the worktree has no copy.
+  fs.writeFileSync(path.join(main, '.herdr-boss.json'), JSON.stringify({ slug: 'tmalpha' }));
+  const worktree = path.join(fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-kit-wt-'))), 'Projects', '.herdr-wt', 'Alpha', 'pm1tube');
+  fs.mkdirSync(path.dirname(worktree), { recursive: true });
+  git(main, 'worktree', 'add', '-q', '-b', 'pm1tube', worktree);
+  assert.equal(fs.existsSync(path.join(worktree, '.herdr-boss.json')), false);
+  const config = loadProjectConfig({ cwd: worktree });
+  assert.equal(config.slug, 'tmalpha');
+  assert.equal(config.root, worktree);
+  assert.equal(config.mainRoot, main);
+  assert.equal(config.repo, path.basename(main));
+  assert.equal(config.configPath, path.join(main, '.herdr-boss.json'));
+  // Without any project file, the main checkout name is the slug, never the worktree folder name.
+  fs.rmSync(path.join(main, '.herdr-boss.json'));
+  assert.equal(loadProjectConfig({ cwd: worktree }).slug, path.basename(main).toLowerCase());
+  // A worktree with its own tracked file keeps that file.
+  fs.writeFileSync(path.join(worktree, '.herdr-boss.json'), JSON.stringify({ slug: 'own' }));
+  assert.equal(loadProjectConfig({ cwd: worktree }).slug, 'own');
+});

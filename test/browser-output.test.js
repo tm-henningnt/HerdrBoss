@@ -46,7 +46,12 @@ function browserCliFixture(t) {
     alpha: { project: 'alpha', port: 1, profile: path.join(dataDir, 'browser-profiles', 'alpha'), headless: true, windowSize: { width: 1280, height: 800 }, bookmarks: [], startPage: null },
     beta: { project: 'beta', port: 1, profile: path.join(dataDir, 'browser-profiles', 'beta'), headless: true, windowSize: { width: 1280, height: 800 }, bookmarks: [], startPage: null },
   }));
-  fs.writeFileSync(path.join(bin, 'herdr'), `#!${process.execPath}\nconst args = process.argv.slice(2);\nif (args[0] !== 'pane' || args[1] !== 'get') process.exit(2);\nconst id = args[2];\nconst label = id === 'boss-pane' ? 'boss' : id === 'worker-pane' ? 'worker' : 'orch';\nconsole.log(JSON.stringify({ result: { pane: { pane_id: id, workspace_id: process.env.HERDR_WORKSPACE_ID, label } } }));\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(dataDir, 'rules.json'), JSON.stringify({ control: { workspaces: [
+    { slug: 'alpha', workspace: 'workspace-alpha', label: 'Alpha', boss: false },
+    { slug: 'beta', workspace: 'workspace-beta', label: 'Beta', boss: false },
+    { slug: 'boss', workspace: 'workspace-boss', label: 'Boss', boss: true },
+  ] } }));
+  fs.writeFileSync(path.join(bin, 'herdr'), `#!${process.execPath}\nconst args = process.argv.slice(2);\nif (args[0] !== 'pane' || args[1] !== 'get') process.exit(2);\nconst id = args[2];\nconst label = id === 'boss-pane' ? 'boss' : id === 'worker-pane' ? 'worker' : id === 'helper-pane' ? undefined : 'orch';\nconsole.log(JSON.stringify({ result: { pane: { pane_id: id, workspace_id: process.env.HERDR_WORKSPACE_ID, label } } }));\n`, { mode: 0o755 });
   t.after(() => fs.rmSync(base, { recursive: true, force: true }));
   const envFor = ({ pane = 'orch-pane', workspace = 'workspace-alpha' } = {}) => {
     const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, HOME: home, HERDR_BOSS_DIR: dataDir };
@@ -58,7 +63,7 @@ function browserCliFixture(t) {
     return env;
   };
   const run = (args, options = {}) => spawnSync(process.execPath, [CLI, 'browser', ...args], {
-    cwd: root,
+    cwd: options.cwd ?? root,
     env: envFor(options),
     encoding: 'utf8',
   });
@@ -69,7 +74,7 @@ test('browser CLI refuses a project orchestrator changing another project browse
   const fixture = browserCliFixture(t);
   const result = fixture.run(['size', 'beta', '1200', '700']);
   assert.equal(result.status, 1, result.stderr);
-  assert.equal(result.stderr.trim(), 'The beta browser belongs to project beta, and this pane runs in project alpha. Only that project or the Boss can change it.');
+  assert.equal(result.stderr.trim(), 'The beta browser belongs to project beta. This pane is in workspace Alpha (workspace-alpha), which belongs to project alpha. Only a pane in the beta workspace or the Boss can change it.');
 });
 
 test('browser CLI allows the caller project and the Boss to change project browsers', (t) => {
@@ -108,7 +113,7 @@ test('browser request checks the caller before reserving another project browser
   const fixture = browserCliFixture(t);
   const result = fixture.run(['request', 'beta', '--reserve']);
   assert.equal(result.status, 1, result.stderr);
-  assert.equal(result.stderr.trim(), 'The beta browser belongs to project beta, and this pane runs in project alpha. Only that project or the Boss can change it.');
+  assert.equal(result.stderr.trim(), 'The beta browser belongs to project beta. This pane is in workspace Alpha (workspace-alpha), which belongs to project alpha. Only a pane in the beta workspace or the Boss can change it.');
   assert.equal(JSON.parse(fs.readFileSync(path.join(fixture.dataDir, 'browser-sessions.json'), 'utf8')).beta.port, 1);
 });
 
@@ -119,5 +124,39 @@ test('browser CLI identifies a worker by its live pane and worktree record', (t)
   fs.writeFileSync(path.join(runs, 'worker-a.json'), JSON.stringify({ name: 'worker-a', pane: 'worker-pane', worktree: fixture.root }));
   const result = fixture.run(['size', 'beta', '1200', '700'], { pane: 'worker-pane', workspace: 'workspace-alpha' });
   assert.equal(result.status, 1, result.stderr);
-  assert.equal(result.stderr.trim(), 'The beta browser belongs to project beta, and this pane runs in project alpha. Only that project or the Boss can change it.');
+  assert.equal(result.stderr.trim(), 'The beta browser belongs to project beta. This pane is in workspace Alpha (workspace-alpha), which belongs to project alpha. Only a pane in the beta workspace or the Boss can change it.');
+});
+
+test('browser CLI allows an unlabeled pane in the project workspace', (t) => {
+  const fixture = browserCliFixture(t);
+  const result = fixture.run(['size', 'alpha', '1200', '700'], { pane: 'helper-pane', workspace: 'workspace-alpha' });
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('browser CLI refuses a pane in another project workspace, whatever its cwd config', (t) => {
+  const fixture = browserCliFixture(t);
+  // The cwd config says alpha, but the pane sits in the beta workspace, so the workspace decides.
+  const own = fixture.run(['size', 'beta', '1200', '700'], { pane: 'helper-pane', workspace: 'workspace-beta' });
+  assert.equal(own.status, 0, own.stderr);
+  const other = fixture.run(['size', 'alpha', '1200', '700'], { pane: 'helper-pane', workspace: 'workspace-beta' });
+  assert.equal(other.status, 1, other.stderr);
+  assert.equal(other.stderr.trim(), 'The alpha browser belongs to project alpha. This pane is in workspace Beta (workspace-beta), which belongs to project beta. Only a pane in the alpha workspace or the Boss can change it.');
+});
+
+test('browser CLI allows any pane in the Boss workspace', (t) => {
+  const fixture = browserCliFixture(t);
+  const result = fixture.run(['size', 'beta', '1200', '700'], { pane: 'helper-pane', workspace: 'workspace-boss' });
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('browser CLI allows a worker in a shared .herdr-wt worktree by its workspace alone', (t) => {
+  const fixture = browserCliFixture(t);
+  // A worker worktree under ~/Projects/.herdr-wt/<repo>/<name> has no run record that matches its cwd.
+  const worktree = path.join(fixture.base, 'Projects', '.herdr-wt', 'Alpha', 'w1');
+  fs.mkdirSync(worktree, { recursive: true });
+  const own = fixture.run(['size', 'alpha', '1200', '700'], { pane: 'worker-pane', workspace: 'workspace-alpha', cwd: worktree });
+  assert.equal(own.status, 0, own.stderr);
+  const other = fixture.run(['size', 'beta', '1200', '700'], { pane: 'worker-pane', workspace: 'workspace-alpha', cwd: worktree });
+  assert.equal(other.status, 1, other.stderr);
+  assert.match(other.stderr, /belongs to project beta\. This pane is in workspace Alpha \(workspace-alpha\)/);
 });

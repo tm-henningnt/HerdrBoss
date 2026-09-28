@@ -2,7 +2,7 @@
 
 Each project has its own persistent Chrome profile and debugging port. Ask the orchestrator for the project slug, then request its browser with `herdr-boss browser request <slug>`. Read the tab list before acting:
 
-In a Herdr pane, change only the browser of the project in that pane's worktree. The Boss pane can change any project browser. This rule covers browser requests, size changes, close, release, restart, tab changes, page navigation and input, and bookmark changes. The CLI checks the pane and its project. The commands `list`, `tabs`, `screenshot`, and `bookmarks <slug> list` only read data. They can read any project browser. A plain terminal with no Herdr pane keeps its current behavior. The CLI prints a warning and skips the project check.
+Herdr Boss decides browser ownership by the Herdr workspace. Any pane in a project's workspace can change that project's browser, also an unlabeled pane and a worker. The Boss pane and every pane in the Boss workspace can change any project browser. This rule covers browser requests, size changes, close, release, restart, tab changes, page navigation and input, and bookmark changes. A refusal names the pane's workspace and the browser's project. A plain terminal outside Herdr skips the check with a warning.
 
 ```sh
 herdr-boss browser tabs <slug>
