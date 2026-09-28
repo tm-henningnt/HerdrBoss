@@ -5,12 +5,13 @@ const $nav = document.getElementById('primary-nav');
 const $roamgate = document.getElementById('roamgate-link');
 const $navMenu = document.getElementById('nav-menu');
 const $navMenuLabel = document.getElementById('nav-menu-label');
-const NAV_LABEL = { overview: 'Overview', mailbox: 'Mailbox', projects: 'Projects', allocation: 'Allocation', organization: 'Organization', settings: 'Settings', agents: 'Agents', browsers: 'Browsers', analytics: 'Analytics', logs: 'Logs' };
+const NAV_LABEL = { overview: 'Overview', mailbox: 'Mailbox', agents: 'Agents', projects: 'Projects', browsers: 'Browsers', allocation: 'Allocation', analytics: 'Analytics', logs: 'Logs', settings: 'Settings' };
 const settingsLink = document.createElement('a');
 settingsLink.href = '/settings';
 settingsLink.dataset.nav = 'settings';
 settingsLink.textContent = 'Settings';
-$nav.insertBefore(settingsLink, $nav.querySelector('[data-nav="allocation"]')?.nextSibling || null);
+// Settings goes after Logs and before Roamgate. Roamgate stays the last entry when it is shown.
+$nav.insertBefore(settingsLink, $roamgate);
 function setNavMenu(open) {
   $nav.classList.toggle('open', open);
   $navMenu.setAttribute('aria-expanded', String(open));
@@ -1080,9 +1081,13 @@ function analyticsView(s) {
 }
 
 function agentsView(s) {
+  const view = agentsViewMode();
+  const chart = view === 'chart';
+  const viewSwitch = `<div class="agents-view-switch" role="group" aria-label="Agents view">${[['chart', 'Chart'], ['list', 'List']].map(([key, label]) => `<button type="button" data-agents-view="${key}" aria-pressed="${view === key}">${label}</button>`).join('')}</div>`;
+  const styleSwitch = `<div class="org-style-switch" role="group" aria-label="Chart style">${['plain', 'cards'].map((style) => `<button type="button" data-org-style="${style}" aria-pressed="${orgStyle === style}">${style === 'plain' ? 'Plain' : 'Cards'}</button>`).join('')}</div>`;
   return [
-    '<header class="page-intro"><div><h1>Live agents</h1><p>Orchestrators and workers across the open Herdr workspaces.</p></div></header>',
-    agentInventory(s),
+    `<header class="page-intro"><div><h1>Agents</h1><p>Chart or list of the Owner, the Boss, project orchestrators, and workers. Use the switch to change the view.</p></div><div class="page-switches">${viewSwitch}${chart ? styleSwitch : ''}</div></header>`,
+    chart ? organizationChart(s) : agentInventory(s),
   ].join('');
 }
 
@@ -1662,6 +1667,23 @@ function setOrgStyle(style) {
   orgStyle = style === 'cards' ? 'cards' : 'plain';
   try { localStorage.setItem(ORG_STYLE_KEY, orgStyle); } catch {}
 }
+// The Agents page has a Chart view (the organization chart) and a List view (the agent inventory).
+// Chart is the default. The URL holds the current view, and only this browser remembers the last choice.
+const AGENTS_VIEW_KEY = 'herdr-boss.agentsView';
+function storedAgentsView() {
+  try { return localStorage.getItem(AGENTS_VIEW_KEY) === 'list' ? 'list' : 'chart'; } catch { return 'chart'; }
+}
+function agentsViewMode() {
+  const view = new URLSearchParams(location.search).get('view');
+  return view === 'list' || view === 'chart' ? view : storedAgentsView();
+}
+function setAgentsView(view) {
+  const next = view === 'list' ? 'list' : 'chart';
+  try { localStorage.setItem(AGENTS_VIEW_KEY, next); } catch {}
+  const url = new URL(location.href);
+  url.searchParams.set('view', next);
+  history.replaceState(null, '', `${url.pathname}${url.search}`);
+}
 const ORG_STATES = ['working', 'blocked', 'failed', 'idle', 'done'];
 const HARNESS_MARK = {
   claude: '<svg viewBox="0 0 16 16"><path d="M8 1.5v13M1.5 8h13M3.4 3.4l9.2 9.2M12.6 3.4l-9.2 9.2"/></svg>',
@@ -1797,7 +1819,7 @@ function orgReserve(s, successor, ownerId) {
   })}</div>`;
 }
 
-function organizationView(s) {
+function organizationChart(s) {
   const panes = s.herdr?.panes || [];
   const agents = panes.filter((p) => p.agent);
   // A successor of an active handoff record and a previous orchestrator are not workers. A successor shows as a reserve only after the prepared and live checks.
@@ -1851,7 +1873,6 @@ function organizationView(s) {
   }).join('');
 
   return [
-    `<header class="page-intro"><div><h1>Organization</h1><p>Chart of the Owner, the Boss, project orchestrators, and workers. Select <b>Details</b> on a node to see its recorded values. Select <b>Messages</b> to write to the Boss or an orchestrator.</p></div><div class="org-style-switch" role="group" aria-label="Chart style">${['plain', 'cards'].map((style) => `<button type="button" data-org-style="${style}" aria-pressed="${orgStyle === style}">${style === 'plain' ? 'Plain' : 'Cards'}</button>`).join('')}</div></header>`,
     `<section class="org-chart${orgStyle === 'cards' ? ' org-cards' : ''}" aria-label="Organization chart">
       <ol class="org-tier" aria-label="Owner"><li>${ownerNode}</li></ol>
       <ol class="org-tier" aria-label="Boss"><li><div class="org-lead">${bossNode}${orgReserve(s, bossSuccessor, 'boss')}</div>${boss ? `<div class="org-boss-workers"><h2>Boss workspace workers <span class="sub">${bossWorkers.length}</span></h2>${orgWorkers(s, bossWorkers, null, 'boss')}</div>` : ''}</li></ol>
@@ -2443,14 +2464,15 @@ const HELP = {
     <p>Disk free space is measured on the filesystem that contains the Herdr Boss data directory. The warning threshold defaults to 20 GB free. The critical threshold defaults to 5 GB free. Free percent is information only. Herdr Boss shows it to one decimal place. Disk notices go to the project orchestrator when that project has linked worker worktrees. They include linked and prunable counts.</p>
     <p>When the guard is active, Herdr Boss blocks a worker start if total sampled CPU exceeds its configured limit or the 5-minute load average exceeds its configured backstop. Leave the away CPU limit or either load backstop blank to disable that threshold.</p>
     <p>Changes stay in a draft until you select <b>Apply policy</b>. A rejected save shows the server error and keeps your draft.</p>`],
-  organization: ['Organization', `
-    <p>A chart of the organization, from top to bottom: the Owner, the Boss, one orchestrator for each project, and the workers under each orchestrator. The page cannot change resources. Use Settings for resources.</p>
+  agents: ['Agents', `
+    <p>One page with two views. The switch at the top changes the view. The <b>Chart</b> view shows the organization from the Owner down to the workers. The <b>List</b> view lists every Herdr workspace with its orchestrator and workers. Chart is the default. The URL holds the view as <code>?view=chart</code> or <code>?view=list</code>, and this browser remembers the last choice.</p>
+    <h3>Chart</h3><p>A chart of the organization, from top to bottom: the Owner, the Boss, one orchestrator for each project, and the workers under each orchestrator. The page cannot change resources. Use Settings for resources.</p>
     <h3>Nodes</h3><p><b>Owner</b> shows <b>At the Mac</b> or <b>Away</b> from the machine idle time. <b>Boss</b> shows the pane labeled <code>boss</code>, its harness and state, the quota use of a Codex or Claude harness, and the handover state. The Boss workspace workers are below the Boss.</p>
     <p>Each project node shows the orchestrator pane, harness, and state, the first published task with status <b>doing</b>, the worker slots in use against the slots and share, and the handover state. The projects use the project order. A workspace marked not a project has no node.</p>
     <p>A worker node shows the agent name, harness, and state. The task ID comes from the published task whose <b>worker</b> field names that agent.</p>
     <h3>Reserve</h3><p>A <b>reserve</b> node shows a prepared successor. It appears only when a handoff record is prepared, its source is the current orchestrator or Boss pane, and the successor pane is live. A recommended successor is not a reserve.</p>
     <h3>Details</h3><p>Select <b>Details</b> on a node to show its recorded values. Select <b>Hide details</b> to close them.</p>
-    <h3>Style</h3><p>The switch at the top selects the <b>Plain</b> and <b>Cards</b> styles. Plain is the default. This browser keeps your choice. If the browser cannot store it, the page uses Plain at the next load.</p>
+    <h3>Style</h3><p>The style switch at the top selects the <b>Plain</b> and <b>Cards</b> styles. Plain is the default. This browser keeps your choice. If the browser cannot store it, the page uses Plain at the next load.</p>
     <p>In Cards, each agent node has a harness mark: Claude, Codex, OpenCode, Pi, or a question mark for an unknown harness. A Codex or Claude node shows a thin bar with its quota use. When the quota data is missing or the probe failed, the bar is empty and shows <b>quota unavailable</b>. When the last probe failed but an earlier reading exists, the bar shows that reading in a muted color. Point to the bar to see the time of the reading. A working node has a slow pulse on its border. A blocked node has the warning color and a warning icon. A failed node has the error color. An idle or done node is dimmed.</p>
     <p>In Cards, a new Owner message draws a short line with a moving dot from the Owner to the Boss or the orchestrator for about 1 second. A new worker report notice draws a line from the worker to its orchestrator. The page uses only the events that it already loads. When your system asks for reduced motion, the page shows a 1-second highlight on both nodes and no movement.</p>
     <h3>Phone</h3><p>On a phone, the chart has one column. Each worker list shows only a count. Select <b>Show</b> to expand the workers, and select <b>Hide</b> to collapse them.</p>
@@ -2460,9 +2482,8 @@ const HELP = {
     <p>The Boss can run <code>herdr-boss messages relay ID... --by boss</code> to mark queued Owner messages as relayed. Herdr Boss never sends a relayed message. The thread shows its relay time and any reply time.</p>
     <p>The Boss and the orchestrators reply with <code>herdr-boss say</code>. The Boss can post a longer report with <code>herdr-boss mail post</code>. The page shows a report as formatted Markdown. You cannot message a worker. Send a worker request to its orchestrator.</p>
     <p>The open panel reads the thread again every 10 seconds. A read-only preview shows the threads and refuses a send.</p>
-    <h3>Data limits</h3><p><b>Not reported</b> means that the current state does not hold the value. Herdr Boss does not receive the model of a running agent. The page does not read a task from a pane title. It shows no pane output, messages, or secrets.</p>`],
-  agents: ['Agents', `
-    <p>Every Herdr workspace with its orchestrator and workers, live from Herdr.</p>
+    <h3>Data limits</h3><p><b>Not reported</b> means that the current state does not hold the value. Herdr Boss does not receive the model of a running agent. The page does not read a task from a pane title. It shows no pane output, messages, or secrets.</p>
+    <h3>List</h3><p>Every Herdr workspace with its orchestrator and workers, live from Herdr.</p>
     <p>A status dot shows working, blocked, failed, idle, or done. Failed means the last visible worker output matched a known provider error, including <b>Free usage exceeded</b>. Herdr Boss reads only the last eight visible lines: on every tick while a worker is working, and when a worker first appears idle or done or changes into either state. A worker can show failed while Herdr still reports it working; the engine then does not count it as a running worker. The failed status clears when a later read shows no known failure, or when a different worker uses the pane. Herdr Boss sends the matched error label, worker name, and pane ID to the project orchestrator. Blocked workers get a notice after five minutes. Idle and done agents are ready for input; they have not always finished their task. Rows with the <b>orch</b> or <b>boss</b> label are orchestrators.</p>
     <p>An orchestrator that stays idle gets a nudge when its published status still has an actionable task: status <b>todo</b>, <b>doing</b>, or <b>review</b> with every task in its <b>blocked by</b> list done. The project must be in <b>auto</b> or <b>active</b> mode, no other worker in that workspace may work, be blocked, or have failed, and the idle period must reach the configured idle minutes. The notice names the task ID and title. Resume an idle or done worker on that task, or start suitable work. One key per project and task keeps the normal notice cooldown in charge; a different next task prompts again.</p>`],
   browsers: ['Browsers', `
@@ -2530,9 +2551,11 @@ function render(force = false) {
   }
   const legacy = /^\/p\/([^/]+)\/?$/.exec(location.pathname);
   if (legacy) history.replaceState(null, '', `/projects/${legacy[1]}`);
+  // An old Organization link opens the Agents page in the Chart view.
+  if (location.pathname === '/organization') history.replaceState(null, '', '/agents?view=chart');
   const m = /^\/projects\/([^/]+)\/?$/.exec(location.pathname);
-  const route = m || location.pathname === '/projects' ? 'projects' : ['mailbox', 'allocation', 'settings', 'organization', 'agents', 'browsers', 'analytics', 'logs'].includes(location.pathname.slice(1)) ? location.pathname.slice(1) : 'overview';
-  const html = route === 'projects' ? projectsView(state, m ? decodeURIComponent(m[1]) : null) : route === 'mailbox' ? mailboxView(state) : route === 'allocation' ? allocationView(state) : route === 'settings' ? settingsView(state) : route === 'organization' ? organizationView(state) : route === 'agents' ? agentsView(state) : route === 'browsers' ? browsersView(state) : route === 'analytics' ? analyticsView(state) : route === 'logs' ? logsView(state) : overview(state);
+  const route = m || location.pathname === '/projects' ? 'projects' : ['mailbox', 'allocation', 'settings', 'agents', 'browsers', 'analytics', 'logs'].includes(location.pathname.slice(1)) ? location.pathname.slice(1) : 'overview';
+  const html = route === 'projects' ? projectsView(state, m ? decodeURIComponent(m[1]) : null) : route === 'mailbox' ? mailboxView(state) : route === 'allocation' ? allocationView(state) : route === 'settings' ? settingsView(state) : route === 'agents' ? agentsView(state) : route === 'browsers' ? browsersView(state) : route === 'analytics' ? analyticsView(state) : route === 'logs' ? logsView(state) : overview(state);
   $navMenuLabel.textContent = NAV_LABEL[route] || 'Menu';
   for (const a of $nav.querySelectorAll('a')) {
     if (a.dataset.nav === route) a.setAttribute('aria-current', 'page');
@@ -2546,7 +2569,7 @@ function render(force = false) {
     lastRender = html;
     if (route === 'mailbox') mailRestoreDrafts(focusId);
   }
-  if (route === 'organization') orgMotion(state);
+  if (route === 'agents' && agentsViewMode() === 'chart') orgMotion(state);
   else orgEventMark = null;
   syncDepGraphs();
   if (!document.getElementById('help-panel').hidden) fillHelp();
@@ -3076,6 +3099,13 @@ document.addEventListener('click', (e) => {
   else orgWorkersOpen.add(button.dataset.orgWorkers);
   lastRender = ''; render(true);
   document.querySelector(selector)?.focus();
+});
+
+document.addEventListener('click', (e) => {
+  const button = e.target.closest?.('[data-agents-view]');
+  if (!button) return;
+  setAgentsView(button.dataset.agentsView);
+  lastRender = ''; render(true);
 });
 
 document.addEventListener('click', (e) => {

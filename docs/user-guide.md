@@ -407,9 +407,13 @@ Press Ctrl or Cmd and turn the mouse wheel to zoom around the pointer. A plain w
 
 When the published status is stale, the project page and the Projects list show `Status stale: <age>` next to the updated time. The mark stays until the orchestrator publishes again. See [Rules and notices](#rules-and-notices) for the stale rule.
 
-## Organization page
+## Agents page
 
-The `/organization` page shows the organization as a chart. The chart has four levels:
+The `/agents` page has two views. The switch at the top of the page selects the **Chart** view or the **List** view. Chart is the default. The URL holds the view as `?view=chart` or `?view=list`. The browser keeps the last choice in its local storage. If the browser cannot store the choice, the page opens Chart at the next load. A link to the old `/organization` route opens the Chart view.
+
+### Chart view
+
+The Chart view shows the organization as a chart. The chart has four levels:
 
 1. The **Owner** node shows **At the Mac** or **Away**. The value comes from the machine idle time.
 2. The **Boss** node shows the pane labeled `boss`, its harness, state, quota use, and handover state. The workers in the Boss workspace are below it.
@@ -450,9 +454,17 @@ The page uses only the state that the dashboard already loads. These limits appl
 - A workspace marked not a project has no project node. The Boss workspace shows as the Boss node.
 - The chart shows no pane output and no secrets. Message text shows only in the Messages panel.
 
+### List view
+
+The List view shows every Herdr workspace with its orchestrator and workers, live from Herdr.
+
+A status dot shows working, blocked, failed, idle, or done. Failed means that the last visible worker output matched a known provider error, including **Free usage exceeded**. Herdr Boss reads only the last eight visible lines: on every tick while a worker is working, and when a worker first appears idle or done or changes into either state. A worker can show failed while Herdr still reports it working; the engine then does not count it as a running worker. The failed status clears when a later read shows no known failure, or when a different worker uses the pane. Herdr Boss sends the matched error label, worker name, and pane ID to the project orchestrator. Blocked workers get a notice after five minutes. Idle and done agents are ready for input; they have not always finished their task. Rows with the **orch** or **boss** label are orchestrators.
+
+An orchestrator that stays idle gets a nudge when its published status still has an actionable task: status **todo**, **doing**, or **review** with every task in its **blocked by** list done. The project must be in **auto** or **active** mode, no other worker in that workspace may work, be blocked, or have failed, and the idle period must reach the configured idle minutes. The notice names the task ID and title. Resume an idle or done worker on that task, or start suitable work. One key per project and task keeps the normal notice cooldown in charge; a different next task prompts again.
+
 ## Owner messages
 
-The Owner can send a message to the Boss or to a project orchestrator from the Organization page. The Boss and the orchestrators reply with `herdr-boss say`. Workers get no messages from the Owner. Send a worker request to its orchestrator.
+The Owner can send a message to the Boss or to a project orchestrator from the Agents page. The Boss and the orchestrators reply with `herdr-boss say`. Workers get no messages from the Owner. Send a worker request to its orchestrator.
 
 ### Threads
 
@@ -460,7 +472,7 @@ Each node has one thread. The thread `boss` holds the messages between the Owner
 
 ### Send a message
 
-1. Open the Organization page.
+1. Open the Agents page.
 2. Select **Messages** on the Boss node or on a project node.
 3. Type a message of 1 to 2000 characters, and select **Send**. Or select a nudge button or **Ask for status**.
 4. Confirm the send in the browser dialog.
@@ -545,7 +557,7 @@ The page groups messages by their project or the Boss, and by the `replyTo` chai
 | `approve` | **Approve**, **Decline**, and an optional note. | `Approved.` or `Declined.`, then the note. |
 | `decide` | A text field and **Send**. Choice buttons when the text has a Markdown list under a `Choices` heading. | `Choice: CHOICE`, then the note. Or the typed text. |
 
-The page asks for a confirmation before each send or dismissal. The answer is an Owner message to the thread of the item, with `replyTo` set to the item ID. It uses the same delivery rules and rate limit as a message from the Organization page. The service then sets `closedAt` on the item, and the item moves to **Done**. A closed item refuses a second answer with HTTP 409.
+The page asks for a confirmation before each send or dismissal. The answer is an Owner message to the thread of the item, with `replyTo` set to the item ID. It uses the same delivery rules and rate limit as a message from the Agents page. The service then sets `closedAt` on the item, and the item moves to **Done**. A closed item refuses a second answer with HTTP 409.
 
 Select **New message** to start a thread with the Boss or a project that has an `orch` pane. Type a message and confirm the send. The page applies the same send limit and safety gates as other Owner messages. It opens the new thread in **Sent**. Use the reply box at the bottom of a conversation to reply to its last open agent message. The page asks you to confirm each reply.
 
