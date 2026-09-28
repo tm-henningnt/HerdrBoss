@@ -4,6 +4,7 @@
 network_access = true
 writable_roots = [
   "{{HOME}}/.herdr-boss",
+  "{{HOME}}/Projects/.herdr-wt",
   "{{HOME}}/Library/Caches/ms-playwright",
   "{{HOME}}/.cache",
   "{{HOME}}/.npm",

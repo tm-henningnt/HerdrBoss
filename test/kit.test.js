@@ -14,6 +14,11 @@ import { classifyWorktrees, pruneWorktrees } from '../src/kit/worktrees.js';
 import { usageProvider } from '../src/usage.js';
 import { validateProject } from '../src/projects.js';
 
+// Worker worktrees default to ~/Projects/.herdr-wt. Keep them out of the real home folder.
+const TEST_HOME = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-kit-home-')));
+process.env.HOME = TEST_HOME;
+process.on('exit', () => fs.rmSync(TEST_HOME, { recursive: true, force: true }));
+
 function git(cwd, ...args) {
   return execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 }
@@ -148,6 +153,23 @@ test('project config finds the git root and applies contract defaults', () => {
   assert.equal(config.imageBudget, 10);
   assert.deepEqual(config.artifactChecks, []);
   for (const [key, value] of Object.entries(PROJECT_DEFAULTS)) assert.deepEqual(config[key], value);
+  assert.equal(config.worktreeParent, path.join(TEST_HOME, 'Projects', '.herdr-wt'));
+  assert.equal(config.worktreePath('worker'), path.join(TEST_HOME, 'Projects', '.herdr-wt', path.basename(root), 'worker'));
+});
+
+test('project config expands a leading ~ in worktreeRoot with the given home', () => {
+  const root = temporaryRepo();
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-kit-otherhome-')));
+  const config = loadProjectConfig({ cwd: root, home });
+  assert.equal(config.worktreePath('w1'), path.join(home, 'Projects', '.herdr-wt', path.basename(root), 'w1'));
+  fs.writeFileSync(path.join(root, '.herdr-boss.json'), JSON.stringify({ worktreeRoot: '~/trees' }));
+  assert.equal(loadProjectConfig({ cwd: root, home }).worktreePath('w1'), path.join(home, 'trees', path.basename(root), 'w1'));
+});
+
+test('a project setting keeps the sibling worktree layout', () => {
+  const root = temporaryRepo();
+  fs.writeFileSync(path.join(root, '.herdr-boss.json'), JSON.stringify({ worktreeRoot: '..', worktreeName: '{repo}-wt-{name}' }));
+  const config = loadProjectConfig({ cwd: root });
   assert.equal(config.worktreePath('worker'), path.join(path.dirname(root), `${path.basename(root)}-wt-worker`));
 });
 
@@ -611,7 +633,11 @@ test('worker start dry-run prints the plan and makes no worktree or agent change
   assert.ok(!output.join('\n').includes('tab create'));
   assert.match(output.join('\n'), /Read \.worker\/brief\.md in your working directory and execute it/);
   assert.ok(calls.some((call) => call.join(' ') === 'agent list'));
+  const newPath = path.join(TEST_HOME, 'Projects', '.herdr-wt', path.basename(root), 'demo');
+  assert.equal(result.worktree, newPath);
+  assert.ok(output.join('\n').includes(newPath));
   assert.ok(!fs.existsSync(config.worktreePath('demo')));
+  assert.ok(!fs.existsSync(path.dirname(newPath)));
   assert.ok(!fs.existsSync(path.join(config.runsPath, 'demo.json')));
   assert.deepEqual(git(root, 'branch', '--show-current'), 'main');
   const explicitOutput = [];
@@ -1474,6 +1500,7 @@ test('worker start copies nested repository inputs before sending the prompt', (
   const result = runKitCommand('worker', ['start', 'demo', '--kind', 'codex', '--task', 'x', '--allow', 'src/', '--copy', 'fixtures/one/a.txt', '--copy', path.join(f.root, 'docs/nested/b.txt')], {
     config: f.config, herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
   });
+  assert.equal(result.worktree, path.join(TEST_HOME, 'Projects', '.herdr-wt', path.basename(f.root), 'demo'));
   const brief = fs.readFileSync(path.join(result.worktree, '.worker/brief.md'), 'utf8');
   assert.match(brief, /\.worker\/inputs\/fixtures\/one\/a\.txt/);
   assert.equal(brief.match(/\.worker\/inputs\/fixtures\/one\/a\.txt/g)?.length, 1);
