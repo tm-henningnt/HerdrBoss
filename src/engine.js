@@ -15,6 +15,7 @@ import { readLeases, reclaimLeases, publicLease, tcpListening } from './leases.j
 import { codeSignCloneDir, sweepCodeSignClones } from './clone-sweep.js';
 import { runDenialScan, readDenials, denialSummary, DENIAL_SCAN_INTERVAL_MS } from './denials.js';
 import { listHandoffs, saveHandoffs, supersedeHandoffs, expireHandoff, expireMissingHandoffs, handoffNotices } from './handoff.js';
+import { deliverQueued } from './messages.js';
 import { readKitNotice, pendingKitAlert, isKitAlert, kitNoticeTargets } from './kit-notice.js';
 import { inspectWorkerTransitions, inspectWorkerReports, applyWorkerFailureStatuses, resolveFreeUsageRun, activeFreeModelExhaustions, extendFreeModelExhaustion, activeFreeLaneExhaustions, extendFreeLaneExhaustion, freeUsageLaneRetry } from './worker-failures.js';
 
@@ -474,6 +475,11 @@ export class Engine extends EventEmitter {
       snap.denials = denialSummary(readDenials(DATA_DIR), now, { pendingBytes: this.memory.denialScan?.pendingBytes || 0 });
       fs.writeFileSync(BULLETIN_FILE, renderBulletin(snap, evaluation, this.cfg));
       if (this.act) await this.deliver(evaluation.alerts, herdr, now);
+      // Owner messages need a fresh pane list, so a stale snapshot never sends to a pane that is now working.
+      if (this.act && this.push && currentPaneList) {
+        try { await this.deliverOwnerMessages(herdr, control.projects, now); }
+        catch (e) { errors.push(`messages: ${e.message}`); }
+      }
       snap.events = this.events.slice(-60);
 
       this.state = snap;
@@ -843,6 +849,16 @@ export class Engine extends EventEmitter {
     const file = path.join(DATA_DIR, 'handoffs.json');
     writeJson(file, current);
     return true;
+  }
+
+  // One Owner message per pane per tick. A pane that got a resource notice in this tick waits for the next tick.
+  async deliverOwnerMessages(herdr, projects, now) {
+    const busy = new Set(Object.entries(this.memory.pushes || {}).filter(([, record]) => record?.at === now).map(([key]) => key.slice(key.lastIndexOf('@') + 1)));
+    await deliverQueued({
+      panes: herdr?.panes || [], projects, now, busy,
+      log: (type, text, extra) => this.log(type, text, extra),
+      prompt: async (pane, text) => checkHerdrResponse(await this.herdrRunner('herdr', ['agent', 'prompt', pane, text])),
+    });
   }
 
   async deliver(alerts, herdr, now) {
