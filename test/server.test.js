@@ -633,3 +633,28 @@ test('the project page shows a Needs your decision group, wait labels, and an Ov
   assert.match(guide, /Needs your decision/);
   assert.match(guide, /waitingOn/);
 });
+
+test('one Agents tab has Chart and List views, a new menu order, and an /organization redirect', () => {
+  const html = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
+  const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
+  // The menu holds the pages in the Owner order, with no Organization entry.
+  const nav = /<nav id="primary-nav"[^>]*>([\s\S]*?)<\/nav>/.exec(html)?.[1] || '';
+  assert.deepEqual([...nav.matchAll(/data-nav="([^"]+)"/g)].map((m) => m[1]), ['overview', 'mailbox', 'agents', 'projects', 'browsers', 'allocation', 'analytics', 'logs']);
+  assert.doesNotMatch(nav, /data-nav="organization"/);
+  assert.doesNotMatch(app, /organization: 'Organization'/);
+  assert.doesNotMatch(app, /route === 'organization'/);
+  // Settings goes before the Roamgate link, which keeps its new-tab attributes.
+  assert.match(app, /\$nav\.insertBefore\(settingsLink, \$roamgate\)/);
+  assert.match(nav, /<a id="roamgate-link" href="\/roamgate" target="_blank" rel="noopener noreferrer" hidden>/);
+  // One Agents page has a Chart and a List view. Chart is the default.
+  assert.match(app, /const AGENTS_VIEW_KEY = 'herdr-boss\.agentsView'/);
+  assert.match(app, /try \{ return localStorage\.getItem\(AGENTS_VIEW_KEY\) === 'list' \? 'list' : 'chart'; \} catch \{ return 'chart'; \}/);
+  assert.match(app, /data-agents-view="\$\{key\}"/);
+  assert.match(app, /url\.searchParams\.set\('view', next\)/);
+  assert.match(css, /\.agents-view-switch\b/);
+  // Motion runs only in the Chart view.
+  assert.match(app, /if \(route === 'agents' && agentsViewMode\(\) === 'chart'\) orgMotion\(state\)/);
+  // /organization opens the Chart view in place.
+  assert.match(app, /if \(location\.pathname === '\/organization'\) history\.replaceState\(null, '', '\/agents\?view=chart'\)/);
+});
