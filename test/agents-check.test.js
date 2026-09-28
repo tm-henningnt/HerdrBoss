@@ -5,7 +5,7 @@ import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { agentsBlock, blockHash, checkAgentsText, checkKitText, projectKit } from '../src/kit/agents-check.js';
+import { agentsBlock, blockHash, checkAgentsFile, checkAgentsText, checkKitText, projectKit } from '../src/kit/agents-check.js';
 import { runKitCommand } from '../src/kit/cli.js';
 import { loadModels } from '../src/kit/config.js';
 
@@ -218,4 +218,122 @@ test('check agents exits 0 for the current layout and 1 for a file without a stu
   const inRepo = spawnSync(process.execPath, [cli, 'check', 'agents'], { env, cwd: path.join(repo, 'sub'), encoding: 'utf8' });
   assert.equal(inRepo.status, 0, inRepo.stdout + inRepo.stderr);
   assert.match(inRepo.stdout, /AGENTS\.md/);
+});
+
+// A Git repository with the current kit file and AGENTS.md stub, and the extra files that orchestrators read.
+function orchestrationRepo(files = {}) {
+  const repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-check-scan-')));
+  execFileSync('git', ['init', '-q', repo]);
+  const write = (relative, text) => {
+    fs.mkdirSync(path.dirname(path.join(repo, relative)), { recursive: true });
+    fs.writeFileSync(path.join(repo, relative), text);
+  };
+  write('docs/orchestration/herdr-boss.md', projectKit().text);
+  write('AGENTS.md', file());
+  for (const [relative, text] of Object.entries(files)) write(relative, text);
+  return repo;
+}
+function scan(repo) {
+  const rulesFile = path.join(repo, 'no-rules.json');
+  return checkAgentsFile(path.join(repo, 'AGENTS.md'), { rulesFile, relative: 'AGENTS.md' });
+}
+
+test('check agents scans the orchestration files in the Git top level', () => {
+  const kinds = [
+    'docs/agents/push.md',
+    'docs/agents/deep/escalation.md',
+    '.orchestration/rules.md',
+    '.orchestration/notes/handoff-note.md',
+    'OrchestratorPrompt.md',
+    'my-orchestrator.md',
+  ];
+  const repo = orchestrationRepo(Object.fromEntries(kinds.map((relative) => [relative, '# Notes\n\nAsk the Boss before each push.\n'])));
+  const result = scan(repo);
+  assert.equal(result.errors, 0, JSON.stringify(result.findings));
+  for (const relative of kinds) {
+    const hits = result.findings.filter((finding) => finding.file === relative);
+    assert.equal(hits.length, 1, `${relative}: ${JSON.stringify(result.findings)}`);
+    assert.equal(hits[0].level, 'warn');
+    assert.equal(hits[0].line, 3);
+    assert.match(hits[0].message, /pushes or product decisions to the Boss/);
+    assert.ok(result.lines.includes(`warn ${relative} line 3: ${hits[0].message}`), result.lines.join('\n'));
+  }
+  assert.equal(result.warnings, kinds.length);
+});
+
+test('the scanned files get the same warnings as the text outside the stub', () => {
+  const text = [
+    '# Rules',
+    'Notify the other project orchestrators after a release.',
+    'The Boss is in pane w12:p3.',
+    'Owner accepted the layout on 2026-09-20.',
+    'Use `claude-sonnet-9` for review.',
+    'Run `pgrep -f vite` to find the server.',
+    '- gpt-6-luna',
+    '- gpt-6-sol',
+    '- opencode/big-pickle',
+  ].join('\n');
+  const result = scan(orchestrationRepo({ 'docs/agents/rules.md': text }));
+  const hits = result.findings.filter((finding) => finding.file === 'docs/agents/rules.md');
+  for (const [line, pattern] of [
+    [2, /notify another project/], [3, /fixed pane ID w12:p3/], [4, /dated line/], [5, /claude-sonnet-9.*not in the model list/],
+    [6, /process command/], [7, /copied model list/],
+  ]) assert.ok(hits.some((finding) => finding.line === line && pattern.test(finding.message)), `${line} ${pattern}: ${JSON.stringify(hits)}`);
+  assert.ok(hits.every((finding) => finding.level === 'warn'));
+});
+
+test('a handoff note warns for each rule-like line', () => {
+  const note = [
+    '# Handoff',
+    'Task V12 is half done.',
+    'Always run the lint step.',
+    '- Never merge on a Friday.',
+    'Do not touch the parser.',
+    '1. Must rebase first.',
+    'Mustard is on the list.',
+  ].join('\n');
+  const result = scan(orchestrationRepo({ '.orchestration/handoff-note.md': note, '.orchestration/plan.md': 'Always run the lint step.\n' }));
+  const handoff = result.findings.filter((finding) => finding.file === '.orchestration/handoff-note.md');
+  assert.deepEqual(handoff.map((finding) => finding.line), [3, 4, 5, 6], JSON.stringify(handoff));
+  for (const finding of handoff) assert.match(finding.message, /handoff note carries no rules/);
+  assert.deepEqual(result.findings.filter((finding) => finding.file === '.orchestration/plan.md'), [], 'a rule in another file is not drift');
+});
+
+test('check agents does not scan memory.md, herdr-boss.md, or other files', () => {
+  const drift = 'Ask the Boss before each push. The Boss is in pane w1:p2.\n';
+  const repo = orchestrationRepo({
+    'docs/orchestration/memory.md': drift,
+    'docs/orchestration/notes.md': drift,
+    'docs/agents/notes.txt': drift,
+    '.orchestration/deep/plan.md': drift,
+    'docs/Orchestrator.md': drift,
+    'README.md': drift,
+  });
+  const result = scan(repo);
+  assert.deepEqual(result.findings, []);
+  fs.appendFileSync(path.join(repo, 'docs/orchestration/herdr-boss.md'), drift);
+  const edited = scan(repo);
+  assert.deepEqual(edited.findings.map((finding) => finding.message), ['docs/orchestration/herdr-boss.md was edited by hand; run herdr-boss kit install']);
+});
+
+test('publish counts the scanned files in agentsCheck.warnings, and errors stay with the stub and the kit file', () => {
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-publish-scan-')));
+  const repo = orchestrationRepo({
+    'docs/agents/push.md': 'Ask the Boss before each push.\n',
+    '.orchestration/handoff.md': 'Never merge on a Friday.\nThe Boss is in pane w1:p2.\n',
+  });
+  const direct = scan(repo);
+  assert.equal(direct.errors, 0);
+  assert.equal(direct.warnings, 3, JSON.stringify(direct.findings));
+  assert.equal(direct.summary, 'AGENTS.md: 0 errors, 3 warnings');
+  const status = path.join(home, 'status.json');
+  fs.writeFileSync(status, JSON.stringify({ project: 'Demo' }));
+  const dataDir = path.join(home, 'boss');
+  const env = { ...process.env, HOME: home, HERDR_BOSS_DIR: dataDir, TMPDIR: home };
+  const result = spawnSync(process.execPath, [path.join(ROOT, 'src', 'cli.js'), 'publish', 'demo', status], { cwd: repo, env, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /warn \.orchestration\/handoff\.md line 2: .*pane ID/);
+  const stored = JSON.parse(fs.readFileSync(path.join(dataDir, 'projects', 'demo.json'), 'utf8'));
+  assert.equal(stored.agentsCheck.errors, 0);
+  assert.equal(stored.agentsCheck.warnings, 3);
 });

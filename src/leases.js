@@ -2,9 +2,9 @@
 // The leases are in leases.json in the data directory. Each change holds the machine mutation lock of src/kit/locks.js.
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { DATA_DIR } from './config.js';
-import { loadProjectConfig } from './kit/config.js';
+import { hasLiveWorkerRun, withMutationLock } from './kit/locks.js';
 import { verifyCallerPane } from './kit/workers.js';
 
 const LEASES_FILE = 'leases.json';
@@ -25,8 +25,6 @@ function timeValue(now) {
   return value instanceof Date ? value.getTime() : Number(value);
 }
 
-function sleep(milliseconds) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds); }
-
 function privateDirectory(directory) {
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   fs.chmodSync(directory, 0o700);
@@ -34,25 +32,9 @@ function privateDirectory(directory) {
 }
 
 // The same guard directory as the machine-scope locks in src/kit/locks.js, so a lease change and a lock change never overlap.
-function withMutationLock(dataDir, operation, waitMs) {
-  const guard = path.join(privateDirectory(path.join(privateDirectory(path.join(dataDir, 'locks')), 'machine')), '.mutation');
-  const deadline = Date.now() + waitMs;
-  for (;;) {
-    try {
-      fs.mkdirSync(guard, { mode: 0o700 });
-      break;
-    } catch (error) {
-      if (error.code !== 'EEXIST') throw error;
-      if (Date.now() >= deadline) {
-        const busy = new Error('A lock or lease operation is already in progress. Retry when it finishes.');
-        busy.code = 'ELOCKBUSY';
-        throw busy;
-      }
-      sleep(50);
-    }
-  }
-  try { return operation(); }
-  finally { fs.rmdirSync(guard); }
+function machineMutationLock(dataDir, operation, waitMs) {
+  const directory = privateDirectory(path.join(privateDirectory(path.join(dataDir, 'locks')), 'machine'));
+  return withMutationLock(directory, operation, { waitMs, busyMessage: 'A lock or lease operation is already in progress. Retry when it finishes.' });
 }
 
 export function readLeases(dataDir = DATA_DIR) {
@@ -77,7 +59,7 @@ function writeLeases(dataDir, store) {
 
 function changeLeases(dataDir, operation, waitMs = COMMAND_LOCK_WAIT_MS) {
   fs.mkdirSync(dataDir, { recursive: true });
-  return withMutationLock(dataDir, () => {
+  return machineMutationLock(dataDir, () => {
     const store = readLeases(dataDir);
     const result = operation(store);
     writeLeases(dataDir, store);
@@ -145,39 +127,6 @@ function paneSet(herdr) {
   } catch { return null; }
 }
 
-function realpathOrNull(file) {
-  try { return fs.realpathSync(file); } catch { return null; }
-}
-
-function checkoutRoots(root) {
-  let listing = '';
-  try { listing = execFileSync('git', ['-C', root, 'worktree', 'list', '--porcelain'], { encoding: 'utf8' }); } catch {}
-  const roots = listing.split('\n').filter((line) => line.startsWith('worktree ')).map((line) => line.slice('worktree '.length));
-  return [...new Set([root, ...roots])];
-}
-
-// The same rule as the worker caller of src/kit/locks.js: a run record in a runs folder of any checkout of the
-// repository names this pane and this worktree and has no finishedAt. Return the run name and the record file.
-function liveWorkerRun(paneId, root) {
-  const worktree = realpathOrNull(root);
-  if (!worktree) return null;
-  for (const checkout of checkoutRoots(root)) {
-    let runsPath;
-    try { runsPath = realpathOrNull(loadProjectConfig({ cwd: checkout }).runsPath); } catch { continue; }
-    if (!runsPath) continue;
-    for (const file of fs.readdirSync(runsPath).filter((entry) => entry.endsWith('.json'))) {
-      const name = path.basename(file, '.json');
-      if (!WORKER_NAME.test(name)) continue;
-      const actual = realpathOrNull(path.join(runsPath, file));
-      if (!actual || !actual.startsWith(`${runsPath}${path.sep}`)) continue;
-      const run = readRunFile(actual);
-      if (run?.name === name && run.pane === paneId && !run.finishedAt && typeof run.worktree === 'string'
-        && realpathOrNull(run.worktree) === worktree) return { name, file: actual };
-    }
-  }
-  return null;
-}
-
 // Return { role: 'boss' | 'orch' | 'worker', paneId, workspaceId, worker?, runFile? }.
 function verifyCaller(env, herdr, config) {
   let caller;
@@ -190,7 +139,7 @@ function verifyCaller(env, herdr, config) {
       try { const response = herdr(['pane', 'get', paneId]); pane = response?.pane ?? response; } catch {}
     }
     const paneWorkspace = pane?.workspace_id ?? pane?.workspaceId ?? pane?.workspace;
-    const run = pane && (pane.pane_id ?? pane.paneId ?? pane.id) === paneId && paneWorkspace === workspaceId ? liveWorkerRun(paneId, config.root) : null;
+    const run = pane && (pane.pane_id ?? pane.paneId ?? pane.id) === paneId && paneWorkspace === workspaceId ? hasLiveWorkerRun(paneId, config.root) : null;
     if (run) return { role: 'worker', paneId, workspaceId, worker: run.name, runFile: run.file };
     throw new Error(`${error.message} A worker pane can take a lease only with a live worker run record for this pane and worktree.`);
   }
