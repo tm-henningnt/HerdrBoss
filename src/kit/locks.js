@@ -12,6 +12,9 @@ const COMMAND = (name) => `herdr-boss lock acquire ${name}`;
 const MACHINE_LOCKS = new Set(['full-suite']);
 export const FULL_SUITE_LOCK = 'full-suite';
 const PUSH_LOCK_WAIT_SECONDS = 1800;
+const MANUAL_LOCK_TTL_MS = 60 * 60 * 1000;
+const LOCK_KINDS = new Set(['manual', 'suite', 'push']);
+const LOCK_NOTICE_TEXT = 'Your full-suite lock expired after 60 minutes and was released. Use herdr-boss suite -- <command> next time.';
 const scopeFor = (name) => (MACHINE_LOCKS.has(name) ? 'machine' : 'repository');
 
 function validateName(name) {
@@ -55,7 +58,17 @@ function readRecord(file, commonDir, scope = 'repository') {
     || !Number.isFinite(Date.parse(value.acquiredAt))) {
     throw new Error(`Lock record ${path.basename(file)} is invalid. Refusing to change it.`);
   }
-  return { ...value, scope };
+  const kind = value.kind ?? 'manual';
+  if (!LOCK_KINDS.has(kind) || (kind !== 'manual' && value.name !== FULL_SUITE_LOCK)) {
+    throw new Error(`Lock record ${path.basename(file)} is invalid. Refusing to change it.`);
+  }
+  const expiresAt = value.expiresAt ?? (scope === 'machine' && value.name === FULL_SUITE_LOCK && kind === 'manual'
+    ? new Date(Date.parse(value.acquiredAt) + MANUAL_LOCK_TTL_MS).toISOString()
+    : undefined);
+  if (expiresAt !== undefined && (typeof expiresAt !== 'string' || !Number.isFinite(Date.parse(expiresAt)))) {
+    throw new Error(`Lock record ${path.basename(file)} is invalid. Refusing to change it.`);
+  }
+  return { ...value, kind, ...(expiresAt ? { expiresAt } : {}), scope };
 }
 
 function paneIds(herdr) {
@@ -74,7 +87,9 @@ function pidIsAlive(pid, probe = process.kill) {
   }
 }
 
-function lockIsLive(record, { herdr, pidAlive = pidIsAlive }) {
+function lockIsLive(record, { herdr, livePanes = null, pidAlive = pidIsAlive, now = Date.now }) {
+  if (record.name === FULL_SUITE_LOCK && record.kind === 'manual' && record.expiresAt
+    && Date.parse(record.expiresAt) <= timeValue(now)) return false;
   let alive;
   try { alive = pidAlive(record.pid); }
   catch (error) {
@@ -82,7 +97,7 @@ function lockIsLive(record, { herdr, pidAlive = pidIsAlive }) {
     else throw error;
   }
   if (!alive) return false;
-  return paneIds(herdr).has(record.ownerPane);
+  return (livePanes ?? paneIds(herdr)).has(record.ownerPane);
 }
 
 function writeNewRecord(file, record) {
@@ -99,6 +114,47 @@ function writeNewRecord(file, record) {
 }
 
 function sleep(milliseconds) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds); }
+
+function lockNoticesDirectory(dataDir) {
+  return privateDirectory(path.join(lockDirectory('', dataDir, 'machine'), 'notices'));
+}
+
+function writeManualExpiryNotice(record, dataDir, now) {
+  const directory = lockNoticesDirectory(dataDir);
+  const notice = {
+    id: crypto.randomUUID(),
+    severity: 'warn',
+    ownerPane: record.ownerPane,
+    text: LOCK_NOTICE_TEXT,
+    createdAt: new Date(timeValue(now)).toISOString(),
+  };
+  writeNewRecord(path.join(directory, `${notice.id}.json`), notice);
+  return notice;
+}
+
+export function readLockTakeoverNotices({ dataDir = DATA_DIR } = {}) {
+  const directory = path.join(dataDir, 'locks', 'machine', 'notices');
+  let files;
+  try { files = fs.readdirSync(directory).filter((file) => /^[0-9a-f-]{36}\.json$/i.test(file)).sort(); }
+  catch (error) { if (error.code === 'ENOENT') return []; throw error; }
+  return files.map((file) => {
+    let notice;
+    try { notice = JSON.parse(fs.readFileSync(path.join(directory, file), 'utf8')); }
+    catch (error) { throw new Error(`Cannot read lock notice ${path.basename(file)}: ${error.message}`); }
+    if (!notice || notice.id !== path.basename(file, '.json') || notice.severity !== 'warn'
+      || typeof notice.ownerPane !== 'string' || notice.text !== LOCK_NOTICE_TEXT
+      || typeof notice.createdAt !== 'string' || !Number.isFinite(Date.parse(notice.createdAt))) {
+      throw new Error(`Lock notice ${path.basename(file)} is invalid.`);
+    }
+    return notice;
+  });
+}
+
+export function removeLockTakeoverNotice(id, { dataDir = DATA_DIR } = {}) {
+  if (typeof id !== 'string' || !/^[0-9a-f-]{36}$/i.test(id)) throw new Error('Lock notice ID is invalid.');
+  try { fs.unlinkSync(path.join(dataDir, 'locks', 'machine', 'notices', `${id}.json`)); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+}
 
 // The .mutation guard folder in directory makes one lock or lease change at a time. A busy guard throws ELOCKBUSY
 // with busyMessage, after waitMs of retries. src/leases.js uses the guard of the machine-scope locks.
@@ -222,13 +278,17 @@ export function acquireProjectLock(name, {
   now = Date.now,
   pause = defaultPause,
   pidAlive = pidIsAlive,
+  kind = 'manual',
 } = {}) {
   validateName(name);
+  if (!LOCK_KINDS.has(kind) || (kind !== 'manual' && name !== FULL_SUITE_LOCK)) {
+    throw new Error('Lock kind must be manual, suite, or push. Only full-suite accepts suite and push kinds.');
+  }
   if (waitSeconds !== null && (!Number.isSafeInteger(waitSeconds) || waitSeconds < 0)) {
     throw new Error('--wait must be a whole non-negative number of seconds.');
   }
   const caller = callerFor(env, herdr, { name, config });
-  const pid = shellPidFor(caller.paneId, herdr);
+  const pid = kind === 'manual' ? shellPidFor(caller.paneId, herdr) : process.pid;
   const { commonDir, directory, scope } = lockContext(config, dataDir, scopeFor(name));
   const file = path.join(directory, `${name}.json`);
   const deadline = waitSeconds === null ? null : BigInt(timeValue(now)) + BigInt(waitSeconds) * 1000n;
@@ -239,22 +299,27 @@ export function acquireProjectLock(name, {
     try {
       const acquired = withMutationLock(directory, () => {
         const previous = readRecord(file, commonDir, scope);
-        if (previous && lockIsLive(previous, { herdr, pidAlive })) {
+        if (previous && lockIsLive(previous, { herdr, pidAlive, now })) {
           activeRecord = previous;
           return null;
         }
         if (previous) {
           staleRecord = previous;
+          if (name === FULL_SUITE_LOCK && previous.kind === 'manual' && previous.expiresAt
+            && Date.parse(previous.expiresAt) <= timeValue(now)) writeManualExpiryNotice(previous, dataDir, now);
           fs.unlinkSync(file);
         }
+        const acquiredAt = new Date(timeValue(now)).toISOString();
         const record = {
           name,
           project: config.slug,
           gitCommonDir: commonDir,
           ownerPane: caller.paneId,
           pid,
+          kind,
           command: COMMAND(name),
-          acquiredAt: new Date(timeValue(now)).toISOString(),
+          acquiredAt,
+          ...(scope === 'machine' && kind === 'manual' ? { expiresAt: new Date(Date.parse(acquiredAt) + MANUAL_LOCK_TTL_MS).toISOString() } : {}),
           ...(scope === 'machine' ? { scope } : {}),
         };
         writeNewRecord(file, record);
@@ -313,20 +378,58 @@ export function listProjectLocks({
   dataDir = DATA_DIR,
   output = console.log,
   pidAlive = pidIsAlive,
+  now = Date.now,
 } = {}) {
   callerFor(env, herdr);
   const locks = ['repository', 'machine'].flatMap((scope) => {
     const { commonDir, directory } = lockContext(config, dataDir, scope);
     return fs.readdirSync(directory).filter((file) => file.endsWith('.json')).sort().map((fileName) => {
       const record = readRecord(path.join(directory, fileName), commonDir, scope);
-      return { ...record, state: lockIsLive(record, { herdr, pidAlive }) ? 'live' : 'stale' };
+      const ageMs = Math.max(0, timeValue(now) - Date.parse(record.acquiredAt));
+      const expiresInMs = record.kind === 'manual' && record.expiresAt ? Math.max(0, Date.parse(record.expiresAt) - timeValue(now)) : null;
+      return {
+        ...record,
+        ageMs,
+        ageSeconds: Math.floor(ageMs / 1000),
+        expiresInMs,
+        state: lockIsLive(record, { herdr, pidAlive, now }) ? 'live' : 'stale',
+      };
     });
   });
   if (!locks.length) output('No project locks.');
   for (const lock of locks) {
-    output(`${lock.name} (${lock.scope}): pane ${lock.ownerPane}, PID ${lock.pid}, ${lock.command}, ${lock.acquiredAt}, ${lock.state}`);
+    const age = formatDuration(lock.ageSeconds);
+    const expiry = lock.expiresInMs === null ? '' : `; expires in ${formatDuration(Math.ceil(lock.expiresInMs / 1000))}`;
+    output(`${lock.name} (${lock.scope}): held by pane ${lock.ownerPane} (${lock.kind}) for ${age}${expiry}; PID ${lock.pid}, ${lock.state}`);
   }
   return locks;
+}
+
+function formatDuration(seconds) {
+  const totalMinutes = Math.max(0, Math.floor(seconds / 60));
+  const days = Math.floor(totalMinutes / 1440);
+  const hours = Math.floor((totalMinutes % 1440) / 60);
+  const minutes = totalMinutes % 60;
+  if (days) return `${days}d ${hours}h`;
+  if (hours) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
+}
+
+export function readMachineLocks({ dataDir = DATA_DIR, livePanes = new Set(), pidAlive = pidIsAlive, now = Date.now } = {}) {
+  const directory = path.join(dataDir, 'locks', 'machine');
+  let files;
+  try { files = fs.readdirSync(directory).filter((file) => file.endsWith('.json')).sort(); }
+  catch (error) { if (error.code === 'ENOENT') return []; throw error; }
+  return files.map((file) => {
+    const record = readRecord(path.join(directory, file), null, 'machine');
+    const ageMs = Math.max(0, timeValue(now) - Date.parse(record.acquiredAt));
+    return {
+      ...record,
+      ageMs,
+      ageSeconds: Math.floor(ageMs / 1000),
+      state: lockIsLive(record, { livePanes, pidAlive, now }) ? 'live' : 'stale',
+    };
+  });
 }
 
 function readText(file) {
@@ -382,7 +485,7 @@ export function pushWithLock(args, {
     return { exitCode: push(), locked: false, hook: null };
   }
   output(`push: pre-push hook found at ${hook}. Taking lock ${FULL_SUITE_LOCK}.`);
-  acquireProjectLock(FULL_SUITE_LOCK, { config, env, herdr, dataDir, waitSeconds: PUSH_LOCK_WAIT_SECONDS, output, now, pause, pidAlive });
+  acquireProjectLock(FULL_SUITE_LOCK, { config, env, herdr, dataDir, waitSeconds: PUSH_LOCK_WAIT_SECONDS, output, now, pause, pidAlive, kind: 'push' });
   let exitCode;
   try { exitCode = push(); }
   finally { releaseProjectLock(FULL_SUITE_LOCK, { config, env, herdr, dataDir, output, pidAlive }); }

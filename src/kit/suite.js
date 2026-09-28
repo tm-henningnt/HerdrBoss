@@ -34,7 +34,7 @@ export function runSuite(command, {
   cwd = process.cwd(),
 } = {}) {
   if (!Array.isArray(command) || !command.length) throw new Error('suite needs a command after --.');
-  acquireProjectLock(FULL_SUITE_LOCK, { config, env, herdr, dataDir, waitSeconds, output, now, pause, pidAlive });
+  acquireProjectLock(FULL_SUITE_LOCK, { config, env, herdr, dataDir, waitSeconds, output, now, pause, pidAlive, kind: 'suite' });
   let exitCode;
   let removed;
   try {
