@@ -25,6 +25,8 @@ Keep the current facts that every HerdrBoss orchestrator needs at start and resu
 - 2026-09-28 (temporary, until the morning of 2026-09-29): The Owner is away. The Boss acts for the Owner. Escalate to the Boss, not to the Owner. The one exception is the Owner's own Chat, where the Owner may check in. Keep a steady pace on the published plan, and start ready work on a Use now lane, free models first. Delete this line when the Owner is back. Source: Boss, for the Owner.
 - 2026-09-28: The Boss gave the go, for the Owner, for the V81 chat view and the partial V80 SQLite move, with messages first. Switch the live message store to SQLite only after the Chat page is live, with a JSON copy and a VACUUM INTO backup first, at a quiet moment, and with an end-to-end delivery check. On any failure, switch back to json at once. Source: Owner and Boss.
 
+- 2026-09-29: Build night watch mode (docs/ideas/night-watch.md) after the V95 lock queue. The night cap is global only, with keys for each lane class; project shares and lending keep working under it, with no night cap for each project. The morning report does not wait: it fires at its time and lists running tasks as "in progress, started HH:MM". Quiet hours stay an option, off by default. The Boss switches from its own cron jobs to `night start` when it is live. Source: Boss, for the Owner.
+
 ## Holds and freezes
 
 None.
