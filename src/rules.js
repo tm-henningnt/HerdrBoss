@@ -294,6 +294,12 @@ export function renderBulletin(snap, evaluation, cfg) {
     L.push('', '## Project rules', '');
     for (const [name, texts] of byProject) { L.push(`### ${name}`, ''); texts.forEach((t) => L.push(`- ${t}`)); L.push(''); }
   }
+  // The denial trend is for the Owner, so it has its own section and never enters the project rules.
+  if (snap.denials?.rising?.length) {
+    L.push('', '## Owner', '');
+    for (const c of snap.denials.rising) L.push(`- Denials and permission prompts: ${c.cause} has ${c.recent} events in the last 24 hours against a 6-day mean of ${c.mean} a day.`);
+    L.push(`- ${snap.denials.note}`);
+  }
   L.push('', '## Quotas', '', '| Provider | Window | Used | Expected | Resets |', '|---|---|---|---|---|');
   for (const q of snap.quotas || []) {
     if (q.error) continue;

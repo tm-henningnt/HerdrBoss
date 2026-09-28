@@ -422,6 +422,24 @@ When a `report.md` line starts with `Status: done` and the next character is whi
 
 `worker collect --record` records one usage event per worker run before merge. An unknown tool-call count stays `null`, and the ledger accepts `null` as unknown. If an older kit reports a ledger entry with `null` as invalid, install a HerdrBoss kit version that accepts `null`, then run `herdr-boss ledger check` again. This check reads the ledger. Do not replace `null` with `0` or edit the ledger entry. After a successful collection, Herdr Boss prints a reminder to merge the branch and then run `herdr-boss worktree prune --apply`. Collection does not remove a worktree. `herdr-boss usage record FILE` adds measured events. The Analytics page shows recorded usage and its coverage. Quota percentages are global per provider. They are not project token counts.
 
+## Denials and permission prompts
+
+Every 15 minutes, the service reads the Claude, Codex, OpenCode, and Pi logs for denials. The scan runs beside the engine tick, only when the engine acts. Two scans never run at the same time. The dashboard preview does not scan. One scan reads at most 20 MB in total. It continues from the saved byte offset of each file. A file with a new inode or a smaller size starts again at byte 0. The offsets are in `memory.json` under `denialScan`.
+
+Herdr Boss keeps only counts in `denials.json` in the data folder, with mode 0600. Each record has the UTC day, the harness, the cause, the project, and the count. The file keeps 30 days. It holds no message text, command, argument, or path. What each harness counts is in [the harness setup](harness-setup.md#denial-counts).
+
+Herdr Boss maps each record to a project by its working folder. A folder inside a registered repository, or inside a sibling `<repo>-wt-<name>`, belongs to that project. The registered repositories are in `project-repos.json`. All other folders count as `other`.
+
+The Analytics page shows the section **Denials and permission prompts**:
+
+- A table of the last 7 days by cause and project, with a count for each day.
+- A total for each harness.
+- A trend arrow. It compares the last 24 hours with the mean of the 6 days before them.
+
+The last 24 hours are the count of today (UTC) and the part of yesterday inside the window. A cause rises when its last 24 hours are above 2 times its 6-day mean and above 10 events. Then the page and the Owner section of the bulletin show "Discuss this trend with the Boss." Herdr Boss sends no pane prompt and adds no project rule for a denial trend.
+
+The first scans read the older logs at 20 MB for each scan. While more than 1 MB of logs is unread, the counts of older days are not complete. Then the page shows the unread size, and neither the page nor the bulletin shows the note.
+
 ## Resource leases
 
 A resource pool is a set of scarce items that several projects share, for example local serve ports. A project leases one item, uses it, and releases it. Herdr Boss keeps the leases in `leases.json` in its data directory, with mode `0600`. Each change holds the mutation lock of the machine locks.
@@ -486,6 +504,7 @@ The dashboard uses these routes. A request from another host needs the access to
 | `GET`, `PUT /api/policy` | Read or replace the policy. |
 | `GET /api/models` | The model allow-list. |
 | `GET`, `POST /api/usage` | Read usage, or record an event. |
+| `GET /api/denials` | The denial counts of the last 7 days, the harness totals, and the trend of each cause. |
 | `GET /api/projects`, `PUT`, `DELETE /api/projects/SLUG` | Read, write, or delete project status. |
 | `GET /api/handoffs`, `GET /api/handoffs/output?id=ID` | Handover records, and a successor's pane output. |
 | `POST /api/handoffs/plan`, `/prepare`, `/activate` | The handover steps. Activation needs `confirmed: true`. |

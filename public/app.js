@@ -21,6 +21,7 @@ let state = null;
 let lastRender = '';
 let models = {};
 let usage = null;
+let denials = null;
 let browserSessions = [];
 const browserMessages = {};
 const browserPreviewOpen = new Set();
@@ -922,6 +923,7 @@ function analyticsView(s) {
     usageBlock(),
     providerUsageBlock(),
     recentUsageBlock(),
+    denialsBlock(),
   ].join('');
 }
 
@@ -1120,6 +1122,25 @@ function usageBlock() {
 function providerUsageBlock() {
   const rows = Object.entries(usage?.byProvider || {});
   return `<section><div class="section-head"><h2>By provider</h2><span>Recorded work, not subscription balance</span></div>${rows.length ? `<div class="fleet-table-wrap"><table class="fleet-table"><thead><tr><th>Provider</th><th>Runs</th><th>Measured</th><th>Input</th><th>Output</th><th>Work time</th></tr></thead><tbody>${rows.map(([provider, x]) => `<tr><td data-label="Provider"><strong>${esc(PROVIDERS[provider] || provider)}</strong></td><td class="mono" data-label="Runs">${x.runs}</td><td class="mono" data-label="Measured">${x.measuredRuns} / ${x.runs}</td><td class="mono" data-label="Input">${x.inputTokens.toLocaleString()}</td><td class="mono" data-label="Output">${x.outputTokens.toLocaleString()}</td><td class="mono" data-label="Work time">${Math.round(x.workMinutes)} min</td></tr>`).join('')}</tbody></table></div>` : '<div class="calm-state">Provider usage will appear as worker runs are recorded.</div>'}</section>`;
+}
+
+const HARNESS_NAMES = { claude: 'Claude', codex: 'Codex', opencode: 'OpenCode', pi: 'Pi' };
+const TREND_ARROW = { up: ['↑', 'rising'], down: ['↓', 'falling'], flat: ['→', 'steady'] };
+
+// Counts only: the scan keeps no message text. A rising cause asks the Owner to talk with the Boss; it sends no pane prompt.
+function denialsBlock() {
+  const d = denials;
+  const head = '<div class="section-head"><h2>Denials and permission prompts</h2><span>Last 7 days, counts only</span></div>';
+  if (!d?.rows?.length) return `<section id="denials">${head}<div class="calm-state">No denials or permission prompts are recorded yet. Herdr Boss reads the harness logs every 15 minutes.</div></section>`;
+  const totals = Object.entries(d.harnessTotals || {}).sort((a, b) => b[1] - a[1]);
+  const arrow = (x) => { const [sign, word] = TREND_ARROW[x.trend] || TREND_ARROW.flat; return `<span class="denial-trend ${esc(x.trend)}" title="${esc(`${word}: ${x.recent} in 24 hours, 6-day mean ${x.mean}`)}">${sign}<span class="visually-hidden"> ${word}</span></span>`; };
+  const dayHead = d.days.map((day) => `<th class="mono">${esc(day.slice(5))}</th>`).join('');
+  const waiting = d.catchingUp ? `<div class="calm-state">Herdr Boss still reads older logs: ${Math.ceil(d.pendingBytes / 1024 ** 2).toLocaleString()} MB left. The counts of older days are not complete, so the trend note waits.</div>` : '';
+  const note = d.rising?.length ? `<div class="denial-note" role="status"><strong>${esc(d.note)}</strong><span>${d.rising.map((c) => `${esc(c.cause)}: ${c.recent} in 24 hours, 6-day mean ${c.mean}`).join(' · ')}</span></div>` : '';
+  return `<section id="denials">${head}${waiting}${note}<div class="usage-metrics">${totals.map(([h, n]) => `<div><strong>${n.toLocaleString()}</strong><span>${esc(HARNESS_NAMES[h] || h)}</span></div>`).join('')}</div>`
+    + `<div class="fleet-table-wrap"><table class="fleet-table denial-table"><thead><tr><th>Cause</th><th>Project</th><th>Harness</th>${dayHead}<th>Total</th><th>Trend</th></tr></thead><tbody>`
+    + d.rows.map((r) => `<tr><td data-label="Cause"><strong>${esc(r.cause)}</strong></td><td data-label="Project">${esc(state.control?.projects?.[r.project]?.label || r.project)}</td><td data-label="Harness">${esc(HARNESS_NAMES[r.harness] || r.harness)}</td>${r.counts.map((n, i) => `<td class="mono" data-label="${esc(d.days[i].slice(5))}">${n || '·'}</td>`).join('')}<td class="mono" data-label="Total">${r.total.toLocaleString()}</td><td data-label="Trend">${arrow(r)}</td></tr>`).join('')
+    + '</tbody></table></div></section>';
 }
 
 function recentUsageBlock() {
@@ -1464,7 +1485,9 @@ const HELP = {
     <h3>Control</h3><p>Select the screenshot to open the large view. The large view shows a still image of the last capture. Turn on <b>Control browser</b> or <b>Live</b> to refresh it at the chosen interval. Turn on <b>Control browser</b>, then click the image and type. Paste long text or a password into the masked field. On a phone the large view is full screen and the image fills the height. The text field and key controls appear only while <b>Control browser</b> is on.</p>`],
   analytics: ['Analytics', `
     <p>Recorded worker runs per project and provider: duration, outcome, and measured tokens.</p>
-    <p>Token totals include only runs that report tokens. Coverage shows how many runs have measurements. Quota percentages are global per provider; they are not project token counts.</p>`],
+    <p>Token totals include only runs that report tokens. Coverage shows how many runs have measurements. Quota percentages are global per provider; they are not project token counts.</p>
+    <h3>Denials and permission prompts</h3><p>Herdr Boss reads the Claude, Codex, OpenCode, and Pi logs every 15 minutes. It counts classifier refusals, sandbox errors, escalation requests, permission prompts, prompts with no answer within 10 minutes, and Herdr guard blocks. It keeps only the day, harness, cause, project, and count. It keeps no message text.</p>
+    <p>The table shows the last 7 days by cause and project. The arrow compares the last 24 hours with the mean of the 6 days before. When a cause is above 2 times its mean and above 10 events, the page and the bulletin show <b>Discuss this trend with the Boss.</b> Herdr Boss sends no prompt to an orchestrator about it. While more than 1 MB of older logs is unread, the note waits, because the counts of older days are not complete.</p>`],
   logs: ['Logs', `
     <p>The top line tells whether Herdr Boss sends notices to orchestrators.</p>
     <p>The guidance section shows the rules in force now, the same text as the bulletin that orchestrators read.</p>
@@ -2207,7 +2230,7 @@ async function refreshRoamgate() {
   } catch { $roamgate.hidden = true; }
 }
 async function refreshExtras() {
-  const results = await Promise.allSettled(['/api/models', '/api/usage', '/api/browser-sessions', '/api/handoffs'].map((url) => fetch(url).then((r) => r.json())));
+  const results = await Promise.allSettled(['/api/models', '/api/usage', '/api/browser-sessions', '/api/handoffs', '/api/denials'].map((url) => fetch(url).then((r) => r.json())));
   if (results[0].status === 'fulfilled') models = results[0].value;
   if (results[1].status === 'fulfilled') usage = results[1].value;
   if (results[2].status === 'fulfilled') {
@@ -2218,6 +2241,7 @@ async function refreshExtras() {
     }
   }
   if (results[3].status === 'fulfilled') handoffRecords = results[3].value;
+  if (results[4].status === 'fulfilled') denials = results[4].value;
   lastRender = '';
   render();
   if (location.pathname === '/browsers') for (const slug of browserPreviewOpen) if (!browserPreviewUrls[slug]) refreshBrowserPreview(slug, true);
