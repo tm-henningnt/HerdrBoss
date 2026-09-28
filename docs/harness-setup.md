@@ -173,4 +173,7 @@ The project comes from the `cwd` of a Claude record and of a Codex session. Open
 
 ## Known limits
 
+Claude Code keeps one memory folder per working folder. Start the Boss agent in `~/.herdr-boss`, so its memory is separate from the memory of each project orchestrator.
+
+
 Codex cannot launch Chromium in its sandbox. The seatbelt sandbox refuses the Chromium Mach port (`MachPortRendezvousServer`, permission denied, error 1100). Herdr Boss does not loosen the sandbox for this. Give tasks that launch a browser to a `claude`, `opencode`, or `pi` worker. `worker start --kind codex` prints a warning when the brief mentions browser work.

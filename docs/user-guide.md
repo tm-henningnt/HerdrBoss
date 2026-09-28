@@ -40,6 +40,8 @@ Store project memory in `docs/orchestration/memory.md`. Commit this file with th
 
 Store Boss memory in `~/.herdr-boss/boss-memory.md`. Keep this file private and never commit it.
 
+Start the Boss agent with `~/.herdr-boss` as its working folder, not a project repository. Claude Code keeps one memory folder per working folder. A Boss that starts in the HerdrBoss repository shares its Claude memory with the HerdrBoss orchestrator, so each one reads the other's notes.
+
 Use these five sections in this order:
 
 - `## Owner decisions in force`: Record one line per decision. Include the date (YYYY-MM-DD) and the source.
