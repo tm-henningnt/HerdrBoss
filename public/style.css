@@ -596,6 +596,24 @@ section[id], div[id="agents"] { scroll-margin-top: 105px; }
 .browser-tile-empty { display: grid; place-items: center; height: 100%; padding: 8px; color: var(--muted); font-size: 11.5px; }
 #browser-viewer .browser-tab-grid { width: min(100%, calc((94vh - 110px) * 1.6 * var(--cols) / var(--rows))); margin: 10px auto 0; }
 #browser-viewer .browser-tile-label { font-size: 14px; }
+.browser-tab-cell { position: relative; min-width: 0; }
+#app .browser-tab-cell .browser-tab-tile, #browser-viewer .browser-tab-cell .browser-tab-tile { width: 100%; }
+.browser-tab-list { display: grid; gap: 4px; min-width: 0; }
+.browser-tab-row { display: flex; align-items: stretch; gap: 4px; min-width: 0; }
+.browser-tab-pick { flex: 1 1 auto; min-width: 0; min-height: 32px; padding: 5px 8px; overflow: hidden; border: 1px solid var(--line); border-radius: 5px; background: var(--panel-2); color: var(--text); font: 11.5px/1.35 var(--sans); text-align: left; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.browser-tab-row.selected .browser-tab-pick { border-color: var(--accent); color: var(--accent); }
+.browser-tab-close { display: inline-flex; align-items: center; justify-content: center; min-width: 32px; min-height: 32px; padding: 0; border: 1px solid var(--line); border-radius: 5px; background: var(--panel-2); color: var(--text); font: 16px/1 var(--sans); cursor: pointer; }
+.browser-tab-close:hover { border-color: var(--crit); color: var(--crit); }
+.browser-tab-grid .browser-tab-close { position: absolute; top: 4px; right: 4px; z-index: 1; border-color: transparent; background: color-mix(in srgb, #000 55%, transparent); color: #fff; }
+.browser-tab-none { margin: 0; color: var(--muted); font-size: 11.5px; }
+.browser-confirm { max-width: 460px; width: calc(100% - 32px); }
+.browser-confirm p { margin: 0 0 12px; font-size: 13.5px; overflow-wrap: anywhere; }
+.browser-confirm .browser-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.browser-confirm button.danger { border-color: var(--crit); color: var(--crit); }
+@media (max-width: 760px) {
+  .browser-tab-close { min-width: 44px; min-height: 44px; }
+  .browser-tab-pick { min-height: 44px; }
+}
 #browser-viewer.grid-mode .browser-viewer-head > label, #browser-viewer.grid-mode #browser-viewer-navigate, #browser-viewer.grid-mode .browser-viewer-controls, #browser-viewer.grid-mode .browser-viewer-help, #browser-viewer.grid-mode > img { display: none; }
 #browser-viewer:not(.grid-mode) #browser-viewer-grid { display: none; }
 

@@ -497,15 +497,31 @@ function browserViewToggle(slug, withProject = true) {
   return `<div class="browser-view-toggle" role="group" aria-label="Browser view"><button type="button" data-browser-view="tab"${attr} aria-pressed="${!gridMode(slug)}">One tab</button><button type="button" data-browser-view="grid"${attr} aria-pressed="${gridMode(slug)}">All tabs</button></div>`;
 }
 
+function browserTabCloseButton(slug, tab) {
+  return `<button type="button" class="browser-tab-close" data-browser-close-tab="${esc(slug)}" data-tab="${esc(tab.id)}" aria-label="Close tab ${esc(tab.title || 'Untitled page')}" title="Close this tab">×</button>`;
+}
+
+// The one-tab view lists every tab as a row. Select a row to show it, or close it with the × control.
+function browserTabRow(slug, tab) {
+  const selected = tab.id === browserSelectedTab[slug];
+  return `<div class="browser-tab-row${selected ? ' selected' : ''}" role="listitem"><button type="button" class="browser-tab-pick" data-browser-pick-tab="${esc(slug)}" data-tab="${esc(tab.id)}" aria-current="${selected ? 'true' : 'false'}" title="Show this tab">${esc(browserTabLabel(tab))}</button>${browserTabCloseButton(slug, tab)}</div>`;
+}
+
+function browserTabList(slug) {
+  const tabs = browserTabs[slug] || [];
+  if (!tabs.length) return '<p class="browser-tab-none">No tabs are open.</p>';
+  return `<div class="browser-tab-list" role="list" aria-label="Browser tabs">${tabs.map((tab) => browserTabRow(slug, tab)).join('')}</div>`;
+}
+
 function browserGridMarkup(slug) {
   const tabs = browserTabs[slug] || [];
   if (!tabs.length) return '<div class="browser-preview-empty">No tabs are open.</div>';
   const cols = Math.ceil(Math.sqrt(tabs.length));
   return `<div class="browser-tab-grid" style="--cols:${cols};--rows:${Math.ceil(tabs.length / cols)}">${tabs.map((tab) => {
     const url = browserGridUrls[slug]?.[tab.id];
-    return `<button type="button" class="browser-tab-tile" data-browser-focus-tab="${esc(slug)}" data-tab="${esc(tab.id)}" title="Show only this tab">${url
+    return `<div class="browser-tab-cell"><button type="button" class="browser-tab-tile" data-browser-focus-tab="${esc(slug)}" data-tab="${esc(tab.id)}" title="Show only this tab">${url
       ? `<img data-browser-grid-image="${esc(slug)}" data-tab="${esc(tab.id)}" src="${url}" alt="${esc(tab.title || 'Browser tab')}">`
-      : `<span class="browser-tile-empty">${esc(browserGridErrors[slug]?.[tab.id] || 'Capturing…')}</span>`}<span class="browser-tile-label">${esc(browserTabLabel(tab))}</span></button>`;
+      : `<span class="browser-tile-empty">${esc(browserGridErrors[slug]?.[tab.id] || 'Capturing…')}</span>`}<span class="browser-tile-label">${esc(browserTabLabel(tab))}</span></button>${browserTabCloseButton(slug, tab)}</div>`;
   }).join('')}</div>`;
 }
 
@@ -555,8 +571,8 @@ function browserResources(s) {
       ${!b?.profileVerified ? `<div class="browser-actions"><button type="button" data-browser-request="${esc(p.slug)}" data-browser-mode="visible">Open visible</button><button type="button" data-browser-request="${esc(p.slug)}" data-browser-mode="headless">Open headless</button></div>` : ''}
       ${b?.profileVerified && !b.responsive ? '<small class="inline-feedback" role="status">Chrome does not answer on its debugging port. Restart or close it from Manage.</small>' : ''}
       ${browserMessages[p.slug] ? `<small class="inline-feedback" role="status">${esc(browserMessages[p.slug])}</small>` : ''}
-      ${preview ? `<div class="browser-preview"><div class="browser-preview-tools">${browserViewToggle(p.slug)}${gridMode(p.slug) ? `<span class="browser-grid-count">${tabs.length} tab${tabs.length === 1 ? '' : 's'}</span>` : `<select data-browser-tab="${esc(p.slug)}" aria-label="${esc(p.label)} browser page">${tabs.map((tab) => `<option value="${esc(tab.id)}" ${tab.id === browserSelectedTab[p.slug] ? 'selected' : ''}>${esc(browserTabLabel(tab))}</option>`).join('')}</select>`}<button type="button" data-browser-refresh="${esc(p.slug)}">Refresh</button>${gridMode(p.slug) ? `<button type="button" data-browser-expand="${esc(p.slug)}">Expand</button>` : `<button type="button" data-browser-new-tab="${esc(p.slug)}" title="Open a blank tab of your own. Agent tabs stay unchanged.">New tab</button>`}<label class="browser-live-toggle"><input type="checkbox" data-browser-live="${esc(p.slug)}" ${browserPreviewLive.has(p.slug) ? 'checked' : ''}> Live</label><label class="browser-live-rate">Every <select data-browser-interval="${esc(p.slug)}" aria-label="${esc(p.label)} live refresh interval">${PREVIEW_INTERVALS.map((ms) => `<option value="${ms}" ${ms === previewInterval(p.slug) ? 'selected' : ''}>${ms / 1000}s</option>`).join('')}</select></label></div>
-        ${gridMode(p.slug) ? browserGridMarkup(p.slug) : `<form class="browser-navigate" data-browser-navigate="${esc(p.slug)}"><button type="button" data-browser-history="back" data-browser-project="${esc(p.slug)}" ${browserNavigation[p.slug]?.canGoBack ? '' : 'disabled'}>Back</button><button type="button" data-browser-history="forward" data-browser-project="${esc(p.slug)}" ${browserNavigation[p.slug]?.canGoForward ? '' : 'disabled'}>Forward</button><button type="button" data-browser-history="home" data-browser-project="${esc(p.slug)}" ${tabs.length ? '' : 'disabled'}>Home</button><input type="text" name="url" value="${esc(browserAddressDraft[p.slug] ?? browserNavigation[p.slug]?.url ?? tabs.find((tab) => tab.id === browserSelectedTab[p.slug])?.url ?? '')}" placeholder="Enter a web address" aria-label="${esc(p.label)} browser address" autocomplete="off" spellcheck="false" required><button type="submit" ${tabs.length ? '' : 'disabled'}>Go</button></form>
+      ${preview ? `<div class="browser-preview"><div class="browser-preview-tools">${browserViewToggle(p.slug)}<span class="browser-grid-count">${tabs.length} tab${tabs.length === 1 ? '' : 's'}</span><button type="button" data-browser-refresh="${esc(p.slug)}">Refresh</button>${gridMode(p.slug) ? `<button type="button" data-browser-expand="${esc(p.slug)}">Expand</button>` : `<button type="button" data-browser-new-tab="${esc(p.slug)}" title="Open a blank tab of your own. Agent tabs stay unchanged.">New tab</button>`}<label class="browser-live-toggle"><input type="checkbox" data-browser-live="${esc(p.slug)}" ${browserPreviewLive.has(p.slug) ? 'checked' : ''}> Live</label><label class="browser-live-rate">Every <select data-browser-interval="${esc(p.slug)}" aria-label="${esc(p.label)} live refresh interval">${PREVIEW_INTERVALS.map((ms) => `<option value="${ms}" ${ms === previewInterval(p.slug) ? 'selected' : ''}>${ms / 1000}s</option>`).join('')}</select></label></div>
+        ${gridMode(p.slug) ? browserGridMarkup(p.slug) : `${browserTabList(p.slug)}<form class="browser-navigate" data-browser-navigate="${esc(p.slug)}"><button type="button" data-browser-history="back" data-browser-project="${esc(p.slug)}" ${browserNavigation[p.slug]?.canGoBack ? '' : 'disabled'}>Back</button><button type="button" data-browser-history="forward" data-browser-project="${esc(p.slug)}" ${browserNavigation[p.slug]?.canGoForward ? '' : 'disabled'}>Forward</button><button type="button" data-browser-history="home" data-browser-project="${esc(p.slug)}" ${tabs.length ? '' : 'disabled'}>Home</button><input type="text" name="url" value="${esc(browserAddressDraft[p.slug] ?? browserNavigation[p.slug]?.url ?? tabs.find((tab) => tab.id === browserSelectedTab[p.slug])?.url ?? '')}" placeholder="Enter a web address" aria-label="${esc(p.label)} browser address" autocomplete="off" spellcheck="false" required><button type="submit" ${tabs.length ? '' : 'disabled'}>Go</button></form>
         ${browserPreviewUrls[p.slug] ? `<button type="button" class="browser-image-button" data-browser-expand="${esc(p.slug)}" aria-label="Expand ${esc(p.label)} browser screenshot"><img data-browser-image="${esc(p.slug)}" src="${browserPreviewUrls[p.slug]}" alt="Current browser page in ${esc(p.label)}"></button>` : '<div class="browser-preview-empty">No screenshot yet</div>'}`}
         <small class="inline-feedback" data-browser-preview-message="${esc(p.slug)}" role="status">${esc(browserPreviewMessages[p.slug] || '')}</small></div>` : ''}
     </article>`;
@@ -2561,7 +2577,8 @@ const HELP = {
     <h3>Start and manage</h3><p><b>Open visible</b> or <b>Open headless</b> starts the browser. <b>Manage</b> restarts it in the other mode, closes it, or sets the window size for the next launch.</p>
     <h3>States</h3><p><b>ready</b>: Chrome runs with the project profile and answers on its debugging port. <b>not responding</b>: Chrome runs with the project profile, but its debugging port does not answer within 2 seconds. The preview is not available. Use <b>Manage</b> to restart or close it. If Chrome does not accept the close command, Herdr Boss sends SIGTERM to that Chrome process only. <b>offline</b>: no Chrome runs with the project profile. <b>port conflict</b>: another process uses the port.</p>
     <h3>Preview</h3><p><b>One tab</b> shows the selected tab with its address bar. <b>All tabs</b> shows every tab in one grid, without controls; select a tile to focus it. <b>Live</b> refreshes at the chosen interval. Without <b>Live</b>, the preview shows the last capture; <b>Refresh</b> takes a new one.</p>
-    <h3>Tabs</h3><p><b>Agent</b> marks a tab an agent uses. Screenshots never change a page. Navigation and input on an agent tab ask for confirmation first. <b>Hidden</b> marks a tab that is not visible; some web apps do not draw there. <b>New tab</b> opens a page of your own.</p>
+    <h3>Tabs</h3><p><b>Agent</b> marks a tab an agent uses. Screenshots never change a page. Navigation and input on an agent tab ask for confirmation first. <b>Hidden</b> marks a tab that is not visible; some web apps do not draw there. <b>New tab</b> opens a page of your own. Each tab row has a <b>Close tab</b> control. Before it closes a tab that an agent holds, the page asks you to confirm. It also warns you before it closes the last tab. A close never stops the browser.</p>
+    <h3>Address box</h3><p>The first focus of the address box selects all its text. A second click places a cursor where you select it.</p>
     <h3>Control</h3><p>Select the screenshot to open the large view. The large view shows a still image of the last capture. Turn on <b>Control browser</b> or <b>Live</b> to refresh it at the chosen interval. Turn on <b>Control browser</b>, then click the image and type. Paste long text or a password into the masked field. On a phone the large view is full screen and the image fills the height. The text field and key controls appear only while <b>Control browser</b> is on.</p>`],
   analytics: ['Analytics', `
     <p>Recorded worker runs per project and provider: duration, outcome, and measured tokens.</p>
@@ -2795,6 +2812,34 @@ document.addEventListener('keydown', (e) => {
   moveBoundary(index, e.key === 'Home' ? Number(handle.getAttribute('aria-valuemin')) : e.key === 'End' ? 100 : value + (e.key === 'ArrowRight' ? 1 : -1));
 });
 
+// The first focus of an address box selects all text. A second click places a normal cursor.
+document.addEventListener('focus', (e) => {
+  const input = e.target;
+  if (!input.matches?.('.browser-navigate input[name="url"]')) return;
+  if (input.dataset.selectAllForFocus) return;
+  input.dataset.selectAllForFocus = input.dataset.selectAllPointer ? 'pending' : 'done';
+  // Keyboard focus has no pointerup, so select at once. A pointer interaction selects on pointerup.
+  if (input.dataset.selectAllForFocus === 'done') input.select();
+}, true);
+
+document.addEventListener('pointerdown', (e) => {
+  const input = e.target.closest?.('.browser-navigate input[name="url"]');
+  if (input) input.dataset.selectAllPointer = '1';
+}, true);
+
+document.addEventListener('pointerup', (e) => {
+  const input = e.target.closest?.('.browser-navigate input[name="url"]');
+  if (input) delete input.dataset.selectAllPointer;
+  if (!input || input.dataset.selectAllForFocus !== 'pending') return;
+  input.dataset.selectAllForFocus = 'done';
+  if (document.activeElement === input) { e.preventDefault(); input.select(); }
+}, true);
+
+document.addEventListener('blur', (e) => {
+  const input = e.target;
+  if (input.matches?.('.browser-navigate input[name="url"]')) delete input.dataset.selectAllForFocus;
+}, true);
+
 document.addEventListener('input', (e) => {
   const addressForm = e.target.closest?.('.browser-navigate');
   if (addressForm && e.target.name === 'url') {
@@ -2866,14 +2911,6 @@ document.addEventListener('change', (e) => {
     const slug = e.target.dataset.browserLive;
     if (e.target.checked) { browserPreviewLive.add(slug); browserNextRefresh[slug] = Date.now() + previewInterval(slug); refreshBrowserPreview(slug); }
     else { browserPreviewLive.delete(slug); browserRefreshStopped(slug); }
-    return;
-  }
-  if (e.target.dataset.browserTab) {
-    const slug = e.target.dataset.browserTab;
-    browserSelectedTab[slug] = e.target.value;
-    delete browserNavigation[slug];
-    delete browserAddressDraft[slug];
-    refreshBrowserPreview(slug);
     return;
   }
   if (e.target.dataset.ladderKind !== undefined || e.target.dataset.ladderModel !== undefined || e.target.dataset.ladderEffort !== undefined) {
@@ -3046,6 +3083,48 @@ async function postBrowserAction(url, body) {
     browserConfirmedTabs.add(key);
     return postJson(url, { ...body, confirmAttached: true });
   }
+}
+
+// A dialog, not window.confirm, so the confirmation is part of the page and shows on every screen.
+function browserConfirm(question, action = 'Close tab') {
+  return new Promise((resolve) => {
+    const dialog = document.createElement('dialog');
+    dialog.className = 'browser-confirm';
+    dialog.setAttribute('aria-label', 'Confirm tab close');
+    dialog.innerHTML = '<p class="browser-confirm-text"></p><div class="browser-confirm-actions"><button type="button" data-browser-confirm="no">Cancel</button><button type="button" data-browser-confirm="yes" class="danger"></button></div>';
+    dialog.querySelector('.browser-confirm-text').textContent = question;
+    dialog.querySelector('[data-browser-confirm="yes"]').textContent = action;
+    let answer = false;
+    const finish = (result) => { answer = result; if (dialog.open) dialog.close(); };
+    dialog.addEventListener('close', () => { dialog.remove(); resolve(answer); }, { once: true });
+    dialog.addEventListener('cancel', (e) => { e.preventDefault(); finish(false); });
+    dialog.querySelector('[data-browser-confirm="no"]').addEventListener('click', () => finish(false));
+    dialog.querySelector('[data-browser-confirm="yes"]').addEventListener('click', () => finish(true));
+    document.body.append(dialog);
+    dialog.showModal();
+  });
+}
+
+// A close asks before it removes a tab that an agent holds. A close never stops the browser process.
+async function closeBrowserTab(slug, tabId, button = null) {
+  const tabs = browserTabs[slug] || [];
+  const tab = tabs.find((candidate) => candidate.id === tabId);
+  const agent = tab?.owner || (tab?.attached ? 'an agent' : null);
+  const title = tab?.title || 'Untitled page';
+  if (agent && !(await browserConfirm(`Tab ${title} belongs to ${agent}. Close it anyway?`))) return;
+  if (tabs.length === 1 && !(await browserConfirm('This is the last tab. The browser keeps running with no page. Close it anyway?'))) return;
+  if (button) button.disabled = true;
+  try {
+    const body = { project: slug, tabId };
+    if (agent) body.force = true;
+    await postJson('/api/browser-sessions/tab-close', body);
+    if (browserSelectedTab[slug] === tabId) delete browserSelectedTab[slug];
+    delete browserNavigation[slug]; delete browserAddressDraft[slug];
+    previewMessage(slug, 'Closed one tab. The browser keeps running.');
+    lastRender = ''; render();
+    await refreshBrowserPreview(slug, true);
+  } catch (error) { previewMessage(slug, error.message); }
+  finally { if (button) button.disabled = false; }
 }
 
 function scheduleViewerRefresh(slug) {
@@ -3271,6 +3350,18 @@ document.addEventListener('click', async (e) => {
   }
   if (e.target.dataset.browserView) {
     setBrowserView(e.target.dataset.browserProject || document.getElementById('browser-viewer').dataset.project, e.target.dataset.browserView);
+    return;
+  }
+  if (e.target.dataset.browserCloseTab) {
+    await closeBrowserTab(e.target.dataset.browserCloseTab, e.target.dataset.tab, e.target);
+    return;
+  }
+  if (e.target.dataset.browserPickTab) {
+    const slug = e.target.dataset.browserPickTab;
+    browserSelectedTab[slug] = e.target.dataset.tab;
+    delete browserNavigation[slug]; delete browserAddressDraft[slug];
+    lastRender = ''; render();
+    await refreshBrowserPreview(slug, true);
     return;
   }
   const tile = e.target.closest?.('[data-browser-focus-tab]');
