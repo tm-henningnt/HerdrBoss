@@ -1,6 +1,6 @@
 // Turns a snapshot into alerts and bulletin advice. Pure functions, no side effects.
 import { dashboardUrl } from './config.js';
-import { goalSummary, machineLimits, POLICY_DEFAULTS, unmeteredClosedParts, unmeteredSummary } from './control.js';
+import { goalSummary, hasQuotaData, machineLimits, POLICY_DEFAULTS, unmeteredClosedParts, unmeteredSummary } from './control.js';
 import { blockedWorkerAlerts } from './worker-failures.js';
 import { kitRevision } from './kit/agents-check.js';
 import { leaseBulletinLines } from './leases.js';
@@ -167,7 +167,7 @@ export function evaluate(snap, cfg, paneSince, now = Date.now(), policy = null) 
 
   // ----- Quotas -----
   for (const q of snap.quotas || []) {
-    if (q.error) continue;
+    if (!hasQuotaData(q)) continue;
     if (policy?.providerModes?.[q.provider] === 'ignore') continue;
     const name = providerName(q.provider);
     for (const w of q.windows) {
@@ -320,7 +320,9 @@ export function renderBulletin(snap, evaluation, cfg) {
   const rules = [...evaluation.advice, ...shared.map((a) => a.text)];
   // Without quota data, pacing is blind. Say so, and never claim that no restriction applies.
   const quotaRows = snap.quotas || [];
-  const failed = quotaRows.filter((q) => q.error).map((q) => providerName(q.provider));
+  const failed = quotaRows.filter((q) => !hasQuotaData(q)).map((q) => providerName(q.provider));
+  const stale = quotaRows.filter((q) => q.error && q.stale);
+  rules.unshift(...stale.map((q) => `Quota data for ${providerName(q.provider)} is from ${fmtTime(q.staleSince)}; the last probe failed.`));
   if (!quotaRows.length) rules.unshift('Quota data unavailable: the quota collector failed. Pace work carefully until the data returns.');
   else if (failed.length) rules.unshift(`Quota data unavailable for ${failed.join(', ')}. Pace work on those providers carefully.`);
   if (rules.length) rules.forEach((r) => L.push(`- ${r}`));
@@ -349,10 +351,11 @@ export function renderBulletin(snap, evaluation, cfg) {
   }
   L.push('', '## Quotas', '', '| Provider | Window | Used | Expected | Resets |', '|---|---|---|---|---|');
   for (const q of snap.quotas || []) {
-    if (q.error) continue;
+    if (!hasQuotaData(q)) continue;
+    const provider = q.stale ? `${providerName(q.provider)} quota from ${fmtTime(q.staleSince)} (probe failed)` : providerName(q.provider);
     for (const w of q.windows) {
       const reset = w.resetsAt && Date.parse(w.resetsAt) <= Date.parse(snap.updatedAt || Date.now());
-      L.push(`| ${providerName(q.provider)} | ${w.label} | ${reset ? 'reset, not yet measured' : `${w.usedPercent}%`} | ${reset ? '–' : `${w.expectedPercent ?? '–'}${w.expectedPercent != null ? '%' : ''}`} | ${fmtTime(w.resetsAt)} |`);
+      L.push(`| ${provider} | ${w.label} | ${reset ? 'reset, not yet measured' : `${w.usedPercent}%`} | ${reset ? '–' : `${w.expectedPercent ?? '–'}${w.expectedPercent != null ? '%' : ''}`} | ${fmtTime(w.resetsAt)} |`);
     }
   }
   if (snap.lanes && Object.keys(snap.lanes).length) {

@@ -286,7 +286,7 @@ export function savePolicy(value, models, { file = FILE, quotas = null, now = Da
   if (errors.length) return errors;
   if (quotas) for (const [provider, windows] of Object.entries(merged.pacingGoals || {})) for (const [key, goal] of Object.entries(windows || {})) {
     if (goal?.end?.type !== 'at') continue;
-    const window = quotas.find((q) => q.provider === provider && !q.error)?.windows?.find((w) => w.key === key && !w.extra);
+    const window = quotas.find((q) => q.provider === provider && hasQuotaData(q))?.windows?.find((w) => w.key === key && !w.extra);
     goal.end.resetAt = new Date(window.resetsAt).toISOString();
   }
   writePolicy(merged, file);
@@ -297,7 +297,7 @@ export function validatePacingGoalEnds(policy, quotas, now = Date.now()) {
   const errors = [];
   for (const [provider, windows] of Object.entries(policy.pacingGoals || {})) for (const [key, goal] of Object.entries(windows || {})) {
     if (!isObject(goal?.end)) continue;
-    const window = (quotas || []).find((q) => q.provider === provider && !q.error)?.windows?.find((w) => w.key === key && !w.extra);
+    const window = (quotas || []).find((q) => q.provider === provider && hasQuotaData(q))?.windows?.find((w) => w.key === key && !w.extra);
     const reset = Date.parse(window?.resetsAt);
     const start = reset - window?.windowMinutes * 60000;
     const end = pacingGoalEnd(policy, provider, window);
@@ -316,7 +316,7 @@ export function clearExpiredOneOffGoals(policy, quotas, now = Date.now(), { file
   const cleared = [];
   for (const [provider, windows] of Object.entries(policy.pacingGoals || {})) for (const [key, goal] of Object.entries(windows || {})) {
     if (goal?.end?.type !== 'at') continue;
-    const window = (quotas || []).find((q) => q.provider === provider && !q.error)?.windows?.find((w) => w.key === key && !w.extra);
+    const window = (quotas || []).find((q) => q.provider === provider && hasQuotaData(q))?.windows?.find((w) => w.key === key && !w.extra);
     const resetChanged = goal.end.resetAt && window?.resetsAt && Date.parse(goal.end.resetAt) !== Date.parse(window.resetsAt);
     if (Date.parse(goal.end.at) > now && !resetChanged) continue;
     delete windows[key];
@@ -386,18 +386,21 @@ function distribute(slots, weights) {
   return result;
 }
 
+// A stale row is the last good row of a provider whose latest probe failed. Pacing and lanes use it as data.
+export const hasQuotaData = (q) => !q?.error || q.stale === true;
+
 // A window whose reset time has passed is unmeasured until the next reading, so its old percentage does not count.
 const liveWindow = (w, now) => !w.extra && Number.isFinite(w.usedPercent) && !(w.resetsAt && Date.parse(w.resetsAt) <= now);
 
 function quotaRisk(q, policy, now = Date.now()) {
-  if (q.error) return null;
+  if (!hasQuotaData(q)) return null;
   const windows = (q.windows || []).filter((w) => liveWindow(w, now));
   const risk = windows.filter((w) => w.usedPercent >= 100 - policy.reservePercent || (w.willLast === false && w.etaSeconds != null && w.etaSeconds <= policy.handoffLeadMinutes * 60));
   return risk.sort((a, b) => b.usedPercent - a.usedPercent)[0] || null;
 }
 
 function quotaExhaustion(q, now = Date.now()) {
-  if (q.error) return null;
+  if (!hasQuotaData(q)) return null;
   return (q.windows || []).filter((w) => liveWindow(w, now) && w.usedPercent >= 100)
     .sort((a, b) => (Date.parse(b.resetsAt) || 0) - (Date.parse(a.resetsAt) || 0))[0] || null;
 }
@@ -448,7 +451,7 @@ const paceScore = (w, expected) => expected != null ? w.usedPercent - expected :
 
 // Any live window that is ahead of pace makes its provider ahead of pace. The lane reports the worst of them.
 function quotaPressure(q, policy, now = Date.now()) {
-  if (policy.providerModes[q.provider] === 'ignore' || q.error) return null;
+  if (policy.providerModes[q.provider] === 'ignore' || !hasQuotaData(q)) return null;
   return (q.windows || []).filter((w) => liveWindow(w, now) && aheadOfQuotaPace(policy, q.provider, w, now))
     .sort((a, b) => paceScore(b, adjustedExpectedPercent(policy, q.provider, b, now)) - paceScore(a, adjustedExpectedPercent(policy, q.provider, a, now)))[0] || null;
 }
@@ -462,7 +465,7 @@ export function laneStatus(quotas, policy, now = Date.now()) {
       resolvedEnd: pacingGoalEnd(policy, q.provider, w),
     }));
     const resetWindows = (q.windows || []).filter((w) => !w.extra && w.resetsAt && Date.parse(w.resetsAt) <= now).map((w) => w.label);
-    if (q.error) { lanes[q.provider] = { state: 'unknown', reason: String(q.error).slice(0, 200), resetWindows, goals }; continue; }
+    if (!hasQuotaData(q)) { lanes[q.provider] = { state: 'unknown', reason: String(q.error).slice(0, 200), resetWindows, goals }; continue; }
     const exhausted = quotaExhaustion(q, now);
     if (exhausted) {
       lanes[q.provider] = { state: 'exhausted', window: exhausted.label, usedPercent: exhausted.usedPercent, resetAt: exhausted.resetsAt || null, resetWindows, goals };

@@ -136,3 +136,23 @@ test('the engine ignores saved quotas older than 15 minutes', { timeout: 30000 }
   assert.deepEqual(out.steps[0].quotas, []);
   assert.equal(out.steps[0].cached, false);
 });
+
+const BOTH = [...QUOTAS, { provider: 'claude', plan: 'max', windows: [{ key: 'primary', label: 'Session', usedPercent: 20, resetsAt: '2026-09-27T14:00:00.000Z', windowMinutes: 300 }] }];
+const CLAUDE_FAILED = [...NEWER, { provider: 'claude', error: 'Claude usage probe timed out.' }];
+
+test('a failed provider keeps its last good row for 60 minutes as a stale row, then only the error', { timeout: 30000 }, (t) => {
+  const out = runScenario(t, { steps: [
+    { tick: true }, { resolve: BOTH }, { tick: true },
+    { advance: 301000, tick: true }, { resolve: CLAUDE_FAILED }, { tick: true },
+    { advance: 25 * MIN, tick: true }, { resolve: CLAUDE_FAILED }, { tick: true },
+    { advance: 30 * MIN, tick: true }, { resolve: CLAUDE_FAILED }, { tick: true },
+  ] });
+  const claude = (step) => step.quotas.find((q) => q.provider === 'claude');
+  const [, fresh, , kept, , keptAgain, , dropped] = out.steps;
+  assert.equal(claude(fresh).stale, undefined);
+  assert.deepEqual(claude(kept), { ...BOTH[1], stale: true, staleSince: new Date(T0).toISOString(), error: 'Claude usage probe timed out.' });
+  assert.deepEqual(kept.quotas.find((q) => q.provider === 'codex'), NEWER[0]);
+  assert.equal(claude(keptAgain).staleSince, new Date(T0).toISOString(), 'a stale row keeps the time of the good read');
+  assert.equal(claude(keptAgain).stale, true);
+  assert.deepEqual(claude(dropped), { provider: 'claude', error: 'Claude usage probe timed out.' });
+});

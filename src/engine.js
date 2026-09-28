@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
 import { DATA_DIR, LIVE_DATA_DIR, dashboardUrl } from './config.js';
-import { collectHerdr, collectQuotas, collectMachine, collectProcesses, collectCwdProcesses, collectMissingWorktreeProcesses, collectWorktreeCounts, collectPiModels, findBrowsers, cpuUse, run } from './collect.js';
+import { collectHerdr, collectQuotas, collectMachine, collectProcesses, collectCwdProcesses, collectMissingWorktreeProcesses, collectWorktreeCounts, collectPiModels, findBrowsers, cpuUse, keepStaleRows, run } from './collect.js';
 import { evaluate, renderBulletin, fmtDuration, providerName, broadcastTargets, staleStatuses } from './rules.js';
 import { listProjects } from './projects.js';
 import { readProjectRepos } from './harness.js';
@@ -601,11 +601,11 @@ export class Engine extends EventEmitter {
       this.quotaError = result.error || 'codexbar: no quota rows';
       return;
     }
-    this.quotas = result.quotas;
+    this.quotas = keepStaleRows(result.quotas, this.quotas, this.quotasAt, result.at);
     this.quotasAt = result.at;
     this.quotasCached = false;
     this.quotaError = null;
-    recordQuotaSnapshot(result.quotas, new Date(result.at).toISOString());
+    recordQuotaSnapshot(this.quotas, new Date(result.at).toISOString());
   }
 
   // The sweep runs beside the tick, because deleting many clones can take longer than one tick.
@@ -679,6 +679,8 @@ export class Engine extends EventEmitter {
     });
     for (const h of [...handoffCandidates(control), ...stopped, ...stoppedBoss]) {
       if (!h.window) continue;
+      // A stale row is data for pacing, but not proof for a handover.
+      if (h.provider && this.quotas.find((q) => q.provider === h.provider)?.stale) continue;
       if (records.some((x) => x.sourcePane === h.pane && ['prepared', 'preparing', 'needs-inspection'].includes(x.status))) continue;
       if (!h.target) {
         const key = `no-target:${h.pane}:${h.window.resetsAt}`;
