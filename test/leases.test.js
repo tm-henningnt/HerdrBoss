@@ -175,6 +175,36 @@ test('lease changes wait for the shared mutation guard', async (t) => {
   assert.equal(readLeases(ctx.dataDir).leases.length, 1);
 });
 
+test('lease acquire and release recover a missing-owner mutation guard older than ten seconds', () => {
+  const ctx = context();
+  const directory = path.join(ctx.dataDir, 'locks', 'machine');
+  const guard = path.join(directory, '.mutation');
+  const seedOldGuard = () => {
+    fs.mkdirSync(guard, { recursive: true, mode: 0o700 });
+    const old = new Date(Date.now() - 11_000);
+    fs.utimesSync(guard, old, old);
+  };
+
+  seedOldGuard();
+  const { lease } = acquire(ctx, ORCH);
+  assert.equal(lease.item, '47100');
+  assert.equal(fs.existsSync(guard), false, 'acquire removes the stale guard');
+
+  seedOldGuard();
+  const released = releaseLease('serve-ports', lease.item, {
+    pools: ctx.pools,
+    dataDir: ctx.dataDir,
+    config: ctx.config,
+    env: ORCH,
+    herdr: fakeHerdr(),
+    now: NOW,
+    output: () => {},
+  });
+  assert.equal(released.item, lease.item);
+  assert.deepEqual(readLeases(ctx.dataDir).leases, []);
+  assert.equal(fs.existsSync(guard), false, 'release removes the stale guard');
+});
+
 test('a preferred item of another project is borrowed, and --ttl sets the expiry', () => {
   const ctx = context();
   const { lease } = acquire(ctx, ORCH, { prefer: '47102', ttlMinutes: 30 });

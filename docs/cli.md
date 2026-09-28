@@ -186,7 +186,7 @@ herdr-boss worker start fix-74 --kind claude --task-file brief.md --allow src/pa
 
 | Command | Action |
 |---|---|
-| `lock acquire NAME [--wait SECONDS]` | Acquire a manual lock. `full-suite` is a machine lock. Other names are locks for this Git repository. Wait up to five seconds when another lock or lease change is in progress. `--wait` accepts a whole number of seconds and waits for a held lock. |
+| `lock acquire NAME [--wait SECONDS]` | Acquire a manual lock. `full-suite` is a machine lock. Other names are locks for this Git repository. Wait up to five seconds when another lock or lease change is in progress. A lock change removes a stale guard that a killed command left. `--wait` accepts a whole number of seconds and waits for a held lock. |
 | `lock release NAME` | Release a lock owned by this pane, or a stale lock. Wait up to five seconds when another lock or lease change is in progress. |
 | `lock list` | List the locks of this Git repository and the machine locks. Show each lock's age, holder pane, kind, scope, and state. Show the time left for a manual `full-suite` lock. |
 | `push [ARGS...]` | Run `git push ARGS...`. When a pre-push hook exists, take and release the `full-suite` lock around the push. The default wait for a held lock is 1800 seconds. Wait up to five seconds for another lock or lease change. If release fails, print a warning. Keep the push exit code, or return 1 if the push succeeded. |

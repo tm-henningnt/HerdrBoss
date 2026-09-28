@@ -6,6 +6,7 @@ import { execFileSync } from 'node:child_process';
 import test from 'node:test';
 import { loadProjectConfig } from '../src/kit/config.js';
 import { runKitCommand } from '../src/kit/cli.js';
+import { withMutationLock } from '../src/kit/locks.js';
 
 function git(cwd, ...args) {
   return execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -81,11 +82,52 @@ test('suite holds the full-suite lock around the command and passes the exit cod
   assert.equal(f.readSeen().lock.kind, 'suite');
   assert.equal(f.readSeen().lock.ownerPane, 'ws:orch');
   assert.equal(fs.existsSync(f.lockFile), false, 'the lock is released after the command');
+  assert.equal(fs.existsSync(path.join(f.dataDir, 'locks', 'machine', '.mutation')), false, 'the mutation guard is removed');
   const failed = f.run([], 3);
   assert.equal(failed.exitCode, 3);
   assert.equal(f.readSeen().locked, true);
   assert.equal(fs.existsSync(f.lockFile), false, 'the lock is released after a failed command');
   assert.ok(f.lines.some((line) => /acquired/.test(line)) && f.lines.some((line) => /released/.test(line)), f.lines.join('\n'));
+});
+
+test('suite removes an old ownerless mutation guard and writes one stderr line', (t) => {
+  const f = fixture(t, 'herdr-suite-stale-guard-');
+  const directory = path.join(f.dataDir, 'locks', 'machine');
+  const guard = path.join(directory, '.mutation');
+  fs.mkdirSync(guard, { recursive: true, mode: 0o700 });
+  const old = new Date(Date.now() - 11_000);
+  fs.utimesSync(guard, old, old);
+
+  const writes = [];
+  const originalWrite = process.stderr.write;
+  let result;
+  try {
+    process.stderr.write = (chunk) => { writes.push(String(chunk)); return true; };
+    result = f.run([]);
+  } finally {
+    process.stderr.write = originalWrite;
+  }
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(fs.existsSync(guard), false);
+  assert.equal(writes.length, 1);
+  assert.match(writes[0].trimEnd(), /^Removed a stale lock guard \(PID unknown, age \d+s\)\.$/);
+});
+
+test('withMutationLock records its PID and timestamp, then removes the owner file', (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-mutation-owner-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+
+  const result = withMutationLock(directory, () => {
+    const owner = JSON.parse(fs.readFileSync(path.join(directory, '.mutation', 'owner.json'), 'utf8'));
+    assert.deepEqual(Object.keys(owner).sort(), ['at', 'pid']);
+    assert.equal(owner.pid, process.pid);
+    assert.ok(Number.isFinite(Date.parse(owner.at)));
+    return 'changed';
+  });
+
+  assert.equal(result, 'changed');
+  assert.equal(fs.existsSync(path.join(directory, '.mutation')), false);
 });
 
 test('suite releases the lock when the command cannot start', (t) => {
