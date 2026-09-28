@@ -530,6 +530,21 @@ test('machine load guard reports active CPU and load limits', async () => {
   assert.equal(machineLimits(high, policy({ machine: { ...POLICY_DEFAULTS.machine, guardPausedUntil: pause } }), now + 3600001).guardState, 'active');
 });
 
+test('an active night state makes the Owner away', async () => {
+  const { machineLimits } = await import('../src/control.js');
+  const now = Date.parse('2026-09-26T12:00:00Z');
+  const present = { cpus: 8, load: [1, 4, 5], ownerIdleMinutes: 0, cpuUse: {} };
+  const night = { active: true, since: '2026-09-26T20:00:00.000Z', until: '2026-09-27T05:30:00.000Z', by: 'owner', quietHours: false };
+  assert.equal(machineLimits(present, policy(), now).owner, 'present');
+  assert.deepEqual(machineLimits(present, policy(), now, night), machineLimits({ ...present, ownerIdleMinutes: 11 }, policy(), now));
+  // The same machine limits apply as for an idle Owner.
+  assert.equal(machineLimits(present, policy(), now, night).cpuLimit, 95);
+  assert.equal(machineLimits(present, policy(), now, night).loadLimit, 64);
+  // An inactive state keeps the idle rule only.
+  assert.equal(machineLimits(present, policy(), now, { ...night, active: false }).owner, 'present');
+  assert.equal(machineLimits(present, policy(), now, null).owner, 'present');
+});
+
 test('machine CPU and load alerts follow guard state while memory alerts stay independent', () => {
   const now = Date.parse('2026-09-26T12:00:00Z');
   const cfg = { quota: { warnPercent: 90, criticalPercent: 98 }, machine: { memFreeWarnPercent: 15, loadWarnFactor: 2 }, providerKinds: {} };

@@ -218,7 +218,7 @@ export function evaluate(snap, cfg, paneSince, now = Date.now(), policy = null) 
   // ----- Machine -----
   const m = snap.machine;
   if (m) {
-    const limits = m.limits || (policy ? machineLimits({ ...m, cpuUse: snap.cpuUse }, policy, now) : null);
+    const limits = m.limits || (policy ? machineLimits({ ...m, cpuUse: snap.cpuUse }, policy, now, snap.night) : null);
     const cpuPercent = limits ? Number(limits.cpuPercent.toFixed(1)) : null;
     if (m.memFreePercent != null && m.memFreePercent < cfg.machine.memFreeWarnPercent) {
       alerts.push({
@@ -338,6 +338,14 @@ export function renderBulletin(snap, evaluation, cfg) {
   rules.unshift(...stale.map((q) => `Quota data for ${providerName(q.provider)} is from ${fmtTime(q.staleSince)}; the last probe failed.`));
   if (!quotaRows.length) rules.unshift('Quota data unavailable: the quota collector failed. Pace work carefully until the data returns.');
   else if (failed.length) rules.unshift(`Quota data unavailable for ${failed.join(', ')}. Pace work on those providers carefully.`);
+  // An active night state comes last into the list, so it is the first line. An orchestrator reads the Owner rule first.
+  if (snap.night?.active) {
+    const end = snap.night.until
+      ? new Date(snap.night.until).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
+      : '?';
+    rules.unshift(`Night watch until ${end} (Owner away). Work as normal; the Boss handles judgment calls.`);
+    if (snap.night.quietHours === true) rules.unshift('Quiet hours: on.');
+  }
   if (rules.length) rules.forEach((r) => L.push(`- ${r}`));
   else L.push('- No quota or active machine restrictions.');
   // Rules for one project stay under that project, so an orchestrator reads only its own.

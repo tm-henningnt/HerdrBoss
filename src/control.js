@@ -115,8 +115,11 @@ export function loadPolicy({ file = FILE, models = null, warn = (text) => consol
   return policy;
 }
 
-export function machineLimits(machine, policy, now = Date.now()) {
-  const away = Number.isFinite(machine.ownerIdleMinutes) && machine.ownerIdleMinutes >= policy.machine.ownerAwayMinutes;
+// The Owner is away when the machine measured an idle Owner, or when night watch is active. An active night state
+// uses the same away limits as an idle Owner. It changes no machine limit.
+export function machineLimits(machine, policy, now = Date.now(), night = null) {
+  const idle = Number.isFinite(machine.ownerIdleMinutes) && machine.ownerIdleMinutes >= policy.machine.ownerAwayMinutes;
+  const away = idle || night?.active === true;
   const cpu = Number.isFinite(machine.cpuTotalSample) ? machine.cpuTotalSample : Object.values(machine.cpuUse || {}).reduce((sum, value) => sum + (Number(value.cpu) || 0), 0);
   const cores = machine.cpus || 1;
   const factor = away ? policy.machine.awayLoadFactor : policy.machine.presentLoadFactor;
