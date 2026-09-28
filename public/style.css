@@ -1040,6 +1040,67 @@ body.dep-full-open { overflow: hidden; }
 :root[data-theme="dark"] button.mail-decline { color: var(--crit); }
 :root .mail-entry .mail-meta strong { color: var(--text); }
 
+/* Chat page. The two panes sit side by side on a wide screen. */
+.chat-notice { margin: 0; color: var(--muted); font-size: 12.5px; }
+.chat-notice[hidden] { display: none; }
+.chat-layout { display: grid; grid-template-columns: minmax(220px, 300px) minmax(0, 1fr); align-items: stretch; gap: 14px; min-width: 0; }
+.chat-list-pane, .chat-panel, .chat-empty-state { min-width: 0; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.chat-list-pane { overflow: hidden; }
+.chat-list-head { padding: 14px 14px 0; }
+.chat-list-head h2 { margin-bottom: 10px; color: var(--text); font-size: 14px; text-transform: none; letter-spacing: 0; }
+.chat-list-head .sub { margin-left: auto; font: 12px var(--mono); }
+.chat-list { margin: 0; padding: 0; list-style: none; }
+.chat-item + .chat-item { border-top: 1px solid var(--line); }
+.chat-row { display: flex; align-items: center; gap: 10px; width: 100%; min-width: 0; min-height: 44px; padding: 10px 12px; border: 0; background: transparent; color: var(--text); text-align: left; }
+.chat-row:hover, .chat-row:focus-visible { background: var(--panel-2); }
+.chat-row[aria-current="true"] { background: color-mix(in srgb, var(--accent) 12%, var(--panel-2)); }
+.chat-avatar { flex: 0 0 auto; display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; background: color-mix(in srgb, var(--accent) 16%, var(--panel)); color: var(--accent); font: 650 12px var(--mono); }
+.chat-main { display: grid; gap: 1px; flex: 1 1 auto; min-width: 0; }
+.chat-name { font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-preview { color: var(--muted); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-side { display: grid; gap: 4px; flex: 0 0 auto; justify-items: end; }
+.chat-time { color: var(--faint); font: 11.5px var(--mono); }
+.chat-unread { min-width: 20px; padding: 1px 6px; border-radius: 99px; background: var(--accent); color: #fff; font: 600 11px var(--mono); text-align: center; }
+.chat-list-pane .chat-empty { margin: 14px; }
+.chat-empty { margin: 0; padding: 14px; color: var(--muted); }
+.chat-empty-state { display: grid; place-items: center; min-height: 220px; color: var(--muted); }
+.chat-panel { display: flex; min-height: 460px; max-height: 72vh; flex-direction: column; overflow: hidden; }
+.chat-panel-head { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.chat-panel-head h2 { min-width: 0; margin: 0; color: var(--text); font-size: 14px; text-transform: none; letter-spacing: 0; overflow-wrap: anywhere; }
+.chat-back { display: none; flex: 0 0 auto; min-height: 44px; padding: 6px 10px; }
+.chat-scroll { position: relative; min-height: 0; flex: 1; overflow: auto; overscroll-behavior: contain; }
+.chat-more { position: sticky; top: 0; margin: 0; padding: 6px 12px; background: var(--panel-2); color: var(--muted); font-size: 11.5px; text-align: center; }
+.chat-bubbles { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; margin: 0; padding: 12px; list-style: none; }
+.chat-bubble { display: grid; gap: 4px; max-width: 82%; padding: 8px 11px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel-2); border-bottom-left-radius: 4px; }
+.chat-bubble.from-agent { justify-self: start; }
+.chat-bubble.from-owner { justify-self: end; background: color-mix(in srgb, var(--accent) 12%, var(--panel)); border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); border-bottom-right-radius: 4px; }
+.chat-bubble-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.chat-bubble-meta { margin: 0; color: var(--muted); font: 11.5px var(--mono); overflow-wrap: anywhere; }
+.chat-state.ok { color: var(--ok); }
+.chat-state.fail { color: var(--crit); }
+.chat-action-link { justify-self: start; margin-top: 2px; color: var(--accent); font-size: 12.5px; font-weight: 650; }
+.chat-bubble-retry { margin: 0; }
+.chat-bubble-retry button { min-height: 32px; padding: 4px 12px; }
+.chat-new-pill { align-self: center; flex: 0 0 auto; margin: 0 0 8px; min-height: 32px; padding: 4px 14px; border-radius: 99px; background: var(--accent); color: #fff; font: 650 12px var(--sans); }
+.chat-composer { display: grid; gap: 5px; flex: 0 0 auto; padding: 9px 12px calc(9px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: var(--panel); }
+.chat-composer-row { display: flex; align-items: flex-end; gap: 8px; }
+.chat-composer textarea { flex: 1 1 auto; min-width: 0; min-height: 38px; max-height: calc(1.45em * 6); padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--text); font: inherit; resize: none; overflow-y: auto; }
+.chat-composer button { flex: 0 0 auto; min-height: 44px; padding: 0 16px; }
+.chat-hint { margin: 0; color: var(--faint); font-size: 11.5px; }
+/* The dark theme sets a color on every button. A quiet chat control must keep the panel text color in both themes. */
+:root button.chat-row, :root button.chat-back, :root button.chat-bubble-retry button { color: var(--text); }
+@media (max-width: 760px) {
+  .chat-layout { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .chat-layout.thread-open .chat-list-pane { display: none; }
+  .chat-empty-state { display: none; }
+  .chat-panel { height: min(78dvh, 720px); min-height: 0; max-height: none; border-radius: 0; }
+  .chat-layout.thread-open .chat-back { display: inline-flex; align-items: center; justify-content: center; }
+  .chat-row { padding: 10px 9px; }
+  .chat-bubble { max-width: 90%; }
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .chat-row:hover { background: color-mix(in srgb, var(--accent) 8%, var(--panel-2)); } }
+:root[data-theme="dark"] .chat-row:hover { background: color-mix(in srgb, var(--accent) 8%, var(--panel-2)); }
+
 /* Machine locks on the Allocation page. */
 .machine-lock-panel { margin-top: 20px; }
 .machine-lock-panel h2 { margin: 0; }

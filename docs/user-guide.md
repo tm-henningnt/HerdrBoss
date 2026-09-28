@@ -667,6 +667,40 @@ The desktop Mailbox badge shows open Needs-you items that the Owner has not open
 
 Both mailbox `POST` routes have the same gates as `POST /api/messages`: a loopback request or an authenticated remote session, and a same-origin request. A read-only preview refuses them with HTTP 403. The 30-day retention of the store applies to the mailbox items.
 
+## Chat page
+
+The Chat page at `/chat` is the conversation view of the Owner. One chat holds the messages between the Owner and the Boss. One chat holds the messages between the Owner and a project orchestrator. A worker has no chat. Use the Mailbox for items that need an answer, an approval, or a decision. Use the Chat for a normal conversation. Both pages read the same message records.
+
+### List
+
+Each row shows the chat title, the last message on one line, the time, and the unread count. The last message is cut with an ellipsis. The chat with the newest last message comes first. A chat with no message comes after a chat with a message. The menu badge shows the total unread count of all chats.
+
+The page reads `GET /api/chats`. It follows the `message` event on `GET /api/events`. It never reloads the page.
+
+### Conversation
+
+Select a row to open the chat. The conversation shows the messages in time order. An Owner message sits on the right. An agent message sits on the left. Each bubble shows the text, the sender, and the time. An Owner bubble also shows the delivery state from the record: `queued`, `delivered`, `relayed`, or `failed` with the reason.
+
+Opening a chat calls `POST /api/chats/<thread>/read`. It marks each message to the Owner as read. The page stops the count for that chat. A read-only preview refuses the read, so the count stays.
+
+Scroll up to read older messages. The page asks for the page before the oldest message while the service sets `more` to `true`. The page keeps your reading position. The 30-day retention of the store sets the oldest message that the page can show.
+
+A new message goes at the bottom. The page scrolls down only when you already read the newest message. Otherwise the page shows a **new messages** pill. Select the pill to go to the newest message.
+
+### Composer
+
+Select **Send** or press Enter to send the message. Select Shift and press Enter to make a new line. The text area grows with the text, up to 6 lines. A message holds at most 2000 characters. The service accepts at most 10 Owner messages a minute. The focus stays in the text area after a send.
+
+The page adds a `queued` bubble at once. The stored record replaces the bubble. A refused send marks the bubble `failed` and shows **Retry**. Select **Retry** to send the same text again. `POST /api/messages` is the only write path of the page.
+
+### Action items
+
+A message from an agent with the action `answer`, `approve`, `decide`, or `read` is a normal bubble. The bubble shows an **Open in Mailbox** link. The inline action cards come in a later change.
+
+### Phone
+
+On a phone, the list fills the page. Select a chat to open it full screen. Select **Back** to return to the list. The chat thread stays in the page address, so the browser Back button also returns to the list. The buttons are at least 44 px high.
+
 ## Phone and home screen
 
 The dashboard adapts to a phone and to a home-screen web app.
