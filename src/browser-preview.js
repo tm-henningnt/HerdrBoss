@@ -250,6 +250,43 @@ export async function browserClick(project, tabId, relativeX, relativeY, adapter
   return { ok: true };
 }
 
+// A drag presses at one position, moves along a straight line, and releases. It moves the page, for example a map pan.
+function dragPosition(value) {
+  const { x, y } = value || {};
+  if (![x, y].every((n) => typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 1)) throw new Error('Drag position must be inside the screenshot.');
+  return { x, y };
+}
+
+export async function browserDrag(project, tabId, from, to, { steps = 10, adapters = {} } = {}) {
+  const start = dragPosition(from);
+  const end = dragPosition(to);
+  if (!Number.isInteger(steps) || steps < 1 || steps > 60) throw new Error('Drag steps must be from 1 to 60.');
+  const context = await pageContext(project, tabId, adapters);
+  // The page size arrives with the first result, so it builds every mouse event. The other requests send them in order.
+  const events = [];
+  const requests = [{ method: 'Page.getLayoutMetrics' }];
+  for (let index = 0; index < steps + 3; index += 1) requests.push(() => events[index]);
+  requests[1] = (metrics) => {
+    const viewport = metrics?.cssVisualViewport || metrics?.cssLayoutViewport;
+    if (!viewport?.clientWidth || !viewport?.clientHeight) throw new Error('Could not determine the page viewport.');
+    const first = { x: Math.min(viewport.clientWidth - 1, Math.round(start.x * viewport.clientWidth)),
+      y: Math.min(viewport.clientHeight - 1, Math.round(start.y * viewport.clientHeight)) };
+    const last = { x: Math.min(viewport.clientWidth - 1, Math.round(end.x * viewport.clientWidth)),
+      y: Math.min(viewport.clientHeight - 1, Math.round(end.y * viewport.clientHeight)) };
+    events.push({ method: 'Input.dispatchMouseEvent', params: { type: 'mouseMoved', ...first } });
+    events.push({ method: 'Input.dispatchMouseEvent', params: { type: 'mousePressed', ...first, button: 'left', clickCount: 1 } });
+    for (let index = 1; index <= steps; index += 1) {
+      events.push({ method: 'Input.dispatchMouseEvent', params: { type: 'mouseMoved', button: 'left', buttons: 1,
+        x: Math.round(first.x + ((last.x - first.x) * index) / steps),
+        y: Math.round(first.y + ((last.y - first.y) * index) / steps) } });
+    }
+    events.push({ method: 'Input.dispatchMouseEvent', params: { type: 'mouseReleased', ...last, button: 'left', clickCount: 1 } });
+    return events[0];
+  };
+  await pageCommands(context.endpoint, context.viewport, requests, undefined, undefined, adapters);
+  return { ok: true };
+}
+
 export async function browserViewport(project, tabId, viewport, adapters = {}) {
   if (!tabId) throw new Error('Select a browser tab.');
   const reset = viewport?.reset === true;
