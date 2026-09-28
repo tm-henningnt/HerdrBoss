@@ -1093,7 +1093,7 @@ body.dep-full-open { overflow: hidden; }
   .lease-action { text-align: left; }
 }
 
-/* Read-only service settings on the Settings page. */
+/* Service settings on the Settings page. */
 .service-settings-panel { grid-column: 1 / -1; }
 .service-settings-panel h2 { margin: 0 0 10px; }
 .service-settings-scroll { overflow-x: auto; }
@@ -1105,4 +1105,9 @@ body.dep-full-open { overflow: hidden; }
 .service-settings-table td:nth-child(2) { max-width: 58ch; overflow-wrap: anywhere; }
 .service-settings-table td:last-child { color: var(--muted); white-space: nowrap; }
 .service-settings-table .service-settings-group th { padding-top: 13px; color: var(--text); font-size: 11px; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; }
+.service-settings-group-actions { float: right; display: inline-flex; align-items: center; gap: 8px; text-transform: none; letter-spacing: normal; }
+.service-settings-group-actions [role="status"] { color: color-mix(in srgb, var(--ok) 70%, var(--text)); font-size: 11px; font-weight: 500; }
+.service-settings-group-actions button { padding: 4px 9px; font-size: 11px; }
+.service-settings-table td:nth-child(2) input[type="number"] { width: 112px; max-width: 100%; }
+.service-settings-table td:nth-child(2) input[type="checkbox"] { width: 16px; height: 16px; vertical-align: middle; }
 .service-settings-note { margin: 12px 0 0; color: var(--muted); font-size: 12.5px; }

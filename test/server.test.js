@@ -13,7 +13,7 @@ process.env.HOME = homeDir;
 process.env.HERDR_BOSS_DIR = dataDir;
 process.env.HERDR_BOSS_PORT = '0';
 
-const [{ serve }, { loadConfig }] = await Promise.all([
+const [{ serve }, { loadConfig, serviceSettingsView }] = await Promise.all([
   import('../src/server.js'),
   import('../src/config.js'),
 ]);
@@ -175,6 +175,7 @@ test('read-only preview allows reads and rejects all API methods that can change
 
   const writes = [
     ['PUT', '/api/policy'],
+    ['PUT', '/api/settings'],
     ['POST', '/api/browser-sessions/window-size'],
     ['POST', '/api/browser-sessions/navigate'],
     ['POST', '/api/browser-sessions/history'],
@@ -246,6 +247,73 @@ test('read-only preview allows reads and rejects all API methods that can change
   assert.equal(fs.existsSync(path.join(path.dirname(customTokenFile), 'sessions.json')), false, 'sessions are not stored beside the custom token');
   assert.equal(fs.existsSync(path.dirname(privateSessions)), false, 'the preview does not create the private access directory');
   await customServer.close();
+});
+
+test('PUT /api/settings persists allowed values and updates the running engine config immediately', { timeout: 20000 }, async (t) => {
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.mkdirSync(homeDir, { recursive: true });
+  const configFile = path.join(dataDir, 'config.json');
+  fs.writeFileSync(configFile, JSON.stringify({
+    other: { keep: true },
+    quota: { warnPercent: 90, criticalPercent: 98, note: 'keep' },
+    machine: { memFreeWarnPercent: 15 },
+  }, null, 2));
+  fs.chmodSync(configFile, 0o640);
+  const cfg = loadConfig();
+  cfg.host = '127.0.0.1';
+  cfg.port = 0;
+  cfg.tickSeconds = 3600;
+  let engine;
+  const { server, close } = serve(cfg, {
+    createEngine: (config) => {
+      engine = new EventEmitter();
+      engine.cfg = config;
+      engine.state = {
+        serviceSettings: serviceSettingsView(config),
+        quotaThresholds: { warnPercent: config.quota.warnPercent, criticalPercent: config.quota.criticalPercent },
+      };
+      engine.memory = {};
+      engine.tick = async () => engine.state;
+      engine.log = () => {};
+      return engine;
+    },
+  });
+  t.after(async () => {
+    await close();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  });
+  await new Promise((resolve, reject) => {
+    server.once('listening', resolve);
+    server.once('error', reject);
+  });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const response = await fetch(`${base}/api/settings`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ changes: { 'quota.warnPercent': 85, 'quota.criticalPercent': 96, 'machine.memFreeWarnPercent': 22 } }),
+  });
+  assert.equal(response.status, 200);
+  const result = await response.json();
+  assert.equal(result.ok, true);
+  assert.equal(engine.cfg.quota.warnPercent, 85);
+  assert.equal(engine.cfg.quota.criticalPercent, 96);
+  assert.equal(engine.cfg.machine.memFreeWarnPercent, 22);
+  assert.deepEqual(engine.state.quotaThresholds, { warnPercent: 85, criticalPercent: 96 });
+  assert.equal(engine.state.serviceSettings.find(({ setting }) => setting === 'machine.memFreeWarnPercent').value, 22);
+  const saved = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+  assert.deepEqual(saved.other, { keep: true });
+  assert.equal(saved.quota.note, 'keep');
+  assert.equal(fs.statSync(configFile).mode & 0o7777, 0o640);
+
+  const before = fs.readFileSync(configFile, 'utf8');
+  const rejected = await fetch(`${base}/api/settings`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ changes: { host: '0.0.0.0' } }),
+  });
+  assert.equal(rejected.status, 400);
+  assert.equal(fs.readFileSync(configFile, 'utf8'), before);
 });
 
 test('the policy API saves per-harness model assignments and rejects unsafe model strings', { timeout: 20000 }, async (t) => {
@@ -675,6 +743,10 @@ test('quota colors use configured thresholds and Settings shows their values', (
   assert.match(app, /Quota warning at \$\{esc\(warnPercent\)\}%, critical at \$\{esc\(criticalPercent\)\}%. Set them in config\.json\./);
   const settingsHelp = /settings: \['Settings', `([\s\S]*?)`\],\s+agents:/.exec(app)?.[1] || '';
   assert.match(settingsHelp, /quota colors use the warning and critical values from <code>config\.json<\/code>/i);
+  assert.match(app, /data-service-setting=/);
+  assert.match(app, /data-save-service-settings=/);
+  assert.match(app, /Rows without inputs are read-only\. Change in config\.json and restart\./);
+  assert.match(settingsHelp, /select <b>Save<\/b>[\s\S]*?applies saved values at once/i);
 });
 
 test('organization cards show an unavailable or stale quota bar, and the header keeps the brand and the updated text on one line', () => {
