@@ -1,4 +1,4 @@
-<!-- herdr-boss kit v=973245619da5 -->
+<!-- herdr-boss kit v=9db6a5a8b679 -->
 Herdr Boss writes this file. Do not edit it. Run herdr-boss kit install to update it.
 
 # Herdr Boss orchestration kit
@@ -33,6 +33,9 @@ These are the shared operating rules for the orchestrator of this project.
 - Inspect each worker diff and run acceptance commands independently.
 - Keep evidence tiers separate. Local checks do not prove hosted or Owner acceptance.
 - Publish project status through Herdr Boss. Do not build a separate project dashboard.
+- Set `waitingOn: owner` only for the escalation categories.
+- Always post a Mailbox item that needs an Owner action, and set `mailboxId` to its id.
+- Use `blockedBy` for waits on other tasks.
 - Use `herdr-boss browser request <project-slug>` for a dedicated browser. Keep its recorded profile and port.
 - Use only this project's browser.
 - Coordinate tab ownership with the orchestrator before sending browser input.
