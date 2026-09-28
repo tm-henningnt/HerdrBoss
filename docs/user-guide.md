@@ -2,6 +2,10 @@
 
 This guide tells how Herdr Boss works and how to set it up. For commands and options, see [cli.md](cli.md). The dashboard has a **Help** panel on each page.
 
+## Requirements
+
+Use Node.js 26.10 or later. Herdr Boss uses the built-in `node:sqlite` module.
+
 ## How it works
 
 Every 30 seconds, Herdr Boss reads Herdr workspaces and agents, machine load and memory, and automation browsers and their owner panes. Every 5 minutes, it reads subscription quotas with `codexbar usage --format json`.
@@ -588,7 +592,19 @@ An orchestrator or the Boss replies with `herdr-boss say --reply-to ID "TEXT"`. 
 
 ### Store
 
-The service keeps the messages in `messages.jsonl` in the data directory, with file mode 0600. Each line is one JSON record with these fields:
+By default, the service keeps messages in `messages.jsonl` in the data directory. The default backend is `json`. To use SQLite, set this value in `config.json`:
+
+```json
+{
+  "store": {
+    "messages": "sqlite"
+  }
+}
+```
+
+When the SQLite message table is empty, Herdr Boss imports records from `messages.jsonl`. It keeps that file. The database is `herdr-boss.db`. It uses write-ahead logging and mode 0600 for the database and its WAL files. With SQLite, Herdr Boss checks the database when it starts. If the check fails, restore a backup or import the JSON file again. Use `herdr-boss store import messages` to import once. Use `herdr-boss store export messages` to write JSONL for a downgrade. Each command prints the number of records.
+
+Each line in `messages.jsonl` is one JSON record with these fields:
 
 | Field | Value |
 |---|---|
@@ -609,7 +625,7 @@ The service keeps the messages in `messages.jsonl` in the data directory, with f
 | `closedBy`, `closeNote` | The role that closed an item through the Boss, and the Boss's note. |
 | `repliedAt` | The API view adds the time of the first reply that names this Owner message ID. It is not stored on the message. |
 
-Each new record is one appended line. A change to a record rewrites the file through a temporary file and a rename. Each write deletes the records that are older than 30 days. A lock file `messages.jsonl.lock` keeps the service and the commands from writing at the same time.
+The JSON backend appends each new record as one line. It rewrites a changed file through a temporary file and a rename. Each write deletes records that are older than 30 days. A lock file `messages.jsonl.lock` keeps writers from writing at the same time. The SQLite backend stores each record as JSON text in one database row. It uses a transaction for each change and keeps the same 30-day retention and message order.
 
 ### Limits and safety
 

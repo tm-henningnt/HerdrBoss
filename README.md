@@ -8,7 +8,7 @@ Herdr Boss is a script. It uses no LLM and no tokens.
 
 | Software | Needed for |
 |---|---|
-| Node 22+ | Everything. |
+| Node 26.10+ | Everything. The service uses the built-in `node:sqlite` module. |
 | [Herdr](https://herdr.dev) CLI | Agents, panes, notices, workers, and handover. |
 | CodexBar CLI | Quota readings and pacing. |
 | Git | Worker worktrees. |

@@ -76,6 +76,7 @@ export function assertDataWritable(dir = DATA_DIR) {
 }
 
 const DEFAULTS = {
+  store: { messages: 'json' },
   port: 4477,
   host: '0.0.0.0',
   access: { tokenFile: DEFAULT_TOKEN_FILE, sessionDays: 30 },

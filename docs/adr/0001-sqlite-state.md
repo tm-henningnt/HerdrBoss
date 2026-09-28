@@ -1,6 +1,6 @@
 # ADR 0001: SQLite for Herdr Boss state
 
-Status: proposed
+Status: Accepted; messages backend built.
 
 ## Context
 

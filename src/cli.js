@@ -68,6 +68,7 @@ const USAGE = `herdr-boss <command>
   policy show|set FILE  Show or replace the local resource policy.
   usage record FILE     Add measured or unmeasured project usage.
   usage summary         Summarize project and provider usage.
+  store import|export messages  Import or export messages through SQLite.
   browser request SLUG [--reserve] [--headless|--visible]  Reserve or launch a persistent project browser.
   browser size SLUG WIDTH HEIGHT  Save window size for the next browser launch.
   browser viewport SLUG --tab ID WIDTHxHEIGHT [--scale N] [--mobile]  Set one tab's device metrics.
@@ -262,6 +263,17 @@ async function main() {
         if (result.errors.length) throw new Error(result.errors.join('\n'));
         console.log(result.duplicate ? 'Usage event already recorded.' : 'Usage recorded.');
       } else throw new Error('Usage: usage record FILE | usage summary');
+      break;
+    }
+    case 'store': {
+      const { importMessages, exportMessages } = await import('./message-store.js');
+      if (args.length === 2 && args[0] === 'import' && args[1] === 'messages') {
+        const count = importMessages({ dir: DATA_DIR });
+        console.log(`Imported ${count} message${count === 1 ? '' : 's'}.`);
+      } else if (args.length === 2 && args[0] === 'export' && args[1] === 'messages') {
+        const count = exportMessages({ dir: DATA_DIR });
+        console.log(`Exported ${count} message${count === 1 ? '' : 's'}.`);
+      } else throw new Error('Usage: store import messages | store export messages');
       break;
     }
     case 'browser': {

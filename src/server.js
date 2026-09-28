@@ -19,6 +19,7 @@ import { listHandoffs } from './handoff.js';
 import { roamgateAvailable, roamgateUrl } from './roamgate.js';
 import { createAccessControl, loginPage } from './access.js';
 import { appendMessage, closeMailboxItem, dismissMailboxItems, groupMessagesByConversation, listThread, mailboxCounts, mailboxFolders, mailboxView, markMailboxRead, messagesWithReplyState, readMessages, validThread, validateOwnerSend } from './messages.js';
+import { assertSqliteAvailable } from './sqlite-store.js';
 import { openMessageStore } from './message-store.js';
 
 const PUBLIC = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
@@ -97,6 +98,8 @@ async function jsonBody(req) {
 export function serve(cfg, { readOnlyPreview = false, createEngine = (config, options) => new Engine(config, options), closeTab = browserCloseTab } = {}) {
   // A direct serve() call must refuse an unsafe preview before the access token, the watcher, or a tick writes a file.
   if (readOnlyPreview) assertPreviewDataDir();
+  assertSqliteAvailable();
+  openMessageStore({ dir: DATA_DIR, backend: cfg.store?.messages });
   const access = readOnlyPreview ? null : createAccessControl(cfg.access.tokenFile, {
     sessionFile: DEFAULT_SESSION_FILE,
     sessionDays: cfg.access.sessionDays,
