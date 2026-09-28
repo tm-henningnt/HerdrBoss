@@ -1608,3 +1608,63 @@ test('the Chat page has a route, a menu position, a composer key rule, a before 
   assert.match(css, /\.chat-new-pill\b/);
   assert.match(guide, /## Chat page/);
 });
+
+test('the Chat page shows the Mailbox action cards, uses the Mailbox write route, and moves the focus', () => {
+  const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
+  const guide = fs.readFileSync(new URL('../docs/user-guide.md', import.meta.url), 'utf8');
+  // A card is a normal bubble. Only a real choice shows one.
+  assert.match(app, /const isCard = !owner && !record\.closedAt && \(record\.action === 'answer' \|\| options\.length > 0\);/);
+  assert.match(app, /const text = isCard \? chatQuestionText\(record\.text\) : record\.text;/);
+  // A decide without a choice list is not a real choice. A card is the same bubble, with no frame.
+  assert.match(app, /function chatQuestionText\(text\)/);
+  assert.match(app, /const at = body\.search\(\/\^#\{1,6\}/);
+  // Card one: approve, accept, deny, and postpone.
+  assert.match(app, /function chatApproveOptions\(\)/);
+  assert.match(app, /\{ value: 'Approved\.', label: 'Approve' \}/);
+  assert.match(app, /\{ value: 'Rejected\.', label: 'Reject', deny: true \}/);
+  assert.match(app, /\{ value: 'later', label: 'Later', later: true \}/);
+  // Card two: decide, one small button for each choice.
+  assert.match(app, /return chatParseChoices\(record\.text\)\.map\(\(choice\) => \(\{ value: `Choice: \$\{choice\}`, label: choice \}\)\);/);
+  assert.match(app, /data-chat-option="\$\{id\}" data-chat-value="\$\{esc\(option\.value\)\}"\${off}>/);
+  // Card three: answer, a one-line text field and a small Send button.
+  assert.match(app, /data-chat-card-draft="\$\{id\}" type="text"/);
+  assert.match(app, /<input id="chat-card-\$\{id\}" data-chat-card-draft="\$\{id\}" type="text" maxlength="1700" value="\$\{esc\(chat\.drafts\[record\.id\] \|\| ''\)\}" placeholder="Answer…">/);
+  assert.match(app, /<button type="submit"\$\{off}>Send<\/button><\/form>/);
+  // Later only collapses the card. It writes nothing and the Mailbox item stays open.
+  assert.match(app, /if \(option\.dataset\.chatValue === 'later'\) \{/);
+  assert.match(app, /chat\.results\[item\.id\] = 'Later\. The item stays open in the Mailbox\.';/);
+  // The choices use the same rule as parseChoices in src/messages.js.
+  assert.match(app, /function chatParseChoices\(text\)/);
+  assert.match(app, /const start = lines\.findIndex\(\(line\) => \/\^#\{1,6\}/);
+  // One write path. The card sends the same request the Mailbox sends, with replyTo set to the item.
+  assert.match(app, /async function chatSendAction\(record, text\)/);
+  assert.match(app, /await postJson\('\/api\/messages', \{ thread: record\.thread, kind: 'message', text, replyTo: record\.id \}\);/);
+  assert.match(app, /chat\.results\[record\.id\] = `\$\{chatResultLabel\(text\)\} \$\{clock\(new Date\(\)\.toISOString\(\)\)\}`;/);
+  assert.match(app, /await loadChatThread\(record\.thread\);/);
+  // The log is a live region, and every bubble has a name with the sender, the time, the text, and the state.
+  assert.match(app, /<ol class="chat-bubbles" role="log" aria-live="polite" aria-label="Messages in the \$\{esc\(title\)\} chat">/);
+  assert.match(app, /aria-label="\$\{esc\(chatBubbleLabel\(sender, \{ \.\.\.record, text \}, state\)\)\}"/);
+  assert.match(app, /function chatBubbleLabel\(sender, record, state\)/);
+  // The focus moves to the composer when a chat opens, and to the list row on Back.
+  assert.match(app, /function openChat\(thread\) \{[\s\S]*?chat\.focus = 'composer';/);
+  assert.match(app, /function closeChat\(\) \{[\s\S]*?chat\.focus = 'row';/);
+  assert.match(app, /if \(view\?\.focus \|\| chat\.focus === 'composer'\) \{/);
+  assert.match(app, /field\.focus\(\);/);
+  assert.match(app, /if \(chat\.focus === 'row' && chat\.backThread\) \$app\.querySelector\(`\[data-chat-open="\$\{CSS\.escape\(chat\.backThread\)\}"\]`\)\?\.focus\(\);/);
+  // The keyboard: arrow keys move through the list, Enter opens a row, and Escape goes back.
+  assert.match(app, /<button class="chat-row" type="button" data-chat-open=/);
+  assert.match(app, /const step = e\.key === 'ArrowDown' \? 1 : e\.key === 'ArrowUp' \? -1 : e\.key === 'Home' \? -index : e\.key === 'End' \? rows\.length - 1 - index : 0;/);
+  assert.match(app, /if \(e\.key === 'Escape' && chat\.thread\) \{ closeChat\(\); return; \}/);
+  // The cards follow the dashboard tokens, and the small text keeps its contrast in both themes.
+  assert.match(css, /\.chat-card-options\b/);
+  assert.match(css, /\.chat-card-answer\b/);
+  assert.match(css, /\.chat-card-deny\b/);
+  assert.match(css, /\.chat-card-later\b/);
+  assert.match(css, /\.chat-card-result\b/);
+  assert.match(css, /#app \.chat-card-options button \{ min-height: 32px;/);
+  assert.match(css, /min-height: 44px/);
+  assert.match(app, /<h3>Action cards<\/h3>/);
+  assert.match(guide, /### Action cards/);
+  assert.match(guide, /The card uses the same send route as the Mailbox\./);
+});

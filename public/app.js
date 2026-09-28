@@ -1957,7 +1957,10 @@ function updateMailboxBadge(s) {
 
 const CHAT_PAGE_LIMIT = 50;
 const CHAT_MAX_LINES = 6;
-const chat = { list: [], loaded: false, loading: false, error: '', status: '', thread: null, title: '', messages: [], more: false, moreLoading: false, loadingThread: false, draft: '', pending: [], unseen: 0, busy: false, scroll: null, keepScroll: null };
+// The actions that ask the Owner for something. A decide without a choice list is not a real choice.
+const CHAT_CHOICES_MAX = 10;
+const CHAT_CHOICE_TEXT_MAX = 200;
+const chat = { list: [], loaded: false, loading: false, error: '', status: '', thread: null, title: '', messages: [], more: false, moreLoading: false, loadingThread: false, draft: '', pending: [], unseen: 0, busy: false, scroll: null, keepScroll: null, drafts: {}, results: {}, cardStatus: {}, focus: null, backThread: null };
 
 const chatThreadFromLocation = () => new URLSearchParams(location.search).get('thread');
 const chatUrl = (thread) => (thread ? `/chat?thread=${encodeURIComponent(thread)}` : '/chat');
@@ -2033,15 +2036,102 @@ function chatConversationView() {
   return `<div class="chat-panel"><div class="chat-panel-head"><button type="button" class="chat-back" data-chat-back aria-label="Back to chats">Back</button><h2>${esc(title)}</h2></div><div class="chat-scroll" data-chat-scroll tabindex="0">${older}${bubbles}</div>${pill}<form class="chat-composer" data-chat-compose><label class="visually-hidden" for="chat-draft">Message to ${esc(title)}</label><div class="chat-composer-row"><textarea id="chat-draft" data-chat-draft maxlength="2000" rows="1" placeholder="Message…"></textarea><button type="submit"${chat.busy ? ' disabled' : ''}>Send</button></div><p class="chat-hint">Enter sends · Shift+Enter makes a new line</p></form></div>`;
 }
 
+// The same rule as parseChoices in src/messages.js: the Markdown list items under a Choices heading.
+function chatParseChoices(text) {
+  const lines = String(text ?? '').split(/\r?\n/);
+  const start = lines.findIndex((line) => /^#{1,6}\s+choices\s*:?\s*$/i.test(line.trim()));
+  if (start < 0) return [];
+  const choices = [];
+  for (const line of lines.slice(start + 1)) {
+    if (!line.trim()) continue;
+    const item = /^\s*(?:[-*+]|\d+[.)])\s+(.*)$/.exec(line) || /^\s*(?:[-*+]|\d+[.)])\s*$/.exec(line);
+    if (!item) break;
+    const choice = String(item[1] ?? '').trim().slice(0, CHAT_CHOICE_TEXT_MAX);
+    if (choice && !choices.includes(choice)) choices.push(choice);
+    if (choices.length >= CHAT_CHOICES_MAX) break;
+  }
+  return choices;
+}
+
+// The result line names the outcome: Approved 22:05, Rejected 22:05, or Answered 22:05.
+function chatResultLabel(text) {
+  const body = String(text || '');
+  if (body.startsWith('Approved.')) return 'Approved';
+  if (body.startsWith('Rejected.')) return 'Rejected';
+  if (body.startsWith('Choice: ')) return body.split('\n')[0].slice(0, 80);
+  return 'Answered';
+}
+
+// A card shows a short question line. The choices move to the buttons, so the page drops the list from the text.
+function chatQuestionText(text) {
+  const body = String(text || '');
+  const at = body.search(/^#{1,6}\s+choices\s*:?\s*$/im);
+  return (at < 0 ? body : body.slice(0, at)).trim();
+}
+
+// An accept, a deny, and a postpone. Later only collapses the card.
+function chatApproveOptions() {
+  return [
+    { value: 'Approved.', label: 'Approve' },
+    { value: 'Rejected.', label: 'Reject', deny: true },
+    { value: 'later', label: 'Later', later: true },
+  ];
+}
+
+// A decide shows one button for each choice. Without a choice list it is not a real choice, so it stays a normal bubble.
+function chatActionOptions(record) {
+  if (record.action === 'approve') return chatApproveOptions();
+  return chatParseChoices(record.text).map((choice) => ({ value: `Choice: ${choice}`, label: choice }));
+}
+
+// The Owner message that closed an action item is the next record in the thread with the same replyTo.
+function chatAnswerTo(record) {
+  if (record.closedBy === 'boss' && record.closeNote) return { text: record.closeNote, at: record.closedAt };
+  return chat.messages.find((item) => item.replyTo === record.id && item.from === 'owner') || null;
+}
+
+// The accessible name of a bubble. It names the sender, the time, the text, and the state.
+function chatBubbleLabel(sender, record, state) {
+  const text = String(record.text || '').replace(/\s+/g, ' ').trim();
+  return [sender, clock(record.at), text, state].filter(Boolean).join('. ');
+}
+
+function chatCardField(record) {
+  const id = esc(record.id);
+  return `<label class="visually-hidden" for="chat-card-${id}">Answer</label><input id="chat-card-${id}" data-chat-card-draft="${id}" type="text" maxlength="1700" value="${esc(chat.drafts[record.id] || '')}" placeholder="Answer…">`;
+}
+
+// An open item with a real choice shows as the same bubble with one small button per option. There is no card frame.
+function chatActionCard(record) {
+  const id = esc(record.id);
+  const collapsed = chat.results[record.id];
+  if (collapsed) return `<p class="chat-card-result" role="status">${esc(collapsed)}</p>`;
+  const off = chat.busy ? ' disabled' : '';
+  const error = chat.cardStatus[record.id] ? `<p class="chat-card-error" role="alert">${esc(chat.cardStatus[record.id])}</p>` : '';
+  if (record.action === 'answer') {
+    return `<form class="chat-card-answer" data-chat-card-form="${id}">${chatCardField(record)}<button type="submit"${off}>Send</button></form>${error}`;
+  }
+  const options = chatActionOptions(record);
+  const buttons = options.map((option) => `<button type="button" class="${option.deny ? 'chat-card-deny' : ''}${option.later ? ' chat-card-later' : ''}" data-chat-option="${id}" data-chat-value="${esc(option.value)}"${off}>${esc(option.label)}</button>`).join('');
+  return `<div class="chat-card-options" role="group" aria-label="Options for this ${esc(MAIL_ACTION_LABEL[record.action] || record.action)} request">${buttons}</div>${error}`;
+}
+
 function chatBubble(record) {
   const owner = record.from === 'owner';
   const sender = MESSAGE_SENDER[record.from] || record.from;
-  const state = owner ? mailDeliveryState(record) : record.action ? `Action: ${record.action}` : record.readAt ? 'read' : 'unread';
+  // A closed item shows the answer that closed it, for example Approved 22:05.
+  const answer = owner ? null : chatAnswerTo(record);
+  const result = answer ? `${chatResultLabel(answer.text)} ${clock(answer.at)}` : record.closedAt ? `closed ${clock(record.closedAt)}` : '';
+  const state = owner ? mailDeliveryState(record) : result || (record.action ? `Action: ${record.action}` : record.readAt ? 'read' : 'unread');
   const tone = !owner ? '' : record.status === 'sent' || record.status === 'relayed' ? ' ok' : record.status === 'failed' ? ' fail' : '';
-  // An action item is a normal bubble for now. The Mailbox holds its buttons.
+  // A card is a normal bubble with buttons. The text is a short question line.
+  const options = owner ? [] : chatActionOptions(record);
+  const isCard = !owner && !record.closedAt && (record.action === 'answer' || options.length > 0);
+  const card = isCard ? chatActionCard(record) : '';
+  const text = isCard ? chatQuestionText(record.text) : record.text;
   const action = !owner && record.action ? `<a class="chat-action-link" href="/mailbox?thread=${encodeURIComponent(record.thread)}">Open in Mailbox</a>` : '';
   const retry = record.local && record.error ? `<p class="chat-bubble-retry"><button type="button" data-chat-retry="${esc(record.id)}">Retry</button></p>` : '';
-  return `<li class="chat-bubble${owner ? ' from-owner' : ' from-agent'}" data-chat-bubble="${esc(record.id)}"><p class="chat-bubble-text">${esc(record.text)}</p><p class="chat-bubble-meta"><span>${esc(sender)} · ${esc(clock(record.at))}</span>${state ? ` · <span class="chat-state${tone}">${esc(state)}</span>` : ''}</p>${action}${retry}</li>`;
+  return `<li class="chat-bubble${owner ? ' from-owner' : ' from-agent'}${card ? ' chat-card' : ''}" data-chat-bubble="${esc(record.id)}" aria-label="${esc(chatBubbleLabel(sender, { ...record, text }, state))}"><p class="chat-bubble-text">${esc(text)}</p><p class="chat-bubble-meta"><span>${esc(sender)} · ${esc(clock(record.at))}</span>${state ? ` · <span class="chat-state${tone}">${esc(state)}</span>` : ''}</p>${card}${action}${retry}</li>`;
 }
 
 async function loadChats() {
@@ -2085,6 +2175,9 @@ function chatSyncLocation() {
   chat.scroll = null;
   chat.keepScroll = null;
   chat.status = '';
+  chat.drafts = {};
+  chat.results = {};
+  chat.cardStatus = {};
   if (!requested) { render(); return; }
   loadChatThread(requested);
   chatMarkRead(requested);
@@ -2094,11 +2187,14 @@ function openChat(thread) {
   if (chat.thread === thread) return;
   history.pushState(null, '', chatUrl(thread));
   chatSyncLocation();
+  chat.focus = 'composer';
   render();
 }
 
 function closeChat() {
   if (!chat.thread) return;
+  chat.backThread = chat.thread;
+  chat.focus = 'row';
   history.pushState(null, '', '/chat');
   chatSyncLocation();
   render();
@@ -2138,11 +2234,14 @@ function chatRestoreView(view) {
   if (field) {
     field.value = chat.draft;
     chatGrowField(field);
-    if (view?.focus) {
+    if (view?.focus || chat.focus === 'composer') {
       field.focus();
-      if (view.caret != null) field.setSelectionRange(view.caret, view.caret);
+      if (view?.caret != null) field.setSelectionRange(view.caret, view.caret);
     }
   }
+  // On Back the focus goes to the list row of the chat that was open.
+  if (chat.focus === 'row' && chat.backThread) $app.querySelector(`[data-chat-open="${CSS.escape(chat.backThread)}"]`)?.focus();
+  chat.focus = null;
 }
 
 // A scroll to the top reads an older page. The reading position must stay on the same message.
@@ -2204,6 +2303,26 @@ async function chatSend(retry = null) {
   $app.querySelector('[data-chat-draft]')?.focus();
 }
 
+// One write path. The card sends the same request the Mailbox sends, with replyTo set to the item.
+// The server closes the item. The card then shows the result, and the message stream refreshes both views.
+async function chatSendAction(record, text) {
+  if (chat.busy || !record || !text) return;
+  chat.busy = true;
+  chat.status = 'Sending…';
+  render();
+  try {
+    await postJson('/api/messages', { thread: record.thread, kind: 'message', text, replyTo: record.id });
+    delete chat.drafts[record.id];
+    delete chat.cardStatus[record.id];
+    chat.results[record.id] = `${chatResultLabel(text)} ${clock(new Date().toISOString())}`;
+    chat.status = 'Queued. Herdr Boss delivers it when the agent is working, idle, or done. The item is closed.';
+  } catch (error) {
+    chat.cardStatus[record.id] = error.message;
+    chat.status = error.message;
+  } finally { chat.busy = false; render(); }
+  await loadChatThread(record.thread);
+}
+
 // A message change arrives on the existing event stream. The list and the open chat follow it.
 function onChatMessage(event) {
   const record = event?.record;
@@ -2229,6 +2348,19 @@ document.addEventListener('click', (e) => {
   if (open) { openChat(open.dataset.chatOpen); return; }
   if (e.target.closest?.('[data-chat-back]')) { closeChat(); return; }
   if (e.target.closest?.('[data-chat-new]')) { chat.scroll = null; chat.unseen = 0; render(); return; }
+  const option = e.target.closest?.('[data-chat-option]');
+  if (option) {
+    const item = chat.messages.find((record) => record.id === option.dataset.chatOption);
+    if (!item) return;
+    // Later only collapses the card. The Mailbox item stays open, and the page writes nothing.
+    if (option.dataset.chatValue === 'later') {
+      chat.results[item.id] = 'Later. The item stays open in the Mailbox.';
+      render();
+      return;
+    }
+    chatSendAction(item, option.dataset.chatValue);
+    return;
+  }
   const retry = e.target.closest?.('[data-chat-retry]');
   if (retry) {
     const pending = chat.pending.find((item) => item.id === retry.dataset.chatRetry);
@@ -2237,18 +2369,41 @@ document.addEventListener('click', (e) => {
 });
 
 document.addEventListener('submit', (e) => {
+  const id = e.target.dataset?.chatCardForm;
+  if (id) {
+    e.preventDefault();
+    const record = chat.messages.find((item) => item.id === id);
+    const text = (chat.drafts[id] || '').trim();
+    if (record && text) chatSendAction(record, text);
+    return;
+  }
   if (!e.target.matches?.('[data-chat-compose]')) return;
   e.preventDefault();
   chatSend();
 });
 
 document.addEventListener('input', (e) => {
+  const cardId = e.target.dataset?.chatCardDraft;
+  if (cardId) { chat.drafts[cardId] = e.target.value; return; }
   if (!e.target.matches?.('[data-chat-draft]')) return;
   chat.draft = e.target.value;
   chatGrowField(e.target);
 });
 
 document.addEventListener('keydown', (e) => {
+  // Arrow keys move through the chat list. Enter opens a row because every row is a button.
+  const row = e.target.closest?.('[data-chat-open]');
+  if (row) {
+    const rows = [...$app.querySelectorAll('[data-chat-open]')];
+    const index = rows.indexOf(row);
+    const step = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : e.key === 'Home' ? -index : e.key === 'End' ? rows.length - 1 - index : 0;
+    if (!step) return;
+    e.preventDefault();
+    rows[Math.min(rows.length - 1, Math.max(0, index + step))]?.focus();
+    return;
+  }
+  // Escape goes back to the list. On a phone the Back button does the same.
+  if (e.key === 'Escape' && chat.thread) { closeChat(); return; }
   if (!e.target.matches?.('[data-chat-draft]')) return;
   // Enter sends the message. Shift+Enter makes a new line.
   if (e.key !== 'Enter' || e.shiftKey) return;
@@ -3131,8 +3286,11 @@ const HELP = {
     <p>A new message goes at the bottom. The page scrolls down only when you already read the newest message. Otherwise it shows a <b>new messages</b> pill. Select the pill to go to the newest message.</p>
     <h3>Composer</h3><p>Select <b>Send</b> or press Enter to send the message. Select Shift and press Enter to make a new line. The text area grows with the text, up to 6 lines. A message holds at most 2000 characters. The service accepts at most 10 messages a minute.</p>
     <p>The page shows your message as <b>queued</b> at once. The stored record replaces it when the service stores it. A refused send marks the bubble <b>failed</b> and shows <b>Retry</b>. Select <b>Retry</b> to send the same text again.</p>
-    <h3>Action items</h3><p>A message from an agent with an action shows as a normal bubble. Select <b>Open in Mailbox</b> to answer it in the Mailbox.</p>
-    <h3>Phone</h3><p>The list fills the page. Select a chat to open it full screen. Select <b>Back</b> to return to the list. The buttons are at least 44 px high.</p>
+    <h3>Action cards</h3><p>A message from an agent that asks for a decision shows as a normal bubble with one small button per option. The bubble holds a short question line. The page drops the choice list from the text, because the buttons hold the choices. A message with no real choice shows as a plain bubble with the <b>Open in Mailbox</b> link.</p>
+    <p><b>Approve</b> and <b>Reject</b> answer an approval. <b>Later</b> only collapses the card. It writes nothing, and the Mailbox item stays open. A <b>decide</b> message with a Markdown list under a <b>Choices</b> heading shows one button for each choice. A decide with the choices <b>Yes</b> and <b>No</b> shows those two buttons. An <b>answer</b> message shows a one-line text field and <b>Send</b>.</p>
+    <p>The card uses the same send route as the Mailbox. The item closes and the bubble shows the result, for example <b>Approved 22:05</b>. A closed item shows as a normal bubble with the result of the answer that closed it. Select <b>Open in Mailbox</b> to see the item in the Mailbox.</p>
+    <h3>Keyboard</h3><p>The chat list is a list of buttons. The arrow keys, <b>Home</b>, and <b>End</b> move through the rows. Enter opens a chat. The focus then goes to the message field. <b>Escape</b> goes back to the list, and the focus goes to the row of the chat that was open. The message list is a live region, so a screen reader reads each new message once. Each bubble has a name with the sender, the time, the text, and the state.</p>
+    <h3>Phone</h3><p>The list fills the page. Select a chat to open it full screen. Select <b>Back</b> to return to the list. The card buttons are at least 44 px high.</p>
     <p>A read-only preview shows the chats and refuses a send. It also refuses a read, so the unread count stays.</p>`],
   allocation: ['Allocation', `
     <p>The resource policy for all projects. Changes are a draft until you select <b>Apply policy</b>.</p>

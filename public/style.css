@@ -1054,13 +1054,13 @@ body.dep-full-open { overflow: hidden; }
 .chat-row { display: flex; align-items: center; gap: 10px; width: 100%; min-width: 0; min-height: 44px; padding: 10px 12px; border: 0; background: transparent; color: var(--text); text-align: left; }
 .chat-row:hover, .chat-row:focus-visible { background: var(--panel-2); }
 .chat-row[aria-current="true"] { background: color-mix(in srgb, var(--accent) 12%, var(--panel-2)); }
-.chat-avatar { flex: 0 0 auto; display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; background: color-mix(in srgb, var(--accent) 16%, var(--panel)); color: var(--accent); font: 650 12px var(--mono); }
+.chat-avatar { flex: 0 0 auto; display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; background: color-mix(in srgb, var(--accent) 16%, var(--panel)); color: var(--text); font: 650 12px var(--mono); }
 .chat-main { display: grid; gap: 1px; flex: 1 1 auto; min-width: 0; }
 .chat-name { font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-preview { color: var(--muted); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-side { display: grid; gap: 4px; flex: 0 0 auto; justify-items: end; }
-.chat-time { color: var(--faint); font: 11.5px var(--mono); }
-.chat-unread { min-width: 20px; padding: 1px 6px; border-radius: 99px; background: var(--accent); color: #fff; font: 600 11px var(--mono); text-align: center; }
+.chat-time { color: var(--muted); font: 11.5px var(--mono); }
+.chat-unread { min-width: 20px; padding: 1px 6px; border-radius: 99px; background: color-mix(in srgb, var(--accent) 20%, var(--panel)); color: var(--text); font: 600 11px var(--mono); text-align: center; }
 .chat-list-pane .chat-empty { margin: 14px; }
 .chat-empty { margin: 0; padding: 14px; color: var(--muted); }
 .chat-empty-state { display: grid; place-items: center; min-height: 220px; color: var(--muted); }
@@ -1076,17 +1076,28 @@ body.dep-full-open { overflow: hidden; }
 .chat-bubble.from-owner { justify-self: end; background: color-mix(in srgb, var(--accent) 12%, var(--panel)); border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); border-bottom-right-radius: 4px; }
 .chat-bubble-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .chat-bubble-meta { margin: 0; color: var(--muted); font: 11.5px var(--mono); overflow-wrap: anywhere; }
-.chat-state.ok { color: var(--ok); }
+.chat-state.ok { color: color-mix(in srgb, var(--ok) 78%, var(--text)); }
 .chat-state.fail { color: var(--crit); }
-.chat-action-link { justify-self: start; margin-top: 2px; color: var(--accent); font-size: 12.5px; font-weight: 650; }
+.chat-action-link { justify-self: start; margin-top: 2px; color: color-mix(in srgb, var(--accent) 80%, var(--text)); font-size: 12.5px; font-weight: 650; }
 .chat-bubble-retry { margin: 0; }
 .chat-bubble-retry button { min-height: 32px; padding: 4px 12px; }
-.chat-new-pill { align-self: center; flex: 0 0 auto; margin: 0 0 8px; min-height: 32px; padding: 4px 14px; border-radius: 99px; background: var(--accent); color: #fff; font: 650 12px var(--sans); }
+.chat-new-pill { align-self: center; flex: 0 0 auto; margin: 0 0 8px; min-height: 32px; padding: 4px 14px; border-radius: 99px; border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line)); background: color-mix(in srgb, var(--accent) 18%, var(--panel)); color: var(--text); font: 650 12px var(--sans); }
 .chat-composer { display: grid; gap: 5px; flex: 0 0 auto; padding: 9px 12px calc(9px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: var(--panel); }
 .chat-composer-row { display: flex; align-items: flex-end; gap: 8px; }
 .chat-composer textarea { flex: 1 1 auto; min-width: 0; min-height: 38px; max-height: calc(1.45em * 6); padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--text); font: inherit; resize: none; overflow-y: auto; }
 .chat-composer button { flex: 0 0 auto; min-height: 44px; padding: 0 16px; }
-.chat-hint { margin: 0; color: var(--faint); font-size: 11.5px; }
+.chat-hint { margin: 0; color: var(--muted); font-size: 11.5px; }
+
+/* A card is a normal bubble with one small button per option. The bubble keeps its own frame. */
+.chat-card-options { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+#app .chat-card-options button { min-height: 32px; padding: 3px 12px; border: 1px solid var(--line); border-radius: 99px; background: var(--panel); color: var(--text); font: 600 12.5px var(--sans); }
+#app .chat-card-options .chat-card-deny { color: var(--crit); border-color: color-mix(in srgb, var(--crit) 40%, var(--line)); }
+#app .chat-card-options .chat-card-later { color: var(--muted); }
+.chat-card-answer { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+.chat-card-answer input { flex: 1 1 auto; min-width: 0; min-height: 32px; padding: 4px 12px; border: 1px solid var(--line); border-radius: 99px; background: var(--panel); color: var(--text); font: 12.5px var(--sans); }
+#app .chat-card-answer button { flex: 0 0 auto; min-height: 32px; padding: 3px 14px; background: color-mix(in srgb, var(--accent) 88%, var(--text)); }
+.chat-card-result { margin: 2px 0 0; color: var(--muted); font: 12.5px var(--mono); }
+.chat-card-error { margin: 2px 0 0; color: var(--crit); font-size: 12.5px; }
 /* The dark theme sets a color on every button. A quiet chat control must keep the panel text color in both themes. */
 :root button.chat-row, :root button.chat-back, :root button.chat-bubble-retry button { color: var(--text); }
 @media (max-width: 760px) {
@@ -1097,6 +1108,8 @@ body.dep-full-open { overflow: hidden; }
   .chat-layout.thread-open .chat-back { display: inline-flex; align-items: center; justify-content: center; }
   .chat-row { padding: 10px 9px; }
   .chat-bubble { max-width: 90%; }
+  .chat-card { max-width: 100%; }
+  #app .chat-card-options button, .chat-card-answer input, #app .chat-card-answer button { min-height: 44px; }
 }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .chat-row:hover { background: color-mix(in srgb, var(--accent) 8%, var(--panel-2)); } }
 :root[data-theme="dark"] .chat-row:hover { background: color-mix(in srgb, var(--accent) 8%, var(--panel-2)); }
