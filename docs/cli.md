@@ -178,12 +178,14 @@ herdr-boss worker start fix-74 --kind claude --task-file brief.md --allow src/pa
 |---|---|
 | `worker list` | Unfinished run records with the live agent status. |
 | `worker collect NAME` | Read the worker report, check its changed paths against `--allow`, and report configured stale-artifact warnings. |
-| `worker collect NAME --record --outcome done\|partial\|failed --gate-passed\|--gate-failed [--defects N] [--rework N]` | Also append the run to the ledger, record usage, and release the leases of the worker. After success, merge the branch, then prune safe worktrees. |
+| `worker collect NAME --record --outcome done\|partial\|failed --gate-passed\|--gate-failed [--defects N] [--rework N]` | Check the report and changed paths. Append one ledger entry, record usage, and release the worker's leases. A closed pane or a merged branch does not block collection. If a check fails, print the reason and write no ledger entry. |
 | `worker park NAME --reason TEXT` | Mark a worker that waits on purpose. Idle notices skip it. |
 | `worker unpark NAME` | Clear the park mark. |
 | `worker allow NAME PATH... --reason TEXT` | Approve extra paths for a running worker after a `WORKER QUESTION`. |
 
 `worker collect` checks changed paths against the paths in the run record. It ignores the worker's `.worker/` folder. It checks artifacts when a `report.md` line starts with `Status: done` and the next character is whitespace, punctuation, or the end of the line. It accepts lines such as `Status: done.` and `Status: done — checks complete`. It ignores `Status: doneish`, `Status: done-partial`, `Status: partial`, and `Status: failed`. It compares the newest matching source file with the oldest matching artifact file. It warns when a source is newer or when sources match but no artifacts do. It prints each warning and includes the warnings in the `artifactWarnings` summary field. A warning does not change the independent gate result. The orchestrator decides whether the gate passed.
+
+With `--record`, the command completes every check before it prints the summary. It uses the ledger and run folder in the main checkout, including when you run it from a worker worktree.
 
 ### Project locks
 

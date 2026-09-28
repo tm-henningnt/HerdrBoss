@@ -796,7 +796,7 @@ test('worker collect --record uses the provider recorded at start, including nul
     assert.equal(usage[0].provider, expected);
     assert.equal(usage[0].recordedProvider, expected ?? 'unmetered-or-unknown');
     assert.equal(fs.readFileSync(f.config.ledgerPath, 'utf8').trim().split('\n').length, 1);
-    assert.ok(output.includes(`After you merge ${run.branch}, remove the worktree with herdr-boss worktree prune --apply`));
+    assert.ok(output.includes('After you review this collection, remove the worktree with herdr-boss worktree prune --apply'));
     assert.throws(() => collect(), /already marked finished/);
   }
 });
@@ -908,6 +908,151 @@ test('worker collect keeps changed paths stable after the base branch merges the
   const afterMerge = collect();
   assert.deepEqual(beforeMerge.actualPaths, ['src/change.js']);
   assert.deepEqual(afterMerge.actualPaths, beforeMerge.actualPaths);
+});
+
+test('worker collect --record refuses invalid reports and scopes without printing a success summary', () => {
+  const cases = [
+    { name: 'collect-scope-refusal', changedPath: 'docs/outside.md', allowedPaths: ['src/', '.orchestration/runs/'], reportPaths: ['docs/outside.md'], error: /outside its allowed scope/ },
+    { name: 'collect-omitted-refusal', changedPath: 'src/change.js', allowedPaths: ['src/', '.orchestration/runs/'], reportPaths: [], error: /omitted changed paths/ },
+    { name: 'collect-report-branch-refusal', changedPath: null, reportPatch: { branch: 'other' }, error: /Report branch other does not match/ },
+    { name: 'collect-report-worktree-refusal', changedPath: null, reportPatch: { worktree: '/missing/worktree' }, error: /does not match run worktree/ },
+    { name: 'collect-report-issue-refusal', issue: 74, reportPatch: { issue: 75 }, error: /Report issue 75 does not match run issue 74/ },
+    { name: 'collect-branch-refusal', changedPath: null, branchMismatch: true, error: /Worktree branch other does not match run branch main/ },
+    { name: 'collect-process-refusal', changedPath: null, leftover: true, error: /still has processes in its worktree/ },
+  ];
+
+  for (const scenario of cases) {
+    const f = setupFixture(null);
+    git(f.root, 'add', '-A');
+    git(f.root, 'commit', '--allow-empty', '-m', 'fixture configuration');
+    const run = startWorker(scenario.name, {
+      kind: 'codex', task: 'x', allow: scenario.allowedPaths ?? ['src/', '.orchestration/runs/'], noWorktree: true,
+      ...(scenario.issue == null ? {} : { issue: scenario.issue }),
+    }, { config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {} });
+    if (scenario.changedPath) {
+      const changedFile = path.join(run.worktree, scenario.changedPath);
+      fs.mkdirSync(path.dirname(changedFile), { recursive: true });
+      fs.writeFileSync(changedFile, 'changed\n');
+      git(run.worktree, 'add', scenario.changedPath);
+      git(run.worktree, 'commit', '-m', 'worker change');
+    }
+    if (scenario.branchMismatch) git(run.worktree, 'checkout', '-b', 'other');
+    const reportDir = path.join(run.worktree, run.workerDir);
+    fs.writeFileSync(path.join(reportDir, 'report.md'), 'Partial result.\n');
+    fs.writeFileSync(path.join(reportDir, 'report.json'), JSON.stringify({
+      issue: scenario.issue ?? null,
+      branch: run.branch,
+      worktree: run.worktree,
+      changedPaths: scenario.reportPaths ?? (scenario.changedPath ? [scenario.changedPath] : []),
+      commands: ['focused check'],
+      evidenceTier: ['unit'],
+      unverified: [],
+      stoppedEarly: true,
+      ...scenario.reportPatch,
+    }));
+    const output = [];
+    assert.throws(() => collectWorker(scenario.name, { record: true, outcome: 'partial', gatePassed: true }, {
+      config: f.config,
+      output: (line) => output.push(line),
+      listWorktreeProcesses: scenario.leftover
+        ? () => [{ pid: 100, ppid: 1, command: 'node', cwd: run.worktree }]
+        : () => [],
+      recordUsageFn: () => ({ errors: [], duplicate: false }),
+    }), (error) => {
+      assert.match(error.message, /^worker collect: no ledger entry written: /);
+      assert.match(error.message, scenario.error);
+      return true;
+    }, scenario.name);
+    assert.deepEqual(output, [], `${scenario.name} must not print a success summary or warning`);
+    assert.equal(fs.existsSync(f.config.ledgerPath), false, `${scenario.name} must not write a ledger entry`);
+    if (run.worktree !== f.root) git(f.root, 'worktree', 'remove', '--force', run.worktree);
+    fs.rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test('worker collect --record after merge and pane close writes one main-checkout ledger entry', (t) => {
+  const root = temporaryRepo('herdr-kit-v94-');
+  const name = 'merged-worker';
+  const worktreeRoot = path.join(path.dirname(root), '.herdr-wt');
+  const repoWorktrees = path.join(worktreeRoot, path.basename(root));
+  const worktree = path.join(repoWorktrees, name);
+  t.after(() => {
+    try { git(root, 'worktree', 'remove', '--force', worktree); } catch {}
+    fs.rmSync(repoWorktrees, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  fs.writeFileSync(path.join(root, '.herdr-boss.json'), JSON.stringify({
+    slug: 'sample',
+    worktreeRoot,
+    worktreeName: '{repo}/{name}',
+    ledger: '.orchestration/delegated-runs.jsonl',
+    runsDir: '.orchestration/runs',
+  }));
+  const mainConfig = loadProjectConfig({ cwd: root });
+  const baseCommit = git(root, 'rev-parse', 'HEAD');
+  fs.mkdirSync(path.dirname(worktree), { recursive: true });
+  git(root, 'worktree', 'add', '-b', name, worktree);
+  const changedFile = path.join(worktree, 'src', 'change.js');
+  fs.mkdirSync(path.dirname(changedFile), { recursive: true });
+  fs.writeFileSync(changedFile, 'export const changed = true;\n');
+  git(worktree, 'add', 'src/change.js');
+  git(worktree, 'commit', '-m', 'worker change');
+  git(root, 'merge', '--ff-only', name);
+
+  const run = {
+    name,
+    issue: null,
+    kind: 'codex',
+    model: 'gpt-6-luna',
+    branch: name,
+    worktree,
+    workerDir: '.worker',
+    base: 'main',
+    baseCommit,
+    startedAt: '2026-09-29T09:00:00.000Z',
+    allowedPaths: ['src/'],
+    pane: 'w1:p99',
+  };
+  fs.mkdirSync(mainConfig.runsPath, { recursive: true });
+  fs.writeFileSync(path.join(mainConfig.runsPath, `${name}.json`), JSON.stringify(run));
+  const reportDir = path.join(worktree, '.worker');
+  fs.mkdirSync(reportDir, { recursive: true });
+  fs.writeFileSync(path.join(reportDir, 'report.md'), 'Partial result.\n');
+  fs.writeFileSync(path.join(reportDir, 'report.json'), JSON.stringify({
+    issue: null,
+    branch: name,
+    worktree,
+    changedPaths: ['src/change.js'],
+    commands: ['focused check'],
+    evidenceTier: ['unit'],
+    unverified: [],
+    stoppedEarly: true,
+  }));
+
+  const config = loadProjectConfig({ cwd: worktree });
+  assert.equal(config.root, worktree);
+  assert.equal(config.mainRoot, root);
+  assert.equal(config.runsPath, mainConfig.runsPath);
+  assert.equal(config.ledgerPath, mainConfig.ledgerPath);
+  const paneIsClosed = true;
+  const herdr = (args) => {
+    if (args[0] === 'agent' && args[1] === 'list') return { agents: paneIsClosed ? [] : [{ name }] };
+    throw new Error(`Unexpected Herdr call: ${args.join(' ')}`);
+  };
+  const output = [];
+  collectWorker(name, { record: true, outcome: 'partial', gatePassed: true }, {
+    config,
+    output: (line) => output.push(line),
+    recordUsageFn: () => ({ errors: [], duplicate: false }),
+  });
+  assert.equal(fs.readFileSync(mainConfig.ledgerPath, 'utf8').trim().split('\n').length, 1);
+  assert.equal(fs.existsSync(path.join(worktree, '.orchestration/delegated-runs.jsonl')), false);
+  const ledgerOutput = [];
+  runKitCommand('ledger', ['check', '--runs'], { config, herdr, output: (line) => ledgerOutput.push(line) });
+  assert.deepEqual(ledgerOutput, ['ledger: PASS (1 entries; 1 run records, 0 still running)']);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(mainConfig.runsPath, `${name}.json`), 'utf8')).outcome, 'partial');
+  assert.ok(output.some((line) => line.includes('"name": "merged-worker"')));
 });
 
 test('worker collection warns only for stale or missing artifacts in explicitly done reports', () => {
