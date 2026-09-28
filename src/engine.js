@@ -15,7 +15,7 @@ import { readLeases, reclaimLeases, publicLease, tcpListening } from './leases.j
 import { codeSignCloneDir, sweepCodeSignClones } from './clone-sweep.js';
 import { runDenialScan, readDenials, denialSummary, DENIAL_SCAN_INTERVAL_MS } from './denials.js';
 import { listHandoffs, saveHandoffs, supersedeHandoffs, expireHandoff, expireMissingHandoffs, handoffNotices } from './handoff.js';
-import { deliverQueued } from './messages.js';
+import { deliverQueued, mailboxCounts, readMessages } from './messages.js';
 import { readKitNotice, pendingKitAlert, isKitAlert, kitNoticeTargets } from './kit-notice.js';
 import { inspectWorkerTransitions, inspectWorkerReports, applyWorkerFailureStatuses, resolveFreeUsageRun, activeFreeModelExhaustions, extendFreeModelExhaustion, activeFreeLaneExhaustions, extendFreeLaneExhaustion, freeUsageLaneRetry } from './worker-failures.js';
 
@@ -481,6 +481,8 @@ export class Engine extends EventEmitter {
         catch (e) { errors.push(`messages: ${e.message}`); }
       }
       snap.events = this.events.slice(-60);
+      try { snap.mailbox = mailboxCounts(readMessages({ dir: DATA_DIR })); }
+      catch (e) { errors.push(`mailbox: ${e.message}`); }
 
       this.state = snap;
       writeJson(STATE_FILE, snap);

@@ -77,6 +77,17 @@ A worker pane cannot use `say`. The command tells the worker to ask its orchestr
 
 The Boss writes to the `boss` thread. An orchestrator writes to the thread of the project that uses its workspace. Herdr Boss finds that project in `state.json`. `--reply-to` must name a message in the same thread.
 
+Each reply and report is an item in the Owner mailbox. Use `--action` to tell the Owner what the item needs:
+
+| Value | Meaning |
+|---|---|
+| `answer` | The Owner types an answer. |
+| `approve` | The Owner approves or declines. |
+| `decide` | The Owner makes a choice. Add a Markdown list under a `## Choices` heading to show choice buttons. |
+| `read` | The Owner only reads the item. This is the default. |
+
+Set `--action decide` or `--action approve` only when you need an Owner answer. The escalation rules make that rare. The Owner answer comes back as an `[owner] Answer to ID:` prompt.
+
 The `say` text is 1 to 4000 characters. The report file is Markdown, up to 64 KB. The report title defaults to the first Markdown heading, or to `Report`. Both commands refuse text that looks like a token, a key, or a password. The error does not print the text.
 
 Example:

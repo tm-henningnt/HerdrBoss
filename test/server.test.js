@@ -52,7 +52,7 @@ test('read-only preview allows reads and rejects all API methods that can change
   assert.deepEqual(engineOptions, { push: false, act: false });
   assert.equal(engine.act, false, 'preview disables actions such as reaping and handovers');
   assert.equal(engine.push, false, 'preview disables prompts and notifications');
-  for (const route of ['/', '/login', '/api/state', '/api/models', '/api/policy', '/api/usage', '/api/projects', '/api/handoffs']) {
+  for (const route of ['/', '/login', '/api/state', '/api/models', '/api/policy', '/api/usage', '/api/projects', '/api/handoffs', '/api/mailbox']) {
     const response = await fetch(`${base}${route}`);
     assert.equal(response.status, 200, `${route} remains readable`);
   }
@@ -77,6 +77,7 @@ test('read-only preview allows reads and rejects all API methods that can change
     ['POST', '/api/usage'],
     ['POST', '/api/tick'],
     ['POST', '/api/messages'],
+    ['POST', '/api/messages/read'],
     ['PATCH', '/api/unknown'],
     ['OPTIONS', '/api/state'],
   ];

@@ -17,6 +17,9 @@ export const MAX_DELIVERY_ATTEMPTS = 4;
 export const NUDGES = ['Continue.', 'Use your free worker slots.', 'Pause after the current task.'];
 export const STATUS_REQUEST_TEXT = 'Send a short status report with herdr-boss say, and publish your status file.';
 export const ACTIONS = ['answer', 'approve', 'decide', 'read'];
+export const READ_IDS_MAX = 200;
+export const CHOICES_MAX = 10;
+export const CHOICE_TEXT_MAX = 200;
 const OWNER_KINDS = ['message', 'nudge', 'status-request'];
 const LOCK_WAIT_MS = 2000;
 const LOCK_STALE_MS = 10000;
@@ -121,13 +124,109 @@ export function validateOwnerSend(body, { knownThreads, records = [], now = Date
     text = body.text;
   } else text = STATUS_REQUEST_TEXT;
   if (!knownThreads.has(thread)) return { status: 404, error: `No open project uses the thread ${thread}.` };
+  const replyTo = body.replyTo ?? null;
+  if (replyTo !== null) {
+    if (typeof replyTo !== 'string') return { status: 400, error: 'replyTo must be a mailbox item ID.' };
+    if (kind !== 'message') return { status: 400, error: 'Only a message can answer a mailbox item.' };
+    const item = records.find((record) => record.id === replyTo && record.thread === thread && isMailboxItem(record));
+    if (!item) return { status: 404, error: `No mailbox item ${replyTo} is in the ${thread} thread.` };
+    if (item.closedAt) return { status: 409, error: 'This mailbox item is closed. Send a new message instead.' };
+  }
   const recent = records.filter((record) => record.from === 'owner' && Date.parse(record.at) > now - 60000).length;
   if (recent >= SEND_LIMIT_PER_MINUTE) return { status: 429, error: `Herdr Boss accepts at most ${SEND_LIMIT_PER_MINUTE} Owner messages a minute. Wait, then send again.` };
-  return { fields: { thread, from: 'owner', to: thread === 'boss' ? 'boss' : 'orch', kind, text, action: null, replyTo: null, status: 'queued', attempts: 0 } };
+  return { fields: { thread, from: 'owner', to: thread === 'boss' ? 'boss' : 'orch', kind, text, action: null, replyTo, status: 'queued', attempts: 0 } };
 }
 
 export function ownerPromptText(record) {
-  return `[owner] ${record.text} (Reply with: herdr-boss say --reply-to ${record.id} "<answer>")`;
+  const answer = record.replyTo ? `Answer to ${record.replyTo}: ` : '';
+  return `[owner] ${answer}${record.text} (Reply with: herdr-boss say --reply-to ${record.id} "<answer>")`;
+}
+
+// ---------- Owner mailbox ----------
+
+// Every agent reply and Boss report to the Owner is a mailbox item. An item without a known action counts as read.
+export const isMailboxItem = (record) => !!record && record.to === 'owner' && (record.kind === 'reply' || record.kind === 'report');
+export const mailboxAction = (record) => (ACTIONS.includes(record?.action) ? record.action : 'read');
+
+// The choices are the Markdown list items under a heading named Choices, up to the first other line.
+export function parseChoices(text) {
+  const lines = String(text ?? '').split(/\r?\n/);
+  const start = lines.findIndex((line) => /^#{1,6}\s+choices\s*:?\s*$/i.test(line.trim()));
+  if (start < 0) return [];
+  const choices = [];
+  for (const line of lines.slice(start + 1)) {
+    if (!line.trim()) continue;
+    const item = /^\s*(?:[-*+]|\d+[.)])\s+(.*)$/.exec(line) || /^\s*(?:[-*+]|\d+[.)])\s*$/.exec(line);
+    if (!item) break;
+    const choice = String(item[1] ?? '').trim().slice(0, CHOICE_TEXT_MAX);
+    if (choice && !choices.includes(choice)) choices.push(choice);
+    if (choices.length >= CHOICES_MAX) break;
+  }
+  return choices;
+}
+
+export function mailboxCounts(records) {
+  const items = records.filter(isMailboxItem);
+  return { unread: items.filter((item) => !item.readAt).length, open: items.filter((item) => !item.closedAt).length };
+}
+
+// Open and closed items, newest first. A closed item carries the Owner send that answered it.
+export function mailboxView(records) {
+  const answers = new Map();
+  for (const record of records) if (record.from === 'owner' && record.replyTo) answers.set(record.replyTo, record);
+  const items = records.filter(isMailboxItem).reverse().map((record) => {
+    const answer = answers.get(record.id);
+    return {
+      ...record,
+      action: mailboxAction(record),
+      choices: parseChoices(record.text),
+      answer: answer ? { id: answer.id, at: answer.at, text: answer.text, status: answer.status } : null,
+    };
+  });
+  return { open: items.filter((item) => !item.closedAt), done: items.filter((item) => item.closedAt) };
+}
+
+export function closeMailboxItem(id, { dir = DATA_DIR, now = Date.now() } = {}) {
+  return withLock(dir, () => {
+    const records = readMessages({ dir });
+    const item = records.find((record) => record.id === id && isMailboxItem(record));
+    if (!item) return null;
+    const at = new Date(now).toISOString();
+    item.closedAt ||= at;
+    item.readAt ||= at;
+    rewrite(dir, fresh(records, now));
+    return item;
+  });
+}
+
+// Sets readAt on each item once. `close: true` also closes items whose action is read.
+// Returns { status, error } for a refused request, or { ok, updated }.
+export function markMailboxRead(body, { dir = DATA_DIR, now = Date.now() } = {}) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return { status: 400, error: 'Send a JSON object with ids.' };
+  const { ids, close = false } = body;
+  if (!Array.isArray(ids) || ids.length < 1 || ids.length > READ_IDS_MAX || !ids.every((id) => typeof id === 'string')) {
+    return { status: 400, error: `ids must be a list of 1 to ${READ_IDS_MAX} mailbox item IDs.` };
+  }
+  if (typeof close !== 'boolean') return { status: 400, error: 'close must be true or false.' };
+  return withLock(dir, () => {
+    const records = readMessages({ dir });
+    const items = ids.map((id) => records.find((record) => record.id === id && isMailboxItem(record)));
+    const missing = ids.find((id, index) => !items[index]);
+    if (missing) return { status: 404, error: `No mailbox item has the ID ${missing}.` };
+    if (close && items.some((item) => mailboxAction(item) !== 'read')) {
+      return { status: 409, error: 'Only an item with the action read closes on Mark read. Answer the other items.' };
+    }
+    const at = new Date(now).toISOString();
+    let updated = 0;
+    for (const item of items) {
+      let changed = false;
+      if (!item.readAt) { item.readAt = at; changed = true; }
+      if (close && !item.closedAt) { item.closedAt = at; changed = true; }
+      if (changed) updated += 1;
+    }
+    rewrite(dir, fresh(records, now));
+    return { ok: true, updated };
+  });
 }
 
 // ---------- Delivery ----------
