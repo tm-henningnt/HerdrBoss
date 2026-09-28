@@ -13,9 +13,10 @@ process.env.HOME = homeDir;
 process.env.HERDR_BOSS_DIR = dataDir;
 process.env.HERDR_BOSS_PORT = '0';
 
-const [{ serve }, { loadConfig, serviceSettingsView }] = await Promise.all([
+const [{ serve }, { loadConfig, serviceSettingsView }, { Engine }] = await Promise.all([
   import('../src/server.js'),
   import('../src/config.js'),
+  import('../src/engine.js'),
 ]);
 
 test('the state API exposes only allow-listed effective service settings', { timeout: 20000 }, (t) => {
@@ -1299,4 +1300,117 @@ test('Settings shows a read-only harness readiness table with the fixed sync lin
   assert.match(app, /<h3>Harness readiness<\/h3>/);
   assert.match(guide, /Harness readiness/);
   assert.match(guide, /Run `herdr-boss harness sync` to see the changes to make/);
+});
+
+test('the resource pool API creates, updates, and removes pools safely', { timeout: 20000 }, async (t) => {
+  fs.rmSync(dataDir, { recursive: true, force: true });
+  fs.rmSync(homeDir, { recursive: true, force: true });
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.mkdirSync(homeDir, { recursive: true });
+  t.after(() => {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  });
+  const configFile = path.join(dataDir, 'config.json');
+  const original = {
+    host: '127.0.0.1', port: 0, tickSeconds: 3600,
+    resourcePools: [{ name: 'serve-ports', items: ['47100'], split: {}, env: 'HERDR_SERVE_PORT', ttlMinutes: 120, check: null, graceMinutes: 10 }],
+    unrelatedSetting: { keep: true },
+  };
+  fs.writeFileSync(configFile, `${JSON.stringify(original)}\n`);
+  fs.chmodSync(configFile, 0o640);
+  const cfg = loadConfig();
+  cfg.host = '127.0.0.1';
+  cfg.port = 0;
+  cfg.tickSeconds = 3600;
+  let poolEngine;
+  const { server, close } = serve(cfg, {
+    createEngine: (engineCfg, options) => {
+      poolEngine = new Engine(engineCfg, { ...options, act: false, push: false });
+      poolEngine.state = { resourceLeases: { pools: engineCfg.resourcePools, errors: [], leases: [] } };
+      poolEngine.tick = async () => poolEngine.state;
+      poolEngine.log = () => {};
+      return poolEngine;
+    },
+  });
+  t.after(async () => { await close(); });
+  await new Promise((resolve, reject) => {
+    server.once('listening', resolve);
+    server.once('error', reject);
+  });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const put = (body) => fetch(`${base}/api/pools`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const pool = (name, items) => ({ name, items, split: {}, env: 'HERDR_OTHER_PORT', ttlMinutes: 60, check: null, graceMinutes: 5 });
+  const mode = () => fs.statSync(configFile).mode & 0o7777;
+
+  const remote = await rawRequest(base, 'PUT', '/api/pools', {
+    headers: { host: 'mac.tail0000.ts.net', 'content-type': 'application/json' },
+    body: JSON.stringify({ action: 'create', pool: pool('serve-ports-2', ['48000']) }),
+  });
+  assert.equal(remote.status, 401, 'a remote write needs dashboard authorization');
+
+  const created = await put({ action: 'create', pool: pool('serve-ports-2', ['48000']) });
+  assert.equal(created.status, 200, await created.text());
+  assert.deepEqual(poolEngine.cfg.resourcePools.find((item) => item.name === 'serve-ports-2').items, ['48000'], 'the engine applies the pool at once');
+  assert.ok(poolEngine.state.resourceLeases.pools.some((item) => item.name === 'serve-ports-2'));
+  let saved = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+  assert.deepEqual(saved.unrelatedSetting, original.unrelatedSetting, 'the writer keeps every other config key');
+  assert.equal(mode(), 0o640, 'the writer keeps the config file mode');
+  assert.deepEqual(saved.resourcePools.map((item) => item.name), ['serve-ports', 'serve-ports-2']);
+
+  const updated = await put({ action: 'update', pool: pool('serve-ports-2', ['48000', '48001']) });
+  assert.equal(updated.status, 200, await updated.text());
+  assert.deepEqual(poolEngine.cfg.resourcePools.find((item) => item.name === 'serve-ports-2').items, ['48000', '48001']);
+
+  const leaseFile = path.join(dataDir, 'leases.json');
+  fs.writeFileSync(leaseFile, JSON.stringify({ leases: [{ pool: 'serve-ports-2', item: '48000', project: 'alpha', pane: 'wA:p2', worker: 'build' }] }));
+  const heldUpdate = await put({ action: 'update', pool: pool('serve-ports-2', ['48001']) });
+  assert.equal(heldUpdate.status, 409, 'an update cannot drop a held item');
+  const heldUpdateBody = await heldUpdate.json();
+  assert.equal(heldUpdateBody.holder.project, 'alpha');
+  assert.equal(heldUpdateBody.holder.pane, 'wA:p2');
+  assert.match(heldUpdateBody.error, /alpha/);
+  const heldRemove = await put({ action: 'remove', pool: { name: 'serve-ports-2' } });
+  assert.equal(heldRemove.status, 409, 'a pool with a held item cannot be removed');
+  assert.equal((await heldRemove.json()).holder.item, '48000');
+
+  const builtIn = await put({ action: 'create', pool: pool('project-browsers', ['48002']) });
+  assert.equal(builtIn.status, 400, 'the built-in pool name is reserved');
+  const protectedRange = await put({ action: 'create', pool: pool('unsafe-ports', ['9225']) });
+  assert.equal(protectedRange.status, 400, 'project browser ports are reserved');
+  const protectedRangeAsRange = await put({ action: 'create', pool: { ...pool('unsafe-range', []), items: undefined, range: '9298-9299' } });
+  assert.equal(protectedRangeAsRange.status, 400, 'ranges cannot include project browser ports');
+
+  fs.writeFileSync(leaseFile, JSON.stringify({ leases: [] }));
+  const removed = await put({ action: 'remove', pool: { name: 'serve-ports-2' } });
+  assert.equal(removed.status, 200, await removed.text());
+  assert.equal(poolEngine.cfg.resourcePools.some((item) => item.name === 'serve-ports-2'), false, 'the engine applies pool removal at once');
+  saved = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+  assert.deepEqual(saved.resourcePools.map((item) => item.name), ['serve-ports']);
+  assert.deepEqual(saved.unrelatedSetting, original.unrelatedSetting);
+  assert.equal(mode(), 0o640);
+  assert.deepEqual(fs.readdirSync(dataDir).filter((name) => name.startsWith('config.json.') && name.endsWith('.tmp')), [], 'atomic writes leave no temporary file');
+});
+
+
+test('Allocation manages config pools and documents the safe limits', () => {
+  const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
+  const guide = fs.readFileSync(new URL('../docs/user-guide.md', import.meta.url), 'utf8');
+  assert.match(app, /data-pool-add/);
+  assert.match(app, /const controls = pool\.builtIn \? '' :/);
+  assert.match(app, /data-pool-edit=/);
+  assert.match(app, /data-pool-remove=/);
+  assert.match(app, /name="items"/);
+  assert.match(app, /name="split"/);
+  assert.match(app, /name="env"/);
+  assert.match(app, /name="ttlMinutes"/);
+  assert.match(app, /name="check"/);
+  assert.match(app, /name="graceMinutes"/);
+  assert.match(app, /Remove the resource pool \$\{name\}\?/);
+  assert.match(app, /<h3>Manage pools<\/h3>/);
+  assert.match(css, /\.resource-pool-fields/);
+  assert.match(guide, /Select \*\*Add pool\*\*/);
+  assert.match(guide, /A held item blocks removal and any update that drops it\./);
+  assert.match(guide, /The read-only preview refuses pool changes\./);
 });

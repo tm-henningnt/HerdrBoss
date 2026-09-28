@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 
 const DEFAULT_DATA_DIR = path.resolve(path.join(os.homedir(), '.herdr-boss'));
 export const LIVE_DATA_DIR = path.resolve(process.env.HERDR_BOSS_LIVE_DIR || DEFAULT_DATA_DIR);
@@ -357,6 +357,39 @@ export function loadConfig() {
   if (process.env.HERDR_BOSS_PUSH === '0') cfg.push = false;
   if (process.env.HERDR_BOSS_PORT) cfg.port = Number(process.env.HERDR_BOSS_PORT);
   return cfg;
+}
+
+// Replace only resourcePools in config.json. Keep the other settings and the file mode.
+export function writeResourcePools(resourcePools, { dataDir = DATA_DIR } = {}) {
+  const file = path.join(dataDir, 'config.json');
+  fs.mkdirSync(dataDir, { recursive: true });
+  let config = {};
+  let mode = 0o600;
+  try {
+    const stat = fs.statSync(file);
+    mode = stat.mode & 0o7777;
+    config = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error(`${file} must hold a JSON object.`);
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  config.resourcePools = resourcePools;
+  const temporary = `${file}.${process.pid}.${randomBytes(8).toString('hex')}.tmp`;
+  let fd;
+  try {
+    fd = fs.openSync(temporary, 'wx', mode);
+    fs.writeFileSync(fd, `${JSON.stringify(config, null, 2)}\n`);
+    fs.fchmodSync(fd, mode);
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fd = undefined;
+    fs.renameSync(temporary, file);
+  } catch (error) {
+    if (fd !== undefined) fs.closeSync(fd);
+    try { fs.unlinkSync(temporary); } catch {}
+    throw error;
+  }
+  return config;
 }
 
 // A legacy install kept the token and the session file in the shared data directory. Move both to the private

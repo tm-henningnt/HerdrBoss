@@ -6,8 +6,8 @@ import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { Engine } from './engine.js';
-import { ownerReleaseLease } from './leases.js';
-import { PROJECTS_DIR, DATA_DIR, DEFAULT_SESSION_FILE, PRIVATE_ACCESS_DIR, assertPreviewDataDir, writeServiceSettings, applyServiceSettings, serviceSettingsView } from './config.js';
+import { ownerReleaseLease, withResourcePoolMutation } from './leases.js';
+import { PROJECTS_DIR, DATA_DIR, DEFAULT_SESSION_FILE, PRIVATE_ACCESS_DIR, assertPreviewDataDir, writeServiceSettings, applyServiceSettings, serviceSettingsView, validateResourcePools, writeResourcePools } from './config.js';
 import { writeProject, listProjects } from './projects.js';
 import { loadModels } from './kit/config.js';
 import { loadPolicy, savePolicy } from './control.js';
@@ -173,6 +173,63 @@ export function serve(cfg, { readOnlyPreview = false, createEngine = (config, op
         }
         const released = ownerReleaseLease(body.pool, body.item, { expectedProject: body.project, dataDir: DATA_DIR });
         return send(res, 200, { ok: true, released });
+      }
+      if (p === '/api/pools' && req.method === 'PUT') {
+        const body = await jsonBody(req);
+        if (!body || !['create', 'update', 'remove'].includes(body.action)) return send(res, 400, { error: 'action must be create, update, or remove.' });
+        const pool = body.pool;
+        if (!pool || typeof pool !== 'object' || Array.isArray(pool) || typeof pool.name !== 'string' || !pool.name) {
+          return send(res, 400, { error: 'pool.name is required.' });
+        }
+        if (pool.name === 'project-browsers') return send(res, 400, { error: 'project-browsers is a built-in pool and cannot be changed.' });
+
+        let candidate = null;
+        if (body.action !== 'remove') {
+          const checkedPool = validateResourcePools([pool]);
+          if (checkedPool.errors.length) return send(res, 400, { error: checkedPool.errors.join(' '), errors: checkedPool.errors });
+          candidate = checkedPool.pools[0];
+          const protectedItems = candidate.items.filter((item) => /^\d+$/.test(item) && Number(item) >= 9222 && Number(item) <= 9299);
+          if (protectedItems.length) return send(res, 400, { error: `Items from 9222 to 9299 are reserved for project browsers: ${protectedItems.join(', ')}.` });
+        }
+
+        const changed = withResourcePoolMutation((leases) => {
+          const configFile = path.join(DATA_DIR, 'config.json');
+          let config;
+          try { config = JSON.parse(fs.readFileSync(configFile, 'utf8')); }
+          catch (error) {
+            if (error.code === 'ENOENT') config = {};
+            else return { status: 409, error: `Cannot read config.json: ${error.message}` };
+          }
+          if (!config || typeof config !== 'object' || Array.isArray(config)) return { status: 409, error: 'config.json must hold a JSON object.' };
+          const currentPools = config.resourcePools ?? [];
+          if (!Array.isArray(currentPools)) return { status: 409, error: 'config.json resourcePools must be an array.' };
+          const index = currentPools.findIndex((item) => item?.name === pool.name);
+          if (body.action === 'create' && index !== -1) return { status: 409, error: `Resource pool ${pool.name} already exists.` };
+          if (body.action !== 'create' && index === -1) return { status: 404, error: `Resource pool ${pool.name} does not exist.` };
+
+          let nextPools;
+          if (body.action === 'create') nextPools = [...currentPools, pool];
+          else if (body.action === 'update') nextPools = currentPools.map((item, itemIndex) => itemIndex === index ? pool : item);
+          else nextPools = currentPools.filter((_, itemIndex) => itemIndex !== index);
+
+          const checked = validateResourcePools(nextPools);
+          if (checked.errors.length) return { status: 400, error: checked.errors.join(' '), errors: checked.errors };
+
+          const held = leases.find((lease) => lease.pool === pool.name && (
+            body.action === 'remove' || !candidate.items.includes(lease.item)
+          ));
+          if (held) {
+            const holder = { pool: held.pool, item: held.item, project: held.project, pane: held.pane || null, worker: held.worker || null };
+            const location = [held.pane && `pane ${held.pane}`, held.worker && `worker ${held.worker}`].filter(Boolean).join(', ');
+            return { status: 409, error: `Resource pool ${pool.name} cannot be ${body.action === 'remove' ? 'removed' : 'updated'} while item ${held.item} is held by project ${held.project}${location ? ` (${location})` : ''}.`, holder };
+          }
+
+          writeResourcePools(nextPools);
+          return { status: 200, pools: checked.pools };
+        });
+        if (changed.status !== 200) return send(res, changed.status, { error: changed.error, ...(changed.errors ? { errors: changed.errors } : {}), ...(changed.holder ? { holder: changed.holder } : {}) });
+        engine.setResourcePools(changed.pools);
+        return send(res, 200, { ok: true, pools: changed.pools });
       }
       if (p === '/api/roamgate' && req.method === 'GET') return send(res, 200, { available: await roamgateAvailable(cfg) });
       if (p === '/roamgate' && req.method === 'GET') {

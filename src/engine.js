@@ -188,6 +188,15 @@ export class Engine extends EventEmitter {
     this.emit('event', e);
   }
 
+  setResourcePools(pools) {
+    this.cfg.resourcePools = pools;
+    this.cfg.resourcePoolErrors = [];
+    if (!this.state?.resourceLeases) return;
+    const { pools: activePools, errors } = leasePools(this.cfg);
+    this.state.resourceLeases = { ...this.state.resourceLeases, pools: activePools, errors };
+    this.emit('state', this.state);
+  }
+
   async tick() {
     if (this.running) return this.state;
     this.running = true;

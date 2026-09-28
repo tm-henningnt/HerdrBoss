@@ -91,6 +91,13 @@ function changeLeases(dataDir, operation, waitMs = MUTATION_GUARD_WAIT_MS) {
   }, waitMs);
 }
 
+// Serialize a pool config change with lease changes. The caller can inspect the current leases
+// and write config.json while no acquire, release, or reclaim operation is in progress.
+export function withResourcePoolMutation(operation, { dataDir = DATA_DIR } = {}) {
+  fs.mkdirSync(dataDir, { recursive: true });
+  return machineMutationLock(dataDir, () => operation(readLeases(dataDir).leases));
+}
+
 // A synchronous probe: a child Node process connects to 127.0.0.1:PORT and exits 0 when the connection opens.
 export function tcpListening(port, { timeoutMs = 1000 } = {}) {
   const script = `const s = require('node:net').connect({ host: '127.0.0.1', port: ${Number(port)} });
