@@ -266,6 +266,10 @@ export function describeLane(provider, lane, now = Date.now()) {
   if (!lane || lane.state === 'open') return `${provider} open${suffix}`;
   if (lane.state === 'unknown') return `${provider} unknown (no quota data)${suffix}`;
   if (lane.state === 'exhausted') return `${provider} exhausted: ${lane.usedPercent}% used in the ${lane.window} window; exhausted until ${lane.resetAt || 'an unknown time'}${suffix}`;
+  if (lane.state === 'trickle') {
+    const name = { claude: 'Claude', codex: 'Codex', opencodego: 'OpenCode Go' }[provider] || provider;
+    return `${name}: trickle (${lane.window} ${lane.usedPercent}% used, ahead of pace): about ${lane.allowancePercent.toFixed(1)}%/day, ${(lane.usedTodayPercent || 0).toFixed(1)}% used today${suffix}`;
+  }
   const numbers = `${lane.usedPercent}% used${lane.expectedPercent != null ? ` against ${lane.expectedPercent}% expected` : ''} in the ${lane.window} window`;
   if (lane.state === 'reserve') return `${provider} near exhaustion: ${numbers}; resets in ${inAbout(lane.backOnPaceAt, now)}${suffix}`;
   return `${provider} ahead of pace: ${numbers}; back on pace in about ${inAbout(lane.backOnPaceAt, now)} if unused${suffix}`;
@@ -312,8 +316,15 @@ function unmeteredAlternatives(rules, project, allowedModels) {
 
 // Decide whether a worker on this provider may start. Returns { error } or { warning } or {}.
 export function providerGate(provider, rules, { force = false, now = Date.now(), project = null, allowedModels = null } = {}) {
-  if (!provider || !rules.avoidProviders?.includes(provider)) return {};
+  if (!provider) return {};
   const lane = rules.lanes?.[provider];
+  if (lane?.state === 'trickle') {
+    const usedToday = lane.usedTodayPercent || 0;
+    if (usedToday < lane.allowancePercent) return {};
+    if (force) return { warning: `Warning: --force overrides the quota guard: ${describeLane(provider, lane, now)}.` };
+    return { error: `${provider} trickle used for today: ${usedToday.toFixed(1)}% of about ${lane.allowancePercent.toFixed(1)}%/day; the next allowance starts at 00:00 UTC.` };
+  }
+  if (!rules.avoidProviders?.includes(provider)) return {};
   const detail = lane ? describeLane(provider, lane, now) : `${provider} is ahead of quota pace or near exhaustion`;
   const alternatives = unmeteredAlternatives(rules, project, allowedModels);
   const lead = alternatives ? ` ${alternatives}` : '';

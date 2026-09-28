@@ -693,8 +693,11 @@ function quotaCard(q) {
   const extras = [];
   if (q.credits?.remaining != null) extras.push(`${q.credits.remaining} credits`);
   if (q.resetCredits) extras.push(`${q.resetCredits} reset credit${q.resetCredits > 1 ? 's' : ''}`);
+  const lane = state?.lanes?.[q.provider];
+  const trickle = lane?.state === 'trickle'
+    ? `<div class="win-foot">Trickle allowance: about ${lane.allowancePercent.toFixed(1)}%/day · ${(lane.usedTodayPercent || 0).toFixed(1)}% used today</div>` : '';
   const trend = usage?.quotaTrend?.[q.provider] || [];
-  return `<div class="panel provider"><div class="provider-head"><b>${esc(name)}</b><span class="tag">${esc(extras.join(' · ') || q.plan || '')}</span></div>${q.stale ? `<div class="err" title="${esc(q.error)}">${esc(staleQuotaText(q))}</div>` : ''}${wins}${trend.length > 1 ? `<div class="win-foot">Weekly use trend · last ${Math.min(24, Math.round(trend.length / 12))}h${spark(trend.map((x) => x.usedPercent), 100)}</div>` : ''}</div>`;
+  return `<div class="panel provider"><div class="provider-head"><b>${esc(name)}</b><span class="tag">${esc(extras.join(' · ') || q.plan || '')}</span></div>${q.stale ? `<div class="err" title="${esc(q.error)}">${esc(staleQuotaText(q))}</div>` : ''}${wins}${trickle}${trend.length > 1 ? `<div class="win-foot">Weekly use trend · last ${Math.min(24, Math.round(trend.length / 12))}h${spark(trend.map((x) => x.usedPercent), 100)}</div>` : ''}</div>`;
 }
 
 function spark(values, max) {

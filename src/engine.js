@@ -9,7 +9,7 @@ import { listProjects } from './projects.js';
 import { readProjectRepos } from './harness.js';
 import { loadModels, KIT_ROOT } from './kit/config.js';
 import { loadPolicy, clearExpiredOneOffGoals, deriveControl, migrateWorkspacePolicy, providerFor, pickSuccessor, laneStatus, leastOverProvider, machineLimits, unmeteredLane, unavailablePiModels, mergeModels } from './control.js';
-import { recordQuotaSnapshot } from './usage.js';
+import { quotaUsageToday, recordQuotaSnapshot } from './usage.js';
 import { listBrowserSessions, cdpResponds, browserProcessCheck } from './browser-pool.js';
 import { readLeases, reclaimLeases, publicLease, tcpListening, leasePools, migrateProjectBrowserLeases } from './leases.js';
 import { codeSignCloneDir, sweepCodeSignClones } from './clone-sweep.js';
@@ -323,8 +323,10 @@ export class Engine extends EventEmitter {
       clearExpiredOneOffGoals(policy, snap.quotas, now, { log: (message) => this.log('policy', message) });
       // Apply the failure status before deriving control, so a failed worker does not count as running.
       snap.herdr = herdr ? { ...herdr, panes: applyWorkerFailureStatuses(herdr.panes, workerTransitions.failures) } : herdr;
+      const todayUse = quotaUsageToday(snap.quotas, undefined, now);
+      snap.lanes = laneStatus(snap.quotas, policy, now, { todayUse });
       const control = deriveControl(snap, policy, this.models, this.memory.paneSince, now, this.memory.exhaustedFreeModels, {
-        exhaustedFreeLanes: this.memory.exhaustedFreeLanes, piModels: this.memory.piModels,
+        exhaustedFreeLanes: this.memory.exhaustedFreeLanes, piModels: this.memory.piModels, lanes: snap.lanes,
       });
       const profileWorkspaces = Object.fromEntries(managedBrowsers.map((b) => [b.profile, control.projects[b.project]?.workspace]).filter(([, ws]) => ws));
       snap.cpuUse = cpuUse(procs, herdr?.panes || [], profileWorkspaces);
@@ -333,7 +335,6 @@ export class Engine extends EventEmitter {
         snap.machine.cpuTotalSample = [...procs.values()].reduce((sum, proc) => sum + Math.max(0, proc.cpu), 0);
         snap.machine.limits = machineLimits(snap.machine, policy, now);
       }
-      snap.lanes = laneStatus(snap.quotas, policy, now);
       // The unmetered lane lists the permitted free models that can start. It never affects least-over selection.
       snap.lanes.unmetered = unmeteredLane(this.models, policy, control.projects, this.memory.exhaustedFreeModels, {
         unavailablePiModels: unavailablePiModels(mergeModels(this.models, policy).kinds.pi?.allowedModels, this.memory.piModels),
@@ -475,7 +476,11 @@ export class Engine extends EventEmitter {
       writeJson(path.join(DATA_DIR, 'rules.json'), {
         updatedAt: snap.updatedAt,
         avoidKinds,
-        avoidProviders: Object.keys(snap.lanes).filter((provider) => control.pressures[provider] || control.risks[provider] || snap.lanes[provider].state === 'exhausted'),
+        avoidProviders: Object.keys(snap.lanes).filter((provider) => {
+          const lane = snap.lanes[provider];
+          if (lane.state === 'trickle' && lane.usedTodayPercent < lane.allowancePercent) return false;
+          return control.pressures[provider] || control.risks[provider] || lane.state === 'exhausted';
+        }),
         lanes: snap.lanes,
         leastOverProvider: snap.leastOverProvider,
         piModels: this.memory.piModels || null,
@@ -513,7 +518,7 @@ export class Engine extends EventEmitter {
         catch (e) { this.log('error', `Handover peer notice check failed: ${e.message}`); }
       }
       if (this.act && policy.autoHandover) {
-        try { await this.autoHandover(control, herdr, policy, now); }
+        try { await this.autoHandover(control, herdr, policy, now, snap.lanes); }
         catch (e) { this.log('error', `Automatic handover check failed: ${e.message}`); }
       }
       writeJson(MEMORY_FILE, this.memory);
@@ -656,13 +661,16 @@ export class Engine extends EventEmitter {
       .finally(() => { this.denialScanRunning = false; });
   }
 
-  async autoHandover(control, herdr, policy, now) {
+  async autoHandover(control, herdr, policy, now, lanes = {}) {
     // Never switch labels using stale quota data or a guessed successor state.
     if (!this.quotasAt || this.quotasCached || now - this.quotasAt > (this.cfg.quotaSeconds + this.cfg.tickSeconds) * 1000) return;
     this.memory.autoHandoverAttempts ||= {};
     for (const [key, at] of Object.entries(this.memory.autoHandoverAttempts)) if (now - at > 7 * 86400 * 1000) delete this.memory.autoHandoverAttempts[key];
     const records = listHandoffs();
     for (const item of records.filter((x) => x.status === 'prepared' && x.automatic && x.readyAt && !x.promptError)) {
+      const targetProvider = providerFor(item.toKind, item.model, policy);
+      const targetLane = lanes[targetProvider];
+      if (targetLane?.state === 'trickle' && targetLane.usedTodayPercent >= targetLane.allowancePercent) continue;
       const sourceKind = item.fromKind || this.memory.lastOrchestrators?.[item.workspace]?.kind;
       const provider = providerFor(sourceKind, policy.preferredModels?.[sourceKind] ?? this.models.kinds[sourceKind]?.defaultModel, policy);
       const quota = this.quotas.find((q) => q.provider === provider && !q.error);
@@ -679,7 +687,7 @@ export class Engine extends EventEmitter {
         this.log('handoff', `Automatically activated ${item.toKind} successor for ${item.label || item.project}`, item.boss ? { workspace: item.workspace, pane: item.newPane } : { project: item.project, pane: item.newPane });
       } catch (e) { this.log('error', `Automatic activation for ${item.label || item.project} failed: ${String(e.stderr || e.message).slice(0, 300)}`); }
     }
-    const successorLimits = { exhaustedFreeModels: this.memory.exhaustedFreeModels, exhaustedFreeLanes: this.memory.exhaustedFreeLanes, piModels: this.memory.piModels };
+    const successorLimits = { exhaustedFreeModels: this.memory.exhaustedFreeModels, exhaustedFreeLanes: this.memory.exhaustedFreeLanes, piModels: this.memory.piModels, lanes };
     const stopped = Object.values(control.projects).flatMap((p) => {
       const last = this.memory.lastOrchestrators[p.workspace];
       if (!p.orch || p.orch.kind || last?.pane !== p.orch.pane) return [];
