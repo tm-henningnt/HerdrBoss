@@ -24,9 +24,16 @@ const DAY_MS = 86400 * 1000;
 const MAX_RUNS = 1000;
 const CLASSIFIER = /^Permission for this action was denied by the Claude Code auto mode classifier\. Reason: \[([^\]\n]{1,80})\]/;
 const CLASSIFIER_ANY = /denied by the Claude Code auto mode classifier\. Reason: \[([^\]\n]{1,80})\]/;
-const REASON = /^[A-Za-z][A-Za-z -]{0,59}$/;
+const REASON = /^[A-Za-z][A-Za-z ()-]{0,59}$/;
 const ESCALATION = /sandbox_permissions\\?["']?\s*[:=]\s*\\?["']?require_escalated/;
-const SANDBOX = [['sandbox:eperm', /EPERM/], ['sandbox:not-permitted', /Operation not permitted/], ['sandbox:permission-denied', /Permission denied/]];
+const MACH_PORT = /(?:bootstrap_look_up|mach-lookup|mach port)/i;
+const MACH_PORT_DENIAL = /\b(?:denied|not permitted|failed|1100)\b/i;
+const SANDBOX = [
+  ['sandbox:mach-port', (text) => MACH_PORT.test(text) && MACH_PORT_DENIAL.test(text)],
+  ['sandbox:eperm', /EPERM/],
+  ['sandbox:not-permitted', /Operation not permitted/],
+  ['sandbox:permission-denied', /Permission denied/],
+];
 const OPENCODE_TYPES = new Set(['bash', 'edit', 'write', 'read', 'glob', 'grep', 'list', 'task', 'webfetch', 'websearch', 'codesearch', 'external_directory', 'doom_loop', 'todowrite', 'todoread', 'lsp', 'skill', 'patch']);
 const GUARD_CLASSES = [['outside-worktree', /is outside the worktree/], ['protected-path', /is a protected path/], ['rm-rf', /^rm -rf\b/], ['denied-command', /is not allowed for a worker/]];
 
@@ -35,6 +42,19 @@ const denialsFile = (dataDir) => path.join(dataDir, 'denials.json');
 
 function parseJson(line) {
   try { const value = JSON.parse(line); return value && typeof value === 'object' ? value : null; } catch { return null; }
+}
+function jsonExitCode(value) {
+  const parsed = typeof value === 'string' ? parseJson(value) : value;
+  if (!parsed || typeof parsed !== 'object') return null;
+  const code = parsed.exit_code ?? parsed.metadata?.exit_code;
+  return Number.isFinite(code) ? code : null;
+}
+function outputExitCode(output, payload) {
+  const jsonCode = jsonExitCode(output) ?? jsonExitCode(payload);
+  if (jsonCode !== null) return jsonCode;
+  const text = typeof output === 'string' ? output : JSON.stringify(output ?? '');
+  const match = /\b(?:Exit code:\s*|Process exited with code\s+)(-?\d+)\b/i.exec(text);
+  return match ? Number(match[1]) : null;
 }
 function timeOf(value, fallback) {
   const at = Date.parse(value);
@@ -75,7 +95,10 @@ export function parseCodexLine(line, ctx = {}) {
   const event = (cause) => ({ at, cause, cwd: ctx.cwd });
   if (payload.type === 'function_call_output' || payload.type === 'custom_tool_call_output') {
     const text = typeof payload.output === 'string' ? payload.output : JSON.stringify(payload.output ?? '');
-    return SANDBOX.filter(([, pattern]) => pattern.test(text)).map(([cause]) => event(cause));
+    const exitCode = outputExitCode(payload.output, payload);
+    if (exitCode === null || exitCode === 0) return [];
+    const match = SANDBOX.find(([, pattern]) => (typeof pattern === 'function' ? pattern(text) : pattern.test(text)));
+    return match ? [event(match[0])] : [];
   }
   if (payload.type === 'function_call' || payload.type === 'custom_tool_call') {
     const args = payload.arguments ?? payload.input;

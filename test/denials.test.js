@@ -40,8 +40,9 @@ function claudeDenial(reason, cwd, at = NOW) {
     message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', is_error: true, content: `Permission for this action was denied by the Claude Code auto mode classifier. Reason: [${reason}]. If you have other tasks ${SECRET}` }] },
   };
 }
-function codexOutput(text, at = NOW) {
-  return { timestamp: iso(at), type: 'response_item', payload: { type: 'function_call_output', call_id: 'c1', output: text } };
+function codexOutput(text, at = NOW, exitMarker = null) {
+  const output = exitMarker ? `${text}\n${exitMarker}` : text;
+  return { timestamp: iso(at), type: 'response_item', payload: { type: 'function_call_output', call_id: 'c1', output } };
 }
 function codexMeta(cwd, at = NOW) {
   return { timestamp: iso(at), type: 'session_meta', payload: { cwd, id: 's1' } };
@@ -59,6 +60,7 @@ const total = (records, cause) => records.filter((r) => !cause || r.cause === ca
 
 test('Claude parser counts a classifier denial with its reason and ignores quoted text', () => {
   assert.deepEqual(parseClaudeLine(JSON.stringify(claudeDenial('Credential Exploration', '/work/Shop'))), [{ at: NOW, cause: 'classifier:Credential Exploration', cwd: '/work/Shop' }]);
+  assert.deepEqual(parseClaudeLine(JSON.stringify(claudeDenial('Sandbox (safe mode)', '/work/Shop'))), [{ at: NOW, cause: 'classifier:Sandbox (safe mode)', cwd: '/work/Shop' }]);
   // A tool result that only quotes the phrase, such as grep output, is not a denial.
   const quoted = { type: 'user', cwd: '/w', timestamp: iso(NOW), message: { content: [{ type: 'tool_result', content: 'match: denied by the Claude Code auto mode classifier. Reason: [Git Destructive]' }] } };
   assert.deepEqual(parseClaudeLine(JSON.stringify(quoted)), []);
@@ -66,13 +68,23 @@ test('Claude parser counts a classifier denial with its reason and ignores quote
   assert.deepEqual(parseClaudeLine('not json'), []);
 });
 
-test('Codex parser counts sandbox errors per output and escalation requests per call', () => {
+test('Codex parser counts sandbox causes only for failed outputs and escalation requests per call', () => {
   const ctx = {};
   assert.deepEqual(parseCodexLine(JSON.stringify(codexMeta('/work/HerdrBoss-wt-a')), ctx), []);
   assert.equal(ctx.cwd, '/work/HerdrBoss-wt-a');
-  const events = parseCodexLine(JSON.stringify(codexOutput(`EPERM: x\nEPERM again\nOperation not permitted\nPermission denied ${SECRET}`)), ctx);
+  assert.deepEqual(parseCodexLine(JSON.stringify(codexOutput('grep hit: EPERM', NOW, 'Exit code: 0')), ctx), []);
+  assert.deepEqual(parseCodexLine(JSON.stringify(codexOutput('EPERM with no exit status')), ctx), []);
+  const events = [
+    ...parseCodexLine(JSON.stringify(codexOutput('EPERM: x\nEPERM again', NOW, 'Exit code: 1')), ctx),
+    ...parseCodexLine(JSON.stringify(codexOutput('Operation not permitted', NOW, 'Process exited with code 1')), ctx),
+    ...parseCodexLine(JSON.stringify({ ...codexOutput({ stderr: `Permission denied ${SECRET}`, exit_code: 2 }), timestamp: iso(NOW) }), ctx),
+  ];
   assert.deepEqual(events.map((e) => e.cause).sort(), ['sandbox:eperm', 'sandbox:not-permitted', 'sandbox:permission-denied']);
   assert.ok(events.every((e) => e.cwd === '/work/HerdrBoss-wt-a' && e.at === NOW));
+  assert.deepEqual(parseCodexLine(JSON.stringify(codexOutput(`Permission denied and Operation not permitted; EPERM ${SECRET}`, NOW, 'Exit code: 2')), ctx).map((e) => e.cause), ['sandbox:eperm']);
+  assert.deepEqual(parseCodexLine(JSON.stringify(codexOutput({ stderr: 'Mach port bootstrap_look_up failed (1100)', exit_code: 1 })), ctx).map((e) => e.cause), ['sandbox:mach-port']);
+  const metadataOutput = { type: 'response_item', payload: { type: 'function_call_output', output: JSON.stringify({ output: 'EPERM', metadata: { exit_code: 1 } }) } };
+  assert.deepEqual(parseCodexLine(JSON.stringify(metadataOutput), ctx).map((e) => e.cause), ['sandbox:eperm']);
   const escalation = parseCodexLine(JSON.stringify(codexCall(`await tools.exec_command({ cmd: "git push", sandbox_permissions: "require_escalated", justification: "${SECRET}" })`)), ctx);
   assert.deepEqual(escalation.map((e) => e.cause), ['escalation:request']);
   const fnCall = { timestamp: iso(NOW), type: 'response_item', payload: { type: 'function_call', name: 'shell', arguments: JSON.stringify({ command: ['ls'], sandbox_permissions: 'require_escalated' }) } };
@@ -141,7 +153,7 @@ test('a scan attributes a denial in a shared-parent worktree to its project', ()
 test('a scan of all four sources stores counts by day, harness, cause, and project', () => {
   const home = newHome();
   writeLines(path.join(home, '.claude/projects/-work-Shop/s1.jsonl'), [claudeDenial('Instruction Poisoning', '/work/Shop'), claudeDenial('Instruction Poisoning', '/work/Shop'), claudeDenial('Git Destructive', '/work/HerdrBoss-wt-x')]);
-  writeLines(path.join(home, '.codex/sessions/2026/09/28/rollout-a.jsonl'), [codexMeta('/work/HerdrBoss'), codexOutput('EPERM'), codexOutput('Operation not permitted'), codexCall('x({ sandbox_permissions: "require_escalated" })')]);
+  writeLines(path.join(home, '.codex/sessions/2026/09/28/rollout-a.jsonl'), [codexMeta('/work/HerdrBoss'), codexOutput('EPERM', NOW, 'Exit code: 1'), codexOutput('Operation not permitted', NOW, 'Exit code: 1'), codexCall('x({ sandbox_permissions: "require_escalated" })')]);
   writeLines(path.join(home, '.local/share/opencode/log/opencode.log'), [
     ocCwd('r1', '/work/Shop', NOW - 30 * MIN),
     ocAsk('per_1', 'bash', 'r1', NOW - 25 * MIN), ocReply('per_1', 'r1', NOW - 24 * MIN),
@@ -216,7 +228,7 @@ test('Codex keeps the session cwd across incremental reads', () => {
   const file = path.join(home, '.codex/sessions/2026/09/28/rollout-b.jsonl');
   writeLines(file, [codexMeta('/work/Shop')]);
   const first = scanDenialLogs({ home, state: {}, now: NOW, repos: REPOS });
-  writeLines(file, [codexOutput('EPERM')], 'a');
+  writeLines(file, [codexOutput('EPERM', NOW, 'Exit code: 1')], 'a');
   const second = scanDenialLogs({ home, state: first.state, now: NOW, repos: REPOS });
   assert.deepEqual(second.records.map((r) => [r.cause, r.project]), [['sandbox:eperm', 'shop']]);
 });
@@ -258,7 +270,7 @@ test('stored records and scan state hold no text fields', () => {
   const home = newHome();
   const dataDir = path.join(ROOT, 'data-text');
   writeLines(path.join(home, '.claude/projects/-work-Shop/s1.jsonl'), [claudeDenial(`Evil ${SECRET}`, '/work/Shop'), claudeDenial('Credential Exploration', '/work/Shop')]);
-  writeLines(path.join(home, '.codex/sessions/2026/09/28/r.jsonl'), [codexMeta('/work/Shop'), codexOutput(`EPERM ${SECRET}`)]);
+  writeLines(path.join(home, '.codex/sessions/2026/09/28/r.jsonl'), [codexMeta('/work/Shop'), codexOutput(`EPERM ${SECRET}`, NOW, 'Exit code: 1')]);
   writeLines(path.join(home, '.local/share/opencode/log/opencode.log'), [ocAsk('per_1', `bash${SECRET}`, 'r1', NOW - 20 * MIN)]);
   writeLines(path.join(home, '.pi/agent/sessions/--work-Shop--/p.jsonl'), [piGuard(`Herdr guard: ${SECRET} is outside the worktree.`)]);
   const result = runDenialScan({ home, dataDir, state: {}, now: NOW, repos: REPOS });
