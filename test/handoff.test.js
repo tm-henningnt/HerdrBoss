@@ -38,7 +38,8 @@ if (args[0] === 'pane' && args[1] === 'list') {
   if (process.env.TEST_PANE_LIST_FAIL === '1') process.exit(1);
   result = { panes: [{ pane_id: 'ws:p1', workspace_id: 'ws' }, ...(process.env.TEST_EXISTING_PANE ? [{ pane_id: process.env.TEST_EXISTING_PANE, workspace_id: 'ws' }] : [])] };
 }
-if (args[0] === 'tab' && args[1] === 'create') result = { root_pane: { pane_id: 'ws:p2' } };
+if (args[0] === 'tab' && args[1] === 'create') result = process.env.TEST_NO_TAB_ID === '1' ? { root_pane: { pane_id: 'ws:p2' } }
+  : { tab: { tab_id: 'ws:t2' }, root_pane: { pane_id: 'ws:p2', tab_id: 'ws:t2' } };
 if (args[0] === 'agent' && args[1] === 'list') result = { agents: [] };
 if (args[0] === 'agent' && args[1] === 'start') {
   const count = Number(fs.readFileSync(process.env.TEST_AGENT_START_FILE, 'utf8') || 0) + 1;
@@ -505,6 +506,97 @@ for (const [reason, env] of [
   assert.equal(result.migratedId, null);
   assert.match(result.migrationFallbackReason, /.+/);
   assert.match(result.sourceContext, /Useful prior work/);
+});
+
+function codexEnvFixture(t, options = {}) {
+  const f = handoffFixture(t, options);
+  const tmp = path.join(f.root, 'caller-tmp');
+  fs.mkdirSync(tmp);
+  f.env = { ...f.env, HERDR_SOCKET_PATH: path.join(f.root, 'herdr.sock'), HERDR_BIN_PATH: path.join(f.root, '.local', 'bin', 'herdr'), TMPDIR: tmp };
+  return f;
+}
+
+function successorStartArgs(f) {
+  const calls = fs.readFileSync(f.callsFile, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+  const start = calls.find((args) => args[0] === 'agent' && args[1] === 'start');
+  return start.slice(start.indexOf('--') + 1);
+}
+
+function shellEnvSettings(args) {
+  const settings = {};
+  args.forEach((arg, index) => {
+    const match = /^shell_environment_policy\.set\.([A-Z_]+)="(.*)"$/.exec(arg);
+    if (match) {
+      assert.equal(args[index - 1], '-c', `${match[1]} must follow -c`);
+      settings[match[1]] = match[2];
+    }
+  });
+  return settings;
+}
+
+test('a codex fresh successor gets the Herdr variables of its new pane as shell environment settings', (t) => {
+  const f = codexEnvFixture(t);
+  const result = JSON.parse(runHandoffCli(f.root, ['handoff', 'prepare', 'ws:p1', '--to', 'codex', '--mode', 'fresh'], f.env));
+  assert.equal(result.status, 'prepared');
+  assert.equal(result.newPane, 'ws:p2');
+  assert.deepEqual(shellEnvSettings(successorStartArgs(f)), {
+    HERDR_ENV: '1', HERDR_PANE_ID: 'ws:p2', HERDR_TAB_ID: 'ws:t2', HERDR_WORKSPACE_ID: 'ws',
+    HERDR_SOCKET_PATH: f.env.HERDR_SOCKET_PATH, HERDR_BIN_PATH: f.env.HERDR_BIN_PATH, TMPDIR: f.env.TMPDIR,
+  });
+});
+
+test('a codex migrated successor gets the same shell environment settings after its resume arguments', (t) => {
+  const f = codexEnvFixture(t, { sessionId: 'old-session' });
+  const result = JSON.parse(runHandoffCli(f.root, ['handoff', 'prepare', 'ws:p1', '--to', 'codex', '--mode', 'migrate'], f.env));
+  assert.equal(result.mode, 'migrate');
+  const args = successorStartArgs(f);
+  assert.deepEqual(args.slice(0, 2), ['resume', 'migrated-session']);
+  assert.deepEqual(shellEnvSettings(args), {
+    HERDR_ENV: '1', HERDR_PANE_ID: 'ws:p2', HERDR_TAB_ID: 'ws:t2', HERDR_WORKSPACE_ID: 'ws',
+    HERDR_SOCKET_PATH: f.env.HERDR_SOCKET_PATH, HERDR_BIN_PATH: f.env.HERDR_BIN_PATH, TMPDIR: f.env.TMPDIR,
+  });
+});
+
+test('a claude successor gets no shell environment settings', (t) => {
+  const f = codexEnvFixture(t);
+  const result = JSON.parse(runHandoffCli(f.root, ['handoff', 'prepare', 'ws:p1', '--to', 'claude', '--mode', 'fresh'], f.env));
+  assert.equal(result.status, 'prepared');
+  assert.equal(successorStartArgs(f).some((arg) => arg.includes('shell_environment_policy')), false);
+});
+
+test('a codex successor leaves out the shell environment settings with unknown values', (t) => {
+  const f = handoffFixture(t);
+  const env = { ...f.env, TEST_NO_TAB_ID: '1' };
+  for (const name of ['HERDR_SOCKET_PATH', 'HERDR_BIN_PATH', 'TMPDIR', 'HERDR_WORKTREE']) delete env[name];
+  const result = JSON.parse(runHandoffCli(f.root, ['handoff', 'prepare', 'ws:p1', '--to', 'codex', '--mode', 'fresh'], env));
+  assert.equal(result.status, 'prepared');
+  assert.deepEqual(shellEnvSettings(successorStartArgs(f)), { HERDR_ENV: '1', HERDR_PANE_ID: 'ws:p2', HERDR_WORKSPACE_ID: 'ws' });
+});
+
+test('a codex successor refuses a caller value with a quote before it creates a tab', (t) => {
+  const f = codexEnvFixture(t);
+  assert.throws(() => runHandoffCli(f.root, ['handoff', 'prepare', 'ws:p1', '--to', 'codex', '--mode', 'fresh'], {
+    ...f.env, HERDR_BIN_PATH: `${f.root}/bad"path`,
+  }), (error) => /HERDR_BIN_PATH has a quote/.test(String(error.stderr)) && !String(error.stderr).includes('bad"path'));
+  assert.equal(fs.existsSync(path.join(f.root, 'handoffs.json')), false);
+  const calls = fs.existsSync(f.callsFile) ? fs.readFileSync(f.callsFile, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line)) : [];
+  assert.equal(calls.some((args) => args[0] === 'tab' && args[1] === 'create'), false);
+});
+
+test('a resumed codex successor uses the recorded tab of its existing pane', (t) => {
+  const existingPane = 'wA:pB';
+  const f = codexEnvFixture(t, { existingPane });
+  fs.writeFileSync(path.join(f.root, 'handoffs.json'), JSON.stringify([{
+    id: 'handoff-project-abc123', sourcePane: 'ws:p1', workspace: 'ws', cwd: f.project, project: 'project',
+    toKind: 'codex', model: null, effort: null, mode: 'fresh', migratedId: null, newPane: existingPane, newTab: 'wA:tC',
+    status: 'needs-inspection', automatic: false, promptError: 'shell was still starting',
+  }]));
+  const result = JSON.parse(runHandoffCli(f.root, ['handoff', 'prepare', 'ws:p1', '--to', 'codex', '--mode', 'fresh'], f.env));
+  assert.equal(result.status, 'prepared');
+  const settings = shellEnvSettings(successorStartArgs(f));
+  assert.equal(settings.HERDR_PANE_ID, existingPane);
+  assert.equal(settings.HERDR_TAB_ID, 'wA:tC');
+  assert.equal(settings.HERDR_WORKSPACE_ID, 'ws');
 });
 
 function measuredHomes(f) {

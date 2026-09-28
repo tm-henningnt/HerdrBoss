@@ -6,6 +6,7 @@ import { DATA_DIR } from './config.js';
 import { deliverPrompt, isAgentPaneBusy, waitForWorkerPane } from './kit/workers.js';
 import { contextTokensFor, loadModels } from './kit/config.js';
 import { loadPolicy, mergeModels, modelEnabled, providerFor, selectModel } from './control.js';
+import { codexShellEnvArgs } from './harness.js';
 
 const FILE = path.join(DATA_DIR, 'handoffs.json');
 const TARGETS = new Set(['codex', 'claude', 'pi', 'opencode']);
@@ -256,7 +257,19 @@ export function planHandoff(id, toKind, { mode = 'migrate', model = null, effort
   return result;
 }
 
-export function prepareHandoff(id, toKind, options = {}, { waitForPane = waitForWorkerPane, wait } = {}) {
+// A Codex tool shell can run under a shared app-server daemon with another environment, so a codex successor gets
+// the Herdr variables of its new pane as -c shell_environment_policy.set.* launch arguments. Other kinds get none.
+function successorAgentArgs(item, launchArgs, env) {
+  if (item.toKind !== 'codex') return launchArgs;
+  return [...launchArgs, ...codexShellEnvArgs({
+    HERDR_ENV: '1', HERDR_PANE_ID: item.newPane, HERDR_TAB_ID: item.newTab, HERDR_WORKSPACE_ID: item.workspace,
+    HERDR_SOCKET_PATH: env.HERDR_SOCKET_PATH, HERDR_BIN_PATH: env.HERDR_BIN_PATH, TMPDIR: env.TMPDIR,
+  })];
+}
+
+export function prepareHandoff(id, toKind, options = {}, { waitForPane = waitForWorkerPane, wait, env = process.env } = {}) {
+  // Refuse a caller value that Codex cannot receive before any record or tab changes.
+  if (toKind === 'codex') successorAgentArgs({ toKind }, [], env);
   const currentPanes = expireMissingSuccessors();
   let records = listHandoffs();
   const active = records.filter((x) => x.sourcePane === id && ['prepared', 'preparing', 'needs-inspection'].includes(x.status));
@@ -313,7 +326,8 @@ export function prepareHandoff(id, toKind, options = {}, { waitForPane = waitFor
       '--env', 'DISABLE_UPDATE_PROMPT=true', '--env', 'DISABLE_AUTO_UPDATE=true', '--no-focus']);
     const newPane = created.root_pane?.pane_id;
     if (!newPane) throw new Error('Herdr created a tab but did not return its root pane. Inspect the tab before retrying.');
-    item = { ...plan, id: name, newPane, migratedId, ...(goal ? { ownerGoal: goal } : {}),
+    const newTab = created.tab?.tab_id ?? created.root_pane?.tab_id ?? created.tab_id;
+    item = { ...plan, id: name, newPane, ...(newTab ? { newTab } : {}), migratedId, ...(goal ? { ownerGoal: goal } : {}),
       ...(context ? { sourceContext: context } : {}), ...(migrationFallbackReason ? { migrationFallbackReason, requestedMode } : {}),
       status: 'preparing', preparedAt: new Date().toISOString(), automatic: options.auto === true };
     records.push(item);
@@ -321,9 +335,10 @@ export function prepareHandoff(id, toKind, options = {}, { waitForPane = waitFor
   }
 
   const { launchArgs } = handoffTarget(item.toKind, { model: item.model, effort: item.effort }, loadPolicy(), loadModels());
-  const args = migratedId && item.toKind === 'codex' ? ['resume', migratedId, ...launchArgs]
-    : migratedId && item.toKind === 'claude' ? ['--resume', migratedId, ...launchArgs]
-      : launchArgs;
+  const agentArgs = successorAgentArgs(item, launchArgs, env);
+  const args = migratedId && item.toKind === 'codex' ? ['resume', migratedId, ...agentArgs]
+    : migratedId && item.toKind === 'claude' ? ['--resume', migratedId, ...agentArgs]
+      : agentArgs;
   const readinessOptions = { retryCommand: 'handoff prepare', timeoutMs: HANDOFF_READY_TIMEOUT_MS };
   try { waitForPane(item.newPane, item.workspace, item.cwd, herdr, wait, readinessOptions); }
   catch (e) {
