@@ -179,9 +179,9 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
   if (command === 'worker') {
     const [action, ...rest] = argv;
     if (action === 'start') {
-      const { positional, flags } = parseArgs(rest, { boolean: ['--no-worktree', '--dry-run', '--force'], repeat: ['--allow', '--copy', '--lease'] });
+      const { positional, flags } = parseArgs(rest, { boolean: ['--no-worktree', '--dry-run', '--force', '--read-only'], repeat: ['--allow', '--copy', '--lease'] });
       if (positional.length !== 1) fail('Usage: worker start <name> --kind <kind> --task TEXT [options]');
-      knownFlags(flags, ['kind', 'model', 'effort', 'issue', 'task', 'taskfile', 'allow', 'copy', 'lease', 'base', 'orch', 'noworktree', 'dryrun', 'force']);
+      knownFlags(flags, ['kind', 'model', 'effort', 'issue', 'task', 'taskfile', 'allow', 'copy', 'lease', 'base', 'orch', 'noworktree', 'dryrun', 'force', 'readonly']);
       try { return startWorker(positional[0], {
         kind: flags.kind,
         model: flags.model,
@@ -195,6 +195,7 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
         base: flags.base,
         orch: flags.orch,
         noWorktree: flags.noworktree,
+        readOnly: flags.readonly,
         dryRun: flags.dryrun,
         force: flags.force,
       }, { config, models: modelConfig, herdr, env, output }); }
