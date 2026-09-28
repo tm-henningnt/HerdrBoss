@@ -432,6 +432,16 @@ Agent commands and tab rules are in [the browser service](../kit/browser-service
 
 Orchestrators do not build dashboards. They publish a status file, and Herdr Boss shows it on `/projects/SLUG`. With the optional work structure fields, the page shows progress, the current frontier, a dependency graph, groups, specs, and all work. See [project-status.md](project-status.md).
 
+### Files
+
+The project page shows a read-only **Files** panel. It names three paths:
+
+- The project memory file: `<repository>/docs/orchestration/memory.md`.
+- The installed kit file: `<repository>/docs/orchestration/herdr-boss.md`.
+- The Boss memory file: `~/.herdr-boss/boss-memory.md`.
+
+The panel shows the kit revision in the project status file next to the current kit revision. The home folder shows as `~`. The page shows paths only. It never shows the contents of a memory or kit file.
+
 ### Needs your decision
 
 A task can name the party that holds it with `waitingOn`: `owner`, `boss`, `task`, or `external`. The project page shows a **Needs your decision** group above the task list. The group lists each open task that waits on the Owner with its ID, title, ask, and a link to its Mailbox conversation. Each project card shows the count. The Overview shows the total with a link to each group.
