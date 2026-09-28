@@ -176,15 +176,15 @@ When the section or the array is missing, or holds a comment or a value that is 
 
 ## Denial counts
 
-Herdr Boss counts denials and permission prompts in the harness logs. It keeps only the day, the harness, the cause, the project, and the count. It keeps no message text, command, argument, or path. A cause with text that is not a known class becomes `other`.
+Herdr Boss counts denials and permission prompts in the harness logs. Each record has the day, harness, cause, project, model, and count. It uses `unknown` when a log has no model. It keeps no message text, command, argument, or path. A cause with text that is not a known class becomes `other`.
 
 | Harness | Log | Cause |
 |---|---|---|
-| Claude | `~/.claude/projects/*/*.jsonl` | `classifier:<Reason>`: a tool result refused by the auto mode classifier. A reason starts with a letter. It can contain letters, spaces, hyphens, and parentheses. It can have at most 60 characters. |
-| Codex | `~/.codex/sessions/YYYY/MM/DD/*.jsonl` | `sandbox:mach-port`, `sandbox:eperm`, `sandbox:not-permitted`, and `sandbox:permission-denied`: count only when the output has a non-zero exit code. A Mach port cause needs `bootstrap_look_up`, `mach-lookup`, or `Mach port` with `denied`, `not permitted`, `failed`, or `1100`. Count one cause per failed output, in this order: `sandbox:mach-port`, `sandbox:eperm`, `sandbox:not-permitted`, `sandbox:permission-denied`. |
+| Claude | `~/.claude/projects/*/*.jsonl` | `classifier:<Reason>`: a tool result refused by the auto mode classifier. The model comes from the latest assistant message. A reason starts with a letter. It can contain letters, spaces, hyphens, and parentheses. It can have at most 60 characters. |
+| Codex | `~/.codex/sessions/YYYY/MM/DD/*.jsonl` | `sandbox:mach-port`, `sandbox:eperm`, `sandbox:not-permitted`, and `sandbox:permission-denied`: count only when the output has a non-zero exit code. The model comes from the turn context. A Mach port cause needs `bootstrap_look_up`, `mach-lookup`, or `Mach port` with `denied`, `not permitted`, `failed`, or `1100`. Count one cause per failed output, in this order: `sandbox:mach-port`, `sandbox:eperm`, `sandbox:not-permitted`, `sandbox:permission-denied`. |
 | Codex | The same files | `escalation:request`: a tool call with `sandbox_permissions` set to `require_escalated`. |
-| OpenCode | `~/.local/share/opencode/log/opencode.log` | `permission:asked:<type>`: a `message=asking` line. `permission:unanswered:<type>`: an `asking` line with no `message=replied` line for its `id=` within 10 minutes. |
-| Pi | `~/.pi/agent/sessions/<folder>/*.jsonl` | `guard:<class>`: a tool result blocked by the Herdr guard. The classes are `outside-worktree`, `protected-path`, `rm-rf`, `denied-command`, and `other`. |
+| OpenCode | `~/.local/share/opencode/log/*.log` | `permission:asked:<type>`: a `message=asking` line. `permission:unanswered:<type>`: an `asking` line with no `message=replied` line for its `id=` within 10 minutes. `permission:<type>`: a permission evaluation whose final matching rule denies the action for the `worker` agent. The model and agent come from the session log. |
+| Pi | `~/.pi/agent/sessions/<folder>/*.jsonl` | `guard:<class>`: a tool result blocked by the Herdr guard. The model comes from the latest model change or assistant message. The classes are `outside-worktree`, `protected-path`, `rm-rf`, `denied-command`, and `other`. |
 
 The project comes from the `cwd` of a Claude record and of a Codex session. OpenCode takes it from the `cwd=` field of another line with the same `run=` value. Pi takes it from the session folder name. The dashboard shows the counts on the Analytics page. See [the user guide](user-guide.md#denials-and-permission-prompts).
 

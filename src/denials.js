@@ -1,6 +1,6 @@
 // Counts of sandbox refusals, permission prompts, and classifier refusals across harnesses.
 // See docs/harness-setup.md. Only counts are kept: never store or log message text, commands,
-// arguments, or paths. A record is { day, harness, cause, project, count }.
+// arguments, or paths. A record is { day, harness, cause, project, model, count }.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -36,6 +36,7 @@ const SANDBOX = [
 ];
 const OPENCODE_TYPES = new Set(['bash', 'edit', 'write', 'read', 'glob', 'grep', 'list', 'task', 'webfetch', 'websearch', 'codesearch', 'external_directory', 'doom_loop', 'todowrite', 'todoread', 'lsp', 'skill', 'patch']);
 const GUARD_CLASSES = [['outside-worktree', /is outside the worktree/], ['protected-path', /is a protected path/], ['rm-rf', /^rm -rf\b/], ['denied-command', /is not allowed for a worker/]];
+const UNKNOWN_MODEL = 'unknown';
 
 const dayOf = (ms) => new Date(ms).toISOString().slice(0, 10);
 const denialsFile = (dataDir) => path.join(dataDir, 'denials.json');
@@ -60,6 +61,37 @@ function timeOf(value, fallback) {
   const at = Date.parse(value);
   return Number.isFinite(at) ? at : fallback;
 }
+function safeModel(value, provider) {
+  if (typeof value !== 'string') return UNKNOWN_MODEL;
+  const model = value.trim();
+  const combined = provider && !model.includes('/') ? `${provider}/${model}` : model;
+  return /^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,119}$/.test(combined) ? combined : UNKNOWN_MODEL;
+}
+function modelFrom(payload) {
+  if (!payload || typeof payload !== 'object') return UNKNOWN_MODEL;
+  return safeModel(payload.model ?? payload.model_id ?? payload.modelID, payload.provider ?? payload.provider_id ?? payload.providerID);
+}
+function globMatch(pattern, value) {
+  if (!pattern) return true;
+  const escaped = String(pattern).replace(/[|\\{}()[\]^$+?.]/g, '\\$&').replaceAll('*', '.*');
+  return new RegExp(`^${escaped}$`).test(String(value));
+}
+function deniedOpenCodePermission(fields, line) {
+  if (fields.action === 'deny') return true;
+  if (fields.message !== 'evaluate' || !fields.permission) return false;
+  const raw = /(?:^|\s)ruleset=(\[.*\])\s+evaluate\s*$/.exec(line)?.[1];
+  let rules;
+  try { rules = JSON.parse(raw); } catch { return false; }
+  if (!Array.isArray(rules)) return false;
+  let action = 'allow';
+  for (const rule of rules) {
+    if (!rule || typeof rule !== 'object') continue;
+    if (!globMatch(rule.permission || '*', fields.permission)) continue;
+    if (!globMatch(rule.pattern || '*', fields.pattern || '')) continue;
+    if (['allow', 'ask', 'deny'].includes(rule.action)) action = rule.action;
+  }
+  return action === 'deny';
+}
 function contentText(content) {
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) return content.map((part) => (typeof part === 'string' ? part : typeof part?.text === 'string' ? part.text : '')).join('\n');
@@ -68,15 +100,18 @@ function contentText(content) {
 const reasonCause = (reason) => `classifier:${REASON.test(reason.trim()) ? reason.trim() : 'other'}`;
 
 // Claude: a tool result that the auto mode classifier refused.
-export function parseClaudeLine(line) {
+export function parseClaudeLine(line, ctx = {}) {
   const record = parseJson(line);
-  if (record?.type !== 'user' || !Array.isArray(record.message?.content)) return [];
+  const message = record?.message;
+  if (typeof message?.model === 'string') ctx.model = safeModel(message.model, message.provider);
+  else if (typeof record?.model === 'string') ctx.model = safeModel(record.model, record.provider);
+  if (record?.type !== 'user' || !Array.isArray(message?.content)) return [];
   const events = [];
-  for (const part of record.message.content) {
+  for (const part of message.content) {
     if (part?.type !== 'tool_result') continue;
     const text = contentText(part.content);
     const match = CLASSIFIER.exec(text) || (record.toolDenialKind === 'automode-blocked' ? CLASSIFIER_ANY.exec(text) : null);
-    if (match) events.push({ at: timeOf(record.timestamp, null), cause: reasonCause(match[1]), cwd: record.cwd });
+    if (match) events.push({ at: timeOf(record.timestamp, null), cause: reasonCause(match[1]), cwd: record.cwd, model: ctx.model || UNKNOWN_MODEL });
   }
   return events;
 }
@@ -86,13 +121,15 @@ export function parseCodexLine(line, ctx = {}) {
   const record = parseJson(line);
   if (!record) return [];
   const payload = record.payload || {};
-  if ((record.type === 'session_meta' || record.type === 'turn_context') && typeof payload.cwd === 'string') {
-    ctx.cwd = payload.cwd;
+  if (record.type === 'session_meta' || record.type === 'turn_context') {
+    if (typeof payload.cwd === 'string') ctx.cwd = payload.cwd;
+    const model = modelFrom(payload);
+    if (model !== UNKNOWN_MODEL) ctx.model = model;
     return [];
   }
   if (record.type !== 'response_item') return [];
   const at = timeOf(record.timestamp, null);
-  const event = (cause) => ({ at, cause, cwd: ctx.cwd });
+  const event = (cause) => ({ at, cause, cwd: ctx.cwd, model: ctx.model || UNKNOWN_MODEL });
   if (payload.type === 'function_call_output' || payload.type === 'custom_tool_call_output') {
     const text = typeof payload.output === 'string' ? payload.output : JSON.stringify(payload.output ?? '');
     const exitCode = outputExitCode(payload.output, payload);
@@ -111,15 +148,24 @@ export function parseCodexLine(line, ctx = {}) {
 // OpenCode: one log line as key=value fields. The patterns field is never returned.
 export function parseOpenCodeLine(line) {
   const fields = {};
-  const token = /(?:^|\s)([A-Za-z_]+)=(\[[^\]]*\]|"(?:[^"\\]|\\.)*"|\S*)/g;
+  const token = /(?:^|\s)([A-Za-z_][A-Za-z0-9_.-]*)=(\[[^\]]*\]|"(?:[^"\\]|\\.)*"|\S*)/g;
   let match;
   while ((match = token.exec(line))) fields[match[1]] = match[2];
-  if (!fields.message) return null;
+  const message = fields.message || /\s+(evaluate|asking|replied|created|stream)\s*$/.exec(line)?.[1];
+  if (!message) return null;
   const stamp = fields.timestamp || /\b(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?)(Z|[+-]\d{2}:?\d{2})?/.exec(line)?.slice(1).join('');
   let at = null;
   if (/^\d+$/.test(stamp || '')) at = Number(stamp) < 1e12 ? Number(stamp) * 1000 : Number(stamp);
   else if (stamp) at = timeOf(/(Z|[+-]\d{2}:?\d{2})$/.test(stamp) ? stamp : `${stamp}Z`, null);
-  return { message: fields.message, id: fields.id, requestID: fields.requestID, type: fields.permission, run: fields.run, cwd: fields.cwd, at };
+  const modelValue = fields.modelID || fields.modelId || fields.model;
+  const model = modelValue ? safeModel(modelValue, fields.providerID || fields.provider) : null;
+  const agent = fields.agent ? (fields.agent === 'worker' ? 'worker' : 'other') : null;
+  return {
+    message, id: fields.id, requestID: fields.requestID, type: fields.permission,
+    action: fields.action, reply: fields.reply, agent, model, denied: deniedOpenCodePermission({ ...fields, message }, line),
+    run: fields.run, session: fields['session.id'] || fields.sessionID || fields.session_id,
+    cwd: fields.cwd, at,
+  };
 }
 
 export function guardCause(reason) {
@@ -129,12 +175,17 @@ export function guardCause(reason) {
 }
 
 // Pi: a tool result that the Herdr guard extension blocked.
-export function parsePiLine(line) {
+export function parsePiLine(line, ctx = {}) {
   const record = parseJson(line);
   const message = record?.message;
+  if (record?.type === 'model_change') {
+    const model = safeModel(record.modelId ?? record.modelID ?? record.model, record.provider ?? record.providerID);
+    if (model !== UNKNOWN_MODEL) ctx.model = model;
+  }
+  if (typeof message?.model === 'string') ctx.model = safeModel(message.model, message.provider);
   if (message?.role !== 'toolResult') return [];
   const match = /(?:^|\n|: )Herdr guard: [^\n]*/.exec(contentText(message.content));
-  return match ? [{ at: timeOf(record.timestamp ?? message.timestamp, null), cause: guardCause(match[0]) }] : [];
+  return match ? [{ at: timeOf(record.timestamp ?? message.timestamp, null), cause: guardCause(match[0]), model: ctx.model || UNKNOWN_MODEL }] : [];
 }
 
 const within = (dir, parent) => {
@@ -195,7 +246,8 @@ function logFiles(home, now) {
       }
     }
   }
-  files.push({ harness: 'opencode', file: path.join(home, '.local', 'share', 'opencode', 'log', 'opencode.log') });
+  const opencode = path.join(home, '.local', 'share', 'opencode', 'log');
+  for (const file of listDir(opencode).filter((e) => e.isFile() && e.name.endsWith('.log'))) files.push({ harness: 'opencode', file: path.join(opencode, file.name) });
   const pi = path.join(home, '.pi', 'agent', 'sessions');
   for (const folder of listDir(pi).filter((e) => e.isDirectory())) for (const file of jsonlIn(path.join(pi, folder.name))) files.push({ harness: 'pi', file, folder: folder.name });
   const out = [];
@@ -228,17 +280,33 @@ function readLines(file, offset, size, budget, fullBudget) {
 // Scan the four log sources from the saved offsets. Returns new counts, the next state, and the bytes read.
 export function scanDenialLogs({ home = os.homedir(), state = {}, now = Date.now(), repos = readProjectRepos(), budgetBytes = SCAN_BUDGET_BYTES } = {}) {
   const counts = new Map();
-  const add = (harness, cause, project, at) => {
-    const key = `${dayOf(Number.isFinite(at) ? at : now)}|${harness}|${cause}|${project}`;
+  const add = (harness, cause, project, at, model) => {
+    const key = `${dayOf(Number.isFinite(at) ? at : now)}|${harness}|${cause}|${project}|${safeModel(model)}`;
     counts.set(key, (counts.get(key) || 0) + 1);
   };
   const previous = state.files || {};
   const files = {};
-  const opencode = { pending: { ...(state.opencode?.pending || {}) }, runs: { ...(state.opencode?.runs || {}) } };
+  const opencode = { pending: { ...(state.opencode?.pending || {}) }, runs: { ...(state.opencode?.runs || {}) }, contexts: { ...(state.opencode?.contexts || {}) } };
+  const contextKeys = (item) => [item.run && `run:${item.run}`, item.session && `session:${item.session}`].filter(Boolean);
+  const openCodeContext = (item) => {
+    const keys = contextKeys(item);
+    const previousContext = keys.map((key) => opencode.contexts[key]).find(Boolean) || {};
+    const context = {
+      model: item.model || previousContext.model || UNKNOWN_MODEL,
+      agent: item.agent || previousContext.agent || null,
+    };
+    if (item.model || item.agent) {
+      for (const key of keys) {
+        delete opencode.contexts[key];
+        opencode.contexts[key] = context;
+      }
+    }
+    return context;
+  };
   const emitAsk = (ask, unanswered) => {
     const project = opencode.runs[ask.run] || 'other';
-    add('opencode', `permission:asked:${ask.type}`, project, ask.at);
-    if (unanswered) add('opencode', `permission:unanswered:${ask.type}`, project, ask.at);
+    add('opencode', `permission:asked:${ask.type}`, project, ask.at, ask.model);
+    if (unanswered) add('opencode', `permission:unanswered:${ask.type}`, project, ask.at, ask.model);
   };
   let used = 0;
   let consumed = 0;
@@ -255,25 +323,29 @@ export function scanDenialLogs({ home = os.homedir(), state = {}, now = Date.now
     consumed += result.offset - entry.offset;
     entry.offset = result.offset;
     pendingBytes += stat.size - entry.offset;
-    const ctx = {};
+    const ctx = { model: entry.model || UNKNOWN_MODEL };
     for (const line of result.lines) {
       if (!line) continue;
       if (harness === 'claude') {
-        for (const e of parseClaudeLine(line)) add('claude', e.cause, projectFor(e.cwd, repos, home), e.at);
+        for (const e of parseClaudeLine(line, ctx)) add('claude', e.cause, projectFor(e.cwd, repos, home), e.at, e.model);
+        entry.model = ctx.model || UNKNOWN_MODEL;
       } else if (harness === 'codex') {
-        for (const e of parseCodexLine(line, ctx)) add('codex', e.cause, e.cwd ? projectFor(e.cwd, repos, home) : entry.project || 'other', e.at);
+        for (const e of parseCodexLine(line, ctx)) add('codex', e.cause, e.cwd ? projectFor(e.cwd, repos, home) : entry.project || 'other', e.at, e.model);
         if (ctx.cwd) entry.project = projectFor(ctx.cwd, repos, home);
+        entry.model = ctx.model || UNKNOWN_MODEL;
       } else if (harness === 'pi') {
-        for (const e of parsePiLine(line)) add('pi', e.cause, projectForPiFolder(folder, repos, home), e.at);
+        for (const e of parsePiLine(line, ctx)) add('pi', e.cause, projectForPiFolder(folder, repos, home), e.at, e.model);
+        entry.model = ctx.model || UNKNOWN_MODEL;
       } else {
         const item = parseOpenCodeLine(line);
         if (!item) continue;
+        const context = openCodeContext(item);
         if (item.run && item.cwd) {
           delete opencode.runs[item.run];
           opencode.runs[item.run] = projectFor(item.cwd, repos, home);
         }
         if (item.message === 'asking' && item.id) {
-          opencode.pending[item.id] = { at: Number.isFinite(item.at) ? item.at : now, type: OPENCODE_TYPES.has(item.type) ? item.type : 'other', run: item.run || null };
+          opencode.pending[item.id] = { at: Number.isFinite(item.at) ? item.at : now, type: OPENCODE_TYPES.has(item.type) ? item.type : 'other', run: item.run || null, model: context.model };
         } else if (item.message === 'replied' && item.requestID && opencode.pending[item.requestID]) {
           const ask = opencode.pending[item.requestID];
           // A reply after 10 minutes does not answer the request in time.
@@ -281,6 +353,10 @@ export function scanDenialLogs({ home = os.homedir(), state = {}, now = Date.now
             emitAsk(ask, false);
             delete opencode.pending[item.requestID];
           }
+        }
+        const agent = item.agent || context.agent;
+        if (item.denied && agent === 'worker' && item.type) {
+          add('opencode', `permission:${OPENCODE_TYPES.has(item.type) ? item.type : 'other'}`, opencode.runs[item.run] || 'other', item.at, context.model);
         }
       }
     }
@@ -293,9 +369,10 @@ export function scanDenialLogs({ home = os.homedir(), state = {}, now = Date.now
   const runs = Object.keys(opencode.runs);
   for (const run of runs.slice(0, Math.max(0, runs.length - MAX_RUNS))) delete opencode.runs[run];
   const records = [...counts].map(([key, count]) => {
-    const [day, harness, cause, project] = key.split('|');
-    return { day, harness, cause, project, count };
+    const [day, harness, cause, project, model] = key.split('|');
+    return { day, harness, cause, project, model, count };
   });
+  for (const [key] of Object.entries(opencode.contexts).slice(0, Math.max(0, Object.keys(opencode.contexts).length - MAX_RUNS * 2))) delete opencode.contexts[key];
   return { records, bytes: used, consumed, state: { files, opencode, pendingBytes } };
 }
 
@@ -305,8 +382,9 @@ export function mergeDenials(existing, added, now = Date.now()) {
   const map = new Map();
   for (const r of [...existing, ...added]) {
     if (r.day < oldest) continue;
-    const key = `${r.day}|${r.harness}|${r.cause}|${r.project}`;
-    const row = map.get(key) || { day: r.day, harness: r.harness, cause: r.cause, project: r.project, count: 0 };
+    const model = safeModel(r.model);
+    const key = `${r.day}|${r.harness}|${r.cause}|${r.project}|${model}`;
+    const row = map.get(key) || { day: r.day, harness: r.harness, cause: r.cause, project: r.project, model, count: 0 };
     row.count += r.count;
     map.set(key, row);
   }
@@ -316,7 +394,8 @@ export function mergeDenials(existing, added, now = Date.now()) {
 export function readDenials(dataDir = DATA_DIR) {
   try {
     const rows = JSON.parse(fs.readFileSync(denialsFile(dataDir), 'utf8'));
-    return Array.isArray(rows) ? rows.filter((r) => r && typeof r.day === 'string' && typeof r.harness === 'string' && typeof r.cause === 'string' && typeof r.project === 'string' && Number.isFinite(r.count)) : [];
+    return Array.isArray(rows) ? rows.filter((r) => r && typeof r.day === 'string' && typeof r.harness === 'string' && typeof r.cause === 'string' && typeof r.project === 'string' && Number.isFinite(r.count))
+      .map((r) => ({ day: r.day, harness: r.harness, cause: r.cause, project: r.project, model: safeModel(r.model), count: r.count })) : [];
   } catch { return []; }
 }
 
@@ -355,6 +434,7 @@ export function denialSummary(records, now = Date.now(), { pendingBytes = 0 } = 
   const rows = new Map();
   const rowDays = new Map();
   const causeDays = new Map();
+  const modelRows = new Map();
   const harnessTotals = {};
   const bump = (map, key, day, count) => {
     if (!map.has(key)) map.set(key, new Map());
@@ -362,22 +442,29 @@ export function denialSummary(records, now = Date.now(), { pendingBytes = 0 } = 
     m.set(day, (m.get(day) || 0) + count);
   };
   for (const r of records) {
-    const key = `${r.harness}|${r.cause}|${r.project}`;
+    const model = safeModel(r.model);
+    const key = `${r.harness}|${r.cause}|${r.project}|${model}`;
     bump(rowDays, key, r.day, r.count);
     bump(causeDays, r.cause, r.day, r.count);
     if (!index.has(r.day)) continue;
-    if (!rows.has(key)) rows.set(key, { harness: r.harness, cause: r.cause, project: r.project, counts: days.map(() => 0), total: 0 });
+    if (!rows.has(key)) rows.set(key, { harness: r.harness, model, cause: r.cause, project: r.project, counts: days.map(() => 0), total: 0 });
     const row = rows.get(key);
     row.counts[index.get(r.day)] += r.count;
     row.total += r.count;
     harnessTotals[r.harness] = (harnessTotals[r.harness] || 0) + r.count;
+    const modelKey = `${r.harness}|${model}|${r.cause}`;
+    const modelRow = modelRows.get(modelKey) || { harness: r.harness, model, cause: r.cause, count: 0 };
+    modelRow.count += r.count;
+    modelRows.set(modelKey, modelRow);
   }
   const rowList = [...rows.entries()].map(([key, row]) => ({ ...row, ...trendOf(rowDays.get(key), now) }))
     .sort((a, b) => b.total - a.total || a.cause.localeCompare(b.cause) || a.project.localeCompare(b.project));
   const causes = [...causeDays.entries()].map(([cause, byDay]) => ({ cause, ...trendOf(byDay, now) })).sort((a, b) => b.recent - a.recent || a.cause.localeCompare(b.cause));
+  const rankedModels = [...modelRows.values()].sort((a, b) => b.count - a.count || a.harness.localeCompare(b.harness) || a.model.localeCompare(b.model) || a.cause.localeCompare(b.cause));
+  const topModels = rankedModels.slice(0, 10);
   const catchingUp = pendingBytes > CATCH_UP_BYTES;
   const rising = catchingUp ? [] : causes.filter((c) => c.rising);
-  return { days, rows: rowList, harnessTotals, causes, rising, note: rising.length ? DISCUSS_NOTE : null, catchingUp, pendingBytes };
+  return { days, rows: rowList, harnessTotals, modelRows: topModels, modelMoreCount: Math.max(0, rankedModels.length - topModels.length), causes, rising, note: rising.length ? DISCUSS_NOTE : null, catchingUp, pendingBytes };
 }
 
 // Dry scan: node src/denials.js prints the per-cause totals of all logs in the last 30 days and writes nothing.

@@ -557,6 +557,11 @@ section[id], div[id="agents"] { scroll-margin-top: 105px; }
 .usage-metrics span { color: var(--muted); font-size: 12px; }
 .denial-note { display: grid; gap: 4px; padding: 11px 14px; margin-bottom: 12px; border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--line)); border-radius: 9px; background: color-mix(in srgb, var(--warn) 8%, var(--panel)); font-size: 13px; }
 .denial-note span { color: var(--muted); }
+.denial-model-breakdown { margin-top: 14px; }
+.denial-model-breakdown h3 { margin: 0 0 7px; color: var(--muted); font-size: 12px; font-weight: 600; }
+.denial-model-table { font-size: 12px; }
+.denial-model-table th, .denial-model-table td { padding: 7px 9px; }
+.denial-model-more { margin: 6px 0 0; color: var(--faint); font-size: 11.5px; text-align: right; }
 .denial-trend { font: 650 15px var(--mono); }
 .denial-trend.up { color: var(--warn); } .denial-trend.down { color: var(--ok); } .denial-trend.flat { color: var(--muted); }
 .notice-status { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: baseline; padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 12.5px; }

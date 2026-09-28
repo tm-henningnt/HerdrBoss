@@ -34,10 +34,10 @@ function writeLines(file, lines, flag = 'w') {
 }
 const iso = (ms) => new Date(ms).toISOString();
 
-function claudeDenial(reason, cwd, at = NOW) {
+function claudeDenial(reason, cwd, at = NOW, model) {
   return {
     type: 'user', cwd, timestamp: iso(at), toolDenialKind: 'automode-blocked',
-    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', is_error: true, content: `Permission for this action was denied by the Claude Code auto mode classifier. Reason: [${reason}]. If you have other tasks ${SECRET}` }] },
+    message: { role: 'user', ...(model ? { model } : {}), content: [{ type: 'tool_result', tool_use_id: 't1', is_error: true, content: `Permission for this action was denied by the Claude Code auto mode classifier. Reason: [${reason}]. If you have other tasks ${SECRET}` }] },
   };
 }
 function codexOutput(text, at = NOW, exitMarker = null) {
@@ -47,20 +47,32 @@ function codexOutput(text, at = NOW, exitMarker = null) {
 function codexMeta(cwd, at = NOW) {
   return { timestamp: iso(at), type: 'session_meta', payload: { cwd, id: 's1' } };
 }
+function codexTurnContext(cwd, model, at = NOW) {
+  return { timestamp: iso(at), type: 'turn_context', payload: { cwd, model } };
+}
 function codexCall(input, at = NOW) {
   return { timestamp: iso(at), type: 'response_item', payload: { type: 'custom_tool_call', name: 'exec', input } };
 }
 const ocAsk = (id, type, run, at) => `INFO  ${iso(at)} +1ms service=permission id=${id} permission=${type} patterns=["cat ${SECRET}", "ls"] run=${run} timestamp=${iso(at)} message=asking`;
 const ocReply = (id, run, at) => `INFO  ${iso(at)} +1ms service=permission requestID=${id} reply=once run=${run} timestamp=${iso(at)} message=replied`;
 const ocCwd = (run, cwd, at) => `INFO  ${iso(at)} +0ms service=session run=${run} cwd=${cwd} timestamp=${iso(at)} message=created`;
+const ocModel = (run, session, provider, model, agent, at = NOW) => `INFO  ${iso(at)} +0ms service=llm run=${run} sessionID=${session} providerID=${provider} modelID=${model} agent=${agent} stream`;
+const ocDenied = (run, session, permission, agent = 'worker', at = NOW) => {
+  const action = agent === 'worker' ? 'deny' : 'allow';
+  const ruleset = JSON.stringify([{ permission, pattern: '*', action }]);
+  return `INFO  ${iso(at)} +0ms service=permission run=${run} sessionID=${session} permission=${permission} pattern=* ruleset=${ruleset} evaluate`;
+};
+function piModelChange(modelId, provider, at = NOW) {
+  return { type: 'model_change', timestamp: iso(at), modelId, provider };
+}
 function piGuard(reason, at = NOW) {
   return { type: 'message', timestamp: iso(at), message: { role: 'toolResult', toolName: 'bash', isError: true, content: [{ type: 'text', text: reason }] } };
 }
 const total = (records, cause) => records.filter((r) => !cause || r.cause === cause).reduce((n, r) => n + r.count, 0);
 
 test('Claude parser counts a classifier denial with its reason and ignores quoted text', () => {
-  assert.deepEqual(parseClaudeLine(JSON.stringify(claudeDenial('Credential Exploration', '/work/Shop'))), [{ at: NOW, cause: 'classifier:Credential Exploration', cwd: '/work/Shop' }]);
-  assert.deepEqual(parseClaudeLine(JSON.stringify(claudeDenial('Sandbox (safe mode)', '/work/Shop'))), [{ at: NOW, cause: 'classifier:Sandbox (safe mode)', cwd: '/work/Shop' }]);
+  assert.deepEqual(parseClaudeLine(JSON.stringify(claudeDenial('Credential Exploration', '/work/Shop'))), [{ at: NOW, cause: 'classifier:Credential Exploration', cwd: '/work/Shop', model: 'unknown' }]);
+  assert.deepEqual(parseClaudeLine(JSON.stringify(claudeDenial('Sandbox (safe mode)', '/work/Shop'))), [{ at: NOW, cause: 'classifier:Sandbox (safe mode)', cwd: '/work/Shop', model: 'unknown' }]);
   // A tool result that only quotes the phrase, such as grep output, is not a denial.
   const quoted = { type: 'user', cwd: '/w', timestamp: iso(NOW), message: { content: [{ type: 'tool_result', content: 'match: denied by the Claude Code auto mode classifier. Reason: [Git Destructive]' }] } };
   assert.deepEqual(parseClaudeLine(JSON.stringify(quoted)), []);
@@ -110,7 +122,7 @@ test('Pi parser counts Herdr guard blocks by reason class', () => {
   assert.equal(guardCause('Herdr guard: rm -rf outside the temporary directories (/x). Ask your orchestrator.'), 'guard:rm-rf');
   assert.equal(guardCause('Herdr guard: git push is not allowed for a worker. Ask your orchestrator.'), 'guard:denied-command');
   assert.equal(guardCause(`Herdr guard: ${SECRET} something new`), 'guard:other');
-  assert.deepEqual(parsePiLine(JSON.stringify(piGuard('Herdr guard: /x is a protected path.'))), [{ at: NOW, cause: 'guard:protected-path' }]);
+  assert.deepEqual(parsePiLine(JSON.stringify(piGuard('Herdr guard: /x is a protected path.'))), [{ at: NOW, cause: 'guard:protected-path', model: 'unknown' }]);
   assert.deepEqual(parsePiLine(JSON.stringify({ type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'Herdr guard: /x is a protected path.' }] } })), []);
 });
 
@@ -180,6 +192,37 @@ test('a scan of all four sources stores counts by day, harness, cause, and proje
   const later = scanDenialLogs({ home, state: result.state, now: NOW + 10 * MIN, repos: REPOS });
   assert.deepEqual(later.records.filter((r) => r.harness === 'opencode').map((r) => [r.cause, r.count]).sort(), [['permission:asked:bash', 1], ['permission:unanswered:bash', 1]]);
   assert.equal(total(later.records.filter((r) => r.harness !== 'opencode')), 0);
+});
+
+test('Pi guard and OpenCode worker denials keep their session models, with unknown as the fallback', () => {
+  const home = newHome();
+  writeLines(path.join(home, '.claude/projects/-work-Shop/known.jsonl'), [
+    { type: 'assistant', message: { model: 'claude-sonnet-4-5' } },
+    claudeDenial('Classifier', '/work/Shop'),
+  ]);
+  writeLines(path.join(home, '.claude/projects/-work-Shop/unknown.jsonl'), [claudeDenial('Missing model', '/work/Shop')]);
+  writeLines(path.join(home, '.codex/sessions/2026/09/28/rollout-model.jsonl'), [codexTurnContext('/work/Shop', 'gpt-6-luna'), codexOutput('EPERM', NOW, 'Exit code: 1')]);
+  writeLines(path.join(home, '.local/share/opencode/log/2026-09-28T120000.log'), [
+    ocCwd('run-model', '/work/Shop', NOW),
+    ocModel('run-model', 'session-model', 'opencode-go', 'glm-5.2', 'worker'),
+    ocDenied('run-model', 'session-model', 'bash'),
+    ocModel('run-other', 'session-other', 'opencode-go', 'glm-5.2', 'build'),
+    ocDenied('run-other', 'session-other', 'read', 'build'),
+  ]);
+  writeLines(path.join(home, '.pi/agent/sessions/--work-Shop--/p.jsonl'), [
+    piModelChange('glm-5.2', 'opencode-go'),
+    piGuard('Herdr guard: /x is outside the worktree. Work only in /w.'),
+  ]);
+
+  const result = scanDenialLogs({ home, state: {}, now: NOW, repos: REPOS });
+  const find = (harness, cause, model) => result.records.find((r) => r.harness === harness && r.cause === cause && r.model === model)?.count;
+  assert.equal(find('claude', 'classifier:Classifier', 'claude-sonnet-4-5'), 1);
+  assert.equal(find('claude', 'classifier:Missing model', 'unknown'), 1);
+  assert.equal(find('codex', 'sandbox:eperm', 'gpt-6-luna'), 1);
+  assert.equal(find('pi', 'guard:outside-worktree', 'opencode-go/glm-5.2'), 1);
+  assert.equal(find('opencode', 'permission:bash', 'opencode-go/glm-5.2'), 1);
+  assert.equal(result.records.some((r) => r.cause === 'permission:read'), false, 'a non-worker permission denial is ignored');
+  assert.ok(result.records.every((r) => Object.keys(r).sort().join(',') === 'cause,count,day,harness,model,project'));
 });
 
 test('a reply that comes after 10 minutes still leaves the request unanswered', () => {
@@ -277,7 +320,8 @@ test('stored records and scan state hold no text fields', () => {
   const stored = readDenials(dataDir);
   assert.ok(stored.length >= 4);
   for (const r of stored) {
-    assert.deepEqual(Object.keys(r).sort(), ['cause', 'count', 'day', 'harness', 'project']);
+    assert.deepEqual(Object.keys(r).sort(), ['cause', 'count', 'day', 'harness', 'model', 'project']);
+    assert.equal(r.model, 'unknown');
     assert.equal(typeof r.count, 'number');
     assert.match(r.day, /^\d{4}-\d{2}-\d{2}$/);
     assert.match(r.cause, /^[a-z]+:[A-Za-z0-9 :-]{1,80}$/);
@@ -297,9 +341,17 @@ test('records older than 30 days are pruned and counts merge by key', () => {
   const base = { harness: 'codex', cause: 'sandbox:eperm', project: 'shop' };
   const merged = mergeDenials([{ ...base, day: day(31), count: 5 }, { ...base, day: day(29), count: 2 }, { ...base, day: day(0), count: 1 }], [{ ...base, day: day(0), count: 3 }], NOW);
   assert.deepEqual(merged.map((r) => [r.day, r.count]).sort(), [[day(29), 2], [day(0), 4]]);
+  const byModel = mergeDenials([
+    { ...base, day: day(0), model: 'provider/first', count: 2 },
+    { ...base, day: day(0), model: 'provider/second', count: 3 },
+  ], [], NOW);
+  assert.deepEqual(byModel.map((r) => [r.model, r.count]).sort(), [['provider/first', 2], ['provider/second', 3]]);
   const dataDir = path.join(ROOT, 'data-prune');
   saveDenials(dataDir, merged);
   assert.deepEqual(readDenials(dataDir), merged);
+  const legacyDir = path.join(ROOT, 'data-legacy');
+  saveDenials(legacyDir, [{ ...base, day: day(0), count: 1 }]);
+  assert.equal(readDenials(legacyDir)[0].model, 'unknown');
 });
 
 test('the trend rule flags a cause above 2 times its 6-day mean and above 10 a day', () => {
@@ -329,6 +381,17 @@ test('the trend rule flags a cause above 2 times its 6-day mean and above 10 a d
   assert.equal(row.total, 20 + 2 * 5);
   assert.equal(summary.harnessTotals.claude, 25 + 10 + 15 + 50 + 8);
   assert.equal(denialSummary([], NOW).note, null);
+});
+
+test('Analytics summary limits model counts to the top ten rows for seven days', () => {
+  const day = new Date(NOW).toISOString().slice(0, 10);
+  const records = Array.from({ length: 12 }, (_, i) => ({
+    day, harness: 'pi', model: `provider/model-${i}`, cause: 'guard:denied-command', project: `project-${i}`, count: 12 - i,
+  }));
+  const summary = denialSummary(records, NOW);
+  assert.equal(summary.modelRows.length, 10);
+  assert.equal(summary.modelMoreCount, 2);
+  assert.deepEqual(summary.modelRows[0], { harness: 'pi', model: 'provider/model-0', cause: 'guard:denied-command', count: 12 });
 });
 
 test('the bulletin puts the note in the Owner section and in no project rules', () => {
