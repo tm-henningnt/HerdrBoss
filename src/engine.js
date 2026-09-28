@@ -6,7 +6,7 @@ import { DATA_DIR, LIVE_DATA_DIR, dashboardUrl, serviceSettingsView } from './co
 import { collectHerdr, collectQuotas, collectMachine, collectProcesses, collectCwdProcesses, collectMissingWorktreeProcesses, collectWorktreeCounts, collectPiModels, findBrowsers, cpuUse, keepStaleRows, run } from './collect.js';
 import { evaluate, renderBulletin, fmtDuration, providerName, broadcastTargets, staleStatuses } from './rules.js';
 import { listProjects } from './projects.js';
-import { readProjectRepos } from './harness.js';
+import { checkHarness, readProjectRepos } from './harness.js';
 import { loadModels, KIT_ROOT } from './kit/config.js';
 import { loadPolicy, clearExpiredOneOffGoals, deriveControl, migrateWorkspacePolicy, providerFor, pickSuccessor, laneStatus, leastOverProvider, machineLimits, unmeteredLane, unavailablePiModels, mergeModels } from './control.js';
 import { quotaUsageToday, recordQuotaSnapshot } from './usage.js';
@@ -30,6 +30,8 @@ const POLICY_FILE = path.join(DATA_DIR, 'policy.json');
 const WORKTREE_SCAN_INTERVAL_MS = 5 * 60 * 1000;
 const CLONE_SWEEP_INTERVAL_MS = 10 * 60 * 1000;
 const PI_MODELS_INTERVAL_MS = 15 * 60 * 1000;
+// The engine reads the harness settings files at each service start and then at most this often.
+export const HARNESS_CHECK_INTERVAL_MS = 10 * 60 * 1000;
 // The stale status rule reads the HEAD of each project repository at most this often.
 // The browsers that Herdr Boss labels: configured shared browsers and managed project browsers. Herdr Boss never stops a browser that it did not start.
 export function knownBrowsers(sharedBrowsers = [], browserSessions = []) {
@@ -131,6 +133,8 @@ export class Engine extends EventEmitter {
     this.cloneSweepRunning = false;
     this.denialScanAt = 0;
     this.denialScanRunning = false;
+    this.harness = null;
+    this.harnessAt = 0;
     this.headReads = new Set();
     this.collectors = {
       collectHerdr,
@@ -145,6 +149,7 @@ export class Engine extends EventEmitter {
       codeSignCloneDir,
       sweepCodeSignClones,
       runDenialScan,
+      checkHarness,
       // A test engine does not run the real pi unless a test injects a collector.
       collectPiModels: process.env.NODE_TEST_CONTEXT ? async () => null : collectPiModels,
       ...collectors,
@@ -184,6 +189,7 @@ export class Engine extends EventEmitter {
     this.running = true;
     const errors = [];
     const now = Date.now();
+    const harness = this.readHarness(now);
     try {
       this.applyQuotaResult();
       if (!this.quotas || now - this.quotasAt > this.cfg.quotaSeconds * 1000) this.readQuotas();
@@ -295,6 +301,8 @@ export class Engine extends EventEmitter {
           criticalPercent: this.cfg.quota?.criticalPercent ?? 98,
         },
         serviceSettings: serviceSettingsView(this.cfg),
+        // The harness readiness findings hold a status, an area, and a fixed item label only.
+        harness,
         // The fixed scan and store limits. The Analytics and Mailbox pages show them read-only.
         limits: {
           denials: {
@@ -593,6 +601,22 @@ export class Engine extends EventEmitter {
       } finally { this.headReads.delete(slug); }
     });
     return Promise.all(reads);
+  }
+
+  // The harness readiness check reads the harness settings files. The engine runs it at each
+  // service start and then every 10 minutes, not on each tick. The state keeps no finding text.
+  readHarness(now) {
+    if (this.harness && now - this.harnessAt < HARNESS_CHECK_INTERVAL_MS) return this.harness;
+    this.harnessAt = now;
+    let findings = [];
+    try { findings = this.collectors.checkHarness() || []; }
+    catch (error) { this.log('harness', `Harness readiness check failed (${error.code || 'error'}).`); }
+    // Drop the text. It holds file paths and setting values.
+    this.harness = {
+      checkedAt: new Date(now).toISOString(),
+      findings: findings.map(({ status, area, item }) => ({ status, area, item })),
+    };
+    return this.harness;
   }
 
   // { slug: { workedAt, landedAt } } in milliseconds, for staleStatuses().

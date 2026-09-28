@@ -1034,3 +1034,86 @@ test('the project page shows the memory and kit file paths with a home-relative 
   const row = listProjects().find((p) => p.slug === 'demo');
   assert.equal(row.repo, '~/Projects/demo');
 });
+
+test('the engine checks harness readiness once at start and then every 10 minutes', { timeout: 20000 }, async () => {
+  const { Engine, HARNESS_CHECK_INTERVAL_MS } = await import('../src/engine.js');
+  const calls = [];
+  const engine = new Engine(loadConfig(), {
+    push: false,
+    act: false,
+    collectors: { checkHarness: () => { calls.push(Date.now()); return [{ status: 'ok', area: 'pi', item: 'Pi guard', text: 'a text with a value' }]; } },
+  });
+  const t0 = 100 * 60 * 60 * 1000;
+  const first = engine.readHarness(t0);
+  assert.equal(calls.length, 1, 'the first read runs the check');
+  assert.deepEqual(first.findings, [{ status: 'ok', area: 'pi', item: 'Pi guard' }], 'the state holds status, area, and item only');
+  assert.equal(first.checkedAt, new Date(t0).toISOString());
+  assert.equal(engine.readHarness(t0 + HARNESS_CHECK_INTERVAL_MS - 1), first, 'a read inside the interval reuses the result');
+  assert.equal(calls.length, 1);
+  const second = engine.readHarness(t0 + HARNESS_CHECK_INTERVAL_MS);
+  assert.equal(calls.length, 2, 'a read after the interval runs the check again');
+  assert.notEqual(second, first);
+  assert.equal(engine.readHarness(t0 + 2 * HARNESS_CHECK_INTERVAL_MS - 1), second);
+  assert.equal(calls.length, 2);
+});
+
+test('the harness state holds status, area, and item only and carries no text or home path', { timeout: 20000 }, (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-harness-state-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const home = path.join(root, 'home');
+  const data = path.join(root, 'data');
+  const live = path.join(root, 'live');
+  fs.mkdirSync(path.join(home, '.codex'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.codex', 'config.toml'),
+    `[sandbox_workspace_write]\nwritable_roots = [\n  "${path.join(home, '.config')}",\n]\n`);
+  const engineUrl = new URL('../src/engine.js', import.meta.url).href;
+  const configUrl = new URL('../src/config.js', import.meta.url).href;
+  const harnessUrl = new URL('../src/harness.js', import.meta.url).href;
+  const script = `
+import { Engine } from ${JSON.stringify(engineUrl)};
+import { loadConfig } from ${JSON.stringify(configUrl)};
+import { checkHarness } from ${JSON.stringify(harnessUrl)};
+const findings = checkHarness({ home: process.env.HOME, dataDir: process.env.HERDR_BOSS_DIR });
+console.log = () => {};
+const engine = new Engine(loadConfig(), { push: false, act: false, collectors: {
+  collectHerdr: async () => ({ panes: [], workspaces: [] }),
+  collectMachine: async () => null,
+  collectProcesses: async () => new Map(),
+  collectQuotas: async () => [],
+  collectWorktreeCounts: async () => ({}),
+  collectCwdProcesses: async () => [],
+  collectMissingWorktreeProcesses: async () => [],
+  checkHarness: () => findings,
+} });
+const state = await engine.tick();
+process.stdout.write(JSON.stringify({ harness: state.harness, findings }));
+`;
+  const result = execFileSync(process.execPath, ['--input-type=module', '-e', script], {
+    encoding: 'utf8',
+    env: { ...process.env, HOME: home, HERDR_BOSS_DIR: data, HERDR_BOSS_LIVE_DIR: live, NODE_TEST_CONTEXT: '1' },
+  });
+  const { harness, findings } = JSON.parse(result.trim());
+  assert.ok(findings.length > 0);
+  assert.ok(findings.some((finding) => finding.text.includes(home)), 'the fixture reports a home path in a finding text');
+  assert.deepEqual(Object.keys(harness).sort(), ['checkedAt', 'findings']);
+  assert.ok(harness.findings.length > 0);
+  for (const finding of harness.findings) assert.deepEqual(Object.keys(finding).sort(), ['area', 'item', 'status']);
+  const serialized = JSON.stringify(harness);
+  assert.equal(serialized.includes(home), false, 'the home path never enters the harness state');
+  for (const finding of findings) assert.equal(serialized.includes(finding.text), false, 'a finding text never enters the harness state');
+});
+
+test('Settings shows a read-only harness readiness table with the fixed sync line', () => {
+  const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
+  const guide = fs.readFileSync(new URL('../docs/user-guide.md', import.meta.url), 'utf8');
+  assert.match(app, /<h2>Harness readiness<\/h2>/);
+  assert.match(app, /s\?\.harness\?\.findings/);
+  assert.match(app, /Run herdr-boss harness sync to see the changes to make\./);
+  assert.match(app, /<th scope="col">Status<\/th><th scope="col">Area<\/th><th scope="col">Item<\/th>/);
+  assert.match(css, /\.harness-readiness-panel\b/);
+  assert.match(css, /\.harness-readiness-bad\b/);
+  assert.match(app, /<h3>Harness readiness<\/h3>/);
+  assert.match(guide, /Harness readiness/);
+  assert.match(guide, /Run `herdr-boss harness sync` to see the changes to make/);
+});

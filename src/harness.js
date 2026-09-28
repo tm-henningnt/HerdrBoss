@@ -21,6 +21,13 @@ const LAUNCH_FLAGS = {
   opencode: [['--agent', 'worker']],
   pi: [['--no-approve'], ['--no-extensions'], ['-e', '~/.pi/agent/extensions/herdr-guard.ts']],
 };
+// A fixed label for each launch-argument check. The label holds no value from the models file.
+const LAUNCH_LABELS = {
+  claude: 'Claude launch arguments',
+  codex: 'Codex launch arguments',
+  opencode: 'OpenCode launch arguments',
+  pi: 'Pi launch arguments',
+};
 
 function homeDir() { return os.homedir(); }
 function registryFile(dataDir = DATA_DIR) { return path.join(dataDir, 'project-repos.json'); }
@@ -320,74 +327,75 @@ function hasFlags(args, flags) {
   return false;
 }
 
-// Return one finding per checked entry: { status: ok|missing|bad, area, text }.
+// Return one finding per checked entry: { status: ok|missing|bad, area, item, text }.
+// item is a fixed label for the entry. It holds no path and no setting value.
 export function checkHarness({ home = homeDir(), dataDir = DATA_DIR, modelsFile = MODELS_FILE } = {}) {
   const findings = [];
-  const add = (status, area, text) => findings.push({ status, area, text });
+  const add = (status, area, item, text) => findings.push({ status, area, item, text });
   const projects = readProjectRepos(dataDir);
 
   const configFile = codexConfigFile(home);
   let codexText = null;
   try { codexText = fs.readFileSync(configFile, 'utf8'); } catch {}
   const parsed = codexText == null ? { error: `no Codex config at ${configFile}` } : parseCodexRoots(codexText);
-  if (parsed.error) add('missing', 'codex writable_roots', `${parsed.error}; run herdr-boss harness sync`);
+  if (parsed.error) add('missing', 'codex writable_roots', 'Codex writable_roots section', `${parsed.error}; run herdr-boss harness sync`);
   else {
     const roots = parsed.items.map((item) => expandHome(item.value, home));
     const herdrBoss = path.join(home, '.herdr-boss');
-    add(roots.some((root) => samePath(root, herdrBoss)) ? 'ok' : 'missing', 'codex writable_roots', herdrBoss);
+    add(roots.some((root) => samePath(root, herdrBoss)) ? 'ok' : 'missing', 'codex writable_roots', 'Herdr Boss data folder', herdrBoss);
     const secret = path.join(home, '.config', 'herdr-boss');
     const exposing = roots.filter((root) => inside(secret, root));
-    if (exposing.length) add('bad', 'codex writable_roots', `${exposing.join(', ')} makes ${secret} writable; ${secret} must not be writable`);
-    else add('ok', 'codex writable_roots', `${secret} is not writable`);
+    if (exposing.length) add('bad', 'codex writable_roots', 'Private config folder not writable', `${exposing.join(', ')} makes ${secret} writable; ${secret} must not be writable`);
+    else add('ok', 'codex writable_roots', 'Private config folder not writable', `${secret} is not writable`);
     const worktrees = sharedWorktreeRoot(home);
-    add(roots.some((root) => samePath(root, worktrees)) ? 'ok' : 'missing', 'codex writable_roots', `${worktrees} (worker worktrees)`);
+    add(roots.some((root) => samePath(root, worktrees)) ? 'ok' : 'missing', 'codex writable_roots', 'Worker worktrees root', `${worktrees} (worker worktrees)`);
     // Workers commit through the .git folder of the main repository.
     for (const project of projects) {
       const git = path.join(project.repo, '.git');
-      add(roots.some((root) => samePath(root, git)) ? 'ok' : 'missing', 'codex writable_roots', `${git} (${project.slug})`);
+      add(roots.some((root) => samePath(root, git)) ? 'ok' : 'missing', 'codex writable_roots', 'Project git root', `${git} (${project.slug})`);
     }
   }
 
   const rulesFile = path.join(home, '.codex', 'rules', 'herdr.rules');
   let rules = null;
   try { rules = fs.readFileSync(rulesFile, 'utf8'); } catch {}
-  if (rules == null) add('missing', 'codex rules', `${rulesFile}`);
+  if (rules == null) add('missing', 'codex rules', 'Codex rules file', `${rulesFile}`);
   else {
     const forbidden = new Set();
     for (const line of rules.split('\n')) {
       const match = /^\s*prefix_rule\(\s*pattern\s*=\s*\[\s*"ps"\s*,\s*"([^"]+)"\s*\]\s*,\s*decision\s*=\s*"forbidden"\s*\)/.exec(line);
       if (match) forbidden.add(match[1]);
     }
-    for (const arg of FORBIDDEN_PS) add(forbidden.has(arg) ? 'ok' : 'missing', 'codex rules', forbidden.has(arg) ? `ps ${arg} is forbidden` : `ps ${arg} is not forbidden in ${rulesFile}`);
+    for (const arg of FORBIDDEN_PS) add(forbidden.has(arg) ? 'ok' : 'missing', 'codex rules', `Forbidden ps ${arg} rule`, forbidden.has(arg) ? `ps ${arg} is forbidden` : `ps ${arg} is not forbidden in ${rulesFile}`);
   }
 
   // Read the autoMode key only.
   const settingsFile = path.join(home, '.claude', 'settings.json');
   const settings = readJson(settingsFile);
   const environment = settings.value?.autoMode?.environment;
-  if (settings.error) add(settings.error === 'missing' ? 'missing' : 'bad', 'claude autoMode', `${settingsFile} is ${settings.error}`);
-  else if (!Array.isArray(environment)) add('missing', 'claude autoMode', `${settingsFile} has no autoMode.environment`);
+  if (settings.error) add(settings.error === 'missing' ? 'missing' : 'bad', 'claude autoMode', 'Claude settings file', `${settingsFile} is ${settings.error}`);
+  else if (!Array.isArray(environment)) add('missing', 'claude autoMode', 'Claude autoMode environment', `${settingsFile} has no autoMode.environment`);
   else {
     const line = environment.find((entry) => typeof entry === 'string' && entry.startsWith(PROJECTS_LINE));
-    if (!line) add('missing', 'claude autoMode', `${PROJECTS_LINE} line`);
+    if (!line) add('missing', 'claude autoMode', 'Herdr Boss projects line', `${PROJECTS_LINE} line`);
     for (const project of projects) {
       if (!line) continue;
       const escaped = project.repo.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const named = new RegExp(`(^|[\\s,:])${escaped}(?=$|[\\s,.;)(])`).test(line);
-      add(named ? 'ok' : 'missing', 'claude autoMode', `${PROJECTS_LINE} ${named ? 'names' : 'does not name'} ${project.repo} (${project.slug})`);
+      add(named ? 'ok' : 'missing', 'claude autoMode', 'Herdr Boss projects line', `${PROJECTS_LINE} ${named ? 'names' : 'does not name'} ${project.repo} (${project.slug})`);
     }
   }
 
   const opencode = openCodeWorker(home);
-  add(opencode.status, 'opencode', opencode.status === 'ok' ? 'agent worker exists' : `agent worker: ${opencode.file} ${opencode.note || 'has no agent.worker'}`);
+  add(opencode.status, 'opencode', 'OpenCode worker agent', opencode.status === 'ok' ? 'agent worker exists' : `agent worker: ${opencode.file} ${opencode.note || 'has no agent.worker'}`);
 
   const guard = path.join(home, '.pi', 'agent', 'extensions', 'herdr-guard.ts');
-  add(fs.existsSync(guard) ? 'ok' : 'missing', 'pi', guard);
+  add(fs.existsSync(guard) ? 'ok' : 'missing', 'pi', 'Pi guard', guard);
 
   const models = readJson(modelsFile);
   for (const [kind, flagSets] of Object.entries(LAUNCH_FLAGS)) {
     const args = models.value?.kinds?.[kind]?.launchArgs || [];
-    for (const flags of flagSets) add(hasFlags(args, flags) ? 'ok' : 'missing', `models.json ${kind}`, flags.join(' '));
+    for (const flags of flagSets) add(hasFlags(args, flags) ? 'ok' : 'missing', `models.json ${kind}`, LAUNCH_LABELS[kind], flags.join(' '));
   }
   return findings;
 }
@@ -415,7 +423,7 @@ const LIVE_PROMPT = "Run this exact shell command and print its output line and 
 export function liveCodexCheck({ env = process.env, modelsFile = MODELS_FILE, timeoutMs = 180_000, run = spawnSync } = {}) {
   const area = 'codex live';
   const values = { HERDR_ENV: 'missing', HERDR_PANE_ID: 'missing' };
-  const finding = (status, note) => ({ status, area, values, text: `HERDR_ENV ${values.HERDR_ENV}, HERDR_PANE_ID ${values.HERDR_PANE_ID}${note ? ` (${note})` : ''}` });
+  const finding = (status, note) => ({ status, area, item: 'Codex live check', values, text: `HERDR_ENV ${values.HERDR_ENV}, HERDR_PANE_ID ${values.HERDR_PANE_ID}${note ? ` (${note})` : ''}` });
   const models = readJson(modelsFile);
   const model = models.value?.kinds?.codex?.defaultModel;
   if (!model) return finding('bad', `no codex default model in ${modelsFile}`);
