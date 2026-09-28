@@ -1,4 +1,4 @@
-<!-- herdr-boss kit v=07679aee908e -->
+<!-- herdr-boss kit v=fce9e6ea6127 -->
 Herdr Boss writes this file. Do not edit it. Run herdr-boss kit install to update it.
 
 # Herdr Boss orchestration kit
@@ -21,6 +21,7 @@ These are the shared operating rules for the orchestrator of this project.
 - Run `herdr-boss models` and `herdr-boss lanes` for the current models and lanes. Never copy model lists or harness facts into project files.
 - Read `~/.herdr-boss/bulletin.md` before each worker dispatch.
 - Follow its worker cap, your project's effective slots, and provider pacing rules. The effective slots include borrowed slots. Your project always keeps its own base slots unless it is idle or paused. Use an authorized override only when needed.
+- When a lane is ahead of pace, start ready work on a lane from the bulletin **Use now** line. Do not wait for the ahead lane.
 - Read `kit/browser-service.md` for project browser commands.
 - Keep the orchestrator pane labeled `orch`.
 - Use `herdr-boss worker start` to start workers.
