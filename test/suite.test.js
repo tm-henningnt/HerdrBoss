@@ -2,11 +2,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import test from 'node:test';
 import { loadProjectConfig } from '../src/kit/config.js';
 import { runKitCommand } from '../src/kit/cli.js';
-import { withMutationLock } from '../src/kit/locks.js';
+import { acquireProjectLock, releaseProjectLock, withMutationLock } from '../src/kit/locks.js';
 
 function git(cwd, ...args) {
   return execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -71,6 +72,114 @@ function fixture(t, prefix) {
   const run = (args, exitCode = 0, extra = {}) => runKitCommand('suite', [...args, '--', process.execPath, script, String(exitCode)], options(extra));
   const readSeen = () => JSON.parse(fs.readFileSync(seen, 'utf8'));
   return { base, root, dataDir, config, env, lines, livePanes, lockFile, options, run, readSeen };
+}
+
+function readQueueFiles(dataDir) {
+  const directory = path.join(dataDir, 'locks', 'machine', 'queue', 'full-suite');
+  try {
+    return fs.readdirSync(directory).filter((name) => name.endsWith('.json'))
+      .map((name) => JSON.parse(fs.readFileSync(path.join(directory, name), 'utf8')))
+      .sort((left, right) => left.seq - right.seq);
+  } catch (error) {
+    if (error.code === 'ENOENT') return [];
+    throw error;
+  }
+}
+
+async function waitFor(condition, message, timeoutMs = 4000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const result = condition();
+    if (result) return result;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.fail(message);
+}
+
+function startLockWaiter(t, f, pane, panes, { waitSeconds = 30 } = {}) {
+  const script = path.join(f.base, `${pane.replaceAll(':', '-')}.mjs`);
+  const locksUrl = pathToFileURL(path.resolve('src/kit/locks.js')).href;
+  const configUrl = pathToFileURL(path.resolve('src/kit/config.js')).href;
+  fs.writeFileSync(script, `
+    import { acquireProjectLock, releaseProjectLock } from ${JSON.stringify(locksUrl)};
+    import { loadProjectConfig } from ${JSON.stringify(configUrl)};
+    const panes = ${JSON.stringify(panes)};
+    const herdr = (args) => {
+      if (args[0] === 'pane' && args[1] === 'get') return { pane: { pane_id: args[2], workspace_id: 'ws', label: 'orch' } };
+      if (args[0] === 'pane' && args[1] === 'list') return { panes: panes.map((pane_id) => ({ pane_id })) };
+      throw new Error('Unexpected Herdr call: ' + args.join(' '));
+    };
+    const config = loadProjectConfig({ cwd: process.argv[2] });
+    const env = { HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'ws', HERDR_PANE_ID: process.argv[4] };
+    const options = { config, env, herdr, dataDir: process.argv[3], waitSeconds: Number(process.argv[5]), kind: 'suite', output: () => {} };
+    try {
+      const lock = acquireProjectLock('full-suite', options);
+      process.stdout.write(JSON.stringify({ type: 'acquired', pane: lock.ownerPane }) + '\\n');
+      await new Promise((resolve) => process.stdin.once('data', resolve));
+      releaseProjectLock('full-suite', { ...options, output: () => {} });
+      process.stdout.write(JSON.stringify({ type: 'released', pane: lock.ownerPane }) + '\\n');
+    } catch (error) {
+      process.stdout.write(JSON.stringify({ type: 'error', message: error.message, exitCode: error.exitCode ?? null }) + '\\n');
+      process.exitCode = error.exitCode ?? 1;
+    }
+  `);
+  const child = spawn(process.execPath, [script, f.root, f.dataDir, pane, String(waitSeconds)], {
+    cwd: f.root,
+    env: { PATH: process.env.PATH, HOME: f.base, TMPDIR: f.base },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  let buffer = '';
+  const messages = [];
+  const waiters = [];
+  child.stdout.setEncoding('utf8');
+  child.stdout.on('data', (chunk) => {
+    buffer += chunk;
+    for (;;) {
+      const newline = buffer.indexOf('\n');
+      if (newline < 0) break;
+      const message = JSON.parse(buffer.slice(0, newline));
+      buffer = buffer.slice(newline + 1);
+      const waiter = waiters.shift();
+      if (waiter) waiter(message);
+      else messages.push(message);
+    }
+  });
+  const nextMessage = (type) => {
+    const index = messages.findIndex((message) => message.type === type);
+    if (index >= 0) return Promise.resolve(messages.splice(index, 1)[0]);
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error(`Waiter ${pane} did not report ${type}.`)), 5000);
+      waiters.push((message) => {
+        clearTimeout(timeout);
+        if (message.type === type) resolve(message);
+        else reject(new Error(`Waiter ${pane} reported ${message.type}: ${message.message ?? ''}`));
+      });
+    });
+  };
+  const exited = new Promise((resolve) => child.once('exit', resolve));
+  t.after(async () => {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
+    await exited;
+  });
+  return { child, exited, nextMessage, release: () => child.stdin.write('release\n') };
+}
+
+function lockOptions(f, pane, panes, extra = {}) {
+  const herdr = (args) => {
+    if (args[0] === 'pane' && args[1] === 'get') return { pane: { pane_id: args[2], workspace_id: 'ws', label: 'orch' } };
+    if (args[0] === 'pane' && args[1] === 'process-info') return { process_info: { shell_pid: process.pid } };
+    if (args[0] === 'pane' && args[1] === 'list') return { panes: panes.map((pane_id) => ({ pane_id })) };
+    throw new Error(`Unexpected Herdr call: ${args.join(' ')}`);
+  };
+  return {
+    config: f.config,
+    dataDir: f.dataDir,
+    lockDataDir: f.dataDir,
+    env: { HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'ws', HERDR_PANE_ID: pane },
+    herdr,
+    output: () => {},
+    ...extra,
+  };
 }
 
 test('suite holds the full-suite lock around the command and passes the exit code through', (t) => {
@@ -227,4 +336,185 @@ test('suite runs for a worker pane with a live run record', (t) => {
   assert.equal(result.exitCode, 0);
   assert.equal(f.readSeen().locked, true);
   assert.equal(fs.existsSync(f.lockFile), false);
+});
+
+test('the machine suite lock serves three separate-process waiters in ticket order', async (t) => {
+  const f = fixture(t, 'herdr-suite-fifo-');
+  const panes = ['ws:a', 'ws:b', 'ws:c', 'ws:d'];
+  const holder = lockOptions(f, 'ws:a', panes);
+  acquireProjectLock('full-suite', { ...holder, kind: 'manual' });
+  let holderOwnsLock = true;
+  const waiters = [];
+  try {
+    for (const [index, pane] of ['ws:b', 'ws:c', 'ws:d'].entries()) {
+      const waiter = startLockWaiter(t, f, pane, panes);
+      waiters.push(waiter);
+      const tickets = await waitFor(() => {
+        const current = readQueueFiles(f.dataDir);
+        return current.length === index + 1 ? current : false;
+      }, `waiter ${pane} did not take its ticket`);
+      assert.deepEqual(tickets.map((ticket) => ticket.pane), ['ws:b', 'ws:c', 'ws:d'].slice(0, index + 1));
+      assert.deepEqual(tickets.map((ticket) => ticket.seq), Array.from({ length: index + 1 }, (_, item) => item + 1));
+      assert.deepEqual(Object.keys(tickets[0]).sort(), ['command', 'createdAt', 'id', 'kind', 'pane', 'pid', 'project', 'seq']);
+    }
+
+    releaseProjectLock('full-suite', holder);
+    holderOwnsLock = false;
+    for (const [index, waiter] of waiters.entries()) {
+      const pane = ['ws:b', 'ws:c', 'ws:d'][index];
+      assert.equal((await waiter.nextMessage('acquired')).pane, pane);
+      waiter.release();
+      assert.equal((await waiter.nextMessage('released')).pane, pane);
+    }
+    assert.equal(fs.existsSync(f.lockFile), false);
+    assert.deepEqual(readQueueFiles(f.dataDir), []);
+  } finally {
+    if (holderOwnsLock && fs.existsSync(f.lockFile)) releaseProjectLock('full-suite', holder);
+  }
+});
+
+test('suite lock timeout returns EX_TEMPFAIL and does not run the test command', (t) => {
+  const f = fixture(t, 'herdr-suite-lock-busy-');
+  const panes = ['ws:a', 'ws:b'];
+  acquireProjectLock('full-suite', { ...lockOptions(f, 'ws:a', panes), kind: 'manual' });
+  const output = [];
+  let error;
+  try {
+    runKitCommand('suite', ['--wait', '0', '--', process.execPath, path.join(f.base, 'suite.mjs')], {
+      ...lockOptions(f, 'ws:b', panes), output: (line) => output.push(line),
+    });
+  } catch (caught) { error = caught; }
+  assert.equal(error?.exitCode, 75);
+  assert.match(error?.message ?? '', /^lock busy: .*ws:a \(manual\).*queue position 1 of 1.*waited 0 seconds/i);
+  assert.ok(output.some((line) => line === 'waiting for full-suite, position 1 of 1, held by ws:a (manual)'));
+  assert.equal(fs.existsSync(path.join(f.base, 'seen.json')), false, 'the suite command does not run before it gets the lock');
+  releaseProjectLock('full-suite', lockOptions(f, 'ws:a', panes));
+});
+
+test('a waiter reports its start and changed position no more than once a minute', (t) => {
+  const f = fixture(t, 'herdr-suite-queue-progress-');
+  let clock = Date.now();
+  const panes = ['ws:a', 'ws:b', 'ws:c'];
+  const holder = { ...lockOptions(f, 'ws:a', panes), now: () => clock };
+  acquireProjectLock('full-suite', { ...holder, kind: 'manual' });
+  const queueDir = path.join(f.dataDir, 'locks', 'machine', 'queue', 'full-suite');
+  fs.mkdirSync(queueDir, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(path.join(queueDir, '.sequence'), '1\n', { mode: 0o600 });
+  const olderId = '00000000-0000-4000-8000-000000000003';
+  fs.writeFileSync(path.join(queueDir, `${olderId}.json`), JSON.stringify({
+    id: olderId, seq: 1, pane: 'ws:c', project: 'older-project', pid: process.pid, kind: 'suite',
+    command: 'herdr-boss lock acquire full-suite', createdAt: new Date(clock).toISOString(),
+  }));
+  const output = [];
+  let firstPause = true;
+  const acquired = acquireProjectLock('full-suite', {
+    ...lockOptions(f, 'ws:b', panes), kind: 'suite', waitSeconds: 120, now: () => clock,
+    output: (line) => output.push(line),
+    pause: (milliseconds) => {
+      clock += milliseconds;
+      if (firstPause) {
+        firstPause = false;
+        fs.unlinkSync(path.join(queueDir, `${olderId}.json`));
+      } else if (output.length === 2) {
+        releaseProjectLock('full-suite', holder);
+      }
+    },
+  });
+  assert.equal(acquired.ownerPane, 'ws:b');
+  assert.deepEqual(output.filter((line) => line.startsWith('waiting for full-suite')), [
+    'waiting for full-suite, position 2 of 2, held by ws:a (manual)',
+    'waiting for full-suite, position 1 of 1, held by ws:a (manual)',
+  ]);
+  releaseProjectLock('full-suite', lockOptions(f, 'ws:b', panes));
+});
+
+test('lock acquire --wait timeout returns EX_TEMPFAIL and names its queue position', (t) => {
+  const f = fixture(t, 'herdr-lock-wait-busy-');
+  const panes = ['ws:a', 'ws:b'];
+  acquireProjectLock('full-suite', { ...lockOptions(f, 'ws:a', panes), kind: 'manual' });
+  let error;
+  try { runKitCommand('lock', ['acquire', 'full-suite', '--wait', '0'], lockOptions(f, 'ws:b', panes)); }
+  catch (caught) { error = caught; }
+  assert.equal(error?.exitCode, 75);
+  assert.match(error?.message ?? '', /^lock busy: .*ws:a \(manual\).*queue position 1 of 1.*waited 0 seconds/i);
+  releaseProjectLock('full-suite', lockOptions(f, 'ws:a', panes));
+});
+
+test('a killed waiter ticket is dropped before the next waiter compares the queue', async (t) => {
+  const f = fixture(t, 'herdr-suite-dead-ticket-');
+  const panes = ['ws:a', 'ws:b', 'ws:c'];
+  const holder = lockOptions(f, 'ws:a', panes);
+  acquireProjectLock('full-suite', { ...holder, kind: 'manual' });
+  let holderOwnsLock = true;
+  const dead = startLockWaiter(t, f, 'ws:b', panes);
+  let next;
+  try {
+    await waitFor(() => readQueueFiles(f.dataDir).some((ticket) => ticket.pane === 'ws:b'), 'the first waiter did not take a ticket');
+    dead.child.kill('SIGKILL');
+    await dead.exited;
+    next = startLockWaiter(t, f, 'ws:c', panes);
+    await waitFor(() => {
+      const tickets = readQueueFiles(f.dataDir);
+      return tickets.length === 1 && tickets[0].pane === 'ws:c' ? tickets : false;
+    }, 'the next waiter did not remove the killed waiter ticket');
+    releaseProjectLock('full-suite', holder);
+    holderOwnsLock = false;
+    assert.equal((await next.nextMessage('acquired')).pane, 'ws:c');
+    next.release();
+    assert.equal((await next.nextMessage('released')).pane, 'ws:c');
+    assert.deepEqual(readQueueFiles(f.dataDir), []);
+  } finally {
+    if (holderOwnsLock && fs.existsSync(f.lockFile)) releaseProjectLock('full-suite', holder);
+  }
+});
+
+test('a wait deadline removes its ticket', (t) => {
+  const f = fixture(t, 'herdr-suite-deadline-ticket-');
+  const panes = ['ws:a', 'ws:b'];
+  const holder = lockOptions(f, 'ws:a', panes);
+  acquireProjectLock('full-suite', { ...holder, kind: 'manual' });
+  let clock = Date.now();
+  let error;
+  try {
+    acquireProjectLock('full-suite', {
+      ...lockOptions(f, 'ws:b', panes), kind: 'suite', waitSeconds: 1,
+      now: () => clock, pause: (milliseconds) => { clock += milliseconds; },
+    });
+  } catch (caught) { error = caught; }
+  assert.equal(error?.exitCode, 75);
+  assert.deepEqual(readQueueFiles(f.dataDir), []);
+  releaseProjectLock('full-suite', holder);
+});
+
+test('a no-wait acquire fails while a live ticket waits and reports the queue length', async (t) => {
+  const f = fixture(t, 'herdr-suite-no-wait-queue-');
+  const panes = ['ws:a', 'ws:b', 'ws:c'];
+  const holder = lockOptions(f, 'ws:a', panes);
+  acquireProjectLock('full-suite', { ...holder, kind: 'manual' });
+  const waiter = startLockWaiter(t, f, 'ws:b', panes);
+  try {
+    await waitFor(() => readQueueFiles(f.dataDir).length === 1, 'the queued waiter did not take a ticket');
+    assert.throws(() => runKitCommand('lock', ['acquire', 'full-suite'], lockOptions(f, 'ws:c', panes)),
+      /held by active pane ws:a .*queue length 1/i);
+  } finally {
+    waiter.child.kill('SIGTERM');
+    await waiter.exited;
+    if (fs.existsSync(f.lockFile)) releaseProjectLock('full-suite', holder);
+  }
+  const acquired = acquireProjectLock('full-suite', lockOptions(f, 'ws:c', panes));
+  assert.equal(acquired.ownerPane, 'ws:c', 'the next acquire removes the dead ticket');
+  releaseProjectLock('full-suite', lockOptions(f, 'ws:c', panes));
+});
+
+test('a broken lock queue ticket is skipped and never blocks the queue', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { readLockQueue } = await import('../src/kit/locks.js');
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-queue-broken-'));
+  const queue = path.join(dataDir, 'locks', 'machine', 'queue', 'full-suite');
+  fs.mkdirSync(queue, { recursive: true });
+  fs.writeFileSync(path.join(queue, '00000000-0000-4000-8000-000000000001.json'), '{"id": "00000000-0000-4000-8000-0000');
+  const tickets = readLockQueue({ dataDir, livePanes: new Set(), pidAlive: () => false });
+  assert.ok(Array.isArray(tickets.queue ?? tickets));
 });

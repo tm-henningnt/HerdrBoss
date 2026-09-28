@@ -14,6 +14,7 @@ export const FULL_SUITE_LOCK = 'full-suite';
 const PUSH_LOCK_WAIT_SECONDS = 1800;
 export const MUTATION_GUARD_WAIT_MS = 5000;
 const MANUAL_LOCK_TTL_MS = 60 * 60 * 1000;
+const LOCK_WAIT_NOTICE_INTERVAL_MS = 60 * 1000;
 const LOCK_KINDS = new Set(['manual', 'suite', 'push']);
 const LOCK_NOTICE_TEXT = 'Your full-suite lock expired after 60 minutes and was released. Use herdr-boss suite -- <command> next time.';
 const scopeFor = (name) => (MACHINE_LOCKS.has(name) ? 'machine' : 'repository');
@@ -99,6 +100,106 @@ function lockIsLive(record, { herdr, livePanes = null, pidAlive = pidIsAlive, no
   }
   if (!alive) return false;
   return (livePanes ?? paneIds(herdr)).has(record.ownerPane);
+}
+
+function lockQueueDirectory(directory, name = FULL_SUITE_LOCK) {
+  return privateDirectory(path.join(privateDirectory(path.join(directory, 'queue')), name));
+}
+
+function readQueueTickets(directory, name = FULL_SUITE_LOCK) {
+  const queue = path.join(directory, 'queue', name);
+  let files;
+  try { files = fs.readdirSync(queue).filter((file) => file.endsWith('.json')).sort(); }
+  catch (error) { if (error.code === 'ENOENT') return []; throw error; }
+  // A broken ticket (a writer killed in the middle of a write) must never block the queue. Skip it with one warning.
+  const tickets = [];
+  for (const file of files) {
+    let ticket = null;
+    try { ticket = JSON.parse(fs.readFileSync(path.join(queue, file), 'utf8')); }
+    catch (error) { if (error.code === 'ENOENT') continue; ticket = null; }
+    const valid = ticket && ticket.id === path.basename(file, '.json') && /^[0-9a-f-]{36}$/i.test(ticket.id)
+      && Number.isSafeInteger(ticket.seq) && ticket.seq >= 1 && typeof ticket.pane === 'string' && ticket.pane
+      && typeof ticket.project === 'string' && ticket.project && Number.isSafeInteger(ticket.pid) && ticket.pid >= 1
+      && LOCK_KINDS.has(ticket.kind) && ticket.command === COMMAND(name)
+      && typeof ticket.createdAt === 'string' && Number.isFinite(Date.parse(ticket.createdAt));
+    if (!valid) {
+      process.stderr.write(`Warning: skipped the unreadable or invalid lock queue ticket ${path.basename(file)}.\n`);
+      continue;
+    }
+    tickets.push(ticket);
+  }
+  // Equal sequence numbers keep a stable order by id.
+  tickets.sort((left, right) => left.seq - right.seq || left.id.localeCompare(right.id));
+  return tickets;
+}
+
+function ticketIsLive(ticket, { livePanes, pidAlive = pidIsAlive, now = Date.now }) {
+  return lockIsLive({ name: FULL_SUITE_LOCK, ownerPane: ticket.pane, pid: ticket.pid, kind: ticket.kind }, {
+    livePanes, pidAlive, now,
+  });
+}
+
+function removeQueueTicket(directory, ticket) {
+  if (!ticket) return;
+  try { fs.unlinkSync(path.join(directory, 'queue', FULL_SUITE_LOCK, `${ticket.id}.json`)); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+}
+
+function nextQueueSequence(queue, tickets) {
+  const file = path.join(queue, '.sequence');
+  let previous = 0;
+  try {
+    const value = fs.readFileSync(file, 'utf8').trim();
+    previous = Number(value);
+    if (!/^\d+$/.test(value) || !Number.isSafeInteger(previous) || previous < 0) throw new Error('sequence is invalid');
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw new Error(`Cannot read lock queue sequence: ${error.message}`);
+  }
+  const next = Math.max(previous, ...tickets.map((ticket) => ticket.seq)) + 1;
+  if (!Number.isSafeInteger(next)) throw new Error('Lock queue sequence is exhausted.');
+  fs.writeFileSync(file, `${next}\n`, { mode: 0o600 });
+  fs.chmodSync(file, 0o600);
+  return next;
+}
+
+function createQueueTicket(directory, name, { config, caller, pid, kind, now }, tickets) {
+  const queue = lockQueueDirectory(directory, name);
+  const ticket = {
+    id: crypto.randomUUID(),
+    seq: nextQueueSequence(queue, tickets),
+    pane: caller.paneId,
+    project: config.slug,
+    pid,
+    kind,
+    command: COMMAND(name),
+    createdAt: new Date(timeValue(now)).toISOString(),
+  };
+  writeNewRecord(path.join(queue, `${ticket.id}.json`), ticket);
+  return ticket;
+}
+
+function waitBusyError(name, { activeRecord, tickets, ticket, startedAt, now }) {
+  const ticketIndex = ticket ? tickets.findIndex((item) => item.id === ticket.id) : -1;
+  const position = ticketIndex >= 0 ? ticketIndex + 1 : tickets.length + 1;
+  const total = Math.max(1, tickets.length + (ticketIndex >= 0 ? 0 : 1));
+  const head = tickets[0];
+  const holder = activeRecord
+    ? `${activeRecord.ownerPane} (${activeRecord.kind})`
+    : head ? `${head.pane} (${head.kind})` : 'no active holder';
+  const waited = Math.max(0, Math.floor((timeValue(now) - startedAt) / 1000));
+  const error = new Error(`lock busy: ${name} is held by ${holder}; queue position ${position} of ${total}; waited ${waited} seconds.`);
+  error.code = 'ELOCKBUSY';
+  error.exitCode = 75;
+  return error;
+}
+
+function noWaitBusyError(name, activeRecord, tickets) {
+  const queueLength = tickets.length;
+  if (activeRecord) {
+    return new Error(`Lock ${name} is held by active pane ${activeRecord.ownerPane} (PID ${activeRecord.pid}, since ${activeRecord.acquiredAt}); queue length ${queueLength}.`);
+  }
+  const first = tickets[0];
+  return new Error(`Lock ${name} is waiting for pane ${first.pane} (${first.kind}); queue length ${queueLength}.`);
 }
 
 function writeNewRecord(file, record) {
@@ -371,58 +472,135 @@ export function acquireProjectLock(name, {
   const pid = kind === 'manual' ? shellPidFor(caller.paneId, herdr) : process.pid;
   const { commonDir, directory, scope } = lockContext(config, dataDir, scopeFor(name));
   const file = path.join(directory, `${name}.json`);
+  const queued = scope === 'machine';
+  const startedAt = timeValue(now);
   const deadline = waitSeconds === null ? null : BigInt(timeValue(now)) + BigInt(waitSeconds) * 1000n;
+  let ticket = null;
+  let ticketOutstanding = false;
+  let lastNotice = null;
+  let lastNoticeAt = null;
+  let failure = null;
+  try {
+    for (;;) {
+      let staleRecord = null;
+      let outcome;
+      try {
+        outcome = withMutationLock(directory, () => {
+          let tickets = [];
+          let livePanes = null;
+          if (queued) {
+            const queue = lockQueueDirectory(directory, name);
+            tickets = readQueueTickets(directory, name);
+            livePanes = paneIds(herdr);
+            const live = [];
+            for (const entry of tickets) {
+              if (ticketIsLive(entry, { livePanes, pidAlive, now })) live.push(entry);
+              else removeQueueTicket(directory, entry);
+            }
+            tickets = live;
+            if (waitSeconds !== null && !ticket) {
+              ticket = createQueueTicket(directory, name, { config, caller, pid, kind, now }, tickets);
+              ticketOutstanding = true;
+              tickets.push(ticket);
+              tickets.sort((left, right) => left.seq - right.seq || left.id.localeCompare(right.id));
+            }
+            if (!fs.statSync(queue).isDirectory()) throw new Error('The lock queue is not a directory.');
+          }
 
-  for (;;) {
-    let activeRecord = null;
-    let staleRecord = null;
-    try {
-      const acquired = withMutationLock(directory, () => {
-        const previous = readRecord(file, commonDir, scope);
-        if (previous && lockIsLive(previous, { herdr, pidAlive, now })) {
-          activeRecord = previous;
-          return null;
+          const previous = readRecord(file, commonDir, scope);
+          const previousIsLive = previous && lockIsLive(previous, { herdr, livePanes, pidAlive, now });
+          if (previousIsLive) {
+            if (waitSeconds === null) return { activeRecord: previous, tickets };
+            return { activeRecord: previous, tickets };
+          }
+          if (previous) {
+            staleRecord = previous;
+            if (name === FULL_SUITE_LOCK && previous.kind === 'manual' && previous.expiresAt
+              && Date.parse(previous.expiresAt) <= timeValue(now)) writeManualExpiryNotice(previous, dataDir, now);
+            fs.unlinkSync(file);
+          }
+          if (queued && waitSeconds === null && tickets.length) return { queueBlocked: true, tickets };
+          if (queued && waitSeconds !== null && tickets[0]?.id !== ticket.id) return { queueBlocked: true, tickets };
+
+          if (ticketOutstanding) {
+            removeQueueTicket(directory, ticket);
+            ticketOutstanding = false;
+          }
+          const acquiredAt = new Date(timeValue(now)).toISOString();
+          const record = {
+            name,
+            project: config.slug,
+            gitCommonDir: commonDir,
+            ownerPane: caller.paneId,
+            pid,
+            kind,
+            command: COMMAND(name),
+            acquiredAt,
+            ...(scope === 'machine' && kind === 'manual' ? { expiresAt: new Date(Date.parse(acquiredAt) + MANUAL_LOCK_TTL_MS).toISOString() } : {}),
+            ...(scope === 'machine' ? { scope } : {}),
+          };
+          writeNewRecord(file, record);
+          return { acquired: { ...record, scope, state: 'live' }, tickets };
+        });
+      } catch (error) {
+        if (error.code === 'EEXIST') continue;
+        if (error.code !== 'ELOCKBUSY') throw error;
+        if (deadline === null || BigInt(timeValue(now)) >= deadline) {
+          if (queued && waitSeconds !== null) {
+            const tickets = readQueueTickets(directory, name);
+            let activeRecord = null;
+            try {
+              const current = readRecord(file, commonDir, scope);
+              if (current && lockIsLive(current, { herdr, pidAlive, now })) activeRecord = current;
+            } catch {}
+            throw waitBusyError(name, { activeRecord, tickets, ticket, startedAt, now });
+          }
+          throw error;
         }
-        if (previous) {
-          staleRecord = previous;
-          if (name === FULL_SUITE_LOCK && previous.kind === 'manual' && previous.expiresAt
-            && Date.parse(previous.expiresAt) <= timeValue(now)) writeManualExpiryNotice(previous, dataDir, now);
-          fs.unlinkSync(file);
-        }
-        const acquiredAt = new Date(timeValue(now)).toISOString();
-        const record = {
-          name,
-          project: config.slug,
-          gitCommonDir: commonDir,
-          ownerPane: caller.paneId,
-          pid,
-          kind,
-          command: COMMAND(name),
-          acquiredAt,
-          ...(scope === 'machine' && kind === 'manual' ? { expiresAt: new Date(Date.parse(acquiredAt) + MANUAL_LOCK_TTL_MS).toISOString() } : {}),
-          ...(scope === 'machine' ? { scope } : {}),
-        };
-        writeNewRecord(file, record);
-        return { ...record, scope, state: 'live' };
-      });
-      if (acquired) {
+        pause(Math.max(1, Math.min(100, Number(deadline - BigInt(timeValue(now))))));
+        continue;
+      }
+      if (outcome.acquired) {
         if (staleRecord) output(`NOTICE: Taking over stale lock ${name} from pane ${staleRecord.ownerPane} (PID ${staleRecord.pid}).`);
-        output(`Lock ${name} acquired by pane ${acquired.ownerPane} (PID ${acquired.pid}).`);
-        return acquired;
+        output(`Lock ${name} acquired by pane ${outcome.acquired.ownerPane} (PID ${outcome.acquired.pid}).`);
+        return outcome.acquired;
       }
-    } catch (error) {
-      if (error.code === 'EEXIST') continue;
-      if (error.code !== 'ELOCKBUSY') throw error;
-      if (deadline === null || BigInt(timeValue(now)) >= deadline) throw error;
+      if (waitSeconds === null) {
+        if (outcome.queueBlocked) throw noWaitBusyError(name, null, outcome.tickets);
+        throw noWaitBusyError(name, outcome.activeRecord, outcome.tickets);
+      }
+
+      const tickets = outcome.tickets ?? [];
+      const ownPosition = ticket ? tickets.findIndex((entry) => entry.id === ticket.id) + 1 : 1;
+      const active = outcome.activeRecord;
+      const head = tickets[0];
+      const holderPane = active?.ownerPane ?? head?.pane ?? 'unknown';
+      const holderKind = active?.kind ?? head?.kind ?? 'unknown';
+      if (queued) {
+        const signature = `${ownPosition}/${tickets.length}`;
+        const observedAt = timeValue(now);
+        if (signature !== lastNotice && (lastNoticeAt === null || observedAt - lastNoticeAt >= LOCK_WAIT_NOTICE_INTERVAL_MS)) {
+          output(`waiting for ${name}, position ${ownPosition} of ${tickets.length}, held by ${holderPane} (${holderKind})`);
+          lastNotice = signature;
+          lastNoticeAt = observedAt;
+        }
+      }
+      if (deadline !== null && BigInt(timeValue(now)) >= deadline) {
+        throw waitBusyError(name, { activeRecord: active, tickets, ticket, startedAt, now });
+      }
       pause(Math.max(1, Math.min(100, Number(deadline - BigInt(timeValue(now))))));
-      continue;
     }
-    if (activeRecord) {
-      if (deadline === null || BigInt(timeValue(now)) >= deadline) {
-        throw new Error(`Lock ${name} is held by active pane ${activeRecord.ownerPane} (PID ${activeRecord.pid}, since ${activeRecord.acquiredAt}).`);
+  } catch (error) {
+    failure = error;
+    throw error;
+  } finally {
+    if (ticketOutstanding) {
+      try {
+        withMutationLock(directory, () => removeQueueTicket(directory, ticket));
+      } catch (error) {
+        if (!failure) throw error;
+        output(`Warning: could not remove lock queue ticket ${ticket.id}: ${String(error.message ?? error).replace(/\s+/g, ' ')}.`);
       }
-      pause(Math.max(1, Math.min(100, Number(deadline - BigInt(timeValue(now))))));
-      continue;
     }
   }
 }
@@ -461,6 +639,7 @@ export function listProjectLocks({
   now = Date.now,
 } = {}) {
   callerFor(env, herdr);
+  const machineQueue = readLockQueue({ dataDir, herdr, pidAlive, now });
   const locks = ['repository', 'machine'].flatMap((scope) => {
     const { commonDir, directory } = lockContext(config, dataDir, scope);
     return fs.readdirSync(directory).filter((file) => file.endsWith('.json')).sort().map((fileName) => {
@@ -472,6 +651,7 @@ export function listProjectLocks({
         ageMs,
         ageSeconds: Math.floor(ageMs / 1000),
         expiresInMs,
+        ...(scope === 'machine' && record.name === FULL_SUITE_LOCK ? { queue: machineQueue } : {}),
         state: lockIsLive(record, { herdr, pidAlive, now }) ? 'live' : 'stale',
       };
     });
@@ -481,6 +661,9 @@ export function listProjectLocks({
     const age = formatDuration(lock.ageSeconds);
     const expiry = lock.expiresInMs === null ? '' : `; expires in ${formatDuration(Math.ceil(lock.expiresInMs / 1000))}`;
     output(`${lock.name} (${lock.scope}): held by pane ${lock.ownerPane} (${lock.kind}) for ${age}${expiry}; PID ${lock.pid}, ${lock.state}`);
+    if (lock.queue?.length) {
+      output(`  Queue: ${lock.queue.map((ticket) => `${ticket.position}. ${ticket.project} ${ticket.pane} (${ticket.kind}) ${formatDuration(ticket.waitSeconds)}`).join(', ')}`);
+    }
   }
   return locks;
 }
@@ -493,6 +676,23 @@ function formatDuration(seconds) {
   if (days) return `${days}d ${hours}h`;
   if (hours) return `${hours}h ${minutes}m`;
   return `${minutes}m`;
+}
+
+export function readLockQueue({ dataDir = DATA_DIR, livePanes = null, herdr = createHerdrRunner(), pidAlive = pidIsAlive, now = Date.now } = {}) {
+  const directory = path.join(dataDir, 'locks', 'machine');
+  const tickets = readQueueTickets(directory);
+  if (!tickets.length) return [];
+  const panes = livePanes ?? paneIds(herdr);
+  const live = tickets.filter((ticket) => ticketIsLive(ticket, { livePanes: panes, pidAlive, now }));
+  return live.map((ticket, index) => {
+    const waitMs = Math.max(0, timeValue(now) - Date.parse(ticket.createdAt));
+    return {
+      ...ticket,
+      position: index + 1,
+      waitMs,
+      waitSeconds: Math.floor(waitMs / 1000),
+    };
+  });
 }
 
 export function readMachineLocks({ dataDir = DATA_DIR, livePanes = new Set(), pidAlive = pidIsAlive, now = Date.now } = {}) {
