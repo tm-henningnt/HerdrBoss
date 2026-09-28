@@ -1981,65 +1981,164 @@ function specsBlock(m, slug) {
 }
 
 // Layered dependency graph: each column holds tasks whose blockers sit in earlier columns. Arrows run from blocker to dependent.
+// Every task is a box, also a task without links. A task without links sits in column 0, after the linked tasks of that column.
 function dependencyGraph(m, slug) {
   const view = projectView(slug);
-  const edges = m.tasks.flatMap((t) => (t.blockedBy || []).filter((id) => m.map.has(id)).map((id) => [id, t.id]));
-  if (!edges.length) return '';
-  const linked = new Set(edges.flat());
-  let nodes = m.tasks.filter((t) => t.id && linked.has(t.id));
+  // A task without an id still gets a box; a synthetic key keeps it apart from the real ids.
+  let nodes = m.tasks.slice();
+  const keyOf = new Map();
+  nodes.forEach((t, i) => keyOf.set(t, t.id || `~${i}`));
   if (!view.showDone) {
     // Keep completed tasks only as the direct blockers of open work, so the open chain keeps its context.
-    const keep = new Set(nodes.filter((t) => !isDone(t)).map((t) => t.id));
-    for (const t of nodes) if (!isDone(t)) for (const id of t.blockedBy || []) if (m.map.has(id)) keep.add(id);
-    nodes = nodes.filter((t) => keep.has(t.id));
+    const keep = new Set(nodes.filter((t) => !isDone(t)).map((t) => keyOf.get(t)));
+    for (const t of nodes) if (!isDone(t)) for (const id of t.blockedBy || []) if (m.map.has(id)) keep.add(keyOf.get(m.map.get(id)));
+    nodes = nodes.filter((t) => keep.has(keyOf.get(t)));
   }
-  const truncated = nodes.length > 90;
-  if (truncated) nodes = nodes.filter((t) => !isDone(t)).slice(0, 90);
-  const inSet = new Set(nodes.map((t) => t.id));
+  if (!nodes.length) return '';
+  const inSet = new Set(nodes.map((t) => keyOf.get(t)));
+  const linked = new Set();
+  const edgeKeys = [];
+  for (const t of nodes) for (const id of t.blockedBy || []) {
+    if (!m.map.has(id) || !inSet.has(id)) continue;
+    linked.add(id); linked.add(keyOf.get(t));
+    edgeKeys.push([id, keyOf.get(t)]);
+  }
   const layer = new Map();
   const visiting = new Set();
   const depth = (t) => {
-    if (layer.has(t.id)) return layer.get(t.id);
-    if (visiting.has(t.id)) return 0; // a cycle in published data; break it here
-    visiting.add(t.id);
+    const key = keyOf.get(t);
+    if (layer.has(key)) return layer.get(key);
+    if (visiting.has(key)) return 0; // a cycle in published data; break it here
+    visiting.add(key);
     const blockers = (t.blockedBy || []).filter((id) => inSet.has(id));
     const d = blockers.length ? 1 + Math.max(...blockers.map((id) => depth(m.map.get(id)))) : 0;
-    visiting.delete(t.id);
-    layer.set(t.id, d);
+    visiting.delete(key);
+    layer.set(key, d);
     return d;
   };
   nodes.forEach(depth);
   const groupOrder = new Map(m.groups.map((g, i) => [g.id, i]));
   const columns = [];
-  for (const t of nodes) (columns[layer.get(t.id)] ||= []).push(t);
-  for (const col of columns) col?.sort((a, b) => (groupOrder.get(a.group) ?? 99) - (groupOrder.get(b.group) ?? 99) || byId(a, b));
+  for (const t of nodes) (columns[layer.get(keyOf.get(t))] ||= []).push(t);
+  // Linked tasks come first in a column; tasks without links follow in the published group order.
+  for (const col of columns) col?.sort((a, b) => (linked.has(keyOf.get(a)) ? 0 : 1) - (linked.has(keyOf.get(b)) ? 0 : 1) || (groupOrder.get(a.group) ?? 99) - (groupOrder.get(b.group) ?? 99) || byId(a, b));
   const W = 168, H = 46, GX = 56, GY = 12, PAD = 8;
   const pos = new Map();
-  columns.forEach((col, x) => (col || []).forEach((t, y) => pos.set(t.id, { x: PAD + x * (W + GX), y: PAD + y * (H + GY) })));
+  columns.forEach((col, x) => (col || []).forEach((t, y) => pos.set(keyOf.get(t), { x: PAD + x * (W + GX), y: PAD + y * (H + GY) })));
   const width = PAD * 2 + columns.length * (W + GX) - GX;
   const height = PAD * 2 + Math.max(...columns.map((c) => c?.length || 0)) * (H + GY) - GY;
-  const paths = edges.filter(([a, b]) => pos.has(a) && pos.has(b)).map(([a, b]) => {
+  const paths = edgeKeys.map(([a, b]) => {
     const s = pos.get(a), e = pos.get(b);
+    if (!s || !e) return '';
     const x1 = s.x + W, y1 = s.y + H / 2, x2 = e.x, y2 = e.y + H / 2, mid = (x1 + x2) / 2;
     const open = !isDone(m.map.get(a));
     return `<path class="dep-edge${open ? ' open' : ''}" d="M${x1},${y1} C${mid},${y1} ${mid},${y2} ${x2 - 4},${y2}" marker-end="url(#dep-arrow-${esc(slug)})"></path>`;
   }).join('');
   const boxes = nodes.map((t) => {
-    const { x, y } = pos.get(t.id);
+    const { x, y } = pos.get(keyOf.get(t));
     const role = m.current.has(t) ? ' current' : m.next.has(t) ? ' next' : '';
     const hidden = (t.blockedBy || []).filter((id) => !inSet.has(id) && !(m.map.has(id) && isDone(m.map.get(id)))).length;
     const url = safeUrl(t.url);
     const body = `<rect class="dep-node s-${esc(t.status || 'todo')}${role}" x="${x}" y="${y}" width="${W}" height="${H}" rx="6"></rect>
       <text x="${x + 9}" y="${y + 18}" class="dep-id">${esc(t.id)}${role ? ` · ${role.trim()}` : ''}${hidden ? ` · +${hidden} external` : ''}</text>
-      <text x="${x + 9}" y="${y + 35}" class="dep-title">${esc(t.title.length > 24 ? `${t.title.slice(0, 23)}…` : t.title)}</text><title>${esc(`${t.id} ${t.title} (${STATUS_LABEL[t.status || 'todo']})`)}</title>`;
-    return url ? `<a href="${esc(url)}" target="_blank" rel="noreferrer">${body}</a>` : `<g>${body}</g>`;
+      <text x="${x + 9}" y="${y + 35}" class="dep-title">${esc(t.title.length > 24 ? `${t.title.slice(0, 23)}…` : t.title)}</text><title>${esc(`${t.id ?? ''} ${t.title} (${STATUS_LABEL[t.status || 'todo']})`)}</title>`;
+    return url ? `<a class="dep-node-group" href="${esc(url)}" target="_blank" rel="noreferrer">${body}</a>` : `<g class="dep-node-group">${body}</g>`;
   }).join('');
   const toggle = `<label class="inline-toggle"><input type="checkbox" data-project-done="${esc(slug)}" ${view.showDone ? 'checked' : ''}> Show completed work</label>`;
-  const body = `<div class="dep-legend"><span class="s-todo">To do</span><span class="s-doing">In progress</span><span class="s-review">Review</span><span class="s-blocked">Blocked</span><span class="s-done">Done</span><span class="current">Current frontier</span><span class="next">Next</span></div>
-    <div class="panel dep-scroll"><svg class="dep-graph" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="Dependency graph with ${nodes.length} tasks">
-      <defs><marker id="dep-arrow-${esc(slug)}" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L8,4 L0,8 z" class="dep-arrow"></path></marker></defs>${paths}${boxes}</svg></div>
-    ${truncated ? '<small class="muted">The graph shows the first 90 open tasks. Filter the issue list below for the rest.</small>' : ''}`;
-  return collapsible({ slug, key: 'dependencies', className: 'dep-section', head: `<div class="section-head"><h2>Dependencies <span class="sub">arrows run from blocker to dependent · columns show order</span></h2>${toggle}</div>`, title: 'Dependencies', count: `${edges.length}`, controls: `<div class="fold-controls">${toggle}</div>`, body });
+  const toolbar = `<div class="dep-toolbar" role="group" aria-label="Dependency graph view">
+    <button type="button" class="dep-btn" data-dep-action="fit" data-dep-slug="${esc(slug)}" aria-label="Fit the whole graph in the panel">Fit</button>
+    <button type="button" class="dep-btn" data-dep-action="out" data-dep-slug="${esc(slug)}" aria-label="Zoom out">−</button>
+    <button type="button" class="dep-btn" data-dep-action="in" data-dep-slug="${esc(slug)}" aria-label="Zoom in">+</button>
+    <button type="button" class="dep-btn" data-dep-action="100" data-dep-slug="${esc(slug)}" aria-label="Zoom to 100 percent">100%</button>
+    <button type="button" class="dep-btn" data-dep-action="full" data-dep-slug="${esc(slug)}" aria-label="Show the graph at full size">Full size</button>
+    <span class="dep-zoom" data-dep-readout="${esc(slug)}" aria-hidden="true">100%</span></div>`;
+  const body = `${toolbar}
+    <div class="dep-legend"><span class="s-todo">To do</span><span class="s-doing">In progress</span><span class="s-review">Review</span><span class="s-blocked">Blocked</span><span class="s-done">Done</span><span class="current">Current frontier</span><span class="next">Next</span></div>
+    <div class="panel dep-scroll"><div class="dep-stage" data-dep-stage="${esc(slug)}">
+      <button type="button" class="dep-close" data-dep-action="close" data-dep-slug="${esc(slug)}" aria-label="Close full size">Close</button>
+      <svg class="dep-graph" data-dep-graph="${esc(slug)}" data-dep-width="${width}" data-dep-height="${height}" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Dependency graph with ${nodes.length} tasks">
+      <defs><marker id="dep-arrow-${esc(slug)}" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L8,4 L0,8 z" class="dep-arrow"></path></marker></defs>${paths}${boxes}</svg></div></div>`;
+  return collapsible({ slug, key: 'dependencies', className: 'dep-section', head: `<div class="section-head"><h2>Dependencies <span class="sub">arrows run from blocker to dependent · columns show order</span></h2>${toggle}</div>`, title: 'Dependencies', count: `${nodes.length}`, controls: `<div class="fold-controls">${toggle}</div>`, body });
+}
+
+// Dependency graph view: zoom and pan for each project live in memory only, never in localStorage.
+const DEP_MIN_ZOOM = 0.25, DEP_MAX_ZOOM = 4;
+const depState = (slug) => {
+  const view = projectView(slug);
+  return (view.dep ||= { zoom: null, cx: null, cy: null, full: false });
+};
+const clampDepZoom = (z) => Math.min(DEP_MAX_ZOOM, Math.max(DEP_MIN_ZOOM, z));
+const depStageEl = (slug) => [...document.querySelectorAll('[data-dep-stage]')].find((s) => s.dataset.depStage === slug) || null;
+const depEl = (selector, key, slug) => [...document.querySelectorAll(selector)].find((el) => el.dataset[key] === slug) || null;
+
+// Change the viewBox for zoom and pan. A null zoom fits the whole graph in the panel the first time.
+function depTransform(slug, { fit = false } = {}) {
+  const stage = depStageEl(slug);
+  const svg = stage?.querySelector('[data-dep-graph]');
+  if (!stage || !svg) return;
+  const rect = svg.getBoundingClientRect();
+  const sw = rect.width, sh = rect.height;
+  if (!(sw > 0) || !(sh > 0)) return; // a hidden section has no size; fit it when it opens
+  const st = depState(slug);
+  const gw = Number(svg.dataset.depWidth) || 1, gh = Number(svg.dataset.depHeight) || 1;
+  if (fit || st.zoom == null || st.cx == null || st.cy == null) {
+    const pad = 20;
+    st.zoom = clampDepZoom(Math.min((sw - pad * 2) / gw, (sh - pad * 2) / gh));
+    st.cx = gw / 2; st.cy = gh / 2;
+  }
+  st.zoom = clampDepZoom(st.zoom);
+  const vw = sw / st.zoom, vh = sh / st.zoom;
+  svg.setAttribute('viewBox', `${st.cx - vw / 2} ${st.cy - vh / 2} ${vw} ${vh}`);
+  const readout = depEl('[data-dep-readout]', 'depReadout', slug);
+  if (readout) readout.textContent = `${Math.round(st.zoom * 100)}%`;
+}
+
+// The current zoom of a project, after a fit when the page has not drawn it yet.
+function depCurrentZoom(slug) {
+  const st = depState(slug);
+  if (st.zoom == null) depTransform(slug);
+  return st.zoom;
+}
+
+// Zoom to a target scale. ax and ay are the pointer fractions of the width and the height; the point stays still.
+function depZoomTo(slug, target, ax = 0.5, ay = 0.5) {
+  const svg = depStageEl(slug)?.querySelector('[data-dep-graph]');
+  if (!svg) return;
+  const rect = svg.getBoundingClientRect();
+  const sw = rect.width, sh = rect.height;
+  if (!(sw > 0) || !(sh > 0)) return;
+  const st = depState(slug);
+  const gw = Number(svg.dataset.depWidth) || 1, gh = Number(svg.dataset.depHeight) || 1;
+  const z = clampDepZoom(st.zoom ?? 1);
+  const vw = sw / z, vh = sh / z;
+  const gx = (st.cx ?? gw / 2) - vw / 2 + ax * vw;
+  const gy = (st.cy ?? gh / 2) - vh / 2 + ay * vh;
+  st.zoom = clampDepZoom(target);
+  st.cx = gx + (0.5 - ax) * (sw / st.zoom);
+  st.cy = gy + (0.5 - ay) * (sh / st.zoom);
+  depTransform(slug);
+}
+
+// Apply the remembered state to every drawn graph after a render, a fold, or a window resize.
+function syncDepGraphs() {
+  for (const stage of document.querySelectorAll('[data-dep-stage]')) {
+    const st = depState(stage.dataset.depStage);
+    stage.classList.toggle('full', !!st.full);
+    depTransform(stage.dataset.depStage);
+  }
+  document.body.classList.toggle('dep-full-open', !!document.querySelector('.dep-stage.full'));
+}
+
+// Open or close the full-size overlay. The graph fits the window when it opens.
+function setDepFull(slug, on) {
+  const st = depState(slug);
+  st.full = on;
+  const stage = depStageEl(slug);
+  if (!stage) return;
+  stage.classList.toggle('full', on);
+  document.body.classList.toggle('dep-full-open', on);
+  if (on) { depTransform(slug, { fit: true }); stage.querySelector('[data-dep-action="close"]')?.focus(); }
+  else { depTransform(slug); depEl('[data-dep-action="full"]', 'depSlug', slug)?.focus(); }
 }
 
 function issueTable(m, slug) {
@@ -2159,7 +2258,8 @@ const HELP = {
     <p><b>Current Owner goal</b> shows the durable direction set by the Owner. Keep it in every status publication until the Owner changes or clears it.</p>
     <p>The bar above the cards shows the applied share and the effective slots of each project, in card order. Its colors match the top edge of each card. An idle project is faded. A paused project is faded and striped.</p>
     <h3>Progress and frontier</h3><p><b>Current frontier</b> is open work with no open blocker. <b>Next</b> waits only on the current frontier. The orchestrator can set both itself.</p>
-    <h3>Dependencies</h3><p>Columns show the order. An arrow runs from a blocker to the work that waits on it. Current work has an orange border; next work has a dashed border. Select a box to open the issue. <b>Show completed work</b> adds finished tasks.</p>
+    <h3>Dependencies</h3><p>Columns show the order. An arrow runs from a blocker to the work that waits on it. A task without links sits in the first column, after the linked tasks. Current work has an orange border; next work has a dashed border. Select a box to open the issue. <b>Show completed work</b> adds finished tasks.</p>
+    <h3>Graph view</h3><p>Select <b>Fit</b> to show the whole graph. Select <b>−</b>, <b>+</b>, or <b>100%</b> to zoom. Press Ctrl or Cmd and turn the mouse wheel to zoom around the pointer. Drag the background to pan. Select <b>Full size</b> to fill the window. Select <b>Close</b> or press Escape to return.</p>
     <h3>Groups and specs</h3><p>Progress per release or phase, and the work under each spec.</p>
     <h3>Tasks and All work</h3><p>The board groups tasks by status; Done shows the latest 10 until you show completed work. The list sorts and filters all work.</p>
     <h3>Project continuity</h3><p>Plan a handover to another harness. Prepare copies the published Owner goal to the successor. An invalid published goal, such as a blank value or a value over 1000 characters, is omitted. If migration is unavailable or fails, Prepare starts fresh and records the reason. Fresh preparation captures at most 200 recent source-pane lines and 20,000 characters, and both caps include the truncation marker. It redacts likely credentials and marks the snapshot as historical context. If recent text is unavailable, it tries the visible pane; if both reads fail, it marks context unavailable. The successor only reads and reports until activation. Inspect its answer, then confirm activation. For a project, activation labels the successor <b>orch</b> and the old pane <b>orch previous</b>. For the Boss, it labels them <b>boss</b> and <b>boss previous</b>. Herdr Boss closes the old pane after 120 minutes when the same handoff and pane roles are still confirmed. Unavailable pane data defers retirement until a later engine tick. The successor gets one notice after retirement. The old agent is asked for a final summary for the successor. A project handover notifies the project workers and the Boss. A Boss handover notifies the Boss-workspace peers and the Owner.</p>
@@ -2308,6 +2408,7 @@ function render(force = false) {
   }
   if (route === 'organization') orgMotion(state);
   else orgEventMark = null;
+  syncDepGraphs();
   if (!document.getElementById('help-panel').hidden) fillHelp();
   $updated.textContent = `updated ${ago(state.updatedAt)}`;
 }
@@ -2320,6 +2421,7 @@ document.addEventListener('toggle', (e) => {
     else browserManageOpen.delete(e.target.dataset.browserManage);
   }
   if (e.target.dataset?.projectFold) setFoldOpen(e.target.dataset.projectFold, e.target.dataset.foldKey, e.target.open);
+  if (e.target.open && e.target.querySelector?.('[data-dep-stage]')) syncDepGraphs();
 }, true);
 
 // Re-render when the viewport crosses the phone breakpoint, so the desktop and phone treatments swap.
@@ -2374,6 +2476,68 @@ document.addEventListener('pointermove', (e) => {
 });
 document.addEventListener('pointerup', (e) => { if (e.target.dataset?.dragging) delete e.target.dataset.dragging; });
 document.addEventListener('pointercancel', (e) => { if (e.target.dataset?.dragging) delete e.target.dataset.dragging; });
+
+// Dependency graph: Ctrl or Cmd with the wheel zooms around the pointer. A drag on the background pans.
+let depDrag = null;
+document.addEventListener('wheel', (e) => {
+  if (!(e.ctrlKey || e.metaKey)) return;
+  const stage = e.target.closest?.('[data-dep-stage]');
+  if (!stage) return;
+  const svg = stage.querySelector('[data-dep-graph]');
+  const rect = svg?.getBoundingClientRect();
+  if (!rect || !(rect.width > 0) || !(rect.height > 0)) return;
+  e.preventDefault();
+  const z = depCurrentZoom(stage.dataset.depStage);
+  if (!z) return;
+  depZoomTo(stage.dataset.depStage, z * Math.exp(-e.deltaY * 0.0015), (e.clientX - rect.left) / rect.width, (e.clientY - rect.top) / rect.height);
+}, { passive: false });
+document.addEventListener('pointerdown', (e) => {
+  const stage = e.target.closest?.('[data-dep-stage]');
+  if (!stage || e.button !== 0) return;
+  if (e.target.closest?.('button, a, .dep-node-group')) return; // a drag on a task box keeps the link working
+  e.preventDefault();
+  const st = depState(stage.dataset.depStage);
+  depDrag = { slug: stage.dataset.depStage, pointerId: e.pointerId, x: e.clientX, y: e.clientY, cx: st.cx ?? 0, cy: st.cy ?? 0, zoom: st.zoom ?? 1 };
+  stage.dataset.dragging = 'true';
+  try { stage.setPointerCapture(e.pointerId); } catch {}
+});
+document.addEventListener('pointermove', (e) => {
+  if (!depDrag || e.pointerId !== depDrag.pointerId) return;
+  const stage = depStageEl(depDrag.slug);
+  if (!stage) return;
+  const st = depState(depDrag.slug);
+  st.cx = depDrag.cx - (e.clientX - depDrag.x) / depDrag.zoom;
+  st.cy = depDrag.cy - (e.clientY - depDrag.y) / depDrag.zoom;
+  depTransform(depDrag.slug);
+});
+function endDepDrag(e) {
+  if (!depDrag || e.pointerId !== depDrag.pointerId) return;
+  const stage = depStageEl(depDrag.slug);
+  if (stage) { delete stage.dataset.dragging; try { stage.releasePointerCapture(e.pointerId); } catch {} }
+  depDrag = null;
+}
+document.addEventListener('pointerup', endDepDrag);
+document.addEventListener('pointercancel', endDepDrag);
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest?.('[data-dep-action]');
+  if (!btn) return;
+  const slug = btn.dataset.depSlug;
+  const action = btn.dataset.depAction;
+  if (action === 'full') { setDepFull(slug, true); return; }
+  if (action === 'close') { setDepFull(slug, false); return; }
+  if (action === 'fit') { depTransform(slug, { fit: true }); return; }
+  const z = depCurrentZoom(slug);
+  if (!z) return;
+  if (action === 'in') depZoomTo(slug, z * 1.25);
+  else if (action === 'out') depZoomTo(slug, z * 0.8);
+  else if (action === '100') depZoomTo(slug, 1);
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  const stage = document.querySelector('.dep-stage.full');
+  if (stage) setDepFull(stage.dataset.depStage, false);
+});
+window.addEventListener('resize', () => syncDepGraphs());
 document.addEventListener('keydown', (e) => {
   const viewer = document.getElementById('browser-viewer');
   if (viewer.open && e.target === viewer.querySelector(':scope > img') && viewer.querySelector('#browser-viewer-control').checked) {

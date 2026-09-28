@@ -389,6 +389,18 @@ Agent commands and tab rules are in [the browser service](../kit/browser-service
 
 Orchestrators do not build dashboards. They publish a status file, and Herdr Boss shows it on `/projects/SLUG`. With the optional work structure fields, the page shows progress, the current frontier, a dependency graph, groups, specs, and all work. See [project-status.md](project-status.md).
 
+### Graph view
+
+The dependency graph draws every task. A task without links sits in the first column, after the linked tasks. Select a box to open the issue.
+
+Use the toolbar above the graph:
+
+- **Fit** shows the whole graph in the panel.
+- **−** and **+** zoom out and in. **100%** shows the graph at its natural size.
+- **Full size** fills the window. Select **Close** or press Escape to return.
+
+Press Ctrl or Cmd and turn the mouse wheel to zoom around the pointer. A plain wheel scrolls the page. Drag the background with the mouse or one finger to pan. A drag on a task box selects the task; it does not pan. The page remembers the zoom and the pan of each project during the session.
+
 When the published status is stale, the project page and the Projects list show `Status stale: <age>` next to the updated time. The mark stays until the orchestrator publishes again. See [Rules and notices](#rules-and-notices) for the stale rule.
 
 ## Organization page

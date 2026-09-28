@@ -510,3 +510,51 @@ test('organization cards show an unavailable or stale quota bar, and the header 
   assert.match(css, /\.brand \{[^}]*white-space: nowrap/);
   assert.match(css, /\.live \{[^}]*white-space: nowrap/);
 });
+
+test('the dependency graph draws every task, with fit, zoom, pan, and a full-size overlay', () => {
+  const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
+  const guide = fs.readFileSync(new URL('../docs/user-guide.md', import.meta.url), 'utf8');
+  // Every task is a node, including tasks without links. The 90-task cut and the empty-edge bail-out are gone.
+  assert.doesNotMatch(app, /if \(!edges\.length\) return ''/);
+  assert.doesNotMatch(app, /first 90/);
+  assert.doesNotMatch(app, /nodes\.length > 90/);
+  assert.match(app, /let nodes = m\.tasks\.slice\(\)/);
+  // A task without links sits in column 0, after the linked tasks of that column.
+  assert.match(app, /linked\.has\(keyOf\.get\(a\)\) \? 0 : 1/);
+  // The toolbar has Fit, out, in, 100%, and Full size. Each button has an aria-label.
+  for (const action of ['fit', 'out', 'in', '100', 'full']) assert.match(app, new RegExp(`data-dep-action="${action}"`), `${action} button`);
+  assert.match(app, /aria-label="Fit the whole graph/);
+  assert.match(app, /aria-label="Zoom out"/);
+  assert.match(app, /aria-label="Zoom in"/);
+  assert.match(app, /aria-label="Zoom to 100 percent"/);
+  assert.match(app, /aria-label="Show the graph at full size"/);
+  assert.match(app, /aria-label="Close full size"/);
+  // The buttons are at least 32 px high on a desktop and 44 px on a phone.
+  assert.match(css, /\.dep-btn\b[^{]*\{[^}]*min-height: 32px/);
+  assert.match(css, /\.dep-btn, \.dep-close \{ min-height: 44px/);
+  // The dark-theme global button color must not hide the toolbar labels.
+  assert.match(css, /:root:not\(\[data-theme="light"\]\) \.dep-btn[^{]*\{[^}]*color: var\(--text\)/);
+  // Zoom and pan change the viewBox only. The page is never scaled.
+  assert.match(app, /const DEP_MIN_ZOOM = 0\.25/);
+  assert.match(app, /DEP_MAX_ZOOM = 4/);
+  assert.match(app, /svg\.setAttribute\('viewBox'/);
+  assert.doesNotMatch(app, /\.dep-graph[^;]*transform: scale/);
+  // Ctrl or Cmd with the wheel zooms around the pointer. A plain wheel scrolls the page.
+  assert.match(app, /addEventListener\('wheel'/);
+  assert.match(app, /if \(!\(e\.ctrlKey \|\| e\.metaKey\)\) return;/);
+  assert.match(app, /\{ passive: false \}/);
+  // Drag the background with pointer capture. A drag that starts on a task box does not pan.
+  assert.match(app, /stage\.setPointerCapture\(e\.pointerId\)/);
+  assert.match(app, /closest\?\.\('button, a, \.dep-node-group'\)/);
+  // Full size is a fixed overlay with a close button. Escape and the button close it.
+  assert.match(app, /function setDepFull\(slug, on\)/);
+  assert.match(app, /body\.classList\.toggle\('dep-full-open', on\)/);
+  assert.match(css, /\.dep-stage\.full\b[^{]*\{[^}]*position: fixed[^}]*inset: 0/);
+  assert.match(app, /if \(e\.key !== 'Escape'\) return;[\s\S]{0,200}setDepFull/);
+  // The help panel and the user guide describe the toolbar and the gestures.
+  assert.match(app, /<b>Fit<\/b> to show the whole graph/);
+  assert.match(app, /Drag the background to pan/);
+  assert.match(guide, /Graph view/);
+  assert.match(guide, /Ctrl or Cmd/);
+});
