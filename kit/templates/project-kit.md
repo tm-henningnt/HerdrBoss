@@ -20,6 +20,7 @@ These are the shared operating rules for the orchestrator of this project.
 - Use `herdr-boss worker start` to start workers.
 - Use lowercase, unique worker names.
 - Give every worker one bounded task and exact allowed paths.
+- Run each `herdr-boss browser` command and each `ps` or `pgrep` command alone. Do not join it to other commands with `&&`, `;`, or a pipe.
 - Put the relevant Owner decisions into each worker brief.
 - Keep Git branches, worktrees, commits, and merges under orchestrator control.
 - Wait on workers or events. Do not poll panes in a tight loop.
@@ -46,7 +47,7 @@ These are the shared operating rules for the orchestrator of this project.
 - Ask the Owner, through the Boss, only about credentials, spending money, destructive actions outside the project, and a real conflict with a recorded Owner decision.
 - Report to the Boss only when a task is merged and live or when blocked. Use one or two lines. Run `herdr agent prompt <boss-pane> "..."` without `--wait`.
 - Do not message another project's orchestrator. The Boss relays messages between projects.
-- Decide and run your own pushes, deployments, and releases. Nobody approves them. Before each push, read the full diff for secrets, private local paths, and other-project client or tenant names. Push one change set at a time. Run a full test suite with `herdr-boss suite -- <command>`, and push with `herdr-boss push <args>`. Never take the full-suite lock with a bare lock acquire for a suite. Use `herdr-boss push` for a push; it takes the lock when a pre-push hook exists. There is no load threshold. Send a deployment that spends money to the Owner through the Boss.
+- Decide and run your own pushes, deployments, and releases. Nobody approves them. Before each push, read the full diff for secrets, private local paths, and other-project client or tenant names. Push one change set at a time. Run `herdr-boss suite -- npm test` as a background command, then wait for it and read its exit code. The tool timeout is 600 seconds. The command takes the machine-wide `full-suite` lock. Never take the full-suite lock with a bare lock acquire for a suite. Push with `herdr-boss push <args>`. Use `herdr-boss push` for a push; it takes the lock when a pre-push hook exists. There is no load threshold. Send a deployment that spends money to the Owner through the Boss.
 - Record an Owner request typed into your pane as an Owner decision in `docs/orchestration/memory.md`.
 - A prompt that starts with `[owner]` is an Owner message from the dashboard. Reply with `herdr-boss say --reply-to <id> "<answer>"`. Record an Owner decision from it in `docs/orchestration/memory.md`.
 - Each `herdr-boss say` reply is an item in the Owner mailbox. Set `--action decide`, `--action approve`, or `--action answer` only when the Owner must act. Everything else is information; omit `--action`.

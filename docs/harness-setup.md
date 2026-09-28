@@ -30,8 +30,9 @@ WARNING: Agents cannot edit `~/.claude/settings.json`. The auto-mode classifier 
 |---|---|---|
 | `autoMode.environment` lines | `~/.claude/settings.json` | The Owner. |
 | `autoMode.allow`, with `"$defaults"` first | `~/.claude/settings.json` | The Owner. |
-| `--permission-mode auto` for workers | `kit/models.json` | Herdr Boss. `worker start` adds it. |
+| `--permission-mode auto` and `--disallowedTools AskUserQuestion` for workers | `kit/models.json` | Herdr Boss. `worker start` and handoff add them. |
 | The `SessionStart` hook | `.claude/settings.json` in each project | `herdr-boss kit install`. |
+| `permissions.deny` with `AskUserQuestion` | `.claude/settings.json` in each project | `herdr-boss kit install`. |
 
 The auto-mode classifier reads `autoMode` only from `~/.claude/settings.json`. A project settings file has no effect on `autoMode`.
 
@@ -42,6 +43,8 @@ The `allow` lines let an orchestrator push its own repository to its own `origin
 Do not add a `permissions.allow` rule for `git push`. A hard allow rule skips the classifier, and it also matches a force-push. The prose `allow` rules let the classifier refuse a force-push and a push to another remote.
 
 `--permission-mode auto` starts a worker with the classifier and the Owner's `autoMode` rules. Without it, a worker runs in the default mode and stops on a permission dialog.
+
+Do not use `AskUserQuestion` in a Claude orchestrator or worker. `worker start` and handoff pass `--disallowedTools AskUserQuestion` to Claude. `kit install` adds `AskUserQuestion` to `permissions.deny` in the project settings file. Keep every existing setting and deny entry.
 
 The `SessionStart` hook prints the kit file and the project memory at each session start. `kit install` writes it.
 
@@ -62,6 +65,8 @@ To apply the Claude lines:
 | A wrong `**Herdr Boss projects**` line | The classifier trusts a folder that is not a project. |
 
 ## Codex
+
+Use `herdr-boss browser` commands to access the project browser from a Codex worker. Herdr Boss launches Chromium outside the Codex sandbox. The worker warning ignores these commands and the phrase `the project browser`. The warning still tells you to choose another worker kind when the brief asks for Playwright, Puppeteer, gallery work, a screenshot tool, or another Chromium launch.
 
 | Setting | File | Applied by |
 |---|---|---|

@@ -561,7 +561,9 @@ test('a claude successor gets no shell environment settings', (t) => {
   const f = codexEnvFixture(t);
   const result = JSON.parse(runHandoffCli(f.root, ['handoff', 'prepare', 'ws:p1', '--to', 'claude', '--mode', 'fresh'], f.env));
   assert.equal(result.status, 'prepared');
-  assert.equal(successorStartArgs(f).some((arg) => arg.includes('shell_environment_policy')), false);
+  const args = successorStartArgs(f);
+  assert.equal(args.some((arg) => arg.includes('shell_environment_policy')), false);
+  assert.equal(args[args.indexOf('--disallowedTools') + 1], 'AskUserQuestion');
 });
 
 test('a codex successor leaves out the shell environment settings with unknown values', (t) => {

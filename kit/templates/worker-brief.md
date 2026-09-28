@@ -26,7 +26,9 @@ List processes only with `pgrep -l NAME` or `ps -o pid,ppid,etime,comm`.
 
 Never use `ps e`, `ps -E`, `ps eww`, `ps aux`, `ps -ef`, or `pgrep -fl`. They print command lines and environments, and those can hold another session's token.
 
-Run a full test suite with `herdr-boss suite -- <command>`, and push with `herdr-boss push <args>`. Never take the full-suite lock with a bare lock acquire for a suite.
+Run each `herdr-boss browser` command and each `ps` or `pgrep` command alone. Do not join it to other commands with `&&`, `;`, or a pipe.
+
+Run `herdr-boss suite -- npm test` as a background command, then wait for it and read its exit code. The tool timeout is 600 seconds. The command takes the machine-wide `full-suite` lock. Never take the full-suite lock with a bare lock acquire for a suite. Push with `herdr-boss push <args>`.
 
 ## Edit scope
 

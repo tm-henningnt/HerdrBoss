@@ -1103,6 +1103,15 @@ test('worker start creates the shared Workers tab once, then splits from its new
   assert.ok(!fake.calls.some((args) => args[1] === 'close'));
 });
 
+test('Claude worker start passes the selection dialog denial to Herdr', () => {
+  const project = sharedTabProject();
+  const fake = sharedTabHerdr();
+  sharedTabStart(project, fake)('claude-no-dialog');
+  const start = fake.calls.find((args) => args[0] === 'agent' && args[1] === 'start');
+  const launchArgs = start.slice(start.indexOf('--') + 1);
+  assert.equal(launchArgs[launchArgs.indexOf('--disallowedTools') + 1], 'AskUserQuestion');
+});
+
 test('a failed worker start closes only what it created in the Workers tab', () => {
   const p = sharedTabProject();
   const start = (fake, name) => assert.throws(() => startWorker(name, { kind: 'claude', task: 'x', allow: ['src/'] }, {
@@ -2613,16 +2622,24 @@ test('the worker brief template uses absolute worker paths and the kit names no 
   assert.ok(template.indexOf('## Process safety') > 0 && template.indexOf('## Process safety') < template.indexOf('## Edit scope'));
   assert.match(processSafety, /List processes only with `pgrep -l NAME` or `ps -o pid,ppid,etime,comm`\./);
   assert.match(processSafety, /Never use `ps e`, `ps -E`, `ps eww`, `ps aux`, `ps -ef`, or `pgrep -fl`\./);
-  assert.match(processSafety, /Run a full test suite with `herdr-boss suite -- <command>`, and push with `herdr-boss push <args>`\. Never take the full-suite lock with a bare lock acquire for a suite\./);
+  assert.match(processSafety, /Run each `herdr-boss browser` command and each `ps` or `pgrep` command alone\. Do not join it to other commands with `&&`, `;`, or a pipe\./);
+  assert.match(processSafety, /Run `herdr-boss suite -- npm test` as a background command, then wait for it and read its exit code\. The tool timeout is 600 seconds\./);
   assert.match(gates, /Run only the scoped acceptance commands named in this brief or task contract\./);
   const grep = spawnSync('grep', ['-rn', 'load average is under 30', 'kit', 'docs'], { encoding: 'utf8' });
   assert.equal(grep.stdout, '');
-  const lockRule = /Run a full test suite with `herdr-boss suite -- <command>`, and push with `herdr-boss push <args>`\. Never take the full-suite lock with a bare lock acquire for a suite\./;
-  for (const file of ['kit/templates/project-kit.md', 'kit/skills/herdr-orchestrator/SKILL.md', 'kit/templates/worker-brief.md', 'docs/user-guide.md']) {
+  const backgroundSuiteRule = /Run `herdr-boss suite -- npm test` as a background command, then wait for it and read its exit code\. The tool timeout is 600 seconds\./;
+  const fullSuiteLockRule = /Never take the full-suite lock with a bare lock acquire for a suite\./;
+  for (const file of ['kit/templates/project-kit.md', 'kit/skills/herdr-orchestrator/SKILL.md', 'kit/templates/worker-brief.md']) {
     const text = fs.readFileSync(path.resolve(file), 'utf8');
-    assert.match(text, lockRule, file);
+    assert.match(text, backgroundSuiteRule, file);
+    assert.match(text, fullSuiteLockRule, file);
     assert.doesNotMatch(text, /herdr-boss lock acquire full-suite/, file);
   }
+  const projectKit = fs.readFileSync(path.resolve('kit/templates/project-kit.md'), 'utf8');
+  assert.match(projectKit, /Run each `herdr-boss browser` command and each `ps` or `pgrep` command alone\. Do not join it to other commands with `&&`, `;`, or a pipe\./);
+  const userGuide = fs.readFileSync(path.resolve('docs/user-guide.md'), 'utf8');
+  assert.match(userGuide, fullSuiteLockRule);
+  assert.match(userGuide, /Run a full test suite with `herdr-boss suite -- <command>`/);
   const cli = fs.readFileSync(path.resolve('docs/cli.md'), 'utf8');
   assert.match(cli, /herdr-boss suite -- npm test/);
   assert.match(cli, /herdr-boss push/);
@@ -2687,4 +2704,17 @@ test('worker start warns when a Codex brief mentions browser work', async () => 
   assert.match(codexBrowserWarning('codex', 'Capture a screenshot with Playwright.'), /Codex cannot launch Chromium/);
   assert.equal(codexBrowserWarning('claude', 'Capture a screenshot with Playwright.'), null);
   assert.equal(codexBrowserWarning('codex', 'Refactor the lock module.'), null);
+});
+
+test('Codex browser warning allows project browser commands and catches other browser tools', async () => {
+  const { codexBrowserWarning } = await import('../src/kit/workers.js');
+  assert.equal(codexBrowserWarning('codex', 'Use the project browser.'), null);
+  assert.equal(codexBrowserWarning('codex', '`herdr-boss browser screenshot demo --tab 1`'), null);
+  assert.equal(codexBrowserWarning('codex', 'Use the project browser with `herdr-boss browser tab new demo http://127.0.0.1:4477` and `herdr-boss browser screenshot demo --tab 1`.'), null);
+  assert.match(codexBrowserWarning('codex', 'Use the project browser and run Playwright.'), /Codex cannot launch Chromium/);
+  assert.match(codexBrowserWarning('codex', 'Use Puppeteer.'), /Codex cannot launch Chromium/);
+  assert.match(codexBrowserWarning('codex', 'Use playwright-cli.'), /Codex cannot launch Chromium/);
+  assert.match(codexBrowserWarning('codex', 'Update the gallery.'), /Codex cannot launch Chromium/);
+  assert.match(codexBrowserWarning('codex', 'Use the screenshot tool.'), /Codex cannot launch Chromium/);
+  assert.match(codexBrowserWarning('codex', 'Launch Chromium outside `herdr-boss browser`.'), /Codex cannot launch Chromium/);
 });

@@ -759,10 +759,16 @@ function releaseStartLeases(leases, name, config, leaseContext) {
 }
 
 // Codex runs in the seatbelt sandbox, which refuses the Chromium Mach port (MachPortRendezvousServer, error 1100).
-// Route browser work to claude, opencode, or pi. This is a warning, not a refusal.
+// Herdr-managed project browser commands run outside the sandbox. Warn for other browser tools and launches.
 const BROWSER_WORDS = /\b(playwright|chromium|chrome|browser|screenshots?|galler(y|ies)|perf replays?|puppeteer|cdp)\b/i;
 export function codexBrowserWarning(kind, task) {
-  if (kind !== 'codex' || !BROWSER_WORDS.test(String(task || ''))) return null;
+  if (kind !== 'codex') return null;
+  const text = String(task || '');
+  const withoutProjectCommands = text
+    .replace(/`[^`\n]*`/g, (code) => /^`\s*(?:\$\s*)?herdr-boss\s+browser\b/i.test(code) ? ' '.repeat(code.length) : code)
+    .replace(/^\s*(?:[-*]\s+)?(?:\$\s*)?herdr-boss\s+browser\b[^\n]*$/gim, (line) => ' '.repeat(line.length))
+    .replace(/\bthe\s+project\s+browser\b/gi, (phrase) => ' '.repeat(phrase.length));
+  if (!BROWSER_WORDS.test(withoutProjectCommands)) return null;
   return 'Warning: this brief mentions browser work. Codex cannot launch Chromium in its sandbox. Use --kind claude, opencode, or pi for tasks that launch a browser.';
 }
 

@@ -292,11 +292,19 @@ export function settingsWithHook(text) {
     try { settings = JSON.parse(text); } catch (error) { throw new Error(`.claude/settings.json is not valid JSON: ${error.message}`); }
     if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new Error('.claude/settings.json must contain a JSON object.');
   }
+  settings.permissions ??= {};
+  if (typeof settings.permissions !== 'object' || Array.isArray(settings.permissions)) throw new Error('.claude/settings.json permissions must be an object.');
+  settings.permissions.deny ??= [];
+  if (!Array.isArray(settings.permissions.deny)) throw new Error('.claude/settings.json permissions.deny must be an array.');
+  const addedDialogDenial = !settings.permissions.deny.includes('AskUserQuestion');
+  if (addedDialogDenial) settings.permissions.deny.push('AskUserQuestion');
   const ours = (hook) => typeof hook?.command === 'string' && hook.command.includes('cat docs/orchestration/herdr-boss.md');
   settings.hooks ??= {};
   if (typeof settings.hooks !== 'object' || Array.isArray(settings.hooks)) throw new Error('.claude/settings.json hooks must be an object.');
   const entries = Array.isArray(settings.hooks.SessionStart) ? settings.hooks.SessionStart : [];
-  if (entries.some((entry) => (entry?.hooks || []).some((hook) => hook?.command === HOOK_COMMAND))) return text;
+  if (entries.some((entry) => (entry?.hooks || []).some((hook) => hook?.command === HOOK_COMMAND))) {
+    return addedDialogDenial ? `${JSON.stringify(settings, null, 2)}\n` : text;
+  }
   const kept = entries.map((entry) => (Array.isArray(entry?.hooks) ? { ...entry, hooks: entry.hooks.filter((hook) => !ours(hook)) } : entry))
     .filter((entry) => !Array.isArray(entry?.hooks) || entry.hooks.length);
   settings.hooks.SessionStart = [...kept, { hooks: [{ type: 'command', command: HOOK_COMMAND }] }];
