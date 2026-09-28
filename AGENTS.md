@@ -44,6 +44,7 @@ Decide implementation, product, and design details, naming, thresholds, test des
 - Write documentation in ASD-STE100 Simplified Technical English: one idea per sentence, active voice, the imperative for instructions, one term for one concept.
 - Keep the README short. Put commands in `docs/cli.md`, concepts in `docs/user-guide.md`, and page help in the dashboard help panel (`HELP` in `public/app.js`).
 - Update the docs and the page help in the same change as the behavior.
+- Make each setting and each resource that Herdr Boss manages visible and settable in the dashboard. Keep an item outside only for a recorded reason, for example a secret, the access token file, or a Claude setting that agents must not edit.
 
 ## Work source
 
