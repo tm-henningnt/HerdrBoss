@@ -116,6 +116,69 @@ function writeNewRecord(file, record) {
 
 function sleep(milliseconds) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds); }
 
+const MUTATION_OWNER_FILE = 'owner.json';
+const MUTATION_OWNERLESS_STALE_MS = 10_000;
+const MUTATION_MAX_AGE_MS = 60_000;
+
+function readMutationOwner(guard) {
+  try { return fs.readFileSync(path.join(guard, MUTATION_OWNER_FILE), 'utf8'); }
+  catch { return null; }
+}
+
+function mutationGuardSnapshot(guard) {
+  let stat;
+  try { stat = fs.statSync(guard); }
+  catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+
+  const ownerText = readMutationOwner(guard);
+  let ownerPid = null;
+  if (ownerText !== null) {
+    try {
+      const owner = JSON.parse(ownerText);
+      if (Number.isSafeInteger(owner?.pid) && owner.pid > 0) ownerPid = owner.pid;
+    } catch {}
+  }
+  const ageMs = Math.max(0, Date.now() - stat.mtimeMs);
+  const stale = ageMs > MUTATION_MAX_AGE_MS
+    || (ownerPid === null && ageMs > MUTATION_OWNERLESS_STALE_MS)
+    || (ownerPid !== null && !pidIsAlive(ownerPid));
+  return { stat, ownerText, ownerPid, ageMs, ageSeconds: Math.floor(ageMs / 1000), stale };
+}
+
+function sameMutationGuard(left, right) {
+  return left.stat.dev === right.stat.dev
+    && left.stat.ino === right.stat.ino
+    && left.stat.mtimeMs === right.stat.mtimeMs
+    && left.ownerText === right.ownerText;
+}
+
+function cleanupOwnedMutationGuard(guard, identity, ownerText = null) {
+  let current;
+  try { current = fs.statSync(guard); }
+  catch (error) { if (error.code === 'ENOENT') return; throw error; }
+  if (current.dev !== identity.dev || current.ino !== identity.ino) return;
+  if (ownerText !== null && readMutationOwner(guard) !== ownerText) return;
+
+  try { fs.unlinkSync(path.join(guard, MUTATION_OWNER_FILE)); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  try { fs.rmdirSync(guard); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+}
+
+function removeStaleMutationGuard(guard, observed, onStale) {
+  if (!observed?.stale) return false;
+  const current = mutationGuardSnapshot(guard);
+  if (!current?.stale || !sameMutationGuard(observed, current)) return false;
+
+  const stalePath = path.join(path.dirname(guard), `.mutation.stale-${crypto.randomUUID()}`);
+  try { fs.renameSync(guard, stalePath); }
+  catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+  fs.rmSync(stalePath, { recursive: true, force: true });
+  const pid = current.ownerPid ?? 'unknown';
+  onStale(`Removed a stale lock guard (PID ${pid}, age ${current.ageSeconds}s).`);
+  return true;
+}
+
 function lockNoticesDirectory(dataDir) {
   return privateDirectory(path.join(lockDirectory('', dataDir, 'machine'), 'notices'));
 }
@@ -162,21 +225,32 @@ export function removeLockTakeoverNotice(id, { dataDir = DATA_DIR } = {}) {
 export function withMutationLock(directory, operation, {
   waitMs = MUTATION_GUARD_WAIT_MS,
   busyMessage = 'A project lock operation is already in progress. Retry when it finishes.',
+  onStale = (message) => process.stderr.write(`${message}\n`),
 } = {}) {
   const guard = path.join(directory, '.mutation');
   const deadline = Date.now() + waitMs;
+  let ownerText;
+  let ownerStat;
   for (;;) {
     let created = false;
+    let createdStat = null;
     try {
       fs.mkdirSync(guard, { mode: 0o700 });
       created = true;
+      createdStat = fs.statSync(guard);
       fs.chmodSync(guard, 0o700);
+      ownerText = `${JSON.stringify({ pid: process.pid, at: new Date().toISOString() })}\n`;
+      fs.writeFileSync(path.join(guard, MUTATION_OWNER_FILE), ownerText, { mode: 0o600, flag: 'wx' });
+      ownerStat = fs.statSync(guard);
       break;
     } catch (error) {
       if (created) {
-        try { fs.rmdirSync(guard); } catch {}
+        try { cleanupOwnedMutationGuard(guard, createdStat); } catch {}
+        throw error;
       }
       if (error.code !== 'EEXIST') throw error;
+      const observed = mutationGuardSnapshot(guard);
+      if (removeStaleMutationGuard(guard, observed, onStale)) continue;
       if (Date.now() >= deadline) {
         const busy = new Error(busyMessage);
         busy.code = 'ELOCKBUSY';
@@ -186,7 +260,7 @@ export function withMutationLock(directory, operation, {
     }
   }
   try { return operation(); }
-  finally { fs.rmdirSync(guard); }
+  finally { cleanupOwnedMutationGuard(guard, ownerStat, ownerText); }
 }
 
 function lockContext(config, dataDir, scope = 'repository') {

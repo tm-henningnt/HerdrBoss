@@ -6,12 +6,26 @@ import { execFileSync, spawn } from 'node:child_process';
 import test from 'node:test';
 import { loadProjectConfig } from '../src/kit/config.js';
 import { runKitCommand } from '../src/kit/cli.js';
+import { withMutationLock } from '../src/kit/locks.js';
 
 function git(cwd, ...args) {
   return execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 }
 
 function shellQuote(value) { return `'${value.replaceAll("'", "'\\''")}'`; }
+
+function seedMutationGuard(directory, { pid = null, ageSeconds = 0 } = {}) {
+  const guard = path.join(directory, '.mutation');
+  fs.mkdirSync(guard, { recursive: true, mode: 0o700 });
+  if (pid !== null) {
+    fs.writeFileSync(path.join(guard, 'owner.json'), JSON.stringify({ pid, at: new Date().toISOString() }), { mode: 0o600 });
+  }
+  if (ageSeconds > 0) {
+    const old = new Date(Date.now() - ageSeconds * 1000);
+    fs.utimesSync(guard, old, old);
+  }
+  return guard;
+}
 
 function installFakeGit(t, f, hook) {
   const realGit = execFileSync('which', ['git'], { encoding: 'utf8' }).trim();
@@ -164,6 +178,54 @@ test('lock release waits briefly for a busy mutation guard', async (t) => {
   runKitCommand('lock', ['release', 'full-suite'], f.options());
   await done;
   assert.equal(fs.existsSync(f.lockFile), false);
+});
+
+for (const staleGuard of [
+  { name: 'dead PID', pid: 2147483647 },
+  { name: 'missing owner older than ten seconds', ageSeconds: 11 },
+  { name: 'live PID older than sixty seconds', pid: process.pid, ageSeconds: 61 },
+]) {
+  test(`lock acquire and release recover a mutation guard with ${staleGuard.name}`, (t) => {
+    const f = fixture(t, 'herdr-lock-stale-guard-');
+    const directory = path.join(f.dataDir, 'locks', 'machine');
+    seedMutationGuard(directory, staleGuard);
+
+    const acquired = runKitCommand('lock', ['acquire', 'full-suite'], f.options());
+    assert.equal(acquired.ownerPane, 'ws:orch');
+    assert.equal(fs.existsSync(path.join(directory, '.mutation')), false, 'acquire removes the stale guard');
+
+    seedMutationGuard(directory, staleGuard);
+    runKitCommand('lock', ['release', 'full-suite'], f.options());
+    assert.equal(fs.existsSync(f.lockFile), false, 'release removes the lock');
+    assert.equal(fs.existsSync(path.join(directory, '.mutation')), false, 'release removes the stale guard');
+  });
+}
+
+test('a recent mutation guard owned by a live PID stays busy', (t) => {
+  const f = fixture(t, 'herdr-lock-live-guard-');
+  const directory = path.join(f.dataDir, 'locks', 'machine');
+  const guard = seedMutationGuard(directory, { pid: process.pid });
+  assert.throws(() => withMutationLock(directory, () => 'changed', { waitMs: 20 }), (error) => {
+    assert.equal(error.code, 'ELOCKBUSY');
+    return true;
+  });
+  assert.equal(fs.existsSync(guard), true, 'the live guard remains in place');
+});
+
+test('withMutationLock reports stale guard removal through onStale', (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-lock-stale-callback-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  seedMutationGuard(directory, { pid: 2147483647 });
+  const notices = [];
+
+  const result = withMutationLock(directory, () => 'changed', {
+    waitMs: 20,
+    onStale: (message) => notices.push(message),
+  });
+
+  assert.equal(result, 'changed');
+  assert.equal(notices.length, 1);
+  assert.match(notices[0], /^Removed a stale lock guard \(PID 2147483647, age \d+s\)\.$/);
 });
 
 test('push lock records the push process and kind', (t) => {
