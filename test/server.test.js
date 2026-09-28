@@ -981,3 +981,24 @@ test('the Browsers page has a bookmark list, a start-page field, and phone-sized
   assert.match(guide, /Bookmarks and the start page/);
   assert.match(guide, /Bookmarks must not hold credentials/);
 });
+
+test('Analytics and Mailbox show the scan and store limits from the state', () => {
+  const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const guide = fs.readFileSync(new URL('../docs/user-guide.md', import.meta.url), 'utf8');
+  // The two read-only lines take the fixed limits from the state.
+  assert.match(app, /function denialLimitsLine\(s\)/);
+  assert.match(app, /function messageLimitsLine\(s\)/);
+  assert.match(app, /const l = s\?\.limits\?\.denials/);
+  assert.match(app, /const l = s\?\.limits\?\.messages/);
+  assert.match(app, /Scans every \$\{minutes\} min, reads at most \$\{megabytes\} MB for each scan, keeps \$\{l\.retainDays\} days, and marks a rise at \$\{l\.riseFactor\}× the 6-day mean and \$\{l\.riseMinEvents\} events\./);
+  assert.match(app, /Herdr Boss keeps messages for \$\{days\} days and accepts at most \$\{l\.sendLimitPerMinute\} Owner messages a minute\./);
+  // Analytics shows the denial line in the denials section, and Mailbox shows the message line in the folder pane footer.
+  assert.match(app, /denialsBlock\(s\)/);
+  assert.match(app, /const limits = denialLimitsLine\(s\)/);
+  assert.match(app, /<aside class="mail-folder-pane">\$\{folderNav\}\$\{messageLimitsLine\(s\)\}<\/aside>/);
+  // Help and the guide describe both lines.
+  assert.match(app, /A read-only line shows the limits/);
+  assert.match(app, /The folder pane shows the fixed limits/);
+  assert.match(guide, /A read-only line with the limits/);
+  assert.match(guide, /The folder pane shows a read-only line with the limits/);
+});

@@ -585,7 +585,7 @@ The Mailbox page at `/mailbox` is the inbox of the Owner. It lists replies from 
 
 ### Items
 
-Use the folder list on the left to open **Needs you**, **Updates**, **Sent**, or **Done**. Each folder shows its item count. The page keeps the selected folder in the address and in browser storage. When Needs you has open items, it is the default folder. When it has no items and you have selected another folder before, the page restores that folder. Otherwise, Needs you is the default folder.
+Use the folder list on the left to open **Needs you**, **Updates**, **Sent**, or **Done**. Each folder shows its item count. The folder pane shows a read-only line with the limits: the retention and the send limit. The page keeps the selected folder in the address and in browser storage. When Needs you has open items, it is the default folder. When it has no items and you have selected another folder before, the page restores that folder. Otherwise, Needs you is the default folder.
 
 - **Needs you** shows open items with action `answer`, `approve`, or `decide`, newest first. When this folder is empty, the page shows “Nothing needs you.” and a link to Updates.
 - **Updates** shows open items with action `read` or no action. Opening an item sets `readAt`. The phone mail icon shows the unread Updates count.
@@ -696,6 +696,7 @@ The Analytics page shows the section **Denials and permission prompts**:
 - A table of the last 7 days by cause and project, with a count for each day.
 - A total for each harness.
 - A trend arrow. It compares the last 24 hours with the mean of the 6 days before them.
+- A read-only line with the limits: the scan interval, the bytes for one scan, the days kept, and the rise rule.
 
 The last 24 hours are the count of today (UTC) and the part of yesterday inside the window. A cause rises when its last 24 hours are above 2 times its 6-day mean and above 10 events. Then the page and the Owner section of the bulletin show "Discuss this trend with the Boss." Herdr Boss sends no pane prompt and adds no project rule for a denial trend.
 

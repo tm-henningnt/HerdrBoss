@@ -406,3 +406,21 @@ test('while older logs are unread, the trend note waits', () => {
   assert.equal(waiting.causes[0].rising, true);
   assert.equal(denialSummary(records, NOW, { pendingBytes: 1000 }).note, DISCUSS_NOTE);
 });
+
+test('the state exposes the fixed scan and store limits', async () => {
+  const { loadConfig } = await import('../src/config.js');
+  const engine = new Engine(loadConfig(), {
+    push: false, act: false, herdrRunner: async () => '',
+    collectors: {
+      collectHerdr: async () => ({ workspaces: [], panes: [] }), collectQuotas: async () => null,
+      collectMachine: async () => null, collectProcesses: async () => new Map(), collectCwdProcesses: async () => [],
+      collectMissingWorktreeProcesses: async () => [], collectWorktreeCounts: async () => ({}),
+      runDenialScan: async () => { throw new Error('no scan in this test'); },
+    },
+  });
+  const state = await engine.tick();
+  assert.deepEqual(state.limits, {
+    denials: { intervalMs: 15 * 60 * 1000, budgetBytes: 20 * 1024 * 1024, retainDays: 30, riseFactor: 2, riseMinEvents: 10 },
+    messages: { retentionMs: 30 * 86400 * 1000, sendLimitPerMinute: 10 },
+  });
+});
