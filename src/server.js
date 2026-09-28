@@ -19,6 +19,7 @@ import { listHandoffs } from './handoff.js';
 import { roamgateAvailable, roamgateUrl } from './roamgate.js';
 import { createAccessControl, loginPage } from './access.js';
 import { appendMessage, closeMailboxItem, dismissMailboxItems, groupMessagesByConversation, listThread, mailboxCounts, mailboxFolders, mailboxView, markMailboxRead, messagesWithReplyState, readMessages, validThread, validateOwnerSend } from './messages.js';
+import { openMessageStore } from './message-store.js';
 
 const PUBLIC = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const DOCS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'docs');
@@ -102,6 +103,7 @@ export function serve(cfg, { readOnlyPreview = false, createEngine = (config, op
     privateDirectory: PRIVATE_ACCESS_DIR,
   });
   const engine = readOnlyPreview ? createEngine(cfg, { push: false, act: false }) : createEngine(cfg);
+  const messageStore = openMessageStore({ dir: DATA_DIR });
   const clients = new Set();
   let closed = false;
   let timer;
@@ -113,6 +115,11 @@ export function serve(cfg, { readOnlyPreview = false, createEngine = (config, op
     for (const res of clients) res.write(msg);
   };
   engine.on('state', (s) => broadcast('state', s));
+  engine.on('message', (event) => broadcast('message', event));
+  const stopMessageWatch = messageStore.onChange((event) => {
+    if (typeof engine.observeMessageChange === 'function') engine.observeMessageChange(event);
+    else broadcast('message', event);
+  });
 
   // The unread count must follow a read or an answer at once, not at the next tick.
   const refreshMailbox = (records = readMessages(), push = false) => {
@@ -165,6 +172,72 @@ export function serve(cfg, { readOnlyPreview = false, createEngine = (config, op
       if (p === '/api/state') {
         if (engine.state) refreshMailbox();
         return send(res, 200, engine.state || {});
+      }
+      if (p === '/api/chats' && req.method === 'GET') {
+        const projects = engine.state?.control?.projects || {};
+        const writable = new Map([['boss', { title: 'Boss' }]]);
+        for (const [thread, project] of Object.entries(projects)) {
+          if (project?.orch?.pane) writable.set(thread, { title: String(project.project || project.title || thread) });
+        }
+        const stored = new Map(messageStore.chats().map((chat) => [chat.thread, chat]));
+        const chats = [...writable].map(([thread, { title }]) => {
+          const chat = stored.get(thread);
+          const record = chat?.last;
+          return {
+            thread,
+            title,
+            last: record ? {
+              id: record.id,
+              at: record.at,
+              from: record.from,
+              text: String(record.text ?? '').slice(0, 120),
+              status: record.status ?? null,
+            } : null,
+            unread: chat?.unreadForOwner ?? 0,
+          };
+        }).sort((left, right) => {
+          if (!left.last) return right.last ? 1 : left.thread.localeCompare(right.thread);
+          if (!right.last) return -1;
+          return Date.parse(right.last.at) - Date.parse(left.last.at) || left.thread.localeCompare(right.thread);
+        });
+        return send(res, 200, chats);
+      }
+      const chatRead = /^\/api\/chats\/([^/]+)\/read$/.exec(p);
+      if (chatRead && req.method === 'POST') {
+        const thread = chatRead[1];
+        if (!validThread(thread)) return send(res, 400, { error: 'Choose a thread: boss or a project slug.' });
+        const projects = engine.state?.control?.projects || {};
+        if (thread !== 'boss' && !projects[thread]?.orch?.pane) return send(res, 404, { error: `No open project uses the thread ${thread}.` });
+        const now = Date.now();
+        const updated = messageStore.mutate((records) => {
+          let count = 0;
+          for (const record of records) {
+            if (record.thread === thread && record.to === 'owner' && !record.readAt) {
+              record.readAt = new Date(now).toISOString();
+              count += 1;
+            }
+          }
+          return { records, result: count };
+        }, { now });
+        return send(res, 200, { ok: true, updated });
+      }
+      const chatPath = /^\/api\/chats\/([^/]+)$/.exec(p);
+      if (chatPath && req.method === 'GET') {
+        const thread = chatPath[1];
+        if (!validThread(thread)) return send(res, 400, { error: 'Choose a thread: boss or a project slug.' });
+        const projects = engine.state?.control?.projects || {};
+        if (thread !== 'boss' && !projects[thread]?.orch?.pane) return send(res, 404, { error: `No open project uses the thread ${thread}.` });
+        const limitText = url.searchParams.get('limit');
+        const limit = limitText === null ? 50 : Number(limitText);
+        if ((limitText !== null && !/^\d+$/.test(limitText)) || !Number.isInteger(limit) || limit < 1 || limit > 100) {
+          return send(res, 400, { error: 'The message limit must be an integer from 1 to 100.' });
+        }
+        const before = url.searchParams.get('before');
+        if (before === '') return send(res, 400, { error: 'before must be a message ID.' });
+        const page = messageStore.thread(thread, { before, limit: limit + 1 });
+        const more = page.length > limit;
+        const messages = messagesWithReplyState(more ? page.slice(1) : page, messageStore.all());
+        return send(res, 200, { thread, messages, more });
       }
       if (p === '/api/leases/release' && req.method === 'POST') {
         const body = await jsonBody(req);
@@ -508,6 +581,7 @@ export function serve(cfg, { readOnlyPreview = false, createEngine = (config, op
     clearTimeout(timer);
     clearTimeout(debounce);
     projectsWatcher.close();
+    stopMessageWatch();
   });
   const loop = async () => {
     try {
@@ -524,6 +598,7 @@ export function serve(cfg, { readOnlyPreview = false, createEngine = (config, op
       await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }
     if (tickPromise) await tickPromise.catch(() => {});
+    stopMessageWatch();
   };
   return { server, engine, close };
 }
