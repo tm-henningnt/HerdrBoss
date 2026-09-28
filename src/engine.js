@@ -13,9 +13,9 @@ import { quotaUsageToday, recordQuotaSnapshot } from './usage.js';
 import { listBrowserSessions, cdpResponds, browserProcessCheck } from './browser-pool.js';
 import { readLeases, reclaimLeases, publicLease, tcpListening, leasePools, migrateProjectBrowserLeases } from './leases.js';
 import { codeSignCloneDir, sweepCodeSignClones } from './clone-sweep.js';
-import { runDenialScan, readDenials, denialSummary, DENIAL_SCAN_INTERVAL_MS } from './denials.js';
+import { runDenialScan, readDenials, denialSummary, DENIAL_SCAN_INTERVAL_MS, SCAN_BUDGET_BYTES, RETAIN_DAYS, RISE_FACTOR, RISE_MIN_EVENTS } from './denials.js';
 import { listHandoffs, saveHandoffs, supersedeHandoffs, expireHandoff, expireMissingHandoffs, handoffNotices } from './handoff.js';
-import { deliverQueued, mailboxCounts, readMessages } from './messages.js';
+import { deliverQueued, mailboxCounts, readMessages, RETENTION_MS, SEND_LIMIT_PER_MINUTE } from './messages.js';
 import { readKitNotice, pendingKitAlert, isKitAlert, kitNoticeTargets } from './kit-notice.js';
 import { inspectWorkerTransitions, inspectWorkerReports, applyWorkerFailureStatuses, resolveFreeUsageRun, activeFreeModelExhaustions, extendFreeModelExhaustion, activeFreeLaneExhaustions, extendFreeLaneExhaustion, freeUsageLaneRetry } from './worker-failures.js';
 import { readLockTakeoverNotices, readMachineLocks, removeLockTakeoverNotice } from './kit/locks.js';
@@ -295,6 +295,20 @@ export class Engine extends EventEmitter {
           criticalPercent: this.cfg.quota?.criticalPercent ?? 98,
         },
         serviceSettings: serviceSettingsView(this.cfg),
+        // The fixed scan and store limits. The Analytics and Mailbox pages show them read-only.
+        limits: {
+          denials: {
+            intervalMs: DENIAL_SCAN_INTERVAL_MS,
+            budgetBytes: SCAN_BUDGET_BYTES,
+            retainDays: RETAIN_DAYS,
+            riseFactor: RISE_FACTOR,
+            riseMinEvents: RISE_MIN_EVENTS,
+          },
+          messages: {
+            retentionMs: RETENTION_MS,
+            sendLimitPerMinute: SEND_LIMIT_PER_MINUTE,
+          },
+        },
         quotasCached: this.quotasCached,
         machine,
         worktreeCounts: this.worktreeCounts,

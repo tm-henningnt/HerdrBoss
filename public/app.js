@@ -1157,7 +1157,7 @@ function analyticsView(s) {
     usageBlock(),
     providerUsageBlock(),
     recentUsageBlock(),
-    denialsBlock(),
+    denialsBlock(s),
   ].join('');
 }
 
@@ -1443,6 +1443,14 @@ function openMailboxDeepLink() {
   openMailboxConversation(thread, conversation, item?.id);
 }
 
+// The fixed store limits, from the state. The line is read-only.
+function messageLimitsLine(s) {
+  const l = s?.limits?.messages;
+  if (!l) return '';
+  const days = Math.round(l.retentionMs / 86400000);
+  return `<p class="mail-folder-limits">Herdr Boss keeps messages for ${days} days and accepts at most ${l.sendLimitPerMinute} Owner messages a minute.</p>`;
+}
+
 function mailboxView(s) {
   if (!mailbox.loaded && !mailbox.loading) loadMailbox();
   const folder = mailboxFolderFromLocation();
@@ -1471,7 +1479,7 @@ function mailboxView(s) {
   return [
     `<header class="page-intro"><div><h1>Mailbox</h1><p>Read and reply to messages from the Boss and project orchestrators.</p></div><button type="button" data-mail-compose-open${mailbox.busy ? ' disabled' : ''}>New message</button></header>`,
     `<p class="mail-notice" role="status"${mailbox.error || mailbox.notice ? '' : ' hidden'}>${esc(mailbox.error || mailbox.notice)}</p>`,
-    `<div class="mailbox-layout${selectedConversation || mailbox.composing ? ' conversation-open' : ''}"><aside class="mail-folder-pane">${folderNav}</aside><section class="mail-list-pane" aria-label="${esc(MAIL_FOLDER_LABEL[folder])}"><div class="mail-list-head"><h2>${esc(MAIL_FOLDER_LABEL[folder])}<span class="sub">${counts[folder] || 0}</span></h2></div>${folder === 'needs-you' ? bulk : ''}${list}</section><section class="mail-conversation-pane">${conversationPanel}</section></div>`,
+    `<div class="mailbox-layout${selectedConversation || mailbox.composing ? ' conversation-open' : ''}"><aside class="mail-folder-pane">${folderNav}${messageLimitsLine(s)}</aside><section class="mail-list-pane" aria-label="${esc(MAIL_FOLDER_LABEL[folder])}"><div class="mail-list-head"><h2>${esc(MAIL_FOLDER_LABEL[folder])}<span class="sub">${counts[folder] || 0}</span></h2></div>${folder === 'needs-you' ? bulk : ''}${list}</section><section class="mail-conversation-pane">${conversationPanel}</section></div>`,
   ].join('');
 }
 
@@ -2108,17 +2116,27 @@ function providerUsageBlock() {
 const HARNESS_NAMES = { claude: 'Claude', codex: 'Codex', opencode: 'OpenCode', pi: 'Pi' };
 const TREND_ARROW = { up: ['↑', 'rising'], down: ['↓', 'falling'], flat: ['→', 'steady'] };
 
+// The fixed scan limits, from the state. The line is read-only.
+function denialLimitsLine(s) {
+  const l = s?.limits?.denials;
+  if (!l) return '';
+  const minutes = Math.round(l.intervalMs / 60000);
+  const megabytes = Math.round(l.budgetBytes / 1024 ** 2);
+  return `<p class="denial-limits">Scans every ${minutes} min, reads at most ${megabytes} MB for each scan, keeps ${l.retainDays} days, and marks a rise at ${l.riseFactor}× the 6-day mean and ${l.riseMinEvents} events.</p>`;
+}
+
 // Counts only: the scan keeps no message text. A rising cause asks the Owner to talk with the Boss; it sends no pane prompt.
-function denialsBlock() {
+function denialsBlock(s) {
   const d = denials;
   const head = '<div class="section-head"><h2>Denials and permission prompts</h2><span>Last 7 days, counts only</span></div>';
-  if (!d?.rows?.length) return `<section id="denials">${head}<div class="calm-state">No denials or permission prompts are recorded yet. Herdr Boss reads the harness logs every 15 minutes.</div></section>`;
+  const limits = denialLimitsLine(s);
+  if (!d?.rows?.length) return `<section id="denials">${head}${limits}<div class="calm-state">No denials or permission prompts are recorded yet. Herdr Boss reads the harness logs every 15 minutes.</div></section>`;
   const totals = Object.entries(d.harnessTotals || {}).sort((a, b) => b[1] - a[1]);
   const arrow = (x) => { const [sign, word] = TREND_ARROW[x.trend] || TREND_ARROW.flat; return `<span class="denial-trend ${esc(x.trend)}" title="${esc(`${word}: ${x.recent} in 24 hours, 6-day mean ${x.mean}`)}">${sign}<span class="visually-hidden"> ${word}</span></span>`; };
   const dayHead = d.days.map((day) => `<th class="mono">${esc(day.slice(5))}</th>`).join('');
   const waiting = d.catchingUp ? `<div class="calm-state">Herdr Boss still reads older logs: ${Math.ceil(d.pendingBytes / 1024 ** 2).toLocaleString()} MB left. The counts of older days are not complete, so the trend note waits.</div>` : '';
   const note = d.rising?.length ? `<div class="denial-note" role="status"><strong>${esc(d.note)}</strong><span>${d.rising.map((c) => `${esc(c.cause)}: ${c.recent} in 24 hours, 6-day mean ${c.mean}`).join(' · ')}</span></div>` : '';
-  return `<section id="denials">${head}${waiting}${note}<div class="usage-metrics">${totals.map(([h, n]) => `<div><strong>${n.toLocaleString()}</strong><span>${esc(HARNESS_NAMES[h] || h)}</span></div>`).join('')}</div>`
+  return `<section id="denials">${head}${limits}${waiting}${note}<div class="usage-metrics">${totals.map(([h, n]) => `<div><strong>${n.toLocaleString()}</strong><span>${esc(HARNESS_NAMES[h] || h)}</span></div>`).join('')}</div>`
     + `<div class="fleet-table-wrap"><table class="fleet-table denial-table"><thead><tr><th>Cause</th><th>Project</th><th>Harness</th>${dayHead}<th>Total</th><th>Trend</th></tr></thead><tbody>`
     + d.rows.map((r) => `<tr><td data-label="Cause"><strong>${esc(r.cause)}</strong></td><td data-label="Project">${esc(state.control?.projects?.[r.project]?.label || r.project)}</td><td data-label="Harness">${esc(HARNESS_NAMES[r.harness] || r.harness)}</td>${r.counts.map((n, i) => `<td class="mono" data-label="${esc(d.days[i].slice(5))}">${n || '·'}</td>`).join('')}<td class="mono" data-label="Total">${r.total.toLocaleString()}</td><td data-label="Trend">${arrow(r)}</td></tr>`).join('')
     + '</tbody></table></div></section>';
@@ -2564,7 +2582,7 @@ const HELP = {
     <h3>Actions</h3><p><b>Answer</b>: type an answer and select <b>Send</b>. <b>Approve</b>: select <b>Approve</b> or <b>Decline</b>. A note is optional. <b>Decide</b>: select a choice, or type an answer and select <b>Send</b>. Choice buttons appear when the message has a Markdown list under a <b>Choices</b> heading. Each answer uses the same delivery limit and safety checks as a new message. An answered item moves to <b>Done</b>.</p>
     <h3>Compose</h3><p>Select <b>New message</b> to write to the Boss or a project with an <code>orch</code> pane. The page asks you to confirm before it sends. The new conversation opens in <b>Sent</b>.</p>
     <h3>Phone</h3><p>The top bar has a mail icon for unread Updates and an alert icon for open Needs-you items. Select an icon to open its folder. The desktop Mailbox badge shows unread Needs-you items.</p>
-    <p>Herdr Boss keeps messages for 30 days. A read-only preview shows messages and refuses a read or a send.</p>`],
+    <p>The folder pane shows the fixed limits: Herdr Boss keeps messages for 30 days and accepts at most 10 Owner messages a minute. A read-only preview shows messages and refuses a read or a send.</p>`],
   allocation: ['Allocation', `
     <p>The resource policy for all projects. Changes are a draft until you select <b>Apply policy</b>.</p>
     <h3>Capacity and handover</h3><p>The global limit of working agents, the lending of unused slots, the quota reserve, and automatic handover with its activation level.</p>
@@ -2631,7 +2649,8 @@ const HELP = {
     <p>Recorded worker runs per project and provider: duration, outcome, and measured tokens.</p>
     <p>Token totals include only runs that report tokens. Coverage shows how many runs have measurements. Quota percentages are global per provider; they are not project token counts.</p>
     <h3>Denials and permission prompts</h3><p>Herdr Boss reads the Claude, Codex, OpenCode, and Pi logs every 15 minutes. It counts classifier refusals, sandbox errors, escalation requests, permission prompts, prompts with no answer within 10 minutes, and Herdr guard blocks. It keeps only the day, harness, cause, project, and count. It keeps no message text.</p>
-    <p>The table shows the last 7 days by cause and project. The arrow compares the last 24 hours with the mean of the 6 days before. When a cause is above 2 times its mean and above 10 events, the page and the bulletin show <b>Discuss this trend with the Boss.</b> Herdr Boss sends no prompt to an orchestrator about it. While more than 1 MB of older logs is unread, the note waits, because the counts of older days are not complete.</p>`],
+    <p>The table shows the last 7 days by cause and project. The arrow compares the last 24 hours with the mean of the 6 days before. When a cause is above 2 times its mean and above 10 events, the page and the bulletin show <b>Discuss this trend with the Boss.</b> Herdr Boss sends no prompt to an orchestrator about it. While more than 1 MB of older logs is unread, the note waits, because the counts of older days are not complete.</p>
+    <p>A read-only line shows the limits: the scan interval, the bytes for one scan, the days kept, and the rise rule.</p>`],
   logs: ['Logs', `
     <p>The top line tells whether Herdr Boss sends notices to orchestrators.</p>
     <p>The guidance section shows the rules in force now, the same text as the bulletin that orchestrators read.</p>
