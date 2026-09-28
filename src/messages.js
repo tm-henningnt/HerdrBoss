@@ -171,8 +171,45 @@ export function mailboxCounts(records) {
   const items = records.filter(isMailboxItem);
   const needsYou = items.filter((item) => needsOwnerAction(item) && !item.closedAt);
   const needsYouUnread = needsYou.filter((item) => !item.readAt).length;
-  const updates = items.filter((item) => !needsOwnerAction(item) && item.closedBy !== 'boss').length;
+  const updates = items.filter((item) => !needsOwnerAction(item) && !item.closedAt && item.closedBy !== 'boss').length;
   return { needsYou: needsYou.length, needsYouUnread, updates, unread: needsYouUnread, open: needsYou.length };
+}
+
+const messageOrder = (left, right) => Date.parse(left.at) - Date.parse(right.at);
+
+// A thread is a project or Boss. replyTo links records into conversations within that thread.
+export function groupMessagesByConversation(records) {
+  const byThreadAndId = new Map(records.map((record) => [`${record.thread}\0${record.id}`, record]));
+  const rootById = new Map();
+  const findRoot = (record) => {
+    if (rootById.has(record.id)) return rootById.get(record.id);
+    const chain = [];
+    const seen = new Map();
+    let cursor = record;
+    let root = cursor.id;
+    while (cursor) {
+      if (seen.has(cursor.id)) {
+        root = chain.slice(seen.get(cursor.id)).sort(messageOrder)[0].id;
+        break;
+      }
+      seen.set(cursor.id, chain.length);
+      chain.push(cursor);
+      const parent = cursor.replyTo && byThreadAndId.get(`${cursor.thread}\0${cursor.replyTo}`);
+      if (!parent) { root = cursor.id; break; }
+      cursor = parent;
+    }
+    for (const item of chain) rootById.set(item.id, root);
+    return root;
+  };
+  const groups = new Map();
+  for (const record of records) {
+    const id = findRoot(record);
+    if (!groups.has(id)) groups.set(id, { id, thread: record.thread, records: [] });
+    groups.get(id).records.push(record);
+  }
+  return [...groups.values()]
+    .map((group) => ({ ...group, records: group.records.sort(messageOrder), latestAt: group.records[group.records.length - 1]?.at ?? null }))
+    .sort((left, right) => Date.parse(right.latestAt) - Date.parse(left.latestAt));
 }
 
 function replyTimes(records) {
@@ -208,6 +245,7 @@ export function mailboxView(records) {
   const answers = new Map();
   const owners = new Map();
   const replies = replyTimes(records);
+  const conversations = new Map(groupMessagesByConversation(records).flatMap((group) => group.records.map((record) => [record.id, group.id])));
   for (const record of records) {
     if (record.from === 'owner') owners.set(record.id, record);
     if (record.from === 'owner' && record.replyTo) answers.set(record.replyTo, record);
@@ -218,15 +256,26 @@ export function mailboxView(records) {
       ...record,
       action: mailboxAction(record),
       choices: parseChoices(record.text),
+      conversationId: conversations.get(record.id) ?? record.id,
       ownerMessage: owners.has(record.replyTo) ? deliveryView(owners.get(record.replyTo), replies) : null,
       answer: answer ? deliveryView(answer, replies) : null,
     };
   });
   return {
     needsYou: items.filter((item) => needsOwnerAction(item) && !item.closedAt),
-    updates: items.filter((item) => !needsOwnerAction(item) && item.closedBy !== 'boss'),
-    done: items.filter((item) => (needsOwnerAction(item) && item.closedAt) || item.closedBy === 'boss'),
+    updates: items.filter((item) => !needsOwnerAction(item) && !item.closedAt && item.closedBy !== 'boss'),
+    done: items.filter((item) => item.closedAt || item.closedBy === 'boss'),
   };
+}
+
+// Sent holds every Owner message. Done also lists messages that the Boss relayed.
+export function mailboxFolders(records) {
+  const view = mailboxView(records);
+  const conversations = new Map(groupMessagesByConversation(records).flatMap((group) => group.records.map((record) => [record.id, group.id])));
+  const sent = messagesWithReplyState(records.filter((record) => record.from === 'owner' && record.to !== 'owner').slice().reverse(), records)
+    .map((record) => ({ ...record, conversationId: conversations.get(record.id) ?? record.id }));
+  const relayed = sent.filter((record) => record.status === 'relayed');
+  return { ...view, sent, updatesUnread: view.updates.filter((record) => !record.readAt).length, done: [...view.done, ...relayed].sort((left, right) => messageOrder(right, left)) };
 }
 
 export function closeMailboxItem(id, { dir = DATA_DIR, now = Date.now() } = {}) {

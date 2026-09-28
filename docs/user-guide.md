@@ -504,17 +504,18 @@ Each new record is one appended line. A change to a record rewrites the file thr
 
 ## Mailbox
 
-The Mailbox page at `/mailbox` is the inbox of the Owner. It lists every reply from `herdr-boss say` and every report from `herdr-boss mail post`. The page works at phone width.
+The Mailbox page at `/mailbox` is the inbox of the Owner. It lists replies from `herdr-boss say`, reports from `herdr-boss mail post`, and messages that the Owner sent. The page works at phone width.
 
 ### Items
 
-Each item shows the sender, the project, the time, and the title of a report or first line of a reply. The sender is the Boss or a project orchestrator. An item needs you when its action is `answer`, `approve`, or `decide`, and it is not closed.
+Use the folder list on the left to open **Needs you**, **Updates**, **Sent**, or **Done**. Each folder shows its item count. The page keeps the selected folder in the address and in browser storage. When Needs you has open items, it is the default folder. When it has no items and you have selected another folder before, the page restores that folder. Otherwise, Needs you is the default folder.
 
-- **Needs you** shows open action items first, newest first. Each item has its answer controls.
-- **Updates** shows information items below Needs you. An item with action `read`, or with no action, is an update. Updates start collapsed. The count shows all updates. Updates do not have a badge. Opening an update sets `readAt`. It stays under Updates until the Boss closes it. You do not need to mark it read.
-- **Done** shows closed Needs-you items and items that the Boss closed, newest first. It shows the Owner answer, the dismissal time, or the Boss note.
+- **Needs you** shows open items with action `answer`, `approve`, or `decide`, newest first. When this folder is empty, the page shows “Nothing needs you.” and a link to Updates.
+- **Updates** shows open items with action `read` or no action. Opening an item sets `readAt`. The phone mail icon shows the unread Updates count.
+- **Sent** shows Owner messages. Each message shows its delivery state and the time of a reply, when one exists.
+- **Done** shows closed or dismissed items and messages that the Boss relayed.
 
-Select an item to open it. The item shows the full text. A report shows as Markdown, with the same renderer as the message panel. A reply shows as plain text. Opening an item sets `readAt` on the record.
+The page groups messages by their project or the Boss, and by the `replyTo` chain. Select an item to open its conversation. The conversation shows Owner and agent messages in time order. A report shows as Markdown, with the same renderer as the message panel. A reply shows as plain text. Opening an item sets `readAt` on the record. On a phone, the conversation fills the page. Select **Back** to return to the folder and message list.
 
 ### Answer an item
 
@@ -526,13 +527,15 @@ Select an item to open it. The item shows the full text. A report shows as Markd
 
 The page asks for a confirmation before each send or dismissal. The answer is an Owner message to the thread of the item, with `replyTo` set to the item ID. It uses the same delivery rules and rate limit as a message from the Organization page. The service then sets `closedAt` on the item, and the item moves to **Done**. A closed item refuses a second answer with HTTP 409.
 
+Select **New message** to start a thread with the Boss or a project that has an `orch` pane. Type a message and confirm the send. The page applies the same send limit and safety gates as other Owner messages. It opens the new thread in **Sent**. Use the reply box at the bottom of a conversation to reply to its last open agent message. The page asks you to confirm each reply.
+
 Select one or more checkboxes under **Needs you**, then select **Dismiss selected**. Select **Dismiss** on one item to dismiss it alone. Dismissal sets `closedAt`, `readAt`, and `dismissed: true`. It sends no message. You cannot dismiss an item that is already closed or does not need action.
 
 The choices are the list items under a Markdown heading with the text `Choices`, for example `## Choices`. The list ends at the first line that is not a list item. The page shows at most 10 choices.
 
 ### Unread count
 
-The header shows the number of open Needs-you items that the Owner has not opened. On a phone, the menu button also shows the number. The number comes from `needsYouUnread` in the `mailbox` field in `/api/state`. The field also has `needsYou` and `updates` counts. For one release, `unread` and `open` remain aliases for `needsYouUnread` and `needsYou`. The dashboard gets new values through state events.
+The desktop Mailbox badge shows open Needs-you items that the Owner has not opened. The number comes from `needsYouUnread` in the `mailbox` field in `/api/state`. On a phone, the top bar has an Updates icon with the unread Updates count and an alert icon with the open Needs-you count. Select either icon to open its folder. The dashboard gets the Needs-you count through state events and reads the Updates count from the mailbox API.
 
 ### API
 
@@ -540,6 +543,9 @@ The header shows the number of open Needs-you items that the Owner has not opene
 |---|---|
 | `GET /api/messages?thread=THREAD` | Return the thread. Owner messages include delivery fields and `repliedAt`. |
 | `GET /api/mailbox` | Return `{ needsYou, updates, done, mailbox }`. Each item has the record fields, `action`, `choices`, `ownerMessage`, and `answer`. |
+| `GET /api/mailbox?folder=FOLDER` | Return the folder lists, unread Updates count, delivery state, and mailbox counts. `FOLDER` is `needs-you`, `updates`, `sent`, or `done`. |
+| `GET /api/mailbox?thread=THREAD` | Return the conversations in a Boss or project thread. |
+| `GET /api/mailbox?thread=THREAD&conversation=ID` | Return the messages in one conversation, oldest first. |
 | `POST /api/messages/read` | Set `readAt` on the items in `{ "ids": [...] }`, 1 to 200 IDs. Add `"close": true` to close items with the action `read`. |
 | `POST /api/messages/dismiss` | Dismiss 1 to 200 open Needs-you items in `{ "ids": [...] }`. It sends no Owner message. |
 | `POST /api/messages` with `replyTo` | Send an answer to an open item of the same thread, and close the item. |
@@ -550,7 +556,7 @@ Both mailbox `POST` routes have the same gates as `POST /api/messages`: a loopba
 
 The dashboard adapts to a phone and to a home-screen web app.
 
-- On a screen up to 760 px wide, the header shows a menu button with the current page name. Select the button to open the page menu. The menu closes after you choose a page and when you press Escape.
+- On a screen up to 760 px wide, the header shows a menu button with the current page name, an Updates icon, and a Needs-you icon. Select an icon to open that Mailbox folder. Select the menu button to open the page menu. The menu closes after you choose a page and when you press Escape.
 - On a phone, the long sections of a project page start collapsed. Select a section title to open it. The dashboard remembers each open section for that project during the session. Overall progress and the current frontier stay open.
 - Project cards become compact. They show the name, mode, status line, and task bar.
 - Tables show stacked rows with a label for each value. The page does not scroll sideways at 393 px.
