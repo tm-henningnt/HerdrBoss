@@ -10,6 +10,7 @@ import http from 'node:http';
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-browser-pool-'));
 process.env.HERDR_BOSS_DIR = dataDir;
 const pool = await import('../src/browser-pool.js');
+const browserPreview = await import('../src/browser-preview.js');
 
 // A listener that accepts TCP connections and never answers, like a hung Chrome.
 async function hungServer() {
@@ -64,6 +65,86 @@ function register(project, port) {
   fs.writeFileSync(path.join(dataDir, 'browser-sessions.json'), JSON.stringify(sessions));
   return sessions[project];
 }
+
+function browserViewportFixture({ includeTab = true } = {}) {
+  const session = { port: 45678 };
+  register('viewport-fixture', session.port);
+  const calls = [];
+  return {
+    calls,
+    adapters: {
+      verifySession: async (project) => {
+        assert.equal(project, 'viewport-fixture');
+        return session;
+      },
+      listTargets: async (actualSession) => {
+        assert.strictEqual(actualSession, session);
+        return includeTab ? [{ id: 'tab-viewport', webSocketDebuggerUrl: `ws://localhost:${session.port}/devtools/page/1` }] : [];
+      },
+      command: async (...call) => { calls.push(call); return {}; },
+    },
+  };
+}
+
+test('browserViewport sends device metrics to the selected tab and clears them on reset', async () => {
+  const fixture = browserViewportFixture();
+  await browserPreview.browserViewport('viewport-fixture', 'tab-viewport', { width: 473, height: 291, scale: 1.5, mobile: true }, fixture.adapters);
+  await browserPreview.browserViewport('viewport-fixture', 'tab-viewport', { reset: true }, fixture.adapters);
+  assert.deepEqual(pool.listBrowserTabViewports('viewport-fixture', ['tab-viewport']), {});
+  assert.deepEqual(fixture.calls, [
+    ['ws://127.0.0.1:45678/devtools/page/1', 'Emulation.setDeviceMetricsOverride', { width: 473, height: 291, deviceScaleFactor: 1.5, mobile: true }],
+    ['ws://127.0.0.1:45678/devtools/page/1', 'Emulation.clearDeviceMetricsOverride', {}],
+  ]);
+});
+
+test('browserViewport rejects dimensions and scale outside the supported range', async () => {
+  const invalid = [
+    { width: 199, height: 291 }, { width: 3841, height: 291 },
+    { width: 473, height: 149 }, { width: 473, height: 2161 },
+    { width: 473, height: 291, scale: 0.49 }, { width: 473, height: 291, scale: 4.01 },
+  ];
+  for (const viewport of invalid) {
+    await assert.rejects(browserPreview.browserViewport('viewport-fixture', 'tab-viewport', viewport), /Viewport width must be 200–3840, height 150–2160, and scale 0.5–4/);
+  }
+});
+
+test('browserViewport checks that the selected tab is still open', async () => {
+  const fixture = browserViewportFixture({ includeTab: false });
+  await assert.rejects(browserPreview.browserViewport('viewport-fixture', 'tab-viewport', { width: 473, height: 291 }, fixture.adapters), /selected tab is no longer open/);
+  assert.deepEqual(fixture.calls, []);
+});
+
+test('browser tab viewport records persist and drops entries for tabs that have closed', () => {
+  register('viewport-persistence', 45679);
+  const viewport = { width: 473, height: 291, scale: 1, mobile: false };
+  pool.setBrowserTabViewport('viewport-persistence', 'tab-live', viewport);
+  pool.setBrowserTabViewport('viewport-persistence', 'tab-closed', viewport);
+  assert.deepEqual(pool.listBrowserTabViewports('viewport-persistence', ['tab-live']), { 'tab-live': viewport });
+  assert.deepEqual(pool.listBrowserSessions()['viewport-persistence'].viewports, { 'tab-live': viewport });
+});
+
+test('browserScreenshot reapplies stored device metrics in its new CDP session', async () => {
+  const project = 'viewport-reapply';
+  const session = register(project, 45680);
+  const tabId = 'tab-reapply';
+  const viewport = { width: 473, height: 291, scale: 1.5, mobile: true };
+  pool.setBrowserTabViewport(project, tabId, viewport);
+  const requests = [];
+  const screenshot = await browserPreview.browserScreenshot(project, tabId, {
+    verifySession: async () => session,
+    listTargets: async () => [{ id: tabId, webSocketDebuggerUrl: `ws://localhost:${session.port}/devtools/page/2` }],
+    commands: async (_endpoint, sessionRequests) => {
+      requests.push(...sessionRequests);
+      return sessionRequests.map((request) => request.method === 'Page.captureScreenshot' ? { data: Buffer.from('jpeg').toString('base64') } : {});
+    },
+  });
+  assert.deepEqual(requests.map((request) => request.method), [
+    'Emulation.setDeviceMetricsOverride', 'Page.captureScreenshot',
+  ]);
+  assert.deepEqual(requests[0].params, { width: 473, height: 291, deviceScaleFactor: 1.5, mobile: true });
+  assert.deepEqual(screenshot, Buffer.from('jpeg'));
+  pool.setBrowserTabViewport(project, tabId, null);
+});
 
 function chromeCmd(port, profile, extra = '') {
   return `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --remote-debugging-port=${port} --user-data-dir=${profile} --headless${extra}`;

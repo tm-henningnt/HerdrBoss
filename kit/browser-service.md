@@ -11,6 +11,8 @@ herdr-boss browser tabs <slug>
 herdr-boss browser tab new <slug> [url]
 herdr-boss browser tab close <slug> --tab <id>
 herdr-boss browser screenshot <slug> --tab <id> [--out DIR]
+herdr-boss browser viewport <slug> --tab <id> <width>x<height> [--scale N] [--mobile]
+herdr-boss browser viewport <slug> --tab <id> --reset
 herdr-boss browser navigate <slug> https://example.com --tab <id>
 herdr-boss browser click <slug> 42% 65% --tab <id>
 printf '%s' "$TEXT" | herdr-boss browser text <slug> --stdin --tab <id>
@@ -20,6 +22,8 @@ herdr-boss browser key <slug> Tab --tab <id>
 Give each browser worker its own tab. Open it with `browser tab new`, which prints the tab ID. The tab opens in its own background window. In a headless browser, a tab that shares a window with other tabs becomes hidden, and some web apps, such as the Qlik client, draw nothing in a hidden page. `browser tabs` shows `visibility` for each tab; check that it is `visible` before a capture. When a tab is hidden, open a new tab with `browser tab new` and use it instead. A driver that holds its own DevTools session can also call `Emulation.setFocusEmulationEnabled` with `enabled: true`; this lasts only while that session stays connected. When the worker is done, the orchestrator closes the tab with `browser tab close`. It refuses a tab that an agent is still attached to.
 
 The screenshot command prints a private JPEG path. It writes the file under `$TMPDIR` when that variable is set. Otherwise, it uses a safe temporary directory. Pass `--out DIR` to select another directory; this overrides `$TMPDIR`. Inspect the file with an image-capable tool. Percentages for `click` refer to the screenshot from its top-left corner. If several pages are open, specify a tab ID for each command. `text` reads standard input so its contents do not appear in the command line. Do not put passwords or token-bearing URLs in shell arguments, reports, or logs; have the Owner enter credentials through the dashboard.
+
+Set an exact page size with `browser viewport`. Width can be 200 to 3840 pixels. Height can be 150 to 2160 pixels. Scale can be 0.5 to 4 and defaults to 1. Add `--mobile` to enable the mobile viewport. The override stays active until you reset it, close the tab, or restart the browser. Run `browser screenshot` to capture the page at that size. The `browser size` command sets the window size for the next launch.
 
 A script that drives the browser over CDP must end when its task ends. A process that exits closes its DevTools connection; the project browser keeps running. Do not keep a script alive to "protect" the browser, and do not leave a script running in the background. Stop every script that a worker started before the worker reports.
 

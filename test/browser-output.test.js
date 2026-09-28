@@ -77,6 +77,20 @@ test('browser CLI refuses a project orchestrator changing another project browse
   assert.equal(result.stderr.trim(), 'The beta browser belongs to project beta. This pane is in workspace Alpha (workspace-alpha), which belongs to project alpha. Only a pane in the beta workspace or the Boss can change it.');
 });
 
+test('browser viewport refuses a project orchestrator changing another project browser', (t) => {
+  const fixture = browserCliFixture(t);
+  const result = fixture.run(['viewport', 'beta', '--tab', 'tab-1', '--reset']);
+  assert.equal(result.status, 1, result.stderr);
+  assert.equal(result.stderr.trim(), 'The beta browser belongs to project beta. This pane is in workspace Alpha (workspace-alpha), which belongs to project alpha. Only a pane in the beta workspace or the Boss can change it.');
+});
+
+test('CLI usage lists both browser viewport forms', () => {
+  const result = spawnSync(process.execPath, [CLI], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /browser viewport SLUG --tab ID WIDTHxHEIGHT \[--scale N\] \[--mobile\]/);
+  assert.match(result.stdout, /browser viewport SLUG --tab ID --reset/);
+});
+
 test('browser CLI allows the caller project and the Boss to change project browsers', (t) => {
   const fixture = browserCliFixture(t);
   const own = fixture.run(['size', 'alpha', '1200', '700']);

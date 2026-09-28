@@ -1,4 +1,4 @@
-import { browserStatus, listBrowserSessions } from './browser-pool.js';
+import { browserStatus, listBrowserSessions, listBrowserTabViewports, setBrowserTabViewport } from './browser-pool.js';
 
 async function verifiedSession(project) {
   const session = listBrowserSessions()[project];
@@ -45,12 +45,13 @@ async function attachedTargets(session) {
 }
 
 // A page in a shared headless window becomes hidden when another tab opens there, and some web apps then stop drawing.
-async function pageVisibility(entry, port) {
+async function pageVisibility(entry, port, viewport = null) {
   try {
     const endpoint = new URL(entry.webSocketDebuggerUrl);
     if (endpoint.protocol !== 'ws:' || Number(endpoint.port) !== port) return null;
     endpoint.hostname = '127.0.0.1';
-    const result = await command(endpoint.href, 'Runtime.evaluate', { expression: 'document.visibilityState', returnByValue: true }, 2000);
+    const requests = [...viewportRequests(viewport), { method: 'Runtime.evaluate', params: { expression: 'document.visibilityState', returnByValue: true } }];
+    const result = (await commands(endpoint.href, requests, 2000)).at(-1);
     return typeof result?.result?.value === 'string' ? result.result.value : null;
   } catch { return null; }
 }
@@ -58,9 +59,10 @@ async function pageVisibility(entry, port) {
 export async function listBrowserTabs(project) {
   const session = await verifiedSession(project);
   const pages = await targets(session);
+  const viewports = listBrowserTabViewports(project, pages.map((page) => page.id));
   let attached = null;
   try { attached = await attachedTargets(session); } catch {}
-  const visibility = await Promise.all(pages.map((entry) => pageVisibility(entry, session.port)));
+  const visibility = await Promise.all(pages.map((entry) => pageVisibility(entry, session.port, viewports[entry.id])));
   return pages.map((entry, index) => ({ id: entry.id, title: entry.title || 'Untitled page', url: entry.url, attached: attached ? attached.has(entry.id) : null, visibility: visibility[index] }));
 }
 
@@ -93,18 +95,31 @@ export async function browserCloseTab(project, tabId, { force = false } = {}) {
   if (!force && (await attachedTargets(session)).has(tabId)) throw new Error('An agent is attached to this tab. Close it when that agent is done, or pass --force.');
   const result = await command(await browserEndpoint(session), 'Target.closeTarget', { targetId: tabId });
   if (result?.success === false) throw new Error('Browser did not close the tab.');
+  setBrowserTabViewport(project, tabId, null);
   return { closed: tabId };
 }
 
-async function pageTarget(project, tabId) {
-  const session = await verifiedSession(project);
-  const pages = await targets(session);
+async function pageContext(project, tabId, adapters = {}) {
+  const session = await (adapters.verifySession || verifiedSession)(project);
+  const pages = await (adapters.listTargets || targets)(session);
   const target = tabId ? pages.find((entry) => entry.id === tabId) : pages.find((entry) => /^https?:/.test(entry.url)) || pages[0];
   if (!target) throw new Error(tabId ? 'The selected tab is no longer open. Reload the tab list.' : 'No inspectable page is open in this browser.');
   const endpoint = new URL(target.webSocketDebuggerUrl);
   if (endpoint.protocol !== 'ws:' || !['127.0.0.1', 'localhost', '[::1]'].includes(endpoint.hostname) || Number(endpoint.port) !== session.port) throw new Error('Browser returned an unexpected debugging endpoint.');
   endpoint.hostname = '127.0.0.1';
-  return endpoint.href;
+  const viewports = (adapters.listViewports || listBrowserTabViewports)(project, pages.map((entry) => entry.id));
+  return { session, pages, target, endpoint: endpoint.href, viewport: viewports[target.id] || null };
+}
+
+function viewportRequests(viewport) {
+  if (!viewport) return [];
+  return [{ method: 'Emulation.setDeviceMetricsOverride', params: {
+    width: viewport.width, height: viewport.height, deviceScaleFactor: viewport.scale, mobile: viewport.mobile,
+  } }];
+}
+
+function pageCommands(endpoint, viewport, requests, timeoutMs, timeoutMessage, adapters = {}) {
+  return (adapters.commands || commands)(endpoint, [...viewportRequests(viewport), ...requests], timeoutMs, timeoutMessage);
 }
 
 function commands(endpoint, requests, timeoutMs = 8000, timeoutMessage = null) {
@@ -121,7 +136,13 @@ function commands(endpoint, requests, timeoutMs = 8000, timeoutMessage = null) {
       try { socket.close(); } catch {}
       if (error) reject(error); else resolve(result);
     }
-    const sendNext = () => socket.send(JSON.stringify({ id: index + 1, method: requests[index].method, params: requests[index].params || {} }));
+    const sendNext = () => {
+      try {
+        const entry = requests[index];
+        const request = typeof entry === 'function' ? entry(results.at(-1), results) : entry;
+        socket.send(JSON.stringify({ id: index + 1, method: request.method, params: request.params || {} }));
+      } catch (error) { finish(error); }
+    };
     socket.addEventListener('open', sendNext);
     socket.addEventListener('message', (event) => {
       let message;
@@ -150,70 +171,119 @@ function oneAtATime(project, task) {
   return next;
 }
 
-export function browserScreenshot(project, tabId) {
-  return oneAtATime(project, () => captureTab(project, tabId));
+export function browserScreenshot(project, tabId, adapters = {}) {
+  return oneAtATime(project, () => captureTab(project, tabId, adapters));
 }
 
-async function captureTab(project, tabId) {
-  const result = await command(await pageTarget(project, tabId), 'Page.captureScreenshot', { format: 'jpeg', quality: 72, captureBeyondViewport: false, fromSurface: true },
-    15000, 'The page did not return a screenshot within 15 s. It can be loading, busy, or showing a dialog, or an agent can be taking its own screenshot of this browser. Refresh again, or choose another tab.');
+async function captureTab(project, tabId, adapters = {}) {
+  const context = await pageContext(project, tabId, adapters);
+  const results = await pageCommands(context.endpoint, context.viewport, [
+    { method: 'Page.captureScreenshot', params: { format: 'jpeg', quality: 72, captureBeyondViewport: false, fromSurface: true } },
+  ], 15000, 'The page did not return a screenshot within 15 s. It can be loading, busy, or showing a dialog, or an agent can be taking its own screenshot of this browser.', adapters);
+  const result = results.at(-1);
   if (!result?.data) throw new Error('Browser returned no screenshot.');
   const image = Buffer.from(result.data, 'base64');
   if (image.length > 8 * 1024 * 1024) throw new Error('Browser screenshot is too large.');
   return image;
 }
 
-export async function browserNavigate(project, tabId, value) {
+export async function browserNavigate(project, tabId, value, adapters = {}) {
   let url;
   const input = String(value || '').trim();
   try { url = new URL(/^https?:\/\//i.test(input) ? input : `https://${input}`); } catch { throw new Error('Enter a valid web address.'); }
   if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Only http and https pages can be opened.');
-  const result = await command(await pageTarget(project, tabId), 'Page.navigate', { url: url.href });
+  const context = await pageContext(project, tabId, adapters);
+  const result = (await pageCommands(context.endpoint, context.viewport, [
+    { method: 'Page.navigate', params: { url: url.href } },
+  ], undefined, undefined, adapters)).at(-1);
   if (result?.errorText) throw new Error(result.errorText);
   return { url: displayUrl(url.href) };
 }
 
-export async function browserNavigationState(project, tabId) {
-  const history = await command(await pageTarget(project, tabId), 'Page.getNavigationHistory');
+export async function browserNavigationState(project, tabId, adapters = {}) {
+  const context = await pageContext(project, tabId, adapters);
+  const history = (await pageCommands(context.endpoint, context.viewport, [
+    { method: 'Page.getNavigationHistory' },
+  ], undefined, undefined, adapters)).at(-1);
   const entries = history?.entries || [];
   const currentIndex = history?.currentIndex ?? -1;
   return { url: entries[currentIndex]?.url || '', canGoBack: currentIndex > 0, canGoForward: currentIndex >= 0 && currentIndex < entries.length - 1 };
 }
 
-export async function browserHistoryAction(project, tabId, action) {
-  const endpoint = await pageTarget(project, tabId);
+export async function browserHistoryAction(project, tabId, action, adapters = {}) {
+  const context = await pageContext(project, tabId, adapters);
   if (action === 'home') {
-    const result = await command(endpoint, 'Page.navigate', { url: 'about:blank' });
+    const result = (await pageCommands(context.endpoint, context.viewport, [
+      { method: 'Page.navigate', params: { url: 'about:blank' } },
+    ], undefined, undefined, adapters)).at(-1);
     if (result?.errorText) throw new Error(result.errorText);
     return { url: 'about:blank' };
   }
   if (!['back', 'forward'].includes(action)) throw new Error('Unknown navigation action.');
-  const history = await command(endpoint, 'Page.getNavigationHistory');
+  const history = (await pageCommands(context.endpoint, context.viewport, [
+    { method: 'Page.getNavigationHistory' },
+  ], undefined, undefined, adapters)).at(-1);
   const index = history.currentIndex + (action === 'back' ? -1 : 1);
   const entry = history.entries?.[index];
   if (!entry) throw new Error(`No ${action} page is available.`);
-  await command(endpoint, 'Page.navigateToHistoryEntry', { entryId: entry.id });
+  await pageCommands(context.endpoint, context.viewport, [
+    { method: 'Page.navigateToHistoryEntry', params: { entryId: entry.id } },
+  ], undefined, undefined, adapters);
   return { url: entry.url };
 }
 
-export async function browserClick(project, tabId, relativeX, relativeY) {
+export async function browserClick(project, tabId, relativeX, relativeY, adapters = {}) {
   if (![relativeX, relativeY].every((n) => typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 1)) throw new Error('Click position must be inside the screenshot.');
-  const endpoint = await pageTarget(project, tabId);
-  const metrics = await command(endpoint, 'Page.getLayoutMetrics');
-  const viewport = metrics?.cssVisualViewport || metrics?.cssLayoutViewport;
-  if (!viewport?.clientWidth || !viewport?.clientHeight) throw new Error('Could not determine the page viewport.');
-  const point = { x: Math.min(viewport.clientWidth - 1, Math.round(relativeX * viewport.clientWidth)),
-    y: Math.min(viewport.clientHeight - 1, Math.round(relativeY * viewport.clientHeight)), button: 'left', clickCount: 1 };
-  await commands(endpoint, [
-    { method: 'Input.dispatchMouseEvent', params: { type: 'mousePressed', ...point } },
-    { method: 'Input.dispatchMouseEvent', params: { type: 'mouseReleased', ...point } },
-  ]);
+  const context = await pageContext(project, tabId, adapters);
+  let point;
+  await pageCommands(context.endpoint, context.viewport, [
+    { method: 'Page.getLayoutMetrics' },
+    (metrics) => {
+      const viewport = metrics?.cssVisualViewport || metrics?.cssLayoutViewport;
+      if (!viewport?.clientWidth || !viewport?.clientHeight) throw new Error('Could not determine the page viewport.');
+      point = { x: Math.min(viewport.clientWidth - 1, Math.round(relativeX * viewport.clientWidth)),
+        y: Math.min(viewport.clientHeight - 1, Math.round(relativeY * viewport.clientHeight)), button: 'left', clickCount: 1 };
+      return { method: 'Input.dispatchMouseEvent', params: { type: 'mousePressed', ...point } };
+    },
+    () => ({ method: 'Input.dispatchMouseEvent', params: { type: 'mouseReleased', ...point } }),
+  ], undefined, undefined, adapters);
   return { ok: true };
 }
 
-export async function browserInsertText(project, tabId, text) {
+export async function browserViewport(project, tabId, viewport, adapters = {}) {
+  if (!tabId) throw new Error('Select a browser tab.');
+  const reset = viewport?.reset === true;
+  if (reset) {
+    if (Object.keys(viewport).length !== 1) throw new Error('Use --reset by itself.');
+  } else {
+    const { width, height, scale = 1, mobile = false } = viewport || {};
+    if (!Number.isInteger(width) || width < 200 || width > 3840
+      || !Number.isInteger(height) || height < 150 || height > 2160
+      || typeof scale !== 'number' || !Number.isFinite(scale) || scale < 0.5 || scale > 4
+      || typeof mobile !== 'boolean') {
+      throw new Error('Viewport width must be 200–3840, height 150–2160, and scale 0.5–4.');
+    }
+  }
+  const context = await pageContext(project, tabId, adapters);
+  const runCommand = adapters.command || command;
+  if (reset) {
+    await runCommand(context.endpoint, 'Emulation.clearDeviceMetricsOverride', {});
+    setBrowserTabViewport(project, tabId, null);
+    return { reset: true };
+  }
+  const { width, height, scale = 1, mobile = false } = viewport;
+  const saved = { width, height, scale, mobile };
+  await runCommand(context.endpoint, 'Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: scale, mobile });
+  setBrowserTabViewport(project, tabId, saved);
+  return saved;
+}
+
+export async function browserInsertText(project, tabId, text, adapters = {}) {
   if (typeof text !== 'string' || !text.length || text.length > 4096) throw new Error('Text must contain 1 to 4096 characters.');
-  await command(await pageTarget(project, tabId), 'Input.insertText', { text });
+  const context = await pageContext(project, tabId, adapters);
+  await pageCommands(context.endpoint, context.viewport, [
+    { method: 'Input.insertText', params: { text } },
+  ], undefined, undefined, adapters);
   return { ok: true };
 }
 
@@ -221,15 +291,16 @@ const KEYS = { Tab: ['Tab', 9], Enter: ['Enter', 13], Backspace: ['Backspace', 8
   ArrowLeft: ['ArrowLeft', 37], ArrowUp: ['ArrowUp', 38], ArrowRight: ['ArrowRight', 39], ArrowDown: ['ArrowDown', 40],
   Home: ['Home', 36], End: ['End', 35], Escape: ['Escape', 27] };
 
-export async function browserKey(project, tabId, key) {
+export async function browserKey(project, tabId, key, adapters = {}) {
   const selected = key === 'SelectAll' ? ['KeyA', 65] : KEYS[key];
   if (!selected) throw new Error('Unsupported browser key.');
   const params = { key: key === 'SelectAll' ? 'a' : key, code: selected[0], windowsVirtualKeyCode: selected[1],
     nativeVirtualKeyCode: selected[1], modifiers: key === 'SelectAll' ? (process.platform === 'darwin' ? 4 : 2) : 0,
     ...(key === 'Enter' ? { text: '\r', unmodifiedText: '\r' } : {}) };
-  await commands(await pageTarget(project, tabId), [
+  const context = await pageContext(project, tabId, adapters);
+  await pageCommands(context.endpoint, context.viewport, [
     { method: 'Input.dispatchKeyEvent', params: { type: key === 'Enter' ? 'keyDown' : 'rawKeyDown', ...params } },
     { method: 'Input.dispatchKeyEvent', params: { type: 'keyUp', ...params, text: undefined, unmodifiedText: undefined } },
-  ]);
+  ], undefined, undefined, adapters);
   return { ok: true };
 }
