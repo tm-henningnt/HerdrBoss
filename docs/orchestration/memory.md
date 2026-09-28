@@ -22,6 +22,9 @@ Keep the current facts that every HerdrBoss orchestrator needs at start and resu
 
 - 2026-09-28: Send an Owner question to the Owner through the Mailbox (`herdr-boss say --action decide|approve|answer`) or the pane, under the escalation rules. Source: Owner, through the Boss.
 
+- 2026-09-28 (temporary, until the morning of 2026-09-29): The Owner is away. The Boss acts for the Owner. Escalate to the Boss, not to the Owner. The one exception is the Owner's own Chat, where the Owner may check in. Keep a steady pace on the published plan, and start ready work on a Use now lane, free models first. Delete this line when the Owner is back. Source: Boss, for the Owner.
+- 2026-09-28: The Boss gave the go, for the Owner, for the V81 chat view and the partial V80 SQLite move, with messages first. Switch the live message store to SQLite only after the Chat page is live, with a JSON copy and a VACUUM INTO backup first, at a quiet moment, and with an end-to-end delivery check. On any failure, switch back to json at once. Source: Owner and Boss.
+
 ## Holds and freezes
 
 None.

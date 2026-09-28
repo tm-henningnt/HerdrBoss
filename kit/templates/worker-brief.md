@@ -200,6 +200,8 @@ Add a **Tool suggestion** section to the human report only when a `herdr-boss` t
 
 List changed paths, exact commands and results, evidence tier, remaining risks, and open questions in the human report.
 
+Add a **Model notes** section to the human report with one line: the harness and model; whether the result was right the first time, needed rework, or failed; and why, in a few words.
+
 State the exact stop point when you cannot finish.
 
 Treat local, integration, browser, hosted, and Owner evidence as separate tiers.
