@@ -558,3 +558,27 @@ test('the dependency graph draws every task, with fit, zoom, pan, and a full-siz
   assert.match(guide, /Graph view/);
   assert.match(guide, /Ctrl or Cmd/);
 });
+
+test('the project page shows a Needs your decision group, wait labels, and an Overview count', () => {
+  const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
+  const guide = fs.readFileSync(new URL('../docs/user-guide.md', import.meta.url), 'utf8');
+  // The group lists each open task that waits on the Owner, with its ask and a Mailbox conversation link.
+  assert.match(app, /function decisionsBlock\(p, m, slug\)/);
+  assert.match(app, /t\.waitingOn === 'owner'/);
+  assert.match(app, /Needs your decision/);
+  assert.match(app, /href="\/mailbox\?thread=\$\{encodeURIComponent\(slug\)\}&conversation=\$\{encodeURIComponent\(t\.mailboxId\)\}"/);
+  assert.match(app, /decisionsBlock\(p, work, slug\)/);
+  // A task that waits only on open tasks shows the blocker IDs. The other waits name their party and the ask.
+  assert.match(app, /waiting on \$\{open\.map\(\(id\) => `#\$\{id\}`\)\.join\(', '\)\}/);
+  assert.match(app, /waits for the Boss/);
+  assert.match(app, /waits for an external party/);
+  // Each project card and the Overview line count the open Owner waits.
+  assert.match(app, /Needs your decision \$\{decisions\}/);
+  assert.match(app, /function decisionSummary\(s\)/);
+  assert.match(app, /decisionSummary\(s\)/);
+  assert.match(css, /\.decision-item\b/);
+  assert.match(app, /<h3>Needs your decision<\/h3>/);
+  assert.match(guide, /Needs your decision/);
+  assert.match(guide, /waitingOn/);
+});

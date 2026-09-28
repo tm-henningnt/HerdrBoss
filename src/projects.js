@@ -6,6 +6,7 @@ import { kitRevision } from './kit/agents-check.js';
 
 export const SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const TASK_STATUS = new Set(['todo', 'doing', 'review', 'blocked', 'done']);
+const WAITING_ON = new Set(['owner', 'boss', 'task', 'external']);
 const FRONTIER = new Set(['current', 'next']);
 const WEB_URL = /^https?:\/\//i;
 const KIT_REVISION = /^[0-9a-f]{12}$/;
@@ -26,6 +27,11 @@ export function validateProject(p) {
     if (t.labels != null && (!Array.isArray(t.labels) || t.labels.some((label) => typeof label !== 'string'))) errs.push(`tasks[${i}].labels must be an array of strings`);
     for (const key of ['id', 'parent', 'group', 'kind', 'url', 'assignee', 'updated', 'note', 'worker']) if (t[key] != null && typeof t[key] !== 'string') errs.push(`tasks[${i}].${key} must be a string`);
     if (t.frontier != null && !FRONTIER.has(t.frontier)) errs.push(`tasks[${i}].frontier must be current or next`);
+    if (t.waitingOn != null && !WAITING_ON.has(t.waitingOn)) errs.push(`tasks[${i}].waitingOn must be one of ${[...WAITING_ON].join('|')}`);
+    if (t.ask != null && (typeof t.ask !== 'string' || !t.ask.trim() || t.ask.length > 200)) errs.push(`tasks[${i}].ask must be a non-empty string of at most 200 characters`);
+    if ((t.waitingOn === 'owner' || t.waitingOn === 'boss') && (typeof t.ask !== 'string' || !t.ask.trim() || t.ask.length > 200)) errs.push(`tasks[${i}].ask is required when waitingOn is ${t.waitingOn}`);
+    if (t.mailboxId != null && typeof t.mailboxId !== 'string') errs.push(`tasks[${i}].mailboxId must be a string`);
+    if ((t.status || 'todo') === 'done' && t.waitingOn != null) errs.push(`tasks[${i}] is done and must not have waitingOn`);
     if (t.url != null && !WEB_URL.test(t.url)) errs.push(`tasks[${i}].url must start with http:// or https://`);
   }
   const ids = (p.tasks || []).map((t) => t?.id).filter(Boolean);
@@ -46,6 +52,22 @@ export function validateProject(p) {
   if (p.kitRevision != null && (typeof p.kitRevision !== 'string' || !KIT_REVISION.test(p.kitRevision))) errs.push('"kitRevision" must be the 12 hex characters of a kit revision');
   if (p.git != null && (typeof p.git !== 'object' || Array.isArray(p.git))) errs.push('"git" must be an object with branch, commit, and dirty');
   return errs;
+}
+
+export function statusWarnings(p) {
+  const warnings = [];
+  if (!p || typeof p !== 'object' || !Array.isArray(p.tasks)) return warnings;
+  for (const t of p.tasks) {
+    if (!t || typeof t !== 'object') continue;
+    const id = t.id || t.title || '?';
+    if (t.status === 'blocked' && !(Array.isArray(t.blockedBy) && t.blockedBy.length) && t.waitingOn == null) {
+      warnings.push(`task ${id} is blocked but names no blocker. Set blockedBy or waitingOn.`);
+    }
+    if (t.waitingOn === 'owner' && !t.mailboxId) {
+      warnings.push(`task ${id} waits on the Owner but has no Mailbox item. Post one with herdr-boss mail post and set mailboxId.`);
+    }
+  }
+  return warnings;
 }
 
 export function listProjects() {

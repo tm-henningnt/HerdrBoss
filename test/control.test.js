@@ -930,6 +930,29 @@ test('project status validation accepts work structure and rejects unsafe or mal
   assert.ok(errors.some((e) => /links\[0\]\.url must start with http/.test(e)));
 });
 
+test('a task can name who it waits on, with a short ask and a Mailbox id', async () => {
+  const { validateProject, statusWarnings } = await import('../src/projects.js');
+  assert.deepEqual(validateProject({
+    project: 'Demo',
+    tasks: [
+      { id: 'V12', title: 'Decide the paint', status: 'blocked', waitingOn: 'owner', ask: 'Which paint?', mailboxId: 'm1' },
+      { id: 'V13', title: 'Vendor check', status: 'todo', waitingOn: 'external', ask: 'Vendor reply' },
+      { id: 'V14', title: 'Contract', status: 'todo', waitingOn: 'task', blockedBy: ['V13'] },
+      { id: 'V15', title: 'Approve the plan', status: 'blocked', waitingOn: 'boss', ask: 'Approve the plan' },
+    ],
+  }), []);
+  // A bad waitingOn, a missing ask, a long ask, and a done task with waitingOn are errors.
+  assert.ok(validateProject({ project: 'x', tasks: [{ id: '1', title: 'A', waitingOn: 'client' }] }).some((e) => /waitingOn must be one of owner\|boss\|task\|external/.test(e)));
+  assert.ok(validateProject({ project: 'x', tasks: [{ id: '1', title: 'A', waitingOn: 'owner' }] }).some((e) => /ask/.test(e)));
+  assert.ok(validateProject({ project: 'x', tasks: [{ id: '1', title: 'A', waitingOn: 'boss', ask: 'x'.repeat(201) }] }).some((e) => /ask/.test(e)));
+  assert.ok(validateProject({ project: 'x', tasks: [{ id: '1', title: 'A', waitingOn: 'owner', ask: 'ok' }] }).some((e) => /ask/.test(e)) === false);
+  assert.ok(validateProject({ project: 'x', tasks: [{ id: '1', title: 'A', status: 'done', waitingOn: 'task' }] }).some((e) => /done/.test(e)));
+  // The warnings do not block a publish. Each names one missing field.
+  assert.deepEqual(statusWarnings({ project: 'x', tasks: [{ id: '1', title: 'A', status: 'blocked' }] }), ['task 1 is blocked but names no blocker. Set blockedBy or waitingOn.']);
+  assert.deepEqual(statusWarnings({ project: 'x', tasks: [{ id: '2', title: 'B', status: 'blocked', waitingOn: 'owner', ask: 'x' }] }), ['task 2 waits on the Owner but has no Mailbox item. Post one with herdr-boss mail post and set mailboxId.']);
+  assert.deepEqual(statusWarnings({ project: 'x', tasks: [{ id: '3', title: 'C', status: 'blocked', blockedBy: ['2'], waitingOn: 'owner', ask: 'x', mailboxId: 'm' }] }), []);
+});
+
 test('CPU use counts pane processes and project browsers per workspace', async () => {
   const { cpuUse } = await import('../src/collect.js');
   const procs = new Map([

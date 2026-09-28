@@ -32,7 +32,8 @@ Only `project` is required. Omit the fields that you do not use.
   "tasks": [
     { "id": "74", "title": "Parse event log", "status": "doing", "worker": "pm-74", "note": "Tests pass, docs remain." },
     { "id": "73", "title": "Render graph", "status": "review", "worker": "pm-73" },
-    { "id": "75", "title": "Export to PNG", "status": "todo" }
+    { "id": "75", "title": "Export to PNG", "status": "todo" },
+    { "id": "76", "title": "Choose the export format", "status": "blocked", "waitingOn": "owner", "ask": "PNG or SVG?", "mailboxId": "m1727" }
   ],
   "metrics": [
     { "label": "Tests", "value": "412/415", "detail": "3 skipped" },
@@ -59,6 +60,9 @@ Only `project` is required. Omit the fields that you do not use.
 | `tasks[].status` | string | One of `todo`, `doing`, `review`, `blocked`, `done`. The default is `todo`. |
 | `tasks[].worker` | string | The Herdr agent name of the worker. The page shows the live status of that agent. |
 | `tasks[].note` | string | One line of detail. |
+| `tasks[].waitingOn` | string | Optional. One of `owner`, `boss`, `task`, `external`. It names the party that holds the task. The project page shows a wait label and, for the Owner, a decision group. |
+| `tasks[].ask` | string | Optional. The short question or need, at most 200 characters. It is required when `waitingOn` is `owner` or `boss`. |
+| `tasks[].mailboxId` | string | Optional. The ID of the Mailbox message for this wait. The decision group links to its conversation. |
 | `metrics[]` | object | `label`, `value`, and an optional `detail`. |
 | `links[]` | object | `label` and `url`. |
 | `notes[]` | string | Short notes. Backticks show as code. |
@@ -106,6 +110,10 @@ Publish every tracked issue as a task, including closed issues with `"status": "
 | `kitRevision` | string | Optional. The kit revision that the orchestrator loaded: the `v=` value in the first line of `docs/orchestration/herdr-boss.md`. It has 12 lowercase hex characters. The project page shows a warning when it is not the current kit revision. |
 
 Task IDs must be unique. A `blockedBy` ID that is not in `tasks[]` counts as external: the graph notes it on the task and does not draw it. Links in `links[]`, `tasks[].url`, and `groups[].refs[].url` must start with `http://` or `https://`.
+
+Use `waitingOn` to separate a wait for a person from a wait for other tasks. Set `waitingOn: owner` only when the task needs an Owner decision. Set `ask` to the short question. Post a Mailbox item for the Owner, and set `mailboxId` to its ID. Use `blockedBy` for a wait on other tasks. A `done` task must not have `waitingOn`.
+
+`herdr-boss publish` warns on standard error, but still publishes, when a `blocked` task has no `blockedBy` and no `waitingOn`, or when a task with `waitingOn: owner` has no `mailboxId`.
 
 Herdr Boss sets `updated` when you publish with method 2 or 3. With method 1, the dashboard uses the file modification time.
 
