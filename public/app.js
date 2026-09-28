@@ -1017,6 +1017,10 @@ function machineLocksBlock(s) {
 let leaseMessage = '';
 let leaseBusy = false;
 const leaseRelease = { pool: '', item: '', project: '', holder: '' };
+const poolEditor = { open: false, action: 'create', name: '', values: null, status: '' };
+let poolBusy = false;
+let poolRemoveTarget = '';
+let poolRemoveBusy = false;
 
 function leaseTtlText(pool) {
   return pool.ttlMinutes == null ? 'no TTL' : `${pool.ttlMinutes} min TTL`;
@@ -1059,11 +1063,33 @@ function leasePoolBlock(s, pool) {
   const items = pool.builtIn ? held.map((lease) => lease.item) : pool.items;
   const free = pool.items.length - held.length;
   const rows = items.map((item) => leaseRow(s, pool, item)).join('') || '<tr><td colspan="7" class="empty">No items.</td></tr>';
+  const controls = pool.builtIn ? '' : `<div class="lease-pool-controls"><button type="button" class="quiet" data-pool-edit="${esc(pool.name)}"${poolBusy ? ' disabled' : ''}>Edit</button><button type="button" class="quiet" data-pool-remove="${esc(pool.name)}"${poolBusy || poolRemoveBusy ? ' disabled' : ''}>Remove</button></div>`;
   return `<div class="lease-pool">
-    <div class="lease-head"><b>${esc(pool.name)}</b><span>${held.length} held · ${free} free</span><span>${esc(leaseTtlText(pool))}</span><span>${esc(leaseReclaimText(pool))}</span></div>
+    <div class="lease-head"><b>${esc(pool.name)}</b><span>${held.length} held · ${free} free</span><span>${esc(leaseTtlText(pool))}</span><span>${esc(leaseReclaimText(pool))}</span>${controls}</div>
     <div class="lease-table-wrap"><table class="lease-table"><thead><tr><th>Item</th><th>State</th><th>Holder project</th><th>Pane or worker</th><th>Age</th><th>Time left</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
     ${pool.builtIn ? `<p class="lease-free-line">${free} free port${free === 1 ? '' : 's'}</p>` : ''}
   </div>`;
+}
+
+function resourcePoolForm() {
+  if (!poolEditor.open) return '';
+  const values = poolEditor.values || {};
+  const update = poolEditor.action === 'update';
+  const check = values.check || '';
+  return `<form class="resource-pool-form" data-resource-pool-form>
+    <div><h3>${update ? `Edit ${esc(poolEditor.name)}` : 'Add a resource pool'}</h3><p>Set the pool items and the lease rules.</p></div>
+    <div class="resource-pool-fields">
+      <label>Pool name<input name="name" value="${esc(values.name || '')}" maxlength="64" pattern="[a-z0-9][a-z0-9-]{0,63}" required${update ? ' readonly' : ''}></label>
+      <label class="pool-items-field">Items<textarea name="items" rows="4" required placeholder="8000&#10;8001">${esc(values.items || '')}</textarea><small>Enter one item per line or separate items with commas.</small></label>
+      <label class="pool-split-field">Project split (JSON)<textarea name="split" rows="4" placeholder="{&#10;  &quot;project&quot;: [&quot;8000&quot;]&#10;}">${esc(values.split || '{}')}</textarea><small>Give each project an array of pool items.</small></label>
+      <label>Environment variable<input name="env" value="${esc(values.env || '')}" maxlength="64" pattern="[A-Z_][A-Z0-9_]{0,63}" required></label>
+      <label>Lease TTL (minutes)<input name="ttlMinutes" type="number" min="1" step="1" value="${esc(values.ttlMinutes ?? '')}" required></label>
+      <label>Reclaim check<select name="check"><option value=""${check === '' ? ' selected' : ''}>None</option><option value="tcp"${check === 'tcp' ? ' selected' : ''}>TCP</option></select></label>
+      <label>Grace period (minutes)<input name="graceMinutes" type="number" min="0" step="1" value="${esc(values.graceMinutes ?? '')}" required></label>
+    </div>
+    <p class="resource-pool-status" role="status">${esc(poolEditor.status)}</p>
+    <div class="resource-pool-actions"><button type="submit"${poolBusy ? ' disabled' : ''}>${poolBusy ? 'Saving…' : update ? 'Save pool' : 'Add pool'}</button><button type="button" class="quiet" data-pool-cancel${poolBusy ? ' disabled' : ''}>Cancel</button></div>
+  </form>`;
 }
 
 function leasesBlock(s) {
@@ -1072,10 +1098,11 @@ function leasesBlock(s) {
   if (!pools.length && !errors.length) return '';
   const errorLines = errors.map((error) => `<p class="lease-error" role="status">Resource pool config is invalid: ${esc(error)}</p>`).join('');
   return `<section class="lease-panel panel">
-    <div class="section-head"><h2>Resource leases</h2><span>Pools that projects share</span></div>
+    <div class="section-head"><h2>Resource leases</h2><span>Pools that projects share</span><button type="button" data-pool-add${poolBusy ? ' disabled' : ''}>Add pool</button></div>
     <p class="setting-help">Each pool lists its items and the holder of each item. Select <b>Release</b> to give a lease back.</p>
     ${leaseMessage ? `<p class="lease-status" role="status">${esc(leaseMessage)}</p>` : ''}
     ${errorLines}
+    ${resourcePoolForm()}
     ${pools.map((pool) => leasePoolBlock(s, pool)).join('')}
   </section>`;
 }
@@ -1142,6 +1169,152 @@ document.addEventListener('click', (e) => {
   const button = e.target.closest?.('[data-lease-release]');
   if (!button) return;
   openLeaseRelease(button.dataset.leaseRelease, button.dataset.leaseItem, button.dataset.leaseProject, button.dataset.leaseHolder || '');
+});
+
+function openResourcePoolForm(action, pool = null) {
+  Object.assign(poolEditor, {
+    open: true,
+    action,
+    name: pool?.name || '',
+    status: '',
+    values: pool ? {
+      name: pool.name,
+      items: (pool.items || []).join('\n'),
+      split: JSON.stringify(pool.split || {}, null, 2),
+      env: pool.env || '',
+      ttlMinutes: pool.ttlMinutes ?? '',
+      check: pool.check || '',
+      graceMinutes: pool.graceMinutes ?? '',
+    } : { name: '', items: '', split: '{}', env: '', ttlMinutes: '', check: '', graceMinutes: '' },
+  });
+  lastRender = '';
+  render();
+  requestAnimationFrame(() => document.querySelector('[data-resource-pool-form] [name="items"]')?.focus());
+}
+
+async function saveResourcePool(body) {
+  const response = await fetch('/api/pools', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const result = await response.json();
+  if (!response.ok) throw new Error((result.errors || [result.error || 'The resource pool could not be saved.']).join(' '));
+  return result;
+}
+
+function resourcePoolRemoveDialog() {
+  let dialog = document.getElementById('resource-pool-remove');
+  if (dialog) return dialog;
+  dialog = document.createElement('dialog');
+  dialog.id = 'resource-pool-remove';
+  dialog.className = 'lease-confirm';
+  dialog.setAttribute('aria-labelledby', 'resource-pool-remove-title');
+  dialog.innerHTML = `<h2 id="resource-pool-remove-title">Remove resource pool?</h2>
+    <p id="resource-pool-remove-text"></p>
+    <p class="setting-help">A pool cannot be removed while one of its items is held.</p>
+    <p class="lease-confirm-status" id="resource-pool-remove-status" role="status"></p>
+    <div class="lease-confirm-actions"><button type="button" data-pool-remove-cancel>Cancel</button><button type="button" id="resource-pool-remove-confirm">Remove pool</button></div>`;
+  document.body.append(dialog);
+  dialog.querySelector('[data-pool-remove-cancel]').addEventListener('click', () => dialog.close());
+  dialog.querySelector('#resource-pool-remove-confirm').addEventListener('click', confirmResourcePoolRemove);
+  return dialog;
+}
+
+function openResourcePoolRemove(name) {
+  poolRemoveTarget = name;
+  const dialog = resourcePoolRemoveDialog();
+  dialog.querySelector('#resource-pool-remove-text').textContent = `Remove the resource pool ${name}?`;
+  dialog.querySelector('#resource-pool-remove-status').textContent = '';
+  dialog.querySelector('#resource-pool-remove-confirm').disabled = false;
+  if (!dialog.open) dialog.showModal();
+}
+
+async function confirmResourcePoolRemove() {
+  if (poolRemoveBusy) return;
+  const dialog = resourcePoolRemoveDialog();
+  const button = dialog.querySelector('#resource-pool-remove-confirm');
+  const status = dialog.querySelector('#resource-pool-remove-status');
+  poolRemoveBusy = true;
+  button.disabled = true;
+  status.textContent = 'Removing…';
+  try {
+    await saveResourcePool({ action: 'remove', pool: { name: poolRemoveTarget } });
+    dialog.close();
+    leaseMessage = `Removed resource pool ${poolRemoveTarget}.`;
+    await refreshLeaseState();
+  } catch (error) {
+    status.textContent = error.message;
+  } finally {
+    poolRemoveBusy = false;
+    button.disabled = false;
+    lastRender = '';
+    render();
+  }
+}
+
+document.addEventListener('input', (e) => {
+  const form = e.target.closest?.('[data-resource-pool-form]');
+  if (form) poolEditor.values = Object.fromEntries(new FormData(form).entries());
+});
+
+document.addEventListener('submit', async (e) => {
+  const form = e.target.closest?.('[data-resource-pool-form]');
+  if (!form) return;
+  e.preventDefault();
+  if (poolBusy) return;
+  const values = Object.fromEntries(new FormData(form).entries());
+  poolEditor.values = values;
+  let split;
+  try {
+    split = values.split.trim() ? JSON.parse(values.split) : {};
+    if (!split || typeof split !== 'object' || Array.isArray(split)) throw new Error('Project split must be a JSON object.');
+  } catch (error) {
+    poolEditor.status = error.message === 'Project split must be a JSON object.' ? error.message : 'Project split must be valid JSON.';
+    lastRender = '';
+    render();
+    return;
+  }
+  const pool = {
+    name: values.name,
+    items: values.items.split(/[\s,]+/).filter(Boolean),
+    split,
+    env: values.env,
+    ttlMinutes: values.ttlMinutes === '' ? null : Number(values.ttlMinutes),
+    check: values.check || null,
+    graceMinutes: values.graceMinutes === '' ? null : Number(values.graceMinutes),
+  };
+  poolBusy = true;
+  poolEditor.status = 'Saving…';
+  lastRender = '';
+  render();
+  try {
+    await saveResourcePool({ action: poolEditor.action, pool });
+    leaseMessage = `${poolEditor.action === 'create' ? 'Added' : 'Updated'} resource pool ${pool.name}.`;
+    Object.assign(poolEditor, { open: false, values: null, status: '' });
+    await refreshLeaseState();
+  } catch (error) {
+    poolEditor.status = error.message;
+  } finally {
+    poolBusy = false;
+    lastRender = '';
+    render();
+  }
+});
+
+document.addEventListener('click', (e) => {
+  const add = e.target.closest?.('[data-pool-add]');
+  if (add) { openResourcePoolForm('create'); return; }
+  if (e.target.closest?.('[data-pool-cancel]')) {
+    Object.assign(poolEditor, { open: false, values: null, status: '' });
+    lastRender = '';
+    render();
+    return;
+  }
+  const edit = e.target.closest?.('[data-pool-edit]');
+  if (edit) {
+    const pool = (state?.resourceLeases?.pools || []).find((item) => item.name === edit.dataset.poolEdit && !item.builtIn);
+    if (pool) openResourcePoolForm('update', pool);
+    return;
+  }
+  const remove = e.target.closest?.('[data-pool-remove]');
+  if (remove) openResourcePoolRemove(remove.dataset.poolRemove);
 });
 
 function browsersView(s) {
@@ -2609,7 +2782,8 @@ const HELP = {
     <p>When <b>Borrow idle shares</b> is on, a project lends its unused slots to the projects that use all their slots. An idle or paused project lends all its slots. Another project always keeps its base slots. It offers its unused slots to other projects and does not lose them. The lent and offered slots go to the full projects by share. When no project is full, no project lends. A project row shows <b>N lent</b> for an idle project, <b>N free for others</b> for a project with unused slots, and <b>+N borrowed</b> for a full project. Borrowed slots are real capacity. The global limit still applies.</p>
     <h3>Locks</h3><p>The panel lists machine locks. Each row shows the lock name, holder project and pane, kind, age, time left, and state. When no lock exists, the panel shows <b>No machine locks are held.</b> A manual lock expires after 60 minutes. A command lock ends when its command ends. Herdr Boss takes over a stale lock. You cannot release a lock from this panel.</p>
     <h3>Resource leases</h3><p>Each pool lists its items and the holder of each item. The head shows the held and free counts, the lease TTL, and the reclaim rule. A held row shows the holder project, the pane or worker, the lease age, and the time left. <b>borrowed</b> marks an item of another project's split. For <code>project-browsers</code>, the panel lists only the held ports and the number of free ports; that pool has 77 ports. An invalid resource pool shows an error line.</p>
-    <p>Select <b>Release</b> to give a lease back. The page asks you to confirm, and names the pool, the item, the holder project, and the pane or worker. The release removes the lease only while its holder project is still the project that the page shows. Otherwise the page reports that the lease changed, and you reload the page. A release never stops a process. For a project browser that runs, the button is disabled until you close the browser on the Browsers page.</p>`],
+    <p>Select <b>Release</b> to give a lease back. The page asks you to confirm, and names the pool, the item, the holder project, and the pane or worker. The release removes the lease only while its holder project is still the project that the page shows. Otherwise the page reports that the lease changed, and you reload the page. A release never stops a process. For a project browser that runs, the button is disabled until you close the browser on the Browsers page.</p>
+    <h3>Manage pools</h3><p>Select <b>Add pool</b> to create a pool. Enter one item per line or separate items with commas. Enter the project split as JSON. Set the environment variable, lease TTL, reclaim check, and grace period. Keep ports 9222 to 9299 out of custom pools. Select <b>Edit</b> to change a config pool. Select <b>Remove</b>, then confirm the pool name, to remove it. A held item blocks removal and any update that drops it. Herdr Boss saves the change to <code>config.json</code> and applies it at once. The built-in <code>project-browsers</code> pool has no edit or remove controls. The read-only preview refuses pool changes.</p>`],
   settings: ['Settings', `
     <p>Each harness section holds the models and provider routes of that harness. Provider quotas and machine limits are below the harnesses.</p>
     <h3>Service settings</h3><p>This read-only table shows the values that the service uses. Each row shows whether the value comes from <code>config.json</code> or a default. Rows are grouped under Machine, Quota, Status, Workers, Browsers, and Service. Change these values in <code>config.json</code>, then restart the service.</p>

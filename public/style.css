@@ -1054,6 +1054,8 @@ body.dep-full-open { overflow: hidden; }
 .lease-pool + .lease-pool { border-top: 1px solid var(--line); padding-top: 14px; }
 .lease-head { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; margin-bottom: 8px; font-size: 12.5px; color: var(--muted); }
 .lease-head b { font-size: 14px; color: var(--text); }
+.lease-pool-controls { display: inline-flex; gap: 6px; margin-left: auto; }
+.lease-pool-controls button { padding: 3px 9px; }
 .lease-table-wrap { overflow-x: auto; }
 .lease-table { width: 100%; border-collapse: collapse; text-align: left; font-size: 12.5px; }
 .lease-table th { padding: 8px 12px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 11px; font-weight: 600; white-space: nowrap; }
@@ -1067,6 +1069,16 @@ body.dep-full-open { overflow: hidden; }
 .lease-error { margin: 0 0 8px; color: var(--warn); font-size: 12.5px; }
 .lease-status { margin: 0 0 8px; color: var(--muted); font-size: 12.5px; }
 .lease-free-line { margin: 8px 0 0; color: var(--muted); font-size: 12.5px; }
+.resource-pool-form { display: grid; gap: 12px; margin: 12px 0 16px; padding: 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); }
+.resource-pool-form h3 { margin: 0 0 4px; font-size: 14px; }
+.resource-pool-form > div:first-child p { margin: 0; color: var(--muted); font-size: 12px; }
+.resource-pool-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.resource-pool-fields label { display: grid; align-content: start; gap: 5px; min-width: 0; color: var(--muted); font-size: 12px; }
+.resource-pool-fields input, .resource-pool-fields textarea, .resource-pool-fields select { box-sizing: border-box; width: 100%; min-width: 0; padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); font: 13px var(--sans); }
+.resource-pool-fields textarea { resize: vertical; font-family: var(--mono); font-size: 12px; }
+.resource-pool-fields small { color: var(--faint); font-size: 11px; }
+.resource-pool-status { min-height: 1em; margin: 0; color: var(--warn); font-size: 12px; }
+.resource-pool-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .browser-lease { margin: 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .browser-lease a { color: var(--accent); }
 
@@ -1076,6 +1088,8 @@ body.dep-full-open { overflow: hidden; }
 .lease-confirm .lease-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
 
 @media (max-width: 760px) {
+  .resource-pool-fields { grid-template-columns: 1fr; }
+  .pool-items-field, .pool-split-field { grid-row: auto; }
   .machine-lock-table thead { display: none; }
   .machine-lock-table, .machine-lock-table tbody, .machine-lock-table tr, .machine-lock-table td { display: block; width: 100%; }
   .machine-lock-table tr { padding: 8px 0; border-bottom: 1px solid var(--line); }
