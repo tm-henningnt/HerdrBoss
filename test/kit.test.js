@@ -1987,6 +1987,34 @@ test('lanes prints the unmetered alternatives lane', () => {
   assert.ok(output.split('\n').includes('unmetered exhausted: opencode/big-pickle until 2026-09-26T15:48:00.000Z'));
 });
 
+test('lanes prints the shared use-now line before other lane details', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-lanes-use-now-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const home = path.join(dir, 'home');
+  fs.mkdirSync(home, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'rules.json'), JSON.stringify({
+    machine: { owner: 'away', cpuPercent: 5, cpuLimit: 95, fiveMinute: 1, loadLimit: null },
+    lanes: {
+      codex: { state: 'open', roomPercent: 8 },
+      opencodego: { state: 'trickle', allowancePercent: 5, usedTodayPercent: 1.1 },
+      unmetered: { state: 'open', unmetered: true, byProject: {} },
+    },
+  }));
+  const cli = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'src', 'cli.js');
+  const output = execFileSync(process.execPath, [cli, 'lanes'], {
+    env: { ...process.env, HOME: home, HERDR_BOSS_DIR: dir }, encoding: 'utf8',
+  });
+
+  const lines = output.trim().split('\n');
+  assert.match(lines[0], /^Machine guard active/);
+  assert.equal(lines[1], 'Use now: codex (below pace), opencodego (trickle 3.9%/day left today)');
+});
+
+test('the project kit tells orchestrators to use the bulletin Use now line', () => {
+  const template = fs.readFileSync(new URL('../kit/templates/project-kit.md', import.meta.url), 'utf8');
+  assert.match(template, /When a lane is ahead of pace, start ready work on a lane from the bulletin \*\*Use now\*\* line\. Do not wait for the ahead lane\./);
+});
+
 test('lanes filters unmetered output to the configured checkout project', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-lanes-project-'));
   const home = path.join(dir, 'home');

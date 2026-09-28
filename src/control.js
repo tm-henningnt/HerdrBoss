@@ -506,7 +506,14 @@ export function laneStatus(quotas, policy, now = Date.now(), { todayUse = {} } =
     const shortPressure = pressured.filter((window) => !isLongQuotaWindow(window)).sort(byPressure)[0] || null;
     const longPressure = pressured.filter(isLongQuotaWindow).sort(byPressure)[0] || null;
     const w = risk || pressure;
-    if (!w) { lanes[q.provider] = { state: 'open', resetWindows, goals }; continue; }
+    if (!w) {
+      const room = liveWindows.map((window) => {
+        const expected = adjustedExpectedPercent(policy, q.provider, window, now);
+        return expected == null ? null : expected - window.usedPercent;
+      }).filter(Number.isFinite);
+      lanes[q.provider] = { state: 'open', roomPercent: room.length ? Math.max(0, Math.min(...room)) : null, resetWindows, goals };
+      continue;
+    }
     const expectedPercent = adjustedExpectedPercent(policy, q.provider, w, now);
     const overPercent = expectedPercent != null ? w.usedPercent - expectedPercent : null;
     const resetAt = Date.parse(w.resetsAt) || Infinity;
@@ -540,6 +547,31 @@ export function laneStatus(quotas, policy, now = Date.now(), { todayUse = {} } =
     };
   }
   return lanes;
+}
+
+const USE_NOW_KINDS = { claude: 'claude', codex: 'codex', opencodego: 'opencode' };
+
+// List metered lanes that can take work now, putting the most headroom first.
+export function useNowLanes(lanes) {
+  const belowPace = [];
+  const trickle = [];
+  const open = [];
+  for (const [provider, lane] of Object.entries(lanes || {})) {
+    if (!lane || lane.unmetered || lane.ignored) continue;
+    const entry = { provider, kind: USE_NOW_KINDS[provider] || provider };
+    if (lane.state === 'open' && Number.isFinite(lane.roomPercent) && lane.roomPercent > 0) {
+      belowPace.push({ ...entry, roomPercent: lane.roomPercent, reason: 'below pace' });
+    } else if (lane.state === 'trickle') {
+      const remaining = lane.allowancePercent - (lane.usedTodayPercent ?? 0);
+      if (Number.isFinite(remaining) && remaining > 0) {
+        trickle.push({ ...entry, reason: `trickle ${remaining.toFixed(1)}%/day left today` });
+      }
+    } else if (lane.state === 'open') {
+      open.push({ ...entry, reason: 'open' });
+    }
+  }
+  belowPace.sort((a, b) => b.roomPercent - a.roomPercent || a.provider.localeCompare(b.provider));
+  return [...belowPace, ...trickle, ...open].map(({ provider, kind, reason }) => ({ provider, kind, reason }));
 }
 
 // When no metered provider is open or under its trickle allowance, the least-over provider that is only ahead of pace may start.
