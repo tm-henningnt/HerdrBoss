@@ -157,6 +157,20 @@ To apply the guard:
 
 When the section or the array is missing, or holds a comment or a value that is not a plain string, `harness sync` changes nothing. It prints the lines to add and exits 1. When no root is missing, it makes no backup. `--dry-run` prints the roots to add and writes nothing. `--codex-only` does not print the Claude lines.
 
+## Denial counts
+
+Herdr Boss counts denials and permission prompts in the harness logs. It keeps only the day, the harness, the cause, the project, and the count. It keeps no message text, command, argument, or path. A cause with text that is not a known class becomes `other`.
+
+| Harness | Log | Cause |
+|---|---|---|
+| Claude | `~/.claude/projects/*/*.jsonl` | `classifier:<Reason>`: a tool result refused by the auto mode classifier. |
+| Codex | `~/.codex/sessions/YYYY/MM/DD/*.jsonl` | `sandbox:eperm`, `sandbox:not-permitted`, and `sandbox:permission-denied`: a tool output with `EPERM`, `Operation not permitted`, or `Permission denied`. Each output counts once for each cause. |
+| Codex | The same files | `escalation:request`: a tool call with `sandbox_permissions` set to `require_escalated`. |
+| OpenCode | `~/.local/share/opencode/log/opencode.log` | `permission:asked:<type>`: a `message=asking` line. `permission:unanswered:<type>`: an `asking` line with no `message=replied` line for its `id=` within 10 minutes. |
+| Pi | `~/.pi/agent/sessions/<folder>/*.jsonl` | `guard:<class>`: a tool result blocked by the Herdr guard. The classes are `outside-worktree`, `protected-path`, `rm-rf`, `denied-command`, and `other`. |
+
+The project comes from the `cwd` of a Claude record and of a Codex session. OpenCode takes it from the `cwd=` field of another line with the same `run=` value. Pi takes it from the session folder name. The dashboard shows the counts on the Analytics page. See [the user guide](user-guide.md#denials-and-permission-prompts).
+
 ## Known limits
 
 Codex cannot launch Chromium in its sandbox. The seatbelt sandbox refuses the Chromium Mach port (`MachPortRendezvousServer`, permission denied, error 1100). Herdr Boss does not loosen the sandbox for this. Give tasks that launch a browser to a `claude`, `opencode`, or `pi` worker. `worker start --kind codex` prints a warning when the brief mentions browser work.

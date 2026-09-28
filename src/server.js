@@ -11,6 +11,7 @@ import { writeProject, listProjects } from './projects.js';
 import { loadModels } from './kit/config.js';
 import { loadPolicy, savePolicy } from './control.js';
 import { recordUsage, usageSummary } from './usage.js';
+import { readDenials, denialSummary } from './denials.js';
 import { requestBrowser, listBrowserSessions, browserStatus, setBrowserWindowSize, closeBrowser, restartBrowser } from './browser-pool.js';
 import { listBrowserTabs, browserScreenshot, browserNavigate, browserNavigationState, browserHistoryAction, browserClick, browserInsertText, browserKey, browserNewTab, tabAttached } from './browser-preview.js';
 import { listHandoffs } from './handoff.js';
@@ -156,6 +157,7 @@ export function serve(cfg, { readOnlyPreview = false, createEngine = (config, op
         const state = await engine.tick();
         return send(res, 200, { ok: true, policy: loadPolicy(), control: state.control });
       }
+      if (p === '/api/denials' && req.method === 'GET') return send(res, 200, denialSummary(readDenials(DATA_DIR), Date.now(), { pendingBytes: engine.memory?.denialScan?.pendingBytes || 0 }));
       if (p === '/api/usage' && req.method === 'GET') return send(res, 200, usageSummary());
       if (p === '/api/usage' && req.method === 'POST') {
         const result = recordUsage(await jsonBody(req));

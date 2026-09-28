@@ -12,6 +12,7 @@ import { recordQuotaSnapshot } from './usage.js';
 import { listBrowserSessions, cdpResponds } from './browser-pool.js';
 import { readLeases, reclaimLeases, publicLease, tcpListening } from './leases.js';
 import { codeSignCloneDir, sweepCodeSignClones } from './clone-sweep.js';
+import { runDenialScan, readDenials, denialSummary, DENIAL_SCAN_INTERVAL_MS } from './denials.js';
 import { listHandoffs, saveHandoffs, supersedeHandoffs, expireHandoff, expireMissingHandoffs, handoffNotices } from './handoff.js';
 import { readKitNotice, pendingKitAlert, isKitAlert, kitNoticeTargets } from './kit-notice.js';
 import { inspectWorkerTransitions, inspectWorkerReports, applyWorkerFailureStatuses, resolveFreeUsageRun, activeFreeModelExhaustions, extendFreeModelExhaustion, activeFreeLaneExhaustions, extendFreeLaneExhaustion, freeUsageLaneRetry } from './worker-failures.js';
@@ -115,6 +116,8 @@ export class Engine extends EventEmitter {
     this.orphanedWorktreeProcesses = [];
     this.cloneSweepAt = 0;
     this.cloneSweepRunning = false;
+    this.denialScanAt = 0;
+    this.denialScanRunning = false;
     this.collectors = {
       collectHerdr,
       collectQuotas,
@@ -127,6 +130,7 @@ export class Engine extends EventEmitter {
       probeTcp: tcpListening,
       codeSignCloneDir,
       sweepCodeSignClones,
+      runDenialScan,
       // A test engine does not run the real pi unless a test injects a collector.
       collectPiModels: process.env.NODE_TEST_CONTEXT ? async () => null : collectPiModels,
       ...collectors,
@@ -318,6 +322,7 @@ export class Engine extends EventEmitter {
       for (const pane of herdr?.panes || []) if (pane.label === 'boss' && pane.agent) this.memory.lastOrchestrators[pane.workspace] = { pane: pane.id, kind: pane.agent, project: 'Boss', label: 'Boss', boss: true };
       if (this.act) await this.reap(browsers);
       if (this.act) this.sweepClones(now);
+      if (this.act) this.scanDenials(now);
       // A prepared successor waits idle by design, so the idle-worker rule skips it.
       try { snap.standbyPanes = listHandoffs().filter((h) => ['preparing', 'prepared', 'needs-inspection'].includes(h.status)).map((h) => h.newPane); }
       catch { snap.standbyPanes = []; }
@@ -456,6 +461,8 @@ export class Engine extends EventEmitter {
       snap.paneSince = this.memory.paneSince;
       snap.history = this.memory.history || [];
       snap.push = this.push;
+      // The denial trend is for the Owner. It goes to the dashboard and the bulletin, never to a pane prompt.
+      snap.denials = denialSummary(readDenials(DATA_DIR), now, { pendingBytes: this.memory.denialScan?.pendingBytes || 0 });
       fs.writeFileSync(BULLETIN_FILE, renderBulletin(snap, evaluation, this.cfg));
       if (this.act) await this.deliver(evaluation.alerts, herdr, now);
       snap.events = this.events.slice(-60);
@@ -559,6 +566,18 @@ export class Engine extends EventEmitter {
       this.log('clone-sweep', `Deleted ${result.removed.length} orphaned Chrome code-sign clone(s) and freed ${freedGiB} GiB.`, { count: result.removed.length, freedBytes: result.freedBytes });
     })().catch((error) => this.log('clone-sweep', `Chrome code-sign clone sweep failed: ${error.message}`))
       .finally(() => { this.cloneSweepRunning = false; });
+  }
+
+  // The denial log scan runs beside the tick, like the clone sweep. It logs counts only, never a path or a message.
+  scanDenials(now) {
+    if (this.denialScanRunning || now - this.denialScanAt < DENIAL_SCAN_INTERVAL_MS) return null;
+    this.denialScanAt = now;
+    this.denialScanRunning = true;
+    return (async () => {
+      const result = await this.collectors.runDenialScan({ state: this.memory.denialScan || {}, now });
+      this.memory.denialScan = result.state;
+    })().catch((error) => this.log('denials', `Denial log scan failed (${error.code || 'error'}).`))
+      .finally(() => { this.denialScanRunning = false; });
   }
 
   async autoHandover(control, herdr, policy, now) {
