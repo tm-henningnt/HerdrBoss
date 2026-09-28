@@ -2161,10 +2161,14 @@ function denialsBlock(s) {
   const dayHead = d.days.map((day) => `<th class="mono">${esc(day.slice(5))}</th>`).join('');
   const waiting = d.catchingUp ? `<div class="calm-state">Herdr Boss still reads older logs: ${Math.ceil(d.pendingBytes / 1024 ** 2).toLocaleString()} MB left. The counts of older days are not complete, so the trend note waits.</div>` : '';
   const note = d.rising?.length ? `<div class="denial-note" role="status"><strong>${esc(d.note)}</strong><span>${d.rising.map((c) => `${esc(c.cause)}: ${c.recent} in 24 hours, 6-day mean ${c.mean}`).join(' · ')}</span></div>` : '';
+  const modelRows = d.modelRows || [];
+  const modelTable = modelRows.length ? `<div class="denial-model-breakdown"><h3>Counts by harness and model</h3><div class="fleet-table-wrap"><table class="fleet-table denial-model-table"><thead><tr><th>Harness</th><th>Model</th><th>Cause</th><th>Count</th></tr></thead><tbody>`
+    + modelRows.slice(0, 10).map((r) => `<tr><td data-label="Harness">${esc(HARNESS_NAMES[r.harness] || r.harness)}</td><td data-label="Model" class="mono">${esc(r.model)}</td><td data-label="Cause">${esc(r.cause)}</td><td data-label="Count" class="mono">${r.count.toLocaleString()}</td></tr>`).join('')
+    + `</tbody></table></div>${d.modelMoreCount ? `<p class="denial-model-more">${d.modelMoreCount.toLocaleString()} more</p>` : ''}</div>` : '';
   return `<section id="denials">${head}${limits}${waiting}${note}<div class="usage-metrics">${totals.map(([h, n]) => `<div><strong>${n.toLocaleString()}</strong><span>${esc(HARNESS_NAMES[h] || h)}</span></div>`).join('')}</div>`
     + `<div class="fleet-table-wrap"><table class="fleet-table denial-table"><thead><tr><th>Cause</th><th>Project</th><th>Harness</th>${dayHead}<th>Total</th><th>Trend</th></tr></thead><tbody>`
     + d.rows.map((r) => `<tr><td data-label="Cause"><strong>${esc(r.cause)}</strong></td><td data-label="Project">${esc(state.control?.projects?.[r.project]?.label || r.project)}</td><td data-label="Harness">${esc(HARNESS_NAMES[r.harness] || r.harness)}</td>${r.counts.map((n, i) => `<td class="mono" data-label="${esc(d.days[i].slice(5))}">${n || '·'}</td>`).join('')}<td class="mono" data-label="Total">${r.total.toLocaleString()}</td><td data-label="Trend">${arrow(r)}</td></tr>`).join('')
-    + '</tbody></table></div></section>';
+    + '</tbody></table></div>' + modelTable + '</section>';
 }
 
 function recentUsageBlock() {
@@ -2707,7 +2711,8 @@ const HELP = {
   analytics: ['Analytics', `
     <p>Recorded worker runs per project and provider: duration, outcome, and measured tokens.</p>
     <p>Token totals include only runs that report tokens. Coverage shows how many runs have measurements. Quota percentages are global per provider; they are not project token counts.</p>
-    <h3>Denials and permission prompts</h3><p>Herdr Boss reads the Claude, Codex, OpenCode, and Pi logs every 15 minutes. It counts classifier refusals, sandbox errors, escalation requests, permission prompts, prompts with no answer within 10 minutes, and Herdr guard blocks. It keeps only the day, harness, cause, project, and count. It keeps no message text.</p>
+    <h3>Denials and permission prompts</h3><p>Herdr Boss reads the Claude, Codex, OpenCode, and Pi logs every 15 minutes. It counts classifier refusals, sandbox errors, escalation requests, permission prompts, prompts with no answer within 10 minutes, OpenCode worker permission denials, and Herdr guard blocks. It keeps the day, harness, cause, project, model, and count. It keeps no message text.</p>
+    <p>The small table shows counts for the last 7 days by harness, model, and cause. It shows up to 10 rows.</p>
     <p>The table shows the last 7 days by cause and project. The arrow compares the last 24 hours with the mean of the 6 days before. When a cause is above 2 times its mean and above 10 events, the page and the bulletin show <b>Discuss this trend with the Boss.</b> Herdr Boss sends no prompt to an orchestrator about it. While more than 1 MB of older logs is unread, the note waits, because the counts of older days are not complete.</p>
     <p>A read-only line shows the limits: the scan interval, the bytes for one scan, the days kept, and the rise rule.</p>`],
   logs: ['Logs', `

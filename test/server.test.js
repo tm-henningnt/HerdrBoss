@@ -1075,6 +1075,15 @@ test('Analytics and Mailbox show the scan and store limits from the state', () =
   assert.match(guide, /The folder pane shows a read-only line with the limits/);
 });
 
+test('Analytics shows the top ten denial counts by harness, model, and cause', () => {
+  const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  assert.match(app, /Counts by harness and model/);
+  assert.match(app, /<th>Harness<\/th><th>Model<\/th><th>Cause<\/th><th>Count<\/th>/);
+  assert.match(app, /modelRows\.slice\(0, 10\)/);
+  assert.match(app, /data-label="Count" class="mono"/);
+  assert.match(app, /modelMoreCount\.toLocaleString\(\)} more/);
+});
+
 test('the project page shows the memory and kit file paths with a home-relative repository path', { timeout: 20000 }, async (t) => {
   const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
   const projects = fs.readFileSync(new URL('../src/projects.js', import.meta.url), 'utf8');

@@ -713,13 +713,14 @@ When a `report.md` line starts with `Status: done` and the next character is whi
 
 Every 15 minutes, the service reads the Claude, Codex, OpenCode, and Pi logs for denials. The scan runs beside the engine tick, only when the engine acts. Two scans never run at the same time. The dashboard preview does not scan. One scan reads at most 20 MB in total. It continues from the saved byte offset of each file. A file with a new inode or a smaller size starts again at byte 0. The offsets are in `memory.json` under `denialScan`.
 
-Herdr Boss keeps only counts in `denials.json` in the data folder, with mode 0600. Each record has the UTC day, the harness, the cause, the project, and the count. The file keeps 30 days. It holds no message text, command, argument, or path. What each harness counts is in [the harness setup](harness-setup.md#denial-counts).
+Herdr Boss keeps only counts in `denials.json` in the data folder, with mode 0600. Each record has the UTC day, the harness, the cause, the project, the model, and the count. The model comes from session metadata. Herdr Boss uses `unknown` when the model is missing. The file keeps 30 days. It holds no message text, command, argument, or path. What each harness counts is in [the harness setup](harness-setup.md#denial-counts).
 
 Herdr Boss maps each record to a project by its working folder. A folder inside a registered repository belongs to that project. A worker worktree inside `~/Projects/.herdr-wt/<repo>/` or inside a sibling `<repo>-wt-<name>` also belongs to that project. The registered repositories are in `project-repos.json`. All other folders count as `other`.
 
 The Analytics page shows the section **Denials and permission prompts**:
 
 - A table of the last 7 days by cause and project, with a count for each day.
+- A small table of counts by harness, model, and cause. It shows the top 10 rows, then the number of extra rows.
 - A total for each harness.
 - A trend arrow. It compares the last 24 hours with the mean of the 6 days before them.
 - A read-only line with the limits: the scan interval, the bytes for one scan, the days kept, and the rise rule.
@@ -793,7 +794,7 @@ The dashboard uses these routes. A request from another host needs the access to
 | `GET`, `PUT /api/policy` | Read or replace the policy. |
 | `GET /api/models` | The model allow-list. |
 | `GET`, `POST /api/usage` | Read usage, or record an event. |
-| `GET /api/denials` | The denial counts of the last 7 days, the harness totals, and the trend of each cause. |
+| `GET /api/denials` | The denial counts of the last 7 days by harness, model, and cause, the harness totals, and the trend of each cause. |
 | `GET /api/projects`, `PUT`, `DELETE /api/projects/SLUG` | Read, write, or delete project status. |
 | `GET /api/handoffs`, `GET /api/handoffs/output?id=ID` | Handover records, and a successor's pane output. |
 | `POST /api/handoffs/plan`, `/prepare`, `/activate` | The handover steps. Activation needs `confirmed: true`. |
