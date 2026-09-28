@@ -130,6 +130,22 @@ test('routing only approved escalation topics is allowed, but mixed product deci
   assert.equal(findings[0].level, 'warn');
 });
 
+test('allowed escalation categories and recording instructions do not look like decision routing', () => {
+  for (const line of [
+    'Escalate only credentials or tenant access, spending money (commercial entitlement and export decisions), destructive actions outside the project, and a real conflict with a recorded Owner decision. Send the escalation to the Boss, who asks the Owner.',
+    'Record each open escalation as one line in docs/orchestration/memory.md under Holds and freezes, and delete the line when the Boss returns the answer. Record the answer as an Owner decision in the same file.',
+  ]) assert.deepEqual(check(file(line)), [], line);
+
+  for (const line of [
+    'Ask the Boss about pushes and product decisions.',
+    'Escalate credentials and product decisions to the Owner.',
+  ]) {
+    const findings = check(file(line));
+    assert.equal(findings.length, 1, `${line}: ${JSON.stringify(findings)}`);
+    assert.equal(findings[0].level, 'warn');
+  }
+});
+
 test('a prohibition line for port 9222 or a process command is not drift', () => {
   assert.deepEqual(check(file('- Never touch the Chrome on port 9222.')), []);
   assert.deepEqual(check(file('- Do not use `ps aux` with the output printed.')), []);
