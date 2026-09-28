@@ -3,7 +3,15 @@ import { browserStatus, listBrowserSessions } from './browser-pool.js';
 async function verifiedSession(project) {
   const session = listBrowserSessions()[project];
   if (!session) throw new Error('No project browser is registered.');
-  const status = await browserStatus(session);
+  let status;
+  try { status = await browserStatus(session); }
+  catch (error) {
+    // A sandboxed tool shell cannot read the process list, so the port owner cannot be verified.
+    if (error?.code === 'EPERM' || /\bEPERM\b/.test(String(error?.message))) {
+      throw new Error('This shell cannot read the process list (spawn EPERM), so the project browser cannot be verified. Run herdr-boss browser as a plain command, with no environment prefix, wrapper, or full path, so that the Codex rule runs it outside the sandbox.');
+    }
+    throw error;
+  }
   if (!status.profileVerified) throw new Error('The project browser is offline or its debugging port belongs to another process.');
   if (!status.responsive) throw new Error('The project browser is not responding. Restart or close it on the Browsers page.');
   return session;

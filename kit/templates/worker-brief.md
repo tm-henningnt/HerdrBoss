@@ -145,6 +145,8 @@ For a visual check of a served page, use the project browser. Every worker kind 
 
 Do not launch your own Chromium, Playwright, or Puppeteer from a `codex` worker.
 
+Run each `herdr-boss browser` command as a plain command: no environment prefix such as `HERDR_ENV=1`, no wrapper, and no full path. The Codex allow rule matches only the plain command, and a sandboxed browser command fails with `spawn EPERM`.
+
 Stop every test or server process you start before you write either report. Before collection, the orchestrator checks for processes whose current working directory is this worktree and asks you to stop any leftovers.
 
 ## Reports

@@ -24,15 +24,26 @@ async function verifyBrowserCaller(slug, { env = process.env, herdr = null } = {
   if (!paneId || !workspaceId) throw new Error('Set both HERDR_PANE_ID and HERDR_WORKSPACE_ID, or neither.');
   const { createHerdrRunner } = await import('./kit/workers.js');
   const runner = herdr ?? createHerdrRunner();
-  let pane;
+  let pane = null;
   try {
     const response = runner(['pane', 'get', paneId]);
     pane = response?.pane ?? response;
-  } catch (error) { throw new Error(`Herdr could not read pane ${paneId}: ${error.message}`); }
-  const returnedId = pane?.pane_id ?? pane?.paneId ?? pane?.id;
-  const paneWorkspace = pane?.workspace_id ?? pane?.workspaceId ?? pane?.workspace;
-  if (returnedId !== paneId || paneWorkspace !== workspaceId) throw new Error(`Herdr does not confirm pane ${paneId} in workspace ${workspaceId}.`);
-  if (pane.label === 'boss') return;
+  } catch (error) {
+    // A sandboxed tool shell (for example Codex, when a prefix keeps the command out of its allow rule) cannot
+    // start herdr. The pane's own workspace variable then decides, with the same ownership rule.
+    const code = error?.code ?? error?.cause?.code;
+    if (!['EPERM', 'EACCES', 'ENOENT'].includes(code) && !/\b(EPERM|EACCES|Operation not permitted)\b/.test(String(error?.message))) {
+      throw new Error(`Herdr could not read pane ${paneId}: ${error.message}`);
+    }
+    console.error(`Warning: Herdr is not reachable from this shell (${code || 'EPERM'}); workspace ${workspaceId} from the environment decides.`);
+  }
+  let paneWorkspace = workspaceId;
+  if (pane) {
+    const returnedId = pane?.pane_id ?? pane?.paneId ?? pane?.id;
+    paneWorkspace = pane?.workspace_id ?? pane?.workspaceId ?? pane?.workspace;
+    if (returnedId !== paneId || paneWorkspace !== workspaceId) throw new Error(`Herdr does not confirm pane ${paneId} in workspace ${workspaceId}.`);
+    if (pane.label === 'boss') return;
+  }
   let control = {};
   try { control = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'rules.json'), 'utf8'))?.control || {}; }
   catch (error) { if (error.code !== 'ENOENT') throw new Error(`Could not read the Herdr Boss rules: ${error.message}`); }

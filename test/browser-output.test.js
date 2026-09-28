@@ -160,3 +160,16 @@ test('browser CLI allows a worker in a shared .herdr-wt worktree by its workspac
   assert.equal(other.status, 1, other.stderr);
   assert.match(other.stderr, /belongs to project beta\. This pane is in workspace Alpha \(workspace-alpha\)/);
 });
+
+test('browser CLI falls back to the environment workspace when a sandbox cannot start herdr', (t) => {
+  const fixture = browserCliFixture(t);
+  // With no herdr on PATH, the spawn fails as in a sandboxed shell (ENOENT here, EPERM under Codex).
+  const env = (workspace) => ({ ...process.env, PATH: path.join(fixture.base, 'empty-bin'), HOME: path.join(fixture.base, 'home'), HERDR_BOSS_DIR: fixture.dataDir, HERDR_ENV: '1', HERDR_PANE_ID: 'worker-pane', HERDR_WORKSPACE_ID: workspace });
+  const run = (args, workspace) => spawnSync(process.execPath, [CLI, 'browser', ...args], { cwd: fixture.root, env: env(workspace), encoding: 'utf8' });
+  const own = run(['size', 'alpha', '1200', '700'], 'workspace-alpha');
+  assert.equal(own.status, 0, own.stderr);
+  assert.match(own.stderr, /Herdr is not reachable from this shell \(ENOENT\); workspace workspace-alpha from the environment decides/);
+  const other = run(['size', 'beta', '1200', '700'], 'workspace-alpha');
+  assert.equal(other.status, 1);
+  assert.match(other.stderr, /belongs to project beta\. This pane is in workspace Alpha \(workspace-alpha\)/);
+});
