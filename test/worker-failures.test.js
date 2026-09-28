@@ -70,7 +70,7 @@ test('free usage model association requires matching recorded name and pane and 
   const record = path.join(checkout, '.worker/runs', 'worker-a.json');
   const pane = { id: 'w1:p2', name: 'W worker-a', cwd: worker };
   fs.writeFileSync(record, JSON.stringify({ name: 'worker-a', pane: pane.id, kind: 'opencode', model: 'opencode/free', worktree: worker }));
-  assert.equal(resolveFreeUsageRun(pane, { providerFor: () => null, policy: {} }), null);
+  assert.deepEqual(resolveFreeUsageRun(pane, { providerFor: () => null, policy: {} }), { project: 'sample', kind: 'opencode', model: 'opencode/free' });
   assert.deepEqual(resolveFreeUsageRun(pane, { providerFor: () => null, policy: {}, runsCwd: checkout }), { project: 'sample', kind: 'opencode', model: 'opencode/free' });
   assert.equal(resolveFreeUsageRun(pane, { providerFor: () => 'opencodego', policy: {}, runsCwd: checkout }), null);
   fs.writeFileSync(record, JSON.stringify({ name: 'worker-a', pane: 'other:pane', kind: 'opencode', model: 'opencode/free', worktree: worker }));

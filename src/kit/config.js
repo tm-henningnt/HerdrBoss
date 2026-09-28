@@ -180,8 +180,8 @@ export function loadProjectConfig({ cwd = process.cwd(), file = '.herdr-boss.jso
       const leaf = String(config.worktreeName).replaceAll('{repo}', repo).replaceAll('{name}', name);
       return path.resolve(worktreeParent, leaf);
     },
-    ledgerPath: path.resolve(root, config.ledger),
-    runsPath: path.resolve(root, config.runsDir),
+    ledgerPath: path.resolve(mainRoot, config.ledger),
+    runsPath: path.resolve(mainRoot, config.runsDir),
     briefTemplatePath: config.briefTemplate === null ? DEFAULT_BRIEF_TEMPLATE : path.resolve(root, config.briefTemplate),
   };
 }

@@ -1273,99 +1273,115 @@ export function recordFlagErrors(options, reportJson = {}) {
 }
 
 export function collectWorker(name, options, { config, now = Date.now(), output = console.log, recordUsageFn = recordUsage, listWorktreeProcesses = worktreeCwdProcesses, leaseDataDir = DATA_DIR } = {}) {
-  const { file, run } = readRun(config, name);
-  if (run.finishedAt) throw new Error(`Run ${name} is already marked finished at ${run.finishedAt}.`);
-  const reportDir = path.join(run.worktree, run.workerDir || '.worker');
-  const normalized = normalizeWorkerReport(readJson(path.join(reportDir, 'report.json')));
-  for (const warning of normalized.warnings) output(warning);
-  const reportJson = normalized.report;
-  if (options.record) {
-    const missing = recordFlagErrors(options, reportJson);
-    if (missing.length) throw new Error(`--record needs:\n- ${missing.join('\n- ')}`);
-  }
-  const reportMd = fs.readFileSync(path.join(reportDir, 'report.md'), 'utf8');
-  const errors = validateWorkerReport(reportJson, { evidenceTiers: config.evidenceTiers });
-  if (errors.length) throw new Error(`Invalid worker report:\n- ${errors.join('\n- ')}`);
-  if (path.resolve(reportJson.worktree) !== path.resolve(run.worktree)) throw new Error(`Report worktree ${reportJson.worktree} does not match run worktree ${run.worktree}.`);
-  const actualBranch = git(run.worktree, ['branch', '--show-current']).trim();
-  if (actualBranch !== run.branch) throw new Error(`Worktree branch ${actualBranch || '(detached)'} does not match run branch ${run.branch}.`);
-  const processList = listWorktreeProcesses(run.worktree);
-  const leftovers = filterCollectProcesses(processList, { worktree: run.worktree, shellPid: run.shellPid });
-  if (leftovers.length) throw new Error(`Worker ${name} still has processes in its worktree: ${leftovers.map((process) => `${process.command || 'unknown'} (pid ${process.pid}, ppid ${process.ppid ?? 'unknown'}, cwd ${process.cwd})`).join('; ')}. Stop them before collection.`);
-  if (run.issue != null && reportJson.issue !== run.issue) throw new Error(`Report issue ${reportJson.issue} does not match run issue ${run.issue}.`);
-  if (reportJson.branch !== run.branch) throw new Error(`Report branch ${reportJson.branch} does not match run branch ${run.branch}.`);
-  const baseRef = run.baseCommit || run.base;
-  const log = gitLog(run.worktree, baseRef);
-  // The worker's own brief and report files live under .worker/ and never count as changed product paths.
-  const ownFile = (item) => item === '.worker' || String(item).startsWith('.worker/');
-  const reported = (reportJson.changedPaths || []).filter((item) => !ownFile(item));
-  const changed = gitChangedPaths(run.worktree, baseRef).filter((item) => !ownFile(item));
+  let ledgerWritten = false;
+  try {
+    const { file, run } = readRun(config, name);
+    if (run.finishedAt) throw new Error(`Run ${name} is already marked finished at ${run.finishedAt}.`);
+    const reportDir = path.join(run.worktree, run.workerDir || '.worker');
+    const normalized = normalizeWorkerReport(readJson(path.join(reportDir, 'report.json')));
+    const reportJson = normalized.report;
+    if (options.record) {
+      const missing = recordFlagErrors(options, reportJson);
+      if (missing.length) throw new Error(`--record needs:\n- ${missing.join('\n- ')}`);
+    }
+    const reportMd = fs.readFileSync(path.join(reportDir, 'report.md'), 'utf8');
+    const errors = validateWorkerReport(reportJson, { evidenceTiers: config.evidenceTiers });
+    if (errors.length) throw new Error(`Invalid worker report:\n- ${errors.join('\n- ')}`);
+    if (path.resolve(reportJson.worktree) !== path.resolve(run.worktree)) throw new Error(`Report worktree ${reportJson.worktree} does not match run worktree ${run.worktree}.`);
+    const actualBranch = git(run.worktree, ['branch', '--show-current']).trim();
+    if (actualBranch !== run.branch) throw new Error(`Worktree branch ${actualBranch || '(detached)'} does not match run branch ${run.branch}.`);
+    const processList = listWorktreeProcesses(run.worktree);
+    const leftovers = filterCollectProcesses(processList, { worktree: run.worktree, shellPid: run.shellPid });
+    if (leftovers.length) throw new Error(`Worker ${name} still has processes in its worktree: ${leftovers.map((process) => `${process.command || 'unknown'} (pid ${process.pid}, ppid ${process.ppid ?? 'unknown'}, cwd ${process.cwd})`).join('; ')}. Stop them before collection.`);
+    if (run.issue != null && reportJson.issue !== run.issue) throw new Error(`Report issue ${reportJson.issue} does not match run issue ${run.issue}.`);
+    if (reportJson.branch !== run.branch) throw new Error(`Report branch ${reportJson.branch} does not match run branch ${run.branch}.`);
+    const baseRef = run.baseCommit || run.base;
+    const log = gitLog(run.worktree, baseRef);
+    // The worker's own brief and report files live under .worker/ and never count as changed product paths.
+    const ownFile = (item) => item === '.worker' || String(item).startsWith('.worker/');
+    const reported = (reportJson.changedPaths || []).filter((item) => !ownFile(item));
+    const changed = gitChangedPaths(run.worktree, baseRef).filter((item) => !ownFile(item));
     const reportScope = compareChangedPaths(reported, run.allowedPaths ?? []);
     const actualScope = compareChangedPaths(changed, run.allowedPaths ?? []);
     const scopeErrors = [...new Set([...reportScope, ...actualScope])];
     const omitted = changed.filter((item) => !reported.includes(item));
-  const summary = {
-    name,
-    issue: reportJson.issue,
-    kind: run.kind,
-    model: run.model,
-    branch: run.branch,
-    worktree: run.worktree,
-    commits: log ? log.split('\n') : [],
-    reportedPaths: reported,
-    actualPaths: changed,
-    outOfScope: scopeErrors,
-    scopeExtensions: run.scopeExtensions ?? [],
-    artifactWarnings: collectArtifactWarnings(run.worktree, reportMd, config.artifactChecks ?? []),
-    report: reportMd,
-  };
-    output(JSON.stringify(summary, null, 2));
-    for (const warning of summary.artifactWarnings) output(`Warning: ${warning}`);
     if (scopeErrors.length) throw new Error(`Worker ${name} changed paths outside its allowed scope: ${scopeErrors.join(', ')}.`);
     if (omitted.length) throw new Error(`Worker ${name} omitted changed paths from its report: ${omitted.join(', ')}.`);
-  if (options.record) {
-    const entry = {
-      issue: run.issue,
+    const summary = {
+      name,
+      issue: reportJson.issue,
+      kind: run.kind,
       model: run.model,
-      surface: 'herdr',
+      branch: run.branch,
       worktree: run.worktree,
-      startedAt: run.startedAt,
-      endedAt: new Date(now).toISOString(),
-      outcome: options.outcome,
-      timedOut: false,
-      // null means unknown. A harness that counts tool calls can report usage.toolCalls.
-      toolCalls: Number.isSafeInteger(reportJson.usage?.toolCalls) && reportJson.usage.toolCalls >= 0 ? reportJson.usage.toolCalls : null,
-      changedPaths: reported,
-      independentGate: { passed: !!options.gatePassed, command: 'Independent gate result supplied by orchestrator; command and evidence are in the worker report and review.' },
-      defectsFound: Array.from({ length: options.defects ?? 0 }, (_value, index) => `defect ${index + 1}`),
-      rework: Array.from({ length: options.rework ?? 0 }, (_value, index) => `rework ${index + 1}`),
-      evidenceTier: reportJson.evidenceTier,
+      commits: log ? log.split('\n') : [],
+      reportedPaths: reported,
+      actualPaths: changed,
+      outOfScope: scopeErrors,
       scopeExtensions: run.scopeExtensions ?? [],
+      artifactWarnings: collectArtifactWarnings(run.worktree, reportMd, config.artifactChecks ?? []),
+      report: reportMd,
     };
-    const usage = reportJson.usage || {};
-    const provider = Object.hasOwn(run, 'provider') ? run.provider : providerFor(run.kind, run.model);
-    const recorded = recordUsageFn({
-      id: `worker:${config.slug}:${name}:${run.startedAt}`,
-      project: config.slug, workspace: run.pane?.split(':')[0] || null,
-      kind: run.kind, model: run.model, provider,
-      startedAt: run.startedAt, endedAt: entry.endedAt, outcome: entry.outcome,
-      gatePassed: entry.independentGate.passed, issue: run.issue,
-      inputTokens: usage.inputTokens ?? null, outputTokens: usage.outputTokens ?? null,
-      cachedTokens: usage.cachedTokens ?? null, cost: usage.cost ?? null,
-    });
-    if (recorded.errors.length) output(`Warning: usage was not recorded: ${recorded.errors.join(' ')}`);
-    appendDelegatedRun(config.ledgerPath, entry, { evidenceTiers: config.evidenceTiers });
-    run.finishedAt = entry.endedAt;
-    run.outcome = entry.outcome;
-    writeJsonAtomic(file, run);
-    if (run.leases?.length) {
-      const taken = new Set(run.leases.map((lease) => `${lease.pool}\n${lease.item}`));
-      const released = dropLeases((lease) => lease.project === config.slug && lease.worker === name && taken.has(`${lease.pool}\n${lease.item}`), { dataDir: leaseDataDir });
-      for (const lease of released) output(`Released lease ${lease.pool} ${lease.item}.`);
+    let usageWarning = null;
+    const releasedLeases = [];
+    if (options.record) {
+      const entry = {
+        issue: run.issue,
+        model: run.model,
+        surface: 'herdr',
+        worktree: run.worktree,
+        startedAt: run.startedAt,
+        endedAt: new Date(now).toISOString(),
+        outcome: options.outcome,
+        timedOut: false,
+        // null means unknown. A harness that counts tool calls can report usage.toolCalls.
+        toolCalls: Number.isSafeInteger(reportJson.usage?.toolCalls) && reportJson.usage.toolCalls >= 0 ? reportJson.usage.toolCalls : null,
+        changedPaths: reported,
+        independentGate: { passed: !!options.gatePassed, command: 'Independent gate result supplied by orchestrator; command and evidence are in the worker report and review.' },
+        defectsFound: Array.from({ length: options.defects ?? 0 }, (_value, index) => `defect ${index + 1}`),
+        rework: Array.from({ length: options.rework ?? 0 }, (_value, index) => `rework ${index + 1}`),
+        evidenceTier: reportJson.evidenceTier,
+        scopeExtensions: run.scopeExtensions ?? [],
+      };
+      const usage = reportJson.usage || {};
+      const provider = Object.hasOwn(run, 'provider') ? run.provider : providerFor(run.kind, run.model);
+      const recorded = recordUsageFn({
+        id: `worker:${config.slug}:${name}:${run.startedAt}`,
+        project: config.slug, workspace: run.pane?.split(':')[0] || null,
+        kind: run.kind, model: run.model, provider,
+        startedAt: run.startedAt, endedAt: entry.endedAt, outcome: entry.outcome,
+        gatePassed: entry.independentGate.passed, issue: run.issue,
+        inputTokens: usage.inputTokens ?? null, outputTokens: usage.outputTokens ?? null,
+        cachedTokens: usage.cachedTokens ?? null, cost: usage.cost ?? null,
+      });
+      if (recorded.errors.length) usageWarning = `Warning: usage was not recorded: ${recorded.errors.join(' ')}`;
+      appendDelegatedRun(config.ledgerPath, entry, { evidenceTiers: config.evidenceTiers });
+      ledgerWritten = true;
+      run.finishedAt = entry.endedAt;
+      run.outcome = entry.outcome;
+      writeJsonAtomic(file, run);
+      if (run.leases?.length) {
+        const taken = new Set(run.leases.map((lease) => `${lease.pool}\n${lease.item}`));
+        releasedLeases.push(...dropLeases((lease) => lease.project === config.slug && lease.worker === name && taken.has(`${lease.pool}\n${lease.item}`), { dataDir: leaseDataDir }));
+      }
     }
-    output(`After you merge ${run.branch}, remove the worktree with herdr-boss worktree prune --apply`);
+    for (const warning of normalized.warnings) output(warning);
+    output(JSON.stringify(summary, null, 2));
+    for (const warning of summary.artifactWarnings) output(`Warning: ${warning}`);
+    if (usageWarning) output(usageWarning);
+    for (const lease of releasedLeases) output(`Released lease ${lease.pool} ${lease.item}.`);
+    if (options.record) output('After you review this collection, remove the worktree with herdr-boss worktree prune --apply');
+    return summary;
+  } catch (error) {
+    if (!options.record) throw error;
+    const reason = String(error?.message ?? error).replace(/\s+/g, ' ').trim();
+    const message = ledgerWritten
+      ? `worker collect: ledger entry written, but collection did not finish: ${reason}`
+      : `worker collect: no ledger entry written: ${reason}`;
+    const refusal = new Error(message, { cause: error });
+    if (error?.exitCode !== undefined) refusal.exitCode = error.exitCode;
+    throw refusal;
   }
-  return summary;
 }
 
 // A parked worker waits on purpose, for example for the Owner. Its pane label tells Herdr Boss to leave it out of idle notices.

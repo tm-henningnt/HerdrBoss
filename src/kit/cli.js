@@ -258,7 +258,8 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
       return;
     }
     if (action === 'check') {
-      const runs = readDelegatedRuns(ledgerPath, { evidenceTiers: config.evidenceTiers });
+      const checkLedgerPath = flags.file ? filePath(config.mainRoot ?? config.root, flags.file) : config.ledgerPath;
+      const runs = readDelegatedRuns(checkLedgerPath, { evidenceTiers: config.evidenceTiers });
       if (flags.runs) {
         // Every run record needs a ledger entry for its worktree, except a worker that is still running.
         const recorded = new Set(runs.map((run) => path.resolve(run.worktree)));
