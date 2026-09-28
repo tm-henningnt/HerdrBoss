@@ -58,7 +58,7 @@ Put captures, logs, and scratch files in `"$TMPDIR"`. Write other worker files t
 
 Never use `../` to reach `.worker` or a path outside the worktree.
 
-For dashboard previews, run `mkdir -p "$TMPDIR/herdr-boss" && HERDR_BOSS_DIR="$TMPDIR/herdr-boss" HERDR_BOSS_PORT=4478 npm start -- --read-only-preview`. Choose an unused local port if 4478 is busy.
+For dashboard previews, run `mkdir -p "$TMPDIR/herdr-boss" && HOME="$(mktemp -d)" HERDR_BOSS_DIR="$TMPDIR/herdr-boss" HERDR_BOSS_PORT=4478 npm start -- --read-only-preview`. Choose an unused local port if 4478 is busy.
 
 Use the task below as the complete work order:
 

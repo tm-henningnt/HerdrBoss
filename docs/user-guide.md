@@ -34,6 +34,10 @@ Then it applies its rules and writes these files to `~/.herdr-boss/`:
 
 Herdr Boss is a script. It uses no LLM and no tokens.
 
+## Dashboard preview
+
+A read-only preview accepts loopback requests only. It has no login page. It never reads, creates, or changes token or session files.
+
 ## Project memory
 
 Store project memory in `docs/orchestration/memory.md`. Commit this file with the project repository.

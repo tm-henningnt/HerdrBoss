@@ -349,7 +349,7 @@ async function main() {
     }
     case 'serve': {
       if (args.some((arg) => arg !== '--read-only-preview') || args.length > 1) throw new Error('Usage: serve [--read-only-preview]');
-      migrateAccessFiles(cfg);
+      if (!args.includes('--read-only-preview')) migrateAccessFiles(cfg);
       const { serve } = await import('./server.js');
       serve(cfg, { readOnlyPreview: args.includes('--read-only-preview') });
       break;

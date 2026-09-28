@@ -73,6 +73,12 @@ function allowedRequest(req, pathname) {
   return req.headers['sec-fetch-site'] !== 'cross-site' || (req.method === 'GET' && !pathname.startsWith('/api/') && req.headers['sec-fetch-mode'] === 'navigate' && req.headers['sec-fetch-dest'] === 'document');
 }
 
+function loopbackRequest(req) {
+  const host = (req.headers.host || '').replace(/:\d+$/, '').toLowerCase();
+  return ['127.0.0.1', 'localhost', '[::1]'].includes(host)
+    && ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress);
+}
+
 // Dashboard control of a tab that an agent holds needs explicit confirmation. Agent CLI commands do not pass through here.
 async function attachedGuard(body) {
   if (body.confirmAttached === true) return null;
@@ -89,7 +95,7 @@ async function jsonBody(req) {
 export function serve(cfg, { readOnlyPreview = false, createEngine = (config, options) => new Engine(config, options) } = {}) {
   // A direct serve() call must refuse an unsafe preview before the access token, the watcher, or a tick writes a file.
   if (readOnlyPreview) assertPreviewDataDir();
-  const access = createAccessControl(cfg.access.tokenFile, {
+  const access = readOnlyPreview ? null : createAccessControl(cfg.access.tokenFile, {
     sessionFile: DEFAULT_SESSION_FILE,
     sessionDays: cfg.access.sessionDays,
     privateDirectory: PRIVATE_ACCESS_DIR,
@@ -135,19 +141,20 @@ export function serve(cfg, { readOnlyPreview = false, createEngine = (config, op
     const url = new URL(req.url, 'http://x');
     const p = url.pathname;
     try {
+      if (readOnlyPreview && !loopbackRequest(req)) return send(res, 403, { error: 'The read-only preview accepts only local requests.' });
       if (!allowedRequest(req, p)) return send(res, 403, { error: 'This control plane requires a local interface or Tailscale host and a same-origin request.' });
       if (readOnlyPreview && p.startsWith('/api/') && !['GET', 'HEAD'].includes(req.method)) {
         return send(res, 403, { error: 'This read-only preview does not allow changes.' });
       }
-      if (p === '/login' && req.method === 'GET') return send(res, 200, loginPage(), 'text/html; charset=utf-8');
-      if (p === '/login' && req.method === 'POST') {
+      if (!readOnlyPreview && p === '/login' && req.method === 'GET') return send(res, 200, loginPage(), 'text/html; charset=utf-8');
+      if (!readOnlyPreview && p === '/login' && req.method === 'POST') {
         const body = await readBody(req, 4096);
         const result = access.login(req, new URLSearchParams(body).get('token'));
         if (!result.ok) return send(res, result.limited ? 429 : 401, loginPage('invalid'), 'text/html; charset=utf-8');
         res.writeHead(303, { location: '/', 'set-cookie': result.cookie, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' });
         return res.end();
       }
-      if (!access.authorized(req, res)) {
+      if (!readOnlyPreview && !access.authorized(req, res)) {
         if (req.method === 'GET' && !p.startsWith('/api/') && (req.headers.accept || '').includes('text/html')) {
           res.writeHead(303, { location: '/login', 'cache-control': 'no-store' });
           return res.end();
