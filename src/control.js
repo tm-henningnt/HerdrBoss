@@ -421,12 +421,26 @@ export function pacingGoalEnd(policy, provider, window) {
   return end.type === 'at' ? Date.parse(end.at) : end.type === 'hoursBeforeReset' ? reset - end.hours * 3600000 : null;
 }
 
-export function goalSummary(goals) {
-  return (goals || []).map(({ label, percent, end, resolvedEnd }) => {
-    const time = Number.isFinite(resolvedEnd) ? new Intl.DateTimeFormat('en', { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }).format(resolvedEnd) : null;
-    const finish = !end ? 'by reset' : end.type === 'hoursBeforeReset' ? `${end.hours} h before reset${time ? ` (${time})` : ''}` : `by ${time || end.at}`;
-    return `${String(label).toLowerCase()}: goal ${percent}% ${finish}`;
-  }).join('; ');
+function formatGoalEnd(end, includeTime = false) {
+  const date = new Intl.DateTimeFormat('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }).format(end).replace(',', '');
+  if (!includeTime) return date;
+  const time = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(end);
+  return `${date} ${time}`;
+}
+
+export function pacingGoalText(goal, now = Date.now()) {
+  const end = goal?.resolvedEnd;
+  const includeTime = goal?.end?.type === 'at' && Number.isFinite(end) && end > now && end - now <= 48 * 60 * 60 * 1000;
+  const by = Number.isFinite(end) ? formatGoalEnd(end, includeTime) : 'reset';
+  return `goal: ${goal?.percent ?? 100}% by ${by}`;
+}
+
+export function formatPacingGoalEnd(end) {
+  return Number.isFinite(end) ? formatGoalEnd(end, true) : 'an unknown time';
+}
+
+export function goalSummary(goals, now = Date.now()) {
+  return (goals || []).map((goal) => `${String(goal.label).toLowerCase()}: ${goal.text || pacingGoalText(goal, now)}`).join('; ');
 }
 
 // The expected-use percentage at the current time, scaled by the goal. Null when no pace forecast exists.
@@ -445,7 +459,8 @@ export function adjustedExpectedPercent(policy, provider, window, now = Date.now
 export function aheadOfQuotaPace(policy, provider, window, now = Date.now()) {
   if (!window) return false;
   const expected = adjustedExpectedPercent(policy, provider, window, now);
-  return (pacingGoalEnd(policy, provider, window) == null && window.willLast === false) || (expected != null && window.usedPercent > expected);
+  const end = pacingGoalEnd(policy, provider, window);
+  return ((end == null || end <= now) && window.willLast === false) || (expected != null && window.usedPercent > expected);
 }
 
 // How far a window is ahead of pace; without expected use, its usage percentage.
@@ -467,10 +482,13 @@ const isLongQuotaWindow = (window) => (Number.isFinite(window.windowMinutes) && 
 export function laneStatus(quotas, policy, now = Date.now(), { todayUse = {} } = {}) {
   const lanes = {};
   for (const q of quotas || []) {
-    const goals = (q.windows || []).filter((w) => !w.extra && Object.hasOwn(policy.pacingGoals?.[q.provider] || {}, w.key)).map((w) => ({
-      label: w.label, percent: pacingGoal(policy, q.provider, w.key), end: policy.pacingGoals[q.provider][w.key]?.end || null,
-      resolvedEnd: pacingGoalEnd(policy, q.provider, w),
-    }));
+    const goals = (q.windows || []).filter((w) => !w.extra && Object.hasOwn(policy.pacingGoals?.[q.provider] || {}, w.key)).map((w) => {
+      const goal = {
+        key: w.key, label: w.label, percent: pacingGoal(policy, q.provider, w.key), end: policy.pacingGoals[q.provider][w.key]?.end || null,
+        resolvedEnd: pacingGoalEnd(policy, q.provider, w) ?? Date.parse(w.resetsAt),
+      };
+      return { ...goal, text: pacingGoalText(goal, now) };
+    });
     const resetWindows = (q.windows || []).filter((w) => !w.extra && w.resetsAt && Date.parse(w.resetsAt) <= now).map((w) => w.label);
     if (!hasQuotaData(q)) { lanes[q.provider] = { state: 'unknown', reason: String(q.error).slice(0, 200), resetWindows, goals }; continue; }
     const exhausted = quotaExhaustion(q, now);
@@ -503,9 +521,14 @@ export function laneStatus(quotas, policy, now = Date.now(), { todayUse = {} } =
     if (!risk && !shortPressure && longPressure && Number.isFinite(Date.parse(longPressure.resetsAt))) {
       const resetsAt = Date.parse(w.resetsAt);
       const daysLeft = Math.max(1, (resetsAt - now) / DAY_MS);
-      const allowancePercent = Math.max(0, (100 - w.usedPercent) / daysLeft);
+      const goalEnd = pacingGoalEnd(policy, q.provider, w);
+      const goalPercent = pacingGoal(policy, q.provider, w.key);
+      const beforeGoalEnd = Number.isFinite(goalEnd) && goalEnd > now;
+      const daysToUse = beforeGoalEnd ? Math.max(1, (goalEnd - now) / DAY_MS) : daysLeft;
+      const targetPercent = beforeGoalEnd || goalEnd == null ? goalPercent : 100;
+      const allowancePercent = Math.max(0, (targetPercent - w.usedPercent) / daysToUse);
       lanes[q.provider] = {
-        state: 'trickle', window: w.label, usedPercent: w.usedPercent, expectedPercent, overPercent,
+        state: 'trickle', window: w.label, windowKey: w.key, usedPercent: w.usedPercent, expectedPercent, overPercent,
         allowancePercent, usedTodayPercent: todayUse[q.provider]?.[w.key] ?? 0,
         resetAt: w.resetsAt || null, resetWindows, goals,
       };

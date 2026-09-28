@@ -1,6 +1,6 @@
 // Turns a snapshot into alerts and bulletin advice. Pure functions, no side effects.
 import { dashboardUrl } from './config.js';
-import { goalSummary, hasQuotaData, machineLimits, POLICY_DEFAULTS, unmeteredClosedParts, unmeteredSummary } from './control.js';
+import { formatPacingGoalEnd, goalSummary, hasQuotaData, machineLimits, pacingGoal, pacingGoalEnd, POLICY_DEFAULTS, unmeteredClosedParts, unmeteredSummary } from './control.js';
 import { blockedWorkerAlerts } from './worker-failures.js';
 import { kitRevision } from './kit/agents-check.js';
 import { leaseBulletinLines } from './leases.js';
@@ -190,8 +190,20 @@ export function evaluate(snap, cfg, paneSince, now = Date.now(), policy = null) 
           title: `${name} ${w.label.toLowerCase()} quota at ${w.usedPercent}%`,
           text: `${name} ${w.label.toLowerCase()} quota is at ${w.usedPercent}% and resets ${reset}. Use ${name} only for work that needs it.`,
         });
-      } else if (w.willLast === false && w.usedPercent >= 40) {
-        advice.push(`${name} ${w.label.toLowerCase()}: ${w.usedPercent}% used, ahead of pace (expected ${w.expectedPercent}%). At this rate it runs out in ${fmtDuration(w.etaSeconds)}, before the reset ${reset}. Use lower reasoning effort for mechanical tasks.`);
+      } else if (w.usedPercent >= 40 && (w.willLast === false || Number.isFinite(pacingGoalEnd(policy, q.provider, w)))) {
+        const goalEnd = pacingGoalEnd(policy, q.provider, w);
+        if (Number.isFinite(goalEnd)) {
+          const goalPercent = pacingGoal(policy, q.provider, w.key);
+          const quotaLeft = 100 - w.usedPercent;
+          const goalLeft = goalPercent - w.usedPercent;
+          const etaToGoal = Number.isFinite(w.etaSeconds) && quotaLeft > 0 && goalLeft > 0
+            ? w.etaSeconds * goalLeft / quotaLeft : null;
+          if (etaToGoal != null && etaToGoal * 1000 < goalEnd - now) {
+            advice.push(`${name} ${w.label.toLowerCase()}: ${w.usedPercent}% used, ahead of pace (expected ${w.expectedPercent}%). At this rate it reaches ${goalPercent}% in ${fmtDuration(etaToGoal)}, before the goal end ${formatPacingGoalEnd(goalEnd)}. Use lower reasoning effort for mechanical tasks.`);
+          }
+        } else {
+          advice.push(`${name} ${w.label.toLowerCase()}: ${w.usedPercent}% used, ahead of pace (expected ${w.expectedPercent}%). At this rate it runs out in ${fmtDuration(w.etaSeconds)}, before the reset ${reset}. Use lower reasoning effort for mechanical tasks.`);
+        }
       }
     }
   }

@@ -106,6 +106,18 @@ test('bulletin and lanes show the trickle allowance and daily use', () => {
     /trickle \(Monthly 50% used, ahead of pace\): about 2\.0%\/day, 0\.4% used today/);
 });
 
+test('bulletin and lanes use the shared short goal text', () => {
+  const quotas = monthlyQuota();
+  const goals = policy({ pacingGoals: { opencodego: { secondary: { percent: 100,
+    end: { type: 'at', at: '2026-10-08T12:00:00.000Z' } } } } });
+  const lanes = laneStatus(quotas, goals, now, { todayUse: { opencodego: { secondary: 0.4 } } });
+  const bulletin = renderBulletin({ updatedAt: new Date(now).toISOString(), quotas, lanes }, { alerts: [], advice: [] }, {});
+  const line = describeLane('opencodego', lanes.opencodego, now);
+
+  assert.match(bulletin, /goal: 100% by Thu 8 Oct/);
+  assert.match(line, /goal: 100% by Thu 8 Oct/);
+});
+
 test('automatic handover selects a trickle lane only while it is under its daily allowance', () => {
   const models = loadModels();
   const snap = {
