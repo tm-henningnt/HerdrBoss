@@ -9,10 +9,23 @@ export const MODELS_FILE = path.join(KIT_ROOT, 'kit', 'models.json');
 export const DEFAULT_BRIEF_TEMPLATE = path.join(KIT_ROOT, 'kit', 'templates', 'worker-brief.md');
 export const DEFAULT_RULES_FILE = path.join(process.env.HERDR_BOSS_DIR || path.join(os.homedir(), '.herdr-boss'), 'rules.json');
 
+// All worker worktrees share one parent folder, so a Codex sandbox needs one writable root for them.
+export const DEFAULT_WORKTREE_ROOT = '~/Projects/.herdr-wt';
+
+export function expandHome(value, home = os.homedir()) {
+  if (value === '~') return home;
+  if (value.startsWith('~/')) return path.join(home, value.slice(2));
+  return value;
+}
+
+export function sharedWorktreeRoot(home = os.homedir()) {
+  return expandHome(DEFAULT_WORKTREE_ROOT, home);
+}
+
 export const PROJECT_DEFAULTS = Object.freeze({
   baseBranch: 'main',
-  worktreeRoot: '..',
-  worktreeName: '{repo}-wt-{name}',
+  worktreeRoot: DEFAULT_WORKTREE_ROOT,
+  worktreeName: '{repo}/{name}',
   evidenceTiers: ['unit', 'integration', 'local-browser', 'hosted', 'owner'],
   ledger: '.orchestration/delegated-runs.jsonl',
   runsDir: '.orchestration/runs',
@@ -65,7 +78,7 @@ export function findGitRoot(cwd = process.cwd()) {
   }
 }
 
-export function loadProjectConfig({ cwd = process.cwd(), file = '.herdr-boss.json' } = {}) {
+export function loadProjectConfig({ cwd = process.cwd(), file = '.herdr-boss.json', home = os.homedir() } = {}) {
   const root = findGitRoot(cwd);
   const configPath = path.resolve(root, file);
   let user = {};
@@ -103,9 +116,10 @@ export function loadProjectConfig({ cwd = process.cwd(), file = '.herdr-boss.jso
   if (!Array.isArray(config.evidenceTiers) || config.evidenceTiers.length === 0 || config.evidenceTiers.some((tier) => typeof tier !== 'string')) {
     throw new Error('evidenceTiers must be a non-empty array of strings.');
   }
-  const worktreeParent = path.isAbsolute(config.worktreeRoot)
-    ? config.worktreeRoot
-    : path.resolve(root, config.worktreeRoot);
+  const worktreeRoot = expandHome(config.worktreeRoot, home);
+  const worktreeParent = path.isAbsolute(worktreeRoot)
+    ? worktreeRoot
+    : path.resolve(root, worktreeRoot);
   return {
     ...config,
     root,

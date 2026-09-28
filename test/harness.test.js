@@ -59,7 +59,7 @@ function codexConfig(roots, { extraBefore = '', extraAfter = '' } = {}) {
 
 // A complete fixture: every fixed entry is present. Tests remove one entry at a time.
 function healthy(f, repos) {
-  const roots = [path.join(f.home, '.herdr-boss'), ...repos.map((repo) => path.join(repo, '.git'))];
+  const roots = [path.join(f.home, '.herdr-boss'), path.join(f.home, 'Projects', '.herdr-wt'), ...repos.map((repo) => path.join(repo, '.git'))];
   writeFile(path.join(f.home, '.codex', 'config.toml'), codexConfig(roots));
   writeFile(path.join(f.home, '.codex', 'rules', 'herdr.rules'), `${FORBIDDEN_PS.map((arg) => `prefix_rule(pattern=["ps", "${arg}"], decision="forbidden")`).join('\n')}\n`);
   writeFile(path.join(f.home, '.claude', 'settings.json'), JSON.stringify({
@@ -140,6 +140,7 @@ test('harness check passes on a complete setup and prints no setting value that 
   const missing = result.stdout.split('\n').filter((line) => line.startsWith('missing'));
   assert.ok(missing.every((line) => /models\.json codex/.test(line)), missing.join('\n'));
   assert.match(result.stdout, /^ok +codex writable_roots: .*Alpha\/\.git \(alpha\)$/m);
+  assert.ok(result.stdout.split('\n').some((line) => /^ok +codex writable_roots: /.test(line) && line.endsWith(`${path.join(f.home, 'Projects', '.herdr-wt')} (worker worktrees)`)), result.stdout);
   assert.match(result.stdout, /^ok +claude autoMode: \*\*Herdr Boss projects\*\* names .*Alpha \(alpha\)$/m);
   assert.match(result.stdout, /^ok +opencode: agent worker exists$/m);
   assert.doesNotMatch(result.stdout + result.stderr, /SECRET|apiKey|primary|allow\b/);
@@ -177,6 +178,7 @@ test('harness check reports each fixed entry', (t) => {
   const out = result.stdout;
   assert.match(out, new RegExp(`^missing +codex writable_roots: ${path.join(f.home, '.herdr-boss').replace(/[.]/g, '\\.')}$`, 'm'));
   assert.match(out, /^bad +codex writable_roots: .*\.config\/herdr-boss must not be writable$/m);
+  assert.match(out, /^missing +codex writable_roots: .*\/Projects\/\.herdr-wt \(worker worktrees\)$/m);
   assert.match(out, /^ok +codex rules: ps e is forbidden$/m);
   for (const arg of ['-E', 'eww', 'auxe', 'auxeww']) assert.match(out, new RegExp(`^missing +codex rules: ps ${arg} is not forbidden`, 'm'));
   assert.match(out, /^missing +opencode: agent worker/m);
@@ -185,6 +187,10 @@ test('harness check reports each fixed entry', (t) => {
   assert.match(out, /^ok +models\.json opencode: --agent worker$/m);
   assert.match(out, /^ok +models\.json pi: --no-approve$/m);
   assert.match(out, /^ok +models\.json pi: --no-extensions$/m);
+
+  // A root written with ~ counts as the parent folder of the worker worktrees.
+  fs.writeFileSync(config, codexConfig([path.join(f.home, '.herdr-boss'), '~/Projects/.herdr-wt']));
+  assert.match(run(f, ['harness', 'check']).stdout, /^ok +codex writable_roots: .*\/Projects\/\.herdr-wt \(worker worktrees\)$/m);
 
   // A parent folder of the private directory also makes it writable.
   fs.writeFileSync(config, codexConfig([path.join(f.home, '.herdr-boss'), path.join(f.home, '.config')]));
@@ -205,7 +211,7 @@ test('harness sync adds the missing roots, keeps the others, makes a backup, and
   const result = run(f, ['harness', 'sync']);
   assert.equal(result.status, 0, result.stderr);
   const after = fs.readFileSync(config, 'utf8');
-  const expected = before.replace(`  "${path.join(beta, '.git')}",\n`, `  "${path.join(beta, '.git')}",\n  "${path.join(f.home, '.herdr-boss')}",\n  "${path.join(alpha, '.git')}",\n`);
+  const expected = before.replace(`  "${path.join(beta, '.git')}",\n`, `  "${path.join(beta, '.git')}",\n  "${path.join(f.home, '.herdr-boss')}",\n  "${path.join(f.home, 'Projects', '.herdr-wt')}",\n  "${path.join(alpha, '.git')}",\n`);
   assert.equal(after, expected);
   assert.equal(fs.statSync(config).mode & 0o777, 0o600);
   const backups = fs.readdirSync(path.dirname(config)).filter((name) => /^config\.toml\.bak-\d{8}T\d{6}Z$/.test(name));
@@ -213,6 +219,7 @@ test('harness sync adds the missing roots, keeps the others, makes a backup, and
   assert.equal(fs.readFileSync(path.join(path.dirname(config), backups[0]), 'utf8'), before);
   // The Claude lines are printed for the Owner; the settings file is not touched.
   assert.match(result.stdout, /\*\*Herdr Boss projects\*\*: .*Beta \(example\/beta\), .*Alpha/);
+  assert.ok(result.stdout.includes(`Worker worktrees are in ${f.home}/Projects/.herdr-wt/<repo>/<name>.`), result.stdout);
   assert.equal(fs.existsSync(path.join(f.home, '.claude', 'settings.json')), false);
 
   // A second run finds nothing to add and makes no new backup.
@@ -256,6 +263,7 @@ test('harness sync --dry-run prints the change and writes nothing', (t) => {
   const result = run(f, ['harness', 'sync', '--dry-run']);
   assert.equal(result.status, 0, result.stderr);
   assert.ok(result.stdout.includes(`+ "${path.join(alpha, '.git')}"`), result.stdout);
+  assert.ok(result.stdout.includes(`+ "${path.join(f.home, 'Projects', '.herdr-wt')}"`), result.stdout);
   assert.match(result.stdout, /Dry run/);
   assert.equal(fs.readFileSync(config, 'utf8'), before);
   assert.deepEqual(fs.readdirSync(path.dirname(config)).filter((name) => name.startsWith('config.toml.bak-')), []);

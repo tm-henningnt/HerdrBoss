@@ -932,6 +932,7 @@ export function startWorker(name, options, {
   let placement = null;
   try {
     if (!options.noWorktree) {
+      fs.mkdirSync(path.dirname(worktree), { recursive: true });
       git(config.root, ['worktree', 'add', '-b', branch, worktree, base]);
       createdWorktree = true;
     }

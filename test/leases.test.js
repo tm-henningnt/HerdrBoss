@@ -23,6 +23,11 @@ function git(cwd, ...args) {
 
 function tempDir(prefix) { return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix))); }
 
+// Worker worktrees default to ~/Projects/.herdr-wt. Keep them out of the real home folder.
+const TEST_HOME = tempDir('herdr-lease-home-');
+process.env.HOME = TEST_HOME;
+process.on('exit', () => fs.rmSync(TEST_HOME, { recursive: true, force: true }));
+
 function temporaryRepo(slug = 'alpha', extra = {}) {
   const root = tempDir('herdr-lease-');
   git(root, 'init', '-b', 'main');

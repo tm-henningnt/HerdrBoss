@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DATA_DIR } from './config.js';
 import { readProjectRepos } from './harness.js';
+import { sharedWorktreeRoot } from './kit/config.js';
 
 export const DENIAL_SCAN_INTERVAL_MS = 15 * 60 * 1000;
 export const SCAN_BUDGET_BYTES = 20 * 1024 * 1024;
@@ -113,29 +114,39 @@ export function parsePiLine(line) {
   return match ? [{ at: timeOf(record.timestamp ?? message.timestamp, null), cause: guardCause(match[0]) }] : [];
 }
 
-// A folder inside <repo> or inside a sibling <repo>-wt-<name> belongs to the slug. The longest repository wins.
-export function projectFor(dir, repos) {
+const within = (dir, parent) => {
+  const rel = path.relative(parent, dir);
+  return rel && !rel.startsWith('..') && !path.isAbsolute(rel) ? rel.split(path.sep) : null;
+};
+
+// A folder inside <repo>, inside a sibling <repo>-wt-<name>, or inside <worktree root>/<repo>/<name> belongs to the slug.
+// The longest repository wins.
+export function projectFor(dir, repos, home = os.homedir()) {
   if (typeof dir !== 'string' || !dir) return 'other';
+  const target = path.resolve(dir);
+  const shared = within(target, path.resolve(sharedWorktreeRoot(home)));
   let best = null;
   for (const { slug, repo } of repos) {
     const root = path.resolve(repo);
-    const rel = path.relative(path.dirname(root), path.resolve(dir));
-    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) continue;
-    const first = rel.split(path.sep)[0];
     const base = path.basename(root);
-    if ((first === base || first.startsWith(`${base}-wt-`)) && (!best || root.length > best.root.length)) best = { slug, root };
+    const first = within(target, path.dirname(root))?.[0];
+    const sibling = first === base || first?.startsWith(`${base}-wt-`);
+    const nested = shared?.length > 1 && shared[0] === base;
+    if ((sibling || nested) && (!best || root.length > best.root.length)) best = { slug, root };
   }
   return best?.slug || 'other';
 }
 
 // Pi names a session folder after its working directory, with each separator as "-" and "--" around it.
 const piEncode = (dir) => path.resolve(dir).replace(/^[/\\]/, '').replace(/[/\\:]/g, '-');
-export function projectForPiFolder(folder, repos) {
+export function projectForPiFolder(folder, repos, home = os.homedir()) {
   const name = String(folder).replace(/^-+|-+$/g, '');
+  const shared = piEncode(sharedWorktreeRoot(home));
   let best = null;
   for (const { slug, repo } of repos) {
     const encoded = piEncode(repo);
-    if ((name === encoded || name.startsWith(`${encoded}-`)) && (!best || encoded.length > best.encoded.length)) best = { slug, encoded };
+    const nested = name.startsWith(`${shared}-${path.basename(path.resolve(repo))}-`);
+    if ((name === encoded || name.startsWith(`${encoded}-`) || nested) && (!best || encoded.length > best.encoded.length)) best = { slug, encoded };
   }
   return best?.slug || 'other';
 }
@@ -225,18 +236,18 @@ export function scanDenialLogs({ home = os.homedir(), state = {}, now = Date.now
     for (const line of result.lines) {
       if (!line) continue;
       if (harness === 'claude') {
-        for (const e of parseClaudeLine(line)) add('claude', e.cause, projectFor(e.cwd, repos), e.at);
+        for (const e of parseClaudeLine(line)) add('claude', e.cause, projectFor(e.cwd, repos, home), e.at);
       } else if (harness === 'codex') {
-        for (const e of parseCodexLine(line, ctx)) add('codex', e.cause, e.cwd ? projectFor(e.cwd, repos) : entry.project || 'other', e.at);
-        if (ctx.cwd) entry.project = projectFor(ctx.cwd, repos);
+        for (const e of parseCodexLine(line, ctx)) add('codex', e.cause, e.cwd ? projectFor(e.cwd, repos, home) : entry.project || 'other', e.at);
+        if (ctx.cwd) entry.project = projectFor(ctx.cwd, repos, home);
       } else if (harness === 'pi') {
-        for (const e of parsePiLine(line)) add('pi', e.cause, projectForPiFolder(folder, repos), e.at);
+        for (const e of parsePiLine(line)) add('pi', e.cause, projectForPiFolder(folder, repos, home), e.at);
       } else {
         const item = parseOpenCodeLine(line);
         if (!item) continue;
         if (item.run && item.cwd) {
           delete opencode.runs[item.run];
-          opencode.runs[item.run] = projectFor(item.cwd, repos);
+          opencode.runs[item.run] = projectFor(item.cwd, repos, home);
         }
         if (item.message === 'asking' && item.id) {
           opencode.pending[item.id] = { at: Number.isFinite(item.at) ? item.at : now, type: OPENCODE_TYPES.has(item.type) ? item.type : 'other', run: item.run || null };

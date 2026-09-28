@@ -116,6 +116,28 @@ test('project attribution maps the repository and its worktree siblings to the s
   assert.equal(projectForPiFolder('--work-Else--', REPOS), 'other');
 });
 
+test('project attribution maps a worktree under the shared parent folder to the slug', () => {
+  const home = '/home/u';
+  const shared = '/home/u/Projects/.herdr-wt';
+  assert.equal(projectFor(`${shared}/HerdrBoss/v22wtparent`, REPOS, home), 'herdrboss');
+  assert.equal(projectFor(`${shared}/HerdrBoss/v22wtparent/src/x`, REPOS, home), 'herdrboss');
+  assert.equal(projectFor(`${shared}/Shop/fix`, REPOS, home), 'shop');
+  assert.equal(projectFor(`${shared}/HerdrBossOther/fix`, REPOS, home), 'other');
+  assert.equal(projectFor(`${shared}/HerdrBoss`, REPOS, home), 'other');
+  assert.equal(projectFor(`${shared}/Else/fix`, REPOS, home), 'other');
+  assert.equal(projectFor('/work/HerdrBoss-wt-old/src', REPOS, home), 'herdrboss');
+  assert.equal(projectForPiFolder('--home-u-Projects-.herdr-wt-HerdrBoss-fix--', REPOS, home), 'herdrboss');
+  assert.equal(projectForPiFolder('--home-u-Projects-.herdr-wt-Shop-fix--', REPOS, home), 'shop');
+  assert.equal(projectForPiFolder('--home-u-Projects-.herdr-wt-Else-fix--', REPOS, home), 'other');
+});
+
+test('a scan attributes a denial in a shared-parent worktree to its project', () => {
+  const home = newHome();
+  writeLines(path.join(home, '.claude/projects/-x/s1.jsonl'), [claudeDenial('Git Destructive', path.join(home, 'Projects', '.herdr-wt', 'Shop', 'w1'))]);
+  const result = runDenialScan({ home, dataDir: path.join(home, 'boss'), repos: REPOS, now: NOW, write: false });
+  assert.deepEqual(result.records.map((r) => [r.harness, r.project]), [['claude', 'shop']]);
+});
+
 test('a scan of all four sources stores counts by day, harness, cause, and project', () => {
   const home = newHome();
   writeLines(path.join(home, '.claude/projects/-work-Shop/s1.jsonl'), [claudeDenial('Instruction Poisoning', '/work/Shop'), claudeDenial('Instruction Poisoning', '/work/Shop'), claudeDenial('Git Destructive', '/work/HerdrBoss-wt-x')]);

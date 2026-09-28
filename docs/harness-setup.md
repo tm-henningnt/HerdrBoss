@@ -35,7 +35,7 @@ WARNING: Agents cannot edit `~/.claude/settings.json`. The auto-mode classifier 
 
 The auto-mode classifier reads `autoMode` only from `~/.claude/settings.json`. A project settings file has no effect on `autoMode`.
 
-The `environment` lines tell the classifier about the supervisor, the Boss messages, the project repositories, and the Owner decisions. Without them, the classifier treats a Boss message as third-party input. It also refuses routine work in a project that the `**Herdr Boss projects**` line does not name. Template: `claude-automode.json`, key `environment`.
+The `environment` lines tell the classifier about the supervisor, the Boss messages, the project repositories, and the Owner decisions. Without them, the classifier treats a Boss message as third-party input. It also refuses routine work in a project that the `**Herdr Boss projects**` line does not name. The same line names the worker worktree folders: `~/Projects/.herdr-wt/<repo>/<name>`, and the older sibling folders `<project>-wt-<name>`. Template: `claude-automode.json`, key `environment`.
 
 The `allow` lines let an orchestrator push its own repository to its own `origin`, remove its own merged worker worktrees, record Owner decisions, and edit the kit in the Herdr Boss repository. Keep `"$defaults"` as the first entry. Without it, the built-in allow rules stop. Template: `claude-automode.json`, key `allow`.
 
@@ -67,11 +67,11 @@ To apply the lines:
 | `herdr.rules` | `~/.codex/rules/herdr.rules` | The Owner, from `codex-herdr.rules`. |
 | `-s workspace-write` | `kit/models.json` | Herdr Boss. |
 
-The Codex sandbox refuses writes outside the worktree. An orchestrator must write the `.git` folder of its main repository to commit, merge, and add a worktree. It must also write `~/.herdr-boss` for locks, scratch folders, and reports. Each project needs one `<repo>/.git` root. Template: `codex-sandbox.toml`.
+The Codex sandbox refuses writes outside the worktree. An orchestrator must write the `.git` folder of its main repository to commit, merge, and add a worktree. It must also write `~/.herdr-boss` for locks, scratch folders, and reports. A worker must write its worktree. All worker worktrees are in the parent folder `~/Projects/.herdr-wt`, so that folder is one root. Each project needs one `<repo>/.git` root. Workers commit through the `.git` folder of the main repository. Template: `codex-sandbox.toml`.
 
 WARNING: Keep `~/.config/herdr-boss` out of `writable_roots`. It holds the private token. A parent folder such as `~/.config` also makes it writable.
 
-`writable_roots` does not accept globs. Sibling worker worktrees (`<project>-wt-<name>`) are not covered.
+`writable_roots` does not accept globs. Older sibling worker worktrees (`<project>-wt-<name>`) are not covered. A Codex worker in such a worktree cannot write its files. Remove the worktree with `herdr-boss worktree prune --apply` when its branch is merged.
 
 `herdr.rules` lets `ps`, the restart of the Herdr Boss service, `herdr-boss browser`, and `playwright-cli` run outside the sandbox. It forbids `ps e`, `ps -E`, `ps eww`, `ps auxe`, and `ps auxeww`, because they print the environment of other processes. Template: `codex-herdr.rules`. Replace `{{UID}}` with the output of `id -u`.
 
@@ -82,12 +82,13 @@ To apply the rules:
 1. Copy `kit/templates/harness/codex-herdr.rules` to `~/.codex/rules/herdr.rules`.
 2. Replace `{{UID}}` with the output of `id -u`.
 3. Check the file: `codex execpolicy check --pretty --rules ~/.codex/rules/herdr.rules`.
-4. Run `herdr-boss harness sync` for the writable roots.
+4. Run `herdr-boss harness sync` for the writable roots. It adds `~/Projects/.herdr-wt`, `~/.herdr-boss`, and each missing `<repo>/.git`.
 5. Start a new Codex session.
 
 | Root or rule | Risk |
 |---|---|
 | `~/.herdr-boss` | An agent can damage the shared Herdr Boss state. |
+| `~/Projects/.herdr-wt` | An agent can change the worktrees of other workers and other projects. |
 | The caches (`~/.cache`, `~/.npm`, the Playwright cache) | Cache poisoning. The risk is low. |
 | Each `<repo>/.git` | Git hooks become writable, so code can run outside the sandbox later. The sandbox gives no other way to commit. |
 | The `launchctl` rule | It allows a restart of the Herdr Boss service only. |
@@ -141,7 +142,7 @@ To apply the guard:
 
 `harness check` checks these entries:
 
-- Codex: `writable_roots` holds `<repo>/.git` for each registered project, and `{{HOME}}/.herdr-boss`.
+- Codex: `writable_roots` holds `<repo>/.git` for each registered project, `{{HOME}}/.herdr-boss`, and `{{HOME}}/Projects/.herdr-wt`.
 - Codex: no root makes `~/.config/herdr-boss` writable.
 - Codex: `herdr.rules` forbids each of the five `ps` forms.
 - Claude: the `**Herdr Boss projects**` line in `autoMode.environment` names each registered project.

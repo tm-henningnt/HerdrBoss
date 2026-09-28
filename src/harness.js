@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DATA_DIR } from './config.js';
+import { expandHome, sharedWorktreeRoot } from './kit/config.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const TEMPLATES = path.join(ROOT, 'kit', 'templates', 'harness');
@@ -53,12 +54,6 @@ export function recordProjectRepo(slug, repo, remote, { dataDir = DATA_DIR } = {
   fs.chmodSync(`${file}.tmp`, 0o600);
   fs.renameSync(`${file}.tmp`, file);
   return { recorded: true, isNew: true };
-}
-
-function expandHome(value, home) {
-  if (value === '~') return home;
-  if (value.startsWith('~/')) return path.join(home, value.slice(2));
-  return value;
 }
 
 function samePath(a, b) { return path.resolve(a) === path.resolve(b); }
@@ -122,7 +117,7 @@ export function parseCodexRoots(text) {
 export function requiredRoots({ home = homeDir(), dataDir = DATA_DIR } = {}) {
   const projects = readProjectRepos(dataDir).map((row) => ({ path: path.join(row.repo, '.git'), slug: row.slug }))
     .sort((a, b) => a.path.localeCompare(b.path));
-  return [{ path: path.join(home, '.herdr-boss'), slug: null }, ...projects];
+  return [{ path: path.join(home, '.herdr-boss'), slug: null }, { path: sharedWorktreeRoot(home), slug: null }, ...projects];
 }
 
 function quote(value) { return JSON.stringify(value); }
@@ -266,6 +261,9 @@ export function checkHarness({ home = homeDir(), dataDir = DATA_DIR, modelsFile 
     const exposing = roots.filter((root) => inside(secret, root));
     if (exposing.length) add('bad', 'codex writable_roots', `${exposing.join(', ')} makes ${secret} writable; ${secret} must not be writable`);
     else add('ok', 'codex writable_roots', `${secret} is not writable`);
+    const worktrees = sharedWorktreeRoot(home);
+    add(roots.some((root) => samePath(root, worktrees)) ? 'ok' : 'missing', 'codex writable_roots', `${worktrees} (worker worktrees)`);
+    // Workers commit through the .git folder of the main repository.
     for (const project of projects) {
       const git = path.join(project.repo, '.git');
       add(roots.some((root) => samePath(root, git)) ? 'ok' : 'missing', 'codex writable_roots', `${git} (${project.slug})`);

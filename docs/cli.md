@@ -62,7 +62,7 @@ The first `publish` of a slug registers the project. It records `{ slug, repo, r
 | Command | Action |
 |---|---|
 | `harness check` | Check the harness settings that orchestration needs. Print one line per entry: `ok`, `missing`, or `bad`, the harness, and the entry. Exit 1 when an entry is `missing` or `bad`. The command prints only paths and entry names. |
-| `harness sync [--dry-run] [--codex-only]` | Back up `~/.codex/config.toml` to `config.toml.bak-<UTC timestamp>`, and add the missing roots to `writable_roots` in `[sandbox_workspace_write]`. Then print the Claude `autoMode` lines for the Owner. `--dry-run` prints the roots to add and writes nothing. `--codex-only` does not print the Claude lines. |
+| `harness sync [--dry-run] [--codex-only]` | Back up `~/.codex/config.toml` to `config.toml.bak-<UTC timestamp>`, and add the missing roots to `writable_roots` in `[sandbox_workspace_write]`. The roots are `~/.herdr-boss`, `~/Projects/.herdr-wt`, and `<repo>/.git` for each registered project. Then print the Claude `autoMode` lines for the Owner. `--dry-run` prints the roots to add and writes nothing. `--codex-only` does not print the Claude lines. |
 
 `harness sync` keeps each existing root and each other line of the file. It adds `~/.herdr-boss` and `<repo>/.git` for each registered project, when they are missing. When the section or the array is missing or cannot be parsed safely, it changes nothing, prints the lines to add, and exits 1. It never edits `~/.claude/settings.json`. The checked entries and the risk of each setting are in [harness-setup.md](harness-setup.md).
 | `herdr-boss scratch SLUG` | Create `~/.herdr-boss/scratch/SLUG/` if it does not exist, and print its absolute path. `HERDR_BOSS_DIR` replaces `~/.herdr-boss`. |
@@ -72,6 +72,8 @@ The first `publish` of a slug registers the project. It records `{ slug, repo, r
 ### `worker start NAME`
 
 Create a branch and worktree, write the brief, add a worker pane, start the agent, and send the brief. Worker panes go in worker tabs in the verified caller workspace. The worker tabs have the labels `Workers`, `Workers 2`, `Workers 3`, and so on. A worker tab holds at most 3 worker panes.
+
+`worker start` puts a new worktree in `~/Projects/.herdr-wt/<repo>/<name>`. It creates the parent folders when they are missing. Set `worktreeRoot` and `worktreeName` in `.herdr-boss.json` to use another place. The dry-run plan shows the worktree path.
 
 `worker start` counts the live panes of each worker tab in `herdr pane list`. It uses the first worker tab in label order that has fewer than 3 panes. It runs `herdr pane split` from the newest pane in that tab. When all worker tabs are full, it runs `herdr tab create` with the lowest free label, for example `--label 'Workers 2'`. The worker then uses the root pane of the new tab. A listed worker tab with 0 live panes counts as free. Herdr has no pane to split in that tab, so `worker start` creates a new tab with the same label.
 
@@ -341,8 +343,8 @@ If a `needs-inspection` record still has a pane in the current Herdr pane list, 
 |---|---|---|
 | `slug` | directory name, lower case | The project slug for status and policy. |
 | `baseBranch` | `main` | The base for new worker branches. |
-| `worktreeRoot` | `..` | Where worker worktrees go, relative to the repository. |
-| `worktreeName` | `{repo}-wt-{name}` | The worktree directory name. |
+| `worktreeRoot` | `~/Projects/.herdr-wt` | The parent folder of the worker worktrees. A leading `~` is the home folder. A relative path is relative to the repository. |
+| `worktreeName` | `{repo}/{name}` | The worktree path inside `worktreeRoot`. `{repo}` is the repository folder name. `{name}` is the worker name. Set `worktreeRoot` to `..` and `worktreeName` to `{repo}-wt-{name}` for sibling folders. |
 | `evidenceTiers` | `unit, integration, local-browser, hosted, owner` | The tiers that reports and the ledger accept. |
 | `ledger` | `.orchestration/delegated-runs.jsonl` | The run ledger. |
 | `runsDir` | `.orchestration/runs` | Run records. |
