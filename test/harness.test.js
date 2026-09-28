@@ -227,6 +227,34 @@ test('harness check reports each fixed entry', (t) => {
   assert.match(run(f, ['harness', 'check']).stdout, /^bad +codex writable_roots: .*\.config\/herdr-boss must not be writable$/m);
 });
 
+test('every harness finding carries a fixed item label and holds no path or text', async (t) => {
+  const { checkHarness } = await import('../src/harness.js');
+  const f = fixture(t);
+  const alpha = gitRepo(f, 'Alpha');
+  registry(f, [{ slug: 'alpha', repo: alpha, remote: 'https://github.com/example/alpha.git' }]);
+  healthy(f, [alpha]);
+  const findings = checkHarness({ home: f.home, dataDir: f.dataDir });
+  assert.ok(findings.length > 0);
+  const items = new Set(findings.map((finding) => finding.item));
+  assert.ok(items.has('Pi guard'), [...items].join(', '));
+  assert.ok(items.has('OpenCode worker agent'), [...items].join(', '));
+  for (const finding of findings) {
+    assert.equal(typeof finding.item, 'string', 'every finding has an item label');
+    assert.ok(finding.item.length > 0, 'the item label is not empty');
+    assert.equal(finding.item, finding.item.trim(), 'the item label has no surrounding space');
+    assert.doesNotMatch(finding.item, /\//, `the item label names no path: ${finding.item}`);
+    assert.equal(finding.item.includes(f.home), false, `the item label holds the home path: ${finding.item}`);
+    assert.notEqual(finding.item, finding.text, 'the item label is not the finding text');
+  }
+
+  // The unsafe-root finding also gets a fixed label and no path.
+  writeFile(path.join(f.home, '.codex', 'config.toml'), codexConfig([path.join(f.home, '.config')]));
+  const bad = checkHarness({ home: f.home, dataDir: f.dataDir }).find((finding) => finding.status === 'bad');
+  assert.ok(bad, 'the fixture reports the private folder as writable');
+  assert.equal(bad.item, 'Private config folder not writable');
+  assert.equal(bad.item.includes(f.home), false);
+});
+
 test('harness sync adds the missing roots, keeps the others, makes a backup, and changes no other line', (t) => {
   const f = fixture(t);
   const alpha = gitRepo(f, 'Alpha');

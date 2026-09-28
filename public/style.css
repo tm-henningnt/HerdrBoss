@@ -1111,3 +1111,14 @@ body.dep-full-open { overflow: hidden; }
 .service-settings-table td:nth-child(2) input[type="number"] { width: 112px; max-width: 100%; }
 .service-settings-table td:nth-child(2) input[type="checkbox"] { width: 16px; height: 16px; vertical-align: middle; }
 .service-settings-note { margin: 12px 0 0; color: var(--muted); font-size: 12.5px; }
+
+/* Read-only harness readiness on the Settings page. */
+.harness-readiness-panel { grid-column: 1 / -1; }
+.harness-readiness-panel h2 { margin: 0 0 10px; }
+.harness-readiness-table td:nth-child(2) { max-width: none; }
+.harness-readiness-table td:last-child { color: var(--text); white-space: normal; overflow-wrap: anywhere; }
+.harness-readiness-status { font: 600 11px var(--mono); text-transform: uppercase; letter-spacing: .04em; }
+.harness-readiness-ok { color: var(--ok); }
+.harness-readiness-missing { color: var(--warn); }
+.harness-readiness-bad { color: var(--crit); }
+.harness-readiness-empty { color: var(--muted); }
