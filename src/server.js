@@ -13,7 +13,7 @@ import { loadModels } from './kit/config.js';
 import { loadPolicy, savePolicy } from './control.js';
 import { recordUsage, usageSummary } from './usage.js';
 import { readDenials, denialSummary } from './denials.js';
-import { requestBrowser, listBrowserSessions, browserStatus, setBrowserWindowSize, closeBrowser, restartBrowser } from './browser-pool.js';
+import { requestBrowser, listBrowserSessions, browserStatus, setBrowserWindowSize, closeBrowser, restartBrowser, listBookmarks, addBookmark, renameBookmark, moveBookmark, removeBookmark, setStartPage } from './browser-pool.js';
 import { listBrowserTabs, browserScreenshot, browserNavigate, browserNavigationState, browserHistoryAction, browserClick, browserInsertText, browserKey, browserNewTab, browserCloseTab, tabAttached } from './browser-preview.js';
 import { listHandoffs } from './handoff.js';
 import { roamgateAvailable, roamgateUrl } from './roamgate.js';
@@ -215,6 +215,24 @@ export function serve(cfg, { readOnlyPreview = false, createEngine = (config, op
         if (!engine.state?.control?.projects?.[project]) return send(res, 404, { error: 'Unknown open project.' });
         try { return send(res, 200, await browserNavigationState(project, url.searchParams.get('tab'))); }
         catch (e) { return send(res, 409, { error: e.message }); }
+      }
+      if (p === '/api/browser-sessions/bookmarks' && req.method === 'GET') {
+        const project = url.searchParams.get('project');
+        if (!engine.state?.control?.projects?.[project]) return send(res, 404, { error: 'Unknown open project.' });
+        try { return send(res, 200, listBookmarks(project)); }
+        catch (e) { return send(res, 400, { error: e.message }); }
+      }
+      if (p === '/api/browser-sessions/bookmarks' && req.method === 'POST') {
+        const body = await jsonBody(req);
+        if (!engine.state?.control?.projects?.[body.project]) return send(res, 404, { error: 'Unknown open project.' });
+        try {
+          if (body.action === 'add') return send(res, 200, addBookmark(body.project, { name: body.name, url: body.url }));
+          if (body.action === 'rename') return send(res, 200, renameBookmark(body.project, body.index, body.name));
+          if (body.action === 'move') return send(res, 200, moveBookmark(body.project, body.index, body.to));
+          if (body.action === 'remove') return send(res, 200, removeBookmark(body.project, body.index));
+          if (body.action === 'start') return send(res, 200, setStartPage(body.project, body.url ?? null));
+          return send(res, 400, { error: 'Unknown bookmark action.' });
+        } catch (e) { return send(res, 400, { error: e.message }); }
       }
       if (p === '/api/browser-sessions/window-size' && req.method === 'POST') {
         const body = await jsonBody(req);

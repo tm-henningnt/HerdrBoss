@@ -386,6 +386,25 @@ button:hover { filter: brightness(1.08); } button:disabled { opacity: .5; cursor
 .browser-size { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; padding-top: 8px; border-top: 1px solid var(--line); }
 .browser-size label { color: var(--muted); font-size: 11.5px; }
 .browser-size input { width: 64px; padding: 5px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel-2); color: var(--text); font: 11px var(--mono); }
+.browser-bookmarks { display: grid; gap: 7px; padding-top: 8px; border-top: 1px solid var(--line); }
+.browser-bookmarks h4 { margin: 0; font-size: 11.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.browser-bookmark-list { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.browser-bookmark-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; padding: 3px 0; }
+.browser-bookmark-name { min-width: 0; flex: 1 1 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.browser-bookmark-actions { display: flex; flex-wrap: wrap; gap: 4px; }
+.browser-bookmark-actions button { padding: 3px 6px; font-size: 11px; }
+.browser-bookmark-actions button.danger { border-color: var(--crit); color: var(--crit); }
+.browser-bookmark-empty { margin: 0; color: var(--muted); font-size: 11.5px; }
+.browser-bookmark-tools { display: flex; flex-wrap: wrap; gap: 6px; }
+.browser-bookmark-rename { display: flex; flex-wrap: wrap; gap: 5px; width: 100%; }
+.browser-bookmark-rename input { min-width: 0; flex: 1 1 140px; padding: 5px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel-2); color: var(--text); font: 12px var(--sans); }
+.browser-start-page { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.browser-start-page label { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1 1 200px; color: var(--muted); font-size: 11.5px; }
+.browser-start-page input { min-width: 0; flex: 1; padding: 5px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel-2); color: var(--text); font: 12px var(--sans); }
+@media (max-width: 760px) {
+  .browser-bookmark-actions button, .browser-bookmark-tools button, .browser-bookmark-rename button, .browser-start-page button { min-height: 44px; }
+  .browser-bookmark-rename input, .browser-start-page input { min-height: 44px; }
+}
 .browser-preview { display: grid; gap: 8px; min-width: 0; padding-top: 8px; border-top: 1px solid var(--line); }
 .browser-preview-tools { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; min-width: 0; width: 100%; }
 .browser-preview-tools select { width: 0; min-width: 0; flex: 1 1 160px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; padding: 5px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel-2); color: var(--text); font-size: 11px; }

@@ -346,7 +346,7 @@ Each project browser port is a lease in the built-in resource pool `project-brow
 - When another project holds the recorded port, `browser request` leases a new port and writes it to the record.
 - `browser close` keeps the lease.
 - `herdr-boss browser release SLUG` removes the lease. It refuses while the project Chrome runs. The record stays.
-- `browser-sessions.json` keeps the profile, the window size, the headless mode, the PID, and the code-sign clone of each project. The lease keeps only the port.
+- `browser-sessions.json` keeps the profile, the window size, the headless mode, the PID, the code-sign clone, the bookmarks, and the start page of each project. The lease keeps only the port.
 
 Herdr Boss reclaims a project browser lease when no Chrome process has the port flag and the profile path of the project on two service ticks in a row. A "not responding" browser still has its process, so Herdr Boss does not reclaim its lease. When the process list fails on a tick, that tick does not count. A reclaim closes no browser and changes no record. The next `browser request` leases the recorded port again when it is free.
 
@@ -410,6 +410,19 @@ Each tab row in the one-tab list and each tile in the All tabs grid has a **Clos
 Before it closes a tab that an agent holds, the page asks the Owner to confirm: "Tab <title> belongs to <agent>. Close it anyway?" Only after Yes does the page send `force: true`. Before it closes the last tab, the page warns the Owner that the browser keeps running with no page.
 
 The page uses `POST /api/browser-sessions/tab-close` with the body `{ project, tabId }`, and the optional field `force`. The route refuses an unknown project and a missing tab. The read-only preview refuses every change. The CLI command is `herdr-boss browser tab close SLUG --tab ID`.
+
+### Bookmarks and the start page
+
+Each browser card has a **Bookmarks** list. The list holds at most 30 bookmarks for the project. A bookmark name has at most 60 characters. A bookmark URL must use `http` or `https`. It must not hold a user name or a password. Herdr Boss refuses such a URL with "Bookmarks must not hold credentials."
+
+- **Add current page** saves the URL and title of the selected tab. When the browser has one tab, it uses that tab.
+- **Open** loads the bookmark in the current tab. **New tab** opens the bookmark in a new tab of its own window.
+- **Rename** shows a small form in the row. The arrows move the bookmark up or down. **Delete** asks the Owner to confirm.
+- **Start page** is the page that opens in the first tab of the next launch. **Save** stores it. A blank value clears it. A running browser does not change.
+
+The page uses `GET /api/browser-sessions/bookmarks?project=SLUG` and `POST /api/browser-sessions/bookmarks` with `{ project, action }`. The action is `add`, `rename`, `move`, `remove`, or `start`. The route refuses an unknown open project, a bad URL, and a bad index. The read-only preview refuses every change. The CLI commands are `herdr-boss browser bookmarks SLUG list|add NAME URL|rm INDEX|open INDEX [--new-tab]|start URL|none`.
+
+The bookmarks and the start page stay in the project record in `browser-sessions.json`. Herdr Boss never stores them in a repository.
 
 Agent commands and tab rules are in [the browser service](../kit/browser-service.md).
 
@@ -755,7 +768,7 @@ The dashboard uses these routes. A request from another host needs the access to
 | `GET /api/projects`, `PUT`, `DELETE /api/projects/SLUG` | Read, write, or delete project status. |
 | `GET /api/handoffs`, `GET /api/handoffs/output?id=ID` | Handover records, and a successor's pane output. |
 | `POST /api/handoffs/plan`, `/prepare`, `/activate` | The handover steps. Activation needs `confirmed: true`. |
-| `GET`, `POST /api/browser-sessions...` | Browser list, request, tabs, screenshot, navigation, input, new tab, tab close, close, and restart. Input to an agent tab returns 409 unless the body has `confirmAttached: true`. Tab close returns 409 for a tab that an agent holds unless the body has `force: true`. |
+| `GET`, `POST /api/browser-sessions...` | Browser list, request, tabs, screenshot, navigation, input, new tab, tab close, close, restart, and bookmarks. Input to an agent tab returns 409 unless the body has `confirmAttached: true`. Tab close returns 409 for a tab that an agent holds unless the body has `force: true`. `GET /api/browser-sessions/bookmarks?project=SLUG` reads the bookmarks and the start page. `POST /api/browser-sessions/bookmarks` changes them with `{ project, action }`. |
 | `POST /api/leases/release` | Release a lease: `{ pool, item, project }`. Returns 409 when the lease changed. |
 | `GET /api/messages?thread=THREAD` | The records of one thread, oldest first, at most 200. |
 | `POST /api/messages` | Queue an Owner message: `{ thread, kind, text }`. `kind` is `message`, `nudge`, or `status-request`. Returns 400 for invalid input, 404 for an unknown thread, and 429 above 10 sends a minute. |

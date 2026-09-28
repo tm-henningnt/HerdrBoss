@@ -367,6 +367,11 @@ Each project has one persistent Chrome profile on a port from 9223 to 9299. The 
 | `browser click SLUG X% Y% [--tab ID]` | Click at a position relative to the screenshot. |
 | `browser text SLUG --stdin [--tab ID]` | Type text from standard input. The text is not echoed. |
 | `browser key SLUG KEY [--tab ID]` | Send `Tab`, `Enter`, `Backspace`, `Delete`, `Escape`, `Home`, `End`, an arrow key, or `SelectAll`. |
+| `browser bookmarks SLUG list` | List the bookmarks and the start page of the project. |
+| `browser bookmarks SLUG add NAME URL` | Add one bookmark. The name has at most 60 characters. The URL must use `http` or `https` and must not hold a user name or a password. |
+| `browser bookmarks SLUG rm INDEX` | Remove the bookmark at `INDEX`. |
+| `browser bookmarks SLUG open INDEX [--new-tab]` | Open the bookmark in the current tab, or in a new tab with `--new-tab`. |
+| `browser bookmarks SLUG start URL\|none` | Set the start page of the next launch, or clear it with `none`. |
 | `browser sweep-clones [--dry-run]` | Delete orphaned Chrome code-sign clones now. Prints the count and the freed GiB. `--dry-run` lists each clone by name and age and deletes nothing. |
 
 ```sh
@@ -376,6 +381,8 @@ herdr-boss browser screenshot tmprocessmining --tab "$id"
 ```
 
 The screenshot command writes under `$TMPDIR` when it is set. Otherwise, it creates a safe temporary directory. Pass `--out DIR` to choose an output directory. This option overrides `$TMPDIR` and can be used with `--tab`.
+
+A project keeps at most 30 bookmarks. A bookmark URL must use `http` or `https` and must not hold a user name or a password. The start page opens in the first tab of the next launch. The bookmarks and the start page stay in the project record in `browser-sessions.json`.
 
 ## Orchestrator handover
 
