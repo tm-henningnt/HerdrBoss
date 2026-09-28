@@ -10,8 +10,8 @@
       "contextTokens": 200000
     },
     "claude": {
-      "defaultModel": "claude-opus-5-5",
-      "allowedModels": ["claude-opus-5-5", "claude-opus-5"],
+      "defaultModel": "claude-sonnet-5-5",
+      "allowedModels": ["claude-sonnet-5-5", "claude-opus-5-5"],
       "allowedEfforts": [],
       "defaultEffort": null,
       "launchArgs": ["--model", "{{model}}", "--permission-mode", "auto", "--disallowedTools", "AskUserQuestion"],

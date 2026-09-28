@@ -551,7 +551,7 @@ export function laneStatus(quotas, policy, now = Date.now(), { todayUse = {} } =
 
 const USE_NOW_KINDS = { claude: 'claude', codex: 'codex', opencodego: 'opencode' };
 
-// List metered lanes that can take work now, putting the most headroom first.
+// List the lanes that can take work now: the unmetered lane first, then the metered lanes with the most headroom first.
 export function useNowLanes(lanes) {
   const belowPace = [];
   const trickle = [];
@@ -582,7 +582,7 @@ export function useNowLanes(lanes) {
     }
   }
   belowPace.sort((a, b) => b.roomPercent - a.roomPercent || a.provider.localeCompare(b.provider));
-  return [...belowPace, ...ignored, ...trickle, ...open, ...free].map(({ provider, kind, reason }) => ({ provider, kind, reason }));
+  return [...free, ...belowPace, ...ignored, ...trickle, ...open].map(({ provider, kind, reason }) => ({ provider, kind, reason }));
 }
 
 // When no metered provider is open or under its trickle allowance, the least-over provider that is only ahead of pace may start.

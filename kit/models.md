@@ -13,12 +13,13 @@ The observed order from lower to higher cost is:
 1. Free `opencode/` models, including Muse Spark and Mimo.
 2. `opencode-go/deepseek-v4.1-flash`.
 3. Codex `gpt-6-luna`.
-4. Claude `claude-opus-5-5` and Codex Sol.
-5. Codex Astra.
+4. Claude `claude-sonnet-5-5`.
+5. Claude `claude-opus-5-5` and Codex Sol.
+6. Codex Astra.
 
 Treat this order as a routing hint.
 
-Prefer an unmetered model for bounded, well-specified work while a metered provider is ahead of pace. Reserve metered models for work that needs judgment. Read the unmetered lane in `herdr-boss lanes`; a worker-start refusal or least-over notice lists your project's unmetered alternatives first.
+Use an unmetered model first for every bounded, well-specified task: implementation, tests, docs, audits, and data checks. Do this whatever the pace of the metered lanes. A metered lane with pacing turned off is still a finite weekly quota. Use metered models for work that needs judgment, and when the unmetered lanes fail. Read the unmetered lane in `herdr-boss lanes` and the bulletin **Use now** line, which lists the unmetered lane first.
 
 Provider quota, task fit, availability, and review effort affect the real cost.
 
@@ -26,12 +27,13 @@ Provider quota, task fit, availability, and review effort affect the real cost.
 
 | Kind and model | Best fit | Limits |
 | --- | --- | --- |
-| `claude`, `claude-opus-5-5` | Visual judgment, browser work, hosted review, and product coherence. | Reserve it for judgment while its lane is ahead of pace; use it for implementation when it has headroom. |
+| `claude`, `claude-sonnet-5-5` | The default Claude worker: implementation, review, and browser checks. | Use it when an unmetered model is not enough for the task. |
+| `claude`, `claude-opus-5-5` | The hardest judgment work, and orchestrators. | Reserve it for work that `claude-sonnet-5-5` cannot do well. |
 | `codex`, `gpt-6-luna` | Core seams, algorithms, cross-cutting changes, and takeovers. | Review root causes and pixel claims. Long sessions can stop without a final report. |
 | `pi`, `opencode-go/deepseek-v4.1-flash` | Economical research and fully specified mechanical work. | Shared Go quota can stop every worker on that provider. Pin the model and verify results. |
 | `pi`, `opencode-go/muse-spark-1.3-contributor` | Cheap bounded implementation, docs, copy, and read-only diagnosis. | Source records disagree on its success rate. Keep the task atomic and inspect every path. |
-| `pi`, `opencode-go/space-bunny-free` | Bounded audits and review-only work. | Evidence is limited. Verify each finding at its source. |
-| `opencode`, free `opencode/` models | Exact one-file changes with a clear gate. | Use only small, mechanical briefs. Permission prompts and provider overload can stop work. |
+| `pi`, `opencode-go/space-bunny-free` and `opencode-go/longcat-2.5-preview-free` (unmetered) | Bounded, well-specified implementation, tests, docs, audits, and data checks. | Evidence is limited. Verify the full diff and each finding at its source. |
+| `opencode`, free `opencode/` models (unmetered) | Bounded, well-specified implementation, tests, docs, audits, and data checks. | Give an exact brief and a clear gate. Verify the full diff. Permission prompts and provider overload can stop work; then move the task to another lane. |
 
 Free `opencode/` models recorded in the source include:
 

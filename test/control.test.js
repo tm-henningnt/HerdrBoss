@@ -1598,7 +1598,7 @@ test('harness routes permit only the compatible provider or unmetered for Codex 
   }
   assert.deepEqual(validatePolicy(policy({
     extraModels: { codex: ['gpt-7'], claude: ['claude-next'], pi: ['vendor/x'] },
-    harnessRoutes: { codex: { 'gpt-6-luna': 'codex', 'gpt-7': null }, claude: { 'claude-opus-5': 'claude', 'claude-next': null }, pi: { 'vendor/x': 'claude' }, opencode: { 'opencode/big-pickle': 'codex' } },
+    harnessRoutes: { codex: { 'gpt-6-luna': 'codex', 'gpt-7': null }, claude: { 'claude-sonnet-5-5': 'claude', 'claude-next': null }, pi: { 'vendor/x': 'claude' }, opencode: { 'opencode/big-pickle': 'codex' } },
   }), models), [], 'compatible, unmetered, and open-harness routes are accepted');
   assert.deepEqual(validatePolicy(policy({ modelProviders: { 'opencode-go/deepseek-v4.1-flash': 'codex' } }), models), [], 'open harnesses accept any legacy route');
 });
@@ -1606,7 +1606,7 @@ test('harness routes permit only the compatible provider or unmetered for Codex 
 test('saving rejects an incompatible effective legacy route unless the harness has a compatible override', () => {
   const errors = validatePolicy(policy({ modelProviders: { 'gpt-6-sol': 'claude' } }), models).join(' ');
   assert.match(errors, /modelProviders: codex\/gpt-6-sol inherits claude\. Choose codex or null \(unmetered\) in harnessRoutes\.codex\./);
-  assert.match(validatePolicy(policy({ modelProviders: { 'claude-opus-5': 'opencodego' } }), models).join(' '), /claude\/claude-opus-5 inherits opencodego\. Choose claude or null/);
+  assert.match(validatePolicy(policy({ modelProviders: { 'claude-sonnet-5-5': 'opencodego' } }), models).join(' '), /claude\/claude-sonnet-5-5 inherits opencodego\. Choose claude or null/);
   assert.deepEqual(validatePolicy(policy({ modelProviders: { 'gpt-6-sol': 'claude' }, harnessRoutes: { codex: { 'gpt-6-sol': 'codex' } } }), models), []);
   assert.deepEqual(validatePolicy(policy({ modelProviders: { 'gpt-6-sol': 'claude' }, harnessRoutes: { codex: { 'gpt-6-sol': null } } }), models), []);
   assert.deepEqual(validatePolicy(policy({ modelProviders: { 'gpt-6-sol': 'claude' }, allowedKinds: ['claude', 'pi'] }), models), [], 'a disabled harness does not block a save');
