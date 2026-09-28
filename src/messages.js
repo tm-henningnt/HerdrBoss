@@ -1,11 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { randomBytes } from 'node:crypto';
 import { DATA_DIR } from './config.js';
 import { SLUG } from './projects.js';
+import { openMessageStore, RETENTION_MS, messagesFile } from './message-store.js';
 
-// Owner messages, agent replies, and Boss reports. One JSON record per line in messages.jsonl.
-export const RETENTION_MS = 30 * 86400 * 1000;
+export { RETENTION_MS, messagesFile };
+
+// Owner messages, agent replies, and Boss reports.
 export const THREAD_LIMIT = 200;
 export const OWNER_TEXT_MAX = 2000;
 export const SAY_TEXT_MAX = 4000;
@@ -22,90 +23,24 @@ export const READ_IDS_MAX = 200;
 export const CHOICES_MAX = 10;
 export const CHOICE_TEXT_MAX = 200;
 const OWNER_KINDS = ['message', 'nudge', 'status-request'];
-const LOCK_WAIT_MS = 2000;
-const LOCK_STALE_MS = 10000;
 
-export const messagesFile = (dir = DATA_DIR) => path.join(dir, 'messages.jsonl');
 export const validThread = (thread) => thread === 'boss' || (typeof thread === 'string' && SLUG.test(thread));
 
-function pause(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
-
-// The service, `say`, and `mail post` write the same file. A short lock file keeps a rewrite from losing an append.
-function withLock(dir, fn) {
-  fs.mkdirSync(dir, { recursive: true });
-  const lock = `${messagesFile(dir)}.lock`;
-  const deadline = Date.now() + LOCK_WAIT_MS;
-  for (;;) {
-    try { fs.closeSync(fs.openSync(lock, 'wx', 0o600)); break; }
-    catch (error) {
-      if (error.code !== 'EEXIST') throw error;
-      try { if (Date.now() - fs.statSync(lock).mtimeMs > LOCK_STALE_MS) { fs.unlinkSync(lock); continue; } } catch {}
-      if (Date.now() > deadline) throw new Error(`The message store is locked (${lock}). Try again.`);
-      pause(20);
-    }
-  }
-  try { return fn(); }
-  finally { try { fs.unlinkSync(lock); } catch {} }
-}
-
 export function readMessages({ dir = DATA_DIR } = {}) {
-  let text;
-  try { text = fs.readFileSync(messagesFile(dir), 'utf8'); }
-  catch (error) { if (error.code === 'ENOENT') return []; throw error; }
-  const records = [];
-  for (const line of text.split('\n')) {
-    if (!line.trim()) continue;
-    try { const record = JSON.parse(line); if (record && typeof record.id === 'string') records.push(record); } catch {}
-  }
-  return records;
+  return openMessageStore({ dir }).all();
 }
 
-const fresh = (records, now) => records.filter((record) => !(Date.parse(record.at) < now - RETENTION_MS));
-
-function rewrite(dir, records) {
-  const file = messagesFile(dir);
-  const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, records.map((record) => `${JSON.stringify(record)}\n`).join(''), { mode: 0o600 });
-  fs.chmodSync(tmp, 0o600);
-  fs.renameSync(tmp, file);
-}
-
-function newId(now) {
-  return `m-${now.toString(36)}-${randomBytes(4).toString('hex')}`;
-}
-
-// Append with one write. A record older than 30 days makes the append a rewrite that deletes it.
+// Keep this wrapper while callers move to the message store interface.
 export function appendMessage(fields, { dir = DATA_DIR, now = Date.now() } = {}) {
-  const record = {
-    id: newId(now), at: new Date(now).toISOString(), thread: null, from: null, to: null, kind: null, text: '',
-    action: null, replyTo: null, status: null, sentAt: null, error: null, relayedAt: null, relayedBy: null, ...fields,
-  };
-  return withLock(dir, () => {
-    const records = readMessages({ dir });
-    const kept = fresh(records, now);
-    if (kept.length !== records.length) rewrite(dir, [...kept, record]);
-    else {
-      fs.appendFileSync(messagesFile(dir), `${JSON.stringify(record)}\n`, { mode: 0o600 });
-      fs.chmodSync(messagesFile(dir), 0o600);
-    }
-    return record;
-  });
+  return openMessageStore({ dir }).append(fields, { now });
 }
 
 export function updateMessage(id, patch, { dir = DATA_DIR, now = Date.now() } = {}) {
-  return withLock(dir, () => {
-    const records = readMessages({ dir });
-    const index = records.findIndex((record) => record.id === id);
-    if (index < 0) return null;
-    records[index] = { ...records[index], ...patch, id };
-    const updated = records[index];
-    rewrite(dir, fresh(records, now));
-    return updated;
-  });
+  return openMessageStore({ dir }).update(id, patch, { now });
 }
 
 export function listThread(thread, { dir = DATA_DIR, limit = THREAD_LIMIT } = {}) {
-  return readMessages({ dir }).filter((record) => record.thread === thread).slice(-limit);
+  return openMessageStore({ dir }).thread(thread, { limit });
 }
 
 // ---------- Owner sends ----------
@@ -279,16 +214,14 @@ export function mailboxFolders(records) {
 }
 
 export function closeMailboxItem(id, { dir = DATA_DIR, now = Date.now() } = {}) {
-  return withLock(dir, () => {
-    const records = readMessages({ dir });
+  return openMessageStore({ dir }).mutate((records) => {
     const item = records.find((record) => record.id === id && isMailboxItem(record));
-    if (!item) return null;
+    if (!item) return { records, result: null };
     const at = new Date(now).toISOString();
     item.closedAt ||= at;
     item.readAt ||= at;
-    rewrite(dir, fresh(records, now));
-    return item;
-  });
+    return { records, result: item };
+  }, { now });
 }
 
 // Record that the Boss handled one or more open Owner mailbox items without sending a reply.
@@ -302,13 +235,12 @@ export function closeMailboxItems(ids, note, { by, dir = DATA_DIR, now = Date.no
   if (text.length < 1 || text.length > 500) return { status: 400, error: 'The close note must be 1 to 500 characters.' };
   try { refuseSecret(text, 'note'); }
   catch (error) { return { status: 400, error: error.message }; }
-  return withLock(dir, () => {
-    const records = readMessages({ dir });
+  return openMessageStore({ dir }).mutate((records) => {
     const items = ids.map((id) => records.find((record) => record.id === id && isMailboxItem(record)));
     const missing = ids.find((id, index) => !items[index]);
-    if (missing) return { status: 404, error: `No open mailbox item has the ID ${missing}.` };
+    if (missing) return { records, result: { status: 404, error: `No open mailbox item has the ID ${missing}.` } };
     const closed = items.find((item) => item.closedAt);
-    if (closed) return { status: 409, error: `Mailbox item ${closed.id} is already closed.` };
+    if (closed) return { records, result: { status: 409, error: `Mailbox item ${closed.id} is already closed.` } };
     const at = new Date(now).toISOString();
     for (const item of items) {
       item.closedAt = at;
@@ -316,9 +248,8 @@ export function closeMailboxItems(ids, note, { by, dir = DATA_DIR, now = Date.no
       item.closedBy = 'boss';
       item.closeNote = text;
     }
-    rewrite(dir, fresh(records, now));
-    return { ok: true, closed: items.length };
-  });
+    return { records, result: { ok: true, closed: items.length } };
+  }, { now });
 }
 
 // Sets readAt on each item once. `close: true` also closes items whose action is read.
@@ -330,13 +261,12 @@ export function markMailboxRead(body, { dir = DATA_DIR, now = Date.now() } = {})
     return { status: 400, error: `ids must be a list of 1 to ${READ_IDS_MAX} mailbox item IDs.` };
   }
   if (typeof close !== 'boolean') return { status: 400, error: 'close must be true or false.' };
-  return withLock(dir, () => {
-    const records = readMessages({ dir });
+  return openMessageStore({ dir }).mutate((records) => {
     const items = ids.map((id) => records.find((record) => record.id === id && isMailboxItem(record)));
     const missing = ids.find((id, index) => !items[index]);
-    if (missing) return { status: 404, error: `No mailbox item has the ID ${missing}.` };
+    if (missing) return { records, result: { status: 404, error: `No mailbox item has the ID ${missing}.` } };
     if (close && items.some((item) => mailboxAction(item) !== 'read')) {
-      return { status: 409, error: 'Only an item with the action read closes on Mark read. Answer the other items.' };
+      return { records, result: { status: 409, error: 'Only an item with the action read closes on Mark read. Answer the other items.' } };
     }
     const at = new Date(now).toISOString();
     let updated = 0;
@@ -346,9 +276,8 @@ export function markMailboxRead(body, { dir = DATA_DIR, now = Date.now() } = {})
       if (close && !item.closedAt) { item.closedAt = at; changed = true; }
       if (changed) updated += 1;
     }
-    rewrite(dir, fresh(records, now));
-    return { ok: true, updated };
-  });
+    return { records, result: { ok: true, updated } };
+  }, { now });
 }
 
 // Dismiss open Needs-you items without sending an answer to an agent.
@@ -358,13 +287,12 @@ export function dismissMailboxItems(body, { dir = DATA_DIR, now = Date.now() } =
   if (!Array.isArray(ids) || ids.length < 1 || ids.length > READ_IDS_MAX || !ids.every((id) => typeof id === 'string')) {
     return { status: 400, error: `ids must be a list of 1 to ${READ_IDS_MAX} mailbox item IDs.` };
   }
-  return withLock(dir, () => {
-    const records = readMessages({ dir });
+  return openMessageStore({ dir }).mutate((records) => {
     const items = ids.map((id) => records.find((record) => record.id === id && isMailboxItem(record)));
     const missing = ids.find((id, index) => !items[index]);
-    if (missing) return { status: 404, error: `No mailbox item has the ID ${missing}.` };
+    if (missing) return { records, result: { status: 404, error: `No mailbox item has the ID ${missing}.` } };
     if (items.some((item) => !needsOwnerAction(item) || item.closedAt)) {
-      return { status: 409, error: 'Only open Needs-you items can be dismissed.' };
+      return { records, result: { status: 409, error: 'Only open Needs-you items can be dismissed.' } };
     }
     const at = new Date(now).toISOString();
     for (const item of items) {
@@ -372,9 +300,8 @@ export function dismissMailboxItems(body, { dir = DATA_DIR, now = Date.now() } =
       item.closedAt ||= at;
       item.dismissed = true;
     }
-    rewrite(dir, fresh(records, now));
-    return { ok: true, dismissed: items.length };
-  });
+    return { records, result: { ok: true, dismissed: items.length } };
+  }, { now });
 }
 
 // Mark queued Owner messages as relayed. The CLI verifies that the caller is the Boss pane.
@@ -383,21 +310,19 @@ export function relayOwnerMessages(ids, { by, dir = DATA_DIR, now = Date.now() }
   if (!Array.isArray(ids) || ids.length < 1 || ids.length > READ_IDS_MAX || !ids.every((id) => typeof id === 'string')) {
     return { status: 400, error: `Give 1 to ${READ_IDS_MAX} Owner message IDs to relay.` };
   }
-  return withLock(dir, () => {
-    const records = readMessages({ dir });
+  return openMessageStore({ dir }).mutate((records) => {
     const items = ids.map((id) => records.find((record) => record.id === id && record.from === 'owner'));
     const missing = ids.find((id, index) => !items[index]);
-    if (missing) return { status: 404, error: `No queued Owner message has the ID ${missing}.` };
-    if (items.some((item) => item.status !== 'queued')) return { status: 409, error: 'Only queued Owner messages can be relayed.' };
+    if (missing) return { records, result: { status: 404, error: `No queued Owner message has the ID ${missing}.` } };
+    if (items.some((item) => item.status !== 'queued')) return { records, result: { status: 409, error: 'Only queued Owner messages can be relayed.' } };
     const relayedAt = new Date(now).toISOString();
     for (const item of items) {
       item.status = 'relayed';
       item.relayedAt = relayedAt;
       item.relayedBy = 'boss';
     }
-    rewrite(dir, fresh(records, now));
-    return { ok: true, relayed: items.length };
-  });
+    return { records, result: { ok: true, relayed: items.length } };
+  }, { now });
 }
 
 // ---------- Delivery ----------
