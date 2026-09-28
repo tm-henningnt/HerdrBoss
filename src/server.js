@@ -14,7 +14,7 @@ import { loadPolicy, savePolicy } from './control.js';
 import { recordUsage, usageSummary } from './usage.js';
 import { readDenials, denialSummary } from './denials.js';
 import { requestBrowser, listBrowserSessions, browserStatus, setBrowserWindowSize, closeBrowser, restartBrowser } from './browser-pool.js';
-import { listBrowserTabs, browserScreenshot, browserNavigate, browserNavigationState, browserHistoryAction, browserClick, browserInsertText, browserKey, browserNewTab, tabAttached } from './browser-preview.js';
+import { listBrowserTabs, browserScreenshot, browserNavigate, browserNavigationState, browserHistoryAction, browserClick, browserInsertText, browserKey, browserNewTab, browserCloseTab, tabAttached } from './browser-preview.js';
 import { listHandoffs } from './handoff.js';
 import { roamgateAvailable, roamgateUrl } from './roamgate.js';
 import { createAccessControl, loginPage } from './access.js';
@@ -93,7 +93,7 @@ async function jsonBody(req) {
   return JSON.parse(await readBody(req));
 }
 
-export function serve(cfg, { readOnlyPreview = false, createEngine = (config, options) => new Engine(config, options) } = {}) {
+export function serve(cfg, { readOnlyPreview = false, createEngine = (config, options) => new Engine(config, options), closeTab = browserCloseTab } = {}) {
   // A direct serve() call must refuse an unsafe preview before the access token, the watcher, or a tick writes a file.
   if (readOnlyPreview) assertPreviewDataDir();
   const access = readOnlyPreview ? null : createAccessControl(cfg.access.tokenFile, {
@@ -254,6 +254,13 @@ export function serve(cfg, { readOnlyPreview = false, createEngine = (config, op
         const body = await jsonBody(req);
         if (!engine.state?.control?.projects?.[body.project]) return send(res, 404, { error: 'Unknown open project.' });
         try { return send(res, 200, await browserNewTab(body.project)); }
+        catch (e) { return send(res, 409, { error: e.message }); }
+      }
+      if (p === '/api/browser-sessions/tab-close' && req.method === 'POST') {
+        const body = await jsonBody(req);
+        if (!engine.state?.control?.projects?.[body.project]) return send(res, 404, { error: 'Unknown open project.' });
+        if (typeof body.tabId !== 'string' || !body.tabId) return send(res, 400, { error: 'tabId is required.' });
+        try { return send(res, 200, await closeTab(body.project, body.tabId, { force: body.force === true })); }
         catch (e) { return send(res, 409, { error: e.message }); }
       }
       if (p === '/api/browser-sessions/close' && req.method === 'POST') {

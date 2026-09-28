@@ -65,6 +65,7 @@ test('read-only preview allows reads and rejects all API methods that can change
     ['POST', '/api/browser-sessions/history'],
     ['POST', '/api/browser-sessions/input'],
     ['POST', '/api/browser-sessions/new-tab'],
+    ['POST', '/api/browser-sessions/tab-close'],
     ['POST', '/api/browser-sessions/close'],
     ['POST', '/api/browser-sessions/request'],
     ['POST', '/api/browser-sessions/restart'],
@@ -657,4 +658,88 @@ test('one Agents tab has Chart and List views, a new menu order, and an /organiz
   assert.match(app, /if \(route === 'agents' && agentsViewMode\(\) === 'chart'\) orgMotion\(state\)/);
   // /organization opens the Chart view in place.
   assert.match(app, /if \(location\.pathname === '\/organization'\) history\.replaceState\(null, '', '\/agents\?view=chart'\)/);
+});
+
+test('the browser tab-close route closes one tab, refuses an attached tab, reports a missing tab, and refuses the preview', { timeout: 20000 }, async (t) => {
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.mkdirSync(homeDir, { recursive: true });
+  t.after(() => {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  });
+  const cfg = loadConfig();
+  cfg.host = '127.0.0.1';
+  cfg.port = 0;
+  cfg.tickSeconds = 3600;
+  const calls = [];
+  const { server, close } = serve(cfg, {
+    createEngine: () => {
+      const engine = new EventEmitter();
+      engine.state = { control: { projects: { alpha: {} } } };
+      engine.tick = async () => engine.state;
+      engine.log = () => {};
+      return engine;
+    },
+    closeTab: async (project, tabId, options) => {
+      calls.push({ project, tabId, force: options?.force === true });
+      if (tabId === 'gone') throw new Error('That tab is no longer open. Run browser tabs again.');
+      if (tabId === 'held' && !options?.force) throw new Error('An agent is attached to this tab. Close it when that agent is done, or pass --force.');
+      return { closed: tabId };
+    },
+  });
+  t.after(async () => { await close(); });
+  await new Promise((resolve, reject) => {
+    server.once('listening', resolve);
+    server.once('error', reject);
+  });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const post = (body) => fetch(`${base}/api/browser-sessions/tab-close`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+
+  const ok = await post({ project: 'alpha', tabId: 't1' });
+  assert.equal(ok.status, 200);
+  assert.deepEqual(await ok.json(), { closed: 't1' });
+  assert.deepEqual(calls.at(-1), { project: 'alpha', tabId: 't1', force: false }, 'the route closes one tab without force');
+
+  const held = await post({ project: 'alpha', tabId: 'held' });
+  assert.equal(held.status, 409);
+  assert.match((await held.json()).error, /agent is attached/);
+
+  const forced = await post({ project: 'alpha', tabId: 'held', force: true });
+  assert.equal(forced.status, 200);
+  assert.deepEqual(calls.at(-1), { project: 'alpha', tabId: 'held', force: true }, 'a confirmed close sends force');
+
+  const gone = await post({ project: 'alpha', tabId: 'gone' });
+  assert.equal(gone.status, 409);
+  assert.match((await gone.json()).error, /no longer open/);
+
+  assert.equal((await post({ project: 'other', tabId: 't1' })).status, 404, 'an unknown project is refused');
+  assert.equal((await post({ project: 'alpha' })).status, 400, 'a missing tabId is refused');
+  await close();
+});
+
+test('the Browsers page selects the whole address on first focus and offers one close control for each tab', () => {
+  const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
+  const guide = fs.readFileSync(new URL('../docs/user-guide.md', import.meta.url), 'utf8');
+  // The first focus selects all text. A per-focus flag keeps the second click as a normal cursor.
+  assert.match(app, /addEventListener\('focus', \(e\) => \{[\s\S]{0,400}\.browser-navigate input\[name="url"\]/);
+  assert.match(app, /input\.select\(\)/);
+  assert.match(app, /addEventListener\('pointerup', \(e\) => \{[\s\S]{0,400}\.browser-navigate input\[name="url"\]/);
+  assert.match(app, /selectAllForFocus/);
+  // Every tab row and grid tile carries a close control with the tab title in its aria-label.
+  assert.match(app, /data-browser-close-tab="\$\{esc\(slug\)\}"/);
+  assert.match(app, /aria-label="Close tab \$\{esc\(/);
+  assert.match(app, /function browserTabRow\(slug, tab\)/);
+  assert.match(app, /browser-tab-row/);
+  assert.match(app, /browser-tab-pick/);
+  assert.match(css, /\.browser-tab-close\b[^{]*\{[^}]*min-height: 32px/);
+  assert.match(css, /@media \(max-width: 760px\) \{[^@]*\.browser-tab-close[^}]*min-height: 44px/);
+  // The close asks before it removes a tab that an agent holds, and warns for the last tab.
+  assert.match(app, /belongs to \$\{/);
+  assert.match(app, /This is the last tab\. The browser keeps running with no page\./);
+  assert.match(app, /\/api\/browser-sessions\/tab-close/);
+  // The help text and the guide describe both behaviours.
+  assert.match(app, /<h3>Tabs<\/h3>[\s\S]*Close tab/);
+  assert.match(guide, /Close tab/);
+  assert.match(guide, /selects all its text/);
 });
