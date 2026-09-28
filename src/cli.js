@@ -70,6 +70,8 @@ const USAGE = `herdr-boss <command>
   usage summary         Summarize project and provider usage.
   browser request SLUG [--reserve] [--headless|--visible]  Reserve or launch a persistent project browser.
   browser size SLUG WIDTH HEIGHT  Save window size for the next browser launch.
+  browser viewport SLUG --tab ID WIDTHxHEIGHT [--scale N] [--mobile]  Set one tab's device metrics.
+  browser viewport SLUG --tab ID --reset  Clear one tab's device metrics.
   browser close SLUG      Gracefully close a managed browser, keeping its profile.
   browser release SLUG    Give back the port lease of a closed project browser.
   browser restart SLUG --headless|--visible [--no-restore]  Switch mode and restore the current page.
@@ -265,7 +267,7 @@ async function main() {
     case 'browser': {
       const { parseScreenshotOptions, saveBrowserScreenshot } = await import('./browser-output.js');
       const { requestBrowser, listBrowserSessions, browserStatus, setBrowserWindowSize, closeBrowser, restartBrowser, releaseBrowser, listBookmarks, addBookmark, removeBookmark, setStartPage } = await import('./browser-pool.js');
-      const { listBrowserTabs, browserScreenshot, browserNavigate, browserClick, browserInsertText, browserKey, browserNewTab, browserCloseTab } = await import('./browser-preview.js');
+      const { listBrowserTabs, browserScreenshot, browserNavigate, browserClick, browserInsertText, browserKey, browserViewport, browserNewTab, browserCloseTab } = await import('./browser-preview.js');
       const tabOption = (rest) => {
         if (!rest.length) return null;
         if (rest.length !== 2 || rest[0] !== '--tab' || !rest[1]) throw new Error('Use --tab ID to select a browser page.');
@@ -304,6 +306,34 @@ async function main() {
       else if (args[0] === 'size' && args.length === 4) {
         await verifyBrowserCaller(args[1]);
         console.log(JSON.stringify(setBrowserWindowSize(args[1], Number(args[2]), Number(args[3])), null, 2));
+      }
+      else if (args[0] === 'viewport' && args[1]) {
+        await verifyBrowserCaller(args[1]);
+        if (args[2] !== '--tab' || !args[3]) throw new Error('Use browser viewport SLUG --tab ID WIDTHxHEIGHT [--scale N] [--mobile], or browser viewport SLUG --tab ID --reset.');
+        let viewport;
+        if (args[4] === '--reset') {
+          if (args.length !== 5) throw new Error('Use --reset by itself.');
+          viewport = { reset: true };
+        } else {
+          const size = /^(\d+)x(\d+)$/.exec(args[4] || '');
+          if (!size) throw new Error('Use WIDTHxHEIGHT, for example 473x291.');
+          viewport = { width: Number(size[1]), height: Number(size[2]) };
+          let scaleSeen = false;
+          let mobileSeen = false;
+          for (let index = 5; index < args.length; index++) {
+            if (args[index] === '--scale' && !scaleSeen && args[index + 1]) {
+              scaleSeen = true;
+              viewport.scale = Number(args[++index]);
+            } else if (args[index] === '--mobile' && !mobileSeen) {
+              mobileSeen = true;
+              viewport.mobile = true;
+            } else {
+              throw new Error('Use browser viewport SLUG --tab ID WIDTHxHEIGHT [--scale N] [--mobile], or browser viewport SLUG --tab ID --reset.');
+            }
+          }
+        }
+        const tab = await selectedTab(args[1], ['--tab', args[3]]);
+        console.log(JSON.stringify(await browserViewport(args[1], tab, viewport), null, 2));
       }
       else if (args[0] === 'close' && args.length === 2) {
         await verifyBrowserCaller(args[1]);
@@ -384,7 +414,7 @@ async function main() {
         await verifyBrowserCaller(args[1]);
         console.log(JSON.stringify(await requestBrowser(args[1], { launch: !args.includes('--reserve'), headless: args.includes('--headless') ? true : args.includes('--visible') ? false : null }), null, 2));
       }
-      else throw new Error('Usage: browser request|size|close|release|restart|list|tabs|tab new|tab close|screenshot|navigate|click|text|key|bookmarks|sweep-clones. Run herdr-boss without arguments for details.');
+      else throw new Error('Usage: browser request|size|viewport|close|release|restart|list|tabs|tab new|tab close|screenshot|navigate|click|text|key|bookmarks|sweep-clones. Run herdr-boss without arguments for details.');
       break;
     }
     case 'handoff': {

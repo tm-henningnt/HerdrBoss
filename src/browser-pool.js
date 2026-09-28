@@ -192,6 +192,52 @@ export function setBrowserWindowSize(project, width, height) {
   return sessions[project];
 }
 
+function validTabViewport(viewport) {
+  return viewport && Number.isInteger(viewport.width) && viewport.width >= 200 && viewport.width <= 3840
+    && Number.isInteger(viewport.height) && viewport.height >= 150 && viewport.height <= 2160
+    && typeof viewport.scale === 'number' && Number.isFinite(viewport.scale) && viewport.scale >= 0.5 && viewport.scale <= 4
+    && typeof viewport.mobile === 'boolean';
+}
+
+export function setBrowserTabViewport(project, tabId, viewport) {
+  if (!SLUG.test(project)) throw new Error('project must be a slug.');
+  if (typeof tabId !== 'string' || !tabId) throw new Error('A browser tab ID is required.');
+  if (viewport !== null && !validTabViewport(viewport)) throw new Error('Invalid browser viewport.');
+  const sessions = listBrowserSessions();
+  const record = sessions[project];
+  if (!record) throw new Error('Request a project browser first.');
+  if (!record.viewports || typeof record.viewports !== 'object' || Array.isArray(record.viewports)) record.viewports = {};
+  if (viewport === null) delete record.viewports[tabId];
+  else record.viewports[tabId] = { width: viewport.width, height: viewport.height, scale: viewport.scale, mobile: viewport.mobile };
+  if (Object.keys(record.viewports).length) save(sessions);
+  else {
+    delete record.viewports;
+    save(sessions);
+  }
+  return record.viewports || {};
+}
+
+export function listBrowserTabViewports(project, openTabIds) {
+  if (!SLUG.test(project)) throw new Error('project must be a slug.');
+  if (!Array.isArray(openTabIds)) throw new Error('Open browser tab IDs are required.');
+  const sessions = listBrowserSessions();
+  const record = sessions[project];
+  if (!record || !record.viewports || typeof record.viewports !== 'object' || Array.isArray(record.viewports)) return {};
+  const open = new Set(openTabIds);
+  const viewports = {};
+  let changed = false;
+  for (const [tabId, viewport] of Object.entries(record.viewports)) {
+    if (open.has(tabId) && validTabViewport(viewport)) viewports[tabId] = viewport;
+    else changed = true;
+  }
+  if (changed) {
+    if (Object.keys(viewports).length) record.viewports = viewports;
+    else delete record.viewports;
+    save(sessions);
+  }
+  return viewports;
+}
+
 // A bookmark URL must be http or https and must not hold a user name or a password.
 function bookmarkUrl(value) {
   let parsed;
