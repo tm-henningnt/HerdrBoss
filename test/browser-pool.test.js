@@ -298,3 +298,24 @@ test('a CDP close does not delete the recorded clone', async (t) => {
     assert.equal(pool.listBrowserSessions()['clone-cdp'].codeSignClone, null);
   } finally { await server.close().catch(() => {}); }
 });
+
+test('a browser launch starts Chrome in its profile folder, not in the caller folder', async (t) => {
+  const clones = cloneFixture(t);
+  const machine = { procs: new Map() };
+  let server = null;
+  let spawnOptions = null;
+  const spawn = (chrome, args, options) => {
+    spawnOptions = options;
+    const port = Number(args.find((a) => a.startsWith('--remote-debugging-port=')).split('=')[1]);
+    const profile = args.find((a) => a.startsWith('--user-data-dir=')).split('=')[1];
+    machine.procs.set(4302, { pid: 4302, cmd: chromeCmd(port, profile) });
+    server = versionServer(port);
+    return { pid: 4302, on() {}, unref() {} };
+  };
+  try {
+    const status = await pool.requestBrowser('cwd-launch', { headless: true, chromePath: process.execPath, spawn,
+      collectProcesses: async () => new Map(machine.procs), cloneDir: clones.dir });
+    assert.equal(spawnOptions.cwd, status.profile);
+    assert.notEqual(spawnOptions.cwd, process.cwd());
+  } finally { if (server) await (await server).close(); }
+});

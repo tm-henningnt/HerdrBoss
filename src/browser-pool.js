@@ -234,7 +234,8 @@ export async function requestBrowser(project, options = {}) {
       `--remote-debugging-port=${port}`, '--remote-debugging-address=127.0.0.1',
       `--user-data-dir=${profile}`, `--window-size=${windowSize.width},${windowSize.height}`, '--no-first-run', '--no-default-browser-check',
       ...(useHeadless ? ['--headless'] : []), 'about:blank',
-    ], { detached: true, stdio: 'ignore' });
+    // Start Chrome in the profile folder, not in the caller's folder, so a worker worktree never holds a project browser.
+    ], { detached: true, stdio: 'ignore', cwd: profile });
     child.on('error', () => {}); // An executable error is reflected by the failed port probe below.
     child.unref();
     session.pid = child.pid;
