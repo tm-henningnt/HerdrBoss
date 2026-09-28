@@ -9,6 +9,7 @@ Read this file before you inspect or control Herdr panes and agents, when a work
 - Parse IDs from command output.
 - Never infer a pane, tab, workspace, or agent ID from its position in the UI.
 - Use `herdr agent` commands for recognized agent lifecycle and prompts.
+- The report and question commands in a worker brief are an exception to the rule against Herdr commands outside Herdr. Workers must use those commands as written. The commands include the caller's Herdr environment.
 - Use `herdr pane` commands for shells and raw terminal control.
 - Never run `herdr pane run` in a pane occupied by an agent.
 - Keep all worker panes in the worker tabs of the verified caller workspace. Give each worker pane `--cwd <dir>` for the worker worktree.

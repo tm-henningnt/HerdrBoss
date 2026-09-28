@@ -14,7 +14,7 @@ import { codexShellEnvArgs } from '../harness.js';
 const NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
 const BRIEF_SLOTS = new Set([
   'name', 'kind', 'model', 'effort', 'project', 'repo', 'worktree', 'branch', 'base', 'issue', 'task',
-  'allowedPaths', 'reportPath', 'reportJsonPath', 'orchPane', 'orchName', 'bulletinPath', 'date', 'evidenceTiers', 'threadLimit', 'imageBudget', 'copyPaths', 'leases',
+  'allowedPaths', 'reportPath', 'reportJsonPath', 'orchPane', 'orchName', 'bulletinPath', 'herdrEnvPrefix', 'herdrBin', 'date', 'evidenceTiers', 'threadLimit', 'imageBudget', 'copyPaths', 'leases',
 ]);
 
 function git(root, args, { encoding = 'utf8' } = {}) {
@@ -181,6 +181,25 @@ function workerPaneShellPid(paneId, herdr) {
 function displayArg(value) {
   if (/^[a-zA-Z0-9_./:=,@+-]+$/.test(value)) return value;
   return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function workerBriefHerdrCommands(env) {
+  const validate = (name, value) => {
+    const hasUnsafeCharacter = [...value].some((char) => {
+      const code = char.charCodeAt(0);
+      return char === '"' || char === "'" || char === '\\' || code <= 0x1f || (code >= 0x7f && code <= 0x9f);
+    });
+    if (hasUnsafeCharacter) {
+      throw new Error(`The value of ${name} has a quote, a backslash, or a control character.`);
+    }
+    return value;
+  };
+  const socketPath = env.HERDR_SOCKET_PATH ? validate('HERDR_SOCKET_PATH', String(env.HERDR_SOCKET_PATH)) : null;
+  const binaryPath = env.HERDR_BIN_PATH ? validate('HERDR_BIN_PATH', String(env.HERDR_BIN_PATH)) : null;
+  return {
+    herdrEnvPrefix: `HERDR_ENV=1${socketPath ? ` HERDR_SOCKET_PATH=${displayArg(socketPath)}` : ''} `,
+    herdrBin: binaryPath && path.isAbsolute(binaryPath) ? displayArg(binaryPath) : 'herdr',
+  };
 }
 
 export function renderBrief(template, slots) {
@@ -762,6 +781,7 @@ export function startWorker(name, options, {
   if (!NAME_PATTERN.test(name)) throw new Error('Worker name must match [a-z][a-z0-9-]{0,31}.');
   if (env.HERDR_ENV !== '1') throw new Error('Run worker start from a Herdr-managed pane (HERDR_ENV=1).');
   const caller = verifyCallerPane(env, herdr, options.orch);
+  const herdrCommands = workerBriefHerdrCommands(env);
   const modelConfig = models ?? JSON.parse(fs.readFileSync(new URL('../../kit/models.json', import.meta.url), 'utf8'));
   const rulesPath = rulesFile ?? path.join(env.HERDR_BOSS_DIR || path.join(os.homedir(), '.herdr-boss'), 'rules.json');
   const rules = readRules(rulesPath);
@@ -923,6 +943,7 @@ export function startWorker(name, options, {
     name, kind: options.kind, model, effort, project: config.slug, repo: config.root, worktree, branch, base,
     issue: options.issue ?? null, task, allowedPaths: options.allow ?? [], reportPath, reportJsonPath,
     orchPane, orchName, bulletinPath: path.join(env.HERDR_BOSS_DIR || path.join(os.homedir(), '.herdr-boss'), 'bulletin.md'),
+    ...herdrCommands,
     date: new Date(now).toISOString().slice(0, 10),
     evidenceTiers: (config.evidenceTiers || []).join(', '),
     imageBudget: config.imageBudget ?? 10,
