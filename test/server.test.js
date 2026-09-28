@@ -119,20 +119,14 @@ test('read-only preview allows reads and rejects all API methods that can change
     customServer.server.once('listening', resolve);
     customServer.server.once('error', reject);
   });
-  const token = fs.readFileSync(customTokenFile, 'utf8').trim();
-  const login = await fetch(`http://127.0.0.1:${customServer.server.address().port}/login`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ token }),
-    redirect: 'manual',
-  });
-  assert.equal(login.status, 303);
+  const loginPage = await fetch(`http://127.0.0.1:${customServer.server.address().port}/login`);
+  assert.equal(loginPage.status, 200);
+  assert.doesNotMatch(await loginPage.text(), /Unlock dashboard|name="token"/, 'the preview has no login page');
   const privateSessions = path.join(homeDir, '.config', 'herdr-boss', 'sessions.json');
-  assert.equal(fs.existsSync(customTokenFile), true, 'the configured custom token path stays active');
-  assert.equal(fs.existsSync(privateSessions), true, 'sessions use the private config directory');
+  assert.equal(fs.existsSync(customTokenFile), false, 'the preview does not create the configured custom token');
+  assert.equal(fs.existsSync(privateSessions), false, 'the preview does not create a session file');
   assert.equal(fs.existsSync(path.join(path.dirname(customTokenFile), 'sessions.json')), false, 'sessions are not stored beside the custom token');
-  assert.equal(fs.statSync(path.dirname(privateSessions)).mode & 0o777, 0o700);
-  assert.equal(fs.statSync(privateSessions).mode & 0o777, 0o600);
+  assert.equal(fs.existsSync(path.dirname(privateSessions)), false, 'the preview does not create the private access directory');
   await customServer.close();
 });
 
