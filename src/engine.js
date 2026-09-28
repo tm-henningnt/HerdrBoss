@@ -18,6 +18,7 @@ import { listHandoffs, saveHandoffs, supersedeHandoffs, expireHandoff, expireMis
 import { deliverQueued, mailboxCounts, readMessages, RETENTION_MS, SEND_LIMIT_PER_MINUTE } from './messages.js';
 import { openMessageStore } from './message-store.js';
 import { readKitNotice, pendingKitAlert, isKitAlert, kitNoticeTargets } from './kit-notice.js';
+import { readNight } from './night.js';
 import { inspectWorkerTransitions, inspectWorkerReports, applyWorkerFailureStatuses, resolveFreeUsageRun, activeFreeModelExhaustions, extendFreeModelExhaustion, activeFreeLaneExhaustions, extendFreeLaneExhaustion, freeUsageLaneRetry } from './worker-failures.js';
 import { FULL_SUITE_LOCK, readLockQueue, readLockTakeoverNotices, readMachineLocks, removeLockTakeoverNotice } from './kit/locks.js';
 
@@ -363,6 +364,8 @@ export class Engine extends EventEmitter {
         },
         quotasCached: this.quotasCached,
         machine,
+        // The stored night watch state, read once per tick. A later task uses it for the Owner and the cap.
+        night: readNight({ dataDir: DATA_DIR, now }),
         worktreeCounts: this.worktreeCounts,
         orphanedWorktreeProcesses: this.orphanedWorktreeProcesses,
         herdr,
@@ -416,7 +419,7 @@ export class Engine extends EventEmitter {
       if (machine) {
         snap.machine.cpuUse = snap.cpuUse;
         snap.machine.cpuTotalSample = [...procs.values()].reduce((sum, proc) => sum + Math.max(0, proc.cpu), 0);
-        snap.machine.limits = machineLimits(snap.machine, policy, now);
+        snap.machine.limits = machineLimits(snap.machine, policy, now, snap.night);
       }
       // The unmetered lane lists the permitted free models that can start. It never affects least-over selection.
       snap.lanes.unmetered = unmeteredLane(this.models, policy, control.projects, this.memory.exhaustedFreeModels, {
@@ -571,7 +574,7 @@ export class Engine extends EventEmitter {
         piModels: this.memory.piModels || null,
         preferredKinds,
         memFreePercent: machine?.memFreePercent ?? null,
-        load: machine ? { oneMinute: machine.load[0], fiveMinute: machine.load[1], cpus: machine.cpus, limit: machineLimits(snap.machine, policy, now).loadLimit } : null,
+        load: machine ? { oneMinute: machine.load[0], fiveMinute: machine.load[1], cpus: machine.cpus, limit: machineLimits(snap.machine, policy, now, snap.night).loadLimit } : null,
         machine: snap.machine?.limits || null,
         notes: evaluation.advice,
         browsers: managedBrowsers.map((b) => ({ project: b.project, port: b.port, profile: b.profile, headless: !!b.headless, windowSize: b.windowSize || { width: 1280, height: 800 }, ready: browsers.some((x) => x.kind === 'automation-chrome' && x.port === String(b.port) && x.profile === b.profile), responsive: b.responsive })),

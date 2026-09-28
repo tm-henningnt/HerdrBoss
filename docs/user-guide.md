@@ -161,6 +161,30 @@ The stale notice text is `Your published status is <age> old while <workers ran 
 
 `HERDR_BOSS_PUSH=0` turns off prompts for one run.
 
+## Night watch
+
+Night watch says that the Owner is away. The Boss acts for the Owner until the end time of the night.
+
+The state lives in the file `night.json` in the data directory. The file is beside `policy.json` and `rules.json`. Its mode is `0600`. Herdr Boss reads the file once per engine tick and writes the result to `snap.night`. The engine changes no other behavior yet.
+
+The stored record holds these keys:
+
+| Key | Meaning |
+|---|---|
+| `active` | The night runs. |
+| `since` | The ISO time at which the night started. |
+| `until` | The ISO time at which the night ends. |
+| `by` | Who started the night. |
+| `quietHours` | Quiet hours are on. The default is `false`. |
+
+A state whose `until` time has passed reads as not active. The file stays, so a later task can read its own marks. A missing or unreadable file reads as not active. The read view of an active state is `{ active, since, until, by, quietHours }`. The read view of any other state is `{ active: false }`.
+
+An active night state also makes the Owner away. The machine limits are the same away limits as for an idle Owner. Night watch changes no machine limit.
+
+The bulletin then shows one line under **Rules now**: `Night watch until 07:30 (Owner away). Work as normal; the Boss handles judgment calls.` The time is the local end time. When `quietHours` is true, the bulletin also shows `Quiet hours: on.`
+
+The commands, the notices, the worker cap, the reports, and the dashboard banner come in later tasks. See `docs/ideas/night-watch.md`.
+
 ## Quota lanes
 
 `herdr-boss lanes` and the bulletin section "Provider lanes" show each metered provider:
