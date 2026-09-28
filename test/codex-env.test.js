@@ -9,6 +9,11 @@ import { codexShellEnvArgs, liveCodexCheck } from '../src/harness.js';
 import { loadModels, loadProjectConfig } from '../src/kit/config.js';
 import { startWorker } from '../src/kit/workers.js';
 
+// Worker worktrees default to ~/Projects/.herdr-wt. Keep them out of the real home folder.
+const TEST_HOME = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-codexenv-home-')));
+process.env.HOME = TEST_HOME;
+process.on('exit', () => fs.rmSync(TEST_HOME, { recursive: true, force: true }));
+
 const CLI = fileURLToPath(new URL('../src/cli.js', import.meta.url));
 const MODELS = fileURLToPath(new URL('../kit/models.json', import.meta.url));
 const ORCH = {
