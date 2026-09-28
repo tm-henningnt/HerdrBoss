@@ -38,6 +38,19 @@ Herdr Boss is a script. It uses no LLM and no tokens.
 
 A read-only preview accepts loopback requests only. It has no login page. It never reads, creates, or changes token or session files.
 
+## What the dashboard manages
+
+Every setting and every resource that Herdr Boss manages is visible and settable in the dashboard, unless a good reason keeps it outside. These are the good reasons:
+
+- A secret, such as a token or a credential.
+- The access token file, and a session file.
+- A Claude setting that agents must not edit.
+- A code contract that must not move, such as the `orch` pane label or the built-in browser port range.
+- A resource that another project or process owns, such as a shared browser that Herdr Boss did not start.
+- A repository file that a release changes, such as the kit catalog or the kit template.
+
+When a value stays outside, the dashboard names it and the reason. The audit and its gap list are in [gui-settings-audit.md](ideas/gui-settings-audit.md).
+
 ## Project memory
 
 Store project memory in `docs/orchestration/memory.md`. Commit this file with the project repository.
