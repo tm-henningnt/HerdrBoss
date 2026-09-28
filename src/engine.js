@@ -7,7 +7,7 @@ import { collectHerdr, collectQuotas, collectMachine, collectProcesses, collectC
 import { evaluate, renderBulletin, fmtDuration, providerName, broadcastTargets, staleStatuses } from './rules.js';
 import { listProjects } from './projects.js';
 import { readProjectRepos } from './harness.js';
-import { loadModels, KIT_ROOT } from './kit/config.js';
+import { loadModels, loadProjectConfig, KIT_ROOT, workerConfigView } from './kit/config.js';
 import { loadPolicy, clearExpiredOneOffGoals, deriveControl, migrateWorkspacePolicy, providerFor, pickSuccessor, laneStatus, leastOverProvider, machineLimits, unmeteredLane, unavailablePiModels, mergeModels } from './control.js';
 import { quotaUsageToday, recordQuotaSnapshot } from './usage.js';
 import { listBrowserSessions, cdpResponds, browserProcessCheck } from './browser-pool.js';
@@ -40,6 +40,8 @@ export function knownBrowsers(sharedBrowsers = [], browserSessions = []) {
 }
 
 export const STATUS_HEAD_INTERVAL_MS = 10 * 60 * 1000;
+// The worker config read runs at start and every 10 minutes, for each project in project-repos.json.
+const PROJECT_CONFIG_INTERVAL_MS = 10 * 60 * 1000;
 // Quotas younger than this are shown without the codexbar error, and saved quotas this young load at start.
 const QUOTA_CACHE_MS = 15 * 60 * 1000;
 
@@ -132,6 +134,8 @@ export class Engine extends EventEmitter {
     this.denialScanAt = 0;
     this.denialScanRunning = false;
     this.headReads = new Set();
+    this.workerConfig = {};
+    this.workerConfigAt = 0;
     this.collectors = {
       collectHerdr,
       collectQuotas,
@@ -374,6 +378,8 @@ export class Engine extends EventEmitter {
       snap.control = control;
       this.recordStatusWork(control, now);
       this.readProjectHeads(now);
+      this.readProjectConfigs(now);
+      snap.workerConfig = this.workerConfig;
       snap.statusActivity = this.statusActivity();
       snap.staleStatus = staleStatuses(snap, this.cfg, now, this.memory.staleStatus);
       this.memory.staleStatus = snap.staleStatus;
@@ -593,6 +599,22 @@ export class Engine extends EventEmitter {
       } finally { this.headReads.delete(slug); }
     });
     return Promise.all(reads);
+  }
+
+  // The read-only worker config of each registered project, with allow-listed fields only.
+  // The read runs once at start and every 10 minutes. One bad project never stops the others.
+  readProjectConfigs(now) {
+    if (now - this.workerConfigAt < PROJECT_CONFIG_INTERVAL_MS) return;
+    this.workerConfigAt = now;
+    const next = {};
+    for (const { slug, repo } of readProjectRepos(DATA_DIR)) {
+      try {
+        next[slug] = workerConfigView(loadProjectConfig({ cwd: repo }));
+      } catch (error) {
+        next[slug] = { fields: [], error: String(error?.message || error) };
+      }
+    }
+    this.workerConfig = next;
   }
 
   // { slug: { workedAt, landedAt } } in milliseconds, for staleStatuses().

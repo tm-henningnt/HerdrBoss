@@ -1034,3 +1034,105 @@ test('the project page shows the memory and kit file paths with a home-relative 
   const row = listProjects().find((p) => p.slug === 'demo');
   assert.equal(row.repo, '~/Projects/demo');
 });
+
+test('the engine state shows the allow-listed worker config of each project and one bad config as an error', { timeout: 30000 }, (t) => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-worker-config-')));
+  const home = path.join(root, 'home');
+  const data = path.join(root, 'data');
+  const live = path.join(root, 'live');
+  fs.mkdirSync(home, { recursive: true });
+  fs.mkdirSync(data, { recursive: true });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  // A good project repository with a .herdr-boss.json that also holds secret-like keys.
+  const good = path.join(root, 'good');
+  fs.mkdirSync(good, { recursive: true });
+  execFileSync('git', ['-C', good, 'init', '-b', 'main'], { stdio: 'ignore' });
+  fs.writeFileSync(path.join(good, '.herdr-boss.json'), JSON.stringify({
+    slug: 'good',
+    baseBranch: 'develop',
+    worktreeRoot: path.join(home, 'trees'),
+    setup: 'npm ci --prefer-offline',
+    imageBudget: 7,
+    accessToken: 'must-not-enter-the-state',
+    roamgate: { tokenFile: path.join(root, 'private-token') },
+  }));
+
+  // A bad project repository: the .herdr-boss.json is not valid JSON.
+  const bad = path.join(root, 'bad');
+  fs.mkdirSync(bad, { recursive: true });
+  execFileSync('git', ['-C', bad, 'init', '-b', 'main'], { stdio: 'ignore' });
+  fs.writeFileSync(path.join(bad, '.herdr-boss.json'), '{ not json');
+
+  fs.writeFileSync(path.join(data, 'project-repos.json'), JSON.stringify([
+    { slug: 'good', repo: good, remote: '' },
+    { slug: 'bad', repo: bad, remote: '' },
+  ]));
+
+  const configUrl = new URL('../src/config.js', import.meta.url).href;
+  const engineUrl = new URL('../src/engine.js', import.meta.url).href;
+  const script = `
+import { loadConfig } from ${JSON.stringify(configUrl)};
+import { Engine } from ${JSON.stringify(engineUrl)};
+console.log = () => {};
+const cfg = loadConfig();
+cfg.host = '127.0.0.1';
+cfg.port = 0;
+cfg.tickSeconds = 3600;
+const collectors = {
+  collectHerdr: async () => ({ panes: [], workspaces: [] }),
+  collectMachine: async () => null,
+  collectProcesses: async () => new Map(),
+  collectQuotas: async () => [],
+  collectWorktreeCounts: async () => ({}),
+  collectCwdProcesses: async () => [],
+  collectMissingWorktreeProcesses: async () => [],
+  collectPiModels: async () => ({ models: [] }),
+};
+const engine = new Engine(cfg, { push: false, act: false, collectors });
+const state = await engine.tick();
+process.stdout.write(JSON.stringify(state.workerConfig));
+`;
+  const result = execFileSync(process.execPath, ['--input-type=module', '-e', script], {
+    encoding: 'utf8',
+    timeout: 25000,
+    env: {
+      ...process.env,
+      HOME: home,
+      HERDR_BOSS_DIR: data,
+      HERDR_BOSS_LIVE_DIR: live,
+      HERDR_BOSS_PORT: '',
+      HERDR_BOSS_PUSH: '',
+    },
+  });
+  const workerConfig = JSON.parse(result.trim());
+
+  assert.deepEqual(Object.keys(workerConfig).sort(), ['bad', 'good']);
+  const fields = workerConfig.good.fields;
+  assert.deepEqual(fields.map((field) => field.key), [
+    'slug', 'baseBranch', 'worktreeRoot', 'worktreeName',
+    'evidenceTiers', 'allowedModels', 'workerPanesPerTab', 'imageBudget',
+    'setup', 'setupTimeoutSeconds', 'agentStartTimeoutMs', 'testThreadsFlag',
+  ]);
+  const field = (key) => fields.find((item) => item.key === key);
+  assert.deepEqual(field('setup'), { key: 'setup', value: 'set', source: 'config' });
+  assert.deepEqual(field('worktreeRoot'), { key: 'worktreeRoot', value: '~/trees', source: 'config' });
+  assert.equal(field('baseBranch').value, 'develop');
+  assert.equal(field('imageBudget').value, 7);
+  const text = JSON.stringify(workerConfig);
+  assert.equal(text.includes('must-not-enter-the-state'), false, 'a key outside the allow-list never enters the state');
+  assert.equal(text.includes(path.join(root, 'private-token')), false, 'a token path never enters the state');
+  assert.ok(workerConfig.bad.error.length > 0, 'a bad config reaches the state as an error');
+  assert.deepEqual(workerConfig.bad.fields, []);
+});
+
+test('the project page shows the worker config panel read-only', () => {
+  const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const guide = fs.readFileSync(new URL('../docs/user-guide.md', import.meta.url), 'utf8');
+  assert.match(app, /function workerConfigBlock\(s, slug\)/);
+  assert.match(app, /s\.workerConfig\?\.\[slug\]/);
+  assert.match(app, /Change these in <span class="mono">\.herdr-boss\.json<\/span> in the repository\./);
+  assert.match(app, /<h3>Worker config<\/h3>/);
+  assert.match(guide, /### Worker config/);
+  assert.match(guide, /Change a field in `\.herdr-boss\.json`/);
+});

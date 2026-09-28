@@ -2507,6 +2507,23 @@ function filesBlock(p) {
   </ul>${kitRevisionLine(p)}</section>`;
 }
 
+// The read-only worker config that the engine read from .herdr-boss.json. It shows allow-listed fields only.
+function workerConfigValue(value) {
+  if (Array.isArray(value)) return value.length ? value.join(', ') : 'none';
+  if (value === null || value === undefined || value === '') return 'not set';
+  return String(value);
+}
+
+function workerConfigBlock(s, slug) {
+  const view = s.workerConfig?.[slug];
+  if (!view) return '';
+  const note = 'Change these in <span class="mono">.herdr-boss.json</span> in the repository.';
+  const body = view.error
+    ? `<div class="warnbox">Could not read <span class="mono">.herdr-boss.json</span>: ${esc(view.error)}</div>`
+    : `<ul class="files-list">${(view.fields || []).map((f) => `<li><span class="k">${esc(f.key)}</span><span class="mono">${esc(workerConfigValue(f.value))}</span>${f.source === 'config' ? '<span class="tag">config</span>' : ''}</li>`).join('')}</ul>`;
+  return `<section class="panel files worker-config"><h2>Worker config</h2>${body}<div class="win-foot">${note}</div></section>`;
+}
+
 function project(s, slug) {
   const published = (s.projects || []).find((x) => x.slug === slug);
   const live = s.control?.projects?.[slug];
@@ -2544,6 +2561,7 @@ function project(s, slug) {
     p.errors ? `<div class="warnbox">${esc(p.errors.join('; '))}</div>` : '',
     agentsDriftLine(p.agentsCheck),
     published ? filesBlock(p) : '',
+    workerConfigBlock(s, slug),
     handoffBlock(s, slug),
     metrics,
     programBlock(work),
@@ -2583,6 +2601,7 @@ const HELP = {
     <h3>Phone</h3><p>On a phone, the long sections start collapsed. Select a section title to open it. The dashboard remembers each open section for this project during the session. Overall progress and the frontier stay open.</p>
     <h3>AGENTS.md drift</h3><p><b>AGENTS.md drift</b> shows the errors and warnings that <b>herdr-boss publish</b> found in the project AGENTS.md. An error is a missing, old, or hand-edited Herdr Boss stub, or a missing, old, or hand-edited kit file <code>docs/orchestration/herdr-boss.md</code>. A warning is stale orchestration text, such as a fixed pane ID, a dated line, a copied model list, or text that sends pushes or product decisions to the Boss. Run <b>herdr-boss check agents</b> in the project for each finding. Run <b>herdr-boss kit install</b> to fix an error.</p>
     <h3>Files</h3><p><b>Files</b> shows the paths that the orchestrator reads: the project memory file, the installed kit file, and the Boss memory file. The home folder shows as <b>~</b>. The panel shows paths only. It never shows the contents of a memory or kit file.</p>
+    <h3>Worker config</h3><p><b>Worker config</b> shows the fields that Herdr Boss read from <code>.herdr-boss.json</code> in the project repository. A <b>config</b> tag marks a field that the file sets; the other fields use the default. The <code>setup</code> command shows as <b>set</b> or <b>not set</b>, and a home folder path shows as <b>~</b>. Change a field in <code>.herdr-boss.json</code> in the repository.</p>
     <h3>Kit revision</h3><p><b>Kit revision</b> shows the kit revision that the orchestrator loaded, from <code>kitRevision</code> in its status file, and the current kit revision. A warning shows when they are different. The orchestrator then runs <b>herdr-boss kit install</b> and re-reads <code>docs/orchestration/herdr-boss.md</code>.</p>
     <h3>Stale status</h3><p><b>Status stale: AGE</b> shows next to the updated time when the published status is older than 2 hours and, after that publish, a worker was working in the last 2 hours or new commits landed on the project repository. A paused project is never stale. The orchestrator gets one notice for each stale status. Publish the current plan and progress to clear the mark.</p>
     <p>The data comes from the project's status file. When a section is missing, the orchestrator has not published those fields.</p>`],

@@ -5,7 +5,7 @@ import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { checkAgentsExclude, contextTokensFor, globMatches, loadModels, loadProjectConfig, PROJECT_DEFAULTS } from '../src/kit/config.js';
+import { checkAgentsExclude, contextTokensFor, globMatches, loadModels, loadProjectConfig, PROJECT_DEFAULTS, workerConfigView } from '../src/kit/config.js';
 import { appendDelegatedRun, compareChangedPaths, gitChangedPaths, readDelegatedRuns, validateAllowedPaths, validateDelegatedRun, validateWorkerReport } from '../src/kit/orchestration.js';
 import { buildGhArgs } from '../src/kit/gh.js';
 import { runKitCommand } from '../src/kit/cli.js';
@@ -1275,6 +1275,38 @@ test('project workerPanesPerTab defaults to three and accepts integers from one 
     fs.writeFileSync(path.join(root, '.herdr-boss.json'), JSON.stringify({ workerPanesPerTab }));
     assert.throws(() => loadProjectConfig({ cwd: root }), /workerPanesPerTab must be an integer from 1 to 6/);
   }
+});
+
+test('the worker config view holds allow-listed fields only and never a secret', () => {
+  const config = {
+    ...PROJECT_DEFAULTS,
+    slug: 'demo',
+    setup: 'npm ci',
+    accessToken: 'must-not-enter-the-view',
+    roamgate: { tokenFile: '/private/roamgate-token' },
+  };
+  const view = workerConfigView(config);
+  assert.deepEqual(view.fields.map((field) => field.key), [
+    'slug', 'baseBranch', 'worktreeRoot', 'worktreeName',
+    'evidenceTiers', 'allowedModels', 'workerPanesPerTab', 'imageBudget',
+    'setup', 'setupTimeoutSeconds', 'agentStartTimeoutMs', 'testThreadsFlag',
+  ]);
+  const text = JSON.stringify(view);
+  assert.equal(text.includes('must-not-enter-the-view'), false, 'a value outside the allow-list never enters the view');
+  assert.equal(text.includes('/private/roamgate-token'), false, 'a token path never enters the view');
+});
+
+test('the worker config view masks setup and shows the home folder as ~', () => {
+  const home = '/home/tester';
+  const set = workerConfigView({ ...PROJECT_DEFAULTS, worktreeRoot: `${home}/trees`, setup: 'npm ci', testThreadsFlag: '--maxWorkers=2' }, { home });
+  const field = (view, key) => view.fields.find((item) => item.key === key);
+  assert.deepEqual(field(set, 'setup'), { key: 'setup', value: 'set', source: 'config' });
+  assert.deepEqual(field(set, 'worktreeRoot'), { key: 'worktreeRoot', value: '~/trees', source: 'config' });
+  assert.deepEqual(field(set, 'testThreadsFlag'), { key: 'testThreadsFlag', value: '--maxWorkers=2', source: 'config' });
+  const plain = workerConfigView({ ...PROJECT_DEFAULTS }, { home });
+  assert.deepEqual(field(plain, 'setup'), { key: 'setup', value: 'not set', source: 'default' });
+  assert.deepEqual(field(plain, 'worktreeRoot'), { key: 'worktreeRoot', value: '~/Projects/.herdr-wt', source: 'default' });
+  assert.deepEqual(field(plain, 'allowedModels'), { key: 'allowedModels', value: 'not set', source: 'default' });
 });
 
 test('worker dialog and screen reads use the recent-unwrapped source', async () => {
