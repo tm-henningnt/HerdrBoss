@@ -12,6 +12,49 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const LABEL = 'no.tallmaker.herdr-boss';
 const PLIST = path.join(os.homedir(), 'Library', 'LaunchAgents', `${LABEL}.plist`);
 
+async function verifyBrowserCaller(slug, { env = process.env, herdr = null, config = null } = {}) {
+  if (!env.HERDR_PANE_ID && !env.HERDR_WORKSPACE_ID) {
+    console.error('Warning: no Herdr pane; the project check is skipped.');
+    return;
+  }
+
+  const { createHerdrRunner, verifyCallerPane } = await import('./kit/workers.js');
+  const runner = herdr ?? createHerdrRunner();
+  let projectConfig = config;
+  let callerRole = null;
+  let pane;
+
+  try {
+    const caller = verifyCallerPane(env, runner, null);
+    const response = runner(['pane', 'get', caller.paneId]);
+    pane = response?.pane ?? response;
+    callerRole = pane.label === 'boss' ? 'boss' : 'project';
+  } catch (error) {
+    const paneId = env.HERDR_PANE_ID;
+    const workspaceId = env.HERDR_WORKSPACE_ID;
+    if (!paneId || !workspaceId) throw error;
+
+    try {
+      const response = runner(['pane', 'get', paneId]);
+      pane = response?.pane ?? response;
+    } catch { throw error; }
+    const returnedId = pane.pane_id ?? pane.paneId ?? pane.id;
+    const paneWorkspace = pane.workspace_id ?? pane.workspaceId ?? pane.workspace;
+    if (returnedId !== paneId || paneWorkspace !== workspaceId) throw error;
+
+    const { hasLiveWorkerRun } = await import('./kit/locks.js');
+    projectConfig ??= loadProjectConfig();
+    if (!hasLiveWorkerRun(paneId, projectConfig.root)) throw error;
+    callerRole = 'project';
+  }
+
+  if (callerRole === 'boss') return;
+  projectConfig ??= loadProjectConfig();
+  if (projectConfig.slug !== slug) {
+    throw new Error(`The ${slug} browser belongs to project ${slug}, and this pane runs in project ${projectConfig.slug}. Only that project or the Boss can change it.`);
+  }
+}
+
 const USAGE = `herdr-boss <command>
 
   serve [--read-only-preview] Run the collector loop and the dashboard server.
@@ -253,19 +296,35 @@ async function main() {
         } else console.log(`Deleted ${result.removed.length} orphaned clone(s) and freed ${(result.freedBytes / 1024 ** 3).toFixed(1)} GiB.`);
       }
       else if (args[0] === 'list' && args.length === 1) console.log(JSON.stringify(await Promise.all(Object.values(listBrowserSessions()).map(browserStatus)), null, 2));
-      else if (args[0] === 'size' && args.length === 4) console.log(JSON.stringify(setBrowserWindowSize(args[1], Number(args[2]), Number(args[3])), null, 2));
-      else if (args[0] === 'close' && args.length === 2) console.log(JSON.stringify(await closeBrowser(args[1]), null, 2));
+      else if (args[0] === 'size' && args.length === 4) {
+        await verifyBrowserCaller(args[1]);
+        console.log(JSON.stringify(setBrowserWindowSize(args[1], Number(args[2]), Number(args[3])), null, 2));
+      }
+      else if (args[0] === 'close' && args.length === 2) {
+        await verifyBrowserCaller(args[1]);
+        console.log(JSON.stringify(await closeBrowser(args[1]), null, 2));
+      }
       else if (args[0] === 'release' && args.length === 2) {
+        await verifyBrowserCaller(args[1]);
         const released = await releaseBrowser(args[1]);
         console.log(`Released project browser port ${released.port} of ${released.project}.`);
       }
-      else if (args[0] === 'restart' && [3, 4].includes(args.length) && ['--headless', '--visible'].includes(args[2]) && (args.length === 3 || args[3] === '--no-restore')) console.log(JSON.stringify(await restartBrowser(args[1], args[2] === '--headless', { restorePage: !args.includes('--no-restore') }), null, 2));
+      else if (args[0] === 'restart' && [3, 4].includes(args.length) && ['--headless', '--visible'].includes(args[2]) && (args.length === 3 || args[3] === '--no-restore')) {
+        await verifyBrowserCaller(args[1]);
+        console.log(JSON.stringify(await restartBrowser(args[1], args[2] === '--headless', { restorePage: !args.includes('--no-restore') }), null, 2));
+      }
       else if (args[0] === 'tabs' && args.length === 2) {
         const tabs = await listBrowserTabs(args[1]);
         console.log(JSON.stringify(tabs.map((tab) => ({ id: tab.id, title: tab.title, url: (() => { try { const url = new URL(tab.url); return ['http:', 'https:'].includes(url.protocol) ? `${url.origin}${url.pathname}` : url.href; } catch { return ''; } })(), visibility: tab.visibility, agentAttached: tab.attached })), null, 2));
       }
-      else if (args[0] === 'tab' && args[1] === 'new' && args[2] && args.length <= 4) console.log(JSON.stringify(await browserNewTab(args[2], args[3])));
-      else if (args[0] === 'tab' && args[1] === 'close' && args[2] && args[3] === '--tab' && args[4] && (args.length === 5 || (args.length === 6 && args[5] === '--force'))) console.log(JSON.stringify(await browserCloseTab(args[2], args[4], { force: args[5] === '--force' })));
+      else if (args[0] === 'tab' && args[1] === 'new' && args[2] && args.length <= 4) {
+        await verifyBrowserCaller(args[2]);
+        console.log(JSON.stringify(await browserNewTab(args[2], args[3])));
+      }
+      else if (args[0] === 'tab' && args[1] === 'close' && args[2] && args[3] === '--tab' && args[4] && (args.length === 5 || (args.length === 6 && args[5] === '--force'))) {
+        await verifyBrowserCaller(args[2]);
+        console.log(JSON.stringify(await browserCloseTab(args[2], args[4], { force: args[5] === '--force' })));
+      }
       else if (args[0] === 'screenshot' && args[1]) {
         const screenshotOptions = parseScreenshotOptions(args.slice(2));
         const tab = await selectedTab(args[1], screenshotOptions.tab ? ['--tab', screenshotOptions.tab] : []);
@@ -273,36 +332,53 @@ async function main() {
         console.log(saveBrowserScreenshot(image, { out: screenshotOptions.out }));
       }
       else if (args[0] === 'navigate' && args[1] && args[2]) {
+        await verifyBrowserCaller(args[1]);
         const tab = await selectedTab(args[1], args.slice(3));
         console.log(JSON.stringify(await browserNavigate(args[1], tab, args[2])));
       }
       else if (args[0] === 'click' && args[1] && args[2] && args[3]) {
+        await verifyBrowserCaller(args[1]);
         const tab = await selectedTab(args[1], args.slice(4));
         await browserClick(args[1], tab, percent(args[2]), percent(args[3]));
         console.log('Click sent.');
       }
       else if (args[0] === 'text' && args[1] && args[2] === '--stdin') {
+        await verifyBrowserCaller(args[1]);
         const tab = await selectedTab(args[1], args.slice(3));
         await browserInsertText(args[1], tab, fs.readFileSync(0, 'utf8'));
         console.log('Text sent.');
       }
       else if (args[0] === 'key' && args[1] && args[2]) {
+        await verifyBrowserCaller(args[1]);
         const tab = await selectedTab(args[1], args.slice(3));
         await browserKey(args[1], tab, args[2]);
         console.log('Key sent.');
       }
       else if (args[0] === 'bookmarks' && args[1] && args[2] === 'list' && args.length === 3) console.log(JSON.stringify(listBookmarks(args[1]), null, 2));
-      else if (args[0] === 'bookmarks' && args[1] && args[2] === 'add' && args[3] && args[4] && args.length === 5) console.log(JSON.stringify(addBookmark(args[1], { name: args[3], url: args[4] }), null, 2));
-      else if (args[0] === 'bookmarks' && args[1] && args[2] === 'rm' && args[3] && args.length === 4) console.log(JSON.stringify(removeBookmark(args[1], args[3]), null, 2));
-      else if (args[0] === 'bookmarks' && args[1] && args[2] === 'start' && args[3] && args.length === 4) console.log(JSON.stringify(setStartPage(args[1], args[3] === 'none' ? null : args[3]), null, 2));
+      else if (args[0] === 'bookmarks' && args[1] && args[2] === 'add' && args[3] && args[4] && args.length === 5) {
+        await verifyBrowserCaller(args[1]);
+        console.log(JSON.stringify(addBookmark(args[1], { name: args[3], url: args[4] }), null, 2));
+      }
+      else if (args[0] === 'bookmarks' && args[1] && args[2] === 'rm' && args[3] && args.length === 4) {
+        await verifyBrowserCaller(args[1]);
+        console.log(JSON.stringify(removeBookmark(args[1], args[3]), null, 2));
+      }
+      else if (args[0] === 'bookmarks' && args[1] && args[2] === 'start' && args[3] && args.length === 4) {
+        await verifyBrowserCaller(args[1]);
+        console.log(JSON.stringify(setStartPage(args[1], args[3] === 'none' ? null : args[3]), null, 2));
+      }
       else if (args[0] === 'bookmarks' && args[1] && args[2] === 'open' && args[3] && (args.length === 4 || (args.length === 5 && args[4] === '--new-tab'))) {
+        await verifyBrowserCaller(args[1]);
         const bookmark = listBookmarks(args[1]).bookmarks[Number(args[3])];
         if (!bookmark) throw new Error('Bookmark index is out of range.');
         if (args[4] === '--new-tab') console.log(JSON.stringify(await browserNewTab(args[1], bookmark.url)));
         else console.log(JSON.stringify(await browserNavigate(args[1], null, bookmark.url)));
       }
       else if (args[0] === 'request' && args[1] && args.includes('--headless') && args.includes('--visible')) throw new Error('Choose either --headless or --visible.');
-      else if (args[0] === 'request' && args[1] && args.slice(2).every((flag) => ['--reserve', '--headless', '--visible'].includes(flag))) console.log(JSON.stringify(await requestBrowser(args[1], { launch: !args.includes('--reserve'), headless: args.includes('--headless') ? true : args.includes('--visible') ? false : null }), null, 2));
+      else if (args[0] === 'request' && args[1] && args.slice(2).every((flag) => ['--reserve', '--headless', '--visible'].includes(flag))) {
+        await verifyBrowserCaller(args[1]);
+        console.log(JSON.stringify(await requestBrowser(args[1], { launch: !args.includes('--reserve'), headless: args.includes('--headless') ? true : args.includes('--visible') ? false : null }), null, 2));
+      }
       else throw new Error('Usage: browser request|size|close|release|restart|list|tabs|tab new|tab close|screenshot|navigate|click|text|key|bookmarks|sweep-clones. Run herdr-boss without arguments for details.');
       break;
     }
