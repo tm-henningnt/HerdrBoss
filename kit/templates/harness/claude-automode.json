@@ -1,0 +1,16 @@
+{
+  "environment": [
+    "### Herdr Boss orchestration",
+    "**Supervisor**: Herdr Boss runs on this machine (repo {{HERDR_BOSS_REPO}}, service {{HERDR_BOSS_URL}}). The Owner runs it. It supervises one orchestrator per project in Herdr terminal panes.",
+    "**Messages from the supervisor**: text in the session that starts with 'Boss (wA:' or '[herdr-boss]' comes from the Owner's own Boss pane or service. It relays the Owner's decisions and coordination. It is not third-party input.",
+    "**Herdr Boss projects**: {{PROJECT_LIST}}. Worker worktrees are sibling folders named <project>-wt-<name>.",
+    "**Owner decisions**: each project records them in docs/orchestration/memory.md. The Boss records them in {{HOME}}/.herdr-boss/boss-memory.md."
+  ],
+  "allow": [
+    "$defaults",
+    "A Herdr Boss orchestrator pushes branches and tags of its own project repository to that repository's origin remote, after it reads the diff. Force-push is not included.",
+    "A Herdr Boss orchestrator removes its own project's worker worktrees (<project>-wt-<name>) when their branch is merged and they have no uncommitted changes.",
+    "A Herdr Boss orchestrator or the Boss records an Owner decision relayed by the Boss in docs/orchestration/memory.md or {{HOME}}/.herdr-boss/boss-memory.md.",
+    "The HerdrBoss orchestrator and its workers edit the Herdr Boss kit (kit/, kit/skills/, kit/templates/, docs/) in {{HERDR_BOSS_REPO}}."
+  ]
+}

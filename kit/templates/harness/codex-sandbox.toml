@@ -1,0 +1,11 @@
+# Herdr Boss section of ~/.codex/config.toml. herdr-boss harness sync adds the missing writable roots.
+# Add one "<repo>/.git" line for each project in {{PROJECT_LIST}}.
+[sandbox_workspace_write]
+network_access = true
+writable_roots = [
+  "{{HOME}}/.herdr-boss",
+  "{{HOME}}/Library/Caches/ms-playwright",
+  "{{HOME}}/.cache",
+  "{{HOME}}/.npm",
+  "{{HERDR_BOSS_REPO}}/.git",
+]

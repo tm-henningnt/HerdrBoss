@@ -57,6 +57,8 @@ const USAGE = `herdr-boss <command>
   check ...             Validate worker handoffs and scope.
   check agents [FILE]   Check the AGENTS.md stub, the kit file, and stale orchestration text.
   check kit             List each published project with its loaded kit revision.
+  harness check         Check the harness settings that orchestration needs. Exit 1 on a missing entry.
+  harness sync [--dry-run] [--codex-only]  Add missing Codex writable roots and print the Claude autoMode lines.
   kit install [--no-hook]  Write the kit file, the AGENTS.md stub, and the Claude SessionStart hook.
   kit block             Print the marked Herdr Boss stub for AGENTS.md.
   gh issue ...          Run safe GitHub issue commands.
@@ -289,8 +291,9 @@ async function main() {
       const text = file === '-' ? fs.readFileSync(0, 'utf8') : fs.readFileSync(file, 'utf8');
       const data = JSON.parse(text);
       // Check AGENTS.md at the Git top level. Findings are warnings here; the status still publishes.
-      let agentsFile = null;
-      try { agentsFile = path.join(execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(), 'AGENTS.md'); } catch {}
+      let top = null;
+      try { top = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() || null; } catch {}
+      const agentsFile = top && path.join(top, 'AGENTS.md');
       if (agentsFile && fs.existsSync(agentsFile) && data && typeof data === 'object' && !Array.isArray(data)) {
         const { checkAgentsFile } = await import('./kit/agents-check.js');
         const result = checkAgentsFile(agentsFile, { rulesFile: path.join(DATA_DIR, 'rules.json'), relative: 'AGENTS.md' });
@@ -301,6 +304,33 @@ async function main() {
       const errors = writeProject(slug, data);
       if (errors.length) { console.error(errors.join('\n')); process.exit(1); }
       console.log(`published ${dashboardUrl(cfg)}/projects/${slug}`);
+      if (top) {
+        // The first publish of a slug registers its repository and adds its .git to the Codex writable roots.
+        const { recordProjectRepo, syncHarness } = await import('./harness.js');
+        let remote = '';
+        try { remote = execFileSync('git', ['remote', 'get-url', 'origin'], { cwd: top, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch {}
+        if (recordProjectRepo(slug, top, remote).isNew) {
+          try {
+            for (const line of syncHarness({ codexOnly: true }).lines) console.error(`warning: harness sync: ${line}`);
+          } catch (error) { console.error(`warning: harness sync: ${error.message}. Run herdr-boss harness sync.`); }
+        }
+      }
+      break;
+    }
+    case 'harness': {
+      const { checkHarness, formatFinding, syncHarness } = await import('./harness.js');
+      const [action, ...flags] = args;
+      if (action === 'check' && !flags.length) {
+        const findings = checkHarness();
+        for (const finding of findings) console.log(formatFinding(finding));
+        const failed = findings.filter((finding) => finding.status !== 'ok').length;
+        console.log(`harness check: ${failed ? 'FAIL' : 'PASS'} (${findings.length} entries, ${failed} missing or bad). See docs/harness-setup.md.`);
+        if (failed) process.exitCode = 1;
+      } else if (action === 'sync' && flags.every((flag) => ['--dry-run', '--codex-only'].includes(flag))) {
+        const result = syncHarness({ dryRun: flags.includes('--dry-run'), codexOnly: flags.includes('--codex-only'), url: dashboardUrl(cfg) });
+        for (const line of result.lines) console.log(line);
+        if (!result.ok) process.exitCode = 1;
+      } else throw new Error('Usage: harness check | harness sync [--dry-run] [--codex-only]');
       break;
     }
     case 'install': {
