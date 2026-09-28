@@ -1,4 +1,4 @@
-<!-- herdr-boss kit v=fce9e6ea6127 -->
+<!-- herdr-boss kit v=1d9e7ae8967c -->
 Herdr Boss writes this file. Do not edit it. Run herdr-boss kit install to update it.
 
 # Herdr Boss orchestration kit
@@ -24,7 +24,7 @@ These are the shared operating rules for the orchestrator of this project.
 - When a lane is ahead of pace, start ready work on a lane from the bulletin **Use now** line. Do not wait for the ahead lane.
 - Read `kit/browser-service.md` for project browser commands.
 - Keep the orchestrator pane labeled `orch`.
-- Use `herdr-boss worker start` to start workers.
+- Use `herdr-boss worker start` to start workers. Use `--read-only` for a task that changes no repository file.
 - Use lowercase, unique worker names.
 - Give every worker one bounded task and exact allowed paths.
 - Run each `herdr-boss browser` command and each `ps` or `pgrep` command alone. Do not join it to other commands with `&&`, `;`, or a pipe.
