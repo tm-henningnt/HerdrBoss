@@ -120,7 +120,7 @@ function driftFindings(lines, { models = [], skip = () => false, handoff = false
     const number = index + 1;
     if (skip(index)) return;
     for (const [pattern, message] of STALE) if (pattern.test(line)) add('warn', number, message);
-    if (PORT.test(line) && !PROHIBITION.test(line)) add('warn', number, 'port 9222 is the Chrome of another project; use herdr-boss browser request');
+    if (PORT.test(line) && !PROHIBITION.test(line)) add('warn', number, 'port 9222 is the retired legacy browser; use herdr-boss browser request');
     if (PROCESS.test(line) && !PROHIBITION.test(line)) add('warn', number, 'a process command prints command lines; use pgrep -l or ps -o pid,ppid,etime,comm');
     if (PANE_ID.test(line)) add('warn', number, `fixed pane ID ${PANE_ID.exec(line)[0]}; ${MEMORY}`);
     if (DATE.test(line)) add('warn', number, `dated line; ${MEMORY}`);

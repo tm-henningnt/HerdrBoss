@@ -35,4 +35,4 @@ Also, when adopting a newer Herdr Boss kit:
 
 1. Keep the active orchestrator pane labeled `orch`. Read `~/.herdr-boss/bulletin.md` before dispatch and use the Owner's saved Allocation policy for worker capacity, provider choices, and handover.
 2. Publish project status with `herdr-boss publish <slug> <file>` so the shared Projects page stays current.
-3. For browser work, read [the project browser service](../kit/browser-service.md). Request the project's dedicated profile, read its tab IDs, and give workers only their assigned tab. Treat port 9222 as an optional legacy shared session, not the default.
+3. For browser work, read [the project browser service](../kit/browser-service.md). Request the project's dedicated profile, read its tab IDs, and give workers only their assigned tab.

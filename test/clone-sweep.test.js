@@ -47,10 +47,10 @@ test('a clone younger than 1 hour is kept', async (t) => {
   assert.equal(fs.existsSync(clone.folder), true);
 });
 
-test('a clone created within 5 seconds of a running Chrome start is kept, like the Chrome on port 9222', async (t) => {
+test('a clone created within 5 seconds of a running Chrome start is kept', async (t) => {
   const { dir } = cloneRoot(t);
   const owned = makeClone(dir, 'code_sign_clone.port9222');
-  // The Chrome on port 9222 started 3 seconds before its clone appeared.
+  // The Chrome started 3 seconds before its clone appeared.
   const processes = async () => [{ pid: 900, startedAt: owned.birthtimeMs - 3000, comm: CHROME }];
   const result = await sweepCodeSignClones({ dir, now: owned.birthtimeMs + 3 * HOUR, processes, freeBytes: async () => 0 });
   assert.deepEqual(result.removed, []);
