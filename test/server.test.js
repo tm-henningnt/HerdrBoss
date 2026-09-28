@@ -1002,3 +1002,35 @@ test('Analytics and Mailbox show the scan and store limits from the state', () =
   assert.match(guide, /A read-only line with the limits/);
   assert.match(guide, /The folder pane shows a read-only line with the limits/);
 });
+
+test('the project page shows the memory and kit file paths with a home-relative repository path', { timeout: 20000 }, async (t) => {
+  const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const projects = fs.readFileSync(new URL('../src/projects.js', import.meta.url), 'utf8');
+  const guide = fs.readFileSync(new URL('../docs/user-guide.md', import.meta.url), 'utf8');
+  // The Files panel shows the project memory, the kit file, the kit revision, and the Boss memory.
+  assert.match(app, /function filesBlock\(p\)/);
+  assert.match(app, /filesBlock\(p\)/);
+  assert.match(app, /docs\/orchestration\/memory\.md/);
+  assert.match(app, /docs\/orchestration\/herdr-boss\.md/);
+  assert.match(app, /~\/\.herdr-boss\/boss-memory\.md/);
+  assert.match(app, /kitRevisionLine\(p\)/);
+  // The repository path comes from the project data, and the home folder shows as ~.
+  assert.match(app, /p\.repo/);
+  assert.match(projects, /function tildePath\(value, home\)/);
+  assert.match(projects, /tildePath\(registered, home\)/);
+  // Help and the guide describe the panel.
+  assert.match(app, /<h3>Files<\/h3>/);
+  assert.match(guide, /Boss memory file/);
+  // The registered repository path reaches the state as a home-relative path.
+  const { listProjects } = await import('../src/projects.js');
+  const repo = path.join(homeDir, 'Projects', 'demo');
+  fs.mkdirSync(path.join(dataDir, 'projects'), { recursive: true });
+  fs.writeFileSync(path.join(dataDir, 'projects', 'demo.json'), JSON.stringify({ project: 'Demo' }));
+  fs.writeFileSync(path.join(dataDir, 'project-repos.json'), JSON.stringify([{ slug: 'demo', repo, remote: '' }]));
+  t.after(() => {
+    fs.rmSync(path.join(dataDir, 'projects', 'demo.json'), { force: true });
+    fs.rmSync(path.join(dataDir, 'project-repos.json'), { force: true });
+  });
+  const row = listProjects().find((p) => p.slug === 'demo');
+  assert.equal(row.repo, '~/Projects/demo');
+});

@@ -2484,6 +2484,9 @@ function agentsDriftLine(check) {
   return `<div class="warnbox">AGENTS.md drift: ${errors} errors, ${warnings} warnings. Run <span class="mono">herdr-boss check agents</span>.</div>`;
 }
 
+// The Boss memory file is outside every project repository.
+const BOSS_MEMORY_PATH = '~/.herdr-boss/boss-memory.md';
+
 // The kit revision that the orchestrator loaded, against the current kit revision of Herdr Boss.
 function kitRevisionLine(p) {
   const current = p.currentKitRevision;
@@ -2492,6 +2495,16 @@ function kitRevisionLine(p) {
   const text = `Kit revision ${esc(loaded)}, current ${esc(current)}`;
   if (loaded === current) return `<div class="win-foot">${text}.</div>`;
   return `<div class="warnbox">${text}. The orchestrator uses an old kit. Run <span class="mono">herdr-boss kit install</span> in the project, and re-read <span class="mono">docs/orchestration/herdr-boss.md</span>.</div>`;
+}
+
+// The read-only file paths that an orchestrator reads. Show paths only, never file contents.
+function filesBlock(p) {
+  const row = (label, value) => `<li><span class="k">${esc(label)}</span>${value ? `<span class="mono">${esc(value)}</span>` : '<span class="muted">not registered yet</span>'}</li>`;
+  return `<section class="panel files"><h2>Files</h2><div class="win-foot">Paths that the orchestrator reads.</div><ul class="files-list">
+    ${row('Project memory', p.repo ? `${p.repo}/docs/orchestration/memory.md` : null)}
+    ${row('Kit file', p.repo ? `${p.repo}/docs/orchestration/herdr-boss.md` : null)}
+    ${row('Boss memory', BOSS_MEMORY_PATH)}
+  </ul>${kitRevisionLine(p)}</section>`;
 }
 
 function project(s, slug) {
@@ -2530,7 +2543,7 @@ function project(s, slug) {
     `<section class="phead"><h1>${esc(p.project)}</h1>${p.goal ? `<div class="owner-goal"><strong>Current Owner goal</strong><p>${esc(p.goal)}</p></div>` : ''}${p.summary ? `<p>${esc(p.summary)}</p>` : ''}${phases}<div class="win-foot">${published ? `updated ${ago(p.updated)}${staleStatusTag(s, p)}${p.status ? ` · ${esc(p.status)}` : ''}` : 'No project status published yet'}${p.git && typeof p.git === 'object' ? ` · <span class="mono">${esc(p.git.branch || '')}${p.git.commit ? ` @ ${esc(String(p.git.commit).slice(0, 12))}` : ''}${p.git.dirty ? ' · uncommitted changes' : ''}</span>` : ''}</div></section>`,
     p.errors ? `<div class="warnbox">${esc(p.errors.join('; '))}</div>` : '',
     agentsDriftLine(p.agentsCheck),
-    published ? kitRevisionLine(p) : '',
+    published ? filesBlock(p) : '',
     handoffBlock(s, slug),
     metrics,
     programBlock(work),
@@ -2569,6 +2582,7 @@ const HELP = {
     <h3>Project continuity</h3><p>Plan a handover to another harness. Prepare copies the published Owner goal to the successor. An invalid published goal, such as a blank value or a value over 1000 characters, is omitted. If migration is unavailable or fails, Prepare starts fresh and records the reason. Fresh preparation captures at most 200 recent source-pane lines and 20,000 characters, and both caps include the truncation marker. It redacts likely credentials and marks the snapshot as historical context. If recent text is unavailable, it tries the visible pane; if both reads fail, it marks context unavailable. The successor only reads and reports until activation. Inspect its answer, then confirm activation. For a project, activation labels the successor <b>orch</b> and the old pane <b>orch previous</b>. For the Boss, it labels them <b>boss</b> and <b>boss previous</b>. Herdr Boss closes the old pane after 120 minutes when the same handoff and pane roles are still confirmed. Unavailable pane data defers retirement until a later engine tick. The successor gets one notice after retirement. The old agent is asked for a final summary for the successor. A project handover notifies the project workers and the Boss. A Boss handover notifies the Boss-workspace peers and the Owner.</p>
     <h3>Phone</h3><p>On a phone, the long sections start collapsed. Select a section title to open it. The dashboard remembers each open section for this project during the session. Overall progress and the frontier stay open.</p>
     <h3>AGENTS.md drift</h3><p><b>AGENTS.md drift</b> shows the errors and warnings that <b>herdr-boss publish</b> found in the project AGENTS.md. An error is a missing, old, or hand-edited Herdr Boss stub, or a missing, old, or hand-edited kit file <code>docs/orchestration/herdr-boss.md</code>. A warning is stale orchestration text, such as a fixed pane ID, a dated line, a copied model list, or text that sends pushes or product decisions to the Boss. Run <b>herdr-boss check agents</b> in the project for each finding. Run <b>herdr-boss kit install</b> to fix an error.</p>
+    <h3>Files</h3><p><b>Files</b> shows the paths that the orchestrator reads: the project memory file, the installed kit file, and the Boss memory file. The home folder shows as <b>~</b>. The panel shows paths only. It never shows the contents of a memory or kit file.</p>
     <h3>Kit revision</h3><p><b>Kit revision</b> shows the kit revision that the orchestrator loaded, from <code>kitRevision</code> in its status file, and the current kit revision. A warning shows when they are different. The orchestrator then runs <b>herdr-boss kit install</b> and re-reads <code>docs/orchestration/herdr-boss.md</code>.</p>
     <h3>Stale status</h3><p><b>Status stale: AGE</b> shows next to the updated time when the published status is older than 2 hours and, after that publish, a worker was working in the last 2 hours or new commits landed on the project repository. A paused project is never stale. The orchestrator gets one notice for each stale status. Publish the current plan and progress to clear the mark.</p>
     <p>The data comes from the project's status file. When a section is missing, the orchestrator has not published those fields.</p>`],

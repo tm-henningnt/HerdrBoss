@@ -1,7 +1,9 @@
 // Project status files written by orchestrators. See docs/project-status.md.
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { PROJECTS_DIR } from './config.js';
+import { readProjectRepos } from './harness.js';
 import { kitRevision } from './kit/agents-check.js';
 
 export const SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -70,20 +72,31 @@ export function statusWarnings(p) {
   return warnings;
 }
 
+// Show the home folder as ~ in a displayed path. Keep another absolute path as it is.
+function tildePath(value, home) {
+  if (!value) return null;
+  if (value === home) return '~';
+  return value.startsWith(`${home}/`) ? `~${value.slice(home.length)}` : value;
+}
+
 export function listProjects() {
   // currentKitRevision is not part of the status file. The project page compares it with kitRevision.
   const currentKitRevision = kitRevision();
+  const home = os.homedir();
+  const repos = readProjectRepos();
   let files = [];
   try { files = fs.readdirSync(PROJECTS_DIR).filter((f) => f.endsWith('.json')); } catch {}
   return files.map((f) => {
     const slug = f.slice(0, -5);
     const file = path.join(PROJECTS_DIR, f);
+    const registered = repos.find((row) => row.slug === slug)?.repo;
+    const repo = tildePath(registered, home);
     try {
       const data = JSON.parse(fs.readFileSync(file, 'utf8'));
       const errors = validateProject(data);
-      return { slug, ...data, currentKitRevision, updated: data.updated || fs.statSync(file).mtime.toISOString(), errors: errors.length ? errors : undefined };
+      return { slug, ...data, currentKitRevision, repo, updated: data.updated || fs.statSync(file).mtime.toISOString(), errors: errors.length ? errors : undefined };
     } catch (e) {
-      return { slug, project: slug, currentKitRevision, errors: [`invalid JSON: ${e.message}`] };
+      return { slug, project: slug, currentKitRevision, repo, errors: [`invalid JSON: ${e.message}`] };
     }
   }).sort((a, b) => a.project.localeCompare(b.project));
 }
