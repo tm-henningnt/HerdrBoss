@@ -121,6 +121,15 @@ test('text that sends pushes or product decisions to the Boss or the Owner gives
   ]) assert.deepEqual(check(file(line)), [], line);
 });
 
+test('routing only approved escalation topics is allowed, but mixed product decisions still warn', () => {
+  assert.deepEqual(check(file('Ask the Boss about credentials, spending money, and destructive actions outside the project.')), []);
+  assert.deepEqual(check(file('Ask the Boss about irreversible actions outside the project.')), []);
+  assert.deepEqual(check(file('Ask the Boss about a conflict with a recorded Owner decision.')), []);
+  const findings = check(file('Ask the Boss about credentials and product decisions.'));
+  assert.equal(findings.length, 1, JSON.stringify(findings));
+  assert.equal(findings[0].level, 'warn');
+});
+
 test('a prohibition line for port 9222 or a process command is not drift', () => {
   assert.deepEqual(check(file('- Never touch the Chrome on port 9222.')), []);
   assert.deepEqual(check(file('- Do not use `ps aux` with the output printed.')), []);

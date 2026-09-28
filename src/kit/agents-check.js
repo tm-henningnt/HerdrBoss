@@ -87,13 +87,17 @@ const MODEL_TOKEN = /(?<![\w/.-])(?:opencode(?:-go)?\/[\w.-]+|(?:gpt-|claude-|de
 // Text outside the stub that routes a decision, a push, a release, or a product question to the Boss, the Owner, a human,
 // or the user. The line needs an ask or escalate verb, a target, and a subject, so "1. Decide the order" is not routing.
 const ROUTE_SUBJECT = /\b(?:decisions?|push(?:es)?|releases?|product questions?)\b/i;
+const ROUTE_ALLOWED_SUBJECT = /\b(?:credentials?|secrets?|spending money|billing|(?:destructive|irreversible)(?: actions?)? outside (?:the )?project|conflicts? with (?:a )?recorded Owner decision)\b/i;
 const ROUTE_VERB = /\b(?:ask|escalat\w*|send|report|route|get approval|wait for)\b/i;
 const ROUTE_TARGET = /\b(?:the Owner|the Boss|a human|the user)\b/i;
 // "Pushes need Owner approval" has the verb and the target in one phrase.
 const ROUTE_APPROVAL = /\b(?:Owner|Boss)(?:'s)? approval\b/;
 const OWN_DECISION = /\byourself\b|\bnobody\b/i;
 function routesDecision(line) {
-  if (!ROUTE_SUBJECT.test(line) || PROHIBITION.test(line) || OWN_DECISION.test(line)) return false;
+  const hasRoutedTopic = ROUTE_SUBJECT.test(line) || ROUTE_ALLOWED_SUBJECT.test(line);
+  if (!hasRoutedTopic || PROHIBITION.test(line) || OWN_DECISION.test(line)) return false;
+  const unapprovedTopics = line.replace(new RegExp(ROUTE_ALLOWED_SUBJECT.source, 'gi'), ' ');
+  if (!ROUTE_SUBJECT.test(unapprovedTopics)) return false;
   return ROUTE_APPROVAL.test(line) || (ROUTE_VERB.test(line) && ROUTE_TARGET.test(line));
 }
 // The verb is an instruction: at most three words before it, so "The Boss decides when to tell other projects" is not drift.

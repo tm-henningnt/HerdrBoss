@@ -305,6 +305,9 @@ test('brief rendering fills known slots and rejects an unknown slot', () => {
   const template = fs.readFileSync(path.resolve('kit/templates/worker-brief.md'), 'utf8');
   assert.match(template, /WORKER REPORT.*WORKER QUESTION.*fails, record the failed command and reason in the worker report, then stop/s);
   assert.match(template, /Boss monitors report metadata and will notify the orchestrator/);
+  assert.match(template, /These report and question commands are an exception to the rule against Herdr commands outside Herdr/);
+  assert.match(template, /{{herdrEnvPrefix}}{{herdrBin}} agent prompt {{orchPane}} "WORKER QUESTION/);
+  assert.match(template, /{{herdrEnvPrefix}}{{herdrBin}} agent prompt {{orchPane}} "WORKER REPORT/);
 });
 
 test('worker report and delegated run validation enforce their handoff schemas', () => {

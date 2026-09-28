@@ -96,6 +96,14 @@ Then stop that path and wait. The orchestrator answers with a new prompt in this
 
 If the Herdr command for `WORKER REPORT` or `WORKER QUESTION` fails, record the failed command and reason in the worker report, then stop. Do not look for a workaround outside the worktree. Boss monitors report metadata and will notify the orchestrator when a report is written.
 
+These report and question commands are an exception to the rule against Herdr commands outside Herdr.
+
+Use this command as written. It works also when your shell lost the Herdr variables.
+
+```sh
+{{herdrEnvPrefix}}{{herdrBin}} agent prompt {{orchPane}} "WORKER QUESTION {{name}}: <what you need and why>"
+```
+
 ## Image budget
 
 View at most {{imageBudget}} screenshots during this session.
@@ -166,8 +174,10 @@ Do not claim a higher tier from a lower-tier result.
 
 After saving both reports, run this command without `--wait`:
 
+Use this command as written. It works also when your shell lost the Herdr variables.
+
 ```sh
-herdr agent prompt {{orchPane}} "WORKER REPORT {{name}}: <done|blocked|stopped>. Report: {{worktree}}/.worker/report.md"
+{{herdrEnvPrefix}}{{herdrBin}} agent prompt {{orchPane}} "WORKER REPORT {{name}}: <done|blocked|stopped>. Report: {{worktree}}/.worker/report.md"
 ```
 
 Use `done`, `blocked`, or `stopped` to describe the result.
