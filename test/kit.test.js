@@ -2847,3 +2847,22 @@ test('project config in a .herdr-wt worker worktree resolves the main checkout p
   fs.writeFileSync(path.join(worktree, '.herdr-boss.json'), JSON.stringify({ slug: 'own' }));
   assert.equal(loadProjectConfig({ cwd: worktree }).slug, 'own');
 });
+
+test('a numeric string issue in a worker report is normalized with a warning', async () => {
+  const { normalizeWorkerReport } = await import('../src/kit/orchestration.js');
+  for (const value of ['204', '#204', ' #204 ']) {
+    const { report, warnings } = normalizeWorkerReport({ issue: value, branch: 'b' });
+    assert.equal(report.issue, 204);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /read as the number 204\. Write issue as a number\./);
+  }
+  for (const value of ['0', '-3', 'abc', '20x', '#', '1.5']) {
+    const { report, warnings } = normalizeWorkerReport({ issue: value });
+    assert.equal(report.issue, value);
+    assert.deepEqual(warnings, []);
+    assert.ok(validateWorkerReport(report).some((error) => /issue must be null or a positive integer/.test(error)));
+  }
+  assert.deepEqual(normalizeWorkerReport({ issue: 12 }).warnings, []);
+  const brief = fs.readFileSync(path.resolve('kit/templates/worker-brief.md'), 'utf8');
+  assert.ok(brief.includes('"issue": 204,'));
+});

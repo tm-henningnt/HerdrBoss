@@ -69,6 +69,20 @@ function tiers(value, errors, allowedTiers) {
   });
 }
 
+// A worker can write the issue as a numeric string ("204" or "#204"). Turn it into the number and return a
+// warning. Any other value stays, so the validator still refuses it.
+export function normalizeWorkerReport(report) {
+  const warnings = [];
+  if (isObject(report) && typeof report.issue === 'string') {
+    const match = /^#?\s*([1-9][0-9]*)$/.exec(report.issue.trim());
+    if (match) {
+      warnings.push(`Warning: the report issue is the string ${JSON.stringify(report.issue)}; it is read as the number ${Number(match[1])}. Write issue as a number.`);
+      return { report: { ...report, issue: Number(match[1]) }, warnings };
+    }
+  }
+  return { report, warnings };
+}
+
 export function validateWorkerReport(report, { evidenceTiers = [] } = {}) {
   const errors = [];
   if (!isObject(report)) return ['record must be a JSON object.'];

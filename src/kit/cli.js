@@ -3,7 +3,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { DEFAULT_RULES_FILE, findGitRoot, loadModels, loadProjectConfig } from './config.js';
 import { mergeModels } from '../control.js';
-import { appendDelegatedRun, compareChangedPaths, gitStatusPaths, readDelegatedRuns, readJson, validateAllowedPaths, validateDelegatedRun, validateWorkerReport } from './orchestration.js';
+import { appendDelegatedRun, compareChangedPaths, gitStatusPaths, readDelegatedRuns, readJson, validateAllowedPaths, validateDelegatedRun, normalizeWorkerReport, validateWorkerReport } from './orchestration.js';
 import { buildGhArgs } from './gh.js';
 import { allowWorkerScope, collectWorker, createHerdrRunner, listWorkers, parkWorker, startWorker } from './workers.js';
 import { pruneWorktrees } from './worktrees.js';
@@ -284,7 +284,9 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
     const targets = ['report', 'run', 'worktree'].filter((key) => flags[key]);
     if (targets.length > 1) fail('Use only one of --report, --run, or --worktree.');
     if (flags.report) {
-      const report = readJson(filePath(config.root, flags.report));
+      const normalized = normalizeWorkerReport(readJson(filePath(config.root, flags.report)));
+      for (const warning of normalized.warnings) output(warning);
+      const report = normalized.report;
       valid(validateWorkerReport(report, { evidenceTiers: config.evidenceTiers }), 'worker report');
       output('check: PASS (worker report)');
       return report;

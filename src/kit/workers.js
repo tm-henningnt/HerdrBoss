@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { appendDelegatedRun, compareChangedPaths, gitChangedPaths, gitLog, readJson, validateAllowedPaths, validateScopePaths, validateWorkerReport } from './orchestration.js';
+import { appendDelegatedRun, compareChangedPaths, gitChangedPaths, gitLog, readJson, validateAllowedPaths, validateScopePaths, normalizeWorkerReport, validateWorkerReport } from './orchestration.js';
 import { recordUsage } from '../usage.js';
 import { goalSummary, mergeModels, modelEnabled, providerFor, selectModel, unavailablePiModels, unmeteredClosedParts, unmeteredSummary } from '../control.js';
 import { DATA_DIR, loadConfig } from '../config.js';
@@ -1198,7 +1198,9 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
   const { file, run } = readRun(config, name);
   if (run.finishedAt) throw new Error(`Run ${name} is already marked finished at ${run.finishedAt}.`);
   const reportDir = path.join(run.worktree, run.workerDir || '.worker');
-  const reportJson = readJson(path.join(reportDir, 'report.json'));
+  const normalized = normalizeWorkerReport(readJson(path.join(reportDir, 'report.json')));
+  for (const warning of normalized.warnings) output(warning);
+  const reportJson = normalized.report;
   if (options.record) {
     const missing = recordFlagErrors(options, reportJson);
     if (missing.length) throw new Error(`--record needs:\n- ${missing.join('\n- ')}`);

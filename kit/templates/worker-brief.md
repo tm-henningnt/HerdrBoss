@@ -174,6 +174,23 @@ Include these fields in the JSON report:
 
 Use the supplied issue ID when the brief has one. Use `null` for work without an issue.
 
+Write `issue` as a JSON number, for example `204`, not as a string (`"204"` or `"#204"`). This is a complete example for a task with issue 204:
+
+```json
+{
+  "issue": 204,
+  "branch": "pm204sort",
+  "worktree": "/Users/you/Projects/.herdr-wt/Example/pm204sort",
+  "changedPaths": ["src/sort.js", "test/sort.test.js"],
+  "commands": ["node --test test/sort.test.js: 12 passed, 0 failed", "herdr-boss suite --wait 1800 -- npm test: exit 0"],
+  "evidenceTier": ["unit"],
+  "unverified": [],
+  "stoppedEarly": false,
+  "toolSuggestion": null,
+  "usage": { "inputTokens": null, "outputTokens": null, "cachedTokens": null, "cost": null, "toolCalls": null }
+}
+```
+
 Replace `<tier>` with one or more of the evidence tiers of this project: {{evidenceTiers}}. The report validator rejects every other tier.
 
 Fill `usage` only with values measured by the worker's harness. Leave unknown values as `null`.
