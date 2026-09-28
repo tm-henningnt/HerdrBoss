@@ -948,8 +948,26 @@ function allocationView(s) {
   return [
     '<header class="page-intro"><div><h1>Resource allocation</h1><p>Set worker capacity, project shares, exclusions, and orchestrator succession.</p></div></header>',
     controlBlock(s),
+    machineLocksBlock(s),
     leasesBlock(s),
   ].join('');
+}
+
+function machineLocksBlock(s) {
+  const locks = Array.isArray(s.locks) ? s.locks : [];
+  const rows = locks.map((lock) => `<tr>
+    <td class="mono" data-label="Lock">${esc(lock.name)}</td>
+    <td data-label="Holder">${esc(lock.project || 'Unknown project')} · ${esc(lock.ownerPane || 'Unknown pane')}</td>
+    <td data-label="Kind">${esc(lock.kind)}</td>
+    <td data-label="Age">${esc(dur(lock.ageSeconds))}</td>
+    <td data-label="Time left">${lock.kind === 'manual' ? `${esc(until(lock.expiresAt))} left` : 'until the command ends'}</td>
+    <td data-label="State"><span class="tag machine-lock-state ${lock.state === 'live' ? 'is-live' : 'is-stale'}">${esc(lock.state)}</span></td>
+  </tr>`).join('');
+  return `<section class="machine-lock-panel panel">
+    <div class="section-head"><h2>Locks</h2><span>Machine locks</span></div>
+    ${locks.length ? `<div class="machine-lock-table-wrap"><table class="machine-lock-table"><thead><tr><th>Lock</th><th>Holder</th><th>Kind</th><th>Age</th><th>Time left</th><th>State</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="machine-lock-empty">No machine locks are held.</p>'}
+    <p class="machine-lock-help">A command lock ends when its command ends. A manual lock expires after 60 minutes. Herdr Boss takes over a stale lock.</p>
+  </section>`;
 }
 
 // ---------- Resource leases ----------
@@ -2515,6 +2533,7 @@ const HELP = {
     <p>A bar label such as <b>30% · 2</b> shows the set share and the effective slots. A narrow segment shows fewer labels; its tooltip shows all values.</p>
     <p>An idle project is faded. A paused project is faded and striped.</p>
     <p>When <b>Borrow idle shares</b> is on, a project lends its unused slots to the projects that use all their slots. An idle or paused project lends all its slots. Another project always keeps its base slots. It offers its unused slots to other projects and does not lose them. The lent and offered slots go to the full projects by share. When no project is full, no project lends. A project row shows <b>N lent</b> for an idle project, <b>N free for others</b> for a project with unused slots, and <b>+N borrowed</b> for a full project. Borrowed slots are real capacity. The global limit still applies.</p>
+    <h3>Locks</h3><p>The panel lists machine locks. Each row shows the lock name, holder project and pane, kind, age, time left, and state. When no lock exists, the panel shows <b>No machine locks are held.</b> A manual lock expires after 60 minutes. A command lock ends when its command ends. Herdr Boss takes over a stale lock. You cannot release a lock from this panel.</p>
     <h3>Resource leases</h3><p>Each pool lists its items and the holder of each item. The head shows the held and free counts, the lease TTL, and the reclaim rule. A held row shows the holder project, the pane or worker, the lease age, and the time left. <b>borrowed</b> marks an item of another project's split. For <code>project-browsers</code>, the panel lists only the held ports and the number of free ports; that pool has 77 ports. An invalid resource pool shows an error line.</p>
     <p>Select <b>Release</b> to give a lease back. The page asks you to confirm, and names the pool, the item, the holder project, and the pane or worker. The release removes the lease only while its holder project is still the project that the page shows. Otherwise the page reports that the lease changed, and you reload the page. A release never stops a process. For a project browser that runs, the button is disabled until you close the browser on the Browsers page.</p>`],
   settings: ['Settings', `

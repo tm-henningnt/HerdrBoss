@@ -992,6 +992,20 @@ body.dep-full-open { overflow: hidden; }
 :root[data-theme="dark"] button.mail-decline { color: var(--crit); }
 :root .mail-entry .mail-meta strong { color: var(--text); }
 
+/* Machine locks on the Allocation page. */
+.machine-lock-panel { margin-top: 20px; }
+.machine-lock-panel h2 { margin: 0; }
+.machine-lock-table-wrap { overflow-x: auto; }
+.machine-lock-table { width: 100%; border-collapse: collapse; text-align: left; font-size: 12.5px; }
+.machine-lock-table th { padding: 8px 12px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 11px; font-weight: 600; white-space: nowrap; }
+.machine-lock-table td { padding: 8px 12px; border-bottom: 1px solid var(--line); vertical-align: middle; white-space: nowrap; }
+.machine-lock-table tr:last-child td { border-bottom: 0; }
+.machine-lock-table td.mono { font-family: var(--mono); }
+.machine-lock-state.is-live { border-color: var(--ok); color: var(--ok); }
+.machine-lock-state.is-stale { border-color: var(--warn); color: var(--warn); }
+.machine-lock-empty, .machine-lock-help { margin: 8px 0 0; color: var(--muted); font-size: 12.5px; }
+.machine-lock-table-wrap + .machine-lock-help { margin-top: 10px; }
+
 /* Resource leases on the Allocation page. */
 .lease-panel { margin-top: 20px; }
 .lease-panel h2 { margin: 0; }
@@ -1021,6 +1035,11 @@ body.dep-full-open { overflow: hidden; }
 .lease-confirm .lease-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
 
 @media (max-width: 760px) {
+  .machine-lock-table thead { display: none; }
+  .machine-lock-table, .machine-lock-table tbody, .machine-lock-table tr, .machine-lock-table td { display: block; width: 100%; }
+  .machine-lock-table tr { padding: 8px 0; border-bottom: 1px solid var(--line); }
+  .machine-lock-table td { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; padding: 3px 0; border: 0; white-space: normal; overflow-wrap: anywhere; }
+  .machine-lock-table td::before { content: attr(data-label); flex: 0 0 92px; color: var(--muted); font-size: 11px; font-weight: 600; }
   .lease-table thead { display: none; }
   .lease-table, .lease-table tbody, .lease-table tr, .lease-table td { display: block; width: 100%; }
   .lease-table tr { padding: 8px 0; border-bottom: 1px solid var(--line); }
