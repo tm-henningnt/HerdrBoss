@@ -757,3 +757,18 @@ test('the Browsers page selects the whole address on first focus and offers one 
   assert.match(guide, /Close tab/);
   assert.match(guide, /selects all its text/);
 });
+
+test('Allocation shows machine locks without internal process or git fields', () => {
+  const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const allocation = /function allocationView\(s\) \{([\s\S]*?)\n\}/.exec(app)?.[1] || '';
+  const locks = /function machineLocksBlock\(s\) \{([\s\S]*?)\n\}/.exec(app)?.[1] || '';
+  assert.match(allocation, /machineLocksBlock\(s\)/);
+  assert.ok(allocation.indexOf('machineLocksBlock(s)') < allocation.indexOf('leasesBlock(s)'), 'Locks appears above Resource leases');
+  assert.match(locks, /<h2>Locks<\/h2>/);
+  assert.match(locks, /No machine locks are held\./);
+  assert.match(locks, /ageSeconds/);
+  assert.match(locks, /expiresAt/);
+  assert.match(locks, /until the command ends/);
+  assert.match(locks, /lock\.state/);
+  assert.doesNotMatch(locks, /gitCommonDir|\bpid\b/);
+});
