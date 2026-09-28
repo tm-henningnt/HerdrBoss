@@ -68,6 +68,7 @@ test('read-only preview allows reads and rejects all API methods that can change
     ['POST', '/api/browser-sessions/tab-close'],
     ['POST', '/api/browser-sessions/close'],
     ['POST', '/api/browser-sessions/request'],
+    ['POST', '/api/browser-sessions/bookmarks'],
     ['POST', '/api/browser-sessions/restart'],
     ['POST', '/api/handoffs/plan'],
     ['POST', '/api/handoffs/prepare'],
@@ -731,6 +732,71 @@ test('the browser tab-close route closes one tab, refuses an attached tab, repor
   await close();
 });
 
+test('the bookmark API lists, adds, renames, moves, removes, sets the start page, and refuses a bad URL or project', { timeout: 20000 }, async (t) => {
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.mkdirSync(homeDir, { recursive: true });
+  t.after(() => {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  });
+  fs.writeFileSync(path.join(dataDir, 'browser-sessions.json'), JSON.stringify({
+    alpha: { project: 'alpha', port: 9299, profile: path.join(dataDir, 'browser-profiles', 'alpha'), headless: true, windowSize: { width: 1280, height: 800 }, pid: null },
+  }));
+  const cfg = loadConfig();
+  cfg.host = '127.0.0.1';
+  cfg.port = 0;
+  cfg.tickSeconds = 3600;
+  const { server, close } = serve(cfg, {
+    createEngine: () => {
+      const engine = new EventEmitter();
+      engine.state = { control: { projects: { alpha: {} } } };
+      engine.tick = async () => engine.state;
+      engine.log = () => {};
+      return engine;
+    },
+  });
+  t.after(async () => { await close(); });
+  await new Promise((resolve, reject) => {
+    server.once('listening', resolve);
+    server.once('error', reject);
+  });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const post = (body) => fetch(`${base}/api/browser-sessions/bookmarks`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const get = (project = 'alpha') => fetch(`${base}/api/browser-sessions/bookmarks?project=${encodeURIComponent(project)}`);
+
+  assert.deepEqual(await (await get()).json(), { bookmarks: [], startPage: null }, 'a fresh project has no bookmarks');
+  const added = await post({ project: 'alpha', action: 'add', name: 'Docs', url: 'https://docs.example/' });
+  assert.equal(added.status, 200);
+  assert.deepEqual((await added.json()).bookmarks, [{ name: 'Docs', url: 'https://docs.example/' }]);
+  await post({ project: 'alpha', action: 'add', name: 'Code', url: 'https://code.example/' });
+  assert.deepEqual((await (await get()).json()).bookmarks.map((b) => b.name), ['Docs', 'Code']);
+
+  const renamed = await post({ project: 'alpha', action: 'rename', index: 0, name: 'Handbook' });
+  assert.equal(renamed.status, 200);
+  assert.equal((await renamed.json()).bookmarks[0].name, 'Handbook');
+  const moved = await post({ project: 'alpha', action: 'move', index: 0, to: 1 });
+  assert.deepEqual((await moved.json()).bookmarks.map((b) => b.name), ['Code', 'Handbook']);
+  const removed = await post({ project: 'alpha', action: 'remove', index: 0 });
+  assert.deepEqual((await removed.json()).bookmarks.map((b) => b.name), ['Handbook']);
+
+  const start = await post({ project: 'alpha', action: 'start', url: 'https://start.example/' });
+  assert.equal(start.status, 200);
+  assert.equal((await start.json()).startPage, 'https://start.example/');
+  assert.equal((await post({ project: 'alpha', action: 'start', url: '' })).status, 200, 'an empty start page clears it');
+  assert.equal((await (await get()).json()).startPage, null);
+
+  const credential = await post({ project: 'alpha', action: 'add', name: 'Cred', url: 'https://user:secret@example.com/' });
+  assert.equal(credential.status, 400);
+  assert.match((await credential.json()).error, /must not hold credentials/);
+  const fileUrl = await post({ project: 'alpha', action: 'add', name: 'File', url: 'file:///etc/passwd' });
+  assert.equal(fileUrl.status, 400);
+  assert.match((await fileUrl.json()).error, /http or https/);
+  assert.equal((await post({ project: 'alpha', action: 'bogus' })).status, 400, 'an unknown action is refused');
+  assert.equal((await post({ project: 'other', action: 'add', name: 'X', url: 'https://x.example/' })).status, 404, 'an unknown project is refused');
+  assert.equal((await get('other')).status, 404, 'an unknown project list is refused');
+  await close();
+});
+
 test('the Browsers page selects the whole address on first focus and offers one close control for each tab', () => {
   const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
   const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
@@ -756,4 +822,32 @@ test('the Browsers page selects the whole address on first focus and offers one 
   assert.match(app, /<h3>Tabs<\/h3>[\s\S]*Close tab/);
   assert.match(guide, /Close tab/);
   assert.match(guide, /selects all its text/);
+});
+
+test('the Browsers page has a bookmark list, a start-page field, and phone-sized controls', () => {
+  const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
+  const guide = fs.readFileSync(new URL('../docs/user-guide.md', import.meta.url), 'utf8');
+  // Each card renders the section, and the page posts to the bookmark route.
+  assert.match(app, /function browserBookmarkSection\(slug, b\)/);
+  assert.match(app, /\$\{browserBookmarkSection\(p\.slug, b\)\}/);
+  assert.match(app, /data-browser-bookmark-add="\$\{esc\(slug\)\}"/);
+  assert.match(app, /data-browser-bookmark-open="\$\{esc\(slug\)\}"/);
+  assert.match(app, /data-browser-bookmark-open-tab="\$\{esc\(slug\)\}"/);
+  assert.match(app, /data-browser-bookmark-rename="\$\{esc\(slug\)\}"/);
+  assert.match(app, /data-browser-bookmark-up="\$\{esc\(slug\)\}"/);
+  assert.match(app, /data-browser-bookmark-down="\$\{esc\(slug\)\}"/);
+  assert.match(app, /data-browser-bookmark-remove="\$\{esc\(slug\)\}"/);
+  assert.match(app, /data-browser-start-page="\$\{esc\(slug\)\}"/);
+  assert.match(app, /\/api\/browser-sessions\/bookmarks/);
+  // Add current page uses the selected tab, and delete confirms first.
+  assert.match(app, /tabs\.find\(\(t\) => t\.id === browserSelectedTab\[slug\]\) \|\| tabs\[0\]/);
+  assert.match(app, /browserConfirm\(`Delete the bookmark \$\{bookmark\.name\}\?`, 'Delete'\)/);
+  // The phone layout gives the bookmark controls at least 44 px.
+  assert.match(css, /\.browser-bookmarks\b/);
+  assert.match(css, /@media \(max-width: 760px\) \{\s*\.browser-bookmark-actions button,[^}]*min-height: 44px/);
+  // Help and guide describe the feature.
+  assert.match(app, /<h3>Bookmarks<\/h3>/);
+  assert.match(guide, /Bookmarks and the start page/);
+  assert.match(guide, /Bookmarks must not hold credentials/);
 });

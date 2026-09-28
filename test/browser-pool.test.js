@@ -320,6 +320,105 @@ test('a CDP close does not delete the recorded clone', async (t) => {
   } finally { await server.close().catch(() => {}); }
 });
 
+test('bookmarks add, rename, move, and remove in the project record', () => {
+  register('bookmark-crud', 9223);
+  pool.addBookmark('bookmark-crud', { name: 'Alpha', url: 'https://alpha.example/' });
+  pool.addBookmark('bookmark-crud', { name: 'Beta', url: 'https://beta.example/page' });
+  assert.deepEqual(pool.listBookmarks('bookmark-crud').bookmarks, [
+    { name: 'Alpha', url: 'https://alpha.example/' },
+    { name: 'Beta', url: 'https://beta.example/page' },
+  ]);
+  pool.renameBookmark('bookmark-crud', 0, '  Alpha two  ');
+  assert.equal(pool.listBookmarks('bookmark-crud').bookmarks[0].name, 'Alpha two', 'the name is trimmed');
+  pool.moveBookmark('bookmark-crud', 0, 1);
+  assert.deepEqual(pool.listBookmarks('bookmark-crud').bookmarks.map((b) => b.name), ['Beta', 'Alpha two']);
+  pool.removeBookmark('bookmark-crud', 0);
+  assert.deepEqual(pool.listBookmarks('bookmark-crud').bookmarks.map((b) => b.name), ['Alpha two']);
+  assert.throws(() => pool.renameBookmark('bookmark-crud', 9, 'Gone'), /out of range/);
+  assert.throws(() => pool.removeBookmark('bookmark-crud', -1), /out of range/);
+  // A project with no record has no bookmarks and no start page.
+  assert.deepEqual(pool.listBookmarks('bookmark-crud-absent'), { bookmarks: [], startPage: null });
+  assert.throws(() => pool.addBookmark('bookmark-crud-absent', { name: 'X', url: 'https://x.example/' }), /Request a project browser first/);
+});
+
+test('a project keeps at most 30 bookmarks', () => {
+  register('bookmark-limit', 9223);
+  for (let i = 0; i < 30; i++) pool.addBookmark('bookmark-limit', { name: `B${i}`, url: `https://b${i}.example/` });
+  assert.throws(() => pool.addBookmark('bookmark-limit', { name: 'Over', url: 'https://over.example/' }), /at most 30/);
+  assert.equal(pool.listBookmarks('bookmark-limit').bookmarks.length, 30);
+});
+
+test('bookmarks refuse credentials, non-http URLs, and long names', () => {
+  register('bookmark-urls', 9223);
+  assert.throws(() => pool.addBookmark('bookmark-urls', { name: 'Cred', url: 'https://user:secret@example.com/' }), /must not hold credentials/);
+  assert.throws(() => pool.addBookmark('bookmark-urls', { name: 'File', url: 'file:///etc/passwd' }), /http or https/);
+  assert.throws(() => pool.addBookmark('bookmark-urls', { name: 'Ftp', url: 'ftp://example.com/' }), /http or https/);
+  assert.throws(() => pool.addBookmark('bookmark-urls', { name: 'N'.repeat(61), url: 'https://ok.example/' }), /at most 60 characters/);
+  assert.throws(() => pool.addBookmark('bookmark-urls', { name: '  ', url: 'https://ok.example/' }), /name is required/);
+  assert.throws(() => pool.setStartPage('bookmark-urls', 'https://user:secret@example.com/'), /must not hold credentials/);
+  assert.throws(() => pool.setStartPage('bookmark-urls', 'file:///etc/passwd'), /http or https/);
+  assert.equal(pool.listBookmarks('bookmark-urls').bookmarks.length, 0);
+  assert.equal(pool.listBookmarks('bookmark-urls').startPage, null);
+});
+
+test('the start page is stored, cleared with null, and opens on a new launch', async (t) => {
+  register('start-page-launch', 9299);
+  const saved = pool.setStartPage('start-page-launch', 'https://start.example/home');
+  assert.equal(saved.startPage, 'https://start.example/home');
+  assert.equal(pool.listBookmarks('start-page-launch').startPage, 'https://start.example/home');
+  // Add a second record without overwriting the first one.
+  const sessions = pool.listBrowserSessions();
+  sessions['no-start-page'] = { project: 'no-start-page', port: 9298, profile: path.join(dataDir, 'browser-profiles', 'no-start-page'), headless: true, windowSize: { width: 1280, height: 800 }, pid: null };
+  fs.writeFileSync(path.join(dataDir, 'browser-sessions.json'), JSON.stringify(sessions));
+  const clones = cloneFixture(t);
+  const launchFixtures = () => {
+    const machine = { procs: new Map() };
+    const launchNet = fakeLaunchNet();
+    const capture = { args: null };
+    const spawn = (chrome, args) => {
+      capture.args = args;
+      const port = Number(args.find((a) => a.startsWith('--remote-debugging-port=')).split('=')[1]);
+      const profile = args.find((a) => a.startsWith('--user-data-dir=')).split('=')[1];
+      machine.procs.set(4600 + machine.procs.size, { pid: 4600 + machine.procs.size, cmd: chromeCmd(port, profile) });
+      launchNet.launched.add(port);
+      return { pid: 4601, on() {}, unref() {} };
+    };
+    return { machine, launchNet, capture, spawn };
+  };
+  const withStart = launchFixtures();
+  await pool.requestBrowser('start-page-launch', { headless: true, chromePath: process.execPath, spawn: withStart.spawn,
+    collectProcesses: async () => new Map(withStart.machine.procs), cloneDir: clones.dir, portOpen: withStart.launchNet.portOpen, fetch: withStart.launchNet.fetch });
+  assert.equal(withStart.capture.args.at(-1), 'https://start.example/home', 'the first tab opens the start page');
+  assert.ok(!withStart.capture.args.includes('about:blank'), 'the launch does not also open about:blank');
+  assert.equal(pool.listBookmarks('start-page-launch').startPage, 'https://start.example/home', 'a launch keeps the start page');
+  // A launch without a start page opens about:blank.
+  const plain = launchFixtures();
+  await pool.requestBrowser('no-start-page', { headless: true, chromePath: process.execPath, spawn: plain.spawn,
+    collectProcesses: async () => new Map(plain.machine.procs), cloneDir: clones.dir, portOpen: plain.launchNet.portOpen, fetch: plain.launchNet.fetch });
+  assert.equal(plain.capture.args.at(-1), 'about:blank');
+  // Clearing the start page removes it.
+  assert.equal(pool.setStartPage('start-page-launch', null).startPage, null);
+  assert.equal(pool.listBookmarks('start-page-launch').startPage, null);
+});
+
+test('a launch keeps existing bookmarks, and an add on a record without them starts an empty list', () => {
+  register('bookmark-keep', 9223);
+  pool.addBookmark('bookmark-keep', { name: 'Keep', url: 'https://keep.example/' });
+  assert.deepEqual(pool.listBrowserSessions()['bookmark-keep'].bookmarks, [{ name: 'Keep', url: 'https://keep.example/' }]);
+  assert.equal(pool.listBrowserSessions()['bookmark-keep'].startPage, null);
+  // A record written before bookmarks existed gains the fields on the first change, and keeps its other fields.
+  const sessions = pool.listBrowserSessions();
+  delete sessions['bookmark-keep'].bookmarks;
+  delete sessions['bookmark-keep'].startPage;
+  fs.writeFileSync(path.join(dataDir, 'browser-sessions.json'), JSON.stringify(sessions));
+  pool.addBookmark('bookmark-keep', { name: 'Second', url: 'https://second.example/' });
+  const record = pool.listBrowserSessions()['bookmark-keep'];
+  assert.deepEqual(record.bookmarks.map((b) => b.name), ['Second']);
+  assert.equal(record.startPage, null);
+  assert.equal(record.port, 9223, 'the other record fields stay');
+  assert.equal(record.profile, path.join(dataDir, 'browser-profiles', 'bookmark-keep'));
+});
+
 test('a browser launch starts Chrome in its profile folder, not in the caller folder', async (t) => {
   const clones = cloneFixture(t);
   const machine = { procs: new Map() };

@@ -11,6 +11,8 @@ const FILE = path.join(DATA_DIR, 'browser-sessions.json');
 const PROFILE_ROOT = path.join(DATA_DIR, 'browser-profiles');
 const SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const DEFAULT_SIZE = { width: 1280, height: 800 };
+const MAX_BOOKMARKS = 30;
+const MAX_BOOKMARK_NAME = 60;
 const CDP_TIMEOUT_MS = 2000;
 
 // Tests replace the network, process table, signal, launch, and code-sign clone functions through the options object.
@@ -190,6 +192,96 @@ export function setBrowserWindowSize(project, width, height) {
   return sessions[project];
 }
 
+// A bookmark URL must be http or https and must not hold a user name or a password.
+function bookmarkUrl(value) {
+  let parsed;
+  try { parsed = new URL(String(value ?? '').trim()); } catch { throw new Error('A bookmark URL must use http or https.'); }
+  if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('A bookmark URL must use http or https.');
+  if (parsed.username || parsed.password) throw new Error('Bookmarks must not hold credentials.');
+  return parsed.href;
+}
+
+function bookmarkName(value) {
+  if (typeof value !== 'string' || !value.trim()) throw new Error('A bookmark name is required.');
+  const name = value.trim();
+  if (name.length > MAX_BOOKMARK_NAME) throw new Error(`A bookmark name has at most ${MAX_BOOKMARK_NAME} characters.`);
+  return name;
+}
+
+// Bookmarks live in the project record. A change needs a record, as setBrowserWindowSize does.
+function bookmarkRecord(project, sessions) {
+  if (!SLUG.test(project)) throw new Error('project must be a slug.');
+  const record = sessions[project];
+  if (!record) throw new Error('Request a project browser first.');
+  if (!Array.isArray(record.bookmarks)) record.bookmarks = [];
+  if (record.startPage === undefined) record.startPage = null;
+  return record;
+}
+
+function bookmarkIndex(record, index) {
+  const i = Number(index);
+  if (!Number.isInteger(i) || i < 0 || i >= record.bookmarks.length) throw new Error('Bookmark index is out of range.');
+  return i;
+}
+
+function bookmarkState(record) {
+  return { bookmarks: record.bookmarks, startPage: record.startPage ?? null };
+}
+
+// Read the bookmarks and the start page of a project. An unknown project reads as empty.
+export function listBookmarks(project) {
+  if (!SLUG.test(project)) throw new Error('project must be a slug.');
+  const record = listBrowserSessions()[project];
+  return { bookmarks: Array.isArray(record?.bookmarks) ? record.bookmarks : [], startPage: record?.startPage ?? null };
+}
+
+export function addBookmark(project, { name, url } = {}) {
+  const sessions = listBrowserSessions();
+  const record = bookmarkRecord(project, sessions);
+  const bookmark = { name: bookmarkName(name), url: bookmarkUrl(url) };
+  if (record.bookmarks.length >= MAX_BOOKMARKS) throw new Error(`A project keeps at most ${MAX_BOOKMARKS} bookmarks.`);
+  record.bookmarks.push(bookmark);
+  save(sessions);
+  return bookmarkState(record);
+}
+
+export function renameBookmark(project, index, name) {
+  const sessions = listBrowserSessions();
+  const record = bookmarkRecord(project, sessions);
+  record.bookmarks[bookmarkIndex(record, index)].name = bookmarkName(name);
+  save(sessions);
+  return bookmarkState(record);
+}
+
+export function moveBookmark(project, from, to) {
+  const sessions = listBrowserSessions();
+  const record = bookmarkRecord(project, sessions);
+  const start = bookmarkIndex(record, from);
+  const target = Number(to);
+  if (!Number.isInteger(target) || target < 0 || target >= record.bookmarks.length) throw new Error('Bookmark index is out of range.');
+  const [bookmark] = record.bookmarks.splice(start, 1);
+  record.bookmarks.splice(target, 0, bookmark);
+  save(sessions);
+  return bookmarkState(record);
+}
+
+export function removeBookmark(project, index) {
+  const sessions = listBrowserSessions();
+  const record = bookmarkRecord(project, sessions);
+  record.bookmarks.splice(bookmarkIndex(record, index), 1);
+  save(sessions);
+  return bookmarkState(record);
+}
+
+// A null or empty URL clears the start page. Otherwise the URL must pass the bookmark rules.
+export function setStartPage(project, url) {
+  const sessions = listBrowserSessions();
+  const record = bookmarkRecord(project, sessions);
+  record.startPage = url === null || url === undefined || String(url).trim() === '' ? null : bookmarkUrl(url);
+  save(sessions);
+  return bookmarkState(record);
+}
+
 function clearClone(project) {
   const sessions = listBrowserSessions();
   if (sessions[project]?.codeSignClone) {
@@ -287,7 +379,7 @@ export async function requestBrowser(project, options = {}) {
   const profile = path.join(PROFILE_ROOT, project);
   fs.mkdirSync(profile, { recursive: true, mode: 0o700 });
   const windowSize = existing?.windowSize || DEFAULT_SIZE;
-  const session = { project, port, profile, headless: useHeadless, windowSize, pid: null, codeSignClone: null, createdAt: existing?.createdAt || new Date().toISOString(), launchedAt: null };
+  const session = { project, port, profile, headless: useHeadless, windowSize, pid: null, codeSignClone: null, bookmarks: existing?.bookmarks || [], startPage: existing?.startPage ?? null, createdAt: existing?.createdAt || new Date().toISOString(), launchedAt: null };
   sessions[project] = session;
   save(sessions);
   let cloneDir = null;
@@ -299,7 +391,7 @@ export async function requestBrowser(project, options = {}) {
     const child = d.spawn(chromePath, [
       `--remote-debugging-port=${port}`, '--remote-debugging-address=127.0.0.1',
       `--user-data-dir=${profile}`, `--window-size=${windowSize.width},${windowSize.height}`, '--no-first-run', '--no-default-browser-check',
-      ...(useHeadless ? ['--headless'] : []), 'about:blank',
+      ...(useHeadless ? ['--headless'] : []), session.startPage || 'about:blank',
     // Start Chrome in the profile folder, not in the caller's folder, so a worker worktree never holds a project browser.
     ], { detached: true, stdio: 'ignore', cwd: profile });
     child.on('error', () => {}); // An executable error is reflected by the failed port probe below.

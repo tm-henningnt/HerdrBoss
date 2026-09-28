@@ -39,6 +39,11 @@ const USAGE = `herdr-boss <command>
   browser click SLUG X% Y% [--tab ID]  Click at screenshot-relative percentages.
   browser text SLUG --stdin [--tab ID]  Send text from standard input without echoing it.
   browser key SLUG KEY [--tab ID]  Send Tab, Enter, Backspace, arrow keys, etc.
+  browser bookmarks SLUG list  List the project bookmarks and the start page.
+  browser bookmarks SLUG add NAME URL  Add one bookmark.
+  browser bookmarks SLUG rm INDEX  Remove one bookmark.
+  browser bookmarks SLUG open INDEX [--new-tab]  Open a bookmark in the current tab or a new tab.
+  browser bookmarks SLUG start URL|none  Set or clear the start page of the next launch.
   browser sweep-clones [--dry-run]  Delete orphaned Chrome code-sign clones now; --dry-run only lists them.
   handoff plan PANE --to KIND [--mode migrate|fresh] [--model MODEL] [--effort EFFORT]
   handoff prepare PANE --to KIND [--mode migrate|fresh] [--model MODEL] [--effort EFFORT]
@@ -211,7 +216,7 @@ async function main() {
     }
     case 'browser': {
       const { parseScreenshotOptions, saveBrowserScreenshot } = await import('./browser-output.js');
-      const { requestBrowser, listBrowserSessions, browserStatus, setBrowserWindowSize, closeBrowser, restartBrowser, releaseBrowser } = await import('./browser-pool.js');
+      const { requestBrowser, listBrowserSessions, browserStatus, setBrowserWindowSize, closeBrowser, restartBrowser, releaseBrowser, listBookmarks, addBookmark, removeBookmark, setStartPage } = await import('./browser-pool.js');
       const { listBrowserTabs, browserScreenshot, browserNavigate, browserClick, browserInsertText, browserKey, browserNewTab, browserCloseTab } = await import('./browser-preview.js');
       const tabOption = (rest) => {
         if (!rest.length) return null;
@@ -286,9 +291,19 @@ async function main() {
         await browserKey(args[1], tab, args[2]);
         console.log('Key sent.');
       }
+      else if (args[0] === 'bookmarks' && args[1] && args[2] === 'list' && args.length === 3) console.log(JSON.stringify(listBookmarks(args[1]), null, 2));
+      else if (args[0] === 'bookmarks' && args[1] && args[2] === 'add' && args[3] && args[4] && args.length === 5) console.log(JSON.stringify(addBookmark(args[1], { name: args[3], url: args[4] }), null, 2));
+      else if (args[0] === 'bookmarks' && args[1] && args[2] === 'rm' && args[3] && args.length === 4) console.log(JSON.stringify(removeBookmark(args[1], args[3]), null, 2));
+      else if (args[0] === 'bookmarks' && args[1] && args[2] === 'start' && args[3] && args.length === 4) console.log(JSON.stringify(setStartPage(args[1], args[3] === 'none' ? null : args[3]), null, 2));
+      else if (args[0] === 'bookmarks' && args[1] && args[2] === 'open' && args[3] && (args.length === 4 || (args.length === 5 && args[4] === '--new-tab'))) {
+        const bookmark = listBookmarks(args[1]).bookmarks[Number(args[3])];
+        if (!bookmark) throw new Error('Bookmark index is out of range.');
+        if (args[4] === '--new-tab') console.log(JSON.stringify(await browserNewTab(args[1], bookmark.url)));
+        else console.log(JSON.stringify(await browserNavigate(args[1], null, bookmark.url)));
+      }
       else if (args[0] === 'request' && args[1] && args.includes('--headless') && args.includes('--visible')) throw new Error('Choose either --headless or --visible.');
       else if (args[0] === 'request' && args[1] && args.slice(2).every((flag) => ['--reserve', '--headless', '--visible'].includes(flag))) console.log(JSON.stringify(await requestBrowser(args[1], { launch: !args.includes('--reserve'), headless: args.includes('--headless') ? true : args.includes('--visible') ? false : null }), null, 2));
-      else throw new Error('Usage: browser request|size|close|release|restart|list|tabs|tab new|tab close|screenshot|navigate|click|text|key|sweep-clones. Run herdr-boss without arguments for details.');
+      else throw new Error('Usage: browser request|size|close|release|restart|list|tabs|tab new|tab close|screenshot|navigate|click|text|key|bookmarks|sweep-clones. Run herdr-boss without arguments for details.');
       break;
     }
     case 'handoff': {

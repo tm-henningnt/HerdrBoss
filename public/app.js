@@ -45,6 +45,8 @@ const browserConfirmedTabs = new Set();
 const browserSelectedTab = {};
 const browserNavigation = {};
 const browserAddressDraft = {};
+// The bookmark row that shows an inline rename form: { slug, index, name } or null.
+let browserBookmarkDraft = null;
 const PREVIEW_INTERVALS = [1500, 3000, 5000, 10000, 30000];
 const PREVIEW_INTERVAL_KEY = 'herdr-boss.browser-preview-intervals';
 const browserPreviewIntervals = (() => { try { const value = JSON.parse(localStorage.getItem(PREVIEW_INTERVAL_KEY)); return value && typeof value === 'object' && !Array.isArray(value) ? value : {}; } catch { return {}; } })();
@@ -556,6 +558,19 @@ function browserState(b) {
   return b.reachable ? 'port conflict' : 'offline';
 }
 
+// A small bookmark list and a start-page field for each project card.
+function browserBookmarkSection(slug, b) {
+  const list = Array.isArray(b?.bookmarks) ? b.bookmarks : [];
+  const editing = browserBookmarkDraft?.slug === slug ? browserBookmarkDraft.index : null;
+  const rows = list.map((bookmark, index) => {
+    if (index === editing) {
+      return `<li class="browser-bookmark-row"><form class="browser-bookmark-rename" data-browser-bookmark-rename="${esc(slug)}" data-index="${index}"><input type="text" name="name" maxlength="60" value="${esc(browserBookmarkDraft.name ?? '')}" aria-label="Bookmark name" required><button type="submit">Save</button><button type="button" data-browser-bookmark-cancel="${esc(slug)}">Cancel</button></form></li>`;
+    }
+    return `<li class="browser-bookmark-row"><span class="browser-bookmark-name" title="${esc(bookmark.url)}">${esc(bookmark.name)}</span><span class="browser-bookmark-actions"><button type="button" data-browser-bookmark-open="${esc(slug)}" data-index="${index}" title="Open in the current tab">Open</button><button type="button" data-browser-bookmark-open-tab="${esc(slug)}" data-index="${index}" title="Open in a new tab">New tab</button><button type="button" data-browser-bookmark-rename="${esc(slug)}" data-index="${index}">Rename</button><button type="button" data-browser-bookmark-up="${esc(slug)}" data-index="${index}" ${index === 0 ? 'disabled' : ''} aria-label="Move ${esc(bookmark.name)} up">↑</button><button type="button" data-browser-bookmark-down="${esc(slug)}" data-index="${index}" ${index === list.length - 1 ? 'disabled' : ''} aria-label="Move ${esc(bookmark.name)} down">↓</button><button type="button" data-browser-bookmark-remove="${esc(slug)}" data-index="${index}" class="danger" aria-label="Delete ${esc(bookmark.name)}">Delete</button></span></li>`;
+  }).join('');
+  return `<div class="browser-bookmarks" data-browser-bookmarks="${esc(slug)}"><h4>Bookmarks</h4>${list.length ? `<ol class="browser-bookmark-list">${rows}</ol>` : '<p class="browser-bookmark-empty">No bookmarks.</p>'}<div class="browser-bookmark-tools"><button type="button" data-browser-bookmark-add="${esc(slug)}">Add current page</button></div><form class="browser-start-page" data-browser-start-page="${esc(slug)}"><label>Start page <input type="text" name="url" value="${esc(b?.startPage ?? '')}" placeholder="https://… (blank clears)" aria-label="${esc(slug)} start page" autocomplete="off" spellcheck="false"></label><button type="submit">Save</button></form></div>`;
+}
+
 function browserResources(s) {
   const projects = Object.values(s.control?.projects || {});
   const sessions = browserSessions;
@@ -571,6 +586,7 @@ function browserResources(s) {
       ${!b?.profileVerified ? `<div class="browser-actions"><button type="button" data-browser-request="${esc(p.slug)}" data-browser-mode="visible">Open visible</button><button type="button" data-browser-request="${esc(p.slug)}" data-browser-mode="headless">Open headless</button></div>` : ''}
       ${b?.profileVerified && !b.responsive ? '<small class="inline-feedback" role="status">Chrome does not answer on its debugging port. Restart or close it from Manage.</small>' : ''}
       ${browserMessages[p.slug] ? `<small class="inline-feedback" role="status">${esc(browserMessages[p.slug])}</small>` : ''}
+      ${browserBookmarkSection(p.slug, b)}
       ${preview ? `<div class="browser-preview"><div class="browser-preview-tools">${browserViewToggle(p.slug)}<span class="browser-grid-count">${tabs.length} tab${tabs.length === 1 ? '' : 's'}</span><button type="button" data-browser-refresh="${esc(p.slug)}">Refresh</button>${gridMode(p.slug) ? `<button type="button" data-browser-expand="${esc(p.slug)}">Expand</button>` : `<button type="button" data-browser-new-tab="${esc(p.slug)}" title="Open a blank tab of your own. Agent tabs stay unchanged.">New tab</button>`}<label class="browser-live-toggle"><input type="checkbox" data-browser-live="${esc(p.slug)}" ${browserPreviewLive.has(p.slug) ? 'checked' : ''}> Live</label><label class="browser-live-rate">Every <select data-browser-interval="${esc(p.slug)}" aria-label="${esc(p.label)} live refresh interval">${PREVIEW_INTERVALS.map((ms) => `<option value="${ms}" ${ms === previewInterval(p.slug) ? 'selected' : ''}>${ms / 1000}s</option>`).join('')}</select></label></div>
         ${gridMode(p.slug) ? browserGridMarkup(p.slug) : `${browserTabList(p.slug)}<form class="browser-navigate" data-browser-navigate="${esc(p.slug)}"><button type="button" data-browser-history="back" data-browser-project="${esc(p.slug)}" ${browserNavigation[p.slug]?.canGoBack ? '' : 'disabled'}>Back</button><button type="button" data-browser-history="forward" data-browser-project="${esc(p.slug)}" ${browserNavigation[p.slug]?.canGoForward ? '' : 'disabled'}>Forward</button><button type="button" data-browser-history="home" data-browser-project="${esc(p.slug)}" ${tabs.length ? '' : 'disabled'}>Home</button><input type="text" name="url" value="${esc(browserAddressDraft[p.slug] ?? browserNavigation[p.slug]?.url ?? tabs.find((tab) => tab.id === browserSelectedTab[p.slug])?.url ?? '')}" placeholder="Enter a web address" aria-label="${esc(p.label)} browser address" autocomplete="off" spellcheck="false" required><button type="submit" ${tabs.length ? '' : 'disabled'}>Go</button></form>
         ${browserPreviewUrls[p.slug] ? `<button type="button" class="browser-image-button" data-browser-expand="${esc(p.slug)}" aria-label="Expand ${esc(p.label)} browser screenshot"><img data-browser-image="${esc(p.slug)}" src="${browserPreviewUrls[p.slug]}" alt="Current browser page in ${esc(p.label)}"></button>` : '<div class="browser-preview-empty">No screenshot yet</div>'}`}
@@ -2579,6 +2595,7 @@ const HELP = {
     <h3>Preview</h3><p><b>One tab</b> shows the selected tab with its address bar. <b>All tabs</b> shows every tab in one grid, without controls; select a tile to focus it. <b>Live</b> refreshes at the chosen interval. Without <b>Live</b>, the preview shows the last capture; <b>Refresh</b> takes a new one.</p>
     <h3>Tabs</h3><p><b>Agent</b> marks a tab an agent uses. Screenshots never change a page. Navigation and input on an agent tab ask for confirmation first. <b>Hidden</b> marks a tab that is not visible; some web apps do not draw there. <b>New tab</b> opens a page of your own. Each tab row has a <b>Close tab</b> control. Before it closes a tab that an agent holds, the page asks you to confirm. It also warns you before it closes the last tab. A close never stops the browser.</p>
     <h3>Address box</h3><p>The first focus of the address box selects all its text. A second click places a cursor where you select it.</p>
+    <h3>Bookmarks</h3><p>A project keeps at most 30 bookmarks. A bookmark name has at most 60 characters. A bookmark URL must use http or https and must not hold a user name or a password. <b>Add current page</b> saves the selected tab. <b>Open</b> loads a bookmark in the current tab; <b>New tab</b> opens it in a new tab. <b>Rename</b>, the arrows, and <b>Delete</b> change the list; Delete asks you to confirm. <b>Start page</b> opens in the first tab of the next launch. <b>Save</b> stores the start page; a blank value clears it.</p>
     <h3>Control</h3><p>Select the screenshot to open the large view. The large view shows a still image of the last capture. Turn on <b>Control browser</b> or <b>Live</b> to refresh it at the chosen interval. Turn on <b>Control browser</b>, then click the image and type. Paste long text or a password into the masked field. On a phone the large view is full screen and the image fills the height. The text field and key controls appear only while <b>Control browser</b> is on.</p>`],
   analytics: ['Analytics', `
     <p>Recorded worker runs per project and provider: duration, outcome, and measured tokens.</p>
@@ -3073,6 +3090,22 @@ async function postJson(url, body) {
   return result;
 }
 
+// A bookmark change returns the new list and the start page. Update the loaded session in place.
+function applyBookmarkResult(slug, result) {
+  const session = browserSessions.find((b) => b.project === slug);
+  if (session) { session.bookmarks = result.bookmarks; session.startPage = result.startPage; }
+  browserBookmarkDraft = null;
+  browserMessages[slug] = 'Bookmarks saved.';
+  lastRender = '';
+  render();
+}
+
+async function postBookmark(slug, body) {
+  const result = await postJson('/api/browser-sessions/bookmarks', { project: slug, ...body });
+  applyBookmarkResult(slug, result);
+  return result;
+}
+
 // Navigation and input on a tab that an agent holds need one confirmation per tab.
 async function postBrowserAction(url, body) {
   const key = `${body.project}:${body.tab}`;
@@ -3171,14 +3204,20 @@ document.addEventListener('submit', async (e) => {
     return;
   }
   const sizeSlug = e.target.dataset.browserSize;
+  const startSlug = e.target.dataset.browserStartPage;
+  const renameSlug = e.target.dataset.browserBookmarkRename;
   const navigateSlug = e.target.dataset.browserNavigate || (e.target.id === 'browser-viewer-navigate' ? document.getElementById('browser-viewer').dataset.project : null);
-  if (!sizeSlug && !navigateSlug) return;
+  if (!sizeSlug && !navigateSlug && !startSlug && !renameSlug) return;
   e.preventDefault();
   const form = e.target;
   const button = form.querySelector('button[type="submit"]');
   button.disabled = true;
   try {
-    if (sizeSlug) {
+    if (startSlug) {
+      await postBookmark(startSlug, { action: 'start', url: form.elements.url.value });
+    } else if (renameSlug) {
+      await postBookmark(renameSlug, { action: 'rename', index: Number(form.dataset.index), name: form.elements.name.value });
+    } else if (sizeSlug) {
       await postJson('/api/browser-sessions/window-size', { project: sizeSlug, width: Number(form.elements.width.value), height: Number(form.elements.height.value) });
       browserMessages[sizeSlug] = 'Size saved for the next browser launch. Close and reopen the browser to apply it.';
       await refreshExtras();
@@ -3190,6 +3229,7 @@ document.addEventListener('submit', async (e) => {
     }
   } catch (error) {
     if (sizeSlug) { browserMessages[sizeSlug] = error.message; lastRender = ''; render(); }
+    else if (startSlug || renameSlug) { browserMessages[startSlug || renameSlug] = error.message; browserBookmarkDraft = null; lastRender = ''; render(); }
     else previewMessage(navigateSlug, error.message);
   } finally { button.disabled = false; }
 });
@@ -3370,6 +3410,68 @@ document.addEventListener('click', async (e) => {
     browserSelectedTab[slug] = tile.dataset.tab;
     delete browserNavigation[slug]; delete browserAddressDraft[slug];
     setBrowserView(slug, 'tab');
+    return;
+  }
+  if (e.target.dataset.browserBookmarkAdd) {
+    const slug = e.target.dataset.browserBookmarkAdd;
+    const tabs = browserTabs[slug] || [];
+    const tab = tabs.find((t) => t.id === browserSelectedTab[slug]) || tabs[0];
+    if (!tab) { browserMessages[slug] = 'No page is open to bookmark.'; lastRender = ''; render(); return; }
+    e.target.disabled = true;
+    try { await postBookmark(slug, { action: 'add', name: tab.title || tab.url, url: tab.url }); }
+    catch (error) { browserMessages[slug] = error.message; lastRender = ''; render(); }
+    finally { e.target.disabled = false; }
+    return;
+  }
+  if (e.target.dataset.browserBookmarkOpen || e.target.dataset.browserBookmarkOpenTab) {
+    const newTab = Boolean(e.target.dataset.browserBookmarkOpenTab);
+    const slug = e.target.dataset.browserBookmarkOpen || e.target.dataset.browserBookmarkOpenTab;
+    const bookmark = (browserSessions.find((b) => b.project === slug)?.bookmarks || [])[Number(e.target.dataset.index)];
+    if (!bookmark) return;
+    e.target.disabled = true;
+    try {
+      if (newTab) {
+        const created = await postJson('/api/browser-sessions/new-tab', { project: slug });
+        browserSelectedTab[slug] = created.id;
+        await postBrowserAction('/api/browser-sessions/navigate', { project: slug, tab: created.id, url: bookmark.url });
+      } else {
+        await postBrowserAction('/api/browser-sessions/navigate', { project: slug, tab: browserSelectedTab[slug], url: bookmark.url });
+      }
+      delete browserAddressDraft[slug];
+      previewMessage(slug, 'Opening bookmark…');
+      setTimeout(() => refreshBrowserPreview(slug, true), 800);
+    } catch (error) { browserMessages[slug] = error.message; lastRender = ''; render(); }
+    finally { e.target.disabled = false; }
+    return;
+  }
+  if (e.target.dataset.browserBookmarkRename) {
+    const slug = e.target.dataset.browserBookmarkRename;
+    const bookmark = (browserSessions.find((b) => b.project === slug)?.bookmarks || [])[Number(e.target.dataset.index)];
+    if (!bookmark) return;
+    browserBookmarkDraft = { slug, index: Number(e.target.dataset.index), name: bookmark.name };
+    lastRender = ''; render();
+    document.querySelector(`[data-browser-bookmark-rename="${slug}"] input`)?.focus();
+    return;
+  }
+  if (e.target.dataset.browserBookmarkCancel) { browserBookmarkDraft = null; lastRender = ''; render(); return; }
+  if (e.target.dataset.browserBookmarkUp || e.target.dataset.browserBookmarkDown) {
+    const up = Boolean(e.target.dataset.browserBookmarkUp);
+    const slug = e.target.dataset.browserBookmarkUp || e.target.dataset.browserBookmarkDown;
+    const index = Number(e.target.dataset.index);
+    e.target.disabled = true;
+    try { await postBookmark(slug, { action: 'move', index, to: up ? index - 1 : index + 1 }); }
+    catch (error) { browserMessages[slug] = error.message; lastRender = ''; render(); }
+    return;
+  }
+  if (e.target.dataset.browserBookmarkRemove) {
+    const slug = e.target.dataset.browserBookmarkRemove;
+    const index = Number(e.target.dataset.index);
+    const bookmark = (browserSessions.find((b) => b.project === slug)?.bookmarks || [])[index];
+    if (!bookmark) return;
+    if (!(await browserConfirm(`Delete the bookmark ${bookmark.name}?`, 'Delete'))) return;
+    e.target.disabled = true;
+    try { await postBookmark(slug, { action: 'remove', index }); }
+    catch (error) { browserMessages[slug] = error.message; lastRender = ''; render(); }
     return;
   }
   if (e.target.dataset.browserRefresh) { await refreshBrowserPreview(e.target.dataset.browserRefresh, true); return; }
