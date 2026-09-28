@@ -9,6 +9,7 @@ import { DATA_DIR, loadConfig } from '../config.js';
 import { workerStatusFromState } from '../worker-failures.js';
 import { checkAgentsFile } from './agents-check.js';
 import { acquireLeaseFor, dropLeases, setLeasePane } from '../leases.js';
+import { codexShellEnvArgs } from '../harness.js';
 
 const NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
 const BRIEF_SLOTS = new Set([
@@ -693,7 +694,7 @@ function renderStartPlan(plan) {
     `   $ herdr ${plan.paneCommand.map(displayArg).join(' ')}`,
     `   ${plan.paneCommand[0] === 'pane' ? 'New pane' : 'Root pane'}: ${plan.paneId}`,
     `7. Start agent:`,
-    `   $ herdr agent start ${displayArg(plan.name)} --kind ${displayArg(plan.kind)} --pane ${displayArg(plan.paneId)} --timeout ${plan.agentStartTimeoutMs} -- ${plan.launchArgs.map(displayArg).join(' ')}`,
+    `   $ herdr agent start ${displayArg(plan.name)} --kind ${displayArg(plan.kind)} --pane ${displayArg(plan.paneId)} --timeout ${plan.agentStartTimeoutMs} -- ${plan.agentArgs.map(displayArg).join(' ')}`,
     `8. Write run record: ${plan.recordFile}`,
     `9. Send task prompt and observe agent activity:`,
     `   $ herdr agent prompt ${displayArg(plan.name)} "${briefPrompt(plan.workerDir)}"`,
@@ -733,6 +734,16 @@ const BROWSER_WORDS = /\b(playwright|chromium|chrome|browser|screenshots?|galler
 export function codexBrowserWarning(kind, task) {
   if (kind !== 'codex' || !BROWSER_WORDS.test(String(task || ''))) return null;
   return 'Warning: this brief mentions browser work. Codex cannot launch Chromium in its sandbox. Use --kind claude, opencode, or pi for tasks that launch a browser.';
+}
+
+// A Codex tool shell can run under a shared app-server daemon with another environment, so a codex worker gets
+// its pane variables as -c shell_environment_policy.set.* launch arguments. Other kinds get no extra arguments.
+function workerAgentArgs(kind, launchArgs, { paneId, tabId, workspaceId, env, tmpDir, worktree }) {
+  if (kind !== 'codex') return launchArgs;
+  return [...launchArgs, ...codexShellEnvArgs({
+    HERDR_ENV: '1', HERDR_PANE_ID: paneId, HERDR_TAB_ID: tabId, HERDR_WORKSPACE_ID: workspaceId,
+    HERDR_SOCKET_PATH: env.HERDR_SOCKET_PATH, HERDR_BIN_PATH: env.HERDR_BIN_PATH, TMPDIR: tmpDir, HERDR_WORKTREE: path.resolve(worktree),
+  })];
 }
 
 export function startWorker(name, options, {
@@ -852,6 +863,7 @@ export function startWorker(name, options, {
   const paneCap = config.workerPanesPerTab ?? WORKER_PANES_PER_TAB;
   let paneCommand;
   let paneTab;
+  let planTabId = '<tab-id>';
   if (options.dryRun) {
     const panePlan = workerPanePlan(workspaceId, worktree, options.kind, herdr, tmpDir, paneCap);
     paneCommand = panePlan.command;
@@ -859,12 +871,15 @@ export function startWorker(name, options, {
       ? `tab "${panePlan.label}" (${getTab(panePlan.tab)}, ${panePlan.panes.length} of ${paneCap} panes)`
       : `tab "${panePlan.label}" (new tab)`;
     paneId = paneCommand[0] === 'pane' ? '<new-pane-id>' : '<new-root-pane-id>';
+    if (panePlan.tab) planTabId = getTab(panePlan.tab);
   }
+  // The placeholders also check the caller values, so a bad value stops the start before any side effect.
+  const agentArgs = workerAgentArgs(options.kind, launchArgs, { paneId: '<pane-id>', tabId: planTabId, workspaceId, env, tmpDir, worktree });
 
   const plan = {
     name, kind: options.kind, model, effort, rulesFile: rulesPath, rulesStale: staleRules,
     noWorktree: !!options.noWorktree, worktree, branch, base, template: config.briefTemplatePath,
-    workspaceId, paneId, paneCommand, paneTab, launchArgs, recordFile, excludeFile,
+    workspaceId, paneId, paneCommand, paneTab, launchArgs, agentArgs, recordFile, excludeFile,
     // A worker in the current worktree uses its existing dependencies, so setup runs only for a new worktree.
     setup: options.noWorktree ? null : config.setup ?? null, setupTimeoutSeconds: config.setupTimeoutSeconds ?? 900,
     agentStartTimeoutMs: config.agentStartTimeoutMs ?? 90000,
@@ -957,15 +972,16 @@ export function startWorker(name, options, {
     for (const lease of leases) setLeasePane(lease.pool, lease.item, paneId, { dataDir: leaseContext.dataDir });
     waitForWorkerPane(paneId, workspaceId, worktree, herdr, wait);
     const shellPid = workerPaneShellPid(paneId, herdr);
+    const paneAgentArgs = workerAgentArgs(options.kind, launchArgs, { paneId, tabId: placement.tabId, workspaceId, env, tmpDir: plan.tmpDir, worktree });
     try {
-      herdr(['agent', 'start', name, '--kind', options.kind, '--pane', paneId, '--timeout', String(plan.agentStartTimeoutMs), '--', ...launchArgs]);
+      herdr(['agent', 'start', name, '--kind', options.kind, '--pane', paneId, '--timeout', String(plan.agentStartTimeoutMs), '--', ...paneAgentArgs]);
     } catch (startError) {
       // Herdr can report agent_not_ready while leaving a blocked agent in the pane.
       try { agentStarted = listFrom(herdr(['agent', 'list']), 'agents').some((agent) => getName(agent) === name); } catch {}
       if (!agentStarted && isAgentPaneBusy(startError)) {
         waitForWorkerPane(paneId, workspaceId, worktree, herdr, wait);
         try {
-          herdr(['agent', 'start', name, '--kind', options.kind, '--pane', paneId, '--timeout', String(plan.agentStartTimeoutMs), '--', ...launchArgs]);
+          herdr(['agent', 'start', name, '--kind', options.kind, '--pane', paneId, '--timeout', String(plan.agentStartTimeoutMs), '--', ...paneAgentArgs]);
         } catch (retryError) {
           try { agentStarted = listFrom(herdr(['agent', 'list']), 'agents').some((agent) => getName(agent) === name); } catch {}
           throw retryError;

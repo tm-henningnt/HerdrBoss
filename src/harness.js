@@ -1,5 +1,6 @@
 // Harness settings that Herdr Boss orchestration needs. See docs/harness-setup.md.
 // Never print a setting value that is not a path: the settings files can hold keys.
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -314,6 +315,50 @@ export function checkHarness({ home = homeDir(), dataDir = DATA_DIR, modelsFile 
     for (const flags of flagSets) add(hasFlags(args, flags) ? 'ok' : 'missing', `models.json ${kind}`, flags.join(' '));
   }
   return findings;
+}
+
+// The variables that a Codex worker tool shell needs. A Codex tool shell can run under a shared app-server daemon,
+// which has the daemon environment and not the pane environment. So worker start passes each value explicitly.
+export const CODEX_SHELL_ENV = ['HERDR_ENV', 'HERDR_PANE_ID', 'HERDR_TAB_ID', 'HERDR_WORKSPACE_ID', 'HERDR_SOCKET_PATH', 'HERDR_BIN_PATH', 'TMPDIR', 'HERDR_WORKTREE'];
+
+// Return one -c shell_environment_policy.set.NAME="value" pair per known value, as array items for execFile.
+// A value that is null, undefined, or empty is left out. The error names the variable, never the value.
+export function codexShellEnvArgs(values) {
+  const args = [];
+  for (const name of CODEX_SHELL_ENV) {
+    const value = values[name];
+    if (value == null || value === '') continue;
+    if (/["'\\\u0000-\u001f\u007f]/.test(String(value))) throw new Error(`The value of ${name} has a quote, a backslash, or a control character. Codex cannot receive it as a TOML string.`);
+    args.push('-c', `shell_environment_policy.set.${name}="${value}"`);
+  }
+  return args;
+}
+
+const LIVE_PROMPT = "Run this exact shell command and print its output line and nothing else: sh -c 'echo HERDR_ENV=${HERDR_ENV:+set} PANE=${HERDR_PANE_ID:+set}'";
+
+// Run one codex exec with the worker shell variables of the caller pane. Report only set or missing, never a value.
+export function liveCodexCheck({ env = process.env, modelsFile = MODELS_FILE, timeoutMs = 180_000, run = spawnSync } = {}) {
+  const area = 'codex live';
+  const values = { HERDR_ENV: 'missing', HERDR_PANE_ID: 'missing' };
+  const finding = (status, note) => ({ status, area, values, text: `HERDR_ENV ${values.HERDR_ENV}, HERDR_PANE_ID ${values.HERDR_PANE_ID}${note ? ` (${note})` : ''}` });
+  const models = readJson(modelsFile);
+  const model = models.value?.kinds?.codex?.defaultModel;
+  if (!model) return finding('bad', `no codex default model in ${modelsFile}`);
+  let envArgs;
+  try {
+    envArgs = codexShellEnvArgs(Object.fromEntries(CODEX_SHELL_ENV.map((name) => [name, name === 'HERDR_ENV' ? (env.HERDR_ENV ? '1' : null) : env[name]])));
+  } catch (error) { return finding('bad', error.message); }
+  const args = ['exec', '-m', model, '-c', 'model_reasoning_effort=low', '-s', 'workspace-write', '--skip-git-repo-check', ...envArgs, LIVE_PROMPT];
+  const result = run('codex', args, { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 });
+  if (result.error?.code === 'ETIMEDOUT' || (result.signal && result.status == null)) return finding('bad', `codex exec timed out after ${Math.round(timeoutMs / 1000)} s`);
+  if (result.error) return finding('bad', result.error.code === 'ENOENT' ? 'codex is not on PATH' : 'codex exec did not start');
+  if (result.status !== 0) return finding('bad', `codex exec exited with status ${result.status}`);
+  const matches = [...String(result.stdout ?? '').matchAll(/HERDR_ENV=(set)?[ \t]+PANE=(set)?(?=\s|$)/gm)];
+  const last = matches.at(-1);
+  if (!last) return finding('bad', 'codex printed no result line');
+  values.HERDR_ENV = last[1] ? 'set' : 'missing';
+  values.HERDR_PANE_ID = last[2] ? 'set' : 'missing';
+  return finding(last[1] && last[2] ? 'ok' : 'missing');
 }
 
 export function formatFinding({ status, area, text }) { return `${status.padEnd(7)} ${area}: ${text}`; }

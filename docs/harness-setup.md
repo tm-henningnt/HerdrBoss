@@ -77,6 +77,8 @@ WARNING: Keep `~/.config/herdr-boss` out of `writable_roots`. It holds the priva
 
 `-s workspace-write` sets the sandbox mode for a worker, so the mode does not depend on the trust defaults.
 
+A Codex tool shell can run under a shared app-server daemon with the daemon environment. `worker start --kind codex` adds one `-c shell_environment_policy.set.<NAME>="<value>"` argument for each Herdr variable of the new pane. Do not add these variables to `~/.codex/config.toml`. Run `herdr-boss harness check --live-codex` to check that a Codex tool shell gets them.
+
 To apply the rules:
 
 1. Copy `kit/templates/harness/codex-herdr.rules` to `~/.codex/rules/herdr.rules`.
@@ -148,6 +150,7 @@ To apply the guard:
 - OpenCode: `agent.worker` exists.
 - Pi: `herdr-guard.ts` exists.
 - `kit/models.json`: the launch flags on this page.
+- Codex live, only with `--live-codex`: one `codex exec` tool shell has `HERDR_ENV` and `HERDR_PANE_ID`. The check uses the default Codex model with `model_reasoning_effort=low` and stops after 180 seconds. It prints `set` or `missing` for each variable, never a value. Without `--live-codex`, `harness check` calls no model.
 
 `harness sync` does these steps:
 
