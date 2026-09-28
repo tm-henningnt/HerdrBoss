@@ -349,13 +349,15 @@ export function selectModel(kind, explicitModel, models, policy = null) {
 export function pickSuccessor(project, currentKind, currentProvider, policy, control, now = Date.now()) {
   for (const rung of policy.orchestratorLadder || []) {
     const provider = providerFor(rung.kind, rung.model, policy);
+    const lane = provider && control.lanes?.[provider];
+    const trickleAtLimit = lane?.state === 'trickle' && lane.usedTodayPercent >= lane.allowancePercent;
     if (rung.kind === currentKind || (currentProvider && provider === currentProvider) ||
         !control.globalAllowed[rung.kind]?.includes(rung.model) ||
         project.excludedKinds.includes(rung.kind) || project.excludedModels.includes(rung.model) ||
         (!provider && Number.isFinite(control.exhaustedFreeModels?.[rung.model]?.retryAt) && control.exhaustedFreeModels[rung.model].retryAt > now) ||
         (!provider && Number.isFinite(control.exhaustedFreeLanes?.[rung.kind]?.retryAt) && control.exhaustedFreeLanes[rung.kind].retryAt > now) ||
         (rung.kind === 'pi' && unavailablePiModels([rung.model], control.piModels).length) ||
-        (provider && (control.risks[provider] || control.exhausted?.[provider]))) continue;
+        (provider && (control.risks[provider] || control.exhausted?.[provider])) || trickleAtLimit) continue;
     return { ...rung, provider: provider || 'unmetered' };
   }
   return null;
@@ -456,8 +458,13 @@ function quotaPressure(q, policy, now = Date.now()) {
     .sort((a, b) => paceScore(b, adjustedExpectedPercent(policy, q.provider, b, now)) - paceScore(a, adjustedExpectedPercent(policy, q.provider, a, now)))[0] || null;
 }
 
-// One state per metered provider: open, pace (ahead of quota pace), reserve (near exhaustion), or unknown.
-export function laneStatus(quotas, policy, now = Date.now()) {
+const LONG_WINDOW_MINUTES = 7 * 24 * 60;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const isLongQuotaWindow = (window) => (Number.isFinite(window.windowMinutes) && window.windowMinutes > LONG_WINDOW_MINUTES)
+  || /^monthly$/i.test(String(window.label || '').trim());
+
+// One state per metered provider: open, trickle, pace, reserve, exhausted, or unknown.
+export function laneStatus(quotas, policy, now = Date.now(), { todayUse = {} } = {}) {
   const lanes = {};
   for (const q of quotas || []) {
     const goals = (q.windows || []).filter((w) => !w.extra && Object.hasOwn(policy.pacingGoals?.[q.provider] || {}, w.key)).map((w) => ({
@@ -473,7 +480,14 @@ export function laneStatus(quotas, policy, now = Date.now()) {
     }
     if (policy.providerModes[q.provider] === 'ignore') { lanes[q.provider] = { state: 'open', ignored: true, resetWindows, goals }; continue; }
     const risk = quotaRisk(q, policy, now);
-    const w = risk || quotaPressure(q, policy, now);
+    const liveWindows = (q.windows || []).filter((window) => liveWindow(window, now));
+    const pressured = liveWindows.filter((window) => aheadOfQuotaPace(policy, q.provider, window, now));
+    const byPressure = (a, b) => paceScore(b, adjustedExpectedPercent(policy, q.provider, b, now))
+      - paceScore(a, adjustedExpectedPercent(policy, q.provider, a, now));
+    const pressure = pressured.sort(byPressure)[0] || null;
+    const shortPressure = pressured.filter((window) => !isLongQuotaWindow(window)).sort(byPressure)[0] || null;
+    const longPressure = pressured.filter(isLongQuotaWindow).sort(byPressure)[0] || null;
+    const w = risk || pressure;
     if (!w) { lanes[q.provider] = { state: 'open', resetWindows, goals }; continue; }
     const expectedPercent = adjustedExpectedPercent(policy, q.provider, w, now);
     const overPercent = expectedPercent != null ? w.usedPercent - expectedPercent : null;
@@ -486,6 +500,17 @@ export function laneStatus(quotas, policy, now = Date.now()) {
       : overPercent != null && overPercent > 0 && goal > 0 && Number.isFinite(end) && Number.isFinite(start) && w.usedPercent <= goal
         ? Math.min(start + w.usedPercent / goal * (end - start), resetAt)
         : overPercent != null && overPercent > 0 && w.windowMinutes && goal > 0 && !Number.isFinite(end) ? Math.min(now + (overPercent / goal) * w.windowMinutes * 60000, resetAt) : resetAt;
+    if (!risk && !shortPressure && longPressure && Number.isFinite(Date.parse(longPressure.resetsAt))) {
+      const resetsAt = Date.parse(w.resetsAt);
+      const daysLeft = Math.max(1, (resetsAt - now) / DAY_MS);
+      const allowancePercent = Math.max(0, (100 - w.usedPercent) / daysLeft);
+      lanes[q.provider] = {
+        state: 'trickle', window: w.label, usedPercent: w.usedPercent, expectedPercent, overPercent,
+        allowancePercent, usedTodayPercent: todayUse[q.provider]?.[w.key] ?? 0,
+        resetAt: w.resetsAt || null, resetWindows, goals,
+      };
+      continue;
+    }
     lanes[q.provider] = {
       state: risk ? 'reserve' : 'pace', window: w.label, usedPercent: w.usedPercent, expectedPercent,
       overPercent, backOnPaceAt: Number.isFinite(backOnPaceMs) ? new Date(backOnPaceMs).toISOString() : null, resetWindows, goals,
@@ -494,11 +519,13 @@ export function laneStatus(quotas, policy, now = Date.now()) {
   return lanes;
 }
 
-// When no metered provider is open, the least-over provider that is only ahead of pace may start without --force.
+// When no metered provider is open or under its trickle allowance, the least-over provider that is only ahead of pace may start.
 // The unmetered lane is not a metered provider, so it never changes this choice.
 export function leastOverProvider(lanes) {
   const metered = Object.entries(lanes).filter(([, lane]) => !lane.unmetered && lane.state !== 'unknown' && lane.state !== 'exhausted');
-  if (!metered.length || metered.some(([, lane]) => lane.state === 'open')) return null;
+  const usable = (lane) => lane.state === 'open'
+    || (lane.state === 'trickle' && lane.usedTodayPercent < lane.allowancePercent);
+  if (!metered.length || metered.some(([, lane]) => usable(lane))) return null;
   const pace = metered.filter(([, lane]) => lane.state === 'pace' && lane.overPercent != null).sort((a, b) => a[1].overPercent - b[1].overPercent);
   return pace[0]?.[0] ?? null;
 }
@@ -640,7 +667,7 @@ function displayUnmeteredModel(model) {
   return model.startsWith('opencode/') ? model.slice('opencode/'.length) : model;
 }
 
-export function deriveControl(snap, policy, baseModels, paneSince = {}, now = Date.now(), exhaustedFreeModels = {}, { exhaustedFreeLanes = {}, piModels = null } = {}) {
+export function deriveControl(snap, policy, baseModels, paneSince = {}, now = Date.now(), exhaustedFreeModels = {}, { exhaustedFreeLanes = {}, piModels = null, lanes = {} } = {}) {
   const models = mergeModels(baseModels, policy);
   const workspaces = workspaceProjects(snap, policy);
   const projects = workspaces.filter((workspace) => !workspace.excluded);
@@ -693,7 +720,7 @@ export function deriveControl(snap, policy, baseModels, paneSince = {}, now = Da
     const currentProvider = providerFor(p.orch.kind, policy.preferredModels?.[p.orch.kind] ?? currentKindConfig?.defaultModel, policy);
     const window = risks[currentProvider];
     if (!window) continue;
-    const preferred = pickSuccessor(p, p.orch.kind, currentProvider, policy, { globalAllowed, risks, exhausted, exhaustedFreeModels, exhaustedFreeLanes, piModels }, now);
+    const preferred = pickSuccessor(p, p.orch.kind, currentProvider, policy, { globalAllowed, risks, exhausted, exhaustedFreeModels, exhaustedFreeLanes, piModels, lanes }, now);
     handoffs.push({ project: p.slug, workspace: p.workspace, pane: p.orch.pane, fromKind: p.orch.kind, sessionId: p.orch.sessionId, provider: currentProvider, window, target: preferred });
   }
   let bossHandoff = null;
@@ -703,7 +730,7 @@ export function deriveControl(snap, policy, baseModels, paneSince = {}, now = Da
     const currentProvider = kindConfig && providerFor(bossPane.agent, policy.preferredModels?.[bossPane.agent] ?? kindConfig.defaultModel, policy);
     const window = risks[currentProvider] || null;
     const bossProject = { excludedKinds: [], excludedModels: [] };
-    const target = kindConfig ? pickSuccessor(bossProject, bossPane.agent, currentProvider, policy, { globalAllowed, risks, exhausted, exhaustedFreeModels, exhaustedFreeLanes, piModels }, now) : null;
+    const target = kindConfig ? pickSuccessor(bossProject, bossPane.agent, currentProvider, policy, { globalAllowed, risks, exhausted, exhaustedFreeModels, exhaustedFreeLanes, piModels, lanes }, now) : null;
     bossHandoff = {
       project: 'Boss', label: 'Boss', boss: true, workspace: bossPane.workspace, pane: bossPane.id,
       fromKind: bossPane.agent || null, sessionId: bossPane.agent ? bossPane.sessionId || (bossPane.agent_session?.kind === 'id' ? bossPane.agent_session.value : null) : null,

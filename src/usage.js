@@ -68,13 +68,43 @@ export function recordQuotaSnapshot(quotas, at = new Date().toISOString()) {
   if (rows.length) fs.appendFileSync(QUOTAS_FILE, rows.map((r) => JSON.stringify(r)).join('\n') + '\n', { mode: 0o600 });
 }
 
-export function readQuotaTrend() {
+export function readQuotaHistory({ file = QUOTAS_FILE, since = null } = {}) {
   let lines = [];
-  try { lines = fs.readFileSync(QUOTAS_FILE, 'utf8').trim().split('\n').filter(Boolean); }
+  try { lines = fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean); }
   catch (e) { if (e.code !== 'ENOENT') throw e; }
+  const rows = (since ? lines : lines.slice(-3000)).map((line) => JSON.parse(line));
+  return since ? rows.filter((row) => Date.parse(row.at) >= Date.parse(since)) : rows;
+}
+
+// Measure quota use since the first matching sample of the UTC day or the current window reset.
+export function quotaUsageToday(quotas, history, now = Date.now()) {
+  const startOfDay = new Date(now);
+  startOfDay.setUTCHours(0, 0, 0, 0);
+  const dayStart = startOfDay.getTime();
+  history ??= readQuotaHistory({ since: new Date(dayStart).toISOString() });
+  const result = {};
+  for (const quota of quotas || []) {
+    const windows = {};
+    for (const window of quota.windows || []) {
+      if (window.extra || !window.key || !Number.isFinite(window.usedPercent)) continue;
+      const resetAt = Date.parse(window.resetsAt);
+      const rows = (history || []).filter((row) => {
+        const at = Date.parse(row.at);
+        if (row.provider !== quota.provider || row.window !== window.key || !Number.isFinite(at) || at < dayStart || at > now) return false;
+        const rowResetAt = Date.parse(row.resetsAt);
+        return !Number.isFinite(resetAt) || !Number.isFinite(rowResetAt) || rowResetAt === resetAt;
+      }).sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+      const base = rows.find((row) => Number.isFinite(row.usedPercent));
+      windows[window.key] = base ? Math.max(0, window.usedPercent - base.usedPercent) : 0;
+    }
+    result[quota.provider] = windows;
+  }
+  return result;
+}
+
+export function readQuotaTrend() {
   const byProvider = {};
-  for (const line of lines.slice(-3000)) {
-    const r = JSON.parse(line);
+  for (const r of readQuotaHistory()) {
     if (r.window !== 'secondary') continue;
     (byProvider[r.provider] ||= []).push(r);
   }

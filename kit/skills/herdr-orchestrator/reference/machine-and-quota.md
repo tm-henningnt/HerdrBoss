@@ -37,10 +37,16 @@ Read this file before you choose a lane for a new kind of task, when `herdr-boss
 
 ## Quota and pacing
 
-- Run `herdr-boss lanes` to see each quota provider in one line: open, ahead of pace, near exhaustion, or exhausted until its reset.
+- Run `herdr-boss lanes` to see each quota provider in one line: open, trickle, ahead of pace, near exhaustion, or exhausted until its reset.
 - The line names the window that sets the state. When several windows are exhausted, the lane uses the latest reset.
 - A provider is ahead of pace when any live window will not last until its reset, also at low usage, or when its use is above its goal-adjusted expected percentage.
 - A quota pacing goal lowers the expected-use curve; an absent goal means 100%.
+- A window longer than 7 days can use a trickle lane when it is ahead of pace. The daily allowance is `(100 - used percent) / days left`. Herdr Boss uses at least 1 day for this calculation and rounds the displayed allowance to one decimal place.
+- Herdr Boss measures today's use from the first matching quota record after 00:00 UTC. After a reset, it uses the first record after that reset. No record for today means 0% use.
+- A short window of 7 days or less that is ahead of pace still closes the lane. An exhausted or near-exhaustion window also closes it.
+- `worker start` allows a trickle lane below its daily allowance. At or above the allowance, it refuses until 00:00 UTC. Use `--force` to bypass this refusal.
+- Automatic handover can use a trickle lane below its daily allowance.
+- The bulletin, `herdr-boss lanes`, and the Overview quota card show the allowance and today's use.
 - The lanes output has an always-open unmetered lane. Prefer an unmetered model for bounded, well-specified work while a metered provider is ahead of pace. Reserve metered models for work that needs judgment.
 - A worker-start refusal or least-over notice lists your project's unmetered alternatives first.
 - Prefer an open provider.
