@@ -13,6 +13,10 @@ When a quota read fails, Herdr Boss keeps the last good quotas. The dashboard sh
 - `codexbar timed out after 240 s`: the read took longer than 240 seconds.
 - `codexbar exited with code N`: `codexbar` failed. The text adds the first line of its error output when there is one.
 
+`codexbar` returns one row for each provider. When the probe for one provider fails, `codexbar` exits with code 1 but still returns the good rows. Herdr Boss keeps these rows. Then it reads each failed provider again one time with `codexbar usage --format json --provider NAME`. This retry also stops after 240 seconds. Herdr Boss uses the retry row when it has no error.
+
+When the retry also fails, Herdr Boss keeps the last good row of that provider for 60 minutes. It marks this row as stale and adds the new error. The bulletin quota table shows the row as "Claude quota from HH:MM (probe failed)". The rules line is "Quota data for Claude is from HH:MM; the last probe failed." The dashboard shows the same text on the provider card. Pacing, quota notices, and provider lanes use a stale row as data. Automatic handover does not use a stale row. After 60 minutes, Herdr Boss removes the row and keeps only the error. The bulletin then says "Quota data unavailable for Claude".
+
 At start, Herdr Boss loads the saved quotas from `state.json` when they are younger than 15 minutes. The dashboard shows "Quotas from HH:MM" for these saved quotas until the first new read succeeds. Automatic handover does not use saved quotas.
 
 Then it applies its rules and writes these files to `~/.herdr-boss/`:

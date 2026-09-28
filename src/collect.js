@@ -103,16 +103,25 @@ function partialRows(err) {
   } catch { return null; }
 }
 
-export async function collectQuotas({ runner = run } = {}) {
-  let out;
-  try { out = await runner('codexbar', ['usage', '--format', 'json'], { timeout: QUOTA_TIMEOUT_MS }); }
+async function codexbarRows(runner, args) {
+  try { return JSON.parse(await runner('codexbar', ['usage', '--format', 'json', ...args], { timeout: QUOTA_TIMEOUT_MS })); }
   catch (err) {
     // codexbar exits 1 when one provider fails, but it still prints rows for every provider. Keep the good rows.
     const rows = partialRows(err);
     if (!rows) throw new Error(codexbarError(err));
-    out = err.stdout;
+    return rows;
   }
-  const rows = JSON.parse(out);
+}
+
+export async function collectQuotas({ runner = run } = {}) {
+  const rows = await codexbarRows(runner, []);
+  // A provider probe can fail once and work on the next call. Read each failed provider again, one time.
+  for (const [i, r] of rows.entries()) {
+    if (!r.error) continue;
+    const retry = await codexbarRows(runner, ['--provider', r.provider]).catch(() => null);
+    const good = retry?.find((x) => x?.provider === r.provider && !x.error);
+    if (good) rows[i] = good;
+  }
   return rows.map((r) => {
     if (r.error) return { provider: r.provider, error: r.error.message };
     const u = r.usage || {};
@@ -145,6 +154,23 @@ export async function collectQuotas({ runner = run } = {}) {
       resetCredits: u.codexResetCredits?.availableCount ?? null,
       updatedAt: u.updatedAt || null,
     };
+  });
+}
+
+// A provider row keeps its last good data this long after its probe starts to fail.
+export const STALE_QUOTA_MS = 60 * 60 * 1000;
+
+// Replace a failed provider row with its last good row from the previous read, marked stale, while that row is young.
+// A previous stale row keeps the time of its good read.
+export function keepStaleRows(quotas, previous, previousAt, now = Date.now()) {
+  return quotas.map((q) => {
+    if (!q.error) return q;
+    const old = (previous || []).find((x) => x.provider === q.provider && (!x.error || x.stale));
+    if (!old) return q;
+    const since = old.stale ? Date.parse(old.staleSince) : previousAt;
+    if (!Number.isFinite(since) || now - since > STALE_QUOTA_MS) return q;
+    const { stale, staleSince, error, ...data } = old;
+    return { ...data, stale: true, staleSince: new Date(since).toISOString(), error: q.error };
   });
 }
 

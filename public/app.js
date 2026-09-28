@@ -380,10 +380,14 @@ function localDateTime(iso) {
   return `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())}T${two(date.getHours())}:${two(date.getMinutes())}`;
 }
 
+// A stale row is the last good row of a provider whose latest probe failed. It still counts as quota data.
+const hasQuotaData = (q) => !q?.error || q.stale === true;
+const staleQuotaText = (q) => `${PROVIDERS[q.provider] || q.provider} quota from ${clock(q.staleSince)} (probe failed)`;
+
 function pacingDraftError(draft, quotas, now = Date.now()) {
   for (const [provider, windows] of Object.entries(draft.pacingGoals || {})) for (const [key, goal] of Object.entries(windows || {})) {
     if (!goal?.end) continue;
-    const window = (quotas || []).find((q) => q.provider === provider && !q.error)?.windows?.find((w) => w.key === key && !w.extra);
+    const window = (quotas || []).find((q) => q.provider === provider && hasQuotaData(q))?.windows?.find((w) => w.key === key && !w.extra);
     const reset = Date.parse(window?.resetsAt);
     const start = reset - window?.windowMinutes * 60000;
     const end = goal.end.type === 'at' ? Date.parse(goal.end.at) : reset - goal.end.hours * 3600000;
@@ -413,7 +417,7 @@ function settingsView(s) {
   // A goal exists only for a live, measured window with a stable key. Extra model-only windows do not get one.
   const goalWindows = [];
   for (const q of s.quotas || []) {
-    if (q.error) continue;
+    if (!hasQuotaData(q)) continue;
     for (const w of q.windows || []) if (!w.extra && w.key != null) goalWindows.push({ provider: q.provider, key: w.key, label: w.label, resetsAt: w.resetsAt });
   }
   const goalRows = goalWindows.length
@@ -674,7 +678,7 @@ function rulesBlock(s) {
 
 function quotaCard(q) {
   const name = PROVIDERS[q.provider] || q.provider;
-  if (q.error) return `<div class="panel provider"><div class="provider-head"><b>${esc(name)}</b></div><div class="err">${esc(q.error)}</div></div>`;
+  if (!hasQuotaData(q)) return `<div class="panel provider"><div class="provider-head"><b>${esc(name)}</b></div><div class="err">${esc(q.error)}</div></div>`;
   const wins = q.windows.map((w) => {
     if (w.resetsAt && Date.parse(w.resetsAt) <= Date.now()) return `<div class="win"><div class="win-row"><span>${esc(w.label)}</span><span class="muted">Reset, not yet measured</span></div><div class="bar"></div><div class="win-row win-foot"><span>The next quota reading shows the new use.</span><span>reset ${clock(w.resetsAt)}</span></div></div>`;
     const cls = w.usedPercent >= 98 ? 'crit' : w.usedPercent >= 90 ? 'warn' : w.willLast === false ? 'warn' : '';
@@ -690,7 +694,7 @@ function quotaCard(q) {
   if (q.credits?.remaining != null) extras.push(`${q.credits.remaining} credits`);
   if (q.resetCredits) extras.push(`${q.resetCredits} reset credit${q.resetCredits > 1 ? 's' : ''}`);
   const trend = usage?.quotaTrend?.[q.provider] || [];
-  return `<div class="panel provider"><div class="provider-head"><b>${esc(name)}</b><span class="tag">${esc(extras.join(' · ') || q.plan || '')}</span></div>${wins}${trend.length > 1 ? `<div class="win-foot">Weekly use trend · last ${Math.min(24, Math.round(trend.length / 12))}h${spark(trend.map((x) => x.usedPercent), 100)}</div>` : ''}</div>`;
+  return `<div class="panel provider"><div class="provider-head"><b>${esc(name)}</b><span class="tag">${esc(extras.join(' · ') || q.plan || '')}</span></div>${q.stale ? `<div class="err" title="${esc(q.error)}">${esc(staleQuotaText(q))}</div>` : ''}${wins}${trend.length > 1 ? `<div class="win-foot">Weekly use trend · last ${Math.min(24, Math.round(trend.length / 12))}h${spark(trend.map((x) => x.usedPercent), 100)}</div>` : ''}</div>`;
 }
 
 function spark(values, max) {
@@ -859,7 +863,7 @@ function eventsBlock(s) {
 function quotaSummary(s) {
   const strip = (s.quotas || []).map((q) => {
     const w = q.windows?.find((x) => x.key === 'secondary') || q.windows?.find((x) => !x.extra);
-    return `<span class="quota-summary-item"><span>${esc(PROVIDERS[q.provider] || q.provider)}</span><strong class="${w?.usedPercent >= 90 ? 'text-crit' : ''}">${w ? `${w.usedPercent}%` : '–'}</strong><small>${q.error ? esc(q.error) : w ? `${esc(w.label)} · resets ${clock(w.resetsAt)}` : 'No quota data'}</small></span>`;
+    return `<span class="quota-summary-item"><span>${esc(PROVIDERS[q.provider] || q.provider)}</span><strong class="${w?.usedPercent >= 90 ? 'text-crit' : ''}">${w ? `${w.usedPercent}%` : '–'}</strong><small>${q.stale ? esc(staleQuotaText(q)) : q.error ? esc(q.error) : w ? `${esc(w.label)} · resets ${clock(w.resetsAt)}` : 'No quota data'}</small></span>`;
   }).join('');
   // Saved quotas from before a restart show their read time until the first new read succeeds.
   const cached = s.quotasCached && s.quotasAt && Date.now() - Date.parse(s.quotasAt) < 15 * 60 * 1000;
@@ -1324,7 +1328,7 @@ function orgHandover(s, sourcePane, risk) {
 function orgQuotaWindow(s, kind) {
   if (!['codex', 'claude'].includes(kind)) return null;
   const q = (s.quotas || []).find((x) => x.provider === kind);
-  if (!q || q.error) return null;
+  if (!q || !hasQuotaData(q)) return null;
   return q.windows?.find((x) => x.key === 'secondary') || q.windows?.find((x) => !x.extra) || null;
 }
 
@@ -1898,7 +1902,7 @@ const HELP = {
     <h3>Needs attention</h3><p>Warnings and critical alerts: quotas, memory, machine load, and orphaned worktree processes. <b>Details</b> opens the rule text in Logs.</p>
     <h3>Handovers</h3><p>Orchestrators whose quota comes near its reserve, and successors that wait for review. Open the project to plan, inspect, or activate a handover.</p>
     <h3>Projects</h3><p>The bar above the cards shows the applied share of each project, in card order. Its colors match the top edge of each card. A label such as <b>30% · 2</b> shows the share and the effective slots; the tooltip shows all values. Change the shares on the Allocation page.</p><p>A card per project with its published status and task mix. The table shows the orchestrator, workers in use against the share, and the policy mode. Select a project for its details.</p>
-    <h3>Subscriptions and machine health</h3><p>Select a bar to open all quota windows, or the processes and load history. After a restart, "Quotas from HH:MM" shows saved quotas until the first new quota read succeeds. The Machine guard switch turns CPU and load warnings and worker-start blocks on or off. Choose a pause length to suspend those rules for a time; select <b>Resume guard</b> to end a pause early. Memory and disk warnings stay on. Disk space reports the filesystem that contains the Herdr Boss data directory.</p>`],
+    <h3>Subscriptions and machine health</h3><p>Select a bar to open all quota windows, or the processes and load history. After a restart, "Quotas from HH:MM" shows saved quotas until the first new quota read succeeds. When the probe for one provider fails, "Claude quota from HH:MM (probe failed)" shows its last good quota for up to 60 minutes. The Machine guard switch turns CPU and load warnings and worker-start blocks on or off. Choose a pause length to suspend those rules for a time; select <b>Resume guard</b> to end a pause early. Memory and disk warnings stay on. Disk space reports the filesystem that contains the Herdr Boss data directory.</p>`],
   projects: ['Projects', `
     <p>Select a project card. The detail below it shows what the orchestrator published and what runs now.</p>
     <p><b>Current Owner goal</b> shows the durable direction set by the Owner. Keep it in every status publication until the Owner changes or clears it.</p>
