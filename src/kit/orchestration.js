@@ -86,6 +86,12 @@ export function validateWorkerReport(report, { evidenceTiers = [] } = {}) {
   tiers(report.evidenceTier, errors, evidenceTiers);
   stringList(report.unverified, 'unverified', errors);
   if (typeof report.stoppedEarly !== 'boolean') errors.push('stoppedEarly must be boolean.');
+  // toolSuggestion is optional: null, or what was missing in the herdr-boss tools, why, and the smallest command that would help.
+  if (report.toolSuggestion != null) {
+    const suggestion = report.toolSuggestion;
+    if (!isObject(suggestion)) errors.push('toolSuggestion must be null or an object with missing, why, and command.');
+    else for (const field of ['missing', 'why', 'command']) if (!isText(suggestion[field])) errors.push(`toolSuggestion.${field} must be a non-empty string.`);
+  }
   return errors;
 }
 

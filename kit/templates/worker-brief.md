@@ -165,6 +165,7 @@ Include these fields in the JSON report:
   "evidenceTier": ["<tier>"],
   "unverified": [],
   "stoppedEarly": false,
+  "toolSuggestion": null,
   "usage": { "inputTokens": null, "outputTokens": null, "cachedTokens": null, "cost": null, "toolCalls": null }
 }
 ```
@@ -174,6 +175,8 @@ Use the supplied issue ID when the brief has one. Use `null` for work without an
 Replace `<tier>` with one or more of the evidence tiers of this project: {{evidenceTiers}}. The report validator rejects every other tier.
 
 Fill `usage` only with values measured by the worker's harness. Leave unknown values as `null`.
+
+Add a **Tool suggestion** section to the human report only when a `herdr-boss` tool was missing for this task. State what was missing, why you needed it, and the smallest command that would help. Put the same in `toolSuggestion` as `{ "missing": "", "why": "", "command": "" }`. Otherwise leave `toolSuggestion` as `null`.
 
 List changed paths, exact commands and results, evidence tier, remaining risks, and open questions in the human report.
 

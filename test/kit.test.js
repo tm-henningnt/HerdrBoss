@@ -2749,3 +2749,19 @@ test('the kit rules name waitingOn, the Mailbox id, and blockedBy', () => {
   const text = fs.readFileSync(path.resolve('kit/templates/project-kit.md'), 'utf8');
   for (const rule of rules) assert.ok(text.includes(rule), `kit/templates/project-kit.md: ${rule}`);
 });
+
+test('a worker report can carry an optional tool suggestion', () => {
+  const base = { issue: null, branch: 'b', worktree: '/w', changedPaths: [], commands: ['npm test: pass'], evidenceTier: ['unit'], unverified: [], stoppedEarly: false };
+  const opts = { evidenceTiers: ['unit'] };
+  assert.deepEqual(validateWorkerReport(base, opts), []);
+  assert.deepEqual(validateWorkerReport({ ...base, toolSuggestion: null }, opts), []);
+  assert.deepEqual(validateWorkerReport({ ...base, toolSuggestion: { missing: 'a tab list filter', why: 'many tabs', command: 'herdr-boss browser tabs SLUG --mine' } }, opts), []);
+  assert.deepEqual(validateWorkerReport({ ...base, toolSuggestion: 'more tools' }, opts), ['toolSuggestion must be null or an object with missing, why, and command.']);
+  assert.deepEqual(validateWorkerReport({ ...base, toolSuggestion: { missing: 'x', why: '' , command: 'y' } }, opts), ['toolSuggestion.why must be a non-empty string.']);
+  const kit = fs.readFileSync(path.resolve('kit/templates/project-kit.md'), 'utf8');
+  assert.ok(kit.includes('Pass each worker `toolSuggestion` to the Boss in one line.'));
+  assert.ok(kit.includes('Keep `herdr-boss browser` a thin helper for visual checks.'));
+  const brief = fs.readFileSync(path.resolve('kit/templates/worker-brief.md'), 'utf8');
+  assert.ok(brief.includes('"toolSuggestion": null'));
+  assert.ok(brief.includes('**Tool suggestion**'));
+});

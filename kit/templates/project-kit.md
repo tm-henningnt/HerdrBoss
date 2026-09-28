@@ -13,6 +13,8 @@ These are the shared operating rules for the orchestrator of this project.
 - Read `kit/models.md` before selecting a worker kind or model.
 - Give tasks that launch their own Chromium (Playwright, performance replays, galleries) to `claude`, `opencode`, or `pi` workers, not to `codex`. The Codex sandbox cannot launch Chromium.
 - A `codex` worker can use the `herdr-boss browser` commands (`tab new`, `navigate`, `screenshot`, `click`, `key`, `text`) on its project browser. Herdr Boss runs that browser outside the sandbox. Use these commands for a visual check of a served page.
+- Keep `herdr-boss browser` a thin helper for visual checks. Do not use it as a Playwright or agent-browser replacement, or for general page automation or scripting.
+- Pass each worker `toolSuggestion` to the Boss in one line. The Boss decides the change.
 - Run `herdr-boss models` and `herdr-boss lanes` for the current models and lanes. Never copy model lists or harness facts into project files.
 - Read `~/.herdr-boss/bulletin.md` before each worker dispatch.
 - Follow its worker cap, your project's effective slots, and provider pacing rules. The effective slots include borrowed slots. Your project always keeps its own base slots unless it is idle or paused. Use an authorized override only when needed.

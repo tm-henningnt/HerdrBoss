@@ -349,6 +349,8 @@ An unknown tool-call count stays `null`. The ledger accepts `null` as unknown. I
 
 ## Browsers
 
+`herdr-boss browser` is a thin helper for visual checks of a project page. It is not a Playwright or agent-browser replacement. Do not add general page automation or scripting to it.
+
 Each project has one persistent Chrome profile on a port from 9223 to 9299. The port is a lease in the built-in pool `project-browsers`. See [Port leases](user-guide.md#port-leases). Add `--tab ID` to page commands when the browser has several tabs; `browser tabs` lists the IDs.
 
 | Command | Action |
