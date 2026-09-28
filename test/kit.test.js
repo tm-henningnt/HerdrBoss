@@ -2864,7 +2864,7 @@ test('the full-suite lock is machine-wide and other lock names stay per reposito
   fs.mkdirSync(queueDir, { recursive: true, mode: 0o700 });
   const ticketId = '00000000-0000-4000-8000-000000000001';
   fs.writeFileSync(path.join(queueDir, `${ticketId}.json`), JSON.stringify({
-    id: ticketId, seq: 1, pane: 'ws:orch-b', project: 'tmprocessmining', pid: 802, kind: 'suite',
+    id: ticketId, seq: 1, pane: 'ws:orch-b', project: 'alpha', pid: 802, kind: 'suite',
     command: 'herdr-boss lock acquire full-suite', createdAt: new Date().toISOString(),
   }));
 
@@ -2876,9 +2876,9 @@ test('the full-suite lock is machine-wide and other lock names stay per reposito
   ]);
   assert.ok(lines.some((line) => /^full-suite .*machine/.test(line)), lines.join('\n'));
   assert.deepEqual(listed[1].queue.map((ticket) => [ticket.position, ticket.project, ticket.pane, ticket.kind]), [
-    [1, 'tmprocessmining', 'ws:orch-b', 'suite'],
+    [1, 'alpha', 'ws:orch-b', 'suite'],
   ]);
-  assert.ok(lines.some((line) => /^  Queue: 1\. tmprocessmining ws:orch-b \(suite\) \d+m$/.test(line)), lines.join('\n'));
+  assert.ok(lines.some((line) => /^  Queue: 1\. alpha ws:orch-b \(suite\) \d+m$/.test(line)), lines.join('\n'));
   assert.ok(lines.some((line) => /^deploy .*repository/.test(line)), lines.join('\n'));
   fs.unlinkSync(path.join(queueDir, `${ticketId}.json`));
 
@@ -2992,10 +2992,10 @@ test('the bulletin shows the current machine lock holder, kind, and age', () => 
     updatedAt: '2026-09-28T10:15:00.000Z',
     locks: [{
       name: 'full-suite', scope: 'machine', state: 'live', ownerPane: 'ws:orch', kind: 'suite', ageSeconds: 900,
-      queue: [{ position: 1, project: 'tmprocessmining', pane: 'w9:pAA', kind: 'suite', waitSeconds: 2460 }],
+      queue: [{ position: 1, project: 'alpha', pane: 'ws:alpha-orch', kind: 'suite', waitSeconds: 2460 }],
     }],
   }, { alerts: [], advice: [] }, { dashboardPort: 4477 });
-  assert.match(text, /- full-suite held by ws:orch \(suite\) for 15m; queue: 1\. tmprocessmining w9:pAA 41m\./);
+  assert.match(text, /- full-suite held by ws:orch \(suite\) for 15m; queue: 1\. alpha ws:alpha-orch 41m\./);
 });
 
 test('the allocation Locks panel renders each full-suite queue entry', () => {

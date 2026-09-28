@@ -147,7 +147,7 @@ test('engine lock snapshots include live full-suite queue tickets', { timeout: 2
   }));
   const ticketId = '00000000-0000-4000-8000-000000000002';
   fs.writeFileSync(path.join(queueDir, `${ticketId}.json`), JSON.stringify({
-    id: ticketId, seq: 4, pane: 'ws:waiter', project: 'tmprocessmining', pid: process.pid, kind: 'suite',
+    id: ticketId, seq: 4, pane: 'ws:waiter', project: 'alpha', pid: process.pid, kind: 'suite',
     command: 'herdr-boss lock acquire full-suite', createdAt: new Date(now.getTime() - 41 * 60 * 1000).toISOString(),
   }));
   const cfg = loadConfig();
@@ -166,7 +166,7 @@ test('engine lock snapshots include live full-suite queue tickets', { timeout: 2
   const state = await engine.tick();
   assert.equal(state.locks.length, 1);
   assert.deepEqual(state.locks[0].queue.map((ticket) => [ticket.position, ticket.project, ticket.pane, ticket.kind]), [
-    [1, 'tmprocessmining', 'ws:waiter', 'suite'],
+    [1, 'alpha', 'ws:waiter', 'suite'],
   ]);
   assert.ok(state.locks[0].queue[0].waitSeconds >= 41 * 60);
 });
