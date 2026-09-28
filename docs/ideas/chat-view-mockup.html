@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chat view — static mockup</title>
+<style>
+  /* Dashboard tokens from public/style.css, copied here so this page stands alone. */
+  :root {
+    --bg: #f4f2ee; --panel: #ffffff; --panel-2: #f8f6f2; --line: #e3dfd7;
+    --text: #1d1b18; --muted: #6f6a61; --faint: #a19b90; --accent: #d0621f;
+    --ok: #2f8a4c; --warn: #b7791f; --crit: #c2362b; --info: #3a6ea5;
+    --idle: #8a8479; --track: #ebe7df;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #121110; --panel: #1b1a18; --panel-2: #22201d; --line: #2e2b27;
+      --text: #ece8e1; --muted: #a39d92; --faint: #6c665d; --accent: #ef8a4a;
+      --ok: #5cbf7a; --warn: #e0a84a; --crit: #ef6a5e; --info: #74a6dd; --idle: #8d877c; --track: #2a2825;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #121110; --panel: #1b1a18; --panel-2: #22201d; --line: #2e2b27;
+    --text: #ece8e1; --muted: #a39d92; --faint: #6c665d; --accent: #ef8a4a;
+    --ok: #5cbf7a; --warn: #e0a84a; --crit: #ef6a5e; --info: #74a6dd; --idle: #8d877c; --track: #2a2825;
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 24px; background: var(--bg); color: var(--text); font: 14px/1.45 var(--sans); }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .intro { margin: 0 0 20px; color: var(--muted); max-width: 70ch; }
+  .stage { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 20px; }
+  .device { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 12px; display: grid; gap: 10px; }
+  .phone { width: 320px; }
+  .desktop { flex: 1 1 560px; min-width: 0; }
+  .caption { font: 600 11px var(--mono); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+  .screen { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--bg); }
+  .bar { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); background: var(--panel-2); }
+  .bar h2 { margin: 0; font-size: 15px; font-weight: 650; }
+  .bar .grow { flex: 1; }
+  .link { font-size: 12.5px; color: var(--accent); }
+  .back { min-height: 32px; min-width: 32px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--text); font-size: 15px; }
+  .sub { color: var(--muted); font-size: 12px; }
+
+  /* Chat list */
+  .chat-list { list-style: none; margin: 0; padding: 0; }
+  .chat-list li + li { border-top: 1px solid var(--line); }
+  .chat-row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 11px 12px; background: none; border: 0; color: inherit; text-align: left; font: inherit; }
+  .avatar { flex: 0 0 auto; width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; background: color-mix(in srgb, var(--accent) 16%, var(--panel)); color: var(--accent); font: 650 12px var(--mono); }
+  .chat-main { min-width: 0; flex: 1; display: grid; gap: 1px; }
+  .chat-name { font-weight: 650; }
+  .chat-preview { color: var(--muted); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chat-side { display: grid; gap: 4px; justify-items: end; }
+  .chat-time { color: var(--faint); font: 11.5px var(--mono); }
+  .unread { min-width: 20px; padding: 1px 6px; border-radius: 99px; background: var(--accent); color: #fff; font: 600 11px var(--mono); text-align: center; }
+
+  /* Conversation */
+  .scroll { padding: 12px; display: grid; gap: 8px; min-height: 220px; }
+  .bubbles { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+  .bubble { max-width: 82%; padding: 8px 11px; border: 1px solid var(--line); border-radius: 14px; display: grid; gap: 4px; }
+  .bubble.agent { justify-self: start; background: var(--panel-2); border-bottom-left-radius: 4px; }
+  .bubble.owner { justify-self: end; background: color-mix(in srgb, var(--accent) 12%, var(--panel)); border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); border-bottom-right-radius: 4px; }
+  .bubble p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .bubble-meta { color: var(--muted); font: 11.5px var(--mono); }
+  .bubble-meta .ok { color: var(--ok); }
+  .bubble-meta .fail { color: var(--crit); }
+  .action { border-top: 1px solid var(--line); margin-top: 2px; padding-top: 7px; display: grid; gap: 6px; }
+  .action label { font: 600 11px var(--mono); text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+  .action textarea { width: 100%; min-height: 44px; resize: vertical; padding: 7px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--text); font: inherit; }
+  .buttons { display: flex; gap: 6px; flex-wrap: wrap; }
+  button.act { min-height: 32px; padding: 5px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--text); font: inherit; }
+  button.act.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.act.decline { color: var(--crit); }
+
+  /* Composer */
+  .composer { border-top: 1px solid var(--line); padding: 9px 12px calc(9px + env(safe-area-inset-bottom)); display: grid; gap: 5px; background: var(--panel-2); }
+  .composer-row { display: flex; gap: 8px; align-items: flex-end; }
+  .composer textarea { flex: 1; min-height: 38px; max-height: 120px; resize: none; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--text); font: inherit; }
+  .composer button { min-height: 38px; padding: 0 16px; border: 1px solid var(--accent); border-radius: 10px; background: var(--accent); color: #fff; font: 650 14px var(--sans); }
+  .hint { color: var(--faint); font-size: 11.5px; }
+
+  /* Desktop two-pane */
+  .desk { display: grid; grid-template-columns: 240px minmax(0, 1fr); min-height: 420px; }
+  .desk .pane-list { border-right: 1px solid var(--line); background: var(--panel); }
+  .desk .pane-conv { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; min-width: 0; background: var(--bg); }
+  .desk .scroll { min-height: 300px; align-content: start; }
+  @media (max-width: 900px) { .desk { grid-template-columns: minmax(0, 1fr); } .desk .pane-list { display: none; } }
+</style>
+</head>
+<body>
+<h1>Chat view — static mockup</h1>
+<p class="intro">Three views of the proposed Chat page, next to the Mailbox. This page is static. It holds no script and no data. The colors use the dashboard tokens from <code>public/style.css</code>.</p>
+
+<div class="stage">
+
+  <!-- 1. Phone chat list -->
+  <section class="device phone" aria-labelledby="cap-list">
+    <p class="caption" id="cap-list">Phone · chat list</p>
+    <div class="screen">
+      <div class="bar">
+        <h2>Chats</h2>
+        <span class="grow"></span>
+        <button class="act" type="button" aria-label="New chat">New +</button>
+      </div>
+      <ul class="chat-list">
+        <li>
+          <button class="chat-row" type="button" aria-label="Open the Boss chat. 3 unread messages.">
+            <span class="avatar" aria-hidden="true">BO</span>
+            <span class="chat-main"><span class="chat-name">Boss</span><span class="chat-preview">The release is ready. Approve it?</span></span>
+            <span class="chat-side"><span class="chat-time">09:41</span><span class="unread">3</span></span>
+          </button>
+        </li>
+        <li>
+          <button class="chat-row" type="button" aria-label="Open the HerdrBoss chat.">
+            <span class="avatar" aria-hidden="true">HB</span>
+            <span class="chat-main"><span class="chat-name">HerdrBoss</span><span class="chat-preview">Task V81 is done. Report attached.</span></span>
+            <span class="chat-side"><span class="chat-time">09:12</span></span>
+          </button>
+        </li>
+        <li>
+          <button class="chat-row" type="button" aria-label="Open the Qlik chat. 1 unread message.">
+            <span class="avatar" aria-hidden="true">QL</span>
+            <span class="chat-main"><span class="chat-name">Qlik</span><span class="chat-preview">Send the next task.</span></span>
+            <span class="chat-side"><span class="chat-time">Mon 18</span><span class="unread">1</span></span>
+          </button>
+        </li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- 2. Phone chat -->
+  <section class="device phone" aria-labelledby="cap-chat">
+    <p class="caption" id="cap-chat">Phone · one chat</p>
+    <div class="screen">
+      <div class="bar">
+        <button class="back" type="button" aria-label="Back to chats">‹</button>
+        <h2>Boss</h2>
+        <span class="grow"></span>
+        <span class="sub" aria-hidden="true">⋯</span>
+      </div>
+      <div class="scroll">
+        <ol class="bubbles" role="log" aria-label="Messages in the Boss chat" aria-live="polite">
+          <li class="bubble owner">
+            <p>Please finish V81 and push main.</p>
+            <span class="bubble-meta">Owner · 09:40 · <span class="ok">Delivered 09:40</span></span>
+          </li>
+          <li class="bubble agent">
+            <p>V81 is done. The report is in the Mailbox.</p>
+            <span class="bubble-meta">Boss · 09:41 · read</span>
+          </li>
+          <li class="bubble agent">
+            <p>Approve the release?</p>
+            <div class="action">
+              <span class="sub">Approve and decline send your answer as a reply.</span>
+              <div class="buttons">
+                <button class="act primary" type="button">Approve</button>
+                <button class="act decline" type="button">Decline</button>
+              </div>
+            </div>
+          </li>
+          <li class="bubble owner">
+            <p>Use your free slots.</p>
+            <span class="bubble-meta">Owner · 09:42 · <span class="fail">Failed: pane busy</span> · retry 2 of 4</span>
+          </li>
+        </ol>
+      </div>
+      <form class="composer" aria-label="Write a message">
+        <div class="composer-row">
+          <textarea aria-label="Message to the Boss" placeholder="Message…"></textarea>
+          <button type="submit">Send</button>
+        </div>
+        <span class="hint">Enter sends · Shift+Enter makes a new line</span>
+      </form>
+    </div>
+  </section>
+
+  <!-- 3. Desktop -->
+  <section class="device desktop" aria-labelledby="cap-desk">
+    <p class="caption" id="cap-desk">Desktop · list and chat together</p>
+    <div class="screen desk">
+      <div class="pane-list">
+        <div class="bar"><h2>Chats</h2></div>
+        <ul class="chat-list">
+          <li>
+            <button class="chat-row" type="button" aria-current="true" aria-label="Boss chat, open. 3 unread messages.">
+              <span class="avatar" aria-hidden="true">BO</span>
+              <span class="chat-main"><span class="chat-name">Boss</span><span class="chat-preview">The release is ready.</span></span>
+              <span class="chat-side"><span class="chat-time">09:41</span><span class="unread">3</span></span>
+            </button>
+          </li>
+          <li>
+            <button class="chat-row" type="button" aria-label="Open the HerdrBoss chat.">
+              <span class="avatar" aria-hidden="true">HB</span>
+              <span class="chat-main"><span class="chat-name">HerdrBoss</span><span class="chat-preview">Task V81 is done.</span></span>
+              <span class="chat-side"><span class="chat-time">09:12</span></span>
+            </button>
+          </li>
+          <li>
+            <button class="chat-row" type="button" aria-label="Open the Qlik chat. 1 unread message.">
+              <span class="avatar" aria-hidden="true">QL</span>
+              <span class="chat-main"><span class="chat-name">Qlik</span><span class="chat-preview">Send the next task.</span></span>
+              <span class="chat-side"><span class="chat-time">Mon 18</span><span class="unread">1</span></span>
+            </button>
+          </li>
+        </ul>
+      </div>
+      <div class="pane-conv">
+        <div class="bar"><button class="back" type="button" aria-label="Back to chats">‹</button><h2>Boss</h2></div>
+        <div class="scroll">
+          <ol class="bubbles" role="log" aria-label="Messages in the Boss chat" aria-live="polite">
+            <li class="bubble owner">
+              <p>Please finish V81 and push main.</p>
+              <span class="bubble-meta">Owner · 09:40 · <span class="ok">Delivered 09:40</span></span>
+            </li>
+            <li class="bubble agent">
+              <p>V81 is done. The report is in the Mailbox.</p>
+              <span class="bubble-meta">Boss · 09:41 · read</span>
+            </li>
+            <li class="bubble agent">
+              <p>Approve the release?</p>
+              <div class="action">
+                <label>Answer</label>
+                <textarea aria-label="Your answer"></textarea>
+                <div class="buttons"><button class="act primary" type="button">Send</button><button class="act" type="button">Dismiss</button></div>
+              </div>
+            </li>
+          </ol>
+        </div>
+        <form class="composer" aria-label="Write a message">
+          <div class="composer-row">
+            <textarea aria-label="Message to the Boss" placeholder="Message…"></textarea>
+            <button type="submit">Send</button>
+          </div>
+          <span class="hint">Enter sends · Shift+Enter makes a new line</span>
+        </form>
+      </div>
+    </div>
+  </section>
+
+</div>
+</body>
+</html>
