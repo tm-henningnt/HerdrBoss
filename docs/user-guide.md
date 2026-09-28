@@ -709,9 +709,34 @@ Select **Send** or press Enter to send the message. Select Shift and press Enter
 
 The page adds a `queued` bubble at once. The stored record replaces the bubble. A refused send marks the bubble `failed` and shows **Retry**. Select **Retry** to send the same text again. `POST /api/messages` is the only write path of the page.
 
-### Action items
+### Action cards
 
-A message from an agent with the action `answer`, `approve`, `decide`, or `read` is a normal bubble. The bubble shows an **Open in Mailbox** link. The inline action cards come in a later change.
+A message from an agent that asks the Owner for a decision shows as a normal bubble with one small button per option. The card has no frame of its own. The bubble holds a short question line, and the page drops the choice list from the text because the buttons hold the choices.
+
+The page shows a card for a real choice only:
+
+- An approval shows **Approve** and **Reject**. It also shows **Later**.
+- A decision shows one button for each choice. A decision with the choices `Yes` and `No` shows those two buttons.
+- An answer shows a one-line text field and a small **Send** button.
+
+**Later** only collapses the card. The page writes nothing. The Mailbox item stays open.
+
+A decision without a Markdown list under a `Choices` heading is not a real choice. It shows as a plain bubble with the **Open in Mailbox** link. A message with the action `read` also shows as a plain bubble.
+
+The page finds the choices with the same rule as the Mailbox.
+
+The card uses the same send route as the Mailbox. It calls `POST /api/messages` with `replyTo` set to the item ID. The server closes the item. The bubble then shows the result, for example `Approved 22:05`. A closed item shows as a normal bubble with the result of the answer that closed it. The message event then refreshes the chat and the Mailbox.
+
+Every card keeps an **Open in Mailbox** link. A read-only preview refuses the send and shows the reason in the card.
+
+### Keyboard and screen readers
+
+- The chat list holds one button per chat. The arrow keys, **Home**, and **End** move the focus between the rows. Enter opens a chat.
+- The focus goes to the message field when a chat opens. The focus goes to the list row of the open chat when you select **Back** or press Escape.
+- Escape returns from an open chat to the list.
+- The message list has `role="log"` and `aria-live="polite"`. A screen reader reads each new message once.
+- Each bubble has a name with the sender, the time, the text, and the state.
+- The text of the chat view reaches the WCAG AA contrast in the light theme and in the dark theme.
 
 ### Phone
 
