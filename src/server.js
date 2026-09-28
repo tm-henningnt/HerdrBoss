@@ -18,7 +18,7 @@ import { listBrowserTabs, browserScreenshot, browserNavigate, browserNavigationS
 import { listHandoffs } from './handoff.js';
 import { roamgateAvailable, roamgateUrl } from './roamgate.js';
 import { createAccessControl, loginPage } from './access.js';
-import { appendMessage, closeMailboxItem, dismissMailboxItems, groupMessagesByConversation, listThread, mailboxCounts, mailboxFolders, mailboxView, markMailboxRead, messagesWithReplyState, readMessages, validThread, validateOwnerSend } from './messages.js';
+import { appendMessage, closeMailboxItem, dismissMailboxItems, groupMessagesByConversation, listThread, mailboxCounts, mailboxFolders, mailboxView, markMailboxRead, messageChannel, messagesWithReplyState, readMessages, validThread, validateOwnerSend } from './messages.js';
 import { assertSqliteAvailable } from './sqlite-store.js';
 import { openMessageStore } from './message-store.js';
 
@@ -183,9 +183,16 @@ export function serve(cfg, { readOnlyPreview = false, createEngine = (config, op
           if (project?.orch?.pane) writable.set(thread, { title: String(project.project || project.title || thread) });
         }
         const stored = new Map(messageStore.chats().map((chat) => [chat.thread, chat]));
+        const mailUnreadByThread = new Map();
+        for (const item of messageStore.all()) {
+          if (item.to !== 'owner' || item.readAt || messageChannel(item) !== 'mail') continue;
+          mailUnreadByThread.set(item.thread, (mailUnreadByThread.get(item.thread) ?? 0) + 1);
+        }
         const chats = [...writable].map(([thread, { title }]) => {
           const chat = stored.get(thread);
           const record = chat?.last;
+          // A mail report is not chat unread. The Mailbox keeps its own counts.
+          const unread = Math.max(0, (chat?.unreadForOwner ?? 0) - (mailUnreadByThread.get(thread) ?? 0));
           return {
             thread,
             title,
@@ -193,10 +200,12 @@ export function serve(cfg, { readOnlyPreview = false, createEngine = (config, op
               id: record.id,
               at: record.at,
               from: record.from,
+              channel: messageChannel(record),
+              title: record.title ?? null,
               text: String(record.text ?? '').slice(0, 120),
               status: record.status ?? null,
             } : null,
-            unread: chat?.unreadForOwner ?? 0,
+            unread,
           };
         }).sort((left, right) => {
           if (!left.last) return right.last ? 1 : left.thread.localeCompare(right.thread);
@@ -215,7 +224,7 @@ export function serve(cfg, { readOnlyPreview = false, createEngine = (config, op
         const updated = messageStore.mutate((records) => {
           let count = 0;
           for (const record of records) {
-            if (record.thread === thread && record.to === 'owner' && !record.readAt) {
+            if (record.thread === thread && record.to === 'owner' && !record.readAt && messageChannel(record) !== 'mail') {
               record.readAt = new Date(now).toISOString();
               count += 1;
             }
@@ -239,7 +248,8 @@ export function serve(cfg, { readOnlyPreview = false, createEngine = (config, op
         if (before === '') return send(res, 400, { error: 'before must be a message ID.' });
         const page = messageStore.thread(thread, { before, limit: limit + 1 });
         const more = page.length > limit;
-        const messages = messagesWithReplyState(more ? page.slice(1) : page, messageStore.all());
+        const messages = messagesWithReplyState(more ? page.slice(1) : page, messageStore.all())
+          .map((record) => ({ ...record, channel: messageChannel(record) }));
         return send(res, 200, { thread, messages, more });
       }
       if (p === '/api/leases/release' && req.method === 'POST') {

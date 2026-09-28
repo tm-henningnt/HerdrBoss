@@ -1936,19 +1936,35 @@ document.addEventListener('click', (e) => {
 
 function updateMailboxBadge(s) {
   const unread = s?.mailbox?.needsYouUnread ?? s?.mailbox?.unread ?? 0;
-  const needsCount = s?.mailbox?.needsYou ?? s?.mailbox?.open ?? 0;
-  const unreadUpdates = mailbox.updatesUnread || 0;
   const text = (count) => count > 99 ? '99+' : String(count);
   for (const badge of document.querySelectorAll('[data-mailbox-badge]')) { badge.hidden = !unread; badge.textContent = text(unread); }
   const link = $nav.querySelector('[data-nav="mailbox"]');
   if (link) link.setAttribute('aria-label', unread ? `Mailbox, ${unread} unread` : 'Mailbox');
   $navMenu.setAttribute('aria-label', unread ? `Menu, ${unread} unread in Mailbox` : 'Menu');
-  for (const badge of document.querySelectorAll('[data-updates-badge]')) { badge.hidden = !unreadUpdates; badge.textContent = text(unreadUpdates); }
-  for (const badge of document.querySelectorAll('[data-needs-you-badge]')) { badge.hidden = !needsCount; badge.textContent = text(needsCount); }
-  const updatesShortcut = document.querySelector('[data-mail-shortcut="updates"]');
-  const needsShortcut = document.querySelector('[data-mail-shortcut="needs-you"]');
-  if (updatesShortcut) updatesShortcut.setAttribute('aria-label', unreadUpdates ? `Updates, ${unreadUpdates} unread` : 'Updates');
-  if (needsShortcut) needsShortcut.setAttribute('aria-label', needsCount ? `Needs you, ${needsCount} items` : 'Needs you');
+  updateTopIcons(s);
+}
+
+// The three top-bar icons: chat unread, mail unread, and open action items. An icon with nothing to show is faded and has no badge.
+const TOP_ICON_NAMES = { chat: 'Chat', mail: 'Updates', 'needs-action': 'Needs you' };
+const TOP_ICON_COUNT_LABEL = { chat: (n) => `Chat, ${n} unread`, mail: (n) => `Updates, ${n} unread`, 'needs-action': (n) => `Needs you, ${n} items` };
+const topIconCounts = (s) => ({
+  chat: s?.mailbox?.chatUnread ?? 0,
+  mail: s?.mailbox?.mailUnread ?? 0,
+  'needs-action': s?.mailbox?.needsAction ?? s?.mailbox?.open ?? 0,
+});
+
+function updateTopIcons(s) {
+  for (const [name, count] of Object.entries(topIconCounts(s))) {
+    const icon = document.querySelector(`[data-top-icon="${name}"]`);
+    if (icon) {
+      icon.dataset.empty = count ? 'false' : 'true';
+      icon.setAttribute('aria-label', count ? TOP_ICON_COUNT_LABEL[name](count) : TOP_ICON_NAMES[name]);
+    }
+    for (const badge of document.querySelectorAll(`[data-top-badge="${name}"]`)) {
+      badge.hidden = !count;
+      badge.textContent = count > 99 ? '99+' : String(count);
+    }
+  }
 }
 
 // ---------- Chat ----------
@@ -2006,7 +2022,6 @@ function chatView(s) {
     : `<p class="chat-empty">${chat.loaded ? 'No chats.' : 'Loading…'}</p>`;
   const conversation = chat.thread ? chatConversationView() : '<section class="chat-empty-state"><p>Select a chat to read it.</p></section>';
   return [
-    '<header class="page-intro"><div><h1>Chat</h1><p>Talk with the Boss and the project orchestrators.</p></div></header>',
     `<p class="chat-notice" role="status"${chat.error || chat.status ? '' : ' hidden'}>${esc(chat.error || chat.status)}</p>`,
     `<div class="chat-layout${chat.thread ? ' thread-open' : ''}"><aside class="chat-list-pane" aria-label="Chats"><div class="chat-list-head"><h2>Chats<span class="sub">${chat.list.length}</span></h2></div>${list}</aside><section class="chat-conversation-pane">${conversation}</section></div>`,
   ].join('');
@@ -2017,10 +2032,11 @@ function chatRow(item) {
   const time = item.last ? clock(item.last.at) : '';
   const open = item.thread === chat.thread;
   const badge = unread ? `<span class="chat-unread">${unread > 99 ? '99+' : unread}</span>` : '';
+  // A report is mail. The row shows it as one short line with a link to the Mailbox.
+  const preview = !item.last ? 'No messages yet.' : item.last.channel === 'mail' ? `Report: ${item.last.title || 'Report'}` : item.last.text;
   return `<li class="chat-item${unread ? ' unread' : ''}"><button class="chat-row" type="button" data-chat-open="${esc(item.thread)}"${open ? ' aria-current="true"' : ''} aria-label="Open the ${esc(item.title)} chat${unread ? `. ${unread} unread message${unread === 1 ? '' : 's'}` : ''}">
     <span class="chat-avatar" aria-hidden="true">${esc(chatInitials(item.title))}</span>
-    <span class="chat-main"><span class="chat-name">${esc(item.title)}</span><span class="chat-preview">${item.last ? esc(item.last.text) : 'No messages yet.'}</span></span>
-    <span class="chat-side">${time ? `<span class="chat-time">${esc(time)}</span>` : ''}${badge}</span>
+    <span class="chat-main"><span class="chat-line-one"><span class="chat-name">${esc(item.title)}</span>${time ? `<span class="chat-time">${esc(time)}</span>` : ''}</span><span class="chat-line-two"><span class="chat-preview">${esc(preview)}</span>${badge}</span></span>
   </button></li>`;
 }
 
@@ -2033,7 +2049,7 @@ function chatConversationView() {
       : '<p class="chat-empty">No messages in this chat.</p>';
   const older = chat.more ? `<p class="chat-more">${chat.moreLoading ? 'Loading older messages…' : 'Scroll up for older messages.'}</p>` : '';
   const pill = chat.unseen ? `<button type="button" class="chat-new-pill" data-chat-new>${chat.unseen} new message${chat.unseen === 1 ? '' : 's'}</button>` : '';
-  return `<div class="chat-panel"><div class="chat-panel-head"><button type="button" class="chat-back" data-chat-back aria-label="Back to chats">Back</button><h2>${esc(title)}</h2></div><div class="chat-scroll" data-chat-scroll tabindex="0">${older}${bubbles}</div>${pill}<form class="chat-composer" data-chat-compose><label class="visually-hidden" for="chat-draft">Message to ${esc(title)}</label><div class="chat-composer-row"><textarea id="chat-draft" data-chat-draft maxlength="2000" rows="1" placeholder="Message…"></textarea><button type="submit"${chat.busy ? ' disabled' : ''}>Send</button></div><p class="chat-hint">Enter sends · Shift+Enter makes a new line</p></form></div>`;
+  return `<div class="chat-panel"><div class="chat-panel-head"><button type="button" class="chat-back" data-chat-back aria-label="Back to chats">Back</button><span class="chat-avatar" aria-hidden="true">${esc(chatInitials(title))}</span><h2>${esc(title)}</h2></div><div class="chat-scroll" data-chat-scroll tabindex="0">${older}${bubbles}</div>${pill}<form class="chat-composer" data-chat-compose><label class="visually-hidden" for="chat-draft">Message to ${esc(title)}</label><div class="chat-composer-row"><textarea id="chat-draft" data-chat-draft maxlength="2000" rows="1" placeholder="Message…"></textarea><button type="submit" class="chat-send" aria-label="Send"${chat.busy ? ' disabled' : ''}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 20 21 12 3.5 4v6l12 2-12 2v6Z"/></svg></button></div><p class="chat-hint">Enter sends · Shift+Enter makes a new line</p></form></div>`;
 }
 
 // The same rule as parseChoices in src/messages.js: the Markdown list items under a Choices heading.
@@ -2119,6 +2135,10 @@ function chatActionCard(record) {
 function chatBubble(record) {
   const owner = record.from === 'owner';
   const sender = MESSAGE_SENDER[record.from] || record.from;
+  // A mail report is not a chat message. The bubble holds one short line and a link to the Mailbox.
+  if (record.channel === 'mail') {
+    return `<li class="chat-report" data-chat-bubble="${esc(record.id)}" aria-label="${esc(chatBubbleLabel(sender, { ...record, text: `Report: ${record.title || 'Report'}` }, 'Open in Mailbox'))}"><span class="chat-report-text">Report: ${esc(record.title || 'Report')}</span><a class="chat-action-link" href="/mailbox?folder=updates">Open in Mailbox</a></li>`;
+  }
   // A closed item shows the answer that closed it, for example Approved 22:05.
   const answer = owner ? null : chatAnswerTo(record);
   const result = answer ? `${chatResultLabel(answer.text)} ${clock(answer.at)}` : record.closedAt ? `closed ${clock(record.closedAt)}` : '';
@@ -2131,7 +2151,7 @@ function chatBubble(record) {
   const text = isCard ? chatQuestionText(record.text) : record.text;
   const action = !owner && record.action ? `<a class="chat-action-link" href="/mailbox?thread=${encodeURIComponent(record.thread)}">Open in Mailbox</a>` : '';
   const retry = record.local && record.error ? `<p class="chat-bubble-retry"><button type="button" data-chat-retry="${esc(record.id)}">Retry</button></p>` : '';
-  return `<li class="chat-bubble${owner ? ' from-owner' : ' from-agent'}${card ? ' chat-card' : ''}" data-chat-bubble="${esc(record.id)}" aria-label="${esc(chatBubbleLabel(sender, { ...record, text }, state))}"><p class="chat-bubble-text">${esc(text)}</p><p class="chat-bubble-meta"><span>${esc(sender)} · ${esc(clock(record.at))}</span>${state ? ` · <span class="chat-state${tone}">${esc(state)}</span>` : ''}</p>${card}${action}${retry}</li>`;
+  return `<li class="chat-bubble${owner ? ' from-owner' : ' from-agent'}${card ? ' chat-card' : ''}" data-chat-bubble="${esc(record.id)}" aria-label="${esc(chatBubbleLabel(sender, { ...record, text }, state))}"><p class="chat-bubble-text">${esc(text)}</p><p class="chat-bubble-meta"><span class="chat-bubble-time">${esc(clock(record.at))}</span>${state ? ` <span class="chat-state${tone}">${esc(state)}</span>` : ''}</p>${card}${action}${retry}</li>`;
 }
 
 async function loadChats() {
@@ -3279,18 +3299,21 @@ const HELP = {
     <h3>Phone</h3><p>The top bar has a mail icon for unread Updates and an alert icon for open Needs-you items. Select an icon to open its folder. The desktop Mailbox badge shows unread Needs-you items.</p>
     <p>The folder pane shows the fixed limits: Herdr Boss keeps messages for 30 days and accepts at most 10 Owner messages a minute. A read-only preview shows messages and refuses a read or a send.</p>`],
   chat: ['Chat', `
-    <p>The Chat page shows one conversation for the Boss and one for each project orchestrator. Use the Mailbox for items that need an answer, an approval, or a decision. Use the Chat for a normal conversation.</p>
-    <h3>List</h3><p>Each row shows the title, the last message on one line, the time, and the unread count. The newest chat comes first. The menu badge shows the total unread count. The list follows the message stream. It never reloads the page.</p>
+    <p>The Chat page shows one conversation for the Boss and one for each project orchestrator. The page has no large heading. Above the conversation there is one slim header with the avatar and the chat name.</p>
+    <h3>Channels</h3><p><b>Chat</b> holds the conversation. A normal reply, an Owner message, a nudge, and a status request stay in Chat only. A reply that asks you for an <b>answer</b>, an <b>approval</b>, or a <b>decision</b> shows in Chat and in Mailbox <b>Needs you</b> while it is open. A <b>report</b> from the Boss is mail. It shows in Mailbox <b>Updates</b> and as one short line in Chat. A normal reply never shows in Updates.</p>
+    <h3>Top bar</h3><p>The top bar has three icons: chat unread, mail unread, and open action items. An icon with nothing to show is faded and has no count. An icon with something to show is bright and shows the count. <b>Needs action</b> is the most visible icon. The three icons are on a desktop and on a phone.</p>
+    <h3>Layout</h3><p>The chat is compact. A bubble has slim padding and no card frame. The time is 11 px. The composer is one line and grows to 6 lines. Its send button is a round button. A list row is 52 px high. The first line holds the title and the time. The second line holds the last message and the unread badge. The row keeps a touch target of at least 44 px on a phone.</p>
+    <h3>List</h3><p>Each row shows the title, the last message on one line, the time, and the unread count. A report shows as <b>Report: TITLE</b>. The newest chat comes first. The menu badge shows the total unread count. The list follows the message stream. It never reloads the page.</p>
     <h3>Conversation</h3><p>Select a row to open the chat. Your messages sit on the right, and the agent messages sit on the left. Each bubble shows the text and the time. Your bubble also shows the delivery state: <b>queued</b>, <b>delivered</b>, or <b>failed</b> with the reason. Opening a chat marks the messages to you as read.</p>
     <p>Scroll up to read older messages. The page asks for the page before the oldest message and keeps your reading position. It stops at the oldest message in the store. The store keeps messages for 30 days.</p>
     <p>A new message goes at the bottom. The page scrolls down only when you already read the newest message. Otherwise it shows a <b>new messages</b> pill. Select the pill to go to the newest message.</p>
-    <h3>Composer</h3><p>Select <b>Send</b> or press Enter to send the message. Select Shift and press Enter to make a new line. The text area grows with the text, up to 6 lines. A message holds at most 2000 characters. The service accepts at most 10 messages a minute.</p>
+    <h3>Composer</h3><p>Select the round send button or press Enter to send the message. Select Shift and press Enter to make a new line. The text area grows with the text, up to 6 lines. A message holds at most 2000 characters. The service accepts at most 10 messages a minute.</p>
     <p>The page shows your message as <b>queued</b> at once. The stored record replaces it when the service stores it. A refused send marks the bubble <b>failed</b> and shows <b>Retry</b>. Select <b>Retry</b> to send the same text again.</p>
     <h3>Action cards</h3><p>A message from an agent that asks for a decision shows as a normal bubble with one small button per option. The bubble holds a short question line. The page drops the choice list from the text, because the buttons hold the choices. A message with no real choice shows as a plain bubble with the <b>Open in Mailbox</b> link.</p>
     <p><b>Approve</b> and <b>Reject</b> answer an approval. <b>Later</b> only collapses the card. It writes nothing, and the Mailbox item stays open. A <b>decide</b> message with a Markdown list under a <b>Choices</b> heading shows one button for each choice. A decide with the choices <b>Yes</b> and <b>No</b> shows those two buttons. An <b>answer</b> message shows a one-line text field and <b>Send</b>.</p>
     <p>The card uses the same send route as the Mailbox. The item closes and the bubble shows the result, for example <b>Approved 22:05</b>. A closed item shows as a normal bubble with the result of the answer that closed it. Select <b>Open in Mailbox</b> to see the item in the Mailbox.</p>
     <h3>Keyboard</h3><p>The chat list is a list of buttons. The arrow keys, <b>Home</b>, and <b>End</b> move through the rows. Enter opens a chat. The focus then goes to the message field. <b>Escape</b> goes back to the list, and the focus goes to the row of the chat that was open. The message list is a live region, so a screen reader reads each new message once. Each bubble has a name with the sender, the time, the text, and the state.</p>
-    <h3>Phone</h3><p>The list fills the page. Select a chat to open it full screen. Select <b>Back</b> to return to the list. The card buttons are at least 44 px high.</p>
+    <h3>Phone</h3><p>The list fills the page. Select a chat to open it full screen. The slim header has the <b>Back</b> control. The card buttons and the send button are at least 44 px.</p>
     <p>A read-only preview shows the chats and refuses a send. It also refuses a read, so the unread count stays.</p>`],
   allocation: ['Allocation', `
     <p>The resource policy for all projects. Changes are a draft until you select <b>Apply policy</b>.</p>
