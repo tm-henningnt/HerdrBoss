@@ -17,7 +17,7 @@ import { listBrowserTabs, browserScreenshot, browserNavigate, browserNavigationS
 import { listHandoffs } from './handoff.js';
 import { roamgateAvailable, roamgateUrl } from './roamgate.js';
 import { createAccessControl, loginPage } from './access.js';
-import { appendMessage, closeMailboxItem, dismissMailboxItems, listThread, mailboxCounts, mailboxView, markMailboxRead, messagesWithReplyState, readMessages, validThread, validateOwnerSend } from './messages.js';
+import { appendMessage, closeMailboxItem, dismissMailboxItems, groupMessagesByConversation, listThread, mailboxCounts, mailboxFolders, mailboxView, markMailboxRead, messagesWithReplyState, readMessages, validThread, validateOwnerSend } from './messages.js';
 
 const PUBLIC = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const DOCS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'docs');
@@ -294,6 +294,31 @@ export function serve(cfg, { readOnlyPreview = false, createEngine = (config, op
       }
       if (p === '/api/mailbox' && req.method === 'GET') {
         const records = readMessages();
+        const folder = url.searchParams.get('folder');
+        const thread = url.searchParams.get('thread');
+        if (folder != null && !['needs-you', 'updates', 'sent', 'done'].includes(folder)) return send(res, 400, { error: 'Choose a mailbox folder: needs-you, updates, sent, or done.' });
+        if (thread != null) {
+          if (!validThread(thread)) return send(res, 400, { error: 'Choose a thread: boss or a project slug.' });
+          const conversationId = url.searchParams.get('conversation');
+          if (conversationId != null) {
+            const group = groupMessagesByConversation(records.filter((record) => record.thread === thread)).find((item) => item.id === conversationId);
+            if (!group) return send(res, 404, { error: 'This conversation is no longer in the mailbox.' });
+            const messages = messagesWithReplyState(group.records.slice(-200), records).map((record) => ({ ...record, conversationId: group.id }));
+            return send(res, 200, { thread, conversationId: group.id, messages });
+          }
+          const conversations = groupMessagesByConversation(records.filter((record) => record.thread === thread));
+          return send(res, 200, conversations.map((group) => ({
+            id: group.id,
+            thread: group.thread,
+            latestAt: group.latestAt,
+            messages: messagesWithReplyState(group.records.slice(-200), records).map((record) => ({ ...record, conversationId: group.id })),
+          })));
+        }
+        if (folder != null) {
+          const folders = mailboxFolders(records);
+          const items = folders[folder === 'needs-you' ? 'needsYou' : folder];
+          return send(res, 200, { ...folders, folder, items, mailbox: refreshMailbox(records) });
+        }
         return send(res, 200, { ...mailboxView(records), mailbox: refreshMailbox(records) });
       }
       if (p === '/api/handoffs' && req.method === 'GET') return send(res, 200, listHandoffs());

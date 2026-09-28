@@ -1111,21 +1111,36 @@ document.addEventListener('click', (e) => {
 // A state render replaces #app, so the typed answers live in mailDrafts and go back into the fields after each render.
 
 const MAIL_ACTION_LABEL = { answer: 'Answer', approve: 'Approve', decide: 'Decide', read: 'Read' };
-const MAIL_UPDATES_STORAGE_KEY = 'herdr-boss-mailbox-updates-collapsed';
-const mailbox = { needsYou: [], updates: [], done: [], loaded: false, loading: false, error: '', notice: '', counts: '', busy: false, status: {} };
-const mailOpen = new Set();
+const MAIL_FOLDER_KEY = 'herdr-boss-mailbox-folder';
+const MAIL_FOLDERS = ['needs-you', 'updates', 'sent', 'done'];
+const MAIL_FOLDER_LABEL = { 'needs-you': 'Needs you', updates: 'Updates', sent: 'Sent', done: 'Done' };
+const mailbox = { needsYou: [], updates: [], sent: [], done: [], updatesUnread: 0, folder: null, loaded: false, loading: false, error: '', notice: '', counts: '', busy: false, status: {}, currentConversation: null, conversationRecords: [], conversationLoading: false, conversationError: '', composing: false, composeDraft: '', composeThread: 'boss', replyDraft: '' };
 const mailReading = new Set();
 const mailSelected = new Set();
 const mailDrafts = {};
 
-function mailUpdatesCollapsed() {
-  try { return localStorage.getItem(MAIL_UPDATES_STORAGE_KEY) !== 'false'; }
-  catch { return true; }
+function resolveMailboxFolder(requested, remembered, needsYouCount) {
+  if (MAIL_FOLDERS.includes(requested)) return requested;
+  if (needsYouCount > 0) return 'needs-you';
+  return MAIL_FOLDERS.includes(remembered) ? remembered : 'needs-you';
 }
 
-function saveMailUpdatesCollapsed(collapsed) {
-  try { localStorage.setItem(MAIL_UPDATES_STORAGE_KEY, String(collapsed)); }
+function storedMailboxFolder() {
+  try { return localStorage.getItem(MAIL_FOLDER_KEY); }
+  catch { return null; }
+}
+
+function saveMailboxFolder(folder) {
+  try { localStorage.setItem(MAIL_FOLDER_KEY, folder); }
   catch { /* Storage can be unavailable in private or restricted browser modes. */ }
+}
+
+function mailboxFolderFromLocation() {
+  return resolveMailboxFolder(new URLSearchParams(location.search).get('folder'), storedMailboxFolder(), mailbox.needsYou.length);
+}
+
+function mailboxFolderUrl(folder) {
+  return `/mailbox?folder=${encodeURIComponent(folder)}`;
 }
 
 function mailProject(s, item) {
@@ -1181,46 +1196,62 @@ function mailDoneLine(item) {
 
 function mailItem(s, item, section) {
   const unread = !item.readAt;
-  const open = mailOpen.has(item.id);
   const done = section === 'done';
-  const update = section === 'updates';
-  const label = update ? 'Update' : MAIL_ACTION_LABEL[item.action] || 'Read';
-  const controls = done ? mailDoneLine(item) : update ? '' : mailActions(item);
+  const label = section === 'updates' ? 'Update' : section === 'sent' ? mailDeliveryState(item) : MAIL_ACTION_LABEL[item.action] || 'Read';
   const closeNote = done && item.closedBy === 'boss' ? `<span class="mail-headline mail-close-note">answered through the Boss: ${esc(item.closeNote || '')}</span>` : '';
-  const select = !done && !update ? `<label class="mail-select"><input type="checkbox" data-mail-select="${esc(item.id)}" aria-label="Select ${esc(mailHeadline(item))}" ${mailSelected.has(item.id) ? 'checked' : ''}></label>` : '';
-  const ownerMessage = item.ownerMessage
-    ? `<p class="sub mail-origin">Owner message · ${esc(mailDeliveryState(item.ownerMessage))}${item.ownerMessage.repliedAt ? ` · replied ${esc(clock(item.ownerMessage.repliedAt))}` : ''}</p>`
-    : '';
-  return `<li class="mail-item${unread ? ' unread' : ''}${done ? ' done' : ''}${update ? ' update' : ''}${select ? ' selectable' : ''}">${select}<details data-mail-item="${esc(item.id)}"${open ? ' open' : ''}>
-    <summary><span class="mail-meta">${unread ? '<span class="mail-dot" aria-hidden="true"></span><span class="visually-hidden">Unread. </span>' : ''}<strong>${esc(mailItemLabel(s, item))}</strong><span class="pill ghost mail-action-${esc(item.action)}">${esc(label)}</span><time datetime="${esc(item.at)}">${esc(clock(item.at))}</time></span>
-      <span class="mail-headline">${item.kind === 'report' ? '<span class="pill">Report</span> ' : ''}${esc(mailHeadline(item))}</span>${closeNote}</summary>
-    <div class="mail-body">${messageBody(item)}${ownerMessage}${controls}</div>
-  </details></li>`;
+  const select = section === 'needs-you' ? `<label class="mail-select"><input type="checkbox" data-mail-select="${esc(item.id)}" aria-label="Select ${esc(mailHeadline(item))}" ${mailSelected.has(item.id) ? 'checked' : ''}></label>` : '';
+  const replied = item.repliedAt ? ` · replied ${clock(item.repliedAt)}` : '';
+  return `<li class="mail-item${unread ? ' unread' : ''}${done ? ' done' : ''}${select ? ' selectable' : ''}">${select}<button class="mail-entry" type="button" data-mail-open data-mail-thread="${esc(item.thread)}" data-mail-conversation="${esc(item.conversationId || item.id)}" data-mail-item-id="${esc(item.id)}">
+    <span class="mail-meta">${unread && section !== 'sent' ? '<span class="mail-dot" aria-hidden="true"></span><span class="visually-hidden">Unread. </span>' : ''}<strong>${esc(mailItemLabel(s, item))}</strong><span class="pill ghost">${esc(label)}</span><time datetime="${esc(item.at)}">${esc(clock(item.at))}</time></span>
+    <span class="mail-headline">${item.kind === 'report' ? '<span class="pill">Report</span> ' : ''}${esc(mailHeadline(item))}</span>${closeNote}${section === 'sent' ? `<span class="mail-entry-state">${esc(mailDeliveryState(item))}${esc(replied)}</span>` : ''}
+  </button></li>`;
 }
 
 function mailboxView(s) {
   if (!mailbox.loaded && !mailbox.loading) loadMailbox();
-  const list = (items, section, empty) => items.length ? `<ol class="mail-list">${items.map((item) => mailItem(s, item, section)).join('')}</ol>` : `<p class="mail-empty">${empty}</p>`;
-  const updatesOpen = !mailUpdatesCollapsed();
+  const folder = mailboxFolderFromLocation();
+  if (mailbox.folder !== folder) {
+    mailbox.folder = folder;
+    mailbox.currentConversation = null;
+    mailbox.conversationRecords = [];
+    mailbox.composing = false;
+  }
+  const items = mailbox[folder === 'needs-you' ? 'needsYou' : folder] || [];
+  const counts = { 'needs-you': mailbox.needsYou.length, updates: mailbox.updates.length, sent: mailbox.sent.length, done: mailbox.done.length };
+  const folderNav = `<nav class="mail-folder-nav" aria-label="Mailbox folders">${MAIL_FOLDERS.map((key) => `<a href="${mailboxFolderUrl(key)}"${folder === key ? ' aria-current="page"' : ''}><span>${esc(MAIL_FOLDER_LABEL[key])}</span><span class="mail-folder-count">${counts[key] || 0}</span></a>`).join('')}</nav>`;
   const allSelected = mailbox.needsYou.length > 0 && mailbox.needsYou.every((item) => mailSelected.has(item.id));
   const selected = mailbox.needsYou.filter((item) => mailSelected.has(item.id)).length;
   const bulk = mailbox.needsYou.length ? `<div class="mail-bulk"><label><input type="checkbox" data-mail-select-all ${allSelected ? 'checked' : ''} aria-label="Select all Needs-you items"> Select all</label><button type="button" data-mail-dismiss-selected ${mailbox.busy || !selected ? 'disabled' : ''}>Dismiss selected${selected ? ` (${selected})` : ''}</button></div>` : '';
+  const empty = folder === 'needs-you' && mailbox.needsYou.length === 0
+    ? `<p class="mail-empty">Nothing needs you.</p><p class="mail-empty-next">${mailbox.updates.length} ${mailbox.updates.length === 1 ? 'update' : 'updates'} · <a href="${mailboxFolderUrl('updates')}">Open Updates</a></p>`
+    : `<p class="mail-empty">${folder === 'updates' ? 'No updates.' : folder === 'sent' ? 'No sent messages.' : 'No completed items.'}</p>`;
+  const list = mailbox.loaded && items.length ? `<ol class="mail-list">${items.map((item) => mailItem(s, item, folder)).join('')}</ol>` : mailbox.loaded ? empty : '<p class="mail-empty">Loading…</p>';
+  const selectedConversation = mailbox.currentConversation;
+  const conversationPanel = mailbox.composing
+    ? mailComposeView(s)
+    : selectedConversation
+      ? mailConversationView(s)
+      : '<section class="mail-reading-empty"><p>Select a conversation to read it.</p></section>';
   return [
-    '<header class="page-intro"><div><h1>Mailbox</h1><p>Items that need your action come first. Open Updates for information.</p></div></header>',
+    `<header class="page-intro"><div><h1>Mailbox</h1><p>Read and reply to messages from the Boss and project orchestrators.</p></div><button type="button" data-mail-compose-open${mailbox.busy ? ' disabled' : ''}>New message</button></header>`,
     `<p class="mail-notice" role="status"${mailbox.error || mailbox.notice ? '' : ' hidden'}>${esc(mailbox.error || mailbox.notice)}</p>`,
-    `<section class="mail-section"><h2>Needs you <span class="sub">${mailbox.needsYou.length}</span></h2>${mailbox.loaded ? `${bulk}${list(mailbox.needsYou, 'needsYou', 'Nothing needs your action.')}` : '<p class="mail-empty">Loading…</p>'}</section>`,
-    `<section class="mail-section"><details class="mail-updates" data-mail-updates${updatesOpen ? ' open' : ''}><summary><h2>Updates <span class="sub">${mailbox.updates.length}</span></h2></summary>${mailbox.loaded ? list(mailbox.updates, 'updates', 'No updates.') : '<p class="mail-empty">Loading…</p>'}</details></section>`,
-    `<section class="mail-section"><h2>Done <span class="sub">${mailbox.done.length}</span></h2>${mailbox.loaded ? list(mailbox.done, 'done', 'No closed items.') : ''}</section>`,
+    `<div class="mailbox-layout${selectedConversation || mailbox.composing ? ' conversation-open' : ''}"><aside class="mail-folder-pane">${folderNav}</aside><section class="mail-list-pane" aria-label="${esc(MAIL_FOLDER_LABEL[folder])}"><div class="mail-list-head"><h2>${esc(MAIL_FOLDER_LABEL[folder])}<span class="sub">${counts[folder] || 0}</span></h2></div>${folder === 'needs-you' ? bulk : ''}${list}</section><section class="mail-conversation-pane">${conversationPanel}</section></div>`,
   ].join('');
 }
 
 async function loadMailbox() {
   mailbox.loading = true;
   try {
-    const response = await fetch('/api/mailbox');
+    const folder = mailboxFolderFromLocation();
+    const response = await fetch(`/api/mailbox?folder=${encodeURIComponent(folder)}`);
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || 'The mailbox could not be read.');
-    Object.assign(mailbox, { needsYou: result.needsYou, updates: result.updates, done: result.done, loaded: true, error: '', counts: JSON.stringify(result.mailbox) });
+    Object.assign(mailbox, { needsYou: result.needsYou, updates: result.updates, sent: result.sent, done: result.done, updatesUnread: result.updatesUnread, loaded: true, error: '', counts: JSON.stringify(result.mailbox) });
+    const requested = new URLSearchParams(location.search).get('folder');
+    const resolved = resolveMailboxFolder(requested, storedMailboxFolder(), mailbox.needsYou.length);
+    mailbox.folder = resolved;
+    saveMailboxFolder(resolved);
+    if (!requested || !MAIL_FOLDERS.includes(requested)) history.replaceState(null, '', mailboxFolderUrl(resolved));
     for (const id of mailSelected) if (!mailbox.needsYou.some((item) => item.id === id)) mailSelected.delete(id);
     if (state) state.mailbox = result.mailbox;
   } catch (error) { mailbox.error = error.message; }
@@ -1229,6 +1260,102 @@ async function loadMailbox() {
 }
 
 function mailFind(id) { return mailbox.needsYou.find((item) => item.id === id) || mailbox.updates.find((item) => item.id === id) || mailbox.done.find((item) => item.id === id); }
+
+function mailComposeView(s) {
+  const projects = Object.values(s.control?.projects || {}).filter((project) => project.orch?.pane).map((project) => ({ thread: project.slug, name: project.label || project.slug }));
+  const options = [{ thread: 'boss', name: 'Boss' }, ...projects].map((item) => `<option value="${esc(item.thread)}"${mailbox.composeThread === item.thread ? ' selected' : ''}>${esc(item.name)}</option>`).join('');
+  return `<section class="mail-compose"><div class="mail-panel-head"><button type="button" class="mail-back" data-mail-back>Back</button><h2>New message</h2></div><form data-mail-compose><label for="mail-compose-recipient">To</label><select id="mail-compose-recipient" name="thread">${options}</select><label for="mail-compose-text">Message</label><textarea id="mail-compose-text" data-mail-compose-draft maxlength="2000" rows="8" required>${esc(mailbox.composeDraft)}</textarea><div class="mail-compose-actions"><button type="submit"${mailbox.busy ? ' disabled' : ''}>Send</button></div><p class="mail-status" role="status">${esc(mailbox.status.compose || '')}</p></form></section>`;
+}
+
+function mailConversationView(s) {
+  const selected = mailbox.currentConversation;
+  const records = mailbox.conversationRecords;
+  const titleRecord = [...records].reverse().find((record) => record.to === 'owner') || records.at(-1);
+  const title = titleRecord ? mailItemLabel(s, titleRecord) : selected.thread === 'boss' ? 'Boss' : s.control?.projects?.[selected.thread]?.label || selected.thread;
+  const messages = mailbox.conversationLoading ? '<p class="mail-empty">Loading conversation…</p>' : mailbox.conversationError ? `<p class="mail-error" role="alert">${esc(mailbox.conversationError)}</p>` : records.length ? `<ol class="mail-conversation">${records.map((record) => mailConversationMessage(s, record)).join('')}</ol>` : '<p class="mail-empty">No messages in this conversation.</p>';
+  const lastAgent = [...records].reverse().find((record) => ['boss', 'orch'].includes(record.from) && record.to === 'owner');
+  const replyTo = lastAgent && !lastAgent.closedAt ? lastAgent.id : '';
+  return `<section class="mail-reading"><div class="mail-panel-head"><button type="button" class="mail-back" data-mail-back aria-label="Back to ${esc(MAIL_FOLDER_LABEL[mailbox.folder])}">Back</button><h2>${esc(title)}</h2></div><div class="mail-conversation-scroll">${messages}</div><form class="mail-reply" data-mail-reply data-mail-thread="${esc(selected.thread)}" data-mail-reply-to="${esc(replyTo)}"><label for="mail-reply-text">Reply</label><textarea id="mail-reply-text" data-mail-reply-draft maxlength="2000" rows="3" required>${esc(mailbox.replyDraft)}</textarea><div><span class="sub">${replyTo ? 'Replies to the last message.' : 'Starts a new message in this thread.'}</span><button type="submit"${mailbox.busy ? ' disabled' : ''}>Send</button></div><p class="mail-status" role="status">${esc(mailbox.status.reply || '')}</p></form></section>`;
+}
+
+function mailConversationMessage(s, record) {
+  const owner = record.from === 'owner';
+  const item = mailFind(record.id);
+  const headline = record.kind === 'report' ? record.title || 'Report' : mailHeadline(record);
+  const meta = `${mailItemLabel(s, record)} · ${clock(record.at)}`;
+  const delivery = owner ? mailDeliveryState(record) : record.action ? `Action: ${record.action}` : '';
+  const status = delivery ? `<p class="mail-message-state">${esc(delivery)}${owner && record.repliedAt ? ` · replied ${esc(clock(record.repliedAt))}` : ''}</p>` : '';
+  const controls = item && item.closedAt ? mailDoneLine(item) : item && ['answer', 'approve', 'decide'].includes(item.action) ? mailActions(item) : '';
+  return `<li><article class="mail-message${owner ? ' from-owner' : ''}"><header class="mail-message-head"><strong>${esc(meta)}</strong><span>${esc(headline)}</span></header>${messageBody(record)}${status}${controls}</article></li>`;
+}
+
+async function loadMailboxConversation(thread, conversation) {
+  mailbox.conversationLoading = true;
+  mailbox.conversationError = '';
+  try {
+    const response = await fetch(`/api/mailbox?thread=${encodeURIComponent(thread)}&conversation=${encodeURIComponent(conversation)}`);
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'The conversation could not be read.');
+    if (mailbox.currentConversation?.thread !== thread || mailbox.currentConversation?.id !== conversation) return;
+    mailbox.conversationRecords = result.messages;
+  } catch (error) { mailbox.conversationError = error.message; }
+  finally { mailbox.conversationLoading = false; }
+  render();
+}
+
+function openMailboxConversation(thread, conversation, itemId) {
+  mailbox.composing = false;
+  mailbox.composeDraft = '';
+  mailbox.replyDraft = '';
+  mailbox.currentConversation = { thread, id: conversation };
+  mailbox.conversationRecords = [];
+  const item = mailFind(itemId);
+  render();
+  if (item) mailOpened(item);
+  loadMailboxConversation(thread, conversation);
+}
+
+async function mailSendReply(form) {
+  const thread = form.dataset.mailThread;
+  const replyTo = form.dataset.mailReplyTo || null;
+  const text = mailbox.replyDraft.trim();
+  if (!text || mailbox.busy || !confirm(`Send this reply to ${thread === 'boss' ? 'the Boss' : mailProject(state || {}, { thread })}?\n\n${text}`)) return;
+  mailbox.busy = true;
+  mailbox.status.reply = 'Sending…';
+  render();
+  try {
+    await postJson('/api/messages', { thread, kind: 'message', text, ...(replyTo ? { replyTo } : {}) });
+    mailbox.replyDraft = '';
+    mailbox.status.reply = 'Queued. Herdr Boss delivers it when the agent is working, idle, or done.';
+    await loadMailbox();
+    if (mailbox.currentConversation) await loadMailboxConversation(thread, mailbox.currentConversation.id);
+  } catch (error) { mailbox.status.reply = error.message; render(); }
+  finally { mailbox.busy = false; render(); }
+}
+
+async function mailSendNewMessage(form) {
+  const thread = form.elements.thread.value;
+  const text = mailbox.composeDraft.trim();
+  const name = thread === 'boss' ? 'the Boss' : mailProject(state || {}, { thread });
+  if (!text || mailbox.busy || !confirm(`Send this message to ${name}?\n\n${text}`)) return;
+  mailbox.busy = true;
+  mailbox.status.compose = 'Sending…';
+  render();
+  try {
+    const result = await postJson('/api/messages', { thread, kind: 'message', text });
+    mailbox.composeDraft = '';
+    mailbox.composeThread = thread;
+    mailbox.composing = false;
+    mailbox.currentConversation = { thread, id: result.message.id };
+    if (mailbox.folder !== 'sent') history.pushState(null, '', mailboxFolderUrl('sent'));
+    mailbox.folder = 'sent';
+    saveMailboxFolder('sent');
+    mailbox.notice = 'Message queued.';
+    await loadMailbox();
+    await loadMailboxConversation(thread, result.message.id);
+  } catch (error) { mailbox.status.compose = error.message; mailbox.composing = true; render(); }
+  finally { mailbox.busy = false; render(); }
+}
 
 async function mailMarkRead(item) {
   const result = await postJson('/api/messages/read', { ids: [item.id] });
@@ -1240,7 +1367,7 @@ async function mailMarkRead(item) {
 async function mailOpened(item) {
   if (item.readAt || mailReading.has(item.id)) return;
   mailReading.add(item.id);
-  try { await mailMarkRead(item); item.readAt = new Date().toISOString(); }
+  try { await mailMarkRead(item); item.readAt = new Date().toISOString(); mailbox.updatesUnread = mailbox.updates.filter((record) => !record.readAt).length; }
   catch (error) { mailbox.status[item.id] = error.message; }
   finally { mailReading.delete(item.id); }
   render();
@@ -1253,11 +1380,11 @@ async function mailSend(item, text, question) {
     await postJson('/api/messages', { thread: item.thread, kind: 'message', text, replyTo: item.id });
     delete mailDrafts[item.id];
     delete mailbox.status[item.id];
-    mailOpen.delete(item.id);
     mailbox.notice = `Queued for ${mailItemLabel(state || {}, item)}. Herdr Boss delivers it when the agent is working, idle, or done. The item is in Done.`;
   } catch (error) { mailbox.status[item.id] = error.message; }
   finally { mailbox.busy = false; }
   await loadMailbox();
+  if (mailbox.currentConversation) await loadMailboxConversation(mailbox.currentConversation.thread, mailbox.currentConversation.id);
 }
 
 async function mailDismiss(items) {
@@ -1271,7 +1398,6 @@ async function mailDismiss(items) {
     await postJson('/api/messages/dismiss', { ids: items.map((item) => item.id) });
     for (const item of items) {
       mailSelected.delete(item.id);
-      mailOpen.delete(item.id);
       delete mailDrafts[item.id];
       delete mailbox.status[item.id];
     }
@@ -1279,16 +1405,23 @@ async function mailDismiss(items) {
   } catch (error) { mailbox.notice = error.message; }
   finally { mailbox.busy = false; }
   await loadMailbox();
+  if (mailbox.currentConversation) await loadMailboxConversation(mailbox.currentConversation.thread, mailbox.currentConversation.id);
 }
 
 function mailRestoreDrafts(focusId) {
   for (const field of $app.querySelectorAll('[data-mail-draft]')) field.value = mailDrafts[field.dataset.mailDraft] || '';
+  const compose = $app.querySelector('[data-mail-compose-draft]');
+  if (compose) compose.value = mailbox.composeDraft;
+  const reply = $app.querySelector('[data-mail-reply-draft]');
+  if (reply) reply.value = mailbox.replyDraft;
   if (focusId) document.getElementById(focusId)?.focus();
 }
 
 document.addEventListener('input', (e) => {
   const id = e.target.dataset?.mailDraft;
   if (id) mailDrafts[id] = e.target.value;
+  if (e.target.matches?.('[data-mail-compose-draft]')) mailbox.composeDraft = e.target.value;
+  if (e.target.matches?.('[data-mail-reply-draft]')) mailbox.replyDraft = e.target.value;
 });
 document.addEventListener('change', (e) => {
   if (e.target.matches?.('[data-mail-select]')) {
@@ -1300,19 +1433,13 @@ document.addEventListener('change', (e) => {
     if (e.target.checked) for (const item of mailbox.needsYou) mailSelected.add(item.id);
     else mailSelected.clear();
     render();
+  } else if (e.target.matches?.('#mail-compose-recipient')) {
+    mailbox.composeThread = e.target.value;
   }
 });
-document.addEventListener('toggle', (e) => {
-  if (e.target.matches?.('details[data-mail-updates]')) {
-    saveMailUpdatesCollapsed(!e.target.open);
-    return;
-  }
-  const id = e.target.dataset?.mailItem;
-  if (!id || !e.target.matches('details')) return;
-  if (e.target.open) { mailOpen.add(id); const item = mailFind(id); if (item) mailOpened(item); }
-  else mailOpen.delete(id);
-}, true);
 document.addEventListener('submit', (e) => {
+  if (e.target.matches?.('[data-mail-compose]')) { e.preventDefault(); mailSendNewMessage(e.target); return; }
+  if (e.target.matches?.('[data-mail-reply]')) { e.preventDefault(); mailSendReply(e.target); return; }
   const id = e.target.dataset?.mailForm;
   if (!id) return;
   e.preventDefault();
@@ -1325,6 +1452,25 @@ document.addEventListener('submit', (e) => {
   else if (note) mailSend(item, note, `Send this answer to ${who}?\n\n${note}`);
 });
 document.addEventListener('click', (e) => {
+  if (e.target.closest?.('[data-mail-compose-open]')) {
+    mailbox.composing = true;
+    mailbox.currentConversation = null;
+    mailbox.conversationRecords = [];
+    mailbox.status.compose = '';
+    render();
+    return;
+  }
+  if (e.target.closest?.('[data-mail-back]')) {
+    mailbox.composing = false;
+    mailbox.currentConversation = null;
+    mailbox.conversationRecords = [];
+    mailbox.replyDraft = '';
+    mailbox.status.compose = '';
+    render();
+    return;
+  }
+  const open = e.target.closest?.('[data-mail-open]');
+  if (open) { openMailboxConversation(open.dataset.mailThread, open.dataset.mailConversation, open.dataset.mailItemId); return; }
   const dismiss = e.target.closest?.('[data-mail-dismiss]');
   if (dismiss) {
     const item = mailFind(dismiss.dataset.mailDismiss);
@@ -1347,11 +1493,19 @@ document.addEventListener('click', (e) => {
 
 function updateMailboxBadge(s) {
   const unread = s?.mailbox?.needsYouUnread ?? s?.mailbox?.unread ?? 0;
-  const text = unread > 99 ? '99+' : String(unread);
-  for (const badge of document.querySelectorAll('[data-mailbox-badge]')) { badge.hidden = !unread; badge.textContent = text; }
+  const needsCount = s?.mailbox?.needsYou ?? s?.mailbox?.open ?? 0;
+  const unreadUpdates = mailbox.updatesUnread || 0;
+  const text = (count) => count > 99 ? '99+' : String(count);
+  for (const badge of document.querySelectorAll('[data-mailbox-badge]')) { badge.hidden = !unread; badge.textContent = text(unread); }
   const link = $nav.querySelector('[data-nav="mailbox"]');
   if (link) link.setAttribute('aria-label', unread ? `Mailbox, ${unread} unread` : 'Mailbox');
   $navMenu.setAttribute('aria-label', unread ? `Menu, ${unread} unread in Mailbox` : 'Menu');
+  for (const badge of document.querySelectorAll('[data-updates-badge]')) { badge.hidden = !unreadUpdates; badge.textContent = text(unreadUpdates); }
+  for (const badge of document.querySelectorAll('[data-needs-you-badge]')) { badge.hidden = !needsCount; badge.textContent = text(needsCount); }
+  const updatesShortcut = document.querySelector('[data-mail-shortcut="updates"]');
+  const needsShortcut = document.querySelector('[data-mail-shortcut="needs-you"]');
+  if (updatesShortcut) updatesShortcut.setAttribute('aria-label', unreadUpdates ? `Updates, ${unreadUpdates} unread` : 'Updates');
+  if (needsShortcut) needsShortcut.setAttribute('aria-label', needsCount ? `Needs you, ${needsCount} items` : 'Needs you');
 }
 
 // ---------- Organization ----------
@@ -2015,15 +2169,16 @@ const HELP = {
     <h3>Stale status</h3><p><b>Status stale: AGE</b> shows next to the updated time when the published status is older than 2 hours and, after that publish, a worker was working in the last 2 hours or new commits landed on the project repository. A paused project is never stale. The orchestrator gets one notice for each stale status. Publish the current plan and progress to clear the mark.</p>
     <p>The data comes from the project's status file. When a section is missing, the orchestrator has not published those fields.</p>`],
   mailbox: ['Mailbox', `
-    <p>One inbox for every reply and report to the Owner. The Boss and the project orchestrators write them with <code>herdr-boss say</code>, and the Boss posts reports with <code>herdr-boss mail post</code>. The Boss can close an item with <code>herdr-boss mail close</code> when the Owner answered through the Boss.</p>
-    <h3>Items</h3><p><b>Needs you</b> lists open items with action <code>answer</code>, <code>approve</code>, or <code>decide</code>, newest first. Each item shows its project or Boss, what it asks, and its answer controls. Select one or more items to dismiss them without an answer, or select <b>Dismiss</b> on one item. The page asks you to confirm. Dismissal sends nothing. <b>Done</b> lists closed action items and items that the Boss closed, with your answer, dismissal, or the Boss note.</p>
-    <p><b>Updates</b> lists information items below Needs you. An item with action <code>read</code>, or with no action, is an update. Updates start collapsed. The count shows all updates. Updates have no badge. Opening an update marks it read. It stays under Updates until the Boss closes it. You do not need to mark it read.</p>
-    <p>Select an item to open it. The item shows the full text. A report shows as formatted Markdown. A reply shows as plain text. Opening an item marks it read.</p>
-    <h3>Actions</h3><p><b>Answer</b>: type an answer and select <b>Send</b>. <b>Approve</b>: select <b>Approve</b> or <b>Decline</b>. A note is optional. <b>Decide</b>: select a choice, or type an answer and select <b>Send</b>. The choice buttons appear when the item has a Markdown list under a <b>Choices</b> heading.</p>
-    <p>The page asks you to confirm each send. The answer goes to the thread of the sender, the same way as a message from the Organization page. Herdr Boss delivers it when the agent is working, idle, or done. Then the item moves to <b>Done</b>.</p>
-    <p>The Mailbox shows Owner-message delivery and reply times. It shows queued, delivered, failed, and relay states.</p>
-    <h3>Badge</h3><p>The number next to <b>Mailbox</b> shows open Needs-you items that you have not opened. It does not count Updates. On a phone, the number also shows on the menu button.</p>
-    <p>Herdr Boss keeps the items for 30 days. A read-only preview shows the items and refuses a read or a send.</p>`],
+    <p>Use the folders to read messages from the Boss and project orchestrators. The page groups each conversation by its project or the Boss and by its reply chain.</p>
+    <h3>Folders</h3><p><b>Needs you</b> is the default folder when an open item needs an answer, approval, or decision. Select an item to open its conversation. Select one or more checkboxes to dismiss items without an answer. The page asks you to confirm. Dismissal sends nothing.</p>
+    <p><b>Updates</b> holds open information items with action <code>read</code> or no action. Opening an item marks it read. <b>Sent</b> holds your messages. It shows queued, delivered, failed, and relayed state, and the reply time. <b>Done</b> holds closed or dismissed items and relayed messages.</p>
+    <p>The folder stays in the page address. The page remembers your last folder. When Needs you has items, it opens that folder by default. When it is empty, the page says <b>Nothing needs you</b> and links to Updates.</p>
+    <h3>Conversations</h3><p>The conversation shows Owner and agent messages in time order. A report shows as formatted Markdown. A reply shows as plain text. Opening an item marks it read. On a phone, select <b>Back</b> to return to the folder list.</p>
+    <p>Use the reply box to answer the last agent message. The page asks you to confirm each send. Herdr Boss delivers the message when the agent is working, idle, or done.</p>
+    <h3>Actions</h3><p><b>Answer</b>: type an answer and select <b>Send</b>. <b>Approve</b>: select <b>Approve</b> or <b>Decline</b>. A note is optional. <b>Decide</b>: select a choice, or type an answer and select <b>Send</b>. Choice buttons appear when the message has a Markdown list under a <b>Choices</b> heading. Each answer uses the same delivery limit and safety checks as a new message. An answered item moves to <b>Done</b>.</p>
+    <h3>Compose</h3><p>Select <b>New message</b> to write to the Boss or a project with an <code>orch</code> pane. The page asks you to confirm before it sends. The new conversation opens in <b>Sent</b>.</p>
+    <h3>Phone</h3><p>The top bar has a mail icon for unread Updates and an alert icon for open Needs-you items. Select an icon to open its folder. The desktop Mailbox badge shows unread Needs-you items.</p>
+    <p>Herdr Boss keeps messages for 30 days. A read-only preview shows messages and refuses a read or a send.</p>`],
   allocation: ['Allocation', `
     <p>The resource policy for all projects. Changes are a draft until you select <b>Apply policy</b>.</p>
     <h3>Capacity and handover</h3><p>The global limit of working agents, the lending of unused slots, the quota reserve, and automatic handover with its activation level.</p>
@@ -2145,7 +2300,8 @@ function render(force = false) {
   }
   updateMailboxBadge(state);
   if (html !== lastRender) {
-    const focusId = document.activeElement?.dataset?.mailDraft ? document.activeElement.id : null;
+    const active = document.activeElement;
+    const focusId = active?.dataset?.mailDraft || active?.matches?.('[data-mail-compose-draft], [data-mail-reply-draft]') ? active.id : null;
     $app.innerHTML = html;
     lastRender = html;
     if (route === 'mailbox') mailRestoreDrafts(focusId);
@@ -2847,7 +3003,7 @@ async function refreshRoamgate() {
   } catch { $roamgate.hidden = true; }
 }
 async function refreshExtras() {
-  const results = await Promise.allSettled(['/api/models', '/api/usage', '/api/browser-sessions', '/api/handoffs', '/api/denials'].map((url) => fetch(url).then((r) => r.json())));
+  const results = await Promise.allSettled(['/api/models', '/api/usage', '/api/browser-sessions', '/api/handoffs', '/api/denials', '/api/mailbox?folder=needs-you'].map((url) => fetch(url).then((r) => r.json())));
   if (results[0].status === 'fulfilled') models = results[0].value;
   if (results[1].status === 'fulfilled') usage = results[1].value;
   if (results[2].status === 'fulfilled') {
@@ -2859,6 +3015,7 @@ async function refreshExtras() {
   }
   if (results[3].status === 'fulfilled') handoffRecords = results[3].value;
   if (results[4].status === 'fulfilled') denials = results[4].value;
+  if (results[5].status === 'fulfilled') mailbox.updatesUnread = results[5].value.updatesUnread || 0;
   if (location.pathname === '/mailbox' && !mailbox.loading) await loadMailbox();
   lastRender = '';
   render();
