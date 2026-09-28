@@ -290,6 +290,10 @@ export class Engine extends EventEmitter {
         updatedAt: new Date(now).toISOString(),
         quotasAt: this.quotasAt ? new Date(this.quotasAt).toISOString() : null,
         quotas: this.quotas || [],
+        quotaThresholds: {
+          warnPercent: this.cfg.quota?.warnPercent ?? 90,
+          criticalPercent: this.cfg.quota?.criticalPercent ?? 98,
+        },
         quotasCached: this.quotasCached,
         machine,
         worktreeCounts: this.worktreeCounts,

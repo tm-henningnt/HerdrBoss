@@ -546,6 +546,20 @@ test('quota cards show the shared pacing goal text in each window and the trickl
   assert.match(app, /Trickle allowance: about \$\{lane\.allowancePercent\.toFixed\(1\)\}%\/day.*?\$\{esc\(trickleGoalText\)\}/s);
 });
 
+test('quota colors use configured thresholds and Settings shows their values', () => {
+  const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  assert.doesNotMatch(app, /usedPercent\s*>=\s*(?:98|90|70)\b/, 'quota colors do not use fixed thresholds');
+  assert.match(app, /state\?\.quotaThresholds|s\?\.quotaThresholds/);
+  assert.match(app, /fallback = \{ warnPercent: 90, criticalPercent: 98 \}/);
+  assert.match(app, /quotaThresholds\(s, \{ warnPercent: 70, criticalPercent: 90 \}\)/);
+  assert.match(app, /w\.usedPercent >= thresholds\.criticalPercent/);
+  assert.match(app, /w\.usedPercent >= thresholds\.warnPercent/);
+  assert.match(app, /quota\.usedPercent >= quota\.criticalPercent[^\n]+quota\.usedPercent >= quota\.warnPercent/);
+  assert.match(app, /Quota warning at \$\{esc\(warnPercent\)\}%, critical at \$\{esc\(criticalPercent\)\}%. Set them in config\.json\./);
+  const settingsHelp = /settings: \['Settings', `([\s\S]*?)`\],\s+agents:/.exec(app)?.[1] || '';
+  assert.match(settingsHelp, /quota colors use the warning and critical values from <code>config\.json<\/code>/i);
+});
+
 test('organization cards show an unavailable or stale quota bar, and the header keeps the brand and the updated text on one line', () => {
   const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
   const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
