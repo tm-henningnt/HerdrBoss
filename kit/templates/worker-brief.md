@@ -140,7 +140,7 @@ For a visual check of a served page, use the project browser. Every worker kind 
 2. Run `herdr-boss browser request <project>`.
 3. Run `herdr-boss browser tab new <project> http://127.0.0.1:<port>/<page>`. Note the tab id.
 4. For an exact size, run `herdr-boss browser viewport <project> --tab <id> <width>x<height>`. Run it with `--reset` before you close the tab.
-5. Run `herdr-boss browser screenshot <project> --tab <id>`. Use `navigate`, `click`, `key`, and `text` as needed.
+5. Run `herdr-boss browser screenshot <project> --tab <id>`. Use `navigate`, `click`, `key`, and `text` as needed. To check a drag, run `herdr-boss browser drag <project> <x1>% <y1>% <x2>% <y2>% --tab <id>`, then take a screenshot.
 6. Run `herdr-boss browser tab close <project> --tab <id>`.
 7. Stop the server. Release a leased port with `herdr-boss lease release serve-ports <port>`.
 

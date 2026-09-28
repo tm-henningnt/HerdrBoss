@@ -83,6 +83,7 @@ const USAGE = `herdr-boss <command>
   browser screenshot SLUG [--tab ID] [--out DIR]  Save a private JPEG and print its path.
   browser navigate SLUG URL [--tab ID]  Open an HTTP(S) page.
   browser click SLUG X% Y% [--tab ID]  Click at screenshot-relative percentages.
+  browser drag SLUG X1% Y1% X2% Y2% [--tab ID] [--steps N]  Press at the first position, move to the second, and release. N is 1 to 60 and defaults to 10.
   browser text SLUG --stdin [--tab ID]  Send text from standard input without echoing it.
   browser key SLUG KEY [--tab ID]  Send Tab, Enter, Backspace, arrow keys, etc.
   browser bookmarks SLUG list  List the project bookmarks and the start page.
@@ -279,7 +280,7 @@ async function main() {
     case 'browser': {
       const { parseScreenshotOptions, saveBrowserScreenshot } = await import('./browser-output.js');
       const { requestBrowser, listBrowserSessions, browserStatus, setBrowserWindowSize, closeBrowser, restartBrowser, releaseBrowser, listBookmarks, addBookmark, removeBookmark, setStartPage } = await import('./browser-pool.js');
-      const { listBrowserTabs, browserScreenshot, browserNavigate, browserClick, browserInsertText, browserKey, browserViewport, browserNewTab, browserCloseTab } = await import('./browser-preview.js');
+      const { listBrowserTabs, browserScreenshot, browserNavigate, browserClick, browserDrag, browserInsertText, browserKey, browserViewport, browserNewTab, browserCloseTab } = await import('./browser-preview.js');
       const tabOption = (rest) => {
         if (!rest.length) return null;
         if (rest.length !== 2 || rest[0] !== '--tab' || !rest[1]) throw new Error('Use --tab ID to select a browser page.');
@@ -296,9 +297,9 @@ async function main() {
         if (tabs.length !== 1) throw new Error('Several pages are open. Run browser tabs and specify --tab ID.');
         return tabs[0].id;
       };
-      const percent = (value) => {
+      const percent = (value, subject = 'Click coordinates') => {
         const match = /^(?:100(?:\.0+)?|\d{1,2}(?:\.\d+)?)%$/.exec(value || '');
-        if (!match) throw new Error('Click coordinates must be percentages from 0% to 100%, for example 42% 65%.');
+        if (!match) throw new Error(`${subject} must be percentages from 0% to 100%, for example 42% 65%.`);
         return Number(value.slice(0, -1)) / 100;
       };
       if (args[0] === 'sweep-clones' && (args.length === 1 || (args.length === 2 && args[1] === '--dry-run'))) {
@@ -389,6 +390,23 @@ async function main() {
         await browserClick(args[1], tab, percent(args[2]), percent(args[3]));
         console.log('Click sent.');
       }
+      else if (args[0] === 'drag' && args[1] && args[2] && args[3] && args[4] && args[5]) {
+        await verifyBrowserCaller(args[1]);
+        const rest = args.slice(6);
+        let steps = 10;
+        const at = rest.indexOf('--steps');
+        if (at >= 0) {
+          if (rest.length !== at + 2 || rest.indexOf('--steps', at + 1) >= 0) throw new Error('Use --steps N with N from 1 to 60.');
+          const value = rest[at + 1];
+          if (!/^\d{1,2}$/.test(value) || Number(value) < 1 || Number(value) > 60) throw new Error('Drag steps must be from 1 to 60.');
+          steps = Number(value);
+          rest.splice(at, 2);
+        }
+        const tab = await selectedTab(args[1], rest);
+        await browserDrag(args[1], tab, { x: percent(args[2], 'Drag coordinates'), y: percent(args[3], 'Drag coordinates') },
+          { x: percent(args[4], 'Drag coordinates'), y: percent(args[5], 'Drag coordinates') }, { steps });
+        console.log('Drag sent.');
+      }
       else if (args[0] === 'text' && args[1] && args[2] === '--stdin') {
         await verifyBrowserCaller(args[1]);
         const tab = await selectedTab(args[1], args.slice(3));
@@ -426,7 +444,7 @@ async function main() {
         await verifyBrowserCaller(args[1]);
         console.log(JSON.stringify(await requestBrowser(args[1], { launch: !args.includes('--reserve'), headless: args.includes('--headless') ? true : args.includes('--visible') ? false : null }), null, 2));
       }
-      else throw new Error('Usage: browser request|size|viewport|close|release|restart|list|tabs|tab new|tab close|screenshot|navigate|click|text|key|bookmarks|sweep-clones. Run herdr-boss without arguments for details.');
+      else throw new Error('Usage: browser request|size|viewport|close|release|restart|list|tabs|tab new|tab close|screenshot|navigate|click|drag|text|key|bookmarks|sweep-clones. Run herdr-boss without arguments for details.');
       break;
     }
     case 'handoff': {

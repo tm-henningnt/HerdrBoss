@@ -123,6 +123,82 @@ test('browser tab viewport records persist and drops entries for tabs that have 
   assert.deepEqual(pool.listBrowserSessions()['viewport-persistence'].viewports, { 'tab-live': viewport });
 });
 
+// The fake command resolves request functions exactly as src/browser-preview.js does, so the tests read the
+// real request list. No real Chrome is touched.
+function browserDragFixture({ width = 1000, height = 500, viewport = null } = {}) {
+  const project = 'drag-fixture';
+  const session = { port: 45681 };
+  register(project, session.port);
+  if (viewport) pool.setBrowserTabViewport(project, 'tab-drag', viewport);
+  const sent = [];
+  const adapters = {
+    verifySession: async (name) => { assert.equal(name, project); return session; },
+    listTargets: async () => [{ id: 'tab-drag', webSocketDebuggerUrl: `ws://localhost:${session.port}/devtools/page/1` }],
+    commands: async (_endpoint, sessionRequests) => {
+      const results = [];
+      for (const entry of sessionRequests) {
+        const request = typeof entry === 'function' ? entry(results.at(-1), results) : entry;
+        sent.push(request);
+        results.push(request.method === 'Page.getLayoutMetrics'
+          ? { cssVisualViewport: { clientWidth: width, clientHeight: height } } : {});
+      }
+      return results;
+    },
+  };
+  return { sent, adapters, project, clearViewport: () => pool.setBrowserTabViewport(project, 'tab-drag', null) };
+}
+
+test('browserDrag sends a press, three moves, and a release for --steps 3', async () => {
+  const fixture = browserDragFixture();
+  const result = await browserPreview.browserDrag(fixture.project, 'tab-drag', { x: 0.2, y: 0.5 }, { x: 0.8, y: 0.5 }, { steps: 3, adapters: fixture.adapters });
+  assert.deepEqual(result, { ok: true });
+  assert.deepEqual(fixture.sent.map((request) => request.method), [
+    'Page.getLayoutMetrics',
+    'Input.dispatchMouseEvent', 'Input.dispatchMouseEvent', 'Input.dispatchMouseEvent',
+    'Input.dispatchMouseEvent', 'Input.dispatchMouseEvent', 'Input.dispatchMouseEvent',
+  ]);
+  assert.deepEqual(fixture.sent.slice(1).map((request) => request.params.type), [
+    'mouseMoved', 'mousePressed', 'mouseMoved', 'mouseMoved', 'mouseMoved', 'mouseReleased',
+  ]);
+  assert.deepEqual(fixture.sent[2].params, { type: 'mousePressed', x: 200, y: 250, button: 'left', clickCount: 1 });
+  assert.deepEqual(fixture.sent.slice(3, 6).map((request) => request.params), [
+    { type: 'mouseMoved', button: 'left', buttons: 1, x: 400, y: 250 },
+    { type: 'mouseMoved', button: 'left', buttons: 1, x: 600, y: 250 },
+    { type: 'mouseMoved', button: 'left', buttons: 1, x: 800, y: 250 },
+  ]);
+  assert.deepEqual(fixture.sent[6].params, { type: 'mouseReleased', x: 800, y: 250, button: 'left', clickCount: 1 });
+  fixture.clearViewport();
+});
+
+test('browserDrag reads the page size and reapplies a stored viewport', async () => {
+  const fixture = browserDragFixture({ width: 400, height: 200, viewport: { width: 400, height: 200, scale: 2, mobile: false } });
+  await browserPreview.browserDrag(fixture.project, 'tab-drag', { x: 0.25, y: 0.75 }, { x: 0.5, y: 0.25 }, { adapters: fixture.adapters });
+  assert.deepEqual(fixture.sent[0], { method: 'Emulation.setDeviceMetricsOverride', params: { width: 400, height: 200, deviceScaleFactor: 2, mobile: false } });
+  assert.deepEqual(fixture.sent.at(-1).params, { type: 'mouseReleased', x: 200, y: 50, button: 'left', clickCount: 1 });
+  fixture.clearViewport();
+});
+
+test('browserDrag clamps the start and end points inside the page', async () => {
+  const fixture = browserDragFixture();
+  await browserPreview.browserDrag(fixture.project, 'tab-drag', { x: 1, y: 1 }, { x: 1, y: 1 }, { steps: 1, adapters: fixture.adapters });
+  assert.deepEqual(fixture.sent[1].params, { type: 'mouseMoved', x: 999, y: 499 });
+  assert.deepEqual(fixture.sent.at(-1).params, { type: 'mouseReleased', x: 999, y: 499, button: 'left', clickCount: 1 });
+  fixture.clearViewport();
+});
+
+test('browserDrag refuses a position outside 0% to 100% and a step count outside 1 to 60', async () => {
+  const fixture = browserDragFixture();
+  for (const from of [{ x: -0.01, y: 0.5 }, { x: 0.5, y: 1.01 }, { x: 0.5 }]) {
+    await assert.rejects(browserPreview.browserDrag(fixture.project, 'tab-drag', from, { x: 0.5, y: 0.5 }, { adapters: fixture.adapters }), /Drag position must be inside the screenshot/);
+  }
+  await assert.rejects(browserPreview.browserDrag(fixture.project, 'tab-drag', { x: 0.5, y: 0.5 }, { x: 0.5, y: 1.5 }, { adapters: fixture.adapters }), /Drag position must be inside the screenshot/);
+  for (const steps of [0, 61, 2.5, 'ten']) {
+    await assert.rejects(browserPreview.browserDrag(fixture.project, 'tab-drag', { x: 0.5, y: 0.5 }, { x: 0.5, y: 0.5 }, { steps, adapters: fixture.adapters }), /Drag steps must be from 1 to 60/);
+  }
+  assert.deepEqual(fixture.sent, []);
+  fixture.clearViewport();
+});
+
 test('browserScreenshot reapplies stored device metrics in its new CDP session', async () => {
   const project = 'viewport-reapply';
   const session = register(project, 45680);

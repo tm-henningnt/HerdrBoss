@@ -84,6 +84,19 @@ test('browser viewport refuses a project orchestrator changing another project b
   assert.equal(result.stderr.trim(), 'The beta browser belongs to project beta. This pane is in workspace Alpha (workspace-alpha), which belongs to project alpha. Only a pane in the beta workspace or the Boss can change it.');
 });
 
+test('browser CLI refuses a project orchestrator dragging in another project browser', (t) => {
+  const fixture = browserCliFixture(t);
+  const result = fixture.run(['drag', 'beta', '20%', '60%', '80%', '60%', '--tab', 'tab-1']);
+  assert.equal(result.status, 1, result.stderr);
+  assert.equal(result.stderr.trim(), 'The beta browser belongs to project beta. This pane is in workspace Alpha (workspace-alpha), which belongs to project alpha. Only a pane in the beta workspace or the Boss can change it.');
+});
+
+test('CLI usage lists the browser drag form', () => {
+  const result = spawnSync(process.execPath, [CLI], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /browser drag SLUG X1% Y1% X2% Y2% \[--tab ID\] \[--steps N\]/);
+});
+
 test('CLI usage lists both browser viewport forms', () => {
   const result = spawnSync(process.execPath, [CLI], { encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);
