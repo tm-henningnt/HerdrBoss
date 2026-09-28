@@ -183,13 +183,64 @@ export function syncCodex({ home = homeDir(), dataDir = DATA_DIR, dryRun = false
   return { ok: true, changed: true, added: missing.map((root) => root.path), backup, lines: out };
 }
 
+function normalizedClaudeLine(line, home) {
+  return String(line).split(home).join('~').replace(/\s+/g, ' ').trim();
+}
+
+function claudeLineLabel(line) {
+  return /^\*\*(.+?)\*\*:/.exec(String(line).trim())?.[1] ?? null;
+}
+
+function compareClaudeLines(area, expected, current, home) {
+  const used = new Set();
+  const changes = [];
+  for (const line of expected) {
+    const label = claudeLineLabel(line);
+    const index = current.findIndex((candidate, candidateIndex) => {
+      if (used.has(candidateIndex) || typeof candidate !== 'string') return false;
+      if (label != null) return claudeLineLabel(candidate) === label;
+      return normalizedClaudeLine(candidate, home) === normalizedClaudeLine(line, home);
+    });
+    if (index < 0) {
+      changes.push(`missing ${area}: ${line}`);
+      continue;
+    }
+    used.add(index);
+    if (normalizedClaudeLine(current[index], home) !== normalizedClaudeLine(line, home)) {
+      if (area === 'environment' && label != null) {
+        changes.push(`change environment "${label}": ${line}`, `now: ${current[index]}`);
+      } else changes.push(`missing ${area}: ${line}`);
+    }
+  }
+  const extraCount = current.reduce((count, line, index) => count + (typeof line === 'string' && !used.has(index) ? 1 : 0), 0);
+  return { changes, extraCount };
+}
+
 export function claudeLines(options = {}) {
-  const template = fs.readFileSync(path.join(TEMPLATES, 'claude-automode.json'), 'utf8');
-  return [
-    'Claude: the Owner pastes these lines into "autoMode" in ~/.claude/settings.json. Herdr Boss does not edit that file.',
-    'Merge "environment" into autoMode.environment. Merge "allow" into autoMode.allow, with "$defaults" first.',
-    ...fillTemplate(template, options).trimEnd().split('\n'),
-  ];
+  const home = options.home ?? homeDir();
+  const file = path.join(home, '.claude', 'settings.json');
+  const template = JSON.parse(fs.readFileSync(path.join(TEMPLATES, 'claude-automode.json'), 'utf8'));
+  const expected = Object.fromEntries(Object.entries(template).map(([key, lines]) => [key, lines.map((line) => fillTemplate(line, options))]));
+  const settings = readJson(file);
+  const autoMode = settings.value?.autoMode;
+  if (settings.error || !autoMode || typeof autoMode !== 'object' || Array.isArray(autoMode)) {
+    const reason = settings.error === 'missing' ? 'settings file is missing' : settings.error === 'not valid JSON' ? 'settings file is not valid JSON' : 'settings file has no autoMode key';
+    return [
+      `Claude ${reason}: ${file}. Add the full template below to autoMode in ~/.claude/settings.json.`,
+      JSON.stringify(expected, null, 2),
+    ];
+  }
+
+  const environment = Array.isArray(autoMode.environment) ? autoMode.environment : [];
+  const allow = Array.isArray(autoMode.allow) ? autoMode.allow : [];
+  const environmentResult = compareClaudeLines('environment', expected.environment, environment, home);
+  const allowResult = compareClaudeLines('allow', expected.allow, allow, home);
+  const changes = [...environmentResult.changes, ...allowResult.changes];
+  const lines = changes.length
+    ? ['Claude autoMode differences for ~/.claude/settings.json:', ...changes]
+    : ['Claude autoMode: nothing to change.'];
+  lines.push(`Owner lines kept: ${environmentResult.extraCount} environment, ${allowResult.extraCount} allow`);
+  return lines;
 }
 
 export function syncHarness({ codexOnly = false, ...options } = {}) {

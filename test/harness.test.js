@@ -73,6 +73,31 @@ function healthy(f, repos) {
   writeFile(path.join(f.home, '.pi', 'agent', 'extensions', 'herdr-guard.ts'), 'export default function () {}\n');
 }
 
+function harnessSyncFixture(t) {
+  const f = fixture(t);
+  const alpha = gitRepo(f, 'Alpha', 'https://github.com/example/alpha.git');
+  registry(f, [{ slug: 'alpha', repo: alpha, remote: 'https://github.com/example/alpha.git' }]);
+  const roots = [path.join(f.home, '.herdr-boss'), path.join(f.home, 'Projects', '.herdr-wt'), path.join(alpha, '.git')];
+  writeFile(path.join(f.home, '.codex', 'config.toml'), codexConfig(roots));
+  const template = JSON.parse(fs.readFileSync(path.join(TEMPLATES, 'claude-automode.json'), 'utf8'));
+  const values = {
+    HOME: f.home,
+    UID: String(process.getuid?.() ?? ''),
+    HERDR_BOSS_REPO: ROOT,
+    HERDR_BOSS_URL: 'http://127.0.0.1:4477',
+    PROJECT_LIST: `${alpha} (example/alpha)`,
+  };
+  const filled = JSON.parse(JSON.stringify(template, (_key, value) => value));
+  for (const key of ['environment', 'allow']) {
+    filled[key] = filled[key].map((line) => line.replace(/\{\{([A-Z_]+)\}\}/g, (_all, name) => values[name]));
+  }
+  return { ...f, alpha, expected: filled };
+}
+
+function writeClaudeAutoMode(f, autoMode, settings = {}) {
+  writeFile(path.join(f.home, '.claude', 'settings.json'), JSON.stringify({ ...settings, autoMode }));
+}
+
 test('the harness templates use only the known placeholders and name no real path, user, or owner', () => {
   const files = fs.readdirSync(TEMPLATES).sort();
   assert.deepEqual(files, ['claude-automode.json', 'codex-herdr.rules', 'codex-sandbox.toml', 'opencode-worker-agent.json', 'pi-herdr-guard.ts']);
@@ -135,6 +160,10 @@ test('harness check passes on a complete setup and prints no setting value that 
   const alpha = gitRepo(f, 'Alpha');
   registry(f, [{ slug: 'alpha', repo: alpha, remote: 'https://github.com/example/alpha.git' }]);
   healthy(f, [alpha]);
+  writeClaudeAutoMode(f, {
+    environment: [`**Herdr Boss projects**: ${alpha} (o/alpha)`, '**Owner note**: KEEP-ENV-PRIVATE'],
+    allow: ['$defaults', 'KEEP-ALLOW-PRIVATE'],
+  }, { apiKeyHelper: 'SECRET-HELPER-VALUE' });
   const result = run(f, ['harness', 'check']);
   // Codex has no -s workspace-write in kit/models.json yet; every other entry is present.
   const missing = result.stdout.split('\n').filter((line) => line.startsWith('missing'));
@@ -144,6 +173,7 @@ test('harness check passes on a complete setup and prints no setting value that 
   assert.match(result.stdout, /^ok +claude autoMode: \*\*Herdr Boss projects\*\* names .*Alpha \(alpha\)$/m);
   assert.match(result.stdout, /^ok +opencode: agent worker exists$/m);
   assert.doesNotMatch(result.stdout + result.stderr, /SECRET|apiKey|primary|allow\b/);
+  assert.doesNotMatch(result.stdout + result.stderr, /KEEP-ENV-PRIVATE|KEEP-ALLOW-PRIVATE/);
 });
 
 test('harness check reports a missing project .git and a missing Claude line and exits 1', (t) => {
@@ -228,6 +258,91 @@ test('harness sync adds the missing roots, keeps the others, makes a backup, and
   assert.match(again.stdout, /nothing to add/);
   assert.doesNotMatch(again.stdout, /Herdr Boss projects/);
   assert.equal(fs.readdirSync(path.dirname(config)).filter((name) => name.startsWith('config.toml.bak-')).length, 1);
+});
+
+test('harness sync reports nothing when every Claude template line is present', (t) => {
+  const f = harnessSyncFixture(t);
+  writeClaudeAutoMode(f, f.expected);
+  const result = run(f, ['harness', 'sync']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Claude autoMode: nothing to change\./);
+  assert.doesNotMatch(result.stdout, /missing (?:environment|allow):|change environment|now:/);
+  assert.match(result.stdout, /Owner lines kept: 0 environment, 0 allow/);
+  assert.doesNotMatch(result.stdout, /"environment"\s*:/);
+  assert.doesNotMatch(result.stdout, /"allow"\s*:/);
+  for (const line of f.expected.allow) assert.ok(!result.stdout.includes(line), `unexpected allow line: ${line}`);
+});
+
+test('harness sync shows only a changed labeled environment line and its current value', (t) => {
+  const f = harnessSyncFixture(t);
+  const current = { ...f.expected, environment: [...f.expected.environment], allow: [...f.expected.allow] };
+  const index = current.environment.findIndex((line) => line.startsWith('**Supervisor**:'));
+  current.environment[index] = current.environment[index].replace('runs on this machine', 'runs on another machine');
+  writeClaudeAutoMode(f, current);
+  const result = run(f, ['harness', 'sync']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(result.stdout.includes(`change environment "Supervisor": ${f.expected.environment[index]}`), result.stdout);
+  assert.ok(result.stdout.includes(`now: ${current.environment[index]}`), result.stdout);
+  assert.doesNotMatch(result.stdout, /"allow"\s*:/);
+  assert.doesNotMatch(result.stdout, /"environment"\s*:/);
+});
+
+test('harness sync reports only a missing allow line and never prints a full allow list', (t) => {
+  const f = harnessSyncFixture(t);
+  const current = { ...f.expected, environment: [...f.expected.environment], allow: [...f.expected.allow] };
+  current.allow.splice(2, 1);
+  writeClaudeAutoMode(f, current);
+  const result = run(f, ['harness', 'sync']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(result.stdout.includes(`missing allow: ${f.expected.allow[2]}`), result.stdout);
+  assert.doesNotMatch(result.stdout, /"allow"\s*:/);
+  assert.doesNotMatch(result.stdout, /\$defaults/);
+  for (const line of f.expected.allow.filter((_line, index) => index !== 2)) assert.ok(!result.stdout.includes(line), `unexpected allow line: ${line}`);
+});
+
+test('harness sync treats a tilde home path as equal to the full home path', (t) => {
+  const f = harnessSyncFixture(t);
+  const current = { ...f.expected, environment: [...f.expected.environment], allow: [...f.expected.allow] };
+  const index = current.environment.findIndex((line) => line.startsWith('**Supervisor**:'));
+  current.environment[index] = current.environment[index].replaceAll(f.home, '~');
+  writeClaudeAutoMode(f, current);
+  const result = run(f, ['harness', 'sync']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Claude autoMode: nothing to change\./);
+  assert.doesNotMatch(result.stdout, /change environment|missing environment/);
+});
+
+test('harness sync counts Owner-only lines without printing them', (t) => {
+  const f = harnessSyncFixture(t);
+  const current = {
+    ...f.expected,
+    environment: [...f.expected.environment, '**Owner note**: KEEP-ENV-PRIVATE'],
+    allow: [...f.expected.allow, 'KEEP-ALLOW-PRIVATE'],
+  };
+  writeClaudeAutoMode(f, current);
+  const result = run(f, ['harness', 'sync']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Claude autoMode: nothing to change\./);
+  assert.match(result.stdout, /Owner lines kept: 1 environment, 1 allow/);
+  assert.doesNotMatch(result.stdout, /KEEP-ENV-PRIVATE|KEEP-ALLOW-PRIVATE|Owner note/);
+});
+
+test('harness sync prints the full Claude template and says when settings are missing', (t) => {
+  const f = harnessSyncFixture(t);
+  const result = run(f, ['harness', 'sync']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Claude settings file is missing:/);
+  for (const line of [...f.expected.environment, ...f.expected.allow]) assert.ok(result.stdout.includes(line), `missing template line: ${line}`);
+});
+
+test('harness sync prints the full Claude template and says when autoMode is missing', (t) => {
+  const f = harnessSyncFixture(t);
+  writeFile(path.join(f.home, '.claude', 'settings.json'), JSON.stringify({ unrelated: 'not printed' }));
+  const result = run(f, ['harness', 'sync']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Claude settings file has no autoMode key:/);
+  for (const line of [...f.expected.environment, ...f.expected.allow]) assert.ok(result.stdout.includes(line), `missing template line: ${line}`);
+  assert.doesNotMatch(result.stdout, /not printed/);
 });
 
 test('harness sync changes nothing when the section cannot be parsed safely', (t) => {
