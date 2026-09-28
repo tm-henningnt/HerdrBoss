@@ -370,6 +370,28 @@ The `/organization` page shows the organization as a chart. The chart has four l
 
 Select **Details** on a node to show its recorded values. Select **Messages** on the Boss node or on a project node to open its thread. The page cannot change resources. See [Owner messages](#owner-messages).
 
+### Chart style
+
+The switch at the top of the page selects the **Plain** or the **Cards** style. Plain is the default. The browser keeps the choice in its local storage. If the browser cannot store the choice, the page uses Plain at the next load.
+
+In the Cards style, each agent node is a card with a harness mark: Claude, Codex, OpenCode, Pi, or a question mark for an unknown harness. A Codex or Claude node shows a thin bar with the quota use. The card border shows the state:
+
+- **working**: a slow pulse on the border.
+- **blocked**: the warning color and a warning icon.
+- **failed**: the error color.
+- **idle** or **done**: a dimmed card.
+
+In the Cards style, a new event draws a short line with a moving dot between two nodes for about 1 second:
+
+- An Owner message event (type `message`) draws a line from the Owner to the Boss or to the project orchestrator.
+- A worker report notice (type `push`, title "Worker NAME wrote its report") draws a line from the worker to its orchestrator.
+
+The page reads only the events that the state already holds. It does not poll for more. At the first view of the page, it shows no old events. When the system asks for reduced motion (`prefers-reduced-motion: reduce`), the page shows a 1-second highlight on the two nodes and no movement.
+
+### Phone layout
+
+At phone width, the chart has one column in both styles. Each worker list shows a count button, for example **Show 3 workers**. Select it to expand the workers. Select **Hide 3 workers** to collapse them. The buttons on the page and in the Messages panel are at least 44 px high. The Messages panel fills the screen.
+
 The page uses only the state that the dashboard already loads. These limits apply:
 
 - The page shows **Not reported** when the state does not hold a value.
