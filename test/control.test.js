@@ -31,6 +31,35 @@ const snapshot = () => ({
   quotas: [{ provider: 'claude', windows: [{ key: 'secondary', label: 'Weekly', usedPercent: 88, willLast: false, etaSeconds: 3000, resetsAt: '2026-09-25T00:00:00Z' }] }],
 });
 
+test('engine state includes configured quota thresholds', (t) => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-engine-quota-thresholds-'));
+  t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+  const engineUrl = new URL('../src/engine.js', import.meta.url).href;
+  const configUrl = new URL('../src/config.js', import.meta.url).href;
+  const script = `
+import { Engine } from ${JSON.stringify(engineUrl)};
+import { loadConfig } from ${JSON.stringify(configUrl)};
+const cfg = loadConfig();
+cfg.quota = { warnPercent: 83, criticalPercent: 96 };
+const engine = new Engine(cfg, { push: false, act: false, collectors: {
+  collectHerdr: async () => ({ panes: [], workspaces: [] }),
+  collectMachine: async () => null,
+  collectProcesses: async () => new Map(),
+  collectQuotas: async () => [],
+  collectWorktreeCounts: async () => ({}),
+  collectCwdProcesses: async () => [],
+  collectMissingWorktreeProcesses: async () => [],
+} });
+const state = await engine.tick();
+console.log(JSON.stringify(state.quotaThresholds));
+`;
+  const result = execFileSync(process.execPath, ['--input-type=module', '-e', script], {
+    env: { ...process.env, HOME: temp, HERDR_BOSS_DIR: path.join(temp, 'data'), HERDR_BOSS_LIVE_DIR: path.join(temp, 'live'), NODE_TEST_CONTEXT: '1' },
+    encoding: 'utf8',
+  });
+  assert.deepEqual(JSON.parse(result), { warnPercent: 83, criticalPercent: 96 });
+});
+
 test('engine caches orphaned worktree scans until the worktree scan interval and keeps the last success on error', (t) => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-engine-scan-cache-'));
   t.after(() => fs.rmSync(temp, { recursive: true, force: true }));

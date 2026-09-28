@@ -384,6 +384,13 @@ function localDateTime(iso) {
 // A stale row is the last good row of a provider whose latest probe failed. It still counts as quota data.
 const hasQuotaData = (q) => !q?.error || q.stale === true;
 const staleQuotaText = (q) => `${PROVIDERS[q.provider] || q.provider} quota from ${clock(q.staleSince)} (probe failed)`;
+function quotaThresholds(s, fallback = { warnPercent: 90, criticalPercent: 98 }) {
+  const values = s?.quotaThresholds || {};
+  return {
+    warnPercent: Number.isFinite(values.warnPercent) ? values.warnPercent : fallback.warnPercent,
+    criticalPercent: Number.isFinite(values.criticalPercent) ? values.criticalPercent : fallback.criticalPercent,
+  };
+}
 
 function pacingDraftError(draft, quotas, now = Date.now()) {
   for (const [provider, windows] of Object.entries(draft.pacingGoals || {})) for (const [key, goal] of Object.entries(windows || {})) {
@@ -406,6 +413,7 @@ function settingsView(s) {
   ensureDraft(s);
   if (!policyDraft) return '';
   const d = policyDraft;
+  const { warnPercent, criticalPercent } = quotaThresholds(s);
   const harnesses = Object.entries(models || {}).map(([kind, cfg]) => harnessSection(kind, cfg, d)).join('');
   const ignoredCount = Object.keys(models || {}).reduce((n, kind) => n + kindModels(kind, d).filter((model) => ignoredLegacyRoute(kind, model, d)).length, 0);
   const providerRows = Object.keys(d.providerModes).map((p) => `<label class="setting-line"><span>${esc(PROVIDERS[p] || p)}</span><select data-provider="${esc(p)}" aria-label="${esc(PROVIDERS[p] || p)} quota mode"><option value="managed" ${d.providerModes[p] === 'managed' ? 'selected' : ''}>Manage pace</option><option value="ignore" ${d.providerModes[p] === 'ignore' ? 'selected' : ''}>Ignore quota</option></select></label>`).join('');
@@ -432,7 +440,7 @@ function settingsView(s) {
       return `<div class="setting-line" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));align-items:end;margin-bottom:12px"><label style="display:grid;gap:4px"><span>${esc(PROVIDERS[provider] || provider)} ${esc(label)} goal %</span><input type="number" min="0" max="100" step="1" placeholder="100" value="${percent ?? ''}" data-pacing-goal="${id}"></label><label style="display:grid;gap:4px"><span>Goal end</span><select data-pacing-end-type="${id}"><option value="reset" ${kind === 'reset' ? 'selected' : ''}>At reset</option><option value="at" ${kind === 'at' ? 'selected' : ''}>One-off local date and time</option><option value="hoursBeforeReset" ${kind === 'hoursBeforeReset' ? 'selected' : ''}>Hours before reset, every window</option></select></label>${kind === 'at' ? `<label style="display:grid;gap:4px"><span>Local date and time</span><input type="datetime-local" value="${esc(endValue)}" data-pacing-end-value="${id}"></label>` : kind === 'hoursBeforeReset' ? `<label style="display:grid;gap:4px"><span>Whole hours before reset</span><input type="number" min="1" step="1" value="${esc(endValue)}" data-pacing-end-value="${id}"></label>` : ''}<span class="setting-help" style="grid-column:1/-1">Resets ${esc(resetsAt || 'unknown')}${end ? ` · Goal ${esc(percent)}% ${kind === 'at' ? `by ${esc(localDateTime(end.at) || 'choose a time')}` : `${esc(end.hours)} h before reset`}` : ''}</span></div>`;
     }).join('')
     : '<p class="setting-help">No measured quota window yet. A goal field appears after the next quota reading.</p>';
-  const quotaPanel = `<section class="panel"><h2>Provider quotas</h2><h3>Quota mode</h3>${providerRows}<p class="setting-help">Ignore quota turns off pacing and pace warnings for worker dispatch. Handover risk and automatic handover still use live quota data.</p><h3 class="quota-goals">Pacing goals</h3><p class="setting-help">The most percent of a window to use by its end. Blank means 100%. A one-off end uses your local time. A recurring end is a whole number of hours before reset.</p>${goalRows}</section>`;
+  const quotaPanel = `<section class="panel"><h2>Provider quotas</h2><p class="setting-help">Quota warning at ${esc(warnPercent)}%, critical at ${esc(criticalPercent)}%. Set them in config.json.</p><h3>Quota mode</h3>${providerRows}<p class="setting-help">Ignore quota turns off pacing and pace warnings for worker dispatch. Handover risk and automatic handover still use live quota data.</p><h3 class="quota-goals">Pacing goals</h3><p class="setting-help">The most percent of a window to use by its end. Blank means 100%. A one-off end uses your local time. A recurring end is a whole number of hours before reset.</p>${goalRows}</section>`;
   return `<header class="page-intro"><div><h1>Settings</h1><p>Assign models and provider routes in each harness. Set provider quotas and machine limits below.</p></div></header><section id="settings-plane" class="control-shell"><section class="panel"><h2>Harnesses</h2><p class="setting-help harness-help">Clear a model box to stop that harness from using it. The same model in another harness keeps its own box and provider.</p>${ignoredCount ? `<p class="setting-help harness-help" role="note" style="color: var(--warn)">${ignoredCount} legacy provider route${ignoredCount === 1 ? ' is' : 's are'} not compatible with ${ignoredCount === 1 ? 'its harness' : 'their harnesses'}. Herdr Boss treats ${ignoredCount === 1 ? 'it' : 'them'} as Unmetered. Choose a provider in each marked row before you apply the policy.</p>` : ''}<div class="harness-grid">${harnesses}</div></section><div class="settings-grid">${quotaPanel}${machineSettings}</div><div class="control-actions ${policyDirty ? 'pending' : ''}"><span data-policy-status role="status" aria-live="polite">${esc(saveMessage || (policyDirty ? 'Unsaved changes · Apply policy to keep them' : 'Policy saved'))}</span><button id="save-policy" ${policyDirty ? '' : 'disabled'}>Apply policy</button></div></section>`;
 }
 
@@ -680,15 +688,16 @@ function rulesBlock(s) {
   return `<section id="guidance"><h2>Current guidance <span class="sub">also published to orchestrators in <a href="/bulletin.md">bulletin.md</a></span></h2><div class="rules">${rows.join('')}</div></section>`;
 }
 
-function quotaCard(q) {
+function quotaCard(q, s = state) {
   const name = PROVIDERS[q.provider] || q.provider;
   if (!hasQuotaData(q)) return `<div class="panel provider"><div class="provider-head"><b>${esc(name)}</b></div><div class="err">${esc(q.error)}</div></div>`;
   const lane = state?.lanes?.[q.provider];
+  const thresholds = quotaThresholds(s);
   const wins = q.windows.map((w) => {
     const windowGoalText = lane?.goals?.find((goal) => goal.key === w.key)?.text || '';
     const goalLabel = windowGoalText ? ` <span class="muted">· ${esc(windowGoalText)}</span>` : '';
     if (w.resetsAt && Date.parse(w.resetsAt) <= Date.now()) return `<div class="win"><div class="win-row"><span>${esc(w.label)}${goalLabel}</span><span class="muted">Reset, not yet measured</span></div><div class="bar"></div><div class="win-row win-foot"><span>The next quota reading shows the new use.</span><span>reset ${clock(w.resetsAt)}</span></div></div>`;
-    const cls = w.usedPercent >= 98 ? 'crit' : w.usedPercent >= 90 ? 'warn' : w.willLast === false ? 'warn' : '';
+    const cls = w.usedPercent >= thresholds.criticalPercent ? 'crit' : w.usedPercent >= thresholds.warnPercent ? 'warn' : w.willLast === false ? 'warn' : '';
     const tick = w.expectedPercent != null ? `<s style="left:calc(${Math.min(100, w.expectedPercent)}% - 1px)" title="Expected at even pace: ${w.expectedPercent}%"></s>` : '';
     const foot = w.paceSummary ? esc(w.paceSummary) : w.extra ? 'Extra window' : '';
     return `<div class="win">
@@ -873,13 +882,14 @@ function eventsBlock(s) {
 }
 
 function quotaSummary(s) {
+  const thresholds = quotaThresholds(s);
   const strip = (s.quotas || []).map((q) => {
     const w = q.windows?.find((x) => x.key === 'secondary') || q.windows?.find((x) => !x.extra);
-    return `<span class="quota-summary-item"><span>${esc(PROVIDERS[q.provider] || q.provider)}</span><strong class="${w?.usedPercent >= 90 ? 'text-crit' : ''}">${w ? `${w.usedPercent}%` : '–'}</strong><small>${q.stale ? esc(staleQuotaText(q)) : q.error ? esc(q.error) : w ? `${esc(w.label)} · resets ${clock(w.resetsAt)}` : 'No quota data'}</small></span>`;
+    return `<span class="quota-summary-item"><span>${esc(PROVIDERS[q.provider] || q.provider)}</span><strong class="${w?.usedPercent >= thresholds.warnPercent ? 'text-crit' : ''}">${w ? `${w.usedPercent}%` : '–'}</strong><small>${q.stale ? esc(staleQuotaText(q)) : q.error ? esc(q.error) : w ? `${esc(w.label)} · resets ${clock(w.resetsAt)}` : 'No quota data'}</small></span>`;
   }).join('');
   // Saved quotas from before a restart show their read time until the first new read succeeds.
   const cached = s.quotasCached && s.quotasAt && Date.now() - Date.parse(s.quotasAt) < 15 * 60 * 1000;
-  return `<section class="quota-summary"><div class="section-head"><h2>Subscriptions</h2><span>${cached ? `Quotas from ${clock(s.quotasAt)}` : `Updated ${ago(s.quotasAt)}`}</span></div><details data-quota-detail ${quotaExpanded ? 'open' : ''}><summary><span class="quota-summary-grid">${strip}</span><span class="fold-hint">Details</span></summary><div class="quota-foldout">${(s.quotas || []).map(quotaCard).join('')}</div></details></section>`;
+  return `<section class="quota-summary"><div class="section-head"><h2>Subscriptions</h2><span>${cached ? `Quotas from ${clock(s.quotasAt)}` : `Updated ${ago(s.quotasAt)}`}</span></div><details data-quota-detail ${quotaExpanded ? 'open' : ''}><summary><span class="quota-summary-grid">${strip}</span><span class="fold-hint">Details</span></summary><div class="quota-foldout">${(s.quotas || []).map((q) => quotaCard(q, s)).join('')}</div></details></section>`;
 }
 
 function machineSummary(s) {
@@ -1757,14 +1767,15 @@ function orgQuotaMeter(s, kind) {
   const w = orgQuotaWindow(s, kind);
   if (!w) return { unavailable: true };
   const q = s.quotas.find((x) => x.provider === kind);
-  return { ...w, stale: q.stale === true, staleSince: q.staleSince };
+  const thresholds = quotaThresholds(s, { warnPercent: 70, criticalPercent: 90 });
+  return { ...w, ...thresholds, stale: q.stale === true, staleSince: q.staleSince };
 }
 
 function orgMeter(agent, quota) {
   if (quota.unavailable) return `<div class="org-quota-row"><div class="org-quota unavailable" role="img" aria-label="${esc(`${PROVIDERS[agent]} quota unavailable`)}"></div><span class="org-quota-note" aria-hidden="true">quota unavailable</span></div>`;
   const stale = quota.stale ? `quota from ${clock(quota.staleSince)}, the last probe failed` : '';
   const label = `${PROVIDERS[agent]} quota ${quota.usedPercent}% used${quota.label ? ` · ${quota.label}` : ''}${stale ? ` · ${stale}` : ''}`;
-  const level = quota.stale ? '' : quota.usedPercent >= 90 ? 'crit' : quota.usedPercent >= 70 ? 'warn' : '';
+  const level = quota.stale ? '' : quota.usedPercent >= quota.criticalPercent ? 'crit' : quota.usedPercent >= quota.warnPercent ? 'warn' : '';
   return `<div class="org-quota${quota.stale ? ' stale' : ''}" role="img" aria-label="${esc(label)}"${stale ? ` title="${esc(stale)}"` : ''}><i class="${level}" style="width:${Math.max(0, Math.min(100, quota.usedPercent))}%"></i></div>`;
 }
 
@@ -2515,7 +2526,8 @@ const HELP = {
     <p>A model can be in more than one harness. Each harness keeps its own box and provider for it, so a change in one harness does not change another.</p>
     <p>Pi also uses seven unmetered OpenCode Zen entries: <code>opencode/big-pickle</code>, <code>opencode/ling-3.0-flash-fin-free</code>, <code>opencode/mimo-v2.6-flash-free</code>, <code>opencode/muse-spark-1.2-contributor-free</code>, <code>opencode/muse-spark-1.3-contributor-free</code>, <code>opencode/nemotron-3-ultra-free</code>, and <code>opencode/nemotron-3.5-lightning-free</code>. They start unmetered and appear as Pi rows here. <code>opencode/space-bunny-free</code> has no Pi catalog entry, so Pi refuses it. Catalog support does not guarantee a configured account or live provider availability.</p>
     <h3>Add a model</h3><p>Type a model string in a harness section and select <b>Add model</b>. Use letters, digits, dots, underscores, slashes, and hyphens. Spaces and shell characters are refused. A new model is marked <b>local</b>, starts unmetered, and is stored in the local policy, not in <code>kit/models.json</code>. Select <b>Remove</b> to delete a local model.</p>
-    <h3>Provider quotas</h3><p>Choose <b>Manage pace</b> or <b>Ignore quota</b> for each provider. Ignore quota turns off pacing and pace warnings for worker dispatch. Handover risk and automatic handover still use live quota data. A live window at 100% or more still exhausts the provider until its reset, and worker start refuses it unless you use <code>--force</code>. Enter a whole pacing goal percent from 0 to 100. Leave it blank for 100%. Choose <b>At reset</b>, a one-off local date and time, or whole hours before each reset. A goal end must be after now, after the window start, and no later than reset. A one-off goal clears after its time or window reset. A recurring end stays in later windows.</p>
+    <h3>Provider quotas</h3><p>Quota colors use the warning and critical values from <code>config.json</code>. Settings shows both values.</p>
+    <p>Choose <b>Manage pace</b> or <b>Ignore quota</b> for each provider. Ignore quota turns off pacing and pace warnings for worker dispatch. Handover risk and automatic handover still use live quota data. A live window at 100% or more still exhausts the provider until its reset, and worker start refuses it unless you use <code>--force</code>. Enter a whole pacing goal percent from 0 to 100. Leave it blank for 100%. Choose <b>At reset</b>, a one-off local date and time, or whole hours before each reset. A goal end must be after now, after the window start, and no later than reset. A one-off goal clears after its time or window reset. A recurring end stays in later windows.</p>
     <p>The quota card, bulletin, and lanes show each goal as <code>goal: 100% by Thu 8 Oct</code>. The text shows the time for a one-off end within 48 hours. A trickle allowance uses the goal percent and days left to a future goal end. After that end, it uses the unused quota and days left to reset. Without a goal end, it uses the goal percent and days left to reset. For a timed end, runs-out advice estimates when the rate reaches the goal percent. It names the goal end when that happens before the end.</p>
     <p>The Machine section sets the guard, CPU limits, 5-minute load backstops, the Owner idle period, disk warning thresholds, and the notice cooldown. Turn the guard off to stop CPU and load warnings and worker-start blocks. Choose a pause length to suspend those rules until the expiry time. Select <b>Resume guard</b> to end a pause early. Memory and disk warnings stay on.</p>
     <p>Disk free space is measured on the filesystem that contains the Herdr Boss data directory. The warning threshold defaults to 20 GB free. The critical threshold defaults to 5 GB free. Free percent is information only. Herdr Boss shows it to one decimal place. Disk notices go to the project orchestrator when that project has linked worker worktrees. They include linked and prunable counts.</p>

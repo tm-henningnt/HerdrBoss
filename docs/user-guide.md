@@ -95,9 +95,9 @@ To add the shared rules to a project, follow [orchestrator-instructions.md](orch
 
 | Condition | Action |
 |---|---|
-| A quota window is at 98% or more | Critical notice in the bulletin only. The bulletin tells orchestrators to avoid that kind. |
-| A quota window is at 90% or more | Warning notice in the bulletin only. |
-| A quota window that had a warning resets below 90% | `Quota restriction cleared` notice in the bulletin only. |
+| A quota window reaches the critical percentage in `config.json` | Critical notice in the bulletin only. The bulletin tells orchestrators to avoid that kind. |
+| A quota window reaches the warning percentage in `config.json` | Warning notice in the bulletin only. |
+| A quota window that had a warning resets below the warning percentage in `config.json` | `Quota restriction cleared` notice in the bulletin only. |
 | A live quota window is at 100% or more | The provider lane is exhausted until the latest reset among its exhausted windows. `worker start` refuses it unless you use `--force`. |
 | A quota runs out before its reset at the current pace, or its use is above the goal-adjusted pace | The provider lane is "ahead of pace". `worker start` refuses it. |
 | Free memory is below 15% | Warning notice. |
@@ -183,7 +183,7 @@ When every metered provider is ahead of pace, `worker start` allows the least-ov
 
 ## Settings and allocation
 
-The Settings page has one section for each harness. A harness section holds the harness availability, the preferred model, and one row for each model. Provider quota modes, quota pacing goals, and machine limits are below the harness sections.
+The Settings page has one section for each harness. A harness section holds the harness availability, the preferred model, and one row for each model. Provider quota modes, quota pacing goals, and machine limits are below the harness sections. Settings shows the warning and critical quota percentages from `config.json`. The dashboard uses these values to color quota levels.
 
 The model catalog is `kit/models.json`. The local policy can add model strings to one harness. Herdr Boss merges these extra models into the allow-list of that harness in worker start, handoff plan and prepare, the lanes and the bulletin, Settings, Allocation, and `herdr-boss models`. An extra model uses the launch arguments and effort rules of its harness.
 
