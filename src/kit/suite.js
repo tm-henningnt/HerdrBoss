@@ -49,7 +49,12 @@ export function runSuite(command, {
       exitCode = result.status ?? 1;
     }
   } finally {
-    releaseProjectLock(FULL_SUITE_LOCK, { config, env, herdr, dataDir, output, pidAlive });
+    try { releaseProjectLock(FULL_SUITE_LOCK, { config, env, herdr, dataDir, output, pidAlive }); }
+    catch (error) {
+      const reason = String(error?.message ?? error).replace(/\s+/g, ' ').replace(/[. ]+$/, '');
+      output(`Warning: could not release lock ${FULL_SUITE_LOCK}: ${reason}. The lock is stale when this process ends.`);
+      if (exitCode === 0) exitCode = 1;
+    }
   }
   return { exitCode, removed };
 }

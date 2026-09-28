@@ -4,14 +4,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { DATA_DIR } from './config.js';
-import { hasLiveWorkerRun, withMutationLock } from './kit/locks.js';
+import { hasLiveWorkerRun, MUTATION_GUARD_WAIT_MS, withMutationLock } from './kit/locks.js';
 import { verifyCallerPane } from './kit/workers.js';
 
 const LEASES_FILE = 'leases.json';
 const WORKER_NAME = /^[a-z][a-z0-9-]{0,31}$/;
 const PROJECT_SLUG = /^[a-z0-9][a-z0-9-]*$/;
-// A command waits this long for a busy mutation lock. The engine does not wait; it tries again on the next tick.
-const COMMAND_LOCK_WAIT_MS = 5000;
 const TCP_MISSES_TO_RECLAIM = 2;
 const CDP_MISSES_TO_RECLAIM = 2;
 // Port 9222 is the protected legacy browser. No pool ever leases it.
@@ -83,7 +81,7 @@ function writeLeases(dataDir, store) {
   fs.renameSync(tmp, file);
 }
 
-function changeLeases(dataDir, operation, waitMs = COMMAND_LOCK_WAIT_MS) {
+function changeLeases(dataDir, operation, waitMs = MUTATION_GUARD_WAIT_MS) {
   fs.mkdirSync(dataDir, { recursive: true });
   return machineMutationLock(dataDir, () => {
     const store = readLeases(dataDir);
@@ -149,7 +147,7 @@ function reclaimInStore(store, { pools, panes, now, probeTcp, browserProcess }) 
 
 // Reclaim leases whose holder is gone. `panes` is the set of pane IDs from a successful pane list, or null.
 // `browserProcess` checks the leases of a cdp pool. Without it, a cdp lease is not checked.
-export function reclaimLeases({ pools, dataDir = DATA_DIR, panes = null, now = Date.now(), probeTcp = tcpListening, browserProcess = null, log = () => {}, waitMs = COMMAND_LOCK_WAIT_MS } = {}) {
+export function reclaimLeases({ pools, dataDir = DATA_DIR, panes = null, now = Date.now(), probeTcp = tcpListening, browserProcess = null, log = () => {}, waitMs = MUTATION_GUARD_WAIT_MS } = {}) {
   if (!fs.existsSync(path.join(dataDir, LEASES_FILE))) return { reclaimed: [] };
   const reclaimed = changeLeases(dataDir, (store) => reclaimInStore(store, { pools, panes, now: timeValue(now), probeTcp, browserProcess }), waitMs);
   for (const item of reclaimed) log(item);

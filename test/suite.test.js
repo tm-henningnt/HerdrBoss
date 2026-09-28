@@ -95,6 +95,35 @@ test('suite releases the lock when the command cannot start', (t) => {
   assert.equal(fs.existsSync(f.lockFile), false);
 });
 
+test('suite keeps a failed command code when lock release stays busy, then the next acquire takes over', (t) => {
+  const f = fixture(t, 'herdr-suite-release-busy-');
+  const guard = path.join(f.dataDir, 'locks', 'machine', '.mutation');
+  const ownerEnded = path.join(f.base, 'owner-ended');
+  const script = path.join(f.base, 'leave-mutation-guard.mjs');
+  fs.writeFileSync(script, [
+    "import fs from 'node:fs';",
+    `fs.mkdirSync(${JSON.stringify(guard)}, { recursive: true, mode: 0o700 });`,
+    `fs.writeFileSync(${JSON.stringify(ownerEnded)}, 'yes');`,
+    'process.exit(4);',
+  ].join('\n'));
+  const pidAlive = (pid) => fs.existsSync(ownerEnded) ? pid === 601 : true;
+
+  const result = runKitCommand('suite', ['--', process.execPath, script], f.options({ pidAlive }));
+
+  assert.equal(result.exitCode, 4);
+  assert.equal(fs.existsSync(f.lockFile), true, 'the lock record remains after release fails');
+  assert.deepEqual(f.lines.filter((line) => line.startsWith('Warning:')), [
+    'Warning: could not release lock full-suite: A project lock operation is already in progress. Retry when it finishes. The lock is stale when this process ends.',
+  ]);
+  fs.rmSync(guard, { recursive: true, force: true });
+
+  const takeover = runKitCommand('lock', ['acquire', 'full-suite'], f.options({ pidAlive }));
+  assert.equal(takeover.ownerPane, 'ws:orch');
+  assert.ok(f.lines.some((line) => /NOTICE: Taking over stale lock full-suite/.test(line)), f.lines.join('\n'));
+  runKitCommand('lock', ['release', 'full-suite'], f.options({ pidAlive }));
+  assert.equal(fs.existsSync(f.lockFile), false);
+});
+
 test('suite removes token, secret, password, and key names from the command environment', (t) => {
   const f = fixture(t, 'herdr-suite-env-');
   const result = f.run([]);
