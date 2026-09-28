@@ -1,0 +1,71 @@
+# Herdr control surface
+
+Read this file before you inspect or control Herdr panes and agents, when a worker state is not clear, before you start a worker, and before browser work.
+
+## Commands
+
+- Use the installed Herdr CLI as the authority for command syntax and current state.
+- Read `herdr status`, `herdr workspace list`, `herdr pane current --current`, `herdr pane list`, and `herdr agent list`.
+- Parse IDs from command output.
+- Never infer a pane, tab, workspace, or agent ID from its position in the UI.
+- Use `herdr agent` commands for recognized agent lifecycle and prompts.
+- Use `herdr pane` commands for shells and raw terminal control.
+- Never run `herdr pane run` in a pane occupied by an agent.
+- Keep all worker panes in the worker tabs of the verified caller workspace. Give each worker pane `--cwd <dir>` for the worker worktree.
+- Send the complete brief only after the worker pane is ready.
+- Use `herdr notification show` only for information the human must see.
+- Never stop the Herdr server or kill the main Herdr process to recover a worker.
+
+## Worker tabs and start options
+
+- Put each worker in a pane of a worker tab in the verified caller workspace. The worker tabs have the labels `Workers`, `Workers 2`, `Workers 3`, and so on. A worker tab holds at most 3 worker panes. The project setting `workerPanesPerTab` changes this limit.
+- `herdr-boss worker start` uses the first worker tab in label order with a free slot. It splits the new pane from the newest pane in that tab. When all worker tabs are full, it creates the tab with the lowest free label, and the worker uses its root pane.
+- Pass `--model` and `--effort` only when the route needs them.
+- Pass `--issue` when the work belongs to a tracked issue.
+- Pass `--base` only when the project needs a non-default base branch.
+- Use `--dry-run` to inspect a planned dispatch without starting it.
+- Use `--no-worktree` only when the orchestrator has chosen shared-tree work. Each such worker gets its own `.worker/<name>/` folder for its brief and reports.
+- Run `herdr-boss worker park <name> --reason TEXT` for a worker that waits on purpose, for example for the Owner. Idle notices then skip it. Run `worker unpark <name>` when it resumes.
+
+## Waiting
+
+- Wait for an agent instead of polling it.
+- Use `herdr agent wait <name> --until idle --timeout <ms>` for long work.
+- Use `herdr agent prompt <name> "<brief>" --wait --timeout <ms>` for short bounded work.
+- Use `herdr pane wait-output <pane> --match <text>` when a command produces the event.
+- Do not reread an unchanged pane in a loop.
+
+## Agent states
+
+- Use `herdr agent get` to inspect a worker state.
+- Read a worker dialog or screen with `herdr agent read <name> --source recent-unwrapped`. This source joins wrapped lines. Do not reject a dialog because the pane is narrow.
+- Read the complete worker dialog before answering it. If the full dialog is not readable, reject it and let the worker ask through `WORKER QUESTION`.
+- Use `herdr agent explain <name>` when state detection fails.
+- Treat `working` as active work.
+- Treat `blocked` as a question or approval dialog that needs inspection.
+- Treat `idle` as ready for input, not as proof of completion.
+- Treat `done` as an ended process, not as proof of a completed task.
+- Treat `unknown` as unknown, not as completion.
+- Require a report even when the worker is `idle` or `done`.
+
+## Recovery and reuse
+
+- Inspect the pane and worktree once after a timeout or silent stop.
+- Retry only the remaining atomic objective.
+- Keep workers warm for related work in the same worktree or evidence chain.
+- Start a fresh worker for a different scope, worktree, or model fit.
+- Close a worker pane after verification when no related task remains.
+
+## Project browser
+
+- Read [the dedicated browser service](../../../browser-service.md) before browser work. Use [the shared-browser rules](../../../shared-browser.md) only for an explicitly assigned legacy session.
+- Request a dedicated persistent browser with `herdr-boss browser request <project-slug>` before browser work.
+- Use the returned port and profile for that project. Do not stop another project's browser.
+- Use the dedicated browser for your project. Port 9222 is only for a legacy shared session when the Owner explicitly assigns it.
+- Coordinate tabs within your project and avoid stopping a browser another worker is using.
+- Give browser workers the project slug and a tab ID. For simple screenshots, navigation, clicks, text, and keys, use [the project browser service](../../../browser-service.md).
+- Have the Owner enter credentials through the dashboard.
+- For dashboard and web checks, prefer the project browser: `herdr-boss browser request <slug>`, then `browser tabs`, `browser tab new`, and `browser screenshot`.
+- `playwright-cli` and `agent-browser` are also permitted. Close their sessions when you are done.
+- Close only browser sessions that the worker owns.
+- Close Chrome with `herdr-boss browser close <slug>` or CDP `Browser.close`. Never send a signal to Chrome yourself.
