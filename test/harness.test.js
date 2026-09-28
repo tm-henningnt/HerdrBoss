@@ -312,6 +312,67 @@ test('harness sync treats a tilde home path as equal to the full home path', (t)
   assert.doesNotMatch(result.stdout, /change environment|missing environment/);
 });
 
+test('harness sync accepts a projects line with extra Owner text and the same paths in another order', (t) => {
+  const f = harnessSyncFixture(t);
+  const beta = gitRepo(f, 'Beta', 'https://github.com/example/beta.git');
+  registry(f, [
+    { slug: 'alpha', repo: f.alpha, remote: 'https://github.com/example/alpha.git' },
+    { slug: 'beta', repo: beta, remote: 'https://github.com/example/beta.git' },
+  ]);
+  const current = { ...f.expected, environment: [...f.expected.environment], allow: [...f.expected.allow] };
+  const index = current.environment.findIndex((line) => line.startsWith('**Herdr Boss projects**'));
+  current.environment[index] = `**Herdr Boss projects**: PUBLIC NOTE. Worker worktrees are in ${f.home}/Projects/.herdr-wt/<repo>/<name>. The projects in another order: ${beta} (example/beta), ${f.alpha} (example/alpha).`;
+  writeClaudeAutoMode(f, current);
+  const result = run(f, ['harness', 'sync']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Claude autoMode: nothing to change\./);
+  assert.doesNotMatch(result.stdout, /change environment "Herdr Boss projects"|missing path:|now:/);
+});
+
+test('harness sync reports a missing project path in the projects line as one change', (t) => {
+  const f = harnessSyncFixture(t);
+  const beta = gitRepo(f, 'Beta', 'https://github.com/example/beta.git');
+  registry(f, [
+    { slug: 'alpha', repo: f.alpha, remote: 'https://github.com/example/alpha.git' },
+    { slug: 'beta', repo: beta, remote: 'https://github.com/example/beta.git' },
+  ]);
+  const current = { ...f.expected, environment: [...f.expected.environment], allow: [...f.expected.allow] };
+  const index = current.environment.findIndex((line) => line.startsWith('**Herdr Boss projects**'));
+  current.environment[index] = `**Herdr Boss projects**: ${f.alpha} (example/alpha). Worker worktrees are in ${f.home}/Projects/.herdr-wt/<repo>/<name>.`;
+  writeClaudeAutoMode(f, current);
+  const result = run(f, ['harness', 'sync']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal((result.stdout.match(/change environment "Herdr Boss projects"/g) ?? []).length, 1, result.stdout);
+  const missingPaths = result.stdout.split('\n').filter((line) => line.startsWith('missing path:'));
+  assert.deepEqual(missingPaths, [`missing path: ${beta}`]);
+});
+
+test('harness sync accepts ~/ paths in place of the full home path in the projects line', (t) => {
+  const f = harnessSyncFixture(t);
+  const current = { ...f.expected, environment: [...f.expected.environment], allow: [...f.expected.allow] };
+  const index = current.environment.findIndex((line) => line.startsWith('**Herdr Boss projects**'));
+  current.environment[index] = `${current.environment[index].replaceAll(f.home, '~')} Owner extra text.`;
+  writeClaudeAutoMode(f, current);
+  const result = run(f, ['harness', 'sync']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Claude autoMode: nothing to change\./);
+  assert.doesNotMatch(result.stdout, /change environment|missing path:/);
+});
+
+test('harness sync still reports another labeled environment line next to an accepted projects line', (t) => {
+  const f = harnessSyncFixture(t);
+  const current = { ...f.expected, environment: [...f.expected.environment], allow: [...f.expected.allow] };
+  const projects = current.environment.findIndex((line) => line.startsWith('**Herdr Boss projects**'));
+  current.environment[projects] = `${current.environment[projects]} Owner extra text.`;
+  const decisions = current.environment.findIndex((line) => line.startsWith('**Owner decisions**:'));
+  current.environment[decisions] = current.environment[decisions].replace('each project records them', 'each project stores them');
+  writeClaudeAutoMode(f, current);
+  const result = run(f, ['harness', 'sync']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.doesNotMatch(result.stdout, /change environment "Herdr Boss projects"|missing path:/);
+  assert.ok(result.stdout.includes(`change environment "Owner decisions": ${f.expected.environment[decisions]}`), result.stdout);
+});
+
 test('harness sync counts Owner-only lines without printing them', (t) => {
   const f = harnessSyncFixture(t);
   const current = {

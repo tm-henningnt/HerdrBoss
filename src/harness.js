@@ -13,7 +13,8 @@ const TEMPLATES = path.join(ROOT, 'kit', 'templates', 'harness');
 const MODELS_FILE = path.join(ROOT, 'kit', 'models.json');
 const SECTION = '[sandbox_workspace_write]';
 const FORBIDDEN_PS = ['e', '-E', 'eww', 'auxe', 'auxeww'];
-const PROJECTS_LINE = '**Herdr Boss projects**';
+const PROJECTS_LABEL = 'Herdr Boss projects';
+const PROJECTS_LINE = `**${PROJECTS_LABEL}**`;
 const LAUNCH_FLAGS = {
   claude: [['--permission-mode', 'auto']],
   codex: [['-s', 'workspace-write']],
@@ -191,7 +192,19 @@ function claudeLineLabel(line) {
   return /^\*\*(.+?)\*\*:/.exec(String(line).trim())?.[1] ?? null;
 }
 
-function compareClaudeLines(area, expected, current, home) {
+// The path test of checkHarness(): a path is named only when no path character touches it.
+function namesClaudePath(line, value) {
+  const escaped = String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(^|[\\s,:])${escaped}(?=$|[\\s,.;)(])`).test(line);
+}
+
+// A folder is also named when a child follows it, as in "~/Projects/.herdr-wt/<repo>".
+function namesClaudeFolder(line, value) {
+  const escaped = String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(^|[\\s,:])${escaped}(?=$|[\\s,.;)(/])`).test(line);
+}
+
+function compareClaudeLines(area, expected, current, home, projectsLinePaths = []) {
   const used = new Set();
   const changes = [];
   for (const line of expected) {
@@ -206,7 +219,16 @@ function compareClaudeLines(area, expected, current, home) {
       continue;
     }
     used.add(index);
-    if (normalizedClaudeLine(current[index], home) !== normalizedClaudeLine(line, home)) {
+    const currentText = normalizedClaudeLine(current[index], home);
+    if (area === 'environment' && label === PROJECTS_LABEL) {
+      const missing = projectsLinePaths.filter(({ target, folder }) => !(folder ? namesClaudeFolder : namesClaudePath)(currentText, normalizedClaudeLine(target, home)));
+      if (missing.length) {
+        changes.push(`change environment "${label}": ${line}`, `now: ${current[index]}`);
+        for (const { target } of missing) changes.push(`missing path: ${target}`);
+      }
+      continue;
+    }
+    if (currentText !== normalizedClaudeLine(line, home)) {
       if (area === 'environment' && label != null) {
         changes.push(`change environment "${label}": ${line}`, `now: ${current[index]}`);
       } else changes.push(`missing ${area}: ${line}`);
@@ -233,7 +255,11 @@ export function claudeLines(options = {}) {
 
   const environment = Array.isArray(autoMode.environment) ? autoMode.environment : [];
   const allow = Array.isArray(autoMode.allow) ? autoMode.allow : [];
-  const environmentResult = compareClaudeLines('environment', expected.environment, environment, home);
+  const requiredPaths = [
+    ...readProjectRepos(options.dataDir ?? DATA_DIR).map((row) => ({ target: row.repo })),
+    { target: sharedWorktreeRoot(home), folder: true },
+  ];
+  const environmentResult = compareClaudeLines('environment', expected.environment, environment, home, requiredPaths);
   const allowResult = compareClaudeLines('allow', expected.allow, allow, home);
   const changes = [...environmentResult.changes, ...allowResult.changes];
   const lines = changes.length
