@@ -39,7 +39,7 @@ function fixture(t, prefix) {
   const script = path.join(base, 'suite.mjs');
   fs.writeFileSync(script, [
     "import fs from 'node:fs';",
-    `fs.writeFileSync(${JSON.stringify(seen)}, JSON.stringify({ names: Object.keys(process.env), locked: fs.existsSync(${JSON.stringify(lockFile)}) }));`,
+    `fs.writeFileSync(${JSON.stringify(seen)}, JSON.stringify({ names: Object.keys(process.env), locked: fs.existsSync(${JSON.stringify(lockFile)}), lock: fs.existsSync(${JSON.stringify(lockFile)}) ? JSON.parse(fs.readFileSync(${JSON.stringify(lockFile)}, 'utf8')) : null }));`,
     'process.exit(Number(process.argv[2] ?? 0));',
   ].join('\n'));
   const env = {
@@ -77,6 +77,9 @@ test('suite holds the full-suite lock around the command and passes the exit cod
   const passed = f.run([]);
   assert.equal(passed.exitCode, 0);
   assert.equal(f.readSeen().locked, true, 'the lock exists while the command runs');
+  assert.equal(f.readSeen().lock.pid, process.pid, 'the lock records the herdr-boss suite process');
+  assert.equal(f.readSeen().lock.kind, 'suite');
+  assert.equal(f.readSeen().lock.ownerPane, 'ws:orch');
   assert.equal(fs.existsSync(f.lockFile), false, 'the lock is released after the command');
   const failed = f.run([], 3);
   assert.equal(failed.exitCode, 3);

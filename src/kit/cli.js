@@ -153,7 +153,7 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
     }
     if (action === 'list') {
       if (rest.length) fail('Usage: lock list');
-      return listProjectLocks({ config, env, herdr, dataDir: lockDataDir, output, pidAlive });
+      return listProjectLocks({ config, env, herdr, dataDir: lockDataDir, output, pidAlive, now });
     }
     fail('Usage: lock acquire <name> [--wait SECONDS] | lock release <name> | lock list');
   }

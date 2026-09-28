@@ -70,6 +70,22 @@ test('herdr-boss push takes and releases the full-suite lock around a push with 
   assert.ok(f.lines.some((line) => /pre-push hook.*full-suite/i.test(line)), f.lines.join('\n'));
 });
 
+test('push lock records the push process and kind', (t) => {
+  const f = fixture(t, 'herdr-push-owner-');
+  f.writeHook(path.join(f.root, '.git', 'hooks'));
+  const hook = path.join(f.root, '.git', 'hooks', 'pre-push');
+  const observed = path.join(f.base, 'push-lock.json');
+  fs.writeFileSync(hook, `#!/bin/sh\ncat '${f.lockFile}' > '${observed}'\nexit 0\n`);
+  fs.chmodSync(hook, 0o755);
+
+  const result = runKitCommand('push', ['origin', 'main'], f.options());
+  assert.equal(result.exitCode, 0);
+  const lock = JSON.parse(fs.readFileSync(observed, 'utf8'));
+  assert.equal(lock.pid, process.pid);
+  assert.equal(lock.kind, 'push');
+  assert.equal(lock.ownerPane, 'ws:orch');
+});
+
 test('herdr-boss push releases the lock and passes the exit code through when the push fails', (t) => {
   const f = fixture(t, 'herdr-push-fail-');
   f.writeHook(path.join(f.root, '.git', 'hooks'), 1);

@@ -13,6 +13,8 @@ import { allowWorkerScope, collectWorker, createHerdrRunner, filterCollectProces
 import { classifyWorktrees, pruneWorktrees } from '../src/kit/worktrees.js';
 import { usageProvider } from '../src/usage.js';
 import { validateProject } from '../src/projects.js';
+import { Engine } from '../src/engine.js';
+import { renderBulletin } from '../src/rules.js';
 
 // Worker worktrees default to ~/Projects/.herdr-wt. Keep them out of the real home folder.
 const TEST_HOME = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-kit-home-')));
@@ -2447,6 +2449,112 @@ test('the full-suite lock is machine-wide and other lock names stay per reposito
   assert.equal(runKitCommand('lock', ['acquire', 'full-suite'], options(secondConfig)).ownerPane, 'ws:orch-b');
 });
 
+test('a dead suite PID makes a full-suite lock stale while its pane remains live', (t) => {
+  const root = temporaryRepo('herdr-suite-pid-stale-');
+  const config = loadProjectConfig({ cwd: root });
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-suite-pid-stale-data-'));
+  t.after(() => [root, dataDir].forEach((dir) => fs.rmSync(dir, { recursive: true, force: true })));
+  const livePanes = new Set(['ws:orch-a', 'ws:orch-b']);
+  let caller = 'ws:orch-a';
+  const herdr = (args) => {
+    if (args[0] === 'pane' && args[1] === 'get') return { pane: { pane_id: args[2], workspace_id: 'ws', label: 'orch' } };
+    if (args[0] === 'pane' && args[1] === 'process-info') return { process_info: { shell_pid: args.at(-1) === 'ws:orch-a' ? 501 : 502 } };
+    if (args[0] === 'pane' && args[1] === 'list') return { panes: [...livePanes].map((pane_id) => ({ pane_id })) };
+    throw new Error(`Unexpected Herdr call: ${args.join(' ')}`);
+  };
+  const options = () => ({
+    config, lockDataDir: dataDir,
+    env: { HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'ws', HERDR_PANE_ID: caller },
+    herdr, pidAlive: (pid) => pid === 501 || pid === 502,
+    now: () => Date.parse('2026-09-28T10:00:00.000Z'), output: () => {},
+  });
+  runKitCommand('lock', ['acquire', 'full-suite'], options());
+  const file = path.join(dataDir, 'locks', 'machine', 'full-suite.json');
+  const record = JSON.parse(fs.readFileSync(file, 'utf8'));
+  record.kind = 'suite';
+  record.pid = 903;
+  delete record.expiresAt;
+  fs.writeFileSync(file, JSON.stringify(record));
+
+  caller = 'ws:orch-b';
+  assert.equal(livePanes.has('ws:orch-a'), true, 'the former holder pane is still live');
+  assert.equal(runKitCommand('lock', ['list'], options())[0].state, 'stale');
+  const takeover = runKitCommand('lock', ['acquire', 'full-suite'], options());
+  assert.equal(takeover.ownerPane, 'ws:orch-b');
+  assert.equal(takeover.kind, 'manual');
+});
+
+test('manual full-suite locks expire after an hour and the engine warns the holder at takeover', async (t) => {
+  const root = temporaryRepo('herdr-manual-suite-lock-');
+  const config = loadProjectConfig({ cwd: root });
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-manual-suite-lock-data-'));
+  t.after(() => [root, dataDir].forEach((dir) => fs.rmSync(dir, { recursive: true, force: true })));
+  const panes = new Set(['ws:orch-a', 'ws:orch-b']);
+  const pids = new Set([501, 502]);
+  const calls = [];
+  const herdr = (args) => {
+    if (args[0] === 'pane' && args[1] === 'get') return { pane: { pane_id: args[2], workspace_id: 'ws', label: 'orch' } };
+    if (args[0] === 'pane' && args[1] === 'process-info') return { process_info: { shell_pid: args.at(-1) === 'ws:orch-a' ? 501 : 502 } };
+    if (args[0] === 'pane' && args[1] === 'list') return { panes: [...panes].map((pane_id) => ({ pane_id })) };
+    throw new Error(`Unexpected Herdr call: ${args.join(' ')}`);
+  };
+  let caller = 'ws:orch-a';
+  let now = Date.parse('2026-09-28T10:00:00.000Z');
+  const output = [];
+  const options = () => ({
+    config, lockDataDir: dataDir,
+    env: { HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'ws', HERDR_PANE_ID: caller },
+    herdr, pidAlive: (pid) => pids.has(pid), now: () => now,
+    output: (line) => output.push(line),
+  });
+
+  const held = runKitCommand('lock', ['acquire', 'full-suite'], options());
+  assert.equal(held.kind, 'manual');
+  assert.equal(held.pid, 501);
+  assert.equal(held.expiresAt, '2026-09-28T11:00:00.000Z');
+  now += 3 * 60 * 1000;
+  const listed = runKitCommand('lock', ['list'], options());
+  assert.equal(listed[0].state, 'live');
+  assert.match(output.at(-1), /full-suite .*ws:orch-a.*manual.*3m.*57m/);
+
+  now += 58 * 60 * 1000;
+  caller = 'ws:orch-b';
+  const takeover = runKitCommand('lock', ['acquire', 'full-suite'], options());
+  assert.equal(takeover.ownerPane, 'ws:orch-b');
+  assert.equal(takeover.kind, 'manual');
+  const noticesDir = path.join(dataDir, 'locks', 'machine', 'notices');
+  const noticeFiles = fs.readdirSync(noticesDir);
+  assert.equal(noticeFiles.length, 1);
+  const notice = JSON.parse(fs.readFileSync(path.join(noticesDir, noticeFiles[0]), 'utf8'));
+  assert.equal(notice.severity, 'warn');
+  assert.equal(notice.ownerPane, 'ws:orch-a');
+  assert.equal(notice.text, 'Your full-suite lock expired after 60 minutes and was released. Use herdr-boss suite -- <command> next time.');
+
+  const engine = Object.create(Engine.prototype);
+  engine.lockDataDir = dataDir;
+  engine.push = true;
+  engine.herdrRunner = async (...args) => { calls.push(args); return '{}'; };
+  engine.log = (...args) => calls.push(['log', ...args]);
+  await engine.deliverLockTakeoverNotices({ panes: [{ id: 'ws:orch-a' }, { id: 'ws:orch-b' }] });
+  const sent = calls.filter((call) => call[0] === 'herdr');
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0][1][0], 'agent');
+  assert.equal(sent[0][1][1], 'prompt');
+  assert.equal(sent[0][1][2], 'ws:orch-a');
+  assert.match(sent[0][1][3], /Your full-suite lock expired after 60 minutes and was released/);
+  assert.ok(calls.some((call) => call[0] === 'log' && call[3]?.severity === 'warn'));
+  await engine.deliverLockTakeoverNotices({ panes: [{ id: 'ws:orch-a' }] });
+  assert.equal(calls.filter((call) => call[0] === 'herdr').length, 1, 'the holder gets one notice');
+});
+
+test('the bulletin shows the current machine lock holder, kind, and age', () => {
+  const text = renderBulletin({
+    updatedAt: '2026-09-28T10:15:00.000Z',
+    locks: [{ name: 'full-suite', scope: 'machine', state: 'live', ownerPane: 'ws:orch', kind: 'suite', ageSeconds: 900 }],
+  }, { alerts: [], advice: [] }, { dashboardPort: 4477 });
+  assert.match(text, /- full-suite held by ws:orch \(suite\) for 15m\./);
+});
+
 test('worker start gives the pane absolute TMPDIR and HERDR_WORKTREE paths and creates the folder', () => {
   const root = temporaryRepo();
   const template = path.join(root, 'brief-template.md');
@@ -2505,13 +2613,20 @@ test('the worker brief template uses absolute worker paths and the kit names no 
   assert.ok(template.indexOf('## Process safety') > 0 && template.indexOf('## Process safety') < template.indexOf('## Edit scope'));
   assert.match(processSafety, /List processes only with `pgrep -l NAME` or `ps -o pid,ppid,etime,comm`\./);
   assert.match(processSafety, /Never use `ps e`, `ps -E`, `ps eww`, `ps aux`, `ps -ef`, or `pgrep -fl`\./);
-  assert.match(processSafety, /Run a full test suite with `herdr-boss suite -- <command>`\. It takes the `full-suite` lock and removes tokens from the test environment\./);
+  assert.match(processSafety, /Run a full test suite with `herdr-boss suite -- <command>`, and push with `herdr-boss push <args>`\. Never take the full-suite lock with a bare lock acquire for a suite\./);
   assert.match(gates, /Run only the scoped acceptance commands named in this brief or task contract\./);
   const grep = spawnSync('grep', ['-rn', 'load average is under 30', 'kit', 'docs'], { encoding: 'utf8' });
   assert.equal(grep.stdout, '');
-  for (const file of ['kit/templates/project-kit.md', 'kit/skills/herdr-orchestrator/SKILL.md', 'docs/user-guide.md', 'docs/cli.md']) {
-    assert.match(fs.readFileSync(path.resolve(file), 'utf8'), /herdr-boss lock acquire full-suite --wait 1800/, file);
+  const lockRule = /Run a full test suite with `herdr-boss suite -- <command>`, and push with `herdr-boss push <args>`\. Never take the full-suite lock with a bare lock acquire for a suite\./;
+  for (const file of ['kit/templates/project-kit.md', 'kit/skills/herdr-orchestrator/SKILL.md', 'kit/templates/worker-brief.md', 'docs/user-guide.md']) {
+    const text = fs.readFileSync(path.resolve(file), 'utf8');
+    assert.match(text, lockRule, file);
+    assert.doesNotMatch(text, /herdr-boss lock acquire full-suite/, file);
   }
+  const cli = fs.readFileSync(path.resolve('docs/cli.md'), 'utf8');
+  assert.match(cli, /herdr-boss suite -- npm test/);
+  assert.match(cli, /herdr-boss push/);
+  assert.doesNotMatch(cli, /herdr-boss lock acquire full-suite --wait 1800/);
 });
 
 test('the orchestrator skill stays short and links each reference file', () => {

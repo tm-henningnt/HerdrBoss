@@ -18,6 +18,7 @@ import { listHandoffs, saveHandoffs, supersedeHandoffs, expireHandoff, expireMis
 import { deliverQueued, mailboxCounts, readMessages } from './messages.js';
 import { readKitNotice, pendingKitAlert, isKitAlert, kitNoticeTargets } from './kit-notice.js';
 import { inspectWorkerTransitions, inspectWorkerReports, applyWorkerFailureStatuses, resolveFreeUsageRun, activeFreeModelExhaustions, extendFreeModelExhaustion, activeFreeLaneExhaustions, extendFreeLaneExhaustion, freeUsageLaneRetry } from './worker-failures.js';
+import { readLockTakeoverNotices, readMachineLocks, removeLockTakeoverNotice } from './kit/locks.js';
 
 const MEMORY_FILE = path.join(DATA_DIR, 'memory.json');
 const STATE_FILE = path.join(DATA_DIR, 'state.json');
@@ -107,7 +108,7 @@ function writeJson(file, data) {
 }
 
 export class Engine extends EventEmitter {
-  constructor(cfg, { push = cfg.push, act = true, collectors = {}, handoffRunner = run, herdrRunner = run, gitRunner = (args) => run('git', args, { timeout: 10000 }), kitRoot = KIT_ROOT } = {}) {
+  constructor(cfg, { push = cfg.push, act = true, collectors = {}, handoffRunner = run, herdrRunner = run, gitRunner = (args) => run('git', args, { timeout: 10000 }), kitRoot = KIT_ROOT, lockDataDir = DATA_DIR } = {}) {
     super();
     this.cfg = cfg;
     const guardReasons = [];
@@ -152,6 +153,7 @@ export class Engine extends EventEmitter {
     this.herdrRunner = herdrRunner;
     this.gitRunner = gitRunner;
     this.kitRoot = kitRoot;
+    this.lockDataDir = lockDataDir;
     this.kitNoticeRead = false;
     this.state = readJson(STATE_FILE, null);
     const savedAt = Date.parse(this.state?.quotasAt);
@@ -296,8 +298,16 @@ export class Engine extends EventEmitter {
         browsers,
         managedBrowsers,
         resourceLeases,
+        locks: [],
         errors,
       };
+      try {
+        snap.locks = readMachineLocks({
+          dataDir: this.lockDataDir,
+          livePanes: new Set((herdr?.panes || []).map((pane) => pane.id)),
+          now,
+        });
+      } catch (error) { errors.push(`locks: ${error.message}`); }
       snap.projects = listProjects();
       const policy = migrateWorkspacePolicy(loadPolicy(), snap, { file: POLICY_FILE });
       this.memory.exhaustedFreeModels = activeFreeModelExhaustions(this.memory.exhaustedFreeModels, now);
@@ -500,6 +510,7 @@ export class Engine extends EventEmitter {
       snap.denials = denialSummary(readDenials(DATA_DIR), now, { pendingBytes: this.memory.denialScan?.pendingBytes || 0 });
       fs.writeFileSync(BULLETIN_FILE, renderBulletin(snap, evaluation, this.cfg));
       if (this.act) await this.deliver(evaluation.alerts, herdr, now);
+      if (this.act && this.push) await this.deliverLockTakeoverNotices(herdr);
       // Owner messages need a fresh pane list, so a stale snapshot never sends to a pane that is now working.
       if (this.act && this.push && currentPaneList) {
         try { await this.deliverOwnerMessages(herdr, control.projects, now); }
@@ -891,6 +902,28 @@ export class Engine extends EventEmitter {
       log: (type, text, extra) => this.log(type, text, extra),
       prompt: async (pane, text) => checkHerdrResponse(await this.herdrRunner('herdr', ['agent', 'prompt', pane, text])),
     });
+  }
+
+  async deliverLockTakeoverNotices(herdr) {
+    if (!this.push || !herdr?.panes) return;
+    let notices;
+    try { notices = readLockTakeoverNotices({ dataDir: this.lockDataDir }); }
+    catch (error) { this.log('error', `Could not read expired lock notices: ${error.message}`); return; }
+    const panes = new Set(herdr.panes.map((pane) => pane.id));
+    for (const notice of notices) {
+      if (!panes.has(notice.ownerPane)) continue;
+      const text = [
+        '[herdr-boss] Resource notice. Act on it if it concerns your work. You do not need to reply to me.',
+        `- ${notice.text}`,
+      ].join('\n');
+      try {
+        checkHerdrResponse(await this.herdrRunner('herdr', ['agent', 'prompt', notice.ownerPane, text]));
+        removeLockTakeoverNotice(notice.id, { dataDir: this.lockDataDir });
+        this.log('notify', notice.text, { severity: notice.severity, pane: notice.ownerPane });
+      } catch (error) {
+        this.log('error', `Expired lock notice to ${notice.ownerPane} failed: ${String(error.stderr || error.message).slice(0, 200)}`);
+      }
+    }
   }
 
   async deliver(alerts, herdr, now) {

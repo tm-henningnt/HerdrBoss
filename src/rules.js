@@ -343,6 +343,14 @@ export function renderBulletin(snap, evaluation, cfg) {
     L.push('', '## Project rules', '');
     for (const [name, texts] of byProject) { L.push(`### ${name}`, ''); texts.forEach((t) => L.push(`- ${t}`)); L.push(''); }
   }
+  const heldMachineLocks = (snap.locks || []).filter((lock) => lock.scope === 'machine' && lock.state === 'live');
+  if (heldMachineLocks.length) {
+    L.push('', '## Locks', '');
+    for (const lock of heldMachineLocks) {
+      const ageSeconds = lock.ageSeconds ?? Math.max(0, Math.floor((Date.parse(snap.updatedAt) - Date.parse(lock.acquiredAt)) / 1000));
+      L.push(`- ${lock.name} held by ${lock.ownerPane} (${lock.kind}) for ${fmtDuration(ageSeconds)}.`);
+    }
+  }
   // The denial trend is for the Owner, so it has its own section and never enters the project rules.
   if (snap.denials?.rising?.length) {
     L.push('', '## Owner', '');

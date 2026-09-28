@@ -59,7 +59,7 @@ Read each file in the skill folder when its step comes:
 - Decide and run your own pushes, deployments, and releases under the project release rules. Neither the Boss nor the Owner approves them.
 - Before each push, read the full diff for tokens, secrets, local paths with private content, and client or tenant names from other projects.
 - Push one change set at a time.
-- Take the machine-wide lock around every full test suite run and every push whose hook runs the full suite: run `herdr-boss lock acquire full-suite --wait 1800`, run the suite or the push, then run `herdr-boss lock release full-suite`. Use `herdr-boss push` for a push; it takes the lock when a pre-push hook exists. There is no load threshold.
+- Run a full test suite with `herdr-boss suite -- <command>`, and push with `herdr-boss push <args>`. Never take the full-suite lock with a bare lock acquire for a suite. Use `herdr-boss push` for a push; it takes the lock when a pre-push hook exists. There is no load threshold.
 - Lease a shared resource with `herdr-boss lease acquire POOL` or `worker start --lease POOL`. Never pick a port from a pool by hand.
 
 ### Human gates and parking
