@@ -57,7 +57,8 @@ const USAGE = `herdr-boss <command>
   check ...             Validate worker handoffs and scope.
   check agents [FILE]   Check the AGENTS.md stub, the kit file, and stale orchestration text.
   check kit             List each published project with its loaded kit revision.
-  harness check         Check the harness settings that orchestration needs. Exit 1 on a missing entry.
+  harness check [--live-codex]  Check the harness settings that orchestration needs. Exit 1 on a missing entry.
+                        --live-codex also runs one codex exec to check the worker shell variables.
   harness sync [--dry-run] [--codex-only]  Add missing Codex writable roots and print the Claude autoMode lines.
   kit install [--no-hook]  Write the kit file, the AGENTS.md stub, and the Claude SessionStart hook.
   kit block             Print the marked Herdr Boss stub for AGENTS.md.
@@ -365,10 +366,12 @@ async function main() {
       break;
     }
     case 'harness': {
-      const { checkHarness, formatFinding, syncHarness } = await import('./harness.js');
+      const { checkHarness, formatFinding, liveCodexCheck, syncHarness } = await import('./harness.js');
       const [action, ...flags] = args;
-      if (action === 'check' && !flags.length) {
+      if (action === 'check' && flags.every((flag) => flag === '--live-codex')) {
         const findings = checkHarness();
+        // Only --live-codex calls a model. It prints set or missing, never a value.
+        if (flags.includes('--live-codex')) findings.push(liveCodexCheck());
         for (const finding of findings) console.log(formatFinding(finding));
         const failed = findings.filter((finding) => finding.status !== 'ok').length;
         console.log(`harness check: ${failed ? 'FAIL' : 'PASS'} (${findings.length} entries, ${failed} missing or bad). See docs/harness-setup.md.`);
@@ -377,7 +380,7 @@ async function main() {
         const result = syncHarness({ dryRun: flags.includes('--dry-run'), codexOnly: flags.includes('--codex-only'), url: dashboardUrl(cfg) });
         for (const line of result.lines) console.log(line);
         if (!result.ok) process.exitCode = 1;
-      } else throw new Error('Usage: harness check | harness sync [--dry-run] [--codex-only]');
+      } else throw new Error('Usage: harness check [--live-codex] | harness sync [--dry-run] [--codex-only]');
       break;
     }
     case 'install': {
