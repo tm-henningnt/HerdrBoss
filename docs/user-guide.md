@@ -442,6 +442,18 @@ The project page shows a read-only **Files** panel. It names three paths:
 
 The panel shows the kit revision in the project status file next to the current kit revision. The home folder shows as `~`. The page shows paths only. It never shows the contents of a memory or kit file.
 
+### Worker config
+
+The project page shows a read-only **Worker config** panel. It shows the non-secret fields that Herdr Boss read from `.herdr-boss.json` in the project repository:
+
+- `slug`, `baseBranch`, `worktreeRoot`, and `worktreeName`.
+- `evidenceTiers`, `allowedModels`, `workerPanesPerTab`, and `imageBudget`.
+- `setup`, `setupTimeoutSeconds`, `agentStartTimeoutMs`, and `testThreadsFlag`.
+
+A field that the file sets has a **config** tag. The other fields use the default value. The `setup` command shows as `set` or `not set`. A `worktreeRoot` path in the home folder shows as `~`. A project with an invalid `.herdr-boss.json` shows the read error in place of the fields.
+
+The engine reads the config at each service start and every 10 minutes. Change a field in `.herdr-boss.json` in the repository. The panel changes after the next read.
+
 ### Needs your decision
 
 A task can name the party that holds it with `waitingOn`: `owner`, `boss`, `task`, or `external`. The project page shows a **Needs your decision** group above the task list. The group lists each open task that waits on the Owner with its ID, title, ask, and a link to its Mailbox conversation. Each project card shows the count. The Overview shows the total with a link to each group.

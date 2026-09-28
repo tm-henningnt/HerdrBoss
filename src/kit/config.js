@@ -186,6 +186,41 @@ export function loadProjectConfig({ cwd = process.cwd(), file = '.herdr-boss.jso
   };
 }
 
+// The non-secret worker config fields that the dashboard shows for a project. Never add a secret field.
+export const WORKER_CONFIG_FIELDS = Object.freeze([
+  'slug', 'baseBranch', 'worktreeRoot', 'worktreeName',
+  'evidenceTiers', 'allowedModels', 'workerPanesPerTab', 'imageBudget',
+  'setup', 'setupTimeoutSeconds', 'agentStartTimeoutMs', 'testThreadsFlag',
+]);
+
+function sameValue(a, b) {
+  if (a === undefined || b === undefined) return a === b;
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+// Show the home folder as ~, and keep one ~ form when the value already uses it.
+function homeRelative(value, home = os.homedir()) {
+  if (typeof value !== 'string' || !home) return value;
+  if (value === home) return '~';
+  if (value.startsWith(`${home}${path.sep}`)) return `~${value.slice(home.length)}`;
+  return value;
+}
+
+// The read-only view of one project worker config. It holds allow-listed fields only.
+// The value of a field never holds a secret. The setup command shows as "set" or "not set".
+export function workerConfigView(config, { home = os.homedir() } = {}) {
+  const fields = WORKER_CONFIG_FIELDS.map((key) => {
+    const raw = config?.[key];
+    const source = sameValue(raw, PROJECT_DEFAULTS[key]) ? 'default' : 'config';
+    let value = raw;
+    if (key === 'setup') value = raw ? 'set' : 'not set';
+    else if (key === 'worktreeRoot') value = homeRelative(raw, home);
+    else if (value === null || value === undefined) value = 'not set';
+    return { key, value, source };
+  });
+  return { fields };
+}
+
 export function loadModels(file = MODELS_FILE) {
   let models;
   try {

@@ -238,6 +238,8 @@ h2 .sub { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(
 .files-list li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; font-size: 12.5px; }
 .files-list .k { flex: 0 0 110px; color: var(--muted); }
 .files-list .mono { overflow-wrap: anywhere; }
+.worker-config .files-list { margin-bottom: 0; }
+.worker-config .files-list .mono { font-family: var(--mono); font-size: 12px; }
 .warnbox { border: 1px dashed var(--crit); color: var(--crit); border-radius: 8px; padding: 8px 12px; font-size: 12.5px; }
 
 @media (max-width: 760px) {
