@@ -1,0 +1,35 @@
+{
+  "mode": "primary",
+  "description": "Unattended Herdr Boss worker: never asks; denies risky actions.",
+  "permission": {
+    "edit": "allow",
+    "webfetch": "allow",
+    "websearch": "allow",
+    "doom_loop": "deny",
+    "external_directory": {
+      "*": "deny",
+      "/tmp/*": "allow",
+      "/private/tmp/*": "allow",
+      "/private/var/folders/*": "allow",
+      "~/.herdr-boss/*": "allow"
+    },
+    "bash": {
+      "*": "allow",
+      "git push*": "deny",
+      "git reset --hard*": "deny",
+      "git clean*": "deny",
+      "git branch -D*": "deny",
+      "git worktree remove*": "deny",
+      "rm -rf /*": "deny",
+      "rm -rf ~*": "deny",
+      "rm -rf $HOME*": "deny",
+      "rm -rf /tmp/*": "allow",
+      "rm -rf /private/tmp/*": "allow",
+      "sudo *": "deny",
+      "launchctl *": "deny",
+      "*.config/herdr-boss*": "deny",
+      "*auth.json*": "deny",
+      "pi auth*": "deny"
+    }
+  }
+}

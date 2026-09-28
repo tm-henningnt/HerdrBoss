@@ -337,6 +337,7 @@ herdr agent prompt <orch-pane> "WORKER REPORT <name>: <done|blocked|stopped>. Re
 - Do not build a separate project dashboard.
 - Keep Herdr as live execution state and the issue tracker as durable work state.
 - Keep the orchestrator pane labeled `orch` so Herdr Boss can find it.
+- Run `herdr-boss harness check` when a harness refuses routine work. Report missing entries to the Boss.
 - Run `herdr-boss kit install` to install the shared rules. It writes `docs/orchestration/herdr-boss.md` from [the kit template](../../templates/project-kit.md) and the `AGENTS.md` stub from [the stub template](../../templates/agents-stub.md).
 - Keep product contracts, acceptance commands, and project-specific browser procedures in the project files.
 

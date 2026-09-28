@@ -54,6 +54,17 @@ When `NODE_TEST_CONTEXT` is set, or the data directory differs from the configur
 | `herdr-boss publish SLUG FILE` | Validate a status file and install it for `/projects/SLUG`. Use `-` for standard input. Schema: [project-status.md](project-status.md). |
 
 `publish` also checks `AGENTS.md` at the Git top level of the current directory, when that file exists. It prints each finding to standard error as a warning. It publishes the status in all cases. The published record gets `agentsCheck: { checkedAt, errors, warnings, file }`. The record holds only the counts and the repository-relative file name. The project page shows a warning line when `errors` or `warnings` is more than 0. The status file can also hold `kitRevision`, the kit revision that the orchestrator loaded. The project page compares it with the current kit revision.
+
+The first `publish` of a slug registers the project. It records `{ slug, repo, remote }` in `project-repos.json` in the data folder, with mode 0600, when the Git top level exists. `repo` is the Git top level. `remote` is the `origin` URL without a user name and a password. A later publish keeps the first record. For a new slug, `publish` runs `harness sync --codex-only` and prints its result as `warning: harness sync:` lines.
+
+## Harness settings
+
+| Command | Action |
+|---|---|
+| `harness check` | Check the harness settings that orchestration needs. Print one line per entry: `ok`, `missing`, or `bad`, the harness, and the entry. Exit 1 when an entry is `missing` or `bad`. The command prints only paths and entry names. |
+| `harness sync [--dry-run] [--codex-only]` | Back up `~/.codex/config.toml` to `config.toml.bak-<UTC timestamp>`, and add the missing roots to `writable_roots` in `[sandbox_workspace_write]`. Then print the Claude `autoMode` lines for the Owner. `--dry-run` prints the roots to add and writes nothing. `--codex-only` does not print the Claude lines. |
+
+`harness sync` keeps each existing root and each other line of the file. It adds `~/.herdr-boss` and `<repo>/.git` for each registered project, when they are missing. When the section or the array is missing or cannot be parsed safely, it changes nothing, prints the lines to add, and exits 1. It never edits `~/.claude/settings.json`. The checked entries and the risk of each setting are in [harness-setup.md](harness-setup.md).
 | `herdr-boss scratch SLUG` | Create `~/.herdr-boss/scratch/SLUG/` if it does not exist, and print its absolute path. `HERDR_BOSS_DIR` replaces `~/.herdr-boss`. |
 
 ## Workers

@@ -1,0 +1,11 @@
+# Herdr Boss orchestration rules. Save as ~/.codex/rules/herdr.rules.
+prefix_rule(pattern=["ps"], decision="allow")
+prefix_rule(pattern=["launchctl", "kickstart", "-k", "gui/{{UID}}/no.tallmaker.herdr-boss"], decision="allow")
+prefix_rule(pattern=["herdr-boss", "browser"], decision="allow")
+prefix_rule(pattern=["playwright-cli"], decision="allow")
+# Never print the environment of another process.
+prefix_rule(pattern=["ps", "e"], decision="forbidden")
+prefix_rule(pattern=["ps", "-E"], decision="forbidden")
+prefix_rule(pattern=["ps", "eww"], decision="forbidden")
+prefix_rule(pattern=["ps", "auxe"], decision="forbidden")
+prefix_rule(pattern=["ps", "auxeww"], decision="forbidden")
