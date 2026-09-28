@@ -57,6 +57,41 @@ function validateArtifactChecks(artifactChecks) {
   });
 }
 
+function validateCheckAgents(checkAgents) {
+  if (!checkAgents || typeof checkAgents !== 'object' || Array.isArray(checkAgents) || Object.keys(checkAgents).some((key) => key !== 'exclude')) {
+    throw new Error('checkAgents must be an object with only an exclude list.');
+  }
+  if (checkAgents.exclude === undefined) return;
+  if (!Array.isArray(checkAgents.exclude)) throw new Error('checkAgents.exclude must be an array of repository-relative POSIX globs.');
+  checkAgents.exclude.forEach((pattern, index) => validateArtifactPattern(pattern, `checkAgents.exclude[${index}]`));
+}
+
+// True when a repository-relative POSIX path matches a glob. * matches inside one segment; ** matches zero or more segments.
+export function globMatches(pattern, relative) {
+  const segment = (glob, name) => new RegExp(`^${glob.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&').replaceAll('\\*', '[^/]*')}$`).test(name);
+  const globs = pattern.split('/');
+  const names = relative.split('/');
+  const match = (g, n) => {
+    if (g === globs.length) return n === names.length;
+    if (globs[g] === '**') return match(g + 1, n) || (n < names.length && match(g, n + 1));
+    return n < names.length && segment(globs[g], names[n]) && match(g + 1, n + 1);
+  };
+  return match(0, 0);
+}
+
+// The checkAgents.exclude globs of the .herdr-boss.json file in root. A missing file gives an empty list.
+// An unreadable or invalid file throws an error.
+export function checkAgentsExclude(root, file = '.herdr-boss.json') {
+  let user;
+  try { user = JSON.parse(fs.readFileSync(path.join(root, file), 'utf8')); } catch (error) {
+    if (error.code === 'ENOENT') return [];
+    throw new Error(`Could not read ${file}: ${error.message}`);
+  }
+  if (user?.checkAgents === undefined) return [];
+  validateCheckAgents(user.checkAgents);
+  return user.checkAgents.exclude ?? [];
+}
+
 export function findGitRoot(cwd = process.cwd()) {
   try {
     return execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8' }).trim();
@@ -92,6 +127,7 @@ export function loadProjectConfig({ cwd = process.cwd(), file = '.herdr-boss.jso
   if (config.setup !== null && (typeof config.setup !== 'string' || !config.setup.trim())) throw new Error('setup must be null or a non-empty shell command.');
   if (config.testThreadsFlag !== null && (typeof config.testThreadsFlag !== 'string' || !config.testThreadsFlag.trim())) throw new Error('testThreadsFlag must be null or a non-empty string.');
   validateArtifactChecks(config.artifactChecks);
+  if (config.checkAgents !== undefined) validateCheckAgents(config.checkAgents);
   if (!Number.isInteger(config.setupTimeoutSeconds) || config.setupTimeoutSeconds < 10) throw new Error('setupTimeoutSeconds must be an integer of 10 or more.');
   if (!Number.isInteger(config.agentStartTimeoutMs) || config.agentStartTimeoutMs < 1 || config.agentStartTimeoutMs > 300000) {
     throw new Error('agentStartTimeoutMs must be an integer from 1 to 300000.');

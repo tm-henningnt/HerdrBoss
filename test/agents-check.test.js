@@ -84,6 +84,8 @@ test('stale orchestration text outside the block gives warnings', () => {
     ['The Boss is in pane w12:p3.', /pane ID.*docs\/orchestration\/memory\.md/],
     ['Owner accepted the layout on 2026-09-20.', /dated.*docs\/orchestration\/memory\.md/],
     ['Freeze starts 26 Sept.', /dated.*docs\/orchestration\/memory\.md/],
+    ['Freeze starts 3. December.', /dated.*docs\/orchestration\/memory\.md/],
+    ['Freeze starts 3 Mar.', /dated.*docs\/orchestration\/memory\.md/],
   ];
   for (const [line, pattern] of cases) {
     const findings = check(file(line));
@@ -336,4 +338,70 @@ test('publish counts the scanned files in agentsCheck.warnings, and errors stay 
   const stored = JSON.parse(fs.readFileSync(path.join(dataDir, 'projects', 'demo.json'), 'utf8'));
   assert.equal(stored.agentsCheck.errors, 0);
   assert.equal(stored.agentsCheck.warnings, 3);
+});
+
+test('a decision line fires only when it routes the decision to the Boss, the Owner, a human, or the user', () => {
+  for (const line of [
+    'Ask the Owner about product decisions.',
+    'Wait for the Boss to approve the push.',
+    'Route release decisions to a human.',
+    'Report product questions to the user.',
+    'Get approval from the Boss for each release.',
+  ]) {
+    const findings = check(file(line));
+    assert.equal(findings.length, 1, `${line}: ${JSON.stringify(findings)}`);
+    assert.match(findings[0].message, /pushes or product decisions to the Boss/);
+  }
+  for (const line of [
+    '1. Decide the order of the tasks.',
+    '2. Decide the push order; the Boss can confirm the list later.',
+    '- Push the branch, then release it.',
+    'Release the lock when the Boss is idle.',
+    'Never ask the Boss about product decisions.',
+    "Don't send push decisions to the Owner.",
+    'Report to the Boss when a task is merged and live.',
+  ]) assert.deepEqual(check(file(line)), [], line);
+});
+
+test('check agents skips excluded globs, the state folder, and data files, and counts them in one summary line', () => {
+  const drift = '# Log\n\n2026-09-20 tenant-a created. Ask the Boss before each push.\n';
+  const repo = orchestrationRepo({
+    '.herdr-boss.json': JSON.stringify({ checkAgents: { exclude: ['.orchestration/tenant-*.md', 'docs/agents/**/generated/*.md'] } }),
+    '.orchestration/tenant-resources.md': drift,
+    'docs/agents/deep/generated/list.md': drift,
+    '.orchestration/state/handoff-live.md': drift,
+    '.orchestration/log.md': `<!-- herdr-boss: data -->\n${drift}`,
+    '.orchestration/marked-late.md': `# Log\n<!-- herdr-boss: data -->\n${drift}`,
+    'docs/agents/push.md': drift,
+  });
+  const result = scan(repo);
+  const files = [...new Set(result.findings.map((finding) => finding.file).filter(Boolean))].sort();
+  assert.deepEqual(files, ['.orchestration/marked-late.md', 'docs/agents/push.md'], JSON.stringify(result.findings));
+  assert.equal(result.skipped, 4);
+  assert.equal(result.summary, 'AGENTS.md: 0 errors, 4 warnings; 4 files skipped');
+  for (const name of ['tenant-resources', 'generated', 'state', 'log.md']) {
+    assert.ok(!result.lines.some((line) => line.includes(name)), `${name} is not named: ${result.lines.join('\n')}`);
+  }
+  const clean = scan(orchestrationRepo({ 'docs/agents/push.md': drift }));
+  assert.equal(clean.skipped, 0);
+  assert.equal(clean.summary, 'AGENTS.md: 0 errors, 2 warnings');
+});
+
+test('check agents prints the skipped-file count in its summary line', () => {
+  const repo = orchestrationRepo({ '.orchestration/log.md': '<!-- herdr-boss: data -->\n2026-09-20 row\n' });
+  const out = spawnSync(process.execPath, [path.join(ROOT, 'src', 'cli.js'), 'check', 'agents'], { cwd: repo, encoding: 'utf8', env: { ...process.env, HERDR_BOSS_DIR: path.join(repo, 'boss') } });
+  assert.equal(out.status, 0, out.stderr);
+  assert.match(out.stdout, /^check agents: PASS \(AGENTS\.md: 0 errors, 0 warnings; 1 file skipped\)$/m);
+  assert.doesNotMatch(out.stdout, /log\.md/);
+});
+
+test('an invalid checkAgents.exclude is an error finding, and the scan still runs', () => {
+  const repo = orchestrationRepo({
+    '.herdr-boss.json': JSON.stringify({ checkAgents: { exclude: ['../outside/*.md'] } }),
+    'docs/agents/push.md': 'Ask the Boss before each push.\n',
+  });
+  const result = scan(repo);
+  assert.equal(result.errors, 1, JSON.stringify(result.findings));
+  assert.ok(result.findings.some((finding) => finding.level === 'error' && /\.herdr-boss\.json.*checkAgents\.exclude/.test(finding.message)), JSON.stringify(result.findings));
+  assert.ok(result.findings.some((finding) => finding.file === 'docs/agents/push.md'));
 });
