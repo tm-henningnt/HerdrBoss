@@ -2446,6 +2446,34 @@ test('the worker brief template uses absolute worker paths and the kit names no 
   }
 });
 
+test('the orchestrator skill stays short and links each reference file', () => {
+  const dir = path.resolve('kit/skills/herdr-orchestrator');
+  const skill = fs.readFileSync(path.join(dir, 'SKILL.md'), 'utf8');
+  const words = skill.split(/\s+/).filter(Boolean).length;
+  assert.ok(words >= 2300 && words <= 2700, `SKILL.md has ${words} words`);
+  assert.match(skill, /^---\nname: herdr-orchestrator\ndescription: Use when /);
+  const references = ['herdr-control.md', 'machine-and-quota.md', 'handover.md', 'ledger-and-evidence.md'];
+  for (const name of references) assert.match(skill, new RegExp(`^- \\[reference/${name.replace('.', '\\.')}\\]\\(reference/${name.replace('.', '\\.')}\\): read `, 'm'), name);
+  assert.match(skill, /\]\(\.\.\/\.\.\/models\.md\)/);
+  assert.match(skill, /\]\(\.\.\/\.\.\/browser-service\.md\)/);
+  for (const file of ['SKILL.md', ...references.map((name) => `reference/${name}`)]) {
+    const text = fs.readFileSync(path.join(dir, file), 'utf8');
+    for (const [, target] of text.matchAll(/\]\(([^)#]+\.md)\)/g)) {
+      assert.ok(fs.existsSync(path.resolve(path.dirname(path.join(dir, file)), target)), `${file} links ${target}`);
+    }
+  }
+  const all = [skill, ...references.map((name) => fs.readFileSync(path.join(dir, 'reference', name), 'utf8'))].join('\n');
+  for (const rule of [
+    'Never stop the Herdr server or kill the main Herdr process to recover a worker.',
+    'Treat `idle` as ready for input, not as proof of completion.',
+    '`vitest run --poolOptions.forks.maxForks=2 --poolOptions.forks.minForks=1`',
+    'Limit a shared cheap provider lane to two concurrent workers.',
+    'Review its output before `handoff activate <id> --confirmed`.',
+    'Treat the ledger as operational telemetry, not acceptance evidence.',
+    'Do not promote local tests to hosted, visual, accessibility, performance, commercial, hardware, or Owner proof.',
+  ]) assert.ok(all.includes(rule), rule);
+});
+
 test('the brief template has the leased resources line and the kit names the lease rule', () => {
   const template = fs.readFileSync(path.resolve('kit/templates/worker-brief.md'), 'utf8');
   assert.match(template, /^- Leased resources: {{leases}}$/m);
