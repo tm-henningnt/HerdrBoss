@@ -1,6 +1,6 @@
 # Plan: project browsers on the resource lease pools
 
-Built and merged on 2026-09-28 (V39). The rest of this file is the design record.
+Built and merged on 2026-09-28 (V39). The Owner retired the port 9222 browser on 2026-09-28 (V40); it stays out of every pool. The rest of this file is the design record.
 
 ## Current state
 

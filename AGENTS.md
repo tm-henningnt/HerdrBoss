@@ -17,7 +17,7 @@ Decide implementation, product, and design details, naming, thresholds, test des
 - This repository is public: https://github.com/tm-henningnt/HerdrBoss. Before each commit, read the full diff for secrets, tokens, local file contents, and details from other projects: client names, tenant URLs, app IDs, and business data. Do not commit such content.
 - Push `main` yourself after the release steps. Before each push, read the full diff for tokens, secrets, local paths with private content, and client or tenant names from other projects. Push with `herdr-boss push origin main`. It takes the machine-wide `full-suite` lock when a pre-push hook exists. Run each full `npm test` inside `herdr-boss lock acquire full-suite --wait 1800` and `herdr-boss lock release full-suite`.
 - The launchd service runs from the `main` working tree of this checkout. A change on `main` goes live for every project at the next restart.
-- Never stop, close, or restart a browser that another project uses. Never touch the Chrome on port 9222.
+- Never stop, close, or restart a browser that another project uses. Herdr Boss never stops a browser that it did not start.
 - Never print a secret to a pane or a report. The default token and all session files are stored in `~/.config/herdr-boss/`; an explicit `access.tokenFile` path stays configured. Agents must not read the private directory. Use temporary `HOME` and `HERDR_BOSS_DIR` fixtures for credential tests.
 
 ## Build and test
