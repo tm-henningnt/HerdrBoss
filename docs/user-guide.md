@@ -447,18 +447,22 @@ The panel reads the thread again every 10 seconds while it is open. The page sho
 A new Owner message has the status `queued`. The service sends queued messages on its acting ticks. These rules apply:
 
 - The service sends only to the pane labeled `boss` for the `boss` thread, or to the `orch` pane of the project.
-- The service sends only when the agent is `idle` or `done`. A message to a `working` or `blocked` agent stays queued.
+- The service sends when the agent is `working`, `idle`, or `done`.
+- A blocked, unknown, or missing pane keeps the message queued. A message waits if the pane has no agent or its label does not match.
 - The service sends at most one message to a pane in one tick. A pane that got a resource notice in the same tick waits for the next tick.
 - The prompt is `[owner] TEXT (Reply with: herdr-boss say --reply-to ID "<answer>")`. An answer to a mailbox item starts with `Answer to ITEM-ID:` after `[owner]`.
-- After a send, the status is `sent` and `sentAt` holds the time.
+- After delivery, the status is `sent` and `sentAt` holds the time. The thread shows `delivered HH:MM`.
 - After a Herdr error, the status is `failed` with a short error. The service tries again on later ticks, up to 3 more times.
+- The thread and Mailbox show `queued`, `delivered HH:MM`, `failed: REASON`, or `relayed by the Boss HH:MM`.
+- They add `replied HH:MM` when a reply names the Owner message ID in `replyTo`.
+- The Boss can mark queued messages as relayed with `herdr-boss messages relay ID... --by boss`. Only the `boss` pane can run this command. It sets `status` to `relayed`, and records `relayedAt` and `relayedBy`. The service never sends a relayed message.
 - The service writes one `message` event to `events.jsonl` for each send or failure. The event holds the message ID, the thread, the kind, and the pane. It does not hold the text.
 
 A read-only preview shows the threads. It refuses a send with HTTP 403 and delivers nothing.
 
 ### Replies and reports
 
-An orchestrator or the Boss replies with `herdr-boss say --reply-to ID "TEXT"`. The Boss can post a longer Markdown report with `herdr-boss mail post --to owner FILE`, for example a morning handback. A reply and a report have the status `new`. The optional `--action` value tells the Owner what the item needs: `answer`, `approve`, `decide`, or `read`. See [the CLI reference](cli.md#owner-messages) for the caller checks and the limits.
+An orchestrator or the Boss replies with `herdr-boss say --reply-to ID "TEXT"`. The Boss can post a longer Markdown report with `herdr-boss mail post --to owner FILE`, for example a morning handback. The Boss can close open Mailbox items as answered through the Boss with `herdr-boss mail close ID... --note TEXT`. It records the note and sends no message. A reply and a report have the status `new`. Set `--action answer`, `--action approve`, or `--action decide` only when the Owner must act. Everything else is information; omit `--action`. See [the CLI reference](cli.md#owner-messages) for the caller checks and the limits.
 
 ### Store
 
@@ -475,10 +479,13 @@ The service keeps the messages in `messages.jsonl` in the data directory, with f
 | `title` | The report title. Only a report has it. |
 | `action` | `answer`, `approve`, `decide`, `read`, or `null`. |
 | `replyTo` | The ID of the message that a reply answers, or `null`. |
-| `status` | `queued`, `sent`, or `failed` for an Owner message. `new` for a reply or a report. |
+| `status` | `queued`, `sent`, `failed`, or `relayed` for an Owner message. `new` for a reply or a report. |
 | `sentAt`, `error`, `attempts` | The delivery time, the last delivery error, and the number of send attempts of an Owner message. |
+| `relayedAt`, `relayedBy` | The relay time and the role that relayed the message. Both fields are set by the Boss relay command. |
 | `readAt` | The time that the Owner opened a mailbox item. A new item does not have this field. |
-| `closedAt` | The time that the Owner answered a mailbox item or marked it read. An open item does not have this field. |
+| `closedAt`, `dismissed` | The close time and whether the Owner dismissed the item without an answer. |
+| `closedBy`, `closeNote` | The role that closed an item through the Boss, and the Boss's note. |
+| `repliedAt` | The API view adds the time of the first reply that names this Owner message ID. It is not stored on the message. |
 
 Each new record is one appended line. A change to a record rewrites the file through a temporary file and a rename. Each write deletes the records that are older than 30 days. A lock file `messages.jsonl.lock` keeps the service and the commands from writing at the same time.
 
@@ -486,22 +493,21 @@ Each new record is one appended line. A change to a record rewrites the file thr
 
 - Only a loopback request or an authenticated remote session can send. The same-origin check of the other `POST` routes applies.
 - The service accepts at most 10 Owner messages a minute across all threads. It refuses more with HTTP 429.
-- `say` and `mail post` refuse text that looks like a token, a key, or a password.
+- `say`, `mail post`, and `mail close` refuse text that looks like a token, a key, or a password.
 
 ## Mailbox
 
-The Mailbox page at `/mailbox` is the inbox of the Owner. It lists every record with `to: owner`: each reply from `herdr-boss say` and each report from `herdr-boss mail post`. Examples are the morning handback and the items queued for the Owner. The page works at phone width.
+The Mailbox page at `/mailbox` is the inbox of the Owner. It lists every reply from `herdr-boss say` and every report from `herdr-boss mail post`. The page works at phone width.
 
 ### Items
 
-Each item shows the sender, the project, the time, and the required action. It also shows the title of a report or the first line of a reply. The sender is the Boss or the project orchestrator. The required action is the `action` field of the record: `answer`, `approve`, `decide`, or `read`. A record without an `action` counts as `read`.
+Each item shows the sender, the project, the time, and the title of a report or first line of a reply. The sender is the Boss or a project orchestrator. An item needs you when its action is `answer`, `approve`, or `decide`, and it is not closed.
 
-The page has two lists:
+- **Needs you** shows open action items first, newest first. Each item has its answer controls.
+- **Updates** shows information items below Needs you. An item with action `read`, or with no action, is an update. Updates start collapsed. The count shows all updates. Updates do not have a badge. Opening an update sets `readAt`. It stays under Updates until the Boss closes it. You do not need to mark it read.
+- **Done** shows closed Needs-you items and items that the Boss closed, newest first. It shows the Owner answer, the dismissal time, or the Boss note.
 
-- **Open** lists the items without `closedAt`, newest first.
-- **Done** lists the closed items, newest first, with the Owner answer.
-
-Select an item to open it. The open item shows the full text. A report shows as Markdown, with the same renderer as the message panel. A reply shows as plain text. Opening an item sets `readAt` on the record.
+Select an item to open it. The item shows the full text. A report shows as Markdown, with the same renderer as the message panel. A reply shows as plain text. Opening an item sets `readAt` on the record.
 
 ### Answer an item
 
@@ -510,25 +516,28 @@ Select an item to open it. The open item shows the full text. A report shows as 
 | `answer` | A text field and **Send**. | The typed text. |
 | `approve` | **Approve**, **Decline**, and an optional note. | `Approved.` or `Declined.`, then the note. |
 | `decide` | A text field and **Send**. Choice buttons when the text has a Markdown list under a `Choices` heading. | `Choice: CHOICE`, then the note. Or the typed text. |
-| `read` | **Mark read**. | Nothing. The item closes. |
 
-The page asks for a confirmation before each send. The answer is an Owner message to the thread of the item, with `replyTo` set to the item ID. It uses the same delivery rules and the same rate limit as a message from the Organization page. The service then sets `closedAt` on the item, and the item moves to **Done**. A closed item refuses a second answer with HTTP 409.
+The page asks for a confirmation before each send or dismissal. The answer is an Owner message to the thread of the item, with `replyTo` set to the item ID. It uses the same delivery rules and rate limit as a message from the Organization page. The service then sets `closedAt` on the item, and the item moves to **Done**. A closed item refuses a second answer with HTTP 409.
+
+Select one or more checkboxes under **Needs you**, then select **Dismiss selected**. Select **Dismiss** on one item to dismiss it alone. Dismissal sets `closedAt`, `readAt`, and `dismissed: true`. It sends no message. You cannot dismiss an item that is already closed or does not need action.
 
 The choices are the list items under a Markdown heading with the text `Choices`, for example `## Choices`. The list ends at the first line that is not a list item. The page shows at most 10 choices.
 
 ### Unread count
 
-The header shows the number of unread items next to **Mailbox** on every page. On a phone, the menu button also shows the number. The number comes from the `mailbox` field in `/api/state`: `{ "unread": N, "open": N }`. The dashboard gets the new value through the state events.
+The header shows the number of open Needs-you items that the Owner has not opened. On a phone, the menu button also shows the number. The number comes from `needsYouUnread` in the `mailbox` field in `/api/state`. The field also has `needsYou` and `updates` counts. For one release, `unread` and `open` remain aliases for `needsYouUnread` and `needsYou`. The dashboard gets new values through state events.
 
 ### API
 
 | Route | Action |
 |---|---|
-| `GET /api/mailbox` | Return `{ open, done, mailbox }`. Each item has the record fields, `action`, `choices`, and `answer`. |
+| `GET /api/messages?thread=THREAD` | Return the thread. Owner messages include delivery fields and `repliedAt`. |
+| `GET /api/mailbox` | Return `{ needsYou, updates, done, mailbox }`. Each item has the record fields, `action`, `choices`, `ownerMessage`, and `answer`. |
 | `POST /api/messages/read` | Set `readAt` on the items in `{ "ids": [...] }`, 1 to 200 IDs. Add `"close": true` to close items with the action `read`. |
+| `POST /api/messages/dismiss` | Dismiss 1 to 200 open Needs-you items in `{ "ids": [...] }`. It sends no Owner message. |
 | `POST /api/messages` with `replyTo` | Send an answer to an open item of the same thread, and close the item. |
 
-`POST /api/messages/read` has the same gates as `POST /api/messages`: a loopback request or an authenticated remote session, and a same-origin request. A read-only preview refuses it with HTTP 403. The 30-day retention of the store applies to the mailbox items.
+Both mailbox `POST` routes have the same gates as `POST /api/messages`: a loopback request or an authenticated remote session, and a same-origin request. A read-only preview refuses them with HTTP 403. The 30-day retention of the store applies to the mailbox items.
 
 ## Phone and home screen
 

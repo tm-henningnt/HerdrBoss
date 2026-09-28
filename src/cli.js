@@ -67,7 +67,9 @@ const USAGE = `herdr-boss <command>
   models                Show allowed worker models.
   say [--reply-to ID] [--action answer|approve|decide|read] TEXT  Reply to the Owner from the boss pane or an orch pane.
   messages [THREAD]     Print the message records of one thread, or of all threads, as JSON.
+  messages relay ID... --by boss  Mark queued Owner messages as relayed by the Boss.
   mail post --to owner [--title TEXT] [--action read|decide|approve|answer] FILE  Post a Markdown report for the Owner from the boss pane.
+  mail close ID... --note TEXT  Close open Owner mailbox items as answered through the Boss.
   kit-path              Print the shared kit directory.
 `;
 
@@ -88,8 +90,20 @@ function messageFlags(args, known, usage) {
 }
 
 async function messageCommand(cmd, args) {
-  const { sayMessage, postReport, readMessages, listThread, validThread } = await import('./messages.js');
+  const { sayMessage, postReport, readMessages, listThread, relayOwnerMessages, closeMailboxItems, validThread, verifyMessageCaller } = await import('./messages.js');
   if (cmd === 'messages') {
+    if (args[0] === 'relay') {
+      const usage = 'Usage: messages relay ID... --by boss';
+      const { flags, positional } = messageFlags(args.slice(1), ['--by'], usage);
+      if (!positional.length || flags['--by'] !== 'boss') throw new Error(usage);
+      const { createHerdrRunner } = await import('./kit/workers.js');
+      const caller = verifyMessageCaller(process.env, createHerdrRunner(), 'messages relay');
+      if (caller.role !== 'boss') throw new Error('Only the pane labeled boss can run herdr-boss messages relay.');
+      const result = relayOwnerMessages(positional, { by: caller.role });
+      if (result.error) throw new Error(result.error);
+      console.log(`Relayed ${result.relayed} queued Owner message${result.relayed === 1 ? '' : 's'}.`);
+      return;
+    }
     if (args.length > 1 || (args.length === 1 && !validThread(args[0]))) throw new Error('Usage: messages [THREAD]. THREAD is boss or a project slug.');
     console.log(JSON.stringify(args.length ? listThread(args[0]) : readMessages(), null, 2));
     return;
@@ -101,6 +115,17 @@ async function messageCommand(cmd, args) {
     if (positional.length !== 1) throw new Error(`${usage}. Quote the text as one argument.`);
     const record = sayMessage(positional[0], { replyTo: flags['--reply-to'] ?? null, action: flags['--action'] ?? null }, { herdr: createHerdrRunner() });
     console.log(`Message ${record.id} is in the ${record.thread} thread for the Owner.`);
+    return;
+  }
+  if (args[0] === 'close') {
+    const usage = 'Usage: mail close ID... --note TEXT';
+    const { flags, positional } = messageFlags(args.slice(1), ['--note'], usage);
+    if (!positional.length || flags['--note'] === undefined) throw new Error(usage);
+    const caller = verifyMessageCaller(process.env, createHerdrRunner(), 'mail close');
+    if (caller.role !== 'boss') throw new Error('Only the pane labeled boss can run herdr-boss mail close.');
+    const result = closeMailboxItems(positional, flags['--note'], { by: caller.role });
+    if (result.error) throw new Error(result.error);
+    console.log(`Closed ${result.closed} Owner mailbox item${result.closed === 1 ? '' : 's'} as answered through the Boss.`);
     return;
   }
   const usage = 'Usage: mail post --to owner [--title TEXT] [--action read|decide|approve|answer] FILE';

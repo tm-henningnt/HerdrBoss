@@ -993,9 +993,15 @@ function markdownHtml(source) {
 
 function messageState(m) {
   if (m.from !== 'owner') return m.action ? `Action: ${m.action}` : '';
-  if (m.status === 'sent') return `Sent ${clock(m.sentAt)}`;
-  if (m.status === 'failed') return `Failed: ${m.error || 'unknown error'} (attempt ${m.attempts || 1} of 4)`;
-  return 'Queued until the agent is idle or done';
+  const delivery = mailDeliveryState(m);
+  return `${delivery}${m.repliedAt ? ` · replied ${clock(m.repliedAt)}` : ''}`;
+}
+
+function mailDeliveryState(m) {
+  if (m.status === 'relayed') return `relayed by the Boss ${clock(m.relayedAt)}`;
+  if (m.status === 'sent') return `delivered ${clock(m.sentAt)}`;
+  if (m.status === 'failed') return `failed: ${m.error || 'unknown error'}`;
+  return 'queued';
 }
 
 // A report is safe Markdown. Every other record is escaped text.
@@ -1072,7 +1078,7 @@ async function sendMessage(body, question, clear = false) {
   messagePanel.busy = true; messagePanel.status = 'Sending…'; renderMessages();
   try {
     await postJson('/api/messages', { thread: messagePanel.thread, ...body });
-    messagePanel.status = 'Queued. Herdr Boss sends it when the agent is idle or done.';
+    messagePanel.status = 'Queued. Herdr Boss delivers it when the agent is working, idle, or done.';
     if (clear) { const field = document.getElementById('message-text'); field.value = ''; field.dispatchEvent(new Event('input')); }
   } catch (error) { messagePanel.status = error.message; }
   finally { messagePanel.busy = false; }
@@ -1100,10 +1106,22 @@ document.addEventListener('click', (e) => {
 // A state render replaces #app, so the typed answers live in mailDrafts and go back into the fields after each render.
 
 const MAIL_ACTION_LABEL = { answer: 'Answer', approve: 'Approve', decide: 'Decide', read: 'Read' };
-const mailbox = { open: [], done: [], loaded: false, loading: false, error: '', notice: '', counts: '', busy: false, status: {} };
+const MAIL_UPDATES_STORAGE_KEY = 'herdr-boss-mailbox-updates-collapsed';
+const mailbox = { needsYou: [], updates: [], done: [], loaded: false, loading: false, error: '', notice: '', counts: '', busy: false, status: {} };
 const mailOpen = new Set();
 const mailReading = new Set();
+const mailSelected = new Set();
 const mailDrafts = {};
+
+function mailUpdatesCollapsed() {
+  try { return localStorage.getItem(MAIL_UPDATES_STORAGE_KEY) !== 'false'; }
+  catch { return true; }
+}
+
+function saveMailUpdatesCollapsed(collapsed) {
+  try { localStorage.setItem(MAIL_UPDATES_STORAGE_KEY, String(collapsed)); }
+  catch { /* Storage can be unavailable in private or restricted browser modes. */ }
+}
 
 function mailProject(s, item) {
   return item.thread === 'boss' ? '' : s.control?.projects?.[item.thread]?.label || item.thread;
@@ -1128,45 +1146,66 @@ function mailActions(item) {
   const id = esc(item.id);
   const off = mailbox.busy ? ' disabled' : '';
   const status = `<p class="mail-status" role="status">${esc(mailbox.status[item.id] || '')}</p>`;
-  if (item.action === 'read') return `<div class="mail-actions"><div class="mail-buttons"><button type="button" data-mail-done="${id}"${off}>Mark read</button></div>${status}</div>`;
+  const dismiss = `<div class="mail-dismiss-row"><button type="button" data-mail-dismiss="${id}"${off}>Dismiss</button></div>`;
   if (item.action === 'approve') {
     return `<form class="mail-actions" data-mail-form="${id}">${mailField(item, 'Note (optional)', 1700, false)}
-      <div class="mail-buttons"><button type="submit" data-mail-verdict="Approved."${off}>Approve</button><button type="submit" class="mail-decline" data-mail-verdict="Declined."${off}>Decline</button></div>${status}</form>`;
+      <div class="mail-buttons"><button type="submit" data-mail-verdict="Approved."${off}>Approve</button><button type="submit" class="mail-decline" data-mail-verdict="Declined."${off}>Decline</button></div>${dismiss}${status}</form>`;
   }
   const choices = item.action === 'decide' && item.choices?.length
     ? `<div class="mail-choices" role="group" aria-label="Choices">${item.choices.map((choice) => `<button type="button" data-mail-choice="${esc(choice)}" data-mail-item="${id}"${off}>${esc(choice)}</button>`).join('')}</div>`
     : '';
   const label = item.action === 'decide' ? (choices ? 'Other answer, or a note for the choice' : 'Decision') : 'Answer';
   return `<form class="mail-actions" data-mail-form="${id}">${choices}${mailField(item, label, choices ? 1700 : 2000, !choices)}
-    <div class="mail-buttons"><button type="submit"${off}>Send</button></div>${status}</form>`;
+    <div class="mail-buttons"><button type="submit"${off}>Send</button></div>${dismiss}${status}</form>`;
 }
 
 function mailDoneLine(item) {
   if (item.answer) {
-    const state = item.answer.status === 'sent' ? 'sent' : item.answer.status === 'failed' ? 'failed' : 'queued';
-    return `<div class="mail-answer"><span class="sub">Your answer · ${esc(state)} · ${esc(clock(item.answer.at))}</span><p class="msg-text">${esc(item.answer.text)}</p></div>`;
+    const state = mailDeliveryState(item.answer);
+    const replied = item.answer.repliedAt ? ` · replied ${clock(item.answer.repliedAt)}` : '';
+    return `<div class="mail-answer"><span class="sub">Your answer · ${esc(state)} · ${esc(clock(item.answer.at))}${esc(replied)}</span><p class="msg-text">${esc(item.answer.text)}</p></div>`;
   }
-  return `<p class="sub mail-answer">Marked read ${esc(clock(item.closedAt))}</p>`;
+  if (item.closedBy === 'boss') {
+    return `<p class="sub mail-answer">Closed by the Boss · ${esc(clock(item.closedAt))}</p>`;
+  }
+  if (item.dismissed) {
+    return `<p class="sub mail-answer">Dismissed · ${esc(clock(item.closedAt))}</p>`;
+  }
+  return `<p class="sub mail-answer">Closed ${esc(clock(item.closedAt))}</p>`;
 }
 
-function mailItem(s, item, done) {
+function mailItem(s, item, section) {
   const unread = !item.readAt;
   const open = mailOpen.has(item.id);
-  return `<li class="mail-item${unread ? ' unread' : ''}${done ? ' done' : ''}"><details data-mail-item="${esc(item.id)}"${open ? ' open' : ''}>
-    <summary><span class="mail-meta">${unread ? '<span class="mail-dot" aria-hidden="true"></span><span class="visually-hidden">Unread. </span>' : ''}<strong>${esc(mailItemLabel(s, item))}</strong><span class="pill ghost mail-action-${esc(item.action)}">${esc(MAIL_ACTION_LABEL[item.action] || 'Read')}</span><time datetime="${esc(item.at)}">${esc(clock(item.at))}</time></span>
-      <span class="mail-headline">${item.kind === 'report' ? '<span class="pill">Report</span> ' : ''}${esc(mailHeadline(item))}</span></summary>
-    <div class="mail-body">${messageBody(item)}${done ? mailDoneLine(item) : mailActions(item)}</div>
+  const done = section === 'done';
+  const update = section === 'updates';
+  const label = update ? 'Update' : MAIL_ACTION_LABEL[item.action] || 'Read';
+  const controls = done ? mailDoneLine(item) : update ? '' : mailActions(item);
+  const closeNote = done && item.closedBy === 'boss' ? `<span class="mail-headline mail-close-note">answered through the Boss: ${esc(item.closeNote || '')}</span>` : '';
+  const select = !done && !update ? `<label class="mail-select"><input type="checkbox" data-mail-select="${esc(item.id)}" aria-label="Select ${esc(mailHeadline(item))}" ${mailSelected.has(item.id) ? 'checked' : ''}></label>` : '';
+  const ownerMessage = item.ownerMessage
+    ? `<p class="sub mail-origin">Owner message · ${esc(mailDeliveryState(item.ownerMessage))}${item.ownerMessage.repliedAt ? ` · replied ${esc(clock(item.ownerMessage.repliedAt))}` : ''}</p>`
+    : '';
+  return `<li class="mail-item${unread ? ' unread' : ''}${done ? ' done' : ''}${update ? ' update' : ''}${select ? ' selectable' : ''}">${select}<details data-mail-item="${esc(item.id)}"${open ? ' open' : ''}>
+    <summary><span class="mail-meta">${unread ? '<span class="mail-dot" aria-hidden="true"></span><span class="visually-hidden">Unread. </span>' : ''}<strong>${esc(mailItemLabel(s, item))}</strong><span class="pill ghost mail-action-${esc(item.action)}">${esc(label)}</span><time datetime="${esc(item.at)}">${esc(clock(item.at))}</time></span>
+      <span class="mail-headline">${item.kind === 'report' ? '<span class="pill">Report</span> ' : ''}${esc(mailHeadline(item))}</span>${closeNote}</summary>
+    <div class="mail-body">${messageBody(item)}${ownerMessage}${controls}</div>
   </details></li>`;
 }
 
 function mailboxView(s) {
   if (!mailbox.loaded && !mailbox.loading) loadMailbox();
-  const list = (items, done, empty) => items.length ? `<ol class="mail-list">${items.map((item) => mailItem(s, item, done)).join('')}</ol>` : `<p class="mail-empty">${empty}</p>`;
+  const list = (items, section, empty) => items.length ? `<ol class="mail-list">${items.map((item) => mailItem(s, item, section)).join('')}</ol>` : `<p class="mail-empty">${empty}</p>`;
+  const updatesOpen = !mailUpdatesCollapsed();
+  const allSelected = mailbox.needsYou.length > 0 && mailbox.needsYou.every((item) => mailSelected.has(item.id));
+  const selected = mailbox.needsYou.filter((item) => mailSelected.has(item.id)).length;
+  const bulk = mailbox.needsYou.length ? `<div class="mail-bulk"><label><input type="checkbox" data-mail-select-all ${allSelected ? 'checked' : ''} aria-label="Select all Needs-you items"> Select all</label><button type="button" data-mail-dismiss-selected ${mailbox.busy || !selected ? 'disabled' : ''}>Dismiss selected${selected ? ` (${selected})` : ''}</button></div>` : '';
   return [
-    '<header class="page-intro"><div><h1>Mailbox</h1><p>Replies and reports for the Owner. Open an item to read it. Answer, approve, or decide in the item.</p></div></header>',
+    '<header class="page-intro"><div><h1>Mailbox</h1><p>Items that need your action come first. Open Updates for information.</p></div></header>',
     `<p class="mail-notice" role="status"${mailbox.error || mailbox.notice ? '' : ' hidden'}>${esc(mailbox.error || mailbox.notice)}</p>`,
-    `<section class="mail-section"><h2>Open <span class="sub">${mailbox.open.length}</span></h2>${mailbox.loaded ? list(mailbox.open, false, 'No open items.') : '<p class="mail-empty">Loading…</p>'}</section>`,
-    `<section class="mail-section"><h2>Done <span class="sub">${mailbox.done.length}</span></h2>${mailbox.loaded ? list(mailbox.done, true, 'No closed items.') : ''}</section>`,
+    `<section class="mail-section"><h2>Needs you <span class="sub">${mailbox.needsYou.length}</span></h2>${mailbox.loaded ? `${bulk}${list(mailbox.needsYou, 'needsYou', 'Nothing needs your action.')}` : '<p class="mail-empty">Loading…</p>'}</section>`,
+    `<section class="mail-section"><details class="mail-updates" data-mail-updates${updatesOpen ? ' open' : ''}><summary><h2>Updates <span class="sub">${mailbox.updates.length}</span></h2></summary>${mailbox.loaded ? list(mailbox.updates, 'updates', 'No updates.') : '<p class="mail-empty">Loading…</p>'}</details></section>`,
+    `<section class="mail-section"><h2>Done <span class="sub">${mailbox.done.length}</span></h2>${mailbox.loaded ? list(mailbox.done, 'done', 'No closed items.') : ''}</section>`,
   ].join('');
 }
 
@@ -1176,17 +1215,18 @@ async function loadMailbox() {
     const response = await fetch('/api/mailbox');
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || 'The mailbox could not be read.');
-    Object.assign(mailbox, { open: result.open, done: result.done, loaded: true, error: '', counts: JSON.stringify(result.mailbox) });
+    Object.assign(mailbox, { needsYou: result.needsYou, updates: result.updates, done: result.done, loaded: true, error: '', counts: JSON.stringify(result.mailbox) });
+    for (const id of mailSelected) if (!mailbox.needsYou.some((item) => item.id === id)) mailSelected.delete(id);
     if (state) state.mailbox = result.mailbox;
   } catch (error) { mailbox.error = error.message; }
   finally { mailbox.loading = false; }
   render();
 }
 
-function mailFind(id) { return mailbox.open.find((item) => item.id === id) || mailbox.done.find((item) => item.id === id); }
+function mailFind(id) { return mailbox.needsYou.find((item) => item.id === id) || mailbox.updates.find((item) => item.id === id) || mailbox.done.find((item) => item.id === id); }
 
-async function mailMarkRead(item, close = false) {
-  const result = await postJson('/api/messages/read', { ids: [item.id], ...(close ? { close: true } : {}) });
+async function mailMarkRead(item) {
+  const result = await postJson('/api/messages/read', { ids: [item.id] });
   if (state) state.mailbox = result.mailbox;
   return result;
 }
@@ -1209,17 +1249,29 @@ async function mailSend(item, text, question) {
     delete mailDrafts[item.id];
     delete mailbox.status[item.id];
     mailOpen.delete(item.id);
-    mailbox.notice = `Queued for ${mailItemLabel(state || {}, item)}. Herdr Boss sends it when the agent is idle or done. The item is in Done.`;
+    mailbox.notice = `Queued for ${mailItemLabel(state || {}, item)}. Herdr Boss delivers it when the agent is working, idle, or done. The item is in Done.`;
   } catch (error) { mailbox.status[item.id] = error.message; }
   finally { mailbox.busy = false; }
   await loadMailbox();
 }
 
-async function mailDone(item) {
-  if (mailbox.busy) return;
-  mailbox.busy = true; render();
-  try { await mailMarkRead(item, true); mailOpen.delete(item.id); delete mailbox.status[item.id]; mailbox.notice = 'Marked read. The item is in Done.'; }
-  catch (error) { mailbox.status[item.id] = error.message; }
+async function mailDismiss(items) {
+  if (mailbox.busy || !items.length) return;
+  const question = items.length === 1
+    ? `Dismiss this item from ${mailItemLabel(state || {}, items[0])} without sending an answer?`
+    : `Dismiss ${items.length} selected items without sending answers?`;
+  if (!confirm(question)) return;
+  mailbox.busy = true; mailbox.notice = ''; mailbox.error = ''; render();
+  try {
+    await postJson('/api/messages/dismiss', { ids: items.map((item) => item.id) });
+    for (const item of items) {
+      mailSelected.delete(item.id);
+      mailOpen.delete(item.id);
+      delete mailDrafts[item.id];
+      delete mailbox.status[item.id];
+    }
+    mailbox.notice = items.length === 1 ? 'Dismissed. No message was sent.' : `Dismissed ${items.length} items. No messages were sent.`;
+  } catch (error) { mailbox.notice = error.message; }
   finally { mailbox.busy = false; }
   await loadMailbox();
 }
@@ -1233,7 +1285,23 @@ document.addEventListener('input', (e) => {
   const id = e.target.dataset?.mailDraft;
   if (id) mailDrafts[id] = e.target.value;
 });
+document.addEventListener('change', (e) => {
+  if (e.target.matches?.('[data-mail-select]')) {
+    const id = e.target.dataset.mailSelect;
+    if (e.target.checked) mailSelected.add(id);
+    else mailSelected.delete(id);
+    render();
+  } else if (e.target.matches?.('[data-mail-select-all]')) {
+    if (e.target.checked) for (const item of mailbox.needsYou) mailSelected.add(item.id);
+    else mailSelected.clear();
+    render();
+  }
+});
 document.addEventListener('toggle', (e) => {
+  if (e.target.matches?.('details[data-mail-updates]')) {
+    saveMailUpdatesCollapsed(!e.target.open);
+    return;
+  }
   const id = e.target.dataset?.mailItem;
   if (!id || !e.target.matches('details')) return;
   if (e.target.open) { mailOpen.add(id); const item = mailFind(id); if (item) mailOpened(item); }
@@ -1252,6 +1320,16 @@ document.addEventListener('submit', (e) => {
   else if (note) mailSend(item, note, `Send this answer to ${who}?\n\n${note}`);
 });
 document.addEventListener('click', (e) => {
+  const dismiss = e.target.closest?.('[data-mail-dismiss]');
+  if (dismiss) {
+    const item = mailFind(dismiss.dataset.mailDismiss);
+    if (item) mailDismiss([item]);
+    return;
+  }
+  if (e.target.closest?.('[data-mail-dismiss-selected]')) {
+    mailDismiss(mailbox.needsYou.filter((item) => mailSelected.has(item.id)));
+    return;
+  }
   const choice = e.target.closest?.('[data-mail-choice]');
   if (choice) {
     const item = mailFind(choice.dataset.mailItem);
@@ -1260,12 +1338,10 @@ document.addEventListener('click', (e) => {
     if (item) mailSend(item, text, `Send this choice to ${mailItemLabel(state || {}, item)}?\n\n${text}`);
     return;
   }
-  const done = e.target.closest?.('[data-mail-done]');
-  if (done) { const item = mailFind(done.dataset.mailDone); if (item) mailDone(item); }
 });
 
 function updateMailboxBadge(s) {
-  const unread = s?.mailbox?.unread || 0;
+  const unread = s?.mailbox?.needsYouUnread ?? s?.mailbox?.unread ?? 0;
   const text = unread > 99 ? '99+' : String(unread);
   for (const badge of document.querySelectorAll('[data-mailbox-badge]')) { badge.hidden = !unread; badge.textContent = text; }
   const link = $nav.querySelector('[data-nav="mailbox"]');
@@ -1935,12 +2011,14 @@ const HELP = {
     <h3>Stale status</h3><p><b>Status stale: AGE</b> shows next to the updated time when the published status is older than 2 hours and, after that publish, a worker was working in the last 2 hours or new commits landed on the project repository. A paused project is never stale. The orchestrator gets one notice for each stale status. Publish the current plan and progress to clear the mark.</p>
     <p>The data comes from the project's status file. When a section is missing, the orchestrator has not published those fields.</p>`],
   mailbox: ['Mailbox', `
-    <p>One inbox for every reply and report to the Owner. The Boss and the project orchestrators write them with <code>herdr-boss say</code>, and the Boss posts reports with <code>herdr-boss mail post</code>. Examples are the morning handback and the items queued for the Owner.</p>
-    <h3>Items</h3><p>Each item shows the sender, the project, the time, the required action, and the title of a report or the first line of a reply. <b>Open</b> lists the items that wait for you, newest first. <b>Done</b> lists the closed items with your answer.</p>
-    <p>Select an item to open it. The open item shows the full text. A report shows as formatted Markdown. A reply shows as plain text. Opening an item marks it read.</p>
-    <h3>Actions</h3><p><b>Answer</b>: type an answer and select <b>Send</b>. <b>Approve</b>: select <b>Approve</b> or <b>Decline</b>. A note is optional. <b>Decide</b>: select a choice, or type an answer and select <b>Send</b>. The choice buttons appear when the item has a Markdown list under a <b>Choices</b> heading. <b>Read</b>: select <b>Mark read</b>.</p>
-    <p>The page asks you to confirm each send. The answer goes to the thread of the sender, the same way as a message from the Organization page. Herdr Boss sends it when the agent is idle or done. Then the item moves to <b>Done</b>.</p>
-    <h3>Unread count</h3><p>The number next to <b>Mailbox</b> in the header shows the unread items. On a phone, it also shows on the menu button.</p>
+    <p>One inbox for every reply and report to the Owner. The Boss and the project orchestrators write them with <code>herdr-boss say</code>, and the Boss posts reports with <code>herdr-boss mail post</code>. The Boss can close an item with <code>herdr-boss mail close</code> when the Owner answered through the Boss.</p>
+    <h3>Items</h3><p><b>Needs you</b> lists open items with action <code>answer</code>, <code>approve</code>, or <code>decide</code>, newest first. Each item shows its project or Boss, what it asks, and its answer controls. Select one or more items to dismiss them without an answer, or select <b>Dismiss</b> on one item. The page asks you to confirm. Dismissal sends nothing. <b>Done</b> lists closed action items and items that the Boss closed, with your answer, dismissal, or the Boss note.</p>
+    <p><b>Updates</b> lists information items below Needs you. An item with action <code>read</code>, or with no action, is an update. Updates start collapsed. The count shows all updates. Updates have no badge. Opening an update marks it read. It stays under Updates until the Boss closes it. You do not need to mark it read.</p>
+    <p>Select an item to open it. The item shows the full text. A report shows as formatted Markdown. A reply shows as plain text. Opening an item marks it read.</p>
+    <h3>Actions</h3><p><b>Answer</b>: type an answer and select <b>Send</b>. <b>Approve</b>: select <b>Approve</b> or <b>Decline</b>. A note is optional. <b>Decide</b>: select a choice, or type an answer and select <b>Send</b>. The choice buttons appear when the item has a Markdown list under a <b>Choices</b> heading.</p>
+    <p>The page asks you to confirm each send. The answer goes to the thread of the sender, the same way as a message from the Organization page. Herdr Boss delivers it when the agent is working, idle, or done. Then the item moves to <b>Done</b>.</p>
+    <p>The Mailbox shows Owner-message delivery and reply times. It shows queued, delivered, failed, and relay states.</p>
+    <h3>Badge</h3><p>The number next to <b>Mailbox</b> shows open Needs-you items that you have not opened. It does not count Updates. On a phone, the number also shows on the menu button.</p>
     <p>Herdr Boss keeps the items for 30 days. A read-only preview shows the items and refuses a read or a send.</p>`],
   allocation: ['Allocation', `
     <p>The resource policy for all projects. Changes are a draft until you select <b>Apply policy</b>.</p>
@@ -1979,7 +2057,8 @@ const HELP = {
     <h3>Phone</h3><p>On a phone, the chart has one column. Each worker list shows only a count. Select <b>Show</b> to expand the workers, and select <b>Hide</b> to collapse them.</p>
     <h3>Messages</h3><p>The Boss node and each project node have a <b>Messages</b> button. It opens the thread of that node. A thread holds the messages in both directions, oldest first.</p>
     <p>Type a message of up to 2000 characters and select <b>Send</b>. The nudge buttons send a fixed text: <b>Continue.</b>, <b>Use your free worker slots.</b>, or <b>Pause after the current task.</b> <b>Ask for status</b> asks the agent for a short status report and a new status file. The page asks you to confirm each send.</p>
-    <p>A new message is <b>Queued</b>. Herdr Boss sends it only when the agent is idle or done. It never types into a working or blocked agent. Then the message is <b>Sent</b>. A <b>Failed</b> message gets up to 3 more attempts on later ticks. Herdr Boss accepts at most 10 messages a minute.</p>
+    <p>A new message is <b>queued</b>. Herdr Boss delivers it when the agent is working, idle, or done. A blocked, unknown, or missing pane keeps it queued. Then the message shows <b>delivered</b> with a time. A <b>failed</b> message gets up to 3 more attempts on later ticks. Herdr Boss accepts at most 10 messages a minute.</p>
+    <p>The Boss can run <code>herdr-boss messages relay ID... --by boss</code> to mark queued Owner messages as relayed. Herdr Boss never sends a relayed message. The thread shows its relay time and any reply time.</p>
     <p>The Boss and the orchestrators reply with <code>herdr-boss say</code>. The Boss can post a longer report with <code>herdr-boss mail post</code>. The page shows a report as formatted Markdown. You cannot message a worker. Send a worker request to its orchestrator.</p>
     <p>The open panel reads the thread again every 10 seconds. A read-only preview shows the threads and refuses a send.</p>
     <h3>Data limits</h3><p><b>Not reported</b> means that the current state does not hold the value. Herdr Boss does not receive the model of a running agent. The page does not read a task from a pane title. It shows no pane output, messages, or secrets.</p>`],

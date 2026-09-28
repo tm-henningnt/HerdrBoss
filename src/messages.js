@@ -17,6 +17,7 @@ export const MAX_DELIVERY_ATTEMPTS = 4;
 export const NUDGES = ['Continue.', 'Use your free worker slots.', 'Pause after the current task.'];
 export const STATUS_REQUEST_TEXT = 'Send a short status report with herdr-boss say, and publish your status file.';
 export const ACTIONS = ['answer', 'approve', 'decide', 'read'];
+const NEEDS_YOU_ACTIONS = new Set(['answer', 'approve', 'decide']);
 export const READ_IDS_MAX = 200;
 export const CHOICES_MAX = 10;
 export const CHOICE_TEXT_MAX = 200;
@@ -77,7 +78,7 @@ function newId(now) {
 export function appendMessage(fields, { dir = DATA_DIR, now = Date.now() } = {}) {
   const record = {
     id: newId(now), at: new Date(now).toISOString(), thread: null, from: null, to: null, kind: null, text: '',
-    action: null, replyTo: null, status: null, sentAt: null, error: null, ...fields,
+    action: null, replyTo: null, status: null, sentAt: null, error: null, relayedAt: null, relayedBy: null, ...fields,
   };
   return withLock(dir, () => {
     const records = readMessages({ dir });
@@ -144,9 +145,10 @@ export function ownerPromptText(record) {
 
 // ---------- Owner mailbox ----------
 
-// Every agent reply and Boss report to the Owner is a mailbox item. An item without a known action counts as read.
+// Every agent reply and Boss report to the Owner is a mailbox item. An item without a known action is information.
 export const isMailboxItem = (record) => !!record && record.to === 'owner' && (record.kind === 'reply' || record.kind === 'report');
 export const mailboxAction = (record) => (ACTIONS.includes(record?.action) ? record.action : 'read');
+const needsOwnerAction = (record) => NEEDS_YOU_ACTIONS.has(mailboxAction(record));
 
 // The choices are the Markdown list items under a heading named Choices, up to the first other line.
 export function parseChoices(text) {
@@ -167,23 +169,64 @@ export function parseChoices(text) {
 
 export function mailboxCounts(records) {
   const items = records.filter(isMailboxItem);
-  return { unread: items.filter((item) => !item.readAt).length, open: items.filter((item) => !item.closedAt).length };
+  const needsYou = items.filter((item) => needsOwnerAction(item) && !item.closedAt);
+  const needsYouUnread = needsYou.filter((item) => !item.readAt).length;
+  const updates = items.filter((item) => !needsOwnerAction(item) && item.closedBy !== 'boss').length;
+  return { needsYou: needsYou.length, needsYouUnread, updates, unread: needsYouUnread, open: needsYou.length };
 }
 
-// Open and closed items, newest first. A closed item carries the Owner send that answered it.
+function replyTimes(records) {
+  const times = new Map();
+  for (const record of records) {
+    if (record.kind === 'reply' && record.to === 'owner' && record.replyTo && !times.has(record.replyTo)) times.set(record.replyTo, record.at);
+  }
+  return times;
+}
+
+function deliveryView(record, replies) {
+  return {
+    id: record.id,
+    at: record.at,
+    text: record.text,
+    status: record.status,
+    sentAt: record.sentAt ?? null,
+    error: record.error ?? null,
+    relayedAt: record.relayedAt ?? null,
+    relayedBy: record.relayedBy ?? null,
+    repliedAt: replies.get(record.id) ?? null,
+  };
+}
+
+// Add reply timestamps to Owner records for thread and mailbox clients.
+export function messagesWithReplyState(records, allRecords = records) {
+  const replies = replyTimes(allRecords);
+  return records.map((record) => record.from === 'owner' ? { ...record, repliedAt: replies.get(record.id) ?? null } : record);
+}
+
+// Needs-you items, updates, and closed items, newest first. A closed item carries the Owner send or Boss note that closed it.
 export function mailboxView(records) {
   const answers = new Map();
-  for (const record of records) if (record.from === 'owner' && record.replyTo) answers.set(record.replyTo, record);
+  const owners = new Map();
+  const replies = replyTimes(records);
+  for (const record of records) {
+    if (record.from === 'owner') owners.set(record.id, record);
+    if (record.from === 'owner' && record.replyTo) answers.set(record.replyTo, record);
+  }
   const items = records.filter(isMailboxItem).reverse().map((record) => {
     const answer = answers.get(record.id);
     return {
       ...record,
       action: mailboxAction(record),
       choices: parseChoices(record.text),
-      answer: answer ? { id: answer.id, at: answer.at, text: answer.text, status: answer.status } : null,
+      ownerMessage: owners.has(record.replyTo) ? deliveryView(owners.get(record.replyTo), replies) : null,
+      answer: answer ? deliveryView(answer, replies) : null,
     };
   });
-  return { open: items.filter((item) => !item.closedAt), done: items.filter((item) => item.closedAt) };
+  return {
+    needsYou: items.filter((item) => needsOwnerAction(item) && !item.closedAt),
+    updates: items.filter((item) => !needsOwnerAction(item) && item.closedBy !== 'boss'),
+    done: items.filter((item) => (needsOwnerAction(item) && item.closedAt) || item.closedBy === 'boss'),
+  };
 }
 
 export function closeMailboxItem(id, { dir = DATA_DIR, now = Date.now() } = {}) {
@@ -196,6 +239,36 @@ export function closeMailboxItem(id, { dir = DATA_DIR, now = Date.now() } = {}) 
     item.readAt ||= at;
     rewrite(dir, fresh(records, now));
     return item;
+  });
+}
+
+// Record that the Boss handled one or more open Owner mailbox items without sending a reply.
+export function closeMailboxItems(ids, note, { by, dir = DATA_DIR, now = Date.now() } = {}) {
+  if (by !== 'boss') return { status: 403, error: 'Only the Boss can close Owner mailbox items.' };
+  if (!Array.isArray(ids) || ids.length < 1 || ids.length > READ_IDS_MAX || !ids.every((id) => typeof id === 'string')) {
+    return { status: 400, error: `Give 1 to ${READ_IDS_MAX} mailbox item IDs to close.` };
+  }
+  if (new Set(ids).size !== ids.length) return { status: 400, error: 'Give each mailbox item ID only once.' };
+  const text = typeof note === 'string' ? note.trim() : '';
+  if (text.length < 1 || text.length > 500) return { status: 400, error: 'The close note must be 1 to 500 characters.' };
+  try { refuseSecret(text, 'note'); }
+  catch (error) { return { status: 400, error: error.message }; }
+  return withLock(dir, () => {
+    const records = readMessages({ dir });
+    const items = ids.map((id) => records.find((record) => record.id === id && isMailboxItem(record)));
+    const missing = ids.find((id, index) => !items[index]);
+    if (missing) return { status: 404, error: `No open mailbox item has the ID ${missing}.` };
+    const closed = items.find((item) => item.closedAt);
+    if (closed) return { status: 409, error: `Mailbox item ${closed.id} is already closed.` };
+    const at = new Date(now).toISOString();
+    for (const item of items) {
+      item.closedAt = at;
+      item.readAt ||= at;
+      item.closedBy = 'boss';
+      item.closeNote = text;
+    }
+    rewrite(dir, fresh(records, now));
+    return { ok: true, closed: items.length };
   });
 }
 
@@ -229,6 +302,55 @@ export function markMailboxRead(body, { dir = DATA_DIR, now = Date.now() } = {})
   });
 }
 
+// Dismiss open Needs-you items without sending an answer to an agent.
+export function dismissMailboxItems(body, { dir = DATA_DIR, now = Date.now() } = {}) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return { status: 400, error: 'Send a JSON object with ids.' };
+  const { ids } = body;
+  if (!Array.isArray(ids) || ids.length < 1 || ids.length > READ_IDS_MAX || !ids.every((id) => typeof id === 'string')) {
+    return { status: 400, error: `ids must be a list of 1 to ${READ_IDS_MAX} mailbox item IDs.` };
+  }
+  return withLock(dir, () => {
+    const records = readMessages({ dir });
+    const items = ids.map((id) => records.find((record) => record.id === id && isMailboxItem(record)));
+    const missing = ids.find((id, index) => !items[index]);
+    if (missing) return { status: 404, error: `No mailbox item has the ID ${missing}.` };
+    if (items.some((item) => !needsOwnerAction(item) || item.closedAt)) {
+      return { status: 409, error: 'Only open Needs-you items can be dismissed.' };
+    }
+    const at = new Date(now).toISOString();
+    for (const item of items) {
+      item.readAt ||= at;
+      item.closedAt ||= at;
+      item.dismissed = true;
+    }
+    rewrite(dir, fresh(records, now));
+    return { ok: true, dismissed: items.length };
+  });
+}
+
+// Mark queued Owner messages as relayed. The CLI verifies that the caller is the Boss pane.
+export function relayOwnerMessages(ids, { by, dir = DATA_DIR, now = Date.now() } = {}) {
+  if (by !== 'boss') return { status: 403, error: 'Only the Boss can relay Owner messages.' };
+  if (!Array.isArray(ids) || ids.length < 1 || ids.length > READ_IDS_MAX || !ids.every((id) => typeof id === 'string')) {
+    return { status: 400, error: `Give 1 to ${READ_IDS_MAX} Owner message IDs to relay.` };
+  }
+  return withLock(dir, () => {
+    const records = readMessages({ dir });
+    const items = ids.map((id) => records.find((record) => record.id === id && record.from === 'owner'));
+    const missing = ids.find((id, index) => !items[index]);
+    if (missing) return { status: 404, error: `No queued Owner message has the ID ${missing}.` };
+    if (items.some((item) => item.status !== 'queued')) return { status: 409, error: 'Only queued Owner messages can be relayed.' };
+    const relayedAt = new Date(now).toISOString();
+    for (const item of items) {
+      item.status = 'relayed';
+      item.relayedAt = relayedAt;
+      item.relayedBy = 'boss';
+    }
+    rewrite(dir, fresh(records, now));
+    return { ok: true, relayed: items.length };
+  });
+}
+
 // ---------- Delivery ----------
 
 function targetPane(thread, panes, projects) {
@@ -246,14 +368,14 @@ function shortError(error, record) {
   return text.slice(0, 160);
 }
 
-// Sends queued Owner messages to settled boss and orch panes. `busy` holds panes that got a prompt in this tick.
+// Sends queued Owner messages to boss and orch panes that are not blocked. `busy` holds panes that got a prompt in this tick.
 export async function deliverQueued({ panes = [], projects = {}, prompt, log = () => {}, dir = DATA_DIR, now = Date.now(), busy = new Set() }) {
   const used = new Set(busy);
   const pending = readMessages({ dir }).filter((record) => record.from === 'owner'
     && (record.status === 'queued' || (record.status === 'failed' && (record.attempts || 0) < MAX_DELIVERY_ATTEMPTS)));
   for (const record of pending) {
     const pane = targetPane(record.thread, panes, projects);
-    if (!pane || used.has(pane.id) || !['idle', 'done'].includes(pane.status)) continue;
+    if (!pane || used.has(pane.id) || !['idle', 'done', 'working'].includes(pane.status)) continue;
     used.add(pane.id);
     const attempts = (record.attempts || 0) + 1;
     const meta = { id: record.id, thread: record.thread, kind: record.kind, pane: pane.id };

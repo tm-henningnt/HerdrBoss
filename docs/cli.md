@@ -65,36 +65,39 @@ The Owner sends messages from the Organization page. The Boss and the orchestrat
 |---|---|
 | `herdr-boss say [--reply-to ID] [--action answer\|approve\|decide\|read] "TEXT"` | Write a reply for the Owner. Run it from the pane labeled `boss` or from a pane labeled `orch`. |
 | `herdr-boss messages [THREAD]` | Print the records of one thread as JSON, oldest first. Without `THREAD`, print the records of all threads. `THREAD` is `boss` or a project slug. |
+| `herdr-boss messages relay ID... --by boss` | Mark queued Owner messages as relayed by the Boss. Only the pane labeled `boss` can run this command. Herdr Boss never sends a relayed message. |
 | `herdr-boss mail post --to owner [--title TEXT] [--action read\|decide\|approve\|answer] FILE` | Post a Markdown report for the Owner in the `boss` thread. Only the pane labeled `boss` can post. |
+| `herdr-boss mail close ID... --note TEXT` | Close open Mailbox items as answered through the Boss. Only the pane labeled `boss` can run this command. It sends no message. |
 
-`say` and `mail post` verify the caller the same way as `worker allow`:
+`say`, `mail post`, `mail close`, and `messages relay` verify the caller the same way as `worker allow`:
 
 1. The pane must set `HERDR_ENV=1`, `HERDR_PANE_ID`, and `HERDR_WORKSPACE_ID`.
 2. `herdr pane get` must return the same pane ID and workspace.
-3. The pane label must be exactly `boss` or `orch`.
+3. The pane label must be exactly `boss` or `orch`. `mail post`, `mail close`, and `messages relay` also require the `boss` label.
 
 A worker pane cannot use `say`. The command tells the worker to ask its orchestrator.
 
 The Boss writes to the `boss` thread. An orchestrator writes to the thread of the project that uses its workspace. Herdr Boss finds that project in `state.json`. `--reply-to` must name a message in the same thread.
 
-Each reply and report is an item in the Owner mailbox. Use `--action` to tell the Owner what the item needs:
+Each reply and report is an item in the Owner mailbox. Set `--action decide`, `--action approve`, or `--action answer` only when the Owner must act. Everything else is information. Omit `--action` for information.
 
 | Value | Meaning |
 |---|---|
 | `answer` | The Owner types an answer. |
 | `approve` | The Owner approves or declines. |
 | `decide` | The Owner makes a choice. Add a Markdown list under a `## Choices` heading to show choice buttons. |
-| `read` | The Owner only reads the item. This is the default. |
+| `read` | Information for the Owner. The commands use this action when you omit `--action`. |
 
-Set `--action decide` or `--action approve` only when you need an Owner answer. The escalation rules make that rare. The Owner answer comes back as an `[owner] Answer to ID:` prompt.
+The Mailbox shows action items under **Needs you**. It shows information under **Updates**. The escalation rules make Owner actions rare. The Owner answer comes back as an `[owner] Answer to ID:` prompt.
 
-The `say` text is 1 to 4000 characters. The report file is Markdown, up to 64 KB. The report title defaults to the first Markdown heading, or to `Report`. Both commands refuse text that looks like a token, a key, or a password. The error does not print the text.
+The `say` text is 1 to 4000 characters. The report file is Markdown, up to 64 KB. The report title defaults to the first Markdown heading, or to `Report`. The `mail close` note is 1 to 500 characters. The close command refuses an unknown or already closed ID and names that ID in its error. The Boss note does not send a reply. These commands refuse text that looks like a token, a key, or a password. The error does not print the text.
 
 Example:
 
 ```sh
 herdr-boss say --reply-to m-mg3k2x1a-1f2e3d4c "Two tasks are left. The next merge is at 14:00."
-herdr-boss mail post --to owner --title "Morning handback" --action read handback.md
+herdr-boss mail post --to owner --title "Morning handback" handback.md
+herdr-boss mail close m-mg3k2x1a-1f2e3d4c --note "Answered with the Owner through the Boss."
 ```
 
 ## Harness settings

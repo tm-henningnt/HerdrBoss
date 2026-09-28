@@ -218,7 +218,7 @@ herdr agent prompt <orch-pane> "WORKER REPORT <name>: <done|blocked|stopped>. Re
 - `herdr-boss kit install` writes `docs/orchestration/herdr-boss.md` from [the kit template](../../templates/project-kit.md) and the `AGENTS.md` stub from [the stub template](../../templates/agents-stub.md).
 - A prompt that starts with `[owner]` is an Owner message from the dashboard. It ends with a reply command that holds the message ID.
 - Reply to an Owner message with `herdr-boss say --reply-to <id> "<answer>"`. Keep the answer short and free of secrets.
-- Each `herdr-boss say` reply is an item in the Owner mailbox. Set `--action decide` or `--action approve` only when you need an Owner answer. The escalation rules make that rare. Leave out `--action` for a plain report.
+- Each `herdr-boss say` reply is an item in the Owner mailbox. Set `--action decide`, `--action approve`, or `--action answer` only when the Owner must act. Everything else is information; omit `--action`.
 - Record an Owner decision from an Owner message in `docs/orchestration/memory.md`, with its full text.
 - Use `herdr-boss publish <slug> <file>` for a validated status file. Follow `docs/project-status.md` for the status schema.
 - Update status at session start, worker completion, blockage, human gate, and session end.

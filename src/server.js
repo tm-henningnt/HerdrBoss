@@ -17,7 +17,7 @@ import { listBrowserTabs, browserScreenshot, browserNavigate, browserNavigationS
 import { listHandoffs } from './handoff.js';
 import { roamgateAvailable, roamgateUrl } from './roamgate.js';
 import { createAccessControl, loginPage } from './access.js';
-import { appendMessage, closeMailboxItem, listThread, mailboxCounts, mailboxView, markMailboxRead, readMessages, validThread, validateOwnerSend } from './messages.js';
+import { appendMessage, closeMailboxItem, dismissMailboxItems, listThread, mailboxCounts, mailboxView, markMailboxRead, messagesWithReplyState, readMessages, validThread, validateOwnerSend } from './messages.js';
 
 const PUBLIC = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const DOCS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'docs');
@@ -262,7 +262,8 @@ export function serve(cfg, { readOnlyPreview = false, createEngine = (config, op
       if (p === '/api/messages' && req.method === 'GET') {
         const thread = url.searchParams.get('thread');
         if (!validThread(thread)) return send(res, 400, { error: 'Choose a thread: boss or a project slug.' });
-        return send(res, 200, listThread(thread));
+        const records = readMessages();
+        return send(res, 200, messagesWithReplyState(listThread(thread), records));
       }
       if (p === '/api/messages' && req.method === 'POST') {
         const knownThreads = new Set(['boss', ...Object.keys(engine.state?.control?.projects || {})]);
@@ -276,6 +277,11 @@ export function serve(cfg, { readOnlyPreview = false, createEngine = (config, op
       }
       if (p === '/api/messages/read' && req.method === 'POST') {
         const result = markMailboxRead(await jsonBody(req));
+        if (result.error) return send(res, result.status, { error: result.error });
+        return send(res, 200, { ...result, mailbox: refreshMailbox(readMessages(), true) });
+      }
+      if (p === '/api/messages/dismiss' && req.method === 'POST') {
+        const result = dismissMailboxItems(await jsonBody(req));
         if (result.error) return send(res, result.status, { error: result.error });
         return send(res, 200, { ...result, mailbox: refreshMailbox(readMessages(), true) });
       }
