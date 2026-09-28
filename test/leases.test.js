@@ -7,7 +7,7 @@ import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { validateResourcePools } from '../src/config.js';
-import { acquireLease, listLeases, readLeases, reclaimLeases, releaseLease, tcpListening } from '../src/leases.js';
+import { acquireLease, listLeases, ownerReleaseLease, readLeases, reclaimLeases, releaseLease, tcpListening } from '../src/leases.js';
 import { renderBulletin } from '../src/rules.js';
 import { loadModels, loadProjectConfig } from '../src/kit/config.js';
 import { collectWorker, startWorker } from '../src/kit/workers.js';
@@ -236,6 +236,27 @@ test('release is allowed for the own project and for the Boss', () => {
   release(other, BOSS);
   assert.equal(readLeases(ctx.dataDir).leases.length, 0);
   assert.throws(() => release(ctx, ORCH), /No lease of serve-ports item 47100/);
+});
+
+test('ownerReleaseLease removes a matching lease and refuses another project', () => {
+  const ctx = context();
+  acquire(ctx, ORCH);
+  const item = readLeases(ctx.dataDir).leases[0].item;
+  const conflict = (project) => {
+    try { ownerReleaseLease('serve-ports', item, { expectedProject: project, dataDir: ctx.dataDir }); return null; }
+    catch (error) { return error; }
+  };
+  const wrongProject = conflict('beta');
+  assert.equal(wrongProject.statusCode, 409);
+  assert.equal(wrongProject.message, 'The lease changed. Reload the page.');
+  assert.equal(readLeases(ctx.dataDir).leases.length, 1, 'a mismatched project keeps the lease');
+  const released = ownerReleaseLease('serve-ports', item, { expectedProject: 'alpha', dataDir: ctx.dataDir });
+  assert.equal(released.item, item);
+  assert.equal(released.project, 'alpha');
+  assert.deepEqual(readLeases(ctx.dataDir).leases, []);
+  const gone = conflict('alpha');
+  assert.equal(gone.statusCode, 409);
+  assert.equal(gone.message, 'The lease changed. Reload the page.');
 });
 
 test('list prints each pool item with its lease as JSON', () => {

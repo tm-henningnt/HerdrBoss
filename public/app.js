@@ -69,6 +69,7 @@ let policyDirty = false;
 let saveMessage = '';
 let machineGuardBusy = false;
 let machineGuardMessage = '';
+let hashScrolled = false;
 
 function markPolicyDirty() {
   policyDirty = true;
@@ -538,7 +539,10 @@ function browserResources(s) {
     const tabs = browserTabs[p.slug] || [];
     const size = b?.windowSize || { width: 1280, height: 800 };
     const preview = browserPreviewOpen.has(p.slug) && !!b?.responsive;
+    const lease = (s.resourceLeases?.leases || []).find((candidate) => candidate.pool === 'project-browsers' && candidate.project === p.slug);
+    const leaseLine = lease ? `<p class="browser-lease"><span class="mono">Leased port :${esc(lease.item)}</span> · CDP <span class="mono">http://127.0.0.1:${esc(lease.item)}</span> · <a href="/allocation#lease-project-browsers-${esc(lease.item)}">View lease</a></p>` : '';
     return `<article class="panel browser-card ${b?.profileVerified ? 'browser-card-active' : 'browser-card-idle'}"><div class="browser-card-head"><div><h3>${esc(p.label)}</h3><p>${b ? `<span class="mono">:${b.port}</span> · ${browserState(b)} · ${b.headless ? 'headless' : 'visible'}` : 'No browser running'}</p></div>${b?.profileVerified ? `<div class="browser-head-actions">${b.responsive ? `<button type="button" class="browser-preview-toggle" data-browser-preview="${esc(p.slug)}">${preview ? 'Hide preview' : 'Show preview'}</button>` : ''}<details class="browser-manage" data-browser-manage="${esc(p.slug)}" ${browserManageOpen.has(p.slug) ? 'open' : ''}><summary>Manage</summary><div class="browser-manage-content"><div class="browser-actions"><button type="button" data-browser-restart="${esc(p.slug)}" data-browser-mode="${b.headless ? 'visible' : 'headless'}">Restart ${b.headless ? 'visible' : 'headless'}</button>${b.responsive ? `<label class="browser-restore"><input type="checkbox" data-browser-restore="${esc(p.slug)}" checked> Reopen current page</label>` : ''}<button type="button" data-browser-close="${esc(p.slug)}">Close browser</button></div><form class="browser-size" data-browser-size="${esc(p.slug)}"><label>Next launch size <input type="number" name="width" min="320" max="3840" value="${size.width}" aria-label="${esc(p.label)} window width"> × <input type="number" name="height" min="240" max="2160" value="${size.height}" aria-label="${esc(p.label)} window height"> px</label><button type="submit">Save size</button></form><details class="browser-record"><summary>Connection and profile</summary><small class="mono">http://127.0.0.1:${b.port}<br>${esc(b.profile)}</small></details></div></details></div>` : '<span class="tag">Available</span>'}</div>
+      ${leaseLine}
       ${!b?.profileVerified ? `<div class="browser-actions"><button type="button" data-browser-request="${esc(p.slug)}" data-browser-mode="visible">Open visible</button><button type="button" data-browser-request="${esc(p.slug)}" data-browser-mode="headless">Open headless</button></div>` : ''}
       ${b?.profileVerified && !b.responsive ? '<small class="inline-feedback" role="status">Chrome does not answer on its debugging port. Restart or close it from Manage.</small>' : ''}
       ${browserMessages[p.slug] ? `<small class="inline-feedback" role="status">${esc(browserMessages[p.slug])}</small>` : ''}
@@ -922,8 +926,141 @@ function allocationView(s) {
   return [
     '<header class="page-intro"><div><h1>Resource allocation</h1><p>Set worker capacity, project shares, exclusions, and orchestrator succession.</p></div></header>',
     controlBlock(s),
+    leasesBlock(s),
   ].join('');
 }
+
+// ---------- Resource leases ----------
+// The Allocation page shows each pool, its items, and the holder of each item. A held row can release its lease.
+let leaseMessage = '';
+let leaseBusy = false;
+const leaseRelease = { pool: '', item: '', project: '', holder: '' };
+
+function leaseTtlText(pool) {
+  return pool.ttlMinutes == null ? 'no TTL' : `${pool.ttlMinutes} min TTL`;
+}
+
+function leaseReclaimText(pool) {
+  if (pool.check === 'cdp') return 'reclaim when its Chrome process is gone (cdp)';
+  if (pool.check === 'tcp') return `reclaim when nothing listens (tcp, ${pool.graceMinutes} min grace)`;
+  return 'reclaim when the pane or worker is gone, or the TTL lapses';
+}
+
+function leaseAgeText(lease) { return lease.at ? ago(lease.at) : '–'; }
+function leaseTimeLeftText(lease) { return lease.expiresAt ? until(lease.expiresAt) : 'no TTL'; }
+
+// A project browser that runs keeps its lease, so the Release button is disabled until you close the browser.
+// The state holds the browser records and the running Chrome processes; a match needs both.
+function browserRunningForLease(s, lease) {
+  const processes = s.browsers || [];
+  return (s.managedBrowsers || []).some((browser) => browser.project === lease.project && String(browser.port) === lease.item
+    && processes.some((proc) => proc.kind === 'automation-chrome' && String(proc.port) === String(browser.port) && proc.profile === browser.profile));
+}
+
+function leaseRow(s, pool, item) {
+  const lease = (s.resourceLeases?.leases || []).find((candidate) => candidate.pool === pool.name && candidate.item === item) || null;
+  const id = `lease-${esc(pool.name)}-${esc(item)}`;
+  if (!lease) {
+    return `<tr id="${id}" class="lease-row lease-free"><td class="mono" data-label="Item">${esc(item)}</td><td data-label="State">Free</td><td data-label="Holder project">–</td><td data-label="Pane or worker">–</td><td data-label="Age">–</td><td data-label="Time left">–</td><td data-label=""></td></tr>`;
+  }
+  const holder = lease.worker || lease.pane || '';
+  const running = pool.name === 'project-browsers' && browserRunningForLease(s, lease);
+  const action = running
+    ? '<button type="button" disabled>Release</button><small class="lease-note">Close the browser first on the Browsers page.</small>'
+    : `<button type="button" class="quiet" data-lease-release="${esc(pool.name)}" data-lease-item="${esc(item)}" data-lease-project="${esc(lease.project)}" data-lease-holder="${esc(holder)}">Release</button>`;
+  return `<tr id="${id}" class="lease-row lease-held"><td class="mono" data-label="Item">${esc(item)}</td><td data-label="State">Held${lease.borrowed ? ' <span class="pill ghost">borrowed</span>' : ''}</td><td data-label="Holder project">${esc(lease.project)}</td><td class="mono" data-label="Pane or worker">${esc(holder) || '–'}</td><td data-label="Age">${esc(leaseAgeText(lease))}</td><td data-label="Time left">${esc(leaseTimeLeftText(lease))}</td><td data-label="" class="lease-action">${action}</td></tr>`;
+}
+
+function leasePoolBlock(s, pool) {
+  const held = (s.resourceLeases?.leases || []).filter((lease) => lease.pool === pool.name && pool.items.includes(lease.item));
+  // The built-in browser pool lists only the held ports, with one line for the free ports.
+  const items = pool.builtIn ? held.map((lease) => lease.item) : pool.items;
+  const free = pool.items.length - held.length;
+  const rows = items.map((item) => leaseRow(s, pool, item)).join('') || '<tr><td colspan="7" class="empty">No items.</td></tr>';
+  return `<div class="lease-pool">
+    <div class="lease-head"><b>${esc(pool.name)}</b><span>${held.length} held · ${free} free</span><span>${esc(leaseTtlText(pool))}</span><span>${esc(leaseReclaimText(pool))}</span></div>
+    <div class="lease-table-wrap"><table class="lease-table"><thead><tr><th>Item</th><th>State</th><th>Holder project</th><th>Pane or worker</th><th>Age</th><th>Time left</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+    ${pool.builtIn ? `<p class="lease-free-line">${free} free port${free === 1 ? '' : 's'}</p>` : ''}
+  </div>`;
+}
+
+function leasesBlock(s) {
+  const pools = s.resourceLeases?.pools || [];
+  const errors = s.resourceLeases?.errors || [];
+  if (!pools.length && !errors.length) return '';
+  const errorLines = errors.map((error) => `<p class="lease-error" role="status">Resource pool config is invalid: ${esc(error)}</p>`).join('');
+  return `<section class="lease-panel panel">
+    <div class="section-head"><h2>Resource leases</h2><span>Pools that projects share</span></div>
+    <p class="setting-help">Each pool lists its items and the holder of each item. Select <b>Release</b> to give a lease back.</p>
+    ${leaseMessage ? `<p class="lease-status" role="status">${esc(leaseMessage)}</p>` : ''}
+    ${errorLines}
+    ${pools.map((pool) => leasePoolBlock(s, pool)).join('')}
+  </section>`;
+}
+
+// A dialog, not window.confirm, so the confirmation is part of the page and shows on every screen.
+function leaseDialog() {
+  let dialog = document.getElementById('lease-confirm');
+  if (dialog) return dialog;
+  dialog = document.createElement('dialog');
+  dialog.id = 'lease-confirm';
+  dialog.className = 'lease-confirm';
+  dialog.setAttribute('aria-labelledby', 'lease-confirm-title');
+  dialog.innerHTML = `<h2 id="lease-confirm-title">Release this lease?</h2>
+    <p id="lease-confirm-text"></p>
+    <p class="setting-help">The release removes the lease from leases.json. It never stops a process.</p>
+    <p class="lease-confirm-status" id="lease-confirm-status" role="status"></p>
+    <div class="lease-confirm-actions"><button type="button" data-lease-cancel>Cancel</button><button type="button" id="lease-confirm-release">Release</button></div>`;
+  document.body.append(dialog);
+  dialog.querySelector('[data-lease-cancel]').addEventListener('click', () => dialog.close());
+  dialog.querySelector('#lease-confirm-release').addEventListener('click', confirmLeaseRelease);
+  return dialog;
+}
+
+function openLeaseRelease(pool, item, project, holder) {
+  Object.assign(leaseRelease, { pool, item, project, holder });
+  const dialog = leaseDialog();
+  dialog.querySelector('#lease-confirm-text').innerHTML = `Pool <b>${esc(pool)}</b> · item <b>${esc(item)}</b> · holder project <b>${esc(project)}</b>${holder ? ` · pane or worker <b>${esc(holder)}</b>` : ''}`;
+  dialog.querySelector('#lease-confirm-status').textContent = '';
+  dialog.querySelector('#lease-confirm-release').disabled = false;
+  if (!dialog.open) dialog.showModal();
+}
+
+async function refreshLeaseState() {
+  const response = await fetch('/api/state');
+  if (response.ok) state = await response.json();
+}
+
+async function confirmLeaseRelease() {
+  if (leaseBusy) return;
+  const dialog = leaseDialog();
+  const button = dialog.querySelector('#lease-confirm-release');
+  const status = dialog.querySelector('#lease-confirm-status');
+  leaseBusy = true;
+  button.disabled = true;
+  status.textContent = 'Releasing…';
+  try {
+    await postJson('/api/leases/release', { pool: leaseRelease.pool, item: leaseRelease.item, project: leaseRelease.project });
+    dialog.close();
+    leaseMessage = `Released ${leaseRelease.pool} item ${leaseRelease.item}.`;
+    await refreshLeaseState();
+  } catch (error) {
+    leaseMessage = error.message;
+    status.textContent = error.message;
+    if (/changed/i.test(error.message)) { dialog.close(); await refreshLeaseState(); }
+  } finally {
+    leaseBusy = false;
+    button.disabled = false;
+    lastRender = '';
+    render();
+  }
+}
+
+document.addEventListener('click', (e) => {
+  const button = e.target.closest?.('[data-lease-release]');
+  if (!button) return;
+  openLeaseRelease(button.dataset.leaseRelease, button.dataset.leaseItem, button.dataset.leaseProject, button.dataset.leaseHolder || '');
+});
 
 function browsersView(s) {
   return [
@@ -2288,7 +2425,9 @@ const HELP = {
     <p>The <b>set share</b> is the share in your policy draft. The bar widths show it. The <b>effective share</b> is the number of worker slots the project has now, divided by the applied maximum of working agents. It changes only after you select <b>Apply policy</b>.</p>
     <p>A bar label such as <b>30% · 2</b> shows the set share and the effective slots. A narrow segment shows fewer labels; its tooltip shows all values.</p>
     <p>An idle project is faded. A paused project is faded and striped.</p>
-    <p>When <b>Borrow idle shares</b> is on, a project lends its unused slots to the projects that use all their slots. An idle or paused project lends all its slots. Another project always keeps its base slots. It offers its unused slots to other projects and does not lose them. The lent and offered slots go to the full projects by share. When no project is full, no project lends. A project row shows <b>N lent</b> for an idle project, <b>N free for others</b> for a project with unused slots, and <b>+N borrowed</b> for a full project. Borrowed slots are real capacity. The global limit still applies.</p>`],
+    <p>When <b>Borrow idle shares</b> is on, a project lends its unused slots to the projects that use all their slots. An idle or paused project lends all its slots. Another project always keeps its base slots. It offers its unused slots to other projects and does not lose them. The lent and offered slots go to the full projects by share. When no project is full, no project lends. A project row shows <b>N lent</b> for an idle project, <b>N free for others</b> for a project with unused slots, and <b>+N borrowed</b> for a full project. Borrowed slots are real capacity. The global limit still applies.</p>
+    <h3>Resource leases</h3><p>Each pool lists its items and the holder of each item. The head shows the held and free counts, the lease TTL, and the reclaim rule. A held row shows the holder project, the pane or worker, the lease age, and the time left. <b>borrowed</b> marks an item of another project's split. For <code>project-browsers</code>, the panel lists only the held ports and the number of free ports; that pool has 77 ports. An invalid resource pool shows an error line.</p>
+    <p>Select <b>Release</b> to give a lease back. The page asks you to confirm, and names the pool, the item, the holder project, and the pane or worker. The release removes the lease only while its holder project is still the project that the page shows. Otherwise the page reports that the lease changed, and you reload the page. A release never stops a process. For a project browser that runs, the button is disabled until you close the browser on the Browsers page.</p>`],
   settings: ['Settings', `
     <p>Each harness section holds the models and provider routes of that harness. Provider quotas and machine limits are below the harnesses.</p>
     <h3>Harnesses</h3><p>Clear <b>Available</b> to stop all workers from using a harness. The preferred model is the model that worker start and handover use when no model is given. An empty choice uses the harness default.</p>
@@ -2328,6 +2467,7 @@ const HELP = {
     <p>An orchestrator that stays idle gets a nudge when its published status still has an actionable task: status <b>todo</b>, <b>doing</b>, or <b>review</b> with every task in its <b>blocked by</b> list done. The project must be in <b>auto</b> or <b>active</b> mode, no other worker in that workspace may work, be blocked, or have failed, and the idle period must reach the configured idle minutes. The notice names the task ID and title. Resume an idle or done worker on that task, or start suitable work. One key per project and task keeps the normal notice cooldown in charge; a different next task prompts again.</p>`],
   browsers: ['Browsers', `
     <p>One persistent Chrome per project. Agents drive it; you can watch and help.</p>
+    <p>Each card shows the leased port and the CDP address <code>http://127.0.0.1:PORT</code> of the project, with a link to its row on the Allocation page.</p>
     <h3>Start and manage</h3><p><b>Open visible</b> or <b>Open headless</b> starts the browser. <b>Manage</b> restarts it in the other mode, closes it, or sets the window size for the next launch.</p>
     <h3>States</h3><p><b>ready</b>: Chrome runs with the project profile and answers on its debugging port. <b>not responding</b>: Chrome runs with the project profile, but its debugging port does not answer within 2 seconds. The preview is not available. Use <b>Manage</b> to restart or close it. If Chrome does not accept the close command, Herdr Boss sends SIGTERM to that Chrome process only. <b>offline</b>: no Chrome runs with the project profile. <b>port conflict</b>: another process uses the port.</p>
     <h3>Preview</h3><p><b>One tab</b> shows the selected tab with its address bar. <b>All tabs</b> shows every tab in one grid, without controls; select a tile to focus it. <b>Live</b> refreshes at the chosen interval. Without <b>Live</b>, the preview shows the last capture; <b>Refresh</b> takes a new one.</p>
@@ -3154,6 +3294,12 @@ function connect() {
   es.addEventListener('state', (e) => {
     state = JSON.parse(e.data);
     render();
+    // A link from the Browsers page opens /allocation#lease-POOL-ITEM. Scroll to that row once.
+    if (!hashScrolled && location.hash) {
+      hashScrolled = true;
+      const target = document.getElementById(location.hash.slice(1));
+      if (target) requestAnimationFrame(() => target.scrollIntoView());
+    }
     if (location.pathname === '/mailbox' && mailbox.loaded && !mailbox.loading && JSON.stringify(state.mailbox) !== mailbox.counts) loadMailbox();
   });
   es.onopen = () => $dot.classList.add('on');

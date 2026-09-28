@@ -377,6 +377,23 @@ export function releaseLease(poolName, item, {
   return released;
 }
 
+// Remove one lease for the dashboard. The dashboard sends the project that it saw, so a stale page cannot
+// release a lease that changed hands. A missing lease and a lease of another project both return a conflict.
+export function ownerReleaseLease(pool, item, { expectedProject, dataDir = DATA_DIR } = {}) {
+  const conflict = () => {
+    const error = new Error('The lease changed. Reload the page.');
+    error.statusCode = 409;
+    return error;
+  };
+  return changeLeases(dataDir, (store) => {
+    const index = store.leases.findIndex((lease) => lease.pool === pool && lease.item === item);
+    const lease = index < 0 ? null : store.leases[index];
+    if (!lease || lease.project !== expectedProject) throw conflict();
+    store.leases.splice(index, 1);
+    return publicLease(lease);
+  });
+}
+
 const publicLease = ({ runFile, tcpMisses, cdpMisses, ...lease }) => lease;
 
 export function listLeases({ pools, dataDir = DATA_DIR, pool = null, output = console.log } = {}) {

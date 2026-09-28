@@ -6,6 +6,7 @@ import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { Engine } from './engine.js';
+import { ownerReleaseLease } from './leases.js';
 import { PROJECTS_DIR, DATA_DIR, DEFAULT_SESSION_FILE, PRIVATE_ACCESS_DIR, assertPreviewDataDir } from './config.js';
 import { writeProject, listProjects } from './projects.js';
 import { loadModels } from './kit/config.js';
@@ -164,6 +165,14 @@ export function serve(cfg, { readOnlyPreview = false, createEngine = (config, op
       if (p === '/api/state') {
         if (engine.state) refreshMailbox();
         return send(res, 200, engine.state || {});
+      }
+      if (p === '/api/leases/release' && req.method === 'POST') {
+        const body = await jsonBody(req);
+        if (typeof body.pool !== 'string' || !body.pool || typeof body.item !== 'string' || !body.item || typeof body.project !== 'string' || !body.project) {
+          return send(res, 400, { error: 'pool, item, and project are required.' });
+        }
+        const released = ownerReleaseLease(body.pool, body.item, { expectedProject: body.project, dataDir: DATA_DIR });
+        return send(res, 200, { ok: true, released });
       }
       if (p === '/api/roamgate' && req.method === 'GET') return send(res, 200, { available: await roamgateAvailable(cfg) });
       if (p === '/roamgate' && req.method === 'GET') {
@@ -380,7 +389,8 @@ export function serve(cfg, { readOnlyPreview = false, createEngine = (config, op
       if (req.method === 'GET' && !p.startsWith('/api/')) return send(res, 200, fs.readFileSync(path.join(PUBLIC, 'index.html')), TYPES['.html']);
       send(res, 404, { error: 'not found' });
     } catch (e) {
-      send(res, e instanceof SyntaxError || e.message.includes('Content-Type') || p.startsWith('/api/handoffs/') ? 400 : 500, { error: e.message });
+      const code = Number.isInteger(e.statusCode) ? e.statusCode : e instanceof SyntaxError || e.message.includes('Content-Type') || p.startsWith('/api/handoffs/') ? 400 : 500;
+      send(res, code, { error: e.message });
     }
   });
 
