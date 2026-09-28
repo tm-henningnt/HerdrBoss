@@ -1,4 +1,4 @@
-// The Herdr Boss kit file and the stub in a project AGENTS.md, and the drift check for both files.
+// The Herdr Boss kit file and the stub in a project AGENTS.md, and the drift check for both files and the other orchestration files.
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -95,13 +95,46 @@ function fullBlock(lines) {
   return lines.some((line) => /^#+\s*Herdr Boss orchestration\b/.test(line)) || lines.filter((line) => line.trim()).length > 12;
 }
 
+// A rule-like line starts with Always, Never, Do not, or Must, after an optional list marker.
+const RULE = /^\s*(?:[-*]\s+|\d+\.\s+)?(?:Always|Never|Do not|Must)\b/;
+
 function modelTokens(line) { return [...line.matchAll(MODEL_TOKEN)].map((match) => match[0].replace(/[.-]+$/, '')); }
+
+// Warnings for orchestration text: stale commands, fixed pane IDs, dates, decisions sent to the Boss or the Owner,
+// notices to other projects, and model IDs. skip(index) is true for a line that is not checked.
+// A handoff note also warns for each rule-like line.
+function driftFindings(lines, { models = [], skip = () => false, handoff = false } = {}) {
+  const allowed = new Set(models);
+  const findings = [];
+  const add = (level, line, message) => findings.push({ level, line, message });
+  const copied = [];
+  lines.forEach((line, index) => {
+    const number = index + 1;
+    if (skip(index)) return;
+    for (const [pattern, message] of STALE) if (pattern.test(line)) add('warn', number, message);
+    if (PORT.test(line) && !PROHIBITION.test(line)) add('warn', number, 'port 9222 is the Chrome of another project; use herdr-boss browser request');
+    if (PROCESS.test(line) && !PROHIBITION.test(line)) add('warn', number, 'a process command prints command lines; use pgrep -l or ps -o pid,ppid,etime,comm');
+    if (PANE_ID.test(line)) add('warn', number, `fixed pane ID ${PANE_ID.exec(line)[0]}; ${MEMORY}`);
+    if (DATE.test(line)) add('warn', number, `dated line; ${MEMORY}`);
+    if (SENDS_DECISION.test(line) && BOSS_OR_OWNER.test(line) && ESCALATE.test(line) && !OWN_DECISION.test(line)) {
+      add('warn', number, 'text sends pushes or product decisions to the Boss or the Owner; the kit makes the orchestrator decide them');
+    }
+    if (NOTIFY_PROJECT.test(line) && !PROHIBITION.test(line)) add('warn', number, 'text tells the orchestrator to notify another project; the Boss relays messages between projects');
+    if (handoff && RULE.test(line)) add('warn', number, 'a handoff note carries no rules; move the rule to AGENTS.md or docs/orchestration/memory.md');
+    for (const model of modelTokens(line)) {
+      if (!allowed.has(model)) add('warn', number, `${model} is not in the model list; run herdr-boss models`);
+      else copied.push({ model, number });
+    }
+  });
+  const distinct = new Set(copied.map((item) => item.model));
+  if (distinct.size >= 3) add('warn', copied[0].number, `copied model list (${distinct.size} models); use herdr-boss models and herdr-boss lanes`);
+  return findings;
+}
 
 // Findings for the text of an AGENTS.md file: [{ level: 'error'|'warn', line, message }].
 // hash is the current block hash. models is the merged list of allowed model IDs.
 export function checkAgentsText(text, { hash, models = [] } = {}) {
   const lines = String(text).replace(/\r\n?/g, '\n').split('\n');
-  const allowed = new Set(models);
   const findings = [];
   const add = (level, line, message) => findings.push({ level, line, message });
   const begins = [];
@@ -131,41 +164,61 @@ export function checkAgentsText(text, { hash, models = [] } = {}) {
     }
   }
 
-  const copied = [];
-  lines.forEach((line, index) => {
-    const number = index + 1;
-    const inside = block && index >= block.begin && index <= block.end;
-    if (inside) return;
-    for (const [pattern, message] of STALE) if (pattern.test(line)) add('warn', number, message);
-    if (PORT.test(line) && !PROHIBITION.test(line)) add('warn', number, 'port 9222 is the Chrome of another project; use herdr-boss browser request');
-    if (PROCESS.test(line) && !PROHIBITION.test(line)) add('warn', number, 'a process command prints command lines; use pgrep -l or ps -o pid,ppid,etime,comm');
-    if (PANE_ID.test(line)) add('warn', number, `fixed pane ID ${PANE_ID.exec(line)[0]}; ${MEMORY}`);
-    if (DATE.test(line)) add('warn', number, `dated line; ${MEMORY}`);
-    if (SENDS_DECISION.test(line) && BOSS_OR_OWNER.test(line) && ESCALATE.test(line) && !OWN_DECISION.test(line)) {
-      add('warn', number, 'text sends pushes or product decisions to the Boss or the Owner; the kit makes the orchestrator decide them');
-    }
-    if (NOTIFY_PROJECT.test(line) && !PROHIBITION.test(line)) add('warn', number, 'text tells the orchestrator to notify another project; the Boss relays messages between projects');
-    for (const model of modelTokens(line)) {
-      if (!allowed.has(model)) add('warn', number, `${model} is not in the model list; run herdr-boss models`);
-      else copied.push({ model, number });
-    }
-  });
-  const distinct = new Set(copied.map((item) => item.model));
-  if (distinct.size >= 3) add('warn', copied[0].number, `copied model list (${distinct.size} models); use herdr-boss models and herdr-boss lanes`);
+  findings.push(...driftFindings(lines, { models, skip: (index) => block && index >= block.begin && index <= block.end }));
   return findings.sort((a, b) => a.line - b.line || (a.level === b.level ? 0 : a.level === 'error' ? -1 : 1));
 }
 
 function plural(count, word) { return `${count} ${word}${count === 1 ? '' : 's'}`; }
 
+// The Markdown files below a folder, as sorted paths relative to root. Symbolic links are not followed.
+function markdownFiles(root, folder, { deep = true, match = () => true } = {}) {
+  let entries;
+  try { entries = fs.readdirSync(path.join(root, folder), { withFileTypes: true }); } catch { return []; }
+  return entries.sort((a, b) => a.name.localeCompare(b.name)).flatMap((entry) => {
+    const relative = folder ? `${folder}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) return deep ? markdownFiles(root, relative, { deep, match }) : [];
+    return entry.isFile() && entry.name.endsWith('.md') && match(entry.name) ? [relative] : [];
+  });
+}
+
+const HANDOFF = /handoff/i;
+const ORCHESTRATOR_FILE = /(?:Orchestrator|orchestrator).*\.md$/;
+
+// Other orchestration files that orchestrators read, relative to root: docs/agents/**/*.md, .orchestration/*.md,
+// .orchestration/**/*handoff*.md, and a top-level *Orchestrator*.md file. The kit file and memory.md are not in the list.
+export function orchestrationFiles(root) {
+  const files = new Set([
+    ...markdownFiles(root, 'docs/agents'),
+    ...markdownFiles(root, '.orchestration', { deep: false }),
+    ...markdownFiles(root, '.orchestration', { match: (name) => HANDOFF.test(name) }),
+    ...markdownFiles(root, '', { deep: false, match: (name) => ORCHESTRATOR_FILE.test(name) }),
+  ]);
+  return [...files].sort();
+}
+
+// Warnings for one orchestration file. Each finding has the file name. A file name with "handoff" is a handoff note.
+export function checkOrchestrationText(text, { file, models = [] } = {}) {
+  const lines = String(text).replace(/\r\n?/g, '\n').split('\n');
+  return driftFindings(lines, { models, handoff: HANDOFF.test(path.basename(file)) }).map((finding) => ({ ...finding, file }));
+}
+
 // Reads an AGENTS.md file and the kit file next to it, and checks both. relative is the file name to report.
 // The kit file is docs/orchestration/herdr-boss.md in the directory of the AGENTS.md file.
+// The check also scans the orchestration files of that directory. Their findings are warnings with a file name.
 export function checkAgentsFile(file, { rulesFile, relative = file } = {}) {
-  const kitPath = path.join(path.dirname(file), KIT_FILE);
+  const root = path.dirname(file);
+  const kitPath = path.join(root, KIT_FILE);
   const kitText = fs.existsSync(kitPath) ? fs.readFileSync(kitPath, 'utf8') : null;
+  const models = mergedModelIds(rulesFile);
   const findings = [
     ...checkKitText(kitText, projectKit().revision),
-    ...checkAgentsText(fs.readFileSync(file, 'utf8'), { hash: agentsBlock().hash, models: mergedModelIds(rulesFile) }),
+    ...checkAgentsText(fs.readFileSync(file, 'utf8'), { hash: agentsBlock().hash, models }),
   ];
+  for (const other of orchestrationFiles(root)) {
+    let text;
+    try { text = fs.readFileSync(path.join(root, other), 'utf8'); } catch { continue; }
+    findings.push(...checkOrchestrationText(text, { file: other, models }));
+  }
   const errors = findings.filter((finding) => finding.level === 'error').length;
   const warnings = findings.length - errors;
   return {
@@ -173,7 +226,7 @@ export function checkAgentsFile(file, { rulesFile, relative = file } = {}) {
     findings,
     errors,
     warnings,
-    lines: findings.map((finding) => `${finding.level} line ${finding.line}: ${finding.message}`),
+    lines: findings.map((finding) => `${finding.level}${finding.file ? ` ${finding.file}` : ''} line ${finding.line}: ${finding.message}`),
     summary: `${relative}: ${plural(errors, 'error')}, ${plural(warnings, 'warning')}`,
   };
 }

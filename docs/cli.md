@@ -247,7 +247,7 @@ herdr-boss lease release serve-ports "$PORT"
 | `check --report FILE` | Validate a worker report (`report.json`). |
 | `check --run FILE` | Validate one ledger entry. |
 | `check --worktree DIR --allow PATH...` | Check that the worktree changes only allowed paths. |
-| `check agents [FILE]` | Check a project `AGENTS.md` and its kit file for kit drift. `FILE` defaults to `AGENTS.md` at the Git top level of the current directory. The kit file is `docs/orchestration/herdr-boss.md` in the directory of `FILE`. The command prints one line per finding and a summary line. It exits 0 when there is no `error` finding, and 1 otherwise. |
+| `check agents [FILE]` | Check a project `AGENTS.md` and its kit file for kit drift. `FILE` defaults to `AGENTS.md` at the Git top level of the current directory. The kit file is `docs/orchestration/herdr-boss.md` in the directory of `FILE`. The command also scans the orchestration files in that directory. The command prints one line per finding and a summary line. It exits 0 when there is no `error` finding, and 1 otherwise. |
 | `check kit` | List each published project with its `kitRevision`, its `agentsCheck` counts, and the revision state: `current`, `old`, or `not published`. The last line is a summary with the current kit revision. The command exits 1 when a project is not current. |
 | `kit install [--no-hook]` | Install the kit in the Git top level of the current directory. The command writes the kit file, the `AGENTS.md` stub, and the Claude `SessionStart` hook. It prints `wrote FILE` for each file that it changed and `unchanged FILE` for the other files. `--no-hook` does not change `.claude/settings.json`. |
 | `kit block` | Print the marked `AGENTS.md` stub with the current hash. Old instructions use this command. Use `kit install` for a new installation. |
@@ -289,7 +289,20 @@ The stub in `AGENTS.md` has this form:
 
 `kit install` computes all files before it writes. An error writes no file.
 
-`check agents` prints each finding as `LEVEL line N: message`. `LEVEL` is `error` or `warn`.
+`check agents` prints each finding in `AGENTS.md` or the kit file as `LEVEL line N: message`. `LEVEL` is `error` or `warn`.
+
+`check agents` also scans these orchestration files in the directory of `AGENTS.md`, usually the Git top level:
+
+- `docs/agents/**/*.md`
+- `.orchestration/*.md`
+- `.orchestration/**/*handoff*.md`
+- a top-level file whose name matches `*Orchestrator*.md` or `*orchestrator*.md`
+
+The command does not scan `docs/orchestration/memory.md` or `docs/orchestration/herdr-boss.md`. The command does not follow symbolic links.
+
+A finding in an orchestration file is always a `warn` finding. The command prints it as `warn FILE line N: message`. `FILE` is the path relative to the directory of `AGENTS.md`. The `warn` findings in the table below that apply outside the stub also apply to all lines of an orchestration file.
+
+A file whose name contains `handoff` is a handoff note. A handoff note carries no rules. Each line of a handoff note that starts with `Always`, `Never`, `Do not`, or `Must` is a `warn` finding. Move the rule to `AGENTS.md` or `docs/orchestration/memory.md`.
 
 | Level | Finding |
 |---|---|
@@ -306,7 +319,7 @@ The stub in `AGENTS.md` has this form:
 | `warn` | A model ID that starts with `gpt-`, `claude-`, `opencode/`, `opencode-go/`, `deepseek`, or `muse-spark` and is not in the merged model list. The merged list is the same list that `herdr-boss models` shows. |
 | `warn` | Outside the stub: three or more allowed model IDs. This is a copied model list. Use `herdr-boss models` and `herdr-boss lanes`. |
 
-`worker start` runs the same check on the project `AGENTS.md`. It prints one warning line with the counts when there are findings. It starts the worker in all cases.
+`publish` and `worker start` run the same check on the project `AGENTS.md` and the orchestration files. `publish` stores the counts in `agentsCheck.errors` and `agentsCheck.warnings`. The findings in the orchestration files count as warnings. `worker start` prints one warning line with the counts when there are findings. It starts the worker in all cases.
 
 An unknown tool-call count stays `null`. The ledger accepts `null` as unknown. If an older kit reports a ledger entry with `null` as invalid, install a HerdrBoss kit version that accepts `null`, then run `herdr-boss ledger check` again. This check reads the ledger. Do not replace `null` with `0` or edit the ledger entry.
 

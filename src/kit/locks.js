@@ -98,23 +98,35 @@ function writeNewRecord(file, record) {
   }
 }
 
-function withMutationLock(directory, operation) {
+function sleep(milliseconds) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds); }
+
+// The .mutation guard folder in directory makes one lock or lease change at a time. A busy guard throws ELOCKBUSY
+// with busyMessage, after waitMs of retries. src/leases.js uses the guard of the machine-scope locks.
+export function withMutationLock(directory, operation, {
+  waitMs = 0,
+  busyMessage = 'A project lock operation is already in progress. Retry when it finishes.',
+} = {}) {
   const guard = path.join(directory, '.mutation');
-  let created = false;
-  try {
-    fs.mkdirSync(guard, { mode: 0o700 });
-    created = true;
-    fs.chmodSync(guard, 0o700);
-  } catch (error) {
-    if (created) {
-      try { fs.rmdirSync(guard); } catch {}
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    let created = false;
+    try {
+      fs.mkdirSync(guard, { mode: 0o700 });
+      created = true;
+      fs.chmodSync(guard, 0o700);
+      break;
+    } catch (error) {
+      if (created) {
+        try { fs.rmdirSync(guard); } catch {}
+      }
+      if (error.code !== 'EEXIST') throw error;
+      if (Date.now() >= deadline) {
+        const busy = new Error(busyMessage);
+        busy.code = 'ELOCKBUSY';
+        throw busy;
+      }
+      sleep(50);
     }
-    if (error.code === 'EEXIST') {
-      const busy = new Error('A project lock operation is already in progress. Retry when it finishes.');
-      busy.code = 'ELOCKBUSY';
-      throw busy;
-    }
-    throw error;
   }
   try { return operation(); }
   finally { fs.rmdirSync(guard); }
@@ -139,9 +151,10 @@ function checkoutRoots(root) {
 
 // A worker run record is live when it names this pane and this worktree and has no finishedAt.
 // The records are in the runs folder of any checkout of the repository, usually the orchestrator checkout.
-function hasLiveWorkerRun(paneId, root) {
+// Return { name, file } for the live run, or null.
+export function hasLiveWorkerRun(paneId, root) {
   const worktree = realpathOrNull(root);
-  if (!worktree) return false;
+  if (!worktree) return null;
   for (const checkout of checkoutRoots(root)) {
     let runsPath;
     try { runsPath = realpathOrNull(loadProjectConfig({ cwd: checkout }).runsPath); } catch { continue; }
@@ -154,10 +167,10 @@ function hasLiveWorkerRun(paneId, root) {
       let run;
       try { run = JSON.parse(fs.readFileSync(actual, 'utf8')); } catch { continue; }
       if (run?.name === name && run.pane === paneId && !run.finishedAt && typeof run.worktree === 'string'
-        && realpathOrNull(run.worktree) === worktree) return true;
+        && realpathOrNull(run.worktree) === worktree) return { name, file: actual };
     }
   }
-  return false;
+  return null;
 }
 
 function workerCallerFor(env, herdr, config) {
@@ -197,9 +210,7 @@ function timeValue(now) {
   return value instanceof Date ? value.getTime() : Number(value);
 }
 
-function defaultPause(milliseconds) {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
-}
+const defaultPause = sleep;
 
 export function acquireProjectLock(name, {
   config,
