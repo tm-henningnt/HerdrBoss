@@ -176,6 +176,8 @@ The stored record holds these keys:
 | `until` | The ISO time at which the night ends. |
 | `by` | Who started the night. |
 | `quietHours` | Quiet hours are on. The default is `false`. |
+| `noticeStartAt` | The ISO time of the start notice, for each pane that got it. |
+| `noticeStopAt` | The ISO time of the end notice, for each pane that got it. |
 
 A state whose `until` time has passed reads as not active. The file stays, so a later task can read its own marks. A missing or unreadable file reads as not active. The read view of an active state is `{ active, since, until, by, quietHours }`. The read view of any other state is `{ active: false }`.
 
@@ -183,7 +185,21 @@ An active night state also makes the Owner away. The machine limits are the same
 
 The bulletin then shows one line under **Rules now**: `Night watch until 07:30 (Owner away). Work as normal; the Boss handles judgment calls.` The time is the local end time. When `quietHours` is true, the bulletin also shows `Quiet hours: on.`
 
-The commands, the notices, the worker cap, the reports, and the dashboard banner come in later tasks. See `docs/ideas/night-watch.md`.
+### Night watch notices
+
+The engine sends one start notice to each orchestrator pane and to the Boss pane. It sends the notice as a direct prompt, so a working orchestrator also receives it. The notice is not a resource notice. It does not use the idle gate and it does not use the hourly `info` limit.
+
+The start notice reads: `[herdr-boss] Night watch until 07:30. The Owner is away; the Boss acts for the Owner. Work as normal. Escalate to the Boss.` The time is the local `until` time of the stored state.
+
+The engine sends one end notice when the night ends. The end notice reads: `[herdr-boss] Night watch ended. The Owner rules apply again.` A pane gets the end notice only when it got the start notice.
+
+The engine stores the send time of each notice in the record, under `noticeStartAt` or `noticeStopAt`, with the pane as the key. A restart reads those marks and sends no notice twice. A pane that joins during the night gets the start notice at the next tick. A mark from before the `since` time belongs to an earlier night, so it does not keep a notice from going out.
+
+A failed send stores no mark. The next tick sends the notice again. A pane that no longer exists gets no end notice.
+
+A stop clears the file. The engine then keeps the last active record in its own memory and sends the end notice from it.
+
+The commands, the worker cap, the reports, and the dashboard banner come in later tasks. See `docs/ideas/night-watch.md`.
 
 ## Quota lanes
 
