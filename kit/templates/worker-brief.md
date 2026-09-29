@@ -18,11 +18,15 @@ Your orchestrator is pane `{{orchPane}}` (agent `{{orchAgent}}`).
 - Issue: `{{issue}}`
 - Date: `{{date}}`
 - Screenshot budget: {{imageBudget}} screenshots. The project setting overrides the kit default.
+{{kindHeaderNote}}
 - Copied inputs:
 {{copyPaths}}
 - Leased resources: {{leases}}
+{{portInstruction}}
 
 ## Process safety
+
+{{kindWaitNote}}
 
 List processes only with `pgrep -l NAME` or `ps -o pid,ppid,etime,comm`.
 
@@ -49,6 +53,8 @@ Do not edit issues, project instructions, roadmaps, or architecture decisions un
 Do not start or direct another agent.
 
 Do not commit, merge, rebase, push, deploy, or publish unless this brief grants that action.
+
+Do not run cherry-pick, rebase, or merge. The orchestrator does them. Commit only when the brief asks.
 
 ## Read first
 

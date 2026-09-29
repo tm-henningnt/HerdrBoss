@@ -32,7 +32,9 @@ const STALLED_PROMPT_WAIT_MS = 20_000;
 const BRIEF_SLOTS = new Set([
   'name', 'kind', 'model', 'effort', 'project', 'repo', 'worktree', 'branch', 'base', 'issue', 'task',
   'allowedPaths', 'reportPath', 'reportJsonPath', 'orchPane', 'orchAgent', 'bulletinPath', 'herdrEnvPrefix', 'herdrBin', 'date', 'evidenceTiers', 'threadLimit', 'imageBudget', 'copyPaths', 'leases',
+  'kindHeaderNote', 'kindWaitNote', 'portInstruction',
 ]);
+const MAX_COPIED_INPUT_BYTES = 200 * 1024 * 1024;
 
 function git(root, args, { encoding = 'utf8' } = {}) {
   return execFileSync('git', ['-C', root, ...args], { encoding });
@@ -224,6 +226,7 @@ export function renderBrief(template, slots) {
   for (const name of names) if (!BRIEF_SLOTS.has(name)) throw new Error(`Unknown brief template slot: {{${name}}}.`);
   return template.replace(/{{\s*([^{}]+?)\s*}}/g, (_match, name) => {
     const value = slots[name];
+    if (['kindHeaderNote', 'kindWaitNote', 'portInstruction'].includes(name) && (value === undefined || value === null || value === '')) return '';
     if (value === undefined || value === null || value === '') return '(none)';
     if (name === 'allowedPaths' && Array.isArray(value)) return value.length ? value.map((item) => `- ${item}`).join('\n') : '(none)';
     if (name === 'copyPaths' && Array.isArray(value)) return value.length ? value.map((item) => `- ${item}`).join('\n') : '(none)';
@@ -851,6 +854,54 @@ function workerAgentArgs(kind, launchArgs, { paneId, tabId, workspaceId, env, tm
   })];
 }
 
+function checkedCopyFile(root, source, label, destinationRelative = null) {
+  const resolvedRoot = path.resolve(root);
+  const resolvedSource = path.resolve(source);
+  const relative = path.relative(resolvedRoot, resolvedSource);
+  if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error(`Copy path ${label} must be inside the repository.`);
+  }
+  let stats;
+  try { stats = fs.lstatSync(resolvedSource); } catch { throw new Error(`Copy path ${label} does not exist.`); }
+  if (!stats.isFile() || stats.isSymbolicLink()) throw new Error(`Copy path ${label} must be a regular file.`);
+  const realRoot = fs.realpathSync(resolvedRoot);
+  const realSource = fs.realpathSync(resolvedSource);
+  const realRelative = path.relative(realRoot, realSource);
+  if (!realRelative || realRelative.startsWith(`..${path.sep}`) || path.isAbsolute(realRelative)) {
+    throw new Error(`Copy path ${label} must be inside the repository.`);
+  }
+  return {
+    source: resolvedSource,
+    relative: (destinationRelative ?? realRelative).split(path.sep).join('/'),
+    size: stats.size,
+  };
+}
+
+function workerInputFiles(root, name) {
+  const inputRoot = path.join(root, '.orchestration', 'state', 'inputs', name);
+  let rootStats;
+  try { rootStats = fs.lstatSync(inputRoot); } catch (error) {
+    if (error.code === 'ENOENT') return [];
+    throw error;
+  }
+  if (!rootStats.isDirectory() || rootStats.isSymbolicLink()) throw new Error(`Worker input path ${inputRoot} must be a directory.`);
+  const files = [];
+  const visit = (directory, prefix = '') => {
+    const entries = fs.readdirSync(directory, { withFileTypes: true })
+      .sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0);
+    for (const entry of entries) {
+      const source = path.join(directory, entry.name);
+      const relative = path.posix.join(prefix, entry.name);
+      if (entry.isSymbolicLink()) throw new Error(`Worker input ${relative} must not be a symbolic link.`);
+      if (entry.isDirectory()) visit(source, relative);
+      else if (entry.isFile()) files.push(checkedCopyFile(root, source, relative, relative));
+      else throw new Error(`Worker input ${relative} must be a regular file.`);
+    }
+  };
+  visit(inputRoot);
+  return files;
+}
+
 export function startWorker(name, options, {
   config,
   models,
@@ -936,21 +987,15 @@ export function startWorker(name, options, {
   const browserWarning = codexBrowserWarning(options.kind, task);
   if (browserWarning) output(browserWarning);
   if (!task?.trim()) throw new Error('Task text must not be empty.');
-  const copyFiles = (options.copy ?? []).map((input) => {
-    const source = path.resolve(config.root, input);
-    const relative = path.relative(config.root, source);
-    if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error(`Copy path ${input} must be inside the repository.`);
-    let stats;
-    try { stats = fs.lstatSync(source); } catch { throw new Error(`Copy path ${input} does not exist.`); }
-    if (!stats.isFile() || stats.isSymbolicLink()) throw new Error(`Copy path ${input} must be a regular file.`);
-    const realRoot = fs.realpathSync(config.root);
-    const realSource = fs.realpathSync(source);
-    const realRelative = path.relative(realRoot, realSource);
-    if (!realRelative || realRelative.startsWith(`..${path.sep}`) || path.isAbsolute(realRelative)) throw new Error(`Copy path ${input} must be inside the repository.`);
-    return { source, relative: realRelative.split(path.sep).join('/') };
-  });
+  const copyFiles = [
+    ...(options.copy ?? []).map((input) => checkedCopyFile(config.root, path.resolve(config.root, input), input)),
+    ...workerInputFiles(config.root, name),
+  ];
   const destinations = copyFiles.map(({ relative }) => relative);
   if (new Set(destinations).size !== destinations.length) throw new Error('Copy paths have a destination collision.');
+  if (copyFiles.reduce((total, file) => total + file.size, 0) > MAX_COPIED_INPUT_BYTES) {
+    throw new Error('Copied inputs exceed the 200 MB total limit.');
+  }
   const base = options.base ?? config.baseBranch;
   const baseCommit = git(config.root, ['rev-parse', base]).trim();
   const branch = options.noWorktree ? git(config.root, ['branch', '--show-current']).trim() : name;
@@ -962,11 +1007,18 @@ export function startWorker(name, options, {
   if (fs.existsSync(recordFile)) throw new Error(`Run record already exists: ${recordFile}.`);
   if (!options.noWorktree && fs.existsSync(worktree)) throw new Error(`Worktree path already exists: ${worktree}.`);
   if (!options.noWorktree && branchExists(config.root, branch)) throw new Error(`Branch already exists: ${branch}.`);
-  const leasePools = options.lease ?? [];
+  const leasePools = [...(options.lease ?? [])];
+  const autoServeLease = !leasePools.includes('serve-ports') && task.includes('serve:live');
+  let autoLeasedServePort = false;
+  let leaseContext = null;
+  if (leasePools.length || autoServeLease) leaseContext = resolveLeaseContext(leaseOptions);
+  if (autoServeLease && leaseContext.pools.some((pool) => pool.name === 'serve-ports')) {
+    leasePools.push('serve-ports');
+    autoLeasedServePort = true;
+  }
   for (const [index, pool] of leasePools.entries()) {
     if (leasePools.indexOf(pool) !== index) throw new Error(`--lease ${pool} may be used only once.`);
   }
-  const leaseContext = leasePools.length ? resolveLeaseContext(leaseOptions) : null;
   if (leaseContext) {
     const unknown = leasePools.find((pool) => !leaseContext.pools.some((candidate) => candidate.name === pool));
     if (unknown) throw new Error(`Unknown resource pool ${unknown}. Pools: ${leaseContext.pools.map((candidate) => candidate.name).join(', ') || '(none)'}.`);
@@ -974,6 +1026,7 @@ export function startWorker(name, options, {
 
   const workspaceId = caller.workspaceId;
   const tmpDir = path.join(path.resolve(worktree), workerDir, 'tmp');
+  if (tmpDir.length > 90) output('Warning: TMPDIR is longer than 90 characters; a Unix socket path can fail.');
   let paneId = null;
   const paneCap = config.workerPanesPerTab ?? WORKER_PANES_PER_TAB;
   let paneCommand;
@@ -1029,6 +1082,7 @@ export function startWorker(name, options, {
   }
   for (const notice of leaseNotices) output(notice);
   for (const lease of leases) output(`Leased ${lease.pool} ${lease.item} as ${lease.env}.`);
+  if (autoLeasedServePort) output('Automatically leased serve-ports for the serve:live task.');
 
   const reportPath = path.join(worktree, plan.workerDir, 'report.md');
   const reportJsonPath = path.join(worktree, plan.workerDir, 'report.json');
@@ -1044,6 +1098,11 @@ export function startWorker(name, options, {
     imageBudget: config.imageBudget ?? 10,
     copyPaths: copyFiles.map(({ relative }) => path.posix.join(plan.workerDir, 'inputs', relative)),
     leases: leases.length ? `${leases.map((lease) => `\`${lease.env}=${lease.item}\` (pool \`${lease.pool}\`)`).join(', ')}. Use only these.` : null,
+    kindHeaderNote: options.kind === 'codex' ? 'In a Codex shell, run `setopt NO_BG_NICE` before a background command.' : '',
+    kindWaitNote: options.kind === 'claude' ? 'To wait, use a background command and wait for its exit, or a herdr-boss wait command. Do not run sleep and then poll.' : '',
+    portInstruction: leases.some((lease) => lease.pool === 'serve-ports')
+      ? `Use only the port in \`${path.posix.join(plan.workerDir, 'port')}\`. Take no other serve port.`
+      : '',
     threadLimit: config.testThreadsFlag
       ? `Add \`${config.testThreadsFlag}\` to each test runner command.`
       : 'Use the form that the project instructions name. For Vitest 2 with the forks pool, use `--poolOptions.forks.maxForks=2 --poolOptions.forks.minForks=1`; `--maxWorkers=2` fails there. For Vitest 3 and later, use `--maxWorkers=2`.',
@@ -1055,6 +1114,9 @@ export function startWorker(name, options, {
   if (leases.length && !/{{\s*leases\s*}}/.test(template)) missingBriefDetails.push(`Leased resources: ${briefSlots.leases}`);
   if (briefSlots.copyPaths.length && !/{{\s*copyPaths\s*}}/.test(template)) {
     missingBriefDetails.push(`Copied inputs:\n${briefSlots.copyPaths.map((item) => `- ${item}`).join('\n')}`);
+  }
+  for (const slot of ['kindHeaderNote', 'kindWaitNote', 'portInstruction']) {
+    if (briefSlots[slot] && !new RegExp(`{{\\s*${slot}\\s*}}`).test(template)) missingBriefDetails.push(briefSlots[slot]);
   }
   const brief = `${renderBrief(template, briefSlots)}${missingBriefDetails.length ? `\n\n## Worker start details\n\n${missingBriefDetails.join('\n\n')}` : ''}`;
   const readWorkerText = readText ?? ((agentName) => {
@@ -1074,6 +1136,8 @@ export function startWorker(name, options, {
     addExclude(worktree);
     fs.mkdirSync(path.join(worktree, plan.workerDir), { recursive: true });
     fs.mkdirSync(plan.tmpDir, { recursive: true });
+    const servePort = leases.find((lease) => lease.pool === 'serve-ports');
+    if (servePort) fs.writeFileSync(path.join(worktree, plan.workerDir, 'port'), `${servePort.item}\n`, { flag: 'wx' });
     for (const file of copyFiles) {
       const destination = path.join(worktree, plan.workerDir, 'inputs', ...file.relative.split('/'));
       fs.mkdirSync(path.dirname(destination), { recursive: true });
