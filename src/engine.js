@@ -19,6 +19,7 @@ import { listHandoffs, saveHandoffs, supersedeHandoffs, expireHandoff, expireMis
 import { deliverQueued, mailboxCounts, readMessages, RETENTION_MS, SEND_LIMIT_PER_MINUTE } from './messages.js';
 import { openMessageStore } from './message-store.js';
 import { readKitNotice, pendingKitAlert, isKitAlert, kitNoticeTargets } from './kit-notice.js';
+import { kitRevisionState, kitSnapshot, KIT_STATES } from './kit/agents-check.js';
 import { nightNoticeSent, quietHoursActive, readNight, readNightRecord, withNightReportMark, withNoticeMark, writeNight } from './night.js';
 import { inspectWorkerTransitions, inspectWorkerReports, isWorkerPane, applyWorkerFailureStatuses, resolveFreeUsageRun, activeFreeModelExhaustions, extendFreeModelExhaustion, activeFreeLaneExhaustions, extendFreeLaneExhaustion, freeUsageLaneRetry } from './worker-failures.js';
 import { FULL_SUITE_LOCK, readLockQueue, readLockTakeoverNotices, readMachineLocks, removeLockTakeoverNotice } from './kit/locks.js';
@@ -302,6 +303,35 @@ export function orchestratorCanReceiveNotice(orch, alerts) {
 }
 
 const skipsIdleGate = (alert) => !!alert.immediate && SEV[alert.severity] >= SEV.warn;
+
+// A project that stays behind on a required kit change gets one reminder after this time.
+export const KIT_REMIND_MS = 2 * 3600 * 1000;
+
+// tracker maps a project slug to the time when it was first seen behind on a required change. The
+// caller stores it in memory. A project that catches up, or is behind on useful changes only,
+// leaves the tracker. The reminder is an immediate warning for the project workspace, and it has
+// no desktop notice. The delivery step sends it to a working orchestrator only.
+export function kitReminderAlerts({ projects, tracker, now, current, changes }) {
+  const entries = changes.map((change) => ({ ...change }));
+  const alerts = [];
+  const seen = new Set();
+  for (const project of projects || []) {
+    if (!project?.slug) continue;
+    const loaded = typeof project.kitRevision === 'string' ? project.kitRevision : null;
+    if (kitRevisionState(loaded, current, entries) !== KIT_STATES.required) continue;
+    seen.add(project.slug);
+    const since = tracker[project.slug]?.since;
+    if (!Number.isFinite(since)) { tracker[project.slug] = { since: now }; continue; }
+    if (now - since < KIT_REMIND_MS || !project.workspace) continue;
+    alerts.push({
+      key: `kitremind:${project.slug}:${current}`, severity: 'warn', scope: project.workspace, immediate: true, once: true, noDesktop: true,
+      title: 'Kit behind',
+      text: `[herdr-boss] Your kit is behind on a required change. Run herdr-boss kit update, then re-read docs/orchestration/herdr-boss.md. Kit revision now ${current}.`,
+    });
+  }
+  for (const slug of Object.keys(tracker)) if (!seen.has(slug)) delete tracker[slug];
+  return alerts;
+}
 
 // A pane gets at most one prompt with info notices in this interval.
 export const INFO_PROMPT_INTERVAL_MS = 60 * 60 * 1000;
@@ -660,6 +690,7 @@ export class Engine extends EventEmitter {
         }).map((lock) => lock.name === FULL_SUITE_LOCK ? { ...lock, queue } : lock);
       } catch (error) { errors.push(`locks: ${error.message}`); }
       snap.projects = listProjects();
+      snap.kit = kitSnapshot();
       const policy = migrateWorkspacePolicy(loadPolicy(), snap, { file: POLICY_FILE });
       this.memory.exhaustedFreeModels = activeFreeModelExhaustions(this.memory.exhaustedFreeModels, now);
       this.memory.exhaustedFreeLanes = activeFreeLaneExhaustions(this.memory.exhaustedFreeLanes, now);
@@ -736,6 +767,7 @@ export class Engine extends EventEmitter {
         }
         const kitAlert = pendingKitAlert(this.memory.kitNotice, now);
         if (kitAlert) evaluation.alerts.push(kitAlert);
+        evaluation.alerts.push(...kitReminderAlerts({ projects: snap.projects, tracker: (this.memory.kitBehind ||= {}), now, current: snap.kit.current, changes: snap.kit.changes }));
       }
       this.memory.quotaRecoveries ||= {};
       // Older records used the reset timestamp as part of the key. Codexbar can
@@ -1433,7 +1465,7 @@ export class Engine extends EventEmitter {
 
     // User notifications: warn and critical, once per alert key.
     for (const a of alerts) {
-      if (SEV[a.severity] < 1 || this.memory.notified[a.key]) continue;
+      if (SEV[a.severity] < 1 || a.noDesktop || this.memory.notified[a.key]) continue;
       this.memory.notified[a.key] = now;
       if (quiet) {
         this.memory.quietNotifications.push({ key: a.key, title: a.title, text: a.text, severity: a.severity });
@@ -1454,6 +1486,8 @@ export class Engine extends EventEmitter {
         let targets = a.scope === 'all' ? broadcast : orchs.filter((o) => o.workspace === a.scope);
         // A kit notice goes to every project orchestrator, also one without active workers.
         if (isKitAlert(a)) targets = kitNoticeTargets(orchs);
+        // A kit reminder goes to the project orchestrator only while it works. The kit notice reached it when it was idle.
+        if (a.key.startsWith('kitremind:')) targets = kitNoticeTargets(targets.filter((o) => o.label === 'orch' && o.status === 'working'));
         if (a.key.startsWith('machine:disk:')) {
           const projectOrch = targets.find((o) => o.label === 'orch');
           targets = projectOrch ? [projectOrch] : targets.filter((o) => o.label !== 'boss').slice(0, 1);

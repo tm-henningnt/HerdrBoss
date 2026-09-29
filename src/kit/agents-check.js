@@ -157,6 +157,29 @@ export function kitChangesSince(revision, file = CHANGES_FILE) {
   return entries.slice(index + 1);
 }
 
+// The state of a project kit revision against the current kit revision. A revision that the change
+// log does not know, or a current revision that the change log does not end with, leaves the
+// project behind on a required change, because the impact of an unrecorded change is unknown.
+export const KIT_STATES = Object.freeze({
+  current: 'current',
+  useful: 'behind (useful only)',
+  required: 'behind (required)',
+  unpublished: 'not published',
+});
+
+export function kitRevisionState(loaded, current = kitRevision(), entries = readKitChanges()) {
+  if (!loaded) return KIT_STATES.unpublished;
+  if (loaded === current) return KIT_STATES.current;
+  const index = entries.findIndex((entry) => entry.revision === loaded);
+  if (index < 0 || entries.at(-1)?.revision !== current) return KIT_STATES.required;
+  return entries.slice(index + 1).some((entry) => entry.impact === 'required') ? KIT_STATES.required : KIT_STATES.useful;
+}
+
+// The current kit revision and the impact of each recorded change, for the dashboard.
+export function kitSnapshot(entries = readKitChanges(), current = kitRevision()) {
+  return { current, changes: entries.map((entry) => ({ revision: entry.revision, impact: entry.impact })) };
+}
+
 // Findings for the text of docs/orchestration/herdr-boss.md. text is null for a missing file.
 export function checkKitText(text, revision) {
   const findings = [];
