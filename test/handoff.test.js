@@ -1015,6 +1015,17 @@ test('project activation labels the successor orch and the previous pane orch pr
   assert.equal(stored.ownerGoal, 'Ship the release safely.');
 });
 
+test('activation plans the early close and expires a second successor for the same source', (t) => {
+  const sibling = { id: 'handoff-sibling', sourcePane: 'ws:p1', newPane: 'ws:p5', workspace: 'ws', status: 'prepared', automatic: true };
+  const f = activationFixture(t, { priorRecords: [sibling] });
+  const item = f.activate();
+  assert.equal(item.finish.plannedAt, new Date(Date.parse(item.activatedAt) + 15 * 60 * 1000).toISOString());
+  const stored = JSON.parse(fs.readFileSync(path.join(f.root, 'handoffs.json'), 'utf8'));
+  const other = stored.find((x) => x.id === 'handoff-sibling');
+  assert.equal(other.status, 'expired');
+  assert.match(other.expiredReason, /handoff-activate/);
+});
+
 test('project activation clears the stable orchestrator name before it names the successor', (t) => {
   const f = activationFixture(t, { agentNames: [{ pane_id: 'ws:p1', name: 'alpha-orch' }] });
   f.activate();

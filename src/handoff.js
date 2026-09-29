@@ -435,6 +435,9 @@ export function markHandoffReady(id) {
   return item;
 }
 
+// The wait for the successor to answer before the old pane closes.
+export const FINISH_TIMEOUT_MS = 15 * 60 * 1000;
+
 function handoffRole(item) { return item.boss || item.label === 'boss' ? 'boss' : 'orch'; }
 
 function handoffMemoryPrompt(item) {
@@ -522,6 +525,16 @@ export function activateHandoff(id, { confirmed = false } = {}) {
   item.activation = { at: item.activatedAt, sourcePane: item.sourcePane, successorPane: item.newPane, sourceLabel, successorLabel: role };
   if (sourceMissing) item.activation.sourceMissing = true;
   supersedeHandoffs(records, Date.parse(item.activatedAt));
+  // The engine closes the old pane after the successor confirms it works. Until then, it plans the latest close time.
+  // The Owner closes the old Boss pane by hand, so a Boss record gets no plan.
+  if (role !== 'boss') item.finish = { plannedAt: new Date(Date.parse(item.activatedAt) + FINISH_TIMEOUT_MS).toISOString() };
+  // A second successor that was prepared for the same source is never used. The engine closes its tab.
+  for (const other of records) {
+    if (role === 'boss' || other === item || other.sourcePane !== item.sourcePane || !['prepared', 'preparing', 'needs-inspection'].includes(other.status)) continue;
+    other.status = 'expired';
+    other.expiredAt = item.activatedAt;
+    other.expiredReason = `Successor ${item.id} was activated for the same orchestrator.`;
+  }
   save(records);
   renameSuccessorAgent(item);
   try {

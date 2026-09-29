@@ -15,7 +15,8 @@ import { listBrowserSessions, cdpResponds, browserProcessCheck } from './browser
 import { readLeases, reclaimLeases, publicLease, tcpListening, leasePools, migrateProjectBrowserLeases } from './leases.js';
 import { codeSignCloneDir, sweepCodeSignClones } from './clone-sweep.js';
 import { runDenialScan, readDenials, denialSummary, DENIAL_SCAN_INTERVAL_MS, SCAN_BUDGET_BYTES, RETAIN_DAYS, RISE_FACTOR, RISE_MIN_EVENTS } from './denials.js';
-import { listHandoffs, saveHandoffs, supersedeHandoffs, expireHandoff, expireMissingHandoffs, handoffNotices } from './handoff.js';
+import { claudeContextUsage, trackBoundary, normalizeModelId } from './context-handover.js';
+import { FINISH_TIMEOUT_MS, listHandoffs, saveHandoffs, supersedeHandoffs, expireHandoff, expireMissingHandoffs, handoffNotices } from './handoff.js';
 import { deliverQueued, mailboxCounts, readMessages, RETENTION_MS, SEND_LIMIT_PER_MINUTE } from './messages.js';
 import { openMessageStore } from './message-store.js';
 import { readKitNotice, pendingKitAlert, isKitAlert, kitNoticeTargets } from './kit-notice.js';
@@ -550,6 +551,8 @@ export class Engine extends EventEmitter {
       if (this.act && currentHerdrSnapshot && currentPaneList) {
         try { expireMissingHandoffs(herdr?.panes); }
         catch (e) { errors.push(`handoffs: ${e.message}`); }
+        try { await this.finishActivations(herdr, now, this.state?.control); }
+        catch (e) { errors.push(`handoff finish: ${e.message}`); }
         try { await this.retirePreviousOrchestrators(herdr, now); }
         catch (e) { errors.push(`handoff retirement: ${e.message}`); }
       }
@@ -927,6 +930,8 @@ export class Engine extends EventEmitter {
       if (this.act && policy.autoHandover) {
         try { await this.autoHandover(control, herdr, policy, now, snap.lanes, snap.projects); }
         catch (e) { this.log('error', `Automatic handover check failed: ${e.message}`); }
+        try { await this.contextHandover(control, herdr, policy, now, snap.projects); }
+        catch (e) { this.log('error', `Context handover check failed: ${e.message}`); }
       }
       writeJson(MEMORY_FILE, this.memory);
       return snap;
@@ -1192,6 +1197,103 @@ export class Engine extends EventEmitter {
     }
   }
 
+  // The second automatic handover trigger. At a task boundary, an orchestrator whose context is above
+  // the policy threshold gets a fresh successor from the project memory file. The successor keeps the
+  // model of the source. Activation waits until the source pane is not working.
+  async contextHandover(control, herdr, policy, now, projects = []) {
+    this.memory.contextBoundary ||= {};
+    this.memory.contextHandovers ||= {};
+    this.memory.autoHandoverAttempts ||= {};
+    const panes = herdr?.panes || [];
+    const records = listHandoffs();
+    const open = ['prepared', 'preparing', 'needs-inspection'];
+    for (const id of Object.keys(this.memory.contextHandovers)) {
+      if (!records.some((x) => x.id === id && open.includes(x.status))) delete this.memory.contextHandovers[id];
+    }
+    const settled = (pane) => ['idle', 'done'].includes(pane?.status);
+    const rankedModel = (model) => (modelTier(normalizeModelId(model)) === null ? null : normalizeModelId(model));
+    const once = (key, text, extra) => {
+      if (this.memory.autoHandoverAttempts[key]) return;
+      this.memory.autoHandoverAttempts[key] = now;
+      this.log('handoff', text, extra);
+    };
+    const eligible = (slug, workspace, label) => !isBossHandoff({ project: slug, workspace, label }, herdr) && !isBossName(slug) &&
+      !projectHeld(slug, projects, control) && workspaceActive(slug, workspace, herdr, control);
+
+    for (const item of records.filter((x) => x.status === 'prepared' && x.automatic && x.readyAt && !x.promptError && this.memory.contextHandovers[x.id])) {
+      const source = panes.find((p) => p.id === item.sourcePane);
+      const target = panes.find((p) => p.id === item.newPane);
+      if (!settled(source) || source.label !== item.label || target?.agent !== item.toKind || !settled(target)) continue;
+      if (isBossHandoff(item, herdr) || isBossName(source.label) || !eligible(item.project, item.workspace, source.label)) continue;
+      const usage = claudeContextUsage({ sessionId: source.sessionId, cwd: source.cwd });
+      const sourceModel = rankedModel(usage.model) || rankedModel(this.memory.contextHandovers[item.id].sourceModel) || normalizeModelId(selectModel(item.fromKind, source.model, this.models, policy));
+      const tier = tierAllowsAutoActivation(sourceModel, item.model);
+      if (!tier.allowed) {
+        once(`owner-decision:${item.id}`, `Context handover of ${item.toKind} ${item.model} for ${item.label || item.project} waits for the Owner: ${tier.reason}. Activate it with herdr-boss handoff activate ${item.id} --confirmed.`, { project: item.project, pane: item.newPane });
+        continue;
+      }
+      const key = `activate:${item.id}`;
+      if (now - (this.memory.autoHandoverAttempts[key] || 0) < 60000) continue;
+      this.memory.autoHandoverAttempts[key] = now;
+      writeJson(MEMORY_FILE, this.memory);
+      try {
+        await this.handoffRunner(process.execPath, [CLI_FILE, 'handoff', 'activate', item.id, '--confirmed'], { timeout: 180000 });
+        this.log('handoff', `Activated ${item.toKind} successor for ${item.label || item.project} at a task boundary (context handover)`, { project: item.project, pane: item.newPane });
+      } catch (e) { this.log('error', `Context handover activation for ${item.label || item.project} failed: ${String(e.stderr || e.message).slice(0, 300)}`); }
+    }
+
+    const tracked = new Set();
+    for (const project of Object.values(control.projects || {})) {
+      const orch = project.orch;
+      const published = projects.find((entry) => entry.slug === project.slug);
+      const pane = orch && panes.find((p) => p.id === orch.pane);
+      if (!pane || !published || isBossName(project.slug) || isBossHandoff({ project: project.slug, workspace: project.workspace, label: pane.label }, herdr)) continue;
+      tracked.add(pane.id);
+      const entry = trackBoundary(this.memory.contextBoundary[pane.id], published, pane.status);
+      this.memory.contextBoundary[pane.id] = entry;
+      if (!entry.armed || !settled(pane)) continue;
+      if (!eligible(project.slug, project.workspace, pane.label)) continue;
+      if (records.some((x) => x.sourcePane === pane.id && open.includes(x.status))) continue;
+      const name = pane.label || project.slug;
+      if (orch.kind !== 'claude') {
+        once(`context-unavailable:${pane.id}:${orch.kind}`, `Context handover for ${name} is unavailable: Herdr Boss reads the context size only from Claude sessions, not from ${orch.kind}.`, { project: project.slug });
+        entry.armed = false;
+        continue;
+      }
+      const usage = claudeContextUsage({ sessionId: pane.sessionId, cwd: pane.cwd });
+      if (!usage.available) {
+        once(`context-unavailable:${pane.id}:${pane.sessionId}`, `Context handover for ${name} is unavailable: ${usage.reason}.`, { project: project.slug });
+        entry.armed = false;
+        continue;
+      }
+      if (usage.tokens <= policy.autoHandoverContextTokens) { entry.armed = false; continue; }
+      const model = rankedModel(usage.model) || normalizeModelId(selectModel(orch.kind, pane.model, this.models, policy));
+      const tier = tierAllowsAutoActivation(model, model);
+      if (!tier.allowed) {
+        once(`context-tier:${pane.id}:${model}`, `Context handover for ${name} is skipped: ${tier.reason}.`, { project: project.slug });
+        entry.armed = false;
+        continue;
+      }
+      const allowedEfforts = this.models.kinds[orch.kind]?.allowedEfforts || [];
+      const effort = allowedEfforts.includes(pane.effort) ? ['--effort', pane.effort] : [];
+      const key = `context-prepare:${pane.id}`;
+      if (now - (this.memory.autoHandoverAttempts[key] || 0) < 15 * 60000) continue;
+      this.memory.autoHandoverAttempts[key] = now;
+      writeJson(MEMORY_FILE, this.memory);
+      try {
+        const prepared = JSON.parse(await this.handoffRunner(process.execPath,
+          [CLI_FILE, 'handoff', 'prepare', pane.id, '--to', orch.kind, '--model', model, '--mode', 'fresh', ...effort, '--auto'],
+          { timeout: 300000 }));
+        this.memory.contextHandovers[prepared.id] = { pane: pane.id, at: now, tokens: usage.tokens, sourceModel: model };
+        entry.armed = false;
+        this.log('handoff', `Prepared a fresh ${orch.kind} successor for ${name} at a task boundary: context is ${usage.tokens} tokens; awaiting readiness`, { project: project.slug, pane: prepared.newPane });
+      } catch (e) {
+        this.log('error', `Context handover preparation for ${name} failed: ${String(e.stderr || e.message).slice(0, 300)}`);
+      }
+    }
+    for (const id of Object.keys(this.memory.contextBoundary)) if (!tracked.has(id)) delete this.memory.contextBoundary[id];
+  }
+
   async notifyHandoffPeers(herdr, now) {
     this.memory.handoffPeerNotices ||= {};
     this.memory.handoffPeerAttempts ||= {};
@@ -1235,6 +1337,102 @@ export class Engine extends EventEmitter {
     }
     for (const [key, at] of Object.entries(this.memory.handoffPeerNotices)) if (now - at > 8 * 86400 * 1000) delete this.memory.handoffPeerNotices[key];
     for (const [key, at] of Object.entries(this.memory.handoffPeerAttempts)) if (now - at > 8 * 86400 * 1000) delete this.memory.handoffPeerAttempts[key];
+  }
+
+  // A record without a finish object was activated before the early close existed. Only the 120-minute retirement handles it.
+  // After activation, close the old pane once the successor is confirmed and the old pane is settled,
+  // then rename the successor tab. Close the tabs of successors that were never activated.
+  async finishActivations(herdr, now, control = null) {
+    const panes = new Map((herdr?.panes || []).map((pane) => [pane.id, pane]));
+    const records = listHandoffs();
+    const at = new Date(now).toISOString();
+    const settled = (pane) => ['idle', 'done'].includes(pane?.status);
+    const since = (pane) => this.memory.paneSince?.[pane.id];
+    const before = new Map(records.map((x) => [x.id, JSON.stringify([x.finish, x.cleanedAt, x.cleanedSkipped, x.retirement])]));
+    for (const item of records.filter((x) => x.status === 'active' && Number.isFinite(Date.parse(x.activatedAt))
+      && now - Date.parse(x.activatedAt) < 7 * 86400 * 1000 && x.finish && !x.finish.doneAt)) {
+      const role = item.boss || item.label === 'boss' ? 'boss' : 'orch';
+      // The Owner closes an old Boss pane by hand.
+      if (role === 'boss') continue;
+      const source = panes.get(item.sourcePane);
+      const successor = panes.get(item.newPane);
+      const scope = role === 'boss' ? { workspace: item.workspace, pane: item.newPane } : { project: item.project, pane: item.newPane };
+      if (!successor || successor.label !== role || !successor.agent) continue;
+      const finish = item.finish;
+      const activatedAt = Date.parse(item.activatedAt);
+      if (successor.status === 'working' && !finish.workedAt) { finish.workedAt = at; }
+      const answered = Boolean(finish.workedAt) && settled(successor);
+      const timedOut = now - activatedAt >= FINISH_TIMEOUT_MS;
+      const confirmed = answered || (timedOut && (!source || settled(source)));
+      const planned = new Date(confirmed ? now : activatedAt + FINISH_TIMEOUT_MS).toISOString();
+      if (!confirmed && finish.plannedAt !== planned) { finish.plannedAt = planned; }
+      const idle = source && since(source);
+      // The allocation of the previous tick tells whether the project has a running worker.
+      const working = Number(control?.projects?.[item.project]?.running) > 0;
+      const quiet = Boolean(source) && !working && settled(source) && idle?.status === source.status && now - idle.since >= 60000;
+      // The old pane works or has an unfinished task. Retry each tick, and tell the Boss once after 60 minutes.
+      if (source && !quiet && now - activatedAt >= 60 * 60000 && !finish.bossNotifiedAt) {
+        const boss = [...panes.values()].find((pane) => pane.label === 'boss' && pane.agent && pane.id !== source.id);
+        if (boss) {
+          try {
+            checkHerdrResponse(await this.herdrRunner('herdr', ['agent', 'prompt', boss.id, `[herdr-boss] Old ${role === 'boss' ? 'Boss' : 'orchestrator'} pane ${source.id} of ${item.displayLabel || item.project} is still ${source.status} 60 minutes after handover. Herdr Boss keeps it open until it is idle. Successor: ${item.newPane}.`]));
+            finish.bossNotifiedAt = at;
+          } catch (error) { this.log('error', `Boss note for handoff ${item.id} failed: ${String(error.stderr || error.message).slice(0, 200)}`, scope); }
+        }
+      }
+      if (!confirmed) continue;
+      if (!finish.confirmedAt) { finish.confirmedAt = at; finish.confirmedBy = answered ? 'answered' : 'timeout'; }
+      if (source) {
+        if (source.label !== `${role} previous` || !quiet) continue;
+        try { checkHerdrResponse(await this.herdrRunner('herdr', ['pane', 'close', source.id])); }
+        catch (error) {
+          this.log('error', `Could not close previous ${role} pane for handoff ${item.id}: ${String(error.stderr || error.message).slice(0, 200)}`, scope);
+          continue;
+        }
+        finish.closedAt = at;
+      }
+      // Only the live tab is safe to rename. A recorded tab id can be stale.
+      const tab = successor.tab;
+      if (tab && (!successor.tabLabel || successor.tabLabel === 'Orchestrator Next')) {
+        try { checkHerdrResponse(await this.herdrRunner('herdr', ['tab', 'rename', tab, 'Orchestrator'])); finish.tabRenamedAt = at; }
+        catch (error) { this.log('error', `Could not rename the tab of ${item.newPane}: ${String(error.stderr || error.message).slice(0, 200)}`, scope); }
+      }
+      finish.doneAt = at;
+      finish.outcome = source ? 'closed' : 'source-absent';
+      item.retirement = { outcome: 'closed-early', completedAt: at };
+     
+      this.log('handoff', `Closed previous ${role} pane ${item.sourcePane} after ${finish.confirmedBy === 'answered' ? 'the successor answered' : 'the 15-minute wait'} (handoff ${item.id})`, scope);
+    }
+    const busy = new Set(records.filter((x) => ['active', 'superseded', 'prepared', 'preparing', 'needs-inspection'].includes(x.status)).flatMap((x) => [x.sourcePane, x.newPane]));
+    for (const item of records.filter((x) => x.status === 'expired' && x.newPane && !x.boss && x.label !== 'boss' && !x.cleanedAt && now - Date.parse(x.expiredAt) < 7 * 86400 * 1000)) {
+      const pane = panes.get(item.newPane);
+      // A pane that left Herdr needs no close. A role pane, or a pane that another record uses, stays open.
+      if (!pane) { item.cleanedAt = at; continue; }
+      if (pane.label || busy.has(pane.id) || pane.orch) { item.cleanedAt = at; item.cleanedSkipped = true; continue; }
+      const tab = pane.tab;
+      const alone = tab && [...panes.values()].every((other) => other.id === pane.id || other.tab !== tab);
+      try {
+        checkHerdrResponse(await this.herdrRunner('herdr', alone ? ['tab', 'close', tab] : ['pane', 'close', pane.id]));
+        item.cleanedAt = at;
+        this.log('handoff', `Closed the unused successor ${alone ? 'tab' : 'pane'} of handoff ${item.id}`, { project: item.project, pane: pane.id });
+      } catch (error) { this.log('error', `Could not close the unused successor of handoff ${item.id}: ${String(error.stderr || error.message).slice(0, 200)}`); }
+    }
+    // The herdr calls above take time. Merge only this method's fields into the current file, so a
+    // concurrent CLI write is kept.
+    const patches = records.filter((x) => before.get(x.id) !== JSON.stringify([x.finish, x.cleanedAt, x.cleanedSkipped, x.retirement]));
+    if (patches.length) {
+      const current = listHandoffs();
+      let merged = false;
+      for (const patch of patches) {
+        const target = current.find((x) => x.id === patch.id);
+        if (!target) continue;
+        if (patch.finish && ['active', 'superseded'].includes(target.status)) target.finish = { ...target.finish, ...patch.finish };
+        if (patch.retirement && !target.retirement) target.retirement = patch.retirement;
+        if (patch.cleanedAt && !target.cleanedAt) { target.cleanedAt = patch.cleanedAt; if (patch.cleanedSkipped) target.cleanedSkipped = true; }
+        merged = true;
+      }
+      if (merged) saveHandoffs(current);
+    }
   }
 
   async retirePreviousOrchestrators(herdr, now) {
