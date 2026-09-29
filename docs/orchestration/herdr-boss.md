@@ -1,4 +1,4 @@
-<!-- herdr-boss kit v=9ca9a9ebf4a8 -->
+<!-- herdr-boss kit v=60049d639ff0 -->
 Herdr Boss writes this file. Do not edit it. Run herdr-boss kit install to update it.
 
 # Herdr Boss orchestration kit
@@ -32,8 +32,8 @@ These are the shared operating rules for the orchestrator of this project.
 - Run each `herdr-boss browser` command and each `ps` or `pgrep` command alone. Do not join it to other commands with `&&`, `;`, or a pipe.
 - Put the relevant Owner decisions into each worker brief.
 - Keep Git branches, worktrees, commits, and merges under orchestrator control.
-- Wait on workers or events. Do not poll panes in a tight loop.
-- Wait on workers in the background. Never run a blocking wait loop longer than 1 minute.
+- After a dispatch, end the turn. The `WORKER REPORT` or `WORKER QUESTION` message arrives as a new prompt. Do not poll panes and do not run sleep or until loops.
+- Run `herdr-boss wait [<worker>...] [--timeout SECONDS]` only when you must block on a worker. Run it as a background command and read its exit code.
 - Treat `working`, `blocked`, `idle`, `done`, and `unknown` as distinct states.
 - Require `.worker/report.md`, `.worker/report.json`, and a `WORKER REPORT` message.
 - Inspect each worker diff and run acceptance commands independently.
