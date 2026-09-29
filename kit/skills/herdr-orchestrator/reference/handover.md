@@ -8,4 +8,5 @@ Read this file when your harness quota threatens the orchestrator.
 4. Use `handoff prepare` to start a successor.
 5. Review its output before `handoff activate <id> --confirmed`.
 
+- The handover carries your `/goal` to the successor. Keep the goal in the published status field `goal`.
 - Check your project on the Boss dashboard or in `herdr-boss policy show` when handover changes. Apply the saved succession ladder.

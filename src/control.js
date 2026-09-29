@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DATA_DIR } from './config.js';
 import { loadModels } from './kit/config.js';
+import { goalTextError } from './goal.js';
 
 const FILE = path.join(DATA_DIR, 'policy.json');
 export const POLICY_DEFAULTS = {
@@ -14,6 +15,8 @@ export const POLICY_DEFAULTS = {
   autoHandover: false,
   autoHandoverPercent: 98,
   autoHandoverContextTokens: 300000,
+  // The /goal text for a new orchestrator that has no goal. A handover copies it to the successor. An empty string turns it off.
+  defaultOrchestratorGoal: 'Keep the build moving end to end. Work through the published plan in priority order, and start the next ready task as soon as a slot is free, on a Use now lane with the free models first. Decide product, design and technical details yourself with good judgment and taste: check docs/orchestration/memory.md for a recorded Owner decision first, choose the simpler and more robust option, and record each decision. Respect herdr-boss messages, the kit and the Boss. When something is unclear, risky or needs a second opinion, ask the Boss, who decides with you. Stop only when no task can progress without a human. Then escalate through the Boss with one mail or chat item that names the decision, the options and your recommendation. Keep your main thread small: use subagents for reviews and reading, end your turn after a dispatch, and wait for worker reports. Before you stop, leave memory.md, the published status and the next task current.',
   orchestratorLadder: [
     { kind: 'codex', model: 'gpt-6-luna', effort: 'xhigh' },
     { kind: 'claude', model: 'claude-opus-5-5', effort: null },
@@ -156,6 +159,7 @@ export function validatePolicy(value, models) {
   }
   if (!Number.isInteger(value.autoHandoverPercent) || value.autoHandoverPercent < 90 || value.autoHandoverPercent > 100) errors.push('autoHandoverPercent must be an integer from 90 to 100.');
   if (!Number.isInteger(value.autoHandoverContextTokens) || value.autoHandoverContextTokens < 50000 || value.autoHandoverContextTokens > 2000000) errors.push('autoHandoverContextTokens must be an integer from 50000 to 2000000.');
+  { const goalError = goalTextError(value.defaultOrchestratorGoal); if (goalError) errors.push(`defaultOrchestratorGoal ${goalError}`); }
   for (const [key, max] of [['idleMinutes', 1440], ['reservePercent', 80], ['handoffLeadMinutes', 10080]]) {
     if (!Number.isInteger(value[key]) || value[key] < 0 || value[key] > max) errors.push(`${key} must be an integer from 0 to ${max}.`);
   }

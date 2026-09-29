@@ -7,6 +7,7 @@ import { deliverPrompt, isAgentPaneBusy, waitForWorkerPane } from './kit/workers
 import { contextTokensFor, loadModels } from './kit/config.js';
 import { loadPolicy, mergeModels, modelEnabled, providerFor, selectModel } from './control.js';
 import { codexShellEnvArgs } from './harness.js';
+import { cleanGoal, goalFromTranscript } from './goal.js';
 
 const FILE = path.join(DATA_DIR, 'handoffs.json');
 const TARGETS = new Set(['codex', 'claude', 'pi', 'opencode']);
@@ -26,6 +27,19 @@ function ownerGoal(project, boss) {
   if (boss) return undefined;
   const goal = readFile(path.join(DATA_DIR, 'projects', `${project}.json`), {})?.goal;
   return validOwnerGoal(goal) ? goal : undefined;
+}
+
+// The goal that the successor gets: the published status goal, else the last /goal command in the source transcript,
+// else the default goal of the policy for an orchestrator. The record keeps the text and where it came from.
+export function captureGoal(item, statusGoal, policy) {
+  // A Boss handover is manual and carries no automatic goal.
+  if (item.boss || item.label === 'boss') return {};
+  const fromStatus = cleanGoal(statusGoal);
+  if (fromStatus) return { goal: fromStatus, goalSource: 'status' };
+  const fromTranscript = goalFromTranscript({ kind: item.fromKind, sessionId: item.sessionId, cwd: item.cwd });
+  if (fromTranscript) return { goal: fromTranscript, goalSource: 'transcript' };
+  const fallback = cleanGoal(policy?.defaultOrchestratorGoal);
+  return fallback ? { goal: fallback, goalSource: 'default' } : {};
 }
 
 function redactContext(value) {
@@ -328,6 +342,7 @@ export function prepareHandoff(id, toKind, options = {}, { waitForPane = waitFor
       const goal = ownerGoal(item.project, item.boss || item.label === 'boss');
       if (goal) item.ownerGoal = goal;
     }
+    if (!Object.hasOwn(item, 'goal')) Object.assign(item, captureGoal(item, item.ownerGoal, loadPolicy()));
     if (item.mode === 'fresh' && !Object.hasOwn(item, 'sourceContext')) item.sourceContext = sourceContext(id);
     resumed = true;
   } else {
@@ -350,13 +365,14 @@ export function prepareHandoff(id, toKind, options = {}, { waitForPane = waitFor
     }
     const context = plan.mode === 'fresh' ? sourceContext(id) : undefined;
     const goal = ownerGoal(plan.project, plan.boss);
+    const captured = captureGoal(plan, goal, loadPolicy());
     const name = `handoff-${plan.project}`.slice(0, 23) + `-${Date.now().toString(36).slice(-6)}`;
     const created = herdr(['tab', 'create', '--workspace', plan.workspace, '--label', 'Orchestrator Next', '--cwd', plan.cwd,
       '--env', 'DISABLE_UPDATE_PROMPT=true', '--env', 'DISABLE_AUTO_UPDATE=true', '--no-focus']);
     const newPane = created.root_pane?.pane_id;
     if (!newPane) throw new Error('Herdr created a tab but did not return its root pane. Inspect the tab before retrying.');
     const newTab = created.tab?.tab_id ?? created.root_pane?.tab_id ?? created.tab_id;
-    item = { ...plan, id: name, newPane, ...(newTab ? { newTab } : {}), migratedId, ...(goal ? { ownerGoal: goal } : {}),
+    item = { ...plan, id: name, newPane, ...(newTab ? { newTab } : {}), migratedId, ...(goal ? { ownerGoal: goal } : {}), ...captured,
       ...(context ? { sourceContext: context } : {}), ...(migrationFallbackReason ? { migrationFallbackReason, requestedMode } : {}),
       status: 'preparing', preparedAt: new Date().toISOString(), automatic: options.auto === true };
     records.push(item);
@@ -470,7 +486,7 @@ export function previousAgentPrompt(item) {
   return `[herdr-boss] Handover activated. You no longer own orchestration of ${item.project}. Pane ${item.newPane} is the new orchestrator, labeled orch. Your pane ${item.sourcePane} is now labeled orch previous. Start no workers, dispatch no work, and send no prompts to workers. Write a concise final summary for the successor: current work, active workers, blockers, and the next action. After that summary, reply to every later request only with: "The ${item.project} orchestrator is now pane ${item.newPane}."`;
 }
 
-function successorPrompt(item) {
+export function successorPrompt(item) {
   const boss = handoffRole(item) === 'boss';
   const memoryPath = boss ? '~/.herdr-boss/boss-memory.md' : 'docs/orchestration/memory.md';
   const previous = boss ? 'previous Boss' : 'previous orchestrator';
@@ -479,7 +495,9 @@ function successorPrompt(item) {
     : `The ${previous} is pane ${item.sourcePane}, now labeled ${item.activation.sourceLabel}.`;
   const summaryNote = missing ? '' : ` The ${previous} was asked to write a final summary for you. Read it with herdr agent read ${item.sourcePane} when it is available.`;
   const roster = item.peerPanes?.length ? ` Other agent panes in your workspace: ${item.peerPanes.join(', ')}.` : Array.isArray(item.peerPanes) ? ' No other agents remain in your workspace.' : '';
-  return `[herdr-boss] Handover activated. You now control ${boss ? 'Herdr Boss orchestration' : `the ${item.project} project`}. Your pane ID is ${item.newPane}, labeled ${item.activation.successorLabel}. ${sourceNote} ${sessionConstruction(item)}${roster} The standby rule no longer applies.${summaryNote} Take over the current work. Use your pane ID ${item.newPane} in worker briefs, worker reports, and messages. Read the current Herdr Boss bulletin and ${memoryPath}, check each agent's work, and resume orchestration within the current policy. Obey the holds and freezes in ${memoryPath}.`;
+  // A Claude successor gets /goal from the engine after it confirms. Other harnesses get the goal in this prompt.
+  const goalNote = !boss && item.goal && item.goalDelivery === 'prompt' ? ` The current Owner goal is: ${item.goal}` : '';
+  return `[herdr-boss] Handover activated. You now control ${boss ? 'Herdr Boss orchestration' : `the ${item.project} project`}. Your pane ID is ${item.newPane}, labeled ${item.activation.successorLabel}. ${sourceNote} ${sessionConstruction(item)}${roster} The standby rule no longer applies.${summaryNote} Take over the current work. Use your pane ID ${item.newPane} in worker briefs, worker reports, and messages. Read the current Herdr Boss bulletin and ${memoryPath}, check each agent's work, and resume orchestration within the current policy. Obey the holds and freezes in ${memoryPath}.${goalNote}`;
 }
 
 // Notices that the engine delivers after activation. A prompt needs a current agent pane; the Owner gets a Herdr notification.
@@ -549,7 +567,12 @@ export function activateHandoff(id, { confirmed = false } = {}) {
     catch (e) { item.previousPromptError = String(e.stderr || e.message).slice(0, 500); }
   }
   save(records);
-  try { herdr(['agent', 'prompt', item.newPane, successorPrompt(item)]); }
+  if (item.goal && role !== 'boss') item.goalDelivery = item.toKind === 'claude' ? 'command' : 'prompt';
+  try {
+    herdr(['agent', 'prompt', item.newPane, successorPrompt(item)]);
+    if (item.goalDelivery === 'prompt') item.goalSentAt = new Date().toISOString();
+    save(records);
+  }
   catch (e) { item.activationPromptError = String(e.stderr || e.message).slice(0, 500); save(records); }
   return item;
 }

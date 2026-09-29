@@ -7,7 +7,7 @@ const SESSION_ID = /^[A-Za-z0-9_-]{1,128}$/;
 // The transcript tail that holds the last assistant message. A second pass reads more when a long line hides it.
 const TAIL_BYTES = [256 * 1024, 4 * 1024 * 1024];
 
-function transcriptFile(sessionId, cwd, home) {
+export function transcriptFile(sessionId, cwd, home) {
   const root = path.join(home, '.claude', 'projects');
   const name = `${sessionId}.jsonl`;
   const direct = typeof cwd === 'string' && cwd ? path.join(root, cwd.replace(/[^a-zA-Z0-9]/g, '-'), name) : null;
