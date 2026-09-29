@@ -102,6 +102,20 @@ herdr-boss mail post --to owner --title "Morning handback" handback.md
 herdr-boss mail close m-mg3k2x1a-1f2e3d4c --note "Answered with the Owner through the Boss."
 ```
 
+## Night watch
+
+| Command | Action |
+|---|---|
+| `herdr-boss night start [--until HH:MM\|ISO] [--quiet-hours]` | Start night watch. The default end time is the next 07:30 local time. `HH:MM` means the next such local time. An ISO value names one instant. The command refuses an end time in the past, or more than 24 hours ahead. |
+| `herdr-boss night stop` | Stop night watch. Clear the night state. |
+| `herdr-boss night` | Print the current night watch state in one line. |
+
+Only the pane labeled `boss`, or the Owner in a plain terminal, may start or stop night watch. An orchestrator or a worker gets a refusal with the reason. The command verifies a Herdr caller the same way as `mail close`.
+
+`night start` writes `night.json` in the data directory. The file holds `active`, `since`, `until`, `by`, and `quietHours`. `by` is `boss` when the Boss pane starts the watch, and `owner` when the Owner starts it in a plain terminal. `--quiet-hours` sets `quietHours` to `true`. The default is `false`.
+
+The service reads the state on every tick. An active state marks the Owner as away, and the Boss acts for the Owner. Night watch runs work as normal: pushes, deploys, and gates continue.
+
 ## Harness settings
 
 | Command | Action |
