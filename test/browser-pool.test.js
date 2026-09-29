@@ -66,8 +66,8 @@ function register(project, port) {
   return sessions[project];
 }
 
-function browserViewportFixture({ includeTab = true } = {}) {
-  const session = { port: 45678 };
+function browserViewportFixture({ includeTab = true, windowScript } = {}) {
+  const session = { port: 45678, windowSize: { width: 1280, height: 800 } };
   register('viewport-fixture', session.port);
   const calls = [];
   return {
@@ -81,20 +81,135 @@ function browserViewportFixture({ includeTab = true } = {}) {
         assert.strictEqual(actualSession, session);
         return includeTab ? [{ id: 'tab-viewport', webSocketDebuggerUrl: `ws://localhost:${session.port}/devtools/page/1` }] : [];
       },
-      command: async (...call) => { calls.push(call); return {}; },
+      command: async (...call) => {
+        calls.push(call);
+        if (windowScript) return windowScript(call, calls);
+        return {};
+      },
     },
   };
 }
 
-test('browserViewport sends device metrics to the selected tab and clears them on reset', async () => {
-  const fixture = browserViewportFixture();
-  await browserPreview.browserViewport('viewport-fixture', 'tab-viewport', { width: 473, height: 291, scale: 1.5, mobile: true }, fixture.adapters);
+test('browserViewport falls back to emulation when the window path fails and clears on reset', async () => {
+  const fixture = browserViewportFixture({
+    windowScript: (call) => {
+      const [, method] = call;
+      if (method === 'Browser.getWindowForTarget') throw new Error('setWindowBounds not supported');
+      return {};
+    },
+  });
+  const result = await browserPreview.browserViewport('viewport-fixture', 'tab-viewport', { width: 473, height: 291, scale: 1.5, mobile: true }, fixture.adapters);
+  assert.equal(result.method, 'emulation');
+  assert.equal(result.width, 473);
+  assert.equal(result.height, 291);
   await browserPreview.browserViewport('viewport-fixture', 'tab-viewport', { reset: true }, fixture.adapters);
   assert.deepEqual(pool.listBrowserTabViewports('viewport-fixture', ['tab-viewport']), {});
   assert.deepEqual(fixture.calls, [
+    ['ws://127.0.0.1:45678/devtools/page/1', 'Browser.getWindowForTarget', { targetId: 'tab-viewport' }],
     ['ws://127.0.0.1:45678/devtools/page/1', 'Emulation.setDeviceMetricsOverride', { width: 473, height: 291, deviceScaleFactor: 1.5, mobile: true }],
+    ['ws://127.0.0.1:45678/devtools/page/1', 'Browser.getWindowForTarget', { targetId: 'tab-viewport' }],
     ['ws://127.0.0.1:45678/devtools/page/1', 'Emulation.clearDeviceMetricsOverride', {}],
   ]);
+});
+
+test('browserViewport resizes the real window and verifies with a second session', async () => {
+  const fixture = browserViewportFixture({
+    windowScript: (call) => {
+      const [, method, params] = call;
+      if (method === 'Browser.getWindowForTarget') return { windowId: 42 };
+      if (method === 'Browser.setWindowBounds') return {};
+      if (method === 'Runtime.evaluate') {
+        return { result: { value: JSON.stringify({ innerWidth: 473, innerHeight: 291 }) } };
+      }
+      return {};
+    },
+  });
+  const result = await browserPreview.browserViewport('viewport-fixture', 'tab-viewport', { width: 473, height: 291 }, fixture.adapters);
+  assert.equal(result.method, 'window');
+  assert.equal(result.width, 473);
+  assert.equal(result.height, 291);
+  assert.equal(result.innerWidth, 473);
+  assert.equal(result.innerHeight, 291);
+  // getWindowForTarget, setWindowBounds, Runtime.evaluate (resize), Runtime.evaluate (second-session check)
+  assert.equal(fixture.calls.length, 4);
+  assert.deepEqual(fixture.calls[0], ['ws://127.0.0.1:45678/devtools/page/1', 'Browser.getWindowForTarget', { targetId: 'tab-viewport' }]);
+  assert.deepEqual(fixture.calls[1], ['ws://127.0.0.1:45678/devtools/page/1', 'Browser.setWindowBounds', { windowId: 42, bounds: { width: 473, height: 291, windowState: 'normal' } }]);
+  assert.equal(fixture.calls[2][1], 'Runtime.evaluate');
+  assert.equal(fixture.calls[3][1], 'Runtime.evaluate');
+  // The stored record has method window, so no emulation is reapplied.
+  const stored = pool.listBrowserTabViewports('viewport-fixture', ['tab-viewport']);
+  assert.equal(stored['tab-viewport'].method, 'window');
+  pool.setBrowserTabViewport('viewport-fixture', 'tab-viewport', null);
+});
+
+test('browserViewport corrects for the browser frame and retries', async () => {
+  let evaluateCount = 0;
+  const fixture = browserViewportFixture({
+    windowScript: (call) => {
+      const [, method] = call;
+      if (method === 'Browser.getWindowForTarget') return { windowId: 42 };
+      if (method === 'Browser.setWindowBounds') return {};
+      if (method === 'Runtime.evaluate') {
+        evaluateCount++;
+        // First call: 10px frame. Second call: correct. Third call: second-session check.
+        const w = evaluateCount === 1 ? 463 : 473;
+        const h = evaluateCount === 1 ? 281 : 291;
+        return { result: { value: JSON.stringify({ innerWidth: w, innerHeight: h }) } };
+      }
+      return {};
+    },
+  });
+  const result = await browserPreview.browserViewport('viewport-fixture', 'tab-viewport', { width: 473, height: 291 }, fixture.adapters);
+  assert.equal(result.method, 'window');
+  assert.equal(result.innerWidth, 473);
+  assert.equal(result.innerHeight, 291);
+  // getWindowForTarget, setWindowBounds (473x291), Runtime.evaluate (463x281), setWindowBounds (483x301), Runtime.evaluate (473x291), Runtime.evaluate (check)
+  assert.equal(fixture.calls.length, 6);
+  assert.deepEqual(fixture.calls[1], ['ws://127.0.0.1:45678/devtools/page/1', 'Browser.setWindowBounds', { windowId: 42, bounds: { width: 473, height: 291, windowState: 'normal' } }]);
+  assert.deepEqual(fixture.calls[3], ['ws://127.0.0.1:45678/devtools/page/1', 'Browser.setWindowBounds', { windowId: 42, bounds: { width: 483, height: 301, windowState: 'normal' } }]);
+  pool.setBrowserTabViewport('viewport-fixture', 'tab-viewport', null);
+});
+
+test('browserViewport falls back when the second session check fails', async () => {
+  let evaluateCount = 0;
+  const fixture = browserViewportFixture({
+    windowScript: (call) => {
+      const [, method] = call;
+      if (method === 'Browser.getWindowForTarget') return { windowId: 42 };
+      if (method === 'Browser.setWindowBounds') return {};
+      if (method === 'Runtime.evaluate') {
+        evaluateCount++;
+        // Resize loop returns correct size, second-session check returns wrong size.
+        if (evaluateCount === 1) return { result: { value: JSON.stringify({ innerWidth: 473, innerHeight: 291 }) } };
+        return { result: { value: JSON.stringify({ innerWidth: 999, innerHeight: 999 }) } };
+      }
+      return {};
+    },
+  });
+  const result = await browserPreview.browserViewport('viewport-fixture', 'tab-viewport', { width: 473, height: 291 }, fixture.adapters);
+  assert.equal(result.method, 'emulation');
+  assert.match(result.reason, /second session read/);
+  // Fallback applied emulation.
+  assert.ok(fixture.calls.some((c) => c[1] === 'Emulation.setDeviceMetricsOverride'));
+  pool.setBrowserTabViewport('viewport-fixture', 'tab-viewport', null);
+});
+
+test('browserViewport reset restores the launch window size', async () => {
+  const fixture = browserViewportFixture({
+    windowScript: (call) => {
+      const [, method] = call;
+      if (method === 'Browser.getWindowForTarget') return { windowId: 42 };
+      return {};
+    },
+  });
+  const result = await browserPreview.browserViewport('viewport-fixture', 'tab-viewport', { reset: true }, fixture.adapters);
+  assert.deepEqual(result, { reset: true });
+  assert.deepEqual(pool.listBrowserTabViewports('viewport-fixture', ['tab-viewport']), {});
+  // getWindowForTarget, setWindowBounds (launch size), clearDeviceMetricsOverride
+  assert.equal(fixture.calls.length, 3);
+  assert.deepEqual(fixture.calls[0], ['ws://127.0.0.1:45678/devtools/page/1', 'Browser.getWindowForTarget', { targetId: 'tab-viewport' }]);
+  assert.deepEqual(fixture.calls[1], ['ws://127.0.0.1:45678/devtools/page/1', 'Browser.setWindowBounds', { windowId: 42, bounds: { width: 1280, height: 800, windowState: 'normal' } }]);
+  assert.deepEqual(fixture.calls[2], ['ws://127.0.0.1:45678/devtools/page/1', 'Emulation.clearDeviceMetricsOverride', {}]);
 });
 
 test('browserViewport rejects dimensions and scale outside the supported range', async () => {
@@ -119,8 +234,9 @@ test('browser tab viewport records persist and drops entries for tabs that have 
   const viewport = { width: 473, height: 291, scale: 1, mobile: false };
   pool.setBrowserTabViewport('viewport-persistence', 'tab-live', viewport);
   pool.setBrowserTabViewport('viewport-persistence', 'tab-closed', viewport);
-  assert.deepEqual(pool.listBrowserTabViewports('viewport-persistence', ['tab-live']), { 'tab-live': viewport });
-  assert.deepEqual(pool.listBrowserSessions()['viewport-persistence'].viewports, { 'tab-live': viewport });
+  const expected = { width: 473, height: 291, scale: 1, mobile: false, method: 'emulation' };
+  assert.deepEqual(pool.listBrowserTabViewports('viewport-persistence', ['tab-live']), { 'tab-live': expected });
+  assert.deepEqual(pool.listBrowserSessions()['viewport-persistence'].viewports, { 'tab-live': expected });
 });
 
 // The fake command resolves request functions exactly as src/browser-preview.js does, so the tests read the
@@ -203,7 +319,7 @@ test('browserScreenshot reapplies stored device metrics in its new CDP session',
   const project = 'viewport-reapply';
   const session = register(project, 45680);
   const tabId = 'tab-reapply';
-  const viewport = { width: 473, height: 291, scale: 1.5, mobile: true };
+  const viewport = { width: 473, height: 291, scale: 1.5, mobile: true, method: 'emulation' };
   pool.setBrowserTabViewport(project, tabId, viewport);
   const requests = [];
   const screenshot = await browserPreview.browserScreenshot(project, tabId, {
@@ -218,6 +334,26 @@ test('browserScreenshot reapplies stored device metrics in its new CDP session',
     'Emulation.setDeviceMetricsOverride', 'Page.captureScreenshot',
   ]);
   assert.deepEqual(requests[0].params, { width: 473, height: 291, deviceScaleFactor: 1.5, mobile: true });
+  assert.deepEqual(screenshot, Buffer.from('jpeg'));
+  pool.setBrowserTabViewport(project, tabId, null);
+});
+
+test('browserScreenshot does not reapply emulation for a window-method viewport', async () => {
+  const project = 'viewport-window-reapply';
+  const session = register(project, 45683);
+  const tabId = 'tab-window-reapply';
+  const viewport = { width: 473, height: 291, scale: 1, mobile: false, method: 'window' };
+  pool.setBrowserTabViewport(project, tabId, viewport);
+  const requests = [];
+  const screenshot = await browserPreview.browserScreenshot(project, tabId, {
+    verifySession: async () => session,
+    listTargets: async () => [{ id: tabId, webSocketDebuggerUrl: `ws://localhost:${session.port}/devtools/page/3` }],
+    commands: async (_endpoint, sessionRequests) => {
+      requests.push(...sessionRequests);
+      return sessionRequests.map((request) => request.method === 'Page.captureScreenshot' ? { data: Buffer.from('jpeg').toString('base64') } : {});
+    },
+  });
+  assert.deepEqual(requests.map((request) => request.method), ['Page.captureScreenshot']);
   assert.deepEqual(screenshot, Buffer.from('jpeg'));
   pool.setBrowserTabViewport(project, tabId, null);
 });

@@ -196,7 +196,8 @@ function validTabViewport(viewport) {
   return viewport && Number.isInteger(viewport.width) && viewport.width >= 200 && viewport.width <= 3840
     && Number.isInteger(viewport.height) && viewport.height >= 150 && viewport.height <= 2160
     && typeof viewport.scale === 'number' && Number.isFinite(viewport.scale) && viewport.scale >= 0.5 && viewport.scale <= 4
-    && typeof viewport.mobile === 'boolean';
+    && typeof viewport.mobile === 'boolean'
+    && (viewport.method === undefined || viewport.method === 'window' || viewport.method === 'emulation');
 }
 
 export function setBrowserTabViewport(project, tabId, viewport) {
@@ -208,7 +209,7 @@ export function setBrowserTabViewport(project, tabId, viewport) {
   if (!record) throw new Error('Request a project browser first.');
   if (!record.viewports || typeof record.viewports !== 'object' || Array.isArray(record.viewports)) record.viewports = {};
   if (viewport === null) delete record.viewports[tabId];
-  else record.viewports[tabId] = { width: viewport.width, height: viewport.height, scale: viewport.scale, mobile: viewport.mobile };
+  else record.viewports[tabId] = { width: viewport.width, height: viewport.height, scale: viewport.scale, mobile: viewport.mobile, method: viewport.method || 'emulation' };
   if (Object.keys(record.viewports).length) save(sessions);
   else {
     delete record.viewports;

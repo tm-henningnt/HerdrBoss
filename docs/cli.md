@@ -368,8 +368,8 @@ Herdr Boss decides browser ownership by the Herdr workspace. Any pane in a proje
 | `browser close SLUG` | Close the browser. The profile and the port lease stay. From a Herdr pane, only a pane in that project's workspace or the Boss can run this command. |
 | `browser release SLUG` | Remove the port lease of the project. Refuses while the project Chrome runs. The record and the profile stay. From a Herdr pane, only a pane in that project's workspace or the Boss can run this command. |
 | `browser size SLUG WIDTH HEIGHT` | Window size for the next launch (320–3840 × 240–2160). From a Herdr pane, only a pane in that project's workspace or the Boss can run this command. |
-| `browser viewport SLUG --tab ID WIDTHxHEIGHT [--scale N] [--mobile]` | Set one tab's page size and device scale. Width is 200–3840, height is 150–2160, and scale is 0.5–4. Scale defaults to 1. From a Herdr pane, only a pane in that project's workspace or the Boss can run this command. |
-| `browser viewport SLUG --tab ID --reset` | Clear one tab's page size and device scale. From a Herdr pane, only a pane in that project's workspace or the Boss can run this command. |
+| `browser viewport SLUG --tab ID WIDTHxHEIGHT [--scale N] [--mobile]` | Set one tab's real window size. Width is 200–3840, height is 150–2160, and scale is 0.5–4. Scale defaults to 1. The command resizes the tab's own window, so every CDP client sees the size. It falls back to device metrics emulation when a window resize is not possible, and it says so. From a Herdr pane, only a pane in that project's workspace or the Boss can run this command. |
+| `browser viewport SLUG --tab ID --reset` | Restore the window to the launch size and clear any device metrics emulation. From a Herdr pane, only a pane in that project's workspace or the Boss can run this command. |
 | `browser tabs SLUG` | Tabs with ID, title, URL, visibility, and whether an agent is attached. |
 | `browser tab new SLUG [URL]` | Open a tab in its own background window. Prints the ID. From a Herdr pane, only a pane in that project's workspace or the Boss can run this command. |
 | `browser tab close SLUG --tab ID [--force]` | Close a tab. Refuses a tab an agent is attached to unless `--force`. From a Herdr pane, only a pane in that project's workspace or the Boss can run this command. |
@@ -394,7 +394,7 @@ herdr-boss browser screenshot tmprocessmining --tab "$id"
 
 The screenshot command writes under `$TMPDIR` when it is set. Otherwise, it creates a safe temporary directory. Pass `--out DIR` to choose an output directory. This option overrides `$TMPDIR` and can be used with `--tab`.
 
-The viewport override stays active until you run `browser viewport SLUG --tab ID --reset`, close the tab, or restart the browser. `browser screenshot` captures the page at the override size. The `browser size` command sets the window size for the next launch.
+The viewport command sets the real window size, so every CDP client sees it. It falls back to emulation and says so. Headless Chrome keeps a window at least 500 px wide. For a narrower size, the command uses emulation, which only herdr-boss sessions see. The size stays active until you run `browser viewport SLUG --tab ID --reset`, close the tab, or restart the browser. `browser screenshot` captures the page at that size. The `browser size` command sets the window size for the next launch.
 
 A project keeps at most 30 bookmarks. A bookmark URL must use `http` or `https` and must not hold a user name or a password. The start page opens in the first tab of the next launch. The bookmarks and the start page stay in the project record in `browser-sessions.json`.
 
