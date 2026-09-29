@@ -185,6 +185,43 @@ test('engine lock snapshots include live full-suite queue tickets', { timeout: 2
     [1, 'alpha', 'ws:waiter', 'suite'],
   ]);
   assert.ok(state.locks[0].queue[0].waitSeconds >= 41 * 60);
+  assert.equal(state.lockStats.acquires, 0);
+  assert.equal(state.lockStats.medianHoldMs, null);
+});
+
+test('engine lock snapshots include the median hold and wait from the lock ledger', { timeout: 20000 }, async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-lock-ledger-state-'));
+  const lockDataDir = path.join(root, 'boss-data');
+  fs.mkdirSync(lockDataDir, { recursive: true, mode: 0o700 });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const at = new Date().toISOString();
+  const lines = [
+    { at, event: 'acquire', name: 'full-suite', project: 'alpha', kind: 'suite', waitMs: 2000 },
+    { at, event: 'release', name: 'full-suite', project: 'alpha', kind: 'suite', holdMs: 100000 },
+    { at, event: 'acquire', name: 'full-suite', project: 'beta', kind: 'push', waitMs: 6000 },
+    { at, event: 'release', name: 'full-suite', project: 'beta', kind: 'push', holdMs: 300000 },
+    { at: '2020-01-01T00:00:00.000Z', event: 'release', name: 'full-suite', project: 'old', kind: 'suite', holdMs: 9000000 },
+  ];
+  fs.writeFileSync(path.join(lockDataDir, 'lock-ledger.jsonl'), `${lines.map((line) => JSON.stringify(line)).join('\n')}\n`);
+  const cfg = loadConfig();
+  cfg.host = '127.0.0.1';
+  cfg.port = 0;
+  const engine = new Engine(cfg, { push: false, act: false, lockDataDir, collectors: {
+    collectHerdr: async () => ({ panes: [], workspaces: [] }),
+    collectMachine: async () => null,
+    collectProcesses: async () => new Map(),
+    collectQuotas: async () => [],
+    collectWorktreeCounts: async () => ({}),
+    collectCwdProcesses: async () => [],
+    collectMissingWorktreeProcesses: async () => [],
+    collectPiModels: async () => ({ models: [] }),
+  } });
+  const state = await engine.tick();
+  assert.equal(state.lockStats.windowDays, 7);
+  assert.equal(state.lockStats.acquires, 2);
+  assert.equal(state.lockStats.medianWaitMs, 4000);
+  assert.equal(state.lockStats.medianHoldMs, 200000);
+  assert.equal(state.lockStats.byName['full-suite'].medianHoldMs, 200000);
 });
 
 test('the state API sends the night watch state with the fields of the read view', { timeout: 20000 }, async (t) => {

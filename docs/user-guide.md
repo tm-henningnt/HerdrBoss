@@ -33,6 +33,7 @@ Then it applies its rules and writes these files to `~/.herdr-boss/`:
 | `events.jsonl` | Prompts, notifications, handovers, and stopped processes. |
 | `policy.json` | The resource policy that you set on the Settings and Allocation pages. |
 | `locks/` | Private project lock records. Each Git repository has a separate directory. |
+| `lock-ledger.jsonl` | The lock ledger. One line for each lock acquire, release, and failed acquire. Rotates at 5 MB to `lock-ledger.1.jsonl`. |
 
 `herdr-boss scratch <slug>` creates `~/.herdr-boss/scratch/<slug>/` for the orchestrator files of a project. Herdr Boss does not delete this folder.
 
@@ -395,7 +396,7 @@ The **base slots** of a project are its set share of the global worker limit. A 
 - When no project is a borrower, no project lends or offers slots.
 
 
-The **Locks** panel lists machine locks. Each row shows the lock name, holder project and pane, kind, age, time left, and state. When no lock exists, the panel shows **No machine locks are held.** A manual lock expires after 60 minutes. A command lock ends when its command ends. Herdr Boss takes over a stale lock. You cannot release a lock from this panel.
+The **Locks** panel lists machine locks. Each row shows the lock name, holder project and pane, kind, age, time left, and state. When no lock exists, the panel shows **No machine locks are held.** A manual lock expires after 60 minutes. A command lock ends when its command ends. Herdr Boss takes over a stale lock. A history line above the table shows the median hold time and the median wait time of the last 7 days, for all locks and for each lock name. Before the first lock change, it shows **No lock history yet.** A re-entrant suite under a push is not part of the medians. You cannot release a lock from this panel.
 
 Below the policy settings, the **Resource leases** panel shows each resource pool. The head of a pool shows the count of held and free items, the lease TTL, and the reclaim rule. A row for each item shows the state (Held or Free), the holder project, the pane or worker, the lease age, and the time left. **borrowed** marks an item of another project's split. The built-in pool `project-browsers` lists only its held ports and the count of free ports. An invalid pool shows an error line. Select **Release** to give a lease back. The page names the pool, the item, the holder project, and the pane or worker, and asks you to confirm. The release removes the lease only while the holder project is still the project that the page shows. Otherwise the page reports that the lease changed, and you reload the page. A release never stops a process. A project browser that runs keeps its lease, so its **Release** button is disabled until you close the browser on the Browsers page.
 
@@ -1033,6 +1034,8 @@ herdr-boss lock release release-review
 ```
 
 All linked worktrees of one repository share its locks. The `full-suite` lock is machine-wide. All repositories on this machine share it, and `lock list` shows its scope as `machine`. Herdr Boss keeps lock files in a private `locks` directory under its data directory. A lock records its name, owner pane, PID, kind, safe acquire command, and acquisition time. A `suite` or `push` lock uses that command's PID. Herdr Boss marks it stale when that process exits, even if its pane stays open. A manual `full-suite` lock uses the pane shell PID and expires after 60 minutes. The next acquire takes over an expired lock, and the engine warns the former holder. Release a lock from its owner pane. Another pane can release it only after the owner PID has exited, the owner pane has closed, or a manual `full-suite` lock has expired. Use `--wait SECONDS` to wait for an active lock. Enter a whole non-negative number. Herdr Boss takes over a stale lock and prints its previous pane and PID.
+
+Herdr Boss writes the lock ledger, `lock-ledger.jsonl`, in its data directory. The file is append-only JSONL. Each acquire adds one `acquire` line. It holds the time, lock name, project, kind (`suite`, `push`, or `manual`), holder pane, tree hash when the checkout is clean, and `waitMs`. Each release adds one `release` line with the same fields and `holdMs`. A takeover of a stale lock adds a `release` line with `takeover: true`. A busy acquire adds a `busy` line, and an acquire whose wait ends first (exit code 75) adds a `timeout` line. Both have `waitMs`. A re-entrant suite under a push adds lines with `reentrant: true`. Its release line holds the time that the suite ran. The medians skip re-entrant lines, `busy` lines, `timeout` lines, and the hold time of takeover lines. When the file passes 5 MB, Herdr Boss renames it to `lock-ledger.1.jsonl` and replaces the older rotated file. It starts a new `lock-ledger.jsonl`. The dashboard reads only the current file. The ledger never blocks a lock change.
 
 Run a full test suite with `herdr-boss suite -- <command>`, and push with `herdr-boss push <args>`. Never take the full-suite lock with a bare lock acquire for a suite. Use `lock acquire` and `lock release` for other lock names. There is no load threshold.
 

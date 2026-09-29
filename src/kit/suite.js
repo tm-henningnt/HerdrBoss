@@ -4,7 +4,7 @@ import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { DATA_DIR } from '../config.js';
 import { createHerdrRunner } from './workers.js';
-import { FULL_SUITE_LOCK, acquireProjectLock, releaseProjectLock } from './locks.js';
+import { FULL_SUITE_LOCK, acquireProjectLock, recordLockRelease, releaseProjectLock } from './locks.js';
 
 export const SUITE_WAIT_SECONDS = 1800;
 export const SUITE_PASSES_FILE = 'suite-passes.json';
@@ -119,6 +119,7 @@ export function runSuite(command, {
   }
 
   const lock = acquireProjectLock(FULL_SUITE_LOCK, { config, env, herdr, dataDir, waitSeconds, output, now, pause, pidAlive, kind: 'suite' });
+  const heldSince = now();
   if (lock.reentrant) output('suite: reusing the full-suite lock of herdr-boss push');
   let exitCode;
   let removed;
@@ -145,8 +146,10 @@ export function runSuite(command, {
       }
     }
   } finally {
-    if (!lock.reentrant) {
-      try { releaseProjectLock(FULL_SUITE_LOCK, { config, env, herdr, dataDir, output, pidAlive }); }
+    if (lock.reentrant) {
+      recordLockRelease({ ...lock, project: config?.slug ?? null, kind: 'suite' }, { dataDir, now, holdMs: Math.max(0, now() - heldSince), reentrant: true });
+    } else {
+      try { releaseProjectLock(FULL_SUITE_LOCK, { config, env, herdr, dataDir, output, pidAlive, now }); }
       catch (error) {
         const reason = String(error?.message ?? error).replace(/\s+/g, ' ').replace(/[. ]+$/, '');
         output(`Warning: could not release lock ${FULL_SUITE_LOCK}: ${reason}. The lock is stale when this process ends.`);

@@ -18,6 +18,9 @@ const MANUAL_LOCK_TTL_MS = 60 * 60 * 1000;
 const LOCK_WAIT_NOTICE_INTERVAL_MS = 60 * 1000;
 const LOCK_KINDS = new Set(['manual', 'suite', 'push']);
 const LOCK_NOTICE_TEXT = 'Your full-suite lock expired after 60 minutes and was released. Use herdr-boss suite -- <command> next time.';
+export const LOCK_LEDGER_FILE = 'lock-ledger.jsonl';
+const LEDGER_EVENTS = new Set(['acquire', 'release', 'busy', 'timeout']);
+const LEDGER_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const scopeFor = (name) => (MACHINE_LOCKS.has(name) ? 'machine' : 'repository');
 
 function validateName(name) {
@@ -200,16 +203,17 @@ function waitBusyError(name, { activeRecord, tickets, ticket, startedAt, now }) 
   const error = new Error(`lock busy: ${name} is held by ${holder}; queue position ${position} of ${total}; waited ${waited} seconds.`);
   error.code = 'ELOCKBUSY';
   error.exitCode = 75;
+  error.ledgerEvent = 'timeout';
   return error;
 }
 
 function noWaitBusyError(name, activeRecord, tickets) {
   const queueLength = tickets.length;
   if (activeRecord) {
-    return new Error(`Lock ${name} is held by active pane ${activeRecord.ownerPane} (PID ${activeRecord.pid}, since ${activeRecord.acquiredAt}); queue length ${queueLength}.`);
+    return Object.assign(new Error(`Lock ${name} is held by active pane ${activeRecord.ownerPane} (PID ${activeRecord.pid}, since ${activeRecord.acquiredAt}); queue length ${queueLength}.`), { ledgerEvent: 'busy' });
   }
   const first = tickets[0];
-  return new Error(`Lock ${name} is waiting for pane ${first.pane} (${first.kind}); queue length ${queueLength}.`);
+  return Object.assign(new Error(`Lock ${name} is waiting for pane ${first.pane} (${first.kind}); queue length ${queueLength}.`), { ledgerEvent: 'busy' });
 }
 
 function writeNewRecord(file, record) {
@@ -462,6 +466,116 @@ function logQuietHoursHold(dataDir, now, action, extra = {}) {
   fs.appendFileSync(path.join(dataDir, 'events.jsonl'), `${JSON.stringify(event)}\n`, { mode: 0o600 });
 }
 
+// The lock ledger is an append-only JSONL file in the data directory. Each acquire and each release adds one line.
+// A ledger failure never blocks a lock change.
+function cleanTreeHash(root) {
+  try {
+    const git = (...args) => execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    if (git('status', '--porcelain')) return null;
+    const tree = git('rev-parse', 'HEAD^{tree}');
+    return /^[0-9a-f]{40,64}$/i.test(tree) ? tree : null;
+  } catch {
+    return null;
+  }
+}
+
+export const LOCK_LEDGER_MAX_BYTES = 5 * 1024 * 1024;
+export const LOCK_LEDGER_ROTATED_FILE = 'lock-ledger.1.jsonl';
+
+function ledgerLine(event, record, now, extra) {
+  return {
+    at: new Date(timeValue(now)).toISOString(),
+    event,
+    name: record.name,
+    project: record.project ?? null,
+    kind: record.kind ?? 'manual',
+    pane: record.ownerPane ?? null,
+    tree: record.tree ?? null,
+    ...extra,
+  };
+}
+
+// Builds the line inside the try, so an invalid clock or an unwritable folder never throws.
+// A file above 5 MB moves to lock-ledger.1.jsonl and replaces the older rotated file.
+function appendLockLedger(dataDir, event, record, now, extra = {}) {
+  try {
+    const line = ledgerLine(event, record, now, extra);
+    fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+    const file = path.join(dataDir, LOCK_LEDGER_FILE);
+    try {
+      if (fs.statSync(file).size > LOCK_LEDGER_MAX_BYTES) fs.renameSync(file, path.join(dataDir, LOCK_LEDGER_ROTATED_FILE));
+    } catch {}
+    fs.appendFileSync(file, `${JSON.stringify(line)}\n`, { mode: 0o600 });
+  } catch {}
+}
+
+// Records one release line. holdMs defaults to the time since the record was acquired.
+export function recordLockRelease(record, { dataDir = DATA_DIR, now = Date.now, holdMs, reentrant = false, takeover = false } = {}) {
+  const hold = holdMs === undefined ? Math.max(0, timeValue(now) - Date.parse(record.acquiredAt)) : holdMs;
+  appendLockLedger(dataDir, 'release', record, now, { holdMs: hold, ...(reentrant ? { reentrant: true } : {}), ...(takeover ? { takeover: true } : {}) });
+}
+
+export function readLockLedger({ dataDir = DATA_DIR, sinceMs = null } = {}) {
+  let text;
+  try { text = fs.readFileSync(path.join(dataDir, LOCK_LEDGER_FILE), 'utf8'); }
+  catch (error) { if (error.code === 'ENOENT' || error.code === 'EISDIR') return []; throw error; }
+  const lines = [];
+  for (const raw of text.split('\n')) {
+    if (!raw) continue;
+    let line;
+    try { line = JSON.parse(raw); } catch { continue; }
+    if (!line || typeof line !== 'object' || !LEDGER_EVENTS.has(line.event)) continue;
+    if (sinceMs !== null && !(Date.parse(line.at) >= sinceMs)) continue;
+    lines.push(line);
+  }
+  return lines;
+}
+
+function median(values) {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : Math.round((sorted[mid - 1] + sorted[mid]) / 2);
+}
+
+// Medians skip re-entrant lines: a re-entrant hold runs inside the hold of its push.
+// Hold medians also skip takeover lines. Wait medians skip failed acquires (busy, timeout); they are counted separately.
+export function lockLedgerStats(lines) {
+  const own = lines.filter((line) => !line.reentrant);
+  const waits = own.filter((line) => line.event === 'acquire' && Number.isFinite(line.waitMs)).map((line) => line.waitMs);
+  const holds = own.filter((line) => line.event === 'release' && !line.takeover && Number.isFinite(line.holdMs)).map((line) => line.holdMs);
+  return {
+    acquires: lines.filter((line) => line.event === 'acquire').length,
+    busy: lines.filter((line) => line.event === 'busy').length,
+    timeouts: lines.filter((line) => line.event === 'timeout').length,
+    takeovers: lines.filter((line) => line.event === 'release' && line.takeover).length,
+    reentrantAcquires: lines.filter((line) => line.event === 'acquire' && line.reentrant).length,
+    releases: holds.length,
+    medianWaitMs: median(waits),
+    medianHoldMs: median(holds),
+  };
+}
+
+let ledgerCache = null;
+
+// Summary of the last 7 days for the dashboard: all locks, and each lock name. Cached until the file changes.
+export function lockLedgerSummary({ dataDir = DATA_DIR, now = Date.now } = {}) {
+  const file = path.join(dataDir, LOCK_LEDGER_FILE);
+  let stat;
+  try { stat = fs.statSync(file); } catch { return { windowDays: 7, ...lockLedgerStats([]), byName: {} }; }
+  const day = Math.floor(timeValue(now) / 3600000);
+  const key = `${file}:${stat.size}:${stat.mtimeMs}:${day}`;
+  if (ledgerCache?.key === key) return ledgerCache.value;
+  const lines = readLockLedger({ dataDir, sinceMs: timeValue(now) - LEDGER_WINDOW_MS });
+  const byName = {};
+  for (const name of [...new Set(lines.map((line) => line.name))].sort()) {
+    byName[name] = lockLedgerStats(lines.filter((line) => line.name === name));
+  }
+  const value = { windowDays: 7, ...lockLedgerStats(lines), byName };
+  ledgerCache = { key, value };
+  return value;
+}
+
 const defaultPause = sleep;
 
 export function acquireProjectLock(name, {
@@ -563,6 +677,7 @@ export function acquireProjectLock(name, {
             ticketOutstanding = false;
           }
           const acquiredAt = new Date(timeValue(now)).toISOString();
+          const treeHash = cleanTreeHash(config.root);
           const record = {
             name,
             project: config.slug,
@@ -575,6 +690,7 @@ export function acquireProjectLock(name, {
             ...(scope === 'machine' && kind === 'manual' ? { expiresAt: new Date(Date.parse(acquiredAt) + MANUAL_LOCK_TTL_MS).toISOString() } : {}),
             ...(reentryToken !== null ? { reentryToken } : {}),
             ...(scope === 'machine' ? { scope } : {}),
+            ...(treeHash ? { tree: treeHash } : {}),
           };
           writeNewRecord(file, record);
           return { acquired: { ...record, scope, state: 'live' }, tickets };
@@ -598,11 +714,18 @@ export function acquireProjectLock(name, {
         continue;
       }
       if (outcome.acquired) {
-        if (staleRecord) output(`NOTICE: Taking over stale lock ${name} from pane ${staleRecord.ownerPane} (PID ${staleRecord.pid}).`);
+        if (staleRecord) {
+          output(`NOTICE: Taking over stale lock ${name} from pane ${staleRecord.ownerPane} (PID ${staleRecord.pid}).`);
+          recordLockRelease(staleRecord, { dataDir, now, takeover: true });
+        }
+        appendLockLedger(dataDir, 'acquire', outcome.acquired, now, { waitMs: Math.max(0, timeValue(now) - startedAt) });
         output(`Lock ${name} acquired by pane ${outcome.acquired.ownerPane} (PID ${outcome.acquired.pid}).`);
         return outcome.acquired;
       }
-      if (outcome.reentrant) return outcome.reentrant;
+      if (outcome.reentrant) {
+        appendLockLedger(dataDir, 'acquire', { ...outcome.reentrant, project: config.slug, kind, ownerPane: caller.paneId }, now, { waitMs: 0, reentrant: true });
+        return outcome.reentrant;
+      }
       if (waitSeconds === null) {
         if (outcome.queueBlocked) throw noWaitBusyError(name, null, outcome.tickets);
         throw noWaitBusyError(name, outcome.activeRecord, outcome.tickets);
@@ -630,6 +753,10 @@ export function acquireProjectLock(name, {
     }
   } catch (error) {
     failure = error;
+    const failedEvent = error.ledgerEvent ?? (error.code === 'ELOCKBUSY' ? (waitSeconds === null ? 'busy' : 'timeout') : null);
+    if (failedEvent) {
+      appendLockLedger(dataDir, failedEvent, { name, project: config.slug, kind, ownerPane: caller.paneId }, now, { waitMs: Math.max(0, timeValue(now) - startedAt) });
+    }
     throw error;
   } finally {
     if (ticketOutstanding) {
@@ -661,12 +788,14 @@ export function releaseProjectLock(name, {
     const record = readRecord(file, commonDir, scope);
     if (!record) throw new Error(`Lock ${name} does not exist.`);
     if (reentryTokenMatches(record, env, pidAlive) && lockIsLive(record, { herdr, pidAlive, now, quietHours })) {
+      recordLockRelease({ ...record, project: config.slug, ownerPane: caller.paneId }, { dataDir, now, holdMs: null, reentrant: true });
       return { ...record, reentrant: true };
     }
     if (record.ownerPane !== caller.paneId && lockIsLive(record, { herdr, pidAlive, now, quietHours })) {
       throw new Error(`Cannot release active lock ${name} owned by another pane (${record.ownerPane}, PID ${record.pid}).`);
     }
     fs.unlinkSync(file);
+    recordLockRelease(record, { dataDir, now });
     output(`Lock ${name} released.`);
     return record;
   });
@@ -816,11 +945,14 @@ export function pushWithLock(args, {
   const reentryToken = crypto.randomBytes(32).toString('hex');
   const lock = acquireProjectLock(FULL_SUITE_LOCK, { config, env, herdr, dataDir, waitSeconds: PUSH_LOCK_WAIT_SECONDS, output, now, pause, pidAlive, kind: 'push', reentryToken });
   const childLockToken = lock.reentrant ? env.HERDR_BOSS_LOCK_TOKEN : reentryToken;
+  const heldSince = timeValue(now);
   let exitCode;
   try { exitCode = push(true, childLockToken); }
   finally {
-    if (!lock.reentrant) {
-      try { releaseProjectLock(FULL_SUITE_LOCK, { config, env, herdr, dataDir, output, pidAlive }); }
+    if (lock.reentrant) {
+      recordLockRelease({ ...lock, project: config.slug, kind: 'push' }, { dataDir, now, holdMs: Math.max(0, timeValue(now) - heldSince), reentrant: true });
+    } else {
+      try { releaseProjectLock(FULL_SUITE_LOCK, { config, env, herdr, dataDir, output, pidAlive, now }); }
       catch (error) {
         warnLockReleaseFailure(error, output);
         if (exitCode === 0) exitCode = 1;

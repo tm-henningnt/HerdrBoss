@@ -22,7 +22,7 @@ import { readKitNotice, pendingKitAlert, isKitAlert, kitNoticeTargets } from './
 import { kitRevisionState, kitSnapshot, KIT_STATES } from './kit/agents-check.js';
 import { nightNoticeSent, quietHoursActive, readNight, readNightRecord, withNightReportMark, withNoticeMark, writeNight } from './night.js';
 import { inspectWorkerTransitions, inspectWorkerReports, isWorkerPane, applyWorkerFailureStatuses, resolveFreeUsageRun, activeFreeModelExhaustions, extendFreeModelExhaustion, activeFreeLaneExhaustions, extendFreeLaneExhaustion, freeUsageLaneRetry } from './worker-failures.js';
-import { FULL_SUITE_LOCK, readLockQueue, readLockTakeoverNotices, readMachineLocks, removeLockTakeoverNotice } from './kit/locks.js';
+import { FULL_SUITE_LOCK, lockLedgerSummary, readLockQueue, readLockTakeoverNotices, readMachineLocks, removeLockTakeoverNotice } from './kit/locks.js';
 
 const MEMORY_FILE = path.join(DATA_DIR, 'memory.json');
 const STATE_FILE = path.join(DATA_DIR, 'state.json');
@@ -676,6 +676,7 @@ export class Engine extends EventEmitter {
         managedBrowsers,
         resourceLeases,
         locks: [],
+        lockStats: null,
         errors,
         modelScorecard: buildModelScorecard(readUsage(), now),
       };
@@ -688,6 +689,7 @@ export class Engine extends EventEmitter {
           now,
           night: snap.night,
         }).map((lock) => lock.name === FULL_SUITE_LOCK ? { ...lock, queue } : lock);
+        snap.lockStats = lockLedgerSummary({ dataDir: this.lockDataDir, now });
       } catch (error) { errors.push(`locks: ${error.message}`); }
       snap.projects = listProjects();
       snap.kit = kitSnapshot();
