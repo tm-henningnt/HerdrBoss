@@ -58,6 +58,7 @@ function readRecord(file, commonDir, scope = 'repository') {
     || !Number.isSafeInteger(value.pid) || value.pid <= 0 || typeof value.name !== 'string'
     || !LOCK_NAME.test(value.name) || value.name !== path.basename(file, '.json')
     || value.command !== COMMAND(value.name) || typeof value.acquiredAt !== 'string'
+    || (value.reentryToken !== undefined && (typeof value.reentryToken !== 'string' || value.reentryToken.length < 16 || value.reentryToken.length > 256))
     || !Number.isFinite(Date.parse(value.acquiredAt))) {
     throw new Error(`Lock record ${path.basename(file)} is invalid. Refusing to change it.`);
   }
@@ -101,6 +102,14 @@ function lockIsLive(record, { herdr, livePanes = null, pidAlive = pidIsAlive, no
   }
   if (!alive) return false;
   return (livePanes ?? paneIds(herdr)).has(record.ownerPane);
+}
+
+function reentryTokenMatches(record, env, pidAlive) {
+  return record?.name === FULL_SUITE_LOCK
+    && record.kind === 'push'
+    && typeof record.reentryToken === 'string'
+    && env.HERDR_BOSS_LOCK_TOKEN === record.reentryToken
+    && pidAlive(record.pid);
 }
 
 function lockQueueDirectory(directory, name = FULL_SUITE_LOCK) {
@@ -466,10 +475,15 @@ export function acquireProjectLock(name, {
   pause = defaultPause,
   pidAlive = pidIsAlive,
   kind = 'manual',
+  reentryToken = null,
 } = {}) {
   validateName(name);
   if (!LOCK_KINDS.has(kind) || (kind !== 'manual' && name !== FULL_SUITE_LOCK)) {
     throw new Error('Lock kind must be manual, suite, or push. Only full-suite accepts suite and push kinds.');
+  }
+  if (reentryToken !== null && (kind !== 'push' || name !== FULL_SUITE_LOCK
+    || typeof reentryToken !== 'string' || reentryToken.length < 16 || reentryToken.length > 256)) {
+    throw new Error('A lock re-entry token requires a push lock and must be 16 to 256 characters.');
   }
   if (waitSeconds !== null && (!Number.isSafeInteger(waitSeconds) || waitSeconds < 0)) {
     throw new Error('--wait must be a whole non-negative number of seconds.');
@@ -505,12 +519,6 @@ export function acquireProjectLock(name, {
               else removeQueueTicket(directory, entry);
             }
             tickets = live;
-            if (waitSeconds !== null && !ticket) {
-              ticket = createQueueTicket(directory, name, { config, caller, pid, kind, now }, tickets);
-              ticketOutstanding = true;
-              tickets.push(ticket);
-              tickets.sort((left, right) => left.seq - right.seq || left.id.localeCompare(right.id));
-            }
             if (!fs.statSync(queue).isDirectory()) throw new Error('The lock queue is not a directory.');
           }
 
@@ -522,6 +530,16 @@ export function acquireProjectLock(name, {
               && Date.parse(previous.expiresAt) <= timeValue(now)) {
               logQuietHoursHold(dataDir, now, 'manual full-suite lock expiry', { pane: previous.ownerPane });
             }
+            // Check before creating a ticket so a hook does not queue behind its live push.
+            if (reentryTokenMatches(previous, env, pidAlive)) {
+              return { reentrant: { ...previous, reentrant: true }, tickets };
+            }
+            if (queued && waitSeconds !== null && !ticket) {
+              ticket = createQueueTicket(directory, name, { config, caller, pid, kind, now }, tickets);
+              ticketOutstanding = true;
+              tickets.push(ticket);
+              tickets.sort((left, right) => left.seq - right.seq || left.id.localeCompare(right.id));
+            }
             if (waitSeconds === null) return { activeRecord: previous, tickets };
             return { activeRecord: previous, tickets };
           }
@@ -530,6 +548,12 @@ export function acquireProjectLock(name, {
             if (name === FULL_SUITE_LOCK && previous.kind === 'manual' && previous.expiresAt
               && Date.parse(previous.expiresAt) <= timeValue(now)) writeManualExpiryNotice(previous, dataDir, now);
             fs.unlinkSync(file);
+          }
+          if (queued && waitSeconds !== null && !ticket) {
+            ticket = createQueueTicket(directory, name, { config, caller, pid, kind, now }, tickets);
+            ticketOutstanding = true;
+            tickets.push(ticket);
+            tickets.sort((left, right) => left.seq - right.seq || left.id.localeCompare(right.id));
           }
           if (queued && waitSeconds === null && tickets.length) return { queueBlocked: true, tickets };
           if (queued && waitSeconds !== null && tickets[0]?.id !== ticket.id) return { queueBlocked: true, tickets };
@@ -549,6 +573,7 @@ export function acquireProjectLock(name, {
             command: COMMAND(name),
             acquiredAt,
             ...(scope === 'machine' && kind === 'manual' ? { expiresAt: new Date(Date.parse(acquiredAt) + MANUAL_LOCK_TTL_MS).toISOString() } : {}),
+            ...(reentryToken !== null ? { reentryToken } : {}),
             ...(scope === 'machine' ? { scope } : {}),
           };
           writeNewRecord(file, record);
@@ -577,6 +602,7 @@ export function acquireProjectLock(name, {
         output(`Lock ${name} acquired by pane ${outcome.acquired.ownerPane} (PID ${outcome.acquired.pid}).`);
         return outcome.acquired;
       }
+      if (outcome.reentrant) return outcome.reentrant;
       if (waitSeconds === null) {
         if (outcome.queueBlocked) throw noWaitBusyError(name, null, outcome.tickets);
         throw noWaitBusyError(name, outcome.activeRecord, outcome.tickets);
@@ -634,6 +660,9 @@ export function releaseProjectLock(name, {
   return withMutationLock(directory, () => {
     const record = readRecord(file, commonDir, scope);
     if (!record) throw new Error(`Lock ${name} does not exist.`);
+    if (reentryTokenMatches(record, env, pidAlive) && lockIsLive(record, { herdr, pidAlive, now, quietHours })) {
+      return { ...record, reentrant: true };
+    }
     if (record.ownerPane !== caller.paneId && lockIsLive(record, { herdr, pidAlive, now, quietHours })) {
       throw new Error(`Cannot release active lock ${name} owned by another pane (${record.ownerPane}, PID ${record.pid}).`);
     }
@@ -771,9 +800,10 @@ export function pushWithLock(args, {
 } = {}) {
   callerFor(env, herdr);
   const hook = findPrePushHook(config.root);
-  const push = (reuseSuitePass = false) => {
+  const push = (reuseSuitePass = false, lockToken = null) => {
     const childEnv = { ...process.env, ...env };
     if (reuseSuitePass) childEnv.HERDR_BOSS_SUITE_REUSE = '1';
+    if (lockToken) childEnv.HERDR_BOSS_LOCK_TOKEN = lockToken;
     const result = spawnSync('git', ['push', ...args], { cwd: config.root, env: childEnv, stdio });
     if (result.error) throw new Error(`Cannot run git push: ${result.error.message}`);
     return result.status ?? 1;
@@ -783,14 +813,18 @@ export function pushWithLock(args, {
     return { exitCode: push(), locked: false, hook: null };
   }
   output(`push: pre-push hook found at ${hook}. Taking lock ${FULL_SUITE_LOCK}.`);
-  acquireProjectLock(FULL_SUITE_LOCK, { config, env, herdr, dataDir, waitSeconds: PUSH_LOCK_WAIT_SECONDS, output, now, pause, pidAlive, kind: 'push' });
+  const reentryToken = crypto.randomBytes(32).toString('hex');
+  const lock = acquireProjectLock(FULL_SUITE_LOCK, { config, env, herdr, dataDir, waitSeconds: PUSH_LOCK_WAIT_SECONDS, output, now, pause, pidAlive, kind: 'push', reentryToken });
+  const childLockToken = lock.reentrant ? env.HERDR_BOSS_LOCK_TOKEN : reentryToken;
   let exitCode;
-  try { exitCode = push(true); }
+  try { exitCode = push(true, childLockToken); }
   finally {
-    try { releaseProjectLock(FULL_SUITE_LOCK, { config, env, herdr, dataDir, output, pidAlive }); }
-    catch (error) {
-      warnLockReleaseFailure(error, output);
-      if (exitCode === 0) exitCode = 1;
+    if (!lock.reentrant) {
+      try { releaseProjectLock(FULL_SUITE_LOCK, { config, env, herdr, dataDir, output, pidAlive }); }
+      catch (error) {
+        warnLockReleaseFailure(error, output);
+        if (exitCode === 0) exitCode = 1;
+      }
     }
   }
   return { exitCode, locked: true, hook };

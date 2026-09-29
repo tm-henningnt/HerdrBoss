@@ -52,6 +52,23 @@ function installFakeGit(t, f, hook) {
   return calls;
 }
 
+function installFakeHerdr(f) {
+  const bin = path.join(f.base, 'fake-bin');
+  fs.mkdirSync(bin, { recursive: true });
+  fs.writeFileSync(path.join(bin, 'herdr'), [
+    '#!/bin/sh',
+    'if [ "$1" = "pane" ] && [ "$2" = "get" ]; then',
+    '  printf \'{"pane":{"pane_id":"%s","workspace_id":"ws","label":"orch"}}\\n\' "$3"',
+    'elif [ "$1" = "pane" ] && [ "$2" = "list" ]; then',
+    '  printf \'{"panes":[{"pane_id":"ws:orch"}]}\\n\'',
+    'else',
+    '  exit 1',
+    'fi',
+    '',
+  ].join('\n'));
+  fs.chmodSync(path.join(bin, 'herdr'), 0o755);
+}
+
 async function holdMutationGuardUntilReleased(t, directory, delayMs = 200) {
   const guard = path.join(directory, '.mutation');
   fs.mkdirSync(guard, { recursive: true, mode: 0o700 });
@@ -143,6 +160,41 @@ test('herdr-boss push enables suite pass reuse for its pre-push hook', (t) => {
 
   assert.equal(result.exitCode, 0);
   assert.equal(f.hookSuiteReuse(), '1');
+});
+
+test('a pre-push suite reuses the push lock and leaves it for the push to release', (t) => {
+  const f = fixture(t, 'herdr-push-suite-lock-reentry-');
+  const cli = path.resolve('src/cli.js');
+  const suiteStatus = path.join(f.base, 'suite-status');
+  const suiteOutput = path.join(f.base, 'suite-output');
+  const hookLockAfterSuite = path.join(f.base, 'hook-lock-after-suite');
+  const hook = path.join(f.root, '.git', 'hooks', 'pre-push');
+  fs.mkdirSync(path.dirname(hook), { recursive: true });
+  fs.writeFileSync(hook, [
+    '#!/bin/sh',
+    `${shellQuote(process.execPath)} ${shellQuote(cli)} suite --wait 1 --reuse -- node -e 0 > ${shellQuote(suiteOutput)} 2>&1`,
+    'status=$?',
+    `printf '%s' "$status" > ${shellQuote(suiteStatus)}`,
+    'if [ "$status" -ne 0 ]; then exit "$status"; fi',
+    `if [ -f ${shellQuote(f.lockFile)} ]; then printf locked > ${shellQuote(hookLockAfterSuite)}; else printf unlocked > ${shellQuote(hookLockAfterSuite)}; fi`,
+  ].join('\n') + '\n');
+  fs.chmodSync(hook, 0o755);
+  installFakeGit(t, f, hook);
+  installFakeHerdr(f);
+
+  const options = f.options();
+  options.env = { ...process.env, ...options.env, HERDR_BOSS_DIR: f.dataDir };
+  options.pidAlive = (pid) => {
+    try { process.kill(pid, 0); return true; }
+    catch (error) { return error.code === 'EPERM'; }
+  };
+  const result = runKitCommand('push', ['origin', 'main'], options);
+
+  assert.equal(fs.readFileSync(suiteStatus, 'utf8'), '0', fs.readFileSync(suiteOutput, 'utf8'));
+  assert.equal(result.exitCode, 0);
+  assert.equal(fs.readFileSync(hookLockAfterSuite, 'utf8'), 'locked', 'the inner suite must not release the push lock');
+  assert.match(fs.readFileSync(suiteOutput, 'utf8'), /suite: reusing the full-suite lock of herdr-boss push/);
+  assert.equal(fs.existsSync(f.lockFile), false, 'the outer push releases the lock');
 });
 
 test('back-to-back pushes with a pre-push hook both succeed and leave no lock', (t) => {

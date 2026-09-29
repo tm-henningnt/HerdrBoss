@@ -118,7 +118,8 @@ export function runSuite(command, {
     }
   }
 
-  acquireProjectLock(FULL_SUITE_LOCK, { config, env, herdr, dataDir, waitSeconds, output, now, pause, pidAlive, kind: 'suite' });
+  const lock = acquireProjectLock(FULL_SUITE_LOCK, { config, env, herdr, dataDir, waitSeconds, output, now, pause, pidAlive, kind: 'suite' });
+  if (lock.reentrant) output('suite: reusing the full-suite lock of herdr-boss push');
   let exitCode;
   let removed;
   try {
@@ -144,11 +145,13 @@ export function runSuite(command, {
       }
     }
   } finally {
-    try { releaseProjectLock(FULL_SUITE_LOCK, { config, env, herdr, dataDir, output, pidAlive }); }
-    catch (error) {
-      const reason = String(error?.message ?? error).replace(/\s+/g, ' ').replace(/[. ]+$/, '');
-      output(`Warning: could not release lock ${FULL_SUITE_LOCK}: ${reason}. The lock is stale when this process ends.`);
-      if (exitCode === 0) exitCode = 1;
+    if (!lock.reentrant) {
+      try { releaseProjectLock(FULL_SUITE_LOCK, { config, env, herdr, dataDir, output, pidAlive }); }
+      catch (error) {
+        const reason = String(error?.message ?? error).replace(/\s+/g, ' ').replace(/[. ]+$/, '');
+        output(`Warning: could not release lock ${FULL_SUITE_LOCK}: ${reason}. The lock is stale when this process ends.`);
+        if (exitCode === 0) exitCode = 1;
+      }
     }
   }
   return { exitCode, removed };
