@@ -5,6 +5,7 @@ import { blockedWorkerAlerts } from './worker-failures.js';
 import { kitRevision } from './kit/agents-check.js';
 import { leaseBulletinLines } from './leases.js';
 import { watchUntilPhrase } from './night.js';
+import { mismatchText, taskMismatches } from './task-state.js';
 
 const PROVIDER_NAMES = { claude: 'Claude', codex: 'Codex', opencodego: 'OpenCode Go' };
 export const providerName = (p) => PROVIDER_NAMES[p] || p;
@@ -100,27 +101,36 @@ function idleOrchestratorNudges(snap, paneSince = {}, now = Date.now(), policy =
 // A working worker counts for the stale status rule for this long.
 export const STALE_STATUS_WORK_WINDOW_MS = 2 * 3600 * 1000;
 
-// Published statuses that no longer describe the work. A status is stale when its updated time is older than
-// staleStatusMinutes and, after that time, a worker was working in the last 2 hours or new commits landed.
-// snap.statusActivity[slug] holds { workedAt, landedAt } in milliseconds. A paused project is never stale.
+// Published statuses that no longer describe the work. A status is stale for one of two reasons.
+// Age: its updated time is older than staleStatusMinutes and, after that time, a worker was working in the
+// last 2 hours or new commits landed. snap.statusActivity[slug] holds { workedAt, landedAt } in milliseconds.
+// Mismatch: a live worker runs a task that is not doing in the status. snap.taskWorkers[slug] holds the worker facts.
+// A paused project is never stale. Both reasons share one entry, so a project gets one notice per episode.
 // prior is the result of the previous tick: an episode keeps its first stale time until a new publish.
 export function staleStatuses(snap, cfg, now = Date.now(), prior = {}) {
   const limitMs = (Number.isFinite(cfg?.staleStatusMinutes) ? cfg.staleStatusMinutes : 120) * 60000;
   const result = {};
   for (const project of snap.projects || []) {
     const updatedMs = Date.parse(project?.updated);
-    if (!project?.slug || !Number.isFinite(updatedMs) || now - updatedMs <= limitMs) continue;
+    if (!project?.slug || !Number.isFinite(updatedMs)) continue;
     const control = snap.control?.projects?.[project.slug];
     if (project.status === 'paused' || (control?.effectiveMode ?? control?.mode) === 'paused') continue;
     const activity = snap.statusActivity?.[project.slug] || {};
-    const workers = Number.isFinite(activity.workedAt) && activity.workedAt > updatedMs && now - activity.workedAt <= STALE_STATUS_WORK_WINDOW_MS;
-    const commits = Number.isFinite(activity.landedAt) && activity.landedAt > updatedMs;
-    if (!workers && !commits) continue;
+    const aged = now - updatedMs > limitMs;
+    const workers = aged && Number.isFinite(activity.workedAt) && activity.workedAt > updatedMs && now - activity.workedAt <= STALE_STATUS_WORK_WINDOW_MS;
+    const commits = aged && Number.isFinite(activity.landedAt) && activity.landedAt > updatedMs;
+    const mismatch = taskMismatches(project, snap.taskWorkers?.[project.slug] || [], { now });
+    if (!workers && !commits && !mismatch.length) continue;
     const earlier = prior?.[project.slug];
+    const ageSeconds = Math.floor((now - updatedMs) / 1000);
+    const why = [workers ? 'workers ran' : null, commits ? 'new commits landed' : null].filter(Boolean).join(' and ');
+    const reasons = [];
+    if (why) reasons.push(`published status is ${fmtDuration(ageSeconds)} old while ${why}`);
+    for (const item of mismatch) reasons.push(mismatchText(item));
     result[project.slug] = {
       slug: project.slug, workspace: control?.workspace || null, updated: project.updated,
       since: earlier?.updated === project.updated && Number.isFinite(earlier.since) ? earlier.since : now,
-      ageSeconds: Math.floor((now - updatedMs) / 1000), workers, commits,
+      ageSeconds, workers, commits, mismatch, reason: reasons.join('; '),
     };
   }
   return result;
@@ -129,11 +139,14 @@ export function staleStatuses(snap, cfg, now = Date.now(), prior = {}) {
 // One notice per project and stale episode. A new publish changes the updated time, so it starts a new key.
 function staleStatusAlerts(stale) {
   return Object.values(stale).filter((item) => item.workspace).map((item) => {
-    const reason = [item.workers ? 'workers ran' : null, item.commits ? 'new commits landed' : null].filter(Boolean).join(' and ');
+    const why = [item.workers ? 'workers ran' : null, item.commits ? 'new commits landed' : null].filter(Boolean).join(' and ');
+    const parts = [];
+    if (why) parts.push(`Your published status is ${fmtDuration(item.ageSeconds)} old while ${why}.`);
+    if (item.mismatch?.length) parts.push(`Your published status does not match the workers: ${item.mismatch.map(mismatchText).join('; ')}.`);
     return {
       key: `status:stale:${item.slug}:${item.updated}`, severity: 'info', once: true, scope: item.workspace,
       title: `${item.slug} published status is stale`,
-      text: `Your published status is ${fmtDuration(item.ageSeconds)} old while ${reason}. Run herdr-boss publish ${item.slug} <file> with the current plan and progress.`,
+      text: `${parts.join(' ')} Run herdr-boss publish ${item.slug} <file> with the current plan and progress.`,
     };
   });
 }

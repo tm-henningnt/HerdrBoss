@@ -51,7 +51,9 @@ When `NODE_TEST_CONTEXT` is set, or the data directory differs from the configur
 
 | Command | Action |
 |---|---|
-| `herdr-boss publish SLUG FILE` | Validate a status file and install it for `/projects/SLUG`. Use `-` for standard input. Schema: [project-status.md](project-status.md). |
+| `herdr-boss publish SLUG FILE [--force]` | Validate a status file and install it for `/projects/SLUG`. Use `-` for standard input. Refuse a status in which a task has a live worker but is not `doing`. `--force` skips this check. Schema: [project-status.md](project-status.md). |
+
+`publish` reads the run records of the project in the Git top level. A worker blocks the publish when all of these are true: its run record has no `finishedAt` and no `collectedAt`, `herdr agent list` shows an agent with the worker name and the status `working` or `blocked`, the worker has no `report.json`, and the worker is not parked. Then, when its task is not `doing` in the status file, `publish` prints one line with the task ID and the worker name. It exits with code 1 and publishes nothing. Set the task to `doing`, or run `publish` again with `--force`. A task ID that is not in the status file counts as not `doing`. An idle or done agent, a parked worker, and a worker that wrote its report wait for the orchestrator, so they never block a `review` or `done` status. When Herdr fails or lists no agent, no worker blocks the publish. A run without a task ID is not checked. See [Live task state](user-guide.md#live-task-state).
 
 `publish` also checks `AGENTS.md` at the Git top level of the current directory, when that file exists. It prints each finding to standard error as a warning. It publishes the status in all cases. The published record gets `agentsCheck: { checkedAt, errors, warnings, file }`. The record holds only the counts and the repository-relative file name. The project page shows a warning line when `errors` or `warnings` is more than 0. The status file can also hold `kitRevision`, the kit revision that the orchestrator loaded. The project page compares it with the current kit revision.
 
@@ -187,7 +189,8 @@ A Codex tool shell can run under a shared app-server daemon with another environ
 | `--lease POOL` | Lease one item of a resource pool for the worker. Repeat for each pool. See [Resource leases](#resource-leases). A task that names `serve:live` automatically leases `serve-ports` when that pool exists and `--lease` does not name it. |
 | `--model MODEL` | A model from `herdr-boss models`. The default is the kind's default model. |
 | `--effort EFFORT` | A reasoning effort, where the kind supports it. |
-| `--issue N` | The issue number. |
+| `--task-id ID` | The task ID from the published status. Herdr Boss saves it as `taskId` in the run record. The project board then shows the task as `doing` while the worker runs. Use letters, digits, `.`, `_`, and `-`, up to 64 characters. Always give this option. Without `--task-id` and `--issue`, `worker start` prints a warning and starts the worker. |
+| `--issue N` | The issue number. It is an alias of `--task-id` for a numeric task ID. Do not use it with `--task-id`. |
 | `--base BRANCH` | The base branch. The default is `baseBranch` in `.herdr-boss.json`. |
 | `--orch PANE` | The verified caller pane for reports. If set, it must match `HERDR_PANE_ID`. |
 | `--no-worktree` | Use the current checkout. The worker gets `.worker/NAME/` for its brief and reports. |
@@ -218,7 +221,7 @@ herdr-boss worker start fix-74 --kind claude --task-file brief.md --allow src/pa
 | Command | Action |
 |---|---|
 | `worker list` | Unfinished run records with the live agent status. |
-| `worker collect NAME` | Read the worker report, check its changed paths against `--allow`, and report configured stale-artifact warnings. |
+| `worker collect NAME` | Read the worker report, check its changed paths against `--allow`, and report configured stale-artifact warnings. It sets `collectedAt` in the run record only when the worker reported done: the report has `stoppedEarly` other than `true`, or `--record` has `--outcome done`. A collect of a running, stopped-early, failed, or partial worker changes nothing in the run record. The project board then shows the task of the worker as `review` until the branch is merged. |
 | `worker collect NAME --record --outcome done\|partial\|failed --gate-passed\|--gate-failed [--defects N] [--rework N] [--model-result first-time\|rework\|failed] [--model-reason TEXT]` | Also append the run to the ledger, record usage, and release the leases of the worker. After success, merge the branch, then prune safe worktrees. |
 | `worker park NAME --reason TEXT` | Mark a worker that waits on purpose. Idle notices skip it. |
 | `worker unpark NAME` | Clear the park mark. |

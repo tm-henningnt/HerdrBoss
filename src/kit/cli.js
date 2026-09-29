@@ -15,7 +15,7 @@ import { listProjects } from '../projects.js';
 import { createWaitHerdr, parseWaitArgs, waitForWorkers } from './wait.js';
 
 const USAGE = `Kit commands:
-  worker start <name> --kind <kind> (--task TEXT | --task-file FILE) [--lease POOL]... [options]
+  worker start <name> --kind <kind> (--task TEXT | --task-file FILE) [--task-id ID] [--lease POOL]... [options]
   worker collect <name> [--record --outcome done|partial|failed --gate-passed|--gate-failed]
   worker list
   wait [<worker>...] [--timeout SECONDS] [--stall SECONDS]
@@ -284,12 +284,13 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
     if (action === 'start') {
       const { positional, flags } = parseArgs(rest, { boolean: ['--no-worktree', '--dry-run', '--force', '--read-only'], repeat: ['--allow', '--copy', '--lease'] });
       if (positional.length !== 1) fail('Usage: worker start <name> --kind <kind> --task TEXT [options]');
-      knownFlags(flags, ['kind', 'model', 'effort', 'issue', 'task', 'taskfile', 'allow', 'copy', 'lease', 'base', 'orch', 'noworktree', 'dryrun', 'force', 'readonly']);
+      knownFlags(flags, ['kind', 'model', 'effort', 'issue', 'taskid', 'task', 'taskfile', 'allow', 'copy', 'lease', 'base', 'orch', 'noworktree', 'dryrun', 'force', 'readonly']);
       try { return startWorker(positional[0], {
         kind: flags.kind,
         model: flags.model,
         effort: flags.effort,
         issue: flags.issue,
+        taskId: flags.taskid,
         task: flags.task,
         taskFile: flags.taskfile,
         allow: flags.allow ?? [],

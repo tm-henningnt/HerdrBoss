@@ -15,6 +15,7 @@ import { usageProvider, validateUsage } from '../src/usage.js';
 import { validateProject } from '../src/projects.js';
 import { Engine } from '../src/engine.js';
 import { renderBulletin } from '../src/rules.js';
+import { readWorkerFacts, gitIsMerged } from '../src/task-state.js';
 import { kitRevision, parseKitImpact, projectKit, readKitChanges, kitChangesSince } from '../src/kit/agents-check.js';
 
 const CLAUDE_READY_SCREEN = '────\n❯\n────\nauto mode';
@@ -4044,4 +4045,78 @@ test('kit update rejects an unknown or repeated option', (t) => {
   }
   // A rejected update writes nothing.
   assert.equal(fs.existsSync(path.join(r.root, 'AGENTS.md')), false);
+});
+
+test('worker start saves the task id in the run record, accepts the issue alias, and warns when a task is missing', () => {
+  const f = setupFixture(null);
+  const lines = [];
+  const start = (name, options) => startWorker(name, { kind: 'codex', task: 'x', allow: ['src/'], noWorktree: true, ...options }, {
+    config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: (line) => lines.push(line),
+  });
+  const withTask = start('by-task', { taskId: 'B1a' });
+  assert.equal(JSON.parse(fs.readFileSync(withTask.recordFile, 'utf8')).taskId, 'B1a');
+  assert.equal(lines.filter((line) => /has no task id/.test(line)).length, 0);
+  const withIssue = start('by-issue', { issue: '7' });
+  const issueRecord = JSON.parse(fs.readFileSync(withIssue.recordFile, 'utf8'));
+  assert.equal(issueRecord.issue, 7);
+  assert.equal(issueRecord.taskId, undefined);
+  assert.equal(lines.filter((line) => /has no task id/.test(line)).length, 0);
+  const without = start('no-task', {});
+  assert.ok(fs.existsSync(without.recordFile), 'a missing task id warns and does not fail');
+  assert.equal(lines.filter((line) => /has no task id/.test(line)).length, 1);
+  assert.throws(() => start('bad-task', { taskId: 'bad id!' }), /--task-id must be a task id/);
+  assert.throws(() => start('both-task', { taskId: 'A', issue: '7' }), /not both/);
+});
+
+test('worker collect marks the run record collected and the task facts follow the merge', () => {
+  const f = setupFixture(null);
+  const run = startWorker('task-mark', { kind: 'codex', task: 'x', allow: ['src/'], taskId: 'T1' }, {
+    config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+  });
+  fs.mkdirSync(path.join(run.worktree, 'src'));
+  fs.writeFileSync(path.join(run.worktree, 'src', 'change.js'), 'export const changed = true;\n');
+  git(run.worktree, 'add', 'src/change.js');
+  git(run.worktree, 'commit', '-m', 'worker change');
+  const reportDir = path.join(run.worktree, '.worker');
+  fs.writeFileSync(path.join(reportDir, 'report.md'), 'Done.\n');
+  fs.writeFileSync(path.join(reportDir, 'report.json'), JSON.stringify({
+    issue: null, branch: run.branch, worktree: run.worktree, changedPaths: ['src/change.js'],
+    commands: ['focused check'], evidenceTier: ['unit'], unverified: [], stoppedEarly: false,
+  }));
+  const phase = () => readWorkerFacts(f.config.runsPath, { isLive: () => true, isMerged: gitIsMerged(f.root) })[0].phase;
+  assert.equal(phase(), 'live');
+  collectWorker('task-mark', {}, { config: f.config, output: () => {}, listWorktreeProcesses: () => [] });
+  const record = JSON.parse(fs.readFileSync(run.recordFile, 'utf8'));
+  assert.match(record.collectedAt, /^\d{4}-\d\d-\d\dT/);
+  assert.equal(record.finishedAt, undefined);
+  assert.equal(phase(), 'review');
+  git(f.root, 'merge', '--ff-only', run.branch);
+  assert.equal(phase(), 'merged');
+});
+
+test('worker collect marks collectedAt only for a worker that reported done, and a peek changes nothing', () => {
+  const scenarios = [
+    { name: 'peek-early', report: { stoppedEarly: true }, options: {}, marked: false },
+    { name: 'peek-done', report: { stoppedEarly: false }, options: {}, marked: true },
+    { name: 'rec-failed', report: { stoppedEarly: false }, options: { record: true, outcome: 'failed', gateFailed: true }, marked: false },
+    { name: 'rec-partial', report: { stoppedEarly: true }, options: { record: true, outcome: 'partial', gateFailed: true }, marked: false },
+    { name: 'rec-done', report: { stoppedEarly: false }, options: { record: true, outcome: 'done', gatePassed: true }, marked: true },
+  ];
+  for (const scenario of scenarios) {
+    const f = setupFixture(null);
+    const run = startWorker(scenario.name, { kind: 'codex', task: 'x', allow: ['src/'], taskId: 'T1' }, {
+      config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+    });
+    const reportDir = path.join(run.worktree, run.workerDir);
+    fs.writeFileSync(path.join(reportDir, 'report.md'), 'Report.\n');
+    fs.writeFileSync(path.join(reportDir, 'report.json'), JSON.stringify({
+      issue: null, branch: run.branch, worktree: run.worktree, changedPaths: [], commands: ['focused check'],
+      evidenceTier: ['unit'], unverified: [], modelOutcome: null, ...scenario.report,
+    }));
+    const before = fs.readFileSync(run.recordFile, 'utf8');
+    collectWorker(scenario.name, scenario.options, { config: f.config, output: () => {}, listWorktreeProcesses: () => [], recordUsageFn: () => ({ errors: [] }) });
+    const after = JSON.parse(fs.readFileSync(run.recordFile, 'utf8'));
+    assert.equal(Boolean(after.collectedAt), scenario.marked, scenario.name);
+    if (!scenario.options.record && !scenario.marked) assert.equal(fs.readFileSync(run.recordFile, 'utf8'), before, `${scenario.name}: the record is unchanged`);
+  }
 });

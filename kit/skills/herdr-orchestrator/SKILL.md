@@ -119,10 +119,12 @@ Read each file in the skill folder when its step comes:
 - Create the worker through the kit command:
 
 ```sh
-herdr-boss worker start <name> --kind <kind> --task-file <file> [--allow <path> | --read-only]
+herdr-boss worker start <name> --kind <kind> --task-file <file> --task-id <id> [--allow <path> | --read-only]
 ```
 
 Use `--read-only` for a task that changes no repository file.
+
+Always give `--task-id` with the published task id.
 
 - Read [the Herdr control surface](reference/herdr-control.md) for the options of `worker start`.
 - Verify the name, branch, worktree, pane, and brief.
