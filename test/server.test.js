@@ -20,6 +20,10 @@ const [{ serve }, { loadConfig, serviceSettingsView }, { Engine }] = await Promi
 ]);
 
 test('the state API exposes only allow-listed effective service settings', { timeout: 20000 }, (t) => {
+  const defaults = serviceSettingsView({});
+  assert.equal(defaults.find(({ setting }) => setting === 'night.maxWorkers').value, null);
+  assert.deepEqual(defaults.find(({ setting }) => setting === 'night.maxWorkersByLane').value,
+    { unmetered: null, codex: null, claude: null, opencodego: null });
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-service-settings-'));
   const home = path.join(root, 'home');
   const data = path.join(root, 'data');
@@ -39,6 +43,7 @@ test('the state API exposes only allow-listed effective service settings', { tim
     quota: { warnPercent: 85, criticalPercent: 97 },
     staleStatusMinutes: 75,
     workers: { staleIdleMinutes: 110 },
+    night: { maxWorkers: 16, maxWorkersByLane: { unmetered: 12, codex: null, claude: 6, opencodego: 4 } },
     browsers: { reapOrphanDaemons: false, orphanDaemonMinAgeSeconds: 3600, staleOwnedMinutes: 25 },
     providerKinds: { codex: ['codex', 'pi'] },
     orchestratorLabel: 'orchestrator',
@@ -104,13 +109,21 @@ try {
     'quota.warnPercent', 'quota.criticalPercent',
     'staleStatusMinutes',
     'workers.staleIdleMinutes',
+    'night.maxWorkers', 'night.maxWorkersByLane',
     'browsers.reapOrphanDaemons', 'browsers.orphanDaemonMinAgeSeconds', 'browsers.staleOwnedMinutes', 'browsers.sweepCodeSignClones',
     'tickSeconds', 'quotaSeconds', 'push', 'alertCooldownSeconds', 'providerKinds', 'orchestratorLabel', 'port', 'host',
   ]);
   assert.deepEqual(view.map(({ source }) => source), [
-    'config', 'config', 'config', 'config', 'config', 'config', 'config', 'config', 'default',
+    'config', 'config', 'config', 'config', 'config', 'config', 'config', 'config', 'config', 'config', 'default',
     'config', 'config', 'config', 'default', 'config', 'config', 'config', 'config',
   ]);
+  assert.deepEqual(view.find(({ setting }) => setting === 'night.maxWorkers'), {
+    group: 'Workers', setting: 'night.maxWorkers', value: 16, source: 'config',
+  });
+  assert.deepEqual(view.find(({ setting }) => setting === 'night.maxWorkersByLane'), {
+    group: 'Workers', setting: 'night.maxWorkersByLane',
+    value: { unmetered: 12, codex: null, claude: 6, opencodego: 4 }, source: 'config',
+  });
   assert.deepEqual(view.find(({ setting }) => setting === 'browsers.sweepCodeSignClones'), {
     group: 'Browsers', setting: 'browsers.sweepCodeSignClones', value: true, source: 'default',
   });
@@ -331,7 +344,13 @@ test('PUT /api/settings persists allowed values and updates the running engine c
   const response = await fetch(`${base}/api/settings`, {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ changes: { 'quota.warnPercent': 85, 'quota.criticalPercent': 96, 'machine.memFreeWarnPercent': 22 } }),
+    body: JSON.stringify({ changes: {
+      'quota.warnPercent': 85,
+      'quota.criticalPercent': 96,
+      'machine.memFreeWarnPercent': 22,
+      'night.maxWorkers': 20,
+      'night.maxWorkersByLane': { unmetered: 12, codex: 8, claude: null, opencodego: 4 },
+    } }),
   });
   assert.equal(response.status, 200);
   const result = await response.json();
@@ -339,12 +358,31 @@ test('PUT /api/settings persists allowed values and updates the running engine c
   assert.equal(engine.cfg.quota.warnPercent, 85);
   assert.equal(engine.cfg.quota.criticalPercent, 96);
   assert.equal(engine.cfg.machine.memFreeWarnPercent, 22);
+  assert.equal(engine.cfg.night.maxWorkers, 20);
+  assert.deepEqual(engine.cfg.night.maxWorkersByLane, { unmetered: 12, codex: 8, claude: null, opencodego: 4 });
   assert.deepEqual(engine.state.quotaThresholds, { warnPercent: 85, criticalPercent: 96 });
   assert.equal(engine.state.serviceSettings.find(({ setting }) => setting === 'machine.memFreeWarnPercent').value, 22);
+  assert.equal(engine.state.serviceSettings.find(({ setting }) => setting === 'night.maxWorkers').value, 20);
+  assert.deepEqual(engine.state.serviceSettings.find(({ setting }) => setting === 'night.maxWorkersByLane').value,
+    { unmetered: 12, codex: 8, claude: null, opencodego: 4 });
   const saved = JSON.parse(fs.readFileSync(configFile, 'utf8'));
   assert.deepEqual(saved.other, { keep: true });
   assert.equal(saved.quota.note, 'keep');
+  assert.equal(saved.night.maxWorkers, 20);
+  assert.deepEqual(saved.night.maxWorkersByLane, { unmetered: 12, codex: 8, claude: null, opencodego: 4 });
   assert.equal(fs.statSync(configFile).mode & 0o7777, 0o640);
+
+  const dayValues = await fetch(`${base}/api/settings`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ changes: {
+      'night.maxWorkers': null,
+      'night.maxWorkersByLane': { unmetered: null, codex: null, claude: null, opencodego: null },
+    } }),
+  });
+  assert.equal(dayValues.status, 200);
+  assert.equal(engine.cfg.night.maxWorkers, null);
+  assert.deepEqual(engine.cfg.night.maxWorkersByLane, { unmetered: null, codex: null, claude: null, opencodego: null });
 
   const before = fs.readFileSync(configFile, 'utf8');
   const rejected = await fetch(`${base}/api/settings`, {
@@ -354,6 +392,34 @@ test('PUT /api/settings persists allowed values and updates the running engine c
   });
   assert.equal(rejected.status, 400);
   assert.equal(fs.readFileSync(configFile, 'utf8'), before);
+
+  for (const value of [0, 41, 1.5]) {
+    const invalid = await fetch(`${base}/api/settings`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ changes: { 'night.maxWorkers': value } }),
+    });
+    assert.equal(invalid.status, 400, `global night cap ${value} must be rejected`);
+  }
+  for (const value of [0, 41, 1.5]) {
+    const invalid = await fetch(`${base}/api/settings`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ changes: { 'night.maxWorkersByLane': { unmetered: value } } }),
+    });
+    assert.equal(invalid.status, 400, `lane night cap ${value} must be rejected`);
+  }
+  assert.equal(fs.readFileSync(configFile, 'utf8'), before, 'invalid night caps must not change config.json');
+});
+
+test('Settings renders editable nullable night global and provider lane caps', () => {
+  const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  assert.ok(app.includes("'night.maxWorkers': [1, 40]"));
+  assert.ok(app.includes("'night.maxWorkersByLane': [1, 40]"));
+  assert.ok(app.includes('Night ${label} worker cap'));
+  assert.ok(app.includes('data-service-lane="${lane}"'));
+  assert.ok(app.includes("input.value === '' && nullableServiceSettings.has(setting) ? null : Number(input.value)"));
+  assert.ok(app.includes("changes[setting][input.dataset.serviceLane] = input.value === '' ? null : Number(input.value)"));
 });
 
 test('the policy API saves per-harness model assignments and rejects unsafe model strings', { timeout: 20000 }, async (t) => {

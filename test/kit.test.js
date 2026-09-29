@@ -2073,15 +2073,44 @@ test('worker start reports off and paused machine guards and ignores their CPU/l
   }
 });
 
-test('worker start refuses machine limits even with --force', () => {
+test('worker start refuses machine limits before a reached night lane cap even with --force', () => {
   const f = setupFixture(null);
-  fs.writeFileSync(f.rulesFile, JSON.stringify({ updatedAt: new Date().toISOString(), machine: { owner: 'present', cpuPercent: 71, cpuLimit: 70, fiveMinute: 1, loadLimit: null } }));
+  fs.writeFileSync(f.rulesFile, JSON.stringify({
+    updatedAt: new Date().toISOString(),
+    machine: { owner: 'present', cpuPercent: 71, cpuLimit: 70, fiveMinute: 1, loadLimit: null },
+    night: { active: true, maxWorkersByLane: { codex: 1 } },
+    control: { runningWorkers: 0, maxWorkers: 16, runningByLane: { codex: 1 }, projects: {} },
+  }));
   const output = [];
   assert.throws(() => startWorker('machine-refused', { kind: 'codex', task: 'x', allow: ['src/'], force: true }, {
     config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: (line) => output.push(line),
   }), /--force cannot bypass this refusal/);
   assert.match(output.join('\n'), /Owner present; CPU 71\.0% \/ limit 70%/);
   assert.ok(!f.calls.includes('agent start'));
+});
+
+test('worker start refuses a reached provider lane cap while night watch is active', (t) => {
+  const f = setupFixture(null);
+  t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
+  fs.writeFileSync(f.rulesFile, JSON.stringify({
+    updatedAt: new Date().toISOString(),
+    night: { active: true, maxWorkersByLane: { codex: 1 } },
+    control: { runningWorkers: 0, maxWorkers: 8, runningByLane: { codex: 1 }, projects: {} },
+  }));
+  assert.throws(() => startWorker('night-lane-refused', { kind: 'codex', task: 'x', allow: ['src/'] }, {
+    config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+  }), /Night worker lane limit \(1\) for codex is reached/);
+  assert.ok(!f.calls.includes('agent start'));
+  assert.equal(fs.existsSync(f.config.worktreePath('night-lane-refused')), false);
+
+  fs.writeFileSync(f.rulesFile, JSON.stringify({
+    updatedAt: new Date().toISOString(),
+    night: { active: false, maxWorkersByLane: { codex: 1 } },
+    control: { runningWorkers: 0, maxWorkers: 8, runningByLane: { codex: 1 }, projects: {} },
+  }));
+  assert.doesNotThrow(() => startWorker('day-lane-unlimited', { kind: 'codex', task: 'x', allow: ['src/'], dryRun: true }, {
+    config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+  }), 'day worker starts do not use night lane caps');
 });
 
 test('worker start refuses the enabled load backstop even with --force', () => {

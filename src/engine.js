@@ -49,6 +49,55 @@ const PROJECT_CONFIG_INTERVAL_MS = 10 * 60 * 1000;
 // Quotas younger than this are shown without the codexbar error, and saved quotas this young load at start.
 const QUOTA_CACHE_MS = 15 * 60 * 1000;
 
+// Count each working pane on the provider recorded when its worker started. Herdr panes do not expose a model, so
+// use the project run records to distinguish metered and unmetered OpenCode workers.
+function runningWorkerCountsByLane(herdr, policy, models) {
+  const active = new Map((herdr?.panes || [])
+    .filter((pane) => pane.agent && !pane.orch && pane.label !== 'boss' && pane.status === 'working')
+    .map((pane) => [pane.id, pane]));
+  const counts = {};
+  const add = (provider) => {
+    const lane = provider || 'unmetered';
+    counts[lane] = (counts[lane] || 0) + 1;
+  };
+  for (const { repo } of readProjectRepos(DATA_DIR)) {
+    let projectConfig;
+    try { projectConfig = loadProjectConfig({ cwd: repo }); }
+    catch { continue; }
+    const { mainRoot, runsPath } = projectConfig;
+    const relative = path.relative(mainRoot, runsPath);
+    if (relative.startsWith('..') || path.isAbsolute(relative)) continue;
+    let files;
+    try {
+      const stat = fs.lstatSync(runsPath);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) continue;
+      files = fs.readdirSync(runsPath);
+    } catch { continue; }
+    for (const name of files) {
+      if (!name.endsWith('.json')) continue;
+      try {
+        const file = path.join(runsPath, name);
+        const stat = fs.lstatSync(file);
+        if (!stat.isFile() || stat.isSymbolicLink()) continue;
+        const run = JSON.parse(fs.readFileSync(file, 'utf8'));
+        const pane = active.get(run?.pane);
+        if (!pane) continue;
+        const provider = Object.hasOwn(run, 'provider')
+          ? run.provider
+          : providerFor(run.kind || pane.agent, run.model, policy);
+        add(provider);
+        active.delete(run.pane);
+      } catch {}
+    }
+  }
+  for (const pane of active.values()) {
+    const kind = pane.agent;
+    const model = pane.model || policy.preferredModels?.[kind] || models.kinds[kind]?.defaultModel;
+    add(providerFor(kind, model, policy));
+  }
+  return counts;
+}
+
 function handoffCandidates(control) {
   return [...(control.handoffs || []), ...(control.bossHandoff ? [control.bossHandoff] : [])];
 }
@@ -411,8 +460,13 @@ export class Engine extends EventEmitter {
       snap.herdr = herdr ? { ...herdr, panes: applyWorkerFailureStatuses(herdr.panes, workerTransitions.failures) } : herdr;
       const todayUse = quotaUsageToday(snap.quotas, undefined, now);
       snap.lanes = laneStatus(snap.quotas, policy, now, { todayUse });
+      const nightConfig = this.cfg.night || {};
+      const laneCapsActive = snap.night?.active === true &&
+        Object.values(nightConfig.maxWorkersByLane || {}).some((cap) => Number.isInteger(cap));
+      const runningByLane = laneCapsActive ? runningWorkerCountsByLane(snap.herdr, policy, this.models) : {};
       const control = deriveControl(snap, policy, this.models, this.memory.paneSince, now, this.memory.exhaustedFreeModels, {
         exhaustedFreeLanes: this.memory.exhaustedFreeLanes, piModels: this.memory.piModels, lanes: snap.lanes,
+        nightMaxWorkers: nightConfig.maxWorkers,
       });
       const profileWorkspaces = Object.fromEntries(managedBrowsers.map((b) => [b.profile, control.projects[b.project]?.workspace]).filter(([, ws]) => ws));
       snap.cpuUse = cpuUse(procs, herdr?.panes || [], profileWorkspaces);
@@ -579,7 +633,8 @@ export class Engine extends EventEmitter {
         notes: evaluation.advice,
         browsers: managedBrowsers.map((b) => ({ project: b.project, port: b.port, profile: b.profile, headless: !!b.headless, windowSize: b.windowSize || { width: 1280, height: 800 }, ready: browsers.some((x) => x.kind === 'automation-chrome' && x.port === String(b.port) && x.profile === b.profile), responsive: b.responsive })),
         policy,
-        control: { runningWorkers: control.runningWorkers, maxWorkers: control.maxWorkers, projects: control.projects, workspaces: control.workspaces },
+        night: { active: snap.night?.active === true, maxWorkersByLane: nightConfig.maxWorkersByLane || {} },
+        control: { runningWorkers: control.runningWorkers, maxWorkers: control.maxWorkers, runningByLane, projects: control.projects, workspaces: control.workspaces },
       });
       snap.paneSince = this.memory.paneSince;
       snap.history = this.memory.history || [];

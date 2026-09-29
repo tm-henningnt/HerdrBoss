@@ -315,6 +315,7 @@ function controlBlock(s) {
 const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/;
 const settingsMessages = {};
 const serviceSettingsMessages = {};
+const nullableServiceSettings = new Set(['night.maxWorkers']);
 // The kit catalog of a harness plus the local extra models in the policy draft.
 function kindModels(kind, d = policyDraft) {
   const base = models[kind]?.allowedModels || [];
@@ -451,18 +452,22 @@ function settingsView(s) {
     'quota.criticalPercent': [51, 100],
     staleStatusMinutes: [5, 1440],
     'workers.staleIdleMinutes': [5, 1440],
+    'night.maxWorkers': [1, 40],
+    'night.maxWorkersByLane': [1, 40],
     'browsers.staleOwnedMinutes': [5, 1440],
     'browsers.orphanDaemonMinAgeSeconds': [60, 86400],
   };
   const serviceSettingBooleans = new Set(['browsers.reapOrphanDaemons', 'browsers.sweepCodeSignClones']);
   const serviceRows = settingsGroups.map((group) => {
     const groupRows = (s.serviceSettings || []).filter((item) => item.group === group).map((item) => {
-      const value = item.value !== null && typeof item.value === 'object' ? JSON.stringify(item.value) : String(item.value);
+      const value = item.value !== null && typeof item.value === 'object' ? JSON.stringify(item.value) : item.value == null ? '' : String(item.value);
       const range = serviceSettingRanges[item.setting];
-      const input = serviceSettingBooleans.has(item.setting)
+      const input = item.setting === 'night.maxWorkersByLane'
+        ? `<div style="display:grid;grid-template-columns:repeat(2,minmax(100px,1fr));gap:8px">${[['unmetered', 'Unmetered'], ['codex', 'Codex'], ['claude', 'Claude'], ['opencodego', 'OpenCode Go']].map(([lane, label]) => `<label style="display:grid;gap:3px"><span>${label}</span><input type="number" min="1" max="40" step="1" value="${esc(item.value?.[lane] ?? '')}" placeholder="Day value" data-service-setting="${esc(item.setting)}" data-service-lane="${lane}" data-service-group="${esc(group)}" aria-label="Night ${label} worker cap"></label>`).join('')}</div>`
+        : serviceSettingBooleans.has(item.setting)
         ? `<input type="checkbox" data-service-setting="${esc(item.setting)}" data-service-group="${esc(group)}" aria-label="${esc(item.setting)}" ${item.value ? 'checked' : ''}>`
         : range
-          ? `<input type="number" min="${range[0]}" max="${range[1]}" step="1" value="${esc(value)}" data-service-setting="${esc(item.setting)}" data-service-group="${esc(group)}" aria-label="${esc(item.setting)}">`
+          ? `<input type="number" min="${range[0]}" max="${range[1]}" step="1" value="${esc(value)}" placeholder="${nullableServiceSettings.has(item.setting) ? 'Day value' : ''}" data-service-setting="${esc(item.setting)}" data-service-group="${esc(group)}" aria-label="${esc(item.setting)}">`
           : `<code>${esc(value)}</code>`;
       return `<tr><th scope="row"><code>${esc(item.setting)}</code></th><td>${input}</td><td>${item.source === 'config' ? 'from config.json' : 'default'}</td></tr>`;
     }).join('');
@@ -3830,10 +3835,15 @@ function settingsRerender(kind, focus) {
 
 async function saveServiceSettings(group, button) {
   const inputs = [...document.querySelectorAll(`[data-service-group="${CSS.escape(group)}"][data-service-setting]`)];
-  const changes = Object.fromEntries(inputs.map((input) => [
-    input.dataset.serviceSetting,
-    input.type === 'checkbox' ? input.checked : Number(input.value),
-  ]));
+  const changes = {};
+  for (const input of inputs) {
+    const setting = input.dataset.serviceSetting;
+    if (input.dataset.serviceLane) {
+      changes[setting] ||= {};
+      changes[setting][input.dataset.serviceLane] = input.value === '' ? null : Number(input.value);
+    } else if (input.type === 'checkbox') changes[setting] = input.checked;
+    else changes[setting] = input.value === '' && nullableServiceSettings.has(setting) ? null : Number(input.value);
+  }
   const status = document.querySelector(`[data-service-settings-status="${CSS.escape(group)}"]`);
   button.disabled = true;
   if (status) status.textContent = '';

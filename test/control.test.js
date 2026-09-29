@@ -60,6 +60,86 @@ console.log(JSON.stringify(state.quotaThresholds));
   assert.deepEqual(JSON.parse(result), { warnPercent: 83, criticalPercent: 96 });
 });
 
+test('Engine applies the configured night worker cap to global control and preserves project shares', (t) => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-engine-night-cap-'));
+  const data = path.join(temp, 'data');
+  fs.mkdirSync(data, { recursive: true });
+  fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({
+    night: { maxWorkers: 3, maxWorkersByLane: { unmetered: 2, codex: 1, claude: null, opencodego: null } },
+  }));
+  fs.writeFileSync(path.join(data, 'policy.json'), JSON.stringify({ maxWorkers: 8, projects: {
+    alpha: { share: 60, mode: 'active' }, beta: { share: 40, mode: 'paused' },
+  } }));
+  fs.writeFileSync(path.join(data, 'night.json'), JSON.stringify({ active: true, since: '2026-09-26T20:00:00.000Z', until: '2099-09-27T05:30:00.000Z' }));
+  const repo = path.join(temp, 'project');
+  fs.mkdirSync(repo, { recursive: true });
+  execFileSync('git', ['init', '-b', 'main', repo], { stdio: 'ignore' });
+  fs.writeFileSync(path.join(repo, '.herdr-boss.json'), JSON.stringify({ slug: 'alpha' }));
+  const runs = path.join(repo, '.orchestration', 'runs');
+  fs.mkdirSync(runs, { recursive: true });
+  fs.writeFileSync(path.join(runs, 'free-worker.json'), JSON.stringify({ pane: 'w1:p2', kind: 'opencode', model: 'opencode/free', provider: null }));
+  fs.writeFileSync(path.join(runs, 'metered-worker.json'), JSON.stringify({ pane: 'w2:p2', kind: 'pi', model: 'opencode-go/model', provider: 'opencodego' }));
+  fs.writeFileSync(path.join(data, 'project-repos.json'), JSON.stringify([{ slug: 'alpha', repo }]));
+  t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+  const engineUrl = new URL('../src/engine.js', import.meta.url).href;
+  const configUrl = new URL('../src/config.js', import.meta.url).href;
+  const script = `
+import fs from 'node:fs';
+import path from 'node:path';
+import { Engine } from ${JSON.stringify(engineUrl)};
+import { loadConfig } from ${JSON.stringify(configUrl)};
+let now = Date.parse('2026-09-26T22:00:00.000Z');
+Date.now = () => now;
+const data = process.env.HERDR_BOSS_DIR;
+const engine = new Engine(loadConfig(), { push: false, act: false, collectors: {
+  collectHerdr: async () => ({
+    workspaces: [{ id: 'w1', label: 'Alpha' }, { id: 'w2', label: 'Beta' }],
+    panes: [
+      { id: 'w1:p1', workspace: 'w1', agent: 'codex', status: 'working' },
+      { id: 'w1:p2', workspace: 'w1', agent: 'opencode', name: 'free-worker', status: 'working' },
+      { id: 'w2:p2', workspace: 'w2', agent: 'pi', name: 'metered-worker', status: 'working' },
+    ],
+  }),
+  collectMachine: async () => null,
+  collectProcesses: async () => new Map(),
+  collectQuotas: async () => [],
+  collectWorktreeCounts: async () => ({}),
+  collectCwdProcesses: async () => [],
+  collectMissingWorktreeProcesses: async () => [],
+  collectPiModels: async () => ({ models: [] }),
+} });
+const active = await engine.tick();
+const activeRules = JSON.parse(fs.readFileSync(path.join(data, 'rules.json'), 'utf8'));
+fs.writeFileSync(path.join(data, 'night.json'), JSON.stringify({ active: false }));
+now += 1000;
+const day = await engine.tick();
+process.stdout.write(JSON.stringify({
+  activeCap: active.control.maxWorkers,
+  activeSlots: Object.values(active.control.projects).reduce((sum, project) => sum + project.baseSlots, 0),
+  borrowedSlots: active.control.projects.alpha.borrowed,
+  effectiveSlots: Object.values(active.control.projects).reduce((sum, project) => sum + project.slots, 0),
+  activeLaneCounts: activeRules.control.runningByLane,
+  activeNight: activeRules.night,
+  dayCap: day.control.maxWorkers,
+  daySlots: Object.values(day.control.projects).reduce((sum, project) => sum + project.baseSlots, 0),
+}));
+`;
+  const result = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', script], {
+    env: { ...process.env, HOME: temp, HERDR_BOSS_DIR: data, HERDR_BOSS_LIVE_DIR: path.join(temp, 'live'), NODE_TEST_CONTEXT: '1' },
+    encoding: 'utf8',
+  }));
+  assert.equal(result.activeCap, 3);
+  assert.equal(result.activeSlots, 3, 'project shares distribute the night global cap');
+  assert.equal(result.borrowedSlots, 1, 'night cap preserves idle project slot lending');
+  assert.equal(result.effectiveSlots, 3);
+  assert.deepEqual(result.activeLaneCounts, { codex: 1, unmetered: 1, opencodego: 1 });
+  assert.deepEqual(result.activeNight, {
+    active: true, maxWorkersByLane: { unmetered: 2, codex: 1, claude: null, opencodego: null },
+  });
+  assert.equal(result.dayCap, 8, 'the day worker cap applies when night watch is inactive');
+  assert.equal(result.daySlots, 8);
+});
+
 test('engine caches orphaned worktree scans until the worktree scan interval and keeps the last success on error', (t) => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-engine-scan-cache-'));
   t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
@@ -701,6 +781,18 @@ test('bulletin states the machine guard mode and retains measured machine limits
   assert.doesNotMatch(pausedBulletin, /machine resources are within limits/i);
   assert.match(pausedBulletin, /configured limit 70%/);
   assert.doesNotMatch(pausedBulletin, /Machine limit exceeded/);
+});
+
+test('active night bulletin shows the global and configured unmetered worker caps', () => {
+  const snap = {
+    ...snapshot(), updatedAt: '2026-09-26T12:00:00Z', night: { active: true }, lanes: {},
+    control: { runningWorkers: 2, maxWorkers: 16, projects: {} },
+  };
+  const bulletin = renderBulletin(snap, { alerts: [], advice: [] }, {
+    dashboardPort: 4477,
+    night: { maxWorkers: 16, maxWorkersByLane: { unmetered: 12, codex: null, claude: null, opencodego: null } },
+  });
+  assert.match(bulletin, /Night cap 16 \(unmetered 12\)/);
 });
 
 test('Owner idle time parses HIDIdleTime nanoseconds and rejects missing or invalid readings', async () => {

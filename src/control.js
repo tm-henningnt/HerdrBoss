@@ -736,7 +736,9 @@ function displayUnmeteredModel(model) {
   return model.startsWith('opencode/') ? model.slice('opencode/'.length) : model;
 }
 
-export function deriveControl(snap, policy, baseModels, paneSince = {}, now = Date.now(), exhaustedFreeModels = {}, { exhaustedFreeLanes = {}, piModels = null, lanes = {} } = {}) {
+export function deriveControl(snap, policy, baseModels, paneSince = {}, now = Date.now(), exhaustedFreeModels = {}, {
+  exhaustedFreeLanes = {}, piModels = null, lanes = {}, nightMaxWorkers = null,
+} = {}) {
   const models = mergeModels(baseModels, policy);
   const workspaces = workspaceProjects(snap, policy);
   const projects = workspaces.filter((workspace) => !workspace.excluded);
@@ -749,7 +751,8 @@ export function deriveControl(snap, policy, baseModels, paneSince = {}, now = Da
     settings[p.slug] = { share: saved?.share ?? defaultShare, mode: saved?.mode ?? 'auto', excludedKinds: saved?.excludedKinds || [], excludedModels: saved?.excludedModels || [] };
     weights[p.slug] = settings[p.slug].share;
   }
-  const base = distribute(policy.maxWorkers, weights);
+  const maxWorkers = snap.night?.active === true && nightMaxWorkers != null ? nightMaxWorkers : policy.maxWorkers;
+  const base = distribute(maxWorkers, weights);
   const result = {};
   const idle = new Set();
   const working = panes.filter((p) => p.agent && !p.orch && p.label !== 'boss' && p.status === 'working');
@@ -807,5 +810,5 @@ export function deriveControl(snap, policy, baseModels, paneSince = {}, now = Da
       ...(!bossPane.agent ? { defaultMode: 'fresh' } : {}),
     };
   }
-  return { projects: result, workspaces, runningWorkers: working.length, maxWorkers: policy.maxWorkers, globalAllowed, risks, exhausted, pressures, handoffs, bossHandoff };
+  return { projects: result, workspaces, runningWorkers: working.length, maxWorkers, globalAllowed, risks, exhausted, pressures, handoffs, bossHandoff };
 }

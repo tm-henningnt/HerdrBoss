@@ -101,6 +101,10 @@ const DEFAULTS = {
     sweepCodeSignClones: true,
   },
   workers: { staleIdleMinutes: 120 },
+  night: {
+    maxWorkers: null,
+    maxWorkersByLane: { unmetered: null, codex: null, claude: null, opencodego: null },
+  },
   // A published project status older than this is stale while workers run or new commits land.
   staleStatusMinutes: 120,
   // Shared resources that projects lease, for example local serve ports. See validateResourcePools().
@@ -118,6 +122,8 @@ const SERVICE_SETTINGS = [
   ['Quota', 'quota.criticalPercent'],
   ['Status', 'staleStatusMinutes'],
   ['Workers', 'workers.staleIdleMinutes'],
+  ['Workers', 'night.maxWorkers'],
+  ['Workers', 'night.maxWorkersByLane'],
   ['Browsers', 'browsers.reapOrphanDaemons'],
   ['Browsers', 'browsers.orphanDaemonMinAgeSeconds'],
   ['Browsers', 'browsers.staleOwnedMinutes'],
@@ -241,6 +247,8 @@ const SERVICE_SETTING_RANGES = new Map([
   ['quota.criticalPercent', [51, 100]],
   ['staleStatusMinutes', [5, 1440]],
   ['workers.staleIdleMinutes', [5, 1440]],
+  ['night.maxWorkers', [1, 40]],
+  ['night.maxWorkersByLane', [1, 40]],
   ['browsers.staleOwnedMinutes', [5, 1440]],
   ['browsers.orphanDaemonMinAgeSeconds', [60, 86400]],
 ]);
@@ -248,6 +256,8 @@ const SERVICE_SETTING_BOOLEANS = new Set([
   'browsers.reapOrphanDaemons',
   'browsers.sweepCodeSignClones',
 ]);
+const NULLABLE_SERVICE_SETTINGS = new Set(['night.maxWorkers']);
+const NIGHT_WORKER_LANES = new Set(['unmetered', 'codex', 'claude', 'opencodego']);
 
 function isRecord(value) {
   return !!value && typeof value === 'object' && !Array.isArray(value);
@@ -267,19 +277,39 @@ function validateServiceSettingValues(changes) {
   if (!isRecord(changes)) throw new Error('changes must be an object of setting names and values.');
   const entries = Object.entries(changes);
   if (!entries.length) throw new Error('At least one service setting is required.');
+  const normalizedChanges = {};
   for (const [setting, value] of entries) {
     const range = SERVICE_SETTING_RANGES.get(setting);
+    if (setting === 'night.maxWorkersByLane') {
+      if (!isRecord(value)) throw new Error('night.maxWorkersByLane must be an object of optional lane caps.');
+      const normalized = { ...DEFAULTS.night.maxWorkersByLane };
+      for (const [lane, cap] of Object.entries(value)) {
+        if (!NIGHT_WORKER_LANES.has(lane)) throw new Error(`night.maxWorkersByLane has an unknown lane ${lane}.`);
+        if (cap !== null && (!Number.isSafeInteger(cap) || cap < 1 || cap > 40)) {
+          throw new Error(`night.maxWorkersByLane.${lane} must be null or a whole number from 1 to 40.`);
+        }
+        normalized[lane] = cap;
+      }
+      normalizedChanges[setting] = normalized;
+      continue;
+    }
     if (range) {
+      if (value === null && NULLABLE_SERVICE_SETTINGS.has(setting)) {
+        normalizedChanges[setting] = null;
+        continue;
+      }
       if (!Number.isSafeInteger(value) || value < range[0] || value > range[1]) {
         throw new Error(`${setting} must be a whole number from ${range[0]} to ${range[1]}.`);
       }
+      normalizedChanges[setting] = value;
     } else if (SERVICE_SETTING_BOOLEANS.has(setting)) {
       if (typeof value !== 'boolean') throw new Error(`${setting} must be true or false.`);
+      normalizedChanges[setting] = value;
     } else {
       throw new Error(`Service setting ${setting} cannot be changed.`);
     }
   }
-  return Object.fromEntries(entries);
+  return normalizedChanges;
 }
 
 export function validateServiceSettings(changes, currentConfig = {}) {

@@ -165,7 +165,7 @@ The stale notice text is `Your published status is <age> old while <workers ran 
 
 Night watch says that the Owner is away. The Boss acts for the Owner until the end time of the night.
 
-The state lives in the file `night.json` in the data directory. The file is beside `policy.json` and `rules.json`. Its mode is `0600`. Herdr Boss reads the file once per engine tick and writes the result to `snap.night`. The engine changes no other behavior yet.
+The state lives in the file `night.json` in the data directory. The file is beside `policy.json` and `rules.json`. Its mode is `0600`. Herdr Boss reads the file once per engine tick and writes the result to `snap.night`.
 
 The stored record holds these keys:
 
@@ -181,9 +181,18 @@ A state whose `until` time has passed reads as not active. The file stays, so a 
 
 An active night state also makes the Owner away. The machine limits are the same away limits as for an idle Owner. Night watch changes no machine limit.
 
+Set these worker caps in `config.json`:
+
+| Setting | Meaning | Value |
+|---|---|---|
+| `night.maxWorkers` | Maximum number of working agents during night watch. | Use `null` to keep the day value. Otherwise, set an integer from 1 to 40. |
+| `night.maxWorkersByLane` | Maximum number of working agents in each provider lane during night watch. | Set `unmetered`, `codex`, `claude`, or `opencodego` to `null` or an integer from 1 to 40. Omit a lane to keep its day value. |
+
+Night caps apply only while night watch is active. Project shares and idle slot lending still apply under the global cap. The machine CPU and load guard limits still block worker starts during night watch.
+
 The bulletin then shows one line under **Rules now**: `Night watch until 07:30 (Owner away). Work as normal; the Boss handles judgment calls.` The time is the local end time. When `quietHours` is true, the bulletin also shows `Quiet hours: on.`
 
-The commands, the notices, the worker cap, the reports, and the dashboard banner come in later tasks. See `docs/ideas/night-watch.md`.
+The night worker caps also appear in the bulletin and in **Settings**. Set them there or edit `config.json`.
 
 ## Quota lanes
 
