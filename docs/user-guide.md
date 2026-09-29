@@ -971,8 +971,18 @@ The dashboard adapts to a phone and to a home-screen web app.
 - On a phone, the long sections of a project page start collapsed. Select a section title to open it. The dashboard remembers each open section for that project during the session. Overall progress and the current frontier stay open.
 - Project cards become compact. They show the name, mode, status line, and task bar.
 - Tables show stacked rows with a label for each value. The page does not scroll sideways at 393 px.
+- On a screen up to 760 px wide, each text field, number field, select, and text area uses a font size of 16 px. This stops iOS Safari from zooming the page when you select a field. Pinch zoom stays on.
+- On a screen up to 760 px wide, each button, select, text field, checkbox with its label, and menu link is at least 44 px high.
+- The page does not scroll sideways at any width from 320 px. A wide table or code block scrolls inside its own box.
+- A fixed bar, such as the **Apply policy** bar, moves up when the on-screen keyboard opens.
 - The expanded browser view fills the screen. One compact toolbar holds the controls. The text field and key controls appear only while **Control browser** is on. The screenshot fills the rest of the height, in portrait and landscape.
 - The dashboard sets the home-screen web app meta tags. To add the dashboard to a phone home screen, open it in Safari, open the Share menu, and select **Add to Home Screen**.
+
+### Check the phone layout
+
+The static checks in `test/phone-layout.test.js` run in `npm test`. They check the viewport meta, the 16 px field size, the 44 px target size (also for class rules that set a smaller height), the dynamic viewport units, and the scroll boxes. They do not open a browser.
+
+`npm run check:phone` runs `test/phone-check.mjs`. The script needs the project browser. It starts a read-only preview, opens each page, the Help panel, the menu, the new-message form of the Mailbox, an open message, and an open chat at 320, 375, 390, and 430 px, and fails when a page is wider than the screen or a field has a font size under 16 px. It prints a warning for each target under 44 px. Add `--strict-targets` to fail on those too. Add `--base URL` to check a running dashboard. A state that needs data, such as an open message, is skipped when the dashboard has none. Add `--only /mailbox,/chat` to check some pages.
 
 ## Configuration
 
