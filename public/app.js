@@ -3623,6 +3623,7 @@ const HELP = {
     <p>A read-only line shows the limits: the scan interval, the bytes for one scan, the days kept, and the rise rule.</p>`],
   logs: ['Logs', `
     <p>The top line tells whether Herdr Boss sends notices to orchestrators.</p>
+    <p>Herdr Boss sends the <code>info</code> notices of a pane as one digest, at most once in 2 hours, and never while the pane works. <code>warn</code> and <code>critical</code> notices arrive at once.</p>
     <p>The guidance section shows the rules in force now, the same text as the bulletin that orchestrators read.</p>
     <p><b>Activity log</b> lists prompts sent to orchestrators, notifications, handovers, and stopped processes, newest first.</p>`],
 };

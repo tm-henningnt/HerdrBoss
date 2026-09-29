@@ -145,7 +145,7 @@ A notice is a prompt to an `orch` pane. Herdr Boss normally sends it only when t
 
 Some notices are in the bulletin only and are never sent as a prompt. These are the quota notices at 90% and 98%, the `Quota restriction cleared` notice, and the `browser is ready` notice. The alert source marks each of them with `prompt: false`. Worker failure, blocked-worker, kit, handover, disk, and machine-limit notices are sent as prompts.
 
-A pane gets at most one prompt with `info` notices in 60 minutes. Other `info` notices for that pane wait in that time. The next allowed prompt sends all waiting `info` notices together, one line each. It shows at most 8 of these lines, then one `and N more` line. The bulletin lists all notices. The hourly limit does not apply to `warn` and `critical` notices. A `warn` or `critical` prompt inside the hour does not include the waiting `info` notices.
+Herdr Boss sends the `info` notices of one pane as one digest. All `info` notices of all kinds use the digest. A pane gets at most one digest in 2 hours. Herdr Boss sends no digest while the pane status is `working`. The digest waits until the status is `idle` or `done`. The first digest goes out as soon as the pane is settled. Other `info` notices for that pane wait. The digest sends all waiting `info` notices together, one line each. It shows at most 8 of these lines, then one `and N more` line. The bulletin lists all notices. The 2-hour limit does not apply to `warn` and `critical` notices. They arrive at once. A `warn` or `critical` prompt inside the 2 hours does not include the waiting `info` notices.
 
 Herdr does not show a draft or an open dialog in a pane. Herdr Boss does not detect them. An agent that waits for input has the status `blocked`, and Herdr Boss sends it no prompt except an immediate `warn` or `critical` notice.
 
@@ -164,7 +164,7 @@ A published project status is stale when both conditions are true:
 
 A paused project is never stale. Herdr Boss finds the repository in `project-repos.json`. A project without a repository record uses only the worker condition. Herdr Boss runs `git -C <repo> rev-parse HEAD` and `git -C <repo> log -1 --format=%cI` at most once every 10 minutes for each project. New commits landed when the HEAD commit time is after `updated`, or when `HEAD` changed after `updated`.
 
-The stale notice text is `Your published status is <age> old while <workers ran | new commits landed>. Run herdr-boss publish <slug> <file> with the current plan and progress.` The notice uses one key for each project and `updated` time. Herdr Boss sends it once, with the idle gate and the hourly `info` limit. A new publish ends the stale status. When the new status becomes stale, Herdr Boss sends a new notice.
+The stale notice text is `Your published status is <age> old while <workers ran | new commits landed>. Run herdr-boss publish <slug> <file> with the current plan and progress.` The notice uses one key for each project and `updated` time. Herdr Boss sends it once, with the idle gate and the 2-hour `info` limit. A new publish ends the stale status. When the new status becomes stale, Herdr Boss sends a new notice.
 
 `HERDR_BOSS_PUSH=0` turns off prompts for one run.
 
@@ -220,7 +220,7 @@ Quiet hours do not hold pushes, deploys, gates, quota rules, worker starts, nudg
 
 ### Night watch notices
 
-The engine sends one start notice to each orchestrator pane and to the Boss pane. It sends the notice as a direct prompt, so a working orchestrator also receives it. The notice is not a resource notice. It does not use the idle gate and it does not use the hourly `info` limit.
+The engine sends one start notice to each orchestrator pane and to the Boss pane. It sends the notice as a direct prompt, so a working orchestrator also receives it. The notice is not a resource notice. It does not use the idle gate and it does not use the 2-hour `info` limit.
 
 The start notice reads: `[herdr-boss] Night watch until 07:30. The Owner is away; the Boss acts for the Owner. Work as normal. Escalate to the Boss.` The time is the local `until` time of the stored state.
 

@@ -333,8 +333,8 @@ export function kitReminderAlerts({ projects, tracker, now, current, changes }) 
   return alerts;
 }
 
-// A pane gets at most one prompt with info notices in this interval.
-export const INFO_PROMPT_INTERVAL_MS = 60 * 60 * 1000;
+// A pane gets at most one prompt with info notices in this interval, and none while the pane works.
+export const INFO_PROMPT_INTERVAL_MS = 2 * 60 * 60 * 1000;
 const INFO_PROMPT_LINES = 8;
 
 // Bulletin-only alert sources: they set prompt: false, so deliver sends no pane prompt for them.

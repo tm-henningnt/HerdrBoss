@@ -345,7 +345,7 @@ test('quota, quota recovery, and browser-ready alerts are in the bulletin but pr
   assert.doesNotMatch(noticeLines.join('\n'), /quota|browser/i);
 });
 
-test('the hourly budget batches info notices with an 8-line cap and warn notices bypass it', (t) => {
+test('the 2-hour budget batches info notices with an 8-line cap and warn notices bypass it', (t) => {
   const panes = [orch('idle')];
   const pending = Array.from({ length: 11 }, (_, i) => info(`b${i + 1}`));
   const prompts = deliverRounds(t, [
@@ -353,19 +353,45 @@ test('the hourly budget batches info notices with an 8-line cap and warn notices
     { at: NOW + 10 * MIN, panes, alerts: [info('a'), ...pending] },
     { at: NOW + 20 * MIN, panes, alerts: [info('a'), ...pending, warn('w')] },
     { at: NOW + 61 * MIN, panes, alerts: [info('a'), ...pending, warn('w')] },
-    { at: NOW + 70 * MIN, panes, alerts: [info('a'), ...pending, warn('w'), info('late')] },
+    { at: NOW + 119 * MIN, panes, alerts: [info('a'), ...pending, warn('w')] },
+    { at: NOW + 121 * MIN, panes, alerts: [info('a'), ...pending, warn('w')] },
+    { at: NOW + 130 * MIN, panes, alerts: [info('a'), ...pending, warn('w'), info('late')] },
   ]);
   const byRound = (round) => prompts.filter((p) => p.round === round);
   assert.equal(byRound(0).length, 1, 'the first info notice goes out');
-  assert.equal(byRound(1).length, 0, 'info notices wait inside the hour');
+  assert.equal(byRound(1).length, 0, 'info notices wait inside the 2 hours');
   assert.equal(byRound(2).length, 1, 'a warn notice bypasses the budget');
   assert.match(byRound(2)[0].text, /Warn notice w/);
   assert.doesNotMatch(byRound(2)[0].text, /Info notice b/, 'pending info notices stay pending');
-  assert.equal(byRound(3).length, 1, 'the pending info notices go out after the hour');
-  const lines = byRound(3)[0].text.split('\n').filter((line) => /^- Info notice b/.test(line));
+  assert.equal(byRound(3).length, 0, 'info notices still wait after 61 minutes');
+  assert.equal(byRound(4).length, 0, 'info notices still wait after 119 minutes');
+  assert.equal(byRound(5).length, 1, 'the pending info notices go out after 2 hours');
+  const lines = byRound(5)[0].text.split('\n').filter((line) => /^- Info notice b/.test(line));
   assert.equal(lines.length, 8, 'the prompt holds at most 8 info lines');
-  assert.match(byRound(3)[0].text, /and 3 more/);
-  assert.equal(byRound(4).length, 0, 'a new info notice waits for the next hour');
+  assert.match(byRound(5)[0].text, /and 3 more/);
+  assert.equal(byRound(6).length, 0, 'a new info notice waits for the next 2 hours');
+});
+
+test('info notices of every kind share one digest per pane and a working pane gets none', (t) => {
+  assert.equal(engineModule.INFO_PROMPT_INTERVAL_MS, 2 * 60 * 60 * 1000);
+  const kinds = [
+    info('kit', { key: 'kit:abc1234', once: true, scope: 'all' }),
+    info('nudge', { key: 'nudge:w1:p1' }),
+    info('report', { key: 'report:alpha', immediate: true }),
+    info('idle', { key: 'idle:w1:p2', once: true }),
+    info('plain'),
+  ];
+  const prompts = deliverRounds(t, [
+    { at: NOW, panes: [orch('working')], alerts: kinds },
+    { at: NOW + 3 * 60 * MIN, panes: [orch('working')], alerts: kinds },
+    { at: NOW + 3 * 60 * MIN + MIN, panes: [orch('idle')], alerts: kinds },
+    { at: NOW + 3 * 60 * MIN + 2 * MIN, panes: [orch('idle')], alerts: [...kinds, info('later', { key: 'kit:def5678', once: true, scope: 'all' })] },
+  ]);
+  assert.equal(prompts.some((p) => p.round <= 1), false, 'a working pane gets no info notice, however long it waits');
+  const digest = prompts.filter((p) => p.round === 2);
+  assert.equal(digest.length, 1, 'the first idle tick sends one digest');
+  for (const name of ['kit', 'nudge', 'report', 'idle', 'plain']) assert.match(digest[0].text, new RegExp(`Info notice ${name}\\.`), `the digest holds the ${name} notice`);
+  assert.equal(prompts.filter((p) => p.round === 3).length, 0, 'a later info notice waits for the next digest');
 });
 
 test('a held group suppresses the idle-orchestrator nudge', () => {
