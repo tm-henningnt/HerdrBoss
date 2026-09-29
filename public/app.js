@@ -72,6 +72,8 @@ let policyDirty = false;
 let saveMessage = '';
 let machineGuardBusy = false;
 let machineGuardMessage = '';
+let nightBusy = false;
+let nightMessage = '';
 let hashScrolled = false;
 
 function markPolicyDirty() {
@@ -129,6 +131,45 @@ function machineGuardMode(machine = {}, now = Date.now()) {
 
 function machineGuardUntilText(untilAt) {
   return untilAt ? ` until ${new Date(untilAt).toLocaleString()}` : '';
+}
+
+// The local end time of a night, as HH:MM.
+function nightTime(iso) {
+  if (!iso || !Number.isFinite(Date.parse(iso))) return '--:--';
+  return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+}
+
+// The night watch banner. It sits under the top bar on every page while a night runs. The page shows nothing when no
+// night runs. The text names the end time, the Owner line, and quiet hours. The Stop button asks first.
+function nightBanner(s) {
+  const night = s?.night;
+  if (night?.active !== true) return '';
+  const text = `Night watch until ${esc(nightTime(night.until))} · the Boss acts for the Owner${night.quietHours === true ? ' · Quiet hours on' : ''}`;
+  return `<div class="night-banner" role="status"><span class="night-banner-text">${text}</span><button type="button" data-night-stop="true"${nightBusy ? ' disabled' : ''}>Stop</button></div>`;
+}
+
+// Start or stop night watch from the banner or from Settings. A stop asks the Owner first. Both routes return the new
+// night state, and a tick already refreshed the page state, so the page re-reads it after a change.
+async function updateNight(action) {
+  if (nightBusy) return;
+  if (action === 'stop' && !confirm('Stop night watch?\n\nThe Owner rules apply again at once. The Boss sends the end notice to every pane that got the start notice.')) return;
+  const until = action === 'start' ? (document.querySelector('[data-night-until]')?.value ?? '') : undefined;
+  const quietHours = action === 'start' ? document.querySelector('[data-night-quiet-hours]')?.checked === true : undefined;
+  nightBusy = true;
+  nightMessage = action === 'start' ? 'Starting night watch…' : 'Stopping night watch…';
+  lastRender = '';
+  render(true);
+  try {
+    const result = await postJson(`/api/night/${action}`, action === 'start' ? { until, quietHours } : {});
+    if (result.night) state.night = result.night;
+    nightMessage = action === 'start' ? `Night watch runs until ${nightTime(result.night?.until)}.` : 'Night watch stopped.';
+  } catch (error) { nightMessage = error.message; }
+  finally {
+    nightBusy = false;
+    await refreshState();
+    lastRender = '';
+    render(true);
+  }
 }
 
 async function updateOverviewMachineGuard(action, hours = 1, enabled = null) {
@@ -540,7 +581,9 @@ function settingsView(s) {
     ? harnessFindings.map((finding) => `<tr><td><span class="harness-readiness-status harness-readiness-${esc(finding.status)}">${esc(finding.status)}</span></td><td>${esc(finding.area)}</td><td>${esc(finding.item)}</td></tr>`).join('')
     : '<tr><td colspan="3" class="harness-readiness-empty">No readiness data yet.</td></tr>';
   const harnessPanel = `<section class="panel harness-readiness-panel"><h2>Harness readiness</h2><div class="service-settings-scroll"><table class="service-settings-table harness-readiness-table"><thead><tr><th scope="col">Status</th><th scope="col">Area</th><th scope="col">Item</th></tr></thead><tbody>${harnessRows}</tbody></table></div><p class="service-settings-note">Run herdr-boss harness sync to see the changes to make.</p></section>`;
-  const settingsPanels = `${quotaPanel}${machineSettings}${avatarSettings(s)}${serviceSettings}${harnessPanel}`;
+  const night = s.night || { active: false };
+  const nightPanel = `<section class="panel night-panel"><h2>Night watch</h2><p class="setting-help">Night watch says that the Owner is away. The Boss acts for the Owner until the end time. The end time is local <code>HH:MM</code> or an ISO time, and it must be in the next 24 hours.</p><p class="setting-help" role="status" aria-live="polite" data-night-status>${esc(night.active ? `Night watch runs until ${nightTime(night.until)}${night.quietHours ? ' · Quiet hours on' : ''}.` : 'No night watch runs.')}${nightMessage ? ` ${esc(nightMessage)}` : ''}</p>${night.active ? `<div class="action-row"><button type="button" data-night-stop="true"${nightBusy ? ' disabled' : ''}>Stop night watch</button></div>` : `<div class="action-row"><label class="setting-line"><span>Start until</span><input type="text" data-night-until value="07:30" size="5" aria-label="Night watch end time"${nightBusy ? ' disabled' : ''}></label><label class="setting-line"><span>Quiet hours</span><input type="checkbox" data-night-quiet-hours aria-label="Quiet hours during night watch"${nightBusy ? ' disabled' : ''}></label><button type="button" data-night-start="true"${nightBusy ? ' disabled' : ''}>Start night watch</button></div>`}</section>`;
+  const settingsPanels = `${quotaPanel}${machineSettings}${nightPanel}${avatarSettings(s)}${serviceSettings}${harnessPanel}`;
   return `<header class="page-intro"><div><h1>Settings</h1><p>Assign models and provider routes in each harness. Set provider quotas and machine limits below.</p></div></header><section id="settings-plane" class="control-shell"><section class="panel"><h2>Harnesses</h2><p class="setting-help harness-help">Clear a model box to stop that harness from using it. The same model in another harness keeps its own box and provider.</p>${ignoredCount ? `<p class="setting-help harness-help" role="note" style="color: var(--warn)">${ignoredCount} legacy provider route${ignoredCount === 1 ? ' is' : 's are'} not compatible with ${ignoredCount === 1 ? 'its harness' : 'their harnesses'}. Herdr Boss treats ${ignoredCount === 1 ? 'it' : 'them'} as Unmetered. Choose a provider in each marked row before you apply the policy.</p>` : ''}<div class="harness-grid">${harnesses}</div></section><div class="settings-grid">${settingsPanels}</div><div class="control-actions ${policyDirty ? 'pending' : ''}"><span data-policy-status role="status" aria-live="polite">${esc(saveMessage || (policyDirty ? 'Unsaved changes · Apply policy to keep them' : 'Policy saved'))}</span><button id="save-policy" ${policyDirty ? '' : 'disabled'}>Apply policy</button></div></section>`;
 }
 
@@ -1227,9 +1270,15 @@ function openLeaseRelease(pool, item, project, holder) {
   if (!dialog.open) dialog.showModal();
 }
 
-async function refreshLeaseState() {
+// Re-read the whole state from the service, for example after a change that the engine applied on a tick.
+async function refreshState() {
   const response = await fetch('/api/state');
   if (response.ok) state = await response.json();
+}
+
+// The lease release re-reads the whole state after the change.
+async function refreshLeaseState() {
+  return refreshState();
 }
 
 async function confirmLeaseRelease() {
@@ -3423,6 +3472,7 @@ const HELP = {
     <h3>Needs attention</h3><p>Warnings and critical alerts: quotas, memory, machine load, and orphaned worktree processes. <b>Details</b> opens the rule text in Logs.</p>
     <h3>Handovers</h3><p>Orchestrators whose quota comes near its reserve, and successors that wait for review. Open the project to plan, inspect, or activate a handover.</p>
     <h3>Projects</h3><p>The bar above the cards shows the applied share of each project, in card order. Its colors match the top edge of each card. A label such as <b>30% · 2</b> shows the share and the effective slots; the tooltip shows all values. Change the shares on the Allocation page.</p><p>A card per project with its published status and task mix. The table shows the orchestrator, workers in use against the share, and the policy mode. Select a project for its details.</p>
+    <h3>Night watch banner</h3><p>While night watch runs, every page shows a slim banner under the top bar. It names the end time, says that the Boss acts for the Owner, and shows <b>Quiet hours on</b> when quiet hours are set. Select <b>Stop</b> to end the night. The page asks you to confirm first. Without a night, the page shows no banner. The Settings page has a <b>Night watch</b> section that starts a night with an end time and a quiet hours check. A read-only preview shows the banner and refuses a change.</p>
     <h3>Subscriptions and machine health</h3><p>Select a bar to open all quota windows, or the processes and load history. After a restart, "Quotas from HH:MM" shows saved quotas until the first new quota read succeeds. When the probe for one provider fails, "Claude quota from HH:MM (probe failed)" shows its last good quota for up to 60 minutes. The Machine guard switch turns CPU and load warnings and worker-start blocks on or off. Choose a pause length to suspend those rules for a time; select <b>Resume guard</b> to end a pause early. Memory and disk warnings stay on. Disk space reports the filesystem that contains the Herdr Boss data directory.</p>`],
   projects: ['Projects', `
     <p>Select a project card. The detail below it shows what the orchestrator published and what runs now.</p>
@@ -3487,6 +3537,7 @@ const HELP = {
   settings: ['Settings', `
     <p>Each harness section holds the models and provider routes of that harness. Provider quotas and machine limits are below the harnesses.</p>
     <h3>Avatars</h3><p>The <b>Avatars</b> section has one row for the Boss and one row for each project. A row shows the avatar of that chat. Select <b>Upload image</b> to use your own image. Select <b>Reset</b> to use the generated avatar again. An image is a PNG, JPEG, or WebP file of at most 512 KB. Herdr Boss keeps no other format. The image shows at once in the Chat, the Mailbox, and the Agents chart. Without an image, the page uses a generated avatar. Its color comes from the name of the project, and it stays the same. The two letters come from the project display name, the same on every page. The Boss has a crown. Each other project has two letters. The letters use the color of the best contrast on the circle.</p>
+    <h3>Night watch</h3><p>The <b>Night watch</b> section shows the stored night watch state. Enter an end time as local <code>HH:MM</code>, such as <code>07:30</code>, or as an ISO time. Select <b>Quiet hours</b> to hold back the held actions during the night. Select <b>Start night watch</b> to start a night. The time must be in the future and no more than 24 hours ahead. Select <b>Stop night watch</b> to end the night. The page asks you to confirm first. The banner under the top bar shows the same state on every page. The read-only preview refuses both actions.</p>
     <h3>Service settings</h3><p>The table shows the values that the service uses. Each row shows whether the value comes from <code>config.json</code> or a default. Rows with inputs can be changed in the dashboard. Change the values in a group, then select <b>Save</b>. Herdr Boss applies saved values at once. Keep the quota warning below the critical value. Rows without inputs are read-only. Change in <code>config.json</code> and restart.</p>
     <h3>Harness readiness</h3><p>This read-only table shows the status of each harness entry that orchestration needs. A row shows the status, the area, and the item. The status is <code>ok</code>, <code>missing</code>, or <code>bad</code>. The table shows no file path and no setting value. Herdr Boss reads these entries at each service start and then every 10 minutes. Run <code>herdr-boss harness sync</code> to see the changes to make.</p>
     <h3>Harnesses</h3><p>Clear <b>Available</b> to stop all workers from using a harness. The preferred model is the model that worker start and handover use when no model is given. An empty choice uses the harness default.</p>
@@ -3598,7 +3649,8 @@ function render(force = false) {
   if (location.pathname === '/organization') history.replaceState(null, '', '/agents?view=chart');
   const m = /^\/projects\/([^/]+)\/?$/.exec(location.pathname);
   const route = m || location.pathname === '/projects' ? 'projects' : ['mailbox', 'chat', 'allocation', 'settings', 'agents', 'browsers', 'analytics', 'logs'].includes(location.pathname.slice(1)) ? location.pathname.slice(1) : 'overview';
-  const html = route === 'projects' ? projectsView(state, m ? decodeURIComponent(m[1]) : null) : route === 'mailbox' ? mailboxView(state) : route === 'chat' ? chatView(state) : route === 'allocation' ? allocationView(state) : route === 'settings' ? settingsView(state) : route === 'agents' ? agentsView(state) : route === 'browsers' ? browsersView(state) : route === 'analytics' ? analyticsView(state) : route === 'logs' ? logsView(state) : overview(state);
+  const page = route === 'projects' ? projectsView(state, m ? decodeURIComponent(m[1]) : null) : route === 'mailbox' ? mailboxView(state) : route === 'chat' ? chatView(state) : route === 'allocation' ? allocationView(state) : route === 'settings' ? settingsView(state) : route === 'agents' ? agentsView(state) : route === 'browsers' ? browsersView(state) : route === 'analytics' ? analyticsView(state) : route === 'logs' ? logsView(state) : overview(state);
+  const html = nightBanner(state) + page;
   $navMenuLabel.textContent = NAV_LABEL[route] || 'Menu';
   for (const a of $nav.querySelectorAll('a')) {
     if (a.dataset.nav === route) a.setAttribute('aria-current', 'page');
@@ -4289,6 +4341,11 @@ document.addEventListener('click', (e) => {
 });
 
 document.addEventListener('click', async (e) => {
+  const nightButton = e.target.closest?.('[data-night-stop], [data-night-start]');
+  if (nightButton) {
+    await updateNight(nightButton.dataset.nightStop ? 'stop' : 'start');
+    return;
+  }
   const avatarReset = e.target.closest?.('[data-avatar-reset]');
   if (avatarReset) {
     await resetAvatar(avatarReset.dataset.avatarReset, avatarReset);

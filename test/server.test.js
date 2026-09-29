@@ -184,6 +184,49 @@ test('engine lock snapshots include live full-suite queue tickets', { timeout: 2
   assert.ok(state.locks[0].queue[0].waitSeconds >= 41 * 60);
 });
 
+test('the state API sends the night watch state with the fields of the read view', { timeout: 20000 }, async (t) => {
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.mkdirSync(homeDir, { recursive: true });
+  const since = new Date(Date.now() - 3600000).toISOString();
+  const until = new Date(Date.now() + 3600000).toISOString();
+  fs.writeFileSync(path.join(dataDir, 'night.json'), JSON.stringify({ active: true, since, until, by: 'boss', quietHours: true, noticeStartAt: {} }));
+  t.after(async () => { fs.rmSync(path.join(dataDir, 'night.json'), { force: true }); });
+  const collectors = {
+    collectHerdr: async () => ({ panes: [], workspaces: [] }),
+    collectMachine: async () => null,
+    collectProcesses: async () => new Map(),
+    collectQuotas: async () => [],
+    collectWorktreeCounts: async () => ({}),
+    collectCwdProcesses: async () => [],
+    collectMissingWorktreeProcesses: async () => [],
+    collectPiModels: async () => ({ models: [] }),
+  };
+  const cfg = loadConfig();
+  cfg.host = '127.0.0.1';
+  cfg.port = 0;
+  cfg.tickSeconds = 3600;
+  const app = serve(cfg, {
+    readOnlyPreview: true,
+    createEngine: (config, options) => new Engine(config, { ...options, collectors }),
+  });
+  t.after(async () => { await app.close(); });
+  await new Promise((resolve, reject) => {
+    app.server.once('listening', resolve);
+    app.server.once('error', reject);
+  });
+  if (!app.engine.state) await new Promise((resolve) => app.engine.once('state', resolve));
+  const response = await fetch(`http://127.0.0.1:${app.server.address().port}/api/state`);
+  assert.equal(response.status, 200);
+  const state = await response.json();
+  assert.deepEqual(Object.keys(state.night).sort(), ['active', 'by', 'quietHours', 'since', 'until']);
+  assert.equal(state.night.active, true);
+  assert.equal(state.night.since, since);
+  assert.equal(state.night.until, until);
+  assert.equal(state.night.by, 'boss');
+  assert.equal(state.night.quietHours, true);
+  await app.close();
+});
+
 test('read-only preview allows reads and rejects all API methods that can change state', { timeout: 20000 }, async (t) => {
   const cfg = loadConfig();
   cfg.host = '127.0.0.1';
@@ -249,6 +292,8 @@ test('read-only preview allows reads and rejects all API methods that can change
     ['POST', '/api/messages'],
     ['POST', '/api/messages/read'],
     ['POST', '/api/messages/dismiss'],
+    ['POST', '/api/night/start'],
+    ['POST', '/api/night/stop'],
     ['POST', '/api/chats/alpha/read'],
     ['POST', '/api/leases/release'],
     ['POST', '/api/avatars/boss'],
@@ -412,6 +457,128 @@ test('PUT /api/settings persists allowed values and updates the running engine c
     assert.equal(invalid.status, 400, `lane night cap ${value} must be rejected`);
   }
   assert.equal(fs.readFileSync(configFile, 'utf8'), before, 'invalid night caps must not change config.json');
+});
+
+test('POST /api/night/start and /api/night/stop write and clear the night state, and the time checks refuse', { timeout: 20000 }, async (t) => {
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.mkdirSync(homeDir, { recursive: true });
+  const nightFile = path.join(dataDir, 'night.json');
+  t.after(() => {
+    fs.rmSync(nightFile, { force: true });
+    fs.rmSync(dataDir, { recursive: true, force: true });
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  });
+  const cfg = loadConfig();
+  cfg.host = '127.0.0.1';
+  cfg.port = 0;
+  cfg.tickSeconds = 3600;
+  const { server, close } = serve(cfg, {
+    createEngine: (config) => {
+      const engine = new EventEmitter();
+      engine.cfg = config;
+      engine.state = {};
+      engine.memory = {};
+      engine.tick = async () => engine.state;
+      engine.log = () => {};
+      return engine;
+    },
+  });
+  t.after(async () => { await close(); });
+  await new Promise((resolve, reject) => {
+    server.once('listening', resolve);
+    server.once('error', reject);
+  });
+  const base = `http://127.0.0.1:${server.address().port}`;
+
+  const read = await fetch(`${base}/api/night`);
+  assert.equal(read.status, 200);
+  assert.deepEqual(await read.json(), { active: false }, 'the read view of no night is inactive');
+
+  const started = await fetch(`${base}/api/night/start`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ until: '07:30', quietHours: true }),
+  });
+  assert.equal(started.status, 200);
+  assert.equal((await started.json()).ok, true);
+  const record = JSON.parse(fs.readFileSync(nightFile, 'utf8'));
+  assert.equal(record.active, true);
+  assert.equal(record.quietHours, true);
+  assert.equal(record.by, 'dashboard');
+  // HH:MM means the next such local time, so the stored end time is in the future.
+  assert.ok(Date.parse(record.until) > Date.now());
+  assert.equal(new Date(record.until).getHours(), 7);
+  assert.equal(new Date(record.until).getMinutes(), 30);
+  assert.equal(fs.statSync(nightFile).mode & 0o7777, 0o600, 'the night file keeps its own-only mode');
+
+  // The default end time is the next 07:30.
+  const withDefault = await fetch(`${base}/api/night/start`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+  assert.equal(withDefault.status, 200);
+  const storedUntil = JSON.parse(fs.readFileSync(nightFile, 'utf8')).until;
+
+  for (const [until, reason] of [
+    [new Date(Date.now() - 3600000).toISOString(), 'a past end time'],
+    [new Date(Date.now() + 48 * 3600000).toISOString(), 'an end time more than 24 hours ahead'],
+    ['noonish', 'a value that is not a time'],
+  ]) {
+    const refused = await fetch(`${base}/api/night/start`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ until }),
+    });
+    assert.equal(refused.status, 400, `${reason} must be refused`);
+    assert.equal(JSON.parse(fs.readFileSync(nightFile, 'utf8')).until, storedUntil, 'a refused start keeps the stored end time');
+  }
+
+  const stopped = await fetch(`${base}/api/night/stop`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: '{}',
+  });
+  assert.equal(stopped.status, 200);
+  const stopBody = await stopped.json();
+  assert.equal(stopBody.ok, true);
+  assert.equal(fs.existsSync(nightFile), false, 'a stop clears the night file');
+
+  // A stop without a night answers the same way.
+  const again = await fetch(`${base}/api/night/stop`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+  assert.equal(again.status, 200);
+  await close();
+});
+
+test('the dashboard shows a night watch banner with a confirmed Stop, and Settings has a Night watch row', () => {
+  const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
+  const guide = fs.readFileSync(new URL('../docs/user-guide.md', import.meta.url), 'utf8');
+  // The banner sits under the top bar on every page, and it holds the end time, the Owner line, and quiet hours.
+  assert.match(app, /function nightBanner\(s\)/);
+  assert.match(app, /nightBanner\(state\)/);
+  assert.match(app, /Night watch until \$\{/);
+  assert.match(app, /the Boss acts for the Owner/);
+  assert.match(app, /Quiet hours on/);
+  assert.match(app, /data-night-stop="true"/);
+  assert.match(app, /postJson\(`\/api\/night\/\$\{action\}`/);
+  // The Stop button asks for a confirmation before it calls the route.
+  assert.match(app, /Stop night watch\?/);
+  // Settings starts a night with an end time and a quiet hours check.
+  assert.match(app, /data-night-start="true"/);
+  assert.match(app, /data-night-until/);
+  assert.match(app, /data-night-quiet-hours/);
+  assert.match(app, /<h2>Night watch<\/h2>/);
+  // The banner uses a calm color, and its button keeps a 44 px touch target on a phone.
+  assert.match(css, /\.night-banner\b/);
+  assert.match(css, /@media \(max-width: \d+px\)[\s\S]*?\.night-banner/);
+  assert.match(css, /min-height: 44px/);
+  // The page help and the guide describe the banner and the row.
+  const settingsHelp = /settings: \['Settings', `([\s\S]*?)`\],\s+agents:/.exec(app)?.[1] || '';
+  assert.match(settingsHelp, /<h3>Night watch<\/h3>/);
+  assert.match(guide, /### Night watch in the dashboard/);
+  assert.match(guide, /POST \/api\/night\/start/);
+  assert.match(guide, /POST \/api\/night\/stop/);
 });
 
 test('Settings renders editable nullable night global and provider lane caps', () => {

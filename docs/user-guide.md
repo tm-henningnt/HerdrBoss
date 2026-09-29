@@ -210,7 +210,23 @@ A failed send stores no mark. The next tick sends the notice again. A pane that 
 
 A stop clears the file. The engine then keeps the last active record in its own memory and sends the end notice from it.
 
-The timed reports and the dashboard banner come in later tasks. See `docs/ideas/night-watch.md`.
+### Night watch in the dashboard
+
+While a night runs, every page shows a slim banner under the top bar. The banner names the local end time, says that the Boss acts for the Owner, and shows `Quiet hours on` when `quietHours` is true. The banner uses a calm color. On a phone it uses at most two lines, and its **Stop** button is at least 44 px high. Without a night, the page shows no banner.
+
+The **Settings** page has a **Night watch** section. It shows the stored state. When no night runs, the section has an end-time field, a **Quiet hours** check, and **Start night watch**. While a night runs, the section has **Stop night watch**.
+
+The dashboard uses these routes. They use the same functions as `herdr-boss night start` and `herdr-boss night stop`, and they keep the same time checks.
+
+| Route | Body | Answer |
+|---|---|---|
+| `POST /api/night/start` | `{ "until": "07:30", "quietHours": false }` | `200` with the new night state. |
+| `POST /api/night/stop` | `{}` | `200` with the new night state. |
+| `GET /api/night` | none | `200` with the night state. |
+
+`until` is `HH:MM` local time or an ISO time. An `HH:MM` value means the next such time. The end time must be in the future and no more than 24 hours ahead. A refused time answers `400` and keeps the stored state. A blank value uses the next 07:30. The routes need the same access as the other dashboard write routes. The read-only preview refuses them. The start route records `by` as `dashboard`.
+
+The end notice and the timed reports come in later tasks. See `docs/ideas/night-watch.md`.
 
 ## Quota lanes
 
