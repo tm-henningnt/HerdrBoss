@@ -911,7 +911,7 @@ test('dashboard offers Prepare after an unavailable migration plan', () => {
 });
 
 // A fake Herdr CLI for activation. It prints the installed CLI's JSON envelope with raw pane fields. On an error it writes the envelope to stderr and exits 1, like the installed CLI.
-function activationFixture(t, { boss = false, failPrompts = [], paneListFails = false, record = {}, priorRecords = [], extraPanes = [], paneErrors = {}, failRenames = [] } = {}) {
+function activationFixture(t, { boss = false, failPrompts = [], paneListFails = false, record = {}, priorRecords = [], extraPanes = [], paneErrors = {}, failRenames = [], agentNames = null, failAgentRenames = [] } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-boss-activate-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const bin = path.join(root, '.local', 'bin');
@@ -919,6 +919,7 @@ function activationFixture(t, { boss = false, failPrompts = [], paneListFails = 
   fs.mkdirSync(bin, { recursive: true });
   const callsFile = path.join(root, 'herdr-calls.jsonl');
   const ws = boss ? 'wb' : 'ws';
+  const agents = agentNames ?? [{ pane_id: `${ws}:p1`, name: 'source-agent' }];
   const panes = [
     { pane_id: `${ws}:p1`, workspace_id: ws, label: boss ? 'boss' : 'orch', agent: 'claude', agent_status: 'working' },
     { pane_id: `${ws}:p2`, workspace_id: ws, label: null, agent: 'codex', agent_status: 'idle' },
@@ -945,12 +946,17 @@ if (args[0] === 'pane' && args[1] === 'rename' && JSON.parse(process.env.TEST_FA
   console.error(JSON.stringify({ id: 'cli:pane:rename', error: { code: 'rename_failed', message: 'Pane error rename_failed.' } }));
   process.exit(1);
 }
+if (args[0] === 'agent' && args[1] === 'rename' && JSON.parse(process.env.TEST_FAIL_AGENT_RENAMES).includes(args[2])) {
+  console.error(JSON.stringify({ id: 'cli:agent:rename', error: { code: 'rename_failed', message: 'Agent error rename_failed.' } }));
+  process.exit(1);
+}
 let result = {};
 if (args[0] === 'pane' && args[1] === 'get') result = { pane: panes.find((pane) => pane.pane_id === args[2]) || null };
 if (args[0] === 'pane' && args[1] === 'list') {
   if (process.env.TEST_PANE_LIST_FAIL === '1') process.exit(1);
   result = { panes };
 }
+if (args[0] === 'agent' && args[1] === 'list') result = { agents: JSON.parse(process.env.TEST_AGENTS) };
 if (args[0] === 'agent' && args[1] === 'prompt' && JSON.parse(process.env.TEST_FAIL_PROMPTS).includes(args[2])) {
   console.error(JSON.stringify({ id: 'cli:agent:prompt', error: { code: 'pane_not_found', message: 'Pane not found.' } }));
   process.exit(1);
@@ -974,13 +980,19 @@ exec node "$(dirname "$0")/herdr.cjs" "$@"
     ...process.env, HOME: root, HERDR_BOSS_DIR: root, PATH: `${bin}${path.delimiter}${process.env.PATH || ''}`,
     TEST_CALLS: callsFile, TEST_PANES: JSON.stringify(panes), TEST_FAIL_PROMPTS: JSON.stringify(failPrompts),
     TEST_PANE_LIST_FAIL: paneListFails ? '1' : '0', TEST_PANE_ERRORS: JSON.stringify(paneErrors), TEST_FAIL_RENAMES: JSON.stringify(failRenames),
+    TEST_AGENTS: JSON.stringify(agents), TEST_FAIL_AGENT_RENAMES: JSON.stringify(failAgentRenames),
   };
   const handoffUrl = new URL('../src/handoff.js', import.meta.url).href;
   const activate = () => JSON.parse(runHandoffModule(root, `import { activateHandoff } from ${JSON.stringify(handoffUrl)};
 console.log(JSON.stringify(activateHandoff('handoff-activate', { confirmed: true })));`, env));
+  const activateWithWarnings = () => JSON.parse(runHandoffModule(root, `import { activateHandoff } from ${JSON.stringify(handoffUrl)};
+const warnings = [];
+console.warn = (...args) => warnings.push(args.join(' '));
+const item = activateHandoff('handoff-activate', { confirmed: true });
+console.log(JSON.stringify({ item, warnings }));`, env));
   const calls = () => fs.readFileSync(callsFile, 'utf8').trim().split('\n').map(JSON.parse);
   const prompts = () => Object.fromEntries(calls().filter((args) => args[0] === 'agent' && args[1] === 'prompt').map((args) => [args[2], args[3]]));
-  return { root, ws, activate, calls, prompts };
+  return { root, ws, activate, activateWithWarnings, calls, prompts };
 }
 
 test('project activation labels the successor orch and the previous pane orch previous', (t) => {
@@ -1001,6 +1013,34 @@ test('project activation labels the successor orch and the previous pane orch pr
   const stored = JSON.parse(fs.readFileSync(path.join(f.root, 'handoffs.json'), 'utf8'))[0];
   assert.deepEqual(stored.activation, item.activation);
   assert.equal(stored.ownerGoal, 'Ship the release safely.');
+});
+
+test('project activation clears the stable orchestrator name before it names the successor', (t) => {
+  const f = activationFixture(t, { agentNames: [{ pane_id: 'ws:p1', name: 'alpha-orch' }] });
+  f.activate();
+  const renames = f.calls().filter((args) => args[0] === 'agent' && args[1] === 'rename');
+  assert.deepEqual(renames, [
+    ['agent', 'rename', 'ws:p1', '--clear'],
+    ['agent', 'rename', 'ws:p2', 'alpha-orch'],
+  ]);
+});
+
+test('Boss activation names its successor boss and clears that name from the source first', (t) => {
+  const f = activationFixture(t, { boss: true, agentNames: [{ pane_id: 'wb:p1', name: 'boss' }] });
+  f.activate();
+  const renames = f.calls().filter((args) => args[0] === 'agent' && args[1] === 'rename');
+  assert.deepEqual(renames, [
+    ['agent', 'rename', 'wb:p1', '--clear'],
+    ['agent', 'rename', 'wb:p2', 'boss'],
+  ]);
+});
+
+test('a failed stable agent rename warns with the manual command and keeps activation active', (t) => {
+  const f = activationFixture(t, { failAgentRenames: ['ws:p2'] });
+  const { item, warnings } = f.activateWithWarnings();
+  assert.equal(item.status, 'active');
+  assert.match(warnings.join('\n'), /Warning:.*herdr agent rename ws:p2 alpha-orch/);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.root, 'handoffs.json'), 'utf8'))[0].status, 'active');
 });
 
 test('activation supersedes the earlier handoff from the successor source pane in the same save', (t) => {
@@ -1150,6 +1190,8 @@ test('dashboard and CLI docs describe the activation labels without standby', ()
   const row = cli.split('\n').find((line) => line.startsWith('| `handoff activate'));
   assert.match(row, /`orch previous`/);
   assert.match(row, /`boss previous`/);
+  assert.match(row, /name its agent `<slug>-orch`/);
+  assert.match(row, /failed agent rename keeps activation active/);
   assert.doesNotMatch(row, /standby/);
 });
 

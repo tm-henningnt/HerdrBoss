@@ -66,6 +66,14 @@ function knownFlags(flags, allowed) {
   if (unknown.length) fail(`Unknown option: --${unknown[0]}.`);
 }
 
+function herdrList(result, key) {
+  if (Array.isArray(result?.[key])) return result[key];
+  return Array.isArray(result) ? result : null;
+}
+function herdrAgentName(agent) { return agent?.name ?? agent?.agent_name ?? null; }
+function herdrPaneId(value) { return value?.pane_id ?? value?.paneId ?? value?.id ?? null; }
+function herdrWorkspace(value) { return value?.workspace_id ?? value?.workspaceId ?? value?.workspace ?? null; }
+
 function commandKit(command, argv, { output = console.log, env = process.env, herdr = createHerdrRunner(), config: injectedConfig = null, rulesFile = DEFAULT_RULES_FILE, lockDataDir, now, pause, pidAlive, pushStdio, suiteStdio } = {}) {
   if (command === 'models') {
     const modelConfig = mergeModels(loadModels(), rulesPolicy(rulesFile));
@@ -113,8 +121,46 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
       return { slug: project.slug, kitRevision: loaded, state, agentsCheck: c ?? null };
     });
     const stale = rows.filter((row) => row.state !== 'current').length;
-    output(`check kit: ${stale ? 'FAIL' : 'PASS'} (current revision ${current}; ${rows.length} projects, ${stale} not current)`);
-    return { current, projects: rows, exitCode: stale ? 1 : 0 };
+    let nameErrors = 0;
+    let agents = null;
+    try { agents = herdrList(herdr(['agent', 'list']), 'agents'); } catch {}
+    if (!agents) output('WARNING: Herdr agent list is unavailable; orchestrator agent names were not checked.');
+    else {
+      let panes = null;
+      try { panes = herdrList(herdr(['pane', 'list']), 'panes'); } catch {}
+      if (!panes) output('WARNING: Herdr pane list is unavailable; orchestrator agent names were not checked.');
+      else {
+        const agentsByPane = new Map(agents.map((agent) => [herdrPaneId(agent), agent]));
+        const projectsByWorkspace = new Map();
+        for (const project of listProjects()) {
+          if (typeof project.workspace !== 'string' || !project.workspace) continue;
+          const projects = projectsByWorkspace.get(project.workspace) ?? [];
+          projects.push(project);
+          projectsByWorkspace.set(project.workspace, projects);
+        }
+        for (const pane of panes) {
+          const paneId = herdrPaneId(pane);
+          const agent = agentsByPane.get(paneId);
+          if (!paneId || !agent) continue;
+          const name = herdrAgentName(agent) ?? '(unknown)';
+          if (pane.label === 'orch') {
+            for (const project of projectsByWorkspace.get(herdrWorkspace(pane)) ?? []) {
+              const expected = `${project.slug}-orch`;
+              if (name === expected) continue;
+              output(`${project.slug}: orchestrator agent is named ${name}; rename it with herdr agent rename ${paneId} ${expected}`);
+              nameErrors += 1;
+            }
+          } else if (pane.label === 'boss' && name !== 'boss') {
+            output(`boss: Boss agent is named ${name}; rename it with herdr agent rename ${paneId} boss`);
+            nameErrors += 1;
+          }
+        }
+      }
+    }
+    const failCheck = stale || nameErrors;
+    const nameSummary = nameErrors ? `; ${nameErrors} wrong agent name${nameErrors === 1 ? '' : 's'}` : '';
+    output(`check kit: ${failCheck ? 'FAIL' : 'PASS'} (current revision ${current}; ${rows.length} projects, ${stale} not current${nameSummary})`);
+    return { current, projects: rows, nameErrors, exitCode: failCheck ? 1 : 0 };
   }
 
   if (command === 'check' && argv[0] === 'agents') {

@@ -2258,6 +2258,12 @@ test('worker brief shows the effective screenshot budget and project precedence'
   assert.equal(fs.readFileSync(path.join(result.worktree, '.worker/brief.md'), 'utf8'), 'Budget 6. The project setting overrides the kit default.');
 });
 
+test('worker brief names the orchestrator by pane and stable agent name', () => {
+  const template = fs.readFileSync(path.resolve('kit/templates/worker-brief.md'), 'utf8');
+  const brief = renderBrief(template, { orchPane: 'w1:p9', orchAgent: 'demo-orch' });
+  assert.match(brief, /Your orchestrator is pane `w1:p9` \(agent `demo-orch`\)\./);
+});
+
 test('default worker brief renders the effective screenshot budget', () => {
   const template = fs.readFileSync(path.resolve('kit/templates/worker-brief.md'), 'utf8');
   const brief = renderBrief(template, { imageBudget: 3 });
@@ -2755,6 +2761,15 @@ test('check kit lists each published project with its kit revision and check cou
   const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-check-kit-')));
   const dataDir = path.join(home, 'boss');
   fs.mkdirSync(path.join(dataDir, 'projects'), { recursive: true });
+  const bin = path.join(home, 'bin');
+  fs.mkdirSync(bin, { recursive: true });
+  const herdr = path.join(bin, 'herdr');
+  fs.writeFileSync(herdr, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+const result = args[0] === 'agent' ? JSON.parse(process.env.TEST_AGENT_RESULT) : JSON.parse(process.env.TEST_PANE_RESULT);
+console.log(JSON.stringify({ result }));
+`);
+  fs.chmodSync(herdr, 0o755);
   const { projectKit } = await import('../src/kit/agents-check.js');
   const current = projectKit().revision;
   const write = (slug, data) => fs.writeFileSync(path.join(dataDir, 'projects', `${slug}.json`), JSON.stringify({ project: slug, ...data }));
@@ -2762,7 +2777,11 @@ test('check kit lists each published project with its kit revision and check cou
   write('beta', { kitRevision: 'abcdef012345', agentsCheck: { errors: 1, warnings: 0, file: 'AGENTS.md' } });
   write('gamma', {});
   const cli = fileURLToPath(new URL('../src/cli.js', import.meta.url));
-  const env = { ...process.env, HOME: home, HERDR_BOSS_DIR: dataDir, TMPDIR: home };
+  const env = {
+    ...process.env, HOME: home, HERDR_BOSS_DIR: dataDir, TMPDIR: home,
+    PATH: `${bin}${path.delimiter}${process.env.PATH || ''}`,
+    TEST_AGENT_RESULT: JSON.stringify({ agents: [] }), TEST_PANE_RESULT: JSON.stringify({ panes: [] }),
+  };
   const result = spawnSync(process.execPath, [cli, 'check', 'kit'], { cwd: home, env, encoding: 'utf8' });
   assert.equal(result.status, 1, result.stderr);
   assert.deepEqual(result.stdout.trimEnd().split('\n'), [
@@ -2777,6 +2796,64 @@ test('check kit lists each published project with its kit revision and check cou
   const pass = spawnSync(process.execPath, [cli, 'check', 'kit'], { cwd: home, env, encoding: 'utf8' });
   assert.equal(pass.status, 0, pass.stderr);
   assert.match(pass.stdout, /check kit: PASS \(current revision [0-9a-f]{12}; 2 projects, 0 not current\)/);
+});
+
+test('check kit flags project and Boss agents with unstable names', async () => {
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-check-kit-names-')));
+  const dataDir = path.join(home, 'boss');
+  const projects = path.join(dataDir, 'projects');
+  const bin = path.join(home, 'bin');
+  fs.mkdirSync(projects, { recursive: true });
+  fs.mkdirSync(bin, { recursive: true });
+  const { projectKit } = await import('../src/kit/agents-check.js');
+  fs.writeFileSync(path.join(projects, 'alpha.json'), JSON.stringify({ project: 'Alpha', workspace: 'wa', kitRevision: projectKit().revision }));
+  const herdr = path.join(bin, 'herdr');
+  fs.writeFileSync(herdr, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+const result = args[0] === 'agent' ? JSON.parse(process.env.TEST_AGENT_RESULT) : JSON.parse(process.env.TEST_PANE_RESULT);
+console.log(JSON.stringify({ result }));
+`);
+  fs.chmodSync(herdr, 0o755);
+  const cli = fileURLToPath(new URL('../src/cli.js', import.meta.url));
+  const env = {
+    ...process.env, HOME: home, HERDR_BOSS_DIR: dataDir, TMPDIR: home,
+    PATH: `${bin}${path.delimiter}${process.env.PATH || ''}`,
+    TEST_AGENT_RESULT: JSON.stringify({ agents: [
+      { pane_id: 'wa:p1', name: 'alpha-old' }, { pane_id: 'boss:p1', name: 'boss-old' },
+    ] }),
+    TEST_PANE_RESULT: JSON.stringify({ panes: [
+      { pane_id: 'wa:p1', workspace_id: 'wa', label: 'orch' },
+      { pane_id: 'boss:p1', workspace_id: 'boss-workspace', label: 'boss' },
+    ] }),
+  };
+  const result = spawnSync(process.execPath, [cli, 'check', 'kit'], { cwd: home, env, encoding: 'utf8' });
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stdout, /alpha: orchestrator agent is named alpha-old; rename it with herdr agent rename wa:p1 alpha-orch/);
+  assert.match(result.stdout, /boss: Boss agent is named boss-old; rename it with herdr agent rename boss:p1 boss/);
+});
+
+test('check kit warns rather than failing when the agent list is unavailable', async () => {
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-check-kit-no-agents-')));
+  const dataDir = path.join(home, 'boss');
+  const projects = path.join(dataDir, 'projects');
+  const bin = path.join(home, 'bin');
+  fs.mkdirSync(projects, { recursive: true });
+  fs.mkdirSync(bin, { recursive: true });
+  const { projectKit } = await import('../src/kit/agents-check.js');
+  fs.writeFileSync(path.join(projects, 'alpha.json'), JSON.stringify({ project: 'Alpha', workspace: 'wa', kitRevision: projectKit().revision }));
+  const herdr = path.join(bin, 'herdr');
+  fs.writeFileSync(herdr, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === 'agent' && args[1] === 'list') process.exit(1);
+console.log(JSON.stringify({ result: { panes: [{ pane_id: 'wa:p1', workspace_id: 'wa', label: 'orch' }] } }));
+`);
+  fs.chmodSync(herdr, 0o755);
+  const cli = fileURLToPath(new URL('../src/cli.js', import.meta.url));
+  const env = { ...process.env, HOME: home, HERDR_BOSS_DIR: dataDir, TMPDIR: home, PATH: `${bin}${path.delimiter}${process.env.PATH || ''}` };
+  const result = spawnSync(process.execPath, [cli, 'check', 'kit'], { cwd: home, env, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /WARNING: Herdr agent list is unavailable; orchestrator agent names were not checked\./);
+  assert.match(result.stdout, /check kit: PASS/);
 });
 
 test('publish keeps the kitRevision of the status file', () => {
@@ -3203,6 +3280,7 @@ test('the kit rules name waitingOn, the Mailbox id, and blockedBy', () => {
     'Set `waitingOn: owner` only for the escalation categories.',
     'Always post a Mailbox item that needs an Owner action, and set `mailboxId` to its id.',
     'Use `blockedBy` for waits on other tasks.',
+    'Your orchestrator agent is named `<slug>-orch`. Prompt workers and the Boss by pane ID or by that name.',
   ];
   const text = fs.readFileSync(path.resolve('kit/templates/project-kit.md'), 'utf8');
   for (const rule of rules) assert.ok(text.includes(rule), `kit/templates/project-kit.md: ${rule}`);
