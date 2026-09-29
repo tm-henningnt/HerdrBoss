@@ -30,7 +30,7 @@ function freshDir(t) {
 }
 
 const DAY = 86400000;
-const now = Date.parse('2026-09-28T12:00:00.000Z');
+const now = Date.now();
 
 function owner(thread, text, extra = {}) {
   return { thread, from: 'owner', to: thread === 'boss' ? 'boss' : 'orch', kind: 'message', text, action: null, replyTo: null, status: 'queued', ...extra };
