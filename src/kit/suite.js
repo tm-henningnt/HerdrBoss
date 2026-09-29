@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -28,6 +28,22 @@ function gitText(root, ...args) {
   return execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
 }
 
+const LOCKFILE_NAMES = [
+  'package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lock', 'bun.lockb',
+  'Cargo.lock', 'poetry.lock', 'uv.lock', 'Pipfile.lock', 'Gemfile.lock', 'composer.lock', 'go.sum',
+];
+
+// The tree hash covers a tracked lockfile. This hash also covers an ignored lockfile.
+function lockfileHashes(root) {
+  const locks = {};
+  for (const name of LOCKFILE_NAMES) {
+    try {
+      locks[name] = createHash('sha256').update(fs.readFileSync(path.join(root, name))).digest('hex');
+    } catch {}
+  }
+  return locks;
+}
+
 function cleanTreeKey(root) {
   try {
     if (gitText(root, 'status', '--porcelain')) return null;
@@ -36,7 +52,8 @@ function cleanTreeKey(root) {
     const tree = gitText(root, 'write-tree');
     const headTree = gitText(root, 'rev-parse', 'HEAD^{tree}');
     if (!repo || tree !== headTree || !/^[0-9a-f]{40,64}$/i.test(tree)) return null;
-    return { repo, tree };
+    const locks = lockfileHashes(root);
+    return Object.keys(locks).length ? { repo, tree, locks } : { repo, tree };
   } catch {
     return null;
   }
@@ -45,6 +62,7 @@ function cleanTreeKey(root) {
 function samePassKey(record, key, command) {
   return record?.repo === key.repo
     && record?.tree === key.tree
+    && JSON.stringify(record?.locks ?? {}) === JSON.stringify(key.locks ?? {})
     && record?.node === process.version
     && Array.isArray(record?.command)
     && JSON.stringify(record.command) === JSON.stringify(command);
@@ -135,7 +153,8 @@ export function runSuite(command, {
       exitCode = result.status ?? 1;
     }
     const finalKey = initialKey && cleanTreeKey(repoRoot);
-    if (exitCode === 0 && initialKey && finalKey?.repo === initialKey.repo && finalKey.tree === initialKey.tree) {
+    if (exitCode === 0 && initialKey && finalKey?.repo === initialKey.repo && finalKey.tree === initialKey.tree
+      && JSON.stringify(finalKey.locks ?? {}) === JSON.stringify(initialKey.locks ?? {})) {
       const records = readSuitePasses(dataDir);
       const pass = { ...initialKey, command: commandArray, node: process.version, time: new Date(now()).toISOString() };
       records.push(pass);

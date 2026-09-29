@@ -1046,6 +1046,8 @@ herdr-boss push origin main
 
 `herdr-boss push` takes the lock only when a pre-push hook exists. It releases the lock also when the push fails, and it returns the exit code of `git push`.
 
+A suite pass matches only when the repository, the tree hash, the command, the Node version, and the hash of each lockfile in the repository root are the same. Herdr Boss hashes `package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, `pnpm-lock.yaml`, `bun.lock`, `bun.lockb`, `Cargo.lock`, `poetry.lock`, `uv.lock`, `Pipfile.lock`, `Gemfile.lock`, `composer.lock`, and `go.sum` when they exist. The tree hash covers a tracked lockfile. The lockfile hash also covers an ignored lockfile. A tree with no lockfile has the same key as before.
+
 Before it removes a worktree, `herdr-boss worktree prune --apply` checks for processes whose current working directory is inside that worktree. It reports parent-PID-1 processes in missing or prunable worktree paths. Stop those processes before cleanup. Herdr Boss removes no worktrees if it cannot scan process directories. It also keeps worktrees that are dirty, unmerged, primary, used by a live pane, or uninspectable. Herdr Boss sends a notice about a parent-PID-1 process in a removed worktree only to that repository's `orch` workspace.
 
 ## HTTP API
