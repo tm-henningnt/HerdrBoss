@@ -1093,6 +1093,25 @@ herdr-boss push origin main
 
 A suite pass matches only when the repository, the tree hash, the command, the Node version, and the hash of each lockfile in the repository root are the same. Herdr Boss hashes `package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, `pnpm-lock.yaml`, `bun.lock`, `bun.lockb`, `Cargo.lock`, `poetry.lock`, `uv.lock`, `Pipfile.lock`, `Gemfile.lock`, `composer.lock`, and `go.sum` when they exist. The tree hash covers a tracked lockfile. The lockfile hash also covers an ignored lockfile. A tree with no lockfile has the same key as before.
 
+### Machine samples
+
+The engine writes one machine sample line for each UTC minute into `machine-samples.jsonl` in the data directory. The file uses mode 0600. It is append-only JSONL. The engine writes no line when it cannot read the machine or when actions are off. A tick that comes late leaves a gap. The engine does not fill a gap. A write error never stops or slows a tick.
+
+Each line has these keys:
+
+- `at`: the sample time, cut to the whole minute, as a UTC ISO string.
+- `l1`, `l5`, `l15`: the 1, 5, and 15 minute load.
+- `cpus`: the core count.
+- `cpu`: the summed CPU of all processes, in percent of all cores.
+- `memFree`, `memGB`: the free memory in percent, and the total memory.
+- `swapMB`, `swapTotalMB`: the swap in use and the swap total.
+- `holders`: the kinds (`suite`, `push`, `manual`) of the live `full-suite` lock holders.
+- `waiters`, `waiterKinds`: the number and the kinds of the tickets in the `full-suite` queue.
+
+A key has the value `null` when the collector cannot read it. A line holds no project name, pane id, path, or command.
+
+When the file passes 3 MB, the engine renames it to `machine-samples.1.jsonl` and replaces the older rotated file. Two files hold about 18 days. The dashboard does not show the samples yet.
+
 Before it removes a worktree, `herdr-boss worktree prune --apply` checks for processes whose current working directory is inside that worktree. It reports parent-PID-1 processes in missing or prunable worktree paths. Stop those processes before cleanup. Herdr Boss removes no worktrees if it cannot scan process directories. It also keeps worktrees that are dirty, unmerged, primary, used by a live pane, or uninspectable. Herdr Boss sends a notice about a parent-PID-1 process in a removed worktree only to that repository's `orch` workspace.
 
 ## HTTP API
