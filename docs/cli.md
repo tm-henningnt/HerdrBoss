@@ -203,6 +203,8 @@ herdr-boss worker start fix-74 --kind claude --task-file brief.md --allow src/pa
 
 With `--record`, the command completes every check before it prints the summary. It uses the ledger and run folder in the main checkout, including when you run it from a worker worktree.
 
+When `report.json` has no `modelOutcome` and you do not set `--model-result`, collection records a result from the outcome. It records `failed` when the outcome or gate failed. It records `rework` when `--rework` is greater than 0. Otherwise, it records `first-time`. Collection prints a warning with the result and recommends `--model-result` next time. An explicit `--model-result` takes precedence.
+
 ### Project locks
 
 | Command | Action |

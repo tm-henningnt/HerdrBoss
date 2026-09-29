@@ -20,7 +20,7 @@ import { deliverQueued, mailboxCounts, readMessages, RETENTION_MS, SEND_LIMIT_PE
 import { openMessageStore } from './message-store.js';
 import { readKitNotice, pendingKitAlert, isKitAlert, kitNoticeTargets } from './kit-notice.js';
 import { nightNoticeSent, quietHoursActive, readNight, readNightRecord, withNightReportMark, withNoticeMark, writeNight } from './night.js';
-import { inspectWorkerTransitions, inspectWorkerReports, applyWorkerFailureStatuses, resolveFreeUsageRun, activeFreeModelExhaustions, extendFreeModelExhaustion, activeFreeLaneExhaustions, extendFreeLaneExhaustion, freeUsageLaneRetry } from './worker-failures.js';
+import { inspectWorkerTransitions, inspectWorkerReports, isWorkerPane, applyWorkerFailureStatuses, resolveFreeUsageRun, activeFreeModelExhaustions, extendFreeModelExhaustion, activeFreeLaneExhaustions, extendFreeLaneExhaustion, freeUsageLaneRetry } from './worker-failures.js';
 import { FULL_SUITE_LOCK, readLockQueue, readLockTakeoverNotices, readMachineLocks, removeLockTakeoverNotice } from './kit/locks.js';
 
 const MEMORY_FILE = path.join(DATA_DIR, 'memory.json');
@@ -66,6 +66,7 @@ export function buildModelScorecard(events = [], now = Date.now()) {
 const WORKTREE_SCAN_INTERVAL_MS = 5 * 60 * 1000;
 const CLONE_SWEEP_INTERVAL_MS = 10 * 60 * 1000;
 const PI_MODELS_INTERVAL_MS = 15 * 60 * 1000;
+const WORKER_NO_REPORT_MS = 10 * 60 * 1000;
 // The engine reads the harness settings files at each service start and then at most this often.
 export const HARNESS_CHECK_INTERVAL_MS = 10 * 60 * 1000;
 // The stale status rule reads the HEAD of each project repository at most this often.
@@ -130,6 +131,65 @@ function runningWorkerCountsByLane(herdr, policy, models) {
     add(providerFor(kind, model, policy));
   }
   return counts;
+}
+
+function readActiveWorkerRuns() {
+  const runs = [];
+  for (const { repo } of readProjectRepos(DATA_DIR)) {
+    let config;
+    try { config = loadProjectConfig({ cwd: repo }); }
+    catch { continue; }
+    const relative = path.relative(config.mainRoot, config.runsPath);
+    if (relative.startsWith('..') || path.isAbsolute(relative)) continue;
+    let files;
+    try {
+      const stat = fs.lstatSync(config.runsPath);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) continue;
+      files = fs.readdirSync(config.runsPath);
+    } catch { continue; }
+    for (const name of files) {
+      if (!name.endsWith('.json')) continue;
+      try {
+        const file = path.join(config.runsPath, name);
+        const stat = fs.lstatSync(file);
+        if (!stat.isFile() || stat.isSymbolicLink()) continue;
+        const run = JSON.parse(fs.readFileSync(file, 'utf8'));
+        if (!run.finishedAt && run.name && run.pane && path.isAbsolute(run.worktree)) runs.push(run);
+      } catch {}
+    }
+  }
+  return runs;
+}
+
+// Keep one timer across idle and done states. A working or other state ends the idle period.
+export function inspectWorkerNoReports(panes, runs, observed = {}, now = Date.now(), reportExists = fs.existsSync) {
+  const live = new Map((panes || []).map((pane) => [pane.id, pane]));
+  const nextObserved = {};
+  const notices = [];
+  for (const run of runs || []) {
+    if (run.finishedAt || !run.name || !run.pane || !run.worktree) continue;
+    const pane = live.get(run.pane);
+    if (!pane || !isWorkerPane(pane) || !['idle', 'done'].includes(pane.status)) continue;
+    const prior = observed?.[pane.id];
+    const startedAt = run.startedAt || null;
+    const sameRun = prior?.name === run.name && prior?.startedAt === startedAt && prior?.worktree === run.worktree;
+    const since = sameRun && Number.isFinite(prior.since) ? prior.since : now;
+    nextObserved[pane.id] = { name: run.name, startedAt, worktree: run.worktree, since };
+    if (!Number.isFinite(now) || now - since < WORKER_NO_REPORT_MS) continue;
+    const reportPath = path.join(run.worktree, '.worker', 'report.json');
+    let exists;
+    try { exists = reportExists(reportPath); }
+    catch { continue; }
+    if (exists !== false) continue;
+    const period = String(since);
+    notices.push({
+      key: `workers:no-report:${run.name}:${run.pane}:${startedAt || 'unknown'}:${period}`,
+      severity: 'warn', scope: pane.workspace, immediate: true, once: true,
+      title: `Worker ${run.name} is idle without a report`,
+      text: `Worker ${run.name} in ${run.pane} is idle for 10 min with no report.json. Check it, then resume or collect it.`,
+    });
+  }
+  return { observed: nextObserved, notices };
 }
 
 function handoffCandidates(control) {
@@ -448,6 +508,10 @@ export class Engine extends EventEmitter {
         herdr.panes, this.memory.workerReportObserved, now,
       ) : { observed: this.memory.workerReportObserved || {}, notices: [] };
       this.memory.workerReportObserved = reportTransitions.observed;
+      const noReportTransitions = herdr ? inspectWorkerNoReports(
+        herdr.panes, readActiveWorkerRuns(), this.memory.workerNoReportObserved, now,
+      ) : { observed: this.memory.workerNoReportObserved || {}, notices: [] };
+      this.memory.workerNoReportObserved = noReportTransitions.observed;
       if (machine) {
         const h = (this.memory.history ||= []);
         h.push({ t: now, load: machine.load[0], mem: machine.memFreePercent });
@@ -571,6 +635,7 @@ export class Engine extends EventEmitter {
       const evaluation = evaluate(snap, this.cfg, this.memory.paneSince, now, policy);
       evaluation.alerts.push(...workerTransitions.notices);
       evaluation.alerts.push(...reportTransitions.notices);
+      evaluation.alerts.push(...noReportTransitions.notices);
       if (this.act) {
         if (!this.kitNoticeRead) {
           this.kitNoticeRead = true;

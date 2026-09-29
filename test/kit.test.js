@@ -756,7 +756,7 @@ test('worker start refuses excluded caller workspace before creating worktree, t
 });
 
 test('worker collect --record uses the provider recorded at start, including null routes', () => {
-  for (const [name, route, expected, failUsage] of [['collect-routed', 'claude', 'claude', false], ['collect-free', null, null, false], ['collect-failure', 'claude', 'claude', true]]) {
+  for (const [name, route, expected, failUsage, modelResult] of [['collect-routed', 'claude', 'claude', false, 'rework'], ['collect-free', null, null, false, null], ['collect-failure', 'claude', 'claude', true, null]]) {
     const f = setupFixture(null);
     const model = 'gpt-6-luna';
     fs.writeFileSync(f.rulesFile, JSON.stringify({ policy: { allowedKinds: ['codex'], excludedModels: [], modelProviders: { [model]: route } } }));
@@ -774,7 +774,7 @@ test('worker collect --record uses the provider recorded at start, including nul
     const changedPolicy = { modelProviders: { [model]: 'opencodego' } };
     const usage = [];
     const output = [];
-    const collect = () => collectWorker(name, { record: true, outcome: 'done', gatePassed: true }, {
+    const collect = () => collectWorker(name, { record: true, outcome: 'done', gatePassed: true, ...(modelResult ? { modelResult } : {}) }, {
       config: f.config, now: Date.parse('2026-09-25T17:00:00Z'), output: (line) => output.push(line),
       listWorktreeProcesses: () => [],
       recordUsageFn: (event) => {
@@ -795,6 +795,9 @@ test('worker collect --record uses the provider recorded at start, including nul
     assert.equal(savedRun.finishedAt, '2026-09-25T17:00:00.000Z');
     assert.equal(usage[0].provider, expected);
     assert.equal(usage[0].recordedProvider, expected ?? 'unmetered-or-unknown');
+    assert.equal(usage[0].modelOutcome.result, modelResult || 'first-time');
+    const modelOutcomeWarnings = output.filter((line) => line.startsWith('Warning: report.json has no modelOutcome;'));
+    assert.deepEqual(modelOutcomeWarnings, modelResult ? [] : ['Warning: report.json has no modelOutcome; recorded first-time from the outcome. Add --model-result next time.']);
     assert.equal(fs.readFileSync(f.config.ledgerPath, 'utf8').trim().split('\n').length, 1);
     assert.ok(output.includes('After you review this collection, remove the worktree with herdr-boss worktree prune --apply'));
     assert.throws(() => collect(), /already marked finished/);

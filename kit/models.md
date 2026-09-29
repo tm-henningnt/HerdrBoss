@@ -41,10 +41,13 @@ Free `opencode/` models recorded in the source include:
 - `opencode/ling-3.0-flash-fin-free`
 - `opencode/mimo-v2.6-flash-free`
 - `opencode/muse-spark-1.2-contributor-free`
-- `opencode/muse-spark-1.3-contributor-free`
 - `opencode/nemotron-3-ultra-free`
 - `opencode/nemotron-3.5-lightning-free`
 - `opencode/space-bunny-free`
+
+## Removed until a trial passes
+
+- `opencode/muse-spark-1.3-contributor-free` — removed 2026-09-29; every call failed.
 
 This list is descriptive only. `models.json` decides which models workers may use.
 

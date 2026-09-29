@@ -61,6 +61,13 @@ test('the Pi allow-list holds no free opencode/ model', () => {
   assert.ok(models.kinds.opencode.allowedModels.includes('opencode/big-pickle'), 'the opencode harness keeps its free models');
 });
 
+test('the failing Muse Spark 1.3 OpenCode model is not allowed or offered in the unmetered line', () => {
+  const removed = 'opencode/muse-spark-1.3-contributor-free';
+  assert.ok(!models.kinds.opencode.allowedModels.includes(removed), 'the failed model is not in the OpenCode allow-list');
+  const lane = unmeteredLane(models, policy(), projects, {}, { now: Date.parse('2026-09-27T12:00:00Z') });
+  assert.doesNotMatch(unmeteredSummary(lane), /muse-spark-1\.3-contributor-free/, 'the failed model is not offered in Use now');
+});
+
 test('a Pi model that the last good result does not list is left out of the lane and reported', () => {
   const piModels = { at: 1, models: parsePiModels(TABLE) };
   const unavailable = unavailablePiModels(fixtureModels.kinds.pi.allowedModels, piModels);
