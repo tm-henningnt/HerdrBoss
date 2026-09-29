@@ -84,6 +84,8 @@ Owner queue (credentials, billing, and Owner-applied settings):
 
 - 2026-09-30: B1b follow-ups for the next board task (B2), from the review: add a DOM test for `patchHtml` (identity, removal, focus, caret); make `depth` and `criticalPath` iterative and add self-dependency and long-chain tests; make `domPart` collision-free (ids `a b` and `a_b`); keep the focus of a card button when a refresh moves it between columns; show a reason for a Blocked card with `waitingOn: task` and no open blocker. Source: orchestrator review.
 
+- 2026-09-30: G4c follow-ups for G4d, from the review: cache the `/api/machine-hours` result for 60 seconds, because the endpoint parses up to two files of 3 MB on each request and G4d adds it to the state fetch list; drop duplicate minutes when the summary reads the file. Source: orchestrator review.
+
 ## Standing rules
 
 - The service serves `public/` from the `main` working tree at once, but the server code only after a restart. Restart the service right after a merge that changes `public/` together with the server API, before the full suite, or the dashboard breaks until the restart.
