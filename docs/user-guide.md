@@ -415,7 +415,9 @@ When an orchestrator's quota comes near its reserve, Herdr Boss recommends a suc
 
 Activation checks that the successor agent is settled and ready. The handoff record keeps the activation time, the source pane ID, and the successor pane ID.
 
-Activation labels the old pane as previous. Herdr Boss closes that pane after 120 minutes from activation when the handoff, the previous-role label, and the successor-role label are still confirmed. A newer handover does not cancel this retirement. Herdr Boss marks the older handover as superseded when the new handover starts from its successor pane and has the same role. The engine also marks older records on each active tick. It follows a chain of superseded records to the current successor before it closes a pane. Unavailable pane data defers retirement until a later tick. The current successor gets one notice after retirement.
+After activation, Herdr Boss finishes the handover. It waits until the successor answers the activation prompt, or until 15 minutes pass with the old pane idle. It then closes the old pane and renames the successor tab from `Orchestrator Next` to `Orchestrator`. It never closes the old pane while that pane works, is blocked, or was settled for less than 60 seconds, or while the project has a running worker. The Owner closes the old Boss pane by hand; this early close applies only to project orchestrators. It retries on each tick, and it sends one line to the Boss when the old pane is still busy after 60 minutes. The Overview shows `closing old orchestrator at HH:MM` on the new orchestrator until the pane is closed. Herdr Boss also closes the tab of a successor that expired or was replaced without activation.
+
+Activation labels the old pane as previous. If the early close did not run, Herdr Boss closes that pane after 120 minutes from activation when the handoff, the previous-role label, and the successor-role label are still confirmed. A newer handover does not cancel this retirement. Herdr Boss marks the older handover as superseded when the new handover starts from its successor pane and has the same role. The engine also marks older records on each active tick. It follows a chain of superseded records to the current successor before it closes a pane. Unavailable pane data defers retirement until a later tick. The current successor gets one notice after retirement.
 
 At activation, Herdr Boss prompts the previous agent first. The prompt tells it that it no longer owns orchestration. It asks for a concise final summary for the successor. It tells the agent to answer each later request only with the successor pane ID. A Boss handover uses Boss and Owner wording. This prompt is best effort. If it fails, the engine sends it again later.
 
@@ -466,6 +468,21 @@ The automatic handover prepares a successor only for a project that works now. A
 The automatic handover also skips a project that the Owner holds. A project is held when its published status is `paused`, `stood down`, or `on hold`, or when its published summary says that it is paused or stood down. A status or summary in another case, spacing, or hyphen variant counts as the same word. A summary that reports the state of another project, or of one task, does not hold its own project. An allocation mode of `paused` holds the project.
 
 The automatic handover activates a prepared successor only when the successor model is not weaker than the source model. The tiers follow the cost order in `kit/models.md`, from the free models up to Codex Astra. A model the kit does not rank has no tier. When either model has no tier, or the successor is weaker, Herdr Boss leaves the record prepared and logs one line that names the reason. The Owner then runs `herdr-boss handoff activate ID --confirmed` when the weaker model is the right choice.
+
+The automatic handover has a second trigger, the context size. It runs only when `autoHandover` is on. Set the limit in Settings as **Hand over at context tokens**, or in `policy.json` as `autoHandoverContextTokens`. The default is 300000 tokens. The value is an integer from 50000 to 2000000.
+
+A task boundary starts the check. A boundary is one of these events:
+
+- A task in the published project status changes to `done`.
+- The orchestrator pane goes from `working` to `idle` or `done` after a new publish.
+
+At a boundary, Herdr Boss reads the context size of the orchestrator. When the size is above the limit, Herdr Boss prepares a fresh successor from `docs/orchestration/memory.md`. The successor has the same harness and the same model as the source. The successor reports ready with `herdr-boss handoff ready`. Herdr Boss then activates it when the source pane is `idle` or `done`. If the source pane works, Herdr Boss waits.
+
+Herdr Boss reads the context size only for a Claude orchestrator. It takes the last main-thread assistant message in the session transcript in `~/.claude/projects/`. The size is the sum of `input_tokens`, `cache_read_input_tokens`, and `cache_creation_input_tokens` of that message. For another harness, or when the transcript is missing, the context size is unavailable. Herdr Boss then logs one line and starts no handover.
+
+Herdr Boss watches a pane from its first tick. A pane that Herdr Boss sees for the first time is unarmed: a task that was already done, or a pane that was already idle, is not a boundary. An idle orchestrator whose project has no running worker and no working agent waits. The check runs after work starts again and the next boundary arrives.
+
+The context trigger uses the same rules as the quota trigger. It skips the Boss, a held project, and a project that does not work. It activates no successor with a weaker or unranked model tier. It prepares no second successor while a record for the same pane is `prepared`, `preparing`, or `needs-inspection`.
 
 ## Project browsers
 

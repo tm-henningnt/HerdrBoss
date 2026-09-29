@@ -462,7 +462,7 @@ export function renderBulletin(snap, evaluation, cfg) {
         .map(([lane, cap]) => `${lane} ${cap}`);
       L.push(`- Night cap ${snap.control.maxWorkers}${laneCaps.length ? ` (${laneCaps.join('; ')})` : ''}.`);
     }
-    L.push(`- Automatic orchestrator handover: ${snap.policy?.autoHandover ? `enabled; prepare at reserve, activate at ${snap.policy.autoHandoverPercent}% after successor readiness` : 'off'}.`);
+    L.push(`- Automatic orchestrator handover: ${snap.policy?.autoHandover ? `enabled; prepare at reserve, activate at ${snap.policy.autoHandoverPercent}% after successor readiness; at a task boundary, hand over above ${snap.policy.autoHandoverContextTokens} context tokens` : 'off'}.`);
     L.push('- Borrowed slots are real capacity. Start workers up to your effective slots; the global limit still applies.');
     for (const p of Object.values(snap.control.projects)) L.push(`- ${p.label}: ${p.running}/${p.slots} slots (${Math.round(p.share)}% share${p.idle ? ', idle' : ''}${p.borrowed ? `, +${p.borrowed} borrowed` : ''}${p.lent ? `, ${p.lent} lent` : ''}${p.offered ? `, ${p.offered} free for others` : ''}). Allowed kinds: ${Object.keys(snap.control.globalAllowed).filter((k) => !p.excludedKinds.includes(k)).join(', ') || 'none'}.`);
   }

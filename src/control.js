@@ -13,6 +13,7 @@ export const POLICY_DEFAULTS = {
   handoffLeadMinutes: 180,
   autoHandover: false,
   autoHandoverPercent: 98,
+  autoHandoverContextTokens: 300000,
   orchestratorLadder: [
     { kind: 'codex', model: 'gpt-6-luna', effort: 'xhigh' },
     { kind: 'claude', model: 'claude-opus-5-5', effort: null },
@@ -154,6 +155,7 @@ export function validatePolicy(value, models) {
     for (const [key, max] of [['diskWarnFreeGB', 1048576], ['diskCriticalFreeGB', 1048576]]) if (!Number.isFinite(value.machine[key]) || value.machine[key] < 0 || value.machine[key] > max) errors.push(`machine.${key} must be a number from 0 to ${max}.`);
   }
   if (!Number.isInteger(value.autoHandoverPercent) || value.autoHandoverPercent < 90 || value.autoHandoverPercent > 100) errors.push('autoHandoverPercent must be an integer from 90 to 100.');
+  if (!Number.isInteger(value.autoHandoverContextTokens) || value.autoHandoverContextTokens < 50000 || value.autoHandoverContextTokens > 2000000) errors.push('autoHandoverContextTokens must be an integer from 50000 to 2000000.');
   for (const [key, max] of [['idleMinutes', 1440], ['reservePercent', 80], ['handoffLeadMinutes', 10080]]) {
     if (!Number.isInteger(value[key]) || value[key] < 0 || value[key] > max) errors.push(`${key} must be an integer from 0 to ${max}.`);
   }
