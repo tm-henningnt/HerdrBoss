@@ -1100,7 +1100,11 @@ export function startWorker(name, options, {
     imageBudget: config.imageBudget ?? 10,
     copyPaths: copyFiles.map(({ relative }) => path.posix.join(plan.workerDir, 'inputs', relative)),
     leases: leases.length ? `${leases.map((lease) => `\`${lease.env}=${lease.item}\` (pool \`${lease.pool}\`)`).join(', ')}. Use only these.` : null,
-    kindHeaderNote: options.kind === 'codex' ? 'In a Codex shell, run `setopt NO_BG_NICE` before a background command.' : '',
+    kindHeaderNote: [
+      options.kind === 'codex' ? 'In a Codex shell, run `setopt NO_BG_NICE` before a background command.' : '',
+      // In the vendor test, Luna failed to report a broken tool in 28.7% of cases. Sol 6.1 failed in 2.8%.
+      model === 'gpt-6-luna' ? 'Report a failing tool, a missing file, or missing evidence explicitly in your report. Never give a best guess in place of a result. The orchestrator verifies each claim at the source.' : '',
+    ].filter(Boolean).join('\n'),
     kindWaitNote: options.kind === 'claude' ? 'To wait, use a background command and wait for its exit, or a herdr-boss wait command. Do not run sleep and then poll.' : '',
     portInstruction: leases.some((lease) => lease.pool === 'serve-ports')
       ? `Use only the port in \`${path.posix.join(plan.workerDir, 'port')}\`. Take no other serve port.`

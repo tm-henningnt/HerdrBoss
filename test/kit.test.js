@@ -926,7 +926,7 @@ test('worker start validates the caller pane and uses it for placement and repor
   const result = startWorker('caller-valid', { kind: 'codex', task: 'x', allow: ['src/'] }, {
     config, models: loadModels(), herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
   });
-  assert.equal(fs.readFileSync(path.join(result.worktree, '.worker', 'brief.md'), 'utf8'), 'Report target: ws:orch\n\n## Worker start details\n\nScreenshot budget: 10 screenshots. The project setting overrides the kit default.\n\nIn a Codex shell, run `setopt NO_BG_NICE` before a background command.');
+  assert.equal(fs.readFileSync(path.join(result.worktree, '.worker', 'brief.md'), 'utf8'), 'Report target: ws:orch\n\n## Worker start details\n\nScreenshot budget: 10 screenshots. The project setting overrides the kit default.\n\nIn a Codex shell, run `setopt NO_BG_NICE` before a background command.\nReport a failing tool, a missing file, or missing evidence explicitly in your report. Never give a best guess in place of a result. The orchestrator verifies each claim at the source.');
   assert.ok(calls.some((args) => args.join(' ') === 'tab list --workspace ws'));
   assert.ok(calls.some((args) => args.join(' ') === 'pane get ws:orch'));
 
@@ -1130,7 +1130,7 @@ test('worker start records a real dispatch before prompting and verifies activit
   });
   assert.equal(result.pane, 'ws:p2');
   assert.ok(calls.some((args) => args[0] === 'agent' && args[1] === 'prompt'));
-  assert.equal(fs.readFileSync(path.join(result.worktree, '.worker', 'brief.md'), 'utf8'), 'Worker demo: x\n\n## Worker start details\n\nScreenshot budget: 10 screenshots. The project setting overrides the kit default.\n\nIn a Codex shell, run `setopt NO_BG_NICE` before a background command.');
+  assert.equal(fs.readFileSync(path.join(result.worktree, '.worker', 'brief.md'), 'utf8'), 'Worker demo: x\n\n## Worker start details\n\nScreenshot budget: 10 screenshots. The project setting overrides the kit default.\n\nIn a Codex shell, run `setopt NO_BG_NICE` before a background command.\nReport a failing tool, a missing file, or missing evidence explicitly in your report. Never give a best guess in place of a result. The orchestrator verifies each claim at the source.');
 });
 
 test('worker collect keeps changed paths stable after the base branch merges the worker', () => {
@@ -2005,6 +2005,22 @@ test('worker start automatically leases serve:live and writes the port file', ()
   assert.match(brief, /Use only the port in `\.worker\/port`\. Take no other serve port\./);
 });
 
+test('a gpt-6-luna brief tells the worker to report failures and never to guess', () => {
+  const template = path.resolve('kit/templates/worker-brief.md');
+  const luna = setupFixture(null);
+  luna.config.briefTemplatePath = template;
+  const lunaRun = startWorker('luna-notes', { kind: 'codex', model: 'gpt-6-luna', task: 'x', allow: ['src/'] }, {
+    config: luna.config, models: loadModels(), herdr: luna.herdr, env: luna.env, rulesFile: luna.rulesFile, output: () => {},
+  });
+  assert.match(fs.readFileSync(path.join(lunaRun.worktree, '.worker/brief.md'), 'utf8'), /Never give a best guess in place of a result/);
+  const sol = setupFixture(null);
+  sol.config.briefTemplatePath = template;
+  const solRun = startWorker('sol-notes', { kind: 'codex', model: 'gpt-6.1-sol', task: 'x', allow: ['src/'] }, {
+    config: sol.config, models: loadModels(), herdr: sol.herdr, env: sol.env, rulesFile: sol.rulesFile, output: () => {},
+  });
+  assert.doesNotMatch(fs.readFileSync(path.join(solRun.worktree, '.worker/brief.md'), 'utf8'), /best guess/);
+});
+
 test('worker briefs add harness notes, the Git rule, and a long TMPDIR warning', () => {
   const template = path.resolve('kit/templates/worker-brief.md');
   const codex = setupFixture(null);
@@ -2585,7 +2601,7 @@ test('worker brief shows the effective screenshot budget and project precedence'
   const result = startWorker('budget', { kind: 'codex', task: 'x', allow: ['src/'] }, {
     config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
   });
-  assert.equal(fs.readFileSync(path.join(result.worktree, '.worker/brief.md'), 'utf8'), 'Budget 6. The project setting overrides the kit default.\n\n## Worker start details\n\nIn a Codex shell, run `setopt NO_BG_NICE` before a background command.');
+  assert.equal(fs.readFileSync(path.join(result.worktree, '.worker/brief.md'), 'utf8'), 'Budget 6. The project setting overrides the kit default.\n\n## Worker start details\n\nIn a Codex shell, run `setopt NO_BG_NICE` before a background command.\nReport a failing tool, a missing file, or missing evidence explicitly in your report. Never give a best guess in place of a result. The orchestrator verifies each claim at the source.');
 });
 
 test('worker brief names the orchestrator by pane and stable agent name', () => {
@@ -2609,7 +2625,7 @@ test('worker start puts the project thread limit flag in the brief', () => {
   fs.writeFileSync(cfgFile, JSON.stringify({ briefTemplate: template, testThreadsFlag: '--poolOptions.forks.maxForks=2' }));
   const config = loadProjectConfig({ cwd: f.root });
   const result = startWorker('demo', { kind: 'codex', task: 'x', allow: ['src/'] }, { config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {} });
-  assert.equal(fs.readFileSync(path.join(result.worktree, '.worker', 'brief.md'), 'utf8'), 'Limit: Add `--poolOptions.forks.maxForks=2` to each test runner command.\n\n## Worker start details\n\nScreenshot budget: 10 screenshots. The project setting overrides the kit default.\n\nIn a Codex shell, run `setopt NO_BG_NICE` before a background command.');
+  assert.equal(fs.readFileSync(path.join(result.worktree, '.worker', 'brief.md'), 'utf8'), 'Limit: Add `--poolOptions.forks.maxForks=2` to each test runner command.\n\n## Worker start details\n\nScreenshot budget: 10 screenshots. The project setting overrides the kit default.\n\nIn a Codex shell, run `setopt NO_BG_NICE` before a background command.\nReport a failing tool, a missing file, or missing evidence explicitly in your report. Never give a best guess in place of a result. The orchestrator verifies each claim at the source.');
 });
 
 test('workers that share a checkout each get their own brief folder', () => {

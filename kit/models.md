@@ -23,6 +23,22 @@ Use an unmetered model first for every bounded, well-specified task: implementat
 
 Provider quota, task fit, availability, and review effort affect the real cost.
 
+## Codex prices
+
+Prices are in USD per million tokens. Source: the vendor announcement of `gpt-6.1-sol`.
+
+| Model | Input | Output | Cached input |
+| --- | ---: | ---: | ---: |
+| `gpt-6-astra` | 10 | 50 | 1 |
+| `gpt-6.1-sol` | 2 | 10 | 0.10 |
+| `gpt-6-luna` | 0.10 | 0.50 | 0.01 |
+
+`gpt-6-luna` costs about 20 times less than `gpt-6.1-sol` in input. Use `gpt-6-luna` for routine Codex work. Use `gpt-6.1-sol` for tougher coding, where a result close to `gpt-6-astra` matters. In the vendor test, `gpt-6.1-sol` matches `gpt-6-astra` on complex coding at about one fifth of the cost.
+
+In the vendor test, a model failed to report a broken search tool in these cases: `gpt-6-astra` 1.5%, `gpt-6.1-sol` 2.8%, `gpt-6-luna` 28.7%. `gpt-6-luna` often guesses and does not say that a tool failed. The worker brief for `gpt-6-luna` therefore tells the worker to report a failing tool, a missing file, or missing evidence, and never to give a best guess. Verify each `gpt-6-luna` claim at the source.
+
+`gpt-6.1-sol` is a trial candidate for review passes and diff reviews that go to `claude-opus-5-5` now. Measure it with the Analytics scorecard before you move review work. The ultrafast variants need the Pro tier at 500 USD per month and are not in use.
+
 ## Task lanes
 
 | Kind and model | Best fit | Limits |
