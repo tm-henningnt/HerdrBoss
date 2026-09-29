@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile, execFileSync, spawnSync } from 'node:child_process';
+import { heldWorkspaces } from '../src/engine.js';
 import { formatKitNotice, readKitNotice, pendingKitAlert, kitNoticeTargets, KIT_PATHS, KIT_REVISION_PATHS } from '../src/kit-notice.js';
 import { kitRevision, projectKit } from '../src/kit/agents-check.js';
 
@@ -158,7 +159,7 @@ test('two kit commits and one non-kit commit give one alert with only the kit su
   assert.equal(result.alert.severity, 'info');
   assert.equal(result.alert.scope, 'all');
   assert.equal(result.alert.once, true);
-  assert.equal(result.alert.text, `[herdr-boss] Kit revision ${revision} (2 change(s)): Change worker start; Change the orchestrator skill. Run herdr-boss kit update, then re-read docs/orchestration/herdr-boss.md now; your loaded copy is stale.`);
+  assert.equal(result.alert.text, `[herdr-boss] Kit revision ${revision} (2 change(s)): Change worker start; Change the orchestrator skill. Run herdr-boss kit update and continue. The command prints the current kit file.`);
   assert.deepEqual(result.state.alert, result.alert);
   assert.deepEqual(git.calls, [
     ['-C', root, 'rev-parse', 'HEAD'],
@@ -216,7 +217,7 @@ test('a mixed batch names only the required changes', async (t) => {
   commit(root, 'kit/models.md', 'A change that needs action', 'Kit-Impact: required');
   commit(root, 'kit/models.md', 'A cosmetic change', 'Kit-Impact: none');
   const result = await readKitNotice({ root, stored: { commit: base, at: 0 }, git: recordingGit(), now: NOW });
-  assert.equal(result.alert.text, `[herdr-boss] Kit revision ${REV} (1 change(s)): A change that needs action. Run herdr-boss kit update, then re-read docs/orchestration/herdr-boss.md now; your loaded copy is stale.`);
+  assert.equal(result.alert.text, `[herdr-boss] Kit revision ${REV} (1 change(s)): A change that needs action. Run herdr-boss kit update and continue. The command prints the current kit file.`);
 });
 
 test('a missing, invalid, or ambiguous impact sends a required notice', async (t) => {
@@ -257,7 +258,7 @@ test('a recorded required change sends a notice when the change log lines up wit
   });
   assert.ok(result.alert);
   // The project kit template is an installed kit asset, so the kit commit moves the fixture revision.
-  assert.equal(result.alert.text, `[herdr-boss] Kit revision ${kitRevision(root)} (1 change(s)): Record a change that needs action. Run herdr-boss kit update, then re-read docs/orchestration/herdr-boss.md now; your loaded copy is stale.`);
+  assert.equal(result.alert.text, `[herdr-boss] Kit revision ${kitRevision(root)} (1 change(s)): Record a change that needs action. Run herdr-boss kit update and continue. The command prints the current kit file.`);
 });
 
 test('a batch of asset commits takes one record per commit, newest first', async (t) => {
@@ -271,7 +272,7 @@ test('a batch of asset commits takes one record per commit, newest first', async
   // The newest commit takes the newest record, which is the required one. Only it is named.
   assert.ok(result.alert);
   // Both commits change an installed kit asset, so they move the fixture revision.
-  assert.equal(result.alert.text, `[herdr-boss] Kit revision ${kitRevision(root)} (1 change(s)): Record the newer useful change. Run herdr-boss kit update, then re-read docs/orchestration/herdr-boss.md now; your loaded copy is stale.`);
+  assert.equal(result.alert.text, `[herdr-boss] Kit revision ${kitRevision(root)} (1 change(s)): Record the newer useful change. Run herdr-boss kit update and continue. The command prints the current kit file.`);
 });
 
 test('a change log that does not line up with the commits sends a required notice', async (t) => {
@@ -347,7 +348,7 @@ test('more than 10 kit commits list the 10 newest and then and N more', async (t
   for (let i = 1; i <= 13; i += 1) commit(root, 'kit/models.md', `Kit change ${i}`);
   const result = await readKitNotice({ root, stored: { commit: base, at: 0 }, git: recordingGit(), now: NOW });
   const subjects = Array.from({ length: 10 }, (_, i) => `Kit change ${13 - i}`).join('; ');
-  assert.equal(result.alert.text, `[herdr-boss] Kit revision ${REV} (13 change(s)): ${subjects}; and 3 more. Run herdr-boss kit update, then re-read docs/orchestration/herdr-boss.md now; your loaded copy is stale.`);
+  assert.equal(result.alert.text, `[herdr-boss] Kit revision ${REV} (13 change(s)): ${subjects}; and 3 more. Run herdr-boss kit update and continue. The command prints the current kit file.`);
 });
 
 test('the notice text stays under 1200 characters with long subjects', () => {
@@ -355,7 +356,7 @@ test('the notice text stays under 1200 characters with long subjects', () => {
   const text = formatKitNotice(commits, 'abcdef012345');
   assert.ok(text.length < 1200, `length ${text.length}`);
   assert.match(text, /^\[herdr-boss\] Kit revision abcdef012345 \(30 change\(s\)\): /);
-  assert.match(text, /; and 20 more\. Run herdr-boss kit update, then re-read docs\/orchestration\/herdr-boss\.md now; your loaded copy is stale\.$/);
+  assert.match(text, /; and 20 more\. Run herdr-boss kit update and continue\. The command prints the current kit file\.$/);
 });
 
 test('a git failure sends nothing, stores HEAD, and gives one event', async (t) => {
@@ -409,6 +410,27 @@ test('kit notice targets exclude the Boss pane and the Boss workspace', () => {
   assert.deepEqual(kitNoticeTargets(orchs).map((o) => o.id), ['wA:p1']);
 });
 
+test('kit notice targets skip the workspaces of held projects', () => {
+  const orchs = [
+    { id: 'wA:p1', workspace: 'wA', workspaceLabel: 'Alpha', label: 'orch', orch: true, agent: 'codex' },
+    { id: 'wB:p1', workspace: 'wB', workspaceLabel: 'Beta', label: 'orch', orch: true, agent: 'codex' },
+  ];
+  assert.deepEqual(kitNoticeTargets(orchs, new Set(['wB'])).map((o) => o.id), ['wA:p1']);
+  assert.deepEqual(kitNoticeTargets(orchs, new Set()).map((o) => o.id), ['wA:p1', 'wB:p1']);
+});
+
+test('heldWorkspaces lists paused, held, and stood-down projects', () => {
+  const projects = [
+    { slug: 'alpha', workspace: 'wA', status: 'active', summary: 'Building.' },
+    { slug: 'beta', workspace: 'wB', status: 'paused', summary: 'Waiting.' },
+    { slug: 'gamma', workspace: 'wC', status: 'active', summary: 'Stood down by the Owner until Monday.' },
+    { slug: 'delta', workspace: 'wD', status: 'active', summary: 'Building.' },
+  ];
+  const control = { projects: { alpha: { workspace: 'wA', effectiveMode: 'auto' }, delta: { workspace: 'wD', effectiveMode: 'paused' } } };
+  assert.deepEqual([...heldWorkspaces(projects, control)].sort(), ['wB', 'wC', 'wD']);
+  assert.deepEqual([...heldWorkspaces([], null)], []);
+});
+
 const engineProbe = `
 import fs from 'node:fs';
 import path from 'node:path';
@@ -454,7 +476,7 @@ if (input.mode === 'read') {
 } else {
   engine.push = true;
   const alert = { key: 'kit:abc1234', severity: 'info', scope: 'all', once: true, title: 'Kit updated', text: '[herdr-boss] Kit updated (1 change(s)): x.' };
-  for (const [i, panes] of input.rounds.entries()) await engine.deliver([alert], { panes }, Date.parse('2026-09-27T10:00:00.000Z') + i * 60000);
+  for (const [i, panes] of input.rounds.entries()) await engine.deliver([alert], { panes }, Date.parse('2026-09-27T10:00:00.000Z') + i * 60000, null, new Set(input.held || []));
 }
 const memoryFile = path.join(process.env.HERDR_BOSS_DIR, 'memory.json');
 out.gitCalls = gitCalls;
@@ -506,6 +528,14 @@ test('the kit notice reaches each idle project orchestrator once and never the B
   const targets = out.prompts.filter((args) => args[0] === 'agent' && args[1] === 'prompt').map((args) => args[2]);
   assert.deepEqual(targets, ['wA:p1', 'wB:p1']);
   assert.ok(out.prompts.every((args) => args.at(-1).includes('Kit updated (1 change(s))')));
+});
+
+test('the kit notice skips the orchestrator of a held project', { timeout: 30000 }, (t) => {
+  const alpha = { id: 'wA:p1', workspace: 'wA', workspaceLabel: 'Alpha', label: 'orch', orch: true, agent: 'codex', status: 'idle' };
+  const beta = { id: 'wB:p1', workspace: 'wB', workspaceLabel: 'Beta', label: 'orch', orch: true, agent: 'claude', status: 'idle' };
+  const out = runEngine(t, { mode: 'deliver', held: ['wB'], rounds: [[alpha, beta]] });
+  const targets = out.prompts.filter((args) => args[0] === 'agent' && args[1] === 'prompt').map((args) => args[2]);
+  assert.deepEqual(targets, ['wA:p1']);
 });
 
 test('the engine stores the kit notice state and logs the queued notice', { timeout: 30000 }, (t) => {

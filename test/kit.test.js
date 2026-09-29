@@ -4010,8 +4010,41 @@ test('kit update --quiet keeps the digest and hides the per-file lines', (t) => 
   assert.equal(second.status, 0, second.stderr);
   const again = r.lines(second);
   assert.equal(again.filter((line) => /^(wrote|unchanged) /.test(line)).length, 0);
-  assert.match(again.at(-1), /^kit update: kit revision /);
-  assert.equal(again.length, 2, 'a current project gets one digest line and one summary line');
+  assert.deepEqual(again, [], 'a current project gets no output');
+  assert.equal(second.stderr, '');
+});
+
+test('kit install and kit update write a file only when its content changes and leave a current project untouched', (t) => {
+  const r = kitUpdateRepo(t);
+  assert.equal(r.run(['kit', 'update', '--quiet']).status, 0);
+  const files = ['docs/orchestration/herdr-boss.md', 'AGENTS.md', '.claude/settings.json'];
+  const stamp = () => files.map((file) => fs.statSync(path.join(r.root, file)).mtimeMs);
+  const before = stamp();
+  const bytes = files.map((file) => r.read(file));
+  const install = r.run(['kit', 'install']);
+  assert.equal(install.status, 0, install.stderr);
+  assert.equal(r.lines(install).filter((line) => line.startsWith('wrote ')).length, 0, 'a current project has nothing to write');
+  assert.equal(r.run(['kit', 'update', '--quiet']).stdout, '');
+  assert.deepEqual(stamp(), before, 'no file is written again');
+  assert.deepEqual(files.map((file) => r.read(file)), bytes);
+  // A changed kit file is written again, and the quiet update reports it.
+  fs.writeFileSync(path.join(r.root, 'docs/orchestration/herdr-boss.md'), '<!-- herdr-boss kit v=000000000000 -->\nold body\n');
+  const changed = r.lines(r.run(['kit', 'update', '--quiet']));
+  assert.ok(changed.length >= 2 && changed[0].startsWith('kit update: '), 'a changed kit prints the digest and the summary');
+  assert.equal(r.read('docs/orchestration/herdr-boss.md'), bytes[0]);
+});
+
+test('kit update without --quiet prints the current kit file after the install lines', (t) => {
+  const r = kitUpdateRepo(t);
+  const lines = r.lines(r.run(['kit', 'update']));
+  const kitLines = r.read('docs/orchestration/herdr-boss.md').split('\n').filter(Boolean);
+  const start = lines.indexOf(kitLines[0]);
+  assert.ok(start > lines.indexOf('wrote AGENTS.md'), 'the kit file follows the install lines');
+  assert.deepEqual(lines.slice(start, start + kitLines.length), kitLines);
+  assert.match(lines.at(-1), /^kit update: kit revision [0-9a-f]{12}, stub [0-9a-f]{12}, in /);
+  // A current project still gets the kit file, so a stale loaded copy can be replaced.
+  const again = r.lines(r.run(['kit', 'update']));
+  assert.ok(again.includes(kitLines[0]));
 });
 
 test('kit update always installs, also when the change log has no change after the installed revision', (t) => {
@@ -4119,4 +4152,39 @@ test('worker collect marks collectedAt only for a worker that reported done, and
     assert.equal(Boolean(after.collectedAt), scenario.marked, scenario.name);
     if (!scenario.options.record && !scenario.marked) assert.equal(fs.readFileSync(run.recordFile, 'utf8'), before, `${scenario.name}: the record is unchanged`);
   }
+});
+
+test('the kit texts carry the subagent and no-watching rule and no rule to re-read the kit on a notice', () => {
+  const read = (file) => fs.readFileSync(path.resolve(file), 'utf8');
+  const kit = read('kit/templates/project-kit.md');
+  const stub = read('kit/templates/agents-stub.md');
+  const skill = read('kit/skills/herdr-orchestrator/SKILL.md');
+  for (const [name, text] of [['kit file', kit], ['stub', stub], ['skill', skill]]) {
+    assert.match(text, /subagents for diff reviews, long report reads, log searches, and code surveys/, name);
+    assert.match(text, /file and line evidence/, name);
+    assert.match(text, /[Vv]erif\w* a finding at the source/, name);
+    assert.match(text, /[Ee]nd (your|the) turn/, name);
+    assert.match(text, /sleep or until loops/, name);
+    assert.doesNotMatch(text, /on each `Kit updated` notice/, name);
+    assert.doesNotMatch(text, /re-read `?docs\/orchestration\/herdr-boss\.md/, name);
+    assert.match(text, /herdr-boss kit update/, name);
+  }
+  for (const text of [kit, skill]) {
+    assert.match(text, /cheaper subagent model/);
+    assert.match(text, /Opus only for hard judgment/);
+    assert.match(text, /at most one cheap check every 20 to 30 minutes/);
+    assert.match(text, /`herdr-boss worker list` and the pane status line/);
+    assert.match(text, /report back through herdr when done and to send a `WORKER QUESTION` when blocked/);
+    assert.match(text, /stall, a block, and a missing report/);
+  }
+  assert.match(kit, /Commit a changed kit file, `AGENTS\.md` stub, or hook with your next commit/);
+  assert.match(skill, /Commit a changed kit file with your next commit/);
+  const lines = stub.trimEnd().split('\n').length;
+  assert.ok(lines >= 6 && lines <= 8, `the stub has ${lines} lines`);
+  const brief = read('kit/templates/worker-brief.md');
+  assert.match(brief, /agent prompt {{orchPane}} "WORKER QUESTION {{name}}:/);
+  assert.match(brief, /agent prompt {{orchPane}} "WORKER REPORT {{name}}:/);
+  const change = readKitChanges().find((entry) => /subagent/i.test(entry.summary || ''));
+  assert.ok(change, 'kit/CHANGES.md has an entry for the subagent rule');
+  assert.equal(change.impact, 'required');
 });

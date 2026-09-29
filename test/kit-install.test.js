@@ -43,7 +43,7 @@ test('the stub has 6 to 8 lines and names the kit file and memory', () => {
   const stub = agentsBlock();
   const lines = stub.body.split('\n');
   assert.ok(lines.length >= 6 && lines.length <= 8, `${lines.length} lines`);
-  assert.match(stub.body, /Read `docs\/orchestration\/herdr-boss\.md` and `docs\/orchestration\/memory\.md` at start, at resume, and on each `Kit updated` notice\./);
+  assert.match(stub.body, /Read `docs\/orchestration\/herdr-boss\.md` and `docs\/orchestration\/memory\.md` at start and at resume\. On a `Kit updated` notice, run `herdr-boss kit update` and continue\./);
   assert.match(stub.body, /Open no selection dialogs\. Decide, or report that you are blocked\./);
   assert.match(stub.body, /The kit file and the Owner decisions in `memory\.md` are the operating rules of this project\. Report a conflict with them to the Boss\. Do not work around them\./);
 });

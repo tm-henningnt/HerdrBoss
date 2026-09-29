@@ -276,6 +276,18 @@ export function projectHeld(slug, projects = [], control = null) {
   return summaryHolds(published.summary, others);
 }
 
+// The workspace ids of the held projects. A workspace comes from the allocation or from the published status.
+export function heldWorkspaces(projects = [], control = null) {
+  const slugs = new Set([...(projects || []).map((entry) => entry.slug), ...Object.keys(control?.projects || {})]);
+  const held = new Set();
+  for (const slug of slugs) {
+    if (!slug || !projectHeld(slug, projects, control)) continue;
+    const workspace = control?.projects?.[slug]?.workspace || (projects || []).find((entry) => entry.slug === slug)?.workspace;
+    if (workspace) held.add(workspace);
+  }
+  return held;
+}
+
 // A workspace is active when its allocation reports a running worker, or when the pane snapshot
 // holds a pane that runs an agent in a working state. An absent, blocked, idle, or done agent is not working.
 export function workspaceActive(slug, workspace, herdr, control) {
@@ -320,12 +332,12 @@ export const KIT_REMIND_MS = 2 * 3600 * 1000;
 // caller stores it in memory. A project that catches up, or is behind on useful changes only,
 // leaves the tracker. The reminder is an immediate warning for the project workspace, and it has
 // no desktop notice. The delivery step sends it to a working orchestrator only.
-export function kitReminderAlerts({ projects, tracker, now, current, changes }) {
+export function kitReminderAlerts({ projects, tracker, now, current, changes, held = () => false }) {
   const entries = changes.map((change) => ({ ...change }));
   const alerts = [];
   const seen = new Set();
   for (const project of projects || []) {
-    if (!project?.slug) continue;
+    if (!project?.slug || held(project.slug)) continue;
     const loaded = typeof project.kitRevision === 'string' ? project.kitRevision : null;
     if (kitRevisionState(loaded, current, entries) !== KIT_STATES.required) continue;
     seen.add(project.slug);
@@ -335,7 +347,7 @@ export function kitReminderAlerts({ projects, tracker, now, current, changes }) 
     alerts.push({
       key: `kitremind:${project.slug}:${current}`, severity: 'warn', scope: project.workspace, immediate: true, once: true, noDesktop: true,
       title: 'Kit behind',
-      text: `[herdr-boss] Your kit is behind on a required change. Run herdr-boss kit update, then re-read docs/orchestration/herdr-boss.md. Kit revision now ${current}.`,
+      text: `[herdr-boss] Your kit is behind on a required change. Run herdr-boss kit update and continue. Kit revision now ${current}.`,
     });
   }
   for (const slug of Object.keys(tracker)) if (!seen.has(slug)) delete tracker[slug];
@@ -654,8 +666,9 @@ export class Engine extends EventEmitter {
       this.memory.workerObserved = workerTransitions.observed;
       this.memory.workerFailures = workerTransitions.failures;
       this.memory.exhaustedFreeModels ||= {};
-      const reportTransitions = herdr ? inspectWorkerReports(
-        herdr.panes, this.memory.workerReportObserved, now,
+      const reportTransitions = herdr ? await inspectWorkerReports(
+        herdr.panes, this.memory.workerReportObserved, now, undefined,
+        this.collectors.readWorkerScreen || ((args) => run('herdr', args, { timeout: 10000 })),
       ) : { observed: this.memory.workerReportObserved || {}, notices: [] };
       this.memory.workerReportObserved = reportTransitions.observed;
       const noReportTransitions = herdr ? inspectWorkerNoReports(
@@ -800,7 +813,7 @@ export class Engine extends EventEmitter {
         }
         const kitAlert = pendingKitAlert(this.memory.kitNotice, now);
         if (kitAlert) evaluation.alerts.push(kitAlert);
-        evaluation.alerts.push(...kitReminderAlerts({ projects: snap.projects, tracker: (this.memory.kitBehind ||= {}), now, current: snap.kit.current, changes: snap.kit.changes }));
+        evaluation.alerts.push(...kitReminderAlerts({ projects: snap.projects, tracker: (this.memory.kitBehind ||= {}), now, current: snap.kit.current, changes: snap.kit.changes, held: (slug) => projectHeld(slug, snap.projects, snap.control) }));
       }
       this.memory.quotaRecoveries ||= {};
       // Older records used the reset timestamp as part of the key. Codexbar can
@@ -934,7 +947,7 @@ export class Engine extends EventEmitter {
       // The denial trend is for the Owner. It goes to the dashboard and the bulletin, never to a pane prompt.
       snap.denials = denialSummary(readDenials(DATA_DIR), now, { pendingBytes: this.memory.denialScan?.pendingBytes || 0 });
       fs.writeFileSync(BULLETIN_FILE, renderBulletin(snap, evaluation, this.cfg));
-      if (this.act) await this.deliver(evaluation.alerts, herdr, now, snap.night);
+      if (this.act) await this.deliver(evaluation.alerts, herdr, now, snap.night, heldWorkspaces(snap.projects, snap.control));
       if (this.act && this.push) await this.deliverLockTakeoverNotices(herdr);
       if (this.act && this.push) await this.deliverNightNotices(snap.night, herdr, now);
       // Owner messages use a fresh pane list so delivery can act on current pane status.
@@ -1833,7 +1846,7 @@ export class Engine extends EventEmitter {
     }
   }
 
-  async deliver(alerts, herdr, now, night = null) {
+  async deliver(alerts, herdr, now, night = null, held = new Set()) {
     const cooldown = loadPolicy().machine.alertCooldownSeconds * 1000;
     const orchs = (herdr?.panes || []).filter((p) => p.orch && p.agent);
     const active = new Set(alerts.map((a) => a.key));
@@ -1872,9 +1885,9 @@ export class Engine extends EventEmitter {
         // A skipped broadcast stays unsent, so it reaches the orchestrator when its workers become active.
         let targets = a.scope === 'all' ? broadcast : orchs.filter((o) => o.workspace === a.scope);
         // A kit notice goes to every project orchestrator, also one without active workers.
-        if (isKitAlert(a)) targets = kitNoticeTargets(orchs);
+        if (isKitAlert(a)) targets = kitNoticeTargets(orchs, held);
         // A kit reminder goes to the project orchestrator only while it works. The kit notice reached it when it was idle.
-        if (a.key.startsWith('kitremind:')) targets = kitNoticeTargets(targets.filter((o) => o.label === 'orch' && o.status === 'working'));
+        if (a.key.startsWith('kitremind:')) targets = kitNoticeTargets(targets.filter((o) => o.label === 'orch' && o.status === 'working'), held);
         if (a.key.startsWith('machine:disk:')) {
           const projectOrch = targets.find((o) => o.label === 'orch');
           targets = projectOrch ? [projectOrch] : targets.filter((o) => o.label !== 'boss').slice(0, 1);

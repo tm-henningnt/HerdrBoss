@@ -182,8 +182,8 @@ test('worker list reports no failed status for previous-role panes from a stale 
   assert.equal(workerStatusFromState('w1:p3', state, run), 'failed');
 });
 
-test('report notices use first-seen metadata for both paths and ignore orchestrators', async () => {
-  const { inspectWorkerReports } = await import('../src/worker-failures.js');
+test('a report notice waits for the grace time, then names a worker that sent no report prompt', async () => {
+  const { inspectWorkerReports, WORKER_REPORT_GRACE_MS } = await import('../src/worker-failures.js');
   const panes = [
     { id: 'ws:p1', workspace: 'ws', cwd: '/work/a', name: 'alpha', agent: 'codex', status: 'working' },
     { id: 'ws:p2', workspace: 'ws', cwd: '/work/b', name: 'beta', agent: 'pi', status: 'idle' },
@@ -196,35 +196,65 @@ test('report notices use first-seen metadata for both paths and ignore orchestra
   ]);
   const calls = [];
   const stat = (file) => { calls.push(file); return files.get(file) || null; };
-  const first = inspectWorkerReports(panes, {}, 100, stat);
-  assert.deepEqual(first.notices.map(({ text, scope }) => [text, scope]), [
-    ['Worker alpha in pane ws:p1 wrote its report: /work/a/.worker/report.json', 'ws'],
-    ['Worker beta in pane ws:p2 wrote its report: /work/b/.worker/beta/report.json', 'ws'],
-  ]);
+  const reads = [];
+  const readScreen = async (args) => { reads.push(args.join(' ')); return 'no prompt here'; };
+  const first = await inspectWorkerReports(panes, {}, 100, stat, readScreen);
+  assert.deepEqual(first.notices, [], 'the first sight of a report gives no notice');
   assert.deepEqual(calls, [
     '/work/a/.worker/report.json', '/work/a/.worker/alpha/report.json',
     '/work/b/.worker/report.json', '/work/b/.worker/beta/report.json',
   ]);
-  const changedStatus = inspectWorkerReports(panes.map((pane) => ({ ...pane, status: 'blocked' })), first.observed, 200, stat);
-  assert.deepEqual(changedStatus.notices.map((notice) => notice.key), first.notices.map((notice) => notice.key));
-  const changedIdentity = inspectWorkerReports([
+  const early = await inspectWorkerReports(panes, first.observed, 100 + WORKER_REPORT_GRACE_MS - 1, stat, readScreen);
+  assert.deepEqual(early.notices, []);
+  const late = await inspectWorkerReports(panes, early.observed, 100 + WORKER_REPORT_GRACE_MS, stat, readScreen);
+  assert.deepEqual(late.notices.map(({ text, scope }) => [text, scope]), [
+    ['Worker alpha in pane ws:p1 wrote its report: /work/a/.worker/report.json', 'ws'],
+    ['Worker beta in pane ws:p2 wrote its report: /work/b/.worker/beta/report.json', 'ws'],
+  ]);
+  const readsBefore = reads.length;
+  const changedStatus = await inspectWorkerReports(panes.map((pane) => ({ ...pane, status: 'blocked' })), late.observed, 100 + WORKER_REPORT_GRACE_MS + 5, stat, readScreen);
+  assert.deepEqual(changedStatus.notices.map((notice) => notice.key), late.notices.map((notice) => notice.key));
+  assert.equal(reads.length, readsBefore, 'a noticed report is not read again');
+  const changedIdentity = await inspectWorkerReports([
     { ...panes[0], agent: 'pi', name: 'renamed', sessionId: 'new-session' },
-  ], first.observed, 150, stat);
+  ], late.observed, 100 + WORKER_REPORT_GRACE_MS + 6, stat, readScreen);
   assert.equal(changedIdentity.observed['ws:p1'].firstSeen, 100);
   assert.equal(changedIdentity.notices[0].text, 'Worker renamed in pane ws:p1 wrote its report: /work/a/.worker/report.json');
   files.set('/work/a/.worker/report.json', { isFile: true, mtimeMs: 201 });
-  const edited = inspectWorkerReports(panes, changedStatus.observed, 202, stat);
-  assert.equal(edited.notices.length, 2);
-  assert.ok(edited.notices.some((notice) => notice.key === 'workers:report:/work/a/.worker/report.json'
-    && notice.text === 'Worker alpha in pane ws:p1 wrote its report: /work/a/.worker/report.json'));
-  assert.deepEqual(edited.notices.map((notice) => notice.key), first.notices.map((notice) => notice.key), 'an edited report keeps its key');
+  const edited = await inspectWorkerReports(panes, changedStatus.observed, 100 + WORKER_REPORT_GRACE_MS + 7, stat, readScreen);
+  assert.deepEqual(edited.notices.map((notice) => notice.key), late.notices.map((notice) => notice.key), 'an edited report keeps its key');
+});
+
+test('a worker that sent its WORKER REPORT prompt gets no report notice', async () => {
+  const { inspectWorkerReports, workerReportPromptSent, WORKER_REPORT_GRACE_MS } = await import('../src/worker-failures.js');
+  const sent = 'x\n$ herdr agent prompt wB:p5T "WORKER REPORT alpha: done. Report: /work/a/.worker/report.md"\nok';
+  assert.equal(workerReportPromptSent(sent, 'alpha'), true);
+  assert.equal(workerReportPromptSent(sent, 'alp'), false);
+  assert.equal(workerReportPromptSent(sent, 'alpha-2'), false);
+  assert.equal(workerReportPromptSent('The brief says: WORKER REPORT alpha: <done|blocked|stopped>', 'alpha'), false, 'text without the send command does not count');
+  const panes = [{ id: 'ws:p1', workspace: 'ws', cwd: '/work/a', name: 'alpha', agent: 'codex', status: 'idle' }];
+  const stat = () => ({ isFile: true, mtimeMs: 101 });
+  let screen = 'still writing';
+  const readScreen = async () => screen;
+  const first = await inspectWorkerReports(panes, {}, 100, stat, readScreen);
+  assert.deepEqual(first.notices, []);
+  screen = sent;
+  const second = await inspectWorkerReports(panes, first.observed, 100 + 1000, stat, readScreen);
+  assert.deepEqual(second.notices, []);
+  screen = 'scrolled away';
+  const third = await inspectWorkerReports(panes, second.observed, 100 + WORKER_REPORT_GRACE_MS + 1, stat, readScreen);
+  assert.deepEqual(third.notices, [], 'a prompt seen once stays settled');
+  const one = (file) => (file === '/work/a/.worker/report.json' ? { isFile: true, mtimeMs: 101 } : null);
+  const failing = await inspectWorkerReports(panes, {}, 100, one, async () => { throw new Error('boom'); });
+  const afterGrace = await inspectWorkerReports(panes, failing.observed, 100 + WORKER_REPORT_GRACE_MS, one, async () => { throw new Error('boom'); });
+  assert.equal(afterGrace.notices.length, 1, 'a failed read counts as no prompt');
 });
 
 test('report inspection accepts metadata only and ignores non-files and stale reports', async () => {
   const { inspectWorkerReports } = await import('../src/worker-failures.js');
   const pane = { id: 'ws:p1', workspace: 'ws', cwd: '/work', name: 'alpha', agent: 'codex' };
   const calls = [];
-  const result = inspectWorkerReports([pane], {}, 500, (file) => {
+  const result = await inspectWorkerReports([pane], {}, 500, (file) => {
     calls.push(file);
     if (file === '/work/.worker/report.json') return { isFile: false, mtimeMs: 900 };
     if (file === '/work/.worker/alpha/report.json') return { isFile: true, mtimeMs: 499 };
@@ -354,7 +384,7 @@ test('a later absolute retry timestamp extends the deadline without a new notice
 });
 
 test('previous-role panes are left out of worker screen reads, reports, blocked alerts, and failure status', async () => {
-  const { inspectWorkerReports } = await import('../src/worker-failures.js');
+  const { inspectWorkerReports, WORKER_REPORT_GRACE_MS } = await import('../src/worker-failures.js');
   const now = 1_000_000;
   const panes = [
     { id: 'w1:p1', workspace: 'w1', cwd: '/work/old-orch', label: 'orch previous', orch: false, agent: 'claude', status: 'working' },
@@ -382,7 +412,7 @@ test('previous-role panes are left out of worker screen reads, reports, blocked 
   assert.deepEqual(blockedWorkerAlerts(blockedSnap, paneSince, now).map((alert) => alert.key), ['workers:blocked:w1:p3']);
 
   const stat = (file) => ({ isFile: true, mtimeMs: file.endsWith('/.worker/report.json') ? 200 : Number.NaN });
-  const reports = inspectWorkerReports(panes, {}, 100, stat);
+  const reports = await inspectWorkerReports(panes, { 'w1:p3': { reports: { 'workers:report:/work/worker/.worker/report.json': { seenAt: 100 - WORKER_REPORT_GRACE_MS } } } }, 100, stat);
   assert.deepEqual(Object.keys(reports.observed), ['w1:p3']);
   assert.deepEqual(reports.notices.map((notice) => notice.text), ['Worker worker-a in pane w1:p3 wrote its report: /work/worker/.worker/report.json']);
 });

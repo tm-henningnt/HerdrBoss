@@ -138,23 +138,40 @@ export function workerPaneReadArgs(paneId) {
   return ['pane', 'read', paneId, '--source', 'visible', '--lines', '8', '--format', 'text'];
 }
 
-// Report files are treated as metadata only. Never open or parse their contents.
-export function inspectWorkerReports(panes, observed, now = Date.now(), getMetadata = (file) => {
+// A worker that finishes sends a WORKER REPORT prompt to its orchestrator. The service tells the
+// orchestrator about a report file only when no such prompt shows in the worker pane within this time.
+export const WORKER_REPORT_GRACE_MS = 2 * 60 * 1000;
+
+const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// Heuristic: a line that echoes the send command, that is, a line with both `herdr agent prompt` and
+// `WORKER REPORT <name>`. Brief text or a quotation without the command does not count.
+export function workerReportPromptSent(screen, name) {
+  if (!name) return false;
+  const pattern = new RegExp(`WORKER REPORT ${escapeRegExp(name)}(?![a-z0-9-])`);
+  return String(screen ?? '').split(/\r?\n/).some((line) => /herdr agent prompt/.test(line) && pattern.test(line));
+}
+
+// Report files are treated as metadata only. Never open or parse their contents. The worker pane is
+// read only to look for the report prompt, and only while a report file waits for its decision.
+export async function inspectWorkerReports(panes, observed, now = Date.now(), getMetadata = (file) => {
   try {
     const stat = fs.lstatSync(file);
     return { isFile: stat.isFile(), mtimeMs: stat.mtimeMs };
   } catch {
     return null;
   }
-}) {
+}, readScreen = null) {
   const nextObserved = {};
   const notices = [];
   for (const pane of panes || []) {
     if (!isWorkerPane(pane)) continue;
     const prior = observed?.[pane.id];
     const firstSeen = Number.isFinite(prior?.firstSeen) ? prior.firstSeen : now;
+    // reports: report path key -> { seenAt, state }. state is 'prompted' or 'noticed' once decided.
+    const reports = { ...(prior?.reports || {}) };
     nextObserved[pane.id] = {
-      agent: pane.agent, name: pane.name || null, sessionId: pane.sessionId || null, firstSeen,
+      agent: pane.agent, name: pane.name || null, sessionId: pane.sessionId || null, firstSeen, reports,
     };
     if (!Number.isFinite(firstSeen) || !pane.cwd) continue;
     const workerName = pane.name || pane.agent;
@@ -163,6 +180,7 @@ export function inspectWorkerReports(panes, observed, now = Date.now(), getMetad
       ...(workerName && path.basename(workerName) === workerName && workerName !== '.' && workerName !== '..'
         ? [`.worker/${workerName}/report.json`] : []),
     ];
+    let screen;
     for (const reportPath of candidates) {
       const absoluteReportPath = path.resolve(pane.cwd, reportPath);
       let metadata;
@@ -170,6 +188,19 @@ export function inspectWorkerReports(panes, observed, now = Date.now(), getMetad
       if (!metadata?.isFile || !Number.isFinite(metadata.mtimeMs) || metadata.mtimeMs <= firstSeen) continue;
       // One notice per report path. A rewrite of the same report changes only its mtime.
       const key = `workers:report:${absoluteReportPath}`;
+      const record = reports[key] = { ...(reports[key] || { seenAt: now }) };
+      if (record.state === 'prompted') continue;
+      if (record.state !== 'noticed') {
+        if (readScreen) {
+          if (screen === undefined) {
+            try { screen = String(await readScreen(['agent', 'read', pane.id, '--source', 'recent-unwrapped', '--lines', '60']) ?? ''); }
+            catch { screen = ''; }
+          }
+          if (workerReportPromptSent(screen, pane.name)) { record.state = 'prompted'; continue; }
+        }
+        if (now - record.seenAt < WORKER_REPORT_GRACE_MS) continue;
+        record.state = 'noticed';
+      }
       notices.push({
         key, severity: 'info', scope: pane.workspace, immediate: true,
         title: `Worker ${workerName} wrote its report`,

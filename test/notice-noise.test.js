@@ -222,29 +222,35 @@ test('a mark from an earlier night does not keep the start notice from going out
   assert.equal(prompts.every(isStart), true);
 });
 
-test('a worker report notice has one key per report path across mtime changes', () => {
+test('a worker report notice has one key per report path across mtime changes', async () => {
   const panes = [{ id: 'w1:p2', workspace: 'w1', agent: 'claude', name: 'alpha', cwd: '/tmp/wt-alpha', status: 'done' }];
-  const observed = { 'w1:p2': { agent: 'claude', name: 'alpha', sessionId: null, firstSeen: NOW - 10 * MIN } };
+  const seen = (cwd) => ({ [`workers:report:${cwd}/.worker/report.json`]: { seenAt: NOW - 5 * MIN } });
+  const observed = { 'w1:p2': { agent: 'claude', name: 'alpha', sessionId: null, firstSeen: NOW - 10 * MIN, reports: seen('/tmp/wt-alpha') } };
   const at = (mtimeMs) => (file) => (file === '/tmp/wt-alpha/.worker/report.json' ? { isFile: true, mtimeMs } : null);
-  const first = inspectWorkerReports(panes, observed, NOW, at(NOW - 5 * MIN)).notices;
-  const second = inspectWorkerReports(panes, observed, NOW + MIN, at(NOW - 2 * MIN)).notices;
+  const first = (await inspectWorkerReports(panes, observed, NOW, at(NOW - 5 * MIN))).notices;
+  const second = (await inspectWorkerReports(panes, observed, NOW + MIN, at(NOW - 2 * MIN))).notices;
   assert.equal(first.length, 1);
   assert.equal(second.length, 1);
   assert.equal(second[0].key, first[0].key, 'a rewrite of the same report keeps the key');
   assert.doesNotMatch(first[0].key, /:\d{10,}/, 'the key holds no mtime');
-  const otherRun = inspectWorkerReports([{ ...panes[0], cwd: '/tmp/wt-beta' }], observed, NOW,
-    (file) => (file === '/tmp/wt-beta/.worker/report.json' ? { isFile: true, mtimeMs: NOW - MIN } : null)).notices;
+  const otherObserved = { 'w1:p2': { ...observed['w1:p2'], reports: seen('/tmp/wt-beta') } };
+  const otherRun = (await inspectWorkerReports([{ ...panes[0], cwd: '/tmp/wt-beta' }], otherObserved, NOW,
+    (file) => (file === '/tmp/wt-beta/.worker/report.json' ? { isFile: true, mtimeMs: NOW - MIN } : null))).notices;
   assert.notEqual(otherRun[0].key, first[0].key, 'a new report path gets a new key');
 });
 
-test('a rewritten report reaches the orchestrator once', (t) => {
+test('a rewritten report reaches the orchestrator once', async (t) => {
   const panes = [orch('idle'), { id: 'w1:p2', workspace: 'w1', agent: 'claude', name: 'alpha', cwd: '/tmp/wt-alpha', status: 'done' }];
-  const observed = { 'w1:p2': { agent: 'claude', name: 'alpha', sessionId: null, firstSeen: NOW - 10 * MIN } };
-  const rounds = [0, 1, 2].map((i) => ({
-    at: NOW + i * 2 * 3600 * 1000,
-    panes,
-    alerts: inspectWorkerReports(panes, observed, NOW, () => ({ isFile: true, mtimeMs: NOW + i * MIN })).notices,
-  }));
+  const observed = { 'w1:p2': { agent: 'claude', name: 'alpha', sessionId: null, firstSeen: NOW - 10 * MIN,
+    reports: { 'workers:report:/tmp/wt-alpha/.worker/report.json': { seenAt: NOW - 5 * MIN } } } };
+  const rounds = [];
+  for (const i of [0, 1, 2]) {
+    rounds.push({
+      at: NOW + i * 2 * 3600 * 1000,
+      panes,
+      alerts: (await inspectWorkerReports(panes, observed, NOW, () => ({ isFile: true, mtimeMs: NOW + i * MIN }))).notices,
+    });
+  }
   const prompts = deliverRounds(t, rounds);
   assert.equal(prompts.filter((p) => /wrote its report/.test(p.text)).length, 1);
 });

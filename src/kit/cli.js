@@ -128,12 +128,16 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
       const root = injectedConfig?.root ?? findGitRoot();
       const installed = installedKitRevision(root);
       const changes = kitChangesSince(installed);
-      // The digest comes before the install, so the reader sees what changed before the install lines.
-      for (const line of formatKitDigest(installed, changes)) output(line);
       const result = installKit(root);
-      if (!argv.includes('--quiet')) {
+      const quiet = argv.includes('--quiet');
+      // A quiet update on a current project prints nothing: no digest, no summary, and no file written.
+      if (quiet && !changes.length && !result.written.length) return { ...result, installed, changes };
+      for (const line of formatKitDigest(installed, changes)) output(line);
+      if (!quiet) {
         for (const file of result.written) output(`wrote ${file}`);
         for (const file of result.unchanged) output(`unchanged ${file}`);
+        // The kit file follows, so a session with a stale copy loads the current rules.
+        output(fs.readFileSync(path.join(root, KIT_FILE), 'utf8').trimEnd());
       }
       output(`kit update: kit revision ${result.revision}, stub ${result.hash}, in ${root}`);
       return { ...result, installed, changes };

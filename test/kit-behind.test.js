@@ -126,6 +126,17 @@ test('kitReminderAlerts stops and resets the clock when the project catches up o
   assert.equal(tracker.alpha, undefined);
 });
 
+test('kitReminderAlerts skips a held project and restarts its clock', () => {
+  const entries = [{ revision: A, impact: 'required', summary: 'a' }, { revision: B, impact: 'required', summary: 'b' }];
+  const projects = [{ slug: 'alpha', workspace: 'wA', kitRevision: A }];
+  const tracker = { alpha: { since: NOW - 5 * KIT_REMIND_MS } };
+  const held = (slug) => slug === 'alpha';
+  assert.deepEqual(kitReminderAlerts({ projects, tracker, now: NOW, current: B, changes: entries, held }), []);
+  assert.equal(tracker.alpha, undefined, 'a held project leaves the tracker');
+  assert.deepEqual(kitReminderAlerts({ projects, tracker, now: NOW + 1, current: B, changes: entries }), []);
+  assert.deepEqual(tracker.alpha, { since: NOW + 1 }, 'the clock starts again at the resume');
+});
+
 const deliverProbe = `
 import { Engine } from './src/engine.js';
 import { loadConfig } from './src/config.js';
@@ -137,7 +148,7 @@ const engine = new Engine(cfg, { push: false, act: false, gitRunner: async () =>
 engine.push = true;
 const alert = { key: 'kitremind:alpha:bbbbbbbbbbbb', severity: 'warn', scope: 'wA', immediate: true, once: true, noDesktop: true, title: 'Kit behind', text: '[herdr-boss] Your kit is behind on a required change. Run herdr-boss kit update.' };
 const now = Date.parse('2026-09-29T10:00:00.000Z');
-for (const [i, panes] of input.rounds.entries()) await engine.deliver([alert], { panes }, now + i * 60000);
+for (const [i, panes] of input.rounds.entries()) await engine.deliver([alert], { panes }, now + i * 60000, null, new Set(input.held || []));
 console.log(JSON.stringify({ prompts: prompts.filter((a) => a[0] === 'agent' && a[1] === 'prompt').map((a) => a[2]) }));
 `;
 
@@ -156,4 +167,17 @@ test('the kit reminder reaches a working project orchestrator once and no other 
   });
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout.trim()).prompts, ['wA:p1']);
+});
+
+test('the kit reminder skips the orchestrator of a held project', (t) => {
+  const dir = tmpDir(t, 'herdr-kit-remind-held-');
+  fs.mkdirSync(path.join(dir, 'projects'), { recursive: true });
+  const rounds = [[{ id: 'wA:p1', workspace: 'wA', workspaceLabel: 'wA', label: 'orch', orch: true, agent: 'claude', status: 'working' }]];
+  const run = (held) => spawnSync(process.execPath, ['--input-type=module', '-e', deliverProbe], {
+    cwd: repo, encoding: 'utf8',
+    env: { ...process.env, HOME: dir, HERDR_BOSS_DIR: dir, HERDR_BOSS_LIVE_DIR: dir, KIT_SCENARIO: JSON.stringify({ rounds, held }) },
+  });
+  const held = run(['wA']);
+  assert.equal(held.status, 0, held.stderr);
+  assert.deepEqual(JSON.parse(held.stdout.trim()).prompts, []);
 });

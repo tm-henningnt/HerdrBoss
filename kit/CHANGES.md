@@ -41,3 +41,7 @@ Summary: Add a blocking herdr-boss wait for the few cases that must block.
 ## 60049d639ff0
 Impact: useful
 Summary: Tell orchestrators to start workers with --task-id so the board shows live task state.
+
+## c13020178b65
+Impact: required
+Summary: Add the subagent and no-watching rule (subagents for reviews and reads, end the turn after a dispatch, at most one check every 20 to 30 minutes); a Kit updated notice now means run kit update and continue.
