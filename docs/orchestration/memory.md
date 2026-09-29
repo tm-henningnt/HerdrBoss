@@ -46,6 +46,8 @@ Owner queue (credentials, billing, and Owner-applied settings):
 
 - 2026-09-29: Boss work queue after NC6, in this order. G0: record one ledger line for each lock acquire and release (project, kind suite/push/manual, tree hash, wait, hold), and show hold and wait medians on the Locks panel. G1: add the lockfile hash to the suite pass key. G2: change the AGENTS.md integrate steps to run one full suite for each integrated tree with `herdr-boss suite --reuse -- npm test`, and reuse that pass on `main`; workers run only changed test files. G3: after G0 has a few days of data, plan lock classes (a long class and a short class that may run beside one long job under a parallelism cap). Plan only; do not build G3. Source: Boss.
 
+- 2026-09-29: G4 joins the guard queue, planned after G0. Plan only; build nothing until the Boss says go. (1) Record a machine sample every minute into a small local file: 1, 5 and 15 minute load, free memory, swap used, and the kinds of running full-suite lock holders. (2) Show on Analytics the hours of the day with machine overload (for example swap above 90%, or load above 3 times the cores) next to the hours in which the full-suite queue had waiters while the CPU was below 50%. (3) Propose thresholds from the data with memory and swap as the main signal, not CPU load. Keep the guard off. Add only a swap-based warning and a refusal of new workers and suites when swap is nearly full. Source: Boss, for the Owner.
+
 ## Standing rules
 
 - The service serves `public/` from the `main` working tree at once, but the server code only after a restart. Restart the service right after a merge that changes `public/` together with the server API, before the full suite, or the dashboard breaks until the restart.
