@@ -5,6 +5,8 @@
  * - read, write, edit, grep, find, and ls may use only the worktree (the Pi working directory),
  *   the temporary directories, and ~/.herdr-boss.
  * - bash may not run the deny list below, and may not name a protected path.
+ * - bash may not run rm -rf on a pattern, on the worktree, or on the .worker folder itself. It may run
+ *   rm -rf on a path inside the worktree .worker folder, and on a path inside a temporary directory.
  */
 
 import os from "node:os";
@@ -59,18 +61,19 @@ const BASH_DENY: [RegExp, string][] = [
 	[/\bkill\b[^;&|]*\$\(\s*pgrep\b/, "kill with a pgrep name pattern"],
 ];
 
-// rm -rf is allowed only when every target is inside a temporary directory or the worktree .worker/tmp.
+// rm -rf is allowed only when every target is inside a temporary directory or inside the worktree .worker folder.
 function rmBlocked(command: string, cwd: string): string | null {
 	const rm = /\brm\s+(-[a-zA-Z]*[rR][a-zA-Z]*f?[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*[rR][a-zA-Z]*|--recursive)\b([^;&|]*)/g;
 	let match: RegExpExecArray | null;
 	while ((match = rm.exec(command))) {
 		const targets = match[2].trim().split(/\s+/).filter((t) => t && !t.startsWith("-"));
 		if (!targets.length) return "rm -rf without a target";
-		const allowed = [...tempRoots(), real(path.join(cwd, ".worker", "tmp"))];
+		// Each root is a boundary: the folder itself stays blocked, only its child folders are allowed.
+		const allowed = [...tempRoots(), real(path.join(cwd, ".worker"))];
 		for (const target of targets) {
 			if (/[*?$`]/.test(target)) return `rm -rf with a pattern or expansion (${target})`;
 			const resolved = expand(target.replace(/^['"]|['"]$/g, ""), cwd);
-			if (!allowed.some((root) => inside(resolved, root) && resolved !== root)) return `rm -rf outside the temporary directories (${target})`;
+			if (!allowed.some((root) => inside(resolved, root) && resolved !== root)) return `rm -rf outside the temporary directories and the worktree .worker folder (${target})`;
 		}
 	}
 	return null;

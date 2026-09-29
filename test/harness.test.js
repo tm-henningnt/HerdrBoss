@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import test from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CLI = path.join(ROOT, 'src', 'cli.js');
@@ -472,4 +472,42 @@ test('harness sync --dry-run prints the change and writes nothing', (t) => {
   assert.match(result.stdout, /Dry run/);
   assert.equal(fs.readFileSync(config, 'utf8'), before);
   assert.deepEqual(fs.readdirSync(path.dirname(config)).filter((name) => name.startsWith('config.toml.bak-')), []);
+});
+
+// Load the guard template as a module and return its tool_call handler. The template holds no placeholder.
+// TMPDIR points at an empty folder inside the fixture home, so the temporary roots hold no fixture path.
+async function guardHandler(t) {
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-guard-')));
+  const file = path.join(home, 'herdr-guard.ts');
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  fs.writeFileSync(file, fs.readFileSync(path.join(TEMPLATES, 'pi-herdr-guard.ts'), 'utf8'));
+  const previous = { home: process.env.HOME, tmp: process.env.TMPDIR };
+  process.env.HOME = home;
+  process.env.TMPDIR = path.join(home, 'empty-tmp');
+  t.after(() => {
+    for (const [key, value] of [['HOME', previous.home], ['TMPDIR', previous.tmp]]) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  });
+  const module = await import(pathToFileURL(file).href);
+  let handler;
+  module.default({ on: (_event, callback) => { handler = callback; } });
+  assert.equal(typeof handler, 'function');
+  return { handler, home, cwd: path.join(home, 'wt') };
+}
+
+const bashDecision = async (guard, command) => guard.handler({ toolName: 'bash', input: { command } }, { cwd: guard.cwd });
+
+test('the Pi guard allows a removal of an exact path in the worktree .worker folder and blocks a pattern, the worktree, and an outside path', async (t) => {
+  const guard = await guardHandler(t);
+  fs.mkdirSync(path.join(guard.cwd, '.worker', 'tmp'), { recursive: true });
+  assert.equal(await bashDecision(guard, 'rm -rf .worker/tmp/scratch'), undefined);
+  assert.equal(await bashDecision(guard, 'rm -rf .worker/report.md'), undefined);
+  assert.equal(await bashDecision(guard, 'rm -rf .worker/tmp/build && rm -rf .worker/tmp/dist'), undefined);
+  for (const pattern of ['rm -rf .worker/tmp/*', 'rm -rf .worker/tmp/x?', 'rm -rf .worker/tmp/$SUB', 'rm -rf .worker/tmp/$(ls)']) {
+    assert.match((await bashDecision(guard, pattern)).reason, /pattern or expansion/, pattern);
+  }
+  for (const blocked of ['rm -rf .worker', 'rm -rf .', 'rm -rf ..', 'rm -rf /etc/hosts', 'rm -rf src/index.js']) {
+    assert.ok((await bashDecision(guard, blocked)).reason, `${blocked} stays blocked`);
+  }
 });
