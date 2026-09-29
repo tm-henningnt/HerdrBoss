@@ -677,7 +677,7 @@ test('worker start validates the caller pane and uses it for placement and repor
   const result = startWorker('caller-valid', { kind: 'codex', task: 'x', allow: ['src/'] }, {
     config, models: loadModels(), herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
   });
-  assert.equal(fs.readFileSync(path.join(result.worktree, '.worker', 'brief.md'), 'utf8'), 'Report target: ws:orch\n\n## Worker start details\n\nScreenshot budget: 10 screenshots. The project setting overrides the kit default.');
+  assert.equal(fs.readFileSync(path.join(result.worktree, '.worker', 'brief.md'), 'utf8'), 'Report target: ws:orch\n\n## Worker start details\n\nScreenshot budget: 10 screenshots. The project setting overrides the kit default.\n\nIn a Codex shell, run `setopt NO_BG_NICE` before a background command.');
   assert.ok(calls.some((args) => args.join(' ') === 'tab list --workspace ws'));
   assert.ok(calls.some((args) => args.join(' ') === 'pane get ws:orch'));
 
@@ -878,7 +878,7 @@ test('worker start records a real dispatch before prompting and verifies activit
   });
   assert.equal(result.pane, 'ws:p2');
   assert.ok(calls.some((args) => args[0] === 'agent' && args[1] === 'prompt'));
-  assert.equal(fs.readFileSync(path.join(result.worktree, '.worker', 'brief.md'), 'utf8'), 'Worker demo: x\n\n## Worker start details\n\nScreenshot budget: 10 screenshots. The project setting overrides the kit default.');
+  assert.equal(fs.readFileSync(path.join(result.worktree, '.worker', 'brief.md'), 'utf8'), 'Worker demo: x\n\n## Worker start details\n\nScreenshot budget: 10 screenshots. The project setting overrides the kit default.\n\nIn a Codex shell, run `setopt NO_BG_NICE` before a background command.');
 });
 
 test('worker collect keeps changed paths stable after the base branch merges the worker', () => {
@@ -1705,6 +1705,84 @@ test('worker start copies nested repository inputs before sending the prompt', (
   assert.equal(brief.match(/\.worker\/inputs\/fixtures\/one\/a\.txt/g)?.length, 1);
 });
 
+test('worker start copies the worker named orchestration inputs into its worktree', () => {
+  const f = setupFixture(null);
+  const inputDir = path.join(f.root, '.orchestration', 'state', 'inputs', 'demo');
+  fs.mkdirSync(path.join(inputDir, 'context'), { recursive: true });
+  fs.writeFileSync(path.join(inputDir, 'context', 'plan.md'), 'Use the current plan.\n');
+  const result = startWorker('demo', { kind: 'codex', task: 'x', allow: ['src/'] }, {
+    config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+  });
+  assert.equal(fs.readFileSync(path.join(result.worktree, '.worker/inputs/context/plan.md'), 'utf8'), 'Use the current plan.\n');
+  const brief = fs.readFileSync(path.join(result.worktree, '.worker/brief.md'), 'utf8');
+  assert.match(brief, /\.worker\/inputs\/context\/plan\.md/);
+});
+
+test('worker start refuses more than 200 MB across automatic and explicit copied inputs', () => {
+  const f = setupFixture(null);
+  const inputDir = path.join(f.root, '.orchestration', 'state', 'inputs', 'oversize');
+  fs.mkdirSync(inputDir, { recursive: true });
+  const inputFd = fs.openSync(path.join(inputDir, 'input.bin'), 'w');
+  fs.ftruncateSync(inputFd, 120 * 1024 * 1024);
+  fs.closeSync(inputFd);
+  const copyFd = fs.openSync(path.join(f.root, 'extra.bin'), 'w');
+  fs.ftruncateSync(copyFd, 80 * 1024 * 1024 + 1);
+  fs.closeSync(copyFd);
+  assert.throws(() => startWorker('oversize', { kind: 'codex', task: 'x', allow: ['src/'], copy: ['extra.bin'], dryRun: true }, {
+    config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+  }), /copied inputs exceed the 200 MB total limit/i);
+  assert.equal(fs.existsSync(f.config.worktreePath('oversize')), false);
+});
+
+test('worker start automatically leases serve:live and writes the port file', () => {
+  const f = setupFixture(null);
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-kit-auto-lease-'));
+  const pools = [{ name: 'serve-ports', items: ['47100'], split: {}, env: 'HERDR_SERVE_PORT', ttlMinutes: 240, check: null, graceMinutes: 10 }];
+  const calls = [];
+  const output = [];
+  const herdr = (args) => { calls.push(args); return f.herdr(args); };
+  const result = startWorker('demo', { kind: 'codex', task: 'Run npm run serve:live to check the page.', allow: ['src/'] }, {
+    config: f.config, models: loadModels(), herdr, env: f.env, rulesFile: f.rulesFile, output: (line) => output.push(line),
+    leaseOptions: { dataDir, pools },
+  });
+  assert.deepEqual(result.leases, [{ pool: 'serve-ports', item: '47100', env: 'HERDR_SERVE_PORT' }]);
+  assert.ok(output.includes('Automatically leased serve-ports for the serve:live task.'));
+  assert.equal(fs.readFileSync(path.join(result.worktree, '.worker/port'), 'utf8'), '47100\n');
+  assert.ok(calls.some((args) => args[0] === 'pane' && args[1] === 'split' && args.includes('HERDR_SERVE_PORT=47100')));
+  const brief = fs.readFileSync(path.join(result.worktree, '.worker/brief.md'), 'utf8');
+  assert.match(brief, /Use only the port in `\.worker\/port`\. Take no other serve port\./);
+});
+
+test('worker briefs add harness notes, the Git rule, and a long TMPDIR warning', () => {
+  const template = path.resolve('kit/templates/worker-brief.md');
+  const codex = setupFixture(null);
+  codex.config.briefTemplatePath = template;
+  const codexRun = startWorker('codex-notes', { kind: 'codex', task: 'x', allow: ['src/'] }, {
+    config: codex.config, models: loadModels(), herdr: codex.herdr, env: codex.env, rulesFile: codex.rulesFile, output: () => {},
+  });
+  const codexBrief = fs.readFileSync(path.join(codexRun.worktree, '.worker/brief.md'), 'utf8');
+  assert.match(codexBrief, /setopt NO_BG_NICE/);
+  assert.doesNotMatch(codexBrief, /To wait, use a background command/);
+  assert.match(codexBrief, /Do not run cherry-pick, rebase, or merge\. The orchestrator does them\. Commit only when the brief asks\./);
+
+  const claude = setupFixture(null);
+  claude.config.briefTemplatePath = template;
+  const claudeRun = startWorker('claude-notes', { kind: 'claude', task: 'x', allow: ['src/'] }, {
+    config: claude.config, models: loadModels(), herdr: claude.herdr, env: claude.env, rulesFile: claude.rulesFile, output: () => {},
+  });
+  const claudeBrief = fs.readFileSync(path.join(claudeRun.worktree, '.worker/brief.md'), 'utf8');
+  assert.match(claudeBrief, /To wait, use a background command and wait for its exit, or a herdr-boss wait command\. Do not run sleep and then poll\./);
+  assert.doesNotMatch(claudeBrief, /In a Codex shell, run `setopt NO_BG_NICE` before a background command\./);
+
+  const long = setupFixture(null);
+  long.config.worktreePath = (name) => path.join(os.tmpdir(), 'x'.repeat(100), name);
+  const output = [];
+  startWorker('long-tmpdir', { kind: 'codex', task: 'x', allow: ['src/'], dryRun: true }, {
+    config: long.config, models: loadModels(), herdr: long.herdr, env: long.env, rulesFile: long.rulesFile, output: (line) => output.push(line),
+  });
+  assert.equal(output.filter((line) => /TMPDIR is longer than 90 characters/.test(line)).length, 1);
+});
+
 test('custom worker brief gets missing budget and copied input details', () => {
   const f = setupFixture(null);
   const template = path.join(f.root, 'custom-brief.md');
@@ -2255,7 +2333,7 @@ test('worker brief shows the effective screenshot budget and project precedence'
   const result = startWorker('budget', { kind: 'codex', task: 'x', allow: ['src/'] }, {
     config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
   });
-  assert.equal(fs.readFileSync(path.join(result.worktree, '.worker/brief.md'), 'utf8'), 'Budget 6. The project setting overrides the kit default.');
+  assert.equal(fs.readFileSync(path.join(result.worktree, '.worker/brief.md'), 'utf8'), 'Budget 6. The project setting overrides the kit default.\n\n## Worker start details\n\nIn a Codex shell, run `setopt NO_BG_NICE` before a background command.');
 });
 
 test('worker brief names the orchestrator by pane and stable agent name', () => {
@@ -2279,7 +2357,7 @@ test('worker start puts the project thread limit flag in the brief', () => {
   fs.writeFileSync(cfgFile, JSON.stringify({ briefTemplate: template, testThreadsFlag: '--poolOptions.forks.maxForks=2' }));
   const config = loadProjectConfig({ cwd: f.root });
   const result = startWorker('demo', { kind: 'codex', task: 'x', allow: ['src/'] }, { config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {} });
-  assert.equal(fs.readFileSync(path.join(result.worktree, '.worker', 'brief.md'), 'utf8'), 'Limit: Add `--poolOptions.forks.maxForks=2` to each test runner command.\n\n## Worker start details\n\nScreenshot budget: 10 screenshots. The project setting overrides the kit default.');
+  assert.equal(fs.readFileSync(path.join(result.worktree, '.worker', 'brief.md'), 'utf8'), 'Limit: Add `--poolOptions.forks.maxForks=2` to each test runner command.\n\n## Worker start details\n\nScreenshot budget: 10 screenshots. The project setting overrides the kit default.\n\nIn a Codex shell, run `setopt NO_BG_NICE` before a background command.');
 });
 
 test('workers that share a checkout each get their own brief folder', () => {
@@ -3280,6 +3358,7 @@ test('the kit rules name waitingOn, the Mailbox id, and blockedBy', () => {
     'Set `waitingOn: owner` only for the escalation categories.',
     'Always post a Mailbox item that needs an Owner action, and set `mailboxId` to its id.',
     'Use `blockedBy` for waits on other tasks.',
+    'Put task inputs in `.orchestration/state/inputs/<worker name>/`; worker start copies them into the worktree.',
     'Your orchestrator agent is named `<slug>-orch`. Prompt workers and the Boss by pane ID or by that name.',
   ];
   const text = fs.readFileSync(path.resolve('kit/templates/project-kit.md'), 'utf8');

@@ -23,6 +23,7 @@ These are the shared operating rules for the orchestrator of this project.
 - Keep the orchestrator pane labeled `orch`.
 - Your orchestrator agent is named `<slug>-orch`. Prompt workers and the Boss by pane ID or by that name.
 - Use `herdr-boss worker start` to start workers. Use `--read-only` for a task that changes no repository file.
+- Put task inputs in `.orchestration/state/inputs/<worker name>/`; worker start copies them into the worktree.
 - Use lowercase, unique worker names.
 - Give every worker one bounded task and exact allowed paths.
 - Run each `herdr-boss browser` command and each `ps` or `pgrep` command alone. Do not join it to other commands with `&&`, `;`, or a pipe.
