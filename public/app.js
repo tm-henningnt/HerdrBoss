@@ -1354,6 +1354,7 @@ function analyticsView(s) {
     '<header class="page-intro"><div><h1>Analytics</h1><p>Recorded work by project and provider. Token totals include only runs with measured tokens.</p></div></header>',
     usageBlock(),
     providerUsageBlock(),
+    modelScorecardBlock(s),
     recentUsageBlock(),
     denialsBlock(s),
   ].join('');
@@ -2614,6 +2615,11 @@ function usageBlock() {
 function providerUsageBlock() {
   const rows = Object.entries(usage?.byProvider || {});
   return `<section><div class="section-head"><h2>By provider</h2><span>Recorded work, not subscription balance</span></div>${rows.length ? `<div class="fleet-table-wrap"><table class="fleet-table"><thead><tr><th>Provider</th><th>Runs</th><th>Measured</th><th>Input</th><th>Output</th><th>Work time</th></tr></thead><tbody>${rows.map(([provider, x]) => `<tr><td data-label="Provider"><strong>${esc(PROVIDERS[provider] || provider)}</strong></td><td class="mono" data-label="Runs">${x.runs}</td><td class="mono" data-label="Measured">${x.measuredRuns} / ${x.runs}</td><td class="mono" data-label="Input">${x.inputTokens.toLocaleString()}</td><td class="mono" data-label="Output">${x.outputTokens.toLocaleString()}</td><td class="mono" data-label="Work time">${Math.round(x.workMinutes)} min</td></tr>`).join('')}</tbody></table></div>` : '<div class="calm-state">Provider usage will appear as worker runs are recorded.</div>'}</section>`;
+}
+
+function modelScorecardBlock(s) {
+  const rows = s?.modelScorecard || [];
+  return `<section><div class="section-head"><h2>Model scorecard</h2><span>Last 30 days, sorted by runs</span></div>${rows.length ? `<div class="fleet-table-wrap"><table class="fleet-table"><thead><tr><th>Harness</th><th>Model</th><th>Runs</th><th>First-time</th><th>Rework</th><th>Failed</th><th>Rework rate</th><th>Median time</th></tr></thead><tbody>${rows.map((r) => `<tr><td data-label="Harness">${esc(HARNESS_NAMES[r.kind] || r.kind)}</td><td data-label="Model" class="mono">${esc(r.model)}</td><td class="mono" data-label="Runs">${r.runs}</td><td class="mono" data-label="First-time">${r.firstTime}</td><td class="mono" data-label="Rework">${r.rework}</td><td class="mono" data-label="Failed">${r.failed}</td><td class="mono" data-label="Rework rate">${(r.reworkRate * 100).toFixed(1)}%</td><td class="mono" data-label="Median time">${r.medianMinutes != null ? Math.round(r.medianMinutes) + ' min' : '—'}</td></tr>`).join('')}</tbody></table></div>` : '<div class="calm-state">No model outcome data yet. Orchestrators record it with <code>worker collect --record --model-result</code>.</div>'}</section>`;
 }
 
 const HARNESS_NAMES = { claude: 'Claude', codex: 'Codex', opencode: 'OpenCode', pi: 'Pi' };

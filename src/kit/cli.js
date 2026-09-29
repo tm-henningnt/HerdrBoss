@@ -213,7 +213,7 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
     if (action === 'collect') {
       const { positional, flags } = parseArgs(rest, { boolean: ['--record', '--gate-passed', '--gate-failed'] });
       if (positional.length !== 1) fail('Usage: worker collect <name> [options]');
-      knownFlags(flags, ['record', 'outcome', 'gatepassed', 'gatefailed', 'defects', 'rework']);
+      knownFlags(flags, ['record', 'outcome', 'gatepassed', 'gatefailed', 'defects', 'rework', 'modelresult', 'modelreason']);
       return collectWorker(positional[0], {
         record: flags.record,
         outcome: flags.outcome,
@@ -221,6 +221,8 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
         gateFailed: flags.gatefailed,
         defects: flags.defects == null ? 0 : Number(flags.defects),
         rework: flags.rework == null ? 0 : Number(flags.rework),
+        modelResult: flags.modelresult || null,
+        modelReason: flags.modelreason || null,
       }, { config, output });
     }
     if (action === 'allow') {
