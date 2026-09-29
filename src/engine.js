@@ -176,7 +176,7 @@ export function inspectWorkerNoReports(panes, runs, observed = {}, now = Date.no
     const since = sameRun && Number.isFinite(prior.since) ? prior.since : now;
     nextObserved[pane.id] = { name: run.name, startedAt, worktree: run.worktree, since };
     if (!Number.isFinite(now) || now - since < WORKER_NO_REPORT_MS) continue;
-    const reportPath = path.join(run.worktree, '.worker', 'report.json');
+    const reportPath = path.join(run.worktree, run.workerDir || '.worker', 'report.json');
     let exists;
     try { exists = reportExists(reportPath); }
     catch { continue; }
