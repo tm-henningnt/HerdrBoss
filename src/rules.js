@@ -4,6 +4,7 @@ import { formatPacingGoalEnd, goalSummary, hasQuotaData, machineLimits, pacingGo
 import { blockedWorkerAlerts } from './worker-failures.js';
 import { kitRevision } from './kit/agents-check.js';
 import { leaseBulletinLines } from './leases.js';
+import { watchUntilPhrase } from './night.js';
 
 const PROVIDER_NAMES = { claude: 'Claude', codex: 'Codex', opencodego: 'OpenCode Go' };
 export const providerName = (p) => PROVIDER_NAMES[p] || p;
@@ -338,12 +339,9 @@ export function renderBulletin(snap, evaluation, cfg) {
   rules.unshift(...stale.map((q) => `Quota data for ${providerName(q.provider)} is from ${fmtTime(q.staleSince)}; the last probe failed.`));
   if (!quotaRows.length) rules.unshift('Quota data unavailable: the quota collector failed. Pace work carefully until the data returns.');
   else if (failed.length) rules.unshift(`Quota data unavailable for ${failed.join(', ')}. Pace work on those providers carefully.`);
-  // An active night state comes last into the list, so it is the first line. An orchestrator reads the Owner rule first.
+  // An active watch state comes last into the list, so it is the first line. An orchestrator reads the Owner rule first.
   if (snap.night?.active) {
-    const end = snap.night.until
-      ? new Date(snap.night.until).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
-      : '?';
-    rules.unshift(`Night watch until ${end} (Owner away). Work as normal; the Boss handles judgment calls.`);
+    rules.unshift(`Watch ${watchUntilPhrase(snap.night, Date.parse(snap.updatedAt) || Date.now())} (Owner away). Work as normal; the Boss handles judgment calls.`);
     if (snap.night.quietHours === true) rules.unshift('Quiet hours: on.');
   }
   if (rules.length) rules.forEach((r) => L.push(`- ${r}`));
@@ -457,10 +455,10 @@ export function renderBulletin(snap, evaluation, cfg) {
   if (snap.control) {
     L.push('', '## Worker allocation', '', `- ${snap.control.runningWorkers}/${snap.control.maxWorkers} working agents globally.`);
     if (snap.night?.active) {
-      const laneCaps = Object.entries(cfg.night?.maxWorkersByLane || {})
+      const laneCaps = Object.entries(cfg.watch?.maxWorkersByLane || {})
         .filter(([, cap]) => Number.isInteger(cap))
         .map(([lane, cap]) => `${lane} ${cap}`);
-      L.push(`- Night cap ${snap.control.maxWorkers}${laneCaps.length ? ` (${laneCaps.join('; ')})` : ''}.`);
+      L.push(`- Watch cap ${snap.control.maxWorkers}${laneCaps.length ? ` (${laneCaps.join('; ')})` : ''}.`);
     }
     L.push(`- Automatic orchestrator handover: ${snap.policy?.autoHandover ? `enabled; prepare at reserve, activate at ${snap.policy.autoHandoverPercent}% after successor readiness; at a task boundary, hand over above ${snap.policy.autoHandoverContextTokens} context tokens` : 'off'}.`);
     L.push('- Borrowed slots are real capacity. Start workers up to your effective slots; the global limit still applies.');

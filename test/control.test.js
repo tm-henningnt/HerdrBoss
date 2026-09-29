@@ -65,7 +65,7 @@ test('Engine applies the configured night worker cap to global control and prese
   const data = path.join(temp, 'data');
   fs.mkdirSync(data, { recursive: true });
   fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({
-    night: { maxWorkers: 3, maxWorkersByLane: { unmetered: 2, codex: 1, claude: null, opencodego: null } },
+    watch: { maxWorkers: 3, maxWorkersByLane: { unmetered: 2, codex: 1, claude: null, opencodego: null } },
   }));
   fs.writeFileSync(path.join(data, 'policy.json'), JSON.stringify({ maxWorkers: 8, projects: {
     alpha: { share: 60, mode: 'active' }, beta: { share: 40, mode: 'paused' },
@@ -136,7 +136,7 @@ process.stdout.write(JSON.stringify({
   assert.deepEqual(result.activeNight, {
     active: true, maxWorkersByLane: { unmetered: 2, codex: 1, claude: null, opencodego: null },
   });
-  assert.equal(result.dayCap, 8, 'the day worker cap applies when night watch is inactive');
+  assert.equal(result.dayCap, 8, 'the day worker cap applies when the watch is inactive');
   assert.equal(result.daySlots, 8);
 });
 
@@ -790,9 +790,9 @@ test('active night bulletin shows the global and configured unmetered worker cap
   };
   const bulletin = renderBulletin(snap, { alerts: [], advice: [] }, {
     dashboardPort: 4477,
-    night: { maxWorkers: 16, maxWorkersByLane: { unmetered: 12, codex: null, claude: null, opencodego: null } },
+    watch: { maxWorkers: 16, maxWorkersByLane: { unmetered: 12, codex: null, claude: null, opencodego: null } },
   });
-  assert.match(bulletin, /Night cap 16 \(unmetered 12\)/);
+  assert.match(bulletin, /Watch cap 16 \(unmetered 12\)/);
 });
 
 test('Owner idle time parses HIDIdleTime nanoseconds and rejects missing or invalid readings', async () => {

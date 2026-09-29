@@ -962,7 +962,7 @@ export function startWorker(name, options, {
   const nightLaneCap = rules.night?.maxWorkersByLane?.[laneName];
   if (rules.night?.active === true && Number.isInteger(nightLaneCap) &&
       (rules.control?.runningByLane?.[laneName] || 0) >= nightLaneCap && !options.force) {
-    throw new Error(`Night worker lane limit (${nightLaneCap}) for ${laneName} is reached; wait for a slot to open.`);
+    throw new Error(`Watch worker lane limit (${nightLaneCap}) for ${laneName} is reached; wait for a slot to open.`);
   }
   const freeGate = unmeteredGate(options.kind, model, provider, rules, { force: options.force, now, project: config.slug, allowedModels: config.allowedModels });
   if (freeGate.error) throw new Error(freeGate.error);

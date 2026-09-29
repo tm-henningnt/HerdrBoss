@@ -2435,7 +2435,7 @@ test('worker start refuses machine limits before a reached night lane cap even w
   assert.ok(!f.calls.includes('agent start'));
 });
 
-test('worker start refuses a reached provider lane cap while night watch is active', (t) => {
+test('worker start refuses a reached provider lane cap while the watch is active', (t) => {
   const f = setupFixture(null);
   t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
   fs.writeFileSync(f.rulesFile, JSON.stringify({
@@ -2445,7 +2445,7 @@ test('worker start refuses a reached provider lane cap while night watch is acti
   }));
   assert.throws(() => startWorker('night-lane-refused', { kind: 'codex', task: 'x', allow: ['src/'] }, {
     config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
-  }), /Night worker lane limit \(1\) for codex is reached/);
+  }), /Watch worker lane limit \(1\) for codex is reached/);
   assert.ok(!f.calls.includes('agent start'));
   assert.equal(fs.existsSync(f.config.worktreePath('night-lane-refused')), false);
 

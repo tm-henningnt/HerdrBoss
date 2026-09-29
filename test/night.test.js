@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { clearNight, defaultNightUntil, nightFile, nightNoticeSent, nightUntil, parseNightUntil, readNight, readNightRecord, withNoticeMark, writeNight } from '../src/night.js';
+import { buildWatchRecord, clearNight, defaultNightUntil, nextDailyTime, nightFile, nightNoticeSent, nightUntil, parseNightUntil, readNight, readNightRecord, watchHours, watchLabel, watchLengthWarning, withNoticeMark, writeNight } from '../src/night.js';
 import { serviceSettingsView, validateServiceSettings } from '../src/config.js';
 import { renderBulletin } from '../src/rules.js';
 
@@ -33,9 +33,9 @@ test('quiet hours are active only during an active night with quiet hours enable
 });
 
 test('night quiet hours is a settable service setting with a false default', () => {
-  assert.equal(serviceSettingsView({}).find(({ setting }) => setting === 'night.quietHours')?.value, false);
-  assert.deepEqual(validateServiceSettings({ 'night.quietHours': true }), { 'night.quietHours': true });
-  assert.throws(() => validateServiceSettings({ 'night.quietHours': 'yes' }), /night\.quietHours must be true or false/);
+  assert.equal(serviceSettingsView({}).find(({ setting }) => setting === 'watch.quietHours')?.value, false);
+  assert.deepEqual(validateServiceSettings({ 'watch.quietHours': true }), { 'watch.quietHours': true });
+  assert.throws(() => validateServiceSettings({ 'watch.quietHours': 'yes' }), /watch\.quietHours must be true or false/);
 });
 
 test('quiet hours queues desktop notifications and shows each once after the night ends', (t) => {
@@ -169,17 +169,17 @@ test('a night state that passed its end time reads as not active', (t) => {
 test('the bulletin names the night end time and the quiet hours', (t) => {
   const dir = tempDir(t);
   assert.ok(dir);
-  const label = new Date(UNTIL).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  const label = watchLabel(UNTIL, NOW);
   const off = bulletin({ night: { active: true, since: new Date(NOW).toISOString(), until: UNTIL, by: 'owner', quietHours: false } });
-  assert.ok(off.includes(`- Night watch until ${label} (Owner away). Work as normal; the Boss handles judgment calls.`), off);
+  assert.ok(off.includes(`- Watch until ${label} (Owner away). Work as normal; the Boss handles judgment calls.`), off);
   assert.ok(!off.includes('Quiet hours: on.'), off);
   const on = bulletin({ night: { active: true, since: new Date(NOW).toISOString(), until: UNTIL, by: 'owner', quietHours: true } });
-  assert.ok(on.includes(`- Night watch until ${label} (Owner away). Work as normal; the Boss handles judgment calls.`), on);
+  assert.ok(on.includes(`- Watch until ${label} (Owner away). Work as normal; the Boss handles judgment calls.`), on);
   assert.ok(on.includes('- Quiet hours: on.'), on);
-  assert.ok(!bulletin({ night: { active: false } }).includes('Night watch'), 'an inactive state adds no line');
-  assert.ok(!bulletin({}).includes('Night watch'), 'a snapshot without a state adds no line');
+  assert.ok(!bulletin({ night: { active: false } }).includes('Watch until'), 'an inactive state adds no line');
+  assert.ok(!bulletin({}).includes('Watch until'), 'a snapshot without a state adds no line');
   // The line comes before the quota and lane lines, so an orchestrator reads it first.
-  assert.ok(off.indexOf('Night watch until') < off.indexOf('## Quotas'), 'the line stays near the top');
+  assert.ok(off.indexOf('Watch until') < off.indexOf('## Quotas'), 'the line stays near the top');
 });
 
 test('the engine state carries the stored night state', (t) => {
@@ -228,10 +228,7 @@ const CLI = fileURLToPath(new URL('../src/cli.js', import.meta.url));
 
 // The same one-line label the CLI prints: the local weekday and time, for example "Tue 07:30".
 function nightLabel(iso) {
-  const date = new Date(iso);
-  const day = new Intl.DateTimeFormat('en-GB', { weekday: 'short' }).format(date);
-  const time = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit' }).format(date);
-  return `${day} ${time}`;
+  return watchLabel(iso);
 }
 
 function runNightCli(args, env) {
@@ -332,12 +329,13 @@ test('an ISO end time keeps its own instant', () => {
   assert.equal(offset.toISOString(), '2026-09-29T05:30:00.000Z');
 });
 
-test('a past or far end time is refused', () => {
+test('a past end time is refused and a far end time is accepted', () => {
   const now = new Date();
   const past = new Date(now.getTime() - 3600e3);
   assert.throws(() => nightUntil(past.toISOString(), { now }), /in the past/);
-  const far = new Date(now.getTime() + 25 * 3600e3);
-  assert.throws(() => nightUntil(far.toISOString(), { now }), /24 hours/);
+  assert.throws(() => nightUntil(now.toISOString(), { now }), /in the past/);
+  const far = new Date(now.getTime() + 10 * 24 * 3600e3);
+  assert.equal(nightUntil(far.toISOString(), { now }).getTime(), far.getTime(), 'a watch has no maximum length');
   // An HH:MM that already passed today becomes tomorrow, so it stays within 24 hours.
   const earlier = new Date(now.getTime() - 3600e3);
   const hh = String(earlier.getHours()).padStart(2, '0');
@@ -346,14 +344,14 @@ test('a past or far end time is refused', () => {
   assert.ok(end.getTime() > now.getTime());
   assert.ok(end.getTime() <= now.getTime() + 24 * 3600e3);
   // An unparsable value is refused.
-  assert.throws(() => parseNightUntil('noon', { now }), /HH:MM or an ISO time/);
-  assert.throws(() => parseNightUntil('25:00', { now }), /HH:MM or an ISO time/);
+  assert.throws(() => parseNightUntil('noon', { now }), /HH:MM, YYYY-MM-DD HH:MM, or an ISO time/);
+  assert.throws(() => parseNightUntil('25:00', { now }), /HH:MM, YYYY-MM-DD HH:MM, or an ISO time/);
 });
 
 test('night start writes the state and prints the default end time', (t) => {
   const dataDir = tempDir(t);
-  const out = runNightCli(['night', 'start'], plainNightEnv(dataDir));
-  assert.match(out, /^Night watch until [A-Z][a-z]{2} 07:30\.\n$/);
+  const out = runNightCli(['watch', 'start'], plainNightEnv(dataDir));
+  assert.match(out, /^On watch until [A-Z][a-z]{2} 07:30\.\n$/);
   const state = JSON.parse(fs.readFileSync(nightFile(dataDir), 'utf8'));
   assert.equal(state.active, true);
   assert.equal(state.by, 'owner');
@@ -375,7 +373,7 @@ test('night start stores report and retro times', (t) => {
   const retroDate = new Date(now.getTime() + 4 * 3600e3);
   const report = `${String(reportDate.getHours()).padStart(2, '0')}:${String(reportDate.getMinutes()).padStart(2, '0')}`;
   const retro = `${String(retroDate.getHours()).padStart(2, '0')}:${String(retroDate.getMinutes()).padStart(2, '0')}`;
-  runNightCli(['night', 'start', '--until', '07:30', '--report', report, '--retro', retro], plainNightEnv(dataDir));
+  runNightCli(['watch', 'start', '--until', '07:30', '--report', report, '--retro', retro], plainNightEnv(dataDir));
   const state = JSON.parse(fs.readFileSync(nightFile(dataDir), 'utf8'));
   const parsed = (value) => {
     const date = new Date(now);
@@ -479,17 +477,203 @@ console.log(JSON.stringify({ before, at: atDeadline, records: check.messageStore
   const result = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', script], { env, encoding: 'utf8' }));
   assert.equal(result.before, 0, 'the service waits for the report time');
   assert.equal(result.records.length, 2);
-  assert.deepEqual(result.records.map((item) => item.title).sort(), ['Night watch report', 'Night watch retro']);
+  assert.deepEqual(result.records.map((item) => item.title).sort(), ['Watch report', 'Watch retro']);
   assert.ok(result.records.every((item) => item.thread === 'boss' && item.to === 'owner'));
   assert.ok(result.records.every((item) => item.at === new Date(deadline).toISOString()));
   assert.ok(result.night.reportSentAt);
   assert.ok(result.night.retroSentAt);
 });
 
+test('a daily report of a watch until cancelled posts once a day and arms the next day', (t) => {
+  const temp = tempDir(t);
+  const dataDir = path.join(temp, 'data');
+  const now = Date.now();
+  const since = new Date(now - 60 * 60e3).toISOString();
+  const deadline = now + 60 * 1000;
+  fs.mkdirSync(dataDir, { recursive: true });
+  writeNight({ active: true, since, until: null, untilCancelled: true, reportDaily: '07:30', reportAt: new Date(deadline).toISOString() }, { dataDir });
+  const engineUrl = new URL('../src/engine.js', import.meta.url).href;
+  const configUrl = new URL('../src/config.js', import.meta.url).href;
+  const nightUrl = new URL('../src/night.js', import.meta.url).href;
+  const script = `
+import { Engine } from ${JSON.stringify(engineUrl)};
+import { loadConfig } from ${JSON.stringify(configUrl)};
+import { readNight, readNightRecord } from ${JSON.stringify(nightUrl)};
+let clockNow = ${now};
+Date.now = () => clockNow;
+const collectors = {
+  collectHerdr: async () => ({ panes: [], workspaces: [] }), collectMachine: async () => null,
+  collectProcesses: async () => new Map(), collectQuotas: async () => [], collectWorktreeCounts: async () => ({}),
+  collectCwdProcesses: async () => [], collectMissingWorktreeProcesses: async () => [],
+  runDenialScan: async ({ state }) => ({ state }), codeSignCloneDir: () => null,
+};
+const reports = (engine) => engine.messageStore.all().filter((item) => item.kind === 'report').length;
+const engine = new Engine(loadConfig(), { push: false, act: false, collectors });
+const state = await engine.tick();
+const before = reports(engine);
+const activeBefore = state.night;
+clockNow = ${deadline};
+await engine.tick();
+const first = reports(engine);
+const armed = readNightRecord();
+await engine.tick();
+const again = reports(engine);
+clockNow = Date.parse(armed.reportAt);
+await engine.tick();
+const nextDay = reports(engine);
+console.log(JSON.stringify({ before, first, again, nextDay, armed, activeBefore, active: readNight({ now: clockNow }), rearmed: readNightRecord() }));
+`;
+  const env = { ...process.env, HOME: temp, HERDR_BOSS_DIR: dataDir, HERDR_BOSS_LIVE_DIR: path.join(temp, 'live'), NODE_TEST_CONTEXT: '1' };
+  const result = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', script], { env, encoding: 'utf8' }));
+  assert.equal(result.activeBefore.active, true, 'a watch until cancelled is active');
+  assert.equal(result.activeBefore.untilCancelled, true);
+  assert.equal(result.before, 0, 'the service waits for the report time');
+  assert.equal(result.first, 1, 'the report posts at its time');
+  assert.equal(result.again, 1, 'the same report does not post twice');
+  assert.equal(result.armed.reportSentAt, undefined, 'the next daily report has no sent mark');
+  const nextAt = new Date(result.armed.reportAt);
+  assert.ok(nextAt.getTime() > deadline, 'the next report is later');
+  assert.equal(nextAt.getHours(), 7);
+  assert.equal(nextAt.getMinutes(), 30);
+  assert.equal(result.nextDay, 2, 'the report of the next day posts');
+  assert.equal(result.active.active, true, 'the watch stays active');
+  assert.ok(Date.parse(result.rearmed.reportAt) > Date.parse(result.armed.reportAt));
+});
+
+test('a watch that ends at the report time posts the report at the end time', () => {
+  const now = new Date(2026, 8, 29, 22, 0, 0);
+  const { record } = buildWatchRecord({ until: '07:30', now });
+  assert.equal(record.reportAt, record.until, 'the default report time is the end time');
+  const set = buildWatchRecord({ until: '07:30', report: '07:00', retro: '06:45', now }).record;
+  assert.equal(new Date(set.reportAt).getHours(), 7);
+  assert.equal(new Date(set.reportAt).getMinutes(), 0);
+  assert.equal(new Date(set.retroAt).getMinutes(), 45);
+  assert.equal(set.reportDaily, undefined, 'a fixed watch has one report');
+});
+
+test('the default end time is 07:30 today before 07:30 and 07:30 tomorrow from 07:30 on', () => {
+  const at = (h, m, s = 0) => new Date(2026, 8, 29, h, m, s);
+  const sameDay = defaultNightUntil({ now: at(7, 29, 59) });
+  assert.equal(sameDay.getDate(), 29);
+  assert.equal(sameDay.getHours() * 60 + sameDay.getMinutes(), 7 * 60 + 30);
+  for (const now of [at(7, 30), at(12, 0), at(23, 59)]) {
+    const next = defaultNightUntil({ now });
+    assert.equal(next.getDate(), 30, `from ${now.toTimeString().slice(0, 5)} the default is tomorrow`);
+    assert.equal(next.getHours() * 60 + next.getMinutes(), 7 * 60 + 30);
+  }
+  assert.equal(defaultNightUntil({ now: at(0, 5) }).getDate(), 29);
+});
+
+test('a local date and time is an accepted end time and an impossible date is refused', () => {
+  const now = new Date(2026, 8, 29, 12, 0, 0);
+  for (const text of ['2026-10-06 08:00', '2026-10-06T08:00']) {
+    const end = parseNightUntil(text, { now });
+    assert.deepEqual([end.getFullYear(), end.getMonth(), end.getDate(), end.getHours(), end.getMinutes()], [2026, 9, 6, 8, 0]);
+  }
+  assert.throws(() => parseNightUntil('2026-02-31 08:00', { now }), /not a valid date/);
+  assert.throws(() => nightUntil('2026-09-29 11:59', { now }), /in the past/);
+  assert.throws(() => nightUntil('2026-09-29 12:00', { now }), /in the past/, 'the present instant is not in the future');
+  assert.equal(nightUntil('2026-09-29 12:01', { now }).getMinutes(), 1);
+});
+
+test('the watch length is in hours and warns above 48 hours', () => {
+  const now = new Date(2026, 8, 29, 12, 0, 0);
+  assert.equal(watchHours(new Date(2026, 8, 29, 19, 30), { now }), 7.5);
+  assert.equal(watchLengthWarning(new Date(2026, 8, 31, 12, 0), { now }), null, '48 hours has no warning');
+  assert.match(watchLengthWarning(new Date(2026, 8, 31, 13, 0), { now }), /lasts 49 hours/);
+});
+
+test('a watch until cancelled has no end time and takes only a daily HH:MM report', () => {
+  const now = new Date(2026, 8, 29, 12, 0, 0);
+  const plain = buildWatchRecord({ untilCancelled: true, now }).record;
+  assert.equal(plain.until, null);
+  assert.equal(plain.untilCancelled, true);
+  assert.equal(plain.reportAt, undefined, 'no report time unless set');
+  const daily = buildWatchRecord({ untilCancelled: true, report: '07:30', now }).record;
+  assert.equal(daily.reportDaily, '07:30');
+  assert.equal(new Date(daily.reportAt).getDate(), 30);
+  assert.throws(() => buildWatchRecord({ untilCancelled: true, report: '2026-10-01 07:30', now }), /HH:MM/);
+  assert.throws(() => buildWatchRecord({ untilCancelled: true, until: '07:30', now }), /not both/);
+  assert.equal(nextDailyTime('07:30', new Date(2026, 8, 30, 7, 30)).getDate(), 1, 'the next daily time is after the given instant');
+});
+
+test('watch state files: watch.json replaces an old night.json', (t) => {
+  const dataDir = tempDir(t);
+  fs.writeFileSync(path.join(dataDir, 'night.json'), JSON.stringify({ active: true, since: new Date(NOW).toISOString(), until: UNTIL, by: 'owner' }));
+  assert.equal(readNight({ dataDir, now: NOW }).active, true, 'the old file is read');
+  assert.equal(readNightRecord({ dataDir }).by, 'owner');
+  writeNight({ active: true, since: new Date(NOW).toISOString(), until: null, untilCancelled: true }, { dataDir });
+  assert.ok(fs.existsSync(path.join(dataDir, 'watch.json')));
+  assert.ok(!fs.existsSync(path.join(dataDir, 'night.json')), 'the write removes the old file');
+  assert.equal(readNight({ dataDir, now: NOW }).untilCancelled, true);
+  fs.writeFileSync(path.join(dataDir, 'night.json'), JSON.stringify({ active: true, until: UNTIL }));
+  assert.equal(clearNight({ dataDir }), true);
+  assert.deepEqual(readNight({ dataDir, now: NOW }), { active: false }, 'a clear removes both files');
+});
+
+test('old night config keys still work', async (t) => {
+  const { migrateLegacyWatchKeys, validateServiceSettings, serviceSettingsView, writeServiceSettings } = await import('../src/config.js');
+  const moved = migrateLegacyWatchKeys({ port: 1, night: { quietHours: true, maxWorkers: 5 }, watch: { maxWorkers: 9 } });
+  assert.deepEqual(moved, { port: 1, watch: { quietHours: true, maxWorkers: 9 } }, 'a watch key wins over a night key');
+  assert.deepEqual(validateServiceSettings({ 'night.maxWorkers': 7 }), { 'watch.maxWorkers': 7 });
+  const view = serviceSettingsView({ night: { maxWorkers: 6 } });
+  assert.equal(view.find(({ setting }) => setting === 'watch.maxWorkers').value, 6);
+  assert.equal(view.find(({ setting }) => setting === 'watch.maxWorkers').source, 'default', 'a raw cfg carries no source map');
+  const dataDir = tempDir(t);
+  fs.writeFileSync(path.join(dataDir, 'config.json'), JSON.stringify({ night: { quietHours: true } }));
+  writeServiceSettings({ 'watch.maxWorkers': 4 }, { dataDir });
+  const saved = JSON.parse(fs.readFileSync(path.join(dataDir, 'config.json'), 'utf8'));
+  assert.deepEqual(saved, { watch: { quietHours: true, maxWorkers: 4 } }, 'a save moves the old keys');
+});
+
+test('the night command is an alias of watch', (t) => {
+  const dataDir = tempDir(t);
+  const out = runNightCli(['night', 'start', '--until-cancelled'], plainNightEnv(dataDir));
+  assert.equal(out, 'On watch until cancelled.\n');
+  const state = JSON.parse(fs.readFileSync(nightFile(dataDir), 'utf8'));
+  assert.equal(state.until, null);
+  assert.equal(state.reportAt, undefined);
+  assert.equal(runNightCli(['night'], plainNightEnv(dataDir)), 'On watch until cancelled (by owner).\n');
+  assert.equal(runNightCli(['watch'], plainNightEnv(dataDir)), 'On watch until cancelled (by owner).\n');
+  assert.equal(runNightCli(['night', 'stop'], plainNightEnv(dataDir)), 'Watch stopped.\n');
+});
+
+test('watch start validates its options', (t) => {
+  const dataDir = tempDir(t);
+  const cases = [
+    [['--until', '2020-01-01 07:30'], /in the past/],
+    [['--until', '2026-02-31 07:30'], /not a valid date/],
+    [['--until', '07:30', '--until-cancelled'], /not both/],
+    [['--until-cancelled', '--report', '2099-01-01 07:30'], /HH:MM/],
+  ];
+  for (const [args, pattern] of cases) {
+    const error = nightCliError(['watch', 'start', ...args], plainNightEnv(dataDir));
+    assert.ok(error, `${args.join(' ')} fails`);
+    assert.match(error.stderr, pattern);
+    assert.ok(!fs.existsSync(nightFile(dataDir)), 'no state file is written');
+  }
+  const out = runNightCli(['watch', 'start', '--until-cancelled', '--report', '07:30'], plainNightEnv(dataDir));
+  assert.equal(out, 'On watch until cancelled.\n');
+  assert.equal(JSON.parse(fs.readFileSync(nightFile(dataDir), 'utf8')).reportDaily, '07:30');
+});
+
+test('the start notice names the end time or says until cancelled', async () => {
+  const { nightNoticeText } = await import('../src/engine.js');
+  assert.equal(nightNoticeText('start', { until: UNTIL }), `[herdr-boss] Watch until ${watchLabel(UNTIL)}. The Owner is away; the Boss acts for the Owner. Work as normal. Escalate to the Boss.`);
+  assert.equal(nightNoticeText('start', { until: null, untilCancelled: true }), '[herdr-boss] Watch until cancelled. The Owner is away; the Boss acts for the Owner. Work as normal. Escalate to the Boss.');
+  assert.equal(nightNoticeText('end', {}), '[herdr-boss] Watch ended. The Owner rules apply again.');
+});
+
+test('watch labels show the weekday, and the date when the time is far away', () => {
+  const now = new Date(2026, 8, 29, 12, 0, 0).getTime();
+  assert.match(watchLabel(new Date(2026, 8, 30, 7, 30).toISOString(), now), /^Wed 07:30$/);
+  assert.match(watchLabel(new Date(2026, 9, 20, 7, 30).toISOString(), now), /^Tue 20 Oct 07:30$/);
+});
+
 test('night start --until HH:MM writes the next such local time', (t) => {
   const dataDir = tempDir(t);
-  const out = runNightCli(['night', 'start', '--until', '07:30'], plainNightEnv(dataDir));
-  assert.match(out, /^Night watch until [A-Z][a-z]{2} 07:30\.\n$/);
+  const out = runNightCli(['watch', 'start', '--until', '07:30'], plainNightEnv(dataDir));
+  assert.match(out, /^On watch until [A-Z][a-z]{2} 07:30\.\n$/);
   const state = JSON.parse(fs.readFileSync(nightFile(dataDir), 'utf8'));
   const until = new Date(state.until);
   assert.equal(until.getHours(), 7);
@@ -501,8 +685,8 @@ test('night start --until HH:MM writes the next such local time', (t) => {
 test('night start --until ISO writes that instant', (t) => {
   const dataDir = tempDir(t);
   const until = new Date(Date.now() + 6 * 3600e3);
-  const out = runNightCli(['night', 'start', '--until', until.toISOString()], plainNightEnv(dataDir));
-  assert.match(out, /^Night watch until [A-Z][a-z]{2} \d{2}:\d{2}\.\n$/);
+  const out = runNightCli(['watch', 'start', '--until', until.toISOString()], plainNightEnv(dataDir));
+  assert.match(out, /^On watch until [A-Z][a-z]{2} \d{2}:\d{2}\.\n$/);
   const state = JSON.parse(fs.readFileSync(nightFile(dataDir), 'utf8'));
   assert.equal(state.until, until.toISOString());
 });
@@ -512,16 +696,16 @@ test('night start --until ISO with an offset writes the same instant', (t) => {
   const until = new Date(Date.now() + 6 * 3600e3);
   // Express the same instant at a +02:00 offset.
   const text = new Date(until.getTime() + 2 * 3600e3).toISOString().replace('Z', '+02:00');
-  const out = runNightCli(['night', 'start', '--until', text], plainNightEnv(dataDir));
-  assert.match(out, /^Night watch until /);
+  const out = runNightCli(['watch', 'start', '--until', text], plainNightEnv(dataDir));
+  assert.match(out, /^On watch until /);
   const state = JSON.parse(fs.readFileSync(nightFile(dataDir), 'utf8'));
   assert.equal(state.until, until.toISOString());
 });
 
 test('night start --quiet-hours stores quiet hours', (t) => {
   const dataDir = tempDir(t);
-  const out = runNightCli(['night', 'start', '--quiet-hours'], plainNightEnv(dataDir));
-  assert.match(out, /^Night watch until [A-Z][a-z]{2} 07:30\.\n$/);
+  const out = runNightCli(['watch', 'start', '--quiet-hours'], plainNightEnv(dataDir));
+  assert.match(out, /^On watch until [A-Z][a-z]{2} 07:30\.\n$/);
   const state = JSON.parse(fs.readFileSync(nightFile(dataDir), 'utf8'));
   assert.equal(state.quietHours, true);
 });
@@ -531,17 +715,17 @@ test('night start uses the config quiet-hours default and explicit CLI flags tak
     const dataDir = tempDir(t);
     fs.writeFileSync(path.join(dataDir, 'config.json'), JSON.stringify({ night: { quietHours: defaultValue } }));
     const env = plainNightEnv(dataDir);
-    runNightCli(['night', 'start'], env);
+    runNightCli(['watch', 'start'], env);
     assert.equal(JSON.parse(fs.readFileSync(nightFile(dataDir), 'utf8')).quietHours, defaultValue, `default ${defaultValue}`);
     clearNight({ dataDir });
 
     const override = defaultValue ? '--no-quiet-hours' : '--quiet-hours';
-    runNightCli(['night', 'start', override], env);
+    runNightCli(['watch', 'start', override], env);
     assert.equal(JSON.parse(fs.readFileSync(nightFile(dataDir), 'utf8')).quietHours, !defaultValue, `${override} overrides ${defaultValue}`);
   }
 });
 
-test('POST /api/night/start uses the config quiet-hours default and an explicit body value takes precedence', (t) => {
+test('POST /api/watch/start uses the config quiet-hours default and an explicit body value takes precedence', (t) => {
   for (const defaultValue of [true, false]) {
     const temp = tempDir(t);
     const home = path.join(temp, 'home');
@@ -573,8 +757,8 @@ try {
   });
   const address = app.server.address();
   const values = [];
-  for (const body of [{}, { quietHours: !cfg.night.quietHours }, { quietHours: cfg.night.quietHours }]) {
-    const response = await fetch('http://127.0.0.1:' + address.port + '/api/night/start', {
+  for (const body of [{}, { quietHours: !cfg.watch.quietHours }, { quietHours: cfg.watch.quietHours }]) {
+    const response = await fetch('http://127.0.0.1:' + address.port + '/api/watch/start', {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
     });
     const result = await response.json();
@@ -607,26 +791,27 @@ try {
 test('night start refuses a past end time', (t) => {
   const dataDir = tempDir(t);
   const past = new Date(Date.now() - 3600e3).toISOString();
-  const error = nightCliError(['night', 'start', '--until', past], plainNightEnv(dataDir));
+  const error = nightCliError(['watch', 'start', '--until', past], plainNightEnv(dataDir));
   assert.ok(error, 'the command fails');
   assert.equal(error.status, 1);
   assert.match(error.stderr, /in the past/);
   assert.ok(!fs.existsSync(nightFile(dataDir)), 'no state file is written');
 });
 
-test('night start refuses an end time more than 24 hours ahead', (t) => {
+test('watch start accepts an end time more than 24 hours ahead and warns above 48 hours', (t) => {
   const dataDir = tempDir(t);
-  const far = new Date(Date.now() + 25 * 3600e3).toISOString();
-  const error = nightCliError(['night', 'start', '--until', far], plainNightEnv(dataDir));
-  assert.ok(error, 'the command fails');
-  assert.equal(error.status, 1);
-  assert.match(error.stderr, /24 hours/);
-  assert.ok(!fs.existsSync(nightFile(dataDir)), 'no state file is written');
+  const soon = new Date(Date.now() + 30 * 3600e3).toISOString();
+  const out = runNightCli(['watch', 'start', '--until', soon], plainNightEnv(dataDir));
+  assert.match(out, /^On watch until [A-Z][a-z]{2} \d{2}:\d{2}\.\n$/, 'no warning at 30 hours');
+  assert.equal(JSON.parse(fs.readFileSync(nightFile(dataDir), 'utf8')).until, soon);
+  const far = new Date(Date.now() + 72 * 3600e3).toISOString();
+  const long = runNightCli(['watch', 'start', '--until', far], plainNightEnv(dataDir));
+  assert.match(long, /Warning: This watch lasts 7\d(\.\d)? hours\./);
 });
 
 test('night start refuses an unknown option', (t) => {
   const dataDir = tempDir(t);
-  const error = nightCliError(['night', 'start', '--bogus'], plainNightEnv(dataDir));
+  const error = nightCliError(['watch', 'start', '--bogus'], plainNightEnv(dataDir));
   assert.ok(error, 'the command fails');
   assert.match(error.stderr, /Unknown option/);
   assert.ok(!fs.existsSync(nightFile(dataDir)), 'no state file is written');
@@ -634,15 +819,15 @@ test('night start refuses an unknown option', (t) => {
 
 test('night refuses an unknown action', (t) => {
   const dataDir = tempDir(t);
-  const error = nightCliError(['night', 'bogus'], plainNightEnv(dataDir));
+  const error = nightCliError(['watch', 'bogus'], plainNightEnv(dataDir));
   assert.ok(error, 'the command fails');
-  assert.match(error.stderr, /Usage: night/);
+  assert.match(error.stderr, /Usage: watch/);
 });
 
 test('night start refuses an orchestrator caller', (t) => {
   const dataDir = tempDir(t);
   const env = paneNightEnv(t, dataDir, { paneId: 'ws-proj:p1', workspaceId: 'ws-proj', label: 'orch' });
-  const error = nightCliError(['night', 'start'], env);
+  const error = nightCliError(['watch', 'start'], env);
   assert.ok(error, 'the command fails');
   assert.equal(error.status, 1);
   assert.match(error.stderr, /pane labeled boss/);
@@ -653,7 +838,7 @@ test('night start refuses an orchestrator caller', (t) => {
 test('night stop refuses an orchestrator caller', (t) => {
   const dataDir = tempDir(t);
   const env = paneNightEnv(t, dataDir, { paneId: 'ws-proj:p1', workspaceId: 'ws-proj', label: 'orch' });
-  const error = nightCliError(['night', 'stop'], env);
+  const error = nightCliError(['watch', 'stop'], env);
   assert.ok(error, 'the command fails');
   assert.match(error.stderr, /pane labeled boss/);
 });
@@ -661,7 +846,7 @@ test('night stop refuses an orchestrator caller', (t) => {
 test('night start refuses a worker caller', (t) => {
   const dataDir = tempDir(t);
   const env = paneNightEnv(t, dataDir, { paneId: 'ws-proj:p9', workspaceId: 'ws-proj', label: 'worker' });
-  const error = nightCliError(['night', 'start'], env);
+  const error = nightCliError(['watch', 'start'], env);
   assert.ok(error, 'the command fails');
   assert.match(error.stderr, /pane labeled boss/);
   assert.ok(!fs.existsSync(nightFile(dataDir)), 'no state file is written');
@@ -670,34 +855,34 @@ test('night start refuses a worker caller', (t) => {
 test('the Boss pane may start night watch', (t) => {
   const dataDir = tempDir(t);
   const env = paneNightEnv(t, dataDir, { paneId: 'ws-boss:p1', workspaceId: 'ws-boss', label: 'boss' });
-  const out = runNightCli(['night', 'start'], env);
-  assert.match(out, /^Night watch until [A-Z][a-z]{2} 07:30\.\n$/);
+  const out = runNightCli(['watch', 'start'], env);
+  assert.match(out, /^On watch until [A-Z][a-z]{2} 07:30\.\n$/);
   const state = JSON.parse(fs.readFileSync(nightFile(dataDir), 'utf8'));
   assert.equal(state.by, 'boss');
 });
 
 test('night stop clears the state and prints one line', (t) => {
   const dataDir = tempDir(t);
-  runNightCli(['night', 'start'], plainNightEnv(dataDir));
+  runNightCli(['watch', 'start'], plainNightEnv(dataDir));
   assert.ok(fs.existsSync(nightFile(dataDir)));
-  const out = runNightCli(['night', 'stop'], plainNightEnv(dataDir));
-  assert.equal(out, 'Night watch stopped.\n');
+  const out = runNightCli(['watch', 'stop'], plainNightEnv(dataDir));
+  assert.equal(out, 'Watch stopped.\n');
   assert.ok(!fs.existsSync(nightFile(dataDir)));
 });
 
 test('night prints the current state in one line', (t) => {
   const dataDir = tempDir(t);
-  assert.equal(runNightCli(['night'], plainNightEnv(dataDir)), 'No night watch.\n');
+  assert.equal(runNightCli(['watch'], plainNightEnv(dataDir)), 'No watch.\n');
   const until = new Date(Date.now() + 6 * 3600e3);
   writeNight({ active: true, since: new Date().toISOString(), until: until.toISOString(), by: 'owner', quietHours: false }, { dataDir });
-  const out = runNightCli(['night'], plainNightEnv(dataDir));
-  assert.equal(out, `Night watch until ${nightLabel(until.toISOString())} (by owner).\n`);
+  const out = runNightCli(['watch'], plainNightEnv(dataDir));
+  assert.equal(out, `On watch until ${nightLabel(until.toISOString())} (by owner).\n`);
 });
 
 test('a pane without HERDR_ENV but with its pane ID is not treated as the Owner', (t) => {
   const dataDir = tempDir(t);
   const env = { ...plainNightEnv(dataDir), HERDR_PANE_ID: 'ws:worker', PATH: path.join(dataDir, 'no-herdr-bin') };
-  const error = nightCliError(['night', 'start', '--until', '07:30'], env);
+  const error = nightCliError(['watch', 'start', '--until', '07:30'], env);
   assert.ok(error, 'the command fails');
   assert.ok(!fs.existsSync(nightFile(dataDir)), 'no state file is written');
 });

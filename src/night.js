@@ -1,14 +1,18 @@
-// The night watch state. The file night.json in the data directory says that the Owner is away and that the
-// Boss acts for the Owner until a stored end time. The file also holds the marks of the notices that went out.
-// A later task adds the commands and the reports.
+// The watch state. The file watch.json in the data directory says that the Owner is away and that the Boss acts for
+// the Owner until a stored end time, or until the Owner cancels. The file also holds the marks of the notices and
+// reports that went out. The old file name night.json is still read.
 import fs from 'node:fs';
 import path from 'node:path';
 import { DATA_DIR } from './config.js';
 
-export const NIGHT_FILE = 'night.json';
+export const WATCH_FILE = 'watch.json';
+export const LEGACY_NIGHT_FILE = 'night.json';
+export const NIGHT_FILE = WATCH_FILE;
 
 // The keys that the stored record must hold. Later night-watch fields pass through this module unchanged.
 const REQUIRED = ['active', 'until'];
+
+const HHMM = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
 // The stored keys of one-time notices and reports.
 const NOTICE_KEY = { start: 'noticeStartAt', end: 'noticeStopAt' };
@@ -20,7 +24,18 @@ function noticeKey(phase) {
 }
 
 export function nightFile(dataDir = DATA_DIR) {
-  return path.join(dataDir, NIGHT_FILE);
+  return path.join(dataDir, WATCH_FILE);
+}
+
+function legacyNightFile(dataDir = DATA_DIR) {
+  return path.join(dataDir, LEGACY_NIGHT_FILE);
+}
+
+// The stored text of the record: watch.json, or the old night.json when watch.json is missing.
+function readStoredText(dataDir) {
+  try { return fs.readFileSync(nightFile(dataDir), 'utf8'); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  return fs.readFileSync(legacyNightFile(dataDir), 'utf8');
 }
 
 function isoOrNull(value) {
@@ -38,6 +53,9 @@ function normalize(value, now) {
     active: true,
     since: isoOrNull(value.since ?? value.startedAt),
     until,
+    untilCancelled: until === null,
+    reportAt: isoOrNull(value.reportAt),
+    reportDaily: HHMM.test(String(value.reportDaily ?? '')) ? value.reportDaily : null,
     by: typeof value.by === 'string' && value.by.trim() ? value.by.trim() : null,
     quietHours: value.quietHours === true,
   };
@@ -50,7 +68,7 @@ export function quietHoursActive(night) {
 
 export function readNight({ dataDir = DATA_DIR, now = Date.now() } = {}) {
   try {
-    return normalize(JSON.parse(fs.readFileSync(nightFile(dataDir), 'utf8')), now);
+    return normalize(JSON.parse(readStoredText(dataDir)), now);
   } catch {
     // A missing or unreadable file means that no night runs.
     return { active: false };
@@ -68,29 +86,39 @@ export function writeNight(state, { dataDir = DATA_DIR } = {}) {
   fs.writeFileSync(tmp, `${JSON.stringify(state, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
   fs.renameSync(tmp, file);
   fs.chmodSync(file, 0o600);
+  // The new file replaces the old one, so a cleared watch cannot come back from an old night.json.
+  try { fs.unlinkSync(legacyNightFile(dataDir)); } catch { /* No old file. */ }
   return file;
 }
 
 export function clearNight({ dataDir = DATA_DIR } = {}) {
-  try {
-    fs.unlinkSync(nightFile(dataDir));
-    return true;
-  } catch (error) {
-    if (error.code === 'ENOENT') return false;
-    throw error;
+  let cleared = false;
+  for (const file of [nightFile(dataDir), legacyNightFile(dataDir)]) {
+    try {
+      fs.unlinkSync(file);
+      cleared = true;
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
   }
+  return cleared;
 }
 
-// The time helpers of the night command. The command parses --until and writes the state.
+// The time helpers of the watch command. The command and the dashboard parse the end time and write the state.
 
-// The default end time of a night watch, as local HH:MM.
+// The default end time of a watch, as local HH:MM.
 export const NIGHT_DEFAULT_UNTIL = '07:30';
+export const WATCH_DEFAULT_UNTIL = NIGHT_DEFAULT_UNTIL;
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-const HHMM = /^([01]\d|2[0-3]):([0-5]\d)$/;
+// A watch of more than this many hours gets a warning.
+export const WATCH_WARN_HOURS = 48;
 
-// Parse a --until value into a Date. HH:MM means the next such local time. An ISO string
-// keeps its own date and offset. The result is always after now.
+const HOUR_MS = 60 * 60 * 1000;
+const LOCAL_DATETIME = /^(\d{4})-(\d{2})-(\d{2})[ T]([01]\d|2[0-3]):([0-5]\d)$/;
+const FORMAT_HELP = 'The time must be HH:MM, YYYY-MM-DD HH:MM, or an ISO time, for example 07:30 or 2026-09-29 07:30.';
+
+// Parse a time value into a Date. HH:MM means the next such local time. YYYY-MM-DD HH:MM (or with a T) is a local
+// time. An ISO string with an offset keeps its own instant.
 export function parseNightUntil(value, { now = new Date() } = {}) {
   const text = String(value).trim();
   const match = HHMM.exec(text);
@@ -100,16 +128,22 @@ export function parseNightUntil(value, { now = new Date() } = {}) {
     if (date.getTime() <= now.getTime()) date.setDate(date.getDate() + 1);
     return date;
   }
+  const local = LOCAL_DATETIME.exec(text);
+  if (local) {
+    const [year, month, day, hour, minute] = local.slice(1).map(Number);
+    const date = new Date(year, month - 1, day, hour, minute, 0, 0);
+    // A date such as 2026-02-31 rolls over. Refuse it.
+    if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) throw new Error(`${text} is not a valid date. ${FORMAT_HELP}`);
+    return date;
+  }
   const ms = Date.parse(text);
-  if (!Number.isFinite(ms)) throw new Error('The --until value must be HH:MM or an ISO time, for example 07:30 or 2026-09-29T07:30:00.');
+  if (!Number.isFinite(ms)) throw new Error(FORMAT_HELP);
   return new Date(ms);
 }
 
-// The end time must be in the future and within 24 hours.
+// The end time must be in the future. A watch has no maximum length.
 export function assertNightUntil(date, { now = new Date() } = {}) {
-  const ms = date.getTime();
-  if (ms <= now.getTime()) throw new Error('The night end time is in the past.');
-  if (ms > now.getTime() + DAY_MS) throw new Error('The night end time is more than 24 hours ahead.');
+  if (date.getTime() <= now.getTime()) throw new Error('The watch end time is in the past.');
   return date;
 }
 
@@ -123,10 +157,70 @@ export function defaultNightUntil({ now = new Date() } = {}) {
   return parseNightUntil(NIGHT_DEFAULT_UNTIL, { now });
 }
 
+// The length of a watch in hours, rounded to one decimal place.
+export function watchHours(until, { now = new Date() } = {}) {
+  return Math.round(((until.getTime() - now.getTime()) / HOUR_MS) * 10) / 10;
+}
+
+// The warning for a long watch, or null.
+export function watchLengthWarning(until, { now = new Date() } = {}) {
+  const hours = watchHours(until, { now });
+  return hours > WATCH_WARN_HOURS ? `This watch lasts ${hours} hours. The Boss acts for the Owner for the whole time.` : null;
+}
+
+// The next local time of a daily HH:MM after the given instant.
+export function nextDailyTime(hhmm, after = new Date()) {
+  if (!HHMM.test(hhmm)) throw new Error('A daily report time must be HH:MM, for example 07:30.');
+  return parseNightUntil(hhmm, { now: after });
+}
+
+// The label of a watch end time: the local weekday and time, for example "Wed 08:00". A time more than 6 days ahead
+// also shows the date, so the label stays unambiguous.
+export function watchLabel(iso, now = Date.now()) {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '--:--';
+  const time = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(date);
+  if (Math.abs(date.getTime() - now) > 6 * 24 * HOUR_MS) {
+    return `${new Intl.DateTimeFormat('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }).format(date)} ${time}`;
+  }
+  return `${new Intl.DateTimeFormat('en-GB', { weekday: 'short' }).format(date)} ${time}`;
+}
+
+// The phrase of the banner, the notice, and the bulletin: "until Wed 08:00" or "until cancelled".
+export function watchUntilPhrase(state, now = Date.now()) {
+  if (state?.untilCancelled === true || !state?.until) return 'until cancelled';
+  return `until ${watchLabel(state.until, now)}`;
+}
+
+// Build the record of a new watch. Both the command and the dashboard call this function, so both apply the same
+// rules. Times are Date objects or strings. untilCancelled is a flag. report and retro are optional. A watch until
+// cancelled takes only an HH:MM report, which repeats every day.
+export function buildWatchRecord({ until, untilCancelled = false, report, retro, quietHours = false, by = null, now = new Date() } = {}) {
+  const has = (value) => value !== undefined && value !== null && value !== '';
+  if (untilCancelled && has(until)) throw new Error('Use either an end time or until cancelled, not both.');
+  const end = untilCancelled ? null : has(until) ? nightUntil(until, { now }) : defaultNightUntil({ now });
+  const record = { active: true, since: now.toISOString(), until: end ? end.toISOString() : null };
+  if (untilCancelled) {
+    record.untilCancelled = true;
+    if (has(report)) {
+      const text = String(report).trim();
+      if (!HHMM.test(text)) throw new Error('A watch until cancelled takes a daily report time as HH:MM, for example 07:30.');
+      record.reportDaily = text;
+      record.reportAt = nextDailyTime(text, now).toISOString();
+    }
+  } else {
+    record.reportAt = (has(report) ? nightUntil(report, { now }) : end).toISOString();
+  }
+  if (has(retro)) record.retroAt = nightUntil(retro, { now }).toISOString();
+  record.by = by;
+  record.quietHours = quietHours === true;
+  return { record, until: end, warning: end ? watchLengthWarning(end, { now }) : null };
+}
+
 // Read the stored record as it is on the file, with the notice marks. A missing or unreadable file reads as null.
 export function readNightRecord({ dataDir = DATA_DIR } = {}) {
   try {
-    const value = JSON.parse(fs.readFileSync(nightFile(dataDir), 'utf8'));
+    const value = JSON.parse(readStoredText(dataDir));
     return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
   } catch {
     return null;

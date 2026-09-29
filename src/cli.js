@@ -55,7 +55,7 @@ async function verifyBrowserCaller(slug, { env = process.env, herdr = null } = {
   throw new Error(`The ${slug} browser belongs to project ${slug}. This pane is in workspace ${where}, ${owner ? `which belongs to project ${owner}` : 'which belongs to no project'}. Only a pane in the ${slug} workspace or the Boss can change it.`);
 }
 
-// Only the Boss pane, the Owner in a plain terminal, or the dashboard may start or stop night
+// Only the Boss pane, the Owner in a plain terminal, or the dashboard may start or stop the
 // watch. An orchestrator or a worker gets a refusal with the reason. The pane check is the same
 // as the other Boss-only commands, for example mail close.
 async function verifyNightCaller(env, herdr) {
@@ -75,17 +75,9 @@ async function verifyNightCaller(env, herdr) {
   const paneWorkspace = pane.workspace_id ?? pane.workspaceId ?? pane.workspace ?? null;
   if (paneWorkspace !== workspaceId) throw new Error(`Cannot verify the caller pane: HERDR_WORKSPACE_ID (${workspaceId}) differs from the pane workspace (${paneWorkspace ?? '(missing)'}).`);
   if (pane.label !== 'boss') {
-    throw new Error(`Only the pane labeled boss can run herdr-boss night. This pane is labeled ${pane.label ?? '(none)'}. An orchestrator or a worker cannot start or stop night watch: ask the Boss.`);
+    throw new Error(`Only the pane labeled boss can run herdr-boss watch. This pane is labeled ${pane.label ?? '(none)'}. An orchestrator or a worker cannot start or stop the watch: ask the Boss.`);
   }
   return { role: 'boss' };
-}
-
-// The one-line label of a night end time: the local weekday and time, for example "Tue 07:30".
-function nightLabel(iso) {
-  const date = new Date(iso);
-  const day = new Intl.DateTimeFormat('en-GB', { weekday: 'short' }).format(date);
-  const time = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit' }).format(date);
-  return `${day} ${time}`;
 }
 
 const USAGE = `herdr-boss <command>
@@ -157,9 +149,10 @@ const USAGE = `herdr-boss <command>
   messages relay ID... --by boss  Mark queued Owner messages as relayed by the Boss.
   mail post --to owner [--title TEXT] [--action read|decide|approve|answer] FILE  Post a Markdown report for the Owner from the boss pane.
   mail close ID... --note TEXT  Close open Owner mailbox items as answered through the Boss.
-  night start [--until HH:MM|ISO] [--report HH:MM|ISO] [--retro HH:MM|ISO] [--quiet-hours|--no-quiet-hours]  Start night watch. The default end time is the next 07:30 local time.
-  night stop           Stop night watch.
-  night                Print the current night watch state.
+  watch start [--until 'YYYY-MM-DD HH:MM'|HH:MM|--until-cancelled] [--report HH:MM] [--retro HH:MM] [--quiet-hours|--no-quiet-hours]
+                       Start the watch. The default end time is the next 07:30 local time.
+  watch stop           Stop the watch.
+  watch                Print the current watch state. "night" is an alias of "watch".
   kit-path              Print the shared kit directory.
 `;
 
@@ -296,15 +289,16 @@ async function main() {
       } else throw new Error('Usage: policy show | policy set FILE');
       break;
     }
+    case 'watch':
     case 'night': {
-      const { readNight, writeNight, clearNight, nightUntil, defaultNightUntil } = await import('./night.js');
-      const usage = 'Usage: night start [--until HH:MM|ISO] [--report HH:MM|ISO] [--retro HH:MM|ISO] [--quiet-hours|--no-quiet-hours] | night stop | night';
+      const { readNight, writeNight, clearNight, buildWatchRecord, watchUntilPhrase } = await import('./night.js');
+      const usage = "Usage: watch start [--until 'YYYY-MM-DD HH:MM'|HH:MM|--until-cancelled] [--report HH:MM] [--retro HH:MM] [--quiet-hours|--no-quiet-hours] | watch stop | watch";
       const [action, ...rest] = args;
       if (action === undefined) {
         const state = readNight();
         console.log(state.active
-          ? `Night watch until ${nightLabel(state.until)}${state.by ? ` (by ${state.by})` : ''}.`
-          : 'No night watch.');
+          ? `On watch ${watchUntilPhrase(state)}${state.by ? ` (by ${state.by})` : ''}.`
+          : 'No watch.');
         break;
       }
       if (!['start', 'stop'].includes(action)) throw new Error(usage);
@@ -312,40 +306,39 @@ async function main() {
       const caller = await verifyNightCaller(process.env, createHerdrRunner());
       if (action === 'stop') {
         clearNight();
-        console.log('Night watch stopped.');
+        console.log('Watch stopped.');
         break;
       }
       const flags = {};
       const positional = [];
+      const BOOLEAN_FLAGS = ['--quiet-hours', '--no-quiet-hours', '--until-cancelled'];
       for (let index = 0; index < rest.length; index += 1) {
         const token = rest[index];
         if (!token.startsWith('--')) { positional.push(token); continue; }
-        if (!['--until', '--report', '--retro', '--quiet-hours', '--no-quiet-hours'].includes(token)) throw new Error(`Unknown option: ${token}. ${usage}`);
+        if (!['--until', '--report', '--retro', ...BOOLEAN_FLAGS].includes(token)) throw new Error(`Unknown option: ${token}. ${usage}`);
         if (token in flags) throw new Error(`${token} may be used only once.`);
-        if (token === '--quiet-hours' || token === '--no-quiet-hours') { flags[token] = true; continue; }
+        if (BOOLEAN_FLAGS.includes(token)) { flags[token] = true; continue; }
         const value = rest[++index];
         if (value === undefined || value.startsWith('--')) throw new Error(`${token} needs a value.`);
         flags[token] = value;
       }
       if (positional.length) throw new Error(usage);
       if (flags['--quiet-hours'] && flags['--no-quiet-hours']) throw new Error('Use only one of --quiet-hours or --no-quiet-hours.');
-      const until = flags['--until'] === undefined ? defaultNightUntil() : nightUntil(flags['--until']);
-      const reportAt = flags['--report'] === undefined ? until : nightUntil(flags['--report']);
-      const retroAt = flags['--retro'] === undefined ? null : nightUntil(flags['--retro']);
-      writeNight({
-        active: true,
-        since: new Date().toISOString(),
-        until: until.toISOString(),
-        reportAt: reportAt.toISOString(),
-        ...(retroAt ? { retroAt: retroAt.toISOString() } : {}),
+      const { record, warning } = buildWatchRecord({
+        until: flags['--until'],
+        untilCancelled: flags['--until-cancelled'] === true,
+        report: flags['--report'],
+        retro: flags['--retro'],
         by: caller.role,
         quietHours: flags['--quiet-hours'] === true
           ? true
           : flags['--no-quiet-hours'] === true
             ? false
-            : cfg.night?.quietHours === true,
+            : (cfg.watch?.quietHours === true),
       });
-      console.log(`Night watch until ${nightLabel(until.toISOString())}.`);
+      writeNight(record);
+      console.log(`On watch ${watchUntilPhrase(record)}.`);
+      if (warning) console.log(`Warning: ${warning}`);
       break;
     }
     case 'usage': {

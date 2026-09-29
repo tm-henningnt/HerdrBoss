@@ -169,49 +169,51 @@ The stale notice text is `Your published status is <age> old while <workers ran 
 
 `HERDR_BOSS_PUSH=0` turns off prompts for one run.
 
-## Night watch
+## Watch
 
-Night watch says that the Owner is away. The Boss acts for the Owner until the end time of the night.
+The watch says that the Owner is away. The Boss acts for the Owner until the end time of the watch, or until the Owner cancels it.
 
-The state lives in the file `night.json` in the data directory. The file is beside `policy.json` and `rules.json`. Its mode is `0600`. Herdr Boss reads the file once per engine tick and writes the result to `snap.night`.
+The state lives in the file `watch.json` in the data directory. The file is beside `policy.json` and `rules.json`. Its mode is `0600`. Herdr Boss reads the file once per engine tick and writes the result to `snap.night`. Herdr Boss also reads the old file name `night.json` when `watch.json` is missing.
 
 The stored record holds these keys:
 
 | Key | Meaning |
 |---|---|
-| `active` | The night runs. |
-| `since` | The ISO time at which the night started. |
-| `until` | The ISO time at which the night ends. |
-| `reportAt` | The ISO time for the morning report. It defaults to `until`. |
+| `active` | The watch runs. |
+| `since` | The ISO time at which the watch started. |
+| `until` | The ISO time at which the watch ends. It is `null` for a watch until cancelled. |
+| `untilCancelled` | The watch runs until the Owner stops it. |
+| `reportAt` | The ISO time for the next report. It defaults to `until`. A watch until cancelled has no `reportAt` unless a daily report is set. |
+| `reportDaily` | The local `HH:MM` time of a daily report. It applies to a watch until cancelled. |
 | `retroAt` | The optional ISO time for the retro. |
-| `by` | Who started the night. |
+| `by` | Who started the watch. |
 | `quietHours` | Quiet hours are on. The default is `false`. |
 | `noticeStartAt` | The ISO time of the start notice, for each pane that got it. |
 | `noticeStopAt` | The ISO time of the end notice, for each pane that got it. |
 | `reportSentAt`, `retroSentAt` | The ISO time when each report was posted. |
 
-A state whose `until` time has passed reads as not active. The file stays, so a later task can read its own marks. A missing or unreadable file reads as not active. The read view of an active state is `{ active, since, until, by, quietHours }`. The read view of any other state is `{ active: false }`.
+A state whose `until` time has passed reads as not active. The file stays, so the engine can read its own marks. A missing or unreadable file reads as not active. The read view of an active state is `{ active, since, until, untilCancelled, reportAt, reportDaily, by, quietHours }`. The read view of any other state is `{ active: false }`.
 
-An active night state also makes the Owner away. The machine limits are the same away limits as for an idle Owner. Night watch changes no machine limit.
+An active watch state also makes the Owner away. The machine limits are the same away limits as for an idle Owner. The watch changes no machine limit.
 
-Set these worker caps in `config.json`:
+Set these worker caps in `config.json`. The old keys `night.maxWorkers`, `night.maxWorkersByLane`, and `night.quietHours` still work. A key under `watch` wins over the same key under `night`.
 
 | Setting | Meaning | Value |
 |---|---|---|
-| `night.maxWorkers` | Maximum number of working agents during night watch. | Use `null` to keep the day value. Otherwise, set an integer from 1 to 40. |
-| `night.maxWorkersByLane` | Maximum number of working agents in each provider lane during night watch. | Set `unmetered`, `codex`, `claude`, or `opencodego` to `null` or an integer from 1 to 40. Omit a lane to keep its day value. |
+| `watch.maxWorkers` | Maximum number of working agents during the watch. | Use `null` to keep the day value. Otherwise, set an integer from 1 to 40. |
+| `watch.maxWorkersByLane` | Maximum number of working agents in each provider lane during the watch. | Set `unmetered`, `codex`, `claude`, or `opencodego` to `null` or an integer from 1 to 40. Omit a lane to keep its day value. |
 
-Night caps apply only while night watch is active. Project shares and idle slot lending still apply under the global cap. The machine CPU and load guard limits still block worker starts during night watch.
+The watch caps apply only while the watch is active. Project shares and idle slot lending still apply under the global cap. The machine CPU and load guard limits still block worker starts during the watch.
 
-The bulletin then shows one line under **Rules now**: `Night watch until 07:30 (Owner away). Work as normal; the Boss handles judgment calls.` The time is the local end time. When `quietHours` is true, the bulletin also shows `Quiet hours: on.`
+The bulletin then shows one line under **Rules now**: `Watch until Wed 08:00 (Owner away). Work as normal; the Boss handles judgment calls.` A watch until cancelled shows `Watch until cancelled`. The time is the local end time. When `quietHours` is true, the bulletin also shows `Quiet hours: on.`
 
-The night worker caps also appear in the bulletin and in **Settings**. Set them there or edit `config.json`.
+The watch worker caps also appear in the bulletin and in **Settings**. Set them there or edit `config.json`.
 
-Quiet hours are optional and are off by default. Set `night.quietHours` in `config.json` to choose the default for new nights. Run `herdr-boss night start --quiet-hours` to turn them on. Run `herdr-boss night start --no-quiet-hours` to turn them off. A value sent from the dashboard also overrides the default.
+Quiet hours are optional and are off by default. Set `watch.quietHours` in `config.json` to choose the default for new watches. Run `herdr-boss watch start --quiet-hours` to turn them on. Run `herdr-boss watch start --no-quiet-hours` to turn them off. A value sent from the dashboard also overrides the default.
 
 Quiet hours hold three service actions:
 
-- Herdr Boss queues desktop notifications. It shows them once when night watch ends.
+- Herdr Boss queues desktop notifications. It shows them once when the watch ends.
 - Herdr Boss waits to release an expired manual `full-suite` lock. It still takes over a lock with a dead holder.
 - Herdr Boss waits to reclaim a lease only when its TTL expires. It still reclaims a lease for a gone pane or a finished worker.
 
@@ -219,45 +221,60 @@ Herdr Boss starts no browser restarts of its own. A person or an agent can still
 
 Quiet hours do not hold pushes, deploys, gates, quota rules, worker starts, nudges, or reports. Herdr Boss writes every alert and event to `events.jsonl`.
 
-### Night watch notices
+### Watch notices
 
 The engine sends one start notice to each orchestrator pane and to the Boss pane. It sends the notice as a direct prompt, so a working orchestrator also receives it. The notice is not a resource notice. It does not use the idle gate and it does not use the 2-hour `info` limit.
 
-The start notice reads: `[herdr-boss] Night watch until 07:30. The Owner is away; the Boss acts for the Owner. Work as normal. Escalate to the Boss.` The time is the local `until` time of the stored state.
+The start notice reads: `[herdr-boss] Watch until Wed 08:00. The Owner is away; the Boss acts for the Owner. Work as normal. Escalate to the Boss.` The time is the local `until` time of the stored state. A watch until cancelled reads `[herdr-boss] Watch until cancelled.` at the start.
 
-The engine sends one end notice when the night ends. The end notice reads: `[herdr-boss] Night watch ended. The Owner rules apply again.` A pane gets the end notice only when it got the start notice.
+The engine sends one end notice when the watch ends. The end notice reads: `[herdr-boss] Watch ended. The Owner rules apply again.` A pane gets the end notice only when it got the start notice.
 
-The engine stores the send time of each notice in the record, under `noticeStartAt` or `noticeStopAt`, with the pane as the key. A restart reads those marks and sends no notice twice. A pane that joins during the night gets the start notice at the next tick. A mark from before the `since` time belongs to an earlier night, so it does not keep a notice from going out.
+The engine stores the send time of each notice in the record, under `noticeStartAt` or `noticeStopAt`, with the pane as the key. A restart reads those marks and sends no notice twice. A pane that joins during the watch gets the start notice at the next tick. A mark from before the `since` time belongs to an earlier watch, so it does not keep a notice from going out.
 
 A failed send stores no mark. The next tick sends the notice again. A pane that no longer exists gets no end notice.
 
 A stop clears the file. The engine then keeps the last active record in its own memory and sends the end notice from it.
 
-### Night watch in the dashboard
+### Watch in the dashboard
 
-While a night runs, every page shows a slim banner under the top bar. The banner names the local end time, says that the Boss acts for the Owner, and shows `Quiet hours on` when `quietHours` is true. The banner uses a calm color. On a phone it uses at most two lines, and its **Stop** button is at least 44 px high. Without a night, the page shows no banner.
+The top bar has a watch symbol, an eye, next to the chat, mail, and needs-action icons. The page has no banner, so the layout does not move when a watch starts.
 
-The **Settings** page has a **Night watch** section. It shows the stored state. When no night runs, the section has an end-time field, a **Quiet hours** check, and **Start night watch**. While a night runs, the section has **Stop night watch**.
+- With no watch, the symbol is faded.
+- While a watch runs, the symbol is clear. On a wide screen it has a small label: `until 08:00`, or `on` for a watch until cancelled. On a phone it is the icon only.
+- Select the symbol to open a popover. Press `Esc` to close it. The popover shows the end time and the mode, and it has **Stop**. The page asks you to confirm a stop. A watch until cancelled also has **Stop**. With no watch, the popover links to the Agents page.
 
-The dashboard uses these routes. They use the same functions as `herdr-boss night start` and `herdr-boss night stop`, and they keep the same time checks.
+The **Agents** page has a compact **Watch** box at the top. It shows the stored state. The **Settings** page links to it. When no watch runs, the box has these controls:
+
+- A date and time picker for the end time. The default is the next 07:30: today at 07:30 before 07:30, and tomorrow at 07:30 otherwise.
+- The length of the watch in hours, next to the picker. A warning shows above 48 hours.
+- **Until I cancel**. The watch then has no end time.
+- **Daily report** with a time, by default 07:30. It shows only with **Until I cancel**. A watch until cancelled sends no report unless you select it.
+- **Quiet hours**.
+- **Start**. The button stays off while the end time is not in the future.
+
+While a watch runs, the box has **Stop the watch**.
+
+The dashboard uses these routes. They use the same functions as `herdr-boss watch start` and `herdr-boss watch stop`, and they keep the same time checks. The old paths `/api/night/start`, `/api/night/stop`, and `/api/night` still work.
 
 | Route | Body | Answer |
 |---|---|---|
-| `POST /api/night/start` | `{ "until": "07:30", "quietHours": false }` | `200` with the new night state. |
-| `POST /api/night/stop` | `{}` | `200` with the new night state. |
-| `GET /api/night` | none | `200` with the night state. |
+| `POST /api/watch/start` | `{ "until": "2026-09-30T07:30:00+02:00", "quietHours": false }` or `{ "untilCancelled": true, "report": "07:30" }` | `200` with the new watch state, and a `warning` above 48 hours. |
+| `POST /api/watch/stop` | `{}` | `200` with the new watch state. |
+| `GET /api/watch` | none | `200` with the watch state. |
 
-`until` is `HH:MM` local time or an ISO time. An `HH:MM` value means the next such time. The end time must be in the future and no more than 24 hours ahead. A refused time answers `400` and keeps the stored state. A blank value uses the next 07:30. The routes need the same access as the other dashboard write routes. The read-only preview refuses them. The start route records `by` as `dashboard`.
+`until` is `HH:MM` local time, `YYYY-MM-DD HH:MM` local time, or an ISO time. An `HH:MM` value means the next such time. The end time must be in the future. A watch has no maximum length. A refused time answers `400` and keeps the stored state. A blank value uses the next 07:30. Do not send `until` with `untilCancelled`. The routes need the same access as the other dashboard write routes. The read-only preview refuses them. The start route records `by` as `dashboard`.
 
 ### Timed reports
 
-Use `--report HH:MM` to set the morning report time. The default is the `--until` time. Use `--retro HH:MM` to set an optional retro time. Each time can also use an ISO timestamp. Each time must be in the future and no more than 24 hours ahead.
+Use `--report HH:MM` to set the report time. The default is the `--until` time. Use `--retro HH:MM` to set an optional retro time. Each time can also be `YYYY-MM-DD HH:MM` or an ISO timestamp. Each time must be in the future.
 
 At each time, the service posts one report to the Owner in the Boss thread. A service restart does not post the same report again. A report does not wait for running tasks to finish.
 
-Each report lists the tasks marked done since the night started. It lists running tasks with their start times, and blocked tasks with the item they wait for. It also lists the worker count, each metered lane's share of recorded work time, and the notices and alerts raised during the night. The report has at most 60 lines.
+A watch until cancelled has no report time unless you set one. Use `--report HH:MM` or the **Daily report** control. The service then posts one report every day at that time. The default time in the dashboard is 07:30.
 
-The report and its sent time stay in the message store and `night.json`. The service keeps these records when the end time passes, so a late engine tick can still post the report.
+Each report lists the tasks marked done since the watch started. It lists running tasks with their start times, and blocked tasks with the item they wait for. It also lists the worker count, each metered lane's share of recorded work time, and the notices and alerts raised during the watch. The report has at most 60 lines.
+
+The report and its sent time stay in the message store and `watch.json`. The service keeps these records when the end time passes, so a late engine tick can still post the report.
 
 ## Quota lanes
 

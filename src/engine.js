@@ -21,7 +21,7 @@ import { deliverQueued, mailboxCounts, readMessages, RETENTION_MS, SEND_LIMIT_PE
 import { openMessageStore } from './message-store.js';
 import { readKitNotice, pendingKitAlert, isKitAlert, kitNoticeTargets } from './kit-notice.js';
 import { kitRevisionState, kitSnapshot, KIT_STATES } from './kit/agents-check.js';
-import { nightNoticeSent, quietHoursActive, readNight, readNightRecord, withNightReportMark, withNoticeMark, writeNight } from './night.js';
+import { nextDailyTime, nightNoticeSent, quietHoursActive, readNight, readNightRecord, watchUntilPhrase, withNightReportMark, withNoticeMark, writeNight } from './night.js';
 import { inspectWorkerTransitions, inspectWorkerReports, isWorkerPane, applyWorkerFailureStatuses, resolveFreeUsageRun, activeFreeModelExhaustions, extendFreeModelExhaustion, activeFreeLaneExhaustions, extendFreeLaneExhaustion, freeUsageLaneRetry } from './worker-failures.js';
 import { FULL_SUITE_LOCK, lockLedgerSummary, readLockQueue, readLockTakeoverNotices, readMachineLocks, removeLockTakeoverNotice } from './kit/locks.js';
 
@@ -361,16 +361,16 @@ export function pruneInactiveDiskPromptRecords(records, activeAlerts) {
   }));
 }
 
-// The text of one night notice. The start notice names the stored end time.
+// The text of one watch notice. The start notice names the stored end time, or says that the watch runs until cancelled.
 export function nightNoticeText(phase, record) {
-  if (phase === 'end') return '[herdr-boss] Night watch ended. The Owner rules apply again.';
+  if (phase === 'end') return '[herdr-boss] Watch ended. The Owner rules apply again.';
   if (phase !== 'start') throw new TypeError('notice phase must be start or end.');
   const end = record?.until ? new Date(record.until) : null;
-  const label = end && !Number.isNaN(end.getTime()) ? ` until ${end.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}` : '';
-  return `[herdr-boss] Night watch${label}. The Owner is away; the Boss acts for the Owner. Work as normal. Escalate to the Boss.`;
+  const label = end && !Number.isNaN(end.getTime()) ? ` ${watchUntilPhrase({ until: record.until })}` : record?.until ? '' : ' until cancelled';
+  return `[herdr-boss] Watch${label}. The Owner is away; the Boss acts for the Owner. Work as normal. Escalate to the Boss.`;
 }
 
-// A night notice goes to an orchestrator pane and to the Boss pane. A pane without an agent takes no prompt.
+// A watch notice goes to an orchestrator pane and to the Boss pane. A pane without an agent takes no prompt.
 export function nightNoticeTarget(pane) {
   return !!pane?.agent && (pane.orch === true || pane.label === 'orch' || pane.label === 'boss');
 }
@@ -722,7 +722,7 @@ export class Engine extends EventEmitter {
       snap.herdr = herdr ? { ...herdr, panes: applyWorkerFailureStatuses(herdr.panes, workerTransitions.failures) } : herdr;
       const todayUse = quotaUsageToday(snap.quotas, undefined, now);
       snap.lanes = laneStatus(snap.quotas, policy, now, { todayUse });
-      const nightConfig = this.cfg.night || {};
+      const nightConfig = this.cfg.watch || {};
       const laneCapsActive = snap.night?.active === true &&
         Object.values(nightConfig.maxWorkersByLane || {}).some((cap) => Number.isInteger(cap));
       const runningByLane = laneCapsActive ? runningWorkerCountsByLane(snap.herdr, policy, this.models) : {};
@@ -1593,12 +1593,12 @@ export class Engine extends EventEmitter {
         marked = true;
         this.log('notify', text, { pane });
       } catch (error) {
-        this.log('error', `Night watch ${phase} notice to ${pane} failed: ${String(error.stderr || error.message).slice(0, 200)}`);
+        this.log('error', `Watch ${phase} notice to ${pane} failed: ${String(error.stderr || error.message).slice(0, 200)}`);
       }
     }
     if (marked && stored) {
       try { writeNight(marks, { dataDir: DATA_DIR }); }
-      catch (error) { this.log('error', `Could not store the night notice marks: ${error.message}`); }
+      catch (error) { this.log('error', `Could not store the watch notice marks: ${error.message}`); }
     }
     // The mirror holds the marks of an active night. It is dropped once the night is not active.
     const mirror = active ? marks : null;
@@ -1616,10 +1616,13 @@ export class Engine extends EventEmitter {
       const deadline = Date.parse(record[kind === 'retro' ? 'retroAt' : 'reportAt']);
       const mark = kind === 'retro' ? 'retroSentAt' : 'reportSentAt';
       if (!Number.isFinite(deadline) || now < deadline || record[mark]) continue;
-      const nightKey = `${record.since}:${kind}`;
+      // A daily report repeats, so each day has its own key. A message from an old version holds the key nightReportKey.
+      const daily = kind === 'report' && typeof record.reportDaily === 'string';
+      const nightKey = daily ? `${record.since}:${kind}:${record.reportAt}` : `${record.since}:${kind}`;
       try {
         // Find a committed message after a restart before appending another one.
-        const posted = this.messageStore.all().some((message) => message.kind === 'report' && message.nightReportKey === nightKey);
+        const posted = this.messageStore.all().some((message) => message.kind === 'report'
+          && (message.watchReportKey === nightKey || message.nightReportKey === nightKey));
         if (!posted) {
           const text = renderNightReport({
             night: record,
@@ -1634,14 +1637,18 @@ export class Engine extends EventEmitter {
           });
           this.messageStore.append({
             thread: 'boss', from: 'boss', to: 'owner', kind: 'report',
-            title: kind === 'retro' ? 'Night watch retro' : 'Night watch report',
-            text, action: 'read', replyTo: null, status: 'new', nightReportKey: nightKey,
+            title: kind === 'retro' ? 'Watch retro' : 'Watch report',
+            text, action: 'read', replyTo: null, status: 'new', watchReportKey: nightKey,
           }, { now });
         }
         const latest = readNightRecord({ dataDir: DATA_DIR }) || record;
-        if (!latest[mark]) writeNight(withNightReportMark(latest, kind, new Date(now).toISOString()), { dataDir: DATA_DIR });
+        if (daily && latest.reportAt === record.reportAt) {
+          // Arm the next daily report and clear the mark of the report that went out.
+          const { reportSentAt, ...rest } = latest;
+          writeNight({ ...rest, reportAt: nextDailyTime(record.reportDaily, new Date(Math.max(now, deadline))).toISOString() }, { dataDir: DATA_DIR });
+        } else if (!daily && !latest[mark]) writeNight(withNightReportMark(latest, kind, new Date(now).toISOString()), { dataDir: DATA_DIR });
       } catch (error) {
-        this.log('error', `Night watch ${kind} failed: ${String(error?.message || error).slice(0, 200)}`);
+        this.log('error', `Watch ${kind} failed: ${String(error?.message || error).slice(0, 200)}`);
       }
     }
   }
