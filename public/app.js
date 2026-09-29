@@ -1812,7 +1812,7 @@ function mailboxView(s) {
   ].join('');
 }
 
-async function loadMailbox() {
+async function loadMailbox(auto = false) {
   mailbox.loading = true;
   try {
     const folder = mailboxFolderFromLocation();
@@ -1830,7 +1830,8 @@ async function loadMailbox() {
     if (state) state.mailbox = result.mailbox;
   } catch (error) { mailbox.error = error.message; }
   finally { mailbox.loading = false; }
-  render();
+  if (auto) autoRender();
+  else render();
 }
 
 function mailFind(id) { return mailbox.needsYou.find((item) => item.id === id) || mailbox.updates.find((item) => item.id === id) || mailbox.done.find((item) => item.id === id); }
@@ -1982,13 +1983,17 @@ async function mailDismiss(items) {
   if (mailbox.currentConversation) await loadMailboxConversation(mailbox.currentConversation.thread, mailbox.currentConversation.id);
 }
 
-function mailRestoreDrafts(focusId) {
+function mailRestoreDrafts(focusId, caret) {
   for (const field of $app.querySelectorAll('[data-mail-draft]')) field.value = mailDrafts[field.dataset.mailDraft] || '';
   const compose = $app.querySelector('[data-mail-compose-draft]');
   if (compose) compose.value = mailbox.composeDraft;
   const reply = $app.querySelector('[data-mail-reply-draft]');
   if (reply) reply.value = mailbox.replyDraft;
-  if (focusId) document.getElementById(focusId)?.focus();
+  const focused = focusId ? document.getElementById(focusId) : null;
+  if (focused) {
+    focused.focus({ preventScroll: true });
+    if (caret) focused.setSelectionRange(caret[0], caret[1]);
+  }
 }
 
 document.addEventListener('input', (e) => {
@@ -3531,6 +3536,7 @@ const HELP = {
     <p><b>Updates</b> holds open information items with action <code>read</code> or no action. Opening an item marks it read. <b>Sent</b> holds your messages. It shows queued, delivered, failed, and relayed state, and the reply time. <b>Done</b> holds closed or dismissed items and relayed messages.</p>
     <p>The folder stays in the page address. The page remembers your last folder. When Needs you has items, it opens that folder by default. When it is empty, the page says <b>Nothing needs you</b> and links to Updates.</p>
     <h3>Conversations</h3><p>The conversation shows Owner and agent messages in time order. A report shows as formatted Markdown. A reply shows as plain text. Opening an item marks it read. On a phone, select <b>Back</b> to return to the folder list.</p>
+    <h3>Refresh</h3><p>The page reads new data every 30 seconds. It keeps the open conversation, the selection, the typed text, and the scroll position. The refresh waits until 3 seconds after you last type or scroll.</p>
     <p>Use the reply box to answer the last agent message. The page asks you to confirm each send. Herdr Boss delivers the message when the agent is working, idle, or done.</p>
     <h3>Actions</h3><p><b>Answer</b>: type an answer and select <b>Send</b>. <b>Approve</b>: select <b>Approve</b> or <b>Decline</b>. A note is optional. <b>Decide</b>: select a choice, or type an answer and select <b>Send</b>. Choice buttons appear when the message has a Markdown list under a <b>Choices</b> heading. Each answer uses the same delivery limit and safety checks as a new message. An answered item moves to <b>Done</b>.</p>
     <h3>Compose</h3><p>Select <b>New message</b> to write to the Boss or a project with an <code>orch</code> pane. The page asks you to confirm before it sends. The new conversation opens in <b>Sent</b>.</p>
@@ -3541,7 +3547,7 @@ const HELP = {
     <h3>Channels</h3><p><b>Chat</b> holds the conversation. A normal reply, an Owner message, a nudge, and a status request stay in Chat only. A reply that asks you for an <b>answer</b>, an <b>approval</b>, or a <b>decision</b> shows in Chat and in Mailbox <b>Needs you</b> while it is open. A <b>report</b> from the Boss is mail. It shows in Mailbox <b>Updates</b> and as one short line in Chat. A normal reply never shows in Updates.</p>
     <h3>Top bar</h3><p>The top bar has three icons: chat unread, mail unread, and open action items. An icon with nothing to show is faded and has no count. An icon with something to show is bright and shows the count. <b>Needs action</b> is the most visible icon. The three icons are on a desktop and on a phone.</p>
     <h3>Layout</h3><p>The chat is compact. A bubble has slim padding and no card frame. The time is 11 px. The composer is one line and grows to 6 lines. Its send button is a round button. A list row is 52 px high. The first line holds the title and the time. The second line holds the last message and the unread badge. The row keeps a touch target of at least 44 px on a phone.</p>
-    <h3>List</h3><p>Each row shows the title, the last message on one line, the time, and the unread count. A report shows as <b>Report: TITLE</b>. The newest chat comes first. The menu badge shows the total unread count. The list follows the message stream. It never reloads the page.</p>
+    <h3>List</h3><p>Each row shows the title, the last message on one line, the time, and the unread count. A report shows as <b>Report: TITLE</b>. The newest chat comes first. The menu badge shows the total unread count. The list follows the message stream. It never reloads the page. The automatic refresh keeps the list and conversation scroll. It waits until 3 seconds after you last type or scroll.</p>
     <h3>Conversation</h3><p>Select a row to open the chat. Your messages sit on the right, and the agent messages sit on the left. Each bubble shows the text and the time. Your bubble also shows the delivery state: <b>queued</b>, <b>delivered</b>, or <b>failed</b> with the reason. Opening a chat marks the messages to you as read.</p>
     <p>Scroll up to read older messages. The page asks for the page before the oldest message and keeps your reading position. It stops at the oldest message in the store. The store keeps messages for 30 days.</p>
     <p>A new message goes at the bottom. The page scrolls down only when you already read the newest message. Otherwise it shows a <b>new messages</b> pill. Select the pill to go to the newest message.</p>
@@ -3671,6 +3677,62 @@ document.addEventListener('click', (e) => {
 
 // ---------- Render loop ----------
 
+// The Owner reads or types on the Mailbox and the Chat. An automatic render waits until the Owner pauses.
+const OWNER_QUIET_MS = 3000;
+let ownerActiveAt = 0;
+let autoRenderTimer = null;
+let ignoreScrollUntil = 0;
+
+function ownerQuietWait(lastActiveAt, now) {
+  return Math.max(0, lastActiveAt + OWNER_QUIET_MS - now);
+}
+
+function autoRender() {
+  const wait = ['/mailbox', '/chat'].includes(location.pathname) ? ownerQuietWait(ownerActiveAt, Date.now()) : 0;
+  if (wait) {
+    if (!autoRenderTimer) autoRenderTimer = setTimeout(() => { autoRenderTimer = null; autoRender(); }, wait);
+    return;
+  }
+  clearTimeout(autoRenderTimer);
+  autoRenderTimer = null;
+  render();
+}
+
+function markOwnerActive(e) {
+  if (!['/mailbox', '/chat'].includes(location.pathname)) return;
+  if (e.type === 'scroll' && Date.now() < ignoreScrollUntil) return;
+  if (e.target === document || $app.contains(e.target)) ownerActiveAt = Date.now();
+}
+document.addEventListener('input', markOwnerActive, { capture: true, passive: true });
+document.addEventListener('scroll', markOwnerActive, { capture: true, passive: true });
+
+// The scroll containers to keep for each route. A position is restored only when its key is the same after the render.
+function keptScrollKeys(route, mailbox, chat) {
+  if (route === 'mailbox') {
+    const view = mailbox.composing ? 'compose' : mailbox.currentConversation?.id || '';
+    return { window: `${mailbox.folder}|${view}`, '.mail-list-pane': mailbox.folder, '.mail-conversation-scroll': view };
+  }
+  if (route === 'chat') return { window: chat.thread || '', '.chat-list-pane': 'list' };
+  return {};
+}
+
+function captureScroll(route) {
+  const keys = keptScrollKeys(route, mailbox, chat);
+  const tops = {};
+  for (const selector of Object.keys(keys)) tops[selector] = selector === 'window' ? scrollY : $app.querySelector(selector)?.scrollTop ?? null;
+  return { keys, tops };
+}
+
+function restoreScroll(route, scroll) {
+  ignoreScrollUntil = Date.now() + 250;
+  for (const [selector, key] of Object.entries(keptScrollKeys(route, mailbox, chat))) {
+    const top = scroll.tops[selector];
+    if (top == null || scroll.keys[selector] !== key) continue;
+    if (selector === 'window') { if (scrollY !== top) scrollTo(scrollX, top); }
+    else { const element = $app.querySelector(selector); if (element) element.scrollTop = top; }
+  }
+}
+
 function render(force = false) {
   if (!state) return;
   if (!policyDirty) policyDraft = null;
@@ -3696,11 +3758,14 @@ function render(force = false) {
   if (html !== lastRender) {
     const active = document.activeElement;
     const focusId = active?.dataset?.mailDraft || active?.matches?.('[data-mail-compose-draft], [data-mail-reply-draft]') ? active.id : null;
+    const caret = focusId && typeof active.selectionStart === 'number' ? [active.selectionStart, active.selectionEnd] : null;
     const chatViewState = route === 'chat' ? chatCaptureView() : null;
+    const scroll = captureScroll(route);
     $app.innerHTML = html;
     lastRender = html;
-    if (route === 'mailbox') mailRestoreDrafts(focusId);
+    if (route === 'mailbox') mailRestoreDrafts(focusId, caret);
     if (route === 'chat') chatRestoreView(chatViewState);
+    restoreScroll(route, scroll);
   }
   if (route === 'agents' && agentsViewMode() === 'chart') orgMotion(state);
   else orgEventMark = null;
@@ -4670,14 +4735,14 @@ function connect() {
   const es = new EventSource('/api/events');
   es.addEventListener('state', (e) => {
     state = JSON.parse(e.data);
-    render();
+    autoRender();
     // A link from the Browsers page opens /allocation#lease-POOL-ITEM. Scroll to that row once.
     if (!hashScrolled && location.hash) {
       hashScrolled = true;
       const target = document.getElementById(location.hash.slice(1));
       if (target) requestAnimationFrame(() => target.scrollIntoView());
     }
-    if (location.pathname === '/mailbox' && mailbox.loaded && !mailbox.loading && JSON.stringify(state.mailbox) !== mailbox.counts) loadMailbox();
+    if (location.pathname === '/mailbox' && mailbox.loaded && !mailbox.loading && JSON.stringify(state.mailbox) !== mailbox.counts) loadMailbox(true);
   });
   es.onopen = () => $dot.classList.add('on');
   es.addEventListener('message', (e) => onChatMessage(JSON.parse(e.data)));
@@ -4690,6 +4755,11 @@ async function refreshRoamgate() {
     $roamgate.hidden = !response.ok || !status.available;
   } catch { $roamgate.hidden = true; }
 }
+// The Mailbox and the Chat keep their DOM when the refreshed HTML is the same, so the reading position stays.
+function refreshForcesRender(pathname) {
+  return !['/mailbox', '/chat'].includes(pathname);
+}
+
 async function refreshExtras() {
   const results = await Promise.allSettled(['/api/models', '/api/usage', '/api/browser-sessions', '/api/handoffs', '/api/denials', '/api/mailbox?folder=needs-you', '/api/chats'].map((url) => fetch(url).then((r) => r.json())));
   if (results[0].status === 'fulfilled') models = results[0].value;
@@ -4705,9 +4775,9 @@ async function refreshExtras() {
   if (results[4].status === 'fulfilled') denials = results[4].value;
   if (results[5].status === 'fulfilled') mailbox.updatesUnread = results[5].value.updatesUnread || 0;
   if (results[6].status === 'fulfilled' && Array.isArray(results[6].value)) { chat.list = chatSortList(results[6].value); chat.loaded = true; }
-  if (location.pathname === '/mailbox' && !mailbox.loading) await loadMailbox();
-  lastRender = '';
-  render();
+  if (location.pathname === '/mailbox' && !mailbox.loading) await loadMailbox(true);
+  if (refreshForcesRender(location.pathname)) lastRender = '';
+  autoRender();
   if (location.pathname === '/browsers') for (const slug of browserPreviewOpen) if (!browserPreviewUrls[slug]) refreshBrowserPreview(slug, true);
 }
 connect();
@@ -4735,4 +4805,4 @@ document.getElementById('browser-viewer').addEventListener('close', () => {
   const slug = document.getElementById('browser-viewer').dataset.project;
   if (slug) browserRefreshStopped(slug);
 });
-setInterval(render, 10000);
+setInterval(autoRender, 10000);
