@@ -22,10 +22,24 @@ function gitSync(root, args) {
   return execFileSync('git', ['-C', root, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', ...args], { encoding: 'utf8' }).trim();
 }
 
+// A project root that holds the same installed kit assets as the repository, so it is a real kit
+// root and its kit revision equals the kit revision of the repository. A commit that changes an
+// asset moves the fixture revision, so tests that change one compute the revision again.
 function makeRepo(t) {
   const root = tmpDir(t, 'herdr-kit-notice-');
   execFileSync('git', ['init', '-b', 'main', root], { stdio: 'ignore' });
   commit(root, 'README.md', 'Initial commit');
+  for (const relative of KIT_REVISION_PATHS) {
+    const source = path.join(repo, relative);
+    const target = path.join(root, relative);
+    if (fs.existsSync(source) && fs.statSync(source).isFile()) {
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.copyFileSync(source, target);
+    } else fs.cpSync(source, target, { recursive: true });
+  }
+  gitSync(root, ['add', '-A']);
+  gitSync(root, ['commit', '-m', 'Add the installed kit assets']);
+  assert.equal(kitRevision(root), kitRevision());
   return root;
 }
 
@@ -104,6 +118,27 @@ test('an unchanged HEAD sends nothing and runs no git log', async (t) => {
   assert.deepEqual(git.calls, [['-C', root, 'rev-parse', 'HEAD']]);
 });
 
+test('the notice and the stored state take the kit revision of the given project root', async (t) => {
+  const root = makeRepo(t);
+  // A project root with its own kit assets, so its kit revision differs from the default kit root.
+  for (const relative of KIT_REVISION_PATHS) {
+    const isFile = /\.(?:md|json)$/.test(relative);
+    const file = path.join(root, isFile ? relative : path.join(relative, 'asset.md'));
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, `fixture ${relative}`);
+  }
+  gitSync(root, ['add', '-A']);
+  gitSync(root, ['commit', '-m', 'Add the fixture kit assets']);
+  const expected = kitRevision(root);
+  assert.match(expected, /^[0-9a-f]{12}$/);
+  assert.notEqual(expected, kitRevision(), 'the fixture root must not have the default kit revision');
+  const base = gitSync(root, ['rev-parse', 'HEAD']);
+  commit(root, 'kit/models.md', 'Change the kit');
+  const result = await readKitNotice({ root, stored: { commit: base, at: 0 }, git: recordingGit(), now: NOW });
+  assert.equal(result.state.revision, expected);
+  assert.ok(result.alert.text.startsWith(`[herdr-boss] Kit revision ${expected} (1 change(s)): `), result.alert.text);
+});
+
 test('two kit commits and one non-kit commit give one alert with only the kit subjects', async (t) => {
   const root = makeRepo(t);
   const base = gitSync(root, ['rev-parse', 'HEAD']);
@@ -111,16 +146,19 @@ test('two kit commits and one non-kit commit give one alert with only the kit su
   commit(root, 'src/server.js', 'Change the dashboard server');
   commit(root, 'src/kit/workers.js', 'Change worker start');
   const head = gitSync(root, ['rev-parse', 'HEAD']);
+  // The skill template is an installed kit asset, so the kit commit moves the fixture revision.
+  const revision = kitRevision(root);
   const git = recordingGit();
   const result = await readKitNotice({ root, stored: { commit: base, at: NOW - 1000 }, git, now: NOW });
   assert.deepEqual(result.state.commit, head);
   assert.equal(result.state.at, NOW);
+  assert.equal(result.state.revision, revision);
   assert.equal(result.event, null);
   assert.equal(result.alert.key, `kit:${head.slice(0, 7)}`);
   assert.equal(result.alert.severity, 'info');
   assert.equal(result.alert.scope, 'all');
   assert.equal(result.alert.once, true);
-  assert.equal(result.alert.text, `[herdr-boss] Kit revision ${REV} (2 change(s)): Change worker start; Change the orchestrator skill. Run herdr-boss kit install, then re-read docs/orchestration/herdr-boss.md now; your loaded copy is stale.`);
+  assert.equal(result.alert.text, `[herdr-boss] Kit revision ${revision} (2 change(s)): Change worker start; Change the orchestrator skill. Run herdr-boss kit update, then re-read docs/orchestration/herdr-boss.md now; your loaded copy is stale.`);
   assert.deepEqual(result.state.alert, result.alert);
   assert.deepEqual(git.calls, [
     ['-C', root, 'rev-parse', 'HEAD'],
@@ -178,7 +216,7 @@ test('a mixed batch names only the required changes', async (t) => {
   commit(root, 'kit/models.md', 'A change that needs action', 'Kit-Impact: required');
   commit(root, 'kit/models.md', 'A cosmetic change', 'Kit-Impact: none');
   const result = await readKitNotice({ root, stored: { commit: base, at: 0 }, git: recordingGit(), now: NOW });
-  assert.equal(result.alert.text, `[herdr-boss] Kit revision ${REV} (1 change(s)): A change that needs action. Run herdr-boss kit install, then re-read docs/orchestration/herdr-boss.md now; your loaded copy is stale.`);
+  assert.equal(result.alert.text, `[herdr-boss] Kit revision ${REV} (1 change(s)): A change that needs action. Run herdr-boss kit update, then re-read docs/orchestration/herdr-boss.md now; your loaded copy is stale.`);
 });
 
 test('a missing, invalid, or ambiguous impact sends a required notice', async (t) => {
@@ -207,7 +245,7 @@ test('a recorded useful change sends no notice when the change log lines up with
   });
   assert.equal(result.alert, null);
   assert.equal(result.event, null);
-  assert.deepEqual(result.state, { commit: head, at: NOW, revision: REV });
+  assert.deepEqual(result.state, { commit: head, at: NOW, revision: kitRevision(root) });
 });
 
 test('a recorded required change sends a notice when the change log lines up with the commits', async (t) => {
@@ -218,7 +256,8 @@ test('a recorded required change sends a notice when the change log lines up wit
     root, stored: { commit: base, revision: '222222222222', at: 0 }, git: recordingGit(), now: NOW, changesFile: changesFile(t, CHANGES_TEXT),
   });
   assert.ok(result.alert);
-  assert.equal(result.alert.text, `[herdr-boss] Kit revision ${REV} (1 change(s)): Record a change that needs action. Run herdr-boss kit install, then re-read docs/orchestration/herdr-boss.md now; your loaded copy is stale.`);
+  // The project kit template is an installed kit asset, so the kit commit moves the fixture revision.
+  assert.equal(result.alert.text, `[herdr-boss] Kit revision ${kitRevision(root)} (1 change(s)): Record a change that needs action. Run herdr-boss kit update, then re-read docs/orchestration/herdr-boss.md now; your loaded copy is stale.`);
 });
 
 test('a batch of asset commits takes one record per commit, newest first', async (t) => {
@@ -231,7 +270,8 @@ test('a batch of asset commits takes one record per commit, newest first', async
   });
   // The newest commit takes the newest record, which is the required one. Only it is named.
   assert.ok(result.alert);
-  assert.equal(result.alert.text, `[herdr-boss] Kit revision ${REV} (1 change(s)): Record the newer useful change. Run herdr-boss kit install, then re-read docs/orchestration/herdr-boss.md now; your loaded copy is stale.`);
+  // Both commits change an installed kit asset, so they move the fixture revision.
+  assert.equal(result.alert.text, `[herdr-boss] Kit revision ${kitRevision(root)} (1 change(s)): Record the newer useful change. Run herdr-boss kit update, then re-read docs/orchestration/herdr-boss.md now; your loaded copy is stale.`);
 });
 
 test('a change log that does not line up with the commits sends a required notice', async (t) => {
@@ -307,7 +347,7 @@ test('more than 10 kit commits list the 10 newest and then and N more', async (t
   for (let i = 1; i <= 13; i += 1) commit(root, 'kit/models.md', `Kit change ${i}`);
   const result = await readKitNotice({ root, stored: { commit: base, at: 0 }, git: recordingGit(), now: NOW });
   const subjects = Array.from({ length: 10 }, (_, i) => `Kit change ${13 - i}`).join('; ');
-  assert.equal(result.alert.text, `[herdr-boss] Kit revision ${REV} (13 change(s)): ${subjects}; and 3 more. Run herdr-boss kit install, then re-read docs/orchestration/herdr-boss.md now; your loaded copy is stale.`);
+  assert.equal(result.alert.text, `[herdr-boss] Kit revision ${REV} (13 change(s)): ${subjects}; and 3 more. Run herdr-boss kit update, then re-read docs/orchestration/herdr-boss.md now; your loaded copy is stale.`);
 });
 
 test('the notice text stays under 1200 characters with long subjects', () => {
@@ -315,7 +355,7 @@ test('the notice text stays under 1200 characters with long subjects', () => {
   const text = formatKitNotice(commits, 'abcdef012345');
   assert.ok(text.length < 1200, `length ${text.length}`);
   assert.match(text, /^\[herdr-boss\] Kit revision abcdef012345 \(30 change\(s\)\): /);
-  assert.match(text, /; and 20 more\. Run herdr-boss kit install, then re-read docs\/orchestration\/herdr-boss\.md now; your loaded copy is stale\.$/);
+  assert.match(text, /; and 20 more\. Run herdr-boss kit update, then re-read docs\/orchestration\/herdr-boss\.md now; your loaded copy is stale\.$/);
 });
 
 test('a git failure sends nothing, stores HEAD, and gives one event', async (t) => {
@@ -390,7 +430,7 @@ const engine = new Engine(cfg, {
     if (args.includes('log')) return args[2] === '--format=%h%x00' ? '' : (input.log || '');
     return args.includes('rev-parse') ? input.head + '\\n' : '';
   },
-  kitRoot: '/kit-root',
+  kitRoot: input.kitRoot || '/kit-root',
   herdrRunner: async (cmd, args) => { prompts.push(args); return ''; },
   collectors: {
     collectHerdr: async () => input.herdr,
@@ -474,17 +514,20 @@ test('the engine stores the kit notice state and logs the queued notice', { time
   const out = runEngine(t, {
     mode: 'read',
     head,
+    // A real kit root, so the notice takes the kit revision of the root that the engine supplies.
+    kitRoot: repo,
     log: `ccccccc\x1fChange the kit\x1fChange the kit\n\x00`,
     memory: { paneSince: {}, pushes: {}, notified: {}, kitNotice: { commit: base, at: 0 } },
   });
   assert.deepEqual(out.gitCalls, [
-    ['-C', '/kit-root', 'rev-parse', 'HEAD'],
-    ['-C', '/kit-root', 'merge-base', '--is-ancestor', base, head],
-    ['-C', '/kit-root', 'log', '--format=%h%x1f%s%x1f%B%x00', `${base}..HEAD`, '--', 'kit', 'src/kit', 'docs/orchestrator-instructions.md'],
-    ['-C', '/kit-root', 'log', '--format=%h%x00', `${base}..HEAD`, '--', 'kit/templates', 'kit/skills/herdr-orchestrator/SKILL.md', 'kit/skills/herdr-orchestrator/reference', 'kit/models.json'],
+    ['-C', repo, 'rev-parse', 'HEAD'],
+    ['-C', repo, 'merge-base', '--is-ancestor', base, head],
+    ['-C', repo, 'log', '--format=%h%x1f%s%x1f%B%x00', `${base}..HEAD`, '--', 'kit', 'src/kit', 'docs/orchestrator-instructions.md'],
+    ['-C', repo, 'log', '--format=%h%x00', `${base}..HEAD`, '--', 'kit/templates', 'kit/skills/herdr-orchestrator/SKILL.md', 'kit/skills/herdr-orchestrator/reference', 'kit/models.json'],
   ]);
   assert.equal(out.memoryKitNotice.commit, head);
   assert.equal(out.memoryKitNotice.alert.key, 'kit:ccccccc');
-  assert.match(out.memoryKitNotice.alert.text, /Kit revision [0-9a-f]{12} \(1 change\(s\)\): Change the kit\. Run herdr-boss kit install/);
+  assert.equal(out.memoryKitNotice.revision, kitRevision(repo));
+  assert.match(out.memoryKitNotice.alert.text, new RegExp(`Kit revision ${kitRevision(repo)} \\(1 change\\(s\\)\\): Change the kit\\. Run herdr-boss kit update`));
   assert.deepEqual(out.events, ['Queued kit notice kit:ccccccc for each project orchestrator']);
 });

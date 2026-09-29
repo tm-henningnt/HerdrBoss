@@ -19,7 +19,7 @@ const MAX_SUBJECTS = 10;
 const MAX_SUBJECT_LENGTH = 90;
 const MAX_TEXT_LENGTH = 1199;
 const PENDING_MS = 7 * 86400 * 1000;
-const TAIL = '. Run herdr-boss kit install, then re-read docs/orchestration/herdr-boss.md now; your loaded copy is stale.';
+const TAIL = '. Run herdr-boss kit update, then re-read docs/orchestration/herdr-boss.md now; your loaded copy is stale.';
 
 function shortSubject(subject) {
   const text = String(subject || '').replace(/\s+/g, ' ').trim();
@@ -68,7 +68,8 @@ export async function readKitNotice({ root, stored, git, now, changesFile = CHAN
   let head;
   try { head = String(await git(['-C', root, 'rev-parse', 'HEAD'])).trim(); }
   catch (error) { return { state: stored ?? null, alert: null, event: `Kit notice skipped: git rev-parse failed: ${errorText(error)}` }; }
-  const revision = kitRevision();
+  // The revision comes from the project root that the caller supplies, not from the default kit root.
+  const revision = kitRevision(root);
   const reset = (event) => ({ state: { commit: head, at: now, revision }, alert: null, event });
   if (!head) return { state: stored ?? null, alert: null, event: 'Kit notice skipped: git rev-parse printed no commit' };
   if (!stored?.commit) return reset(null);
