@@ -170,6 +170,7 @@ Include these fields in the JSON report:
   "evidenceTier": ["<tier>"],
   "unverified": [],
   "stoppedEarly": false,
+  "modelOutcome": null,
   "toolSuggestion": null,
   "usage": { "inputTokens": null, "outputTokens": null, "cachedTokens": null, "cost": null, "toolCalls": null }
 }
@@ -189,6 +190,7 @@ Write `issue` as a JSON number, for example `204`, not as a string (`"204"` or `
   "evidenceTier": ["unit"],
   "unverified": [],
   "stoppedEarly": false,
+  "modelOutcome": null,
   "toolSuggestion": null,
   "usage": { "inputTokens": null, "outputTokens": null, "cachedTokens": null, "cost": null, "toolCalls": null }
 }
@@ -197,6 +199,8 @@ Write `issue` as a JSON number, for example `204`, not as a string (`"204"` or `
 Replace `<tier>` with one or more of the evidence tiers of this project: {{evidenceTiers}}. The report validator rejects every other tier.
 
 Fill `usage` only with values measured by the worker's harness. Leave unknown values as `null`.
+
+Add a **Model notes** section to the human report with one line: the harness and model; right the first time, needed rework, or failed; and why, in a few words. Put the same in `modelOutcome` as `{ "kind": "", "model": "", "result": "first-time" | "rework" | "failed", "reason": "<at most 200 characters>" }`. Otherwise leave `modelOutcome` as `null`.
 
 Add a **Tool suggestion** section to the human report only when a `herdr-boss` tool was missing for this task. State what was missing, why you needed it, and the smallest command that would help. Put the same in `toolSuggestion` as `{ "missing": "", "why": "", "command": "" }`. Otherwise leave `toolSuggestion` as `null`.
 

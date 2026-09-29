@@ -100,6 +100,16 @@ export function validateWorkerReport(report, { evidenceTiers = [] } = {}) {
   tiers(report.evidenceTier, errors, evidenceTiers);
   stringList(report.unverified, 'unverified', errors);
   if (typeof report.stoppedEarly !== 'boolean') errors.push('stoppedEarly must be boolean.');
+  if (report.modelOutcome != null) {
+    const outcome = report.modelOutcome;
+    if (!isObject(outcome)) errors.push('modelOutcome must be null or an object.');
+    else {
+      for (const field of ['kind', 'model']) if (!isText(outcome[field])) errors.push(`modelOutcome.${field} must be a non-empty string.`);
+      if (!['first-time', 'rework', 'failed'].includes(outcome.result)) errors.push('modelOutcome.result must be first-time, rework, or failed.');
+      if (typeof outcome.reason !== 'string') errors.push('modelOutcome.reason must be a string.');
+      else if (outcome.reason.length > 200) errors.push('modelOutcome.reason must be at most 200 characters.');
+    }
+  }
   // toolSuggestion is optional: null, or what was missing in the herdr-boss tools, why, and the smallest command that would help.
   if (report.toolSuggestion != null) {
     const suggestion = report.toolSuggestion;

@@ -41,6 +41,7 @@ These are the shared operating rules for the orchestrator of this project.
 - Use only this project's browser.
 - Coordinate tab ownership with the orchestrator before sending browser input.
 - Record measured worker usage in `.worker/report.json` and run `herdr-boss worker collect --record` after review.
+- At review, record the model outcome with `worker collect --record --model-result` and, for rework or failure, `--model-reason`.
 - Prepare a successor with `herdr-boss handoff plan` and `handoff prepare` when the orchestrator's quota is at risk.
 - A handoff note carries no rules and no pane IDs.
 - Mark a script-written data file with `<!-- herdr-boss: data -->` on its first line. `herdr-boss check agents` skips it.

@@ -30,6 +30,39 @@ const EVENTS_FILE = path.join(DATA_DIR, 'events.jsonl');
 const CLI_FILE = fileURLToPath(new URL('./cli.js', import.meta.url));
 const SEV = { info: 0, warn: 1, critical: 2 };
 const POLICY_FILE = path.join(DATA_DIR, 'policy.json');
+
+function median(values) {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+// Build the model scorecard from usage events. One row per harness and model.
+export function buildModelScorecard(events = [], now = Date.now()) {
+  const cutoff = now - 30 * 24 * 60 * 60 * 1000;
+  const rows = {};
+  for (const e of events) {
+    const end = Date.parse(e.endedAt);
+    if (!Number.isFinite(end) || end < cutoff) continue;
+    const key = `${e.kind}\n${e.model}`;
+    const row = rows[key] ||= { kind: e.kind, model: e.model, runs: 0, firstTime: 0, rework: 0, failed: 0, durations: [] };
+    row.runs++;
+    const result = e.modelOutcome?.result;
+    if (result === 'first-time') row.firstTime++;
+    else if (result === 'rework') row.rework++;
+    else if (result === 'failed') row.failed++;
+    const start = Date.parse(e.startedAt);
+    if (Number.isFinite(start)) row.durations.push((end - start) / 60000);
+  }
+  return Object.values(rows)
+    .map((row) => ({
+      ...row,
+      reworkRate: row.runs ? (row.rework + row.failed) / row.runs : 0,
+      medianMinutes: median(row.durations),
+    }))
+    .sort((a, b) => b.runs - a.runs || a.kind.localeCompare(b.kind) || a.model.localeCompare(b.model));
+}
 const WORKTREE_SCAN_INTERVAL_MS = 5 * 60 * 1000;
 const CLONE_SWEEP_INTERVAL_MS = 10 * 60 * 1000;
 const PI_MODELS_INTERVAL_MS = 15 * 60 * 1000;
@@ -457,6 +490,7 @@ export class Engine extends EventEmitter {
         resourceLeases,
         locks: [],
         errors,
+        modelScorecard: buildModelScorecard(readUsage(), now),
       };
       try {
         const livePanes = new Set((herdr?.panes || []).map((pane) => pane.id));

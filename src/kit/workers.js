@@ -1278,6 +1278,15 @@ export function recordFlagErrors(options, reportJson = {}) {
   return missing;
 }
 
+// Derive the model outcome: orchestrator override wins, then report, then defaults.
+export function deriveModelOutcome(options, reportJson = {}) {
+  if (options.modelResult) return { result: options.modelResult, reason: options.modelReason || '' };
+  if (reportJson.modelOutcome) return { result: reportJson.modelOutcome.result, reason: reportJson.modelOutcome.reason || '' };
+  if (options.outcome === 'failed' || options.gateFailed) return { result: 'failed', reason: '' };
+  if ((options.rework ?? 0) > 0) return { result: 'rework', reason: '' };
+  return { result: 'first-time', reason: '' };
+}
+
 export function collectWorker(name, options, { config, now = Date.now(), output = console.log, recordUsageFn = recordUsage, listWorktreeProcesses = worktreeCwdProcesses, leaseDataDir = DATA_DIR } = {}) {
   let ledgerWritten = false;
   try {
@@ -1331,6 +1340,7 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
     let usageWarning = null;
     const releasedLeases = [];
     if (options.record) {
+      const modelOutcome = deriveModelOutcome(options, reportJson);
       const entry = {
         issue: run.issue,
         model: run.model,
@@ -1348,6 +1358,7 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
         rework: Array.from({ length: options.rework ?? 0 }, (_value, index) => `rework ${index + 1}`),
         evidenceTier: reportJson.evidenceTier,
         scopeExtensions: run.scopeExtensions ?? [],
+        modelOutcome: { kind: run.kind, model: run.model, result: modelOutcome.result, reason: modelOutcome.reason },
       };
       const usage = reportJson.usage || {};
       const provider = Object.hasOwn(run, 'provider') ? run.provider : providerFor(run.kind, run.model);
@@ -1359,6 +1370,7 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
         gatePassed: entry.independentGate.passed, issue: run.issue,
         inputTokens: usage.inputTokens ?? null, outputTokens: usage.outputTokens ?? null,
         cachedTokens: usage.cachedTokens ?? null, cost: usage.cost ?? null,
+        modelOutcome: entry.modelOutcome,
       });
       if (recorded.errors.length) usageWarning = `Warning: usage was not recorded: ${recorded.errors.join(' ')}`;
       appendDelegatedRun(config.ledgerPath, entry, { evidenceTiers: config.evidenceTiers });

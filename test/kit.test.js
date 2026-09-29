@@ -3274,3 +3274,175 @@ test('worker start keeps every repeated --allow path in the run record', () => {
   const record = JSON.parse(fs.readFileSync(result.recordFile, 'utf8'));
   for (const item of ['src/a.js', 'test/a.test.js', 'docs/a.md']) assert.ok(record.allowedPaths.includes(item), `${item} in ${record.allowedPaths.join(', ')}`);
 });
+
+test('modelOutcome validation accepts null and valid objects', () => {
+  const base = { issue: null, branch: 'b', worktree: '/w', changedPaths: [], commands: ['test'], evidenceTier: ['unit'], unverified: [], stoppedEarly: false };
+  assert.deepEqual(validateWorkerReport({ ...base, modelOutcome: null }, { evidenceTiers: ['unit'] }), []);
+  const valid = { kind: 'pi', model: 'opencode-go/space-bunny-free', result: 'first-time', reason: 'clean run' };
+  assert.deepEqual(validateWorkerReport({ ...base, modelOutcome: valid }, { evidenceTiers: ['unit'] }), []);
+  for (const result of ['rework', 'failed']) {
+    const outcome = { ...valid, result };
+    assert.deepEqual(validateWorkerReport({ ...base, modelOutcome: outcome }, { evidenceTiers: ['unit'] }), []);
+  }
+  // Invalid: missing fields
+  assert.ok(validateWorkerReport({ ...base, modelOutcome: { kind: 'pi', model: 'm', result: 'first-time' } }, { evidenceTiers: ['unit'] }).some((e) => e.includes('reason')));
+  // Invalid: bad result value
+  assert.ok(validateWorkerReport({ ...base, modelOutcome: { kind: 'pi', model: 'm', result: 'unknown', reason: 'r' } }, { evidenceTiers: ['unit'] }).some((e) => e.includes('result')));
+  // Invalid: reason too long
+  assert.ok(validateWorkerReport({ ...base, modelOutcome: { kind: 'pi', model: 'm', result: 'first-time', reason: 'x'.repeat(201) } }, { evidenceTiers: ['unit'] }).some((e) => e.includes('reason')));
+});
+
+test('worker collect --record derives model outcome defaults', () => {
+  const f = setupFixture(null);
+  git(f.root, 'add', '-A');
+  git(f.root, 'commit', '--allow-empty', '-m', 'fixture configuration');
+  const run = startWorker('model-default', { kind: 'pi', model: 'opencode-go/space-bunny-free', task: 'x', allow: ['.orchestration/runs/'], noWorktree: true }, {
+    config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+  });
+  const reportDir = path.join(run.worktree, run.workerDir);
+  fs.writeFileSync(path.join(reportDir, 'report.md'), 'Done.\n');
+  fs.writeFileSync(path.join(reportDir, 'report.json'), JSON.stringify({
+    issue: null, branch: run.branch, worktree: run.worktree,
+    changedPaths: [`.orchestration/runs/${run.name}.json`],
+    commands: ['focused check'], evidenceTier: ['unit'], unverified: [], stoppedEarly: false,
+  }));
+  const usageEvents = [];
+  collectWorker('model-default', { record: true, outcome: 'done', gatePassed: true }, {
+    config: f.config, output: () => {}, listWorktreeProcesses: () => [],
+    recordUsageFn: (event) => { usageEvents.push(event); return { errors: [], duplicate: false }; },
+  });
+  const ledger = readDelegatedRuns(f.config.ledgerPath, { evidenceTiers: f.config.evidenceTiers });
+  assert.equal(ledger[0].modelOutcome.result, 'first-time');
+  assert.equal(usageEvents[0].modelOutcome.result, 'first-time');
+  try { git(f.root, 'worktree', 'remove', '--force', run.worktree); } catch {}
+  fs.rmSync(f.root, { recursive: true, force: true });
+});
+
+test('worker collect --record orchestrator overrides report model outcome', () => {
+  const f = setupFixture(null);
+  git(f.root, 'add', '-A');
+  git(f.root, 'commit', '--allow-empty', '-m', 'fixture configuration');
+  const run = startWorker('model-override', { kind: 'pi', model: 'opencode-go/space-bunny-free', task: 'x', allow: ['.orchestration/runs/'], noWorktree: true }, {
+    config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+  });
+  const reportDir = path.join(run.worktree, run.workerDir);
+  fs.writeFileSync(path.join(reportDir, 'report.md'), 'Done.\n');
+  fs.writeFileSync(path.join(reportDir, 'report.json'), JSON.stringify({
+    issue: null, branch: run.branch, worktree: run.worktree,
+    changedPaths: [`.orchestration/runs/${run.name}.json`],
+    commands: ['focused check'], evidenceTier: ['unit'], unverified: [], stoppedEarly: false,
+    modelOutcome: { kind: 'pi', model: 'opencode-go/space-bunny-free', result: 'first-time', reason: 'clean' },
+  }));
+  const usageEvents = [];
+  collectWorker('model-override', { record: true, outcome: 'done', gatePassed: true, modelResult: 'rework', modelReason: 'needed fixes' }, {
+    config: f.config, output: () => {}, listWorktreeProcesses: () => [],
+    recordUsageFn: (event) => { usageEvents.push(event); return { errors: [], duplicate: false }; },
+  });
+  const ledger = readDelegatedRuns(f.config.ledgerPath, { evidenceTiers: f.config.evidenceTiers });
+  assert.equal(ledger[0].modelOutcome.result, 'rework');
+  assert.equal(ledger[0].modelOutcome.reason, 'needed fixes');
+  assert.equal(usageEvents[0].modelOutcome.result, 'rework');
+  try { git(f.root, 'worktree', 'remove', '--force', run.worktree); } catch {}
+  fs.rmSync(f.root, { recursive: true, force: true });
+});
+
+test('worker collect --record derives failed model outcome from gate failure', () => {
+  const f = setupFixture(null);
+  git(f.root, 'add', '-A');
+  git(f.root, 'commit', '--allow-empty', '-m', 'fixture configuration');
+  const run = startWorker('model-failed', { kind: 'pi', model: 'opencode-go/space-bunny-free', task: 'x', allow: ['.orchestration/runs/'], noWorktree: true }, {
+    config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+  });
+  const reportDir = path.join(run.worktree, run.workerDir);
+  fs.writeFileSync(path.join(reportDir, 'report.md'), 'Done.\n');
+  fs.writeFileSync(path.join(reportDir, 'report.json'), JSON.stringify({
+    issue: null, branch: run.branch, worktree: run.worktree,
+    changedPaths: [`.orchestration/runs/${run.name}.json`],
+    commands: ['focused check'], evidenceTier: ['unit'], unverified: [], stoppedEarly: false,
+  }));
+  const usageEvents = [];
+  collectWorker('model-failed', { record: true, outcome: 'done', gateFailed: true }, {
+    config: f.config, output: () => {}, listWorktreeProcesses: () => [],
+    recordUsageFn: (event) => { usageEvents.push(event); return { errors: [], duplicate: false }; },
+  });
+  const ledger = readDelegatedRuns(f.config.ledgerPath, { evidenceTiers: f.config.evidenceTiers });
+  assert.equal(ledger[0].modelOutcome.result, 'failed');
+  assert.equal(usageEvents[0].modelOutcome.result, 'failed');
+  try { git(f.root, 'worktree', 'remove', '--force', run.worktree); } catch {}
+  fs.rmSync(f.root, { recursive: true, force: true });
+});
+
+test('worker collect --record derives rework model outcome from rework count', () => {
+  const f = setupFixture(null);
+  git(f.root, 'add', '-A');
+  git(f.root, 'commit', '--allow-empty', '-m', 'fixture configuration');
+  const run = startWorker('model-rework', { kind: 'pi', model: 'opencode-go/space-bunny-free', task: 'x', allow: ['.orchestration/runs/'], noWorktree: true }, {
+    config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+  });
+  const reportDir = path.join(run.worktree, run.workerDir);
+  fs.writeFileSync(path.join(reportDir, 'report.md'), 'Done.\n');
+  fs.writeFileSync(path.join(reportDir, 'report.json'), JSON.stringify({
+    issue: null, branch: run.branch, worktree: run.worktree,
+    changedPaths: [`.orchestration/runs/${run.name}.json`],
+    commands: ['focused check'], evidenceTier: ['unit'], unverified: [], stoppedEarly: false,
+  }));
+  const usageEvents = [];
+  collectWorker('model-rework', { record: true, outcome: 'done', gatePassed: true, rework: 2 }, {
+    config: f.config, output: () => {}, listWorktreeProcesses: () => [],
+    recordUsageFn: (event) => { usageEvents.push(event); return { errors: [], duplicate: false }; },
+  });
+  const ledger = readDelegatedRuns(f.config.ledgerPath, { evidenceTiers: f.config.evidenceTiers });
+  assert.equal(ledger[0].modelOutcome.result, 'rework');
+  assert.equal(usageEvents[0].modelOutcome.result, 'rework');
+  try { git(f.root, 'worktree', 'remove', '--force', run.worktree); } catch {}
+  fs.rmSync(f.root, { recursive: true, force: true });
+});
+
+test('model scorecard computes runs, first-time, rework, failed, rework rate, and median duration', async () => {
+  const { buildModelScorecard } = await import('../src/engine.js');
+  const now = Date.parse('2026-09-28T12:00:00Z');
+  const events = [
+    { kind: 'pi', model: 'opencode-go/space-bunny-free', startedAt: '2026-09-27T10:00:00Z', endedAt: '2026-09-27T10:30:00Z', modelOutcome: { result: 'first-time' } },
+    { kind: 'pi', model: 'opencode-go/space-bunny-free', startedAt: '2026-09-26T10:00:00Z', endedAt: '2026-09-26T10:45:00Z', modelOutcome: { result: 'rework' } },
+    { kind: 'pi', model: 'opencode-go/space-bunny-free', startedAt: '2026-09-25T10:00:00Z', endedAt: '2026-09-25T10:15:00Z', modelOutcome: { result: 'failed' } },
+    { kind: 'codex', model: 'gpt-6-luna', startedAt: '2026-09-27T11:00:00Z', endedAt: '2026-09-27T11:20:00Z', modelOutcome: { result: 'first-time' } },
+    { kind: 'codex', model: 'gpt-6-luna', startedAt: '2026-09-26T11:00:00Z', endedAt: '2026-09-26T11:10:00Z', modelOutcome: { result: 'first-time' } },
+  ];
+  const rows = buildModelScorecard(events, now);
+  assert.equal(rows.length, 2);
+  // Sorted by runs: pi has 3 runs, codex has 2
+  assert.equal(rows[0].kind, 'pi');
+  assert.equal(rows[0].model, 'opencode-go/space-bunny-free');
+  assert.equal(rows[0].runs, 3);
+  assert.equal(rows[0].firstTime, 1);
+  assert.equal(rows[0].rework, 1);
+  assert.equal(rows[0].failed, 1);
+  assert.ok(Math.abs(rows[0].reworkRate - 2 / 3) < 0.001);
+  // Median of [15, 30, 45] = 30
+  assert.equal(rows[0].medianMinutes, 30);
+  assert.equal(rows[1].kind, 'codex');
+  assert.equal(rows[1].model, 'gpt-6-luna');
+  assert.equal(rows[1].runs, 2);
+  assert.equal(rows[1].firstTime, 2);
+  assert.equal(rows[1].rework, 0);
+  assert.equal(rows[1].failed, 0);
+  assert.equal(rows[1].reworkRate, 0);
+  // Median of [10, 20] = 15
+  assert.equal(rows[1].medianMinutes, 15);
+});
+
+test('Analytics page includes the Model scorecard table', async () => {
+  const fs = await import('fs');
+  const appJs = fs.readFileSync('public/app.js', 'utf8');
+  assert.ok(appJs.includes('Model scorecard'));
+  assert.ok(appJs.includes('modelScorecard'));
+  assert.ok(appJs.includes('Rework rate'));
+  assert.ok(appJs.includes('Median time'));
+});
+
+test('project kit includes the model outcome rule', async () => {
+  const fs = await import('fs');
+  const kit = fs.readFileSync('kit/templates/project-kit.md', 'utf8');
+  assert.ok(kit.includes('worker collect --record --model-result'));
+  assert.ok(kit.includes('--model-reason'));
+});

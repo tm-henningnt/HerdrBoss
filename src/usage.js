@@ -15,6 +15,16 @@ export function validateUsage(e) {
   for (const k of ['inputTokens', 'outputTokens', 'cachedTokens', 'cost']) if (e[k] != null && (!Number.isFinite(e[k]) || e[k] < 0)) errors.push(`${k} must be null or a non-negative number.`);
   if (Number.isNaN(Date.parse(e.startedAt)) || Number.isNaN(Date.parse(e.endedAt))) errors.push('startedAt and endedAt must be ISO times.');
   if (e.id != null && (typeof e.id !== 'string' || e.id.length > 240)) errors.push('id must be a short string.');
+  if (e.modelOutcome != null) {
+    const outcome = e.modelOutcome;
+    if (!isObject(outcome)) errors.push('modelOutcome must be null or an object.');
+    else {
+      for (const field of ['kind', 'model']) if (!isText(outcome[field])) errors.push(`modelOutcome.${field} must be a non-empty string.`);
+      if (!['first-time', 'rework', 'failed'].includes(outcome.result)) errors.push('modelOutcome.result must be first-time, rework, or failed.');
+      if (typeof outcome.reason !== 'string') errors.push('modelOutcome.reason must be a string.');
+      else if (outcome.reason.length > 200) errors.push('modelOutcome.reason must be at most 200 characters.');
+    }
+  }
   return errors;
 }
 
