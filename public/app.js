@@ -1,3 +1,5 @@
+import { markdownOrPlain, plainTextHtml, sanitizeRendered } from './markdown.js';
+
 const $app = document.getElementById('app');
 const $dot = document.getElementById('dot');
 const $updated = document.getElementById('updated');
@@ -1510,44 +1512,29 @@ const MESSAGE_NUDGES = ['Continue.', 'Use your free worker slots.', 'Pause after
 const MESSAGE_SENDER = { owner: 'Owner', boss: 'Boss', orch: 'Orchestrator' };
 const messagePanel = { thread: null, name: '', timer: null, records: [], status: '', busy: false };
 
-// Escaped Markdown: headings, lists, fenced code, inline code, bold, and italic. Raw HTML stays text.
-function markdownHtml(source) {
-  const inline = (text) => text.split('`').map((part, index) => index % 2
-    ? `<code>${esc(part)}</code>`
-    : esc(part).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>').replace(/(^|[^*\w])\*([^*\s][^*]*)\*/g, '$1<em>$2</em>')).join('');
-  const out = [];
-  let list = null;
-  let paragraph = [];
-  let code = null;
-  const flush = () => {
-    if (paragraph.length) { out.push(`<p>${paragraph.map(inline).join(' ')}</p>`); paragraph = []; }
-    if (list) { out.push(`<${list.tag}>${list.items.map((item) => `<li>${inline(item)}</li>`).join('')}</${list.tag}>`); list = null; }
-  };
-  for (const line of String(source || '').split(/\r?\n/)) {
-    if (code) {
-      if (/^\s*```/.test(line)) { out.push(`<pre><code>${esc(code.join('\n'))}</code></pre>`); code = null; }
-      else code.push(line);
-      continue;
-    }
-    if (/^\s*```/.test(line)) { flush(); code = []; continue; }
-    const heading = /^(#{1,6})\s+(.*)$/.exec(line);
-    if (heading) { flush(); const level = Math.min(heading[1].length + 2, 6); out.push(`<h${level}>${inline(heading[2])}</h${level}>`); continue; }
-    const bullet = /^\s*[-*+]\s+(.*)$/.exec(line);
-    const numbered = /^\s*\d+[.)]\s+(.*)$/.exec(line);
-    if (bullet || numbered) {
-      const tag = bullet ? 'ul' : 'ol';
-      if (paragraph.length || (list && list.tag !== tag)) flush();
-      list ||= { tag, items: [] };
-      list.items.push((bullet || numbered)[1]);
-      continue;
-    }
-    if (!line.trim()) { flush(); continue; }
-    if (list) flush();
-    paragraph.push(line.trim());
+// Safe Markdown from public/markdown.js. The browser walk then removes any element or attribute outside the allowlist.
+// The cache keeps the 10-second render cheap.
+const markdownCache = new Map();
+function safeMarkdownHtml(source) {
+  const key = String(source ?? '');
+  if (markdownCache.has(key)) return markdownCache.get(key);
+  // One hostile message must not break the whole page render.
+  let html;
+  try {
+    const template = document.createElement('template');
+    template.innerHTML = markdownOrPlain(key);
+    sanitizeRendered(template.content);
+    html = template.innerHTML;
+  } catch {
+    html = plainTextHtml(key);
   }
-  if (code) out.push(`<pre><code>${esc(code.join('\n'))}</code></pre>`);
-  flush();
-  return out.join('');
+  if (markdownCache.size >= 300) markdownCache.delete(markdownCache.keys().next().value);
+  markdownCache.set(key, html);
+  return html;
+}
+
+function markdownBlock(source, className = '') {
+  return `<div class="md${className ? ` ${className}` : ''}">${safeMarkdownHtml(source)}</div>`;
 }
 
 function messageState(m) {
@@ -1563,11 +1550,11 @@ function mailDeliveryState(m) {
   return 'queued';
 }
 
-// A report is safe Markdown. Every other record is escaped text.
+// Each record body is safe Markdown. A report also shows its title when the text does not start with it.
 function messageBody(m) {
-  return m.kind === 'report'
-    ? `<div class="msg-report">${m.title && /^#{1,6}\s+(.*)/.exec(String(m.text).trimStart())?.[1]?.trim() !== m.title ? `<h3>${esc(m.title)}</h3>` : ''}${markdownHtml(m.text)}</div>`
-    : `<p class="msg-text">${esc(m.text)}</p>`;
+  if (m.kind !== 'report') return markdownBlock(m.text, 'msg-text');
+  const title = m.title && /^#{1,6}\s+(.*)/.exec(String(m.text).trimStart())?.[1]?.trim() !== m.title ? `<h3>${esc(m.title)}</h3>` : '';
+  return `<div class="md msg-report">${title}${safeMarkdownHtml(m.text)}</div>`;
 }
 
 function messageItem(m) {
@@ -1737,7 +1724,7 @@ function mailDoneLine(item) {
   if (item.answer) {
     const state = mailDeliveryState(item.answer);
     const replied = item.answer.repliedAt ? ` · replied ${clock(item.answer.repliedAt)}` : '';
-    return `<div class="mail-answer"><span class="sub">Your answer · ${esc(state)} · ${esc(clock(item.answer.at))}${esc(replied)}</span><p class="msg-text">${esc(item.answer.text)}</p></div>`;
+    return `<div class="mail-answer"><span class="sub">Your answer · ${esc(state)} · ${esc(clock(item.answer.at))}${esc(replied)}</span>${markdownBlock(item.answer.text, 'msg-text')}</div>`;
   }
   if (item.closedBy === 'boss') {
     return `<p class="sub mail-answer">Closed by the Boss · ${esc(clock(item.closedAt))}</p>`;
@@ -2370,7 +2357,7 @@ function chatBubble(record, startOfRun = false) {
   const action = !owner && record.action ? `<a class="chat-action-link" href="/mailbox?thread=${encodeURIComponent(record.thread)}">Open in Mailbox</a>` : '';
   const retry = record.local && record.error ? `<p class="chat-bubble-retry"><button type="button" data-chat-retry="${esc(record.id)}">Retry</button></p>` : '';
   const label = esc(chatBubbleLabel(sender, { ...record, text }, state));
-  const content = `<p class="chat-bubble-text">${esc(text)}</p><p class="chat-bubble-meta"><span class="chat-bubble-time">${esc(clock(record.at))}</span>${state ? ` <span class="chat-state${tone}">${esc(state)}</span>` : ''}</p>${card}${action}${retry}`;
+  const content = `<div class="chat-bubble-text md">${safeMarkdownHtml(text)}</div><p class="chat-bubble-meta"><span class="chat-bubble-time">${esc(clock(record.at))}</span>${state ? ` <span class="chat-state${tone}">${esc(state)}</span>` : ''}</p>${card}${action}${retry}`;
   // The avatar of the other party shows on the first bubble of a run of messages from that sender.
   if (!owner && startOfRun) return `<li class="chat-entry" data-chat-bubble="${esc(record.id)}" aria-label="${label}">${avatarSlot(record.thread, { title: avatarTitle(record.thread), size: 20 })}<div class="chat-bubble from-agent${card ? ' chat-card' : ''}" data-chat-bubble="${esc(record.id)}" aria-label="${label}">${content}</div></li>`;
   return `<li class="chat-bubble${owner ? ' from-owner' : ' from-agent'}${card ? ' chat-card' : ''}" data-chat-bubble="${esc(record.id)}" aria-label="${label}">${content}</li>`;
@@ -3540,9 +3527,10 @@ const HELP = {
     <h3>Folders</h3><p><b>Needs you</b> is the default folder when an open item needs an answer, approval, or decision. Select an item to open its conversation. Select one or more checkboxes to dismiss items without an answer. The page asks you to confirm. Dismissal sends nothing.</p>
     <p><b>Updates</b> holds open information items with action <code>read</code> or no action. Opening an item marks it read. <b>Sent</b> holds your messages. It shows queued, delivered, failed, and relayed state, and the reply time. <b>Done</b> holds closed or dismissed items and relayed messages.</p>
     <p>The folder stays in the page address. The page remembers your last folder. When Needs you has items, it opens that folder by default. When it is empty, the page says <b>Nothing needs you</b> and links to Updates.</p>
-    <h3>Conversations</h3><p>The conversation shows Owner and agent messages in time order. A report shows as formatted Markdown. A reply shows as plain text. Opening an item marks it read. On a phone, select <b>Back</b> to return to the folder list.</p>
+    <h3>Conversations</h3><p>The conversation shows Owner and agent messages in time order. Each message and each report shows as formatted Markdown. Opening an item marks it read. On a phone, select <b>Back</b> to return to the folder list.</p>
     <h3>Refresh</h3><p>The page reads new data every 30 seconds. It keeps the open conversation, the selection, the typed text, and the scroll position. The refresh waits until 3 seconds after you last type or scroll.</p>
     <p>Use the reply box to answer the last agent message. The page asks you to confirm each send. Herdr Boss delivers the message when the agent is working, idle, or done.</p>
+    <h3>Markdown</h3><p>The page shows headings, bold, italic, lists, task lists, tables, code, quotes, rules, and links. A wide table or code block scrolls sideways in its own box. Raw HTML shows as text. A link opens only when it uses <code>http</code>, <code>https</code>, or <code>mailto</code>, or a local path. An external link opens in a new tab.</p>
     <h3>Actions</h3><p><b>Answer</b>: type an answer and select <b>Send</b>. <b>Approve</b>: select <b>Approve</b> or <b>Decline</b>. A note is optional. <b>Decide</b>: select a choice, or type an answer and select <b>Send</b>. Choice buttons appear when the message has a Markdown list under a <b>Choices</b> heading. Each answer uses the same delivery limit and safety checks as a new message. An answered item moves to <b>Done</b>.</p>
     <h3>Compose</h3><p>Select <b>New message</b> to write to the Boss or a project with an <code>orch</code> pane. The page asks you to confirm before it sends. The new conversation opens in <b>Sent</b>.</p>
     <h3>Phone</h3><p>The top bar has a mail icon for unread Updates and an alert icon for open Needs-you items. Select an icon to open its folder. The desktop Mailbox badge shows unread Needs-you items.</p>
@@ -3553,7 +3541,7 @@ const HELP = {
     <h3>Top bar</h3><p>The top bar has three icons: chat unread, mail unread, and open action items. An icon with nothing to show is faded and has no count. An icon with something to show is bright and shows the count. <b>Needs action</b> is the most visible icon. The three icons are on a desktop and on a phone.</p>
     <h3>Layout</h3><p>The chat is compact. A bubble has slim padding and no card frame. The time is 11 px. The composer is one line and grows to 6 lines. Its send button is a round button. A list row is 52 px high. The first line holds the title and the time. The second line holds the last message and the unread badge. The row keeps a touch target of at least 44 px on a phone.</p>
     <h3>List</h3><p>Each row shows the title, the last message on one line, the time, and the unread count. A report shows as <b>Report: TITLE</b>. The newest chat comes first. The menu badge shows the total unread count. The list follows the message stream. It never reloads the page. The automatic refresh keeps the list and conversation scroll. It waits until 3 seconds after you last type or scroll.</p>
-    <h3>Conversation</h3><p>Select a row to open the chat. Your messages sit on the right, and the agent messages sit on the left. Each bubble shows the text and the time. Your bubble also shows the delivery state: <b>queued</b>, <b>delivered</b>, or <b>failed</b> with the reason. Opening a chat marks the messages to you as read.</p>
+    <h3>Conversation</h3><p>Select a row to open the chat. Your messages sit on the right, and the agent messages sit on the left. Each bubble shows the text as formatted Markdown and the time. A wide table or code block scrolls sideways inside the bubble. Raw HTML shows as text. Your bubble also shows the delivery state: <b>queued</b>, <b>delivered</b>, or <b>failed</b> with the reason. Opening a chat marks the messages to you as read.</p>
     <p>Scroll up to read older messages. The page asks for the page before the oldest message and keeps your reading position. It stops at the oldest message in the store. The store keeps messages for 30 days.</p>
     <p>A new message goes at the bottom. The page scrolls down only when you already read the newest message. Otherwise it shows a <b>new messages</b> pill. Select the pill to go to the newest message.</p>
     <h3>Composer</h3><p>Select the round send button or press Enter to send the message. Select Shift and press Enter to make a new line. The text area grows with the text, up to 6 lines. A message holds at most 2000 characters. The service accepts at most 10 messages a minute.</p>
@@ -3615,7 +3603,7 @@ const HELP = {
     <p>Type a message of up to 2000 characters and select <b>Send</b>. The nudge buttons send a fixed text: <b>Continue.</b>, <b>Use your free worker slots.</b>, or <b>Pause after the current task.</b> <b>Ask for status</b> asks the agent for a short status report and a new status file. The page asks you to confirm each send.</p>
     <p>A new message is <b>queued</b>. Herdr Boss delivers it when the agent is working, idle, or done. A blocked, unknown, or missing pane keeps it queued. Then the message shows <b>delivered</b> with a time. A <b>failed</b> message gets up to 3 more attempts on later ticks. Herdr Boss accepts at most 10 messages a minute.</p>
     <p>The Boss can run <code>herdr-boss messages relay ID... --by boss</code> to mark queued Owner messages as relayed. Herdr Boss never sends a relayed message. The thread shows its relay time and any reply time.</p>
-    <p>The Boss and the orchestrators reply with <code>herdr-boss say</code>. The Boss can post a longer report with <code>herdr-boss mail post</code>. The page shows a report as formatted Markdown. You cannot message a worker. Send a worker request to its orchestrator.</p>
+    <p>The Boss and the orchestrators reply with <code>herdr-boss say</code>. The Boss can post a longer report with <code>herdr-boss mail post</code>. The page shows each message and each report as formatted Markdown. You cannot message a worker. Send a worker request to its orchestrator.</p>
     <p>The open panel reads the thread again every 10 seconds. A read-only preview shows the threads and refuses a send.</p>
     <h3>Data limits</h3><p><b>Not reported</b> means that the current state does not hold the value. Herdr Boss does not receive the model of a running agent. The page does not read a task from a pane title. It shows no pane output, messages, or secrets.</p>
     <h3>List</h3><p>Every Herdr workspace with its orchestrator and workers, live from Herdr.</p>

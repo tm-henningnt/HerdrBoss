@@ -905,15 +905,51 @@ body.dep-full-open { overflow: hidden; }
 .msg-owner { justify-self: end; border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
 .msg-head { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
 .msg-head time { color: var(--muted); margin-left: auto; }
-.msg-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.msg-text { margin: 0; overflow-wrap: anywhere; }
 .msg-state { margin: 0; color: var(--muted); font-size: 12px; }
 .msg-failed .msg-state { color: var(--crit); }
 .msg-empty { color: var(--muted); }
-.msg-report { overflow-wrap: anywhere; }
-.msg-report h3, .msg-report h4, .msg-report h5, .msg-report h6 { margin: 6px 0 4px; font-size: 14px; }
-.msg-report p, .msg-report ul, .msg-report ol { margin: 4px 0; }
-.msg-report ul, .msg-report ol { padding-left: 20px; }
-.msg-report pre { margin: 4px 0; padding: 8px; overflow-x: auto; background: var(--panel); border-radius: 6px; }
+/* Safe Markdown in the Mailbox and the Chat. A table or a code block scrolls sideways in its own box. */
+.md { min-width: 0; font-size: 14px; line-height: 1.55; overflow-wrap: anywhere; }
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md h3, .md h4, .md h5, .md h6 { margin: 14px 0 4px; line-height: 1.3; color: var(--text); text-transform: none; letter-spacing: 0; }
+.md h3 { font-size: 17px; font-weight: 700; }
+.md h4 { font-size: 15.5px; font-weight: 650; }
+.md h5 { font-size: 14.5px; font-weight: 650; }
+.md h6 { font-size: 14px; font-weight: 600; color: var(--muted); }
+.md p { margin: 6px 0; }
+.md .md-plain { white-space: pre-wrap; }
+.md ul, .md ol { margin: 6px 0; padding-left: 22px; }
+.md li { margin: 3px 0; }
+.md li > ul, .md li > ol { margin: 2px 0; }
+.md li::marker { color: var(--muted); }
+.md ul.md-task { list-style: none; padding-left: 4px; }
+.md li > input[type="checkbox"] { accent-color: var(--accent); margin: 0 4px 0 0; vertical-align: -1px; }
+.md code { font: 12.5px var(--mono); padding: 1px 5px; border-radius: 4px; background: var(--panel-2); border: 1px solid var(--line); overflow-wrap: anywhere; }
+.md pre { margin: 8px 0; padding: 10px 12px; overflow-x: auto; border-radius: 8px; background: var(--panel-2); border: 1px solid var(--line); }
+.md pre code { padding: 0; border: 0; background: none; font-size: 12.5px; line-height: 1.5; white-space: pre; overflow-wrap: normal; }
+.md blockquote { margin: 8px 0; padding: 2px 0 2px 12px; border-left: 2px solid var(--faint); color: var(--muted); }
+.md hr { border: 0; border-top: 1px solid var(--line); margin: 14px 0; }
+.md a { color: color-mix(in srgb, var(--accent) 82%, var(--text)); text-underline-offset: 2px; }
+.md a[target="_blank"]::after { content: "\2197" / ""; margin-left: 1px; font-size: 0.85em; }
+.md .md-table { margin: 8px 0; max-width: 100%; overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; }
+.md .md-table:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.md table { border-collapse: collapse; min-width: 100%; font-size: 13px; }
+.md th, .md td { padding: 6px 10px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); overflow-wrap: normal; }
+.md th { background: var(--panel-2); font-weight: 650; white-space: nowrap; }
+.md td:first-child { white-space: nowrap; }
+.md tr:last-child td { border-bottom: 0; }
+.md td.n { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.chat-bubble-text.md { font-size: 13.5px; line-height: 1.45; }
+.chat-bubble-text.md h3, .chat-bubble-text.md h4, .chat-bubble-text.md h5, .chat-bubble-text.md h6 { margin: 8px 0 2px; font-size: 14px; }
+.chat-bubble-text.md p { margin: 4px 0; }
+.chat-bubble-text.md pre, .chat-bubble-text.md .md-table { margin: 6px 0; background: var(--panel); }
+@media (max-width: 760px) {
+  .md ul, .md ol { padding-left: 18px; }
+  .md pre { padding: 8px 10px; }
+  .md th, .md td { padding: 5px 8px; }
+}
 .message-form { display: grid; gap: 6px; padding: 10px 14px 0; border-top: 1px solid var(--line); }
 .message-form label { font-size: 12.5px; color: var(--muted); }
 .message-form textarea { width: 100%; box-sizing: border-box; resize: vertical; font: inherit; }
@@ -1102,10 +1138,10 @@ body.dep-full-open { overflow: hidden; }
 .chat-more { position: sticky; top: 0; margin: 0; padding: 6px 12px; background: var(--panel-2); color: var(--muted); font-size: 11.5px; text-align: center; }
 .chat-bubbles { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; margin: 0; padding: 10px 12px; list-style: none; }
 /* A slim bubble. It has no card frame. The time sits in the bubble corner at 11 px. */
-.chat-bubble { display: grid; gap: 1px; max-width: 75%; padding: 6px 8px; border-radius: 12px; background: var(--panel-2); border-bottom-left-radius: 4px; }
+.chat-bubble { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1px; max-width: 75%; padding: 6px 8px; border-radius: 12px; background: var(--panel-2); border-bottom-left-radius: 4px; }
 .chat-bubble.from-agent { justify-self: start; }
 .chat-bubble.from-owner { justify-self: end; background: color-mix(in srgb, var(--accent) 14%, var(--panel)); border-bottom-left-radius: 12px; border-bottom-right-radius: 4px; }
-.chat-bubble-text { margin: 0; font-size: 13.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.chat-bubble-text { margin: 0; min-width: 0; font-size: 13.5px; overflow-wrap: anywhere; }
 .chat-bubble-meta { display: flex; align-items: baseline; gap: 6px; margin: 0; color: var(--muted); font: 11px var(--mono); overflow-wrap: anywhere; }
 .chat-bubble.from-agent .chat-bubble-meta { justify-content: flex-end; }
 .chat-bubble-time { font-size: 11px; }
