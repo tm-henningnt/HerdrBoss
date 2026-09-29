@@ -454,6 +454,16 @@ Herdr Boss recommends the first succession choice that can start. The dashboard 
 
 When no choice can start, Herdr Boss recommends no successor. The automatic handover then logs that no alternative provider is eligible.
 
+The automatic handover never touches the Boss. It prepares and activates no Boss successor, and it activates no prepared Boss record. The Owner does each Boss handover by hand. The Boss project page keeps its successor recommendation.
+
+The Overview lists only handover records in the state `prepared`, `preparing`, or `needs-inspection`. It lists a record only when the source pane and the successor pane are still in Herdr. It shows no recommendation without a record, and no Boss recommendation. Plan a handover without a record on the project page.
+
+The automatic handover prepares a successor only for a project that works now. A project qualifies when its allocation reports a running worker, or when a pane in its workspace runs an agent in a `working` state. A workspace with no working agent and no running worker waits. A stopped orchestrator in a workspace with a working worker stays eligible.
+
+The automatic handover also skips a project that the Owner holds. A project is held when its published status is `paused`, `stood down`, or `on hold`, or when its published summary says that it is paused or stood down. A status or summary in another case, spacing, or hyphen variant counts as the same word. A summary that reports the state of another project, or of one task, does not hold its own project. An allocation mode of `paused` holds the project.
+
+The automatic handover activates a prepared successor only when the successor model is not weaker than the source model. The tiers follow the cost order in `kit/models.md`, from the free models up to Codex Astra. A model the kit does not rank has no tier. When either model has no tier, or the successor is weaker, Herdr Boss leaves the record prepared and logs one line that names the reason. The Owner then runs `herdr-boss handoff activate ID --confirmed` when the weaker model is the right choice.
+
 ## Project browsers
 
 Each project can have one persistent Chrome profile. Request it with `herdr-boss browser request SLUG`, or open it from the Browsers page. Herdr Boss assigns a port from 9223 to 9299.
