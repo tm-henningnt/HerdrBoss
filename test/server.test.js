@@ -1830,15 +1830,15 @@ test('an avatar gives each slug a stable color, two initials from the title, and
   // The same slug always gets the same color. Two slugs do not share one by accident.
   assert.equal(avatarColor('herdrboss'), avatarColor('herdrboss'));
   assert.equal(avatarSvg('herdrboss', { title: 'HerdrBoss', size: 28 }), avatarSvg('herdrboss', { title: 'HerdrBoss', size: 28 }));
-  assert.notEqual(avatarColor('herdrboss'), avatarColor('tmprocessmining'));
+  assert.notEqual(avatarColor('herdrboss'), avatarColor('alphabeta'));
   assert.ok(AVATAR_PALETTE.includes(avatarColor('herdrboss')), 'the color comes from the palette');
   // The initials come from the title.
   assert.equal(avatarInitials('HerdrBoss'), 'HB');
-  assert.equal(avatarInitials('TmProcessMining'), 'TP');
+  assert.equal(avatarInitials('AlphaBeta'), 'AB');
   assert.equal(avatarInitials('qlik-ai'), 'QA');
   assert.equal(avatarInitials('A'), 'A');
   assert.equal(avatarInitials(''), '?');
-  assert.match(avatarSvg('tmprocessmining', { title: 'TmProcessMining', size: 28 }), />TP</);
+  assert.match(avatarSvg('alphabeta', { title: 'AlphaBeta', size: 28 }), />AB</);
   // The initials take the color of the best contrast on the circle, and reach WCAG AA.
   for (const color of AVATAR_PALETTE) {
     const text = avatarTextColor(color);
@@ -1938,10 +1938,10 @@ test('the avatar routes store an image with mode 0600, and read and remove it ag
 
 test('one title gives one avatar, and the Chat, the Mailbox, the Agents cards, and Settings agree', () => {
   const { avatarSvg, avatarInitials, avatarTitle } = avatarBlock();
-  const projects = { herdrboss: { slug: 'herdrboss', label: 'HerdrBoss' }, tmprocessmining: { slug: 'tmprocessmining', label: 'TmProcessMining' } };
+  const projects = { herdrboss: { slug: 'herdrboss', label: 'HerdrBoss' }, alphabeta: { slug: 'alphabeta', label: 'AlphaBeta' } };
   // The project display name is the one title. The chat title and then the slug are the fallbacks.
   assert.equal(avatarTitle('herdrboss', 'herdrboss', projects), 'HerdrBoss');
-  assert.equal(avatarTitle('tmprocessmining', 'tmprocessmining', projects), 'TmProcessMining');
+  assert.equal(avatarTitle('alphabeta', 'alphabeta', projects), 'AlphaBeta');
   assert.equal(avatarTitle('boss', 'Boss', projects), 'Boss');
   assert.equal(avatarTitle('noslug', 'Chat title', projects), 'Chat title');
   assert.equal(avatarTitle('noslug', '', projects), 'noslug');
