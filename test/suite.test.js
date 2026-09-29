@@ -726,3 +726,42 @@ test('suite keeps only the last 200 pass records', (t) => {
   assert.equal(records.length, 200);
   assert.notEqual(records[0].time, record.time);
 });
+
+test('suite records the hash of each lockfile in the pass key', (t) => {
+  const f = fixture(t, 'herdr-suite-cache-lock-record-');
+  fs.writeFileSync(path.join(f.root, 'package-lock.json'), '{"lockfileVersion":3}\n');
+  fs.writeFileSync(path.join(f.root, 'yarn.lock'), '# yarn\n');
+  git(f.root, 'add', '.');
+  git(f.root, 'commit', '-m', 'add lockfiles');
+  assert.equal(f.run([]).exitCode, 0);
+  const [record] = JSON.parse(fs.readFileSync(path.join(f.dataDir, 'suite-passes.json'), 'utf8'));
+  assert.deepEqual(Object.keys(record.locks).sort(), ['package-lock.json', 'yarn.lock']);
+  for (const hash of Object.values(record.locks)) assert.match(hash, /^[0-9a-f]{64}$/);
+  assert.equal(f.run(['--reuse']).exitCode, 0);
+  assert.equal(f.readSeen().runs, 1, 'unchanged lockfiles reuse the pass');
+});
+
+test('suite does not reuse a pass after an ignored lockfile changes', (t) => {
+  const f = fixture(t, 'herdr-suite-cache-lock-ignored-');
+  fs.writeFileSync(path.join(f.root, '.gitignore'), 'pnpm-lock.yaml\n');
+  git(f.root, 'add', '.gitignore');
+  git(f.root, 'commit', '-m', 'ignore lockfile');
+  fs.writeFileSync(path.join(f.root, 'pnpm-lock.yaml'), 'lockfileVersion: 9\n');
+  assert.equal(f.run([]).exitCode, 0);
+  assert.equal(git(f.root, 'status', '--porcelain'), '', 'the ignored lockfile leaves the tree clean');
+  fs.writeFileSync(path.join(f.root, 'pnpm-lock.yaml'), 'lockfileVersion: 10\n');
+
+  assert.equal(f.run(['--reuse']).exitCode, 0);
+  assert.equal(f.readSeen().runs, 2, 'a changed lockfile runs the command');
+});
+
+test('suite does not record a pass when a lockfile changes during the command', (t) => {
+  const f = fixture(t, 'herdr-suite-cache-lock-during-');
+  fs.writeFileSync(path.join(f.root, '.gitignore'), 'package-lock.json\n');
+  git(f.root, 'add', '.gitignore');
+  git(f.root, 'commit', '-m', 'ignore lockfile');
+  const install = path.join(f.base, 'install.mjs');
+  fs.writeFileSync(install, `import fs from 'node:fs';\nfs.writeFileSync(${JSON.stringify(path.join(f.root, 'package-lock.json'))}, '{}\\n');\n`);
+  assert.equal(f.runCommand([], [process.execPath, install]).exitCode, 0);
+  assert.equal(fs.existsSync(path.join(f.dataDir, 'suite-passes.json')), false);
+});
