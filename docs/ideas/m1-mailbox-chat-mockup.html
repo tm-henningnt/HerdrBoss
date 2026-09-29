@@ -363,12 +363,12 @@ function renderMail() {
   const FOLDERS = [['needs', 'Needs you', 'needs', 3], ['inbox', 'Inbox', 'inbox', 9], ['updates', 'Reports and updates', 'doc', 6], ['done', 'Done', 'done', 41]];
   const folderList = (rail) => `<ul class="folders">${FOLDERS.map(([k, label, icon, n]) => `<li><a href="?page=mail&folder=${k}"${k === folder ? ' aria-current="page"' : ''}>${use(icon)}<span>${label}</span><span class="n">${n}</span></a></li>`).join('')}<li><hr></li><li><a href="#">${use('sent')}<span>Sent</span></a></li></ul>`;
   const rows = [
-    { id: 1, who: 'boss', from: 'Boss', act: 'Approve', subj: 'Hold new Claude workers until Thu 21:00?', prev: 'Claude is at 84% of its week. The orchestrators use about 2% an hour.', time: '07:41', unread: true },
+    { id: 1, who: 'boss', from: 'Boss', act: 'Approve', subj: 'Hold new Claude workers until Thu 21:00?', prev: 'Claude is at 84% of its week. The orchestrators use about 3% an hour.', time: '07:41', unread: true },
     { id: 2, who: 'atlas', from: 'Atlas', act: 'Decide', subj: 'Release 1.1 now or after the review pass?', prev: 'Gates 2 to 7 are green. Gate 1 waits for CI next month.', time: '07:12', unread: true, n: 3 },
     { id: 3, who: 'harbor', from: 'Harbor', act: 'Answer', subj: 'Which tenant should the demo app use?', prev: 'The demo builder needs one tenant for the read-back check.', time: '06:55', unread: false },
   ];
   const sepRows = [
-    { id: 4, who: 'boss', from: 'Boss', act: 'Report', cls: 'report', subj: 'Night report, 28–29 Sept', prev: 'Night watch ran from 00:30 to 07:30, and it ended by itself.', time: '07:32', unread: true },
+    { id: 4, who: 'boss', from: 'Boss', act: 'Report', cls: 'report', subj: 'Night report, 28–29 Sept', prev: 'Night watch ran from 01:00 to 07:00, and it ended by itself.', time: '07:32', unread: true },
     { id: 5, who: 'herdrboss', from: 'HerdrBoss', subj: 'Task G1 is merged and live', prev: 'The suite pass key now holds the lockfile hashes.', time: '05:10', unread: false, n: 2 },
     { id: 6, who: 'ledger', from: 'Ledger', subj: 'Gates 2 to 7 are green', prev: 'Gate 1 waits for CI. Nothing needs you.', time: 'Mon', unread: false },
   ];
@@ -392,7 +392,7 @@ function renderMail() {
     <div class="tools desktop-only"><button class="ibtn" aria-label="Close">${use('back')}</button><span class="spacer"></span><button class="ibtn" aria-label="Mark unread">${use('read')}</button><button class="ibtn" aria-label="Dismiss">${use('dismiss')}</button><button class="ibtn" aria-label="More">${use('more')}</button></div>
     <div class="scroll">
       ${approve ? `<div class="thread-head"><h2>Hold new Claude workers until Thu 21:00?</h2><div class="chips"><span class="act">Approve</span></div></div>
-      <article class="msg"><div class="msg-top">${av('boss')}<span><strong>Boss</strong><div class="to">to you · asks for approval</div></span><time>07:41</time></div><div class="msg-body md"><p>Claude is at <strong>84%</strong> of its week. The reset is Thu 1 Oct 21:00.</p><p>The orchestrators and the Boss use about 2% an hour. I hold new Claude workers until the reset.</p><p>Say if you want a different trade-off.</p></div></article>` : `<div class="thread-head"><h2>Night report, 28–29 Sept</h2><div class="chips"><span class="act report">Report</span></div></div>
+      <article class="msg"><div class="msg-top">${av('boss')}<span><strong>Boss</strong><div class="to">to you · asks for approval</div></span><time>07:41</time></div><div class="msg-body md"><p>Claude is at <strong>84%</strong> of its week. The reset is Thu 1 Oct 21:00.</p><p>The orchestrators and the Boss use about 3% an hour. I hold new Claude workers until the reset.</p><p>Say if you want a different trade-off.</p></div></article>` : `<div class="thread-head"><h2>Night report, 28–29 Sept</h2><div class="chips"><span class="act report">Report</span></div></div>
       <div class="msg collapsed from-owner">${`<span class="av s32" style="background:var(--panel-2);color:var(--muted);box-shadow:inset 0 0 0 1px var(--line)">You</span>`}<span style="min-width:0"><strong>You</strong><div class="snip">Send the night report at 07:30, with the scorecard.</div></span><time class="num" style="color:var(--muted);font-size:12px">Mon 22:04</time></div>
       <article class="msg"><div class="msg-top">${av('boss')}<span><strong>Boss</strong><div class="to">to you · report</div></span><time>07:32</time></div><div class="msg-body md">${report}</div></article>`}
     </div>
@@ -415,7 +415,7 @@ function renderMail() {
 
 function mdReport() {
   // What the in-repo renderer must output for the report fixture. Names are placeholders.
-  return `<p>Night watch ran from 00:30 to 07:30, and it ended by itself. All active projects moved forward all night.</p>
+  return `<p>Night watch ran from 01:00 to 07:00, and it ended by itself. All active projects moved forward all night.</p>
   <h2>Atlas</h2>
   <ul><li><strong>Release 1.0.0 is done.</strong> It is tagged <code>v1.0.0</code>, and the demo runs 1.0.0.</li><li><strong>Gap:</strong> serve-live was named in 6 briefs but used in none.
     <ul><li>Since 05:20 the review refuses a report without serve-live evidence.</li></ul></li></ul>
@@ -424,7 +424,7 @@ function mdReport() {
     <tr><td>Pi with a free model</td><td class="n">24</td><td>No failures. Median 41 min. Good for exact specs.</td></tr>
     <tr><td>Codex</td><td class="n">25</td><td>About 1 in 4 needed rework. Median 57 min.</td></tr>
     <tr><td>Sonnet 5.5 reviews</td><td class="n">7</td><td>4 right first time.</td></tr></tbody></table></div>
-  <blockquote><p>Only 7 of 69 runs have a structured model result so far.</p></blockquote>
+  <blockquote><p>Only 5 of 40 runs have a structured model result so far.</p></blockquote>
   <pre><code>herdr-boss suite --reuse -- npm test</code></pre>
   <hr>
   <h2>Needs you</h2>
@@ -457,7 +457,7 @@ function renderChat() {
     <div class="unread-mark" role="separator">2 unread messages</div>
     <div class="group">${av('boss', 's28')}
       <div class="b"><div class="md"><p>Claude is at <strong>84%</strong> of its week. The reset is Thu 1 Oct 21:00.</p></div><span class="meta">07:40</span></div>
-      <div class="b card"><div class="md"><p>The orchestrators use about 2% an hour. I hold new Claude workers until the reset. Say if you want a different trade-off.</p></div><span class="meta">07:41</span><div class="opts"><button class="primary">Approve</button><button class="deny">Reject</button><button>Later</button></div></div>
+      <div class="b card"><div class="md"><p>The orchestrators use about 3% an hour. I hold new Claude workers until the reset. Say if you want a different trade-off.</p></div><span class="meta">07:41</span><div class="opts"><button class="primary">Approve</button><button class="deny">Reject</button><button>Later</button></div></div>
     </div>
     <div class="group mine"><div class="b">Keep the orchestrators on Claude.<span class="meta">07:44 ${tick('sent')}</span></div><div class="b">Codex takes the workers.<span class="meta">07:44 ${tick('queued')}</span></div></div>`;
   const thread = `
