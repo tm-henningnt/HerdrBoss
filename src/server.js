@@ -419,7 +419,7 @@ export function serve(cfg, { readOnlyPreview = false, createEngine = (config, op
           since: new Date().toISOString(),
           until: until.toISOString(),
           by: 'dashboard',
-          quietHours: body.quietHours === true,
+          quietHours: typeof body.quietHours === 'boolean' ? body.quietHours : cfg.night?.quietHours === true,
         }, { dataDir: DATA_DIR });
         const state = await engine.tick();
         return send(res, 200, { ok: true, night: state?.night ?? readNight({ dataDir: DATA_DIR }) });

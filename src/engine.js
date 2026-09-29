@@ -19,7 +19,7 @@ import { listHandoffs, saveHandoffs, supersedeHandoffs, expireHandoff, expireMis
 import { deliverQueued, mailboxCounts, readMessages, RETENTION_MS, SEND_LIMIT_PER_MINUTE } from './messages.js';
 import { openMessageStore } from './message-store.js';
 import { readKitNotice, pendingKitAlert, isKitAlert, kitNoticeTargets } from './kit-notice.js';
-import { nightNoticeSent, readNight, readNightRecord, withNightReportMark, withNoticeMark, writeNight } from './night.js';
+import { nightNoticeSent, quietHoursActive, readNight, readNightRecord, withNightReportMark, withNoticeMark, writeNight } from './night.js';
 import { inspectWorkerTransitions, inspectWorkerReports, applyWorkerFailureStatuses, resolveFreeUsageRun, activeFreeModelExhaustions, extendFreeModelExhaustion, activeFreeLaneExhaustions, extendFreeLaneExhaustion, freeUsageLaneRetry } from './worker-failures.js';
 import { FULL_SUITE_LOCK, readLockQueue, readLockTakeoverNotices, readMachineLocks, removeLockTakeoverNotice } from './kit/locks.js';
 
@@ -354,6 +354,7 @@ export class Engine extends EventEmitter {
         const matched = browsers.some((x) => x.kind === 'automation-chrome' && x.port === String(b.port) && x.profile === b.profile);
         return { ...b, responsive: matched ? await this.collectors.cdpResponds(b.port) : false };
       }));
+      const night = readNight({ dataDir: DATA_DIR, now });
 
       // The first acting tick writes a project browser lease for each browser record. It runs once for each data directory.
       const { pools: resourcePools, errors: resourcePoolErrors } = leasePools(this.cfg);
@@ -377,7 +378,14 @@ export class Engine extends EventEmitter {
             pools: resourcePools, dataDir: DATA_DIR, now, probeTcp: this.collectors.probeTcp, waitMs: 0,
             panes: currentHerdrSnapshot && currentPaneList ? new Set(herdr.panes.map((pane) => pane.id)) : null,
             browserProcess: browserProcessCheck(processesKnown ? procs : null, Object.fromEntries(browserSessions.map((b) => [b.project, b]))),
-            log: (item) => reclaimedLeases.push(item) && this.log('lease', `Reclaimed ${item.pool} ${item.item} of ${item.project}${item.worker ? `/${item.worker}` : ''}: ${item.reason}`, { pool: item.pool, item: item.item, project: item.project, reason: item.reason }),
+            night,
+            log: (item) => {
+              if (item.held) this.log('quiet-hours', `quiet hours held ${item.held}`, { pool: item.pool, item: item.item, project: item.project });
+              else {
+                reclaimedLeases.push(item);
+                this.log('lease', `Reclaimed ${item.pool} ${item.item} of ${item.project}${item.worker ? `/${item.worker}` : ''}: ${item.reason}`, { pool: item.pool, item: item.item, project: item.project, reason: item.reason });
+              }
+            },
           });
         } catch (e) { if (e.code !== 'ELOCKBUSY') errors.push(`leases: ${e.message}`); }
       }
@@ -439,8 +447,8 @@ export class Engine extends EventEmitter {
         },
         quotasCached: this.quotasCached,
         machine,
-        // The stored night watch state, read once per tick. A later task uses it for the Owner and the cap.
-        night: readNight({ dataDir: DATA_DIR, now }),
+        // The stored night watch state is read once per tick.
+        night,
         worktreeCounts: this.worktreeCounts,
         orphanedWorktreeProcesses: this.orphanedWorktreeProcesses,
         herdr,
@@ -457,6 +465,7 @@ export class Engine extends EventEmitter {
           dataDir: this.lockDataDir,
           livePanes,
           now,
+          night: snap.night,
         }).map((lock) => lock.name === FULL_SUITE_LOCK ? { ...lock, queue } : lock);
       } catch (error) { errors.push(`locks: ${error.message}`); }
       snap.projects = listProjects();
@@ -668,7 +677,7 @@ export class Engine extends EventEmitter {
       // The denial trend is for the Owner. It goes to the dashboard and the bulletin, never to a pane prompt.
       snap.denials = denialSummary(readDenials(DATA_DIR), now, { pendingBytes: this.memory.denialScan?.pendingBytes || 0 });
       fs.writeFileSync(BULLETIN_FILE, renderBulletin(snap, evaluation, this.cfg));
-      if (this.act) await this.deliver(evaluation.alerts, herdr, now);
+      if (this.act) await this.deliver(evaluation.alerts, herdr, now, snap.night);
       if (this.act && this.push) await this.deliverLockTakeoverNotices(herdr);
       if (this.act && this.push) await this.deliverNightNotices(snap.night, herdr, now);
       // Owner messages use a fresh pane list so delivery can act on current pane status.
@@ -1199,17 +1208,34 @@ export class Engine extends EventEmitter {
     }
   }
 
-  async deliver(alerts, herdr, now) {
+  async deliver(alerts, herdr, now, night = null) {
     const cooldown = loadPolicy().machine.alertCooldownSeconds * 1000;
     const orchs = (herdr?.panes || []).filter((p) => p.orch && p.agent);
     const active = new Set(alerts.map((a) => a.key));
+    const quiet = quietHoursActive(night);
+    this.memory.notified ||= {};
+    this.memory.quietNotifications = Array.isArray(this.memory.quietNotifications) ? this.memory.quietNotifications : [];
+
+    // Deliver notifications once when quiet hours end. The service keeps the queue in memory.json across restarts.
+    if (!quiet && this.memory.quietNotifications.length) {
+      for (const notice of this.memory.quietNotifications) {
+        run('herdr', ['notification', 'show', `Herdr Boss: ${notice.title}`, '--body', notice.text, '--sound', notice.severity === 'critical' ? 'request' : 'none']).catch(() => {});
+        this.log('notify', notice.title, { severity: notice.severity });
+      }
+      this.memory.quietNotifications = [];
+    }
 
     // User notifications: warn and critical, once per alert key.
     for (const a of alerts) {
       if (SEV[a.severity] < 1 || this.memory.notified[a.key]) continue;
       this.memory.notified[a.key] = now;
-      run('herdr', ['notification', 'show', `Herdr Boss: ${a.title}`, '--body', a.text, '--sound', a.severity === 'critical' ? 'request' : 'none']).catch(() => {});
-      this.log('notify', a.title, { severity: a.severity });
+      if (quiet) {
+        this.memory.quietNotifications.push({ key: a.key, title: a.title, text: a.text, severity: a.severity });
+        this.log('quiet-hours', 'quiet hours held desktop notification', { key: a.key, title: a.title, alertText: a.text, severity: a.severity });
+      } else {
+        run('herdr', ['notification', 'show', `Herdr Boss: ${a.title}`, '--body', a.text, '--sound', a.severity === 'critical' ? 'request' : 'none']).catch(() => {});
+        this.log('notify', a.title, { severity: a.severity });
+      }
     }
 
     // Prompts to orchestrators, grouped per pane.

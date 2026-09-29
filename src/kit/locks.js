@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { DATA_DIR } from '../config.js';
+import { quietHoursActive, readNight } from '../night.js';
 import { loadProjectConfig } from './config.js';
 import { createHerdrRunner, verifyCallerPane } from './workers.js';
 
@@ -89,9 +90,9 @@ function pidIsAlive(pid, probe = process.kill) {
   }
 }
 
-function lockIsLive(record, { herdr, livePanes = null, pidAlive = pidIsAlive, now = Date.now }) {
+function lockIsLive(record, { herdr, livePanes = null, pidAlive = pidIsAlive, now = Date.now, quietHours = false }) {
   if (record.name === FULL_SUITE_LOCK && record.kind === 'manual' && record.expiresAt
-    && Date.parse(record.expiresAt) <= timeValue(now)) return false;
+    && Date.parse(record.expiresAt) <= timeValue(now) && !quietHours) return false;
   let alive;
   try { alive = pidAlive(record.pid); }
   catch (error) {
@@ -447,6 +448,11 @@ function warnLockReleaseFailure(error, output) {
   output(`Warning: could not release lock ${FULL_SUITE_LOCK}: ${reason}. The lock is stale when this process ends.`);
 }
 
+function logQuietHoursHold(dataDir, now, action, extra = {}) {
+  const event = { at: new Date(timeValue(now)).toISOString(), type: 'quiet-hours', text: `quiet hours held ${action}`, ...extra };
+  fs.appendFileSync(path.join(dataDir, 'events.jsonl'), `${JSON.stringify(event)}\n`, { mode: 0o600 });
+}
+
 const defaultPause = sleep;
 
 export function acquireProjectLock(name, {
@@ -484,6 +490,7 @@ export function acquireProjectLock(name, {
     for (;;) {
       let staleRecord = null;
       let outcome;
+      let quietHours = false;
       try {
         outcome = withMutationLock(directory, () => {
           let tickets = [];
@@ -507,9 +514,14 @@ export function acquireProjectLock(name, {
             if (!fs.statSync(queue).isDirectory()) throw new Error('The lock queue is not a directory.');
           }
 
+          quietHours = quietHoursActive(readNight({ dataDir, now: timeValue(now) }));
           const previous = readRecord(file, commonDir, scope);
-          const previousIsLive = previous && lockIsLive(previous, { herdr, livePanes, pidAlive, now });
+          const previousIsLive = previous && lockIsLive(previous, { herdr, livePanes, pidAlive, now, quietHours });
           if (previousIsLive) {
+            if (quietHours && name === FULL_SUITE_LOCK && previous.kind === 'manual' && previous.expiresAt
+              && Date.parse(previous.expiresAt) <= timeValue(now)) {
+              logQuietHoursHold(dataDir, now, 'manual full-suite lock expiry', { pane: previous.ownerPane });
+            }
             if (waitSeconds === null) return { activeRecord: previous, tickets };
             return { activeRecord: previous, tickets };
           }
@@ -551,7 +563,7 @@ export function acquireProjectLock(name, {
             let activeRecord = null;
             try {
               const current = readRecord(file, commonDir, scope);
-              if (current && lockIsLive(current, { herdr, pidAlive, now })) activeRecord = current;
+              if (current && lockIsLive(current, { herdr, pidAlive, now, quietHours })) activeRecord = current;
             } catch {}
             throw waitBusyError(name, { activeRecord, tickets, ticket, startedAt, now });
           }
@@ -612,15 +624,17 @@ export function releaseProjectLock(name, {
   dataDir = DATA_DIR,
   output = console.log,
   pidAlive = pidIsAlive,
+  now = Date.now,
 } = {}) {
   validateName(name);
   const caller = callerFor(env, herdr, { name, config });
   const { commonDir, directory, scope } = lockContext(config, dataDir, scopeFor(name));
   const file = path.join(directory, `${name}.json`);
+  const quietHours = quietHoursActive(readNight({ dataDir, now: timeValue(now) }));
   return withMutationLock(directory, () => {
     const record = readRecord(file, commonDir, scope);
     if (!record) throw new Error(`Lock ${name} does not exist.`);
-    if (record.ownerPane !== caller.paneId && lockIsLive(record, { herdr, pidAlive })) {
+    if (record.ownerPane !== caller.paneId && lockIsLive(record, { herdr, pidAlive, now, quietHours })) {
       throw new Error(`Cannot release active lock ${name} owned by another pane (${record.ownerPane}, PID ${record.pid}).`);
     }
     fs.unlinkSync(file);
@@ -639,6 +653,7 @@ export function listProjectLocks({
   now = Date.now,
 } = {}) {
   callerFor(env, herdr);
+  const quietHours = quietHoursActive(readNight({ dataDir, now: timeValue(now) }));
   const machineQueue = readLockQueue({ dataDir, herdr, pidAlive, now });
   const locks = ['repository', 'machine'].flatMap((scope) => {
     const { commonDir, directory } = lockContext(config, dataDir, scope);
@@ -652,7 +667,7 @@ export function listProjectLocks({
         ageSeconds: Math.floor(ageMs / 1000),
         expiresInMs,
         ...(scope === 'machine' && record.name === FULL_SUITE_LOCK ? { queue: machineQueue } : {}),
-        state: lockIsLive(record, { herdr, pidAlive, now }) ? 'live' : 'stale',
+        state: lockIsLive(record, { herdr, pidAlive, now, quietHours }) ? 'live' : 'stale',
       };
     });
   });
@@ -695,7 +710,8 @@ export function readLockQueue({ dataDir = DATA_DIR, livePanes = null, herdr = cr
   });
 }
 
-export function readMachineLocks({ dataDir = DATA_DIR, livePanes = new Set(), pidAlive = pidIsAlive, now = Date.now } = {}) {
+export function readMachineLocks({ dataDir = DATA_DIR, livePanes = new Set(), pidAlive = pidIsAlive, now = Date.now, night = null } = {}) {
+  const quietHours = quietHoursActive(night);
   const directory = path.join(dataDir, 'locks', 'machine');
   let files;
   try { files = fs.readdirSync(directory).filter((file) => file.endsWith('.json')).sort(); }
@@ -707,7 +723,7 @@ export function readMachineLocks({ dataDir = DATA_DIR, livePanes = new Set(), pi
       ...record,
       ageMs,
       ageSeconds: Math.floor(ageMs / 1000),
-      state: lockIsLive(record, { livePanes, pidAlive, now }) ? 'live' : 'stale',
+      state: lockIsLive(record, { livePanes, pidAlive, now, quietHours }) ? 'live' : 'stale',
     };
   });
 }
