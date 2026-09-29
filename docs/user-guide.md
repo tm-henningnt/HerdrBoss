@@ -174,10 +174,13 @@ The stored record holds these keys:
 | `active` | The night runs. |
 | `since` | The ISO time at which the night started. |
 | `until` | The ISO time at which the night ends. |
+| `reportAt` | The ISO time for the morning report. It defaults to `until`. |
+| `retroAt` | The optional ISO time for the retro. |
 | `by` | Who started the night. |
 | `quietHours` | Quiet hours are on. The default is `false`. |
 | `noticeStartAt` | The ISO time of the start notice, for each pane that got it. |
 | `noticeStopAt` | The ISO time of the end notice, for each pane that got it. |
+| `reportSentAt`, `retroSentAt` | The ISO time when each report was posted. |
 
 A state whose `until` time has passed reads as not active. The file stays, so a later task can read its own marks. A missing or unreadable file reads as not active. The read view of an active state is `{ active, since, until, by, quietHours }`. The read view of any other state is `{ active: false }`.
 
@@ -210,7 +213,15 @@ A failed send stores no mark. The next tick sends the notice again. A pane that 
 
 A stop clears the file. The engine then keeps the last active record in its own memory and sends the end notice from it.
 
-The timed reports and the dashboard banner come in later tasks. See `docs/ideas/night-watch.md`.
+### Timed reports
+
+Use `--report HH:MM` to set the morning report time. The default is the `--until` time. Use `--retro HH:MM` to set an optional retro time. Each time can also use an ISO timestamp. Each time must be in the future and no more than 24 hours ahead.
+
+At each time, the service posts one report to the Owner in the Boss thread. A service restart does not post the same report again. A report does not wait for running tasks to finish.
+
+Each report lists the tasks marked done since the night started. It lists running tasks with their start times, and blocked tasks with the item they wait for. It also lists the worker count, each metered lane's share of recorded work time, and the notices and alerts raised during the night. The report has at most 60 lines.
+
+The report and its sent time stay in the message store and `night.json`. The service keeps these records when the end time passes, so a late engine tick can still post the report.
 
 ## Quota lanes
 

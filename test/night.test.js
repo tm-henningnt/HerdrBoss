@@ -256,12 +256,132 @@ test('night start writes the state and prints the default end time', (t) => {
   assert.equal(state.active, true);
   assert.equal(state.by, 'owner');
   assert.equal(state.quietHours, false);
+  assert.equal(state.retroAt, undefined, 'the retro stays off by default');
   assert.ok(Number.isFinite(Date.parse(state.since)));
   const until = new Date(state.until);
   assert.equal(until.getHours(), 7);
   assert.equal(until.getMinutes(), 30);
+  assert.equal(state.reportAt, state.until, 'the default report time is the night end time');
   assert.ok(until.getTime() > Date.now() - 60000, 'the end time is in the future');
   assert.ok(until.getTime() <= Date.now() + 24 * 3600e3, 'the end time is within 24 hours');
+});
+
+test('night start stores report and retro times', (t) => {
+  const dataDir = tempDir(t);
+  const now = new Date();
+  const reportDate = new Date(now.getTime() + 3 * 3600e3);
+  const retroDate = new Date(now.getTime() + 4 * 3600e3);
+  const report = `${String(reportDate.getHours()).padStart(2, '0')}:${String(reportDate.getMinutes()).padStart(2, '0')}`;
+  const retro = `${String(retroDate.getHours()).padStart(2, '0')}:${String(retroDate.getMinutes()).padStart(2, '0')}`;
+  runNightCli(['night', 'start', '--until', '07:30', '--report', report, '--retro', retro], plainNightEnv(dataDir));
+  const state = JSON.parse(fs.readFileSync(nightFile(dataDir), 'utf8'));
+  const parsed = (value) => {
+    const date = new Date(now);
+    date.setHours(Number(value.slice(0, 2)), Number(value.slice(3)), 0, 0);
+    if (date <= now) date.setDate(date.getDate() + 1);
+    return date.toISOString();
+  };
+  assert.equal(state.reportAt, parsed(report));
+  assert.equal(state.retroAt, parsed(retro));
+});
+
+test('a night report lists project work, lane use, notices, and alerts within 60 lines', async () => {
+  const { renderNightReport } = await import('../src/night-report.js');
+  const since = '2026-09-28T18:00:00.000Z';
+  const startedAt = '2026-09-28T19:00:00.000Z';
+  const workerStartedAt = '2026-09-28T19:20:00.000Z';
+  const report = renderNightReport({
+    night: { since }, kind: 'report', now: Date.parse('2026-09-28T20:00:00.000Z'),
+    projects: [{ slug: 'alpha', project: 'Alpha', workspace: 'w1', tasks: [
+      { id: 'T1', title: 'Ship the change', status: 'done', updated: '2026-09-28T19:30:00.000Z' },
+      { id: 'T2', title: 'Review the change', status: 'doing', startedAt },
+      { id: 'T4', title: 'Check the worker start', status: 'doing', worker: 'w1:p2' },
+      { id: 'T3', title: 'Wait for input', status: 'blocked', waitingOn: 'owner' },
+      { id: 'T0', title: 'Old work', status: 'done', updated: '2026-09-28T17:59:00.000Z' },
+    ] }],
+    control: { projects: { alpha: { running: 2 } } },
+    herdr: { panes: [{ id: 'w1:p2', workspace: 'w1', agent: 'codex', status: 'working' }] },
+    paneSince: { 'w1:p2': { status: 'working', since: Date.parse(workerStartedAt) } },
+    usage: [
+      { project: 'alpha', provider: 'codex', startedAt, endedAt: '2026-09-28T19:45:00.000Z' },
+      { project: 'alpha', provider: 'claude', startedAt, endedAt: '2026-09-28T19:15:00.000Z' },
+      { project: 'alpha', provider: 'unmetered', startedAt, endedAt: '2026-09-28T20:00:00.000Z' },
+    ],
+    events: [
+      { type: 'notify', at: '2026-09-28T19:50:00.000Z', project: 'alpha', text: 'Night notice.' },
+      { type: 'alert', at: '2026-09-28T19:55:00.000Z', project: 'alpha', text: 'Night alert.' },
+      { type: 'notify', at: '2026-09-28T17:00:00.000Z', project: 'alpha', text: 'Earlier notice.' },
+    ],
+  });
+  assert.match(report, /T1 Ship the change: done/);
+  const localStart = new Date(startedAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  assert.ok(report.includes(`T2 Review the change: in progress, started ${localStart}`));
+  const localWorkerStart = new Date(workerStartedAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  assert.ok(report.includes(`T4 Check the worker start: in progress, started ${localWorkerStart}`));
+  assert.match(report, /T3 Wait for input: blocked, waiting on owner/);
+  assert.match(report, /Workers: 2/);
+  assert.match(report, /codex 75%/i);
+  assert.match(report, /claude 25%/i);
+  assert.match(report, /Night notice\./);
+  assert.match(report, /Night alert\./);
+  assert.doesNotMatch(report, /Old work|Earlier notice|unmetered/);
+  assert.ok(report.split('\n').length <= 60, 'the report stays within the line limit');
+  const longReport = renderNightReport({
+    night: { since }, kind: 'report', now: Date.parse('2026-09-28T20:00:00.000Z'),
+    projects: Array.from({ length: 12 }, (_, index) => ({ slug: `project-${index}`, project: `Project ${index}`, tasks: [] })),
+  });
+  assert.equal(longReport.split('\n').length, 60);
+  assert.match(longReport, /Report truncated to 60 lines\.$/);
+  const missingStart = renderNightReport({
+    night: { since }, now: Date.parse('2026-09-28T20:00:00.000Z'),
+    projects: [{ slug: 'alpha', tasks: [{ id: 'T5', title: 'No recorded start', status: 'doing', worker: 'missing' }] }],
+  });
+  assert.match(missingStart, /T5 No recorded start: in progress, started unknown time/);
+});
+
+test('the engine posts each due night report once across a restart', (t) => {
+  const temp = tempDir(t);
+  const dataDir = path.join(temp, 'data');
+  const now = Date.now();
+  const since = new Date(now - 60 * 60e3).toISOString();
+  const deadline = now + 60 * 1000;
+  fs.mkdirSync(dataDir, { recursive: true });
+  writeNight({ active: true, since, until: new Date(deadline + 60 * 1000).toISOString(), reportAt: new Date(deadline).toISOString(), retroAt: new Date(deadline).toISOString() }, { dataDir });
+  const engineUrl = new URL('../src/engine.js', import.meta.url).href;
+  const configUrl = new URL('../src/config.js', import.meta.url).href;
+  const nightUrl = new URL('../src/night.js', import.meta.url).href;
+  const script = `
+import { Engine } from ${JSON.stringify(engineUrl)};
+import { loadConfig } from ${JSON.stringify(configUrl)};
+import { readNightRecord } from ${JSON.stringify(nightUrl)};
+let clockNow = ${now};
+Date.now = () => clockNow;
+const collectors = {
+  collectHerdr: async () => ({ panes: [], workspaces: [] }), collectMachine: async () => null,
+  collectProcesses: async () => new Map(), collectQuotas: async () => [], collectWorktreeCounts: async () => ({}),
+  collectCwdProcesses: async () => [], collectMissingWorktreeProcesses: async () => [],
+  runDenialScan: async ({ state }) => ({ state }), codeSignCloneDir: () => null,
+};
+const engine = new Engine(loadConfig(), { push: false, act: false, collectors });
+await engine.tick();
+const before = engine.messageStore.all().filter((item) => item.kind === 'report').length;
+clockNow = ${deadline};
+await engine.tick();
+const atDeadline = engine.messageStore.all().filter((item) => item.kind === 'report');
+const restarted = new Engine(loadConfig(), { push: false, act: false, collectors });
+await restarted.tick();
+const check = new Engine(loadConfig(), { push: false, act: false, collectors });
+console.log(JSON.stringify({ before, at: atDeadline, records: check.messageStore.all().filter((item) => item.kind === 'report'), night: readNightRecord() }));
+`;
+  const env = { ...process.env, HOME: temp, HERDR_BOSS_DIR: dataDir, HERDR_BOSS_LIVE_DIR: path.join(temp, 'live'), NODE_TEST_CONTEXT: '1' };
+  const result = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', script], { env, encoding: 'utf8' }));
+  assert.equal(result.before, 0, 'the service waits for the report time');
+  assert.equal(result.records.length, 2);
+  assert.deepEqual(result.records.map((item) => item.title).sort(), ['Night watch report', 'Night watch retro']);
+  assert.ok(result.records.every((item) => item.thread === 'boss' && item.to === 'owner'));
+  assert.ok(result.records.every((item) => item.at === new Date(deadline).toISOString()));
+  assert.ok(result.night.reportSentAt);
+  assert.ok(result.night.retroSentAt);
 });
 
 test('night start --until HH:MM writes the next such local time', (t) => {

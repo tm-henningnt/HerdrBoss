@@ -9,7 +9,8 @@ import { listProjects } from './projects.js';
 import { checkHarness, readProjectRepos } from './harness.js';
 import { loadModels, loadProjectConfig, KIT_ROOT, workerConfigView } from './kit/config.js';
 import { loadPolicy, clearExpiredOneOffGoals, deriveControl, migrateWorkspacePolicy, providerFor, pickSuccessor, laneStatus, leastOverProvider, machineLimits, unmeteredLane, unavailablePiModels, mergeModels } from './control.js';
-import { quotaUsageToday, recordQuotaSnapshot } from './usage.js';
+import { quotaUsageToday, recordQuotaSnapshot, readUsage } from './usage.js';
+import { renderNightReport } from './night-report.js';
 import { listBrowserSessions, cdpResponds, browserProcessCheck } from './browser-pool.js';
 import { readLeases, reclaimLeases, publicLease, tcpListening, leasePools, migrateProjectBrowserLeases } from './leases.js';
 import { codeSignCloneDir, sweepCodeSignClones } from './clone-sweep.js';
@@ -18,7 +19,7 @@ import { listHandoffs, saveHandoffs, supersedeHandoffs, expireHandoff, expireMis
 import { deliverQueued, mailboxCounts, readMessages, RETENTION_MS, SEND_LIMIT_PER_MINUTE } from './messages.js';
 import { openMessageStore } from './message-store.js';
 import { readKitNotice, pendingKitAlert, isKitAlert, kitNoticeTargets } from './kit-notice.js';
-import { nightNoticeSent, readNight, readNightRecord, withNoticeMark, writeNight } from './night.js';
+import { nightNoticeSent, readNight, readNightRecord, withNightReportMark, withNoticeMark, writeNight } from './night.js';
 import { inspectWorkerTransitions, inspectWorkerReports, applyWorkerFailureStatuses, resolveFreeUsageRun, activeFreeModelExhaustions, extendFreeModelExhaustion, activeFreeLaneExhaustions, extendFreeLaneExhaustion, freeUsageLaneRetry } from './worker-failures.js';
 import { FULL_SUITE_LOCK, readLockQueue, readLockTakeoverNotices, readMachineLocks, removeLockTakeoverNotice } from './kit/locks.js';
 
@@ -664,6 +665,7 @@ export class Engine extends EventEmitter {
         try { await this.deliverOwnerMessages(herdr, control.projects, now); }
         catch (e) { errors.push(`messages: ${e.message}`); }
       }
+      await this.deliverNightReports(snap, now);
       snap.events = this.events.slice(-60);
       try { snap.mailbox = mailboxCounts(readMessages({ dir: DATA_DIR })); }
       catch (e) { errors.push(`mailbox: ${e.message}`); }
@@ -1145,6 +1147,44 @@ export class Engine extends EventEmitter {
     if (JSON.stringify(this.memory.nightRecord ?? null) !== JSON.stringify(mirror)) {
       this.memory.nightRecord = mirror;
       writeJson(MEMORY_FILE, this.memory);
+    }
+  }
+
+  // Timed reports use the raw record so a tick at or after the end time can still fire.
+  async deliverNightReports(snap, now) {
+    for (const kind of ['retro', 'report']) {
+      const record = readNightRecord({ dataDir: DATA_DIR });
+      if (record?.active !== true || !record.since) continue;
+      const deadline = Date.parse(record[kind === 'retro' ? 'retroAt' : 'reportAt']);
+      const mark = kind === 'retro' ? 'retroSentAt' : 'reportSentAt';
+      if (!Number.isFinite(deadline) || now < deadline || record[mark]) continue;
+      const nightKey = `${record.since}:${kind}`;
+      try {
+        // Find a committed message after a restart before appending another one.
+        const posted = this.messageStore.all().some((message) => message.kind === 'report' && message.nightReportKey === nightKey);
+        if (!posted) {
+          const text = renderNightReport({
+            night: record,
+            kind,
+            now,
+            projects: snap.projects,
+            control: snap.control,
+            herdr: snap.herdr,
+            paneSince: this.memory.paneSince,
+            usage: readUsage(),
+            events: this.events,
+          });
+          this.messageStore.append({
+            thread: 'boss', from: 'boss', to: 'owner', kind: 'report',
+            title: kind === 'retro' ? 'Night watch retro' : 'Night watch report',
+            text, action: 'read', replyTo: null, status: 'new', nightReportKey: nightKey,
+          }, { now });
+        }
+        const latest = readNightRecord({ dataDir: DATA_DIR }) || record;
+        if (!latest[mark]) writeNight(withNightReportMark(latest, kind, new Date(now).toISOString()), { dataDir: DATA_DIR });
+      } catch (error) {
+        this.log('error', `Night watch ${kind} failed: ${String(error?.message || error).slice(0, 200)}`);
+      }
     }
   }
 

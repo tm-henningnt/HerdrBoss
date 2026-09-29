@@ -7,12 +7,12 @@ import { DATA_DIR } from './config.js';
 
 export const NIGHT_FILE = 'night.json';
 
-// The keys that the stored record must hold. The other keys, such as reportAt, are written by later tasks and
-// pass through this module unchanged.
+// The keys that the stored record must hold. Later night-watch fields pass through this module unchanged.
 const REQUIRED = ['active', 'until'];
 
-// The stored key of the send marks of each notice phase.
+// The stored keys of one-time notices and reports.
 const NOTICE_KEY = { start: 'noticeStartAt', end: 'noticeStopAt' };
+const REPORT_MARK = { report: 'reportSentAt', retro: 'retroSentAt' };
 
 function noticeKey(phase) {
   if (!Object.hasOwn(NOTICE_KEY, phase)) throw new TypeError('notice phase must be start or end.');
@@ -146,4 +146,10 @@ export function withNoticeMark(record, phase, pane, at) {
   const key = noticeKey(phase);
   const marks = record?.[key];
   return { ...(record || {}), [key]: { ...(marks && typeof marks === 'object' && !Array.isArray(marks) ? marks : {}), [pane]: at } };
+}
+
+// A report mark is stored only after its message is in the message store.
+export function withNightReportMark(record, kind, at) {
+  if (!Object.hasOwn(REPORT_MARK, kind)) throw new TypeError('night report kind must be report or retro.');
+  return { ...(record || {}), [REPORT_MARK[kind]]: at };
 }
