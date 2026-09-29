@@ -84,7 +84,8 @@ const USAGE = `herdr-boss <command>
 
   serve [--read-only-preview] Run the collector loop and the dashboard server.
   tick [--json]         Collect once and print alerts. Sends nothing, terminates nothing.
-  publish <slug> <file> Validate a project status file and install it. Use "-" for stdin.
+  publish <slug> <file> [--force] Validate a project status file and install it. Use "-" for stdin.
+                        Refuses a live worker on a task that is not doing, unless --force.
   install               Install and start the launchd agent.
   uninstall             Stop and remove the launchd agent.
   logs                  Show the server log.
@@ -647,8 +648,9 @@ async function main() {
       break;
     }
     case 'publish': {
-      const [slug, file] = args;
-      if (!slug || !file) { console.error('usage: herdr-boss publish <slug> <file|->'); process.exit(2); }
+      const force = args.includes('--force');
+      const [slug, file] = args.filter((arg) => arg !== '--force');
+      if (!slug || !file) { console.error('usage: herdr-boss publish <slug> <file|-> [--force]'); process.exit(2); }
       const text = file === '-' ? fs.readFileSync(0, 'utf8') : fs.readFileSync(file, 'utf8');
       const data = JSON.parse(text);
       // Check AGENTS.md at the Git top level. Findings are warnings here; the status still publishes.
@@ -661,6 +663,29 @@ async function main() {
         for (const line of result.lines) console.error(`warning: ${line.includes(".md line") ? line : `AGENTS.md ${line}`}`);
         if (result.findings.length) console.error(`warning: ${result.summary}. Run herdr-boss check agents.`);
         data.agentsCheck = { checkedAt: new Date().toISOString(), errors: result.errors, warnings: result.warnings, file: result.file };
+      }
+      if (!force && top && data && typeof data === 'object' && Array.isArray(data.tasks)) {
+        // A live worker on a task that is not doing means the status is wrong. A failed check never blocks a publish.
+        let conflicts = [];
+        try {
+          const { readWorkerFacts, publishConflicts, gitIsMerged, agentStatuses } = await import('./task-state.js');
+          const { createHerdrRunner } = await import('./kit/workers.js');
+          const projectConfig = loadProjectConfig({ cwd: top });
+          // Only a working or blocked agent counts. When Herdr lists nothing, no worker blocks the publish.
+          let statuses = null;
+          try { statuses = agentStatuses(createHerdrRunner()(['agent', 'list'])); } catch {}
+          const facts = readWorkerFacts(projectConfig.runsPath, {
+            isLive: (run) => Boolean(statuses?.has(run.name)),
+            agentStatus: (run) => statuses?.get(run.name) ?? null,
+            isMerged: gitIsMerged(projectConfig.root),
+          });
+          conflicts = publishConflicts(data, facts);
+        } catch {}
+        if (conflicts.length) {
+          for (const line of conflicts) console.error(`error: ${line}.`);
+          console.error(`Nothing was published. Set each of these tasks to doing, or run herdr-boss publish ${slug} <file> --force to publish anyway.`);
+          process.exit(1);
+        }
       }
       const errors = writeProject(slug, data);
       if (errors.length) { console.error(errors.join('\n')); process.exit(1); }

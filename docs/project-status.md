@@ -113,9 +113,28 @@ Task IDs must be unique. A `blockedBy` ID that is not in `tasks[]` counts as ext
 
 Use `waitingOn` to separate a wait for a person from a wait for other tasks. Set `waitingOn: owner` only when the task needs an Owner decision. Set `ask` to the short question. Post a Mailbox item for the Owner, and set `mailboxId` to its ID. Use `blockedBy` for a wait on other tasks. A `done` task must not have `waitingOn`.
 
+`herdr-boss publish` refuses a status in which a task has an active worker (working or blocked, with no report) but is not `doing`. Run it with `--force` to skip this check.
+
 `herdr-boss publish` warns on standard error, but still publishes, when a `blocked` task has no `blockedBy` and no `waitingOn`, or when a task with `waitingOn: owner` has no `mailboxId`.
 
 Herdr Boss sets `updated` when you publish with method 2 or 3. With method 1, the dashboard uses the file modification time.
+
+## Live task state
+
+Herdr Boss derives the effective state of each task from the published status and from the worker run records. The state API adds these fields to each task and keeps every published field. `GET /api/projects` and the state that the dashboard receives hold the same fields.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `tasks[].state` | string | The effective state: `blocked`, `ready`, `doing`, `review`, or `done`. |
+| `tasks[].stateSource` | string | Where the state comes from: `published`, `live from worker NAME`, `collected from worker NAME`, `merged from worker NAME`, or `derived from dependencies`. |
+| `tasks[].publishedStatus` | string | The `status` that the orchestrator published. `status` keeps the same value. |
+| `tasks[].worker` | object or null | `name`, `kind`, `model`, and `startedAt` of the worker that decides the state. |
+| `tasks[].blockers` | string[] | The IDs of the dependencies that are not done. It is empty unless `state` is `blocked`. |
+| `tasks[].blockedReason` | string or null | The reason, for example `waits on task 70, task 71` or `waits on the owner`. |
+| `boardStale` | boolean | `true` when the published status no longer describes the work. |
+| `boardStaleReason` | string or null | The reason for `boardStale`. |
+
+The rules are in [Live task state](user-guide.md#live-task-state).
 
 ## Remove a project
 

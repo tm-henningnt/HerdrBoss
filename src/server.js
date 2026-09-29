@@ -184,12 +184,15 @@ export function serve(cfg, { readOnlyPreview = false, createEngine = (config, op
     return mailbox;
   };
 
+  // Add the derived task state to a project list. An engine without the method leaves the list as it is.
+  const decorateProjects = (list) => (typeof engine.decorateProjects === 'function' ? engine.decorateProjects(list) : list);
+
   // Push project edits to clients without waiting for the next tick.
   const projectsWatcher = fs.watch(PROJECTS_DIR, () => {
     clearTimeout(debounce);
     debounce = setTimeout(() => {
       if (!engine.state) return;
-      engine.state.projects = listProjects();
+      engine.state.projects = decorateProjects(listProjects());
       broadcast('state', engine.state);
     }, 300);
   });
@@ -691,7 +694,7 @@ export function serve(cfg, { readOnlyPreview = false, createEngine = (config, op
           return send(res, 200, { ok: true, slug, generated: true });
         }
       }
-      if (p === '/api/projects' && req.method === 'GET') return send(res, 200, listProjects());
+      if (p === '/api/projects' && req.method === 'GET') return send(res, 200, decorateProjects(listProjects()));
       const pm = /^\/api\/projects\/([^/]+)$/.exec(p);
       if (pm && (req.method === 'PUT' || req.method === 'POST')) {
         let data;

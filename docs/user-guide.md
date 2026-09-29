@@ -128,7 +128,7 @@ To add the shared rules to a project, follow [orchestrator-instructions.md](orch
 | A worker is working, first appears idle or done, or changes into either state | Herdr Boss reads only the last 8 visible pane lines. A known provider error marks the worker failed and sends the orchestrator its name, pane ID, and fixed error label. |
 | A worker writes `.worker/report.json` or `.worker/<name>/report.json` after its pane first appears | One notice per report file path. A rewrite of the same file sends no new notice. |
 | A managed project browser starts and responds | `browser is ready` notice in the bulletin only. |
-| A published project status is stale | One `info` notice to that project's `orch` pane for each stale status. The bulletin shows `Status stale since <time>.` in the project section. |
+| A published project status is stale: it is old while workers ran or commits landed, or an active worker runs a task that is not `doing` | One `info` notice to that project's `orch` pane for each stale status. The bulletin shows `Status stale since <time>.` in the project section. See [Live task state](#live-task-state). |
 
 The no-report watchdog starts its timer when a worker first appears idle or done. A change between these two states does not reset the timer. The warning goes to that project's `orch` pane. Herdr Boss sends it once in the idle period. A working pane resets the period. An existing `report.json` prevents the warning.
 
@@ -619,6 +619,31 @@ Agent commands and tab rules are in [the browser service](../kit/browser-service
 ## Project status pages
 
 Orchestrators do not build dashboards. They publish a status file, and Herdr Boss shows it on `/projects/SLUG`. With the optional work structure fields, the page shows progress, the current frontier, a dependency graph, groups, specs, and all work. See [project-status.md](project-status.md).
+
+### Live task state
+
+The published status file holds the plan. The worker run records hold what happens. Herdr Boss overlays the run records on the published tasks, so the state of a task does not wait for a publish. The service reads the run records of each registered project every 15 seconds. A worker links to a task through `taskId` in its run record. Start each worker with `worker start --task-id ID`. `--issue N` works as an alias for a numeric task ID. A run without a task ID has no effect on the board, and `worker start` prints a warning.
+
+Each task gets one effective state, `state`:
+
+1. A published `done` task stays `done`.
+2. A worker whose branch is merged makes the task `done`. A branch counts as merged when its run record has `mergedAt`, or when the branch has at least one commit beyond the base commit and its tip is in the base branch. A branch with no new commit, a deleted branch, and the base branch itself do not count. The orchestrator publishes `done` for such a task.
+3. A live worker makes the task `doing`. The source is `live from worker NAME`. A worker is live when its run record has no `finishedAt` and no `collectedAt`, and its pane is in the pane list.
+4. A collected worker whose branch is not merged makes the task `review`. `worker collect` sets `collectedAt` only when the worker reported done.
+5. A failed, partial, or abandoned worker gives no state. When the task is published as `doing` and all its workers failed or are gone, the task is open again: it is `ready`, or `blocked` when a dependency is not done. Any other published status applies.
+6. A task that is `todo`, `ready`, or `blocked` without `waitingOn` has the state `blocked` while a task in `blockedBy` is not done. `blockers` names these tasks. A `blockedBy` ID that is not in the status counts as not done. A published `waitingOn` also gives `blocked`, and the reason names the Owner, the Boss, a task, or an external item. A dependency never changes a `done` task, a `doing` task, or a `review` task.
+7. The same task has the state `ready` when all its dependencies are done.
+
+When more than one worker runs on a task, the latest live worker decides first. Without a live worker, the latest collected or merged worker decides. Herdr Boss ignores a finished, collected, or abandoned run that is older than 14 days.
+
+The service checks at most 5 branches for a merge in each read of the run records and keeps each answer. A merged answer stays. A not-merged answer is used again for 60 seconds.
+
+The board is stale, `boardStale: true`, when one of these is true:
+
+- An active worker runs a task that is not `doing` in the published status, more than 5 minutes after the worker started. A task that is not in the status also counts. A worker is active when its agent status is `working` or `blocked`, it is not parked, and it has no `report.json`. An idle worker, a parked worker, and a worker that reported done wait for the orchestrator.
+- The published status is older than `staleStatusMinutes` (default 120 minutes), a worker worked after the publish and within the last 2 hours, or new commits landed after the publish.
+
+`boardStaleReason` names the cause. Herdr Boss sends one notice to the orchestrator pane for each stale status, the same notice as for an old status. The text adds the worker and the task when a worker does not match the status. A new publish starts a new episode. `herdr-boss publish` refuses a status in which a task has an active worker but is not `doing`. Use `--force` to publish anyway. The commands are in [cli.md](cli.md).
 
 ### Files
 

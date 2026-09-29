@@ -10,6 +10,7 @@ import { workerStatusFromState } from '../worker-failures.js';
 import { checkAgentsFile, kitBehindLine } from './agents-check.js';
 import { acquireLeaseFor, dropLeases, setLeasePane } from '../leases.js';
 import { codexShellEnvArgs } from '../harness.js';
+import { TASK_ID } from '../task-state.js';
 
 const NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
 const AGENT_READY_MARKERS = Object.freeze({
@@ -985,6 +986,10 @@ export function startWorker(name, options, {
   const allowedPaths = [...requestedPaths, `${workerDir}/**`];
   if (!!options.task === !!options.taskFile) throw new Error('Provide exactly one of --task or --task-file.');
   if (options.issue != null && (!/^\d+$/.test(String(options.issue)) || Number(options.issue) <= 0)) throw new Error('--issue must be a positive integer.');
+  if (options.taskId != null && !TASK_ID.test(String(options.taskId))) throw new Error('--task-id must be a task id from the published status: letters, digits, ".", "_" or "-", up to 64 characters.');
+  if (options.taskId != null && options.issue != null) throw new Error('Give --task-id or --issue, not both. --issue N is an alias for a numeric task id.');
+  const taskIdNote = taskIdWarning(options);
+  if (taskIdNote) output(taskIdNote);
   const task = options.taskFile ? fs.readFileSync(path.resolve(options.taskFile), 'utf8').trimEnd() : options.task;
   const browserWarning = codexBrowserWarning(options.kind, task);
   if (browserWarning) output(browserWarning);
@@ -1187,6 +1192,7 @@ export function startWorker(name, options, {
       provider,
       effort,
       issue: options.issue == null ? null : Number(options.issue),
+      ...(options.taskId != null ? { taskId: String(options.taskId) } : {}),
       worktree,
       branch,
       base,
@@ -1327,6 +1333,12 @@ export function allowWorkerScope(name, { paths = [], reason = null } = {}, {
   return run;
 }
 
+// A run that names no task never shows on the project board. Warn, and start the worker.
+export function taskIdWarning(options) {
+  if (options?.taskId != null || options?.issue != null) return null;
+  return 'Warning: this worker has no task id. Use worker start --task-id ID with the task id from the published status, so the board shows the task as doing.';
+}
+
 function readRun(config, name) {
   if (!NAME_PATTERN.test(name)) throw new Error('Worker name must match [a-z][a-z0-9-]{0,31}.');
   const file = path.join(config.runsPath, `${name}.json`);
@@ -1455,6 +1467,13 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
         const taken = new Set(run.leases.map((lease) => `${lease.pool}\n${lease.item}`));
         releasedLeases.push(...dropLeases((lease) => lease.project === config.slug && lease.worker === name && taken.has(`${lease.pool}\n${lease.item}`), { dataDir: leaseDataDir }));
       }
+    }
+    // The mark tells the project board that the worker reported done and was collected. A collect that only reads
+    // a running or failed worker changes nothing.
+    const reportedDone = options.record ? options.outcome === 'done' : reportJson.stoppedEarly !== true;
+    if (reportedDone && !run.collectedAt) {
+      run.collectedAt = new Date(now).toISOString();
+      writeJsonAtomic(file, run);
     }
     for (const warning of normalized.warnings) output(warning);
     if (options.record && !reportJson.modelOutcome && !options.modelResult) {
