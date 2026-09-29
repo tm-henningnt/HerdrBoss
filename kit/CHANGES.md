@@ -21,3 +21,7 @@ revision matches an entry has that entry and every earlier entry.
 ## 883095fbe869
 Impact: required
 Summary: Compute the kit revision from installed kit assets only.
+
+## d5a3318be296
+Impact: useful
+Summary: Add gpt-6.1-sol as the trial Codex model for tougher tasks; gpt-6-luna stays the routine default; remove gpt-6-sol.

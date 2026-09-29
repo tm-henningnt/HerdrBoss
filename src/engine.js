@@ -203,7 +203,7 @@ const MODEL_TIERS = {
   'opencode-go/deepseek-v4.1-flash': 2,
   'gpt-6-luna': 3,
   'claude-sonnet-5-5': 4,
-  'gpt-6-sol': 5,
+  'gpt-6.1-sol': 5,
   'claude-opus-5-5': 5,
   'gpt-6-astra': 6,
 };

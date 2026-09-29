@@ -896,7 +896,7 @@ test('successor ladder skips no Pi rung while the Pi model result is unknown', (
 });
 
 test('current orchestrator provider falls back to its preferred model route', () => {
-  const p = policy({ preferredModels: { codex: 'gpt-6-sol' }, modelProviders: { 'gpt-6-sol': 'claude' } });
+  const p = policy({ preferredModels: { codex: 'gpt-6.1-sol' }, modelProviders: { 'gpt-6.1-sol': 'claude' } });
   const result = deriveControl(snapshot(), p, models, {}, Date.parse('2026-09-24T17:00:00Z'));
   const handoff = result.handoffs.find((item) => item.fromKind === 'codex');
   assert.equal(handoff.provider, 'claude');
@@ -910,7 +910,7 @@ test('provider routing separates free OpenCode from OpenCode Go', () => {
 });
 
 test('policy validates preferred models and explicit provider routes', () => {
-  const p = policy({ preferredModels: { codex: 'gpt-6-sol' }, modelProviders: { 'gpt-6-sol': null, 'opencode-go/deepseek-v4.1-flash': 'claude' } });
+  const p = policy({ preferredModels: { codex: 'gpt-6.1-sol' }, modelProviders: { 'gpt-6.1-sol': null, 'opencode-go/deepseek-v4.1-flash': 'claude' } });
   assert.deepEqual(validatePolicy(p, models), []);
   assert.match(validatePolicy(policy({ preferredModels: { codex: 'claude-sonnet-4-5' } }), models).join(' '), /preferredModels/);
   assert.match(validatePolicy(policy({ modelProviders: { 'unknown-model': 'codex' } }), models).join(' '), /modelProviders/);
@@ -932,8 +932,8 @@ test('usage attribution prefers an explicit provider over changed policy routes'
 });
 
 test('preferred model selection preserves explicit choices and legacy defaults', () => {
-  assert.equal(selectModel('codex', null, models, { preferredModels: { codex: 'gpt-6-sol' } }), 'gpt-6-sol');
-  assert.equal(selectModel('codex', 'gpt-6-astra', models, { preferredModels: { codex: 'gpt-6-sol' } }), 'gpt-6-astra');
+  assert.equal(selectModel('codex', null, models, { preferredModels: { codex: 'gpt-6.1-sol' } }), 'gpt-6.1-sol');
+  assert.equal(selectModel('codex', 'gpt-6-astra', models, { preferredModels: { codex: 'gpt-6.1-sol' } }), 'gpt-6-astra');
   assert.equal(selectModel('codex', null, models, {}), models.kinds.codex.defaultModel);
 });
 
@@ -1650,7 +1650,7 @@ test('per-harness assignments validate the harness, the model, and the provider'
   assert.match(validatePolicy(policy({ disabledModels: { claude: ['gpt-6-luna'] } }), models).join(' '), /disabledModels/);
   assert.match(validatePolicy(policy({ disabledModels: { codex: ['gpt-6-luna', 'gpt-6-luna'] } }), models).join(' '), /disabledModels/);
   assert.match(validatePolicy(policy({ disabledModels: { codex: 'gpt-6-luna' } }), models).join(' '), /disabledModels/);
-  assert.deepEqual(validatePolicy(policy({ harnessRoutes: { codex: { 'gpt-6-luna': null } }, disabledModels: { codex: ['gpt-6-sol'] } }), models), []);
+  assert.deepEqual(validatePolicy(policy({ harnessRoutes: { codex: { 'gpt-6-luna': null } }, disabledModels: { codex: ['gpt-6.1-sol'] } }), models), []);
 });
 
 test('legacy global exclusions and routes keep working beside per-harness assignments', async () => {
@@ -1680,13 +1680,13 @@ test('a project may exclude a model that at least one available harness enables'
 test('handoff targets use the merged allow-list and the per-harness enabled state', async () => {
   const { handoffTarget } = await import('../src/handoff.js');
   const extra = 'vendor/pi-extra';
-  const p = policy({ extraModels: { pi: [extra] }, disabledModels: { codex: ['gpt-6-sol'] }, harnessRoutes: { pi: { [extra]: 'opencodego' } } });
+  const p = policy({ extraModels: { pi: [extra] }, disabledModels: { codex: ['gpt-6.1-sol'] }, harnessRoutes: { pi: { [extra]: 'opencodego' } } });
   const target = handoffTarget('pi', { model: extra }, p, models);
   assert.equal(target.model, extra);
   assert.equal(target.provider, 'opencodego');
   assert.deepEqual(target.launchArgs.slice(0, 4), ['--model', extra, '--models', extra]);
   assert.throws(() => handoffTarget('opencode', { model: extra }, p, models), /allow-list/);
-  assert.throws(() => handoffTarget('codex', { model: 'gpt-6-sol' }, p, models), /disabled for codex/);
+  assert.throws(() => handoffTarget('codex', { model: 'gpt-6.1-sol' }, p, models), /disabled for codex/);
   assert.equal(handoffTarget('codex', { model: 'gpt-6-astra', effort: 'high' }, p, models).launchArgs.join(' '), '-m gpt-6-astra -c model_reasoning_effort=high -s workspace-write');
   assert.throws(() => handoffTarget('codex', { model: 'gpt-6-luna' }, policy({ excludedModels: ['gpt-6-luna'] }), models), /global policy/);
   assert.throws(() => handoffTarget('pi', { model: 'bad model' }, policy({ extraModels: { pi: ['bad model'] } }), models), /allow-list/);
@@ -1711,12 +1711,12 @@ test('harness routes permit only the compatible provider or unmetered for Codex 
 });
 
 test('saving rejects an incompatible effective legacy route unless the harness has a compatible override', () => {
-  const errors = validatePolicy(policy({ modelProviders: { 'gpt-6-sol': 'claude' } }), models).join(' ');
-  assert.match(errors, /modelProviders: codex\/gpt-6-sol inherits claude\. Choose codex or null \(unmetered\) in harnessRoutes\.codex\./);
+  const errors = validatePolicy(policy({ modelProviders: { 'gpt-6.1-sol': 'claude' } }), models).join(' ');
+  assert.match(errors, /modelProviders: codex\/gpt-6.1-sol inherits claude\. Choose codex or null \(unmetered\) in harnessRoutes\.codex\./);
   assert.match(validatePolicy(policy({ modelProviders: { 'claude-sonnet-5-5': 'opencodego' } }), models).join(' '), /claude\/claude-sonnet-5-5 inherits opencodego\. Choose claude or null/);
-  assert.deepEqual(validatePolicy(policy({ modelProviders: { 'gpt-6-sol': 'claude' }, harnessRoutes: { codex: { 'gpt-6-sol': 'codex' } } }), models), []);
-  assert.deepEqual(validatePolicy(policy({ modelProviders: { 'gpt-6-sol': 'claude' }, harnessRoutes: { codex: { 'gpt-6-sol': null } } }), models), []);
-  assert.deepEqual(validatePolicy(policy({ modelProviders: { 'gpt-6-sol': 'claude' }, allowedKinds: ['claude', 'pi'] }), models), [], 'a disabled harness does not block a save');
+  assert.deepEqual(validatePolicy(policy({ modelProviders: { 'gpt-6.1-sol': 'claude' }, harnessRoutes: { codex: { 'gpt-6.1-sol': 'codex' } } }), models), []);
+  assert.deepEqual(validatePolicy(policy({ modelProviders: { 'gpt-6.1-sol': 'claude' }, harnessRoutes: { codex: { 'gpt-6.1-sol': null } } }), models), []);
+  assert.deepEqual(validatePolicy(policy({ modelProviders: { 'gpt-6.1-sol': 'claude' }, allowedKinds: ['claude', 'pi'] }), models), [], 'a disabled harness does not block a save');
   assert.deepEqual(validatePolicy(policy({ modelProviders: { 'claude-opus-5-5': 'claude' } }), models), [], 'the compatible live route stays valid');
 });
 

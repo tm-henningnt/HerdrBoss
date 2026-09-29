@@ -696,9 +696,9 @@ test('the policy API saves per-harness model assignments and rejects unsafe mode
   const compatible = await put({ ...draft, harnessRoutes: { ...draft.harnessRoutes, codex: { 'gpt-6-luna': null }, claude: { 'claude-opus-5-5': 'claude' } } });
   assert.equal(compatible.status, 200);
   assert.deepEqual((await compatible.json()).policy.harnessRoutes.codex, { 'gpt-6-luna': null });
-  const inherited = await put({ ...draft, modelProviders: { ...draft.modelProviders, 'gpt-6-sol': 'claude' } });
+  const inherited = await put({ ...draft, modelProviders: { ...draft.modelProviders, 'gpt-6.1-sol': 'claude' } });
   assert.equal(inherited.status, 400);
-  assert.match((await inherited.json()).errors.join(' '), /modelProviders: codex\/gpt-6-sol inherits claude\. Choose codex or null \(unmetered\) in harnessRoutes\.codex\./);
+  assert.match((await inherited.json()).errors.join(' '), /modelProviders: codex\/gpt-6.1-sol inherits claude\. Choose codex or null \(unmetered\) in harnessRoutes\.codex\./);
   const pruned = await put({ ...draft, modelProviders: { ...draft.modelProviders, 'claude-opus-5': 'claude' }, disabledModels: { ...draft.disabledModels, claude: ['claude-opus-5'] }, extraModels: { ...draft.extraModels, claude: ['claude-opus-5-5'] } });
   assert.equal(pruned.status, 200);
   const prunedBody = await pruned.json();
@@ -711,10 +711,10 @@ test('the policy API saves per-harness model assignments and rejects unsafe mode
   const stillStrict = await put({ ...draft, disabledModels: { claude: ['claude-opus-5'] }, maxWorkers: 0 });
   assert.equal(stillStrict.status, 400);
   assert.match((await stillStrict.json()).errors.join(' '), /maxWorkers/);
-  const overridden = await put({ ...draft, modelProviders: { ...draft.modelProviders, 'gpt-6-sol': 'claude', 'claude-opus-5-5': 'claude' }, harnessRoutes: { ...draft.harnessRoutes, codex: { 'gpt-6-sol': 'codex' } }, ignoredRoutes: { codex: ['gpt-6-sol'] } });
+  const overridden = await put({ ...draft, modelProviders: { ...draft.modelProviders, 'gpt-6.1-sol': 'claude', 'claude-opus-5-5': 'claude' }, harnessRoutes: { ...draft.harnessRoutes, codex: { 'gpt-6.1-sol': 'codex' } }, ignoredRoutes: { codex: ['gpt-6.1-sol'] } });
   assert.equal(overridden.status, 200);
   const overriddenPolicy = (await overridden.json()).policy;
-  assert.equal(overriddenPolicy.modelProviders['gpt-6-sol'], 'claude', 'the raw legacy route is kept');
+  assert.equal(overriddenPolicy.modelProviders['gpt-6.1-sol'], 'claude', 'the raw legacy route is kept');
   assert.deepEqual(overriddenPolicy.ignoredRoutes, {}, 'the override makes the legacy route compatible');
   assert.equal(JSON.parse(fs.readFileSync(path.join(dataDir, 'policy.json'), 'utf8')).ignoredRoutes, undefined, 'the derived field is not stored');
   const resetAt = (await (await fetch(`${base}/api/state`)).json()).quotas[0].windows[0].resetsAt;

@@ -52,7 +52,7 @@ function codexConfig(roots, { extraBefore = '', extraAfter = '' } = {}) {
     ']',
     '',
     '[profiles.fast]',
-    'model = "gpt-6-sol"',
+    'model = "gpt-6.1-sol"',
     extraAfter,
   ].join('\n');
 }

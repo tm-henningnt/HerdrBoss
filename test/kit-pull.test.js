@@ -61,7 +61,7 @@ test('worker start prints the kit line when the project kit is behind', (t) => {
   const run = (root) => {
     const config = loadProjectConfig({ cwd: root });
     const rulesFile = path.join(root, 'rules.json');
-    fs.writeFileSync(rulesFile, JSON.stringify({ updatedAt: '2026-09-24T12:00:00.000Z', avoidKinds: [], preferredKinds: ['codex'], memFreePercent: 50, notes: [], policy: { allowedKinds: ['codex'], excludedModels: [], preferredModels: { codex: 'gpt-6-sol' } } }));
+    fs.writeFileSync(rulesFile, JSON.stringify({ updatedAt: '2026-09-24T12:00:00.000Z', avoidKinds: [], preferredKinds: ['codex'], memFreePercent: 50, notes: [], policy: { allowedKinds: ['codex'], excludedModels: [], preferredModels: { codex: 'gpt-6.1-sol' } } }));
     const template = path.join(root, 'brief-template.md');
     fs.writeFileSync(template, 'Worker {{name}}: {{task}} {{allowedPaths}}');
     fs.writeFileSync(path.join(root, '.herdr-boss.json'), JSON.stringify({ briefTemplate: template }));

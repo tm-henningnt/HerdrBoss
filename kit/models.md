@@ -14,7 +14,7 @@ The observed order from lower to higher cost is:
 2. `opencode-go/deepseek-v4.1-flash`.
 3. Codex `gpt-6-luna`.
 4. Claude `claude-sonnet-5-5`.
-5. Claude `claude-opus-5-5` and Codex Sol.
+5. Claude `claude-opus-5-5` and Codex `gpt-6.1-sol`.
 6. Codex Astra.
 
 Treat this order as a routing hint.
@@ -29,7 +29,8 @@ Provider quota, task fit, availability, and review effort affect the real cost.
 | --- | --- | --- |
 | `claude`, `claude-sonnet-5-5` | The default Claude worker: implementation, review, and browser checks. | Use it when an unmetered model is not enough for the task. |
 | `claude`, `claude-opus-5-5` | The hardest judgment work, and orchestrators. | Reserve it for work that `claude-sonnet-5-5` cannot do well. |
-| `codex`, `gpt-6-luna` | Core seams, algorithms, cross-cutting changes, and takeovers. | Review root causes and pixel claims. Long sessions can stop without a final report. |
+| `codex`, `gpt-6-luna` | The default Codex worker for routine work: bounded implementation, tests, docs, and review fixes. | Review root causes and pixel claims. Long sessions can stop without a final report. |
+| `codex`, `gpt-6.1-sol` (trial) | Tougher programming tasks: cross-cutting fixes, algorithms, takeovers, and tasks where `gpt-6-luna` needed rework. Cost effective and close to Astra level. | Trial until the Analytics scorecard has about 10 runs for this model. Record `--model-result` for every run with `worker collect --record`, so rework and time can be compared with `gpt-6-luna`. |
 | `pi`, `opencode-go/deepseek-v4.1-flash` | Economical research and fully specified mechanical work. | Shared Go quota can stop every worker on that provider. Pin the model and verify results. |
 | `pi`, `opencode-go/muse-spark-1.3-contributor` | Cheap bounded implementation, docs, copy, and read-only diagnosis. | Source records disagree on its success rate. Keep the task atomic and inspect every path. |
 | `pi`, `opencode-go/space-bunny-free` and `opencode-go/longcat-2.5-preview-free` (unmetered) | Bounded, well-specified implementation, tests, docs, audits, and data checks. | Evidence is limited. Verify the full diff and each finding at its source. |

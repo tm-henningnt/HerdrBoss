@@ -867,7 +867,7 @@ test('worker start dry-run prints the plan and makes no worktree or agent change
   fs.writeFileSync(configFile, JSON.stringify({ briefTemplate: template }));
   const config = loadProjectConfig({ cwd: root });
   const rulesFile = path.join(root, 'rules.json');
-  fs.writeFileSync(rulesFile, JSON.stringify({ updatedAt: '2026-09-24T12:00:00.000Z', avoidKinds: [], preferredKinds: ['codex'], memFreePercent: 50, notes: [], policy: { allowedKinds: ['codex'], excludedModels: [], preferredModels: { codex: 'gpt-6-sol' } } }));
+  fs.writeFileSync(rulesFile, JSON.stringify({ updatedAt: '2026-09-24T12:00:00.000Z', avoidKinds: [], preferredKinds: ['codex'], memFreePercent: 50, notes: [], policy: { allowedKinds: ['codex'], excludedModels: [], preferredModels: { codex: 'gpt-6.1-sol' } } }));
   const models = loadModels();
   const calls = [];
   const herdr = (args) => {
@@ -884,7 +884,7 @@ test('worker start dry-run prints the plan and makes no worktree or agent change
   });
   assert.equal(result.dryRun, true);
   assert.match(output.join('\n'), /git worktree add -b demo/);
-  assert.match(output.join('\n'), /Validate kind\/model\/effort: codex \/ gpt-6-sol/);
+  assert.match(output.join('\n'), /Validate kind\/model\/effort: codex \/ gpt-6.1-sol/);
   assert.match(output.join('\n'), /herdr pane split ws:p1 --direction right --cwd/);
   assert.match(output.join('\n'), /New pane: <new-pane-id>/);
   assert.match(output.join('\n'), /herdr agent start demo --kind codex --pane '<new-pane-id>' --timeout 90000 --/);
@@ -903,8 +903,8 @@ test('worker start dry-run prints the plan and makes no worktree or agent change
     config, models, herdr, env: { HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'ws', HERDR_PANE_ID: 'ws:orch' }, rulesFile, now: Date.parse('2026-09-24T12:00:00Z'), output: (text) => explicitOutput.push(text),
   });
   assert.match(explicitOutput.join('\n'), /Validate kind\/model\/effort: codex \/ gpt-6-astra/);
-  fs.writeFileSync(rulesFile, JSON.stringify({ avoidProviders: ['claude'], policy: { allowedKinds: ['codex'], excludedModels: [], modelProviders: { 'gpt-6-sol': 'claude' } } }));
-  assert.throws(() => startWorker('demo-routed', { kind: 'codex', model: 'gpt-6-sol', task: 'x', allow: ['src/'], dryRun: true }, {
+  fs.writeFileSync(rulesFile, JSON.stringify({ avoidProviders: ['claude'], policy: { allowedKinds: ['codex'], excludedModels: [], modelProviders: { 'gpt-6.1-sol': 'claude' } } }));
+  assert.throws(() => startWorker('demo-routed', { kind: 'codex', model: 'gpt-6.1-sol', task: 'x', allow: ['src/'], dryRun: true }, {
     config, models, herdr, env: { HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'ws', HERDR_PANE_ID: 'ws:orch' }, rulesFile, output: () => {},
   }), /claude is ahead of quota pace or near exhaustion/);
 });

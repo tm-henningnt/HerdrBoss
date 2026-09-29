@@ -192,7 +192,7 @@ test('an unknown model ID and a copied model list give warnings', () => {
   assert.deepEqual(check(file('Use `gpt-6-luna` for review.')), [], 'one allowed model is not a copied list');
   assert.deepEqual(check(file('Use claude-code and the claude-api skill.')), [], 'a word without a version is not a model');
 
-  const copied = check(file('- gpt-6-luna\n- gpt-6-sol\n- opencode/big-pickle'));
+  const copied = check(file('- gpt-6-luna\n- gpt-6.1-sol\n- opencode/big-pickle'));
   const hits = only(copied, 'warn', /copied model list.*herdr-boss models.*herdr-boss lanes/);
   assert.equal(hits[0].line, 2);
 
@@ -318,7 +318,7 @@ test('the scanned files get the same warnings as the text outside the stub', () 
     'Use `claude-sonnet-9` for review.',
     'Run `pgrep -f vite` to find the server.',
     '- gpt-6-luna',
-    '- gpt-6-sol',
+    '- gpt-6.1-sol',
     '- opencode/big-pickle',
   ].join('\n');
   const result = scan(orchestrationRepo({ 'docs/agents/rules.md': text }));

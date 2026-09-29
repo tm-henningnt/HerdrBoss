@@ -397,7 +397,7 @@ test('the model tiers match the cost order in kit/models.md', () => {
   assert.equal(modelTier('opencode-go/deepseek-v4.1-flash'), 2);
   assert.equal(modelTier('gpt-6-luna'), 3);
   assert.equal(modelTier('claude-sonnet-5-5'), 4);
-  assert.equal(modelTier('gpt-6-sol'), 5);
+  assert.equal(modelTier('gpt-6.1-sol'), 5);
   assert.equal(modelTier('claude-opus-5-5'), 5);
   assert.equal(modelTier('gpt-6-astra'), 6);
   // A model the kit does not rank has no tier, so the automatic path leaves it to the Owner.
@@ -409,10 +409,10 @@ test('the model tiers match the cost order in kit/models.md', () => {
   assert.equal(tierAllowsAutoActivation('opencode/space-bunny-free', 'gpt-6-luna').allowed, true);
   assert.equal(tierAllowsAutoActivation('opencode-go/space-bunny-free', 'gpt-6-astra').allowed, true);
   assert.equal(tierAllowsAutoActivation('gpt-6-luna', 'opencode-go/space-bunny-free').allowed, false);
-  assert.equal(tierAllowsAutoActivation('gpt-6-sol', 'opencode-go/longcat-2.5-preview-free').allowed, false);
-  assert.equal(tierAllowsAutoActivation('gpt-6-sol', 'gpt-6-luna').allowed, false);
+  assert.equal(tierAllowsAutoActivation('gpt-6.1-sol', 'opencode-go/longcat-2.5-preview-free').allowed, false);
+  assert.equal(tierAllowsAutoActivation('gpt-6.1-sol', 'gpt-6-luna').allowed, false);
   assert.equal(tierAllowsAutoActivation('opencode-go/muse-spark-1.3-contributor', 'gpt-6-astra').allowed, false);
-  assert.match(tierAllowsAutoActivation('gpt-6-sol', 'opencode-go/muse-spark-1.3-contributor').reason, /does not rank/);
+  assert.match(tierAllowsAutoActivation('gpt-6.1-sol', 'opencode-go/muse-spark-1.3-contributor').reason, /does not rank/);
   assert.match(tierAllowsAutoActivation('opencode-go/muse-spark-1.3-contributor', 'gpt-6-astra').reason, /source model/);
 });
 
@@ -441,7 +441,7 @@ test('automatic activation needs a successor that is not weaker than the source'
   assert.match(decisions(unknown)[0].text, /kit does not rank/);
 
   // The successor is stronger than the source.
-  const stronger = runScenario(t, preparedScenario({ model: 'gpt-6-sol' }, [
+  const stronger = runScenario(t, preparedScenario({ model: 'gpt-6.1-sol' }, [
     { id: 'w-alpha:p1', workspace: 'w-alpha', label: 'orch', orch: true, agent: 'claude', status: 'working', model: 'claude-sonnet-5-5' },
     { id: 'w-alpha:p2', workspace: 'w-alpha', label: null, orch: false, agent: 'codex', status: 'idle' },
   ]));
@@ -449,12 +449,12 @@ test('automatic activation needs a successor that is not weaker than the source'
   assert.deepEqual(decisions(stronger), []);
 
   // The source and the successor model sit in the same tier, so an equal model still hands over.
-  const equal = runScenario(t, preparedScenario({ model: 'gpt-6-sol' }, [
+  const equal = runScenario(t, preparedScenario({ model: 'gpt-6.1-sol' }, [
     { id: 'w-alpha:p1', workspace: 'w-alpha', label: 'orch', orch: true, agent: 'claude', status: 'working', model: 'claude-opus-5-5' },
     { id: 'w-alpha:p2', workspace: 'w-alpha', label: null, orch: false, agent: 'codex', status: 'idle' },
   ]));
   assert.equal(modelTier('claude-opus-5-5'), 5);
-  assert.equal(modelTier('gpt-6-sol'), 5);
+  assert.equal(modelTier('gpt-6.1-sol'), 5);
   assert.equal(activated(equal), true);
   assert.deepEqual(decisions(equal), []);
 
