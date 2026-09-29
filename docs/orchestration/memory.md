@@ -59,7 +59,7 @@ Owner queue (credentials, billing, and Owner-applied settings):
 
 ## State at the stand-down (2026-09-29)
 
-- **In progress:** resumed on 2026-09-29 with the first task below.
+- **In progress:** resumed on 2026-09-29. V112 (the re-entrant lock, first task below) runs as Codex worker `v112reentrantlock`; review its report, merge in the integration worktree (`~/Projects/.herdr-wt/HerdrBoss/integrate`), and push. Then NC1 to NC6 (the notice plan tasks N1 to N6; the IDs N1 and K1 were taken).
 - **First task at resume (Boss, 2026-09-29):** fix a deadlock from V111. Under `herdr-boss push`, a pre-push hook that runs `herdr-boss suite --reuse` queues behind the full-suite lock that the push itself holds (seen in Viz: lock list showed the push as holder and its own suite in the queue). Make a suite or lock call under a push from the same process tree reuse the held lock, re-entrant through an environment token that `herdr-boss push` sets, not queue. Add a test. Then correct the kit line "A push reuses a suite pass of the same clean tree" and the V111 docs to match.
 - **Interim kit advice (until that fix):** in a pre-push hook, run the suite directly. Use `suite --reuse` only in gate scripts that run outside `herdr-boss push`. The Boss tells the projects.
 - **Second task at resume (Boss, for an Owner request, 2026-09-29):** fewer notices and less kit churn. The plan and task split are in `docs/ideas/notice-churn-plan.md` (N1 to N6). Start with N1: compute the kit revision only from the files that `kit install` writes.
