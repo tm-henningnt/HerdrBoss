@@ -147,6 +147,8 @@ const USAGE = `herdr-boss <command>
                         --live-codex also runs one codex exec to check the worker shell variables.
   harness sync [--dry-run] [--codex-only]  Add missing Codex writable roots and print the Claude autoMode lines.
   kit install [--no-hook]  Write the kit file, the AGENTS.md stub, and the Claude SessionStart hook.
+  kit update [--quiet]    Print the kit changes since the installed kit revision, then install the kit.
+                          --quiet keeps the digest and hides the per-file install lines.
   kit block             Print the marked Herdr Boss stub for AGENTS.md.
   gh issue ...          Run safe GitHub issue commands.
   models                Show allowed worker models.

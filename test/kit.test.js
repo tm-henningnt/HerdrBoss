@@ -8,14 +8,14 @@ import { fileURLToPath } from 'node:url';
 import { checkAgentsExclude, contextTokensFor, globMatches, loadModels, loadProjectConfig, PROJECT_DEFAULTS, workerConfigView } from '../src/kit/config.js';
 import { appendDelegatedRun, compareChangedPaths, gitChangedPaths, readDelegatedRuns, validateAllowedPaths, validateDelegatedRun, validateWorkerReport } from '../src/kit/orchestration.js';
 import { buildGhArgs } from '../src/kit/gh.js';
-import { runKitCommand } from '../src/kit/cli.js';
+import { formatKitDigest, runKitCommand } from '../src/kit/cli.js';
 import { allowWorkerScope, collectWorker, createHerdrRunner, filterCollectProcesses, listWorkers, parseWorktreeCwdProcesses, renderBrief, startWorker, waitForAgentReady, waitForWorkerPane } from '../src/kit/workers.js';
 import { classifyWorktrees, pruneWorktrees } from '../src/kit/worktrees.js';
 import { usageProvider, validateUsage } from '../src/usage.js';
 import { validateProject } from '../src/projects.js';
 import { Engine } from '../src/engine.js';
 import { renderBulletin } from '../src/rules.js';
-import { kitRevision, parseKitImpact, readKitChanges, kitChangesSince } from '../src/kit/agents-check.js';
+import { kitRevision, parseKitImpact, projectKit, readKitChanges, kitChangesSince } from '../src/kit/agents-check.js';
 
 const CLAUDE_READY_SCREEN = '────\n❯\n────\nauto mode';
 const CODEX_READY_SCREEN = '› Ask Codex to do anything\n? for shortcuts';
@@ -3916,4 +3916,116 @@ test('worker collect accepts a folder entry with a trailing slash inside the all
   assert.throws(setup('folder-omit', ['docs/shots/', runs('folder-omit')], 'docs/notes.md'), /omitted changed paths from its report: docs\/notes\.md/);
   // A folder entry without the trailing slash covers nothing.
   assert.throws(setup('folder-noslash', ['docs/shots', runs('folder-noslash')]), /omitted changed paths/);
+});
+
+// A real git repository with its own HOME, so the Claude settings file stays in a temporary folder.
+function kitUpdateRepo(t) {
+  const cli = fileURLToPath(new URL('../src/cli.js', import.meta.url));
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-kit-update-')));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  execFileSync('git', ['init', '-q', path.join(dir, 'repo')]);
+  const root = path.join(dir, 'repo');
+  return {
+    root,
+    run: (args) => spawnSync(process.execPath, [cli, ...args], {
+      cwd: root, encoding: 'utf8', env: { ...process.env, HOME: dir, HERDR_BOSS_DIR: path.join(dir, 'boss'), TMPDIR: dir },
+    }),
+    lines: (result) => result.stdout.split('\n').filter(Boolean),
+    read: (file) => fs.readFileSync(path.join(root, file), 'utf8'),
+  };
+}
+
+test('the kit update digest names the impact and the summary of every change', () => {
+  const changes = [
+    { revision: '111111111111', impact: 'required', summary: 'Change the kit file.' },
+    { revision: '222222222222', impact: 'none', summary: 'Fix a spelling.' },
+  ];
+  assert.deepEqual(formatKitDigest('000000000000', changes), [
+    'kit update: 2 kit change(s) since installed revision 000000000000',
+    '  required: Change the kit file. (111111111111)',
+    '  none: Fix a spelling. (222222222222)',
+  ]);
+  // An unknown installed revision shows every known change.
+  assert.deepEqual(formatKitDigest(null, changes), [
+    'kit update: installed kit revision is unknown; showing all 2 known change(s)',
+    '  required: Change the kit file. (111111111111)',
+    '  none: Fix a spelling. (222222222222)',
+  ]);
+  // No change gives one line in each case.
+  assert.deepEqual(formatKitDigest('000000000000', []), ['kit update: installed kit revision 000000000000 is current (no recorded change)']);
+  assert.deepEqual(formatKitDigest(null, []), ['kit update: no installed kit revision found (no recorded change)']);
+  // An entry without a summary names its revision.
+  assert.deepEqual(formatKitDigest('000000000000', [{ revision: '333333333333', impact: 'useful', summary: null }]), [
+    'kit update: 1 kit change(s) since installed revision 000000000000',
+    '  useful: 333333333333 (333333333333)',
+  ]);
+});
+
+test('kit update prints the digest before it installs the kit', (t) => {
+  const r = kitUpdateRepo(t);
+  const result = r.run(['kit', 'update']);
+  assert.equal(result.status, 0, result.stderr);
+  const lines = r.lines(result);
+  // Nothing is installed yet, so the digest lists every known change.
+  const changes = kitChangesSince(null);
+  assert.equal(lines[0], `kit update: installed kit revision is unknown; showing all ${changes.length} known change(s)`);
+  assert.deepEqual(lines.slice(1, 1 + changes.length), changes.map((change) => `  ${change.impact}: ${change.summary} (${change.revision})`));
+  const digestEnd = changes.length;
+  const wrote = lines.slice(digestEnd).filter((line) => line.startsWith('wrote ') || line.startsWith('unchanged '));
+  assert.ok(wrote.length, 'the update installs the kit');
+  assert.match(lines.at(-1), new RegExp(`^kit update: kit revision ${kitRevision()}, stub [0-9a-f]{12}, in ${r.root}$`));
+  // The digest comes before every install line.
+  assert.ok(lines.indexOf(lines.at(-1)) > lines.indexOf('wrote AGENTS.md'), 'the summary is last');
+  // The installed kit file now carries the current revision.
+  assert.equal(r.read('docs/orchestration/herdr-boss.md').split('\n')[0], `<!-- herdr-boss kit v=${kitRevision()} -->`);
+});
+
+test('kit update --quiet keeps the digest and hides the per-file lines', (t) => {
+  const r = kitUpdateRepo(t);
+  const first = r.run(['kit', 'update', '--quiet']);
+  assert.equal(first.status, 0, first.stderr);
+  const lines = r.lines(first);
+  assert.equal(lines.filter((line) => /^(wrote|unchanged) /.test(line)).length, 0);
+  assert.match(lines[0], /^kit update: /);
+  assert.match(lines.at(-1), /^kit update: kit revision [0-9a-f]{12}, stub [0-9a-f]{12}, in /);
+  // The install still happened, so a later update has nothing to write.
+  const second = r.run(['kit', 'update', '--quiet']);
+  assert.equal(second.status, 0, second.stderr);
+  const again = r.lines(second);
+  assert.equal(again.filter((line) => /^(wrote|unchanged) /.test(line)).length, 0);
+  assert.match(again.at(-1), /^kit update: kit revision /);
+  assert.equal(again.length, 2, 'a current project gets one digest line and one summary line');
+});
+
+test('kit update always installs, also when the change log has no change after the installed revision', (t) => {
+  const r = kitUpdateRepo(t);
+  assert.equal(r.run(['kit', 'update', '--quiet']).status, 0);
+  // The installed kit file now carries the current revision, so the change log has nothing after it.
+  const changes = kitChangesSince(kitRevision());
+  assert.equal(r.read('docs/orchestration/herdr-boss.md').split('\n')[0], `<!-- herdr-boss kit v=${kitRevision()} -->`);
+  // Delete one installed file. An update with no change must still write it.
+  fs.rmSync(path.join(r.root, 'AGENTS.md'));
+  const result = r.run(['kit', 'update']);
+  assert.equal(result.status, 0, result.stderr);
+  const lines = r.lines(result);
+  assert.equal(lines[0], changes.length
+    ? `kit update: ${changes.length} kit change(s) since installed revision ${kitRevision()}`
+    : `kit update: installed kit revision ${kitRevision()} is current (no recorded change)`);
+  assert.ok(lines.includes('wrote AGENTS.md'), 'an update with no change still installs');
+  assert.match(lines.at(-1), new RegExp(`^kit update: kit revision ${kitRevision()}, stub [0-9a-f]{12}, in `));
+  // A kit file with a revision that the change log does not know lists every known change.
+  fs.writeFileSync(path.join(r.root, 'docs/orchestration/herdr-boss.md'), '<!-- herdr-boss kit v=000000000000 -->\nold body\n');
+  const unknown = r.lines(r.run(['kit', 'update', '--quiet']));
+  assert.deepEqual(unknown, formatKitDigest('000000000000', kitChangesSince('000000000000')).concat([unknown.at(-1)]));
+});
+
+test('kit update rejects an unknown or repeated option', (t) => {
+  const r = kitUpdateRepo(t);
+  for (const args of [['update', '--bogus'], ['update', '--quiet', '--quiet'], ['update', 'extra']]) {
+    const result = r.run(['kit', ...args]);
+    assert.equal(result.status, 2, `${args.join(' ')}: ${result.stderr}`);
+    assert.match(result.stderr, /Usage: kit install \[--no-hook\] \| kit update \[--quiet\] \| kit block/);
+  }
+  // A rejected update writes nothing.
+  assert.equal(fs.existsSync(path.join(r.root, 'AGENTS.md')), false);
 });

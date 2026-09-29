@@ -9,7 +9,7 @@ import { allowWorkerScope, collectWorker, createHerdrRunner, listWorkers, parkWo
 import { pruneWorktrees } from './worktrees.js';
 import { acquireProjectLock, listProjectLocks, pushWithLock, releaseProjectLock } from './locks.js';
 import { SUITE_WAIT_SECONDS, listSuitePasses, runSuite } from './suite.js';
-import { agentsBlock, checkAgentsFile, installKit, kitRevision, rulesPolicy } from './agents-check.js';
+import { agentsBlock, checkAgentsFile, installKit, kitChangesSince, kitRevision, KIT_FILE, rulesPolicy } from './agents-check.js';
 import { listProjects } from '../projects.js';
 
 const USAGE = `Kit commands:
@@ -27,6 +27,7 @@ const USAGE = `Kit commands:
   check agents [FILE]
   check kit
   kit install [--no-hook]
+  kit update [--quiet]
   kit block
   gh issue create|comment|edit ... --body-file FILE
   models [--kind KIND]
@@ -66,6 +67,34 @@ function knownFlags(flags, allowed) {
   if (unknown.length) fail(`Unknown option: --${unknown[0]}.`);
 }
 
+// The version line that installKit writes. It mirrors KIT_VERSION in src/kit/agents-check.js.
+const KIT_VERSION_LINE = /^<!--\s*herdr-boss kit v=(\S*)\s*-->$/;
+
+// The kit revision that a project has installed, read from its own kit file. Returns null when the
+// file is missing, unreadable, or has no version line.
+export function installedKitRevision(root) {
+  try {
+    const [line] = fs.readFileSync(path.join(root, KIT_FILE), 'utf8').split('\n');
+    return KIT_VERSION_LINE.exec(String(line ?? '').trim())?.[1] || null;
+  } catch { return null; }
+}
+
+// The digest lines of a kit update, oldest change first. The digest names the impact and the
+// summary of every change. With no change it gives one line.
+export function formatKitDigest(installed, changes) {
+  if (!changes.length) {
+    return [installed
+      ? `kit update: installed kit revision ${installed} is current (no recorded change)`
+      : 'kit update: no installed kit revision found (no recorded change)'];
+  }
+  return [
+    installed
+      ? `kit update: ${changes.length} kit change(s) since installed revision ${installed}`
+      : `kit update: installed kit revision is unknown; showing all ${changes.length} known change(s)`,
+    ...changes.map((change) => `  ${change.impact}: ${change.summary ?? change.revision} (${change.revision})`),
+  ];
+}
+
 function herdrList(result, key) {
   if (Array.isArray(result?.[key])) return result[key];
   return Array.isArray(result) ? result : null;
@@ -92,13 +121,28 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
   }
 
   if (command === 'kit') {
-    const usage = 'Usage: kit install [--no-hook] | kit block';
+    const usage = 'Usage: kit install [--no-hook] | kit update [--quiet] | kit block';
     if (argv[0] === 'block') {
       // kit block prints the AGENTS.md stub, for old instructions.
       if (argv.length !== 1) fail(usage);
       const result = agentsBlock();
       output(result.block.trimEnd());
       return result;
+    }
+    if (argv[0] === 'update') {
+      if (argv.length > 2 || argv.slice(1).some((flag) => flag !== '--quiet')) fail(usage);
+      const root = injectedConfig?.root ?? findGitRoot();
+      const installed = installedKitRevision(root);
+      const changes = kitChangesSince(installed);
+      // The digest comes before the install, so the reader sees what changed before the install lines.
+      for (const line of formatKitDigest(installed, changes)) output(line);
+      const result = installKit(root);
+      if (!argv.includes('--quiet')) {
+        for (const file of result.written) output(`wrote ${file}`);
+        for (const file of result.unchanged) output(`unchanged ${file}`);
+      }
+      output(`kit update: kit revision ${result.revision}, stub ${result.hash}, in ${root}`);
+      return { ...result, installed, changes };
     }
     if (argv[0] !== 'install' || argv.slice(1).some((flag) => flag !== '--no-hook') || argv.length > 2) fail(usage);
     const root = injectedConfig?.root ?? findGitRoot();
