@@ -61,7 +61,7 @@ function codexConfig(roots, { extraBefore = '', extraAfter = '' } = {}) {
 function healthy(f, repos) {
   const roots = [path.join(f.home, '.herdr-boss'), path.join(f.home, 'Projects', '.herdr-wt'), ...repos.map((repo) => path.join(repo, '.git'))];
   writeFile(path.join(f.home, '.codex', 'config.toml'), codexConfig(roots));
-  writeFile(path.join(f.home, '.codex', 'rules', 'herdr.rules'), `${FORBIDDEN_PS.map((arg) => `prefix_rule(pattern=["ps", "${arg}"], decision="forbidden")`).join('\n')}\n`);
+  writeFile(path.join(f.home, '.codex', 'rules', 'herdr.rules'), `${[...FORBIDDEN_PS.map((arg) => `prefix_rule(pattern=["ps", "${arg}"], decision="forbidden")`), 'prefix_rule(pattern=["pkill"], decision="forbidden")', 'prefix_rule(pattern=["killall"], decision="forbidden")'].join('\n')}\n`);
   writeFile(path.join(f.home, '.claude', 'settings.json'), JSON.stringify({
     apiKeyHelper: 'SECRET-HELPER-VALUE',
     autoMode: { environment: [`**Herdr Boss projects**: ${repos.map((repo) => `${repo} (o/${path.basename(repo)})`).join(', ')}.`], allow: ['$defaults'] },
@@ -211,6 +211,7 @@ test('harness check reports each fixed entry', (t) => {
   assert.match(out, /^missing +codex writable_roots: .*\/Projects\/\.herdr-wt \(worker worktrees\)$/m);
   assert.match(out, /^ok +codex rules: ps e is forbidden$/m);
   for (const arg of ['-E', 'eww', 'auxe', 'auxeww']) assert.match(out, new RegExp(`^missing +codex rules: ps ${arg} is not forbidden`, 'm'));
+  for (const command of ['pkill', 'killall']) assert.match(out, new RegExp(`^missing +codex rules: ${command} is not forbidden`, 'm'));
   assert.match(out, /^missing +opencode: agent worker/m);
   assert.match(out, /^missing +pi: .*herdr-guard\.ts$/m);
   assert.match(out, /^ok +models\.json claude: --permission-mode auto$/m);

@@ -26,6 +26,8 @@ List processes only with `pgrep -l NAME` or `ps -o pid,ppid,etime,comm`.
 
 Never use `ps e`, `ps -E`, `ps eww`, `ps aux`, `ps -ef`, or `pgrep -fl`. They print command lines and environments, and those can hold another session's token.
 
+Stop only a process that you started, by the PID that you saved when you started it. Save `$!` right after a background start, for example `setopt NO_BG_NICE; npm run serve:live > .worker/tmp/serve.log 2>&1 & echo $! > .worker/tmp/serve.pid`, or use the PID that the server prints. Stop it with `kill <pid>`. Never use `pkill`, `killall`, or `kill` with a name pattern such as `kill $(pgrep …)`. A name pattern can stop another project's server.
+
 Run each `herdr-boss browser` command and each `ps` or `pgrep` command alone. Do not join it to other commands with `&&`, `;`, or a pipe.
 
 Run `herdr-boss suite -- npm test` as a background command, then wait for it and read its exit code. The tool timeout is 600 seconds. The command takes the machine-wide `full-suite` lock. Never take the full-suite lock with a bare lock acquire for a suite. Push with `herdr-boss push <args>`.
@@ -140,7 +142,7 @@ For a visual check of a served page, use the project browser. Every worker kind 
 2. Run `herdr-boss browser request <project>`.
 3. Run `herdr-boss browser tab new <project> http://127.0.0.1:<port>/<page>`. Note the tab id.
 4. For an exact size, run `herdr-boss browser viewport <project> --tab <id> <width>x<height>`. The viewport command sets the real window size, so every CDP client sees it. It falls back to emulation and says so. Run it with `--reset` before you close the tab.
-5. Run `herdr-boss browser screenshot <project> --tab <id>`. Use `navigate`, `click`, `key`, and `text` as needed. To check a drag, run `herdr-boss browser drag <project> <x1>% <y1>% <x2>% <y2>% --tab <id>`, then take a screenshot.
+5. Run `herdr-boss browser screenshot <project> --tab <id>`. Use `navigate`, `click`, `key`, and `text` as needed. To check a hover state or a tooltip, run `herdr-boss browser hover <project> <x>% <y>% --tab <id>` before the screenshot. To check a drag, run `herdr-boss browser drag <project> <x1>% <y1>% <x2>% <y2>% --tab <id>`, then take a screenshot.
 6. Run `herdr-boss browser tab close <project> --tab <id>`.
 7. Stop the server. Release a leased port with `herdr-boss lease release serve-ports <port>`.
 

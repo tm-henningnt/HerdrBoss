@@ -9,3 +9,6 @@ prefix_rule(pattern=["ps", "-E"], decision="forbidden")
 prefix_rule(pattern=["ps", "eww"], decision="forbidden")
 prefix_rule(pattern=["ps", "auxe"], decision="forbidden")
 prefix_rule(pattern=["ps", "auxeww"], decision="forbidden")
+# Stop only processes you started, by their saved PID. A name pattern can stop another project's process.
+prefix_rule(pattern=["pkill"], decision="forbidden")
+prefix_rule(pattern=["killall"], decision="forbidden")

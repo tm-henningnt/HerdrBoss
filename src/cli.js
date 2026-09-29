@@ -363,7 +363,7 @@ async function main() {
     case 'browser': {
       const { parseScreenshotOptions, saveBrowserScreenshot } = await import('./browser-output.js');
       const { requestBrowser, listBrowserSessions, browserStatus, setBrowserWindowSize, closeBrowser, restartBrowser, releaseBrowser, listBookmarks, addBookmark, removeBookmark, setStartPage } = await import('./browser-pool.js');
-      const { listBrowserTabs, browserScreenshot, browserNavigate, browserClick, browserDrag, browserInsertText, browserKey, browserViewport, browserNewTab, browserCloseTab } = await import('./browser-preview.js');
+      const { listBrowserTabs, browserScreenshot, browserNavigate, browserClick, browserHover, browserDrag, browserInsertText, browserKey, browserViewport, browserNewTab, browserCloseTab } = await import('./browser-preview.js');
       const tabOption = (rest) => {
         if (!rest.length) return null;
         if (rest.length !== 2 || rest[0] !== '--tab' || !rest[1]) throw new Error('Use --tab ID to select a browser page.');
@@ -480,6 +480,12 @@ async function main() {
         await browserClick(args[1], tab, percent(args[2]), percent(args[3]));
         console.log('Click sent.');
       }
+      else if (args[0] === 'hover' && args[1] && args[2] && args[3]) {
+        await verifyBrowserCaller(args[1]);
+        const tab = await selectedTab(args[1], args.slice(4));
+        await browserHover(args[1], tab, percent(args[2], 'Hover coordinates'), percent(args[3], 'Hover coordinates'));
+        console.log('Hover sent.');
+      }
       else if (args[0] === 'drag' && args[1] && args[2] && args[3] && args[4] && args[5]) {
         await verifyBrowserCaller(args[1]);
         const rest = args.slice(6);
@@ -534,7 +540,7 @@ async function main() {
         await verifyBrowserCaller(args[1]);
         console.log(JSON.stringify(await requestBrowser(args[1], { launch: !args.includes('--reserve'), headless: args.includes('--headless') ? true : args.includes('--visible') ? false : null }), null, 2));
       }
-      else throw new Error('Usage: browser request|size|viewport|close|release|restart|list|tabs|tab new|tab close|screenshot|navigate|click|drag|text|key|bookmarks|sweep-clones. Run herdr-boss without arguments for details.');
+      else throw new Error('Usage: browser request|size|viewport|close|release|restart|list|tabs|tab new|tab close|screenshot|navigate|click|hover|drag|text|key|bookmarks|sweep-clones. Run herdr-boss without arguments for details.');
       break;
     }
     case 'handoff': {

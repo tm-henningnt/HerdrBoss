@@ -366,6 +366,10 @@ export function checkHarness({ home = homeDir(), dataDir = DATA_DIR, modelsFile 
       const match = /^\s*prefix_rule\(\s*pattern\s*=\s*\[\s*"ps"\s*,\s*"([^"]+)"\s*\]\s*,\s*decision\s*=\s*"forbidden"\s*\)/.exec(line);
       if (match) forbidden.add(match[1]);
     }
+    for (const command of ['pkill', 'killall']) {
+      const has = rules.split('\n').some((line) => new RegExp(`^\\s*prefix_rule\\(\\s*pattern\\s*=\\s*\\[\\s*"${command}"\\s*\\]\\s*,\\s*decision\\s*=\\s*"forbidden"\\s*\\)`).test(line));
+      add(has ? 'ok' : 'missing', 'codex rules', `Forbidden ${command} rule`, has ? `${command} is forbidden` : `${command} is not forbidden in ${rulesFile}`);
+    }
     for (const arg of FORBIDDEN_PS) add(forbidden.has(arg) ? 'ok' : 'missing', 'codex rules', `Forbidden ps ${arg} rule`, forbidden.has(arg) ? `ps ${arg} is forbidden` : `ps ${arg} is not forbidden in ${rulesFile}`);
   }
 

@@ -232,6 +232,23 @@ export async function browserHistoryAction(project, tabId, action, adapters = {}
   return { url: entry.url };
 }
 
+// Move the mouse to a position relative to the screenshot, with no press, so a hover state or a tooltip shows.
+export async function browserHover(project, tabId, relativeX, relativeY, adapters = {}) {
+  if (![relativeX, relativeY].every((n) => typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 1)) throw new Error('Hover position must be inside the screenshot.');
+  const context = await pageContext(project, tabId, adapters);
+  await pageCommands(context.endpoint, context.viewport, [
+    { method: 'Page.getLayoutMetrics' },
+    (metrics) => {
+      const viewport = metrics?.cssVisualViewport || metrics?.cssLayoutViewport;
+      if (!viewport?.clientWidth || !viewport?.clientHeight) throw new Error('Could not determine the page viewport.');
+      return { method: 'Input.dispatchMouseEvent', params: { type: 'mouseMoved', button: 'none', buttons: 0,
+        x: Math.min(viewport.clientWidth - 1, Math.round(relativeX * viewport.clientWidth)),
+        y: Math.min(viewport.clientHeight - 1, Math.round(relativeY * viewport.clientHeight)) } };
+    },
+  ], undefined, undefined, adapters);
+  return { ok: true };
+}
+
 export async function browserClick(project, tabId, relativeX, relativeY, adapters = {}) {
   if (![relativeX, relativeY].every((n) => typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 1)) throw new Error('Click position must be inside the screenshot.');
   const context = await pageContext(project, tabId, adapters);

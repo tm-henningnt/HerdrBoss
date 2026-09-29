@@ -54,6 +54,9 @@ const BASH_DENY: [RegExp, string][] = [
 	[/\blaunchctl\b/, "launchctl"],
 	[/\.config\/herdr-boss\b/, "the private Herdr Boss directory"],
 	[/\bauth\.json\b/, "a credential file"],
+	[/\bpkill\b/, "pkill (stop your process by its saved PID)"],
+	[/\bkillall\b/, "killall (stop your process by its saved PID)"],
+	[/\bkill\b[^;&|]*\$\(\s*pgrep\b/, "kill with a pgrep name pattern"],
 ];
 
 // rm -rf is allowed only when every target is inside a temporary directory or the worktree .worker/tmp.

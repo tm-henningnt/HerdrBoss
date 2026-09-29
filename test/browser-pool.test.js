@@ -730,3 +730,12 @@ test('a browser launch starts Chrome in its profile folder, not in the caller fo
   assert.equal(spawnOptions.cwd, status.profile);
   assert.notEqual(spawnOptions.cwd, process.cwd());
 });
+
+test('browserHover sends one mouseMoved with no press at the screenshot position', async () => {
+  const fixture = browserDragFixture();
+  const result = await browserPreview.browserHover(fixture.project, 'tab-drag', 0.25, 0.5, fixture.adapters);
+  assert.deepEqual(result, { ok: true });
+  assert.deepEqual(fixture.sent.map((request) => request.method), ['Page.getLayoutMetrics', 'Input.dispatchMouseEvent']);
+  assert.deepEqual(fixture.sent[1].params, { type: 'mouseMoved', button: 'none', buttons: 0, x: 250, y: 250 });
+  await assert.rejects(() => browserPreview.browserHover(fixture.project, 'tab-drag', 1.2, 0.5, fixture.adapters), /inside the screenshot/);
+});
