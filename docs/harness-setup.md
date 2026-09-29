@@ -125,6 +125,8 @@ The `worker` agent never asks. It allows edits in the worktree and denies each o
 
 WARNING: `opencode.json` can hold provider keys. Do not print it. `harness check` reads only the `agent.worker` key and prints no value.
 
+The OpenCode worker profile checks the command string and the tool name. It is not a sandbox. A worker can reach a denied folder through bash, for example with cat or ls, although external_directory denies it. Treat the profile as a guard against mistakes, not as a security boundary.
+
 To apply the agent:
 
 1. Open `~/.config/opencode/opencode.json` in an editor.
@@ -143,7 +145,7 @@ To apply the agent:
 | `--no-approve` | `kit/models.json` | Herdr Boss. |
 | `--no-extensions` and `-e` for each extension | `kit/models.json` | Herdr Boss. |
 
-`herdr-guard.ts` keeps a worker inside its worktree. File tools can use only the worktree, the temporary folders, and `~/.herdr-boss`. The guard blocks the same commands as the OpenCode `worker` agent. It never asks. A blocked call returns a reason to the worker.
+`herdr-guard.ts` keeps a worker inside its worktree. File tools can use only the worktree, the temporary folders, and `~/.herdr-boss`. The guard blocks the same commands as the OpenCode `worker` agent. It allows `rm -rf` on a path inside the worktree `.worker` folder and on a path inside a temporary folder. It blocks `rm -rf` with a pattern, and `rm -rf` on the worktree or on the `.worker` folder itself. It never asks. A blocked call returns a reason to the worker.
 
 `--no-approve` stops Pi from loading project-local settings, resources, and packages. `--no-extensions` stops the automatic extension load. Each `-e` then loads one named extension, so the guard is always loaded.
 
@@ -192,7 +194,7 @@ Herdr Boss counts denials and permission prompts in the harness logs. Each recor
 | Harness | Log | Cause |
 |---|---|---|
 | Claude | `~/.claude/projects/*/*.jsonl` | `classifier:<Reason>`: a tool result refused by the auto mode classifier. The model comes from the latest assistant message. A reason starts with a letter. It can contain letters, spaces, hyphens, and parentheses. It can have at most 60 characters. |
-| Codex | `~/.codex/sessions/YYYY/MM/DD/*.jsonl` | `sandbox:mach-port`, `sandbox:eperm`, `sandbox:not-permitted`, and `sandbox:permission-denied`: count only when the output has a non-zero exit code. The model comes from the turn context. A Mach port cause needs `bootstrap_look_up`, `mach-lookup`, or `Mach port` with `denied`, `not permitted`, `failed`, or `1100`. Count one cause per failed output, in this order: `sandbox:mach-port`, `sandbox:eperm`, `sandbox:not-permitted`, `sandbox:permission-denied`. |
+| Codex | `~/.codex/sessions/YYYY/MM/DD/*.jsonl` | `sandbox:mach-port`, `sandbox:eperm`, `sandbox:not-permitted`, and `sandbox:permission-denied`: count only when the output has a non-zero exit code. A batched exec output holds one block per command. Each block starts with a `Chunk ID:` or `Wall time:` line, has its own exit code line, and holds its own keywords. Herdr Boss checks each block on its own, so a failed command next to a command that passed does not add a count. The model comes from the turn context. A Mach port cause needs `bootstrap_look_up`, `mach-lookup`, or `Mach port` with `denied`, `not permitted`, `failed`, or `1100`. Count one cause per failed output, in this order: `sandbox:mach-port`, `sandbox:eperm`, `sandbox:not-permitted`, `sandbox:permission-denied`. |
 | Codex | The same files | `escalation:request`: a tool call with `sandbox_permissions` set to `require_escalated`. |
 | OpenCode | `~/.local/share/opencode/log/*.log` | `permission:asked:<type>`: a `message=asking` line. `permission:unanswered:<type>`: an `asking` line with no `message=replied` line for its `id=` within 10 minutes. `permission:<type>`: a permission evaluation whose final matching rule denies the action for the `worker` agent. The model and agent come from the session log. |
 | Pi | `~/.pi/agent/sessions/<folder>/*.jsonl` | `guard:<class>`: a tool result blocked by the Herdr guard. The model comes from the latest model change or assistant message. The classes are `outside-worktree`, `protected-path`, `rm-rf`, `denied-command`, and `other`. |

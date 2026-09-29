@@ -53,6 +53,17 @@ function codexTurnContext(cwd, model, at = NOW) {
 function codexCall(input, at = NOW) {
   return { timestamp: iso(at), type: 'response_item', payload: { type: 'custom_tool_call', name: 'exec', input } };
 }
+// A batched exec output: one block per command, each with its own header group and exit code line.
+function codexBatch(parts, at = NOW) {
+  const output = parts.map((part) => [
+    `Chunk ID: ${part.id}`,
+    'Wall time: 0.01 seconds',
+    part.old ? `Exit code: ${part.code}` : `Process exited with code ${part.code}`,
+    'Output:',
+    part.text,
+  ].join('\n')).join('\n\n');
+  return { timestamp: iso(at), type: 'response_item', payload: { type: 'function_call_output', call_id: 'c-batch', output } };
+}
 const ocAsk = (id, type, run, at) => `INFO  ${iso(at)} +1ms service=permission id=${id} permission=${type} patterns=["cat ${SECRET}", "ls"] run=${run} timestamp=${iso(at)} message=asking`;
 const ocReply = (id, run, at) => `INFO  ${iso(at)} +1ms service=permission requestID=${id} reply=once run=${run} timestamp=${iso(at)} message=replied`;
 const ocCwd = (run, cwd, at) => `INFO  ${iso(at)} +0ms service=session run=${run} cwd=${cwd} timestamp=${iso(at)} message=created`;
@@ -102,6 +113,42 @@ test('Codex parser counts sandbox causes only for failed outputs and escalation 
   const fnCall = { timestamp: iso(NOW), type: 'response_item', payload: { type: 'function_call', name: 'shell', arguments: JSON.stringify({ command: ['ls'], sandbox_permissions: 'require_escalated' }) } };
   assert.deepEqual(parseCodexLine(JSON.stringify(fnCall), ctx).map((e) => e.cause), ['escalation:request']);
   assert.deepEqual(parseCodexLine(JSON.stringify(codexCall('ls -la')), ctx), []);
+});
+
+test('Codex parser splits a batched exec output and counts one denial in a part', () => {
+  const ctx = {};
+  // A failed search next to a command that passed is not a sandbox denial.
+  const noMatch = codexBatch([
+    { id: 'a', code: 1, text: 'no matches found' },
+    { id: 'b', code: 0, text: 'EPERM in a build log of a command that passed' },
+  ]);
+  assert.deepEqual(parseCodexLine(JSON.stringify(noMatch), ctx), []);
+  assert.deepEqual(parseCodexLine(JSON.stringify(codexBatch([
+    { id: 'a', code: 1, old: true, text: 'nothing found' },
+    { id: 'b', code: 0, old: true, text: 'done' },
+  ])), ctx), []);
+  // A real denial in one part counts once, also with a failed command next to it.
+  const denied = [
+    ...parseCodexLine(JSON.stringify(codexBatch([
+      { id: 'a', code: 0, text: 'a command that passed' },
+      { id: 'b', code: 1, text: 'spawn EPERM while writing' },
+    ])), ctx),
+    ...parseCodexLine(JSON.stringify(codexBatch([
+      { id: 'a', code: 1, text: 'EPERM first' },
+      { id: 'b', code: 1, text: 'Operation not permitted second' },
+    ])), ctx),
+  ];
+  assert.deepEqual(denied.map((e) => e.cause), ['sandbox:eperm', 'sandbox:eperm']);
+  // A passed part that quotes a sandbox word does not count.
+  assert.deepEqual(parseCodexLine(JSON.stringify(codexBatch([
+    { id: 'a', code: 0, text: 'EPERM in a comment' },
+    { id: 'b', code: 0, text: 'done' },
+  ])), ctx), []);
+  // A JSON output that is an array of command results works the same way.
+  const arrayOutput = { timestamp: iso(NOW), type: 'response_item', payload: { type: 'function_call_output', call_id: 'c-array', output: JSON.stringify([{ exit_code: 1, output: 'no matches found' }, { exit_code: 0, output: 'all tests passed' }]) } };
+  assert.deepEqual(parseCodexLine(JSON.stringify(arrayOutput), ctx), []);
+  const arrayDenied = { ...arrayOutput, payload: { ...arrayOutput.payload, output: JSON.stringify([{ exit_code: 1, output: 'no matches found' }, { exit_code: 1, output: 'Operation not permitted here' }]) } };
+  assert.deepEqual(parseCodexLine(JSON.stringify(arrayDenied), ctx).map((e) => e.cause), ['sandbox:not-permitted']);
 });
 
 test('OpenCode parser reads the permission fields without the patterns', () => {

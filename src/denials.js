@@ -50,12 +50,35 @@ function jsonExitCode(value) {
   const code = parsed.exit_code ?? parsed.metadata?.exit_code;
   return Number.isFinite(code) ? code : null;
 }
+function textExitCode(text) {
+  const match = /\b(?:Exit code:\s*|Process exited with code\s+)(-?\d+)\b/i.exec(text);
+  return match ? Number(match[1]) : null;
+}
 function outputExitCode(output, payload) {
   const jsonCode = jsonExitCode(output) ?? jsonExitCode(payload);
   if (jsonCode !== null) return jsonCode;
+  return textExitCode(typeof output === 'string' ? output : JSON.stringify(output ?? ''));
+}
+// A batched exec output holds one block per command. Each block starts at a header line. Split the text
+// there, so each part keeps its own exit code and its own keyword check.
+const BATCH_HEADER = /^(?:Chunk ID:|Wall time:)[^\n]*$/gm;
+function codexOutputParts(output, payload) {
+  const parsed = typeof output === 'string' ? parseJson(output) : output;
+  if (Array.isArray(parsed)) {
+    return parsed.filter((part) => part && typeof part === 'object').map((part) => {
+      const code = Number.isFinite(Number(part.exit_code)) ? Number(part.exit_code) : null;
+      return { text: typeof part.output === 'string' ? part.output : JSON.stringify(part.output ?? ''), code };
+    });
+  }
   const text = typeof output === 'string' ? output : JSON.stringify(output ?? '');
-  const match = /\b(?:Exit code:\s*|Process exited with code\s+)(-?\d+)\b/i.exec(text);
-  return match ? Number(match[1]) : null;
+  const starts = [...text.matchAll(BATCH_HEADER)].map((match) => match.index);
+  if (starts.length === 0) return [{ text, code: outputExitCode(output, payload) }];
+  const parts = [];
+  const head = text.slice(0, starts[0]);
+  if (head.trim()) parts.push({ text: head, code: textExitCode(head) });
+  for (const [index, start] of starts.entries()) parts.push({ text: text.slice(start, starts[index + 1] ?? text.length), code: null });
+  for (const part of parts) if (part.code === null) part.code = textExitCode(part.text);
+  return parts;
 }
 function timeOf(value, fallback) {
   const at = Date.parse(value);
@@ -131,11 +154,13 @@ export function parseCodexLine(line, ctx = {}) {
   const at = timeOf(record.timestamp, null);
   const event = (cause) => ({ at, cause, cwd: ctx.cwd, model: ctx.model || UNKNOWN_MODEL });
   if (payload.type === 'function_call_output' || payload.type === 'custom_tool_call_output') {
-    const text = typeof payload.output === 'string' ? payload.output : JSON.stringify(payload.output ?? '');
-    const exitCode = outputExitCode(payload.output, payload);
-    if (exitCode === null || exitCode === 0) return [];
-    const match = SANDBOX.find(([, pattern]) => (typeof pattern === 'function' ? pattern(text) : pattern.test(text)));
-    return match ? [event(match[0])] : [];
+    // Count one cause per output. Each part of a batch carries its own exit code and its own keywords.
+    for (const part of codexOutputParts(payload.output, payload)) {
+      if (part.code === null || part.code === 0) continue;
+      const match = SANDBOX.find(([, pattern]) => (typeof pattern === 'function' ? pattern(part.text) : pattern.test(part.text)));
+      if (match) return [event(match[0])];
+    }
+    return [];
   }
   if (payload.type === 'function_call' || payload.type === 'custom_tool_call') {
     const args = payload.arguments ?? payload.input;
