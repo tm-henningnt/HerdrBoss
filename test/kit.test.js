@@ -11,7 +11,7 @@ import { buildGhArgs } from '../src/kit/gh.js';
 import { runKitCommand } from '../src/kit/cli.js';
 import { allowWorkerScope, collectWorker, createHerdrRunner, filterCollectProcesses, listWorkers, parseWorktreeCwdProcesses, renderBrief, startWorker, waitForAgentReady, waitForWorkerPane } from '../src/kit/workers.js';
 import { classifyWorktrees, pruneWorktrees } from '../src/kit/worktrees.js';
-import { usageProvider } from '../src/usage.js';
+import { usageProvider, validateUsage } from '../src/usage.js';
 import { validateProject } from '../src/projects.js';
 import { Engine } from '../src/engine.js';
 import { renderBulletin } from '../src/rules.js';
@@ -3445,4 +3445,33 @@ test('project kit includes the model outcome rule', async () => {
   const kit = fs.readFileSync('kit/templates/project-kit.md', 'utf8');
   assert.ok(kit.includes('worker collect --record --model-result'));
   assert.ok(kit.includes('--model-reason'));
+});
+
+test('worker collect --record with --model-result writes the ledger and a valid usage record end to end', () => {
+  const f = setupFixture(null);
+  const model = 'gpt-6-luna';
+  fs.writeFileSync(f.rulesFile, JSON.stringify({ policy: { allowedKinds: ['codex'], excludedModels: [], modelProviders: { [model]: 'codex' } } }));
+  git(f.root, 'add', '-A');
+  git(f.root, 'commit', '--allow-empty', '-m', 'fixture configuration');
+  const name = 'collect-model-result';
+  const run = startWorker(name, { kind: 'codex', model, task: 'x', allow: ['.orchestration/runs/'], noWorktree: true }, {
+    config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+  });
+  const reportDir = path.join(run.worktree, run.workerDir);
+  fs.writeFileSync(path.join(reportDir, 'report.md'), 'Done.\n');
+  fs.writeFileSync(path.join(reportDir, 'report.json'), JSON.stringify({
+    issue: null, branch: run.branch, worktree: run.worktree, changedPaths: [`.orchestration/runs/${name}.json`], commands: ['focused check'],
+    evidenceTier: ['unit'], unverified: [], stoppedEarly: false,
+  }));
+  const usage = [];
+  // The real usage validator runs on the record, so a helper that only this flag path uses cannot be missing.
+  collectWorker(name, { record: true, outcome: 'done', gatePassed: true, modelResult: 'first-time', modelReason: 'right the first time' }, {
+    config: f.config, now: Date.parse('2026-09-25T17:00:00Z'), output: () => {}, listWorktreeProcesses: () => [],
+    recordUsageFn: (event) => { const errors = validateUsage(event); usage.push({ event, errors }); return { errors, duplicate: false }; },
+  });
+  assert.deepEqual(usage[0].errors, []);
+  assert.deepEqual(usage[0].event.modelOutcome, { kind: 'codex', model, result: 'first-time', reason: 'right the first time' });
+  const ledger = fs.readFileSync(f.config.ledgerPath, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+  assert.equal(ledger.length, 1);
+  assert.equal(ledger[0].modelOutcome.result, 'first-time');
 });

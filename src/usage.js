@@ -3,6 +3,9 @@ import path from 'node:path';
 import { DATA_DIR } from './config.js';
 import { loadPolicy, providerFor } from './control.js';
 
+const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+const isText = (value) => typeof value === 'string' && value.trim().length > 0;
+
 const FILE = path.join(DATA_DIR, 'usage.jsonl');
 const QUOTAS_FILE = path.join(DATA_DIR, 'quota-history.jsonl');
 const SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
