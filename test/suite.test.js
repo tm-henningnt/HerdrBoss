@@ -228,6 +228,66 @@ test('suite holds the full-suite lock around the command and passes the exit cod
   assert.ok(f.lines.some((line) => /acquired/.test(line)) && f.lines.some((line) => /released/.test(line)), f.lines.join('\n'));
 });
 
+test('a matching push token re-enters without a queue ticket and cannot release the push lock', (t) => {
+  const f = fixture(t, 'herdr-suite-push-lock-reentry-');
+  const token = 'push-reentry-token-0001';
+  const outerEnv = { ...f.env };
+  const outerOptions = { ...f.options({ pidAlive: (pid) => pid === process.pid }), dataDir: f.dataDir, env: outerEnv };
+  acquireProjectLock('full-suite', { ...outerOptions, kind: 'push', reentryToken: token });
+
+  const innerEnv = { ...f.env, HERDR_BOSS_LOCK_TOKEN: token };
+  const innerOptions = { ...outerOptions, env: innerEnv, kind: 'suite', waitSeconds: 0 };
+  const acquired = acquireProjectLock('full-suite', innerOptions);
+
+  assert.equal(acquired.reentrant, true);
+  assert.equal(fs.readFileSync(f.lockFile, 'utf8').includes(token), true);
+  assert.deepEqual(readQueueFiles(f.dataDir), [], 're-entry does not take a queue ticket');
+  releaseProjectLock('full-suite', { ...innerOptions, output: () => {} });
+  assert.equal(fs.existsSync(f.lockFile), true, 'the inner caller cannot release the outer lock');
+
+  releaseProjectLock('full-suite', { ...outerOptions, output: () => {} });
+  assert.equal(fs.existsSync(f.lockFile), false);
+});
+
+test('a wrong push token waits in the full-suite queue', (t) => {
+  const f = fixture(t, 'herdr-suite-push-lock-wrong-token-');
+  const token = 'push-reentry-token-0002';
+  const options = { ...f.options({ pidAlive: (pid) => pid === process.pid }), dataDir: f.dataDir };
+  acquireProjectLock('full-suite', { ...options, kind: 'push', reentryToken: token });
+
+  assert.throws(() => acquireProjectLock('full-suite', {
+    ...options,
+    env: { ...f.env, HERDR_BOSS_LOCK_TOKEN: 'wrong-reentry-token-0000' },
+    kind: 'suite',
+    waitSeconds: 0,
+  }), (error) => error.exitCode === 75);
+  assert.ok(f.lines.some((line) => line.startsWith('waiting for full-suite,')), f.lines.join('\n'));
+  assert.equal(JSON.parse(fs.readFileSync(f.lockFile, 'utf8')).reentryToken, token);
+  assert.deepEqual(readQueueFiles(f.dataDir), [], 'the timed-out caller removes its ticket');
+  releaseProjectLock('full-suite', { ...options, output: () => {} });
+});
+
+test('a token from a finished push does not re-enter its former lock', (t) => {
+  const f = fixture(t, 'herdr-suite-push-lock-stale-token-');
+  const token = 'push-reentry-token-0003';
+  let pushAlive = true;
+  const options = { ...f.options({ pidAlive: (pid) => pid === process.pid && pushAlive }), dataDir: f.dataDir };
+  acquireProjectLock('full-suite', { ...options, kind: 'push', reentryToken: token });
+  pushAlive = false;
+
+  const acquired = acquireProjectLock('full-suite', {
+    ...options,
+    env: { ...f.env, HERDR_BOSS_LOCK_TOKEN: token },
+    kind: 'suite',
+    waitSeconds: 0,
+  });
+
+  assert.equal(acquired.reentrant, undefined);
+  assert.equal(JSON.parse(fs.readFileSync(f.lockFile, 'utf8')).kind, 'suite');
+  assert.equal(JSON.parse(fs.readFileSync(f.lockFile, 'utf8')).reentryToken, undefined);
+  releaseProjectLock('full-suite', { ...options, env: { ...f.env, HERDR_BOSS_LOCK_TOKEN: token }, output: () => {} });
+});
+
 test('suite removes an old ownerless mutation guard and writes one stderr line', (t) => {
   const f = fixture(t, 'herdr-suite-stale-guard-');
   const directory = path.join(f.dataDir, 'locks', 'machine');
