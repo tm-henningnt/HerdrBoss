@@ -1120,7 +1120,7 @@ function leaseTtlText(pool) {
 
 function leaseReclaimText(pool) {
   if (pool.check === 'cdp') return 'reclaim when its Chrome process is gone (cdp)';
-  if (pool.check === 'tcp') return `reclaim when nothing listens (tcp, ${pool.graceMinutes} min grace)`;
+  if (pool.check === 'tcp') return 'reclaim when the holder is gone or the TTL ends';
   return 'reclaim when the pane or worker is gone, or the TTL lapses';
 }
 

@@ -340,29 +340,31 @@ test('reclaim keeps pane leases when the pane list failed', () => {
   assert.equal(readLeases(ctx.dataDir).leases.length, 1);
 });
 
-test('a tcp lease is reclaimed only after the grace time and two missed checks in a row', () => {
+test('a live holder keeps its tcp lease when nothing listens, until the TTL', () => {
   const ctx = context({ pool: { ...POOL, check: 'tcp', graceMinutes: 10 } });
-  const probes = [];
-  let listening = false;
-  const probeTcp = (port) => { probes.push(port); return listening; };
-  const tick = (now) => {
+  const probeTcp = () => false;
+  const tick = (now, panes = new Set(['ws:orch'])) => {
     const events = [];
-    reclaimLeases({ pools: ctx.pools, dataDir: ctx.dataDir, panes: new Set(['ws:orch']), now, probeTcp, log: (event) => events.push(event) });
+    reclaimLeases({ pools: ctx.pools, dataDir: ctx.dataDir, panes, now, probeTcp, log: (event) => events.push(event) });
     return events;
   };
-  seedLeases(ctx.dataDir, [lease('47100', { at: new Date(NOW - 5 * 60000).toISOString() })]);
-  assert.deepEqual(tick(NOW), []);
-  assert.deepEqual(probes, [], 'no check inside the grace time');
-  const late = NOW + 6 * 60000;
-  assert.deepEqual(tick(late), []);
-  assert.deepEqual(probes, ['47100']);
-  listening = true;
-  assert.deepEqual(tick(late + 30000), [], 'a listening check resets the count');
-  listening = false;
-  assert.deepEqual(tick(late + 60000), []);
-  const events = tick(late + 90000);
-  assert.deepEqual(events.map((event) => event.reason), ['nothing listens on 127.0.0.1:47100']);
+  // A worker leased the port long ago and does not serve yet. Its pane is alive, so the lease stays.
+  seedLeases(ctx.dataDir, [lease('47100', { at: new Date(NOW - 3 * 3600000).toISOString(), expiresAt: new Date(NOW + 3600000).toISOString() })]);
+  for (const step of [0, 60000, 120000, 600000]) assert.deepEqual(tick(NOW + step), [], 'no reclaim while the holder lives');
+  assert.equal(readLeases(ctx.dataDir).leases.length, 1);
+  // After the TTL, the lease goes back to the pool, and the event names the holder pane for the notice.
+  const events = tick(NOW + 2 * 3600000);
+  assert.deepEqual(events.map((event) => event.reason), ['lease expired']);
+  assert.equal(events[0].pane, 'ws:orch');
   assert.equal(readLeases(ctx.dataDir).leases.length, 0);
+});
+
+test('a tcp lease of a gone pane is reclaimed at once, whatever listens', () => {
+  const ctx = context({ pool: { ...POOL, check: 'tcp', graceMinutes: 10 } });
+  seedLeases(ctx.dataDir, [lease('47101', { at: new Date(NOW - 60000).toISOString() })]);
+  const events = [];
+  reclaimLeases({ pools: ctx.pools, dataDir: ctx.dataDir, panes: new Set(['ws:other']), now: NOW, probeTcp: () => true, log: (event) => events.push(event) });
+  assert.deepEqual(events.map((event) => event.reason), ['pane ws:orch is gone']);
 });
 
 test('acquire reclaims before it chooses', () => {

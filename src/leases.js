@@ -10,7 +10,6 @@ import { verifyCallerPane } from './kit/workers.js';
 const LEASES_FILE = 'leases.json';
 const WORKER_NAME = /^[a-z][a-z0-9-]{0,31}$/;
 const PROJECT_SLUG = /^[a-z0-9][a-z0-9-]*$/;
-const TCP_MISSES_TO_RECLAIM = 2;
 const CDP_MISSES_TO_RECLAIM = 2;
 // Port 9222 is the protected legacy browser. No pool ever leases it.
 export const PROTECTED_PORT = '9222';
@@ -111,7 +110,7 @@ function readRunFile(file) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
 }
 
-// Decide the reclaim reason for one lease, or null to keep it. A TCP miss changes lease.tcpMisses, and a missing browser process changes lease.cdpMisses.
+// Decide the reclaim reason for one lease, or null to keep it. A missing browser process changes lease.cdpMisses.
 // browserProcess(lease) returns true or false when the process table is known, and null when it is not.
 function reclaimReason(lease, { pool, panes, now, probeTcp, browserProcess }) {
   if (pool?.check === 'cdp') {
@@ -130,13 +129,8 @@ function reclaimReason(lease, { pool, panes, now, probeTcp, browserProcess }) {
     if (run?.name === lease.worker && run.finishedAt) return `worker ${lease.worker} finished`;
   }
   if (lease.expiresAt != null && Date.parse(lease.expiresAt) <= now) return 'lease expired';
-  if (pool?.check === 'tcp' && now - Date.parse(lease.at) >= pool.graceMinutes * 60000) {
-    if (probeTcp(lease.item)) delete lease.tcpMisses;
-    else {
-      lease.tcpMisses = (lease.tcpMisses ?? 0) + 1;
-      if (lease.tcpMisses >= TCP_MISSES_TO_RECLAIM) return `nothing listens on 127.0.0.1:${lease.item}`;
-    }
-  }
+  // A holder that is alive keeps its lease until its TTL, also when nothing listens yet: a worker can lease a port
+  // long before it serves on it. A port without a listener is never a reason to reclaim.
   return null;
 }
 
@@ -146,7 +140,7 @@ function reclaimInStore(store, { pools, panes, now, probeTcp, browserProcess }) 
     const pool = pools.find((candidate) => candidate.name === lease.pool);
     const reason = reclaimReason(lease, { pool, panes, now, probeTcp, browserProcess });
     if (!reason) return true;
-    reclaimed.push({ pool: lease.pool, item: lease.item, project: lease.project, worker: lease.worker ?? null, reason });
+    reclaimed.push({ pool: lease.pool, item: lease.item, project: lease.project, worker: lease.worker ?? null, pane: lease.pane ?? null, reason });
     return false;
   });
   return reclaimed;

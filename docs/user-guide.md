@@ -947,7 +947,7 @@ Define each pool in `resourcePools` in `~/.herdr-boss/config.json`:
 | `env` | Required. The variable that `worker start --lease` sets in the worker pane. |
 | `ttlMinutes` | The lease time. The default is 240. |
 | `check` | `"tcp"` or `null`. `"tcp"` means that each item is a local port. The default is `null`. |
-| `graceMinutes` | The time after the lease start before the TCP check starts. The default is 10. |
+| `graceMinutes` | Kept for older configs. It has no effect on reclaims: a port without a listener is never reclaimed. |
 
 The pool `project-browsers` is built in. Herdr Boss adds it to the config pools. Do not define a config pool with this name: it is an error. See [Port leases](#port-leases).
 
@@ -958,10 +958,9 @@ Herdr Boss reclaims a lease on each service tick and before each `lease acquire`
 - The pane of the lease is not in a successful Herdr pane list.
 - The run record of the worker has `finishedAt`.
 - The time `expiresAt` of the lease is in the past.
-- The pool has `"check": "tcp"`, the grace time is over, and nothing listens on `127.0.0.1:<item>` on two checks in a row.
 - The pool is `project-browsers`, and no matching Chrome process runs on two ticks in a row. This rule is the only rule for this pool.
 
-Herdr Boss logs one `lease` event for each reclaimed lease, with the pool, the item, the project, and the reason. The bulletin has a `Resource leases` section with one line for each pool. The line shows each item with its holder, its age, and `borrowed`, or `free`. The line of `project-browsers` shows only the leased ports and the number of free ports.
+A port without a listener is never a reason to reclaim. A holder that is alive keeps its lease until its TTL, also before it serves on the port. `lease acquire` never gives out an item that a live holder has. Herdr Boss logs one `lease` event for each reclaimed lease, with the pool, the item, the project, and the reason. When the holder pane is still alive, for example after the TTL, the engine sends it one notice. The bulletin has a `Resource leases` section with one line for each pool. The line shows each item with its holder, its age, and `borrowed`, or `free`. The line of `project-browsers` shows only the leased ports and the number of free ports.
 
 ## Project locks and worktree cleanup
 

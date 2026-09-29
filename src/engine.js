@@ -369,15 +369,26 @@ export class Engine extends EventEmitter {
       }
       // Reclaim leases on an acting tick. A pane is gone only when the pane list of this tick succeeded.
       // A project browser lease is checked only when the process list of this tick succeeded.
+      const reclaimedLeases = [];
       if (this.act) {
         try {
           reclaimLeases({
             pools: resourcePools, dataDir: DATA_DIR, now, probeTcp: this.collectors.probeTcp, waitMs: 0,
             panes: currentHerdrSnapshot && currentPaneList ? new Set(herdr.panes.map((pane) => pane.id)) : null,
             browserProcess: browserProcessCheck(processesKnown ? procs : null, Object.fromEntries(browserSessions.map((b) => [b.project, b]))),
-            log: (item) => this.log('lease', `Reclaimed ${item.pool} ${item.item} of ${item.project}${item.worker ? `/${item.worker}` : ''}: ${item.reason}`, { pool: item.pool, item: item.item, project: item.project, reason: item.reason }),
+            log: (item) => reclaimedLeases.push(item) && this.log('lease', `Reclaimed ${item.pool} ${item.item} of ${item.project}${item.worker ? `/${item.worker}` : ''}: ${item.reason}`, { pool: item.pool, item: item.item, project: item.project, reason: item.reason }),
           });
         } catch (e) { if (e.code !== 'ELOCKBUSY') errors.push(`leases: ${e.message}`); }
+      }
+      // Tell a holder whose pane is still alive that its lease went back to the pool, for example after its TTL.
+      if (this.act && this.push && currentPaneList) {
+        const livePanes = new Set(herdr.panes.map((pane) => pane.id));
+        for (const item of reclaimedLeases) {
+          if (!item.pane || !livePanes.has(item.pane)) continue;
+          const text = `[herdr-boss] Your lease ${item.pool} ${item.item} was reclaimed: ${item.reason}. Stop using it, and take a new one with herdr-boss lease acquire ${item.pool}.`;
+          try { checkHerdrResponse(await this.herdrRunner('herdr', ['agent', 'prompt', item.pane, text])); }
+          catch (error) { this.log('error', `Lease reclaim notice to ${item.pane} failed: ${String(error.stderr || error.message).slice(0, 200)}`); }
+        }
       }
       let leaseStore = { leases: [] };
       try { leaseStore = readLeases(DATA_DIR); } catch (e) { errors.push(`leases: ${e.message}`); }
