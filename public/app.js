@@ -337,7 +337,7 @@ function controlBlock(s) {
           <label class="setting-line"><span>Automatic handover</span><input type="checkbox" data-policy-bool="autoHandover" ${d.autoHandover ? 'checked' : ''}></label>
           <p class="setting-help">Apply policy to save this choice.</p>
           <label class="setting-line"><span>Activate at quota used %</span><input type="number" min="90" max="100" value="${d.autoHandoverPercent}" data-policy-number="autoHandoverPercent"></label>
-          <p class="setting-help">When enabled, Boss prepares a successor at the reserve limit and activates it at this quota level after the successor reports ready. The source stays in control until then.</p>
+          <p class="setting-help">When enabled, Boss prepares a successor at the reserve limit and activates it at this quota level after the successor reports ready. The source stays in control until then. Automatic handover never runs for the Boss, for a project that no longer works, for a project that is paused or stood down in its published status, or for a successor model that is weaker than the source model.</p>
         </div>
       </div>
       <div class="succession"><div class="section-head"><h3>Orchestrator succession</h3><button type="button" data-ladder-add ${d.orchestratorLadder?.length >= 20 ? 'disabled' : ''}>Add choice</button></div>
@@ -587,11 +587,19 @@ function settingsView(s) {
   return `<header class="page-intro"><div><h1>Settings</h1><p>Assign models and provider routes in each harness. Set provider quotas and machine limits below.</p></div></header><section id="settings-plane" class="control-shell"><section class="panel"><h2>Harnesses</h2><p class="setting-help harness-help">Clear a model box to stop that harness from using it. The same model in another harness keeps its own box and provider.</p>${ignoredCount ? `<p class="setting-help harness-help" role="note" style="color: var(--warn)">${ignoredCount} legacy provider route${ignoredCount === 1 ? ' is' : 's are'} not compatible with ${ignoredCount === 1 ? 'its harness' : 'their harnesses'}. Herdr Boss treats ${ignoredCount === 1 ? 'it' : 'them'} as Unmetered. Choose a provider in each marked row before you apply the policy.</p>` : ''}<div class="harness-grid">${harnesses}</div></section><div class="settings-grid">${settingsPanels}</div><div class="control-actions ${policyDirty ? 'pending' : ''}"><span data-policy-status role="status" aria-live="polite">${esc(saveMessage || (policyDirty ? 'Unsaved changes · Apply policy to keep them' : 'Policy saved'))}</span><button id="save-policy" ${policyDirty ? '' : 'disabled'}>Apply policy</button></div></section>`;
 }
 
+// The handoff records that need the Owner: an open record whose source pane and successor pane still exist.
+// A record in another state, or a record with a missing pane, is stale. The pane check is skipped when the pane list is unknown.
+function openHandoffRecords(records, panes) {
+  const live = Array.isArray(panes) ? new Set(panes.map((p) => p.id)) : null;
+  return (Array.isArray(records) ? records : []).filter((x) => x && HANDOFF_OPEN.includes(x.status) && x.newPane && (!live || (live.has(x.newPane) && (!x.sourcePane || live.has(x.sourcePane)))));
+}
+
 function handoffBlock(s, projectSlug = null) {
-  const candidates = [...(s.control?.handoffs || []), ...(s.control?.bossHandoff ? [s.control.bossHandoff] : [])].filter((h) => !projectSlug || h.project === projectSlug);
+  // The Overview shows prepared records only. A recommendation without a record belongs to the project page.
+  const candidates = projectSlug ? [...(s.control?.handoffs || []), ...(s.control?.bossHandoff ? [s.control.bossHandoff] : [])].filter((h) => h.project === projectSlug) : [];
   const project = projectSlug && s.control?.projects?.[projectSlug];
   if (project?.orch && !candidates.length) candidates.push({ project: projectSlug, pane: project.orch.pane, fromKind: project.orch.kind, target: null, window: null });
-  const prepared = handoffRecords.filter((x) => ['prepared', 'preparing', 'needs-inspection'].includes(x.status) && (!projectSlug || x.project === projectSlug));
+  const prepared = openHandoffRecords(handoffRecords, s.herdr?.panes).filter((x) => !projectSlug || x.project === projectSlug);
   const cards = [
     ...prepared.map((item) => {
       const output = handoffOutputs[item.id];
@@ -1104,8 +1112,7 @@ function decisionSummary(s) {
 }
 
 function overview(s) {
-  const currentHandoffs = [...(s.control?.handoffs || []), ...(s.control?.bossHandoff ? [s.control.bossHandoff] : [])];
-  const handovers = currentHandoffs.length + handoffRecords.filter((x) => ['prepared', 'preparing', 'needs-inspection'].includes(x.status) && !currentHandoffs.some((h) => h.pane === x.sourcePane)).length;
+  const handovers = openHandoffRecords(handoffRecords, s.herdr?.panes).length;
   const alertCount = (s.alerts || []).filter((a) => ['warn', 'critical'].includes(a.severity) && !a.key?.startsWith('handoff:')).length;
   return [
     `<header class="page-intro"><div><h1>Overview</h1><p>${alertCount || handovers ? `${alertCount} resource alert${alertCount === 1 ? '' : 's'} · ${handovers} handover${handovers === 1 ? '' : 's'} to review` : 'Projects are operating within the current resource policy.'}</p></div><div class="capacity-readout"><strong>${s.control?.runningWorkers ?? 0}<span> / ${s.control?.maxWorkers ?? '–'}</span></strong><small>working agents</small><a href="/allocation">Adjust allocation →</a></div></header>`,
@@ -3476,7 +3483,7 @@ const HELP = {
   overview: ['Overview', `
     <p>The state of all projects and shared resources at one glance.</p>
     <h3>Needs attention</h3><p>Warnings and critical alerts: quotas, memory, machine load, and orphaned worktree processes. <b>Details</b> opens the rule text in Logs.</p>
-    <h3>Handovers</h3><p>Orchestrators whose quota comes near its reserve, and successors that wait for review. Open the project to plan, inspect, or activate a handover.</p>
+    <h3>Handovers</h3><p>Prepared successors that wait for review. A record shows only while its source pane and successor pane exist. A recommendation without a record is not listed here. Open the project to plan, inspect, or activate a handover.</p>
     <h3>Projects</h3><p>The bar above the cards shows the applied share of each project, in card order. Its colors match the top edge of each card. A label such as <b>30% · 2</b> shows the share and the effective slots; the tooltip shows all values. Change the shares on the Allocation page.</p><p>A card per project with its published status and task mix. The table shows the orchestrator, workers in use against the share, and the policy mode. Select a project for its details.</p>
     <h3>Night watch banner</h3><p>While night watch runs, every page shows a slim banner under the top bar. It names the end time, says that the Boss acts for the Owner, and shows <b>Quiet hours on</b> when quiet hours are set. Select <b>Stop</b> to end the night. The page asks you to confirm first. Without a night, the page shows no banner. The Settings page has a <b>Night watch</b> section that starts a night with an end time and a quiet hours check. A read-only preview shows the banner and refuses a change.</p>
     <h3>Subscriptions and machine health</h3><p>Select a bar to open all quota windows, or the processes and load history. After a restart, "Quotas from HH:MM" shows saved quotas until the first new quota read succeeds. When the probe for one provider fails, "Claude quota from HH:MM (probe failed)" shows its last good quota for up to 60 minutes. The Machine guard switch turns CPU and load warnings and worker-start blocks on or off. Choose a pause length to suspend those rules for a time; select <b>Resume guard</b> to end a pause early. Memory and disk warnings stay on. Disk space reports the filesystem that contains the Herdr Boss data directory.</p>`],
@@ -3528,7 +3535,7 @@ const HELP = {
     <p>A read-only preview shows the chats and refuses a send. It also refuses a read, so the unread count stays.</p>`],
   allocation: ['Allocation', `
     <p>The resource policy for all projects. Changes are a draft until you select <b>Apply policy</b>.</p>
-    <h3>Capacity and handover</h3><p>The global limit of working agents, the lending of unused slots, the quota reserve, and automatic handover with its activation level.</p>
+    <h3>Capacity and handover</h3><p>The global limit of working agents, the lending of unused slots, the quota reserve, and automatic handover with its activation level. Automatic handover prepares a successor only for a workspace that has a working agent or a running worker. It skips a project that is paused or stood down in its published status or summary, and it activates a successor only when that model is not weaker than the source model. It never runs for the Boss.</p>
     <h3>Orchestrator succession</h3><p>The ranked successors for automatic handover. Use the arrows to change the order. Unlisted choices are never selected automatically.</p>
     <h3>Workspace projects</h3><p>Clear a workspace switch to include that workspace as a project. An excluded workspace stays on Agents and shows <b>Not a project</b>. It gets no project share or worker slots. Herdr Boss stores workspace labels and resolves saved Herdr IDs to labels. The Boss workspace stays excluded while a pane is labelled <code>boss</code>.</p>
     <h3>Project shares</h3><p>Drag a boundary on the bar, or focus it and use the arrow keys. Projects to the left stay fixed; the rest share the remainder. A share is advisory. The mode sets a project to auto, active, idle, or paused.</p>

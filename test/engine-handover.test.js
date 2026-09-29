@@ -6,13 +6,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { POLICY_DEFAULTS } from '../src/control.js';
+import { modelTier, tierAllowsAutoActivation, summaryHolds } from '../src/engine.js';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const probe = `
 import { Engine } from './src/engine.js';
 import { loadConfig } from './src/config.js';
 const input = JSON.parse(process.env.H24_SCENARIO);
-const now = Date.parse('2026-09-26T12:00:00.000Z');
+let now = Date.parse('2026-09-26T12:00:00.000Z');
 Date.now = () => now;
 const calls = [];
 const collectorCalls = { herdr: 0, processes: 0, quotas: 0 };
@@ -46,8 +47,8 @@ engine.deliver = async () => {};
 // The quota read runs beside the tick. Finish one read first, so the tick applies its quotas.
 engine.readQuotas();
 await engine.quotaRead;
-await engine.tick();
-console.log(JSON.stringify({ calls, collectorCalls, control: engine.state.control, lanes: engine.state.lanes }));
+for (const at of input.ticks || ['2026-09-26T12:00:00.000Z']) { now = Date.parse(at); await engine.tick(); }
+console.log(JSON.stringify({ calls, collectorCalls, control: engine.state.control, lanes: engine.state.lanes, events: engine.events }));
 `;
 
 const liveQuota = (usedPercent) => [{ provider: 'claude', windows: [{
@@ -66,7 +67,13 @@ function runScenario(t, scenario) {
     policy.orchestratorLadder = scenario.ladder;
     policy.harnessRoutes = { pi: { 'opencode-go/deepseek-v4.1-flash': null } };
   }
+  if (scenario.projects) policy.projects = scenario.projects;
   fs.writeFileSync(path.join(dir, 'policy.json'), JSON.stringify(policy));
+  // The published project status files that the tick reads through listProjects().
+  for (const entry of scenario.published || []) {
+    const { slug, ...body } = entry;
+    fs.writeFileSync(path.join(dir, 'projects', `${slug}.json`), JSON.stringify(body));
+  }
   fs.writeFileSync(path.join(dir, 'memory.json'), JSON.stringify({
     paneSince: {}, pushes: {}, notified: {}, lastOrchestrators: scenario.lastOrchestrators,
     exhaustedFreeModels: scenario.exhaustedFreeModels || {},
@@ -85,79 +92,172 @@ function runScenario(t, scenario) {
       HERDR_BOSS_LIVE_DIR: dir,
       HERDR_BOSS_ALLOW_ACTIONS: '1',
       NODE_TEST_CONTEXT: '',
-      H24_SCENARIO: JSON.stringify({ herdr: scenario.herdr, quotas: liveQuota(scenario.usedPercent ?? 98) }),
+      H24_SCENARIO: JSON.stringify({
+        herdr: scenario.herdr, quotas: liveQuota(scenario.usedPercent ?? 98), ticks: scenario.ticks,
+      }),
     },
   });
   assert.equal(result.status, 0, result.stderr);
-  return JSON.parse(result.stdout.trim());
+  const output = JSON.parse(result.stdout.trim());
+  output.records = JSON.parse(fs.readFileSync(path.join(dir, 'handoffs.json'), 'utf8'));
+  return output;
 }
 
-test('Ignore quota still prepares successors for stopped project orchestrators and the stopped Boss', { timeout: 30000 }, (t) => {
+// A workspace with a worker that still works, and an orchestrator pane that does not.
+const idleOrchestrator = {
+  workspaces: [{ id: 'w-alpha', label: 'Alpha' }],
+  panes: [
+    { id: 'w-alpha:p1', workspace: 'w-alpha', label: 'orch', orch: true, agent: null, status: null },
+    { id: 'w-alpha:p3', workspace: 'w-alpha', label: 'worker', orch: false, agent: 'codex', status: 'working' },
+  ],
+};
+
+test('Ignore quota prepares a successor for a stopped project orchestrator while a worker runs', { timeout: 30000 }, (t) => {
   const project = runScenario(t, {
     usedPercent: 98,
     lastOrchestrators: { 'w-alpha': { pane: 'w-alpha:p1', kind: 'claude', project: 'alpha' } },
-    herdr: {
-      workspaces: [{ id: 'w-alpha', label: 'Alpha' }],
-      panes: [{ id: 'w-alpha:p1', workspace: 'w-alpha', label: 'orch', orch: true, agent: null, status: null }],
-    },
+    herdr: idleOrchestrator,
   });
   assert.deepEqual(project.collectorCalls, { herdr: 1, processes: 1, quotas: 1 });
   assert.deepEqual(project.calls.map(({ args }) => args.slice(1, 3)), [['handoff', 'plan'], ['handoff', 'prepare']]);
   assert.equal(project.calls[0].args[3], 'w-alpha:p1');
   assert.equal(project.calls[1].args[3], 'w-alpha:p1');
-
-  const boss = runScenario(t, {
-    usedPercent: 98,
-    lastOrchestrators: { 'w-boss': { pane: 'w-boss:p1', kind: 'claude', project: 'Boss', boss: true } },
-    herdr: {
-      workspaces: [{ id: 'w-boss', label: 'Boss' }],
-      panes: [{ id: 'w-boss:p1', workspace: 'w-boss', label: 'boss', orch: false, agent: null, status: null }],
-    },
-  });
-  assert.deepEqual(boss.collectorCalls, { herdr: 1, processes: 1, quotas: 1 });
-  assert.deepEqual(boss.calls.map(({ args }) => args.slice(1, 3)), [['handoff', 'plan'], ['handoff', 'prepare']]);
-  assert.equal(boss.calls[0].args[3], 'w-boss:p1');
-  assert.equal(boss.calls[1].args[3], 'w-boss:p1');
 });
 
-test('automatic stopped project and Boss handovers skip actively exhausted free successor models', { timeout: 30000 }, (t) => {
-  const common = {
-    usedPercent: 98,
-    ladder: [
-      { kind: 'pi', model: 'opencode-go/deepseek-v4.1-flash' },
-      { kind: 'codex', model: 'gpt-6-luna', effort: 'xhigh' },
-    ],
-    exhaustedFreeModels: {
-      'opencode-go/deepseek-v4.1-flash': { model: 'opencode-go/deepseek-v4.1-flash', retryAt: Date.parse('2026-09-26T12:01:00.000Z') },
-    },
-  };
+test('automatic handover skips a project with no working agent and no running worker', { timeout: 30000 }, (t) => {
   const project = runScenario(t, {
-    ...common,
+    usedPercent: 98,
     lastOrchestrators: { 'w-alpha': { pane: 'w-alpha:p1', kind: 'claude', project: 'alpha' } },
     herdr: {
       workspaces: [{ id: 'w-alpha', label: 'Alpha' }],
       panes: [{ id: 'w-alpha:p1', workspace: 'w-alpha', label: 'orch', orch: true, agent: null, status: null }],
     },
   });
-  const boss = runScenario(t, {
-    ...common,
+  assert.deepEqual(project.control.projects.alpha.running, 0);
+  assert.deepEqual(project.calls, []);
+});
+
+test('automatic handover never prepares or activates the Boss pane', { timeout: 30000 }, (t) => {
+  const stopped = runScenario(t, {
+    usedPercent: 98,
     lastOrchestrators: { 'w-boss': { pane: 'w-boss:p1', kind: 'claude', project: 'Boss', boss: true } },
     herdr: {
       workspaces: [{ id: 'w-boss', label: 'Boss' }],
       panes: [{ id: 'w-boss:p1', workspace: 'w-boss', label: 'boss', orch: false, agent: null, status: null }],
     },
   });
+  assert.deepEqual(stopped.calls, []);
 
-  for (const result of [project, boss]) {
-    const plan = result.calls.find(({ args }) => args[2] === 'plan');
-    assert.ok(plan);
-    assert.equal(plan.args[plan.args.indexOf('--to') + 1], 'codex');
-    assert.equal(plan.args[plan.args.indexOf('--model') + 1], 'gpt-6-luna');
+  const working = runScenario(t, {
+    usedPercent: 98,
+    herdr: {
+      workspaces: [{ id: 'w-boss', label: 'Boss' }],
+      panes: [
+        { id: 'w-boss:p1', workspace: 'w-boss', label: 'boss', orch: false, agent: 'claude', status: 'working', sessionId: 'boss-session' },
+        { id: 'w-boss:p2', workspace: 'w-boss', label: null, orch: false, agent: 'codex', status: 'idle' },
+      ],
+    },
+    handoffs: [{
+      id: 'prepared-boss', project: 'Boss', workspace: 'w-boss', label: 'boss', boss: true, sourcePane: 'w-boss:p1',
+      newPane: 'w-boss:p2', fromKind: 'claude', toKind: 'codex', status: 'prepared', automatic: true,
+      readyAt: '2026-09-26T11:00:00.000Z', preparedAt: '2026-09-26T11:00:00.000Z',
+    }],
+  });
+  assert.equal(working.calls.some(({ args }) => args[2] === 'activate'), false);
+  assert.equal(working.records[0].status, 'prepared');
+  // The Owner keeps the recommendation. The automatic path is the only part that skips the Boss.
+  assert.equal(working.control.bossHandoff.target.kind, 'codex');
+});
+
+test('a Boss record stays out of the automatic path when its pane label changed', { timeout: 30000 }, (t) => {
+  // The record metadata decides, not the current pane label. Each case names the Boss by metadata
+  // alone, so only the metadata guard can hold it back.
+  const cases = [
+    { name: 'boss flag', record: { boss: true, project: 'alpha', label: 'orch' }, pane: { label: 'orch' } },
+    { name: 'Boss project', record: { project: 'Boss', label: 'orch' }, pane: { label: 'orch' } },
+    { name: 'Boss display label', record: { project: 'alpha', displayLabel: 'Boss', label: 'orch' }, pane: { label: 'orch' } },
+    { name: 'Boss workspace', record: { project: 'alpha', label: 'orch' }, pane: { label: 'orch' }, bossPane: true },
+  ];
+  for (const entry of cases) {
+    const { record, pane, bossPane } = entry;
+    const result = runScenario(t, {
+      usedPercent: 98,
+      lastOrchestrators: { 'w-alpha': { pane: 'w-alpha:p1', kind: 'claude', project: 'alpha' } },
+      herdr: {
+        workspaces: [{ id: 'w-alpha', label: 'Alpha' }],
+        panes: [
+          { id: 'w-alpha:p1', workspace: 'w-alpha', orch: true, agent: 'claude', status: 'working', model: 'gpt-6-luna', ...pane },
+          { id: 'w-alpha:p2', workspace: 'w-alpha', label: null, orch: false, agent: 'codex', status: 'idle' },
+          ...(bossPane ? [{ id: 'w-alpha:p4', workspace: 'w-alpha', label: 'boss', orch: false, agent: 'claude', status: 'working' }] : []),
+        ],
+      },
+      handoffs: [{
+        id: 'prepared-metadata', workspace: 'w-alpha', sourcePane: 'w-alpha:p1', newPane: 'w-alpha:p2',
+        fromKind: 'claude', toKind: 'codex', model: 'gpt-6-luna', status: 'prepared', automatic: true,
+        readyAt: '2026-09-26T11:00:00.000Z', preparedAt: '2026-09-26T11:00:00.000Z', ...record,
+      }],
+    });
+    assert.equal(result.calls.some(({ args }) => args[2] === 'activate'), false, entry.name);
+    assert.equal(result.records[0].status, 'prepared', entry.name);
   }
 });
 
-test('automatic proactive project and Boss handovers skip actively exhausted free successor models', { timeout: 30000 }, (t) => {
-  const common = {
+test('automatic handover skips a project that a published status or summary holds', { timeout: 60000 }, (t) => {
+  const held = [
+    { status: 'paused' }, { status: 'Paused' }, { status: 'PAUSED' }, { status: 'stood down' },
+    { status: 'Stood down' }, { status: 'stood-down' }, { status: 'Stood_Down' }, { status: 'on hold' },
+    { summary: 'Stood down until the release is out.' },
+    { summary: 'Paused by the Owner.' },
+    { status: 'paused', summary: 'Shipping the handover change.' },
+    // The project's own workers are its own business. The summary still holds it.
+    { summary: 'The workers are paused while the migration runs.' },
+    { summary: 'Paused. Its own workers are paused too.' },
+  ];
+  for (const entry of held) {
+    const result = runScenario(t, {
+      usedPercent: 98,
+      lastOrchestrators: { 'w-alpha': { pane: 'w-alpha:p1', kind: 'claude', project: 'alpha' } },
+      herdr: idleOrchestrator,
+      published: [{ slug: 'alpha', project: 'Alpha', workspace: 'w-alpha', ...entry }],
+    });
+    assert.deepEqual(result.calls, [], JSON.stringify(entry));
+  }
+
+  // A status that names another project, and a task of this project, do not hold this project.
+  const open = [
+    { status: 'active', summary: 'Beta is stood down until the notice work lands.' },
+    { status: 'active', summary: 'Stood-down work moved to the Beta project.' },
+    { status: 'active', summary: 'The other project paused its release; this one continues.' },
+    { status: 'active', summary: 'Ticket 12 is paused in the other project.' },
+    { status: 'active', goal: 'Ship the automatic handover change.' },
+  ];
+  for (const entry of open) {
+    const result = runScenario(t, {
+      usedPercent: 98,
+      lastOrchestrators: { 'w-alpha': { pane: 'w-alpha:p1', kind: 'claude', project: 'alpha' } },
+      herdr: idleOrchestrator,
+      published: [
+        { slug: 'alpha', project: 'Alpha', workspace: 'w-alpha', ...entry },
+        { slug: 'beta', project: 'Beta', workspace: 'w-beta', status: 'paused' },
+      ],
+    });
+    assert.deepEqual(result.calls.map(({ args }) => args.slice(1, 3)), [['handoff', 'plan'], ['handoff', 'prepare']], JSON.stringify(entry));
+  }
+});
+
+test('automatic handover skips a project whose allocation mode is paused', { timeout: 30000 }, (t) => {
+  const result = runScenario(t, {
+    usedPercent: 98,
+    lastOrchestrators: { 'w-alpha': { pane: 'w-alpha:p1', kind: 'claude', project: 'alpha' } },
+    herdr: idleOrchestrator,
+    projects: { alpha: { mode: 'paused' } },
+  });
+  assert.equal(result.control.projects.alpha.effectiveMode, 'paused');
+  assert.deepEqual(result.calls, []);
+});
+
+test('automatic stopped project handover skips actively exhausted free successor models', { timeout: 30000 }, (t) => {
+  const project = runScenario(t, {
     usedPercent: 98,
     ladder: [
       { kind: 'pi', model: 'opencode-go/deepseek-v4.1-flash' },
@@ -166,44 +266,42 @@ test('automatic proactive project and Boss handovers skip actively exhausted fre
     exhaustedFreeModels: {
       'opencode-go/deepseek-v4.1-flash': { model: 'opencode-go/deepseek-v4.1-flash', retryAt: Date.parse('2026-09-26T12:01:00.000Z') },
     },
-  };
+    lastOrchestrators: { 'w-alpha': { pane: 'w-alpha:p1', kind: 'claude', project: 'alpha' } },
+    herdr: idleOrchestrator,
+  });
+  const plan = project.calls.find(({ args }) => args[2] === 'plan');
+  assert.ok(plan);
+  assert.equal(plan.args[plan.args.indexOf('--to') + 1], 'codex');
+  assert.equal(plan.args[plan.args.indexOf('--model') + 1], 'gpt-6-luna');
+});
+
+test('automatic proactive project handover skips actively exhausted free successor models', { timeout: 30000 }, (t) => {
   const project = runScenario(t, {
-    ...common,
+    usedPercent: 98,
+    ladder: [
+      { kind: 'pi', model: 'opencode-go/deepseek-v4.1-flash' },
+      { kind: 'codex', model: 'gpt-6-luna', effort: 'xhigh' },
+    ],
+    exhaustedFreeModels: {
+      'opencode-go/deepseek-v4.1-flash': { model: 'opencode-go/deepseek-v4.1-flash', retryAt: Date.parse('2026-09-26T12:01:00.000Z') },
+    },
     herdr: {
       workspaces: [{ id: 'w-alpha', label: 'Alpha' }],
       panes: [{ id: 'w-alpha:p1', workspace: 'w-alpha', label: 'orch', orch: true, agent: 'claude', status: 'working', sessionId: 'source-session' }],
     },
   });
-  const boss = runScenario(t, {
-    ...common,
-    herdr: {
-      workspaces: [{ id: 'w-boss', label: 'Boss' }],
-      panes: [{ id: 'w-boss:p1', workspace: 'w-boss', label: 'boss', orch: false, agent: 'claude', status: 'working', sessionId: 'boss-session' }],
-    },
-  });
-
-  for (const result of [project, boss]) {
-    const plan = result.calls.find(({ args }) => args[2] === 'plan');
-    assert.ok(plan);
-    assert.equal(plan.args[plan.args.indexOf('--to') + 1], 'codex');
-    assert.equal(plan.args[plan.args.indexOf('--model') + 1], 'gpt-6-luna');
-  }
+  const plan = project.calls.find(({ args }) => args[2] === 'plan');
+  assert.ok(plan);
+  assert.equal(plan.args[plan.args.indexOf('--to') + 1], 'codex');
+  assert.equal(plan.args[plan.args.indexOf('--model') + 1], 'gpt-6-luna');
 });
 
+// The automatic source shapes. A Boss pane is never an automatic source, so the Boss shape
+// only checks that the Owner keeps the recommendation.
 const handoverShapes = {
   stoppedProject: {
     lastOrchestrators: { 'w-alpha': { pane: 'w-alpha:p1', kind: 'claude', project: 'alpha' } },
-    herdr: {
-      workspaces: [{ id: 'w-alpha', label: 'Alpha' }],
-      panes: [{ id: 'w-alpha:p1', workspace: 'w-alpha', label: 'orch', orch: true, agent: null, status: null }],
-    },
-  },
-  stoppedBoss: {
-    lastOrchestrators: { 'w-boss': { pane: 'w-boss:p1', kind: 'claude', project: 'Boss', boss: true } },
-    herdr: {
-      workspaces: [{ id: 'w-boss', label: 'Boss' }],
-      panes: [{ id: 'w-boss:p1', workspace: 'w-boss', label: 'boss', orch: false, agent: null, status: null }],
-    },
+    herdr: idleOrchestrator,
   },
   proactiveProject: {
     herdr: {
@@ -223,6 +321,12 @@ function assertCodexSuccessor(t, common) {
   for (const [shape, scenario] of Object.entries(handoverShapes)) {
     const result = runScenario(t, { ...common, ...scenario });
     const plan = result.calls.find(({ args }) => args[2] === 'plan');
+    if (shape === 'proactiveBoss') {
+      assert.equal(plan, undefined, shape);
+      assert.equal(result.control.bossHandoff.target.kind, 'codex', shape);
+      assert.equal(result.control.bossHandoff.target.model, 'gpt-6-luna', shape);
+      continue;
+    }
     assert.ok(plan, shape);
     assert.equal(plan.args[plan.args.indexOf('--to') + 1], 'codex', shape);
     assert.equal(plan.args[plan.args.indexOf('--model') + 1], 'gpt-6-luna', shape);
@@ -255,31 +359,148 @@ test('automatic project and Boss handovers skip a Pi rung that the last good Pi 
   });
 });
 
+// A prepared automatic record, a source that works, and a successor that is ready.
+const preparedScenario = (record, panes, extra = {}) => ({
+  usedPercent: 98,
+  lastOrchestrators: { 'w-alpha': { pane: 'w-alpha:p1', kind: 'claude', project: 'alpha' } },
+  herdr: {
+    workspaces: [{ id: 'w-alpha', label: 'Alpha' }],
+    panes: panes || [
+      { id: 'w-alpha:p1', workspace: 'w-alpha', label: 'orch', orch: true, agent: 'claude', status: 'working', model: 'gpt-6-luna' },
+      { id: 'w-alpha:p2', workspace: 'w-alpha', label: null, orch: false, agent: 'codex', status: 'idle' },
+    ],
+  },
+  handoffs: [{
+    id: 'prepared-1', project: 'alpha', workspace: 'w-alpha', label: 'orch', sourcePane: 'w-alpha:p1',
+    newPane: 'w-alpha:p2', fromKind: 'claude', toKind: 'codex', model: 'gpt-6-luna', status: 'prepared', automatic: true,
+    readyAt: '2026-09-26T11:00:00.000Z', preparedAt: '2026-09-26T11:00:00.000Z',
+    ...record,
+  }],
+  ...extra,
+});
 test('Ignore quota activates a prepared successor at the configured live quota threshold', { timeout: 30000 }, (t) => {
-  const scenario = {
-    usedPercent: 98,
-    lastOrchestrators: { 'w-alpha': { pane: 'w-alpha:p1', kind: 'claude', project: 'alpha' } },
-    herdr: {
-      workspaces: [{ id: 'w-alpha', label: 'Alpha' }],
-      panes: [
-        { id: 'w-alpha:p1', workspace: 'w-alpha', label: 'orch', orch: true, agent: 'claude', status: 'working' },
-        { id: 'w-alpha:p2', workspace: 'w-alpha', label: null, orch: false, agent: 'codex', status: 'idle' },
-      ],
-    },
-    handoffs: [{
-      id: 'prepared-1', project: 'alpha', workspace: 'w-alpha', label: 'orch', sourcePane: 'w-alpha:p1',
-      newPane: 'w-alpha:p2', fromKind: 'claude', toKind: 'codex', status: 'prepared', automatic: true,
-      readyAt: '2026-09-26T11:00:00.000Z', preparedAt: '2026-09-26T11:00:00.000Z',
-    }],
-  };
-
-  const belowThreshold = runScenario(t, { ...scenario, usedPercent: 97 });
+  const belowThreshold = runScenario(t, preparedScenario({}, null, { usedPercent: 97 }));
   assert.deepEqual(belowThreshold.collectorCalls, { herdr: 1, processes: 1, quotas: 1 });
   assert.equal(belowThreshold.calls.some(({ args }) => args[2] === 'activate'), false);
 
-  const atThreshold = runScenario(t, scenario);
+  const atThreshold = runScenario(t, preparedScenario({}));
   assert.deepEqual(atThreshold.collectorCalls, { herdr: 1, processes: 1, quotas: 1 });
   assert.equal(atThreshold.calls.some(({ args }) => args[2] === 'activate' && args[3] === 'prepared-1'), true);
+});
+
+test('the model tiers match the cost order in kit/models.md', () => {
+  // Rung 1 is every free opencode model, including the free opencode-go models.
+  for (const model of ['opencode/big-pickle', 'opencode/space-bunny-free', 'opencode/mimo-v2.6-flash-free',
+    'opencode-go/space-bunny-free', 'opencode-go/longcat-2.5-preview-free']) {
+    assert.equal(modelTier(model), 1, model);
+  }
+  assert.equal(modelTier('opencode-go/deepseek-v4.1-flash'), 2);
+  assert.equal(modelTier('gpt-6-luna'), 3);
+  assert.equal(modelTier('claude-sonnet-5-5'), 4);
+  assert.equal(modelTier('gpt-6-sol'), 5);
+  assert.equal(modelTier('claude-opus-5-5'), 5);
+  assert.equal(modelTier('gpt-6-astra'), 6);
+  // A model the kit does not rank has no tier, so the automatic path leaves it to the Owner.
+  for (const model of ['opencode-go/mimo-v2.6-flash', 'opencode-go/muse-spark-1.3-contributor',
+    'claude-sonnet-4-5', '', null, undefined, 42]) {
+    assert.equal(modelTier(model), null, String(model));
+  }
+  // A free source hands over to any ranked model. A free target never weakens a metered source.
+  assert.equal(tierAllowsAutoActivation('opencode/space-bunny-free', 'gpt-6-luna').allowed, true);
+  assert.equal(tierAllowsAutoActivation('opencode-go/space-bunny-free', 'gpt-6-astra').allowed, true);
+  assert.equal(tierAllowsAutoActivation('gpt-6-luna', 'opencode-go/space-bunny-free').allowed, false);
+  assert.equal(tierAllowsAutoActivation('gpt-6-sol', 'opencode-go/longcat-2.5-preview-free').allowed, false);
+  assert.equal(tierAllowsAutoActivation('gpt-6-sol', 'gpt-6-luna').allowed, false);
+  assert.equal(tierAllowsAutoActivation('opencode-go/muse-spark-1.3-contributor', 'gpt-6-astra').allowed, false);
+  assert.match(tierAllowsAutoActivation('gpt-6-sol', 'opencode-go/muse-spark-1.3-contributor').reason, /does not rank/);
+  assert.match(tierAllowsAutoActivation('opencode-go/muse-spark-1.3-contributor', 'gpt-6-astra').reason, /source model/);
+});
+
+test('automatic activation needs a successor that is not weaker than the source', { timeout: 60000 }, (t) => {
+  const activated = (result) => result.calls.some(({ args }) => args[2] === 'activate' && args[3] === 'prepared-1');
+  const decisions = (result) => result.events.filter((event) => event.type === 'handoff' && /waits for the Owner/.test(event.text));
+
+  // The source pane names a weaker successor model. The Owner decides.
+  const weaker = runScenario(t, preparedScenario({}, [
+    { id: 'w-alpha:p1', workspace: 'w-alpha', label: 'orch', orch: true, agent: 'claude', status: 'working', model: 'claude-opus-5-5' },
+    { id: 'w-alpha:p2', workspace: 'w-alpha', label: null, orch: false, agent: 'codex', status: 'idle' },
+  ], { ticks: ['2026-09-26T12:00:00.000Z', '2026-09-26T12:02:00.000Z'] }));
+  assert.equal(activated(weaker), false);
+  assert.equal(weaker.records[0].status, 'prepared');
+  assert.equal(decisions(weaker).length, 1, 'the Owner decision is logged once, not once per tick');
+  assert.match(decisions(weaker)[0].text, /weaker than the source/);
+  assert.match(decisions(weaker)[0].text, /handoff activate prepared-1 --confirmed/);
+
+  // The kit does not rank this model, so the Owner decides.
+  const unknown = runScenario(t, preparedScenario({ model: 'opencode-go/mimo-v2.6-flash' }, [
+    { id: 'w-alpha:p1', workspace: 'w-alpha', label: 'orch', orch: true, agent: 'claude', status: 'working', model: 'gpt-6-luna' },
+    { id: 'w-alpha:p2', workspace: 'w-alpha', label: null, orch: false, agent: 'codex', status: 'idle' },
+  ]));
+  assert.equal(activated(unknown), false);
+  assert.equal(unknown.records[0].status, 'prepared');
+  assert.match(decisions(unknown)[0].text, /kit does not rank/);
+
+  // The successor is stronger than the source.
+  const stronger = runScenario(t, preparedScenario({ model: 'gpt-6-sol' }, [
+    { id: 'w-alpha:p1', workspace: 'w-alpha', label: 'orch', orch: true, agent: 'claude', status: 'working', model: 'claude-sonnet-5-5' },
+    { id: 'w-alpha:p2', workspace: 'w-alpha', label: null, orch: false, agent: 'codex', status: 'idle' },
+  ]));
+  assert.equal(activated(stronger), true);
+  assert.deepEqual(decisions(stronger), []);
+
+  // The source and the successor model sit in the same tier, so an equal model still hands over.
+  const equal = runScenario(t, preparedScenario({ model: 'gpt-6-sol' }, [
+    { id: 'w-alpha:p1', workspace: 'w-alpha', label: 'orch', orch: true, agent: 'claude', status: 'working', model: 'claude-opus-5-5' },
+    { id: 'w-alpha:p2', workspace: 'w-alpha', label: null, orch: false, agent: 'codex', status: 'idle' },
+  ]));
+  assert.equal(modelTier('claude-opus-5-5'), 5);
+  assert.equal(modelTier('gpt-6-sol'), 5);
+  assert.equal(activated(equal), true);
+  assert.deepEqual(decisions(equal), []);
+
+  // A source pane that exposes no model falls back to the default model of its kind.
+  const fromDefault = runScenario(t, preparedScenario({ model: 'opencode-go/space-bunny-free', toKind: 'pi' }, [
+    { id: 'w-alpha:p1', workspace: 'w-alpha', label: 'orch', orch: true, agent: 'claude', status: 'working' },
+    { id: 'w-alpha:p2', workspace: 'w-alpha', label: null, orch: false, agent: 'pi', status: 'idle' },
+  ]));
+  assert.equal(modelTier('claude-sonnet-5-5'), 4);
+  assert.equal(activated(fromDefault), false);
+  assert.match(decisions(fromDefault)[0].text, /weaker than the source model claude-sonnet-5-5/);
+
+  // A free successor does not take over from a metered source.
+  const free = runScenario(t, preparedScenario({ toKind: 'pi', model: 'opencode-go/space-bunny-free' }, [
+    { id: 'w-alpha:p1', workspace: 'w-alpha', label: 'orch', orch: true, agent: 'claude', status: 'working' },
+    { id: 'w-alpha:p2', workspace: 'w-alpha', label: null, orch: false, agent: 'pi', status: 'idle' },
+  ]));
+  assert.equal(activated(free), false);
+  assert.match(decisions(free)[0].text, /weaker than the source/);
+
+  // A free source hands over to a metered successor.
+  const fromFree = runScenario(t, preparedScenario({ model: 'gpt-6-luna' }, [
+    { id: 'w-alpha:p1', workspace: 'w-alpha', label: 'orch', orch: true, agent: 'claude', status: 'working', model: 'opencode/space-bunny-free' },
+    { id: 'w-alpha:p2', workspace: 'w-alpha', label: null, orch: false, agent: 'codex', status: 'idle' },
+  ]));
+  assert.equal(activated(fromFree), true);
+});
+
+test('automatic activation skips a held or inactive project and keeps its record', { timeout: 60000 }, (t) => {
+  const cases = [
+    { name: 'held by status', extra: { published: [{ slug: 'alpha', project: 'Alpha', workspace: 'w-alpha', status: 'Stood down' }] } },
+    { name: 'held by summary', extra: { published: [{ slug: 'alpha', project: 'Alpha', workspace: 'w-alpha', summary: 'Paused by the Owner.' }] } },
+    { name: 'paused allocation', extra: { projects: { alpha: { mode: 'paused' } } } },
+    {
+      name: 'no working agent and no running worker',
+      panes: [
+        { id: 'w-alpha:p1', workspace: 'w-alpha', label: 'orch', orch: true, agent: null, status: null, model: 'gpt-6-luna' },
+        { id: 'w-alpha:p2', workspace: 'w-alpha', label: null, orch: false, agent: 'codex', status: 'idle' },
+      ],
+    },
+  ];
+  for (const entry of cases) {
+    const result = runScenario(t, preparedScenario({}, entry.panes, entry.extra));
+    assert.equal(result.calls.some(({ args }) => args[2] === 'activate'), false, entry.name);
+    assert.equal(result.records[0].status, 'prepared', entry.name);
+  }
 });
 
 // The notice probe runs several engine ticks against fake Herdr snapshots and a fake Herdr runner.
@@ -759,4 +980,10 @@ test('an exit-zero plain, empty, or result-free success is recorded once', { tim
   ]);
   const at = Date.parse('2026-09-27T12:01:00.000Z');
   assert.deepEqual(result.notices, { 'handoff-boss@owner': at, 'handoff-boss@w-boss:p3': at, 'handoff-boss@w-boss:p4': at });
+});
+
+test('a capitalized task or other-project clause does not hold the project', () => {
+  assert.equal(summaryHolds('Task T5 is paused.', []), false);
+  assert.equal(summaryHolds('Another project is paused.', []), false);
+  assert.equal(summaryHolds('The project is paused.', []), true);
 });

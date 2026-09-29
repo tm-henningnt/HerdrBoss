@@ -8,7 +8,7 @@ import { evaluate, renderBulletin, fmtDuration, providerName, broadcastTargets, 
 import { listProjects } from './projects.js';
 import { checkHarness, readProjectRepos } from './harness.js';
 import { loadModels, loadProjectConfig, KIT_ROOT, workerConfigView } from './kit/config.js';
-import { loadPolicy, clearExpiredOneOffGoals, deriveControl, migrateWorkspacePolicy, providerFor, pickSuccessor, laneStatus, leastOverProvider, machineLimits, unmeteredLane, unavailablePiModels, mergeModels } from './control.js';
+import { loadPolicy, clearExpiredOneOffGoals, deriveControl, migrateWorkspacePolicy, providerFor, selectModel, pickSuccessor, laneStatus, leastOverProvider, machineLimits, unmeteredLane, unavailablePiModels, mergeModels } from './control.js';
 import { quotaUsageToday, recordQuotaSnapshot, readUsage } from './usage.js';
 import { renderNightReport } from './night-report.js';
 import { listBrowserSessions, cdpResponds, browserProcessCheck } from './browser-pool.js';
@@ -194,6 +194,99 @@ export function inspectWorkerNoReports(panes, runs, observed = {}, now = Date.no
 
 function handoffCandidates(control) {
   return [...(control.handoffs || []), ...(control.bossHandoff ? [control.bossHandoff] : [])];
+}
+
+// The cost order of the models that kit/models.md ranks, lowest tier first. Two models in one
+// tier cost the same.
+const MODEL_TIERS = {
+  'opencode-go/deepseek-v4.1-flash': 2,
+  'gpt-6-luna': 3,
+  'claude-sonnet-5-5': 4,
+  'gpt-6-sol': 5,
+  'claude-opus-5-5': 5,
+  'gpt-6-astra': 6,
+};
+
+// The free opencode-go models that kit/models.md lists as unmetered. The other opencode-go models
+// use the Go quota, and the kit does not rank them.
+const FREE_OPENCODE_GO_MODELS = new Set([
+  'opencode-go/space-bunny-free',
+  'opencode-go/longcat-2.5-preview-free',
+]);
+
+// The tier of a model, or null when the kit does not rank it.
+export function modelTier(model) {
+  if (typeof model !== 'string' || !model.trim()) return null;
+  // Every opencode model is free, and so are the free opencode-go models.
+  if (model.startsWith('opencode/') || FREE_OPENCODE_GO_MODELS.has(model)) return 1;
+  return MODEL_TIERS[model] ?? null;
+}
+
+// Whether an automatic activation may hand a control pane to a successor model.
+export function tierAllowsAutoActivation(sourceModel, targetModel) {
+  const target = modelTier(targetModel);
+  if (target === null) return { allowed: false, reason: `the kit does not rank ${targetModel}` };
+  const source = modelTier(sourceModel);
+  if (source === null) return { allowed: false, reason: `the kit does not rank the source model ${sourceModel}` };
+  if (target < source) return { allowed: false, reason: `${targetModel} is weaker than the source model ${sourceModel}` };
+  return { allowed: true, reason: '' };
+}
+
+// A published status that holds a project. Case, spacing, and hyphen variants count as one word.
+const HELD_STATUS_WORDS = new Set(['paused', 'pause', 'stood down', 'stand down', 'on hold', 'held', 'hold']);
+
+// One clause of a published summary, split on the marks that end a sentence.
+const SUMMARY_CLAUSE_SPLIT = /[.;!?\n]+/;
+// A clause that reports the state of another project, or of one task, does not hold this project.
+// A clause that names this project's own workers does hold it.
+const OTHER_HOLD_CLAUSE = /\b(other|another) projects?\b|\b(tasks?|tickets?|issues?)\b/i;
+const HOLD_WORD = /\b(paused?|stood down|stand down|on hold)\b/i;
+
+const mentions = (clause, name) => new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(clause);
+
+// Whether a published summary holds the project it belongs to. The names of the other published
+// projects are the ones a summary may report on without holding its own project.
+export function summaryHolds(summary, otherNames = []) {
+  if (!HOLD_WORD.test(String(summary || ''))) return false;
+  const names = otherNames.filter((name) => typeof name === 'string' && name.trim().length > 2);
+  return String(summary).split(SUMMARY_CLAUSE_SPLIT).some((clause) => {
+    if (!HOLD_WORD.test(clause) || OTHER_HOLD_CLAUSE.test(clause)) return false;
+    return !names.some((name) => mentions(clause, name.trim()));
+  });
+}
+
+// A project the Owner holds: a published status or summary that says paused or stood down, or a
+// paused allocation mode. A published file of another project never holds this one.
+export function projectHeld(slug, projects = [], control = null) {
+  if (control?.projects?.[slug]?.effectiveMode === 'paused') return true;
+  const published = (projects || []).find((entry) => entry.slug === slug);
+  if (!published) return false;
+  if (HELD_STATUS_WORDS.has(String(published.status || '').toLowerCase().replace(/[\s_-]+/g, ' ').trim())) return true;
+  const others = (projects || []).filter((entry) => entry.slug !== slug).flatMap((entry) => [entry.project, entry.slug]);
+  return summaryHolds(published.summary, others);
+}
+
+// A workspace is active when its allocation reports a running worker, or when the pane snapshot
+// holds a pane that runs an agent in a working state. An absent, blocked, idle, or done agent is not working.
+export function workspaceActive(slug, workspace, herdr, control) {
+  if (Number(control?.projects?.[slug]?.running) > 0) return true;
+  return (herdr?.panes || []).some((pane) => pane.workspace === workspace && pane.agent && pane.status === 'working');
+}
+
+// The Boss workspace is the one that holds the Boss pane.
+export const bossWorkspace = (herdr, workspace) => Boolean(workspace) && (herdr?.panes || []).some((pane) => pane.label === 'boss' && pane.workspace === workspace);
+
+const BOSS_NAMES = new Set(['boss', 'boss previous']);
+const isBossName = (value) => BOSS_NAMES.has(String(value || '').toLowerCase());
+
+// Whether a candidate or a record belongs to the Boss. A pane label can change, so the record
+// metadata decides: the boss flag, the Boss project, the Boss display label, or a workspace that
+// still holds the Boss pane. The Owner prepares and activates a Boss handover by hand.
+export function isBossHandoff(item, herdr) {
+  if (!item) return false;
+  if (item.boss === true) return true;
+  if (isBossName(item.project) || isBossName(item.displayLabel) || isBossName(item.label)) return true;
+  return bossWorkspace(herdr, item.workspace);
 }
 
 export function alertPromptDue(alert, record, now, cooldown) {
@@ -798,7 +891,7 @@ export class Engine extends EventEmitter {
         catch (e) { this.log('error', `Handover peer notice check failed: ${e.message}`); }
       }
       if (this.act && policy.autoHandover) {
-        try { await this.autoHandover(control, herdr, policy, now, snap.lanes); }
+        try { await this.autoHandover(control, herdr, policy, now, snap.lanes, snap.projects); }
         catch (e) { this.log('error', `Automatic handover check failed: ${e.message}`); }
       }
       writeJson(MEMORY_FILE, this.memory);
@@ -973,7 +1066,7 @@ export class Engine extends EventEmitter {
       .finally(() => { this.denialScanRunning = false; });
   }
 
-  async autoHandover(control, herdr, policy, now, lanes = {}) {
+  async autoHandover(control, herdr, policy, now, lanes = {}, projects = []) {
     // Never switch labels using stale quota data or a guessed successor state.
     if (!this.quotasAt || this.quotasCached || now - this.quotasAt > (this.cfg.quotaSeconds + this.cfg.tickSeconds) * 1000) return;
     this.memory.autoHandoverAttempts ||= {};
@@ -990,6 +1083,24 @@ export class Engine extends EventEmitter {
       const target = herdr?.panes?.find((p) => p.id === item.newPane);
       const source = herdr?.panes?.find((p) => p.id === item.sourcePane);
       if (target?.agent !== item.toKind || !['idle', 'done'].includes(target.status) || source?.label !== item.label) continue;
+      // The Boss is never an automatic source, and a held or inactive project keeps its prepared
+      // record until the Owner or the project itself makes the workspace eligible again.
+      if (isBossHandoff(item, herdr) || isBossName(source?.label)) continue;
+      if (!workspaceActive(item.project, item.workspace, herdr, control)) continue;
+      if (projectHeld(item.project, projects, control)) continue;
+      // A weaker or unranked successor model leaves the control pane where it is. The record stays
+      // prepared, and the Owner activates it by hand when the weaker model is the right choice.
+      const sourceModel = selectModel(item.fromKind, source?.model, this.models, policy);
+      const tier = tierAllowsAutoActivation(sourceModel, item.model);
+      if (!tier.allowed) {
+        const decisionKey = `owner-decision:${item.id}`;
+        if (!this.memory.autoHandoverAttempts[decisionKey]) {
+          this.memory.autoHandoverAttempts[decisionKey] = now;
+          this.log('handoff', `Automatic activation of ${item.toKind} ${item.model} for ${item.label || item.project} waits for the Owner: ${tier.reason}. Activate it with herdr-boss handoff activate ${item.id} --confirmed.`,
+            { project: item.project, pane: item.newPane });
+        }
+        continue;
+      }
       const key = `activate:${item.id}`;
       if (now - (this.memory.autoHandoverAttempts[key] || 0) < 60000) continue;
       this.memory.autoHandoverAttempts[key] = now;
@@ -1006,19 +1117,15 @@ export class Engine extends EventEmitter {
       const provider = providerFor(last.kind, policy.preferredModels?.[last.kind] ?? this.models.kinds[last.kind]?.defaultModel, policy);
       const window = this.quotas.find((q) => q.provider === provider && !q.error)?.windows?.find((w) => !w.extra && w.usedPercent >= policy.autoHandoverPercent);
       if (!window) return [];
-      return [{ project: p.slug, pane: p.orch.pane, fromKind: last.kind, sessionId: null, window, target: pickSuccessor(p, last.kind, provider, policy, { ...control, ...successorLimits }, now) }];
+      return [{ project: p.slug, workspace: p.workspace, pane: p.orch.pane, fromKind: last.kind, sessionId: null, window, target: pickSuccessor(p, last.kind, provider, policy, { ...control, ...successorLimits }, now) }];
     });
-    const stoppedBoss = (herdr?.panes || []).filter((pane) => pane.label === 'boss' && !pane.agent).flatMap((pane) => {
-      const last = this.memory.lastOrchestrators[pane.workspace];
-      if (!last?.kind || last.pane !== pane.id) return [];
-      const provider = providerFor(last.kind, policy.preferredModels?.[last.kind] ?? this.models.kinds[last.kind]?.defaultModel, policy);
-      const window = this.quotas.find((q) => q.provider === provider && !q.error)?.windows?.find((w) => !w.extra && w.usedPercent >= policy.autoHandoverPercent);
-      if (!window) return [];
-      const project = { excludedKinds: [], excludedModels: [] };
-      return [{ project: 'Boss', label: 'Boss', boss: true, workspace: pane.workspace, pane: pane.id, fromKind: last.kind, sessionId: null, window, target: pickSuccessor(project, last.kind, provider, policy, { ...control, ...successorLimits }, now) }];
-    });
-    for (const h of [...handoffCandidates(control), ...stopped, ...stoppedBoss]) {
+    // The Boss is never an automatic source. The Owner prepares a Boss successor by hand.
+    for (const h of [...handoffCandidates(control), ...stopped]) {
       if (!h.window) continue;
+      if (isBossHandoff(h, herdr)) continue;
+      // A held or inactive project waits. A stopped project with a working worker stays eligible.
+      if (projectHeld(h.project, projects, control)) continue;
+      if (!workspaceActive(h.project, h.workspace, herdr, control)) continue;
       // A stale row is data for pacing, but not proof for a handover.
       if (h.provider && this.quotas.find((q) => q.provider === h.provider)?.stale) continue;
       if (records.some((x) => x.sourcePane === h.pane && ['prepared', 'preparing', 'needs-inspection'].includes(x.status))) continue;
