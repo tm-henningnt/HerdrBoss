@@ -186,7 +186,8 @@ test('the engine state carries the stored night state', (t) => {
   const temp = tempDir(t);
   const dataDir = path.join(temp, 'data');
   fs.mkdirSync(dataDir, { recursive: true });
-  writeNight({ active: true, since: new Date(NOW).toISOString(), until: UNTIL, by: 'owner', quietHours: true }, { dataDir });
+  // The engine ticks with the real clock, so the end time must be ahead of the real time, not a fixed date.
+  writeNight({ active: true, since: new Date(Date.now() - 60000).toISOString(), until: new Date(Date.now() + 3600000).toISOString(), by: 'owner', quietHours: true }, { dataDir });
   const engineUrl = new URL('../src/engine.js', import.meta.url).href;
   const configUrl = new URL('../src/config.js', import.meta.url).href;
   const script = `
