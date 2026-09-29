@@ -1,4 +1,4 @@
-<!-- herdr-boss kit v=97f8b16b116c -->
+<!-- herdr-boss kit v=8f9292cd697c -->
 Herdr Boss writes this file. Do not edit it. Run herdr-boss kit install to update it.
 
 # Herdr Boss orchestration kit
@@ -44,6 +44,7 @@ These are the shared operating rules for the orchestrator of this project.
 - Use only this project's browser.
 - Coordinate tab ownership with the orchestrator before sending browser input.
 - Record measured worker usage in `.worker/report.json` and run `herdr-boss worker collect --record` after review.
+- At review, record the model outcome with `worker collect --record --model-result` and, for rework or failure, `--model-reason`.
 - Prepare a successor with `herdr-boss handoff plan` and `handoff prepare` when the orchestrator's quota is at risk.
 - A handoff note carries no rules and no pane IDs.
 - Mark a script-written data file with `<!-- herdr-boss: data -->` on its first line. `herdr-boss check agents` skips it.
