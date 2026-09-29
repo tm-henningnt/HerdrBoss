@@ -25,3 +25,7 @@ Summary: Compute the kit revision from installed kit assets only.
 ## d5a3318be296
 Impact: useful
 Summary: Add gpt-6.1-sol as the trial Codex model for tougher tasks; gpt-6-luna stays the routine default; remove gpt-6-sol.
+
+## 51683b8cf0ee
+Impact: useful
+Summary: Add editable Watch routine texts (kit/watch) that the service runs during a watch.
