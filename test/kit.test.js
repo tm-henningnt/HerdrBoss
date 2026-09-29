@@ -3264,3 +3264,13 @@ test('a numeric string issue in a worker report is normalized with a warning', a
   const brief = fs.readFileSync(path.resolve('kit/templates/worker-brief.md'), 'utf8');
   assert.ok(brief.includes('"issue": 204,'));
 });
+
+test('worker start keeps every repeated --allow path in the run record', () => {
+  const f = setupFixture(null);
+  const result = runKitCommand('worker', ['start', 'three-allow', '--kind', 'pi', '--model', 'opencode-go/space-bunny-free', '--issue', '331', '--task', 'x',
+    '--allow', 'src/a.js', '--allow', 'test/a.test.js', '--allow', 'docs/a.md'], {
+    config: f.config, herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+  });
+  const record = JSON.parse(fs.readFileSync(result.recordFile, 'utf8'));
+  for (const item of ['src/a.js', 'test/a.test.js', 'docs/a.md']) assert.ok(record.allowedPaths.includes(item), `${item} in ${record.allowedPaths.join(', ')}`);
+});

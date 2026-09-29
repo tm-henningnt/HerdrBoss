@@ -32,7 +32,7 @@ Decide implementation, product, and design details, naming, thresholds, test des
 ## Integrate and release
 
 1. Review each worker diff, and run `npm test` in the worker worktree.
-2. Merge the branch into `main`.
+2. Merge the branch in a separate integration worktree, never in the `main` checkout. The CLI and the dashboard run straight from `main`, so a conflict marker there breaks `herdr-boss` for every project. Resolve conflicts and run the tests in the integration worktree, then move `main` forward with `git merge --ff-only`.
 3. Run `npm test` on `main`.
 4. Restart the service: `launchctl kickstart -k gui/$(id -u)/no.tallmaker.herdr-boss`.
 5. Check that it serves: `curl -fsS -o /dev/null -w '%{http_code}' http://127.0.0.1:4477/api/state` must print `200` within 30 seconds.
