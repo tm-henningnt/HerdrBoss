@@ -62,3 +62,72 @@ export function readMachineSamples({ dataDir = DATA_DIR, sinceMs = null } = {}) 
   }
   return lines;
 }
+
+export const MACHINE_HOURS_MAX_DAYS = 14;
+const DAY_MS = 86400000;
+
+const finite = (value) => (typeof value === 'number' && Number.isFinite(value) ? value : null);
+const swapPercent = (line) => {
+  const used = finite(line.swapMB);
+  const total = finite(line.swapTotalMB);
+  return used !== null && total !== null && total > 0 ? (used / total) * 100 : null;
+};
+
+// Overload: swap above 90 percent with at least 1 GB in use, or a 5-minute load above 3 times the cores.
+export function isOverloadSample(line) {
+  const pct = swapPercent(line);
+  if (pct !== null && pct > 90 && line.swapMB >= 1024) return true;
+  const l5 = finite(line.l5);
+  const cpus = finite(line.cpus);
+  return l5 !== null && cpus !== null && cpus > 0 && l5 > 3 * cpus;
+}
+
+// Idle wait: the full-suite queue had waiters and the CPU was not the reason.
+export function isIdleWaitSample(line) {
+  const cpu = finite(line.cpu);
+  return finite(line.waiters) > 0 && cpu !== null && cpu < 50;
+}
+
+export function clampSummaryDays(days) {
+  const n = Math.floor(Number(days));
+  return Number.isFinite(n) && n >= 1 ? Math.min(n, MACHINE_HOURS_MAX_DAYS) : MACHINE_HOURS_MAX_DAYS;
+}
+
+// One pass over the samples of the last `days` days. The hour is the local hour of the day, 0 to 23.
+// A minute without a sample is missing data. `coverage` is the share of the window minutes that hold a sample.
+export function summarizeHours({ samples = null, dataDir = DATA_DIR, days = MACHINE_HOURS_MAX_DAYS, now = Date.now() } = {}) {
+  const window = clampSummaryDays(days);
+  const sinceMs = now - window * DAY_MS;
+  const lines = (samples || readMachineSamples({ dataDir, sinceMs })).filter((line) => {
+    const at = Date.parse(line?.at);
+    return Number.isFinite(at) && at >= sinceMs && at <= now;
+  });
+  const hours = Array.from({ length: 24 }, (_, hour) => ({
+    hour, samples: 0, overloadMin: 0, idleWaitMin: 0, swapPeakPct: null, memFreeMin: null, holderKinds: {},
+  }));
+  const dates = new Set();
+  const totals = { samples: 0, overloadMin: 0, idleWaitMin: 0 };
+  for (const line of lines) {
+    const date = new Date(line.at);
+    const row = hours[date.getHours()];
+    dates.add(`${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`);
+    row.samples += 1;
+    totals.samples += 1;
+    if (isOverloadSample(line)) { row.overloadMin += 1; totals.overloadMin += 1; }
+    if (isIdleWaitSample(line)) { row.idleWaitMin += 1; totals.idleWaitMin += 1; }
+    const pct = swapPercent(line);
+    if (pct !== null) row.swapPeakPct = Math.max(row.swapPeakPct ?? 0, Math.round(pct));
+    const memFree = finite(line.memFree);
+    if (memFree !== null) row.memFreeMin = Math.min(row.memFreeMin ?? memFree, memFree);
+    for (const kind of Array.isArray(line.holders) ? line.holders : []) {
+      if (typeof kind === 'string' && kind) row.holderKinds[kind] = (row.holderKinds[kind] ?? 0) + 1;
+    }
+  }
+  return {
+    days: window,
+    daysWithData: dates.size,
+    hours,
+    totals,
+    coverage: +Math.min(1, totals.samples / (window * 1440)).toFixed(3),
+  };
+}

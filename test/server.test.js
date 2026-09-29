@@ -2339,3 +2339,63 @@ test('the pages show the avatar, the Settings page manages the image, and the co
   assert.match(guide, /The composer hides the scroll bar until the text is longer than 6 lines\./);
   assert.match(guide, /## Avatars/);
 });
+
+test('GET /api/machine-hours summarizes the sample file, limits days, and works in the read-only preview', { timeout: 20000 }, async (t) => {
+  const cfg = loadConfig();
+  cfg.host = '127.0.0.1';
+  cfg.port = 0;
+  cfg.tickSeconds = 3600;
+  const { server, close } = serve(cfg, {
+    readOnlyPreview: true,
+    createEngine: (_config, actions) => {
+      const engine = new EventEmitter();
+      engine.act = actions.act;
+      engine.push = actions.push;
+      engine.state = {};
+      engine.tick = async () => engine.state;
+      engine.log = () => {};
+      return engine;
+    },
+  });
+  const samplesFile = path.join(dataDir, 'machine-samples.jsonl');
+  t.after(async () => {
+    await close();
+    fs.rmSync(samplesFile, { force: true });
+  });
+  await new Promise((resolve, reject) => {
+    server.once('listening', resolve);
+    server.once('error', reject);
+  });
+  const base = `http://127.0.0.1:${server.address().port}`;
+
+  const empty = await fetch(`${base}/api/machine-hours`);
+  assert.equal(empty.status, 200);
+  const emptyBody = await empty.json();
+  assert.equal(emptyBody.days, 14);
+  assert.equal(emptyBody.hours.length, 24);
+  assert.equal(emptyBody.totals.samples, 0);
+  assert.equal(emptyBody.coverage, 0);
+
+  const at = new Date(Date.now() - 3600000);
+  at.setMinutes(0, 0, 0);
+  const line = { at: at.toISOString(), l1: 1, l5: 40, l15: 1, cpus: 10, cpu: 10, memFree: 30, memGB: 24, swapMB: 100, swapTotalMB: 4096, holders: ['suite'], waiters: 1, waiterKinds: ['push'] };
+  const old = { ...line, at: new Date(Date.now() - 5 * 86400000).toISOString() };
+  fs.writeFileSync(samplesFile, `${JSON.stringify(line)}\nbroken line\n${JSON.stringify(old)}\n`);
+
+  const body = await (await fetch(`${base}/api/machine-hours?days=14`)).json();
+  assert.equal(body.totals.samples, 2);
+  assert.equal(body.daysWithData, 2);
+  assert.equal(body.hours[at.getHours()].overloadMin, 1);
+  assert.equal(body.hours[at.getHours()].idleWaitMin, 1);
+  assert.deepEqual(body.hours[at.getHours()].holderKinds, { suite: 1 });
+  assert.doesNotMatch(JSON.stringify(body), /\/Users|\/tmp|herdr-preview/);
+
+  assert.equal((await (await fetch(`${base}/api/machine-hours?days=1`)).json()).totals.samples, 1);
+  assert.equal((await (await fetch(`${base}/api/machine-hours?days=99`)).json()).days, 14);
+  assert.equal((await (await fetch(`${base}/api/machine-hours?days=0`)).json()).days, 14);
+  assert.equal((await (await fetch(`${base}/api/machine-hours?days=abc`)).json()).days, 14);
+
+  for (const method of ['POST', 'PUT', 'DELETE']) {
+    assert.equal((await fetch(`${base}/api/machine-hours`, { method, body: method === 'DELETE' ? undefined : '{}' })).status, 403, method);
+  }
+});

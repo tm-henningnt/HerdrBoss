@@ -1216,7 +1216,23 @@ Each line has these keys:
 
 A key has the value `null` when the collector cannot read it. A line holds no project name, pane id, path, or command.
 
-When the file passes 3 MB, the engine renames it to `machine-samples.1.jsonl` and replaces the older rotated file. Two files hold about 18 days. The dashboard does not show the samples yet.
+When the file passes 3 MB, the engine renames it to `machine-samples.1.jsonl` and replaces the older rotated file. Two files hold about 18 days.
+
+Two definitions classify a sample:
+
+- An overload minute has swap above 90 percent with at least 1 GB in use, or a 5-minute load above 3 times the cores.
+- An idle-wait minute has at least one waiter in the `full-suite` queue while `cpu` is below 50.
+
+`GET /api/machine-hours?days=N` returns the samples of the last N days, grouped by the local hour of the day. `days` is a whole number from 1 to 14. A missing or invalid value gives 14. The route reads both sample files, skips a line that does not parse, and allows GET in the read-only preview.
+
+The response has these keys:
+
+- `days`, `daysWithData`: the window, and the number of local dates that hold a sample.
+- `hours`: 24 rows. Each row has `hour` (0 to 23), `samples`, `overloadMin`, `idleWaitMin`, `swapPeakPct`, `memFreeMin`, and `holderKinds`.
+- `totals`: `samples`, `overloadMin`, and `idleWaitMin` over all hours.
+- `coverage`: `samples` divided by `days` times 1440.
+
+`overloadMin` and `idleWaitMin` count samples, and one sample is one minute. A minute without a sample is missing data. It is not a quiet minute. `swapPeakPct` and `memFreeMin` are the highest swap percent and the lowest free memory of the hour, or `null`. `holderKinds` counts the samples for each holder kind. The response holds no project name, pane id, or path. The dashboard does not show the hours yet.
 
 Before it removes a worktree, `herdr-boss worktree prune --apply` checks for processes whose current working directory is inside that worktree. It reports parent-PID-1 processes in missing or prunable worktree paths. Stop those processes before cleanup. Herdr Boss removes no worktrees if it cannot scan process directories. It also keeps worktrees that are dirty, unmerged, primary, used by a live pane, or uninspectable. Herdr Boss sends a notice about a parent-PID-1 process in a removed worktree only to that repository's `orch` workspace.
 
@@ -1230,6 +1246,7 @@ The dashboard uses these routes. A request from another host needs the access to
 | `GET`, `PUT /api/policy` | Read or replace the policy. |
 | `GET /api/models` | The model allow-list. |
 | `GET`, `POST /api/usage` | Read usage, or record an event. |
+| `GET /api/machine-hours?days=N` | The machine samples of the last N days (1 to 14, default 14) by local hour of day: overload minutes, idle-wait minutes, swap peak, lowest free memory, holder kinds, and coverage. |
 | `GET /api/denials` | The denial counts of the last 7 days by harness, model, and cause, the harness totals, and the trend of each cause. |
 | `GET /api/projects`, `PUT`, `DELETE /api/projects/SLUG` | Read, write, or delete project status. |
 | `GET /api/handoffs`, `GET /api/handoffs/output?id=ID` | Handover records, and a successor's pane output. |
