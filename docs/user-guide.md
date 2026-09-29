@@ -203,6 +203,10 @@ The Settings page has one section for each harness. A harness section holds the 
 
 The **Service settings** table shows the values that the service uses. Each row shows whether the value comes from `config.json` or a default. The table groups rows under Machine, Quota, Status, Workers, Browsers, and Service. Set values with inputs, then select **Save** for that group. Herdr Boss writes only those values to `config.json` and applies them at once. Keep the quota warning below the critical value. Rows without inputs stay read-only. Change in `config.json` and restart the service. The table does not show access or Roamgate settings.
 
+### Avatars
+
+The Settings page has an **Avatars** section. It has one row for the Boss and one row for each project. A row shows the avatar, an **Upload image** control, and a **Reset** control. The image is a PNG, JPEG, or WebP file of at most 512 KB. See [Avatars](#avatars) for the rules, the storage, and the routes.
+
 The **Harness readiness** table shows the status of each harness entry that orchestration needs. Each row shows the status, the area, and the item. The status is `ok`, `missing`, or `bad`. The table is read-only. It shows no file path and no setting value. Herdr Boss reads these entries at each service start and then every 10 minutes. Run `herdr-boss harness sync` to see the changes to make.
 
 The model catalog is `kit/models.json`. The local policy can add model strings to one harness. Herdr Boss merges these extra models into the allow-list of that harness in worker start, handoff plan and prepare, the lanes and the bulletin, Settings, Allocation, and `herdr-boss models`. An extra model uses the launch arguments and effort rules of its harness.
@@ -503,8 +507,8 @@ The `/agents` page has two views. The switch at the top of the page selects the 
 The Chart view shows the organization as a chart. The chart has four levels:
 
 1. The **Owner** node shows **At the Mac** or **Away**. The value comes from the machine idle time.
-2. The **Boss** node shows the pane labeled `boss`, its harness, state, quota use, and handover state. The workers in the Boss workspace are below it.
-3. Each **project** node shows the orchestrator pane, harness, and state. It also shows the current task, the worker slots in use against the slots and share, and the handover state. The nodes use the project order.
+2. The **Boss** node shows the pane labeled `boss`, its harness, state, quota use, and handover state. It also shows the avatar of the Boss. The workers in the Boss workspace are below it.
+3. Each **project** node shows the orchestrator pane, harness, and state. It also shows the avatar of the project, the current task, the worker slots in use against the slots and share, and the handover state. The nodes use the project order.
 4. Each **worker** node shows the agent name, harness, state, and task ID.
 
 Select **Details** on a node to show its recorded values. Select **Messages** on the Boss node or on a project node to open its thread. The page cannot change resources. See [Owner messages](#owner-messages).
@@ -639,7 +643,7 @@ The Mailbox page at `/mailbox` is the inbox of the Owner. It lists replies from 
 
 ### Items
 
-Use the folder list on the left to open **Needs you**, **Updates**, **Sent**, or **Done**. Each folder shows its item count. The folder pane shows a read-only line with the limits: the retention and the send limit. The page keeps the selected folder in the address and in browser storage. When Needs you has open items, it is the default folder. When it has no items and you have selected another folder before, the page restores that folder. Otherwise, Needs you is the default folder.
+Use the folder list on the left to open **Needs you**, **Updates**, **Sent**, or **Done**. Each folder shows its item count. Each row starts with the avatar of the Boss or of the project that sent the item. The folder pane shows a read-only line with the limits: the retention and the send limit. The page keeps the selected folder in the address and in browser storage. When Needs you has open items, it is the default folder. When it has no items and you have selected another folder before, the page restores that folder. Otherwise, Needs you is the default folder.
 
 - **Needs you** shows open items with action `answer`, `approve`, or `decide`, newest first. When this folder is empty, the page shows “Nothing needs you.” and a link to Updates.
 - **Updates** shows open items with action `read` or no action. Opening an item sets `readAt`. The phone mail icon shows the unread Updates count.
@@ -693,11 +697,36 @@ An icon with nothing to show is faded. It has opacity 0.35 and no badge. An icon
 
 Both mailbox `POST` routes have the same gates as `POST /api/messages`: a loopback request or an authenticated remote session, and a same-origin request. A read-only preview refuses them with HTTP 403. The 30-day retention of the store applies to the mailbox items.
 
+## Avatars
+
+The Boss and each project have an avatar. The page shows the avatar in the Chat list, in the Chat header, next to the first message of each run of messages from the other party, in each Mailbox row, and on the orchestrator cards of the Agents chart. The avatar is decoration. It is `aria-hidden`, and the name of the party stays as text.
+
+### Generated avatar
+
+`avatarSvg(slug, { title, size })` in `public/app.js` builds the avatar as an inline SVG. The page uses the sizes 20, 28, and 36 px.
+
+- A hash of the slug picks one hue of a fixed palette of 12 hues. The same slug always gets the same hue. The palette has no pure white and no pure black.
+- The initials come from the project display name, the same name that Settings shows. The chat title and then the slug are the fallbacks. The page takes the first two letters of the first two words. A camel-case name starts a new word, so `TmProcessMining` gives `TP` and `HerdrBoss` gives `HB`. Every page uses this one title, so one project has one avatar in the Chat, the Mailbox, the Agents chart, and Settings.
+- The initials take white or a dark color, whichever has the better contrast on the circle. Every hue of the palette reaches the WCAG AA contrast of 4.5 with that color.
+- The slug `boss` gets a fixed crown in the accent color, not initials.
+
+### Image of the Owner
+
+The Owner can use an own image for the Boss and for each project. The page uses the image when one is stored, and the generated avatar otherwise.
+
+- The Settings page has an **Avatars** section. It has one row for the Boss and one row for each project. **Upload image** stores an image. **Reset** removes it.
+- An image is a PNG, JPEG, or WebP file of at most 512 KB. The service checks the magic bytes, not only the content type. It refuses SVG and every other format. An SVG file can carry a script.
+- The service stores the file as `<data dir>/avatars/<slug>.<ext>` with mode `0600`. A new image replaces the file of that slug. A removed image puts the generated avatar back.
+- The write routes are dashboard write routes. A read-only preview refuses an upload and a remove with HTTP 403.
+- Herdr Boss calls no image API. It stores no key.
+
 ## Chat page
 
 The Chat page at `/chat` is the conversation view of the Owner. One chat holds the messages between the Owner and the Boss. One chat holds the messages between the Owner and a project orchestrator. A worker has no chat. Use the Mailbox for items that need an answer, an approval, or a decision. Use the Chat for a normal conversation. Both pages read the same message records.
 
 The page has no large heading. Above the conversation there is one slim header. It holds the avatar of the chat and the chat name. On a phone the header also holds the **Back** control.
+
+The initials come from the project display name. The slug is the fallback. Every page uses that one name, so one project has the same avatar in the Chat list, the Chat header, the bubbles, the Mailbox, the Agents chart, and Settings.
 
 ### Channels
 
@@ -718,19 +747,19 @@ A chat message that needs an action shows in Chat with its card or its link. Its
 The Chat is compact, in the style of a phone messenger.
 
 - A bubble has 6 to 8 px of padding and a width of at most 75%. It has no card frame. The time is 11 px and sits in the corner of the bubble.
-- The composer is one line. It grows to 6 lines. The send button is a round button of 36 px. Its touch area is 44 px on a phone.
+- The composer is one line. It grows to 6 lines. The send button is a round button of 36 px. Its touch area is 44 px on a phone. The composer hides the scroll bar until the text is longer than 6 lines.
 - A chat list row is 52 px high. The first line holds the title and the time. The second line holds the last message and the unread badge.
 - The theme sets the colors. The page keeps its contrast in the light theme and in the dark theme.
 
 ### List
 
-Each row shows the chat title and the time on the first line. The second line shows the last message on one line and the unread badge. The last message is cut with an ellipsis. A mail report shows as `Report: TITLE`. The chat with the newest last message comes first. A chat with no message comes after a chat with a message. The menu badge shows the total unread count of all chats. A mail report does not count as chat unread.
+Each row shows the chat title and the time on the first line. The second line shows the last message on one line and the unread badge. The last message is cut with an ellipsis. Each row starts with the avatar of that chat. A mail report shows as `Report: TITLE`. The chat with the newest last message comes first. A chat with no message comes after a chat with a message. The menu badge shows the total unread count of all chats. A mail report does not count as chat unread.
 
 The page reads `GET /api/chats`. It follows the `message` event on `GET /api/events`. It never reloads the page.
 
 ### Conversation
 
-Select a row to open the chat. The conversation shows the messages in time order. An Owner message sits on the right. An agent message sits on the left. Each bubble shows the text, the sender, and the time. An Owner bubble also shows the delivery state from the record: `queued`, `delivered`, `relayed`, or `failed` with the reason.
+Select a row to open the chat. The conversation shows the messages in time order. An Owner message sits on the right. An agent message sits on the left. The avatar of the agent shows at the first message of each run of messages from that agent. It does not show again inside the same run. Each bubble shows the text, the sender, and the time. An Owner bubble also shows the delivery state from the record: `queued`, `delivered`, `relayed`, or `failed` with the reason.
 
 Opening a chat calls `POST /api/chats/<thread>/read`. It marks each chat record to the Owner as read. A mail report keeps its own read state. The page stops the count for that chat. A read-only preview refuses the read, so the count stays.
 
@@ -740,7 +769,7 @@ A new message goes at the bottom. The page scrolls down only when you already re
 
 ### Composer
 
-Select the round send button or press Enter to send the message. Select Shift and press Enter to make a new line. The text area grows with the text, up to 6 lines. A message holds at most 2000 characters. The service accepts at most 10 Owner messages a minute. The focus stays in the text area after a send.
+Select the round send button or press Enter to send the message. Select Shift and press Enter to make a new line. The text area grows with the text, up to 6 lines. The composer hides the scroll bar until the text is longer than 6 lines. A message holds at most 2000 characters. The service accepts at most 10 Owner messages a minute. The focus stays in the text area after a send.
 
 The page adds a `queued` bubble at once. The stored record replaces the bubble. A refused send marks the bubble `failed` and shows **Retry**. Select **Retry** to send the same text again. `POST /api/messages` is the only write path of the page.
 
@@ -925,4 +954,5 @@ The dashboard uses these routes. A request from another host needs the access to
 | `GET /api/messages?thread=THREAD` | The records of one thread, oldest first, at most 200. |
 | `POST /api/messages` | Queue an Owner message: `{ thread, kind, text }`. `kind` is `message`, `nudge`, or `status-request`. Returns 400 for invalid input, 404 for an unknown thread, and 429 above 10 sends a minute. |
 | `POST /api/tick` | Collect now. |
+| `GET`, `POST`, `DELETE /api/avatars/SLUG` | Read, store, or remove the image of one avatar. The slug is `boss` or a project slug. `POST` takes the image as the body, at most 512 KB, and accepts only a PNG, JPEG, or WebP file. It returns 415 for any other format and 413 for a larger body. A read-only preview refuses the two write routes. |
 | `GET /bulletin.md` | The current bulletin. |

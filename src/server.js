@@ -52,6 +52,53 @@ function send(res, code, body, type = 'application/json; charset=utf-8') {
   res.end(typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body));
 }
 
+// The Owner's own avatar image. A PNG, JPEG, or WebP file of at most 512 KB. SVG and other formats are refused.
+const AVATARS_DIR = path.join(DATA_DIR, 'avatars');
+const AVATAR_MAX_BYTES = 512 * 1024;
+const AVATAR_TYPES = { '.png': 'image/png', '.jpg': 'image/jpeg', '.webp': 'image/webp' };
+const AVATAR_DECLARED = [...Object.values(AVATAR_TYPES), 'application/octet-stream'];
+
+function readBytes(req, limit) {
+  return new Promise((resolve, reject) => {
+    let size = 0; let refused = false; const chunks = [];
+    req.on('data', (chunk) => {
+      // Keep reading so the answer reaches the client. A refused body never reaches the disk.
+      if (refused) return;
+      size += chunk.length;
+      if (size > limit) {
+        refused = true;
+        reject(Object.assign(new Error(`The body is larger than ${limit} bytes.`), { statusCode: 413 }));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => { if (!refused) resolve(Buffer.concat(chunks)); });
+    req.on('error', reject);
+  });
+}
+
+// The magic bytes decide the format. A content type alone proves nothing.
+function avatarFormat(buffer) {
+  const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  if (buffer.length >= 8 && buffer.subarray(0, 8).equals(PNG)) return '.png';
+  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return '.jpg';
+  if (buffer.length >= 12 && buffer.subarray(0, 4).toString('latin1') === 'RIFF' && buffer.subarray(8, 12).toString('latin1') === 'WEBP') return '.webp';
+  return null;
+}
+
+// An avatar belongs to the Boss or to a project slug: lower-case letters, digits, and hyphens only.
+function validAvatarSlug(slug) {
+  return slug === 'boss' || /^[a-z0-9][a-z0-9-]{0,63}$/.test(slug);
+}
+
+function avatarFile(slug) {
+  for (const ext of Object.keys(AVATAR_TYPES)) {
+    const file = path.join(AVATARS_DIR, `${slug}${ext}`);
+    if (fs.existsSync(file)) return { file, ext };
+  }
+  return null;
+}
+
 function readBody(req, limit = 1024 * 1024) {
   return new Promise((resolve, reject) => {
     let size = 0; const chunks = [];
@@ -557,6 +604,39 @@ export function serve(cfg, { readOnlyPreview = false, createEngine = (config, op
         return;
       }
       if (p === '/api/tick' && req.method === 'POST') return send(res, 200, await engine.tick());
+      const avatar = /^\/api\/avatars\/([^/]+)$/.exec(p);
+      if (avatar) {
+        const slug = avatar[1];
+        if (!validAvatarSlug(slug)) return send(res, 400, { error: 'Choose boss or a project slug of lower-case letters, digits, and hyphens.' });
+        if (req.method === 'GET') {
+          const found = avatarFile(slug);
+          if (!found) return send(res, 404, { error: 'No image is stored for this avatar. The page uses the generated one.' });
+          return send(res, 200, fs.readFileSync(found.file), AVATAR_TYPES[found.ext]);
+        }
+        const known = slug === 'boss' || Boolean(engine.state?.control?.projects?.[slug]);
+        if (req.method === 'POST') {
+          if (!known) return send(res, 404, { error: 'No open project uses this slug.' });
+          const declared = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+          if (declared && !AVATAR_DECLARED.includes(declared)) return send(res, 415, { error: 'Send a PNG, JPEG, or WebP image. SVG and other formats are refused.' });
+          const body = await readBytes(req, AVATAR_MAX_BYTES);
+          const ext = avatarFormat(body);
+          if (!ext) return send(res, 415, { error: 'The file is not a PNG, JPEG, or WebP image. SVG and other formats are refused.' });
+          fs.mkdirSync(AVATARS_DIR, { recursive: true, mode: 0o700 });
+          for (const old of Object.keys(AVATAR_TYPES)) fs.rmSync(path.join(AVATARS_DIR, `${slug}${old}`), { force: true });
+          const file = path.join(AVATARS_DIR, `${slug}${ext}`);
+          fs.writeFileSync(file, body, { mode: 0o600 });
+          fs.chmodSync(file, 0o600);
+          engine.log('message', `The Owner stored a ${ext.slice(1).toUpperCase()} avatar image for ${slug}`);
+          return send(res, 200, { ok: true, slug, type: AVATAR_TYPES[ext] });
+        }
+        if (req.method === 'DELETE') {
+          const found = avatarFile(slug);
+          if (!found) return send(res, 404, { error: 'No image is stored for this avatar. The page uses the generated one.' });
+          fs.rmSync(found.file, { force: true });
+          engine.log('message', `The Owner removed the avatar image of ${slug}`);
+          return send(res, 200, { ok: true, slug, generated: true });
+        }
+      }
       if (p === '/api/projects' && req.method === 'GET') return send(res, 200, listProjects());
       const pm = /^\/api\/projects\/([^/]+)$/.exec(p);
       if (pm && (req.method === 'PUT' || req.method === 'POST')) {

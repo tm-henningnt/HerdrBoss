@@ -200,6 +200,8 @@ test('read-only preview allows reads and rejects all API methods that can change
     ['POST', '/api/messages/dismiss'],
     ['POST', '/api/chats/alpha/read'],
     ['POST', '/api/leases/release'],
+    ['POST', '/api/avatars/boss'],
+    ['DELETE', '/api/avatars/boss'],
     ['PATCH', '/api/unknown'],
     ['OPTIONS', '/api/state'],
   ];
@@ -1697,7 +1699,8 @@ test('the Chat page shows the Mailbox action cards, uses the Mailbox write route
   assert.match(app, /await loadChatThread\(record\.thread\);/);
   // The log is a live region, and every bubble has a name with the sender, the time, the text, and the state.
   assert.match(app, /<ol class="chat-bubbles" role="log" aria-live="polite" aria-label="Messages in the \$\{esc\(title\)\} chat">/);
-  assert.match(app, /aria-label="\$\{esc\(chatBubbleLabel\(sender, \{ \.\.\.record, text \}, state\)\)\}"/);
+  assert.match(app, /const label = esc\(chatBubbleLabel\(sender, \{ \.\.\.record, text \}, state\)\);/);
+  assert.match(app, /aria-label="\$\{label\}"/);
   assert.match(app, /function chatBubbleLabel\(sender, record, state\)/);
   // The focus moves to the composer when a chat opens, and to the list row on Back.
   assert.match(app, /function openChat\(thread\) \{[\s\S]*?chat\.focus = 'composer';/);
@@ -1753,7 +1756,7 @@ test('the Chat page is compact: no page heading, slim bubbles, a round send butt
   const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
   // No big heading above the conversation. The header holds the avatar and the chat name.
   assert.doesNotMatch(app, /<h1>Chat<\/h1>/);
-  assert.match(app, /<span class="chat-avatar" aria-hidden="true">\$\{esc\(chatInitials\(title\)\)\}<\/span><h2>\$\{esc\(title\)\}<\/h2>/);
+  assert.match(app, /\$\{avatarSlot\(chat\.thread, \{ title: avatarTitle\(chat\.thread, title\), size: 28 \}\)\}<h2>\$\{esc\(title\)\}<\/h2>/);
   // A slim bubble. It has no card border and the time is 11 px.
   assert.match(css, /\.chat-bubble \{ display: grid; gap: 1px; max-width: 75%; padding: 6px 8px;/);
   assert.doesNotMatch(css, /\.chat-bubble \{[^}]*border: 1px solid/);
@@ -1768,4 +1771,191 @@ test('the Chat page is compact: no page heading, slim bubbles, a round send butt
   // A mail report is one short line in the chat.
   assert.match(app, /if \(record\.channel === 'mail'\) \{[\s\S]*?Report: \$\{esc\(record\.title \|\| 'Report'\)\}[\s\S]*?Open in Mailbox/);
   assert.match(css, /\.chat-report \{/);
+});
+
+// The avatar block of public/app.js runs in the browser. The test reads the block and calls the functions.
+function avatarBlock() {
+  const source = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const block = /\/\/ ---------- Avatars[^\n]*----------\n([\s\S]*?)\/\/ ---------- End avatars ----------/.exec(source)?.[1];
+  assert.ok(block, 'public/app.js holds the avatar functions between the two avatar markers');
+  return new Function(`${block}
+return { AVATAR_PALETTE, AVATAR_SIZES, avatarSvg, avatarInitials, avatarColor, avatarTextColor, avatarContrast, avatarTitle };`)();
+}
+
+test('an avatar gives each slug a stable color, two initials from the title, and the Boss a fixed glyph', () => {
+  const { AVATAR_PALETTE, AVATAR_SIZES, avatarSvg, avatarInitials, avatarColor, avatarTextColor, avatarContrast } = avatarBlock();
+  // A fixed palette of 12 hues. No pure white and no pure black circle.
+  assert.equal(AVATAR_PALETTE.length, 12);
+  assert.equal(new Set(AVATAR_PALETTE).size, 12, 'every hue in the palette is used once');
+  assert.equal(AVATAR_PALETTE.includes('#ffffff'), false);
+  assert.equal(AVATAR_PALETTE.includes('#000000'), false);
+  // The same slug always gets the same color. Two slugs do not share one by accident.
+  assert.equal(avatarColor('herdrboss'), avatarColor('herdrboss'));
+  assert.equal(avatarSvg('herdrboss', { title: 'HerdrBoss', size: 28 }), avatarSvg('herdrboss', { title: 'HerdrBoss', size: 28 }));
+  assert.notEqual(avatarColor('herdrboss'), avatarColor('tmprocessmining'));
+  assert.ok(AVATAR_PALETTE.includes(avatarColor('herdrboss')), 'the color comes from the palette');
+  // The initials come from the title.
+  assert.equal(avatarInitials('HerdrBoss'), 'HB');
+  assert.equal(avatarInitials('TmProcessMining'), 'TP');
+  assert.equal(avatarInitials('qlik-ai'), 'QA');
+  assert.equal(avatarInitials('A'), 'A');
+  assert.equal(avatarInitials(''), '?');
+  assert.match(avatarSvg('tmprocessmining', { title: 'TmProcessMining', size: 28 }), />TP</);
+  // The initials take the color of the best contrast on the circle, and reach WCAG AA.
+  for (const color of AVATAR_PALETTE) {
+    const text = avatarTextColor(color);
+    assert.ok(['#ffffff', '#14181d'].includes(text), `${color} uses white or dark initials`);
+    assert.ok(avatarContrast(color, text) >= 4.5, `${color} with ${text} reaches the AA contrast of 4.5`);
+  }
+  // The three sizes.
+  assert.deepEqual(AVATAR_SIZES, [20, 28, 36]);
+  for (const size of AVATAR_SIZES) {
+    assert.match(avatarSvg('alpha', { title: 'Alpha', size }), new RegExp(`width="${size}" height="${size}"`));
+    assert.match(avatarSvg('boss', { title: 'Boss', size }), new RegExp(`width="${size}" height="${size}"`));
+  }
+  assert.match(avatarSvg('alpha', { title: 'Alpha', size: 30 }), /width="28" height="28"/, 'an unknown size falls back to 28');
+  // The avatar is decoration. The name stays as text next to it.
+  assert.match(avatarSvg('alpha', { title: 'Alpha', size: 28 }), /aria-hidden="true"/);
+  // The Boss gets a fixed crown in the accent color, and no initials.
+  const boss = avatarSvg('boss', { title: 'Boss', size: 28 });
+  assert.match(boss, /fill="var\(--accent\)"/);
+  assert.doesNotMatch(boss, /<text/);
+  assert.doesNotMatch(boss, /[A-Z]{2}<\/text>/);
+});
+
+test('the avatar routes store an image with mode 0600, and read and remove it again', { timeout: 20000 }, async (t) => {
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.mkdirSync(homeDir, { recursive: true });
+  t.after(() => {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  });
+  const cfg = loadConfig();
+  cfg.host = '127.0.0.1';
+  cfg.port = 0;
+  cfg.tickSeconds = 3600;
+  const { server, close } = serve(cfg, {
+    createEngine: () => {
+      const engine = new EventEmitter();
+      engine.state = { control: { projects: { alpha: { slug: 'alpha', label: 'Alpha', orch: { pane: 'w1' } } } } };
+      engine.tick = async () => engine.state;
+      engine.log = () => {};
+      return engine;
+    },
+  });
+  t.after(async () => { await close(); });
+  await new Promise((resolve, reject) => {
+    server.once('listening', resolve);
+    server.once('error', reject);
+  });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const avatars = path.join(dataDir, 'avatars');
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+  const upload = (slug, body, type) => fetch(`${base}/api/avatars/${slug}`, { method: 'POST', headers: type ? { 'content-type': type } : {}, body });
+
+  // A good PNG for the Boss is stored, read back, and removed.
+  const stored = await upload('boss', png, 'image/png');
+  assert.equal(stored.status, 200);
+  assert.equal((await stored.json()).ok, true);
+  const file = path.join(avatars, 'boss.png');
+  assert.equal(fs.readFileSync(file).equals(png), true, 'the service stores the bytes it received');
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600, 'the stored image has mode 0600');
+  const read = await fetch(`${base}/api/avatars/boss`);
+  assert.equal(read.status, 200);
+  assert.equal(read.headers.get('content-type'), 'image/png');
+  assert.equal(Buffer.from(await read.arrayBuffer()).equals(png), true);
+
+  // A project slug stores next to the Boss.
+  assert.equal((await upload('alpha', png, 'image/png')).status, 200);
+  assert.equal(fs.existsSync(path.join(avatars, 'alpha.png')), true);
+
+  // An unknown slug and an unsafe name are refused.
+  assert.equal((await upload('nope', png, 'image/png')).status, 404);
+  assert.equal((await upload('..%2Fescape', png, 'image/png')).status, 400, 'an unsafe slug is refused');
+  assert.equal(fs.existsSync(path.join(dataDir, 'escape.png')), false);
+
+  // An SVG is refused. Its content type and its bytes.
+  const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>');
+  assert.equal((await upload('boss', svg, 'image/svg+xml')).status, 415);
+  assert.equal((await upload('boss', svg, 'image/png')).status, 415, 'the magic bytes decide, not the declared type');
+  // A file over 512 KB is refused.
+  const big = Buffer.concat([png, Buffer.alloc(600 * 1024)]);
+  const tooBig = await upload('boss', big, 'image/png');
+  assert.equal(tooBig.status, 413);
+  assert.equal(fs.readFileSync(file).equals(png), true, 'a refused upload keeps the stored image');
+
+  // A good JPEG and WebP pass, and each slug holds one file.
+  assert.equal((await upload('boss', Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(64)]), 'image/jpeg')).status, 200);
+  assert.equal(fs.existsSync(path.join(avatars, 'boss.jpg')), true);
+  assert.equal(fs.existsSync(path.join(avatars, 'boss.png')), false, 'a new image replaces the old file of that slug');
+  assert.equal(fs.statSync(path.join(avatars, 'boss.jpg')).mode & 0o777, 0o600);
+
+  // Remove puts the generated avatar back.
+  assert.equal((await fetch(`${base}/api/avatars/boss`, { method: 'DELETE' })).status, 200);
+  assert.equal(fs.existsSync(path.join(avatars, 'boss.jpg')), false);
+  assert.equal((await fetch(`${base}/api/avatars/boss`)).status, 404);
+  assert.equal((await fetch(`${base}/api/avatars/boss`, { method: 'DELETE' })).status, 404);
+  assert.equal(fs.existsSync(path.join(avatars, 'alpha.png')), true, 'one slug does not remove another');
+});
+
+test('one title gives one avatar, and the Chat, the Mailbox, the Agents cards, and Settings agree', () => {
+  const { avatarSvg, avatarInitials, avatarTitle } = avatarBlock();
+  const projects = { herdrboss: { slug: 'herdrboss', label: 'HerdrBoss' }, tmprocessmining: { slug: 'tmprocessmining', label: 'TmProcessMining' } };
+  // The project display name is the one title. The chat title and then the slug are the fallbacks.
+  assert.equal(avatarTitle('herdrboss', 'herdrboss', projects), 'HerdrBoss');
+  assert.equal(avatarTitle('tmprocessmining', 'tmprocessmining', projects), 'TmProcessMining');
+  assert.equal(avatarTitle('boss', 'Boss', projects), 'Boss');
+  assert.equal(avatarTitle('noslug', 'Chat title', projects), 'Chat title');
+  assert.equal(avatarTitle('noslug', '', projects), 'noslug');
+  // A chat that knows only the slug and a Settings row that knows the label show the same avatar.
+  const fromChat = avatarSvg('herdrboss', { title: avatarTitle('herdrboss', 'herdrboss', projects), size: 28 });
+  const fromSettings = avatarSvg('herdrboss', { title: avatarTitle('herdrboss', 'HerdrBoss', projects), size: 28 });
+  assert.equal(fromChat, fromSettings, 'the Chat and Settings show the same avatar for one project');
+  assert.match(fromChat, />HB</, 'the project display name gives the initials, not the slug');
+  assert.notEqual(avatarInitials('herdrboss'), 'HB');
+
+  // Every page passes the title through the one source. A page with its own title fails here.
+  const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const slots = [...app.matchAll(/avatarSlot\(([^,]+), \{ title: avatarTitle\(/g)].map((match) => match[1]);
+  assert.equal(slots.length, 6, 'six avatar slots: Settings row, Mailbox row, Chat list row, Chat header, chat bubble, and Agents card');
+  for (const slug of slots) assert.doesNotMatch(slug, /\.title$|\btitle\b/, 'no page passes its own title to an avatar slot');
+});
+
+test('the pages show the avatar, the Settings page manages the image, and the composer hides its scroll bar', () => {
+  const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
+  const guide = fs.readFileSync(new URL('../docs/user-guide.md', import.meta.url), 'utf8');
+  // The Chat list, the Chat header, the first bubble of a run, the Mailbox rows, and the Agents chart cards.
+  assert.match(app, /\$\{avatarSlot\(item\.thread, \{ title: avatarTitle\(item\.thread, item\.title\), size: 28 \}\)\}/);
+  assert.match(app, /\$\{avatarSlot\(chat\.thread, \{ title: avatarTitle\(chat\.thread, title\), size: 28 \}\)\}/);
+  assert.match(app, /\$\{avatarSlot\(record\.thread, \{ title: avatarTitle\(record\.thread\), size: 20 \}\)\}/);
+  assert.match(app, /\$\{avatarSlot\(item\.thread, \{ title: avatarTitle\(item\.thread\), size: 20 \}\)\}/);
+  assert.match(app, /avatarSlot\(avatar\.slug, \{ title: avatarTitle\(avatar\.slug, avatar\.title\), size: 36 \}\)/);
+  assert.match(app, /\$\{avatarSlot\(row\.slug, \{ title: avatarTitle\(row\.slug, row\.title\), size: 28 \}\)\}/);
+  // The image of the Owner replaces the generated avatar when it exists.
+  assert.match(app, /src="\/api\/avatars\/\$\{encodeURIComponent\(slug\)\}"/);
+  assert.match(app, /document\.addEventListener\('load', \(e\) => avatarImageLoaded\(e\.target\), true\);/);
+  assert.match(app, /document\.addEventListener\('error', \(e\) => avatarImageFailed\(e\.target\), true\);/);
+  // The Settings page has one Avatars section with a row for the Boss and for each project.
+  assert.match(app, /<h2>Avatars<\/h2>/);
+  assert.match(app, /\{ slug: 'boss', title: 'Boss' \}, \.\.\.Object\.entries\(s\.control\?\.projects \|\| \{\}\)/);
+  assert.match(app, /data-avatar-upload="\$\{esc\(row\.slug\)\}"/);
+  assert.match(app, /data-avatar-reset="\$\{esc\(row\.slug\)\}"/);
+  assert.match(app, /accept="image\/png,image\/jpeg,image\/webp"/);
+  assert.match(app, /const AVATAR_MAX_BYTES = 512 \* 1024;/);
+  // The composer hides the scroll bar until the text is longer than six lines. The limit is the 6-line height of the text area.
+  assert.match(app, /const limit = Math\.round\(line\) \* CHAT_MAX_LINES;/);
+  assert.match(app, /field\.classList\.toggle\('chat-overflow', field\.scrollHeight > limit\);/);
+  assert.match(css, /\.chat-composer textarea \{[^}]*overflow-y: hidden;/);
+  assert.match(css, /\.chat-composer textarea\.chat-overflow \{ overflow-y: auto;/);
+  // Only the class turns the scroll bar on. No other rule sets the overflow of the text area.
+  assert.equal((css.match(/\.chat-composer textarea[^{]*\{[^}]*overflow/g) || []).length, 2, 'two rules set the overflow: the base rule and the class rule');
+  // The page help and the guide describe the avatars and the scroll bar.
+  const chatHelp = /chat: \['Chat', `([\s\S]*?)`\],/.exec(app)?.[1] || '';
+  assert.match(chatHelp, /avatar/i);
+  const settingsHelp = /settings: \['Settings', `([\s\S]*?)`\],\s+agents:/.exec(app)?.[1] || '';
+  assert.match(settingsHelp, /<h3>Avatars<\/h3>/);
+  assert.match(guide, /### Avatars/);
+  assert.match(guide, /The composer hides the scroll bar until the text is longer than 6 lines\./);
+  assert.match(guide, /## Avatars/);
 });
