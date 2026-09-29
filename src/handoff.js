@@ -67,6 +67,35 @@ function handoffAgentName(id) {
   return withLetterPrefix.slice(0, 32);
 }
 
+function agentName(agent) { return agent?.name ?? agent?.agent_name ?? null; }
+function agentPane(agent) { return agent?.pane_id ?? agent?.paneId ?? agent?.id ?? null; }
+function stableOrchestratorName(item) {
+  return handoffRole(item) === 'boss' ? 'boss' : `${String(item.project).toLowerCase()}-orch`;
+}
+
+function renameSuccessorAgent(item) {
+  const name = stableOrchestratorName(item);
+  let agents = null;
+  try {
+    const listed = herdr(['agent', 'list']);
+    agents = Array.isArray(listed?.agents) ? listed.agents : Array.isArray(listed) ? listed : null;
+  } catch { /* Activation remains valid when the roster is unavailable. */ }
+
+  const source = agents?.find((agent) => agentPane(agent) === item.sourcePane);
+  if (source && agentName(source) === name) {
+    try { herdr(['agent', 'rename', item.sourcePane, '--clear']); }
+    catch {
+      console.warn(`Warning: could not clear the existing agent name. Run "herdr agent rename ${item.sourcePane} --clear" by hand, then run "herdr agent rename ${item.newPane} ${name}".`);
+      return;
+    }
+  }
+
+  try { herdr(['agent', 'rename', item.newPane, name]); }
+  catch {
+    console.warn(`Warning: could not rename the successor agent. Run "herdr agent rename ${item.newPane} ${name}" by hand.`);
+  }
+}
+
 function call(command, args, cwd, { timeout = 120000 } = {}) {
   return execFileSync(command, args, { cwd, encoding: 'utf8', timeout, maxBuffer: 8 * 1024 * 1024,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -493,6 +522,8 @@ export function activateHandoff(id, { confirmed = false } = {}) {
   item.activation = { at: item.activatedAt, sourcePane: item.sourcePane, successorPane: item.newPane, sourceLabel, successorLabel: role };
   if (sourceMissing) item.activation.sourceMissing = true;
   supersedeHandoffs(records, Date.parse(item.activatedAt));
+  save(records);
+  renameSuccessorAgent(item);
   try {
     item.peerPanes = herdr(['pane', 'list']).panes
       .filter((pane) => pane.workspace_id === item.workspace && ![item.newPane, item.sourcePane].includes(pane.pane_id) && pane.agent && !PREVIOUS_LABELS.has(pane.label))

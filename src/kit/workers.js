@@ -31,7 +31,7 @@ const READY_WAIT_MS = 45_000;
 const STALLED_PROMPT_WAIT_MS = 20_000;
 const BRIEF_SLOTS = new Set([
   'name', 'kind', 'model', 'effort', 'project', 'repo', 'worktree', 'branch', 'base', 'issue', 'task',
-  'allowedPaths', 'reportPath', 'reportJsonPath', 'orchPane', 'orchName', 'bulletinPath', 'herdrEnvPrefix', 'herdrBin', 'date', 'evidenceTiers', 'threadLimit', 'imageBudget', 'copyPaths', 'leases',
+  'allowedPaths', 'reportPath', 'reportJsonPath', 'orchPane', 'orchAgent', 'bulletinPath', 'herdrEnvPrefix', 'herdrBin', 'date', 'evidenceTiers', 'threadLimit', 'imageBudget', 'copyPaths', 'leases',
 ]);
 
 function git(root, args, { encoding = 'utf8' } = {}) {
@@ -1033,11 +1033,11 @@ export function startWorker(name, options, {
   const reportPath = path.join(worktree, plan.workerDir, 'report.md');
   const reportJsonPath = path.join(worktree, plan.workerDir, 'report.json');
   const orchPane = caller.paneId;
-  const orchName = getName(liveAgents.find((agent) => getPane(agent) === orchPane)) ?? '(none)';
+  const orchAgent = `${config.slug}-orch`;
   const briefSlots = {
     name, kind: options.kind, model, effort, project: config.slug, repo: config.root, worktree, branch, base,
     issue: options.issue ?? null, task, allowedPaths, reportPath, reportJsonPath,
-    orchPane, orchName, bulletinPath: path.join(env.HERDR_BOSS_DIR || path.join(os.homedir(), '.herdr-boss'), 'bulletin.md'),
+    orchPane, orchAgent, bulletinPath: path.join(env.HERDR_BOSS_DIR || path.join(os.homedir(), '.herdr-boss'), 'bulletin.md'),
     ...herdrCommands,
     date: new Date(now).toISOString().slice(0, 10),
     evidenceTiers: (config.evidenceTiers || []).join(', '),
