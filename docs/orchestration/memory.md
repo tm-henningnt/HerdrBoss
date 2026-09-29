@@ -28,6 +28,8 @@ Keep the current facts that every HerdrBoss orchestrator needs at start and resu
 
 ## Holds and freezes
 
+- 2026-09-29: Stand-down by the Owner, 2026-09-29, until the Owner resumes. Start no new workers and no new tasks. Source: Owner, through the Boss.
+
 - 2026-09-29 (until the Claude reset on Thu 2026-10-01 21:00): Start no new Claude worker without asking the Boss first. Do reviews, owner-proxy passes, and visual checks on Codex through herdr-boss browser, and bounded work on the free models. Keep orchestrator turns short. Delete this line after the reset. Source: Boss.
 
 None.
@@ -53,3 +55,13 @@ Owner queue (credentials, billing, and Owner-applied settings):
 
 - Plan and progress: `herdr-boss publish herdrboss`, project page at `http://127.0.0.1:4477/projects/herdrboss`.
 - Handoff issue list and Chrome clone report: the HerdrBoss scratch folder (`herdr-boss scratch herdrboss`).
+
+## State at the stand-down (2026-09-29)
+
+- **In progress:** nothing. No worker runs, and no task is half-done. `main` is pushed and passes the full suite.
+- **Next task:** none is queued. The first thing to do at resume is to delete the Claude quota hold line above, if the reset on Thu 2026-10-01 21:00 has passed, and to ask the Boss for the next task.
+- **Open branches:** `kit-cli` and `kit-docs`, from 2026-09-24, before the kit split. They are not merged and not needed; `main` holds the kit. Ask the Boss before you delete them.
+- **Worktrees:** only the main checkout. Create the integration worktree again when you merge: `git worktree add -B integrate ~/Projects/.herdr-wt/HerdrBoss/integrate main`.
+- **Leases:** none. The project browser is closed, and its port 9225 is released.
+- **Live data:** the message store runs on SQLite (`store.messages: sqlite` in `~/.herdr-boss/config.json`), with backups in `~/.herdr-boss/backups/`. The move of events to SQLite waits for the Boss.
+- **Merge rule:** merge in the integration worktree, run the suite there, then `git merge --ff-only integrate` in `main`. Never edit `main` while a suite runs on it.
