@@ -3,7 +3,7 @@ import test from 'node:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 
 function writeExecutable(file, source) {
   fs.writeFileSync(file, source);
@@ -1201,4 +1201,22 @@ test('a successive activation leaves earlier previous-role panes out of its work
   assert.doesNotMatch(project.prompts()['ws:p2'], /ws:p0/);
   const boss = activationFixture(t, { boss: true, extraPanes: [{ pane_id: 'wb:p0', workspace_id: 'wb', label: 'boss previous', agent: 'claude', agent_status: 'idle' }] });
   assert.deepEqual(boss.activate().peerPanes, ['wb:p3']);
+});
+
+test('handoff plan prints the kit line to stderr when the project kit is behind', (t) => {
+  const f = handoffFixture(t);
+  const git = (...args) => execFileSync('git', args, { cwd: f.project, stdio: 'ignore' });
+  git('init', '-q');
+  fs.mkdirSync(path.join(f.project, 'docs', 'orchestration'), { recursive: true });
+  const kitFile = path.join(f.project, 'docs', 'orchestration', 'herdr-boss.md');
+  const plan = () => spawnSync(process.execPath, [new URL('../src/cli.js', import.meta.url).pathname, 'handoff', 'plan', 'ws:p1', '--to', 'pi', '--mode', 'fresh'], { cwd: f.project, env: f.env, encoding: 'utf8' });
+  fs.writeFileSync(kitFile, '<!-- herdr-boss kit v=000000000000 -->\nold body\n');
+  const behind = plan();
+  assert.equal(behind.status, 0, behind.stderr);
+  assert.match(behind.stderr, /^Kit update: this project kit is behind by .* Run herdr-boss kit update\.$/m);
+  assert.doesNotThrow(() => JSON.parse(behind.stdout), 'stdout stays JSON');
+  fs.rmSync(kitFile);
+  const none = plan();
+  assert.equal(none.status, 0, none.stderr);
+  assert.doesNotMatch(none.stderr, /Kit update:/);
 });

@@ -7,7 +7,7 @@ import { recordUsage } from '../usage.js';
 import { goalSummary, mergeModels, modelEnabled, providerFor, selectModel, unavailablePiModels, unmeteredClosedParts, unmeteredSummary } from '../control.js';
 import { DATA_DIR, loadConfig } from '../config.js';
 import { workerStatusFromState } from '../worker-failures.js';
-import { checkAgentsFile } from './agents-check.js';
+import { checkAgentsFile, kitBehindLine } from './agents-check.js';
 import { acquireLeaseFor, dropLeases, setLeasePane } from '../leases.js';
 import { codexShellEnvArgs } from '../harness.js';
 
@@ -934,6 +934,8 @@ export function startWorker(name, options, {
   if (staleRules) output(`Warning: Herdr Boss rules are older than 10 minutes or have no valid timestamp: ${rulesPath}`);
   const machineStatus = describeMachine(rules);
   if (machineStatus) output(machineStatus);
+  const kitLine = config?.root ? kitBehindLine(config.root) : null;
+  if (kitLine) output(kitLine);
   const overload = loadWarning(rules);
   if (overload) throw new Error(overload);
   if (!options.kind) throw new Error('--kind is required.');

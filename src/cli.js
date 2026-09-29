@@ -563,6 +563,13 @@ async function main() {
       const value = (flag, fallback) => { const i = args.indexOf(flag); return i < 0 ? fallback : args[i + 1]; };
       const to = value('--to');
       if (!target || !to || !['plan', 'prepare'].includes(action)) throw new Error('Usage: handoff plan|prepare PANE --to KIND [--mode migrate|fresh] [--model MODEL]');
+      // The JSON result goes to stdout, so the kit line goes to stderr.
+      try {
+        const top = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+        const { kitBehindLine } = await import('./kit/agents-check.js');
+        const kitLine = top && kitBehindLine(top);
+        if (kitLine) console.error(kitLine);
+      } catch {}
       const options = { mode: value('--mode', 'migrate'), model: value('--model', null), effort: value('--effort', null), force: args.includes('--force'), auto: args.includes('--auto') };
       console.log(JSON.stringify(action === 'plan' ? planHandoff(target, to, options) : prepareHandoff(target, to, options), null, 2));
       break;
@@ -644,6 +651,11 @@ async function main() {
       const errors = writeProject(slug, data);
       if (errors.length) { console.error(errors.join('\n')); process.exit(1); }
       for (const warning of statusWarnings(data)) console.error(`Warning: ${warning}`);
+      if (top) {
+        const { kitBehindLine } = await import('./kit/agents-check.js');
+        const kitLine = kitBehindLine(top);
+        if (kitLine) console.error(kitLine);
+      }
       console.log(`published ${dashboardUrl(cfg)}/projects/${slug}`);
       if (top) {
         // The first publish of a slug registers its repository and adds its .git to the Codex writable roots.

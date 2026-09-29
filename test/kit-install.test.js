@@ -171,7 +171,7 @@ test('kit install refuses invalid settings JSON and two blocks, and writes nothi
 test('the hook command prints both files and succeeds when one is missing', (t) => {
   const r = repo(t);
   assert.equal(run(r, ['kit', 'install']).status, 0);
-  const env = { ...process.env, HOME: r.home, CLAUDE_PROJECT_DIR: r.root };
+  const env = { PATH: '/usr/bin:/bin', HOME: r.home, CLAUDE_PROJECT_DIR: r.root };
   const missing = spawnSync('/bin/sh', ['-c', HOOK_COMMAND], { cwd: r.home, env, encoding: 'utf8' });
   assert.equal(missing.status, 0, missing.stderr);
   assert.equal(missing.stdout, projectKit().text);
