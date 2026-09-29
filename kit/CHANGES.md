@@ -29,3 +29,7 @@ Summary: Add gpt-6.1-sol as the trial Codex model for tougher tasks; gpt-6-luna 
 ## 51683b8cf0ee
 Impact: useful
 Summary: Add editable Watch routine texts (kit/watch) that the service runs during a watch.
+
+## 9ca9a9ebf4a8
+Impact: useful
+Summary: Carry the Owner /goal over in an orchestrator handover.
