@@ -315,6 +315,7 @@ function controlBlock(s) {
 const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/;
 const settingsMessages = {};
 const serviceSettingsMessages = {};
+const avatarMessages = {};
 // The kit catalog of a harness plus the local extra models in the policy draft.
 function kindModels(kind, d = policyDraft) {
   const base = models[kind]?.allowedModels || [];
@@ -412,6 +413,63 @@ function pacingDraftError(draft, quotas, now = Date.now()) {
   return null;
 }
 
+// The Owner's own image for the Boss and for each project. The page uses the generated avatar when no image is stored.
+function avatarSettings(s) {
+  const rows = [{ slug: 'boss', title: 'Boss' }, ...Object.entries(s.control?.projects || {}).map(([slug, project]) => ({ slug, title: project?.label || slug }))];
+  const list = rows.map((row) => `<div class="avatar-row">
+    ${avatarSlot(row.slug, { title: avatarTitle(row.slug, row.title), size: 28 })}
+    <span class="avatar-row-name">${esc(row.title)}</span>
+    <label class="avatar-upload"><span>Upload image</span><input type="file" accept="image/png,image/jpeg,image/webp" data-avatar-upload="${esc(row.slug)}" aria-label="Upload an image for ${esc(row.title)}"></label>
+    <button type="button" data-avatar-reset="${esc(row.slug)}">Reset</button>
+    <span class="avatar-status" role="status" aria-live="polite" data-avatar-status="${esc(row.slug)}">${esc(avatarMessages[row.slug] || '')}</span>
+  </div>`).join('');
+  return `<section class="panel avatar-settings"><h2>Avatars</h2><p class="setting-help">Each row holds the avatar of the Boss or of a project. Choose <b>Upload image</b> to use your own image. Choose <b>Reset</b> to use the generated avatar again. An image is a PNG, JPEG, or WebP file of at most 512 KB. Herdr Boss keeps no other format.</p>${list || '<p class="setting-help">No project is open.</p>'}</section>`;
+}
+
+// The Owner's own avatar image. The page sends the file as it is, and the service checks the bytes.
+async function uploadAvatar(slug, input) {
+  const file = input.files && input.files[0];
+  if (!file) return;
+  if (file.size > AVATAR_MAX_BYTES) { avatarMessages[slug] = `The file is larger than 512 KB. Choose a smaller image.`; lastRender = ''; render(true); return; }
+  avatarMessages[slug] = 'Uploading…';
+  lastRender = ''; render(true);
+  try {
+    const response = await fetch(`/api/avatars/${encodeURIComponent(slug)}`, { method: 'POST', headers: { 'content-type': file.type || 'application/octet-stream' }, body: file });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'The image could not be stored.');
+    avatarMessages[slug] = 'The image is in use. It shows at once in the Chat, the Mailbox, and the Agents chart.';
+  } catch (error) { avatarMessages[slug] = error.message; }
+  finally {
+    if (input) input.value = '';
+    lastRender = ''; render(true);
+  }
+}
+
+async function resetAvatar(slug, button) {
+  avatarMessages[slug] = 'Removing…';
+  lastRender = ''; render(true);
+  try {
+    const response = await fetch(`/api/avatars/${encodeURIComponent(slug)}`, { method: 'DELETE' });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'The image could not be removed.');
+    avatarMessages[slug] = 'The generated avatar is in use again.';
+  } catch (error) { avatarMessages[slug] = error.message; }
+  finally {
+    if (button?.isConnected) button.focus();
+    lastRender = ''; render(true);
+  }
+}
+
+// An image of the Owner replaces the generated avatar. A missing image keeps the generated one.
+document.addEventListener('load', (e) => avatarImageLoaded(e.target), true);
+document.addEventListener('error', (e) => avatarImageFailed(e.target), true);
+
+document.addEventListener('change', (e) => {
+  const upload = e.target.dataset?.avatarUpload;
+  if (!upload) return;
+  uploadAvatar(upload, e.target);
+});
+
 function settingsView(s) {
   ensureDraft(s);
   if (!policyDraft) return '';
@@ -477,7 +535,7 @@ function settingsView(s) {
     ? harnessFindings.map((finding) => `<tr><td><span class="harness-readiness-status harness-readiness-${esc(finding.status)}">${esc(finding.status)}</span></td><td>${esc(finding.area)}</td><td>${esc(finding.item)}</td></tr>`).join('')
     : '<tr><td colspan="3" class="harness-readiness-empty">No readiness data yet.</td></tr>';
   const harnessPanel = `<section class="panel harness-readiness-panel"><h2>Harness readiness</h2><div class="service-settings-scroll"><table class="service-settings-table harness-readiness-table"><thead><tr><th scope="col">Status</th><th scope="col">Area</th><th scope="col">Item</th></tr></thead><tbody>${harnessRows}</tbody></table></div><p class="service-settings-note">Run herdr-boss harness sync to see the changes to make.</p></section>`;
-  const settingsPanels = `${quotaPanel}${machineSettings}${serviceSettings}${harnessPanel}`;
+  const settingsPanels = `${quotaPanel}${machineSettings}${avatarSettings(s)}${serviceSettings}${harnessPanel}`;
   return `<header class="page-intro"><div><h1>Settings</h1><p>Assign models and provider routes in each harness. Set provider quotas and machine limits below.</p></div></header><section id="settings-plane" class="control-shell"><section class="panel"><h2>Harnesses</h2><p class="setting-help harness-help">Clear a model box to stop that harness from using it. The same model in another harness keeps its own box and provider.</p>${ignoredCount ? `<p class="setting-help harness-help" role="note" style="color: var(--warn)">${ignoredCount} legacy provider route${ignoredCount === 1 ? ' is' : 's are'} not compatible with ${ignoredCount === 1 ? 'its harness' : 'their harnesses'}. Herdr Boss treats ${ignoredCount === 1 ? 'it' : 'them'} as Unmetered. Choose a provider in each marked row before you apply the policy.</p>` : ''}<div class="harness-grid">${harnesses}</div></section><div class="settings-grid">${settingsPanels}</div><div class="control-actions ${policyDirty ? 'pending' : ''}"><span data-policy-status role="status" aria-live="polite">${esc(saveMessage || (policyDirty ? 'Unsaved changes · Apply policy to keep them' : 'Policy saved'))}</span><button id="save-policy" ${policyDirty ? '' : 'disabled'}>Apply policy</button></div></section>`;
 }
 
@@ -1627,6 +1685,7 @@ function mailItem(s, item, section) {
   const select = section === 'needs-you' ? `<label class="mail-select"><input type="checkbox" data-mail-select="${esc(item.id)}" aria-label="Select ${esc(mailHeadline(item))}" ${mailSelected.has(item.id) ? 'checked' : ''}></label>` : '';
   const replied = item.repliedAt ? ` · replied ${clock(item.repliedAt)}` : '';
   return `<li class="mail-item${unread ? ' unread' : ''}${done ? ' done' : ''}${select ? ' selectable' : ''}">${select}<button class="mail-entry" type="button" data-mail-open data-mail-thread="${esc(item.thread)}" data-mail-conversation="${esc(item.conversationId || item.id)}" data-mail-item-id="${esc(item.id)}">
+    ${avatarSlot(item.thread, { title: avatarTitle(item.thread), size: 20 })}
     <span class="mail-meta">${unread && section !== 'sent' ? '<span class="mail-dot" aria-hidden="true"></span><span class="visually-hidden">Unread. </span>' : ''}<strong>${esc(mailItemLabel(s, item))}</strong><span class="pill ghost">${esc(label)}</span><time datetime="${esc(item.at)}">${esc(clock(item.at))}</time></span>
     <span class="mail-headline">${item.kind === 'report' ? '<span class="pill">Report</span> ' : ''}${esc(mailHeadline(item))}</span>${closeNote}${section === 'sent' ? `<span class="mail-entry-state">${esc(mailDeliveryState(item))}${esc(replied)}</span>` : ''}
   </button></li>`;
@@ -2005,10 +2064,89 @@ function chatUpdateBadge() {
   if (link) link.setAttribute('aria-label', unread ? `Chat, ${unread} unread` : 'Chat');
 }
 
-function chatInitials(title) {
-  const words = String(title || '?').split(/[\s_-]+/).filter(Boolean);
-  return (words.length > 1 ? `${words[0][0]}${words[1][0]}` : String(title || '?').slice(0, 2)).toUpperCase();
+// ---------- Avatars: one stable circle per thread ----------
+// A fixed palette of 12 hues. Each hue reads in the light theme and in the dark theme. No pure white and no pure black circle.
+const AVATAR_PALETTE = ['#2f6f9f', '#1f7a6a', '#4a5bb5', '#7a4bb0', '#a24a8f', '#a5453f', '#9c5c22', '#8a7420', '#5f7a24', '#277a35', '#1a7a86', '#d99b3a'];
+const AVATAR_TEXT_LIGHT = '#ffffff';
+const AVATAR_TEXT_DARK = '#14181d';
+const AVATAR_SIZES = [20, 28, 36];
+const AVATAR_MAX_BYTES = 512 * 1024;
+
+// A camel-case name starts a new word, so TmProcessMining gives the letters T and P.
+function avatarWords(title) {
+  return String(title || '').replace(/([a-z0-9])([A-Z])/g, '$1 $2').split(/[\s_.-]+/).filter((word) => /[A-Za-z0-9]/.test(word));
 }
+
+function avatarInitials(title) {
+  const words = avatarWords(title);
+  const letters = (words.length > 1 ? `${words[0][0]}${words[1][0]}` : String(words[0] || '?')).replace(/[^A-Za-z0-9]/g, '');
+  return (letters || '?').toUpperCase().slice(0, 2);
+}
+
+function avatarHash(slug) {
+  let hash = 0;
+  for (const char of String(slug || '?')) hash = (hash * 31 + char.codePointAt(0)) % 1000003;
+  return hash;
+}
+
+// The same slug always gets the same hue, in the Chat, the Mailbox, and the Agents chart.
+function avatarColor(slug) {
+  return AVATAR_PALETTE[avatarHash(slug) % AVATAR_PALETTE.length];
+}
+
+// The relative luminance of a hex color, as WCAG 2.1 defines it.
+function avatarLuminance(hex) {
+  const value = parseInt(String(hex).slice(1), 16);
+  const [red, green, blue] = [(value >> 16) & 255, (value >> 8) & 255, value & 255].map((channel) => {
+    const part = channel / 255;
+    return part <= 0.03928 ? part / 12.92 : ((part + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+}
+
+function avatarContrast(one, two) {
+  const high = Math.max(avatarLuminance(one), avatarLuminance(two));
+  const low = Math.min(avatarLuminance(one), avatarLuminance(two));
+  return (high + 0.05) / (low + 0.05);
+}
+
+// The initials take the color of the best contrast on the circle.
+function avatarTextColor(background) {
+  return avatarContrast(background, AVATAR_TEXT_LIGHT) >= avatarContrast(background, AVATAR_TEXT_DARK) ? AVATAR_TEXT_LIGHT : AVATAR_TEXT_DARK;
+}
+
+// One avatar as inline SVG. The Boss gets a fixed crown in the accent color. The avatar is decoration, so the name stays as text.
+function avatarSvg(slug, { title, size } = {}) {
+  const side = AVATAR_SIZES.includes(Number(size)) ? Number(size) : 28;
+  if (String(slug) === 'boss') return `<svg class="avatar avatar-${side} avatar-boss" width="${side}" height="${side}" viewBox="0 0 40 40" aria-hidden="true" focusable="false"><circle cx="20" cy="20" r="20" fill="var(--panel-2)"/><path d="M10.5 25 9 15.4l5.6 3.8L20 11.5l5.4 7.7 5.6-3.8L29.5 25Z" fill="var(--accent)"/><rect x="10.5" y="26.4" width="19" height="2.8" rx="1.4" fill="var(--accent)"/></svg>`;
+  const background = avatarColor(slug);
+  // The view box is 40 units wide, so 16 units give 40 percent of the rendered size.
+  return `<svg class="avatar avatar-${side}" width="${side}" height="${side}" viewBox="0 0 40 40" aria-hidden="true" focusable="false"><circle cx="20" cy="20" r="20" fill="${background}"/><text x="20" y="20" dy="0.36em" text-anchor="middle" font-family="ui-monospace, monospace" font-size="16" font-weight="650" fill="${avatarTextColor(background)}">${avatarInitials(title || slug)}</text></svg>`;
+}
+
+// One title for one avatar. Every page reads the project display name from the state, so the Chat, the Mailbox, the Agents chart, and Settings show the same avatar. The chat title and then the slug are the fallbacks.
+function avatarTitle(slug, fallback = '', projects = state?.control?.projects) {
+  if (slug === 'boss') return 'Boss';
+  const project = projects?.[slug];
+  return project?.label || project?.title || fallback || slug;
+}
+
+// The image of the Owner replaces the generated avatar when it exists. The generated one stays as the fallback.
+function avatarSlot(slug, { title, size } = {}) {
+  return `<span class="avatar-slot" data-avatar-slot="${esc(slug)}">${avatarSvg(slug, { title, size })}<img class="avatar avatar-image" data-avatar-image="${esc(slug)}" src="/api/avatars/${encodeURIComponent(slug)}" alt="" hidden></span>`;
+}
+
+function avatarImageLoaded(image) {
+  if (!image?.dataset?.avatarImage) return;
+  image.hidden = false;
+  if (image.previousElementSibling) image.previousElementSibling.hidden = true;
+}
+
+function avatarImageFailed(image) {
+  if (!image?.dataset?.avatarImage) return;
+  image.remove();
+}
+// ---------- End avatars ----------
 
 function chatTitle(thread) {
   const item = chatFind(thread);
@@ -2039,7 +2177,7 @@ function chatRow(item) {
   // A report is mail. The row shows it as one short line with a link to the Mailbox.
   const preview = !item.last ? 'No messages yet.' : item.last.channel === 'mail' ? `Report: ${item.last.title || 'Report'}` : item.last.text;
   return `<li class="chat-item${unread ? ' unread' : ''}"><button class="chat-row" type="button" data-chat-open="${esc(item.thread)}"${open ? ' aria-current="true"' : ''} aria-label="Open the ${esc(item.title)} chat${unread ? `. ${unread} unread message${unread === 1 ? '' : 's'}` : ''}">
-    <span class="chat-avatar" aria-hidden="true">${esc(chatInitials(item.title))}</span>
+    ${avatarSlot(item.thread, { title: avatarTitle(item.thread, item.title), size: 28 })}
     <span class="chat-main"><span class="chat-line-one"><span class="chat-name">${esc(item.title)}</span>${time ? `<span class="chat-time">${esc(time)}</span>` : ''}</span><span class="chat-line-two"><span class="chat-preview">${esc(preview)}</span>${badge}</span></span>
   </button></li>`;
 }
@@ -2049,11 +2187,11 @@ function chatConversationView() {
   const bubbles = chat.loadingThread && !chat.messages.length
     ? '<p class="chat-empty">Loading messages…</p>'
     : chat.messages.length || chat.pending.length
-      ? `<ol class="chat-bubbles" role="log" aria-live="polite" aria-label="Messages in the ${esc(title)} chat">${[...chat.messages, ...chat.pending].map(chatBubble).join('')}</ol>`
+      ? `<ol class="chat-bubbles" role="log" aria-live="polite" aria-label="Messages in the ${esc(title)} chat">${[...chat.messages, ...chat.pending].map((record, index, list) => chatBubble(record, index === 0 || list[index - 1].from !== record.from)).join('')}</ol>`
       : '<p class="chat-empty">No messages in this chat.</p>';
   const older = chat.more ? `<p class="chat-more">${chat.moreLoading ? 'Loading older messages…' : 'Scroll up for older messages.'}</p>` : '';
   const pill = chat.unseen ? `<button type="button" class="chat-new-pill" data-chat-new>${chat.unseen} new message${chat.unseen === 1 ? '' : 's'}</button>` : '';
-  return `<div class="chat-panel"><div class="chat-panel-head"><button type="button" class="chat-back" data-chat-back aria-label="Back to chats">Back</button><span class="chat-avatar" aria-hidden="true">${esc(chatInitials(title))}</span><h2>${esc(title)}</h2></div><div class="chat-scroll" data-chat-scroll tabindex="0">${older}${bubbles}</div>${pill}<form class="chat-composer" data-chat-compose><label class="visually-hidden" for="chat-draft">Message to ${esc(title)}</label><div class="chat-composer-row"><textarea id="chat-draft" data-chat-draft maxlength="2000" rows="1" placeholder="Message…"></textarea><button type="submit" class="chat-send" aria-label="Send"${chat.busy ? ' disabled' : ''}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 20 21 12 3.5 4v6l12 2-12 2v6Z"/></svg></button></div><p class="chat-hint">Enter sends · Shift+Enter makes a new line</p></form></div>`;
+  return `<div class="chat-panel"><div class="chat-panel-head"><button type="button" class="chat-back" data-chat-back aria-label="Back to chats">Back</button>${avatarSlot(chat.thread, { title: avatarTitle(chat.thread, title), size: 28 })}<h2>${esc(title)}</h2></div><div class="chat-scroll" data-chat-scroll tabindex="0">${older}${bubbles}</div>${pill}<form class="chat-composer" data-chat-compose><label class="visually-hidden" for="chat-draft">Message to ${esc(title)}</label><div class="chat-composer-row"><textarea id="chat-draft" data-chat-draft maxlength="2000" rows="1" placeholder="Message…"></textarea><button type="submit" class="chat-send" aria-label="Send"${chat.busy ? ' disabled' : ''}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 20 21 12 3.5 4v6l12 2-12 2v6Z"/></svg></button></div><p class="chat-hint">Enter sends · Shift+Enter makes a new line</p></form></div>`;
 }
 
 // The same rule as parseChoices in src/messages.js: the Markdown list items under a Choices heading.
@@ -2136,7 +2274,7 @@ function chatActionCard(record) {
   return `<div class="chat-card-options" role="group" aria-label="Options for this ${esc(MAIL_ACTION_LABEL[record.action] || record.action)} request">${buttons}</div>${error}`;
 }
 
-function chatBubble(record) {
+function chatBubble(record, startOfRun = false) {
   const owner = record.from === 'owner';
   const sender = MESSAGE_SENDER[record.from] || record.from;
   // A mail report is not a chat message. The bubble holds one short line and a link to the Mailbox.
@@ -2155,7 +2293,11 @@ function chatBubble(record) {
   const text = isCard ? chatQuestionText(record.text) : record.text;
   const action = !owner && record.action ? `<a class="chat-action-link" href="/mailbox?thread=${encodeURIComponent(record.thread)}">Open in Mailbox</a>` : '';
   const retry = record.local && record.error ? `<p class="chat-bubble-retry"><button type="button" data-chat-retry="${esc(record.id)}">Retry</button></p>` : '';
-  return `<li class="chat-bubble${owner ? ' from-owner' : ' from-agent'}${card ? ' chat-card' : ''}" data-chat-bubble="${esc(record.id)}" aria-label="${esc(chatBubbleLabel(sender, { ...record, text }, state))}"><p class="chat-bubble-text">${esc(text)}</p><p class="chat-bubble-meta"><span class="chat-bubble-time">${esc(clock(record.at))}</span>${state ? ` <span class="chat-state${tone}">${esc(state)}</span>` : ''}</p>${card}${action}${retry}</li>`;
+  const label = esc(chatBubbleLabel(sender, { ...record, text }, state));
+  const content = `<p class="chat-bubble-text">${esc(text)}</p><p class="chat-bubble-meta"><span class="chat-bubble-time">${esc(clock(record.at))}</span>${state ? ` <span class="chat-state${tone}">${esc(state)}</span>` : ''}</p>${card}${action}${retry}`;
+  // The avatar of the other party shows on the first bubble of a run of messages from that sender.
+  if (!owner && startOfRun) return `<li class="chat-entry" data-chat-bubble="${esc(record.id)}" aria-label="${label}">${avatarSlot(record.thread, { title: avatarTitle(record.thread), size: 20 })}<div class="chat-bubble from-agent${card ? ' chat-card' : ''}" data-chat-bubble="${esc(record.id)}" aria-label="${label}">${content}</div></li>`;
+  return `<li class="chat-bubble${owner ? ' from-owner' : ' from-agent'}${card ? ' chat-card' : ''}" data-chat-bubble="${esc(record.id)}" aria-label="${label}">${content}</li>`;
 }
 
 async function loadChats() {
@@ -2284,11 +2426,13 @@ async function loadChatOlder() {
   await loadChatThread(chat.thread, { older: true });
 }
 
-// The text area grows with the text, up to six lines.
+// The text area grows with the text, up to six lines. Its scroll bar shows only when the text is longer than that.
 function chatGrowField(field) {
   const line = parseFloat(getComputedStyle(field).lineHeight) || 20;
+  const limit = Math.round(line) * CHAT_MAX_LINES;
   field.style.height = 'auto';
-  field.style.height = `${Math.min(field.scrollHeight, Math.round(line) * CHAT_MAX_LINES)}px`;
+  field.style.height = `${Math.min(field.scrollHeight, limit)}px`;
+  field.classList.toggle('chat-overflow', field.scrollHeight > limit);
 }
 
 function chatUpsertRecord(record) {
@@ -2549,7 +2693,7 @@ function orgFacts(rows) {
   return `<dl class="org-facts">${rows.filter(Boolean).map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v ?? NOT_REPORTED)}</dd></div>`).join('')}</dl>`;
 }
 
-function orgNode({ id, role, name, status, summary, facts, className = '', thread = null, agent, quota = null }) {
+function orgNode({ id, role, name, status, summary, facts, className = '', thread = null, agent, quota = null, avatar = null }) {
   const open = orgOpen.has(id);
   const domId = `org-detail-${id.replace(/[^A-Za-z0-9_-]/g, '-')}`;
   const cards = orgStyle === 'cards';
@@ -2558,9 +2702,11 @@ function orgNode({ id, role, name, status, summary, facts, className = '', threa
   // An agent node has a harness; the Owner node has none and keeps only its dot.
   const kind = agent === undefined ? null : HARNESS_MARK[agent] ? agent : 'unknown';
   const mark = cards && kind ? `<span class="org-mark" title="${esc(agent || 'Unknown harness')}" aria-hidden="true">${HARNESS_MARK[kind]}</span>` : '';
+  // The Boss and each project card show the avatar of that thread.
+  const face = cards && avatar ? avatarSlot(avatar.slug, { title: avatarTitle(avatar.slug, avatar.title), size: 36 }) : '';
   const alert = cards && state === 'blocked' ? ORG_BLOCKED_ICON : '';
   const meter = cards && quota ? orgMeter(agent, quota) : '';
-  return `<article class="org-node ${esc(className)} org-state-${state}${flash}" data-org-id="${esc(id)}"><div class="org-node-head">${mark}<span class="st ${esc(status || 'unknown')}" aria-hidden="true"></span><span class="pill">${esc(role)}</span><strong>${esc(name)}</strong>${alert}</div>
+  return `<article class="org-node ${esc(className)} org-state-${state}${flash}" data-org-id="${esc(id)}"><div class="org-node-head">${face}${mark}<span class="st ${esc(status || 'unknown')}" aria-hidden="true"></span><span class="pill">${esc(role)}</span><strong>${esc(name)}</strong>${alert}</div>
     ${meter}<p class="org-node-summary">${summary.filter(Boolean).map((x) => `<span>${esc(x)}</span>`).join('')}</p>
     <div class="org-actions"><button type="button" class="quiet org-toggle" data-org-node="${esc(id)}" aria-expanded="${open}" aria-controls="${domId}">${open ? 'Hide details' : 'Details'}<span class="visually-hidden"> for ${esc(name)}</span></button>${thread ? `<button type="button" class="quiet org-messages" data-messages-thread="${esc(thread)}" data-messages-name="${esc(name)}">Messages<span class="visually-hidden"> for ${esc(name)}</span></button>` : ''}</div>
     <div class="org-detail" id="${domId}" ${open ? '' : 'hidden'}>${orgFacts(facts)}</div></article>`;
@@ -2620,7 +2766,7 @@ function organizationChart(s) {
   const bossRisk = s.control?.bossHandoff;
   const bossSuccessor = boss ? orgSuccessor(s, boss.id) : null;
   const bossNode = boss ? orgNode({
-    id: 'boss', role: 'boss', name: 'Boss', status: boss.status, className: 'org-boss', thread: 'boss', agent: boss.agent || null, quota: orgQuotaMeter(s, boss.agent),
+    id: 'boss', role: 'boss', name: 'Boss', status: boss.status, className: 'org-boss', thread: 'boss', agent: boss.agent || null, quota: orgQuotaMeter(s, boss.agent), avatar: { slug: 'boss', title: 'Boss' },
     summary: [boss.agent || 'No agent', boss.status || NOT_REPORTED, orgHandover(s, boss.id, bossRisk)],
     facts: orgAgentFacts(s, boss, [['Workspace', boss.workspaceLabel || boss.workspace], ['Quota use', orgQuota(s, boss.agent)], ['Handover', orgHandover(s, boss.id, bossRisk)]]),
   }) : '<article class="org-node org-boss org-missing"><strong>Boss</strong><p class="org-node-summary"><span>No pane is labeled <code>boss</code>.</span></p></article>';
@@ -2639,7 +2785,7 @@ function organizationChart(s) {
     const handover = orgHandover(s, p.orch?.pane, risk);
     const mode = p.effectiveMode === 'paused' ? 'Paused' : p.idle ? 'Idle' : 'Active';
     const node = orgNode({
-      id: `project:${p.slug}`, role: 'orch', name: p.label, status: orch?.status || (p.orch ? p.orch.status : 'unknown'), thread: p.slug, agent: orch?.agent || null, quota: orgQuotaMeter(s, orch?.agent),
+      id: `project:${p.slug}`, role: 'orch', name: p.label, status: orch?.status || (p.orch ? p.orch.status : 'unknown'), thread: p.slug, agent: orch?.agent || null, quota: orgQuotaMeter(s, orch?.agent), avatar: { slug: p.slug, title: p.label },
       summary: [orch ? `${orch.agent || 'No agent'} · ${orch.status || NOT_REPORTED}` : 'No orchestrator', slots],
       facts: [
         ['Project', p.label],
@@ -3335,6 +3481,7 @@ const HELP = {
     <h3>Manage pools</h3><p>Select <b>Add pool</b> to create a pool. Enter one item per line or separate items with commas. Enter the project split as JSON. Set the environment variable, lease TTL, reclaim check, and grace period. Keep ports 9222 to 9299 out of custom pools. Select <b>Edit</b> to change a config pool. Select <b>Remove</b>, then confirm the pool name, to remove it. A held item blocks removal and any update that drops it. Herdr Boss saves the change to <code>config.json</code> and applies it at once. The built-in <code>project-browsers</code> pool has no edit or remove controls. The read-only preview refuses pool changes.</p>`],
   settings: ['Settings', `
     <p>Each harness section holds the models and provider routes of that harness. Provider quotas and machine limits are below the harnesses.</p>
+    <h3>Avatars</h3><p>The <b>Avatars</b> section has one row for the Boss and one row for each project. A row shows the avatar of that chat. Select <b>Upload image</b> to use your own image. Select <b>Reset</b> to use the generated avatar again. An image is a PNG, JPEG, or WebP file of at most 512 KB. Herdr Boss keeps no other format. The image shows at once in the Chat, the Mailbox, and the Agents chart. Without an image, the page uses a generated avatar. Its color comes from the name of the project, and it stays the same. The two letters come from the project display name, the same on every page. The Boss has a crown. Each other project has two letters. The letters use the color of the best contrast on the circle.</p>
     <h3>Service settings</h3><p>The table shows the values that the service uses. Each row shows whether the value comes from <code>config.json</code> or a default. Rows with inputs can be changed in the dashboard. Change the values in a group, then select <b>Save</b>. Herdr Boss applies saved values at once. Keep the quota warning below the critical value. Rows without inputs are read-only. Change in <code>config.json</code> and restart.</p>
     <h3>Harness readiness</h3><p>This read-only table shows the status of each harness entry that orchestration needs. A row shows the status, the area, and the item. The status is <code>ok</code>, <code>missing</code>, or <code>bad</code>. The table shows no file path and no setting value. Herdr Boss reads these entries at each service start and then every 10 minutes. Run <code>herdr-boss harness sync</code> to see the changes to make.</p>
     <h3>Harnesses</h3><p>Clear <b>Available</b> to stop all workers from using a harness. The preferred model is the model that worker start and handover use when no model is given. An empty choice uses the harness default.</p>
@@ -4132,6 +4279,11 @@ document.addEventListener('click', (e) => {
 });
 
 document.addEventListener('click', async (e) => {
+  const avatarReset = e.target.closest?.('[data-avatar-reset]');
+  if (avatarReset) {
+    await resetAvatar(avatarReset.dataset.avatarReset, avatarReset);
+    return;
+  }
   const serviceSave = e.target.closest?.('[data-save-service-settings]');
   if (serviceSave) {
     await saveServiceSettings(serviceSave.dataset.saveServiceSettings, serviceSave);
