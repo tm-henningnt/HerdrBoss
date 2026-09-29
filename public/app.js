@@ -1,6 +1,11 @@
 import { markdownOrPlain, plainTextHtml, sanitizeRendered } from './markdown.js';
+import { FLOW, FLOW_LABEL, DONE_LIMIT, taskMap, taskState, blockReasons, boardColumns, dependencyChain, criticalPath, graphTasks } from './board.js';
+import { patchHtml } from './keyed.js';
 
 const $app = document.getElementById('app');
+// A visual check can force a theme with ?theme=light or ?theme=dark. Without it, the page follows the system.
+const forcedTheme = new URLSearchParams(location.search).get('theme');
+if (forcedTheme === 'light' || forcedTheme === 'dark') document.documentElement.dataset.theme = forcedTheme;
 const $dot = document.getElementById('dot');
 const $updated = document.getElementById('updated');
 const $nav = document.getElementById('primary-nav');
@@ -21,6 +26,8 @@ function setNavMenu(open) {
 
 let state = null;
 let lastRender = '';
+// The project page patches its DOM in place when the previous render was the project page too.
+let lastRoute = null;
 let models = {};
 let usage = null;
 let denials = null;
@@ -3340,7 +3347,7 @@ function recentUsageBlock() {
 // Orchestrators publish these fields (docs/project-status.md). The Boss only derives views from them.
 
 const projectViews = {};
-const projectView = (slug) => (projectViews[slug] ||= { showDone: false, sort: 'order', group: 'all' });
+const projectView = (slug) => (projectViews[slug] ||= { showDone: false, sort: 'order', group: 'all', selected: null, doneAll: false, graphAll: false, boardCol: null });
 const safeUrl = (url) => (/^https?:\/\//i.test(String(url || '')) ? String(url) : null);
 const byId = (a, b) => String(a.id ?? '').localeCompare(String(b.id ?? ''), undefined, { numeric: true });
 const isDone = (t) => (t.status || 'todo') === 'done';
@@ -3353,17 +3360,17 @@ const FOLD_PREFIX = 'herdr-boss.project-folds.';
 function foldState(slug) {
   try { const value = JSON.parse(sessionStorage.getItem(FOLD_PREFIX + slug)); return value && typeof value === 'object' && !Array.isArray(value) ? value : {}; } catch { return {}; }
 }
-function foldOpen(slug, key) { return foldState(slug)[key] === true; }
+function foldOpen(slug, key, fallback = false) { const value = foldState(slug)[key]; return typeof value === 'boolean' ? value : fallback; }
 function setFoldOpen(slug, key, open) {
   const value = foldState(slug);
   value[key] = open;
   try { sessionStorage.setItem(FOLD_PREFIX + slug, JSON.stringify(value)); } catch {}
 }
 // A long project section stays a plain section on a desktop. On a phone it becomes a details element that remembers its open state for the session.
-function collapsible({ slug, key, className = '', head = '', title, count = '', controls = '', body, id = '' }) {
-  if (!isPhone()) return `<section${id ? ` id="${esc(id)}"` : ''}${className ? ` class="${esc(className)}"` : ''}>${head}${body}</section>`;
-  const open = foldOpen(slug, key);
-  return `<details${id ? ` id="${esc(id)}"` : ''} class="fold-phone${className ? ` ${esc(className)}` : ''}" data-project-fold="${esc(slug)}" data-fold-key="${esc(key)}"${open ? ' open' : ''}>`
+function collapsible({ slug, key, className = '', head = '', title, count = '', controls = '', body, id = '', defaultOpen = false }) {
+  if (!isPhone()) return `<section data-key="section:${esc(key)}"${id ? ` id="${esc(id)}"` : ''}${className ? ` class="${esc(className)}"` : ''}>${head}${body}</section>`;
+  const open = foldOpen(slug, key, defaultOpen);
+  return `<details data-key="section:${esc(key)}"${id ? ` id="${esc(id)}"` : ''} class="fold-phone${className ? ` ${esc(className)}` : ''}" data-project-fold="${esc(slug)}" data-fold-key="${esc(key)}"${open ? ' open' : ''}>`
     + `<summary class="fold-summary"><h2>${esc(title)}${count ? ` <span class="sub">${esc(count)}</span>` : ''}</h2><span class="fold-chevron" aria-hidden="true"></span></summary>`
     + `<div class="fold-body">${controls}${body}</div></details>`;
 }
@@ -3464,26 +3471,94 @@ function specsBlock(m, slug) {
   return collapsible({ slug, key: 'specs', head: `<h2>Specs <span class="sub">${specs.length} · progress of the work under each spec</span></h2>`, title: 'Specs', count: `${specs.length}`, body });
 }
 
-// Layered dependency graph: each column holds tasks whose blockers sit in earlier columns. Arrows run from blocker to dependent.
-// Every task is a box, also a task without links. A task without links sits in column 0, after the linked tasks of that column.
-function dependencyGraph(m, slug) {
+// ---------- Board and dependency graph: one model ----------
+// The board and the graph use the flow states of board.js and the same --st-* colors.
+// A selected task highlights its card, its graph node, and its dependency chain. The selection lives in the project view.
+
+const WAIT_PARTY = { owner: 'the Owner', boss: 'the Boss', external: 'an external item', task: 'a task' };
+const BOARD_EMPTY = { blocked: 'Nothing waits.', ready: 'No task is ready.', doing: 'No worker runs a task.', review: 'Nothing waits for review.', done: 'No task is done yet.' };
+const ICON_EXTERNAL = '<svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true"><path d="M4.5 2.5h5v5M9.5 2.5 3 9" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const domPart = (value) => String(value).replace(/[^A-Za-z0-9_-]/g, '_');
+const cardDomId = (slug, id) => `card-${domPart(slug)}-${domPart(id)}`;
+const colDomId = (slug, k) => `board-${domPart(slug)}-${k}`;
+
+function waitReason(r, t, slug) {
+  if (r.kind === 'task') return r.known
+    ? `<button type="button" class="wait-link mono" data-task-select="${esc(r.id)}" data-slug="${esc(slug)}" data-reveal="card" aria-label="Select blocking task ${esc(r.id)}">${esc(r.id)}</button>`
+    : `<span class="mono" title="This task is not in the published status">${esc(r.id)} (outside)</span>`;
+  if (r.kind === 'owner' && t.mailboxId) return `<a href="/mailbox?thread=${encodeURIComponent(slug)}&conversation=${encodeURIComponent(t.mailboxId)}">the Owner</a>`;
+  return esc(WAIT_PARTY[r.kind] || r.kind);
+}
+
+function boardCard(t, ctx) {
+  const { slug, map, selected, chain, path, now } = ctx;
+  const state = taskState(t, map);
+  const id = t.id != null ? String(t.id) : '';
+  const key = id || `~${ctx.index}`;
+  const url = safeUrl(t.url);
+  const cls = ['card', `st-${state}`, id && id === selected ? 'is-selected' : '', id && id !== selected && chain.has(id) ? 'in-chain' : '', id && path.has(id) ? 'on-path' : ''].filter(Boolean).join(' ');
+  const reasons = blockReasons(t, map);
+  const wait = reasons.length ? `<p class="card-wait">Waits on ${reasons.map((r) => waitReason(r, t, slug)).join(', ')}</p>` : '';
+  const w = t.worker;
+  const elapsed = state === 'doing' && Number.isFinite(Date.parse(w?.startedAt)) ? dur((now - Date.parse(w.startedAt)) / 1000) : '';
+  const worker = w ? `<p class="card-worker"><span class="mono">${esc(w.name)}</span>${w.model ? ` · ${esc(w.model)}` : ''}${elapsed ? ` · <span class="num">${esc(elapsed)}</span>` : ''}</p>` : '';
+  const source = t.stateSource && t.stateSource !== 'published' && (state === 'doing' || state === 'review') ? `<p class="card-source">${esc(t.stateSource)}</p>` : '';
+  const title = id
+    ? `<button type="button" class="card-title" data-task-select="${esc(id)}" data-slug="${esc(slug)}" data-reveal="graph" aria-pressed="${id === selected}">${esc(t.title)}</button>`
+    : `<span class="card-title">${esc(t.title)}</span>`;
+  return `<li class="${cls}" data-key="task:${esc(key)}"${id ? ` id="${esc(cardDomId(slug, id))}" data-task-card="${esc(id)}"` : ''}>`
+    + `<div class="card-top"><span class="card-dot" aria-hidden="true"></span><span class="card-id mono">${esc(id)}</span>${id && path.has(id) ? '<span class="card-flag">critical path</span>' : ''}${url ? `<a class="card-link" href="${esc(url)}" target="_blank" rel="noreferrer" aria-label="Open issue ${esc(id)}">${ICON_EXTERNAL}</a>` : ''}</div>`
+    + `${title}${wait}${worker}${source}</li>`;
+}
+
+// The phone shows one column at a time. The first column with work opens, in the order Doing, Ready, Blocked, Review, Done.
+function boardActiveColumn(view, counts) {
+  if (FLOW.includes(view.boardCol)) return view.boardCol;
+  return ['doing', 'ready', 'blocked', 'review', 'done'].find((k) => counts[k] > 0) || 'ready';
+}
+
+function boardBlock(p, slug) {
+  const tasks = (p.tasks || []).filter((t) => t && t.title != null);
+  if (!tasks.length) return '';
   const view = projectView(slug);
-  // A task without an id still gets a box; a synthetic key keeps it apart from the real ids.
-  let nodes = m.tasks.slice();
-  const keyOf = new Map();
-  nodes.forEach((t, i) => keyOf.set(t, t.id || `~${i}`));
-  if (!view.showDone) {
-    // Keep completed tasks only as the direct blockers of open work, so the open chain keeps its context.
-    const keep = new Set(nodes.filter((t) => !isDone(t)).map((t) => keyOf.get(t)));
-    for (const t of nodes) if (!isDone(t)) for (const id of t.blockedBy || []) if (m.map.has(id)) keep.add(keyOf.get(m.map.get(id)));
-    nodes = nodes.filter((t) => keep.has(keyOf.get(t)));
-  }
+  const b = boardColumns(tasks, { groups: p.groups, showAllDone: view.doneAll });
+  const selected = view.selected && b.map.has(view.selected) ? view.selected : null;
+  const ctx = { slug, map: b.map, selected, chain: selected ? dependencyChain(selected, tasks) : new Set(), path: new Set(b.critical.path), now: Date.now() };
+  const active = boardActiveColumn(view, b.counts);
+  const open = tasks.length - b.counts.done;
+  const steps = b.critical.path.length;
+  const pathText = steps ? ` · critical path${b.critical.milestone ? ` to ${b.critical.milestone.title}` : ''}: ${steps} ${steps === 1 ? 'task' : 'tasks'}` : '';
+  const stale = p.boardStale ? `<p class="board-stale" role="status"><span class="stale-mark">stale</span> ${esc(p.boardStaleReason || 'The published status does not match the workers.')}</p>` : '';
+  const tabs = `<div class="board-tabs" role="tablist" aria-label="Board columns">${FLOW.map((k) => `<button type="button" role="tab" class="board-tab st-${k}" data-board-tab="${k}" data-slug="${esc(slug)}" aria-selected="${k === active}" aria-controls="${esc(colDomId(slug, k))}" tabindex="${k === active ? 0 : -1}"><span class="card-dot" aria-hidden="true"></span><span class="tab-label">${FLOW_LABEL[k]}</span><span class="num">${b.counts[k]}</span></button>`).join('')}</div>`;
+  const cols = FLOW.map((k) => {
+    const list = b.columns[k];
+    const more = k === 'done' && (b.hiddenDone || (view.doneAll && b.counts.done > DONE_LIMIT))
+      ? `<button type="button" class="board-more" data-board-done="${esc(slug)}">${b.hiddenDone ? `Show all ${b.counts.done} done` : `Show the last ${DONE_LIMIT}`}</button>` : '';
+    const cards = list.length ? `<ol class="board-list">${list.map((t, i) => boardCard(t, { ...ctx, index: `${k}${i}` })).join('')}</ol>` : `<p class="board-empty">${BOARD_EMPTY[k]}</p>`;
+    return `<section class="board-col st-${k}" data-key="col:${k}" data-col="${k}" id="${esc(colDomId(slug, k))}" role="tabpanel" aria-label="${FLOW_LABEL[k]}, ${b.counts[k]}"><h3><span class="card-dot" aria-hidden="true"></span>${FLOW_LABEL[k]}<span class="num">${b.counts[k]}</span></h3>${cards}${more}</section>`;
+  }).join('');
+  const body = `<div class="board" data-key="board:${esc(slug)}">${stale}${tabs}<div class="board-cols" data-board-cols="${esc(slug)}" data-keep-attrs="style">${cols}</div></div>`;
+  return collapsible({ slug, key: 'board', id: 'board', className: 'board-section', defaultOpen: true, head: `<div class="section-head"><h2>Board <span class="sub">${open} open${esc(pathText)}</span></h2></div>`, title: 'Board', count: `${open} open${p.boardStale ? ' · stale' : ''}`, body });
+}
+
+// Layered dependency graph: each column holds tasks whose blockers sit in earlier columns. Arrows run from blocker to dependent.
+// Every task is a box. A task without links sits in column 0, after the linked tasks of that column.
+function dependencyGraph(p, slug) {
+  const view = projectView(slug);
+  const all = (p.tasks || []).filter((t) => t && t.title != null);
+  const map = taskMap(all);
+  const nodes = graphTasks(all, { openOnly: !view.graphAll });
   if (!nodes.length) return '';
+  const groups = Array.isArray(p.groups) ? p.groups : [];
+  // A task without an id still gets a box; a synthetic key keeps it apart from the real ids.
+  const keyOf = new Map();
+  nodes.forEach((t, i) => keyOf.set(t, t.id != null ? String(t.id) : `~${i}`));
   const inSet = new Set(nodes.map((t) => keyOf.get(t)));
   const linked = new Set();
   const edgeKeys = [];
-  for (const t of nodes) for (const id of t.blockedBy || []) {
-    if (!m.map.has(id) || !inSet.has(id)) continue;
+  for (const t of nodes) for (const raw of t.blockedBy || []) {
+    const id = String(raw);
+    if (!map.has(id) || !inSet.has(id)) continue;
     linked.add(id); linked.add(keyOf.get(t));
     edgeKeys.push([id, keyOf.get(t)]);
   }
@@ -3494,41 +3569,51 @@ function dependencyGraph(m, slug) {
     if (layer.has(key)) return layer.get(key);
     if (visiting.has(key)) return 0; // a cycle in published data; break it here
     visiting.add(key);
-    const blockers = (t.blockedBy || []).filter((id) => inSet.has(id));
-    const d = blockers.length ? 1 + Math.max(...blockers.map((id) => depth(m.map.get(id)))) : 0;
+    const blockers = (t.blockedBy || []).map(String).filter((id) => inSet.has(id));
+    const d = blockers.length ? 1 + Math.max(...blockers.map((id) => depth(map.get(id)))) : 0;
     visiting.delete(key);
     layer.set(key, d);
     return d;
   };
   nodes.forEach(depth);
-  const groupOrder = new Map(m.groups.map((g, i) => [g.id, i]));
+  const groupOrder = new Map(groups.map((g, i) => [g.id, i]));
   const columns = [];
   for (const t of nodes) (columns[layer.get(keyOf.get(t))] ||= []).push(t);
   // Linked tasks come first in a column; tasks without links follow in the published group order.
   for (const col of columns) col?.sort((a, b) => (linked.has(keyOf.get(a)) ? 0 : 1) - (linked.has(keyOf.get(b)) ? 0 : 1) || (groupOrder.get(a.group) ?? 99) - (groupOrder.get(b.group) ?? 99) || byId(a, b));
-  const W = 168, H = 46, GX = 56, GY = 12, PAD = 8;
+  const W = 176, H = 48, GX = 56, GY = 12, PAD = 8;
   const pos = new Map();
   columns.forEach((col, x) => (col || []).forEach((t, y) => pos.set(keyOf.get(t), { x: PAD + x * (W + GX), y: PAD + y * (H + GY) })));
   const width = PAD * 2 + columns.length * (W + GX) - GX;
   const height = PAD * 2 + Math.max(...columns.map((c) => c?.length || 0)) * (H + GY) - GY;
+  const critical = criticalPath(all, groups);
+  const path = new Set(critical.path);
+  const pathEdges = new Set(critical.path.slice(1).map((id, i) => `${critical.path[i]}>${id}`));
+  const selected = view.selected && map.has(view.selected) ? view.selected : null;
+  const chain = selected ? dependencyChain(selected, all) : null;
+  const focus = (a, b) => (!chain ? '' : chain.has(a) && (b == null || chain.has(b)) ? ' in-chain' : ' dim');
   const paths = edgeKeys.map(([a, b]) => {
     const s = pos.get(a), e = pos.get(b);
     if (!s || !e) return '';
     const x1 = s.x + W, y1 = s.y + H / 2, x2 = e.x, y2 = e.y + H / 2, mid = (x1 + x2) / 2;
-    const open = !isDone(m.map.get(a));
-    return `<path class="dep-edge${open ? ' open' : ''}" d="M${x1},${y1} C${mid},${y1} ${mid},${y2} ${x2 - 4},${y2}" marker-end="url(#dep-arrow-${esc(slug)})"></path>`;
+    const open = taskState(map.get(a), map) !== 'done';
+    const cls = `dep-edge${open ? ' open' : ''}${pathEdges.has(`${a}>${b}`) ? ' on-path' : ''}${focus(a, b)}`;
+    return `<path data-key="edge:${esc(a)}>${esc(b)}" class="${cls}" d="M${x1},${y1} C${mid},${y1} ${mid},${y2} ${x2 - 4},${y2}" marker-end="url(#dep-arrow-${esc(slug)})"></path>`;
   }).join('');
   const boxes = nodes.map((t) => {
-    const { x, y } = pos.get(keyOf.get(t));
-    const role = m.current.has(t) ? ' current' : m.next.has(t) ? ' next' : '';
-    const hidden = (t.blockedBy || []).filter((id) => !inSet.has(id) && !(m.map.has(id) && isDone(m.map.get(id)))).length;
-    const url = safeUrl(t.url);
-    const body = `<rect class="dep-node s-${esc(t.status || 'todo')}${role}" x="${x}" y="${y}" width="${W}" height="${H}" rx="6"></rect>
-      <text x="${x + 9}" y="${y + 18}" class="dep-id">${esc(t.id)}${role ? ` · ${role.trim()}` : ''}${hidden ? ` · +${hidden} external` : ''}</text>
-      <text x="${x + 9}" y="${y + 35}" class="dep-title">${esc(t.title.length > 24 ? `${t.title.slice(0, 23)}…` : t.title)}</text><title>${esc(`${t.id ?? ''} ${t.title} (${STATUS_LABEL[t.status || 'todo']})`)}</title>`;
-    return url ? `<a class="dep-node-group" href="${esc(url)}" target="_blank" rel="noreferrer">${body}</a>` : `<g class="dep-node-group">${body}</g>`;
+    const key = keyOf.get(t);
+    const { x, y } = pos.get(key);
+    const state = taskState(t, map);
+    const hidden = (t.blockedBy || []).map(String).filter((id) => !map.has(id)).length;
+    const label = `${t.id ?? ''} · ${FLOW_LABEL[state]}${path.has(key) ? ' · path' : ''}${hidden ? ` · +${hidden} outside` : ''}`;
+    const cls = `dep-node-group st-${state}${key === selected ? ' is-selected' : ''}${path.has(key) ? ' on-path' : ''}${focus(key)}`;
+    const select = t.id != null ? ` data-task-select="${esc(key)}" data-slug="${esc(slug)}" data-reveal="card" role="button" tabindex="0" aria-pressed="${key === selected}" aria-label="${esc(`${t.id} ${t.title}, ${FLOW_LABEL[state]}`)}"` : '';
+    return `<g class="${cls}" data-key="node:${esc(key)}"${select}><rect class="dep-node" x="${x}" y="${y}" width="${W}" height="${H}" rx="6"></rect>`
+      + `<rect class="dep-mark" x="${x + 9}" y="${y + 10}" width="8" height="8" rx="2"></rect>`
+      + `<text x="${x + 22}" y="${y + 18}" class="dep-id">${esc(label)}</text>`
+      + `<text x="${x + 9}" y="${y + 36}" class="dep-title">${esc(t.title.length > 25 ? `${t.title.slice(0, 24)}…` : t.title)}</text><title>${esc(`${t.id ?? ''} ${t.title} (${FLOW_LABEL[state]})`)}</title></g>`;
   }).join('');
-  const toggle = `<label class="inline-toggle"><input type="checkbox" data-project-done="${esc(slug)}" ${view.showDone ? 'checked' : ''}> Show completed work</label>`;
+  const toggle = `<label class="inline-toggle"><input type="checkbox" data-graph-open="${esc(slug)}" ${view.graphAll ? '' : 'checked'}> Open work only</label>`;
   const toolbar = `<div class="dep-toolbar" role="group" aria-label="Dependency graph view">
     <button type="button" class="dep-btn" data-dep-action="fit" data-dep-slug="${esc(slug)}" aria-label="Fit the whole graph in the panel">Fit</button>
     <button type="button" class="dep-btn" data-dep-action="out" data-dep-slug="${esc(slug)}" aria-label="Zoom out">−</button>
@@ -3536,39 +3621,60 @@ function dependencyGraph(m, slug) {
     <button type="button" class="dep-btn" data-dep-action="100" data-dep-slug="${esc(slug)}" aria-label="Zoom to 100 percent">100%</button>
     <button type="button" class="dep-btn" data-dep-action="full" data-dep-slug="${esc(slug)}" aria-label="Show the graph at full size">Full size</button>
     <span class="dep-zoom" data-dep-readout="${esc(slug)}" aria-hidden="true">100%</span></div>`;
-  const body = `${toolbar}
-    <div class="dep-legend"><span class="s-todo">To do</span><span class="s-doing">In progress</span><span class="s-review">Review</span><span class="s-blocked">Blocked</span><span class="s-done">Done</span><span class="current">Current frontier</span><span class="next">Next</span></div>
-    <div class="panel dep-scroll"><div class="dep-stage" data-dep-stage="${esc(slug)}">
+  const milestone = critical.milestone ? ` to ${critical.milestone.title}` : '';
+  const legend = `<div class="dep-legend">${FLOW.map((k) => `<span class="st-${k}">${FLOW_LABEL[k]}</span>`).join('')}${critical.path.length ? `<span class="on-path">Critical path${esc(milestone)}</span>` : ''}${selected ? `<span class="in-chain">Chain of ${esc(selected)}</span>` : ''}</div>`;
+  const body = `<div class="dep" data-key="graph:${esc(slug)}">${toolbar}${legend}
+    <div class="panel dep-scroll"><div class="dep-stage" data-dep-stage="${esc(slug)}" data-keep-attrs="style">
       <button type="button" class="dep-close" data-dep-action="close" data-dep-slug="${esc(slug)}" aria-label="Close full size">Close</button>
-      <svg class="dep-graph" data-dep-graph="${esc(slug)}" data-dep-width="${width}" data-dep-height="${height}" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Dependency graph with ${nodes.length} tasks">
-      <defs><marker id="dep-arrow-${esc(slug)}" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L8,4 L0,8 z" class="dep-arrow"></path></marker></defs>${paths}${boxes}</svg></div></div>`;
-  return collapsible({ slug, key: 'dependencies', className: 'dep-section', head: `<div class="section-head"><h2>Dependencies <span class="sub">arrows run from blocker to dependent · columns show order</span></h2>${toggle}</div>`, title: 'Dependencies', count: `${nodes.length}`, controls: `<div class="fold-controls">${toggle}</div>`, body });
+      <svg class="dep-graph${chain ? ' has-selection' : ''}" style="--gw:${width}px;--gh:${height}px" data-dep-graph="${esc(slug)}" data-dep-width="${width}" data-dep-height="${height}" data-keep-attrs="viewBox" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" role="group" aria-label="Dependency graph with ${nodes.length} tasks">
+      <defs><marker id="dep-arrow-${esc(slug)}" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L8,4 L0,8 z" class="dep-arrow"></path></marker></defs>${paths}${boxes}</svg></div></div></div>`;
+  return collapsible({ slug, key: 'dependencies', id: 'dependencies', className: 'dep-section', head: `<div class="section-head"><h2>Dependencies <span class="sub">arrows run from blocker to dependent${critical.path.length ? ` · the critical path${esc(milestone)} is marked` : ''}</span></h2>${toggle}</div>`, title: 'Dependencies', count: `${nodes.length}`, controls: `<div class="fold-controls">${toggle}</div>`, body });
 }
 
 // Dependency graph view: zoom and pan for each project live in memory only, never in localStorage.
 const DEP_MIN_ZOOM = 0.25, DEP_MAX_ZOOM = 4;
+// The automatic view never draws the graph text smaller than this zoom. Fit can go lower.
+const DEP_READABLE_ZOOM = 0.85;
 const depState = (slug) => {
   const view = projectView(slug);
-  return (view.dep ||= { zoom: null, cx: null, cy: null, full: false });
+  return (view.dep ||= { zoom: null, cx: null, cy: null, full: false, moved: false, whole: false });
 };
 const clampDepZoom = (z) => Math.min(DEP_MAX_ZOOM, Math.max(DEP_MIN_ZOOM, z));
 const depStageEl = (slug) => [...document.querySelectorAll('[data-dep-stage]')].find((s) => s.dataset.depStage === slug) || null;
 const depEl = (selector, key, slug) => [...document.querySelectorAll(selector)].find((el) => el.dataset[key] === slug) || null;
 
-// Change the viewBox for zoom and pan. A null zoom fits the whole graph in the panel the first time.
+// Change the viewBox for zoom and pan. The graph fits the panel until the Owner zooms or pans it; then the view stays.
 function depTransform(slug, { fit = false } = {}) {
   const stage = depStageEl(slug);
   const svg = stage?.querySelector('[data-dep-graph]');
   if (!stage || !svg) return;
   const rect = svg.getBoundingClientRect();
-  const sw = rect.width, sh = rect.height;
+  let sw = rect.width, sh = rect.height;
   if (!(sw > 0) || !(sh > 0)) return; // a hidden section has no size; fit it when it opens
   const st = depState(slug);
   const gw = Number(svg.dataset.depWidth) || 1, gh = Number(svg.dataset.depHeight) || 1;
-  if (fit || st.zoom == null || st.cx == null || st.cy == null) {
-    const pad = 20;
-    st.zoom = clampDepZoom(Math.min((sw - pad * 2) / gw, (sh - pad * 2) / gh));
-    st.cx = gw / 2; st.cy = gh / 2;
+  // On a phone the graph has its natural size and scrolls sideways in its own box.
+  if (st.full || isPhone()) stage.style.height = '';
+  if (isPhone() && !st.full) { svg.setAttribute('viewBox', `0 0 ${gw} ${gh}`); return; }
+  if (fit) { st.moved = false; st.whole = true; }
+  const pad = 20;
+  // Until the Owner zooms or pans, the graph fits the panel. The automatic view keeps the text readable: a wide graph
+  // starts at DEP_READABLE_ZOOM at its left edge. Fit shows the whole graph at any zoom.
+  const autoZoom = (width) => Math.min(1, st.whole ? (width - pad * 2) / gw : Math.max((width - pad * 2) / gw, DEP_READABLE_ZOOM));
+  // A wide, flat graph gets a lower panel, so the fitted graph leaves no large empty band.
+  if (!st.full && !st.moved) {
+    const fitted = Math.round(Math.max(200, Math.min(520, innerHeight * 0.6, gh * autoZoom(sw) + pad * 2)));
+    if (Math.abs(stage.offsetHeight - fitted) > 2) {
+      stage.style.height = `${fitted}px`;
+      const next = svg.getBoundingClientRect();
+      sw = next.width; sh = next.height;
+    }
+  }
+  if (!st.moved || st.zoom == null || st.cx == null || st.cy == null) {
+    st.zoom = clampDepZoom(Math.min(autoZoom(sw), (sh - pad * 2) / gh));
+    const whole = st.zoom <= (sw - pad * 2) / gw + 1e-6;
+    st.cx = whole ? gw / 2 : sw / st.zoom / 2 - pad / st.zoom;
+    st.cy = gh / 2;
   }
   st.zoom = clampDepZoom(st.zoom);
   const vw = sw / st.zoom, vh = sh / st.zoom;
@@ -3598,6 +3704,7 @@ function depZoomTo(slug, target, ax = 0.5, ay = 0.5) {
   const gx = (st.cx ?? gw / 2) - vw / 2 + ax * vw;
   const gy = (st.cy ?? gh / 2) - vh / 2 + ay * vh;
   st.zoom = clampDepZoom(target);
+  st.moved = true; st.whole = false;
   st.cx = gx + (0.5 - ax) * (sw / st.zoom);
   st.cy = gy + (0.5 - ay) * (sh / st.zoom);
   depTransform(slug);
@@ -3620,6 +3727,7 @@ function setDepFull(slug, on) {
   const stage = depStageEl(slug);
   if (!stage) return;
   stage.classList.toggle('full', on);
+  if (on) stage.style.height = '';
   document.body.classList.toggle('dep-full-open', on);
   if (on) { depTransform(slug, { fit: true }); stage.querySelector('[data-dep-action="close"]')?.focus(); }
   else { depTransform(slug); depEl('[data-dep-action="full"]', 'depSlug', slug)?.focus(); }
@@ -3730,29 +3838,13 @@ function project(s, slug) {
   const live = s.control?.projects?.[slug];
   const p = published || (live ? { slug, project: live.label, workspace: live.workspace, tasks: [] } : null);
   if (!p) return `<div class="panel empty">No open project "${esc(slug)}".</div>`;
-  const panes = s.herdr?.panes || [];
-  const byName = new Map(panes.filter((x) => x.name).map((x) => [x.name, x]));
   const phases = p.phases?.length ? `<ol class="phases">${p.phases.map((ph) => {
     const idx = p.phases.indexOf(p.phase);
     const i = p.phases.indexOf(ph);
     return `<li class="${ph === p.phase ? 'current' : idx >= 0 && i < idx ? 'done' : ''}">${esc(ph)}</li>`;
   }).join('')}</ol>` : p.phase ? `<div><span class="tag">${esc(p.phase)}</span></div>` : '';
   const metrics = p.metrics?.length ? `<section class="metrics">${p.metrics.map((m) => `<div class="panel metric"><div class="k">${esc(m.label)}</div><div class="v">${esc(m.value)}</div>${m.detail ? `<div class="d">${esc(m.detail)}</div>` : ''}</div>`).join('')}</section>` : '';
-  const c = taskCounts(p);
-  const colors = STATUS_COLOR;
   const work = workModel(p);
-  const view = projectView(slug);
-  // The Done column can hold hundreds of closed issues; show the latest ten unless completed work is on.
-  const columnTasks = (k) => {
-    const list = (p.tasks || []).filter((t) => (t.status || 'todo') === k);
-    return k === 'done' && !view.showDone ? list.sort((a, b) => String(b.updated || '').localeCompare(String(a.updated || ''))).slice(0, 10) : list;
-  };
-  const board = (p.tasks || []).length ? collapsible({ slug, key: 'board', head: `<h2>Tasks <span class="sub">${(p.tasks || []).length} total · worker status is live from Herdr${!view.showDone && c.done > 10 ? ` · Done shows the latest 10 of ${c.done}` : ''}</span></h2>`, title: 'Tasks', count: `${(p.tasks || []).length}`, body: `<div class="board">${STATUSES.map((k) => `<div class="col" style="--c:var(--${colors[k]})"><h3><span>${STATUS_LABEL[k]}</span><span class="num">${c[k]}</span></h3>
-      ${columnTasks(k).map((t) => {
-        const w = t.worker && byName.get(t.worker);
-        const wait = waitText(t, work);
-        return `<div class="task">${t.id ? `<span class="id">${esc(t.id)}</span>` : ''}<span class="title">${esc(t.title)}</span>${t.note ? `<span class="note">${esc(t.note)}</span>` : ''}${wait ? `<span class="wait">${esc(wait)}</span>` : ''}${t.worker ? `<span class="w"><span class="st ${w ? w.status : 'shell'}"></span>${esc(t.worker)}${w ? ` · ${esc(w.status)}` : ' · not running'}</span>` : ''}</div>`;
-      }).join('')}</div>`).join('')}</div>` }) : '';
   const links = p.links?.length ? `<div class="panel"><h2>Links</h2><ul class="links">${p.links.map((l) => safeUrl(l.url) ? `<li><a href="${esc(safeUrl(l.url))}" target="_blank" rel="noreferrer">${esc(l.label || l.url)}</a></li>` : `<li>${esc(l.label || '')}</li>`).join('')}</ul></div>` : '';
   const notes = p.notes?.length ? `<div class="panel"><h2>Notes</h2><ul class="notes">${p.notes.map((n) => `<li>${code(n)}</li>`).join('')}</ul></div>` : '';
   const ws = p.workspace && s.herdr?.workspaces.find((w) => w.id === p.workspace || w.label === p.workspace);
@@ -3766,11 +3858,11 @@ function project(s, slug) {
     handoffBlock(s, slug),
     metrics,
     programBlock(work),
-    dependencyGraph(work, slug),
+    boardBlock(p, slug),
+    dependencyGraph(p, slug),
     groupsBlock(work, slug),
     specsBlock(work, slug),
     decisionsBlock(p, work, slug),
-    board,
     issueTable(work, slug),
     gatesRisksBlock(p),
     links || notes ? `<section class="two">${notes}${links}</section>` : '',
@@ -3795,12 +3887,17 @@ const HELP = {
     <p>The bar above the cards shows the applied share and the effective slots of each project, in card order. Its colors match the top edge of each card. An idle project is faded. A paused project is faded and striped.</p>
     <h3>Progress and frontier</h3><p><b>Current frontier</b> is open work with no open blocker. <b>Next</b> waits only on the current frontier. The orchestrator can set both itself.</p>
     <h3>Needs your decision</h3><p>Open work that waits on you. Each item shows its ID, title, and ask, and links to its Mailbox conversation when the orchestrator set <code>mailboxId</code>. A task that waits on other tasks shows <b>waiting on #ID</b>. A task that waits on the Boss or an external party names it and shows the ask.</p>
-    <h3>Dependencies</h3><p>Columns show the order. An arrow runs from a blocker to the work that waits on it. A task without links sits in the first column, after the linked tasks. Current work has an orange border; next work has a dashed border. Select a box to open the issue. <b>Show completed work</b> adds finished tasks.</p>
-    <h3>Graph view</h3><p>Select <b>Fit</b> to show the whole graph. Select <b>−</b>, <b>+</b>, or <b>100%</b> to zoom. Press Ctrl or Cmd and turn the mouse wheel to zoom around the pointer. Drag the background to pan. Select <b>Full size</b> to fill the window. Select <b>Close</b> or press Escape to return.</p>
+    <h3>Board</h3><p>The board has five columns in the order of the flow. <b>Blocked</b> holds a task that waits on another task, the Owner, the Boss, or an external item. <b>Ready</b> holds a task whose dependencies are all done. <b>Doing</b> holds a task with a live worker. <b>Review</b> holds a task whose worker was collected and is not merged. <b>Done</b> shows the last 10 done tasks. Select <b>Show all N done</b> to see the rest.</p>
+    <p>Each card shows the task ID, the title, what the task waits on, and its worker. A Doing card shows the worker, the model, the elapsed time, and the source, for example <b>live from worker NAME</b>. The state comes from the worker records, so it does not wait for a publish. Ready sorts by priority: the critical path first, then the group order, then the published order.</p>
+    <p>A <b>stale</b> mark with its reason shows when the published status does not match the workers or is too old. The orchestrator clears it with a new publish.</p>
+    <h3>Select a task</h3><p>Select a card title to select the task. The card gets a ring, and the graph shows the task and its dependency chain; the other tasks fade. Select a graph box to select its task and go to its card. On a Blocked card, select a blocker ID to go to that task. Select the selected task again to clear the selection. A refresh keeps the selection and the scroll position.</p>
+    <h3>Dependencies</h3><p>The graph uses the same states and colors as the board. Each box names its state. Columns show the order. An arrow runs from a blocker to the work that waits on it. A task without links sits in the first column, after the linked tasks. <b>Open work only</b> shows the open tasks and the done tasks that block them directly. Clear it to show all tasks.</p>
+    <p>The orange line is the critical path: the longest chain of open tasks to the next milestone. The next milestone is the first group with open work. Its boxes say <b>path</b>, and its cards say <b>critical path</b>.</p>
+    <h3>Graph view</h3><p>The graph fits the panel until you zoom or pan it. A wide graph starts at its left edge at a zoom that keeps the text readable. Select <b>Fit</b> to show the whole graph. Select <b>−</b>, <b>+</b>, or <b>100%</b> to zoom. Press Ctrl or Cmd and turn the mouse wheel to zoom around the pointer. Drag the background to pan. Select <b>Full size</b> to fill the window. Select <b>Close</b> or press Escape to return.</p>
     <h3>Groups and specs</h3><p>Progress per release or phase, and the work under each spec.</p>
-    <h3>Tasks and All work</h3><p>The board groups tasks by status; Done shows the latest 10 until you show completed work. The list sorts and filters all work.</p>
+    <h3>All work</h3><p>The list sorts and filters all work by the published status.</p>
     <h3>Project continuity</h3><p>Plan a handover to another harness. Prepare copies the published Owner goal to the successor. The handover record shows the goal as one collapsed line. A Claude successor gets <code>/goal</code> once, after it answers. An invalid published goal, such as a blank value or a value over 1000 characters, is omitted. If migration is unavailable or fails, Prepare starts fresh and records the reason. Fresh preparation captures at most 200 recent source-pane lines and 20,000 characters, and both caps include the truncation marker. It redacts likely credentials and marks the snapshot as historical context. If recent text is unavailable, it tries the visible pane; if both reads fail, it marks context unavailable. The successor only reads and reports until activation. Inspect its answer, then confirm activation. For a project, activation labels the successor <b>orch</b> and the old pane <b>orch previous</b>. For the Boss, it labels them <b>boss</b> and <b>boss previous</b>. Herdr Boss closes the old pane and renames the successor tab to <b>Orchestrator</b> when the successor has answered, or after 15 minutes with the old pane idle. It never closes a pane that works or a pane of a project with a running worker, and it does not do this for the Boss. It tells the Boss when the old pane is still busy after 60 minutes. The Overview shows <b>closing old orchestrator at</b> a time until then. Otherwise it closes the old pane after 120 minutes when the same handoff and pane roles are still confirmed. Unavailable pane data defers retirement until a later engine tick. The successor gets one notice after retirement. The old agent is asked for a final summary for the successor. A project handover notifies the project workers and the Boss. A Boss handover notifies the Boss-workspace peers and the Owner.</p>
-    <h3>Phone</h3><p>On a phone, the long sections start collapsed. Select a section title to open it. The dashboard remembers each open section for this project during the session. Overall progress and the frontier stay open.</p>
+    <h3>Phone</h3><p>On a phone, the long sections start collapsed. Select a section title to open it. The dashboard remembers each open section for this project during the session. Overall progress, the frontier, and the board stay open.</p><p>The board shows one column at a time. The tab bar above it shows each column with its count. Select a tab or swipe sideways to change the column. The graph has its natural size and scrolls sideways in its own box.</p>
     <h3>AGENTS.md drift</h3><p><b>AGENTS.md drift</b> shows the errors and warnings that <b>herdr-boss publish</b> found in the project AGENTS.md. An error is a missing, old, or hand-edited Herdr Boss stub, or a missing, old, or hand-edited kit file <code>docs/orchestration/herdr-boss.md</code>. A warning is stale orchestration text, such as a fixed pane ID, a dated line, a copied model list, or text that sends pushes or product decisions to the Boss. Run <b>herdr-boss check agents</b> in the project for each finding. Run <b>herdr-boss kit install</b> to fix an error.</p>
     <h3>Files</h3><p><b>Files</b> shows the paths that the orchestrator reads: the project memory file, the installed kit file, and the Boss memory file. The home folder shows as <b>~</b>. The panel shows paths only. It never shows the contents of a memory or kit file.</p>
     <h3>Worker config</h3><p><b>Worker config</b> shows the fields that Herdr Boss read from <code>.herdr-boss.json</code> in the project repository. A <b>config</b> tag marks a field that the file sets; the other fields use the default. The <code>setup</code> command shows as <b>set</b> or <b>not set</b>, and a home folder path shows as <b>~</b>. Change a field in <code>.herdr-boss.json</code> in the repository.</p>
@@ -4049,7 +4146,9 @@ function render(force = false) {
       ? { id: active.id, range: typeof active.selectionStart === 'number' ? [active.selectionStart, active.selectionEnd] : null } : null;
     const chatViewState = route === 'chat' ? chatCaptureView() : null;
     const scroll = captureScroll(route);
-    $app.innerHTML = html;
+    if (route === 'projects' && lastRoute === 'projects') patchHtml($app, html);
+    else $app.innerHTML = html;
+    lastRoute = route;
     lastRender = html;
     if (watchField) {
       const field = document.getElementById(watchField.id);
@@ -4065,6 +4164,7 @@ function render(force = false) {
   if (route === 'agents' && agentsViewMode() === 'chart') orgMotion(state);
   else orgEventMark = null;
   syncDepGraphs();
+  syncBoards();
   if (!document.getElementById('help-panel').hidden) fillHelp();
   $updated.textContent = `updated ${ago(state.updatedAt)}`;
 }
@@ -4150,7 +4250,8 @@ document.addEventListener('wheel', (e) => {
 document.addEventListener('pointerdown', (e) => {
   const stage = e.target.closest?.('[data-dep-stage]');
   if (!stage || e.button !== 0) return;
-  if (e.target.closest?.('button, a, .dep-node-group')) return; // a drag on a task box keeps the link working
+  if (e.target.closest?.('button, a, .dep-node-group')) return; // a drag on a task box keeps the selection working
+  if (isPhone() && !depState(stage.dataset.depStage).full) return; // the phone box scrolls natively
   e.preventDefault();
   const st = depState(stage.dataset.depStage);
   depDrag = { slug: stage.dataset.depStage, pointerId: e.pointerId, x: e.clientX, y: e.clientY, cx: st.cx ?? 0, cy: st.cy ?? 0, zoom: st.zoom ?? 1 };
@@ -4162,6 +4263,7 @@ document.addEventListener('pointermove', (e) => {
   const stage = depStageEl(depDrag.slug);
   if (!stage) return;
   const st = depState(depDrag.slug);
+  st.moved = true;
   st.cx = depDrag.cx - (e.clientX - depDrag.x) / depDrag.zoom;
   st.cy = depDrag.cy - (e.clientY - depDrag.y) / depDrag.zoom;
   depTransform(depDrag.slug);
@@ -4194,6 +4296,140 @@ document.addEventListener('keydown', (e) => {
   if (stage) setDepFull(stage.dataset.depStage, false);
 });
 window.addEventListener('resize', () => syncDepGraphs());
+
+// ---------- Board and graph selection ----------
+const scrollBehavior = () => (reducedMotion.matches ? 'auto' : 'smooth');
+let boardScrollAt = 0;
+
+function boardColsEl(slug) {
+  return [...document.querySelectorAll('[data-board-cols]')].find((el) => el.dataset.boardCols === slug) || null;
+}
+
+// Show one board column on the phone. The tabs follow the column in view.
+function showBoardColumn(slug, key, { smooth = true } = {}) {
+  const cols = boardColsEl(slug);
+  const col = cols?.querySelector(`[data-col="${key}"]`);
+  if (!col) return;
+  projectView(slug).boardCol = key;
+  markBoardTab(cols, key);
+  if (!isPhone()) return;
+  if (Math.abs(cols.scrollLeft - col.offsetLeft) > 2) cols.scrollTo({ left: col.offsetLeft, behavior: smooth ? scrollBehavior() : 'auto' });
+}
+
+// On a phone the swipe box takes the height of the column in view, not the height of the longest column.
+function fitBoardHeight(cols, key) {
+  const col = isPhone() && cols.querySelector(`[data-col="${key}"]`);
+  const height = col ? `${col.offsetHeight}px` : '';
+  if (cols.style.height !== height) cols.style.height = height;
+}
+
+function markBoardTab(cols, key) {
+  fitBoardHeight(cols, key);
+  for (const tab of cols.parentElement.querySelectorAll('[data-board-tab]')) {
+    const on = tab.dataset.boardTab === key;
+    tab.setAttribute('aria-selected', String(on));
+    tab.tabIndex = on ? 0 : -1;
+  }
+}
+
+// After a render, the phone board shows the column of the selected tab. A swipe in progress keeps its place.
+function syncBoards() {
+  for (const cols of document.querySelectorAll('[data-board-cols]')) {
+    const key = cols.parentElement.querySelector('[data-board-tab][aria-selected="true"]')?.dataset.boardTab;
+    fitBoardHeight(cols, key);
+    if (!isPhone() || Date.now() - boardScrollAt < 800) continue;
+    const col = key && cols.querySelector(`[data-col="${key}"]`);
+    if (col && Math.abs(cols.scrollLeft - col.offsetLeft) > 2) cols.scrollLeft = col.offsetLeft;
+  }
+}
+
+document.addEventListener('scroll', (e) => {
+  const cols = e.target?.dataset?.boardCols != null ? e.target : null;
+  if (!cols || !isPhone()) return;
+  boardScrollAt = Date.now();
+  const index = Math.max(0, Math.min(FLOW.length - 1, Math.round(cols.scrollLeft / Math.max(1, cols.clientWidth))));
+  const key = cols.children[index]?.dataset.col;
+  if (!key || projectView(cols.dataset.boardCols).boardCol === key) return;
+  projectView(cols.dataset.boardCols).boardCol = key;
+  markBoardTab(cols, key);
+}, true);
+
+// Center the graph on a task node when the node is outside the visible part. The zoom stays.
+function centerGraphOn(slug, id) {
+  const svg = depStageEl(slug)?.querySelector('[data-dep-graph]');
+  const node = [...(svg?.querySelectorAll('[data-task-select]') || [])].find((el) => el.dataset.taskSelect === id);
+  const rect = node?.querySelector('.dep-node');
+  if (!rect) return;
+  const x = Number(rect.getAttribute('x')), y = Number(rect.getAttribute('y')), w = Number(rect.getAttribute('width')), h = Number(rect.getAttribute('height'));
+  const stage = depStageEl(slug);
+  if (isPhone() && !depState(slug).full) {
+    if (x < stage.scrollLeft || x + w > stage.scrollLeft + stage.clientWidth) stage.scrollTo({ left: Math.max(0, x + w / 2 - stage.clientWidth / 2), behavior: scrollBehavior() });
+    return;
+  }
+  const [vx, vy, vw, vh] = (svg.getAttribute('viewBox') || '').split(/\s+/).map(Number);
+  if ([vx, vy, vw, vh].every(Number.isFinite) && x >= vx && y >= vy && x + w <= vx + vw && y + h <= vy + vh) return;
+  const st = depState(slug);
+  if (st.zoom == null) depTransform(slug);
+  st.cx = x + w / 2; st.cy = y + h / 2; st.moved = true;
+  depTransform(slug);
+}
+
+function revealCard(slug, id) {
+  const card = document.getElementById(cardDomId(slug, id));
+  if (!card) return;
+  const fold = card.closest('details');
+  if (fold && !fold.open) fold.open = true;
+  const col = card.closest('[data-col]');
+  if (col) showBoardColumn(slug, col.dataset.col);
+  card.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: scrollBehavior() });
+  card.querySelector('.card-title')?.focus({ preventScroll: true });
+}
+
+// A card title selects the task and shows its chain in the graph. A graph node or a blocker link selects the task and shows its card.
+// Selecting the selected task from its card or its node clears the selection.
+function selectTask(slug, id, reveal) {
+  const view = projectView(slug);
+  view.selected = view.selected === id && reveal !== 'card-link' ? null : id;
+  lastRender = '';
+  render();
+  if (!view.selected) return;
+  centerGraphOn(slug, id);
+  if (reveal === 'card' || reveal === 'card-link') revealCard(slug, id);
+}
+
+document.addEventListener('click', (e) => {
+  const pick = e.target.closest?.('[data-task-select]');
+  if (pick) {
+    e.preventDefault();
+    const reveal = pick.classList.contains('wait-link') ? 'card-link' : pick.dataset.reveal;
+    selectTask(pick.dataset.slug, pick.dataset.taskSelect, reveal);
+    return;
+  }
+  const tab = e.target.closest?.('[data-board-tab]');
+  if (tab) { showBoardColumn(tab.dataset.slug, tab.dataset.boardTab); return; }
+  const more = e.target.closest?.('[data-board-done]');
+  if (more) {
+    const view = projectView(more.dataset.boardDone);
+    view.doneAll = !view.doneAll;
+    lastRender = ''; render();
+  }
+});
+
+document.addEventListener('keydown', (e) => {
+  const node = e.target.closest?.('g[data-task-select]');
+  if (node && (e.key === 'Enter' || e.key === ' ')) {
+    e.preventDefault();
+    selectTask(node.dataset.slug, node.dataset.taskSelect, 'card');
+    return;
+  }
+  const tab = e.target.closest?.('[data-board-tab]');
+  if (!tab || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
+  e.preventDefault();
+  const i = FLOW.indexOf(tab.dataset.boardTab);
+  const next = e.key === 'Home' ? 0 : e.key === 'End' ? FLOW.length - 1 : (i + (e.key === 'ArrowRight' ? 1 : -1) + FLOW.length) % FLOW.length;
+  showBoardColumn(tab.dataset.slug, FLOW[next]);
+  tab.parentElement.querySelector(`[data-board-tab="${FLOW[next]}"]`)?.focus();
+});
 document.addEventListener('keydown', (e) => {
   const viewer = document.getElementById('browser-viewer');
   if (viewer.open && e.target === viewer.querySelector(':scope > img') && viewer.querySelector('#browser-viewer-control').checked) {
@@ -4281,6 +4517,11 @@ document.addEventListener('input', (e) => {
 document.addEventListener('change', (e) => {
   if (e.target.matches?.('[data-overview-guard-toggle]')) {
     updateOverviewMachineGuard('toggle', 1, e.target.checked);
+    return;
+  }
+  if (e.target.dataset?.graphOpen) {
+    projectView(e.target.dataset.graphOpen).graphAll = !e.target.checked;
+    lastRender = ''; render();
     return;
   }
   const projectControl = e.target.dataset?.projectDone || e.target.dataset?.projectSort || e.target.dataset?.projectGroup;
