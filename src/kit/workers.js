@@ -1110,7 +1110,7 @@ export function startWorker(name, options, {
       // In the vendor test, Luna failed to report a broken tool in 28.7% of cases. Sol 6.1 failed in 2.8%.
       model === 'gpt-6-luna' ? 'Report a failing tool, a missing file, or missing evidence explicitly in your report. Never give a best guess in place of a result. The orchestrator verifies each claim at the source.' : '',
     ].filter(Boolean).join('\n'),
-    kindWaitNote: options.kind === 'claude' ? 'To wait, use a background command and wait for its exit, or a herdr-boss wait command. Do not run sleep and then poll.' : '',
+    kindWaitNote: options.kind === 'claude' ? 'To wait, use a background command and wait for its exit. Do not run sleep and then poll. Do not run herdr-boss wait: it waits on other workers.' : '',
     portInstruction: leases.some((lease) => lease.pool === 'serve-ports')
       ? `Use only the port in \`${path.posix.join(plan.workerDir, 'port')}\`. Take no other serve port.`
       : '',

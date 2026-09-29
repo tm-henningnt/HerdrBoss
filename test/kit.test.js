@@ -2040,7 +2040,7 @@ test('worker briefs add harness notes, the Git rule, and a long TMPDIR warning',
     config: claude.config, models: loadModels(), herdr: claude.herdr, env: claude.env, rulesFile: claude.rulesFile, output: () => {},
   });
   const claudeBrief = fs.readFileSync(path.join(claudeRun.worktree, '.worker/brief.md'), 'utf8');
-  assert.match(claudeBrief, /To wait, use a background command and wait for its exit, or a herdr-boss wait command\. Do not run sleep and then poll\./);
+  assert.match(claudeBrief, /To wait, use a background command and wait for its exit\. Do not run sleep and then poll\. Do not run herdr-boss wait: it waits on other workers\./);
   assert.doesNotMatch(claudeBrief, /In a Codex shell, run `setopt NO_BG_NICE` before a background command\./);
 
   const long = setupFixture(null);

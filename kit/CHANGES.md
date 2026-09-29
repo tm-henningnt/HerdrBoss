@@ -37,3 +37,7 @@ Summary: Carry the Owner /goal over in an orchestrator handover.
 ## 4f7a0c699512
 Impact: useful
 Summary: Add a blocking herdr-boss wait for the few cases that must block.
+
+## 60049d639ff0
+Impact: useful
+Summary: Tell orchestrators to start workers with --task-id so the board shows live task state.
