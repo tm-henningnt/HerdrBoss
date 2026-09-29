@@ -59,7 +59,9 @@ Owner queue (credentials, billing, and Owner-applied settings):
 ## State at the stand-down (2026-09-29)
 
 - **In progress:** nothing. No worker runs, and no task is half-done. `main` is pushed and passes the full suite.
-- **Next task:** none is queued. The first thing to do at resume is to delete the Claude quota hold line above, if the reset on Thu 2026-10-01 21:00 has passed, and to ask the Boss for the next task.
+- **First task at resume (Boss, 2026-09-29):** fix a deadlock from V111. Under `herdr-boss push`, a pre-push hook that runs `herdr-boss suite --reuse` queues behind the full-suite lock that the push itself holds (seen in Viz: lock list showed the push as holder and its own suite in the queue). Make a suite or lock call under a push from the same process tree reuse the held lock, re-entrant through an environment token that `herdr-boss push` sets, not queue. Add a test. Then correct the kit line "A push reuses a suite pass of the same clean tree" and the V111 docs to match.
+- **Interim kit advice (until that fix):** in a pre-push hook, run the suite directly. Use `suite --reuse` only in gate scripts that run outside `herdr-boss push`. The Boss tells the projects.
+- **Next after that:** delete the Claude quota hold line above, if the reset on Thu 2026-10-01 21:00 has passed, and ask the Boss for the next task.
 - **Open branches:** `kit-cli` and `kit-docs`, from 2026-09-24, before the kit split. They are not merged and not needed; `main` holds the kit. Ask the Boss before you delete them.
 - **Worktrees:** only the main checkout. Create the integration worktree again when you merge: `git worktree add -B integrate ~/Projects/.herdr-wt/HerdrBoss/integrate main`.
 - **Leases:** none. The project browser is closed, and its port 9225 is released.
