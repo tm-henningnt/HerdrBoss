@@ -9,7 +9,7 @@ import { allowWorkerScope, collectWorker, createHerdrRunner, listWorkers, parkWo
 import { pruneWorktrees } from './worktrees.js';
 import { acquireProjectLock, listProjectLocks, pushWithLock, releaseProjectLock } from './locks.js';
 import { SUITE_WAIT_SECONDS, listSuitePasses, runSuite } from './suite.js';
-import { agentsBlock, checkAgentsFile, installKit, kitChangesSince, kitRevision, KIT_FILE, rulesPolicy } from './agents-check.js';
+import { agentsBlock, checkAgentsFile, installedKitRevision, installKit, kitChangesSince, kitRevision, KIT_FILE, rulesPolicy } from './agents-check.js';
 import { listProjects } from '../projects.js';
 
 const USAGE = `Kit commands:
@@ -67,17 +67,7 @@ function knownFlags(flags, allowed) {
   if (unknown.length) fail(`Unknown option: --${unknown[0]}.`);
 }
 
-// The version line that installKit writes. It mirrors KIT_VERSION in src/kit/agents-check.js.
-const KIT_VERSION_LINE = /^<!--\s*herdr-boss kit v=(\S*)\s*-->$/;
-
-// The kit revision that a project has installed, read from its own kit file. Returns null when the
-// file is missing, unreadable, or has no version line.
-export function installedKitRevision(root) {
-  try {
-    const [line] = fs.readFileSync(path.join(root, KIT_FILE), 'utf8').split('\n');
-    return KIT_VERSION_LINE.exec(String(line ?? '').trim())?.[1] || null;
-  } catch { return null; }
-}
+export { installedKitRevision };
 
 // The digest lines of a kit update, oldest change first. The digest names the impact and the
 // summary of every change. With no change it gives one line.

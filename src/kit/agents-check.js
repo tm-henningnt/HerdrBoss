@@ -12,7 +12,8 @@ export const KIT_FILE = 'docs/orchestration/herdr-boss.md';
 const KIT_NOTE = 'Herdr Boss writes this file. Do not edit it. Run herdr-boss kit install to update it.';
 const KIT_VERSION = /^<!--\s*herdr-boss kit v=(\S*)\s*-->$/;
 // The Claude SessionStart hook prints the kit file and the project memory. A missing file does not fail the hook.
-export const HOOK_COMMAND = 'cd "${CLAUDE_PROJECT_DIR:-.}" && cat docs/orchestration/herdr-boss.md docs/orchestration/memory.md 2>/dev/null; exit 0';
+// It first runs herdr-boss kit update --quiet, so the printed kit file is current. A failed or missing update does not fail the hook.
+export const HOOK_COMMAND = 'cd "${CLAUDE_PROJECT_DIR:-.}" && { herdr-boss kit update --quiet 2>/dev/null; cat docs/orchestration/herdr-boss.md docs/orchestration/memory.md 2>/dev/null; }; exit 0';
 const INSTALL = 'run herdr-boss kit install';
 const BEGIN = /^\s*<!--\s*herdr-boss:begin(?:\s+v=(\S*))?\s*-->\s*$/;
 const END = /^\s*<!--\s*herdr-boss:end\s*-->\s*$/;
@@ -155,6 +156,28 @@ export function kitChangesSince(revision, file = CHANGES_FILE) {
   const index = entries.findIndex((entry) => entry.revision === revision);
   if (index < 0) return entries;
   return entries.slice(index + 1);
+}
+
+// The kit revision that a project has installed, read from its own kit file. Returns null when the
+// file is missing, unreadable, or has no version line.
+export function installedKitRevision(root) {
+  try {
+    const [line] = fs.readFileSync(path.join(root, KIT_FILE), 'utf8').split('\n');
+    return KIT_VERSION.exec(String(line ?? '').trim())?.[1] || null;
+  } catch { return null; }
+}
+
+// One line that says the project kit is behind for a required or useful change, or null. A project
+// with no installed kit, a current kit, or only changes with impact none gives null.
+export function kitBehindLine(root, { changesFile = CHANGES_FILE, current = kitRevision() } = {}) {
+  const installed = installedKitRevision(root);
+  if (!installed || installed === current) return null;
+  const changes = kitChangesSince(installed, changesFile);
+  const required = changes.filter((change) => change.impact === 'required').length;
+  const useful = changes.filter((change) => change.impact === 'useful').length;
+  if (!required && !useful) return null;
+  const parts = [required && `${required} required`, useful && `${useful} useful`].filter(Boolean).join(' and ');
+  return `Kit update: this project kit is behind by ${parts} change(s). Run herdr-boss kit update.`;
 }
 
 // Findings for the text of docs/orchestration/herdr-boss.md. text is null for a missing file.

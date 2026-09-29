@@ -314,7 +314,7 @@ When a task names `serve:live` and the `serve-ports` pool exists, `worker start`
 |---|---|
 | `docs/orchestration/herdr-boss.md` | The kit file. The body is `kit/templates/project-kit.md`. Only Herdr Boss writes this file. |
 | `AGENTS.md` | The stub between the markers. The stub body is `kit/templates/agents-stub.md`. |
-| `.claude/settings.json` | A Claude `SessionStart` hook that prints the kit file and `docs/orchestration/memory.md`. |
+| `.claude/settings.json` | A Claude `SessionStart` hook that runs `herdr-boss kit update --quiet`, then prints the kit file and `docs/orchestration/memory.md`. |
 
 The revision covers `kit/templates/`, `kit/skills/herdr-orchestrator/SKILL.md`, its reference files, and `kit/models.json`. It does not change when service, dashboard, or website files change.
 
@@ -342,6 +342,10 @@ The stub in `AGENTS.md` has this form:
 `kit install` merges the hook into `.claude/settings.json` and keeps all other keys and hooks. It adds the hook one time. It replaces an older Herdr Boss hook, which it finds by the text `cat docs/orchestration/herdr-boss.md` in the command. It creates the file when it does not exist. It refuses a file that is not valid JSON. Codex has no equivalent hook.
 
 `kit install` computes all files before it writes. An error writes no file.
+
+The hook prints the digest of `kit update --quiet` before the kit file. A failed or missing `herdr-boss` command does not fail the hook. The hook still prints the kit file and the memory file.
+
+`worker start`, `publish`, and `handoff plan|prepare` check the kit revision of the project in the Git top level. When the project kit is behind for at least one `required` or `useful` change, the command prints one line: `Kit update: this project kit is behind by N required and M useful change(s). Run herdr-boss kit update.` `worker start` prints the line to standard output. `publish` and `handoff` print it to standard error. The command prints nothing when the kit is current, when the project has no kit file, or when all changes have the impact `none`.
 
 `kit update` prints its digest before it writes any file. The digest names the impact and the summary of every kit change after the installed revision, oldest first. The installed revision is the version line of the kit file of the project. When the change log does not know that revision, the digest lists every known change and says that the revision is unknown. With no change the digest is one line. `--quiet` keeps the digest and the final `kit update: kit revision ...` line, and hides the `wrote FILE` and `unchanged FILE` lines. `kit update` installs in all cases.
 
