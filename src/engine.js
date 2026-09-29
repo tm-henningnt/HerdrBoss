@@ -23,6 +23,7 @@ import { readKitNotice, pendingKitAlert, isKitAlert, kitNoticeTargets } from './
 import { kitRevisionState, kitSnapshot, KIT_STATES } from './kit/agents-check.js';
 import { nextDailyTime, nightNoticeSent, quietHoursActive, readNight, readNightRecord, watchUntilPhrase, withNightReportMark, withNoticeMark, writeNight } from './night.js';
 import { inspectWorkerTransitions, inspectWorkerReports, isWorkerPane, applyWorkerFailureStatuses, resolveFreeUsageRun, activeFreeModelExhaustions, extendFreeModelExhaustion, activeFreeLaneExhaustions, extendFreeLaneExhaustion, freeUsageLaneRetry } from './worker-failures.js';
+import { appendMachineSample, sampleLine } from './machine-samples.js';
 import { FULL_SUITE_LOCK, lockLedgerSummary, readLockQueue, readLockTakeoverNotices, readMachineLocks, removeLockTakeoverNotice } from './kit/locks.js';
 
 const MEMORY_FILE = path.join(DATA_DIR, 'memory.json');
@@ -508,6 +509,17 @@ export class Engine extends EventEmitter {
     this.messageVersion = version;
   }
 
+  // One line for each UTC minute. A slow tick leaves a gap. The write never throws.
+  recordMachineSample(snap, queue, now) {
+    try {
+      const minute = Math.floor(now / 60000);
+      if (this.memory.lastSampleMinute === minute) return;
+      this.memory.lastSampleMinute = minute;
+      const holders = (snap.locks || []).filter((lock) => lock.name === FULL_SUITE_LOCK && lock.state === 'live');
+      appendMachineSample(sampleLine({ machine: snap.machine, holders, waiters: queue, now }), { dataDir: this.lockDataDir });
+    } catch {}
+  }
+
   async tick() {
     if (this.running) return this.state;
     this.running = true;
@@ -683,9 +695,10 @@ export class Engine extends EventEmitter {
         errors,
         modelScorecard: buildModelScorecard(readUsage(), now),
       };
+      let queue = [];
       try {
         const livePanes = new Set((herdr?.panes || []).map((pane) => pane.id));
-        const queue = readLockQueue({ dataDir: this.lockDataDir, livePanes, now });
+        queue = readLockQueue({ dataDir: this.lockDataDir, livePanes, now });
         snap.locks = readMachineLocks({
           dataDir: this.lockDataDir,
           livePanes,
@@ -736,6 +749,7 @@ export class Engine extends EventEmitter {
         snap.machine.cpuUse = snap.cpuUse;
         snap.machine.cpuTotalSample = [...procs.values()].reduce((sum, proc) => sum + Math.max(0, proc.cpu), 0);
         snap.machine.limits = machineLimits(snap.machine, policy, now, snap.night);
+        if (this.act) this.recordMachineSample(snap, queue, now);
       }
       // The unmetered lane lists the permitted free models that can start. It never affects least-over selection.
       snap.lanes.unmetered = unmeteredLane(this.models, policy, control.projects, this.memory.exhaustedFreeModels, {
