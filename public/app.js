@@ -77,7 +77,11 @@ let machineGuardMessage = '';
 let nightBusy = false;
 let nightMessage = '';
 // The Watch form on the Agents page. until is a datetime-local value; null means the default at the next render.
-const watchForm = { until: null, forever: false, daily: false, report: '07:30' };
+const watchForm = { until: null, forever: false, daily: false, report: '07:30', routines: {}, adhoc: '' };
+// The routine editors on Settings keep their drafts, their open state, and their messages across renders.
+const routineDrafts = {};
+const routineOpen = new Set();
+const routineMessages = {};
 let hashScrolled = false;
 
 function markPolicyDirty() {
@@ -284,9 +288,13 @@ async function updateNight(action) {
   if (nightBusy) return;
   if (action === 'stop' && !confirm('Stop the watch?\n\nThe Owner rules apply again at once. The Boss sends the end notice to every pane that got the start notice.')) return;
   if (action === 'start' && !watchFormView().valid) { nightMessage = watchFormView().warning; lastRender = ''; render(true); return; }
-  const body = action === 'start' ? (watchForm.forever
-    ? { untilCancelled: true, ...(watchForm.daily ? { report: watchForm.report } : {}) }
-    : { until: new Date(watchForm.until).toISOString() }) : undefined;
+  const body = action === 'start' ? {
+    ...(watchForm.forever
+      ? { untilCancelled: true, ...(watchForm.daily ? { report: watchForm.report } : {}) }
+      : { until: new Date(watchForm.until).toISOString() }),
+    routines: watchRoutineChoiceBody(),
+    adhoc: watchForm.adhoc,
+  } : undefined;
   const quietHours = action === 'start' ? document.querySelector('[data-night-quiet-hours]')?.checked === true : undefined;
   nightBusy = true;
   nightMessage = action === 'start' ? 'Starting the watch…' : 'Stopping the watch…';
@@ -721,7 +729,7 @@ function settingsView(s) {
   const harnessPanel = `<section class="panel harness-readiness-panel"><h2>Harness readiness</h2><div class="service-settings-scroll"><table class="service-settings-table harness-readiness-table"><thead><tr><th scope="col">Status</th><th scope="col">Area</th><th scope="col">Item</th></tr></thead><tbody>${harnessRows}</tbody></table></div><p class="service-settings-note">Run herdr-boss harness sync to see the changes to make.</p></section>`;
   const night = s.night || { active: false };
   const nightPanel = `<section class="panel night-panel"><h2>Watch</h2><p class="setting-help">The Watch control is on the <a href="/agents#watch">Agents page</a>.</p></section>`;
-  const settingsPanels = `${quotaPanel}${machineSettings}${nightPanel}${avatarSettings(s)}${serviceSettings}${harnessPanel}`;
+  const settingsPanels = `${quotaPanel}${machineSettings}${nightPanel}${watchRoutineSettings(s)}${avatarSettings(s)}${serviceSettings}${harnessPanel}`;
   return `<header class="page-intro"><div><h1>Settings</h1><p>Assign models and provider routes in each harness. Set provider quotas and machine limits below.</p></div></header><section id="settings-plane" class="control-shell"><section class="panel"><h2>Harnesses</h2><p class="setting-help harness-help">Clear a model box to stop that harness from using it. The same model in another harness keeps its own box and provider.</p>${ignoredCount ? `<p class="setting-help harness-help" role="note" style="color: var(--warn)">${ignoredCount} legacy provider route${ignoredCount === 1 ? ' is' : 's are'} not compatible with ${ignoredCount === 1 ? 'its harness' : 'their harnesses'}. Herdr Boss treats ${ignoredCount === 1 ? 'it' : 'them'} as Unmetered. Choose a provider in each marked row before you apply the policy.</p>` : ''}<div class="harness-grid">${harnesses}</div></section><div class="settings-grid">${settingsPanels}</div><div class="control-actions ${policyDirty ? 'pending' : ''}"><span data-policy-status role="status" aria-live="polite">${esc(saveMessage || (policyDirty ? 'Unsaved changes · Apply policy to keep them' : 'Policy saved'))}</span><button id="save-policy" ${policyDirty ? '' : 'disabled'}>Apply policy</button></div></section>`;
 }
 
@@ -1627,6 +1635,128 @@ function analyticsView(s) {
   ].join('');
 }
 
+// The text of a routine schedule.
+function routineScheduleText(routine) {
+  return routine.every !== undefined ? `every ${routine.every} min` : `${routine.beforeEnd} before the end`;
+}
+
+// The Watch form value of a routine. The first render takes the value from the service, which holds the last choice.
+function watchRoutineDraft(routine) {
+  return (watchForm.routines[routine.id] ??= { enabled: routine.enabled !== false, every: routine.every, beforeEnd: routine.beforeEnd });
+}
+
+// The choice that the start request carries: one entry for each routine.
+function watchRoutineChoiceBody() {
+  return Object.fromEntries((state?.watchRoutines || []).map((routine) => {
+    const draft = watchRoutineDraft(routine);
+    if (draft.enabled === false) return [routine.id, { enabled: false }];
+    return [routine.id, routine.every !== undefined ? { enabled: true, every: Number(draft.every) } : { enabled: true, beforeEnd: draft.beforeEnd }];
+  }));
+}
+
+// The routine rows and the ad-hoc text of the Watch form.
+function watchRoutineFields(s) {
+  const dis = nightBusy ? ' disabled' : '';
+  const rows = (s?.watchRoutines || []).map((routine) => {
+    const draft = watchRoutineDraft(routine);
+    const id = esc(routine.id);
+    const when = routine.every !== undefined
+      ? `every <input type="number" id="wr-every-${id}" min="1" max="1440" inputmode="numeric" data-routine-every="${id}" value="${esc(draft.every)}" aria-label="${esc(routine.title)}: minutes between runs"${dis}> min`
+      : `<input type="time" id="wr-before-${id}" data-routine-before="${id}" value="${esc(draft.beforeEnd)}" aria-label="${esc(routine.title)}: time before the end"${dis}> before the end`;
+    return `<div class="watch-routine"><label class="setting-line"><input type="checkbox" data-routine-enabled="${id}"${draft.enabled ? ' checked' : ''}${dis}><span>${esc(routine.title)}</span></label><span class="watch-routine-when">${when}</span></div>`;
+  }).join('');
+  return `<fieldset class="watch-routines"><legend>Routines</legend>${rows || '<p class="setting-help">No routine is defined.</p>'}</fieldset><label class="watch-adhoc"><span>Instructions for this watch</span><textarea id="watch-adhoc" data-watch-adhoc rows="3" maxlength="2000" placeholder="Optional. The Boss gets this text with each routine. The orchestrators get it in the start notice."${dis}>${esc(watchForm.adhoc)}</textarea></label>`;
+}
+
+// The routines of the running watch, with the next run and the last run.
+function watchRoutineLive(night) {
+  const items = night.routines || [];
+  const extra = night.adhoc ? `<p class="setting-help">Instructions for this watch: ${esc(night.adhoc)}</p>` : '';
+  if (!items.length) return `<p class="setting-help">No routine runs in this watch.</p>${extra}`;
+  const rows = items.map((routine) => {
+    const note = routine.waitingSince ? ' · waiting for an idle Boss' : routine.missedAt ? ` · skipped ${watchLabel(routine.missedAt)}` : '';
+    return `<li><b>${esc(routine.title)}</b><span>${esc(routineScheduleText(routine))}</span><span>Next ${routine.nextAt ? esc(watchLabel(routine.nextAt)) : 'none'} · Last ${routine.lastAt ? esc(watchLabel(routine.lastAt)) : 'never'}${esc(note)}</span></li>`;
+  }).join('');
+  return `<ul class="watch-routine-list">${rows}</ul>${extra}`;
+}
+
+// The editor draft of one routine on Settings. The key __new is the form of a new routine.
+function routineEditorDraft(key, routine) {
+  return (routineDrafts[key] ??= {
+    id: '', title: routine?.title ?? '', model: routine?.model ?? 'default',
+    kind: routine?.beforeEnd !== undefined ? 'beforeEnd' : 'every',
+    every: routine?.every ?? 60, beforeEnd: routine?.beforeEnd ?? '01:00', prompt: routine?.prompt ?? '',
+  });
+}
+
+function routineEditor(routine) {
+  const key = routine ? routine.id : '__new';
+  const draft = routineEditorDraft(key, routine);
+  const k = esc(key);
+  const field = (name) => `id="rd-${k}-${name}" data-rd="${k}:${name}"`;
+  const source = routine ? { kit: 'kit text', override: 'edited', custom: 'own routine' }[routine.source] : 'new';
+  const summary = routine ? `${esc(routine.title)} <small>${esc(routineScheduleText(routine))} · ${source}</small>` : 'Add a routine';
+  const schedule = draft.kind === 'every'
+    ? `<input type="number" ${field('every')} min="1" max="1440" inputmode="numeric" value="${esc(draft.every)}" aria-label="Minutes between runs"> min`
+    : `<input type="time" ${field('beforeEnd')} value="${esc(draft.beforeEnd)}" aria-label="Time before the end"> before the end`;
+  const reset = routine && routine.source !== 'kit'
+    ? `<button type="button" data-routine-reset="${k}">${routine.source === 'custom' ? 'Delete routine' : 'Reset to the kit text'}</button>`
+    : '';
+  return `<details class="routine-editor" data-routine-details="${k}"${routineOpen.has(key) ? ' open' : ''}><summary>${summary}</summary><div class="routine-fields">`
+    + (routine ? '' : `<label><span>Id</span><input ${field('id')} value="${esc(draft.id)}" maxlength="40" placeholder="lowercase-with-hyphens"></label>`)
+    + `<label><span>Title</span><input ${field('title')} value="${esc(draft.title)}" maxlength="60"></label>`
+    + `<label><span>Model hint</span><input ${field('model')} value="${esc(draft.model)}" maxlength="40"></label>`
+    + `<label><span>Schedule</span><select ${field('kind')}><option value="every"${draft.kind === 'every' ? ' selected' : ''}>Every N minutes</option><option value="beforeEnd"${draft.kind === 'beforeEnd' ? ' selected' : ''}>Before the end of the watch</option></select></label>`
+    + `<label><span>Time</span><span class="routine-when">${schedule}</span></label>`
+    + `<label class="routine-prompt"><span>Prompt</span><textarea ${field('prompt')} rows="10" maxlength="8000">${esc(draft.prompt)}</textarea></label>`
+    + `<div class="routine-actions"><button type="button" data-routine-save="${k}">Save</button>${reset}<span class="setting-help" role="status" aria-live="polite">${esc(routineMessages[key] || '')}</span></div>`
+    + '</div></details>';
+}
+
+function watchRoutineSettings(s) {
+  const routines = s?.watchRoutines || [];
+  return `<section class="panel night-panel watch-routine-settings" id="watch-routines"><h2>Watch routines</h2><p class="setting-help">A routine is a prompt that the service sends to the Boss pane while a watch runs. Turn routines on for a watch in the Watch box on the <a href="/agents#watch">Agents page</a>. The default texts are kit files. A change here is saved on this machine and never changes the kit file.</p>${routines.map(routineEditor).join('')}${routineEditor(null)}</section>`;
+}
+
+async function sendJson(method, url, body) {
+  const response = await fetch(url, { method, headers: { 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || (result.errors || []).join(' ') || 'The request failed.');
+  return result;
+}
+
+async function saveRoutineEditor(key) {
+  const draft = routineDrafts[key];
+  if (!draft) return;
+  const id = key === '__new' ? draft.id.trim() : key;
+  const body = {
+    title: draft.title, model: draft.model, prompt: draft.prompt,
+    ...(draft.kind === 'every' ? { every: Number(draft.every) } : { beforeEnd: draft.beforeEnd }),
+  };
+  try {
+    await sendJson('PUT', `/api/watch/routines/${encodeURIComponent(id)}`, body);
+    delete routineDrafts[key];
+    delete watchForm.routines[id];
+    routineMessages[key] = 'Saved.';
+  } catch (error) { routineMessages[key] = error.message; }
+  await refreshState();
+  lastRender = '';
+  render(true);
+}
+
+async function resetRoutineEditor(key) {
+  if (!confirm('Reset this routine to the kit text?\n\nA routine that you added is deleted.')) return;
+  try {
+    await sendJson('DELETE', `/api/watch/routines/${encodeURIComponent(key)}`);
+    delete routineDrafts[key];
+    delete watchForm.routines[key];
+    routineMessages[key] = 'Reset.';
+  } catch (error) { routineMessages[key] = error.message; }
+  await refreshState();
+  lastRender = '';
+  render(true);
+}
+
 // The Watch control. It sits at the top of the Agents page in a compact box. The form values live in watchForm.
 function watchPanel(s) {
   const night = s?.night || { active: false };
@@ -1634,8 +1764,8 @@ function watchPanel(s) {
   const status = `${night.active ? `On watch ${watchUntilPhrase(night)}${night.quietHours ? ' · Quiet hours on' : ''}.` : 'No watch runs.'}${nightMessage ? ` ${nightMessage}` : ''}`;
   const dis = nightBusy ? ' disabled' : '';
   const form = night.active
-    ? `<button type="button" data-night-stop="true"${dis}>Stop the watch</button>`
-    : `<div class="watch-form" data-night-form><label class="setting-line"><span>Until</span><input type="datetime-local" data-night-until value="${esc(watchForm.until)}" aria-label="Watch end date and time"${watchForm.forever || nightBusy ? ' disabled' : ''}></label><span class="watch-length" data-night-length aria-live="polite"></span><label class="setting-line"><input type="checkbox" data-night-forever aria-label="Watch until I cancel"${watchForm.forever ? ' checked' : ''}${dis}><span>Until I cancel</span></label><span class="watch-daily" data-night-daily-row${watchForm.forever ? '' : ' hidden'}><label class="setting-line"><input type="checkbox" data-night-daily aria-label="Send a daily report"${watchForm.daily ? ' checked' : ''}${dis}><span>Daily report</span></label><input type="time" data-night-report value="${esc(watchForm.report)}" aria-label="Daily report time"${watchForm.daily && !nightBusy ? '' : ' disabled'}></span><label class="setting-line"><input type="checkbox" data-night-quiet-hours aria-label="Quiet hours during the watch"${dis}><span>Quiet hours</span></label><button type="button" data-night-start="true"${dis}>Start</button><p class="setting-help watch-warning" role="alert" data-night-warning></p></div>`;
+    ? `${watchRoutineLive(night)}<button type="button" data-night-stop="true"${dis}>Stop the watch</button>`
+    : `<div class="watch-form" data-night-form><label class="setting-line"><span>Until</span><input type="datetime-local" data-night-until value="${esc(watchForm.until)}" aria-label="Watch end date and time"${watchForm.forever || nightBusy ? ' disabled' : ''}></label><span class="watch-length" data-night-length aria-live="polite"></span><label class="setting-line"><input type="checkbox" data-night-forever aria-label="Watch until I cancel"${watchForm.forever ? ' checked' : ''}${dis}><span>Until I cancel</span></label><span class="watch-daily" data-night-daily-row${watchForm.forever ? '' : ' hidden'}><label class="setting-line"><input type="checkbox" data-night-daily aria-label="Send a daily report"${watchForm.daily ? ' checked' : ''}${dis}><span>Daily report</span></label><input type="time" data-night-report value="${esc(watchForm.report)}" aria-label="Daily report time"${watchForm.daily && !nightBusy ? '' : ' disabled'}></span><label class="setting-line"><input type="checkbox" data-night-quiet-hours aria-label="Quiet hours during the watch"${dis}><span>Quiet hours</span></label>${watchRoutineFields(s)}<button type="button" data-night-start="true"${dis}>Start</button><p class="setting-help watch-warning" role="alert" data-night-warning></p></div>`;
   return `<section class="panel night-panel watch-compact" id="watch"><h2>Watch</h2><p class="setting-help" role="status" aria-live="polite" data-night-status>${esc(status)}</p>${form}</section>`;
 }
 
@@ -3716,6 +3846,7 @@ const HELP = {
     <p>Each harness section holds the models and provider routes of that harness. Provider quotas and machine limits are below the harnesses.</p>
     <h3>Avatars</h3><p>The <b>Avatars</b> section has one row for the Boss and one row for each project. A row shows the avatar of that chat. Select <b>Upload image</b> to use your own image. Select <b>Reset</b> to use the generated avatar again. An image is a PNG, JPEG, or WebP file of at most 512 KB. Herdr Boss keeps no other format. The image shows at once in the Chat, the Mailbox, and the Agents chart. Without an image, the page uses a generated avatar. Its color comes from the name of the project, and it stays the same. The two letters come from the project display name, the same on every page. The Boss has a crown. Each other project has two letters. The letters use the color of the best contrast on the circle.</p>
     <h3>Watch</h3><p>The <b>Watch</b> box is on the <b>Agents</b> page. Select the link on this page to open it.</p>
+    <h3>Watch routines</h3><p>Each routine in the <b>Watch routines</b> section has a title, a model hint, a schedule, and a prompt text. Select a routine to edit it. The schedule is a number of minutes between runs, or a time before the end of the watch. Select <b>Save</b> to store the change on this machine. The change never edits the kit file, and it applies to the next prompt of a running watch. Select <b>Reset to the kit text</b> to remove your change. Use <b>Add a routine</b> to create your own routine. Turn routines on or off for a watch in the Watch box on the Agents page.</p>
     <h3>Service settings</h3><p>The table shows the values that the service uses. Each row shows whether the value comes from <code>config.json</code> or a default. Rows with inputs can be changed in the dashboard. Change the values in a group, then select <b>Save</b>. Herdr Boss applies saved values at once. Keep the quota warning below the critical value. Rows without inputs are read-only. Change in <code>config.json</code> and restart.</p>
     <h3>Harness readiness</h3><p>This read-only table shows the status of each harness entry that orchestration needs. A row shows the status, the area, and the item. The status is <code>ok</code>, <code>missing</code>, or <code>bad</code>. The table shows no file path and no setting value. Herdr Boss reads these entries at each service start and then every 10 minutes. Run <code>herdr-boss harness sync</code> to see the changes to make.</p>
     <h3>Harnesses</h3><p>Clear <b>Available</b> to stop all workers from using a harness. The preferred model is the model that worker start and handover use when no model is given. An empty choice uses the harness default.</p>
@@ -3735,7 +3866,11 @@ const HELP = {
     <p>Changes stay in a draft until you select <b>Apply policy</b>. A rejected save shows the server error and keeps your draft.</p>`],
   agents: ['Agents', `
     <p>One page with two views. The switch at the top changes the view. The <b>Chart</b> view shows the organization from the Owner down to the workers. The <b>List</b> view lists every Herdr workspace with its orchestrator and workers. Chart is the default. The URL holds the view as <code>?view=chart</code> or <code>?view=list</code>, and this browser remembers the last choice.</p>
-    <h3>Watch</h3><p>The box at the top shows the watch state. Choose the end date and time in the picker. The default is the next 07:30: today when it is before 07:30, tomorrow otherwise. The length in hours shows next to the picker, and a warning shows above 48 hours. A watch has no maximum length. The end time must be in the future. Select <b>Until I cancel</b> to run the watch until you stop it. Then you can select <b>Daily report</b> and set a time, by default 07:30. A watch until cancelled sends no report unless you select this. Select <b>Quiet hours</b> to hold back the held actions. Select <b>Start</b> to start the watch. Select <b>Stop the watch</b> to end it. The page asks you to confirm first. The read-only preview refuses both actions.</p>
+    <h3>Watch</h3><p>The box at the top shows the watch state. Choose the end date and time in the picker. The default is the next 07:30: today when it is before 07:30, tomorrow otherwise. The length in hours shows next to the picker, and a warning shows above 48 hours. A watch has no maximum length. The end time must be in the future.</p>
+    <p>Select <b>Until I cancel</b> to run the watch until you stop it. Then you can select <b>Daily report</b> and set a time, by default 07:30. A watch until cancelled sends no report unless you select this. Select <b>Quiet hours</b> to hold back the held actions.</p>
+    <p>The <b>Routines</b> list shows the prompts that the service sends to the Boss pane during the watch. Clear the box of a routine to leave it out of this watch. Set its schedule: a number of minutes between runs, or a time before the end of the watch. A routine before the end has no run in a watch until cancelled.</p>
+    <p>Write <b>Instructions for this watch</b> to add a text for this watch only. The service sends the text to the Boss with each routine, and to each orchestrator in the start notice. The box keeps your last choice of routines and schedules as the default of the next watch.</p>
+    <p>Select <b>Start</b> to start the watch. While the watch runs, the box lists each routine with its next run and its last run. The service prompts the Boss only when the Boss pane is idle, and once for each run. If the Boss is busy, the service tries again until the next run is due, then skips the run. Select <b>Stop the watch</b> to end it. The page asks you to confirm first. The read-only preview refuses both actions.</p>
     <h3>Chart</h3><p>A chart of the organization, from top to bottom: the Owner, the Boss, one orchestrator for each project, and the workers under each orchestrator. The page cannot change resources. Use Settings for resources.</p>
     <h3>Nodes</h3><p><b>Owner</b> shows <b>At the Mac</b> or <b>Away</b> from the machine idle time. <b>Boss</b> shows the pane labeled <code>boss</code>, its harness and state, the quota use of a Codex or Claude harness, and the handover state. The Boss workspace workers are below the Boss.</p>
     <p>Each project node shows the orchestrator pane, harness, and state, the first published task with status <b>doing</b>, the worker slots in use against the slots and share, and the handover state. The projects use the project order. A workspace marked not a project has no node.</p>
@@ -3900,10 +4035,20 @@ function render(force = false) {
     const active = document.activeElement;
     const focusId = active?.dataset?.mailDraft || active?.matches?.('[data-mail-compose-draft], [data-mail-reply-draft]') ? active.id : null;
     const caret = focusId && typeof active.selectionStart === 'number' ? [active.selectionStart, active.selectionEnd] : null;
+    // A field of the Watch box or of a routine editor keeps its focus and caret across a render.
+    const watchField = active?.id && active.matches?.('#watch-adhoc, [data-rd], [data-routine-every], [data-routine-before]')
+      ? { id: active.id, range: typeof active.selectionStart === 'number' ? [active.selectionStart, active.selectionEnd] : null } : null;
     const chatViewState = route === 'chat' ? chatCaptureView() : null;
     const scroll = captureScroll(route);
     $app.innerHTML = html;
     lastRender = html;
+    if (watchField) {
+      const field = document.getElementById(watchField.id);
+      if (field) {
+        field.focus();
+        try { if (watchField.range) field.setSelectionRange(...watchField.range); } catch { /* A number or time input has no caret. */ }
+      }
+    }
     if (route === 'mailbox') mailRestoreDrafts(focusId, caret);
     if (route === 'chat') chatRestoreView(chatViewState);
     restoreScroll(route, scroll);
@@ -4585,11 +4730,31 @@ document.addEventListener('click', (e) => {
 document.addEventListener('input', (e) => {
   if (e.target.matches?.('[data-night-until]')) { watchForm.until = e.target.value; syncWatchForm(); }
   else if (e.target.matches?.('[data-night-report]')) watchForm.report = e.target.value || '07:30';
+  else if (e.target.matches?.('[data-watch-adhoc]')) watchForm.adhoc = e.target.value;
+  else if (e.target.matches?.('[data-routine-every]')) (watchForm.routines[e.target.dataset.routineEvery] ??= {}).every = e.target.value;
+  else if (e.target.matches?.('[data-routine-before]')) (watchForm.routines[e.target.dataset.routineBefore] ??= {}).beforeEnd = e.target.value;
+  else if (e.target.matches?.('[data-rd]')) {
+    const [key, name] = e.target.dataset.rd.split(/:(.*)/s);
+    if (routineDrafts[key] && name !== 'kind') routineDrafts[key][name] = e.target.value;
+  }
 });
 document.addEventListener('change', (e) => {
   if (e.target.matches?.('[data-night-forever]')) { watchForm.forever = e.target.checked; syncWatchForm(); }
   else if (e.target.matches?.('[data-night-daily]')) { watchForm.daily = e.target.checked; syncWatchForm(); }
+  else if (e.target.matches?.('[data-routine-enabled]')) (watchForm.routines[e.target.dataset.routineEnabled] ??= {}).enabled = e.target.checked;
+  else if (e.target.matches?.('[data-rd$=":kind"]')) {
+    const [key] = e.target.dataset.rd.split(/:(.*)/s);
+    if (routineDrafts[key]) routineDrafts[key].kind = e.target.value;
+    lastRender = '';
+    render(true);
+  }
 });
+// The open state of a routine editor is kept, because a render replaces the page. The toggle event does not bubble.
+document.addEventListener('toggle', (e) => {
+  const key = e.target.dataset?.routineDetails;
+  if (key === undefined) return;
+  if (e.target.open) routineOpen.add(key); else routineOpen.delete(key);
+}, true);
 // A render replaces the form, so the length text is filled again after each render.
 new MutationObserver(() => syncWatchForm()).observe(document.getElementById('app') || document.body, { childList: true });
 setInterval(syncWatchForm, 30000);
@@ -4598,6 +4763,16 @@ document.addEventListener('click', async (e) => {
   const nightButton = e.target.closest?.('[data-night-stop], [data-night-start]');
   if (nightButton) {
     await updateNight(nightButton.dataset.nightStop ? 'stop' : 'start');
+    return;
+  }
+  const routineSave = e.target.closest?.('[data-routine-save]');
+  if (routineSave) {
+    await saveRoutineEditor(routineSave.dataset.routineSave);
+    return;
+  }
+  const routineReset = e.target.closest?.('[data-routine-reset]');
+  if (routineReset) {
+    await resetRoutineEditor(routineReset.dataset.routineReset);
     return;
   }
   const avatarReset = e.target.closest?.('[data-avatar-reset]');

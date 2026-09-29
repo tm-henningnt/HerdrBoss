@@ -57,6 +57,7 @@ export function kitRevision(root = KIT_ROOT) {
       'kit/skills/herdr-orchestrator/SKILL.md',
       ...kitFiles(root, 'kit/skills/herdr-orchestrator/reference'),
       'kit/models.json',
+      ...kitFiles(root, 'kit/watch'),
     ].sort();
     const hash = createHash('sha256');
     for (const file of files) {

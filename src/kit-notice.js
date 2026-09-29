@@ -11,6 +11,7 @@ export const KIT_REVISION_PATHS = Object.freeze([
   'kit/skills/herdr-orchestrator/SKILL.md',
   'kit/skills/herdr-orchestrator/reference',
   'kit/models.json',
+  'kit/watch',
 ]);
 // One log record: hash, subject, and the whole message. The unit separator keeps a subject that
 // holds a newline from splitting a record, and the null byte ends it.

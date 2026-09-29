@@ -14,6 +14,7 @@ import { loadPolicy, savePolicy } from './control.js';
 import { recordUsage, usageSummary } from './usage.js';
 import { readDenials, denialSummary } from './denials.js';
 import { buildWatchRecord, clearNight, readNight, writeNight } from './night.js';
+import { effectiveRoutines, rememberChoice, resetRoutine, saveRoutine } from './watch-routines.js';
 import { requestBrowser, listBrowserSessions, browserStatus, setBrowserWindowSize, closeBrowser, restartBrowser, listBookmarks, addBookmark, renameBookmark, moveBookmark, removeBookmark, setStartPage } from './browser-pool.js';
 import { listBrowserTabs, browserScreenshot, browserNavigate, browserNavigationState, browserHistoryAction, browserClick, browserInsertText, browserKey, browserNewTab, browserCloseTab, tabAttached } from './browser-preview.js';
 import { listHandoffs } from './handoff.js';
@@ -406,6 +407,26 @@ export function serve(cfg, { readOnlyPreview = false, createEngine = (config, op
       // The watch uses the same functions as the CLI. The routes stay under the read-only preview guard and the access control.
       // The old /api/night paths stay as aliases of /api/watch.
       const watchPath = p.replace(/^\/api\/night(?=\/|$)/, '/api/watch');
+      // The routine routes edit the machine-level override in the data directory. They never change a kit file.
+      const routineRoute = /^\/api\/watch\/routines(?:\/([^/]+))?$/.exec(watchPath);
+      if (routineRoute) {
+        let id = null;
+        try { id = routineRoute[1] ? decodeURIComponent(routineRoute[1]) : null; } catch { return send(res, 400, { error: 'The routine id is not valid.' }); }
+        const options = { dataDir: DATA_DIR, kitRoot: engine.kitRoot };
+        if (!id && req.method === 'GET') return send(res, 200, { routines: effectiveRoutines(options) });
+        if (id && req.method === 'PUT') {
+          let routine;
+          try { routine = saveRoutine(id, await jsonBody(req), options); } catch (error) { return send(res, 400, { error: error.message }); }
+          await engine.tick();
+          return send(res, 200, { ok: true, routine });
+        }
+        if (id && req.method === 'DELETE') {
+          let removed;
+          try { removed = resetRoutine(id, options); } catch (error) { return send(res, 400, { error: error.message }); }
+          await engine.tick();
+          return send(res, 200, { ok: true, removed, routines: effectiveRoutines(options) });
+        }
+      }
       if (watchPath === '/api/watch/stop' && req.method === 'POST') {
         clearNight({ dataDir: DATA_DIR });
         const state = await engine.tick();
@@ -422,9 +443,14 @@ export function serve(cfg, { readOnlyPreview = false, createEngine = (config, op
             retro: body.retro,
             by: 'dashboard',
             quietHours: typeof body.quietHours === 'boolean' ? body.quietHours : cfg.watch?.quietHours === true,
+            routines: body.routines,
+            adhoc: body.adhoc,
+            kitRoot: engine.kitRoot,
           });
         } catch (error) { return send(res, 400, { error: error.message }); }
         writeNight(built.record, { dataDir: DATA_DIR });
+        // The choice of this watch is the default of the next watch.
+        if (built.choice) rememberChoice(built.choice, { dataDir: DATA_DIR, kitRoot: engine.kitRoot });
         const state = await engine.tick();
         return send(res, 200, { ok: true, warning: built.warning, night: state?.night ?? readNight({ dataDir: DATA_DIR }) });
       }

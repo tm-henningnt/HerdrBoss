@@ -149,9 +149,10 @@ const USAGE = `herdr-boss <command>
   messages relay ID... --by boss  Mark queued Owner messages as relayed by the Boss.
   mail post --to owner [--title TEXT] [--action read|decide|approve|answer] FILE  Post a Markdown report for the Owner from the boss pane.
   mail close ID... --note TEXT  Close open Owner mailbox items as answered through the Boss.
-  watch start [--until 'YYYY-MM-DD HH:MM'|HH:MM|--until-cancelled] [--report HH:MM] [--retro HH:MM] [--quiet-hours|--no-quiet-hours]
+  watch start [--until 'YYYY-MM-DD HH:MM'|HH:MM|--until-cancelled] [--report HH:MM] [--retro HH:MM] [--quiet-hours|--no-quiet-hours] [--routines ID,ID|none] [--adhoc TEXT]
                        Start the watch. The default end time is the next 07:30 local time.
   watch stop           Stop the watch.
+  watch routines       Print the next and last run of each routine of the running watch.
   watch                Print the current watch state. "night" is an alias of "watch".
   kit-path              Print the shared kit directory.
 `;
@@ -292,13 +293,21 @@ async function main() {
     case 'watch':
     case 'night': {
       const { readNight, writeNight, clearNight, buildWatchRecord, watchUntilPhrase } = await import('./night.js');
-      const usage = "Usage: watch start [--until 'YYYY-MM-DD HH:MM'|HH:MM|--until-cancelled] [--report HH:MM] [--retro HH:MM] [--quiet-hours|--no-quiet-hours] | watch stop | watch";
+      const usage = "Usage: watch start [--until 'YYYY-MM-DD HH:MM'|HH:MM|--until-cancelled] [--report HH:MM] [--retro HH:MM] [--quiet-hours|--no-quiet-hours] [--routines ID,ID|none] [--adhoc TEXT] | watch stop | watch routines | watch";
       const [action, ...rest] = args;
       if (action === undefined) {
         const state = readNight();
         console.log(state.active
           ? `On watch ${watchUntilPhrase(state)}${state.by ? ` (by ${state.by})` : ''}.`
           : 'No watch.');
+        break;
+      }
+      if (action === 'routines' && rest.length === 0) {
+        const state = readNight();
+        if (!state.active) console.log('No watch.');
+        for (const routine of state.active ? state.routines : []) {
+          console.log(`${routine.id}: next ${routine.nextAt ?? 'none'}, last ${routine.lastAt ?? 'never'}`);
+        }
         break;
       }
       if (!['start', 'stop'].includes(action)) throw new Error(usage);
@@ -315,7 +324,7 @@ async function main() {
       for (let index = 0; index < rest.length; index += 1) {
         const token = rest[index];
         if (!token.startsWith('--')) { positional.push(token); continue; }
-        if (!['--until', '--report', '--retro', ...BOOLEAN_FLAGS].includes(token)) throw new Error(`Unknown option: ${token}. ${usage}`);
+        if (!['--until', '--report', '--retro', '--routines', '--adhoc', ...BOOLEAN_FLAGS].includes(token)) throw new Error(`Unknown option: ${token}. ${usage}`);
         if (token in flags) throw new Error(`${token} may be used only once.`);
         if (BOOLEAN_FLAGS.includes(token)) { flags[token] = true; continue; }
         const value = rest[++index];
@@ -324,12 +333,23 @@ async function main() {
       }
       if (positional.length) throw new Error(usage);
       if (flags['--quiet-hours'] && flags['--no-quiet-hours']) throw new Error('Use only one of --quiet-hours or --no-quiet-hours.');
-      const { record, warning } = buildWatchRecord({
+      // --routines lists the routines that run. Every other routine is off for this watch. Without the option, the
+      // last choice applies.
+      let routines;
+      if (flags['--routines'] !== undefined) {
+        const { effectiveRoutines } = await import('./watch-routines.js');
+        const wanted = flags['--routines'] === 'none' ? [] : flags['--routines'].split(',').map((id) => id.trim()).filter(Boolean);
+        routines = Object.fromEntries(effectiveRoutines().map((routine) => [routine.id, { enabled: wanted.includes(routine.id) }]));
+        for (const id of wanted) if (!(id in routines)) throw new Error(`Unknown routine ${id}. Known routines: ${Object.keys(routines).join(', ')}.`);
+      }
+      const { record, warning, choice } = buildWatchRecord({
         until: flags['--until'],
         untilCancelled: flags['--until-cancelled'] === true,
         report: flags['--report'],
         retro: flags['--retro'],
         by: caller.role,
+        routines,
+        adhoc: flags['--adhoc'],
         quietHours: flags['--quiet-hours'] === true
           ? true
           : flags['--no-quiet-hours'] === true
@@ -337,6 +357,7 @@ async function main() {
             : (cfg.watch?.quietHours === true),
       });
       writeNight(record);
+      if (choice) (await import('./watch-routines.js')).rememberChoice(choice);
       console.log(`On watch ${watchUntilPhrase(record)}.`);
       if (warning) console.log(`Warning: ${warning}`);
       break;

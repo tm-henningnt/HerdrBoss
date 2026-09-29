@@ -106,8 +106,9 @@ herdr-boss mail close m-mg3k2x1a-1f2e3d4c --note "Answered with the Owner throug
 
 | Command | Action |
 |---|---|
-| `herdr-boss watch start [--until 'YYYY-MM-DD HH:MM' \| --until HH:MM \| --until-cancelled] [--quiet-hours] [--report HH:MM] [--retro HH:MM]` | Start the watch. The default end time is the next 07:30 local time. |
+| `herdr-boss watch start [--until 'YYYY-MM-DD HH:MM' \| --until HH:MM \| --until-cancelled] [--quiet-hours] [--report HH:MM] [--retro HH:MM] [--routines ID,ID\|none] [--adhoc TEXT]` | Start the watch. The default end time is the next 07:30 local time. |
 | `herdr-boss watch stop` | Stop the watch. Clear the watch state. |
+| `herdr-boss watch routines` | Print the next run and the last run of each routine of the running watch. |
 | `herdr-boss watch` | Print the current watch state in one line. |
 
 `herdr-boss night` is an alias of `herdr-boss watch`.
@@ -129,6 +130,14 @@ The end time must be in the future. A watch has no maximum length. The command p
 The service reads the state on every tick. An active state marks the Owner as away, and the Boss acts for the Owner. The watch runs work as normal: pushes, deploys, and gates continue.
 
 At `reportAt`, the service posts a report to the Boss thread in the Mailbox. At `retroAt`, it posts a retro. Each post happens once, even after a service restart. A daily report sets the next `reportAt` to the next `reportDaily` time after each post. A report does not wait for running tasks. It lists tasks completed since the watch started, running tasks and their start times, blocked tasks and what they wait for, worker counts, recorded metered lane use, and notices and alerts from the watch. The service keeps each report to 60 lines.
+
+### Watch routines
+
+`--routines` lists the routine IDs that run in this watch. Every other routine is off. `--routines none` turns all routines off. Without the option, the last choice applies. The first choice is that all routines run. `--adhoc` sets a text for this watch only. The text can hold up to 2000 characters.
+
+`watch.json` then also holds `adhoc` and `routines`. Each item of `routines` holds `id`, `title`, `model`, `every` or `beforeEnd`, `nextAt`, `lastAt`, and, when they apply, `missedAt` and `waitingSince`. The item holds no prompt text.
+
+The Watch box on the Agents page sets the same values through `POST /api/watch/start` with `routines` and `adhoc`. `GET /api/watch/routines` lists the routines. `PUT /api/watch/routines/ID` saves an edit. `DELETE /api/watch/routines/ID` removes the edit.
 
 ## Harness settings
 

@@ -1325,3 +1325,24 @@ body.dep-full-open { overflow: hidden; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .watch-icon { color: var(--text); } :root:not([data-theme="light"]) .watch-icon[data-empty="false"] { color: var(--accent); } }
 :root[data-theme="dark"] .watch-icon { color: var(--text); }
 :root[data-theme="dark"] .watch-icon[data-empty="false"] { color: var(--accent); }
+.watch-compact .watch-routines { flex: 1 1 100%; display: grid; gap: 4px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.watch-routines legend { padding: 0; margin-bottom: 2px; font-size: 12px; color: var(--muted); }
+.watch-routine { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; }
+.watch-routine .setting-line { flex: 0 1 auto; justify-content: flex-start; gap: 8px; min-width: min(15em, 100%); }
+.watch-routine-when { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+.watch-routine-when input[type="number"] { width: 5em; }
+.watch-adhoc { display: grid; flex: 1 1 100%; gap: 4px; font-size: 12px; color: var(--muted); }
+.watch-adhoc textarea, .routine-fields input:not([type="number"]):not([type="time"]), .routine-fields select, .routine-fields textarea { box-sizing: border-box; width: 100%; min-width: 0; padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); font: 13px var(--sans); }
+.watch-adhoc textarea, .routine-fields textarea { resize: vertical; }
+.watch-routine-list { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 4px; }
+.watch-routine-list li { display: flex; flex-wrap: wrap; gap: 2px 12px; }
+.watch-routine-list li span { color: var(--muted); font-variant-numeric: tabular-nums; }
+.watch-routine-settings { grid-column: 1 / -1; }
+.routine-editor { border-top: 1px solid var(--line); padding: 6px 0; }
+.routine-editor summary { cursor: pointer; padding: 4px 0; }
+.routine-editor summary small { color: var(--muted); margin-left: 6px; }
+.routine-fields { display: grid; gap: 8px; padding: 6px 0 4px; max-width: 72ch; }
+.routine-fields label { display: grid; gap: 3px; font-size: 12px; color: var(--muted); }
+.routine-when { display: inline-flex; align-items: center; gap: 6px; }
+.routine-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.routine-actions .setting-help { margin: 0; }

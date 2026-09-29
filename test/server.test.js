@@ -258,7 +258,7 @@ test('the state API sends the watch state, read from the old night.json file, wi
   const response = await fetch(`http://127.0.0.1:${app.server.address().port}/api/state`);
   assert.equal(response.status, 200);
   const state = await response.json();
-  assert.deepEqual(Object.keys(state.night).sort(), ['active', 'by', 'quietHours', 'reportAt', 'reportDaily', 'since', 'until', 'untilCancelled']);
+  assert.deepEqual(Object.keys(state.night).sort(), ['active', 'adhoc', 'by', 'quietHours', 'reportAt', 'reportDaily', 'routines', 'since', 'until', 'untilCancelled']);
   assert.equal(state.night.active, true);
   assert.equal(state.night.since, since);
   assert.equal(state.night.until, until);

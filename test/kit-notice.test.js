@@ -523,7 +523,7 @@ test('the engine stores the kit notice state and logs the queued notice', { time
     ['-C', repo, 'rev-parse', 'HEAD'],
     ['-C', repo, 'merge-base', '--is-ancestor', base, head],
     ['-C', repo, 'log', '--format=%h%x1f%s%x1f%B%x00', `${base}..HEAD`, '--', 'kit', 'src/kit', 'docs/orchestrator-instructions.md'],
-    ['-C', repo, 'log', '--format=%h%x00', `${base}..HEAD`, '--', 'kit/templates', 'kit/skills/herdr-orchestrator/SKILL.md', 'kit/skills/herdr-orchestrator/reference', 'kit/models.json'],
+    ['-C', repo, 'log', '--format=%h%x00', `${base}..HEAD`, '--', 'kit/templates', 'kit/skills/herdr-orchestrator/SKILL.md', 'kit/skills/herdr-orchestrator/reference', 'kit/models.json', 'kit/watch'],
   ]);
   assert.equal(out.memoryKitNotice.commit, head);
   assert.equal(out.memoryKitNotice.alert.key, 'kit:ccccccc');

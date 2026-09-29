@@ -11,6 +11,7 @@ import { loadModels, loadProjectConfig, KIT_ROOT, workerConfigView } from './kit
 import { loadPolicy, clearExpiredOneOffGoals, deriveControl, migrateWorkspacePolicy, providerFor, selectModel, pickSuccessor, laneStatus, leastOverProvider, machineLimits, unmeteredLane, unavailablePiModels, mergeModels } from './control.js';
 import { quotaUsageToday, recordQuotaSnapshot, readUsage } from './usage.js';
 import { renderNightReport } from './night-report.js';
+import { adhocOneLine, effectiveRoutines, routinePromptText, slotAfter, slotEnd } from './watch-routines.js';
 import { listBrowserSessions, cdpResponds, browserProcessCheck } from './browser-pool.js';
 import { readLeases, reclaimLeases, publicLease, tcpListening, leasePools, migrateProjectBrowserLeases } from './leases.js';
 import { codeSignCloneDir, sweepCodeSignClones } from './clone-sweep.js';
@@ -368,7 +369,9 @@ export function nightNoticeText(phase, record) {
   if (phase !== 'start') throw new TypeError('notice phase must be start or end.');
   const end = record?.until ? new Date(record.until) : null;
   const label = end && !Number.isNaN(end.getTime()) ? ` ${watchUntilPhrase({ until: record.until })}` : record?.until ? '' : ' until cancelled';
-  return `[herdr-boss] Watch${label}. The Owner is away; the Boss acts for the Owner. Work as normal. Escalate to the Boss.`;
+  const extra = adhocOneLine(record?.adhoc);
+  const tail = extra ? ` Instructions for this watch: ${extra}${/[.!?]$/.test(extra) ? '' : '.'}` : '';
+  return `[herdr-boss] Watch${label}. The Owner is away; the Boss acts for the Owner. Work as normal. Escalate to the Boss.${tail}`;
 }
 
 // A watch notice goes to an orchestrator pane and to the Boss pane. A pane without an agent takes no prompt.
@@ -929,6 +932,9 @@ export class Engine extends EventEmitter {
         catch (e) { errors.push(`messages: ${e.message}`); }
       }
       await this.deliverNightReports(snap, now);
+      if (this.act && this.push) await this.deliverWatchRoutines(herdr, now);
+      snap.watchRoutines = effectiveRoutines({ dataDir: DATA_DIR, kitRoot: this.kitRoot });
+      snap.night = readNight({ dataDir: DATA_DIR, now });
       snap.events = this.events.slice(-60);
       try { snap.mailbox = mailboxCounts(readMessages({ dir: DATA_DIR })); }
       catch (e) { errors.push(`mailbox: ${e.message}`); }
@@ -1619,6 +1625,77 @@ export class Engine extends EventEmitter {
     if (JSON.stringify(this.memory.nightRecord ?? null) !== JSON.stringify(mirror)) {
       this.memory.nightRecord = mirror;
       writeJson(MEMORY_FILE, this.memory);
+    }
+  }
+
+  // The routines of the watch. Each routine has a slot: from nextAt to the next slot, or to the end of the watch for a
+  // routine relative to the end. The service prompts the Boss pane once in a slot, and only when the pane is idle.
+  // A busy Boss keeps the routine armed, so the next tick tries again inside the slot. A slot that passes is skipped.
+  // The marks live in watch.json, so a restart repeats no routine. One routine goes out per tick, because the Boss
+  // is busy after the prompt.
+  async deliverWatchRoutines(herdr, now) {
+    if (!this.push || !herdr?.panes) return;
+    const record = readNightRecord({ dataDir: DATA_DIR });
+    if (record?.active !== true || !record.since || !Array.isArray(record.routines) || !record.routines.length) return;
+    const routines = record.routines.map((item) => ({ ...item }));
+    const at = new Date(now).toISOString();
+    const boss = herdr.panes.find((pane) => pane.label === 'boss' && pane.agent);
+    const idle = !!boss && (boss.status === 'idle' || boss.status === 'done');
+    const texts = new Map(effectiveRoutines({ dataDir: DATA_DIR, kitRoot: this.kitRoot }).map((item) => [item.id, item]));
+    const nextLabel = (item) => (item.nextAt ? `next ${item.nextAt}` : 'no next run');
+    let changed = false;
+    let sent = false;
+    const due = routines.filter((item) => item.nextAt && now >= Date.parse(item.nextAt)).sort((a, b) => Date.parse(a.nextAt) - Date.parse(b.nextAt));
+    for (const item of due) {
+      if (now >= slotEnd(item, record)) {
+        const slot = item.nextAt;
+        item.missedAt = at;
+        item.nextAt = slotAfter(item, record, now);
+        delete item.waitingSince;
+        changed = true;
+        const reason = item.lastFailure ? `the prompt failed (${item.lastFailure})` : !boss ? 'no Boss pane was found' : `the Boss was ${boss.status}`;
+        delete item.lastFailure;
+        this.log('watch-routine', `Watch routine ${item.title} skipped the slot of ${slot}: ${reason}. ${nextLabel(item)}.`, { routine: item.id, nextAt: item.nextAt });
+        continue;
+      }
+      if (sent || !idle) {
+        if (!item.waitingSince) {
+          item.waitingSince = at;
+          changed = true;
+          this.log('watch-routine', `Watch routine ${item.title} waits for an idle Boss.`, { routine: item.id, nextAt: item.nextAt });
+        }
+        continue;
+      }
+      const definition = texts.get(item.id);
+      if (!definition) {
+        item.nextAt = null;
+        changed = true;
+        this.log('error', `Watch routine ${item.id} has no text. The service drops it from this watch.`);
+        continue;
+      }
+      try {
+        checkHerdrResponse(await this.herdrRunner('herdr', ['agent', 'prompt', boss.id, routinePromptText({ ...definition, ...item, prompt: definition.prompt }, record.adhoc)]));
+      } catch (error) {
+        const message = String(error.stderr || error.message).slice(0, 200);
+        this.log('error', `Watch routine ${item.title} to ${boss.id} failed: ${message}`);
+        if (item.lastFailure !== message.slice(0, 80)) { item.lastFailure = message.slice(0, 80); changed = true; }
+        continue;
+      }
+      sent = true;
+      item.lastAt = at;
+      item.nextAt = slotAfter(item, record, now);
+      delete item.waitingSince;
+      delete item.missedAt;
+      delete item.lastFailure;
+      changed = true;
+      this.log('watch-routine', `Watch routine ${item.title} sent to ${boss.id}. Last ${at}, ${nextLabel(item)}.`, { routine: item.id, pane: boss.id, lastAt: at, nextAt: item.nextAt });
+    }
+    if (!changed) return;
+    try {
+      const latest = readNightRecord({ dataDir: DATA_DIR }) || record;
+      writeNight({ ...latest, routines }, { dataDir: DATA_DIR });
+    } catch (error) {
+      this.log('error', `Could not store the watch routine marks: ${error.message}`);
     }
   }
 

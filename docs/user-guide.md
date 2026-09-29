@@ -276,6 +276,24 @@ Each report lists the tasks marked done since the watch started. It lists runnin
 
 The report and its sent time stay in the message store and `watch.json`. The service keeps these records when the end time passes, so a late engine tick can still post the report.
 
+### Watch routines
+
+A routine is a prompt that the service sends to the Boss pane while a watch runs. The service owns the routines. A restart of the Boss pane does not stop them.
+
+The kit holds the default routines as the files `kit/watch/*.md`. Each file starts with a front matter block: `title`, `model` (a model hint), and one schedule. `every: N` runs the routine every N minutes. `beforeEnd: HH:MM` runs it once, that long before the end of the watch. The rest of the file is the prompt text. The defaults are `Hourly check`, `Morning retrospective`, and `Morning summary and report`.
+
+The Owner edits a routine in **Settings**, in the section **Watch routines**. The edit is saved in `watch-routines.json` in the data directory. It is a machine-level override. It never changes the kit file. **Reset to the kit text** removes the override. The Owner can also add a routine of their own.
+
+The Watch box on the Agents page has a box for each routine, its schedule, and a text area for instructions for this watch. The box keeps the last choice of routines and schedules as the default of the next watch.
+
+When a watch starts, the service arms the routines that are on and stores the instructions. A routine that runs before the end has no run in a watch until cancelled.
+
+At each run time the service sends one prompt to the pane labeled `boss`: the routine text, then the instructions. The service sends the prompt only when the Boss pane is idle. If the Boss is busy, the service tries again at each tick until the next run is due. Then it skips the run and logs it. The service sends at most one routine per tick.
+
+The service writes the state of each routine to `watch.json`. A restart repeats no routine. The Agents page shows the next run and the last run of each routine. The log has one line for each sent, waiting, and skipped run.
+
+The start notice to the orchestrators and the Boss carries the instructions in one line.
+
 ## Quota lanes
 
 `herdr-boss lanes` and the bulletin section "Provider lanes" show each metered provider:

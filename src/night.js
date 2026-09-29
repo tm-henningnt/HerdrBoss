@@ -4,6 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { DATA_DIR } from './config.js';
+import { armRoutines, cleanAdhoc } from './watch-routines.js';
 
 export const WATCH_FILE = 'watch.json';
 export const LEGACY_NIGHT_FILE = 'night.json';
@@ -58,6 +59,23 @@ function normalize(value, now) {
     reportDaily: HHMM.test(String(value.reportDaily ?? '')) ? value.reportDaily : null,
     by: typeof value.by === 'string' && value.by.trim() ? value.by.trim() : null,
     quietHours: value.quietHours === true,
+    adhoc: typeof value.adhoc === 'string' ? value.adhoc : '',
+    routines: Array.isArray(value.routines) ? value.routines.filter((item) => item && typeof item.id === 'string').map(routineView) : [],
+  };
+}
+
+// The fields of one armed routine that the dashboard and the CLI show.
+function routineView(item) {
+  return {
+    id: item.id,
+    title: typeof item.title === 'string' ? item.title : item.id,
+    model: typeof item.model === 'string' ? item.model : 'default',
+    ...(item.every !== undefined ? { every: item.every } : {}),
+    ...(item.beforeEnd !== undefined ? { beforeEnd: item.beforeEnd } : {}),
+    nextAt: isoOrNull(item.nextAt),
+    lastAt: isoOrNull(item.lastAt),
+    missedAt: isoOrNull(item.missedAt),
+    waitingSince: isoOrNull(item.waitingSince),
   };
 }
 
@@ -195,7 +213,7 @@ export function watchUntilPhrase(state, now = Date.now()) {
 // Build the record of a new watch. Both the command and the dashboard call this function, so both apply the same
 // rules. Times are Date objects or strings. untilCancelled is a flag. report and retro are optional. A watch until
 // cancelled takes only an HH:MM report, which repeats every day.
-export function buildWatchRecord({ until, untilCancelled = false, report, retro, quietHours = false, by = null, now = new Date() } = {}) {
+export function buildWatchRecord({ until, untilCancelled = false, report, retro, quietHours = false, by = null, now = new Date(), routines, adhoc, dataDir = DATA_DIR, kitRoot } = {}) {
   const has = (value) => value !== undefined && value !== null && value !== '';
   if (untilCancelled && has(until)) throw new Error('Use either an end time or until cancelled, not both.');
   const end = untilCancelled ? null : has(until) ? nightUntil(until, { now }) : defaultNightUntil({ now });
@@ -214,7 +232,10 @@ export function buildWatchRecord({ until, untilCancelled = false, report, retro,
   if (has(retro)) record.retroAt = nightUntil(retro, { now }).toISOString();
   record.by = by;
   record.quietHours = quietHours === true;
-  return { record, until: end, warning: end ? watchLengthWarning(end, { now }) : null };
+  // The choice is checked here, so a bad routine or a long text starts no watch.
+  record.adhoc = cleanAdhoc(adhoc);
+  record.routines = armRoutines({ choice: routines, until: end, now, dataDir, ...(kitRoot ? { kitRoot } : {}) });
+  return { record, until: end, choice: routines, warning: end ? watchLengthWarning(end, { now }) : null };
 }
 
 // Read the stored record as it is on the file, with the notice marks. A missing or unreadable file reads as null.
