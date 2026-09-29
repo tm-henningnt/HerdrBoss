@@ -1915,3 +1915,58 @@ test('no nudge goes out when the published status has no actionable work', () =>
   delete snap.projects;
   assert.deepEqual(nudgeAlerts(snap, since), [], 'no published status file');
 });
+
+test('savePolicy prunes stale and duplicate model references and returns a note', async () => {
+  const { savePolicy } = await import('../src/control.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-prune-'));
+  const file = path.join(dir, 'policy.json');
+  try {
+    const notes = [];
+    const draft = policy({
+      modelProviders: { 'claude-opus-5': 'claude', 'claude-opus-5-5': 'claude' },
+      extraModels: { claude: ['claude-opus-5-5', 'claude-local-x', 'claude-local-x'] },
+      disabledModels: { claude: ['claude-opus-5', 'claude-local-x', 'claude-local-x'] },
+      harnessRoutes: { claude: { 'claude-opus-5': 'claude', 'claude-local-x': null } },
+      excludedModels: ['claude-opus-5'],
+      preferredModels: { claude: 'claude-opus-5' },
+    });
+    assert.deepEqual(savePolicy(draft, models, { file, notes }), []);
+    const stored = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.deepEqual(stored.extraModels, { claude: ['claude-local-x'] });
+    assert.deepEqual(stored.disabledModels, { claude: ['claude-local-x'] });
+    assert.deepEqual(stored.modelProviders, { 'claude-opus-5-5': 'claude' });
+    assert.deepEqual(stored.harnessRoutes, { claude: { 'claude-local-x': null } });
+    assert.deepEqual(stored.excludedModels, []);
+    assert.deepEqual(stored.preferredModels, {});
+    assert.equal(notes.length, 1);
+    assert.match(notes[0], /^Removed .*claude-opus-5\b/);
+    assert.ok(notes[0].length < 300);
+    assert.deepEqual(draft.disabledModels.claude, ['claude-opus-5', 'claude-local-x', 'claude-local-x'], 'the input stays unchanged');
+    const clean = [];
+    assert.deepEqual(savePolicy(policy(), models, { file, notes: clean }), []);
+    assert.deepEqual(clean, []);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('savePolicy keeps strict errors for unrelated malformed fields while it prunes', async () => {
+  const { savePolicy } = await import('../src/control.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-prune-strict-'));
+  const file = path.join(dir, 'policy.json');
+  try {
+    const notes = [];
+    const errors = savePolicy(policy({
+      maxWorkers: 0,
+      disabledModels: { claude: ['claude-opus-5'] },
+      extraModels: { pi: ['glm; rm -rf ~'] },
+      modelProviders: { 'claude-opus-5-5': 'nowhere' },
+    }), models, { file, notes });
+    const text = errors.join(' ');
+    assert.match(text, /maxWorkers/);
+    assert.match(text, /Invalid extraModels string for pi/);
+    assert.match(text, /Invalid modelProviders route for claude-opus-5-5/);
+    assert.doesNotMatch(text, /disabledModels/);
+    assert.equal(fs.existsSync(file), false);
+    assert.deepEqual(notes, []);
+    assert.match(savePolicy(policy({ disabledModels: { claude: 'claude-opus-5' } }), models, { file }).join(' '), /disabledModels\.claude must be a list/);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

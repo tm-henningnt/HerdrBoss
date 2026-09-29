@@ -397,10 +397,11 @@ export function serve(cfg, { readOnlyPreview = false, createEngine = (config, op
       }
       if (p === '/api/policy' && req.method === 'GET') return send(res, 200, loadPolicy());
       if (p === '/api/policy' && req.method === 'PUT') {
-        const errors = savePolicy(await jsonBody(req), loadModels(), { quotas: engine.state?.quotas || [], now: Date.now() });
+        const notes = [];
+        const errors = savePolicy(await jsonBody(req), loadModels(), { quotas: engine.state?.quotas || [], now: Date.now(), notes });
         if (errors.length) return send(res, 400, { ok: false, errors });
         const state = await engine.tick();
-        return send(res, 200, { ok: true, policy: loadPolicy(), control: state.control });
+        return send(res, 200, { ok: true, policy: loadPolicy(), control: state.control, notes });
       }
       // Night watch uses the same functions as the CLI. The routes stay under the read-only preview guard and the access control.
       if (p === '/api/night/stop' && req.method === 'POST') {

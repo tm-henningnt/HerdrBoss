@@ -280,9 +280,88 @@ export function migrateWorkspacePolicy(value, snap, { file = null } = {}) {
   return ignoredRoutes === undefined ? next : { ...next, ignoredRoutes };
 }
 
-export function savePolicy(value, models, { file = FILE, quotas = null, now = Date.now() } = {}) {
+// Remove references to models that the catalog no longer allows, and duplicate entries.
+// Only well-formed values are pruned. A malformed field stays and fails validation.
+// The result holds the pruned copy and one note. The note is null when nothing changed.
+export function prunePolicy(value, models) {
+  if (!isObject(value)) return { policy: value, note: null };
+  const policy = { ...value };
+  const removed = new Map();
+  const drop = (model, field) => {
+    if (!removed.has(model)) removed.set(model, new Set());
+    removed.get(model).add(field);
+  };
+  const unique = (list, field) => {
+    const seen = new Set();
+    return list.filter((model) => {
+      if (typeof model !== 'string' || !seen.has(model)) { seen.add(model); return true; }
+      drop(model, field);
+      return false;
+    });
+  };
+  if (isObject(policy.extraModels)) {
+    policy.extraModels = Object.fromEntries(Object.entries(policy.extraModels).map(([kind, list]) => {
+      if (!models.kinds[kind] || !Array.isArray(list)) return [kind, list];
+      const kept = unique(list, `extraModels.${kind}`).filter((model) => {
+        if (typeof model !== 'string' || !models.kinds[kind].allowedModels.includes(model)) return true;
+        drop(model, `extraModels.${kind}`);
+        return false;
+      });
+      return [kind, kept];
+    }).filter(([, list]) => !Array.isArray(list) || list.length));
+  }
+  const catalog = mergeModels(models, policy);
+  const known = (kind) => new Set(catalog.kinds[kind]?.allowedModels || []);
+  const all = new Set(Object.values(catalog.kinds).flatMap((cfg) => cfg.allowedModels));
+  const prune = (list, field, allowed) => unique(list, field).filter((model) => {
+    if (typeof model !== 'string' || allowed.has(model)) return true;
+    drop(model, field);
+    return false;
+  });
+  if (isObject(policy.disabledModels)) {
+    policy.disabledModels = Object.fromEntries(Object.entries(policy.disabledModels).map(([kind, list]) => [kind, catalog.kinds[kind] && Array.isArray(list) ? prune(list, `disabledModels.${kind}`, known(kind)) : list])
+      .filter(([, list]) => !Array.isArray(list) || list.length));
+  }
+  if (isObject(policy.harnessRoutes)) {
+    policy.harnessRoutes = Object.fromEntries(Object.entries(policy.harnessRoutes).map(([kind, routes]) => {
+      if (!catalog.kinds[kind] || !isObject(routes)) return [kind, routes];
+      return [kind, Object.fromEntries(Object.entries(routes).filter(([model]) => {
+        if (known(kind).has(model)) return true;
+        drop(model, `harnessRoutes.${kind}`);
+        return false;
+      }))];
+    }));
+  }
+  if (isObject(policy.modelProviders)) {
+    policy.modelProviders = Object.fromEntries(Object.entries(policy.modelProviders).filter(([model]) => {
+      if (all.has(model)) return true;
+      drop(model, 'modelProviders');
+      return false;
+    }));
+  }
+  if (Array.isArray(policy.excludedModels)) policy.excludedModels = prune(policy.excludedModels, 'excludedModels', all);
+  if (isObject(policy.preferredModels)) {
+    policy.preferredModels = Object.fromEntries(Object.entries(policy.preferredModels).filter(([kind, model]) => {
+      if (!catalog.kinds[kind] || typeof model !== 'string' || known(kind).has(model)) return true;
+      drop(model, `preferredModels.${kind}`);
+      return false;
+    }));
+  }
+  if (isObject(policy.projects)) {
+    policy.projects = Object.fromEntries(Object.entries(policy.projects).map(([slug, project]) => [slug,
+      isObject(project) && Array.isArray(project.excludedModels) ? { ...project, excludedModels: prune(project.excludedModels, `projects.${slug}.excludedModels`, all) } : project]));
+  }
+  if (!removed.size) return { policy: value, note: null };
+  const parts = [...removed].map(([model, fields]) => `${model} (${[...fields].join(', ')})`);
+  const shown = parts.slice(0, 4).join('; ');
+  return { policy, note: `Removed stale model references: ${shown}${parts.length > 4 ? `; and ${parts.length - 4} more` : ''}.` };
+}
+
+// Pass a notes array to receive a note for each automatic prune of stale model references.
+export function savePolicy(value, models, { file = FILE, quotas = null, now = Date.now(), notes = null } = {}) {
   // ignoredRoutes is derived at load time, so a draft that carries it back does not store it.
-  const { ignoredRoutes: _derived, ...stored } = value || {};
+  const { ignoredRoutes: _derived, ...draft } = value || {};
+  const { policy: stored, note } = prunePolicy(draft, models);
   const merged = { ...POLICY_DEFAULTS, ...stored, machine: { ...POLICY_DEFAULTS.machine, ...stored.machine }, providerModes: { ...POLICY_DEFAULTS.providerModes, ...stored.providerModes } };
   const errors = validatePolicy(merged, models);
   if (quotas) errors.push(...validatePacingGoalEnds(merged, quotas, now));
@@ -293,6 +372,7 @@ export function savePolicy(value, models, { file = FILE, quotas = null, now = Da
     goal.end.resetAt = new Date(window.resetsAt).toISOString();
   }
   writePolicy(merged, file);
+  if (note && notes) notes.push(note);
   return [];
 }
 

@@ -288,8 +288,10 @@ async function main() {
       if (args[0] === 'show' && args.length === 1) console.log(JSON.stringify(loadPolicy(), null, 2));
       else if (args[0] === 'set' && args.length === 2) {
         const { loadModels } = await import('./kit/config.js');
-        const errors = savePolicy(JSON.parse(fs.readFileSync(args[1], 'utf8')), loadModels());
+        const notes = [];
+        const errors = savePolicy(JSON.parse(fs.readFileSync(args[1], 'utf8')), loadModels(), { notes });
         if (errors.length) throw new Error(errors.join('\n'));
+        for (const note of notes) console.log(note);
         console.log('Policy saved. The service will apply it on its next tick.');
       } else throw new Error('Usage: policy show | policy set FILE');
       break;

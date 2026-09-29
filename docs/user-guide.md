@@ -362,6 +362,8 @@ Codex uses OpenAI subscription models, and Claude uses Anthropic subscription mo
 | `excludedModels` | `["vendor/model"]` | Models that no harness uses. |
 | `modelProviders` | `{ "vendor/model": "codex" }` | The route of a model in every harness without its own route. |
 
+Apply policy and `policy set` remove references to models that the catalog no longer allows, and repeated entries. They prune `modelProviders`, `harnessRoutes`, `disabledModels`, `extraModels`, `excludedModels`, `preferredModels`, and project `excludedModels`. Settings shows one note after the save. The note names each removed model and the field that held it. A malformed value still stops the save and shows an error.
+
 Old policy files can omit all of these fields and `preferredModels` and `pacingGoals`. Herdr Boss keeps `excludedModels` and `modelProviders` values. When you enable a model in one harness and `excludedModels` lists it, Settings removes it from `excludedModels` and adds it to `disabledModels` for each other harness that lists it.
 
 Both pages keep policy edits in a draft. Select **Apply policy** to save the draft. A rejected save shows the server error and keeps the draft.

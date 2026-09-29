@@ -3550,6 +3550,7 @@ const HELP = {
     <p>Each model row has a box and a provider. Clear the box to stop that harness from using the model. Choose a provider to count the model against that provider quota. Choose <b>Unmetered</b> when no quota applies.</p>
     <p>A Codex row offers only <b>Codex</b> and <b>Unmetered</b>. A Claude row offers only <b>Claude</b> and <b>Unmetered</b>. Opencode and Pi rows offer <b>Claude</b>, <b>Codex</b>, <b>OpenCode Go</b>, and <b>Unmetered</b>. </p>
     <p>An old <code>modelProviders</code> route can send a Codex or Claude model to another provider. Herdr Boss ignores that route and treats the model as Unmetered in that harness. The row shows <b>Ignored</b> and a note. Choose a provider in the row to store a compatible route for that harness. Apply policy refuses a save while an available Codex or Claude harness still has an ignored route.</p>
+    <p>Apply policy removes references to models that no harness allows any more, and repeated entries. It removes them from the routes, the disabled lists, the local models, the excluded lists, and the preferred models. The status line names each removed model and the list that held it. Other invalid values still stop the save and show an error.</p>
     <p>A model can be in more than one harness. Each harness keeps its own box and provider for it, so a change in one harness does not change another.</p>
     <p>Pi also uses seven unmetered OpenCode Zen entries: <code>opencode/big-pickle</code>, <code>opencode/ling-3.0-flash-fin-free</code>, <code>opencode/mimo-v2.6-flash-free</code>, <code>opencode/muse-spark-1.2-contributor-free</code>, <code>opencode/muse-spark-1.3-contributor-free</code>, <code>opencode/nemotron-3-ultra-free</code>, and <code>opencode/nemotron-3.5-lightning-free</code>. They start unmetered and appear as Pi rows here. <code>opencode/space-bunny-free</code> has no Pi catalog entry, so Pi refuses it. Catalog support does not guarantee a configured account or live provider availability.</p>
     <h3>Add a model</h3><p>Type a model string in a harness section and select <b>Add model</b>. Use letters, digits, dots, underscores, slashes, and hyphens. Spaces and shell characters are refused. A new model is marked <b>local</b>, starts unmetered, and is stored in the local policy, not in <code>kit/models.json</code>. Select <b>Remove</b> to delete a local model.</p>
@@ -4601,7 +4602,7 @@ document.addEventListener('click', async (e) => {
       if (!response.ok) throw new Error((result.errors || [result.error || 'The policy could not be saved.']).join(' '));
       policyDraft = result.policy;
       policyDirty = false;
-      saveMessage = 'Policy saved';
+      saveMessage = ['Policy saved.', ...(result.notes || [])].join(' ');
       for (const kind of Object.keys(settingsMessages)) delete settingsMessages[kind];
       state.policy = result.policy;
       state.control = result.control;

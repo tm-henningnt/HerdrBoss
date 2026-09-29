@@ -662,6 +662,18 @@ test('the policy API saves per-harness model assignments and rejects unsafe mode
   const inherited = await put({ ...draft, modelProviders: { ...draft.modelProviders, 'gpt-6-sol': 'claude' } });
   assert.equal(inherited.status, 400);
   assert.match((await inherited.json()).errors.join(' '), /modelProviders: codex\/gpt-6-sol inherits claude\. Choose codex or null \(unmetered\) in harnessRoutes\.codex\./);
+  const pruned = await put({ ...draft, modelProviders: { ...draft.modelProviders, 'claude-opus-5': 'claude' }, disabledModels: { ...draft.disabledModels, claude: ['claude-opus-5'] }, extraModels: { ...draft.extraModels, claude: ['claude-opus-5-5'] } });
+  assert.equal(pruned.status, 200);
+  const prunedBody = await pruned.json();
+  assert.equal(prunedBody.notes.length, 1);
+  assert.match(prunedBody.notes[0], /claude-opus-5 \(disabledModels\.claude, modelProviders\)/);
+  assert.equal(prunedBody.policy.modelProviders['claude-opus-5'], undefined);
+  assert.equal(prunedBody.policy.disabledModels.claude, undefined);
+  assert.equal(prunedBody.policy.extraModels.claude, undefined);
+  assert.deepEqual((await (await put(draft)).json()).notes, [], 'a clean save has no note');
+  const stillStrict = await put({ ...draft, disabledModels: { claude: ['claude-opus-5'] }, maxWorkers: 0 });
+  assert.equal(stillStrict.status, 400);
+  assert.match((await stillStrict.json()).errors.join(' '), /maxWorkers/);
   const overridden = await put({ ...draft, modelProviders: { ...draft.modelProviders, 'gpt-6-sol': 'claude', 'claude-opus-5-5': 'claude' }, harnessRoutes: { ...draft.harnessRoutes, codex: { 'gpt-6-sol': 'codex' } }, ignoredRoutes: { codex: ['gpt-6-sol'] } });
   assert.equal(overridden.status, 200);
   const overriddenPolicy = (await overridden.json()).policy;
