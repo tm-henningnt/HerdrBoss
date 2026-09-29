@@ -69,6 +69,94 @@ export function kitRevision(root = KIT_ROOT) {
   } catch { return null; }
 }
 
+// The kit change log. It is the fallback record for changes without a Kit-Impact: trailer.
+// It is not part of the kit revision inputs.
+export const CHANGES_FILE = path.join(KIT_ROOT, 'kit', 'CHANGES.md');
+
+// A Git trailer line: Key: value where Key starts with a letter and contains only letters, digits, and hyphens.
+const TRAILER_LINE = /^[A-Za-z][A-Za-z0-9-]*: .+$/;
+
+// Parse a Kit-Impact: trailer from commit message text.
+// The trailer must appear in the final trailer block — the last consecutive run of
+// trailer lines at the end of the message. Multiple ordinary trailers are allowed
+// in that block. A body line followed by more body text is not a trailer.
+// The value must be exactly required, useful, or none (case-insensitive).
+// The trailer key is case-sensitive. Returns null when the trailer is absent, ambiguous, or has an invalid value.
+export function parseKitImpact(message) {
+  const lines = String(message || '').replace(/\r\n?/g, '\n').split('\n');
+  while (lines.length && lines.at(-1).trim() === '') lines.pop();
+  if (!lines.length) return null;
+  // Find the start of the final trailer block: walk backwards from the end while lines are trailers.
+  let trailerStart = lines.length;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (TRAILER_LINE.test(lines[i])) {
+      trailerStart = i;
+    } else {
+      break;
+    }
+  }
+  if (trailerStart >= lines.length) return null;
+  if (trailerStart > 0 && lines[trailerStart - 1].trim() !== '') return null;
+  // Count malformed Kit-Impact lines too. An invalid or duplicate trailer must not
+  // let another value in the same block silently lower the change impact.
+  const impacts = lines.slice(trailerStart).filter((line) => /^Kit-Impact(?:\s|:)/.test(line));
+  if (impacts.length !== 1) return null;
+  const match = /^Kit-Impact: ([A-Za-z]+)$/.exec(impacts[0]);
+  if (!match) return null;
+  const value = match[1].toLowerCase();
+  return ['required', 'useful', 'none'].includes(value) ? value : null;
+}
+
+const CHANGE_HEAD = /^## ([0-9a-f]{12})$/;
+const CHANGE_IMPACT = /^Impact: (required|useful|none)$/;
+const CHANGE_SUMMARY = /^Summary: (.+)$/;
+
+// Read a kit change log and return parsed entries in chronological order.
+// Each entry: { revision, impact, summary }.
+// A missing or unreadable file returns an empty list.
+// An entry with a missing or invalid Impact line defaults to required (conservative).
+export function readKitChanges(file = CHANGES_FILE) {
+  let text;
+  try { text = fs.readFileSync(file, 'utf8'); } catch { return []; }
+  const entries = [];
+  let current = null;
+  const finish = () => {
+    if (!current) return;
+    const impact = current.impacts.length === 1 ? CHANGE_IMPACT.exec(current.impacts[0]) : null;
+    entries.push({
+      revision: current.revision,
+      impact: impact?.[1] ?? 'required',
+      summary: current.summary,
+    });
+    current = null;
+  };
+  for (const line of text.replace(/\r\n?/g, '\n').split('\n')) {
+    const trimmed = line.trim();
+    const head = CHANGE_HEAD.exec(trimmed);
+    if (head) {
+      finish();
+      current = { revision: head[1], impacts: [], summary: null };
+      continue;
+    }
+    if (!current) continue;
+    if (/^Impact(?:\s|:)/.test(trimmed)) { current.impacts.push(trimmed); continue; }
+    const summary = CHANGE_SUMMARY.exec(trimmed);
+    if (summary) { current.summary = summary[1].trim(); }
+  }
+  finish();
+  return entries;
+}
+
+// Return kit changes after a given revision through the current revision.
+// If the revision is unknown, return all entries in order.
+export function kitChangesSince(revision, file = CHANGES_FILE) {
+  const entries = readKitChanges(file);
+  if (!revision) return entries;
+  const index = entries.findIndex((entry) => entry.revision === revision);
+  if (index < 0) return entries;
+  return entries.slice(index + 1);
+}
+
 // Findings for the text of docs/orchestration/herdr-boss.md. text is null for a missing file.
 export function checkKitText(text, revision) {
   const findings = [];

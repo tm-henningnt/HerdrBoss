@@ -15,7 +15,7 @@ import { usageProvider, validateUsage } from '../src/usage.js';
 import { validateProject } from '../src/projects.js';
 import { Engine } from '../src/engine.js';
 import { renderBulletin } from '../src/rules.js';
-import { kitRevision } from '../src/kit/agents-check.js';
+import { kitRevision, parseKitImpact, readKitChanges, kitChangesSince } from '../src/kit/agents-check.js';
 
 const CLAUDE_READY_SCREEN = '────\n❯\n────\nauto mode';
 const CODEX_READY_SCREEN = '› Ask Codex to do anything\n? for shortcuts';
@@ -59,6 +59,213 @@ test('kit revision follows installed kit assets and ignores product code', () =>
     assert.equal(kitRevision(root), revision, 'generated kit output and product code do not change the revision');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('parseKitImpact reads required, useful, and none case-insensitively from a trailer block', () => {
+  for (const value of ['required', 'REQUIRED', 'Required', 'useful', 'USEFUL', 'none', 'NONE', 'None']) {
+    assert.equal(parseKitImpact(`Kit-Impact: ${value}`), value.toLowerCase());
+  }
+  // A trailer block with multiple ordinary trailers.
+  assert.equal(parseKitImpact('Kit-Impact: required\nSigned-off-by: Someone'), 'required');
+  assert.equal(parseKitImpact('Signed-off-by: Someone\nKit-Impact: useful'), 'useful');
+  assert.equal(parseKitImpact('Co-Authored-By: A\nKit-Impact: none\nSigned-off-by: B'), 'none');
+  assert.equal(parseKitImpact('Kit-Impact: useful\n'), 'useful');
+  assert.equal(parseKitImpact('Kit-Impact: useful\n\n'), 'useful');
+  // A body line followed by a blank line and then a trailer block.
+  assert.equal(parseKitImpact('Some body text\n\nKit-Impact: required'), 'required');
+  assert.equal(parseKitImpact('Some body text\n\nSigned-off-by: Someone\nKit-Impact: useful'), 'useful');
+});
+
+test('parseKitImpact rejects a middle-of-body Kit-Impact and invalid forms', () => {
+  // A body line followed by more body text is not a trailer.
+  assert.equal(parseKitImpact('Kit-Impact: required\nMore body text'), null);
+  assert.equal(parseKitImpact('Some text\nKit-Impact: required\nMore text'), null);
+  assert.equal(parseKitImpact('Kit-Impact: required\n\nMore body text'), null);
+  // A trailer block followed by body text is not the final trailer block.
+  assert.equal(parseKitImpact('Kit-Impact: required\nSigned-off-by: Someone\n\nMore body'), null);
+  // A trailer needs a blank separator after body text.
+  assert.equal(parseKitImpact('Subject\nKit-Impact: useful'), null);
+  // No trailer block at all.
+  assert.equal(parseKitImpact('no trailer at all'), null);
+  // Invalid values.
+  assert.equal(parseKitImpact('Kit-Impact: '), null);
+  assert.equal(parseKitImpact('Kit-Impact: maybe'), null);
+  assert.equal(parseKitImpact('Kit-Impact: required extra'), null);
+  // Malformed trailer syntax.
+  assert.equal(parseKitImpact('Kit-Impact:required'), null);
+  assert.equal(parseKitImpact('Kit-Impact : required'), null);
+  assert.equal(parseKitImpact('Kit-Impact: required\t'), null);
+  assert.equal(parseKitImpact('Kit-Impact:\trequired'), null);
+  assert.equal(parseKitImpact('Kit-Impact: required '), null);
+  assert.equal(parseKitImpact('xKit-Impact: required'), null);
+  // Wrong key case.
+  assert.equal(parseKitImpact('kit-impact: required'), null);
+  // Ambiguous: multiple Kit-Impact trailers in the block.
+  assert.equal(parseKitImpact('Kit-Impact: required\nKit-Impact: none'), null);
+  assert.equal(parseKitImpact('Kit-Impact: useful\nKit-Impact: maybe'), null);
+  assert.equal(parseKitImpact('Kit-Impact: useful\nKit-Impact:required'), null);
+  assert.equal(parseKitImpact('Kit-Impact: useful\nKit-Impact : required'), null);
+  // Empty and null inputs.
+  assert.equal(parseKitImpact(''), null);
+  assert.equal(parseKitImpact(null), null);
+  assert.equal(parseKitImpact(undefined), null);
+});
+
+test('readKitChanges parses a documented changelog format', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-kit-changes-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'CHANGES.md');
+  const text = [
+    '# Kit change log',
+    '',
+    'This file is the fallback record of kit changes.',
+    '',
+    '## Format',
+    '',
+    'Each entry starts with a level-two heading that holds the kit revision.',
+    '',
+    '## Entries',
+    '',
+    '## 883095fbe869',
+    'Impact: required',
+    'Summary: Compute the kit revision from installed kit assets only.',
+    '',
+    '## aaaaaaaaaaaa',
+    'Impact: useful',
+    'Summary: Add a helpful but non-critical feature.',
+    '',
+    '## bbbbbbbbbbbb',
+    'Impact: none',
+    'Summary: A cosmetic change with no action needed.',
+    '',
+  ].join('\n');
+  fs.writeFileSync(file, text);
+  const entries = readKitChanges(file);
+  assert.deepEqual(entries, [
+    { revision: '883095fbe869', impact: 'required', summary: 'Compute the kit revision from installed kit assets only.' },
+    { revision: 'aaaaaaaaaaaa', impact: 'useful', summary: 'Add a helpful but non-critical feature.' },
+    { revision: 'bbbbbbbbbbbb', impact: 'none', summary: 'A cosmetic change with no action needed.' },
+  ]);
+});
+
+test('readKitChanges defaults to required for a missing or invalid Impact line', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-kit-changes-default-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'CHANGES.md');
+  const text = [
+    '## 111111111111',
+    'Summary: No impact line at all.',
+    '',
+    '## 222222222222',
+    'Impact: maybe',
+    'Summary: Invalid impact value.',
+    '',
+    '## 333333333333',
+    'Impact: required',
+    'Summary: Valid impact.',
+    '',
+    '## 444444444444',
+    'Impact: useful',
+    'Impact: none',
+    'Summary: Duplicate impacts are conservative.',
+    '',
+    '## 555555555555',
+    'Impact: useful',
+    'Impact: maybe',
+    'Summary: An invalid duplicate is conservative.',
+    '',
+    '## 666666666666',
+    'Impact: ',
+    'Summary: An empty impact is invalid.',
+    '',
+    '## 777777777777',
+    'Impact: useful',
+    'Impact : none',
+    'Summary: A malformed duplicate is conservative.',
+    '',
+  ].join('\n');
+  fs.writeFileSync(file, text);
+  const entries = readKitChanges(file);
+  assert.equal(entries[0].impact, 'required', 'missing Impact defaults to required');
+  assert.equal(entries[1].impact, 'required', 'invalid Impact defaults to required');
+  assert.equal(entries[2].impact, 'required', 'valid Impact is preserved');
+  assert.equal(entries[3].impact, 'required', 'duplicate valid Impact lines default to required');
+  assert.equal(entries[4].impact, 'required', 'a valid and invalid Impact pair defaults to required');
+  assert.equal(entries[5].impact, 'required', 'an empty Impact line defaults to required');
+  assert.equal(entries[6].impact, 'required', 'a malformed duplicate defaults to required');
+});
+
+test('readKitChanges returns an empty list for a missing or invalid file', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-kit-changes-missing-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  assert.deepEqual(readKitChanges(path.join(dir, 'nonexistent.md')), []);
+  const file = path.join(dir, 'CHANGES.md');
+  fs.writeFileSync(file, '# No entries\n\nJust text, no entries.\n');
+  assert.deepEqual(readKitChanges(file), []);
+});
+
+test('kitChangesSince returns entries after a known revision', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-kit-changes-since-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'CHANGES.md');
+  const text = [
+    '## 111111111111',
+    'Impact: required',
+    'Summary: First change.',
+    '',
+    '## 222222222222',
+    'Impact: useful',
+    'Summary: Second change.',
+    '',
+    '## 333333333333',
+    'Impact: none',
+    'Summary: Third change.',
+    '',
+  ].join('\n');
+  fs.writeFileSync(file, text);
+  assert.deepEqual(kitChangesSince('111111111111', file), [
+    { revision: '222222222222', impact: 'useful', summary: 'Second change.' },
+    { revision: '333333333333', impact: 'none', summary: 'Third change.' },
+  ]);
+  assert.deepEqual(kitChangesSince('222222222222', file), [
+    { revision: '333333333333', impact: 'none', summary: 'Third change.' },
+  ]);
+  assert.deepEqual(kitChangesSince('333333333333', file), []);
+});
+
+test('kitChangesSince returns all entries for an unknown or missing revision', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-kit-changes-unknown-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'CHANGES.md');
+  const text = [
+    '## 111111111111',
+    'Impact: required',
+    'Summary: First change.',
+    '',
+    '## 222222222222',
+    'Impact: useful',
+    'Summary: Second change.',
+    '',
+  ].join('\n');
+  fs.writeFileSync(file, text);
+  const all = [
+    { revision: '111111111111', impact: 'required', summary: 'First change.' },
+    { revision: '222222222222', impact: 'useful', summary: 'Second change.' },
+  ];
+  assert.deepEqual(kitChangesSince('unknown', file), all);
+  assert.deepEqual(kitChangesSince('', file), all);
+  assert.deepEqual(kitChangesSince(null, file), all);
+  assert.deepEqual(kitChangesSince(undefined, file), all);
+});
+
+test('the real kit/CHANGES.md has a valid format and at least one entry', () => {
+  const entries = readKitChanges();
+  assert.ok(entries.length >= 1, 'the real changelog must have at least one entry');
+  for (const entry of entries) {
+    assert.match(entry.revision, /^[0-9a-f]{12}$/, `revision ${entry.revision} must be 12 hex chars`);
+    assert.ok(['required', 'useful', 'none'].includes(entry.impact), `impact ${entry.impact} must be valid`);
+    assert.ok(entry.summary && entry.summary.length > 0, 'summary must be non-empty');
   }
 });
 
