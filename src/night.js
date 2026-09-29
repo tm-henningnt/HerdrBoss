@@ -66,3 +66,45 @@ export function clearNight({ dataDir = DATA_DIR } = {}) {
     throw error;
   }
 }
+
+// The time helpers of the night command. The command parses --until and writes the state.
+
+// The default end time of a night watch, as local HH:MM.
+export const NIGHT_DEFAULT_UNTIL = '07:30';
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const HHMM = /^([01]\d|2[0-3]):([0-5]\d)$/;
+
+// Parse a --until value into a Date. HH:MM means the next such local time. An ISO string
+// keeps its own date and offset. The result is always after now.
+export function parseNightUntil(value, { now = new Date() } = {}) {
+  const text = String(value).trim();
+  const match = HHMM.exec(text);
+  if (match) {
+    const date = new Date(now);
+    date.setHours(Number(match[1]), Number(match[2]), 0, 0);
+    if (date.getTime() <= now.getTime()) date.setDate(date.getDate() + 1);
+    return date;
+  }
+  const ms = Date.parse(text);
+  if (!Number.isFinite(ms)) throw new Error('The --until value must be HH:MM or an ISO time, for example 07:30 or 2026-09-29T07:30:00.');
+  return new Date(ms);
+}
+
+// The end time must be in the future and within 24 hours.
+export function assertNightUntil(date, { now = new Date() } = {}) {
+  const ms = date.getTime();
+  if (ms <= now.getTime()) throw new Error('The night end time is in the past.');
+  if (ms > now.getTime() + DAY_MS) throw new Error('The night end time is more than 24 hours ahead.');
+  return date;
+}
+
+// Parse and check a --until value in one call.
+export function nightUntil(value, { now = new Date() } = {}) {
+  return assertNightUntil(parseNightUntil(value, { now }), { now });
+}
+
+// The default end time: the next 07:30 local time.
+export function defaultNightUntil({ now = new Date() } = {}) {
+  return parseNightUntil(NIGHT_DEFAULT_UNTIL, { now });
+}

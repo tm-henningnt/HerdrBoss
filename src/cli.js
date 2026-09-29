@@ -55,6 +55,39 @@ async function verifyBrowserCaller(slug, { env = process.env, herdr = null } = {
   throw new Error(`The ${slug} browser belongs to project ${slug}. This pane is in workspace ${where}, ${owner ? `which belongs to project ${owner}` : 'which belongs to no project'}. Only a pane in the ${slug} workspace or the Boss can change it.`);
 }
 
+// Only the Boss pane, the Owner in a plain terminal, or the dashboard may start or stop night
+// watch. An orchestrator or a worker gets a refusal with the reason. The pane check is the same
+// as the other Boss-only commands, for example mail close.
+async function verifyNightCaller(env, herdr) {
+  // A plain terminal is the Owner. No pane check runs there.
+  // Any Herdr pane variable means a pane, which must pass the pane check. Only a shell with none is the Owner.
+  if (env.HERDR_ENV !== '1' && !env.HERDR_PANE_ID && !env.HERDR_WORKSPACE_ID) return { role: 'owner' };
+  const paneId = env.HERDR_PANE_ID;
+  const workspaceId = env.HERDR_WORKSPACE_ID;
+  if (!paneId) throw new Error('Cannot verify the caller pane: HERDR_PANE_ID is required.');
+  if (!workspaceId) throw new Error('Cannot verify the caller pane: HERDR_WORKSPACE_ID is required.');
+  let response;
+  try { response = herdr(['pane', 'get', paneId]); }
+  catch (error) { throw new Error(`Cannot verify the caller pane: Herdr could not read pane ${paneId}: ${error.message}`); }
+  const pane = response?.pane ?? response ?? {};
+  const returnedId = pane.pane_id ?? pane.paneId ?? pane.id ?? null;
+  if (returnedId !== paneId) throw new Error(`Cannot verify the caller pane: the returned pane ID (${returnedId ?? '(missing)'}) differs from HERDR_PANE_ID (${paneId}).`);
+  const paneWorkspace = pane.workspace_id ?? pane.workspaceId ?? pane.workspace ?? null;
+  if (paneWorkspace !== workspaceId) throw new Error(`Cannot verify the caller pane: HERDR_WORKSPACE_ID (${workspaceId}) differs from the pane workspace (${paneWorkspace ?? '(missing)'}).`);
+  if (pane.label !== 'boss') {
+    throw new Error(`Only the pane labeled boss can run herdr-boss night. This pane is labeled ${pane.label ?? '(none)'}. An orchestrator or a worker cannot start or stop night watch: ask the Boss.`);
+  }
+  return { role: 'boss' };
+}
+
+// The one-line label of a night end time: the local weekday and time, for example "Tue 07:30".
+function nightLabel(iso) {
+  const date = new Date(iso);
+  const day = new Intl.DateTimeFormat('en-GB', { weekday: 'short' }).format(date);
+  const time = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit' }).format(date);
+  return `${day} ${time}`;
+}
+
 const USAGE = `herdr-boss <command>
 
   serve [--read-only-preview] Run the collector loop and the dashboard server.
@@ -122,6 +155,9 @@ const USAGE = `herdr-boss <command>
   messages relay ID... --by boss  Mark queued Owner messages as relayed by the Boss.
   mail post --to owner [--title TEXT] [--action read|decide|approve|answer] FILE  Post a Markdown report for the Owner from the boss pane.
   mail close ID... --note TEXT  Close open Owner mailbox items as answered through the Boss.
+  night start [--until HH:MM|ISO] [--quiet-hours]  Start night watch. The default end time is the next 07:30 local time.
+  night stop           Stop night watch.
+  night                Print the current night watch state.
   kit-path              Print the shared kit directory.
 `;
 
@@ -254,6 +290,49 @@ async function main() {
         if (errors.length) throw new Error(errors.join('\n'));
         console.log('Policy saved. The service will apply it on its next tick.');
       } else throw new Error('Usage: policy show | policy set FILE');
+      break;
+    }
+    case 'night': {
+      const { readNight, writeNight, clearNight, nightUntil, defaultNightUntil } = await import('./night.js');
+      const usage = 'Usage: night start [--until HH:MM|ISO] [--quiet-hours] | night stop | night';
+      const [action, ...rest] = args;
+      if (action === undefined) {
+        const state = readNight();
+        console.log(state.active
+          ? `Night watch until ${nightLabel(state.until)}${state.by ? ` (by ${state.by})` : ''}.`
+          : 'No night watch.');
+        break;
+      }
+      if (!['start', 'stop'].includes(action)) throw new Error(usage);
+      const { createHerdrRunner } = await import('./kit/workers.js');
+      const caller = await verifyNightCaller(process.env, createHerdrRunner());
+      if (action === 'stop') {
+        clearNight();
+        console.log('Night watch stopped.');
+        break;
+      }
+      const flags = {};
+      const positional = [];
+      for (let index = 0; index < rest.length; index += 1) {
+        const token = rest[index];
+        if (!token.startsWith('--')) { positional.push(token); continue; }
+        if (!['--until', '--quiet-hours'].includes(token)) throw new Error(`Unknown option: ${token}. ${usage}`);
+        if (token in flags) throw new Error(`${token} may be used only once.`);
+        if (token === '--quiet-hours') { flags[token] = true; continue; }
+        const value = rest[++index];
+        if (value === undefined || value.startsWith('--')) throw new Error(`${token} needs a value.`);
+        flags[token] = value;
+      }
+      if (positional.length) throw new Error(usage);
+      const until = flags['--until'] === undefined ? defaultNightUntil() : nightUntil(flags['--until']);
+      writeNight({
+        active: true,
+        since: new Date().toISOString(),
+        until: until.toISOString(),
+        by: caller.role,
+        quietHours: flags['--quiet-hours'] === true,
+      });
+      console.log(`Night watch until ${nightLabel(until.toISOString())}.`);
       break;
     }
     case 'usage': {
