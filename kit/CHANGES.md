@@ -33,3 +33,7 @@ Summary: Add editable Watch routine texts (kit/watch) that the service runs duri
 ## 9ca9a9ebf4a8
 Impact: useful
 Summary: Carry the Owner /goal over in an orchestrator handover.
+
+## 4f7a0c699512
+Impact: useful
+Summary: Add a blocking herdr-boss wait for the few cases that must block.
