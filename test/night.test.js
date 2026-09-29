@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { clearNight, defaultNightUntil, nightFile, nightUntil, parseNightUntil, readNight, writeNight } from '../src/night.js';
+import { clearNight, defaultNightUntil, nightFile, nightNoticeSent, nightUntil, parseNightUntil, readNight, readNightRecord, withNoticeMark, writeNight } from '../src/night.js';
 import { renderBulletin } from '../src/rules.js';
 
 const NOW = Date.parse('2026-09-28T22:00:00Z');
@@ -400,4 +400,43 @@ test('a pane without HERDR_ENV but with its pane ID is not treated as the Owner'
   const error = nightCliError(['night', 'start', '--until', '07:30'], env);
   assert.ok(error, 'the command fails');
   assert.ok(!fs.existsSync(nightFile(dataDir)), 'no state file is written');
+});
+
+test('a notice mark is stored per pane and keeps the other keys', () => {
+  const base = { active: true, since: new Date(NOW).toISOString(), until: UNTIL, by: 'owner', quietHours: true };
+  const marked = withNoticeMark(base, 'start', 'w1:p1', new Date(NOW).toISOString());
+  assert.deepEqual(marked.noticeStartAt, { 'w1:p1': new Date(NOW).toISOString() });
+  assert.equal(marked.until, UNTIL, 'the end time stays as it is');
+  assert.equal(marked.quietHours, true, 'the quiet hours stay as they are');
+  assert.equal(base.noticeStartAt, undefined, 'the stored record is not changed');
+  const two = withNoticeMark(marked, 'start', 'w2:p1', new Date(NOW + 1).toISOString());
+  assert.deepEqual(Object.keys(two.noticeStartAt), ['w1:p1', 'w2:p1'], 'a second pane adds a mark');
+  const stopped = withNoticeMark(two, 'end', 'w1:p1', new Date(NOW + 2).toISOString());
+  assert.equal(Object.keys(stopped.noticeStopAt).length, 1, 'the end marks are a separate key');
+  assert.deepEqual([...nightNoticeSent(stopped, 'start')], ['w1:p1', 'w2:p1'], 'the start marks name both panes');
+  assert.deepEqual([...nightNoticeSent(stopped, 'end')], ['w1:p1'], 'the end marks name the pane that got the notice');
+  assert.throws(() => nightNoticeSent(stopped, 'middle'), TypeError, 'an unknown phase is a caller error');
+  assert.throws(() => withNoticeMark(base, 'middle', 'w1:p1', new Date(NOW).toISOString()), TypeError);
+});
+
+test('a mark from before the night started does not count', () => {
+  const record = { active: true, since: new Date(NOW).toISOString(), until: UNTIL,
+    noticeStartAt: { 'w1:p1': new Date(NOW - 1).toISOString(), 'w2:p1': new Date(NOW).toISOString() } };
+  assert.deepEqual([...nightNoticeSent(record, 'start')], ['w2:p1'], 'the earlier mark belongs to an earlier night');
+  assert.deepEqual([...nightNoticeSent({ active: true, startedAt: record.since, noticeStopAt: { 'w9:p9': record.noticeStartAt['w1:p1'] } }, 'end')], [],
+    'a record without a start time takes every mark');
+  assert.deepEqual([...nightNoticeSent(null, 'start')], [], 'a missing record has no marks');
+  assert.deepEqual([...nightNoticeSent({ active: true, noticeStartAt: [] }, 'start')], [], 'a broken mark key has no marks');
+});
+
+test('the stored record reads back with its notice marks', (t) => {
+  const dataDir = tempDir(t);
+  assert.equal(readNightRecord({ dataDir }), null, 'a directory without a state file has no record');
+  writeNight(withNoticeMark({ active: true, since: new Date(NOW).toISOString(), until: UNTIL, by: 'owner', quietHours: false },
+    'start', 'w1:p1', new Date(NOW).toISOString()), { dataDir });
+  const record = readNightRecord({ dataDir });
+  assert.equal(record.noticeStartAt['w1:p1'], new Date(NOW).toISOString());
+  assert.equal(readNight({ dataDir, now: NOW }).until, new Date(UNTIL).toISOString(), 'the read state still works');
+  clearNight({ dataDir });
+  assert.equal(readNightRecord({ dataDir }), null, 'a cleared state file has no record');
 });

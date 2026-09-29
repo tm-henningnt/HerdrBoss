@@ -1,14 +1,23 @@
 // The night watch state. The file night.json in the data directory says that the Owner is away and that the
-// Boss acts for the Owner until a stored end time. A later task adds the commands, the notices, and the reports.
+// Boss acts for the Owner until a stored end time. The file also holds the marks of the notices that went out.
+// A later task adds the commands and the reports.
 import fs from 'node:fs';
 import path from 'node:path';
 import { DATA_DIR } from './config.js';
 
 export const NIGHT_FILE = 'night.json';
 
-// The keys that the stored record must hold. The other keys, such as reportAt and noticeStopAt, are written by
-// later tasks and pass through this module unchanged.
+// The keys that the stored record must hold. The other keys, such as reportAt, are written by later tasks and
+// pass through this module unchanged.
 const REQUIRED = ['active', 'until'];
+
+// The stored key of the send marks of each notice phase.
+const NOTICE_KEY = { start: 'noticeStartAt', end: 'noticeStopAt' };
+
+function noticeKey(phase) {
+  if (!Object.hasOwn(NOTICE_KEY, phase)) throw new TypeError('notice phase must be start or end.');
+  return NOTICE_KEY[phase];
+}
 
 export function nightFile(dataDir = DATA_DIR) {
   return path.join(dataDir, NIGHT_FILE);
@@ -107,4 +116,34 @@ export function nightUntil(value, { now = new Date() } = {}) {
 // The default end time: the next 07:30 local time.
 export function defaultNightUntil({ now = new Date() } = {}) {
   return parseNightUntil(NIGHT_DEFAULT_UNTIL, { now });
+}
+
+// Read the stored record as it is on the file, with the notice marks. A missing or unreadable file reads as null.
+export function readNightRecord({ dataDir = DATA_DIR } = {}) {
+  try {
+    const value = JSON.parse(fs.readFileSync(nightFile(dataDir), 'utf8'));
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+// The panes that already got a notice of this phase in this night. A mark from before the night started belongs to
+// an earlier night, so it does not count.
+export function nightNoticeSent(record, phase) {
+  const marks = record?.[noticeKey(phase)];
+  if (!marks || typeof marks !== 'object' || Array.isArray(marks)) return new Set();
+  const since = isoOrNull(record?.since ?? record?.startedAt);
+  const from = since === null ? null : Date.parse(since);
+  return new Set(Object.entries(marks)
+    .filter(([, at]) => from === null || !(Date.parse(at) < from))
+    .map(([pane]) => pane));
+}
+
+// Add the send time of one notice for one pane to a stored record. The other keys stay as they are, and the given
+// record is not changed.
+export function withNoticeMark(record, phase, pane, at) {
+  const key = noticeKey(phase);
+  const marks = record?.[key];
+  return { ...(record || {}), [key]: { ...(marks && typeof marks === 'object' && !Array.isArray(marks) ? marks : {}), [pane]: at } };
 }

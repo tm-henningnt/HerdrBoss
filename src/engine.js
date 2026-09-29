@@ -18,7 +18,7 @@ import { listHandoffs, saveHandoffs, supersedeHandoffs, expireHandoff, expireMis
 import { deliverQueued, mailboxCounts, readMessages, RETENTION_MS, SEND_LIMIT_PER_MINUTE } from './messages.js';
 import { openMessageStore } from './message-store.js';
 import { readKitNotice, pendingKitAlert, isKitAlert, kitNoticeTargets } from './kit-notice.js';
-import { readNight } from './night.js';
+import { nightNoticeSent, readNight, readNightRecord, withNoticeMark, writeNight } from './night.js';
 import { inspectWorkerTransitions, inspectWorkerReports, applyWorkerFailureStatuses, resolveFreeUsageRun, activeFreeModelExhaustions, extendFreeModelExhaustion, activeFreeLaneExhaustions, extendFreeLaneExhaustion, freeUsageLaneRetry } from './worker-failures.js';
 import { FULL_SUITE_LOCK, readLockQueue, readLockTakeoverNotices, readMachineLocks, removeLockTakeoverNotice } from './kit/locks.js';
 
@@ -92,6 +92,20 @@ export function pruneInactiveDiskPromptRecords(records, activeAlerts) {
     const alertKey = recordKey.split('@')[0];
     return !alertKey.startsWith('machine:disk:') || active.has(alertKey);
   }));
+}
+
+// The text of one night notice. The start notice names the stored end time.
+export function nightNoticeText(phase, record) {
+  if (phase === 'end') return '[herdr-boss] Night watch ended. The Owner rules apply again.';
+  if (phase !== 'start') throw new TypeError('notice phase must be start or end.');
+  const end = record?.until ? new Date(record.until) : null;
+  const label = end && !Number.isNaN(end.getTime()) ? ` until ${end.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}` : '';
+  return `[herdr-boss] Night watch${label}. The Owner is away; the Boss acts for the Owner. Work as normal. Escalate to the Boss.`;
+}
+
+// A night notice goes to an orchestrator pane and to the Boss pane. A pane without an agent takes no prompt.
+export function nightNoticeTarget(pane) {
+  return !!pane?.agent && (pane.orch === true || pane.label === 'orch' || pane.label === 'boss');
 }
 
 // The Herdr CLI can print an error envelope and exit with status 0. Only that envelope is a failure;
@@ -589,6 +603,7 @@ export class Engine extends EventEmitter {
       fs.writeFileSync(BULLETIN_FILE, renderBulletin(snap, evaluation, this.cfg));
       if (this.act) await this.deliver(evaluation.alerts, herdr, now);
       if (this.act && this.push) await this.deliverLockTakeoverNotices(herdr);
+      if (this.act && this.push) await this.deliverNightNotices(snap.night, herdr, now);
       // Owner messages use a fresh pane list so delivery can act on current pane status.
       if (this.act && this.push && currentPaneList) {
         try { await this.deliverOwnerMessages(herdr, control.projects, now); }
@@ -1033,6 +1048,48 @@ export class Engine extends EventEmitter {
       } catch (error) {
         this.log('error', `Expired lock notice to ${notice.ownerPane} failed: ${String(error.stderr || error.message).slice(0, 200)}`);
       }
+    }
+  }
+
+  // One start notice and one end notice per pane. The marks live in night.json, so a restart sends no notice twice.
+  // A pane that joins during the night gets the start notice at the next tick. A failed send stores no mark, so the
+  // next tick sends the notice again. A stop clears the file, so the engine keeps the last active record in memory
+  // and sends the end notice from it.
+  async deliverNightNotices(night, herdr, now) {
+    if (!this.push || !herdr?.panes) return;
+    const stored = readNightRecord({ dataDir: DATA_DIR });
+    const active = night?.active === true;
+    const record = stored || this.memory.nightRecord;
+    if (!record) return;
+    const phase = active ? 'start' : 'end';
+    const sent = nightNoticeSent(record, phase);
+    const live = new Map(herdr.panes.map((pane) => [pane.id, pane]));
+    const targets = phase === 'start'
+      ? herdr.panes.filter((pane) => nightNoticeTarget(pane) && !sent.has(pane.id)).map((pane) => pane.id)
+      // Only a pane that got the start notice gets the end notice.
+      : [...nightNoticeSent(record, 'start')].filter((pane) => !sent.has(pane) && live.has(pane));
+    const text = nightNoticeText(phase, record);
+    let marked = false;
+    let marks = record;
+    for (const pane of targets) {
+      try {
+        checkHerdrResponse(await this.herdrRunner('herdr', ['agent', 'prompt', pane, text]));
+        marks = withNoticeMark(marks, phase, pane, new Date(now).toISOString());
+        marked = true;
+        this.log('notify', text, { pane });
+      } catch (error) {
+        this.log('error', `Night watch ${phase} notice to ${pane} failed: ${String(error.stderr || error.message).slice(0, 200)}`);
+      }
+    }
+    if (marked && stored) {
+      try { writeNight(marks, { dataDir: DATA_DIR }); }
+      catch (error) { this.log('error', `Could not store the night notice marks: ${error.message}`); }
+    }
+    // The mirror holds the marks of an active night. It is dropped once the night is not active.
+    const mirror = active ? marks : null;
+    if (JSON.stringify(this.memory.nightRecord ?? null) !== JSON.stringify(mirror)) {
+      this.memory.nightRecord = mirror;
+      writeJson(MEMORY_FILE, this.memory);
     }
   }
 

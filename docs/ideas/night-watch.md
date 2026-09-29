@@ -25,13 +25,15 @@ Store the state in `night.json` in the data folder, beside `policy.json` and `ru
 
 ## 2. Notices
 
-The engine sends one start notice and one end notice to every orchestrator pane. It uses the direct prompt of the lock-takeover notice in `src/engine.js:1025`, not the alert queue, so a working orchestrator receives it too.
+The engine sends one start notice and one end notice to every orchestrator pane and to the Boss pane. It uses the direct prompt of the lock-takeover notice in `src/engine.js:1025`, not the alert queue, so a working orchestrator receives it too. The notice is not a resource notice. It uses no idle gate and no hourly `info` limit.
 
-The start notice reads: `Owner away until 07:30. The Boss acts for the Owner. Escalate to the Boss.`
+The start notice reads: `[herdr-boss] Night watch until 07:30. The Owner is away; the Boss acts for the Owner. Work as normal. Escalate to the Boss.` The time is the local `until` time of the stored state.
 
-The end notice reads: `Owner is back. The Boss no longer acts for the Owner.`
+The end notice reads: `[herdr-boss] Night watch ended. The Owner rules apply again.` A pane gets the end notice only when it got the start notice.
 
-The engine records each send in `memory.pushes` under `night:start@<pane>` and `night:end@<pane>`. It never sends a notice twice for the same night. A failed send stays unsent, so the next tick tries again. Orchestrators do not copy the notice into `memory.md`.
+The engine records each send in `night.json` under `noticeStartAt` and `noticeStopAt`, with the pane as the key. A restart reads those marks and sends no notice twice. A pane that joins during the night gets the start notice at the next tick. A mark from before the `since` time belongs to an earlier night. A failed send stores no mark, so the next tick sends the notice again.
+
+A stop clears the file. The engine keeps the last active record in `memory.nightRecord` and sends the end notice from it, then drops the record. Orchestrators do not copy the notice into `memory.md`.
 
 ## 3. Service-side checks
 
