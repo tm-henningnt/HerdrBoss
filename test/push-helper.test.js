@@ -112,12 +112,13 @@ function fixture(t, prefix) {
   const writeHook = (dir, exitCode = 0) => {
     fs.mkdirSync(dir, { recursive: true });
     const hook = path.join(dir, 'pre-push');
-    fs.writeFileSync(hook, `#!/bin/sh\nif [ -f '${lockFile}' ]; then echo locked > '${base}/hook-saw'; else echo unlocked > '${base}/hook-saw'; fi\nexit ${exitCode}\n`);
+    fs.writeFileSync(hook, `#!/bin/sh\nif [ -f '${lockFile}' ]; then echo locked > '${base}/hook-saw'; else echo unlocked > '${base}/hook-saw'; fi\nprintf '%s' "${'${HERDR_BOSS_SUITE_REUSE-unset}'}" > '${base}/hook-suite-reuse'\nexit ${exitCode}\n`);
     fs.chmodSync(hook, 0o755);
     return hook;
   };
   const hookSaw = () => fs.readFileSync(path.join(base, 'hook-saw'), 'utf8').trim();
-  return { base, root, remote, dataDir, config, calls, lines, livePanes, options, lockFile, writeHook, hookSaw };
+  const hookSuiteReuse = () => fs.readFileSync(path.join(base, 'hook-suite-reuse'), 'utf8');
+  return { base, root, remote, dataDir, config, calls, lines, livePanes, options, lockFile, writeHook, hookSaw, hookSuiteReuse };
 }
 
 test('herdr-boss push takes and releases the full-suite lock around a push with a pre-push hook', (t) => {
@@ -130,6 +131,18 @@ test('herdr-boss push takes and releases the full-suite lock around a push with 
   assert.equal(fs.existsSync(f.lockFile), false, 'the lock is released after the push');
   assert.equal(git(f.remote, 'rev-parse', 'main'), git(f.root, 'rev-parse', 'main'));
   assert.ok(f.lines.some((line) => /pre-push hook.*full-suite/i.test(line)), f.lines.join('\n'));
+});
+
+test('herdr-boss push enables suite pass reuse for its pre-push hook', (t) => {
+  const f = fixture(t, 'herdr-push-suite-reuse-');
+  f.writeHook(path.join(f.root, '.git', 'hooks'));
+  const options = f.options();
+  options.env = { ...process.env, ...options.env };
+
+  const result = runKitCommand('push', ['origin', 'main'], options);
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(f.hookSuiteReuse(), '1');
 });
 
 test('back-to-back pushes with a pre-push hook both succeed and leave no lock', (t) => {
