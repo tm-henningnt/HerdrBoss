@@ -780,6 +780,12 @@ Select one or more checkboxes under **Needs you**, then select **Dismiss selecte
 
 The choices are the list items under a Markdown heading with the text `Choices`, for example `## Choices`. The list ends at the first line that is not a list item. The page shows at most 10 choices.
 
+### Automatic refresh
+
+The page reads new data every 30 seconds and on each state event. It replaces the page only when the new page differs. It keeps the open conversation, the selection, the typed text, and the caret. It keeps the scroll position of the list and of the conversation. A new folder or a new conversation starts at the top.
+
+The refresh waits while you type or scroll. It runs 3 seconds after your last input or scroll. The Chat page uses the same rule.
+
 ### Unread count and the top-bar icons
 
 The desktop Mailbox badge shows open Needs-you items that the Owner has not opened. The number comes from `needsYouUnread` in the `mailbox` field in `/api/state`.
@@ -868,6 +874,8 @@ The Chat is compact, in the style of a phone messenger.
 Each row shows the chat title and the time on the first line. The second line shows the last message on one line and the unread badge. The last message is cut with an ellipsis. Each row starts with the avatar of that chat. A mail report shows as `Report: TITLE`. The chat with the newest last message comes first. A chat with no message comes after a chat with a message. The menu badge shows the total unread count of all chats. A mail report does not count as chat unread.
 
 The page reads `GET /api/chats`. It follows the `message` event on `GET /api/events`. It never reloads the page.
+
+The automatic refresh keeps the scroll position of the chat list and of the conversation. It waits 3 seconds after your last input or scroll. See [Automatic refresh](#automatic-refresh).
 
 ### Conversation
 
