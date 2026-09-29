@@ -3386,24 +3386,38 @@ function agentsDriftLine(check) {
 // The Boss memory file is outside every project repository.
 const BOSS_MEMORY_PATH = '~/.herdr-boss/boss-memory.md';
 
+// The state of the loaded kit revision, from the current revision and the impact of each recorded change.
+// It matches kitRevisionState() in src/kit/agents-check.js. An unknown revision is behind on a required change.
+function kitState(loaded, kit) {
+  if (!loaded) return 'not published';
+  if (loaded === kit.current) return 'current';
+  const changes = kit.changes || [];
+  const index = changes.findIndex((c) => c.revision === loaded);
+  if (index < 0 || changes.at(-1)?.revision !== kit.current) return 'behind (required)';
+  return changes.slice(index + 1).some((c) => c.impact === 'required') ? 'behind (required)' : 'behind (useful only)';
+}
+
 // The kit revision that the orchestrator loaded, against the current kit revision of Herdr Boss.
-function kitRevisionLine(p) {
+// A project that is behind on useful changes only shows a muted line. A required change shows a warning.
+function kitRevisionLine(p, kit) {
   const current = p.currentKitRevision;
   if (!current) return '';
   const loaded = p.kitRevision || 'not published';
   const text = `Kit revision ${esc(loaded)}, current ${esc(current)}`;
-  if (loaded === current) return `<div class="win-foot">${text}.</div>`;
+  const state = kitState(p.kitRevision, { current, changes: kit?.changes });
+  if (state === 'current') return `<div class="win-foot">${text}.</div>`;
+  if (state === 'behind (useful only)') return `<div class="win-foot muted">${text}. Behind (useful only): the kit changes since then need no action. Run <span class="mono">herdr-boss kit update</span> when convenient.</div>`;
   return `<div class="warnbox">${text}. The orchestrator uses an old kit. Run <span class="mono">herdr-boss kit update</span> in the project, read its digest of the kit changes, and re-read <span class="mono">docs/orchestration/herdr-boss.md</span>.</div>`;
 }
 
 // The read-only file paths that an orchestrator reads. Show paths only, never file contents.
-function filesBlock(p) {
+function filesBlock(p, kit) {
   const row = (label, value) => `<li><span class="k">${esc(label)}</span>${value ? `<span class="mono">${esc(value)}</span>` : '<span class="muted">not registered yet</span>'}</li>`;
   return `<section class="panel files"><h2>Files</h2><div class="win-foot">Paths that the orchestrator reads.</div><ul class="files-list">
     ${row('Project memory', p.repo ? `${p.repo}/docs/orchestration/memory.md` : null)}
     ${row('Kit file', p.repo ? `${p.repo}/docs/orchestration/herdr-boss.md` : null)}
     ${row('Boss memory', BOSS_MEMORY_PATH)}
-  </ul>${kitRevisionLine(p)}</section>`;
+  </ul>${kitRevisionLine(p, kit)}</section>`;
 }
 
 // The read-only worker config that the engine read from .herdr-boss.json. It shows allow-listed fields only.
@@ -3459,7 +3473,7 @@ function project(s, slug) {
     `<section class="phead"><h1>${esc(p.project)}</h1>${p.goal ? `<div class="owner-goal"><strong>Current Owner goal</strong><p>${esc(p.goal)}</p></div>` : ''}${p.summary ? `<p>${esc(p.summary)}</p>` : ''}${phases}<div class="win-foot">${published ? `updated ${ago(p.updated)}${staleStatusTag(s, p)}${p.status ? ` · ${esc(p.status)}` : ''}` : 'No project status published yet'}${p.git && typeof p.git === 'object' ? ` · <span class="mono">${esc(p.git.branch || '')}${p.git.commit ? ` @ ${esc(String(p.git.commit).slice(0, 12))}` : ''}${p.git.dirty ? ' · uncommitted changes' : ''}</span>` : ''}</div></section>`,
     p.errors ? `<div class="warnbox">${esc(p.errors.join('; '))}</div>` : '',
     agentsDriftLine(p.agentsCheck),
-    published ? filesBlock(p) : '',
+    published ? filesBlock(p, s.kit) : '',
     workerConfigBlock(s, slug),
     handoffBlock(s, slug),
     metrics,
@@ -3502,7 +3516,7 @@ const HELP = {
     <h3>AGENTS.md drift</h3><p><b>AGENTS.md drift</b> shows the errors and warnings that <b>herdr-boss publish</b> found in the project AGENTS.md. An error is a missing, old, or hand-edited Herdr Boss stub, or a missing, old, or hand-edited kit file <code>docs/orchestration/herdr-boss.md</code>. A warning is stale orchestration text, such as a fixed pane ID, a dated line, a copied model list, or text that sends pushes or product decisions to the Boss. Run <b>herdr-boss check agents</b> in the project for each finding. Run <b>herdr-boss kit install</b> to fix an error.</p>
     <h3>Files</h3><p><b>Files</b> shows the paths that the orchestrator reads: the project memory file, the installed kit file, and the Boss memory file. The home folder shows as <b>~</b>. The panel shows paths only. It never shows the contents of a memory or kit file.</p>
     <h3>Worker config</h3><p><b>Worker config</b> shows the fields that Herdr Boss read from <code>.herdr-boss.json</code> in the project repository. A <b>config</b> tag marks a field that the file sets; the other fields use the default. The <code>setup</code> command shows as <b>set</b> or <b>not set</b>, and a home folder path shows as <b>~</b>. Change a field in <code>.herdr-boss.json</code> in the repository.</p>
-    <h3>Kit revision</h3><p><b>Kit revision</b> shows the kit revision that the orchestrator loaded, from <code>kitRevision</code> in its status file, and the current kit revision. A warning shows when they are different. The <b>Kit updated</b> notice then tells the orchestrator to run <b>herdr-boss kit update</b> and to re-read <code>docs/orchestration/herdr-boss.md</code>. The command first prints a digest of the kit changes since the installed kit revision. The digest names the impact and the summary of each change, oldest first. The command then installs the kit as <b>herdr-boss kit install</b> does. The Claude session hook runs <b>herdr-boss kit update --quiet</b> at each session start. <b>worker start</b>, <b>publish</b>, and <b>handoff</b> print one line when the project kit is behind for a required or useful change.</p>
+    <h3>Kit revision</h3><p><b>Kit revision</b> shows the kit revision that the orchestrator loaded, from <code>kitRevision</code> in its status file, and the current kit revision. A muted line shows when the project is behind on changes that need no action (<b>behind (useful only)</b>). A warning shows when the project is behind on a required change, or when its revision is not in the change log. The <b>Kit updated</b> notice then tells the orchestrator to run <b>herdr-boss kit update</b> and to re-read <code>docs/orchestration/herdr-boss.md</code>. A working orchestrator that stays behind on a required change for 2 hours gets one reminder. The command first prints a digest of the kit changes since the installed kit revision. The digest names the impact and the summary of each change, oldest first. The command then installs the kit as <b>herdr-boss kit install</b> does. The Claude session hook runs <b>herdr-boss kit update --quiet</b> at each session start. <b>worker start</b>, <b>publish</b>, and <b>handoff</b> print one line when the project kit is behind for a required or useful change.</p>
     <h3>Stale status</h3><p><b>Status stale: AGE</b> shows next to the updated time when the published status is older than 2 hours and, after that publish, a worker was working in the last 2 hours or new commits landed on the project repository. A paused project is never stale. The orchestrator gets one notice for each stale status. Publish the current plan and progress to clear the mark.</p>
     <p>The data comes from the project's status file. When a section is missing, the orchestrator has not published those fields.</p>`],
   mailbox: ['Mailbox', `

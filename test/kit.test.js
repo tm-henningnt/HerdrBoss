@@ -3116,16 +3116,16 @@ console.log(JSON.stringify({ result }));
   assert.equal(result.status, 1, result.stderr);
   assert.deepEqual(result.stdout.trimEnd().split('\n'), [
     `alpha: kit revision ${current} (current); agents check 0 errors, 2 warnings`,
-    'beta: kit revision abcdef012345 (old); agents check 1 errors, 0 warnings',
+    'beta: kit revision abcdef012345 (behind (required)); agents check 1 errors, 0 warnings',
     'gamma: kit revision none (not published); agents check not published',
-    `check kit: FAIL (current revision ${current}; 3 projects, 2 not current)`,
+    `check kit: FAIL (current revision ${current}; 3 projects, 1 behind (required), 1 not published)`,
   ]);
 
   write('beta', { kitRevision: current });
   fs.rmSync(path.join(dataDir, 'projects', 'gamma.json'));
   const pass = spawnSync(process.execPath, [cli, 'check', 'kit'], { cwd: home, env, encoding: 'utf8' });
   assert.equal(pass.status, 0, pass.stderr);
-  assert.match(pass.stdout, /check kit: PASS \(current revision [0-9a-f]{12}; 2 projects, 0 not current\)/);
+  assert.match(pass.stdout, /check kit: PASS \(current revision [0-9a-f]{12}; 2 projects\)/);
 });
 
 test('check kit flags project and Boss agents with unstable names', async () => {
@@ -3236,7 +3236,7 @@ test('the project page shows the AGENTS.md drift line and its help', () => {
   assert.match(app, /agentsDriftLine\(p\.agentsCheck\)/);
   assert.match(app, /<h3>AGENTS\.md drift<\/h3>/);
   assert.match(app, /Kit revision \$\{esc\(loaded\)\}, current \$\{esc\(current\)\}/);
-  assert.match(app, /kitRevisionLine\(p\)/);
+  assert.match(app, /kitRevisionLine\(p, kit\)/);
   assert.match(app, /<h3>Kit revision<\/h3>/);
 });
 

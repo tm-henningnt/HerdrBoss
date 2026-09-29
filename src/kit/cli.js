@@ -9,7 +9,7 @@ import { allowWorkerScope, collectWorker, createHerdrRunner, listWorkers, parkWo
 import { pruneWorktrees } from './worktrees.js';
 import { acquireProjectLock, listProjectLocks, pushWithLock, releaseProjectLock } from './locks.js';
 import { SUITE_WAIT_SECONDS, listSuitePasses, runSuite } from './suite.js';
-import { agentsBlock, checkAgentsFile, installedKitRevision, installKit, kitChangesSince, kitRevision, KIT_FILE, rulesPolicy } from './agents-check.js';
+import { agentsBlock, checkAgentsFile, installedKitRevision, installKit, kitChangesSince, kitRevision, kitRevisionState, KIT_FILE, KIT_STATES, rulesPolicy } from './agents-check.js';
 import { listProjects } from '../projects.js';
 
 const USAGE = `Kit commands:
@@ -145,16 +145,20 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
 
   if (command === 'check' && argv[0] === 'kit') {
     if (argv.length !== 1) fail('Usage: check kit');
-    const current = kitRevision();
+    const current = injectedConfig?.currentKitRevision ?? kitRevision();
+    const entries = injectedConfig?.kitChanges;
     const rows = listProjects().map((project) => {
       const loaded = typeof project.kitRevision === 'string' && project.kitRevision ? project.kitRevision : null;
-      const state = !loaded ? 'not published' : loaded === current ? 'current' : 'old';
+      const state = kitRevisionState(loaded, current, entries);
       const c = project.agentsCheck;
       const counts = c && Number.isInteger(c.errors) && Number.isInteger(c.warnings) ? `${c.errors} errors, ${c.warnings} warnings` : 'not published';
       output(`${project.slug}: kit revision ${loaded ?? 'none'} (${state}); agents check ${counts}`);
       return { slug: project.slug, kitRevision: loaded, state, agentsCheck: c ?? null };
     });
-    const stale = rows.filter((row) => row.state !== 'current').length;
+    const count = (state) => rows.filter((row) => row.state === state).length;
+    const required = count(KIT_STATES.required);
+    const useful = count(KIT_STATES.useful);
+    const unpublished = count(KIT_STATES.unpublished);
     let nameErrors = 0;
     let agents = null;
     try { agents = herdrList(herdr(['agent', 'list']), 'agents'); } catch {}
@@ -191,9 +195,14 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
         }
       }
     }
-    const failCheck = stale || nameErrors;
+    const failCheck = required || unpublished || nameErrors;
+    const stateSummary = [
+      required ? `${required} ${KIT_STATES.required}` : null,
+      useful ? `${useful} ${KIT_STATES.useful}` : null,
+      unpublished ? `${unpublished} ${KIT_STATES.unpublished}` : null,
+    ].filter(Boolean).map((text) => `, ${text}`).join('');
     const nameSummary = nameErrors ? `; ${nameErrors} wrong agent name${nameErrors === 1 ? '' : 's'}` : '';
-    output(`check kit: ${failCheck ? 'FAIL' : 'PASS'} (current revision ${current}; ${rows.length} projects, ${stale} not current${nameSummary})`);
+    output(`check kit: ${failCheck ? 'FAIL' : 'PASS'} (current revision ${current}; ${rows.length} projects${stateSummary}${nameSummary})`);
     return { current, projects: rows, nameErrors, exitCode: failCheck ? 1 : 0 };
   }
 

@@ -1584,12 +1584,12 @@ test('the project page shows the memory and kit file paths with a home-relative 
   const projects = fs.readFileSync(new URL('../src/projects.js', import.meta.url), 'utf8');
   const guide = fs.readFileSync(new URL('../docs/user-guide.md', import.meta.url), 'utf8');
   // The Files panel shows the project memory, the kit file, the kit revision, and the Boss memory.
-  assert.match(app, /function filesBlock\(p\)/);
-  assert.match(app, /filesBlock\(p\)/);
+  assert.match(app, /function filesBlock\(p, kit\)/);
+  assert.match(app, /filesBlock\(p, s\.kit\)/);
   assert.match(app, /docs\/orchestration\/memory\.md/);
   assert.match(app, /docs\/orchestration\/herdr-boss\.md/);
   assert.match(app, /~\/\.herdr-boss\/boss-memory\.md/);
-  assert.match(app, /kitRevisionLine\(p\)/);
+  assert.match(app, /kitRevisionLine\(p, kit\)/);
   // The repository path comes from the project data, and the home folder shows as ~.
   assert.match(app, /p\.repo/);
   assert.match(projects, /function tildePath\(value, home\)/);
