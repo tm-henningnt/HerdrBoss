@@ -230,6 +230,35 @@ With `--record`, the command completes every check before it prints the summary.
 
 When `report.json` has no `modelOutcome` and you do not set `--model-result`, collection records a result from the outcome. It records `failed` when the outcome or gate failed. It records `rework` when `--rework` is greater than 0. Otherwise, it records `first-time`. Collection prints a warning with the result and recommends `--model-result` next time. An explicit `--model-result` takes precedence.
 
+### `wait [WORKER...]`
+
+```sh
+herdr-boss wait [WORKER...] [--timeout SECONDS] [--stall SECONDS]
+```
+
+Use `wait` only when you must block on a worker. Normally, end the turn after a dispatch. The worker sends a `WORKER REPORT` or `WORKER QUESTION` message.
+
+`wait` blocks until the first event of any listed worker. With no worker name, it waits on all unfinished workers of this project. It prints one line, `<worker> <reason>`, and exits with the code of the reason. On a timeout, it prints the names of all waited workers, separated by commas.
+
+| Reason | Exit code | Event |
+|---|---|---|
+| `report` | 0 | `report.json` or `report.md` in the worker folder was written after the worker started. |
+| `question` | 10 | A new pane line that holds `herdr agent prompt` and `WORKER QUESTION <name>` appeared after `wait` started. This is a heuristic on the echo of the send command. |
+| `blocked` | 11 | The pane agent status is `blocked`. |
+| `stalled` | 12 | The pane output did not change for the stall time, and the pane agent status is not `working`. |
+| `gone` | 13 | The worker is not in `herdr agent list`, or a pane read reports that the agent does not exist. An unreadable agent list is a failed call. `wait` retries it. |
+| `timeout` | 75 | `--timeout` seconds passed with no other event. |
+
+Exit code 75 is also the code of a busy lock in the `lock` commands (`EX_TEMPFAIL`). The meaning depends on the command: for `wait` it means timeout, for `lock acquire` it means lock busy.
+
+When two events occur in the same poll, `wait` reports the first in this order: `report`, `question`, `blocked`, `gone`, `stalled`.
+
+A usage error, an unknown worker name, or a project with no unfinished worker exits with code 2.
+
+The stall time is `--stall SECONDS`. Without it, `wait` uses the dashboard setting `workers.staleIdleMinutes`. Without `--timeout`, `wait` has no time limit. Run it as a background command, because a tool call has its own time limit.
+
+`wait` reads the worker run records and the modification times of the report files. It never opens a report file and never prints report contents. It makes at most one Herdr call per second, and it polls once per second. Each Herdr call has a timeout of 10 seconds, or less when the `--timeout` deadline is nearer, so a hung call cannot hold the wait past `--timeout`. Use `worker collect NAME` to read the report.
+
 ### Project locks
 
 | Command | Action |

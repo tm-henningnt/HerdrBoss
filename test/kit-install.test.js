@@ -53,7 +53,8 @@ test('the kit text has the new rules and the stub precedence line', () => {
   for (const rule of [
     /Report every problem with the kit or the tools to the Boss\. The Boss decides the fix\./,
     /Never open a selection dialog\. Decide, or report that you are blocked\./,
-    /Wait on workers in the background\. Never run a blocking wait loop longer than 1 minute\./,
+    /After a dispatch, end the turn\./,
+    /Run `herdr-boss wait \[<worker>\.\.\.\] \[--timeout SECONDS\]` only when you must block on a worker\./,
     /Write the full text of an Owner decision into `docs\/orchestration\/memory\.md`, not a pointer\./,
     /Put the relevant Owner decisions into each worker brief\./,
     /A handoff note carries no rules and no pane IDs\./,

@@ -122,6 +122,7 @@ const USAGE = `herdr-boss <command>
   handoff activate ID --confirmed
   handoff ready ID      Signal automatic successor readiness.
   worker ...            Start, collect, or list workers.
+  wait [<worker>...]    Block until the first report, question, block, stall, or lost pane of a worker.
   lock acquire <name> [--wait SECONDS]  Acquire a project lock.
   lock release <name>   Release a project lock.
   lock list             List project locks with their scope.
@@ -238,7 +239,7 @@ async function main() {
     await messageCommand(cmd, args);
     return;
   }
-  if (['worker', 'lock', 'push', 'suite', 'worktree', 'ledger', 'check', 'gh', 'models', 'kit'].includes(cmd)) {
+  if (['worker', 'wait', 'lock', 'push', 'suite', 'worktree', 'ledger', 'check', 'gh', 'models', 'kit'].includes(cmd)) {
     const { runKitCommand } = await import('./kit/cli.js');
     const result = runKitCommand(cmd, args);
     if (result?.exitCode) process.exitCode = result.exitCode;

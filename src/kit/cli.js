@@ -10,12 +10,15 @@ import { pruneWorktrees } from './worktrees.js';
 import { acquireProjectLock, listProjectLocks, pushWithLock, releaseProjectLock } from './locks.js';
 import { SUITE_WAIT_SECONDS, listSuitePasses, runSuite } from './suite.js';
 import { agentsBlock, checkAgentsFile, installedKitRevision, installKit, kitChangesSince, kitRevision, kitRevisionState, KIT_FILE, KIT_STATES, rulesPolicy } from './agents-check.js';
+import { loadConfig } from '../config.js';
 import { listProjects } from '../projects.js';
+import { createWaitHerdr, parseWaitArgs, waitForWorkers } from './wait.js';
 
 const USAGE = `Kit commands:
   worker start <name> --kind <kind> (--task TEXT | --task-file FILE) [--lease POOL]... [options]
   worker collect <name> [--record --outcome done|partial|failed --gate-passed|--gate-failed]
   worker list
+  wait [<worker>...] [--timeout SECONDS] [--stall SECONDS]
   worker park <name> --reason TEXT | worker unpark <name>
   worker allow <name> <path>... --reason TEXT
   lock acquire <name> [--wait SECONDS] | lock release <name> | lock list
@@ -93,7 +96,8 @@ function herdrAgentName(agent) { return agent?.name ?? agent?.agent_name ?? null
 function herdrPaneId(value) { return value?.pane_id ?? value?.paneId ?? value?.id ?? null; }
 function herdrWorkspace(value) { return value?.workspace_id ?? value?.workspaceId ?? value?.workspace ?? null; }
 
-function commandKit(command, argv, { output = console.log, env = process.env, herdr = createHerdrRunner(), config: injectedConfig = null, rulesFile = DEFAULT_RULES_FILE, lockDataDir, now, pause, pidAlive, pushStdio, suiteStdio } = {}) {
+function commandKit(command, argv, { output = console.log, env = process.env, herdr = null, config: injectedConfig = null, rulesFile = DEFAULT_RULES_FILE, lockDataDir, now, pause, pidAlive, pushStdio, suiteStdio } = {}) {
+  herdr ??= command === 'wait' ? createWaitHerdr(createHerdrRunner) : createHerdrRunner();
   if (command === 'models') {
     const modelConfig = mergeModels(loadModels(), rulesPolicy(rulesFile));
     const { positional, flags } = parseArgs(argv);
@@ -219,6 +223,12 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
 
   const config = injectedConfig ?? loadProjectConfig();
   const modelConfig = command === 'worker' ? loadModels() : null;
+  if (command === 'wait') {
+    const { names, timeoutSeconds, stallSeconds } = parseWaitArgs(argv);
+    let stall = stallSeconds;
+    if (stall === null) stall = injectedConfig ? null : loadConfig().workers.staleIdleMinutes * 60;
+    return waitForWorkers(names, { config, herdr, output, now, pause, timeoutSeconds, ...(stall ? { stallSeconds: stall } : {}) });
+  }
   if (command === 'lock') {
     const [action, ...rest] = argv;
     if (action === 'acquire') {

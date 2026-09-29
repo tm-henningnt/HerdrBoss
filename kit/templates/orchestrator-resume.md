@@ -88,7 +88,8 @@ Worker coordination
 - Use separate worktrees for parallel changes.
 - Keep one writer per shared module.
 - Limit each shared cheap provider lane to two active workers.
-- Wait on a worker or event. Do not poll a pane in a tight loop.
+- After a dispatch, end the turn and wait for the `WORKER REPORT` message. Do not poll a pane.
+- Run `herdr-boss wait [<worker>...] [--timeout SECONDS]` as a background command only when you must block on a worker.
 - Treat `working` as active; inspect `blocked`; treat `idle`, `done`, and `unknown` as non-evidence.
 - Keep a worker warm for related work in the same worktree or evidence chain.
 - Require `.worker/report.md`, `.worker/report.json`, and a `WORKER REPORT` message.

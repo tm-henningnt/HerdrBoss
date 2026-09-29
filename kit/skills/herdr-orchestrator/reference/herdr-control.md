@@ -30,6 +30,8 @@ Read this file before you inspect or control Herdr panes and agents, when a work
 
 ## Waiting
 
+- After a dispatch, end the turn. The worker sends a `WORKER REPORT` or `WORKER QUESTION` message.
+- Run `herdr-boss wait [<worker>...] [--timeout SECONDS]` as a background command only when you must block. It prints `<worker> <reason>` for the first event and exits with a code for the reason: 0 report, 10 question, 11 blocked, 12 stalled, 13 gone, 75 timeout. With no worker name it waits on all unfinished workers of the project.
 - Wait for an agent instead of polling it.
 - Use `herdr agent wait <name> --until idle --timeout <ms>` for long work.
 - Use `herdr agent prompt <name> "<brief>" --wait --timeout <ms>` for short bounded work.
