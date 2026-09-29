@@ -1198,9 +1198,9 @@ function browsersBlock(s) {
   const br = s.browsers || [];
   if (!br.length) return '';
   const pane = (id) => s.herdr?.panes.find((p) => p.id === id);
-  return `<table class="browsers"><thead><tr><th>Process</th><th>PID</th><th>Owner</th><th>Age</th><th>MB</th></tr></thead><tbody>
+  return `<div class="table-scroll"><table class="browsers"><thead><tr><th>Process</th><th>PID</th><th>Owner</th><th>Age</th><th>MB</th></tr></thead><tbody>
     ${br.map((b) => { const p = pane(b.pane); return `<tr><td data-label="Process">${esc(b.kind)}${b.headless ? ' (headless)' : ''}${b.port ? ` :${b.port}` : ''}</td><td class="mono" data-label="PID">${b.pid}</td><td data-label="Owner">${p ? esc(p.name || p.id) : b.shared ? `<span title="${esc(b.shared)}">shared</span>` : b.orphan ? '<span class="stale">orphan</span>' : '–'}</td><td class="mono" data-label="Age">${dur(b.age)}</td><td class="mono" data-label="MB">${b.rssMB}</td></tr>`; }).join('')}
-  </tbody></table>`;
+  </tbody></table></div>`;
 }
 
 function eventsBlock(s) {
@@ -3650,7 +3650,7 @@ function gatesRisksBlock(p) {
   const gates = Array.isArray(p.gates) ? p.gates : [];
   const risks = Array.isArray(p.risks) ? p.risks : [];
   if (!gates.length && !risks.length) return '';
-  return `<section class="two">${gates.length ? `<div class="panel"><h2>Human gates</h2><table class="issue-table"><thead><tr><th>Gate</th><th>Needs</th><th>Evidence</th><th>Status</th></tr></thead><tbody>${gates.map((g) => `<tr><td data-label="Gate">${g.id ? `<b class="mono">${esc(g.id)}</b> ` : ''}${esc(g.title)}</td><td data-label="Needs">${esc(g.needs || '')}</td><td data-label="Evidence">${esc(g.evidence || '')}</td><td data-label="Status">${esc(g.status || '')}</td></tr>`).join('')}</tbody></table></div>` : ''}
+  return `<section class="two">${gates.length ? `<div class="panel"><h2>Human gates</h2><div class="table-scroll"><table class="issue-table"><thead><tr><th>Gate</th><th>Needs</th><th>Evidence</th><th>Status</th></tr></thead><tbody>${gates.map((g) => `<tr><td data-label="Gate">${g.id ? `<b class="mono">${esc(g.id)}</b> ` : ''}${esc(g.title)}</td><td data-label="Needs">${esc(g.needs || '')}</td><td data-label="Evidence">${esc(g.evidence || '')}</td><td data-label="Status">${esc(g.status || '')}</td></tr>`).join('')}</tbody></table></div></div>` : ''}
     ${risks.length ? `<div class="panel"><h2>Risks</h2><ul class="notes">${risks.map((r) => `<li>${code(r)}</li>`).join('')}</ul></div>` : ''}</section>`;
 }
 
@@ -5135,3 +5135,11 @@ document.getElementById('browser-viewer').addEventListener('close', () => {
   if (slug) browserRefreshStopped(slug);
 });
 setInterval(autoRender, 10000);
+
+// Keep fixed bars above the on-screen keyboard. --kb-inset is the height the keyboard hides. A pinch zoom sets it to 0.
+if (window.visualViewport) {
+  const vv = window.visualViewport;
+  const setKeyboardInset = () => document.documentElement.style.setProperty('--kb-inset', `${vv.scale > 1.01 ? 0 : Math.max(0, Math.round(innerHeight - vv.height - vv.offsetTop))}px`);
+  vv.addEventListener('resize', setKeyboardInset);
+  vv.addEventListener('scroll', setKeyboardInset);
+}
