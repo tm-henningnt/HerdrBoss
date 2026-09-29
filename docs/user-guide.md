@@ -620,7 +620,7 @@ Agent commands and tab rules are in [the browser service](../kit/browser-service
 
 ## Project status pages
 
-Orchestrators do not build dashboards. They publish a status file, and Herdr Boss shows it on `/projects/SLUG`. With the optional work structure fields, the page shows progress, the current frontier, a dependency graph, groups, specs, and all work. See [project-status.md](project-status.md).
+Orchestrators do not build dashboards. They publish a status file, and Herdr Boss shows it on `/projects/SLUG`. The page shows a board of the tasks. With the optional work structure fields, the page also shows progress, the current frontier, a dependency graph, groups, specs, and all work. See [project-status.md](project-status.md).
 
 ### Live task state
 
@@ -646,6 +646,36 @@ The board is stale, `boardStale: true`, when one of these is true:
 - The published status is older than `staleStatusMinutes` (default 120 minutes), a worker worked after the publish and within the last 2 hours, or new commits landed after the publish.
 
 `boardStaleReason` names the cause. Herdr Boss sends one notice to the orchestrator pane for each stale status, the same notice as for an old status. The text adds the worker and the task when a worker does not match the status. A new publish starts a new episode. `herdr-boss publish` refuses a status in which a task has an active worker but is not `doing`. Use `--force` to publish anyway. The commands are in [cli.md](cli.md).
+
+### Board
+
+The board shows each task in one column of the flow. The column comes from the effective state, `state`. A status without `state` gets the same rules in the page.
+
+| Column | Tasks |
+|---|---|
+| Blocked | A task that waits on a task that is not done, on the Owner, on the Boss, or on an external item. |
+| Ready | A task whose dependencies are all done. |
+| Doing | A task with a live worker, or a task published as `doing`. |
+| Review | A task whose worker was collected and whose branch is not merged. |
+| Done | The last 10 done tasks by `updated`. **Show all N done** shows the rest. |
+
+Each card shows the task ID, the title, what the task waits on, and the worker. A Blocked card names each open blocker. The blocker ID is a link that selects that task. A blocker that is not in the status shows as **ID (outside)**. A wait on the Owner links to the Mailbox conversation when the task has `mailboxId`. A Doing card shows the worker, the model, the elapsed time, and the source, for example `live from worker NAME`. A Review card shows the worker and the source.
+
+Ready sorts by priority. The tasks on the critical path come first, then the tasks in the published group order, then the tasks in the published order. Doing puts the longest-running worker first.
+
+When `boardStale` is true, the board shows a **stale** mark and `boardStaleReason`.
+
+The next milestone is the first group in `groups[]` that has an open task. The critical path is the longest chain of open tasks that ends in that milestone. Without groups, the chain can end in any open task. When two chains have the same length, the chain whose last task comes first in the status wins. A card on the path shows **critical path**.
+
+The board and the dependency graph use the same states and the same colors. Each state has a label next to its color. The colors pass a check for color-vision separation in the light and the dark theme.
+
+Select a card title to select the task. The card gets a ring. The graph marks the task and its dependency chain: all tasks that it waits on and all tasks that wait on it. The other tasks fade. Select a graph box to select its task and go to its card. Select the selected task again to clear the selection.
+
+The page updates the board and the graph in place. A refresh keeps the selection, the scroll position, the phone column, and the graph zoom. The page matches each card and each graph box by its task ID.
+
+On a phone, the board shows one column at a time. A tab bar above the board shows each column with its count. Select a tab or swipe sideways to change the column. The first column with work opens, in the order Doing, Ready, Blocked, Review, Done. The board section is open by default.
+
+A link to `/projects/SLUG#board` or `/projects/SLUG#dependencies` opens the page at that section.
 
 ### Files
 
@@ -677,15 +707,19 @@ A task that waits on other tasks shows **waiting on #ID** in place of the plain 
 
 ### Graph view
 
-The dependency graph draws every task. A task without links sits in the first column, after the linked tasks. Select a box to open the issue.
+The dependency graph draws the open tasks and the done tasks that block them directly. Clear **Open work only** to draw every task. A task without links sits in the first column, after the linked tasks. Each box names its task ID and its state. A box on the critical path says **path**, and an orange line joins the path. Select a box to select its task. The issue link is on the card.
 
 Use the toolbar above the graph:
 
-- **Fit** shows the whole graph in the panel.
+- **Fit** shows the whole graph in the panel. Until you zoom or pan, the graph fits the panel. A wide graph starts at its left edge at 85% zoom, so the text stays readable.
 - **−** and **+** zoom out and in. **100%** shows the graph at its natural size.
 - **Full size** fills the window. Select **Close** or press Escape to return.
 
-Press Ctrl or Cmd and turn the mouse wheel to zoom around the pointer. A plain wheel scrolls the page. Drag the background with the mouse or one finger to pan. A drag on a task box selects the task; it does not pan. The page remembers the zoom and the pan of each project during the session.
+Press Ctrl or Cmd and turn the mouse wheel to zoom around the pointer. A plain wheel scrolls the page. Drag the background with the mouse to pan. A drag on a task box does not pan. The page remembers the zoom and the pan of each project during the session.
+
+On a phone, the graph has its natural size and scrolls sideways in its own box. Only **Full size** shows in the toolbar.
+
+For a visual check, add `?theme=light` or `?theme=dark` to a dashboard address. The page then uses that theme and ignores the system setting.
 
 When the published status is stale, the project page and the Projects list show `Status stale: <age>` next to the updated time. The mark stays until the orchestrator publishes again. See [Rules and notices](#rules-and-notices) for the stale rule.
 

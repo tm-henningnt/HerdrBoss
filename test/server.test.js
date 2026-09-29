@@ -1358,11 +1358,11 @@ test('the dependency graph draws every task, with fit, zoom, pan, and a full-siz
   const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
   const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
   const guide = fs.readFileSync(new URL('../docs/user-guide.md', import.meta.url), 'utf8');
-  // Every task is a node, including tasks without links. The 90-task cut and the empty-edge bail-out are gone.
+  // Every task in the filter is a node, including tasks without links. The 90-task cut and the empty-edge bail-out are gone.
   assert.doesNotMatch(app, /if \(!edges\.length\) return ''/);
   assert.doesNotMatch(app, /first 90/);
   assert.doesNotMatch(app, /nodes\.length > 90/);
-  assert.match(app, /let nodes = m\.tasks\.slice\(\)/);
+  assert.match(app, /const nodes = graphTasks\(all, \{ openOnly: !view\.graphAll \}\)/);
   // A task without links sits in column 0, after the linked tasks of that column.
   assert.match(app, /linked\.has\(keyOf\.get\(a\)\) \? 0 : 1/);
   // The toolbar has Fit, out, in, 100%, and Full size. Each button has an aria-label.
