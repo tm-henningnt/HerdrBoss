@@ -905,6 +905,12 @@ export function startWorker(name, options, {
     if (projectPolicy?.mode === 'paused' && !options.force) throw new Error(`Project ${config.slug} is paused. Use --force only for an authorized override.`);
   }
   const provider = providerFor(options.kind, model, policy);
+  const laneName = provider || 'unmetered';
+  const nightLaneCap = rules.night?.maxWorkersByLane?.[laneName];
+  if (rules.night?.active === true && Number.isInteger(nightLaneCap) &&
+      (rules.control?.runningByLane?.[laneName] || 0) >= nightLaneCap && !options.force) {
+    throw new Error(`Night worker lane limit (${nightLaneCap}) for ${laneName} is reached; wait for a slot to open.`);
+  }
   const freeGate = unmeteredGate(options.kind, model, provider, rules, { force: options.force, now, project: config.slug, allowedModels: config.allowedModels });
   if (freeGate.error) throw new Error(freeGate.error);
   if (freeGate.warning) output(freeGate.warning);
