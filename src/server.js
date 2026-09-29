@@ -13,7 +13,7 @@ import { loadModels } from './kit/config.js';
 import { loadPolicy, savePolicy } from './control.js';
 import { recordUsage, usageSummary } from './usage.js';
 import { readDenials, denialSummary } from './denials.js';
-import { clearNight, defaultNightUntil, nightUntil, readNight, writeNight } from './night.js';
+import { buildWatchRecord, clearNight, readNight, writeNight } from './night.js';
 import { requestBrowser, listBrowserSessions, browserStatus, setBrowserWindowSize, closeBrowser, restartBrowser, listBookmarks, addBookmark, renameBookmark, moveBookmark, removeBookmark, setStartPage } from './browser-pool.js';
 import { listBrowserTabs, browserScreenshot, browserNavigate, browserNavigationState, browserHistoryAction, browserClick, browserInsertText, browserKey, browserNewTab, browserCloseTab, tabAttached } from './browser-preview.js';
 import { listHandoffs } from './handoff.js';
@@ -403,29 +403,32 @@ export function serve(cfg, { readOnlyPreview = false, createEngine = (config, op
         const state = await engine.tick();
         return send(res, 200, { ok: true, policy: loadPolicy(), control: state.control, notes });
       }
-      // Night watch uses the same functions as the CLI. The routes stay under the read-only preview guard and the access control.
-      if (p === '/api/night/stop' && req.method === 'POST') {
+      // The watch uses the same functions as the CLI. The routes stay under the read-only preview guard and the access control.
+      // The old /api/night paths stay as aliases of /api/watch.
+      const watchPath = p.replace(/^\/api\/night(?=\/|$)/, '/api/watch');
+      if (watchPath === '/api/watch/stop' && req.method === 'POST') {
         clearNight({ dataDir: DATA_DIR });
         const state = await engine.tick();
         return send(res, 200, { ok: true, night: state?.night ?? { active: false } });
       }
-      if (p === '/api/night/start' && req.method === 'POST') {
+      if (watchPath === '/api/watch/start' && req.method === 'POST') {
         const body = await jsonBody(req);
-        const requested = body.until ?? null;
-        let until;
-        try { until = requested === null || requested === '' ? defaultNightUntil() : nightUntil(String(requested)); }
-        catch (error) { return send(res, 400, { error: error.message }); }
-        writeNight({
-          active: true,
-          since: new Date().toISOString(),
-          until: until.toISOString(),
-          by: 'dashboard',
-          quietHours: typeof body.quietHours === 'boolean' ? body.quietHours : cfg.night?.quietHours === true,
-        }, { dataDir: DATA_DIR });
+        let built;
+        try {
+          built = buildWatchRecord({
+            until: body.until,
+            untilCancelled: body.untilCancelled === true,
+            report: body.report,
+            retro: body.retro,
+            by: 'dashboard',
+            quietHours: typeof body.quietHours === 'boolean' ? body.quietHours : cfg.watch?.quietHours === true,
+          });
+        } catch (error) { return send(res, 400, { error: error.message }); }
+        writeNight(built.record, { dataDir: DATA_DIR });
         const state = await engine.tick();
-        return send(res, 200, { ok: true, night: state?.night ?? readNight({ dataDir: DATA_DIR }) });
+        return send(res, 200, { ok: true, warning: built.warning, night: state?.night ?? readNight({ dataDir: DATA_DIR }) });
       }
-      if (p === '/api/night' && req.method === 'GET') return send(res, 200, readNight({ dataDir: DATA_DIR }));
+      if (watchPath === '/api/watch' && req.method === 'GET') return send(res, 200, readNight({ dataDir: DATA_DIR }));
       if (p === '/api/denials' && req.method === 'GET') return send(res, 200, denialSummary(readDenials(DATA_DIR), Date.now(), { pendingBytes: engine.memory?.denialScan?.pendingBytes || 0 }));
       if (p === '/api/usage' && req.method === 'GET') return send(res, 200, usageSummary());
       if (p === '/api/usage' && req.method === 'POST') {

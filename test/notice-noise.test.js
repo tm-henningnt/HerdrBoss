@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { POLICY_DEFAULTS } from '../src/control.js';
+import { watchLabel } from '../src/night.js';
 import { evaluate, renderBulletin } from '../src/rules.js';
 import { inspectWorkerNoReports } from '../src/engine.js';
 import * as engineModule from '../src/engine.js';
@@ -122,9 +123,9 @@ function nightNoticeRounds(t, rounds) {
 }
 
 const NIGHT_UNTIL = '2026-09-29T05:30:00.000Z';
-const NIGHT_LABEL = new Date(NIGHT_UNTIL).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-const START_TEXT = `[herdr-boss] Night watch until ${NIGHT_LABEL}. The Owner is away; the Boss acts for the Owner. Work as normal. Escalate to the Boss.`;
-const STOP_TEXT = '[herdr-boss] Night watch ended. The Owner rules apply again.';
+const NIGHT_LABEL = watchLabel(NIGHT_UNTIL);
+const START_TEXT = `[herdr-boss] Watch until ${NIGHT_LABEL}. The Owner is away; the Boss acts for the Owner. Work as normal. Escalate to the Boss.`;
+const STOP_TEXT = '[herdr-boss] Watch ended. The Owner rules apply again.';
 // A working pane, because a night notice is a direct prompt. It must not wait for an idle orchestrator.
 const nightPanes = [
   { id: 'w1:p1', workspace: 'w1', orch: true, label: 'orch', agent: 'claude', status: 'working' },
@@ -133,7 +134,7 @@ const nightPanes = [
 ];
 const nightPanesWith = (extra) => [...nightPanes, ...extra];
 const nightRecord = (patch = {}) => ({ active: true, since: new Date(NOW).toISOString(), until: NIGHT_UNTIL, by: 'owner', quietHours: false, ...patch });
-const isStart = (prompt) => /Night watch until/.test(prompt.text);
+const isStart = (prompt) => /Watch until/.test(prompt.text);
 const isStop = (prompt) => prompt.text === STOP_TEXT;
 
 test('the night start notice reaches each orchestrator pane and the Boss pane once', (t) => {

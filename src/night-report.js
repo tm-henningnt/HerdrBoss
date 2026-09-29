@@ -72,7 +72,7 @@ function reportEvents(project, events, herdr, since, now) {
 export function renderNightReport({ night, kind = 'report', now = Date.now(), projects = [], control = {}, herdr = {}, paneSince = {}, usage = [], events = [] }) {
   const since = timestamp(night?.since) ?? now;
   const lines = [
-    kind === 'retro' ? 'Night watch retro' : 'Night watch report',
+    kind === 'retro' ? 'Watch retro' : 'Watch report',
     `Since: ${new Date(since).toISOString()}`,
     `As of: ${new Date(now).toISOString()}`,
   ];

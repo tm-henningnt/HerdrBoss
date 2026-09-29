@@ -21,8 +21,8 @@ const [{ serve }, { loadConfig, serviceSettingsView }, { Engine }] = await Promi
 
 test('the state API exposes only allow-listed effective service settings', { timeout: 20000 }, (t) => {
   const defaults = serviceSettingsView({});
-  assert.equal(defaults.find(({ setting }) => setting === 'night.maxWorkers').value, null);
-  assert.deepEqual(defaults.find(({ setting }) => setting === 'night.maxWorkersByLane').value,
+  assert.equal(defaults.find(({ setting }) => setting === 'watch.maxWorkers').value, null);
+  assert.deepEqual(defaults.find(({ setting }) => setting === 'watch.maxWorkersByLane').value,
     { unmetered: null, codex: null, claude: null, opencodego: null });
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-service-settings-'));
   const home = path.join(root, 'home');
@@ -43,7 +43,7 @@ test('the state API exposes only allow-listed effective service settings', { tim
     quota: { warnPercent: 85, criticalPercent: 97 },
     staleStatusMinutes: 75,
     workers: { staleIdleMinutes: 110 },
-    night: { maxWorkers: 16, maxWorkersByLane: { unmetered: 12, codex: null, claude: 6, opencodego: 4 } },
+    watch: { maxWorkers: 16, maxWorkersByLane: { unmetered: 12, codex: null, claude: 6, opencodego: 4 } },
     browsers: { reapOrphanDaemons: false, orphanDaemonMinAgeSeconds: 3600, staleOwnedMinutes: 25 },
     providerKinds: { codex: ['codex', 'pi'] },
     orchestratorLabel: 'orchestrator',
@@ -109,7 +109,7 @@ try {
     'quota.warnPercent', 'quota.criticalPercent',
     'staleStatusMinutes',
     'workers.staleIdleMinutes',
-    'night.maxWorkers', 'night.maxWorkersByLane', 'night.quietHours',
+    'watch.maxWorkers', 'watch.maxWorkersByLane', 'watch.quietHours',
     'browsers.reapOrphanDaemons', 'browsers.orphanDaemonMinAgeSeconds', 'browsers.staleOwnedMinutes', 'browsers.sweepCodeSignClones',
     'tickSeconds', 'quotaSeconds', 'push', 'alertCooldownSeconds', 'providerKinds', 'orchestratorLabel', 'port', 'host',
   ]);
@@ -117,15 +117,15 @@ try {
     'config', 'config', 'config', 'config', 'config', 'config', 'config', 'default', 'config', 'config', 'config', 'default',
     'config', 'config', 'config', 'default', 'config', 'config', 'config', 'config',
   ]);
-  assert.deepEqual(view.find(({ setting }) => setting === 'night.maxWorkers'), {
-    group: 'Workers', setting: 'night.maxWorkers', value: 16, source: 'config',
+  assert.deepEqual(view.find(({ setting }) => setting === 'watch.maxWorkers'), {
+    group: 'Workers', setting: 'watch.maxWorkers', value: 16, source: 'config',
   });
-  assert.deepEqual(view.find(({ setting }) => setting === 'night.maxWorkersByLane'), {
-    group: 'Workers', setting: 'night.maxWorkersByLane',
+  assert.deepEqual(view.find(({ setting }) => setting === 'watch.maxWorkersByLane'), {
+    group: 'Workers', setting: 'watch.maxWorkersByLane',
     value: { unmetered: 12, codex: null, claude: 6, opencodego: 4 }, source: 'config',
   });
-  assert.deepEqual(view.find(({ setting }) => setting === 'night.quietHours'), {
-    group: 'Night watch', setting: 'night.quietHours', value: false, source: 'default',
+  assert.deepEqual(view.find(({ setting }) => setting === 'watch.quietHours'), {
+    group: 'Watch', setting: 'watch.quietHours', value: false, source: 'default',
   });
   assert.deepEqual(view.find(({ setting }) => setting === 'browsers.sweepCodeSignClones'), {
     group: 'Browsers', setting: 'browsers.sweepCodeSignClones', value: true, source: 'default',
@@ -224,7 +224,7 @@ test('engine lock snapshots include the median hold and wait from the lock ledge
   assert.equal(state.lockStats.byName['full-suite'].medianHoldMs, 200000);
 });
 
-test('the state API sends the night watch state with the fields of the read view', { timeout: 20000 }, async (t) => {
+test('the state API sends the watch state, read from the old night.json file, with the fields of the read view', { timeout: 20000 }, async (t) => {
   fs.mkdirSync(dataDir, { recursive: true });
   fs.mkdirSync(homeDir, { recursive: true });
   const since = new Date(Date.now() - 3600000).toISOString();
@@ -258,7 +258,7 @@ test('the state API sends the night watch state with the fields of the read view
   const response = await fetch(`http://127.0.0.1:${app.server.address().port}/api/state`);
   assert.equal(response.status, 200);
   const state = await response.json();
-  assert.deepEqual(Object.keys(state.night).sort(), ['active', 'by', 'quietHours', 'since', 'until']);
+  assert.deepEqual(Object.keys(state.night).sort(), ['active', 'by', 'quietHours', 'reportAt', 'reportDaily', 'since', 'until', 'untilCancelled']);
   assert.equal(state.night.active, true);
   assert.equal(state.night.since, since);
   assert.equal(state.night.until, until);
@@ -332,6 +332,8 @@ test('read-only preview allows reads and rejects all API methods that can change
     ['POST', '/api/messages'],
     ['POST', '/api/messages/read'],
     ['POST', '/api/messages/dismiss'],
+    ['POST', '/api/watch/start'],
+    ['POST', '/api/watch/stop'],
     ['POST', '/api/night/start'],
     ['POST', '/api/night/stop'],
     ['POST', '/api/chats/alpha/read'],
@@ -435,8 +437,8 @@ test('PUT /api/settings persists allowed values and updates the running engine c
       'quota.warnPercent': 85,
       'quota.criticalPercent': 96,
       'machine.memFreeWarnPercent': 22,
-      'night.maxWorkers': 20,
-      'night.maxWorkersByLane': { unmetered: 12, codex: 8, claude: null, opencodego: 4 },
+      'watch.maxWorkers': 20,
+      'watch.maxWorkersByLane': { unmetered: 12, codex: 8, claude: null, opencodego: 4 },
     } }),
   });
   assert.equal(response.status, 200);
@@ -445,31 +447,31 @@ test('PUT /api/settings persists allowed values and updates the running engine c
   assert.equal(engine.cfg.quota.warnPercent, 85);
   assert.equal(engine.cfg.quota.criticalPercent, 96);
   assert.equal(engine.cfg.machine.memFreeWarnPercent, 22);
-  assert.equal(engine.cfg.night.maxWorkers, 20);
-  assert.deepEqual(engine.cfg.night.maxWorkersByLane, { unmetered: 12, codex: 8, claude: null, opencodego: 4 });
+  assert.equal(engine.cfg.watch.maxWorkers, 20);
+  assert.deepEqual(engine.cfg.watch.maxWorkersByLane, { unmetered: 12, codex: 8, claude: null, opencodego: 4 });
   assert.deepEqual(engine.state.quotaThresholds, { warnPercent: 85, criticalPercent: 96 });
   assert.equal(engine.state.serviceSettings.find(({ setting }) => setting === 'machine.memFreeWarnPercent').value, 22);
-  assert.equal(engine.state.serviceSettings.find(({ setting }) => setting === 'night.maxWorkers').value, 20);
-  assert.deepEqual(engine.state.serviceSettings.find(({ setting }) => setting === 'night.maxWorkersByLane').value,
+  assert.equal(engine.state.serviceSettings.find(({ setting }) => setting === 'watch.maxWorkers').value, 20);
+  assert.deepEqual(engine.state.serviceSettings.find(({ setting }) => setting === 'watch.maxWorkersByLane').value,
     { unmetered: 12, codex: 8, claude: null, opencodego: 4 });
   const saved = JSON.parse(fs.readFileSync(configFile, 'utf8'));
   assert.deepEqual(saved.other, { keep: true });
   assert.equal(saved.quota.note, 'keep');
-  assert.equal(saved.night.maxWorkers, 20);
-  assert.deepEqual(saved.night.maxWorkersByLane, { unmetered: 12, codex: 8, claude: null, opencodego: 4 });
+  assert.equal(saved.watch.maxWorkers, 20);
+  assert.deepEqual(saved.watch.maxWorkersByLane, { unmetered: 12, codex: 8, claude: null, opencodego: 4 });
   assert.equal(fs.statSync(configFile).mode & 0o7777, 0o640);
 
   const dayValues = await fetch(`${base}/api/settings`, {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ changes: {
-      'night.maxWorkers': null,
-      'night.maxWorkersByLane': { unmetered: null, codex: null, claude: null, opencodego: null },
+      'watch.maxWorkers': null,
+      'watch.maxWorkersByLane': { unmetered: null, codex: null, claude: null, opencodego: null },
     } }),
   });
   assert.equal(dayValues.status, 200);
-  assert.equal(engine.cfg.night.maxWorkers, null);
-  assert.deepEqual(engine.cfg.night.maxWorkersByLane, { unmetered: null, codex: null, claude: null, opencodego: null });
+  assert.equal(engine.cfg.watch.maxWorkers, null);
+  assert.deepEqual(engine.cfg.watch.maxWorkersByLane, { unmetered: null, codex: null, claude: null, opencodego: null });
 
   const before = fs.readFileSync(configFile, 'utf8');
   const rejected = await fetch(`${base}/api/settings`, {
@@ -484,7 +486,7 @@ test('PUT /api/settings persists allowed values and updates the running engine c
     const invalid = await fetch(`${base}/api/settings`, {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ changes: { 'night.maxWorkers': value } }),
+      body: JSON.stringify({ changes: { 'watch.maxWorkers': value } }),
     });
     assert.equal(invalid.status, 400, `global night cap ${value} must be rejected`);
   }
@@ -492,17 +494,17 @@ test('PUT /api/settings persists allowed values and updates the running engine c
     const invalid = await fetch(`${base}/api/settings`, {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ changes: { 'night.maxWorkersByLane': { unmetered: value } } }),
+      body: JSON.stringify({ changes: { 'watch.maxWorkersByLane': { unmetered: value } } }),
     });
     assert.equal(invalid.status, 400, `lane night cap ${value} must be rejected`);
   }
   assert.equal(fs.readFileSync(configFile, 'utf8'), before, 'invalid night caps must not change config.json');
 });
 
-test('POST /api/night/start and /api/night/stop write and clear the night state, and the time checks refuse', { timeout: 20000 }, async (t) => {
+test('POST /api/watch/start and /api/watch/stop write and clear the watch state, and the time checks refuse', { timeout: 20000 }, async (t) => {
   fs.mkdirSync(dataDir, { recursive: true });
   fs.mkdirSync(homeDir, { recursive: true });
-  const nightFile = path.join(dataDir, 'night.json');
+  const nightFile = path.join(dataDir, 'watch.json');
   t.after(() => {
     fs.rmSync(nightFile, { force: true });
     fs.rmSync(dataDir, { recursive: true, force: true });
@@ -530,11 +532,11 @@ test('POST /api/night/start and /api/night/stop write and clear the night state,
   });
   const base = `http://127.0.0.1:${server.address().port}`;
 
-  const read = await fetch(`${base}/api/night`);
+  const read = await fetch(`${base}/api/watch`);
   assert.equal(read.status, 200);
   assert.deepEqual(await read.json(), { active: false }, 'the read view of no night is inactive');
 
-  const started = await fetch(`${base}/api/night/start`, {
+  const started = await fetch(`${base}/api/watch/start`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ until: '07:30', quietHours: true }),
@@ -552,7 +554,7 @@ test('POST /api/night/start and /api/night/stop write and clear the night state,
   assert.equal(fs.statSync(nightFile).mode & 0o7777, 0o600, 'the night file keeps its own-only mode');
 
   // The default end time is the next 07:30.
-  const withDefault = await fetch(`${base}/api/night/start`, {
+  const withDefault = await fetch(`${base}/api/watch/start`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({}),
@@ -562,10 +564,9 @@ test('POST /api/night/start and /api/night/stop write and clear the night state,
 
   for (const [until, reason] of [
     [new Date(Date.now() - 3600000).toISOString(), 'a past end time'],
-    [new Date(Date.now() + 48 * 3600000).toISOString(), 'an end time more than 24 hours ahead'],
     ['noonish', 'a value that is not a time'],
   ]) {
-    const refused = await fetch(`${base}/api/night/start`, {
+    const refused = await fetch(`${base}/api/watch/start`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ until }),
@@ -574,7 +575,48 @@ test('POST /api/night/start and /api/night/stop write and clear the night state,
     assert.equal(JSON.parse(fs.readFileSync(nightFile, 'utf8')).until, storedUntil, 'a refused start keeps the stored end time');
   }
 
-  const stopped = await fetch(`${base}/api/night/stop`, {
+  // A far end time is accepted. The answer carries a warning above 48 hours.
+  const far = await fetch(`${base}/api/watch/start`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ until: new Date(Date.now() + 96 * 3600000).toISOString() }),
+  });
+  assert.equal(far.status, 200);
+  assert.match((await far.json()).warning, /This watch lasts \d+(\.\d)? hours/);
+
+  // Until cancelled stores no end time and no report time. A daily report time repeats.
+  const forever = await fetch(`${base}/api/watch/start`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ untilCancelled: true }),
+  });
+  assert.equal(forever.status, 200);
+  const foreverRecord = JSON.parse(fs.readFileSync(nightFile, 'utf8'));
+  assert.equal(foreverRecord.until, null);
+  assert.equal(foreverRecord.untilCancelled, true);
+  assert.equal(foreverRecord.reportAt, undefined);
+  const daily = await fetch(`${base}/api/watch/start`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ untilCancelled: true, report: '07:30' }),
+  });
+  assert.equal(daily.status, 200);
+  const dailyRecord = JSON.parse(fs.readFileSync(nightFile, 'utf8'));
+  assert.equal(dailyRecord.reportDaily, '07:30');
+  assert.equal(new Date(dailyRecord.reportAt).getHours(), 7);
+  const both = await fetch(`${base}/api/watch/start`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ untilCancelled: true, until: '07:30' }),
+  });
+  assert.equal(both.status, 400, 'an end time with until cancelled is refused');
+
+  // The old /api/night paths still work.
+  const legacy = await fetch(`${base}/api/night`);
+  assert.equal(legacy.status, 200);
+  assert.equal((await legacy.json()).untilCancelled, true);
+
+  const stopped = await fetch(`${base}/api/watch/stop`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: '{}',
@@ -585,47 +627,62 @@ test('POST /api/night/start and /api/night/stop write and clear the night state,
   assert.equal(fs.existsSync(nightFile), false, 'a stop clears the night file');
 
   // A stop without a night answers the same way.
-  const again = await fetch(`${base}/api/night/stop`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+  const again = await fetch(`${base}/api/watch/stop`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
   assert.equal(again.status, 200);
   await close();
 });
 
-test('the dashboard shows a night watch banner with a confirmed Stop, and Settings has a Night watch row', () => {
+test('the dashboard shows a watch symbol with a confirmed Stop, and the Agents page has a Watch box', () => {
   const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
   const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
   const guide = fs.readFileSync(new URL('../docs/user-guide.md', import.meta.url), 'utf8');
-  // The banner sits under the top bar on every page, and it holds the end time, the Owner line, and quiet hours.
-  assert.match(app, /function nightBanner\(s\)/);
-  assert.match(app, /nightBanner\(state\)/);
-  assert.match(app, /Night watch until \$\{/);
-  assert.match(app, /the Boss acts for the Owner/);
+  // The top bar has a watch symbol and a popover. The page has no banner.
+  const html = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
+  assert.match(html, /id="watch-toggle"/);
+  assert.match(html, /id="watch-pop"/);
+  assert.match(html, /id="watch-toggle"[^>]*aria-haspopup="dialog"/);
+  // A stop closes the popover and returns focus to the toggle. Tab out and Esc close it.
+  assert.match(app, /if \(action === 'stop'\) closeWatchPopover\(true\);/);
+  assert.match(app, /function closeWatchPopover\(refocus = false\) \{\s+toggleWatchPopover\(false\);\s+if \(refocus\) document\.getElementById\('watch-toggle'\)\?\.focus\(\);/);
+  assert.match(app, /addEventListener\('focusout'/);
+  assert.match(app, /e\.key === 'Escape' && pop && !pop\.hidden\) closeWatchPopover\(true\)/);
+  assert.match(app, /function updateWatchIcon\(s\)/);
+  assert.match(app, /updateWatchIcon\(state\)/);
+  assert.doesNotMatch(app, /nightBanner/);
+  assert.doesNotMatch(app, /night-banner/);
+  assert.match(app, /The Boss acts for the Owner/);
   assert.match(app, /Quiet hours on/);
   assert.match(app, /data-night-stop="true"/);
-  assert.match(app, /postJson\(`\/api\/night\/\$\{action\}`/);
-  // The Stop button asks for a confirmation before it calls the route.
-  assert.match(app, /Stop night watch\?/);
-  // Settings starts a night with an end time and a quiet hours check.
+  assert.match(app, /postJson\(`\/api\/watch\/\$\{action\}`/);
+  assert.match(app, /Stop the watch\?/);
+  // The Agents page starts a watch. Settings links to it.
+  assert.match(app, /watchPanel\(s\),/);
+  assert.match(app, /href="\/agents#watch"/);
   assert.match(app, /data-night-start="true"/);
-  assert.match(app, /data-night-until/);
+  assert.match(app, /type="datetime-local" data-night-until/);
+  assert.match(app, /data-night-forever/);
+  assert.match(app, /Until I cancel/);
+  assert.match(app, /Daily report/);
   assert.match(app, /data-night-quiet-hours/);
-  assert.match(app, /<h2>Night watch<\/h2>/);
-  // The banner uses a calm color, and its button keeps a 44 px touch target on a phone.
-  assert.match(css, /\.night-banner\b/);
-  assert.match(css, /@media \(max-width: \d+px\)[\s\S]*?\.night-banner/);
-  assert.match(css, /min-height: 44px/);
-  // The page help and the guide describe the banner and the row.
+  // The label hides on a phone, and the popover button keeps a 44 px touch target.
+  assert.match(css, /\.watch-icon\b/);
+  assert.match(css, /@media \(max-width: \d+px\)[^\n]*\.watch-label \{ display: none/);
+  assert.match(css, /\.watch-pop button \{ min-height: 44px/);
+  assert.doesNotMatch(css, /\.night-banner/);
+  // The page help and the guide describe the symbol and the box.
   const settingsHelp = /settings: \['Settings', `([\s\S]*?)`\],\s+agents:/.exec(app)?.[1] || '';
-  assert.match(settingsHelp, /<h3>Night watch<\/h3>/);
-  assert.match(guide, /### Night watch in the dashboard/);
-  assert.match(guide, /POST \/api\/night\/start/);
-  assert.match(guide, /POST \/api\/night\/stop/);
+  assert.match(settingsHelp, /<h3>Watch<\/h3>/);
+  assert.match(app, /<h3>Watch symbol<\/h3>/);
+  assert.match(guide, /### Watch in the dashboard/);
+  assert.match(guide, /POST \/api\/watch\/start/);
+  assert.match(guide, /POST \/api\/watch\/stop/);
 });
 
-test('Settings renders editable nullable night global and provider lane caps', () => {
+test('Settings renders editable nullable watch global and provider lane caps', () => {
   const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
-  assert.ok(app.includes("'night.maxWorkers': [1, 40]"));
-  assert.ok(app.includes("'night.maxWorkersByLane': [1, 40]"));
-  assert.ok(app.includes('Night ${label} worker cap'));
+  assert.ok(app.includes("'watch.maxWorkers': [1, 40]"));
+  assert.ok(app.includes("'watch.maxWorkersByLane': [1, 40]"));
+  assert.ok(app.includes('Watch ${label} worker cap'));
   assert.ok(app.includes('data-service-lane="${lane}"'));
   assert.ok(app.includes("input.value === '' && nullableServiceSettings.has(setting) ? null : Number(input.value)"));
   assert.ok(app.includes("changes[setting][input.dataset.serviceLane] = input.value === '' ? null : Number(input.value)"));

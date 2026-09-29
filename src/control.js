@@ -115,7 +115,7 @@ export function loadPolicy({ file = FILE, models = null, warn = (text) => consol
   return policy;
 }
 
-// The Owner is away when the machine measured an idle Owner, or when night watch is active. An active night state
+// The Owner is away when the machine measured an idle Owner, or when a watch is active. An active watch state
 // uses the same away limits as an idle Owner. It changes no machine limit.
 export function machineLimits(machine, policy, now = Date.now(), night = null) {
   const idle = Number.isFinite(machine.ownerIdleMinutes) && machine.ownerIdleMinutes >= policy.machine.ownerAwayMinutes;

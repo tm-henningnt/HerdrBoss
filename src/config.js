@@ -101,7 +101,7 @@ const DEFAULTS = {
     sweepCodeSignClones: true,
   },
   workers: { staleIdleMinutes: 120 },
-  night: {
+  watch: {
     quietHours: false,
     maxWorkers: null,
     maxWorkersByLane: { unmetered: null, codex: null, claude: null, opencodego: null },
@@ -123,9 +123,9 @@ const SERVICE_SETTINGS = [
   ['Quota', 'quota.criticalPercent'],
   ['Status', 'staleStatusMinutes'],
   ['Workers', 'workers.staleIdleMinutes'],
-  ['Workers', 'night.maxWorkers'],
-  ['Workers', 'night.maxWorkersByLane'],
-  ['Night watch', 'night.quietHours'],
+  ['Workers', 'watch.maxWorkers'],
+  ['Workers', 'watch.maxWorkersByLane'],
+  ['Watch', 'watch.quietHours'],
   ['Browsers', 'browsers.reapOrphanDaemons'],
   ['Browsers', 'browsers.orphanDaemonMinAgeSeconds'],
   ['Browsers', 'browsers.staleOwnedMinutes'],
@@ -221,9 +221,23 @@ function merge(a, b) {
   return out;
 }
 
+
+// Old config files hold the watch settings under "night". Read them as "watch". A key under "watch" wins.
+export function migrateLegacyWatchKeys(config) {
+  if (!isRecord(config) || !Object.hasOwn(config, 'night')) return config;
+  const { night, ...rest } = config;
+  if (!isRecord(night)) return rest;
+  return { ...rest, watch: merge(night, isRecord(rest.watch) ? rest.watch : {}) };
+}
+
+// A setting name from an old caller starts with "night.". It means the same setting under "watch".
+function watchSettingName(setting) {
+  return typeof setting === 'string' && setting.startsWith('night.') ? `watch.${setting.slice(6)}` : setting;
+}
+
 export function serviceSettingsView(cfg) {
-  const effective = merge(DEFAULTS, cfg);
-  const configured = cfg?.[CONFIG_SOURCE] || {};
+  const effective = merge(DEFAULTS, migrateLegacyWatchKeys(cfg));
+  const configured = migrateLegacyWatchKeys(cfg?.[CONFIG_SOURCE] || {});
   return SERVICE_SETTINGS.map(([group, setting]) => {
     const parts = setting.split('.');
     let value = effective;
@@ -249,18 +263,18 @@ const SERVICE_SETTING_RANGES = new Map([
   ['quota.criticalPercent', [51, 100]],
   ['staleStatusMinutes', [5, 1440]],
   ['workers.staleIdleMinutes', [5, 1440]],
-  ['night.maxWorkers', [1, 40]],
-  ['night.maxWorkersByLane', [1, 40]],
+  ['watch.maxWorkers', [1, 40]],
+  ['watch.maxWorkersByLane', [1, 40]],
   ['browsers.staleOwnedMinutes', [5, 1440]],
   ['browsers.orphanDaemonMinAgeSeconds', [60, 86400]],
 ]);
 const SERVICE_SETTING_BOOLEANS = new Set([
   'browsers.reapOrphanDaemons',
   'browsers.sweepCodeSignClones',
-  'night.quietHours',
+  'watch.quietHours',
 ]);
-const NULLABLE_SERVICE_SETTINGS = new Set(['night.maxWorkers']);
-const NIGHT_WORKER_LANES = new Set(['unmetered', 'codex', 'claude', 'opencodego']);
+const NULLABLE_SERVICE_SETTINGS = new Set(['watch.maxWorkers']);
+const WATCH_WORKER_LANES = new Set(['unmetered', 'codex', 'claude', 'opencodego']);
 
 function isRecord(value) {
   return !!value && typeof value === 'object' && !Array.isArray(value);
@@ -278,18 +292,18 @@ function setServiceSetting(target, setting, value) {
 
 function validateServiceSettingValues(changes) {
   if (!isRecord(changes)) throw new Error('changes must be an object of setting names and values.');
-  const entries = Object.entries(changes);
+  const entries = Object.entries(changes).map(([setting, value]) => [watchSettingName(setting), value]);
   if (!entries.length) throw new Error('At least one service setting is required.');
   const normalizedChanges = {};
   for (const [setting, value] of entries) {
     const range = SERVICE_SETTING_RANGES.get(setting);
-    if (setting === 'night.maxWorkersByLane') {
-      if (!isRecord(value)) throw new Error('night.maxWorkersByLane must be an object of optional lane caps.');
-      const normalized = { ...DEFAULTS.night.maxWorkersByLane };
+    if (setting === 'watch.maxWorkersByLane') {
+      if (!isRecord(value)) throw new Error('watch.maxWorkersByLane must be an object of optional lane caps.');
+      const normalized = { ...DEFAULTS.watch.maxWorkersByLane };
       for (const [lane, cap] of Object.entries(value)) {
-        if (!NIGHT_WORKER_LANES.has(lane)) throw new Error(`night.maxWorkersByLane has an unknown lane ${lane}.`);
+        if (!WATCH_WORKER_LANES.has(lane)) throw new Error(`watch.maxWorkersByLane has an unknown lane ${lane}.`);
         if (cap !== null && (!Number.isSafeInteger(cap) || cap < 1 || cap > 40)) {
-          throw new Error(`night.maxWorkersByLane.${lane} must be null or a whole number from 1 to 40.`);
+          throw new Error(`watch.maxWorkersByLane.${lane} must be null or a whole number from 1 to 40.`);
         }
         normalized[lane] = cap;
       }
@@ -346,6 +360,7 @@ export function writeServiceSettings(changes, { dataDir = DATA_DIR } = {}) {
     try { current = JSON.parse(fs.readFileSync(file, 'utf8')); }
     catch { throw new Error('config.json must contain valid JSON before settings can be saved.'); }
     if (!isRecord(current)) throw new Error('config.json must contain a JSON object before settings can be saved.');
+    current = migrateLegacyWatchKeys(current);
   }
   const normalized = validateServiceSettings(changes, current);
   const updated = structuredClone(current);
@@ -378,7 +393,7 @@ export function loadConfig() {
   fs.mkdirSync(PROJECTS_DIR, { recursive: true });
   const file = path.join(DATA_DIR, 'config.json');
   let user = {};
-  try { user = JSON.parse(fs.readFileSync(file, 'utf8')); } catch {}
+  try { user = migrateLegacyWatchKeys(JSON.parse(fs.readFileSync(file, 'utf8'))); } catch {}
   const cfg = merge(DEFAULTS, user);
   Object.defineProperty(cfg, CONFIG_SOURCE, { value: user });
   // A stored legacy tokenFile names the data directory. Report the private default in memory. Only

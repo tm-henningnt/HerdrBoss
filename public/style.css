@@ -65,11 +65,14 @@ h2 .sub { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(
 .sev { font: 600 11px var(--mono); text-transform: uppercase; letter-spacing: 0.04em; padding-top: 2px; color: var(--muted); }
 .rule.critical .sev { color: var(--crit); } .rule.warn .sev { color: var(--warn); } .rule.ok .sev { color: var(--ok); } .rule.advice .sev { color: var(--accent); }
 
-/* Night watch banner. It sits under the top bar on every page. The color is calm, not an alert color. */
-.night-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 14px; border: 1px solid color-mix(in srgb, var(--info) 30%, var(--line)); border-radius: 8px; background: color-mix(in srgb, var(--info) 7%, var(--panel)); color: var(--text); font-size: 12.5px; }
-.night-banner-text { min-width: 0; }
-.night-banner button { flex: 0 0 auto; border-color: color-mix(in srgb, var(--info) 55%, var(--line)); background: var(--panel); color: var(--text); }
-@media (max-width: 760px) { .night-banner { flex-wrap: wrap; row-gap: 8px; } .night-banner button { min-height: 44px; min-width: 76px; } }
+/* Watch form on Settings. The rows wrap at phone width. */
+.watch-form { display: grid; gap: 10px; }
+.watch-form-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+.watch-form-row[hidden] { display: none; }
+.watch-form input[type="datetime-local"], .watch-form input[type="time"] { min-width: 0; max-width: 100%; }
+.watch-length { color: var(--muted); font-variant-numeric: tabular-nums; }
+.watch-warning { color: var(--warn); margin: 0; }
+.watch-warning:empty { display: none; }
 
 /* Quotas */
 .provider { display: grid; gap: 10px; }
@@ -349,9 +352,6 @@ button { border: 1px solid var(--accent); border-radius: 6px; background: var(--
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) button { color: #1d1b18; } }
 :root[data-theme="dark"] button { color: #1d1b18; }
 button:hover { filter: brightness(1.08); } button:disabled { opacity: .5; cursor: default; }
-/* The night banner Stop button is calm in both themes, so its text keeps the theme text color. The dark button rule has
-   the same specificity as the global one, so this rule comes after it. */
-:root:not([data-theme="light"]) .night-banner button, :root[data-theme="dark"] .night-banner button { color: var(--text); }
 /* The root prefix outranks the dark-theme button color, so a quiet button keeps readable text in both themes. */
 :root button.quiet { background: transparent; color: var(--muted); border-color: var(--line); padding: 4px 8px; font-weight: 500; }
 :root button.quiet:hover { color: var(--text); border-color: var(--muted); filter: none; }
@@ -1259,3 +1259,33 @@ body.dep-full-open { overflow: hidden; }
 .harness-readiness-missing { color: var(--warn); }
 .harness-readiness-bad { color: var(--crit); }
 .harness-readiness-empty { color: var(--muted); }
+
+/* Watch symbol in the top bar and its popover. The popover floats, so it never shifts the layout. */
+.watch-icon { width: auto; min-width: 36px; padding: 0 6px; grid-auto-flow: column; gap: 5px; border: 0; background: transparent; cursor: pointer; }
+.watch-icon[data-empty="false"] { color: var(--accent); opacity: 1; }
+.watch-icon[data-empty="false"] svg { fill: color-mix(in srgb, currentColor 14%, transparent); }
+.watch-label { font: 600 11px/1 var(--mono); white-space: nowrap; }
+.watch-label[hidden] { display: none; }
+@media (max-width: 1400px) { .watch-label { display: none; } }
+@media (max-width: 760px) { .top-icons { gap: 0; } .top-icons .top-icon { width: 40px; } .top-icons .watch-icon { width: 34px; min-width: 34px; padding: 0; } .watch-label { display: none; } }
+.watch-pop { position: fixed; top: 56px; right: 12px; z-index: 30; width: min(280px, calc(100vw - 24px)); padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--text); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25); font-size: 13px; }
+.watch-pop[hidden] { display: none; }
+.watch-pop h2 { margin: 0 0 6px; font-size: 13px; }
+.watch-pop dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; margin: 0 0 8px; }
+.watch-pop dt { color: var(--muted); }
+.watch-pop dd { margin: 0; }
+.watch-pop p { margin: 0 0 8px; }
+.watch-pop button { min-height: 36px; }
+@media (max-width: 760px) { .watch-pop button { min-height: 44px; min-width: 76px; } }
+/* Compact Watch box on the Agents page. */
+.watch-compact { padding: 10px 14px; margin-bottom: 12px; }
+.watch-compact h2 { margin: 0 0 2px; font-size: 13px; }
+.watch-compact .setting-help { margin: 0 0 6px; }
+.watch-compact .watch-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+.watch-compact .watch-warning { flex: 1 1 100%; }
+.watch-daily { display: inline-flex; align-items: center; gap: 8px; }
+.watch-daily[hidden] { display: none; }
+/* The dark button rule sets dark text. The watch symbol is a flat icon, so it keeps the theme text color. */
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .watch-icon { color: var(--text); } :root:not([data-theme="light"]) .watch-icon[data-empty="false"] { color: var(--accent); } }
+:root[data-theme="dark"] .watch-icon { color: var(--text); }
+:root[data-theme="dark"] .watch-icon[data-empty="false"] { color: var(--accent); }
