@@ -44,6 +44,8 @@ Owner queue (credentials, billing, and Owner-applied settings):
 - V22 is ready on branch `v22wtparent`, not merged. It puts new worker worktrees under `~/Projects/.herdr-wt/<repo>/<name>`. Before the merge, the Owner runs `herdr-boss harness sync` (adds `~/Projects/.herdr-wt` to the Codex `writable_roots`, with a backup) and pastes the printed Claude `autoMode` lines into `~/.claude/settings.json`. Then the HerdrBoss orchestrator merges V22.
 
 
+- 2026-09-29: Boss work queue after NC6, in this order. G0: record one ledger line for each lock acquire and release (project, kind suite/push/manual, tree hash, wait, hold), and show hold and wait medians on the Locks panel. G1: add the lockfile hash to the suite pass key. G2: change the AGENTS.md integrate steps to run one full suite for each integrated tree with `herdr-boss suite --reuse -- npm test`, and reuse that pass on `main`; workers run only changed test files. G3: after G0 has a few days of data, plan lock classes (a long class and a short class that may run beside one long job under a parallelism cap). Plan only; do not build G3. Source: Boss.
+
 ## Standing rules
 
 - The service serves `public/` from the `main` working tree at once, but the server code only after a restart. Restart the service right after a merge that changes `public/` together with the server API, before the full suite, or the dashboard breaks until the restart.
