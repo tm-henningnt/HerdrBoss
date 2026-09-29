@@ -43,6 +43,11 @@ function normalize(value, now) {
   };
 }
 
+// Quiet hours apply only while an active night watch has them enabled.
+export function quietHoursActive(night) {
+  return night?.active === true && night?.quietHours === true;
+}
+
 export function readNight({ dataDir = DATA_DIR, now = Date.now() } = {}) {
   try {
     return normalize(JSON.parse(fs.readFileSync(nightFile(dataDir), 'utf8')), now);

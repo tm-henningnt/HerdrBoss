@@ -8,6 +8,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { validateResourcePools } from '../src/config.js';
 import { acquireLease, listLeases, ownerReleaseLease, readLeases, reclaimLeases, releaseLease, tcpListening } from '../src/leases.js';
+import { writeNight } from '../src/night.js';
 import { renderBulletin } from '../src/rules.js';
 import { loadModels, loadProjectConfig } from '../src/kit/config.js';
 import { collectWorker, startWorker } from '../src/kit/workers.js';
@@ -329,6 +330,23 @@ test('reclaim removes leases of a gone pane, a finished run, and an expired leas
   ]);
   assert.equal(result.reclaimed.length, 3);
   assert.deepEqual(readLeases(ctx.dataDir).leases.map((item) => item.item), ['47103']);
+});
+
+test('quiet hours holds a TTL lease reclaim but still reclaims a gone pane', () => {
+  const ctx = context();
+  seedLeases(ctx.dataDir, [
+    lease('47100', { pane: 'ws:gone' }),
+    lease('47101', { expiresAt: new Date(NOW - 1).toISOString() }),
+  ]);
+  writeNight({ active: true, since: new Date(NOW - 60000).toISOString(), until: new Date(NOW + 3600000).toISOString(), quietHours: true }, { dataDir: ctx.dataDir });
+  const events = [];
+  const result = reclaimLeases({ pools: ctx.pools, dataDir: ctx.dataDir, panes: new Set(['ws:orch']), now: NOW, log: (event) => events.push(event) });
+  assert.deepEqual(result.reclaimed.map((item) => [item.item, item.reason]), [['47100', 'pane ws:gone is gone']]);
+  assert.deepEqual(events.map((event) => [event.item, event.reason, event.held]), [
+    ['47100', 'pane ws:gone is gone', undefined],
+    ['47101', undefined, 'lease TTL expiry'],
+  ]);
+  assert.deepEqual(readLeases(ctx.dataDir).leases.map((item) => item.item), ['47101']);
 });
 
 test('reclaim keeps pane leases when the pane list failed', () => {

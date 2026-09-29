@@ -6,6 +6,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { clearNight, defaultNightUntil, nightFile, nightNoticeSent, nightUntil, parseNightUntil, readNight, readNightRecord, withNoticeMark, writeNight } from '../src/night.js';
+import { serviceSettingsView, validateServiceSettings } from '../src/config.js';
 import { renderBulletin } from '../src/rules.js';
 
 const NOW = Date.parse('2026-09-28T22:00:00Z');
@@ -22,6 +23,106 @@ function tempDir(t) {
 function bulletin(snap) {
   return renderBulletin({ updatedAt: new Date(NOW).toISOString(), quotas: [], ...snap }, { alerts: [], advice: [] }, { host: '127.0.0.1', port: 4477 });
 }
+
+test('quiet hours are active only during an active night with quiet hours enabled', async () => {
+  const { quietHoursActive } = await import('../src/night.js');
+  assert.equal(quietHoursActive({ active: true, quietHours: true }), true);
+  assert.equal(quietHoursActive({ active: true, quietHours: false }), false);
+  assert.equal(quietHoursActive({ active: false, quietHours: true }), false);
+  assert.equal(quietHoursActive(null), false);
+});
+
+test('night quiet hours is a settable service setting with a false default', () => {
+  assert.equal(serviceSettingsView({}).find(({ setting }) => setting === 'night.quietHours')?.value, false);
+  assert.deepEqual(validateServiceSettings({ 'night.quietHours': true }), { 'night.quietHours': true });
+  assert.throws(() => validateServiceSettings({ 'night.quietHours': 'yes' }), /night\.quietHours must be true or false/);
+});
+
+test('quiet hours queues desktop notifications and shows each once after the night ends', (t) => {
+  const temp = tempDir(t);
+  const home = path.join(temp, 'home');
+  const dataDir = path.join(temp, 'data');
+  const binDir = path.join(home, '.local', 'bin');
+  const callsFile = path.join(temp, 'notifications.txt');
+  fs.mkdirSync(binDir, { recursive: true });
+  fs.mkdirSync(dataDir, { recursive: true });
+  const herdr = path.join(binDir, 'herdr');
+  fs.writeFileSync(herdr, '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HERDR_TEST_CALLS"\n');
+  fs.chmodSync(herdr, 0o700);
+  const script = `
+import fs from 'node:fs';
+const { Engine } = await import(process.env.ENGINE_URL);
+const { loadConfig } = await import(process.env.CONFIG_URL);
+const engine = new Engine(loadConfig(), { push: false, act: false });
+const alert = { key: 'machine:disk:main', severity: 'warn', title: 'Disk low', text: 'Disk space is low.' };
+await engine.deliver([alert], { panes: [] }, 1000, { active: true, quietHours: true });
+const queued = structuredClone(engine.memory.quietNotifications || []);
+const held = engine.events.filter((event) => event.text === 'quiet hours held desktop notification');
+await engine.deliver([], { panes: [] }, 2000, { active: false });
+await engine.deliver([], { panes: [] }, 3000, { active: false });
+const deadline = Date.now() + 3000;
+while ((!fs.existsSync(process.env.HERDR_TEST_CALLS) || fs.readFileSync(process.env.HERDR_TEST_CALLS, 'utf8').trim().split('\\n').length < 1) && Date.now() < deadline) {
+  await new Promise((resolve) => setTimeout(resolve, 10));
+}
+console.log(JSON.stringify({ queued, held, after: engine.memory.quietNotifications, events: engine.events }));
+`;
+  const env = {
+    ...process.env,
+    HOME: home,
+    HERDR_BOSS_DIR: dataDir,
+    HERDR_BOSS_LIVE_DIR: path.join(temp, 'live'),
+    HERDR_TEST_CALLS: callsFile,
+    ENGINE_URL: new URL('../src/engine.js', import.meta.url).href,
+    CONFIG_URL: new URL('../src/config.js', import.meta.url).href,
+  };
+  const result = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', script], { env, encoding: 'utf8' }));
+  assert.equal(result.queued.length, 1, 'the notification waits in the queue');
+  assert.equal(result.held.length, 1, 'the hold is recorded once');
+  assert.equal(result.held[0].title, 'Disk low');
+  assert.equal(result.held[0].alertText, 'Disk space is low.', 'the held alert stays in events.jsonl');
+  assert.deepEqual(result.after, [], 'the queue clears after delivery');
+  assert.equal(fs.readFileSync(callsFile, 'utf8').trim().split('\n').length, 1, 'the notification is shown once');
+  assert.ok(result.events.some((event) => event.text === 'Disk low'), 'the notification is logged when it is shown');
+});
+
+test('desktop notifications are not held when quiet hours are off or the night is inactive', (t) => {
+  const temp = tempDir(t);
+  const home = path.join(temp, 'home');
+  const dataDir = path.join(temp, 'data');
+  const binDir = path.join(home, '.local', 'bin');
+  const callsFile = path.join(temp, 'notifications.txt');
+  fs.mkdirSync(binDir, { recursive: true });
+  fs.mkdirSync(dataDir, { recursive: true });
+  const herdr = path.join(binDir, 'herdr');
+  fs.writeFileSync(herdr, '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HERDR_TEST_CALLS"\n');
+  fs.chmodSync(herdr, 0o700);
+  const script = `
+import fs from 'node:fs';
+const { Engine } = await import(process.env.ENGINE_URL);
+const { loadConfig } = await import(process.env.CONFIG_URL);
+const engine = new Engine(loadConfig(), { push: false, act: false });
+await engine.deliver([{ key: 'a', severity: 'warn', title: 'A', text: 'A' }], { panes: [] }, 1000, { active: true, quietHours: false });
+await engine.deliver([{ key: 'b', severity: 'warn', title: 'B', text: 'B' }], { panes: [] }, 2000, { active: false, quietHours: true });
+const deadline = Date.now() + 3000;
+while ((!fs.existsSync(process.env.HERDR_TEST_CALLS) || fs.readFileSync(process.env.HERDR_TEST_CALLS, 'utf8').trim().split('\\n').length < 2) && Date.now() < deadline) {
+  await new Promise((resolve) => setTimeout(resolve, 10));
+}
+console.log(JSON.stringify({ queue: engine.memory.quietNotifications || [], events: engine.events }));
+`;
+  const env = {
+    ...process.env,
+    HOME: home,
+    HERDR_BOSS_DIR: dataDir,
+    HERDR_BOSS_LIVE_DIR: path.join(temp, 'live'),
+    HERDR_TEST_CALLS: callsFile,
+    ENGINE_URL: new URL('../src/engine.js', import.meta.url).href,
+    CONFIG_URL: new URL('../src/config.js', import.meta.url).href,
+  };
+  const result = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', script], { env, encoding: 'utf8' }));
+  assert.deepEqual(result.queue, []);
+  assert.equal(fs.readFileSync(callsFile, 'utf8').trim().split('\n').length, 2);
+  assert.ok(!result.events.some((event) => event.text === 'quiet hours held desktop notification'));
+});
 
 test('night state round trips through the data directory', (t) => {
   const dataDir = tempDir(t);
@@ -302,6 +403,84 @@ test('night start --quiet-hours stores quiet hours', (t) => {
   assert.match(out, /^Night watch until [A-Z][a-z]{2} 07:30\.\n$/);
   const state = JSON.parse(fs.readFileSync(nightFile(dataDir), 'utf8'));
   assert.equal(state.quietHours, true);
+});
+
+test('night start uses the config quiet-hours default and explicit CLI flags take precedence', (t) => {
+  for (const defaultValue of [true, false]) {
+    const dataDir = tempDir(t);
+    fs.writeFileSync(path.join(dataDir, 'config.json'), JSON.stringify({ night: { quietHours: defaultValue } }));
+    const env = plainNightEnv(dataDir);
+    runNightCli(['night', 'start'], env);
+    assert.equal(JSON.parse(fs.readFileSync(nightFile(dataDir), 'utf8')).quietHours, defaultValue, `default ${defaultValue}`);
+    clearNight({ dataDir });
+
+    const override = defaultValue ? '--no-quiet-hours' : '--quiet-hours';
+    runNightCli(['night', 'start', override], env);
+    assert.equal(JSON.parse(fs.readFileSync(nightFile(dataDir), 'utf8')).quietHours, !defaultValue, `${override} overrides ${defaultValue}`);
+  }
+});
+
+test('POST /api/night/start uses the config quiet-hours default and an explicit body value takes precedence', (t) => {
+  for (const defaultValue of [true, false]) {
+    const temp = tempDir(t);
+    const home = path.join(temp, 'home');
+    const dataDir = path.join(temp, 'data');
+    fs.mkdirSync(home, { recursive: true });
+    fs.mkdirSync(dataDir, { recursive: true });
+    fs.writeFileSync(path.join(dataDir, 'config.json'), JSON.stringify({ port: 0, host: '127.0.0.1', night: { quietHours: defaultValue } }));
+    const script = `
+const { serve } = await import(process.env.SERVER_URL);
+const { loadConfig } = await import(process.env.CONFIG_URL);
+const { Engine } = await import(process.env.ENGINE_URL);
+console.log = () => {};
+const collectors = {
+  collectHerdr: async () => ({ panes: [], workspaces: [] }),
+  collectMachine: async () => null,
+  collectProcesses: async () => new Map(),
+  collectQuotas: async () => [],
+  collectWorktreeCounts: async () => ({}),
+  collectCwdProcesses: async () => [],
+  collectMissingWorktreeProcesses: async () => [],
+  collectPiModels: async () => ({ models: [] }),
+};
+const cfg = loadConfig();
+const app = serve(cfg, { createEngine: (config, options) => new Engine(config, { ...options, collectors }) });
+try {
+  if (!app.server.listening) await new Promise((resolve, reject) => {
+    app.server.once('listening', resolve);
+    app.server.once('error', reject);
+  });
+  const address = app.server.address();
+  const values = [];
+  for (const body of [{}, { quietHours: !cfg.night.quietHours }, { quietHours: cfg.night.quietHours }]) {
+    const response = await fetch('http://127.0.0.1:' + address.port + '/api/night/start', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+    });
+    const result = await response.json();
+    values.push({ status: response.status, quietHours: result.night?.quietHours });
+  }
+  process.stdout.write(JSON.stringify(values));
+} finally {
+  await app.close();
+}
+`;
+    const env = {
+      ...process.env,
+      HOME: home,
+      HERDR_BOSS_DIR: dataDir,
+      HERDR_BOSS_LIVE_DIR: path.join(temp, 'live'),
+      NODE_TEST_CONTEXT: '1',
+      SERVER_URL: new URL('../src/server.js', import.meta.url).href,
+      CONFIG_URL: new URL('../src/config.js', import.meta.url).href,
+      ENGINE_URL: new URL('../src/engine.js', import.meta.url).href,
+    };
+    const results = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', script], { env, encoding: 'utf8', timeout: 20000 }));
+    assert.deepEqual(results, [
+      { status: 200, quietHours: defaultValue },
+      { status: 200, quietHours: !defaultValue },
+      { status: 200, quietHours: defaultValue },
+    ], `config default ${defaultValue}`);
+  }
 });
 
 test('night start refuses a past end time', (t) => {

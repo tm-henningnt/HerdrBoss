@@ -109,12 +109,12 @@ try {
     'quota.warnPercent', 'quota.criticalPercent',
     'staleStatusMinutes',
     'workers.staleIdleMinutes',
-    'night.maxWorkers', 'night.maxWorkersByLane',
+    'night.maxWorkers', 'night.maxWorkersByLane', 'night.quietHours',
     'browsers.reapOrphanDaemons', 'browsers.orphanDaemonMinAgeSeconds', 'browsers.staleOwnedMinutes', 'browsers.sweepCodeSignClones',
     'tickSeconds', 'quotaSeconds', 'push', 'alertCooldownSeconds', 'providerKinds', 'orchestratorLabel', 'port', 'host',
   ]);
   assert.deepEqual(view.map(({ source }) => source), [
-    'config', 'config', 'config', 'config', 'config', 'config', 'config', 'config', 'config', 'config', 'default',
+    'config', 'config', 'config', 'config', 'config', 'config', 'config', 'default', 'config', 'config', 'config', 'default',
     'config', 'config', 'config', 'default', 'config', 'config', 'config', 'config',
   ]);
   assert.deepEqual(view.find(({ setting }) => setting === 'night.maxWorkers'), {
@@ -123,6 +123,9 @@ try {
   assert.deepEqual(view.find(({ setting }) => setting === 'night.maxWorkersByLane'), {
     group: 'Workers', setting: 'night.maxWorkersByLane',
     value: { unmetered: 12, codex: null, claude: 6, opencodego: 4 }, source: 'config',
+  });
+  assert.deepEqual(view.find(({ setting }) => setting === 'night.quietHours'), {
+    group: 'Night watch', setting: 'night.quietHours', value: false, source: 'default',
   });
   assert.deepEqual(view.find(({ setting }) => setting === 'browsers.sweepCodeSignClones'), {
     group: 'Browsers', setting: 'browsers.sweepCodeSignClones', value: true, source: 'default',

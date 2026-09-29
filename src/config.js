@@ -102,6 +102,7 @@ const DEFAULTS = {
   },
   workers: { staleIdleMinutes: 120 },
   night: {
+    quietHours: false,
     maxWorkers: null,
     maxWorkersByLane: { unmetered: null, codex: null, claude: null, opencodego: null },
   },
@@ -124,6 +125,7 @@ const SERVICE_SETTINGS = [
   ['Workers', 'workers.staleIdleMinutes'],
   ['Workers', 'night.maxWorkers'],
   ['Workers', 'night.maxWorkersByLane'],
+  ['Night watch', 'night.quietHours'],
   ['Browsers', 'browsers.reapOrphanDaemons'],
   ['Browsers', 'browsers.orphanDaemonMinAgeSeconds'],
   ['Browsers', 'browsers.staleOwnedMinutes'],
@@ -255,6 +257,7 @@ const SERVICE_SETTING_RANGES = new Map([
 const SERVICE_SETTING_BOOLEANS = new Set([
   'browsers.reapOrphanDaemons',
   'browsers.sweepCodeSignClones',
+  'night.quietHours',
 ]);
 const NULLABLE_SERVICE_SETTINGS = new Set(['night.maxWorkers']);
 const NIGHT_WORKER_LANES = new Set(['unmetered', 'codex', 'claude', 'opencodego']);

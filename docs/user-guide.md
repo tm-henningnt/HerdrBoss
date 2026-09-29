@@ -196,6 +196,18 @@ The bulletin then shows one line under **Rules now**: `Night watch until 07:30 (
 
 The night worker caps also appear in the bulletin and in **Settings**. Set them there or edit `config.json`.
 
+Quiet hours are optional and are off by default. Set `night.quietHours` in `config.json` to choose the default for new nights. Run `herdr-boss night start --quiet-hours` to turn them on. Run `herdr-boss night start --no-quiet-hours` to turn them off. A value sent from the dashboard also overrides the default.
+
+Quiet hours hold three service actions:
+
+- Herdr Boss queues desktop notifications. It shows them once when night watch ends.
+- Herdr Boss waits to release an expired manual `full-suite` lock. It still takes over a lock with a dead holder.
+- Herdr Boss waits to reclaim a lease only when its TTL expires. It still reclaims a lease for a gone pane or a finished worker.
+
+Herdr Boss starts no browser restarts of its own. A person or an agent can still request a browser restart during quiet hours.
+
+Quiet hours do not hold pushes, deploys, gates, quota rules, worker starts, nudges, or reports. Herdr Boss writes every alert and event to `events.jsonl`.
+
 ### Night watch notices
 
 The engine sends one start notice to each orchestrator pane and to the Boss pane. It sends the notice as a direct prompt, so a working orchestrator also receives it. The notice is not a resource notice. It does not use the idle gate and it does not use the hourly `info` limit.

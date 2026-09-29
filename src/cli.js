@@ -155,7 +155,7 @@ const USAGE = `herdr-boss <command>
   messages relay ID... --by boss  Mark queued Owner messages as relayed by the Boss.
   mail post --to owner [--title TEXT] [--action read|decide|approve|answer] FILE  Post a Markdown report for the Owner from the boss pane.
   mail close ID... --note TEXT  Close open Owner mailbox items as answered through the Boss.
-  night start [--until HH:MM|ISO] [--quiet-hours]  Start night watch. The default end time is the next 07:30 local time.
+  night start [--until HH:MM|ISO] [--quiet-hours|--no-quiet-hours]  Start night watch. The default end time is the next 07:30 local time.
   night stop           Stop night watch.
   night                Print the current night watch state.
   kit-path              Print the shared kit directory.
@@ -294,7 +294,7 @@ async function main() {
     }
     case 'night': {
       const { readNight, writeNight, clearNight, nightUntil, defaultNightUntil } = await import('./night.js');
-      const usage = 'Usage: night start [--until HH:MM|ISO] [--quiet-hours] | night stop | night';
+      const usage = 'Usage: night start [--until HH:MM|ISO] [--quiet-hours|--no-quiet-hours] | night stop | night';
       const [action, ...rest] = args;
       if (action === undefined) {
         const state = readNight();
@@ -316,21 +316,26 @@ async function main() {
       for (let index = 0; index < rest.length; index += 1) {
         const token = rest[index];
         if (!token.startsWith('--')) { positional.push(token); continue; }
-        if (!['--until', '--quiet-hours'].includes(token)) throw new Error(`Unknown option: ${token}. ${usage}`);
+        if (!['--until', '--quiet-hours', '--no-quiet-hours'].includes(token)) throw new Error(`Unknown option: ${token}. ${usage}`);
         if (token in flags) throw new Error(`${token} may be used only once.`);
-        if (token === '--quiet-hours') { flags[token] = true; continue; }
+        if (token === '--quiet-hours' || token === '--no-quiet-hours') { flags[token] = true; continue; }
         const value = rest[++index];
         if (value === undefined || value.startsWith('--')) throw new Error(`${token} needs a value.`);
         flags[token] = value;
       }
       if (positional.length) throw new Error(usage);
+      if (flags['--quiet-hours'] && flags['--no-quiet-hours']) throw new Error('Use only one of --quiet-hours or --no-quiet-hours.');
       const until = flags['--until'] === undefined ? defaultNightUntil() : nightUntil(flags['--until']);
       writeNight({
         active: true,
         since: new Date().toISOString(),
         until: until.toISOString(),
         by: caller.role,
-        quietHours: flags['--quiet-hours'] === true,
+        quietHours: flags['--quiet-hours'] === true
+          ? true
+          : flags['--no-quiet-hours'] === true
+            ? false
+            : cfg.night?.quietHours === true,
       });
       console.log(`Night watch until ${nightLabel(until.toISOString())}.`);
       break;

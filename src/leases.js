@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { DATA_DIR } from './config.js';
+import { quietHoursActive, readNight } from './night.js';
 import { hasLiveWorkerRun, MUTATION_GUARD_WAIT_MS, withMutationLock } from './kit/locks.js';
 import { verifyCallerPane } from './kit/workers.js';
 
@@ -112,7 +113,7 @@ function readRunFile(file) {
 
 // Decide the reclaim reason for one lease, or null to keep it. A missing browser process changes lease.cdpMisses.
 // browserProcess(lease) returns true or false when the process table is known, and null when it is not.
-function reclaimReason(lease, { pool, panes, now, probeTcp, browserProcess }) {
+function reclaimReason(lease, { pool, panes, now, probeTcp, browserProcess, quietHours = false }) {
   if (pool?.check === 'cdp') {
     // A hung Chrome still has its process. Only a missing process counts, so a browser that does not respond keeps its lease.
     const present = typeof browserProcess === 'function' ? browserProcess(lease) : null;
@@ -128,31 +129,41 @@ function reclaimReason(lease, { pool, panes, now, probeTcp, browserProcess }) {
     const run = readRunFile(lease.runFile);
     if (run?.name === lease.worker && run.finishedAt) return `worker ${lease.worker} finished`;
   }
-  if (lease.expiresAt != null && Date.parse(lease.expiresAt) <= now) return 'lease expired';
+  if (lease.expiresAt != null && Date.parse(lease.expiresAt) <= now) {
+    return quietHours ? { held: 'lease TTL expiry' } : 'lease expired';
+  }
   // A holder that is alive keeps its lease until its TTL, also when nothing listens yet: a worker can lease a port
   // long before it serves on it. A port without a listener is never a reason to reclaim.
   return null;
 }
 
-function reclaimInStore(store, { pools, panes, now, probeTcp, browserProcess }) {
+function reclaimInStore(store, { pools, panes, now, probeTcp, browserProcess, quietHours = false }) {
   const reclaimed = [];
+  const held = [];
   store.leases = store.leases.filter((lease) => {
     const pool = pools.find((candidate) => candidate.name === lease.pool);
-    const reason = reclaimReason(lease, { pool, panes, now, probeTcp, browserProcess });
+    const reason = reclaimReason(lease, { pool, panes, now, probeTcp, browserProcess, quietHours });
+    if (reason?.held) {
+      held.push({ pool: lease.pool, item: lease.item, project: lease.project, worker: lease.worker ?? null, pane: lease.pane ?? null, held: reason.held });
+      return true;
+    }
     if (!reason) return true;
     reclaimed.push({ pool: lease.pool, item: lease.item, project: lease.project, worker: lease.worker ?? null, pane: lease.pane ?? null, reason });
     return false;
   });
-  return reclaimed;
+  return { reclaimed, held };
 }
 
 // Reclaim leases whose holder is gone. `panes` is the set of pane IDs from a successful pane list, or null.
 // `browserProcess` checks the leases of a cdp pool. Without it, a cdp lease is not checked.
-export function reclaimLeases({ pools, dataDir = DATA_DIR, panes = null, now = Date.now(), probeTcp = tcpListening, browserProcess = null, log = () => {}, waitMs = MUTATION_GUARD_WAIT_MS } = {}) {
-  if (!fs.existsSync(path.join(dataDir, LEASES_FILE))) return { reclaimed: [] };
-  const reclaimed = changeLeases(dataDir, (store) => reclaimInStore(store, { pools, panes, now: timeValue(now), probeTcp, browserProcess }), waitMs);
+export function reclaimLeases({ pools, dataDir = DATA_DIR, panes = null, now = Date.now(), night = null, probeTcp = tcpListening, browserProcess = null, log = () => {}, waitMs = MUTATION_GUARD_WAIT_MS } = {}) {
+  if (!fs.existsSync(path.join(dataDir, LEASES_FILE))) return { reclaimed: [], held: [] };
+  const at = timeValue(now);
+  const quietHours = quietHoursActive(night ?? readNight({ dataDir, now: at }));
+  const { reclaimed, held } = changeLeases(dataDir, (store) => reclaimInStore(store, { pools, panes, now: at, probeTcp, browserProcess, quietHours }), waitMs);
   for (const item of reclaimed) log(item);
-  return { reclaimed };
+  for (const item of held) log(item);
+  return { reclaimed, held };
 }
 
 function paneSet(herdr) {
@@ -279,7 +290,7 @@ export function acquireLeaseFor(poolName, holder, { pools, dataDir = DATA_DIR, p
   const at = timeValue(now);
   const skip = new Set(exclude);
   const { lease, reclaimed } = changeLeases(dataDir, (store) => {
-    const reclaimedNow = reclaimInStore(store, { pools, panes, now: at, probeTcp, browserProcess });
+    const { reclaimed: reclaimedNow } = reclaimInStore(store, { pools, panes, now: at, probeTcp, browserProcess });
     if (pool.holder === 'project') {
       const held = store.leases.find((entry) => entry.pool === pool.name && entry.project === holder.project);
       if (held) return { lease: held, reclaimed: reclaimedNow };
@@ -361,7 +372,7 @@ export function releaseLease(poolName, item, {
   const project = caller.role === 'boss' ? null : projectOf(config);
   const panes = paneSet(herdr);
   const { released, reclaimed } = changeLeases(dataDir, (store) => {
-    const reclaimedNow = reclaimInStore(store, { pools, panes, now: timeValue(now), probeTcp });
+    const { reclaimed: reclaimedNow } = reclaimInStore(store, { pools, panes, now: timeValue(now), probeTcp });
     const index = store.leases.findIndex((lease) => lease.pool === poolName && lease.item === item);
     if (index < 0) {
       const gone = reclaimedNow.find((entry) => entry.pool === poolName && entry.item === item);

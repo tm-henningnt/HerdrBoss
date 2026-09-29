@@ -8,6 +8,7 @@ import test from 'node:test';
 import { loadProjectConfig } from '../src/kit/config.js';
 import { runKitCommand } from '../src/kit/cli.js';
 import { acquireProjectLock, releaseProjectLock, withMutationLock } from '../src/kit/locks.js';
+import { writeNight } from '../src/night.js';
 
 function git(cwd, ...args) {
   return execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -181,6 +182,32 @@ function lockOptions(f, pane, panes, extra = {}) {
     ...extra,
   };
 }
+
+test('quiet hours holds an expired live manual full-suite lock', (t) => {
+  const f = fixture(t, 'herdr-suite-quiet-expiry-');
+  const start = Date.parse('2026-09-28T20:00:00Z');
+  const options = lockOptions(f, 'ws:orch', ['ws:orch'], { now: start });
+  const original = acquireProjectLock('full-suite', { ...options, kind: 'manual' });
+  const expiry = Date.parse(original.expiresAt) + 1;
+  writeNight({ active: true, since: new Date(start).toISOString(), until: new Date(expiry + 3600000).toISOString(), quietHours: true }, { dataDir: f.dataDir });
+  assert.throws(() => acquireProjectLock('full-suite', { ...options, now: expiry }), /held by active pane/);
+  const record = JSON.parse(fs.readFileSync(f.lockFile, 'utf8'));
+  assert.equal(record.acquiredAt, original.acquiredAt, 'expiry does not release a live lock during quiet hours');
+  assert.ok(!fs.existsSync(path.join(f.dataDir, 'locks', 'machine', 'notices')), 'the held expiry adds no expiry notice');
+  assert.ok(fs.readFileSync(path.join(f.dataDir, 'events.jsonl'), 'utf8').includes('quiet hours held manual full-suite lock expiry'));
+});
+
+test('quiet hours still takes over an expired manual lock with a dead holder', (t) => {
+  const f = fixture(t, 'herdr-suite-quiet-dead-holder-');
+  const start = Date.parse('2026-09-28T20:00:00Z');
+  const options = lockOptions(f, 'ws:orch', ['ws:orch'], { now: start });
+  const original = acquireProjectLock('full-suite', { ...options, kind: 'manual' });
+  const expiry = Date.parse(original.expiresAt) + 1;
+  writeNight({ active: true, since: new Date(start).toISOString(), until: new Date(expiry + 3600000).toISOString(), quietHours: true }, { dataDir: f.dataDir });
+  const takeover = acquireProjectLock('full-suite', { ...options, now: expiry, pidAlive: () => false });
+  assert.notEqual(takeover.acquiredAt, original.acquiredAt);
+  assert.equal(JSON.parse(fs.readFileSync(f.lockFile, 'utf8')).acquiredAt, new Date(expiry).toISOString());
+});
 
 test('suite holds the full-suite lock around the command and passes the exit code through', (t) => {
   const f = fixture(t, 'herdr-suite-pass-');
