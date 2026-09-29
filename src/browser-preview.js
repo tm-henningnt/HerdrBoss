@@ -112,7 +112,7 @@ async function pageContext(project, tabId, adapters = {}) {
 }
 
 function viewportRequests(viewport) {
-  if (!viewport) return [];
+  if (!viewport || viewport.method !== 'emulation') return [];
   return [{ method: 'Emulation.setDeviceMetricsOverride', params: {
     width: viewport.width, height: viewport.height, deviceScaleFactor: viewport.scale, mobile: viewport.mobile,
   } }];
@@ -287,6 +287,66 @@ export async function browserDrag(project, tabId, from, to, { steps = 10, adapte
   return { ok: true };
 }
 
+// Try to resize the tab's own window. Return { ok: true, innerWidth, innerHeight } on success,
+// or { ok: false, reason } when the window path cannot reach the size.
+async function tryWindowResize(context, tabId, width, height, runCommand) {
+  try {
+    const window = await runCommand(context.endpoint, 'Browser.getWindowForTarget', { targetId: tabId });
+    if (!window?.windowId) throw new Error('Browser did not return a window ID.');
+    let currentWidth = width;
+    let currentHeight = height;
+    let innerWidth = 0;
+    let innerHeight = 0;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await runCommand(context.endpoint, 'Browser.setWindowBounds', {
+        windowId: window.windowId,
+        bounds: { width: currentWidth, height: currentHeight, windowState: 'normal' },
+      });
+      const result = await runCommand(context.endpoint, 'Runtime.evaluate', {
+        expression: 'JSON.stringify({ innerWidth: window.innerWidth, innerHeight: window.innerHeight })',
+        returnByValue: true,
+      });
+      const size = JSON.parse(result?.result?.value || '{}');
+      innerWidth = size.innerWidth || 0;
+      innerHeight = size.innerHeight || 0;
+      if (Math.abs(innerWidth - width) <= 1 && Math.abs(innerHeight - height) <= 1) break;
+      // The inner size is smaller than the window by the browser frame. Add the difference and try again.
+      currentWidth = currentWidth + (width - innerWidth);
+      currentHeight = currentHeight + (height - innerHeight);
+    }
+    if (Math.abs(innerWidth - width) > 1 || Math.abs(innerHeight - height) > 1) {
+      throw new Error(`window resize could not reach ${width}x${height} (got ${innerWidth}x${innerHeight})`);
+    }
+    // Second-session check: open a new session and verify the inner size.
+    const checkResult = await runCommand(context.endpoint, 'Runtime.evaluate', {
+      expression: 'JSON.stringify({ innerWidth: window.innerWidth, innerHeight: window.innerHeight })',
+      returnByValue: true,
+    });
+    const checkSize = JSON.parse(checkResult?.result?.value || '{}');
+    if (Math.abs(checkSize.innerWidth - width) > 1 || Math.abs(checkSize.innerHeight - height) > 1) {
+      throw new Error(`second session read ${checkSize.innerWidth}x${checkSize.innerHeight}, expected ${width}x${height}`);
+    }
+    return { ok: true, innerWidth: checkSize.innerWidth, innerHeight: checkSize.innerHeight };
+  } catch (error) {
+    return { ok: false, reason: error.message };
+  }
+}
+
+// Restore the window to the launch size and clear any emulation.
+async function resetWindow(context, tabId, runCommand) {
+  try {
+    const window = await runCommand(context.endpoint, 'Browser.getWindowForTarget', { targetId: tabId });
+    if (window?.windowId) {
+      const launchSize = context.session?.windowSize || { width: 1280, height: 800 };
+      await runCommand(context.endpoint, 'Browser.setWindowBounds', {
+        windowId: window.windowId,
+        bounds: { width: launchSize.width, height: launchSize.height, windowState: 'normal' },
+      });
+    }
+  } catch {}
+  await runCommand(context.endpoint, 'Emulation.clearDeviceMetricsOverride', {});
+}
+
 export async function browserViewport(project, tabId, viewport, adapters = {}) {
   if (!tabId) throw new Error('Select a browser tab.');
   const reset = viewport?.reset === true;
@@ -304,13 +364,25 @@ export async function browserViewport(project, tabId, viewport, adapters = {}) {
   const context = await pageContext(project, tabId, adapters);
   const runCommand = adapters.command || command;
   if (reset) {
-    await runCommand(context.endpoint, 'Emulation.clearDeviceMetricsOverride', {});
+    await resetWindow(context, tabId, runCommand);
     setBrowserTabViewport(project, tabId, null);
     return { reset: true };
   }
   const { width, height, scale = 1, mobile = false } = viewport;
   const saved = { width, height, scale, mobile };
+  // Try the window path first: resize the tab's own window so every CDP client sees the size.
+  const windowResult = await tryWindowResize(context, tabId, width, height, runCommand);
+  if (windowResult.ok) {
+    saved.method = 'window';
+    saved.innerWidth = windowResult.innerWidth;
+    saved.innerHeight = windowResult.innerHeight;
+    setBrowserTabViewport(project, tabId, saved);
+    return saved;
+  }
+  // Fallback: use device metrics emulation when the window path cannot reach the size.
   await runCommand(context.endpoint, 'Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: scale, mobile });
+  saved.method = 'emulation';
+  saved.reason = windowResult.reason;
   setBrowserTabViewport(project, tabId, saved);
   return saved;
 }

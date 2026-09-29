@@ -346,7 +346,14 @@ async function main() {
           }
         }
         const tab = await selectedTab(args[1], ['--tab', args[3]]);
-        console.log(JSON.stringify(await browserViewport(args[1], tab, viewport), null, 2));
+        const viewportResult = await browserViewport(args[1], tab, viewport);
+        if (viewportResult.reset) {
+          console.log('viewport: reset');
+        } else if (viewportResult.method === 'window') {
+          console.log(`viewport: window ${viewportResult.width}x${viewportResult.height} (inner ${viewportResult.innerWidth}x${viewportResult.innerHeight})`);
+        } else {
+          console.log(`viewport: emulation ${viewportResult.width}x${viewportResult.height} (window resize not possible: ${viewportResult.reason})`);
+        }
       }
       else if (args[0] === 'close' && args.length === 2) {
         await verifyBrowserCaller(args[1]);
