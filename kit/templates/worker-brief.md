@@ -178,6 +178,8 @@ Include these fields in the JSON report:
 
 Use the supplied issue ID when the brief has one. Use `null` for work without an issue.
 
+List each changed file in `changedPaths`. For a folder of many files, such as screenshots, you may list the folder once with a trailing `/`, for example `docs/validation/shots/`. The folder must be inside your allowed paths.
+
 Write `issue` as a JSON number, for example `204`, not as a string (`"204"` or `"#204"`). This is a complete example for a task with issue 204:
 
 ```json

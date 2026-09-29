@@ -1319,7 +1319,10 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
     const reportScope = compareChangedPaths(reported, run.allowedPaths ?? []);
     const actualScope = compareChangedPaths(changed, run.allowedPaths ?? []);
     const scopeErrors = [...new Set([...reportScope, ...actualScope])];
-    const omitted = changed.filter((item) => !reported.includes(item));
+    // A report entry that ends in / covers every changed file under that folder, when the folder is inside the
+    // allowed paths. The scope check above still runs on each real file.
+    const folders = reported.filter((item) => item.endsWith('/') && compareChangedPaths([item], run.allowedPaths ?? []).length === 0);
+    const omitted = changed.filter((item) => !reported.includes(item) && !folders.some((folder) => item.startsWith(folder)));
     if (scopeErrors.length) throw new Error(`Worker ${name} changed paths outside its allowed scope: ${scopeErrors.join(', ')}.`);
     if (omitted.length) throw new Error(`Worker ${name} omitted changed paths from its report: ${omitted.join(', ')}.`);
     const summary = {

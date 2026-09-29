@@ -3475,3 +3475,36 @@ test('worker collect --record with --model-result writes the ledger and a valid 
   assert.equal(ledger.length, 1);
   assert.equal(ledger[0].modelOutcome.result, 'first-time');
 });
+
+test('worker collect accepts a folder entry with a trailing slash inside the allowed paths, and still refuses a real omission', () => {
+  const setup = (name, changedPaths, extraFile = null) => {
+    const f = setupFixture(null);
+    fs.writeFileSync(f.rulesFile, JSON.stringify({ policy: { allowedKinds: ['codex'], excludedModels: [], modelProviders: { 'gpt-6-luna': 'codex' } } }));
+    git(f.root, 'add', '-A');
+    git(f.root, 'commit', '--allow-empty', '-m', 'fixture configuration');
+    const run = startWorker(name, { kind: 'codex', model: 'gpt-6-luna', task: 'x', allow: ['docs/', '.orchestration/runs/'], noWorktree: true }, {
+      config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+    });
+    fs.mkdirSync(path.join(run.worktree, 'docs', 'shots'), { recursive: true });
+    for (const file of ['a.png', 'b.png']) fs.writeFileSync(path.join(run.worktree, 'docs', 'shots', file), file);
+    if (extraFile) fs.writeFileSync(path.join(run.worktree, extraFile), 'x');
+    git(run.worktree, 'add', '-A');
+    git(run.worktree, 'commit', '-m', 'worker change');
+    const reportDir = path.join(run.worktree, run.workerDir);
+    fs.writeFileSync(path.join(reportDir, 'report.md'), 'Done.\n');
+    fs.writeFileSync(path.join(reportDir, 'report.json'), JSON.stringify({
+      issue: null, branch: run.branch, worktree: run.worktree, changedPaths, commands: ['focused check'], evidenceTier: ['unit'], unverified: [], stoppedEarly: false,
+    }));
+    return () => collectWorker(name, { record: true, outcome: 'done', gatePassed: true }, {
+      config: f.config, now: Date.parse('2026-09-25T17:00:00Z'), output: () => {}, listWorktreeProcesses: () => [],
+      recordUsageFn: () => ({ errors: [], duplicate: false }),
+    });
+  };
+  const runs = (name) => `.orchestration/runs/${name}.json`;
+  // The folder entry covers both screenshots.
+  assert.doesNotThrow(setup('folder-ok', ['docs/shots/', runs('folder-ok')]));
+  // A file outside the folder that the report does not name is still an omission.
+  assert.throws(setup('folder-omit', ['docs/shots/', runs('folder-omit')], 'docs/notes.md'), /omitted changed paths from its report: docs\/notes\.md/);
+  // A folder entry without the trailing slash covers nothing.
+  assert.throws(setup('folder-noslash', ['docs/shots', runs('folder-noslash')]), /omitted changed paths/);
+});
