@@ -16,6 +16,7 @@ import { listBrowserSessions, cdpResponds, browserProcessCheck } from './browser
 import { readLeases, reclaimLeases, publicLease, tcpListening, leasePools, migrateProjectBrowserLeases } from './leases.js';
 import { codeSignCloneDir, sweepCodeSignClones } from './clone-sweep.js';
 import { runDenialScan, readDenials, denialSummary, DENIAL_SCAN_INTERVAL_MS, SCAN_BUDGET_BYTES, RETAIN_DAYS, RISE_FACTOR, RISE_MIN_EVENTS } from './denials.js';
+import { goalShown } from './goal.js';
 import { claudeContextUsage, trackBoundary, normalizeModelId } from './context-handover.js';
 import { FINISH_TIMEOUT_MS, listHandoffs, saveHandoffs, supersedeHandoffs, expireHandoff, expireMissingHandoffs, handoffNotices } from './handoff.js';
 import { deliverQueued, mailboxCounts, readMessages, RETENTION_MS, SEND_LIMIT_PER_MINUTE } from './messages.js';
@@ -32,6 +33,8 @@ const STATE_FILE = path.join(DATA_DIR, 'state.json');
 const BULLETIN_FILE = path.join(DATA_DIR, 'bulletin.md');
 const EVENTS_FILE = path.join(DATA_DIR, 'events.jsonl');
 const CLI_FILE = fileURLToPath(new URL('./cli.js', import.meta.url));
+// The wait for a working successor to settle before the goal step gives up.
+const GOAL_WAIT_MS = 10 * 60 * 1000;
 const SEV = { info: 0, warn: 1, critical: 2 };
 const POLICY_FILE = path.join(DATA_DIR, 'policy.json');
 
@@ -1402,6 +1405,8 @@ export class Engine extends EventEmitter {
       }
       if (!confirmed) continue;
       if (!finish.confirmedAt) { finish.confirmedAt = at; finish.confirmedBy = answered ? 'answered' : 'timeout'; }
+      // The old pane stays open until the successor has its goal, so the goal step runs before the close.
+      if (!await this.deliverGoal(item, successor, now, at, scope)) continue;
       if (source) {
         if (source.label !== `${role} previous` || !quiet) continue;
         try { checkHerdrResponse(await this.herdrRunner('herdr', ['pane', 'close', source.id])); }
@@ -1453,6 +1458,50 @@ export class Engine extends EventEmitter {
       }
       if (merged) saveHandoffs(current);
     }
+  }
+
+  // Save goal fields of one record into the current file. A concurrent write to another field is kept.
+  patchGoalFields(item, fields) {
+    const apply = (target) => { for (const [key, value] of Object.entries(fields)) { if (value === undefined) delete target[key]; else target[key] = value; } };
+    apply(item);
+    const current = listHandoffs();
+    const target = current.find((x) => x.id === item.id);
+    if (!target) return;
+    apply(target);
+    saveHandoffs(current);
+  }
+
+  // Send the Owner's /goal to a Claude successor once, then check that the pane shows it.
+  // Returns false while the step waits for the next tick. A failed step is logged and never sends the goal again.
+  async deliverGoal(item, successor, now, at, scope) {
+    if (!item.goal || item.goalDelivery !== 'command' || item.goalVerifiedAt || item.goalVerifyFailedAt) return true;
+    const fail = (message) => {
+      this.log('error', `Goal for handoff ${item.id}: ${message}`, scope);
+      this.patchGoalFields(item, { goalVerifyFailedAt: at });
+      return true;
+    };
+    if (!item.goalSentAt) {
+      if (!['idle', 'done'].includes(successor.status)) {
+        return now - Date.parse(item.finish.confirmedAt) > GOAL_WAIT_MS ? fail('the successor did not settle in time; the goal was not sent') : false;
+      }
+      // The mark comes before the send, so a failed save or a crash never sends the goal twice.
+      this.patchGoalFields(item, { goalSentAt: at });
+      try { checkHerdrResponse(await this.herdrRunner('herdr', ['agent', 'prompt', item.newPane, `/goal ${item.goal}`])); }
+      catch (error) { return fail(`the /goal prompt failed: ${String(error.stderr || error.message).slice(0, 200)}`); }
+    }
+    let shown = false;
+    try { shown = goalShown(await this.herdrRunner('herdr', ['pane', 'read', item.newPane, '--source', 'visible', '--lines', '80', '--format', 'text']), item.goal); }
+    catch { /* An unreadable pane counts as a goal that does not show yet. */ }
+    if (shown) {
+      this.patchGoalFields(item, { goalVerifiedAt: at });
+      this.log('handoff', `The successor pane ${item.newPane} shows the /goal of handoff ${item.id}`, scope);
+      return true;
+    }
+    const attempts = (item.goalVerifyAttempts || 0) + 1;
+    if (attempts >= 3) return fail('the pane did not show the goal after three checks');
+    if (attempts === 2) this.log('handoff', `The /goal of handoff ${item.id} is not confirmed yet in pane ${item.newPane}; checking once more`, scope);
+    this.patchGoalFields(item, { goalVerifyAttempts: attempts });
+    return false;
   }
 
   async retirePreviousOrchestrators(herdr, now) {

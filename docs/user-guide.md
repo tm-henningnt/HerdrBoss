@@ -506,6 +506,8 @@ The automatic handover activates a prepared successor only when the successor mo
 
 The automatic handover has a second trigger, the context size. It runs only when `autoHandover` is on. Set the limit in Settings as **Hand over at context tokens**, or in `policy.json` as `autoHandoverContextTokens`. The default is 300000 tokens. The value is an integer from 50000 to 2000000.
 
+A handover carries the Owner goal to the successor. Set the goal for an orchestrator with no goal in Settings as **Default orchestrator goal**, or in `policy.json` as `defaultOrchestratorGoal`. The value is one line of at most 4000 characters. An empty value turns the default off. The handover record and the project page show the goal as one collapsed line.
+
 A task boundary starts the check. A boundary is one of these events:
 
 - A task in the published project status changes to `done`.
