@@ -80,7 +80,7 @@ export function checkKitText(text, revision) {
   const version = match[1];
   const body = lines.slice(lines[1]?.trim() === KIT_NOTE ? 2 : 1).join('\n').replace(/^\n+/, '');
   if (version !== revision) add(`has old kit revision ${version || '(none)'}; ${INSTALL}`);
-  if (blockHash(body) !== version) add(`was edited by hand; ${INSTALL}`);
+  else if (normalize(body) !== normalize(fs.readFileSync(KIT_TEMPLATE, 'utf8'))) add(`was edited by hand; ${INSTALL}`);
   return findings;
 }
 

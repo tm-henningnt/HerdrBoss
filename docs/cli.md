@@ -315,6 +315,8 @@ When a task names `serve:live` and the `serve-ports` pool exists, `worker start`
 | `AGENTS.md` | The stub between the markers. The stub body is `kit/templates/agents-stub.md`. |
 | `.claude/settings.json` | A Claude `SessionStart` hook that prints the kit file and `docs/orchestration/memory.md`. |
 
+The revision covers `kit/templates/`, `kit/skills/herdr-orchestrator/SKILL.md`, its reference files, and `kit/models.json`. It does not change when service, dashboard, or website files change.
+
 The kit file has this form:
 
 ```

@@ -38,17 +38,25 @@ test('kit revision follows installed kit assets and ignores product code', () =>
     write('public/app.js', 'dashboard');
     write('website/page.js', 'website');
 
+    write('docs/orchestration/herdr-boss.md', '<!-- herdr-boss kit v=old -->\nold note\n\nold generated body');
     const revision = kitRevision(root);
+    write('kit/templates/agents-stub.md', 'changed stub template');
+    assert.notEqual(kitRevision(root), revision, 'an installed template changes the revision');
+    write('kit/templates/agents-stub.md', 'other template');
     write('kit/skills/herdr-orchestrator/reference/handover.md', 'changed reference');
     assert.notEqual(kitRevision(root), revision, 'an installed reference file changes the revision');
     write('kit/skills/herdr-orchestrator/reference/handover.md', 'reference');
+    write('kit/models.json', '{"changed":true}');
+    assert.notEqual(kitRevision(root), revision, 'the model catalog changes the revision');
+    write('kit/models.json', '{}');
     write('kit/templates/project-kit.md', 'changed canonical body');
     assert.notEqual(kitRevision(root), revision, 'the canonical template changes the revision');
     write('kit/templates/project-kit.md', 'canonical body');
+    write('docs/orchestration/herdr-boss.md', '<!-- herdr-boss kit v=other -->\nnew note\n\nother generated body');
     write('src/engine.js', 'changed service');
     write('public/app.js', 'changed dashboard');
     write('website/page.js', 'changed website');
-    assert.equal(kitRevision(root), revision, 'product code does not change the revision');
+    assert.equal(kitRevision(root), revision, 'generated kit output and product code do not change the revision');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

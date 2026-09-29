@@ -5,7 +5,7 @@ import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { agentsBlock, blockHash, HOOK_COMMAND, projectKit } from '../src/kit/agents-check.js';
+import { agentsBlock, blockHash, HOOK_COMMAND, kitRevision, projectKit } from '../src/kit/agents-check.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CLI = path.join(ROOT, 'src', 'cli.js');
@@ -30,7 +30,8 @@ function hooks(r) { return JSON.parse(read(r, SETTINGS)).hooks.SessionStart.flat
 test('the kit file has a version line, a do-not-edit line, and the template body', () => {
   const kit = projectKit();
   const body = fs.readFileSync(path.join(ROOT, 'kit', 'templates', 'project-kit.md'), 'utf8').replace(/[ \t]+$/gm, '').trimEnd();
-  assert.equal(kit.revision, blockHash(body));
+  assert.equal(kit.revision, kitRevision());
+  assert.notEqual(kit.revision, blockHash(body));
   assert.match(kit.revision, /^[0-9a-f]{12}$/);
   const lines = kit.text.split('\n');
   assert.equal(lines[0], `<!-- herdr-boss kit v=${kit.revision} -->`);
