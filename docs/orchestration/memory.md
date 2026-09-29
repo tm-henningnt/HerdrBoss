@@ -28,6 +28,8 @@ Keep the current facts that every HerdrBoss orchestrator needs at start and resu
 
 ## Holds and freezes
 
+- 2026-09-29 (until the Claude reset on Thu 2026-10-01 21:00): Start no new Claude worker without asking the Boss first. Do reviews, owner-proxy passes, and visual checks on Codex through herdr-boss browser, and bounded work on the free models. Keep orchestrator turns short. Delete this line after the reset. Source: Boss.
+
 None.
 
 Owner queue (credentials, billing, and Owner-applied settings):
