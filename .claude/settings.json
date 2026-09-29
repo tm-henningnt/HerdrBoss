@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cd \"${CLAUDE_PROJECT_DIR:-.}\" && cat docs/orchestration/herdr-boss.md docs/orchestration/memory.md 2>/dev/null; exit 0"
+            "command": "cd \"${CLAUDE_PROJECT_DIR:-.}\" && { herdr-boss kit update --quiet 2>/dev/null; cat docs/orchestration/herdr-boss.md docs/orchestration/memory.md 2>/dev/null; }; exit 0"
           }
         ]
       }
