@@ -682,7 +682,27 @@ Each node has one thread. The thread `boss` holds the messages between the Owner
 
 The nudge buttons send one of these fixed texts: "Continue.", "Use your free worker slots.", or "Pause after the current task." **Ask for status** sends "Send a short status report with herdr-boss say, and publish your status file."
 
-The panel reads the thread again every 10 seconds while it is open. The page shows message text as plain text. It shows a report as Markdown: headings, lists, code, bold, and italic. It shows raw HTML as text.
+The panel reads the thread again every 10 seconds while it is open. The page shows each message and each report as safe Markdown. See [Markdown in messages](#markdown-in-messages).
+
+### Markdown in messages
+
+The message panel, the Mailbox, and the Chat show message text as Markdown. The renderer is `public/markdown.js`. It has no dependencies. The page shows these parts:
+
+- Headings `#` to `######`. A heading shows one level smaller in a message, so `#` shows as a third-level heading.
+- Paragraphs. A single line break is a space. Two spaces or `\` at the end of a line make a line break.
+- Bold (`**text**`), italic (`*text*`), strikethrough (`~~text~~`), and inline code (`` `code` ``). An underscore inside a word is text, for example `snake_case`.
+- Bullet lists, numbered lists, and task lists (`- [ ]` and `- [x]`). Indent a line by 2 or more spaces to nest a list.
+- Tables with a header row and an alignment row. A table scrolls sideways in its own box. A column that holds only numbers is right-aligned.
+- Fenced code blocks with three backticks or three tildes. A code block scrolls sideways.
+- Block quotes with `>`, and horizontal rules with `---`.
+- Links `[text](url)`, `<url>`, and bare `https://` addresses. An external link opens in a new tab.
+
+These safety rules apply:
+
+- Raw HTML shows as text. The page runs no script from a message.
+- A link must use `http:`, `https:`, `mailto:`, a local path that starts with `/`, or `#`. The page shows other links, for example `javascript:` or `data:`, as text without a link.
+- The page removes each element and attribute that is not on the renderer allowlist.
+- The renderer reads at most 200 KB of a message. Nesting deeper than 8 levels shows as text.
 
 ### Delivery
 
@@ -762,7 +782,7 @@ Use the folder list on the left to open **Needs you**, **Updates**, **Sent**, or
 - **Sent** shows Owner messages. Each message shows its delivery state and the time of a reply, when one exists.
 - **Done** shows closed or dismissed items and messages that the Boss relayed.
 
-The page groups messages by their project or the Boss, and by the `replyTo` chain. Select an item to open its conversation. The conversation shows Owner and agent messages in time order. A report shows as Markdown, with the same renderer as the message panel. A reply shows as plain text. Opening an item sets `readAt` on the record. On a phone, the conversation fills the page. Select **Back** to return to the folder and message list.
+The page groups messages by their project or the Boss, and by the `replyTo` chain. Select an item to open its conversation. The conversation shows Owner and agent messages in time order. Each message and each report shows as safe Markdown, with the same renderer as the message panel and the Chat. See [Markdown in messages](#markdown-in-messages). Opening an item sets `readAt` on the record. On a phone, the conversation fills the page. Select **Back** to return to the folder and message list.
 
 ### Answer an item
 
@@ -871,7 +891,7 @@ The page reads `GET /api/chats`. It follows the `message` event on `GET /api/eve
 
 ### Conversation
 
-Select a row to open the chat. The conversation shows the messages in time order. An Owner message sits on the right. An agent message sits on the left. The avatar of the agent shows at the first message of each run of messages from that agent. It does not show again inside the same run. Each bubble shows the text, the sender, and the time. An Owner bubble also shows the delivery state from the record: `queued`, `delivered`, `relayed`, or `failed` with the reason.
+Select a row to open the chat. The conversation shows the messages in time order. An Owner message sits on the right. An agent message sits on the left. The avatar of the agent shows at the first message of each run of messages from that agent. It does not show again inside the same run. Each bubble shows the text as safe Markdown, the sender, and the time. A wide table or code block scrolls sideways inside the bubble. An Owner bubble also shows the delivery state from the record: `queued`, `delivered`, `relayed`, or `failed` with the reason.
 
 Opening a chat calls `POST /api/chats/<thread>/read`. It marks each chat record to the Owner as read. A mail report keeps its own read state. The page stops the count for that chat. A read-only preview refuses the read, so the count stays.
 
