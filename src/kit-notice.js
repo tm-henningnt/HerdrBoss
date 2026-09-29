@@ -20,7 +20,7 @@ const MAX_SUBJECTS = 10;
 const MAX_SUBJECT_LENGTH = 90;
 const MAX_TEXT_LENGTH = 1199;
 const PENDING_MS = 7 * 86400 * 1000;
-const TAIL = '. Run herdr-boss kit update, then re-read docs/orchestration/herdr-boss.md now; your loaded copy is stale.';
+const TAIL = '. Run herdr-boss kit update and continue. The command prints the current kit file.';
 
 function shortSubject(subject) {
   const text = String(subject || '').replace(/\s+/g, ' ').trim();
@@ -104,7 +104,8 @@ export function isKitAlert(alert) {
   return typeof alert?.key === 'string' && alert.key.startsWith('kit:');
 }
 
-// Every project orchestrator gets the notice. The Boss gets kit reports from the HerdrBoss orchestrator.
-export function kitNoticeTargets(orchs) {
-  return orchs.filter((o) => o.label !== 'boss' && !/^boss$/i.test(o.workspaceLabel || ''));
+// Every project orchestrator gets the notice, except the orchestrator of a held project (paused,
+// held, or stood down). held is a Set of workspace ids. The Boss gets kit reports from the HerdrBoss orchestrator.
+export function kitNoticeTargets(orchs, held = new Set()) {
+  return orchs.filter((o) => o.label !== 'boss' && !/^boss$/i.test(o.workspaceLabel || '') && !held.has(o.workspace));
 }

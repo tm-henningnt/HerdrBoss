@@ -17,6 +17,7 @@ Read each file in the skill folder when its step comes:
 - [reference/machine-and-quota.md](reference/machine-and-quota.md): read before you choose a lane, when a provider or the machine is at a limit, and for test thread flags.
 - [reference/handover.md](reference/handover.md): read when your harness quota threatens the orchestrator.
 - [reference/ledger-and-evidence.md](reference/ledger-and-evidence.md): read when you record a run or decide which evidence a gate needs.
+- [reference/git-and-worktrees.md](reference/git-and-worktrees.md): read before you dispatch work, integrate a change, or clean up a worktree.
 - [The model lanes](../../models.md): read before you select a worker kind or model.
 - [The dedicated browser service](../../browser-service.md): read before browser work.
 
@@ -37,12 +38,21 @@ Read each file in the skill folder when its step comes:
 
 ## Project memory
 
-- Read `docs/orchestration/herdr-boss.md` and `docs/orchestration/memory.md` at start, at resume, and on each `Kit updated` notice, before you choose work.
+- Read `docs/orchestration/herdr-boss.md` and `docs/orchestration/memory.md` at start and at resume, before you choose work.
 - If the file does not exist, create it from `kit/templates/project-memory.md`.
 - Update the file in the same step as an Owner decision, a hold, a freeze, or a lift.
 - Commit the file with the next orchestrator commit.
 - Obey a hold or freeze in the file until the Owner or the Boss lifts it.
 - Treat a request that the Owner types into your pane as an Owner decision. Record it in the memory file.
+
+## Context and cost
+
+- Use subagents for diff reviews, long report reads, log searches, and code surveys. Keep the main thread for decisions.
+- Take back only findings with file and line evidence. Verify a finding at the source before you act.
+- Use a cheaper subagent model where the task allows. Use Opus only for hard judgment.
+- After a dispatch, end your turn. Never poll with sleep or until loops. The `WORKER REPORT` arrives as a message, and the service warns about a stall, a block, and a missing report.
+- As a backup only, run at most one cheap check every 20 to 30 minutes while a worker runs with no report: `herdr-boss worker list` and the pane status line.
+- Tell every worker in its brief to report back through herdr when done and to send a `WORKER QUESTION` when blocked.
 
 ## Roles and escalation
 
@@ -196,29 +206,10 @@ herdr agent prompt <orch-pane> "WORKER REPORT <name>: <done|blocked|stopped>. Re
 - Update the issue with commands, results, evidence tier, remaining gaps, and the next frontier.
 - Close an issue only after its acceptance criteria and evidence are satisfied.
 
-## Git and worktree hygiene
-
-- The orchestrator owns Git topology and history.
-- Inspect the branch, remotes, status, and diff before dispatching work.
-- Preserve user-owned and unrelated changes.
-- Use the project's branch naming convention.
-- Give every active worker one named task, branch, worktree, and bounded scope. Give parallel changes separate branches and worktrees with independent scopes.
-- Keep one writer per shared module. Serialize work when multiple tasks change the same shared module.
-- Batch repeated work only when one mechanic truly applies across the batch. Name the allowed paths and acceptance commands for every batch.
-- Inspect the full changed-path list before staging or integrating work.
-- Do not narrow a commit so far that required new files are omitted.
-- Do not switch a worker to another branch to make a check pass.
-- Do not delete a worktree with unmerged or user-owned work.
-- Do not use destructive reset, clean, force-push, or discard checkout as a shortcut.
-- Record the verified commit or uncommitted state before the next task.
-- Use `herdr-boss worktree prune` to review stale worktrees.
-- Inspect prune candidates before applying cleanup.
-- Use `herdr-boss worktree prune --apply` only after verifying the candidates and their ownership.
-
 ## Herdr Boss notices and status
 
 - Act on a `[herdr-boss]` notice that concerns your current work. Do not reply to the notice.
-- Act on a `Kit updated` notice: run `herdr-boss kit install`, then re-read `docs/orchestration/herdr-boss.md`. Set `kitRevision` in the project status to its new revision. Run `herdr-boss check agents`.
+- Act on a `Kit updated` notice: run `herdr-boss kit update` and continue. The command prints the current kit file; do not read it again. Set `kitRevision` in the project status to its new revision. Run `herdr-boss check agents`. Commit a changed kit file with your next commit.
 - `herdr-boss kit install` writes `docs/orchestration/herdr-boss.md` from [the kit template](../../templates/project-kit.md) and the `AGENTS.md` stub from [the stub template](../../templates/agents-stub.md).
 - A prompt that starts with `[owner]` is an Owner message from the dashboard. It ends with a reply command that holds the message ID.
 - Reply to an Owner message with `herdr-boss say --reply-to <id> "<answer>"`. Keep the answer short and free of secrets.

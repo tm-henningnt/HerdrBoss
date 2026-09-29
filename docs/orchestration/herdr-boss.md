@@ -1,4 +1,4 @@
-<!-- herdr-boss kit v=60049d639ff0 -->
+<!-- herdr-boss kit v=c13020178b65 -->
 Herdr Boss writes this file. Do not edit it. Run herdr-boss kit install to update it.
 
 # Herdr Boss orchestration kit
@@ -7,7 +7,9 @@ These are the shared operating rules for the orchestrator of this project.
 
 
 - Use the Herdr Boss orchestrator skill when you coordinate workers or resume an unknown project state.
-- Read this file and `docs/orchestration/memory.md` at start, at resume, and on each `Kit updated` notice, before you choose work.
+- Read this file and `docs/orchestration/memory.md` at start and at resume, before you choose work. The session start hook prints both files.
+- When a `Kit updated` notice arrives, run `herdr-boss kit update` and continue. The command prints the current kit file. Do not read the file again.
+- Commit a changed kit file, `AGENTS.md` stub, or hook with your next commit. Do not make a separate commit for it.
 - Set `kitRevision` in the published project status to the `v=` value in the first line of this file.
 - Use and respect the kit, `[herdr-boss]` notices, and Boss messages. Report every problem with the kit or the tools to the Boss. The Boss decides the fix.
 - Never open a selection dialog. Decide, or report that you are blocked.
@@ -32,7 +34,12 @@ These are the shared operating rules for the orchestrator of this project.
 - Run each `herdr-boss browser` command and each `ps` or `pgrep` command alone. Do not join it to other commands with `&&`, `;`, or a pipe.
 - Put the relevant Owner decisions into each worker brief.
 - Keep Git branches, worktrees, commits, and merges under orchestrator control.
+- Use subagents for diff reviews, long report reads, log searches, and code surveys. Keep the main thread for decisions and dispatch.
+- Take back only findings with file and line evidence from a subagent. Verify a finding at the source before you act.
+- Use a cheaper subagent model where the task allows. Use Opus only for hard judgment.
 - After a dispatch, end the turn. The `WORKER REPORT` or `WORKER QUESTION` message arrives as a new prompt. Do not poll panes and do not run sleep or until loops.
+- The service warns about a stall, a block, and a missing report. As a backup only, run at most one cheap check every 20 to 30 minutes while a worker runs with no report: `herdr-boss worker list` and the pane status line.
+- Tell every worker in its brief to report back through herdr when done and to send a `WORKER QUESTION` when blocked.
 - Run `herdr-boss wait [<worker>...] [--timeout SECONDS]` only when you must block on a worker. Run it as a background command and read its exit code.
 - Treat `working`, `blocked`, `idle`, `done`, and `unknown` as distinct states.
 - Require `.worker/report.md`, `.worker/report.json`, and a `WORKER REPORT` message.

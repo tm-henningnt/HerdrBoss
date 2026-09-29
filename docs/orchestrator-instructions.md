@@ -22,14 +22,14 @@ Keep product direction, issue sources, acceptance gates, release rules, and brow
 
 The kit file and the Owner decisions in `docs/orchestration/memory.md` are the operating rules of the project. Report a conflict with them to the Boss. Do not work around them.
 
-Read `docs/orchestration/herdr-boss.md` and `docs/orchestration/memory.md` at start, at resume, and on each `Kit updated` notice. Record Owner decisions, holds, and freezes in `memory.md`.
+Read `docs/orchestration/herdr-boss.md` and `docs/orchestration/memory.md` at start and at resume. Record Owner decisions, holds, and freezes in `memory.md`.
 
 When a `Kit updated` notice arrives:
 
-1. Run `herdr-boss kit install`. Do not change the project rules outside the stub.
-2. Re-read `docs/orchestration/herdr-boss.md`. Your loaded copy is stale.
-3. Set `kitRevision` in the project status to the `v=` value in the first line of the kit file, and publish the status.
-4. Run `herdr-boss check agents`. Fix each finding.
+1. Run `herdr-boss kit update`. Do not change the project rules outside the stub. The command prints the current kit file. Do not read the file again.
+2. Set `kitRevision` in the project status to the `v=` value in the first line of the kit file, and publish the status.
+3. Run `herdr-boss check agents`. Fix each finding.
+4. Commit a changed kit file, stub, or hook with your next commit. Do not make a separate commit for it.
 
 Also, when adopting a newer Herdr Boss kit:
 
