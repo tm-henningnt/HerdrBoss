@@ -6,6 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { POLICY_DEFAULTS } from '../src/control.js';
 import { evaluate, renderBulletin } from '../src/rules.js';
+import { inspectWorkerNoReports } from '../src/engine.js';
 import * as engineModule from '../src/engine.js';
 import { inspectWorkerReports } from '../src/worker-failures.js';
 import { validateProject } from '../src/projects.js';
@@ -245,6 +246,47 @@ test('a rewritten report reaches the orchestrator once', (t) => {
   }));
   const prompts = deliverRounds(t, rounds);
   assert.equal(prompts.filter((p) => /wrote its report/.test(p.text)).length, 1);
+});
+
+test('an idle worker without report.json reaches its orchestrator once per idle period after 10 minutes', (t) => {
+  const worker = { id: 'w1:p2', workspace: 'w1', agent: 'claude', name: 'alpha', cwd: '/tmp/wt-alpha', status: 'idle' };
+  const run = { name: 'alpha', pane: worker.id, worktree: worker.cwd, startedAt: '2026-09-27T11:00:00.000Z' };
+  let observed = {};
+  const rounds = [];
+  const observe = (pane, at) => {
+    const result = inspectWorkerNoReports([pane], [run], observed, at, () => false);
+    observed = result.observed;
+    rounds.push({ at, panes: [orch('idle'), pane], alerts: result.notices });
+  };
+  observe(worker, NOW);
+  observe(worker, NOW + 10 * MIN - 1);
+  observe(worker, NOW + 10 * MIN);
+  observe(worker, NOW + 11 * MIN);
+  observe({ ...worker, status: 'working' }, NOW + 12 * MIN);
+  observe(worker, NOW + 13 * MIN);
+  observe(worker, NOW + 23 * MIN);
+
+  assert.equal(rounds[0].alerts.length, 0, 'the idle period starts on first observation');
+  assert.equal(rounds[1].alerts.length, 0, 'the watchdog waits for the full 10 minutes');
+  assert.equal(rounds[2].alerts.length, 1, 'the notice becomes due at 10 minutes');
+  assert.equal(rounds[3].alerts.length, 1, 'the same notice stays active until the worker works');
+  assert.equal(rounds[4].alerts.length, 0, 'a working pane never triggers the notice');
+  assert.equal(rounds[5].alerts.length, 0, 'work resets the idle period');
+  assert.equal(rounds[6].alerts.length, 1, 'a new idle period can trigger a new notice');
+
+  const prompts = deliverRounds(t, rounds);
+  assert.equal(prompts.length, 2, 'delivery sends one notice for each idle period');
+  assert.deepEqual(prompts.map((prompt) => prompt.pane), ['w1:p1', 'w1:p1']);
+  assert.ok(prompts.every((prompt) => prompt.text.includes('Worker alpha in w1:p2 is idle for 10 min with no report.json. Check it, then resume or collect it.')));
+});
+
+test('the no-report watchdog stays quiet when report.json exists', () => {
+  const worker = { id: 'w1:p2', workspace: 'w1', agent: 'claude', name: 'alpha', cwd: '/tmp/wt-alpha', status: 'done' };
+  const run = { name: 'alpha', pane: worker.id, worktree: worker.cwd, startedAt: '2026-09-27T11:00:00.000Z' };
+  let observed = {};
+  observed = inspectWorkerNoReports([worker], [run], observed, NOW, () => true).observed;
+  const result = inspectWorkerNoReports([worker], [run], observed, NOW + 10 * MIN, () => true);
+  assert.equal(result.notices.length, 0);
 });
 
 test('an info immediate notice waits for an idle orchestrator and a warn immediate notice does not', (t) => {

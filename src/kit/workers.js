@@ -1387,6 +1387,10 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
       }
     }
     for (const warning of normalized.warnings) output(warning);
+    if (options.record && !reportJson.modelOutcome && !options.modelResult) {
+      const { result } = deriveModelOutcome(options, reportJson);
+      output(`Warning: report.json has no modelOutcome; recorded ${result} from the outcome. Add --model-result next time.`);
+    }
     output(JSON.stringify(summary, null, 2));
     for (const warning of summary.artifactWarnings) output(`Warning: ${warning}`);
     if (usageWarning) output(usageWarning);
