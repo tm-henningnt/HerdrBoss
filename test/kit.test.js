@@ -15,10 +15,44 @@ import { usageProvider, validateUsage } from '../src/usage.js';
 import { validateProject } from '../src/projects.js';
 import { Engine } from '../src/engine.js';
 import { renderBulletin } from '../src/rules.js';
+import { kitRevision } from '../src/kit/agents-check.js';
 
 const CLAUDE_READY_SCREEN = '────\n❯\n────\nauto mode';
 const CODEX_READY_SCREEN = '› Ask Codex to do anything\n? for shortcuts';
 const ALL_READY_SCREENS = `${CLAUDE_READY_SCREEN}\n${CODEX_READY_SCREEN}`;
+
+test('kit revision follows installed kit assets and ignores product code', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-kit-revision-'));
+  const write = (relative, text) => {
+    const file = path.join(root, relative);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, text);
+  };
+  try {
+    write('kit/templates/project-kit.md', 'canonical body');
+    write('kit/templates/agents-stub.md', 'other template');
+    write('kit/skills/herdr-orchestrator/SKILL.md', 'skill');
+    write('kit/skills/herdr-orchestrator/reference/handover.md', 'reference');
+    write('kit/models.json', '{}');
+    write('src/engine.js', 'service');
+    write('public/app.js', 'dashboard');
+    write('website/page.js', 'website');
+
+    const revision = kitRevision(root);
+    write('kit/skills/herdr-orchestrator/reference/handover.md', 'changed reference');
+    assert.notEqual(kitRevision(root), revision, 'an installed reference file changes the revision');
+    write('kit/skills/herdr-orchestrator/reference/handover.md', 'reference');
+    write('kit/templates/project-kit.md', 'changed canonical body');
+    assert.notEqual(kitRevision(root), revision, 'the canonical template changes the revision');
+    write('kit/templates/project-kit.md', 'canonical body');
+    write('src/engine.js', 'changed service');
+    write('public/app.js', 'changed dashboard');
+    write('website/page.js', 'changed website');
+    assert.equal(kitRevision(root), revision, 'product code does not change the revision');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 // Worker worktrees default to ~/Projects/.herdr-wt. Keep them out of the real home folder.
 const TEST_HOME = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-kit-home-')));

@@ -33,13 +33,40 @@ export function agentsBlock(file = STUB_TEMPLATE) {
 // The current kit body, its revision, and the full text of docs/orchestration/herdr-boss.md.
 export function projectKit(file = KIT_TEMPLATE) {
   const body = normalize(fs.readFileSync(file, 'utf8'));
-  const revision = blockHash(body);
+  const revision = kitRevision();
   return { revision, body, text: `<!-- herdr-boss kit v=${revision} -->\n${KIT_NOTE}\n\n${body}\n` };
 }
 
-// The current kit revision, or null when the template cannot be read.
-export function kitRevision() {
-  try { return projectKit().revision; } catch { return null; }
+function kitFiles(root, directory) {
+  const absolute = path.join(root, directory);
+  if (!fs.existsSync(absolute)) return [];
+  return fs.readdirSync(absolute, { withFileTypes: true }).flatMap((entry) => {
+    const relative = path.join(directory, entry.name);
+    return entry.isDirectory() ? kitFiles(root, relative) : entry.isFile() ? [relative] : [];
+  });
+}
+
+// Hash only content that the kit installer distributes. The project-kit template body is canonical;
+// its generated revision line and note are not part of the input.
+export function kitRevision(root = KIT_ROOT) {
+  try {
+    const template = path.join(root, 'kit/templates/project-kit.md');
+    const files = [
+      ...kitFiles(root, 'kit/templates'),
+      'kit/skills/herdr-orchestrator/SKILL.md',
+      ...kitFiles(root, 'kit/skills/herdr-orchestrator/reference'),
+      'kit/models.json',
+    ].sort();
+    const hash = createHash('sha256');
+    for (const file of files) {
+      hash.update(file).update('\0');
+      hash.update(file === 'kit/templates/project-kit.md'
+        ? normalize(fs.readFileSync(template, 'utf8'))
+        : fs.readFileSync(path.join(root, file)));
+      hash.update('\0');
+    }
+    return hash.digest('hex').slice(0, 12);
+  } catch { return null; }
 }
 
 // Findings for the text of docs/orchestration/herdr-boss.md. text is null for a missing file.
