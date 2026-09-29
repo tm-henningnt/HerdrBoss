@@ -770,12 +770,14 @@ export function pushWithLock(args, {
   stdio = 'inherit',
 } = {}) {
   callerFor(env, herdr);
-  const push = () => {
-    const result = spawnSync('git', ['push', ...args], { cwd: config.root, stdio });
+  const hook = findPrePushHook(config.root);
+  const push = (reuseSuitePass = false) => {
+    const childEnv = { ...process.env, ...env };
+    if (reuseSuitePass) childEnv.HERDR_BOSS_SUITE_REUSE = '1';
+    const result = spawnSync('git', ['push', ...args], { cwd: config.root, env: childEnv, stdio });
     if (result.error) throw new Error(`Cannot run git push: ${result.error.message}`);
     return result.status ?? 1;
   };
-  const hook = findPrePushHook(config.root);
   if (!hook) {
     output('push: no pre-push hook found. Pushing without a lock.');
     return { exitCode: push(), locked: false, hook: null };
@@ -783,7 +785,7 @@ export function pushWithLock(args, {
   output(`push: pre-push hook found at ${hook}. Taking lock ${FULL_SUITE_LOCK}.`);
   acquireProjectLock(FULL_SUITE_LOCK, { config, env, herdr, dataDir, waitSeconds: PUSH_LOCK_WAIT_SECONDS, output, now, pause, pidAlive, kind: 'push' });
   let exitCode;
-  try { exitCode = push(); }
+  try { exitCode = push(true); }
   finally {
     try { releaseProjectLock(FULL_SUITE_LOCK, { config, env, herdr, dataDir, output, pidAlive }); }
     catch (error) {

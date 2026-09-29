@@ -8,7 +8,7 @@ import { buildGhArgs } from './gh.js';
 import { allowWorkerScope, collectWorker, createHerdrRunner, listWorkers, parkWorker, startWorker } from './workers.js';
 import { pruneWorktrees } from './worktrees.js';
 import { acquireProjectLock, listProjectLocks, pushWithLock, releaseProjectLock } from './locks.js';
-import { SUITE_WAIT_SECONDS, runSuite } from './suite.js';
+import { SUITE_WAIT_SECONDS, listSuitePasses, runSuite } from './suite.js';
 import { agentsBlock, checkAgentsFile, installKit, kitRevision, rulesPolicy } from './agents-check.js';
 import { listProjects } from '../projects.js';
 
@@ -20,7 +20,7 @@ const USAGE = `Kit commands:
   worker allow <name> <path>... --reason TEXT
   lock acquire <name> [--wait SECONDS] | lock release <name> | lock list
   push [git push arguments]
-  suite [--wait SECONDS] [--keep NAME]... -- <command...>
+  suite [--wait SECONDS] [--keep NAME]... [--reuse] -- <command...> | suite --list-passes
   worktree prune [--apply]
   ledger append --entry FILE | ledger check [--runs]
   check --report FILE | --run FILE | --worktree DIR --allow PATH...
@@ -209,17 +209,21 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
   }
   if (command === 'suite') {
     // The options come before --. Everything after -- is the command.
-    const usage = 'Usage: suite [--wait SECONDS] [--keep NAME]... -- <command...>';
+    const usage = 'Usage: suite [--wait SECONDS] [--keep NAME]... [--reuse] -- <command...> | suite --list-passes';
+    if (argv[0] === '--list-passes') {
+      if (argv.length !== 1) fail(usage);
+      return listSuitePasses({ dataDir: lockDataDir, output });
+    }
     const separator = argv.indexOf('--');
     if (separator < 0 || separator === argv.length - 1) fail(usage);
-    const { positional, flags } = parseArgs(argv.slice(0, separator), { repeat: ['--keep'] });
+    const { positional, flags } = parseArgs(argv.slice(0, separator), { boolean: ['--reuse'], repeat: ['--keep'] });
     if (positional.length) fail(usage);
-    knownFlags(flags, ['wait', 'keep']);
+    knownFlags(flags, ['wait', 'keep', 'reuse']);
     if (flags.wait !== undefined && !/^\d+$/.test(flags.wait)) fail('--wait must be a whole non-negative number of seconds.');
     const waitSeconds = flags.wait === undefined ? SUITE_WAIT_SECONDS : Number(flags.wait);
     if (!Number.isSafeInteger(waitSeconds)) fail('--wait must be a whole non-negative number of seconds.');
     return runSuite(argv.slice(separator + 1), {
-      config, env, herdr, dataDir: lockDataDir, waitSeconds, keep: flags.keep ?? [], output, now, pause, pidAlive, stdio: suiteStdio,
+      config, env, herdr, dataDir: lockDataDir, waitSeconds, keep: flags.keep ?? [], reuse: flags.reuse ?? false, output, now, pause, pidAlive, stdio: suiteStdio,
     });
   }
   if (command === 'worker') {

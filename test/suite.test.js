@@ -42,7 +42,8 @@ function fixture(t, prefix) {
   const script = path.join(base, 'suite.mjs');
   fs.writeFileSync(script, [
     "import fs from 'node:fs';",
-    `fs.writeFileSync(${JSON.stringify(seen)}, JSON.stringify({ names: Object.keys(process.env), locked: fs.existsSync(${JSON.stringify(lockFile)}), lock: fs.existsSync(${JSON.stringify(lockFile)}) ? JSON.parse(fs.readFileSync(${JSON.stringify(lockFile)}, 'utf8')) : null }));`,
+    `const previous = fs.existsSync(${JSON.stringify(seen)}) ? JSON.parse(fs.readFileSync(${JSON.stringify(seen)}, 'utf8')) : {};`,
+    `fs.writeFileSync(${JSON.stringify(seen)}, JSON.stringify({ names: Object.keys(process.env), runs: (previous.runs ?? 0) + 1, locked: fs.existsSync(${JSON.stringify(lockFile)}), lock: fs.existsSync(${JSON.stringify(lockFile)}) ? JSON.parse(fs.readFileSync(${JSON.stringify(lockFile)}, 'utf8')) : null }));`,
     'process.exit(Number(process.argv[2] ?? 0));',
   ].join('\n'));
   const env = {
@@ -71,8 +72,9 @@ function fixture(t, prefix) {
     ...extra,
   });
   const run = (args, exitCode = 0, extra = {}) => runKitCommand('suite', [...args, '--', process.execPath, script, String(exitCode)], options(extra));
+  const runCommand = (args, command, extra = {}) => runKitCommand('suite', [...args, '--', ...command], options(extra));
   const readSeen = () => JSON.parse(fs.readFileSync(seen, 'utf8'));
-  return { base, root, dataDir, config, env, lines, livePanes, lockFile, options, run, readSeen };
+  return { base, root, dataDir, config, env, lines, livePanes, lockFile, script, options, run, runCommand, readSeen };
 }
 
 function readQueueFiles(dataDir) {
@@ -544,4 +546,123 @@ test('a broken lock queue ticket is skipped and never blocks the queue', async (
   fs.writeFileSync(path.join(queue, '00000000-0000-4000-8000-000000000001.json'), '{"id": "00000000-0000-4000-8000-0000');
   const tickets = readLockQueue({ dataDir, livePanes: new Set(), pidAlive: () => false });
   assert.ok(Array.isArray(tickets.queue ?? tickets));
+});
+
+test('suite records a clean pass and reuses it only when requested', (t) => {
+  const f = fixture(t, 'herdr-suite-cache-reuse-');
+  assert.equal(f.run([]).exitCode, 0);
+
+  const file = path.join(f.dataDir, 'suite-passes.json');
+  const firstRecords = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(firstRecords.length, 1);
+  assert.deepEqual(firstRecords[0], {
+    repo: fs.realpathSync(path.join(f.root, '.git')),
+    tree: git(f.root, 'write-tree'),
+    command: [process.execPath, f.script, '0'],
+    node: process.version,
+    time: firstRecords[0].time,
+  });
+  assert.ok(Number.isFinite(Date.parse(firstRecords[0].time)));
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+
+  assert.equal(f.run([]).exitCode, 0, 'a pass is not reused by default');
+  assert.equal(f.readSeen().runs, 2);
+  const recordsBeforeReuse = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(recordsBeforeReuse.length, 2);
+  assert.equal(f.run([], 3).exitCode, 3, 'a failed command returns its status');
+  assert.equal(f.readSeen().runs, 3);
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).length, 2, 'a failed command adds no pass');
+  const acquiredBeforeReuse = f.lines.filter((line) => /Lock full-suite acquired/.test(line)).length;
+
+  assert.equal(f.run(['--reuse']).exitCode, 0);
+  assert.equal(f.readSeen().runs, 3, 'the matching command does not run again');
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).length, 2);
+  assert.equal(f.lines.filter((line) => /Lock full-suite acquired/.test(line)).length, acquiredBeforeReuse, 'reuse does not take the lock');
+  assert.ok(f.lines.includes(`suite: reused the pass of ${recordsBeforeReuse.at(-1).time} for tree ${recordsBeforeReuse.at(-1).tree.slice(0, 12)}`));
+});
+
+test('suite does not reuse a pass for a different command or Node version', (t) => {
+  const commandFixture = fixture(t, 'herdr-suite-cache-command-');
+  assert.equal(commandFixture.run([]).exitCode, 0);
+  assert.equal(commandFixture.run(['--reuse'], 3).exitCode, 3);
+  assert.equal(commandFixture.readSeen().runs, 2, 'a different command runs');
+
+  const nodeFixture = fixture(t, 'herdr-suite-cache-node-');
+  assert.equal(nodeFixture.run([]).exitCode, 0);
+  const file = path.join(nodeFixture.dataDir, 'suite-passes.json');
+  const records = JSON.parse(fs.readFileSync(file, 'utf8'));
+  records[0].node = 'v0.0.0';
+  fs.writeFileSync(file, `${JSON.stringify(records)}\n`, { mode: 0o600 });
+  assert.equal(nodeFixture.run(['--reuse']).exitCode, 0);
+  assert.equal(nodeFixture.readSeen().runs, 2, 'a different Node version does not match');
+});
+
+test('the pre-push environment variable implies suite pass reuse', (t) => {
+  const f = fixture(t, 'herdr-suite-cache-hook-env-');
+  assert.equal(f.run([]).exitCode, 0);
+  f.env.HERDR_BOSS_SUITE_REUSE = '1';
+
+  assert.equal(f.run([]).exitCode, 0);
+  assert.equal(f.readSeen().runs, 1);
+});
+
+test('suite does not reuse a pass after a tracked file changes', (t) => {
+  const f = fixture(t, 'herdr-suite-cache-tree-');
+  assert.equal(f.run([]).exitCode, 0);
+  fs.writeFileSync(path.join(f.root, 'README.md'), 'changed tree\n');
+  git(f.root, 'add', 'README.md');
+  git(f.root, 'commit', '-m', 'change tree');
+
+  assert.equal(f.run(['--reuse']).exitCode, 0);
+  assert.equal(f.readSeen().runs, 2);
+});
+
+test('suite neither records a dirty starting tree nor a tree changed during the command', (t) => {
+  const dirty = fixture(t, 'herdr-suite-cache-dirty-');
+  fs.writeFileSync(path.join(dirty.root, 'untracked.txt'), 'dirty\n');
+  assert.equal(dirty.run(['--reuse']).exitCode, 0);
+  assert.equal(dirty.readSeen().runs, 1);
+  assert.equal(fs.existsSync(path.join(dirty.dataDir, 'suite-passes.json')), false);
+
+  const changed = fixture(t, 'herdr-suite-cache-changed-during-');
+  const mutation = path.join(changed.base, 'change-tree.mjs');
+  fs.writeFileSync(mutation, [
+    "import fs from 'node:fs';",
+    "import { execFileSync } from 'node:child_process';",
+    `fs.writeFileSync(${JSON.stringify(path.join(changed.root, 'README.md'))}, 'changed during suite\\n');`,
+    `execFileSync('git', ['-C', ${JSON.stringify(changed.root)}, 'add', 'README.md']);`,
+    `execFileSync('git', ['-C', ${JSON.stringify(changed.root)}, 'commit', '-m', 'changed during suite'], { stdio: 'ignore' });`,
+  ].join('\n'));
+
+  assert.equal(changed.runCommand([], [process.execPath, mutation]).exitCode, 0);
+  assert.equal(git(changed.root, 'status', '--porcelain'), '', 'the command leaves the new tree clean');
+  assert.equal(fs.existsSync(path.join(changed.dataDir, 'suite-passes.json')), false, 'the pass is not recorded under the old tree');
+});
+
+test('suite lists the ten most recent pass records', (t) => {
+  const f = fixture(t, 'herdr-suite-cache-list-');
+  assert.equal(f.run([]).exitCode, 0);
+  const records = JSON.parse(fs.readFileSync(path.join(f.dataDir, 'suite-passes.json'), 'utf8'));
+  f.lines.length = 0;
+
+  const listed = runKitCommand('suite', ['--list-passes'], f.options());
+
+  assert.equal(listed.length, 1);
+  assert.ok(f.lines.some((line) => line.includes(records[0].time)));
+  assert.ok(f.lines.some((line) => line.includes('repo')));
+  assert.ok(f.lines.some((line) => line.includes(records[0].tree.slice(0, 12))));
+  assert.ok(f.lines.some((line) => line.includes(JSON.stringify(records[0].command))));
+});
+
+test('suite keeps only the last 200 pass records', (t) => {
+  const f = fixture(t, 'herdr-suite-cache-limit-');
+  assert.equal(f.run([]).exitCode, 0);
+  const file = path.join(f.dataDir, 'suite-passes.json');
+  const record = JSON.parse(fs.readFileSync(file, 'utf8'))[0];
+  fs.writeFileSync(file, `${JSON.stringify(Array.from({ length: 200 }, (_, index) => ({ ...record, time: new Date(index).toISOString() })))}\n`, { mode: 0o600 });
+
+  assert.equal(f.run([]).exitCode, 0);
+  const records = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(records.length, 200);
+  assert.notEqual(records[0].time, record.time);
 });
