@@ -98,9 +98,14 @@ export function clampSummaryDays(days) {
 export function summarizeHours({ samples = null, dataDir = DATA_DIR, days = MACHINE_HOURS_MAX_DAYS, now = Date.now() } = {}) {
   const window = clampSummaryDays(days);
   const sinceMs = now - window * DAY_MS;
+  const minutes = new Set();
   const lines = (samples || readMachineSamples({ dataDir, sinceMs })).filter((line) => {
     const at = Date.parse(line?.at);
-    return Number.isFinite(at) && at >= sinceMs && at <= now;
+    if (!Number.isFinite(at) || at < sinceMs || at > now) return false;
+    const minute = Math.floor(at / 60000);
+    if (minutes.has(minute)) return false;
+    minutes.add(minute);
+    return true;
   });
   const hours = Array.from({ length: 24 }, (_, hour) => ({
     hour, samples: 0, overloadMin: 0, idleWaitMin: 0, swapPeakPct: null, memFreeMin: null, holderKinds: {},

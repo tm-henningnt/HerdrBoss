@@ -33,6 +33,8 @@ let lastRoute = null;
 let models = {};
 let usage = null;
 let denials = null;
+let machineHours = null;
+let machineHoursOpen = false;
 let browserSessions = [];
 const browserMessages = {};
 const browserPreviewOpen = new Set();
@@ -1708,8 +1710,67 @@ function analyticsView(s) {
     modelScorecardBlock(s),
     recentUsageBlock(),
     denialsBlock(s),
+    machineHoursBlock(),
   ].join('');
 }
+
+// Mean minutes per day for each hour of the day, from /api/machine-hours. Local hours, counts only.
+const MACHINE_CHART = { left: 34, top: 8, plotH: 150, group: 26, bar: 9, gap: 2 };
+function machineHoursBlock() {
+  const m = machineHours;
+  const head = '<div class="section-head"><h2>Machine overload and idle waiting by hour</h2><span>Last 14 days, local time</span></div>';
+  if (!m?.hours || !m.totals?.samples) return `<section id="machine-hours">${head}<div class="calm-state">No machine samples yet. Herdr Boss records one sample each minute.</div></section>`;
+  const c = MACHINE_CHART;
+  const days = Math.max(1, m.daysWithData);
+  const mean = (n) => n / days;
+  const width = c.left + 24 * c.group + 6;
+  const height = c.top + c.plotH + 38;
+  const y = (v) => c.top + c.plotH - (Math.min(v, 60) / 60) * c.plotH;
+  const grid = [0, 15, 30, 45, 60].map((v) => `<line x1="${c.left}" x2="${width - 6}" y1="${y(v)}" y2="${y(v)}" class="mh-grid"/><text x="${c.left - 6}" y="${y(v) + 4}" text-anchor="end" class="mh-tick">${v}</text>`).join('');
+  const groups = m.hours.map((h) => {
+    const x0 = c.left + h.hour * c.group + (c.group - (2 * c.bar + c.gap)) / 2;
+    const low = h.samples < 10;
+    const bar = (v, cls, off) => { const top = y(mean(v)); const hgt = c.top + c.plotH - top; return hgt > 0 ? `<rect x="${x0 + off}" y="${top}" width="${c.bar}" height="${hgt}" rx="2" class="mh-bar ${cls}${low ? ' low' : ''}"/>` : ''; };
+    const label = h.hour % 3 === 0 ? `<text x="${c.left + h.hour * c.group + c.group / 2}" y="${c.top + c.plotH + 16}" text-anchor="middle" class="mh-tick">${h.hour}</text>` : '';
+    return `<g>${bar(h.overloadMin, 'overload', 0)}${bar(h.idleWaitMin, 'idle', c.bar + c.gap)}${label}<rect x="${c.left + h.hour * c.group}" y="${c.top}" width="${c.group}" height="${c.plotH}" class="mh-hit" data-hour="${h.hour}" tabindex="0"><title>${esc(machineHourText(h, days))}</title></rect></g>`;
+  }).join('');
+  const defs = '<defs><pattern id="mh-hatch-o" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="5" height="5" class="mh-o-fill"/><line x1="0" y1="0" x2="0" y2="5" class="mh-hatch-line" stroke-width="2"/></pattern><pattern id="mh-hatch-i" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="5" height="5" class="mh-i-fill"/><line x1="0" y1="0" x2="0" y2="5" class="mh-hatch-line" stroke-width="2"/></pattern></defs>';
+  const overloadTotal = m.totals.overloadMin, idleTotal = m.totals.idleWaitMin;
+  const title = overloadTotal || idleTotal
+    ? `On average the machine is overloaded ${(overloadTotal / days).toFixed(0)} min and suite requests wait at low CPU ${(idleTotal / days).toFixed(0)} min a day.`
+    : 'The machine was not overloaded, and no suite request waited at low CPU.';
+  const note = m.coverage < 0.5 ? `<div class="calm-state" role="status">Low coverage: samples cover ${Math.round(m.coverage * 100)}% of the ${m.days} days. A minute without a sample is missing data, not a quiet minute. Hatched bars have fewer than 10 samples.</div>` : '';
+  const rows = m.hours.map((h) => `<tr><td data-label="Hour" class="mono">${String(h.hour).padStart(2, '0')}:00</td><td data-label="Overload min/day" class="mono">${mean(h.overloadMin).toFixed(1)}</td><td data-label="Idle-wait min/day" class="mono">${mean(h.idleWaitMin).toFixed(1)}</td><td data-label="Samples" class="mono">${h.samples.toLocaleString()}</td><td data-label="Swap peak" class="mono">${h.swapPeakPct === null ? '·' : `${h.swapPeakPct}%`}</td></tr>`).join('');
+  return `<section id="machine-hours">${head}<p class="machine-hours-title">${esc(title)}</p>${note}`
+    + '<div class="mh-legend"><span><i class="mh-key overload"></i>Overload (swap over 90% or high load)</span><span><i class="mh-key idle"></i>Queue waited, CPU under 50%</span></div>'
+    + `<div class="mh-scroll"><svg class="mh-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(title)}" style="min-width:${width}px">${defs}${grid}${groups}<text x="${c.left + 12 * c.group}" y="${height - 2}" text-anchor="middle" class="mh-tick">hour of day (local time)</text></svg><div class="mh-tip" id="mh-tip" hidden></div></div>`
+    + `<details class="mh-details" data-mh-detail${machineHoursOpen ? ' open' : ''}><summary>Table of the 24 hours</summary><div class="fleet-table-wrap"><table class="fleet-table"><thead><tr><th>Hour</th><th>Overload min/day</th><th>Idle-wait min/day</th><th>Samples</th><th>Swap peak</th></tr></thead><tbody>${rows}</tbody></table></div></details></section>`;
+}
+function machineHourText(h, days) {
+  return `${String(h.hour).padStart(2, '0')}:00 · overload ${(h.overloadMin / days).toFixed(1)} min/day · idle wait ${(h.idleWaitMin / days).toFixed(1)} min/day · ${h.samples.toLocaleString()} samples`;
+}
+// One shared tooltip for hover, focus, and touch on the hour columns.
+function showMachineTip(target) {
+  const tip = document.getElementById('mh-tip');
+  const hour = target?.dataset?.hour;
+  if (!tip || hour === undefined || !machineHours?.hours) return;
+  const svg = target.ownerSVGElement;
+  const box = svg.getBoundingClientRect();
+  const scale = box.width / svg.viewBox.baseVal.width;
+  tip.textContent = machineHourText(machineHours.hours[+hour], Math.max(1, machineHours.daysWithData));
+  tip.hidden = false;
+  const left = (+target.getAttribute('x') + MACHINE_CHART.group / 2) * scale;
+  tip.style.left = `${Math.max(4, Math.min(left - tip.offsetWidth / 2, svg.parentElement.scrollWidth - tip.offsetWidth - 4))}px`;
+}
+document.addEventListener('pointerover', (e) => { if (e.target.classList?.contains('mh-hit')) showMachineTip(e.target); });
+document.addEventListener('focusin', (e) => { if (e.target.classList?.contains('mh-hit')) showMachineTip(e.target); });
+const hideMachineTip = (e) => { if (e.target.classList?.contains('mh-hit')) { const tip = document.getElementById('mh-tip'); if (tip) tip.hidden = true; } };
+document.addEventListener('pointerout', hideMachineTip);
+document.addEventListener('focusout', hideMachineTip);
+document.addEventListener('pointerdown', (e) => {
+  if (e.target.classList?.contains('mh-hit')) showMachineTip(e.target);
+  else { const tip = document.getElementById('mh-tip'); if (tip) tip.hidden = true; }
+});
 
 // The text of a routine schedule.
 function routineScheduleText(routine) {
@@ -4375,7 +4436,9 @@ const HELP = {
     <h3>Denials and permission prompts</h3><p>Herdr Boss reads the Claude, Codex, OpenCode, and Pi logs every 15 minutes. It counts classifier refusals, sandbox errors, escalation requests, permission prompts, prompts with no answer within 10 minutes, OpenCode worker permission denials, and Herdr guard blocks. It keeps the day, harness, cause, project, model, and count. It keeps no message text.</p>
     <p>The small table shows counts for the last 7 days by harness, model, and cause. It shows up to 10 rows.</p>
     <p>The table shows the last 7 days by cause and project. The arrow compares the last 24 hours with the mean of the 6 days before. When a cause is above 2 times its mean and above 10 events, the page and the bulletin show <b>Discuss this trend with the Boss.</b> Herdr Boss sends no prompt to an orchestrator about it. While more than 1 MB of older logs is unread, the note waits, because the counts of older days are not complete.</p>
-    <p>A read-only line shows the limits: the scan interval, the bytes for one scan, the days kept, and the rise rule.</p>`],
+    <p>A read-only line shows the limits: the scan interval, the bytes for one scan, the days kept, and the rise rule.</p>
+    <h3>Machine overload and idle waiting</h3><p>The chart shows, for each hour of the day in local time, the mean minutes per day of two conditions over the last 14 days. <b>Overload</b>: swap above 90% with at least 1 GB in use, or a 5-minute load above 3 times the cores. <b>Queue waited, CPU under 50%</b>: a suite request waited in the <code>full-suite</code> queue while the CPU was not the reason.</p>
+    <p>Hover, focus, or touch an hour to read its values. Hatched bars have fewer than 10 samples. A note shows when samples cover less than half of the window; a minute without a sample is missing data. The table under the chart has the same 24 rows. On a phone the chart scrolls sideways inside its own box.</p>`],
   logs: ['Logs', `
     <p>The top line tells whether Herdr Boss sends notices to orchestrators.</p>
     <p>Herdr Boss sends the <code>info</code> notices of a pane as one digest, at most once in 2 hours, and never while the pane works. <code>warn</code> and <code>critical</code> notices arrive at once.</p>
@@ -4564,6 +4627,7 @@ function render(force = false) {
 
 document.addEventListener('toggle', (e) => {
   if (e.target.matches?.('[data-quota-detail]')) quotaExpanded = e.target.open;
+  if (e.target.matches?.('[data-mh-detail]')) machineHoursOpen = e.target.open;
   if (e.target.matches?.('[data-machine-detail]')) machineExpanded = e.target.open;
   if (e.target.dataset?.browserManage) {
     if (e.target.open) browserManageOpen.add(e.target.dataset.browserManage);
@@ -5734,7 +5798,7 @@ function refreshForcesRender(pathname) {
 }
 
 async function refreshExtras() {
-  const results = await Promise.allSettled(['/api/models', '/api/usage', '/api/browser-sessions', '/api/handoffs', '/api/denials', '/api/mailbox?folder=needs-you', '/api/chats', '/api/settings/prices'].map((url) => fetch(url).then((r) => r.json())));
+  const results = await Promise.allSettled(['/api/models', '/api/usage', '/api/browser-sessions', '/api/handoffs', '/api/denials', '/api/mailbox?folder=needs-you', '/api/chats', '/api/settings/prices', '/api/machine-hours'].map((url) => fetch(url).then((r) => r.json())));
   if (results[0].status === 'fulfilled') models = results[0].value;
   if (results[1].status === 'fulfilled') usage = results[1].value;
   if (results[2].status === 'fulfilled') {
@@ -5749,6 +5813,7 @@ async function refreshExtras() {
   if (results[5].status === 'fulfilled') mailbox.updatesUnread = results[5].value.updatesUnread || 0;
   if (results[6].status === 'fulfilled' && Array.isArray(results[6].value)) { chat.list = chatSortList(results[6].value); chat.loaded = true; }
   if (results[7].status === 'fulfilled' && results[7].value?.prices) priceTable = results[7].value;
+  if (results[8].status === 'fulfilled' && results[8].value?.hours) machineHours = results[8].value;
   if (location.pathname === '/mailbox' && !mailbox.loading) await loadMailbox(true);
   if (refreshForcesRender(location.pathname)) lastRender = '';
   autoRender();

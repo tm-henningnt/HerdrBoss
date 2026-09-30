@@ -1632,3 +1632,24 @@ body.app-view textarea, body.app-view input { caret-color: var(--accent); }
 .chat-scroll > .chat-bubbles { width: 100%; margin: auto auto 0; }
 .chat-bubbles > .chat-report { border-left: 0; border-radius: 14px; background: var(--panel); box-shadow: inset 0 0 0 1px var(--line); padding: 8px 12px; }
 .mail-answer { border-left: 0; border-radius: 8px; box-shadow: inset 0 0 0 1px var(--line); }
+
+/* Analytics: machine overload by hour */
+.machine-hours-title { margin: 0 0 8px; }
+.mh-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 8px 0; color: var(--muted); font-size: 13px; }
+.mh-key { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; }
+.mh-key.overload, .mh-o-fill { background: var(--accent); fill: var(--accent); }
+.mh-key.idle, .mh-i-fill { background: var(--info); fill: var(--info); }
+.mh-scroll { position: relative; overflow-x: auto; max-width: 100%; }
+.mh-chart { display: block; width: 100%; max-width: 900px; height: auto; }
+.mh-grid { stroke: var(--line, currentColor); stroke-opacity: .35; stroke-width: 1; }
+.mh-tick { fill: var(--muted); font-size: 10px; }
+.mh-bar.overload { fill: var(--accent); }
+.mh-bar.idle { fill: var(--info); }
+.mh-bar.overload.low { fill: url(#mh-hatch-o); }
+.mh-bar.idle.low { fill: url(#mh-hatch-i); }
+.mh-hatch-line { stroke: var(--panel, #fff); }
+.mh-hit { fill: transparent; cursor: default; }
+.mh-hit:hover, .mh-hit:focus { fill: var(--text); fill-opacity: .07; outline: none; }
+.mh-tip { position: absolute; top: 0; padding: 4px 8px; border-radius: 6px; background: var(--panel-2, var(--panel)); border: 1px solid var(--line, currentColor); font-size: 12px; white-space: nowrap; pointer-events: none; z-index: 2; }
+.mh-details { margin-top: 10px; }
+@media (max-width: 760px) { .machine-hours-title, .mh-legend, .mh-details summary { font-size: 16px; } }
