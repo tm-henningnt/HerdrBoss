@@ -9,6 +9,7 @@ import { listProjects } from './projects.js';
 import { checkHarness, readProjectRepos } from './harness.js';
 import { loadModels, loadProjectConfig, KIT_ROOT, workerConfigView } from './kit/config.js';
 import { loadPolicy, clearExpiredOneOffGoals, deriveControl, migrateWorkspacePolicy, providerFor, selectModel, pickSuccessor, laneStatus, leastOverProvider, machineLimits, unmeteredLane, unavailablePiModels, mergeModels } from './control.js';
+import { scanSpend, SPEND_SCAN_INTERVAL_MS } from './spend.js';
 import { quotaUsageToday, recordQuotaSnapshot, readUsage } from './usage.js';
 import { renderNightReport } from './night-report.js';
 import { adhocOneLine, effectiveRoutines, routinePromptText, slotAfter, slotEnd } from './watch-routines.js';
@@ -440,6 +441,8 @@ export class Engine extends EventEmitter {
     this.cloneSweepRunning = false;
     this.denialScanAt = 0;
     this.denialScanRunning = false;
+    this.spendScanAt = 0;
+    this.spendScanRunning = false;
     this.harness = null;
     this.harnessAt = 0;
     this.headReads = new Set();
@@ -461,6 +464,8 @@ export class Engine extends EventEmitter {
       codeSignCloneDir,
       sweepCodeSignClones,
       runDenialScan,
+      // A test engine never reads the real harness logs unless a test injects a collector.
+      runSpendScan: process.env.NODE_TEST_CONTEXT ? async () => null : scanSpend,
       checkHarness,
       // A test engine does not run the real pi unless a test injects a collector.
       collectPiModels: process.env.NODE_TEST_CONTEXT ? async () => null : collectPiModels,
@@ -799,6 +804,7 @@ export class Engine extends EventEmitter {
       if (this.act) await this.reap(browsers);
       if (this.act) this.sweepClones(now);
       if (this.act) this.scanDenials(now);
+      if (this.act) this.scanSpend(now, herdr);
       // A prepared successor waits idle by design, so the idle-worker rule skips it.
       try { snap.standbyPanes = listHandoffs().filter((h) => ['preparing', 'prepared', 'needs-inspection'].includes(h.status)).map((h) => h.newPane); }
       catch { snap.standbyPanes = []; }
@@ -1179,6 +1185,17 @@ export class Engine extends EventEmitter {
       this.memory.denialScan = result.state;
     })().catch((error) => this.log('denials', `Denial log scan failed (${error.code || 'error'}).`))
       .finally(() => { this.denialScanRunning = false; });
+  }
+
+  // The spend scan runs beside the tick. It reads token counts from the session logs, never text.
+  scanSpend(now, herdr) {
+    if (this.spendScanRunning || now - this.spendScanAt < SPEND_SCAN_INTERVAL_MS) return null;
+    this.spendScanAt = now;
+    this.spendScanRunning = true;
+    return (async () => {
+      await this.collectors.runSpendScan({ panes: herdr?.panes || [], now });
+    })().catch((error) => this.log('spend', `Spend log scan failed (${error.code || 'error'}).`))
+      .finally(() => { this.spendScanRunning = false; });
   }
 
   async autoHandover(control, herdr, policy, now, lanes = {}, projects = []) {

@@ -94,6 +94,7 @@ const USAGE = `herdr-boss <command>
   policy show|set FILE  Show or replace the local resource policy.
   usage record FILE     Add measured or unmeasured project usage.
   usage summary         Summarize project and provider usage.
+  spend [--days N] [--json]  Print the token use and estimated cost per day and role for all harnesses.
   store import|export messages  Import or export messages through SQLite.
   browser request SLUG [--reserve] [--headless|--visible]  Reserve or launch a persistent project browser.
   browser size SLUG WIDTH HEIGHT  Save window size for the next browser launch.
@@ -363,6 +364,19 @@ async function main() {
       if (choice) (await import('./watch-routines.js')).rememberChoice(choice);
       console.log(`On watch ${watchUntilPhrase(record)}.`);
       if (warning) console.log(`Warning: ${warning}`);
+      break;
+    }
+    case 'spend': {
+      const { spendSummary, formatSpend, clampSpendDays, SPEND_DEFAULT_DAYS } = await import('./spend.js');
+      let days = SPEND_DEFAULT_DAYS;
+      let json = false;
+      for (let i = 0; i < args.length; i += 1) {
+        if (args[i] === '--json') json = true;
+        else if (args[i] === '--days' && /^\d+$/.test(args[i + 1] || '')) days = clampSpendDays(args[++i]);
+        else throw new Error('Usage: spend [--days N] [--json]');
+      }
+      const summary = spendSummary({ days });
+      console.log(json ? JSON.stringify(summary, null, 2) : formatSpend(summary));
       break;
     }
     case 'usage': {

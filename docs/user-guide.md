@@ -410,6 +410,26 @@ Set `imageBudget` in `.herdr-boss.json` to a positive integer to set the project
 
 The Analytics page shows a **Model scorecard** table with one row for each harness and model over the last 30 days. Each row shows the runs, the first-time, rework, and failed counts, the rework rate (rework plus failed, divided by the runs), and the median run duration. The table sorts by runs. The orchestrator records the model outcome at review time with `worker collect --record --model-result first-time|rework|failed` and, for rework or failure, `--model-reason TEXT`. The orchestrator's values win over the report's `modelOutcome`. When neither is given, the result is derived: `failed` when `--outcome failed` or `--gate-failed`, `rework` when `--rework` is more than 0, otherwise `first-time`.
 
+### Token use and spend by role
+
+The service reads the session logs of Claude Code, Codex, Pi, and OpenCode every 5 minutes. It keeps one number for each day: the token use, split by role and by harness. A day is the local calendar day of the machine, the same day as on the machine hours. The roles are `boss`, `orchestrator`, `worker`, and `other`. Read the numbers with `herdr-boss spend [--days N]` or `GET /api/spend?days=N`. The Analytics page does not show them yet.
+
+The service reads only counts: input, output, cache read, and cache write tokens, and the model name. It never reads or keeps message text or commands. The saved scan state keeps only the role, the worker and project names for matching, and one-way hashes of the folder and the session ID. It keeps no path and no raw session ID. The token total of a day is input plus output plus cache read plus cache write. A Codex input count that includes cached input is split, so the cached tokens count once.
+
+The service finds the role of a session in this order:
+
+1. The session ID of a live pane. The pane label `boss` gives `boss`. An orchestrator pane gives `orchestrator`. Any other agent pane gives `worker`.
+2. The working folder inside the worker worktree folder, or inside a `<repo>-wt-<name>` folder. It gives `worker`.
+3. A working folder that only Boss panes, or only orchestrator panes, used. It gives that role.
+4. The working folder of a registered project repository. It gives `orchestrator`.
+5. Otherwise the role is `other`.
+
+The estimated cost uses two sources. Pi and OpenCode log a cost for each message, and Herdr Boss keeps that cost. Claude and Codex logs hold no cost, so Herdr Boss multiplies the tokens by the price of the model. The price table is `src/spend-prices.json`, in USD per million tokens. It holds only the prices that `kit/models.md` documents, which are the Codex prices. A model without a price is `unpriced`. The summary shows its tokens as `unpriced` and leaves them out of the cost. Add a price to `src/spend-prices.json` to price a model. The next summary prices the stored history again.
+
+A scan reads at most 16 MB of new log bytes, one chunk at a time, and lets the service work between chunks. The saved byte offset of each file lets the next scan continue. A log file older than 35 days is read only when the scan state already knows it, so a resumed old file continues from its offset. A Claude message that the transcript repeats counts once, by message ID and request ID, over the last 128 messages of a file. A line longer than 4 MB is skipped. A broken line is counted and skipped. A file that shrinks is read again from the start. If a harness log has lines but none holds usage counts, the harness status is `unavailable`, and Herdr Boss does not guess. OpenCode counts come from the token columns of its database. Claude subagent transcripts in the `subagents` folders are not read.
+
+A worker run record in `usage.jsonl` has null token fields until a log matches it. The scan matches a record to one worker log by harness, project, worker name, and start time. It takes the log whose first message is closest to the run start, and it never gives one log to two records. It then fills `inputTokens` (input plus cache write), `outputTokens`, `cachedTokens` (cache read), and `cost`, and sets `tokenSource` to `measured`. `cost` stays null when a model has no price. A record with no matching log 24 hours after the run ends gets `tokenSource` `unavailable`. The model scorecard and `usage summary` use the filled values.
+
 Set `artifactChecks` in `.herdr-boss.json` to check generated files during worker collection. Each rule has an `artifacts` glob and a `sources` glob. For example, use `docs/gallery/**/*.png` for artifacts and `extensions/**/src/**` for sources. The patterns are repository-relative POSIX paths. `*` matches within one path segment. `**` matches zero or more path segments. Herdr Boss rejects absolute paths, parent traversal, backslashes, empty patterns, and malformed rules.
 
 Use the workspace switches above the project shares to include or exclude a live workspace. An excluded workspace stays visible on Agents with the marker **Not a project**. It does not appear on Projects or Overview. It has no project share or worker slots. Herdr Boss stores excluded workspace labels. It resolves a saved Herdr ID to its current label when possible. A workspace with a pane labelled `boss` is excluded automatically while that pane is present. Herdr Boss removes the legacy `policy.projects.boss` entry and redistributes other project shares in the same proportions.
@@ -1247,6 +1267,7 @@ The dashboard uses these routes. A request from another host needs the access to
 | `GET /api/models` | The model allow-list. |
 | `GET`, `POST /api/usage` | Read usage, or record an event. |
 | `GET /api/machine-hours?days=N` | The machine samples of the last N days (1 to 14, default 14) by local hour of day: overload minutes, idle-wait minutes, swap peak, lowest free memory, holder kinds, and coverage. |
+| `GET /api/spend?days=N` | The token use and estimated cost per day, role, and harness for the last N days (1 to 90, default 7), the harness log status, and the unread log bytes. |
 | `GET /api/denials` | The denial counts of the last 7 days by harness, model, and cause, the harness totals, and the trend of each cause. |
 | `GET /api/projects`, `PUT`, `DELETE /api/projects/SLUG` | Read, write, or delete project status. |
 | `GET /api/handoffs`, `GET /api/handoffs/output?id=ID` | Handover records, and a successor's pane output. |

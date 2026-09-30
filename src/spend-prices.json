@@ -1,0 +1,9 @@
+{
+  "unit": "USD per million tokens",
+  "source": "kit/models.md, Codex prices. A model with no entry is unpriced. Pi and OpenCode log their own cost.",
+  "models": {
+    "codex/gpt-6-astra": { "input": 10, "output": 50, "cacheRead": 1 },
+    "codex/gpt-6.1-sol": { "input": 2, "output": 10, "cacheRead": 0.10 },
+    "codex/gpt-6-luna": { "input": 0.10, "output": 0.50, "cacheRead": 0.01 }
+  }
+}

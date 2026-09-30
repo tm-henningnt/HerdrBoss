@@ -12,6 +12,7 @@ import { writeProject, listProjects } from './projects.js';
 import { loadModels } from './kit/config.js';
 import { loadPolicy, savePolicy } from './control.js';
 import { recordUsage, usageSummary } from './usage.js';
+import { spendSummary, clampSpendDays } from './spend.js';
 import { readDenials, denialSummary } from './denials.js';
 import { summarizeHours } from './machine-samples.js';
 import { buildWatchRecord, clearNight, readNight, writeNight } from './night.js';
@@ -461,6 +462,7 @@ export function serve(cfg, { readOnlyPreview = false, createEngine = (config, op
       if (watchPath === '/api/watch' && req.method === 'GET') return send(res, 200, readNight({ dataDir: DATA_DIR }));
       if (p === '/api/denials' && req.method === 'GET') return send(res, 200, denialSummary(readDenials(DATA_DIR), Date.now(), { pendingBytes: engine.memory?.denialScan?.pendingBytes || 0 }));
       if (p === '/api/machine-hours' && req.method === 'GET') return send(res, 200, summarizeHours({ dataDir: DATA_DIR, days: url.searchParams.get('days') }));
+      if (p === '/api/spend' && req.method === 'GET') return send(res, 200, spendSummary({ dataDir: DATA_DIR, days: clampSpendDays(url.searchParams.get('days')) }));
       if (p === '/api/usage' && req.method === 'GET') return send(res, 200, usageSummary());
       if (p === '/api/usage' && req.method === 'POST') {
         const result = recordUsage(await jsonBody(req));
