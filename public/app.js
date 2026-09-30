@@ -6,6 +6,7 @@ import { groupMailRows, inboxSections, listTime, mailRowHtml } from './mail-rows
 import { chatJumpHtml, chatJumpButtonHtml, chatAtBottom, chatJumpScroll } from './chat-jump.js';
 import { mailBarItem, mailActionBarHtml, mailSelectionBarHtml } from './mail-bar.js';
 import { APP_VIEW_ROUTES, appViewport } from './app-view.js';
+import { createWizard } from './project-wizard-ui.js';
 import { stackedBars, lineChart, stripBars, heatGrid, outcomeBars, legendHtml, foldSeries, spendSeries, claudeSpend, quotaSeries, denialGrid, firstTimeRate, activityFilter, activityChoices, eventLevel, dayLabel, usd, minutes, compact, ACTIVITY_RANGES, ACTIVITY_LEVELS, SERIES_CLASSES } from './analytics.js';
 
 const $app = document.getElementById('app');
@@ -3857,12 +3858,81 @@ function projectsView(s, slug) {
   // A link to a published project opens it also when its workspace is closed, for example a link from the Board.
   const selected = slug && (projectSlugs(s).includes(slug) || (s.projects || []).some((p) => p.slug === slug)) ? slug : defaultProject(s);
   return [
-    '<header class="page-intro"><div><h1>Projects</h1><p>Select a project to inspect its status, work, agents, and orchestrator handover.</p></div></header>',
+    '<header class="page-intro"><div><h1>Projects</h1><p>Select a project to inspect its status, work, agents, and orchestrator handover.</p></div><button type="button" class="wizard-open" data-wizard-open aria-haspopup="dialog">New project</button></header>',
     allocationSummary(s),
     projectSelector(s, selected),
     selected ? `<div class="project-detail" id="project-detail">${project(s, selected)}</div>` : '',
   ].join('');
 }
+
+// ---------- New project wizard ----------
+// A dialog outside the page render, so a page render never touches the typed text. The state, the calls, and the polling are in
+// project-wizard-ui.js. Each render of the dialog goes through patchHtml, so a field keeps its focus and caret.
+// The dialog never creates a repository. A GitHub remote becomes a Mailbox decide item, and the dialog shows its state.
+
+const wizardCtl = createWizard({
+  view: {
+    patch: (html) => patchHtml(wizardDialog(), html),
+    focusFirst() {
+      const dialog = wizardDialog();
+      (dialog.querySelector('[data-wizard-first]') || dialog.querySelector('input:checked') || dialog.querySelector('[data-wizard-title]') || dialog.querySelector('input, select, textarea, button[data-wizard]'))?.focus();
+    },
+    isOpen: () => wizardDialog().open,
+    show: () => wizardDialog().showModal(),
+    hide: () => wizardDialog().close(),
+  },
+  fetchJson: async (method, url, body) => {
+    const response = await fetch(url, { method, headers: body === undefined ? {} : { 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
+    let json = null;
+    try { json = await response.json(); } catch { /* A non-JSON body has no sentence. */ }
+    return { status: response.status, json };
+  },
+  storage: localStorage,
+  setTimer: (fn, ms) => setTimeout(fn, ms),
+  clearTimer: (id) => clearTimeout(id),
+  confirmClose: () => browserConfirm('Close the New project form? Your entries stay saved in this browser.', 'Close form', 'Confirm close of the New project form'),
+});
+
+function wizardDialog() {
+  let dialog = document.getElementById('wizard-panel');
+  if (dialog) return dialog;
+  dialog = document.createElement('dialog');
+  dialog.id = 'wizard-panel';
+  dialog.className = 'wizard-panel';
+  dialog.setAttribute('aria-labelledby', 'wizard-title');
+  document.body.append(dialog);
+  dialog.addEventListener('cancel', (e) => { e.preventDefault(); wizardCtl.close(); });
+  dialog.addEventListener('close', () => wizardCtl.stopPolling());
+  dialog.addEventListener('submit', (e) => { e.preventDefault(); wizardCtl.next(); });
+  dialog.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && e.target.tagName === 'TEXTAREA') { e.preventDefault(); wizardCtl.next(); }
+  });
+  dialog.addEventListener('input', (e) => {
+    const { readOnly, run } = wizardCtl.state;
+    if (readOnly || run) return;
+    wizardCtl.read(e.target);
+    if (e.target.id === 'wiz-goal') {
+      const hint = dialog.querySelector('#wiz-goal-hint');
+      if (hint) hint.textContent = hint.textContent.replace(/\d+ used\./, `${e.target.value.length} used.`);
+    }
+  });
+  dialog.addEventListener('change', (e) => {
+    const { readOnly, run } = wizardCtl.state;
+    if (readOnly || run) return;
+    wizardCtl.read(e.target);
+    if (e.target.type === 'radio' || e.target.tagName === 'SELECT') wizardCtl.render();
+  });
+  dialog.addEventListener('click', (e) => {
+    const action = e.target.closest('[data-wizard]')?.dataset.wizard;
+    const run = { close: 'close', back: 'back', plan: 'plan', create: 'create', resume: 'resume', check: 'check', discard: 'discard' }[action];
+    if (run) wizardCtl[run]();
+  });
+  return dialog;
+}
+
+document.addEventListener('click', (e) => {
+  if (e.target.closest('[data-wizard-open]')) wizardCtl.open();
+});
 
 // ---------- Board page: one kanban across all projects ----------
 // The page uses the task model of the project board (board.js). The filters, the grouping, and the closed swimlanes are remembered
@@ -4979,6 +5049,7 @@ const HELP = {
     <p>Select a project card. The detail below it shows what the orchestrator published and what runs now.</p>
     <p>The page puts the sections in the order of use: <b>Now</b>, then the plan and progress, then history (all work, notes, and links), then <b>Details</b>.</p>
     <h3>Now</h3><p>The orchestrator line shows the harness, the pane, and the state of the orchestrator. Select it to open the handover form. A needed or prepared handover shows the full continuity section in its place. The cards below show the decisions that wait for you, the status issues, the running workers with their state and task, the work that waits to merge, and the next task. A card without content does not show. Select a task in a card to select it on the board.</p>
+    <h3>New project</h3><p>Select <b>New project</b> to build a project. The form has five steps: name, folder, remote, orchestrator, and review. The folder is a group folder or an exact path. There is no default folder. The remote is a new GitHub repository (private by default), no remote, or an existing URL. A new GitHub repository is never created at once: Herdr Boss posts a decision to the Mailbox and waits for your answer. The orchestrator step sets the kind, the goal, and the tick box <b>Start the orchestrator</b>, which is on by default. The review step shows what the run will do. <b>Create project</b> starts the run. The progress view shows each step and updates every 2 seconds. When the run waits for your decision, open the Mailbox item, answer it, then select <b>Resume</b>. <b>Check</b> reads the finished project. The form saves your entries in this browser, but not the repository URL. The read-only preview does not allow a new project.</p>
     <h3>Details</h3><p>The last section holds closed cards: <b>Files and kit</b>, <b>Worker config</b>, <b>Agents and panes</b>, and <b>Browser and leases</b>. Each header shows a short summary. The browser remembers the open or closed state of each card for each project.</p>
     <p><b>Current Owner goal</b> shows the durable direction set by the Owner. Keep it in every status publication until the Owner changes or clears it.</p>
     <p>The bar above the cards shows the applied share and the effective slots of each project, in card order. Its colors match the top edge of each card. An idle project is faded. A paused project is faded and striped.</p>
@@ -5938,11 +6009,11 @@ async function postBrowserAction(url, body) {
 }
 
 // A dialog, not window.confirm, so the confirmation is part of the page and shows on every screen.
-function browserConfirm(question, action = 'Close tab') {
+function browserConfirm(question, action = 'Close tab', label = 'Confirm tab close') {
   return new Promise((resolve) => {
     const dialog = document.createElement('dialog');
     dialog.className = 'browser-confirm';
-    dialog.setAttribute('aria-label', 'Confirm tab close');
+    dialog.setAttribute('aria-label', label);
     dialog.innerHTML = '<p class="browser-confirm-text"></p><div class="browser-confirm-actions"><button type="button" class="quiet" data-browser-confirm="no">Cancel</button><button type="button" data-browser-confirm="yes" class="danger"></button></div>';
     dialog.querySelector('.browser-confirm-text').textContent = question;
     dialog.querySelector('[data-browser-confirm="yes"]').textContent = action;
