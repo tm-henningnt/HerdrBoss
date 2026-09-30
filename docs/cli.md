@@ -46,7 +46,7 @@ When `NODE_TEST_CONTEXT` is set, or the data directory differs from the configur
 | `herdr-boss policy set FILE` | Validate and replace the policy. The service applies it on the next tick. |
 | `herdr-boss usage record FILE` | Add one measured or unmeasured usage event. |
 | `herdr-boss usage summary` | Usage per project and provider. |
-| `herdr-boss spend [--days N] [--json]` | Token use and estimated cost for the last N days (1 to 90, default 7). It prints one line for each day and role, then one total line for each day. `unpriced` marks tokens of a model without a price. `--json` prints the full summary, with the harness split. The service updates the numbers every 5 minutes. |
+| `herdr-boss spend [--days N] [--json]` | Token use and cost for the last N days (1 to 90, default 7). It prints one line for each day and role, then one total line for each day. The cost is in USD and carries the label `API-price equivalent`: the Owner is on a subscription and is not billed per token. `unpriced` marks tokens of a model without a price. A last line lists models with `unconfirmed` price figures. `--json` prints the full summary, with the harness split, `costLabel`, and `unconfirmedPrices`. The service updates the numbers every 5 minutes. |
 
 ## Project status
 

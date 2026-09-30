@@ -1,9 +1,15 @@
 {
   "unit": "USD per million tokens",
-  "source": "kit/models.md, Codex prices. A model with no entry is unpriced. Pi and OpenCode log their own cost.",
+  "source": "kit/models.md, Codex prices. Claude prices carry their own source and date. A model with no entry is unpriced. Pi and OpenCode log their own cost.",
   "models": {
     "codex/gpt-6-astra": { "input": 10, "output": 50, "cacheRead": 1 },
     "codex/gpt-6.1-sol": { "input": 2, "output": 10, "cacheRead": 0.10 },
-    "codex/gpt-6-luna": { "input": 0.10, "output": 0.50, "cacheRead": 0.01 }
+    "codex/gpt-6-luna": { "input": 0.10, "output": 0.50, "cacheRead": 0.01 },
+    "claude/claude-opus-5-5": { "input": 4, "output": 20, "cacheRead": 0.20, "cacheWrite": 5, "cacheWrite1h": 8, "unconfirmed": ["cacheRead", "cacheWrite", "cacheWrite1h"], "source": "Anthropic API pricing, from the claude-api skill. The cache read of 0.20 conflicts with 0.1 times the input (0.40).", "date": "2026-09-25" },
+    "claude/claude-sonnet-5-5": { "input": 2, "output": 10, "cacheRead": 0.20, "cacheWrite": 2.5, "cacheWrite1h": 4, "source": "Anthropic API pricing, from the claude-api skill.", "date": "2026-09-25" },
+    "claude/claude-haiku-4-5": { "input": 1, "output": 5, "cacheRead": 0.10, "cacheWrite": 1.25, "cacheWrite1h": 2, "source": "Anthropic API pricing, from the claude-api skill.", "date": "2026-09-25" },
+    "claude/claude-fable-5-1": { "input": 10, "output": 50, "cacheRead": 0.25, "cacheWrite": 12.5, "cacheWrite1h": 20, "unconfirmed": ["cacheRead"], "source": "Anthropic API pricing, from the claude-api skill. The cache read of 0.25 is 0.025 times the input price, not 0.1 times (1.00).", "date": "2026-09-25" },
+    "claude/claude-opus-5": { "input": 5, "output": 25, "cacheRead": 0.50, "cacheWrite": 6.25, "cacheWrite1h": 10, "removed": true, "source": "Anthropic API pricing, from the claude-api skill. The model is removed.", "date": "2026-09-25" },
+    "claude/claude-sonnet-5": { "input": 2, "output": 10, "cacheRead": 0.20, "cacheWrite": 2.5, "cacheWrite1h": 4, "removed": true, "source": "Anthropic API pricing, from the claude-api skill. The model is removed.", "date": "2026-09-25" }
   }
 }

@@ -26,6 +26,8 @@ const DAY_MS = 86400 * 1000;
 export const ROLES = ['boss', 'orchestrator', 'worker', 'other'];
 export const HARNESSES = ['claude', 'codex', 'pi', 'opencode'];
 const FIELDS = ['input', 'output', 'cacheRead', 'cacheWrite'];
+// cacheWrite1h is the part of cacheWrite that the 1 hour cache holds. It is not a token total of its own.
+const STORED = [...FIELDS, 'cacheWrite1h'];
 // The recent Claude message IDs that one log file keeps, as hashes.
 const SEEN_LIMIT = 128;
 
@@ -82,10 +84,16 @@ export function parseClaudeLine(line, ctx = {}) {
   if (typeof row.sessionId === 'string' && !ctx.sessionId) ctx.sessionId = row.sessionId;
   const usage = row.message?.usage;
   if (row.type !== 'assistant' || !isObject(usage)) return { skip: true };
+  // cache_creation splits the cache write into the 5 minute and the 1 hour part. Without it, all of it is 5 minute.
+  const split = isObject(usage.cache_creation) ? usage.cache_creation : null;
+  const write5m = count(split?.ephemeral_5m_input_tokens);
+  const write1h = count(split?.ephemeral_1h_input_tokens);
+  const cacheWrite = count(usage.cache_creation_input_tokens) || write5m + write1h;
   const now = {
     input: count(usage.input_tokens), output: count(usage.output_tokens),
-    cacheRead: count(usage.cache_read_input_tokens), cacheWrite: count(usage.cache_creation_input_tokens),
+    cacheRead: count(usage.cache_read_input_tokens), cacheWrite,
   };
+  if (Math.min(write1h, cacheWrite) > 0) now.cacheWrite1h = Math.min(write1h, cacheWrite);
   if (!totalTokens(now)) return { skip: true };
   // Dedupe by message ID and request ID over a bounded set of recent messages. The repeat adds only its growth.
   let delta = now;
@@ -97,10 +105,10 @@ export function parseClaudeLine(line, ctx = {}) {
     const before = seen.get(key);
     if (before) {
       repeat = true;
-      delta = Object.fromEntries(FIELDS.map((f, i) => [f, Math.max(0, now[f] - before[i])]));
+      delta = Object.fromEntries(STORED.map((f, i) => [f, Math.max(0, (now[f] || 0) - (before[i] || 0))]).filter(([f, n]) => n > 0 || FIELDS.includes(f)));
       seen.delete(key);
     }
-    seen.set(key, FIELDS.map((f, i) => Math.max(now[f], before?.[i] || 0)));
+    seen.set(key, STORED.map((f, i) => Math.max(now[f] || 0, before?.[i] || 0)));
     while (seen.size > SEEN_LIMIT) seen.delete(seen.keys().next().value);
   }
   if (!totalTokens(delta)) return { skip: true };
@@ -229,6 +237,19 @@ export function learnPanes(state, panes = []) {
   for (const [cwd, roles] of Object.entries(byCwd)) if (roles.size === 1) state.cwds[hash(path.resolve(cwd))] = [...roles][0];
 }
 
+const BOSS_NAMES = new Set(['boss', 'boss previous']);
+// A Boss record has the boss flag or the label `boss`, as handoff.js sets them. The project and display names are a second check.
+const isBossRecord = (item) => Boolean(item.boss) || [item.project, item.displayLabel, item.label].some((v) => BOSS_NAMES.has(String(v || '').toLowerCase()));
+
+// Learn the sessions of earlier Boss panes from the handover records. A Boss record names the session that
+// the Boss left (sessionId) and the session that took over (migratedId). The state keeps their hashes only.
+export function learnHandoffs(state, records = []) {
+  for (const item of Array.isArray(records) ? records : []) {
+    if (!isObject(item) || !isBossRecord(item)) continue;
+    for (const id of [item.sessionId, item.migratedId]) if (typeof id === 'string' && id) state.sessions[hash(id)] = 'boss';
+  }
+}
+
 // Return { role, project, worker } for a session. The project and worker names stay in the private state file.
 // The raw folder and session ID are used here only. The state file keeps their hashes.
 export function classify({ sessionId, cwd }, env) {
@@ -256,6 +277,7 @@ export function classify({ sessionId, cwd }, env) {
 
 function addUsage(target, usage, logCost = null) {
   for (const f of FIELDS) target[f] = (target[f] || 0) + (usage[f] || 0);
+  if (usage.cacheWrite1h) target.cacheWrite1h = (target.cacheWrite1h || 0) + usage.cacheWrite1h;
   if (logCost != null) {
     target.logCost = (target.logCost || 0) + logCost;
     target.costTokens = (target.costTokens || 0) + totalTokens(usage);
@@ -403,11 +425,13 @@ const yieldTurn = () => new Promise((resolve) => setImmediate(resolve));
 // Read the next lines of the log files within the byte budget. Returns the bytes read and the bytes still unread.
 export async function scanSpend({
   dataDir = DATA_DIR, home = os.homedir(), now = Date.now(), panes = [], repos = readProjectRepos(dataDir),
+  handoffs = readJson(path.join(dataDir, 'handoffs.json'), []),
   worktreeRoot = sharedWorktreeRoot(home), budgetBytes = SPEND_BUDGET_BYTES,
   maxLineBytes = SPEND_MAX_LINE_BYTES, chunkBytes = SPEND_CHUNK_BYTES, fillUsage = true, usageFile = path.join(dataDir, 'usage.jsonl'),
 } = {}) {
   const state = loadState(dataDir);
   const daily = loadDaily(dataDir);
+  learnHandoffs(state, handoffs);
   learnPanes(state, panes);
   const env = {
     sessions: state.sessions, cwds: state.cwds, repos, worktreeRoot,
@@ -490,7 +514,7 @@ export async function scanSpend({
   if (fillUsage) {
     const aliases = {};
     for (const { slug, repo } of repos) (aliases[slug] ||= []).push(path.basename(repo).toLowerCase());
-    fillMeasuredUsage({ file: usageFile, runs: measuredRuns(state), now, priceOf: priceFor(loadPrices()), aliases });
+    fillMeasuredUsage({ file: usageFile, runs: measuredRuns(state), now, priceOf: priceFor(loadPrices(dataDir)), aliases });
   }
   return { bytes, pendingBytes, harnesses };
 }
@@ -515,9 +539,71 @@ export function measuredRuns(state) {
 
 // ---- Prices and summary ----
 
-// Prices are in USD per million tokens, from src/spend-prices.json.
-export function loadPrices() {
+// Prices are in USD per million tokens, from src/spend-prices.json. The Owner can override single figures in
+// spend-prices.override.json in the data directory. The Claude figures are the API list prices, so the USD is an
+// API-price equivalent: a subscription does not bill per token.
+export const COST_LABEL = 'API-price equivalent';
+export const PRICE_FIELDS = ['input', 'output', 'cacheRead', 'cacheWrite', 'cacheWrite1h'];
+export const PRICE_MAX = 1000;
+const overrideFile = (dir) => path.join(dir, 'spend-prices.override.json');
+const validPrice = (n) => typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= PRICE_MAX;
+
+export function defaultPrices() {
   return readJson(new URL('./spend-prices.json', import.meta.url), {}).models || {};
+}
+
+// Check an override body: { models: { "<harness>/<model>": { <price field>: number } } }.
+// A model must be in the default table, a field must be a price field, and a number must be 0 to 1000.
+export function validatePriceOverrides(body, known = defaultPrices()) {
+  const errors = [];
+  if (!isObject(body)) return { errors: ['The prices must be an object.'], overrides: null };
+  for (const key of Object.keys(body)) if (key !== 'models') errors.push(`Unknown key: ${key}.`);
+  if (!isObject(body.models)) return { errors: [...errors, 'models must be an object.'], overrides: null };
+  const models = {};
+  for (const [name, fields] of Object.entries(body.models)) {
+    if (!Object.hasOwn(known, name)) { errors.push(`Unknown model: ${name}.`); continue; }
+    if (!isObject(fields)) { errors.push(`${name} must be an object.`); continue; }
+    const clean = {};
+    for (const [field, value] of Object.entries(fields)) {
+      if (!PRICE_FIELDS.includes(field)) errors.push(`${name}: unknown price field ${field}.`);
+      else if (!validPrice(value)) errors.push(`${name}: ${field} must be a number from 0 to ${PRICE_MAX}.`);
+      else clean[field] = value;
+    }
+    if (Object.keys(clean).length) models[name] = clean;
+  }
+  return { errors, overrides: errors.length ? null : { models } };
+}
+
+export function readPriceOverrides(dataDir = DATA_DIR) {
+  const known = defaultPrices();
+  const file = readJson(overrideFile(dataDir), null);
+  const models = {};
+  // A hand-edited file can hold a bad entry. Each entry is checked alone, and a bad one is skipped.
+  for (const [name, fields] of Object.entries(isObject(file?.models) ? file.models : {})) {
+    const one = validatePriceOverrides({ models: { [name]: fields } }, known);
+    if (one.overrides?.models[name]) models[name] = one.overrides.models[name];
+  }
+  return { models };
+}
+
+// Replace the override file. An empty models object removes it. A bad body throws and writes nothing.
+export function writePriceOverrides(body, { dataDir = DATA_DIR } = {}) {
+  const { errors, overrides } = validatePriceOverrides(body);
+  if (errors.length) throw new Error(errors.join(' '));
+  if (Object.keys(overrides.models).length) writeJson(overrideFile(dataDir), overrides);
+  else fs.rmSync(overrideFile(dataDir), { force: true });
+  return overrides;
+}
+
+// The default table with the override applied. An overridden figure is no longer unconfirmed.
+export function loadPrices(dataDir = DATA_DIR) {
+  const prices = defaultPrices();
+  for (const [name, fields] of Object.entries(readPriceOverrides(dataDir).models)) {
+    const unconfirmed = (prices[name].unconfirmed || []).filter((f) => !(f in fields));
+    prices[name] = { ...prices[name], ...fields, ...(unconfirmed.length ? { unconfirmed } : {}) };
+    if (!unconfirmed.length) delete prices[name].unconfirmed;
+  }
+  return prices;
 }
 export function priceFor(prices) {
   return (harness, model) => {
@@ -525,11 +611,16 @@ export function priceFor(prices) {
     return isObject(p) && Number.isFinite(p.input) && Number.isFinite(p.output) ? p : null;
   };
 }
+// A cache write is 5 minute unless the usage names the 1 hour part. A missing cache price falls back:
+// the cache read to the input price, the 1 hour write to the 5 minute write, and the 5 minute write to the input price.
 export function estimateCost(usage, price) {
   if (!price) return null;
   const cacheRead = Number.isFinite(price.cacheRead) ? price.cacheRead : price.input;
   const cacheWrite = Number.isFinite(price.cacheWrite) ? price.cacheWrite : price.input;
-  return (usage.input * price.input + usage.output * price.output + usage.cacheRead * cacheRead + usage.cacheWrite * cacheWrite) / 1e6;
+  const cacheWrite1h = Number.isFinite(price.cacheWrite1h) ? price.cacheWrite1h : cacheWrite;
+  const write1h = Math.min(usage.cacheWrite1h || 0, usage.cacheWrite || 0);
+  const write5m = (usage.cacheWrite || 0) - write1h;
+  return (usage.input * price.input + usage.output * price.output + usage.cacheRead * cacheRead + write5m * cacheWrite + write1h * cacheWrite1h) / 1e6;
 }
 // The cost of one usage row: the cost that the harness logged, plus the price-table estimate of the rest.
 // Tokens without either are unpriced.
@@ -566,7 +657,7 @@ export function clampSpendDays(days) {
 }
 
 // The daily summary for the last N days. No path, project, worker, or session appears in it.
-export function spendSummary({ dataDir = DATA_DIR, days = SPEND_DEFAULT_DAYS, now = Date.now(), prices = loadPrices() } = {}) {
+export function spendSummary({ dataDir = DATA_DIR, days = SPEND_DEFAULT_DAYS, now = Date.now(), prices = loadPrices(dataDir) } = {}) {
   const daily = loadDaily(dataDir);
   const state = loadState(dataDir);
   const priceOf = priceFor(prices);
@@ -574,6 +665,7 @@ export function spendSummary({ dataDir = DATA_DIR, days = SPEND_DEFAULT_DAYS, no
   const merge = (day, key, entry) => {
     const bucket = ((merged[day] ||= {})[key] ||= emptyUsage());
     for (const f of FIELDS) bucket[f] += entry[f] || 0;
+    if (entry.cacheWrite1h) bucket.cacheWrite1h = (bucket.cacheWrite1h || 0) + entry.cacheWrite1h;
     if (entry.logCost != null) {
       bucket.logCost = (bucket.logCost || 0) + entry.logCost;
       bucket.costTokens = (bucket.costTokens || 0) + (entry.costTokens || 0);
@@ -585,12 +677,14 @@ export function spendSummary({ dataDir = DATA_DIR, days = SPEND_DEFAULT_DAYS, no
   }
   const oldest = dayOf(now - (Math.max(1, days) - 1) * DAY_MS);
   const result = [];
+  const unconfirmed = new Set();
   for (const day of Object.keys(merged).filter((d) => d >= oldest).sort().reverse()) {
     const total = blank();
     const roles = {};
     for (const [key, entry] of Object.entries(merged[day])) {
       const [role, harness, model] = key.split('|');
       const cost = costOf(entry, harness, model, priceOf);
+      if (cost.costUsd > 0 && priceOf(harness, model)?.unconfirmed?.length) unconfirmed.add(`${harness}/${model}`);
       fold(total, entry, cost);
       const row = roles[role] ||= { role, ...blank(), harnesses: {} };
       fold(row, entry, cost);
@@ -603,6 +697,9 @@ export function spendSummary({ dataDir = DATA_DIR, days = SPEND_DEFAULT_DAYS, no
     });
   }
   return {
+    currency: 'USD',
+    costLabel: COST_LABEL,
+    unconfirmedPrices: [...unconfirmed].sort(),
     updatedAt: daily.updatedAt || null,
     pendingBytes: daily.pendingBytes || 0,
     harnesses: Object.fromEntries(HARNESSES.map((h) => [h, { status: state.harnesses[h]?.status || 'none' }])),
@@ -614,7 +711,7 @@ export function spendSummary({ dataDir = DATA_DIR, days = SPEND_DEFAULT_DAYS, no
 export function formatSpend(summary) {
   const short = (n) => (n >= 1e9 ? `${(n / 1e9).toFixed(2)}G` : n >= 1e6 ? `${(n / 1e6).toFixed(2)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}K` : String(n));
   const cost = (row) => {
-    const usd = `${row.costUsd.toFixed(2)} USD`;
+    const usd = `${row.costUsd.toFixed(2)} USD ${COST_LABEL}`;
     if (!row.unpricedTokens) return usd;
     return row.costUsd > 0 ? `${usd} + ${short(row.unpricedTokens)} tokens unpriced` : `unpriced (${short(row.unpricedTokens)} tokens)`;
   };
@@ -624,6 +721,7 @@ export function formatSpend(summary) {
     lines.push(`${day.day}  ${'total'.padEnd(12)} ${short(day.total.tokens).padStart(8)} tokens  ${cost(day.total)}`);
   }
   if (!lines.length) lines.push('No spend recorded yet. The service reads the session logs every 5 minutes.');
+  if (summary.unconfirmedPrices?.length) lines.push(`Unconfirmed prices: ${summary.unconfirmedPrices.join(', ')}.`);
   const bad = Object.entries(summary.harnesses).filter(([, h]) => h.status === 'unavailable').map(([name]) => name);
   if (bad.length) lines.push(`Unavailable logs: ${bad.join(', ')}.`);
   return lines.join('\n');
