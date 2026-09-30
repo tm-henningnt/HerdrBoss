@@ -514,6 +514,15 @@ When an orchestrator's quota comes near its reserve, Herdr Boss recommends a suc
 
 Activation checks that the successor agent is settled and ready. The handoff record keeps the activation time, the source pane ID, and the successor pane ID.
 
+Herdr Boss activates a prepared automatic successor when all of these are true:
+
+- The source orchestrator pane is `idle` or `done`. A running worker does not block activation. It keeps the project active.
+- The successor pane is `idle` or `done`.
+- The project is not held or stood down, and the pane is not the Boss pane.
+- The successor model is not weaker than the source model.
+
+An orchestrator that finished its turn and waits at a gate is `idle` or `done`, so it can hand over. A prepared successor from the context trigger does not expire for 24 hours. Other automatic successors expire after 2 hours. While a prepared successor waits, the Overview shows `handover waits:` and the reason. The engine state gives the same reason in `handoverWaits`, by handoff ID.
+
 After activation, Herdr Boss finishes the handover. It waits until the successor answers the activation prompt, or until 15 minutes pass with the old pane idle. It then closes the old pane and renames the successor tab from `Orchestrator Next` to `Orchestrator`. It never closes the old pane while that pane works, is blocked, or was settled for less than 60 seconds, or while the project has a running worker. The Owner closes the old Boss pane by hand; this early close applies only to project orchestrators. It retries on each tick, and it sends one line to the Boss when the old pane is still busy after 60 minutes. The Overview shows `closing old orchestrator at HH:MM` on the new orchestrator until the pane is closed. Herdr Boss also closes the tab of a successor that expired or was replaced without activation.
 
 Activation labels the old pane as previous. If the early close did not run, Herdr Boss closes that pane after 120 minutes from activation when the handoff, the previous-role label, and the successor-role label are still confirmed. A newer handover does not cancel this retirement. Herdr Boss marks the older handover as superseded when the new handover starts from its successor pane and has the same role. The engine also marks older records on each active tick. It follows a chain of superseded records to the current successor before it closes a pane. Unavailable pane data defers retirement until a later tick. The current successor gets one notice after retirement.

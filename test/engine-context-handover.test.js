@@ -70,7 +70,7 @@ for (const [index, step] of input.steps.entries()) {
   }
   await engine.tick();
 }
-console.log(JSON.stringify({ calls, herdrCalls, events: engine.events, memory: engine.memory }));
+console.log(JSON.stringify({ calls, herdrCalls, events: engine.events, memory: engine.memory, handoverWaits: engine.state?.handoverWaits }));
 `;
 
 function transcript(home, cwd, sessionId, lines) {
@@ -313,6 +313,63 @@ test('a ready context successor is not activated for a held project or a weaker 
   assert.deepEqual(activates(held), [], 'held');
   const weaker = run(t, { tokens: 400000, model: 'claude-opus-5-5', memory, handoffs: [readyRecord()], steps: [{ at: at(1), herdr: herdrOf(pane('idle'), worker, successor), published: { alpha: status(1) } }] });
   assert.deepEqual(activates(weaker), [], 'weaker');
+});
+
+// The source orchestrator finished its turn and waits at a gate for hours while a worker runs.
+const gateSteps = (sourceStatus, published = status(1)) => [
+  { at: at(1), herdr: herdrOf(pane(sourceStatus), worker, successor), published: { alpha: published } },
+  { at: '2026-09-29T15:30:00.000Z', herdr: herdrOf(pane(sourceStatus), worker, successor), published: { alpha: published } },
+];
+const oldRecord = () => readyRecord({ preparedAt: '2026-09-29T11:00:00.000Z' });
+
+test('a ready context successor activates when the source pane is done and waits at a gate', { timeout: 30000 }, (t) => {
+  const out = run(t, {
+    tokens: 400000, memory: { contextHandovers: { 'ctx-1': { pane: 'w-alpha:p1', at: 1 } } }, handoffs: [oldRecord()],
+    steps: gateSteps('done', status(1, { summary: 'Waiting on the Owner for a decision.', tasks: [{ id: 'T2', title: 'Two', status: 'blocked', waitingOn: 'owner', ask: 'Approve the plan' }] })),
+  });
+  assert.equal(activates(out)[0]?.step, 0);
+});
+
+test('a context successor does not expire after two hours while the source waits', { timeout: 30000 }, (t) => {
+  const out = run(t, {
+    tokens: 400000, memory: { contextHandovers: { 'ctx-1': { pane: 'w-alpha:p1', at: 1 } } },
+    handoffs: [oldRecord()],
+    steps: [{ at: '2026-09-29T15:30:00.000Z', herdr: herdrOf(pane('working'), worker, successor), published: { alpha: status(1) } }],
+  });
+  assert.equal(out.records[0].status, 'prepared');
+});
+
+test('a tracked context successor expires after 24 hours, an untracked one after 2 hours', { timeout: 30000 }, (t) => {
+  const memory = { contextHandovers: { 'ctx-1': { pane: 'w-alpha:p1', at: 1 } } };
+  const stepAt = (time) => [{ at: time, herdr: herdrOf(pane('working'), worker, successor), published: { alpha: status(1) } }];
+  assert.equal(run(t, { tokens: 400000, memory, handoffs: [oldRecord()], steps: stepAt('2026-09-30T10:00:00.000Z') }).records[0].status, 'prepared', '23 hours');
+  assert.equal(run(t, { tokens: 400000, memory, handoffs: [oldRecord()], steps: stepAt('2026-09-30T12:00:00.000Z') }).records[0].status, 'expired', '25 hours');
+  assert.equal(run(t, { tokens: 400000, handoffs: [oldRecord()], steps: stepAt('2026-09-29T15:30:00.000Z') }).records[0].status, 'expired', 'lost memory');
+});
+
+test('the Boss pane and a stood-down project never activate and show the reason', { timeout: 30000 }, (t) => {
+  const memory = { contextHandovers: { 'ctx-1': { pane: 'w-alpha:p1', at: 1 } } };
+  const stood = run(t, { tokens: 400000, memory, handoffs: [readyRecord()], steps: [{ at: at(1), herdr: herdrOf(pane('idle'), worker, successor), published: { alpha: status(1, { status: 'stood down' }) } }] });
+  assert.deepEqual(activates(stood), []);
+  assert.equal(stood.handoverWaits['ctx-1'], 'the project is held');
+  const bossPane = pane('idle', { id: 'w-boss:p1', workspace: 'w-boss', label: 'boss' });
+  const bossSuccessor = { ...successor, id: 'w-boss:p9', workspace: 'w-boss' };
+  const boss = run(t, { tokens: 400000, memory, handoffs: [readyRecord({ project: 'boss', workspace: 'w-boss', label: 'boss', sourcePane: 'w-boss:p1', newPane: 'w-boss:p9', boss: true })],
+    steps: [{ at: at(1), herdr: { workspaces: [{ id: 'w-boss', label: 'Boss' }], panes: [bossPane, { ...worker, workspace: 'w-boss' }, bossSuccessor] }, published: { boss: status(1) } }] });
+  assert.deepEqual(activates(boss), []);
+  assert.equal(boss.handoverWaits['ctx-1'], 'the Boss pane is never handed over');
+});
+
+test('the engine state names why a prepared successor waits', { timeout: 30000 }, (t) => {
+  const memory = { contextHandovers: { 'ctx-1': { pane: 'w-alpha:p1', at: 1 } } };
+  const step = (herdr, published = status(1)) => [{ at: at(1), herdr, published: { alpha: published } }];
+  const reason = (steps, extra = {}) => run(t, { tokens: 400000, memory, handoffs: [readyRecord()], steps, ...extra }).handoverWaits?.['ctx-1'];
+  assert.equal(reason(step(herdrOf(pane('working'), worker, successor))), 'the source orchestrator works');
+  assert.equal(reason(step(herdrOf(pane('idle'), worker, { ...successor, status: 'working' }))), 'the successor works');
+  assert.equal(reason(step(herdrOf(pane('idle'), worker, successor), status(1, { status: 'paused' }))), 'the project is held');
+  assert.equal(reason(step(herdrOf(pane('idle'), successor))), 'the project has no running worker');
+  assert.equal(reason(step(herdrOf(pane('idle'), worker, successor)), { model: 'claude-opus-5-5' }), 'claude-sonnet-5-5 is weaker than the source model claude-opus-5-5');
+  assert.equal(reason(step(herdrOf(pane('idle'), worker, successor))), undefined);
 });
 
 test('a prepared record that did not come from the context trigger is not activated by it', { timeout: 30000 }, (t) => {
