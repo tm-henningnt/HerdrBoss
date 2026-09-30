@@ -11,6 +11,9 @@ export const POLICY_DEFAULTS = {
   borrowIdle: true,
   idleMinutes: 15,
   reservePercent: 15,
+  // A lane is ahead of pace only when its use is more than paceTolerancePoints above the expected use and at least paceMinUsePercent.
+  paceTolerancePoints: 5,
+  paceMinUsePercent: 30,
   handoffLeadMinutes: 180,
   autoHandover: false,
   autoHandoverPercent: 98,
@@ -169,7 +172,7 @@ export function validatePolicy(value, models) {
   if (!Number.isInteger(value.autoHandoverPercent) || value.autoHandoverPercent < 90 || value.autoHandoverPercent > 100) errors.push('autoHandoverPercent must be an integer from 90 to 100.');
   if (!Number.isInteger(value.autoHandoverContextTokens) || value.autoHandoverContextTokens < 50000 || value.autoHandoverContextTokens > 2000000) errors.push('autoHandoverContextTokens must be an integer from 50000 to 2000000.');
   { const goalError = goalTextError(value.defaultOrchestratorGoal); if (goalError) errors.push(`defaultOrchestratorGoal ${goalError}`); }
-  for (const [key, max] of [['idleMinutes', 1440], ['reservePercent', 80], ['handoffLeadMinutes', 10080]]) {
+  for (const [key, max] of [['idleMinutes', 1440], ['reservePercent', 80], ['handoffLeadMinutes', 10080], ['paceTolerancePoints', 50], ['paceMinUsePercent', 100]]) {
     if (!Number.isInteger(value[key]) || value[key] < 0 || value[key] > max) errors.push(`${key} must be an integer from 0 to ${max}.`);
   }
   subset(value.allowedKinds, KINDS, 'allowedKinds', errors);
@@ -553,12 +556,19 @@ export function adjustedExpectedPercent(policy, provider, window, now = Date.now
   return window.expectedPercent * pacingGoal(policy, provider, window.key) / 100;
 }
 
-// A live window is ahead of pace when it will not last to reset, or when its use is above the goal-adjusted expected use.
+// The pace tolerance in percentage points and the use below which no window is ahead of pace. Old policy files have neither key.
+export const paceTolerancePoints = (policy) => Number.isFinite(policy?.paceTolerancePoints) ? policy.paceTolerancePoints : POLICY_DEFAULTS.paceTolerancePoints;
+export const paceMinUsePercent = (policy) => Number.isFinite(policy?.paceMinUsePercent) ? policy.paceMinUsePercent : POLICY_DEFAULTS.paceMinUsePercent;
+
+// A live window below the minimum use is never ahead of pace. A window that will not last to reset is ahead of pace
+// when it has no future timed goal end, whatever the tolerance. Otherwise its use must be more than the tolerance
+// above the goal-adjusted expected use.
 export function aheadOfQuotaPace(policy, provider, window, now = Date.now()) {
-  if (!window) return false;
-  const expected = adjustedExpectedPercent(policy, provider, window, now);
+  if (!window || window.usedPercent < paceMinUsePercent(policy)) return false;
   const end = pacingGoalEnd(policy, provider, window);
-  return ((end == null || end <= now) && window.willLast === false) || (expected != null && window.usedPercent > expected);
+  if ((end == null || end <= now) && window.willLast === false) return true;
+  const expected = adjustedExpectedPercent(policy, provider, window, now);
+  return expected != null && window.usedPercent > expected + paceTolerancePoints(policy);
 }
 
 // How far a window is ahead of pace; without expected use, its usage percentage.
@@ -609,7 +619,12 @@ export function laneStatus(quotas, policy, now = Date.now(), { todayUse = {} } =
         const expected = adjustedExpectedPercent(policy, q.provider, window, now);
         return expected == null ? null : expected - window.usedPercent;
       }).filter(Number.isFinite);
+      // A window above its expected use but inside the tolerance is on pace. The lanes line shows it.
+      const tolerated = liveWindows.map((window) => ({ window, expected: adjustedExpectedPercent(policy, q.provider, window, now) }))
+        .filter(({ window, expected }) => expected != null && window.usedPercent > expected)
+        .sort((a, b) => (b.window.usedPercent - b.expected) - (a.window.usedPercent - a.expected))[0];
       lanes[q.provider] = { state: 'open', roomPercent: room.length ? Math.max(0, Math.min(...room)) : null, resetWindows, goals };
+      if (tolerated) lanes[q.provider].onPace = { window: tolerated.window.label, usedPercent: tolerated.window.usedPercent, expectedPercent: tolerated.expected, tolerancePoints: paceTolerancePoints(policy) };
       continue;
     }
     const expectedPercent = adjustedExpectedPercent(policy, q.provider, w, now);
@@ -641,7 +656,8 @@ export function laneStatus(quotas, policy, now = Date.now(), { todayUse = {} } =
     }
     lanes[q.provider] = {
       state: risk ? 'reserve' : 'pace', window: w.label, usedPercent: w.usedPercent, expectedPercent,
-      overPercent, backOnPaceAt: Number.isFinite(backOnPaceMs) ? new Date(backOnPaceMs).toISOString() : null, resetWindows, goals,
+      overPercent, tolerancePoints: paceTolerancePoints(policy),
+      backOnPaceAt: Number.isFinite(backOnPaceMs) ? new Date(backOnPaceMs).toISOString() : null, resetWindows, goals,
     };
   }
   return lanes;

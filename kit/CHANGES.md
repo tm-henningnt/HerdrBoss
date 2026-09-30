@@ -61,3 +61,7 @@ Summary: Worker briefs address the orchestrator by its stable agent name, and a 
 ## b966d46c47d7
 Impact: useful
 Summary: Add the AGENTS.md project part and README templates for the new project flow.
+
+## 87289067cf70
+Impact: useful
+Summary: A lane is ahead of pace only above a tolerance (default 5 points) and a minimum use (default 30%); the lanes line shows the tolerance.

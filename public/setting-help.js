@@ -134,6 +134,20 @@ export const SETTING_HELP = Object.fromEntries([
     lower: 'A lower goal saves quota. The lanes say Use now less often. An earlier end forces the use of quota sooner.',
     apply: 'policy',
   }),
+  S('quotas', 'paceTolerancePoints', 'Pace tolerance points', {
+    what: 'The number of percentage points that the use of a quota window may be above its expected use before the lane is ahead of pace. A lane inside the tolerance is on pace.',
+    default: '5', unit: 'Percentage points', range: '0 to 50',
+    raise: 'A lane stays on pace with a larger lead. Workers start more often.',
+    lower: 'A lane is ahead of pace sooner. A value of 0 uses no tolerance.',
+    apply: 'policy',
+  }),
+  S('quotas', 'paceMinUsePercent', 'Minimum use for ahead of pace', {
+    what: 'The used percent of a quota window below which the lane is never ahead of pace, also when the use is above the expected use.',
+    default: '30', unit: 'Percent used', range: '0 to 100',
+    raise: 'A lane stays on pace to a higher use. A fresh window does not block workers.',
+    lower: 'A lane can be ahead of pace at a lower use. A value of 0 uses no minimum.',
+    apply: 'policy',
+  }),
   S('quotas', 'quota.warnPercent', 'Quota warning level', {
     what: 'The used percent of a quota window at which the quota shows a warning.',
     default: '90', unit: 'Percent used', range: '50 to 99, below the critical level',

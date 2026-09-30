@@ -198,7 +198,7 @@ To add the shared rules to a project, follow [orchestrator-instructions.md](orch
 | A quota window reaches the warning percentage in `config.json` | Warning notice in the bulletin only. |
 | A quota window that had a warning resets below the warning percentage in `config.json` | `Quota restriction cleared` notice in the bulletin only. |
 | A live quota window is at 100% or more | The provider lane is exhausted until the latest reset among its exhausted windows. `worker start` refuses it unless you use `--force`. |
-| A quota runs out before its reset at the current pace, or its use is above the goal-adjusted pace | The provider lane is "ahead of pace". `worker start` refuses it. |
+| A window has a use of at least the minimum use, and its use is more than the pace tolerance above the goal-adjusted pace | The provider lane is "ahead of pace". `worker start` refuses it. |
 | Free memory is below 15% | Warning notice. |
 | Active machine CPU limit or enabled 5-minute load backstop is exceeded | Stop new workers and full test suites. `worker start` refuses the dispatch, including with `--force`. |
 | An idle worker still owns an automation browser after 30 minutes | Notice to that project. |
@@ -403,8 +403,8 @@ The start notice to the orchestrators and the Boss carries the instructions in o
 
 `herdr-boss lanes` and the bulletin section "Provider lanes" show each metered provider:
 
-- **open**: use it.
-- **ahead of pace**: a live window will not last to its reset, or its use is above its goal-adjusted expected use. The lane shows when it is back on pace if it is not used.
+- **open**: use it. A lane that is above its expected use but inside the pace tolerance shows as `on pace`, with its use, its expected use, and the tolerance.
+- **ahead of pace**: a live window has a use of at least the minimum use, and its use is more than the pace tolerance above its goal-adjusted expected use. The lane shows when it is back on pace if it is not used.
 - **trickle**: a window longer than 7 days is ahead of pace. The lane shows the daily allowance and today's use. You can start workers while today's use is below the allowance.
 - **near exhaustion**: the quota is inside the reserve. Only `--force` can use it.
 - **exhausted**: a live window is at 100% or more. The lane shows its label and reset time. Only `--force` can use it.
@@ -418,6 +418,8 @@ Herdr Boss gives a trickle lane a daily allowance. With a goal end in the future
 The bulletin and `herdr-boss lanes` show the allowance, today's use, and the goal. The Overview quota card shows the goal in each window row. It also shows the goal in the trickle footer. Each goal uses the form `goal: 100% by Thu 8 Oct`. The text shows the time for a one-off end within 48 hours. `worker start` allows a trickle lane below its allowance. At or above the allowance, it refuses until 00:00 UTC. Use `--force` to bypass this refusal. Automatic handover can use a trickle lane below its allowance.
 
 When several windows are ahead of pace, the lane names the worst one: the window with the most use above its goal-adjusted expected use. A window without an expected value ranks by its used percentage. When several windows are exhausted, the lane shows the one with the latest reset.
+
+The **pace tolerance** is the number of percentage points that a window may be above its expected use and stay on pace. The default is 5. A window is ahead of pace only when its use is more than the tolerance above the expected use. A window at exactly the tolerance is on pace. A tolerance of 0 gives the strict rule. The **minimum use** is the used percent below which a window is never ahead of pace. The default is 30. A minimum use of 0 gives no minimum. A window below the minimum use is never ahead of pace. A window at or above the minimum use that will not last to its reset is ahead of pace at any tolerance, unless a timed goal end is still in the future. Set `paceTolerancePoints` (0 to 50) and `paceMinUsePercent` (0 to 100) in Settings under Provider quotas. The reserve and near-exhaustion rules do not use them.
 
 A **quota pacing goal** is the most percent of a window that you want to use by its end. A goal without a separate end reaches its percent at reset. Herdr Boss scales the measured expected-use pace by `goal / 100` for this form. A timed goal rises from the live window start to its percent at the configured end. The line stays at that percent until reset. An unset goal means 100%, which preserves the normal pace. When a timed goal end passes, Herdr Boss uses the reset forecast to decide if a long window is ahead of pace. A goal does not change the reserve or near-exhaustion rules, which use the actual used percentage. A goal has no effect on a provider in `ignore` mode. A window whose reset time has passed starts fresh; usage does not carry across a reset.
 

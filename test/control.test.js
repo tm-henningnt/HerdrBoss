@@ -13,6 +13,8 @@ import { alertPromptDue, Engine, orchestratorCanReceiveNotice, pruneInactiveDisk
 import { collectMissingWorktreeProcesses } from '../src/collect.js';
 
 const models = loadModels();
+// Fixtures for the goal and ordering rules use the old pace rule: no tolerance and no minimum use.
+const legacyPace = { paceTolerancePoints: 0, paceMinUsePercent: 0 };
 const policy = (patch = {}) => ({ ...structuredClone(POLICY_DEFAULTS), ...patch });
 // Fixture unmetered Pi models. The kit Pi allow-list holds only metered opencode-go/ models.
 const fixturePiModels = ['fixturezen/free-a', 'fixturezen/free-b'];
@@ -1228,8 +1230,8 @@ test('a pacing goal makes a willLast window ahead of pace and scales its numbers
   const { laneStatus } = await import('../src/control.js');
   const now = Date.parse('2026-09-25T10:00:00Z');
   const quotas = [{ provider: 'codex', windows: [{ key: 'primary', label: 'Weekly', usedPercent: 45, expectedPercent: 50, willLast: true, windowMinutes: 10080, resetsAt: '2026-09-29T09:00:00Z' }] }];
-  assert.equal(laneStatus(quotas, policy(), now).codex.state, 'open');
-  const lane = laneStatus(quotas, policy({ pacingGoals: { codex: { primary: 80 } } }), now).codex;
+  assert.equal(laneStatus(quotas, policy(legacyPace), now).codex.state, 'open');
+  const lane = laneStatus(quotas, policy({ ...legacyPace, pacingGoals: { codex: { primary: 80 } } }), now).codex;
   assert.equal(lane.state, 'pace');
   assert.equal(lane.expectedPercent, 40);
   assert.equal(lane.overPercent, 5);
@@ -1259,7 +1261,7 @@ test('long-window trickle allowance counts to a future goal, then falls back to 
   const goalEnd = '2026-10-13T12:00:00.000Z'; // 360 hours before reset.
   const quota = [{ provider: 'codex', windows: [{ key: 'primary', label: 'Monthly', usedPercent: 50,
     expectedPercent: 15, windowMinutes: 43200, willLast: false, resetsAt: reset }] }];
-  const timed = (percent = 100) => policy({ pacingGoals: { codex: { primary: { percent, end: { type: 'at', at: goalEnd } } } } });
+  const timed = (percent = 100) => policy({ ...legacyPace, pacingGoals: { codex: { primary: { percent, end: { type: 'at', at: goalEnd } } } } });
 
   const beforeGoal = laneStatus(quota, timed(), Date.parse('2026-10-03T12:00:00.000Z')).codex;
   assert.equal(beforeGoal.state, 'trickle');
@@ -1272,7 +1274,7 @@ test('long-window trickle allowance counts to a future goal, then falls back to 
   const smallerGoal = laneStatus(quota, timed(80), Date.parse('2026-10-03T12:00:00.000Z')).codex;
   assert.equal(smallerGoal.allowancePercent, 3);
 
-  const noGoalEnd = laneStatus(quota, policy(), Date.parse('2026-09-28T12:00:00.000Z')).codex;
+  const noGoalEnd = laneStatus(quota, policy(legacyPace), Date.parse('2026-09-28T12:00:00.000Z')).codex;
   assert.ok(Math.abs(noGoalEnd.allowancePercent - (50 / 30)) < 1e-10);
 });
 
@@ -1321,7 +1323,7 @@ test('timed goals rank the worst window and the least-over provider', async () =
     ] },
     { provider: 'claude', windows: [{ key: 'primary', label: 'Daily', usedPercent: 55, expectedPercent: 50, willLast: true, windowMinutes: 1440, resetsAt: '2026-09-26T00:00:00Z' }] },
   ];
-  const timed = policy({ pacingGoals: { codex: { primary: { percent: 80, end: { type: 'at', at: '2026-09-25T18:00:00.000Z' } } } } });
+  const timed = policy({ ...legacyPace, pacingGoals: { codex: { primary: { percent: 80, end: { type: 'at', at: '2026-09-25T18:00:00.000Z' } } } } });
   assert.equal(deriveControl({ ...snapshot(), quotas }, timed, models, {}, now).pressures.codex.label, 'Weekly');
   assert.equal(leastOverProvider(laneStatus(quotas, timed, now)), 'claude');
 });
@@ -1392,16 +1394,16 @@ test('least-over ordering uses the goal-adjusted pace score', async () => {
     { provider: 'codex', windows: [{ key: 'primary', label: 'Weekly', usedPercent: 45, expectedPercent: 43, willLast: false, windowMinutes: 10080, resetsAt: '2026-09-29T09:00:00Z' }] },
     { provider: 'claude', windows: [{ key: 'secondary', label: 'Weekly', usedPercent: 63, expectedPercent: 58, willLast: false, windowMinutes: 10080, resetsAt: '2026-10-01T18:00:00Z' }] },
   ];
-  assert.equal(leastOverProvider(laneStatus(quotas, policy(), now)), 'codex');
-  const goal = policy({ pacingGoals: { codex: { primary: 40 } } });
+  assert.equal(leastOverProvider(laneStatus(quotas, policy(legacyPace), now)), 'codex');
+  const goal = policy({ ...legacyPace, pacingGoals: { codex: { primary: 40 } } });
   assert.equal(leastOverProvider(laneStatus(quotas, goal, now)), 'claude');
   // The worst window of a provider also ranks by the adjusted pace, not the raw pace.
   const windows = [{ provider: 'codex', windows: [
     { key: 'primary', label: 'Weekly', usedPercent: 45, expectedPercent: 43, willLast: false, windowMinutes: 10080, resetsAt: '2026-09-29T09:00:00Z' },
     { key: 'secondary', label: 'Monthly', usedPercent: 60, expectedPercent: 50, willLast: false, windowMinutes: 43200, resetsAt: '2026-10-23T09:00:00Z' },
   ] }];
-  assert.equal(deriveControl({ ...snapshot(), quotas: windows }, policy(), models, {}, now).pressures.codex.label, 'Monthly');
-  assert.equal(deriveControl({ ...snapshot(), quotas: windows }, policy({ pacingGoals: { codex: { primary: 10 } } }), models, {}, now).pressures.codex.label, 'Weekly');
+  assert.equal(deriveControl({ ...snapshot(), quotas: windows }, policy(legacyPace), models, {}, now).pressures.codex.label, 'Monthly');
+  assert.equal(deriveControl({ ...snapshot(), quotas: windows }, policy({ ...legacyPace, pacingGoals: { codex: { primary: 10 } } }), models, {}, now).pressures.codex.label, 'Weekly');
 });
 
 test('a pacing goal stays inert for an ignored provider and after a reset', async () => {
@@ -1573,8 +1575,8 @@ test('least-over selection skips the unmetered lane', async () => {
     { provider: 'codex', windows: [{ key: 'primary', label: 'Weekly', usedPercent: 45, expectedPercent: 43, willLast: false, windowMinutes: 10080, resetsAt: '2026-09-29T09:00:00Z' }] },
     { provider: 'claude', windows: [{ key: 'secondary', label: 'Weekly', usedPercent: 63, expectedPercent: 58, willLast: false, windowMinutes: 10080, resetsAt: '2026-10-01T18:00:00Z' }] },
   ];
-  const lanes = laneStatus(quotas, policy(), now);
-  lanes.unmetered = unmeteredLane(models, policy(), { a: { excludedKinds: [], excludedModels: [] } });
+  const lanes = laneStatus(quotas, policy(legacyPace), now);
+  lanes.unmetered = unmeteredLane(models, policy(legacyPace), { a: { excludedKinds: [], excludedModels: [] } });
   assert.equal(leastOverProvider(lanes), 'codex');
 });
 
