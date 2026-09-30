@@ -571,3 +571,72 @@ test('a concurrent write to handoffs.json survives the finish step', { timeout: 
   assert.ok(out.records[0].finish.closedAt);
   assert.ok(out.records.some((x) => x.id === 'late'));
 });
+
+// ---- An old pane with status done has finished its turn. It counts as idle for the cleanup.
+test('a done old pane closes and the tab is renamed after the close', { timeout: 30000 }, (t) => {
+  const out = run(t, {
+    handoffs: [activeRecord({ activatedAt: '2026-09-29T11:59:30.000Z' })],
+    steps: [
+      { at: at(1), herdr: herdrOf(oldPane('working'), newPane('working'), idleWorker) },
+      { at: at(2), herdr: herdrOf(oldPane('done'), newPane('done'), idleWorker) },
+      { at: at(3), herdr: herdrOf(oldPane('done'), newPane('done'), idleWorker) },
+    ],
+  });
+  assert.deepEqual(closes(out).map(({ args }) => args), [['pane', 'close', 'w-alpha:p1']]);
+  assert.deepEqual(renames(out).map(({ args }) => args.slice(2)), [['w-alpha:t9', 'Orchestrator']]);
+  assert.ok(out.herdrCalls.indexOf(closes(out)[0]) < out.herdrCalls.indexOf(renames(out)[0]), 'the rename follows the close');
+  assert.ok(out.records[0].finish.closedAt);
+  assert.ok(out.records[0].finish.tabRenamedAt);
+  assert.ok(out.records[0].finish.doneAt);
+});
+
+test('a done old pane closes after the 15-minute wait when the successor never answered', { timeout: 30000 }, (t) => {
+  const out = run(t, {
+    handoffs: [activeRecord()],
+    steps: [
+      { at: at(0), herdr: herdrOf(oldPane('done'), newPane('idle'), idleWorker) },
+      { at: at(2), herdr: herdrOf(oldPane('done'), newPane('idle'), idleWorker) },
+    ],
+  });
+  assert.equal(closes(out).length, 1);
+  assert.equal(out.records[0].finish.confirmedBy, 'timeout');
+  assert.equal(renames(out).length, 1);
+});
+
+test('a working or blocked old pane is not closed and the tab is not renamed', { timeout: 30000 }, (t) => {
+  for (const status of ['working', 'blocked']) {
+    const out = run(t, {
+      handoffs: [activeRecord()],
+      steps: [{ at: at(0), herdr: herdrOf(oldPane(status), newPane('idle'), idleWorker) }, { at: at(2), herdr: herdrOf(oldPane(status), newPane('idle'), idleWorker) }],
+    });
+    assert.deepEqual(closes(out), [], status);
+    assert.deepEqual(renames(out), [], status);
+  }
+});
+
+test('the tab is renamed when the old pane closed earlier and the tab still has the Next name', { timeout: 30000 }, (t) => {
+  const out = run(t, {
+    handoffs: [activeRecord()],
+    steps: [{ at: at(0), herdr: herdrOf(newPane('idle'), idleWorker) }, { at: at(2), herdr: herdrOf(newPane('idle'), idleWorker) }],
+  });
+  assert.deepEqual(closes(out), []);
+  assert.equal(renames(out).length, 1);
+  assert.equal(out.records[0].finish.outcome, 'source-absent');
+});
+
+test('the 60-minute note names the reason when a done old pane stays open', { timeout: 30000 }, (t) => {
+  const boss = { workspaces: [{ id: 'w-alpha', label: 'Alpha' }, { id: 'w-boss', label: 'Boss' }] };
+  const scenario = (panes) => run(t, {
+    handoffs: [activeRecord({ activatedAt: '2026-09-29T11:00:30.000Z' })],
+    steps: [{ at: at(0), herdr: { ...boss, panes } }, { at: at(2), herdr: { ...boss, panes } }],
+  });
+  const running = scenario([oldPane('done'), newPane('idle'), worker, bossPane]);
+  assert.deepEqual(closes(running), []);
+  assert.match(bossNotes(running)[0].args[3], /still done/);
+  assert.match(bossNotes(running)[0].args[3], /a worker of the project runs/);
+  const relabeled = scenario([{ ...oldPane('done'), label: 'orch old' }, newPane('idle'), idleWorker, bossPane]);
+  assert.deepEqual(closes(relabeled), []);
+  assert.match(bossNotes(relabeled)[0].args[3], /label is orch old, not orch previous/);
+  const busy = scenario([oldPane('working'), newPane('idle'), idleWorker, bossPane]);
+  assert.match(bossNotes(busy)[0].args[3], /the pane works/);
+});

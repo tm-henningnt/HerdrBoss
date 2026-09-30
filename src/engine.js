@@ -1529,13 +1529,20 @@ export class Engine extends EventEmitter {
       const idle = source && since(source);
       // The allocation of the previous tick tells whether the project has a running worker.
       const working = Number(control?.projects?.[item.project]?.running) > 0;
-      const quiet = Boolean(source) && !working && settled(source) && idle?.status === source.status && now - idle.since >= 60000;
+      const quiet = Boolean(source) && !working && settled(source) && source.label === `${role} previous` && idle?.status === source.status && now - idle.since >= 60000;
       // The old pane works or has an unfinished task. Retry each tick, and tell the Boss once after 60 minutes.
+      const reasons = [];
+      if (source && !quiet) {
+        if (!settled(source)) reasons.push(`the pane ${source.status === 'blocked' ? 'is blocked' : 'works'}`);
+        if (working) reasons.push('a worker of the project runs');
+        if (source.label !== `${role} previous`) reasons.push(`its label is ${source.label || 'empty'}, not ${role} previous`);
+        if (settled(source) && !(idle?.status === source.status && now - idle.since >= 60000)) reasons.push('it settled less than 60 seconds ago');
+      }
       if (source && !quiet && now - activatedAt >= 60 * 60000 && !finish.bossNotifiedAt) {
         const boss = [...panes.values()].find((pane) => pane.label === 'boss' && pane.agent && pane.id !== source.id);
         if (boss) {
           try {
-            checkHerdrResponse(await this.herdrRunner('herdr', ['agent', 'prompt', boss.id, `[herdr-boss] Old ${role === 'boss' ? 'Boss' : 'orchestrator'} pane ${source.id} of ${item.displayLabel || item.project} is still ${source.status} 60 minutes after handover. Herdr Boss keeps it open until it is idle. Successor: ${item.newPane}.`]));
+            checkHerdrResponse(await this.herdrRunner('herdr', ['agent', 'prompt', boss.id, `[herdr-boss] Old ${role === 'boss' ? 'Boss' : 'orchestrator'} pane ${source.id} of ${item.displayLabel || item.project} is still ${source.status} 60 minutes after handover: ${reasons.join(', ')}. Herdr Boss keeps it open until it is idle or done and none of these applies. Successor: ${item.newPane}.`]));
             finish.bossNotifiedAt = at;
           } catch (error) { this.log('error', `Boss note for handoff ${item.id} failed: ${String(error.stderr || error.message).slice(0, 200)}`, scope); }
         }
@@ -1545,7 +1552,7 @@ export class Engine extends EventEmitter {
       // The old pane stays open until the successor has its goal, so the goal step runs before the close.
       if (!await this.deliverGoal(item, successor, now, at, scope)) continue;
       if (source) {
-        if (source.label !== `${role} previous` || !quiet) continue;
+        if (!quiet) continue;
         try { checkHerdrResponse(await this.herdrRunner('herdr', ['pane', 'close', source.id])); }
         catch (error) {
           this.log('error', `Could not close previous ${role} pane for handoff ${item.id}: ${String(error.stderr || error.message).slice(0, 200)}`, scope);
