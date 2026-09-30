@@ -5,7 +5,10 @@ import path from 'node:path';
 import test from 'node:test';
 import { assertTempDataDir } from '../src/data-dir-guard.js';
 import { execFileSync } from 'node:child_process';
-import { runProjectNew, PROJECT_NEW_STEPS } from '../src/project-new.js';
+import { runProjectNew, addProjectPolicy, PROJECT_NEW_STEPS } from '../src/project-new.js';
+import { validatePolicy } from '../src/control.js';
+import { loadModels } from '../src/kit/config.js';
+import { validateProject } from '../src/projects.js';
 import { scanText } from '../src/secret-scan.js';
 
 // Git reads its identity from a temporary global file, never from the machine.
@@ -112,7 +115,7 @@ test('builds the folder and files, keeps later steps unbuilt, and writes a 0600 
     assert.equal(status(result, 'files'), 'done');
     assert.equal(status(result, 'kit'), 'done');
     assert.equal(status(result, 'commit'), 'done');
-    for (const name of ['remote', 'policy', 'register', 'workspace']) {
+    for (const name of ['remote', 'workspace']) {
       assert.equal(status(result, name), 'not-built', name);
       assert.match(result.steps.find((s) => s.name === name).detail, /not built yet/);
     }
@@ -413,4 +416,176 @@ test('scanText finishes a 200k character line in under one second', () => {
   const start = process.hrtime.bigint();
   assert.deepEqual(scanText('a.txt', 'a-'.repeat(100000)), []);
   assert.ok(Number(process.hrtime.bigint() - start) / 1e9 < 1);
+});
+
+const entry = (share, extra = {}) => ({ share, mode: 'auto', excludedKinds: [], excludedModels: [], ...extra });
+const total = (projects) => Object.values(projects).reduce((sum, p) => sum + p.share, 0);
+const forget = (f, ...names) => {
+  const file = path.join(f.dataDir, 'flows', 'demo.json');
+  const state = JSON.parse(fs.readFileSync(file, 'utf8'));
+  for (const name of names) delete state.steps[name];
+  fs.writeFileSync(file, JSON.stringify(state));
+};
+const writePolicyFile = (f, projects) => fs.writeFileSync(path.join(f.dataDir, 'policy.json'), `${JSON.stringify({ projects })}\n`);
+const readPolicyFile = (f) => JSON.parse(fs.readFileSync(path.join(f.dataDir, 'policy.json'), 'utf8'));
+
+test('addProjectPolicy adds an entry with share 10 and keeps the total at most 100', () => {
+  const result = addProjectPolicy({ projects: { a: entry(50), b: entry(50, { mode: 'paused', excludedKinds: ['pi'] }) } }, 'demo');
+  assert.equal(result.changed, true);
+  assert.equal(result.policy.projects.demo.share, 10);
+  assert.ok(total(result.policy.projects) <= 100);
+  assert.deepEqual(result.before, { a: 50, b: 50 });
+  assert.deepEqual(result.after, { a: 45, b: 45, demo: 10 });
+  assert.equal(result.policy.projects.b.mode, 'paused');
+  assert.deepEqual(result.policy.projects.b.excludedKinds, ['pi']);
+  assert.equal(validatePolicy({ ...structuredClone(addProjectPolicy({ projects: {} }, 'x').policy) }, loadModels()).some((e) => /share/.test(e)), false);
+});
+
+test('addProjectPolicy leaves shares alone when there is room', () => {
+  const result = addProjectPolicy({ projects: { a: entry(30), b: entry(0) } }, 'demo');
+  assert.deepEqual(result.after, { a: 30, b: 0, demo: 10 });
+});
+
+test('addProjectPolicy rounds down with integers and refuses a share that would fall below 1', () => {
+  const rounded = addProjectPolicy({ projects: { a: entry(33), b: entry(33), c: entry(34) } }, 'demo');
+  for (const share of Object.values(rounded.after)) assert.ok(Number.isInteger(share));
+  assert.ok(total(rounded.policy.projects) <= 100);
+  const many = {};
+  for (let i = 0; i < 100; i += 1) many[`p${i}`] = entry(1);
+  assert.throws(() => addProjectPolicy({ projects: many }, 'demo'), /below 1/);
+});
+
+test('addProjectPolicy does not change the input and is idempotent', () => {
+  const input = { projects: { a: entry(95) } };
+  const first = addProjectPolicy(input, 'demo');
+  assert.equal(input.projects.a.share, 95);
+  const second = addProjectPolicy(first.policy, 'demo');
+  assert.equal(second.changed, false);
+  assert.deepEqual(second.policy, first.policy);
+});
+
+test('the policy step writes the temp policy file, keeps other fields, and a rerun changes nothing', () => {
+  const f = fixture();
+  try {
+    writePolicyFile(f, { a: entry(60, { mode: 'idle' }), b: entry(40, { excludedKinds: ['pi'] }) });
+    const result = runProjectNew(base(f));
+    assert.equal(result.ok, true);
+    assert.equal(status(result, 'policy'), 'done');
+    assert.match(result.steps.find((s) => s.name === 'policy').detail, /Shares before: a 60, b 40\. Shares after: a 54, b 36, demo 10/);
+    const policy = readPolicyFile(f);
+    assert.equal(policy.projects.demo.share, 10);
+    assert.ok(total(policy.projects) <= 100);
+    assert.equal(policy.projects.a.mode, 'idle');
+    assert.deepEqual(policy.projects.b.excludedKinds, ['pi']);
+    const text = fs.readFileSync(path.join(f.dataDir, 'policy.json'), 'utf8');
+    forget(f, 'policy');
+    const again = runProjectNew(base(f));
+    assert.equal(again.ok, true);
+    assert.equal(fs.readFileSync(path.join(f.dataDir, 'policy.json'), 'utf8'), text);
+    assert.match(again.steps.find((s) => s.name === 'policy').detail, /already/);
+  } finally { f.cleanup(); }
+});
+
+test('the policy step fails when a share would fall below 1 and writes nothing', () => {
+  const f = fixture();
+  try {
+    const many = {};
+    for (let i = 0; i < 100; i += 1) many[`p${i}`] = entry(1);
+    writePolicyFile(f, many);
+    const before = fs.readFileSync(path.join(f.dataDir, 'policy.json'), 'utf8');
+    const result = runProjectNew(base(f));
+    assert.equal(result.ok, false);
+    assert.equal(status(result, 'policy'), 'failed');
+    assert.match(result.error, /below 1/);
+    assert.equal(status(result, 'register'), 'pending');
+    assert.equal(fs.readFileSync(path.join(f.dataDir, 'policy.json'), 'utf8'), before);
+  } finally { f.cleanup(); }
+});
+
+test('the register step writes only the temp project-repos file and a rerun keeps it', () => {
+  const f = fixture();
+  try {
+    const result = runProjectNew(base(f));
+    assert.equal(status(result, 'register'), 'done');
+    const rows = JSON.parse(fs.readFileSync(path.join(f.dataDir, 'project-repos.json'), 'utf8'));
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].slug, 'demo');
+    assert.equal(rows[0].repo, fs.realpathSync(path.join(f.group, 'demo')));
+    assert.equal(rows[0].remote, '');
+    assert.equal(fs.statSync(path.join(f.dataDir, 'project-repos.json')).mode & 0o777, 0o600);
+    forget(f, 'register');
+    const again = runProjectNew(base(f));
+    assert.match(again.steps.find((s) => s.name === 'register').detail, /already/);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(f.dataDir, 'project-repos.json'), 'utf8')).length, 1);
+  } finally { f.cleanup(); }
+});
+
+test('the status step publishes a valid first status into the temp data dir', () => {
+  const f = fixture();
+  try {
+    const result = runProjectNew(base(f, { name: 'Demo', goal: 'Ship the demo.' }));
+    assert.equal(status(result, 'status'), 'done');
+    const file = path.join(f.dataDir, 'projects', 'demo.json');
+    const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.deepEqual(validateProject(data), []);
+    assert.equal(data.summary, 'New project. Set up the project.');
+    assert.equal(data.goal, 'Ship the demo.');
+    assert.match(data.kitRevision, /^[0-9a-f]{12}$/);
+    assert.equal(data.tasks.length, 1);
+    assert.equal(data.tasks[0].title, 'Set up the project');
+    assert.equal(data.tasks[0].status, 'todo');
+    assert.equal(data.tasks[0].priority, 1);
+    const text = fs.readFileSync(file, 'utf8');
+    forget(f, 'status');
+    const again = runProjectNew(base(f, { name: 'Demo', goal: 'Ship the demo.' }));
+    assert.match(again.steps.find((s) => s.name === 'status').detail, /already/);
+    assert.equal(fs.readFileSync(file, 'utf8'), text);
+  } finally { f.cleanup(); }
+});
+
+test('the status step leaves out the goal without --goal', () => {
+  const f = fixture();
+  try {
+    runProjectNew(base(f));
+    assert.equal(Object.hasOwn(JSON.parse(fs.readFileSync(path.join(f.dataDir, 'projects', 'demo.json'), 'utf8')), 'goal'), false);
+  } finally { f.cleanup(); }
+});
+
+test('a dry run names the policy, register, and status steps and writes nothing', () => {
+  const f = fixture();
+  try {
+    writePolicyFile(f, { a: entry(100) });
+    const before = tree(f.root);
+    const text = fs.readFileSync(path.join(f.dataDir, 'policy.json'), 'utf8');
+    const result = runProjectNew(base(f, { dryRun: true }));
+    for (const name of ['policy', 'register', 'status']) {
+      assert.equal(status(result, name), 'planned', name);
+      assert.doesNotMatch(result.steps.find((s) => s.name === name).detail, /not built yet/);
+    }
+    assert.deepEqual(tree(f.root), before);
+    assert.equal(fs.readFileSync(path.join(f.dataDir, 'policy.json'), 'utf8'), text);
+  } finally { f.cleanup(); }
+});
+
+test('addProjectPolicy refuses a share that is missing or not a whole number', () => {
+  for (const bad of [undefined, 1.5, '20', -1, null]) {
+    assert.throws(() => addProjectPolicy({ projects: { a: { ...entry(50), share: bad }, b: entry(60) } }, 'demo'), /whole number/, String(bad));
+  }
+});
+
+test('the register step refuses a slug that is registered to another folder', () => {
+  const f = fixture();
+  try {
+    runProjectNew(base(f));
+    const file = path.join(f.dataDir, 'project-repos.json');
+    const rows = JSON.parse(fs.readFileSync(file, 'utf8'));
+    rows[0].repo = path.join(f.root, 'elsewhere');
+    fs.writeFileSync(file, JSON.stringify(rows));
+    forget(f, 'register');
+    const again = runProjectNew(base(f));
+    assert.equal(again.ok, false);
+    assert.equal(status(again, 'register'), 'failed');
+    assert.match(again.error, /another folder/);
+    assert.equal(status(again, 'status'), 'pending');
+  } finally { f.cleanup(); }
 });

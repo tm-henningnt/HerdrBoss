@@ -149,12 +149,14 @@ export function listProjects() {
   }).sort((a, b) => a.project.localeCompare(b.project));
 }
 
-export function writeProject(slug, data) {
+// dir: the projects folder. The default is the projects folder of the data dir.
+export function writeProject(slug, data, { dir = PROJECTS_DIR } = {}) {
   if (!SLUG.test(slug)) return ['slug must match [a-z0-9][a-z0-9-]*'];
   const errs = validateProject(data);
   if (errs.length) return errs;
   data.updated = new Date().toISOString();
-  const file = path.join(PROJECTS_DIR, `${slug}.json`);
+  const file = path.join(dir, `${slug}.json`);
+  fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(`${file}.tmp`, JSON.stringify(data, null, 2));
   fs.renameSync(`${file}.tmp`, file);
   return [];

@@ -1,5 +1,5 @@
 // The flow of `herdr-boss project new`: validate the inputs, create the folder, write the first files.
-// Later steps (remote, policy, register, workspace, harness, check) are named and report `not built yet`.
+// Later steps (remote, workspace, harness, check) are named and report `not built yet`.
 // The state file flows/<slug>.json in the data dir records finished steps, so a rerun continues where the last run stopped.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -9,14 +9,19 @@ import { DATA_DIR, LIVE_DATA_DIR } from './config.js';
 import { KIT_ROOT } from './kit/config.js';
 import { agentsWithStub, installKit } from './kit/agents-check.js';
 import { scanStaged } from './secret-scan.js';
-import { readProjectRepos } from './harness.js';
-import { SLUG } from './projects.js';
+import { readProjectRepos, recordProjectRepo } from './harness.js';
+import { SLUG, validateProject, writeProject } from './projects.js';
+import { loadPolicy, savePolicy } from './control.js';
+import { loadModels } from './kit/config.js';
+import { kitRevision } from './kit/agents-check.js';
 
-export const PROJECT_NEW_STEPS = ['validate', 'folder', 'files', 'kit', 'commit', 'remote', 'policy', 'register', 'workspace', 'harness', 'check'];
-const NOT_BUILT = new Set(['remote', 'policy', 'register', 'workspace', 'harness', 'check']);
+export const PROJECT_NEW_STEPS = ['validate', 'folder', 'files', 'kit', 'commit', 'remote', 'policy', 'register', 'status', 'workspace', 'harness', 'check'];
+const NOT_BUILT = new Set(['remote', 'workspace', 'harness', 'check']);
+export const NEW_PROJECT_SHARE = 10;
 const TEMPLATES = path.join(KIT_ROOT, 'kit', 'templates');
 const GITIGNORE = 'node_modules/\n.DS_Store\n.orchestration/\n.worker/\n';
 const COMMIT_MESSAGE = 'Set up the project with Herdr Boss';
+const FIRST_TASK = 'Set up the project';
 const DEFAULT_GOAL = 'Describe the goal of this project here.';
 
 export class ProjectNewError extends Error {}
@@ -109,6 +114,49 @@ function writeState(file, state) {
   }
 }
 
+// Add the entry of a new project to a policy object. Return { policy, changed, before, after }.
+// before and after map each slug to its share. The input is not changed.
+// The other shares scale down by floor(share * (100 - share of the new project) / total) when the total would pass 100.
+// Only shares change. A share of 1 or more that would fall below 1 is refused.
+export function addProjectPolicy(policy, slug, options = {}) {
+  const share = options.share ?? NEW_PROJECT_SHARE;
+  if (!Number.isInteger(share) || share < 1 || share > 100) refuse('The share of a new project must be a whole number from 1 to 100.');
+  const next = structuredClone(policy || {});
+  next.projects = next.projects && typeof next.projects === 'object' && !Array.isArray(next.projects) ? next.projects : {};
+  const shares = () => Object.fromEntries(Object.entries(next.projects).map(([name, project]) => [name, project.share]));
+  const before = shares();
+  for (const [name, value] of Object.entries(before)) {
+    if (!Number.isInteger(value) || value < 0) refuse(`The share of ${name} is not a whole number of 0 or more. Correct it in the dashboard, then run the flow again with --resume.`);
+  }
+  if (Object.hasOwn(next.projects, slug)) return { policy: next, changed: false, before, after: before };
+  const sum = Object.values(before).reduce((acc, value) => acc + value, 0);
+  const room = 100 - share;
+  if (sum > room) {
+    for (const [name, project] of Object.entries(next.projects)) {
+      const scaled = Math.floor(project.share * room / sum);
+      if (project.share >= 1 && scaled < 1) refuse(`The share of ${name} would fall below 1 (${project.share} -> ${scaled}). Lower a share in the dashboard, then run the flow again with --resume.`);
+      project.share = scaled;
+    }
+  }
+  next.projects[slug] = { share, mode: 'auto', excludedKinds: [], excludedModels: [] };
+  return { policy: next, changed: true, before, after: shares() };
+}
+
+const showShares = (shares) => Object.entries(shares).map(([name, value]) => `${name} ${value}`).join(', ') || 'none';
+
+function policyFile(dataDir) { return path.join(dataDir, 'policy.json'); }
+
+// Read the local policy, add the project, and save through the validated writer of `policy set`.
+function applyProjectPolicy(slug, dataDir) {
+  const file = policyFile(dataDir);
+  const models = loadModels();
+  const result = addProjectPolicy(loadPolicy({ file, models, warn: () => {} }), slug);
+  if (!result.changed) return `the policy already has ${slug}, shares unchanged: ${showShares(result.after)}`;
+  const errors = savePolicy(result.policy, models, { file });
+  if (errors.length) refuse(`The policy is not valid: ${errors.join(' ')}`);
+  return `added ${slug} with share ${result.after[slug]}. Shares before: ${showShares(result.before)}. Shares after: ${showShares(result.after)}`;
+}
+
 function template(file, values) {
   return fs.readFileSync(path.join(TEMPLATES, file), 'utf8').replace(/\{\{(\w+)\}\}/g, (_, key) => values[key] ?? '');
 }
@@ -131,6 +179,9 @@ const DESCRIBE = {
   folder: (i) => `run mkdir -p ${i.path}, then git init -b main`,
   kit: (i) => `write the kit file, the AGENTS.md stub, and the SessionStart hook in ${i.path}/.claude/settings.json`,
   commit: () => `stage all files, scan the staged files for secrets, and commit "${COMMIT_MESSAGE}"`,
+  policy: (i) => `add ${i.slug} to the policy with share ${NEW_PROJECT_SHARE} and scale the other shares down so the total stays at most 100`,
+  register: (i) => `record ${i.slug} and ${i.path} in project-repos.json`,
+  status: (i) => `publish the first status of ${i.slug} with the task "${FIRST_TASK}"`,
   files: (i) => `write ${projectFiles(i).map(([f]) => f).join(', ')} in ${i.path}; keep each file that exists`,
 };
 
@@ -180,6 +231,35 @@ const RUN = {
     }
     git(['commit', '-q', '-m', COMMIT_MESSAGE]);
     return `committed ${git(['rev-parse', '--short', 'HEAD'])}`;
+  },
+  policy(inputs, context) { return applyProjectPolicy(inputs.slug, context.dataDir); },
+  register(inputs, context) {
+    const git = (args) => execFileSync('git', args, { cwd: inputs.path, stdio: ['ignore', 'pipe', 'ignore'] }).toString('utf8').trim();
+    const repo = git(['rev-parse', '--show-toplevel']);
+    let remote = '';
+    try { remote = git(['remote', 'get-url', 'origin']); } catch {}
+    const row = readProjectRepos(context.dataDir).find((r) => r.slug === inputs.slug);
+    if (row) {
+      const same = (a, b) => realOrResolved(a) === realOrResolved(b);
+      if (!same(row.repo, repo)) refuse(`The slug ${inputs.slug} is registered with another folder: ${row.repo}. This project is ${repo}.`);
+      return `${inputs.slug} is already registered with ${row.repo}`;
+    }
+    if (!recordProjectRepo(inputs.slug, repo, remote, { dataDir: context.dataDir }).recorded) refuse(`The project ${inputs.slug} could not be registered.`);
+    return `registered ${inputs.slug} with ${repo}`;
+  },
+  status(inputs, context) {
+    const dir = path.join(context.dataDir, 'projects');
+    if (fs.existsSync(path.join(dir, `${inputs.slug}.json`))) return `${inputs.slug} already has a status`;
+    const data = {
+      project: inputs.name,
+      ...(inputs.goal ? { goal: inputs.goal } : {}),
+      summary: `New project. ${FIRST_TASK}.`,
+      kitRevision: kitRevision(),
+      tasks: [{ id: 'set-up-the-project', title: FIRST_TASK, status: 'todo', priority: 1 }],
+    };
+    const errors = writeProject(inputs.slug, data, { dir });
+    if (errors.length) refuse(`The first status is not valid: ${errors.join(' ')}`);
+    return `published the first status of ${inputs.slug}`;
   },
 };
 

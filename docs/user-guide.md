@@ -68,6 +68,18 @@ Every setting and every resource that Herdr Boss manages is visible and settable
 
 When a value stays outside, the dashboard names it and the reason. The audit and its gap list are in [gui-settings-audit.md](ideas/gui-settings-audit.md).
 
+## New project setup
+
+The module `src/project-new.js` builds a new project in steps. It has no command yet. See `docs/cli.md`, section New project flow.
+
+The steps `policy`, `register`, and `status` put the new project into Herdr Boss:
+
+1. `policy` gives the project a share of 10 percent. The other projects give up part of their share, so the total stays at most 100. Each project keeps its mode and its exclusions. You see the shares before and after the change.
+2. `register` records the project folder in `project-repos.json`. The dashboard and the engine then read the repository of the project.
+3. `status` publishes the first status. It holds one task, `Set up the project`. The project appears on the dashboard with this task.
+
+Each step changes nothing when its result already exists. A run that stops at a failed step continues at that step on the next run. After the change, check the shares on the Allocation page.
+
 ## Project memory
 
 Store project memory in `docs/orchestration/memory.md`. Commit this file with the project repository.

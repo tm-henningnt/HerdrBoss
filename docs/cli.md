@@ -119,7 +119,7 @@ Run `project new` in a plain terminal, in the pane labeled `boss`, or in a pane 
 
 The module `src/project-new.js` exports `runProjectNew(options)`. The command calls it.
 
-`runProjectNew` runs these steps in order: `validate`, `folder`, `files`, `kit`, `commit`. The steps `remote`, `policy`, `register`, `workspace`, `harness`, and `check` report `not built yet`. They change nothing.
+`runProjectNew` runs these steps in order: `validate`, `folder`, `files`, `kit`, `commit`, `policy`, `register`, `status`. The steps `remote`, `workspace`, `harness`, and `check` report `not built yet`. They change nothing.
 
 | Option | Meaning |
 |---|---|
@@ -148,6 +148,14 @@ The `kit` step calls the installer of `herdr-boss kit install` for the project f
 The `commit` step stages all files of the project and scans the staged files for secrets. Then it makes the first commit with the message `Set up the project with Herdr Boss` and no trailer. The commit uses the identity from `git var GIT_AUTHOR_IDENT` and `git var GIT_COMMITTER_IDENT`, which honor the environment. When Git cannot build an identity, the step fails and sets no identity. When the project already has a commit, the step makes no second commit.
 
 The scan refuses the commit for these classes: a private key block, a GitHub token, an AWS access key, a Slack token, a `password`, `secret`, `token`, or `api_key` assignment with a literal value of 16 or more characters, and a `.env` file. A file that ends in `.example`, `.sample`, `.template`, or `.dist` is not a `.env` file. The scan reads at most the first 200 KB of each line. A file over 2 MB, or a file with a NUL byte, cannot be scanned. The scan refuses it with the class `unscanned large or binary file`, unless its path is in the option `allowUnscanned`. The list is empty by default. The refusal names each file and class and never prints a value. The step then unstages all files and leaves the files unchanged. Remove the secret, then run the flow again with `resume`.
+
+The `policy` step adds the project to `policy.json` in the data folder. The new project gets `share` 10, `mode` `auto`, and no exclusions. When the total of all shares would pass 100, the step scales the other shares down: each new share is the old share times (100 minus 10) divided by the old total, rounded down. The step changes only shares. It keeps each mode and each exclusion. It refuses to run when a share is not a whole number of 0 or more. It refuses a change that would lower a share of 1 or more to below 1, and it writes nothing then. It saves the policy through the validation of `herdr-boss policy set`. The step prints the shares of all projects before and after the change. When the policy already has an entry for the slug, the step changes nothing.
+
+The `register` step records `{ slug, repo, remote }` for the project in `project-repos.json` in the data folder, with mode 0600. It records the same values as the first `publish`. It does not publish a status. When the slug is already registered to the same folder, the step changes nothing. When it is registered to another folder, the step fails.
+
+The `status` step publishes the first status through the code of `herdr-boss publish`: `writeProject` validates the file with `validateProject`. The status has the summary `New project. Set up the project.`, the current `kitRevision`, and one task `Set up the project` with status `todo` and priority 1. The `goal` field holds the option `goal`. The status has no `goal` field when the option is empty. When `projects/<slug>.json` exists, the step changes nothing.
+
+A dry run names these three steps and writes nothing.
 
 The state file is `flows/<slug>.json` in the data folder, with mode 0600. The command writes it through a temporary file with a unique name, and never follows a symlink at that name. It holds the inputs and the status of each finished step. The repository holds no state. A run that finds a state file with the same inputs skips the finished steps. It changes nothing when all built steps are finished. A step that fails is recorded as `failed`, and the next run repeats it.
 
