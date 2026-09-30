@@ -422,12 +422,12 @@ function allocationSegment(s, p, share) {
   return `<div class="allocation-segment ${allocationActivity(p)}" data-segment="${esc(p.slug)}" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${share}" aria-label="${esc(p.label)} set share" aria-valuetext="${esc(text.value)}" style="width:${share}%;background-color:${allocationColor(s, p.slug)}" title="${esc(text.title)}"><span class="allocation-label" aria-hidden="true"><span class="allocation-share">${share}%</span><span class="allocation-slots"> · ${effectiveAllocation(p).slots}</span></span></div>`;
 }
 // The read-only summary shows the applied shares. The Allocation page shows the editable draft.
-function allocationSummary(s) {
+function allocationSummary(s, { link = true } = {}) {
   const live = s.control?.projects || {};
   const projects = projectSlugs(s).map((slug) => live[slug]).filter(Boolean);
   if (!projects.length) return '';
   const segments = projects.map((p) => allocationSegment(s, p, Number(compactPercent(p.share || 0)))).join('');
-  return `<div class="allocation-summary"><div class="allocation-bar" role="group" aria-label="Applied project allocation, 0 to 100 percent, in project card order">${segments}</div><a href="/allocation">Adjust allocation →</a></div>`;
+  return `<div class="allocation-summary"><div class="allocation-bar" role="group" aria-label="Applied project allocation, 0 to 100 percent, in project card order">${segments}</div>${link ? '<a href="/allocation">Adjust allocation →</a>' : ''}</div>`;
 }
 function moveBoundary(index, position) {
   const projects = allocationProjects();
@@ -984,7 +984,8 @@ function handoffBlock(s, projectSlug = null) {
   const countText = cards.length ? (projectSlug && !prepared.length && !candidates.some((h) => h.window) ? 'Start when needed' : `${cards.length} need review`) : 'No handovers pending';
   const head = `<div class="section-head"><h2>Project continuity</h2><span>${countText}</span></div>`;
   const body = cards.length ? `<div class="handoff-list">${cards.join('')}</div>` : empty;
-  if (!projectSlug) return `<section class="handoff-section">${head}${body}</section>`;
+  // On the Overview, no pending handover is one slim line under the alerts.
+  if (!projectSlug) return cards.length ? `<section class="handoff-section">${head}${body}</section>` : `<section class="handoff-section handoff-none">${head}</section>`;
   // A needed or prepared handover is a full section in the Now area. Otherwise the orchestrator is one slim line that opens to the handover form.
   if (prepared.length || candidates.some((h) => h.window)) return `<section data-key="section:continuity" class="handoff-section handoff-needed">${head}${body}</section>`;
   const orch = project?.orch;
@@ -1498,7 +1499,7 @@ function attentionBlock(s) {
 
 function fleetBlock(s) {
   const projects = Object.values(s.control?.projects || {});
-  return `<section class="fleet-section"><div class="section-head"><h2>Projects</h2><a href="/agents">Live agents →</a></div>${allocationSummary(s)}${projectSelector(s, null)}<div class="fleet-table-wrap"><table class="fleet-table"><thead><tr><th>Project</th><th>Orchestrator</th><th>Workers</th><th>Policy</th><th>Published status</th></tr></thead><tbody>${projects.map((p) => {
+  return `<section class="fleet-section"><div class="section-head"><h2>Projects</h2><a href="/agents">Live agents →</a></div>${allocationSummary(s, { link: false })}${projectSelector(s, null)}<div class="fleet-table-wrap"><table class="fleet-table overview-projects"><thead><tr><th>Project</th><th>Orchestrator</th><th>Workers</th><th>Policy</th><th>Published status</th></tr></thead><tbody>${projects.map((p) => {
     const published = (s.projects || []).find((x) => x.slug === p.slug);
     const detail = `/projects/${p.slug}`;
     return `<tr><td data-label="Project"><a href="${esc(detail)}"><strong>${esc(p.label)}</strong></a><small>${esc(p.workspace)}</small></td><td data-label="Orchestrator">${p.orch ? `<span class="status-inline"><span class="st ${esc(p.orch.status)}"></span>${esc(p.orch.kind)} · ${esc(p.orch.status)}</span>` : '<span class="text-crit">Missing</span>'}</td><td class="mono" data-label="Workers">${p.running} / ${p.slots}</td><td data-label="Policy">${esc(p.effectiveMode === 'paused' ? 'Paused' : p.idle ? 'Idle · lending' : `${Math.round(p.share)}% share`)}</td><td data-label="Published status">${published ? `${esc(published.status || published.phase || 'Published')}<small>updated ${ago(published.updated)}${staleStatusTag(s, published)}</small>` : '<span class="muted">Not published</span>'}</td></tr>`;
@@ -1519,8 +1520,8 @@ function overview(s) {
   return [
     `<header class="page-intro"><div><h1>Overview</h1><p>${alertCount || handovers ? `${alertCount} resource alert${alertCount === 1 ? '' : 's'} · ${handovers} handover${handovers === 1 ? '' : 's'} to review` : 'Projects are operating within the current resource policy.'}</p></div><div class="capacity-readout"><strong>${s.control?.runningWorkers ?? 0}<span> / ${s.control?.maxWorkers ?? '–'}</span></strong><small>working agents</small><a href="/allocation">Adjust allocation →</a></div></header>`,
     guidanceFold(s),
-    `<div class="overview-action-grid">${attentionBlock(s)}${handoffBlock(s)}</div>`,
     decisionSummary(s),
+    `<div class="overview-action-grid">${attentionBlock(s)}${handoffBlock(s)}</div>`,
     fleetBlock(s),
     quotaSummary(s),
     machineSummary(s),
@@ -2240,7 +2241,10 @@ function watchPanel(s) {
   const form = night.active
     ? `${watchRoutineLive(night)}<button type="button" data-night-stop="true"${dis}>Stop the watch</button>`
     : `<div class="watch-form" data-night-form><label class="setting-line"><span>Until</span><input type="datetime-local" data-night-until value="${esc(watchForm.until)}" aria-label="Watch end date and time"${watchForm.forever || nightBusy ? ' disabled' : ''}></label><span class="watch-length" data-night-length aria-live="polite"></span><label class="setting-line"><input type="checkbox" data-night-forever aria-label="Watch until I cancel"${watchForm.forever ? ' checked' : ''}${dis}><span>Until I cancel</span></label><span class="watch-daily" data-night-daily-row${watchForm.forever ? '' : ' hidden'}><label class="setting-line"><input type="checkbox" data-night-daily aria-label="Send a daily report"${watchForm.daily ? ' checked' : ''}${dis}><span>Daily report</span></label><input type="time" data-night-report value="${esc(watchForm.report)}" aria-label="Daily report time"${watchForm.daily && !nightBusy ? '' : ' disabled'}></span><label class="setting-line"><input type="checkbox" data-night-quiet-hours aria-label="Quiet hours during the watch"${dis}><span>Quiet hours</span></label>${watchRoutineFields(s)}<button type="button" data-night-start="true"${dis}>Start</button><p class="setting-help watch-warning" role="alert" data-night-warning></p></div>`;
-  return `<section class="panel night-panel watch-compact" id="watch"><h2>Watch</h2><p class="setting-help" role="status" aria-live="polite" data-night-status>${esc(status)}</p>${form}</section>`;
+  // A fold card: closed by default when no watch runs, open by default while a watch runs. The browser remembers a choice.
+  const summary = night.active ? `On watch ${watchUntilPhrase(night)}` : 'No watch runs';
+  const body = `<p class="setting-help" role="status" aria-live="polite" data-night-status>${esc(status)}</p>${form}`;
+  return foldCard({ slug: AGENTS_FOLD, key: 'watch', id: 'watch', className: 'watch-compact watch-fold', title: 'Watch', count: summary, hint: night.active ? '' : 'Start a watch', body, defaultOpen: night.active === true });
 }
 
 function agentsView(s) {
@@ -3860,8 +3864,10 @@ function fleetProjects(s) {
     .map((p) => ({ ...p, label: avatarTitle(p.slug, p.project || p.slug) }));
 }
 
-function fleetChip(item) {
-  return `<a class="proj-chip" href="/projects/${encodeURIComponent(item.slug)}" title="Open ${esc(item.label)}">${avatarSlot(item.slug, { title: item.label, size: 20 })}<span>${esc(item.label)}</span></a>`;
+// On a phone the chip is plain text: the card title is the link, and the project chip row filters the board.
+function fleetChip(item, { plain = false } = {}) {
+  const inner = `${avatarSlot(item.slug, { title: item.label, size: 20 })}<span>${esc(item.label)}</span>`;
+  return plain ? `<span class="proj-chip">${inner}</span>` : `<a class="proj-chip" href="/projects/${encodeURIComponent(item.slug)}" title="Open ${esc(item.label)}">${inner}</a>`;
 }
 
 function fleetTaskUrl(slug, id) {
@@ -3896,7 +3902,7 @@ function fleetCard(item, { chip, now }) {
     ? `<a class="card-title" href="${fleetTaskUrl(slug, id)}" title="Open ${esc(id)} on the ${esc(item.label)} board">${esc(t.title)}</a>`
     : `<span class="card-title">${esc(t.title)}</span>`;
   return `<li class="card kb-card st-${state}${item.onPath ? ' on-path' : ''}" data-key="task:${esc(item.key)}" id="fleet-${esc(domPart(item.key))}">`
-    + `<div class="card-top">${chip ? fleetChip(item) : '<span class="card-dot" aria-hidden="true"></span>'}<span class="card-id mono">${esc(id)}</span>${item.onPath ? '<span class="card-flag" title="On the critical path of the project">path</span>' : ''}</div>`
+    + `<div class="card-top">${chip ? fleetChip(item, { plain: chip === 'plain' }) : '<span class="card-dot" aria-hidden="true"></span>'}<span class="card-id mono">${esc(id)}</span>${item.onPath ? '<span class="card-flag" title="On the critical path of the project">path</span>' : ''}</div>`
     + `${title}${wait}${worker}</li>`;
 }
 
@@ -3950,7 +3956,7 @@ function fleetToolbar(projects, items, phone) {
   const state = phone ? '' : `<label class="kb-field"><span>State</span><select data-fleet-filter="state">${option('', 'All states', fleet.state)}${FLOW.map((k) => option(k, fleetColLabel(k), fleet.state)).join('')}</select></label>`;
   const active = fleet.project || fleet.who || (fleet.state && !phone) || fleet.query;
   return `<div class="kb-toolbar" role="search" aria-label="Filter the board">`
-    + `<label class="kb-search"><span class="visually-hidden">Search tasks</span><input type="search" id="fleet-search" data-fleet-query value="${esc(fleet.query)}" placeholder="Search tasks (press /)" autocomplete="off" spellcheck="false"></label>`
+    + `<label class="kb-search"><span class="visually-hidden">Search tasks</span><input type="search" id="fleet-search" data-fleet-query value="${esc(fleet.query)}" placeholder="${phone ? 'Search tasks' : 'Search tasks (press /)'}" autocomplete="off" spellcheck="false"></label>`
     + `${project}<label class="kb-field"><span>Kind</span><select data-fleet-filter="who">${whoOptions}</select></label>${state}`
     + `<button type="button" class="kb-clear" data-fleet-clear${active ? '' : ' hidden'}>Clear filters</button></div>`;
 }
@@ -3981,7 +3987,7 @@ function boardView(s) {
     const view = projectView(FLEET_SLUG);
     const active = boardActiveColumn(view, board.counts);
     const tabs = phone ? `<div class="board-tabs" role="tablist" aria-label="Board columns">${FLOW.map((k) => `<button type="button" role="tab" class="board-tab st-${k}" data-board-tab="${k}" data-slug="${FLEET_SLUG}" aria-selected="${k === active}" aria-controls="fleet-col-${k}" tabindex="${k === active ? 0 : -1}"><span class="card-dot" aria-hidden="true"></span><span class="tab-label">${FLOW_LABEL[k]}</span><span class="num">${board.counts[k]}</span></button>`).join('')}</div>` : '';
-    const sections = cols.map((k) => `<section class="board-col st-${k}" data-key="col:${k}" data-col="${k}" id="fleet-col-${k}"${phone ? ' role="tabpanel"' : ''} aria-label="${fleetColLabel(k)}, ${board.counts[k]}"><h3><span class="card-dot" aria-hidden="true"></span>${fleetColLabel(k)}<span class="num">${board.counts[k]}</span></h3>${fleetList(board.columns[k], k, { chip: true, now })}</section>`).join('');
+    const sections = cols.map((k) => `<section class="board-col st-${k}" data-key="col:${k}" data-col="${k}" id="fleet-col-${k}"${phone ? ' role="tabpanel"' : ''} aria-label="${fleetColLabel(k)}, ${board.counts[k]}"><h3><span class="card-dot" aria-hidden="true"></span>${fleetColLabel(k)}<span class="num">${board.counts[k]}</span></h3>${fleetList(board.columns[k], k, { chip: phone ? 'plain' : true, now })}</section>`).join('');
     body = `<div class="board kb-board" data-key="fleet:mixed">${tabs}<div class="board-cols kb-cols" data-board-cols="${FLEET_SLUG}" data-keep-attrs="style" style="--cols:${cols.length}">${sections}</div></div>`;
   } else {
     const head = `<div class="kb-head" style="--cols:${cols.length}" aria-hidden="true">${cols.map((k) => `<span class="st-${k}"><span class="card-dot"></span>${fleetColLabel(k)}<span class="num">${board.counts[k]}</span></span>`).join('')}</div>`;
@@ -4311,6 +4317,7 @@ const FOLD_PREFIX = 'herdr-boss.project-folds.';
 // The open or closed state of each fold, per project, in this browser. The Overview uses the slug OVERVIEW_FOLD.
 const OVERVIEW_FOLD = '~overview';
 const SETTINGS_FOLD = '~settings';
+const AGENTS_FOLD = '~agents';
 function foldState(slug) {
   try { const value = JSON.parse(localStorage.getItem(FOLD_PREFIX + slug)); return value && typeof value === 'object' && !Array.isArray(value) ? value : {}; } catch { return {}; }
 }
@@ -4923,21 +4930,23 @@ const HELP = {
   overview: ['Overview', `
     <p>The state of all projects and shared resources at one glance.</p>
     <h3>Current guidance</h3><p>The collapsed section under the header holds the rules that orchestrators read in the bulletin. Its header shows one summary line: the watch, the Use now lanes, the lanes ahead of pace or exhausted, and the rule counts. Select the header to show the lane states and the rules. The browser remembers the open or closed state.</p>
-    <h3>Needs attention</h3><p>Warnings and critical alerts: quotas, memory, machine load, and orphaned worktree processes. <b>Details</b> opens the rule text in Logs.</p>
-    <h3>Handovers</h3><p>Prepared successors that wait for review. Each shows the goal that the successor gets, as one collapsed line. A record shows only while its source pane and successor pane exist. A recommendation without a record is not listed here. Open the project to plan, inspect, or activate a handover.</p>
-    <h3>Projects</h3><p>The bar above the cards shows the applied share of each project, in card order. Its colors match the top edge of each card. A label such as <b>30% · 2</b> shows the share and the effective slots; the tooltip shows all values. Change the shares on the Allocation page.</p><p>A card per project with its published status and task mix. The table shows the orchestrator, workers in use against the share, and the policy mode. Select a project for its details.</p>
+    <h3>Needs your decision</h3><p>The line under the guidance shows the number of open tasks that wait for you, with a link to each project. It shows only when a task waits for you.</p>
+    <h3>Needs attention</h3><p>Warnings and critical alerts: quotas, memory, machine load, and orphaned worktree processes. <b>Details</b> opens the current guidance at its rules. <b>Adjust policy</b> opens the Allocation page.</p>
+    <h3>Handovers</h3><p>When no handover waits for review, <b>Project continuity</b> is one line under <b>Needs attention</b>. Otherwise it lists the prepared successors that wait for review. Each shows the goal that the successor gets, as one collapsed line. A record shows only while its source pane and successor pane exist. A recommendation without a record is not listed here. Open the project to plan, inspect, or activate a handover.</p>
+    <h3>Projects</h3><p>The bar above the cards shows the applied share of each project, in card order. Its colors match the top edge of each card. A label such as <b>30% · 2</b> shows the share and the effective slots; the tooltip shows all values. Change the shares on the Allocation page.</p><p>A card per project with its published status and task mix. The table shows the orchestrator, workers in use against the share, and the policy mode. On a phone the table shows one short block for each project. Select a project for its details.</p>
+    <h3>Top bar on a phone</h3><p>The top bar is one row: the Herdr Boss mark, the menu button with the page name, the four icons, and <b>Help</b>. Below 375 px the icons move to a second row. A warning line under the bar shows that the page lost its connection to the service.</p>
     <h3>Watch symbol</h3><p>The eye symbol in the top bar, next to the chat, mail, and needs-action icons, shows the watch. When no watch runs, the symbol is faded. While a watch runs, the symbol is clear and, on a wide screen, shows a label such as <b>until 08:00</b> or <b>on</b>. On a phone it shows the icon only. Select it to open a popover with the end time, the mode, and <b>Stop</b>. The page asks you to confirm a stop. The page has no banner. A read-only preview shows the symbol and refuses a change.</p>
     <h3>Subscriptions and machine health</h3><p>Select a bar to open all quota windows, or the processes and load history. After a restart, "Quotas from HH:MM" shows saved quotas until the first new quota read succeeds. When the probe for one provider fails, "Claude quota from HH:MM (probe failed)" shows its last good quota for up to 60 minutes. The Machine guard switch turns CPU and load warnings and worker-start blocks on or off. Choose a pause length to suspend those rules for a time; select <b>Resume guard</b> to end a pause early. Memory and disk warnings stay on. Disk space reports the filesystem that contains the Herdr Boss data directory.</p>`],
   board: ['Board', `
     <p>The Board shows the tasks of all projects on one kanban. It uses the same task states as the board on each project page.</p>
     <h3>Columns</h3><p><b>Blocked</b> holds a task that waits on another task, the Owner, the Boss, or an external item. <b>Ready</b> holds a task whose dependencies are all done. <b>Doing</b> holds a task with a live worker; the longest-running worker comes first. <b>Review</b> holds a task whose worker was collected and is not merged. <b>Done · 24 h</b> holds the tasks done in the last 24 hours, newest first. A done task without an update time does not show.</p>
     <h3>Cards</h3><p>A card shows the project, the task ID, the title, and the worker with its model. A Doing card also shows the elapsed time. A Blocked card shows what it waits on: the ID and title of each open blocker task, or the Owner, the Boss, or an external item with the ask. When the status names no blocker, the card says so. A <b>path</b> mark shows a task on the critical path of its project.</p>
-    <p>Select a card title to open the project page with the task selected. The page shows the task card on the project board and its chain in the dependency graph. Select a blocker to open that task. Select the project name to open the project page.</p>
+    <p>Select a card to open the project page with the task selected. The page shows the task card on the project board and its chain in the dependency graph. Select a blocker to open that task. Select the project name to open the project page.</p>
     <h3>Summary</h3><p>The counts show the tasks in each column after the project, who, and search filters. Select a count to show only that column. Select it again to show all columns. <b>Needs the Owner</b> counts the open Mailbox items that need you and opens the Mailbox. Each project bar shows the tasks of that project in each state, on one scale for all projects. Select a bar to show only that project.</p>
     <h3>Filters</h3><p><b>Project</b> shows one project. <b>Kind</b> shows the tasks that wait for the Owner, the tasks with a worker, or the tasks of one worker harness or one model. <b>State</b> shows one column. The search matches the project, the task ID, the title, the ask, and the worker name and model. Each word must match. Press <kbd>/</kbd> to go to the search. <b>Clear filters</b> removes all filters.</p>
     <h3>Grouping</h3><p><b>By project</b> shows one swimlane for each project. Select a swimlane title to close or open it. <b>One board</b> shows all projects in one set of columns. The page remembers the grouping, the filters, and the closed swimlanes in this browser. It does not remember the search.</p>
     <h3>Refresh</h3><p>The page updates in place. It keeps the scroll position, the focus, and the search text.</p>
-    <h3>Phone</h3><p>On a phone the page shows one column at a time. The tab bar shows each column with its count. Select a tab or swipe sideways to change the column. The row of project chips replaces the swimlanes. Select a chip to show one project, and select <b>All</b> to show all projects.</p>`],
+    <h3>Phone</h3><p>On a phone the page shows one column at a time. The tab bar shows each column with its count. Select a tab or swipe sideways to change the column. The row of project chips replaces the swimlanes. Select a chip to show one project, and select <b>All</b> to show all projects. The project name on a card is not a link on a phone.</p>`],
   projects: ['Projects', `
     <p>Select a project card. The detail below it shows what the orchestrator published and what runs now.</p>
     <p>The page puts the sections in the order of use: <b>Now</b>, then the plan and progress, then history (all work, notes, and links), then <b>Details</b>.</p>
@@ -5034,7 +5043,7 @@ const HELP = {
     <p>Changes stay in a draft until you select <b>Apply policy</b>. A rejected save shows the server error and keeps your draft.</p>`],
   agents: ['Agents', `
     <p>One page with two views. The switch at the top changes the view. The <b>Chart</b> view shows the organization from the Owner down to the workers. The <b>List</b> view lists every Herdr workspace with its orchestrator and workers. Chart is the default. The URL holds the view as <code>?view=chart</code> or <code>?view=list</code>, and this browser remembers the last choice.</p>
-    <h3>Watch</h3><p>The box at the top shows the watch state. Choose the end date and time in the picker. The default is the next 07:30: today when it is before 07:30, tomorrow otherwise. The length in hours shows next to the picker, and a warning shows above 48 hours. A watch has no maximum length. The end time must be in the future.</p>
+    <h3>Watch</h3><p>The box at the top shows the watch state in its header. When no watch runs, the box is closed; select the header to open it. While a watch runs, the box is open. The browser remembers the open or closed state. Choose the end date and time in the picker. The default is the next 07:30: today when it is before 07:30, tomorrow otherwise. The length in hours shows next to the picker, and a warning shows above 48 hours. A watch has no maximum length. The end time must be in the future.</p>
     <p>Select <b>Until I cancel</b> to run the watch until you stop it. Then you can select <b>Daily report</b> and set a time, by default 07:30. A watch until cancelled sends no report unless you select this. Select <b>Quiet hours</b> to hold back the held actions.</p>
     <p>The <b>Routines</b> list shows the prompts that the service sends to the Boss pane during the watch. Clear the box of a routine to leave it out of this watch. Set its schedule: a number of minutes between runs, or a time before the end of the watch. A routine before the end has no run in a watch until cancelled.</p>
     <p>Write <b>Instructions for this watch</b> to add a text for this watch only. The service sends the text to the Boss with each routine, and to each orchestrator in the start notice. The box keeps your last choice of routines and schedules as the default of the next watch.</p>
@@ -6409,6 +6418,14 @@ document.addEventListener('click', async (e) => {
   }
 });
 
+// Scroll to the element that the address hash names. A closed fold opens; its toggle event saves the open state.
+function revealHash() {
+  const target = document.getElementById(location.hash.slice(1));
+  if (!target) return;
+  if (target.tagName === 'DETAILS') target.open = true;
+  requestAnimationFrame(() => target.scrollIntoView());
+}
+
 document.addEventListener('click', (e) => {
   const a = e.target.closest('a[href^="/"]');
   if (!a || a.target || e.metaKey || e.ctrlKey || /\.md$/.test(a.getAttribute('href'))) return;
@@ -6417,10 +6434,10 @@ document.addEventListener('click', (e) => {
   lastRender = '';
   render();
   if (location.pathname === '/browsers') for (const slug of browserPreviewOpen) if (!browserPreviewUrls[slug]) refreshBrowserPreview(slug, true);
-  if (location.hash) requestAnimationFrame(() => document.getElementById(location.hash.slice(1))?.scrollIntoView());
+  if (location.hash) revealHash();
   else scrollTo(0, 0);
 });
-addEventListener('popstate', () => { lastRender = ''; render(); if (location.pathname === '/browsers') for (const slug of browserPreviewOpen) if (!browserPreviewUrls[slug]) refreshBrowserPreview(slug, true); if (location.hash) requestAnimationFrame(() => document.getElementById(location.hash.slice(1))?.scrollIntoView()); });
+addEventListener('popstate', () => { lastRender = ''; render(); if (location.pathname === '/browsers') for (const slug of browserPreviewOpen) if (!browserPreviewUrls[slug]) refreshBrowserPreview(slug, true); if (location.hash) revealHash(); });
 
 function connect() {
   const es = new EventSource('/api/events');
@@ -6430,8 +6447,7 @@ function connect() {
     // A link from the Browsers page opens /allocation#lease-POOL-ITEM. Scroll to that row once.
     if (!hashScrolled && location.hash) {
       hashScrolled = true;
-      const target = document.getElementById(location.hash.slice(1));
-      if (target) requestAnimationFrame(() => target.scrollIntoView());
+      revealHash();
     }
     if (location.pathname === '/mailbox' && mailbox.loaded && !mailbox.loading && JSON.stringify(state.mailbox) !== mailbox.counts) loadMailbox(true);
   });

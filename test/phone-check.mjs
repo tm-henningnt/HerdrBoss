@@ -6,7 +6,8 @@
 //
 // Without --base the script starts a read-only preview with a temporary HOME and HERDR_BOSS_DIR.
 // The script fails when a page is wider than the viewport, or when a visible input, select, or
-// textarea has a computed font size under 16 px. --strict-targets also fails on touch targets under 44 px.
+// textarea has a computed font size under 16 px, or when the header is more than one row high at 375 px and wider.
+// --strict-targets also fails on touch targets under 44 px.
 import { execFileSync, spawn } from 'node:child_process';
 import { mkdtempSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -88,7 +89,9 @@ const MEASURE = `(() => {
     if (r.right > vw + 0.5 && !clipped(el) && !/(auto|scroll)/.test(getComputedStyle(el).overflowX)) pre.push(path(el));
   }
   const bad = {}; for (const el of document.querySelectorAll('#app *')) { if (!visible(el)) continue; }
-  return { vw, doc, offenders: offenders.slice(0, 8), offenderCount: offenders.length, small, targets, unscrolled: pre };
+  const top = document.querySelector('header.top');
+  const header = top ? Math.round(top.getBoundingClientRect().height) : 0;
+  return { vw, doc, offenders: offenders.slice(0, 8), offenderCount: offenders.length, small, targets, unscrolled: pre, header };
 })()`;
 
 async function settle(cdp) {
@@ -120,7 +123,7 @@ try {
 
   const state = await (await fetch(`${base}/api/state`)).json();
   const slug = state.projects?.[0]?.slug;
-  const pages = ['/', '/projects', '/agents', '/agents?view=chart', '/allocation', '/analytics', '/settings', '/mailbox', '/chat', '/logs', '/browsers'];
+  const pages = ['/', '/projects', '/board', '/agents', '/agents?view=chart', '/allocation', '/analytics', '/settings', '/mailbox', '/chat', '/logs', '/browsers'];
   if (slug) pages.splice(2, 0, `/projects/${slug}`);
 
   for (const width of widths) {
@@ -148,6 +151,8 @@ try {
         const m = await cdp.eval(MEASURE);
         const problems = navError ? [navError] : [];
         if (m.doc > m.vw) problems.push(`scrollWidth ${m.doc} > clientWidth ${m.vw}`);
+        // One header row is 50 px: a 44 px control and the padding. A second row adds 44 px or more.
+        if (width >= 375 && m.header > 64) problems.push(`header ${m.header}px high: more than one row`);
         for (const o of m.offenders) problems.push(`wide element ${o.el} (${o.left}..${o.right})`);
         for (const s of m.small) problems.push(`font ${s.fontSize}px on ${s.el}`);
         for (const u of m.unscrolled) problems.push(`no scroll box: ${u}`);
