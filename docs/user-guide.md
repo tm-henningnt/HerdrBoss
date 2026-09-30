@@ -182,6 +182,14 @@ The Overview shows the current guidance in a collapsed section under the page he
 
 Select the header to open the section. It shows the watch line, one chip for each quota lane with its state and use, and the same rules as the bulletin. The browser remembers the open or closed state in its local storage. The Analytics page has the activity log.
 
+The Overview shows its sections in this order:
+
+1. The current guidance.
+2. **Needs your decision**, when a task waits on the Owner. See [Needs your decision](#needs-your-decision).
+3. **Needs attention**: the warnings and critical alerts. **Details** opens the current guidance at its rules. **Adjust policy** opens the Allocation page.
+4. **Project continuity**: the prepared handovers that wait for review. When no handover waits, the section is one line under **Needs attention**, and **Needs attention** uses the full width.
+5. The projects, the subscriptions, and the machine health.
+
 ## Watch
 
 The watch says that the Owner is away. The Boss acts for the Owner until the end time of the watch, or until the Owner cancels it.
@@ -256,7 +264,7 @@ The top bar has a watch symbol, an eye, next to the chat, mail, and needs-action
 - While a watch runs, the symbol is clear. On a wide screen it has a small label: `until 08:00`, or `on` for a watch until cancelled. On a phone it is the icon only.
 - Select the symbol to open a popover. Press `Esc` to close it. The popover shows the end time and the mode, and it has **Stop**. The page asks you to confirm a stop. A watch until cancelled also has **Stop**. With no watch, the popover links to the Agents page.
 
-The **Agents** page has a compact **Watch** box at the top. It shows the stored state. The **Settings** page links to it. When no watch runs, the box has these controls:
+The **Agents** page has a **Watch** box at the top. The box header shows the watch state: `No watch runs` or `On watch until 08:00`. When no watch runs, the box is closed. Select the header to open it. While a watch runs, the box is open. The browser remembers the open or closed state in its local storage. The link in the popover and the link on the **Settings** page open the box. When no watch runs, the box has these controls:
 
 - A date and time picker for the end time. The default is the next 07:30: today at 07:30 before 07:30, and tomorrow at 07:30 otherwise.
 - The length of the watch in hours, next to the picker. A warning shows above 48 hours.
@@ -711,7 +719,7 @@ Blocked, Ready, and Review keep the project order and, in a project, the order o
 
 A card shows the project name and avatar, the task ID, the title, and the worker with its model. A Doing card also shows the elapsed time. A Blocked card shows what the task waits on: the ID and the title of each open blocker, or the Owner, the Boss, or an external item with the `ask`. A card on the critical path of its project shows **path**.
 
-Select the card title to open `/projects/SLUG?task=ID`. The project page selects the task, shows its card on the board, and centers it in the dependency graph. Select a blocker to open that task the same way. Select the project name to open the project page.
+Select a card to open `/projects/SLUG?task=ID`. The project page selects the task, shows its card on the board, and centers it in the dependency graph. Select a blocker to open that task the same way. Select the project name to open the project page. On a phone the project name on a card is not a link. Use the project chips to show one project.
 
 ### Summary strip
 
@@ -1291,10 +1299,12 @@ On a phone, the list fills the page. Select a chat to open it full screen. Selec
 
 The dashboard adapts to a phone and to a home-screen web app.
 
-- On a screen up to 760 px wide, the header shows a menu button with the current page name and the three top-bar icons. Select an icon to open the Chat or that Mailbox folder. Select the menu button to open the page menu. The menu closes after you choose a page and when you press Escape.
+- On a screen up to 760 px wide, the header is one row: the Herdr Boss mark, a menu button with the current page name, the watch symbol, the three top-bar icons, and **Help**. On a screen below 375 px the icons move to a second row. The page name in the menu button shortens before the header wraps. Select an icon to open the Chat or that Mailbox folder. Select the menu button to open the page menu. The menu closes after you choose a page and when you press Escape.
+- On a phone the header does not show the update time. A warning line under the header shows that the page lost its connection to the service.
 - On a phone, the long sections of a project page start collapsed. Select a section title to open it. The browser remembers each open section for that project in its local storage. The Now section, overall progress, the current frontier, and the board stay open.
 - Project cards become compact. They show the name, mode, status line, and task bar.
-- Tables show stacked rows with a label for each value. The page does not scroll sideways at 393 px.
+- Tables show stacked rows with a label for each value. The page does not scroll sideways at 393 px. The project table on the Overview shows one short block for each project, without labels: the name and workers on the first line, the orchestrator and the policy on the second line, and the published status on the third line.
+- On a screen up to 760 px wide, a link that acts as a button, such as **Details** or **Project details**, is at least 44 px high.
 - On a screen up to 760 px wide, each text field, number field, select, and text area uses a font size of 16 px. This stops iOS Safari from zooming the page when you select a field. Pinch zoom stays on.
 - On a screen up to 760 px wide, each button, select, text field, checkbox with its label, and menu link is at least 44 px high.
 - The page does not scroll sideways at any width from 320 px. A wide table or code block scrolls inside its own box.
@@ -1306,7 +1316,7 @@ The dashboard adapts to a phone and to a home-screen web app.
 
 The static checks in `test/phone-layout.test.js` run in `npm test`. They check the viewport meta, the 16 px field size, the 44 px target size (also for class rules that set a smaller height), the dynamic viewport units, and the scroll boxes. They do not open a browser.
 
-`npm run check:phone` runs `test/phone-check.mjs`. The script needs the project browser. It starts a read-only preview, opens each page, the Help panel, the menu, the new-message form of the Mailbox, an open message, and an open chat at 320, 375, 390, and 430 px, and fails when a page is wider than the screen or a field has a font size under 16 px. It prints a warning for each target under 44 px. Add `--strict-targets` to fail on those too. Add `--base URL` to check a running dashboard. A state that needs data, such as an open message, is skipped when the dashboard has none. Add `--only /mailbox,/chat` to check some pages.
+`npm run check:phone` runs `test/phone-check.mjs`. The script needs the project browser. It starts a read-only preview, opens each page, the Help panel, the menu, the new-message form of the Mailbox, an open message, and an open chat at 320, 375, 390, and 430 px, and fails when a page is wider than the screen or a field has a font size under 16 px. At 375 px and wider it also fails when the header is more than one row high (above 64 px). It prints a warning for each target under 44 px. Add `--strict-targets` to fail on those too. Add `--base URL` to check a running dashboard. A state that needs data, such as an open message, is skipped when the dashboard has none. Add `--only /mailbox,/chat` to check some pages.
 
 ## Configuration
 
