@@ -595,7 +595,7 @@ export class Engine extends EventEmitter {
       if (this.act && currentHerdrSnapshot && currentPaneList) {
         try { expireMissingHandoffs(herdr?.panes); }
         catch (e) { errors.push(`handoffs: ${e.message}`); }
-        try { await this.finishActivations(herdr, now, this.state?.control); }
+        try { await this.finishActivations(herdr, now); }
         catch (e) { errors.push(`handoff finish: ${e.message}`); }
         try { await this.retirePreviousOrchestrators(herdr, now); }
         catch (e) { errors.push(`handoff retirement: ${e.message}`); }
@@ -1502,7 +1502,7 @@ export class Engine extends EventEmitter {
   // A record without a finish object was activated before the early close existed. Only the 120-minute retirement handles it.
   // After activation, close the old pane once the successor is confirmed and the old pane is settled,
   // then rename the successor tab. Close the tabs of successors that were never activated.
-  async finishActivations(herdr, now, control = null) {
+  async finishActivations(herdr, now) {
     const panes = new Map((herdr?.panes || []).map((pane) => [pane.id, pane]));
     const records = listHandoffs();
     const at = new Date(now).toISOString();
@@ -1527,14 +1527,11 @@ export class Engine extends EventEmitter {
       const planned = new Date(confirmed ? now : activatedAt + FINISH_TIMEOUT_MS).toISOString();
       if (!confirmed && finish.plannedAt !== planned) { finish.plannedAt = planned; }
       const idle = source && since(source);
-      // The allocation of the previous tick tells whether the project has a running worker.
-      const working = Number(control?.projects?.[item.project]?.running) > 0;
-      const quiet = Boolean(source) && !working && settled(source) && source.label === `${role} previous` && idle?.status === source.status && now - idle.since >= 60000;
+      const quiet = Boolean(source) && settled(source) && source.label === `${role} previous` && idle?.status === source.status && now - idle.since >= 60000;
       // The old pane works or has an unfinished task. Retry each tick, and tell the Boss once after 60 minutes.
       const reasons = [];
       if (source && !quiet) {
         if (!settled(source)) reasons.push(`the pane ${source.status === 'blocked' ? 'is blocked' : 'works'}`);
-        if (working) reasons.push('a worker of the project runs');
         if (source.label !== `${role} previous`) reasons.push(`its label is ${source.label || 'empty'}, not ${role} previous`);
         if (settled(source) && !(idle?.status === source.status && now - idle.since >= 60000)) reasons.push('it settled less than 60 seconds ago');
       }

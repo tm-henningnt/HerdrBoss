@@ -562,8 +562,8 @@ test('brief rendering fills known slots and rejects an unknown slot', () => {
   assert.match(template, /WORKER REPORT.*WORKER QUESTION.*fails, record the failed command and reason in the worker report, then stop/s);
   assert.match(template, /Boss monitors report metadata and will notify the orchestrator/);
   assert.match(template, /These report and question commands are an exception to the rule against Herdr commands outside Herdr/);
-  assert.match(template, /{{herdrEnvPrefix}}{{herdrBin}} agent prompt {{orchPane}} "WORKER QUESTION/);
-  assert.match(template, /{{herdrEnvPrefix}}{{herdrBin}} agent prompt {{orchPane}} "WORKER REPORT/);
+  assert.match(template, /{{herdrEnvPrefix}}{{herdrBin}} agent prompt {{orchAgent}} "WORKER QUESTION/);
+  assert.match(template, /{{herdrEnvPrefix}}{{herdrBin}} agent prompt {{orchAgent}} "WORKER REPORT/);
 });
 
 test('worker report and delegated run validation enforce their handoff schemas', () => {
@@ -2608,7 +2608,13 @@ test('worker brief shows the effective screenshot budget and project precedence'
 test('worker brief names the orchestrator by pane and stable agent name', () => {
   const template = fs.readFileSync(path.resolve('kit/templates/worker-brief.md'), 'utf8');
   const brief = renderBrief(template, { orchPane: 'w1:p9', orchAgent: 'demo-orch' });
-  assert.match(brief, /Your orchestrator is pane `w1:p9` \(agent `demo-orch`\)\./);
+  assert.match(brief, /Your orchestrator is the agent `demo-orch`\. Its current pane is `w1:p9`\./);
+  assert.ok(brief.indexOf('agent `demo-orch`') < brief.indexOf('`w1:p9`'), 'the agent name comes first');
+  assert.match(brief, /If a command to `demo-orch` fails, send the same message to the pane `w1:p9`\./);
+  assert.match(brief, /agent prompt demo-orch "WORKER QUESTION/);
+  assert.match(brief, /agent prompt demo-orch "WORKER REPORT/);
+  assert.doesNotMatch(brief, /agent prompt w1:p9/);
+  assert.match(brief, /new pane ID in a prompt/);
 });
 
 test('default worker brief renders the effective screenshot budget', () => {
@@ -4182,8 +4188,8 @@ test('the kit texts carry the subagent and no-watching rule and no rule to re-re
   const lines = stub.trimEnd().split('\n').length;
   assert.ok(lines >= 6 && lines <= 8, `the stub has ${lines} lines`);
   const brief = read('kit/templates/worker-brief.md');
-  assert.match(brief, /agent prompt {{orchPane}} "WORKER QUESTION {{name}}:/);
-  assert.match(brief, /agent prompt {{orchPane}} "WORKER REPORT {{name}}:/);
+  assert.match(brief, /agent prompt {{orchAgent}} "WORKER QUESTION {{name}}:/);
+  assert.match(brief, /agent prompt {{orchAgent}} "WORKER REPORT {{name}}:/);
   const change = readKitChanges().find((entry) => /subagent/i.test(entry.summary || ''));
   assert.ok(change, 'kit/CHANGES.md has an entry for the subagent rule');
   assert.equal(change.impact, 'required');

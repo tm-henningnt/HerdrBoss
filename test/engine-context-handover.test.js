@@ -541,12 +541,13 @@ test('the unused successor cleanup uses the live pane tab, not a stale recorded 
   assert.deepEqual(out.herdrCalls.filter(({ args }) => args[1] === 'close').map(({ args }) => args), [['tab', 'close', 'w-alpha:t8']]);
 });
 
-test('the old pane stays open while the project has a running worker', { timeout: 30000 }, (t) => {
+test('the old pane closes while the project has a running worker', { timeout: 30000 }, (t) => {
   const out = run(t, {
     handoffs: [activeRecord()],
     steps: [{ at: at(0), herdr: herdrOf(oldPane('idle'), newPane('idle'), worker) }, { at: at(2), herdr: herdrOf(oldPane('idle'), newPane('idle'), worker) }],
   });
-  assert.deepEqual(closes(out), []);
+  assert.deepEqual(closes(out).map(({ args }) => args), [['pane', 'close', 'w-alpha:p1']]);
+  assert.ok(out.records[0].finish.closedAt);
 });
 
 test('a Boss record gets no automatic close, rename, or cleanup', { timeout: 30000 }, (t) => {
@@ -631,9 +632,8 @@ test('the 60-minute note names the reason when a done old pane stays open', { ti
     steps: [{ at: at(0), herdr: { ...boss, panes } }, { at: at(2), herdr: { ...boss, panes } }],
   });
   const running = scenario([oldPane('done'), newPane('idle'), worker, bossPane]);
-  assert.deepEqual(closes(running), []);
-  assert.match(bossNotes(running)[0].args[3], /still done/);
-  assert.match(bossNotes(running)[0].args[3], /a worker of the project runs/);
+  assert.equal(closes(running).length, 1);
+  assert.deepEqual(bossNotes(running), []);
   const relabeled = scenario([{ ...oldPane('done'), label: 'orch old' }, newPane('idle'), idleWorker, bossPane]);
   assert.deepEqual(closes(relabeled), []);
   assert.match(bossNotes(relabeled)[0].args[3], /label is orch old, not orch previous/);
