@@ -553,6 +553,10 @@ When a task names `serve:live` and the `serve-ports` pool exists, `worker start`
 | `worktree prune [--apply]` | List worktrees that pass the safe checks and show processes in removal candidates. `--apply` removes only worktrees with no blocking process. |
 | `gh issue create\|comment\|edit ... --body-file FILE` | Run a GitHub issue command. An inline `--body` is refused. |
 
+### Kit change impact
+
+A commit that changes `kit/`, `src/kit/`, or `docs/orchestrator-instructions.md` needs a `Kit-Impact: required`, `Kit-Impact: useful`, or `Kit-Impact: none` trailer, or a change of `kit/CHANGES.md`. A kit change with neither has impact `useful` and sends no `Kit updated` notice. A paused or stood-down project gets no kit notice. `test/kit-impact-trailer.test.js` checks the Git log.
+
 ### Kit file, `AGENTS.md` stub, and drift check
 
 `kit install` writes three files in the project repository:

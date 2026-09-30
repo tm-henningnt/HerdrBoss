@@ -50,13 +50,13 @@ function parseLog(stdout) {
 // The impact of each commit, in the order of commits, which is newest first. A commit that carries
 // no usable Kit-Impact: trailer takes the impact of the change log entry that lines up with it. A
 // batch that does not line up with the change log, or a stored cursor without a known revision,
-// leaves every change at required.
+// leaves every change at useful. Only a trailer or a change log entry sets required.
 function commitImpacts(commits, assetHashes, entries, stored) {
   const index = entries.findIndex((entry) => entry.revision === stored?.revision);
   const recorded = index >= 0 ? entries.slice(index + 1) : [];
   // Git lists newest first and the change log is chronological, so read the record in reverse.
   const aligned = recorded.length === assetHashes.length ? recorded.slice().reverse() : [];
-  return commits.map((commit) => parseKitImpact(commit.message) ?? aligned.shift()?.impact ?? 'required');
+  return commits.map((commit) => parseKitImpact(commit.message) ?? aligned.shift()?.impact ?? 'useful');
 }
 
 function errorText(error) {

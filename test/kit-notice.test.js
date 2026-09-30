@@ -12,6 +12,7 @@ import { kitRevision, projectKit } from '../src/kit/agents-check.js';
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const NOW = Date.parse('2026-09-27T10:00:00.000Z');
 const REV = projectKit().revision;
+const REQUIRED = 'Kit-Impact: required';
 
 function tmpDir(t, prefix) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -134,7 +135,7 @@ test('the notice and the stored state take the kit revision of the given project
   assert.match(expected, /^[0-9a-f]{12}$/);
   assert.notEqual(expected, kitRevision(), 'the fixture root must not have the default kit revision');
   const base = gitSync(root, ['rev-parse', 'HEAD']);
-  commit(root, 'kit/models.md', 'Change the kit');
+  commit(root, 'kit/models.md', 'Change the kit', REQUIRED);
   const result = await readKitNotice({ root, stored: { commit: base, at: 0 }, git: recordingGit(), now: NOW });
   assert.equal(result.state.revision, expected);
   assert.ok(result.alert.text.startsWith(`[herdr-boss] Kit revision ${expected} (1 change(s)): `), result.alert.text);
@@ -143,9 +144,9 @@ test('the notice and the stored state take the kit revision of the given project
 test('two kit commits and one non-kit commit give one alert with only the kit subjects', async (t) => {
   const root = makeRepo(t);
   const base = gitSync(root, ['rev-parse', 'HEAD']);
-  commit(root, 'kit/skills/herdr-orchestrator/SKILL.md', 'Change the orchestrator skill');
+  commit(root, 'kit/skills/herdr-orchestrator/SKILL.md', 'Change the orchestrator skill', REQUIRED);
   commit(root, 'src/server.js', 'Change the dashboard server');
-  commit(root, 'src/kit/workers.js', 'Change worker start');
+  commit(root, 'src/kit/workers.js', 'Change worker start', REQUIRED);
   const head = gitSync(root, ['rev-parse', 'HEAD']);
   // The skill template is an installed kit asset, so the kit commit moves the fixture revision.
   const revision = kitRevision(root);
@@ -172,7 +173,7 @@ test('two kit commits and one non-kit commit give one alert with only the kit su
 test('the orchestrator instructions file counts as a kit path', async (t) => {
   const root = makeRepo(t);
   const base = gitSync(root, ['rev-parse', 'HEAD']);
-  commit(root, 'docs/orchestrator-instructions.md', 'Change the orchestrator block');
+  commit(root, 'docs/orchestrator-instructions.md', 'Change the orchestrator block', REQUIRED);
   commit(root, 'docs/user-guide.md', 'Change the user guide');
   const result = await readKitNotice({ root, stored: { commit: base, at: 0 }, git: recordingGit(), now: NOW });
   assert.match(result.alert.text, /\(1 change\(s\)\): Change the orchestrator block\. Run/);
@@ -183,7 +184,7 @@ test('the kit and stub templates count as kit paths', async (t) => {
     assert.ok(KIT_PATHS.some((kitPath) => file === kitPath || file.startsWith(`${kitPath}/`)), file);
     const root = makeRepo(t);
     const base = gitSync(root, ['rev-parse', 'HEAD']);
-    commit(root, file, `Change ${path.basename(file)}`);
+    commit(root, file, `Change ${path.basename(file)}`, REQUIRED);
     const result = await readKitNotice({ root, stored: { commit: base, at: 0 }, git: recordingGit(), now: NOW });
     assert.match(result.alert.text, new RegExp(`\\(1 change\\(s\\)\\): Change ${path.basename(file).replace('.', '\\.')}\\. Run`));
   }
@@ -220,7 +221,7 @@ test('a mixed batch names only the required changes', async (t) => {
   assert.equal(result.alert.text, `[herdr-boss] Kit revision ${REV} (1 change(s)): A change that needs action. Run herdr-boss kit update and continue. The command prints the current kit file.`);
 });
 
-test('a missing, invalid, or ambiguous impact sends a required notice', async (t) => {
+test('a missing, invalid, or ambiguous impact sends no notice', async (t) => {
   const cases = [
     ['no trailer', ''],
     ['an invalid value', 'Kit-Impact: maybe'],
@@ -230,10 +231,10 @@ test('a missing, invalid, or ambiguous impact sends a required notice', async (t
   for (const [name, trailers] of cases) {
     const root = makeRepo(t);
     const base = gitSync(root, ['rev-parse', 'HEAD']);
-    commit(root, 'kit/models.md', `Kit change with ${name}`, trailers);
+    const head = commit(root, 'kit/models.md', `Kit change with ${name}`, trailers);
     const result = await readKitNotice({ root, stored: { commit: base, at: 0 }, git: recordingGit(), now: NOW });
-    assert.ok(result.alert, name);
-    assert.match(result.alert.text, /\(1 change\(s\)\): Kit change with/, name);
+    assert.equal(result.alert, null, name);
+    assert.deepEqual(result.state, { commit: head, at: NOW, revision: REV }, name);
   }
 });
 
@@ -275,7 +276,7 @@ test('a batch of asset commits takes one record per commit, newest first', async
   assert.equal(result.alert.text, `[herdr-boss] Kit revision ${kitRevision(root)} (1 change(s)): Record the newer useful change. Run herdr-boss kit update and continue. The command prints the current kit file.`);
 });
 
-test('a change log that does not line up with the commits sends a required notice', async (t) => {
+test('a change log that does not line up with the commits sends no notice', async (t) => {
   const cases = [
     ['two asset commits and one entry', ['kit/templates/project-kit.md', 'kit/models.json']],
     ['a code commit and one entry', ['src/kit/workers.js']],
@@ -287,12 +288,11 @@ test('a change log that does not line up with the commits sends a required notic
     const result = await readKitNotice({
       root, stored: { commit: base, revision: '111111111111', at: 0 }, git: recordingGit(), now: NOW, changesFile: changesFile(t, USEFUL_TEXT),
     });
-    assert.ok(result.alert, name);
-    assert.match(result.alert.text, new RegExp(`\\(${files.length} change\\(s\\)\\)`), name);
+    assert.equal(result.alert, null, name);
   }
 });
 
-test('an unknown stored revision or an old cursor sends a required notice', async (t) => {
+test('an unknown stored revision or an old cursor sends no notice', async (t) => {
   for (const stored of [{ revision: 'deadbeefcafe' }, {}]) {
     const root = makeRepo(t);
     const base = gitSync(root, ['rev-parse', 'HEAD']);
@@ -300,12 +300,11 @@ test('an unknown stored revision or an old cursor sends a required notice', asyn
     const result = await readKitNotice({
       root, stored: { commit: base, at: 0, ...stored }, git: recordingGit(), now: NOW, changesFile: changesFile(t, CHANGES_TEXT),
     });
-    assert.ok(result.alert, JSON.stringify(stored));
-    assert.match(result.alert.text, /\(1 change\(s\)\): Record a useful change/, JSON.stringify(stored));
+    assert.equal(result.alert, null, JSON.stringify(stored));
   }
 });
 
-test('an unreadable change log sends a required notice', async (t) => {
+test('an unreadable change log sends no notice', async (t) => {
   const root = makeRepo(t);
   const base = gitSync(root, ['rev-parse', 'HEAD']);
   commit(root, 'kit/templates/project-kit.md', 'Record a useful change');
@@ -313,7 +312,7 @@ test('an unreadable change log sends a required notice', async (t) => {
   const result = await readKitNotice({
     root, stored: { commit: base, revision: '111111111111', at: 0 }, git: recordingGit(), now: NOW, changesFile: missing,
   });
-  assert.ok(result.alert);
+  assert.equal(result.alert, null);
 });
 
 test('the kit revision paths are the installed kit assets that the revision hashes', (t) => {
@@ -345,7 +344,7 @@ test('the kit revision paths are the installed kit assets that the revision hash
 test('more than 10 kit commits list the 10 newest and then and N more', async (t) => {
   const root = makeRepo(t);
   const base = gitSync(root, ['rev-parse', 'HEAD']);
-  for (let i = 1; i <= 13; i += 1) commit(root, 'kit/models.md', `Kit change ${i}`);
+  for (let i = 1; i <= 13; i += 1) commit(root, 'kit/models.md', `Kit change ${i}`, REQUIRED);
   const result = await readKitNotice({ root, stored: { commit: base, at: 0 }, git: recordingGit(), now: NOW });
   const subjects = Array.from({ length: 10 }, (_, i) => `Kit change ${13 - i}`).join('; ');
   assert.equal(result.alert.text, `[herdr-boss] Kit revision ${REV} (13 change(s)): ${subjects}; and 3 more. Run herdr-boss kit update and continue. The command prints the current kit file.`);
@@ -476,7 +475,7 @@ if (input.mode === 'read') {
 } else {
   engine.push = true;
   const alert = { key: 'kit:abc1234', severity: 'info', scope: 'all', once: true, title: 'Kit updated', text: '[herdr-boss] Kit updated (1 change(s)): x.' };
-  for (const [i, panes] of input.rounds.entries()) await engine.deliver([alert], { panes }, Date.parse('2026-09-27T10:00:00.000Z') + i * 60000, null, new Set(input.held || []));
+  for (const [i, panes] of input.rounds.entries()) await engine.deliver([alert], { panes }, Date.parse('2026-09-27T10:00:00.000Z') + i * 60000, null, new Set((input.heldRounds ? input.heldRounds[i] : input.held) || []));
 }
 const memoryFile = path.join(process.env.HERDR_BOSS_DIR, 'memory.json');
 out.gitCalls = gitCalls;
@@ -538,6 +537,14 @@ test('the kit notice skips the orchestrator of a held project', { timeout: 30000
   assert.deepEqual(targets, ['wA:p1']);
 });
 
+test('a paused project gets no kit notice and gets it once when it resumes', { timeout: 30000 }, (t) => {
+  const alpha = { id: 'wA:p1', workspace: 'wA', workspaceLabel: 'Alpha', label: 'orch', orch: true, agent: 'codex', status: 'idle' };
+  const beta = { id: 'wB:p1', workspace: 'wB', workspaceLabel: 'Beta', label: 'orch', orch: true, agent: 'claude', status: 'idle' };
+  const out = runEngine(t, { mode: 'deliver', heldRounds: [['wB'], ['wB'], [], []], rounds: [[alpha, beta], [alpha, beta], [alpha, beta], [alpha, beta]] });
+  const targets = out.prompts.filter((args) => args[0] === 'agent' && args[1] === 'prompt').map((args) => args[2]);
+  assert.deepEqual(targets, ['wA:p1', 'wB:p1']);
+});
+
 test('the engine stores the kit notice state and logs the queued notice', { timeout: 30000 }, (t) => {
   const base = 'a'.repeat(40);
   const head = 'c'.repeat(40);
@@ -546,7 +553,7 @@ test('the engine stores the kit notice state and logs the queued notice', { time
     head,
     // A real kit root, so the notice takes the kit revision of the root that the engine supplies.
     kitRoot: repo,
-    log: `ccccccc\x1fChange the kit\x1fChange the kit\n\x00`,
+    log: `ccccccc\x1fChange the kit\x1fChange the kit\n\n${'Kit-Impact: required'}\n\x00`,
     memory: { paneSince: {}, pushes: {}, notified: {}, kitNotice: { commit: base, at: 0 } },
   });
   assert.deepEqual(out.gitCalls, [
