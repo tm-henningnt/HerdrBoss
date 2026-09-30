@@ -15,6 +15,7 @@ import { quotaUsageToday, recordQuotaSnapshot, readUsage } from './usage.js';
 import { renderNightReport } from './night-report.js';
 import { adhocOneLine, effectiveRoutines, routinePromptText, slotAfter, slotEnd } from './watch-routines.js';
 import { listBrowserSessions, cdpResponds, browserProcessCheck } from './browser-pool.js';
+import { probeBrowser, createBrowserProbes } from './browser-probe.js';
 import { readLeases, reclaimLeases, publicLease, tcpListening, leasePools, migrateProjectBrowserLeases } from './leases.js';
 import { codeSignCloneDir, sweepCodeSignClones } from './clone-sweep.js';
 import { runDenialScan, readDenials, denialSummary, DENIAL_SCAN_INTERVAL_MS, SCAN_BUDGET_BYTES, RETAIN_DAYS, RISE_FACTOR, RISE_MIN_EVENTS } from './denials.js';
@@ -398,6 +399,17 @@ export function browserReadyAlert(b, workspace) {
   };
 }
 
+// The notice to the project orchestrator for a browser that failed two CDP probes in a row.
+// The key holds the time of the change, so a browser that recovers and fails again sends one new notice.
+export function browserUnresponsiveAlert(b, workspace) {
+  const mode = b.headless ? 'headless' : 'visible';
+  return {
+    key: `browser:managed-unresponsive:${b.project}:${b.port}:${b.probeSince || ''}`, severity: 'warn', once: true, immediate: true, noDesktop: true, scope: workspace || 'user',
+    title: `${b.project} browser is not responding`,
+    text: `Your project browser is not responding. Run herdr-boss browser restart ${b.project} --${mode}, then continue.`,
+  };
+}
+
 export function pruneInactiveDiskPromptRecords(records, activeAlerts) {
   const active = activeAlerts instanceof Set ? activeAlerts : new Set(activeAlerts || []);
   return Object.fromEntries(Object.entries(records || {}).filter(([recordKey]) => {
@@ -486,6 +498,8 @@ export class Engine extends EventEmitter {
       collectMissingWorktreeProcesses,
       collectWorktreeCounts,
       cdpResponds,
+      // A test engine never probes a real browser port unless a test injects a probe.
+      probeBrowser: process.env.NODE_TEST_CONTEXT ? async () => ({ ok: true }) : probeBrowser,
       probeTcp: tcpListening,
       codeSignCloneDir,
       sweepCodeSignClones,
@@ -497,6 +511,7 @@ export class Engine extends EventEmitter {
       collectPiModels: process.env.NODE_TEST_CONTEXT ? async () => null : collectPiModels,
       ...collectors,
     };
+    this.browserProbes = createBrowserProbes({ probe: (port) => this.collectors.probeBrowser(port), onWarning: (text, b) => this.log('browser', text, { project: b.project }) });
     this.handoffRunner = handoffRunner;
     this.herdrRunner = herdrRunner;
     this.gitRunner = gitRunner;
@@ -636,9 +651,12 @@ export class Engine extends EventEmitter {
       const browserSessions = Object.values(listBrowserSessions());
       const browsers = findBrowsers(procs, herdr?.panes || [], knownBrowsers(this.cfg.sharedBrowsers, browserSessions));
       // Probe only a browser whose process matches its port and profile. The probes run in parallel, so a hung browser delays the tick by at most 2 seconds.
+      // A browser that started less than 120 seconds ago gets no probe, as in the offline check below.
+      // The CDP round trip runs in the background, at most once a minute for each browser, and only on an acting tick.
       const managedBrowsers = await Promise.all(browserSessions.map(async (b) => {
         const matched = browsers.some((x) => x.kind === 'automation-chrome' && x.port === String(b.port) && x.profile === b.profile);
-        return { ...b, responsive: matched ? await this.collectors.cdpResponds(b.port) : false };
+        const probe = this.browserProbes.tick({ key: `${b.project}:${b.port}:${b.launchedAt || ''}`, project: b.project, port: b.port, active: matched && this.act && !(b.launchedAt && now - Date.parse(b.launchedAt) < 120000) }, now);
+        return { ...b, responsive: matched ? await this.collectors.cdpResponds(b.port) : false, notResponding: probe.notResponding, probeAt: probe.lastProbeAt, probeReason: probe.reason, probeSince: probe.since };
       }));
       const night = readNight({ dataDir: DATA_DIR, now });
 
@@ -948,6 +966,8 @@ export class Engine extends EventEmitter {
           const p = control.projects[b.project];
           if (p?.workspace) evaluation.alerts.push(browserReadyAlert(b, p.workspace));
         }
+        // The notice has one key for each change to "not responding". It ends when the browser answers again. Herdr Boss never restarts the browser.
+        if (running && b.notResponding) evaluation.alerts.push(browserUnresponsiveAlert(b, control.projects[b.project]?.workspace || null));
         if (!b.launchedAt || now - Date.parse(b.launchedAt) < 120000) continue;
         if (running) continue;
         const p = control.projects[b.project];
@@ -983,7 +1003,7 @@ export class Engine extends EventEmitter {
         load: machine ? { oneMinute: machine.load[0], fiveMinute: machine.load[1], cpus: machine.cpus, limit: machineLimits(snap.machine, policy, now, snap.night).loadLimit } : null,
         machine: snap.machine?.limits || null,
         notes: evaluation.advice,
-        browsers: managedBrowsers.map((b) => ({ project: b.project, port: b.port, profile: b.profile, headless: !!b.headless, windowSize: b.windowSize || { width: 1280, height: 800 }, ready: browsers.some((x) => x.kind === 'automation-chrome' && x.port === String(b.port) && x.profile === b.profile), responsive: b.responsive })),
+        browsers: managedBrowsers.map((b) => ({ project: b.project, port: b.port, profile: b.profile, headless: !!b.headless, windowSize: b.windowSize || { width: 1280, height: 800 }, ready: browsers.some((x) => x.kind === 'automation-chrome' && x.port === String(b.port) && x.profile === b.profile), responsive: b.responsive, notResponding: b.notResponding, probeAt: b.probeAt, probeReason: b.probeReason })),
         policy,
         night: { active: snap.night?.active === true, maxWorkersByLane: nightConfig.maxWorkersByLane || {} },
         control: { runningWorkers: control.runningWorkers, maxWorkers: control.maxWorkers, runningByLane, projects: control.projects, workspaces: control.workspaces },

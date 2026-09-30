@@ -506,6 +506,36 @@ test('restartBrowser skips the page restore for a hung browser, closes it, and l
   }
 });
 
+test('restartBrowser restarts a browser that answers /json/version but cannot list its pages, and skips the restore', async () => {
+  const server = http.createServer((req, res) => {
+    if (req.url === '/json/version') { res.setHeader('content-type', 'application/json'); return res.end(JSON.stringify({ webSocketDebuggerUrl: `ws://127.0.0.1:${server.address().port}/devtools/browser/x` })); }
+    res.statusCode = 500;
+    res.end('Internal error');
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const session = register('tabs-hung-restart', server.address().port);
+  const machine = fakeMachine(session);
+  const launchNet = fakeLaunchNet();
+  const spawn = (chrome, args) => {
+    const port = Number(args.find((a) => a.startsWith('--remote-debugging-port=')).split('=')[1]);
+    const profile = args.find((a) => a.startsWith('--user-data-dir=')).split('=')[1];
+    machine.procs.set(4201, { pid: 4201, cmd: chromeCmd(port, profile) });
+    launchNet.launched.add(port);
+    return { pid: 4201, on() {}, unref() {} };
+  };
+  const closeViaCdp = async () => { machine.procs.delete(4101); machine.procs.delete(4102); server.closeAllConnections(); server.close(); };
+  try {
+    const result = await pool.restartBrowser('tabs-hung-restart', true, {
+      collectProcesses: machine.collectProcesses, closeViaCdp, spawn, chromePath: process.execPath, cloneDir: null, portOpen: launchNet.portOpen,
+      // The recorded port belongs to the fake server. The relaunch uses the fake launch network.
+      fetch: (url, options) => (Number(new URL(url).port) === session.port ? fetch(url, options) : launchNet.fetch(url, options)),
+    });
+    assert.equal(result.restoredPage, false);
+    assert.equal(result.profileVerified, true);
+    assert.equal(result.pid, 4201);
+  } finally { server.closeAllConnections(); server.close(); }
+});
+
 // A temporary clone folder and a process list without a Chrome main process. The real clone folder is never used.
 function cloneFixture(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-clone-dir-'));

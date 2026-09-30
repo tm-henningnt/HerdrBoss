@@ -485,10 +485,10 @@ export function renderBulletin(snap, evaluation, cfg) {
     L.push('', '## Project browsers', '');
     for (const b of snap.managedBrowsers) {
       const running = (snap.browsers || []).some((x) => x.kind === 'automation-chrome' && x.port === String(b.port) && x.profile === b.profile);
-      const state = !running ? 'offline' : b.responsive === false ? 'not responding' : 'ready';
+      const state = !running ? 'offline' : b.responsive === false || b.notResponding ? 'not responding' : 'ready';
       const size = b.windowSize || { width: 1280, height: 800 };
       if (state === 'not responding') {
-        L.push(`- ${b.project}: not responding (${b.headless ? 'headless' : 'visible'}); CDP http://127.0.0.1:${b.port} does not answer. Do not use it. Ask the Owner to restart it on the Browsers page, or run \`herdr-boss browser restart ${b.project} --${b.headless ? 'headless' : 'visible'}\` for your own project. Do not stop another project's browser.`);
+        L.push(`- ${b.project}: not responding (${b.headless ? 'headless' : 'visible'}); CDP http://127.0.0.1:${b.port} does not answer${b.probeReason ? ` (${b.probeReason})` : ''}. Do not use it. Ask the Owner to restart it on the Browsers page, or run \`herdr-boss browser restart ${b.project} --${b.headless ? 'headless' : 'visible'}\` for your own project. Do not stop another project's browser.`);
         continue;
       }
       L.push(`- ${b.project}: ${state} (${b.headless ? 'headless' : 'visible'}); next launch ${size.width}×${size.height}; CDP http://127.0.0.1:${b.port}; profile ${b.profile}. Use \`herdr-boss browser tabs ${b.project}\` and \`herdr-boss browser screenshot ${b.project} --tab <id>\` for simple browser work; see \`kit/browser-service.md\` for input commands. Do not stop another project's browser.`);

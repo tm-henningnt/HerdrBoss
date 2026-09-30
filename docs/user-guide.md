@@ -876,13 +876,42 @@ Herdr Boss shows one state for each project browser:
 | State | Meaning |
 |---|---|
 | ready | Chrome runs with the project port and profile. `GET /json/version` on the port returns HTTP 200 with JSON within 2 seconds. |
-| not responding | Chrome runs with the project port and profile, and the port accepts connections. `GET /json/version` does not answer within 2 seconds. |
+| not responding | Chrome runs with the project port and profile, and one of two conditions holds. Either `GET /json/version` does not answer within 2 seconds, or two CDP probes in a row failed. |
 | offline | No Chrome process runs with the project port and profile. |
 | port conflict | Another process uses the port. Herdr Boss does not touch it. |
 
-A "not responding" browser shows **Restart** and **Close browser** under **Manage**. It has no preview. The bulletin shows the same state for agents.
+A "not responding" browser shows the label **Not responding**, the reason, and a **Restart** button on its card. It also shows **Restart** and **Close browser** under **Manage**. It has no preview. The bulletin shows the same state and the reason for agents.
 
-To recover a "not responding" browser, use **Restart** or **Close browser** on the Browsers page. The CLI commands are `herdr-boss browser restart SLUG --headless|--visible` and `herdr-boss browser close SLUG`. A restart of a "not responding" browser does not reopen the current page.
+#### CDP probe
+
+`GET /json/version` can answer while the browser serves no tab. The service therefore runs a CDP probe on each project browser that Herdr Boss started. The probe has four steps:
+
+1. Send `Browser.getVersion`.
+2. Send `Target.getTargets`.
+3. Open a blank background tab with `Target.createTarget` and `background: true`.
+4. Run `Runtime.evaluate` with `1+1` in that tab. The result must be `2`.
+
+Each step has a limit of 3 seconds. The four steps together have a limit of 8 seconds. The cleanup adds up to 6 seconds: 2 seconds to wait for a late `createTarget` answer, 2 seconds for `Target.closeTarget`, and 2 seconds for the HTTP close. A probe therefore takes at most 14 seconds. The probe always closes the blank tab, also after a failure or a timeout. It also closes a socket that opens after a timeout. The probe never navigates, captures, focuses, or closes another tab.
+
+The probe records the ID of its blank tab. `browser tabs`, the preview grid, and the tab counts hide that tab. Herdr Boss drops a record when the tab closes, or after 10 minutes. When the blank tab does not close, the service writes one `browser` event to the log: `The probe tab ID on port PORT did not close.`
+
+The service runs at most one probe for each browser in 60 seconds. It never runs two probes of one browser at the same time. It runs no probe for a closed browser, for a browser that Herdr Boss did not start, for a browser that started less than 120 seconds ago, or in the read-only preview.
+
+One failed probe changes nothing. Two failed probes in a row mark the browser `not responding`. One successful probe clears the mark. The engine state and `GET /api/browser-sessions` show `notResponding`, `probeAt` (time of the last probe), and `probeReason`. The reason is one of these phrases:
+
+| Reason | Meaning |
+|---|---|
+| `getVersion timed out` or `getVersion failed` | The browser control socket did not answer, or refused the connection. |
+| `getTargets timed out` or `getTargets failed` | The browser did not list its tabs. |
+| `createTarget timed out` or `createTarget failed` | The browser did not open the blank tab. |
+| `evaluate did not return` or `evaluate failed` | The blank tab did not run the script. |
+| `evaluate returned a wrong value` | The script result was not `2`. |
+
+When a browser turns `not responding`, the service sends one notice to the orchestrator of the project: `Your project browser is not responding. Run herdr-boss browser restart SLUG --headless, then continue.` The notice names the current mode of the browser (`--headless` or `--visible`). The notice ends when the browser answers again. A later change to `not responding` sends a new notice.
+
+Herdr Boss never restarts a browser by itself. The **Restart** button on the card calls the route `POST /api/browser-sessions/restart` in the current mode, without reopening the current page. It exists only for a browser that Herdr Boss started. The CLI command `herdr-boss browser restart` keeps its rule: only a pane of the project or the Boss can run it.
+
+To recover a "not responding" browser, use **Restart** or **Close browser** on the Browsers page. The CLI commands are `herdr-boss browser restart SLUG --headless|--visible` and `herdr-boss browser close SLUG`. A restart of a "not responding" browser does not reopen the current page. A restart also skips the page restore when the browser cannot list its pages.
 
 Close works as follows:
 

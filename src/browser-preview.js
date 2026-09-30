@@ -1,3 +1,4 @@
+import { isProbeTab } from './browser-probe.js';
 import { browserStatus, listBrowserSessions, listBrowserTabViewports, setBrowserTabViewport } from './browser-pool.js';
 
 async function verifiedSession(project) {
@@ -58,7 +59,8 @@ async function pageVisibility(entry, port, viewport = null) {
 
 export async function listBrowserTabs(project) {
   const session = await verifiedSession(project);
-  const pages = await targets(session);
+  // The tab of a running or failed CDP probe is not a page of an agent or the Owner.
+  const pages = (await targets(session)).filter((page) => !isProbeTab(page.id));
   const viewports = listBrowserTabViewports(project, pages.map((page) => page.id));
   let attached = null;
   try { attached = await attachedTargets(session); } catch {}

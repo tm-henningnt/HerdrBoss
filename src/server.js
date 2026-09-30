@@ -19,6 +19,7 @@ import { summarizeHours, clampSummaryDays } from './machine-samples.js';
 import { analyticsSummary } from './analytics.js';
 import { buildWatchRecord, clearNight, readNight, writeNight } from './night.js';
 import { effectiveRoutines, rememberChoice, resetRoutine, saveRoutine } from './watch-routines.js';
+import { withProbeState } from './browser-probe.js';
 import { requestBrowser, listBrowserSessions, browserStatus, setBrowserWindowSize, closeBrowser, restartBrowser, listBookmarks, addBookmark, renameBookmark, moveBookmark, removeBookmark, setStartPage } from './browser-pool.js';
 import { listBrowserTabs, browserScreenshot, browserNavigate, browserNavigationState, browserHistoryAction, browserClick, browserInsertText, browserKey, browserNewTab, browserCloseTab, tabAttached } from './browser-preview.js';
 import { listHandoffs } from './handoff.js';
@@ -544,7 +545,8 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine 
       }
       if (p === '/api/browser-sessions' && req.method === 'GET') {
         const sessions = await Promise.all(Object.values(listBrowserSessions()).map(browserStatus));
-        return send(res, 200, sessions);
+        // The CDP probe state comes from the last engine tick.
+        return send(res, 200, withProbeState(sessions, engine.state?.managedBrowsers));
       }
       if (p === '/api/browser-sessions/tabs' && req.method === 'GET') {
         const project = url.searchParams.get('project');

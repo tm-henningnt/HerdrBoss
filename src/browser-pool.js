@@ -383,10 +383,14 @@ export async function restartBrowser(project, headless, options = {}) {
   const responsive = restorePage && session ? (await browserStatus(session, d)).responsive : false;
   if (restorePage && responsive) {
     const { listBrowserTabs } = await import('./browser-preview.js');
-    const tabs = await listBrowserTabs(project);
-    const selected = tabId ? tabs.find((tab) => tab.id === tabId) : tabs.find((tab) => /^https?:\/\//i.test(tab.url));
-    if (tabId && !selected) throw new Error('The selected page is no longer open. Refresh the preview before restarting.');
-    if (selected && /^https?:\/\//i.test(selected.url)) pageUrl = selected.url;
+    // A browser can answer /json/version and still fail to list its pages. The restart then skips the restore.
+    let tabs = null;
+    try { tabs = await listBrowserTabs(project); } catch {}
+    if (tabs) {
+      const selected = tabId ? tabs.find((tab) => tab.id === tabId) : tabs.find((tab) => /^https?:\/\//i.test(tab.url));
+      if (tabId && !selected) throw new Error('The selected page is no longer open. Refresh the preview before restarting.');
+      if (selected && /^https?:\/\//i.test(selected.url)) pageUrl = selected.url;
+    }
   }
   await closeBrowser(project, d);
   const status = await requestBrowser(project, { ...options, headless });
