@@ -897,8 +897,9 @@ export class Engine extends EventEmitter {
           text: `The bootstrap prompt did not reach the proposed successor ${h.id} in pane ${h.newPane}. It cannot report ready, so automatic activation cannot happen. Read the pane with herdr agent read ${h.newPane}, then send the prompt again or close the pane and prepare a new successor.`,
         });
         // Expire an automatic successor two hours after preparation when its source provider is no longer at risk.
+        // A successor of the context trigger waits up to 24 hours for a task boundary.
         const sourceProvider = providerFor(h.fromKind, policy.preferredModels?.[h.fromKind] ?? this.models.kinds[h.fromKind]?.defaultModel, policy);
-        if (h.status === 'prepared' && h.automatic && now - Date.parse(h.preparedAt) > 2 * 3600000 && !control.risks[sourceProvider]) {
+        if (h.status === 'prepared' && h.automatic && now - Date.parse(h.preparedAt) > (this.memory.contextHandovers?.[h.id] ? 24 : 2) * 3600000 && !control.risks[sourceProvider]) {
           const expired = this.act ? expireHandoff(h.id, `${sourceProvider || 'the source provider'} is no longer near its limit`) : null;
           if (expired) {
             this.log('handoff', `Expired unused successor ${h.id} in pane ${h.newPane}`, h.boss || h.label === 'boss' ? { workspace: h.workspace, pane: h.newPane } : { project: h.project, pane: h.newPane });
@@ -983,6 +984,8 @@ export class Engine extends EventEmitter {
       try { snap.mailbox = mailboxCounts(readMessages({ dir: DATA_DIR })); }
       catch (e) { errors.push(`mailbox: ${e.message}`); }
 
+      try { snap.handoverWaits = policy.autoHandover ? this.handoverWaits(herdr, control, snap.projects, policy) : {}; }
+      catch (e) { snap.handoverWaits = {}; errors.push(`handover waits: ${e.message}`); }
       this.state = snap;
       writeJson(STATE_FILE, snap);
       writeJson(MEMORY_FILE, this.memory);
@@ -1304,6 +1307,45 @@ export class Engine extends EventEmitter {
     }
   }
 
+  // Why a prepared successor is not activated yet. The reason is empty when activation may go ahead.
+  // Only the state of the source orchestrator pane counts as work: a running worker keeps the project
+  // active and never blocks the handover.
+  handoverBlock(item, { herdr, control, projects, policy }) {
+    const panes = herdr?.panes || [];
+    const source = panes.find((p) => p.id === item.sourcePane);
+    const target = panes.find((p) => p.id === item.newPane);
+    const settled = (pane) => ['idle', 'done'].includes(pane?.status);
+    const block = (reason, ownerDecision = false) => ({ reason, ownerDecision });
+    if (!item.readyAt) return block('the successor is not ready');
+    if (!source) return block('the source pane is gone');
+    if (isBossHandoff(item, herdr) || isBossName(source.label)) return block('the Boss pane is never handed over');
+    if (!settled(source)) return block('the source orchestrator works');
+    if (source.label !== item.label) return block('the source pane label changed');
+    if (target?.agent !== item.toKind) return block('the successor pane is absent');
+    if (!settled(target)) return block('the successor works');
+    if (projectHeld(item.project, projects, control)) return block('the project is held');
+    if (!workspaceActive(item.project, item.workspace, herdr, control)) return block('the project has no running worker');
+    const tracked = this.memory.contextHandovers?.[item.id] || {};
+    const usage = claudeContextUsage({ sessionId: source.sessionId, cwd: source.cwd });
+    const ranked = (model) => (modelTier(normalizeModelId(model)) === null ? null : normalizeModelId(model));
+    const sourceModel = ranked(usage.model) || ranked(tracked.sourceModel) || normalizeModelId(selectModel(item.fromKind, source.model, this.models, policy));
+    const tier = tierAllowsAutoActivation(sourceModel, item.model);
+    if (!tier.allowed) return block(tier.reason, true);
+    return block('');
+  }
+
+  // The reason for each prepared successor of the context trigger that waits. Shown on the Overview.
+  handoverWaits(herdr, control, projects, policy) {
+    const waits = {};
+    let records = [];
+    try { records = listHandoffs(); } catch { return waits; }
+    for (const item of records.filter((x) => x.status === 'prepared' && x.automatic && !x.promptError && this.memory.contextHandovers?.[x.id])) {
+      const { reason } = this.handoverBlock(item, { herdr, control, projects, policy });
+      if (reason) waits[item.id] = reason;
+    }
+    return waits;
+  }
+
   // The second automatic handover trigger. At a task boundary, an orchestrator whose context is above
   // the policy threshold gets a fresh successor from the project memory file. The successor keeps the
   // model of the source. Activation waits until the source pane is not working.
@@ -1328,17 +1370,11 @@ export class Engine extends EventEmitter {
       !projectHeld(slug, projects, control) && workspaceActive(slug, workspace, herdr, control);
 
     for (const item of records.filter((x) => x.status === 'prepared' && x.automatic && x.readyAt && !x.promptError && this.memory.contextHandovers[x.id])) {
-      const source = panes.find((p) => p.id === item.sourcePane);
-      const target = panes.find((p) => p.id === item.newPane);
-      if (!settled(source) || source.label !== item.label || target?.agent !== item.toKind || !settled(target)) continue;
-      if (isBossHandoff(item, herdr) || isBossName(source.label) || !eligible(item.project, item.workspace, source.label)) continue;
-      const usage = claudeContextUsage({ sessionId: source.sessionId, cwd: source.cwd });
-      const sourceModel = rankedModel(usage.model) || rankedModel(this.memory.contextHandovers[item.id].sourceModel) || normalizeModelId(selectModel(item.fromKind, source.model, this.models, policy));
-      const tier = tierAllowsAutoActivation(sourceModel, item.model);
-      if (!tier.allowed) {
-        once(`owner-decision:${item.id}`, `Context handover of ${item.toKind} ${item.model} for ${item.label || item.project} waits for the Owner: ${tier.reason}. Activate it with herdr-boss handoff activate ${item.id} --confirmed.`, { project: item.project, pane: item.newPane });
-        continue;
+      const block = this.handoverBlock(item, { herdr, control, projects, policy });
+      if (block.ownerDecision) {
+        once(`owner-decision:${item.id}`, `Context handover of ${item.toKind} ${item.model} for ${item.label || item.project} waits for the Owner: ${block.reason}. Activate it with herdr-boss handoff activate ${item.id} --confirmed.`, { project: item.project, pane: item.newPane });
       }
+      if (block.reason) continue;
       const key = `activate:${item.id}`;
       if (now - (this.memory.autoHandoverAttempts[key] || 0) < 60000) continue;
       this.memory.autoHandoverAttempts[key] = now;
