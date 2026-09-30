@@ -34,6 +34,8 @@ Keep the current facts that every HerdrBoss orchestrator needs at start and resu
 
 ## Holds and freezes
 
+- 2026-09-30: Paused by the Owner, short break, resume when the Owner says so. Start no new workers and no new tasks. Running workers: none. Next task on resume: G4h after 7 days of machine samples (from 2026-10-07); until then only Owner approvals (P1, A1, S1, G5) and the iOS keyboard check are open. Source: Owner, through the Boss.
+
 - 2026-09-29: The Owner resumed HerdrBoss only. The other projects stay stood down until the notice streamlining (N1 to N6) is done. Send no kit updates to the other projects during this work; the Boss holds them. Report merges to the Boss in one line, without kit updates for the projects. Source: Owner, through the Boss.
 - 2026-09-29: Claude quota hold lifted by the Owner. Claude remains paced under the Owner's 20x plan; Codex is unpaced by the Owner. Use Sonnet 5.5 by default for Claude workers and Opus 5.5 for hard judgment. Prepare the HerdrBoss orchestrator handover to Claude only when the Owner asks. Never hand over the Boss pane. Source: Owner, through the Boss.
 
