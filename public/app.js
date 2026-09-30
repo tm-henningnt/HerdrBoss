@@ -510,6 +510,64 @@ function controlBlock(s) {
 // A model string holds letters, digits, dots, underscores, slashes, and hyphens. The server applies the same rule.
 const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/;
 const settingsMessages = {};
+// The price table of the Settings page. The draft keeps typed values across a refresh.
+let priceTable = null;
+const priceDraft = {};
+let priceMessage = '';
+const PRICE_COLUMNS = [['input', 'Input'], ['output', 'Output'], ['cacheRead', 'Cache read'], ['cacheWrite', 'Cache write 5 min'], ['cacheWrite1h', 'Cache write 1 h']];
+function pricesPanel() {
+  const intro = '<p class="setting-help">USD per million tokens. The cost that Herdr Boss shows is an <b>API-price equivalent</b>: a subscription is not billed per token. A blank field uses the default.</p>';
+  if (!priceTable) return `<section id="price-settings" class="panel"><h2>Token prices</h2>${intro}<p class="setting-help">Prices are not loaded.</p></section>`;
+  const rows = Object.entries(priceTable.prices || {}).sort(([a], [b]) => a.localeCompare(b)).map(([name, p]) => {
+    const cells = PRICE_COLUMNS.map(([field, label]) => {
+      const draft = priceDraft[name]?.[field];
+      const value = draft !== undefined ? draft : p[field] ?? '';
+      const mark = (p.unconfirmed || []).includes(field) ? '<div class="muted">unconfirmed</div>' : '';
+      return `<td><input type="number" min="0" max="1000" step="any" style="width:84px" value="${esc(value)}" data-price-model="${esc(name)}" data-price-field="${esc(field)}" aria-label="${esc(name)} ${esc(label)}">${mark}</td>`;
+    }).join('');
+    return `<tr><th scope="row"><code>${esc(name)}</code>${p.removed ? ' <span class="muted">removed</span>' : ''}</th>${cells}<td>${esc(p.source || '')}${p.date ? ` <span class="muted">${esc(p.date)}</span>` : ''}</td></tr>`;
+  }).join('');
+  const head = PRICE_COLUMNS.map(([, label]) => `<th scope="col">${label}</th>`).join('');
+  return `<section id="price-settings" class="panel"><h2>Token prices</h2>${intro}<div class="service-settings-scroll"><table class="service-settings-table"><thead><tr><th scope="col">Model</th>${head}<th scope="col">Source</th></tr></thead><tbody>${rows}</tbody></table></div><p class="inline-feedback" role="status" aria-live="polite" data-price-message>${esc(priceMessage)}</p><div class="control-actions"><button type="button" data-save-prices>Save prices</button> <button type="button" class="quiet" data-reset-prices>Reset to defaults</button></div></section>`;
+}
+async function savePrices(reset, button) {
+  const models = {};
+  if (!reset) {
+    for (const input of document.querySelectorAll('#price-settings [data-price-model]')) {
+      const { priceModel: name, priceField: field } = input.dataset;
+      if (input.value.trim() === '') continue;
+      const value = Number(input.value);
+      // Send only the figures that differ from the default table. The server checks the range.
+      if (value === priceTable?.defaults?.[name]?.[field]) continue;
+      (models[name] ||= {})[field] = value;
+    }
+  }
+  const status = document.querySelector('[data-price-message]');
+  button.disabled = true;
+  try {
+    const response = await fetch('/api/settings/prices', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ models }) });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'The prices could not be saved.');
+    priceTable = result;
+    for (const key of Object.keys(priceDraft)) delete priceDraft[key];
+    priceMessage = reset ? 'Prices reset to the defaults.' : 'Saved.';
+    lastRender = '';
+    render();
+  } catch (error) {
+    priceMessage = error.message;
+    if (status) status.textContent = error.message;
+  } finally { button.disabled = false; }
+}
+document.addEventListener('input', (e) => {
+  const input = e.target.closest?.('#price-settings [data-price-model]');
+  if (input) (priceDraft[input.dataset.priceModel] ||= {})[input.dataset.priceField] = input.value;
+});
+document.addEventListener('click', (e) => {
+  const save = e.target.closest?.('[data-save-prices]');
+  if (save) savePrices(false, save);
+  const reset = e.target.closest?.('[data-reset-prices]');
+  if (reset) savePrices(true, reset);
+});
 const serviceSettingsMessages = {};
 const avatarMessages = {};
 const nullableServiceSettings = new Set(['watch.maxWorkers']);
@@ -738,7 +796,7 @@ function settingsView(s) {
   const harnessPanel = `<section class="panel harness-readiness-panel"><h2>Harness readiness</h2><div class="service-settings-scroll"><table class="service-settings-table harness-readiness-table"><thead><tr><th scope="col">Status</th><th scope="col">Area</th><th scope="col">Item</th></tr></thead><tbody>${harnessRows}</tbody></table></div><p class="service-settings-note">Run herdr-boss harness sync to see the changes to make.</p></section>`;
   const night = s.night || { active: false };
   const nightPanel = `<section class="panel night-panel"><h2>Watch</h2><p class="setting-help">The Watch control is on the <a href="/agents#watch">Agents page</a>.</p></section>`;
-  const settingsPanels = `${quotaPanel}${machineSettings}${nightPanel}${watchRoutineSettings(s)}${avatarSettings(s)}${serviceSettings}${harnessPanel}`;
+  const settingsPanels = `${quotaPanel}${machineSettings}${nightPanel}${watchRoutineSettings(s)}${avatarSettings(s)}${serviceSettings}${pricesPanel()}${harnessPanel}`;
   return `<header class="page-intro"><div><h1>Settings</h1><p>Assign models and provider routes in each harness. Set provider quotas and machine limits below.</p></div></header><section id="settings-plane" class="control-shell"><section class="panel"><h2>Harnesses</h2><p class="setting-help harness-help">Clear a model box to stop that harness from using it. The same model in another harness keeps its own box and provider.</p>${ignoredCount ? `<p class="setting-help harness-help" role="note" style="color: var(--warn)">${ignoredCount} legacy provider route${ignoredCount === 1 ? ' is' : 's are'} not compatible with ${ignoredCount === 1 ? 'its harness' : 'their harnesses'}. Herdr Boss treats ${ignoredCount === 1 ? 'it' : 'them'} as Unmetered. Choose a provider in each marked row before you apply the policy.</p>` : ''}<div class="harness-grid">${harnesses}</div></section><div class="settings-grid">${settingsPanels}</div><div class="control-actions ${policyDirty ? 'pending' : ''}"><span data-policy-status role="status" aria-live="polite">${esc(saveMessage || (policyDirty ? 'Unsaved changes · Apply policy to keep them' : 'Policy saved'))}</span><button id="save-policy" ${policyDirty ? '' : 'disabled'}>Apply policy</button></div></section>`;
 }
 
@@ -4182,6 +4240,7 @@ const HELP = {
     <h3>Watch</h3><p>The <b>Watch</b> box is on the <b>Agents</b> page. Select the link on this page to open it.</p>
     <h3>Watch routines</h3><p>Each routine in the <b>Watch routines</b> section has a title, a model hint, a schedule, and a prompt text. Select a routine to edit it. The schedule is a number of minutes between runs, or a time before the end of the watch. Select <b>Save</b> to store the change on this machine. The change never edits the kit file, and it applies to the next prompt of a running watch. Select <b>Reset to the kit text</b> to remove your change. Use <b>Add a routine</b> to create your own routine. Turn routines on or off for a watch in the Watch box on the Agents page.</p>
     <h3>Service settings</h3><p>The table shows the values that the service uses. Each row shows whether the value comes from <code>config.json</code> or a default. Rows with inputs can be changed in the dashboard. Change the values in a group, then select <b>Save</b>. Herdr Boss applies saved values at once. Keep the quota warning below the critical value. Rows without inputs are read-only. Change in <code>config.json</code> and restart.</p>
+    <h3>Token prices</h3><p>The <b>Token prices</b> section lists the price of each model in USD per million tokens: input, output, cache read, cache write for 5 minutes, and cache write for 1 hour. It shows the source and date of each entry. <b>unconfirmed</b> marks a figure that does not match the published pricing rule. Herdr Boss shows the cost as an <b>API-price equivalent</b>, because a subscription is not billed per token. Change a figure and select <b>Save prices</b>. A blank field uses the default. <b>Reset to defaults</b> removes all changes. A figure that you save is no longer unconfirmed.</p>
     <h3>Harness readiness</h3><p>This read-only table shows the status of each harness entry that orchestration needs. A row shows the status, the area, and the item. The status is <code>ok</code>, <code>missing</code>, or <code>bad</code>. The table shows no file path and no setting value. Herdr Boss reads these entries at each service start and then every 10 minutes. Run <code>herdr-boss harness sync</code> to see the changes to make.</p>
     <h3>Harnesses</h3><p>Clear <b>Available</b> to stop all workers from using a harness. The preferred model is the model that worker start and handover use when no model is given. An empty choice uses the harness default.</p>
     <p>Each model row has a box and a provider. Clear the box to stop that harness from using the model. Choose a provider to count the model against that provider quota. Choose <b>Unmetered</b> when no quota applies.</p>
@@ -4346,6 +4405,10 @@ function render(force = false) {
   if (!state) return;
   if (!policyDirty) policyDraft = null;
   if (!force && policyDirty && ['/allocation', '/settings'].includes(location.pathname) && document.activeElement?.closest?.('#control-plane, #settings-plane')) {
+    $updated.textContent = `updated ${ago(state.updatedAt)}`;
+    return;
+  }
+  if (!force && Object.keys(priceDraft).length && location.pathname === '/settings' && document.activeElement?.closest?.('#price-settings')) {
     $updated.textContent = `updated ${ago(state.updatedAt)}`;
     return;
   }
@@ -5578,7 +5641,7 @@ function refreshForcesRender(pathname) {
 }
 
 async function refreshExtras() {
-  const results = await Promise.allSettled(['/api/models', '/api/usage', '/api/browser-sessions', '/api/handoffs', '/api/denials', '/api/mailbox?folder=needs-you', '/api/chats'].map((url) => fetch(url).then((r) => r.json())));
+  const results = await Promise.allSettled(['/api/models', '/api/usage', '/api/browser-sessions', '/api/handoffs', '/api/denials', '/api/mailbox?folder=needs-you', '/api/chats', '/api/settings/prices'].map((url) => fetch(url).then((r) => r.json())));
   if (results[0].status === 'fulfilled') models = results[0].value;
   if (results[1].status === 'fulfilled') usage = results[1].value;
   if (results[2].status === 'fulfilled') {
@@ -5592,6 +5655,7 @@ async function refreshExtras() {
   if (results[4].status === 'fulfilled') denials = results[4].value;
   if (results[5].status === 'fulfilled') mailbox.updatesUnread = results[5].value.updatesUnread || 0;
   if (results[6].status === 'fulfilled' && Array.isArray(results[6].value)) { chat.list = chatSortList(results[6].value); chat.loaded = true; }
+  if (results[7].status === 'fulfilled' && results[7].value?.prices) priceTable = results[7].value;
   if (location.pathname === '/mailbox' && !mailbox.loading) await loadMailbox(true);
   if (refreshForcesRender(location.pathname)) lastRender = '';
   autoRender();

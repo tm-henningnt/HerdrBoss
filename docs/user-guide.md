@@ -412,19 +412,30 @@ The Analytics page shows a **Model scorecard** table with one row for each harne
 
 ### Token use and spend by role
 
-The service reads the session logs of Claude Code, Codex, Pi, and OpenCode every 5 minutes. It keeps one number for each day: the token use, split by role and by harness. A day is the local calendar day of the machine, the same day as on the machine hours. The roles are `boss`, `orchestrator`, `worker`, and `other`. Read the numbers with `herdr-boss spend [--days N]` or `GET /api/spend?days=N`. The Analytics page does not show them yet.
+The service reads the session logs of Claude Code, Codex, Pi, and OpenCode every 5 minutes. It keeps one number for each day: the token use, split by role and by harness. A day is the local calendar day of the machine, the same day as on the machine hours. The roles are `boss`, `orchestrator`, `worker`, and `other`. The Boss and the HerdrBoss orchestrator share one Claude transcript folder, so the session ID decides between them. Read the numbers with `herdr-boss spend [--days N]` or `GET /api/spend?days=N`. The Analytics page does not show them yet.
 
 The service reads only counts: input, output, cache read, and cache write tokens, and the model name. It never reads or keeps message text or commands. The saved scan state keeps only the role, the worker and project names for matching, and one-way hashes of the folder and the session ID. It keeps no path and no raw session ID. The token total of a day is input plus output plus cache read plus cache write. A Codex input count that includes cached input is split, so the cached tokens count once.
 
 The service finds the role of a session in this order:
 
 1. The session ID of a live pane. The pane label `boss` gives `boss`. An orchestrator pane gives `orchestrator`. Any other agent pane gives `worker`.
+   The handover records also give `boss`. A record of a Boss handover names the session that the Boss left and the session that took over. Both sessions are `boss`, also after the pane label changed.
 2. The working folder inside the worker worktree folder, or inside a `<repo>-wt-<name>` folder. It gives `worker`.
 3. A working folder that only Boss panes, or only orchestrator panes, used. It gives that role.
 4. The working folder of a registered project repository. It gives `orchestrator`.
 5. Otherwise the role is `other`.
 
-The estimated cost uses two sources. Pi and OpenCode log a cost for each message, and Herdr Boss keeps that cost. Claude and Codex logs hold no cost, so Herdr Boss multiplies the tokens by the price of the model. The price table is `src/spend-prices.json`, in USD per million tokens. It holds only the prices that `kit/models.md` documents, which are the Codex prices. A model without a price is `unpriced`. The summary shows its tokens as `unpriced` and leaves them out of the cost. Add a price to `src/spend-prices.json` to price a model. The next summary prices the stored history again.
+The cost uses two sources. Pi and OpenCode log a cost for each message, and Herdr Boss keeps that cost. Claude and Codex logs hold no cost, so Herdr Boss multiplies the tokens by the price of the model.
+
+The cost is in USD and carries the label `API-price equivalent`. The prices are the API list prices. The Owner is on a subscription and is not billed per token, so the number shows what the same tokens cost at API prices. The label appears in `herdr-boss spend`, in `GET /api/spend` (`costLabel`), and in this guide.
+
+The price table is `src/spend-prices.json`, in USD per million tokens. It holds the Codex prices from `kit/models.md` and the Claude API prices for `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-4-5`, `claude-fable-5-1`, and the removed models `claude-opus-5` and `claude-sonnet-5`. Each Claude entry has the columns `input`, `output`, `cacheRead`, `cacheWrite` (5 minute), and `cacheWrite1h`, a `source`, and a `date`. A model without a price is `unpriced`. The summary shows its tokens as `unpriced` and leaves them out of the cost. The next summary prices the stored history again.
+
+A Claude transcript can split a cache write into a 5 minute part and a 1 hour part (`cache_creation`). Herdr Boss prices the 1 hour part at `cacheWrite1h`. A cache write with no split is 5 minute. The token totals do not change.
+
+An entry can list `unconfirmed` figures. The cache figures of `claude-opus-5-5` are `unconfirmed`: the cache read of 0.20 does not match 0.1 times the input price (0.40). Herdr Boss uses the listed figure. `herdr-boss spend` names each model with an `unconfirmed` figure that it used, and `GET /api/spend` lists them in `unconfirmedPrices`.
+
+To change a price, write an override file. `GET /api/settings/prices` returns the price table, the default table (`defaults`), the source and date of each entry, and the current override. `PUT /api/settings/prices` replaces the override with `{"models": {"claude/claude-opus-5-5": {"cacheRead": 0.4}}}`. An empty `models` object removes the override. The route accepts only models that the table lists and the fields `input`, `output`, `cacheRead`, `cacheWrite`, and `cacheWrite1h`. Each value is a number from 0 to 1000. The server rejects other input with status 400 and keeps the old file. The file is `spend-prices.override.json` in the data directory. An overridden figure is no longer `unconfirmed`. The **Token prices** section of the Settings page edits the same override. It lists each model with the five price columns, the source and date, and the `unconfirmed` marks. Select **Save prices** to save. The page shows a server error when a value is rejected. Select **Reset to defaults** to remove the override.
 
 A scan reads at most 16 MB of new log bytes, one chunk at a time, and lets the service work between chunks. The saved byte offset of each file lets the next scan continue. A log file older than 35 days is read only when the scan state already knows it, so a resumed old file continues from its offset. A Claude message that the transcript repeats counts once, by message ID and request ID, over the last 128 messages of a file. A line longer than 4 MB is skipped. A broken line is counted and skipped. A file that shrinks is read again from the start. If a harness log has lines but none holds usage counts, the harness status is `unavailable`, and Herdr Boss does not guess. OpenCode counts come from the token columns of its database. Claude subagent transcripts in the `subagents` folders are not read.
 
@@ -1317,7 +1328,8 @@ The dashboard uses these routes. A request from another host needs the access to
 | `GET /api/models` | The model allow-list. |
 | `GET`, `POST /api/usage` | Read usage, or record an event. |
 | `GET /api/machine-hours?days=N` | The machine samples of the last N days (1 to 14, default 14) by local hour of day: overload minutes, idle-wait minutes, swap peak, lowest free memory, holder kinds, and coverage. |
-| `GET /api/spend?days=N` | The token use and estimated cost per day, role, and harness for the last N days (1 to 90, default 7), the harness log status, and the unread log bytes. |
+| `GET /api/spend?days=N` | The token use and cost per day, role, and harness for the last N days (1 to 90, default 7), the cost label `API-price equivalent`, the models with `unconfirmed` prices, the harness log status, and the unread log bytes. |
+| `GET`, `PUT /api/settings/prices` | Read the price table and the override, or replace the override. See Token use and spend by role. |
 | `GET /api/denials` | The denial counts of the last 7 days by harness, model, and cause, the harness totals, and the trend of each cause. |
 | `GET /api/projects`, `PUT`, `DELETE /api/projects/SLUG` | Read, write, or delete project status. |
 | `GET /api/handoffs`, `GET /api/handoffs/output?id=ID` | Handover records, and a successor's pane output. |

@@ -12,7 +12,7 @@ import { writeProject, listProjects } from './projects.js';
 import { loadModels } from './kit/config.js';
 import { loadPolicy, savePolicy } from './control.js';
 import { recordUsage, usageSummary } from './usage.js';
-import { spendSummary, clampSpendDays } from './spend.js';
+import { spendSummary, clampSpendDays, loadPrices, defaultPrices, readPriceOverrides, writePriceOverrides, COST_LABEL } from './spend.js';
 import { readDenials, denialSummary } from './denials.js';
 import { summarizeHours } from './machine-samples.js';
 import { buildWatchRecord, clearNight, readNight, writeNight } from './night.js';
@@ -400,6 +400,17 @@ export function serve(cfg, { readOnlyPreview = false, createEngine = (config, op
           broadcast('state', engine.state);
         }
         return send(res, 200, { ok: true, settings });
+      }
+      if (p === '/api/settings/prices' && req.method === 'GET') {
+        return send(res, 200, { unit: 'USD per million tokens', costLabel: COST_LABEL, prices: loadPrices(DATA_DIR), defaults: defaultPrices(), overrides: readPriceOverrides(DATA_DIR) });
+      }
+      if (p === '/api/settings/prices' && req.method === 'PUT') {
+        let body;
+        try { body = await jsonBody(req); }
+        catch (error) { return send(res, 400, { ok: false, error: error.message }); }
+        try { writePriceOverrides(body, { dataDir: DATA_DIR }); }
+        catch (error) { return send(res, error.code === 'EACCES' || error.code === 'EROFS' ? 500 : 400, { ok: false, error: error.message }); }
+        return send(res, 200, { ok: true, unit: 'USD per million tokens', costLabel: COST_LABEL, prices: loadPrices(DATA_DIR), defaults: defaultPrices(), overrides: readPriceOverrides(DATA_DIR) });
       }
       if (p === '/api/policy' && req.method === 'GET') return send(res, 200, loadPolicy());
       if (p === '/api/policy' && req.method === 'PUT') {

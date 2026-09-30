@@ -2399,3 +2399,56 @@ test('GET /api/machine-hours summarizes the sample file, limits days, and works 
     assert.equal((await fetch(`${base}/api/machine-hours`, { method, body: method === 'DELETE' ? undefined : '{}' })).status, 403, method);
   }
 });
+
+test('/api/settings/prices reads the price table and writes a validated override', { timeout: 20000 }, async (t) => {
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.mkdirSync(homeDir, { recursive: true });
+  const cfg = loadConfig();
+  cfg.host = '127.0.0.1';
+  cfg.port = 0;
+  cfg.tickSeconds = 3600;
+  const { server, close } = serve(cfg, {
+    createEngine: (config) => {
+      const engine = new EventEmitter();
+      engine.cfg = config;
+      engine.state = { serviceSettings: serviceSettingsView(config) };
+      engine.memory = {};
+      engine.tick = async () => engine.state;
+      engine.log = () => {};
+      return engine;
+    },
+  });
+  t.after(async () => {
+    await close();
+    fs.rmSync(path.join(dataDir, 'spend-prices.override.json'), { force: true });
+  });
+  await new Promise((resolve, reject) => {
+    server.once('listening', resolve);
+    server.once('error', reject);
+  });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const put = (body) => fetch(`${base}/api/settings/prices`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+
+  const read = await (await fetch(`${base}/api/settings/prices`)).json();
+  assert.equal(read.costLabel, 'API-price equivalent');
+  assert.equal(read.prices['claude/claude-opus-5-5'].cacheRead, 0.20);
+  assert.deepEqual(read.overrides, { models: {} });
+  assert.equal(read.defaults['claude/claude-opus-5-5'].cacheRead, 0.20);
+
+  const saved = await put({ models: { 'claude/claude-opus-5-5': { cacheRead: 0.4 } } });
+  assert.equal(saved.status, 200);
+  const after = await saved.json();
+  assert.equal(after.prices['claude/claude-opus-5-5'].cacheRead, 0.4);
+  assert.equal(after.defaults['claude/claude-opus-5-5'].cacheRead, 0.20);
+  assert.deepEqual(after.overrides, { models: { 'claude/claude-opus-5-5': { cacheRead: 0.4 } } });
+
+  const before = fs.readFileSync(path.join(dataDir, 'spend-prices.override.json'), 'utf8');
+  for (const body of [{ models: { 'claude/claude-opus-5-5': { input: 1001 } } }, { models: { 'claude/made-up': { input: 1 } } }, { models: { 'claude/claude-opus-5-5': { colour: 1 } } }, []]) {
+    const rejected = await put(body);
+    assert.equal(rejected.status, 400, JSON.stringify(body));
+    assert.equal(fs.readFileSync(path.join(dataDir, 'spend-prices.override.json'), 'utf8'), before);
+  }
+  const cleared = await put({ models: {} });
+  assert.equal(cleared.status, 200);
+  assert.equal(fs.existsSync(path.join(dataDir, 'spend-prices.override.json')), false);
+});

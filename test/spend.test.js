@@ -207,10 +207,12 @@ test('a scan sums per day and role, reads incrementally, and prices only the kno
   // Codex luna: 1M fresh input at 0.10, 100K output at 0.50, 1M cached at 0.01 = 0.16 USD. Pi logs 0.5 USD.
   assert.ok(Math.abs(byRole.worker.harnesses.codex.costUsd - 0.16) < 1e-9);
   assert.equal(byRole.worker.harnesses.pi.costUsd, 0.5);
-  assert.equal(byRole.worker.harnesses.claude.costUsd, 0);
-  assert.equal(byRole.worker.harnesses.claude.unpricedTokens, 115);
-  assert.equal(byRole.boss.unpricedTokens, 24);
-  assert.equal(today.total.unpricedTokens, 115 + 24 + 12);
+  // Claude Sonnet 5.5 at 2 input, 10 output, 0.20 cache read: worker 10, 5, 100; Boss 2, 2, 20; orchestrator 1, 1, 10.
+  assert.ok(Math.abs(byRole.worker.harnesses.claude.costUsd - (10 * 2 + 5 * 10 + 100 * 0.2) / 1e6) < 1e-12);
+  assert.equal(byRole.worker.harnesses.claude.unpricedTokens, 0);
+  assert.ok(Math.abs(byRole.boss.costUsd - (2 * 2 + 2 * 10 + 20 * 0.2) / 1e6) < 1e-12);
+  assert.equal(byRole.boss.unpricedTokens, 0);
+  assert.equal(today.total.unpricedTokens, 0);
   assert.equal(summary.harnesses.claude.status, 'ok');
   assert.equal(summary.harnesses.opencode.status, 'none');
 
@@ -376,10 +378,11 @@ test('the cost of a model without a price is unpriced and a logged cost is kept'
   assert.equal(clampSpendDays('9999'), 90);
 });
 
-test('the price table lists the documented Codex prices and no Claude price', () => {
+test('the price table lists the documented Codex prices and the Claude API prices', () => {
   const prices = loadPrices();
   assert.deepEqual(prices['codex/gpt-6-luna'], { input: 0.10, output: 0.50, cacheRead: 0.01 });
-  assert.equal(prices['claude/claude-sonnet-5-5'], undefined);
+  assert.deepEqual([prices['claude/claude-sonnet-5-5'].input, prices['claude/claude-sonnet-5-5'].output], [2, 10]);
+  assert.equal(prices['claude/claude-unlisted-1'], undefined);
 });
 
 test('the CLI prints one line per day and role and one total line per day', async () => {
@@ -387,7 +390,7 @@ test('the CLI prints one line per day and role and one total line per day', asyn
   const { dataDir, worktreeRoot } = dirs(home);
   const cwd = path.join(worktreeRoot, 'Shop', 'fix1');
   const today = new Date().toISOString();
-  writeLines(path.join(home, '.claude', 'projects', '-x', 'w1.jsonl'), [{ ...claudeRow({ cwd, id: 'a', req: 'a', input: 1000, output: 500, cacheRead: 0, cacheWrite: 0 }), timestamp: today }]);
+  writeLines(path.join(home, '.claude', 'projects', '-x', 'w1.jsonl'), [{ ...claudeRow({ cwd, id: 'a', req: 'a', input: 1000, output: 500, cacheRead: 0, cacheWrite: 0, model: 'claude-unlisted-1' }), timestamp: today }]);
   await scanSpend({ dataDir, home, now: Date.now(), repos: [], worktreeRoot, fillUsage: false });
   const env = { ...process.env, HOME: home, HERDR_BOSS_DIR: dataDir, HERDR_BOSS_LIVE_DIR: dataDir };
   const cli = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'src', 'cli.js');
