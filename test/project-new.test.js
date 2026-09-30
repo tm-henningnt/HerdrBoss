@@ -4,7 +4,21 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { assertTempDataDir } from '../src/data-dir-guard.js';
+import { execFileSync } from 'node:child_process';
 import { runProjectNew, PROJECT_NEW_STEPS } from '../src/project-new.js';
+import { scanText } from '../src/secret-scan.js';
+
+// Git reads its identity from a temporary global file, never from the machine.
+const GIT_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-project-new-git-'));
+const WITH_IDENTITY = path.join(GIT_HOME, 'with');
+const WITHOUT_IDENTITY = path.join(GIT_HOME, 'without');
+fs.writeFileSync(WITH_IDENTITY, '[user]\n\tname = Test User\n\temail = test@example.invalid\n');
+fs.writeFileSync(WITHOUT_IDENTITY, '[user]\n\tuseConfigOnly = true\n');
+process.env.GIT_CONFIG_GLOBAL = WITH_IDENTITY;
+process.env.GIT_CONFIG_NOSYSTEM = '1';
+for (const key of ['GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL', 'GIT_COMMITTER_NAME', 'GIT_COMMITTER_EMAIL', 'EMAIL']) delete process.env[key];
+test.after(() => fs.rmSync(GIT_HOME, { recursive: true, force: true }));
+const gitOut = (dir, ...args) => execFileSync('git', args, { cwd: dir, encoding: 'utf8' }).trim();
 
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-project-new-'));
@@ -96,7 +110,9 @@ test('builds the folder and files, keeps later steps unbuilt, and writes a 0600 
     assert.equal(status(result, 'validate'), 'done');
     assert.equal(status(result, 'folder'), 'done');
     assert.equal(status(result, 'files'), 'done');
-    for (const name of ['kit', 'commit', 'remote', 'policy', 'register', 'workspace']) {
+    assert.equal(status(result, 'kit'), 'done');
+    assert.equal(status(result, 'commit'), 'done');
+    for (const name of ['remote', 'policy', 'register', 'workspace']) {
       assert.equal(status(result, name), 'not-built', name);
       assert.match(result.steps.find((s) => s.name === name).detail, /not built yet/);
     }
@@ -114,7 +130,7 @@ test('builds the folder and files, keeps later steps unbuilt, and writes a 0600 
     assert.equal(fs.statSync(path.dirname(stateFile)).mode & 0o777, 0o700);
     const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
     assert.equal(state.steps.files.status, 'done');
-    assert.equal(state.steps.kit, undefined);
+    assert.equal(state.steps.kit.status, 'done');
     assert.equal(fs.existsSync(path.join(dir, 'flows')), false);
     assert.doesNotMatch(fs.readFileSync(stateFile, 'utf8'), /token|password|secret/i);
   } finally { f.cleanup(); }
@@ -157,7 +173,8 @@ test('files step never overwrites an existing file', () => {
     const result = runProjectNew({ slug: 'demo', group: f.group, dataDir: f.dataDir, repoRoot: f.repoRoot, ceiling: f.ceiling, resume: true });
     assert.equal(result.ok, true);
     assert.equal(fs.readFileSync(path.join(dir, 'README.md'), 'utf8'), 'my readme\n');
-    assert.equal(fs.readFileSync(path.join(dir, 'AGENTS.md'), 'utf8'), '# Mine\n');
+    // The files step keeps the file. The kit step then adds the Herdr Boss stub after the heading.
+    assert.match(fs.readFileSync(path.join(dir, 'AGENTS.md'), 'utf8'), /^# Mine\n\n<!-- herdr-boss:begin/);
     assert.ok(fs.existsSync(path.join(dir, '.gitignore')));
   } finally { f.cleanup(); }
 });
@@ -239,4 +256,161 @@ test('the state temp file never follows a planted symlink', () => {
     assert.equal(fs.statSync(result.stateFile).mode & 0o777, 0o600);
     assert.deepEqual(fs.readdirSync(path.join(f.dataDir, 'flows')).filter((n) => n !== 'demo.json.tmp'), ['demo.json']);
   } finally { f.cleanup(); }
+});
+
+const base = (f, extra = {}) => ({ slug: 'demo', group: f.group, dataDir: f.dataDir, repoRoot: f.repoRoot, ceiling: f.ceiling, ...extra });
+
+test('the kit step writes the kit file and the hook inside the project and a rerun changes nothing', () => {
+  const f = fixture();
+  try {
+    const dir = path.join(f.group, 'demo');
+    const result = runProjectNew(base(f));
+    assert.equal(status(result, 'kit'), 'done');
+    assert.match(fs.readFileSync(path.join(dir, 'docs/orchestration/herdr-boss.md'), 'utf8'), /herdr-boss kit v=/);
+    const settings = JSON.parse(fs.readFileSync(path.join(dir, '.claude/settings.json'), 'utf8'));
+    assert.match(settings.hooks.SessionStart[0].hooks[0].command, /herdr-boss\.md/);
+    assert.match(fs.readFileSync(path.join(dir, 'AGENTS.md'), 'utf8'), /herdr-boss:begin/);
+    // Forget the kit step, then repeat it: the files stay byte for byte and keep their mtime.
+    const state = JSON.parse(fs.readFileSync(result.stateFile, 'utf8'));
+    delete state.steps.kit;
+    fs.writeFileSync(result.stateFile, JSON.stringify(state));
+    const files = ['docs/orchestration/herdr-boss.md', '.claude/settings.json', 'AGENTS.md'];
+    const snap = () => files.map((r) => `${fs.readFileSync(path.join(dir, r), 'utf8')}:${fs.statSync(path.join(dir, r)).mtimeMs}`);
+    const before = snap();
+    const again = runProjectNew(base(f, { resume: true }));
+    assert.equal(status(again, 'kit'), 'done');
+    assert.match(again.steps.find((s) => s.name === 'kit').detail, /wrote 0 files/);
+    assert.deepEqual(snap(), before);
+    assert.deepEqual(fs.readdirSync(f.group), ['demo']);
+  } finally { f.cleanup(); }
+});
+
+test('the commit step makes one commit with the plain message and no trailer', () => {
+  const f = fixture();
+  try {
+    const dir = path.join(f.group, 'demo');
+    const result = runProjectNew(base(f));
+    assert.equal(status(result, 'commit'), 'done');
+    assert.equal(gitOut(dir, 'rev-list', '--count', 'HEAD'), '1');
+    assert.equal(gitOut(dir, 'log', '-1', '--format=%B'), 'Set up the project with Herdr Boss');
+    assert.equal(gitOut(dir, 'log', '-1', '--format=%an <%ae>'), 'Test User <test@example.invalid>');
+    assert.equal(gitOut(dir, 'status', '--porcelain'), '');
+    assert.match(gitOut(dir, 'ls-files'), /\.claude\/settings\.json/);
+    const state = JSON.parse(fs.readFileSync(result.stateFile, 'utf8'));
+    delete state.steps.commit;
+    fs.writeFileSync(result.stateFile, JSON.stringify(state));
+    const again = runProjectNew(base(f, { resume: true }));
+    assert.equal(status(again, 'commit'), 'done');
+    assert.equal(gitOut(dir, 'rev-list', '--count', 'HEAD'), '1');
+  } finally { f.cleanup(); }
+});
+
+test('a token in a file stops the commit, names the file and class, and leaves the files unstaged', () => {
+  const f = fixture();
+  try {
+    const dir = path.join(f.group, 'demo');
+    const token = `gh${'p_'}${'a1B2c3D4e5'.repeat(4)}`;
+    const failed = runProjectNew(base(f, { stepRunners: { files: (inputs) => {
+      fs.writeFileSync(path.join(inputs.path, 'notes.md'), `key: ${token}\n`);
+      fs.writeFileSync(path.join(inputs.path, '.env'), 'A=1\n');
+      fs.writeFileSync(path.join(inputs.path, 'README.md'), 'hello\n');
+    } } }));
+    assert.equal(failed.ok, false);
+    assert.equal(status(failed, 'commit'), 'failed');
+    assert.match(failed.error, /notes\.md: GitHub token/);
+    assert.match(failed.error, /\.env: \.env file/);
+    assert.doesNotMatch(JSON.stringify(failed) + fs.readFileSync(failed.stateFile, 'utf8'), new RegExp(token));
+    assert.equal(gitOut(dir, 'diff', '--cached', '--name-only'), '');
+    assert.throws(() => gitOut(dir, 'rev-parse', '--verify', '-q', 'HEAD'));
+    assert.equal(fs.readFileSync(path.join(dir, 'notes.md'), 'utf8'), `key: ${token}\n`);
+    fs.rmSync(path.join(dir, 'notes.md'));
+    fs.rmSync(path.join(dir, '.env'));
+    const fixed = runProjectNew(base(f, { resume: true }));
+    assert.equal(fixed.ok, true);
+    assert.equal(gitOut(dir, 'rev-list', '--count', 'HEAD'), '1');
+  } finally { f.cleanup(); }
+});
+
+test('a missing Git identity fails the commit step and sets no identity', () => {
+  const f = fixture();
+  process.env.GIT_CONFIG_GLOBAL = WITHOUT_IDENTITY;
+  try {
+    const dir = path.join(f.group, 'demo');
+    const failed = runProjectNew(base(f));
+    assert.equal(failed.ok, false);
+    assert.equal(status(failed, 'kit'), 'done');
+    assert.equal(status(failed, 'commit'), 'failed');
+    assert.match(failed.error, /user\.name|user\.email/);
+    assert.throws(() => gitOut(dir, 'rev-parse', '--verify', '-q', 'HEAD'));
+    assert.equal(fs.readFileSync(WITHOUT_IDENTITY, 'utf8'), '[user]\n\tuseConfigOnly = true\n');
+    process.env.GIT_CONFIG_GLOBAL = WITH_IDENTITY;
+    assert.equal(runProjectNew(base(f, { resume: true })).ok, true);
+  } finally { process.env.GIT_CONFIG_GLOBAL = WITH_IDENTITY; f.cleanup(); }
+});
+
+test('dry run describes the kit and commit steps and runs neither', () => {
+  const f = fixture();
+  try {
+    const result = runProjectNew(base(f, { dryRun: true }));
+    for (const name of ['kit', 'commit']) {
+      assert.equal(status(result, name), 'planned');
+      assert.match(result.steps.find((s) => s.name === name).detail, /^would /);
+    }
+    assert.equal(fs.existsSync(path.join(f.group, 'demo')), false);
+  } finally { f.cleanup(); }
+});
+
+test('scanText names the class for each secret pattern and skips clean text', () => {
+  const cases = {
+    'private key': '-----BEGIN RSA ' + 'PRIVATE KEY-----',
+    'GitHub token': `gh${'o_'}${'x'.repeat(30)}`,
+    'AWS access key': `id AK${'IA'}0123456789ABCDEF`,
+    'Slack token': `xox${'b-'}1234567890-abcdef`,
+    'credential assignment': `api${'_key'} = "abcdef0123456789abcdef"`,
+  };
+  for (const [name, text] of Object.entries(cases)) assert.deepEqual(scanText('a.txt', text), [name], name);
+  assert.deepEqual(scanText('config/.env', 'A=1'), ['.env file']);
+  assert.deepEqual(scanText('.env.example', 'A=1'), []);
+  assert.deepEqual(scanText('a.md', 'Set the token with `herdr-boss token`. password = "x"'), []);
+});
+
+test('a rerun after a refusal refuses again while the secret stays and passes when it is gone', () => {
+  const f = fixture();
+  try {
+    const dir = path.join(f.group, 'demo');
+    const planted = { files: (inputs) => { fs.writeFileSync(path.join(inputs.path, 'a.txt'), `xox${'b-'}1234567890-abcdef\n`); } };
+    const first = runProjectNew(base(f, { stepRunners: planted }));
+    assert.equal(first.ok, false);
+    const second = runProjectNew(base(f, { resume: true }));
+    assert.equal(second.ok, false);
+    assert.match(second.error, /a\.txt: Slack token/);
+    assert.equal(gitOut(dir, 'diff', '--cached', '--name-only'), '');
+    fs.rmSync(path.join(dir, 'a.txt'));
+    assert.equal(runProjectNew(base(f, { resume: true })).ok, true);
+    assert.equal(gitOut(dir, 'rev-list', '--count', 'HEAD'), '1');
+  } finally { f.cleanup(); }
+});
+
+test('a binary or large file is refused as unscanned unless it is on the allow list', () => {
+  const f = fixture();
+  try {
+    const dir = path.join(f.group, 'demo');
+    const plant = { files: (inputs) => {
+      fs.writeFileSync(path.join(inputs.path, 'blob.bin'), Buffer.from([1, 0, 2]));
+      fs.writeFileSync(path.join(inputs.path, 'big.txt'), 'x'.repeat(2 * 1024 * 1024 + 1));
+    } };
+    const failed = runProjectNew(base(f, { stepRunners: plant }));
+    assert.equal(failed.ok, false);
+    assert.match(failed.error, /blob\.bin: unscanned large or binary file/);
+    assert.match(failed.error, /big\.txt: unscanned large or binary file/);
+    assert.equal(gitOut(dir, 'diff', '--cached', '--name-only'), '');
+    const allowed = runProjectNew(base(f, { resume: true, allowUnscanned: ['blob.bin', 'big.txt'] }));
+    assert.equal(allowed.ok, true);
+  } finally { f.cleanup(); }
+});
+
+test('scanText finishes a 200k character line in under one second', () => {
+  const start = process.hrtime.bigint();
+  assert.deepEqual(scanText('a.txt', 'a-'.repeat(100000)), []);
+  assert.ok(Number(process.hrtime.bigint() - start) / 1e9 < 1);
 });

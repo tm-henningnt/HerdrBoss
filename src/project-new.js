@@ -1,5 +1,5 @@
 // The flow of `herdr-boss project new`: validate the inputs, create the folder, write the first files.
-// Later steps (kit, commit, remote, policy, register, workspace, harness, check) are named and report `not built yet`.
+// Later steps (remote, policy, register, workspace, harness, check) are named and report `not built yet`.
 // The state file flows/<slug>.json in the data dir records finished steps, so a rerun continues where the last run stopped.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -7,14 +7,16 @@ import { randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { DATA_DIR, LIVE_DATA_DIR } from './config.js';
 import { KIT_ROOT } from './kit/config.js';
-import { agentsWithStub } from './kit/agents-check.js';
+import { agentsWithStub, installKit } from './kit/agents-check.js';
+import { scanStaged } from './secret-scan.js';
 import { readProjectRepos } from './harness.js';
 import { SLUG } from './projects.js';
 
 export const PROJECT_NEW_STEPS = ['validate', 'folder', 'files', 'kit', 'commit', 'remote', 'policy', 'register', 'workspace', 'harness', 'check'];
-const NOT_BUILT = new Set(['kit', 'commit', 'remote', 'policy', 'register', 'workspace', 'harness', 'check']);
+const NOT_BUILT = new Set(['remote', 'policy', 'register', 'workspace', 'harness', 'check']);
 const TEMPLATES = path.join(KIT_ROOT, 'kit', 'templates');
 const GITIGNORE = 'node_modules/\n.DS_Store\n.orchestration/\n.worker/\n';
+const COMMIT_MESSAGE = 'Set up the project with Herdr Boss';
 const DEFAULT_GOAL = 'Describe the goal of this project here.';
 
 export class ProjectNewError extends Error {}
@@ -127,6 +129,8 @@ function projectFiles(inputs) {
 const DESCRIBE = {
   validate: (i) => `check the slug ${i.slug}, the folder ${i.path}, and that the slug is not registered`,
   folder: (i) => `run mkdir -p ${i.path}, then git init -b main`,
+  kit: (i) => `write the kit file, the AGENTS.md stub, and the SessionStart hook in ${i.path}/.claude/settings.json`,
+  commit: () => `stage all files, scan the staged files for secrets, and commit "${COMMIT_MESSAGE}"`,
   files: (i) => `write ${projectFiles(i).map(([f]) => f).join(', ')} in ${i.path}; keep each file that exists`,
 };
 
@@ -156,11 +160,32 @@ const RUN = {
     }
     return `wrote ${written.length} files, kept ${kept.length} existing files`;
   },
+  kit(inputs) {
+    const result = installKit(inputs.path);
+    return `kit revision ${result.revision}: wrote ${result.written.length} files, kept ${result.unchanged.length} unchanged`;
+  },
+  commit(inputs, context) {
+    const cwd = inputs.path;
+    const git = (args) => execFileSync('git', args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] }).toString('utf8').trim();
+    try { git(['rev-parse', '--verify', '-q', 'HEAD']); return 'the project already has a commit'; } catch {}
+    // git var honors the environment and fails when it cannot build an identity. Nothing here invents one or writes config.
+    try { git(['var', 'GIT_AUTHOR_IDENT']); git(['var', 'GIT_COMMITTER_IDENT']); } catch {
+      refuse('Git has no user.name or user.email. Set them with git config, then run the flow again with --resume.');
+    }
+    git(['add', '-A']);
+    const findings = scanStaged(cwd, { allowUnscanned: context.allowUnscanned });
+    if (findings.length) {
+      try { git(['reset', '-q']); } catch { git(['rm', '-r', '-q', '--cached', '--ignore-unmatch', '.']); }
+      refuse(`The commit is refused. ${findings.map((f) => `${f.file}: ${f.classes.join(', ')}`).join('; ')}. Remove each secret, then run the flow again with --resume.`);
+    }
+    git(['commit', '-q', '-m', COMMIT_MESSAGE]);
+    return `committed ${git(['rev-parse', '--short', 'HEAD'])}`;
+  },
 };
 
 // Run the flow. Input errors throw ProjectNewError before any change.
 // A step failure is recorded in the state file and returned as { ok: false, error }.
-// options: slug, group | path, name, goal, dryRun, resume, dataDir, repoRoot (the Herdr Boss repository, default: this one), ceiling, stepRunners (tests replace step functions).
+// options: slug, group | path, name, goal, dryRun, resume, dataDir, repoRoot (the Herdr Boss repository, default: this one), ceiling, allowUnscanned (paths of large or binary files that the commit scan skips, default none), stepRunners (tests replace step functions).
 export function runProjectNew(options = {}) {
   const dataDir = path.resolve(options.dataDir || DATA_DIR);
   const inputs = resolveInputs(options);
@@ -170,7 +195,7 @@ export function runProjectNew(options = {}) {
   if (saved && JSON.stringify(saved.inputs) !== JSON.stringify(inputs)) refuse(`The state for ${inputs.slug} has different inputs. Use the same inputs, or remove ${stateFile}.`);
   const state = saved || { inputs, createdAt: new Date().toISOString(), steps: {} };
   // ceiling (tests): the nested-repository walk stops at this folder.
-  const context = { dataDir, repoRoot: path.resolve(options.repoRoot || KIT_ROOT), group: options.group ? path.resolve(options.group) : null, ceiling: options.ceiling };
+  const context = { dataDir, repoRoot: path.resolve(options.repoRoot || KIT_ROOT), group: options.group ? path.resolve(options.group) : null, ceiling: options.ceiling, allowUnscanned: options.allowUnscanned || [] };
   const runners = { ...RUN, ...(options.stepRunners || {}) };
   const finished = (name) => ['done', 'skipped'].includes(state.steps[name]?.status);
   const result = { ok: true, dryRun: Boolean(options.dryRun), slug: inputs.slug, path: inputs.path, stateFile, steps: [] };

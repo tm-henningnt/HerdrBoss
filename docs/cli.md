@@ -78,7 +78,7 @@ The first `publish` of a slug registers the project. It records `{ slug, repo, r
 
 The module `src/project-new.js` exports `runProjectNew(options)`. It has no command yet.
 
-`runProjectNew` runs these steps in order: `validate`, `folder`, `files`. The steps `kit`, `commit`, `remote`, `policy`, `register`, `workspace`, `harness`, and `check` report `not built yet`. They change nothing.
+`runProjectNew` runs these steps in order: `validate`, `folder`, `files`, `kit`, `commit`. The steps `remote`, `policy`, `register`, `workspace`, `harness`, and `check` report `not built yet`. They change nothing.
 
 | Option | Meaning |
 |---|---|
@@ -88,6 +88,7 @@ The module `src/project-new.js` exports `runProjectNew(options)`. It has no comm
 | `name` | The project name. The default is the slug. |
 | `goal` | One line for the README. |
 | `dryRun` | Return each step with the action it would run. Change nothing. |
+| `allowUnscanned` | Paths of large or binary files that the commit scan skips. The default is none. |
 | `resume` | Continue a saved run. Refuse when no state file exists. |
 
 `runProjectNew` refuses these inputs before it changes anything:
@@ -100,6 +101,12 @@ The module `src/project-new.js` exports `runProjectNew(options)`. It has no comm
 - A path inside another Git repository. `project new` makes only new top-level projects. The check walks up from the nearest existing parent folder and refuses when a parent holds `.git`.
 
 The `folder` step runs `mkdir -p` and `git init -b main`. The `files` step writes `AGENTS.md`, `docs/orchestration/memory.md`, `.herdr-boss.json`, `.gitignore`, `README.md`, and `docs/ideas/.gitkeep`. `AGENTS.md` holds a project part from `kit/templates/agents-project.md` and the Herdr Boss stub. The step never overwrites a file that exists.
+
+The `kit` step calls the installer of `herdr-boss kit install` for the project folder. It writes `docs/orchestration/herdr-boss.md`, the stub in `AGENTS.md`, and the SessionStart hook in `.claude/settings.json` of the project. It writes no file outside the project folder. It does not change the user-level Claude settings. A second run changes nothing.
+
+The `commit` step stages all files of the project and scans the staged files for secrets. Then it makes the first commit with the message `Set up the project with Herdr Boss` and no trailer. The commit uses the identity from `git var GIT_AUTHOR_IDENT` and `git var GIT_COMMITTER_IDENT`, which honor the environment. When Git cannot build an identity, the step fails and sets no identity. When the project already has a commit, the step makes no second commit.
+
+The scan refuses the commit for these classes: a private key block, a GitHub token, an AWS access key, a Slack token, a `password`, `secret`, `token`, or `api_key` assignment with a literal value of 16 or more characters, and a `.env` file. A file that ends in `.example`, `.sample`, `.template`, or `.dist` is not a `.env` file. The scan reads at most the first 200 KB of each line. A file over 2 MB, or a file with a NUL byte, cannot be scanned. The scan refuses it with the class `unscanned large or binary file`, unless its path is in the option `allowUnscanned`. The list is empty by default. The refusal names each file and class and never prints a value. The step then unstages all files and leaves the files unchanged. Remove the secret, then run the flow again with `resume`.
 
 The state file is `flows/<slug>.json` in the data folder, with mode 0600. The command writes it through a temporary file with a unique name, and never follows a symlink at that name. It holds the inputs and the status of each finished step. The repository holds no state. A run that finds a state file with the same inputs skips the finished steps. It changes nothing when all built steps are finished. A step that fails is recorded as `failed`, and the next run repeats it.
 
