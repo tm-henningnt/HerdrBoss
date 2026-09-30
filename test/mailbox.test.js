@@ -205,9 +205,9 @@ test('Boss close validates its caller, note, and every open mailbox ID before ch
 });
 
 test('a Boss close note is visible in the collapsed Done item summary', () => {
-  const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
-  const template = app.slice(app.indexOf('function mailItem('), app.indexOf('function mailFind('));
-  assert.match(template, /const closeNote = done && item\.closedBy === 'boss' \? `<span class="mail-headline mail-close-note">answered through the Boss: \$\{esc\(item\.closeNote \|\| ''\)\}<\/span>` : '';/);
+  const rows = fs.readFileSync(new URL('../public/mail-rows.js', import.meta.url), 'utf8');
+  assert.match(rows, /const preview = item\.closedBy === 'boss' \? `answered through the Boss: \$\{item\.closeNote \|\| ''\}` : mailPreview\(item\);/);
+  assert.match(rows, /<span class="mail-preview">\$\{esc\(preview\)\}<\/span>/);
 });
 
 test('marking read sets readAt once, closes only read items on request, and keeps the 30-day retention', (t) => {
@@ -532,4 +532,42 @@ test('the three top-bar counts ignore closed and read items', () => {
   const counts = mailboxCounts(records);
   assert.deepEqual({ chatUnread: counts.chatUnread, mailUnread: counts.mailUnread, needsAction: counts.needsAction }, { chatUnread: 1, mailUnread: 1, needsAction: 0 });
   assert.deepEqual(mailboxCounts([]), { needsYou: 0, needsYouUnread: 0, updates: 0, unread: 0, open: 0, chatUnread: 0, mailUnread: 0, needsAction: 0 });
+});
+
+test('the Inbox folder holds every open mail item, newest first', () => {
+  const records = [
+    { ...reply('alpha', 'Please answer.', { action: 'answer' }), id: 'm-needs-old', at: new Date(now - 5000).toISOString() },
+    { ...report('Status update', 'A status update.'), id: 'm-update', at: new Date(now - 4000).toISOString() },
+    { ...reply('boss', 'Approve the plan.', { action: 'approve' }), id: 'm-needs-new', at: new Date(now - 3000).toISOString() },
+    { ...report('Closed report', 'Finished.', { closedAt: new Date(now - 1000).toISOString() }), id: 'm-closed', at: new Date(now - 2000).toISOString() },
+  ];
+  const folders = mailboxFolders(records);
+  assert.deepEqual(folders.inbox.map((item) => item.id), ['m-needs-new', 'm-update', 'm-needs-old']);
+  assert.ok(folders.inbox.every((item) => !item.closedAt), 'a closed item is not in the Inbox');
+});
+
+test('the Mailbox UI accepts the Inbox folder and names Updates Reports and updates', () => {
+  const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const folders = JSON.parse(/const MAIL_FOLDERS = (\[[^\]]*\]);/.exec(app)[1].replace(/'/g, '"'));
+  assert.deepEqual(folders, ['needs-you', 'inbox', 'updates', 'done', 'sent']);
+  const match = /function resolveMailboxFolder\(requested, remembered, needsYouCount\) \{([\s\S]*?)\n\}/.exec(app);
+  const resolve = new Function('MAIL_FOLDERS', 'requested', 'remembered', 'needsYouCount', match[1]);
+  assert.equal(resolve(folders, 'inbox', 'needs-you', 3), 'inbox');
+  assert.equal(resolve(folders, null, 'inbox', 0), 'inbox');
+  assert.match(app, /updates: 'Reports and updates'/);
+  assert.match(app, /inbox: 'Inbox'/);
+});
+
+test('GET /api/mailbox?folder=inbox answers with the open items', { timeout: 20000 }, async (t) => {
+  fs.rmSync(messages.messagesFile(), { force: true });
+  const at = Date.parse('2026-09-28T10:00:00.000Z');
+  const needs = appendMessage(reply('alpha', 'Which option?', { action: 'answer' }), { now: at });
+  const update = appendMessage(report('Daily update', 'Nothing to decide.'), { now: at + 1000 });
+  const { base } = await startServer(t);
+  const response = await fetch(`${base}/api/mailbox?folder=inbox`);
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.folder, 'inbox');
+  assert.deepEqual(body.items.map((item) => item.id), [update.id, needs.id]);
+  assert.deepEqual(body.inbox.map((item) => item.id), [update.id, needs.id]);
 });

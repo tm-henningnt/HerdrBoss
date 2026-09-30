@@ -218,14 +218,15 @@ export function mailboxView(records) {
   };
 }
 
-// Sent holds every Owner message. Done also lists messages that the Boss relayed.
+// Inbox holds every open item, newest first. Sent holds every Owner message. Done also lists messages that the Boss relayed.
 export function mailboxFolders(records) {
   const view = mailboxView(records);
   const conversations = new Map(groupMessagesByConversation(records).flatMap((group) => group.records.map((record) => [record.id, group.id])));
   const sent = messagesWithReplyState(records.filter((record) => record.from === 'owner' && record.to !== 'owner').slice().reverse(), records)
     .map((record) => ({ ...record, conversationId: conversations.get(record.id) ?? record.id }));
   const relayed = sent.filter((record) => record.status === 'relayed');
-  return { ...view, sent, updatesUnread: view.updates.filter((record) => !record.readAt).length, done: [...view.done, ...relayed].sort((left, right) => messageOrder(right, left)) };
+  const inbox = [...view.needsYou, ...view.updates].sort((left, right) => messageOrder(right, left));
+  return { ...view, inbox, sent, updatesUnread: view.updates.filter((record) => !record.readAt).length, done: [...view.done, ...relayed].sort((left, right) => messageOrder(right, left)) };
 }
 
 export function closeMailboxItem(id, { dir = DATA_DIR, now = Date.now() } = {}) {

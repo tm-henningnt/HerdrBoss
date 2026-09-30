@@ -604,7 +604,7 @@ export function serve(cfg, { readOnlyPreview = false, createEngine = (config, op
         const records = readMessages();
         const folder = url.searchParams.get('folder');
         const thread = url.searchParams.get('thread');
-        if (folder != null && !['needs-you', 'updates', 'sent', 'done'].includes(folder)) return send(res, 400, { error: 'Choose a mailbox folder: needs-you, updates, sent, or done.' });
+        if (folder != null && !['needs-you', 'inbox', 'updates', 'sent', 'done'].includes(folder)) return send(res, 400, { error: 'Choose a mailbox folder: needs-you, inbox, updates, sent, or done.' });
         if (thread != null) {
           if (!validThread(thread)) return send(res, 400, { error: 'Choose a thread: boss or a project slug.' });
           const conversationId = url.searchParams.get('conversation');

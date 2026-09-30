@@ -14,7 +14,8 @@ function body(signature) {
 test('a render of the project page patches the page in place and does not replace it', () => {
   assert.match(app, /import \{ patchHtml \} from '\.\/keyed\.js';/);
   const renderBody = body('render(force = false)');
-  assert.match(renderBody, /if \(\(route === 'projects' \|\| route === 'board'\) && lastRoute === route\) patchHtml\(\$app, html\);\s*else \$app\.innerHTML = html;/);
+  assert.match(app, /const KEYED_ROUTES = \[[^\]]*'projects', 'board'[^\]]*\];/);
+  assert.match(renderBody, /if \(KEYED_ROUTES\.includes\(route\) && lastRoute === route\) patchHtml\(\$app, html\);\s*else \$app\.innerHTML = html;/);
   assert.match(renderBody, /lastRoute = route;/);
   assert.match(renderBody, /syncBoards\(\);/);
 });
