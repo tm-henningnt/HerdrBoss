@@ -93,6 +93,26 @@ export function gitIsMerged(root, { cache = new Map(), budget = { left: Infinity
   };
 }
 
+// Two counts for the project git state. ahead: commits of the current branch that are not on its upstream, 0 when
+// it has no upstream. unmerged: local branches that are not merged into base, without base itself. A count that
+// git cannot answer is null. The function never throws. Each git call has a timeout.
+export function gitCounts(root, { base = 'main', timeout = 3000 } = {}) {
+  const git = (args) => execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout });
+  try { git(['rev-parse', '--git-dir']); } catch { return { ahead: null, unmerged: null }; }
+  let ahead = 0;
+  try {
+    git(['rev-parse', '--verify', '--quiet', '@{upstream}']);
+    const n = Number.parseInt(git(['rev-list', '--count', '@{upstream}..HEAD']).trim(), 10);
+    ahead = Number.isFinite(n) ? n : null;
+  } catch { ahead = 0; }
+  let unmerged = null;
+  try {
+    const names = git(['for-each-ref', `--no-merged=${base}`, '--format=%(refname:short)', 'refs/heads']).split('\n').map((x) => x.trim()).filter(Boolean);
+    unmerged = names.filter((name) => name !== base).length;
+  } catch { unmerged = null; }
+  return { ahead, unmerged };
+}
+
 // The status of each agent that Herdr lists, by name. A null list means Herdr could not answer.
 export function agentStatuses(list) {
   const rows = Array.isArray(list) ? list : list?.agents;
@@ -197,11 +217,14 @@ export function publishConflicts(data, workers = []) {
 
 // Decorate published projects with the derived task state and the board stale flag.
 // stale is the result of staleStatuses().
-export function applyTaskState(projects, taskWorkers = {}, { stale = {} } = {}) {
+// counts holds { slug: { ahead, unmerged } } and joins the git state of the project.
+export function applyTaskState(projects, taskWorkers = {}, { stale = {}, gitCounts: counts = {} } = {}) {
   return (projects || []).map((project) => {
     if (!project?.slug) return project;
     const entry = stale[project.slug];
     const flags = { boardStale: Boolean(entry), boardStaleReason: entry?.reason ?? null };
+    const count = counts[project.slug];
+    if (count) flags.git = { ...(project.git && typeof project.git === 'object' && !Array.isArray(project.git) ? project.git : {}), ahead: count.ahead, unmerged: count.unmerged };
     if (!Array.isArray(project.tasks)) return { ...project, ...flags };
     return { ...project, tasks: overlayTasks(project.tasks, taskWorkers[project.slug] || []), ...flags };
   });

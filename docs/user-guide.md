@@ -801,9 +801,9 @@ The first line of the Now section is the orchestrator line. It shows the harness
 Below the line, small cards sit in a grid of one, two, or three columns:
 
 - **Needs your decision**: the open tasks that wait on the Owner.
-- **Status issues**: status file errors, a stale status, a stale board, AGENTS.md drift, and a required kit update.
+- **Status issues**: status file errors, a stale status (the age, or the reason when a live worker runs a task that is not doing), a stale board, AGENTS.md drift, and a required kit update.
 - **Running now**: the used and total worker slots, and each worker with its harness, state, elapsed time, and task.
-- **Waiting to merge**: the tasks in Review, and uncommitted changes from the published `git` field.
+- **Waiting to merge**: the tasks in Review, and uncommitted changes from the published `git` field. The card also shows `N unpushed commits` and `M unmerged branches` when the count is above 0. Herdr Boss reads both counts from the project repository at most once a minute. Unpushed commits are the commits of the current branch that are not on its upstream. A branch without an upstream has 0. Unmerged branches are the local branches that are not merged into the base branch. The base branch itself does not count. Herdr Boss shows a count only as a number. If git does not answer, the count does not show.
 - **Next task**: the first Ready task in board order, the number of other Ready tasks, and the number of blocked tasks.
 
 A card without content does not show. Select a task in a card to select it on the board and in the graph.
