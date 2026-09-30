@@ -131,3 +131,39 @@ export function summarizeHours({ samples = null, dataDir = DATA_DIR, days = MACH
     coverage: +Math.min(1, totals.samples / (window * 1440)).toFixed(3),
   };
 }
+
+// One line about the hours of the day with high swap in the last `days` days, or null. Aggregate figures only.
+// An hour counts for a day when a sample of that local hour is at or above `warnPercent` with at least `minUsedGB` in use.
+// The line names the hours that were high on at least 2 days, or on 1 day when only 1 day has data.
+export function highSwapHoursLine({ warnPercent, minUsedGB = 0, days = 7, samples = null, dataDir = DATA_DIR, now = Date.now() } = {}) {
+  if (!Number.isFinite(warnPercent)) return null;
+  const window = clampSummaryDays(days);
+  const sinceMs = now - window * DAY_MS;
+  const lines = (samples || readMachineSamples({ dataDir, sinceMs })).filter((line) => {
+    const at = Date.parse(line?.at);
+    return Number.isFinite(at) && at >= sinceMs && at <= now;
+  });
+  const byHour = Array.from({ length: 24 }, () => new Set());
+  const dates = new Set();
+  const highDates = new Set();
+  for (const line of lines) {
+    const date = new Date(line.at);
+    const day = `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+    dates.add(day);
+    const pct = swapPercent(line);
+    if (pct === null || pct < warnPercent || line.swapMB < minUsedGB * 1024) continue;
+    byHour[date.getHours()].add(day);
+    highDates.add(day);
+  }
+  if (!highDates.size) return null;
+  const need = dates.size > 1 ? 2 : 1;
+  const hours = byHour.map((set, hour) => (set.size >= need ? hour : -1)).filter((hour) => hour >= 0);
+  if (!hours.length) return null;
+  const ranges = [];
+  for (const hour of hours) {
+    const last = ranges[ranges.length - 1];
+    if (last && last[1] === hour - 1) last[1] = hour; else ranges.push([hour, hour]);
+  }
+  const text = ranges.map(([a, b]) => (a === b ? `hour ${a}` : `hours ${a} to ${b}`)).join(', ');
+  return `Swap was above the warning level in ${text} on ${highDates.size} of the last ${window} days.`;
+}
