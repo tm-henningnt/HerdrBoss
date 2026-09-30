@@ -28,6 +28,7 @@ import { appendMessage, chatSummaries, isMailAnswer, isMailRecord, messagesById,
 import { assertSqliteAvailable } from './sqlite-store.js';
 import { openMessageStore } from './message-store.js';
 import { BODY_LIMIT as PROJECT_NEW_BODY_LIMIT, createProjectNewApi } from './project-new-api.js';
+import { createReviewApi } from './review-api.js';
 
 const PUBLIC = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const DOCS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'docs');
@@ -188,6 +189,7 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine 
   const engine = readOnlyPreview ? createEngine(cfg, { push: false, act: false }) : createEngine(cfg);
   const messageStore = openMessageStore({ dir: DATA_DIR });
   const projectNewApi = createProjectNewApi({ dataDir: DATA_DIR, log: (level, text) => engine.log(level, text), ...projectNew });
+  const reviewApi = createReviewApi({ dataDir: DATA_DIR });
   const clients = new Set();
   let closed = false;
   let timer;
@@ -270,6 +272,8 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine 
         const routed = await projectNewApi.handle(req.method, p, () => projectNewBody(req));
         return send(res, routed.status, routed.body);
       }
+      // The review routes sit behind the same checks. The read-only preview guard above already refuses each change.
+      if (p === '/api/reviews' || p.startsWith('/api/reviews/')) return await reviewApi.handle(req, res, url);
       if (p === '/api/state') {
         if (engine.state) refreshMailbox();
         return send(res, 200, engine.state || {});
