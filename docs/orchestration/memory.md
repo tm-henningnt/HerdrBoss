@@ -105,17 +105,11 @@ Owner queue (credentials, billing, and Owner-applied settings):
 - Plan and progress: `herdr-boss publish herdrboss`, project page at `http://127.0.0.1:4477/projects/herdrboss`.
 - Handoff issue list and Chrome clone report: the HerdrBoss scratch folder (`herdr-boss scratch herdrboss`).
 
-## State at orchestrator handover (2026-09-29)
+## State at orchestrator handover (2026-09-30)
 
-- **Parked task:** the Owner asked to background NC3 and hand over control now. Keep NC3 open. The new orchestrator can resume it from the integration worktree after checking the current status and Git state.
-- **Main:** this handover and memory update are on top of pushed `6f75530` (V112, NC1, and NC2). NC3 remains off `main` and is not pushed. No service restart has occurred because the Owner's hold remains in force.
-- **NC3:** the reviewed changes are merged in `integrate` at `32c4f95`; that tree passed the full suite (923 passed, 1 skipped) and focused kit/notice tests (194 passed). The repair worker branch is `nc3reviewfix` at `11645bc`, based on the reviewed checkpoint `nc3requirednotice` at `5ec1fe0`. The worker was collected and its pane closed. NC3 is not on `main` and is not pushed. The integration worktree predates this handover-doc commit; merge the updated `main` into `integrate` before promoting NC3, then rerun the full suite for the resulting tree.
-- **HB2 partial:** branch `hb2handover` has uncommitted changes in `src/engine.js`, `test/engine-handover.test.js`, `docs/user-guide.md`, and `public/app.js`. The worker stopped after free OpenCode usage ran out. The focused tests passed 32 tests, and the worker also ran a full suite with 916 passing tests despite a brief that prohibited it. The partial code covers held and inactive projects, Boss exclusion from automatic preparation and activation, and model tiers. The Overview candidate filter is still open: show only `prepared`, `preparing`, or `needs-inspection` records and never show a Boss candidate for a project that keeps its Boss. Review the branch before using it.
-- **HB1 open:** policy data still names removed `claude-opus-5` in `modelProviders` and `disabledModels`. Make policy set and Settings prune stale or duplicate references and show a note. Keep strict validation for unrelated malformed values. The live policy is unchanged.
-- **NC4 to NC6:** not started. Follow `docs/ideas/notice-churn-plan.md` after NC3. Keep the service restart held until NC6 passes.
-- **Handover:** the prepared fresh Claude Sonnet 5.5 successor is the target of this transfer. The new Owner request supersedes the earlier timing to hand over only after NC3 to NC6. Do not hand over the Boss pane.
-- **Quota and holds:** Claude weekly use was 0% at the last bulletin and remains paced under the Owner's 20x plan; Codex is unpaced by the Owner. Re-read the bulletin for current values. Other projects remain stood down and must receive no kit updates. Do not restart the service before NC6.
-- **Remaining ledger gap:** `herdr-boss ledger check --runs` reports 11 old runs with no ledger entries. Their worktree paths no longer exist and no report JSON could be read. Do not invent outcomes.
-- **Other worktrees:** `hb2handover` and the NC3 worker branches contain unmerged work; preserve them. The old `kit-cli` and `kit-docs` branches are not merged; ask the Boss before deleting them. Check `herdr-boss worktree prune` before removing any worktree.
-- **Leases and service:** no active project browser lease. The HerdrBoss browser is offline. The service was not restarted for NC3; after NC6, restart it and check that `/api/state` returns HTTP 200.
-- **Next steps:** read `AGENTS.md`, `docs/orchestration/herdr-boss.md`, this file, and the current bulletin. Reconcile the parked NC3 integration branch with the updated `main`, then continue the backlog in published project status. Report a merge to the Boss only when it is live or when blocked, and do not send other projects kit updates during the hold.
+- **Main:** `6d5c24a`, pushed and live. It contains B1b, B2, G4c and E5. The full suite passed 1239 of 1239.
+- **Running workers:** `e4status` (E4 status cap, with the idempotent `doneIds` fix), `m1phone1` (M1 T2 and T3, Mailbox and Chat phone views), `e5bprices` (E5b, Claude API-price-equivalent cost and Boss role by session id).
+- **Next:** review each report with a subagent, merge in the `integrate` worktree, run one full suite with `herdr-boss suite -- npm test`, fast-forward `main`, restart, check `/api/state`, push, and report to the Boss in one line.
+- **Queue after these:** rest of M1, P1, A1 with L1, S1, GUI pass, G4d to G4h (cache `/api/machine-hours` for 60 seconds), G3.
+- **Old branches:** the NC1 to NC6, HB1, HB2 and other older worktrees are not verified as merged. Check `git branch --merged main` before deleting any. Ask the Boss before deleting `kit-cli` and `kit-docs`.
+- **Ledger gap:** 11 old runs have no ledger entries. Do not invent outcomes.
