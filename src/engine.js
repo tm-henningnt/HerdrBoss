@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
@@ -278,14 +279,35 @@ export function projectHeld(slug, projects = [], control = null) {
   return summaryHolds(published.summary, others);
 }
 
-// The workspace ids of the held projects. A workspace comes from the allocation or from the published status.
-export function heldWorkspaces(projects = [], control = null) {
+const nameKey = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+
+// The workspace ids of one project. A published or allocated workspace id comes first. Without one,
+// a workspace matches when its label equals the project slug or name, or when an orchestrator pane
+// runs inside the project repository.
+function projectWorkspaceIds(entry, control, herdr) {
+  const known = control?.projects?.[entry.slug]?.workspace || entry.workspace;
+  if (known) return [known];
+  const keys = new Set([nameKey(entry.slug), nameKey(entry.project)].filter(Boolean));
+  const repo = typeof entry.repo === 'string' && entry.repo ? path.resolve(entry.repo.replace(/^~(?=\/|$)/, os.homedir())) : null;
+  const ids = new Set();
+  for (const workspace of herdr?.workspaces || []) if (workspace.id && keys.has(nameKey(workspace.label))) ids.add(workspace.id);
+  for (const pane of herdr?.panes || []) {
+    if (!pane.workspace) continue;
+    if (keys.has(nameKey(pane.workspaceLabel))) ids.add(pane.workspace);
+    else if (repo && pane.cwd && (path.resolve(pane.cwd) === repo || path.resolve(pane.cwd).startsWith(repo + path.sep))) ids.add(pane.workspace);
+  }
+  return [...ids];
+}
+
+// The workspace ids of the held projects. Every path that sends a kit notice uses this set. herdr is the
+// workspace and pane snapshot. It finds the workspace of a held project that has no published workspace id.
+export function heldWorkspaces(projects = [], control = null, herdr = null) {
   const slugs = new Set([...(projects || []).map((entry) => entry.slug), ...Object.keys(control?.projects || {})]);
   const held = new Set();
   for (const slug of slugs) {
     if (!slug || !projectHeld(slug, projects, control)) continue;
-    const workspace = control?.projects?.[slug]?.workspace || (projects || []).find((entry) => entry.slug === slug)?.workspace;
-    if (workspace) held.add(workspace);
+    const entry = (projects || []).find((item) => item.slug === slug) || { slug };
+    for (const id of projectWorkspaceIds(entry, control, herdr)) held.add(id);
   }
   return held;
 }
@@ -971,7 +993,7 @@ export class Engine extends EventEmitter {
       // The denial trend is for the Owner. It goes to the dashboard and the bulletin, never to a pane prompt.
       snap.denials = denialSummary(readDenials(DATA_DIR), now, { pendingBytes: this.memory.denialScan?.pendingBytes || 0 });
       fs.writeFileSync(BULLETIN_FILE, renderBulletin(snap, evaluation, this.cfg));
-      if (this.act) await this.deliver(evaluation.alerts, herdr, now, snap.night, heldWorkspaces(snap.projects, snap.control));
+      if (this.act) await this.deliver(evaluation.alerts, herdr, now, snap.night, heldWorkspaces(snap.projects, snap.control, herdr));
       if (this.act && this.push) await this.deliverLockTakeoverNotices(herdr);
       if (this.act && this.push) await this.deliverNightNotices(snap.night, herdr, now);
       // Owner messages use a fresh pane list so delivery can act on current pane status.
