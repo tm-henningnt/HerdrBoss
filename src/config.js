@@ -140,17 +140,94 @@ const SERVICE_SETTINGS = [
   ['Service', 'host'],
 ];
 
-const POOL_KEYS = new Set(['name', 'items', 'range', 'split', 'env', 'ttlMinutes', 'check', 'graceMinutes']);
+const POOL_KEYS = new Set(['name', 'items', 'range', 'split', 'env', 'ttlMinutes', 'check', 'graceMinutes', 'idleMinutes', 'waitSeconds', 'portEnv']);
 const POOL_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const POOL_ITEM = /^[A-Za-z0-9._:-]{1,64}$/;
 const PROJECT_SLUG = /^[a-z0-9][a-z0-9-]*$/;
 const ENV_NAME = /^[A-Z_][A-Z0-9_]{0,63}$/;
 const MAX_POOL_ITEMS = 1000;
 const isPort = (item) => /^\d{1,5}$/.test(item) && Number(item) >= 1 && Number(item) <= 65535;
+export const PORT_LOW = 1024;
+export const PORT_HIGH = 65535;
+export const MAX_POOL_PORTS = 100;
+export const DEFAULT_IDLE_MINUTES = 20;
+export const MAX_PORT_ENV_VALUE = 200;
+
+// Parse "8000-8004,8010" into an array of number strings, in the order given. Return { items } or { error }.
+export function parsePortSpec(spec, { maxItems = MAX_POOL_ITEMS } = {}) {
+  if (typeof spec !== 'string' || !spec.trim()) return { error: 'must be "LOW-HIGH" or a comma-separated list of those and single numbers' };
+  const items = [];
+  const seen = new Set();
+  for (const part of spec.split(',').map((entry) => entry.trim())) {
+    const match = /^(\d{1,9})(?:-(\d{1,9}))?$/.exec(part);
+    if (!match) return { error: 'must be "LOW-HIGH" or a comma-separated list of those and single numbers' };
+    const low = Number(match[1]);
+    const high = match[2] === undefined ? low : Number(match[2]);
+    if (low > high) return { error: 'must be "LOW-HIGH" with LOW not above HIGH in each range' };
+    if (high - low + 1 > maxItems) return { error: `must give at most ${maxItems} items` };
+    for (let item = low; item <= high; item += 1) {
+      if (seen.has(item)) return { error: `has a duplicate: ${item}`, duplicate: true };
+      seen.add(item);
+      items.push(String(item));
+    }
+    if (items.length > maxItems) return { error: `must give at most ${maxItems} items` };
+  }
+  return { items };
+}
+
+// A ports pool has only numeric items, and either the tcp check or at least one port from 1024 up.
+// The idle rule, the port limits, and the client id values apply to a ports pool.
+export function isPortsPool(pool) {
+  const items = pool?.items ?? [];
+  if (!items.length || !items.every((item) => /^\d+$/.test(item))) return false;
+  return pool.check === 'tcp' || items.some((item) => Number(item) >= PORT_LOW);
+}
+
+// The extra environment variables for one item of a pool: [{ env, value }]. Only a value that is configured is returned.
+export function portEnvFor(pool, item) {
+  const result = [];
+  for (const [env, entries] of Object.entries(pool?.portEnv ?? {})) {
+    for (const [spec, value] of Object.entries(entries)) {
+      if (parsePortSpec(spec).items?.includes(String(item))) { result.push({ env, value }); break; }
+    }
+  }
+  return result;
+}
+
+// Validate the portEnv setting of one pool: { VARIABLE: { "8005-8009": "value" } }. The values are plain strings.
+// An error message never holds a value. Return the map, or null when the pool has none.
+function validatePortEnv(value, { label, items, env, errors }) {
+  if (value === undefined) return null;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) { errors.push(`${label}.portEnv must be an object of variable names to port ranges.`); return null; }
+  const result = {};
+  for (const [name, entries] of Object.entries(value)) {
+    const at = `${label}.portEnv.${name}`;
+    if (!ENV_NAME.test(name)) { errors.push(`${label}.portEnv key ${name.slice(0, 64)} must be an environment variable name of uppercase letters, digits, and underscores.`); continue; }
+    if (name === env) { errors.push(`${at}: ${name} is the lease variable of the pool. Choose another name.`); continue; }
+    if (!entries || typeof entries !== 'object' || Array.isArray(entries)) { errors.push(`${at} must be an object of port ranges to values.`); continue; }
+    const owner = new Set();
+    result[name] = {};
+    for (const [spec, entry] of Object.entries(entries)) {
+      const parsed = parsePortSpec(spec);
+      if (parsed.error) { errors.push(`${at} key ${spec.slice(0, 40)} ${parsed.error}.`); continue; }
+      const outside = parsed.items.find((item) => !items.includes(item));
+      if (outside) { errors.push(`${at} port ${outside} is not in the pool.`); continue; }
+      const twice = parsed.items.find((item) => owner.has(item));
+      if (twice) { errors.push(`${at} port ${twice} is in more than one entry.`); continue; }
+      parsed.items.forEach((item) => owner.add(item));
+      if (typeof entry !== 'string') errors.push(`${at} value for ${spec} must be a string.`);
+      else if (!entry.length) errors.push(`${at} value for ${spec} must be a string of 1 to ${MAX_PORT_ENV_VALUE} characters.`);
+      else if (entry.length > MAX_PORT_ENV_VALUE) errors.push(`${at} value for ${spec} must have at most ${MAX_PORT_ENV_VALUE} characters.`);
+      else if (/[\s\u0000-\u001f\u007f]/u.test(entry)) errors.push(`${at} value for ${spec} must have no whitespace and no control characters.`);
+      else result[name][spec] = entry;
+    }
+  }
+  return result;
+}
 
 // Validate the resourcePools setting. Return the normalized pools and one message for each error.
 // A pool holds only names, items, and limits. An unknown key is an error, so a pool cannot carry a secret.
-export function validateResourcePools(value) {
+export function validateResourcePools(value, { dashboardPort = null } = {}) {
   if (!Array.isArray(value)) return { pools: [], errors: ['resourcePools must be an array.'] };
   const errors = [];
   const pools = [];
@@ -176,12 +253,15 @@ export function validateResourcePools(value) {
         });
       }
     } else {
-      const match = typeof pool.range === 'string' ? /^(\d{1,9})-(\d{1,9})$/.exec(pool.range) : null;
-      const low = match ? Number(match[1]) : NaN;
-      const high = match ? Number(match[2]) : NaN;
-      if (!match || low > high) errors.push(`${label}.range must be "LOW-HIGH" with integers and LOW not above HIGH.`);
-      else if (high - low + 1 > MAX_POOL_ITEMS) errors.push(`${label}.range must give at most ${MAX_POOL_ITEMS} items.`);
-      else for (let item = low; item <= high; item += 1) items.push(String(item));
+      const parsed = parsePortSpec(pool.range);
+      if (parsed.error) errors.push(`${label}.range ${parsed.error}.`);
+      else items = parsed.items;
+    }
+    if (errors.length === before && isPortsPool({ items, check: pool.check ?? null })) {
+      const outside = items.filter((item) => Number(item) < PORT_LOW || Number(item) > PORT_HIGH);
+      if (outside.length) errors.push(`${label} ports must be from ${PORT_LOW} to ${PORT_HIGH}: ${outside.slice(0, 5).join(', ')}.`);
+      if (items.length > MAX_POOL_PORTS) errors.push(`${label} must have at most ${MAX_POOL_PORTS} ports.`);
+      if (dashboardPort && items.includes(String(dashboardPort))) errors.push(`${label} includes the dashboard port ${dashboardPort}. A pool cannot lease it.`);
     }
     const split = {};
     if (pool.split !== undefined) {
@@ -208,7 +288,12 @@ export function validateResourcePools(value) {
     const check = pool.check ?? null;
     if (check !== null && check !== 'tcp') errors.push(`${label}.check must be "tcp" or null.`);
     if (check === 'tcp') for (const item of items.filter((entry) => !isPort(entry))) errors.push(`${label}.check "tcp" needs port items; ${item} is not a port.`);
-    if (errors.length === before) pools.push({ name: pool.name, items, split, env: pool.env, ttlMinutes, check, graceMinutes });
+    const idleMinutes = pool.idleMinutes ?? DEFAULT_IDLE_MINUTES;
+    if (!Number.isSafeInteger(idleMinutes) || idleMinutes < 1 || idleMinutes > 240) errors.push(`${label}.idleMinutes must be a whole number from 1 to 240.`);
+    const waitSeconds = pool.waitSeconds ?? 0;
+    if (!Number.isSafeInteger(waitSeconds) || waitSeconds < 0 || waitSeconds > 3600) errors.push(`${label}.waitSeconds must be a whole number from 0 to 3600.`);
+    const portEnv = validatePortEnv(pool.portEnv, { label, items, env: pool.env, errors });
+    if (errors.length === before) pools.push({ name: pool.name, items, split, env: pool.env, ttlMinutes, check, graceMinutes, idleMinutes, waitSeconds, ...(portEnv ? { portEnv } : {}) });
   });
   return { pools, errors };
 }
@@ -403,11 +488,11 @@ export function loadConfig() {
   // migrateAccessFiles() writes the new setting.
   if (cfg.access.tokenFile === path.join(DATA_DIR, 'access-token')) cfg.access.tokenFile = DEFAULT_TOKEN_FILE;
   // An invalid pool list gives no pools. The lease commands and the bulletin name each error.
-  const pools = validateResourcePools(cfg.resourcePools);
-  cfg.resourcePools = pools.errors.length ? [] : pools.pools;
-  cfg.resourcePoolErrors = pools.errors;
   if (process.env.HERDR_BOSS_PUSH === '0') cfg.push = false;
   if (process.env.HERDR_BOSS_PORT) cfg.port = Number(process.env.HERDR_BOSS_PORT);
+  const pools = validateResourcePools(cfg.resourcePools, { dashboardPort: cfg.port });
+  cfg.resourcePools = pools.errors.length ? [] : pools.pools;
+  cfg.resourcePoolErrors = pools.errors;
   return cfg;
 }
 

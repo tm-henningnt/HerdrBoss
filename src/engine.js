@@ -16,7 +16,7 @@ import { renderNightReport } from './night-report.js';
 import { adhocOneLine, effectiveRoutines, routinePromptText, slotAfter, slotEnd } from './watch-routines.js';
 import { listBrowserSessions, cdpResponds, browserProcessCheck } from './browser-pool.js';
 import { probeBrowser, createBrowserProbes } from './browser-probe.js';
-import { readLeases, reclaimLeases, publicLease, tcpListening, leasePools, migrateProjectBrowserLeases } from './leases.js';
+import { readLeases, reclaimLeases, publicLease, publicPool, reclaimNoticeText, hasIdleRule, tcpListening, tcpListeningAsync, leasePools, migrateProjectBrowserLeases } from './leases.js';
 import { codeSignCloneDir, sweepCodeSignClones } from './clone-sweep.js';
 import { runDenialScan, readDenials, denialSummary, DENIAL_SCAN_INTERVAL_MS, SCAN_BUDGET_BYTES, RETAIN_DAYS, RISE_FACTOR, RISE_MIN_EVENTS } from './denials.js';
 import { goalOnScreen, sendGoalPrompt } from './goal.js';
@@ -34,6 +34,9 @@ import { FULL_SUITE_LOCK, lockLedgerSummary, readLockQueue, readLockTakeoverNoti
 
 const TASK_WORKERS_INTERVAL_MS = 15_000;
 const TASK_MERGE_CHECKS = 5;
+const LEASE_PROBE_PARALLEL = 8;
+const LEASE_PROBES_PER_TICK = 25;
+const LEASE_LISTENER_TTL_MS = 5 * 60_000;
 const GIT_COUNTS_INTERVAL_MS = 60_000;
 const MEMORY_FILE = path.join(DATA_DIR, 'memory.json');
 const STATE_FILE = path.join(DATA_DIR, 'state.json');
@@ -454,6 +457,8 @@ function writeJson(file, data) {
 }
 
 export class Engine extends EventEmitter {
+  leaseListeners = new Map();
+  leaseProbeCursor = 0;
   constructor(cfg, { push = cfg.push, act = true, collectors = {}, handoffRunner = run, herdrRunner = run, gitRunner = (args) => run('git', args, { timeout: 10000 }), kitRoot = KIT_ROOT, lockDataDir = DATA_DIR } = {}) {
     super();
     this.cfg = cfg;
@@ -501,6 +506,7 @@ export class Engine extends EventEmitter {
       // A test engine never probes a real browser port unless a test injects a probe.
       probeBrowser: process.env.NODE_TEST_CONTEXT ? async () => ({ ok: true }) : probeBrowser,
       probeTcp: tcpListening,
+      probePort: tcpListeningAsync,
       codeSignCloneDir,
       sweepCodeSignClones,
       runDenialScan,
@@ -545,12 +551,35 @@ export class Engine extends EventEmitter {
     this.emit('event', e);
   }
 
+  async probeLeaseListeners(pools, now) {
+    let store;
+    try { store = readLeases(DATA_DIR); } catch { return; }
+    const leased = store.leases.filter((lease) => hasIdleRule(pools.find((pool) => pool.name === lease.pool)))
+      .sort((a, b) => `${a.pool}\n${a.item}`.localeCompare(`${b.pool}\n${b.item}`, 'en', { numeric: true }));
+    for (const key of [...this.leaseListeners.keys()]) if (!leased.some((lease) => `${lease.pool}\n${lease.item}` === key)) this.leaseListeners.delete(key);
+    if (!leased.length) return;
+    const count = Math.min(LEASE_PROBES_PER_TICK, leased.length);
+    const start = this.leaseProbeCursor % leased.length;
+    const due = Array.from({ length: count }, (_, index) => leased[(start + index) % leased.length]);
+    this.leaseProbeCursor = (start + count) % leased.length;
+    let next = 0;
+    const worker = async () => {
+      while (next < due.length) {
+        const lease = due[next++];
+        let value = null;
+        try { value = await this.collectors.probePort(lease.item); } catch { value = null; }
+        this.leaseListeners.set(`${lease.pool}\n${lease.item}`, { value: value === true ? true : value === false ? false : null, at: now });
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(LEASE_PROBE_PARALLEL, due.length) }, worker));
+  }
+
   setResourcePools(pools) {
     this.cfg.resourcePools = pools;
     this.cfg.resourcePoolErrors = [];
     if (!this.state?.resourceLeases) return;
     const { pools: activePools, errors } = leasePools(this.cfg);
-    this.state.resourceLeases = { ...this.state.resourceLeases, pools: activePools, errors };
+    this.state.resourceLeases = { ...this.state.resourceLeases, pools: activePools.map(publicPool), errors };
     this.emit('state', this.state);
   }
 
@@ -676,10 +705,18 @@ export class Engine extends EventEmitter {
       // Reclaim leases on an acting tick. A pane is gone only when the pane list of this tick succeeded.
       // A project browser lease is checked only when the process list of this tick succeeded.
       const reclaimedLeases = [];
+      // Probe the ports of the leases of ports pools on an acting tick only: at most 8 at a time and 25 for each tick, round robin,
+      // so every port is checked over several ticks. An answer is kept by pool and item for 5 minutes. No answer means unknown.
+      if (this.act && this.collectors.probePort) await this.probeLeaseListeners(resourcePools, now);
+      const listenerOf = (pool, item) => {
+        const known = this.leaseListeners.get(`${pool}\n${item}`);
+        return known && now - known.at < LEASE_LISTENER_TTL_MS ? known.value : null;
+      };
       if (this.act) {
         try {
           reclaimLeases({
-            pools: resourcePools, dataDir: DATA_DIR, now, probeTcp: this.collectors.probeTcp, waitMs: 0,
+            pools: resourcePools, dataDir: DATA_DIR, now, waitMs: 0,
+            probeTcp: (item, pool) => listenerOf(pool, item),
             panes: currentHerdrSnapshot && currentPaneList ? new Set(herdr.panes.map((pane) => pane.id)) : null,
             browserProcess: browserProcessCheck(processesKnown ? procs : null, Object.fromEntries(browserSessions.map((b) => [b.project, b]))),
             night,
@@ -698,14 +735,20 @@ export class Engine extends EventEmitter {
         const livePanes = new Set(herdr.panes.map((pane) => pane.id));
         for (const item of reclaimedLeases) {
           if (!item.pane || !livePanes.has(item.pane)) continue;
-          const text = `[herdr-boss] Your lease ${item.pool} ${item.item} was reclaimed: ${item.reason}. Stop using it, and take a new one with herdr-boss lease acquire ${item.pool}.`;
+          const text = `[herdr-boss] ${reclaimNoticeText(item)}`;
           try { checkHerdrResponse(await this.herdrRunner('herdr', ['agent', 'prompt', item.pane, text])); }
           catch (error) { this.log('error', `Lease reclaim notice to ${item.pane} failed: ${String(error.stderr || error.message).slice(0, 200)}`); }
         }
       }
       let leaseStore = { leases: [] };
       try { leaseStore = readLeases(DATA_DIR); } catch (e) { errors.push(`leases: ${e.message}`); }
-      const resourceLeases = { pools: resourcePools, errors: resourcePoolErrors, leases: leaseStore.leases.map(publicLease) };
+      const resourceLeases = {
+        pools: resourcePools.map(publicPool), errors: resourcePoolErrors,
+        leases: leaseStore.leases.map((lease) => {
+          const listener = listenerOf(lease.pool, lease.item);
+          return { ...publicLease(lease), ...(listener === null ? {} : { listener }) };
+        }),
+      };
 
       this.trackPaneStatus(herdr, now);
       const workerTransitions = herdr ? await inspectWorkerTransitions(

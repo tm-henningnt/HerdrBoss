@@ -136,7 +136,8 @@ const USAGE = `herdr-boss <command>
   lock acquire <name> [--wait SECONDS]  Acquire a project lock.
   lock release <name>   Release a project lock.
   lock list             List project locks with their scope.
-  lease acquire POOL [--for SLUG|WORKER] [--prefer ITEM] [--ttl MINUTES]  Lease one pool item and print it.
+  lease acquire POOL [--for SLUG|WORKER] [--prefer ITEM] [--ttl MINUTES] [--pid PID] [--wait SECONDS] [--env-file FILE]  Lease one pool item and print it. --pid binds the lease to the server process. --wait queues for a free item. --env-file writes the pool variables for a shell to source.
+  lease bind POOL ITEM --pid PID  Bind a lease to the server process that uses its port.
   lease release POOL ITEM  Release a lease of your project; the Boss can release any lease.
   lease list [POOL]     Print the pool items and their leases as JSON.
   push [git push arguments]  Run git push. Take the full-suite lock when a pre-push hook exists.
@@ -653,17 +654,17 @@ async function main() {
       break;
     }
     case 'lease': {
-      const { acquireLease, releaseLease, listLeases, leasePools } = await import('./leases.js');
+      const { acquireLease, releaseLease, bindLease, listLeases, leasePools } = await import('./leases.js');
       const { pools, errors: poolErrors } = leasePools(cfg);
       if (poolErrors.length) throw new Error(`The resourcePools setting in ${path.join(DATA_DIR, 'config.json')} is invalid:\n- ${poolErrors.join('\n- ')}`);
       const [action, ...rest] = args;
-      const usage = 'Usage: lease acquire POOL [--for SLUG|WORKER] [--prefer ITEM] [--ttl MINUTES] | lease release POOL ITEM | lease list [POOL]';
+      const usage = 'Usage: lease acquire POOL [--for SLUG|WORKER] [--prefer ITEM] [--ttl MINUTES] [--pid PID] [--wait SECONDS] [--env-file FILE] | lease bind POOL ITEM --pid PID | lease release POOL ITEM | lease list [POOL]';
       if (action === 'list') {
         if (rest.length > 1) throw new Error(usage);
         listLeases({ pools, pool: rest[0] ?? null });
         break;
       }
-      if (!['acquire', 'release'].includes(action)) throw new Error(usage);
+      if (!['acquire', 'release', 'bind'].includes(action)) throw new Error(usage);
       const { createHerdrRunner } = await import('./kit/workers.js');
       let project = null;
       try { project = loadProjectConfig(); } catch {}
@@ -676,20 +677,32 @@ async function main() {
       }
       const flags = {};
       const positional = [];
+      const allowed = action === 'bind' ? ['--pid'] : ['--for', '--prefer', '--ttl', '--pid', '--wait', '--env-file'];
       for (let index = 0; index < rest.length; index += 1) {
         const token = rest[index];
         if (!token.startsWith('--')) { positional.push(token); continue; }
-        if (!['--for', '--prefer', '--ttl'].includes(token)) throw new Error(`Unknown option: ${token}. ${usage}`);
+        if (!allowed.includes(token)) throw new Error(`Unknown option: ${token}. ${usage}`);
         if (token in flags) throw new Error(`${token} may be used only once.`);
         const value = rest[++index];
         if (value === undefined || value.startsWith('--')) throw new Error(`${token} needs a value.`);
         flags[token] = value;
       }
+      if (flags['--pid'] !== undefined && !/^[1-9]\d*$/.test(flags['--pid'])) throw new Error('--pid must be a positive whole number.');
+      if (action === 'bind') {
+        if (positional.length !== 2 || flags['--pid'] === undefined) throw new Error(usage);
+        const bound = bindLease(positional[0], positional[1], Number(flags['--pid']), common);
+        console.log(`Bound lease ${positional[0]} ${positional[1]} to process ${bound.pid}.`);
+        break;
+      }
       if (positional.length !== 1) throw new Error(usage);
       if (flags['--ttl'] !== undefined && !/^\d+$/.test(flags['--ttl'])) throw new Error('--ttl must be a positive whole number of minutes.');
+      if (flags['--wait'] !== undefined && !/^\d+$/.test(flags['--wait'])) throw new Error('--wait must be a whole number of seconds.');
       acquireLease(positional[0], {
         ...common, forTarget: flags['--for'] ?? null, prefer: flags['--prefer'] ?? null,
         ttlMinutes: flags['--ttl'] === undefined ? null : Number(flags['--ttl']),
+        pid: flags['--pid'] === undefined ? null : Number(flags['--pid']),
+        waitSeconds: flags['--wait'] === undefined ? null : Number(flags['--wait']),
+        envFile: flags['--env-file'] ?? null,
       });
       break;
     }

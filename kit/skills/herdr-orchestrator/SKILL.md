@@ -70,7 +70,7 @@ Read each file in the skill folder when its step comes:
 - Before each push, read the full diff for tokens, secrets, local paths with private content, and client or tenant names from other projects.
 - Push one change set at a time.
 - Run `herdr-boss suite -- npm test` as a background command, then wait for it and read its exit code. The tool timeout is 600 seconds. The command takes the machine-wide `full-suite` lock. Never take the full-suite lock with a bare lock acquire for a suite. Push with `herdr-boss push <args>`. Use `herdr-boss push` for a push; it takes the lock when a pre-push hook exists. There is no load threshold.
-- Lease a shared resource with `herdr-boss lease acquire POOL` or `worker start --lease POOL`. Never pick a port from a pool by hand.
+- Lease a shared resource with `herdr-boss lease acquire POOL` or `worker start --lease POOL`. Never pick a port from a pool by hand. The serve-lease rules are in [the machine and quota rules](reference/machine-and-quota.md).
 
 ### Human gates and parking
 

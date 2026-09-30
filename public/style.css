@@ -1368,6 +1368,8 @@ p.wizard-errors { padding-left: 10px; }
 .lease-table tr:last-child td { border-bottom: 0; }
 .lease-table td.mono { font-family: var(--mono); }
 .lease-free td { color: var(--muted); }
+.lease-idle td { color: var(--muted); }
+.lease-idle td:first-child { font-style: italic; }
 .lease-action { text-align: right; }
 .lease-action button { padding: 4px 10px; }
 .lease-note { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; white-space: normal; }
@@ -2396,3 +2398,10 @@ a.rv-page-link:hover { background: var(--panel-2); }
   .rv-canvas { transition: none; }
   .rv-hint { animation: none; }
 }
+
+.pool-env { margin-top: 12px; display: grid; gap: 8px; }
+.pool-env h4 { margin: 0; font-size: 13px; }
+.pool-env-row { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; }
+.pool-env-row input { flex: 1 1 140px; min-width: 0; }
+.pool-env-set { color: var(--muted); font-size: 12.5px; flex: 1 1 140px; }
+.pool-env > button[data-pool-env-add] { justify-self: start; }

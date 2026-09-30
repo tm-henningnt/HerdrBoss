@@ -54,3 +54,11 @@ Read this file before you choose a lane for a new kind of task, when `herdr-boss
 - `worker start` refuses an exhausted provider unless you use the explicit `--force` override.
 - When every metered provider is ahead of pace, `worker start` allows the least-over provider without `--force`. Keep that task small.
 - A quota window whose reset time has passed shows "reset, not yet measured" until the next reading. Do not use its old percentage as a reason for `--force`.
+
+## Serve leases
+
+- Take a serve port with `herdr-boss lease acquire serve-ports --wait 600`. The command waits up to 10 minutes for a free port. It then fails with a clear message. A `serve-live` helper calls it with `--wait 600` before it fails.
+- Bind the lease to the server process with `herdr-boss lease bind serve-ports PORT --pid PID`. You can also pass `--pid PID` to `lease acquire`. Herdr Boss releases a bound lease within one tick after the process ends.
+- Start the server soon after you take the lease. Herdr Boss reclaims a serve lease whose port has no listener for 20 minutes (`idleMinutes` of the pool). It sends one notice. Take a new port after the notice.
+- Pick the client ID by port. When the pool has a value for the port, the lease hands it over in an environment variable, for example `TM_SERVE_LIVE_CLIENT_ID`. `worker start --lease` sets it in the worker pane. `lease acquire --env-file FILE` writes it for the shell to source.
+- Never print the value in a pane, a report, or a brief.
