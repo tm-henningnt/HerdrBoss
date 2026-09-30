@@ -651,15 +651,15 @@ A Codex tool shell can run under a shared app-server daemon with another environ
 | `--read-only` | Allow changes in the worker's own folder only. Use this option when the task changes no repository file. Do not use it with `--allow`. |
 | `--copy PATH` | Copy a regular repository file into `.worker/inputs/` before the agent starts. Repeat for each file. Keep its repository subdirectories. The 200 MB limit also counts automatic task inputs. |
 | `--lease POOL` | Lease one item of a resource pool for the worker. Repeat for each pool. See [Resource leases](#resource-leases). A task that names `serve:live` automatically leases `serve-ports` when that pool exists and `--lease` does not name it. |
-| `--model MODEL` | A model from `herdr-boss models`. The default is the kind's default model. |
-| `--effort EFFORT` | A reasoning effort, where the kind supports it. |
+| `--model MODEL` | A model from `herdr-boss models`. Without this option, `worker start` uses the kind's default model in `kit/models.json`. The `preferredModels` policy does not override it. The preferred model is a fallback only when the default cannot start (disabled, or not allowed). The fallback never picks an Opus model without `--force`. `worker start` always passes the model to the harness, so the account default of the harness is never used. A kind without a default model fails and asks for `--model`. The name is case-folded, a bracketed suffix such as `[1m]` is dropped, and `opus`, `claude-opus`, and `opus-5-5` mean `claude-opus-5-5`. The dry-run plan and the run record show `modelSource`: `flag`, `default`, or `policy`. |
+| `--effort EFFORT` | A reasoning effort, where the kind supports it. Without this option, `worker start` uses the kit default effort of the kind. The run record shows `effortSource` (`flag` or `default`) when an effort applies. |
 | `--task-id ID` | The task ID from the published status. Herdr Boss saves it as `taskId` in the run record. The project board then shows the task as `doing` while the worker runs. Use letters, digits, `.`, `_`, and `-`, up to 64 characters. Always give this option. Without `--task-id` and `--issue`, `worker start` prints a warning and starts the worker. |
 | `--issue N` | The issue number. It is an alias of `--task-id` for a numeric task ID. Do not use it with `--task-id`. |
 | `--base BRANCH` | The base branch. The default is `baseBranch` in `.herdr-boss.json`. |
 | `--orch PANE` | The verified caller pane for reports. If set, it must match `HERDR_PANE_ID`. |
 | `--no-worktree` | Use the current checkout. The worker gets `.worker/NAME/` for its brief and reports. |
 | `--dry-run` | Print the plan. Change nothing. |
-| `--force` | Override quota, capacity, and paused-project refusals. It cannot enable a disabled model. It cannot override the swap refusal. |
+| `--force` | Override quota, capacity, and paused-project refusals. Start `claude-opus-5-5` only with the Owner's approval: without `--force`, `worker start` fails with `claude-opus-5-5 needs the Owner's approval. Ask the Owner, then start with --force.` The refusal also applies to the Opus spellings that `--model` normalizes, and to an Opus fallback from the policy. It happens before a worktree, a pane, or a run record exists. With `--force`, the run record holds `force: true`. It cannot enable a disabled model. It cannot override the swap refusal. |
 | `--force-swap` | Override the swap refusal (see below). |
 
 Worker brief templates support two Herdr command slots:

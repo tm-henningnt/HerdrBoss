@@ -44,7 +44,7 @@ In the vendor test, a model failed to report a broken search tool in these cases
 | Kind and model | Best fit | Limits |
 | --- | --- | --- |
 | `claude`, `claude-sonnet-5-5` | The default Claude worker: implementation, review, and browser checks. | Use it when an unmetered model is not enough for the task. |
-| `claude`, `claude-opus-5-5` | The hardest judgment work, and orchestrators. | Reserve it for work that `claude-sonnet-5-5` cannot do well. |
+| `claude`, `claude-opus-5-5` | The hardest judgment work, and orchestrators. | Reserve it for work that `claude-sonnet-5-5` cannot do well. `worker start` refuses `claude-opus-5-5`, and its aliases `opus` and `claude-opus`, without `--force`. Ask the Owner first. `worker start` without `--model` always uses the kit default model, not the policy's preferred model. |
 | `codex`, `gpt-6-luna` | The default Codex worker for routine work: bounded implementation, tests, docs, and review fixes. | Review root causes and pixel claims. Long sessions can stop without a final report. |
 | `codex`, `gpt-6.1-sol` (trial) | Tougher programming tasks: cross-cutting fixes, algorithms, takeovers, and tasks where `gpt-6-luna` needed rework. Cost effective and close to Astra level. | Trial until the Analytics scorecard has about 10 runs for this model. Record `--model-result` for every run with `worker collect --record`, so rework and time can be compared with `gpt-6-luna`. |
 | `pi`, `opencode-go/deepseek-v4.1-flash` | Economical research and fully specified mechanical work. | Shared Go quota can stop every worker on that provider. Pin the model and verify results. |
