@@ -1,7 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 import { DATA_DIR } from './config.js';
+import { isLiveDataDir } from './data-dir-guard.js';
 
 const require = createRequire(import.meta.url);
 const DATABASE_NAME = 'herdr-boss.db';
@@ -9,6 +11,42 @@ const BUSY_TIMEOUT_MS = 5000;
 const storesByFile = new Map();
 
 export const databaseFile = (dir = DATA_DIR) => path.join(path.resolve(dir), DATABASE_NAME);
+
+export const MIGRATION_GUARD_MESSAGE = 'This source tree cannot migrate the live database. Run it from the main checkout or use a temporary HERDR_BOSS_DIR.';
+
+// Add a column only when the table lacks it. Use this helper for every ADD COLUMN migration: a database can hold the
+// column already when an earlier run of the migration stopped before it recorded the schema version.
+// Returns true when it added the column.
+export function addColumnIfMissing(db, table, column, definition) {
+  if (!/^[a-z_][a-z0-9_]*$/i.test(table) || !/^[a-z_][a-z0-9_]*$/i.test(column)) throw new Error('A table and a column name hold letters, digits, and underscores only.');
+  if (db.prepare(`PRAGMA table_info(${table})`).all().some((entry) => entry.name === column)) return false;
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  return true;
+}
+
+const SOURCE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+// The main checkout has a .git directory. A linked worktree has a .git file. A copy of the source has neither.
+// The decision reads the file system only: no subprocess and no environment variable, so a missing git, a slow git, and
+// GIT_DIR or GIT_WORK_TREE cannot change it.
+export function isMainCheckout(root) {
+  try { return fs.lstatSync(path.join(root, '.git')).isDirectory(); }
+  catch { return false; }
+}
+
+// A pending migration on the live database needs the main checkout: the launchd service runs from it. Any other source tree
+// (a worker worktree, the integration worktree, a copy) is refused. `guard` replaces the real values in a test:
+// { liveDirs, sourceRoot }. The service ignores it: only a test run (NODE_TEST_CONTEXT is set) honors it.
+// A temporary data dir is not live and migrates freely.
+function assertMayMigrate(file, guard) {
+  const override = process.env.NODE_TEST_CONTEXT && guard ? guard : {};
+  const dir = path.dirname(file);
+  const live = override.liveDirs
+    ? override.liveDirs.some((entry) => { const relative = path.relative(path.resolve(entry), path.resolve(dir)); return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative)); })
+    : isLiveDataDir(dir);
+  if (!live) return;
+  if (!isMainCheckout(override.sourceRoot ?? SOURCE_ROOT)) throw new Error(MIGRATION_GUARD_MESSAGE);
+}
 
 export function assertSqliteAvailable() {
   try { return require('node:sqlite'); }
@@ -146,15 +184,20 @@ const MIGRATIONS = [
       CREATE INDEX review_packs_state_idx ON review_packs(state, updated_at);
     `,
   },
+  {
+    version: 3,
+    run: (db) => { addColumnIfMissing(db, 'review_results', 'markdown', 'TEXT'); },
+  },
 ];
 
-function migrate(db, file) {
+function migrate(db, file, guard) {
   db.exec(`CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY,
     applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   )`);
   let current = db.prepare('SELECT COALESCE(MAX(version), 0) AS version FROM schema_version').get().version;
   if (current > MIGRATIONS.at(-1).version) throw new Error(`SQLite database ${file} has a newer schema version (${current}).`);
+  if (MIGRATIONS.some((migration) => migration.version > current)) assertMayMigrate(file, guard);
   for (const migration of MIGRATIONS) {
     if (migration.version <= current) continue;
     db.exec('BEGIN IMMEDIATE');
@@ -164,7 +207,8 @@ function migrate(db, file) {
         db.exec('COMMIT');
         continue;
       }
-      db.exec(migration.sql);
+      if (migration.run) migration.run(db);
+      else db.exec(migration.sql);
       db.prepare('INSERT INTO schema_version(version) VALUES (?)').run(migration.version);
       db.exec('COMMIT');
       current = migration.version;
@@ -179,7 +223,7 @@ function sqlString(value) {
   return `'${String(value).replaceAll("'", "''")}'`;
 }
 
-export function openSqliteStore({ dir = DATA_DIR } = {}) {
+export function openSqliteStore({ dir = DATA_DIR, guard } = {}) {
   const file = databaseFile(dir);
   const cached = storesByFile.get(file);
   if (cached) return cached;
@@ -198,7 +242,7 @@ export function openSqliteStore({ dir = DATA_DIR } = {}) {
     db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}; PRAGMA foreign_keys = ON;`);
     quickCheck(db, file);
     db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;');
-    migrate(db, file);
+    migrate(db, file, guard);
     secureFiles(file);
   } catch (error) {
     try { db.close(); } catch {}

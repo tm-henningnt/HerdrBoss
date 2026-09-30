@@ -26,11 +26,19 @@ const GROUP_CHIP = {
   open: { tone: 'open', label: 'Open', icon: '' },
 };
 
+// The verdicts of the submit form. The Owner chooses one. The summary proposes one from the counts and never forces it.
 const VERDICTS = [
-  { key: 'approve', label: 'Approve', done: 'Approved', tone: 'ok', icon: 'check', hint: 'Accept the pack as it is.' },
-  { key: 'request-changes', label: 'Request changes', done: 'Changes requested', tone: 'crit', icon: 'close', hint: 'The project fixes the denied items.' },
-  { key: 'comment', label: 'Comment', done: 'Commented', tone: 'info', icon: 'note', hint: 'Send the notes without a decision.' },
+  { key: 'accept', label: 'Accept pack', done: 'Accepted', tone: 'ok', icon: 'check', hint: 'Accept the pack as it is.' },
+  { key: 'accept-with-changes', label: 'Accept with changes', done: 'Accepted with changes', tone: 'warn', icon: 'note', hint: 'The project makes the changes that you listed.' },
+  { key: 'deny', label: 'Deny pack', done: 'Denied', tone: 'crit', icon: 'close', hint: 'The project does not ship this pack.' },
 ];
+// A result that an earlier build stored keeps its own label. The form does not offer these.
+const LEGACY_VERDICTS = [
+  { key: 'approve', label: 'Approve', done: 'Approve', tone: 'ok', icon: 'check' },
+  { key: 'request-changes', label: 'Request changes', done: 'Request changes', tone: 'crit', icon: 'close' },
+  { key: 'comment', label: 'Comment', done: 'Comment', tone: 'info', icon: 'note' },
+];
+const DEFAULT_VERDICT = 'accept-with-changes';
 
 const TYPE_LABEL = {
   image: 'Image', 'image-pair': 'Image pair', gallery: 'Gallery', video: 'Video', markdown: 'Text', table: 'Table',
@@ -153,7 +161,7 @@ export function itemChip(item, pack) {
 }
 
 function verdictInfo(key) {
-  return VERDICTS.find((verdict) => verdict.key === key) || null;
+  return [...VERDICTS, ...LEGACY_VERDICTS].find((verdict) => verdict.key === key) || null;
 }
 
 function doneChip(pack, esc) {
@@ -228,32 +236,61 @@ function sectionHtml(pack, section, ui, esc) {
     + `<ul class="review-items">${items.map((item) => itemRowHtml(pack, item, ui, esc)).join('')}</ul></details>`;
 }
 
-// The summary groups: Open first, then the other states in the order of the bar.
+// The summary groups in the order of the decision: denied, needs live check, notes, accepted, and open last.
 const SUMMARY_GROUPS = [
-  { label: 'Open', has: (item) => item.state === 'open' },
   { label: 'Denied', has: (item) => item.state === 'denied' },
   { label: 'Needs live check', has: (item) => item.state === 'live' },
   { label: 'Note only', has: (item) => item.state === 'note' },
   { label: 'Accepted', has: (item) => item.state === 'accepted' || item.state === 'answered' },
+  { label: 'Open', has: (item) => item.state === 'open' },
 ];
 
+// The delivery of the result to the orchestrator, as a state, a label, and a sentence. The API gives the status of the Owner message:
+// queued, sent, or failed, with the attempts and the retry flag. The text holds the raw error: the caller escapes it.
+export function deliveryText(delivery) {
+  if (!delivery) return null;
+  const error = String(delivery.error || 'unknown error').replace(/\.$/, '');
+  if (delivery.status === 'error') return { state: 'failed', label: 'Failed', text: `The result is stored but not queued for the orchestrator: ${error}. Select Queue again.`, again: true };
+  if (delivery.status === 'sent') {
+    return { state: 'sent', label: 'Delivered', text: delivery.attempts > 1 ? `The orchestrator got the result after a retry. Attempts: ${delivery.attempts}.` : 'The orchestrator got the result.' };
+  }
+  if (delivery.status === 'failed') {
+    if (delivery.retry) return { state: 'retrying', label: 'Retrying', text: `Attempt ${delivery.attempts} of ${delivery.maxAttempts} failed: ${error}. Herdr Boss tries again.` };
+    return { state: 'failed', label: 'Failed', text: `Delivery failed after ${delivery.attempts} attempts: ${error}. The result is stored. The orchestrator can run herdr-boss review result.` };
+  }
+  return { state: 'queued', label: 'Queued', text: 'Waiting to send the result to the orchestrator.' };
+}
+
+const DELIVERY_TONE = { queued: 'open', sent: 'ok', retrying: 'warn', failed: 'crit' };
+
+function deliveryHtml(delivery, esc) {
+  const view = deliveryText(delivery);
+  if (!view) return '';
+  const again = view.again ? ' <button type="button" class="review-button" data-review-redeliver>Queue again</button>' : '';
+  return `<p class="review-delivery" data-state="${view.state}" role="status">${chipHtml({ tone: DELIVERY_TONE[view.state], label: view.label, icon: '' }, esc)} <span>${esc(view.text)}</span>${again}</p>`;
+}
+
 function summaryHtml(pack, ui, esc) {
+  const open = pack.state === 'open';
+  const missing = (pack.items || []).filter((item) => item.state === 'open').length;
   const blocks = SUMMARY_GROUPS.map((group) => {
     const items = (pack.items || []).filter(group.has);
     if (!items.length) return '';
     const rows = items.map((item) => {
       const note = item.answer?.note ? `<small class="review-sum-note">${esc(item.answer.note)}</small>` : '';
       const chosen = item.state === 'answered' ? `<small>${esc(itemChip(item, pack).label)}</small>` : '';
-      const go = group.label === 'Open' ? `<a class="review-sum-go" href="${esc(reviewUrl(pack.slug, pack.pack, item.id))}">Review now</a>` : '';
-      return `<li><a class="review-sum-title" href="${esc(reviewUrl(pack.slug, pack.pack, item.id))}">${esc(item.title || item.id)}</a>${go}${chosen}${note}</li>`;
+      const changed = item.stale ? '<small class="review-sum-stale">changed in this version</small>' : '';
+      const go = group.label === 'Open' && open ? `<a class="review-sum-go" href="${esc(reviewUrl(pack.slug, pack.pack, item.id))}">Review now</a>` : '';
+      return `<li><a class="review-sum-title" href="${esc(reviewUrl(pack.slug, pack.pack, item.id))}">${esc(item.title || item.id)}</a>${go}${chosen}${changed}${note}</li>`;
     }).join('');
     return `<div class="review-sum-block"><h3 class="review-sum-h">${group.label} <span class="num">${items.length}</span></h3><ul>${rows}</ul></div>`;
   }).join('');
+  const warning = missing ? `<p class="review-sum-warn" role="status">${open ? (missing === 1 ? '1 item has no decision' : `${missing} items have no decision`) : (missing === 1 ? '1 item had no decision' : `${missing} items had no decision`)}</p>` : '';
 
   let form;
-  if (pack.state === 'open') {
+  if (open) {
     const proposed = ui.proposed ?? pack.derived?.proposedVerdict;
-    const chosen = verdictInfo(ui.verdict) ? ui.verdict : proposed || 'comment';
+    const chosen = VERDICTS.some((verdict) => verdict.key === ui.verdict) ? ui.verdict : VERDICTS.some((verdict) => verdict.key === proposed) ? proposed : DEFAULT_VERDICT;
     const options = VERDICTS.map((verdict) => `<label class="review-verdict-option"><input type="radio" name="review-verdict" value="${verdict.key}"${verdict.key === chosen ? ' checked' : ''} data-review-verdict><span><b>${verdict.label}</b><small>${verdict.hint}</small></span>${verdict.key === proposed ? '<span class="review-proposed">Proposed</span>' : ''}</label>`).join('');
     const note = ui.note ?? pack.note ?? '';
     form = `<form class="review-submit-form" id="review-submit-form" data-review-submit data-key="review-form">`
@@ -266,9 +303,9 @@ function summaryHtml(pack, ui, esc) {
     const verdict = verdictInfo(ui.result?.verdict ?? pack.verdict);
     const chip = pack.state === 'expired' ? chipHtml({ tone: 'open', label: 'Expired', icon: '' }, esc) : verdict ? chipHtml({ tone: verdict.tone, label: verdict.done, icon: verdict.icon }, esc) : '';
     const note = ui.result?.note ?? pack.note;
-    form = `<div class="review-result"><p>${pack.state === 'expired' ? 'Expired' : 'Submitted'}${pack.closedAt ? ` ${esc(ui.time ? ui.time(pack.closedAt) : pack.closedAt)}` : ''} ${chip}</p>${note ? `<p class="review-result-note">${esc(note)}</p>` : ''}</div>`;
+    form = `<div class="review-result"><p>${pack.state === 'expired' ? 'Expired' : 'Submitted'}${pack.closedAt ? ` ${esc(ui.time ? ui.time(pack.closedAt) : pack.closedAt)}` : ''} ${chip}</p>${note ? `<p class="review-result-note">${esc(note)}</p>` : ''}${deliveryHtml(pack.delivery ?? ui.delivery, esc)}</div>`;
   }
-  return `<section id="review-submit" class="review-summary" aria-labelledby="review-sum-title"><h2 id="review-sum-title">Summary</h2>${blocks}${form}</section>`;
+  return `<section id="review-submit" class="review-summary" aria-labelledby="review-sum-title"><h2 id="review-sum-title">Summary</h2>${warning}${blocks}${form}</section>`;
 }
 
 // The pack note changed on another device while my note waited. The field keeps my text until I choose.
@@ -351,7 +388,7 @@ export function reviewMessageHtml(title, text, h, { alert = false, retry = false
 export function pinProposedVerdict(ui, pack) {
   if (ui.proposedVersion !== pack.version) {
     ui.proposedVersion = pack.version;
-    ui.proposed = pack.derived?.proposedVerdict || 'comment';
+    ui.proposed = pack.derived?.proposedVerdict || DEFAULT_VERDICT;
   }
   return ui;
 }
@@ -392,4 +429,12 @@ export function reviewOpenLinkHtml(item, esc) {
   const ref = item?.kind === 'review' ? item.review : null;
   if (!ref || !SLUG.test(String(ref.slug)) || !SLUG.test(String(ref.pack))) return '';
   return `<a class="review-open" href="${esc(reviewUrl(ref.slug, ref.pack))}">Open review</a>`;
+}
+
+// The result line of a closed review item in the Mailbox, after the Owner submitted the pack. The link opens the submitted summary, read-only.
+// helpers: esc, clock(iso), and state(answer), the delivery state text of the result message. A replaced or deleted item has no line.
+export function reviewDoneLineHtml(item, { esc, clock, state }) {
+  if (item?.kind !== 'review' || item.closedBy !== 'owner' || item.closeNote !== 'review submitted') return '';
+  const delivery = item.answer && state ? state(item.answer) : '';
+  return `<div class="mail-answer"><p class="sub">Review submitted · ${esc(clock(item.closedAt))}${delivery ? ` · ${esc(delivery)}` : ''}</p>${reviewOpenLinkHtml(item, esc)}</div>`;
 }

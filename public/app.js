@@ -6,7 +6,7 @@ import { groupMailRows, inboxSections, listTime, mailRowHtml } from './mail-rows
 import { chatJumpHtml, chatJumpButtonHtml, chatAtBottom, chatJumpScroll } from './chat-jump.js';
 import { mailBarItem, mailActionBarHtml, mailSelectionBarHtml, mailElsewhereButtonHtml, mailSuggestionHtml } from './mail-bar.js';
 import { APP_VIEW_ROUTES, appViewport } from './app-view.js';
-import { parseReviewPath, reviewItemFromHash, reviewUrl, packListHtml, packPageHtml, reviewMessageHtml, reviewKeyAction, reviewOpenLinkHtml, reviewErrorText, submitConfirmText, pinProposedVerdict } from './review.js';
+import { parseReviewPath, reviewItemFromHash, reviewUrl, packListHtml, packPageHtml, reviewMessageHtml, reviewKeyAction, reviewOpenLinkHtml, reviewErrorText, submitConfirmText, pinProposedVerdict, reviewDoneLineHtml } from './review.js';
 import { viewerKeyAction, nextOpenItem, itemNeighbors, sectionStep, addPin, removePin, setPinText, itemSpec } from './review-viewer.js';
 import { attachGestures, restoreStages, resetStages, zoomStage } from './review-gestures.js';
 import { createTapGuard, startViewedTimer, ANSWER_EMPTY } from './review-save.js';
@@ -2573,6 +2573,8 @@ function mailActions(item) {
 }
 
 function mailDoneLine(item) {
+  const submitted = reviewDoneLineHtml(item, { esc, clock, state: mailDeliveryState });
+  if (submitted) return submitted;
   if (item.answer) {
     const state = mailDeliveryState(item.answer);
     const replied = item.answer.repliedAt ? ` · replied ${clock(item.answer.repliedAt)}` : '';
@@ -5286,7 +5288,8 @@ const HELP = {
     <h3>Pack list</h3><p><b>Open</b> holds the packs that wait for your answers. <b>Done</b> holds the submitted and the expired packs, each with its verdict. A row shows the project, the pack title, the version, the time of the last change, and the count of answered items. A row with <b>N changed</b> has items that changed after your answer. The Mailbox item of a pack opens the same page with <b>Open review</b>.</p>
     <h3>Progress bar</h3><p>The bar shows the item states in a fixed order: <b>Accepted</b>, <b>Note only</b>, <b>Needs live check</b>, <b>Denied</b>, and <b>Open</b>. Accepted also counts a choice or a rating. The Denied segment has stripes, so it differs from Needs live check without color. The legend under the bar names each state with its count.</p>
     <h3>Sections</h3><p>The pack page shows one block for each section, with its state and its count of answered items. Select a section title to fold or unfold its items. Each item row shows the item type, the title, the state, and a check mark when you viewed it. A viewed and answered item shows as a short, faded row. <b>Changed</b> marks an item that changed after your answer. It counts as open until you answer again. Select an item to open it in the item viewer. Back returns to the same row.</p>
-    <h3>Summary and submit</h3><p>The summary under the sections lists the items by state, with open items first and your notes under each item. Write a note for the whole pack in the note field. The page saves the note 600 ms after you stop typing. Select a verdict: <b>Approve</b>, <b>Request changes</b>, or <b>Comment</b>. The page selects the proposed verdict from the item states when it first shows the pack version. A later answer does not move the selection. Select <b>Submit review</b> in the bar at the bottom. While changes wait to save, the button shows <b>Waiting for N changes to save</b> and stays disabled. The page asks you to confirm and names the pack, the version, the verdict, and the counts. Then it sends the result. A submit with open items is allowed. The result lists them as open.</p>
+    <h3>Summary and submit</h3><p>The summary under the sections lists the items by state: <b>Denied</b>, <b>Needs live check</b>, <b>Note only</b>, <b>Accepted</b>, and <b>Open</b> last. Your note shows under each item. An open item has <b>Review now</b>. An item that changed after your answer shows <b>changed in this version</b>. A warning above the list names the count of items that have no decision. Write a note for the whole pack in the note field. The page saves the note 600 ms after you stop typing. Select a verdict: <b>Accept pack</b>, <b>Accept with changes</b>, or <b>Deny pack</b>. The page proposes one from the item states when it first shows the pack version. You choose the verdict. A later answer does not move the selection. Select <b>Submit review</b> in the bar at the bottom. While changes wait to save, the button shows <b>Waiting for N changes to save</b> and stays disabled. The page asks you to confirm and names the pack, the version, the verdict, and the counts. Then it sends the result. A submit with open items is allowed. The result lists them as open.</p>
+    <h3>After the submit</h3><p>The page shows the summary as read-only. The service sends the result to the <code>orch</code> pane of the project as one message. The page shows the delivery state: <b>Queued</b>, <b>Delivered</b>, <b>Retrying</b>, or <b>Failed</b>. A failed delivery is tried again up to 4 times. The Mailbox item of the pack closes, and <b>Open review</b> on it opens this read-only summary. A pack takes at most 3 submits in one minute.</p>
     <h3>Item viewer</h3><p>The top bar shows the item title, <b>Item N of M</b> with the section, and the <b>Viewed</b> toggle. The page marks an item viewed when it stays open and visible for 1.5 seconds. The evidence fills the space above the answer bar. A pair has <b>Toggle</b> and <b>Slider</b>. A gallery shows a grid: select an image to open it. A table and a code box scroll sideways in their own box. <b>Open</b> on a live link opens a new tab.</p>
     <h3>Zoom and pins</h3><p>Pinch to zoom, or double tap for 2×. Double tap again for the fit size. Drag to pan a zoomed image. On a desktop, hold Ctrl and turn the wheel, or press <kbd>+</kbd> and <kbd>-</kbd>. <kbd>z</kbd> toggles the fit size and 100 %. Select <b>Add pin</b>, then tap the image to drop a numbered pin. Write the pin note in the field under the image. An item takes at most 20 pins.</p>
     <h3>Answers</h3><p>The answer bar shows only the questions of the item: <b>Deny</b>, <b>Note</b>, <b>Live</b>, <b>Accept</b>, the choices, and the rating. Select a pressed button again to clear it. A second tap on the same button within 400 ms does nothing. Swipe left or right to go to the next or the previous item.</p>
@@ -5448,6 +5451,7 @@ document.addEventListener('click', (e) => {
 // The pack list and the section list of hosted review packs. public/review.js renders them. This part loads the data and handles the events.
 
 const REVIEW_RELOAD_MS = 30000;
+const REVIEW_DELIVERY_RELOAD_MS = 5000;
 const reviews = { open: null, done: null, error: '', loading: false, listAt: 0, packs: {}, ui: {}, revealed: '', path: '', texts: {}, textLoading: new Set(), viewer: {}, itemPath: '', stopViewed: null, reloadTimer: null, restored: new Set() };
 const reviewKey = (slug, pack) => `${slug}/${pack}`;
 const reviewUi = (key) => (reviews.ui[key] ||= { note: null, verdict: null, submitting: false, submitStatus: '', result: null });
@@ -5527,7 +5531,9 @@ function reviewsView(s) {
   } else {
     const key = reviewKey(route.slug, route.pack);
     const entry = reviews.packs[key];
-    if (!entry || (!entry.loading && Date.now() - entry.at > REVIEW_RELOAD_MS)) loadReviewPack(route.slug, route.pack);
+    // A result that waits for delivery reloads sooner, so the state changes from queued to delivered without a reload of the page.
+    const waiting = ['queued', 'failed'].includes(entry?.data?.delivery?.status) && entry.data.delivery.status !== 'error';
+    if (!entry || (!entry.loading && Date.now() - entry.at > (waiting ? REVIEW_DELIVERY_RELOAD_MS : REVIEW_RELOAD_MS))) loadReviewPack(route.slug, route.pack);
     if (entry?.data) {
       const ui = pinProposedVerdict(reviewUi(key), entry.data);
       const viewer = route.view === 'item' ? reviewViewerView(key, route.item) : undefined;
@@ -5611,7 +5617,7 @@ async function submitReview() {
   // A submit never races an unsaved change: the drafts go into the queue, and the submit waits until the queue is empty.
   reviewDrafts.flush();
   if (reviewSync.pendingCount(current.key)) { reviewsRender(); return; }
-  const verdict = ui.verdict || ui.proposed || entry.data.derived?.proposedVerdict || 'comment';
+  const verdict = ui.verdict || ui.proposed || entry.data.derived?.proposedVerdict || 'accept-with-changes';
   const note = ui.note ?? entry.data.note ?? '';
   if (!confirm(submitConfirmText(entry.data, verdict))) return;
   ui.submitting = true;
@@ -5620,9 +5626,10 @@ async function submitReview() {
   try {
     const saved = await reviewFetch(`/api/reviews/${encodeURIComponent(route.slug)}/${encodeURIComponent(route.pack)}/submit`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ verdict, note }) });
     ui.result = saved.result;
+    ui.delivery = saved.delivery;
     ui.submitStatus = '';
   } catch (error) {
-    if (error.status === 409 && error.body?.result) { ui.result = error.body.result; ui.submitStatus = 'This version was submitted before. The page shows the first result.'; }
+    if (error.status === 409 && error.body?.result) { ui.result = error.body.result; ui.delivery = error.body.delivery; ui.submitStatus = 'This version was submitted before. The page shows the first result.'; }
     else ui.submitStatus = `Not sent. ${error.message}`;
   }
   ui.submitting = false;
@@ -5690,6 +5697,18 @@ function onReviewEvent(event) {
   } else if (route?.view === 'list') reviewsRender();
 }
 
+// Queue the result of a submitted pack again. The submit route answers 409 for a submitted version and repairs the missing message.
+document.addEventListener('click', async (e) => {
+  if (!e.target.closest?.('[data-review-redeliver]')) return;
+  const current = reviewRoutePack();
+  if (!current?.entry?.data?.verdict) return;
+  const { route, entry, ui } = current;
+  try {
+    const saved = await reviewFetch(`/api/reviews/${encodeURIComponent(route.slug)}/${encodeURIComponent(route.pack)}/submit`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ verdict: entry.data.verdict, note: entry.data.note ?? '' }) });
+    ui.delivery = saved.delivery;
+  } catch (error) { if (error.status === 409 && error.body?.delivery) ui.delivery = error.body.delivery; }
+  await loadReviewPack(route.slug, route.pack);
+});
 document.addEventListener('click', (e) => {
   if (!e.target.closest?.('[data-review-retry]')) return;
   const route = parseReviewPath(location.pathname);

@@ -122,7 +122,7 @@ const TABLES = ['review_packs', 'review_versions', 'review_items', 'review_files
 test('migration 2 creates the review tables in an empty database', (t) => {
   const dir = dataDir(t);
   const { db } = openSqliteStore({ dir });
-  assert.deepEqual(db.prepare('SELECT version FROM schema_version ORDER BY version').all().map((row) => row.version), [1, 2]);
+  assert.deepEqual(db.prepare('SELECT version FROM schema_version ORDER BY version').all().map((row) => row.version), [1, 2, 3]);
   const names = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((row) => row.name);
   for (const table of TABLES) assert.ok(names.includes(table), `table ${table} exists`);
   assert.ok(names.includes('messages'), 'the message table stays');
@@ -142,7 +142,7 @@ test('migration 2 upgrades a database that has migration 1 only', (t) => {
   `);
   old.close();
   const { db } = openSqliteStore({ dir });
-  assert.deepEqual(db.prepare('SELECT version FROM schema_version ORDER BY version').all().map((row) => row.version), [1, 2]);
+  assert.deepEqual(db.prepare('SELECT version FROM schema_version ORDER BY version').all().map((row) => row.version), [1, 2, 3]);
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM messages').get().n, 1);
   for (const table of TABLES) assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n, 0);
 });
@@ -336,7 +336,7 @@ test('item, section, and pack states follow the answers', (t) => {
 
   assert.equal(derived().pack, 'open');
   assert.deepEqual(derived().counts, { items: 5, accepted: 0, denied: 0, live: 0, noteOnly: 0, open: 5 });
-  assert.equal(derived().proposedVerdict, 'comment');
+  assert.equal(derived().proposedVerdict, 'accept-with-changes');
 
   answer(dir, 'cart-themes', { decision: 'accept' });
   assert.equal(sectionState('cart'), 'open', 'one open item keeps the section open');
@@ -353,20 +353,20 @@ test('item, section, and pack states follow the answers', (t) => {
   assert.equal(stateOf(dir, 'live-form'), 'live');
   assert.equal(sectionState('errors'), 'live');
   assert.equal(derived().pack, 'live');
-  assert.equal(derived().proposedVerdict, 'comment');
+  assert.equal(derived().proposedVerdict, 'accept-with-changes');
 
   answer(dir, 'live-form', { live: 'done' });
   assert.equal(stateOf(dir, 'live-form'), 'open', 'a done live check alone does not answer an item that asks accept or deny');
   answer(dir, 'live-form', { decision: 'accept' });
   assert.equal(sectionState('errors'), 'accepted');
   assert.equal(derived().pack, 'accepted');
-  assert.equal(derived().proposedVerdict, 'approve');
+  assert.equal(derived().proposedVerdict, 'accept');
   assert.deepEqual(derived().counts, { items: 5, accepted: 4, denied: 0, live: 0, noteOnly: 1, open: 0 });
 
   answer(dir, 'error-copy', { decision: 'deny' });
   assert.equal(sectionState('errors'), 'denied');
   assert.equal(derived().pack, 'denied');
-  assert.equal(derived().proposedVerdict, 'request-changes');
+  assert.equal(derived().proposedVerdict, 'accept-with-changes');
 
   answer(dir, 'live-form', { decision: null, live: 'pending' });
   assert.equal(sectionState('errors'), 'denied', 'denied wins over needs live check');
@@ -407,12 +407,12 @@ test('a pack is submitted once, and a second submit after a new version is allow
   answer(dir, 'pay-button', { choice: 'b' });
   putPackNote({ ...where(dir), note: 'Good direction.', rev: 0 });
 
-  const submitted = submitPack({ ...where(dir), verdict: 'request-changes', note: 'Fix the dark cart.', messageId: 'msg-1' });
+  const submitted = submitPack({ ...where(dir), verdict: 'accept-with-changes', note: 'Fix the dark cart.', messageId: 'msg-1' });
   assert.equal(submitted.ok, true);
   const result = submitted.result;
   assert.equal(result.schema, 'herdr-boss.review-result/1');
   assert.equal(result.version, 1);
-  assert.equal(result.verdict, 'request-changes');
+  assert.equal(result.verdict, 'accept-with-changes');
   assert.equal(result.note, 'Fix the dark cart.');
   assert.equal(result.submittedAt, new Date(T0).toISOString());
   assert.deepEqual(result.counts, { items: 5, accepted: 1, denied: 1, live: 0, noteOnly: 0, open: 3 });
@@ -424,21 +424,21 @@ test('a pack is submitted once, and a second submit after a new version is allow
   assert.equal(getPack(where(dir)).mailId, 'mail-1');
   assert.throws(() => putAnswer({ ...where(dir), item: 'error-copy', patch: { rev: 0, decision: 'accept' } }), (error) => error.code === 'closed');
 
-  const again = submitPack({ ...where(dir), verdict: 'approve', note: 'Again.' });
+  const again = submitPack({ ...where(dir), verdict: 'accept', note: 'Again.' });
   assert.equal(again.ok, false);
   assert.equal(again.conflict, 'submitted');
-  assert.equal(again.result.verdict, 'request-changes');
+  assert.equal(again.result.verdict, 'accept-with-changes');
   assert.equal(count(dir, 'review_results'), 1);
 
   assert.throws(() => submitPack({ ...where(dir), verdict: 'ship-it' }), (error) => error.code === 'invalid');
 
   publish(dir, folder({ tag: 9 }));
   assert.equal(getPack(where(dir)).state, 'open', 'a new version opens the pack again');
-  const second = submitPack({ ...where(dir), verdict: 'comment', note: 'Second look.' });
+  const second = submitPack({ ...where(dir), verdict: 'deny', note: 'Second look.' });
   assert.equal(second.ok, true);
   assert.equal(second.result.version, 2);
   assert.equal(getResult(where(dir)).version, 2);
-  assert.equal(getResult({ ...where(dir), version: 1 }).verdict, 'request-changes');
+  assert.equal(getResult({ ...where(dir), version: 1 }).verdict, 'accept-with-changes');
   assert.equal(count(dir, 'review_results'), 2);
 });
 
@@ -461,7 +461,7 @@ test('the sweep deletes a submitted pack 30 days after the submit and keeps the 
   const dir = dataDir(t);
   publish(dir, folder());
   answer(dir, 'cart-themes', { decision: 'accept' });
-  submitPack({ ...where(dir), verdict: 'comment', note: '' });
+  submitPack({ ...where(dir), verdict: 'deny', note: '' });
 
   assert.deepEqual(sweep({ dir, now: T0 + 29 * DAY }).deleted, []);
   assert.equal(fs.existsSync(path.join(dir, 'review-packs', 'shop', 'checkout-redesign')), true);
@@ -471,7 +471,7 @@ test('the sweep deletes a submitted pack 30 days after the submit and keeps the 
   assert.equal(fs.existsSync(path.join(dir, 'review-packs', 'shop', 'checkout-redesign')), false);
   for (const table of ['review_packs', 'review_versions', 'review_items', 'review_files', 'review_answers']) assert.equal(count(dir, table), 0, table);
   assert.equal(count(dir, 'review_results'), 1);
-  assert.equal(getResult(where(dir)).verdict, 'comment');
+  assert.equal(getResult(where(dir)).verdict, 'deny');
   assert.equal(getPack(where(dir)), null);
 
   sweep({ dir, now: T0 + 181 * DAY });
@@ -507,7 +507,7 @@ test('publish refuses a version that pushes the total bytes over the quota and n
   const dir = dataDir(t);
   const size = png(390, 800, 1).length * 4;
   publish(dir, folder({ id: 'api-reference' }), { quotaBytes: size * 2.5 });
-  submitPack({ ...where(dir, 'api-reference'), verdict: 'approve', note: '' });
+  submitPack({ ...where(dir, 'api-reference'), verdict: 'accept', note: '' });
   publish(dir, folder({ id: 'landing-redesign' }), { quotaBytes: size * 2.5 });
 
   const before = walk(path.join(dir, 'review-packs')).length;
@@ -619,7 +619,7 @@ test('list and get return metadata and no file content', (t) => {
   publish(dir, folder());
   publish(dir, folder({ id: 'api-reference' }), { now: T0 + DAY });
   answer(dir, 'cart-themes', { decision: 'accept' });
-  submitPack({ ...where(dir, 'api-reference'), verdict: 'approve', note: '' });
+  submitPack({ ...where(dir, 'api-reference'), verdict: 'accept', note: '' });
 
   const open = listPacks({ dir });
   assert.deepEqual(open.map((entry) => entry.pack).sort(), ['checkout-redesign']);
@@ -628,7 +628,7 @@ test('list and get return metadata and no file content', (t) => {
   assert.equal(open[0].state, 'open');
   assert.deepEqual(open[0].counts, { items: 5, accepted: 1, denied: 0, live: 0, noteOnly: 0, open: 4 });
   const done = listPacks({ dir, state: 'done' });
-  assert.deepEqual(done.map((entry) => [entry.pack, entry.verdict]), [['api-reference', 'approve']]);
+  assert.deepEqual(done.map((entry) => [entry.pack, entry.verdict]), [['api-reference', 'accept']]);
   assert.equal(listPacks({ dir, state: 'all' }).length, 2);
 
   const png1 = png(390, 800, 1).toString('base64');
@@ -646,7 +646,7 @@ test('delete removes the files and the rows, and returns the mail id', (t) => {
   publish(dir, folder({ id: 'api-reference' }));
   setMailId({ ...where(dir), mailId: 'mail-1' });
   answer(dir, 'cart-themes', { decision: 'accept' });
-  submitPack({ ...where(dir), verdict: 'approve', note: '' });
+  submitPack({ ...where(dir), verdict: 'accept', note: '' });
 
   const removed = deletePack(where(dir));
   assert.equal(removed.deleted, true);

@@ -12,6 +12,12 @@ function liveDirs() {
   return dirs.map(resolveAlias);
 }
 
+// True when `dir` is a live data directory or inside one.
+export function isLiveDataDir(dir) {
+  const target = resolveAlias(dir);
+  return liveDirs().some((live) => { const relative = path.relative(live, target); return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative)); });
+}
+
 // Throw when a seed, fixture, or preview helper would write into the live data directory or into a directory inside it.
 // Compare real paths, so a symlink cannot hide the live directory. Return the real path of a safe directory.
 export function assertTempDataDir(dir) {

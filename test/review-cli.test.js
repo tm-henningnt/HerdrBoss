@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { assertTempDataDir } from '../src/data-dir-guard.js';
 import { openSqliteStore } from '../src/sqlite-store.js';
-import { getPack, submitPack, putAnswer, publishVersion } from '../src/review-store.js';
+import { getPack, getResultRecord, submitPack, putAnswer, publishVersion } from '../src/review-store.js';
 import { reviewCommand } from '../src/review-cli.js';
 import { readMessages } from '../src/messages.js';
 
@@ -406,12 +406,12 @@ test('review result prints the Markdown summary and the JSON for both argument f
   const now = Date.now();
   putAnswer({ dir: data, now, slug: 'shop', pack: 'checkout-redesign', item: 'cart-themes', patch: { rev: 0, decision: 'deny', note: 'The total is hard to read in dark.' } });
   putAnswer({ dir: data, now, slug: 'shop', pack: 'checkout-redesign', item: 'error-copy', patch: { rev: 0, decision: 'accept' } });
-  const submit = submitPack({ dir: data, now, slug: 'shop', pack: 'checkout-redesign', verdict: 'request-changes', note: 'Fix the dark cart.' });
+  const submit = submitPack({ dir: data, now, slug: 'shop', pack: 'checkout-redesign', verdict: 'accept-with-changes', note: 'Fix the dark cart.' });
   assert.equal(submit.ok, true);
 
   const markdown = cli('review', 'result', 'shop', 'checkout-redesign');
   assert.equal(markdown.status, 0, output(markdown));
-  assert.match(markdown.stdout, /Request changes/);
+  assert.match(markdown.stdout, /Accept with changes/);
   assert.match(markdown.stdout, /Fix the dark cart\./);
   assert.match(markdown.stdout, /cart-themes/);
   assert.match(markdown.stdout, /The total is hard to read in dark\./);
@@ -419,14 +419,38 @@ test('review result prints the Markdown summary and the JSON for both argument f
   assert.equal(slashed.status, 0, output(slashed));
   const json = JSON.parse(slashed.stdout);
   assert.equal(json.schema, 'herdr-boss.review-result/1');
-  assert.equal(json.verdict, 'request-changes');
+  assert.equal(json.verdict, 'accept-with-changes');
   assert.equal(json.counts.denied, 1);
+});
+
+test('review result serves the stored result: Markdown by default, --format json|md, and --version', (t) => {
+  const { cli, data } = published(t);
+  const now = Date.now();
+  putAnswer({ dir: data, now, slug: 'shop', pack: 'checkout-redesign', item: 'cart-themes', patch: { rev: 0, decision: 'deny', note: 'Too faint.' } });
+  submitPack({ dir: data, now, slug: 'shop', pack: 'checkout-redesign', verdict: 'accept-with-changes', note: 'One.' });
+  const stored = getResultRecord({ dir: data, slug: 'shop', pack: 'checkout-redesign' });
+  const plain = cli('review', 'result', 'shop', 'checkout-redesign');
+  assert.equal(plain.status, 0, output(plain));
+  assert.equal(plain.stdout.trimEnd(), stored.markdown.trimEnd(), 'the default is the stored Markdown');
+  const md = cli('review', 'result', 'shop', 'checkout-redesign', '--format', 'md', '--version', '1');
+  assert.equal(md.stdout, plain.stdout);
+  const json = cli('review', 'result', 'shop', 'checkout-redesign', '--version', '1', '--format', 'json');
+  assert.equal(json.status, 0, output(json));
+  assert.deepEqual(JSON.parse(json.stdout), stored.result);
+  assert.deepEqual(JSON.parse(cli('review', 'result', 'shop', 'checkout-redesign', '--json').stdout), stored.result, '--json still works');
+  const missing = cli('review', 'result', 'shop', 'checkout-redesign', '--version', '2');
+  assert.equal(missing.status, 3, output(missing));
+  assert.match(missing.stderr, /version 2/);
+  for (const bad of [['--format', 'xml'], ['--version', '0'], ['--version', 'x'], ['--format', 'json', '--json']]) {
+    const refused = cli('review', 'result', 'shop', 'checkout-redesign', ...bad);
+    assert.equal(refused.status, 1, output(refused));
+  }
 });
 
 test('review result takes a bare pack ID from an orch pane and refuses it from a plain terminal', (t) => {
   const { cli, data } = published(t);
   const now = Date.now();
-  submitPack({ dir: data, now, slug: 'shop', pack: 'checkout-redesign', verdict: 'comment', note: 'Fine.' });
+  submitPack({ dir: data, now, slug: 'shop', pack: 'checkout-redesign', verdict: 'deny', note: 'Fine.' });
   const bare = cli('review', 'result', 'checkout-redesign', '--json');
   assert.equal(bare.status, 0, output(bare));
   assert.equal(JSON.parse(bare.stdout).slug, 'shop');
@@ -439,7 +463,7 @@ test('review result takes a bare pack ID from an orch pane and refuses it from a
 test('review list prints open packs, filters by slug and state, and prints JSON', (t) => {
   const { cli, data } = published(t);
   assert.equal(cli('review', 'publish', 'shop', packFolder({ id: 'api-reference' })).status, 0);
-  submitPack({ dir: data, now: Date.now(), slug: 'shop', pack: 'api-reference', verdict: 'approve', note: '' });
+  submitPack({ dir: data, now: Date.now(), slug: 'shop', pack: 'api-reference', verdict: 'accept', note: '' });
   const open = cli('review', 'list');
   assert.equal(open.status, 0, output(open));
   assert.match(open.stdout, /shop\/checkout-redesign/);
@@ -447,7 +471,7 @@ test('review list prints open packs, filters by slug and state, and prints JSON'
   assert.ok(!open.stdout.includes('api-reference'), 'the default list holds open packs only');
   const done = cli('review', 'list', 'shop', '--state', 'done');
   assert.match(done.stdout, /shop\/api-reference/);
-  assert.match(done.stdout, /approve/);
+  assert.match(done.stdout, /submitted Accept pack/);
   const all = JSON.parse(cli('review', 'list', '--state', 'all', '--json').stdout);
   assert.deepEqual(all.map((entry) => entry.pack).sort(), ['api-reference', 'checkout-redesign']);
   assert.equal(cli('review', 'list', '--state', 'bogus').status, 1);
@@ -519,8 +543,8 @@ function seedPack(data, slug, id) {
 test('result and list follow the caller scope of publish', (t) => {
   const orch = published(t);
   seedPack(orch.data, 'blog', 'api-reference');
-  submitPack({ dir: orch.data, now: Date.now(), slug: 'blog', pack: 'api-reference', verdict: 'approve', note: '' });
-  submitPack({ dir: orch.data, now: Date.now(), slug: 'shop', pack: 'checkout-redesign', verdict: 'comment', note: '' });
+  submitPack({ dir: orch.data, now: Date.now(), slug: 'blog', pack: 'api-reference', verdict: 'accept', note: '' });
+  submitPack({ dir: orch.data, now: Date.now(), slug: 'shop', pack: 'checkout-redesign', verdict: 'deny', note: '' });
 
   // An orch pane sees its own slug only. The default list is the own slug.
   const own = JSON.parse(orch.cli('review', 'list', '--state', 'all', '--json').stdout);
@@ -657,7 +681,7 @@ test('an unchanged publish repairs a closed item, and a submitted pack opens as 
   const { data, run } = inProcess(t);
   const folder = packFolder();
   assert.equal(run(['publish', 'shop', folder]).code, 0);
-  submitPack({ dir: data, now: T, slug: 'shop', pack: 'checkout-redesign', verdict: 'comment', note: '' });
+  submitPack({ dir: data, now: T, slug: 'shop', pack: 'checkout-redesign', verdict: 'deny', note: '' });
   const reopened = run(['publish', 'shop', folder], {}, T + 1000);
   assert.equal(reopened.code, 0, reopened.err);
   assert.equal(getPack({ dir: data, slug: 'shop', pack: 'checkout-redesign' }).version, 2, 'a submitted pack takes the next version');

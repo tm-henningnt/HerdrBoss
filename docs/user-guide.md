@@ -78,7 +78,7 @@ Only the Owner answers a review pack. The server cannot tell the Owner from an a
 | Route | Answer |
 |---|---|
 | `GET /api/reviews?state=open` | The packs with progress counts. `state` is `open` (default) or `done`. Another value gets `400`. `stale` is the number of items that changed after the Owner answered them. |
-| `GET /api/reviews/<slug>/<pack>` | The current version: manifest, files, item states, answers, and progress. `?version=<n>` selects an older version. An unknown pack or version gets `404`. |
+| `GET /api/reviews/<slug>/<pack>` | The current version: manifest, files, item states, answers, and progress. `?version=<n>` selects an older version. A submitted version also has `verdict`, `submittedAt`, and `delivery`. An unknown pack or version gets `404`. |
 | `GET /api/reviews/<slug>/<pack>/files/<version>/<path>` | One pack file. `<path>` is the file path from the manifest. |
 
 A slug, a pack ID, and an item ID match `[a-z0-9][a-z0-9-]*` and have at most 64 characters. A version is a whole number of 1 or more.
@@ -113,13 +113,13 @@ A request with a matching `If-None-Match` gets `304` with no body. A video respo
 |---|---|---|
 | `PUT /api/reviews/<slug>/<pack>/items/<item>` | `rev` and any of `decision`, `choice`, `rating`, `live`, `viewed`, `note`, `pins`, `checks`, `opId` | `200` with the saved answer. |
 | `PUT /api/reviews/<slug>/<pack>/note` | `note`, `rev` | `200` with `note` and the new `rev`. |
-| `POST /api/reviews/<slug>/<pack>/submit` | `verdict` (`approve`, `request-changes`, or `comment`), optional `note` | `200` with the result. |
+| `POST /api/reviews/<slug>/<pack>/submit` | `verdict` (`accept`, `accept-with-changes`, or `deny`), optional `note` | `200` with the result and `delivery`. |
 
 `rev` is the revision that the client last saw. Use `0` for an item with no answer. The server changes only the fields in the body. It accepts the change only when `rev` equals the stored revision. A stale `rev` gets `409` with `conflict: true` and `current`, the stored answer or the stored note. A retry with the same `opId` gets `200` and `duplicate: true`.
 
 The page gives each item change a new `opId`. It sends the same `opId` again when it retries the change. The note route has no `opId`. When a retried note gets `409` and `current.note` is the sent text, the page counts the note as saved.
 
-The submit route stores the result of the current version and closes the pack. A second submit of the same version gets `409` with `conflict: "submitted"` and the first result. A submitted or expired pack takes no answer: the answer route gets `409`.
+The submit route stores the result of the current version and closes the pack. It also queues the result for the orchestrator and closes the Mailbox item. A second submit of the same version gets `409` with `conflict: "submitted"`, the first result, and `delivery`. The second submit queues no second message. It repairs a step that failed the first time. A pack takes at most 3 submits in one minute. The fourth gets `429` and a `Retry-After` header. A body that is not valid does not count. A submitted or expired pack takes no answer: the answer route gets `409`.
 
 The routes give these other errors:
 
@@ -129,6 +129,30 @@ The routes give these other errors:
 - `413`: a body over 64 KB for an item, or over 16 KB for a note or a submit.
 
 An error text never holds an absolute path.
+
+### Review result and delivery
+
+A submit stores the result with the pack, in the table `review_results`. The result has two forms. Both forms hold ids, states, and the Owner's notes. They hold no file content and no image.
+
+- **JSON.** The schema is `herdr-boss.review-result/1`. It holds the pack ID, the slug, the title, the version, the submit time, the verdict, the pack note, the state of each section, and one entry for each item. An item entry has the state, the decision, the choice, the rating, the live check, the note, the pins, and `stale` for an item that changed after the answer. The JSON has at most 256 KB. A longer result first shortens the notes, then leaves out items. The field `truncated` names the cut.
+- **Markdown.** The summary starts with the counts. Then it lists the denied items and the items that need a live check, with the Owner's notes quoted. The notes, the accepted items, and the open items follow. The Markdown has at most 64 KB. A longer summary ends with `Cut: the summary is longer than 64 KB.`
+
+The verdict is `accept` (**Accept pack**), `accept-with-changes` (**Accept with changes**), or `deny` (**Deny pack**). The summary screen proposes one from the counts. The Owner chooses the verdict.
+
+After a successful submit, the service queues one Owner message of the kind `review-result` to the thread of the project. The message is in the Mailbox thread of the pack. The existing delivery sends it to the pane labeled `orch` of the project, with the same retries as the other Owner messages. The message is keyed by the pack ID and the version, so a version has one message. The text has at most 1500 characters:
+
+```
+[owner] Review of <pack title> v<version>: <verdict>. Denied: N, needs live check: N, notes: N, accepted: N, open: N.
+Denied: <item>: <note>
+Needs live check: <item>: <note>
+Fetch the full result: herdr-boss review result <pack id> --version <version> --format json|md
+```
+
+Each line except the last has at most 200 characters. A note is one line: a line break or a control character becomes a space, so a note cannot add a line to the prompt. The service removes a token or a password from a note before it queues the message. A list that does not fit ends with `… N more`.
+
+The delivery state is `queued`, `sent`, or `failed`. A failed message is sent again at each tick until it has 4 attempts. `delivery` in the API has `status`, `attempts`, `error`, and `retry`. The Reviews page and the Mailbox thread show the state.
+
+The submit closes the Mailbox item of that version with `closedBy: "owner"` and the note `review submitted`. A second close changes nothing.
 
 ### Live review events
 
@@ -172,7 +196,7 @@ Each section is a fold with its title, its state chip, and its count of answered
 
 ### Summary and submit
 
-The summary follows the sections. It lists the items by state: Open first with **Review now**, then Denied, Needs live check, Note only, and Accepted. A note shows under its item. The pack note field saves the note 600 ms after the last key, and at once when the field loses the focus. The verdict choice has **Approve**, **Request changes**, and **Comment**. The page selects the proposed verdict of the pack state and marks it **Proposed**. The page sets the proposal when it first shows a pack version. A later answer does not move the selection. A new version sets a new proposal. **Submit review** is in the bar at the bottom edge. It asks for a confirm that names the pack, the version, the verdict, and the count of each state. Then it sends the verdict and the pack note. The button stays disabled while the request runs. It is also disabled while changes wait in the autosave queue. It then shows `Waiting for N changes to save`. A submit with open items is allowed. After the submit, the page shows the result and no form. A second submit of the same version shows the first result.
+The summary follows the sections. It lists the items by state: Denied, Needs live check, Note only, Accepted, and Open last. The Owner's note shows under its item. An open item has **Review now**. An open item that changed after the answer shows `changed in this version`. Above the list, `N items have no decision` warns about the open items. The pack note field saves the note 600 ms after the last key, and at once when the field loses the focus. The verdict choice has **Accept pack**, **Accept with changes**, and **Deny pack**. The page selects the proposed verdict and marks it **Proposed**. A pack with no denied item and no open item gets **Accept pack**. A pack with only denied items gets **Deny pack**. Any other pack gets **Accept with changes**. The page sets the proposal when it first shows a pack version. A later answer does not move the selection. A new version sets a new proposal. **Submit review** is in the bar at the bottom edge. It asks for a confirm that names the pack, the version, the verdict, and the count of each state. Then it sends the verdict and the pack note. The button stays disabled while the request runs. It is also disabled while changes wait in the autosave queue. It then shows `Waiting for N changes to save`. A submit with open items is allowed. After the submit, the page shows the summary as read-only: the verdict, the pack note, every decision and note, and the delivery state of the result. The delivery state is **Queued**, **Delivered**, **Retrying**, or **Failed**, with the attempts and the reason. When the service stored the result but did not queue the message, **Queue again** queues it. A second submit of the same version shows the first result.
 
 A failed request shows its reason in plain words under the field or in the bottom bar. The page keeps the sentence of the API when the answer has one. Otherwise it shows one of these sentences:
 
@@ -298,7 +322,7 @@ The keys do nothing while the focus is in a text field, except `Esc`, which leav
 
 ### Mailbox entry
 
-A Mailbox item of the kind `review` has **Open review** in place of the answer form. On a phone the link is in the bar at the bottom edge. The submit of the review closes the item.
+A Mailbox item of the kind `review` has **Open review** in place of the answer form. On a phone the link is in the bar at the bottom edge. The submit of the review closes the item. The closed item shows `Review submitted`, the delivery state of the result, and **Open review**. **Open review** on a closed item opens the submitted summary as read-only. The Mailbox thread of the pack shows the result message with its delivery state.
 
 ## What the dashboard manages
 
@@ -1502,6 +1526,8 @@ By default, the service keeps messages in `messages.jsonl` in the data directory
 ```
 
 When the SQLite message table is empty, Herdr Boss imports records from `messages.jsonl`. It keeps that file. The database is `herdr-boss.db`. It uses write-ahead logging and mode 0600 for the database and its WAL files. With SQLite, Herdr Boss checks the database when it starts. If the check fails, restore a backup or import the JSON file again. Use `herdr-boss store import messages` to import once. Use `herdr-boss store export messages` to write JSONL for a downgrade. Each command prints the number of records.
+
+The review packs and the SQLite message store share one database schema. Each schema change is a migration. A migration that adds a column first checks that the column is missing, so a repeated run is safe. A migration that is pending on the live database runs only from the main checkout, the source tree of the service. The main checkout is the root with a `.git` directory. A linked worktree has a `.git` file. Another source tree, such as a worker worktree, stops with the error `This source tree cannot migrate the live database. Run it from the main checkout or use a temporary HERDR_BOSS_DIR.` Such a tree can still read a database that is at the schema version of its code. A temporary data directory migrates from any source tree.
 
 Each line in `messages.jsonl` is one JSON record with these fields:
 

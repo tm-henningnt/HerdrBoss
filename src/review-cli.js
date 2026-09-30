@@ -6,20 +6,20 @@ import { DATA_DIR, dashboardUrl, loadConfig } from './config.js';
 import { SLUG } from './projects.js';
 import { validatePack } from './review-pack.js';
 import { buildImport, safeText } from './review-import.js';
-import { publishVersion, getPack, getResult, listPacks, deletePack, setMailId, ReviewStoreError } from './review-store.js';
+import { publishVersion, getPack, getResultRecord, listPacks, deletePack, setMailId, ReviewStoreError } from './review-store.js';
+import { resultMarkdown, verdictLabel } from './review-result.js';
 import { verifyMessageCaller, readControl, readMessages, postReview, closeReviewItems, refuseSecret } from './messages.js';
 
 export const EXIT = Object.freeze({ ok: 0, refused: 1, invalid: 2, missing: 3 });
 
 const NOTE_MAX = 1000;
 const STATES = ['open', 'done', 'all'];
-const VERDICT_LABEL = { approve: 'Approve', 'request-changes': 'Request changes', comment: 'Comment' };
 
 const USAGE = {
   check: 'Usage: review check FOLDER',
   publish: 'Usage: review publish SLUG FOLDER [--note TEXT] [--dry-run]',
   import: 'Usage: review import SLUG FOLDER-OR-FILE [--id ID] [--title TEXT] [--dry-run]',
-  result: 'Usage: review result [SLUG] PACK [--json]. PACK can also be SLUG/PACK.',
+  result: 'Usage: review result [SLUG] PACK [--version N] [--format json|md]. PACK can also be SLUG/PACK. --json means --format json.',
   delete: 'Usage: review delete [SLUG] PACK. PACK can also be SLUG/PACK.',
   list: 'Usage: review list [SLUG] [--state open|done|all] [--json]',
 };
@@ -248,43 +248,27 @@ function importCommand(args, ctx) {
   } finally { built.cleanup(); }
 }
 
-// The Markdown summary of a result. It lists the denied items first.
-export function resultMarkdown(result, titles = new Map()) {
-  const name = (id) => (titles.get(id) ? `${id} (${titles.get(id)})` : id);
-  const lines = [`# Review result: ${result.pack} v${result.version}, ${VERDICT_LABEL[result.verdict] ?? result.verdict}`, ''];
-  const counts = result.counts;
-  lines.push(`${counts.accepted} accepted, ${counts.denied} denied, ${counts.live} live check, ${counts.noteOnly} note only, ${counts.open} open. Submitted ${result.submittedAt}.`, '');
-  if (result.note) lines.push('## Pack note', '', result.note, '');
-  const group = (heading, items, render) => {
-    if (!items.length) return;
-    lines.push(`## ${heading}`, '');
-    for (const item of items) lines.push(`- ${render(item)}`);
-    lines.push('');
-  };
-  const noteOf = (item) => (item.note ? `: ${item.note}` : '');
-  group('Denied', result.items.filter((item) => item.state === 'denied'), (item) => `${name(item.id)}${noteOf(item)}${item.pins?.length ? ` (${plural(item.pins.length, 'pin')})` : ''}`);
-  group('Needs live check', result.items.filter((item) => item.state === 'live'), (item) => `${name(item.id)}${noteOf(item)}`);
-  group('Answered', result.items.filter((item) => item.state === 'answered'), (item) => `${name(item.id)}: ${item.choice !== undefined ? `choice ${item.choice}` : item.rating !== undefined ? `rating ${item.rating}` : 'live check done'}${item.note ? `. ${item.note}` : ''}`);
-  group('Notes', result.items.filter((item) => item.state === 'note' || (item.state === 'accepted' && item.note)), (item) => `${name(item.id)}${item.state === 'accepted' ? ' (accepted)' : ''}${noteOf(item)}`);
-  group('Open', result.items.filter((item) => item.state === 'open'), (item) => `${name(item.id)}${item.stale ? ' (changed since the last answer)' : ''}${noteOf(item)}`);
-  const accepted = result.items.filter((item) => item.state === 'accepted' && !item.note).map((item) => item.id);
-  if (accepted.length) lines.push('## Accepted', '', accepted.join(', '), '');
-  const unchecked = result.items.filter((item) => item.unchecked?.length);
-  group('Unticked checklist entries', unchecked, (item) => `${item.id}: ${item.unchecked.join(', ')}`);
-  group('Removed in this version', result.removed ?? [], (item) => `${item.id}${item.decision ? ` (was ${item.decision})` : ''}${noteOf(item)}`);
-  return `${lines.join('\n').trimEnd()}\n`;
-}
+export { resultMarkdown };
 
 function resultCommand(args, ctx) {
-  const { flags, positional } = parse(args, { switches: ['--json'] }, USAGE.result);
+  const { flags, positional } = parse(args, { values: ['--version', '--format'], switches: ['--json'] }, USAGE.result);
+  if (flags['--json'] && flags['--format'] !== undefined) throw new ReviewCliError(`Use --format or --json, not both. ${USAGE.result}`);
+  const format = flags['--json'] ? 'json' : flags['--format'] ?? 'md';
+  if (!['json', 'md'].includes(format)) throw new ReviewCliError(`The format must be json or md. ${USAGE.result}`);
+  let version;
+  if (flags['--version'] !== undefined) {
+    if (!/^[1-9]\d{0,8}$/.test(flags['--version'])) throw new ReviewCliError(`The version must be a whole number of 1 or more. ${USAGE.result}`);
+    version = Number(flags['--version']);
+  }
   const { slug, pack } = resolvePack(positional, USAGE.result, { env: ctx.env, control: ctx.control() });
   verifyReviewCaller('review result', slug, ctx);
-  const current = getPack({ dir: ctx.dir, slug, pack });
-  if (!current) { ctx.err(`No pack ${slug}/${pack} exists.`); return EXIT.missing; }
-  const result = getResult({ dir: ctx.dir, slug, pack });
-  if (!result) { ctx.err(`No result for ${slug}/${pack} yet. The Owner has not submitted the review.`); return EXIT.missing; }
-  if (flags['--json']) ctx.out(JSON.stringify(result, null, 2));
-  else ctx.out(resultMarkdown(result, new Map(current.items.map((item) => [item.id, safeText(item.title)]))).trimEnd());
+  if (!getPack({ dir: ctx.dir, slug, pack })) { ctx.err(`No pack ${slug}/${pack} exists.`); return EXIT.missing; }
+  const record = getResultRecord({ dir: ctx.dir, slug, pack, version });
+  if (!record) {
+    ctx.err(version === undefined ? `No result for ${slug}/${pack} yet. The Owner has not submitted the review.` : `No result for ${slug}/${pack} version ${version}. The Owner has not submitted that version.`);
+    return EXIT.missing;
+  }
+  ctx.out(format === 'json' ? JSON.stringify(record.result, null, 2) : record.markdown.trimEnd());
   return EXIT.ok;
 }
 
@@ -320,7 +304,7 @@ function listCommand(args, ctx) {
   if (!packs.length) { ctx.out('No review packs.'); return EXIT.ok; }
   for (const entry of packs) {
     const answered = entry.counts.items - entry.counts.open;
-    const status = entry.state === 'submitted' ? `submitted ${entry.verdict ?? ''}`.trim() : entry.state;
+    const status = entry.state === 'submitted' ? `submitted ${entry.verdict ? verdictLabel(entry.verdict) : ''}`.trim() : entry.state;
     ctx.out(`${entry.slug}/${entry.pack}  v${entry.version}  ${status}  ${answered} of ${entry.counts.items} answered  ${safeText(entry.title)}`);
   }
   return EXIT.ok;

@@ -4,6 +4,8 @@
 // the client path must equal a stored file row, and the file on disk comes from the stored name.
 import fs from 'node:fs';
 import * as reviewStore from './review-store.js';
+import * as mailbox from './messages.js';
+import { VERDICTS } from './review-result.js';
 import { ReviewStoreError } from './review-store.js';
 import { detectType } from './review-pack.js';
 import { scrub } from './project-new-api.js';
@@ -12,6 +14,8 @@ import { SLUG } from './projects.js';
 export const ITEM_BODY_LIMIT = 64 * 1024;
 export const NOTE_BODY_LIMIT = 16 * 1024;
 export const SUBMIT_BODY_LIMIT = 16 * 1024;
+export const SUBMIT_LIMIT = 3;
+export const SUBMIT_WINDOW_MS = 60 * 1000;
 const VERSION = /^[1-9]\d{0,8}$/;
 const NAME_MAX = 256;
 const HEAD_BYTES = 8192;
@@ -130,14 +134,34 @@ export function parseRange(header, size) {
   return { start, end: Math.min(last, size - 1) };
 }
 
+// A sliding window of hits for each key. hit() returns { ok: true }, or { ok: false, retryAfter } with the seconds until the oldest hit leaves the window.
+export function createRateLimit({ limit = SUBMIT_LIMIT, windowMs = SUBMIT_WINDOW_MS, now = () => Date.now() } = {}) {
+  const hits = new Map();
+  return {
+    hit(key) {
+      const time = now();
+      const recent = (hits.get(key) ?? []).filter((at) => time - at < windowMs);
+      if (recent.length >= limit) {
+        hits.set(key, recent);
+        return { ok: false, retryAfter: Math.max(1, Math.ceil((recent[0] + windowMs - time) / 1000)) };
+      }
+      recent.push(time);
+      hits.set(key, recent);
+      for (const [other, list] of hits) if (other !== key && list.every((at) => time - at >= windowMs)) hits.delete(other);
+      return { ok: true };
+    },
+  };
+}
+
 const etagMatches = (header, etag) => header.split(',').some((part) => part.trim() === '*' || part.trim().replace(/^W\//, '') === etag);
 
 // options: dataDir, store (tests replace it), now (a function that gives the time in ms), and onChange(event), which
 // the server pushes as a `review` event. An event holds ids and numbers only: slug, pack, version, and item and rev,
 // note and rev, or state. It never holds an answer, a note text, or a file name.
-export function createReviewApi({ dataDir, store = reviewStore, now = () => Date.now(), onChange = () => {} } = {}) {
+export function createReviewApi({ dataDir, store = reviewStore, mail = mailbox, now = () => Date.now(), onChange = () => {} } = {}) {
   if (typeof dataDir !== 'string' || !dataDir) throw new TypeError('createReviewApi needs a data directory.');
   const where = (slug, pack) => ({ dir: dataDir, slug, pack });
+  const limiter = createRateLimit({ now });
   const notify = (slug, pack, fields) => {
     try {
       const head = store.packHeads?.({ dir: dataDir, slug, pack })?.[0];
@@ -156,6 +180,7 @@ export function createReviewApi({ dataDir, store = reviewStore, now = () => Date
     if (text !== null && !VERSION.test(text)) throw new HttpError(400, 'The version must be a whole number of 1 or more.');
     const found = store.getPack({ ...where(slug, pack), version: text === null ? undefined : Number(text) });
     if (!found) throw new HttpError(404, 'The pack or the version does not exist.');
+    if (found.verdict) found.delivery = delivery(slug, pack, found.version);
     return { status: 200, body: found };
   }
 
@@ -177,13 +202,39 @@ export function createReviewApi({ dataDir, store = reviewStore, now = () => Date
     return { status: 200, body: saved };
   }
 
+  // The delivery state of the result message of one version, or null. The text of an error holds no path.
+  function delivery(slug, pack, version) {
+    try { return mail.reviewResultDelivery({ slug, pack, version }, { dir: dataDir }); } catch { return null; }
+  }
+
+  // After a submit: queue the result message once, link it to the result, and close the Mailbox item of the version.
+  // Each step is idempotent, so a repeat submit of the same version repairs a step that failed. A failure never undoes the stored result.
+  function finish(slug, pack, result) {
+    try {
+      const mailId = store.getPack({ ...where(slug, pack), version: result.version })?.mailId ?? null;
+      const record = mail.postReviewResult({ result, replyTo: mailId }, { dir: dataDir, now: now() });
+      store.setResultMessage({ ...where(slug, pack), version: result.version, messageId: record.id });
+      mail.closeSubmittedReview({ slug, pack, version: result.version }, { dir: dataDir, now: now() });
+      return delivery(slug, pack, result.version);
+    } catch (error) {
+      return { status: 'error', error: scrub(String(error?.message || 'The result could not be queued.')).slice(0, 200), retry: false, attempts: 0 };
+    }
+  }
+
   async function submit(req, slug, pack) {
     const body = await readJson(req, SUBMIT_BODY_LIMIT);
     onlyFields(body, ['verdict', 'note']);
+    if (!VERDICTS.includes(body.verdict)) throw new HttpError(400, `The verdict must be one of ${VERDICTS.join(', ')}.`);
+    const limit = limiter.hit(`${slug}/${pack}`);
+    if (!limit.ok) throw new HttpError(429, `A pack takes at most ${SUBMIT_LIMIT} submits a minute. Wait ${limit.retryAfter} seconds.`, { retryAfter: limit.retryAfter });
     const saved = store.submitPack({ ...where(slug, pack), now: now(), verdict: body.verdict, note: body.note });
-    if (saved.conflict) return { status: 409, body: { error: 'This version was submitted before. The first result is in this response.', conflict: saved.conflict, result: saved.result } };
+    if (saved.conflict) {
+      const repaired = saved.result ? finish(slug, pack, saved.result) : null;
+      return { status: 409, body: { error: 'This version was submitted before. The first result is in this response.', conflict: saved.conflict, result: saved.result, delivery: repaired } };
+    }
+    const queued = finish(slug, pack, saved.result);
     notify(slug, pack, { state: 'submitted' });
-    return { status: 200, body: saved };
+    return { status: 200, body: { ...saved, delivery: queued } };
   }
 
   // One stored file, with the type from its bytes, an ETag from its sha256, and ranges for video.
@@ -309,6 +360,7 @@ export function createReviewApi({ dataDir, store = reviewStore, now = () => Date
       const { status, body } = describe(error);
       const headers = {};
       if (error instanceof HttpError && error.extra.allow) headers.allow = error.extra.allow;
+      if (error instanceof HttpError && error.extra.retryAfter) headers['retry-after'] = String(error.extra.retryAfter);
       return sendJson(res, status, body, headers);
     }
   }

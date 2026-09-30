@@ -3,6 +3,8 @@ import path from 'node:path';
 import { DATA_DIR } from './config.js';
 import { SLUG } from './projects.js';
 import { openMessageStore, RETENTION_MS, messagesFile, newId } from './message-store.js';
+import { redactSecrets } from './redact.js';
+import { promptText } from './review-result.js';
 
 export { RETENTION_MS, messagesFile };
 
@@ -95,6 +97,8 @@ export function mailboxTitle(item) {
 // The prompt for the agent. An answer to a mailbox item names the item and quotes the question, so the agent does not need the Mailbox.
 // Every line of the quote starts with "> ", so a line in the question cannot look like a new prompt.
 export function ownerPromptText(record, question = null) {
+  // The text of a review result is the finished prompt: one header line, the denied items, and the fetch command.
+  if (record.kind === 'review-result') return record.text;
   const hint = `(Reply with: herdr-boss say --reply-to ${record.id} "<answer>")`;
   if (!record.replyTo) return `[owner] ${record.text} ${hint}`;
   if (!question) return `[owner] Answer to ${record.replyTo}: ${record.text} ${hint}`;
@@ -551,15 +555,6 @@ export async function deliverQueued({ panes = [], projects = {}, prompt, log = (
 
 // ---------- Agent replies and reports ----------
 
-// The same patterns as the handover context redaction in handoff.js.
-function redactSecrets(value) {
-  return value
-    .replace(/\bBearer\s+[^\s"']+/gi, 'Bearer [REDACTED]')
-    .replace(/\b(?:sk-[a-zA-Z0-9_-]{3,}|gh[pousr]_[a-zA-Z0-9_]{8,}|github_pat_[a-zA-Z0-9_]{8,}|AIza[a-zA-Z0-9_-]{12,}|xox[baprs]-[a-zA-Z0-9-]{8,})\b/g, '[REDACTED]')
-    .replace(/("(?:[a-z][a-z0-9]*[_-])*(?:api[_-]?key|key|access[_-]?token|auth[_-]?token|token|secret|password|passwd|pwd)"\s*[:=]\s*")(?:(?:\\.)|[^"\\\r\n])*"/gi, '$1[REDACTED]"')
-    .replace(/\b((?:[a-z][a-z0-9]*[_-])*(?:api[_-]?key|key|access[_-]?token|auth[_-]?token|token|secret|password|passwd|pwd)\s*[:=]\s*)(?:["'][^"'\r\n]*["']|[^\s,;]+)/gi, '$1[REDACTED]');
-}
-
 export function refuseSecret(text, what) {
   if (redactSecrets(text) !== text) throw new Error(`The ${what} looks like it holds a secret: a token, a key, or a password. Herdr Boss did not store it. Remove the secret and try again.`);
 }
@@ -675,5 +670,59 @@ export function postReview({ slug, pack, title, version, text, role = 'orch' } =
     closeReviewRecords(records, { slug, pack }, at);
     records.push(record);
     return { records, result: record };
+  }, { now });
+}
+
+// ---------- Review result ----------
+
+const sameReview = (record, { slug, pack, version }) => record.review?.slug === slug && record.review?.pack === pack && record.review?.version === version;
+
+// Queue the result of a submitted review as one Owner message to the project thread. The message is keyed by the pack and the version:
+// a second call returns the first message and adds none, so a retried submit never sends a second prompt.
+// The existing delivery (deliverQueued) sends it with its retries. `replyTo` is the ID of the Mailbox item of the pack.
+export function postReviewResult({ result, replyTo = null } = {}, { dir = DATA_DIR, now = Date.now() } = {}) {
+  const ref = { slug: result?.slug, pack: result?.pack, version: result?.version };
+  if (!validThread(ref.slug) || ref.slug === 'boss') throw new Error('The project slug must match [a-z0-9][a-z0-9-]* and have at most 64 characters.');
+  if (!Number.isInteger(ref.version) || ref.version < 1) throw new Error('The review result needs a version.');
+  const text = promptText(result);
+  const at = new Date(now).toISOString();
+  return openMessageStore({ dir }).mutate((records) => {
+    const existing = records.find((record) => record.kind === 'review-result' && sameReview(record, ref));
+    if (existing) return { records, result: existing };
+    const record = {
+      id: newId(now), at, thread: ref.slug, from: 'owner', to: 'orch', kind: 'review-result', text, action: null, replyTo, status: 'queued',
+      sentAt: null, error: null, attempts: 0, review: ref,
+    };
+    records.push(record);
+    return { records, result: record };
+  }, { now });
+}
+
+// The delivery state of the result message of one pack version: queued, sent, or failed. `retry` is true while a failed message
+// has attempts left. It returns null when the version has no message.
+export function reviewResultDelivery(ref, { dir = DATA_DIR } = {}) {
+  const record = readMessages({ dir }).find((entry) => entry.kind === 'review-result' && sameReview(entry, ref));
+  if (!record) return null;
+  const attempts = record.attempts || 0;
+  return {
+    id: record.id, status: record.status, attempts, sentAt: record.sentAt ?? null, error: record.error ?? null,
+    retry: record.status === 'failed' && attempts < MAX_DELIVERY_ATTEMPTS, maxAttempts: MAX_DELIVERY_ATTEMPTS,
+  };
+}
+
+// The submit closes the review item of that pack version as the Owner. A second call closes nothing. It returns { closed }.
+export function closeSubmittedReview({ slug, pack, version }, { dir = DATA_DIR, now = Date.now() } = {}) {
+  const at = new Date(now).toISOString();
+  return openMessageStore({ dir }).mutate((records) => {
+    let closed = 0;
+    for (const record of records) {
+      if (record.kind !== 'review' || record.closedAt || !sameReview(record, { slug, pack, version })) continue;
+      record.closedAt = at;
+      record.readAt ||= at;
+      record.closedBy = 'owner';
+      record.closeNote = 'review submitted';
+      closed += 1;
+    }
+    return { records, result: { closed } };
   }, { now });
 }

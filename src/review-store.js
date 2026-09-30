@@ -9,8 +9,9 @@ import path from 'node:path';
 import { SLUG } from './projects.js';
 import { openSqliteStore, databaseFile } from './sqlite-store.js';
 import { validatePack } from './review-pack.js';
+import { RESULT_SCHEMA, VERDICTS, proposeVerdict, buildResult, boundResult, resultMarkdown } from './review-result.js';
 
-export const RESULT_SCHEMA = 'herdr-boss.review-result/1';
+export { RESULT_SCHEMA };
 export const REVIEW_DIR = 'review-packs';
 export const LIMITS = Object.freeze({
   versionsKept: 3,
@@ -25,7 +26,6 @@ const DAY = 24 * 60 * 60 * 1000;
 const STAGE_MAX_AGE = 60 * 60 * 1000;
 const NOTE_MAX = 2000;
 const PINS_MAX = 50;
-const VERDICTS = ['approve', 'request-changes', 'comment'];
 const DECISIONS = ['accept', 'deny'];
 const DECIDING = ['accept', 'deny', 'choice', 'rating'];
 const PATCH_KEYS = new Set(['rev', 'opId', 'decision', 'choice', 'rating', 'live', 'viewed', 'note', 'pins', 'checks']);
@@ -166,8 +166,6 @@ function countStates(states) {
   }
   return counts;
 }
-
-const VERDICT_FOR = { accepted: 'approve', denied: 'request-changes' };
 
 function answerShape(row, currentHash) {
   return {
@@ -398,6 +396,7 @@ export function getPack({ dir, slug, pack, version } = {}) {
   const states = items.map((item) => item.state);
   const packState = groupState(states);
   const files = db.prepare('SELECT path, sha256, bytes, type, stored FROM review_files WHERE slug = ? AND pack = ? AND version = ? ORDER BY path').all(slug, pack, wanted);
+  const submitted = db.prepare('SELECT verdict, submitted_at AS submittedAt, message_id AS messageId FROM review_results WHERE slug = ? AND pack = ? AND version = ?').get(slug, pack, wanted) ?? null;
   return {
     slug,
     pack,
@@ -412,13 +411,16 @@ export function getPack({ dir, slug, pack, version } = {}) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     closedAt: row.closed_at,
+    verdict: submitted?.verdict ?? null,
+    submittedAt: submitted?.submittedAt ?? null,
+    resultMessageId: submitted?.messageId ?? null,
     publishedAt: versionRow.published_at,
     publishedBy: versionRow.published_by,
     manifest,
     files,
     items: items.map(({ spec, ...item }) => item),
     removed,
-    derived: { sections, pack: packState, counts: countStates(states), proposedVerdict: VERDICT_FOR[packState] ?? 'comment' },
+    derived: { sections, pack: packState, counts: countStates(states), proposedVerdict: proposeVerdict(countStates(states)) },
   };
 }
 
@@ -470,15 +472,37 @@ export function getFile({ dir, slug, pack, version, file } = {}) {
   return { path: row.path, sha256: row.sha256, bytes: row.bytes, type: row.type, file: target };
 }
 
-// The newest result of a pack, or the result of one version. It returns null when there is none.
-export function getResult({ dir, slug, pack, version } = {}) {
+// The newest result of a pack, or the result of one version, with its Markdown summary. It returns null when there is none.
+// It returns { version, verdict, note, result, markdown, submittedAt, messageId }.
+export function getResultRecord({ dir, slug, pack, version } = {}) {
   checkName(slug);
   checkName(pack, 'slug', 'The pack ID');
   const { db } = open(dir);
   const row = version === undefined
-    ? db.prepare('SELECT result FROM review_results WHERE slug = ? AND pack = ? ORDER BY version DESC LIMIT 1').get(slug, pack)
-    : db.prepare('SELECT result FROM review_results WHERE slug = ? AND pack = ? AND version = ?').get(slug, pack, version);
-  return row ? parseJson(row.result, null) : null;
+    ? db.prepare('SELECT * FROM review_results WHERE slug = ? AND pack = ? ORDER BY version DESC LIMIT 1').get(slug, pack)
+    : db.prepare('SELECT * FROM review_results WHERE slug = ? AND pack = ? AND version = ?').get(slug, pack, version);
+  if (!row) return null;
+  const result = parseJson(row.result, null);
+  return {
+    version: row.version, verdict: row.verdict, note: row.note, result, submittedAt: row.submitted_at, messageId: row.message_id,
+    markdown: row.markdown ?? (result ? resultMarkdown(result) : ''),
+  };
+}
+
+// The newest result of a pack, or the result of one version, as the JSON object. It returns null when there is none.
+export function getResult(options = {}) {
+  return getResultRecord(options)?.result ?? null;
+}
+
+// Link the result message of a version. The message is the Owner record that the Mailbox delivers.
+export function setResultMessage({ dir, slug, pack, version, messageId } = {}) {
+  checkName(slug);
+  checkName(pack, 'slug', 'The pack ID');
+  const sqlite = open(dir);
+  const changes = sqlite.db.prepare('UPDATE review_results SET message_id = ? WHERE slug = ? AND pack = ? AND version = ?').run(messageId ?? null, slug, pack, version).changes;
+  if (!changes) throw new ReviewStoreError('not-found', 'The result does not exist.');
+  sqlite.secureFiles();
+  return { ok: true };
 }
 
 // getPack, listPacks, getResult, and deletePack take no clock: they read or delete only.
@@ -629,39 +653,6 @@ export function putPackNote({ dir, now, slug, pack, note, rev } = {}) {
 
 // ---------- Submit ----------
 
-function buildResult(pack, verdict, note, at) {
-  const items = pack.items.map((item) => {
-    const out = { id: item.id, section: item.section, hash: item.hash, state: item.state };
-    const answer = item.answer;
-    if (item.stale) out.stale = true;
-    if (answer) {
-      if (answer.decision) out.decision = answer.decision;
-      if (answer.choice !== null) out.choice = answer.choice;
-      if (answer.rating !== null) out.rating = answer.rating;
-      if (answer.live) out.live = answer.live;
-      if (answer.note) out.note = answer.note;
-      if (answer.pins.length) out.pins = answer.pins;
-      if (Object.keys(answer.checks).length) out.checks = answer.checks;
-    }
-    const entries = pack.manifest.sections.flatMap((section) => section.items).find((entry) => entry.id === item.id)?.entries;
-    if (entries) out.unchecked = entries.filter((entry) => !answer?.checks?.[entry.id]).map((entry) => entry.id);
-    return out;
-  });
-  return {
-    schema: RESULT_SCHEMA,
-    slug: pack.slug,
-    pack: pack.pack,
-    version: pack.version,
-    submittedAt: at,
-    verdict,
-    note,
-    counts: pack.derived.counts,
-    sections: pack.derived.sections.map((section) => ({ id: section.id, state: section.state })),
-    items,
-    removed: pack.removed.map((entry) => ({ id: entry.id, decision: entry.answer.decision, note: entry.answer.note })),
-  };
-}
-
 // Submit the current version. A pack is submitted once for each version. A second submit of the same version returns
 // { ok: false, conflict: 'submitted', result }. A new version opens the pack again.
 export function submitPack({ dir, now, slug, pack, verdict, note, messageId = null } = {}) {
@@ -676,10 +667,11 @@ export function submitPack({ dir, now, slug, pack, verdict, note, messageId = nu
     const existing = db.prepare('SELECT result FROM review_results WHERE slug = ? AND pack = ? AND version = ?').get(slug, pack, row.current_version);
     if (existing) return { ok: false, conflict: 'submitted', result: parseJson(existing.result, null) };
     if (row.state !== 'open') throw new ReviewStoreError('closed', `The pack is ${row.state}. Publish a new version to review it again.`);
-    const result = buildResult(getPack({ dir, slug, pack }), verdict, note ?? row.note, at);
-    db.prepare('INSERT INTO review_results(slug, pack, version, verdict, note, result, submitted_at, message_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(slug, pack, row.current_version, verdict, result.note, JSON.stringify(result), at, messageId);
-    db.prepare("UPDATE review_packs SET state = 'submitted', closed_at = ?, updated_at = ? WHERE slug = ? AND pack = ?").run(at, at, slug, pack);
+    const bound = boundResult(buildResult(getPack({ dir, slug, pack }), verdict, note ?? row.note, at));
+    const { result } = bound;
+    db.prepare('INSERT INTO review_results(slug, pack, version, verdict, note, result, markdown, submitted_at, message_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(slug, pack, row.current_version, verdict, result.note, bound.json, resultMarkdown(result), at, messageId);
+    db.prepare("UPDATE review_packs SET state = 'submitted', closed_at = ?, updated_at = ?, note = ? WHERE slug = ? AND pack = ?").run(at, at, result.note, slug, pack);
     return { ok: true, result };
   });
 }

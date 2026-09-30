@@ -75,7 +75,7 @@ export function mailRowHtml(row, helpers) {
   const subject = mailSubject(item);
   // A Done row closed by the Boss shows the close note in place of the preview.
   const preview = item.closedBy === 'boss' ? `answered through the Boss: ${item.closeNote || ''}` : mailPreview(item);
-  const closedLine = item.closedBy === 'owner' ? 'Closed as answered elsewhere' : item.closedBy === 'project' ? 'Resolved by the project' : '';
+  const closedLine = item.closedBy === 'owner' ? (item.closeNote === 'review submitted' ? 'Review submitted' : 'Closed as answered elsewhere') : item.closedBy === 'project' ? 'Resolved by the project' : '';
   const tag = mailTag(item);
   const unread = row.unread && item.from !== 'owner';
   const checked = row.ids.some((id) => selected.has(id));

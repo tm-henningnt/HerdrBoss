@@ -304,7 +304,7 @@ A review pack is a folder of evidence with one question for each item. The Owner
 | `herdr-boss review check FOLDER` | Validate a pack folder. Write nothing. Any pane and any terminal can run it. |
 | `herdr-boss review publish SLUG FOLDER [--note TEXT] [--dry-run]` | Validate the folder, store it as the next version of its pack, and post a Mailbox item for the Owner. |
 | `herdr-boss review import SLUG FOLDER-OR-FILE [--id ID] [--title TEXT] [--dry-run]` | Turn a folder of HTML files, or one HTML file, into a pack, and publish it. |
-| `herdr-boss review result [SLUG] PACK [--json]` | Print the result of a submitted review as Markdown, or as JSON with `--json`. |
+| `herdr-boss review result [SLUG] PACK [--version N] [--format json\|md]` | Print the stored result of a submitted review. The default format is Markdown. `--version N` selects a version. The default is the newest submitted version. `--json` means `--format json`. |
 | `herdr-boss review delete [SLUG] PACK` | Delete the pack with its files and answers. Close its Mailbox items. |
 | `herdr-boss review list [SLUG] [--state open\|done\|all] [--json]` | List the packs. The default state is `open`. |
 
@@ -360,7 +360,11 @@ The importer reads each page in one pass with fixed limits: 20000 tags for each 
 
 ### Result
 
-The Owner answer comes back as an `[owner]` prompt with the verdict and a fetch command. `review result SLUG PACK` prints the Markdown summary. It lists the denied items first, with their notes and pins. `--json` prints the result object with the schema `herdr-boss.review-result/1`.
+The Owner answer comes back as an `[owner]` prompt with the verdict, the counts, the denied items with their notes, and a fetch command. The prompt has at most 1500 characters. The command in the prompt is `herdr-boss review result PACK --version N --format json|md`.
+
+`review result` prints the stored Markdown summary. The summary starts with the counts. It lists the denied items and the items that need a live check first, with the Owner's notes quoted. `--format json` prints the result object with the schema `herdr-boss.review-result/1`. The verdict is `accept`, `accept-with-changes`, or `deny`. Exit code 3 means that the pack, the version, or the result does not exist. The Owner has then not submitted that version.
+
+The command changes no task. Read the result, record an Owner decision in `docs/orchestration/memory.md`, and publish the project status.
 
 ### Exit codes
 

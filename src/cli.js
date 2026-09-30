@@ -172,7 +172,7 @@ const USAGE = `herdr-boss <command>
   review check FOLDER   Validate a review pack folder. Any pane can run it. Exit 2 when the pack is not valid.
   review publish SLUG FOLDER [--note TEXT] [--dry-run]  Publish a review pack and post a Mailbox item. Run it from an orch pane of SLUG, the boss pane (SLUG boss), or a plain terminal.
   review import SLUG FOLDER-OR-FILE [--id ID] [--title TEXT] [--dry-run]  Import HTML pages as a review pack and publish it.
-  review result [SLUG] PACK [--json]  Print the result of a submitted review. PACK can also be SLUG/PACK. Exit 3 when there is no result.
+  review result [SLUG] PACK [--version N] [--format json|md]  Print the stored result of a submitted review: Markdown by default. PACK can also be SLUG/PACK. Exit 3 when there is no result.
   review delete [SLUG] PACK  Delete a review pack and close its Mailbox item. Same caller rules as publish.
   review list [SLUG] [--state open|done|all] [--json]  List review packs.
   kit-path              Print the shared kit directory.

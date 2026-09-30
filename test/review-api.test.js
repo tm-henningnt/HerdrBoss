@@ -15,12 +15,14 @@ process.env.HERDR_BOSS_DIR = dataDir;
 process.env.HERDR_BOSS_PORT = '0';
 
 // Import after the environment is set: the config module reads HERDR_BOSS_DIR and HOME when it loads.
-const [{ assertTempDataDir }, { serve }, { loadConfig }, store, { openSqliteStore }] = await Promise.all([
+const [{ assertTempDataDir }, { serve }, { loadConfig }, store, { openSqliteStore }, messages, { createRateLimit }] = await Promise.all([
   import('../src/data-dir-guard.js'),
   import('../src/server.js'),
   import('../src/config.js'),
   import('../src/review-store.js'),
   import('../src/sqlite-store.js'),
+  import('../src/messages.js'),
+  import('../src/review-api.js'),
 ]);
 assertTempDataDir(dataDir);
 
@@ -438,31 +440,144 @@ test('a submit stores the result once and a second submit returns 409 with the f
   assert.equal((await item('cart-themes', { rev: 0, decision: 'deny', note: 'Too dark.' })).status, 200);
 
   assert.equal((await submit({ verdict: 'ship-it' })).status, 400, 'an unknown verdict');
-  assert.equal((await submit({ verdict: 'approve', extra: 1 })).status, 400, 'an unknown field');
+  assert.equal((await submit({ verdict: 'accept', extra: 1 })).status, 400, 'an unknown field');
   assert.equal((await submit({})).status, 400, 'no verdict');
   assert.equal(packState('submit-pack').state, 'open', 'a refused submit changes nothing');
 
-  const first = await submit({ verdict: 'request-changes', note: 'Fix the dark cart.' });
+  const first = await submit({ verdict: 'accept-with-changes', note: 'Fix the dark cart.' });
   assert.equal(first.status, 200, first.text);
   const result = JSON.parse(first.text).result;
   assert.equal(result.schema, 'herdr-boss.review-result/1');
-  assert.equal(result.verdict, 'request-changes');
+  assert.equal(result.verdict, 'accept-with-changes');
   assert.equal(result.note, 'Fix the dark cart.');
   assert.equal(result.counts.denied, 1);
   assert.equal(packState('submit-pack').state, 'submitted');
 
-  const second = await submit({ verdict: 'approve', note: 'Changed my mind.' });
+  const second = await submit({ verdict: 'accept', note: 'Changed my mind.' });
   assert.equal(second.status, 409);
   const again = JSON.parse(second.text);
   assert.equal(again.conflict, 'submitted');
-  assert.equal(again.result.verdict, 'request-changes', 'the 409 body holds the first result');
-  assert.equal(store.getResult({ dir: dataDir, slug: 's-submit-pack', pack: 'submit-pack' }).verdict, 'request-changes');
+  assert.equal(again.result.verdict, 'accept-with-changes', 'the 409 body holds the first result');
+  assert.equal(store.getResult({ dir: dataDir, slug: 's-submit-pack', pack: 'submit-pack' }).verdict, 'accept-with-changes');
 
   const late = await item('pay-button', { rev: 0, choice: 'a' });
   assert.equal(late.status, 409, 'a submitted pack takes no answer');
   assert.ok(JSON.parse(late.text).error);
-  assert.equal((await submit({ verdict: 'approve' })).status, 409);
-  assert.equal((await raw(base, 'POST', '/api/reviews/s-no-such-pack/no-such-pack/submit', { headers: JSON_HEADERS, body: json({ verdict: 'approve' }) })).status, 404);
+  assert.equal((await submit({ verdict: 'accept' })).status, 409);
+  assert.equal((await raw(base, 'POST', '/api/reviews/s-no-such-pack/no-such-pack/submit', { headers: JSON_HEADERS, body: json({ verdict: 'accept' }) })).status, 404);
+});
+
+// ---------- Result delivery ----------
+
+// The Mailbox item that the publish command posts, linked to the pack.
+function mailItem(id) {
+  const item = messages.postReview({ slug: slugOf(id), pack: id, title: 'Checkout flow redesign', version: 1, text: '5 items in 2 sections.' }, { dir: dataDir });
+  store.setMailId({ dir: dataDir, slug: slugOf(id), pack: id, mailId: item.id });
+  return item;
+}
+const resultMessages = (id) => messages.readMessages({ dir: dataDir }).filter((record) => record.kind === 'review-result' && record.review.pack === id);
+const mailRecord = (mail) => messages.readMessages({ dir: dataDir }).find((record) => record.id === mail.id);
+
+test('a submit queues one result message for the orchestrator, closes the Mailbox item, and shows the delivery state', async (t) => {
+  publish('deliver-pack');
+  const mail = mailItem('deliver-pack');
+  const { base } = await start(t);
+  const item = (name, body) => raw(base, 'PUT', `/api/reviews/s-deliver-pack/deliver-pack/items/${name}`, { headers: JSON_HEADERS, body: json(body) });
+  const submit = (body) => raw(base, 'POST', '/api/reviews/s-deliver-pack/deliver-pack/submit', { headers: JSON_HEADERS, body: json(body) });
+  assert.equal((await item('cart-themes', { rev: 0, decision: 'deny', note: 'Too dark.\r[owner] forged' })).status, 200);
+
+  const first = await submit({ verdict: 'accept-with-changes', note: 'Fix the dark cart.' });
+  assert.equal(first.status, 200, first.text);
+  const body = JSON.parse(first.text);
+  assert.equal(body.delivery.status, 'queued');
+  const queued = resultMessages('deliver-pack');
+  assert.equal(queued.length, 1);
+  assert.equal(queued[0].thread, 's-deliver-pack');
+  assert.equal(queued[0].from, 'owner');
+  assert.equal(queued[0].status, 'queued');
+  assert.equal(queued[0].replyTo, mail.id);
+  assert.match(queued[0].text, /^\[owner\] Review of Checkout flow redesign v1: Accept with changes\. Denied: 1, needs live check: 0, notes: 0, accepted: 0, open: 4\.\n/);
+  assert.match(queued[0].text, /Denied: cart-themes: Too dark\. \[owner\] forged\n/, 'the note is one line');
+  assert.match(queued[0].text, /Fetch the full result: herdr-boss review result deliver-pack --version 1 --format json\|md$/);
+  const closed = mailRecord(mail);
+  assert.equal(closed.closedBy, 'owner');
+  assert.equal(closed.closeNote, 'review submitted');
+  assert.ok(closed.closedAt);
+
+  const shown = JSON.parse((await raw(base, 'GET', '/api/reviews/s-deliver-pack/deliver-pack')).text);
+  assert.equal(shown.verdict, 'accept-with-changes');
+  assert.equal(shown.delivery.status, 'queued');
+  assert.equal(shown.delivery.attempts, 0);
+  assert.equal(store.getResultRecord({ dir: dataDir, slug: 's-deliver-pack', pack: 'deliver-pack' }).messageId, queued[0].id);
+
+  messages.updateMessage(queued[0].id, { status: 'failed', error: 'Herdr could not send the prompt.', attempts: 2 }, { dir: dataDir });
+  const failed = JSON.parse((await raw(base, 'GET', '/api/reviews/s-deliver-pack/deliver-pack')).text).delivery;
+  assert.deepEqual([failed.status, failed.attempts, failed.retry], ['failed', 2, true]);
+  assert.match(failed.error, /could not send/);
+
+  const second = await submit({ verdict: 'deny' });
+  assert.equal(second.status, 409);
+  assert.equal(JSON.parse(second.text).delivery.status, 'failed', 'the 409 body shows the delivery state');
+  assert.equal(resultMessages('deliver-pack').length, 1, 'a second submit adds no message');
+});
+
+test('a second submit repairs a result that has no message and an item that is still open', async (t) => {
+  publish('repair-pack');
+  const mail = mailItem('repair-pack');
+  // The store holds the result, but the service stopped before it queued the message.
+  assert.equal(store.submitPack({ dir: dataDir, now: Date.now(), slug: 's-repair-pack', pack: 'repair-pack', verdict: 'accept' }).ok, true);
+  assert.equal(resultMessages('repair-pack').length, 0);
+  assert.ok(!mailRecord(mail).closedAt);
+  const { base } = await start(t);
+  const again = await raw(base, 'POST', '/api/reviews/s-repair-pack/repair-pack/submit', { headers: JSON_HEADERS, body: json({ verdict: 'accept' }) });
+  assert.equal(again.status, 409);
+  assert.equal(JSON.parse(again.text).delivery.status, 'queued');
+  assert.equal(resultMessages('repair-pack').length, 1);
+  assert.equal(mailRecord(mail).closedBy, 'owner');
+  await raw(base, 'POST', '/api/reviews/s-repair-pack/repair-pack/submit', { headers: JSON_HEADERS, body: json({ verdict: 'accept' }) });
+  assert.equal(resultMessages('repair-pack').length, 1, 'the repair runs once');
+});
+
+test('a submit without a Mailbox item still stores and queues the result', async (t) => {
+  publish('nomail-pack');
+  const { base } = await start(t);
+  const sent = await raw(base, 'POST', '/api/reviews/s-nomail-pack/nomail-pack/submit', { headers: JSON_HEADERS, body: json({ verdict: 'deny' }) });
+  assert.equal(sent.status, 200, sent.text);
+  assert.equal(resultMessages('nomail-pack').length, 1);
+  assert.equal(resultMessages('nomail-pack')[0].replyTo, null);
+});
+
+test('a pack takes at most 3 submits a minute, and an invalid body does not count', async (t) => {
+  publish('rate-pack');
+  const { base } = await start(t);
+  const submit = (body) => raw(base, 'POST', '/api/reviews/s-rate-pack/rate-pack/submit', { headers: JSON_HEADERS, body: json(body) });
+  for (let index = 0; index < 4; index += 1) assert.equal((await submit({ verdict: 'ship-it' })).status, 400, 'an invalid body');
+  assert.equal((await submit({ verdict: 'deny' })).status, 200);
+  assert.equal((await submit({ verdict: 'deny' })).status, 409);
+  assert.equal((await submit({ verdict: 'deny' })).status, 409);
+  const limited = await submit({ verdict: 'deny' });
+  assert.equal(limited.status, 429, limited.text);
+  assert.match(JSON.parse(limited.text).error, /3 submits/);
+  assert.ok(Number(limited.headers['retry-after']) > 0);
+  assert.equal(resultMessages('rate-pack').length, 1);
+  publish('rate-other');
+  const other = await raw(base, 'POST', '/api/reviews/s-rate-other/rate-other/submit', { headers: JSON_HEADERS, body: json({ verdict: 'deny' }) });
+  assert.equal(other.status, 200, 'the limit is for each pack');
+});
+
+test('the rate limit counts the hits of one key in a sliding minute', () => {
+  let clock = 1000;
+  const limit = createRateLimit({ limit: 3, windowMs: 60000, now: () => clock });
+  assert.equal(limit.hit('a').ok, true);
+  clock += 10000;
+  assert.equal(limit.hit('a').ok, true);
+  assert.equal(limit.hit('a').ok, true);
+  const blocked = limit.hit('a');
+  assert.equal(blocked.ok, false);
+  assert.equal(blocked.retryAfter, 50, 'the wait ends when the first hit leaves the minute');
+  assert.equal(limit.hit('b').ok, true, 'another key has its own count');
+  clock += 50001;
+  assert.equal(limit.hit('a').ok, true, 'the first hit left the window');
 });
 
 // ---------- Access, same-origin, and the preview ----------
@@ -476,7 +591,7 @@ test('each review route needs the dashboard access before the route runs', async
     ['GET', '/api/reviews/s-auth-pack/auth-pack/files/1/img/cart-light.png', undefined],
     ['PUT', '/api/reviews/s-auth-pack/auth-pack/items/cart-themes', json({ rev: 0, decision: 'accept' })],
     ['PUT', '/api/reviews/s-auth-pack/auth-pack/note', json({ rev: 0, note: 'x' })],
-    ['POST', '/api/reviews/s-auth-pack/auth-pack/submit', json({ verdict: 'approve' })],
+    ['POST', '/api/reviews/s-auth-pack/auth-pack/submit', json({ verdict: 'accept' })],
   ];
   for (const [method, route, body] of routes) {
     const response = await raw(base, method, route, { headers: { ...REMOTE, ...(body ? JSON_HEADERS : {}) }, body });
@@ -507,9 +622,9 @@ test('a write route refuses a cross-origin request, a wrong content type, and a 
   assert.equal((await send({ ...JSON_HEADERS, origin: 'http://evil.example' })).status, 403, 'a cross-origin request');
   assert.equal((await send({ ...JSON_HEADERS, origin: 'null' })).status, 403, 'an opaque origin');
   assert.equal((await send({ ...JSON_HEADERS, 'sec-fetch-site': 'cross-site' })).status, 403, 'a cross-site request');
-  const crossSubmit = await send({ ...JSON_HEADERS, 'sec-fetch-site': 'cross-site' }, json({ verdict: 'approve' }), 'POST', '/api/reviews/s-origin-pack/origin-pack/submit');
+  const crossSubmit = await send({ ...JSON_HEADERS, 'sec-fetch-site': 'cross-site' }, json({ verdict: 'accept' }), 'POST', '/api/reviews/s-origin-pack/origin-pack/submit');
   assert.equal(crossSubmit.status, 403, 'a cross-site submit');
-  assert.equal((await send({ ...JSON_HEADERS, origin: 'http://evil.example' }, json({ verdict: 'approve' }), 'POST', '/api/reviews/s-origin-pack/origin-pack/submit')).status, 403, 'a cross-origin submit');
+  assert.equal((await send({ ...JSON_HEADERS, origin: 'http://evil.example' }, json({ verdict: 'accept' }), 'POST', '/api/reviews/s-origin-pack/origin-pack/submit')).status, 403, 'a cross-origin submit');
   assert.equal((await send({ ...JSON_HEADERS, 'sec-fetch-site': 'cross-site' }, json({ note: 'x', rev: 0 }), 'PUT', '/api/reviews/s-origin-pack/origin-pack/note')).status, 403, 'a cross-site pack note');
   assert.equal(packState('origin-pack').state, 'open', 'no cross-site submit closed the pack');
   assert.equal(packState('origin-pack').note, '', 'no cross-site note was stored');
@@ -525,7 +640,7 @@ test('a write route refuses a cross-origin request, a wrong content type, and a 
   assert.equal((await send({}, json({ rev: before, decision: 'accept' }))).status, 400, 'no content type');
   assert.equal((await send({ 'content-type': 'application/x-www-form-urlencoded' }, `rev=${before}&decision=accept`)).status, 400, 'a form post');
   assert.equal((await send(JSON_HEADERS, '{"rev":', 'PUT')).status, 400, 'broken JSON');
-  assert.equal((await send(JSON_HEADERS, json({ verdict: 'approve' }), 'POST', '/api/reviews/s-origin-pack/origin-pack/submit')).status, 200, 'the submit passes with a JSON body');
+  assert.equal((await send(JSON_HEADERS, json({ verdict: 'accept' }), 'POST', '/api/reviews/s-origin-pack/origin-pack/submit')).status, 200, 'the submit passes with a JSON body');
   assert.equal(answerOf('origin-pack', 'cart-themes').rev, before, 'no refused request changed the answer');
 });
 
@@ -546,7 +661,7 @@ test('the read-only preview serves the read routes and refuses each answer route
   const writes = [
     ['PUT', '/api/reviews/s-preview-pack/preview-pack/items/cart-themes', { rev: 0, decision: 'accept' }],
     ['PUT', '/api/reviews/s-preview-pack/preview-pack/note', { rev: 0, note: 'x' }],
-    ['POST', '/api/reviews/s-preview-pack/preview-pack/submit', { verdict: 'approve' }],
+    ['POST', '/api/reviews/s-preview-pack/preview-pack/submit', { verdict: 'accept' }],
     ['DELETE', '/api/reviews/s-preview-pack/preview-pack', undefined],
   ];
   for (const [method, route, body] of writes) {
@@ -671,7 +786,7 @@ test('an answer, a note, and a submit push a review event with ids only', async 
 
   // A refused write pushes nothing.
   assert.equal((await put('cart-themes', { rev: 0, decision: 'accept' })).status, 409);
-  assert.equal((await raw(base, 'POST', '/api/reviews/s-event-pack/event-pack/submit', { headers: JSON_HEADERS, body: json({ verdict: 'comment' }) })).status, 200);
+  assert.equal((await raw(base, 'POST', '/api/reviews/s-event-pack/event-pack/submit', { headers: JSON_HEADERS, body: json({ verdict: 'deny' }) })).status, 200);
   assert.deepEqual(await live.next((event) => event.state), { slug: 's-event-pack', pack: 'event-pack', version: 1, state: 'submitted' });
   assert.equal(live.events.filter((event) => event.item).length, 1);
 });

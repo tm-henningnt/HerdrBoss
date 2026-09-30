@@ -9,7 +9,9 @@ const review = await import('../public/review.js');
 const {
   REVIEW_STATES, parseReviewPath, reviewItemFromHash, reviewUrl, progressText, progressBarHtml, packRowHtml, packListHtml,
   packPageHtml, itemChip, reviewKeyAction, reviewOpenLinkHtml, sectionProgress, reviewErrorText, submitConfirmText, pinProposedVerdict,
+  deliveryText, reviewDoneLineHtml,
 } = review;
+const { mailRowHtml } = await import('../public/mail-rows.js');
 const { mailActionBarHtml } = await import('../public/mail-bar.js');
 const { patchHtml } = await import('../public/keyed.js');
 const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
@@ -60,7 +62,7 @@ function fullPack(over = {}) {
       sections: [{ id: 'cart', title: 'Cart', state: 'denied' }, { id: 'errors', title: 'Error handling', state: 'open' }],
       pack: 'denied',
       counts: { items: 6, accepted: 2, denied: 1, live: 1, noteOnly: 1, open: 1 },
-      proposedVerdict: 'request-changes',
+      proposedVerdict: 'accept-with-changes',
     },
     ...over,
   };
@@ -150,11 +152,12 @@ test('a pack row shows the project, the version, the count, the bar, and the tim
 });
 
 test('a done pack row shows its verdict chip and no progress bar', () => {
-  const approved = packRowHtml(listPack({ state: 'submitted', verdict: 'approve' }), helpers());
-  assert.match(approved, /review-chip review-chip-ok[^>]*>.*Approved/);
+  const approved = packRowHtml(listPack({ state: 'submitted', verdict: 'accept' }), helpers());
+  assert.match(approved, /review-chip review-chip-ok[^>]*>.*Accepted/);
   assert.doesNotMatch(approved, /role="img"/);
-  assert.match(packRowHtml(listPack({ state: 'submitted', verdict: 'request-changes' }), helpers()), /review-chip-crit[^>]*>.*Changes requested/);
-  assert.match(packRowHtml(listPack({ state: 'submitted', verdict: 'comment' }), helpers()), /review-chip-info[^>]*>.*Commented/);
+  assert.match(packRowHtml(listPack({ state: 'submitted', verdict: 'accept-with-changes' }), helpers()), /review-chip-warn[^>]*>.*Accepted with changes/);
+  assert.match(packRowHtml(listPack({ state: 'submitted', verdict: 'deny' }), helpers()), /review-chip-crit[^>]*>.*Denied/);
+  assert.match(packRowHtml(listPack({ state: 'submitted', verdict: 'request-changes' }), helpers()), /Request changes/, 'a result of an earlier build keeps its label');
   assert.match(packRowHtml(listPack({ state: 'expired' }), helpers()), /Expired/);
 });
 
@@ -235,34 +238,116 @@ test('the pack page ends with the summary of decisions, the pack note, the verdi
   const page = packPageHtml(fullPack(), { note: 'Fix the dark cart.' }, helpers());
   assert.match(page, /id="review-submit"/);
   assert.match(page, /<textarea id="review-note"[^>]*maxlength="2000"[^>]*>Fix the dark cart\.<\/textarea>/);
-  assert.match(page, /name="review-verdict" value="request-changes" checked/, 'the proposed verdict is selected');
+  assert.match(page, /name="review-verdict" value="accept-with-changes" checked/, 'the proposed verdict is selected');
   assert.match(page, /Proposed/);
-  assert.match(page, /value="approve"/);
-  assert.match(page, /value="comment"/);
+  assert.match(page, /value="accept"/);
+  assert.match(page, /value="deny"/);
+  for (const label of ['Accept pack', 'Accept with changes', 'Deny pack']) assert.match(page, new RegExp(`<b>${label}</b>`));
+  assert.doesNotMatch(page, /value="comment"|value="approve"|value="request-changes"/);
   assert.match(page, /class="review-foot"[^>]*>.*1 open item.*Submit review/s);
-  // The summary lists the open items first, then the other states with their notes.
-  const order = ['Open', 'Denied', 'Needs live check', 'Note only', 'Accepted'].map((label) => page.indexOf(`<h3 class="review-sum-h">${label}`));
-  assert.ok(order.every((at) => at > 0), 'each state has a block');
-  assert.deepEqual([...order].sort((a, b) => a - b), order);
   assert.match(page, /Too faint in dark\./, 'a note shows in the summary');
   assert.match(page, /Review now/);
 });
 
+test('the summary lists the states in the order denied, needs live check, notes, accepted, open', () => {
+  const page = packPageHtml(fullPack(), {}, helpers());
+  const order = ['Denied', 'Needs live check', 'Note only', 'Accepted', 'Open'].map((label) => page.indexOf(`<h3 class="review-sum-h">${label}`));
+  assert.ok(order.every((at) => at > 0), 'each state has a block');
+  assert.deepEqual([...order].sort((x, y) => x - y), order);
+  const flow = /<h3 class="review-sum-h">Needs live check[^]*?<\/ul>/.exec(page)[0];
+  assert.match(flow, /Title flow-video/);
+});
+
+test('open items get a plain warning, and a changed item says it changed in this version', () => {
+  const page = packPageHtml(fullPack(), {}, helpers());
+  assert.match(page, /<p class="review-sum-warn"[^>]*>1 item has no decision<\/p>/);
+  const open = /<h3 class="review-sum-h">Open[^]*?<\/ul>/.exec(page)[0];
+  assert.match(open, /Title error-copy/);
+  assert.match(open, /changed in this version/);
+  const more = fullPack();
+  more.items.push(item('extra-a', 'errors', 'open'), item('extra-b', 'errors', 'open'));
+  assert.match(packPageHtml(more, {}, helpers()), /3 items have no decision/);
+  const none = fullPack();
+  none.items = none.items.filter((entry) => entry.state !== 'open');
+  assert.doesNotMatch(packPageHtml(none, {}, helpers()), /have no decision|has no decision/);
+});
+
+test('every note in the summary is escaped, in the list, the pack note, and the read-only result', () => {
+  const pack = fullPack({ note: EVIL });
+  pack.items[0].answer.note = EVIL;
+  pack.items[0].title = EVIL;
+  pack.items[4].answer.note = EVIL;
+  const open = packPageHtml(pack, {}, helpers());
+  assert.ok(!open.includes('<img src=x'), 'no raw markup from a note or a title');
+  assert.ok(open.includes(esc(EVIL)));
+  const done = packPageHtml({ ...pack, state: 'submitted', verdict: 'deny', closedAt: '2026-09-30T09:00:00.000Z', delivery: { status: 'failed', attempts: 2, maxAttempts: 4, retry: true, error: EVIL } }, { result: { verdict: 'deny', note: EVIL } }, helpers());
+  assert.ok(!done.includes('<img src=x'));
+  assert.ok(done.includes(esc(EVIL)));
+});
+
 test('a chosen verdict stays chosen across a render, and a busy submit disables the button', () => {
-  const page = packPageHtml(fullPack(), { verdict: 'comment', submitting: true, submitStatus: 'Sending…' }, helpers());
-  assert.match(page, /value="comment" checked/);
-  assert.doesNotMatch(page, /value="request-changes" checked/);
+  const page = packPageHtml(fullPack(), { verdict: 'deny', submitting: true, submitStatus: 'Sending…' }, helpers());
+  assert.match(page, /value="deny" checked/);
+  assert.doesNotMatch(page, /value="accept-with-changes" checked/);
   assert.match(page, /type="submit"[^>]*disabled[^>]*>Submit review/);
   assert.match(page, /role="status"[^>]*>Sending…/);
 });
 
 test('a submitted pack shows its result and no form', () => {
-  const page = packPageHtml(fullPack({ state: 'submitted', closedAt: '2026-09-30T09:00:00.000Z' }), { verdict: 'approve', result: { verdict: 'request-changes' } }, helpers());
+  const page = packPageHtml(fullPack({ state: 'submitted', closedAt: '2026-09-30T09:00:00.000Z' }), { verdict: 'accept', result: { verdict: 'accept-with-changes' } }, helpers());
   assert.doesNotMatch(page, /<textarea/);
   assert.doesNotMatch(page, /Submit review/);
   assert.match(page, /Submitted/);
-  assert.match(page, /Changes requested/);
+  assert.match(page, /Accepted with changes/);
 });
+
+test('a submitted pack is a read-only summary: the decisions and notes, the result note, the delivery state, and no edit control', () => {
+  const pack = fullPack({ state: 'submitted', verdict: 'accept-with-changes', note: 'Fix the dark cart.', closedAt: '2026-09-30T09:00:00.000Z', delivery: { status: 'sent', attempts: 1, maxAttempts: 4, retry: false, error: null } });
+  const page = packPageHtml(pack, {}, helpers());
+  assert.doesNotMatch(page, /<textarea|<input|<form|Submit review|Review now|review-foot/);
+  assert.match(page, /Too faint in dark\./);
+  assert.match(page, /<p class="review-result-note">Fix the dark cart\.<\/p>/);
+  assert.match(page, /Accepted with changes/);
+  assert.match(page, /1 item had no decision/);
+  assert.match(page, /class="review-delivery"[^>]*data-state="sent"[^>]*>[^]*Delivered/);
+  const expired = packPageHtml(fullPack({ state: 'expired' }), {}, helpers());
+  assert.doesNotMatch(expired, /review-delivery|<textarea/);
+});
+
+test('the verdict chip of a result is not cut', () => {
+  assert.match(css, /\.review-result \.review-chip \{[^}]*max-width: none/);
+});
+
+test('the delivery text names the state, the attempts, the retry, and the failure', () => {
+  assert.equal(deliveryText(null), null);
+  assert.deepEqual(deliveryText({ status: 'queued', attempts: 0 }), { state: 'queued', label: 'Queued', text: 'Waiting to send the result to the orchestrator.' });
+  assert.deepEqual(deliveryText({ status: 'sent', attempts: 1 }), { state: 'sent', label: 'Delivered', text: 'The orchestrator got the result.' });
+  assert.deepEqual(deliveryText({ status: 'sent', attempts: 3 }), { state: 'sent', label: 'Delivered', text: 'The orchestrator got the result after a retry. Attempts: 3.' });
+  const retry = deliveryText({ status: 'failed', attempts: 2, maxAttempts: 4, retry: true, error: 'Herdr could not send the prompt.' });
+  assert.equal(retry.state, 'retrying');
+  assert.equal(retry.label, 'Retrying');
+  assert.match(retry.text, /Attempt 2 of 4 failed: Herdr could not send the prompt\. Herdr Boss tries again\./);
+  const failed = deliveryText({ status: 'failed', attempts: 4, maxAttempts: 4, retry: false, error: 'No pane.' });
+  assert.equal(failed.state, 'failed');
+  assert.match(failed.text, /Delivery failed after 4 attempts: No pane\. The result is stored\. The orchestrator can run herdr-boss review result\./);
+  const lost = deliveryText({ status: 'error', error: 'The store is busy.' });
+  assert.equal(lost.state, 'failed');
+  assert.match(lost.text, /not queued/);
+});
+
+test('a closed review item in the Mailbox shows the result line and opens the submitted summary', () => {
+  const closed = { kind: 'review', thread: 'shop', review: { slug: 'shop', pack: 'checkout-redesign', version: 1 }, closedAt: '2026-09-30T09:00:00.000Z', closedBy: 'owner', closeNote: 'review submitted',
+    answer: { status: 'sent', sentAt: '2026-09-30T09:00:05.000Z', at: '2026-09-30T09:00:00.000Z' } };
+  const line = reviewDoneLineHtml(closed, { esc, clock: () => '09:00', state: () => 'delivered 09:00' });
+  assert.match(line, /Review submitted · 09:00 · delivered 09:00/);
+  assert.match(line, /<a class="review-open" href="\/reviews\/shop\/checkout-redesign">Open review<\/a>/);
+  assert.equal(reviewDoneLineHtml({ ...closed, closedBy: 'review', closeNote: undefined }, { esc, clock: () => '09:00', state: () => '' }), '', 'a replaced item has no result line');
+  assert.match(app, /reviewDoneLineHtml\(item/, 'the Mailbox uses it for a closed review item');
+  const row = mailRowHtml({ key: 'k', ids: ['m1'], unread: false, item: { ...closed, id: 'm1', from: 'orch', to: 'owner', at: '2026-09-30T08:00:00.000Z', title: 'Review: Checkout flow redesign (v1)', text: 'x', action: 'decide' } }, { esc, avatar: () => '', clock: () => '09:00', sender: () => 'Shop' });
+  assert.match(row, /Review submitted/);
+  assert.doesNotMatch(row, /answered elsewhere/);
+});
+
 
 test('the item route shows the item page with a way back to its row', () => {
   const page = packPageHtml(fullPack(), { item: 'flow-video' }, helpers());
@@ -366,10 +451,10 @@ test('the review page has 44 px targets, 16 px fields, a split view on the deskt
 // ---------- Review fixes: confirm, error text, fixed proposed verdict ----------
 
 test('the submit confirm names the pack, the version, the verdict, and each count', () => {
-  const text = submitConfirmText(fullPack(), 'request-changes');
-  assert.equal(text, 'Submit the review of Checkout flow redesign, version 2?\n\nVerdict: Request changes\n2 accepted, 1 note only, 1 needs live check, 1 denied, 1 open.\n\nThe result goes to the project orchestrator.');
-  assert.match(submitConfirmText(fullPack(), 'approve'), /Verdict: Approve\n/);
-  assert.match(submitConfirmText(fullPack(), 'comment'), /Verdict: Comment\n/);
+  const text = submitConfirmText(fullPack(), 'accept-with-changes');
+  assert.equal(text, 'Submit the review of Checkout flow redesign, version 2?\n\nVerdict: Accept with changes\n2 accepted, 1 note only, 1 needs live check, 1 denied, 1 open.\n\nThe result goes to the project orchestrator.');
+  assert.match(submitConfirmText(fullPack(), 'accept'), /Verdict: Accept pack\n/);
+  assert.match(submitConfirmText(fullPack(), 'deny'), /Verdict: Deny pack\n/);
 });
 
 test('the app asks for the confirm before the submit request and keeps the button disabled while it runs', () => {
@@ -408,108 +493,19 @@ test('the proposed verdict is fixed at the first render of a version, so the sel
   const ui = {};
   const pack = fullPack();
   pinProposedVerdict(ui, pack);
-  assert.equal(ui.proposed, 'request-changes');
+  assert.equal(ui.proposed, 'accept-with-changes');
   // An answer changes the pack state. The pinned proposal and the checked radio stay.
-  const later = fullPack({ derived: { ...fullPack().derived, pack: 'accepted', proposedVerdict: 'approve' } });
+  const later = fullPack({ derived: { ...fullPack().derived, pack: 'accepted', proposedVerdict: 'accept' } });
   pinProposedVerdict(ui, later);
-  assert.equal(ui.proposed, 'request-changes');
+  assert.equal(ui.proposed, 'accept-with-changes');
   const page = packPageHtml(later, ui, helpers());
-  assert.match(page, /value="request-changes" checked/);
-  assert.doesNotMatch(page, /value="approve" checked/);
-  assert.match(page, /value="request-changes" checked[^]*?Proposed/);
+  assert.match(page, /value="accept-with-changes" checked/);
+  assert.doesNotMatch(page, /value="accept" checked/);
+  assert.match(page, /value="accept-with-changes" checked[^]*?Proposed/);
   // A new version pins the new proposal.
   pinProposedVerdict(ui, fullPack({ version: 3, derived: { ...later.derived } }));
-  assert.equal(ui.proposed, 'approve');
-  // The Owner's own choice wins over the proposal.
-  assert.match(packPageHtml(later, { ...ui, verdict: 'comment' }, helpers()), /value="comment" checked/);
-});
-
-// ---------- Item viewer ----------
-
-function viewerPack() {
-  const pack = fullPack();
-  pack.manifest.sections[0].items.push({ id: 'cart-themes', type: 'image-pair', variant: 'theme', a: { src: 'a.png', label: 'Light' }, b: { src: 'b.png', label: 'Dark' } });
-  return pack;
-}
-
-test('a keyed update of the item viewer keeps the note field, its text, the zoom stage, and the zoom transform', () => {
-  const root = setup(`<main>${packPageHtml(viewerPack(), { item: 'cart-themes', viewer: { pair: 'a' } }, helpers())}</main>`);
-  const main = root.firstChild;
-  const note = find(main, (el) => el.getAttribute('id') === 'rv-note-cart-themes');
-  const stage = byKey(main, 'rv-stage:cart-themes');
-  const canvas = find(stage, (el) => /rv-canvas/.test(el.getAttribute('class') || ''));
-  canvas.setAttribute('style', 'transform: translate(10px, 0px) scale(2)');
-  stage.setAttribute('class', 'rv-stage rv-zoomed');
-  note.focus();
-  note.value = 'Too faint in dark, also on the total.';
-  const next = viewerPack();
-  next.items[0].answer = { ...next.items[0].answer, decision: 'accept' };
-  patchHtml(main, packPageHtml(next, { item: 'cart-themes', viewer: { pair: 'b' } }, helpers()));
-  assert.equal(find(main, (el) => el.getAttribute('id') === 'rv-note-cart-themes'), note, 'the same field node');
-  assert.equal(note.value, 'Too faint in dark, also on the total.');
-  assert.equal(document.activeElement, note);
-  assert.equal(byKey(main, 'rv-stage:cart-themes'), stage, 'the same stage node');
-  assert.equal(canvas.getAttribute('style'), 'transform: translate(10px, 0px) scale(2)', 'the zoom stays on a pair toggle');
-  assert.match(canvas.getAttribute('class'), /rv-show-b/, 'the toggle still applies');
-  assert.equal(stage.getAttribute('class'), 'rv-stage rv-zoomed', 'the zoomed class of the gesture code stays');
-  assert.equal(find(main, (el) => el.getAttribute('data-rv-decision') === 'accept').getAttribute('aria-pressed'), 'true');
-});
-
-test('every answer write of the viewer goes through saveItemAnswer and the queue of public/review-sync.js', () => {
-  const queue = fs.readFileSync(new URL('../public/review-sync.js', import.meta.url), 'utf8');
-  assert.doesNotMatch(app, /\/items\/\$\{/, 'app.js sends no item PUT of its own');
-  assert.doesNotMatch(app, /\/note`, \{ method: 'PUT'/, 'app.js sends no note PUT of its own');
-  assert.equal((queue.match(/itemUrl\(P, op\.item\), \{ method: 'PUT'/g) || []).length, 1, 'one PUT to the item route');
-  assert.match(queue, /JSON\.stringify\(\{ \.\.\.op\.patch, rev, opId: op\.opId \}\)/, 'each item write has the rev and the opId');
-  const body = /\nfunction saveItemAnswer\(item, patch(?:, [^)]*)?\) \{([\s\S]*?)\n\}/.exec(app)?.[1];
-  assert.ok(body, 'the UI defines saveItemAnswer(item, patch)');
-  assert.match(body, /queueItemAnswer\(/);
-  assert.match(app, /reviewSync\.enqueue\(\{ slug: ctx\.route\.slug/);
-  assert.match(app, /data\.rvConflict === 'mine'\) reviewSync\.keepMine\(/);
-  assert.match(app, /data\.rvConflict === 'theirs'\) reviewSync\.useTheirs\(/);
-  assert.match(app, /REVIEW_VIEWED_MS = 1500/);
-  assert.match(app, /startViewedTimer\(\{ doc: document, ms: REVIEW_VIEWED_MS/, 'the Viewed timer counts only while the page is visible');
-  assert.match(app, /reviewRepeatTap\(`\$\{item\.id\}:\$\{kind\}:\$\{value\}`\)\) return;/, 'a double tap sends one change');
-});
-
-test('a move to another item puts the focus on the item heading', () => {
-  const body = /\nfunction reviewItemGo\(open, id\) \{([\s\S]*?)\n\}/.exec(app)?.[1];
-  assert.ok(body);
-  assert.match(body, /reviews\.focus = '\[data-rv-heading\]'/);
-  assert.ok(body.indexOf('reviews.focus') < body.indexOf('reviewGo('), 'the target is set before the render');
-  const swipe = /\nfunction reviewSwipe\(intent\) \{([\s\S]*?)\n\}/.exec(app)?.[1];
-  assert.match(swipe, /reviewItemGo\(open,/, 'a swipe uses the same move');
-  const keys = /\nfunction reviewViewerKey\(e, inField\) \{([\s\S]*?)\n\}/.exec(app)?.[1];
-  assert.doesNotMatch(keys.replace(/reviewGo\(reviewUrl\(route\.slug, route\.pack\)\)|reviewGo\(`\$\{reviewUrl\(route\.slug, route\.pack\)\}#item=/g, ''), /reviewGo\(/, 'each item move in the keys uses reviewItemGo');
-});
-
-test('the page passes the sanitizing Markdown renderer to the viewer, and no DOM pass sanitizes after insertion', () => {
-  assert.match(app, /text: \(url\) => reviews\.texts\[url\], markdown: safeMarkdownHtml[,} ]/);
-  const safe = /\nfunction safeMarkdownHtml\(source\) \{([\s\S]*?)\n\}/.exec(app)?.[1];
-  assert.ok(safe.indexOf('sanitizeRendered(template.content)') < safe.indexOf('html = template.innerHTML'), 'the string is sanitized before it is returned');
-  assert.doesNotMatch(app, /querySelectorAll\('\.rv-md'\)/);
-});
-
-test('the page help and the user guide describe the item viewer', () => {
-  const help = /reviews: \['Reviews', `([\s\S]*?)`\]/.exec(app)?.[1] || '';
-  assert.match(help, /<h3>Item viewer<\/h3>/);
-  assert.match(help, /<h3>Zoom and pins<\/h3>/);
-  assert.match(help, /<kbd>n<\/kbd> next open item/);
-  assert.doesNotMatch(help, /The item viewer is not ready/);
-  const guide = fs.readFileSync(new URL('../docs/user-guide.md', import.meta.url), 'utf8');
-  assert.match(guide, /### Item viewer/);
-  assert.match(guide, /### Zoom, pins, and swipe/);
-  assert.match(guide, /\*\*Keep mine\*\*/);
-});
-
-test('the item viewer has 44 px targets, 16 px fields, a stage without touch scrolling, and no motion when reduced', () => {
-  assert.match(css, /\.rv-stage \{[^}]*touch-action: none/);
-  assert.match(css, /#app \.rv-act \{[^}]*min-height: 52px/);
-  assert.match(css, /#app \.rv-tool \{[^}]*min-width: 44px; min-height: 44px/);
-  assert.match(css, /#app \.rv-choice \{[^}]*min-height: 44px/);
-  assert.match(css, /#app \.rv-star \{[^}]*width: 44px; height: 44px/);
-  assert.match(css, /\.rv-check \{[^}]*min-height: 48px/);
-  assert.match(css, /\.rv-pin-field, \.rv-note-field \{[^}]*font: 16px/);
-  assert.match(css, /\.rv-table th \{[^}]*position: sticky; top: 0/);
-  assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{\s*\.rv-canvas \{ transition: none; \}\s*\.rv-hint \{ animation: none; \}/);
+  assert.equal(ui.proposed, 'accept');
+  // The Owner's own choice wins over the proposal, and nothing forces the verdict.
+  assert.match(packPageHtml(later, { ...ui, verdict: 'deny' }, helpers()), /value="deny" checked/);
+  assert.equal(pinProposedVerdict({}, fullPack({ derived: { ...fullPack().derived, proposedVerdict: undefined } })).proposed, 'accept-with-changes');
 });

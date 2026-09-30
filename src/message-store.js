@@ -169,8 +169,8 @@ export function exportMessages({ dir = DATA_DIR } = {}) {
   return records.length;
 }
 
-function openSqliteMessageStore(dir, key, listeners) {
-  const sqlite = openSqliteStore({ dir });
+function openSqliteMessageStore(dir, key, listeners, guard) {
+  const sqlite = openSqliteStore({ dir, guard });
   importJsonlIfEmpty(sqlite, dir);
   const { db } = sqlite;
   const all = () => fresh(sqliteRecords(db), Date.now()).sort(messageOrder);
@@ -283,7 +283,7 @@ export function openMessageStore(options = {}) {
   backend ??= configuredBackend(dir);
   if (!['json', 'sqlite'].includes(backend)) throw new Error(`Unsupported message store backend: ${backend}`);
   const { key, listeners } = listenersFor(dir, backend);
-  if (backend === 'sqlite') return openSqliteMessageStore(dir, key, listeners);
+  if (backend === 'sqlite') return openSqliteMessageStore(dir, key, listeners, options.guard);
   const all = () => fresh(readStoredRecords(dir), Date.now()).sort(messageOrder);
 
   const store = {
