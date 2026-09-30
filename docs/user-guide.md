@@ -252,7 +252,7 @@ A `page` item shows an imported HTML page in a frame. The page is untrusted. It 
 4. The route serves only a file that the manifest of the token version names. It refuses a path with `..`, a backslash, or a NUL character. It refuses a symbolic link and a file outside the version folder.
 5. Each refusal gets the same `404` body. The response does not show why the route refused the request.
 
-The frame has `sandbox="allow-scripts"`, `referrerpolicy="no-referrer"`, `loading="lazy"`, and `allow=""`. It has no `allow-same-origin`. The page cannot read the dashboard cookie, the DOM of the dashboard, or local storage.
+The frame has `sandbox="allow-scripts"`, `referrerpolicy="no-referrer"`, `loading="lazy"`, and `allow=""`. It has no `allow-same-origin`. The page cannot read the dashboard cookie, the DOM of the dashboard, or local storage. The page can still navigate its own frame to an outside address. The frame holds no cookie or storage.
 
 Each response of the raw route has this header. The `sandbox` directive also applies when you open the raw URL in a tab.
 

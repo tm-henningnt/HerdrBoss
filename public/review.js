@@ -380,6 +380,24 @@ export function parseFrameMessage(event, frameWindow) {
   }
 }
 
+// The same patterns as src/redact.js. The server refuses a pin text that matches; the viewer drops such text first.
+const SECRET_PATTERNS = [
+  /\bBearer\s+[^\s"']+/i,
+  /\b(?:sk-[a-zA-Z0-9_-]{3,}|gh[pousr]_[a-zA-Z0-9_]{8,}|github_pat_[a-zA-Z0-9_]{8,}|AIza[a-zA-Z0-9_-]{12,}|xox[baprs]-[a-zA-Z0-9-]{8,})\b/,
+  /\b(?:[a-z][a-z0-9]*[_-])*(?:api[_-]?key|key|access[_-]?token|auth[_-]?token|token|secret|password|passwd|pwd)"?\s*[:=]\s*\S/i,
+];
+export const looksSecret = (text) => SECRET_PATTERNS.some((pattern) => pattern.test(String(text)));
+
+// The pin fields that a `pick` message may set. The anchor must be one from the last `ready` message, so a page script
+// cannot store an arbitrary string. The text is cut to 200 characters and dropped when it looks like a secret.
+export function pickPinFields(message, anchors) {
+  const fields = {};
+  if (message?.anchor && (anchors || []).some((anchor) => anchor.id === message.anchor)) fields.anchor = message.anchor;
+  const text = String(message?.text ?? '').slice(0, FRAME_STRING_MAX);
+  if (text && !looksSecret(text)) fields.text = text;
+  return fields;
+}
+
 // The URL of a link that the page asked to open, or null. Only http and https pass safeUrl() here.
 export function frameOpenUrl(url) {
   const safe = safeUrl(String(url ?? ''));

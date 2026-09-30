@@ -651,3 +651,16 @@ test('the dashboard wires the frame through the checked message path only', () =
   assert.match(app, /parseFrameMessage\(event, el\?\.contentWindow\)/);
   assert.ok(!/allow-same-origin/.test(app + fs.readFileSync(new URL('../public/review.js', import.meta.url), 'utf8')));
 });
+
+test('a pick sets an anchor only from the last ready message and cuts or drops the text', () => {
+  const { pickPinFields, looksSecret } = review;
+  const anchors = [{ id: 'top' }, { id: 'hb-1' }];
+  assert.deepEqual(pickPinFields({ anchor: 'top', text: 'Shop' }, anchors), { anchor: 'top', text: 'Shop' });
+  assert.deepEqual(pickPinFields({ anchor: 'forged', text: '' }, anchors), {}, 'an unknown anchor');
+  assert.deepEqual(pickPinFields({ anchor: 'top', text: 'x' }, undefined), { text: 'x' }, 'no ready message');
+  assert.equal(pickPinFields({ anchor: null, text: 'y'.repeat(300) }, anchors).text.length, 200);
+  for (const text of ['Bearer abc123', 'token: abc', 'sk-abcdef', 'password = "x"']) {
+    assert.ok(looksSecret(text), text);
+    assert.deepEqual(pickPinFields({ anchor: null, text }, anchors), {}, text);
+  }
+});

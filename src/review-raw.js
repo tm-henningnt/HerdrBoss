@@ -175,7 +175,10 @@ export function createRawRoute({ dataDir, hostAllowed, tokens = createRawTokens(
         }
         if (got !== stat.size) return refuse(res);
         const tag = Buffer.from(`<script src="/review-raw/${token}/${BRIDGE_NAME}"></script>`, 'utf8');
-        return send(req, res, { type: 'text/html; charset=utf-8', bytes: Buffer.concat([page, tag]) });
+        // The tag goes before the last </body> (any case). A page without one gets the tag at the end.
+        const close = page.toString('latin1').toLowerCase().lastIndexOf('</body');
+        const bytes = close < 0 ? Buffer.concat([page, tag]) : Buffer.concat([page.subarray(0, close), tag, page.subarray(close)]);
+        return send(req, res, { type: 'text/html; charset=utf-8', bytes });
       }
       const type = BINARY_TYPES[kind] ?? (kind === 'text' ? (TEXT_TYPES[extension] ?? 'text/plain; charset=utf-8') : null);
       if (!type) return refuse(res);

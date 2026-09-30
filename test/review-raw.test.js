@@ -195,9 +195,8 @@ test('the raw route serves a page with the exact CSP, no frame header, and the b
   assert.equal(page.headers['referrer-policy'], 'no-referrer');
   assert.equal(page.headers['cache-control'], 'no-store');
   const tag = `<script src="/review-raw/${token}/__hb-bridge.js"></script>`;
-  assert.ok(page.text.startsWith(PAGE), 'the page bytes are unchanged');
+  assert.equal(page.text, PAGE.replace('</body>', `${tag}</body>`), 'the tag sits before </body>');
   assert.equal(page.text.split(tag).length - 1, 1, 'one bridge tag');
-  assert.ok(page.text.endsWith(tag));
   assert.equal(page.headers['content-length'], String(page.bytes.length));
 });
 
@@ -391,4 +390,31 @@ test('the store keeps at most the cap of live tokens across requests', async (t)
   assert.equal(rawTokens.size(), 3);
   assert.equal((await raw(base, 'GET', `/review-raw/${tokens[0]}/site/index.html`)).status, 404, 'the oldest token gave way');
   assert.equal((await raw(base, 'GET', `/review-raw/${tokens[4]}/site/index.html`)).status, 200);
+});
+
+test('the bridge tag goes before the last </body> in any case, else at the end', async (t) => {
+  const pages = {
+    'raw-body-upper': '<!doctype html><HTML><BODY><p>Upper</p></BODY></HTML>',
+    'raw-body-two': '<!doctype html><html><body><script>var a = "</body>";</script><p>Two</p></body></html>',
+    'raw-body-open': '<!doctype html><html><body><script>var a = 1;',
+  };
+  const { base } = await start(t);
+  for (const [id, page] of Object.entries(pages)) {
+    publish(id, { page });
+    const { token } = await issue(base, id);
+    const tag = `<script src="/review-raw/${token}/__hb-bridge.js"></script>`;
+    const body = (await raw(base, 'GET', `/review-raw/${token}/site/index.html`)).text;
+    assert.equal(body.split(tag).length - 1, 1, `${id}: one tag`);
+    if (id === 'raw-body-upper') assert.equal(body, page.replace('</BODY>', `${tag}</BODY>`));
+    if (id === 'raw-body-two') assert.equal(body, page.replace(/<\/body><\/html>$/, `${tag}</body></html>`), 'before the last </body>');
+    if (id === 'raw-body-open') assert.equal(body, page + tag, 'a page that ends in an open script gets the tag at the end');
+  }
+});
+
+test('the store refuses a pin text or anchor that looks like a secret', () => {
+  publish('raw-pin');
+  const put = (pin) => store.putAnswer({ dir: dataDir, now: Date.now(), slug: 's-raw-pin', pack: 'raw-pin', item: 'home', patch: { rev: 0, pins: [{ n: 1, x: 0.5, y: 0.5, ...pin }] } });
+  assert.throws(() => put({ text: 'Bearer abcdef123456' }), /secret/);
+  assert.throws(() => put({ anchor: 'token: abc' }), /secret/);
+  assert.ok(put({ text: 'The heading', anchor: 'top' }).answer);
 });

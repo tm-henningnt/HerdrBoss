@@ -9,6 +9,7 @@ import path from 'node:path';
 import { SLUG } from './projects.js';
 import { openSqliteStore, databaseFile } from './sqlite-store.js';
 import { validatePack } from './review-pack.js';
+import { redactSecrets } from './redact.js';
 import { RESULT_SCHEMA, VERDICTS, proposeVerdict, buildResult, boundResult, resultMarkdown } from './review-result.js';
 
 export { RESULT_SCHEMA };
@@ -541,6 +542,7 @@ function checkPins(value) {
     for (const key of ['src', 'anchor', 'text']) {
       if (pin[key] === undefined) continue;
       if (typeof pin[key] !== 'string' || pin[key].length > 200) throw invalid(`The pin ${key} must be text of at most 200 characters.`);
+      if (redactSecrets(pin[key]) !== pin[key]) throw invalid(`The pin ${key} looks like it holds a secret: a token, a key, or a password. Herdr Boss did not store it.`);
       out[key] = pin[key];
     }
     return out;

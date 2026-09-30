@@ -6,7 +6,7 @@ import { groupMailRows, inboxSections, listTime, mailRowHtml } from './mail-rows
 import { chatJumpHtml, chatJumpButtonHtml, chatAtBottom, chatJumpScroll } from './chat-jump.js';
 import { mailBarItem, mailActionBarHtml, mailSelectionBarHtml, mailElsewhereButtonHtml, mailSuggestionHtml } from './mail-bar.js';
 import { APP_VIEW_ROUTES, appViewport } from './app-view.js';
-import { parseReviewPath, reviewItemFromHash, reviewUrl, packListHtml, packPageHtml, reviewMessageHtml, reviewKeyAction, reviewOpenLinkHtml, reviewErrorText, submitConfirmText, pinProposedVerdict, reviewDoneLineHtml, parseFrameMessage, pinsInView, frameView } from './review.js';
+import { parseReviewPath, reviewItemFromHash, reviewUrl, packListHtml, packPageHtml, reviewMessageHtml, reviewKeyAction, reviewOpenLinkHtml, reviewErrorText, submitConfirmText, pinProposedVerdict, reviewDoneLineHtml, parseFrameMessage, pinsInView, frameView, pickPinFields } from './review.js';
 import { viewerKeyAction, nextOpenItem, itemNeighbors, sectionStep, addPin, removePin, setPinText, itemSpec } from './review-viewer.js';
 import { attachGestures, restoreStages, resetStages, zoomStage } from './review-gestures.js';
 import { createTapGuard, startViewedTimer, ANSWER_EMPTY } from './review-save.js';
@@ -6084,8 +6084,7 @@ function reviewDropFramePin(open, message) {
   const pins = addPin(item.answer?.pins || [], { x: message.x, y: message.y });
   if (!pins) { vui.error = 'An item takes at most 20 pins. Remove a pin to add one.'; reviewsRender(); return; }
   const added = pins[pins.length - 1];
-  if (message.anchor) added.anchor = message.anchor;
-  if (message.text) added.text = message.text;
+  Object.assign(added, pickPinFields(message, open.vui.frame?.anchors));
   vui.noteOpen = true;
   reviews.focus = `[data-rv-pin-text="${added.n}"]`;
   saveItemAnswer(item, { pins });
