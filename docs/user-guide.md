@@ -973,18 +973,23 @@ The JSON backend appends each new record as one line. It rewrites a changed file
 
 ## Mailbox
 
-The Mailbox page at `/mailbox` is the inbox of the Owner. It lists replies from `herdr-boss say`, reports from `herdr-boss mail post`, and messages that the Owner sent. The page works at phone width.
+The Mailbox page at `/mailbox` is the inbox of the Owner. It lists replies from `herdr-boss say`, reports from `herdr-boss mail post`, and messages that the Owner sent. The page fills the window. On a phone it is a full-screen app view. See [Phone app view](#phone-app-view).
 
-### Items
+### Folders
 
-Use the folder list on the left to open **Needs you**, **Updates**, **Sent**, or **Done**. Each folder shows its item count. Each row starts with the avatar of the Boss or of the project that sent the item. The folder pane shows a read-only line with the limits: the retention and the send limit. The page keeps the selected folder in the address and in browser storage. When Needs you has open items, it is the default folder. When it has no items and you have selected another folder before, the page restores that folder. Otherwise, Needs you is the default folder.
+The folders are **Needs you**, **Inbox**, **Reports and updates**, and **Done**. **Sent** is below a divider. On a desktop the folder rail is on the left, with **New message** at the top. On a phone the folders are in the menu drawer. Each folder shows its count. The folder pane shows a read-only line with the limits: the retention and the send limit. The folder pane shows on a desktop. The page keeps the selected folder in the address and in browser storage. When Needs you has open items, it is the default folder. When it has no items and you have selected another folder before, the page restores that folder. Otherwise, Needs you is the default folder.
 
-- **Needs you** shows open items with action `answer`, `approve`, or `decide`, newest first. When this folder is empty, the page shows “Nothing needs you.” and a link to Updates.
-- **Updates** shows open items with action `read` or no action. Opening an item sets `readAt`. The phone mail icon shows the unread Updates count.
-- **Sent** shows Owner messages. Each message shows its delivery state and the time of a reply, when one exists.
+- **Needs you** shows open items with action `answer`, `approve`, or `decide`, newest first. When this folder is empty, the page shows “Nothing needs you.” and a link to the Inbox.
+- **Inbox** shows all open items, newest first. The list has two sections: Needs you first, then Reports and updates. `GET /api/mailbox?folder=inbox` returns the items.
+- **Reports and updates** shows open items with action `read` or no action. The folder key stays `updates`, so `/mailbox?folder=updates` links keep working. Opening an item sets `readAt`. The count shows the unread items.
 - **Done** shows closed or dismissed items and messages that the Boss relayed.
+- **Sent** shows Owner messages. Each row shows the recipient, the delivery state, and the time of a reply, when one exists.
 
-The page groups messages by their project or the Boss, and by the `replyTo` chain. Select an item to open its conversation. The conversation shows Owner and agent messages in time order. Each message and each report shows as safe Markdown, with the same renderer as the message panel and the Chat. See [Markdown in messages](#markdown-in-messages). Opening an item sets `readAt` on the record. On a phone, the conversation fills the page. Select **Back** to return to the folder and message list.
+### Rows
+
+The list has one row for each conversation. A conversation is one thread and one `replyTo` chain. The row shows the newest item of the conversation in the folder. On a phone the row has two lines. Line 1 holds the avatar, the project name or `Boss`, the message count when the conversation has more than one item, and the action tag: **Approve**, **Answer**, **Decide**, or **Report**. Line 2 holds the subject and a one-line preview. The time and an unread dot sit on the right. An unread row shows the name, the subject, and the time in bold. On a wide desktop list without an open conversation, each row is one 44 px line. The time is `HH:MM` for today, `Yesterday`, a weekday for the last 6 days, or the day and the month.
+
+Select a row to open its conversation. The conversation shows Owner and agent messages in time order. Each message and each report shows as safe Markdown, with the same renderer as the message panel and the Chat. See [Markdown in messages](#markdown-in-messages). Opening an item sets `readAt` on the record. On a desktop the conversation opens at the right of the list, and the list keeps its position. On a phone the conversation fills the screen. Select the Back arrow to return to the list.
 
 ### Answer an item
 
@@ -998,13 +1003,13 @@ The page asks for a confirmation before each send or dismissal. The answer is an
 
 Select **New message** to start a thread with the Boss or a project that has an `orch` pane. Type a message and confirm the send. The page applies the same send limit and safety gates as other Owner messages. It opens the new thread in **Sent**. Use the reply box at the bottom of a conversation to reply to its last open agent message. The page asks you to confirm each reply.
 
-Select one or more checkboxes under **Needs you**, then select **Dismiss selected**. Select **Dismiss** on one item to dismiss it alone. Dismissal sets `closedAt`, `readAt`, and `dismissed: true`. It sends no message. You cannot dismiss an item that is already closed or does not need action.
+Select one or more checkboxes under **Needs you**, then select **Dismiss selected**. A check box selects all items of its conversation. Select **Dismiss** on one item to dismiss it alone. Dismissal sets `closedAt`, `readAt`, and `dismissed: true`. It sends no message. You cannot dismiss an item that is already closed or does not need action.
 
 The choices are the list items under a Markdown heading with the text `Choices`, for example `## Choices`. The list ends at the first line that is not a list item. The page shows at most 10 choices.
 
 ### Automatic refresh
 
-The page reads new data every 30 seconds and on each state event. It replaces the page only when the new page differs. It keeps the open conversation, the selection, the typed text, and the caret. It keeps the scroll position of the list and of the conversation. A new folder or a new conversation starts at the top.
+The page reads new data every 30 seconds and on each state event. It changes only the parts of the page that changed. Each row, conversation, chat, and bubble has a key (`data-key`), and `public/keyed.js` keeps the DOM node of each key. The page keeps the open conversation, the selection, the typed text, the focus, and the caret. It keeps the scroll position of the list and of the conversation. A new folder or a new conversation starts at the top.
 
 The refresh waits while you type or scroll. It runs 3 seconds after your last input or scroll. The Chat page uses the same rule.
 
@@ -1060,11 +1065,23 @@ The Owner can use an own image for the Boss and for each project. The page uses 
 - The write routes are dashboard write routes. A read-only preview refuses an upload and a remove with HTTP 403.
 - Herdr Boss calls no image API. It stores no key.
 
+## Phone app view
+
+On a screen up to 760 px wide, the Mailbox and the Chat are app views. The page header, the menu bar, and the page padding do not show. The page has the height of the visual viewport. The page itself does not scroll. Only the list, the conversation, or the chat log scrolls.
+
+- The top bar is 52 px high, plus the top safe-area inset. It holds the menu button and the page title with its count. In a conversation it holds the Back arrow, the avatar, and the name.
+- The menu button opens a drawer. The drawer holds the Mailbox folders on the Mailbox, the links to all pages with the Needs-you and Chat counts, and **Help**. A dot on the menu button shows unread items on the other page.
+- The Mailbox list has a floating **New** button at the bottom right.
+- When the phone keyboard opens, the visual viewport gets smaller. The page sets `--app-h` from `visualViewport.height`, so the composer and the reply field stay above the keyboard. The viewport meta has `interactive-widget=resizes-content` for Chrome on Android.
+- Buttons and fields keep a touch target of at least 44 px and a font size of 16 px.
+
+A check can force a theme with `?theme=light` or `?theme=dark` in the page address.
+
 ## Chat page
 
 The Chat page at `/chat` is the conversation view of the Owner. One chat holds the messages between the Owner and the Boss. One chat holds the messages between the Owner and a project orchestrator. A worker has no chat. Use the Mailbox for items that need an answer, an approval, or a decision. Use the Chat for a normal conversation. Both pages read the same message records.
 
-The page has no large heading. Above the conversation there is one slim header. It holds the avatar of the chat and the chat name. On a phone the header also holds the **Back** control.
+The page has no large heading. On a desktop the chat list and the open chat are two panes that fill the window below the page header. Above the conversation there is one slim bar. It holds the avatar of the chat, the chat name, and a link to the Mailbox. On a phone the bar also holds the Back arrow. See [Phone app view](#phone-app-view).
 
 The initials come from the project display name. The slug is the fallback. Every page uses that one name, so one project has the same avatar in the Chat list, the Chat header, the bubbles, the Mailbox, the Agents chart, and Settings.
 
@@ -1088,7 +1105,8 @@ The Chat is compact, in the style of a phone messenger.
 
 - A bubble has 6 to 8 px of padding and a width of at most 75%. It has no card frame. The time is 11 px and sits in the corner of the bubble.
 - The composer is one line. It grows to 6 lines. The send button is a round button of 36 px. Its touch area is 44 px on a phone. The composer hides the scroll bar until the text is longer than 6 lines.
-- A chat list row is 52 px high. The first line holds the title and the time. The second line holds the last message and the unread badge.
+- A chat list row is 72 px high, with a 52 px avatar. The first line holds the title and the time. The second line holds the last message and the unread badge. An unread row is bold.
+- A run of bubbles from one sender forms a group. The inner corners of a group are tight. A short chat sits at the bottom of the log, next to the composer.
 - The theme sets the colors. The page keeps its contrast in the light theme and in the dark theme.
 
 ### List

@@ -1,6 +1,8 @@
 import { markdownOrPlain, plainTextHtml, sanitizeRendered } from './markdown.js';
 import { FLOW, FLOW_LABEL, DONE_LIMIT, taskMap, taskState, blockReasons, boardColumns, dependencyChain, criticalPath, graphTasks, graphDepths, blockerIds, elapsedText, domPart, fleetItems, fleetColumns, fleetFilter, fleetWho } from './board.js';
 import { patchHtml } from './keyed.js';
+import { groupMailRows, inboxSections, listTime, mailRowHtml } from './mail-rows.js';
+import { APP_VIEW_ROUTES, appViewport } from './app-view.js';
 
 const $app = document.getElementById('app');
 // A visual check can force a theme with ?theme=light or ?theme=dark. Without it, the page follows the system.
@@ -2003,9 +2005,11 @@ document.addEventListener('click', (e) => {
 
 const MAIL_ACTION_LABEL = { answer: 'Answer', approve: 'Approve', decide: 'Decide', read: 'Read' };
 const MAIL_FOLDER_KEY = 'herdr-boss-mailbox-folder';
-const MAIL_FOLDERS = ['needs-you', 'updates', 'sent', 'done'];
-const MAIL_FOLDER_LABEL = { 'needs-you': 'Needs you', updates: 'Updates', sent: 'Sent', done: 'Done' };
-const mailbox = { needsYou: [], updates: [], sent: [], done: [], updatesUnread: 0, folder: null, loaded: false, loading: false, error: '', notice: '', counts: '', busy: false, status: {}, currentConversation: null, conversationRecords: [], conversationLoading: false, conversationError: '', composing: false, composeDraft: '', composeThread: 'boss', replyDraft: '', openedDeepLink: null };
+const MAIL_FOLDERS = ['needs-you', 'inbox', 'updates', 'done', 'sent'];
+const MAIL_FOLDER_LABEL = { 'needs-you': 'Needs you', inbox: 'Inbox', updates: 'Reports and updates', done: 'Done', sent: 'Sent' };
+const MAIL_FOLDER_ICON = { 'needs-you': 'alert', inbox: 'inbox', updates: 'report', done: 'check', sent: 'send' };
+const MAIL_FOLDER_KEYS = { 'needs-you': 'needsYou', inbox: 'inbox', updates: 'updates', done: 'done', sent: 'sent' };
+const mailbox = { needsYou: [], inbox: [], updates: [], sent: [], done: [], updatesUnread: 0, folder: null, loaded: false, loading: false, error: '', notice: '', counts: '', busy: false, status: {}, currentConversation: null, conversationRecords: [], conversationLoading: false, conversationError: '', composing: false, composeDraft: '', composeThread: 'boss', replyDraft: '', openedDeepLink: null };
 const mailReading = new Set();
 const mailSelected = new Set();
 const mailDrafts = {};
@@ -2050,7 +2054,7 @@ function mailItemLabel(s, item) {
 
 function mailField(item, label, max, required) {
   const id = esc(item.id);
-  return `<label for="mail-text-${id}">${label}</label><textarea id="mail-text-${id}" data-mail-draft="${id}" maxlength="${max}" rows="3"${required ? ' required' : ''}></textarea>`;
+  return `<label for="mail-text-${id}">${label}</label><textarea id="mail-text-${id}" data-mail-draft="${id}" maxlength="${max}" rows="3"${required ? ' required' : ''}>${esc(mailDrafts[item.id] || '')}</textarea>`;
 }
 
 function mailActions(item) {
@@ -2085,19 +2089,71 @@ function mailDoneLine(item) {
   return `<p class="sub mail-answer">Closed ${esc(clock(item.closedAt))}</p>`;
 }
 
-function mailItem(s, item, section) {
-  const unread = !item.readAt;
-  const done = section === 'done';
-  const label = section === 'updates' ? 'Update' : section === 'sent' ? mailDeliveryState(item) : MAIL_ACTION_LABEL[item.action] || 'Read';
-  const closeNote = done && item.closedBy === 'boss' ? `<span class="mail-headline mail-close-note">answered through the Boss: ${esc(item.closeNote || '')}</span>` : '';
-  const select = section === 'needs-you' ? `<label class="mail-select"><input type="checkbox" data-mail-select="${esc(item.id)}" aria-label="Select ${esc(mailHeadline(item))}" ${mailSelected.has(item.id) ? 'checked' : ''}></label>` : '';
-  const replied = item.repliedAt ? ` · replied ${clock(item.repliedAt)}` : '';
-  return `<li class="mail-item${unread ? ' unread' : ''}${done ? ' done' : ''}${select ? ' selectable' : ''}">${select}<button class="mail-entry" type="button" data-mail-open data-mail-thread="${esc(item.thread)}" data-mail-conversation="${esc(item.conversationId || item.id)}" data-mail-item-id="${esc(item.id)}">
-    ${avatarSlot(item.thread, { title: avatarTitle(item.thread), size: 20 })}
-    <span class="mail-meta">${unread && section !== 'sent' ? '<span class="mail-dot" aria-hidden="true"></span><span class="visually-hidden">Unread. </span>' : ''}<strong>${esc(mailItemLabel(s, item))}</strong><span class="pill ghost">${esc(label)}</span><time datetime="${esc(item.at)}">${esc(clock(item.at))}</time></span>
-    <span class="mail-headline">${item.kind === 'report' ? '<span class="pill">Report</span> ' : ''}${esc(mailHeadline(item))}</span>${closeNote}${section === 'sent' ? `<span class="mail-entry-state">${esc(mailDeliveryState(item))}${esc(replied)}</span>` : ''}
-  </button></li>`;
+// The sender line of a row. A Sent row names the recipient.
+function mailRowSender(s, row) {
+  const item = row.item;
+  const name = item.thread === 'boss' ? 'Boss' : mailProject(s, item);
+  return item.from === 'owner' ? `To ${name}` : name;
 }
+
+function mailRowsHtml(s, rows, folder) {
+  const current = mailbox.currentConversation ? `${mailbox.currentConversation.thread}:${mailbox.currentConversation.id}` : '';
+  const selectable = folder === 'needs-you';
+  return rows.map((row) => mailRowHtml(row, {
+    esc, clock: (iso) => listTime(iso), current, selectable, selected: mailSelected,
+    avatar: (thread) => avatarSlot(thread, { title: avatarTitle(thread), size: 36 }),
+    sender: (x) => mailRowSender(s, x),
+    state: folder === 'sent' ? (item) => `${mailDeliveryState(item)}${item.repliedAt ? ` · replied ${clock(item.repliedAt)}` : ''}` : null,
+  })).join('');
+}
+
+// ---------- App view: icons, the app bar, and the drawer ----------
+// One stroke icon set for the phone app view. 24-unit view box, stroke 1.8.
+const APP_ICON = {
+  menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
+  back: '<path d="M15 5l-7 7 7 7"/>',
+  pencil: '<path d="M4 20h4L19 9l-4-4L4 16v4Z"/><path d="M13.5 6.5l4 4"/>',
+  inbox: '<path d="M4 13.5 6.5 5h11l2.5 8.5V19H4v-5.5Z"/><path d="M4 13.5h5a3 3 0 0 0 6 0h5"/>',
+  alert: '<path d="M12 4 21 19.5H3L12 4Z"/><path d="M12 10v4m0 2.6v.01"/>',
+  report: '<path d="M7 3.5h7l4 4V20.5H7z"/><path d="M14 3.5v4h4M9.5 12h6M9.5 15.5h6"/>',
+  check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
+  send: '<path d="M4 12 20 4l-4 16-4-6.5L4 12Z"/><path d="m12 13.5 8-9.5"/>',
+  mail: '<path d="M3.5 6.5h17v12h-17z"/><path d="m4 7 8 6 8-6"/>',
+  chat: '<path d="M4 5.5h16v11H9l-5 4v-15Z"/>',
+  help: '<circle cx="12" cy="12" r="8.5"/><path d="M9.6 9.5a2.5 2.5 0 1 1 3.4 2.3c-.6.3-1 .8-1 1.5v.4m0 2.6v.01"/>',
+  close: '<path d="M6 6l12 12M18 6 6 18"/>',
+};
+const appIcon = (name) => `<svg class="app-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${APP_ICON[name] || ''}</svg>`;
+
+let appDrawerOpen = false;
+
+// The menu button of the phone app bar. A dot shows unread items on the other page.
+function appMenuButton(s, route) {
+  const counts = topIconCounts(s);
+  const other = route === 'mailbox' ? counts.chat : counts['needs-action'] + counts.mail;
+  return `<button type="button" class="app-icon-button app-menu" data-app-drawer aria-expanded="${appDrawerOpen}" aria-controls="app-drawer" aria-label="Menu${other ? `, ${other} unread on other pages` : ''}">${appIcon('menu')}${other ? '<span class="app-menu-dot" aria-hidden="true"></span>' : ''}</button>`;
+}
+
+// The drawer holds the Mailbox folders (on the Mailbox) and the links to all pages. It replaces the page header on a phone.
+function appDrawer(s, route, folderLinks = '') {
+  const counts = topIconCounts(s);
+  const pages = [['/', 'Overview'], ['/board', 'Board'], ['/mailbox', 'Mailbox', counts['needs-action']], ['/chat', 'Chat', counts.chat], ['/agents', 'Agents'], ['/projects', 'Projects'], ['/browsers', 'Browsers'], ['/allocation', 'Allocation'], ['/analytics', 'Analytics'], ['/logs', 'Logs']];
+  const links = pages.map(([href, label, count]) => `<a href="${href}"${href.slice(1) === route ? ' aria-current="page"' : ''}><span>${label}</span>${count ? `<span class="app-drawer-count num">${count > 99 ? '99+' : count}</span>` : ''}</a>`).join('');
+  return `<div class="app-drawer" id="app-drawer" data-key="app-drawer"${appDrawerOpen ? '' : ' hidden'}><button type="button" class="app-drawer-scrim" data-app-drawer-close tabindex="-1" aria-label="Close the menu"></button>`
+    + `<nav class="app-drawer-panel" aria-label="Menu"><div class="app-drawer-head"><span class="app-drawer-brand">Herdr Boss</span><button type="button" class="app-icon-button" data-app-drawer-close aria-label="Close the menu">${appIcon('close')}</button></div>`
+    + `${folderLinks ? `<div class="app-drawer-group" aria-label="Mailbox folders">${folderLinks}</div><hr>` : ''}<div class="app-drawer-group app-drawer-pages">${links}</div><hr><button type="button" class="app-drawer-help" data-app-help>${appIcon('help')}<span>Help</span></button></nav></div>`;
+}
+
+document.addEventListener('click', (e) => {
+  if (e.target.closest?.('[data-app-drawer]')) { appDrawerOpen = !appDrawerOpen; render(); if (appDrawerOpen) document.querySelector('.app-drawer-panel a[aria-current], .app-drawer-panel a')?.focus(); return; }
+  if (e.target.closest?.('[data-app-drawer-close]')) { appDrawerOpen = false; render(); document.querySelector('[data-app-drawer]')?.focus(); return; }
+  if (e.target.closest?.('[data-app-help]')) { appDrawerOpen = false; render(); setHelp(true); return; }
+  // A link in the drawer changes the page. The global link handler renders the page, so the drawer closes first.
+  if (e.target.closest?.('.app-drawer a')) appDrawerOpen = false;
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && appDrawerOpen) { appDrawerOpen = false; render(); document.querySelector('[data-app-drawer]')?.focus(); }
+});
 
 // A project page link opens one Mailbox conversation directly with ?thread= and ?conversation=.
 function openMailboxDeepLink() {
@@ -2108,7 +2164,7 @@ function openMailboxDeepLink() {
   const key = `${thread}:${conversation}`;
   if (mailbox.openedDeepLink === key) return;
   mailbox.openedDeepLink = key;
-  const item = [...mailbox.needsYou, ...mailbox.updates, ...mailbox.sent, ...mailbox.done].find((x) => x.thread === thread && (x.conversationId || x.id) === conversation);
+  const item = [...mailbox.inbox, ...mailbox.sent, ...mailbox.done].find((x) => x.thread === thread && (x.conversationId || x.id) === conversation);
   openMailboxConversation(thread, conversation, item?.id);
 }
 
@@ -2120,6 +2176,18 @@ function messageLimitsLine(s) {
   return `<p class="mail-folder-limits">Herdr Boss keeps messages for ${days} days and accepts at most ${l.sendLimitPerMinute} Owner messages a minute.</p>`;
 }
 
+function mailFolderLinks(folder, counts, className) {
+  const link = (key) => `<a class="${className}" href="${mailboxFolderUrl(key)}"${folder === key ? ' aria-current="page"' : ''}>${appIcon(MAIL_FOLDER_ICON[key])}<span>${esc(MAIL_FOLDER_LABEL[key])}</span>${counts[key] ? `<span class="mail-folder-count num">${counts[key]}</span>` : ''}</a>`;
+  // Sent is below a divider: the Owner reads it for the delivery state, not for work.
+  return `${MAIL_FOLDERS.filter((key) => key !== 'sent').map(link).join('')}<hr class="mail-folder-divider">${link('sent')}`;
+}
+
+function mailEmpty(folder) {
+  if (folder === 'needs-you') return `<div class="mail-empty"><p>Nothing needs you.</p><p class="mail-empty-next">${mailbox.updates.length} ${mailbox.updates.length === 1 ? 'report or update' : 'reports and updates'} · <a href="${mailboxFolderUrl('inbox')}">Open Inbox</a></p></div>`;
+  const text = { inbox: 'The Inbox is empty.', updates: 'No reports or updates.', sent: 'No sent messages.', done: 'No completed items.' }[folder];
+  return `<div class="mail-empty"><p>${text}</p></div>`;
+}
+
 function mailboxView(s) {
   if (!mailbox.loaded && !mailbox.loading) loadMailbox();
   const folder = mailboxFolderFromLocation();
@@ -2129,27 +2197,27 @@ function mailboxView(s) {
     mailbox.conversationRecords = [];
     mailbox.composing = false;
   }
-  const items = mailbox[folder === 'needs-you' ? 'needsYou' : folder] || [];
-  const counts = { 'needs-you': mailbox.needsYou.length, updates: mailbox.updates.length, sent: mailbox.sent.length, done: mailbox.done.length };
-  const folderNav = `<nav class="mail-folder-nav" aria-label="Mailbox folders">${MAIL_FOLDERS.map((key) => `<a href="${mailboxFolderUrl(key)}"${folder === key ? ' aria-current="page"' : ''}><span>${esc(MAIL_FOLDER_LABEL[key])}</span><span class="mail-folder-count">${counts[key] || 0}</span></a>`).join('')}</nav>`;
+  const items = mailbox[MAIL_FOLDER_KEYS[folder]] || [];
+  const counts = { 'needs-you': mailbox.needsYou.length, inbox: mailbox.inbox.length, updates: mailbox.updatesUnread || 0, done: 0, sent: 0 };
+  const label = MAIL_FOLDER_LABEL[folder];
   const allSelected = mailbox.needsYou.length > 0 && mailbox.needsYou.every((item) => mailSelected.has(item.id));
   const selected = mailbox.needsYou.filter((item) => mailSelected.has(item.id)).length;
-  const bulk = mailbox.needsYou.length ? `<div class="mail-bulk"><label><input type="checkbox" data-mail-select-all ${allSelected ? 'checked' : ''} aria-label="Select all Needs-you items"> Select all</label><button type="button" data-mail-dismiss-selected ${mailbox.busy || !selected ? 'disabled' : ''}>Dismiss selected${selected ? ` (${selected})` : ''}</button></div>` : '';
-  const empty = folder === 'needs-you' && mailbox.needsYou.length === 0
-    ? `<p class="mail-empty">Nothing needs you.</p><p class="mail-empty-next">${mailbox.updates.length} ${mailbox.updates.length === 1 ? 'update' : 'updates'} · <a href="${mailboxFolderUrl('updates')}">Open Updates</a></p>`
-    : `<p class="mail-empty">${folder === 'updates' ? 'No updates.' : folder === 'sent' ? 'No sent messages.' : 'No completed items.'}</p>`;
-  const list = mailbox.loaded && items.length ? `<ol class="mail-list">${items.map((item) => mailItem(s, item, folder)).join('')}</ol>` : mailbox.loaded ? empty : '<p class="mail-empty">Loading…</p>';
-  const selectedConversation = mailbox.currentConversation;
-  const conversationPanel = mailbox.composing
-    ? mailComposeView(s)
-    : selectedConversation
-      ? mailConversationView(s)
-      : '<section class="mail-reading-empty"><p>Select a conversation to read it.</p></section>';
-  return [
-    `<header class="page-intro"><div><h1>Mailbox</h1><p>Read and reply to messages from the Boss and project orchestrators.</p></div><button type="button" data-mail-compose-open${mailbox.busy ? ' disabled' : ''}>New message</button></header>`,
-    `<p class="mail-notice" role="status"${mailbox.error || mailbox.notice ? '' : ' hidden'}>${esc(mailbox.error || mailbox.notice)}</p>`,
-    `<div class="mailbox-layout${selectedConversation || mailbox.composing ? ' conversation-open' : ''}"><aside class="mail-folder-pane">${folderNav}${messageLimitsLine(s)}</aside><section class="mail-list-pane" aria-label="${esc(MAIL_FOLDER_LABEL[folder])}"><div class="mail-list-head"><h2>${esc(MAIL_FOLDER_LABEL[folder])}<span class="sub">${counts[folder] || 0}</span></h2></div>${folder === 'needs-you' ? bulk : ''}${list}</section><section class="mail-conversation-pane">${conversationPanel}</section></div>`,
-  ].join('');
+  const bulk = folder === 'needs-you' && mailbox.needsYou.length ? `<div class="mail-bulk"><label><input type="checkbox" data-mail-select-all ${allSelected ? 'checked' : ''} aria-label="Select all Needs-you items"> Select all</label><button type="button" data-mail-dismiss-selected ${mailbox.busy || !selected ? 'disabled' : ''}>Dismiss selected${selected ? ` (${selected})` : ''}</button></div>` : '';
+  let list;
+  if (!mailbox.loaded) list = '<div class="mail-empty"><p>Loading…</p></div>';
+  else if (!items.length) list = mailEmpty(folder);
+  else if (folder === 'inbox') list = inboxSections(items).map((section) => `<section class="mail-section" data-key="section:${section.key}" aria-label="${esc(section.label)}"><h2 class="mail-section-head">${esc(section.label)}</h2><ol class="mail-list">${mailRowsHtml(s, section.rows, folder)}</ol></section>`).join('');
+  else list = `<ol class="mail-list">${mailRowsHtml(s, groupMailRows(items), folder)}</ol>`;
+  const open = mailbox.currentConversation || mailbox.composing;
+  const conversationPanel = mailbox.composing ? mailComposeView(s) : mailbox.currentConversation ? mailConversationView(s) : '';
+  return `<div class="mailbox-layout${open ? ' conversation-open' : ''}" data-key="mailbox"${appDrawerOpen ? ' inert' : ''}>`
+    + `<aside class="mail-folder-pane" data-key="mail-rail"><button type="button" class="mail-compose-button" data-mail-compose-open${mailbox.busy ? ' disabled' : ''}>${appIcon('pencil')}<span>New message</span></button><nav class="mail-folder-nav" aria-label="Mailbox folders">${mailFolderLinks(folder, counts, 'mail-folder-link')}</nav>${messageLimitsLine(s)}</aside>`
+    + `<section class="mail-list-pane" data-key="mail-list" aria-label="${esc(label)}"><div class="app-bar mail-list-bar">${appMenuButton(s, 'mailbox')}<h1>${esc(label)}${mailbox.loaded ? `<span class="app-bar-count num">${items.length}</span>` : ''}</h1></div>`
+    + `<p class="mail-notice" role="status"${mailbox.error || mailbox.notice ? '' : ' hidden'}>${esc(mailbox.error || mailbox.notice)}</p>${bulk}`
+    + `<div class="mail-list-scroll" data-key="mail-list-scroll">${list}</div>`
+    + `<button type="button" class="mail-fab" data-mail-compose-open${mailbox.busy ? ' disabled' : ''}>${appIcon('pencil')}<span>New</span></button></section>`
+    + `<section class="mail-conversation-pane" data-key="mail-thread-pane"${open ? '' : ' hidden'}>${conversationPanel}</section></div>`
+    + appDrawer(s, 'mailbox', mailFolderLinks(folder, counts, 'app-drawer-folder'));
 }
 
 async function loadMailbox(auto = false) {
@@ -2159,7 +2227,7 @@ async function loadMailbox(auto = false) {
     const response = await fetch(`/api/mailbox?folder=${encodeURIComponent(folder)}`);
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || 'The mailbox could not be read.');
-    Object.assign(mailbox, { needsYou: result.needsYou, updates: result.updates, sent: result.sent, done: result.done, updatesUnread: result.updatesUnread, loaded: true, error: '', counts: JSON.stringify(result.mailbox) });
+    Object.assign(mailbox, { needsYou: result.needsYou, inbox: result.inbox || [], updates: result.updates, sent: result.sent, done: result.done, updatesUnread: result.updatesUnread, loaded: true, error: '', counts: JSON.stringify(result.mailbox) });
     const requested = new URLSearchParams(location.search).get('folder');
     const resolved = resolveMailboxFolder(requested, storedMailboxFolder(), mailbox.needsYou.length);
     mailbox.folder = resolved;
@@ -2174,12 +2242,12 @@ async function loadMailbox(auto = false) {
   else render();
 }
 
-function mailFind(id) { return mailbox.needsYou.find((item) => item.id === id) || mailbox.updates.find((item) => item.id === id) || mailbox.done.find((item) => item.id === id); }
+function mailFind(id) { return mailbox.inbox.find((item) => item.id === id) || mailbox.needsYou.find((item) => item.id === id) || mailbox.updates.find((item) => item.id === id) || mailbox.done.find((item) => item.id === id); }
 
 function mailComposeView(s) {
   const projects = Object.values(s.control?.projects || {}).filter((project) => project.orch?.pane).map((project) => ({ thread: project.slug, name: project.label || project.slug }));
   const options = [{ thread: 'boss', name: 'Boss' }, ...projects].map((item) => `<option value="${esc(item.thread)}"${mailbox.composeThread === item.thread ? ' selected' : ''}>${esc(item.name)}</option>`).join('');
-  return `<section class="mail-compose"><div class="mail-panel-head"><button type="button" class="mail-back" data-mail-back>Back</button><h2>New message</h2></div><form data-mail-compose><label for="mail-compose-recipient">To</label><select id="mail-compose-recipient" name="thread">${options}</select><label for="mail-compose-text">Message</label><textarea id="mail-compose-text" data-mail-compose-draft maxlength="2000" rows="8" required>${esc(mailbox.composeDraft)}</textarea><div class="mail-compose-actions"><button type="submit"${mailbox.busy ? ' disabled' : ''}>Send</button></div><p class="mail-status" role="status">${esc(mailbox.status.compose || '')}</p></form></section>`;
+  return `<section class="mail-compose"><div class="app-bar mail-panel-head"><button type="button" class="app-icon-button mail-back" data-mail-back aria-label="Back to ${esc(MAIL_FOLDER_LABEL[mailbox.folder])}">${appIcon('back')}</button><h2>New message</h2></div><form data-mail-compose><label for="mail-compose-recipient">To</label><select id="mail-compose-recipient" name="thread">${options}</select><label for="mail-compose-text">Message</label><textarea id="mail-compose-text" data-mail-compose-draft maxlength="2000" rows="8" required>${esc(mailbox.composeDraft)}</textarea><div class="mail-compose-actions"><button type="submit"${mailbox.busy ? ' disabled' : ''}>Send</button></div><p class="mail-status" role="status">${esc(mailbox.status.compose || '')}</p></form></section>`;
 }
 
 function mailConversationView(s) {
@@ -2190,7 +2258,7 @@ function mailConversationView(s) {
   const messages = mailbox.conversationLoading ? '<p class="mail-empty">Loading conversation…</p>' : mailbox.conversationError ? `<p class="mail-error" role="alert">${esc(mailbox.conversationError)}</p>` : records.length ? `<ol class="mail-conversation">${records.map((record) => mailConversationMessage(s, record)).join('')}</ol>` : '<p class="mail-empty">No messages in this conversation.</p>';
   const lastAgent = [...records].reverse().find((record) => ['boss', 'orch'].includes(record.from) && record.to === 'owner');
   const replyTo = lastAgent && !lastAgent.closedAt ? lastAgent.id : '';
-  return `<section class="mail-reading"><div class="mail-panel-head"><button type="button" class="mail-back" data-mail-back aria-label="Back to ${esc(MAIL_FOLDER_LABEL[mailbox.folder])}">Back</button><h2>${esc(title)}</h2></div><div class="mail-conversation-scroll">${messages}</div><form class="mail-reply" data-mail-reply data-mail-thread="${esc(selected.thread)}" data-mail-reply-to="${esc(replyTo)}"><label for="mail-reply-text">Reply</label><textarea id="mail-reply-text" data-mail-reply-draft maxlength="2000" rows="3" required>${esc(mailbox.replyDraft)}</textarea><div><span class="sub">${replyTo ? 'Replies to the last message.' : 'Starts a new message in this thread.'}</span><button type="submit"${mailbox.busy ? ' disabled' : ''}>Send</button></div><p class="mail-status" role="status">${esc(mailbox.status.reply || '')}</p></form></section>`;
+  return `<section class="mail-reading"><div class="app-bar mail-panel-head"><button type="button" class="app-icon-button mail-back" data-mail-back aria-label="Back to ${esc(MAIL_FOLDER_LABEL[mailbox.folder])}">${appIcon('back')}</button>${avatarSlot(selected.thread, { title: avatarTitle(selected.thread), size: 28 })}<h2>${esc(title)}</h2></div><div class="mail-conversation-scroll" data-key="mail-thread:${esc(selected.thread)}:${esc(selected.id)}">${messages}</div><form class="mail-reply" data-mail-reply data-mail-thread="${esc(selected.thread)}" data-mail-reply-to="${esc(replyTo)}"><label for="mail-reply-text">Reply</label><textarea id="mail-reply-text" data-mail-reply-draft maxlength="2000" rows="3" required>${esc(mailbox.replyDraft)}</textarea><div><span class="sub">${replyTo ? 'Replies to the last message.' : 'Starts a new message in this thread.'}</span><button type="submit"${mailbox.busy ? ' disabled' : ''}>Send</button></div><p class="mail-status" role="status">${esc(mailbox.status.reply || '')}</p></form></section>`;
 }
 
 function mailConversationMessage(s, record) {
@@ -2201,7 +2269,7 @@ function mailConversationMessage(s, record) {
   const delivery = owner ? mailDeliveryState(record) : record.action ? `Action: ${record.action}` : '';
   const status = delivery ? `<p class="mail-message-state">${esc(delivery)}${owner && record.repliedAt ? ` · replied ${esc(clock(record.repliedAt))}` : ''}</p>` : '';
   const controls = item && item.closedAt ? mailDoneLine(item) : item && ['answer', 'approve', 'decide'].includes(item.action) ? mailActions(item) : '';
-  return `<li><article class="mail-message${owner ? ' from-owner' : ''}"><header class="mail-message-head"><strong>${esc(meta)}</strong><span>${esc(headline)}</span></header>${messageBody(record)}${status}${controls}</article></li>`;
+  return `<li><article class="mail-message${owner ? ' from-owner' : ''}"><header class="mail-message-head"><strong>${esc(meta)}</strong>${record.kind === 'report' ? '' : `<span>${esc(headline)}</span>`}</header>${messageBody(record)}${status}${controls}</article></li>`;
 }
 
 async function loadMailboxConversation(thread, conversation) {
@@ -2324,13 +2392,14 @@ async function mailDismiss(items) {
 }
 
 function mailRestoreDrafts(focusId, caret) {
-  for (const field of $app.querySelectorAll('[data-mail-draft]')) field.value = mailDrafts[field.dataset.mailDraft] || '';
+  for (const field of $app.querySelectorAll('[data-mail-draft]')) if (field !== document.activeElement) field.value = mailDrafts[field.dataset.mailDraft] || '';
   const compose = $app.querySelector('[data-mail-compose-draft]');
-  if (compose) compose.value = mailbox.composeDraft;
+  if (compose && compose !== document.activeElement) compose.value = mailbox.composeDraft;
   const reply = $app.querySelector('[data-mail-reply-draft]');
-  if (reply) reply.value = mailbox.replyDraft;
+  if (reply && reply !== document.activeElement) reply.value = mailbox.replyDraft;
+  // A keyed patch keeps the focused field, its text, and its caret. Only a replaced field needs them back.
   const focused = focusId ? document.getElementById(focusId) : null;
-  if (focused) {
+  if (focused && focused !== document.activeElement) {
     focused.focus({ preventScroll: true });
     if (caret) focused.setSelectionRange(caret[0], caret[1]);
   }
@@ -2344,9 +2413,10 @@ document.addEventListener('input', (e) => {
 });
 document.addEventListener('change', (e) => {
   if (e.target.matches?.('[data-mail-select]')) {
-    const id = e.target.dataset.mailSelect;
-    if (e.target.checked) mailSelected.add(id);
-    else mailSelected.delete(id);
+    for (const id of e.target.dataset.mailSelect.split(',')) {
+      if (e.target.checked) mailSelected.add(id);
+      else mailSelected.delete(id);
+    }
     render();
   } else if (e.target.matches?.('[data-mail-select-all]')) {
     if (e.target.checked) for (const item of mailbox.needsYou) mailSelected.add(item.id);
@@ -2576,21 +2646,21 @@ function chatView(s) {
     ? `<ul class="chat-list">${rows}</ul>`
     : `<p class="chat-empty">${chat.loaded ? 'No chats.' : 'Loading…'}</p>`;
   const conversation = chat.thread ? chatConversationView() : '<section class="chat-empty-state"><p>Select a chat to read it.</p></section>';
-  return [
-    `<p class="chat-notice" role="status"${chat.error || chat.status ? '' : ' hidden'}>${esc(chat.error || chat.status)}</p>`,
-    `<div class="chat-layout${chat.thread ? ' thread-open' : ''}"><aside class="chat-list-pane" aria-label="Chats"><div class="chat-list-head"><h2>Chats<span class="sub">${chat.list.length}</span></h2></div>${list}</aside><section class="chat-conversation-pane">${conversation}</section></div>`,
-  ].join('');
+  return `<div class="chat-layout${chat.thread ? ' thread-open' : ''}" data-key="chat"${appDrawerOpen ? ' inert' : ''}><aside class="chat-list-pane" data-key="chat-list" aria-label="Chats"><div class="app-bar chat-list-head">${appMenuButton(s, 'chat')}<h1>Chats<span class="app-bar-count num">${chat.list.length}</span></h1></div>`
+    + `<p class="chat-notice" role="status"${chat.error || chat.status ? '' : ' hidden'}>${esc(chat.error || chat.status)}</p>`
+    + `<div class="chat-list-scroll" data-key="chat-list-scroll">${list}</div></aside><section class="chat-conversation-pane" data-key="chat-thread-pane">${conversation}</section></div>`
+    + appDrawer(s, 'chat');
 }
 
 function chatRow(item) {
   const unread = item.unread || 0;
-  const time = item.last ? clock(item.last.at) : '';
+  const time = item.last ? listTime(item.last.at) : '';
   const open = item.thread === chat.thread;
   const badge = unread ? `<span class="chat-unread">${unread > 99 ? '99+' : unread}</span>` : '';
   // A report is mail. The row shows it as one short line with a link to the Mailbox.
   const preview = !item.last ? 'No messages yet.' : item.last.channel === 'mail' ? `Report: ${item.last.title || 'Report'}` : item.last.text;
-  return `<li class="chat-item${unread ? ' unread' : ''}"><button class="chat-row" type="button" data-chat-open="${esc(item.thread)}"${open ? ' aria-current="true"' : ''} aria-label="Open the ${esc(item.title)} chat${unread ? `. ${unread} unread message${unread === 1 ? '' : 's'}` : ''}">
-    ${avatarSlot(item.thread, { title: avatarTitle(item.thread, item.title), size: 28 })}
+  return `<li class="chat-item${unread ? ' unread' : ''}" data-key="chat:${esc(item.thread)}"><button class="chat-row" type="button" data-chat-open="${esc(item.thread)}"${open ? ' aria-current="true"' : ''} aria-label="Open the ${esc(item.title)} chat${unread ? `. ${unread} unread message${unread === 1 ? '' : 's'}` : ''}">
+    ${avatarSlot(item.thread, { title: avatarTitle(item.thread, item.title), size: 36 })}
     <span class="chat-main"><span class="chat-line-one"><span class="chat-name">${esc(item.title)}</span>${time ? `<span class="chat-time">${esc(time)}</span>` : ''}</span><span class="chat-line-two"><span class="chat-preview">${esc(preview)}</span>${badge}</span></span>
   </button></li>`;
 }
@@ -2604,7 +2674,7 @@ function chatConversationView() {
       : '<p class="chat-empty">No messages in this chat.</p>';
   const older = chat.more ? `<p class="chat-more">${chat.moreLoading ? 'Loading older messages…' : 'Scroll up for older messages.'}</p>` : '';
   const pill = chat.unseen ? `<button type="button" class="chat-new-pill" data-chat-new>${chat.unseen} new message${chat.unseen === 1 ? '' : 's'}</button>` : '';
-  return `<div class="chat-panel"><div class="chat-panel-head"><button type="button" class="chat-back" data-chat-back aria-label="Back to chats">Back</button>${avatarSlot(chat.thread, { title: avatarTitle(chat.thread, title), size: 28 })}<h2>${esc(title)}</h2></div><div class="chat-scroll" data-chat-scroll tabindex="0">${older}${bubbles}</div>${pill}<form class="chat-composer" data-chat-compose><label class="visually-hidden" for="chat-draft">Message to ${esc(title)}</label><div class="chat-composer-row"><textarea id="chat-draft" data-chat-draft maxlength="2000" rows="1" placeholder="Message…"></textarea><button type="submit" class="chat-send" aria-label="Send"${chat.busy ? ' disabled' : ''}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 20 21 12 3.5 4v6l12 2-12 2v6Z"/></svg></button></div><p class="chat-hint">Enter sends · Shift+Enter makes a new line</p></form></div>`;
+  return `<div class="chat-panel"><div class="app-bar chat-panel-head"><button type="button" class="app-icon-button chat-back" data-chat-back aria-label="Back to chats">${appIcon('back')}</button>${avatarSlot(chat.thread, { title: avatarTitle(chat.thread, title), size: 28 })}<h2>${esc(title)}</h2><a class="app-icon-button chat-mail-link" href="/mailbox?folder=inbox" aria-label="Open the Mailbox">${appIcon('mail')}</a></div><div class="chat-scroll" data-key="chat-scroll:${esc(chat.thread)}" data-chat-scroll tabindex="0">${older}${bubbles}</div>${pill}<form class="chat-composer" data-key="chat-composer" data-chat-compose><label class="visually-hidden" for="chat-draft">Message to ${esc(title)}</label><div class="chat-composer-row"><textarea id="chat-draft" data-chat-draft maxlength="2000" rows="1" placeholder="Message…">${esc(chat.draft)}</textarea><button type="submit" class="chat-send" aria-label="Send"${chat.busy ? ' disabled' : ''}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 20 21 12 3.5 4v6l12 2-12 2v6Z"/></svg></button></div><p class="chat-hint">Enter sends · Shift+Enter makes a new line</p></form></div>`;
 }
 
 // The same rule as parseChoices in src/messages.js: the Markdown list items under a Choices heading.
@@ -2692,7 +2762,7 @@ function chatBubble(record, startOfRun = false) {
   const sender = MESSAGE_SENDER[record.from] || record.from;
   // A mail report is not a chat message. The bubble holds one short line and a link to the Mailbox.
   if (record.channel === 'mail') {
-    return `<li class="chat-report" data-chat-bubble="${esc(record.id)}" aria-label="${esc(chatBubbleLabel(sender, { ...record, text: `Report: ${record.title || 'Report'}` }, 'Open in Mailbox'))}"><span class="chat-report-text">Report: ${esc(record.title || 'Report')}</span><a class="chat-action-link" href="/mailbox?folder=updates">Open in Mailbox</a></li>`;
+    return `<li class="chat-report" data-key="msg:${esc(record.id)}" data-chat-bubble="${esc(record.id)}" aria-label="${esc(chatBubbleLabel(sender, { ...record, text: `Report: ${record.title || 'Report'}` }, 'Open in Mailbox'))}"><span class="chat-report-text">Report: ${esc(record.title || 'Report')}</span><a class="chat-action-link" href="/mailbox?folder=updates">Open in Mailbox</a></li>`;
   }
   // A closed item shows the answer that closed it, for example Approved 22:05.
   const answer = owner ? null : chatAnswerTo(record);
@@ -2709,8 +2779,8 @@ function chatBubble(record, startOfRun = false) {
   const label = esc(chatBubbleLabel(sender, { ...record, text }, state));
   const content = `<div class="chat-bubble-text md">${safeMarkdownHtml(text)}</div><p class="chat-bubble-meta"><span class="chat-bubble-time">${esc(clock(record.at))}</span>${state ? ` <span class="chat-state${tone}">${esc(state)}</span>` : ''}</p>${card}${action}${retry}`;
   // The avatar of the other party shows on the first bubble of a run of messages from that sender.
-  if (!owner && startOfRun) return `<li class="chat-entry" data-chat-bubble="${esc(record.id)}" aria-label="${label}">${avatarSlot(record.thread, { title: avatarTitle(record.thread), size: 20 })}<div class="chat-bubble from-agent${card ? ' chat-card' : ''}" data-chat-bubble="${esc(record.id)}" aria-label="${label}">${content}</div></li>`;
-  return `<li class="chat-bubble${owner ? ' from-owner' : ' from-agent'}${card ? ' chat-card' : ''}" data-chat-bubble="${esc(record.id)}" aria-label="${label}">${content}</li>`;
+  if (!owner && startOfRun) return `<li class="chat-entry" data-key="msg:${esc(record.id)}" data-chat-bubble="${esc(record.id)}" aria-label="${label}">${avatarSlot(record.thread, { title: avatarTitle(record.thread), size: 20 })}<div class="chat-bubble from-agent${card ? ' chat-card' : ''}" data-chat-bubble="${esc(record.id)}" aria-label="${label}">${content}</div></li>`;
+  return `<li class="chat-bubble${owner ? ' from-owner' : ' from-agent'}${startOfRun ? ' run-start' : ''}${card ? ' chat-card' : ''}" data-key="msg:${esc(record.id)}" data-chat-bubble="${esc(record.id)}" aria-label="${label}">${content}</li>`;
 }
 
 async function loadChats() {
@@ -2810,7 +2880,8 @@ function chatRestoreView(view) {
     scroller.addEventListener('scroll', chatScrolled, { passive: true });
   }
   const field = $app.querySelector('[data-chat-draft]');
-  if (field) {
+  // A keyed patch keeps the focused field with its text and caret. A replaced field gets the draft and the caret back.
+  if (field && field !== document.activeElement) {
     field.value = chat.draft;
     chatGrowField(field);
     if (view?.focus || chat.focus === 'composer') {
@@ -4195,22 +4266,22 @@ const HELP = {
     <p>The data comes from the project's status file. When a section is missing, the orchestrator has not published those fields.</p>`],
   mailbox: ['Mailbox', `
     <p>Use the folders to read messages from the Boss and project orchestrators. The page groups each conversation by its project or the Boss and by its reply chain.</p>
-    <h3>Folders</h3><p><b>Needs you</b> is the default folder when an open item needs an answer, approval, or decision. Select an item to open its conversation. Select one or more checkboxes to dismiss items without an answer. The page asks you to confirm. Dismissal sends nothing.</p>
-    <p><b>Updates</b> holds open information items with action <code>read</code> or no action. Opening an item marks it read. <b>Sent</b> holds your messages. It shows queued, delivered, failed, and relayed state, and the reply time. <b>Done</b> holds closed or dismissed items and relayed messages.</p>
-    <p>The folder stays in the page address. The page remembers your last folder. When Needs you has items, it opens that folder by default. When it is empty, the page says <b>Nothing needs you</b> and links to Updates.</p>
-    <h3>Conversations</h3><p>The conversation shows Owner and agent messages in time order. Each message and each report shows as formatted Markdown. Opening an item marks it read. On a phone, select <b>Back</b> to return to the folder list.</p>
-    <h3>Refresh</h3><p>The page reads new data every 30 seconds. It keeps the open conversation, the selection, the typed text, and the scroll position. The refresh waits until 3 seconds after you last type or scroll.</p>
+    <h3>Folders</h3><p><b>Needs you</b> is the default folder when an open item needs an answer, approval, or decision. <b>Inbox</b> holds all open items: Needs you first, then reports and updates. <b>Reports and updates</b> holds open information items with action <code>read</code> or no action. Opening an item marks it read. <b>Done</b> holds closed or dismissed items and relayed messages. <b>Sent</b>, below the divider, holds your messages with the queued, delivered, failed, or relayed state and the reply time.</p>
+    <p>The folder stays in the page address. The page remembers your last folder. When Needs you has items, it opens that folder by default. When it is empty, the page says <b>Nothing needs you</b> and links to the Inbox.</p>
+    <h3>Rows</h3><p>Each row is one conversation. It shows the project or the Boss, the message count, the action tag, the subject, a preview, and the time. An unread row is bold and has a dot. Select a row to open the conversation. Select one or more check boxes in Needs you to dismiss items without an answer. The page asks you to confirm. Dismissal sends nothing.</p>
+    <h3>Conversations</h3><p>The conversation shows Owner and agent messages in time order. Each message and each report shows as formatted Markdown. Opening an item marks it read. On a desktop the conversation opens at the right of the list. On a phone it fills the screen. Select the Back arrow to return to the list.</p>
+    <h3>Refresh</h3><p>The page reads new data every 30 seconds. It changes only the rows and messages that changed. It keeps the open conversation, the selection, the typed text, the caret, and the scroll position. The refresh waits until 3 seconds after you last type or scroll.</p>
     <p>Use the reply box to answer the last agent message. The page asks you to confirm each send. Herdr Boss delivers the message when the agent is working, idle, or done.</p>
     <h3>Markdown</h3><p>The page shows headings, bold, italic, lists, task lists, tables, code, quotes, rules, and links. A wide table or code block scrolls sideways in its own box. Raw HTML shows as text. A link opens only when it uses <code>http</code>, <code>https</code>, or <code>mailto</code>, or a local path. An external link opens in a new tab.</p>
     <h3>Actions</h3><p><b>Answer</b>: type an answer and select <b>Send</b>. <b>Approve</b>: select <b>Approve</b> or <b>Decline</b>. A note is optional. <b>Decide</b>: select a choice, or type an answer and select <b>Send</b>. Choice buttons appear when the message has a Markdown list under a <b>Choices</b> heading. Each answer uses the same delivery limit and safety checks as a new message. An answered item moves to <b>Done</b>.</p>
     <h3>Compose</h3><p>Select <b>New message</b> to write to the Boss or a project with an <code>orch</code> pane. The page asks you to confirm before it sends. The new conversation opens in <b>Sent</b>.</p>
-    <h3>Phone</h3><p>The top bar has a mail icon for unread Updates and an alert icon for open Needs-you items. Select an icon to open its folder. The desktop Mailbox badge shows unread Needs-you items.</p>
+    <h3>Phone</h3><p>The Mailbox fills the screen. The page header does not show. Select the menu button at the top left to open the drawer with the folders, the other pages, and Help. A dot on the menu button shows unread chats. Select <b>New</b> at the bottom right to write a message. The desktop Mailbox badge shows unread Needs-you items.</p>
     <p>The folder pane shows the fixed limits: Herdr Boss keeps messages for 30 days and accepts at most 10 Owner messages a minute. A read-only preview shows messages and refuses a read or a send.</p>`],
   chat: ['Chat', `
-    <p>The Chat page shows one conversation for the Boss and one for each project orchestrator. The page has no large heading. Above the conversation there is one slim header with the avatar and the chat name.</p>
+    <p>The Chat page shows one conversation for the Boss and one for each project orchestrator. The page has no large heading. On a desktop the chat list and the open chat fill the window. Above the conversation there is one slim bar with the avatar, the chat name, and a link to the Mailbox.</p>
     <h3>Channels</h3><p><b>Chat</b> holds the conversation. A normal reply, an Owner message, a nudge, and a status request stay in Chat only. A reply that asks you for an <b>answer</b>, an <b>approval</b>, or a <b>decision</b> shows in Chat and in Mailbox <b>Needs you</b> while it is open. A <b>report</b> from the Boss is mail. It shows in Mailbox <b>Updates</b> and as one short line in Chat. A normal reply never shows in Updates.</p>
-    <h3>Top bar</h3><p>The top bar has three icons: chat unread, mail unread, and open action items. An icon with nothing to show is faded and has no count. An icon with something to show is bright and shows the count. <b>Needs action</b> is the most visible icon. The three icons are on a desktop and on a phone.</p>
-    <h3>Layout</h3><p>The chat is compact. A bubble has slim padding and no card frame. The time is 11 px. The composer is one line and grows to 6 lines. Its send button is a round button. A list row is 52 px high. The first line holds the title and the time. The second line holds the last message and the unread badge. The row keeps a touch target of at least 44 px on a phone.</p>
+    <h3>Top bar</h3><p>The top bar has three icons: chat unread, mail unread, and open action items. An icon with nothing to show is faded and has no count. An icon with something to show is bright and shows the count. <b>Needs action</b> is the most visible icon. The three icons are on a desktop and on a phone. On a phone the Mailbox and the Chat hide the top bar, and the menu drawer shows the counts.</p>
+    <h3>Layout</h3><p>The chat is compact. A bubble has slim padding and no card frame. The time is 11 px. The composer is one line and grows to 6 lines. Its send button is a round button. A list row is 72 px high. The first line holds the title and the time. The second line holds the last message and the unread badge. The row keeps a touch target of at least 44 px on a phone.</p>
     <h3>List</h3><p>Each row shows the title, the last message on one line, the time, and the unread count. A report shows as <b>Report: TITLE</b>. The newest chat comes first. The menu badge shows the total unread count. The list follows the message stream. It never reloads the page. The automatic refresh keeps the list and conversation scroll. It waits until 3 seconds after you last type or scroll.</p>
     <h3>Conversation</h3><p>Select a row to open the chat. Your messages sit on the right, and the agent messages sit on the left. Each bubble shows the text as formatted Markdown and the time. A wide table or code block scrolls sideways inside the bubble. Raw HTML shows as text. Your bubble also shows the delivery state: <b>queued</b>, <b>delivered</b>, or <b>failed</b> with the reason. Opening a chat marks the messages to you as read.</p>
     <p>Scroll up to read older messages. The page asks for the page before the oldest message and keeps your reading position. It stops at the oldest message in the store. The store keeps messages for 30 days.</p>
@@ -4221,7 +4292,7 @@ const HELP = {
     <p><b>Approve</b> and <b>Reject</b> answer an approval. <b>Later</b> only collapses the card. It writes nothing, and the Mailbox item stays open. A <b>decide</b> message with a Markdown list under a <b>Choices</b> heading shows one button for each choice. A decide with the choices <b>Yes</b> and <b>No</b> shows those two buttons. An <b>answer</b> message shows a one-line text field and <b>Send</b>.</p>
     <p>The card uses the same send route as the Mailbox. The item closes and the bubble shows the result, for example <b>Approved 22:05</b>. A closed item shows as a normal bubble with the result of the answer that closed it. Select <b>Open in Mailbox</b> to see the item in the Mailbox.</p>
     <h3>Keyboard</h3><p>The chat list is a list of buttons. The arrow keys, <b>Home</b>, and <b>End</b> move through the rows. Enter opens a chat. The focus then goes to the message field. <b>Escape</b> goes back to the list, and the focus goes to the row of the chat that was open. The message list is a live region, so a screen reader reads each new message once. Each bubble has a name with the sender, the time, the text, and the state.</p>
-    <h3>Phone</h3><p>The list fills the page. Select a chat to open it full screen. The slim header has the <b>Back</b> control. The card buttons and the send button are at least 44 px.</p>
+    <h3>Phone</h3><p>The Chat fills the screen. The page header does not show. Select the menu button to open the drawer with the other pages and Help. Select a chat to open it full screen. The slim bar has the Back arrow. When the keyboard opens, the composer stays above it. The card buttons and the send button are at least 44 px.</p>
     <p>A read-only preview shows the chats and refuses a send. It also refuses a read, so the unread count stays.</p>`],
   allocation: ['Allocation', `
     <p>The resource policy for all projects. Changes are a draft until you select <b>Apply policy</b>.</p>
@@ -4320,7 +4391,7 @@ function currentRoute() {
 function fillHelp() {
   const [title, body] = HELP[currentRoute()] || HELP.overview;
   document.getElementById('help-title').textContent = `${title} help`;
-  document.getElementById('help-body').innerHTML = `${body}<p class="help-more">On a screen up to 760 px wide, use the menu button at the top to change pages. Commands and setup: <code>docs/cli.md</code> and <code>docs/user-guide.md</code> in the Herdr Boss repository.</p>`;
+  document.getElementById('help-body').innerHTML = `${body}<p class="help-more">On a screen up to 760 px wide, use the menu button at the top to change pages. On the Mailbox and the Chat the menu button opens a drawer. Commands and setup: <code>docs/cli.md</code> and <code>docs/user-guide.md</code> in the Herdr Boss repository.</p>`;
 }
 
 function setHelp(open) {
@@ -4381,9 +4452,9 @@ document.addEventListener('scroll', markOwnerActive, { capture: true, passive: t
 function keptScrollKeys(route, mailbox, chat) {
   if (route === 'mailbox') {
     const view = mailbox.composing ? 'compose' : mailbox.currentConversation?.id || '';
-    return { window: `${mailbox.folder}|${view}`, '.mail-list-pane': mailbox.folder, '.mail-conversation-scroll': view };
+    return { window: `${mailbox.folder}|${view}`, '.mail-list-scroll': mailbox.folder, '.mail-conversation-scroll': view };
   }
-  if (route === 'chat') return { window: chat.thread || '', '.chat-list-pane': 'list' };
+  if (route === 'chat') return { window: chat.thread || '', '.chat-list-scroll': 'list' };
   return {};
 }
 
@@ -4398,11 +4469,26 @@ function restoreScroll(route, scroll) {
   ignoreScrollUntil = Date.now() + 250;
   for (const [selector, key] of Object.entries(keptScrollKeys(route, mailbox, chat))) {
     const top = scroll.tops[selector];
-    if (top == null || scroll.keys[selector] !== key) continue;
+    if (top == null) continue;
+    // A keyed patch keeps a scroll region node. When the view changed, for example to another folder, the region starts at the top.
+    if (scroll.keys[selector] !== key) {
+      const element = selector === 'window' ? null : $app.querySelector(selector);
+      if (element) element.scrollTop = 0;
+      continue;
+    }
     if (selector === 'window') { if (scrollY !== top) scrollTo(scrollX, top); }
     else { const element = $app.querySelector(selector); if (element) element.scrollTop = top; }
   }
 }
+
+// A check can force a theme with ?theme=light or ?theme=dark. Without the parameter the page follows the system theme.
+{
+  const theme = new URLSearchParams(location.search).get('theme');
+  if (theme === 'light' || theme === 'dark') document.documentElement.dataset.theme = theme;
+}
+
+// These routes keep their DOM across a render. A keyed patch changes only what changed.
+const KEYED_ROUTES = ['projects', 'board', 'mailbox', 'chat'];
 
 function render(force = false) {
   if (!state) return;
@@ -4431,6 +4517,9 @@ function render(force = false) {
   const route = m || location.pathname === '/projects' ? 'projects' : ['board', 'mailbox', 'chat', 'allocation', 'settings', 'agents', 'browsers', 'analytics', 'logs'].includes(location.pathname.slice(1)) ? location.pathname.slice(1) : 'overview';
   const page = route === 'projects' ? projectsView(state, m ? decodeURIComponent(m[1]) : null) : route === 'board' ? boardView(state) : route === 'mailbox' ? mailboxView(state) : route === 'chat' ? chatView(state) : route === 'allocation' ? allocationView(state) : route === 'settings' ? settingsView(state) : route === 'agents' ? agentsView(state) : route === 'browsers' ? browsersView(state) : route === 'analytics' ? analyticsView(state) : route === 'logs' ? logsView(state) : overview(state);
   const html = page;
+  // The Mailbox and the Chat are app views: on a phone they fill the visual viewport and hide the page header.
+  document.body.classList.toggle('app-view', APP_VIEW_ROUTES.includes(route));
+  if (!APP_VIEW_ROUTES.includes(route)) appDrawerOpen = false;
   $navMenuLabel.textContent = NAV_LABEL[route] || 'Menu';
   for (const a of $nav.querySelectorAll('a')) {
     if (a.dataset.nav === route) a.setAttribute('aria-current', 'page');
@@ -4448,7 +4537,7 @@ function render(force = false) {
       ? { id: active.id, range: typeof active.selectionStart === 'number' ? [active.selectionStart, active.selectionEnd] : null } : null;
     const chatViewState = route === 'chat' ? chatCaptureView() : null;
     const scroll = captureScroll(route);
-    if ((route === 'projects' || route === 'board') && lastRoute === route) patchHtml($app, html);
+    if (KEYED_ROUTES.includes(route) && lastRoute === route) patchHtml($app, html);
     else $app.innerHTML = html;
     lastRoute = route;
     lastRender = html;
@@ -4484,7 +4573,7 @@ document.addEventListener('toggle', (e) => {
 }, true);
 
 // Re-render when the viewport crosses the phone breakpoint, so the desktop and phone treatments swap.
-phoneMedia.addEventListener('change', () => { lastRender = ''; render(); });
+phoneMedia.addEventListener('change', () => { appDrawerOpen = false; lastRender = ''; render(); });
 
 function updateShares() {
   const projects = allocationProjects();
@@ -5695,6 +5784,14 @@ setInterval(autoRender, 10000);
 if (window.visualViewport) {
   const vv = window.visualViewport;
   const setKeyboardInset = () => document.documentElement.style.setProperty('--kb-inset', `${vv.scale > 1.01 ? 0 : Math.max(0, Math.round(innerHeight - vv.height - vv.offsetTop))}px`);
-  vv.addEventListener('resize', setKeyboardInset);
-  vv.addEventListener('scroll', setKeyboardInset);
+  // The phone app view has the height of the visual viewport, so the composer sits on top of the keyboard.
+  const setAppViewport = () => {
+    const view = appViewport({ height: vv.height, offsetTop: vv.offsetTop, scale: vv.scale, innerHeight });
+    document.documentElement.style.setProperty('--app-h', `${view.height}px`);
+    document.documentElement.style.setProperty('--app-top', `${view.top}px`);
+  };
+  const onViewport = () => { setKeyboardInset(); setAppViewport(); };
+  vv.addEventListener('resize', onViewport);
+  vv.addEventListener('scroll', onViewport);
+  setAppViewport();
 }

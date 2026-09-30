@@ -1665,7 +1665,7 @@ test('Analytics and Mailbox show the scan and store limits from the state', () =
   // Analytics shows the denial line in the denials section, and Mailbox shows the message line in the folder pane footer.
   assert.match(app, /denialsBlock\(s\)/);
   assert.match(app, /const limits = denialLimitsLine\(s\)/);
-  assert.match(app, /<aside class="mail-folder-pane">\$\{folderNav\}\$\{messageLimitsLine\(s\)\}<\/aside>/);
+  assert.match(app, /<aside class="mail-folder-pane" data-key="mail-rail">[^`]*<nav class="mail-folder-nav" aria-label="Mailbox folders">\$\{mailFolderLinks\(folder, counts, 'mail-folder-link'\)\}<\/nav>\$\{messageLimitsLine\(s\)\}<\/aside>/);
   // Help and the guide describe both lines.
   assert.match(app, /A read-only line shows the limits/);
   assert.match(app, /The folder pane shows the fixed limits/);
@@ -2156,7 +2156,7 @@ test('the Chat page is compact: no page heading, slim bubbles, a round send butt
   assert.match(css, /\.chat-send \{ width: 44px; height: 44px; \}/);
   // A dense list: each row shows the title and the time on the first line, then the last message and the unread badge.
   assert.match(app, /<span class="chat-line-one"><span class="chat-name">\$\{esc\(item\.title\)\}<\/span>\$\{time \? `<span class="chat-time">\$\{esc\(time\)\}<\/span>` : ''\}<\/span><span class="chat-line-two"><span class="chat-preview">\$\{esc\(preview\)\}<\/span>\$\{badge\}<\/span>/);
-  assert.match(css, /\.chat-row \{[^}]*height: 52px;/);
+  assert.match(css, /button\.chat-row \{[^}]*min-height: 72px;/);
   // A mail report is one short line in the chat.
   assert.match(app, /if \(record\.channel === 'mail'\) \{[\s\S]*?Report: \$\{esc\(record\.title \|\| 'Report'\)\}[\s\S]*?Open in Mailbox/);
   assert.match(css, /\.chat-report \{/);
@@ -2306,7 +2306,7 @@ test('one title gives one avatar, and the Chat, the Mailbox, the Agents cards, a
   // Every page passes the title through the one source. A page with its own title fails here.
   const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
   const slots = [...app.matchAll(/avatarSlot\(([^,]+), \{ title: avatarTitle\(/g)].map((match) => match[1]);
-  assert.equal(slots.length, 6, 'six avatar slots: Settings row, Mailbox row, Chat list row, Chat header, chat bubble, and Agents card');
+  assert.equal(slots.length, 7, 'seven avatar slots: Settings row, Mailbox row, Mailbox thread header, Chat list row, Chat header, chat bubble, and Agents card');
   for (const slug of slots) assert.doesNotMatch(slug, /\.title$|\btitle\b/, 'no page passes its own title to an avatar slot');
 });
 
@@ -2315,10 +2315,11 @@ test('the pages show the avatar, the Settings page manages the image, and the co
   const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
   const guide = fs.readFileSync(new URL('../docs/user-guide.md', import.meta.url), 'utf8');
   // The Chat list, the Chat header, the first bubble of a run, the Mailbox rows, and the Agents chart cards.
-  assert.match(app, /\$\{avatarSlot\(item\.thread, \{ title: avatarTitle\(item\.thread, item\.title\), size: 28 \}\)\}/);
+  assert.match(app, /\$\{avatarSlot\(item\.thread, \{ title: avatarTitle\(item\.thread, item\.title\), size: 36 \}\)\}/);
   assert.match(app, /\$\{avatarSlot\(chat\.thread, \{ title: avatarTitle\(chat\.thread, title\), size: 28 \}\)\}/);
   assert.match(app, /\$\{avatarSlot\(record\.thread, \{ title: avatarTitle\(record\.thread\), size: 20 \}\)\}/);
-  assert.match(app, /\$\{avatarSlot\(item\.thread, \{ title: avatarTitle\(item\.thread\), size: 20 \}\)\}/);
+  assert.match(app, /avatar: \(thread\) => avatarSlot\(thread, \{ title: avatarTitle\(thread\), size: 36 \}\)/);
+  assert.match(app, /\$\{avatarSlot\(selected\.thread, \{ title: avatarTitle\(selected\.thread\), size: 28 \}\)\}/);
   assert.match(app, /avatarSlot\(avatar\.slug, \{ title: avatarTitle\(avatar\.slug, avatar\.title\), size: 36 \}\)/);
   assert.match(app, /\$\{avatarSlot\(row\.slug, \{ title: avatarTitle\(row\.slug, row\.title\), size: 28 \}\)\}/);
   // The image of the Owner replaces the generated avatar when it exists.
