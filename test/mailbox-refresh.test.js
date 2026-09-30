@@ -59,8 +59,8 @@ test('a re-render keeps the scroll of the Mailbox list, the Mailbox conversation
 
 test('render patches the Mailbox and the Chat in place after the first mount', () => {
   const renderBody = body('render(force = false)');
-  assert.match(renderBody, /const KEYED_ROUTES = \['projects', 'board', 'mailbox', 'chat', 'analytics'\];|KEYED_ROUTES\.includes\(route\) && lastRoute === route\) patchHtml\(\$app, html\)/);
-  assert.match(app, /const KEYED_ROUTES = \['projects', 'board', 'mailbox', 'chat', 'analytics'\];/);
+  assert.match(renderBody, /const KEYED_ROUTES = \['projects', 'board', 'mailbox', 'chat', 'analytics'(, '[a-z]+')*\];|KEYED_ROUTES\.includes\(route\) && lastRoute === route\) patchHtml\(\$app, html\)/);
+  assert.match(app, /const KEYED_ROUTES = \['projects', 'board', 'mailbox', 'chat', 'analytics'(, '[a-z]+')*\];/);
   assert.match(renderBody, /if \(KEYED_ROUTES\.includes\(route\) && lastRoute === route\) patchHtml\(\$app, html\);\n\s*else \$app\.innerHTML = html;/);
 });
 
