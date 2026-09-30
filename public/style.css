@@ -263,17 +263,17 @@ h2 .sub { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(
 .issue-table .wait { color: var(--warn); font-size: 12px; }
 /* The global dark-theme button color must not hide the board text. */
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .card-title, :root:not([data-theme="light"]) .wait-link, :root:not([data-theme="light"]) .board-more, :root:not([data-theme="light"]) .board-tab[aria-selected="true"] { color: var(--text); }
+  :root:not([data-theme="light"]) .now-task, :root:not([data-theme="light"]) .card-title, :root:not([data-theme="light"]) .wait-link, :root:not([data-theme="light"]) .board-more, :root:not([data-theme="light"]) .board-tab[aria-selected="true"] { color: var(--text); }
   :root:not([data-theme="light"]) .board-tab { color: var(--muted); }
 }
-:root[data-theme="dark"] .card-title, :root[data-theme="dark"] .wait-link, :root[data-theme="dark"] .board-more, :root[data-theme="dark"] .board-tab[aria-selected="true"] { color: var(--text); }
+:root[data-theme="dark"] .now-task, :root[data-theme="dark"] .card-title, :root[data-theme="dark"] .wait-link, :root[data-theme="dark"] .board-more, :root[data-theme="dark"] .board-tab[aria-selected="true"] { color: var(--text); }
 :root[data-theme="dark"] .board-tab { color: var(--muted); }
 .board-section, .dep-section { scroll-margin-top: 72px; }
 .decision-list { display: grid; gap: 8px; }
-.decision-item { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 8px; background: var(--panel-2); }
+.decision-item { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 10px; padding: 8px 0 0; border-top: 1px solid color-mix(in srgb, var(--accent) 25%, var(--line)); }
+.decision-item:first-child { padding-top: 0; border-top: 0; }
 .decision-item p { margin: 4px 0 0; color: var(--text); font-size: 13px; }
 .decision-mail { flex: 0 0 auto; color: var(--accent); font-size: 12.5px; }
-.decision-section { border-left: 3px solid var(--accent); }
 .project-decision-count { display: inline-block; margin-top: 6px; padding: 1px 7px; border-radius: 99px; border: 1px solid var(--accent); color: var(--accent); font-size: 11px; }
 .decisions-summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 14px; border-left: 3px solid var(--accent); }
 .decisions-summary a { color: var(--accent); }
@@ -803,6 +803,65 @@ body.dep-full-open { overflow: hidden; }
 .fold-body > *, .fold-controls { min-width: 0; max-width: 100%; }
 .fold-controls { display: flex; flex-wrap: wrap; gap: 8px; }
 @media (prefers-reduced-motion: reduce) { .fold-chevron { transition: none; } }
+
+/* Fold cards: a details element with its summary and body in one box, on every screen size. */
+.fold-card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+.fold-card > .fold-summary { justify-content: flex-start; border: 0; background: none; border-radius: 10px; }
+.fold-card > .fold-summary:hover h2 { color: var(--accent); }
+.fold-card > .fold-summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.fold-card > .fold-summary h2 { flex: 0 1 auto; min-width: 0; flex-wrap: wrap; row-gap: 2px; }
+.fold-card > .fold-summary .fold-chevron { margin-left: auto; }
+.fold-card > .fold-body { padding: 0 14px 14px; }
+.fold-card .fold-hint { flex: none; margin-left: auto; color: var(--accent); font-size: 12px; font-weight: 600; }
+.fold-card .fold-hint + .fold-chevron { margin-left: 0; }
+
+/* Project page: the Now section. The orchestrator line, then a grid of small cards in one, two, or three columns. */
+.project-now { display: grid; gap: 12px; }
+.now-grid { display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr); align-items: start; }
+@media (min-width: 761px) { .now-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (min-width: 1180px) { .now-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.now-card { display: grid; gap: 8px; align-content: start; min-width: 0; padding: 12px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+.now-card h3 { display: flex; align-items: baseline; gap: 8px; margin: 0; font-size: 13px; font-weight: 650; }
+.now-card h3 .num, .now-card h3 .sub { color: var(--muted); font-size: 12px; font-weight: 400; }
+.now-card p { margin: 0; font-size: 13px; overflow-wrap: anywhere; }
+.now-list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; font-size: 13px; }
+.now-list > li { min-width: 0; overflow-wrap: anywhere; }
+.now-issues li { position: relative; padding-left: 16px; }
+.now-issues li::before { content: ''; position: absolute; left: 0; top: 0.5em; width: 8px; height: 8px; border-radius: 50%; background: var(--warn); }
+.now-issues li.crit::before { background: var(--crit); }
+.now-worker { display: grid; grid-template-columns: 8px minmax(0, 1fr); gap: 8px; align-items: baseline; }
+.now-worker .st { transform: translateY(-1px); }
+.now-worker p, .now-worker .muted { color: var(--muted); }
+.now-task { display: flex; align-items: baseline; gap: 6px; width: 100%; min-width: 0; margin: 0; padding: 2px 0; border: 0; border-radius: 4px; background: none; color: var(--text); font: 400 13px/1.4 var(--sans); text-align: left; cursor: pointer; }
+.now-task .mono { flex: none; color: var(--muted); font-size: 12px; }
+.now-task .now-task-title { min-width: 0; overflow-wrap: anywhere; }
+button.now-task:hover .now-task-title { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.now-task:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.now-next .now-task { font-weight: 600; }
+@media (max-width: 760px), (pointer: coarse) and (max-height: 500px) { .now-task { align-items: center; } }
+.now-card.decision-section { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); background: color-mix(in srgb, var(--accent) 5%, var(--panel)); }
+.now-card.now-issues { border-color: color-mix(in srgb, var(--warn) 40%, var(--line)); }
+.orch-line > .fold-summary { padding: 9px 14px; }
+.orch-line > .fold-summary > .st { flex: none; }
+.orch-line > .fold-summary h2 .sub { font-family: var(--mono); font-size: 12px; }
+.handoff-needed { padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--line)); border-radius: 10px; background: color-mix(in srgb, var(--warn) 5%, var(--panel)); }
+
+/* Project page: the Details grid. Closed cards sit two to a row on a desktop. */
+.details-grid { display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr); align-items: start; }
+@media (min-width: 761px) { .details-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.details-grid .files-list { margin-bottom: 8px; }
+.details-grid .ws-grid { grid-template-columns: minmax(0, 1fr); }
+.details-grid .ws-grid > .panel { background: var(--panel-2); }
+.files > .win-foot:first-child { margin: 0 0 6px; }
+
+/* Overview: the current guidance, collapsed under a one-line summary. */
+.guidance-fold > .fold-summary h2 .sub { font-size: 12.5px; }
+.guidance-fold > .fold-body { gap: 10px; }
+.guidance-watch { margin: 0; font-weight: 600; }
+.lane-list { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.lane-chip { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 6px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 99px; background: var(--panel-2); font-size: 12px; }
+.lane-chip span { color: var(--muted); }
+.lane-chip.ok b { color: var(--ok); } .lane-chip.warn b { color: var(--warn); } .lane-chip.crit b { color: var(--crit); }
 
 @media (max-width: 760px), (pointer: coarse) and (max-height: 500px) {
   .dep-section, .handoff-section, .browser-fleet { margin-bottom: 14px; }
