@@ -1,0 +1,623 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Review packs mockup</title>
+<style>
+/* Incumbent Herdr Boss tokens, copied from public/style.css. The mockup adds no new colors. */
+:root {
+  --bg: #f4f2ee; --panel: #ffffff; --panel-2: #f8f6f2; --line: #e3dfd7; --text: #1d1b18; --muted: #6f6a61; --faint: #a19b90;
+  --accent: #d0621f; --ok: #2f8a4c; --warn: #b7791f; --crit: #c2362b; --info: #3a6ea5;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif;
+  --select: color-mix(in srgb, var(--accent) 12%, var(--panel-2));
+  --bar-h: 52px; --on-accent: #fff;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #121110; --panel: #1b1a18; --panel-2: #22201d; --line: #2e2b27; --text: #ece8e1; --muted: #a39d92; --faint: #6c665d;
+    --accent: #ef8a4a; --ok: #5cbf7a; --warn: #e0a84a; --crit: #ef6a5e; --info: #74a6dd; --on-accent: #1d1b18; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #121110; --panel: #1b1a18; --panel-2: #22201d; --line: #2e2b27; --text: #ece8e1; --muted: #a39d92; --faint: #6c665d;
+  --accent: #ef8a4a; --ok: #5cbf7a; --warn: #e0a84a; --crit: #ef6a5e; --info: #74a6dd; --on-accent: #1d1b18; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--text); font: 14px/1.45 var(--sans); -webkit-font-smoothing: antialiased; }
+::selection { background: color-mix(in srgb, var(--accent) 30%, transparent); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+textarea, input { caret-color: var(--accent); font: inherit; color: inherit; }
+* { scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+a { color: inherit; text-underline-offset: 3px; }
+.icon { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: 0 0 auto; }
+.icon-sm { width: 16px; height: 16px; }
+.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* ---------- The board around the screens ---------- */
+.board-head { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; padding: 18px max(16px, env(safe-area-inset-left)) 12px; border-bottom: 1px solid var(--line); }
+.board-head h1 { margin: 0; font-size: 18px; font-weight: 650; letter-spacing: -0.01em; }
+.board-head p { margin: 0; color: var(--muted); font-size: 13px; max-width: 70ch; }
+.seg { display: inline-flex; padding: 2px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); }
+.seg button, .seg a { padding: 4px 10px; border-radius: 6px; font-size: 12.5px; color: var(--muted); text-decoration: none; }
+.seg [aria-pressed="true"], .seg [aria-current] { background: var(--panel); color: var(--text); font-weight: 600; box-shadow: 0 1px 2px rgb(0 0 0 / 0.08); }
+.board-head .seg { margin-left: auto; }
+.board { display: flex; flex-wrap: wrap; gap: 28px 24px; padding: 20px 16px 40px; }
+.screen-label { display: flex; align-items: baseline; gap: 8px; margin: 0 0 8px; font-size: 13px; font-weight: 650; }
+.screen-label small { color: var(--muted); font-weight: 400; }
+
+/* A phone screen is 390 by 760. At 760 px and less it takes the full width. */
+.phone { width: 390px; height: 760px; display: flex; flex-direction: column; overflow: hidden; position: relative; background: var(--bg); border: 1px solid var(--line); border-radius: 22px; box-shadow: 0 10px 30px -12px rgb(0 0 0 / 0.25); }
+@media (max-width: 760px) {
+  .board { padding: 12px 0 32px; gap: 28px; }
+  .board > figure { width: 100%; }
+  .screen-label { padding: 0 16px; }
+  .phone { width: 100%; border-radius: 0; border-left: 0; border-right: 0; box-shadow: none; }
+}
+figure { margin: 0; }
+
+/* ---------- App bar, as in the M1 app view ---------- */
+.bar { flex: 0 0 auto; display: flex; align-items: center; gap: 2px; min-height: var(--bar-h); padding: 0 6px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.bar h2 { flex: 1 1 auto; min-width: 0; margin: 0 4px; font-size: 16px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bar h2 small { display: block; color: var(--muted); font-size: 12px; font-weight: 450; }
+.ibtn { position: relative; display: grid; place-items: center; width: 44px; height: 44px; border-radius: 50%; }
+.ibtn:hover { background: var(--panel-2); }
+.scroll { flex: 1 1 auto; min-height: 0; overflow: auto; }
+.tabs { display: flex; gap: 4px; padding: 8px 12px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.tabs button { padding: 5px 12px; border-radius: 999px; font-size: 13px; color: var(--muted); }
+.tabs button[aria-pressed="true"] { background: var(--select); color: var(--text); font-weight: 600; }
+
+/* ---------- State chips. Each chip has an icon and a word, never color alone. ---------- */
+.chip { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px; border-radius: 999px; font-size: 11.5px; font-weight: 600; white-space: nowrap; border: 1px solid transparent; }
+.chip .icon { width: 13px; height: 13px; stroke-width: 2.2; }
+.chip.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); }
+.chip.crit { color: var(--crit); background: color-mix(in srgb, var(--crit) 12%, transparent); }
+.chip.warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); }
+.chip.info { color: var(--info); background: color-mix(in srgb, var(--info) 12%, transparent); }
+.chip.open { color: var(--muted); border-color: var(--line); }
+.chip.changed { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+
+/* ---------- The progress bar (dataviz: fixed order, 2 px gaps, hatch on Denied) ---------- */
+.prog { display: flex; gap: 2px; height: 10px; border-radius: 5px; overflow: hidden; background: var(--panel); }
+.prog i { display: block; height: 100%; min-width: 3px; }
+.prog i:first-child { border-radius: 4px 0 0 4px; } .prog i:last-child { border-radius: 0 4px 4px 0; }
+.s-ok { background: var(--ok); } .s-info { background: var(--info); } .s-warn { background: var(--warn); }
+.s-crit { background: repeating-linear-gradient(135deg, var(--crit) 0 3px, color-mix(in srgb, var(--crit) 55%, var(--panel)) 3px 5px); }
+.s-open { background: var(--line); }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 8px; font-size: 12px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 5px; }
+.legend i { width: 10px; height: 10px; border-radius: 3px; }
+.legend b { color: var(--text); font-weight: 600; font-family: var(--mono); font-size: 11.5px; }
+
+/* ---------- Pack list ---------- */
+.row { display: grid; grid-template-columns: 40px 1fr auto; gap: 4px 12px; align-items: center; padding: 12px 14px; border-bottom: 1px solid var(--line); background: var(--panel); text-decoration: none; }
+.row:hover { background: var(--panel-2); }
+.av { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; font-size: 14px; color: #fff; grid-row: span 2; }
+.av.a1 { background: #5b6f8f; } .av.a2 { background: #5a7447; } .av.a3 { background: #8f6a5b; }
+.row strong { font-size: 14.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row .meta { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.row .line2 { grid-column: 2 / 4; display: flex; align-items: center; gap: 10px; }
+.row .line2 .prog { flex: 1 1 auto; height: 6px; }
+.row .line2 .num { font-size: 12px; color: var(--muted); }
+.row.unread strong::after { content: ""; display: inline-block; width: 8px; height: 8px; margin-left: 8px; border-radius: 50%; background: var(--accent); vertical-align: 2px; }
+.group-h { padding: 14px 14px 6px; font-size: 12px; font-weight: 650; color: var(--muted); }
+
+/* ---------- Section list ---------- */
+.pack-head { padding: 12px 14px 12px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.pack-head .top { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; font-size: 12.5px; color: var(--muted); }
+.pack-head .top b { color: var(--text); font-family: var(--mono); font-weight: 600; }
+.sec { margin-top: 10px; background: var(--panel); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.sec-h { display: flex; align-items: center; gap: 8px; padding: 10px 14px 8px; }
+.sec-h h3 { flex: 1 1 auto; margin: 0; font-size: 14px; font-weight: 650; }
+.sec-h .num { color: var(--muted); font-size: 12px; }
+.it { display: grid; grid-template-columns: 52px 1fr auto 28px; gap: 10px; align-items: center; min-height: 56px; padding: 6px 14px; border-top: 1px solid var(--line); }
+.it.done { min-height: 40px; grid-template-columns: 22px 1fr auto 28px; }
+.it.done .thumb { width: 22px; height: 22px; border-radius: 5px; }
+.it.done .t { color: var(--muted); }
+.thumb { width: 52px; height: 38px; border-radius: 6px; border: 1px solid var(--line); overflow: hidden; background: var(--panel-2); display: grid; place-items: center; color: var(--muted); }
+.thumb .icon { width: 18px; height: 18px; }
+.it .t { min-width: 0; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.it .t small { display: block; color: var(--muted); font-size: 11.5px; }
+.viewed { width: 20px; height: 20px; border-radius: 5px; border: 1.6px solid var(--faint); display: grid; place-items: center; justify-self: end; }
+.viewed.on { background: var(--muted); border-color: var(--muted); color: var(--panel); }
+.viewed .icon { width: 13px; height: 13px; stroke-width: 3; }
+.sticky-foot { flex: 0 0 auto; display: flex; align-items: center; gap: 10px; padding: 10px 14px calc(10px + env(safe-area-inset-bottom)); background: var(--panel); border-top: 1px solid var(--line); }
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 40px; padding: 0 16px; border-radius: 10px; font-weight: 600; font-size: 14px; border: 1px solid var(--line); background: var(--panel); text-decoration: none; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.btn.grow { flex: 1 1 auto; }
+.sticky-foot .muted { color: var(--muted); font-size: 12.5px; }
+
+/* ---------- Item viewer ---------- */
+.viewer { flex: 1 1 auto; min-height: 0; position: relative; display: flex; flex-direction: column; background: color-mix(in srgb, var(--bg) 70%, #000 0%); }
+.pairbar { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 3; }
+.pairbar .seg { background: color-mix(in srgb, var(--panel) 88%, transparent); backdrop-filter: blur(8px); box-shadow: 0 2px 8px rgb(0 0 0 / 0.12); }
+.stage { flex: 1 1 auto; min-height: 0; overflow: hidden; display: grid; place-items: center; padding: 56px 10px 10px; position: relative; }
+.hint { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 3; display: inline-flex; align-items: center; gap: 8px; padding: 7px 12px; border-radius: 999px; background: rgb(20 18 16 / 0.82); color: #f4f2ee; font-size: 12.5px; white-space: nowrap; }
+.hint .icon { width: 16px; height: 16px; }
+.zoomchip { position: absolute; right: 12px; top: 12px; z-index: 3; padding: 3px 8px; border-radius: 6px; background: rgb(20 18 16 / 0.72); color: #f4f2ee; font: 600 11.5px var(--mono); }
+.item-body { flex: 0 0 auto; padding: 10px 14px; background: var(--panel); border-top: 1px solid var(--line); font-size: 13px; }
+.item-body p { margin: 0; color: var(--muted); }
+.item-body .note { margin-top: 8px; display: flex; gap: 8px; align-items: flex-start; padding: 8px 10px; border-radius: 8px; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
+.pin { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; background: var(--accent); color: var(--on-accent); font: 700 12px var(--sans); box-shadow: 0 0 0 2px var(--panel), 0 3px 8px rgb(0 0 0 / 0.3); flex: 0 0 auto; }
+.saved { margin-left: auto; color: var(--muted); font-size: 11.5px; white-space: nowrap; display: inline-flex; align-items: center; gap: 4px; }
+.answer { flex: 0 0 auto; display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; padding: 8px 10px calc(8px + env(safe-area-inset-bottom)); background: var(--panel); border-top: 1px solid var(--line); }
+.answer button { display: grid; justify-items: center; gap: 2px; padding: 6px 0 5px; border-radius: 10px; font-size: 11.5px; font-weight: 600; color: var(--muted); }
+.answer button:hover { background: var(--panel-2); }
+.answer button .icon { width: 22px; height: 22px; }
+.answer .on-crit { color: var(--crit); background: color-mix(in srgb, var(--crit) 12%, transparent); }
+.answer .on-ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); }
+.answer .on-info { color: var(--info); background: color-mix(in srgb, var(--info) 12%, transparent); }
+.answer.choice { grid-template-columns: 1fr 1fr 0.8fr; }
+.answer.choice button { display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 44px; font-size: 13px; padding: 0 6px; border: 1px solid var(--line); }
+.answer.choice button .icon { width: 16px; height: 16px; }
+.answer.choice .picked { border-color: var(--accent); color: var(--accent); background: var(--select); }
+
+/* ---------- Invented screenshots, drawn in CSS ---------- */
+.shot { position: relative; width: 100%; max-width: 360px; aspect-ratio: 9 / 16; border-radius: 10px; overflow: hidden; box-shadow: 0 6px 20px -6px rgb(0 0 0 / 0.35); font-family: Georgia, "Times New Roman", serif; }
+.shot.lp-dark { background: #16181d; color: #d7dae0; }
+.shot.lp-light { background: #fbfaf7; color: #1b1d22; }
+.lp-nav { display: flex; justify-content: space-between; align-items: center; padding: 14px 16px; font: 600 11px var(--sans); }
+.lp-nav i { display: inline-block; width: 28px; height: 6px; margin-left: 8px; border-radius: 3px; background: currentColor; opacity: 0.35; }
+.lp-hero { padding: 28px 18px 0; }
+.lp-hero .h { font-size: 30px; line-height: 1.05; letter-spacing: -0.02em; }
+.shot.lp-dark .lp-hero .h { color: #6c7079; }
+.lp-hero .p { margin-top: 12px; font: 13px/1.5 var(--sans); opacity: 0.7; }
+.lp-cta { display: inline-block; margin-top: 18px; padding: 10px 16px; border-radius: 8px; background: #3f6fd8; color: #fff; font: 600 12px var(--sans); }
+.lp-img { margin: 22px 18px 0; height: 150px; border-radius: 10px; background: linear-gradient(135deg, #3f6fd8, #8a6fd8 55%, #d88a6f); }
+.shot.lp-dark .lp-img { filter: saturate(0.8) brightness(0.8); }
+.lp-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 14px 18px; }
+.lp-cards i { height: 60px; border-radius: 8px; background: currentColor; opacity: 0.08; }
+.shot .pin { position: absolute; }
+.focus-ring { position: absolute; border: 2px dashed var(--accent); border-radius: 6px; }
+
+/* Code, diff, and tables */
+.doc { padding: 14px; font-size: 13px; background: var(--panel); }
+.doc h4 { margin: 0 0 6px; font-size: 15px; }
+.doc p { margin: 0 0 10px; color: var(--muted); }
+.code { font: 12px/1.6 var(--mono); border: 1px solid var(--line); border-radius: 8px; overflow: auto; background: var(--panel-2); }
+.code div { display: grid; grid-template-columns: 34px 16px 1fr; white-space: pre; padding-right: 10px; }
+.code .ln { color: var(--faint); text-align: right; padding-right: 8px; }
+.code .add { background: color-mix(in srgb, var(--ok) 13%, transparent); }
+.code .del { background: color-mix(in srgb, var(--crit) 12%, transparent); }
+.code .hl { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: -2px; }
+.code .hunk { color: var(--info); background: color-mix(in srgb, var(--info) 8%, transparent); }
+table.t { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+table.t th, table.t td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+table.t th { position: sticky; top: 0; background: var(--panel-2); font-size: 11.5px; color: var(--muted); font-weight: 650; }
+table.t code { font: 11.5px var(--mono); }
+table.t tr.hl td { background: color-mix(in srgb, var(--accent) 14%, transparent); box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--accent) 50%, transparent); }
+.inline-note { display: flex; align-items: flex-start; gap: 8px; margin: 8px 0 0; padding: 8px 10px; border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line)); border-radius: 8px; background: var(--select); font-size: 12.5px; }
+.inline-note .pin { width: 20px; height: 20px; font-size: 11px; }
+.inline-note textarea { flex: 1 1 auto; min-height: 44px; border: 0; background: transparent; resize: none; padding: 0; }
+
+/* Summary */
+.sumsec { background: var(--panel); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); margin-top: 10px; }
+.sumsec h3 { display: flex; align-items: center; gap: 8px; margin: 0; padding: 10px 14px 6px; font-size: 13.5px; }
+.sumsec h3 .num { color: var(--muted); font-weight: 500; font-size: 12px; margin-left: auto; }
+.sumsec li { list-style: none; padding: 7px 14px; border-top: 1px solid var(--line); font-size: 13px; }
+.sumsec ul { margin: 0; padding: 0; }
+.sumsec li small { display: block; color: var(--muted); font-size: 12px; }
+.sumsec li .go { float: right; color: var(--accent); font-weight: 600; font-size: 12.5px; text-decoration: none; }
+.verdict { display: grid; gap: 6px; padding: 10px 14px; }
+.verdict label { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); font-size: 13.5px; }
+.verdict label.sel { border-color: var(--accent); background: var(--select); font-weight: 600; }
+.verdict label small { margin-left: auto; color: var(--muted); font-size: 11.5px; font-weight: 450; }
+.radio { width: 16px; height: 16px; border-radius: 50%; border: 1.6px solid var(--faint); }
+.sel .radio { border: 5px solid var(--accent); }
+.packnote { margin: 0 14px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); min-height: 64px; font-size: 13.5px; }
+.packnote .saved { float: right; }
+.stat-line { display: flex; justify-content: space-between; font-size: 12.5px; color: var(--muted); margin-bottom: 8px; }
+.stat-line b { font: 600 20px var(--sans); color: var(--text); letter-spacing: -0.01em; }
+
+/* Offline pill and banner */
+.pill { position: absolute; left: 50%; top: 60px; transform: translateX(-50%); z-index: 5; display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: 999px; background: var(--panel); border: 1px solid color-mix(in srgb, var(--warn) 50%, var(--line)); color: var(--warn); font-size: 12px; font-weight: 600; box-shadow: 0 4px 12px -4px rgb(0 0 0 / 0.2); }
+.banner { display: flex; align-items: center; gap: 8px; padding: 8px 14px; background: var(--select); border-bottom: 1px solid var(--line); font-size: 12.5px; }
+.banner a { margin-left: auto; color: var(--accent); font-weight: 650; text-decoration: none; }
+
+/* Legacy frame */
+.frame-wrap { flex: 1 1 auto; min-height: 0; position: relative; margin: 0; background: #fff; overflow: hidden; }
+.legacy { padding: 16px; font: 13px/1.5 Georgia, serif; color: #222; background: #fff; height: 100%; }
+.legacy h1 { font-size: 20px; margin: 0 0 6px; }
+.legacy .lg-img { height: 120px; margin: 10px 0; border-radius: 4px; background: linear-gradient(120deg, #ccd6e6, #e6dccc); }
+.legacy .lg-row { display: flex; gap: 8px; } .legacy .lg-row div { flex: 1; height: 70px; background: #eee; border-radius: 4px; }
+.frame-wrap .pin { position: absolute; }
+.placing { position: absolute; inset: 0; border: 3px solid var(--accent); pointer-events: none; }
+.placing span { position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%); padding: 4px 10px; border-radius: 999px; background: var(--accent); color: var(--on-accent); font-size: 12px; font-weight: 600; white-space: nowrap; }
+.sandbox-note { flex: 0 0 auto; display: flex; gap: 8px; align-items: center; padding: 7px 14px; background: var(--panel-2); border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+
+/* ---------- Desktop split view ---------- */
+.desk-fig { width: 100%; }
+.desk { width: 100%; max-width: 1240px; height: 720px; display: grid; grid-template-rows: auto 1fr; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--bg); box-shadow: 0 10px 30px -12px rgb(0 0 0 / 0.25); }
+.desk-top { display: flex; align-items: center; gap: 16px; height: 48px; padding: 0 16px; background: var(--bg); border-bottom: 1px solid var(--line); font-size: 13px; }
+.desk-top .brand { font-weight: 650; display: flex; align-items: center; gap: 8px; }
+.desk-top .crumb { color: var(--muted); }
+.desk-top .crumb b { color: var(--text); }
+.desk-top .keys { margin-left: auto; color: var(--muted); font-size: 12px; }
+kbd { display: inline-block; min-width: 20px; padding: 1px 5px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5px; background: var(--panel); font: 600 11px var(--mono); text-align: center; color: var(--text); }
+.desk-cols { display: grid; grid-template-columns: 280px 1fr 320px; min-height: 0; }
+.desk-cols > * { min-height: 0; overflow: auto; }
+.col-l { border-right: 1px solid var(--line); background: var(--panel); }
+.col-l .it { grid-template-columns: 1fr auto 20px; min-height: 36px; padding: 4px 14px; font-size: 13px; }
+.col-l .it.cur { background: var(--select); box-shadow: inset 2px 0 0 var(--accent); }
+.col-c { display: flex; flex-direction: column; }
+.col-c .item-top { display: flex; align-items: center; gap: 10px; padding: 12px 18px; border-bottom: 1px solid var(--line); background: var(--panel); }
+.col-c .item-top h3 { margin: 0; font-size: 16px; flex: 1 1 auto; }
+.col-c .item-top .num { color: var(--muted); font-size: 12px; }
+.col-c .body { flex: 1 1 auto; overflow: auto; padding: 16px 18px; }
+.col-c .answer { grid-template-columns: repeat(4, auto) 1fr; justify-content: start; padding: 8px 18px; }
+.col-c .answer button { grid-auto-flow: column; gap: 6px; padding: 7px 12px; font-size: 13px; }
+.col-c .answer button .icon { width: 18px; height: 18px; }
+.col-c .answer kbd { margin-left: 2px; }
+.col-r { border-left: 1px solid var(--line); background: var(--panel); }
+.col-r h4 { margin: 0; padding: 12px 14px 8px; font-size: 13px; display: flex; justify-content: space-between; }
+.col-r h4 span { color: var(--muted); font-weight: 450; }
+.rnote { padding: 10px 14px; border-top: 1px solid var(--line); font-size: 12.5px; display: grid; grid-template-columns: 22px 1fr; gap: 8px; }
+.rnote .pin { width: 22px; height: 22px; font-size: 11px; }
+.rnote small { display: block; color: var(--muted); font-size: 11.5px; margin-bottom: 2px; }
+.rnote.cur { background: var(--select); }
+.help-pop { position: absolute; right: 336px; bottom: 64px; width: 330px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); box-shadow: 0 14px 34px -10px rgb(0 0 0 / 0.35); font-size: 12.5px; }
+.help-pop h4 { margin: 0 0 8px; font-size: 13px; display: flex; justify-content: space-between; }
+.help-pop dl { display: grid; grid-template-columns: auto 1fr; gap: 5px 10px; margin: 0; }
+.help-pop dd { margin: 0; color: var(--muted); }
+.desk-wrap { position: relative; }
+.desk-narrow { display: none; padding: 12px 16px; color: var(--muted); font-size: 13px; border: 1px dashed var(--line); border-radius: 10px; margin: 0 16px; }
+@media (max-width: 1100px) { .desk-cols { grid-template-columns: 240px 1fr; } .col-r, .help-pop { display: none; } }
+@media (max-width: 900px) { .desk { display: none; } .desk-narrow { display: block; } }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="12" cy="19" r="1.2"/></symbol>
+  <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+  <symbol id="i-note" viewBox="0 0 24 24"><path d="M5 4.5h14v11H10l-5 4v-15Z"/><path d="M9 9h6M9 12h4"/></symbol>
+  <symbol id="i-live" viewBox="0 0 24 24"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v5H5V6h5"/></symbol>
+  <symbol id="i-dot" viewBox="0 0 24 24"><circle cx="12" cy="12" r="6"/></symbol>
+  <symbol id="i-img" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M4 17l5-5 4 4 3-3 4 4"/></symbol>
+  <symbol id="i-table" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="14" rx="1.5"/><path d="M3.5 10h17M3.5 14.5h17M10 5v14"/></symbol>
+  <symbol id="i-diff" viewBox="0 0 24 24"><path d="M8 4v10M3 9h10M12 18h9"/></symbol>
+  <symbol id="i-video" viewBox="0 0 24 24"><rect x="3.5" y="6" width="12" height="12" rx="2"/><path d="M15.5 10.5l5-3v9l-5-3"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24"><path d="M9 7h11M9 12h11M9 17h11"/><path d="M4 7l1 1 2-2M4 12l1 1 2-2M4 17l1 1 2-2"/></symbol>
+  <symbol id="i-doc" viewBox="0 0 24 24"><path d="M6 3.5h8l4 4v13H6z"/><path d="M14 3.5v4h4M9 12h6M9 15.5h6"/></symbol>
+  <symbol id="i-pinch" viewBox="0 0 24 24"><path d="M9 11V5.5a1.5 1.5 0 0 1 3 0V11m0-1.5a1.5 1.5 0 0 1 3 0V11m0-.5a1.5 1.5 0 0 1 3 0V15a6 6 0 0 1-6 6h-.5a6 6 0 0 1-5-2.7L4 15a1.5 1.5 0 0 1 2.5-1.7L9 16"/></symbol>
+  <symbol id="i-cloud" viewBox="0 0 24 24"><path d="M7 18h10a4 4 0 0 0 .5-8A6 6 0 0 0 6 11a3.5 3.5 0 0 0 1 7Z"/><path d="M4 4l16 16"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 5.7 0l3-3A4 4 0 0 0 13 5.3l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3A4 4 0 0 0 11 18.7l1-1"/></symbol>
+  <symbol id="i-star" viewBox="0 0 24 24"><path d="M12 4l2.4 5 5.4.7-4 3.8 1 5.4L12 16.3 7.2 19l1-5.4-4-3.8 5.4-.7z"/></symbol>
+</svg>
+
+<header class="board-head">
+  <h1>Review packs</h1>
+  <p>Mockup for docs/ideas/review-packs.md. Invented content only. Phone screens are 390 px wide. The desktop split view shows above 900 px.</p>
+  <div class="seg" role="group" aria-label="Theme">
+    <a href="?theme=auto" data-t="auto">Auto</a><a href="?theme=light" data-t="light">Light</a><a href="?theme=dark" data-t="dark">Dark</a>
+  </div>
+</header>
+
+<main class="board">
+
+<!-- 1. Pack list -->
+<figure id="f1">
+  <p class="screen-label">1 · Pack list <small>/reviews</small></p>
+  <div class="phone">
+    <div class="bar">
+      <button class="ibtn" aria-label="Menu"><svg class="icon"><use href="#i-menu"/></svg></button>
+      <h2>Reviews</h2>
+    </div>
+    <div class="tabs"><button aria-pressed="true">Open <span class="num">3</span></button><button aria-pressed="false">Done <span class="num">7</span></button></div>
+    <div class="scroll">
+      <a class="row unread" href="#">
+        <span class="av a3" aria-hidden="true">S</span>
+        <strong>Landing page redesign</strong><span class="meta">v1 · 08:12</span>
+        <span class="line2"><span class="prog" role="img" aria-label="0 of 18 answered"><i class="s-open" style="flex:18"></i></span><span class="num">0 / 18</span></span>
+      </a>
+      <a class="row" href="#">
+        <span class="av a1" aria-hidden="true">C</span>
+        <strong>Checkout flow redesign</strong><span class="meta">v2 · Yesterday</span>
+        <span class="line2"><span class="prog" role="img" aria-label="18 of 31 answered"><i class="s-ok" style="flex:14"></i><i class="s-info" style="flex:2"></i><i class="s-warn" style="flex:1"></i><i class="s-crit" style="flex:1"></i><i class="s-open" style="flex:13"></i></span><span class="num">18 / 31</span></span>
+      </a>
+      <a class="row" href="#">
+        <span class="av a2" aria-hidden="true">O</span>
+        <strong>Orders API reference</strong><span class="meta">v3 · Mon</span>
+        <span class="line2"><span class="prog" role="img" aria-label="9 of 12 answered"><i class="s-ok" style="flex:8"></i><i class="s-info" style="flex:1"></i><i class="s-open" style="flex:3"></i></span><span class="num">9 / 12</span></span>
+      </a>
+      <p class="group-h">Done this week</p>
+      <a class="row" href="#">
+        <span class="av a2" aria-hidden="true">O</span>
+        <strong>Orders API reference</strong><span class="meta">v2 · Sat</span>
+        <span class="line2"><span class="chip crit"><svg class="icon"><use href="#i-x"/></svg>Changes requested</span></span>
+      </a>
+      <a class="row" href="#">
+        <span class="av a1" aria-hidden="true">C</span>
+        <strong>Checkout flow redesign</strong><span class="meta">v1 · Fri</span>
+        <span class="line2"><span class="chip info"><svg class="icon"><use href="#i-note"/></svg>Commented</span></span>
+      </a>
+      <a class="row" href="#">
+        <span class="av a3" aria-hidden="true">S</span>
+        <strong>Pricing table copy</strong><span class="meta">v1 · Thu</span>
+        <span class="line2"><span class="chip ok"><svg class="icon"><use href="#i-check"/></svg>Approved</span></span>
+      </a>
+    </div>
+  </div>
+</figure>
+
+<!-- 2. Section list -->
+<figure id="f2">
+  <p class="screen-label">2 · Section list <small>/reviews/shop/checkout-redesign</small></p>
+  <div class="phone">
+    <div class="bar">
+      <button class="ibtn" aria-label="Back"><svg class="icon"><use href="#i-back"/></svg></button>
+      <h2>Checkout flow redesign<small>v2 · 4 sections · 5 changed</small></h2>
+      <button class="ibtn" aria-label="More"><svg class="icon"><use href="#i-more"/></svg></button>
+    </div>
+    <div class="scroll">
+      <div class="pack-head">
+        <div class="top"><span><b>18</b> of 31 answered · <b>21</b> viewed</span><span>3 need you</span></div>
+        <div class="prog" role="img" aria-label="14 accepted, 2 note only, 1 needs live check, 1 denied, 13 open"><i class="s-ok" style="flex:14" title="Accepted 14"></i><i class="s-info" style="flex:2" title="Note only 2"></i><i class="s-warn" style="flex:1" title="Needs live check 1"></i><i class="s-crit" style="flex:1" title="Denied 1"></i><i class="s-open" style="flex:13" title="Open 13"></i></div>
+        <div class="legend"><span><i class="s-ok"></i>Accepted <b>14</b></span><span><i class="s-info"></i>Note <b>2</b></span><span><i class="s-warn"></i>Live check <b>1</b></span><span><i class="s-crit"></i>Denied <b>1</b></span><span><i class="s-open"></i>Open <b>13</b></span></div>
+      </div>
+      <section class="sec">
+        <div class="sec-h"><h3>Cart</h3><span class="chip crit"><svg class="icon"><use href="#i-x"/></svg>Denied</span><span class="num">6 / 6</span></div>
+        <div class="it done"><span class="thumb"><svg class="icon"><use href="#i-img"/></svg></span><span class="t">Empty cart</span><span class="chip ok"><svg class="icon"><use href="#i-check"/></svg>Accepted</span><span class="viewed on"><svg class="icon"><use href="#i-check"/></svg></span></div>
+        <div class="it"><span class="thumb" style="background:linear-gradient(90deg,#fbfaf7 50%,#16181d 50%)"></span><span class="t">Cart, light and dark<small>Image pair · 1 note</small></span><span class="chip crit"><svg class="icon"><use href="#i-x"/></svg>Denied</span><span class="viewed on"><svg class="icon"><use href="#i-check"/></svg></span></div>
+        <div class="it"><span class="thumb"><svg class="icon"><use href="#i-img"/></svg></span><span class="t">Pay button position<small>Before or after</small></span><span class="chip ok"><svg class="icon"><use href="#i-check"/></svg>After</span><span class="viewed on"><svg class="icon"><use href="#i-check"/></svg></span></div>
+        <div class="it"><span class="thumb"><svg class="icon"><use href="#i-video"/></svg></span><span class="t">Full checkout, 40 s<small>Video · live check</small></span><span class="chip warn"><svg class="icon"><use href="#i-live"/></svg>Live check</span><span class="viewed on"><svg class="icon"><use href="#i-check"/></svg></span></div>
+      </section>
+      <section class="sec">
+        <div class="sec-h"><h3>Error handling</h3><span class="chip open">Open</span><span class="num">1 / 5</span></div>
+        <div class="it"><span class="thumb"><svg class="icon"><use href="#i-table"/></svg></span><span class="t">Error messages<small>Table · 14 rows</small></span><span class="chip changed">Changed</span><span class="viewed"></span></div>
+        <div class="it"><span class="thumb"><svg class="icon"><use href="#i-diff"/></svg></span><span class="t">Card validation change<small>Diff · +24 −9</small></span><span class="chip open">Open</span><span class="viewed"></span></div>
+        <div class="it"><span class="thumb"><svg class="icon"><use href="#i-list"/></svg></span><span class="t">Accessibility checks<small>Checklist · 2 of 6 ticked</small></span><span class="chip open">Open</span><span class="viewed"></span></div>
+      </section>
+      <section class="sec">
+        <div class="sec-h"><h3>Receipt email</h3><span class="chip open">Open</span><span class="num">0 / 4</span></div>
+      </section>
+    </div>
+    <div class="sticky-foot"><span class="muted">13 open items</span><a class="btn primary grow" href="#">Review summary</a></div>
+  </div>
+</figure>
+
+<!-- 3. Item viewer: image pair with pinch zoom hint -->
+<figure id="f3">
+  <p class="screen-label">3 · Item viewer, pair and zoom <small>Landing page redesign</small></p>
+  <div class="phone">
+    <div class="bar">
+      <button class="ibtn" aria-label="Back to sections"><svg class="icon"><use href="#i-back"/></svg></button>
+      <h2><span class="num">1 / 18</span> · Hero<small>Hero, light and dark</small></h2>
+      <button class="ibtn" aria-label="Viewed" aria-pressed="true"><span class="viewed on"><svg class="icon"><use href="#i-check"/></svg></span></button>
+    </div>
+    <div class="viewer">
+      <div class="pairbar"><div class="seg" role="group" aria-label="Pair"><button aria-pressed="false">Light</button><button aria-pressed="true">Dark</button></div></div>
+      <span class="zoomchip">1.8×</span>
+      <div class="stage">
+        <div class="shot lp-dark" style="transform:scale(1.08);transform-origin:40% 20%">
+          <div class="lp-nav"><span>Northwind</span><span><i></i><i></i><i></i></span></div>
+          <div class="lp-hero"><div class="h">Plan your week in one calm view</div><div class="p">Shared lists, quiet reminders, and a timeline that fits on a phone.</div><span class="lp-cta">Start free</span></div>
+          <div class="lp-img"></div>
+          <div class="focus-ring" style="left:12px;top:62px;width:250px;height:74px"></div>
+          <span class="pin" style="left:252px;top:50px">1</span>
+        </div>
+      </div>
+      <div class="hint"><svg class="icon"><use href="#i-pinch"/></svg>Pinch to zoom · double tap for 2×</div>
+    </div>
+    <div class="item-body">
+      <p>The hero on a 390 px screen. Swipe for the next item.</p>
+      <div class="note"><span class="pin">1</span><span>Headline gray is too faint in dark.</span><span class="saved"><svg class="icon icon-sm"><use href="#i-check"/></svg>Saved</span></div>
+    </div>
+    <div class="answer">
+      <button class="on-crit"><svg class="icon"><use href="#i-x"/></svg>Deny</button>
+      <button class="on-info"><svg class="icon"><use href="#i-note"/></svg>Note 1</button>
+      <button><svg class="icon"><use href="#i-live"/></svg>Live</button>
+      <button><svg class="icon"><use href="#i-check"/></svg>Accept</button>
+    </div>
+  </div>
+</figure>
+
+<!-- 4. Item viewer: diff with a line note and a choice, offline -->
+<figure id="f4">
+  <p class="screen-label">4 · Item viewer, text and choice <small>Orders API reference</small></p>
+  <div class="phone">
+    <div class="bar">
+      <button class="ibtn" aria-label="Back to sections"><svg class="icon"><use href="#i-back"/></svg></button>
+      <h2><span class="num">7 / 12</span> · Errors<small>Pagination error shape</small></h2>
+      <button class="ibtn" aria-label="Viewed" aria-pressed="false"><span class="viewed"></span></button>
+    </div>
+    <div class="banner"><svg class="icon icon-sm"><use href="#i-doc"/></svg>Version 4 is ready. 2 items changed.<a href="#">Switch</a></div>
+    <span class="pill" style="top:auto;bottom:78px"><svg class="icon icon-sm"><use href="#i-cloud"/></svg>2 changes waiting</span>
+    <div class="scroll doc">
+      <h3 style="margin:0 0 6px;font-size:15px">Option A or option B</h3>
+      <p>Two shapes for the error of a bad page cursor. The rest of the reference uses shape A.</p>
+      <div class="code" role="table" aria-label="Diff">
+        <div class="hunk"><span class="ln"></span><span></span>@@ errors.md: 41 @@</div>
+        <div><span class="ln">41</span><span> </span>### Bad cursor</div>
+        <div class="del"><span class="ln">42</span><span>−</span>HTTP 400 {"error": "bad cursor"}</div>
+        <div class="add hl"><span class="ln">42</span><span>+</span>HTTP 400 {"code": "cursor_invalid",</div>
+        <div class="add"><span class="ln">43</span><span>+</span>  "message": "The cursor expired."}</div>
+        <div><span class="ln">44</span><span> </span></div>
+        <div><span class="ln">45</span><span> </span>A cursor lives for 10 minutes.</div>
+      </div>
+      <div class="inline-note"><span class="pin">1</span><textarea aria-label="Note on line 42">Use "code" everywhere, also in the 404 examples.</textarea><span class="saved" style="color:var(--warn)">Not saved: retrying</span></div>
+      <table class="t" style="margin-top:12px">
+        <thead><tr><th>Field</th><th>A</th><th>B</th></tr></thead>
+        <tbody><tr><td><code>error</code></td><td>text</td><td>–</td></tr><tr class="hl"><td><code>code</code></td><td>–</td><td>slug</td></tr><tr><td><code>message</code></td><td>–</td><td>text</td></tr></tbody>
+      </table>
+    </div>
+    <div class="answer choice">
+      <button>A · keep</button>
+      <button class="picked">B · new shape</button>
+      <button><svg class="icon"><use href="#i-note"/></svg>Note</button>
+    </div>
+  </div>
+</figure>
+
+<!-- 5. Decision summary -->
+<figure id="f5">
+  <p class="screen-label">5 · Decision summary <small>Landing page redesign</small></p>
+  <div class="phone">
+    <div class="bar">
+      <button class="ibtn" aria-label="Back"><svg class="icon"><use href="#i-back"/></svg></button>
+      <h2>Summary<small>Landing page redesign · v1</small></h2>
+    </div>
+    <div class="scroll">
+      <div class="pack-head">
+        <div class="stat-line"><span><b>17</b> of 18 answered</span><span>1 open</span></div>
+        <div class="prog" style="height:14px" role="img" aria-label="15 accepted, 1 note only, 0 needs live check, 1 denied, 1 open"><i class="s-ok" style="flex:15" title="Accepted 15"></i><i class="s-info" style="flex:1" title="Note only 1"></i><i class="s-crit" style="flex:1" title="Denied 1"></i><i class="s-open" style="flex:1" title="Open 1"></i></div>
+        <div class="legend"><span><i class="s-ok"></i>Accepted <b>15</b></span><span><i class="s-info"></i>Note <b>1</b></span><span><i class="s-warn"></i>Live check <b>0</b></span><span><i class="s-crit"></i>Denied <b>1</b></span><span><i class="s-open"></i>Open <b>1</b></span></div>
+      </div>
+      <div class="sumsec"><h3><span class="chip open">Open</span><span class="num">1</span></h3><ul><li><a class="go" href="#">Review now</a>Footer links<small>Footer · not viewed</small></li></ul></div>
+      <div class="sumsec"><h3><span class="chip crit"><svg class="icon"><use href="#i-x"/></svg>Denied</span><span class="num">1</span></h3><ul><li>Hero, light and dark<small>1 · Headline gray is too faint in dark.</small></li></ul></div>
+      <div class="sumsec"><h3><span class="chip info"><svg class="icon"><use href="#i-note"/></svg>Note only</span><span class="num">1</span></h3><ul><li>Feature grid<small>Swap the second and third card.</small></li></ul></div>
+      <div class="sumsec"><h3><span class="chip ok"><svg class="icon"><use href="#i-check"/></svg>Accepted</span><span class="num">15</span></h3><ul><li>Pricing table<small>Chose B · Keep the yearly price first.</small></li><li><small>Hero on a wide screen, Hero CTA, Sign-up form (live checked), and 11 more</small></li></ul></div>
+      <p class="group-h">Pack note</p>
+      <div class="packnote"><span class="saved"><svg class="icon icon-sm"><use href="#i-check"/></svg>Saved</span>Fix the dark hero, then ship.</div>
+      <p class="group-h">Verdict</p>
+      <div class="verdict" role="radiogroup" aria-label="Verdict">
+        <label><span class="radio"></span>Approve</label>
+        <label class="sel"><span class="radio"></span>Request changes<small>Proposed: 1 denied</small></label>
+        <label><span class="radio"></span>Comment</label>
+      </div>
+    </div>
+    <div class="sticky-foot"><a class="btn" href="#">Back</a><a class="btn primary grow" href="#">Submit review</a></div>
+  </div>
+</figure>
+
+<!-- 6. Imported HTML page in the sandbox -->
+<figure id="f6">
+  <p class="screen-label">6 · Imported HTML page <small>sandboxed frame, placing a note</small></p>
+  <div class="phone">
+    <div class="bar">
+      <button class="ibtn" aria-label="Back to sections"><svg class="icon"><use href="#i-back"/></svg></button>
+      <h2><span class="num">3 / 22</span> · report-03.html<small>Imported page</small></h2>
+      <button class="ibtn" aria-label="Page outline"><svg class="icon"><use href="#i-list"/></svg></button>
+    </div>
+    <div class="sandbox-note"><svg class="icon icon-sm"><use href="#i-shield"/></svg>Sandboxed page. No network. 2 external images blocked.</div>
+    <div class="frame-wrap">
+      <div class="legacy">
+        <h1>Search results page</h1>
+        <p>Three layouts for the result list, with the filter panel open.</p>
+        <div class="lg-img"></div>
+        <div class="lg-row"><div></div><div></div><div></div></div>
+        <p style="margin-top:10px">Layout B keeps the filters in a sheet on small screens.</p>
+      </div>
+      <span class="pin" style="left:62%;top:34%">1</span>
+      <div class="placing"><span>Tap the page to place note 2</span></div>
+    </div>
+    <div class="answer">
+      <button><svg class="icon"><use href="#i-x"/></svg>Deny</button>
+      <button class="on-info"><svg class="icon"><use href="#i-note"/></svg>Note</button>
+      <button><svg class="icon"><use href="#i-live"/></svg>Live</button>
+      <button><svg class="icon"><use href="#i-check"/></svg>Accept</button>
+    </div>
+  </div>
+</figure>
+
+<!-- 7. Mailbox item -->
+<figure id="f7">
+  <p class="screen-label">7 · Mailbox item <small>/mailbox, Needs you</small></p>
+  <div class="phone">
+    <div class="bar">
+      <button class="ibtn" aria-label="Back"><svg class="icon"><use href="#i-back"/></svg></button>
+      <h2>Review: Landing page redesign (v1)<small>site · Decide</small></h2>
+    </div>
+    <div class="scroll doc" style="background:var(--bg)">
+      <div style="background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px">
+        <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px"><span class="av a3" style="grid-row:auto;width:32px;height:32px;font-size:12px">S</span><strong>site</strong><span style="margin-left:auto;color:var(--muted);font-size:12px">08:12</span></div>
+        <p style="color:var(--text)">18 items in 3 sections: Hero, Pricing, and Footer. Light and dark pairs for each screen. One item needs a live check of the sign-up form.</p>
+        <div class="prog" role="img" aria-label="0 of 18 answered"><i class="s-open" style="flex:1"></i></div>
+        <div class="legend"><span>Open <b>18</b></span></div>
+        <a class="btn primary" style="margin-top:14px;width:100%" href="#">Open review</a>
+      </div>
+      <p style="margin-top:14px;font-size:12.5px">The review replaces the answer form. Submit closes this item and sends the result to the orchestrator.</p>
+    </div>
+  </div>
+</figure>
+
+<!-- 8. Desktop split view -->
+<figure id="f8" class="desk-fig">
+  <p class="screen-label">8 · Desktop split view <small>Orders API reference · 1240 px · shortcut help open</small></p>
+  <div class="desk-wrap">
+  <div class="desk">
+    <div class="desk-top"><span class="brand">Herdr Boss</span><span class="crumb">Reviews / <b>Orders API reference</b> · v3</span>
+      <span style="flex:0 0 220px"><span class="prog" role="img" aria-label="9 of 12 answered"><i class="s-ok" style="flex:8"></i><i class="s-info" style="flex:1"></i><i class="s-open" style="flex:3"></i></span></span><span class="num" style="font-size:12px;color:var(--muted)">9 / 12</span>
+      <span class="keys"><kbd>?</kbd> shortcuts</span></div>
+    <div class="desk-cols">
+      <nav class="col-l" aria-label="Sections">
+        <div class="sec-h"><h3>Overview</h3><span class="chip ok"><svg class="icon"><use href="#i-check"/></svg>Accepted</span></div>
+        <div class="it done"><span class="t">Introduction</span><span class="chip ok"><svg class="icon"><use href="#i-check"/></svg></span><span class="viewed on"><svg class="icon"><use href="#i-check"/></svg></span></div>
+        <div class="it done"><span class="t">Authentication</span><span class="chip ok"><svg class="icon"><use href="#i-check"/></svg></span><span class="viewed on"><svg class="icon"><use href="#i-check"/></svg></span></div>
+        <div class="sec-h"><h3>Endpoints</h3><span class="chip open">Open</span></div>
+        <div class="it done"><span class="t">GET /orders</span><span class="chip ok"><svg class="icon"><use href="#i-check"/></svg></span><span class="viewed on"><svg class="icon"><use href="#i-check"/></svg></span></div>
+        <div class="it cur"><span class="t">Order fields</span><span class="chip info"><svg class="icon"><use href="#i-note"/></svg></span><span class="viewed on"><svg class="icon"><use href="#i-check"/></svg></span></div>
+        <div class="it"><span class="t">POST /orders</span><span class="chip changed">Changed</span><span class="viewed"></span></div>
+        <div class="it"><span class="t">Webhooks</span><span class="chip open">Open</span><span class="viewed"></span></div>
+        <div class="sec-h"><h3>Errors</h3><span class="chip open">Open</span></div>
+        <div class="it"><span class="t">Pagination error shape</span><span class="chip open">A / B</span><span class="viewed"></span></div>
+        <div class="it"><span class="t">Rate limits</span><span class="chip warn"><svg class="icon"><use href="#i-live"/></svg></span><span class="viewed on"><svg class="icon"><use href="#i-check"/></svg></span></div>
+      </nav>
+      <section class="col-c">
+        <div class="item-top"><h3>Order fields</h3><span class="num">5 / 12 · Endpoints</span><span class="chip info"><svg class="icon"><use href="#i-note"/></svg>Note</span></div>
+        <div class="body">
+          <p style="margin:0 0 12px;color:var(--muted)">The fields of one order object. Select a row to attach a note.</p>
+          <table class="t">
+            <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+            <tbody>
+              <tr><td><code>id</code></td><td>string</td><td>The order ID, for example <code>ord_4821</code>.</td></tr>
+              <tr><td><code>status</code></td><td>enum</td><td><code>open</code>, <code>paid</code>, <code>shipped</code>, or <code>cancelled</code>.</td></tr>
+              <tr class="hl"><td><code>total</code></td><td>number</td><td>The order total in the smallest currency unit.</td></tr>
+              <tr><td><code>currency</code></td><td>string</td><td>An ISO 4217 code.</td></tr>
+              <tr><td><code>items</code></td><td>array</td><td>The order lines. See <a href="#">Order line</a>.</td></tr>
+              <tr><td><code>created_at</code></td><td>string</td><td>An RFC 3339 time.</td></tr>
+            </tbody>
+          </table>
+          <div class="inline-note"><span class="pin">2</span><textarea aria-label="Note on the total row">Say "minor units" and give one example, such as 1999 for 19.99.</textarea><span class="saved"><svg class="icon icon-sm"><use href="#i-check"/></svg>Saved</span></div>
+        </div>
+        <div class="answer">
+          <button><svg class="icon"><use href="#i-x"/></svg>Deny <kbd>d</kbd></button>
+          <button class="on-info"><svg class="icon"><use href="#i-note"/></svg>Note <kbd>n</kbd></button>
+          <button><svg class="icon"><use href="#i-live"/></svg>Live <kbd>l</kbd></button>
+          <button><svg class="icon"><use href="#i-check"/></svg>Accept <kbd>a</kbd></button>
+        </div>
+      </section>
+      <aside class="col-r" aria-label="Notes">
+        <h4>Notes <span>3</span></h4>
+        <div class="rnote"><span class="pin">1</span><div><small>Authentication</small>Show the token header in each example.</div></div>
+        <div class="rnote cur"><span class="pin">2</span><div><small>Order fields · row total</small>Say "minor units" and give one example, such as 1999 for 19.99.</div></div>
+        <div class="rnote"><span class="pin" style="background:var(--warn);color:var(--on-accent)">3</span><div><small>Rate limits · live check</small>Try 20 calls in a second on the sandbox API.</div></div>
+        <h4 style="margin-top:8px">Pack note</h4>
+        <div class="rnote" style="grid-template-columns:1fr"><div style="color:var(--muted)">Write a note for the whole pack…</div></div>
+      </aside>
+    </div>
+  </div>
+  <div class="help-pop" role="dialog" aria-label="Shortcuts">
+    <h4>Shortcuts <kbd>Esc</kbd></h4>
+    <dl>
+      <dt><kbd>j</kbd> <kbd>k</kbd></dt><dd>Next or previous item</dd>
+      <dt><kbd>J</kbd> <kbd>K</kbd></dt><dd>Next or previous section</dd>
+      <dt><kbd>a</kbd> <kbd>d</kbd> <kbd>l</kbd></dt><dd>Accept, Deny, Needs live check</dd>
+      <dt><kbd>n</kbd></dt><dd>Note</dd>
+      <dt><kbd>1</kbd>–<kbd>6</kbd></dt><dd>Choice or rating</dd>
+      <dt><kbd>e</kbd> <kbd>v</kbd></dt><dd>Viewed and next; toggle Viewed</dd>
+      <dt><kbd>t</kbd> <kbd>z</kbd></dt><dd>Toggle pair; fit or 100 %</dd>
+      <dt><kbd>s</kbd> <kbd>u</kbd></dt><dd>Summary; back to sections</dd>
+    </dl>
+  </div>
+  </div>
+  <p class="desk-narrow">The desktop split view shows at 900 px and wider. Open this file on a wide window.</p>
+</figure>
+
+</main>
+<script>
+// Theme from the query: ?theme=light|dark. Auto follows the system.
+const theme = new URLSearchParams(location.search).get('theme');
+if (theme === 'light' || theme === 'dark') document.documentElement.dataset.theme = theme;
+for (const link of document.querySelectorAll('[data-t]')) if (link.dataset.t === (theme === 'light' || theme === 'dark' ? theme : 'auto')) link.setAttribute('aria-current', 'true');
+</script>
+</body>
+</html>
