@@ -7,6 +7,7 @@ export const PROJECT_NEW_USAGE = 'Usage: project new <slug> [--group DIR | --pat
 export const PROJECT_CHECK_USAGE = 'Usage: project check <slug>';
 export const PROJECT_USAGE = `${PROJECT_NEW_USAGE}\n${PROJECT_CHECK_USAGE}`;
 export const EXIT_NOT_BUILT = 2;
+export const EXIT_WAITING = 3;
 
 const VALUE_FLAGS = ['--group', '--path', '--remote', '--visibility', '--org', '--kind', '--goal'];
 const BOOLEAN_FLAGS = ['--start', '--dry-run', '--resume'];
@@ -93,6 +94,10 @@ export function projectCommand(args, { env = process.env, herdr, dataDir, log = 
   log(`${result.dryRun ? 'Dry run' : 'Project'} ${result.slug}`);
   for (const step of result.steps) log(stepLine(step));
   log(`Path: ${result.path}`);
+  if (result.waiting) {
+    log('Waiting for an Owner decision. Answer the Mailbox item, then run the same command with --resume.');
+    return EXIT_WAITING;
+  }
   if (!result.ok) {
     log(`Error: ${result.error}`);
     log('Next: fix the error, then run the same command with --resume.');

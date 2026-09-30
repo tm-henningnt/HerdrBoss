@@ -15,9 +15,10 @@ import { loadPolicy, savePolicy } from './control.js';
 import { loadModels } from './kit/config.js';
 import { kitRevision } from './kit/agents-check.js';
 import { describeWorkspace, workspaceStep } from './project-new-workspace.js';
+import { ORG_NAME, RemoteError, describeRemote, remoteStep, validateRemoteUrl } from './project-new-remote.js';
 
 export const PROJECT_NEW_STEPS = ['validate', 'folder', 'files', 'kit', 'commit', 'remote', 'policy', 'register', 'status', 'workspace', 'harness', 'check'];
-const NOT_BUILT = new Set(['remote', 'harness', 'check']);
+const NOT_BUILT = new Set(['harness', 'check']);
 export const NEW_PROJECT_SHARE = 10;
 const TEMPLATES = path.join(KIT_ROOT, 'kit', 'templates');
 const GITIGNORE = 'node_modules/\n.DS_Store\n.orchestration/\n.worker/\n';
@@ -183,6 +184,7 @@ const DESCRIBE = {
   policy: (i) => `add ${i.slug} to the policy with share ${NEW_PROJECT_SHARE} and scale the other shares down so the total stays at most 100`,
   register: (i) => `record ${i.slug} and ${i.path} in project-repos.json`,
   status: (i) => `publish the first status of ${i.slug} with the task "${FIRST_TASK}"`,
+  remote: describeRemote,
   workspace: describeWorkspace,
   files: (i) => `write ${projectFiles(i).map(([f]) => f).join(', ')} in ${i.path}; keep each file that exists`,
 };
@@ -234,6 +236,7 @@ const RUN = {
     git(['commit', '-q', '-m', COMMIT_MESSAGE]);
     return `committed ${git(['rev-parse', '--short', 'HEAD'])}`;
   },
+  remote: remoteStep,
   policy(inputs, context) { return applyProjectPolicy(inputs.slug, context.dataDir); },
   register(inputs, context) {
     const git = (args) => execFileSync('git', args, { cwd: inputs.path, stdio: ['ignore', 'pipe', 'ignore'] }).toString('utf8').trim();
@@ -268,10 +271,14 @@ const RUN = {
 
 // Run the flow. Input errors throw ProjectNewError before any change.
 // A step failure is recorded in the state file and returned as { ok: false, error }.
-// options: slug, group | path, name, goal, dryRun, resume, dataDir, repoRoot (the Herdr Boss repository, default: this one), ceiling, allowUnscanned (paths of large or binary files that the commit scan skips, default none), stepRunners (tests replace step functions).
+// options: slug, group | path, name, goal, remote (gh, none, or a Git URL; default none), visibility (private or public), org, dryRun, resume, dataDir, repoRoot (the Herdr Boss repository, default: this one), ceiling, allowUnscanned (paths of large or binary files that the commit scan skips, default none), stepRunners (tests replace step functions).
 export function runProjectNew(options = {}) {
   const dataDir = path.resolve(options.dataDir || DATA_DIR);
   const inputs = resolveInputs(options);
+  if (options.org !== undefined && !ORG_NAME.test(String(options.org))) refuse('The organization must be an organization or user name: letters, digits, and hyphens, and it must not start with a hyphen.');
+  if (options.remote && options.remote !== 'gh' && options.remote !== 'none') {
+    try { validateRemoteUrl(options.remote); } catch (error) { if (error instanceof RemoteError) refuse(error.message); throw error; }
+  }
   const stateFile = stateFilePath(dataDir, inputs.slug);
   const saved = readState(stateFile);
   if (options.resume && !saved) refuse(`There is no state for ${inputs.slug}. Nothing to resume.`);
@@ -280,7 +287,7 @@ export function runProjectNew(options = {}) {
   state.ids ||= {};
   // ceiling (tests): the nested-repository walk stops at this folder.
   const context = { dataDir, repoRoot: path.resolve(options.repoRoot || KIT_ROOT), group: options.group ? path.resolve(options.group) : null, ceiling: options.ceiling, allowUnscanned: options.allowUnscanned || [],
-    start: Boolean(options.start), kind: options.kind, herdr: options.herdr, hooks: options.hooks, env: options.env, ids: state.ids,
+    remote: options.remote ?? 'none', visibility: options.visibility ?? 'private', org: options.org, start: Boolean(options.start), kind: options.kind, herdr: options.herdr, hooks: options.hooks, env: options.env, ids: state.ids,
     remember(patch) { Object.assign(state.ids, patch); state.updatedAt = new Date().toISOString(); writeState(stateFile, state); } };
   const runners = { ...RUN, ...(options.stepRunners || {}) };
   // A step that was skipped for a missing --start runs when a later run gives --start.
@@ -308,6 +315,11 @@ export function runProjectNew(options = {}) {
       // A skip for a missing --start changes nothing, so a repeated run writes no state.
       if (!(reason === 'no-start' && state.steps[name]?.reason === 'no-start')) { state.steps[name] = { status, at: new Date().toISOString(), detail, ...(reason ? { reason } : {}) }; ran = true; }
       result.steps.push({ name, status, detail });
+      if (status === 'waiting') {
+        result.waiting = true;
+        for (const rest of PROJECT_NEW_STEPS.slice(PROJECT_NEW_STEPS.indexOf(name) + 1)) result.steps.push({ name: rest, status: 'pending', detail: 'waits for the Owner decision' });
+        break;
+      }
     } catch (error) {
       ran = true;
       state.steps[name] = { status: 'failed', at: new Date().toISOString(), detail: error.message };

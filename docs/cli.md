@@ -91,18 +91,18 @@ herdr-boss project check <slug>
 |---|---|
 | `--group DIR` | The group folder. The project folder is `DIR/<slug>`. |
 | `--path DIR` | The project folder. Give `--group` or `--path`. There is no default folder. |
-| `--remote` | `none` (default), `gh`, or a Git URL. A URL must not hold a user name or a password. |
-| `--visibility` | `private` (default) or `public`. `public` needs a remote that is not `none`. |
-| `--org NAME` | The organization for `--remote gh`. |
+| `--remote` | `none` (default), `gh`, or a Git URL. `gh` creates a GitHub repository after an Owner decision. A URL is https, ssh, or git, or `user@host:path`. A URL must not hold a user name or a password. |
+| `--visibility` | `private` (default) or `public`. `public` needs a remote that is not `none`. With `--remote gh`, `public` only offers the choice `Create public` to the Owner. |
+| `--org NAME` | The organization for `--remote gh`. Without it, the repository belongs to the `gh` login. |
 | `--kind` | The harness of the first orchestrator: `claude` or `codex`. It overrides the first usable entry of `orchestratorLadder`. The model comes from the policy for that kind. |
 | `--goal TEXT` | One line for the README and the first status. |
 | `--start` | Create the Herdr workspace and start the first orchestrator. The orchestrator uses model quota. Off by default. |
 | `--dry-run` | Print each step as `would ...`. Change nothing. |
 | `--resume` | Continue a saved run. |
 
-Only the steps of `runProjectNew` that are built run. The steps `remote`, `harness`, and `check` print `not built yet`. The values of `--remote`, `--visibility`, and `--org` reach `runProjectNew` as options. They change nothing until those steps are built. The values of `--kind` and `--start` control the step `workspace`.
+Only the steps of `runProjectNew` that are built run. The steps `harness` and `check` print `not built yet`. The values of `--remote`, `--visibility`, and `--org` control the step `remote`. The values of `--kind` and `--start` control the step `workspace`.
 
-A step prints one state: `done`, `skipped`, `failed`, `pending`, `not built yet`, or, in a dry run, `would ...`.
+A step prints one state: `done`, `skipped`, `waiting`, `failed`, `pending`, `not built yet`, or, in a dry run, `would ...`.
 
 `project check <slug>` is not built yet. It prints `project check is not built yet` and exits with code 2.
 
@@ -111,7 +111,7 @@ A step prints one state: `done`, `skipped`, `failed`, `pending`, `not built yet`
 | 0 | Done. |
 | 1 | Usage error or refusal. This includes an unknown flag and a failed step. |
 | 2 | Not built. |
-| 3 | Waiting for an Owner decision. Reserved. |
+| 3 | Waiting for an Owner decision. The step `remote` posted a decide item. |
 
 Run `project new` in a plain terminal, in the pane labeled `boss`, or in a pane labeled `orch`. A worker pane is refused before any step runs. The pane check is the check of `herdr-boss say`.
 
@@ -119,7 +119,7 @@ Run `project new` in a plain terminal, in the pane labeled `boss`, or in a pane 
 
 The module `src/project-new.js` exports `runProjectNew(options)`. The command calls it.
 
-`runProjectNew` runs these steps in order: `validate`, `folder`, `files`, `kit`, `commit`, `policy`, `register`, `status`, `workspace`. The steps `remote`, `harness`, and `check` report `not built yet`. They change nothing.
+`runProjectNew` runs these steps in order: `validate`, `folder`, `files`, `kit`, `commit`, `remote`, `policy`, `register`, `status`, `workspace`. The steps `harness` and `check` report `not built yet`. They change nothing. A step that returns `waiting` stops the run. The result has `waiting: true`, and the later steps are `pending`.
 
 | Option | Meaning |
 |---|---|
@@ -128,6 +128,9 @@ The module `src/project-new.js` exports `runProjectNew(options)`. The command ca
 | `path` | The project folder. Use `group` or `path`, never both. There is no default. |
 | `name` | The project name. The default is the slug. |
 | `goal` | One line for the README. |
+| `remote` | `none` (default), `gh`, or a Git URL. `runProjectNew` refuses a URL that is not valid or that holds credentials, before any change. |
+| `visibility` | `private` (default) or `public`. |
+| `org` | The organization for `gh`. It must match `[A-Za-z0-9][A-Za-z0-9-]{0,38}`. `runProjectNew` refuses another value before any change. |
 | `start` | Run the step `workspace`. Without it, the step prints `skipped: no --start` and creates nothing. |
 | `kind` | `claude` or `codex`. Overrides the orchestrator ladder. |
 | `herdr` | The Herdr runner that the step `workspace` uses. The default is `createHerdrRunner()`. Tests pass a fake. |
@@ -152,6 +155,17 @@ The `commit` step stages all files of the project and scans the staged files for
 
 The scan refuses the commit for these classes: a private key block, a GitHub token, an AWS access key, a Slack token, a `password`, `secret`, `token`, or `api_key` assignment with a literal value of 16 or more characters, and a `.env` file. A file that ends in `.example`, `.sample`, `.template`, or `.dist` is not a `.env` file. The scan reads at most the first 200 KB of each line. A file over 2 MB, or a file with a NUL byte, cannot be scanned. The scan refuses it with the class `unscanned large or binary file`, unless its path is in the option `allowUnscanned`. The list is empty by default. The refusal names each file and class and never prints a value. The step then unstages all files and leaves the files unchanged. Remove the secret, then run the flow again with `resume`.
 
+The `remote` step (`src/project-new-remote.js`) sets the Git remote `origin`. Creating a repository is an Owner decision. The step never pushes.
+
+1. With `--remote none`, the step prints `skipped: --remote none`.
+2. With `--remote URL`, the step refuses a URL with credentials, runs `git remote add origin URL`, and checks it with `git ls-remote origin`. When the check fails, the step removes `origin` again and fails. It creates nothing.
+3. With `--remote gh`, the step posts a decide item to the Mailbox as `boss`, in the `boss` thread, and exits with code 3. It calls `gh` only after the answer. The item names the repository (`<org>/<slug>`, or `<gh login>/<slug>` without `--org`), the visibility, and the choices `Create private`, `Create public` (only with `--visibility public`), and `Do not create`. The repository name is the slug.
+4. Run `project new ... --resume` after the Owner answers. The step reads only the newest Owner reply to the item. A reply that does not clearly pick a choice keeps the flow waiting, and the step does not use an older reply. A negation (`not`, `isn't`, `no`, `never`, `without`, `don't`) or a hedge (`wait`, `maybe`, `not sure`) in a reply that is not a plain decline keeps the flow waiting. `yes` picks `Create private`, unless the item offered `Create public`. `Create public` needs the word `public` in the answer. `Do not create` sets the step to `skipped: Owner declined`, and the flow continues without a remote.
+5. After a clear answer, the step runs `gh auth status`. When `gh` has no login, the step does not log in. It posts an `answer` item that tells the Owner to run `gh auth login`, and it fails. Run the flow again with `--resume` after the login.
+6. With a login, the step runs `gh repo create <owner>/<slug> --private|--public --source <folder> --remote origin`, with no `--push`. Then it runs `git ls-remote origin`. A name that is already in use fails the step with the message of `gh`. The step does not retry.
+
+The step never runs `gh auth token`. It never reads, prints, or stores a token. It removes tokens and URL credentials from each line of `gh` and `git` output before it prints or records the line. The state file holds the Mailbox item ID and the created repository name in `ids`, in the fields `remoteAsk`, `remoteLoginItem`, and `remoteCreated`. A rerun asks no second question and creates no second repository. When `origin` exists and matches, the step changes nothing. When `origin` points to another repository, the step fails.
+
 The `policy` step adds the project to `policy.json` in the data folder. The new project gets `share` 10, `mode` `auto`, and no exclusions. When the total of all shares would pass 100, the step scales the other shares down: each new share is the old share times (100 minus 10) divided by the old total, rounded down. The step changes only shares. It keeps each mode and each exclusion. It refuses to run when a share is not a whole number of 0 or more. It refuses a change that would lower a share of 1 or more to below 1, and it writes nothing then. It saves the policy through the validation of `herdr-boss policy set`. The step prints the shares of all projects before and after the change. When the policy already has an entry for the slug, the step changes nothing.
 
 The `register` step records `{ slug, repo, remote }` for the project in `project-repos.json` in the data folder, with mode 0600. It records the same values as the first `publish`. It does not publish a status. When the slug is already registered to the same folder, the step changes nothing. When it is registered to another folder, the step fails.
@@ -169,7 +183,7 @@ The `workspace` step runs only with `--start`. It spends model quota. Nothing el
 
 The state file holds the workspace ID, the pane ID, the chosen kind and model, and one flag for each sent message (`agentStarted`, `goalSent`, `goalVerified`, `promptSent`) in the field `ids`. A run that finds the workspace ID reuses the workspace. When the ID is gone, the run reuses the one workspace with the label of the slug. The run creates no second workspace or pane. A pane that already runs the agent gets no second start. A message that the flags mark as sent is not sent again. When the step fails, the next run with `--resume --start` continues at the failed point.
 
-A dry run names the steps `policy`, `register`, `status`, and `workspace`, and writes nothing. With `--start`, the dry run of `workspace` prints `would create ...` and the chosen harness. It calls no Herdr command.
+A dry run names the steps `remote`, `policy`, `register`, `status`, and `workspace`, and writes and posts nothing. With `--start`, the dry run of `workspace` prints `would create ...` and the chosen harness. It calls no Herdr command.
 
 The state file is `flows/<slug>.json` in the data folder, with mode 0600. The command writes it through a temporary file with a unique name, and never follows a symlink at that name. It holds the inputs and the status of each finished step. The repository holds no state. A run that finds a state file with the same inputs skips the finished steps. It changes nothing when all built steps are finished. A step that fails is recorded as `failed`, and the next run repeats it.
 

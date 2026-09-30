@@ -115,10 +115,10 @@ test('builds the folder and files, keeps later steps unbuilt, and writes a 0600 
     assert.equal(status(result, 'files'), 'done');
     assert.equal(status(result, 'kit'), 'done');
     assert.equal(status(result, 'commit'), 'done');
-    for (const name of ['remote', 'harness']) {
-      assert.equal(status(result, name), 'not-built', name);
-      assert.match(result.steps.find((s) => s.name === name).detail, /not built yet/);
-    }
+    assert.equal(status(result, 'harness'), 'not-built');
+    assert.match(result.steps.find((s) => s.name === 'harness').detail, /not built yet/);
+    assert.equal(status(result, 'remote'), 'skipped');
+    assert.match(result.steps.find((s) => s.name === 'remote').detail, /--remote none/);
     assert.equal(status(result, 'workspace'), 'skipped');
     assert.match(result.steps.find((s) => s.name === 'workspace').detail, /no --start/);
     assert.ok(fs.existsSync(path.join(dir, '.git')));
