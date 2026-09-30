@@ -1294,7 +1294,9 @@ Opening a chat calls `POST /api/chats/<thread>/read`. It marks each chat record 
 
 Scroll up to read older messages. The page asks for the page before the oldest message while the service sets `more` to `true`. The page keeps your reading position. The 30-day retention of the store sets the oldest message that the page can show.
 
-A new message goes at the bottom. The page scrolls down only when you already read the newest message. Otherwise the page shows a **new messages** pill. Select the pill to go to the newest message.
+A new message goes at the bottom. The page scrolls down only when you already read the newest message. Otherwise the page keeps your position.
+
+While you read older messages, a round arrow-down button shows at the bottom right of the message list, above the composer. Its name is `Jump to the newest message`. A small badge on the button shows the count of new messages. The badge shows `99+` above 99. Select the button, or press Enter on it, to scroll to the newest message. The badge clears. The button hides when the list is at the bottom. When the system setting `prefers-reduced-motion` is on, the page jumps without animation. On a phone, the touch target is 44 px wide.
 
 ### Composer
 
