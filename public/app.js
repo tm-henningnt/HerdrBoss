@@ -865,7 +865,11 @@ function handoffBlock(s, projectSlug = null) {
   const head = `<div class="section-head"><h2>Project continuity</h2><span>${countText}</span></div>`;
   const body = cards.length ? `<div class="handoff-list">${cards.join('')}</div>` : empty;
   if (!projectSlug) return `<section class="handoff-section">${head}${body}</section>`;
-  return collapsible({ slug: projectSlug, key: 'continuity', className: 'handoff-section', head, title: 'Project continuity', count: countText, body });
+  // A needed or prepared handover is a full section in the Now area. Otherwise the orchestrator is one slim line that opens to the handover form.
+  if (prepared.length || candidates.some((h) => h.window)) return `<section data-key="section:continuity" class="handoff-section handoff-needed">${head}${body}</section>`;
+  const orch = project?.orch;
+  const lead = `<span class="st ${esc(orch?.status || 'unknown')}" aria-hidden="true"></span>`;
+  return foldCard({ slug: projectSlug, key: 'continuity', className: 'orch-line', lead, title: 'Orchestrator', count: orch ? `${orch.kind} · ${orch.pane} · ${orch.status}` : 'no labeled pane', hint: orch ? 'Plan a handover' : '', body });
 }
 
 function browserViewToggle(slug, withProject = true) {
@@ -1085,13 +1089,70 @@ async function refreshBrowserPreview(slug, reloadTabs = false) {
 
 // ---------- Overview ----------
 
-function rulesBlock(s) {
+function rulesRows(s) {
   const rows = [];
   for (const a of s.alerts || []) if (a.severity !== 'info') rows.push(`<div class="rule ${a.severity}"><span class="sev">${a.severity}</span><div>${code(a.text)}</div></div>`);
   for (const a of s.advice || []) rows.push(`<div class="rule advice"><span class="sev">advice</span><div>${code(a)}</div></div>`);
   for (const a of s.alerts || []) if (a.severity === 'info') rows.push(`<div class="rule"><span class="sev">notice</span><div>${code(a.text)} <span class="tag">${esc(a.scope)}</span></div></div>`);
   if (!rows.length) rows.push(`<div class="rule ok"><span class="sev">ok</span><div>No restrictions. All quotas and machine resources are within limits.</div></div>`);
-  return `<section id="guidance"><h2>Current guidance <span class="sub">also published to orchestrators in <a href="/bulletin.md">bulletin.md</a></span></h2><div class="rules">${rows.join('')}</div></section>`;
+  return rows;
+}
+
+function rulesBlock(s) {
+  return `<section id="guidance"><h2>Current guidance <span class="sub">also published to orchestrators in <a href="/bulletin.md">bulletin.md</a></span></h2><div class="rules">${rulesRows(s).join('')}</div></section>`;
+}
+
+// The lanes that can take work now, in the order of the bulletin Use now line (useNowLanes() in src/control.js):
+// free models, then the lanes below pace with the most room first, then ignored lanes, trickle lanes, and open lanes.
+function useNowList(lanes) {
+  const kind = (provider) => ({ opencodego: 'opencode' })[provider] || provider;
+  const free = [], below = [], ignored = [], trickle = [], open = [];
+  for (const [provider, lane] of Object.entries(lanes || {})) {
+    if (!lane) continue;
+    if (lane.unmetered) { if (lane.state === 'open') free.push('free models'); continue; }
+    if (lane.ignored) { if (lane.state === 'open') ignored.push(kind(provider)); continue; }
+    if (lane.state === 'open' && Number.isFinite(lane.roomPercent) && lane.roomPercent > 0) below.push([lane.roomPercent, kind(provider)]);
+    else if (lane.state === 'trickle' && lane.allowancePercent - (lane.usedTodayPercent ?? 0) > 0) trickle.push(kind(provider));
+    else if (lane.state === 'open') open.push(kind(provider));
+  }
+  below.sort((a, b) => b[0] - a[0] || a[1].localeCompare(b[1]));
+  return [...free, ...below.map(([, name]) => name), ...ignored, ...trickle, ...open];
+}
+
+// One line for the header of the Overview guidance: the watch, the Use now lanes, the lanes that cannot take work, and the rule counts.
+function guidanceSummary(s) {
+  const parts = [];
+  if (s.night?.active) parts.push(`Watch ${watchLabelText(s.night)}`);
+  const use = useNowList(s.lanes);
+  parts.push(`Use now: ${use.length ? use.join(', ') : 'no metered lane'}`);
+  const held = { pace: 'ahead of pace', reserve: 'near exhaustion', exhausted: 'exhausted' };
+  const slow = Object.entries(s.lanes || {}).filter(([, lane]) => lane && !lane.unmetered && !lane.ignored && held[lane.state]);
+  if (slow.length) parts.push(slow.map(([provider, lane]) => `${PROVIDERS[provider] || provider} ${held[lane.state]}`).join(', '));
+  const count = (severity) => (s.alerts || []).filter((a) => a.severity === severity).length;
+  const critical = count('critical'), warn = count('warn'), advice = (s.advice || []).length;
+  if (critical) parts.push(`${critical} critical`);
+  if (warn) parts.push(`${warn} warning${warn === 1 ? '' : 's'}`);
+  if (advice) parts.push(`${advice} advice`);
+  return parts.join(' · ');
+}
+
+// The state of each lane in plain words, for the body of the Overview guidance.
+function laneLine(provider, lane) {
+  const name = provider === 'unmetered' ? 'Free models' : PROVIDERS[provider] || provider;
+  const used = Number.isFinite(lane.usedPercent) ? ` · ${lane.usedPercent}% used${Number.isFinite(lane.expectedPercent) ? ` of ${lane.expectedPercent}% expected` : ''}${lane.window ? ` (${esc(lane.window)})` : ''}` : '';
+  const text = lane.ignored ? 'open, quota ignored' : lane.state === 'open' && Number.isFinite(lane.roomPercent) && lane.roomPercent > 0 ? 'below pace'
+    : ({ open: 'open', pace: 'ahead of pace', reserve: 'near exhaustion', exhausted: 'exhausted', trickle: 'trickle', closed: 'closed', unknown: 'no quota data' })[lane.state] || lane.state;
+  const tone = ['exhausted', 'closed'].includes(lane.state) ? 'crit' : ['pace', 'reserve', 'trickle'].includes(lane.state) ? 'warn' : lane.state === 'open' ? 'ok' : '';
+  return `<li class="lane-chip ${tone}"><b>${esc(name)}</b><span>${esc(text)}${used}</span></li>`;
+}
+
+// The current guidance on the Overview: the same rules as the bulletin, collapsed by default under a one-line summary.
+function guidanceFold(s) {
+  const watch = s.night?.active ? `<p class="guidance-watch">Watch ${esc(watchUntilPhrase(s.night))} (Owner away). Work as normal; the Boss handles judgment calls.</p>` : '';
+  const lanes = Object.entries(s.lanes || {}).filter(([, lane]) => lane);
+  const laneList = lanes.length ? `<ul class="lane-list">${lanes.map(([provider, lane]) => laneLine(provider, lane)).join('')}</ul>` : '';
+  const body = `${watch}${laneList}<div class="rules">${rulesRows(s).join('')}</div><p class="win-foot">Orchestrators read the same rules in <a href="/bulletin.md">bulletin.md</a>. The <a href="/logs#guidance">Logs</a> page shows them with the activity log.</p>`;
+  return foldCard({ slug: OVERVIEW_FOLD, key: 'guidance', id: 'overview-guidance', className: 'guidance-fold', title: 'Current guidance', count: guidanceSummary(s), body });
 }
 
 function quotaCard(q, s = state) {
@@ -1180,7 +1241,7 @@ function workspacesBlock(s, slug) {
       ${hasOrch ? '' : `<div class="noorch">No orchestrator. Label one with <code>herdr pane rename &lt;pane&gt; orch</code>.</div>`}
     </div>`;
   }).join('');
-  return collapsible({ slug, key: 'workspaces', head: '<h2>Workspaces <span class="sub">live from Herdr</span></h2>', title: 'Workspaces', count: `${h.workspaces.length}`, body: `<div class="ws-grid">${cards}</div>` });
+  return `<div class="ws-grid">${cards}</div>`;
 }
 
 function agentProfile(p, s) {
@@ -1341,6 +1402,7 @@ function overview(s) {
   const alertCount = (s.alerts || []).filter((a) => ['warn', 'critical'].includes(a.severity) && !a.key?.startsWith('handoff:')).length;
   return [
     `<header class="page-intro"><div><h1>Overview</h1><p>${alertCount || handovers ? `${alertCount} resource alert${alertCount === 1 ? '' : 's'} · ${handovers} handover${handovers === 1 ? '' : 's'} to review` : 'Projects are operating within the current resource policy.'}</p></div><div class="capacity-readout"><strong>${s.control?.runningWorkers ?? 0}<span> / ${s.control?.maxWorkers ?? '–'}</span></strong><small>working agents</small><a href="/allocation">Adjust allocation →</a></div></header>`,
+    guidanceFold(s),
     `<div class="overview-action-grid">${attentionBlock(s)}${handoffBlock(s)}</div>`,
     decisionSummary(s),
     fleetBlock(s),
@@ -3805,22 +3867,28 @@ const STATUS_COLOR = { todo: 'faint', doing: 'info', review: 'accent', blocked: 
 const phoneMedia = window.matchMedia('(max-width: 760px), (pointer: coarse) and (max-height: 500px)');
 const isPhone = () => phoneMedia.matches;
 const FOLD_PREFIX = 'herdr-boss.project-folds.';
+// The open or closed state of each fold, per project, in this browser. The Overview uses the slug OVERVIEW_FOLD.
+const OVERVIEW_FOLD = '~overview';
 function foldState(slug) {
-  try { const value = JSON.parse(sessionStorage.getItem(FOLD_PREFIX + slug)); return value && typeof value === 'object' && !Array.isArray(value) ? value : {}; } catch { return {}; }
+  try { const value = JSON.parse(localStorage.getItem(FOLD_PREFIX + slug)); return value && typeof value === 'object' && !Array.isArray(value) ? value : {}; } catch { return {}; }
 }
 function foldOpen(slug, key, fallback = false) { const value = foldState(slug)[key]; return typeof value === 'boolean' ? value : fallback; }
 function setFoldOpen(slug, key, open) {
   const value = foldState(slug);
   value[key] = open;
-  try { sessionStorage.setItem(FOLD_PREFIX + slug, JSON.stringify(value)); } catch {}
+  try { localStorage.setItem(FOLD_PREFIX + slug, JSON.stringify(value)); } catch {}
 }
-// A long project section stays a plain section on a desktop. On a phone it becomes a details element that remembers its open state for the session.
+// A details element on every screen size. It remembers its open state per project. The summary holds the title and a short count or summary line.
+function foldCard({ slug, key, className = '', title, count = '', lead = '', hint = '', controls = '', body, id = '', defaultOpen = false, boxed = true }) {
+  const open = foldOpen(slug, key, defaultOpen);
+  return `<details data-key="section:${esc(key)}"${id ? ` id="${esc(id)}"` : ''} class="fold-phone${boxed ? ' fold-card' : ''}${className ? ` ${esc(className)}` : ''}" data-project-fold="${esc(slug)}" data-fold-key="${esc(key)}"${open ? ' open' : ''}>`
+    + `<summary class="fold-summary">${lead}<h2>${esc(title)}${count ? ` <span class="sub">${esc(count)}</span>` : ''}</h2>${hint ? `<span class="fold-hint">${esc(hint)}</span>` : ''}<span class="fold-chevron" aria-hidden="true"></span></summary>`
+    + `<div class="fold-body">${controls}${body}</div></details>`;
+}
+// A long project section stays a plain section on a desktop. On a phone it becomes a fold card.
 function collapsible({ slug, key, className = '', head = '', title, count = '', controls = '', body, id = '', defaultOpen = false }) {
   if (!isPhone()) return `<section data-key="section:${esc(key)}"${id ? ` id="${esc(id)}"` : ''}${className ? ` class="${esc(className)}"` : ''}>${head}${body}</section>`;
-  const open = foldOpen(slug, key, defaultOpen);
-  return `<details data-key="section:${esc(key)}"${id ? ` id="${esc(id)}"` : ''} class="fold-phone${className ? ` ${esc(className)}` : ''}" data-project-fold="${esc(slug)}" data-fold-key="${esc(key)}"${open ? ' open' : ''}>`
-    + `<summary class="fold-summary"><h2>${esc(title)}${count ? ` <span class="sub">${esc(count)}</span>` : ''}</h2><span class="fold-chevron" aria-hidden="true"></span></summary>`
-    + `<div class="fold-body">${controls}${body}</div></details>`;
+  return foldCard({ slug, key, className, title, count, controls, body, id, defaultOpen, boxed: false });
 }
 
 // Current frontier: open work whose known blockers are all done. Next: open work that waits only on the current frontier.
@@ -3870,7 +3938,7 @@ function decisionsBlock(p, m, slug) {
       : '<span class="muted">No Mailbox item yet</span>';
     return `<article class="decision-item"><div>${t.id ? `<b class="mono">${esc(t.id)}</b> ` : ''}<b>${esc(t.title)}</b>${t.ask ? `<p>${esc(t.ask)}</p>` : ''}</div>${mail}</article>`;
   }).join('')}</div>`;
-  return collapsible({ slug, key: 'decisions', id: 'decisions', className: 'decision-section', head: '<div class="section-head"><h2>Needs your decision <span class="sub">open work that waits for you</span></h2></div>', title: 'Needs your decision', count: `${items.length}`, body });
+  return `<article class="now-card decision-section" id="decisions" data-key="now:decisions"><h3>Needs your decision <span class="num">${items.length}</span></h3>${body}</article>`;
 }
 
 function taskChip(t, extra = '') {
@@ -4216,7 +4284,7 @@ function agentsDriftLine(check) {
   const errors = Number.isInteger(check?.errors) ? check.errors : 0;
   const warnings = Number.isInteger(check?.warnings) ? check.warnings : 0;
   if (!errors && !warnings) return '';
-  return `<div class="warnbox">AGENTS.md drift: ${errors} errors, ${warnings} warnings. Run <span class="mono">herdr-boss check agents</span>.</div>`;
+  return `<li class="${errors ? 'crit' : 'warn'}">AGENTS.md drift: ${errors} errors, ${warnings} warnings. Run <span class="mono">herdr-boss check agents</span>.</li>`;
 }
 
 // The Boss memory file is outside every project repository.
@@ -4249,11 +4317,11 @@ function kitRevisionLine(p, kit) {
 // The read-only file paths that an orchestrator reads. Show paths only, never file contents.
 function filesBlock(p, kit) {
   const row = (label, value) => `<li><span class="k">${esc(label)}</span>${value ? `<span class="mono">${esc(value)}</span>` : '<span class="muted">not registered yet</span>'}</li>`;
-  return `<section class="panel files"><h2>Files</h2><div class="win-foot">Paths that the orchestrator reads.</div><ul class="files-list">
+  return `<div class="files"><p class="win-foot">Paths that the orchestrator reads.</p><ul class="files-list">
     ${row('Project memory', p.repo ? `${p.repo}/docs/orchestration/memory.md` : null)}
     ${row('Kit file', p.repo ? `${p.repo}/docs/orchestration/herdr-boss.md` : null)}
     ${row('Boss memory', BOSS_MEMORY_PATH)}
-  </ul>${kitRevisionLine(p, kit)}</section>`;
+  </ul>${kitRevisionLine(p, kit)}</div>`;
 }
 
 // The read-only worker config that the engine read from .herdr-boss.json. It shows allow-listed fields only.
@@ -4270,7 +4338,95 @@ function workerConfigBlock(s, slug) {
   const body = view.error
     ? `<div class="warnbox">Could not read <span class="mono">.herdr-boss.json</span>: ${esc(view.error)}</div>`
     : `<ul class="files-list">${(view.fields || []).map((f) => `<li><span class="k">${esc(f.key)}</span><span class="mono">${esc(workerConfigValue(f.value))}</span>${f.source === 'config' ? '<span class="tag">config</span>' : ''}</li>`).join('')}</ul>`;
-  return `<section class="panel files worker-config"><h2>Worker config</h2>${body}<div class="win-foot">${note}</div></section>`;
+  return `<div class="files worker-config">${body}<div class="win-foot">${note}</div></div>`;
+}
+
+// The Now section: what needs the Owner or can act now. The orchestrator line or a needed handover comes first, then a grid of small cards.
+function projectNowModel(p, { workspace, panes = [], ready = [], since = {}, now = Date.now() }) {
+  const open = (p.tasks || []).filter((t) => t && t.title != null && !isDone(t));
+  const state = (t) => t.state || t.status || 'todo';
+  const workerName = (t) => (t.worker && typeof t.worker === 'object' ? t.worker.name : t.worker);
+  const mine = workspace ? panes.filter((x) => x.workspace === workspace && x.agent) : [];
+  const orch = mine.find((x) => x.orch && x.label !== 'boss');
+  const workers = mine.filter((x) => !x.orch && x.label !== 'boss').map((x) => {
+    const start = since[x.id]?.since;
+    return { id: x.id, name: x.name || x.agent, kind: x.agent, status: x.status || 'unknown', title: x.title || '', task: (x.name && open.find((t) => workerName(t) === x.name)) || null, seconds: start ? Math.round((now - start) / 1000) : null };
+  });
+  return {
+    decisions: open.filter((t) => t.waitingOn === 'owner'),
+    orch: orch ? { pane: orch.id, kind: orch.agent, status: orch.status || 'unknown' } : null,
+    workers,
+    review: open.filter((t) => state(t) === 'review'),
+    dirty: !!(p.git && typeof p.git === 'object' && p.git.dirty),
+    next: ready[0] || null,
+    blocked: open.filter((t) => state(t) === 'blocked').length,
+  };
+}
+
+// A task in a Now card is one button: its ID and title. It selects the task and shows its board card.
+function nowTask(t, slug, extra = '') {
+  const id = t.id != null && t.id !== '' ? String(t.id) : '';
+  const label = `${id ? `<span class="mono">${esc(id)}</span> ` : ''}<span class="now-task-title">${esc(t.title)}</span>${extra}`;
+  return id ? `<button type="button" class="now-task" data-task-select="${esc(id)}" data-slug="${esc(slug)}" data-reveal="card-link" aria-label="Show task ${esc(id)} on the board">${label}</button>` : `<span class="now-task">${label}</span>`;
+}
+
+function projectNow(s, p, slug, work) {
+  const live = s.control?.projects?.[slug];
+  const workspace = live?.workspace || s.herdr?.workspaces.find((w) => w.id === p.workspace || w.label === p.workspace)?.id || null;
+  const tasks = (p.tasks || []).filter((t) => t && t.title != null);
+  const ready = tasks.length ? boardColumns(tasks, { groups: p.groups }).columns.ready : [];
+  const m = projectNowModel(p, { workspace, panes: s.herdr?.panes || [], ready, since: s.paneSince || {} });
+  const stale = s.staleStatus?.[slug];
+  const kit = p.currentKitRevision ? kitState(p.kitRevision, { current: p.currentKitRevision, changes: s.kit?.changes }) : '';
+  const issues = [
+    ...(Array.isArray(p.errors) ? p.errors : p.errors ? [p.errors] : []).map((e) => `<li class="crit">Status file: ${esc(e)}</li>`),
+    stale && stale.updated === p.updated ? `<li class="warn">Status stale: ${esc(dur((Date.now() - new Date(p.updated)) / 1000))}. The orchestrator must publish the current plan.</li>` : '',
+    p.boardStale ? `<li class="warn">Board stale: ${esc(p.boardStaleReason || 'the published status does not match the workers.')}</li>` : '',
+    agentsDriftLine(p.agentsCheck),
+    kit === 'behind (required)' ? '<li class="warn">The orchestrator uses an old kit. Run <span class="mono">herdr-boss kit update</span> in the project.</li>' : '',
+  ].filter(Boolean);
+  const workerRow = (w) => `<li class="now-worker"><span class="st ${esc(w.status)}" aria-hidden="true"></span><div><b>${esc(w.name)}</b> <span class="muted">${esc(w.kind)} · ${esc(w.status)}${w.seconds != null ? ` · ${esc(dur(w.seconds))}` : ''}</span>${w.task ? nowTask(w.task, slug) : `<p>${esc(w.title || 'No current title')}</p>`}</div></li>`;
+  const slots = live ? `${live.running} / ${live.slots} slots` : '';
+  const cards = [
+    decisionsBlock(p, work, slug),
+    issues.length ? `<article class="now-card now-issues" data-key="now:issues"><h3>Status issues <span class="num">${issues.length}</span></h3><ul class="now-list">${issues.join('')}</ul></article>` : '',
+    live || m.workers.length ? `<article class="now-card" data-key="now:workers"><h3>Running now${slots ? ` <span class="sub">${esc(slots)}</span>` : ''}</h3>${m.workers.length ? `<ul class="now-list">${m.workers.map(workerRow).join('')}</ul>` : '<p class="muted">No worker runs.</p>'}</article>` : '',
+    m.review.length || m.dirty ? `<article class="now-card" data-key="now:merge"><h3>Waiting to merge${m.review.length ? ` <span class="num">${m.review.length}</span>` : ''}</h3>${m.review.length ? `<ul class="now-list">${m.review.map((t) => `<li>${nowTask(t, slug, t.worker?.name ? ` <span class="muted">· ${esc(t.worker.name)}</span>` : '')}</li>`).join('')}</ul>` : ''}${m.dirty ? `<p class="muted">The published status reports uncommitted changes${p.git?.branch ? ` on <span class="mono">${esc(p.git.branch)}</span>` : ''}.</p>` : ''}</article>` : '',
+    tasks.length ? `<article class="now-card" data-key="now:next"><h3>Next task</h3>${m.next ? `<div class="now-next">${nowTask(m.next, slug)}</div>` : '<p class="muted">No task is ready.</p>'}<p class="muted">${ready.length > 1 ? `${ready.length - 1} more ready` : 'No other task is ready'}${m.blocked ? ` · ${m.blocked} blocked` : ''}</p></article>` : '',
+  ].filter(Boolean);
+  const continuity = handoffBlock(s, slug);
+  if (!cards.length && !continuity) return '';
+  return `<section class="project-now" data-key="section:now"><h2 class="visually-hidden">Now</h2>${continuity}${cards.length ? `<div class="now-grid">${cards.join('')}</div>` : ''}</section>`;
+}
+
+// The browser and the resource leases of one project, read-only. The Browsers and Allocation pages hold the controls.
+function browserLeaseBlock(s, slug) {
+  const b = (s.managedBrowsers || []).find((x) => x.project === slug);
+  const leases = (s.resourceLeases?.leases || []).filter((x) => x.project === slug);
+  const browser = b ? `<li><span class="k">Browser</span><span><span class="mono">:${esc(b.port)}</span> · ${esc(browserState(b))} · ${b.headless ? 'headless' : 'visible'}</span></li>` : '<li><span class="k">Browser</span><span class="muted">not running</span></li>';
+  const rows = leases.map((x) => `<li><span class="k">${esc(x.pool)}</span><span><span class="mono">${esc(x.item)}</span>${x.worker || x.pane ? ` · ${esc(x.worker || x.pane)}` : ''} · ${esc(leaseAgeText(x))}</span></li>`).join('');
+  return `<div class="files"><ul class="files-list">${browser}${rows || '<li><span class="k">Leases</span><span class="muted">none held</span></li>'}</ul><p class="win-foot">Manage the browser on the <a href="/browsers">Browsers</a> page and the leases on the <a href="/allocation">Allocation</a> page.</p></div>`;
+}
+
+// Pure information and settings, last on the page, in cards that are closed by default.
+function projectDetails(s, p, slug, published) {
+  const cards = [];
+  if (published) {
+    const kit = p.currentKitRevision ? kitState(p.kitRevision, { current: p.currentKitRevision, changes: s.kit?.changes }) : '';
+    cards.push(foldCard({ slug, key: 'files', title: 'Files and kit', count: kit ? `kit ${kit}` : '', body: filesBlock(p, s.kit) }));
+  }
+  const config = s.workerConfig?.[slug];
+  if (config) cards.push(foldCard({ slug, key: 'worker-config', title: 'Worker config', count: config.error ? 'unreadable' : `${(config.fields || []).filter((f) => f.source === 'config').length} set in the file`, body: workerConfigBlock(s, slug) }));
+  const ws = p.workspace && s.herdr?.workspaces.find((w) => w.id === p.workspace || w.label === p.workspace);
+  if (ws) {
+    const agents = s.herdr.panes.filter((x) => x.workspace === ws.id && (x.agent || x.orch));
+    const working = agents.filter((x) => x.status === 'working').length;
+    cards.push(foldCard({ slug, key: 'workspaces', title: 'Agents and panes', count: `${agents.length} agent${agents.length === 1 ? '' : 's'}${working ? ` · ${working} working` : ''}`, body: workspacesBlock({ ...s, herdr: { ...s.herdr, workspaces: [ws] } }, slug) }));
+  }
+  const b = (s.managedBrowsers || []).find((x) => x.project === slug);
+  const leases = (s.resourceLeases?.leases || []).filter((x) => x.project === slug).length;
+  cards.push(foldCard({ slug, key: 'browser', title: 'Browser and leases', count: `${b ? `:${b.port} ${browserState(b)}` : 'no browser'} · ${leases} lease${leases === 1 ? '' : 's'}`, body: browserLeaseBlock(s, slug) }));
+  return `<section class="project-details" id="details" data-key="section:details"><div class="section-head"><h2>Details</h2><span>Settings and reference</span></div><div class="details-grid">${cards.join('')}</div></section>`;
 }
 
 function project(s, slug) {
@@ -4287,26 +4443,19 @@ function project(s, slug) {
   const work = workModel(p);
   const links = p.links?.length ? `<div class="panel"><h2>Links</h2><ul class="links">${p.links.map((l) => safeUrl(l.url) ? `<li><a href="${esc(safeUrl(l.url))}" target="_blank" rel="noreferrer">${esc(l.label || l.url)}</a></li>` : `<li>${esc(l.label || '')}</li>`).join('')}</ul></div>` : '';
   const notes = p.notes?.length ? `<div class="panel"><h2>Notes</h2><ul class="notes">${p.notes.map((n) => `<li>${code(n)}</li>`).join('')}</ul></div>` : '';
-  const ws = p.workspace && s.herdr?.workspaces.find((w) => w.id === p.workspace || w.label === p.workspace);
-  const wsBlock = ws ? workspacesBlock({ ...s, herdr: { ...s.herdr, workspaces: [ws] } }, slug) : '';
   return [
     `<section class="phead"><h1>${esc(p.project)}</h1>${p.goal ? `<div class="owner-goal">${goalField('Current Owner goal', p.goal)}</div>` : ''}${p.summary ? `<p>${esc(p.summary)}</p>` : ''}${phases}<div class="win-foot">${published ? `updated ${ago(p.updated)}${staleStatusTag(s, p)}${p.status ? ` · ${esc(p.status)}` : ''}` : 'No project status published yet'}${p.git && typeof p.git === 'object' ? ` · <span class="mono">${esc(p.git.branch || '')}${p.git.commit ? ` @ ${esc(String(p.git.commit).slice(0, 12))}` : ''}${p.git.dirty ? ' · uncommitted changes' : ''}</span>` : ''}</div></section>`,
-    p.errors ? `<div class="warnbox">${esc(p.errors.join('; '))}</div>` : '',
-    agentsDriftLine(p.agentsCheck),
-    published ? filesBlock(p, s.kit) : '',
-    workerConfigBlock(s, slug),
-    handoffBlock(s, slug),
+    projectNow(s, p, slug, work),
     metrics,
     programBlock(work),
     boardBlock(p, slug),
     dependencyGraph(p, slug),
     groupsBlock(work, slug),
     specsBlock(work, slug),
-    decisionsBlock(p, work, slug),
-    issueTable(work, slug),
     gatesRisksBlock(p),
+    issueTable(work, slug),
     links || notes ? `<section class="two">${notes}${links}</section>` : '',
-    wsBlock,
+    projectDetails(s, p, slug, published),
   ].join('');
 }
 
@@ -4316,6 +4465,7 @@ function project(s, slug) {
 const HELP = {
   overview: ['Overview', `
     <p>The state of all projects and shared resources at one glance.</p>
+    <h3>Current guidance</h3><p>The collapsed section under the header holds the rules that orchestrators read in the bulletin. Its header shows one summary line: the watch, the Use now lanes, the lanes ahead of pace or exhausted, and the rule counts. Select the header to show the lane states and the rules. The browser remembers the open or closed state.</p>
     <h3>Needs attention</h3><p>Warnings and critical alerts: quotas, memory, machine load, and orphaned worktree processes. <b>Details</b> opens the rule text in Logs.</p>
     <h3>Handovers</h3><p>Prepared successors that wait for review. Each shows the goal that the successor gets, as one collapsed line. A record shows only while its source pane and successor pane exist. A recommendation without a record is not listed here. Open the project to plan, inspect, or activate a handover.</p>
     <h3>Projects</h3><p>The bar above the cards shows the applied share of each project, in card order. Its colors match the top edge of each card. A label such as <b>30% · 2</b> shows the share and the effective slots; the tooltip shows all values. Change the shares on the Allocation page.</p><p>A card per project with its published status and task mix. The table shows the orchestrator, workers in use against the share, and the policy mode. Select a project for its details.</p>
@@ -4333,6 +4483,9 @@ const HELP = {
     <h3>Phone</h3><p>On a phone the page shows one column at a time. The tab bar shows each column with its count. Select a tab or swipe sideways to change the column. The row of project chips replaces the swimlanes. Select a chip to show one project, and select <b>All</b> to show all projects.</p>`],
   projects: ['Projects', `
     <p>Select a project card. The detail below it shows what the orchestrator published and what runs now.</p>
+    <p>The page puts the sections in the order of use: <b>Now</b>, then the plan and progress, then history (all work, notes, and links), then <b>Details</b>.</p>
+    <h3>Now</h3><p>The orchestrator line shows the harness, the pane, and the state of the orchestrator. Select it to open the handover form. A needed or prepared handover shows the full continuity section in its place. The cards below show the decisions that wait for you, the status issues, the running workers with their state and task, the work that waits to merge, and the next task. A card without content does not show. Select a task in a card to select it on the board.</p>
+    <h3>Details</h3><p>The last section holds closed cards: <b>Files and kit</b>, <b>Worker config</b>, <b>Agents and panes</b>, and <b>Browser and leases</b>. Each header shows a short summary. The browser remembers the open or closed state of each card for each project.</p>
     <p><b>Current Owner goal</b> shows the durable direction set by the Owner. Keep it in every status publication until the Owner changes or clears it.</p>
     <p>The bar above the cards shows the applied share and the effective slots of each project, in card order. Its colors match the top edge of each card. An idle project is faded. A paused project is faded and striped.</p>
     <h3>Progress and frontier</h3><p><b>Current frontier</b> is open work with no open blocker. <b>Next</b> waits only on the current frontier. The orchestrator can set both itself.</p>
@@ -4346,11 +4499,11 @@ const HELP = {
     <h3>Graph view</h3><p>The graph fits the panel until you zoom or pan it. A wide graph starts at its left edge at a zoom that keeps the text readable. Select <b>Fit</b> to show the whole graph. Select <b>−</b>, <b>+</b>, or <b>100%</b> to zoom. Press Ctrl or Cmd and turn the mouse wheel to zoom around the pointer. Drag the background to pan. Select <b>Full size</b> to fill the window. Select <b>Close</b> or press Escape to return.</p>
     <h3>Groups and specs</h3><p>Progress per release or phase, and the work under each spec.</p>
     <h3>All work</h3><p>The list sorts and filters all work by the published status.</p>
-    <h3>Project continuity</h3><p>Plan a handover to another harness. Prepare copies the published Owner goal to the successor. The handover record shows the goal as one collapsed line. A Claude successor gets <code>/goal</code> once, after it answers. An invalid published goal, such as a blank value or a value over 1000 characters, is omitted. If migration is unavailable or fails, Prepare starts fresh and records the reason. Fresh preparation captures at most 200 recent source-pane lines and 20,000 characters, and both caps include the truncation marker. It redacts likely credentials and marks the snapshot as historical context. If recent text is unavailable, it tries the visible pane; if both reads fail, it marks context unavailable. The successor only reads and reports until activation. Inspect its answer, then confirm activation. For a project, activation labels the successor <b>orch</b> and the old pane <b>orch previous</b>. For the Boss, it labels them <b>boss</b> and <b>boss previous</b>. Herdr Boss closes the old pane and renames the successor tab to <b>Orchestrator</b> when the successor has answered, or after 15 minutes with the old pane idle. It never closes a pane that works or a pane of a project with a running worker, and it does not do this for the Boss. It tells the Boss when the old pane is still busy after 60 minutes. The Overview shows <b>closing old orchestrator at</b> a time until then. Otherwise it closes the old pane after 120 minutes when the same handoff and pane roles are still confirmed. Unavailable pane data defers retirement until a later engine tick. The successor gets one notice after retirement. The old agent is asked for a final summary for the successor. A project handover notifies the project workers and the Boss. A Boss handover notifies the Boss-workspace peers and the Owner.</p>
-    <h3>Phone</h3><p>On a phone, the long sections start collapsed. Select a section title to open it. The dashboard remembers each open section for this project during the session. Overall progress, the frontier, and the board stay open.</p><p>The board shows one column at a time. The tab bar above it shows each column with its count. Select a tab or swipe sideways to change the column. The graph has its natural size and scrolls sideways in its own box.</p>
+    <h3>Project continuity</h3><p>Open the orchestrator line to plan a handover to another harness. Prepare copies the published Owner goal to the successor. The handover record shows the goal as one collapsed line. A Claude successor gets <code>/goal</code> once, after it answers. An invalid published goal, such as a blank value or a value over 1000 characters, is omitted. If migration is unavailable or fails, Prepare starts fresh and records the reason. Fresh preparation captures at most 200 recent source-pane lines and 20,000 characters, and both caps include the truncation marker. It redacts likely credentials and marks the snapshot as historical context. If recent text is unavailable, it tries the visible pane; if both reads fail, it marks context unavailable. The successor only reads and reports until activation. Inspect its answer, then confirm activation. For a project, activation labels the successor <b>orch</b> and the old pane <b>orch previous</b>. For the Boss, it labels them <b>boss</b> and <b>boss previous</b>. Herdr Boss closes the old pane and renames the successor tab to <b>Orchestrator</b> when the successor has answered, or after 15 minutes with the old pane idle. It never closes a pane that works or a pane of a project with a running worker, and it does not do this for the Boss. It tells the Boss when the old pane is still busy after 60 minutes. The Overview shows <b>closing old orchestrator at</b> a time until then. Otherwise it closes the old pane after 120 minutes when the same handoff and pane roles are still confirmed. Unavailable pane data defers retirement until a later engine tick. The successor gets one notice after retirement. The old agent is asked for a final summary for the successor. A project handover notifies the project workers and the Boss. A Boss handover notifies the Boss-workspace peers and the Owner.</p>
+    <h3>Phone</h3><p>On a phone, the long sections start collapsed. Select a section title to open it. The browser remembers each open section for this project. The Now section, overall progress, the frontier, and the board stay open.</p><p>The board shows one column at a time. The tab bar above it shows each column with its count. Select a tab or swipe sideways to change the column. The graph has its natural size and scrolls sideways in its own box.</p>
     <h3>AGENTS.md drift</h3><p><b>AGENTS.md drift</b> shows the errors and warnings that <b>herdr-boss publish</b> found in the project AGENTS.md. An error is a missing, old, or hand-edited Herdr Boss stub, or a missing, old, or hand-edited kit file <code>docs/orchestration/herdr-boss.md</code>. A warning is stale orchestration text, such as a fixed pane ID, a dated line, a copied model list, or text that sends pushes or product decisions to the Boss. Run <b>herdr-boss check agents</b> in the project for each finding. Run <b>herdr-boss kit install</b> to fix an error.</p>
-    <h3>Files</h3><p><b>Files</b> shows the paths that the orchestrator reads: the project memory file, the installed kit file, and the Boss memory file. The home folder shows as <b>~</b>. The panel shows paths only. It never shows the contents of a memory or kit file.</p>
-    <h3>Worker config</h3><p><b>Worker config</b> shows the fields that Herdr Boss read from <code>.herdr-boss.json</code> in the project repository. A <b>config</b> tag marks a field that the file sets; the other fields use the default. The <code>setup</code> command shows as <b>set</b> or <b>not set</b>, and a home folder path shows as <b>~</b>. Change a field in <code>.herdr-boss.json</code> in the repository.</p>
+    <h3>Files</h3><p><b>Files and kit</b> in Details shows the paths that the orchestrator reads: the project memory file, the installed kit file, and the Boss memory file. The home folder shows as <b>~</b>. The panel shows paths only. It never shows the contents of a memory or kit file.</p>
+    <h3>Worker config</h3><p><b>Worker config</b> in Details shows the fields that Herdr Boss read from <code>.herdr-boss.json</code> in the project repository. A <b>config</b> tag marks a field that the file sets; the other fields use the default. The <code>setup</code> command shows as <b>set</b> or <b>not set</b>, and a home folder path shows as <b>~</b>. Change a field in <code>.herdr-boss.json</code> in the repository.</p>
     <h3>Kit revision</h3><p><b>Kit revision</b> shows the kit revision that the orchestrator loaded, from <code>kitRevision</code> in its status file, and the current kit revision. A muted line shows when the project is behind on changes that need no action (<b>behind (useful only)</b>). A warning shows when the project is behind on a required change, or when its revision is not in the change log. The <b>Kit updated</b> notice then tells the orchestrator to run <b>herdr-boss kit update</b> and to continue. The command prints the kit file. A working orchestrator that stays behind on a required change for 2 hours gets one reminder. The command first prints a digest of the kit changes since the installed kit revision. The digest names the impact and the summary of each change, oldest first. The command then installs the kit as <b>herdr-boss kit install</b> does. The Claude session hook runs <b>herdr-boss kit update --quiet</b> at each session start. <b>worker start</b>, <b>publish</b>, and <b>handoff</b> print one line when the project kit is behind for a required or useful change.</p>
     <h3>Stale status</h3><p><b>Status stale: AGE</b> shows next to the updated time when the published status is older than 2 hours and, after that publish, a worker was working in the last 2 hours or new commits landed on the project repository. A paused project is never stale. The orchestrator gets one notice for each stale status. Publish the current plan and progress to clear the mark.</p>
     <p>The data comes from the project's status file. When a section is missing, the orchestrator has not published those fields.</p>`],

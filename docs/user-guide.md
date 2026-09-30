@@ -171,6 +171,17 @@ The stale notice text is `Your published status is <age> old while <workers ran 
 
 `HERDR_BOSS_PUSH=0` turns off prompts for one run.
 
+### Current guidance
+
+The Overview shows the current guidance in a collapsed section under the page header. The section header shows one summary line, for example `Use now: free models, codex · Claude ahead of pace · 1 warning`. The line holds these parts:
+
+- `Watch on` or `Watch until HH:MM` while a watch runs.
+- The Use now lanes, in the order of the bulletin Use now line. `free models` is the open unmetered lane.
+- Each metered lane that is ahead of pace, near exhaustion, or exhausted.
+- The number of critical rules, warnings, and advice lines.
+
+Select the header to open the section. It shows the watch line, one chip for each quota lane with its state and use, and the same rules as the bulletin. The browser remembers the open or closed state in its local storage. The Logs page shows the same rules with the activity log.
+
 ## Watch
 
 The watch says that the Owner is away. The Boss acts for the Owner until the end time of the watch, or until the Owner cancels it.
@@ -715,6 +726,36 @@ On a screen up to 760 px wide, the Board shows one column at a time. A tab bar s
 
 Orchestrators do not build dashboards. They publish a status file. Herdr Boss shows it on `/projects/SLUG`. The page shows a board of the tasks. With the optional work structure fields, the page also shows progress, the current frontier, a dependency graph, groups, specs, and all work. See [project-status.md](project-status.md).
 
+### Page order
+
+The project page puts the sections in the order of use:
+
+1. The header: the name, the Owner goal, the summary, the phases, and the updated time.
+2. **Now**: what needs the Owner or can act now.
+3. The plan and progress: metrics, overall progress and the frontier, the board, the dependency graph, groups, specs, and human gates and risks.
+4. History: all work, notes, and links.
+5. **Details**: settings and reference information, in closed cards.
+
+### Now
+
+The first line of the Now section is the orchestrator line. It shows the harness, the pane, and the state of the orchestrator. Select it to open the handover form. When a handover is needed or prepared, the full **Project continuity** section replaces the line.
+
+Below the line, small cards sit in a grid of one, two, or three columns:
+
+- **Needs your decision**: the open tasks that wait on the Owner.
+- **Status issues**: status file errors, a stale status, a stale board, AGENTS.md drift, and a required kit update.
+- **Running now**: the used and total worker slots, and each worker with its harness, state, elapsed time, and task.
+- **Waiting to merge**: the tasks in Review, and uncommitted changes from the published `git` field.
+- **Next task**: the first Ready task in board order, the number of other Ready tasks, and the number of blocked tasks.
+
+A card without content does not show. Select a task in a card to select it on the board and in the graph.
+
+### Project details
+
+The **Details** section is the last section of the project page. It holds closed cards: **Files and kit**, **Worker config**, **Agents and panes**, and **Browser and leases**. The card header shows a short summary, for example the kit state or the number of agents. On a desktop the cards sit two to a row. The browser remembers the open or closed state of each card for each project in its local storage.
+
+**Browser and leases** shows the project browser port and state and the resource leases of the project. It is read-only. Use the Browsers page and the Allocation page to change them.
+
 Publish at task boundaries: a task starts, a task ends, a blocker appears, or a blocker clears. `herdr-boss publish` keeps the newest 30 done tasks in the stored status. It counts the older done tasks in `doneCount`. The orchestrator keeps its own file unchanged. The project data holds `doneCount`. The overall progress on the project page adds `doneCount` to the done tasks and to all tasks.
 
 ### Live task state
@@ -774,17 +815,17 @@ A link to `/projects/SLUG#board` or `/projects/SLUG#dependencies` opens the page
 
 ### Files
 
-The project page shows a read-only **Files** panel. It names three paths:
+The **Files and kit** card in Details is read-only. It names three paths:
 
 - The project memory file: `<repository>/docs/orchestration/memory.md`.
 - The installed kit file: `<repository>/docs/orchestration/herdr-boss.md`.
 - The Boss memory file: `~/.herdr-boss/boss-memory.md`.
 
-The panel shows the kit revision in the project status file next to the current kit revision. The home folder shows as `~`. The page shows paths only. It never shows the contents of a memory or kit file.
+The card shows the kit revision in the project status file next to the current kit revision. A required kit update also shows in the Now section. The home folder shows as `~`. The page shows paths only. It never shows the contents of a memory or kit file.
 
 ### Worker config
 
-The project page shows a read-only **Worker config** panel. It shows the non-secret fields that Herdr Boss read from `.herdr-boss.json` in the project repository:
+The **Worker config** card in Details is read-only. It shows the non-secret fields that Herdr Boss read from `.herdr-boss.json` in the project repository:
 
 - `slug`, `baseBranch`, `worktreeRoot`, and `worktreeName`.
 - `evidenceTiers`, `allowedModels`, `workerPanesPerTab`, and `imageBudget`.
@@ -792,11 +833,11 @@ The project page shows a read-only **Worker config** panel. It shows the non-sec
 
 A field that the file sets has a **config** tag. The other fields use the default value. The `setup` command shows as `set` or `not set`. A `worktreeRoot` path in the home folder shows as `~`. A project with an invalid `.herdr-boss.json` shows the read error in place of the fields.
 
-The engine reads the config at each service start and every 10 minutes. Change a field in `.herdr-boss.json` in the repository. The panel changes after the next read.
+The engine reads the config at each service start and every 10 minutes. Change a field in `.herdr-boss.json` in the repository. The card changes after the next read.
 
 ### Needs your decision
 
-A task can name the party that holds it with `waitingOn`: `owner`, `boss`, `task`, or `external`. The project page shows a **Needs your decision** group above the task list. The group lists each open task that waits on the Owner with its ID, title, ask, and a link to its Mailbox conversation. Each project card shows the count. The Overview shows the total with a link to each group.
+A task can name the party that holds it with `waitingOn`: `owner`, `boss`, `task`, or `external`. The project page shows a **Needs your decision** card first in the Now section. The group lists each open task that waits on the Owner with its ID, title, ask, and a link to its Mailbox conversation. Each project card shows the count. The Overview shows the total with a link to each group.
 
 A task that waits on other tasks shows **waiting on #ID** in place of the plain **Blocked** label. A task that waits on the Boss or an external party shows that party and the ask. The orchestrator sets `ask` when it waits on the Owner or the Boss, and sets `mailboxId` to the ID of the Mailbox item. See [project-status.md](project-status.md).
 
@@ -1184,7 +1225,7 @@ On a phone, the list fills the page. Select a chat to open it full screen. Selec
 The dashboard adapts to a phone and to a home-screen web app.
 
 - On a screen up to 760 px wide, the header shows a menu button with the current page name and the three top-bar icons. Select an icon to open the Chat or that Mailbox folder. Select the menu button to open the page menu. The menu closes after you choose a page and when you press Escape.
-- On a phone, the long sections of a project page start collapsed. Select a section title to open it. The dashboard remembers each open section for that project during the session. Overall progress and the current frontier stay open.
+- On a phone, the long sections of a project page start collapsed. Select a section title to open it. The browser remembers each open section for that project in its local storage. The Now section, overall progress, the current frontier, and the board stay open.
 - Project cards become compact. They show the name, mode, status line, and task bar.
 - Tables show stacked rows with a label for each value. The page does not scroll sideways at 393 px.
 - On a screen up to 760 px wide, each text field, number field, select, and text area uses a font size of 16 px. This stops iOS Safari from zooming the page when you select a field. Pinch zoom stays on.
