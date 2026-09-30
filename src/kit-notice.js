@@ -20,6 +20,7 @@ const MAX_SUBJECTS = 10;
 const MAX_SUBJECT_LENGTH = 90;
 const MAX_TEXT_LENGTH = 1199;
 const PENDING_MS = 7 * 86400 * 1000;
+const MAX_PENDING = 50;
 const TAIL = '. Run herdr-boss kit update and continue. The command prints the current kit file.';
 
 function shortSubject(subject) {
@@ -59,6 +60,29 @@ function commitImpacts(commits, assetHashes, entries, stored) {
   return commits.map((commit) => parseKitImpact(commit.message) ?? aligned.shift()?.impact ?? 'useful');
 }
 
+// The required commits that no pane has received yet, newest first. Older than seven days or over
+// the cap, an entry leaves the list.
+function mergePending(previous, added, now) {
+  const seen = new Set();
+  const merged = [...added.map((c) => ({ hash: c.hash, subject: c.subject, at: now })), ...(Array.isArray(previous) ? previous : [])];
+  const live = merged.filter((e) => e?.hash && Number.isFinite(e.at) && now - e.at <= PENDING_MS && !seen.has(e.hash) && seen.add(e.hash));
+  const expired = (Array.isArray(previous) ? previous : []).filter((e) => !(Number.isFinite(e?.at) && now - e.at <= PENDING_MS)).length;
+  return { list: live.slice(0, MAX_PENDING), expired, capped: Math.max(0, live.length - MAX_PENDING) };
+}
+
+// One log line, with counts only, when pending changes leave the list unsent.
+function dropEvent(expired, capped) {
+  if (!expired && !capped) return null;
+  return `Kit notice dropped unsent pending changes: ${expired} expired after 7 days, ${capped} over the ${MAX_PENDING} entry cap`;
+}
+
+function kitAlert(head, pending, revision) {
+  return {
+    key: `kit:${head.slice(0, 7)}`, severity: 'info', scope: 'all', once: true,
+    title: 'Kit updated', text: formatKitNotice(pending, revision),
+  };
+}
+
 function errorText(error) {
   return String(error?.stderr || error?.message || error).trim().split('\n')[0].slice(0, 200);
 }
@@ -71,7 +95,9 @@ export async function readKitNotice({ root, stored, git, now, changesFile = CHAN
   catch (error) { return { state: stored ?? null, alert: null, event: `Kit notice skipped: git rev-parse failed: ${errorText(error)}` }; }
   // The revision comes from the project root that the caller supplies, not from the default kit root.
   const revision = kitRevision(root);
-  const reset = (event) => ({ state: { commit: head, at: now, revision }, alert: null, event });
+  // Required changes that no pane has received yet stay in the state, also when HEAD moves without a new kit commit.
+  const { list: carried, expired } = mergePending(stored?.pending, [], now);
+  const reset = (event) => ({ state: { commit: head, at: now, revision, ...(carried.length ? { pending: carried, alert: kitAlert(head, carried, revision) } : {}) }, alert: null, event, dropEvent: dropEvent(expired, 0) });
   if (!head) return { state: stored ?? null, alert: null, event: 'Kit notice skipped: git rev-parse printed no commit' };
   if (!stored?.commit) return reset(null);
   if (stored.commit === head) return { state: stored, alert: null, event: null };
@@ -87,11 +113,9 @@ export async function readKitNotice({ root, stored, git, now, changesFile = CHAN
   const impacts = commitImpacts(commits, assetHashes, readKitChanges(changesFile), stored);
   const required = commits.filter((_, index) => impacts[index] === 'required');
   if (!required.length) return reset(null);
-  const alert = {
-    key: `kit:${head.slice(0, 7)}`, severity: 'info', scope: 'all', once: true,
-    title: 'Kit updated', text: formatKitNotice(required, revision),
-  };
-  return { state: { commit: head, at: now, revision, alert }, alert, event: null };
+  const { list: pending, capped } = mergePending(stored?.pending, required, now);
+  const alert = kitAlert(head, pending, revision);
+  return { state: { commit: head, at: now, revision, pending, alert }, alert, event: null, dropEvent: dropEvent(expired, capped) };
 }
 
 // The alert stays active until each orchestrator gets it, for at most seven days.
@@ -108,4 +132,10 @@ export function isKitAlert(alert) {
 // held, or stood down). held is a Set of workspace ids. The Boss gets kit reports from the HerdrBoss orchestrator.
 export function kitNoticeTargets(orchs, held = new Set()) {
   return orchs.filter((o) => o.label !== 'boss' && !/^boss$/i.test(o.workspaceLabel || '') && !held.has(o.workspace));
+}
+
+// The pending changes that one pane has not received. sent is the list of commit hashes that the pane got.
+export function unsentKitChanges(state, sent = []) {
+  const got = new Set(sent);
+  return (state?.pending || []).filter((change) => !got.has(change.hash));
 }

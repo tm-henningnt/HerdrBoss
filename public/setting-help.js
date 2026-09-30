@@ -254,6 +254,13 @@ export const SETTING_HELP = Object.fromEntries([
     lower: 'A lower value sends repeat notices sooner. Zero sends a notice at each change.',
     apply: 'policy',
   }),
+  S('machine', 'machine.kitDigestMinutes', 'Kit digest interval minutes', {
+    what: 'The least time between two kit digests to one orchestrator pane. A digest lists the required kit changes that the pane has not received. Herdr Boss sends no digest while the pane works. It sends the digest when the pane is idle or done.',
+    default: '120 (2 hours)', unit: 'Minutes', range: '10 to 1440',
+    raise: 'A higher value sends fewer kit digests. Each digest lists more changes.',
+    lower: 'A lower value sends kit digests sooner. Each digest lists fewer changes.',
+    apply: 'policy',
+  }),
   S('machine', 'machine.memFreeWarnPercent', 'Memory free warning', {
     what: 'The free memory percent below which Herdr Boss shows a memory warning. It stays on when the guard is off.',
     default: '15', unit: 'Percent free', range: '1 to 50',
