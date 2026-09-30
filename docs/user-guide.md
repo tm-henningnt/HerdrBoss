@@ -76,7 +76,7 @@ Only the Owner answers a review pack. The server cannot tell the Owner from an a
 
 | Route | Answer |
 |---|---|
-| `GET /api/reviews?state=open` | The packs with progress counts. `state` is `open` (default) or `done`. Another value gets `400`. |
+| `GET /api/reviews?state=open` | The packs with progress counts. `state` is `open` (default) or `done`. Another value gets `400`. `stale` is the number of items that changed after the Owner answered them. |
 | `GET /api/reviews/<slug>/<pack>` | The current version: manifest, files, item states, answers, and progress. `?version=<n>` selects an older version. An unknown pack or version gets `404`. |
 | `GET /api/reviews/<slug>/<pack>/files/<version>/<path>` | One pack file. `<path>` is the file path from the manifest. |
 
@@ -126,6 +126,66 @@ The routes give these other errors:
 - `413`: a body over 64 KB for an item, or over 16 KB for a note or a submit.
 
 An error text never holds an absolute path.
+
+## Reviews page
+
+The **Reviews** page shows the review packs that projects send to the Owner. The menu entry is after **Mailbox**. The page is an app view, as the Mailbox: on a screen of 760 px or less it fills the screen, and the menu button at the top left opens the drawer.
+
+### Routes
+
+| Route | Page |
+|---|---|
+| `/reviews` | The pack list. `?folder=done` opens the Done folder. |
+| `/reviews/<slug>/<pack>` | The section list of one pack, with the summary and the submit form. |
+| `/reviews/<slug>/<pack>/<item>` | The page of one item. The page keeps the address of the item for the item viewer. |
+| `/reviews/<slug>/<pack>#item=<item>` | The section list with the row of that item marked and in view. Back from an item page uses this address. |
+
+`/reviews/<slug>/<pack>/summary` opens the section list. An address with a part that is not a slug shows **Review not found**.
+
+### Pack list
+
+The list has two folders. **Open** holds the packs that wait for answers. **Done** holds the submitted and the expired packs. Each row shows the project avatar, the pack title, the version, the time of the last change, the project name, and the count `N of M items answered`. An open row also shows the progress bar. A row with **N changed** has items that changed after the Owner answered them. A done row shows the verdict chip: **Approved**, **Changes requested**, **Commented**, or **Expired**.
+
+### Progress bar
+
+The bar shows the item states in a fixed order: Accepted, Note only, Needs live check, Denied, and Open. Accepted also counts a choice and a rating. The segments use the status colors `--ok`, `--info`, `--warn`, and `--crit`, and `--line` for Open. A gap of 2 px separates the segments. The Denied segment has stripes, so it differs from Needs live check without color. The bar has a text alternative with each count. On the section list, a legend under the bar names each state with its count.
+
+### Section list
+
+Each section is a fold with its title, its state chip, and its count of answered items. A section that is accepted and fully viewed starts folded. The page keeps each fold as the Owner sets it across a refresh. Each item row shows a type icon, the title, the state chip, and the viewed mark. A viewed and answered row is short and faded. **Changed** marks an item that changed after the answer. The item then counts as open. On a screen of 900 px or wider, the sections are in a column at the left, and the state chips of the items show their icon only. The word stays in the tooltip and for screen readers.
+
+### Summary and submit
+
+The summary follows the sections. It lists the items by state: Open first with **Review now**, then Denied, Needs live check, Note only, and Accepted. A note shows under its item. The pack note field saves the note 1 second after the last key, and when the field loses the focus. The verdict choice has **Approve**, **Request changes**, and **Comment**. The page selects the proposed verdict of the pack state and marks it **Proposed**. The page sets the proposal when it first shows a pack version. A later answer does not move the selection. A new version sets a new proposal. **Submit review** is in the bar at the bottom edge. It asks for a confirm that names the pack, the version, the verdict, and the count of each state. Then it sends the verdict and the pack note. The button stays disabled while the request runs. A submit with open items is allowed. After the submit, the page shows the result and no form. A second submit of the same version shows the first result.
+
+A failed request shows its reason in plain words under the field or in the bottom bar. The page keeps the sentence of the API when the answer has one. Otherwise it shows one of these sentences:
+
+| Cause | Sentence |
+|---|---|
+| No connection | `The service is not reachable. It may be restarting. Try again in a moment.` |
+| `401` | `Sign in again.` |
+| `403` | `The service refused the request.` |
+| `413` | `The text is too large.` |
+| `429` | `Too many requests. Wait a minute and try again.` |
+| `500` and higher | `The service reported an error.` |
+| Other | `The request failed.` |
+ The read-only preview shows the packs and refuses each note and submit with `Not sent. This read-only preview does not allow changes.`
+
+### Keys
+
+| Key | Action |
+|---|---|
+| `j`, `k` | Next or previous row |
+| `J`, `K` | Next or previous section |
+| `u`, `Esc` | Back: from an item to the section list, from a pack to the list |
+| `s` | Go to the summary and the pack note |
+| `?` | Open the page help |
+
+The keys do nothing while the focus is in a text field, except `Esc`, which leaves the field.
+
+### Mailbox entry
+
+A Mailbox item of the kind `review` has **Open review** in place of the answer form. On a phone the link is in the bar at the bottom edge. The submit of the review closes the item.
 
 ## What the dashboard manages
 

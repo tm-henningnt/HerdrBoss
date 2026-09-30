@@ -436,7 +436,7 @@ export function listPacks({ dir, state = 'open', slug } = {}) {
       slug: pack.slug, pack: pack.pack, title: pack.title, version: pack.version, state: pack.state, mailId: pack.mailId,
       createdAt: pack.createdAt, updatedAt: pack.updatedAt, closedAt: pack.closedAt,
       verdict: pack.state === 'submitted' ? result?.verdict ?? null : null,
-      counts: pack.derived.counts, packState: pack.derived.pack,
+      counts: pack.derived.counts, packState: pack.derived.pack, stale: pack.items.filter((item) => item.stale).length,
     };
   });
 }

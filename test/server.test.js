@@ -1452,7 +1452,7 @@ test('one Agents tab has Chart and List views, a new menu order, and an /organiz
   const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
   // The menu holds the pages in the Owner order, with no Organization entry.
   const nav = /<nav id="primary-nav"[^>]*>([\s\S]*?)<\/nav>/.exec(html)?.[1] || '';
-  assert.deepEqual([...nav.matchAll(/data-nav="([^"]+)"/g)].map((m) => m[1]), ['overview', 'board', 'mailbox', 'chat', 'agents', 'projects', 'browsers', 'allocation', 'analytics']);
+  assert.deepEqual([...nav.matchAll(/data-nav="([^"]+)"/g)].map((m) => m[1]), ['overview', 'board', 'mailbox', 'reviews', 'chat', 'agents', 'projects', 'browsers', 'allocation', 'analytics']);
   assert.doesNotMatch(nav, /data-nav="organization"/);
   assert.doesNotMatch(app, /organization: 'Organization'/);
   assert.doesNotMatch(app, /route === 'organization'/);
@@ -2034,7 +2034,7 @@ test('the Chat page has a route, a menu position, a composer key rule, a before 
   assert.match(app, /'mailbox', 'chat', 'allocation'/);
   assert.match(app, /route === 'chat' \? chatView\(state\)/);
   const nav = /<nav id="primary-nav"[^>]*>([\s\S]*?)<\/nav>/.exec(html)?.[1] || '';
-  assert.deepEqual([...nav.matchAll(/data-nav="([^"]+)"/g)].map((m) => m[1]), ['overview', 'board', 'mailbox', 'chat', 'agents', 'projects', 'browsers', 'allocation', 'analytics']);
+  assert.deepEqual([...nav.matchAll(/data-nav="([^"]+)"/g)].map((m) => m[1]), ['overview', 'board', 'mailbox', 'reviews', 'chat', 'agents', 'projects', 'browsers', 'allocation', 'analytics']);
   assert.match(nav, /<a href="\/chat" data-nav="chat">Chat<span class="nav-badge" data-chat-badge aria-hidden="true" hidden><\/span><\/a>/);
   // The list reads the chat API and shows a badge with the total unread count.
   assert.match(app, /fetch\('\/api\/chats'\)/);
@@ -2317,7 +2317,7 @@ test('one title gives one avatar, and the Chat, the Mailbox, the Agents cards, a
   // Every page passes the title through the one source. A page with its own title fails here.
   const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
   const slots = [...app.matchAll(/avatarSlot\(([^,]+), \{ title: avatarTitle\(/g)].map((match) => match[1]);
-  assert.equal(slots.length, 7, 'seven avatar slots: Settings row, Mailbox row, Mailbox thread header, Chat list row, Chat header, chat bubble, and Agents card');
+  assert.equal(slots.length, 8, 'eight avatar slots: Settings row, Mailbox row, Mailbox thread header, Chat list row, Chat header, chat bubble, Agents card, and review pack row');
   for (const slug of slots) assert.doesNotMatch(slug, /\.title$|\btitle\b/, 'no page passes its own title to an avatar slot');
 });
 

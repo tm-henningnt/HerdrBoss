@@ -15,7 +15,7 @@ test('the app view follows the visual viewport, so the composer sits above the k
   assert.deepEqual(appViewport({ height: 553.4, offsetTop: 120.6, scale: 1, innerHeight: 844 }), { height: 553, top: 121 }, 'iOS scrolls the layout viewport');
   assert.deepEqual(appViewport({ height: 400, offsetTop: 90, scale: 2, innerHeight: 844 }), { height: 844, top: 0 }, 'a pinch zoom keeps the full height');
   assert.deepEqual(appViewport({ height: 0, offsetTop: 0, scale: 1, innerHeight: 700 }), { height: 700, top: 0 });
-  assert.deepEqual(APP_VIEW_ROUTES, ['mailbox', 'chat']);
+  assert.deepEqual(APP_VIEW_ROUTES, ['mailbox', 'reviews', 'chat']);
 });
 
 test('the phone app view hides the page header and fills the visual viewport', () => {

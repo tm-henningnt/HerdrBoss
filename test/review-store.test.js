@@ -301,6 +301,17 @@ test('a changed item hash marks the answer stale and keeps the earlier decision 
   assert.equal(stateOf(dir, 'cart-themes'), 'accepted');
 });
 
+test('the pack list counts the stale items, so the list can mark a changed pack', (t) => {
+  const dir = dataDir(t);
+  publish(dir, folder());
+  assert.equal(listPacks({ dir })[0].stale, 0);
+  answer(dir, 'cart-themes', { decision: 'deny' });
+  publish(dir, folder({ tag: 9 }));
+  assert.equal(listPacks({ dir })[0].stale, 1);
+  answer(dir, 'cart-themes', { decision: 'accept' });
+  assert.equal(listPacks({ dir })[0].stale, 0);
+});
+
 test('an answer to an item that a version removed stays for the summary', (t) => {
   const dir = dataDir(t);
   publish(dir, folder());
