@@ -1,5 +1,5 @@
 // The flow of `herdr-boss project new`: validate the inputs, create the folder, write the first files.
-// Later steps (remote, workspace, harness, check) are named and report `not built yet`.
+// Later steps (remote, harness, check) are named and report `not built yet`.
 // The state file flows/<slug>.json in the data dir records finished steps, so a rerun continues where the last run stopped.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -14,9 +14,10 @@ import { SLUG, validateProject, writeProject } from './projects.js';
 import { loadPolicy, savePolicy } from './control.js';
 import { loadModels } from './kit/config.js';
 import { kitRevision } from './kit/agents-check.js';
+import { describeWorkspace, workspaceStep } from './project-new-workspace.js';
 
 export const PROJECT_NEW_STEPS = ['validate', 'folder', 'files', 'kit', 'commit', 'remote', 'policy', 'register', 'status', 'workspace', 'harness', 'check'];
-const NOT_BUILT = new Set(['remote', 'workspace', 'harness', 'check']);
+const NOT_BUILT = new Set(['remote', 'harness', 'check']);
 export const NEW_PROJECT_SHARE = 10;
 const TEMPLATES = path.join(KIT_ROOT, 'kit', 'templates');
 const GITIGNORE = 'node_modules/\n.DS_Store\n.orchestration/\n.worker/\n';
@@ -182,6 +183,7 @@ const DESCRIBE = {
   policy: (i) => `add ${i.slug} to the policy with share ${NEW_PROJECT_SHARE} and scale the other shares down so the total stays at most 100`,
   register: (i) => `record ${i.slug} and ${i.path} in project-repos.json`,
   status: (i) => `publish the first status of ${i.slug} with the task "${FIRST_TASK}"`,
+  workspace: describeWorkspace,
   files: (i) => `write ${projectFiles(i).map(([f]) => f).join(', ')} in ${i.path}; keep each file that exists`,
 };
 
@@ -247,6 +249,7 @@ const RUN = {
     if (!recordProjectRepo(inputs.slug, repo, remote, { dataDir: context.dataDir }).recorded) refuse(`The project ${inputs.slug} could not be registered.`);
     return `registered ${inputs.slug} with ${repo}`;
   },
+  workspace: workspaceStep,
   status(inputs, context) {
     const dir = path.join(context.dataDir, 'projects');
     if (fs.existsSync(path.join(dir, `${inputs.slug}.json`))) return `${inputs.slug} already has a status`;
@@ -274,16 +277,21 @@ export function runProjectNew(options = {}) {
   if (options.resume && !saved) refuse(`There is no state for ${inputs.slug}. Nothing to resume.`);
   if (saved && JSON.stringify(saved.inputs) !== JSON.stringify(inputs)) refuse(`The state for ${inputs.slug} has different inputs. Use the same inputs, or remove ${stateFile}.`);
   const state = saved || { inputs, createdAt: new Date().toISOString(), steps: {} };
+  state.ids ||= {};
   // ceiling (tests): the nested-repository walk stops at this folder.
-  const context = { dataDir, repoRoot: path.resolve(options.repoRoot || KIT_ROOT), group: options.group ? path.resolve(options.group) : null, ceiling: options.ceiling, allowUnscanned: options.allowUnscanned || [] };
+  const context = { dataDir, repoRoot: path.resolve(options.repoRoot || KIT_ROOT), group: options.group ? path.resolve(options.group) : null, ceiling: options.ceiling, allowUnscanned: options.allowUnscanned || [],
+    start: Boolean(options.start), kind: options.kind, herdr: options.herdr, hooks: options.hooks, env: options.env, ids: state.ids,
+    remember(patch) { Object.assign(state.ids, patch); state.updatedAt = new Date().toISOString(); writeState(stateFile, state); } };
   const runners = { ...RUN, ...(options.stepRunners || {}) };
-  const finished = (name) => ['done', 'skipped'].includes(state.steps[name]?.status);
+  // A step that was skipped for a missing --start runs when a later run gives --start.
+  const finished = (name) => ['done', 'skipped'].includes(state.steps[name]?.status) && state.steps[name].reason !== 'no-start';
   const result = { ok: true, dryRun: Boolean(options.dryRun), slug: inputs.slug, path: inputs.path, stateFile, steps: [] };
 
   if (options.dryRun) {
     if (!finished('validate')) { checkFolder(inputs.path, context); checkSlug(inputs.slug, dataDir); }
     for (const name of PROJECT_NEW_STEPS) {
-      const detail = NOT_BUILT.has(name) ? 'not built yet' : `would ${DESCRIBE[name](inputs)}`;
+      const text = NOT_BUILT.has(name) ? null : DESCRIBE[name](inputs, context);
+      const detail = text === null ? 'not built yet' : text.startsWith('skipped') ? text : `would ${text}`;
       result.steps.push({ name, status: finished(name) ? state.steps[name].status : 'planned', detail });
     }
     return result;
@@ -294,12 +302,14 @@ export function runProjectNew(options = {}) {
   for (const name of PROJECT_NEW_STEPS) {
     if (NOT_BUILT.has(name)) { result.steps.push({ name, status: 'not-built', detail: 'not built yet' }); continue; }
     if (finished(name)) { result.steps.push({ name, status: state.steps[name].status, detail: state.steps[name].detail }); continue; }
-    ran = true;
     try {
-      const detail = runners[name](inputs, context) || 'done';
-      state.steps[name] = { status: 'done', at: new Date().toISOString(), detail };
-      result.steps.push({ name, status: 'done', detail });
+      const outcome = runners[name](inputs, context) || 'done';
+      const { status = 'done', detail, reason } = typeof outcome === 'string' ? { detail: outcome } : outcome;
+      // A skip for a missing --start changes nothing, so a repeated run writes no state.
+      if (!(reason === 'no-start' && state.steps[name]?.reason === 'no-start')) { state.steps[name] = { status, at: new Date().toISOString(), detail, ...(reason ? { reason } : {}) }; ran = true; }
+      result.steps.push({ name, status, detail });
     } catch (error) {
+      ran = true;
       state.steps[name] = { status: 'failed', at: new Date().toISOString(), detail: error.message };
       result.steps.push({ name, status: 'failed', detail: error.message });
       result.ok = false;

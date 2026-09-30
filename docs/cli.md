@@ -94,13 +94,13 @@ herdr-boss project check <slug>
 | `--remote` | `none` (default), `gh`, or a Git URL. A URL must not hold a user name or a password. |
 | `--visibility` | `private` (default) or `public`. `public` needs a remote that is not `none`. |
 | `--org NAME` | The organization for `--remote gh`. |
-| `--kind` | The harness of the first orchestrator: `claude` or `codex`. |
+| `--kind` | The harness of the first orchestrator: `claude` or `codex`. It overrides the first usable entry of `orchestratorLadder`. The model comes from the policy for that kind. |
 | `--goal TEXT` | One line for the README and the first status. |
-| `--start` | Start the first orchestrator. Off by default. |
+| `--start` | Create the Herdr workspace and start the first orchestrator. The orchestrator uses model quota. Off by default. |
 | `--dry-run` | Print each step as `would ...`. Change nothing. |
 | `--resume` | Continue a saved run. |
 
-Only the steps of `runProjectNew` that are built run. The steps `remote`, `policy`, `register`, `workspace`, `harness`, and `check` print `not built yet`. The values of `--remote`, `--visibility`, `--org`, `--kind`, and `--start` reach `runProjectNew` as options. They change nothing until those steps are built.
+Only the steps of `runProjectNew` that are built run. The steps `remote`, `harness`, and `check` print `not built yet`. The values of `--remote`, `--visibility`, and `--org` reach `runProjectNew` as options. They change nothing until those steps are built. The values of `--kind` and `--start` control the step `workspace`.
 
 A step prints one state: `done`, `skipped`, `failed`, `pending`, `not built yet`, or, in a dry run, `would ...`.
 
@@ -119,7 +119,7 @@ Run `project new` in a plain terminal, in the pane labeled `boss`, or in a pane 
 
 The module `src/project-new.js` exports `runProjectNew(options)`. The command calls it.
 
-`runProjectNew` runs these steps in order: `validate`, `folder`, `files`, `kit`, `commit`, `policy`, `register`, `status`. The steps `remote`, `workspace`, `harness`, and `check` report `not built yet`. They change nothing.
+`runProjectNew` runs these steps in order: `validate`, `folder`, `files`, `kit`, `commit`, `policy`, `register`, `status`, `workspace`. The steps `remote`, `harness`, and `check` report `not built yet`. They change nothing.
 
 | Option | Meaning |
 |---|---|
@@ -128,6 +128,9 @@ The module `src/project-new.js` exports `runProjectNew(options)`. The command ca
 | `path` | The project folder. Use `group` or `path`, never both. There is no default. |
 | `name` | The project name. The default is the slug. |
 | `goal` | One line for the README. |
+| `start` | Run the step `workspace`. Without it, the step prints `skipped: no --start` and creates nothing. |
+| `kind` | `claude` or `codex`. Overrides the orchestrator ladder. |
+| `herdr` | The Herdr runner that the step `workspace` uses. The default is `createHerdrRunner()`. Tests pass a fake. |
 | `dryRun` | Return each step with the action it would run. Change nothing. |
 | `allowUnscanned` | Paths of large or binary files that the commit scan skips. The default is none. |
 | `resume` | Continue a saved run. Refuse when no state file exists. |
@@ -155,7 +158,18 @@ The `register` step records `{ slug, repo, remote }` for the project in `project
 
 The `status` step publishes the first status through the code of `herdr-boss publish`: `writeProject` validates the file with `validateProject`. The status has the summary `New project. Set up the project.`, the current `kitRevision`, and one task `Set up the project` with status `todo` and priority 1. The `goal` field holds the option `goal`. The status has no `goal` field when the option is empty. When `projects/<slug>.json` exists, the step changes nothing.
 
-A dry run names these three steps and writes nothing.
+The `workspace` step runs only with `--start`. It spends model quota. Nothing else starts it. Without `--start`, the step prints `skipped: no --start` and creates nothing. A later run with `--start` does the step.
+
+1. The step picks the harness. With `--kind`, it uses that kind and the model of the policy for that kind. Without `--kind`, it uses the first entry of `orchestratorLadder` that `handoffTarget()` accepts. The step fails before it creates anything when no harness is usable.
+2. The step runs `herdr workspace create --cwd PATH --label <slug> --no-focus`. The label equals the slug, so Herdr Boss maps the workspace to the project. The step writes the workspace ID into the field `workspace` of the published status.
+3. The step runs `herdr pane rename PANE orch` for the root pane.
+4. The step runs `herdr agent start <slug>-orch --kind K --pane PANE -- ARGS`. The arguments come from `handoffTarget()`. A Codex orchestrator also gets the `-c shell_environment_policy.set.*` arguments of a handover.
+5. The step delivers the Owner goal. The goal is the text of `--goal`, or else the Settings value **Default orchestrator goal**. `goalDelivery()` in `src/goal.js` decides how, as in a handover. A Claude orchestrator gets `/goal TEXT` as its own prompt. The step then reads the pane and fails when the pane does not show the goal after three checks. A Codex orchestrator gets the goal in the first prompt.
+6. The step sends the first prompt with `deliverPrompt()`. The prompt tells the orchestrator to read `AGENTS.md`, `docs/orchestration/memory.md`, and `docs/orchestration/herdr-boss.md`, and to start with the task `Set up the project`.
+
+The state file holds the workspace ID, the pane ID, the chosen kind and model, and one flag for each sent message (`agentStarted`, `goalSent`, `goalVerified`, `promptSent`) in the field `ids`. A run that finds the workspace ID reuses the workspace. When the ID is gone, the run reuses the one workspace with the label of the slug. The run creates no second workspace or pane. A pane that already runs the agent gets no second start. A message that the flags mark as sent is not sent again. When the step fails, the next run with `--resume --start` continues at the failed point.
+
+A dry run names the steps `policy`, `register`, `status`, and `workspace`, and writes nothing. With `--start`, the dry run of `workspace` prints `would create ...` and the chosen harness. It calls no Herdr command.
 
 The state file is `flows/<slug>.json` in the data folder, with mode 0600. The command writes it through a temporary file with a unique name, and never follows a symlink at that name. It holds the inputs and the status of each finished step. The repository holds no state. A run that finds a state file with the same inputs skips the finished steps. It changes nothing when all built steps are finished. A step that fails is recorded as `failed`, and the next run repeats it.
 

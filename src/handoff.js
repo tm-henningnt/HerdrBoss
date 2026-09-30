@@ -7,7 +7,7 @@ import { deliverPrompt, isAgentPaneBusy, waitForWorkerPane } from './kit/workers
 import { contextTokensFor, loadModels, loadProjectConfig } from './kit/config.js';
 import { loadPolicy, mergeModels, modelEnabled, providerFor, selectModel } from './control.js';
 import { codexShellEnvArgs } from './harness.js';
-import { cleanGoal, goalFromTranscript } from './goal.js';
+import { cleanGoal, goalDelivery, goalFromTranscript } from './goal.js';
 
 const FILE = path.join(DATA_DIR, 'handoffs.json');
 const TARGETS = new Set(['codex', 'claude', 'pi', 'opencode']);
@@ -302,7 +302,7 @@ export function planHandoff(id, toKind, { mode = 'migrate', model = null, effort
 
 // A Codex tool shell can run under a shared app-server daemon with another environment, so a codex successor gets
 // the Herdr variables of its new pane as -c shell_environment_policy.set.* launch arguments. Other kinds get none.
-function successorAgentArgs(item, launchArgs, env) {
+export function successorAgentArgs(item, launchArgs, env) {
   if (item.toKind !== 'codex') return launchArgs;
   return [...launchArgs, ...codexShellEnvArgs({
     HERDR_ENV: '1', HERDR_PANE_ID: item.newPane, HERDR_TAB_ID: item.newTab, HERDR_WORKSPACE_ID: item.workspace,
@@ -630,7 +630,8 @@ export function activateHandoff(id, { confirmed = false } = {}) {
     catch (e) { item.previousPromptError = String(e.stderr || e.message).slice(0, 500); }
   }
   save(records);
-  if (item.goal && role !== 'boss') item.goalDelivery = item.toKind === 'claude' ? 'command' : 'prompt';
+  const delivery = goalDelivery({ goal: item.goal, kind: item.toKind, boss: role === 'boss' });
+  if (delivery) item.goalDelivery = delivery;
   try {
     herdr(['agent', 'prompt', item.newPane, successorPrompt(item)]);
     if (item.goalDelivery === 'prompt') item.goalSentAt = new Date().toISOString();

@@ -104,6 +104,13 @@ export function goalFromTranscript({ kind, sessionId, cwd = null, home = os.home
   } catch { return null; }
 }
 
+// How the Owner goal reaches a new agent: a Claude agent gets the /goal command, other kinds get the goal in the first prompt.
+// Returns 'command', 'prompt', or undefined when there is no goal or the agent is the Boss (a Boss handover carries no goal).
+export function goalDelivery({ goal, kind, boss = false }) {
+  if (!goal || boss) return undefined;
+  return kind === 'claude' ? 'command' : 'prompt';
+}
+
 // The pane text wraps long lines, so compare without whitespace. The first 60 characters identify the goal.
 export function goalShown(paneText, goal) {
   const squash = (value) => String(value ?? '').replace(/\s+/g, '');

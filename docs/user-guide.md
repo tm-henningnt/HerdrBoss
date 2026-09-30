@@ -70,13 +70,22 @@ When a value stays outside, the dashboard names it and the reason. The audit and
 
 ## New project setup
 
-The module `src/project-new.js` builds a new project in steps. It has no command yet. See `docs/cli.md`, section New project flow.
+The command `herdr-boss project new` builds a new project in steps. See `docs/cli.md`, section New project flow.
 
 The steps `policy`, `register`, and `status` put the new project into Herdr Boss:
 
 1. `policy` gives the project a share of 10 percent. The other projects give up part of their share, so the total stays at most 100. Each project keeps its mode and its exclusions. You see the shares before and after the change.
 2. `register` records the project folder in `project-repos.json`. The dashboard and the engine then read the repository of the project.
 3. `status` publishes the first status. It holds one task, `Set up the project`. The project appears on the dashboard with this task.
+
+The step `workspace` starts the first orchestrator. It runs only when you give `--start`, because the orchestrator uses model quota:
+
+1. `workspace` creates a Herdr workspace with the label of the slug. The root pane gets the label `orch`.
+2. The step starts the agent `<slug>-orch`. It uses `--kind` when you give it. Otherwise it uses the first usable entry of the orchestrator ladder in Settings.
+3. The step gives the agent your goal, or the **Default orchestrator goal** from Settings. A Claude agent gets `/goal`. A Codex agent gets the goal in the first prompt.
+4. The step sends the first prompt. The agent reads `AGENTS.md`, the project memory, and the kit file. Then it starts the task `Set up the project`.
+
+Run the command again with `--resume --start` after a failure. The run uses the workspace and the pane that it created. It sends no message twice.
 
 Each step changes nothing when its result already exists. A run that stops at a failed step continues at that step on the next run. After the change, check the shares on the Allocation page.
 

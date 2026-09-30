@@ -72,11 +72,13 @@ const LABEL = { done: 'done', skipped: 'skipped', planned: '', 'not-built': 'not
 function stepLine(step) {
   const state = LABEL[step.status] ?? step.status;
   const detail = step.detail && step.detail !== 'done' && step.detail !== state ? step.detail : '';
-  return `  ${step.name.padEnd(10)}${[state, detail].filter(Boolean).join(' ')}`;
+  // A detail that starts with the state, such as "skipped: no --start", is not repeated.
+  const same = detail.startsWith(`${state}:`);
+  return `  ${step.name.padEnd(10)}${(same ? [detail] : [state, detail]).filter(Boolean).join(' ')}`;
 }
 
 // Run `project new` or `project check`. Returns the exit code. A usage error or a refusal throws.
-export function projectCommand(args, { env = process.env, herdr, dataDir, log = console.log } = {}) {
+export function projectCommand(args, { env = process.env, herdr, dataDir, log = console.log, hooks, flowOptions = {} } = {}) {
   const [action, ...rest] = args;
   if (action === 'check') {
     if (rest.length !== 1 || rest[0].startsWith('--')) throw new Error(PROJECT_CHECK_USAGE);
@@ -87,7 +89,7 @@ export function projectCommand(args, { env = process.env, herdr, dataDir, log = 
   // The caller check runs first: a worker pane must not reach any other step.
   verifyProjectCaller(env, herdr);
   const options = parseProjectNewArgs(rest);
-  const result = runProjectNew({ ...options, dataDir });
+  const result = runProjectNew({ ...options, dataDir, herdr, hooks, env, ...flowOptions });
   log(`${result.dryRun ? 'Dry run' : 'Project'} ${result.slug}`);
   for (const step of result.steps) log(stepLine(step));
   log(`Path: ${result.path}`);
@@ -97,6 +99,9 @@ export function projectCommand(args, { env = process.env, herdr, dataDir, log = 
     return 1;
   }
   if (result.dryRun) log('Next: run the same command without --dry-run.');
-  else log(`Next: open ${result.path}, describe the goal in README.md, and commit. The steps marked "not built yet" do not run yet.`);
+  else {
+    if (result.steps.some((step) => step.name === 'workspace' && step.status === 'skipped')) log('Next: add --start to create the Herdr workspace and start the orchestrator. The command sends the first prompt to the model.');
+    log(`Next: open ${result.path}, describe the goal in README.md, and commit. The steps marked "not built yet" do not run yet.`);
+  }
   return 0;
 }

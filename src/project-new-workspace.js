@@ -1,0 +1,170 @@
+// Step `workspace` of `herdr-boss project new`: the Herdr workspace, the orchestrator pane, the agent, the goal, and the first prompt.
+// The step spends model quota, so it runs only with --start. The flow state keeps the ids and one flag for each sent message,
+// so a rerun creates no second workspace or pane and sends nothing twice.
+import fs from 'node:fs';
+import path from 'node:path';
+import { loadPolicy } from './control.js';
+import { cleanGoal, goalDelivery, goalShown } from './goal.js';
+import { handoffTarget, successorAgentArgs } from './handoff.js';
+import { loadModels } from './kit/config.js';
+import { createHerdrRunner, deliverPrompt, isAgentPaneBusy, readAgentText, waitForAgentReady, waitForWorkerPane } from './kit/workers.js';
+import { writeProject } from './projects.js';
+
+const GOAL_CHECKS = 3;
+const GOAL_CHECK_WAIT_MS = 2000;
+const FIRST_TASK = 'Set up the project';
+
+const rows = (response, key) => (Array.isArray(response?.[key]) ? response[key] : Array.isArray(response) ? response : []);
+const workspaceId = (workspace) => workspace?.workspace_id ?? workspace?.workspaceId ?? workspace?.id ?? null;
+const paneId = (pane) => pane?.pane_id ?? pane?.paneId ?? pane?.id ?? null;
+const paneOf = (response) => response?.pane ?? response;
+
+export const orchestratorName = (slug) => `${slug}-orch`;
+
+// The harness and model of the orchestrator: --kind with the model of the policy for that kind,
+// else the first entry of orchestratorLadder that handoffTarget() accepts. Throws with the reason when none is usable.
+export function pickOrchestrator({ kind = null, policy, models }) {
+  if (kind) {
+    if (!['claude', 'codex'].includes(kind)) throw new Error('--kind must be claude or codex.');
+    try { return { kind, ...handoffTarget(kind, {}, policy, models) }; } catch (error) { throw new Error(`--kind ${kind}: ${error.message}`); }
+  }
+  const reasons = [];
+  for (const rung of policy.orchestratorLadder || []) {
+    try { return { kind: rung.kind, ...handoffTarget(rung.kind, { model: rung.model, effort: rung.effort }, policy, models) }; } catch (error) {
+      reasons.push(`${rung.kind} ${rung.model}: ${error.message}`);
+    }
+  }
+  throw new Error(`No entry of orchestratorLadder is usable. ${reasons.join(' ')}`.trim());
+}
+
+function loadTarget(context, kind) {
+  const models = loadModels();
+  const policy = loadPolicy({ file: path.join(context.dataDir, 'policy.json'), models, warn: () => {} });
+  return { policy, target: pickOrchestrator({ kind, policy, models }) };
+}
+
+// The text of the dry run.
+export function describeWorkspace(inputs, context) {
+  if (!context.start) return 'skipped: no --start';
+  let harness = '';
+  try {
+    const { target } = loadTarget(context, context.kind);
+    harness = ` with ${target.kind} ${target.model}`;
+  } catch (error) { harness = ` (no usable harness: ${error.message})`; }
+  return `would create the Herdr workspace ${inputs.slug} in ${inputs.path}, label the root pane orch, start the agent ${orchestratorName(inputs.slug)}${harness}, deliver the goal, and send the first prompt`;
+}
+
+// The workspace of the state, else the only workspace with the label of the slug, else the one whose pane is in the folder.
+function findWorkspace(herdr, recordedId, slug, cwd) {
+  const workspaces = rows(herdr(['workspace', 'list']), 'workspaces');
+  const recorded = recordedId && workspaces.find((w) => workspaceId(w) === recordedId);
+  if (recorded) return workspaceId(recorded);
+  const labeled = workspaces.filter((w) => w.label === slug);
+  if (labeled.length <= 1) return labeled.length ? workspaceId(labeled[0]) : null;
+  const inFolder = labeled.filter((w) => rows(herdr(['pane', 'list', '--workspace', workspaceId(w)]), 'panes').some((p) => (p.foreground_cwd ?? p.cwd) === cwd));
+  if (inFolder.length === 1) return workspaceId(inFolder[0]);
+  throw new Error(`More than one Herdr workspace has the label ${slug}. Close the extra workspaces, then run the flow again with --resume.`);
+}
+
+function findPane(herdr, ids, workspace) {
+  if (ids.paneId) {
+    try {
+      const pane = paneOf(herdr(['pane', 'get', ids.paneId]));
+      if (paneId(pane) === ids.paneId && (pane.workspace_id ?? pane.workspaceId) === workspace) return ids.paneId;
+    } catch { /* The recorded pane is gone. Look in the workspace. */ }
+  }
+  const panes = rows(herdr(['pane', 'list', '--workspace', workspace]), 'panes');
+  const pane = panes.find((p) => p.label === 'orch') ?? panes[0];
+  if (!pane) throw new Error(`The Herdr workspace ${workspace} has no pane.`);
+  return paneId(pane);
+}
+
+function firstPrompt({ slug, pane, boss, goal }) {
+  return `[herdr-boss] You are the orchestrator of the new project ${slug}. Your pane is ${pane}, labeled orch. ${boss ? `The Boss pane is ${boss}. ` : ''}`
+    + 'Read AGENTS.md, docs/orchestration/memory.md, and docs/orchestration/herdr-boss.md. '
+    + `Then start with the published task "${FIRST_TASK}".${goal ? ` The current Owner goal is: ${goal}` : ''}`;
+}
+
+// Point the published status at the workspace. A status that does not exist yet is left alone.
+function linkStatus(dataDir, slug, workspace) {
+  const dir = path.join(dataDir, 'projects');
+  let data;
+  try { data = JSON.parse(fs.readFileSync(path.join(dir, `${slug}.json`), 'utf8')); } catch (error) {
+    if (error.code === 'ENOENT') return;
+    throw error;
+  }
+  if (data.workspace === workspace) return;
+  const errors = writeProject(slug, { ...data, workspace }, { dir });
+  if (errors.length) throw new Error(`The status of ${slug} is not valid: ${errors.join(' ')}`);
+}
+
+// Run the step. context: start, kind, herdr (runner), hooks (tests replace the wait functions), env,
+// dataDir, ids (the saved ids), remember(patch) (merge into ids and save the state at once).
+export function workspaceStep(inputs, context) {
+  if (!context.start) return { status: 'skipped', reason: 'no-start', detail: 'skipped: no --start' };
+  const herdr = context.herdr ?? createHerdrRunner();
+  const hooks = { waitForPane: waitForWorkerPane, waitForReady: waitForAgentReady, readText: readAgentText, ...context.hooks };
+  const { policy, target } = loadTarget(context, context.kind);
+  const cwd = fs.realpathSync(inputs.path);
+  const name = orchestratorName(inputs.slug);
+  const ids = context.ids;
+
+  let workspace = findWorkspace(herdr, ids.workspaceId, inputs.slug, cwd);
+  let created = null;
+  if (!workspace) {
+    const response = herdr(['workspace', 'create', '--cwd', cwd, '--label', inputs.slug, '--no-focus']);
+    workspace = workspaceId(response?.workspace ?? response);
+    if (!workspace) throw new Error('Herdr created a workspace but did not return its id. Inspect the Herdr workspaces, then run the flow again with --resume.');
+    created = paneId(response?.root_pane ?? response?.pane);
+  }
+  // Another workspace than the recorded one: the old flags describe a pane that is gone.
+  if (ids.workspaceId !== workspace) context.remember({ workspaceId: workspace, paneId: created, agentStarted: false, kind: null, model: null, goalSent: false, goalVerified: false, promptSent: false });
+  else if (created) context.remember({ paneId: created });
+  linkStatus(context.dataDir, inputs.slug, workspace);
+
+  const pane = findPane(herdr, ids, workspace);
+  if (ids.paneId !== pane) context.remember({ paneId: pane });
+  const info = paneOf(herdr(['pane', 'get', pane]));
+  if (info.label !== 'orch') herdr(['pane', 'rename', pane, 'orch']);
+
+  let kind = info.agent || target.kind;
+  if (!info.agent) {
+    hooks.waitForPane(pane, workspace, cwd, herdr, hooks.wait);
+    const launch = successorAgentArgs({ toKind: target.kind, newPane: pane, newTab: info.tab_id ?? info.tabId, workspace }, target.launchArgs, context.env ?? process.env);
+    try { herdr(['agent', 'start', name, '--kind', target.kind, '--pane', pane, '--', ...launch]); } catch (error) { if (!isAgentPaneBusy(error)) throw error; }
+    context.remember({ agentStarted: true, kind: target.kind, model: target.model });
+  } else if (!ids.kind) context.remember({ agentStarted: true, kind });
+  kind = ids.kind || kind;
+
+  const goal = cleanGoal(inputs.goal) ?? cleanGoal(policy.defaultOrchestratorGoal);
+  const delivery = goalDelivery({ goal, kind });
+  const settle = () => hooks.waitForReady(name, kind, { herdr, readText: hooks.readText, wait: hooks.wait });
+  if (delivery === 'command') {
+    if (!ids.goalSent) {
+      settle();
+      herdr(['agent', 'prompt', name, `/goal ${goal}`]);
+      context.remember({ goalSent: true });
+    }
+    if (!ids.goalVerified) {
+      let shown = false;
+      for (let check = 1; check <= GOAL_CHECKS && !shown; check += 1) {
+        try {
+          const read = herdr(['pane', 'read', pane, '--source', 'visible', '--lines', '80', '--format', 'text']);
+          shown = goalShown(typeof read === 'string' ? read : read?.text, goal);
+        } catch { /* An unreadable pane counts as a goal that does not show yet. */ }
+        if (!shown && check < GOAL_CHECKS) (hooks.wait ?? ((ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)))(GOAL_CHECK_WAIT_MS);
+      }
+      if (!shown) throw new Error(`The pane ${pane} does not show the /goal after ${GOAL_CHECKS} checks. Check the pane, then run the flow again with --resume. The goal is not sent again.`);
+      context.remember({ goalVerified: true });
+    }
+  }
+  if (!ids.promptSent) {
+    if (!ids.goalSent) settle();
+    let boss = null;
+    try { boss = paneId(rows(herdr(['pane', 'list']), 'panes').find((p) => p.label === 'boss')); } catch { /* The prompt works without the Boss pane. */ }
+    const text = firstPrompt({ slug: inputs.slug, pane, boss, goal: delivery === 'prompt' ? goal : null });
+    deliverPrompt(name, text, `orchestrator of the new project ${inputs.slug}`, { herdr, readText: hooks.readText, wait: hooks.wait, kind });
+    context.remember({ promptSent: true });
+  }
+  return { detail: `workspace ${workspace}, pane ${pane}, agent ${name} (${kind}${ids.model ? ` ${ids.model}` : ''})` };
+}

@@ -137,7 +137,7 @@ test('cli: a real run creates the folder, prints done states, and exits 0', () =
     assert.equal(result.status, 0, result.stderr + result.stdout);
     assert.match(result.stdout, /folder\s+done/);
     assert.match(result.stdout, /commit\s+done/);
-    assert.match(result.stdout, /workspace\s+not built yet/);
+    assert.match(result.stdout, /workspace\s+skipped: no --start/);
     assert.ok(fs.existsSync(path.join(f.group, 'demo', 'AGENTS.md')));
   } finally { f.cleanup(); }
 });
