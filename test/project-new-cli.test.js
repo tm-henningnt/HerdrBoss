@@ -113,7 +113,8 @@ test('a dry run prints each step, the path, and the next action, and changes not
     assert.match(text, /folder\s+would run mkdir -p/);
     assert.match(text, /files\s+would write AGENTS\.md/);
     assert.match(text, /remote\s+skipped: --remote none/);
-    assert.match(text, /harness\s+not built yet/);
+    assert.match(text, /harness\s+skipped: no home folder/);
+    assert.match(text, /check\s+not built yet/);
     assert.match(text, new RegExp(`Path: ${path.join(f.group, 'demo').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
     assert.match(text, /Next: /);
     assert.deepEqual(fs.readdirSync(f.group), []);
@@ -173,13 +174,14 @@ test('cli: an unknown flag prints the usage line', () => {
   } finally { f.cleanup(); }
 });
 
-test('cli: project check exits 2 and says it is not built yet', () => {
+test('cli: project check exits 1 on a usage error and 4 for a project that is not registered', () => {
   const f = fixture();
   try {
     const result = f.cli('project', 'check', 'demo');
-    assert.equal(result.status, 2);
-    assert.match(result.stdout + result.stderr, /project check is not built yet/);
+    assert.equal(result.status, 4);
+    assert.match(result.stdout, /folder\s+missing: no folder is known/);
     assert.equal(f.cli('project', 'check').status, 1);
+    assert.match(f.cli('project', 'check', 'demo', '--bogus').stderr, /Usage: project check/);
   } finally { f.cleanup(); }
 });
 

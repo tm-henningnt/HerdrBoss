@@ -95,7 +95,7 @@ const USAGE = `herdr-boss <command>
                         [--kind claude|codex] [--goal TEXT] [--start] [--dry-run] [--resume]
                         Create a project folder with the kit files and the first commit.
                         Exit 0 done, 1 usage or refusal, 2 not built, 3 waiting for the Owner.
-  project check <slug>  Check a project set-up. Not built yet: exits 2.
+  project check <slug> [--fix STEP [--start]]  Check a project set-up. Exit 4 when an item is missing.
   scratch SLUG          Create the durable scratch folder of a project and print its path.
   policy show|set FILE  Show or replace the local resource policy.
   usage record FILE     Add measured or unmeasured project usage.

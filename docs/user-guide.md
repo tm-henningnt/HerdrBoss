@@ -87,7 +87,15 @@ The step `workspace` starts the first orchestrator. It runs only when you give `
 3. The step gives the agent your goal, or the **Default orchestrator goal** from Settings. A Claude agent gets `/goal`. A Codex agent gets the goal in the first prompt.
 4. The step sends the first prompt. The agent reads `AGENTS.md`, the project memory, and the kit file. Then it starts the task `Set up the project`.
 
+The step `harness` prepares the machine for the project:
+
+1. It adds the project to the Codex `writable_roots`. It writes a backup of the Codex config first.
+2. It prints the Claude autoMode lines that are missing. Add them to `~/.claude/settings.json` yourself. Herdr Boss never edits that file. The step detail says `needs Owner action` when a line is missing.
+3. It reserves a browser port for the project. It starts no browser.
+
 Run the command again with `--resume --start` after a failure. The run uses the workspace and the pane that it created. It sends no message twice.
+
+Run `herdr-boss project check <slug>` at any time. It reads the project and prints `ok` or `missing:` for each part: the folder, `AGENTS.md`, the kit, the first commit, the remote, the policy entry, the registration, the status, the workspace, the Codex roots, and the browser reservation. It changes nothing. Each missing part names a fix. Run `herdr-boss project check <slug> --fix STEP` to run that one step again. The command then prints the check again. The exit code is 0 when all parts are present and 4 when a part is missing.
 
 Each step changes nothing when its result already exists. A run that stops at a failed step continues at that step on the next run. After the change, check the shares on the Allocation page.
 

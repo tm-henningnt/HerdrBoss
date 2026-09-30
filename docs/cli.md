@@ -82,7 +82,7 @@ The first `publish` of a slug registers the project. It records `{ slug, repo, r
 herdr-boss project new <slug> [--group DIR | --path DIR] [--remote gh|URL|none]
   [--visibility private|public] [--org NAME] [--kind claude|codex] [--goal TEXT]
   [--start] [--dry-run] [--resume]
-herdr-boss project check <slug>
+herdr-boss project check <slug> [--fix STEP [--start]]
 ```
 
 `project new` calls `runProjectNew` and prints one line for each step, the project path, and the next action. It never prints a token.
@@ -100,11 +100,49 @@ herdr-boss project check <slug>
 | `--dry-run` | Print each step as `would ...`. Change nothing. |
 | `--resume` | Continue a saved run. |
 
-Only the steps of `runProjectNew` that are built run. The steps `harness` and `check` print `not built yet`. The values of `--remote`, `--visibility`, and `--org` control the step `remote`. The values of `--kind` and `--start` control the step `workspace`.
+Only the steps of `runProjectNew` that are built run. The step `check` prints `not built yet`. The values of `--remote`, `--visibility`, and `--org` control the step `remote`. The values of `--kind` and `--start` control the step `workspace`.
+
+The step `harness` runs the Codex part of `herdr-boss harness sync` and reserves the project browser. It prints the Claude autoMode lines. It never edits `~/.claude/settings.json`. See "Step harness" below.
 
 A step prints one state: `done`, `skipped`, `waiting`, `failed`, `pending`, `not built yet`, or, in a dry run, `would ...`.
 
-`project check <slug>` is not built yet. It prints `project check is not built yet` and exits with code 2.
+### Step harness
+
+The step `harness` does three things for the new project:
+
+1. It adds the missing Codex `writable_roots` to `~/.codex/config.toml`. It writes a backup file first. It adds no root that exists.
+2. It prints the Claude autoMode lines that `herdr-boss harness sync` prints. It never edits `~/.claude/settings.json`. When a line is missing, the step detail says `needs Owner action`. Add the printed lines to the file yourself.
+3. It reserves the project browser, the same as `herdr-boss browser request <slug> --reserve`. It launches no browser.
+
+A Codex root or a browser port that cannot be set is a warning in the step detail. The step does not fail. A second run changes nothing. A dry run changes and reserves nothing.
+
+The step runs only with the default data dir, or with an explicit `home` option of `runProjectNew`. With another data dir and no `home`, the step prints `skipped: no home folder for this data dir`.
+
+### Command project check
+
+`project check <slug>` only reads. It writes no file and starts no step. It prints one line for each item. An item line starts with `ok`, or with `missing:` and the reason. A missing item names the fix step, or says `fix by hand`.
+
+The check works for a project that `project new` did not make. It reads the folder, the data dir, and the Codex config. It needs no flow state file. It uses the state file only for the recorded remote and for the question whether the flow ran with `--start`.
+
+| Item | Present when | Fix step |
+|---|---|---|
+| `folder` | The folder exists, has a Git repository, and is on `main`. | `folder` |
+| `agents` | `AGENTS.md` exists and `herdr-boss check agents` reports no error for it. | `files`, `kit` |
+| `memory` | `docs/orchestration/memory.md` exists. | `files` |
+| `kit` | `docs/orchestration/herdr-boss.md` has the current kit revision, and `.claude/settings.json` has the SessionStart hook. | `kit` |
+| `config` | `.herdr-boss.json` is valid JSON with the slug of the project. | `files` |
+| `gitignore` | `.gitignore` exists. | `files` |
+| `commit` | The repository has a first commit. | `commit` |
+| `remote` | `origin` is set, or the state records that the step `remote` was skipped. | `remote` |
+| `policy` | The policy has an entry for the slug. | `policy` |
+| `register` | `project-repos.json` has a row for the slug. | `register` |
+| `status` | The published status exists and has a task. | `status` |
+| `workspace` | The flow ran with `--start`: Herdr has the workspace. Otherwise the item is `ok`. | `workspace` |
+| `orchestrator` | The flow ran with `--start`: the pane `orch` has the agent `<slug>-orch`. Otherwise the item is `ok`. | `workspace` |
+| `harness` | The Codex `writable_roots` hold every required path. | `harness` |
+| `browser` | `browser-sessions.json` has a reservation for the slug. | `harness` |
+
+`--fix STEP` runs the named flow step and no other step. Then the command prints the check again. The steps that `--fix` accepts are `folder`, `files`, `kit`, `commit`, `remote`, `policy`, `register`, `status`, `workspace`, and `harness`. `--fix remote` still posts a decide item to the Owner and waits for the answer. `--fix workspace` needs `--start`, because the step uses model quota. The flag `--fix` may be used once. `--fix` refuses a worker pane, like `project new`. Plain `project check` has no pane check. A step that cannot be fixed by a step, such as invalid JSON in `.herdr-boss.json`, needs a correction by hand.
 
 | Exit code | Meaning |
 |---|---|
@@ -112,6 +150,7 @@ A step prints one state: `done`, `skipped`, `waiting`, `failed`, `pending`, `not
 | 1 | Usage error or refusal. This includes an unknown flag and a failed step. |
 | 2 | Not built. |
 | 3 | Waiting for an Owner decision. The step `remote` posted a decide item. |
+| 4 | `project check` found a missing item. |
 
 Run `project new` in a plain terminal, in the pane labeled `boss`, or in a pane labeled `orch`. A worker pane is refused before any step runs. The pane check is the check of `herdr-boss say`.
 
@@ -119,7 +158,7 @@ Run `project new` in a plain terminal, in the pane labeled `boss`, or in a pane 
 
 The module `src/project-new.js` exports `runProjectNew(options)`. The command calls it.
 
-`runProjectNew` runs these steps in order: `validate`, `folder`, `files`, `kit`, `commit`, `remote`, `policy`, `register`, `status`, `workspace`. The steps `harness` and `check` report `not built yet`. They change nothing. A step that returns `waiting` stops the run. The result has `waiting: true`, and the later steps are `pending`.
+`runProjectNew` runs these steps in order: `validate`, `folder`, `files`, `kit`, `commit`, `remote`, `policy`, `register`, `status`, `workspace`, `harness`. The step `check` reports `not built yet`. It changes nothing. A step that returns `waiting` stops the run. The result has `waiting: true`, and the later steps are `pending`.
 
 | Option | Meaning |
 |---|---|
@@ -133,6 +172,9 @@ The module `src/project-new.js` exports `runProjectNew(options)`. The command ca
 | `org` | The organization for `gh`. It must match `[A-Za-z0-9][A-Za-z0-9-]{0,38}`. `runProjectNew` refuses another value before any change. |
 | `start` | Run the step `workspace`. Without it, the step prints `skipped: no --start` and creates nothing. |
 | `kind` | `claude` or `codex`. Overrides the orchestrator ladder. |
+| `home` | The home folder for the step `harness`. The default is the account home, and only with the default data dir. |
+
+The module `src/project-new-check.js` exports `checkProject(slug, options)` and `formatCheck(check)`. `runProjectStep(name, options)` in `src/project-new.js` runs one step for `--fix`.
 | `herdr` | The Herdr runner that the step `workspace` uses. The default is `createHerdrRunner()`. Tests pass a fake. |
 | `dryRun` | Return each step with the action it would run. Change nothing. |
 | `allowUnscanned` | Paths of large or binary files that the commit scan skips. The default is none. |
