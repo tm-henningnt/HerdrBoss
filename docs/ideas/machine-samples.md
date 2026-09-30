@@ -145,7 +145,7 @@ Set a percent to `null` to switch its rule off. A rule clears when swap is 5 poi
 
 ### Warning
 
-`rules.js` adds an alert with key `machine:swap`, severity `warn`. The title is "Swap high: N% used". The text tells the reader to close finished workers and their browsers and to start no new browser or test workers. The alert uses the existing cooldown (`alertCooldownSeconds`) and the existing notice path. It does not depend on `guardEnabled`.
+`rules.js` adds an alert with key `machine:swap`, severity `warn`. The title is "Swap high: N% used". The text gives advice: swap is elastic, the browser worker rule, and close finished workers and their browsers. The alert uses the existing cooldown (`alertCooldownSeconds`) and the existing notice path. It does not depend on `guardEnabled`.
 
 ### Refusal
 

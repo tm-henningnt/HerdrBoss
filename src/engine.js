@@ -27,7 +27,7 @@ import { applyTaskState, readWorkerFacts, gitIsMerged } from './task-state.js';
 import { kitRevisionState, kitSnapshot, KIT_STATES } from './kit/agents-check.js';
 import { nextDailyTime, nightNoticeSent, quietHoursActive, readNight, readNightRecord, watchUntilPhrase, withNightReportMark, withNoticeMark, writeNight } from './night.js';
 import { inspectWorkerTransitions, inspectWorkerReports, isWorkerPane, applyWorkerFailureStatuses, resolveFreeUsageRun, activeFreeModelExhaustions, extendFreeModelExhaustion, activeFreeLaneExhaustions, extendFreeLaneExhaustion, freeUsageLaneRetry } from './worker-failures.js';
-import { appendMachineSample, sampleLine } from './machine-samples.js';
+import { appendMachineSample, highSwapHoursLine, sampleLine } from './machine-samples.js';
 import { FULL_SUITE_LOCK, lockLedgerSummary, readLockQueue, readLockTakeoverNotices, readMachineLocks, removeLockTakeoverNotice } from './kit/locks.js';
 
 const TASK_WORKERS_INTERVAL_MS = 15_000;
@@ -781,6 +781,18 @@ export class Engine extends EventEmitter {
         snap.machine.limits = machineLimits(snap.machine, policy, now, snap.night);
         this.memory.swapWarn = swapWarnStep(this.memory.swapWarn, snap.machine.limits);
         snap.machine.limits.swapWarning = this.memory.swapWarn.active;
+        if (snap.machine.limits.swapWarning) {
+          // The line reads the sample file. Refresh it at most every 10 minutes.
+          const cached = this.memory.swapHours;
+          if (!cached || now - cached.at > 600_000) {
+            let line = null;
+            try {
+              line = highSwapHoursLine({ warnPercent: snap.machine.limits.swapWarnPercent, minUsedGB: snap.machine.limits.swapMinUsedGB, now });
+            } catch { /* the history line is optional */ }
+            this.memory.swapHours = { at: now, line };
+          }
+          snap.machine.limits.swapHoursLine = this.memory.swapHours.line;
+        }
         if (this.act) this.recordMachineSample(snap, queue, now);
       }
       // The unmetered lane lists the permitted free models that can start. It never affects least-over selection.

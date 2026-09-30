@@ -276,7 +276,17 @@ export function evaluate(snap, cfg, paneSince, now = Date.now(), policy = null) 
       alerts.push({
         key: 'machine:swap', severity: 'warn', scope: 'all',
         title: `Swap high: ${percent}% used`,
-        text: `Swap is ${percent}% used (${limits.swapUsedGB.toFixed(1)} GB). Close finished workers and their browsers. Start no new browser or test workers until it drops.`,
+        text: [
+          `Swap is ${percent}% used (${limits.swapUsedGB.toFixed(1)} GB).`,
+          'macOS swap grows on demand, so a high figure alone does not mean the machine is short of memory.',
+          limits.swapRefuseEnabled === true
+            ? `The swap refusal is on. It refuses new work at ${limits.swapRefusePercent}% swap with at least ${limits.swapMinUsedGB} GB in use.`
+            : 'The swap refusal is off.',
+          'Use at most 1 browser worker at a time while swap is above the warning level. Use up to 3 browser workers otherwise.',
+          'One worker at a time is fine.',
+          'Close finished workers and their browsers.',
+          limits.swapHoursLine || '',
+        ].filter(Boolean).join(' '),
       });
     }
     const guardActive = limits ? (limits.guardActive ?? (limits.guardState ? limits.guardState === 'active' : true)) : true;

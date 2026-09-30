@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { POLICY_DEFAULTS, machineLimits } from '../src/control.js';
 import { evaluate, swapWarnStep } from '../src/rules.js';
+import { highSwapHoursLine } from '../src/machine-samples.js';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const policy = (machine = {}) => ({ ...structuredClone(POLICY_DEFAULTS), machine: { ...POLICY_DEFAULTS.machine, ...machine } });
@@ -92,7 +93,7 @@ test('evaluate raises machine:swap from the limits, also when the guard is off',
     assert.ok(alert, `guardEnabled ${pol.machine.guardEnabled}`);
     assert.equal(alert.severity, 'warn');
     assert.equal(alert.title, 'Swap high: 85% used');
-    assert.match(alert.text, /browser or test workers/);
+    assert.match(alert.text, /at most 1 browser worker/);
     const quiet = evaluate({ projects: [], herdr: { workspaces: [], panes: [] }, machine: { ...machine, limits: { ...limits, swapWarning: false } } }, cfg, {}, now, pol).alerts;
     assert.ok(!quiet.some((a) => a.key === 'machine:swap'));
   }
@@ -301,4 +302,54 @@ test('push refuses at high swap only when a pre-push hook exists', (t) => {
   const result = runKitCommand('push', ['--dry-run'], plain.options());
   assert.equal(typeof result.exitCode, 'number');
   assert.ok(plain.lines.some((line) => /no pre-push hook/.test(line)));
+});
+
+const swapText = (machineOverrides, limitsOverrides = {}) => {
+  const cfg = { quota: { warnPercent: 90, criticalPercent: 98 }, machine: { memFreeWarnPercent: 15, loadWarnFactor: 2 }, providerKinds: {} };
+  const now = Date.parse('2026-09-30T12:00:00Z');
+  const pol = policy(machineOverrides);
+  const machine = { cpus: 8, load: [1, 1, 1], memFreePercent: 50, memTotalGB: 24, cpuTotalSample: 0, ownerIdleMinutes: 0, ...sample(3500) };
+  const limits = { ...machineLimits(machine, pol, now), swapWarning: true, ...limitsOverrides };
+  const alerts = evaluate({ projects: [], herdr: { workspaces: [], panes: [] }, machine: { ...machine, limits } }, cfg, {}, now, pol).alerts;
+  return alerts.find((a) => a.key === 'machine:swap').text;
+};
+
+test('the swap alert text is advice, with the refusal off', () => {
+  const text = swapText({});
+  assert.match(text, /^Swap is 85% used \(3\.4 GB\)\./);
+  assert.match(text, /swap grows on demand/);
+  assert.match(text, /does not mean the machine is short of memory/);
+  assert.match(text, /The swap refusal is off\./);
+  assert.match(text, /at most 1 browser worker at a time/);
+  assert.match(text, /up to 3 browser workers/);
+  assert.match(text, /One worker at a time is fine\./);
+  assert.match(text, /Close finished workers and their browsers\./);
+  assert.doesNotMatch(text, /start no|block/i);
+});
+
+test('the swap alert text names the refusal when it is on', () => {
+  const text = swapText({ swapRefuseEnabled: true });
+  assert.match(text, /The swap refusal is on\. It refuses new work at 95% swap with at least 2 GB in use\./);
+  assert.doesNotMatch(text, /refusal is off/);
+  assert.doesNotMatch(text, /start no|block/i);
+});
+
+test('the swap alert text ends with the swap hours line when the limits hold one', () => {
+  const line = 'Swap was above the warning level in hours 14 to 17 on 3 of the last 7 days.';
+  assert.ok(swapText({}, { swapHoursLine: line }).endsWith(line));
+  assert.doesNotMatch(swapText({}), /Swap was above/);
+});
+
+test('highSwapHoursLine reports the hours with high swap by day, in aggregate', () => {
+  const now = Date.parse('2026-09-30T20:00:00');
+  const at = (day, hour) => new Date(2026, 8, day, hour, 30).toISOString();
+  const high = (day, hour) => ({ at: at(day, hour), swapMB: 3500, swapTotalMB: 4096 });
+  const low = (day, hour) => ({ at: at(day, hour), swapMB: 500, swapTotalMB: 4096 });
+  const samples = [];
+  for (const day of [28, 29, 30]) for (const hour of [14, 15, 16, 17]) samples.push(high(day, hour));
+  samples.push(high(29, 9), low(28, 9), low(30, 9));
+  assert.equal(highSwapHoursLine({ warnPercent: 80, minUsedGB: 2, samples, now }), 'Swap was above the warning level in hours 14 to 17 on 3 of the last 7 days.');
+  assert.equal(highSwapHoursLine({ warnPercent: 80, minUsedGB: 2, samples: [low(30, 9)], now }), null);
+  assert.equal(highSwapHoursLine({ warnPercent: 99, minUsedGB: 2, samples, now }), null);
+  assert.equal(highSwapHoursLine({ warnPercent: null, samples, now }), null);
 });
