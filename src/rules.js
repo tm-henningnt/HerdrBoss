@@ -1,6 +1,6 @@
 // Turns a snapshot into alerts and bulletin advice. Pure functions, no side effects.
 import { dashboardUrl } from './config.js';
-import { formatPacingGoalEnd, goalSummary, hasQuotaData, machineLimits, pacingGoal, pacingGoalEnd, POLICY_DEFAULTS, unmeteredClosedParts, unmeteredSummary, useNowLanes } from './control.js';
+import { aheadOfQuotaPace, formatPacingGoalEnd, goalSummary, hasQuotaData, machineLimits, pacingGoal, pacingGoalEnd, POLICY_DEFAULTS, unmeteredClosedParts, unmeteredSummary, useNowLanes } from './control.js';
 import { blockedWorkerAlerts } from './worker-failures.js';
 import { kitRevision } from './kit/agents-check.js';
 import { leaseBulletinLines } from './leases.js';
@@ -221,7 +221,7 @@ export function evaluate(snap, cfg, paneSince, now = Date.now(), policy = null) 
           title: `${name} ${w.label.toLowerCase()} quota at ${w.usedPercent}%`,
           text: `${name} ${w.label.toLowerCase()} quota is at ${w.usedPercent}% and resets ${reset}. Use ${name} only for work that needs it.`,
         });
-      } else if (w.usedPercent >= 40 && (w.willLast === false || Number.isFinite(pacingGoalEnd(policy, q.provider, w)))) {
+      } else if (w.usedPercent >= 40 && (w.willLast === false || Number.isFinite(pacingGoalEnd(policy, q.provider, w))) && (w.expectedPercent == null || aheadOfQuotaPace(policy, q.provider, w, now))) {
         const goalEnd = pacingGoalEnd(policy, q.provider, w);
         if (Number.isFinite(goalEnd)) {
           const goalPercent = pacingGoal(policy, q.provider, w.key);
@@ -452,10 +452,10 @@ export function renderBulletin(snap, evaluation, cfg) {
         continue;
       }
       const back = lane.backOnPaceAt ? ` Back ${lane.state === 'reserve' ? 'at reset' : 'on pace if unused'} about ${fmtTime(lane.backOnPaceAt)}.` : '';
-      const text = lane.state === 'open' ? 'open.' : lane.state === 'unknown' ? 'unknown: no quota data.'
+      const text = lane.state === 'open' ? (lane.onPace ? `on pace (${lane.onPace.usedPercent}% used, expected ${lane.onPace.expectedPercent}%, tolerance ${lane.onPace.tolerancePoints} points).` : 'open.') : lane.state === 'unknown' ? 'unknown: no quota data.'
         : lane.state === 'exhausted' ? `exhausted: ${lane.usedPercent}% used in the ${lane.window} window; exhausted until ${lane.resetAt || '?'}.`
           : lane.state === 'trickle' ? `trickle (${lane.window} ${lane.usedPercent}% used, ahead of pace): about ${lane.allowancePercent.toFixed(1)}%/day, ${(lane.usedTodayPercent || 0).toFixed(1)}% used today.`
-        : `${lane.state === 'reserve' ? 'near exhaustion' : 'ahead of pace'}: ${lane.usedPercent}% used${lane.expectedPercent != null ? ` against ${lane.expectedPercent}% expected` : ''} in the ${lane.window} window.${back}`;
+        : `${lane.state === 'reserve' ? 'near exhaustion' : 'ahead of pace'}: ${lane.usedPercent}% used${lane.expectedPercent != null ? ` against ${lane.expectedPercent}% expected` : ''} in the ${lane.window} window${lane.expectedPercent != null && Number.isFinite(lane.tolerancePoints) ? `, tolerance ${lane.tolerancePoints} points` : ''}.${back}`;
       const goals = goalSummary(lane.goals);
       L.push(`- ${providerName(provider)}: ${text}${goals ? ` ${goals}.` : ''}${lane.state === 'pace' && snap.leastOverProvider === provider ? ' Every metered provider is over pace; this one is the least over, and worker start allows it.' : ''}`);
     }

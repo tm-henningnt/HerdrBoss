@@ -356,6 +356,10 @@ function inAbout(iso, now) {
 export function describeLane(provider, lane, now = Date.now()) {
   const goals = goalSummary(lane?.goals);
   const suffix = goals ? `; ${goals}` : '';
+  if (lane?.state === 'open' && lane.onPace) {
+    const { usedPercent, expectedPercent, tolerancePoints } = lane.onPace;
+    return `${provider} on pace (${usedPercent}% used, expected ${expectedPercent}%, tolerance ${tolerancePoints} points)${suffix}`;
+  }
   if (!lane || lane.state === 'open') return `${provider} open${suffix}`;
   if (lane.state === 'unknown') return `${provider} unknown (no quota data)${suffix}`;
   if (lane.state === 'exhausted') return `${provider} exhausted: ${lane.usedPercent}% used in the ${lane.window} window; exhausted until ${lane.resetAt || 'an unknown time'}${suffix}`;
@@ -365,7 +369,8 @@ export function describeLane(provider, lane, now = Date.now()) {
   }
   const numbers = `${lane.usedPercent}% used${lane.expectedPercent != null ? ` against ${lane.expectedPercent}% expected` : ''} in the ${lane.window} window`;
   if (lane.state === 'reserve') return `${provider} near exhaustion: ${numbers}; resets in ${inAbout(lane.backOnPaceAt, now)}${suffix}`;
-  return `${provider} ahead of pace: ${numbers}; back on pace in about ${inAbout(lane.backOnPaceAt, now)} if unused${suffix}`;
+  const tolerance = lane.expectedPercent != null && Number.isFinite(lane.tolerancePoints) ? `; tolerance ${lane.tolerancePoints} points` : '';
+  return `${provider} ahead of pace: ${numbers}; back on pace in about ${inAbout(lane.backOnPaceAt, now)} if unused${tolerance}${suffix}`;
 }
 
 export function describeUnmetered(lane, project = null) {
