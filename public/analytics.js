@@ -50,6 +50,8 @@ export function legendHtml(series, extra = '') {
 }
 
 // The chart keeps its drawn size between min and 1.35 times its width. Below min it scrolls sideways in its box.
+// A timeline keeps 86 percent of its view width, so a 10.5 px tick renders at 9 px or more. A narrow screen scrolls the chart in its box.
+const timelineMin = (width) => Math.max(380, Math.round(width * 0.86));
 const sizeStyle = (width, min, grow = 1.35) => `min-width:${Math.round(Math.min(width, min))}px;max-width:${Math.round(width * grow)}px`;
 // One tab stop for each chart: the first hit area has tabindex 0 and the others -1. The arrow keys move the stop (public/app.js).
 // data-keep-attrs keeps the moved stop when a refresh patches the chart.
@@ -120,7 +122,7 @@ export function lineChart({ points, series, yMax = 100, fmt = (n) => `${n}%`, la
   const labels = xLabels.map((l) => `<text x="${x(l.i)}" y="${top + plotH + 17}" text-anchor="middle" class="viz-tick">${esc(l.label)}</text>`).join('');
   const tipAttr = rovingTips();
   const hits = points.map((_, i) => (tips[i] ? `<rect x="${left + i * step}" y="${top}" width="${step}" height="${plotH}" class="viz-hit" ${tipAttr(tips[i])}/>` : '')).join('');
-  return `<svg class="viz" viewBox="0 0 ${width} ${height}" style="${sizeStyle(width, 380)}" role="img" aria-label="${esc(label)}">${ticks}${shade}${paths}${labels}${hits}</svg>`;
+  return `<svg class="viz" viewBox="0 0 ${width} ${height}" style="${sizeStyle(width, timelineMin(width))}" role="img" aria-label="${esc(label)}">${ticks}${shade}${paths}${labels}${hits}</svg>`;
 }
 
 // A small strip of bars under a timeline, with its own short axis: the minutes a suite request waited in each column.
@@ -134,7 +136,7 @@ export function stripBars({ values, max, label = '', height = 56, tips = [], uni
   const bars = values.map((v, i) => (v > 0 ? `<rect x="${left + i * step + 0.5}" y="${top + plotH - (v / top1) * plotH}" width="${Math.max(1, step - 1)}" height="${(v / top1) * plotH}" class="viz-fill s-wait"/>` : '')).join('');
   // The strip repeats the tooltips of the chart above it, so it takes no tab stop. Hover and touch still open a tooltip.
   const hits = values.map((_, i) => (tips[i] ? `<rect x="${left + i * step}" y="${top}" width="${step}" height="${plotH}" class="viz-hit" data-tip="${esc(tips[i])}"/>` : '')).join('');
-  return `<svg class="viz viz-strip" viewBox="0 0 ${width} ${height}" style="${sizeStyle(width, 380)}" role="img" aria-label="${esc(label)}"><line x1="${left}" x2="${width - right}" y1="${top + plotH}" y2="${top + plotH}" class="viz-grid base"/><text x="${left - 6}" y="${top + 8}" text-anchor="end" class="viz-tick">${top1}</text><text x="${left - 6}" y="${top + plotH}" text-anchor="end" class="viz-tick">${esc(unit)}</text>${bars}${hits}</svg>`;
+  return `<svg class="viz viz-strip" viewBox="0 0 ${width} ${height}" style="${sizeStyle(width, timelineMin(width))}" role="img" aria-label="${esc(label)}"><line x1="${left}" x2="${width - right}" y1="${top + plotH}" y2="${top + plotH}" class="viz-grid base"/><text x="${left - 6}" y="${top + 8}" text-anchor="end" class="viz-tick">${top1}</text><text x="${left - 6}" y="${top + plotH}" text-anchor="end" class="viz-tick">${esc(unit)}</text>${bars}${hits}</svg>`;
 }
 
 // A heat map: rows by columns, one blue step for each fifth of the largest value. Zero stays the empty cell color.

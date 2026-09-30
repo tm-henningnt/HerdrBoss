@@ -1678,7 +1678,7 @@ function leaseDialog() {
     <p id="lease-confirm-text"></p>
     <p class="setting-help">The release removes the lease from leases.json. It never stops a process.</p>
     <p class="lease-confirm-status" id="lease-confirm-status" role="status"></p>
-    <div class="lease-confirm-actions"><button type="button" data-lease-cancel>Cancel</button><button type="button" id="lease-confirm-release">Release</button></div>`;
+    <div class="lease-confirm-actions"><button type="button" class="quiet" data-lease-cancel>Cancel</button><button type="button" class="danger" id="lease-confirm-release">Release</button></div>`;
   document.body.append(dialog);
   dialog.querySelector('[data-lease-cancel]').addEventListener('click', () => dialog.close());
   dialog.querySelector('#lease-confirm-release').addEventListener('click', confirmLeaseRelease);
@@ -1775,7 +1775,7 @@ function resourcePoolRemoveDialog() {
     <p id="resource-pool-remove-text"></p>
     <p class="setting-help">A pool cannot be removed while one of its items is held.</p>
     <p class="lease-confirm-status" id="resource-pool-remove-status" role="status"></p>
-    <div class="lease-confirm-actions"><button type="button" data-pool-remove-cancel>Cancel</button><button type="button" id="resource-pool-remove-confirm">Remove pool</button></div>`;
+    <div class="lease-confirm-actions"><button type="button" class="quiet" data-pool-remove-cancel>Cancel</button><button type="button" class="danger" id="resource-pool-remove-confirm">Remove pool</button></div>`;
   document.body.append(dialog);
   dialog.querySelector('[data-pool-remove-cancel]').addEventListener('click', () => dialog.close());
   dialog.querySelector('#resource-pool-remove-confirm').addEventListener('click', confirmResourcePoolRemove);
@@ -2026,11 +2026,15 @@ function quotaChart() {
   const rows = lanes.map((x) => [esc(name(x)), x.lastUsed === null ? '–' : `${x.lastUsed}%`, x.lastPace === null ? '–' : `${x.lastPace}%`, x.lastUsed === null || x.lastPace === null ? '–' : `${x.lastUsed - x.lastPace > 0 ? '+' : ''}${x.lastUsed - x.lastPace} pts`]);
   return vizCard({
     ...base, title,
-    sub: `Weekly window, percent used, one column for each hour over the last ${hours > 48 ? `${Math.round(hours / 24)} days` : `${hours} hours`}. A drop is a window reset.`,
+    sub: `Weekly window, percent used, one column for each hour over ${lastWindowText(hours)}. A drop is a window reset.`,
     legend,
     chart: lineChart({ points: q.cols, series: q.series, yMax: 100, tips, xLabels, label: title }),
     details: vizTable(['Lane', 'Used now', 'Pace now', 'Difference'], rows),
   });
+}
+function lastWindowText(hours) {
+  if (hours > 48) return `the last ${Math.round(hours / 24)} days`;
+  return hours === 1 ? 'the last hour' : `the last ${hours} hours`;
 }
 const localDayKey = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 
@@ -2305,8 +2309,9 @@ function messageState(m) {
 }
 
 function mailDeliveryState(m) {
-  if (m.status === 'relayed') return `relayed by the Boss ${clock(m.relayedAt)}`;
-  if (m.status === 'sent') return `delivered ${clock(m.sentAt)}`;
+  // A record without a time shows the state alone, not a dash for the missing time.
+  if (m.status === 'relayed') return m.relayedAt ? `relayed by the Boss ${clock(m.relayedAt)}` : 'relayed by the Boss';
+  if (m.status === 'sent') return m.sentAt ? `delivered ${clock(m.sentAt)}` : 'delivered';
   if (m.status === 'failed') return `failed: ${m.error || 'unknown error'}`;
   return 'queued';
 }
@@ -2333,11 +2338,11 @@ function messageDialog() {
   dialog.id = 'message-panel';
   dialog.className = 'message-panel';
   dialog.setAttribute('aria-labelledby', 'message-title');
-  dialog.innerHTML = `<div class="message-head"><h2 id="message-title">Messages</h2><button type="button" data-message-close>Close</button></div>
+  dialog.innerHTML = `<div class="message-head"><h2 id="message-title">Messages</h2><button type="button" class="quiet" data-message-close>Close</button></div>
     <ol class="msg-thread" id="message-thread" aria-live="polite"></ol>
     <form class="message-form" id="message-form"><label for="message-text">Message</label><textarea id="message-text" maxlength="2000" rows="3" required></textarea>
       <div class="message-send"><span class="sub" id="message-count">0 / 2000</span><button type="submit">Send</button></div></form>
-    <div class="message-nudges" role="group" aria-label="Quick messages">${MESSAGE_NUDGES.map((text) => `<button type="button" data-message-nudge="${esc(text)}">${esc(text)}</button>`).join('')}<button type="button" data-message-status>Ask for status</button></div>
+    <div class="message-nudges" role="group" aria-label="Quick messages">${MESSAGE_NUDGES.map((text) => `<button type="button" class="quiet" data-message-nudge="${esc(text)}">${esc(text)}</button>`).join('')}<button type="button" class="quiet" data-message-status>Ask for status</button></div>
     <p class="message-status" id="message-status" role="status"></p>`;
   document.body.append(dialog);
   dialog.addEventListener('close', () => { clearInterval(messagePanel.timer); messagePanel.timer = null; messagePanel.thread = null; });
@@ -4991,7 +4996,7 @@ const HELP = {
     <h3>Markdown</h3><p>The page shows headings, bold, italic, lists, task lists, tables, code, quotes, rules, and links. A wide table or code block scrolls sideways in its own box. Raw HTML shows as text. A link opens only when it uses <code>http</code>, <code>https</code>, or <code>mailto</code>, or a local path. An external link opens in a new tab.</p>
     <h3>Actions</h3><p><b>Answer</b>: type an answer and select <b>Send</b>. <b>Approve</b>: select <b>Approve</b> or <b>Reject</b>. A note is optional. <b>Decide</b>: select a choice, or type an answer and select <b>Send</b>. Choice buttons appear when the message has a Markdown list under a <b>Choices</b> heading. Each answer uses the same delivery limit and safety checks as a new message. An answered item moves to <b>Done</b>.</p>
     <h3>Compose</h3><p>Select <b>New message</b> to write to the Boss or a project with an <code>orch</code> pane. The page asks you to confirm before it sends. The new conversation opens in <b>Sent</b>.</p>
-    <h3>Phone</h3><p>The Mailbox fills the screen. The page header does not show. Select the menu button at the top left to open the drawer with the folders, the other pages, and Help. A dot on the menu button shows unread chats. Select <b>New</b> at the bottom right to write a message. The desktop Mailbox badge shows unread Needs-you items.</p><p>In a conversation, the actions of the open item sit in a bar at the bottom edge. An approval has <b>Approve</b>, <b>Reject</b>, a note button, and <b>Dismiss</b>. A decision has its choice buttons, a note button, and <b>Dismiss</b>. An answer has <b>Dismiss</b>, the answer field, and <b>Send</b>. The note button opens a text field. When the keyboard opens, the bar stays above it.</p><p>In Needs you, select a check box to start a selection. The selection bar replaces <b>New</b> at the bottom edge. It shows the count, a button to clear the selection, <b>All</b>, and <b>Dismiss</b> with the count.</p>
+    <h3>Phone</h3><p>The Mailbox fills the screen. The page header does not show. Select the menu button at the top left to open the drawer with the folders, the other pages, and Help. A dot on the menu button shows unread chats. Select <b>New</b> at the bottom right to write a message. The desktop Mailbox badge shows unread Needs-you items.</p><p>In a conversation, the actions of the open item sit in a bar at the bottom edge. An approval has <b>Approve</b>, <b>Reject</b>, a note button, and <b>Dismiss</b>. A decision has its choice buttons, a note button, and <b>Dismiss</b>. The choice buttons wrap onto more rows, so each choice stays in view. An answer has <b>Dismiss</b>, the answer field, and <b>Send</b>. The note button opens a text field. When the keyboard opens, the bar stays above it.</p><p>In Needs you, select a check box to start a selection. The selection bar replaces <b>New</b> at the bottom edge. It shows the count, a button to clear the selection, <b>All</b>, and <b>Dismiss</b> with the count.</p>
     <p>The folder pane shows the fixed limits: Herdr Boss keeps messages for 30 days and accepts at most 10 Owner messages a minute. A read-only preview shows messages and refuses a read or a send.</p>`],
   chat: ['Chat', `
     <p>The Chat page shows one conversation for the Boss and one for each project orchestrator. The page has no large heading. On a desktop the chat list and the open chat fill the window. Above the conversation there is one slim bar with the avatar, the chat name, and a link to the Mailbox.</p>
@@ -5923,7 +5928,7 @@ function browserConfirm(question, action = 'Close tab') {
     const dialog = document.createElement('dialog');
     dialog.className = 'browser-confirm';
     dialog.setAttribute('aria-label', 'Confirm tab close');
-    dialog.innerHTML = '<p class="browser-confirm-text"></p><div class="browser-confirm-actions"><button type="button" data-browser-confirm="no">Cancel</button><button type="button" data-browser-confirm="yes" class="danger"></button></div>';
+    dialog.innerHTML = '<p class="browser-confirm-text"></p><div class="browser-confirm-actions"><button type="button" class="quiet" data-browser-confirm="no">Cancel</button><button type="button" data-browser-confirm="yes" class="danger"></button></div>';
     dialog.querySelector('.browser-confirm-text').textContent = question;
     dialog.querySelector('[data-browser-confirm="yes"]').textContent = action;
     let answer = false;

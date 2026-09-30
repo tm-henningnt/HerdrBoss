@@ -933,9 +933,12 @@ button.now-task:hover .now-task-title { color: var(--accent); text-decoration: u
   #browser-viewer[open] { display: flex; flex-direction: column; inset: 0; width: auto; height: auto; max-width: none; max-height: none; margin: 0; padding: 0; border: 0; border-radius: 0; }
   #browser-viewer .browser-viewer-head { flex: 0 0 auto; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: calc(8px + env(safe-area-inset-top)) calc(10px + env(safe-area-inset-right)) 8px calc(10px + env(safe-area-inset-left)); }
   #browser-viewer #browser-viewer-status { display: none; }
-  #browser-viewer #browser-viewer-close { margin-left: 0; }
-  #browser-viewer .browser-viewer-head .browser-navigate { flex: 1 1 300px; width: auto; margin: 0; padding: 0; flex-wrap: nowrap; }
-  #browser-viewer .browser-navigate input { flex: 1 1 auto; min-width: 0; }
+  #browser-viewer #browser-viewer-close { margin-left: auto; }
+  /* The address field and Go take the first row. Back, Forward, and Home share the second row. */
+  #browser-viewer .browser-viewer-head .browser-navigate { flex: 1 1 100%; width: auto; margin: 0; padding: 0; flex-wrap: wrap; }
+  #browser-viewer .browser-navigate input { order: -2; flex: 1 1 calc(100% - 64px); min-width: 0; }
+  #browser-viewer .browser-navigate button[type="submit"] { order: -1; flex: 0 0 auto; }
+  #browser-viewer .browser-navigate button[type="button"] { flex: 1 1 0; }
   #browser-viewer .browser-viewer-controls { display: none; flex: 0 0 auto; margin: 0; padding: 6px calc(10px + env(safe-area-inset-right)) 6px calc(10px + env(safe-area-inset-left)); flex-wrap: nowrap; overflow-x: auto; }
   #browser-viewer:has(#browser-viewer-control:checked) .browser-viewer-controls { display: flex; }
   #browser-viewer .browser-viewer-help { display: none; }
@@ -1042,7 +1045,7 @@ button.now-task:hover .now-task-title { color: var(--accent); text-decoration: u
 .message-panel[open] { display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto auto; }
 .message-panel::backdrop { background: color-mix(in srgb, #000 60%, transparent); }
 .message-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
-.message-head h2 { margin: 0; font-size: 15px; overflow-wrap: anywhere; }
+.message-head h2 { margin: 0; overflow-wrap: anywhere; }
 .msg-thread { list-style: none; margin: 0; padding: 12px 14px; display: grid; gap: 10px; align-content: start; overflow-y: auto; min-height: 120px; max-height: 52vh; max-height: 52dvh; }
 .msg { display: grid; gap: 4px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); max-width: 88%; justify-self: start; }
 .msg-owner { justify-self: end; border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
@@ -1098,6 +1101,12 @@ button.now-task:hover .now-task-title { color: var(--accent); text-decoration: u
 .message-form textarea { width: 100%; box-sizing: border-box; resize: vertical; font: inherit; }
 .message-send { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .message-nudges { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 14px 0; }
+/* One dialog set: a 16 px sentence-case title, quiet Close and Cancel buttons, and a red outline for a destructive action. */
+dialog h2 { color: var(--text); font-size: 16px; font-weight: 650; letter-spacing: 0; text-transform: none; }
+:root dialog button.quiet, :root dialog button.danger { padding: 7px 11px; font-weight: 600; }
+:root dialog button.quiet { color: var(--text); }
+:root dialog button.danger { background: transparent; border-color: var(--crit); color: var(--crit); }
+:root dialog button.danger:hover { background: color-mix(in srgb, var(--crit) 10%, transparent); filter: none; }
 .message-status { margin: 0; padding: 8px 14px 12px; min-height: 1.2em; color: var(--muted); font-size: 12.5px; }
 @media (max-width: 760px) { .message-panel { width: 100vw; max-width: 100vw; max-height: 100dvh; border-radius: 0; } .msg { max-width: 100%; } }
 
@@ -1205,6 +1214,7 @@ button.now-task:hover .now-task-title { color: var(--accent); text-decoration: u
 .chat-bubble-meta { display: flex; align-items: baseline; gap: 6px; margin: 0; color: var(--muted); font: 11px var(--mono); overflow-wrap: anywhere; }
 .chat-bubble.from-agent .chat-bubble-meta { justify-content: flex-end; }
 .chat-bubble-time { font-size: 11px; }
+.chat-bubble.from-owner .chat-bubble-time { color: color-mix(in srgb, var(--muted) 70%, var(--text)); }
 /* The first bubble of a run shows the avatar of the other party. */
 .chat-entry { display: flex; align-items: flex-end; gap: 6px; }
 .chat-entry .chat-bubble { max-width: calc(75% - 26px); }
@@ -1597,7 +1607,7 @@ body.app-view textarea, body.app-view input { caret-color: var(--accent); }
 .mail-folder-link .app-icon, .app-drawer-panel a .app-icon { width: 20px; height: 20px; color: var(--muted); }
 .mail-folder-link[aria-current="page"] .app-icon, .app-drawer-panel a[aria-current="page"] .app-icon { color: var(--accent); }
 .mail-folder-count, .app-drawer-count { margin-left: auto; color: var(--muted); font: 600 12px var(--mono); }
-[aria-current="page"] > .mail-folder-count, [aria-current="page"] > .app-drawer-count { color: var(--accent); }
+[aria-current="page"] > .mail-folder-count, [aria-current="page"] > .app-drawer-count { color: var(--text); }
 .mail-folder-divider, .app-drawer-panel hr { margin: 8px 12px; border: 0; border-top: 1px solid var(--line); }
 .mail-folder-limits { margin: 14px 12px 0; color: var(--muted); font-size: 11.5px; line-height: 1.4; }
 .mail-list-pane { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
@@ -1634,6 +1644,7 @@ body.app-view textarea, body.app-view input { caret-color: var(--accent); }
 .mail-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); }
 .mail-row.unread .mail-from, .mail-row.unread .mail-subject { font-weight: 650; }
 .mail-row.unread .mail-side time { color: var(--accent); font-weight: 600; }
+.mail-entry[aria-current="true"] .mail-side time { color: var(--text); }
 .mail-empty { padding: 28px 16px; color: var(--muted); }
 .mail-empty p { margin: 0 0 6px; }
 .mail-empty-next a { color: var(--accent); font-weight: 650; }
@@ -1649,9 +1660,10 @@ body.app-view textarea, body.app-view input { caret-color: var(--accent); }
 .mail-bar-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .mail-bar-row > button:not(.app-icon-button):not(.mail-bar-send) { flex: 1 1 0; min-width: 0; min-height: 44px; padding: 8px 14px; border-radius: 22px; font-size: 14px; }
 :root .mail-bar-row > button.mail-decline { background: transparent; }
-.mail-bar-choices { display: flex; flex: 1 1 auto; gap: 6px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
-.mail-bar-choices::-webkit-scrollbar { display: none; }
-:root .mail-bar-choices button { flex: 0 0 auto; min-height: 44px; padding: 8px 16px; border: 1px solid var(--line); border-radius: 22px; background: var(--panel-2); color: var(--text); font-size: 14px; }
+/* The choices wrap onto more rows, so every choice stays in view. The icons stay at the bottom right. */
+.mail-bar-choices { display: flex; flex: 1 1 auto; flex-wrap: wrap; gap: 6px; min-width: 0; max-height: 40dvh; overflow-y: auto; }
+.mail-bar-row:has(> .mail-bar-choices) { align-items: flex-end; }
+:root .mail-bar-choices button { flex: 0 1 auto; max-width: 100%; min-height: 44px; padding: 8px 16px; border: 1px solid var(--line); border-radius: 22px; background: var(--panel-2); color: var(--text); font-size: 14px; white-space: normal; text-align: left; overflow-wrap: anywhere; }
 .mail-bar-compose { align-items: flex-end; }
 .mail-bar-compose textarea { flex: 1 1 auto; min-width: 0; min-height: 44px; max-height: calc(1.4em * 6); padding: 10px 14px; border: 1px solid var(--line); border-radius: 22px; background: var(--panel-2); color: var(--text); font: 16px/1.4 var(--sans); resize: none; overflow-y: hidden; }
 .mail-bar-compose textarea.chat-overflow { overflow-y: auto; }
@@ -1827,7 +1839,7 @@ body.app-view textarea, body.app-view input { caret-color: var(--accent); }
 .viz-titles h3 { margin: 0; font-size: 15px; font-weight: 650; line-height: 1.35; text-wrap: balance; }
 .viz-sub { margin: 3px 0 0; color: var(--muted); font-size: 12.5px; line-height: 1.4; max-width: 72ch; }
 .viz-note { margin: 0 0 8px; color: var(--muted); font-size: 12.5px; }
-.viz-card .calm-state { background: var(--panel-2); }
+.viz-card .calm-state { padding: 4px 0; border: 0; background: transparent; }
 .viz-switch { display: inline-flex; flex-wrap: wrap; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; }
 :root .viz-switch button { margin: 0; padding: 0 11px; height: 30px; border: 0; border-radius: 0; background: var(--panel); color: var(--muted); font: 600 12px var(--sans); cursor: pointer; white-space: nowrap; }
 :root .viz-switch button + button { border-left: 1px solid var(--line); }

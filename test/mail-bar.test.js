@@ -140,7 +140,8 @@ test('the phone bars sit at the bottom edge above the safe-area inset', () => {
   const phone = css.slice(at, css.indexOf('\n}\n', at));
   assert.match(phone, /\.mail-action-bar \{[^}]*flex: 0 0 auto;[^}]*padding: [^;]*calc\(6px \+ env\(safe-area-inset-bottom\)\)/);
   assert.match(css, /\.mail-bar-row \{[^}]*display: flex;/);
-  assert.match(css, /\.mail-bar-choices \{[^}]*overflow-x: auto;/);
+  // The choices wrap onto more rows, so a third choice is never out of view.
+  assert.match(css, /\.mail-bar-choices \{[^}]*flex-wrap: wrap;/);
   assert.match(phone, /\.mail-list-pane\.selecting \.mail-list-scroll \{ padding-bottom: 0; \}/);
   assert.match(phone, /\.mail-reply \{ grid-template-columns: minmax\(0, 1fr\) auto;[^}]*calc\(6px \+ env\(safe-area-inset-bottom\)\)/, 'the Reply form is the same pill composer');
   assert.match(phone, /\.mail-reply textarea \{[^}]*border-radius: 22px;/);
