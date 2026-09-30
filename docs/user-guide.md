@@ -1129,7 +1129,7 @@ A new Owner message has the status `queued`. The service sends queued messages o
 - The service sends when the agent is `working`, `idle`, or `done`.
 - A blocked, unknown, or missing pane keeps the message queued. A message waits if the pane has no agent or its label does not match.
 - The service sends at most one message to a pane in one tick. A pane that got a resource notice in the same tick waits for the next tick.
-- The prompt is `[owner] TEXT (Reply with: herdr-boss say --reply-to ID "<answer>")`. An answer to a mailbox item starts with `Answer to ITEM-ID:` after `[owner]`.
+- The prompt is `[owner] TEXT (Reply with: herdr-boss say --reply-to ID "<answer>")`. An answer to a mailbox item has this form: `[owner] Answer to ITEM-ID (ITEM-TITLE): ANSWER`. The quoted question follows. Each line starts with `> `. The quote has at most 400 characters, cut on a character boundary, and holds no control character. A line separator in the question becomes a line break inside the quote. The reply hint is the last line. The title of a report is its title. The title of a reply is its first line. If the question is no longer in the store, the prompt is `[owner] Answer to ITEM-ID: ANSWER (Reply with: ...)`. The Boss thread uses the same form.
 - After delivery, the status is `sent` and `sentAt` holds the time. The thread shows `delivered HH:MM`.
 - After a Herdr error, the status is `failed` with a short error. The service tries again on later ticks, up to 3 more times.
 - The thread and Mailbox show `queued`, `delivered HH:MM`, `failed: REASON`, or `relayed by the Boss HH:MM`.
@@ -1138,6 +1138,12 @@ A new Owner message has the status `queued`. The service sends queued messages o
 - The service writes one `message` event to `events.jsonl` for each send or failure. The event holds the message ID, the thread, the kind, and the pane. It does not hold the text.
 
 A read-only preview shows the threads. It refuses a send with HTTP 403 and delivers nothing.
+
+### Answers stay in the Mailbox
+
+A conversation that starts in the Mailbox stays in the Mailbox. An Owner message with `replyTo` set is an answer to a mail item when its parent record is in the same thread and is on the mail channel (`mail` or `both`). The page shows it in the conversation of that item, below the question, with the time and the delivery state. The Chat does not list it. The Chat shows no row, no unread count, and no preview for it. The rule uses `replyTo`, not the thread name. An Owner message that names a plain chat reply stays in the Chat, and it does not close that reply. An Owner message whose parent record is no longer in the store also stays in the Chat.
+
+The rule applies when the page reads the records. A migration is not needed. An answer that an earlier version filed as a chat message shows in the Mailbox conversation after the update. The stored records do not change.
 
 ### Replies and reports
 
@@ -1204,7 +1210,7 @@ The folders are **Needs you**, **Inbox**, **Reports and updates**, and **Done**.
 
 The list has one row for each conversation. A conversation is one thread and one `replyTo` chain. The row shows the newest item of the conversation in the folder. On a phone the row has two lines. Line 1 holds the avatar, the project name or `Boss`, the message count when the conversation has more than one item, and the action tag: **Approve**, **Answer**, **Decide**, or **Report**. Line 2 holds the subject and a one-line preview. The time and an unread dot sit on the right. An unread row shows the name, the subject, and the time in bold. On a wide desktop list without an open conversation, each row is one 44 px line. The time is `HH:MM` for today, `Yesterday`, a weekday for the last 6 days, or the day and the month.
 
-Select a row to open its conversation. The conversation shows Owner and agent messages in time order. Each message and each report shows as safe Markdown, with the same renderer as the message panel and the Chat. See [Markdown in messages](#markdown-in-messages). Opening an item sets `readAt` on the record. On a desktop the conversation opens at the right of the list, and the list keeps its position. On a phone the conversation fills the screen. Select the Back arrow to return to the list.
+Select a row to open its conversation. The conversation shows Owner and agent messages in time order. The answer of the Owner to an item is in the conversation of that item, with its time and its delivery state. Each message and each report shows as safe Markdown, with the same renderer as the message panel and the Chat. See [Markdown in messages](#markdown-in-messages). Opening an item sets `readAt` on the record. On a desktop the conversation opens at the right of the list, and the list keeps its position. On a phone the conversation fills the screen. Select the Back arrow to return to the list.
 
 ### Answer an item
 
@@ -1301,7 +1307,7 @@ A check can force a theme with `?theme=light` or `?theme=dark` in the page addre
 
 ## Chat page
 
-The Chat page at `/chat` is the conversation view of the Owner. One chat holds the messages between the Owner and the Boss. One chat holds the messages between the Owner and a project orchestrator. A worker has no chat. Use the Mailbox for items that need an answer, an approval, or a decision. Use the Chat for a normal conversation. Both pages read the same message records.
+The Chat page at `/chat` is the conversation view of the Owner. One chat holds the messages between the Owner and the Boss. One chat holds the messages between the Owner and a project orchestrator. A worker has no chat. Use the Mailbox for items that need an answer, an approval, or a decision. Use the Chat for a normal conversation. Both pages read the same message records. An answer to a Mailbox item shows only in the Mailbox.
 
 The page has no large heading. On a desktop the chat list and the open chat are two panes that fill the window below the page header. Above the conversation there is one slim bar. It holds the avatar of the chat, the chat name, and a link to the Mailbox. On a phone the bar also holds the Back arrow. See [Phone app view](#phone-app-view).
 
@@ -1318,6 +1324,10 @@ The initials come from the project display name. The slug is the fallback. Every
 | `mail` | a report from `herdr-boss mail post` | Mailbox **Updates**, and one short line in Chat |
 
 `mailboxView()`, `mailboxFolders()`, and `mailboxCounts()` use only `mail` and `both` records. A plain chat reply never shows in Mailbox Updates.
+
+An Owner answer to a mailbox item is not a chat record. `isMailAnswer(record, byId)` is true when an Owner record has `replyTo` and its parent is a mail record of the same thread. `chatRecords()` leaves these records out of the chat list, the chat thread, and the chat counts. A chat message from the Owner has no `replyTo` and stays in the Chat. The service sets `mailAnswer: true` on the message event of a mail answer, so the page can ignore it.
+
+A plain chat message from an agent asks nothing and creates no Mailbox item. An agent that needs an answer, an approval, or a decision runs `herdr-boss say --action answer|approve|decide "TEXT"`. The Chat then shows the item as a card, and the Mailbox shows it in **Needs you**.
 
 A chat message that needs an action shows in Chat with its card or its link. Its action item shows in Mailbox **Needs you**. A mail report shows in Chat as one short line: `Report: TITLE · Open in Mailbox`.
 

@@ -262,7 +262,7 @@ Each reply and report is an item in the Owner mailbox. Set `--action decide`, `-
 | `decide` | The Owner makes a choice. Add a Markdown list under a `## Choices` heading to show choice buttons. |
 | `read` | Information for the Owner. The commands use this action when you omit `--action`. |
 
-The Mailbox shows action items under **Needs you**. It shows information under **Updates**. The escalation rules make Owner actions rare. The Owner answer comes back as an `[owner] Answer to ID:` prompt.
+The Mailbox shows action items under **Needs you**. It shows information under **Updates**. The escalation rules make Owner actions rare. The Owner answer comes back as an `[owner] Answer to ID (TITLE): ANSWER` prompt. The quoted question follows the answer.
 
 The `say` text is 1 to 4000 characters. The report file is Markdown, up to 64 KB. The report title defaults to the first Markdown heading, or to `Report`. The `mail close` note is 1 to 500 characters. The close command refuses an unknown or already closed ID and names that ID in its error. The Boss note does not send a reply. These commands refuse text that looks like a token, a key, or a password. The error does not print the text.
 
