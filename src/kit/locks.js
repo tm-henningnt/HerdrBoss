@@ -217,16 +217,21 @@ function noWaitBusyError(name, activeRecord, tickets) {
   return Object.assign(new Error(`Lock ${name} is waiting for pane ${first.pane} (${first.kind}); queue length ${queueLength}.`), { ledgerEvent: 'busy' });
 }
 
+// Write to a temporary file, then link it to the final name. A reader never sees a partial record,
+// and the link fails with EEXIST when the final file exists.
 function writeNewRecord(file, record) {
-  const fd = fs.openSync(file, 'wx', 0o600);
+  const temporary = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  const fd = fs.openSync(temporary, 'wx', 0o600);
   try {
     fs.writeFileSync(fd, `${JSON.stringify(record, null, 2)}\n`);
     fs.fchmodSync(fd, 0o600);
+    fs.closeSync(fd);
+    fs.linkSync(temporary, file);
   } catch (error) {
-    try { fs.unlinkSync(file); } catch {}
+    try { fs.closeSync(fd); } catch {}
     throw error;
   } finally {
-    fs.closeSync(fd);
+    try { fs.unlinkSync(temporary); } catch {}
   }
 }
 

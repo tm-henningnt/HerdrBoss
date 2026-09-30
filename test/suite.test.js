@@ -80,8 +80,11 @@ function fixture(t, prefix) {
 function readQueueFiles(dataDir) {
   const directory = path.join(dataDir, 'locks', 'machine', 'queue', 'full-suite');
   try {
+    // Skip a file that is unreadable or not yet complete. The caller retries through waitFor.
     return fs.readdirSync(directory).filter((name) => name.endsWith('.json'))
-      .map((name) => JSON.parse(fs.readFileSync(path.join(directory, name), 'utf8')))
+      .flatMap((name) => {
+        try { return [JSON.parse(fs.readFileSync(path.join(directory, name), 'utf8'))]; } catch { return []; }
+      })
       .sort((left, right) => left.seq - right.seq);
   } catch (error) {
     if (error.code === 'ENOENT') return [];
@@ -764,4 +767,32 @@ test('suite does not record a pass when a lockfile changes during the command', 
   fs.writeFileSync(install, `import fs from 'node:fs';\nfs.writeFileSync(${JSON.stringify(path.join(f.root, 'package-lock.json'))}, '{}\\n');\n`);
   assert.equal(f.runCommand([], [process.execPath, install]).exitCode, 0);
   assert.equal(fs.existsSync(path.join(f.dataDir, 'suite-passes.json')), false);
+});
+
+test('a queue ticket file is never visible before its content is complete', (t) => {
+  const f = fixture(t, 'herdr-suite-ticket-atomic-');
+  const options = lockOptions(f, 'ws:orch', ['ws:orch', 'ws:w1'], {});
+  acquireProjectLock('full-suite', options);
+  const queueDirectory = path.join(f.dataDir, 'locks', 'machine', 'queue', 'full-suite');
+  const seen = [];
+  let ticketWrites = 0;
+  const original = fs.writeFileSync;
+  fs.writeFileSync = function patched(target, ...rest) {
+    // Record each published ticket file that cannot be parsed while the writer is still writing.
+    if (typeof target === 'number' && fs.existsSync(queueDirectory)) {
+      if (fs.readdirSync(queueDirectory).some((entry) => entry.endsWith('.json') || entry.endsWith('.tmp'))) ticketWrites += 1;
+      for (const name of fs.readdirSync(queueDirectory).filter((entry) => entry.endsWith('.json'))) {
+        try { JSON.parse(fs.readFileSync(path.join(queueDirectory, name), 'utf8')); } catch { seen.push(name); }
+      }
+    }
+    return original.call(this, target, ...rest);
+  };
+  try {
+    assert.throws(() => acquireProjectLock('full-suite', { ...lockOptions(f, 'ws:w1', ['ws:orch', 'ws:w1'], {}), waitSeconds: 0 }), /lock|held|queue/i);
+  } finally {
+    fs.writeFileSync = original;
+  }
+  assert.deepEqual(seen, [], 'no ticket file is unreadable while it is written');
+  assert.equal(ticketWrites, 1, 'the test observed one ticket write');
+  assert.deepEqual(fs.readdirSync(queueDirectory).filter((name) => name.endsWith('.tmp')), [], 'no temporary file remains');
 });
