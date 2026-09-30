@@ -171,6 +171,8 @@ A retry with a known `opId` sends no event. The review page loads the pack again
 
 The **Reviews** page shows the review packs that projects send to the Owner. The menu entry is after **Board**. The page is an app view, as the Mailbox: on a screen of 760 px or less it fills the screen, and the menu button at the top left opens the drawer.
 
+Herdr Boss deletes a closed pack 30 days after it closes. An open pack expires after 60 days without a change. Herdr Boss keeps each result for 180 days. It keeps the newest 3 versions. The review pack quota is 2 GiB. Run `herdr-boss review delete <slug> <pack>` to delete a pack.
+
 ### Routes
 
 | Route | Page |

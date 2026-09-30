@@ -22,7 +22,8 @@ import { runDenialScan, readDenials, denialSummary, DENIAL_SCAN_INTERVAL_MS, SCA
 import { goalOnScreen, sendGoalPrompt } from './goal.js';
 import { claudeContextUsage, trackBoundary, normalizeModelId } from './context-handover.js';
 import { FINISH_TIMEOUT_MS, autoReadyHandoff, markSuccessorWorking, listHandoffs, saveHandoffs, supersedeHandoffs, expireHandoff, expireMissingHandoffs, handoffNotices } from './handoff.js';
-import { deliverQueued, mailboxCounts, readMessages, RETENTION_MS, SEND_LIMIT_PER_MINUTE } from './messages.js';
+import { closeReviewItems, deliverQueued, mailboxCounts, readMessages, RETENTION_MS, SEND_LIMIT_PER_MINUTE } from './messages.js';
+import { sweep as sweepReviewPacks } from './review-store.js';
 import { openMessageStore } from './message-store.js';
 import { readKitNotice, pendingKitAlert, isKitAlert, kitNoticeTargets, unsentKitChanges, formatKitNotice } from './kit-notice.js';
 import { applyTaskState, readWorkerFacts, gitIsMerged, gitCounts } from './task-state.js';
@@ -83,6 +84,7 @@ export function buildModelScorecard(events = [], now = Date.now()) {
 }
 const WORKTREE_SCAN_INTERVAL_MS = 5 * 60 * 1000;
 const CLONE_SWEEP_INTERVAL_MS = 10 * 60 * 1000;
+const REVIEW_RETENTION_INTERVAL_MS = 60 * 60 * 1000;
 const PI_MODELS_INTERVAL_MS = 15 * 60 * 1000;
 const WORKER_NO_REPORT_MS = 10 * 60 * 1000;
 // The engine reads the harness settings files at each service start and then at most this often.
@@ -480,6 +482,8 @@ export class Engine extends EventEmitter {
     this.orphanedWorktreeProcesses = [];
     this.cloneSweepAt = 0;
     this.cloneSweepRunning = false;
+    this.reviewRetentionAt = 0;
+    this.reviewRetentionRunning = false;
     this.denialScanAt = 0;
     this.denialScanRunning = false;
     this.spendScanAt = 0;
@@ -509,6 +513,7 @@ export class Engine extends EventEmitter {
       probePort: tcpListeningAsync,
       codeSignCloneDir,
       sweepCodeSignClones,
+      sweepReviewPacks,
       runDenialScan,
       // A test engine never reads the real harness logs unless a test injects a collector.
       runSpendScan: process.env.NODE_TEST_CONTEXT ? async () => null : scanSpend,
@@ -904,6 +909,7 @@ export class Engine extends EventEmitter {
       for (const pane of herdr?.panes || []) if (pane.label === 'boss' && pane.agent) this.memory.lastOrchestrators[pane.workspace] = { pane: pane.id, kind: pane.agent, project: 'Boss', label: 'Boss', boss: true };
       if (this.act) await this.reap(browsers);
       if (this.act) this.sweepClones(now);
+      if (this.act) this.sweepReviewPacks(now, control, herdr);
       if (this.act) this.scanDenials(now);
       if (this.act) this.scanSpend(now, herdr);
       // A prepared successor waits idle by design, so the idle-worker rule skips it.
@@ -1294,6 +1300,56 @@ export class Engine extends EventEmitter {
       this.log('clone-sweep', `Deleted ${result.removed.length} orphaned Chrome code-sign clone(s) and freed ${freedGiB} GiB.`, { count: result.removed.length, freedBytes: result.freedBytes });
     })().catch((error) => this.log('clone-sweep', `Chrome code-sign clone sweep failed: ${error.message}`))
       .finally(() => { this.cloneSweepRunning = false; });
+  }
+
+  // The review pack sweep runs beside the tick. It closes expired Mailbox items and tries one notice for each expired pack.
+  sweepReviewPacks(now, control, herdr) {
+    if (this.reviewRetentionRunning || now - this.reviewRetentionAt < REVIEW_RETENTION_INTERVAL_MS) return null;
+    this.reviewRetentionAt = now;
+    this.reviewRetentionRunning = true;
+    return (async () => {
+      const result = await this.collectors.sweepReviewPacks({ dir: DATA_DIR, now });
+      const expired = Array.isArray(result?.expired) ? result.expired : [];
+      const deleted = Array.isArray(result?.deleted) ? result.deleted : [];
+      let closedItems = 0;
+
+      for (const entry of [...expired, ...deleted]) {
+        closedItems += closeReviewItems({ slug: entry.slug, pack: entry.pack }, { dir: DATA_DIR, now }).closed;
+      }
+
+      for (const entry of expired) {
+        const project = control?.projects?.[entry.slug];
+        const pane = project?.orch?.pane
+          ? herdr?.panes?.find((candidate) => candidate.id === project.orch.pane && candidate.label === 'orch' && candidate.agent)
+          : null;
+        const notice = `The review pack "${entry.title}" (${entry.pack}) expired after 60 days with no change. Publish it again if the Owner still needs it.`;
+        if (!pane) {
+          this.log('review-retention', notice, { project: entry.slug });
+          continue;
+        }
+        if (!this.push) {
+          this.log('review-retention', `Not sent: ${notice}`, { project: entry.slug, pane: pane.id });
+          continue;
+        }
+        try {
+          checkHerdrResponse(await this.herdrRunner('herdr', ['agent', 'prompt', pane.id, notice]));
+        } catch (error) {
+          this.log('error', `Review pack expiry notice failed for ${entry.pack} (${error.code || 'error'}).`, { project: entry.slug, pane: pane.id });
+        }
+      }
+
+      const counts = {
+        deleted: deleted.length,
+        expired: expired.length,
+        closedItems,
+        purged: Number(result?.purged) || 0,
+        cleaned: Number(result?.cleaned) || 0,
+      };
+      if (Object.values(counts).some((count) => count > 0)) {
+        this.log('review-retention', `Review retention: ${counts.deleted} deleted, ${counts.expired} expired, ${counts.closedItems} review items closed, ${counts.purged} results purged, and ${counts.cleaned} leftovers cleaned.`, counts);
+      }
+    })().catch((error) => this.log('review-retention', `Review retention sweep failed (${error.code || 'error'}).`))
+      .finally(() => { this.reviewRetentionRunning = false; });
   }
 
   // The denial log scan runs beside the tick, like the clone sweep. It logs counts only, never a path or a message.

@@ -55,7 +55,9 @@ function readStoredRecords(dir) {
   return records;
 }
 
-const fresh = (records, now) => records.filter((record) => !(Date.parse(record.at) < now - RETENTION_MS));
+const isOpenReviewItem = (record) => record?.kind === 'review' && !record.closedAt;
+// Keep an open review item until review retention closes it. Closed review items use the normal 30-day limit.
+const fresh = (records, now) => records.filter((record) => isOpenReviewItem(record) || !(Date.parse(record.at) < now - RETENTION_MS));
 
 function rewrite(dir, records) {
   const file = messagesFile(dir);
