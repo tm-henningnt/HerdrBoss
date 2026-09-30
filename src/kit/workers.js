@@ -273,6 +273,9 @@ function hasAgentReadyMarker(text, marker) {
     && marker.boxRule.test(lines[promptIndex + 1] ?? '');
 }
 
+// True when the pane text shows the input prompt of the harness. A harness without a marker always counts as ready.
+export const agentReadyVisible = (kind, text) => hasAgentReadyMarker(text, AGENT_READY_MARKERS[kind]);
+
 export function waitForAgentReady(name, kind, { herdr, readText = readAgentText, wait = pause } = {}, timeoutMs = READY_WAIT_MS) {
   const marker = AGENT_READY_MARKERS[kind];
   let elapsed = 0;

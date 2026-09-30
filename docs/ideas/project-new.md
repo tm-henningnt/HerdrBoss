@@ -239,3 +239,19 @@ Each question lists options and a recommendation. The Boss or the Owner decides.
 - A. The first usable entry of `orchestratorLadder`.
 - B. `--kind` required.
 - Recommendation: A, with `--kind` as an override. The ladder is the Owner setting for this choice.
+
+## Future option B: automatic accept
+
+Herdr Boss could press the accept key for the folder trust prompt itself. It does not. This option is not built.
+
+Option B needs the typed authorization of the Owner. The authorization is an explicit per-run setting or a typed confirmation in the wizard.
+
+The narrow rules of option B:
+
+- Watch only the pane that the flow created.
+- Watch only for the first 3 minutes after the pane exists.
+- Accept only the exact known prompt for the exact project folder.
+- Send one key.
+- Log the accept as an event.
+
+The auto mode classifier objected to this feature on 2026-09-30. The Owner chose detection with a Mailbox item instead.
