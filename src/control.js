@@ -6,7 +6,7 @@ import { goalTextError } from './goal.js';
 
 const FILE = path.join(DATA_DIR, 'policy.json');
 export const POLICY_DEFAULTS = {
-  machine: { guardEnabled: true, guardPausedUntil: null, ownerAwayMinutes: 10, presentCpuPercent: 70, awayCpuPercent: 95, presentLoadFactor: 3, awayLoadFactor: 8, diskWarnFreeGB: 20, diskCriticalFreeGB: 5, alertCooldownSeconds: 21600 },
+  machine: { guardEnabled: true, guardPausedUntil: null, ownerAwayMinutes: 10, presentCpuPercent: 70, awayCpuPercent: 95, presentLoadFactor: 3, awayLoadFactor: 8, diskWarnFreeGB: 20, diskCriticalFreeGB: 5, alertCooldownSeconds: 21600, swapWarnPercent: 80, swapRefusePercent: 95, swapMinUsedGB: 2 },
   maxWorkers: 8,
   borrowIdle: true,
   idleMinutes: 15,
@@ -131,9 +131,14 @@ export function machineLimits(machine, policy, now = Date.now(), night = null) {
   const guardPausedUntil = policy.machine.guardPausedUntil ?? null;
   const pauseAt = guardPausedUntil == null ? NaN : Date.parse(guardPausedUntil);
   const guardState = !guardEnabled ? 'off' : Number.isFinite(pauseAt) && pauseAt > now ? 'paused' : 'active';
+  const swapUsed = Number.isFinite(machine.swapUsedMB) ? machine.swapUsedMB : null;
+  const swapTotal = Number.isFinite(machine.swapTotalMB) && machine.swapTotalMB > 0 ? machine.swapTotalMB : null;
+  const swapPercent = swapUsed != null && swapTotal != null ? swapUsed / swapTotal * 100 : null;
   return { owner: away ? 'away' : 'present', cpuPercent: cpu / cores, cpuLimit: away ? policy.machine.awayCpuPercent : policy.machine.presentCpuPercent,
     fiveMinute: machine.load?.[1] ?? null, loadLimit: factor == null ? null : cores * factor,
-    guardEnabled, guardPausedUntil, guardState, guardActive: guardState === 'active' };
+    guardEnabled, guardPausedUntil, guardState, guardActive: guardState === 'active',
+    swapPercent, swapUsedGB: swapUsed == null ? null : swapUsed / 1024,
+    swapWarnPercent: policy.machine.swapWarnPercent ?? null, swapRefusePercent: policy.machine.swapRefusePercent ?? null, swapMinUsedGB: policy.machine.swapMinUsedGB ?? 0 };
 }
 
 function subset(value, set, field, errors) {
@@ -155,6 +160,8 @@ export function validatePolicy(value, models) {
     for (const key of ['ownerAwayMinutes', 'presentCpuPercent']) if (!Number.isInteger(value.machine[key]) || value.machine[key] < 0 || value.machine[key] > (key === 'ownerAwayMinutes' ? 1440 : 100)) errors.push(`machine.${key} is out of range.`);
     if (value.machine.awayCpuPercent !== null && (!Number.isInteger(value.machine.awayCpuPercent) || value.machine.awayCpuPercent < 0 || value.machine.awayCpuPercent > 100)) errors.push('machine.awayCpuPercent must be null or an integer from 0 to 100.');
     for (const key of ['presentLoadFactor', 'awayLoadFactor']) if (value.machine[key] !== null && (!Number.isFinite(value.machine[key]) || value.machine[key] < 0 || value.machine[key] > 128)) errors.push(`machine.${key} must be null or a number from 0 to 128.`);
+    for (const key of ['swapWarnPercent', 'swapRefusePercent']) if (value.machine[key] !== null && (!Number.isInteger(value.machine[key]) || value.machine[key] < 1 || value.machine[key] > 100)) errors.push(`machine.${key} must be null or an integer from 1 to 100.`);
+    if (!Number.isFinite(value.machine.swapMinUsedGB) || value.machine.swapMinUsedGB < 0 || value.machine.swapMinUsedGB > 1024) errors.push('machine.swapMinUsedGB must be a number from 0 to 1024.');
     for (const [key, max] of [['diskWarnFreeGB', 1048576], ['diskCriticalFreeGB', 1048576]]) if (!Number.isFinite(value.machine[key]) || value.machine[key] < 0 || value.machine[key] > max) errors.push(`machine.${key} must be a number from 0 to ${max}.`);
   }
   if (!Number.isInteger(value.autoHandoverPercent) || value.autoHandoverPercent < 90 || value.autoHandoverPercent > 100) errors.push('autoHandoverPercent must be an integer from 90 to 100.');

@@ -737,6 +737,15 @@ test('the policy API saves per-harness model assignments and rejects unsafe mode
   assert.deepEqual(stored.modelProviders, draft.modelProviders, 'the legacy route stays');
   assert.equal(stored.machine.guardEnabled, false);
   assert.equal(stored.machine.guardPausedUntil, draft.machine.guardPausedUntil);
+  assert.deepEqual([current.machine.swapWarnPercent, current.machine.swapRefusePercent, current.machine.swapMinUsedGB], [80, 95, 2], 'the fresh policy carries the swap defaults');
+  const swapSaved = await put({ ...draft, machine: { ...draft.machine, swapWarnPercent: 70, swapRefusePercent: null, swapMinUsedGB: 3.5 } });
+  assert.equal(swapSaved.status, 200);
+  assert.deepEqual((({ swapWarnPercent, swapRefusePercent, swapMinUsedGB }) => ({ swapWarnPercent, swapRefusePercent, swapMinUsedGB }))((await swapSaved.json()).policy.machine), { swapWarnPercent: 70, swapRefusePercent: null, swapMinUsedGB: 3.5 });
+  const swapReread = (await (await fetch(`${base}/api/policy`)).json()).machine;
+  assert.deepEqual([swapReread.swapWarnPercent, swapReread.swapRefusePercent, swapReread.swapMinUsedGB], [70, null, 3.5]);
+  const invalidSwap = await put({ ...draft, machine: { ...draft.machine, swapWarnPercent: 101 } });
+  assert.equal(invalidSwap.status, 400);
+  assert.match((await invalidSwap.json()).errors.join(' '), /machine.swapWarnPercent/);
   const invalidGuard = await put({ ...draft, machine: { ...draft.machine, guardEnabled: 'off' } });
   assert.equal(invalidGuard.status, 400);
   assert.match((await invalidGuard.json()).errors.join(' '), /machine.guardEnabled/);
