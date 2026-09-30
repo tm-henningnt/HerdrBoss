@@ -592,3 +592,21 @@ test('the register step refuses a slug that is registered to another folder', ()
     assert.equal(status(again, 'status'), 'pending');
   } finally { f.cleanup(); }
 });
+
+test('addProjectPolicy keeps the total at 100 when 5 projects sum to 100, with the new one at 10 and none below 1', () => {
+  const projects = { a: entry(9), b: entry(36), c: entry(31), d: entry(13), e: entry(11) };
+  const result = addProjectPolicy({ projects }, 'demo');
+  assert.equal(result.after.demo, 10);
+  assert.equal(total(result.policy.projects), 100);
+  for (const share of Object.values(result.after)) assert.ok(share >= 1);
+  assert.deepEqual(result.before, { a: 9, b: 36, c: 31, d: 13, e: 11 });
+  assert.deepEqual(result.after, { a: 8, b: 32, c: 28, d: 12, e: 10, demo: 10 });
+});
+
+test('addProjectPolicy scales to the previous total when it was below 100 and the room is short', () => {
+  const result = addProjectPolicy({ projects: { a: entry(50), b: entry(45) } }, 'demo');
+  assert.equal(total(result.policy.projects), 100);
+  const small = addProjectPolicy({ projects: { a: entry(1), b: entry(1), c: entry(98) } }, 'demo');
+  assert.equal(total(small.policy.projects), 100);
+  assert.ok(small.after.a >= 1 && small.after.b >= 1);
+});

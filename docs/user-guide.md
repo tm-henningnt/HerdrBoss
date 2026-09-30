@@ -208,7 +208,7 @@ With `--remote gh`, the step `remote` asks you before it creates a GitHub reposi
 
 The steps `policy`, `register`, and `status` put the new project into Herdr Boss:
 
-1. `policy` gives the project a share of 10 percent. The other projects give up part of their share, so the total stays at most 100. Each project keeps its mode and its exclusions. You see the shares before and after the change.
+1. `policy` gives the project a share of 10 percent. The other projects give up part of their share, so the total stays at most 100. When the previous total was 100, the scaled shares add up to exactly 90 by the largest remainder method, and no share of 1 or more falls below 1. Each project keeps its mode and its exclusions. You see the shares before and after the change.
 2. `register` records the project folder in `project-repos.json`. The dashboard and the engine then read the repository of the project.
 3. `status` publishes the first status. It holds one task, `Set up the project`. The project appears on the dashboard with this task.
 
@@ -714,6 +714,22 @@ Each project has two share values:
 
 - The **set share** is the share in the policy draft. The bar widths show the set share. Drag a boundary or use the arrow keys to change it.
 - The **effective share** is the number of worker slots that the project has now, divided by the applied maximum of working agents. The **effective slots** are that number of slots. These values come from the applied policy. They change only after you select **Apply policy**.
+
+The line **Total** next to the bar shows the sum of the set shares, for example `Total 99 of 100`. When the sum is below 100, the button **Distribute the remaining N** adds the remainder to the largest share. Herdr Boss adds it only when you select the button. A sum above 100 shows a warning and blocks **Apply policy**.
+
+A project that the policy holds but the project list does not shows the line `not in the project list` with its saved share. The share is read-only, counts in the total, and no save changes it.
+
+The form always shows the shares that the policy holds, also when their sum is not 100. A project that has no share in the policy shows the marker `default, not saved`. Its default is a part of the room that the saved shares leave. Herdr Boss writes the default only when you change that share or confirm the dialog of **Apply policy**.
+
+**Apply policy** shows a dialog before it saves in these cases:
+
+- The form changes more than one share and you moved more than one boundary.
+- The total changes by more than 5 points.
+- A project has a default share that you did not change.
+
+The dialog lists the old and the new share of every project. A move of one boundary between two neighbors saves without a dialog.
+
+When the policy changes on the server, for example when `project new` adds a project, the form reloads if it has no unsaved edit. If it has an unsaved edit, the page shows `The policy changed on the server. Reload the shares?` Select **Reload the shares** to discard the edit and load the saved shares.
 
 A bar segment shows its set share and its effective slots, for example `30% · 2`. A narrow segment shows only the set share or no label. Its tooltip shows all values.
 
