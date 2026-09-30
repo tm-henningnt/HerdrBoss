@@ -26,23 +26,45 @@ export function reportExists(record) {
   try { return fs.existsSync(path.join(record.worktree, record.workerDir || '.worker', 'report.json')); } catch { return false; }
 }
 
-// phase: live | review | merged | failed | abandoned
-// live: the run is not finished and its agent runs. abandoned: the run is not finished and its agent is gone.
+// The state of the report file: done, failed, or null when the file is missing or unreadable. A report that says
+// stoppedEarly true, or a status or outcome of blocked, failed, or partial, is failed.
+export function reportStatus(record) {
+  if (!reportExists(record)) return null;
+  try {
+    const report = JSON.parse(fs.readFileSync(path.join(record.worktree, record.workerDir || '.worker', 'report.json'), 'utf8'));
+    if (!report || typeof report !== 'object') return null;
+    const said = [report.status, report.outcome].filter((v) => typeof v === 'string').map((v) => v.toLowerCase());
+    return report.stoppedEarly === true || said.some((v) => ['blocked', 'failed', 'partial'].includes(v)) ? 'failed' : 'done';
+  } catch { return null; }
+}
+
+// phase: live | finished | review | merged | failed | abandoned
+// live: the run is not finished and its agent runs. finished: the agent is gone, the worker wrote a done report, and no
+// collect is recorded. failed also covers a gone agent whose report says blocked, failed, or stopped early.
+// abandoned: the agent is gone, and the run has no usable report and no finishedAt.
 // review: the worker was collected as done and its branch is not merged. merged: the branch is merged.
 // failed: the run was recorded with the outcome failed or partial.
 // active: a live worker that is working or blocked, is not parked, and has no report. Only an active worker
 // can make the published status wrong. An idle, parked, or reported worker is waiting for the orchestrator.
-export function workerFactFromRun(record, { isLive = () => true, isMerged = () => false, hasReport = () => false, agentStatus = () => null, now = Date.now() } = {}) {
+export function workerFactFromRun(record, { isLive = () => true, isMerged = () => false, hasReport = () => false, reportStatus: statusOf = (r) => (hasReport(r) ? 'done' : null), agentStatus = () => null, now = Date.now() } = {}) {
   const taskId = runTaskId(record);
   if (!taskId || !record?.name) return null;
+  // Answers without a merge check. mergeable: a merged branch changes the phase.
   let phase;
-  if (record.finishedAt) phase = record.outcome === 'done' ? (isMerged(record) ? 'merged' : 'review') : 'failed';
-  else if (record.collectedAt) phase = isMerged(record) ? 'merged' : 'review';
-  else phase = isLive(record) ? 'live' : 'abandoned';
+  let mergeable = false;
+  if (record.finishedAt) { phase = record.outcome === 'done' ? 'review' : 'failed'; mergeable = phase === 'review'; }
+  else if (record.collectedAt) { phase = 'review'; mergeable = true; }
+  else if (isLive(record)) phase = 'live';
+  else {
+    const reported = statusOf(record);
+    phase = reported === 'done' ? 'finished' : reported === 'failed' ? 'failed' : 'abandoned';
+    mergeable = phase === 'finished';
+  }
   if (phase !== 'live') {
     const newest = Math.max(...[record.startedAt, record.collectedAt, record.finishedAt].map(Date.parse).filter(Number.isFinite), -Infinity);
     if (Number.isFinite(newest) && now - newest > HISTORY_MS) return null;
   }
+  if (mergeable && isMerged(record)) phase = 'merged';
   const fact = { name: record.name, taskId, phase, kind: record.kind ?? null, model: record.model ?? null, startedAt: record.startedAt ?? null };
   if (phase === 'live') fact.active = !record.parked && !hasReport(record) && ACTIVE_AGENT_STATUSES.has(agentStatus(record));
   return fact;
@@ -53,6 +75,7 @@ export function readWorkerFacts(runsPath, options = {}) {
   let files = [];
   try { files = fs.readdirSync(runsPath).filter((name) => name.endsWith('.json')); } catch { return []; }
   const opts = { hasReport: reportExists, ...options };
+  if (!options.reportStatus && !options.hasReport) opts.reportStatus = reportStatus;
   const facts = [];
   for (const file of files) {
     let record;
@@ -69,10 +92,10 @@ export function readWorkerFacts(runsPath, options = {}) {
 // again for recheckMs. budget.left caps the number of git checks. A caller that shares the cache and budget
 // between reads never blocks for long.
 export function gitIsMerged(root, { cache = new Map(), budget = { left: Infinity }, now = Date.now(), recheckMs = 60000 } = {}) {
-  const git = (args) => execFileSync('git', ['-C', root, ...args], { stdio: 'ignore' });
+  const git = (args) => execFileSync('git', ['-C', root, ...args], { stdio: 'ignore', timeout: 3000 });
   return (record) => {
     if (record?.mergedAt) return true;
-    if (!record?.branch || !record?.base || record.branch === record.base) return false;
+    if (!record?.branch || !record?.baseCommit || !record?.base || record.branch === record.base) return false;
     const key = `${root}\0${record.name}\0${record.startedAt}`;
     const known = cache.get(key);
     if (known?.merged) return true;
@@ -82,7 +105,7 @@ export function gitIsMerged(root, { cache = new Map(), budget = { left: Infinity
     let merged = false;
     try {
       git(['rev-parse', '--verify', '--quiet', `refs/heads/${record.branch}`]);
-      const tip = execFileSync('git', ['-C', root, 'rev-parse', `refs/heads/${record.branch}`], { encoding: 'utf8' }).trim();
+      const tip = execFileSync('git', ['-C', root, 'rev-parse', `refs/heads/${record.branch}`], { encoding: 'utf8', timeout: 3000 }).trim();
       if (tip !== record.baseCommit) {
         git(['merge-base', '--is-ancestor', tip, record.base]);
         merged = true;
@@ -129,7 +152,7 @@ function pickWorker(workers) {
   const start = (worker) => Date.parse(worker.startedAt) || 0;
   const latest = (list) => list.reduce((best, worker) => (!best || start(worker) >= start(best) ? worker : best), null);
   return latest(workers.filter((worker) => worker.phase === 'live'))
-    || latest(workers.filter((worker) => worker.phase === 'review' || worker.phase === 'merged'));
+    || latest(workers.filter((worker) => worker.phase === 'review' || worker.phase === 'merged' || worker.phase === 'finished'));
 }
 
 function workerView(worker) {
@@ -158,6 +181,7 @@ export function overlayTasks(tasks, workers = []) {
     if (worker?.phase === 'merged') return { state: 'done', stateSource: `merged from worker ${worker.name}`, worker };
     if (worker?.phase === 'live') return { state: 'doing', stateSource: `live from worker ${worker.name}`, worker };
     if (worker?.phase === 'review') return { state: 'review', stateSource: `collected from worker ${worker.name}`, worker };
+    if (worker?.phase === 'finished') return { state: 'review', stateSource: `finished, not collected (worker ${worker.name})`, worker };
     // Every worker of a task that is published as doing has failed or gone. The task is open again.
     if (published === 'doing' && own.length) {
       const last = own.reduce((a, b) => ((Date.parse(b.startedAt) || 0) >= (Date.parse(a.startedAt) || 0) ? b : a));

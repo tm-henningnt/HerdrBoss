@@ -10,7 +10,7 @@ import { spawnSync, execFileSync } from 'node:child_process';
 const DATA = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-task-state-'));
 process.env.HERDR_BOSS_DIR = DATA;
 process.on('exit', () => fs.rmSync(DATA, { recursive: true, force: true }));
-const { overlayTasks, readWorkerFacts, workerFactFromRun, publishConflicts, applyTaskState, gitIsMerged, gitCounts, taskMismatches } = await import('../src/task-state.js');
+const { reportStatus, overlayTasks, readWorkerFacts, workerFactFromRun, publishConflicts, applyTaskState, gitIsMerged, gitCounts, taskMismatches } = await import('../src/task-state.js');
 const { staleStatuses, evaluate } = await import('../src/rules.js');
 const { taskIdWarning } = await import('../src/kit/workers.js');
 
@@ -167,6 +167,70 @@ test('a collected worker turns merged once its branch is merged', (t) => {
   const dir = runsDir(t, [run('c', { taskId: 'C', collectedAt: iso(NOW - MIN) })]);
   assert.equal(readWorkerFacts(dir, { isMerged: () => false })[0].phase, 'review');
   assert.equal(readWorkerFacts(dir, { isMerged: () => true })[0].phase, 'merged');
+});
+
+test('a finished worker without a collect record is finished, not abandoned', (t) => {
+  const dir = runsDir(t, [run('f', { taskId: 'F' })]);
+  const fact = (options) => readWorkerFacts(dir, { isLive: () => false, ...options })[0];
+  assert.equal(fact({ hasReport: () => true }).phase, 'finished', 'the report exists');
+  assert.equal(fact({ hasReport: () => false }).phase, 'abandoned', 'no report, no finishedAt, no pane');
+  assert.equal(fact({ hasReport: () => true, isMerged: () => true }).phase, 'merged', 'the branch is merged');
+  assert.equal(fact({ hasReport: () => false, isMerged: () => true }).phase, 'abandoned', 'a merged branch without a report is not checked');
+  assert.equal(fact({ hasReport: () => true, isMerged: () => true, now: NOW + 20 * 86400000 }), undefined, 'an old record is dropped before the merge check');
+  assert.equal(readWorkerFacts(dir, { isLive: () => true, hasReport: () => true })[0].phase, 'live', 'a live pane stays live');
+});
+
+test('a report that says failed, blocked, or stopped early makes the worker failed, also when the branch is merged', (t) => {
+  const write = (report) => {
+    const worktree = fs.mkdtempSync(path.join(DATA, 'wt-'));
+    fs.mkdirSync(path.join(worktree, '.worker'));
+    fs.writeFileSync(path.join(worktree, '.worker', 'report.json'), typeof report === 'string' ? report : JSON.stringify(report));
+    return worktree;
+  };
+  const phase = (report) => {
+    const dir = runsDir(t, [run('r', { taskId: 'R', worktree: write(report) })]);
+    return readWorkerFacts(dir, { isLive: () => false, isMerged: () => true, now: NOW })[0].phase;
+  };
+  assert.equal(phase({ stoppedEarly: true }), 'failed');
+  assert.equal(phase({ stoppedEarly: false, status: 'blocked' }), 'failed');
+  assert.equal(phase({ stoppedEarly: false, outcome: 'failed' }), 'failed');
+  assert.equal(phase({ stoppedEarly: false }), 'merged');
+  assert.equal(phase('not json'), 'abandoned');
+  assert.equal(reportStatus(run('none')), null);
+  const [a] = overlayTasks([task('A', { status: 'doing' })], [live('w1', 'A', { phase: 'failed' })]);
+  assert.equal(a.state, 'ready', 'the task returns to ready');
+});
+
+test('a branch without a baseCommit or a branch name is not merged', () => {
+  const root = fs.mkdtempSync(path.join(DATA, 'merge-'));
+  const git = (...args) => execFileSync('git', ['-C', root, ...args], { stdio: 'ignore' });
+  git('init', '-q', '-b', 'main');
+  git('-c', 'user.name=t', '-c', 'user.email=t@example.test', 'commit', '-q', '--allow-empty', '-m', 'a');
+  git('branch', 'side');
+  const merged = gitIsMerged(root);
+  assert.equal(merged({ name: 'x', branch: 'side', base: 'main', startedAt: 's' }), false, 'no baseCommit');
+  assert.equal(merged({ name: 'y', branch: '', base: 'main', baseCommit: 'abc', startedAt: 's' }), false, 'no branch');
+  assert.equal(merged({ name: 'z', branch: 'side', base: 'main', baseCommit: 'abc', startedAt: 's' }), true, 'a branch tip in base beyond baseCommit');
+});
+
+test('a worker collected, then merged, turns from review to merged', (t) => {
+  const dir = runsDir(t, [run('c', { taskId: 'C', finishedAt: iso(NOW - MIN), collectedAt: iso(NOW - MIN), outcome: 'done' })]);
+  assert.equal(readWorkerFacts(dir, { isMerged: () => false })[0].phase, 'review');
+  assert.equal(readWorkerFacts(dir, { isMerged: () => true })[0].phase, 'merged');
+});
+
+test('a finished worker that is not collected makes the task review, and a merge makes it done', () => {
+  const [a] = overlayTasks([task('A', { status: 'doing' })], [live('w1', 'A', { phase: 'finished' })]);
+  assert.equal(a.state, 'review');
+  assert.equal(a.stateSource, 'finished, not collected (worker w1)');
+  assert.equal(a.worker.name, 'w1');
+  const [b] = overlayTasks([task('B')], [live('w2', 'B', { phase: 'finished' })]);
+  assert.equal(b.state, 'review', 'a todo task with a finished worker does not return to ready');
+  const [c] = overlayTasks([task('C', { status: 'doing' })], [live('w3', 'C', { phase: 'merged' })]);
+  assert.equal(c.state, 'done');
+  assert.equal(c.stateSource, 'merged from worker w3');
+  const [d] = overlayTasks([task('D', { status: 'doing' })], [live('w4', 'D', { phase: 'abandoned' })]);
+  assert.equal(d.state, 'ready', 'abandoned still opens the task');
 });
 
 // Publish check.
