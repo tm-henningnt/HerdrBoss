@@ -19,7 +19,7 @@ import { codeSignCloneDir, sweepCodeSignClones } from './clone-sweep.js';
 import { runDenialScan, readDenials, denialSummary, DENIAL_SCAN_INTERVAL_MS, SCAN_BUDGET_BYTES, RETAIN_DAYS, RISE_FACTOR, RISE_MIN_EVENTS } from './denials.js';
 import { goalShown } from './goal.js';
 import { claudeContextUsage, trackBoundary, normalizeModelId } from './context-handover.js';
-import { FINISH_TIMEOUT_MS, listHandoffs, saveHandoffs, supersedeHandoffs, expireHandoff, expireMissingHandoffs, handoffNotices } from './handoff.js';
+import { FINISH_TIMEOUT_MS, autoReadyHandoff, markSuccessorWorking, listHandoffs, saveHandoffs, supersedeHandoffs, expireHandoff, expireMissingHandoffs, handoffNotices } from './handoff.js';
 import { deliverQueued, mailboxCounts, readMessages, RETENTION_MS, SEND_LIMIT_PER_MINUTE } from './messages.js';
 import { openMessageStore } from './message-store.js';
 import { readKitNotice, pendingKitAlert, isKitAlert, kitNoticeTargets } from './kit-notice.js';
@@ -40,6 +40,7 @@ const EVENTS_FILE = path.join(DATA_DIR, 'events.jsonl');
 const CLI_FILE = fileURLToPath(new URL('./cli.js', import.meta.url));
 // The wait for a working successor to settle before the goal step gives up.
 const GOAL_WAIT_MS = 10 * 60 * 1000;
+const AUTO_READY_MS = 120 * 1000;
 const SEV = { info: 0, warn: 1, critical: 2 };
 const POLICY_FILE = path.join(DATA_DIR, 'policy.json');
 
@@ -1324,6 +1325,18 @@ export class Engine extends EventEmitter {
     }
   }
 
+  // Why a prepared successor has no readyAt yet.
+  successorNotReady(item, target, now = Date.now()) {
+    if (item.promptError) return 'the prepare prompt failed';
+    if (!target) return 'the successor pane is absent';
+    if (target.agent !== item.toKind) return 'the successor pane runs another agent';
+    if (!['idle', 'done'].includes(target.status)) return 'it works';
+    if (item.promptDelivery === 'stalled-retry') return 'the prepare prompt stalled';
+    if (!item.seenWorkingAt) return 'it has not started its state read';
+    const wait = AUTO_READY_MS - (now - Date.parse(item.promptAt || item.preparedAt));
+    return wait > 0 ? `it settled, and the automatic ready signal waits ${Math.ceil(wait / 1000)} more seconds` : 'the ready check runs next tick';
+  }
+
   // Why a prepared successor is not activated yet. The reason is empty when activation may go ahead.
   // Only the state of the source orchestrator pane counts as work: a running worker keeps the project
   // active and never blocks the handover.
@@ -1333,7 +1346,7 @@ export class Engine extends EventEmitter {
     const target = panes.find((p) => p.id === item.newPane);
     const settled = (pane) => ['idle', 'done'].includes(pane?.status);
     const block = (reason, ownerDecision = false) => ({ reason, ownerDecision });
-    if (!item.readyAt) return block('the successor is not ready');
+    if (!item.readyAt) return block(`successor not ready: ${this.successorNotReady(item, target)}`);
     if (!source) return block('the source pane is gone');
     if (isBossHandoff(item, herdr) || isBossName(source.label)) return block('the Boss pane is never handed over');
     if (!settled(source)) return block('the source orchestrator works');
@@ -1356,7 +1369,7 @@ export class Engine extends EventEmitter {
     const waits = {};
     let records = [];
     try { records = listHandoffs(); } catch { return waits; }
-    for (const item of records.filter((x) => x.status === 'prepared' && x.automatic && !x.promptError && this.memory.contextHandovers?.[x.id])) {
+    for (const item of records.filter((x) => x.status === 'prepared' && x.automatic && !(x.promptError && x.readyAt) && this.memory.contextHandovers?.[x.id])) {
       const { reason } = this.handoverBlock(item, { herdr, control, projects, policy });
       if (reason) waits[item.id] = reason;
     }
@@ -1386,6 +1399,22 @@ export class Engine extends EventEmitter {
     const eligible = (slug, workspace, label) => !isBossHandoff({ project: slug, workspace, label }, herdr) && !isBossName(slug) &&
       !projectHeld(slug, projects, control) && workspaceActive(slug, workspace, herdr, control);
 
+    // A successor that read its state but never ran `handoff ready` becomes ready when it is idle or done.
+    for (const item of records.filter((x) => x.status === 'prepared' && x.automatic && !x.readyAt && !x.promptError && this.memory.contextHandovers[x.id])) {
+      const target = panes.find((p) => p.id === item.newPane);
+      if (target?.agent !== item.toKind) continue;
+      // Only a pane seen working after the prompt has started its state read.
+      if (target.status === 'working' && !item.seenWorkingAt && !(now < Date.parse(item.promptAt))) {
+        const seen = markSuccessorWorking(item.id, new Date(now).toISOString());
+        if (seen) item.seenWorkingAt = seen.seenWorkingAt;
+      }
+      if (!settled(target) || !item.seenWorkingAt || item.promptDelivery === 'stalled-retry') continue;
+      if (now - Date.parse(item.promptAt || item.preparedAt) < AUTO_READY_MS) continue;
+      const ready = autoReadyHandoff(item.id, 'auto: successor idle');
+      if (!ready) continue;
+      Object.assign(item, { readyAt: ready.readyAt, readyNote: ready.readyNote });
+      this.log('handoff', `Marked the ${item.toKind} successor of ${item.label || item.project} ready: ${ready.readyNote} (handoff ${item.id})`, { project: item.project, pane: item.newPane });
+    }
     for (const item of records.filter((x) => x.status === 'prepared' && x.automatic && x.readyAt && !x.promptError && this.memory.contextHandovers[x.id])) {
       const block = this.handoverBlock(item, { herdr, control, projects, policy });
       if (block.ownerDecision) {
@@ -1548,6 +1577,12 @@ export class Engine extends EventEmitter {
       if (!finish.confirmedAt) { finish.confirmedAt = at; finish.confirmedBy = answered ? 'answered' : 'timeout'; }
       // The old pane stays open until the successor has its goal, so the goal step runs before the close.
       if (!await this.deliverGoal(item, successor, now, at, scope)) continue;
+      // Only the live tab is safe to rename. A recorded tab id can be stale.
+      const tab = successor.tab;
+      if (tab && !finish.tabRenamedAt && (!successor.tabLabel || successor.tabLabel === 'Orchestrator Next')) {
+        try { checkHerdrResponse(await this.herdrRunner('herdr', ['tab', 'rename', tab, 'Orchestrator'])); finish.tabRenamedAt = at; }
+        catch (error) { this.log('error', `Could not rename the tab of ${item.newPane}: ${String(error.stderr || error.message).slice(0, 200)}`, scope); }
+      }
       if (source) {
         if (!quiet) continue;
         try { checkHerdrResponse(await this.herdrRunner('herdr', ['pane', 'close', source.id])); }
@@ -1556,12 +1591,6 @@ export class Engine extends EventEmitter {
           continue;
         }
         finish.closedAt = at;
-      }
-      // Only the live tab is safe to rename. A recorded tab id can be stale.
-      const tab = successor.tab;
-      if (tab && (!successor.tabLabel || successor.tabLabel === 'Orchestrator Next')) {
-        try { checkHerdrResponse(await this.herdrRunner('herdr', ['tab', 'rename', tab, 'Orchestrator'])); finish.tabRenamedAt = at; }
-        catch (error) { this.log('error', `Could not rename the tab of ${item.newPane}: ${String(error.stderr || error.message).slice(0, 200)}`, scope); }
       }
       finish.doneAt = at;
       finish.outcome = source ? 'closed' : 'source-absent';
