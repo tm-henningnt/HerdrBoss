@@ -55,6 +55,78 @@ Use `POST /api/chats/<thread>/read` to mark the unread chat records to the Owner
 
 Use `POST /api/messages` to send an Owner message. Read `GET /api/events` to receive each message change as a `message` event.
 
+## Review pack API
+
+A review pack is a set of evidence with one question for each item. The routes below read packs, serve pack files, and store the Owner answers. `src/review-api.js` handles them. `src/review-store.js` keeps the data. A project publishes packs. The Owner answers them.
+
+### Access
+
+The routes sit behind the same checks as the other `/api/` routes, in this order: host check, same-origin check, access check, read-only preview check, then the route.
+
+- A loopback request needs no login. Any other address needs the bearer token or a session cookie. Without them the answer is `401`.
+- A request with a foreign `Origin` header, or with `Sec-Fetch-Site: cross-site`, gets `403`. This applies to each method, and to file reads.
+- A request with a body needs `Content-Type: application/json`. Other types get `400`.
+- The read-only preview serves `GET` and `HEAD`. It answers each other method with `403`.
+
+The read-only preview serves `GET` of packs only from its own temporary data directory. It binds loopback by default.
+
+Only the Owner answers a review pack. The server cannot tell the Owner from an agent on a loopback request. This is the same rule as for the Mailbox. Do not give the dashboard token to an agent. The kit forbids an agent to call an answer route.
+
+### Read routes
+
+| Route | Answer |
+|---|---|
+| `GET /api/reviews?state=open` | The packs with progress counts. `state` is `open` (default) or `done`. Another value gets `400`. |
+| `GET /api/reviews/<slug>/<pack>` | The current version: manifest, files, item states, answers, and progress. `?version=<n>` selects an older version. An unknown pack or version gets `404`. |
+| `GET /api/reviews/<slug>/<pack>/files/<version>/<path>` | One pack file. `<path>` is the file path from the manifest. |
+
+A slug, a pack ID, and an item ID match `[a-z0-9][a-z0-9-]*` and have at most 64 characters. A version is a whole number of 1 or more.
+
+### File route
+
+The route serves a file only when its path equals a stored file of that version. It never joins the request path to a folder. A path with an empty part, a `.` or `..` part, a backslash, or a NUL character gets `400`. A path that names no stored file gets `404`. A stored file that is a symbolic link is not served.
+
+The content type comes from the first bytes of the stored file. The file name and the extension have no effect.
+
+| Bytes | Content type |
+|---|---|
+| PNG, JPEG, GIF, WebP | `image/png`, `image/jpeg`, `image/gif`, `image/webp` |
+| MP4, WebM | `video/mp4`, `video/webm` |
+| Text | `text/plain; charset=utf-8` |
+| SVG, HTML, other binary | Not served. The answer is `415`. |
+
+Each file response has these headers:
+
+- `X-Content-Type-Options: nosniff`
+- `Content-Security-Policy: default-src 'none'; sandbox`
+- `Cross-Origin-Resource-Policy: same-origin`
+- `Content-Disposition: inline`
+- `ETag`: the SHA-256 of the file in quotation marks
+- `Cache-Control: private, no-cache`
+
+A request with a matching `If-None-Match` gets `304` with no body. A video response also has `Accept-Ranges: bytes`. A video request with one `Range: bytes=<first>-<last>`, `bytes=<first>-`, or `bytes=-<count>` gets `206` and a `Content-Range` header. A range that starts after the end of the file gets `416` and `Content-Range: bytes */<size>`. A request with several ranges or another unit gets the whole file. Other file types ignore `Range`.
+
+### Answer routes
+
+| Route | Body | Answer |
+|---|---|---|
+| `PUT /api/reviews/<slug>/<pack>/items/<item>` | `rev` and any of `decision`, `choice`, `rating`, `live`, `viewed`, `note`, `pins`, `checks`, `opId` | `200` with the saved answer. |
+| `PUT /api/reviews/<slug>/<pack>/note` | `note`, `rev` | `200` with `note` and the new `rev`. |
+| `POST /api/reviews/<slug>/<pack>/submit` | `verdict` (`approve`, `request-changes`, or `comment`), optional `note` | `200` with the result. |
+
+`rev` is the revision that the client last saw. Use `0` for an item with no answer. The server changes only the fields in the body. It accepts the change only when `rev` equals the stored revision. A stale `rev` gets `409` with `conflict: true` and `current`, the stored answer or the stored note. A retry with the same `opId` gets `200` and `duplicate: true`.
+
+The submit route stores the result of the current version and closes the pack. A second submit of the same version gets `409` with `conflict: "submitted"` and the first result. A submitted or expired pack takes no answer: the answer route gets `409`.
+
+The routes give these other errors:
+
+- `400`: a body that is not a JSON object, an unknown field, or a field that the item does not allow.
+- `404`: an unknown pack.
+- `405`: a wrong method, with an `Allow` header.
+- `413`: a body over 64 KB for an item, or over 16 KB for a note or a submit.
+
+An error text never holds an absolute path.
+
 ## What the dashboard manages
 
 Every setting and every resource that Herdr Boss manages is visible and settable in the dashboard, unless a good reason keeps it outside. These are the good reasons:

@@ -8,7 +8,7 @@ import { assertTempDataDir } from '../src/data-dir-guard.js';
 import { validatePack } from '../src/review-pack.js';
 import { openSqliteStore } from '../src/sqlite-store.js';
 import {
-  publishVersion, putAnswer, putPackNote, getPack, listPacks, getResult, submitPack, sweep, deletePack, setMailId,
+  publishVersion, putAnswer, putPackNote, getPack, listPacks, getResult, getFile, submitPack, sweep, deletePack, setMailId,
   packDirectory, ReviewStoreError,
 } from '../src/review-store.js';
 
@@ -718,4 +718,22 @@ test('the quota does not count the versions that the same publish prunes', (t) =
   assert.deepEqual(fs.readdirSync(path.join(dir, 'review-packs', 'shop', 'checkout-redesign')).sort(), ['v2', 'v3', 'v4']);
   // Another pack still counts in full.
   assert.throws(() => publish(dir, folder({ id: 'api-reference' }), { quotaBytes }), (error) => error.code === 'quota');
+});
+
+// ---------- File lookup ----------
+
+test('getFile finds a stored file by its manifest path and nothing else', (t) => {
+  const dir = dataDir(t);
+  publish(dir, folder());
+  const found = getFile({ dir, slug: 'shop', pack: 'checkout-redesign', version: 1, file: 'img/cart-light.png' });
+  assert.equal(found.path, 'img/cart-light.png');
+  assert.match(found.sha256, /^[0-9a-f]{64}$/);
+  assert.equal(found.file, path.join(packDirectory(dir, 'shop', 'checkout-redesign', 1), 'img', 'cart-light.png'));
+  assert.equal(fs.statSync(found.file).size, found.bytes);
+  for (const file of ['../manifest.json', 'img/../img/cart-light.png', '/etc/passwd', 'img/missing.png', '', undefined]) {
+    assert.equal(getFile({ dir, slug: 'shop', pack: 'checkout-redesign', version: 1, file }), null, String(file));
+  }
+  assert.equal(getFile({ dir, slug: 'shop', pack: 'checkout-redesign', version: 2, file: 'img/cart-light.png' }), null, 'a version that does not exist');
+  assert.throws(() => getFile({ dir, slug: 'shop', pack: 'checkout-redesign', version: 0, file: 'img/cart-light.png' }), ReviewStoreError);
+  assert.throws(() => getFile({ dir, slug: 'Bad Slug', pack: 'checkout-redesign', version: 1, file: 'x' }), ReviewStoreError);
 });

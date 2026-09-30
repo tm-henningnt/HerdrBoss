@@ -441,6 +441,22 @@ export function listPacks({ dir, state = 'open', slug } = {}) {
   });
 }
 
+// One stored file of a version, looked up by its manifest path. A route never joins a client path to a folder:
+// the client path must equal a row of review_files, and the file on disk comes from the `stored` column.
+// It returns { path, sha256, bytes, type, file } with `file` as the absolute path, or null when the row is missing.
+export function getFile({ dir, slug, pack, version, file } = {}) {
+  checkName(slug);
+  checkName(pack, 'slug', 'The pack ID');
+  if (!Number.isInteger(version) || version < 1) throw invalid('The version must be a whole number of 1 or more.');
+  if (typeof file !== 'string' || !file) return null;
+  const row = open(dir).db.prepare('SELECT path, sha256, bytes, type, stored FROM review_files WHERE slug = ? AND pack = ? AND version = ? AND path = ?').get(slug, pack, version, file);
+  if (!row) return null;
+  const root = packDirectory(dir, slug, pack, version);
+  const target = path.join(root, ...safeRelative(row.stored));
+  if (!inside(root, target)) throw new ReviewStoreError('path', 'The stored path leaves the version folder.');
+  return { path: row.path, sha256: row.sha256, bytes: row.bytes, type: row.type, file: target };
+}
+
 // The newest result of a pack, or the result of one version. It returns null when there is none.
 export function getResult({ dir, slug, pack, version } = {}) {
   checkName(slug);
