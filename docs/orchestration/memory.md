@@ -109,9 +109,9 @@ Owner queue (credentials, billing, and Owner-applied settings):
 
 ## State at orchestrator handover (2026-09-30)
 
-- **Main:** `a13ca81`, pushed and live (suite 1302 of 1302, service restarted, `/api/state` 200). It adds E4, E5, E5b, M1 T2 and T3, G4e, G4f, and kit revision `7436456f91aa`.
-- **Kit:** the kit file update is committed with this file. Report the kit change to the Boss in one line.
+- **Main:** `45ae7ea`, pushed and live (suite 1332 of 1332). It adds G4g (swap refusal, off by default), T1 (atomic lock tickets), SG1 (seed guard, `openMessageStore` rejects a string), M1 critique fixes, and kit revision `f73a93f04e11`.
+- **Incident 2026-09-30:** a worker seeded 17 invented messages into the live store. Removed after a backup (`~/.herdr-boss/backups/herdr-boss-20260930-incident.db`). GUI worker briefs say: seed only into a temporary `HERDR_BOSS_DIR`; the orchestrator starts the preview (`--read-only-preview`, own port) when the worker's permission classifier denies it.
 - **Running workers:** none at the time of writing.
-- **Queue:** G4g (swap refusal, off by default), T1, M1 follow-ups, G4d, P1, A1 with L1, S1, GUI pass, G3.
+- **Queue:** M1 remainder (phone bottom action bar, thumb zone), G4d, P1, A1 with L1, S1, GUI pass, G3, G4h after 7 days of samples.
 - **Old branches:** the NC1 to NC6, HB1, HB2 and other older worktrees are not verified as merged. Check `git branch --merged main` before deleting any. Ask the Boss before deleting `kit-cli` and `kit-docs`.
 - **Ledger gap:** 11 old runs have no ledger entries. Do not invent outcomes.
