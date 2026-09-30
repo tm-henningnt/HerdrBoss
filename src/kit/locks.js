@@ -280,11 +280,29 @@ function cleanupOwnedMutationGuard(guard, identity, ownerText = null) {
   catch (error) { if (error.code === 'ENOENT') return; throw error; }
   if (current.dev !== identity.dev || current.ino !== identity.ino) return;
   if (ownerText !== null && readMutationOwner(guard) !== ownerText) return;
+  // The guard folder leaves the guard name in one rename. A reader never sees a guard without its owner record.
+  const trash = path.join(path.dirname(guard), `.mutation.releasing-${crypto.randomUUID()}`);
+  try { fs.renameSync(guard, trash); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; return; }
+  fs.rmSync(trash, { recursive: true, force: true });
+}
 
-  try { fs.unlinkSync(path.join(guard, MUTATION_OWNER_FILE)); }
-  catch (error) { if (error.code !== 'ENOENT') throw error; }
-  try { fs.rmdirSync(guard); }
-  catch (error) { if (error.code !== 'ENOENT') throw error; }
+// A claim or a release that was killed before it removed its folder leaves a folder that starts with .mutation. behind.
+// None of these folders holds the guard. The next claim removes the ones that are older than MUTATION_MAX_AGE_MS.
+function removeMutationGuardLeftovers(guard) {
+  const parent = path.dirname(guard);
+  const prefix = `${path.basename(guard)}.`;
+  let entries;
+  try { entries = fs.readdirSync(parent, { withFileTypes: true }); }
+  catch { return; }
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !entry.name.startsWith(prefix)) continue;
+    const leftover = path.join(parent, entry.name);
+    let ageMs;
+    try { ageMs = Date.now() - fs.statSync(leftover).mtimeMs; } catch { continue; }
+    if (ageMs <= MUTATION_MAX_AGE_MS) continue;
+    try { fs.rmSync(leftover, { recursive: true, force: true }); } catch {}
+  }
 }
 
 function removeStaleMutationGuard(guard, observed, onStale) {
@@ -342,6 +360,27 @@ export function removeLockTakeoverNotice(id, { dataDir = DATA_DIR } = {}) {
   catch (error) { if (error.code !== 'ENOENT') throw error; }
 }
 
+// The claim builds the guard in a staging folder that already holds the owner record, then renames the folder to the guard name.
+// A reader therefore never sees a guard without an owner record, and a killed process leaves no ownerless guard.
+// The function returns false when another process holds the guard. A rename onto an existing folder fails, so a claim never takes a live guard.
+function claimMutationGuard(guard, ownerText) {
+  const staging = `${guard}.staging-${crypto.randomUUID()}`;
+  try {
+    fs.mkdirSync(staging, { mode: 0o700 });
+    fs.writeFileSync(path.join(staging, MUTATION_OWNER_FILE), ownerText, { mode: 0o600 });
+    if (fs.existsSync(guard)) return false;
+    fs.renameSync(staging, guard);
+    return true;
+  } catch (error) {
+    // macOS and Linux name the error of a rename onto an existing folder EEXIST, ENOTEMPTY, or ENOTDIR.
+    if (error.code === 'EEXIST' || error.code === 'ENOTEMPTY' || error.code === 'ENOTDIR') return false;
+    throw error;
+  } finally {
+    // The rename already moved the staging folder. This line only removes it after a failure or a killed claim.
+    try { fs.rmSync(staging, { recursive: true, force: true }); } catch {}
+  }
+}
+
 // The .mutation guard folder in directory makes one lock or lease change at a time. A busy guard throws ELOCKBUSY
 // with busyMessage, after waitMs of retries. src/leases.js uses the guard of the machine-scope locks.
 export function withMutationLock(directory, operation, {
@@ -354,32 +393,32 @@ export function withMutationLock(directory, operation, {
   let ownerText;
   let ownerStat;
   for (;;) {
-    let created = false;
-    let createdStat = null;
-    try {
-      fs.mkdirSync(guard, { mode: 0o700 });
-      created = true;
-      createdStat = fs.statSync(guard);
-      fs.chmodSync(guard, 0o700);
-      ownerText = `${JSON.stringify({ pid: process.pid, at: new Date().toISOString() })}\n`;
-      fs.writeFileSync(path.join(guard, MUTATION_OWNER_FILE), ownerText, { mode: 0o600, flag: 'wx' });
-      ownerStat = fs.statSync(guard);
-      break;
-    } catch (error) {
-      if (created) {
-        try { cleanupOwnedMutationGuard(guard, createdStat); } catch {}
+    const claimText = `${JSON.stringify({ pid: process.pid, at: new Date().toISOString() })}\n`;
+    if (claimMutationGuard(guard, claimText)) {
+      let claimedStat = null;
+      try {
+        claimedStat = fs.statSync(guard);
+        fs.chmodSync(guard, 0o700);
+        ownerStat = fs.statSync(guard);
+        ownerText = claimText;
+        break;
+      } catch (error) {
+        if (claimedStat) { try { cleanupOwnedMutationGuard(guard, claimedStat); } catch {} }
         throw error;
       }
-      if (error.code !== 'EEXIST') throw error;
-      const observed = mutationGuardSnapshot(guard);
-      if (removeStaleMutationGuard(guard, observed, onStale)) continue;
-      if (Date.now() >= deadline) {
-        const busy = new Error(busyMessage);
-        busy.code = 'ELOCKBUSY';
-        throw busy;
-      }
-      sleep(50);
     }
+    const observed = mutationGuardSnapshot(guard);
+    if (removeStaleMutationGuard(guard, observed, onStale)) {
+      removeMutationGuardLeftovers(guard);
+      continue;
+    }
+    if (Date.now() >= deadline) {
+      const busy = new Error(busyMessage);
+      busy.code = 'ELOCKBUSY';
+      throw busy;
+    }
+    removeMutationGuardLeftovers(guard);
+    sleep(50);
   }
   try { return operation(); }
   finally { cleanupOwnedMutationGuard(guard, ownerStat, ownerText); }
