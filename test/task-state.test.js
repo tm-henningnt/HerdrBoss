@@ -10,7 +10,7 @@ import { spawnSync, execFileSync } from 'node:child_process';
 const DATA = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-task-state-'));
 process.env.HERDR_BOSS_DIR = DATA;
 process.on('exit', () => fs.rmSync(DATA, { recursive: true, force: true }));
-const { overlayTasks, readWorkerFacts, workerFactFromRun, publishConflicts, applyTaskState, gitIsMerged, taskMismatches } = await import('../src/task-state.js');
+const { overlayTasks, readWorkerFacts, workerFactFromRun, publishConflicts, applyTaskState, gitIsMerged, gitCounts, taskMismatches } = await import('../src/task-state.js');
 const { staleStatuses, evaluate } = await import('../src/rules.js');
 const { taskIdWarning } = await import('../src/kit/workers.js');
 
@@ -433,4 +433,54 @@ test('the engine reads worker facts from the run records of a registered project
   assert.equal(decorated.tasks[1].state, 'ready');
   assert.equal(decorated.boardStale, true);
   assert.match(decorated.boardStaleReason, /worker live-one runs task A/);
+});
+
+// A temporary repository with a bare upstream. No real project repository is read.
+function countsFixture() {
+  const dir = fs.mkdtempSync(path.join(DATA, 'counts-'));
+  const run = (cwd, ...args) => execFileSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  const bare = path.join(dir, 'up.git');
+  const repo = path.join(dir, 'repo');
+  fs.mkdirSync(repo);
+  run(dir, 'init', '--bare', '-b', 'main', bare);
+  run(repo, 'init', '-b', 'main');
+  fs.writeFileSync(path.join(repo, 'a.txt'), 'a');
+  run(repo, 'add', '.');
+  run(repo, 'commit', '-m', 'one');
+  const commit = (name) => { fs.writeFileSync(path.join(repo, name), name); run(repo, 'add', '.'); run(repo, 'commit', '-m', name); };
+  return { repo, run: (...args) => run(repo, ...args), commit, bare };
+}
+
+test('gitCounts is 0 and 0 for a repository without upstream and without other branches', () => {
+  const f = countsFixture();
+  assert.deepEqual(gitCounts(f.repo, { base: 'main' }), { ahead: 0, unmerged: 0 });
+});
+
+test('gitCounts counts commits not on the upstream and branches not merged into the base', () => {
+  const f = countsFixture();
+  f.run('remote', 'add', 'origin', f.bare);
+  f.run('push', '-u', 'origin', 'main');
+  f.commit('b.txt');
+  f.commit('c.txt');
+  f.run('branch', 'merged');
+  f.run('checkout', '-b', 'topic');
+  f.commit('t.txt');
+  f.run('checkout', 'main');
+  assert.deepEqual(gitCounts(f.repo, { base: 'main' }), { ahead: 2, unmerged: 1 });
+  f.run('merge', '--no-ff', '-m', 'merge topic', 'topic');
+  assert.deepEqual(gitCounts(f.repo, { base: 'main' }), { ahead: 4, unmerged: 0 });
+});
+
+test('gitCounts never throws: a missing repository or base gives null counts', () => {
+  assert.deepEqual(gitCounts(path.join(DATA, 'no-such-repo'), { base: 'main' }), { ahead: null, unmerged: null });
+  const f = countsFixture();
+  assert.deepEqual(gitCounts(f.repo, { base: 'no-such-base' }), { ahead: 0, unmerged: null });
+});
+
+test('applyTaskState adds the git counts to the project git state', () => {
+  const projects = [{ slug: 'alpha', git: { branch: 'main', dirty: true } }, { slug: 'beta' }, { slug: 'gamma', git: { branch: 'x' } }];
+  const result = applyTaskState(projects, {}, { gitCounts: { alpha: { ahead: 2, unmerged: 1 }, beta: { ahead: 0, unmerged: 3 } } });
+  assert.deepEqual(result[0].git, { branch: 'main', dirty: true, ahead: 2, unmerged: 1 });
+  assert.deepEqual(result[1].git, { ahead: 0, unmerged: 3 });
+  assert.deepEqual(result[2].git, { branch: 'x' });
 });

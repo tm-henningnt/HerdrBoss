@@ -23,7 +23,7 @@ import { FINISH_TIMEOUT_MS, listHandoffs, saveHandoffs, supersedeHandoffs, expir
 import { deliverQueued, mailboxCounts, readMessages, RETENTION_MS, SEND_LIMIT_PER_MINUTE } from './messages.js';
 import { openMessageStore } from './message-store.js';
 import { readKitNotice, pendingKitAlert, isKitAlert, kitNoticeTargets } from './kit-notice.js';
-import { applyTaskState, readWorkerFacts, gitIsMerged } from './task-state.js';
+import { applyTaskState, readWorkerFacts, gitIsMerged, gitCounts } from './task-state.js';
 import { kitRevisionState, kitSnapshot, KIT_STATES } from './kit/agents-check.js';
 import { nextDailyTime, nightNoticeSent, quietHoursActive, readNight, readNightRecord, watchUntilPhrase, withNightReportMark, withNoticeMark, writeNight } from './night.js';
 import { inspectWorkerTransitions, inspectWorkerReports, isWorkerPane, applyWorkerFailureStatuses, resolveFreeUsageRun, activeFreeModelExhaustions, extendFreeModelExhaustion, activeFreeLaneExhaustions, extendFreeLaneExhaustion, freeUsageLaneRetry } from './worker-failures.js';
@@ -32,6 +32,7 @@ import { FULL_SUITE_LOCK, lockLedgerSummary, readLockQueue, readLockTakeoverNoti
 
 const TASK_WORKERS_INTERVAL_MS = 15_000;
 const TASK_MERGE_CHECKS = 5;
+const GIT_COUNTS_INTERVAL_MS = 60_000;
 const MEMORY_FILE = path.join(DATA_DIR, 'memory.json');
 const STATE_FILE = path.join(DATA_DIR, 'state.json');
 const BULLETIN_FILE = path.join(DATA_DIR, 'bulletin.md');
@@ -451,6 +452,8 @@ export class Engine extends EventEmitter {
     this.taskWorkers = {};
     this.taskWorkersAt = 0;
     this.mergedCache = new Map();
+    this.gitCounts = {};
+    this.gitCountsAt = 0;
     this.collectors = {
       collectHerdr,
       collectQuotas,
@@ -811,7 +814,7 @@ export class Engine extends EventEmitter {
       snap.taskWorkers = this.readTaskWorkers(now, herdr);
       snap.staleStatus = staleStatuses(snap, this.cfg, now, this.memory.staleStatus);
       this.memory.staleStatus = snap.staleStatus;
-      snap.projects = applyTaskState(snap.projects, snap.taskWorkers, { stale: snap.staleStatus });
+      snap.projects = applyTaskState(snap.projects, snap.taskWorkers, { stale: snap.staleStatus, gitCounts: this.readGitCounts(now) });
       this.memory.lastOrchestrators ||= {};
       for (const p of Object.values(control.projects)) if (p.orch?.kind) this.memory.lastOrchestrators[p.workspace] = { pane: p.orch.pane, kind: p.orch.kind, project: p.slug };
       for (const pane of herdr?.panes || []) if (pane.label === 'boss' && pane.agent) this.memory.lastOrchestrators[pane.workspace] = { pane: pane.id, kind: pane.agent, project: 'Boss', label: 'Boss', boss: true };
@@ -1067,10 +1070,24 @@ export class Engine extends EventEmitter {
     return next;
   }
 
+  // The unpushed commit and unmerged branch counts of each registered project. The read runs at most once a minute.
+  readGitCounts(now) {
+    if (now - this.gitCountsAt < GIT_COUNTS_INTERVAL_MS) return this.gitCounts;
+    this.gitCountsAt = now;
+    const next = {};
+    for (const { slug, repo } of readProjectRepos(DATA_DIR)) {
+      let base = 'main';
+      try { base = loadProjectConfig({ cwd: repo }).baseBranch || 'main'; } catch { /* the default base applies */ }
+      next[slug] = gitCounts(repo, { base });
+    }
+    this.gitCounts = next;
+    return next;
+  }
+
   // Apply the task state to a fresh project list, for example after a publish between two ticks.
   decorateProjects(projects, now = Date.now()) {
     const snap = { projects, control: this.state?.control, statusActivity: this.statusActivity(), taskWorkers: this.taskWorkers };
-    return applyTaskState(projects, this.taskWorkers, { stale: staleStatuses(snap, this.cfg, now, this.memory.staleStatus) });
+    return applyTaskState(projects, this.taskWorkers, { stale: staleStatuses(snap, this.cfg, now, this.memory.staleStatus), gitCounts: this.gitCounts });
   }
 
   // The read-only worker config of each registered project, with allow-listed fields only.

@@ -134,3 +134,26 @@ test('the help and the user guide describe the new layout', () => {
   assert.match(guide, /### Now/);
   assert.match(guide, /### Project details/);
 });
+
+test('the Waiting to merge card shows the unpushed commit and unmerged branch counts above 0', () => {
+  const { gitCountsLine } = load(['gitCountsLine']);
+  assert.equal(gitCountsLine({ ahead: 0, unmerged: 0 }), '');
+  assert.equal(gitCountsLine(null), '');
+  assert.equal(gitCountsLine({ ahead: null, unmerged: null }), '');
+  assert.match(gitCountsLine({ ahead: 3, unmerged: 0 }), /3 unpushed commits/);
+  assert.doesNotMatch(gitCountsLine({ ahead: 3, unmerged: 0 }), /unmerged/);
+  assert.match(gitCountsLine({ ahead: 1, unmerged: 2 }), /1 unpushed commit\b(?!s)/);
+  assert.match(gitCountsLine({ ahead: 1, unmerged: 2 }), /2 unmerged branches/);
+  assert.match(gitCountsLine({ ahead: 0, unmerged: 1 }), /1 unmerged branch\b(?!es)/);
+  const now = body('projectNow');
+  assert.match(now, /gitCountsLine\(p\.git\)/);
+});
+
+test('the Status stale card shows the reason for a live worker on a task that is not doing, else the age', () => {
+  const { staleStatusText } = load(['staleStatusText'], { dur: (s) => `${Math.round(s / 60)} min` });
+  const updated = new Date(Date.now() - 3 * 3600 * 1000).toISOString();
+  assert.equal(staleStatusText({ updated, mismatch: [], reason: 'published status is 3 h old while workers ran' }, updated), '180 min');
+  const reason = 'worker w1 runs task A, which the status lists as todo';
+  assert.equal(staleStatusText({ updated, mismatch: [{ taskId: 'A' }], reason }, updated), reason);
+  assert.match(body('projectNow'), /staleStatusText\(stale, p\.updated\)/);
+});

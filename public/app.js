@@ -4811,6 +4811,20 @@ function nowTask(t, slug, extra = '') {
   return id ? `<button type="button" class="now-task" data-task-select="${esc(id)}" data-slug="${esc(slug)}" data-reveal="card-link" aria-label="Show task ${esc(id)} on the board">${label}</button>` : `<span class="now-task">${label}</span>`;
 }
 
+// The unpushed commit and unmerged branch counts of the project git state. A count of 0 or null shows nothing.
+function gitCountsLine(git) {
+  const n = (v) => (Number.isFinite(v) && v > 0 ? v : 0);
+  const ahead = n(git?.ahead);
+  const unmerged = n(git?.unmerged);
+  const parts = [ahead ? `${ahead} unpushed commit${ahead === 1 ? '' : 's'}` : '', unmerged ? `${unmerged} unmerged branch${unmerged === 1 ? '' : 'es'}` : ''].filter(Boolean);
+  return parts.length ? `<p class="muted">${parts.join(' · ')}</p>` : '';
+}
+
+// The Status stale line: the reason for a live worker on a task that is not doing, else the age.
+function staleStatusText(stale, updated) {
+  return stale.mismatch?.length && stale.reason ? stale.reason : dur((Date.now() - new Date(updated)) / 1000);
+}
+
 function projectNow(s, p, slug, work) {
   const live = s.control?.projects?.[slug];
   const workspace = live?.workspace || s.herdr?.workspaces.find((w) => w.id === p.workspace || w.label === p.workspace)?.id || null;
@@ -4818,10 +4832,11 @@ function projectNow(s, p, slug, work) {
   const ready = tasks.length ? boardColumns(tasks, { groups: p.groups }).columns.ready : [];
   const m = projectNowModel(p, { workspace, panes: s.herdr?.panes || [], ready, since: s.paneSince || {} });
   const stale = s.staleStatus?.[slug];
+  const counts = gitCountsLine(p.git);
   const kit = p.currentKitRevision ? kitState(p.kitRevision, { current: p.currentKitRevision, changes: s.kit?.changes }) : '';
   const issues = [
     ...(Array.isArray(p.errors) ? p.errors : p.errors ? [p.errors] : []).map((e) => `<li class="crit">Status file: ${esc(e)}</li>`),
-    stale && stale.updated === p.updated ? `<li class="warn">Status stale: ${esc(dur((Date.now() - new Date(p.updated)) / 1000))}. The orchestrator must publish the current plan.</li>` : '',
+    stale && stale.updated === p.updated ? `<li class="warn">Status stale: ${esc(staleStatusText(stale, p.updated))}. The orchestrator must publish the current plan.</li>` : '',
     p.boardStale ? `<li class="warn">Board stale: ${esc(p.boardStaleReason || 'the published status does not match the workers.')}</li>` : '',
     agentsDriftLine(p.agentsCheck),
     kit === 'behind (required)' ? '<li class="warn">The orchestrator uses an old kit. Run <span class="mono">herdr-boss kit update</span> in the project.</li>' : '',
@@ -4832,7 +4847,7 @@ function projectNow(s, p, slug, work) {
     decisionsBlock(p, work, slug),
     issues.length ? `<article class="now-card now-issues" data-key="now:issues"><h3>Status issues <span class="num">${issues.length}</span></h3><ul class="now-list">${issues.join('')}</ul></article>` : '',
     live || m.workers.length ? `<article class="now-card" data-key="now:workers"><h3>Running now${slots ? ` <span class="sub">${esc(slots)}</span>` : ''}</h3>${m.workers.length ? `<ul class="now-list">${m.workers.map(workerRow).join('')}</ul>` : '<p class="muted">No worker runs.</p>'}</article>` : '',
-    m.review.length || m.dirty ? `<article class="now-card" data-key="now:merge"><h3>Waiting to merge${m.review.length ? ` <span class="num">${m.review.length}</span>` : ''}</h3>${m.review.length ? `<ul class="now-list">${m.review.map((t) => `<li>${nowTask(t, slug, t.worker?.name ? ` <span class="muted">· ${esc(t.worker.name)}</span>` : '')}</li>`).join('')}</ul>` : ''}${m.dirty ? `<p class="muted">The published status reports uncommitted changes${p.git?.branch ? ` on <span class="mono">${esc(p.git.branch)}</span>` : ''}.</p>` : ''}</article>` : '',
+    m.review.length || m.dirty || counts ? `<article class="now-card" data-key="now:merge"><h3>Waiting to merge${m.review.length ? ` <span class="num">${m.review.length}</span>` : ''}</h3>${m.review.length ? `<ul class="now-list">${m.review.map((t) => `<li>${nowTask(t, slug, t.worker?.name ? ` <span class="muted">· ${esc(t.worker.name)}</span>` : '')}</li>`).join('')}</ul>` : ''}${m.dirty ? `<p class="muted">The published status reports uncommitted changes${p.git?.branch ? ` on <span class="mono">${esc(p.git.branch)}</span>` : ''}.</p>` : ''}${counts}</article>` : '',
     tasks.length ? `<article class="now-card" data-key="now:next"><h3>Next task</h3>${m.next ? `<div class="now-next">${nowTask(m.next, slug)}</div>` : '<p class="muted">No task is ready.</p>'}<p class="muted">${ready.length > 1 ? `${ready.length - 1} more ready` : 'No other task is ready'}${m.blocked ? ` · ${m.blocked} blocked` : ''}</p></article>` : '',
   ].filter(Boolean);
   const continuity = handoffBlock(s, slug);
@@ -4885,7 +4900,7 @@ function project(s, slug) {
   const links = p.links?.length ? `<div class="panel"><h2>Links</h2><ul class="links">${p.links.map((l) => safeUrl(l.url) ? `<li><a href="${esc(safeUrl(l.url))}" target="_blank" rel="noreferrer">${esc(l.label || l.url)}</a></li>` : `<li>${esc(l.label || '')}</li>`).join('')}</ul></div>` : '';
   const notes = p.notes?.length ? `<div class="panel"><h2>Notes</h2><ul class="notes">${p.notes.map((n) => `<li>${code(n)}</li>`).join('')}</ul></div>` : '';
   return [
-    `<section class="phead"><h1>${esc(p.project)}</h1>${p.goal ? `<div class="owner-goal">${goalField('Current Owner goal', p.goal)}</div>` : ''}${p.summary ? `<p>${esc(p.summary)}</p>` : ''}${phases}<div class="win-foot">${published ? `updated ${ago(p.updated)}${staleStatusTag(s, p)}${p.status ? ` · ${esc(p.status)}` : ''}` : 'No project status published yet'}${p.git && typeof p.git === 'object' ? ` · <span class="mono">${esc(p.git.branch || '')}${p.git.commit ? ` @ ${esc(String(p.git.commit).slice(0, 12))}` : ''}${p.git.dirty ? ' · uncommitted changes' : ''}</span>` : ''}</div></section>`,
+    `<section class="phead"><h1>${esc(p.project)}</h1>${p.goal ? `<div class="owner-goal">${goalField('Current Owner goal', p.goal)}</div>` : ''}${p.summary ? `<p>${esc(p.summary)}</p>` : ''}${phases}<div class="win-foot">${published ? `updated ${ago(p.updated)}${staleStatusTag(s, p)}${p.status ? ` · ${esc(p.status)}` : ''}` : 'No project status published yet'}${p.git && typeof p.git === 'object' && (p.git.branch || p.git.commit || p.git.dirty) ? ` · <span class="mono">${esc(p.git.branch || '')}${p.git.commit ? ` @ ${esc(String(p.git.commit).slice(0, 12))}` : ''}${p.git.dirty ? ' · uncommitted changes' : ''}</span>` : ''}</div></section>`,
     projectNow(s, p, slug, work),
     metrics,
     programBlock(work),
