@@ -654,6 +654,137 @@ test('worktree apply removes a clean merged worker tree in a temporary repo', ()
   assert.ok(output.some((line) => line.includes(`Removed ${safe}`)));
 });
 
+function archiveFixture(name = 'arch') {
+  const root = temporaryRepo();
+  const worktree = path.join(path.dirname(root), `${path.basename(root)}-wt-${name}`);
+  git(root, 'switch', '-c', name);
+  fs.writeFileSync(path.join(root, `${name}.txt`), 'merged\n');
+  git(root, 'add', `${name}.txt`);
+  git(root, 'commit', '-m', `${name} change`);
+  git(root, 'switch', 'main');
+  git(root, 'merge', '--no-ff', name, '-m', `merge ${name}`);
+  git(root, 'worktree', 'add', worktree, name);
+  fs.appendFileSync(path.join(root, '.git', 'info', 'exclude'), '.worker/\n');
+  fs.mkdirSync(path.join(worktree, '.worker', 'tmp'), { recursive: true });
+  fs.writeFileSync(path.join(worktree, '.worker', 'report.md'), 'human report\n');
+  fs.writeFileSync(path.join(worktree, '.worker', 'report.json'), '{"issue":null}\n');
+  fs.writeFileSync(path.join(worktree, '.worker', 'brief.md'), 'brief\n');
+  fs.writeFileSync(path.join(worktree, '.worker', 'tmp', 'scratch.txt'), 'scratch\n');
+  fs.writeFileSync(path.join(worktree, '.worker', 'inputs.txt'), 'input\n');
+  const target = path.join(root, '.orchestration', 'reports', name);
+  const run = (options = {}) => {
+    const lines = [];
+    const config = loadProjectConfig({ cwd: root });
+    const result = pruneWorktrees(config, { apply: true, herdr: () => ({ panes: [] }), listProcesses: () => [], output: (line) => lines.push(line), ...options });
+    return { lines, result };
+  };
+  return { root, worktree, target, run };
+}
+
+test('worktree prune archives the three worker reports into the main checkout before removal', (t) => {
+  const { root, worktree, target, run } = archiveFixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const { lines } = run();
+  assert.equal(fs.existsSync(worktree), false);
+  assert.deepEqual(fs.readdirSync(target).sort(), ['brief.md', 'report.json', 'report.md']);
+  assert.equal(fs.readFileSync(path.join(target, 'report.md'), 'utf8'), 'human report\n');
+  assert.ok(target.startsWith(path.join(root, '.orchestration', 'reports') + path.sep));
+  assert.ok(lines.includes(`archived reports of arch to ${target}`));
+});
+
+test('worktree prune keeps an older archive and writes a newer report to a suffixed folder', (t) => {
+  const { root, worktree, target, run } = archiveFixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(target, { recursive: true });
+  fs.writeFileSync(path.join(target, 'report.md'), 'older copy\n');
+  fs.rmSync(path.join(worktree, '.worker', 'report.json'));
+  const { lines } = run({ now: Date.UTC(2026, 8, 30, 12, 0, 0) });
+  const suffixed = path.join(path.dirname(target), 'arch-20260930T120000Z');
+  assert.equal(fs.existsSync(worktree), false);
+  assert.equal(fs.readFileSync(path.join(target, 'report.md'), 'utf8'), 'older copy\n');
+  assert.deepEqual(fs.readdirSync(target), ['report.md']);
+  assert.equal(fs.readFileSync(path.join(suffixed, 'report.md'), 'utf8'), 'human report\n');
+  assert.deepEqual(fs.readdirSync(suffixed).sort(), ['brief.md', 'report.md']);
+  assert.ok(lines.includes('skipped report.json: missing'));
+  assert.ok(lines.includes(`archived reports of arch to ${suffixed}`));
+});
+
+test('worktree prune adds a counter when the suffixed folder exists', (t) => {
+  const { root, target, run } = archiveFixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(target, { recursive: true });
+  fs.writeFileSync(path.join(target, 'report.md'), 'older copy\n');
+  fs.mkdirSync(path.join(path.dirname(target), 'arch-20260930T120000Z'));
+  run({ now: Date.UTC(2026, 8, 30, 12, 0, 0) });
+  assert.equal(fs.readFileSync(path.join(path.dirname(target), 'arch-20260930T120000Z-2', 'report.json'), 'utf8'), '{"issue":null}\n');
+});
+
+test('worktree prune keeps the worktree when .worker is a symlink', (t) => {
+  const { root, worktree, run } = archiveFixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-worker-link-'));
+  t.after(() => fs.rmSync(elsewhere, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(elsewhere, 'report.md'), 'outside\n');
+  fs.rmSync(path.join(worktree, '.worker'), { recursive: true });
+  fs.symlinkSync(elsewhere, path.join(worktree, '.worker'));
+  fs.appendFileSync(path.join(root, '.git', 'info', 'exclude'), '.worker\n');
+  const { lines } = run();
+  assert.equal(fs.existsSync(worktree), true);
+  assert.ok(lines.some((line) => line.startsWith('Archive of arch failed:') && line.includes('.worker is not a real directory')));
+  assert.equal(fs.existsSync(path.join(root, '.orchestration', 'reports')), false);
+});
+
+test('worktree prune keeps the worktree when the archive folder is a symlink', (t) => {
+  const { root, worktree, target, run } = archiveFixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-archive-link-'));
+  t.after(() => fs.rmSync(elsewhere, { recursive: true, force: true }));
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.symlinkSync(elsewhere, target);
+  const { lines } = run();
+  assert.equal(fs.existsSync(worktree), true);
+  assert.deepEqual(fs.readdirSync(elsewhere), []);
+  assert.ok(lines.some((line) => line.startsWith('Archive of arch failed:')));
+});
+
+test('worktree prune skips a report larger than 1 MB', (t) => {
+  const { root, worktree, target, run } = archiveFixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(worktree, '.worker', 'report.md'), Buffer.alloc(1024 * 1024 + 1, 'a'));
+  const { lines } = run();
+  assert.ok(lines.includes('skipped report.md: over 1 MB'));
+  assert.equal(fs.existsSync(worktree), false);
+  assert.deepEqual(fs.readdirSync(target).sort(), ['brief.md', 'report.json']);
+});
+
+test('worktree prune keeps the worktree when the archive copy fails', (t) => {
+  const { root, worktree, target, run } = archiveFixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, 'a file where the folder belongs\n');
+  const { lines } = run();
+  assert.equal(fs.existsSync(worktree), true);
+  assert.ok(lines.some((line) => line.startsWith('Archive of arch failed:') && line.includes('worktree kept')));
+  assert.ok(!lines.some((line) => line.startsWith('Removed ')));
+});
+
+test('worktree prune --no-archive removes the worktree without a copy', (t) => {
+  const { root, worktree, run } = archiveFixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const { lines } = run({ archive: false });
+  assert.equal(fs.existsSync(worktree), false);
+  assert.equal(fs.existsSync(path.join(root, '.orchestration', 'reports')), false);
+  assert.ok(!lines.some((line) => line.startsWith('archived reports')));
+});
+
+test('worktree prune without --apply archives nothing', (t) => {
+  const { root, worktree, run } = archiveFixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  run({ apply: false });
+  assert.equal(fs.existsSync(worktree), true);
+  assert.equal(fs.existsSync(path.join(root, '.orchestration', 'reports')), false);
+});
+
 test('worktree prune blocks live cwd processes, missing-worktree orphans, and failed scans', (t) => {
   const root = temporaryRepo();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

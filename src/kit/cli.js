@@ -24,7 +24,7 @@ const USAGE = `Kit commands:
   lock acquire <name> [--wait SECONDS] | lock release <name> | lock list
   push [git push arguments]
   suite [--wait SECONDS] [--keep NAME]... [--reuse] -- <command...> | suite --list-passes
-  worktree prune [--apply]
+  worktree prune [--apply] [--no-archive]
   ledger append --entry FILE | ledger check [--runs]
   check --report FILE | --run FILE | --worktree DIR --allow PATH...
   check agents [FILE]
@@ -350,11 +350,11 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
 
   if (command === 'worktree') {
     const [action, ...rest] = argv;
-    if (action !== 'prune') fail('Usage: worktree prune [--apply]');
-    const { positional, flags } = parseArgs(rest, { boolean: ['--apply'] });
-    knownFlags(flags, ['apply']);
-    if (positional.length) fail('Usage: worktree prune [--apply]');
-    return pruneWorktrees(config, { apply: flags.apply, herdr, output });
+    if (action !== 'prune') fail('Usage: worktree prune [--apply] [--no-archive]');
+    const { positional, flags } = parseArgs(rest, { boolean: ['--apply', '--no-archive'] });
+    knownFlags(flags, ['apply', 'noarchive']);
+    if (positional.length) fail('Usage: worktree prune [--apply] [--no-archive]');
+    return pruneWorktrees(config, { apply: flags.apply, archive: !flags.noarchive, herdr, output });
   }
 
   if (command === 'ledger') {

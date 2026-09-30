@@ -1482,6 +1482,8 @@ The **Analytics** page shows the hours in the block **Machine overload and idle 
 
 Before it removes a worktree, `herdr-boss worktree prune --apply` checks for processes whose current working directory is inside that worktree. It reports parent-PID-1 processes in missing or prunable worktree paths. Stop those processes before cleanup. Herdr Boss removes no worktrees if it cannot scan process directories. It also keeps worktrees that are dirty, unmerged, primary, used by a live pane, or uninspectable. Herdr Boss sends a notice about a parent-PID-1 process in a removed worktree only to that repository's `orch` workspace.
 
+Before it removes a worktree, `worktree prune --apply` copies the worker reports `report.md`, `report.json`, and `brief.md` to `.orchestration/reports/<worker name>/` in the main checkout. It never overwrites an archived file. If the folder already holds a report, it writes the new reports to `<worker name>-<UTC time>`. If the copy fails, it keeps the worktree. Use `--no-archive` to skip the copy.
+
 ## HTTP API
 
 The dashboard uses these routes. A request from another host needs the access token.

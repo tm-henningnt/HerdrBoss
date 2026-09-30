@@ -497,6 +497,8 @@ Collection records the run before merge. After a successful `--record`, merge th
 
 `worktree prune` checks the current working directory of processes in every existing worktree it could remove. It also reports parent-PID-1 processes that still use a missing or prunable worktree path. It never removes a worktree while a matching process runs. It blocks all removals when it cannot scan processes. It does not remove dirty, unmerged, primary, live-pane, or uninspectable worktrees.
 
+Before `worktree prune --apply` removes a worktree, it copies `.worker/report.md`, `.worker/report.json`, and `.worker/brief.md` to `.orchestration/reports/<worker name>/` in the main checkout. It copies no other file. It skips a missing file and a file larger than 1 MB, and prints one line for each skipped file, for example `skipped report.md: over 1 MB`. It never overwrites a file. If the archive folder already holds one of the files, the command writes all files to the new folder `<worker name>-<UTC time>`. It adds `-2`, `-3` when that folder also exists. It prints one line for each archive: `archived reports of <name> to <path>`. The `.gitignore` of the project holds `.orchestration/`. If `.worker` or the archive folder is a symlink, or a copy fails, the command prints the error and keeps that worktree. Use `--no-archive` to remove a worktree without the copy.
+
 ```sh
 herdr-boss worker allow fix-74 docs/parse.md --reason "the fix also needs the parser docs"
 ```
@@ -553,7 +555,7 @@ When a task names `serve:live` and the `serve-ports` pool exists, `worker start`
 | `kit install [--no-hook]` | Install the kit in the Git top level of the current directory. The command writes the kit file, the `AGENTS.md` stub, and the Claude `SessionStart` hook. It prints `wrote FILE` for each file that it changed and `unchanged FILE` for the other files. `--no-hook` does not change `.claude/settings.json`. |
 | `kit update [--quiet]` | Install the kit as `kit install` does, print the kit changes since the installed kit revision, and print the current kit file. `--quiet` prints the digest and the summary line only, and prints nothing when the kit is current and no file changes. |
 | `kit block` | Print the marked `AGENTS.md` stub with the current hash. Old instructions use this command. Use `kit install` for a new installation. |
-| `worktree prune [--apply]` | List worktrees that pass the safe checks and show processes in removal candidates. `--apply` removes only worktrees with no blocking process. |
+| `worktree prune [--apply] [--no-archive]` | List worktrees that pass the safe checks and show processes in removal candidates. `--apply` removes only worktrees with no blocking process. Before it removes a worktree, `--apply` archives the worker reports. `--no-archive` skips the archive. |
 | `gh issue create\|comment\|edit ... --body-file FILE` | Run a GitHub issue command. An inline `--body` is refused. |
 
 ### Kit change impact

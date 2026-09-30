@@ -88,7 +88,68 @@ export function formatAge(milliseconds) {
   return `${Math.floor(milliseconds / 60000)}m`;
 }
 
-export function pruneWorktrees(config, { apply = false, herdr = createHerdrRunner(), output = console.log, now = Date.now(), listProcesses = listCwdProcesses } = {}) {
+const ARCHIVE_FILES = ['report.md', 'report.json', 'brief.md'];
+const ARCHIVE_MAX_BYTES = 1024 * 1024;
+const ARCHIVE_FOLDER = path.join('.orchestration', 'reports');
+
+function realDirectory(folder, label) {
+  let stat;
+  try { stat = fs.lstatSync(folder); } catch (error) {
+    if (error.code === 'ENOENT') return false;
+    throw error;
+  }
+  if (!stat.isDirectory()) throw new Error(`${label} is not a real directory (${folder}).`);
+  return true;
+}
+
+function utcStamp(now) {
+  return new Date(now).toISOString().replace(/\.\d+Z$/, 'Z').replace(/[-:]/g, '');
+}
+
+// Copies the worker reports of a worktree to <main checkout>/.orchestration/reports/<name>/.
+// It skips a missing file and a file over 1 MB, and reports each skip through output.
+// It never overwrites a file. When the folder already holds one of the files, it writes all files to
+// a new folder <name>-<UTC time>, with -2, -3 added when that folder also exists.
+// It throws when .worker or a target folder is a symlink or a file, or when a copy fails.
+// Returns the target folder, or null when nothing was copied.
+export function archiveWorkerReports(worktree, name, mainRoot, { output = () => {}, now = Date.now() } = {}) {
+  const workerFolder = path.join(worktree, '.worker');
+  if (!realDirectory(workerFolder, '.worker')) return null;
+  const sources = [];
+  for (const file of ARCHIVE_FILES) {
+    const source = path.join(workerFolder, file);
+    let stat;
+    try { stat = fs.lstatSync(source); } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      output(`skipped ${file}: missing`);
+      continue;
+    }
+    if (!stat.isFile()) output(`skipped ${file}: not a regular file`);
+    else if (stat.size > ARCHIVE_MAX_BYTES) output(`skipped ${file}: over 1 MB`);
+    else sources.push({ file, source });
+  }
+  if (!sources.length) return null;
+  const reports = path.join(mainRoot, ARCHIVE_FOLDER);
+  realDirectory(path.join(mainRoot, '.orchestration'), '.orchestration');
+  realDirectory(reports, 'Report archive folder');
+  let target = path.join(reports, name);
+  if (realDirectory(target, 'Archive folder') && sources.some(({ file }) => fs.existsSync(path.join(target, file)))) {
+    const base = path.join(reports, `${name}-${utcStamp(now)}`);
+    target = base;
+    for (let counter = 2; fs.existsSync(target) || fs.lstatSync(target, { throwIfNoEntry: false }); counter += 1) target = `${base}-${counter}`;
+  }
+  fs.mkdirSync(target, { recursive: true });
+  for (const { file, source } of sources) fs.copyFileSync(source, path.join(target, file), fs.constants.COPYFILE_EXCL);
+  return target;
+}
+
+function workerNameOf(worktreePath, mainRoot) {
+  const base = path.basename(worktreePath);
+  const legacy = `${path.basename(mainRoot)}-wt-`;
+  return base.startsWith(legacy) ? base.slice(legacy.length) : base;
+}
+
+export function pruneWorktrees(config, { apply = false, archive = true, herdr = createHerdrRunner(), output = console.log, now = Date.now(), listProcesses = listCwdProcesses } = {}) {
   const panesResponse = herdr(['pane', 'list']);
   const panes = Array.isArray(panesResponse) ? panesResponse : panesResponse.panes ?? [];
   let processes = [];
@@ -125,7 +186,18 @@ export function pruneWorktrees(config, { apply = false, herdr = createHerdrRunne
     }
   }
   if (apply) {
+    const mainRoot = parseWorktrees(git(config.root, ['worktree', 'list', '--porcelain']))[0]?.path ?? config.root;
     for (const worktree of worktrees.filter((item) => item.removable)) {
+      if (archive) {
+        const name = workerNameOf(worktree.path, mainRoot);
+        try {
+          const target = archiveWorkerReports(worktree.path, name, mainRoot, { output, now });
+          if (target) output(`archived reports of ${name} to ${target}`);
+        } catch (error) {
+          output(`Archive of ${name} failed: ${error.message}; worktree kept. Fix the error or run with --no-archive.`);
+          continue;
+        }
+      }
       git(config.root, ['worktree', 'remove', worktree.path]);
       git(config.root, ['branch', '-d', worktree.branch]);
       output(`Removed ${worktree.path} and branch ${worktree.branch}.`);
