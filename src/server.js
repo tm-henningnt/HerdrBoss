@@ -15,6 +15,7 @@ import { recordUsage, usageSummary } from './usage.js';
 import { spendSummary, clampSpendDays, loadPrices, defaultPrices, readPriceOverrides, writePriceOverrides, COST_LABEL } from './spend.js';
 import { readDenials, denialSummary } from './denials.js';
 import { summarizeHours, clampSummaryDays } from './machine-samples.js';
+import { analyticsSummary } from './analytics.js';
 import { buildWatchRecord, clearNight, readNight, writeNight } from './night.js';
 import { effectiveRoutines, rememberChoice, resetRoutine, saveRoutine } from './watch-routines.js';
 import { requestBrowser, listBrowserSessions, browserStatus, setBrowserWindowSize, closeBrowser, restartBrowser, listBookmarks, addBookmark, renameBookmark, moveBookmark, removeBookmark, setStartPage } from './browser-pool.js';
@@ -150,6 +151,7 @@ const MACHINE_HOURS_CACHE_MS = 60000;
 
 export function serve(cfg, { readOnlyPreview = false, createEngine = (config, options) => new Engine(config, options), closeTab = browserCloseTab } = {}) {
   const machineHoursCache = new Map();
+  let analyticsCache = null;
   // A direct serve() call must refuse an unsafe preview before the access token, the watcher, or a tick writes a file.
   if (readOnlyPreview) assertPreviewDataDir();
   assertSqliteAvailable();
@@ -483,6 +485,12 @@ export function serve(cfg, { readOnlyPreview = false, createEngine = (config, op
         const body = summarizeHours({ dataDir: DATA_DIR, days });
         machineHoursCache.set(days, { at: Date.now(), body });
         return send(res, 200, body);
+      }
+      if (p === '/api/analytics' && req.method === 'GET') {
+        // Aggregate figures for the Analytics charts. The route reads the tail of the event log and the samples, so it keeps the result for 60 seconds.
+        if (analyticsCache && Date.now() - analyticsCache.at < MACHINE_HOURS_CACHE_MS) return send(res, 200, analyticsCache.body);
+        analyticsCache = { at: Date.now(), body: analyticsSummary({ dataDir: DATA_DIR }) };
+        return send(res, 200, analyticsCache.body);
       }
       if (p === '/api/spend' && req.method === 'GET') return send(res, 200, spendSummary({ dataDir: DATA_DIR, days: clampSpendDays(url.searchParams.get('days')) }));
       if (p === '/api/usage' && req.method === 'GET') return send(res, 200, usageSummary());

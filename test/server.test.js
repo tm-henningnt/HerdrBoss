@@ -1441,7 +1441,7 @@ test('one Agents tab has Chart and List views, a new menu order, and an /organiz
   const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
   // The menu holds the pages in the Owner order, with no Organization entry.
   const nav = /<nav id="primary-nav"[^>]*>([\s\S]*?)<\/nav>/.exec(html)?.[1] || '';
-  assert.deepEqual([...nav.matchAll(/data-nav="([^"]+)"/g)].map((m) => m[1]), ['overview', 'board', 'mailbox', 'chat', 'agents', 'projects', 'browsers', 'allocation', 'analytics', 'logs']);
+  assert.deepEqual([...nav.matchAll(/data-nav="([^"]+)"/g)].map((m) => m[1]), ['overview', 'board', 'mailbox', 'chat', 'agents', 'projects', 'browsers', 'allocation', 'analytics']);
   assert.doesNotMatch(nav, /data-nav="organization"/);
   assert.doesNotMatch(app, /organization: 'Organization'/);
   assert.doesNotMatch(app, /route === 'organization'/);
@@ -2023,7 +2023,7 @@ test('the Chat page has a route, a menu position, a composer key rule, a before 
   assert.match(app, /'mailbox', 'chat', 'allocation'/);
   assert.match(app, /route === 'chat' \? chatView\(state\)/);
   const nav = /<nav id="primary-nav"[^>]*>([\s\S]*?)<\/nav>/.exec(html)?.[1] || '';
-  assert.deepEqual([...nav.matchAll(/data-nav="([^"]+)"/g)].map((m) => m[1]), ['overview', 'board', 'mailbox', 'chat', 'agents', 'projects', 'browsers', 'allocation', 'analytics', 'logs']);
+  assert.deepEqual([...nav.matchAll(/data-nav="([^"]+)"/g)].map((m) => m[1]), ['overview', 'board', 'mailbox', 'chat', 'agents', 'projects', 'browsers', 'allocation', 'analytics']);
   assert.match(nav, /<a href="\/chat" data-nav="chat">Chat<span class="nav-badge" data-chat-badge aria-hidden="true" hidden><\/span><\/a>/);
   // The list reads the chat API and shows a badge with the total unread count.
   assert.match(app, /fetch\('\/api\/chats'\)/);
@@ -2415,6 +2415,51 @@ test('GET /api/machine-hours summarizes the sample file, limits days, and works 
   for (const method of ['POST', 'PUT', 'DELETE']) {
     assert.equal((await fetch(`${base}/api/machine-hours`, { method, body: method === 'DELETE' ? undefined : '{}' })).status, 403, method);
   }
+});
+
+test('GET /api/analytics returns notice counts and the machine timeline, cached for 60 seconds', { timeout: 20000 }, async (t) => {
+  const cfg = loadConfig();
+  cfg.host = '127.0.0.1';
+  cfg.port = 0;
+  cfg.tickSeconds = 3600;
+  const { server, close } = serve(cfg, {
+    readOnlyPreview: true,
+    createEngine: (_config, actions) => {
+      const engine = new EventEmitter();
+      engine.act = actions.act;
+      engine.push = actions.push;
+      engine.state = {};
+      engine.tick = async () => engine.state;
+      engine.log = () => {};
+      return engine;
+    },
+  });
+  const eventsFile = path.join(dataDir, 'events.jsonl');
+  const hadEvents = fs.existsSync(eventsFile) ? fs.readFileSync(eventsFile) : null;
+  t.after(async () => {
+    await close();
+    if (hadEvents) fs.writeFileSync(eventsFile, hadEvents);
+    else fs.rmSync(eventsFile, { force: true });
+  });
+  await new Promise((resolve, reject) => {
+    server.once('listening', resolve);
+    server.once('error', reject);
+  });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  fs.writeFileSync(eventsFile, `${JSON.stringify({ at: new Date(Date.now() - 60000).toISOString(), type: 'notify', pane: 'w1:p1', text: 'Client Name notice' })}\n`);
+  const first = await fetch(`${base}/api/analytics`);
+  assert.equal(first.status, 200);
+  const body = await first.json();
+  assert.equal(body.notices.total, 1);
+  assert.equal(body.notices.days.length, 7);
+  assert.equal(body.timeline.points.length, 144);
+  assert.doesNotMatch(JSON.stringify(body), /Client Name|\/Users|\/tmp/);
+  fs.appendFileSync(eventsFile, `${JSON.stringify({ at: new Date().toISOString(), type: 'notify', pane: 'w1:p1' })}\n`);
+  assert.equal((await (await fetch(`${base}/api/analytics`)).json()).notices.total, 1, 'cached');
+  const realNow = Date.now();
+  t.mock.method(Date, 'now', () => realNow + 61000);
+  assert.equal((await (await fetch(`${base}/api/analytics`)).json()).notices.total, 2);
+  assert.equal((await fetch(`${base}/api/analytics`, { method: 'POST', body: '{}' })).status, 403);
 });
 
 test('the Analytics page serves and its script fetches and draws the machine hours', () => {

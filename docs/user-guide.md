@@ -180,7 +180,7 @@ The Overview shows the current guidance in a collapsed section under the page he
 - Each metered lane that is ahead of pace, near exhaustion, or exhausted.
 - The number of critical rules, warnings, and advice lines.
 
-Select the header to open the section. It shows the watch line, one chip for each quota lane with its state and use, and the same rules as the bulletin. The browser remembers the open or closed state in its local storage. The Logs page shows the same rules with the activity log.
+Select the header to open the section. It shows the watch line, one chip for each quota lane with its state and use, and the same rules as the bulletin. The browser remembers the open or closed state in its local storage. The Analytics page has the activity log.
 
 ## Watch
 
@@ -431,7 +431,7 @@ The Allocation page sets the global worker limit, workspace project status, proj
 
 Set `imageBudget` in `.herdr-boss.json` to a positive integer to set the project's screenshot budget in each worker brief. The default is 10 screenshots. The project setting overrides the kit default. Worker start appends any missing budget or copied input details when a project brief template omits those slots. Use `worker start --copy PATH` to copy a regular repository file into the worker's `.worker/inputs/` directory before the agent starts. Repeat `--copy` for each file. The command preserves repository subdirectories and refuses paths outside the repository.
 
-The Analytics page shows a **Model scorecard** table with one row for each harness and model over the last 30 days. Each row shows the runs, the first-time, rework, and failed counts, the rework rate (rework plus failed, divided by the runs), and the median run duration. The table sorts by runs. The orchestrator records the model outcome at review time with `worker collect --record --model-result first-time|rework|failed` and, for rework or failure, `--model-reason TEXT`. The orchestrator's values win over the report's `modelOutcome`. When neither is given, the result is derived: `failed` when `--outcome failed` or `--gate-failed`, `rework` when `--rework` is more than 0, otherwise `first-time`.
+The Analytics page shows a **Model scorecard** chart. Its Details table has one row for each harness and model over the last 30 days. Each row shows the runs, the first-time, rework, and failed counts, the rework rate (rework plus failed, divided by the runs), and the median run duration. The table sorts by runs. The orchestrator records the model outcome at review time with `worker collect --record --model-result first-time|rework|failed` and, for rework or failure, `--model-reason TEXT`. The orchestrator's values win over the report's `modelOutcome`. When neither is given, the result is derived: `failed` when `--outcome failed` or `--gate-failed`, `rework` when `--rework` is more than 0, otherwise `first-time`.
 
 ### Token use and spend by role
 
@@ -721,6 +721,54 @@ The page updates in place with a keyed patch, the same as the project page. A re
 ### Phone
 
 On a screen up to 760 px wide, the Board shows one column at a time. A tab bar shows each column with its count. Select a tab or swipe sideways to change the column. The first column with work opens, in the order Doing, Ready, Blocked, Review, Done. A row of project chips replaces the swimlanes and the project filter. Select a chip to show one project. Select **All** to show all projects. The grouping switch, the state filter, and the per-project bars do not show on a phone.
+
+## Analytics page
+
+The Analytics page (`/analytics`) shows figures and charts. It answers these questions:
+
+- What does the fleet cost each day, by role and by harness?
+- Does the quota use of each lane stay at or below its expected pace?
+- How often is each model right the first time?
+- Which causes of denials and permission prompts occur, for which harness?
+- When do the machine load and the lock waits slow work down?
+- How many notices does each pane get?
+
+### Headline strip
+
+The strip at the top has six tiles. Each tile shows one figure, a detail line, and a change where the data has one.
+
+- **Claude spend a day**: the mean Claude spend of the last 7 days, split by role, with the change on the 7 days before.
+- **Quota against pace**: the lane with the most use above its pace line, in percentage points.
+- **Denials this week**: the 7-day count. The trend compares the last 24 hours with the 6-day mean.
+- **Notices per pane a day**: the 7-day mean for each pane that got a notice, and the value of today.
+- **Lock wait and hold**: the median wait and the median hold of the lock acquires in the last 7 days.
+- **First-time success**: the first-time runs divided by the judged runs of the last 30 days.
+
+### Charts
+
+Each chart has a title that tells what to read from it, a scope line, a legend, and an axis. Hover, focus, or touch a column, a cell, or a row to read its values in a tooltip. **Details** under each chart opens the table of the same figures. The page remembers the open Details until the page reloads.
+
+- **Spend**: stacked bars for each day of the last 14 days. The switch splits the bars by role or by harness. The source is `/api/spend`. The USD figure is the API-price equivalent. The Owner pays a subscription, not these amounts. When no model in the window has a price, the chart shows tokens.
+- **Quota**: one solid line for the use of each lane and one dashed line for its expected pace, in the weekly window, one column for each hour. The source is the quota trend of `/api/usage`.
+- **Model scorecard**: one bar for each of the 8 models with the most runs. The bar shows the share of first-time, rework, failed, and not judged runs. The right column shows the runs and the median time. Details also holds the recorded work by project and provider and the recent runs.
+- **Denials**: a heat map of the causes by day over the last 7 days. The switch selects one harness or all harnesses. A darker cell has more events.
+- **Machine load and lock waits**: lines for the 5-minute load as a percent of the cores, the memory in use, and the swap in use, over the last 24 hours in columns of 10 minutes. A shaded column had a lock holder. The strip under the lines shows the minutes in which a suite request waited.
+- **Machine overload and idle waiting by hour**: see [Machine samples](#machine-samples).
+- **Notices per pane**: stacked bars for each day of the last 7 days. The five panes with the most notices have their own color. The other panes share one gray.
+
+The charts use one color set for light mode and one for dark mode. The set passes the dataviz palette validator. The charts show no project name, client name, or path. They show harness, model, cause, lock kind, and pane ID only. On a screen up to 1180 px wide the charts are in one column. On a phone each chart scrolls sideways inside its own box.
+
+The route `/api/analytics` gives the notice counts and the machine timeline. It reads the last 2 MB of `events.jsonl` and the machine samples of the last 25 hours. It keeps the result for 60 seconds. The result holds numbers, lock kinds, and pane IDs only.
+
+### Activity log
+
+The last section of the page is the activity log. It lists prompts sent to orchestrators, notices, handovers, errors, and stopped processes, newest first. The first line tells whether Herdr Boss sends notices to orchestrators.
+
+- Filter by kind, project, level, and time range. The level is the severity of a notice, or `error` for an error event.
+- Type in the search box to match the text, the kind, the pane, or the project.
+- **Details** holds the raw log: all kept events without filters, one line each.
+
+The log shows the events that the state keeps: the last 60. The old address `/logs` opens this section. The old address `/logs#guidance` opens the guidance section of the Overview.
 
 ## Project status pages
 
@@ -1292,11 +1340,11 @@ Herdr Boss keeps only counts in `denials.json` in the data folder, with mode 060
 
 Herdr Boss maps each record to a project by its working folder. A folder inside a registered repository belongs to that project. A worker worktree inside `~/Projects/.herdr-wt/<repo>/` or inside a sibling `<repo>-wt-<name>` also belongs to that project. The registered repositories are in `project-repos.json`. All other folders count as `other`.
 
-The Analytics page shows the section **Denials and permission prompts**:
+The Analytics page shows the chart **Denials and permission prompts**: a heat map of the causes by day, for one harness or for all harnesses. Its Details hold these tables:
 
 - A table of the last 7 days by cause and project, with a count for each day.
 - A small table of counts by harness, model, and cause. It shows the top 10 rows, then the number of extra rows.
-- A total for each harness.
+- A total for each harness, on the harness switch.
 - A trend arrow. It compares the last 24 hours with the mean of the 6 days before them.
 - A read-only line with the limits: the scan interval, the bytes for one scan, the days kept, and the rise rule.
 
@@ -1397,7 +1445,7 @@ The response has these keys:
 
 The route keeps its result for 60 seconds for each value of `days`. The summary counts a repeated minute once.
 
-The **Analytics** page shows the hours in the block **Machine overload and idle waiting by hour**. The chart has two bars for each local hour of the day. The bars show the mean minutes per day of overload and of idle waiting, from 0 to 60. The title above the chart gives the two daily means. A tooltip on hover, focus, or touch gives the values of one hour. A hatched bar marks an hour with fewer than 10 samples. A note shows when `coverage` is below 0.5. The details element under the chart holds the same 24 rows as a table. On a phone the chart scrolls sideways inside its own box.
+The **Analytics** page shows the hours in the block **Machine overload and idle waiting by hour**. The chart has two bars for each local hour of the day. The bars show the mean minutes per day of overload and of idle waiting, from 0 to 60. The chart title gives the two daily means. A tooltip on hover, focus, or touch gives the values of one hour. A hatched bar marks an hour with fewer than 10 samples. A note shows when `coverage` is below 0.5. The details element under the chart holds the same 24 rows as a table. On a phone the chart scrolls sideways inside its own box.
 
 Before it removes a worktree, `herdr-boss worktree prune --apply` checks for processes whose current working directory is inside that worktree. It reports parent-PID-1 processes in missing or prunable worktree paths. Stop those processes before cleanup. Herdr Boss removes no worktrees if it cannot scan process directories. It also keeps worktrees that are dirty, unmerged, primary, used by a live pane, or uninspectable. Herdr Boss sends a notice about a parent-PID-1 process in a removed worktree only to that repository's `orch` workspace.
 
@@ -1412,6 +1460,7 @@ The dashboard uses these routes. A request from another host needs the access to
 | `GET /api/models` | The model allow-list. |
 | `GET`, `POST /api/usage` | Read usage, or record an event. |
 | `GET /api/machine-hours?days=N` | The machine samples of the last N days (1 to 14, default 14) by local hour of day: overload minutes, idle-wait minutes, swap peak, lowest free memory, holder kinds, and coverage. |
+| `GET /api/analytics` | The notice counts for each pane and local day of the last 7 days, and the machine timeline of the last 24 hours in columns of 10 minutes. Numbers, lock kinds, and pane IDs only. The service keeps the result for 60 seconds. |
 | `GET /api/spend?days=N` | The token use and cost per day, role, and harness for the last N days (1 to 90, default 7), the cost label `API-price equivalent`, the models with `unconfirmed` prices, the harness log status, and the unread log bytes. |
 | `GET`, `PUT /api/settings/prices` | Read the price table and the override, or replace the override. See Token use and spend by role. |
 | `GET /api/denials` | The denial counts of the last 7 days by harness, model, and cause, the harness totals, and the trend of each cause. |

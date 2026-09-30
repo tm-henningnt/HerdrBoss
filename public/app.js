@@ -4,6 +4,7 @@ import { patchHtml } from './keyed.js';
 import { groupMailRows, inboxSections, listTime, mailRowHtml } from './mail-rows.js';
 import { mailBarItem, mailActionBarHtml, mailSelectionBarHtml } from './mail-bar.js';
 import { APP_VIEW_ROUTES, appViewport } from './app-view.js';
+import { stackedBars, lineChart, stripBars, heatGrid, outcomeBars, legendHtml, foldSeries, spendSeries, claudeSpend, quotaSeries, denialGrid, firstTimeRate, activityFilter, activityChoices, eventLevel, dayLabel, usd, minutes, compact, ACTIVITY_RANGES, ACTIVITY_LEVELS, SERIES_CLASSES } from './analytics.js';
 
 const $app = document.getElementById('app');
 // A visual check can force a theme with ?theme=light or ?theme=dark. Without it, the page follows the system.
@@ -15,7 +16,7 @@ const $nav = document.getElementById('primary-nav');
 const $roamgate = document.getElementById('roamgate-link');
 const $navMenu = document.getElementById('nav-menu');
 const $navMenuLabel = document.getElementById('nav-menu-label');
-const NAV_LABEL = { overview: 'Overview', board: 'Board', mailbox: 'Mailbox', chat: 'Chat', agents: 'Agents', projects: 'Projects', browsers: 'Browsers', allocation: 'Allocation', analytics: 'Analytics', logs: 'Logs', settings: 'Settings' };
+const NAV_LABEL = { overview: 'Overview', board: 'Board', mailbox: 'Mailbox', chat: 'Chat', agents: 'Agents', projects: 'Projects', browsers: 'Browsers', allocation: 'Allocation', analytics: 'Analytics', settings: 'Settings' };
 const settingsLink = document.createElement('a');
 settingsLink.href = '/settings';
 settingsLink.dataset.nav = 'settings';
@@ -36,6 +37,11 @@ let usage = null;
 let denials = null;
 let machineHours = null;
 let machineHoursOpen = false;
+// The Analytics page: /api/spend and /api/analytics, the chart switches, the open Details, and the activity log filters.
+let spendData = null;
+let analyticsData = null;
+let pendingHash = location.pathname === '/analytics' && location.hash ? location.hash.slice(1) : null;
+const analyticsUi = { spendBy: 'role', denialHarness: 'all', open: new Set(), log: { kind: 'all', project: 'all', level: 'all', range: '24h', q: '' } };
 let browserSessions = [];
 const browserMessages = {};
 const browserPreviewOpen = new Set();
@@ -1098,10 +1104,6 @@ function rulesRows(s) {
   return rows;
 }
 
-function rulesBlock(s) {
-  return `<section id="guidance"><h2>Current guidance <span class="sub">also published to orchestrators in <a href="/bulletin.md">bulletin.md</a></span></h2><div class="rules">${rulesRows(s).join('')}</div></section>`;
-}
-
 // The lanes that can take work now, in the order of the bulletin Use now line (useNowLanes() in src/control.js):
 // free models, then the lanes below pace with the most room first, then ignored lanes, trickle lanes, and open lanes.
 function useNowList(lanes) {
@@ -1151,7 +1153,7 @@ function guidanceFold(s) {
   const watch = s.night?.active ? `<p class="guidance-watch">Watch ${esc(watchUntilPhrase(s.night))} (Owner away). Work as normal; the Boss handles judgment calls.</p>` : '';
   const lanes = Object.entries(s.lanes || {}).filter(([, lane]) => lane);
   const laneList = lanes.length ? `<ul class="lane-list">${lanes.map(([provider, lane]) => laneLine(provider, lane)).join('')}</ul>` : '';
-  const body = `${watch}${laneList}<div class="rules">${rulesRows(s).join('')}</div><p class="win-foot">Orchestrators read the same rules in <a href="/bulletin.md">bulletin.md</a>. The <a href="/logs#guidance">Logs</a> page shows them with the activity log.</p>`;
+  const body = `${watch}${laneList}<div class="rules">${rulesRows(s).join('')}</div><p class="win-foot">Orchestrators read the same rules in <a href="/bulletin.md">bulletin.md</a>. The <a href="/analytics#activity">Analytics</a> page has the activity log.</p>`;
   return foldCard({ slug: OVERVIEW_FOLD, key: 'guidance', id: 'overview-guidance', className: 'guidance-fold', title: 'Current guidance', count: guidanceSummary(s), body });
 }
 
@@ -1377,7 +1379,7 @@ function machineSummary(s) {
 function attentionBlock(s) {
   const alerts = (s.alerts || []).filter((a) => ['warn', 'critical'].includes(a.severity) && !a.key?.startsWith('handoff:'));
   if (s.errors?.length) alerts.unshift({ key: 'collection', severity: 'warn', title: 'Some status data is unavailable', text: s.errors.join(' · ') });
-  return `<section class="attention-section"><div class="section-head"><h2>Needs attention</h2><span>${alerts.length ? `${alerts.length} alerts` : 'Clear'}</span></div>${alerts.length ? `<div class="attention-list">${alerts.map((a) => `<article class="attention-item ${esc(a.severity)}"><span class="severity-dot" aria-hidden="true"></span><div><b>${esc(a.title || a.severity)}</b><p>${esc(a.text)}</p></div><a href="${a.key?.startsWith('quota:') ? '/allocation' : '/logs#guidance'}">${a.key?.startsWith('quota:') ? 'Adjust policy' : 'Details'}</a></article>`).join('')}</div>` : '<div class="calm-state">No resource alerts need action. Project orchestrators can continue within the current policy.</div>'}</section>`;
+  return `<section class="attention-section"><div class="section-head"><h2>Needs attention</h2><span>${alerts.length ? `${alerts.length} alerts` : 'Clear'}</span></div>${alerts.length ? `<div class="attention-list">${alerts.map((a) => `<article class="attention-item ${esc(a.severity)}"><span class="severity-dot" aria-hidden="true"></span><div><b>${esc(a.title || a.severity)}</b><p>${esc(a.text)}</p></div><a href="${a.key?.startsWith('quota:') ? '/allocation' : '/#overview-guidance'}">${a.key?.startsWith('quota:') ? 'Adjust policy' : 'Details'}</a></article>`).join('')}</div>` : '<div class="calm-state">No resource alerts need action. Project orchestrators can continue within the current policy.</div>'}</section>`;
 }
 
 function fleetBlock(s) {
@@ -1767,22 +1769,180 @@ function browsersView(s) {
 
 function analyticsView(s) {
   return [
-    '<header class="page-intro"><div><h1>Analytics</h1><p>Recorded work by project and provider. Token totals include only runs with measured tokens.</p></div></header>',
-    usageBlock(),
-    providerUsageBlock(),
-    modelScorecardBlock(s),
-    recentUsageBlock(),
+    '<header class="page-intro"><div><h1>Analytics</h1><p>What the fleet costs, how well the models work, where the machine and the locks slow work down, and what Herdr Boss told the panes.</p></div></header>',
+    analyticsHeadline(s),
+    '<div class="viz-group" data-key="grp:cost"><h2>Cost and quota</h2><div class="viz-grid">',
+    spendChart(),
+    quotaChart(),
+    '</div></div><div class="viz-group" data-key="grp:quality"><h2>Quality and friction</h2><div class="viz-grid">',
+    scorecardChart(s),
     denialsBlock(s),
+    '</div></div><div class="viz-group" data-key="grp:machine"><h2>Machine and locks</h2><div class="viz-grid">',
+    timelineChart(s),
     machineHoursBlock(),
+    '</div></div><div class="viz-group" data-key="grp:notices"><h2>Notices and activity</h2><div class="viz-grid">',
+    noticeChart(),
+    activitySection(s),
+    '</div></div>',
   ].join('');
+}
+
+// One chart card: a title that says what to read, a scope line, a legend, the chart in its own sideways scroll box, and the table behind Details.
+function vizCard({ id, title, sub = '', controls = '', legend = '', chart = '', notes = '', details = '', empty = '' }) {
+  const open = analyticsUi.open.has(id);
+  return `<section class="viz-card" id="${id}" data-key="viz:${id}"><header class="viz-head"><div class="viz-titles"><h3>${esc(title)}</h3>${sub ? `<p class="viz-sub">${sub}</p>` : ''}</div>${controls}</header>${notes}`
+    + (empty ? `<div class="calm-state">${empty}</div>` : `${legend}<div class="viz-scroll" data-key="scroll:${id}">${chart}</div>`)
+    + `<div class="viz-tip" role="tooltip" hidden></div>`
+    + (details ? `<details class="viz-details" data-viz-detail="${id}"${open ? ' open' : ''}><summary>Details</summary><div class="viz-details-body">${details}</div></details>` : '')
+    + '</section>';
+}
+function vizSwitch(attr, current, options, label) {
+  return `<div class="viz-switch" role="group" aria-label="${esc(label)}">${options.map(([value, text]) => `<button type="button" data-${attr}="${esc(value)}" aria-pressed="${value === current}">${esc(text)}</button>`).join('')}</div>`;
+}
+const vizTable = (head, rows) => `<div class="fleet-table-wrap"><table class="fleet-table"><thead><tr>${head.map((h) => `<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.map((r) => `<tr>${r.map((c, i) => `<td data-label="${esc(head[i])}"${i ? ' class="mono"' : ''}>${c}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+const pctText = (x) => `${Math.round(x * 100)}%`;
+const trendSpan = (dir, text) => `<span class="hl-trend ${dir}">${dir === 'up' ? '↑' : dir === 'down' ? '↓' : '→'} ${esc(text)}</span>`;
+const hhmm = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+
+// The headline strip: one figure for each question, with the change against the period before.
+function analyticsHeadline(s) {
+  const tiles = [];
+  const tile = (label, value, detail, trend = '') => tiles.push(`<div class="hl-tile"><span class="hl-label">${esc(label)}</span><strong class="hl-value">${value}</strong>${trend}<span class="hl-detail">${detail}</span></div>`);
+  const claude = claudeSpend(spendData);
+  if (claude.mean !== null) {
+    const change = claude.before ? (claude.mean - claude.before) / claude.before : null;
+    const roles = [['worker', 'workers'], ['orchestrator', 'orchestrators'], ['boss', 'Boss']].filter(([r]) => claude.roleMean[r]).map(([r, l]) => `${l} $${Math.round(claude.roleMean[r])}`).join(', ');
+    const moved = change === null ? '' : Math.abs(change) < 0.05 ? 'same as the 7 days before' : `${Math.abs(Math.round(change * 100))}% ${change > 0 ? 'above' : 'below'} the 7 days before`;
+    tile('Claude spend a day', usd(claude.mean), `7-day mean, API-price equivalent. ${esc(roles || 'No Claude spend')}.`, moved ? trendSpan(Math.abs(change) < 0.05 ? 'flat' : change > 0 ? 'up' : 'down', moved) : '');
+  } else tile('Claude spend a day', '–', 'No spend is recorded yet.');
+  const q = quotaSeries(usage?.quotaTrend, (p) => PROVIDERS[p] || p).series.filter((x) => !x.dashed && x.lastUsed !== null && x.lastPace !== null);
+  if (q.length) {
+    const worst = [...q].sort((a, b) => (b.lastUsed - b.lastPace) - (a.lastUsed - a.lastPace))[0];
+    const gap = worst.lastUsed - worst.lastPace;
+    tile('Quota against pace', `${gap > 0 ? '+' : ''}${gap} pts`, `${esc(PROVIDERS[worst.provider] || worst.provider)} is ${gap > 0 ? 'above' : 'at or below'} its pace line · ${q.length} lanes`, trendSpan(gap > 0 ? 'up' : 'flat', gap > 0 ? 'over pace' : 'on pace'));
+  } else tile('Quota against pace', '–', 'No quota readings yet.');
+  const rows = denials?.rows || [];
+  if (rows.length) {
+    const week = rows.reduce((a, r) => a + r.total, 0);
+    const recent = rows.reduce((a, r) => a + r.recent, 0);
+    const mean = rows.reduce((a, r) => a + r.mean, 0);
+    tile('Denials this week', week.toLocaleString(), `${Math.round(recent).toLocaleString()} in the last 24 hours · 6-day mean ${Math.round(mean)}`, trendSpan(recent > mean * 1.2 ? 'up' : recent < mean * 0.8 ? 'down' : 'flat', recent > mean * 1.2 ? 'rising' : recent < mean * 0.8 ? 'falling' : 'steady'));
+  } else tile('Denials this week', '0', 'No denials are recorded.');
+  const n = analyticsData?.notices;
+  if (n?.total) {
+    const panes = n.panes.filter((p) => p.total).length;
+    const perPane = n.total / n.days.length / Math.max(1, panes);
+    const today = n.panes.reduce((a, p) => a + p.counts.at(-1), 0) / Math.max(1, panes);
+    tile('Notices per pane a day', perPane.toFixed(1), `${n.total.toLocaleString()} notices to ${panes} panes in 7 days`, trendSpan(today > perPane * 1.2 ? 'up' : today < perPane * 0.8 ? 'down' : 'flat', `today ${today.toFixed(1)}`));
+  } else tile('Notices per pane a day', '0', 'No notices in 7 days.');
+  const locks = s?.lockStats;
+  if (locks?.acquires) tile('Lock wait and hold', `${minutes(locks.medianWaitMs)} <small>/ ${minutes(locks.medianHoldMs)}</small>`, `Medians of ${locks.acquires.toLocaleString()} acquires in ${locks.windowDays} days${locks.timeouts ? ` · ${locks.timeouts} timeouts` : ''}`);
+  else tile('Lock wait and hold', '–', 'No lock acquires in 7 days.');
+  const ft = firstTimeRate(s?.modelScorecard);
+  if (ft) tile('First-time success', pctText(ft.rate), `${ft.judged.toLocaleString()} judged of ${ft.runs.toLocaleString()} runs · 30 days`);
+  else tile('First-time success', '–', 'No judged runs yet.');
+  return `<section class="hl-strip" data-key="headline" aria-label="Headline figures">${tiles.join('')}</section>`;
+}
+
+function spendChart() {
+  const costLabel = spendData?.costLabel || 'API-price equivalent';
+  const base = { id: 'spend', title: 'Spend by role and harness' };
+  if (!spendData?.days?.length) return vizCard({ ...base, empty: 'No spend is recorded yet. The service reads the session logs every 5 minutes.' });
+  const priced = spendData.days.some((d) => d.total?.costUsd > 0);
+  const metric = priced ? 'costUsd' : 'tokens';
+  const fmt = priced ? usd : compact;
+  const by = analyticsUi.spendBy;
+  const { days, series } = spendSeries(spendData, by, metric);
+  const sums = series.map((x) => x.values.reduce((a, b) => a + b, 0));
+  const all = sums.reduce((a, b) => a + b, 0);
+  const top = series[sums.indexOf(Math.max(...sums))];
+  const title = top && all ? `${top.label} ${by === 'role' ? 'take' : 'takes'} ${pctText(sums[series.indexOf(top)] / all)} of the ${fmt(all)} spent in ${days.length} days` : 'No spend in this window';
+  // A harness with tokens but no price has no bar in USD. The scope line names it.
+  const tokenSeries = spendSeries(spendData, 'harness', 'tokens').series;
+  const costKeys = new Set(spendSeries(spendData, 'harness', metric).series.map((x) => x.key));
+  const unpriced = priced ? tokenSeries.filter((x) => !costKeys.has(x.key)).map((x) => x.label) : [];
+  const sub = `${priced ? `USD per day, ${esc(costLabel)}. The Owner pays a subscription, not these amounts.` : 'Tokens per day. No model in this window has a price.'}${unpriced.length ? ` ${esc(unpriced.join(' and '))} ${unpriced.length > 1 ? 'have' : 'has'} no price and no bar.` : ''}${spendData.unconfirmedPrices?.length ? ` Unconfirmed prices: ${esc(spendData.unconfirmedPrices.join(', '))}.` : ''}`;
+  const roleRows = spendSeries(spendData, 'role', metric), harnessRows = spendSeries(spendData, 'harness', metric);
+  const head = ['Day', ...roleRows.series.map((x) => x.label), ...harnessRows.series.map((x) => x.label), 'Tokens'];
+  const byDay = new Map(spendData.days.map((d) => [d.day, d]));
+  const rows = [...days].reverse().map((day) => {
+    const i = days.indexOf(day);
+    return [esc(dayLabel(day, true)), ...roleRows.series.map((x) => fmt(x.values[i])), ...harnessRows.series.map((x) => fmt(x.values[i])), compact(byDay.get(day)?.total?.tokens || 0)];
+  });
+  return vizCard({
+    ...base, title, sub,
+    controls: vizSwitch('spend-by', by, [['role', 'Role'], ['harness', 'Harness']], 'Split the spend by'),
+    legend: legendHtml(series),
+    chart: stackedBars({ cats: days.map((d) => ({ label: dayLabel(d), tip: dayLabel(d, true) })), series, fmt, label: title }),
+    details: `<p class="viz-note">Columns: roles, then harnesses. The Boss role is the pane labeled boss and the earlier Boss sessions.</p>${vizTable(head, rows)}`,
+  });
+}
+
+function quotaChart() {
+  const base = { id: 'quota', title: 'Quota use against the expected pace' };
+  const q = quotaSeries(usage?.quotaTrend, (p) => PROVIDERS[p] || p);
+  if (!q.cols.length) return vizCard({ ...base, empty: 'No quota readings yet. Herdr Boss records each weekly window at each quota read.' });
+  const lanes = q.series.filter((x) => !x.dashed);
+  const over = lanes.filter((x) => x.lastUsed !== null && x.lastPace !== null && x.lastUsed > x.lastPace);
+  const name = (x) => PROVIDERS[x.provider] || x.provider;
+  const title = over.length
+    ? `${over.map((x) => `${name(x)} is ${x.lastUsed - x.lastPace} points above`).join('; ')} its pace line`
+    : 'Every lane is at or below its pace line';
+  const hours = q.cols.length;
+  const xLabels = [];
+  let lastLabel = -99;
+  q.cols.forEach((t, i) => {
+    const h = new Date(t).getHours();
+    const want = hours > 48 ? h === 0 : h % 6 === 0;
+    if (want && i - lastLabel >= (hours > 48 ? 8 : 5)) { xLabels.push({ i, label: h === 0 ? dayLabel(localDayKey(t)) : `${String(h).padStart(2, '0')}:00` }); lastLabel = i; }
+  });
+  const tips = q.cols.map((t, i) => [`${dayLabel(localDayKey(t), true)} ${hhmm(t)}`, ...lanes.map((x) => {
+    const pace = q.series.find((p) => p.key === `${x.provider}-pace`)?.values[i];
+    return x.values[i] === null ? null : `${name(x)}: used ${x.values[i]}%${pace != null ? ` · pace ${pace}%` : ''}`;
+  }).filter(Boolean)].join('\n'));
+  const legend = legendHtml(lanes.map((x) => ({ label: name(x), cls: x.cls })), '<li><i class="viz-key dashed s-ink" aria-hidden="true"></i>Dashed: expected pace</li>');
+  const rows = lanes.map((x) => [esc(name(x)), x.lastUsed === null ? '–' : `${x.lastUsed}%`, x.lastPace === null ? '–' : `${x.lastPace}%`, x.lastUsed === null || x.lastPace === null ? '–' : `${x.lastUsed - x.lastPace > 0 ? '+' : ''}${x.lastUsed - x.lastPace} pts`]);
+  return vizCard({
+    ...base, title,
+    sub: `Weekly window, percent used, one column for each hour over the last ${hours > 48 ? `${Math.round(hours / 24)} days` : `${hours} hours`}. A drop is a window reset.`,
+    legend,
+    chart: lineChart({ points: q.cols, series: q.series, yMax: 100, tips, xLabels, label: title }),
+    details: vizTable(['Lane', 'Used now', 'Pace now', 'Difference'], rows),
+  });
+}
+const localDayKey = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+
+function scorecardChart(s) {
+  const all = s?.modelScorecard || [];
+  const base = { id: 'scorecard', title: 'Model scorecard' };
+  const recorded = `<h4>Recorded work</h4>${usageBlock()}${providerUsageBlock()}${recentUsageBlock()}`;
+  if (!all.length) return vizCard({ ...base, empty: 'No worker runs in the last 30 days.', details: recorded });
+  const rows = all.slice(0, 8);
+  const judged = (r) => r.firstTime + r.rework + r.failed;
+  const ranked = all.filter((r) => judged(r) >= 5).sort((a, b) => b.firstTime / judged(b) - a.firstTime / judged(a));
+  const best = ranked[0];
+  const title = best ? `${best.model} on ${HARNESS_NAMES[best.kind] || best.kind} is right the first time most often: ${pctText(best.firstTime / judged(best))} of ${judged(best)} judged runs` : 'Too few judged runs to rank the models';
+  const chartRows = rows.map((r) => ({
+    label: r.model, sub: HARNESS_NAMES[r.kind] || r.kind,
+    parts: [{ cls: 'o-first', value: r.firstTime }, { cls: 'o-rework', value: r.rework }, { cls: 'o-failed', value: r.failed }, { cls: 'o-none', value: Math.max(0, r.runs - judged(r)) }],
+    right: `${r.runs} runs · ${Math.round(r.medianMinutes || 0)} min`,
+    tip: `${r.model} (${HARNESS_NAMES[r.kind] || r.kind})\nFirst time: ${r.firstTime}\nRework: ${r.rework}\nFailed: ${r.failed}\nNot judged: ${Math.max(0, r.runs - judged(r))}\nMedian time: ${Math.round(r.medianMinutes || 0)} min`,
+  }));
+  return vizCard({
+    ...base, title,
+    sub: `Last 30 days, the ${rows.length} models with the most runs. Bars show the share of each outcome; the right column shows runs and the median time.`,
+    legend: legendHtml([{ label: 'First time', cls: 'o-first' }, { label: 'Rework', cls: 'o-rework' }, { label: 'Failed', cls: 'o-failed' }, { label: 'Not judged', cls: 'o-none' }]),
+    chart: outcomeBars({ rows: chartRows, label: title }),
+    details: `${modelScorecardBlock(s)}${recorded}`,
+  });
 }
 
 // Mean minutes per day for each hour of the day, from /api/machine-hours. Local hours, counts only.
 const MACHINE_CHART = { left: 34, top: 8, plotH: 150, group: 26, bar: 9, gap: 2 };
 function machineHoursBlock() {
   const m = machineHours;
-  const head = '<div class="section-head"><h2>Machine overload and idle waiting by hour</h2><span>Last 14 days, local time</span></div>';
-  if (!m?.hours || !m.totals?.samples) return `<section id="machine-hours">${head}<div class="calm-state">No machine samples yet. Herdr Boss records one sample each minute.</div></section>`;
+  const head = (title) => `<header class="viz-head"><div class="viz-titles"><h3>${esc(title)}</h3><p class="viz-sub">Machine overload and idle waiting by hour. Mean minutes a day over the last 14 days, local time.</p></div></header>`;
+  if (!m?.hours || !m.totals?.samples) return `<section class="viz-card" id="machine-hours" data-key="viz:machine-hours">${head('Machine overload and idle waiting by hour')}<div class="calm-state">No machine samples yet. Herdr Boss records one sample each minute.</div></section>`;
   const c = MACHINE_CHART;
   const days = Math.max(1, m.daysWithData);
   const mean = (n) => n / days;
@@ -1804,10 +1964,10 @@ function machineHoursBlock() {
     : 'The machine was not overloaded, and no suite request waited at low CPU.';
   const note = m.coverage < 0.5 ? `<div class="calm-state" role="status">Low coverage: samples cover ${Math.round(m.coverage * 100)}% of the ${m.days} days. A minute without a sample is missing data, not a quiet minute. Hatched bars have fewer than 10 samples.</div>` : '';
   const rows = m.hours.map((h) => `<tr><td data-label="Hour" class="mono">${String(h.hour).padStart(2, '0')}:00</td><td data-label="Overload min/day" class="mono">${mean(h.overloadMin).toFixed(1)}</td><td data-label="Idle-wait min/day" class="mono">${mean(h.idleWaitMin).toFixed(1)}</td><td data-label="Samples" class="mono">${h.samples.toLocaleString()}</td><td data-label="Swap peak" class="mono">${h.swapPeakPct === null ? '·' : `${h.swapPeakPct}%`}</td></tr>`).join('');
-  return `<section id="machine-hours">${head}<p class="machine-hours-title">${esc(title)}</p>${note}`
+  return `<section class="viz-card" id="machine-hours" data-key="viz:machine-hours">${head(title)}${note}`
     + '<div class="mh-legend"><span><i class="mh-key overload"></i>Overload (swap over 90% or high load)</span><span><i class="mh-key idle"></i>Queue waited, CPU under 50%</span></div>'
     + `<div class="mh-scroll"><svg class="mh-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(title)}" style="min-width:${width}px">${defs}${grid}${groups}<text x="${c.left + 12 * c.group}" y="${height - 2}" text-anchor="middle" class="mh-tick">hour of day (local time)</text></svg><div class="mh-tip" id="mh-tip" hidden></div></div>`
-    + `<details class="mh-details" data-mh-detail${machineHoursOpen ? ' open' : ''}><summary>Table of the 24 hours</summary><div class="fleet-table-wrap"><table class="fleet-table"><thead><tr><th>Hour</th><th>Overload min/day</th><th>Idle-wait min/day</th><th>Samples</th><th>Swap peak</th></tr></thead><tbody>${rows}</tbody></table></div></details></section>`;
+    + `<details class="mh-details" data-mh-detail${machineHoursOpen ? ' open' : ''}><summary>Details</summary><div class="fleet-table-wrap"><table class="fleet-table"><thead><tr><th>Hour</th><th>Overload min/day</th><th>Idle-wait min/day</th><th>Samples</th><th>Swap peak</th></tr></thead><tbody>${rows}</tbody></table></div></details></section>`;
 }
 function machineHourText(h, days) {
   return `${String(h.hour).padStart(2, '0')}:00 · overload ${(h.overloadMin / days).toFixed(1)} min/day · idle wait ${(h.idleWaitMin / days).toFixed(1)} min/day · ${h.samples.toLocaleString()} samples`;
@@ -2267,7 +2427,7 @@ function appMenuButton(s, route) {
 // The drawer holds the Mailbox folders (on the Mailbox) and the links to all pages. It replaces the page header on a phone.
 function appDrawer(s, route, folderLinks = '') {
   const counts = topIconCounts(s);
-  const pages = [['/', 'Overview'], ['/board', 'Board'], ['/mailbox', 'Mailbox', counts['needs-action']], ['/chat', 'Chat', counts.chat], ['/agents', 'Agents'], ['/projects', 'Projects'], ['/browsers', 'Browsers'], ['/allocation', 'Allocation'], ['/analytics', 'Analytics'], ['/logs', 'Logs']];
+  const pages = [['/', 'Overview'], ['/board', 'Board'], ['/mailbox', 'Mailbox', counts['needs-action']], ['/chat', 'Chat', counts.chat], ['/agents', 'Agents'], ['/projects', 'Projects'], ['/browsers', 'Browsers'], ['/allocation', 'Allocation'], ['/analytics', 'Analytics']];
   const links = pages.map(([href, label, count]) => `<a href="${href}"${href.slice(1) === route ? ' aria-current="page"' : ''}><span>${label}</span>${count ? `<span class="app-drawer-count num">${count > 99 ? '99+' : count}</span>` : ''}</a>`).join('');
   return `<div class="app-drawer" id="app-drawer" data-key="app-drawer"${appDrawerOpen ? '' : ' hidden'}><button type="button" class="app-drawer-scrim" data-app-drawer-close tabindex="-1" aria-label="Close the menu"></button>`
     + `<nav class="app-drawer-panel" aria-label="Menu"><div class="app-drawer-head"><span class="app-drawer-brand">Herdr Boss</span><button type="button" class="app-icon-button" data-app-drawer-close aria-label="Close the menu">${appIcon('close')}</button></div>`
@@ -3786,15 +3946,6 @@ document.addEventListener('toggle', (e) => {
   saveFleet();
 }, true);
 
-function logsView(s) {
-  return [
-    '<header class="page-intro"><div><h1>Logs &amp; guidance</h1><p>Current instructions sent to orchestrators and recent Boss activity.</p></div></header>',
-    `<div class="notice-status"><strong>Automatic orchestrator notices: ${s.push ? 'on' : 'off'}</strong><span>${s.push ? 'HerdrBoss can prompt idle orchestrators about resource issues.' : 'HerdrBoss is collecting status without prompting orchestrators.'}</span></div>`,
-    rulesBlock(s),
-    `<section id="events"><h2>Activity log</h2>${eventsBlock(s)}</section>`,
-  ].join('');
-}
-
 function usageBlock() {
   const rows = Object.entries(usage?.byProject || {});
   const runs = rows.reduce((n, [, x]) => n + x.runs, 0);
@@ -3805,7 +3956,7 @@ function usageBlock() {
 
 function providerUsageBlock() {
   const rows = Object.entries(usage?.byProvider || {});
-  return `<section><div class="section-head"><h2>By provider</h2><span>Recorded work, not subscription balance</span></div>${rows.length ? `<div class="fleet-table-wrap"><table class="fleet-table"><thead><tr><th>Provider</th><th>Runs</th><th>Measured</th><th>Input</th><th>Output</th><th>Work time</th></tr></thead><tbody>${rows.map(([provider, x]) => `<tr><td data-label="Provider"><strong>${esc(PROVIDERS[provider] || provider)}</strong></td><td class="mono" data-label="Runs">${x.runs}</td><td class="mono" data-label="Measured">${x.measuredRuns} / ${x.runs}</td><td class="mono" data-label="Input">${x.inputTokens.toLocaleString()}</td><td class="mono" data-label="Output">${x.outputTokens.toLocaleString()}</td><td class="mono" data-label="Work time">${Math.round(x.workMinutes)} min</td></tr>`).join('')}</tbody></table></div>` : '<div class="calm-state">Provider usage will appear as worker runs are recorded.</div>'}</section>`;
+  return `<section><div class="section-head"><h2>By provider</h2><span>Recorded work, not subscription balance</span></div>${rows.length ? `<div class="fleet-table-wrap"><table class="fleet-table"><thead><tr><th>Provider</th><th>Runs</th><th>Measured</th><th>Input</th><th>Output</th><th>Work time</th></tr></thead><tbody>${rows.map(([provider, x]) => `<tr><td data-label="Provider"><strong>${esc(PROVIDERS[provider] || (provider === 'undefined' ? 'Not recorded' : provider))}</strong></td><td class="mono" data-label="Runs">${x.runs}</td><td class="mono" data-label="Measured">${x.measuredRuns} / ${x.runs}</td><td class="mono" data-label="Input">${x.inputTokens.toLocaleString()}</td><td class="mono" data-label="Output">${x.outputTokens.toLocaleString()}</td><td class="mono" data-label="Work time">${Math.round(x.workMinutes)} min</td></tr>`).join('')}</tbody></table></div>` : '<div class="calm-state">Provider usage will appear as worker runs are recorded.</div>'}</section>`;
 }
 
 function modelScorecardBlock(s) {
@@ -3828,10 +3979,20 @@ function denialLimitsLine(s) {
 // Counts only: the scan keeps no message text. A rising cause asks the Owner to talk with the Boss; it sends no pane prompt.
 function denialsBlock(s) {
   const d = denials;
-  const head = '<div class="section-head"><h2>Denials and permission prompts</h2><span>Last 7 days, counts only</span></div>';
+  const base = { id: 'denials', title: 'Denials and permission prompts' };
   const limits = denialLimitsLine(s);
-  if (!d?.rows?.length) return `<section id="denials">${head}${limits}<div class="calm-state">No denials or permission prompts are recorded yet. Herdr Boss reads the harness logs every 15 minutes.</div></section>`;
-  const totals = Object.entries(d.harnessTotals || {}).sort((a, b) => b[1] - a[1]);
+  if (!d?.rows?.length) return vizCard({ ...base, notes: limits, empty: 'No denials or permission prompts are recorded yet. Herdr Boss reads the harness logs every 15 minutes.' });
+  const totals = Object.entries(d.harnessTotals || {}).filter(([, n]) => n).sort((a, b) => b[1] - a[1]);
+  const harness = analyticsUi.denialHarness !== 'all' && !d.harnessTotals?.[analyticsUi.denialHarness] ? 'all' : analyticsUi.denialHarness;
+  const grid = denialGrid(d, harness);
+  const causes = grid.causes.slice(0, 8);
+  if (grid.causes.length > 8) {
+    const counts = d.days.map((_, i) => grid.causes.slice(8).reduce((a, c) => a + c.counts[i], 0));
+    causes.push({ cause: 'Other causes', counts, total: counts.reduce((a, b) => a + b, 0) });
+  }
+  const who = harness === 'all' ? 'all harnesses' : HARNESS_NAMES[harness] || harness;
+  const top = causes[0];
+  const title = top ? `${top.cause} causes the most denials for ${who}: ${top.total.toLocaleString()} of ${grid.total.toLocaleString()} in 7 days` : `No denials for ${who} in 7 days`;
   const arrow = (x) => { const [sign, word] = TREND_ARROW[x.trend] || TREND_ARROW.flat; return `<span class="denial-trend ${esc(x.trend)}" title="${esc(`${word}: ${x.recent} in 24 hours, 6-day mean ${x.mean}`)}">${sign}<span class="visually-hidden"> ${word}</span></span>`; };
   const dayHead = d.days.map((day) => `<th class="mono">${esc(day.slice(5))}</th>`).join('');
   const waiting = d.catchingUp ? `<div class="calm-state">Herdr Boss still reads older logs: ${Math.ceil(d.pendingBytes / 1024 ** 2).toLocaleString()} MB left. The counts of older days are not complete, so the trend note waits.</div>` : '';
@@ -3840,11 +4001,177 @@ function denialsBlock(s) {
   const modelTable = modelRows.length ? `<div class="denial-model-breakdown"><h3>Counts by harness and model</h3><div class="fleet-table-wrap"><table class="fleet-table denial-model-table"><thead><tr><th>Harness</th><th>Model</th><th>Cause</th><th>Count</th></tr></thead><tbody>`
     + modelRows.slice(0, 10).map((r) => `<tr><td data-label="Harness">${esc(HARNESS_NAMES[r.harness] || r.harness)}</td><td data-label="Model" class="mono">${esc(r.model)}</td><td data-label="Cause">${esc(r.cause)}</td><td data-label="Count" class="mono">${r.count.toLocaleString()}</td></tr>`).join('')
     + `</tbody></table></div>${d.modelMoreCount ? `<p class="denial-model-more">${d.modelMoreCount.toLocaleString()} more</p>` : ''}</div>` : '';
-  return `<section id="denials">${head}${limits}${waiting}${note}<div class="usage-metrics">${totals.map(([h, n]) => `<div><strong>${n.toLocaleString()}</strong><span>${esc(HARNESS_NAMES[h] || h)}</span></div>`).join('')}</div>`
-    + `<div class="fleet-table-wrap"><table class="fleet-table denial-table"><thead><tr><th>Cause</th><th>Project</th><th>Harness</th>${dayHead}<th>Total</th><th>Trend</th></tr></thead><tbody>`
+  const table = `<div class="fleet-table-wrap"><table class="fleet-table denial-table"><thead><tr><th>Cause</th><th>Project</th><th>Harness</th>${dayHead}<th>Total</th><th>Trend</th></tr></thead><tbody>`
     + d.rows.map((r) => `<tr><td data-label="Cause"><strong>${esc(r.cause)}</strong></td><td data-label="Project">${esc(state.control?.projects?.[r.project]?.label || r.project)}</td><td data-label="Harness">${esc(HARNESS_NAMES[r.harness] || r.harness)}</td>${r.counts.map((n, i) => `<td class="mono" data-label="${esc(d.days[i].slice(5))}">${n || '·'}</td>`).join('')}<td class="mono" data-label="Total">${r.total.toLocaleString()}</td><td data-label="Trend">${arrow(r)}</td></tr>`).join('')
-    + '</tbody></table></div>' + modelTable + '</section>';
+    + '</tbody></table></div>';
+  const cols = d.days.map((day) => dayLabel(day));
+  return vizCard({
+    ...base, title,
+    sub: 'Last 7 days, counts for each cause and day. A darker cell has more events.',
+    controls: vizSwitch('denial-harness', harness, [['all', 'All'], ...totals.map(([h, n]) => [h, `${HARNESS_NAMES[h] || h} ${n.toLocaleString()}`])], 'Show the denials of'),
+    notes: `${limits}${waiting}${note}`,
+    legend: '<ul class="viz-legend"><li class="viz-ramp" aria-hidden="true"><i class="viz-heat-key q1"></i><i class="viz-heat-key q3"></i><i class="viz-heat-key q5"></i></li><li>Fewer to more events</li></ul>',
+    chart: causes.length ? heatGrid({ rows: causes.map((c) => c.cause), cols, values: causes.map((c) => c.counts), label: title, tip: (r, c) => `${causes[r].cause}, ${dayLabel(d.days[c], true)}\n${causes[r].counts[c]} events (${who})` }) : '<div class="calm-state">No denials for this harness.</div>',
+    details: `${table}${modelTable}`,
+  });
 }
+
+// Load, memory, and swap over the last 24 hours on one percent axis. Shaded columns: a lock holder held a machine lock.
+// The strip below shows the minutes in which a suite request waited in the queue.
+function timelineChart() {
+  const t = analyticsData?.timeline;
+  const base = { id: 'timeline', title: 'Machine load and lock waits' };
+  const points = t?.points || [];
+  if (!points.some((p) => p.samples)) return vizCard({ ...base, empty: 'No machine samples in the last 24 hours. Herdr Boss records one sample each minute.' });
+  const times = points.map((p) => Date.parse(p.at));
+  const heldMin = points.reduce((a, p) => a + p.heldMin, 0), waitMin = points.reduce((a, p) => a + p.waitMin, 0);
+  const peak = Math.max(0, ...points.map((p) => p.load ?? 0));
+  const title = `${waitMin ? `Suite requests waited ${minutes(waitMin * 60000)}` : 'No suite request waited'} and locks were held ${minutes(heldMin * 60000)} in 24 hours; load peaked at ${peak}% of the cores`;
+  const series = [
+    { key: 'load', label: 'Load, % of cores', cls: 's1', values: points.map((p) => p.load) },
+    { key: 'mem', label: 'Memory in use', cls: 's2', values: points.map((p) => p.mem) },
+    { key: 'swap', label: 'Swap in use', cls: 's3', values: points.map((p) => p.swap) },
+  ];
+  const bucket = t.bucketMin;
+  const kinds = (p) => Object.keys(p.holderKinds || {}).join(', ');
+  const tips = points.map((p, i) => (p.samples ? [`${hhmm(times[i])}–${hhmm(times[i] + bucket * 60000)}`, `Load: ${p.load ?? '–'}% of the cores`, `Memory in use: ${p.mem ?? '–'}%`, `Swap in use: ${p.swap ?? '–'}%`, p.heldMin ? `Lock held ${p.heldMin} of ${bucket} min (${kinds(p)})` : 'No lock held', p.waitMin ? `Waiting ${p.waitMin} min, up to ${p.waitersMax} requests` : 'No wait'].join('\n') : ''));
+  const xLabels = [];
+  times.forEach((ms, i) => { const d = new Date(ms); if (d.getMinutes() === 0 && d.getHours() % 4 === 0) xLabels.push({ i, label: `${String(d.getHours()).padStart(2, '0')}:00` }); });
+  const bands = points.map((p, i) => ({ i, alpha: p.heldMin / bucket }));
+  const hours = [];
+  for (let i = 0; i < points.length; i += 60 / bucket) {
+    const group = points.slice(i, i + 60 / bucket).filter((p) => p.samples);
+    if (!group.length) continue;
+    const mean = (k) => { const v = group.map((p) => p[k]).filter((x) => x !== null); return v.length ? `${Math.round(v.reduce((a, b) => a + b, 0) / v.length)}%` : '–'; };
+    hours.push([hhmm(times[i]), mean('load'), mean('mem'), mean('swap'), `${group.reduce((a, p) => a + p.heldMin, 0)} min`, `${group.reduce((a, p) => a + p.waitMin, 0)} min`]);
+  }
+  const maxWait = Math.max(1, ...points.map((p) => p.waitMin));
+  return vizCard({
+    ...base, title,
+    sub: `Last 24 hours in columns of ${bucket} minutes, local time. Samples hold numbers and lock kinds only.`,
+    legend: legendHtml(series, '<li><i class="viz-key band" aria-hidden="true"></i>Shaded: a lock was held</li><li><i class="viz-key s-wait" aria-hidden="true"></i>Bars below: minutes a suite request waited</li>'),
+    chart: `${lineChart({ points: times, series, yMax: Math.max(100, peak), tips, xLabels, bands, label: title })}${stripBars({ values: points.map((p) => p.waitMin), max: maxWait, tips, label: 'Minutes a suite request waited' })}`,
+    details: vizTable(['Hour', 'Load', 'Memory', 'Swap', 'Lock held', 'Waited'], hours.reverse()),
+  });
+}
+
+function noticeChart() {
+  const n = analyticsData?.notices;
+  const base = { id: 'notices', title: 'Notices per pane' };
+  if (!n?.total) return vizCard({ ...base, empty: 'Herdr Boss sent no notice to a pane in the last 7 days.' });
+  const series = foldSeries(n.panes.filter((p) => p.pane !== 'other').map((p) => ({ key: p.pane, label: p.pane, values: p.counts })));
+  const other = n.panes.find((p) => p.pane === 'other');
+  if (other) {
+    const last = series.find((x) => x.key === 'other');
+    if (last) last.values = last.values.map((v, i) => v + other.counts[i]);
+    else series.push({ key: 'other', label: 'Other panes', cls: 's-other', values: other.counts });
+  }
+  const top = n.panes.filter((p) => p.pane !== 'other')[0];
+  const title = top ? `Pane ${top.pane} gets the most notices: ${top.total.toLocaleString()} in 7 days, ${(top.total / n.days.length).toFixed(1)} a day` : `${n.total} notices in 7 days`;
+  return vizCard({
+    ...base, title,
+    sub: 'Last 7 days, notices and digest items sent to each pane. Pane IDs only.',
+    legend: legendHtml(series),
+    chart: stackedBars({ cats: n.days.map((d) => ({ label: dayLabel(d), tip: dayLabel(d, true) })), series, fmt: (v) => String(Math.round(v)), label: title }),
+    details: vizTable(['Pane', ...n.days.map((d) => dayLabel(d)), 'Total'], n.panes.map((p) => [esc(p.pane), ...p.counts.map((c) => c || '·'), p.total])),
+  });
+}
+
+// The activity log: prompts to orchestrators, notices, handovers, and stopped processes, with filters and a search.
+function activitySection(s) {
+  const f = analyticsUi.log;
+  const events = s.events || [];
+  const { kinds, projects } = activityChoices(events);
+  const list = activityFilter(events, f);
+  const option = (value, label, current) => `<option value="${esc(value)}"${value === current ? ' selected' : ''}>${esc(label)}</option>`;
+  const select = (field, label, choices) => `<label class="kb-field"><span>${label}</span><select data-activity-filter="${field}">${choices.map(([v, l]) => option(v, l, f[field])).join('')}</select></label>`;
+  const tools = `<div class="kb-toolbar activity-tools" role="search" aria-label="Filter the activity log">`
+    + `<label class="kb-search"><span class="visually-hidden">Search the activity log</span><input type="search" id="activity-search" data-activity-filter="q" value="${esc(f.q)}" placeholder="Search the log" autocomplete="off" spellcheck="false"></label>`
+    + select('kind', 'Kind', [['all', 'All kinds'], ...kinds.map((k) => [k, k])])
+    + select('project', 'Project', [['all', 'All projects'], ...projects.map((p) => [p, state.control?.projects?.[p]?.label || p])])
+    + select('level', 'Level', [['all', 'All levels'], ...ACTIVITY_LEVELS.map((l) => [l, l])])
+    + select('range', 'Time', ACTIVITY_RANGES.map(([v, l]) => [v, l]))
+    + '</div>';
+  const long = f.range === '7d' || f.range === 'all';
+  const when = (at) => (long ? `${dayLabel(localDayKey(Date.parse(at)))} ${hhmm(Date.parse(at))}` : hhmm(Date.parse(at)));
+  const rows = list.slice(0, 200).map((e) => `<li><span class="t">${esc(when(e.at))}</span><span class="ty ${esc(e.type)}">${esc(e.type)}</span><span>${esc(e.text)}${e.pane ? ` <small class="mono">${esc(e.pane)}</small>` : ''}${eventLevel(e) !== 'info' ? ` <small class="lvl ${esc(eventLevel(e))}">${esc(eventLevel(e))}</small>` : ''}</span></li>`).join('');
+  const raw = events.slice().reverse().map((e) => `${e.at}  ${e.type}${e.severity ? `/${e.severity}` : ''}${e.pane ? `  ${e.pane}` : ''}${e.project ? `  ${e.project}` : ''}  ${e.text}`).join('\n');
+  const open = analyticsUi.open.has('activity');
+  return `<section class="viz-card activity-card" id="activity" data-key="viz:activity"><header class="viz-head"><div class="viz-titles"><h3>Activity log</h3><p class="viz-sub">Automatic orchestrator notices are <b>${s.push ? 'on' : 'off'}</b>. ${s.push ? 'Herdr Boss can prompt idle orchestrators about resource issues.' : 'Herdr Boss collects status and sends no prompts.'} Showing ${Math.min(200, list.length)} of ${events.length} kept events.</p></div></header>`
+    + tools
+    + `<div class="panel activity-list" data-key="activity-list">${rows ? `<ul class="events">${rows}</ul>` : '<div class="empty">No event matches the filters.</div>'}</div>`
+    + `<details class="viz-details" data-viz-detail="activity" id="activity-raw"${open ? ' open' : ''}><summary>Details</summary><div class="viz-details-body"><p class="viz-note"><a href="#activity-raw-log">Raw log</a>: the ${events.length} kept events, newest first, without filters. The guidance that orchestrators read is in <a href="/bulletin.md">bulletin.md</a> and on the <a href="/#overview-guidance">Overview</a>.</p><pre class="raw-log" id="activity-raw-log" tabindex="0">${esc(raw)}</pre></div></details></section>`;
+}
+
+// One shared tooltip for each chart card, for hover, keyboard focus, and touch. The text comes from data-tip on the hit area.
+function showVizTip(hit) {
+  const card = hit.closest('.viz-card');
+  const tip = card?.querySelector('.viz-tip');
+  if (!tip) return;
+  tip.textContent = hit.dataset.tip;
+  tip.hidden = false;
+  const box = card.getBoundingClientRect();
+  const r = hit.getBoundingClientRect();
+  const left = r.left - box.left + r.width / 2 - tip.offsetWidth / 2;
+  tip.style.left = `${Math.max(8, Math.min(left, box.width - tip.offsetWidth - 8))}px`;
+  const above = r.top - box.top - tip.offsetHeight - 8;
+  tip.style.top = `${above >= 4 ? above : r.bottom - box.top + 8}px`;
+  for (const other of card.querySelectorAll('.viz-hit.on')) other.classList.remove('on');
+  hit.classList.add('on');
+}
+function hideVizTip(card) {
+  const tip = card?.querySelector('.viz-tip');
+  if (tip) tip.hidden = true;
+  for (const hit of card?.querySelectorAll('.viz-hit.on') || []) hit.classList.remove('on');
+}
+document.addEventListener('pointerover', (e) => { if (e.target.classList?.contains('viz-hit')) showVizTip(e.target); });
+document.addEventListener('focusin', (e) => { if (e.target.classList?.contains('viz-hit')) showVizTip(e.target); });
+document.addEventListener('pointerout', (e) => { if (e.target.classList?.contains('viz-hit') && e.pointerType === 'mouse' && !e.relatedTarget?.classList?.contains('viz-hit')) hideVizTip(e.target.closest('.viz-card')); });
+document.addEventListener('focusout', (e) => { if (e.target.classList?.contains('viz-hit')) hideVizTip(e.target.closest('.viz-card')); });
+// The arrow keys move the one tab stop of a chart to the next or the previous hit area. Home and End go to the first and the last.
+function moveVizFocus(hit, key) {
+  const hits = [...hit.ownerSVGElement.querySelectorAll('.viz-hit[tabindex]')];
+  const at = hits.indexOf(hit);
+  const to = key === 'Home' ? 0 : key === 'End' ? hits.length - 1 : at + (key === 'ArrowRight' || key === 'ArrowDown' ? 1 : -1);
+  const next = hits[Math.max(0, Math.min(hits.length - 1, to))];
+  if (!next || next === hit) return;
+  hit.setAttribute('tabindex', '-1');
+  next.setAttribute('tabindex', '0');
+  next.focus();
+}
+document.addEventListener('keydown', (e) => {
+  if (!e.target.classList?.contains('viz-hit') || !['ArrowRight', 'ArrowLeft', 'ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) return;
+  e.preventDefault();
+  moveVizFocus(e.target, e.key);
+});
+// A touch outside the hit areas closes the open tooltip.
+document.addEventListener('pointerdown', (e) => { if (!e.target.classList?.contains('viz-hit')) for (const card of document.querySelectorAll('.viz-card')) hideVizTip(card); });
+document.addEventListener('click', (e) => {
+  const by = e.target.closest?.('[data-spend-by]');
+  if (by) { analyticsUi.spendBy = by.dataset.spendBy; render(); return; }
+  const harness = e.target.closest?.('[data-denial-harness]');
+  if (harness) { analyticsUi.denialHarness = harness.dataset.denialHarness; render(); }
+});
+document.addEventListener('change', (e) => {
+  const field = e.target.dataset?.activityFilter;
+  if (!field || field === 'q') return;
+  analyticsUi.log[field] = e.target.value;
+  render();
+});
+// The search renders 150 ms after the last key, not on each key.
+let activityQueryTimer = null;
+document.addEventListener('input', (e) => {
+  if (e.target.dataset?.activityFilter !== 'q') return;
+  analyticsUi.log.q = e.target.value;
+  clearTimeout(activityQueryTimer);
+  activityQueryTimer = setTimeout(() => { activityQueryTimer = null; if (location.pathname === '/analytics') render(); }, 150);
+});
+document.addEventListener('toggle', (e) => {
+  const id = e.target.dataset?.vizDetail;
+  if (!id) return;
+  if (e.target.open) analyticsUi.open.add(id);
+  else analyticsUi.open.delete(id);
+}, true);
 
 function recentUsageBlock() {
   const rows = usage?.recent || [];
@@ -4612,19 +4939,19 @@ const HELP = {
     <h3>Bookmarks</h3><p>A project keeps at most 30 bookmarks. A bookmark name has at most 60 characters. A bookmark URL must use http or https and must not hold a user name or a password. <b>Add current page</b> saves the selected tab. <b>Open</b> loads a bookmark in the current tab; <b>New tab</b> opens it in a new tab. <b>Rename</b>, the arrows, and <b>Delete</b> change the list; Delete asks you to confirm. <b>Start page</b> opens in the first tab of the next launch. <b>Save</b> stores the start page; a blank value clears it.</p>
     <h3>Control</h3><p>Select the screenshot to open the large view. The large view shows a still image of the last capture. Turn on <b>Control browser</b> or <b>Live</b> to refresh it at the chosen interval. Turn on <b>Control browser</b>, then click the image and type. Paste long text or a password into the masked field. On a phone the large view is full screen and the image fills the height. The text field and key controls appear only while <b>Control browser</b> is on.</p>`],
   analytics: ['Analytics', `
-    <p>Recorded worker runs per project and provider: duration, outcome, and measured tokens.</p>
-    <p>Token totals include only runs that report tokens. Coverage shows how many runs have measurements. Quota percentages are global per provider; they are not project token counts.</p>
+    <p>The page answers six questions: what the fleet costs, how the quota compares with the pace, how often the models are right the first time, where the harnesses deny work, when the machine and the locks slow work down, and which panes get notices.</p>
+    <h3>Headline strip</h3><p>Each tile shows one figure and its change. <b>Claude spend a day</b> is the mean of the last 7 days, with the change on the 7 days before. <b>Quota against pace</b> shows the lane with the most use above its pace line. <b>Denials this week</b> compares the last 24 hours with the 6-day mean. <b>Notices per pane a day</b> is the 7-day mean and today. <b>Lock wait and hold</b> shows the median wait and the median hold. <b>First-time success</b> counts the judged runs of the last 30 days.</p>
+    <h3>Charts</h3><p>The title of each chart tells what to read from it. Hover, focus, or touch a column, a cell, or a row to read its values. On a phone each chart scrolls sideways inside its own box. <b>Details</b> under a chart opens the table of the same figures.</p>
+    <p><b>Spend</b>: stacked bars for each day, split by role or by harness with the switch. The USD figure is the API-price equivalent. The Owner pays a subscription, not these amounts. <b>Quota</b>: one solid line for the use of each lane and one dashed line for its expected pace, in the weekly window. <b>Model scorecard</b>: the share of first-time, rework, failed, and not judged runs for each model. <b>Details</b> also holds the recorded work by project and provider and the recent runs.</p>
     <h3>Denials and permission prompts</h3><p>Herdr Boss reads the Claude, Codex, OpenCode, and Pi logs every 15 minutes. It counts classifier refusals, sandbox errors, escalation requests, permission prompts, prompts with no answer within 10 minutes, OpenCode worker permission denials, and Herdr guard blocks. It keeps the day, harness, cause, project, model, and count. It keeps no message text.</p>
-    <p>The small table shows counts for the last 7 days by harness, model, and cause. It shows up to 10 rows.</p>
-    <p>The table shows the last 7 days by cause and project. The arrow compares the last 24 hours with the mean of the 6 days before. When a cause is above 2 times its mean and above 10 events, the page and the bulletin show <b>Discuss this trend with the Boss.</b> Herdr Boss sends no prompt to an orchestrator about it. While more than 1 MB of older logs is unread, the note waits, because the counts of older days are not complete.</p>
+    <p>The heat map shows the counts for each cause and day over the last 7 days. The switch selects one harness or all. The small table in Details shows counts for the last 7 days by harness, model, and cause. It shows up to 10 rows.</p>
+    <p>The table in Details shows the last 7 days by cause and project. The arrow compares the last 24 hours with the mean of the 6 days before. When a cause is above 2 times its mean and above 10 events, the page and the bulletin show <b>Discuss this trend with the Boss.</b> Herdr Boss sends no prompt to an orchestrator about it. While more than 1 MB of older logs is unread, the note waits, because the counts of older days are not complete.</p>
     <p>A read-only line shows the limits: the scan interval, the bytes for one scan, the days kept, and the rise rule.</p>
+    <h3>Machine load and lock waits</h3><p>Lines show the 5-minute load as a percent of the cores, the memory in use, and the swap in use over the last 24 hours, in columns of 10 minutes. A shaded column had a lock holder. The strip under the chart shows the minutes in which a suite request waited in the queue.</p>
     <h3>Machine overload and idle waiting</h3><p>The chart shows, for each hour of the day in local time, the mean minutes per day of two conditions over the last 14 days. <b>Overload</b>: swap above 90% with at least 1 GB in use, or a 5-minute load above 3 times the cores. <b>Queue waited, CPU under 50%</b>: a suite request waited in the <code>full-suite</code> queue while the CPU was not the reason.</p>
-    <p>Hover, focus, or touch an hour to read its values. Hatched bars have fewer than 10 samples. A note shows when samples cover less than half of the window; a minute without a sample is missing data. The table under the chart has the same 24 rows. On a phone the chart scrolls sideways inside its own box.</p>`],
-  logs: ['Logs', `
-    <p>The top line tells whether Herdr Boss sends notices to orchestrators.</p>
-    <p>Herdr Boss sends the <code>info</code> notices of a pane as one digest, at most once in 2 hours, and never while the pane works. <code>warn</code> and <code>critical</code> notices arrive at once.</p>
-    <p>The guidance section shows the rules in force now, the same text as the bulletin that orchestrators read.</p>
-    <p><b>Activity log</b> lists prompts sent to orchestrators, notifications, handovers, and stopped processes, newest first.</p>`],
+    <p>Hover, focus, or touch an hour to read its values. Hatched bars have fewer than 10 samples. A note shows when samples cover less than half of the window; a minute without a sample is missing data. The table under the chart has the same 24 rows. On a phone the chart scrolls sideways inside its own box.</p>
+    <h3>Notices per pane</h3><p>Stacked bars show the notices and digest items that Herdr Boss sent to each pane on each day. The chart shows pane IDs only. The five panes with the most notices have their own color. The other panes share one gray.</p>
+    <h3>Activity log</h3><p>The log lists prompts sent to orchestrators, notifications, handovers, and stopped processes, newest first. Filter by kind, project, level, and time, or type in the search box. The first line tells whether Herdr Boss sends notices to orchestrators. Herdr Boss sends the <code>info</code> notices of a pane as one digest, at most once in 2 hours, and never while the pane works. <code>warn</code> and <code>critical</code> notices arrive at once. <b>Details</b> holds the raw log without filters. The old <code>/logs</code> address opens this section.</p>`],
 };
 
 function currentRoute() {
@@ -4733,7 +5060,7 @@ function restoreScroll(route, scroll) {
 }
 
 // These routes keep their DOM across a render. A keyed patch changes only what changed.
-const KEYED_ROUTES = ['projects', 'board', 'mailbox', 'chat'];
+const KEYED_ROUTES = ['projects', 'board', 'mailbox', 'chat', 'analytics'];
 
 function render(force = false) {
   if (!state) return;
@@ -4750,6 +5077,11 @@ function render(force = false) {
   if (legacy) history.replaceState(null, '', `/projects/${legacy[1]}`);
   // An old Organization link opens the Agents page in the Chart view.
   if (location.pathname === '/organization') history.replaceState(null, '', '/agents?view=chart');
+  // The activity log moved to Analytics and the guidance to the Overview. An old Logs link opens the new place.
+  if (location.pathname === '/logs') {
+    history.replaceState(null, '', location.hash === '#guidance' ? '/#overview-guidance' : '/analytics#activity');
+    pendingHash = location.hash.slice(1);
+  }
   const m = /^\/projects\/([^/]+)\/?$/.exec(location.pathname);
   // A Board card links to /projects/<slug>?task=<id>. The page selects the task once, then drops the parameter from the address.
   const pick = m ? new URLSearchParams(location.search).get('task') : null;
@@ -4759,8 +5091,8 @@ function render(force = false) {
     history.replaceState(null, '', location.pathname + location.hash);
     requestAnimationFrame(() => { centerGraphOn(slug, pick); revealCard(slug, pick, 'center'); });
   }
-  const route = m || location.pathname === '/projects' ? 'projects' : ['board', 'mailbox', 'chat', 'allocation', 'settings', 'agents', 'browsers', 'analytics', 'logs'].includes(location.pathname.slice(1)) ? location.pathname.slice(1) : 'overview';
-  const page = route === 'projects' ? projectsView(state, m ? decodeURIComponent(m[1]) : null) : route === 'board' ? boardView(state) : route === 'mailbox' ? mailboxView(state) : route === 'chat' ? chatView(state) : route === 'allocation' ? allocationView(state) : route === 'settings' ? settingsView(state) : route === 'agents' ? agentsView(state) : route === 'browsers' ? browsersView(state) : route === 'analytics' ? analyticsView(state) : route === 'logs' ? logsView(state) : overview(state);
+  const route = m || location.pathname === '/projects' ? 'projects' : ['board', 'mailbox', 'chat', 'allocation', 'settings', 'agents', 'browsers', 'analytics'].includes(location.pathname.slice(1)) ? location.pathname.slice(1) : 'overview';
+  const page = route === 'projects' ? projectsView(state, m ? decodeURIComponent(m[1]) : null) : route === 'board' ? boardView(state) : route === 'mailbox' ? mailboxView(state) : route === 'chat' ? chatView(state) : route === 'allocation' ? allocationView(state) : route === 'settings' ? settingsView(state) : route === 'agents' ? agentsView(state) : route === 'browsers' ? browsersView(state) : route === 'analytics' ? analyticsView(state) : overview(state);
   const html = page;
   // The Mailbox and the Chat are app views: on a phone they fill the visual viewport and hide the page header.
   document.body.classList.toggle('app-view', APP_VIEW_ROUTES.includes(route));
@@ -4793,6 +5125,8 @@ function render(force = false) {
         try { if (watchField.range) field.setSelectionRange(...watchField.range); } catch { /* A number or time input has no caret. */ }
       }
     }
+    // A refresh clears the tooltip. The hit area that has the focus shows its tooltip again.
+    if (document.activeElement?.classList?.contains('viz-hit')) showVizTip(document.activeElement);
     if (route === 'mailbox') mailRestoreDrafts(focusId, caret);
     if (route === 'chat') chatRestoreView(chatViewState);
     restoreScroll(route, scroll);
@@ -4802,6 +5136,11 @@ function render(force = false) {
   syncDepGraphs();
   syncBoards();
   syncTopHeight();
+  if (pendingHash) {
+    const target = document.getElementById(pendingHash);
+    pendingHash = null;
+    if (target) { if (target.tagName === 'DETAILS') target.open = true; target.scrollIntoView(); }
+  }
   if (!document.getElementById('help-panel').hidden) fillHelp();
   $updated.textContent = `updated ${ago(state.updatedAt)}`;
 }
@@ -5981,7 +6320,7 @@ function refreshForcesRender(pathname) {
 }
 
 async function refreshExtras() {
-  const results = await Promise.allSettled(['/api/models', '/api/usage', '/api/browser-sessions', '/api/handoffs', '/api/denials', '/api/mailbox?folder=needs-you', '/api/chats', '/api/settings/prices', '/api/machine-hours'].map((url) => fetch(url).then((r) => r.json())));
+  const results = await Promise.allSettled(['/api/models', '/api/usage', '/api/browser-sessions', '/api/handoffs', '/api/denials', '/api/mailbox?folder=needs-you', '/api/chats', '/api/settings/prices', '/api/spend?days=14', '/api/analytics', '/api/machine-hours'].map((url) => fetch(url).then((r) => r.json())));
   if (results[0].status === 'fulfilled') models = results[0].value;
   if (results[1].status === 'fulfilled') usage = results[1].value;
   if (results[2].status === 'fulfilled') {
@@ -5996,7 +6335,9 @@ async function refreshExtras() {
   if (results[5].status === 'fulfilled') mailbox.updatesUnread = results[5].value.updatesUnread || 0;
   if (results[6].status === 'fulfilled' && Array.isArray(results[6].value)) { chat.list = chatSortList(results[6].value); chat.loaded = true; }
   if (results[7].status === 'fulfilled' && results[7].value?.prices) priceTable = results[7].value;
-  if (results[8].status === 'fulfilled' && results[8].value?.hours) machineHours = results[8].value;
+  if (results[8].status === 'fulfilled' && Array.isArray(results[8].value?.days)) spendData = results[8].value;
+  if (results[9].status === 'fulfilled' && results[9].value?.timeline) analyticsData = results[9].value;
+  if (results[10].status === 'fulfilled' && results[10].value?.hours) machineHours = results[10].value;
   if (location.pathname === '/mailbox' && !mailbox.loading) await loadMailbox(true);
   if (refreshForcesRender(location.pathname)) lastRender = '';
   autoRender();
