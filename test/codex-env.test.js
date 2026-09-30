@@ -114,16 +114,16 @@ test('the worker brief report and question commands carry caller Herdr settings 
   const f = startFixture();
   const run = f.start('cxreport');
   const brief = fs.readFileSync(path.join(run.worktree, '.worker', 'brief.md'), 'utf8');
-  assert.match(brief, /HERDR_ENV=1 HERDR_SOCKET_PATH=\/fake\/herdr\.sock \/fake\/bin\/herdr agent prompt ws:orch "WORKER QUESTION/);
-  assert.match(brief, /HERDR_ENV=1 HERDR_SOCKET_PATH=\/fake\/herdr\.sock \/fake\/bin\/herdr agent prompt ws:orch "WORKER REPORT/);
+  assert.match(brief, /HERDR_ENV=1 HERDR_SOCKET_PATH=\/fake\/herdr\.sock \/fake\/bin\/herdr agent prompt alpha-orch "WORKER QUESTION/);
+  assert.match(brief, /HERDR_ENV=1 HERDR_SOCKET_PATH=\/fake\/herdr\.sock \/fake\/bin\/herdr agent prompt alpha-orch "WORKER REPORT/);
   assert.match(brief, /Use this command as written\. It works also when your shell lost the Herdr variables\./);
 
   const missing = startFixture();
   const { HERDR_SOCKET_PATH, ...caller } = ORCH;
   const missingRun = missing.start('cxnosocket', {}, caller);
   const missingBrief = fs.readFileSync(path.join(missingRun.worktree, '.worker', 'brief.md'), 'utf8');
-  assert.match(missingBrief, /HERDR_ENV=1 \/fake\/bin\/herdr agent prompt ws:orch "WORKER QUESTION/);
-  assert.match(missingBrief, /HERDR_ENV=1 \/fake\/bin\/herdr agent prompt ws:orch "WORKER REPORT/);
+  assert.match(missingBrief, /HERDR_ENV=1 \/fake\/bin\/herdr agent prompt alpha-orch "WORKER QUESTION/);
+  assert.match(missingBrief, /HERDR_ENV=1 \/fake\/bin\/herdr agent prompt alpha-orch "WORKER REPORT/);
   assert.doesNotMatch(missingBrief, /HERDR_SOCKET_PATH/);
 });
 
