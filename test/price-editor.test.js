@@ -92,5 +92,5 @@ test('Reset to defaults sends an empty override', async () => {
 test('the Settings page places the price editor in its own section and the help names it', () => {
   assert.match(app, /\$\{serviceSettings\}\$\{pricesPanel\(\)\}\$\{harnessPanel\}/);
   assert.match(app, /<h3>Token prices<\/h3>/);
-  assert.match(app, /'\/api\/settings\/prices'\]/);
+  assert.match(app, /'\/api\/settings\/prices'[,\]]/);
 });
