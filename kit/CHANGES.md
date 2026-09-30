@@ -49,3 +49,7 @@ Summary: Add the subagent and no-watching rule (subagents for reviews and reads,
 ## 7436456f91aa
 Impact: useful
 Summary: Publish the project status at task boundaries only; the service keeps the last 30 done tasks and counts the rest.
+
+## f73a93f04e11
+Impact: useful
+Summary: GUI worker briefs say that seed data goes only into a temporary HERDR_BOSS_DIR, and that the preview runs read-only on its own port.
