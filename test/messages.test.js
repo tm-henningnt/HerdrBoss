@@ -16,6 +16,7 @@ const messages = await import('../src/messages.js');
 const {
   appendMessage, updateMessage, readMessages, listThread, messagesFile, deliverQueued,
   sayMessage, postReport, ownerPromptText, messageChannel, MAX_DELIVERY_ATTEMPTS,
+  chatSummaries, chatThreadPage, markMailboxRead, postReview, closeReviewItems, isMailboxItem, isMailRecord, isMailAnswer, messagesById, chatRecords, mailboxView, mailboxCounts,
 } = messages;
 
 test.after(() => {
@@ -487,4 +488,131 @@ test('messageChannel gives every kind and action one channel', () => {
   }
   assert.equal(messageChannel(null), 'chat');
   assert.equal(messageChannel({ to: 'orch', from: 'owner', kind: 'message', text: 'x' }), 'chat');
+});
+
+// ---------- Review records ----------
+
+const reviewFields = (extra = {}) => ({ slug: 'alpha', pack: 'checkout-redesign', title: 'Checkout flow redesign', version: 1, text: '31 items in 4 sections.', role: 'orch', ...extra });
+
+test('postReview appends a decide item on the mail channel that links to the pack', (t) => {
+  const dir = freshDir(t);
+  const record = postReview(reviewFields(), { dir, now });
+  assert.equal(record.kind, 'review');
+  assert.equal(record.thread, 'alpha');
+  assert.equal(record.from, 'orch');
+  assert.equal(record.to, 'owner');
+  assert.equal(record.action, 'decide');
+  assert.equal(record.status, 'new');
+  assert.equal(record.title, 'Review: Checkout flow redesign (v1)');
+  assert.match(record.text, /^31 items in 4 sections\.\n\n\[Open review\]\(\/reviews\/alpha\/checkout-redesign\)$/);
+  assert.deepEqual(record.review, { slug: 'alpha', pack: 'checkout-redesign', version: 1 });
+  assert.equal(isMailboxItem(record), true);
+  assert.equal(messageChannel(record), 'mail');
+  assert.equal(isMailRecord(record), true);
+  const stored = readMessages({ dir });
+  assert.equal(stored.length, 1);
+  assert.deepEqual(stored[0].review, record.review);
+});
+
+test('an open review item is in Needs you and counts as an action item', (t) => {
+  const dir = freshDir(t);
+  const record = postReview(reviewFields(), { dir, now });
+  const view = mailboxView(readMessages({ dir }));
+  assert.deepEqual(view.needsYou.map((item) => item.id), [record.id]);
+  assert.equal(view.needsYou[0].action, 'decide');
+  assert.equal(mailboxCounts(readMessages({ dir })).needsYou, 1);
+  closeReviewItems({ slug: 'alpha', pack: 'checkout-redesign' }, { dir, now: now + 1000 });
+  const after = mailboxView(readMessages({ dir }));
+  assert.equal(after.needsYou.length, 0);
+  assert.deepEqual(after.done.map((item) => item.id), [record.id]);
+});
+
+test('a new version closes the older review item of the same pack only', (t) => {
+  const dir = freshDir(t);
+  const other = postReview(reviewFields({ pack: 'api-reference', title: 'Orders API reference' }), { dir, now });
+  const otherProject = postReview(reviewFields({ slug: 'beta' }), { dir, now });
+  const first = postReview(reviewFields(), { dir, now: now + 1000 });
+  const second = postReview(reviewFields({ version: 2 }), { dir, now: now + 2000 });
+  const records = readMessages({ dir });
+  const byId = new Map(records.map((record) => [record.id, record]));
+  assert.ok(byId.get(first.id).closedAt, 'the older item is closed');
+  assert.equal(byId.get(first.id).closedBy, 'review');
+  assert.ok(byId.get(first.id).readAt);
+  assert.ok(!byId.get(second.id).closedAt, 'the new item is open');
+  assert.ok(!byId.get(other.id).closedAt, 'another pack keeps its item');
+  assert.ok(!byId.get(otherProject.id).closedAt, 'another project keeps its item');
+  assert.equal(byId.get(second.id).title, 'Review: Checkout flow redesign (v2)');
+});
+
+test('closeReviewItems closes every open item of a pack and reports how many', (t) => {
+  const dir = freshDir(t);
+  const item = postReview(reviewFields(), { dir, now });
+  const done = closeReviewItems({ slug: 'alpha', pack: 'checkout-redesign' }, { dir, now: now + 1000 });
+  assert.equal(done.closed, 1);
+  assert.equal(readMessages({ dir }).find((record) => record.id === item.id).closedBy, 'review');
+  assert.equal(closeReviewItems({ slug: 'alpha', pack: 'checkout-redesign' }, { dir, now: now + 2000 }).closed, 0, 'a closed item stays as it is');
+  assert.equal(closeReviewItems({ slug: 'alpha', pack: 'unknown' }, { dir, now }).closed, 0);
+});
+
+test('postReview refuses a bad thread, a role, and a secret in the title, the text, or the note', (t) => {
+  const dir = freshDir(t);
+  assert.throws(() => postReview(reviewFields({ slug: 'Not A Slug' }), { dir, now }), /slug/i);
+  assert.throws(() => postReview(reviewFields({ role: 'worker' }), { dir, now }), /role/i);
+  assert.throws(() => postReview(reviewFields({ title: 'Deploy with token=abc123def456' }), { dir, now }), /secret/i);
+  assert.throws(() => postReview(reviewFields({ text: 'Use ghp_abcdefghijklmnop now.' }), { dir, now }), /secret/i);
+  assert.deepEqual(readMessages({ dir }), [], 'no refused text reaches the store');
+});
+
+test('a long pack title is cut so the item title stays within the title limit', (t) => {
+  const dir = freshDir(t);
+  const record = postReview(reviewFields({ title: 'T'.repeat(200) }), { dir, now });
+  assert.ok(record.title.length <= 200, `title has ${record.title.length} characters`);
+  assert.match(record.title, /^Review: T+.* \(v1\)$/);
+});
+
+test('an Owner answer to a review item stays in the Mailbox thread and names the item in the prompt', (t) => {
+  const dir = freshDir(t);
+  const item = postReview(reviewFields(), { dir, now });
+  const answer = appendMessage({ ...owner('alpha', 'Start with the dark cart.'), replyTo: item.id }, { dir, now: now + 1000 });
+  const records = readMessages({ dir });
+  assert.equal(isMailAnswer(answer, messagesById(records)), true);
+  assert.ok(!chatRecords(records).some((record) => record.id === answer.id), 'the answer is not in the Chat');
+  const view = mailboxView(records);
+  assert.equal(view.needsYou[0].answer.id, answer.id);
+  const prompt = ownerPromptText(answer, item);
+  assert.match(prompt, /^\[owner\] Answer to m-[^ ]+ \(Review: Checkout flow redesign \(v1\)\): Start with the dark cart\./);
+  assert.match(prompt, /> 31 items in 4 sections\./);
+});
+
+test('a new review item closes the older one in the same store write', async (t) => {
+  const { openMessageStore } = await import('../src/message-store.js');
+  const dir = freshDir(t);
+  postReview(reviewFields(), { dir, now });
+  const store = openMessageStore({ dir });
+  const openAt = [];
+  const stop = store.onChange((event) => {
+    if (event.type === 'append' && event.record.kind === 'review') openAt.push(readMessages({ dir }).filter((record) => record.kind === 'review' && !record.closedAt).length);
+  });
+  t.after(stop);
+  postReview(reviewFields({ version: 2 }), { dir, now: now + 1000 });
+  assert.deepEqual(openAt, [1], 'when the new item appears, the older item is already closed');
+});
+
+test('an Owner answer to a review item never shows in the Chat, and reading the item does not close it', (t) => {
+  const dir = freshDir(t);
+  const item = postReview(reviewFields(), { dir, now });
+  const answer = appendMessage({ ...owner('alpha', 'Start with the dark cart.'), replyTo: item.id }, { dir, now: now + 1000 });
+  const records = readMessages({ dir });
+  assert.ok(!chatThreadPage(records, 'alpha').some((record) => record.id === answer.id), 'the thread page omits the answer');
+  const summary = chatSummaries(records).find((chat) => chat.thread === 'alpha');
+  assert.ok(summary.last.id !== answer.id, 'the Chat list does not use the answer as its last message');
+  assert.equal(summary.count, 1);
+  assert.equal(mailboxView(records).needsYou[0].answer.id, answer.id, 'the answer belongs to the Mailbox item');
+
+  assert.deepEqual(markMailboxRead({ ids: [item.id] }, { dir, now: now + 2000 }), { ok: true, updated: 1 });
+  const read = readMessages({ dir }).find((record) => record.id === item.id);
+  assert.ok(read.readAt, 'reading marks the item read');
+  assert.ok(!read.closedAt, 'reading does not close a decide item');
+  assert.equal(mailboxView(readMessages({ dir })).needsYou.length, 1);
+  assert.equal(markMailboxRead({ ids: [item.id], close: true }, { dir, now: now + 3000 }).status, 409, 'Mark read cannot close a review item');
 });

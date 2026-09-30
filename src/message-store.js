@@ -65,7 +65,7 @@ function rewrite(dir, records) {
   fs.renameSync(tmp, file);
 }
 
-function newId(now) {
+export function newId(now) {
   return `m-${now.toString(36)}-${randomBytes(4).toString('hex')}`;
 }
 
