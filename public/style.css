@@ -510,7 +510,7 @@ button:hover { filter: brightness(1.08); } button:disabled { opacity: .5; cursor
   .top { gap: 8px 12px; }
   #primary-nav a { padding: 5px 8px; }
 }
-@media (min-width: 761px) and (max-width: 1240px) {
+@media (min-width: 761px) and (max-width: 1360px) {
   #primary-nav { gap: 1px; }
   #primary-nav a { padding: 5px 6px; font-size: 12px; }
 }
@@ -1062,13 +1062,12 @@ body.dep-full-open { overflow: hidden; }
 .mail-message.from-owner { margin-left: clamp(0px, 8%, 55px); border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
 .mail-message-head { display: grid; gap: 3px; min-width: 0; }
 .mail-message-head strong { color: var(--muted); font-size: 11.5px; font-weight: 600; overflow-wrap: anywhere; }
-.mail-message-head > span { font-size: 13px; font-weight: 650; overflow-wrap: anywhere; }
 .mail-message .msg-text, .mail-message .msg-report { margin: 0; overflow-wrap: anywhere; }
 .mail-message-state { margin: 0; color: var(--muted); font-size: 11.5px; overflow-wrap: anywhere; }
 .mail-message .mail-actions { border-top: 1px solid var(--line); padding-top: 9px; }
 .mail-reply { display: grid; gap: 6px; flex: 0 0 auto; padding: 10px 12px 12px; border-top: 1px solid var(--line); background: var(--panel); }
 .mail-reply label, .mail-compose label { color: var(--muted); font-size: 12px; }
-.mail-reply textarea, .mail-compose textarea, .mail-compose select { width: 100%; min-width: 0; padding: 9px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--text); font: inherit; }
+.mail-reply textarea, .mail-actions textarea, .mail-compose textarea, .mail-compose select { width: 100%; min-width: 0; padding: 9px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--text); font: inherit; }
 .mail-reply textarea, .mail-compose textarea { resize: vertical; }
 .mail-reply > div, .mail-compose-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .mail-reply button, .mail-compose-actions button { min-height: 44px; padding: 8px 18px; }
@@ -1132,7 +1131,7 @@ body.dep-full-open { overflow: hidden; }
 .chat-new-pill { align-self: center; flex: 0 0 auto; margin: 0 0 8px; min-height: 32px; padding: 4px 14px; border-radius: 99px; border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line)); background: color-mix(in srgb, var(--accent) 18%, var(--panel)); color: var(--text); font: 650 12px var(--sans); }
 .chat-composer { display: grid; gap: 3px; flex: 0 0 auto; padding: 6px 10px calc(6px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: var(--panel); }
 .chat-composer-row { display: flex; align-items: flex-end; gap: 6px; }
-.chat-composer textarea { flex: 1 1 auto; min-width: 0; min-height: 34px; max-height: calc(1.45em * 6); padding: 7px 10px; border: 1px solid var(--line); border-radius: 17px; background: var(--bg); color: var(--text); font: 13.5px var(--sans); line-height: 1.45; resize: none; overflow-y: hidden; }
+.chat-composer textarea { flex: 1 1 auto; min-width: 0; min-height: 34px; max-height: calc(1.4em * 6); padding: 7px 10px; border: 1px solid var(--line); border-radius: 17px; background: var(--bg); color: var(--text); font: 15px/1.4 var(--sans); resize: none; overflow-y: hidden; }
 /* The scroll bar of the composer shows only when the text is longer than 6 lines. */
 .chat-composer textarea.chat-overflow { overflow-y: auto; scrollbar-width: thin; }
 /* A round send button of 36 px. The touch area is 44 px on a phone. */
@@ -1492,7 +1491,7 @@ body.app-view textarea, body.app-view input { caret-color: var(--accent); }
 .mail-notice[hidden] { display: none; }
 .mail-list-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 .mail-list { margin: 0; padding: 0; list-style: none; }
-.mail-bulk { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 4px 16px; border-bottom: 1px solid var(--line); }
+.mail-bulk { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 4px 16px 4px 22px; border-bottom: 1px solid var(--line); }
 .mail-bulk label { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; cursor: pointer; }
 .mail-bulk input, .mail-select input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
 :root .mail-bulk button { padding: 6px 12px; border-color: var(--line); background: transparent; color: var(--text); font-weight: 600; }
@@ -1578,7 +1577,7 @@ body.app-view textarea, body.app-view input { caret-color: var(--accent); }
 .chat-bubbles > .chat-bubble.from-owner:has(+ .chat-bubble.from-owner:not(.run-start)) { border-bottom-right-radius: 5px; }
 .chat-bubble-text.md { font-size: 14.5px; line-height: 1.4; }
 .chat-composer { gap: 2px; padding: 6px 10px 8px; }
-.chat-composer textarea { min-height: 40px; padding: 9px 14px; border-radius: 20px; background: var(--panel-2); font-size: 15px; line-height: 1.4; }
+.chat-composer textarea { min-height: 40px; padding: 9px 14px; border-radius: 20px; background: var(--panel-2); }
 .chat-hint { padding-left: 14px; }
 
 /* Phone app view. The Mailbox and the Chat fill the visual viewport. The page header, the menu bar, and the page padding do not show. */
@@ -1603,7 +1602,7 @@ body.app-view textarea, body.app-view input { caret-color: var(--accent); }
   .mailbox-layout.conversation-open .mail-list-pane { display: none; }
   .mailbox-layout.conversation-open .mail-conversation-pane { animation: app-slide-in 200ms cubic-bezier(0.22, 1, 0.36, 1); }
   .mail-list-scroll { padding-bottom: calc(84px + env(safe-area-inset-bottom)); }
-  .mail-bulk { padding: 0 max(12px, env(safe-area-inset-right)) 0 max(4px, env(safe-area-inset-left)); }
+  .mail-bulk { padding: 0 max(12px, env(safe-area-inset-right)) 0 max(22px, env(safe-area-inset-left)); }
   :root button.mail-entry { padding: 9px max(14px, env(safe-area-inset-right)) 9px max(14px, env(safe-area-inset-left)); }
   .mail-select + .mail-entry { padding-left: 8px; }
   :root button.mail-fab { position: absolute; right: max(16px, env(safe-area-inset-right)); bottom: calc(16px + env(safe-area-inset-bottom)); z-index: 2; display: inline-flex; align-items: center; gap: 10px; height: 52px; padding: 0 20px 0 16px; border: 0; border-radius: 16px; background: color-mix(in srgb, var(--accent) 14%, var(--panel)); color: var(--text); font: 650 14px var(--sans); box-shadow: 0 4px 14px rgb(0 0 0 / 0.14); }
