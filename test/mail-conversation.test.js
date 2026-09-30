@@ -28,7 +28,7 @@ test('the Reply form hides while the last agent message is an open item with its
 
 // The first line of a reply is its headline. The body shows the same line, so the header shows only the sender and the time.
 test('a conversation message does not repeat its first line above the body', () => {
-  const fn = body('mailConversationMessage(s, record)');
+  const fn = body('mailConversationMessage(s, record, barItem)');
   assert.doesNotMatch(fn, /mailHeadline\(record\)/);
   assert.doesNotMatch(fn, /<span>\$\{esc\(headline\)\}<\/span>/);
 });

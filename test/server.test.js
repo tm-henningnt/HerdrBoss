@@ -2145,7 +2145,7 @@ test('the Chat page is compact: no page heading, slim bubbles, a round send butt
   const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
   // No big heading above the conversation. The header holds the avatar and the chat name.
   assert.doesNotMatch(app, /<h1>Chat<\/h1>/);
-  assert.match(app, /\$\{avatarSlot\(chat\.thread, \{ title: avatarTitle\(chat\.thread, title\), size: 28 \}\)\}<h2>\$\{esc\(title\)\}<\/h2>/);
+  assert.match(app, /\$\{avatarSlot\(chat\.thread, \{ title: avatarTitle\(chat\.thread, title\), size: 28 \}\)\}<\$\{titleTag\}>\$\{esc\(title\)\}<\/\$\{titleTag\}>/, 'the chat name is the h1 on a phone and an h2 on a desktop');
   // A slim bubble. It has no card border and the time is 11 px.
   assert.match(css, /\.chat-bubble \{ display: grid; grid-template-columns: minmax\(0, 1fr\); gap: 1px; max-width: 75%; padding: 6px 8px;/);
   assert.doesNotMatch(css, /\.chat-bubble \{[^}]*border: 1px solid/);

@@ -1009,7 +1009,7 @@ The page asks for a confirmation before each send or dismissal. The answer is an
 
 Select **New message** to start a thread with the Boss or a project that has an `orch` pane. Type a message and confirm the send. The page applies the same send limit and safety gates as other Owner messages. It opens the new thread in **Sent**. Use the reply box at the bottom of a conversation to reply to its last open agent message. When that message is an open answer, approve, or decide item, the item form replaces the reply box. The page asks you to confirm each reply.
 
-Select one or more checkboxes under **Needs you**, then select **Dismiss selected**. A check box selects all items of its conversation. Select **Dismiss** on one item to dismiss it alone. Dismissal sets `closedAt`, `readAt`, and `dismissed: true`. It sends no message. You cannot dismiss an item that is already closed or does not need action.
+Select one or more checkboxes under **Needs you**, then select **Dismiss selected**. On a phone, select **Dismiss N** in the selection bar. A check box selects all items of its conversation. Select **Dismiss** on one item to dismiss it alone. Dismissal sets `closedAt`, `readAt`, and `dismissed: true`. It sends no message. You cannot dismiss an item that is already closed or does not need action.
 
 The choices are the list items under a Markdown heading with the text `Choices`, for example `## Choices`. The list ends at the first line that is not a list item. The page shows at most 10 choices.
 
@@ -1078,7 +1078,14 @@ On a screen up to 760 px wide, the Mailbox and the Chat are app views. The page 
 - The top bar is 52 px high, plus the top safe-area inset. It holds the menu button and the page title with its count. In a conversation it holds the Back arrow, the avatar, and the name.
 - The menu button opens a drawer. The drawer holds the Mailbox folders on the Mailbox, the links to all pages with the Needs-you and Chat counts, and **Help**. A dot on the menu button shows unread items on the other page.
 - The Mailbox list has a floating **New** button at the bottom right.
-- When the phone keyboard opens, the visual viewport gets smaller. The page sets `--app-h` from `visualViewport.height`, so the composer and the reply field stay above the keyboard. The viewport meta has `interactive-widget=resizes-content` for Chrome on Android.
+- In a Mailbox conversation, the actions of the open item sit in a bar at the bottom edge, above the bottom safe-area inset. The bar holds the item actions from [Answer an item](#answer-an-item):
+  - An approval: **Approve**, **Reject**, a note button, and a **Dismiss** button. The note button opens the note field above the buttons.
+  - A decision with choices: one button for each choice, in a row that scrolls sideways, then a note button and **Dismiss**. The note button opens a field for another answer or a note, with **Send**.
+  - An answer, or a decision without choices: **Dismiss**, the answer field, and **Send** in one row.
+- The item that the bar holds is the open item of the last agent message. An older open item keeps its form in its message. A conversation without an open item shows the reply field and **Send** in one row at the same place.
+- In **Needs you**, select one or more check boxes to start the selection. A selection bar then replaces the **New** button at the bottom edge. It shows the count, **Clear the selection**, **All**, and **Dismiss N**.
+- On a phone the conversation replaces the list. Its title in the top bar is the page heading (`h1`). On a desktop the list title is the `h1` and the conversation title is an `h2`.
+- When the phone keyboard opens, the visual viewport gets smaller. The page sets `--app-h` from `visualViewport.height`, so the composer, the reply field, and the action bar stay above the keyboard. The viewport meta has `interactive-widget=resizes-content` for Chrome on Android.
 - Buttons and fields keep a touch target of at least 44 px and a font size of 16 px.
 
 A check can force a theme with `?theme=light` or `?theme=dark` in the page address.

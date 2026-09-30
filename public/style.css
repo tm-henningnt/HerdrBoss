@@ -1529,6 +1529,25 @@ body.app-view textarea, body.app-view input { caret-color: var(--accent); }
 .mail-panel-head .avatar { width: 32px; height: 32px; }
 .mail-conversation-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; }
 .mail-compose form { overflow-y: auto; }
+/* Phone action bar and selection bar. They show only at phone width, at the bottom edge of the thread or the list. */
+.mail-action-bar { display: grid; gap: 6px; min-width: 0; }
+.mail-bar-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.mail-bar-row > button:not(.app-icon-button):not(.mail-bar-send) { flex: 1 1 0; min-width: 0; min-height: 44px; padding: 8px 14px; border-radius: 22px; font-size: 14px; }
+:root .mail-bar-row > button.mail-decline { background: transparent; }
+.mail-bar-choices { display: flex; flex: 1 1 auto; gap: 6px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.mail-bar-choices::-webkit-scrollbar { display: none; }
+:root .mail-bar-choices button { flex: 0 0 auto; min-height: 44px; padding: 8px 16px; border: 1px solid var(--line); border-radius: 22px; background: var(--panel-2); color: var(--text); font-size: 14px; }
+.mail-bar-compose { align-items: flex-end; }
+.mail-bar-compose textarea { flex: 1 1 auto; min-width: 0; min-height: 44px; max-height: calc(1.4em * 6); padding: 10px 14px; border: 1px solid var(--line); border-radius: 22px; background: var(--panel-2); color: var(--text); font: 16px/1.4 var(--sans); resize: none; overflow-y: hidden; }
+.mail-bar-compose textarea.chat-overflow { overflow-y: auto; }
+:root button.mail-bar-send { flex: 0 0 auto; display: grid; place-items: center; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 50%; background: var(--accent); color: var(--bg); }
+:root button.mail-bar-icon { color: var(--muted); }
+.mail-action-bar .mail-status { margin: 0; font-size: 12.5px; }
+.mail-action-bar .mail-status:empty { display: none; }
+.mail-select-count { flex: 1 1 auto; min-width: 0; color: var(--text); font-size: 15px; font-weight: 650; }
+.mail-bar-all { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; min-height: 44px; padding: 0 10px; color: var(--muted); font-size: 14px; cursor: pointer; }
+.mail-bar-all input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
+.mail-select-bar .mail-bar-row > .mail-bar-primary { flex: 0 0 auto; }
 /* A wide list without an open thread shows one 44 px line for each conversation. */
 @media (min-width: 1100px) {
   .mailbox-layout:not(.conversation-open) :root button.mail-entry, .mailbox-layout:not(.conversation-open) .mail-entry { grid-template-columns: 28px minmax(140px, 200px) minmax(0, 1fr) auto; grid-template-areas: "avatar one two side"; min-height: 44px; padding-block: 6px; }
@@ -1606,7 +1625,16 @@ body.app-view textarea, body.app-view input { caret-color: var(--accent); }
   :root button.mail-entry { padding: 9px max(14px, env(safe-area-inset-right)) 9px max(14px, env(safe-area-inset-left)); }
   .mail-select + .mail-entry { padding-left: 8px; }
   :root button.mail-fab { position: absolute; right: max(16px, env(safe-area-inset-right)); bottom: calc(16px + env(safe-area-inset-bottom)); z-index: 2; display: inline-flex; align-items: center; gap: 10px; height: 52px; padding: 0 20px 0 16px; border: 0; border-radius: 16px; background: color-mix(in srgb, var(--accent) 14%, var(--panel)); color: var(--text); font: 650 14px var(--sans); box-shadow: 0 4px 14px rgb(0 0 0 / 0.14); }
-  .mail-reply { padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
+  /* On a phone the Reply form is the same pill composer as the action bar: one field and Send in one row. */
+  .mail-reply { grid-template-columns: minmax(0, 1fr) auto; align-items: end; padding: 6px max(8px, env(safe-area-inset-right)) calc(6px + env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left)); }
+  .mail-reply label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .mail-reply textarea { height: 44px; min-height: 44px; max-height: calc(1.4em * 6); padding: 10px 14px; border-radius: 22px; background: var(--panel-2); font: 16px/1.4 var(--sans); resize: none; overflow-y: hidden; }
+  .mail-reply textarea.chat-overflow { overflow-y: auto; }
+  .mail-reply button { border-radius: 22px; }
+  .mail-reply > .mail-status { grid-column: 1 / -1; margin: 0; }
+  .mail-reply > .mail-status:empty { display: none; }
+  .mail-action-bar { flex: 0 0 auto; padding: 6px max(8px, env(safe-area-inset-right)) calc(6px + env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left)); border-top: 1px solid var(--line); background: var(--panel); }
+  .mail-list-pane.selecting .mail-list-scroll { padding-bottom: 0; }
   .mail-reply .sub { display: none; }
   .chat-layout { grid-template-columns: minmax(0, 1fr); }
   .chat-list-pane { border-right: 0; }
