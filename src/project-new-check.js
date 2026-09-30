@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { DATA_DIR } from './config.js';
+import { assertTempDataDir } from './data-dir-guard.js';
 import { claudeLines, readProjectRepos, stripRemoteCredentials, syncCodex } from './harness.js';
 import { HOOK_COMMAND, KIT_FILE, checkAgentsFile, installedKitRevision, kitRevision } from './kit/agents-check.js';
 import { KIT_ROOT } from './kit/config.js';
@@ -22,16 +23,23 @@ function readJson(file) {
   try { return { value: JSON.parse(fs.readFileSync(file, 'utf8')) }; } catch (error) { return { error: error.code === 'ENOENT' ? 'missing' : 'not valid JSON' }; }
 }
 
-// The home folder of the harness step. The default data dir belongs to this account.
-// Another data dir belongs to a test or a preview: it needs an explicit home, or the step does not run.
+const SKIP_DETAIL = 'skipped: not the live data dir';
+
+// The step writes under the account home folder only for the live data dir: the inverse of assertTempDataDir.
+// A temporary data dir belongs to a test or a preview, and its step never edits a file under a home folder.
+function isLiveDataDir(dataDir) {
+  try { assertTempDataDir(dataDir); return false; } catch { return true; }
+}
+
+// The home folder of the harness step. `context.home` replaces the account home, for tests that inject a live data dir.
 function harnessHome(context) {
-  if (context.home) return path.resolve(context.home);
-  return samePath(context.dataDir, DATA_DIR) ? os.homedir() : null;
+  if (!isLiveDataDir(context.dataDir)) return null;
+  return context.home ? path.resolve(context.home) : os.homedir();
 }
 
 // The text of the dry run.
 export function describeHarness(_inputs, context) {
-  if (!harnessHome(context)) return 'skipped: no home folder for this data dir';
+  if (!harnessHome(context)) return SKIP_DETAIL;
   return 'run harness sync for the Codex writable roots with a backup, print the Claude autoMode lines without editing ~/.claude/settings.json, and reserve the project browser';
 }
 
@@ -54,7 +62,11 @@ export function reserveBrowserCommand(slug, { dataDir, home }) {
 // A Codex root or a browser port that cannot be set is a warning. The Claude lines are for the Owner: nothing edits ~/.claude/settings.json.
 export function harnessStep(inputs, context) {
   const home = harnessHome(context);
-  if (!home) return { status: 'skipped', detail: 'skipped: no home folder for this data dir' };
+  if (!home) {
+    // The Claude lines only read the settings file, so the skipped step still prints them.
+    const claude = claudeLines({ home: context.home ? path.resolve(context.home) : os.homedir(), dataDir: context.dataDir });
+    return { status: 'skipped', detail: SKIP_DETAIL, lines: claude[0] === CLAUDE_CLEAN ? [] : claude };
+  }
   const lines = [];
   const parts = [];
   const codex = syncCodex({ home, dataDir: context.dataDir });

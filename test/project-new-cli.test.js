@@ -113,7 +113,7 @@ test('a dry run prints each step, the path, and the next action, and changes not
     assert.match(text, /folder\s+would run mkdir -p/);
     assert.match(text, /files\s+would write AGENTS\.md/);
     assert.match(text, /remote\s+skipped: --remote none/);
-    assert.match(text, /harness\s+skipped: no home folder/);
+    assert.match(text, /harness\s+skipped: not the live data dir/);
     assert.match(text, /check\s+not built yet/);
     assert.match(text, new RegExp(`Path: ${path.join(f.group, 'demo').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
     assert.match(text, /Next: /);

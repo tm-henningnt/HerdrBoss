@@ -116,7 +116,7 @@ The step `harness` does three things for the new project:
 
 A Codex root or a browser port that cannot be set is a warning in the step detail. The step does not fail. A second run changes nothing. A dry run changes and reserves nothing.
 
-The step runs only with the default data dir, or with an explicit `home` option of `runProjectNew`. With another data dir and no `home`, the step prints `skipped: no home folder for this data dir`.
+The step changes a file under the home folder only for the live data dir. A temporary data dir is not the live data dir: the same test as `assertTempDataDir`, inverted. For a temporary data dir, the step does not change `~/.codex/config.toml`, does not write a backup, and does not reserve a browser. It prints `skipped: not the live data dir` and the Claude autoMode lines. The other steps write only inside the project folder or the data dir, so they need no such rule. The browser command of the step uses the same data dir as the flow.
 
 ### Command project check
 
@@ -172,7 +172,7 @@ The module `src/project-new.js` exports `runProjectNew(options)`. The command ca
 | `org` | The organization for `gh`. It must match `[A-Za-z0-9][A-Za-z0-9-]{0,38}`. `runProjectNew` refuses another value before any change. |
 | `start` | Run the step `workspace`. Without it, the step prints `skipped: no --start` and creates nothing. |
 | `kind` | `claude` or `codex`. Overrides the orchestrator ladder. |
-| `home` | The home folder for the step `harness`. The default is the account home, and only with the default data dir. |
+| `home` | The home folder for the step `harness`. The default is the account home. The step uses it only for the live data dir. |
 
 The module `src/project-new-check.js` exports `checkProject(slug, options)` and `formatCheck(check)`. `runProjectStep(name, options)` in `src/project-new.js` runs one step for `--fix`.
 | `herdr` | The Herdr runner that the step `workspace` uses. The default is `createHerdrRunner()`. Tests pass a fake. |

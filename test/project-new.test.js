@@ -116,7 +116,7 @@ test('builds the folder and files, keeps later steps unbuilt, and writes a 0600 
     assert.equal(status(result, 'kit'), 'done');
     assert.equal(status(result, 'commit'), 'done');
     assert.equal(status(result, 'harness'), 'skipped');
-    assert.match(result.steps.find((s) => s.name === 'harness').detail, /no home folder/);
+    assert.match(result.steps.find((s) => s.name === 'harness').detail, /not the live data dir/);
     assert.equal(status(result, 'check'), 'not-built');
     assert.equal(status(result, 'remote'), 'skipped');
     assert.match(result.steps.find((s) => s.name === 'remote').detail, /--remote none/);
