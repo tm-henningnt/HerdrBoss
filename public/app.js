@@ -3,6 +3,7 @@ import { FLOW, FLOW_LABEL, DONE_LIMIT, taskMap, taskState, blockReasons, boardCo
 import { patchHtml } from './keyed.js';
 import { SETTING_HELP, settingPopupHtml, settingsGuideHtml } from './setting-help.js';
 import { groupMailRows, inboxSections, listTime, mailRowHtml } from './mail-rows.js';
+import { chatJumpHtml, chatJumpButtonHtml, chatAtBottom, chatJumpScroll } from './chat-jump.js';
 import { mailBarItem, mailActionBarHtml, mailSelectionBarHtml } from './mail-bar.js';
 import { APP_VIEW_ROUTES, appViewport } from './app-view.js';
 import { stackedBars, lineChart, stripBars, heatGrid, outcomeBars, legendHtml, foldSeries, spendSeries, claudeSpend, quotaSeries, denialGrid, firstTimeRate, activityFilter, activityChoices, eventLevel, dayLabel, usd, minutes, compact, ACTIVITY_RANGES, ACTIVITY_LEVELS, SERIES_CLASSES } from './analytics.js';
@@ -2523,6 +2524,7 @@ const APP_ICON = {
   chat: '<path d="M4 5.5h16v11H9l-5 4v-15Z"/>',
   help: '<circle cx="12" cy="12" r="8.5"/><path d="M9.6 9.5a2.5 2.5 0 1 1 3.4 2.3c-.6.3-1 .8-1 1.5v.4m0 2.6v.01"/>',
   close: '<path d="M6 6l12 12M18 6 6 18"/>',
+  down: '<path d="M12 5v14M6 13l6 6 6-6"/>',
   archive: '<path d="M3.5 5h17v4h-17z"/><path d="M5 9v10h14V9M10 13h4"/>',
 };
 const appIcon = (name) => `<svg class="app-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${APP_ICON[name] || ''}</svg>`;
@@ -2955,7 +2957,7 @@ const CHAT_MAX_LINES = 6;
 // The actions that ask the Owner for something. A decide without a choice list is not a real choice.
 const CHAT_CHOICES_MAX = 10;
 const CHAT_CHOICE_TEXT_MAX = 200;
-const chat = { list: [], loaded: false, loading: false, error: '', status: '', thread: null, title: '', messages: [], more: false, moreLoading: false, loadingThread: false, draft: '', pending: [], unseen: 0, busy: false, scroll: null, keepScroll: null, drafts: {}, results: {}, cardStatus: {}, focus: null, backThread: null };
+const chat = { list: [], loaded: false, loading: false, error: '', status: '', thread: null, title: '', messages: [], more: false, moreLoading: false, loadingThread: false, draft: '', pending: [], unseen: 0, jumping: false, busy: false, scroll: null, keepScroll: null, drafts: {}, results: {}, cardStatus: {}, focus: null, backThread: null };
 
 const chatThreadFromLocation = () => new URLSearchParams(location.search).get('thread');
 const chatUrl = (thread) => (thread ? `/chat?thread=${encodeURIComponent(thread)}` : '/chat');
@@ -3107,8 +3109,8 @@ function chatConversationView() {
       ? `<ol class="chat-bubbles" role="log" aria-live="polite" aria-label="Messages in the ${esc(title)} chat">${[...chat.messages, ...chat.pending].map((record, index, list) => chatBubble(record, index === 0 || list[index - 1].from !== record.from)).join('')}</ol>`
       : '<p class="chat-empty">No messages in this chat.</p>';
   const older = chat.more ? `<p class="chat-more">${chat.moreLoading ? 'Loading older messages…' : 'Scroll up for older messages.'}</p>` : '';
-  const pill = chat.unseen ? `<button type="button" class="chat-new-pill" data-chat-new>${chat.unseen} new message${chat.unseen === 1 ? '' : 's'}</button>` : '';
-  return `<div class="chat-panel"><div class="app-bar chat-panel-head"><button type="button" class="app-icon-button chat-back" data-chat-back aria-label="Back to chats">${appIcon('back')}</button>${avatarSlot(chat.thread, { title: avatarTitle(chat.thread, title), size: 28 })}<${titleTag}>${esc(title)}</${titleTag}><a class="app-icon-button chat-mail-link" href="/mailbox?folder=inbox" aria-label="Open the Mailbox">${appIcon('mail')}</a></div><div class="chat-scroll" data-key="chat-scroll:${esc(chat.thread)}" data-chat-scroll tabindex="0">${older}${bubbles}</div>${pill}<form class="chat-composer" data-key="chat-composer" data-chat-compose><label class="visually-hidden" for="chat-draft">Message to ${esc(title)}</label><div class="chat-composer-row"><textarea id="chat-draft" data-chat-draft maxlength="2000" rows="1" placeholder="Message…">${esc(chat.draft)}</textarea><button type="submit" class="chat-send" aria-label="Send"${chat.busy ? ' disabled' : ''}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 20 21 12 3.5 4v6l12 2-12 2v6Z"/></svg></button></div><p class="chat-hint">Enter sends · Shift+Enter makes a new line</p></form></div>`;
+  const jump = chatJumpHtml({ visible: chat.scroll !== null, unread: chat.unseen, icon: appIcon });
+  return `<div class="chat-panel"><div class="app-bar chat-panel-head"><button type="button" class="app-icon-button chat-back" data-chat-back aria-label="Back to chats">${appIcon('back')}</button>${avatarSlot(chat.thread, { title: avatarTitle(chat.thread, title), size: 28 })}<${titleTag}>${esc(title)}</${titleTag}><a class="app-icon-button chat-mail-link" href="/mailbox?folder=inbox" aria-label="Open the Mailbox">${appIcon('mail')}</a></div><div class="chat-scroll" data-key="chat-scroll:${esc(chat.thread)}" data-chat-scroll tabindex="0">${older}${bubbles}</div>${jump}<form class="chat-composer" data-key="chat-composer" data-chat-compose><label class="visually-hidden" for="chat-draft">Message to ${esc(title)}</label><div class="chat-composer-row"><textarea id="chat-draft" data-chat-draft maxlength="2000" rows="1" placeholder="Message…">${esc(chat.draft)}</textarea><button type="submit" class="chat-send" aria-label="Send"${chat.busy ? ' disabled' : ''}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 20 21 12 3.5 4v6l12 2-12 2v6Z"/></svg></button></div><p class="chat-hint">Enter sends · Shift+Enter makes a new line</p></form></div>`;
 }
 
 // The same rule as parseChoices in src/messages.js: the Markdown list items under a Choices heading.
@@ -3312,6 +3314,8 @@ function chatRestoreView(view) {
       chat.keepScroll = null;
     } else scroller.scrollTop = chat.scroll === null ? scroller.scrollHeight : chat.scroll;
     scroller.addEventListener('scroll', chatScrolled, { passive: true });
+    scroller.addEventListener('wheel', chatJumpCancel, { passive: true });
+    scroller.addEventListener('touchmove', chatJumpCancel, { passive: true });
   }
   const field = $app.querySelector('[data-chat-draft]');
   // A keyed patch keeps the focused field with its text and caret. A replaced field gets the draft and the caret back.
@@ -3328,12 +3332,32 @@ function chatRestoreView(view) {
   chat.focus = null;
 }
 
+// The button follows the scroll position and the unread count without a full render.
+function chatJumpRefresh() {
+  const anchor = $app.querySelector('[data-key="chat-jump-anchor"]');
+  if (anchor) patchHtml(anchor, chatJumpButtonHtml({ visible: chat.scroll !== null, unread: chat.unseen, icon: appIcon }));
+}
+
+// A scroll by the Owner ends a jump that runs.
+function chatJumpCancel() { chat.jumping = false; }
+
+// The button scrolls to the newest message. A smooth scroll keeps chat.scroll empty, so a keyed update does not stop it.
+function chatJumpToNewest() {
+  const scroller = $app.querySelector('[data-chat-scroll]');
+  chat.scroll = null;
+  chat.unseen = 0;
+  if (scroller && !chatAtBottom(scroller)) chat.jumping = true;
+  chatJumpRefresh();
+  if (scroller) chatJumpScroll(scroller, window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+}
+
 // A scroll to the top reads an older page. The reading position must stay on the same message.
 function chatScrolled() {
   const scroller = $app.querySelector('[data-chat-scroll]');
   if (!scroller) return;
-  if (scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 48) { chat.scroll = null; chat.unseen = 0; }
-  else chat.scroll = scroller.scrollTop;
+  if (chatAtBottom(scroller)) { chat.scroll = null; chat.unseen = 0; chat.jumping = false; }
+  else if (!chat.jumping) chat.scroll = scroller.scrollTop;
+  chatJumpRefresh();
   if (scroller.scrollTop < 32 && chat.more && !chat.moreLoading) loadChatOlder();
 }
 
@@ -3423,7 +3447,7 @@ function onChatMessage(event) {
   if (record.thread === chat.thread) {
     const isNew = event.type === 'append' && !chat.messages.some((message) => message.id === record.id);
     chatUpsertRecord(record);
-    // The page scrolls down only when the Owner reads the newest message. Otherwise it shows a pill.
+    // The page scrolls down only when the Owner reads the newest message. Otherwise it shows the jump button.
     if (isNew && chat.scroll !== null) chat.unseen += 1;
   }
   render();
@@ -3433,7 +3457,7 @@ document.addEventListener('click', (e) => {
   const open = e.target.closest?.('[data-chat-open]');
   if (open) { openChat(open.dataset.chatOpen); return; }
   if (e.target.closest?.('[data-chat-back]')) { closeChat(); return; }
-  if (e.target.closest?.('[data-chat-new]')) { chat.scroll = null; chat.unseen = 0; render(); return; }
+  if (e.target.closest?.('[data-chat-jump]')) { chatJumpToNewest(); return; }
   const option = e.target.closest?.('[data-chat-option]');
   if (option) {
     const item = chat.messages.find((record) => record.id === option.dataset.chatOption);
@@ -4998,7 +5022,7 @@ const HELP = {
     <h3>List</h3><p>Each row shows the title, the last message on one line, the time, and the unread count. A report shows as <b>Report: TITLE</b>. The newest chat comes first. The menu badge shows the total unread count. The list follows the message stream. It never reloads the page. The automatic refresh keeps the list and conversation scroll. It waits until 3 seconds after you last type or scroll.</p>
     <h3>Conversation</h3><p>Select a row to open the chat. Your messages sit on the right, and the agent messages sit on the left. Each bubble shows the text as formatted Markdown and the time. A wide table or code block scrolls sideways inside the bubble. Raw HTML shows as text. Your bubble also shows the delivery state: <b>queued</b>, <b>delivered</b>, or <b>failed</b> with the reason. Opening a chat marks the messages to you as read.</p>
     <p>Scroll up to read older messages. The page asks for the page before the oldest message and keeps your reading position. It stops at the oldest message in the store. The store keeps messages for 30 days.</p>
-    <p>A new message goes at the bottom. The page scrolls down only when you already read the newest message. Otherwise it shows a <b>new messages</b> pill. Select the pill to go to the newest message.</p>
+    <p>A new message goes at the bottom. The page scrolls down only when you already read the newest message. Otherwise the page keeps your position and shows a round arrow-down button at the bottom right of the message list. The badge on the button counts the new messages. Select the button to scroll to the newest message. The button hides at the bottom.</p>
     <h3>Composer</h3><p>Select the round send button or press Enter to send the message. Select Shift and press Enter to make a new line. The text area grows with the text, up to 6 lines. A message holds at most 2000 characters. The service accepts at most 10 messages a minute.</p>
     <p>The page shows your message as <b>queued</b> at once. The stored record replaces it when the service stores it. A refused send marks the bubble <b>failed</b> and shows <b>Retry</b>. Select <b>Retry</b> to send the same text again.</p>
     <h3>Action cards</h3><p>A message from an agent that asks for a decision shows as a normal bubble with one small button per option. The bubble holds a short question line. The page drops the choice list from the text, because the buttons hold the choices. A message with no real choice shows as a plain bubble with the <b>Open in Mailbox</b> link.</p>
