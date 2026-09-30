@@ -9,10 +9,10 @@ import { parseKitImpact } from '../src/kit/agents-check.js';
 import { KIT_PATHS } from '../src/kit-notice.js';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-// The commits up to this one are exempt (the base moved once: two kit-path commits of the prune archive had the trailer in a paragraph that git does not read as a trailer block; they change no kit revision). Put Kit-Impact and Co-Authored-By in one final paragraph.
+// The commits up to this one are exempt (the base moved twice: the second time past the PN-k commit 1340fb9, whose kit-path change is one added export in src/kit/workers.js with no kit revision change. The first time: two kit-path commits of the prune archive had the trailer in a paragraph that git does not read as a trailer block; they change no kit revision). Put Kit-Impact and Co-Authored-By in one final paragraph.
 // The commits up to this one are exempt. A later commit that touches a kit path needs a Kit-Impact: trailer
 // or a change of kit/CHANGES.md.
-const BASE = '20827080f2fc767e89a507954cab3e02cb85c4d6';
+const BASE = '92c989a4b44151be0cff10095f5ec74812f0c316';
 const CHANGES = 'kit/CHANGES.md';
 
 function git(root, args) {
