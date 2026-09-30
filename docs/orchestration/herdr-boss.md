@@ -1,4 +1,4 @@
-<!-- herdr-boss kit v=87289067cf70 -->
+<!-- herdr-boss kit v=fdcccc24dac7 -->
 Herdr Boss writes this file. Do not edit it. Run herdr-boss kit install to update it.
 
 # Herdr Boss orchestration kit
@@ -69,6 +69,7 @@ These are the shared operating rules for the orchestrator of this project.
 - Do not message another project's orchestrator. The Boss relays messages between projects.
 - Decide and run your own pushes, deployments, and releases. Nobody approves them. Before each push, read the full diff for secrets, private local paths, and other-project client or tenant names. Push one change set at a time. Run `herdr-boss suite -- npm test` as a background command, then wait for it and read its exit code. The tool timeout is 600 seconds. The command takes the machine-wide `full-suite` lock. Never take the full-suite lock with a bare lock acquire for a suite. Push with `herdr-boss push <args>`. Use `herdr-boss push` for a push; it takes the lock when a pre-push hook exists. The full-suite lock serves waiters in order. Start your suite once, and wait; do not restart it to jump the queue. Exit code 75 means the lock was busy and no test ran. There is no load threshold. Send a deployment that spends money to the Owner through the Boss.
 - A pre-push hook may run `herdr-boss suite` or `herdr-boss suite --reuse`. When the suite runs under `herdr-boss push`, it reuses the push lock. A changed file always runs the suite again.
+- Use `herdr-boss gh issue create|comment|edit ... --body-file FILE` for issues. Use `herdr-boss gh label create|list|edit|sync` for labels, for example `herdr-boss gh label sync --preset triage`, and `herdr-boss gh milestone create|list` for milestones. These commands refuse a delete and a secret in a value. Do not use raw `gh` for them.
 - Record an Owner request typed into your pane as an Owner decision in `docs/orchestration/memory.md`.
 - A prompt that starts with `[owner]` is an Owner message from the dashboard. Reply with `herdr-boss say --reply-to <id> "<answer>"`. Record an Owner decision from it in `docs/orchestration/memory.md`.
 - Each `herdr-boss say` reply is an item in the Owner mailbox. Set `--action decide`, `--action approve`, or `--action answer` only when the Owner must act. Everything else is information; omit `--action`.
