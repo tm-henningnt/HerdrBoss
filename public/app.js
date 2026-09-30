@@ -2786,7 +2786,7 @@ async function mailMarkRead(item) {
 async function mailOpened(item) {
   if (item.readAt || mailReading.has(item.id)) return;
   mailReading.add(item.id);
-  try { await mailMarkRead(item); item.readAt = new Date().toISOString(); mailbox.updatesUnread = mailbox.updates.filter((record) => !record.readAt).length; }
+  try { await mailMarkRead(item); item.readAt = new Date().toISOString(); if (item.action === 'read') item.closedAt ||= item.readAt; mailbox.updatesUnread = mailbox.updates.filter((record) => !record.readAt).length; }
   catch (error) { mailbox.status[item.id] = error.message; }
   finally { mailReading.delete(item.id); }
   render();
@@ -4989,7 +4989,7 @@ const HELP = {
     <p>The data comes from the project's status file. When a section is missing, the orchestrator has not published those fields.</p>`],
   mailbox: ['Mailbox', `
     <p>Use the folders to read messages from the Boss and project orchestrators. The page groups each conversation by its project or the Boss and by its reply chain.</p>
-    <h3>Folders</h3><p><b>Needs you</b> is the default folder when an open item needs an answer, approval, or decision. <b>Inbox</b> holds all open items: Needs you first, then reports and updates. <b>Reports and updates</b> holds open information items with action <code>read</code> or no action. Opening an item marks it read. <b>Done</b> holds closed or dismissed items and relayed messages. <b>Sent</b>, below the divider, holds your messages with the queued, delivered, failed, or relayed state and the reply time.</p>
+    <h3>Folders</h3><p><b>Needs you</b> is the default folder when an open item needs an answer, approval, or decision. <b>Inbox</b> holds the open Needs-you items and the unread information items: Needs you first, then reports and updates. <b>Reports and updates</b> holds unread information items with action <code>read</code> or no action. Opening an information item marks it read and moves it to Done. <b>Done</b> holds read information items, closed or dismissed items, and relayed messages. <b>Sent</b>, below the divider, holds your messages with the queued, delivered, failed, or relayed state and the reply time.</p>
     <p>The folder stays in the page address. The page remembers your last folder. When Needs you has items, it opens that folder by default. When it is empty, the page says <b>Nothing needs you</b> and links to the Inbox.</p>
     <h3>Rows</h3><p>Each row is one conversation. It shows the project or the Boss, the message count, the action tag, the subject, a preview, and the time. An unread row is bold and has a dot. Select a row to open the conversation. Select one or more check boxes in Needs you to dismiss items without an answer. The page asks you to confirm. Dismissal sends nothing.</p>
     <h3>Conversations</h3><p>The conversation shows Owner and agent messages in time order. Each message and each report shows as formatted Markdown. Opening an item marks it read. On a desktop the conversation opens at the right of the list. On a phone it fills the screen. Select the Back arrow to return to the list.</p>

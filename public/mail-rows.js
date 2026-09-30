@@ -27,7 +27,7 @@ export function inboxSections(inbox) {
   const items = inbox || [];
   return [
     { key: 'needs-you', label: 'Needs you', rows: groupMailRows(items.filter((item) => NEEDS_YOU.has(item.action) && !item.closedAt)) },
-    { key: 'updates', label: 'Reports and updates', rows: groupMailRows(items.filter((item) => !NEEDS_YOU.has(item.action) || item.closedAt)) },
+    { key: 'updates', label: 'Reports and updates', rows: groupMailRows(items.filter((item) => !NEEDS_YOU.has(item.action) && !item.closedAt)) },
   ].filter((section) => section.rows.length);
 }
 

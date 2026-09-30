@@ -102,3 +102,11 @@ test('the list time is short: the clock today, Yesterday, a weekday, or the day 
   assert.equal(listTime(new Date(2026, 8, 20, 9, 0).toISOString(), now), '20 Sep');
   assert.equal(listTime('bad', now), '');
 });
+
+test('the Inbox sections hold a read information item as Done, not as an update', () => {
+  const sections = inboxSections([
+    item('m-unread', { at: at(3) }),
+    item('m-done', { at: at(2), readAt: at(1), closedAt: at(1) }),
+  ]);
+  assert.deepEqual(sections.map((section) => [section.key, section.rows.map((row) => row.item.id)]), [['updates', ['m-unread']]]);
+});

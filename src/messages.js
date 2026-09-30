@@ -84,6 +84,8 @@ export function ownerPromptText(record) {
 export const isMailboxItem = (record) => !!record && record.to === 'owner' && (record.kind === 'reply' || record.kind === 'report');
 export const mailboxAction = (record) => (ACTIONS.includes(record?.action) ? record.action : 'read');
 const needsOwnerAction = (record) => NEEDS_YOU_ACTIONS.has(mailboxAction(record));
+// An information item is done when it is closed, closed by the Boss, or read. Old read items have no closedAt.
+const isDone = (record) => !!record.closedAt || record.closedBy === 'boss' || (!needsOwnerAction(record) && !!record.readAt);
 
 // The channel rule. A report is mail. A reply with an action for the Owner is in both channels. Every other record is a chat message.
 export function messageChannel(record) {
@@ -118,7 +120,7 @@ export function mailboxCounts(records) {
   const items = records.filter(isMailRecord);
   const needsYou = items.filter((item) => needsOwnerAction(item) && !item.closedAt);
   const needsYouUnread = needsYou.filter((item) => !item.readAt).length;
-  const updates = items.filter((item) => !needsOwnerAction(item) && !item.closedAt && item.closedBy !== 'boss').length;
+  const updates = items.filter((item) => !needsOwnerAction(item) && !isDone(item)).length;
   const chatUnread = records.filter((record) => record.to === 'owner' && !record.readAt && messageChannel(record) !== 'mail').length;
   const mailUnread = items.filter((item) => messageChannel(item) === 'mail' && !item.readAt).length;
   return { needsYou: needsYou.length, needsYouUnread, updates, unread: needsYouUnread, open: needsYou.length, chatUnread, mailUnread, needsAction: needsYou.length };
@@ -203,6 +205,7 @@ export function mailboxView(records) {
     const answer = answers.get(record.id);
     return {
       ...record,
+      ...(!record.closedAt && isDone(record) && record.closedBy !== 'boss' ? { closedAt: record.readAt } : {}),
       action: mailboxAction(record),
       channel: messageChannel(record),
       choices: parseChoices(record.text),
@@ -213,12 +216,12 @@ export function mailboxView(records) {
   });
   return {
     needsYou: items.filter((item) => needsOwnerAction(item) && !item.closedAt),
-    updates: items.filter((item) => !needsOwnerAction(item) && !item.closedAt && item.closedBy !== 'boss'),
-    done: items.filter((item) => item.closedAt || item.closedBy === 'boss'),
+    updates: items.filter((item) => !needsOwnerAction(item) && !isDone(item)),
+    done: items.filter(isDone),
   };
 }
 
-// Inbox holds every open item, newest first. Sent holds every Owner message. Done also lists messages that the Boss relayed.
+// Inbox holds the open Needs-you items and the unread information items, newest first. Sent holds every Owner message. Done also lists messages that the Boss relayed.
 export function mailboxFolders(records) {
   const view = mailboxView(records);
   const conversations = new Map(groupMessagesByConversation(records).flatMap((group) => group.records.map((record) => [record.id, group.id])));
@@ -268,7 +271,8 @@ export function closeMailboxItems(ids, note, { by, dir = DATA_DIR, now = Date.no
   }, { now });
 }
 
-// Sets readAt on each item once. `close: true` also closes items whose action is read.
+// Sets readAt on each item once. An item whose action is read also gets closedAt, so a read information item is Done.
+// `close: true` stays accepted and has the same effect for those items.
 // Returns { status, error } for a refused request, or { ok, updated }.
 export function markMailboxRead(body, { dir = DATA_DIR, now = Date.now() } = {}) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return { status: 400, error: 'Send a JSON object with ids.' };
@@ -289,7 +293,7 @@ export function markMailboxRead(body, { dir = DATA_DIR, now = Date.now() } = {})
     for (const item of items) {
       let changed = false;
       if (!item.readAt) { item.readAt = at; changed = true; }
-      if (close && !item.closedAt) { item.closedAt = at; changed = true; }
+      if ((close || mailboxAction(item) === 'read') && !item.closedAt) { item.closedAt = at; changed = true; }
       if (changed) updated += 1;
     }
     return { records, result: { ok: true, updated } };

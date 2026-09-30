@@ -231,13 +231,13 @@ test('marking read sets readAt once, closes only read items on request, and keep
   let records = readMessages({ dir });
   assert.equal(records.some((r) => r.id === old.id), false, 'the rewrite deletes records older than 30 days');
   assert.equal(records.find((r) => r.id === item.id).readAt, new Date(later).toISOString());
-  assert.equal(records.find((r) => r.id === item.id).closedAt, undefined);
+  assert.equal(records.find((r) => r.id === item.id).closedAt, new Date(later).toISOString(), 'a read information item closes with readAt');
   assert.deepEqual(markMailboxRead({ ids: [item.id] }, { dir, now: later + 1000 }), { ok: true, updated: 0 }, 'a second read keeps the first readAt');
   assert.equal(readMessages({ dir }).find((r) => r.id === item.id).readAt, new Date(later).toISOString());
 
-  assert.deepEqual(markMailboxRead({ ids: [item.id], close: true }, { dir, now: later + 2000 }), { ok: true, updated: 1 });
+  assert.deepEqual(markMailboxRead({ ids: [item.id], close: true }, { dir, now: later + 2000 }), { ok: true, updated: 0 }, 'the item closed at the first read');
   records = readMessages({ dir });
-  assert.equal(records.find((r) => r.id === item.id).closedAt, new Date(later + 2000).toISOString());
+  assert.equal(records.find((r) => r.id === item.id).closedAt, new Date(later).toISOString());
   assert.deepEqual(mailboxCounts(records), { needsYou: 1, needsYouUnread: 0, updates: 0, unread: 0, open: 1, chatUnread: 0, mailUnread: 0, needsAction: 1 });
 });
 
@@ -339,7 +339,7 @@ test('the mailbox API lists items, marks them read behind the send gates, and an
     headers: { host: 'mac.tail0000.ts.net', cookie, 'content-type': 'application/json', origin: 'http://mac.tail0000.ts.net' }, body: JSON.stringify(read),
   });
   assert.equal(phoneRead.status, 200, phoneRead.text);
-  assert.deepEqual(JSON.parse(phoneRead.text), { ok: true, updated: 1, mailbox: { needsYou: 3, needsYouUnread: 3, updates: 1, unread: 3, open: 3, chatUnread: 3, mailUnread: 0, needsAction: 3 } });
+  assert.deepEqual(JSON.parse(phoneRead.text), { ok: true, updated: 1, mailbox: { needsYou: 3, needsYouUnread: 3, updates: 0, unread: 3, open: 3, chatUnread: 3, mailUnread: 0, needsAction: 3 } });
 
   const closeRead = await post('/api/messages/read', { ids: [handback.id], close: true });
   assert.equal(closeRead.status, 200);
@@ -570,4 +570,56 @@ test('GET /api/mailbox?folder=inbox answers with the open items', { timeout: 200
   assert.equal(body.folder, 'inbox');
   assert.deepEqual(body.items.map((item) => item.id), [update.id, needs.id]);
   assert.deepEqual(body.inbox.map((item) => item.id), [update.id, needs.id]);
+});
+
+test('reading an information item closes it, and the item leaves the Inbox for Done', (t) => {
+  const dir = freshDir(t);
+  const info = appendMessage(report('Night report', 'All green.'), { dir, now });
+  const unread = appendMessage(report('Unread report', 'FYI.'), { dir, now: now + 1 });
+  const decide = appendMessage(reply('alpha', 'Which?', { action: 'decide' }), { dir, now: now + 2 });
+  const later = now + 60000;
+
+  let folders = mailboxFolders(readMessages({ dir }));
+  assert.deepEqual(folders.inbox.map((r) => r.id), [decide.id, unread.id, info.id], 'unread items are in the Inbox');
+
+  assert.deepEqual(markMailboxRead({ ids: [info.id, decide.id] }, { dir, now: later }), { ok: true, updated: 2 });
+  let records = readMessages({ dir });
+  assert.equal(records.find((r) => r.id === info.id).closedAt, new Date(later).toISOString(), 'read sets closedAt with readAt');
+  assert.equal(records.find((r) => r.id === decide.id).closedAt, undefined, 'a read decide item stays open');
+  folders = mailboxFolders(records);
+  assert.deepEqual(folders.inbox.map((r) => r.id), [decide.id, unread.id]);
+  assert.deepEqual(folders.needsYou.map((r) => r.id), [decide.id]);
+  assert.deepEqual(folders.updates.map((r) => r.id), [unread.id]);
+  assert.deepEqual(folders.done.map((r) => r.id), [info.id]);
+  assert.equal(folders.updatesUnread, 1);
+  assert.deepEqual(mailboxCounts(records), { needsYou: 1, needsYouUnread: 0, updates: 1, unread: 0, open: 1, chatUnread: 0, mailUnread: 1, needsAction: 1 });
+
+  markMailboxRead({ ids: [info.id] }, { dir, now: later + 5000 });
+  assert.equal(readMessages({ dir }).find((r) => r.id === info.id).closedAt, new Date(later).toISOString(), 'a second read keeps closedAt');
+});
+
+test('a read mark keeps an existing closedAt of an information item', (t) => {
+  const dir = freshDir(t);
+  const closedAt = new Date(now + 1000).toISOString();
+  const info = appendMessage(report('Night report', 'Done.', { closedAt }), { dir, now });
+  markMailboxRead({ ids: [info.id] }, { dir, now: now + 9000 });
+  const stored = readMessages({ dir }).find((r) => r.id === info.id);
+  assert.equal(stored.closedAt, closedAt);
+  assert.equal(stored.readAt, new Date(now + 9000).toISOString());
+});
+
+test('an old read information item without closedAt shows as Done', () => {
+  const readAt = new Date(now).toISOString();
+  const records = [
+    { id: 'm-old', at: readAt, ...report('Night report', 'Old.', { readAt }) },
+    { id: 'm-new', at: readAt, ...report('Unread report', 'Unread.') },
+    { id: 'm-ask', at: readAt, ...reply('alpha', 'Which?', { action: 'decide', readAt }) },
+  ];
+  const view = mailboxView(records);
+  assert.deepEqual(view.done.map((r) => r.id), ['m-old']);
+  assert.equal(view.done[0].closedAt, readAt, 'the view sets closedAt to readAt');
+  assert.deepEqual(view.updates.map((r) => r.id), ['m-new']);
+  assert.deepEqual(view.needsYou.map((r) => r.id), ['m-ask']);
+  assert.deepEqual(mailboxFolders(records).inbox.map((r) => r.id).sort(), ['m-ask', 'm-new']);
+  assert.equal(mailboxCounts(records).updates, 1);
 });

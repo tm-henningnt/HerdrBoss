@@ -1132,9 +1132,9 @@ The Mailbox page at `/mailbox` is the inbox of the Owner. It lists replies from 
 The folders are **Needs you**, **Inbox**, **Reports and updates**, and **Done**. **Sent** is below a divider. On a desktop the folder rail is on the left, with **New message** at the top. On a phone the folders are in the menu drawer. Each folder shows its count. The folder pane shows a read-only line with the limits: the retention and the send limit. The folder pane shows on a desktop. The page keeps the selected folder in the address and in browser storage. When Needs you has open items, it is the default folder. When it has no items and you have selected another folder before, the page restores that folder. Otherwise, Needs you is the default folder.
 
 - **Needs you** shows open items with action `answer`, `approve`, or `decide`, newest first. When this folder is empty, the page shows “Nothing needs you.” and a link to the Inbox.
-- **Inbox** shows all open items, newest first. The list has two sections: Needs you first, then Reports and updates. `GET /api/mailbox?folder=inbox` returns the items.
-- **Reports and updates** shows open items with action `read` or no action. The folder key stays `updates`, so `/mailbox?folder=updates` links keep working. Opening an item sets `readAt`. The count shows the unread items.
-- **Done** shows closed or dismissed items and messages that the Boss relayed.
+- **Inbox** shows the open Needs-you items and the unread information items, newest first. The list has two sections: Needs you first, then Reports and updates. A read information item is not in the Inbox. `GET /api/mailbox?folder=inbox` returns the items.
+- **Reports and updates** shows unread items with action `read` or no action. The folder key stays `updates`, so `/mailbox?folder=updates` links keep working. Opening an item, or marking it read, sets `readAt` and `closedAt` together, and the item moves to Done. An existing `closedAt` stays. The view also lists an old read information item without `closedAt` as Done. The count shows the unread items. A read `decide`, `approve`, or `answer` item stays in Needs you until you answer or dismiss it.
+- **Done** shows read information items, closed or dismissed items, and messages that the Boss relayed.
 - **Sent** shows Owner messages. Each row shows the recipient, the delivery state, and the time of a reply, when one exists.
 
 ### Rows

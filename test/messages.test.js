@@ -466,7 +466,7 @@ test('an acting engine tick delivers queued Owner messages to idle and working o
   assert.equal(output.events[0].id, toAlpha.id);
   assert.equal(output.events[1].id, toBeta.id);
   assert.ok(!JSON.stringify(output.events).includes('Alpha, continue.'));
-  assert.deepEqual(output.mailbox, { needsYou: 1, needsYouUnread: 1, updates: 1, unread: 1, open: 1, chatUnread: 1, mailUnread: 0, needsAction: 1 }, 'the state holds the counts of the top bar, the update count, and one-release aliases');
+  assert.deepEqual(output.mailbox, { needsYou: 1, needsYouUnread: 1, updates: 0, unread: 1, open: 1, chatUnread: 1, mailUnread: 0, needsAction: 1 }, 'the state holds the counts of the top bar, the update count (a read report is Done), and one-release aliases');
 });
 
 test('messageChannel gives every kind and action one channel', () => {
