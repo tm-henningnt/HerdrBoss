@@ -237,7 +237,7 @@ function fn(signature) {
 
 // The render test loads the real page functions from public/app.js into a vm context. Only the Markdown renderer and the sender table are stubs.
 function load(names, extra = {}) {
-  const context = { ...extra, MESSAGE_SENDER: { orch: 'Orchestrator', owner: 'You' }, safeMarkdownHtml: (text) => `<p>${String(text)}</p>`, mailProject: () => 'Alpha', mailActions: () => '<form></form>', mailSuggestionHtml: () => '', mailbox: { busy: false } };
+  const context = { ...extra, MESSAGE_SENDER: { orch: 'Orchestrator', owner: 'You' }, safeMarkdownHtml: (text) => `<p>${String(text)}</p>`, reviewDoneLineHtml: () => '', mailProject: () => 'Alpha', mailActions: () => '<form></form>', mailSuggestionHtml: () => '', mailbox: { busy: false } };
   const sources = [/\nconst esc = .*\n/.exec(app)?.[0], ...names.map((name) => {
     const match = new RegExp(`\\nfunction ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n\\}\\n`).exec(app);
     assert.ok(match, `the UI defines ${name}`);
