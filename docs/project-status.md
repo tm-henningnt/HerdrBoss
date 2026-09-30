@@ -94,6 +94,9 @@ Publish every tracked issue as a task, including closed issues with `"status": "
 | Field | Type | Meaning |
 |---|---|---|
 | `tasks[].blockedBy` | string[] | IDs of the tasks that must be done first. Use the GitHub native issue dependencies or the "blocked by" links in the issues. The graph draws an arrow from each blocker to the task. |
+| `doneCount` | integer | Written by `herdr-boss publish`. The number of done tasks that left `tasks[]`. It equals `doneCountBase` plus the number of IDs in `doneIds`. The value is from 0 to 1000000. Do not set it by hand. |
+| `doneIds` | string[] | Written by `herdr-boss publish`. The IDs of the done tasks that `doneCount` counts. At most 5000 IDs. |
+| `doneCountBase` | integer | Written by `herdr-boss publish`. The part of `doneCount` that has no ID. The value is from 0 to 1000000. |
 | `tasks[].parent` | string | The ID of the parent task. The specs section counts the work under each spec by this field. |
 | `tasks[].kind` | string | A task class, for example `spec`, `impl`, `bug`, or `gate`. Tasks with `spec` show in the specs section. |
 | `tasks[].group` | string | The `id` of a group in `groups[]`. |
@@ -108,6 +111,10 @@ Publish every tracked issue as a task, including closed issues with `"status": "
 | `risks[]` | string[] | Open risks. |
 | `git` | object | `branch`, `commit`, and `dirty` (boolean). |
 | `kitRevision` | string | Optional. The kit revision that the orchestrator loaded: the `v=` value in the first line of `docs/orchestration/herdr-boss.md`. It has 12 lowercase hex characters. The project page shows a warning when it is not the current kit revision. |
+
+`herdr-boss publish` keeps at most the newest 30 done tasks in the stored status. It orders them by `updated`, or by file order when `updated` is missing. A done task that another task lists in `blockedBy` stays. The command records the IDs of the removed tasks in `doneIds` and counts them in `doneCount`. It prints one line when it counts new tasks. The orchestrator keeps its own file unchanged. Publishing the same file again leaves `doneCount` unchanged. The command warns when the stored status is larger than 200 KB.
+
+The project data holds `doneCount`. The server does not compute a progress total. The client adds `doneCount` to the number of done tasks and to the number of all tasks.
 
 Task IDs must be unique. A `blockedBy` ID that is not in `tasks[]` counts as external: the graph notes it on the task and does not draw it. Links in `links[]`, `tasks[].url`, and `groups[].refs[].url` must start with `http://` or `https://`.
 

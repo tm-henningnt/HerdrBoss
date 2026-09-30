@@ -690,7 +690,9 @@ On a screen up to 760 px wide, the Board shows one column at a time. A tab bar s
 
 ## Project status pages
 
-Orchestrators do not build dashboards. They publish a status file, and Herdr Boss shows it on `/projects/SLUG`. The page shows a board of the tasks. With the optional work structure fields, the page also shows progress, the current frontier, a dependency graph, groups, specs, and all work. See [project-status.md](project-status.md).
+Orchestrators do not build dashboards. They publish a status file. Herdr Boss shows it on `/projects/SLUG`. The page shows a board of the tasks. With the optional work structure fields, the page also shows progress, the current frontier, a dependency graph, groups, specs, and all work. See [project-status.md](project-status.md).
+
+Publish at task boundaries: a task starts, a task ends, a blocker appears, or a blocker clears. `herdr-boss publish` keeps the newest 30 done tasks in the stored status. It counts the older done tasks in `doneCount`. The orchestrator keeps its own file unchanged. The project data holds `doneCount`. The overall progress on the project page adds `doneCount` to the done tasks and to all tasks.
 
 ### Live task state
 

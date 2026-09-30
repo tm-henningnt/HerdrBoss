@@ -4,8 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
-import { loadConfig, migrateAccessFiles, assertPreviewDataDir, assertDataWritable, sandboxWriteError, DATA_DIR, dashboardUrl } from './config.js';
-import { writeProject, statusWarnings, SLUG } from './projects.js';
+import { loadConfig, migrateAccessFiles, assertPreviewDataDir, assertDataWritable, sandboxWriteError, DATA_DIR, PROJECTS_DIR, dashboardUrl } from './config.js';
+import { writeProject, statusWarnings, capDoneTasks, STATUS_WARN_BYTES, SLUG } from './projects.js';
 import { loadProjectConfig } from './kit/config.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -703,8 +703,14 @@ async function main() {
           process.exit(1);
         }
       }
+      // Keep the stored status small: only the newest done tasks stay. The removed ones go into doneCount.
+      let previous = null;
+      if (SLUG.test(slug)) try { previous = JSON.parse(fs.readFileSync(path.join(PROJECTS_DIR, `${slug}.json`), 'utf8')); } catch {}
+      const moved = SLUG.test(slug) ? capDoneTasks(data, previous) : 0;
       const errors = writeProject(slug, data);
       if (errors.length) { console.error(errors.join('\n')); process.exit(1); }
+      const storedBytes = Buffer.byteLength(JSON.stringify(data, null, 2));
+      if (storedBytes > STATUS_WARN_BYTES) console.error(`warning: the status is larger than 200 KB (${Math.round(storedBytes / 1024)} KB). Shorten notes and task text.`);
       for (const warning of statusWarnings(data)) console.error(`Warning: ${warning}`);
       if (top) {
         const { kitBehindLine } = await import('./kit/agents-check.js');
@@ -712,6 +718,7 @@ async function main() {
         if (kitLine) console.error(kitLine);
       }
       console.log(`published ${dashboardUrl(cfg)}/projects/${slug}`);
+      if (moved) console.log(`moved ${moved} done ${moved === 1 ? 'task' : 'tasks'} into doneCount`);
       if (top) {
         // The first publish of a slug registers its repository and adds its .git to the Codex writable roots.
         const { recordProjectRepo, syncHarness } = await import('./harness.js');
