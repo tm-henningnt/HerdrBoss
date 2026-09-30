@@ -53,3 +53,7 @@ Summary: Publish the project status at task boundaries only; the service keeps t
 ## f73a93f04e11
 Impact: useful
 Summary: GUI worker briefs say that seed data goes only into a temporary HERDR_BOSS_DIR, and that the preview runs read-only on its own port.
+
+## 084656db38fb
+Impact: useful
+Summary: Worker briefs address the orchestrator by its stable agent name, and a handover tells each running worker the new orchestrator.

@@ -4,7 +4,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { DATA_DIR } from './config.js';
 import { deliverPrompt, isAgentPaneBusy, waitForWorkerPane } from './kit/workers.js';
-import { contextTokensFor, loadModels } from './kit/config.js';
+import { contextTokensFor, loadModels, loadProjectConfig } from './kit/config.js';
 import { loadPolicy, mergeModels, modelEnabled, providerFor, selectModel } from './control.js';
 import { codexShellEnvArgs } from './harness.js';
 import { cleanGoal, goalFromTranscript } from './goal.js';
@@ -523,6 +523,49 @@ export function handoffNotices(item, panes = []) {
   return notices;
 }
 
+// The line for a running worker. The agent name stays the same after a handover; the pane ID is the current address.
+export function workerOrchestratorPrompt(item) {
+  return `Your orchestrator is now ${stableOrchestratorName(item)} (pane ${item.newPane}). Send WORKER REPORT and WORKER QUESTION there.`;
+}
+
+// The running workers of the project, from its run records. A record with a finish time is not running.
+function runningWorkerRecords(item) {
+  const runsPath = loadProjectConfig({ cwd: item.cwd }).runsPath;
+  const runs = [];
+  for (const file of fs.readdirSync(runsPath).filter((name) => name.endsWith('.json'))) {
+    let run;
+    try { run = JSON.parse(fs.readFileSync(path.join(runsPath, file), 'utf8')); } catch { continue; }
+    if (run && typeof run.name === 'string' && typeof run.pane === 'string' && !run.finishedAt) runs.push(run);
+  }
+  return runs;
+}
+
+// Tell each running worker the new orchestrator, once for each worker and handoff. The record keeps the
+// result, so a second call sends nothing. A failed prompt is logged and never stops the activation.
+export function promptRunningWorkers(item, records = null) {
+  if (handoffRole(item) === 'boss') return;
+  let runs;
+  try { runs = runningWorkerRecords(item); }
+  catch (e) { if (e.code !== 'ENOENT') console.warn(`Warning: could not read the worker records: ${String(e.message).slice(0, 200)}`); return; }
+  let live = null;
+  try { live = new Map(herdr(['pane', 'list']).panes.map((pane) => [pane.pane_id, pane])); } catch { /* Try each worker without the pane list. */ }
+  const sent = item.workerPrompts ||= {};
+  for (const run of runs) {
+    if (Object.hasOwn(sent, run.name) || [item.newPane, item.sourcePane].includes(run.pane)) continue;
+    if (live && !live.get(run.pane)?.agent) continue;
+    // The mark comes before the send and is saved at once, so a crash never sends a second prompt.
+    sent[run.name] = { pane: run.pane, at: new Date().toISOString() };
+    if (records) save(records);
+    try { herdr(['agent', 'prompt', run.pane, workerOrchestratorPrompt(item)]); }
+    catch (e) {
+      const error = String(e.stderr || e.message).slice(0, 500);
+      sent[run.name] = { pane: run.pane, error };
+      console.warn(`Warning: could not tell worker ${run.name} (pane ${run.pane}) the new orchestrator: ${error}`);
+    }
+    if (records) save(records);
+  }
+}
+
 export function activateHandoff(id, { confirmed = false } = {}) {
   if (!confirmed) throw new Error('Review the successor output, then pass --confirmed.');
   const records = listHandoffs();
@@ -574,5 +617,6 @@ export function activateHandoff(id, { confirmed = false } = {}) {
     save(records);
   }
   catch (e) { item.activationPromptError = String(e.stderr || e.message).slice(0, 500); save(records); }
+  promptRunningWorkers(item, records);
   return item;
 }

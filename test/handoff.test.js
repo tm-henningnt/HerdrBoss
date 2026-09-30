@@ -992,7 +992,7 @@ const item = activateHandoff('handoff-activate', { confirmed: true });
 console.log(JSON.stringify({ item, warnings }));`, env));
   const calls = () => fs.readFileSync(callsFile, 'utf8').trim().split('\n').map(JSON.parse);
   const prompts = () => Object.fromEntries(calls().filter((args) => args[0] === 'agent' && args[1] === 'prompt').map((args) => [args[2], args[3]]));
-  return { root, ws, activate, activateWithWarnings, calls, prompts };
+  return { root, ws, env, activate, activateWithWarnings, calls, prompts };
 }
 
 test('project activation labels the successor orch and the previous pane orch previous', (t) => {
@@ -1111,6 +1111,62 @@ test('project activation prompts the successor and the previous agent with both 
   assert.equal(Object.hasOwn(item, 'previousPromptError'), false);
   const order = f.calls().filter((args) => args[1] === 'prompt').map((args) => args[2]);
   assert.deepEqual(order, ['ws:p1', 'ws:p2']);
+});
+
+// Run records of workers under the project runs folder. A record without finishedAt is a running worker.
+function writeRuns(f, runs) {
+  execFileSync('git', ['init', '-q'], { cwd: path.join(f.root, 'project') });
+  const dir = path.join(f.root, 'project', '.orchestration', 'runs');
+  fs.mkdirSync(dir, { recursive: true });
+  for (const run of runs) fs.writeFileSync(path.join(dir, `${run.name}.json`), JSON.stringify(run));
+}
+const WORKER_LINE = 'Your orchestrator is now alpha-orch (pane ws:p2). Send WORKER REPORT and WORKER QUESTION there.';
+
+test('activation prompts each running worker once with the new orchestrator line', (t) => {
+  const f = activationFixture(t);
+  writeRuns(f, [
+    { name: 'w1', pane: 'ws:p3', startedAt: '2026-09-30T09:00:00.000Z' },
+    { name: 'w-gone', pane: 'ws:p8', startedAt: '2026-09-30T09:00:00.000Z' },
+    { name: 'w-done', pane: 'ws:p4', startedAt: '2026-09-30T09:00:00.000Z', finishedAt: '2026-09-30T09:30:00.000Z' },
+  ]);
+  const item = f.activate();
+  const workerPrompts = f.calls().filter((args) => args[0] === 'agent' && args[1] === 'prompt' && args[3] === WORKER_LINE);
+  assert.deepEqual(workerPrompts.map((args) => args[2]), ['ws:p3']);
+  assert.deepEqual(Object.keys(item.workerPrompts), ['w1']);
+  assert.equal(item.workerPrompts.w1.pane, 'ws:p3');
+  assert.ok(item.workerPrompts.w1.at);
+  const stored = JSON.parse(fs.readFileSync(path.join(f.root, 'handoffs.json'), 'utf8'))[0];
+  assert.deepEqual(stored.workerPrompts, item.workerPrompts);
+});
+
+test('a failed worker prompt is logged and never fails the activation', (t) => {
+  const f = activationFixture(t, { failPrompts: ['ws:p3'] });
+  writeRuns(f, [{ name: 'w1', pane: 'ws:p3', startedAt: '2026-09-30T09:00:00.000Z' }]);
+  const { item, warnings } = f.activateWithWarnings();
+  assert.equal(item.status, 'active');
+  assert.match(item.workerPrompts.w1.error, /Pane not found|pane_not_found/);
+  assert.equal(Object.hasOwn(item.workerPrompts.w1, 'at'), false);
+  assert.ok(warnings.some((line) => /w1/.test(line) && /ws:p3/.test(line)));
+});
+
+test('the workerPrompts record prevents a second prompt to the same worker', (t) => {
+  const f = activationFixture(t);
+  writeRuns(f, [{ name: 'w1', pane: 'ws:p3', startedAt: '2026-09-30T09:00:00.000Z' }]);
+  f.activate();
+  const handoffUrl = new URL('../src/handoff.js', import.meta.url).href;
+  runHandoffModule(f.root, `import { listHandoffs, promptRunningWorkers } from ${JSON.stringify(handoffUrl)};
+const item = listHandoffs()[0];
+promptRunningWorkers(item);`, f.env);
+  const sent = f.calls().filter((args) => args[0] === 'agent' && args[1] === 'prompt' && args[3] === WORKER_LINE).map((args) => args[2]);
+  assert.deepEqual(sent, ['ws:p3']);
+});
+
+test('a Boss activation prompts no worker', (t) => {
+  const f = activationFixture(t, { boss: true });
+  writeRuns(f, [{ name: 'w1', pane: 'wb:p3', startedAt: '2026-09-30T09:00:00.000Z' }]);
+  const item = f.activate();
+  assert.equal(Object.hasOwn(item, 'workerPrompts'), false);
+  assert.equal(f.calls().some((args) => args[3] === WORKER_LINE), false);
 });
 
 test('migrated activation tells the successor how session-migrate built its session', (t) => {
