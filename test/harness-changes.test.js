@@ -182,3 +182,16 @@ test('herdr-boss harness change exits 1 on a bad harness, label, or date and wri
   }
   assert.equal(fs.existsSync(path.join(dir, HARNESS_CHANGES_FILE)), false);
 });
+
+test('the reader also accepts the day and note spelling and cuts a long note', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-changes-alias-'));
+  const long = 'n'.repeat(120);
+  fs.writeFileSync(path.join(dir, HARNESS_CHANGES_FILE), [
+    JSON.stringify({ day: '2026-03-01', harness: 'claude', note: 'rules added to the settings' }),
+    JSON.stringify({ day: '2026-03-02', harness: 'codex', note: long }),
+    JSON.stringify({ day: '2026-03-03', harness: 'pi', label: long }),
+  ].join('\n') + '\n');
+  const rows = readHarnessChanges(dir);
+  assert.deepEqual(rows.map((r) => [r.date, r.harness]), [['2026-03-01', 'claude'], ['2026-03-02', 'codex']]);
+  assert.equal(rows[1].label.length, 80);
+});

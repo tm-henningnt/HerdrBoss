@@ -1,5 +1,5 @@
 // Harness change markers for the denial chart on the Analytics page. One JSON object for each line of
-// harness-changes.jsonl in the data dir: { date: YYYY-MM-DD, harness, label }. The reader skips every line
+// harness-changes.jsonl in the data dir: { date: YYYY-MM-DD, harness, label }, and the alias { day, harness, note }. The reader skips every line
 // that does not validate and never throws.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -32,11 +32,16 @@ const localToday = () => {
 // A validated entry or null. The result holds the three known fields only.
 export function parseHarnessChange(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  const { date, harness, label } = value;
+  // The Boss and the harness sync write the same entry as { day, harness, note }. Both spellings are read.
+  const date = value.date ?? value.day;
+  const label = value.label ?? value.note;
+  const { harness } = value;
   if (!validDate(date) || !CHANGE_HARNESSES.includes(harness) || typeof label !== 'string') return null;
-  const text = label.trim();
-  if (!text || text.length > MAX_LABEL_LENGTH || CONTROL.test(label)) return null;
-  return { date, harness, label: text };
+  if (CONTROL.test(label)) return null;
+  const trimmed = label.trim();
+  // A `label` over the limit is refused. A `note` is a free sentence: it is cut to the limit.
+  if (!trimmed || (value.label !== undefined && trimmed.length > MAX_LABEL_LENGTH)) return null;
+  return { date, harness, label: trimmed.slice(0, MAX_LABEL_LENGTH) };
 }
 
 // Reads the last 64 KB and keeps the last 200 valid lines. The first line of the tail can be cut; it fails to parse and is skipped.
