@@ -49,7 +49,7 @@ test('SQLite store uses WAL, a 5-second busy timeout, ordered migrations, and ba
   assert.equal(store.db.prepare('PRAGMA busy_timeout').get().timeout, 5000);
   assert.equal(store.db.prepare('PRAGMA foreign_keys').get().foreign_keys, 1);
   assert.equal(store.db.prepare('PRAGMA synchronous').get().synchronous, 1);
-  assert.deepEqual(store.db.prepare('SELECT version FROM schema_version ORDER BY version').all().map((row) => row.version), [1]);
+  assert.deepEqual(store.db.prepare('SELECT version FROM schema_version ORDER BY version').all().map((row) => row.version), [1, 2]);
   store.db.prepare('INSERT INTO messages(id, at, thread, record) VALUES (?, ?, ?, ?)')
     .run('backup-row', '2026-09-28T10:00:00.000Z', 'alpha', JSON.stringify({ id: 'backup-row', text: 'Backup.' }));
 

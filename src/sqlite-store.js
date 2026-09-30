@@ -58,6 +58,94 @@ const MIGRATIONS = [
       INSERT INTO message_store_state(id, version) VALUES (1, 0);
     `,
   },
+  {
+    version: 2,
+    sql: `
+      CREATE TABLE review_packs (
+        slug TEXT NOT NULL,
+        pack TEXT NOT NULL,
+        title TEXT NOT NULL,
+        current_version INTEGER NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('open', 'submitted', 'expired')),
+        mail_id TEXT,
+        note TEXT NOT NULL DEFAULT '',
+        note_rev INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        closed_at TEXT,
+        PRIMARY KEY (slug, pack)
+      );
+      CREATE TABLE review_versions (
+        slug TEXT NOT NULL,
+        pack TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        manifest TEXT NOT NULL,
+        bytes INTEGER NOT NULL,
+        files INTEGER NOT NULL,
+        published_at TEXT NOT NULL,
+        published_by TEXT,
+        PRIMARY KEY (slug, pack, version),
+        FOREIGN KEY (slug, pack) REFERENCES review_packs(slug, pack) ON DELETE CASCADE
+      );
+      CREATE TABLE review_items (
+        slug TEXT NOT NULL,
+        pack TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        item TEXT NOT NULL,
+        section TEXT NOT NULL,
+        hash TEXT NOT NULL,
+        position INTEGER NOT NULL,
+        spec TEXT NOT NULL,
+        PRIMARY KEY (slug, pack, version, item),
+        FOREIGN KEY (slug, pack, version) REFERENCES review_versions(slug, pack, version) ON DELETE CASCADE
+      );
+      CREATE TABLE review_files (
+        slug TEXT NOT NULL,
+        pack TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        path TEXT NOT NULL,
+        sha256 TEXT NOT NULL,
+        bytes INTEGER NOT NULL,
+        type TEXT NOT NULL,
+        stored TEXT NOT NULL,
+        PRIMARY KEY (slug, pack, version, path),
+        FOREIGN KEY (slug, pack, version) REFERENCES review_versions(slug, pack, version) ON DELETE CASCADE
+      );
+      CREATE TABLE review_answers (
+        slug TEXT NOT NULL,
+        pack TEXT NOT NULL,
+        item TEXT NOT NULL,
+        decision TEXT,
+        choice TEXT,
+        rating INTEGER,
+        live TEXT,
+        viewed INTEGER NOT NULL DEFAULT 0,
+        note TEXT NOT NULL DEFAULT '',
+        pins TEXT,
+        checks TEXT,
+        hash TEXT NOT NULL,
+        stale INTEGER NOT NULL DEFAULT 0,
+        previous TEXT,
+        rev INTEGER NOT NULL,
+        op_id TEXT,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (slug, pack, item),
+        FOREIGN KEY (slug, pack) REFERENCES review_packs(slug, pack) ON DELETE CASCADE
+      );
+      CREATE TABLE review_results (
+        slug TEXT NOT NULL,
+        pack TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        verdict TEXT NOT NULL,
+        note TEXT NOT NULL DEFAULT '',
+        result TEXT NOT NULL,
+        submitted_at TEXT NOT NULL,
+        message_id TEXT,
+        PRIMARY KEY (slug, pack, version)
+      );
+      CREATE INDEX review_packs_state_idx ON review_packs(state, updated_at);
+    `,
+  },
 ];
 
 function migrate(db, file) {
