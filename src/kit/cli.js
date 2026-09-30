@@ -262,7 +262,7 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
   }
   if (command === 'push') {
     // All arguments go to git push unchanged.
-    return pushWithLock(argv, { config, env, herdr, dataDir: lockDataDir, output, now, pause, pidAlive, stdio: pushStdio });
+    return pushWithLock(argv, { config, env, herdr, dataDir: lockDataDir, output, now, pause, pidAlive, stdio: pushStdio, rulesFile });
   }
   if (command === 'suite') {
     // The options come before --. Everything after -- is the command.
@@ -280,15 +280,15 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
     const waitSeconds = flags.wait === undefined ? SUITE_WAIT_SECONDS : Number(flags.wait);
     if (!Number.isSafeInteger(waitSeconds)) fail('--wait must be a whole non-negative number of seconds.');
     return runSuite(argv.slice(separator + 1), {
-      config, env, herdr, dataDir: lockDataDir, waitSeconds, keep: flags.keep ?? [], reuse: flags.reuse ?? false, output, now, pause, pidAlive, stdio: suiteStdio,
+      config, env, herdr, dataDir: lockDataDir, waitSeconds, keep: flags.keep ?? [], reuse: flags.reuse ?? false, output, now, pause, pidAlive, stdio: suiteStdio, rulesFile,
     });
   }
   if (command === 'worker') {
     const [action, ...rest] = argv;
     if (action === 'start') {
-      const { positional, flags } = parseArgs(rest, { boolean: ['--no-worktree', '--dry-run', '--force', '--read-only'], repeat: ['--allow', '--copy', '--lease'] });
+      const { positional, flags } = parseArgs(rest, { boolean: ['--no-worktree', '--dry-run', '--force', '--force-swap', '--read-only'], repeat: ['--allow', '--copy', '--lease'] });
       if (positional.length !== 1) fail('Usage: worker start <name> --kind <kind> --task TEXT [options]');
-      knownFlags(flags, ['kind', 'model', 'effort', 'issue', 'taskid', 'task', 'taskfile', 'allow', 'copy', 'lease', 'base', 'orch', 'noworktree', 'dryrun', 'force', 'readonly']);
+      knownFlags(flags, ['kind', 'model', 'effort', 'issue', 'taskid', 'task', 'taskfile', 'allow', 'copy', 'lease', 'base', 'orch', 'noworktree', 'dryrun', 'force', 'forceswap', 'readonly']);
       try { return startWorker(positional[0], {
         kind: flags.kind,
         model: flags.model,
@@ -306,7 +306,8 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
         readOnly: flags.readonly,
         dryRun: flags.dryrun,
         force: flags.force,
-      }, { config, models: modelConfig, herdr, env, output }); }
+        forceSwap: flags.forceswap,
+      }, { config, models: modelConfig, herdr, env, output, rulesFile, now: typeof now === 'function' ? now() : now }); }
       catch (error) {
         if (!/\nSTART FAILED: /.test(error.message)) error.message = `${error.message}\nSTART FAILED: ${error.message.split('\n')[0]}`;
         throw error;

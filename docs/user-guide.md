@@ -358,7 +358,9 @@ The swap warning uses three settings in the Machine section: `machine.swapWarnPe
 
 The engine raises the alert `machine:swap` with severity `warn` and the title `Swap high: N% used` when the last 3 samples are at or above `swapWarnPercent` and each has at least `swapMinUsedGB` in use. The engine takes one sample at each tick, which is every 30 seconds by default. The alert clears when swap is more than 5 points below `swapWarnPercent`, or below the GB floor. The alert does not depend on the machine guard. It stays on when the guard is off or paused. The alert never blocks a worker start or a suite. The notice cooldown applies to it.
 
-`swapRefusePercent` is stored and shown. No command refuses work on it yet.
+The swap refusal is off by default. Turn it on with the switch "Refuse new work at high swap" in the Machine section. When the switch is on and swap is at or above `swapRefusePercent` with at least `swapMinUsedGB` in use, an orchestrator or a worker cannot run `worker start`, `herdr-boss suite`, or `herdr-boss push` with a pre-push hook. The message shows the swap percent and the GB in use. A blank `swapRefusePercent` switches the refusal off.
+
+Work that the Owner or the Boss starts is never refused. Rules older than 3 minutes never refuse. To override, add `--force-swap` to `worker start`, or set `HERDR_BOSS_FORCE_SWAP=1` for `suite` and `push`. `--force` does not override the refusal. `suite --reuse` returns 0 when it reuses a passing tree.
 
 Policy settings take precedence over legacy `config.json` values. The old `machine.loadWarnFactor` field does not control machine guards. The `machine.alertCooldownSeconds` policy value takes precedence over the legacy top-level `alertCooldownSeconds` field for notice delivery.
 

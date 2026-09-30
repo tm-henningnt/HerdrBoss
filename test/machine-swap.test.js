@@ -160,3 +160,145 @@ test('Engine.tick does not raise machine:swap below the GB floor', { timeout: 60
   const seen = run(t, { total: 2048, used: [1900, 1900, 1900, 1900] });
   assert.deepEqual(seen, [false, false, false, false]);
 });
+
+// Swap refusal in worker start, suite, and push.
+const { swapRefusal, swapExempt } = await import('../src/kit/swap-guard.js');
+const { runKitCommand } = await import('../src/kit/cli.js');
+const { loadProjectConfig } = await import('../src/kit/config.js');
+const { execFileSync } = await import('node:child_process');
+
+const NOW = Date.parse('2026-09-30T12:00:00Z');
+const swapRules = (patch = {}, updatedAt = new Date(NOW - 60000).toISOString()) => ({
+  updatedAt,
+  machine: { swapPercent: 97, swapUsedGB: 3.9, swapRefusePercent: 95, swapMinUsedGB: 2, swapRefuseEnabled: true, ...patch },
+});
+
+test('swapRefusal names the swap figure, the setting, and the override', () => {
+  const text = swapRefusal(swapRules(), { now: NOW, override: 'Pass --force-swap to override.' });
+  assert.match(text, /97%/);
+  assert.match(text, /3\.9 GB/);
+  assert.match(text, /95%/);
+  assert.match(text, /swapRefuseEnabled|Refuse new work at high swap/);
+  assert.match(text, /Pass --force-swap to override\./);
+});
+
+test('swapRefusal is off by default, with a null percent, below the floor, and with stale rules', () => {
+  assert.equal(swapRefusal(swapRules({ swapRefuseEnabled: false }), { now: NOW }), null);
+  assert.equal(swapRefusal(swapRules({ swapRefuseEnabled: undefined }), { now: NOW }), null);
+  assert.equal(swapRefusal(swapRules({ swapRefusePercent: null }), { now: NOW }), null);
+  assert.equal(swapRefusal(swapRules({ swapPercent: 94, swapUsedGB: 3.8 }), { now: NOW }), null);
+  assert.equal(swapRefusal(swapRules({ swapPercent: 99, swapUsedGB: 1.9 }), { now: NOW }), null);
+  assert.equal(swapRefusal(swapRules({ swapPercent: null, swapUsedGB: null }), { now: NOW }), null);
+  assert.equal(swapRefusal(swapRules({}, new Date(NOW - 181000).toISOString()), { now: NOW }), null, 'older than 3 minutes');
+  assert.equal(swapRefusal({ machine: swapRules().machine }, { now: NOW }), null, 'no timestamp');
+  assert.equal(swapRefusal(null, { now: NOW }), null);
+  assert.ok(swapRefusal(swapRules({ swapPercent: 95, swapUsedGB: 2 }), { now: NOW }), 'the thresholds are inclusive');
+});
+
+test('swapExempt covers a shell outside Herdr and the boss pane', () => {
+  const herdr = (label) => () => ({ pane: { pane_id: 'ws:p', label } });
+  assert.equal(swapExempt({}, herdr('orch')), true, 'no pane: Owner shell');
+  assert.equal(swapExempt({ HERDR_PANE_ID: 'ws:p' }, herdr('boss')), true);
+  assert.equal(swapExempt({ HERDR_PANE_ID: 'ws:p' }, herdr('orch')), false);
+  assert.equal(swapExempt({ HERDR_PANE_ID: 'ws:p' }, () => { throw new Error('no herdr'); }), true, 'an unreadable pane does not refuse');
+  assert.equal(swapExempt({ HERDR_PANE_ID: 'ws:p', HERDR_BOSS_FORCE_SWAP: '1' }, herdr('orch')), true);
+});
+
+function swapFixture(t, { rules = swapRules(), label = 'orch', hook = false } = {}) {
+  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-swap-cli-')));
+  t.after(() => fs.rmSync(base, { recursive: true, force: true }));
+  const root = path.join(base, 'repo');
+  const git = (...args) => execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  execFileSync('git', ['init', '-b', 'main', root], { stdio: 'ignore' });
+  git('config', 'user.name', 'Test User');
+  git('config', 'user.email', 'test@example.invalid');
+  fs.writeFileSync(path.join(root, 'README.md'), 'seed\n');
+  git('add', 'README.md');
+  git('commit', '-m', 'seed');
+  if (hook) {
+    fs.mkdirSync(path.join(root, '.git', 'hooks'), { recursive: true });
+    fs.writeFileSync(path.join(root, '.git', 'hooks', 'pre-push'), '#!/bin/sh\nherdr-boss suite -- npm test\nexit 0\n', { mode: 0o755 });
+  }
+  const dataDir = path.join(base, 'data');
+  const rulesFile = path.join(base, 'rules.json');
+  fs.writeFileSync(rulesFile, JSON.stringify({ ...rules, avoidKinds: [], preferredKinds: [], notes: [] }));
+  const lines = [];
+  const herdr = (args) => {
+    if (args[0] === 'pane' && args[1] === 'get') return { pane: { pane_id: args[2], workspace_id: 'ws', label } };
+    if (args[0] === 'pane' && args[1] === 'process-info') return { process_info: { shell_pid: 601 } };
+    if (args[0] === 'pane' && args[1] === 'list') return { panes: [{ pane_id: 'ws:p' }] };
+    if (args[0] === 'agent' && args[1] === 'list') return { agents: [] };
+    throw new Error(`Unexpected Herdr call: ${args.join(' ')}`);
+  };
+  const env = { PATH: process.env.PATH, HOME: base, TMPDIR: base, HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'ws', HERDR_PANE_ID: 'ws:p' };
+  const marker = path.join(base, 'ran');
+  const script = path.join(base, 'suite.mjs');
+  fs.writeFileSync(script, `import fs from 'node:fs'; fs.writeFileSync(${JSON.stringify(marker)}, 'ran');\n`);
+  const options = (extra = {}) => ({
+    config: loadProjectConfig({ cwd: root }), lockDataDir: dataDir, rulesFile, env, herdr, now: () => NOW, pidAlive: (pid) => pid === 601,
+    output: (line) => lines.push(line), suiteStdio: 'ignore', pushStdio: 'ignore', ...extra,
+  });
+  return { base, root, git, dataDir, rulesFile, lines, env, options, marker, script, ran: () => fs.existsSync(marker) };
+}
+
+test('worker start refuses at high swap, and --force does not bypass it', (t) => {
+  const f = swapFixture(t);
+  const start = (...extra) => runKitCommand('worker', ['start', 'w1', '--kind', 'claude', '--task', 'x', '--read-only', ...extra], f.options({ now: NOW }));
+  assert.throws(() => start(), /97%.*3\.9 GB[\s\S]*--force-swap/);
+  assert.throws(() => start('--force'), /--force-swap/, '--force is not enough');
+});
+
+test('worker start does not refuse the boss pane, --force-swap, or a policy with the option off', (t) => {
+  const refused = /Swap|swap is at/;
+  const boss = swapFixture(t, { label: 'boss' });
+  assert.throws(() => runKitCommand('worker', ['start', 'w1', '--task', 'x', '--read-only'], boss.options({ now: NOW })), (error) => !refused.test(error.message));
+  const forced = swapFixture(t);
+  assert.throws(() => runKitCommand('worker', ['start', 'w1', '--task', 'x', '--read-only', '--force-swap'], forced.options({ now: NOW })), (error) => !refused.test(error.message));
+  const off = swapFixture(t, { rules: swapRules({ swapRefuseEnabled: false }) });
+  assert.throws(() => runKitCommand('worker', ['start', 'w1', '--task', 'x', '--read-only'], off.options({ now: NOW })), (error) => !refused.test(error.message));
+});
+
+test('suite refuses at high swap before it runs the command or takes the lock', (t) => {
+  const f = swapFixture(t);
+  assert.throws(() => runKitCommand('suite', ['--', process.execPath, f.script], f.options()), /97%[\s\S]*HERDR_BOSS_FORCE_SWAP=1/);
+  assert.equal(f.ran(), false);
+  assert.equal(fs.existsSync(path.join(f.dataDir, 'locks', 'machine', 'full-suite.json')), false);
+});
+
+test('suite runs with HERDR_BOSS_FORCE_SWAP=1, for a boss pane, and with stale rules', (t) => {
+  const forced = swapFixture(t);
+  const result = runKitCommand('suite', ['--', process.execPath, forced.script], forced.options({ env: { ...forced.env, HERDR_BOSS_FORCE_SWAP: '1' } }));
+  assert.equal(result.exitCode, 0);
+  assert.equal(forced.ran(), true);
+  const boss = swapFixture(t, { label: 'boss' });
+  assert.equal(runKitCommand('suite', ['--', process.execPath, boss.script], boss.options()).exitCode, 0);
+  const stale = swapFixture(t, { rules: swapRules({}, new Date(NOW - 4 * 60000).toISOString()) });
+  assert.equal(runKitCommand('suite', ['--', process.execPath, stale.script], stale.options()).exitCode, 0);
+});
+
+test('suite --reuse with a passing reused tree returns 0 at high swap', (t) => {
+  const f = swapFixture(t);
+  const env = { ...f.env, HERDR_BOSS_FORCE_SWAP: '1' };
+  assert.equal(runKitCommand('suite', ['--', process.execPath, f.script], f.options({ env })).exitCode, 0);
+  fs.rmSync(f.marker);
+  const result = runKitCommand('suite', ['--reuse', '--', process.execPath, f.script], f.options());
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.reused, true);
+  assert.equal(f.ran(), false);
+  assert.throws(() => runKitCommand('suite', ['--', process.execPath, f.script], f.options()), /97%/, 'without --reuse it still refuses');
+});
+
+test('suite --reuse refuses at high swap when no pass matches', (t) => {
+  const f = swapFixture(t);
+  assert.throws(() => runKitCommand('suite', ['--reuse', '--', process.execPath, f.script], f.options()), /97%/);
+});
+
+test('push refuses at high swap only when a pre-push hook exists', (t) => {
+  const hooked = swapFixture(t, { hook: true });
+  assert.throws(() => runKitCommand('push', ['--dry-run'], hooked.options()), /97%[\s\S]*HERDR_BOSS_FORCE_SWAP=1/);
+  assert.equal(fs.existsSync(path.join(hooked.dataDir, 'locks', 'machine', 'queue')), false, 'nothing queued');
+  const plain = swapFixture(t);
+  const result = runKitCommand('push', ['--dry-run'], plain.options());
+  assert.equal(typeof result.exitCode, 'number');
+  assert.ok(plain.lines.some((line) => /no pre-push hook/.test(line)));
+});

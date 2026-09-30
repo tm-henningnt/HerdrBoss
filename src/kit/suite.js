@@ -4,6 +4,8 @@ import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { DATA_DIR } from '../config.js';
 import { createHerdrRunner } from './workers.js';
+import { DEFAULT_RULES_FILE } from './config.js';
+import { SWAP_FORCE_ENV, swapGuardFor } from './swap-guard.js';
 import { FULL_SUITE_LOCK, acquireProjectLock, recordLockRelease, releaseProjectLock } from './locks.js';
 
 export const SUITE_WAIT_SECONDS = 1800;
@@ -123,6 +125,7 @@ export function runSuite(command, {
   pidAlive,
   stdio = 'inherit',
   cwd = process.cwd(),
+  rulesFile = DEFAULT_RULES_FILE,
 } = {}) {
   if (!Array.isArray(command) || !command.length) throw new Error('suite needs a command after --.');
   const repoRoot = config?.root ?? cwd;
@@ -135,6 +138,9 @@ export function runSuite(command, {
       return { exitCode: 0, removed: 0, reused: true, pass };
     }
   }
+
+  const swapText = swapGuardFor(rulesFile, { env, herdr, now, override: `Set ${SWAP_FORCE_ENV}=1 to override.` });
+  if (swapText) throw new Error(swapText);
 
   const lock = acquireProjectLock(FULL_SUITE_LOCK, { config, env, herdr, dataDir, waitSeconds, output, now, pause, pidAlive, kind: 'suite' });
   const heldSince = now();

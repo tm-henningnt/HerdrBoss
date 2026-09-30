@@ -11,6 +11,7 @@ import { checkAgentsFile, kitBehindLine } from './agents-check.js';
 import { acquireLeaseFor, dropLeases, setLeasePane } from '../leases.js';
 import { codexShellEnvArgs } from '../harness.js';
 import { TASK_ID } from '../task-state.js';
+import { swapRefusal, swapExempt } from './swap-guard.js';
 
 const NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
 const AGENT_READY_MARKERS = Object.freeze({
@@ -939,6 +940,8 @@ export function startWorker(name, options, {
   if (kitLine) output(kitLine);
   const overload = loadWarning(rules);
   if (overload) throw new Error(overload);
+  const swapText = options.forceSwap || swapExempt(env, herdr) ? null : swapRefusal(rules, { now, override: 'Pass --force-swap to override. --force cannot bypass this refusal.' });
+  if (swapText) throw new Error(swapText);
   if (!options.kind) throw new Error('--kind is required.');
   if (rules.avoidKinds !== undefined && !Array.isArray(rules.avoidKinds)) throw new Error(`Herdr Boss rules avoidKinds must be an array: ${rulesPath}`);
   if ((rules.avoidKinds ?? []).includes(options.kind)) {

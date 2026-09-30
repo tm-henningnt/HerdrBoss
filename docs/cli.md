@@ -202,7 +202,8 @@ A Codex tool shell can run under a shared app-server daemon with another environ
 | `--orch PANE` | The verified caller pane for reports. If set, it must match `HERDR_PANE_ID`. |
 | `--no-worktree` | Use the current checkout. The worker gets `.worker/NAME/` for its brief and reports. |
 | `--dry-run` | Print the plan. Change nothing. |
-| `--force` | Override quota, capacity, and paused-project refusals. It cannot enable a disabled model. |
+| `--force` | Override quota, capacity, and paused-project refusals. It cannot enable a disabled model. It cannot override the swap refusal. |
+| `--force-swap` | Override the swap refusal (see below). |
 
 Worker brief templates support two Herdr command slots:
 
@@ -215,7 +216,16 @@ Set `imageBudget` in `.herdr-boss.json` to a positive integer to set the project
 
 `worker start` refuses a provider that is ahead of pace, near exhaustion, or exhausted. An exhausted lane shows its window and reset time; when several windows are exhausted, it uses the latest reset. `--force` remains the explicit quota override. Ignore quota mode disables pacing and handover warnings below 100%, but it does not make an exhausted provider usable. When every metered provider is ahead of pace, it allows the least-over one with a notice. A refusal or least-over notice lists the current project's unmetered alternatives first, then names the least-over metered provider. It refuses dispatch when the active CPU limit or enabled load backstop is exceeded. `--force` cannot bypass a machine refusal.
 
-The `machine` object in `rules.json` also holds `swapPercent`, `swapUsedGB`, `swapWarnPercent`, `swapRefusePercent`, `swapMinUsedGB`, and `swapWarning`. `swapWarning` is `true` while the `machine:swap` alert is raised. This alert is a notice only. `worker start`, `suite`, and `push` do not refuse on swap.
+The `machine` object in `rules.json` also holds `swapPercent`, `swapUsedGB`, `swapWarnPercent`, `swapRefusePercent`, `swapMinUsedGB`, and `swapWarning`. `swapWarning` is `true` while the `machine:swap` alert is raised. `swapRefuseEnabled` is `true` when the Owner turned on the swap refusal.
+
+The swap refusal is off by default. The Owner turns it on with `machine.swapRefuseEnabled` in Settings, Machine. When it is on, `worker start`, `suite`, and `push` refuse if all of these are true:
+
+- `swapPercent` is at or above `swapRefusePercent`. A blank `swapRefusePercent` switches the refusal off.
+- `swapUsedGB` is at or above `swapMinUsedGB`.
+- `updatedAt` in `rules.json` is not older than 3 minutes. Older rules never refuse.
+- The caller is a pane that is not the `boss` pane, and is inside Herdr. A shell outside Herdr and the `boss` pane are never refused.
+
+The refusal message shows the swap percent and the GB in use, and names the override. `worker start` needs `--force-swap`. `--force` does not override it. `suite` and `push` need `HERDR_BOSS_FORCE_SWAP=1` in the environment. `suite` refuses before it takes the lock. `suite --reuse` still returns 0 when it reuses a passing tree, because no test runs. `push` refuses before it takes the lock, and only when a pre-push hook exists. A ticket that is already in the queue stays.
 
 The Pi allow-list holds only `opencode-go/` models. Free `opencode/` models run only in the `opencode` harness. `worker start --kind pi` refuses an `opencode/` model.
 

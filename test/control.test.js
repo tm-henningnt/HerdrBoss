@@ -589,7 +589,7 @@ test('machine load guard reports active CPU and load limits', async () => {
   assert.deepEqual(machineLimits({ cpus: 8, load: [1, 4, 5], ownerIdleMinutes: 11, cpuUse: { a: { cpu: 400 } } }, policy(), now), {
     owner: 'away', cpuPercent: 50, cpuLimit: 95, fiveMinute: 4, loadLimit: 64,
     guardEnabled: true, guardPausedUntil: null, guardState: 'active', guardActive: true,
-    swapPercent: null, swapUsedGB: null, swapWarnPercent: 80, swapRefusePercent: 95, swapMinUsedGB: 2,
+    swapPercent: null, swapUsedGB: null, swapWarnPercent: 80, swapRefusePercent: 95, swapMinUsedGB: 2, swapRefuseEnabled: false,
   });
   assert.equal(machineLimits({ cpus: 8, load: [1, 4, 5], ownerIdleMinutes: null, cpuUse: { a: { cpu: 560 } } }, policy()).owner, 'present');
   assert.equal(machineLimits({ cpus: 8, load: [1, 4, 5], ownerIdleMinutes: 0, cpuUse: {} }, policy()).loadLimit, 24);

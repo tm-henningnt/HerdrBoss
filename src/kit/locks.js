@@ -4,7 +4,8 @@ import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { DATA_DIR } from '../config.js';
 import { quietHoursActive, readNight } from '../night.js';
-import { loadProjectConfig } from './config.js';
+import { DEFAULT_RULES_FILE, loadProjectConfig } from './config.js';
+import { SWAP_FORCE_ENV, swapGuardFor } from './swap-guard.js';
 import { createHerdrRunner, verifyCallerPane } from './workers.js';
 
 const LOCK_NAME = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/;
@@ -926,6 +927,7 @@ export function pushWithLock(args, {
   pause = defaultPause,
   pidAlive = pidIsAlive,
   stdio = 'inherit',
+  rulesFile = DEFAULT_RULES_FILE,
 } = {}) {
   callerFor(env, herdr);
   const hook = findPrePushHook(config.root);
@@ -941,6 +943,8 @@ export function pushWithLock(args, {
     output('push: no pre-push hook found. Pushing without a lock.');
     return { exitCode: push(), locked: false, hook: null };
   }
+  const swapText = swapGuardFor(rulesFile, { env, herdr, now, override: `Set ${SWAP_FORCE_ENV}=1 to override.` });
+  if (swapText) throw new Error(swapText);
   output(`push: pre-push hook found at ${hook}. Taking lock ${FULL_SUITE_LOCK}.`);
   const reentryToken = crypto.randomBytes(32).toString('hex');
   const lock = acquireProjectLock(FULL_SUITE_LOCK, { config, env, herdr, dataDir, waitSeconds: PUSH_LOCK_WAIT_SECONDS, output, now, pause, pidAlive, kind: 'push', reentryToken });

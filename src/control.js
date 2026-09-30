@@ -6,7 +6,7 @@ import { goalTextError } from './goal.js';
 
 const FILE = path.join(DATA_DIR, 'policy.json');
 export const POLICY_DEFAULTS = {
-  machine: { guardEnabled: true, guardPausedUntil: null, ownerAwayMinutes: 10, presentCpuPercent: 70, awayCpuPercent: 95, presentLoadFactor: 3, awayLoadFactor: 8, diskWarnFreeGB: 20, diskCriticalFreeGB: 5, alertCooldownSeconds: 21600, swapWarnPercent: 80, swapRefusePercent: 95, swapMinUsedGB: 2 },
+  machine: { guardEnabled: true, guardPausedUntil: null, ownerAwayMinutes: 10, presentCpuPercent: 70, awayCpuPercent: 95, presentLoadFactor: 3, awayLoadFactor: 8, diskWarnFreeGB: 20, diskCriticalFreeGB: 5, alertCooldownSeconds: 21600, swapWarnPercent: 80, swapRefusePercent: 95, swapMinUsedGB: 2, swapRefuseEnabled: false },
   maxWorkers: 8,
   borrowIdle: true,
   idleMinutes: 15,
@@ -138,7 +138,7 @@ export function machineLimits(machine, policy, now = Date.now(), night = null) {
     fiveMinute: machine.load?.[1] ?? null, loadLimit: factor == null ? null : cores * factor,
     guardEnabled, guardPausedUntil, guardState, guardActive: guardState === 'active',
     swapPercent, swapUsedGB: swapUsed == null ? null : swapUsed / 1024,
-    swapWarnPercent: policy.machine.swapWarnPercent ?? null, swapRefusePercent: policy.machine.swapRefusePercent ?? null, swapMinUsedGB: policy.machine.swapMinUsedGB ?? 0 };
+    swapWarnPercent: policy.machine.swapWarnPercent ?? null, swapRefusePercent: policy.machine.swapRefusePercent ?? null, swapMinUsedGB: policy.machine.swapMinUsedGB ?? 0, swapRefuseEnabled: policy.machine.swapRefuseEnabled === true };
 }
 
 function subset(value, set, field, errors) {
@@ -161,6 +161,7 @@ export function validatePolicy(value, models) {
     if (value.machine.awayCpuPercent !== null && (!Number.isInteger(value.machine.awayCpuPercent) || value.machine.awayCpuPercent < 0 || value.machine.awayCpuPercent > 100)) errors.push('machine.awayCpuPercent must be null or an integer from 0 to 100.');
     for (const key of ['presentLoadFactor', 'awayLoadFactor']) if (value.machine[key] !== null && (!Number.isFinite(value.machine[key]) || value.machine[key] < 0 || value.machine[key] > 128)) errors.push(`machine.${key} must be null or a number from 0 to 128.`);
     for (const key of ['swapWarnPercent', 'swapRefusePercent']) if (value.machine[key] !== null && (!Number.isInteger(value.machine[key]) || value.machine[key] < 1 || value.machine[key] > 100)) errors.push(`machine.${key} must be null or an integer from 1 to 100.`);
+    if (typeof value.machine.swapRefuseEnabled !== 'boolean') errors.push('machine.swapRefuseEnabled must be boolean.');
     if (!Number.isFinite(value.machine.swapMinUsedGB) || value.machine.swapMinUsedGB < 0 || value.machine.swapMinUsedGB > 1024) errors.push('machine.swapMinUsedGB must be a number from 0 to 1024.');
     for (const [key, max] of [['diskWarnFreeGB', 1048576], ['diskCriticalFreeGB', 1048576]]) if (!Number.isFinite(value.machine[key]) || value.machine[key] < 0 || value.machine[key] > max) errors.push(`machine.${key} must be a number from 0 to ${max}.`);
   }
