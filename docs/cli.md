@@ -168,6 +168,171 @@ The Watch box on the Agents page sets the same values through `POST /api/watch/s
 The command reads only `autoMode` from `~/.claude/settings.json`. It prints missing lines and changed labeled environment lines. It shows the old line after `now:`. It counts Owner lines that the template does not define, but it does not show their text. If the settings file or the `autoMode` key is missing, it prints the full template and says why. It never edits `~/.claude/settings.json`. The checked entries and the risk of each setting are in [harness-setup.md](harness-setup.md).
 | `herdr-boss scratch SLUG` | Create `~/.herdr-boss/scratch/SLUG/` if it does not exist, and print its absolute path. `HERDR_BOSS_DIR` replaces `~/.herdr-boss`. |
 
+## Settings reference
+
+The dashboard Settings and Allocation pages show these settings. Each row shows the key in `policy.json` or `config.json`, the default, the unit, the range, and the effect of a higher or lower value. The dashboard shows the same text in the info popup of each setting.
+
+Regenerate the block with `UPDATE_SETTINGS_DOCS=1 node --test test/setting-help.test.js` after you change `public/setting-help.js`.
+
+<!-- settings-reference:begin -->
+
+Do not edit this block. It comes from `public/setting-help.js`.
+
+#### Harnesses
+
+- Controls: Which agent kinds and models workers may use, the preferred model of each kind, and which provider quota each model counts against.
+- Effect: Workers and quotas. Worker start and handover choose only from the models that you leave on.
+- Safe to change: Safe to change at any time. A running worker keeps its model. A model that you switch off is not chosen again.
+- Restart: No restart. Select Apply policy.
+
+| Setting | Key | What it does | Default | Unit | Range | Raise it | Lower it | Apply |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Available | `harness.available` | Lets workers use this harness. Clear it to stop all workers from using the harness. | On for every harness | Switch | On or off | Turning it on lets worker start and handover pick the harness. | Turning it off stops new workers on this harness. A running worker keeps working. | Select Apply policy. The change takes effect at the next engine tick. |
+| Preferred model | `harness.preferredModel` | The model that worker start and handover use when no model is given. | The harness default | Model name | Any model that the harness allows | Not applicable. Choose another model to change the choice. | An empty choice uses the harness default. | Select Apply policy. The change takes effect at the next engine tick. |
+| Model box | `harness.model` | Lets this harness use the model. Clear the box to stop the harness from using the model. | On for a catalog model | Switch | On or off | Turning it on lets workers use the model in this harness. | Turning it off stops new workers on this model in this harness. Other harnesses keep their own box. | Select Apply policy. The change takes effect at the next engine tick. |
+| Provider | `harness.provider` | The provider quota that this model counts against. | The route of the catalog, or Unmetered | Provider name | The providers that the harness supports, or Unmetered | Not applicable. Choose a provider to count the model against its quota. | Unmetered means no quota applies. Pacing and quota warnings ignore the model. | Select Apply policy. The change takes effect at the next engine tick. |
+| Add model | `harness.addModel` | Adds a local model string to this harness. The string is stored in the local policy, not in kit/models.json. | No local models | Model string | Up to 128 characters: letters, digits, dot, underscore, slash, and hyphen | Not applicable. | Select Remove to delete a local model. | Select Apply policy. The change takes effect at the next engine tick. |
+
+#### Provider quotas
+
+- Controls: How Herdr Boss paces each provider quota, the goal for each quota window, and the warning and critical levels.
+- Effect: Quotas and notices. Pacing changes which lanes say Use now and when a worker start is refused. The levels change when a quota notice is sent.
+- Safe to change: Safe to change. A goal below 100% makes Herdr Boss save quota. Keep the warning level below the critical level.
+- Restart: No restart. Goals and modes need Apply policy. The two levels need Save.
+
+| Setting | Key | What it does | Default | Unit | Range | Raise it | Lower it | Apply |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Quota mode | `quota.mode` | Sets if Herdr Boss paces a provider. Manage pace uses the quota to decide when to run work. Ignore quota stops pacing and pace warnings for worker dispatch. | Manage pace | Choice | Manage pace or Ignore quota | Not applicable. | Ignore quota lets workers start at any pace. Handover risk and automatic handover still use live quota data. A window at 100% still exhausts the provider. | Select Apply policy. The change takes effect at the next engine tick. |
+| Pacing goal | `quota.goalPercent` | The most percent of a quota window that Herdr Boss plans to use by the end of the goal. | Blank, which means 100% | Percent of the window | 0 to 100 | A higher goal lets workers use more of the window. | A lower goal saves quota. The lanes say Use now less often. | Select Apply policy. The change takes effect at the next engine tick. |
+| Goal end | `quota.goalEnd` | When the pacing goal ends: at the reset, at a local date and time, or a whole number of hours before each reset. | At reset | Choice, then a local time or hours | The end must be after now, after the window start, and not after the reset | A later end gives the goal more time to use quota. | An earlier end forces the use of quota sooner. | Select Apply policy. The change takes effect at the next engine tick. |
+| Quota warning level | `quota.warnPercent` | The used percent of a quota window at which the quota shows a warning. | 90 | Percent used | 50 to 99, below the critical level | A higher value gives the warning later. | A lower value gives the warning earlier. | Select Save in the group. The change takes effect at once. |
+| Quota critical level | `quota.criticalPercent` | The used percent of a quota window at which the quota shows a critical alert. | 98 | Percent used | 51 to 100, above the warning level | A higher value gives the critical alert later. | A lower value gives the critical alert earlier. Keep it above the warning level. | Select Save in the group. The change takes effect at once. |
+
+#### Machine
+
+- Controls: The machine guard, the CPU and load limits, the disk and swap thresholds, and the notice cooldown.
+- Effect: The machine and notices. An active guard blocks new workers when the machine is busy. Disk and swap thresholds raise notices. The swap refusal can block worker starts.
+- Safe to change: Safe to change. A high limit lets more work run at once. A low limit protects the machine but slows work. Disk and swap notices stay on when the guard is off.
+- Restart: No restart. Select Apply policy.
+
+| Setting | Key | What it does | Default | Unit | Range | Raise it | Lower it | Apply |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Machine guard | `machine.guardEnabled` | Turns the CPU and load limits on or off. An active guard warns and blocks worker starts when the machine is busy. | On | Switch | On or off | Turning it on protects the machine from too many workers. | Turning it off stops CPU and load warnings and blocks. Memory, disk, and swap notices stay on. | Select Apply policy. The change takes effect at the next engine tick. |
+| Pause guard | `machine.guardPause` | Turns the machine guard off for a set time. The guard turns on again when the time ends. | 1 hour in the list | Hours | 1, 2, 4, 8, 12, or 24 hours | A longer pause lets more work run for longer. | A shorter pause returns the protection sooner. Select Resume guard to end a pause early. | Select Apply policy. The change takes effect at the next engine tick. |
+| Owner away after minutes | `machine.ownerAwayMinutes` | The idle time after which Herdr Boss treats the Owner as away. It chooses the away limits below. | 10 | Minutes | 0 to 1440 | The Owner counts as present for longer, so the lower present limits apply for longer. | The Owner counts as away sooner, so the higher away limits apply sooner. | Select Apply policy. The change takes effect at the next engine tick. |
+| CPU limit while present | `machine.presentCpuPercent` | The CPU use at which the guard blocks worker starts while the Owner is present. CPU is a percent of the total machine capacity. | 70 | Percent | 0 to 100 | A higher limit lets workers start on a busier machine. | A lower limit keeps the machine free for the Owner. | Select Apply policy. The change takes effect at the next engine tick. |
+| CPU limit while away | `machine.awayCpuPercent` | The CPU use at which the guard blocks worker starts while the Owner is away. | 95 | Percent | 0 to 100, or blank to turn the limit off | A higher limit lets workers use more of the machine. | A lower limit leaves more headroom. A blank field turns the limit off. | Select Apply policy. The change takes effect at the next engine tick. |
+| Present load backstop | `machine.presentLoadFactor` | A backstop on the 5-minute load average while the Owner is present. The limit is this factor times the core count. | 3 | Times the core count | 0 to 128, or blank to turn the backstop off | A higher factor allows more load before the guard acts. | A lower factor acts sooner. A blank field turns the backstop off. | Select Apply policy. The change takes effect at the next engine tick. |
+| Away load backstop | `machine.awayLoadFactor` | A backstop on the 5-minute load average while the Owner is away. The limit is this factor times the core count. | 8 | Times the core count | 0 to 128, or blank to turn the backstop off | A higher factor allows more load before the guard acts. | A lower factor acts sooner. A blank field turns the backstop off. | Select Apply policy. The change takes effect at the next engine tick. |
+| Disk warning below free GB | `machine.diskWarnFreeGB` | The free disk space below which Herdr Boss sends a disk warning. A GB is 2³⁰ bytes. This notice stays on when the guard is off. | 20 | GB free | 0 to 1048576 | A higher value gives the warning earlier. | A lower value gives the warning later. | Select Apply policy. The change takes effect at the next engine tick. |
+| Disk critical below free GB | `machine.diskCriticalFreeGB` | The free disk space below which Herdr Boss sends a critical disk alert. | 5 | GB free | 0 to 1048576 | A higher value gives the critical alert earlier. | A lower value gives the critical alert later. Keep it below the warning value. | Select Apply policy. The change takes effect at the next engine tick. |
+| Swap warning at % used | `machine.swapWarnPercent` | The swap use at which Herdr Boss raises a swap warning. It needs 3 samples in a row at or above the percent, with at least the minimum GB in use. The warning never blocks work. | 80 | Percent of the swap total | 1 to 100, or blank to turn the warning off | A higher value gives the warning later. | A lower value gives the warning earlier. A blank field turns the warning off. | Select Apply policy. The change takes effect at the next engine tick. |
+| Swap refusal at % used | `machine.swapRefusePercent` | The swap use at which the swap refusal blocks new work. It has an effect only when Refuse new work at high swap is on. | 95 | Percent of the swap total | 1 to 100, or blank to turn the refusal off | A higher value blocks new work later. | A lower value blocks new work sooner. A blank field turns the refusal off. | Select Apply policy. The change takes effect at the next engine tick. |
+| Swap rules need at least GB used | `machine.swapMinUsedGB` | The least swap in use before the swap warning and the swap refusal apply. The macOS swap total grows with use, so a percent alone can mislead. | 2 | GB | 0 to 1024 | A higher value ignores a small swap use. | A lower value lets a small swap use raise a notice. Zero removes the floor. | Select Apply policy. The change takes effect at the next engine tick. |
+| Refuse new work at high swap | `machine.swapRefuseEnabled` | When on, a worker start, a suite, or a push with a pre-push suite fails while swap is at or above the refusal percent. Work that the Owner or the Boss starts is never refused. | Off | Switch | On or off | Turning it on protects a machine that swaps from more load. Use --force-swap, or HERDR_BOSS_FORCE_SWAP=1 for suite and push, to override. | Turning it off lets work start at any swap level. The swap warning still applies. | Select Apply policy. The change takes effect at the next engine tick. |
+| Notice cooldown seconds | `machine.alertCooldownSeconds` | The least time before the same machine notice is sent again. | 21600 (6 hours) | Seconds | 0 to 604800 | A higher value sends fewer repeat notices. | A lower value sends repeat notices sooner. Zero sends a notice at each change. | Select Apply policy. The change takes effect at the next engine tick. |
+| Memory free warning | `machine.memFreeWarnPercent` | The free memory percent below which Herdr Boss shows a memory warning. It stays on when the guard is off. | 15 | Percent free | 1 to 50 | A higher value gives the memory warning earlier. | A lower value gives the memory warning later. | Select Save in the group. The change takes effect at once. |
+
+#### Watch
+
+- Controls: The routines that the Boss pane gets while a watch runs, the worker caps of a watch, and quiet hours.
+- Effect: Workers and notices. A cap limits how many workers run while the Owner is away. A routine sends a prompt to the Boss pane.
+- Safe to change: Safe to change. A routine change applies at the next prompt of a running watch. A routine that you edit never changes the kit file.
+- Restart: No restart. A routine needs Save. A cap needs Save in its group.
+
+| Setting | Key | What it does | Default | Unit | Range | Raise it | Lower it | Apply |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Routine title | `watch.routine.title` | The name of a watch routine. The Watch box and the Boss prompt show it. | The kit title | Text | Up to 60 characters | Not applicable. | Not applicable. | The change takes effect at once. |
+| Routine model hint | `watch.routine.model` | A hint of the model that the Boss should use for the routine. The Boss pane reads it in the prompt. | default | Text | Up to 40 characters | Not applicable. | Not applicable. | The change takes effect at once. |
+| Routine schedule | `watch.routine.schedule` | When a routine runs during a watch: every N minutes, or at a set time before the end of the watch. | Every 60 minutes for a new routine | Minutes, or a time of day | 1 to 1440 minutes, or a time such as 01:00 | More minutes between runs send fewer prompts. | Fewer minutes between runs send more prompts and use more quota. | The change takes effect at once. |
+| Routine prompt | `watch.routine.prompt` | The text that the service sends to the Boss pane when the routine runs. | The kit text | Text | Up to 8000 characters | A longer prompt gives more detail and uses more context. | Reset to the kit text removes your change. | The change takes effect at once. |
+| Watch worker cap | `watch.maxWorkers` | The most workers that run at the same time while a watch runs. A blank value uses the day value. | Blank (the day value) | Workers | 1 to 40, or blank | A higher cap runs more workers overnight and uses more quota and CPU. | A lower cap runs fewer workers overnight. | Select Save in the group. The change takes effect at once. |
+| Watch worker cap by lane | `watch.maxWorkersByLane` | The most workers per lane while a watch runs. The lanes are Unmetered, Codex, Claude, and OpenCode Go. A blank lane uses the day value. | All lanes blank | Workers | 1 to 40 for each lane, or blank | A higher cap lets that lane run more workers. | A lower cap protects the quota of that lane. | Select Save in the group. The change takes effect at once. |
+| Quiet hours default | `watch.quietHours` | The default for a new watch: quiet hours on or off. Quiet hours queue desktop notifications until the watch ends. They also delay the release of an expired manual suite lock or lease. | Off | Switch | On or off | Turning it on gives a new watch quiet hours. A watch that you start can override it. | Turning it off gives a new watch normal desktop notifications. | Select Save in the group. The change takes effect at once. |
+
+#### Capacity and handover
+
+- Controls: The number of working agents, idle sharing, the orchestrator reserve, and automatic handover of an orchestrator to a successor. These controls are on the Allocation page.
+- Effect: Workers, quotas, and handover. The maximum working agents is a hard cap for worker start. Handover moves an orchestrator to a fresh successor before a quota or context limit.
+- Safe to change: Change the maximum working agents with care: a high value adds load. Leave automatic handover off until you have read the handover guide.
+- Restart: No restart. Select Apply policy.
+
+| Setting | Key | What it does | Default | Unit | Range | Raise it | Lower it | Apply |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Maximum working agents | `maxWorkers` | The most agents that work at the same time. The worker command enforces it for all projects together. | 8 | Agents | 1 to 64 | A higher value runs more work at once and adds CPU and quota use. | A lower value queues new workers until a slot is free. | Select Apply policy. The change takes effect at the next engine tick. |
+| Borrow idle shares | `borrowIdle` | Lets a busy project use the unused share of an idle project. | On | Switch | On or off | Turning it on uses the whole capacity when some projects are idle. | Turning it off keeps each project inside its own share. | Select Apply policy. The change takes effect at the next engine tick. |
+| Idle after minutes | `idleMinutes` | The time without activity after which a project counts as idle and lends its share. | 15 | Minutes | 0 to 1440 | A project stays active longer before it lends its share. | A project lends its share sooner. | Select Apply policy. The change takes effect at the next engine tick. |
+| Orchestrator reserve | `reservePercent` | The percent of a provider quota that is kept for orchestrators. Workers cannot use it. | 15 | Percent of the quota | 0 to 80 | A higher reserve keeps orchestrators running longer when quota is short. Workers get less. | A lower reserve gives workers more quota. An orchestrator can run out first. | Select Apply policy. The change takes effect at the next engine tick. |
+| Handover lead minutes | `handoffLeadMinutes` | A quota window is at risk when it will run out within this many minutes. Herdr Boss then recommends a handover. | 180 | Minutes | 0 to 10080 | A higher value recommends a handover earlier. | A lower value recommends a handover later. | Select Apply policy. The change takes effect at the next engine tick. |
+| Automatic handover | `autoHandover` | Lets Herdr Boss prepare and activate a successor orchestrator without the Owner. It never runs for the Boss. | Off | Switch | On or off | Turning it on moves an orchestrator to a successor at the reserve limit or the context limit. | Turning it off means only the Owner starts a handover. | Select Apply policy. The change takes effect at the next engine tick. |
+| Activate at quota used % | `autoHandoverPercent` | The quota level at which the prepared successor takes control. The source stays in control until then. | 98 | Percent of the quota | 90 to 100 | A higher value keeps the source in control for longer. | A lower value hands over sooner. | Select Apply policy. The change takes effect at the next engine tick. |
+| Hand over at context tokens | `autoHandoverContextTokens` | The context size above which a Claude orchestrator gets a fresh successor at a task boundary. | 300000 | Tokens | 50000 to 2000000 | A higher value keeps a long context for longer. | A lower value hands over sooner and keeps the context short. | Select Apply policy. The change takes effect at the next engine tick. |
+| Default orchestrator goal | `defaultOrchestratorGoal` | The /goal text for a new orchestrator that has no goal. A handover copies the goal of the old orchestrator to the successor. | A standing goal text | Text | One line of at most 4000 characters, or empty for no default | A longer text gives more direction and uses more context. | An empty text gives a new orchestrator no default goal. | Select Apply policy. The change takes effect at the next engine tick. |
+
+#### Token prices (Advanced)
+
+- Controls: The USD price per million tokens of each model.
+- Effect: Only the cost figures on the Analytics page. No price changes how workers run.
+- Safe to change: Safe to change. Reset to defaults removes all your changes.
+- Restart: No restart. Select Save prices.
+
+| Setting | Key | What it does | Default | Unit | Range | Raise it | Lower it | Apply |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Input price | `prices.input` | The price of input tokens. The cost that Herdr Boss shows is an API-price equivalent, because a subscription is not billed per token. | The catalog price | USD per million tokens | 0 to 1000, or blank for the default | A higher price raises the cost figures. | A lower price lowers the cost figures. | The change takes effect at once. |
+| Output price | `prices.output` | The price of output tokens. | The catalog price | USD per million tokens | 0 to 1000, or blank for the default | A higher price raises the cost figures. | A lower price lowers the cost figures. | The change takes effect at once. |
+| Cache read price | `prices.cacheRead` | The price of tokens that the provider reads from its cache. | The catalog price | USD per million tokens | 0 to 1000, or blank for the default | A higher price raises the cost figures. | A lower price lowers the cost figures. | The change takes effect at once. |
+| Cache write price, 5 minutes | `prices.cacheWrite` | The price of tokens that the provider writes to a cache with a 5-minute life. | The catalog price | USD per million tokens | 0 to 1000, or blank for the default | A higher price raises the cost figures. | A lower price lowers the cost figures. | The change takes effect at once. |
+| Cache write price, 1 hour | `prices.cacheWrite1h` | The price of tokens that the provider writes to a cache with a 1-hour life. | The catalog price | USD per million tokens | 0 to 1000, or blank for the default | A higher price raises the cost figures. | A lower price lowers the cost figures. | The change takes effect at once. |
+
+#### Avatars (Advanced)
+
+- Controls: The image of the Boss and of each project in the Chat, the Mailbox, and the Agents chart.
+- Effect: Only how the pages look.
+- Safe to change: Safe to change.
+- Restart: No restart. An upload or a reset takes effect at once.
+
+| Setting | Key | What it does | Default | Unit | Range | Raise it | Lower it | Apply |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Upload image | `avatar.upload` | Sets your own image for the Boss or for a project. | A generated avatar | Image file | PNG, JPEG, or WebP, at most 512 KB | Not applicable. | Not applicable. | The change takes effect at once. |
+| Reset avatar | `avatar.reset` | Removes your image and returns to the generated avatar. | Not applicable | Button | Not applicable | Not applicable. | Not applicable. | The change takes effect at once. |
+
+#### Service settings (Advanced)
+
+- Controls: The values that the service itself uses: collection intervals, stale limits, browser clean-up, and the network address. Each row shows whether the value comes from config.json or is a default.
+- Effect: Workers, notices, browsers, and the machine. A value here changes when a status is stale, when an idle worker is reported, and when an orphan browser is stopped.
+- Safe to change: A row with an input is safe to change. A row without an input is read-only. Change it in config.json.
+- Restart: A row with an input needs no restart. A read-only row needs a service restart.
+
+| Setting | Key | What it does | Default | Unit | Range | Raise it | Lower it | Apply |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Stale status minutes | `staleStatusMinutes` | The age after which a published project status is stale while workers run or new commits land. | 120 | Minutes | 5 to 1440 | A higher value gives the stale notice later. | A lower value gives the stale notice sooner. | Select Save in the group. The change takes effect at once. |
+| Stale idle worker minutes | `workers.staleIdleMinutes` | The idle time after which Herdr Boss reports a worker as stale. The wait command uses it as its stall time. | 120 | Minutes | 5 to 1440 | A higher value waits longer before it reports an idle worker. | A lower value reports an idle worker sooner. | Select Save in the group. The change takes effect at once. |
+| Stop orphan browser daemons | `browsers.reapOrphanDaemons` | Lets Herdr Boss stop an agent-browser daemon that has no parent, no children, and the minimum age. It never stops a browser that it did not start. | On | Switch | On or off | Turning it on frees memory from forgotten daemons. | Turning it off leaves orphan daemons running. | Select Save in the group. The change takes effect at once. |
+| Orphan daemon minimum age | `browsers.orphanDaemonMinAgeSeconds` | The age that an orphan browser daemon must reach before Herdr Boss stops it. | 7200 | Seconds | 60 to 86400 | A higher value spares a young daemon for longer. | A lower value stops orphans sooner and risks a daemon that is between two uses. | Select Save in the group. The change takes effect at once. |
+| Stale owned browser minutes | `browsers.staleOwnedMinutes` | The idle time of the agent after which Herdr Boss reports its browser as stale. | 30 | Minutes | 5 to 1440 | A higher value reports a stale browser later. | A lower value reports a stale browser sooner. | Select Save in the group. The change takes effect at once. |
+| Sweep code-sign clones | `browsers.sweepCodeSignClones` | Lets Herdr Boss delete old code-sign clones of Chrome that no running Chrome process owns. | On | Switch | On or off | Turning it on frees disk space. | Turning it off leaves the clones on disk. | Select Save in the group. The change takes effect at once. |
+| Tick seconds | `tickSeconds` | The time between two collection passes of the engine. | 30 | Seconds | A positive whole number | A higher value gives slower updates and less load. | A lower value gives faster updates and more load. | Change it in config.json. Restart the service. |
+| Quota seconds | `quotaSeconds` | The time between two reads of the provider quotas. | 300 | Seconds | A positive whole number | A higher value reads quotas less often. | A lower value reads quotas more often and calls the providers more. | Change it in config.json. Restart the service. |
+| Push prompts | `push` | Lets the service send prompts to orchestrator panes. Notices to the Owner are always sent. | On | Switch | On or off | Turning it on lets the service prompt the orchestrators. | Turning it off stops all prompts to orchestrator panes. | Change it in config.json. Restart the service. |
+| Notice cooldown (legacy) | `alertCooldownSeconds` | The least time before the same notice is sent again. The machine cooldown in the Machine group takes precedence for machine notices. | 21600 (6 hours) | Seconds | A whole number of 0 or more | A higher value sends fewer repeat notices. | A lower value sends repeat notices sooner. | Change it in config.json. Restart the service. |
+| Provider kinds | `providerKinds` | Maps each quota provider to the agent kinds that use it. | claude to claude, codex to codex, opencodego to opencode and pi | Object of lists | Kind names that exist | Not applicable. | A wrong map counts a kind against the wrong quota. | Change it in config.json. Restart the service. |
+| Orchestrator label | `orchestratorLabel` | The pane label that marks the orchestrator of a project. | orch | Text | One pane label | Not applicable. | A wrong label makes Herdr Boss miss the orchestrator panes. | Change it in config.json. Restart the service. |
+| Port | `port` | The port of the dashboard and the API. | 4477 | TCP port | 1 to 65535 | Not applicable. | A change also changes the address that other tools use. | Change it in config.json. Restart the service. |
+| Host | `host` | The network address that the server listens on. 0.0.0.0 allows remote access with the access token. 127.0.0.1 allows only this machine. | 0.0.0.0 | Address | An IP address of this machine | Not applicable. | Set 127.0.0.1 to turn remote access off. | Change it in config.json. Restart the service. |
+
+#### Harness readiness (Advanced)
+
+- Controls: A read-only table that shows if each harness entry that orchestration needs is present.
+- Effect: Nothing. The table only reports.
+- Safe to change: Nothing to change. Run herdr-boss harness sync to see what to fix.
+- Restart: No restart.
+
+| Setting | Key | What it does | Default | Unit | Range | Raise it | Lower it | Apply |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Readiness table | `harness.readiness` | Shows for each harness entry if it is ok, missing, or bad. The table shows no path and no value. | Not applicable | Table | Read-only | Not applicable. | Not applicable. | The change takes effect at once. |
+
+<!-- settings-reference:end -->
+
 ## Workers
 
 ### `worker start NAME`

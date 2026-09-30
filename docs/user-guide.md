@@ -345,9 +345,19 @@ When every metered provider is ahead of pace, `worker start` allows the least-ov
 
 ## Settings and allocation
 
+### Setting help and page order
+
+Each setting on the Settings page and on the Allocation page has an **i** button next to its label. Select the button, or focus it and press Enter or Space, to open a popup. The popup shows what the setting does, its default, its unit, its range, the effect of a higher and a lower value, and how the change takes effect. On a desktop, hold the pointer over the button to show the same popup. Press Escape to close it. A popup stays open when the page refreshes.
+
+The Help panel of the Settings page has a guide to each group of settings: what the group controls, what it affects, which changes are safe, and if a restart is needed. The text of the popups, the guide, and the settings reference in `docs/cli.md` comes from one file, `public/setting-help.js`. A test fails when a setting has no explanation.
+
+The Settings page lists the most used groups first: Harnesses, Provider quotas, Machine, Watch, and Watch routines. The **Advanced** section holds Avatars, Token prices, Service settings, and Harness readiness. It is closed at first. The page remembers in this browser if you opened it.
+
+The Advanced section opens by itself while a harness readiness row is not `ok` or a service settings save shows an error. Its header then shows how many items need attention.
+
 The Settings page has one section for each harness. A harness section holds the harness availability, the preferred model, and one row for each model. Provider quota modes, quota pacing goals, and machine limits are below the harness sections. Settings shows the warning and critical quota percentages from `config.json`. The dashboard uses these values to color quota levels.
 
-The **Service settings** table shows the values that the service uses. Each row shows whether the value comes from `config.json` or a default. The table groups rows under Machine, Quota, Status, Workers, Browsers, and Service. Set values with inputs, then select **Save** for that group. Herdr Boss writes only those values to `config.json` and applies them at once. Keep the quota warning below the critical value. Rows without inputs stay read-only. Change in `config.json` and restart the service. The table does not show access or Roamgate settings.
+The **Service settings** table shows the values that the service uses. Each row shows whether the value comes from `config.json` or a default. The table groups rows under Machine, Quota, Status, Workers, Watch, Browsers, and Service. Set values with inputs, then select **Save** for that group. Herdr Boss writes only those values to `config.json` and applies them at once. Keep the quota warning below the critical value. Rows without inputs stay read-only. Change in `config.json` and restart the service. The table does not show access or Roamgate settings.
 
 ### Avatars
 

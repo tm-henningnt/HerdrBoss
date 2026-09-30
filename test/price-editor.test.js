@@ -18,7 +18,7 @@ function editor({ table, inputs = [], response }) {
   };
   const fetch = async (url, init) => { calls.push({ url, init }); return { ok: response.ok, json: async () => response.body }; };
   const esc = (v) => String(v).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
-  const api = new Function('document', 'fetch', 'esc', 'render', `let lastRender = 'x';\n${block}\nreturn { pricesPanel, savePrices, setTable: (t) => { priceTable = t; }, draft: priceDraft, message: () => priceMessage, table: () => priceTable, lastRender: () => lastRender };`)(document, fetch, esc, () => {});
+  const api = new Function('document', 'fetch', 'esc', 'render', 'helpButton', `let lastRender = 'x';\n${block}\nreturn { pricesPanel, savePrices, setTable: (t) => { priceTable = t; }, draft: priceDraft, message: () => priceMessage, table: () => priceTable, lastRender: () => lastRender };`)(document, fetch, esc, () => {}, () => '');
   api.setTable(table);
   return { ...api, calls, status };
 }
@@ -90,7 +90,7 @@ test('Reset to defaults sends an empty override', async () => {
 });
 
 test('the Settings page places the price editor in its own section and the help names it', () => {
-  assert.match(app, /\$\{serviceSettings\}\$\{pricesPanel\(\)\}\$\{harnessPanel\}/);
+  assert.match(app, /\$\{pricesPanel\(\)\}\$\{serviceSettings\}\$\{harnessPanel\}/);
   assert.match(app, /<h3>Token prices<\/h3>/);
   assert.match(app, /'\/api\/settings\/prices'[,\]]/);
 });

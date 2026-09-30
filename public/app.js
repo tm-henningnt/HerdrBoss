@@ -1,6 +1,7 @@
 import { markdownOrPlain, plainTextHtml, sanitizeRendered } from './markdown.js';
 import { FLOW, FLOW_LABEL, DONE_LIMIT, taskMap, taskState, blockReasons, boardColumns, dependencyChain, criticalPath, graphTasks, graphDepths, blockerIds, elapsedText, domPart, fleetItems, fleetColumns, fleetFilter, fleetWho } from './board.js';
 import { patchHtml } from './keyed.js';
+import { SETTING_HELP, settingPopupHtml, settingsGuideHtml } from './setting-help.js';
 import { groupMailRows, inboxSections, listTime, mailRowHtml } from './mail-rows.js';
 import { mailBarItem, mailActionBarHtml, mailSelectionBarHtml } from './mail-bar.js';
 import { APP_VIEW_ROUTES, appViewport } from './app-view.js';
@@ -490,17 +491,17 @@ function controlBlock(s) {
     <div class="panel control-shell">
       <div class="control-grid">
         <div><h3>Capacity &amp; handover</h3>
-          <label class="setting-line"><span>Maximum working agents</span><input type="number" min="1" max="64" value="${d.maxWorkers}" data-policy-number="maxWorkers"></label>
-          <label class="setting-line"><span>Borrow idle shares</span><input type="checkbox" data-policy-bool="borrowIdle" ${d.borrowIdle ? 'checked' : ''}></label>
-          <label class="setting-line"><span>Idle after minutes</span><input type="number" min="0" max="1440" value="${d.idleMinutes}" data-policy-number="idleMinutes"></label>
-          <label class="setting-line"><span>Orchestrator reserve %</span><input type="number" min="0" max="80" value="${d.reservePercent}" data-policy-number="reservePercent"></label>
-          <label class="setting-line"><span>Handover lead minutes</span><input type="number" min="0" max="10080" value="${d.handoffLeadMinutes}" data-policy-number="handoffLeadMinutes"></label>
-          <label class="setting-line"><span>Automatic handover</span><input type="checkbox" data-policy-bool="autoHandover" ${d.autoHandover ? 'checked' : ''}></label>
+          ${settingRow('maxWorkers', 'Maximum working agents', `<input id="${helpFid('maxWorkers')}" type="number" min="1" max="64" value="${d.maxWorkers}" data-policy-number="maxWorkers">`)}
+          ${settingRow('borrowIdle', 'Borrow idle shares', `<input id="${helpFid('borrowIdle')}" type="checkbox" data-policy-bool="borrowIdle" ${d.borrowIdle ? 'checked' : ''}>`)}
+          ${settingRow('idleMinutes', 'Idle after minutes', `<input id="${helpFid('idleMinutes')}" type="number" min="0" max="1440" value="${d.idleMinutes}" data-policy-number="idleMinutes">`)}
+          ${settingRow('reservePercent', 'Orchestrator reserve %', `<input id="${helpFid('reservePercent')}" type="number" min="0" max="80" value="${d.reservePercent}" data-policy-number="reservePercent">`)}
+          ${settingRow('handoffLeadMinutes', 'Handover lead minutes', `<input id="${helpFid('handoffLeadMinutes')}" type="number" min="0" max="10080" value="${d.handoffLeadMinutes}" data-policy-number="handoffLeadMinutes">`)}
+          ${settingRow('autoHandover', 'Automatic handover', `<input id="${helpFid('autoHandover')}" type="checkbox" data-policy-bool="autoHandover" ${d.autoHandover ? 'checked' : ''}>`)}
           <p class="setting-help">Apply policy to save this choice.</p>
-          <label class="setting-line"><span>Activate at quota used %</span><input type="number" min="90" max="100" value="${d.autoHandoverPercent}" data-policy-number="autoHandoverPercent"></label>
+          ${settingRow('autoHandoverPercent', 'Activate at quota used %', `<input id="${helpFid('autoHandoverPercent')}" type="number" min="90" max="100" value="${d.autoHandoverPercent}" data-policy-number="autoHandoverPercent">`)}
           <p class="setting-help">When enabled, Boss prepares a successor at the reserve limit and activates it at this quota level after the successor reports ready. The source stays in control until then.</p>
-          <label class="setting-line"><span>Hand over at context tokens</span><input type="number" min="50000" max="2000000" step="10000" value="${d.autoHandoverContextTokens}" data-policy-number="autoHandoverContextTokens"></label>
-          <label class="setting-line goal-setting"><span>Default orchestrator goal</span><input type="text" maxlength="4000" value="${esc(d.defaultOrchestratorGoal ?? '')}" data-policy-text="defaultOrchestratorGoal"></label>
+          ${settingRow('autoHandoverContextTokens', 'Hand over at context tokens', `<input id="${helpFid('autoHandoverContextTokens')}" type="number" min="50000" max="2000000" step="10000" value="${d.autoHandoverContextTokens}" data-policy-number="autoHandoverContextTokens">`)}
+          ${settingRow('defaultOrchestratorGoal', 'Default orchestrator goal', `<input id="${helpFid('defaultOrchestratorGoal')}" type="text" maxlength="4000" value="${esc(d.defaultOrchestratorGoal ?? '')}" data-policy-text="defaultOrchestratorGoal">`, { cls: 'goal-setting' })}
           <p class="setting-help">A handover copies the goal of the old orchestrator to the successor: the published status goal, else the last <code>/goal</code> command of its session. A new orchestrator with no goal gets this text. Leave it empty for no default. Use one line of at most 4000 characters. A Claude successor gets <code>/goal</code> after it answers. Other harnesses get the goal in the activation prompt.</p>
           <p class="setting-help">At a task boundary, a Claude orchestrator with a context above this many tokens gets a fresh successor from the project memory file, with the same model. Herdr Boss activates it when the orchestrator pane is not working. It reads the context size only for Claude. A pane it sees for the first time waits for its next boundary.</p>
           <p class="setting-help">Automatic handover never runs for the Boss, for a project that no longer works, for a project that is paused or stood down in its published status, or for a successor model that is weaker than the source model. After activation, Herdr Boss closes the old pane when the successor has answered and the old pane is idle.</p>
@@ -517,6 +518,115 @@ function controlBlock(s) {
       <div class="control-actions ${policyDirty ? 'pending' : ''}"><span data-policy-status role="status">${esc(saveMessage || (policyDirty ? 'Unsaved changes · Apply policy to keep them' : `${s.control.runningWorkers}/${d.maxWorkers} workers active · policy saved`))}</span><button id="save-policy" ${policyDirty ? '' : 'disabled'}>Apply policy</button></div>
     </div></section>`;
 }
+
+// Inline help of a setting. The texts are in setting-help.js. A button opens one shared popup, by touch, by keyboard, or by hover.
+// A help key is the setting id, plus #instance when the page shows the setting more than once, for example once for each provider.
+// settingHelpOpen is the key that a tap or a key press opened. It stays open across a refresh. settingHelpHover is the key under the pointer.
+let settingHelpOpen = null;
+let settingHelpHover = null;
+// After Escape, the pointer that still rests on the button does not open the popup again until it leaves the button.
+let settingHelpMuted = false;
+const helpFid = (id) => `sf-${String(id).replace(/[^A-Za-z0-9_-]/g, '-')}`;
+function helpButton(id, instance = '') {
+  const item = SETTING_HELP[id];
+  if (!item) return '';
+  const key = instance ? `${id}#${instance}` : id;
+  return `<button type="button" class="info-btn" data-setting-help="${esc(key)}" aria-expanded="${settingHelpOpen === key}" aria-controls="setting-popup"${settingHelpOpen === key ? ' aria-describedby="setting-popup"' : ''} aria-label="About ${esc(item.label)}"><span aria-hidden="true">i</span></button>`;
+}
+// A labelled setting row. for= ties the label to the field, so the info button in the label text does not become the control.
+function settingRow(id, text, control, { cls = '', field = id } = {}) {
+  return `<label class="setting-line${cls ? ` ${cls}` : ''}" for="${helpFid(field)}"><span>${text}${helpButton(id, field === id ? '' : field)}</span>${control}</label>`;
+}
+let settingPopupEl = null;
+function settingPopup() {
+  if (settingPopupEl) return settingPopupEl;
+  settingPopupEl = document.createElement('div');
+  settingPopupEl.id = 'setting-popup';
+  settingPopupEl.className = 'setting-popup';
+  settingPopupEl.setAttribute('role', 'region');
+  settingPopupEl.setAttribute('aria-label', 'Setting help');
+  settingPopupEl.hidden = true;
+  document.body.appendChild(settingPopupEl);
+  return settingPopupEl;
+}
+function settingHelpButton(key) {
+  return key ? document.querySelector(`[data-setting-help="${CSS.escape(key)}"]`) : null;
+}
+// Show the popup for the open or hovered setting, below its button, inside the screen. Hide it when the button is gone.
+function syncSettingPopup() {
+  const popup = settingPopup();
+  const key = settingHelpHover || settingHelpOpen;
+  const id = key?.split('#')[0];
+  const button = settingHelpButton(key);
+  if (!button) {
+    if (settingHelpOpen && !settingHelpButton(settingHelpOpen)) settingHelpOpen = null;
+    popup.hidden = true;
+    return;
+  }
+  if (popup.dataset.for !== id) { popup.innerHTML = `<h3>${esc(SETTING_HELP[id].label)}</h3>${settingPopupHtml(id)}`; popup.dataset.for = id; }
+  popup.hidden = false;
+  const rect = button.getBoundingClientRect();
+  const width = Math.min(380, window.innerWidth - 32);
+  popup.style.width = `${width}px`;
+  popup.style.left = `${Math.min(Math.max(16, rect.left - 8), window.innerWidth - width - 16)}px`;
+  const height = popup.offsetHeight;
+  const below = rect.bottom + 6;
+  const top = below + height > window.innerHeight - 8 && rect.top - 6 - height > 8 ? rect.top - 6 - height : below;
+  popup.style.top = `${top}px`;
+  popup.style.maxHeight = `${Math.max(120, Math.min(460, window.innerHeight - top - 8))}px`;
+  for (const other of document.querySelectorAll('[data-setting-help]')) {
+    const open = other.dataset.settingHelp === settingHelpOpen;
+    other.setAttribute('aria-expanded', String(open));
+    if (open) other.setAttribute('aria-describedby', 'setting-popup'); else other.removeAttribute('aria-describedby');
+  }
+}
+function closeSettingHelp({ focus = false } = {}) {
+  const id = settingHelpOpen;
+  settingHelpOpen = null;
+  settingHelpHover = null;
+  syncSettingPopup();
+  if (focus) settingHelpButton(id)?.focus();
+}
+document.addEventListener('click', (e) => {
+  const button = e.target.closest?.('[data-setting-help]');
+  if (button) {
+    e.preventDefault();
+    settingHelpMuted = false;
+    settingHelpOpen = settingHelpOpen === button.dataset.settingHelp ? null : button.dataset.settingHelp;
+    settingHelpHover = null;
+    syncSettingPopup();
+    return;
+  }
+  if (settingHelpOpen && !e.target.closest?.('#setting-popup')) closeSettingHelp();
+});
+// Escape closes the popup first, and returns the focus to its button. The capture phase runs before the other Escape handlers.
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || !(settingHelpOpen || settingHelpHover)) return;
+  e.stopPropagation();
+  settingHelpMuted = true;
+  closeSettingHelp({ focus: true });
+}, true);
+// Hover shows the same popup on a screen with a pointer. A tap does not use it.
+document.addEventListener('mouseover', (e) => {
+  const button = e.target.closest?.('[data-setting-help]');
+  if (!button || settingHelpMuted || !window.matchMedia?.('(hover: hover)').matches) return;
+  settingHelpHover = button.dataset.settingHelp;
+  syncSettingPopup();
+});
+document.addEventListener('mouseout', (e) => {
+  if (e.target.closest?.('[data-setting-help]')) settingHelpMuted = false;
+  if (!e.target.closest?.('[data-setting-help]') || !settingHelpHover) return;
+  settingHelpHover = null;
+  syncSettingPopup();
+});
+// Focus that moves outside both the button and the popup closes the popup. A refresh that replaces the button has no related target and keeps it.
+document.addEventListener('focusout', (e) => {
+  if (!settingHelpOpen || !e.relatedTarget) return;
+  if (e.relatedTarget.closest?.('[data-setting-help], #setting-popup')) return;
+  closeSettingHelp();
+});
+window.addEventListener('resize', () => syncSettingPopup());
+document.addEventListener('scroll', () => { if (settingHelpOpen || settingHelpHover) syncSettingPopup(); }, true);
 
 // A model string holds letters, digits, dots, underscores, slashes, and hyphens. The server applies the same rule.
 const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/;
@@ -538,7 +648,7 @@ function pricesPanel() {
     }).join('');
     return `<tr><th scope="row"><code>${esc(name)}</code>${p.removed ? ' <span class="muted">removed</span>' : ''}</th>${cells}<td>${esc(p.source || '')}${p.date ? ` <span class="muted">${esc(p.date)}</span>` : ''}</td></tr>`;
   }).join('');
-  const head = PRICE_COLUMNS.map(([, label]) => `<th scope="col">${label}</th>`).join('');
+  const head = PRICE_COLUMNS.map(([field, label]) => `<th scope="col">${label}${helpButton('prices.' + field)}</th>`).join('');
   return `<section id="price-settings" class="panel"><h2>Token prices</h2>${intro}<div class="service-settings-scroll"><table class="service-settings-table"><thead><tr><th scope="col">Model</th>${head}<th scope="col">Source</th></tr></thead><tbody>${rows}</tbody></table></div><p class="inline-feedback" role="status" aria-live="polite" data-price-message>${esc(priceMessage)}</p><div class="control-actions"><button type="button" data-save-prices>Save prices</button> <button type="button" class="quiet" data-reset-prices>Reset to defaults</button></div></section>`;
 }
 async function savePrices(reset, button) {
@@ -635,11 +745,11 @@ function harnessSection(kind, cfg, d) {
       ${ignored ? `<p class="setting-help" id="${noteId}" data-route-note style="grid-column: 1 / -1; max-width: none; margin: 0 0 6px; color: var(--warn)">The legacy route to ${esc(PROVIDERS[ignored] || ignored)} is ignored. ${esc(kind)} treats this model as Unmetered. Choose ${esc(choices)}, then Apply policy.</p>` : ''}</li>`;
   }).join('');
   return `<section class="harness" data-harness="${esc(kind)}" aria-labelledby="harness-${esc(kind)}">
-    <div class="harness-head"><h3 id="harness-${esc(kind)}">${esc(kind)}</h3><label><input type="checkbox" data-kind="${esc(kind)}" ${d.allowedKinds.includes(kind) ? 'checked' : ''}> Available</label></div>
-    <label class="setting-line"><span>Preferred model</span><select data-preferred-model="${esc(kind)}"><option value="">Harness default (${esc(cfg.defaultModel)})</option>${list.map((model) => `<option value="${esc(model)}" ${d.preferredModels?.[kind] === model ? 'selected' : ''}>${esc(model)}</option>`).join('')}</select></label>
-    <div class="harness-columns" aria-hidden="true"><span>Model</span><span>Provider</span></div>
+    <div class="harness-head"><h3 id="harness-${esc(kind)}">${esc(kind)}</h3><label><input type="checkbox" data-kind="${esc(kind)}" ${d.allowedKinds.includes(kind) ? 'checked' : ''}> Available${helpButton('harness.available', kind)}</label></div>
+    ${settingRow('harness.preferredModel', 'Preferred model', `<select id="${helpFid(`preferred.${kind}`)}" data-preferred-model="${esc(kind)}"><option value="">Harness default (${esc(cfg.defaultModel)})</option>${list.map((model) => `<option value="${esc(model)}" ${d.preferredModels?.[kind] === model ? 'selected' : ''}>${esc(model)}</option>`).join('')}</select>`, { field: `preferred.${kind}` })}
+    <div class="harness-columns"><span>Model${helpButton('harness.model', kind)}</span><span>Provider${helpButton('harness.provider', kind)}</span></div>
     <ul class="harness-models">${rows}</ul>
-    <form class="add-model" data-add-model="${esc(kind)}"><input name="model" data-add-model-input="${esc(kind)}" autocomplete="off" spellcheck="false" placeholder="vendor/model-id" aria-label="New model string for ${esc(kind)}" maxlength="128"><button type="submit" class="quiet">Add model</button></form>
+    <form class="add-model" data-add-model="${esc(kind)}"><input name="model" data-add-model-input="${esc(kind)}" autocomplete="off" spellcheck="false" placeholder="vendor/model-id" aria-label="New model string for ${esc(kind)}" maxlength="128"><button type="submit" class="quiet">Add model</button>${helpButton('harness.addModel', kind)}</form>
     <p class="inline-feedback" role="status" data-settings-message="${esc(kind)}">${esc(settingsMessages[kind] || '')}</p>
   </section>`;
 }
@@ -689,7 +799,7 @@ function avatarSettings(s) {
     <button type="button" data-avatar-reset="${esc(row.slug)}">Reset</button>
     <span class="avatar-status" role="status" aria-live="polite" data-avatar-status="${esc(row.slug)}">${esc(avatarMessages[row.slug] || '')}</span>
   </div>`).join('');
-  return `<section class="panel avatar-settings"><h2>Avatars</h2><p class="setting-help">Each row holds the avatar of the Boss or of a project. Choose <b>Upload image</b> to use your own image. Choose <b>Reset</b> to use the generated avatar again. An image is a PNG, JPEG, or WebP file of at most 512 KB. Herdr Boss keeps no other format.</p>${list || '<p class="setting-help">No project is open.</p>'}</section>`;
+  return `<section class="panel avatar-settings"><h2>Avatars</h2><p class="setting-help">Each row holds the avatar of the Boss or of a project. Choose <b>Upload image</b>${helpButton('avatar.upload')} to use your own image. Choose <b>Reset</b>${helpButton('avatar.reset')} to use the generated avatar again. An image is a PNG, JPEG, or WebP file of at most 512 KB. Herdr Boss keeps no other format.</p>${list || '<p class="setting-help">No project is open.</p>'}</section>`;
 }
 
 // The Owner's own avatar image. The page sends the file as it is, and the service checks the bytes.
@@ -743,13 +853,13 @@ function settingsView(s) {
   const { warnPercent, criticalPercent } = quotaThresholds(s);
   const harnesses = Object.entries(models || {}).map(([kind, cfg]) => harnessSection(kind, cfg, d)).join('');
   const ignoredCount = Object.keys(models || {}).reduce((n, kind) => n + kindModels(kind, d).filter((model) => ignoredLegacyRoute(kind, model, d)).length, 0);
-  const providerRows = Object.keys(d.providerModes).map((p) => `<label class="setting-line"><span>${esc(PROVIDERS[p] || p)}</span><select data-provider="${esc(p)}" aria-label="${esc(PROVIDERS[p] || p)} quota mode"><option value="managed" ${d.providerModes[p] === 'managed' ? 'selected' : ''}>Manage pace</option><option value="ignore" ${d.providerModes[p] === 'ignore' ? 'selected' : ''}>Ignore quota</option></select></label>`).join('');
+  const providerRows = Object.keys(d.providerModes).map((p) => settingRow('quota.mode', esc(PROVIDERS[p] || p), `<select id="${helpFid(`quota.mode.${p}`)}" data-provider="${esc(p)}" aria-label="${esc(PROVIDERS[p] || p)} quota mode"><option value="managed" ${d.providerModes[p] === 'managed' ? 'selected' : ''}>Manage pace</option><option value="ignore" ${d.providerModes[p] === 'ignore' ? 'selected' : ''}>Ignore quota</option></select>`, { field: `quota.mode.${p}` })).join('');
   const machine = d.machine || {};
-  const machineNumber = (key, label, max, nullable = false, min = 0) => `<label class="setting-line"><span>${label}</span><input type="number" min="${min}" max="${max}" ${nullable ? 'step="any" placeholder="Disabled"' : ''} value="${machine[key] ?? ''}" data-policy-machine="${key}"></label>`;
+  const machineNumber = (key, label, max, nullable = false, min = 0) => settingRow(`machine.${key}`, label, `<input id="${helpFid(`machine.${key}`)}" type="number" min="${min}" max="${max}" ${nullable ? 'step="any" placeholder="Disabled"' : ''} value="${machine[key] ?? ''}" data-policy-machine="${key}">`);
   const guardMode = machineGuardMode(machine);
   const pauseHours = [1, 2, 4, 8, 12, 24].map((hours) => `<option value="${hours}">${hours} hour${hours === 1 ? '' : 's'}</option>`).join('');
-  const machineGuardSettings = `<div class="machine-guard-controls"><label class="setting-line"><span>Machine guard · ${guardMode}${guardMode === 'paused' ? esc(machineGuardUntilText(machine.guardPausedUntil)) : ''}</span><input type="checkbox" role="switch" aria-label="Machine guard enabled" data-policy-machine-bool="guardEnabled" ${machine.guardEnabled ? 'checked' : ''}></label><div class="action-row"><label class="setting-line"><span>Pause for</span><select aria-label="Machine guard pause duration" data-machine-pause-hours>${pauseHours}</select></label><button type="button" data-machine-guard-draft="pause">Pause guard</button>${guardMode === 'active' ? '' : '<button type="button" data-machine-guard-draft="resume">Resume guard</button>'}</div><p class="setting-help">${esc(machineGuardMessage || (guardMode === 'paused' ? `The guard resumes ${machineGuardUntilText(machine.guardPausedUntil).slice(7)}.` : guardMode === 'off' ? 'CPU and load limits do not block worker starts while the guard is off.' : 'CPU and load limits block worker starts while the guard is active.'))}</p></div>`;
-  const machineSettings = `<section class="panel"><h2>Machine</h2><p class="setting-help">The Owner is away after the idle period. CPU is a percent of total machine capacity. Disk alerts stay active when the CPU and load guard is off or paused. Disk thresholds use free GB. GB uses 2³⁰ bytes. The swap warning starts at the swap percent below when 3 samples in a row are at or above it and at least the minimum GB is in use. It stays off the guard switch and never blocks work. The swap refusal is off by default. When the switch below is on, an orchestrator or a worker cannot start a worker, a suite, or a push with a pre-push suite while swap is at or above the refusal percent and at least the minimum GB is in use. The message shows the swap figure. Start work with --force-swap, or set HERDR_BOSS_FORCE_SWAP=1 for suite and push, to override. Work that the Owner or the Boss starts is never refused. A null refusal percent switches the refusal off.</p><label class="setting-line"><span>Refuse new work at high swap</span><input type="checkbox" role="switch" aria-label="Refuse new work at high swap" data-policy-machine-bool="swapRefuseEnabled" ${machine.swapRefuseEnabled ? 'checked' : ''}></label>${machineGuardSettings}${machineNumber('ownerAwayMinutes', 'Owner away after minutes', 1440)}${machineNumber('presentCpuPercent', 'CPU limit while present %', 100)}${machineNumber('awayCpuPercent', 'CPU limit while away %', 100, true)}${machineNumber('presentLoadFactor', 'Present load backstop × cores', 128, true)}${machineNumber('awayLoadFactor', 'Away load backstop × cores', 128, true)}${machineNumber('diskWarnFreeGB', 'Disk warning below free GB', 1048576)}${machineNumber('diskCriticalFreeGB', 'Disk critical below free GB', 1048576)}${machineNumber('swapWarnPercent', 'Swap warning at % used', 100, true, 1)}${machineNumber('swapRefusePercent', 'Swap refusal at % used', 100, true, 1)}${machineNumber('swapMinUsedGB', 'Swap rules need at least GB used', 1024)}<label class="setting-line"><span>Notice cooldown seconds</span><input type="number" min="0" max="604800" value="${machine.alertCooldownSeconds}" data-policy-machine="alertCooldownSeconds"></label></section>`;
+  const machineGuardSettings = `<div class="machine-guard-controls">${settingRow('machine.guardEnabled', `Machine guard · ${guardMode}${guardMode === 'paused' ? esc(machineGuardUntilText(machine.guardPausedUntil)) : ''}`, `<input id="${helpFid('machine.guardEnabled')}" type="checkbox" role="switch" aria-label="Machine guard enabled" data-policy-machine-bool="guardEnabled" ${machine.guardEnabled ? 'checked' : ''}>`)}<div class="action-row">${settingRow('machine.guardPause', 'Pause for', `<select id="${helpFid('machine.guardPause')}" aria-label="Machine guard pause duration" data-machine-pause-hours>${pauseHours}</select>`)}<button type="button" data-machine-guard-draft="pause">Pause guard</button>${guardMode === 'active' ? '' : '<button type="button" data-machine-guard-draft="resume">Resume guard</button>'}</div><p class="setting-help">${esc(machineGuardMessage || (guardMode === 'paused' ? `The guard resumes ${machineGuardUntilText(machine.guardPausedUntil).slice(7)}.` : guardMode === 'off' ? 'CPU and load limits do not block worker starts while the guard is off.' : 'CPU and load limits block worker starts while the guard is active.'))}</p></div>`;
+  const machineSettings = `<section class="panel"><h2>Machine</h2><p class="setting-help">The Owner is away after the idle period. CPU is a percent of the total machine capacity. Disk and swap notices stay on when the guard is off or paused. Select the i button next to a setting for its default, its range, and its effect.</p>${settingRow('machine.swapRefuseEnabled', 'Refuse new work at high swap', `<input id="${helpFid('machine.swapRefuseEnabled')}" type="checkbox" role="switch" aria-label="Refuse new work at high swap" data-policy-machine-bool="swapRefuseEnabled" ${machine.swapRefuseEnabled ? 'checked' : ''}>`)}${machineGuardSettings}${machineNumber('ownerAwayMinutes', 'Owner away after minutes', 1440)}${machineNumber('presentCpuPercent', 'CPU limit while present %', 100)}${machineNumber('awayCpuPercent', 'CPU limit while away %', 100, true)}${machineNumber('presentLoadFactor', 'Present load backstop × cores', 128, true)}${machineNumber('awayLoadFactor', 'Away load backstop × cores', 128, true)}${machineNumber('diskWarnFreeGB', 'Disk warning below free GB', 1048576)}${machineNumber('diskCriticalFreeGB', 'Disk critical below free GB', 1048576)}${machineNumber('swapWarnPercent', 'Swap warning at % used', 100, true, 1)}${machineNumber('swapRefusePercent', 'Swap refusal at % used', 100, true, 1)}${machineNumber('swapMinUsedGB', 'Swap rules need at least GB used', 1024)}${settingRow('machine.alertCooldownSeconds', 'Notice cooldown seconds', `<input id="${helpFid('machine.alertCooldownSeconds')}" type="number" min="0" max="604800" value="${machine.alertCooldownSeconds}" data-policy-machine="alertCooldownSeconds">`)}</section>`;
   // A goal exists only for a live, measured window with a stable key. Extra model-only windows do not get one.
   const goalWindows = [];
   for (const q of s.quotas || []) {
@@ -764,11 +874,11 @@ function settingsView(s) {
       const id = `${esc(provider)}:${esc(key)}`;
       const kind = end?.type || 'reset';
       const endValue = kind === 'at' ? localDateTime(end.at) : end?.hours ?? '';
-      return `<div class="setting-line" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));align-items:end;margin-bottom:12px"><label style="display:grid;gap:4px"><span>${esc(PROVIDERS[provider] || provider)} ${esc(label)} goal %</span><input type="number" min="0" max="100" step="1" placeholder="100" value="${percent ?? ''}" data-pacing-goal="${id}"></label><label style="display:grid;gap:4px"><span>Goal end</span><select data-pacing-end-type="${id}"><option value="reset" ${kind === 'reset' ? 'selected' : ''}>At reset</option><option value="at" ${kind === 'at' ? 'selected' : ''}>One-off local date and time</option><option value="hoursBeforeReset" ${kind === 'hoursBeforeReset' ? 'selected' : ''}>Hours before reset, every window</option></select></label>${kind === 'at' ? `<label style="display:grid;gap:4px"><span>Local date and time</span><input type="datetime-local" value="${esc(endValue)}" data-pacing-end-value="${id}"></label>` : kind === 'hoursBeforeReset' ? `<label style="display:grid;gap:4px"><span>Whole hours before reset</span><input type="number" min="1" step="1" value="${esc(endValue)}" data-pacing-end-value="${id}"></label>` : ''}<span class="setting-help" style="grid-column:1/-1">Resets ${esc(resetsAt || 'unknown')}${end ? ` · Goal ${esc(percent)}% ${kind === 'at' ? `by ${esc(localDateTime(end.at) || 'choose a time')}` : `${esc(end.hours)} h before reset`}` : ''}</span></div>`;
+      return `<div class="setting-line" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));align-items:end;margin-bottom:12px"><label style="display:grid;gap:4px" for="${helpFid(`goal.${id}`)}"><span>${esc(PROVIDERS[provider] || provider)} ${esc(label)} goal %${helpButton('quota.goalPercent', id)}</span><input id="${helpFid(`goal.${id}`)}" type="number" min="0" max="100" step="1" placeholder="100" value="${percent ?? ''}" data-pacing-goal="${id}"></label><label style="display:grid;gap:4px" for="${helpFid(`goalend.${id}`)}"><span>Goal end${helpButton('quota.goalEnd', id)}</span><select id="${helpFid(`goalend.${id}`)}" data-pacing-end-type="${id}"><option value="reset" ${kind === 'reset' ? 'selected' : ''}>At reset</option><option value="at" ${kind === 'at' ? 'selected' : ''}>One-off local date and time</option><option value="hoursBeforeReset" ${kind === 'hoursBeforeReset' ? 'selected' : ''}>Hours before reset, every window</option></select></label>${kind === 'at' ? `<label style="display:grid;gap:4px"><span>Local date and time</span><input type="datetime-local" value="${esc(endValue)}" data-pacing-end-value="${id}"></label>` : kind === 'hoursBeforeReset' ? `<label style="display:grid;gap:4px"><span>Whole hours before reset</span><input type="number" min="1" step="1" value="${esc(endValue)}" data-pacing-end-value="${id}"></label>` : ''}<span class="setting-help" style="grid-column:1/-1">Resets ${esc(resetsAt || 'unknown')}${end ? ` · Goal ${esc(percent)}% ${kind === 'at' ? `by ${esc(localDateTime(end.at) || 'choose a time')}` : `${esc(end.hours)} h before reset`}` : ''}</span></div>`;
     }).join('')
     : '<p class="setting-help">No measured quota window yet. A goal field appears after the next quota reading.</p>';
   const quotaPanel = `<section class="panel"><h2>Provider quotas</h2><p class="setting-help">Quota warning at ${esc(warnPercent)}%, critical at ${esc(criticalPercent)}%. Set them in config.json.</p><h3>Quota mode</h3>${providerRows}<p class="setting-help">Ignore quota turns off pacing and pace warnings for worker dispatch. Handover risk and automatic handover still use live quota data.</p><h3 class="quota-goals">Pacing goals</h3><p class="setting-help">The most percent of a window to use by its end. Blank means 100%. A one-off end uses your local time. A recurring end is a whole number of hours before reset.</p>${goalRows}</section>`;
-  const settingsGroups = ['Machine', 'Quota', 'Status', 'Workers', 'Browsers', 'Service'];
+  const settingsGroups = ['Machine', 'Quota', 'Status', 'Workers', 'Watch', 'Browsers', 'Service'];
   const serviceSettingRanges = {
     'machine.memFreeWarnPercent': [1, 50],
     'quota.warnPercent': [50, 99],
@@ -780,7 +890,7 @@ function settingsView(s) {
     'browsers.staleOwnedMinutes': [5, 1440],
     'browsers.orphanDaemonMinAgeSeconds': [60, 86400],
   };
-  const serviceSettingBooleans = new Set(['browsers.reapOrphanDaemons', 'browsers.sweepCodeSignClones']);
+  const serviceSettingBooleans = new Set(['browsers.reapOrphanDaemons', 'browsers.sweepCodeSignClones', 'watch.quietHours']);
   const serviceRows = settingsGroups.map((group) => {
     const groupRows = (s.serviceSettings || []).filter((item) => item.group === group).map((item) => {
       const value = item.value !== null && typeof item.value === 'object' ? JSON.stringify(item.value) : item.value == null ? '' : String(item.value);
@@ -792,7 +902,7 @@ function settingsView(s) {
         : range
           ? `<input type="number" min="${range[0]}" max="${range[1]}" step="1" value="${esc(value)}" placeholder="${nullableServiceSettings.has(item.setting) ? 'Day value' : ''}" data-service-setting="${esc(item.setting)}" data-service-group="${esc(group)}" aria-label="${esc(item.setting)}">`
           : `<code>${esc(value)}</code>`;
-      return `<tr><th scope="row"><code>${esc(item.setting)}</code></th><td>${input}</td><td>${item.source === 'config' ? 'from config.json' : 'default'}</td></tr>`;
+      return `<tr><th scope="row"><code>${esc(item.setting)}</code>${helpButton(item.setting)}</th><td>${input}</td><td>${item.source === 'config' ? 'from config.json' : 'default'}</td></tr>`;
     }).join('');
     const canSave = (s.serviceSettings || []).some((item) => item.group === group && (serviceSettingRanges[item.setting] || serviceSettingBooleans.has(item.setting)));
     const controls = canSave ? `<span class="service-settings-group-actions"><span role="status" aria-live="polite" data-service-settings-status="${esc(group)}">${esc(serviceSettingsMessages[group] || '')}</span><button type="button" data-save-service-settings="${esc(group)}">Save</button></span>` : '';
@@ -804,11 +914,14 @@ function settingsView(s) {
   const harnessRows = harnessFindings.length
     ? harnessFindings.map((finding) => `<tr><td><span class="harness-readiness-status harness-readiness-${esc(finding.status)}">${esc(finding.status)}</span></td><td>${esc(finding.area)}</td><td>${esc(finding.item)}</td></tr>`).join('')
     : '<tr><td colspan="3" class="harness-readiness-empty">No readiness data yet.</td></tr>';
-  const harnessPanel = `<section class="panel harness-readiness-panel"><h2>Harness readiness</h2><div class="service-settings-scroll"><table class="service-settings-table harness-readiness-table"><thead><tr><th scope="col">Status</th><th scope="col">Area</th><th scope="col">Item</th></tr></thead><tbody>${harnessRows}</tbody></table></div><p class="service-settings-note">Run herdr-boss harness sync to see the changes to make.</p></section>`;
+  const harnessPanel = `<section class="panel harness-readiness-panel"><h2>Harness readiness${helpButton('harness.readiness')}</h2><div class="service-settings-scroll"><table class="service-settings-table harness-readiness-table"><thead><tr><th scope="col">Status</th><th scope="col">Area</th><th scope="col">Item</th></tr></thead><tbody>${harnessRows}</tbody></table></div><p class="service-settings-note">Run herdr-boss harness sync to see the changes to make.</p></section>`;
   const night = s.night || { active: false };
   const nightPanel = `<section class="panel night-panel"><h2>Watch</h2><p class="setting-help">The Watch control is on the <a href="/agents#watch">Agents page</a>.</p></section>`;
-  const settingsPanels = `${quotaPanel}${machineSettings}${nightPanel}${watchRoutineSettings(s)}${avatarSettings(s)}${serviceSettings}${pricesPanel()}${harnessPanel}`;
-  return `<header class="page-intro"><div><h1>Settings</h1><p>Assign models and provider routes in each harness. Set provider quotas and machine limits below.</p></div></header><section id="settings-plane" class="control-shell"><section class="panel"><h2>Harnesses</h2><p class="setting-help harness-help">Clear a model box to stop that harness from using it. The same model in another harness keeps its own box and provider.</p>${ignoredCount ? `<p class="setting-help harness-help" role="note" style="color: var(--warn)">${ignoredCount} legacy provider route${ignoredCount === 1 ? ' is' : 's are'} not compatible with ${ignoredCount === 1 ? 'its harness' : 'their harnesses'}. Herdr Boss treats ${ignoredCount === 1 ? 'it' : 'them'} as Unmetered. Choose a provider in each marked row before you apply the policy.</p>` : ''}<div class="harness-grid">${harnesses}</div></section><div class="settings-grid">${settingsPanels}</div><div class="control-actions ${policyDirty ? 'pending' : ''}"><span data-policy-status role="status" aria-live="polite">${esc(saveMessage || (policyDirty ? 'Unsaved changes · Apply policy to keep them' : 'Policy saved'))}</span><button id="save-policy" ${policyDirty ? '' : 'disabled'}>Apply policy</button></div></section>`;
+  // The Advanced fold opens by itself while it holds a warning: a harness finding that is not ok, or a service save error.
+  const advancedIssues = harnessFindings.filter((finding) => finding.status !== 'ok').length + Object.values(serviceSettingsMessages).filter((text) => text && text !== 'Saved.').length;
+  const advanced = foldCard({ slug: SETTINGS_FOLD, key: 'advanced', id: 'advanced-settings', className: 'advanced-settings', title: 'Advanced', hint: advancedIssues ? `Rarely used settings · ${advancedIssues} need${advancedIssues === 1 ? 's' : ''} attention` : 'Rarely used settings', forceOpen: advancedIssues > 0, body: `<div class="settings-grid">${avatarSettings(s)}${pricesPanel()}${serviceSettings}${harnessPanel}</div>`, boxed: false });
+  const settingsPanels = `${quotaPanel}${machineSettings}${nightPanel}${watchRoutineSettings(s)}`;
+  return `<header class="page-intro"><div><h1>Settings</h1><p>Assign models and provider routes in each harness. Set provider quotas and machine limits below.</p></div></header><section id="settings-plane" class="control-shell"><section class="panel"><h2>Harnesses</h2><p class="setting-help harness-help">Clear a model box to stop that harness from using it. The same model in another harness keeps its own box and provider.</p>${ignoredCount ? `<p class="setting-help harness-help" role="note" style="color: var(--warn)">${ignoredCount} legacy provider route${ignoredCount === 1 ? ' is' : 's are'} not compatible with ${ignoredCount === 1 ? 'its harness' : 'their harnesses'}. Herdr Boss treats ${ignoredCount === 1 ? 'it' : 'them'} as Unmetered. Choose a provider in each marked row before you apply the policy.</p>` : ''}<div class="harness-grid">${harnesses}</div></section><div class="settings-grid">${settingsPanels}</div>${advanced}<div class="control-actions ${policyDirty ? 'pending' : ''}"><span data-policy-status role="status" aria-live="polite">${esc(saveMessage || (policyDirty ? 'Unsaved changes · Apply policy to keep them' : 'Policy saved'))}</span><button id="save-policy" ${policyDirty ? '' : 'disabled'}>Apply policy</button></div></section>`;
 }
 
 // The handoff records that need the Owner: an open record whose source pane and successor pane still exist.
@@ -2064,11 +2177,11 @@ function routineEditor(routine) {
     : '';
   return `<details class="routine-editor" data-routine-details="${k}"${routineOpen.has(key) ? ' open' : ''}><summary>${summary}</summary><div class="routine-fields">`
     + (routine ? '' : `<label><span>Id</span><input ${field('id')} value="${esc(draft.id)}" maxlength="40" placeholder="lowercase-with-hyphens"></label>`)
-    + `<label><span>Title</span><input ${field('title')} value="${esc(draft.title)}" maxlength="60"></label>`
-    + `<label><span>Model hint</span><input ${field('model')} value="${esc(draft.model)}" maxlength="40"></label>`
-    + `<label><span>Schedule</span><select ${field('kind')}><option value="every"${draft.kind === 'every' ? ' selected' : ''}>Every N minutes</option><option value="beforeEnd"${draft.kind === 'beforeEnd' ? ' selected' : ''}>Before the end of the watch</option></select></label>`
+    + `<label for="rd-${k}-title"><span>Title${helpButton('watch.routine.title', k)}</span><input ${field('title')} value="${esc(draft.title)}" maxlength="60"></label>`
+    + `<label for="rd-${k}-model"><span>Model hint${helpButton('watch.routine.model', k)}</span><input ${field('model')} value="${esc(draft.model)}" maxlength="40"></label>`
+    + `<label for="rd-${k}-kind"><span>Schedule${helpButton('watch.routine.schedule', k)}</span><select ${field('kind')}><option value="every"${draft.kind === 'every' ? ' selected' : ''}>Every N minutes</option><option value="beforeEnd"${draft.kind === 'beforeEnd' ? ' selected' : ''}>Before the end of the watch</option></select></label>`
     + `<label><span>Time</span><span class="routine-when">${schedule}</span></label>`
-    + `<label class="routine-prompt"><span>Prompt</span><textarea ${field('prompt')} rows="10" maxlength="8000">${esc(draft.prompt)}</textarea></label>`
+    + `<label class="routine-prompt" for="rd-${k}-prompt"><span>Prompt${helpButton('watch.routine.prompt', k)}</span><textarea ${field('prompt')} rows="10" maxlength="8000">${esc(draft.prompt)}</textarea></label>`
     + `<div class="routine-actions"><button type="button" data-routine-save="${k}">Save</button>${reset}<span class="setting-help" role="status" aria-live="polite">${esc(routineMessages[key] || '')}</span></div>`
     + '</div></details>';
 }
@@ -4196,6 +4309,7 @@ const isPhone = () => phoneMedia.matches;
 const FOLD_PREFIX = 'herdr-boss.project-folds.';
 // The open or closed state of each fold, per project, in this browser. The Overview uses the slug OVERVIEW_FOLD.
 const OVERVIEW_FOLD = '~overview';
+const SETTINGS_FOLD = '~settings';
 function foldState(slug) {
   try { const value = JSON.parse(localStorage.getItem(FOLD_PREFIX + slug)); return value && typeof value === 'object' && !Array.isArray(value) ? value : {}; } catch { return {}; }
 }
@@ -4206,8 +4320,8 @@ function setFoldOpen(slug, key, open) {
   try { localStorage.setItem(FOLD_PREFIX + slug, JSON.stringify(value)); } catch {}
 }
 // A details element on every screen size. It remembers its open state per project. The summary holds the title and a short count or summary line.
-function foldCard({ slug, key, className = '', title, count = '', lead = '', hint = '', controls = '', body, id = '', defaultOpen = false, boxed = true }) {
-  const open = foldOpen(slug, key, defaultOpen);
+function foldCard({ slug, key, className = '', title, count = '', lead = '', hint = '', controls = '', body, id = '', defaultOpen = false, boxed = true, forceOpen = false }) {
+  const open = forceOpen || foldOpen(slug, key, defaultOpen);
   return `<details data-key="section:${esc(key)}"${id ? ` id="${esc(id)}"` : ''} class="fold-phone${boxed ? ' fold-card' : ''}${className ? ` ${esc(className)}` : ''}" data-project-fold="${esc(slug)}" data-fold-key="${esc(key)}"${open ? ' open' : ''}>`
     + `<summary class="fold-summary">${lead}<h2>${esc(title)}${count ? ` <span class="sub">${esc(count)}</span>` : ''}</h2>${hint ? `<span class="fold-hint">${esc(hint)}</span>` : ''}<span class="fold-chevron" aria-hidden="true"></span></summary>`
     + `<div class="fold-body">${controls}${body}</div></details>`;
@@ -4879,7 +4993,8 @@ const HELP = {
     <p>Select <b>Release</b> to give a lease back. The page asks you to confirm, and names the pool, the item, the holder project, and the pane or worker. The release removes the lease only while its holder project is still the project that the page shows. Otherwise the page reports that the lease changed, and you reload the page. A release never stops a process. For a project browser that runs, the button is disabled until you close the browser on the Browsers page.</p>
     <h3>Manage pools</h3><p>Select <b>Add pool</b> to create a pool. Enter one item per line or separate items with commas. Enter the project split as JSON. Set the environment variable, lease TTL, reclaim check, and grace period. Keep ports 9222 to 9299 out of custom pools. Select <b>Edit</b> to change a config pool. Select <b>Remove</b>, then confirm the pool name, to remove it. A held item blocks removal and any update that drops it. Herdr Boss saves the change to <code>config.json</code> and applies it at once. The built-in <code>project-browsers</code> pool has no edit or remove controls. The read-only preview refuses pool changes.</p>`],
   settings: ['Settings', `
-    <p>Each harness section holds the models and provider routes of that harness. Provider quotas and machine limits are below the harnesses.</p>
+    <p>Each harness section holds the models and provider routes of that harness. Provider quotas and machine limits are below the harnesses. The <b>Advanced</b> section holds the rarely used settings. It stays closed until you open it, and the page remembers its state.</p>
+    <h3>Guide to the settings</h3>${settingsGuideHtml()}
     <h3>Avatars</h3><p>The <b>Avatars</b> section has one row for the Boss and one row for each project. A row shows the avatar of that chat. Select <b>Upload image</b> to use your own image. Select <b>Reset</b> to use the generated avatar again. An image is a PNG, JPEG, or WebP file of at most 512 KB. Herdr Boss keeps no other format. The image shows at once in the Chat, the Mailbox, and the Agents chart. Without an image, the page uses a generated avatar. Its color comes from the name of the project, and it stays the same. The two letters come from the project display name, the same on every page. The Boss has a crown. Each other project has two letters. The letters use the color of the best contrast on the circle.</p>
     <h3>Watch</h3><p>The <b>Watch</b> box is on the <b>Agents</b> page. Select the link on this page to open it.</p>
     <h3>Watch routines</h3><p>Each routine in the <b>Watch routines</b> section has a title, a model hint, a schedule, and a prompt text. Select a routine to edit it. The schedule is a number of minutes between runs, or a time before the end of the watch. Select <b>Save</b> to store the change on this machine. The change never edits the kit file, and it applies to the next prompt of a running watch. Select <b>Reset to the kit text</b> to remove your change. Use <b>Add a routine</b> to create your own routine. Turn routines on or off for a watch in the Watch box on the Agents page.</p>
@@ -5060,7 +5175,7 @@ function restoreScroll(route, scroll) {
 }
 
 // These routes keep their DOM across a render. A keyed patch changes only what changed.
-const KEYED_ROUTES = ['projects', 'board', 'mailbox', 'chat', 'analytics'];
+const KEYED_ROUTES = ['projects', 'board', 'mailbox', 'chat', 'analytics', 'settings', 'allocation'];
 
 function render(force = false) {
   if (!state) return;
@@ -5131,6 +5246,7 @@ function render(force = false) {
     if (route === 'chat') chatRestoreView(chatViewState);
     restoreScroll(route, scroll);
   }
+  syncSettingPopup();
   if (route === 'agents' && agentsViewMode() === 'chart') orgMotion(state);
   else orgEventMark = null;
   syncDepGraphs();

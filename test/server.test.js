@@ -1888,7 +1888,7 @@ test('Settings shows a read-only harness readiness table with the fixed sync lin
   const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
   const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
   const guide = fs.readFileSync(new URL('../docs/user-guide.md', import.meta.url), 'utf8');
-  assert.match(app, /<h2>Harness readiness<\/h2>/);
+  assert.match(app, /<h2>Harness readiness\$\{helpButton\('harness\.readiness'\)\}<\/h2>/);
   assert.match(app, /s\?\.harness\?\.findings/);
   assert.match(app, /Run herdr-boss harness sync to see the changes to make\./);
   assert.match(app, /<th scope="col">Status<\/th><th scope="col">Area<\/th><th scope="col">Item<\/th>/);

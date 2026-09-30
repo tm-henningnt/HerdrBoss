@@ -1,0 +1,592 @@
+// The one text of every setting that the Settings and Allocation pages show.
+// The info popup, the Help panel guide, and the settings reference in docs/cli.md all come from this file.
+// Write in ASD-STE100 Simplified Technical English: one idea per sentence, active voice.
+// A setting id is the key in policy.json or config.json. A control without such a key has a short dotted name.
+// `apply` is one of APPLY. `default` and `range` are text, because a setting can be blank or a list.
+
+export const APPLY = {
+  policy: 'Select Apply policy. The change takes effect at the next engine tick.',
+  service: 'Select Save in the group. The change takes effect at once.',
+  restart: 'Change it in config.json. Restart the service.',
+  now: 'The change takes effect at once.',
+};
+
+// The order of a group is the order on the page. `advanced` groups sit in the collapsed Advanced section.
+export const SETTING_GROUPS = [
+  {
+    id: 'harnesses', title: 'Harnesses', advanced: false,
+    controls: 'Which agent kinds and models workers may use, the preferred model of each kind, and which provider quota each model counts against.',
+    affects: 'Workers and quotas. Worker start and handover choose only from the models that you leave on.',
+    safe: 'Safe to change at any time. A running worker keeps its model. A model that you switch off is not chosen again.',
+    restart: 'No restart. Select Apply policy.',
+  },
+  {
+    id: 'quotas', title: 'Provider quotas', advanced: false,
+    controls: 'How Herdr Boss paces each provider quota, the goal for each quota window, and the warning and critical levels.',
+    affects: 'Quotas and notices. Pacing changes which lanes say Use now and when a worker start is refused. The levels change when a quota notice is sent.',
+    safe: 'Safe to change. A goal below 100% makes Herdr Boss save quota. Keep the warning level below the critical level.',
+    restart: 'No restart. Goals and modes need Apply policy. The two levels need Save.',
+  },
+  {
+    id: 'machine', title: 'Machine', advanced: false,
+    controls: 'The machine guard, the CPU and load limits, the disk and swap thresholds, and the notice cooldown.',
+    affects: 'The machine and notices. An active guard blocks new workers when the machine is busy. Disk and swap thresholds raise notices. The swap refusal can block worker starts.',
+    safe: 'Safe to change. A high limit lets more work run at once. A low limit protects the machine but slows work. Disk and swap notices stay on when the guard is off.',
+    restart: 'No restart. Select Apply policy.',
+  },
+  {
+    id: 'watch', title: 'Watch', advanced: false,
+    controls: 'The routines that the Boss pane gets while a watch runs, the worker caps of a watch, and quiet hours.',
+    affects: 'Workers and notices. A cap limits how many workers run while the Owner is away. A routine sends a prompt to the Boss pane.',
+    safe: 'Safe to change. A routine change applies at the next prompt of a running watch. A routine that you edit never changes the kit file.',
+    restart: 'No restart. A routine needs Save. A cap needs Save in its group.',
+  },
+  {
+    id: 'capacity', title: 'Capacity and handover', advanced: false,
+    controls: 'The number of working agents, idle sharing, the orchestrator reserve, and automatic handover of an orchestrator to a successor. These controls are on the Allocation page.',
+    affects: 'Workers, quotas, and handover. The maximum working agents is a hard cap for worker start. Handover moves an orchestrator to a fresh successor before a quota or context limit.',
+    safe: 'Change the maximum working agents with care: a high value adds load. Leave automatic handover off until you have read the handover guide.',
+    restart: 'No restart. Select Apply policy.',
+  },
+  {
+    id: 'prices', title: 'Token prices', advanced: true,
+    controls: 'The USD price per million tokens of each model.',
+    affects: 'Only the cost figures on the Analytics page. No price changes how workers run.',
+    safe: 'Safe to change. Reset to defaults removes all your changes.',
+    restart: 'No restart. Select Save prices.',
+  },
+  {
+    id: 'avatars', title: 'Avatars', advanced: true,
+    controls: 'The image of the Boss and of each project in the Chat, the Mailbox, and the Agents chart.',
+    affects: 'Only how the pages look.',
+    safe: 'Safe to change.',
+    restart: 'No restart. An upload or a reset takes effect at once.',
+  },
+  {
+    id: 'service', title: 'Service settings', advanced: true,
+    controls: 'The values that the service itself uses: collection intervals, stale limits, browser clean-up, and the network address. Each row shows whether the value comes from config.json or is a default.',
+    affects: 'Workers, notices, browsers, and the machine. A value here changes when a status is stale, when an idle worker is reported, and when an orphan browser is stopped.',
+    safe: 'A row with an input is safe to change. A row without an input is read-only. Change it in config.json.',
+    restart: 'A row with an input needs no restart. A read-only row needs a service restart.',
+  },
+  {
+    id: 'readiness', title: 'Harness readiness', advanced: true,
+    controls: 'A read-only table that shows if each harness entry that orchestration needs is present.',
+    affects: 'Nothing. The table only reports.',
+    safe: 'Nothing to change. Run herdr-boss harness sync to see what to fix.',
+    restart: 'No restart.',
+  },
+];
+
+const S = (group, id, label, fields) => [id, { group, label, ...fields }];
+
+export const SETTING_HELP = Object.fromEntries([
+  // Harnesses
+  S('harnesses', 'harness.available', 'Available', {
+    what: 'Lets workers use this harness. Clear it to stop all workers from using the harness.',
+    default: 'On for every harness', unit: 'Switch', range: 'On or off',
+    raise: 'Turning it on lets worker start and handover pick the harness.',
+    lower: 'Turning it off stops new workers on this harness. A running worker keeps working.',
+    apply: 'policy',
+  }),
+  S('harnesses', 'harness.preferredModel', 'Preferred model', {
+    what: 'The model that worker start and handover use when no model is given.',
+    default: 'The harness default', unit: 'Model name', range: 'Any model that the harness allows',
+    raise: 'Not applicable. Choose another model to change the choice.',
+    lower: 'An empty choice uses the harness default.',
+    apply: 'policy',
+  }),
+  S('harnesses', 'harness.model', 'Model box', {
+    what: 'Lets this harness use the model. Clear the box to stop the harness from using the model.',
+    default: 'On for a catalog model', unit: 'Switch', range: 'On or off',
+    raise: 'Turning it on lets workers use the model in this harness.',
+    lower: 'Turning it off stops new workers on this model in this harness. Other harnesses keep their own box.',
+    apply: 'policy',
+  }),
+  S('harnesses', 'harness.provider', 'Provider', {
+    what: 'The provider quota that this model counts against.',
+    default: 'The route of the catalog, or Unmetered', unit: 'Provider name', range: 'The providers that the harness supports, or Unmetered',
+    raise: 'Not applicable. Choose a provider to count the model against its quota.',
+    lower: 'Unmetered means no quota applies. Pacing and quota warnings ignore the model.',
+    apply: 'policy',
+  }),
+  S('harnesses', 'harness.addModel', 'Add model', {
+    what: 'Adds a local model string to this harness. The string is stored in the local policy, not in kit/models.json.',
+    default: 'No local models', unit: 'Model string', range: 'Up to 128 characters: letters, digits, dot, underscore, slash, and hyphen',
+    raise: 'Not applicable.',
+    lower: 'Select Remove to delete a local model.',
+    apply: 'policy',
+  }),
+
+  // Provider quotas
+  S('quotas', 'quota.mode', 'Quota mode', {
+    what: 'Sets if Herdr Boss paces a provider. Manage pace uses the quota to decide when to run work. Ignore quota stops pacing and pace warnings for worker dispatch.',
+    default: 'Manage pace', unit: 'Choice', range: 'Manage pace or Ignore quota',
+    raise: 'Not applicable.',
+    lower: 'Ignore quota lets workers start at any pace. Handover risk and automatic handover still use live quota data. A window at 100% still exhausts the provider.',
+    apply: 'policy',
+  }),
+  S('quotas', 'quota.goalPercent', 'Pacing goal', {
+    what: 'The most percent of a quota window that Herdr Boss plans to use by the end of the goal.',
+    default: 'Blank, which means 100%', unit: 'Percent of the window', range: '0 to 100',
+    raise: 'A higher goal lets workers use more of the window.',
+    lower: 'A lower goal saves quota. The lanes say Use now less often.',
+    apply: 'policy',
+  }),
+  S('quotas', 'quota.goalEnd', 'Goal end', {
+    what: 'When the pacing goal ends: at the reset, at a local date and time, or a whole number of hours before each reset.',
+    default: 'At reset', unit: 'Choice, then a local time or hours', range: 'The end must be after now, after the window start, and not after the reset',
+    raise: 'A later end gives the goal more time to use quota.',
+    lower: 'An earlier end forces the use of quota sooner.',
+    apply: 'policy',
+  }),
+  S('quotas', 'quota.warnPercent', 'Quota warning level', {
+    what: 'The used percent of a quota window at which the quota shows a warning.',
+    default: '90', unit: 'Percent used', range: '50 to 99, below the critical level',
+    raise: 'A higher value gives the warning later.',
+    lower: 'A lower value gives the warning earlier.',
+    apply: 'service',
+  }),
+  S('quotas', 'quota.criticalPercent', 'Quota critical level', {
+    what: 'The used percent of a quota window at which the quota shows a critical alert.',
+    default: '98', unit: 'Percent used', range: '51 to 100, above the warning level',
+    raise: 'A higher value gives the critical alert later.',
+    lower: 'A lower value gives the critical alert earlier. Keep it above the warning level.',
+    apply: 'service',
+  }),
+
+  // Machine
+  S('machine', 'machine.guardEnabled', 'Machine guard', {
+    what: 'Turns the CPU and load limits on or off. An active guard warns and blocks worker starts when the machine is busy.',
+    default: 'On', unit: 'Switch', range: 'On or off',
+    raise: 'Turning it on protects the machine from too many workers.',
+    lower: 'Turning it off stops CPU and load warnings and blocks. Memory, disk, and swap notices stay on.',
+    apply: 'policy',
+  }),
+  S('machine', 'machine.guardPause', 'Pause guard', {
+    what: 'Turns the machine guard off for a set time. The guard turns on again when the time ends.',
+    default: '1 hour in the list', unit: 'Hours', range: '1, 2, 4, 8, 12, or 24 hours',
+    raise: 'A longer pause lets more work run for longer.',
+    lower: 'A shorter pause returns the protection sooner. Select Resume guard to end a pause early.',
+    apply: 'policy',
+  }),
+  S('machine', 'machine.ownerAwayMinutes', 'Owner away after minutes', {
+    what: 'The idle time after which Herdr Boss treats the Owner as away. It chooses the away limits below.',
+    default: '10', unit: 'Minutes', range: '0 to 1440',
+    raise: 'The Owner counts as present for longer, so the lower present limits apply for longer.',
+    lower: 'The Owner counts as away sooner, so the higher away limits apply sooner.',
+    apply: 'policy',
+  }),
+  S('machine', 'machine.presentCpuPercent', 'CPU limit while present', {
+    what: 'The CPU use at which the guard blocks worker starts while the Owner is present. CPU is a percent of the total machine capacity.',
+    default: '70', unit: 'Percent', range: '0 to 100',
+    raise: 'A higher limit lets workers start on a busier machine.',
+    lower: 'A lower limit keeps the machine free for the Owner.',
+    apply: 'policy',
+  }),
+  S('machine', 'machine.awayCpuPercent', 'CPU limit while away', {
+    what: 'The CPU use at which the guard blocks worker starts while the Owner is away.',
+    default: '95', unit: 'Percent', range: '0 to 100, or blank to turn the limit off',
+    raise: 'A higher limit lets workers use more of the machine.',
+    lower: 'A lower limit leaves more headroom. A blank field turns the limit off.',
+    apply: 'policy',
+  }),
+  S('machine', 'machine.presentLoadFactor', 'Present load backstop', {
+    what: 'A backstop on the 5-minute load average while the Owner is present. The limit is this factor times the core count.',
+    default: '3', unit: 'Times the core count', range: '0 to 128, or blank to turn the backstop off',
+    raise: 'A higher factor allows more load before the guard acts.',
+    lower: 'A lower factor acts sooner. A blank field turns the backstop off.',
+    apply: 'policy',
+  }),
+  S('machine', 'machine.awayLoadFactor', 'Away load backstop', {
+    what: 'A backstop on the 5-minute load average while the Owner is away. The limit is this factor times the core count.',
+    default: '8', unit: 'Times the core count', range: '0 to 128, or blank to turn the backstop off',
+    raise: 'A higher factor allows more load before the guard acts.',
+    lower: 'A lower factor acts sooner. A blank field turns the backstop off.',
+    apply: 'policy',
+  }),
+  S('machine', 'machine.diskWarnFreeGB', 'Disk warning below free GB', {
+    what: 'The free disk space below which Herdr Boss sends a disk warning. A GB is 2³⁰ bytes. This notice stays on when the guard is off.',
+    default: '20', unit: 'GB free', range: '0 to 1048576',
+    raise: 'A higher value gives the warning earlier.',
+    lower: 'A lower value gives the warning later.',
+    apply: 'policy',
+  }),
+  S('machine', 'machine.diskCriticalFreeGB', 'Disk critical below free GB', {
+    what: 'The free disk space below which Herdr Boss sends a critical disk alert.',
+    default: '5', unit: 'GB free', range: '0 to 1048576',
+    raise: 'A higher value gives the critical alert earlier.',
+    lower: 'A lower value gives the critical alert later. Keep it below the warning value.',
+    apply: 'policy',
+  }),
+  S('machine', 'machine.swapWarnPercent', 'Swap warning at % used', {
+    what: 'The swap use at which Herdr Boss raises a swap warning. It needs 3 samples in a row at or above the percent, with at least the minimum GB in use. The warning never blocks work.',
+    default: '80', unit: 'Percent of the swap total', range: '1 to 100, or blank to turn the warning off',
+    raise: 'A higher value gives the warning later.',
+    lower: 'A lower value gives the warning earlier. A blank field turns the warning off.',
+    apply: 'policy',
+  }),
+  S('machine', 'machine.swapRefusePercent', 'Swap refusal at % used', {
+    what: 'The swap use at which the swap refusal blocks new work. It has an effect only when Refuse new work at high swap is on.',
+    default: '95', unit: 'Percent of the swap total', range: '1 to 100, or blank to turn the refusal off',
+    raise: 'A higher value blocks new work later.',
+    lower: 'A lower value blocks new work sooner. A blank field turns the refusal off.',
+    apply: 'policy',
+  }),
+  S('machine', 'machine.swapMinUsedGB', 'Swap rules need at least GB used', {
+    what: 'The least swap in use before the swap warning and the swap refusal apply. The macOS swap total grows with use, so a percent alone can mislead.',
+    default: '2', unit: 'GB', range: '0 to 1024',
+    raise: 'A higher value ignores a small swap use.',
+    lower: 'A lower value lets a small swap use raise a notice. Zero removes the floor.',
+    apply: 'policy',
+  }),
+  S('machine', 'machine.swapRefuseEnabled', 'Refuse new work at high swap', {
+    what: 'When on, a worker start, a suite, or a push with a pre-push suite fails while swap is at or above the refusal percent. Work that the Owner or the Boss starts is never refused.',
+    default: 'Off', unit: 'Switch', range: 'On or off',
+    raise: 'Turning it on protects a machine that swaps from more load. Use --force-swap, or HERDR_BOSS_FORCE_SWAP=1 for suite and push, to override.',
+    lower: 'Turning it off lets work start at any swap level. The swap warning still applies.',
+    apply: 'policy',
+  }),
+  S('machine', 'machine.alertCooldownSeconds', 'Notice cooldown seconds', {
+    what: 'The least time before the same machine notice is sent again.',
+    default: '21600 (6 hours)', unit: 'Seconds', range: '0 to 604800',
+    raise: 'A higher value sends fewer repeat notices.',
+    lower: 'A lower value sends repeat notices sooner. Zero sends a notice at each change.',
+    apply: 'policy',
+  }),
+  S('machine', 'machine.memFreeWarnPercent', 'Memory free warning', {
+    what: 'The free memory percent below which Herdr Boss shows a memory warning. It stays on when the guard is off.',
+    default: '15', unit: 'Percent free', range: '1 to 50',
+    raise: 'A higher value gives the memory warning earlier.',
+    lower: 'A lower value gives the memory warning later.',
+    apply: 'service',
+  }),
+
+  // Watch
+  S('watch', 'watch.routine.title', 'Routine title', {
+    what: 'The name of a watch routine. The Watch box and the Boss prompt show it.',
+    default: 'The kit title', unit: 'Text', range: 'Up to 60 characters',
+    raise: 'Not applicable.', lower: 'Not applicable.',
+    apply: 'now',
+  }),
+  S('watch', 'watch.routine.model', 'Routine model hint', {
+    what: 'A hint of the model that the Boss should use for the routine. The Boss pane reads it in the prompt.',
+    default: 'default', unit: 'Text', range: 'Up to 40 characters',
+    raise: 'Not applicable.', lower: 'Not applicable.',
+    apply: 'now',
+  }),
+  S('watch', 'watch.routine.schedule', 'Routine schedule', {
+    what: 'When a routine runs during a watch: every N minutes, or at a set time before the end of the watch.',
+    default: 'Every 60 minutes for a new routine', unit: 'Minutes, or a time of day', range: '1 to 1440 minutes, or a time such as 01:00',
+    raise: 'More minutes between runs send fewer prompts.',
+    lower: 'Fewer minutes between runs send more prompts and use more quota.',
+    apply: 'now',
+  }),
+  S('watch', 'watch.routine.prompt', 'Routine prompt', {
+    what: 'The text that the service sends to the Boss pane when the routine runs.',
+    default: 'The kit text', unit: 'Text', range: 'Up to 8000 characters',
+    raise: 'A longer prompt gives more detail and uses more context.',
+    lower: 'Reset to the kit text removes your change.',
+    apply: 'now',
+  }),
+  S('watch', 'watch.maxWorkers', 'Watch worker cap', {
+    what: 'The most workers that run at the same time while a watch runs. A blank value uses the day value.',
+    default: 'Blank (the day value)', unit: 'Workers', range: '1 to 40, or blank',
+    raise: 'A higher cap runs more workers overnight and uses more quota and CPU.',
+    lower: 'A lower cap runs fewer workers overnight.',
+    apply: 'service',
+  }),
+  S('watch', 'watch.maxWorkersByLane', 'Watch worker cap by lane', {
+    what: 'The most workers per lane while a watch runs. The lanes are Unmetered, Codex, Claude, and OpenCode Go. A blank lane uses the day value.',
+    default: 'All lanes blank', unit: 'Workers', range: '1 to 40 for each lane, or blank',
+    raise: 'A higher cap lets that lane run more workers.',
+    lower: 'A lower cap protects the quota of that lane.',
+    apply: 'service',
+  }),
+  S('watch', 'watch.quietHours', 'Quiet hours default', {
+    what: 'The default for a new watch: quiet hours on or off. Quiet hours queue desktop notifications until the watch ends. They also delay the release of an expired manual suite lock or lease.',
+    default: 'Off', unit: 'Switch', range: 'On or off',
+    raise: 'Turning it on gives a new watch quiet hours. A watch that you start can override it.',
+    lower: 'Turning it off gives a new watch normal desktop notifications.',
+    apply: 'service',
+  }),
+
+  // Capacity and handover (Allocation page)
+  S('capacity', 'maxWorkers', 'Maximum working agents', {
+    what: 'The most agents that work at the same time. The worker command enforces it for all projects together.',
+    default: '8', unit: 'Agents', range: '1 to 64',
+    raise: 'A higher value runs more work at once and adds CPU and quota use.',
+    lower: 'A lower value queues new workers until a slot is free.',
+    apply: 'policy',
+  }),
+  S('capacity', 'borrowIdle', 'Borrow idle shares', {
+    what: 'Lets a busy project use the unused share of an idle project.',
+    default: 'On', unit: 'Switch', range: 'On or off',
+    raise: 'Turning it on uses the whole capacity when some projects are idle.',
+    lower: 'Turning it off keeps each project inside its own share.',
+    apply: 'policy',
+  }),
+  S('capacity', 'idleMinutes', 'Idle after minutes', {
+    what: 'The time without activity after which a project counts as idle and lends its share.',
+    default: '15', unit: 'Minutes', range: '0 to 1440',
+    raise: 'A project stays active longer before it lends its share.',
+    lower: 'A project lends its share sooner.',
+    apply: 'policy',
+  }),
+  S('capacity', 'reservePercent', 'Orchestrator reserve', {
+    what: 'The percent of a provider quota that is kept for orchestrators. Workers cannot use it.',
+    default: '15', unit: 'Percent of the quota', range: '0 to 80',
+    raise: 'A higher reserve keeps orchestrators running longer when quota is short. Workers get less.',
+    lower: 'A lower reserve gives workers more quota. An orchestrator can run out first.',
+    apply: 'policy',
+  }),
+  S('capacity', 'handoffLeadMinutes', 'Handover lead minutes', {
+    what: 'A quota window is at risk when it will run out within this many minutes. Herdr Boss then recommends a handover.',
+    default: '180', unit: 'Minutes', range: '0 to 10080',
+    raise: 'A higher value recommends a handover earlier.',
+    lower: 'A lower value recommends a handover later.',
+    apply: 'policy',
+  }),
+  S('capacity', 'autoHandover', 'Automatic handover', {
+    what: 'Lets Herdr Boss prepare and activate a successor orchestrator without the Owner. It never runs for the Boss.',
+    default: 'Off', unit: 'Switch', range: 'On or off',
+    raise: 'Turning it on moves an orchestrator to a successor at the reserve limit or the context limit.',
+    lower: 'Turning it off means only the Owner starts a handover.',
+    apply: 'policy',
+  }),
+  S('capacity', 'autoHandoverPercent', 'Activate at quota used %', {
+    what: 'The quota level at which the prepared successor takes control. The source stays in control until then.',
+    default: '98', unit: 'Percent of the quota', range: '90 to 100',
+    raise: 'A higher value keeps the source in control for longer.',
+    lower: 'A lower value hands over sooner.',
+    apply: 'policy',
+  }),
+  S('capacity', 'autoHandoverContextTokens', 'Hand over at context tokens', {
+    what: 'The context size above which a Claude orchestrator gets a fresh successor at a task boundary.',
+    default: '300000', unit: 'Tokens', range: '50000 to 2000000',
+    raise: 'A higher value keeps a long context for longer.',
+    lower: 'A lower value hands over sooner and keeps the context short.',
+    apply: 'policy',
+  }),
+  S('capacity', 'defaultOrchestratorGoal', 'Default orchestrator goal', {
+    what: 'The /goal text for a new orchestrator that has no goal. A handover copies the goal of the old orchestrator to the successor.',
+    default: 'A standing goal text', unit: 'Text', range: 'One line of at most 4000 characters, or empty for no default',
+    raise: 'A longer text gives more direction and uses more context.',
+    lower: 'An empty text gives a new orchestrator no default goal.',
+    apply: 'policy',
+  }),
+
+  // Token prices
+  S('prices', 'prices.input', 'Input price', {
+    what: 'The price of input tokens. The cost that Herdr Boss shows is an API-price equivalent, because a subscription is not billed per token.',
+    default: 'The catalog price', unit: 'USD per million tokens', range: '0 to 1000, or blank for the default',
+    raise: 'A higher price raises the cost figures.', lower: 'A lower price lowers the cost figures.',
+    apply: 'now',
+  }),
+  S('prices', 'prices.output', 'Output price', {
+    what: 'The price of output tokens.',
+    default: 'The catalog price', unit: 'USD per million tokens', range: '0 to 1000, or blank for the default',
+    raise: 'A higher price raises the cost figures.', lower: 'A lower price lowers the cost figures.',
+    apply: 'now',
+  }),
+  S('prices', 'prices.cacheRead', 'Cache read price', {
+    what: 'The price of tokens that the provider reads from its cache.',
+    default: 'The catalog price', unit: 'USD per million tokens', range: '0 to 1000, or blank for the default',
+    raise: 'A higher price raises the cost figures.', lower: 'A lower price lowers the cost figures.',
+    apply: 'now',
+  }),
+  S('prices', 'prices.cacheWrite', 'Cache write price, 5 minutes', {
+    what: 'The price of tokens that the provider writes to a cache with a 5-minute life.',
+    default: 'The catalog price', unit: 'USD per million tokens', range: '0 to 1000, or blank for the default',
+    raise: 'A higher price raises the cost figures.', lower: 'A lower price lowers the cost figures.',
+    apply: 'now',
+  }),
+  S('prices', 'prices.cacheWrite1h', 'Cache write price, 1 hour', {
+    what: 'The price of tokens that the provider writes to a cache with a 1-hour life.',
+    default: 'The catalog price', unit: 'USD per million tokens', range: '0 to 1000, or blank for the default',
+    raise: 'A higher price raises the cost figures.', lower: 'A lower price lowers the cost figures.',
+    apply: 'now',
+  }),
+
+  // Avatars
+  S('avatars', 'avatar.upload', 'Upload image', {
+    what: 'Sets your own image for the Boss or for a project.',
+    default: 'A generated avatar', unit: 'Image file', range: 'PNG, JPEG, or WebP, at most 512 KB',
+    raise: 'Not applicable.', lower: 'Not applicable.',
+    apply: 'now',
+  }),
+  S('avatars', 'avatar.reset', 'Reset avatar', {
+    what: 'Removes your image and returns to the generated avatar.',
+    default: 'Not applicable', unit: 'Button', range: 'Not applicable',
+    raise: 'Not applicable.', lower: 'Not applicable.',
+    apply: 'now',
+  }),
+
+  // Service settings
+  S('service', 'staleStatusMinutes', 'Stale status minutes', {
+    what: 'The age after which a published project status is stale while workers run or new commits land.',
+    default: '120', unit: 'Minutes', range: '5 to 1440',
+    raise: 'A higher value gives the stale notice later.',
+    lower: 'A lower value gives the stale notice sooner.',
+    apply: 'service',
+  }),
+  S('service', 'workers.staleIdleMinutes', 'Stale idle worker minutes', {
+    what: 'The idle time after which Herdr Boss reports a worker as stale. The wait command uses it as its stall time.',
+    default: '120', unit: 'Minutes', range: '5 to 1440',
+    raise: 'A higher value waits longer before it reports an idle worker.',
+    lower: 'A lower value reports an idle worker sooner.',
+    apply: 'service',
+  }),
+  S('service', 'browsers.reapOrphanDaemons', 'Stop orphan browser daemons', {
+    what: 'Lets Herdr Boss stop an agent-browser daemon that has no parent, no children, and the minimum age. It never stops a browser that it did not start.',
+    default: 'On', unit: 'Switch', range: 'On or off',
+    raise: 'Turning it on frees memory from forgotten daemons.',
+    lower: 'Turning it off leaves orphan daemons running.',
+    apply: 'service',
+  }),
+  S('service', 'browsers.orphanDaemonMinAgeSeconds', 'Orphan daemon minimum age', {
+    what: 'The age that an orphan browser daemon must reach before Herdr Boss stops it.',
+    default: '7200', unit: 'Seconds', range: '60 to 86400',
+    raise: 'A higher value spares a young daemon for longer.',
+    lower: 'A lower value stops orphans sooner and risks a daemon that is between two uses.',
+    apply: 'service',
+  }),
+  S('service', 'browsers.staleOwnedMinutes', 'Stale owned browser minutes', {
+    what: 'The idle time of the agent after which Herdr Boss reports its browser as stale.',
+    default: '30', unit: 'Minutes', range: '5 to 1440',
+    raise: 'A higher value reports a stale browser later.',
+    lower: 'A lower value reports a stale browser sooner.',
+    apply: 'service',
+  }),
+  S('service', 'browsers.sweepCodeSignClones', 'Sweep code-sign clones', {
+    what: 'Lets Herdr Boss delete old code-sign clones of Chrome that no running Chrome process owns.',
+    default: 'On', unit: 'Switch', range: 'On or off',
+    raise: 'Turning it on frees disk space.',
+    lower: 'Turning it off leaves the clones on disk.',
+    apply: 'service',
+  }),
+  S('service', 'tickSeconds', 'Tick seconds', {
+    what: 'The time between two collection passes of the engine.',
+    default: '30', unit: 'Seconds', range: 'A positive whole number',
+    raise: 'A higher value gives slower updates and less load.',
+    lower: 'A lower value gives faster updates and more load.',
+    apply: 'restart',
+  }),
+  S('service', 'quotaSeconds', 'Quota seconds', {
+    what: 'The time between two reads of the provider quotas.',
+    default: '300', unit: 'Seconds', range: 'A positive whole number',
+    raise: 'A higher value reads quotas less often.',
+    lower: 'A lower value reads quotas more often and calls the providers more.',
+    apply: 'restart',
+  }),
+  S('service', 'push', 'Push prompts', {
+    what: 'Lets the service send prompts to orchestrator panes. Notices to the Owner are always sent.',
+    default: 'On', unit: 'Switch', range: 'On or off',
+    raise: 'Turning it on lets the service prompt the orchestrators.',
+    lower: 'Turning it off stops all prompts to orchestrator panes.',
+    apply: 'restart',
+  }),
+  S('service', 'alertCooldownSeconds', 'Notice cooldown (legacy)', {
+    what: 'The least time before the same notice is sent again. The machine cooldown in the Machine group takes precedence for machine notices.',
+    default: '21600 (6 hours)', unit: 'Seconds', range: 'A whole number of 0 or more',
+    raise: 'A higher value sends fewer repeat notices.',
+    lower: 'A lower value sends repeat notices sooner.',
+    apply: 'restart',
+  }),
+  S('service', 'providerKinds', 'Provider kinds', {
+    what: 'Maps each quota provider to the agent kinds that use it.',
+    default: 'claude to claude, codex to codex, opencodego to opencode and pi', unit: 'Object of lists', range: 'Kind names that exist',
+    raise: 'Not applicable.',
+    lower: 'A wrong map counts a kind against the wrong quota.',
+    apply: 'restart',
+  }),
+  S('service', 'orchestratorLabel', 'Orchestrator label', {
+    what: 'The pane label that marks the orchestrator of a project.',
+    default: 'orch', unit: 'Text', range: 'One pane label',
+    raise: 'Not applicable.',
+    lower: 'A wrong label makes Herdr Boss miss the orchestrator panes.',
+    apply: 'restart',
+  }),
+  S('service', 'port', 'Port', {
+    what: 'The port of the dashboard and the API.',
+    default: '4477', unit: 'TCP port', range: '1 to 65535',
+    raise: 'Not applicable.',
+    lower: 'A change also changes the address that other tools use.',
+    apply: 'restart',
+  }),
+  S('service', 'host', 'Host', {
+    what: 'The network address that the server listens on. 0.0.0.0 allows remote access with the access token. 127.0.0.1 allows only this machine.',
+    default: '0.0.0.0', unit: 'Address', range: 'An IP address of this machine',
+    raise: 'Not applicable.',
+    lower: 'Set 127.0.0.1 to turn remote access off.',
+    apply: 'restart',
+  }),
+
+  // Harness readiness
+  S('readiness', 'harness.readiness', 'Readiness table', {
+    what: 'Shows for each harness entry if it is ok, missing, or bad. The table shows no path and no value.',
+    default: 'Not applicable', unit: 'Table', range: 'Read-only',
+    raise: 'Not applicable.', lower: 'Not applicable.',
+    apply: 'now',
+  }),
+]);
+
+export const SETTING_FIELDS = ['what', 'default', 'unit', 'range', 'raise', 'lower', 'apply'];
+
+const escapeHtml = (text) => String(text).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+
+export function settingHelp(id) {
+  return SETTING_HELP[id] || null;
+}
+
+// The plain-text lines of one setting, as [label, text] pairs. The popup, the guide, and the docs use these.
+export function settingLines(id) {
+  const item = SETTING_HELP[id];
+  if (!item) return [];
+  return [
+    ['What it does', item.what],
+    ['Default', item.default],
+    ['Unit', item.unit],
+    ['Range', item.range],
+    ['Raise it', item.raise],
+    ['Lower it', item.lower],
+    ['Apply', APPLY[item.apply]],
+  ];
+}
+
+export function settingPopupHtml(id) {
+  const lines = settingLines(id);
+  if (!lines.length) return '';
+  return `<dl class="setting-popup-list">${lines.map(([term, text]) => `<div><dt>${escapeHtml(term)}</dt><dd>${escapeHtml(text)}</dd></div>`).join('')}</dl>`;
+}
+
+// The high-level guide for the Help panel.
+export function settingsGuideHtml() {
+  const rows = SETTING_GROUPS.map((group) => `<h4>${escapeHtml(group.title)}${group.advanced ? ' (Advanced)' : ''}</h4>`
+    + `<p><b>Controls:</b> ${escapeHtml(group.controls)}</p>`
+    + `<p><b>Effect:</b> ${escapeHtml(group.affects)}</p>`
+    + `<p><b>Safe to change:</b> ${escapeHtml(group.safe)}</p>`
+    + `<p><b>Restart:</b> ${escapeHtml(group.restart)}</p>`).join('');
+  return `<p>Select the <b>i</b> button next to a setting to read what it does, its default, its unit, its range, and the effect of a higher or lower value. On a desktop, hold the pointer over the button. Press Escape to close the popup.</p>${rows}`;
+}
+
+export const DOCS_BEGIN = '<!-- settings-reference:begin -->';
+export const DOCS_END = '<!-- settings-reference:end -->';
+
+// The settings reference for docs/cli.md. A test compares this text with the file.
+export function settingsDocsMarkdown() {
+  const out = [DOCS_BEGIN, '', 'Do not edit this block. It comes from `public/setting-help.js`.', ''];
+  for (const group of SETTING_GROUPS) {
+    out.push(`#### ${group.title}${group.advanced ? ' (Advanced)' : ''}`, '');
+    out.push(`- Controls: ${group.controls}`, `- Effect: ${group.affects}`, `- Safe to change: ${group.safe}`, `- Restart: ${group.restart}`, '');
+    out.push('| Setting | Key | What it does | Default | Unit | Range | Raise it | Lower it | Apply |', '| --- | --- | --- | --- | --- | --- | --- | --- | --- |');
+    for (const [id, item] of Object.entries(SETTING_HELP)) {
+      if (item.group !== group.id) continue;
+      const cell = (text) => String(text).replace(/\|/g, '\\|');
+      out.push(`| ${cell(item.label)} | \`${id}\` | ${cell(item.what)} | ${cell(item.default)} | ${cell(item.unit)} | ${cell(item.range)} | ${cell(item.raise)} | ${cell(item.lower)} | ${cell(APPLY[item.apply])} |`);
+    }
+    out.push('');
+  }
+  out.push(DOCS_END);
+  return out.join('\n');
+}
