@@ -66,7 +66,7 @@ test('firstInvalidStep gives the first step with an error', () => {
 });
 
 test('toRequest builds the body of the routes', () => {
-  assert.deepEqual(toRequest(filled()), { slug: 'demo-app', name: 'Demo App', group: '/tmp/work', remote: 'gh', visibility: 'private', start: true });
+  assert.deepEqual(toRequest(filled()), { slug: 'demo-app', name: 'Demo App', group: '/tmp/work', remote: 'gh', visibility: 'private', decision: { visibility: 'private', source: 'wizard' }, start: true });
   assert.deepEqual(toRequest(filled({ folderMode: 'path', path: ' /tmp/p ', remote: 'none', kind: 'codex', goal: ' Build it ', start: false })),
     { slug: 'demo-app', name: 'Demo App', path: '/tmp/p', remote: 'none', kind: 'codex', goal: 'Build it', start: false });
   assert.deepEqual(toRequest(filled({ remote: 'gh', visibility: 'public', org: 'acme' })).org, 'acme');
@@ -121,7 +121,7 @@ test('the remote step offers four choices, private by default, and a warning lin
   assert.doesNotMatch(html, /Anyone on the internet/);
   const pub = wizardHtml({ draft: filled({ visibility: 'public' }), step: 'remote', errors: [] });
   assert.match(pub, /Anyone on the internet/);
-  assert.match(html, /Mailbox/, 'the step says that the question goes to the Mailbox');
+  assert.match(html, /does not ask in the Mailbox/, 'the step says that the choice needs no Mailbox question');
 });
 
 test('the orchestrator step has the tick box, on by default', () => {
@@ -231,4 +231,61 @@ test('the Projects page has the New project button, the wizard has no other h1, 
   assert.match(body, /New project/);
   assert.match(source, /from '\.\/project-wizard-ui\.js'/);
   assert.match(fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8'), /\.wizard-panel/);
+});
+
+test('a private choice needs no confirmation and sends a private decision', () => {
+  assert.deepEqual(validateStep('remote', filled()), []);
+  const html = wizardHtml({ draft: filled(), step: 'remote', errors: [] });
+  assert.doesNotMatch(html, /wiz-confirm-public/);
+  assert.doesNotMatch(html, /<button type="submit"[^>]*disabled/);
+  assert.deepEqual(toRequest(filled()).decision, { visibility: 'private', source: 'wizard' });
+  // A typed word left over from an earlier public choice is not sent for private.
+  assert.deepEqual(toRequest(filled({ confirmPublic: 'public' })).decision, { visibility: 'private', source: 'wizard' });
+});
+
+test('a public choice shows the warning, a confirmation field, and a disabled next button until the word matches', () => {
+  const draft = filled({ visibility: 'public' });
+  const html = wizardHtml({ draft, step: 'remote', errors: [] });
+  assert.match(html, /Anyone on the internet can read all files and the full history/);
+  assert.match(html, /Do not put secrets, client names, or private data/);
+  assert.match(html, /making it private later does not undo that/);
+  assert.match(html, /<input id="wiz-confirm-public"[^>]*aria-describedby="wiz-public-warning"/);
+  assert.match(html, /<label for="wiz-confirm-public">Type public to confirm<\/label>/);
+  assert.match(html, /<button type="submit" disabled aria-disabled="true">Next<\/button>/);
+  assert.equal(validateStep('remote', draft).length, 1);
+  for (const typed of ['', 'pub', 'publik', 'public repo', 'not public', 'private']) {
+    const d = filled({ visibility: 'public', confirmPublic: typed });
+    assert.match(wizardHtml({ draft: d, step: 'remote', errors: [] }), /<button type="submit" disabled/, typed);
+    assert.equal(validateStep('remote', d).length, 1, typed);
+    assert.equal('confirmPublic' in toRequest(d).decision, false, typed);
+  }
+});
+
+test('the typed word public enables the next button and adds confirmPublic to the request', () => {
+  for (const typed of ['public', ' public ', 'PUBLIC']) {
+    const d = filled({ visibility: 'public', confirmPublic: typed });
+    const html = wizardHtml({ draft: d, step: 'remote', errors: [] });
+    assert.match(html, /<button type="submit">Next<\/button>/, typed);
+    assert.match(html, /aria-invalid="false"/);
+    assert.deepEqual(validateStep('remote', d), [], typed);
+    assert.deepEqual(toRequest(d).decision, { visibility: 'public', source: 'wizard', confirmPublic: true }, typed);
+    assert.equal(toRequest(d).visibility, 'public');
+  }
+});
+
+test('the confirmation field escapes the typed text and the draft never keeps it', () => {
+  const html = wizardHtml({ draft: filled({ visibility: 'public', confirmPublic: EVIL }), step: 'remote', errors: [] });
+  assert.doesNotMatch(html, /<img/);
+  assert.match(html, /value="&lt;img src=x onerror=alert\(1\)&gt;&quot;&#39;&amp;"/);
+  const saved = new Map();
+  saveDraft({ setItem: (k, v) => saved.set(k, v) }, filled({ visibility: 'public', confirmPublic: 'public' }));
+  assert.doesNotMatch(saved.get(DRAFT_KEY), /confirmPublic/);
+  assert.equal(loadDraft({ getItem: () => JSON.stringify({ visibility: 'public', confirmPublic: 'public' }) }).confirmPublic, '');
+});
+
+test('the review step warns about a public repository and drops the Mailbox sentence', () => {
+  const rows = reviewRows(filled({ visibility: 'public', confirmPublic: 'public' }));
+  const warn = rows.find((r) => r.warn);
+  assert.match(warn.value, /Anyone on the internet/);
+  assert.doesNotMatch(JSON.stringify(rows), /Mailbox/);
 });

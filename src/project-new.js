@@ -16,7 +16,7 @@ import { loadModels } from './kit/config.js';
 import { kitRevision } from './kit/agents-check.js';
 import { describeWorkspace, workspaceStep } from './project-new-workspace.js';
 import { describeHarness, harnessStep } from './project-new-check.js';
-import { ORG_NAME, RemoteError, describeRemote, remoteStep, validateRemoteUrl } from './project-new-remote.js';
+import { ORG_NAME, RemoteError, checkDecision, describeRemote, remoteStep, validateRemoteUrl } from './project-new-remote.js';
 
 export const PROJECT_NEW_STEPS = ['validate', 'folder', 'files', 'kit', 'commit', 'remote', 'policy', 'register', 'status', 'workspace', 'harness', 'check'];
 export const NOT_BUILT = new Set(['check']);
@@ -292,7 +292,7 @@ const RUN = {
 // home and reserveBrowser belong to the step harness. persist false keeps the ids in memory only.
 function makeContext(options, { dataDir, state, stateFile, persist }) {
   return { dataDir, repoRoot: path.resolve(options.repoRoot || KIT_ROOT), group: options.group ? path.resolve(options.group) : null, ceiling: options.ceiling, allowUnscanned: options.allowUnscanned || [],
-    remote: options.remote ?? 'none', visibility: options.visibility ?? 'private', org: options.org, start: Boolean(options.start), kind: options.kind, herdr: options.herdr, hooks: options.hooks, env: options.env, home: options.home, reserveBrowser: options.reserveBrowser, ids: state.ids,
+    remote: options.remote ?? 'none', visibility: options.visibility ?? 'private', decision: options.decision, org: options.org, start: Boolean(options.start), kind: options.kind, herdr: options.herdr, hooks: options.hooks, env: options.env, home: options.home, reserveBrowser: options.reserveBrowser, ids: state.ids,
     remember(patch) { Object.assign(state.ids, patch); if (!persist) return; state.updatedAt = new Date().toISOString(); writeState(stateFile, state); } };
 }
 
@@ -305,6 +305,11 @@ export function runProjectNew(options = {}) {
   if (options.org !== undefined && !ORG_NAME.test(String(options.org))) refuse('The organization must be an organization or user name: letters, digits, and hyphens, and it must not start with a hyphen.');
   if (options.remote && options.remote !== 'gh' && options.remote !== 'none') {
     try { validateRemoteUrl(options.remote); } catch (error) { if (error instanceof RemoteError) refuse(error.message); throw error; }
+  }
+  if (options.decision !== undefined) {
+    try { checkDecision(options.decision); } catch (error) { if (error instanceof RemoteError) refuse(error.message); throw error; }
+    if (options.remote !== 'gh') refuse('A decision needs --remote gh.');
+    if (options.visibility !== undefined && options.visibility !== options.decision.visibility) refuse('The decision visibility must match the visibility option.');
   }
   const stateFile = stateFilePath(dataDir, inputs.slug);
   const saved = readState(stateFile);

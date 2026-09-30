@@ -1137,6 +1137,9 @@ dialog h2 { color: var(--text); font-size: 16px; font-weight: 650; letter-spacin
 .wizard-choice span, .wizard-check span { display: grid; gap: 2px; min-width: 0; }
 .wizard-choice small, .wizard-check small { color: var(--muted); font-size: 12px; }
 .wizard-warn { margin: 0; padding: 8px 10px; border: 1px solid var(--warn); border-radius: 8px; color: var(--text); font-size: 13px; }
+.wizard-confirm { display: grid; gap: 8px; }
+.wizard-confirm input[aria-invalid="true"] { border-color: var(--warn); }
+.wizard-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
 .wizard-errors { margin: 0; padding: 8px 10px 8px 26px; border: 1px solid var(--crit); border-radius: 8px; color: var(--crit); font-size: 13px; }
 p.wizard-errors { padding-left: 10px; }
 .wizard-actions { display: flex; gap: 8px; justify-content: flex-end; align-items: center; flex-wrap: wrap; padding-top: 4px; }

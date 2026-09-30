@@ -155,7 +155,7 @@ export function createWizard({ view, fetchJson, storage, setTimer, clearTimer, c
   }
 
   // Copy one field into the draft, then save the draft.
-  const FIELDS = { 'wiz-slug': 'slug', 'wiz-name': 'name', 'wiz-group': 'group', 'wiz-path': 'path', 'wiz-url': 'url', 'wiz-org': 'org', 'wiz-goal': 'goal', 'wiz-kind': 'kind' };
+  const FIELDS = { 'wiz-slug': 'slug', 'wiz-name': 'name', 'wiz-group': 'group', 'wiz-path': 'path', 'wiz-url': 'url', 'wiz-confirm-public': 'confirmPublic', 'wiz-org': 'org', 'wiz-goal': 'goal', 'wiz-kind': 'kind' };
   function read(el) {
     const d = w.draft;
     if (FIELDS[el.id]) d[FIELDS[el.id]] = el.value;
@@ -163,6 +163,8 @@ export function createWizard({ view, fetchJson, storage, setTimer, clearTimer, c
     else if (['folderMode', 'remote', 'visibility'].includes(el.name)) d[el.name] = el.value;
     else return false;
     saveDraft(storage, d);
+    // The next button depends on the typed word, so the form renders again. The page patch keeps the focus and the caret.
+    if (el.id === 'wiz-confirm-public') render();
     return true;
   }
 

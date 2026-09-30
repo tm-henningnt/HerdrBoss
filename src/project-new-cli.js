@@ -112,7 +112,8 @@ function checkCommand(args, { herdr, dataDir, log, hooks, env, flowOptions }) {
   if (fix) {
     // A fix changes files and can spend model quota or ask the Owner. The read-only check needs no caller check.
     verifyProjectCaller(env, herdr);
-    const fixed = runProjectStep(fix, { slug, start, dataDir, herdr, hooks, env, ...flowOptions });
+    const { decision: _decision, ...allowedFlow } = flowOptions; // eslint-disable-line no-unused-vars
+    const fixed = runProjectStep(fix, { slug, start, dataDir, herdr, hooks, env, ...allowedFlow });
     log(`Fix ${fix} for ${slug}`);
     log(stepLine(fixed.step));
     for (const line of fixed.step.lines ?? []) log(`    ${line}`);
@@ -132,7 +133,9 @@ export function projectCommand(args, { env = process.env, herdr, dataDir, log = 
   // The caller check runs first: a worker pane must not reach any other step.
   verifyProjectCaller(env, herdr);
   const options = parseProjectNewArgs(rest);
-  const result = runProjectNew({ ...options, dataDir, herdr, hooks, env, ...flowOptions });
+  // A decision belongs to the dashboard routes. The command line always asks in the Mailbox.
+  const { decision: _decision, ...allowedFlow } = flowOptions; // eslint-disable-line no-unused-vars
+  const result = runProjectNew({ ...options, dataDir, herdr, hooks, env, ...allowedFlow });
   log(`${result.dryRun ? 'Dry run' : 'Project'} ${result.slug}`);
   for (const step of result.steps) {
     log(stepLine(step));
