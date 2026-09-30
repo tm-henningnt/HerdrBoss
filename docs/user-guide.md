@@ -216,8 +216,11 @@ The step `workspace` starts the first orchestrator. It runs only when you give `
 
 1. `workspace` creates a Herdr workspace with the label of the slug. The root pane gets the label `orch`.
 2. The step starts the agent `<slug>-orch`. It uses `--kind` when you give it. Otherwise it uses the first usable entry of the orchestrator ladder in Settings.
-3. The step gives the agent your goal, or the **Default orchestrator goal** from Settings. A Claude agent gets `/goal`. A Codex agent gets the goal in the first prompt.
-4. The step sends the first prompt. The agent reads `AGENTS.md`, the project memory, and the kit file. Then it starts the task `Set up the project`.
+3. The step watches the new pane for a folder trust prompt. See the paragraph below.
+4. The step gives the agent your goal, or the **Default orchestrator goal** from Settings. A Claude agent gets `/goal`. A Codex agent gets the goal in the first prompt.
+5. The step sends the first prompt. The agent reads `AGENTS.md`, the project memory, and the kit file. Then it starts the task `Set up the project`.
+
+The Owner accepts the trust prompt. Herdr Boss only tells the Owner where it is. Claude Code and Codex show a folder trust prompt in a new folder. Herdr Boss reads only the pane that this run created, every 2 seconds, for 3 minutes. When the pane shows the known prompt for exactly the project folder, Herdr Boss posts one item to the Mailbox. The item names the pane and links to the Agents page. Open the Agents page, choose the pane, and press Enter on the option that trusts the folder. Herdr Boss never presses a key in a pane for this. If the agent is neither ready nor working after 3 minutes and the prompt was not seen, Herdr Boss posts one item that says the pane may wait for input. Claude Code and Codex have a known prompt. Pi and OpenCode show no folder trust prompt, so Herdr Boss does not watch them.
 
 The step `harness` prepares the machine for the project:
 

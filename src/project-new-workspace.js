@@ -7,12 +7,17 @@ import { loadPolicy } from './control.js';
 import { cleanGoal, goalDelivery, goalShown } from './goal.js';
 import { handoffTarget, successorAgentArgs } from './handoff.js';
 import { loadModels } from './kit/config.js';
-import { createHerdrRunner, deliverPrompt, isAgentPaneBusy, readAgentText, waitForAgentReady, waitForWorkerPane } from './kit/workers.js';
+import { agentReadyVisible, createHerdrRunner, deliverPrompt, isAgentPaneBusy, readAgentText, waitForAgentReady, waitForWorkerPane } from './kit/workers.js';
+import { appendMessage } from './messages.js';
 import { writeProject } from './projects.js';
+import { TRUST_HARNESSES, hasTrustCue, matchTrustPrompt } from './trust-prompts.js';
 
 const GOAL_CHECKS = 3;
 const GOAL_CHECK_WAIT_MS = 2000;
 const FIRST_TASK = 'Set up the project';
+const TRUST_WINDOW_MS = 180_000;
+const TRUST_POLL_MS = 2000;
+const pauseMs = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
 const rows = (response, key) => (Array.isArray(response?.[key]) ? response[key] : Array.isArray(response) ? response : []);
 const workspaceId = (workspace) => workspace?.workspace_id ?? workspace?.workspaceId ?? workspace?.id ?? null;
@@ -85,6 +90,63 @@ function firstPrompt({ slug, pane, boss, goal }) {
     + `Then start with the published task "${FIRST_TASK}".${goal ? ` The current Owner goal is: ${goal}` : ''}`;
 }
 
+const TRUST_OPTION = { claude: 'Yes, I trust this folder', codex: 'Trust and continue' };
+
+function trustItemText({ pane, kind, slug, folder }) {
+  return [
+    `Accept the folder trust prompt in pane ${pane} (the ${kind} agent of ${slug}): open the Agents page, choose the pane, and press Enter on "${TRUST_OPTION[kind]}".`,
+    `Folder: ${folder}`,
+    'Agents page: /agents',
+  ].join('\n');
+}
+
+function trustTimeoutText({ pane, kind, slug }) {
+  return [
+    `The pane ${pane} (the ${kind} agent of ${slug}) may wait for input. It is not ready and not working after 3 minutes.`,
+    'Open the Agents page, choose the pane, and answer the question in it.',
+    'Agents page: /agents',
+  ].join('\n');
+}
+
+// Watch the pane that this run created for a folder trust dialog. Herdr Boss never presses a key here.
+// The wait is synchronous and can last 3 minutes. The API runs the flow in a child process (runFlowInChild in src/project-new-api.js),
+// so the wait never blocks the dashboard server.
+// The watch reads the pane by its id every 2 seconds. It stops when the agent shows its input prompt or works, or 3 minutes
+// after the creation of the pane. The known dialog for exactly this folder gets one Mailbox item and one event.
+// At the timeout, an agent that is neither ready nor working and had no known dialog gets one item that says the pane may wait.
+function watchTrust({ name, pane, kind, slug, folder, since, herdr, hooks, context }) {
+  const now = hooks.now ?? Date.now;
+  const wait = hooks.wait ?? pauseMs;
+  const deadline = since + TRUST_WINDOW_MS;
+  let waited = 0;
+  let detected = Boolean(context.ids.trustDetectedItem);
+  const read = () => {
+    try {
+      const response = herdr(['pane', 'read', pane, '--source', 'recent-unwrapped', '--lines', '60', '--format', 'text']);
+      return String(typeof response === 'string' ? response : response?.text ?? '');
+    } catch { return ''; }
+  };
+  const working = () => {
+    try { const status = herdr(['agent', 'get', name]); return (status?.agent ?? status)?.agent_status === 'working'; } catch { return false; }
+  };
+  const post = (text) => appendMessage({ thread: 'boss', from: 'boss', to: 'owner', kind: 'reply', text, action: 'answer', replyTo: null, status: 'new' }, { dir: context.dataDir }).id;
+  for (;;) {
+    const text = read();
+    if (!hasTrustCue(text)) {
+      if (agentReadyVisible(kind, text) || working()) return;
+    } else if (!detected && matchTrustPrompt(kind, text, folder).match) {
+      detected = true;
+      context.remember({ trustDetectedItem: post(trustItemText({ pane, kind, slug, folder })) });
+      try { fs.appendFileSync(path.join(context.dataDir, 'events.jsonl'), `${JSON.stringify({ at: new Date().toISOString(), type: 'project-new', text: 'trust prompt detected', pane, folder, harness: kind })}\n`); } catch { /* The event log is not required for the flow. */ }
+    }
+    if (Math.max(now() - since, waited) >= TRUST_WINDOW_MS) break;
+    const delay = Math.max(1, Math.min(TRUST_POLL_MS, deadline - now(), TRUST_WINDOW_MS - waited));
+    wait(delay);
+    waited += delay;
+  }
+  if (!detected && !context.ids.trustTimeoutItem) context.remember({ trustTimeoutItem: post(trustTimeoutText({ pane, kind, slug })) });
+}
+
 // Point the published status at the workspace. A status that does not exist yet is left alone.
 function linkStatus(dataDir, slug, workspace) {
   const dir = path.join(dataDir, 'projects');
@@ -118,8 +180,9 @@ export function workspaceStep(inputs, context) {
     created = paneId(response?.root_pane ?? response?.pane);
   }
   // Another workspace than the recorded one: the old flags describe a pane that is gone.
-  if (ids.workspaceId !== workspace) context.remember({ workspaceId: workspace, paneId: created, agentStarted: false, kind: null, model: null, goalSent: false, goalVerified: false, promptSent: false });
-  else if (created) context.remember({ paneId: created });
+  const createdAt = (hooks.now ?? Date.now)();
+  if (ids.workspaceId !== workspace) context.remember({ workspaceId: workspace, paneId: created, agentStarted: false, kind: null, model: null, goalSent: false, goalVerified: false, promptSent: false, trustPane: created, trustSince: created ? createdAt : null, trustDone: false, trustDetectedItem: null, trustTimeoutItem: null });
+  else if (created) context.remember({ paneId: created, trustPane: created, trustSince: createdAt, trustDone: false, trustDetectedItem: null, trustTimeoutItem: null });
   linkStatus(context.dataDir, inputs.slug, workspace);
 
   const pane = findPane(herdr, ids, workspace);
@@ -135,6 +198,12 @@ export function workspaceStep(inputs, context) {
     context.remember({ agentStarted: true, kind: target.kind, model: target.model });
   } else if (!ids.kind) context.remember({ agentStarted: true, kind });
   kind = ids.kind || kind;
+
+  // Only the pane that this run created, only for 3 minutes after its creation, only for a harness with a known dialog.
+  if (ids.trustPane === pane && !ids.trustDone && TRUST_HARNESSES.includes(kind)) {
+    watchTrust({ name, pane, kind, slug: inputs.slug, folder: cwd, since: ids.trustSince, herdr, hooks, context });
+    context.remember({ trustDone: true });
+  }
 
   const goal = cleanGoal(inputs.goal) ?? cleanGoal(policy.defaultOrchestratorGoal);
   const delivery = goalDelivery({ goal, kind });

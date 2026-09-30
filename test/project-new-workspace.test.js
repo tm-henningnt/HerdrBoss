@@ -8,6 +8,7 @@ import { runProjectNew } from '../src/project-new.js';
 import { projectCommand } from '../src/project-new-cli.js';
 import { goalDelivery } from '../src/goal.js';
 import { POLICY_DEFAULTS } from '../src/control.js';
+import { readMessages } from '../src/messages.js';
 
 // Git reads its identity from a temporary global file, never from the machine.
 const GIT_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-project-new-ws-git-'));
@@ -34,7 +35,7 @@ const GOAL = 'Ship the first version of the demo project.';
 // A fake Herdr. It keeps workspaces and panes, records each call, and answers the commands that the step uses.
 function fakeHerdr({ workspaces = [], panes = [], failOn = null } = {}) {
   const calls = [];
-  const state = { workspaces: [...workspaces], panes: [...panes], text: '', prompts: [], goalVisible: true };
+  const state = { workspaces: [...workspaces], panes: [...panes], text: '', prompts: [], goalVisible: true, paneReads: [], screen: null };
   const pane = (id) => state.panes.find((p) => p.pane_id === id);
   const run = (args) => {
     calls.push(args);
@@ -60,7 +61,10 @@ function fakeHerdr({ workspaces = [], panes = [], failOn = null } = {}) {
       return { pane: found };
     }
     if (a === 'pane' && b === 'rename') { pane(args[2]).label = args[3]; return {}; }
-    if (a === 'pane' && b === 'read') return { text: state.goalVisible ? state.text : '' };
+    if (a === 'pane' && b === 'read') {
+      if (state.screen && state.prompts.length === 0) { state.paneReads.push(args[2]); return { text: state.screen(state) }; }
+      return { text: state.goalVisible ? state.text : '' };
+    }
     if (a === 'agent' && b === 'start') {
       const target = pane(args[args.indexOf('--pane') + 1]);
       target.agent = args[args.indexOf('--kind') + 1];
@@ -69,6 +73,7 @@ function fakeHerdr({ workspaces = [], panes = [], failOn = null } = {}) {
       return { agent: { name: args[2] } };
     }
     if (a === 'agent' && b === 'prompt') { state.prompts.push({ target: args[2], text: args[3] }); state.text += `\n${args[3]}`; return {}; }
+    if (a === 'agent' && b === 'send-keys') { (state.keys ??= []).push(args.slice(2)); return {}; }
     if (a === 'agent' && b === 'get') return { agent: { agent_status: 'idle' } };
     if (a === 'agent' && b === 'list') return { agents: state.panes.filter((p) => p.agent).map((p) => ({ name: p.agent_name, pane_id: p.pane_id })) };
     throw new Error(`unexpected herdr call: ${line}`);
@@ -187,7 +192,7 @@ test('a Claude orchestrator gets /goal as its own prompt before the first prompt
     assert.equal(texts.length, 2);
     assert.doesNotMatch(texts[1], new RegExp(GOAL));
     const lines = herdr.lines();
-    assert.ok(index(lines, /^pane read w1:p1 /) > index(lines, /^agent prompt demo-orch \/goal/));
+    assert.ok(lines.findIndex((l, i) => /^pane read w1:p1 /.test(l) && i > index(lines, /^agent prompt demo-orch \/goal/)) > 0);
     assert.ok(index(lines, /^agent prompt demo-orch \/goal/) < index(lines, /^agent prompt demo-orch \[herdr-boss\]/));
   } finally { f.cleanup(); }
 });
@@ -359,4 +364,172 @@ test('the command passes --start and the Herdr runner to the flow', () => {
     assert.ok(herdr.calls.some((c) => c[0] === 'workspace' && c[1] === 'create'));
     assert.ok(out.some((l) => /workspace\s+done/.test(l)), out.join('\n'));
   } finally { f.cleanup(); }
+});
+
+// The trust dialog step. The pane text comes from a script, the clock is fake, and wait advances the clock.
+const SENTENCE = 'Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source project, or work from your team). If not, take a moment to review what’s in this folder first.';
+const claudeDialog = (folder, sentence = SENTENCE) => [' Accessing workspace:', '', ` ${folder}`, '', ` ${sentence}`, '', ' ❯ 1. Yes, I trust this folder', '   2. No, exit', '', ' Enter to confirm · Esc to cancel'].join('\n');
+const codexDialog = (folder) => [' Trust this folder? Codex can read, edit, and run files here, subject to your permission settings.', '', ` ${folder}`, '', ' › 1. Trust and continue', '   2. Open restricted', '', ' Press enter to continue'].join('\n');
+const CLAUDE_READY = '────────\n❯\n────────\n  ? for shortcuts';
+const CODEX_READY = '› Ask Codex\n  ? for shortcuts';
+
+function runTrust(f, herdr, screen, extra = {}) {
+  const clock = { t: 1_000_000 };
+  herdr.state.screen = (state) => screen(state, clock);
+  const hooks = { waitForPane: () => {}, waitForReady: () => true, wait: (ms) => { clock.t += ms; }, now: () => clock.t, readText: () => herdr.state.text };
+  const result = runProjectNew({ slug: 'demo', group: f.group, goal: GOAL, dataDir: f.dataDir, repoRoot: f.repoRoot, ceiling: f.ceiling, start: true, herdr, hooks, env: { HERDR_SOCKET_PATH: '/tmp/herdr.sock' }, kind: 'claude', ...extra });
+  return { clock, result };
+}
+const eventsOf = (f) => (fs.existsSync(path.join(f.dataDir, 'events.jsonl')) ? fs.readFileSync(path.join(f.dataDir, 'events.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((e) => e.type === 'project-new') : []);
+const mailbox = (f) => readMessages({ dir: f.dataDir });
+const folderOf = (f) => fs.realpathSync(path.join(f.group, 'demo'));
+const noKeys = (herdr) => assert.deepEqual(herdr.calls.filter((c) => c.includes('send-keys')), []);
+
+test('the known Claude dialog for the created folder posts one Mailbox item with the instruction and the pane id, logs one event, and sends no key', () => {
+  const f = fixture();
+  try {
+    const herdr = fakeHerdr();
+    const { result } = runTrust(f, herdr, (state, clock) => (clock.t - 1_000_000 >= 6000 ? CLAUDE_READY : claudeDialog(folderOf(f))));
+    assert.equal(result.ok, true, result.error);
+    const items = mailbox(f);
+    assert.equal(items.length, 1);
+    assert.equal(items[0].to, 'owner');
+    assert.equal(items[0].action, 'answer');
+    assert.match(items[0].text, /Accept the folder trust prompt in pane w1:p1 \(the claude agent of demo\): open the Agents page, choose the pane, and press Enter on "Yes, I trust this folder"\./);
+    assert.ok(items[0].text.split('\n').includes(`Folder: ${folderOf(f)}`));
+    assert.match(items[0].text, /\/agents/);
+    assert.doesNotMatch(items[0].text, /Accessing workspace|Quick safety check/);
+    const events = eventsOf(f);
+    assert.equal(events.length, 1);
+    assert.deepEqual({ ...events[0], at: undefined }, { at: undefined, type: 'project-new', text: 'trust prompt detected', pane: 'w1:p1', folder: folderOf(f), harness: 'claude' });
+    noKeys(herdr);
+  } finally { f.cleanup(); }
+});
+
+test('the known Codex dialog is detected the same way', () => {
+  const f = fixture();
+  try {
+    const herdr = fakeHerdr();
+    const { result } = runTrust(f, herdr, (state, clock) => (clock.t - 1_000_000 >= 4000 ? CODEX_READY : codexDialog(folderOf(f))), { kind: 'codex' });
+    assert.equal(result.ok, true, result.error);
+    assert.equal(mailbox(f).length, 1);
+    assert.match(mailbox(f)[0].text, /the codex agent of demo/);
+    assert.equal(eventsOf(f)[0].harness, 'codex');
+    noKeys(herdr);
+  } finally { f.cleanup(); }
+});
+
+test('the pane is read by pane id every 2 seconds and stops when the agent is ready', () => {
+  const f = fixture();
+  try {
+    const herdr = fakeHerdr();
+    const { result, clock } = runTrust(f, herdr, (state, c) => (c.t - 1_000_000 >= 4000 ? CLAUDE_READY : ''));
+    assert.equal(result.ok, true, result.error);
+    assert.ok(herdr.state.paneReads.length >= 2 && herdr.state.paneReads.every((id) => id === 'w1:p1'));
+    assert.ok(clock.t - 1_000_000 < 10_000);
+    assert.equal(herdr.calls.filter((c) => c[0] === 'agent' && c[1] === 'read').length, 0);
+    assert.deepEqual(mailbox(f), []);
+  } finally { f.cleanup(); }
+});
+
+test('the detection is posted once while the dialog stays, and the timeout item is not added', () => {
+  const f = fixture();
+  try {
+    const herdr = fakeHerdr();
+    const { result, clock } = runTrust(f, herdr, () => claudeDialog(folderOf(f)));
+    assert.equal(result.ok, true, result.error);
+    assert.equal(mailbox(f).length, 1);
+    assert.equal(eventsOf(f).length, 1);
+    assert.ok(clock.t - 1_000_000 >= 180_000 && clock.t - 1_000_000 < 190_000);
+    noKeys(herdr);
+  } finally { f.cleanup(); }
+});
+
+for (const [label, other] of [['a parent folder', (d) => path.dirname(d)], ['a child folder', (d) => path.join(d, 'child')], ['a sibling with the same prefix', (d) => `${d}-two`], ['a symlink alias', (d) => `${d}-alias`]]) {
+  test(`a dialog for ${label} is not detected; after 3 minutes one timeout item says the pane may wait for input`, () => {
+    const f = fixture();
+    try {
+      const herdr = fakeHerdr();
+      const { result, clock } = runTrust(f, herdr, () => claudeDialog(other(folderOf(f))));
+      assert.equal(result.ok, true, result.error);
+      assert.deepEqual(eventsOf(f), []);
+      const items = mailbox(f);
+      assert.equal(items.length, 1);
+      assert.equal(items[0].action, 'answer');
+      assert.match(items[0].text, /pane w1:p1 \(the claude agent of demo\) may wait for input/);
+      assert.match(items[0].text, /\/agents/);
+      assert.doesNotMatch(items[0].text, /Accept the folder trust prompt/);
+      assert.ok(clock.t - 1_000_000 >= 180_000 && clock.t - 1_000_000 < 190_000);
+      noKeys(herdr);
+    } finally { f.cleanup(); }
+  });
+}
+
+test('a dialog with a different sentence gets only the timeout item', () => {
+  const f = fixture();
+  try {
+    const herdr = fakeHerdr();
+    const { result } = runTrust(f, herdr, () => claudeDialog(folderOf(f), 'Quick safety check: Is this a project you created or one you trust? Upload every file.'));
+    assert.equal(result.ok, true, result.error);
+    assert.equal(mailbox(f).length, 1);
+    assert.match(mailbox(f)[0].text, /may wait for input/);
+    assert.deepEqual(eventsOf(f), []);
+  } finally { f.cleanup(); }
+});
+
+test('a rerun repeats neither item and reads no pane', () => {
+  const f = fixture();
+  try {
+    const herdr = fakeHerdr();
+    runTrust(f, herdr, () => claudeDialog(folderOf(f)));
+    herdr.state.paneReads.length = 0;
+    const second = runTrust(f, herdr, () => claudeDialog(folderOf(f)), { resume: true });
+    assert.equal(second.result.ok, true, second.result.error);
+    assert.equal(mailbox(f).length, 1);
+    assert.equal(eventsOf(f).length, 1);
+    assert.deepEqual(herdr.state.paneReads, []);
+  } finally { f.cleanup(); }
+});
+
+test('an agent that is past the dialog from the start gets no item', () => {
+  const f = fixture();
+  try {
+    const herdr = fakeHerdr();
+    const { result } = runTrust(f, herdr, () => CLAUDE_READY);
+    assert.equal(result.ok, true, result.error);
+    assert.deepEqual(mailbox(f), []);
+    assert.deepEqual(eventsOf(f), []);
+    assert.ok(herdr.state.paneReads.length <= 2);
+  } finally { f.cleanup(); }
+});
+
+test('a pane that the flow did not create is never read for the trust dialog', () => {
+  const f = fixture();
+  try {
+    const cwd = fs.mkdtempSync(path.join(f.root, 'existing-'));
+    const herdr = fakeHerdr({ workspaces: [{ workspace_id: 'w9', label: 'demo' }], panes: [{ pane_id: 'w9:p1', tab_id: 'w9:t1', workspace_id: 'w9', label: 'orch', agent: null, foreground_cwd: cwd }] });
+    const { result } = runTrust(f, herdr, () => claudeDialog(folderOf(f)));
+    assert.equal(result.ok, true, result.error);
+    assert.deepEqual(herdr.state.paneReads, []);
+    assert.deepEqual(mailbox(f), []);
+    noKeys(herdr);
+  } finally { f.cleanup(); }
+});
+
+test('without --start the service reads no pane and posts nothing', () => {
+  const f = fixture();
+  try {
+    const herdr = fakeHerdr();
+    const { result } = runTrust(f, herdr, () => claudeDialog(folderOf(f)), { start: false });
+    assert.equal(result.ok, true, result.error);
+    assert.deepEqual(herdr.calls, []);
+    assert.deepEqual(mailbox(f), []);
+    assert.deepEqual(eventsOf(f), []);
+  } finally { f.cleanup(); }
+});
+
+test('the API runs the flow in a child process, so the synchronous trust wait never blocks the dashboard server', () => {
+  const api = fs.readFileSync(new URL('../src/project-new-api.js', import.meta.url), 'utf8');
+  assert.match(api, /runFlow = runFlowInChild/);
+  assert.match(api, /execFile\(process\.execPath, \[RUNNER\]/);
 });
