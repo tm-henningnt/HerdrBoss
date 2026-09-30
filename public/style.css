@@ -1391,6 +1391,16 @@ p.wizard-errors { padding-left: 10px; }
 .lease-confirm h2 { margin: 0 0 10px; font-size: 16px; }
 .lease-confirm p { margin: 0 0 10px; font-size: 13.5px; }
 .lease-confirm .lease-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.goal-set { display: grid; gap: 6px; min-width: 0; margin: 8px 0; }
+.goal-set-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; min-width: 0; }
+.goal-set-button { min-height: 44px; min-width: 44px; }
+.goal-set-status { flex: 1 1 12em; min-width: 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.goal-dialog { max-width: 520px; }
+.goal-dialog .goal-dialog-field { display: grid; gap: 5px; margin: 0 0 10px; color: var(--muted); font-size: 12px; }
+.goal-dialog textarea { box-sizing: border-box; width: 100%; min-width: 0; padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); font: 13px var(--sans); resize: vertical; }
+.goal-dialog .goal-dialog-status { min-height: 1em; margin: 0 0 10px; color: var(--warn); font-size: 12px; }
+.goal-dialog .goal-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.goal-dialog .goal-dialog-actions button { min-height: 44px; min-width: 44px; }
 
 @media (max-width: 760px) {
   .resource-pool-fields { grid-template-columns: 1fr; }

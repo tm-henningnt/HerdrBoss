@@ -117,3 +117,80 @@ export function goalShown(paneText, goal) {
   const needle = squash(goal).slice(0, 60);
   return needle.length > 0 && squash(paneText).includes(needle);
 }
+
+// ---- Set the goal of a running orchestrator.
+// The steps below run against any Herdr runner: run(args) gives the raw output, a parsed object, or a promise of either.
+// The handover (engine) and `herdr-boss goal set` use these same steps.
+export const GOAL_SET_MAX_LENGTH = 1000;
+
+// The text of `goal set`: at most GOAL_SET_MAX_LENGTH characters. A line break becomes a space. Any other control character is refused.
+// Returns { text } or { error }.
+export function goalSetText(value) {
+  if (typeof value !== 'string') return { error: 'The goal text must be a string.' };
+  const joined = value.replace(/\r\n|\r|\n/g, ' ');
+  if (CONTROL.test(joined)) { CONTROL.lastIndex = 0; return { error: 'The goal text must not contain control characters.' }; }
+  const text = joined.replace(/\s+/g, ' ').trim();
+  if (!text) return { error: 'The goal text is empty.' };
+  if (text.toLowerCase() === 'clear') return { error: 'The text "clear" is the command that removes a goal. Use another text.' };
+  if (text.length > GOAL_SET_MAX_LENGTH) return { error: `The goal text must be at most ${GOAL_SET_MAX_LENGTH} characters.` };
+  return { text };
+}
+
+// The text that one prompt carries. A Claude pane runs the /goal command. Another harness gets the goal as plain text.
+export function goalPromptText({ goal, kind }) {
+  return goalDelivery({ goal, kind }) === 'command' ? `/goal ${goal}` : `[herdr-boss] The current Owner goal is: ${goal}`;
+}
+
+// Text of a pane read. The runner gives a string or an object with text.
+export function paneText(read) {
+  return typeof read === 'string' ? read : typeof read?.text === 'string' ? read.text : '';
+}
+
+// A Herdr response that holds an error object is a failure.
+export function herdrResponseError(raw) {
+  if (raw && typeof raw === 'object') return raw.error ? (raw.error.message || JSON.stringify(raw.error)) : null;
+  try { const parsed = JSON.parse(raw); return parsed && typeof parsed === 'object' && parsed.error ? (parsed.error.message || JSON.stringify(parsed.error)) : null; } catch { return null; }
+}
+
+// Send the goal to a pane as one prompt, without --wait. Throws when Herdr refuses it.
+export async function sendGoalPrompt({ run, pane, goal, kind }) {
+  const error = herdrResponseError(await run(['agent', 'prompt', pane, goalPromptText({ goal, kind })]));
+  if (error) throw new Error(error);
+}
+
+// How often the start of the goal shows in the text. Wrapped lines are joined, so whitespace does not count.
+export function goalOccurrences(text, goal) {
+  const squash = (value) => String(value ?? '').replace(/\s+/g, '');
+  const needle = squash(goal).slice(0, 60);
+  if (!needle) return 0;
+  const hay = squash(text);
+  let count = 0;
+  for (let at = hay.indexOf(needle); at >= 0; at = hay.indexOf(needle, at + needle.length)) count += 1;
+  return count;
+}
+
+// The goal confirmation lines of the harness: the goal-set notice and the goal indicator.
+const GOAL_CONFIRMATION = /goal\s+(?:set|active|updated)|◎\s*\/goal/gi;
+export function goalConfirmations(text) {
+  return (String(text ?? '').match(GOAL_CONFIRMATION) || []).length;
+}
+
+// The verdict for one look at the pane after a send, compared with the screen before the send.
+// 'absent': the goal text is not new on the screen. An old identical /goal in the scrollback does not count.
+// 'pending': the text is new but the pane works or the input line still holds it, so the command may only be queued.
+// 'active': the text is new and the harness confirms it, or the pane is settled with an empty input line.
+// snapshot: { status, blocker, text } where blocker comes from screenBlocker.
+export function goalVerdict({ before, snapshot, goal }) {
+  if (goalOccurrences(snapshot.text, goal) <= goalOccurrences(before, goal)) return 'absent';
+  if (goalConfirmations(snapshot.text) > goalConfirmations(before) && snapshot.blocker !== 'input') return 'active';
+  if (snapshot.blocker === null && ['idle', 'done'].includes(snapshot.status)) return 'active';
+  return 'pending';
+}
+
+// True when the visible text of the pane shows the goal. With before (the screen text before the send), the goal must be new.
+export async function goalOnScreen({ run, pane, goal, before = null }) {
+  try {
+    const text = paneText(await run(['pane', 'read', pane, '--source', 'visible', '--lines', '80', '--format', 'text']));
+    return before === null ? goalShown(text, goal) : goalOccurrences(text, goal) > goalOccurrences(before, goal);
+  } catch { return false; /* An unreadable pane counts as a goal that does not show yet. */ }
+}

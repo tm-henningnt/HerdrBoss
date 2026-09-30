@@ -993,6 +993,63 @@ Herdr Boss derives a Herdr-safe agent name from each handoff record ID. Use the 
 
 If a `needs-inspection` record still has a pane in the current Herdr pane list, repeat `handoff prepare` for the same source pane, target kind, and mode. It waits for readiness and starts the successor in that pane. It keeps the existing handoff record and pane. If the pane does not become ready, the record stays `needs-inspection` and the command reports the readiness error. If a successful current pane list proves that the pane is absent, the record expires and prepare can create a new successor.
 
+## Set the goal of an orchestrator
+
+### Command
+
+```
+herdr-boss goal set <project|pane> [--text TEXT] [--dry-run]
+```
+
+`goal set` puts the `/goal` on a running orchestrator. A `/goal` that Herdr Boss sends to a pane that works is queued as plain text and does not run. The command therefore waits until the pane can take it.
+
+| Argument | Meaning |
+|---|---|
+| `<project>` | A project slug. The command uses the pane labeled `orch` in the workspace of the project. |
+| `<pane>` | A pane ID, for example `wB:p6P`. The pane must be labeled `orch`. The command refuses a worker pane, the Boss pane, and a pane without an agent. |
+| `--text TEXT` | The goal text. Without it, the command uses the Settings value **Default orchestrator goal**. |
+| `--dry-run` | Resolve the pane, print the text and the state of the pane, and send nothing. |
+
+The text has at most 1000 characters. A line break becomes a space. Any other control character is an error. The text `clear` is an error, because `/goal clear` removes a goal.
+
+### Steps
+
+1. The command checks the caller and the pane. It prints the target pane and the text.
+2. The command waits until the pane can take a command. One deadline of 10 minutes from the start covers the wait and every retry. The pane can take a command when the agent status is `idle` or `done`, the screen shows the empty input prompt of the harness, and no dialog is on the screen. The command polls every 5 seconds and stops after 10 minutes.
+3. The command sends the goal as one prompt without `--wait`. A Claude pane gets `/goal TEXT`. A pane of another harness gets the plain sentence `[herdr-boss] The current Owner goal is: TEXT`. `goalDelivery()` in `src/goal.js` decides which.
+4. The command reads the screen before the send and again after it. The goal is active when its text is new on the screen and the pane shows the goal confirmation, or the pane is idle with an empty input line. A goal that is typed or queued in the input line, or an old identical `/goal` in the scrollback, does not count. `goalVerdict()` in `src/goal.js` decides. The command checks up to 5 times, 2 seconds apart.
+5. If the goal does not show, the command waits for an idle pane again. Before each new send it checks whether the earlier goal rendered late. It sends at most 3 times.
+
+The command never sends into a pane that works, is blocked, shows a dialog, or holds text in its input line. The handover uses `sendGoalPrompt()` and `goalOnScreen()` from `src/goal.js`, the same functions as steps 3 and 4. The engine spreads its waits over its ticks.
+
+### Result and exit codes
+
+The last line states the result in plain words. A reason in parentheses can follow it.
+
+| Exit code | Last line | Meaning |
+|---|---|---|
+| 0 | `goal set and active` | The pane shows the goal. A dry run also exits with 0. |
+| 1 | (an error message) | Usage error, a bad text, or a refused caller. |
+| 2 | `the pane stayed busy` | The pane did not become ready in 10 minutes, or the pane is not an orchestrator pane. |
+| 3 | `sent but not shown` | The command sent the goal and the pane did not show it, or the deadline passed. |
+| 130 | `cancelled` | SIGINT stopped the wait. If the goal was already sent, it can still be set. |
+
+### Caller rules
+
+A plain terminal, the Boss pane, and the orchestrator of the project may run the command. The check is the same as for `project new`. An orchestrator sets only the goal of its own workspace. A worker pane is refused.
+
+### Dashboard route
+
+The dashboard uses the same steps in the service.
+
+| Route | Meaning |
+|---|---|
+| `POST /api/goal/set` | The body has `project` and the optional `text`. The route checks the project and the text, starts the job in the background, and returns 202 with `url` `/api/goal/status/<slug>`. At most 2 jobs run at the same time (429 above that). A second job for one project gives 409. |
+| `POST /api/goal/cancel` | The body has `project`. The route stops a running job. It gives 409 when no job runs. |
+| `GET /api/goal/status/<slug>` | The state of the last job of the project: `waiting`, `sending`, `verifying`, `active`, `failed`, `cancelled`, or `interrupted`. The service saves each job in `goal-jobs/<slug>.json` in the data directory (mode 0600, no pane text). A file that says running, with no job in memory, reports `interrupted`. Each `reason` has no absolute path and at most 200 characters. A `failed` job has a `reason`. The command is allowed for a paused or stood down project. A project without a job gives 404. |
+
+The routes need the dashboard login and a same-origin request, as the project-new routes do. The read-only preview refuses the POST routes. Its status route gives 404 because the preview has no job.
+
 ## Project settings (`.herdr-boss.json`)
 
 | Key | Default | Meaning |

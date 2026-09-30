@@ -96,6 +96,8 @@ const USAGE = `herdr-boss <command>
                         Create a project folder with the kit files and the first commit.
                         Exit 0 done, 1 usage or refusal, 2 not built, 3 waiting for the Owner.
   project check <slug> [--fix STEP [--start]]  Check a project set-up. Exit 4 when an item is missing.
+  goal set <project|pane> [--text TEXT] [--dry-run]  Set the /goal of a running orchestrator when its pane is idle.
+                        Exit 0 goal active, 2 pane busy or not an orchestrator, 3 sent but not shown.
   scratch SLUG          Create the durable scratch folder of a project and print its path.
   policy show|set FILE  Show or replace the local resource policy.
   usage record FILE     Add measured or unmeasured project usage.
@@ -255,6 +257,18 @@ async function main() {
     const { projectCommand } = await import('./project-new-cli.js');
     const { createHerdrRunner } = await import('./kit/workers.js');
     const code = projectCommand(args, { env: process.env, herdr: createHerdrRunner() });
+    if (code) process.exitCode = code;
+    return;
+  }
+  if (cmd === 'goal') {
+    const { goalCommand } = await import('./goal-cli.js');
+    const { createHerdrRunner } = await import('./kit/workers.js');
+    const { readControl } = await import('./messages.js');
+    const { loadPolicy } = await import('./control.js');
+    // SIGINT cancels the wait. The command prints the result and exits with code 130.
+    const controller = new AbortController();
+    process.once('SIGINT', () => controller.abort());
+    const code = await goalCommand(args, { env: process.env, herdr: createHerdrRunner(), control: readControl(), policy: loadPolicy(), signal: controller.signal });
     if (code) process.exitCode = code;
     return;
   }

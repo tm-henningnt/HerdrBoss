@@ -19,7 +19,7 @@ import { probeBrowser, createBrowserProbes } from './browser-probe.js';
 import { readLeases, reclaimLeases, publicLease, tcpListening, leasePools, migrateProjectBrowserLeases } from './leases.js';
 import { codeSignCloneDir, sweepCodeSignClones } from './clone-sweep.js';
 import { runDenialScan, readDenials, denialSummary, DENIAL_SCAN_INTERVAL_MS, SCAN_BUDGET_BYTES, RETAIN_DAYS, RISE_FACTOR, RISE_MIN_EVENTS } from './denials.js';
-import { goalShown } from './goal.js';
+import { goalOnScreen, sendGoalPrompt } from './goal.js';
 import { claudeContextUsage, trackBoundary, normalizeModelId } from './context-handover.js';
 import { FINISH_TIMEOUT_MS, autoReadyHandoff, markSuccessorWorking, listHandoffs, saveHandoffs, supersedeHandoffs, expireHandoff, expireMissingHandoffs, handoffNotices } from './handoff.js';
 import { deliverQueued, mailboxCounts, readMessages, RETENTION_MS, SEND_LIMIT_PER_MINUTE } from './messages.js';
@@ -1686,7 +1686,9 @@ export class Engine extends EventEmitter {
 
   // Send the Owner's /goal to a Claude successor once, then check that the pane shows it.
   // Returns false while the step waits for the next tick. A failed step is logged and never sends the goal again.
+  // The send and the check are the steps of `herdr-boss goal set` in src/goal.js. The tick spreads the waits over several ticks.
   async deliverGoal(item, successor, now, at, scope) {
+    const herdr = (args) => this.herdrRunner('herdr', args);
     if (!item.goal || item.goalDelivery !== 'command' || item.goalVerifiedAt || item.goalVerifyFailedAt) return true;
     const fail = (message) => {
       this.log('error', `Goal for handoff ${item.id}: ${message}`, scope);
@@ -1699,13 +1701,10 @@ export class Engine extends EventEmitter {
       }
       // The mark comes before the send, so a failed save or a crash never sends the goal twice.
       this.patchGoalFields(item, { goalSentAt: at });
-      try { checkHerdrResponse(await this.herdrRunner('herdr', ['agent', 'prompt', item.newPane, `/goal ${item.goal}`])); }
+      try { await sendGoalPrompt({ run: herdr, pane: item.newPane, goal: item.goal, kind: 'claude' }); }
       catch (error) { return fail(`the /goal prompt failed: ${String(error.stderr || error.message).slice(0, 200)}`); }
     }
-    let shown = false;
-    try { shown = goalShown(await this.herdrRunner('herdr', ['pane', 'read', item.newPane, '--source', 'visible', '--lines', '80', '--format', 'text']), item.goal); }
-    catch { /* An unreadable pane counts as a goal that does not show yet. */ }
-    if (shown) {
+    if (await goalOnScreen({ run: herdr, pane: item.newPane, goal: item.goal })) {
       this.patchGoalFields(item, { goalVerifiedAt: at });
       this.log('handoff', `The successor pane ${item.newPane} shows the /goal of handoff ${item.id}`, scope);
       return true;
