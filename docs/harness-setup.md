@@ -22,6 +22,16 @@ The first `herdr-boss publish SLUG FILE` for a slug registers the project. The c
 
 When `publish` registers a new slug, it runs `harness sync --codex-only`. It prints the result as `warning: harness sync:` lines. The publish succeeds also when the sync fails.
 
+### GitHub login for `project new`
+
+The step `remote` of `herdr-boss project new --remote gh` needs a `gh` login on this machine.
+
+1. Run `gh auth login` in a terminal. Herdr Boss never runs it.
+2. Run `gh auth status` to check the login.
+3. Run the `project new` command again with `--resume`.
+
+Herdr Boss uses the stored login of `gh`. It never reads, prints, or stores the token. The step creates a repository only after you answer the Mailbox item.
+
 ## Claude
 
 WARNING: Agents cannot edit `~/.claude/settings.json`. The auto-mode classifier blocks the change. The Owner applies the Claude settings by hand.

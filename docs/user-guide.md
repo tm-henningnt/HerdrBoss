@@ -72,6 +72,8 @@ When a value stays outside, the dashboard names it and the reason. The audit and
 
 The command `herdr-boss project new` builds a new project in steps. See `docs/cli.md`, section New project flow.
 
+With `--remote gh`, the step `remote` asks you before it creates a GitHub repository. The question is a decide item in the Mailbox. The default is a private repository. A public repository needs `--visibility public` and an answer that contains the word `public`. The command exits with code 3 and waits. Answer the item, then run the same command with `--resume`. The step never pushes.
+
 The steps `policy`, `register`, and `status` put the new project into Herdr Boss:
 
 1. `policy` gives the project a share of 10 percent. The other projects give up part of their share, so the total stays at most 100. Each project keeps its mode and its exclusions. You see the shares before and after the change.
