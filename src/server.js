@@ -24,7 +24,7 @@ import { listBrowserTabs, browserScreenshot, browserNavigate, browserNavigationS
 import { listHandoffs } from './handoff.js';
 import { roamgateAvailable, roamgateUrl } from './roamgate.js';
 import { createAccessControl, loginPage } from './access.js';
-import { appendMessage, closeMailboxItem, dismissMailboxItems, groupMessagesByConversation, listThread, mailboxCounts, mailboxFolders, mailboxView, markMailboxRead, messageChannel, messagesWithReplyState, readMessages, validThread, validateOwnerSend } from './messages.js';
+import { appendMessage, chatSummaries, isMailAnswer, isMailRecord, messagesById, chatThreadPage, closeMailboxItem, dismissMailboxItems, groupMessagesByConversation, listThread, mailboxCounts, mailboxFolders, mailboxView, markMailboxRead, messageChannel, messagesWithReplyState, readMessages, validThread, validateOwnerSend, withMailAnswers } from './messages.js';
 import { assertSqliteAvailable } from './sqlite-store.js';
 import { openMessageStore } from './message-store.js';
 import { BODY_LIMIT as PROJECT_NEW_BODY_LIMIT, createProjectNewApi } from './project-new-api.js';
@@ -194,7 +194,15 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine 
   let tickPromise;
   let debounce;
 
+  // The Chat page ignores a record with mailAnswer set. The service knows the parent record, and the page may not.
+  const annotateMessage = (data) => {
+    const record = data?.record;
+    if (!record || record.from !== 'owner' || !record.replyTo) return data;
+    const parent = readMessages().find((item) => item.id === record.replyTo);
+    return isMailAnswer(record, messagesById(parent ? [parent] : [])) ? { ...data, record: { ...record, mailAnswer: true } } : data;
+  };
   const broadcast = (event, data) => {
+    if (event === 'message') data = annotateMessage(data);
     const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
     for (const res of clients) res.write(msg);
   };
@@ -272,7 +280,7 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine 
         for (const [thread, project] of Object.entries(projects)) {
           if (project?.orch?.pane) writable.set(thread, { title: String(project.project || project.title || thread) });
         }
-        const stored = new Map(messageStore.chats().map((chat) => [chat.thread, chat]));
+        const stored = new Map(chatSummaries(messageStore.all()).map((chat) => [chat.thread, chat]));
         const mailUnreadByThread = new Map();
         for (const item of messageStore.all()) {
           if (item.to !== 'owner' || item.readAt || messageChannel(item) !== 'mail') continue;
@@ -336,9 +344,10 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine 
         }
         const before = url.searchParams.get('before');
         if (before === '') return send(res, 400, { error: 'before must be a message ID.' });
-        const page = messageStore.thread(thread, { before, limit: limit + 1 });
+        const everything = messageStore.all();
+        const page = chatThreadPage(everything, thread, { before, limit: limit + 1 });
         const more = page.length > limit;
-        const messages = messagesWithReplyState(more ? page.slice(1) : page, messageStore.all())
+        const messages = withMailAnswers(messagesWithReplyState(more ? page.slice(1) : page, everything), everything)
           .map((record) => ({ ...record, channel: messageChannel(record) }));
         return send(res, 200, { thread, messages, more });
       }
@@ -646,7 +655,8 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine 
         const result = validateOwnerSend(await jsonBody(req), { knownThreads, records: readMessages(), now: Date.now() });
         if (result.error) return send(res, result.status, { error: result.error });
         const message = appendMessage(result.fields);
-        if (message.replyTo) closeMailboxItem(message.replyTo);
+        // Only a mail item closes. An Owner message that names a plain chat reply leaves that reply as it is.
+        if (message.replyTo && isMailRecord(readMessages().find((item) => item.id === message.replyTo))) closeMailboxItem(message.replyTo);
         engine.log('message', `Queued Owner ${message.kind} ${message.id} for ${message.thread}`, { id: message.id, thread: message.thread, kind: message.kind, replyTo: message.replyTo });
         const mailbox = refreshMailbox(readMessages(), true);
         return send(res, 200, { ok: true, message, mailbox });

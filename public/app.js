@@ -3161,10 +3161,10 @@ function chatActionOptions(record) {
   return chatParseChoices(record.text).map((choice) => ({ value: `Choice: ${choice}`, label: choice }));
 }
 
-// The Owner message that closed an action item is the next record in the thread with the same replyTo.
+// The server adds the answer that closed an action item, because the Chat does not list the answer record.
 function chatAnswerTo(record) {
   if (record.closedBy === 'boss' && record.closeNote) return { text: record.closeNote, at: record.closedAt };
-  return chat.messages.find((item) => item.replyTo === record.id && item.from === 'owner') || null;
+  return record.answer || null;
 }
 
 // The accessible name of a bubble. It names the sender, the time, the text, and the state.
@@ -3433,10 +3433,14 @@ async function chatSendAction(record, text) {
   await loadChatThread(record.thread);
 }
 
+// The service sets mailAnswer on a message event when the record answers a mail item. It belongs to the Mailbox thread, so the Chat ignores it. A reply to a plain chat reply has no flag and stays in the Chat.
+const isMailAnswerRecord = (record) => record.mailAnswer === true;
+
 // A message change arrives on the existing event stream. The list and the open chat follow it.
 function onChatMessage(event) {
   const record = event?.record;
   if (!record || typeof record.id !== 'string') return;
+  if (isMailAnswerRecord(record)) return;
   const item = chatFind(record.thread);
   if (item) {
     item.last = { id: record.id, at: record.at, from: record.from, text: String(record.text ?? '').slice(0, 120), status: record.status ?? null };
@@ -5006,7 +5010,7 @@ const HELP = {
     <h3>Folders</h3><p><b>Needs you</b> is the default folder when an open item needs an answer, approval, or decision. <b>Inbox</b> holds the open Needs-you items and the unread information items: Needs you first, then reports and updates. <b>Reports and updates</b> holds unread information items with action <code>read</code> or no action. Opening an information item marks it read and moves it to Done. <b>Done</b> holds read information items, closed or dismissed items, and relayed messages. <b>Sent</b>, below the divider, holds your messages with the queued, delivered, failed, or relayed state and the reply time.</p>
     <p>The folder stays in the page address. The page remembers your last folder. When Needs you has items, it opens that folder by default. When it is empty, the page says <b>Nothing needs you</b> and links to the Inbox.</p>
     <h3>Rows</h3><p>Each row is one conversation. It shows the project or the Boss, the message count, the action tag, the subject, a preview, and the time. An unread row is bold and has a dot. Select a row to open the conversation. Select one or more check boxes in Needs you to dismiss items without an answer. The page asks you to confirm. Dismissal sends nothing.</p>
-    <h3>Conversations</h3><p>The conversation shows Owner and agent messages in time order. Each message and each report shows as formatted Markdown. Opening an item marks it read. On a desktop the conversation opens at the right of the list. On a phone it fills the screen. Select the Back arrow to return to the list.</p>
+    <h3>Conversations</h3><p>The conversation shows Owner and agent messages in time order. Your answer to an item stays in the conversation of that item, with its time and its delivery state. The Chat does not show it. Each message and each report shows as formatted Markdown. Opening an item marks it read. On a desktop the conversation opens at the right of the list. On a phone it fills the screen. Select the Back arrow to return to the list.</p>
     <h3>Refresh</h3><p>The page reads new data every 30 seconds. It changes only the rows and messages that changed. It keeps the open conversation, the selection, the typed text, the caret, and the scroll position. The refresh waits until 3 seconds after you last type or scroll.</p>
     <p>Use the reply box to answer the last agent message. When that message is an open item, its own form replaces the reply box. The page asks you to confirm each send. Herdr Boss delivers the message when the agent is working, idle, or done.</p>
     <h3>Markdown</h3><p>The page shows headings, bold, italic, lists, task lists, tables, code, quotes, rules, and links. A wide table or code block scrolls sideways in its own box. Raw HTML shows as text. A link opens only when it uses <code>http</code>, <code>https</code>, or <code>mailto</code>, or a local path. An external link opens in a new tab.</p>
@@ -5016,7 +5020,7 @@ const HELP = {
     <p>The folder pane shows the fixed limits: Herdr Boss keeps messages for 30 days and accepts at most 10 Owner messages a minute. A read-only preview shows messages and refuses a read or a send.</p>`],
   chat: ['Chat', `
     <p>The Chat page shows one conversation for the Boss and one for each project orchestrator. The page has no large heading. On a desktop the chat list and the open chat fill the window. Above the conversation there is one slim bar with the avatar, the chat name, and a link to the Mailbox.</p>
-    <h3>Channels</h3><p><b>Chat</b> holds the conversation. A normal reply, an Owner message, a nudge, and a status request stay in Chat only. A reply that asks you for an <b>answer</b>, an <b>approval</b>, or a <b>decision</b> shows in Chat and in Mailbox <b>Needs you</b> while it is open. A <b>report</b> from the Boss is mail. It shows in Mailbox <b>Updates</b> and as one short line in Chat. A normal reply never shows in Updates.</p>
+    <h3>Channels</h3><p><b>Chat</b> holds the conversation. A normal reply, an Owner message, a nudge, and a status request stay in Chat only. A reply that asks you for an <b>answer</b>, an <b>approval</b>, or a <b>decision</b> shows in Chat and in Mailbox <b>Needs you</b> while it is open. A <b>report</b> from the Boss is mail. It shows in Mailbox <b>Updates</b> and as one short line in Chat. A normal reply never shows in Updates. Your answer to a Mailbox item shows only in the Mailbox. Your reply to a normal message stays in the Chat. An agent that needs an answer, an approval, or a decision uses <code>herdr-boss say --action</code>.</p>
     <h3>Top bar</h3><p>The top bar has three icons: chat unread, mail unread, and open action items. An icon with nothing to show is faded and has no count. An icon with something to show is bright and shows the count. <b>Needs action</b> is the most visible icon. The three icons are on a desktop and on a phone. On a phone the Mailbox and the Chat hide the top bar, and the menu drawer shows the counts.</p>
     <h3>Layout</h3><p>The chat is compact. A bubble has slim padding and no card frame. The time is 11 px. The composer is one line and grows to 6 lines. Its send button is a round button. A list row is 72 px high. The first line holds the title and the time. The second line holds the last message and the unread badge. The row keeps a touch target of at least 44 px on a phone.</p>
     <h3>List</h3><p>Each row shows the title, the last message on one line, the time, and the unread count. A report shows as <b>Report: TITLE</b>. The newest chat comes first. The menu badge shows the total unread count. The list follows the message stream. It never reloads the page. The automatic refresh keeps the list and conversation scroll. It waits until 3 seconds after you last type or scroll.</p>

@@ -73,9 +73,34 @@ export function validateOwnerSend(body, { knownThreads, records = [], now = Date
   return { fields: { thread, from: 'owner', to: thread === 'boss' ? 'boss' : 'orch', kind, text, action: null, replyTo, status: 'queued', attempts: 0 } };
 }
 
-export function ownerPromptText(record) {
-  const answer = record.replyTo ? `Answer to ${record.replyTo}: ` : '';
-  return `[owner] ${answer}${record.text} (Reply with: herdr-boss say --reply-to ${record.id} "<answer>")`;
+const PROMPT_QUOTE_MAX = 400;
+const LINE_BREAKS = /\r\n|[\r\n\u000b\u000c\u0085\u2028\u2029]/g;
+const CONTROLS = /[\u0000-\u0008\u000e-\u001f\u007f-\u009f]/g;
+
+// Cut on a code point boundary, so a surrogate pair stays whole.
+const cutCodePoints = (text, max) => {
+  const points = Array.from(text.slice(0, max * 2));
+  return { text: points.slice(0, max).join(''), cut: points.length > max || text.length > max * 2 };
+};
+
+// The title of a mailbox item: the report title, or the first line of the text without Markdown marks. It holds no control character.
+export function mailboxTitle(item) {
+  const source = item?.kind === 'report' && item.title ? String(item.title) : String(item?.text ?? '').split(LINE_BREAKS).find((part) => part.trim()) ?? '';
+  const plain = source.replace(/^\s{0,3}(#{1,6}\s+|>\s?|[-*+]\s+|\d+[.)]\s+)/, '').replace(/[*_`]+/g, '').replace(CONTROLS, '').replace(/\s+/g, ' ').trim();
+  return cutCodePoints(plain, TITLE_MAX).text.trim();
+}
+
+// The prompt for the agent. An answer to a mailbox item names the item and quotes the question, so the agent does not need the Mailbox.
+// Every line of the quote starts with "> ", so a line in the question cannot look like a new prompt.
+export function ownerPromptText(record, question = null) {
+  const hint = `(Reply with: herdr-boss say --reply-to ${record.id} "<answer>")`;
+  if (!record.replyTo) return `[owner] ${record.text} ${hint}`;
+  if (!question) return `[owner] Answer to ${record.replyTo}: ${record.text} ${hint}`;
+  const title = mailboxTitle(question);
+  const source = String(question.text ?? '').replace(LINE_BREAKS, '\n').replace(CONTROLS, '');
+  const { text, cut } = cutCodePoints(source, PROMPT_QUOTE_MAX);
+  const quote = `${text}${cut ? '…' : ''}`.split('\n').map((line) => `> ${line}`).join('\n');
+  return `[owner] Answer to ${record.replyTo}${title ? ` (${title})` : ''}: ${record.text}\n${quote}\n${hint}`;
 }
 
 // ---------- Owner mailbox ----------
@@ -93,6 +118,59 @@ export function messageChannel(record) {
   if (record.kind === 'report') return 'mail';
   if (record.kind === 'reply' && NEEDS_YOU_ACTIONS.has(mailboxAction(record))) return 'both';
   return 'chat';
+}
+
+// An Owner answer to a mail item belongs to the Mailbox thread of that item. The record has replyTo set, and its parent is a record of the same thread on the mail channel (isMailRecord).
+// A reply to a plain chat reply stays in the Chat. An answer whose parent is no longer in the store also stays in the Chat.
+// The view decides this by replyTo, not by the thread name, so an answer that an older version filed as chat is also a mail answer.
+export const messagesById = (records) => new Map(records.map((record) => [record.id, record]));
+export function isMailAnswer(record, byId) {
+  if (!record || record.from !== 'owner' || !record.replyTo) return false;
+  const parent = byId.get(record.replyTo);
+  return !!parent && parent.thread === record.thread && isMailRecord(parent);
+}
+
+// The records that the Chat shows. A Mailbox answer stays in the Mailbox.
+export function chatRecords(records) {
+  const byId = messagesById(records);
+  return records.filter((record) => !isMailAnswer(record, byId));
+}
+
+// One summary for each thread from the chat records: the last record, the count, and the unread records to the Owner.
+export function chatSummaries(records) {
+  const chats = new Map();
+  for (const record of chatRecords(records)) {
+    if (!chats.has(record.thread)) chats.set(record.thread, { thread: record.thread, last: record, count: 0, unreadForOwner: 0 });
+    const chat = chats.get(record.thread);
+    chat.last = record;
+    chat.count += 1;
+    if (record.to === 'owner' && !record.readAt) chat.unreadForOwner += 1;
+  }
+  return [...chats.values()].sort((left, right) => messageOrder(right.last, left.last));
+}
+
+// A page of a chat thread, oldest first. before is the ID of the oldest message that the client holds.
+export function chatThreadPage(records, thread, { limit = THREAD_LIMIT, before = null } = {}) {
+  const list = chatRecords(records).filter((record) => record.thread === thread);
+  let end = list.length;
+  if (before !== null) {
+    const cursor = list.findIndex((record) => record.id === before);
+    if (cursor < 0) return [];
+    end = cursor;
+  }
+  const count = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : 0;
+  return count ? list.slice(Math.max(0, end - count), end) : [];
+}
+
+// A mailbox item in a chat thread carries the answer, so its card shows the result without the answer record.
+export function withMailAnswers(page, records) {
+  const byId = messagesById(records);
+  const answers = new Map();
+  for (const record of records) if (isMailAnswer(record, byId) && !answers.has(record.replyTo)) answers.set(record.replyTo, record);
+  return page.map((record) => {
+    const answer = isMailRecord(record) && answers.get(record.id);
+    return answer ? { ...record, answer: { id: answer.id, text: answer.text, at: answer.at } } : record;
+  });
 }
 
 // The Mailbox lists only mail records. A plain chat reply never shows in Updates.
@@ -354,18 +432,20 @@ function targetPane(thread, panes, projects) {
 }
 
 // A command error can repeat the prompt text. Keep one short line and remove the text.
-function shortError(error, record) {
+function shortError(error, record, question = null) {
   const stderr = String(error?.stderr || '').trim().split('\n')[0];
   const message = String(error?.message || '');
   let text = stderr || (message && !message.startsWith('Command failed') ? message.split('\n')[0] : 'Herdr could not send the prompt.');
-  for (const part of [ownerPromptText(record), record.text]) if (part) text = text.split(part).join('[message]');
+  for (const part of [ownerPromptText(record, question), ownerPromptText(record), record.text]) if (part) text = text.split(part).join('[message]');
   return text.slice(0, 160);
 }
 
 // Sends queued Owner messages to boss and orch panes that are not blocked. `busy` holds panes that got a prompt in this tick.
 export async function deliverQueued({ panes = [], projects = {}, prompt, log = () => {}, dir = DATA_DIR, now = Date.now(), busy = new Set() }) {
   const used = new Set(busy);
-  const pending = readMessages({ dir }).filter((record) => record.from === 'owner'
+  const all = readMessages({ dir });
+  const questions = new Map(all.filter(isMailboxItem).map((record) => [record.id, record]));
+  const pending = all.filter((record) => record.from === 'owner'
     && (record.status === 'queued' || (record.status === 'failed' && (record.attempts || 0) < MAX_DELIVERY_ATTEMPTS)));
   for (const record of pending) {
     const pane = targetPane(record.thread, panes, projects);
@@ -374,11 +454,11 @@ export async function deliverQueued({ panes = [], projects = {}, prompt, log = (
     const attempts = (record.attempts || 0) + 1;
     const meta = { id: record.id, thread: record.thread, kind: record.kind, pane: pane.id };
     try {
-      await prompt(pane.id, ownerPromptText(record));
+      await prompt(pane.id, ownerPromptText(record, questions.get(record.replyTo)));
       updateMessage(record.id, { status: 'sent', sentAt: new Date(now).toISOString(), error: null, attempts }, { dir, now });
       log('message', `Delivered Owner ${record.kind} ${record.id} to ${record.thread}`, meta);
     } catch (error) {
-      const reason = shortError(error, record);
+      const reason = shortError(error, record, questions.get(record.replyTo));
       updateMessage(record.id, { status: 'failed', error: reason, attempts }, { dir, now });
       const retry = attempts < MAX_DELIVERY_ATTEMPTS ? 'will retry' : 'no more retries';
       log('message', `Owner ${record.kind} ${record.id} to ${record.thread} failed (attempt ${attempts}, ${retry}): ${reason}`, { ...meta, failed: true });
