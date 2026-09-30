@@ -385,7 +385,7 @@ h2 .sub { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(
 .control-actions { display: flex; justify-content: flex-end; align-items: center; gap: 12px; font-size: 12px; color: var(--muted); }
 .control-actions.pending { position: fixed; right: 24px; bottom: calc(20px + var(--kb-inset, 0px)); z-index: 10; padding: 10px 12px; border: 1px solid var(--accent); border-radius: 8px; background: var(--panel); box-shadow: 0 8px 28px color-mix(in srgb, #000 30%, transparent); color: var(--text); }
 @media (max-width: 620px) { .control-actions.pending { left: 16px; right: 16px; justify-content: space-between; } }
-@media (max-width: 760px) { .settings-grid { grid-template-columns: 1fr; } .harness-columns, .harness-model { grid-template-columns: minmax(0, 1fr) 118px; gap: 4px 8px; } .harness-model > span[aria-hidden] { display: none; } .harness-model > button { grid-column: 2; justify-self: end; margin-bottom: 6px; } }
+@media (max-width: 760px) { .settings-grid { grid-template-columns: 1fr; } .harness-columns, .harness-model { grid-template-columns: minmax(0, 1fr) 136px; gap: 4px 8px; } .harness-model > span[aria-hidden] { display: none; } .harness-model > button { grid-column: 2; justify-self: end; margin-bottom: 6px; } }
 button { border: 1px solid var(--accent); border-radius: 6px; background: var(--accent); color: #fff; padding: 7px 11px; font: 600 12px var(--sans); cursor: pointer; }
 input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 /* Inline setting help. The button is a 44 px target on a phone; the visible circle stays small. */
@@ -427,7 +427,7 @@ button:hover { filter: brightness(1.08); } button:disabled { opacity: .5; cursor
 .resource-card small { color: var(--muted); overflow-wrap: anywhere; }
 .browser-fleet { margin-bottom: 28px; }
 .browser-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
-.browser-idle-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
+.browser-idle-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 16px; }
 .browser-card { display: grid; gap: 8px; min-width: 0; align-content: start; }
 .browser-card > * { min-width: 0; }
 .browser-card-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
@@ -435,12 +435,9 @@ button:hover { filter: brightness(1.08); } button:disabled { opacity: .5; cursor
 .browser-card-head p { margin: 0; color: var(--muted); font-size: 12px; }
 .browser-head-actions { display: flex; align-items: center; gap: 8px; }
 .browser-card button { padding: 5px 8px; background: var(--panel-2); border-color: var(--line); color: var(--text); }
-.browser-card .browser-preview-toggle, .browser-card [data-browser-refresh] { border-color: var(--accent); color: var(--accent); }
 .browser-card .browser-navigate button[type="submit"], .browser-card-idle [data-browser-mode="visible"] { background: var(--accent); border-color: var(--accent); color: #fff; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .browser-card button { color: var(--text); } }
 :root[data-theme="dark"] .browser-card button { color: var(--text); }
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .browser-card .browser-preview-toggle, :root:not([data-theme="light"]) .browser-card [data-browser-refresh] { color: var(--accent); } }
-:root[data-theme="dark"] .browser-card .browser-preview-toggle, :root[data-theme="dark"] .browser-card [data-browser-refresh] { color: var(--accent); }
 .browser-card [data-browser-refresh]:disabled { opacity: .7; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .browser-card .browser-navigate button[type="submit"], :root:not([data-theme="light"]) .browser-card-idle [data-browser-mode="visible"] { color: #1d1b18; } }
 :root[data-theme="dark"] .browser-card .browser-navigate button[type="submit"], :root[data-theme="dark"] .browser-card-idle [data-browser-mode="visible"] { color: #1d1b18; }
@@ -462,7 +459,7 @@ button:hover { filter: brightness(1.08); } button:disabled { opacity: .5; cursor
 .browser-idle-grid .browser-card .browser-size { border-top: 1px solid var(--line); padding-top: 8px; }
 .browser-size { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; padding-top: 8px; border-top: 1px solid var(--line); }
 .browser-size label { color: var(--muted); font-size: 11.5px; }
-.browser-size input { width: 64px; padding: 5px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel-2); color: var(--text); font: 11px var(--mono); }
+.browser-size input { width: 64px; padding: 6px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel-2); color: var(--text); font: 12px var(--mono); }
 .browser-bookmarks { display: grid; gap: 7px; padding-top: 8px; border-top: 1px solid var(--line); }
 .browser-bookmarks h4 { margin: 0; font-size: 11.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
 .browser-bookmark-list { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
@@ -477,7 +474,7 @@ button:hover { filter: brightness(1.08); } button:disabled { opacity: .5; cursor
 .browser-bookmark-rename input { min-width: 0; flex: 1 1 140px; padding: 5px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel-2); color: var(--text); font: 12px var(--sans); }
 .browser-start-page { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .browser-start-page label { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1 1 200px; color: var(--muted); font-size: 11.5px; }
-.browser-start-page input { min-width: 0; flex: 1; padding: 5px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel-2); color: var(--text); font: 12px var(--sans); }
+.browser-start-page input { min-width: 0; flex: 1; padding: 6px 8px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel-2); color: var(--text); font: 12px var(--sans); }
 @media (max-width: 760px) {
   .browser-bookmark-actions button, .browser-bookmark-tools button, .browser-bookmark-rename button, .browser-start-page button { min-height: 44px; }
   .browser-bookmark-rename input, .browser-start-page input { min-height: 44px; }
@@ -688,9 +685,6 @@ section[id], div[id="agents"] { scroll-margin-top: 105px; }
 :root { --on-accent: #fff; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --on-accent: #1d1b18; } }
 :root[data-theme="dark"] { --on-accent: #1d1b18; }
-.browser-view-toggle { display: inline-flex; flex: none; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
-#app .browser-view-toggle button, #browser-viewer .browser-view-toggle button { margin: 0; padding: 5px 9px; border: 0; border-radius: 0; background: var(--panel-2); color: var(--text); font-size: 12px; }
-#app .browser-view-toggle button[aria-pressed="true"], #browser-viewer .browser-view-toggle button[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
 .browser-grid-count { flex: 1 1 auto; color: var(--muted); font-size: 11.5px; }
 .browser-tab-grid { display: grid; grid-template-columns: repeat(var(--cols), minmax(0, 1fr)); gap: 2px; overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: var(--line); }
 #app .browser-tab-tile, #browser-viewer .browser-tab-tile { position: relative; display: block; margin: 0; padding: 0; overflow: hidden; aspect-ratio: 16 / 10; border: 0; border-radius: 0; background: var(--panel-2); cursor: zoom-in; }
@@ -998,10 +992,10 @@ button.now-task:hover .now-task-title { color: var(--accent); text-decoration: u
 .page-switches { display: inline-flex; flex-wrap: wrap; gap: 8px; }
 /* One segmented control for the page switches: the track and the selected segment of the main navigation.
    The :root:root prefix outranks the dark-theme button color. */
-:is(.agents-view-switch, .org-style-switch, .kb-group) { display: inline-flex; flex: 0 0 auto; gap: 2px; padding: 3px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); }
-:root:root :is(.agents-view-switch, .org-style-switch, .kb-group) button { flex: 1 1 auto; margin: 0; height: 30px; padding: 0 12px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font: 600 12.5px var(--sans); cursor: pointer; }
-:root:root :is(.agents-view-switch, .org-style-switch, .kb-group) button:hover { color: var(--text); filter: none; }
-:root:root :is(.agents-view-switch, .org-style-switch, .kb-group) button[aria-pressed="true"] { background: var(--panel); color: var(--text); box-shadow: 0 1px 3px color-mix(in srgb, #000 12%, transparent); }
+:is(.agents-view-switch, .org-style-switch, .kb-group, .browser-view-toggle) { display: inline-flex; flex: 0 0 auto; gap: 2px; padding: 3px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); }
+:root:root :is(.agents-view-switch, .org-style-switch, .kb-group, .browser-view-toggle) button { flex: 1 1 auto; margin: 0; height: 30px; padding: 0 12px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font: 600 12.5px var(--sans); cursor: pointer; }
+:root:root :is(.agents-view-switch, .org-style-switch, .kb-group, .browser-view-toggle) button:hover { color: var(--text); filter: none; }
+:root:root :is(.agents-view-switch, .org-style-switch, .kb-group, .browser-view-toggle) button[aria-pressed="true"] { background: var(--panel); color: var(--text); box-shadow: 0 1px 3px color-mix(in srgb, #000 12%, transparent); }
 .org-worker-count { justify-self: start; }
 .org-workers[hidden] { display: none; }
 .org-cards .org-node { border-width: 1.5px; border-radius: 12px; box-shadow: 0 1px 2px color-mix(in srgb, #000 8%, transparent); }
@@ -1438,6 +1432,7 @@ pre { max-width: 100%; overflow-x: auto; }
 .avatar-upload, .avatar-upload input { min-width: 0; max-width: 100%; }
 @media (max-width: 760px) {
   input, select, textarea { font-size: 16px !important; }
+  .avatar-upload > span { min-height: 44px; }
   /* The floor is !important so a class rule with a smaller min-height cannot lower it. Add a new control class here only if it is not a button, select, text field, or label. */
   button, [role="button"], a.btn, select, textarea, input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="hidden"], [type="color"]) { min-height: 44px !important; }
   label:has(> input:not([type="hidden"])) { min-height: 44px !important; }
@@ -1904,3 +1899,29 @@ body.app-view textarea, body.app-view input { caret-color: var(--accent); }
   .activity-list .events li { grid-template-columns: auto minmax(0, 1fr); }
   .activity-list .events li > span:last-child { grid-column: 1 / -1; }
 }
+
+/* G5b: the Allocation, Browsers, and Settings pages. */
+/* Secondary actions: the same look as the handover Plan button. The :root:root prefix outranks the dark-theme button color. */
+:root:root :is([data-ladder-add], [data-pool-add], [data-avatar-reset], [data-save-service-settings], .browser-card .browser-preview-toggle, .browser-card [data-browser-refresh]) { background: var(--panel-2); border-color: var(--line); color: var(--text); }
+:root:root :is([data-ladder-add], [data-pool-add], [data-avatar-reset], [data-save-service-settings], .browser-card .browser-preview-toggle, .browser-card [data-browser-refresh]):hover:not(:disabled) { border-color: var(--muted); filter: none; }
+/* The lease head: the title and its note on the left, Add pool on the right. */
+.lease-panel > .section-head > span { margin-right: auto; }
+.lease-panel > .setting-help { max-width: 76ch; }
+/* Settings forms. Selects use the sans font, so a phone shows the whole choice. */
+:is(#control-plane, #settings-plane) select { font-family: var(--sans); }
+.settings-grid > .panel > h3 { margin: 18px 0 8px; }
+.setting-line.goal-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); align-items: end; gap: 8px 12px; margin-bottom: 14px; }
+.goal-row > .goal-field { display: grid; gap: 4px; }
+.goal-row input[type="number"], .goal-row select { width: 100%; }
+.goal-note { grid-column: 1 / -1; margin: 0; }
+.lane-limits { display: grid; grid-template-columns: repeat(2, minmax(100px, 1fr)); gap: 8px; }
+.lane-limits label { display: grid; gap: 3px; }
+/* The price table needs the full width: a model name stays on one line, and the table scrolls in its own box. */
+.settings-grid > #price-settings { grid-column: 1 / -1; }
+#price-settings tbody th code { white-space: nowrap; overflow-wrap: normal; }
+/* The avatar upload is one secondary button. The native file input stays in the label for the keyboard and the screen reader. */
+.avatar-upload { position: relative; cursor: pointer; }
+.avatar-upload > span { display: inline-flex; align-items: center; padding: 7px 11px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel-2); color: var(--text); font: 600 12px var(--sans); }
+.avatar-upload:hover > span { border-color: var(--muted); }
+.avatar-upload input[type="file"] { position: absolute; width: 1px; height: 1px; opacity: 0; clip-path: inset(50%); }
+.avatar-upload:focus-within > span { outline: 2px solid var(--accent); outline-offset: 2px; }
