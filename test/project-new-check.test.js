@@ -21,7 +21,9 @@ test.after(() => fs.rmSync(GIT_HOME, { recursive: true, force: true }));
 
 const git = (dir, ...args) => execFileSync('git', args, { cwd: dir, encoding: 'utf8' }).trim();
 
-function fixture() {
+// The step harness edits a home folder only for the live data dir. The fixture marks its own data dir as the live one
+// through HERDR_BOSS_LIVE_DIR. It is a temporary directory: the real ~/.herdr-boss and ~/.codex are never used.
+function fixture({ live = true } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-project-check-'));
   const dataDir = assertTempDataDir(path.join(root, 'data'));
   fs.mkdirSync(dataDir, { recursive: true });
@@ -34,7 +36,15 @@ function fixture() {
   fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
   fs.writeFileSync(path.join(home, '.codex', 'config.toml'), '[sandbox_workspace_write]\nwritable_roots = []\n');
   fs.writeFileSync(path.join(home, '.claude', 'settings.json'), `${JSON.stringify({ autoMode: { environment: ['Owner line'], allow: [] } }, null, 2)}\n`);
-  return { root, dataDir, group, repoRoot, home, ceiling: root, dir: path.join(group, 'demo'), cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
+  const before = process.env.HERDR_BOSS_LIVE_DIR;
+  if (live) process.env.HERDR_BOSS_LIVE_DIR = dataDir;
+  else delete process.env.HERDR_BOSS_LIVE_DIR;
+  const cleanup = () => {
+    if (before === undefined) delete process.env.HERDR_BOSS_LIVE_DIR;
+    else process.env.HERDR_BOSS_LIVE_DIR = before;
+    fs.rmSync(root, { recursive: true, force: true });
+  };
+  return { root, dataDir, group, repoRoot, home, ceiling: root, dir: path.join(group, 'demo'), cleanup };
 }
 
 // A fake browser reservation. It records the calls and writes the session file like the real command.
@@ -401,13 +411,41 @@ test('harness step: no Claude difference means no Owner action, a Codex or brows
   } finally { f.cleanup(); }
 });
 
-test('harness step: without a home for a data dir that is not the default, the step is skipped and touches nothing', () => {
-  const f = fixture();
+test('harness step: a temporary data dir skips the step, leaves the Codex config byte-identical, and creates no reservation', () => {
+  const f = fixture({ live: false });
+  try {
+    const codexFile = path.join(f.home, '.codex', 'config.toml');
+    const before = fs.readFileSync(codexFile);
+    const codexNames = fs.readdirSync(path.join(f.home, '.codex'));
+    const reserveBrowser = fakeBrowser(f);
+    const result = runProjectNew({ slug: 'demo', group: f.group, dataDir: f.dataDir, repoRoot: f.repoRoot, ceiling: f.ceiling, home: f.home, reserveBrowser });
+    const step = result.steps.find((s) => s.name === 'harness');
+    assert.equal(step.status, 'skipped');
+    assert.equal(step.detail, 'skipped: not the live data dir');
+    assert.ok(step.lines.some((line) => /Claude autoMode differences/.test(line)));
+    assert.ok(fs.readFileSync(codexFile).equals(before));
+    assert.deepEqual(fs.readdirSync(path.join(f.home, '.codex')), codexNames);
+    assert.deepEqual(reserveBrowser.calls, []);
+    assert.equal(fs.existsSync(path.join(f.dataDir, 'browser-sessions.json')), false);
+  } finally { f.cleanup(); }
+});
+
+test('harness step: a temporary data dir without a home is skipped and touches nothing', () => {
+  const f = fixture({ live: false });
   try {
     const result = runProjectNew({ slug: 'demo', group: f.group, dataDir: f.dataDir, repoRoot: f.repoRoot, ceiling: f.ceiling });
     const step = result.steps.find((s) => s.name === 'harness');
     assert.equal(step.status, 'skipped');
+    assert.equal(step.detail, 'skipped: not the live data dir');
     assert.equal(fs.existsSync(path.join(f.dataDir, 'browser-sessions.json')), false);
+  } finally { f.cleanup(); }
+});
+
+test('harness step: a dry run for a temporary data dir prints the skip', () => {
+  const f = fixture({ live: false });
+  try {
+    const result = runProjectNew({ slug: 'demo', group: f.group, dataDir: f.dataDir, repoRoot: f.repoRoot, ceiling: f.ceiling, home: f.home, dryRun: true });
+    assert.equal(result.steps.find((s) => s.name === 'harness').detail, 'skipped: not the live data dir');
   } finally { f.cleanup(); }
 });
 
