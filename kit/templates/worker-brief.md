@@ -72,6 +72,8 @@ Never use `../` to reach `.worker` or a path outside the worktree.
 
 For dashboard previews, run `mkdir -p "$TMPDIR/herdr-boss" && HOME="$(mktemp -d)" HERDR_BOSS_DIR="$TMPDIR/herdr-boss" HERDR_BOSS_PORT=4478 npm start -- --read-only-preview`. Choose an unused local port if 4478 is busy.
 
+For a task that changes the GUI, put seed data only into a temporary `HERDR_BOSS_DIR`. Never write seed data into `~/.herdr-boss`. Run the preview with `--read-only-preview` on its own port. To seed invented Mailbox and Chat messages, run `HERDR_BOSS_DIR="$TMPDIR/herdr-boss" HOME="$(mktemp -d)" node scripts/seed-preview.js`. Call `openMessageStore` with an options object such as `{ dir }`, never with a string.
+
 Use the task below as the complete work order:
 
 {{task}}

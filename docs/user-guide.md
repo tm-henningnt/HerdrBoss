@@ -43,6 +43,8 @@ Herdr Boss is a script. It uses no LLM and no tokens.
 
 A read-only preview accepts loopback requests only. It has no login page. It never reads, creates, or changes token or session files.
 
+Put seed data only into a temporary data directory. Never write seed data or test data into `~/.herdr-boss`. Run the preview with `--read-only-preview` on its own port. `scripts/seed-preview.js` writes invented Mailbox and Chat messages into `HERDR_BOSS_DIR`. It refuses the live data directory, a directory inside it, and a symlink to it, with the message `Refusing to write test data into the live data dir.` Each seed or fixture helper calls `assertTempDataDir(dir)` from `src/data-dir-guard.js` before it writes. `openMessageStore` takes an options object such as `{ dir }`. It throws a `TypeError` for a string.
+
 ## Chat API
 
 Use `GET /api/chats` to list the Boss chat and project chats with an orchestrator pane. The response gives each chat a title, a last message, and an unread count. A chat without messages has a `null` last message. The last message and each chat record have a `channel` field. The unread count leaves out a mail report.

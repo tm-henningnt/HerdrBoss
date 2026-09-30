@@ -274,7 +274,12 @@ function openSqliteMessageStore(dir, key, listeners) {
   return store;
 }
 
-export function openMessageStore({ dir = DATA_DIR, backend } = {}) {
+export function openMessageStore(options = {}) {
+  if (options === null || typeof options !== 'object' || Array.isArray(options)) {
+    throw new TypeError(`openMessageStore takes an options object such as { dir }, not ${options === null ? 'null' : Array.isArray(options) ? 'an array' : typeof options}. A string is not a directory argument.`);
+  }
+  const { dir = DATA_DIR } = options;
+  let { backend } = options;
   backend ??= configuredBackend(dir);
   if (!['json', 'sqlite'].includes(backend)) throw new Error(`Unsupported message store backend: ${backend}`);
   const { key, listeners } = listenersFor(dir, backend);

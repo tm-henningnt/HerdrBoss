@@ -14,7 +14,7 @@ export const DEFAULT_SESSION_FILE = path.join(PRIVATE_ACCESS_DIR, 'sessions.json
 
 // fs.realpathSync() needs an existing path. Resolve the deepest existing ancestor, then re-attach the rest, so a path
 // whose final directory does not exist still compares by its real path.
-function resolveAlias(target) {
+export function resolveAlias(target) {
   const missing = [];
   let current = path.resolve(target);
   for (;;) {
