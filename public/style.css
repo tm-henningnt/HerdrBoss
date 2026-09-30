@@ -1937,3 +1937,4 @@ body.app-view textarea, body.app-view input { caret-color: var(--accent); }
 .avatar-upload:hover > span { border-color: var(--muted); }
 .avatar-upload input[type="file"] { position: absolute; width: 1px; height: 1px; opacity: 0; clip-path: inset(50%); }
 .avatar-upload:focus-within > span { outline: 2px solid var(--accent); outline-offset: 2px; }
+.help-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 0 14px; margin: -4px 0 10px; color: var(--muted); font-size: 12.5px; }

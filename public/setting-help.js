@@ -127,18 +127,11 @@ export const SETTING_HELP = Object.fromEntries([
     lower: 'Ignore quota lets workers start at any pace. Handover risk and automatic handover still use live quota data. A window at 100% still exhausts the provider.',
     apply: 'policy',
   }),
-  S('quotas', 'quota.goalPercent', 'Pacing goal', {
-    what: 'The most percent of a quota window that Herdr Boss plans to use by the end of the goal.',
-    default: 'Blank, which means 100%', unit: 'Percent of the window', range: '0 to 100',
-    raise: 'A higher goal lets workers use more of the window.',
-    lower: 'A lower goal saves quota. The lanes say Use now less often.',
-    apply: 'policy',
-  }),
-  S('quotas', 'quota.goalEnd', 'Goal end', {
-    what: 'When the pacing goal ends: at the reset, at a local date and time, or a whole number of hours before each reset.',
-    default: 'At reset', unit: 'Choice, then a local time or hours', range: 'The end must be after now, after the window start, and not after the reset',
-    raise: 'A later end gives the goal more time to use quota.',
-    lower: 'An earlier end forces the use of quota sooner.',
+  S('quotas', 'quota.goalPercent', 'Pacing goal and goal end', {
+    what: 'The most percent of a quota window that Herdr Boss plans to use by the end of the goal. The goal end is at the reset, at a local date and time, or a whole number of hours before each reset.',
+    default: 'Blank, which means 100%', unit: 'Percent of the window', range: '0 to 100. A goal end must be after now, after the window start, and not after the reset',
+    raise: 'A higher goal lets workers use more of the window. A later end gives the goal more time to use quota.',
+    lower: 'A lower goal saves quota. The lanes say Use now less often. An earlier end forces the use of quota sooner.',
     apply: 'policy',
   }),
   S('quotas', 'quota.warnPercent', 'Quota warning level', {
@@ -356,31 +349,53 @@ export const SETTING_HELP = Object.fromEntries([
     apply: 'policy',
   }),
   S('capacity', 'autoHandover', 'Automatic handover', {
-    what: 'Lets Herdr Boss prepare and activate a successor orchestrator without the Owner. It never runs for the Boss.',
+    what: 'Lets Herdr Boss prepare and activate a successor orchestrator without the Owner. It never runs for the Boss. It never runs for a project that no longer works or that is paused or stood down. It never runs for a successor model that is weaker than the source. After activation, Herdr Boss closes the old pane when the successor has answered and the old pane is idle.',
     default: 'Off', unit: 'Switch', range: 'On or off',
     raise: 'Turning it on moves an orchestrator to a successor at the reserve limit or the context limit.',
     lower: 'Turning it off means only the Owner starts a handover.',
     apply: 'policy',
   }),
   S('capacity', 'autoHandoverPercent', 'Activate at quota used %', {
-    what: 'The quota level at which the prepared successor takes control. The source stays in control until then.',
+    what: 'The quota level at which the prepared successor takes control. Boss prepares the successor at the reserve limit. The source stays in control until the successor reports ready and the quota reaches this level.',
     default: '98', unit: 'Percent of the quota', range: '90 to 100',
     raise: 'A higher value keeps the source in control for longer.',
     lower: 'A lower value hands over sooner.',
     apply: 'policy',
   }),
   S('capacity', 'autoHandoverContextTokens', 'Hand over at context tokens', {
-    what: 'The context size above which a Claude orchestrator gets a fresh successor at a task boundary.',
+    what: 'The context size above which a Claude orchestrator gets a fresh successor at a task boundary. The successor starts from the project memory file with the same model. Herdr Boss activates it when the orchestrator pane is not working. It reads the context size only for Claude. A pane that it sees for the first time waits for its next boundary.',
     default: '300000', unit: 'Tokens', range: '50000 to 2000000',
     raise: 'A higher value keeps a long context for longer.',
     lower: 'A lower value hands over sooner and keeps the context short.',
     apply: 'policy',
   }),
   S('capacity', 'defaultOrchestratorGoal', 'Default orchestrator goal', {
-    what: 'The /goal text for a new orchestrator that has no goal. A handover copies the goal of the old orchestrator to the successor.',
+    what: 'The /goal text for a new orchestrator that has no goal. A handover copies the goal of the old orchestrator to the successor: the published status goal, else the last /goal command of its session. A Claude successor gets /goal after it answers. Other harnesses get the goal in the activation prompt.',
     default: 'A standing goal text', unit: 'Text', range: 'One line of at most 4000 characters, or empty for no default',
     raise: 'A longer text gives more direction and uses more context.',
     lower: 'An empty text gives a new orchestrator no default goal.',
+    apply: 'policy',
+  }),
+
+  S('capacity', 'succession.ladder', 'Orchestrator succession', {
+    what: 'The ordered list of kind, model, and effort choices that automatic handover tries. It skips the current provider, unavailable quotas, and global or project exclusions.',
+    default: 'The list in policy.json', unit: 'List of choices', range: 'Up to 20 choices',
+    raise: 'A longer list gives automatic handover more successors to try.',
+    lower: 'A shorter list can leave no successor. A choice outside the list is never selected automatically.',
+    apply: 'policy',
+  }),
+  S('capacity', 'workspace.exclusion', 'Workspace projects', {
+    what: 'Decides which live workspaces count as projects. Clear a workspace switch to include it as a project. The Boss workspace stays excluded while its pane is labelled boss.',
+    default: 'Every workspace is a project, except the Boss workspace', unit: 'Switch for each workspace', range: 'On or off',
+    raise: 'Switching a workspace on removes it from the projects and from the shares.',
+    lower: 'Switching a workspace off makes it a project that takes part in the shares.',
+    apply: 'policy',
+  }),
+  S('capacity', 'project.shares', 'Project shares', {
+    what: 'The share of the working agents for each project. Drag a boundary in the bar: only the projects to its right rebalance. The labels show the set share and the effective slots. Shares are advisory. The worker command enforces the global cap.',
+    default: 'The shares in policy.json', unit: 'Percent of the working agents', range: '0 to 100, and all shares add up to 100',
+    raise: 'A larger share gives the project more slots when the machine is busy.',
+    lower: 'A smaller share gives the project fewer slots. It can borrow idle shares of others when Borrow idle shares is on.',
     apply: 'policy',
   }),
 
@@ -417,15 +432,9 @@ export const SETTING_HELP = Object.fromEntries([
   }),
 
   // Avatars
-  S('avatars', 'avatar.upload', 'Upload image', {
-    what: 'Sets your own image for the Boss or for a project.',
-    default: 'A generated avatar', unit: 'Image file', range: 'PNG, JPEG, or WebP, at most 512 KB',
-    raise: 'Not applicable.', lower: 'Not applicable.',
-    apply: 'now',
-  }),
-  S('avatars', 'avatar.reset', 'Reset avatar', {
-    what: 'Removes your image and returns to the generated avatar.',
-    default: 'Not applicable', unit: 'Button', range: 'Not applicable',
+  S('avatars', 'avatar.upload', 'Avatar image and reset', {
+    what: 'Sets your own image for the Boss or for a project. The Reset button removes your image and returns to the generated avatar.',
+    default: 'A generated avatar', unit: 'Image file', range: 'PNG, JPEG, or WebP, at most 512 KB. Each row holds the avatar of the Boss or of a project. Herdr Boss keeps no other format',
     raise: 'Not applicable.', lower: 'Not applicable.',
     apply: 'now',
   }),
@@ -581,7 +590,7 @@ export function settingsGuideHtml() {
     + `<p><b>Effect:</b> ${escapeHtml(group.affects)}</p>`
     + `<p><b>Safe to change:</b> ${escapeHtml(group.safe)}</p>`
     + `<p><b>Restart:</b> ${escapeHtml(group.restart)}</p>`).join('');
-  return `<p>Select the <b>i</b> button next to a setting to read what it does, its default, its unit, its range, and the effect of a higher or lower value. On a desktop, hold the pointer over the button. Press Escape to close the popup.</p>${rows}`;
+  return `<p>Select an <b>i</b> button to read what a setting does, its default, its unit, its range, and the effect of a higher or lower value. A setting that repeats in a section has one button on the section header, not one on each row. On a desktop, hold the pointer over the button. Press Escape to close the popup.</p>${rows}`;
 }
 
 export const DOCS_BEGIN = '<!-- settings-reference:begin -->';

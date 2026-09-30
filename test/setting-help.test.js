@@ -15,7 +15,7 @@ const POLICY_KEYS_WITHOUT_CONTROL = new Set([
   'allowedKinds', // the Available switch of each harness: harness.available
   'excludedModels', 'disabledModels', 'extraModels', 'preferredModels', 'modelProviders', 'harnessRoutes', // the harness model rows: harness.model, harness.provider, harness.preferredModel, harness.addModel
   'providerModes', // quota.mode
-  'pacingGoals', // quota.goalPercent and quota.goalEnd
+  'pacingGoals', // quota.goalPercent (goal and goal end)
   'excludedWorkspaces', 'projects', // the workspace switches and project shares on Allocation
 ]);
 
@@ -131,4 +131,59 @@ test('the settable service settings state their range and when they apply', () =
   assert.match(SETTING_HELP.push.what, /restart/i);
   assert.match(SETTING_HELP.alertCooldownSeconds.what, /unused legacy value/);
   for (const id of ['alertCooldownSeconds', 'port', 'host', 'providerKinds', 'orchestratorLabel']) assert.equal(SETTING_HELP[id].apply, 'restart', `${id} stays in config.json`);
+});
+
+// A setting that a page shows in more than one row gets one info button on the section or group header.
+// A row button repeats the same explanation, so a helpButton call takes no instance argument.
+test('no two rows of a section carry the same explanation as row buttons', () => {
+  assert.deepEqual([...app.matchAll(/helpButton\('[^']+',[^)]*\)/g)].map((match) => match[0]), [], 'helpButton takes one argument');
+  assert.doesNotMatch(app, /settingRow\([^\n]*\{[^}]*field:[^}]*\}\)\}<\/label>[^\n]*helpButton/, 'settingRow adds no instance help');
+  const counts = new Map();
+  for (const match of app.matchAll(/helpButton\('([^']+)'\)/g)) counts.set(match[1], (counts.get(match[1]) || 0) + 1);
+  for (const [id, count] of counts) assert.equal(count, 1, `${id} has ${count} info buttons`);
+  const settingRows = new Map();
+  for (const match of app.matchAll(/settingRow\('([^']+)'/g)) settingRows.set(match[1], (settingRows.get(match[1]) || 0) + 1);
+  for (const [id, count] of settingRows) assert.equal(count, 1, `${id} has ${count} row buttons`);
+});
+
+test('the repeated per-harness, per-provider, and per-routine settings have one button on the header', () => {
+  const settings = app.slice(app.indexOf('function settingsView('));
+  assert.match(settings, /<h3>Quota mode\$\{helpButton\('quota\.mode'\)\}<\/h3>/);
+  assert.match(settings, /Pacing goals\$\{helpButton\('quota\.goalPercent'\)\}<\/h3>/);
+  for (const id of ['harness.available', 'harness.preferredModel', 'harness.model', 'harness.provider', 'harness.addModel']) assert.match(settings, new RegExp(`class="help-legend"[^\\n]*helpButton\\('${id.replace('.', '\\.')}'\\)`), `${id} is in the Harnesses legend`);
+  for (const id of ['watch.routine.title', 'watch.routine.model', 'watch.routine.schedule', 'watch.routine.prompt']) assert.match(app, new RegExp(`class="help-legend"[^\\n]*helpButton\\('${id.replace(/\./g, '\\.')}'\\)`), `${id} is in the routines legend`);
+  const harness = app.slice(app.indexOf('function harnessSection('), app.indexOf('function localDateTime('));
+  assert.doesNotMatch(harness, /helpButton\(/);
+  const routine = app.slice(app.indexOf('function routineEditor('), app.indexOf('function watchRoutineSettings('));
+  assert.doesNotMatch(routine, /helpButton\(/);
+});
+
+test('no explanation of the schema repeats inside a group', () => {
+  const seen = new Map();
+  for (const [id, item] of Object.entries(SETTING_HELP)) {
+    const key = `${item.group}|${item.what.trim().toLowerCase()}`;
+    assert.ok(!seen.has(key), `${id} repeats the explanation of ${seen.get(key)}`);
+    seen.set(key, id);
+  }
+});
+
+test('the Settings and Allocation pages keep no always-visible explanation that the popups cover', () => {
+  const removed = [
+    'Apply policy to save this choice', 'Boss prepares a successor at the reserve limit', 'A handover copies the goal',
+    'At a task boundary, a Claude orchestrator', 'Automatic handover never runs', 'Automatic handover tries these choices',
+    'Clear a workspace switch', 'project shares are advisory', 'drag a boundary', 'Clear a model box', 'Ignore quota turns off pacing',
+    'The most percent of a window', 'Quota warning at', 'The Owner is away after the idle period', 'USD per million tokens',
+    'Rows without inputs are read-only', 'Run herdr-boss harness sync', 'A routine is a prompt that the service sends', 'Each pool lists its items',
+    'Choose <b>Upload image</b>', 'unused legacy value',
+  ];
+  const pages = app.slice(0, app.indexOf('const HELP = {'));
+  for (const text of removed) assert.ok(!pages.includes(text), `"${text}" is still inline`);
+  const settings = app.slice(app.indexOf('function settingsView('), app.indexOf('// The handoff records that need the Owner'));
+  const paragraphs = [...settings.matchAll(/<p class="setting-help"[^>]*>/g)].length;
+  assert.ok(paragraphs <= 5, `the Settings page has ${paragraphs} inline help lines`);
+});
+
+test('the schema holds the succession, workspace, and share explanations', () => {
+  for (const id of ['succession.ladder', 'workspace.exclusion', 'project.shares']) assert.equal(SETTING_HELP[id]?.group, 'capacity', id);
+  for (const id of ['succession.ladder', 'workspace.exclusion', 'project.shares']) assert.match(app, new RegExp(`helpButton\\('${id.replace('.', '\\.')}'\\)`));
 });

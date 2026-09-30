@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import { execFileSync } from 'node:child_process';
+import { SETTING_GROUPS } from '../public/setting-help.js';
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-preview-test-'));
 const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-preview-home-'));
@@ -1347,12 +1348,12 @@ test('quota colors use configured thresholds and Settings shows their values', (
   assert.match(app, /w\.usedPercent >= thresholds\.criticalPercent/);
   assert.match(app, /w\.usedPercent >= thresholds\.warnPercent/);
   assert.match(app, /quota\.usedPercent >= quota\.criticalPercent[^\n]+quota\.usedPercent >= quota\.warnPercent/);
-  assert.match(app, /Quota warning at \$\{esc\(warnPercent\)\}%, critical at \$\{esc\(criticalPercent\)\}%. Set them in config\.json\./);
+  assert.doesNotMatch(app, /Quota warning at \$\{esc\(warnPercent\)\}/, 'the two levels show as rows of the Service settings table, not as an inline line');
   const settingsHelp = /settings: \['Settings', `([\s\S]*?)`\],\s+agents:/.exec(app)?.[1] || '';
   assert.match(settingsHelp, /quota colors use the warning and critical values from <code>config\.json<\/code>/i);
   assert.match(app, /data-service-setting=/);
   assert.match(app, /data-save-service-settings=/);
-  assert.match(app, /Rows without inputs are read-only: port, host, provider kinds, and orchestrator label\. Change them in config\.json and restart\./);
+  assert.match(SETTING_GROUPS.find((group) => group.id === 'service').safe, /A row without an input is read-only\. Change it in config\.json\./);
   assert.match(app, /restart required/);
   assert.match(settingsHelp, /select <b>Save<\/b>[\s\S]*?applies saved values at once/i);
 });
@@ -1900,7 +1901,7 @@ test('Settings shows a read-only harness readiness table with the fixed sync lin
   const guide = fs.readFileSync(new URL('../docs/user-guide.md', import.meta.url), 'utf8');
   assert.match(app, /<h2>Harness readiness\$\{helpButton\('harness\.readiness'\)\}<\/h2>/);
   assert.match(app, /s\?\.harness\?\.findings/);
-  assert.match(app, /Run herdr-boss harness sync to see the changes to make\./);
+  assert.doesNotMatch(app, /Run herdr-boss harness sync to see the changes to make\./, 'the readiness group text in the schema holds the sync hint');
   assert.match(app, /<th scope="col">Status<\/th><th scope="col">Area<\/th><th scope="col">Item<\/th>/);
   assert.match(css, /\.harness-readiness-panel\b/);
   assert.match(css, /\.harness-readiness-bad\b/);
@@ -2337,7 +2338,7 @@ test('the pages show the avatar, the Settings page manages the image, and the co
   assert.match(app, /document\.addEventListener\('load', \(e\) => avatarImageLoaded\(e\.target\), true\);/);
   assert.match(app, /document\.addEventListener\('error', \(e\) => avatarImageFailed\(e\.target\), true\);/);
   // The Settings page has one Avatars section with a row for the Boss and for each project.
-  assert.match(app, /<h2>Avatars<\/h2>/);
+  assert.match(app, /<h2>Avatars\$\{helpButton\('avatar\.upload'\)\}<\/h2>/);
   assert.match(app, /\{ slug: 'boss', title: 'Boss' \}, \.\.\.Object\.entries\(s\.control\?\.projects \|\| \{\}\)/);
   assert.match(app, /data-avatar-upload="\$\{esc\(row\.slug\)\}"/);
   assert.match(app, /data-avatar-reset="\$\{esc\(row\.slug\)\}"/);
