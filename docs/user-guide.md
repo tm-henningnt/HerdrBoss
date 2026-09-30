@@ -354,6 +354,12 @@ Use the switch in Settings or the Overview machine summary to turn the guard on 
 
 When Herdr Boss loads an older policy without `machine.guardEnabled`, it checks the saved thresholds. It turns the guard off and restores the default thresholds only for the exact old off tuple: present CPU 100, away CPU blank, and both load backstops blank. It keeps the saved Owner-away time and alert cooldown. For every other old policy, it turns the guard on and keeps the saved thresholds.
 
+The swap warning uses three settings in the Machine section: `machine.swapWarnPercent` (default 80), `machine.swapRefusePercent` (default 95), and `machine.swapMinUsedGB` (default 2). A percent is a whole number from 1 to 100, or blank to turn the rule off. The GB value is a number from 0 to 1024. Herdr Boss computes the swap percent as swap used divided by swap total. The swap total on macOS grows with use, so the warning also needs at least `swapMinUsedGB` of swap in use.
+
+The engine raises the alert `machine:swap` with severity `warn` and the title `Swap high: N% used` when the last 3 samples are at or above `swapWarnPercent` and each has at least `swapMinUsedGB` in use. The engine takes one sample at each tick, which is every 30 seconds by default. The alert clears when swap is more than 5 points below `swapWarnPercent`, or below the GB floor. The alert does not depend on the machine guard. It stays on when the guard is off or paused. The alert never blocks a worker start or a suite. The notice cooldown applies to it.
+
+`swapRefusePercent` is stored and shown. No command refuses work on it yet.
+
 Policy settings take precedence over legacy `config.json` values. The old `machine.loadWarnFactor` field does not control machine guards. The `machine.alertCooldownSeconds` policy value takes precedence over the legacy top-level `alertCooldownSeconds` field for notice delivery.
 
 Clear the **Available** box of a harness to disable that harness for every project. Choose a preferred model for a harness. Worker start and handoff use it when you omit an explicit model. An empty choice uses the harness default.

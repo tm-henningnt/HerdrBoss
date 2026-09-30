@@ -589,6 +589,7 @@ test('machine load guard reports active CPU and load limits', async () => {
   assert.deepEqual(machineLimits({ cpus: 8, load: [1, 4, 5], ownerIdleMinutes: 11, cpuUse: { a: { cpu: 400 } } }, policy(), now), {
     owner: 'away', cpuPercent: 50, cpuLimit: 95, fiveMinute: 4, loadLimit: 64,
     guardEnabled: true, guardPausedUntil: null, guardState: 'active', guardActive: true,
+    swapPercent: null, swapUsedGB: null, swapWarnPercent: 80, swapRefusePercent: 95, swapMinUsedGB: 2,
   });
   assert.equal(machineLimits({ cpus: 8, load: [1, 4, 5], ownerIdleMinutes: null, cpuUse: { a: { cpu: 560 } } }, policy()).owner, 'present');
   assert.equal(machineLimits({ cpus: 8, load: [1, 4, 5], ownerIdleMinutes: 0, cpuUse: {} }, policy()).loadLimit, 24);
@@ -1968,5 +1969,28 @@ test('savePolicy keeps strict errors for unrelated malformed fields while it pru
     assert.equal(fs.existsSync(file), false);
     assert.deepEqual(notes, []);
     assert.match(savePolicy(policy({ disabledModels: { claude: 'claude-opus-5' } }), models, { file }).join(' '), /disabledModels\.claude must be a list/);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('swap policy settings have defaults and range checks', () => {
+  assert.deepEqual([POLICY_DEFAULTS.machine.swapWarnPercent, POLICY_DEFAULTS.machine.swapRefusePercent, POLICY_DEFAULTS.machine.swapMinUsedGB], [80, 95, 2]);
+  const errors = (patch) => validatePolicy({ ...policy(), machine: { ...POLICY_DEFAULTS.machine, ...patch } }, models).filter((e) => /swap/.test(e));
+  assert.deepEqual(errors({}), []);
+  assert.deepEqual(errors({ swapWarnPercent: null, swapRefusePercent: null, swapMinUsedGB: 0 }), []);
+  assert.deepEqual(errors({ swapWarnPercent: 1, swapRefusePercent: 100, swapMinUsedGB: 1024 }), []);
+  for (const key of ['swapWarnPercent', 'swapRefusePercent']) {
+    for (const bad of [0, 101, 50.5, '80', NaN]) assert.match(errors({ [key]: bad }).join(' '), new RegExp(`machine.${key}`), `${key} ${bad}`);
+  }
+  for (const bad of [-1, 1025, null, '2', NaN]) assert.match(errors({ swapMinUsedGB: bad }).join(' '), /machine.swapMinUsedGB/, `GB ${bad}`);
+});
+
+test('an older policy without swap settings loads the defaults', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-policy-swap-'));
+  try {
+    const file = path.join(dir, 'policy.json');
+    fs.writeFileSync(file, JSON.stringify({ machine: { guardEnabled: false } }));
+    const loaded = loadPolicy({ file, models, warn: () => {} });
+    assert.deepEqual([loaded.machine.swapWarnPercent, loaded.machine.swapRefusePercent, loaded.machine.swapMinUsedGB], [80, 95, 2]);
+    assert.equal(loaded.machine.guardEnabled, false);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

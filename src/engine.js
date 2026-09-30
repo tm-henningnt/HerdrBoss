@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
 import { DATA_DIR, LIVE_DATA_DIR, dashboardUrl, serviceSettingsView } from './config.js';
 import { collectHerdr, collectQuotas, collectMachine, collectProcesses, collectCwdProcesses, collectMissingWorktreeProcesses, collectWorktreeCounts, collectPiModels, findBrowsers, cpuUse, keepStaleRows, run } from './collect.js';
-import { evaluate, renderBulletin, fmtDuration, providerName, broadcastTargets, staleStatuses } from './rules.js';
+import { evaluate, swapWarnStep, renderBulletin, fmtDuration, providerName, broadcastTargets, staleStatuses } from './rules.js';
 import { listProjects } from './projects.js';
 import { checkHarness, readProjectRepos } from './harness.js';
 import { loadModels, loadProjectConfig, KIT_ROOT, workerConfigView } from './kit/config.js';
@@ -779,6 +779,8 @@ export class Engine extends EventEmitter {
         snap.machine.cpuUse = snap.cpuUse;
         snap.machine.cpuTotalSample = [...procs.values()].reduce((sum, proc) => sum + Math.max(0, proc.cpu), 0);
         snap.machine.limits = machineLimits(snap.machine, policy, now, snap.night);
+        this.memory.swapWarn = swapWarnStep(this.memory.swapWarn, snap.machine.limits);
+        snap.machine.limits.swapWarning = this.memory.swapWarn.active;
         if (this.act) this.recordMachineSample(snap, queue, now);
       }
       // The unmetered lane lists the permitted free models that can start. It never affects least-over selection.

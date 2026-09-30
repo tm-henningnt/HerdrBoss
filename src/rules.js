@@ -152,6 +152,22 @@ function staleStatusAlerts(stale) {
 }
 
 // alert: { key, severity: info|warn|critical, scope: 'all' | <workspace id> | 'user', title, text }
+// One step of the swap warning. It needs 3 samples in a row at or above the warn percent, each with at least
+// swapMinUsedGB in use. A raised warning clears when swap is 5 points below the warn percent, or below the GB floor.
+// It does not depend on the machine guard.
+export function swapWarnStep(state, limits) {
+  const samples = [...(state?.samples || [])];
+  const warn = limits?.swapWarnPercent;
+  const pct = limits?.swapPercent;
+  if (warn == null || pct == null || !Number.isFinite(limits.swapUsedGB)) return { samples: [], active: false };
+  const enough = limits.swapUsedGB >= (limits.swapMinUsedGB ?? 0);
+  samples.push({ pct, enough });
+  while (samples.length > 3) samples.shift();
+  const confirmed = samples.length === 3 && samples.every((s) => s.enough && s.pct >= warn);
+  const active = state?.active ? enough && pct >= warn - 5 : confirmed;
+  return { samples, active };
+}
+
 export function evaluate(snap, cfg, paneSince, now = Date.now(), policy = null) {
   const alerts = [];
   const advice = [];
@@ -254,6 +270,14 @@ export function evaluate(snap, cfg, paneSince, now = Date.now(), policy = null) 
             text: `The Herdr Boss data filesystem has ${freeGB.toFixed(1)} GB (${freePercent}) free. This project has ${counts.linked} linked worker worktree(s), including ${counts.prunable} missing/prunable. After reviewing merged work, run \`herdr-boss worktree prune --apply\` to remove safe worktrees.` });
         }
       }
+    }
+    if (limits?.swapWarning && limits.swapPercent != null) {
+      const percent = Math.round(limits.swapPercent);
+      alerts.push({
+        key: 'machine:swap', severity: 'warn', scope: 'all',
+        title: `Swap high: ${percent}% used`,
+        text: `Swap is ${percent}% used (${limits.swapUsedGB.toFixed(1)} GB). Close finished workers and their browsers. Start no new browser or test workers until it drops.`,
+      });
     }
     const guardActive = limits ? (limits.guardActive ?? (limits.guardState ? limits.guardState === 'active' : true)) : true;
     const cpuExceeded = guardActive && !!limits && limits.cpuLimit != null && limits.cpuPercent > limits.cpuLimit;
