@@ -383,3 +383,44 @@ test('the approved series is outlined and lighter than the refused series in bot
   assert.doesNotMatch(help, /The light part/);
   assert.doesNotMatch(guide, /\(light, same color\)/);
 });
+
+// ---------- Policy changes (PC2) ----------
+
+test('the policy changes list shows time, caller kind, and changed keys with escaping', async () => {
+  const { policyChangesTitle, policyChangesListHtml, policyChangesDetailsHtml, policyWhen, POLICY_LIST_ENTRIES } = await import('../public/analytics.js');
+  const at = new Date(2026, 8, 30, 18, 25).toISOString();
+  const entries = [
+    { at, caller: 'page', changes: [{ key: 'projects.herdrboss.share', old: 20, new: 9 }, { key: 'allowedKinds', old: 'changed', new: 'changed' }, { key: 'note', old: null, new: '<img src=x onerror=1>' }] },
+    { at, caller: '<b>odd</b>', changes: Array.from({ length: 9 }, (_, i) => ({ key: `projects.p${i}.share`, old: 1, new: 2 })) },
+  ];
+  assert.equal(policyWhen(at), 'Wed 30 Sep 18:25');
+  assert.equal(policyWhen('nope'), '–');
+  assert.equal(policyChangesTitle(entries), 'Last policy write: Page, 3 keys changed, Wed 30 Sep 18:25');
+  assert.equal(policyChangesTitle([]), 'Policy changes');
+  const list = policyChangesListHtml(entries);
+  assert.match(list, /<code>projects\.herdrboss\.share<\/code> <span class="policy-old">20<\/span> → <span class="policy-new">9<\/span>/);
+  assert.match(list, /<span class="policy-old">none<\/span> → <span class="policy-new">&lt;img src=x onerror=1&gt;<\/span>/);
+  assert.match(list, /policy-caller page">Page</);
+  assert.match(list, /policy-caller &lt;b&gt;odd&lt;\/b&gt;">Unknown</);
+  assert.doesNotMatch(list, /<img|<b>odd/);
+  assert.match(list, /and 3 more in Details/);
+  const details = policyChangesDetailsHtml(entries);
+  assert.equal((details.match(/<tr>/g) || []).length, 1 + 3 + 9, 'a row for each changed key, and the header row');
+  assert.match(details, /data-label="Key" class="mono">projects\.herdrboss\.share</);
+  assert.doesNotMatch(details, /<img/);
+  const many = Array.from({ length: POLICY_LIST_ENTRIES + 5 }, () => entries[0]);
+  assert.equal((policyChangesListHtml(many).match(/class="policy-change"/g) || []).length, POLICY_LIST_ENTRIES);
+});
+
+test('the Analytics page has the Policy changes section with an empty state, help, and 44 px rows on the phone', () => {
+  assert.match(app, /function policyChangesCard\(\)/);
+  assert.match(app, /policyChangesCard\(\),\n\s*activitySection\(s\)/);
+  assert.match(app, /No policy write is recorded yet\./);
+  assert.match(app, /analyticsData\?\.policyChanges/);
+  assert.match(app, /<h3>Policy changes<\/h3><p>The list shows the last writes of <code>policy\.json<\/code>/);
+  assert.match(css, /\.policy-change \{[^}]*min-height: 44px/);
+  const phone = css.slice(css.lastIndexOf('@media (max-width: 760px) {', css.indexOf('.hl-strip { grid-template-columns: repeat(2')));
+  assert.match(phone, /\.policy-change \{[^}]*min-height: 44px/);
+  assert.match(guide, /^### Policy changes$/m);
+  assert.match(guide, /\*\*Policy changes\*\*: a list of the last writes/);
+});

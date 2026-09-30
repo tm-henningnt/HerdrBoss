@@ -352,6 +352,49 @@ export function denialDetailsHtml({ win, markers = [] }) {
   return `${days}${note}<h3>Harness changes</h3>${marks}`;
 }
 
+// ---------- Policy changes ----------
+
+export const POLICY_CALLER_LABEL = { page: 'Page', cli: 'CLI', 'project-new': 'Project new', unknown: 'Unknown' };
+export const POLICY_LIST_ENTRIES = 20;
+export const POLICY_LIST_KEYS = 6;
+const pad2 = (n) => String(n).padStart(2, '0');
+
+// The local date and time of an entry, for example `Wed 30 Sep 18:25`.
+export function policyWhen(at) {
+  const d = new Date(Date.parse(at));
+  if (Number.isNaN(d.getTime())) return '–';
+  return `${dayLabel(`${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`, true)} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+export const policyValue = (value) => (value === null || value === undefined ? 'none' : String(value));
+const callerBadge = (caller) => `<span class="policy-caller ${esc(caller)}">${esc(POLICY_CALLER_LABEL[caller] || POLICY_CALLER_LABEL.unknown)}</span>`;
+
+// The title: what the newest write was.
+export function policyChangesTitle(entries) {
+  if (!entries?.length) return 'Policy changes';
+  const [last] = entries;
+  const count = last.changes.length;
+  return `Last policy write: ${POLICY_CALLER_LABEL[last.caller] || 'Unknown'}, ${count} ${count === 1 ? 'key' : 'keys'} changed, ${policyWhen(last.at)}`;
+}
+
+// The list of the newest writes. A row holds the time, the caller kind, and the first changed keys with the old and the new value.
+export function policyChangesListHtml(entries) {
+  const rows = (entries || []).slice(0, POLICY_LIST_ENTRIES).map((entry) => {
+    const shown = entry.changes.slice(0, POLICY_LIST_KEYS);
+    const more = entry.changes.length - shown.length;
+    const keys = shown.map((c) => `<li><code>${esc(c.key)}</code> <span class="policy-old">${esc(policyValue(c.old))}</span> → <span class="policy-new">${esc(policyValue(c.new))}</span></li>`).join('');
+    return `<li class="policy-change"><div class="policy-head"><time datetime="${esc(entry.at)}">${esc(policyWhen(entry.at))}</time>${callerBadge(entry.caller)}</div><ul class="policy-keys">${keys}${more > 0 ? `<li class="policy-more">and ${more} more in Details</li>` : ''}</ul></li>`;
+  }).join('');
+  return `<ul class="policy-changes">${rows}</ul>`;
+}
+
+// The table behind Details: one row for each changed key of each kept write, newest first.
+export function policyChangesDetailsHtml(entries) {
+  const head = ['Time', 'Caller', 'Key', 'Old', 'New'];
+  const cell = (label, value, mono = true) => `<td data-label="${esc(label)}"${mono ? ' class="mono"' : ''}>${value}</td>`;
+  const rows = (entries || []).flatMap((entry) => entry.changes.map((c) => `<tr>${cell('Time', esc(policyWhen(entry.at)), false)}${cell('Caller', esc(POLICY_CALLER_LABEL[entry.caller] || 'Unknown'), false)}${cell('Key', esc(c.key))}${cell('Old', esc(policyValue(c.old)))}${cell('New', esc(policyValue(c.new)))}</tr>`)).join('');
+  return `<div class="fleet-table-wrap"><table class="fleet-table"><thead><tr>${head.map((h) => `<th>${h}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
 export function firstTimeRate(scorecard) {
   const rows = scorecard || [];
   const judged = rows.reduce((a, r) => a + r.firstTime + r.rework + r.failed, 0);

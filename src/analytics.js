@@ -4,9 +4,10 @@ import { DATA_DIR } from './config.js';
 import { readMachineSamples } from './machine-samples.js';
 import { readDenials, denialDaily, RETAIN_DAYS } from './denials.js';
 import { readHarnessChanges } from './harness-changes.js';
+import { readPolicyChanges } from './policy-log.js';
 
 // Aggregate figures for the Analytics page. The result holds numbers, lock kinds, and pane IDs only:
-// no notice text, workspace or project name, path, or command.
+// no notice text, workspace name, path, or command. The policy changes hold policy keys, which name a project, and scalar values.
 
 export const NOTICE_PANE_LIMIT = 5;
 export const EVENT_TAIL_BYTES = 2 * 1024 * 1024;
@@ -133,5 +134,6 @@ export function analyticsSummary({ dataDir = DATA_DIR, now = Date.now() } = {}) 
     timeline: machineTimeline(samples, { hours: 24, bucketMin: 10, now }),
     denials,
     harnessChanges: markersIn(denials.days, dataDir),
+    policyChanges: readPolicyChanges(dataDir),
   };
 }

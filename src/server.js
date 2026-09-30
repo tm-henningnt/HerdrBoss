@@ -11,7 +11,7 @@ import { ownerReleaseLease, withResourcePoolMutation } from './leases.js';
 import { PROJECTS_DIR, DATA_DIR, DEFAULT_SESSION_FILE, PRIVATE_ACCESS_DIR, assertPreviewDataDir, writeServiceSettings, applyServiceSettings, serviceSettingsView, validateResourcePools, writeResourcePools } from './config.js';
 import { writeProject, listProjects } from './projects.js';
 import { loadModels } from './kit/config.js';
-import { loadPolicy, savePolicy } from './control.js';
+import { loadPolicy, savePolicy, policyShareGuard } from './control.js';
 import { recordUsage, usageSummary } from './usage.js';
 import { spendSummary, clampSpendDays, loadPrices, defaultPrices, readPriceOverrides, writePriceOverrides, COST_LABEL } from './spend.js';
 import { readDenials, denialSummary } from './denials.js';
@@ -465,8 +465,16 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine 
       if (p === '/api/policy' && req.method === 'GET') return send(res, 200, loadPolicy());
       if (p === '/api/policy' && req.method === 'PUT') {
         const notes = [];
-        const errors = savePolicy(await jsonBody(req), loadModels(), { quotas: engine.state?.quotas || [], now: Date.now(), notes });
+        // confirmed and allowSum belong to the request, not to the policy. The caller header is a label and proves no identity.
+        const body = await jsonBody(req);
+        if (!body || typeof body !== 'object' || Array.isArray(body)) return send(res, 400, { ok: false, error: 'The body must be a JSON object.' });
+        const { confirmed, allowSum, ...draft } = body;
+        const options = { quotas: engine.state?.quotas || [], now: Date.now(), notes, caller: req.headers['x-herdr-boss-caller'] === 'page' ? 'page' : 'unknown' };
+        const errors = savePolicy(draft, loadModels(), { ...options, dryRun: true });
         if (errors.length) return send(res, 400, { ok: false, errors });
+        const refusal = policyShareGuard(loadPolicy(), draft, { confirmed: confirmed === true, allowSum: allowSum === true });
+        if (refusal) return send(res, refusal.status, { ok: false, error: refusal.error, changed: refusal.changed, sum: refusal.sum });
+        savePolicy(draft, loadModels(), options);
         const state = await engine.tick();
         return send(res, 200, { ok: true, policy: loadPolicy(), control: state.control, notes });
       }

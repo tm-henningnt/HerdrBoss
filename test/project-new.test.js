@@ -486,6 +486,11 @@ test('the policy step writes the temp policy file, keeps other fields, and a rer
     assert.equal(again.ok, true);
     assert.equal(fs.readFileSync(path.join(f.dataDir, 'policy.json'), 'utf8'), text);
     assert.match(again.steps.find((s) => s.name === 'policy').detail, /already/);
+    const lines = fs.readFileSync(path.join(f.dataDir, 'policy-changes.jsonl'), 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line));
+    assert.equal(lines.length, 1, 'the write logs one line and the rerun logs none');
+    assert.equal(lines[0].caller, 'project-new');
+    assert.ok(lines[0].changes.some((c) => c.key === 'projects.demo.share' && c.old === null && c.new === 10));
+    assert.ok(lines[0].changes.some((c) => c.key === 'projects.a.share' && c.old === 60 && c.new === 54));
   } finally { f.cleanup(); }
 });
 

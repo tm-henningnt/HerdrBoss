@@ -3,6 +3,7 @@ import path from 'node:path';
 import { DATA_DIR } from './config.js';
 import { loadModels } from './kit/config.js';
 import { goalTextError } from './goal.js';
+import { appendPolicyChange, callerKind, diffPolicy } from './policy-log.js';
 
 const FILE = path.join(DATA_DIR, 'policy.json');
 export const POLICY_DEFAULTS = {
@@ -253,11 +254,39 @@ export function validatePolicy(value, models) {
   return errors;
 }
 
-function writePolicy(value, file) {
+// The one function that writes policy.json. It appends one line to policy-changes.jsonl for a write that changes a value.
+// caller is a label (page, cli, project-new, unknown). A missing or other marker logs as unknown.
+export function writePolicy(value, { caller = 'unknown', dir = null, file = null } = {}) {
+  const target = file || path.join(dir || DATA_DIR, 'policy.json');
+  const logDir = dir || path.dirname(target);
   const { ignoredRoutes: _derived, ...stored } = value;
-  const tmp = `${file}.${process.pid}.tmp`;
+  let before = {};
+  try { before = JSON.parse(fs.readFileSync(target, 'utf8')); } catch {}
+  const tmp = `${target}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, `${JSON.stringify(stored, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
-  fs.renameSync(tmp, file);
+  fs.renameSync(tmp, target);
+  appendPolicyChange(logDir, { caller: callerKind(caller), changes: diffPolicy(before, stored) });
+}
+
+// The share guard of a policy write from the page or the CLI. Compare the project shares of the new policy with the saved one.
+// Return null to allow the write, or { status: 409, error, changed, sum } to refuse it. A request that changes no share always passes.
+// A change of 3 or more shares needs confirmed. A total other than 100 needs allowSum. via is 'api' or 'cli' and sets the wording of the way out.
+export function policyShareGuard(saved, next, { confirmed = false, allowSum = false, via = 'api' } = {}) {
+  const before = isObject(saved?.projects) ? saved.projects : {};
+  const after = isObject(next?.projects) ? next.projects : {};
+  const share = (projects, slug) => (Number.isInteger(projects[slug]?.share) ? projects[slug].share : null);
+  const changed = [...new Set([...Object.keys(before), ...Object.keys(after)])]
+    .map((slug) => ({ slug, old: share(before, slug), new: share(after, slug) }))
+    .filter((item) => item.old !== item.new);
+  if (!changed.length) return null;
+  const sum = Object.keys(after).reduce((total, slug) => total + (share(after, slug) ?? 0), 0);
+  const lines = changed.map((item) => `${String(item.slug).slice(0, 120)} ${item.old ?? 'none'} -> ${item.new ?? 'none'}`).join(', ');
+  const confirmWay = via === 'cli' ? 'Run the command again with --confirmed' : 'Send "confirmed": true in the request body';
+  const sumWay = via === 'cli' ? 'Run the command again with --allow-sum' : 'Send "allowSum": true in the request body';
+  const problems = [];
+  if (changed.length >= 3 && !confirmed) problems.push(`This write changes ${changed.length} project shares: ${lines}. ${confirmWay} to apply it.`);
+  if (sum !== 100 && !allowSum) problems.push(`The project shares add up to ${sum}, not 100${changed.length < 3 || confirmed ? `. Changed: ${lines}` : ''}. ${sumWay} to save this total.`);
+  return problems.length ? { status: 409, error: problems.join(' '), changed, sum } : null;
 }
 
 // Resolve saved workspace IDs to stable labels and migrate the legacy Boss project entry
@@ -294,7 +323,7 @@ export function migrateWorkspacePolicy(value, snap, { file = null } = {}) {
 
   // Compare only persisted fields. ignoredRoutes is derived by loadPolicy and must not trigger a write each tick.
   const changed = JSON.stringify(stored) !== JSON.stringify(next);
-  if (changed && file) writePolicy(next, file);
+  if (changed && file) writePolicy(next, { file });
   return ignoredRoutes === undefined ? next : { ...next, ignoredRoutes };
 }
 
@@ -376,7 +405,7 @@ export function prunePolicy(value, models) {
 }
 
 // Pass a notes array to receive a note for each automatic prune of stale model references.
-export function savePolicy(value, models, { file = FILE, quotas = null, now = Date.now(), notes = null } = {}) {
+export function savePolicy(value, models, { file = FILE, quotas = null, now = Date.now(), notes = null, caller = 'unknown', dryRun = false } = {}) {
   // ignoredRoutes is derived at load time, so a draft that carries it back does not store it.
   const { ignoredRoutes: _derived, ...draft } = value || {};
   const { policy: stored, note } = prunePolicy(draft, models);
@@ -389,7 +418,8 @@ export function savePolicy(value, models, { file = FILE, quotas = null, now = Da
     const window = quotas.find((q) => q.provider === provider && hasQuotaData(q))?.windows?.find((w) => w.key === key && !w.extra);
     goal.end.resetAt = new Date(window.resetsAt).toISOString();
   }
-  writePolicy(merged, file);
+  if (dryRun) return [];
+  writePolicy(merged, { file, caller });
   if (note && notes) notes.push(note);
   return [];
 }
@@ -425,7 +455,7 @@ export function clearExpiredOneOffGoals(policy, quotas, now = Date.now(), { file
     cleared.push(`${provider}/${key}`);
   }
   if (cleared.length) {
-    writePolicy(policy, file);
+    writePolicy(policy, { file });
     for (const name of cleared) log(`Cleared one-off pacing goal ${name}.`);
   }
   return cleared;

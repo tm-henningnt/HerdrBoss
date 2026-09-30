@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import { createDocument, find } from './fake-dom.js';
 
 const {
-  buildDraftShares, draftSignature, shareTotal, distributeRemainder, checkSave, confirmText, totalHtml, moveShares, allocationFooterHtml, staleRowHtml,
+  buildDraftShares, draftSignature, shareTotal, distributeRemainder, checkSave, confirmText, sumConfirmText, totalHtml, moveShares, allocationFooterHtml, staleRowHtml,
 } = await import('../public/allocation-draft.js');
 const { patchHtml } = await import('../public/keyed.js');
 const draftSource = fs.readFileSync(new URL('../public/allocation-draft.js', import.meta.url), 'utf8');
@@ -112,10 +112,24 @@ test('a touched default saves without a confirmation', () => {
   assert.equal(result.action, 'save');
 });
 
-test('a slider move between two neighbors is a normal save', () => {
+test('a slider move that changes two shares is a normal save', () => {
+  const shares = { alpha: 9, beta: 36, gamma: 34, delta: 10, epsilon: 10 };
+  const result = checkSave(base({ shares, touched: ['gamma', 'delta'], boundaries: 1 }));
+  assert.equal(result.action, 'save');
+});
+
+test('a change of three shares needs a confirmation, because the server refuses it without confirmed', () => {
   const shares = { alpha: 9, beta: 36, gamma: 34, delta: 10, epsilon: 11 };
   const result = checkSave(base({ shares, touched: ['gamma', 'delta', 'epsilon'], boundaries: 1 }));
-  assert.equal(result.action, 'save');
+  assert.equal(result.action, 'confirm');
+  assert.equal(result.confirmSum, undefined, 'the total is 100');
+});
+
+test('a change with a total other than 100 asks a second confirmation, and an unchanged 99 does not', () => {
+  const shares = { alpha: 9, beta: 36, gamma: 34, delta: 10, epsilon: 10 };
+  assert.equal(checkSave(base({ shares, touched: ['gamma', 'delta'], boundaries: 1 })).confirmSum, true);
+  assert.equal(checkSave(base({ otherChanged: true })).confirmSum, undefined);
+  assert.match(sumConfirmText(99), /add up to 99, not 100/);
 });
 
 test('more than one changed share from more than one edit needs a confirmation that lists every project', () => {
