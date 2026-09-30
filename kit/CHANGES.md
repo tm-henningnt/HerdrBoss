@@ -57,3 +57,7 @@ Summary: GUI worker briefs say that seed data goes only into a temporary HERDR_B
 ## 084656db38fb
 Impact: useful
 Summary: Worker briefs address the orchestrator by its stable agent name, and a handover tells each running worker the new orchestrator.
+
+## b966d46c47d7
+Impact: useful
+Summary: Add the AGENTS.md project part and README templates for the new project flow.

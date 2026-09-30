@@ -1,4 +1,4 @@
-<!-- herdr-boss kit v=084656db38fb -->
+<!-- herdr-boss kit v=b966d46c47d7 -->
 Herdr Boss writes this file. Do not edit it. Run herdr-boss kit install to update it.
 
 # Herdr Boss orchestration kit

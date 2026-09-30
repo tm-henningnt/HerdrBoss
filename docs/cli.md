@@ -74,6 +74,35 @@ The orchestrator keeps its own file unchanged. Publishing the same file again le
 
 The first `publish` of a slug registers the project. It records `{ slug, repo, remote }` in `project-repos.json` in the data folder, with mode 0600, when the Git top level exists. `repo` is the Git top level. `remote` is the `origin` URL without a user name and a password. A later publish keeps the first record. For a new slug, `publish` runs `harness sync --codex-only` and prints its result as `warning: harness sync:` lines.
 
+## New project flow
+
+The module `src/project-new.js` exports `runProjectNew(options)`. It has no command yet.
+
+`runProjectNew` runs these steps in order: `validate`, `folder`, `files`. The steps `kit`, `commit`, `remote`, `policy`, `register`, `workspace`, `harness`, and `check` report `not built yet`. They change nothing.
+
+| Option | Meaning |
+|---|---|
+| `slug` | Required. Must match `[a-z0-9][a-z0-9-]{0,63}`. |
+| `group` | The group folder. The project folder is `<group>/<name>`. |
+| `path` | The project folder. Use `group` or `path`, never both. There is no default. |
+| `name` | The project name. The default is the slug. |
+| `goal` | One line for the README. |
+| `dryRun` | Return each step with the action it would run. Change nothing. |
+| `resume` | Continue a saved run. Refuse when no state file exists. |
+
+`runProjectNew` refuses these inputs before it changes anything:
+
+- A bad slug, or a slug in `project-repos.json` or in `projects/`.
+- With `group`, a `name` that has a slash, a backslash, `..`, or a leading dot. The real path of the project folder must stay inside the real path of the group.
+- A project folder that is a symlink.
+- A path inside the Herdr Boss repository, the data folder, or the live data folder. The check compares real paths, so a symlink in a parent folder does not bypass it.
+- A folder that is not empty, or that holds `.git`.
+- A path inside another Git repository. `project new` makes only new top-level projects. The check walks up from the nearest existing parent folder and refuses when a parent holds `.git`.
+
+The `folder` step runs `mkdir -p` and `git init -b main`. The `files` step writes `AGENTS.md`, `docs/orchestration/memory.md`, `.herdr-boss.json`, `.gitignore`, `README.md`, and `docs/ideas/.gitkeep`. `AGENTS.md` holds a project part from `kit/templates/agents-project.md` and the Herdr Boss stub. The step never overwrites a file that exists.
+
+The state file is `flows/<slug>.json` in the data folder, with mode 0600. The command writes it through a temporary file with a unique name, and never follows a symlink at that name. It holds the inputs and the status of each finished step. The repository holds no state. A run that finds a state file with the same inputs skips the finished steps. It changes nothing when all built steps are finished. A step that fails is recorded as `failed`, and the next run repeats it.
+
 ## Owner messages
 
 The Owner sends messages from the Organization page. The Boss and the orchestrators reply with these commands. The default store is `messages.jsonl` in the data directory. Set `store.messages` to `sqlite` in `config.json` to use `herdr-boss.db`.
