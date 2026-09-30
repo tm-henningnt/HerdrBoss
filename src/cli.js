@@ -739,9 +739,13 @@ async function main() {
       // Keep the stored status small: only the newest done tasks stay. The removed ones go into doneCount.
       let previous = null;
       if (SLUG.test(slug)) try { previous = JSON.parse(fs.readFileSync(path.join(PROJECTS_DIR, `${slug}.json`), 'utf8')); } catch {}
+      const submitted = structuredClone(data);
       const moved = SLUG.test(slug) ? capDoneTasks(data, previous) : 0;
       const errors = writeProject(slug, data);
       if (errors.length) { console.error(errors.join('\n')); process.exit(1); }
+      // The publish closes each Mailbox item of this project whose task no longer waits on the Owner. A failure only prints a warning.
+      const { closeResolvedOnPublish } = await import('./messages.js');
+      closeResolvedOnPublish(slug, submitted, { log: (line) => console.log(line), warn: (line) => console.error(`warning: ${line}`) });
       const storedBytes = Buffer.byteLength(JSON.stringify(data, null, 2));
       if (storedBytes > STATUS_WARN_BYTES) console.error(`warning: the status is larger than 200 KB (${Math.round(storedBytes / 1024)} KB). Shorten notes and task text.`);
       for (const warning of statusWarnings(data)) console.error(`Warning: ${warning}`);

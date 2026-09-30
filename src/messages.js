@@ -20,6 +20,8 @@ export const STATUS_REQUEST_TEXT = 'Send a short status report with herdr-boss s
 export const ACTIONS = ['answer', 'approve', 'decide', 'read'];
 const NEEDS_YOU_ACTIONS = new Set(['answer', 'approve', 'decide']);
 export const READ_IDS_MAX = 200;
+export const CLOSE_NOTE_PROJECT = 'resolved by the project';
+export const CLOSE_NOTE_ELSEWHERE = 'answered elsewhere';
 export const CHOICES_MAX = 10;
 export const CHOICE_TEXT_MAX = 200;
 const OWNER_KINDS = ['message', 'nudge', 'status-request'];
@@ -204,6 +206,15 @@ export function mailboxCounts(records) {
   return { needsYou: needsYou.length, needsYouUnread, updates, unread: needsYouUnread, open: needsYou.length, chatUnread, mailUnread, needsAction: needsYou.length };
 }
 
+// An open Needs-you item gets the suggestion to close it when the Owner wrote on its thread after the item, and did not answer this item.
+// Keep open stores closeSuggestionDismissedAt on the item, so the suggestion stays away on every device.
+export function closeSuggested(item, records) {
+  if (!needsOwnerAction(item) || item.kind === 'review' || item.closedAt || item.closeSuggestionDismissedAt || item.from === 'owner') return false;
+  const since = Date.parse(item.at);
+  return records.some((record) => record.from === 'owner' && record.kind === 'message' && record.thread === item.thread
+    && record.replyTo !== item.id && Date.parse(record.at) > since);
+}
+
 const messageOrder = (left, right) => Date.parse(left.at) - Date.parse(right.at);
 
 // A thread is a project or Boss. replyTo links records into conversations within that thread.
@@ -283,6 +294,7 @@ export function mailboxView(records) {
     const answer = answers.get(record.id);
     return {
       ...record,
+      closeSuggestion: closeSuggested(record, records),
       ...(!record.closedAt && isDone(record) && record.closedBy !== 'boss' ? { closedAt: record.readAt } : {}),
       action: mailboxAction(record),
       channel: messageChannel(record),
@@ -319,6 +331,51 @@ export function closeMailboxItem(id, { dir = DATA_DIR, now = Date.now() } = {}) 
     item.readAt ||= at;
     return { records, result: item };
   }, { now });
+}
+
+// The project that owns an item closes it when its task no longer waits on the Owner. The Owner closes it as answered elsewhere.
+// The close never changes an existing closedAt.
+const taskList = (status) => (Array.isArray(status?.tasks) ? status.tasks.filter((task) => task && typeof task === 'object') : []);
+
+// Close the open Needs-you items of the thread `slug` whose task exists in the next status and no longer has waitingOn owner.
+// A task that is absent from the status never closes its item, so a status without tasks closes nothing. An item without a task is never closed.
+export function closeResolvedMailboxItems(slug, next, { dir = DATA_DIR, now = Date.now() } = {}) {
+  if (!validThread(slug) || slug === 'boss') return { closed: 0 };
+  const tasks = taskList(next).filter((task) => typeof task.mailboxId === 'string' && task.mailboxId);
+  const waiting = new Set(tasks.filter((task) => task.waitingOn === 'owner').map((task) => task.mailboxId));
+  const resolved = [...new Set(tasks.map((task) => task.mailboxId))].filter((id) => !waiting.has(id));
+  if (!resolved.length) return { closed: 0 };
+  const store = openMessageStore({ dir });
+  // Read first. A publish with no open item to close does not rewrite the store.
+  const open = (record) => record.thread === slug && isMailboxItem(record) && record.kind !== 'review' && needsOwnerAction(record) && !record.closedAt;
+  const all = store.all();
+  if (!resolved.some((id) => all.some((record) => record.id === id && open(record)))) return { closed: 0 };
+  return store.mutate((records) => {
+    const at = new Date(now).toISOString();
+    let closed = 0;
+    for (const id of resolved) {
+      const item = records.find((record) => record.id === id && open(record));
+      if (!item) continue;
+      item.closedAt = at;
+      item.readAt ||= at;
+      item.closedBy = 'project';
+      item.closeNote = CLOSE_NOTE_PROJECT;
+      closed += 1;
+    }
+    return { records, result: { closed } };
+  }, { now });
+}
+
+// The publish path calls this one. A failed mailbox update never fails the publish.
+export function closeResolvedOnPublish(slug, next, { log = () => {}, warn = log, ...options } = {}) {
+  try {
+    const result = closeResolvedMailboxItems(slug, next, options);
+    if (result.closed) log(`Closed ${result.closed} Mailbox ${result.closed === 1 ? 'item' : 'items'} of ${slug}: the task no longer waits on the Owner.`);
+    return result;
+  } catch (error) {
+    warn(`The Mailbox update after the publish of ${slug} failed: ${error.message}`);
+    return { closed: 0, error: error.message };
+  }
 }
 
 // Record that the Boss handled one or more open Owner mailbox items without sending a reply.
@@ -379,7 +436,37 @@ export function markMailboxRead(body, { dir = DATA_DIR, now = Date.now() } = {})
 }
 
 // Dismiss open Needs-you items without sending an answer to an agent.
+// With answeredElsewhere: true the items close as answered elsewhere: closedBy is owner and the note says so. They are not dismissed.
 export function dismissMailboxItems(body, { dir = DATA_DIR, now = Date.now() } = {}) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return { status: 400, error: 'Send a JSON object with ids.' };
+  const { ids, answeredElsewhere = false } = body;
+  if (!Array.isArray(ids) || ids.length < 1 || ids.length > READ_IDS_MAX || !ids.every((id) => typeof id === 'string')) {
+    return { status: 400, error: `ids must be a list of 1 to ${READ_IDS_MAX} mailbox item IDs.` };
+  }
+  if (typeof answeredElsewhere !== 'boolean') return { status: 400, error: 'answeredElsewhere must be true or false.' };
+  return openMessageStore({ dir }).mutate((records) => {
+    const items = ids.map((id) => records.find((record) => record.id === id && isMailboxItem(record)));
+    const missing = ids.find((id, index) => !items[index]);
+    if (missing) return { records, result: { status: 404, error: `No mailbox item has the ID ${missing}.` } };
+    if (items.some((item) => !needsOwnerAction(item) || item.closedAt)) {
+      return { records, result: { status: 409, error: `Only open Needs-you items can be ${answeredElsewhere ? 'closed' : 'dismissed'}.` } };
+    }
+    if (answeredElsewhere && items.some((item) => item.kind === 'review')) {
+      return { records, result: { status: 409, error: 'A review item closes when you submit the review.' } };
+    }
+    const at = new Date(now).toISOString();
+    for (const item of items) {
+      item.readAt ||= at;
+      item.closedAt ||= at;
+      if (answeredElsewhere) { item.closedBy = 'owner'; item.closeNote = CLOSE_NOTE_ELSEWHERE; }
+      else item.dismissed = true;
+    }
+    return { records, result: answeredElsewhere ? { ok: true, closed: items.length } : { ok: true, dismissed: items.length } };
+  }, { now });
+}
+
+// The Owner keeps an item open after the close suggestion. The dismissal is stored on the item.
+export function keepMailboxItemsOpen(body, { dir = DATA_DIR, now = Date.now() } = {}) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return { status: 400, error: 'Send a JSON object with ids.' };
   const { ids } = body;
   if (!Array.isArray(ids) || ids.length < 1 || ids.length > READ_IDS_MAX || !ids.every((id) => typeof id === 'string')) {
@@ -389,16 +476,12 @@ export function dismissMailboxItems(body, { dir = DATA_DIR, now = Date.now() } =
     const items = ids.map((id) => records.find((record) => record.id === id && isMailboxItem(record)));
     const missing = ids.find((id, index) => !items[index]);
     if (missing) return { records, result: { status: 404, error: `No mailbox item has the ID ${missing}.` } };
-    if (items.some((item) => !needsOwnerAction(item) || item.closedAt)) {
-      return { records, result: { status: 409, error: 'Only open Needs-you items can be dismissed.' } };
+    if (items.some((item) => !needsOwnerAction(item) || item.kind === 'review' || item.closedAt)) {
+      return { records, result: { status: 409, error: 'Only an open Needs-you item has a close suggestion.' } };
     }
     const at = new Date(now).toISOString();
-    for (const item of items) {
-      item.readAt ||= at;
-      item.closedAt ||= at;
-      item.dismissed = true;
-    }
-    return { records, result: { ok: true, dismissed: items.length } };
+    for (const item of items) item.closeSuggestionDismissedAt ||= at;
+    return { records, result: { ok: true, kept: items.length } };
   }, { now });
 }
 

@@ -4,7 +4,7 @@ import { patchHtml } from './keyed.js';
 import { SETTING_HELP, settingPopupHtml, settingsGuideHtml } from './setting-help.js';
 import { groupMailRows, inboxSections, listTime, mailRowHtml } from './mail-rows.js';
 import { chatJumpHtml, chatJumpButtonHtml, chatAtBottom, chatJumpScroll } from './chat-jump.js';
-import { mailBarItem, mailActionBarHtml, mailSelectionBarHtml } from './mail-bar.js';
+import { mailBarItem, mailActionBarHtml, mailSelectionBarHtml, mailElsewhereButtonHtml, mailSuggestionHtml } from './mail-bar.js';
 import { APP_VIEW_ROUTES, appViewport } from './app-view.js';
 import { parseReviewPath, reviewItemFromHash, reviewUrl, packListHtml, packPageHtml, reviewMessageHtml, reviewKeyAction, reviewOpenLinkHtml, reviewErrorText, submitConfirmText, pinProposedVerdict } from './review.js';
 import { createWizard } from './project-wizard-ui.js';
@@ -2531,7 +2531,7 @@ function mailActions(item) {
   const id = esc(item.id);
   const off = mailbox.busy ? ' disabled' : '';
   const status = `<p class="mail-status" role="status">${esc(mailbox.status[item.id] || '')}</p>`;
-  const dismiss = `<div class="mail-dismiss-row"><button type="button" data-mail-dismiss="${id}"${off}>Dismiss</button></div>`;
+  const dismiss = `<div class="mail-dismiss-row"><button type="button" data-mail-dismiss="${id}"${off}>Dismiss</button>${mailElsewhereButtonHtml(item, { esc, busy: mailbox.busy })}</div>`;
   if (item.action === 'approve') {
     return `<form class="mail-actions" data-mail-form="${id}">${mailField(item, 'Note (optional)', 1700, false)}
       <div class="mail-buttons"><button type="submit" data-mail-verdict="Approved."${off}>Approve</button><button type="submit" class="mail-decline" data-mail-verdict="Rejected."${off}>Reject</button></div>${dismiss}${status}</form>`;
@@ -2549,6 +2549,12 @@ function mailDoneLine(item) {
     const state = mailDeliveryState(item.answer);
     const replied = item.answer.repliedAt ? ` · replied ${clock(item.answer.repliedAt)}` : '';
     return `<div class="mail-answer"><span class="sub">Your answer · ${esc(state)} · ${esc(clock(item.answer.at))}${esc(replied)}</span>${markdownBlock(item.answer.text, 'msg-text')}</div>`;
+  }
+  if (item.closedBy === 'owner') {
+    return `<p class="sub mail-answer">Closed as answered elsewhere · ${esc(clock(item.closedAt))}</p>`;
+  }
+  if (item.closedBy === 'project') {
+    return `<p class="sub mail-answer">Resolved by the project · ${esc(clock(item.closedAt))}</p>`;
   }
   if (item.closedBy === 'boss') {
     return `<p class="sub mail-answer">Closed by the Boss · ${esc(clock(item.closedAt))}</p>`;
@@ -2570,7 +2576,7 @@ function mailRowsHtml(s, rows, folder) {
   const current = mailbox.currentConversation ? `${mailbox.currentConversation.thread}:${mailbox.currentConversation.id}` : '';
   const selectable = folder === 'needs-you';
   return rows.map((row) => mailRowHtml(row, {
-    esc, clock: (iso) => listTime(iso), current, selectable, selected: mailSelected,
+    esc, clock: (iso) => listTime(iso), current, selectable, selected: mailSelected, icon: folder === 'needs-you' || folder === 'inbox' ? appIcon : null,
     avatar: (thread) => avatarSlot(thread, { title: avatarTitle(thread), size: 36 }),
     sender: (x) => mailRowSender(s, x),
     state: folder === 'sent' ? (item) => `${mailDeliveryState(item)}${item.repliedAt ? ` · replied ${clock(item.repliedAt)}` : ''}` : null,
@@ -2765,7 +2771,8 @@ function mailConversationMessage(s, record, barItem) {
   const delivery = owner ? mailDeliveryState(record) : record.action ? `Action: ${record.action}` : '';
   const status = delivery ? `<p class="mail-message-state">${esc(delivery)}${owner && record.repliedAt ? ` · replied ${esc(clock(record.repliedAt))}` : ''}</p>` : '';
   const controls = item && item.closedAt ? mailDoneLine(item) : item && item === barItem ? '' : item && item.kind === 'review' ? reviewOpenLinkHtml(item, esc) : item && ['answer', 'approve', 'decide'].includes(item.action) ? mailActions(item) : '';
-  return `<li><article class="mail-message${owner ? ' from-owner' : ''}"><header class="mail-message-head"><strong>${esc(meta)}</strong></header>${messageBody(record)}${status}${controls}</article></li>`;
+  const suggestion = item ? mailSuggestionHtml(item, { esc, busy: mailbox.busy }) : '';
+  return `<li><article class="mail-message${owner ? ' from-owner' : ''}"><header class="mail-message-head"><strong>${esc(meta)}</strong></header>${messageBody(record)}${status}${suggestion}${controls}</article></li>`;
 }
 
 async function loadMailboxConversation(thread, conversation) {
@@ -2866,6 +2873,33 @@ async function mailSend(item, text, question) {
   if (mailbox.currentConversation) await loadMailboxConversation(mailbox.currentConversation.thread, mailbox.currentConversation.id);
 }
 
+// Close an item that the Owner answered in another place. The route is the dismiss route with answeredElsewhere. No message goes to the agent.
+async function mailCloseElsewhere(item) {
+  if (mailbox.busy) return;
+  mailbox.busy = true; mailbox.notice = ''; mailbox.error = ''; render();
+  try {
+    await postJson('/api/messages/dismiss', { ids: [item.id], answeredElsewhere: true });
+    mailSelected.delete(item.id);
+    delete mailDrafts[item.id];
+    delete mailbox.status[item.id];
+    mailbox.notice = 'Closed as answered elsewhere. No message was sent.';
+  } catch (error) { mailbox.notice = error.message; }
+  finally { mailbox.busy = false; }
+  await loadMailbox();
+  if (mailbox.currentConversation) await loadMailboxConversation(mailbox.currentConversation.thread, mailbox.currentConversation.id);
+}
+
+// Keep open: the dismissal of the suggestion is stored on the item.
+async function mailKeepOpen(item) {
+  if (mailbox.busy) return;
+  mailbox.busy = true; render();
+  try { await postJson('/api/messages/keep-open', { ids: [item.id] }); }
+  catch (error) { mailbox.notice = error.message; }
+  finally { mailbox.busy = false; }
+  await loadMailbox();
+  if (mailbox.currentConversation) await loadMailboxConversation(mailbox.currentConversation.thread, mailbox.currentConversation.id);
+}
+
 async function mailDismiss(items) {
   if (mailbox.busy || !items.length) return;
   const question = items.length === 1
@@ -2959,6 +2993,18 @@ document.addEventListener('click', (e) => {
   }
   const open = e.target.closest?.('[data-mail-open]');
   if (open) { openMailboxConversation(open.dataset.mailThread, open.dataset.mailConversation, open.dataset.mailItemId); return; }
+  const elsewhere = e.target.closest?.('[data-mail-elsewhere]');
+  if (elsewhere) {
+    const item = mailFind(elsewhere.dataset.mailElsewhere);
+    if (item) mailCloseElsewhere(item);
+    return;
+  }
+  const keep = e.target.closest?.('[data-mail-keep]');
+  if (keep) {
+    const item = mailFind(keep.dataset.mailKeep);
+    if (item) mailKeepOpen(item);
+    return;
+  }
   const dismiss = e.target.closest?.('[data-mail-dismiss]');
   if (dismiss) {
     const item = mailFind(dismiss.dataset.mailDismiss);
@@ -5175,14 +5221,14 @@ const HELP = {
     <p>Use the folders to read messages from the Boss and project orchestrators. The page groups each conversation by its project or the Boss and by its reply chain.</p>
     <h3>Folders</h3><p><b>Needs you</b> is the default folder when an open item needs an answer, approval, or decision. <b>Inbox</b> holds the open Needs-you items and the unread information items: Needs you first, then reports and updates. <b>Reports and updates</b> holds unread information items with action <code>read</code> or no action. Opening an information item marks it read and moves it to Done. <b>Done</b> holds read information items, closed or dismissed items, and relayed messages. <b>Sent</b>, below the divider, holds your messages with the queued, delivered, failed, or relayed state and the reply time.</p>
     <p>The folder stays in the page address. The page remembers your last folder. When Needs you has items, it opens that folder by default. When it is empty, the page says <b>Nothing needs you</b> and links to the Inbox.</p>
-    <h3>Rows</h3><p>Each row is one conversation. It shows the project or the Boss, the message count, the action tag, the subject, a preview, and the time. An unread row is bold and has a dot. Select a row to open the conversation. Select one or more check boxes in Needs you to dismiss items without an answer. The page asks you to confirm. Dismissal sends nothing.</p>
+    <h3>Rows</h3><p>Each row is one conversation. It shows the project or the Boss, the message count, the action tag, the subject, a preview, and the time. An unread row is bold and has a dot. Select a row to open the conversation. Select one or more check boxes in Needs you to dismiss items without an answer. The page asks you to confirm. Dismissal sends nothing. Select <b>Close as answered elsewhere</b> (the check-mark button on a row) when you answered the item in another place. The item moves to Done and no message goes out.</p><p>An item also closes when the project publishes a status in which its task no longer waits on you. When you write to the same thread after an item arrived, the item asks <b>Close this item?</b>. Select <b>Keep open</b> to hide the question for that item.</p>
     <h3>Conversations</h3><p>The conversation shows Owner and agent messages in time order. Your answer to an item stays in the conversation of that item, with its time and its delivery state. The Chat does not show it. Each message and each report shows as formatted Markdown. Opening an item marks it read. On a desktop the conversation opens at the right of the list. On a phone it fills the screen. Select the Back arrow to return to the list.</p>
     <h3>Refresh</h3><p>The page reads new data every 30 seconds. It changes only the rows and messages that changed. It keeps the open conversation, the selection, the typed text, the caret, and the scroll position. The refresh waits until 3 seconds after you last type or scroll.</p>
     <p>Use the reply box to answer the last agent message. When that message is an open item, its own form replaces the reply box. The page asks you to confirm each send. Herdr Boss delivers the message when the agent is working, idle, or done.</p>
     <h3>Markdown</h3><p>The page shows headings, bold, italic, lists, task lists, tables, code, quotes, rules, and links. A wide table or code block scrolls sideways in its own box. Raw HTML shows as text. A link opens only when it uses <code>http</code>, <code>https</code>, or <code>mailto</code>, or a local path. An external link opens in a new tab.</p>
     <h3>Actions</h3><p><b>Answer</b>: type an answer and select <b>Send</b>. <b>Approve</b>: select <b>Approve</b> or <b>Reject</b>. A note is optional. <b>Decide</b>: select a choice, or type an answer and select <b>Send</b>. Choice buttons appear when the message has a Markdown list under a <b>Choices</b> heading. A review pack item has <b>Open review</b> in place of the answer form. The submit of the review closes the item. Each answer uses the same delivery limit and safety checks as a new message. An answered item moves to <b>Done</b>.</p>
     <h3>Compose</h3><p>Select <b>New message</b> to write to the Boss or a project with an <code>orch</code> pane. The page asks you to confirm before it sends. The new conversation opens in <b>Sent</b>.</p>
-    <h3>Phone</h3><p>The Mailbox fills the screen. The page header does not show. Select the menu button at the top left to open the drawer with the folders, the other pages, and Help. A dot on the menu button shows unread chats. Select <b>New</b> at the bottom right to write a message. The desktop Mailbox badge shows unread Needs-you items.</p><p>In a conversation, the actions of the open item sit in a bar at the bottom edge. An approval has <b>Approve</b>, <b>Reject</b>, a note button, and <b>Dismiss</b>. A decision has its choice buttons, a note button, and <b>Dismiss</b>. The choice buttons wrap onto more rows, so each choice stays in view. An answer has <b>Dismiss</b>, the answer field, and <b>Send</b>. The note button opens a text field. When the keyboard opens, the bar stays above it.</p><p>In Needs you, select a check box to start a selection. The selection bar replaces <b>New</b> at the bottom edge. It shows the count, a button to clear the selection, <b>All</b>, and <b>Dismiss</b> with the count.</p>
+    <h3>Phone</h3><p>The Mailbox fills the screen. The page header does not show. Select the menu button at the top left to open the drawer with the folders, the other pages, and Help. A dot on the menu button shows unread chats. Select <b>New</b> at the bottom right to write a message. The desktop Mailbox badge shows unread Needs-you items.</p><p>In a conversation, the actions of the open item sit in a bar at the bottom edge. An approval has <b>Approve</b>, <b>Reject</b>, a note button, and <b>Dismiss</b>. A decision has its choice buttons, a note button, and <b>Dismiss</b>. The choice buttons wrap onto more rows, so each choice stays in view. An answer has <b>Dismiss</b>, the answer field, and <b>Send</b>. Each bar has a last row with <b>Close as answered elsewhere</b>. The note button opens a text field. When the keyboard opens, the bar stays above it.</p><p>In Needs you, select a check box to start a selection. The selection bar replaces <b>New</b> at the bottom edge. It shows the count, a button to clear the selection, <b>All</b>, and <b>Dismiss</b> with the count.</p>
     <p>The folder pane shows the fixed limits: Herdr Boss keeps messages for 30 days and accepts at most 10 Owner messages a minute. A read-only preview shows messages and refuses a read or a send.</p>`],
   reviews: ['Reviews', `
     <p>A project sends you a review pack when it needs your decision on evidence: screenshots, text, tables, or a live check. Each item of the pack asks one question. You answer the items, write a note for the whole pack, and submit one result. The result goes to the project orchestrator.</p>

@@ -70,21 +70,26 @@ export function mailTag(item) {
 
 // One row. helpers: esc, avatar(thread), clock(iso), sender(row), and the optional selectable, selected, current, and state(item).
 export function mailRowHtml(row, helpers) {
-  const { esc, avatar, clock, sender, selectable = false, selected = new Set(), current = '', state = null } = helpers;
+  const { esc, avatar, clock, sender, selectable = false, selected = new Set(), current = '', state = null, icon = null } = helpers;
   const item = row.item;
   const subject = mailSubject(item);
   // A Done row closed by the Boss shows the close note in place of the preview.
   const preview = item.closedBy === 'boss' ? `answered through the Boss: ${item.closeNote || ''}` : mailPreview(item);
+  const closedLine = item.closedBy === 'owner' ? 'Closed as answered elsewhere' : item.closedBy === 'project' ? 'Resolved by the project' : '';
   const tag = mailTag(item);
   const unread = row.unread && item.from !== 'owner';
   const checked = row.ids.some((id) => selected.has(id));
   const open = current === row.key;
   const select = selectable ? `<label class="mail-select"><input type="checkbox" data-mail-select="${esc(row.ids.join(','))}" aria-label="Select ${esc(subject)}"${checked ? ' checked' : ''}></label>` : '';
   const extra = state ? `<span class="mail-state">${esc(state(item))}</span>` : '';
+  // An open Needs-you item has the row action that closes it as answered elsewhere.
+  const elsewhere = icon && item.from !== 'owner' && item.kind !== 'review' && !item.closedAt && NEEDS_YOU.has(item.action)
+    ? `<button type="button" class="app-icon-button mail-row-action" data-mail-elsewhere="${esc(item.id)}" aria-label="Close as answered elsewhere" title="Close as answered elsewhere">${icon('check')}</button>`
+    : '';
   return `<li class="mail-row${unread ? ' unread' : ''}${open ? ' current' : ''}" data-key="row:${esc(row.key)}">${select}<button class="mail-entry" type="button" data-mail-open data-mail-thread="${esc(item.thread)}" data-mail-conversation="${esc(item.conversationId || item.id)}" data-mail-item-id="${esc(item.id)}"${open ? ' aria-current="true"' : ''}>`
     + `${avatar(item.thread)}`
     + `<span class="mail-line-one"><span class="mail-from">${esc(sender(row))}</span>${row.count > 1 ? `<span class="mail-count num">${row.count}</span>` : ''}${tag ? `<span class="mail-tag tag-${tag.key}">${esc(tag.label)}</span>` : ''}</span>`
-    + `<span class="mail-line-two"><span class="mail-subject">${esc(subject)}</span>${preview ? `<span class="mail-preview">${esc(preview)}</span>` : ''}${extra}</span>`
+    + `<span class="mail-line-two"><span class="mail-subject">${esc(subject)}</span>${closedLine ? `<span class="mail-preview">${esc(closedLine)}</span>` : preview ? `<span class="mail-preview">${esc(preview)}</span>` : ''}${extra}</span>`
     + `<span class="mail-side"><time class="num" datetime="${esc(item.at)}">${esc(clock(item.at))}</time>${unread ? '<span class="mail-dot" aria-hidden="true"></span><span class="visually-hidden">Unread</span>' : ''}</span>`
-    + '</button></li>';
+    + `</button>${elsewhere}</li>`;
 }
