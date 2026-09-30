@@ -41,6 +41,8 @@ export const PROJECT_DEFAULTS = Object.freeze({
   // The most worker panes that worker start puts in one Workers tab.
   workerPanesPerTab: 3,
   artifactChecks: [],
+  // Globs of the files that no test reads. A change to such a file keeps a suite pass. See docs/cli.md.
+  suiteUntested: ['.worker/**', '.orchestration/**'],
 });
 
 function validateArtifactPattern(pattern, label) {
@@ -70,6 +72,33 @@ function validateArtifactChecks(artifactChecks) {
   });
 }
 
+// Sample paths that a test or the build reads. A suiteUntested glob that matches one of them is invalid.
+export const SUITE_PROTECTED_SAMPLES = Object.freeze([
+  'src/x.js', 'test/x.test.js', 'public/app.js', 'kit/CHANGES.md', 'kit/templates/x.md', '.github/workflows/x.yml',
+  'package.json', 'package-lock.json', '.herdr-boss.json', 'docs/cli.md', 'docs/user-guide.md', 'bin/x',
+]);
+
+// The first problem of a suiteUntested list, or null. A glob is invalid when it has a leading ** or */ segment,
+// or when it matches a protected sample path.
+export function suiteUntestedProblem(patterns) {
+  if (!Array.isArray(patterns)) return 'suiteUntested must be an array of repository-relative POSIX globs.';
+  for (const [index, pattern] of patterns.entries()) {
+    const label = `suiteUntested[${index}]`;
+    try { validateArtifactPattern(pattern, label); } catch (error) { return error.message; }
+    if (pattern === '*' || pattern === '**' || pattern.startsWith('**/') || pattern.startsWith('*/')) {
+      return `${label} must not start with a wildcard segment.`;
+    }
+    const hit = SUITE_PROTECTED_SAMPLES.find((sample) => globMatches(pattern, sample));
+    if (hit) return `${label} matches the tested path ${hit}.`;
+  }
+  return null;
+}
+
+function validateSuiteUntested(patterns) {
+  const problem = suiteUntestedProblem(patterns);
+  if (problem) throw new Error(problem.startsWith('suiteUntested') ? problem : `suiteUntested: ${problem}`);
+}
+
 function validateCheckAgents(checkAgents) {
   if (!checkAgents || typeof checkAgents !== 'object' || Array.isArray(checkAgents) || Object.keys(checkAgents).some((key) => key !== 'exclude')) {
     throw new Error('checkAgents must be an object with only an exclude list.');
@@ -86,6 +115,8 @@ export function globMatches(pattern, relative) {
   const names = relative.split('/');
   const match = (g, n) => {
     if (g === globs.length) return n === names.length;
+    // A trailing ** matches the paths below the folder, never the folder itself.
+    if (globs[g] === '**' && g === globs.length - 1) return n < names.length;
     if (globs[g] === '**') return match(g + 1, n) || (n < names.length && match(g, n + 1));
     return n < names.length && segment(globs[g], names[n]) && match(g + 1, n + 1);
   };
@@ -153,6 +184,7 @@ export function loadProjectConfig({ cwd = process.cwd(), file = '.herdr-boss.jso
   if (config.setup !== null && (typeof config.setup !== 'string' || !config.setup.trim())) throw new Error('setup must be null or a non-empty shell command.');
   if (config.testThreadsFlag !== null && (typeof config.testThreadsFlag !== 'string' || !config.testThreadsFlag.trim())) throw new Error('testThreadsFlag must be null or a non-empty string.');
   validateArtifactChecks(config.artifactChecks);
+  validateSuiteUntested(config.suiteUntested);
   if (config.checkAgents !== undefined) validateCheckAgents(config.checkAgents);
   if (!Number.isInteger(config.setupTimeoutSeconds) || config.setupTimeoutSeconds < 10) throw new Error('setupTimeoutSeconds must be an integer of 10 or more.');
   if (!Number.isInteger(config.agentStartTimeoutMs) || config.agentStartTimeoutMs < 1 || config.agentStartTimeoutMs > 300000) {

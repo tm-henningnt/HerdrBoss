@@ -352,6 +352,45 @@ export function denialDetailsHtml({ win, markers = [] }) {
   return `${days}${note}<h3>Harness changes</h3>${marks}`;
 }
 
+// ---------- Lock wait and hold ----------
+
+// The daily lock figures of /api/analytics for one project or for all. A project that is not in the data counts as all.
+// The hold is the bottom part of a bar and the wait is the part above it: the wait is the cost of the queue.
+export function lockWaitSeries(locks, project = 'all') {
+  const days = Array.isArray(locks?.days) ? locks.days : [];
+  const list = Array.isArray(locks?.projects) ? locks.projects : [];
+  const chosen = project !== 'all' && list.some((p) => p.project === project) ? project : 'all';
+  const rows = chosen === 'all' ? list : list.filter((p) => p.project === chosen);
+  const pick = (key) => days.map((_, i) => rows.reduce((sum, p) => sum + (Number.isFinite(p[key]?.[i]) ? p[key][i] : 0), 0));
+  const sum = (values) => values.reduce((a, b) => a + b, 0);
+  const wait = pick('wait'), hold = pick('hold');
+  return {
+    days,
+    project: chosen,
+    projects: list.map((p) => p.project),
+    series: [
+      { key: 'hold', label: 'Hold', cls: 's1', values: hold },
+      { key: 'wait', label: 'Wait', cls: 's2', values: wait },
+    ],
+    totals: { wait: sum(wait), hold: sum(hold), runs: sum(pick('runs')), timeouts: sum(pick('timeouts')) },
+  };
+}
+
+// The tables behind Details: one row for each day, and one row for each project of the window.
+export function lockWaitDetailsHtml(win, locks) {
+  const cell = (label, value, mono = true) => `<td data-label="${esc(label)}"${mono ? ' class="mono"' : ''}>${value}</td>`;
+  const dayRows = win.days.map((day, i) => `<tr>${cell('Date', esc(day), false)}${cell('Wait', minutes(win.series[1].values[i]))}${cell('Hold', minutes(win.series[0].values[i]))}</tr>`).join('');
+  const days = `<div class="fleet-table-wrap"><table class="fleet-table"><thead><tr><th>Date</th><th>Wait</th><th>Hold</th></tr></thead><tbody>${dayRows}<tr class="viz-total">${cell('Date', 'Total', false)}${cell('Wait', minutes(win.totals.wait))}${cell('Hold', minutes(win.totals.hold))}</tr></tbody></table></div>`;
+  const rows = (Array.isArray(locks?.projects) ? locks.projects : []).filter((p) => win.project === 'all' || p.project === win.project);
+  const projects = rows.length
+    ? `<h3>By project</h3><div class="fleet-table-wrap"><table class="fleet-table"><thead><tr><th>Project</th><th>Runs</th><th>Wait</th><th>Hold</th><th>Timeouts</th></tr></thead><tbody>${rows.map((p) => {
+      const sum = (values) => values.reduce((a, b) => a + b, 0);
+      return `<tr>${cell('Project', esc(p.project), false)}${cell('Runs', sum(p.runs))}${cell('Wait', minutes(p.waitTotal))}${cell('Hold', minutes(p.holdTotal))}${cell('Timeouts', sum(p.timeouts))}</tr>`;
+    }).join('')}</tbody></table></div>`
+    : '<p class="viz-note">No lock use is recorded in this window.</p>';
+  return `${days}${projects}`;
+}
+
 // ---------- Policy changes ----------
 
 export const POLICY_CALLER_LABEL = { page: 'Page', cli: 'CLI', 'project-new': 'Project new', unknown: 'Unknown' };

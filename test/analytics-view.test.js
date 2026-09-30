@@ -6,6 +6,7 @@ import {
   stackedBars, lineChart, heatGrid, outcomeBars, stripBars, foldSeries, niceMax, spendSeries, claudeSpend, quotaSeries,
   denialGrid, firstTimeRate, activityFilter, activityChoices, eventLevel, dayLabel, usd,
   DENIAL_RANGES, DEFAULT_DENIAL_RANGE, denialRange, denialSeries, denialMarkers, denialDetailsHtml, denialLegendHtml,
+  lockWaitSeries, lockWaitDetailsHtml,
 } from '../public/analytics.js';
 
 const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
@@ -423,4 +424,51 @@ test('the Analytics page has the Policy changes section with an empty state, hel
   assert.match(phone, /\.policy-change \{[^}]*min-height: 44px/);
   assert.match(guide, /^### Policy changes$/m);
   assert.match(guide, /\*\*Policy changes\*\*: a list of the last writes/);
+});
+
+const DAY = 86400000;
+const lockData = {
+  days: ['2026-09-28', '2026-09-29', '2026-09-30'],
+  projects: [
+    { project: 'alpha', wait: [0, 60000, 120000], hold: [0, 300000, 600000], runs: [0, 1, 2], timeouts: [0, 0, 1], waitTotal: 180000, holdTotal: 900000 },
+    { project: 'beta', wait: [0, 0, 60000], hold: [0, 0, 60000], runs: [0, 0, 1], timeouts: [0, 0, 0], waitTotal: 60000, holdTotal: 60000 },
+  ],
+  totals: { wait: [0, 60000, 180000], hold: [0, 300000, 660000] },
+};
+
+test('lockWaitSeries gives wait and hold for all projects or for one, and ignores an unknown project', () => {
+  const all = lockWaitSeries(lockData, 'all');
+  assert.deepEqual(all.days, lockData.days);
+  assert.deepEqual(all.series.map((x) => [x.key, x.values]), [['hold', [0, 300000, 660000]], ['wait', [0, 60000, 180000]]]);
+  assert.deepEqual(all.totals, { wait: 240000, hold: 960000, runs: 4, timeouts: 1 });
+  const one = lockWaitSeries(lockData, 'beta');
+  assert.deepEqual(one.series.find((x) => x.key === 'wait').values, [0, 0, 60000]);
+  assert.equal(lockWaitSeries(lockData, 'nope').project, 'all');
+  assert.deepEqual(lockWaitSeries(null, 'all').days, []);
+  assert.deepEqual(all.projects, ['alpha', 'beta']);
+});
+
+test('lockWaitSeries stacked bars keep the roving tab order and name wait and hold in the tooltip', () => {
+  const win = lockWaitSeries(lockData, 'all');
+  const svg = stackedBars({ cats: win.days.map((d) => ({ label: dayLabel(d), tip: dayLabel(d, true) })), series: win.series, fmt: (v) => `${Math.round(v / 60000)} min`, label: 'x' });
+  assert.match(svg, /tabindex="0"/);
+  assert.match(svg, /Wait: 3 min/);
+  assert.match(svg, /Hold: 11 min/);
+});
+
+test('lockWaitDetailsHtml lists each day and each project with its wait, hold, runs, and timeouts', () => {
+  const html = lockWaitDetailsHtml(lockWaitSeries(lockData, 'all'), lockData);
+  assert.match(html, /2026-09-30/);
+  assert.match(html, /alpha/);
+  assert.match(html, /<th>Timeouts<\/th>/);
+  assert.match(html, /11 min/);
+  assert.doesNotMatch(lockWaitDetailsHtml(lockWaitSeries(lockData, 'beta'), lockData), /alpha/);
+});
+
+test('the page has the lock wait card, its switch, its help text, and its guide entry', () => {
+  assert.match(app, /function lockWaitBlock\(/);
+  assert.match(app, /data-lock-project/);
+  assert.match(app, /<h3>Lock wait and hold<\/h3>/);
+  assert.match(guide, /\*\*Lock wait and hold by project\*\*/);
+  assert.ok(DAY > 0);
 });

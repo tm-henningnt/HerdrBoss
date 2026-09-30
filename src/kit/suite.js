@@ -1,16 +1,16 @@
-import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { DATA_DIR } from '../config.js';
 import { createHerdrRunner } from './workers.js';
 import { DEFAULT_RULES_FILE } from './config.js';
 import { SWAP_FORCE_ENV, swapGuardFor } from './swap-guard.js';
 import { FULL_SUITE_LOCK, acquireProjectLock, recordLockRelease, releaseProjectLock } from './locks.js';
+import { DEFAULT_SUITE_UNTESTED, SUITE_PASSES_FILE, cleanTreeKey, readSuitePasses, samePassKey, sameTreeKey, writeSuitePasses } from './suite-passes.js';
+
+export { SUITE_PASSES_FILE };
 
 export const SUITE_WAIT_SECONDS = 1800;
-export const SUITE_PASSES_FILE = 'suite-passes.json';
-const MAX_SUITE_PASSES = 200;
 // Claude Code sets the messaging names in every tool shell. A test does not need them or any credential.
 const ALWAYS_REMOVED = new Set(['CLAUDE_CODE_MESSAGING_TOKEN', 'CLAUDE_CODE_MESSAGING_SOCKET']);
 const SECRET_NAME = /(TOKEN|SECRET|PASSWORD|API_KEY|_KEY)$/i;
@@ -26,79 +26,6 @@ export function cleanSuiteEnvironment(env, keep = []) {
   return { env: clean, removed };
 }
 
-function gitText(root, ...args) {
-  return execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-}
-
-const LOCKFILE_NAMES = [
-  'package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lock', 'bun.lockb',
-  'Cargo.lock', 'poetry.lock', 'uv.lock', 'Pipfile.lock', 'Gemfile.lock', 'composer.lock', 'go.sum',
-];
-
-// The tree hash covers a tracked lockfile. This hash also covers an ignored lockfile.
-function lockfileHashes(root) {
-  const locks = {};
-  for (const name of LOCKFILE_NAMES) {
-    try {
-      locks[name] = createHash('sha256').update(fs.readFileSync(path.join(root, name))).digest('hex');
-    } catch {}
-  }
-  return locks;
-}
-
-function cleanTreeKey(root) {
-  try {
-    if (gitText(root, 'status', '--porcelain')) return null;
-    const commonDir = gitText(root, 'rev-parse', '--git-common-dir');
-    const repo = fs.realpathSync(path.resolve(root, commonDir));
-    const tree = gitText(root, 'write-tree');
-    const headTree = gitText(root, 'rev-parse', 'HEAD^{tree}');
-    if (!repo || tree !== headTree || !/^[0-9a-f]{40,64}$/i.test(tree)) return null;
-    const locks = lockfileHashes(root);
-    return Object.keys(locks).length ? { repo, tree, locks } : { repo, tree };
-  } catch {
-    return null;
-  }
-}
-
-function samePassKey(record, key, command) {
-  return record?.repo === key.repo
-    && record?.tree === key.tree
-    && JSON.stringify(record?.locks ?? {}) === JSON.stringify(key.locks ?? {})
-    && record?.node === process.version
-    && Array.isArray(record?.command)
-    && JSON.stringify(record.command) === JSON.stringify(command);
-}
-
-function readSuitePasses(dataDir) {
-  try {
-    const value = JSON.parse(fs.readFileSync(path.join(dataDir, SUITE_PASSES_FILE), 'utf8'));
-    return Array.isArray(value) ? value.filter((record) => record && typeof record === 'object' && !Array.isArray(record)) : [];
-  } catch {
-    return [];
-  }
-}
-
-function writeSuitePasses(dataDir, records) {
-  fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
-  const file = path.join(dataDir, SUITE_PASSES_FILE);
-  const temporary = path.join(dataDir, `.${SUITE_PASSES_FILE}.${process.pid}.${randomUUID()}.tmp`);
-  let fd;
-  try {
-    fd = fs.openSync(temporary, 'wx', 0o600);
-    fs.writeFileSync(fd, `${JSON.stringify(records.slice(-MAX_SUITE_PASSES), null, 2)}\n`);
-    fs.fchmodSync(fd, 0o600);
-    fs.fsyncSync(fd);
-    fs.closeSync(fd);
-    fd = undefined;
-    fs.renameSync(temporary, file);
-  } catch (error) {
-    if (fd !== undefined) { try { fs.closeSync(fd); } catch {} }
-    try { fs.unlinkSync(temporary); } catch {}
-    throw error;
-  }
-}
-
 export function listSuitePasses({ dataDir = DATA_DIR, output = console.log } = {}) {
   const records = readSuitePasses(dataDir).slice(-10);
   for (const record of records) {
@@ -109,6 +36,14 @@ export function listSuitePasses({ dataDir = DATA_DIR, output = console.log } = {
     output(`suite: ${record.time ?? 'unknown time'} ${repoName || 'unknown repo'} ${tree} ${command}`);
   }
   return records;
+}
+
+// A push sets HERDR_BOSS_PUSH_SUITES to a file. Each suite run of its pre-push hook adds its command to the file.
+// The push stores the commands, so the next push can look for a pass of each command before it takes the lock.
+function noteHookSuite(env, command) {
+  const file = env.HERDR_BOSS_PUSH_SUITES;
+  if (!file) return;
+  try { fs.appendFileSync(file, `${JSON.stringify(command)}\n`, { mode: 0o600 }); } catch {}
 }
 
 export function runSuite(command, {
@@ -130,9 +65,14 @@ export function runSuite(command, {
   if (!Array.isArray(command) || !command.length) throw new Error('suite needs a command after --.');
   const repoRoot = config?.root ?? cwd;
   const commandArray = [...command];
-  const initialKey = cleanTreeKey(repoRoot);
-  if ((reuse || env.HERDR_BOSS_SUITE_REUSE === '1') && initialKey) {
-    const pass = readSuitePasses(dataDir).slice().reverse().find((record) => samePassKey(record, initialKey, commandArray));
+  const untested = config?.suiteUntested ?? DEFAULT_SUITE_UNTESTED;
+  const initialKey = cleanTreeKey(repoRoot, untested);
+  noteHookSuite(env, commandArray);
+  if (initialKey) {
+    // A run without --reuse asks for a fresh run of the same tree. It skips the suite only when a pass has another tree
+    // and the same tested hash: the trees differ by untested files only.
+    const explicit = reuse || env.HERDR_BOSS_SUITE_REUSE === '1';
+    const pass = readSuitePasses(dataDir).slice().reverse().find((record) => samePassKey(record, initialKey, commandArray) && (explicit || record.tree !== initialKey.tree));
     if (pass) {
       output(`suite: reused the pass of ${pass.time} for tree ${pass.tree.slice(0, 12)}`);
       return { exitCode: 0, removed: 0, reused: true, pass };
@@ -158,9 +98,8 @@ export function runSuite(command, {
     } else {
       exitCode = result.status ?? 1;
     }
-    const finalKey = initialKey && cleanTreeKey(repoRoot);
-    if (exitCode === 0 && initialKey && finalKey?.repo === initialKey.repo && finalKey.tree === initialKey.tree
-      && JSON.stringify(finalKey.locks ?? {}) === JSON.stringify(initialKey.locks ?? {})) {
+    const finalKey = initialKey && cleanTreeKey(repoRoot, untested);
+    if (exitCode === 0 && initialKey && finalKey?.tree === initialKey.tree && sameTreeKey(finalKey, initialKey)) {
       const records = readSuitePasses(dataDir);
       const pass = { ...initialKey, command: commandArray, node: process.version, time: new Date(now()).toISOString() };
       records.push(pass);

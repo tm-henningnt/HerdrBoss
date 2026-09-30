@@ -622,9 +622,11 @@ test('suite records a clean pass and reuses it only when requested', (t) => {
     repo: fs.realpathSync(path.join(f.root, '.git')),
     tree: git(f.root, 'write-tree'),
     command: [process.execPath, f.script, '0'],
+    tested: firstRecords[0].tested,
     node: process.version,
     time: firstRecords[0].time,
   });
+  assert.match(firstRecords[0].tested, /^[0-9a-f]{64}$/);
   assert.ok(Number.isFinite(Date.parse(firstRecords[0].time)));
   assert.equal(fs.statSync(file).mode & 0o777, 0o600);
 
@@ -795,4 +797,155 @@ test('a queue ticket file is never visible before its content is complete', (t) 
   assert.deepEqual(seen, [], 'no ticket file is unreadable while it is written');
   assert.equal(ticketWrites, 1, 'the test observed one ticket write');
   assert.deepEqual(fs.readdirSync(queueDirectory).filter((name) => name.endsWith('.tmp')), [], 'no temporary file remains');
+});
+
+function commitFile(root, file, content, message = 'change') {
+  fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+  fs.writeFileSync(path.join(root, file), content);
+  git(root, 'add', '-A');
+  git(root, 'commit', '-m', message);
+}
+
+const readPasses = (f) => JSON.parse(fs.readFileSync(path.join(f.dataDir, 'suite-passes.json'), 'utf8'));
+
+test('a change to an untested path reuses the pass without --reuse', (t) => {
+  const f = fixture(t, 'herdr-suite-untested-hit-');
+  assert.equal(f.run([]).exitCode, 0);
+  commitFile(f.root, '.worker/report.md', 'notes\n');
+  commitFile(f.root, '.orchestration/runs/a.json', '{}\n');
+
+  assert.equal(f.run([]).exitCode, 0);
+  assert.equal(f.readSeen().runs, 1, 'the suite does not run again');
+  assert.ok(f.lines.some((line) => /^suite: reused the pass of /.test(line)), f.lines.join('\n'));
+  assert.equal(readPasses(f).length, 1);
+});
+
+test('a change to a tested path misses the pass', (t) => {
+  const f = fixture(t, 'herdr-suite-untested-miss-');
+  assert.equal(f.run([]).exitCode, 0);
+  commitFile(f.root, '.worker/report.md', 'notes\n');
+  commitFile(f.root, 'README.md', 'changed\n');
+
+  assert.equal(f.run(['--reuse']).exitCode, 0);
+  assert.equal(f.readSeen().runs, 2);
+  commitFile(f.root, 'docs/guide.md', 'doc\n');
+  assert.equal(f.run(['--reuse']).exitCode, 0);
+  assert.equal(f.readSeen().runs, 3, 'a docs file is tested');
+});
+
+test('an identical tree without --reuse still runs', (t) => {
+  const f = fixture(t, 'herdr-suite-untested-fresh-');
+  assert.equal(f.run([]).exitCode, 0);
+  assert.equal(f.run([]).exitCode, 0);
+  assert.equal(f.readSeen().runs, 2);
+});
+
+test('an untracked file in an untested path does not block the pass', (t) => {
+  const f = fixture(t, 'herdr-suite-untested-untracked-');
+  fs.mkdirSync(path.join(f.root, '.worker'));
+  fs.writeFileSync(path.join(f.root, '.worker', 'scratch.log'), 'log\n');
+  assert.equal(f.run([]).exitCode, 0);
+  assert.equal(readPasses(f).length, 1);
+  assert.equal(f.run(['--reuse']).exitCode, 0);
+  assert.equal(f.readSeen().runs, 1);
+  fs.writeFileSync(path.join(f.root, 'scratch.txt'), 'tested path\n');
+  assert.equal(f.run(['--reuse']).exitCode, 0);
+  assert.equal(f.readSeen().runs, 2, 'an untracked file in a tested path runs the suite');
+  assert.equal(readPasses(f).length, 1, 'and records no pass');
+});
+
+test('suiteUntested in .herdr-boss.json adds untested paths, and a changed list misses', (t) => {
+  const f = fixture(t, 'herdr-suite-untested-config-');
+  fs.writeFileSync(path.join(f.root, '.herdr-boss.json'), JSON.stringify({ suiteUntested: ['notes/**'] }));
+  git(f.root, 'add', '.herdr-boss.json');
+  git(f.root, 'commit', '-m', 'config');
+  const config = loadProjectConfig({ cwd: f.root });
+  assert.deepEqual(config.suiteUntested, ['notes/**']);
+  assert.equal(f.run([], 0, { config }).exitCode, 0);
+  commitFile(f.root, 'notes/a.txt', 'a\n');
+  assert.equal(f.run([], 0, { config }).exitCode, 0);
+  assert.equal(f.readSeen().runs, 1, 'a file under notes is untested');
+  assert.equal(f.run(['--reuse']).exitCode, 0);
+  assert.equal(f.readSeen().runs, 2, 'the default list does not cover notes');
+});
+
+test('suiteUntested refuses an absolute path or a parent segment', (t) => {
+  const f = fixture(t, 'herdr-suite-untested-invalid-');
+  for (const bad of [['/etc/**'], ['../x'], [''], 'notes', ['a/b/../c'], ['**'], ['*'], ['src/**'], ['package.json'], ['**/*.md'], ['*/x.js'],
+    ['test/**'], ['public/*'], ['kit/**'], ['.github/**'], ['docs/**'], ['.herdr-boss.json'], ['package-lock.json'], ['bin/**'], ['kit/CHANGES.md'], ['docs/cli.md']]) {
+    fs.writeFileSync(path.join(f.root, '.herdr-boss.json'), JSON.stringify({ suiteUntested: bad }));
+    assert.throws(() => loadProjectConfig({ cwd: f.root }), /suiteUntested/);
+  }
+});
+
+test('a merge commit with the tree of a passed branch reuses the pass', (t) => {
+  const f = fixture(t, 'herdr-suite-merge-hit-');
+  git(f.root, 'checkout', '-b', 'feature');
+  commitFile(f.root, 'README.md', 'feature\n');
+  assert.equal(f.run([]).exitCode, 0);
+  git(f.root, 'checkout', 'main');
+  git(f.root, 'merge', '--no-ff', 'feature', '-m', 'merge feature');
+  assert.equal(git(f.root, 'rev-parse', 'HEAD^{tree}'), git(f.root, 'rev-parse', 'feature^{tree}'));
+
+  assert.equal(f.run(['--reuse']).exitCode, 0);
+  assert.equal(f.readSeen().runs, 1);
+});
+
+test('a merge commit whose tree differs from the passed branch misses', (t) => {
+  const f = fixture(t, 'herdr-suite-merge-miss-');
+  git(f.root, 'checkout', '-b', 'feature');
+  commitFile(f.root, 'feature.txt', 'feature\n');
+  assert.equal(f.run([]).exitCode, 0);
+  git(f.root, 'checkout', 'main');
+  commitFile(f.root, 'main.txt', 'main\n');
+  git(f.root, 'merge', '--no-ff', 'feature', '-m', 'merge feature');
+
+  assert.equal(f.run(['--reuse']).exitCode, 0);
+  assert.equal(f.readSeen().runs, 2);
+});
+
+test('a changed ignored lockfile misses the pass', (t) => {
+  const f = fixture(t, 'herdr-suite-lockfile-');
+  commitFile(f.root, '.gitignore', 'package-lock.json\n');
+  fs.writeFileSync(path.join(f.root, 'package-lock.json'), 'one\n');
+  assert.equal(f.run([]).exitCode, 0);
+  assert.equal(f.run(['--reuse']).exitCode, 0);
+  assert.equal(f.readSeen().runs, 1);
+  fs.writeFileSync(path.join(f.root, 'package-lock.json'), 'two\n');
+  assert.equal(f.run(['--reuse']).exitCode, 0);
+  assert.equal(f.readSeen().runs, 2);
+});
+
+test('a pass made in another worktree of the repository is reused', (t) => {
+  const f = fixture(t, 'herdr-suite-worktree-');
+  assert.equal(f.run([]).exitCode, 0);
+  const other = path.join(f.base, 'other');
+  git(f.root, 'worktree', 'add', '--detach', other);
+  const config = loadProjectConfig({ cwd: other });
+  assert.equal(f.run(['--reuse'], 0, { config }).exitCode, 0);
+  assert.equal(f.readSeen().runs, 1);
+});
+
+test('an invalid suiteUntested list is ignored as a whole by the key', async (t) => {
+  const { cleanTreeKey, DEFAULT_SUITE_UNTESTED } = await import('../src/kit/suite-passes.js');
+  const f = fixture(t, 'herdr-suite-untested-ignored-');
+  const fallback = cleanTreeKey(f.root, DEFAULT_SUITE_UNTESTED);
+  assert.equal(cleanTreeKey(f.root, ['**']).tested, fallback.tested);
+  assert.equal(cleanTreeKey(f.root, ['notes/**', 'src/**']).tested, fallback.tested);
+  assert.notEqual(cleanTreeKey(f.root, ['notes/**']).tested, fallback.tested);
+});
+
+test('dir/** matches only paths below dir, never dir itself', async (t) => {
+  const { globMatches } = await import('../src/kit/config.js');
+  assert.equal(globMatches('.worker/**', '.worker'), false);
+  assert.equal(globMatches('.worker/**', '.worker/a'), true);
+  assert.equal(globMatches('.worker/**', '.worker/a/b.md'), true);
+  assert.equal(globMatches('**', 'a'), true);
+  assert.equal(globMatches('a/**/b', 'a/b'), true);
+
+  const f = fixture(t, 'herdr-suite-untested-file-named-dir-');
+  assert.equal(f.run([]).exitCode, 0);
+  commitFile(f.root, '.worker', 'a tracked file named like the folder\n');
+  assert.equal(f.run(['--reuse']).exitCode, 0);
+  assert.equal(f.readSeen().runs, 2, 'a tracked file named .worker is tested');
 });

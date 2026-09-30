@@ -13,7 +13,7 @@ import { createItemSaver, createTapGuard, startViewedTimer } from './review-save
 import { createWizard } from './project-wizard-ui.js';
 import { goalSetBlockHtml, goalDialogHtml, goalJobRunning, goalStatusText, pollGoalStatus } from './goal-set.js';
 import { buildDraftShares, draftSignature, shareTotal, distributeRemainder, moveShares, totalHtml, checkSave, confirmText, sumConfirmText, allocationFooterHtml, staleRowHtml } from './allocation-draft.js';
-import { stackedBars, lineChart, stripBars, outcomeBars, legendHtml, foldSeries, spendSeries, claudeSpend, quotaSeries, firstTimeRate, activityFilter, activityChoices, eventLevel, dayLabel, usd, minutes, compact, ACTIVITY_RANGES, ACTIVITY_LEVELS, SERIES_CLASSES, DENIAL_RANGES, DEFAULT_DENIAL_RANGE, denialRange, denialSeries, denialMarkers, denialDetailsHtml, denialLegendHtml, policyChangesTitle, policyChangesListHtml, policyChangesDetailsHtml } from './analytics.js';
+import { stackedBars, lineChart, stripBars, outcomeBars, legendHtml, foldSeries, spendSeries, claudeSpend, quotaSeries, firstTimeRate, activityFilter, activityChoices, eventLevel, dayLabel, usd, minutes, compact, ACTIVITY_RANGES, ACTIVITY_LEVELS, SERIES_CLASSES, DENIAL_RANGES, DEFAULT_DENIAL_RANGE, denialRange, denialSeries, denialMarkers, denialDetailsHtml, denialLegendHtml, policyChangesTitle, policyChangesListHtml, policyChangesDetailsHtml, lockWaitSeries, lockWaitDetailsHtml } from './analytics.js';
 
 const $app = document.getElementById('app');
 // A visual check can force a theme with ?theme=light or ?theme=dark. Without it, the page follows the system.
@@ -54,7 +54,7 @@ const DENIAL_RANGE_KEY = 'herdr-boss.denialRange';
 function loadDenialRange() {
   try { return denialRange(localStorage.getItem(DENIAL_RANGE_KEY)); } catch { return DEFAULT_DENIAL_RANGE; }
 }
-const analyticsUi = { spendBy: 'role', denialHarness: 'all', denialRange: loadDenialRange(), open: new Set(), log: { kind: 'all', project: 'all', level: 'all', range: '24h', q: '' } };
+const analyticsUi = { spendBy: 'role', lockProject: 'all', denialHarness: 'all', denialRange: loadDenialRange(), open: new Set(), log: { kind: 'all', project: 'all', level: 'all', range: '24h', q: '' } };
 let browserSessions = [];
 const browserMessages = {};
 const browserPreviewOpen = new Set();
@@ -1988,6 +1988,7 @@ function analyticsView(s) {
     denialsBlock(s),
     '</div></div><div class="viz-group" data-key="grp:machine"><h2>Machine and locks</h2><div class="viz-grid">',
     timelineChart(s),
+    lockWaitBlock(),
     machineHoursBlock(),
     '</div></div><div class="viz-group" data-key="grp:notices"><h2>Notices and activity</h2><div class="viz-grid">',
     noticeChart(),
@@ -4448,6 +4449,26 @@ function timelineChart() {
   });
 }
 
+// Wait and hold of the machine-wide locks for each day from /api/analytics, counted from the lock ledger. The filter picks one project.
+function lockWaitBlock() {
+  const locks = analyticsData?.locks;
+  const base = { id: 'lock-wait', title: 'Lock wait and hold' };
+  if (!locks?.projects?.length) return vizCard({ ...base, empty: 'No lock use is recorded in the last 7 days.' });
+  const win = lockWaitSeries(locks, analyticsUi.lockProject);
+  const who = win.project === 'all' ? 'all projects' : win.project;
+  const title = `${minutes(win.totals.wait)} waiting and ${minutes(win.totals.hold)} holding in 7 days (${who})`;
+  const fmt = (v) => minutes(v);
+  const controls = `<div class="viz-controls">${vizSwitch('lock-project', win.project, [['all', 'All'], ...win.projects.map((p) => [p, p])], 'Show the locks of')}</div>`;
+  return vizCard({
+    ...base, title,
+    sub: 'Last 7 days, one bar for each day. The lower part is the time a run held the lock. The upper part is the time a run waited for it. A run that reused a pass holds no lock and adds nothing.',
+    controls,
+    legend: legendHtml(win.series.map((x) => ({ ...x, label: `${x.label} ${minutes(win.totals[x.key])}` }))),
+    chart: stackedBars({ cats: win.days.map((day) => ({ label: dayLabel(day), tip: dayLabel(day, true) })), series: win.series, fmt, label: title }),
+    details: lockWaitDetailsHtml(win, locks),
+  });
+}
+
 function noticeChart() {
   const n = analyticsData?.notices;
   const base = { id: 'notices', title: 'Notices per pane' };
@@ -4555,6 +4576,8 @@ document.addEventListener('pointerdown', (e) => { if (!e.target.classList?.conta
 document.addEventListener('click', (e) => {
   const by = e.target.closest?.('[data-spend-by]');
   if (by) { analyticsUi.spendBy = by.dataset.spendBy; render(); return; }
+  const lockProject = e.target.closest?.('[data-lock-project]');
+  if (lockProject) { analyticsUi.lockProject = lockProject.dataset.lockProject; render(); return; }
   const harness = e.target.closest?.('[data-denial-harness]');
   if (harness) { analyticsUi.denialHarness = harness.dataset.denialHarness; render(); return; }
   const range = e.target.closest?.('[data-denial-range]');
@@ -5398,6 +5421,7 @@ const HELP = {
     <p>A flag on the chart marks a day on which a harness fix went in. The flags come from <code>harness-changes.jsonl</code> in the data folder, one JSON object on each line: <code>date</code> (YYYY-MM-DD), <code>harness</code> (<code>claude</code>, <code>codex</code>, <code>opencode</code>, or <code>pi</code>), and <code>label</code> (up to 80 characters). Add a line with <code>herdr-boss harness change HARNESS LABEL [--date YYYY-MM-DD]</code>. Hover, focus, or touch a flag to read its date, harness, and label. Details lists the days, both series, and the flags. The small table in Details shows counts for the last 7 days by harness, model, and cause. It shows up to 10 rows.</p>
     <p>The table in Details shows the last 7 days by cause and project. The arrow compares the last 24 hours with the mean of the 6 days before. When a cause is above 2 times its mean and above 10 events, the page and the bulletin show <b>Discuss this trend with the Boss.</b> Herdr Boss sends no prompt to an orchestrator about it. While more than 1 MB of older logs is unread, the note waits, because the counts of older days are not complete.</p>
     <p>A read-only line shows the limits: the scan interval, the bytes for one scan, the days kept, and the rise rule.</p>
+    <h3>Lock wait and hold</h3><p>Bars show, for each of the last 7 days, the time that runs held a machine lock (lower part) and the time that runs waited for it (upper part). Choose a project to see only its runs. A push or a suite run that reused a suite pass takes no lock and adds no time. Details lists the days and the projects with their runs and timeouts.</p>
     <h3>Machine load and lock waits</h3><p>Lines show the 5-minute load as a percent of the cores, the memory in use, and the swap in use over the last 24 hours, in columns of 10 minutes. A shaded column had a lock holder. The strip under the chart shows the minutes in which a suite request waited in the queue.</p>
     <h3>Machine overload and idle waiting</h3><p>The chart shows, for each hour of the day in local time, the mean minutes per day of two conditions over the last 14 days. <b>Overload</b>: swap above 90% with at least 1 GB in use, or a 5-minute load above 3 times the cores. <b>Queue waited, CPU under 50%</b>: a suite request waited in the <code>full-suite</code> queue while the CPU was not the reason.</p>
     <p>Hover, focus, or touch an hour to read its values. Hatched bars have fewer than 10 samples. A note shows when samples cover less than half of the window; a minute without a sample is missing data. The table under the chart has the same 24 rows. On a phone the chart scrolls sideways inside its own box.</p>

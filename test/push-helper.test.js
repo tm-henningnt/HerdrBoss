@@ -6,7 +6,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import test from 'node:test';
 import { loadProjectConfig } from '../src/kit/config.js';
 import { runKitCommand } from '../src/kit/cli.js';
-import { withMutationLock } from '../src/kit/locks.js';
+import { acquireProjectLock, readLockLedger, releaseProjectLock, withMutationLock } from '../src/kit/locks.js';
 
 function git(cwd, ...args) {
   return execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -480,4 +480,150 @@ test('a worker in a .herdr-wt worktree without its own project file takes the lo
   assert.equal(acquired.ownerPane, 'ws:worker');
   assert.equal(acquired.project, 'tmalpha');
   runKitCommand('lock', ['release', 'full-suite'], f.options('ws:worker', workerConfig));
+});
+
+// A hook that runs one suite through the real CLI, like the hook of a project. The fake git runs the hook for git push.
+function suiteHookFixture(t, prefix) {
+  const f = fixture(t, prefix);
+  const cli = path.resolve('src/cli.js');
+  const hook = path.join(f.root, '.git', 'hooks', 'pre-push');
+  const hookLock = path.join(f.base, 'hook-lock');
+  fs.mkdirSync(path.dirname(hook), { recursive: true });
+  fs.writeFileSync(hook, [
+    '#!/bin/sh',
+    `${shellQuote(process.execPath)} ${shellQuote(cli)} suite --wait 1 -- node -e 0 > ${shellQuote(path.join(f.base, 'suite-output'))} 2>&1`,
+  ].join('\n') + '\n');
+  fs.chmodSync(hook, 0o755);
+  // The fake git runs this wrapper for git push. It records the lock state, then runs the hook file.
+  const wrapper = path.join(f.base, 'wrapper.sh');
+  fs.writeFileSync(wrapper, [
+    '#!/bin/sh',
+    `if [ -f ${shellQuote(f.lockFile)} ]; then printf locked > ${shellQuote(hookLock)}; else printf unlocked > ${shellQuote(hookLock)}; fi`,
+    `exec ${shellQuote(hook)}`,
+  ].join('\n') + '\n');
+  fs.chmodSync(wrapper, 0o755);
+  const calls = installFakeGit(t, f, wrapper);
+  installFakeHerdr(f);
+  const options = () => {
+    const base = f.options();
+    return {
+      ...base,
+      env: { ...process.env, ...base.env, HERDR_BOSS_DIR: f.dataDir },
+      pidAlive: (pid) => { try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; } },
+    };
+  };
+  const push = (extra = {}) => runKitCommand('push', ['origin', 'main'], { ...options(), ...extra });
+  const pushCount = () => fs.readFileSync(calls, 'utf8').split('\n').filter(Boolean).length;
+  const ledger = () => readLockLedger({ dataDir: f.dataDir });
+  const hookSawLock = () => fs.readFileSync(hookLock, 'utf8');
+  return { ...f, options, push, pushCount, ledger, hookSawLock };
+}
+
+test('a push with a reusable suite pass takes no full-suite lock', (t) => {
+  const f = suiteHookFixture(t, 'herdr-push-reuse-');
+  const first = f.push();
+  assert.equal(first.exitCode, 0);
+  assert.equal(first.locked, true, 'the first push learns the hook suite and takes the lock');
+  assert.equal(f.hookSawLock(), 'locked');
+
+  const second = f.push();
+  assert.equal(second.exitCode, 0);
+  assert.equal(second.locked, false);
+  assert.equal(second.reused, true);
+  assert.equal(f.hookSawLock(), 'unlocked');
+  assert.equal(f.pushCount(), 2);
+  assert.ok(f.lines.some((line) => /suite pass/i.test(line) && /without the full-suite lock/i.test(line)), f.lines.join('\n'));
+  const reused = f.ledger().filter((line) => line.kind === 'push' && line.reused === true);
+  assert.deepEqual(reused.map((line) => line.event), ['acquire', 'release']);
+  assert.equal(reused[0].name, 'full-suite');
+  assert.equal(reused[0].waitMs, 0);
+  assert.equal(reused[1].holdMs, 0);
+  assert.equal(f.ledger().filter((line) => line.kind === 'push' && !line.reused && line.event === 'acquire').length, 1);
+});
+
+test('a reusable push does not queue behind a held full-suite lock', (t) => {
+  const f = suiteHookFixture(t, 'herdr-push-reuse-busy-');
+  assert.equal(f.push().exitCode, 0);
+  const holder = f.options();
+  acquireProjectLock('full-suite', { ...holder, config: f.config, dataDir: f.dataDir, kind: 'suite', output: () => {} });
+  t.after(() => { try { releaseProjectLock('full-suite', { ...holder, config: f.config, dataDir: f.dataDir, output: () => {} }); } catch {} });
+
+  const result = f.push({ pause: () => { throw new Error('the push waited for the lock'); } });
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.reused, true);
+  const queue = path.join(f.dataDir, 'locks', 'machine', 'queue', 'full-suite');
+  assert.deepEqual(fs.existsSync(queue) ? fs.readdirSync(queue).filter((name) => name.endsWith('.json')) : [], []);
+});
+
+test('a push takes the full-suite lock when the tree has no pass', (t) => {
+  const f = suiteHookFixture(t, 'herdr-push-no-pass-');
+  assert.equal(f.push().exitCode, 0);
+  fs.writeFileSync(path.join(f.root, 'README.md'), 'changed\n');
+  git(f.root, 'commit', '-am', 'change a tested file');
+
+  const result = f.push();
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.locked, true);
+  assert.equal(result.reused, undefined);
+  assert.equal(f.hookSawLock(), 'locked');
+  assert.equal(f.ledger().filter((line) => line.reused).length, 0);
+});
+
+test('a push after a change to an untested path reuses the pass', (t) => {
+  const f = suiteHookFixture(t, 'herdr-push-untested-');
+  assert.equal(f.push().exitCode, 0);
+  fs.mkdirSync(path.join(f.root, '.worker'));
+  fs.writeFileSync(path.join(f.root, '.worker', 'report.md'), 'report\n');
+  git(f.root, 'add', '.worker/report.md');
+  git(f.root, 'commit', '-m', 'add a report');
+
+  const result = f.push();
+
+  assert.equal(result.reused, true);
+  assert.equal(result.locked, false);
+});
+
+test('a push does not reuse a pass of a dirty tree or of a hook that runs no suite', (t) => {
+  const f = suiteHookFixture(t, 'herdr-push-dirty-');
+  assert.equal(f.push().exitCode, 0);
+  fs.writeFileSync(path.join(f.root, 'scratch.txt'), 'dirty\n');
+  assert.equal(f.push().locked, true, 'an untracked tested file blocks reuse');
+  fs.rmSync(path.join(f.root, 'scratch.txt'));
+
+
+  const g = suiteHookFixture(t, 'herdr-push-plain-hook-');
+  fs.writeFileSync(path.join(g.root, '.git', 'hooks', 'pre-push'), '#!/bin/sh\nexit 0\n');
+  assert.equal(g.push().locked, true);
+  assert.equal(g.push().locked, true, 'a hook that runs no suite leaves no command, so no push reuses a pass');
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(g.dataDir, 'push-hooks.json'), 'utf8')), []);
+});
+
+test('a failed reused push still reports the git exit code', (t) => {
+  const f = suiteHookFixture(t, 'herdr-push-reuse-fail-');
+  assert.equal(f.push().exitCode, 0);
+  const hook = path.join(f.root, '.git', 'hooks', 'pre-push');
+  const text = fs.readFileSync(hook, 'utf8');
+  fs.writeFileSync(hook, `${text}exit 7\n`);
+  assert.equal(f.push().exitCode, 7, 'the changed hook locks and learns');
+  const result = f.push();
+  assert.equal(result.reused, true);
+  assert.equal(result.exitCode, 7);
+  assert.equal(fs.existsSync(f.lockFile), false);
+});
+
+test('a changed hook file misses, and a hook with a raw test command is never reusable', (t) => {
+  const f = suiteHookFixture(t, 'herdr-push-hook-change-');
+  assert.equal(f.push().exitCode, 0);
+  assert.equal(f.push().reused, true);
+  const hook = path.join(f.root, '.git', 'hooks', 'pre-push');
+  fs.appendFileSync(hook, '# changed\n');
+  assert.equal(f.push().locked, true, 'a changed hook file is a miss');
+  assert.equal(f.push().reused, true, 'the next push learns the new hook');
+
+  fs.appendFileSync(hook, 'npm test\n');
+  assert.equal(f.push().locked, true, 'a raw test command makes the hook non-reusable');
+  assert.equal(f.push().locked, true);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(f.dataDir, 'push-hooks.json'), 'utf8')), []);
 });
