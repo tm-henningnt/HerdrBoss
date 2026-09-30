@@ -1,5 +1,6 @@
 // The phone bars of the Mailbox. On a phone the actions of the open item and of a selection sit in a bar at the bottom edge, in reach of the thumb.
 // The module has no DOM use, so the Node tests import it directly.
+import { reviewOpenLinkHtml } from './review.js';
 
 const OPEN_ACTIONS = new Set(['answer', 'approve', 'decide']);
 
@@ -23,7 +24,11 @@ export function mailActionBarHtml(item, helpers) {
   const note = (label) => `<button type="button" class="app-icon-button mail-bar-icon" data-mail-note="${id}" aria-label="${label}" title="${label}"${off}>${icon('pencil')}</button>`;
   const noteShown = noteOpen || Boolean(draft);
   let rows;
-  if (item.action === 'approve') {
+  // A review item has no answer field. The Owner answers in the review pages, and the submit closes the item.
+  const review = reviewOpenLinkHtml(item, esc);
+  if (review) {
+    rows = `<div class="mail-bar-row">${review}${dismiss}</div>`;
+  } else if (item.action === 'approve') {
     rows = `${noteShown ? `<div class="mail-bar-row mail-bar-compose">${field('Note (optional)', 1700, false, 'Note (optional)')}</div>` : ''}`
       + `<div class="mail-bar-row"><button type="submit" class="mail-bar-primary" data-mail-verdict="Approved."${off}>Approve</button><button type="submit" class="mail-decline" data-mail-verdict="Rejected."${off}>Reject</button>${noteShown ? '' : note('Add a note')}${dismiss}</div>`;
   } else if (choices) {

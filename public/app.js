@@ -6,6 +6,7 @@ import { groupMailRows, inboxSections, listTime, mailRowHtml } from './mail-rows
 import { chatJumpHtml, chatJumpButtonHtml, chatAtBottom, chatJumpScroll } from './chat-jump.js';
 import { mailBarItem, mailActionBarHtml, mailSelectionBarHtml } from './mail-bar.js';
 import { APP_VIEW_ROUTES, appViewport } from './app-view.js';
+import { parseReviewPath, reviewItemFromHash, reviewUrl, packListHtml, packPageHtml, reviewMessageHtml, reviewKeyAction, reviewOpenLinkHtml, reviewErrorText, submitConfirmText, pinProposedVerdict } from './review.js';
 import { createWizard } from './project-wizard-ui.js';
 import { stackedBars, lineChart, stripBars, outcomeBars, legendHtml, foldSeries, spendSeries, claudeSpend, quotaSeries, firstTimeRate, activityFilter, activityChoices, eventLevel, dayLabel, usd, minutes, compact, ACTIVITY_RANGES, ACTIVITY_LEVELS, SERIES_CLASSES, DENIAL_RANGES, DEFAULT_DENIAL_RANGE, denialRange, denialSeries, denialMarkers, denialDetailsHtml, denialLegendHtml } from './analytics.js';
 
@@ -19,7 +20,7 @@ const $nav = document.getElementById('primary-nav');
 const $roamgate = document.getElementById('roamgate-link');
 const $navMenu = document.getElementById('nav-menu');
 const $navMenuLabel = document.getElementById('nav-menu-label');
-const NAV_LABEL = { overview: 'Overview', board: 'Board', mailbox: 'Mailbox', chat: 'Chat', agents: 'Agents', projects: 'Projects', browsers: 'Browsers', allocation: 'Allocation', analytics: 'Analytics', settings: 'Settings' };
+const NAV_LABEL = { overview: 'Overview', board: 'Board', mailbox: 'Mailbox', reviews: 'Reviews', chat: 'Chat', agents: 'Agents', projects: 'Projects', browsers: 'Browsers', allocation: 'Allocation', analytics: 'Analytics', settings: 'Settings' };
 const settingsLink = document.createElement('a');
 settingsLink.href = '/settings';
 settingsLink.dataset.nav = 'settings';
@@ -2556,7 +2557,7 @@ function appMenuButton(s, route) {
 // The drawer holds the Mailbox folders (on the Mailbox) and the links to all pages. It replaces the page header on a phone.
 function appDrawer(s, route, folderLinks = '') {
   const counts = topIconCounts(s);
-  const pages = [['/', 'Overview'], ['/board', 'Board'], ['/mailbox', 'Mailbox', counts['needs-action']], ['/chat', 'Chat', counts.chat], ['/agents', 'Agents'], ['/projects', 'Projects'], ['/browsers', 'Browsers'], ['/allocation', 'Allocation'], ['/analytics', 'Analytics']];
+  const pages = [['/', 'Overview'], ['/board', 'Board'], ['/mailbox', 'Mailbox', counts['needs-action']], ['/reviews', 'Reviews'], ['/chat', 'Chat', counts.chat], ['/agents', 'Agents'], ['/projects', 'Projects'], ['/browsers', 'Browsers'], ['/allocation', 'Allocation'], ['/analytics', 'Analytics']];
   const links = pages.map(([href, label, count]) => `<a href="${href}"${href.slice(1) === route ? ' aria-current="page"' : ''}><span>${label}</span>${count ? `<span class="app-drawer-count num">${count > 99 ? '99+' : count}</span>` : ''}</a>`).join('');
   return `<div class="app-drawer" id="app-drawer" data-key="app-drawer"${appDrawerOpen ? '' : ' hidden'}><button type="button" class="app-drawer-scrim" data-app-drawer-close tabindex="-1" aria-label="Close the menu"></button>`
     + `<nav class="app-drawer-panel" aria-label="Menu"><div class="app-drawer-head"><span class="app-drawer-brand">Herdr Boss</span><button type="button" class="app-icon-button" data-app-drawer-close aria-label="Close the menu">${appIcon('close')}</button></div>`
@@ -2701,7 +2702,7 @@ function mailConversationMessage(s, record, barItem) {
   const meta = `${mailItemLabel(s, record)} · ${clock(record.at)}`;
   const delivery = owner ? mailDeliveryState(record) : record.action ? `Action: ${record.action}` : '';
   const status = delivery ? `<p class="mail-message-state">${esc(delivery)}${owner && record.repliedAt ? ` · replied ${esc(clock(record.repliedAt))}` : ''}</p>` : '';
-  const controls = item && item.closedAt ? mailDoneLine(item) : item && item === barItem ? '' : item && ['answer', 'approve', 'decide'].includes(item.action) ? mailActions(item) : '';
+  const controls = item && item.closedAt ? mailDoneLine(item) : item && item === barItem ? '' : item && item.kind === 'review' ? reviewOpenLinkHtml(item, esc) : item && ['answer', 'approve', 'decide'].includes(item.action) ? mailActions(item) : '';
   return `<li><article class="mail-message${owner ? ' from-owner' : ''}"><header class="mail-message-head"><strong>${esc(meta)}</strong></header>${messageBody(record)}${status}${controls}</article></li>`;
 }
 
@@ -5117,10 +5118,19 @@ const HELP = {
     <h3>Refresh</h3><p>The page reads new data every 30 seconds. It changes only the rows and messages that changed. It keeps the open conversation, the selection, the typed text, the caret, and the scroll position. The refresh waits until 3 seconds after you last type or scroll.</p>
     <p>Use the reply box to answer the last agent message. When that message is an open item, its own form replaces the reply box. The page asks you to confirm each send. Herdr Boss delivers the message when the agent is working, idle, or done.</p>
     <h3>Markdown</h3><p>The page shows headings, bold, italic, lists, task lists, tables, code, quotes, rules, and links. A wide table or code block scrolls sideways in its own box. Raw HTML shows as text. A link opens only when it uses <code>http</code>, <code>https</code>, or <code>mailto</code>, or a local path. An external link opens in a new tab.</p>
-    <h3>Actions</h3><p><b>Answer</b>: type an answer and select <b>Send</b>. <b>Approve</b>: select <b>Approve</b> or <b>Reject</b>. A note is optional. <b>Decide</b>: select a choice, or type an answer and select <b>Send</b>. Choice buttons appear when the message has a Markdown list under a <b>Choices</b> heading. Each answer uses the same delivery limit and safety checks as a new message. An answered item moves to <b>Done</b>.</p>
+    <h3>Actions</h3><p><b>Answer</b>: type an answer and select <b>Send</b>. <b>Approve</b>: select <b>Approve</b> or <b>Reject</b>. A note is optional. <b>Decide</b>: select a choice, or type an answer and select <b>Send</b>. Choice buttons appear when the message has a Markdown list under a <b>Choices</b> heading. A review pack item has <b>Open review</b> in place of the answer form. The submit of the review closes the item. Each answer uses the same delivery limit and safety checks as a new message. An answered item moves to <b>Done</b>.</p>
     <h3>Compose</h3><p>Select <b>New message</b> to write to the Boss or a project with an <code>orch</code> pane. The page asks you to confirm before it sends. The new conversation opens in <b>Sent</b>.</p>
     <h3>Phone</h3><p>The Mailbox fills the screen. The page header does not show. Select the menu button at the top left to open the drawer with the folders, the other pages, and Help. A dot on the menu button shows unread chats. Select <b>New</b> at the bottom right to write a message. The desktop Mailbox badge shows unread Needs-you items.</p><p>In a conversation, the actions of the open item sit in a bar at the bottom edge. An approval has <b>Approve</b>, <b>Reject</b>, a note button, and <b>Dismiss</b>. A decision has its choice buttons, a note button, and <b>Dismiss</b>. The choice buttons wrap onto more rows, so each choice stays in view. An answer has <b>Dismiss</b>, the answer field, and <b>Send</b>. The note button opens a text field. When the keyboard opens, the bar stays above it.</p><p>In Needs you, select a check box to start a selection. The selection bar replaces <b>New</b> at the bottom edge. It shows the count, a button to clear the selection, <b>All</b>, and <b>Dismiss</b> with the count.</p>
     <p>The folder pane shows the fixed limits: Herdr Boss keeps messages for 30 days and accepts at most 10 Owner messages a minute. A read-only preview shows messages and refuses a read or a send.</p>`],
+  reviews: ['Reviews', `
+    <p>A project sends you a review pack when it needs your decision on evidence: screenshots, text, tables, or a live check. Each item of the pack asks one question. You answer the items, write a note for the whole pack, and submit one result. The result goes to the project orchestrator.</p>
+    <h3>Pack list</h3><p><b>Open</b> holds the packs that wait for your answers. <b>Done</b> holds the submitted and the expired packs, each with its verdict. A row shows the project, the pack title, the version, the time of the last change, and the count of answered items. A row with <b>N changed</b> has items that changed after your answer. The Mailbox item of a pack opens the same page with <b>Open review</b>.</p>
+    <h3>Progress bar</h3><p>The bar shows the item states in a fixed order: <b>Accepted</b>, <b>Note only</b>, <b>Needs live check</b>, <b>Denied</b>, and <b>Open</b>. Accepted also counts a choice or a rating. The Denied segment has stripes, so it differs from Needs live check without color. The legend under the bar names each state with its count.</p>
+    <h3>Sections</h3><p>The pack page shows one block for each section, with its state and its count of answered items. Select a section title to fold or unfold its items. Each item row shows the item type, the title, the state, and a check mark when you viewed it. A viewed and answered item shows as a short, faded row. <b>Changed</b> marks an item that changed after your answer. It counts as open until you answer again. Select an item to open it. The item page keeps the address of the item. Back returns to the same row.</p>
+    <h3>Summary and submit</h3><p>The summary under the sections lists the items by state, with open items first and your notes under each item. Write a note for the whole pack in the note field. The page saves the note 1 second after you stop typing. Select a verdict: <b>Approve</b>, <b>Request changes</b>, or <b>Comment</b>. The page selects the proposed verdict from the item states when it first shows the pack version. A later answer does not move the selection. Select <b>Submit review</b> in the bar at the bottom. The page asks you to confirm and names the pack, the version, the verdict, and the counts. Then it sends the result. A submit with open items is allowed. The result lists them as open.</p>
+    <h3>Keys</h3><p><kbd>j</kbd> and <kbd>k</kbd> move to the next or the previous row. <kbd>J</kbd> and <kbd>K</kbd> move to the next or the previous section. <kbd>Enter</kbd> opens the row. <kbd>u</kbd> or <kbd>Esc</kbd> goes back. <kbd>s</kbd> goes to the summary. <kbd>?</kbd> opens this help. The keys do nothing while the focus is in a text field, except <kbd>Esc</kbd>, which leaves the field.</p>
+    <h3>Phone and desktop</h3><p>On a phone the page fills the screen, and the bar with <b>Submit review</b> sits at the bottom edge. Select the menu button at the top left to open the other pages. On a screen of 900 px or wider, the sections are at the left and the summary is at the right.</p>
+    <p>A read-only preview shows the packs and refuses each answer, note, and submit with a message.</p>`],
   chat: ['Chat', `
     <p>The Chat page shows one conversation for the Boss and one for each project orchestrator. The page has no large heading. On a desktop the chat list and the open chat fill the window. Above the conversation there is one slim bar with the avatar, the chat name, and a link to the Mailbox.</p>
     <h3>Channels</h3><p><b>Chat</b> holds the conversation. A normal reply, an Owner message, a nudge, and a status request stay in Chat only. A reply that asks you for an <b>answer</b>, an <b>approval</b>, or a <b>decision</b> shows in Chat and in Mailbox <b>Needs you</b> while it is open. A <b>report</b> from the Boss is mail. It shows in Mailbox <b>Updates</b> and as one short line in Chat. A normal reply never shows in Updates. Your answer to a Mailbox item shows only in the Mailbox. Your reply to a normal message stays in the Chat. An agent that needs an answer, an approval, or a decision uses <code>herdr-boss say --action</code>.</p>
@@ -5231,6 +5241,7 @@ const HELP = {
 
 function currentRoute() {
   if (/^\/(projects|p)(\/|$)/.test(location.pathname)) return 'projects';
+  if (parseReviewPath(location.pathname)) return 'reviews';
   const name = location.pathname.slice(1);
   return HELP[name] ? name : 'overview';
 }
@@ -5263,6 +5274,216 @@ document.addEventListener('click', (e) => {
   if (e.target.closest?.('#nav-menu') || e.target.closest?.('#primary-nav')) return;
   setNavMenu(false);
 });
+
+// ---------- Reviews ----------
+// The pack list and the section list of hosted review packs. public/review.js renders them. This part loads the data and handles the events.
+
+const REVIEW_RELOAD_MS = 30000;
+const REVIEW_NOTE_DELAY_MS = 1000;
+const reviews = { open: null, done: null, error: '', loading: false, listAt: 0, packs: {}, ui: {}, revealed: '', path: '' };
+const reviewKey = (slug, pack) => `${slug}/${pack}`;
+const reviewUi = (key) => (reviews.ui[key] ||= { note: null, noteStatus: '', noteTimer: null, verdict: null, submitting: false, submitStatus: '', result: null });
+
+function reviewHelpers(s) {
+  return { esc, avatar: (slug) => avatarSlot(slug, { title: avatarTitle(slug), size: 36 }), projectLabel: (slug) => avatarTitle(slug), time: (iso) => listTime(iso), menuButton: appMenuButton(s, 'reviews') };
+}
+
+function reviewsRender() { if (currentRoute() === 'reviews') render(); }
+
+// A failed request throws a plain sentence. See reviewErrorText() in public/review.js.
+async function reviewFetch(url, options) {
+  let response;
+  try { response = await fetch(url, options); } catch { throw Object.assign(new Error(reviewErrorText({ network: true })), { status: 0, body: null }); }
+  const body = await response.json().catch(() => null);
+  if (!response.ok) throw Object.assign(new Error(reviewErrorText({ status: response.status, body })), { status: response.status, body });
+  return body;
+}
+
+async function loadReviewLists() {
+  reviews.loading = true;
+  try {
+    const [open, done] = await Promise.all(['open', 'done'].map((kind) => reviewFetch(`/api/reviews?state=${kind}`)));
+    Object.assign(reviews, { open, done, error: '' });
+  } catch (error) { reviews.error = error.message; }
+  finally { reviews.loading = false; reviews.listAt = Date.now(); reviewsRender(); }
+}
+
+async function loadReviewPack(slug, pack) {
+  const entry = reviews.packs[reviewKey(slug, pack)] ||= { data: null, error: '', status: 0, at: 0, loading: false };
+  entry.loading = true;
+  try {
+    entry.data = await reviewFetch(`/api/reviews/${encodeURIComponent(slug)}/${encodeURIComponent(pack)}`);
+    entry.error = '';
+    entry.status = 200;
+  } catch (error) { entry.error = error.message; entry.status = error.status || 0; }
+  finally { entry.loading = false; entry.at = Date.now(); reviewsRender(); }
+}
+
+function reviewsView(s) {
+  const route = parseReviewPath(location.pathname);
+  const h = reviewHelpers(s);
+  let page;
+  if (route.view === 'list') {
+    if (!reviews.loading && (!reviews.listAt || Date.now() - reviews.listAt > REVIEW_RELOAD_MS)) loadReviewLists();
+    const folder = new URLSearchParams(location.search).get('folder') === 'done' ? 'done' : 'open';
+    page = packListHtml({ folder, open: reviews.open, done: reviews.done, error: reviews.error }, h);
+  } else if (route.view === 'missing') {
+    page = reviewMessageHtml('Review not found', 'This address names no review pack.', h);
+  } else {
+    const key = reviewKey(route.slug, route.pack);
+    const entry = reviews.packs[key];
+    if (!entry || (!entry.loading && Date.now() - entry.at > REVIEW_RELOAD_MS)) loadReviewPack(route.slug, route.pack);
+    if (entry?.data) {
+      const ui = pinProposedVerdict(reviewUi(key), entry.data);
+      page = packPageHtml(entry.data, { ...ui, current: reviewItemFromHash(location.hash), item: route.view === 'item' ? route.item : undefined }, h);
+    } else if (entry?.error && entry.status === 404) page = reviewMessageHtml('Review not found', 'This review pack does not exist. The project can have deleted it.', h);
+    else if (entry?.error) page = reviewMessageHtml('Review', `The review could not load. ${entry.error}`, h, { alert: true, retry: true });
+    else page = reviewMessageHtml('Review', 'Loading the review…', h);
+  }
+  return `<div class="reviews-layout" data-key="reviews"${appDrawerOpen ? ' inert' : ''}>${page}</div>${appDrawer(s, 'reviews')}`;
+}
+
+// A new address starts at the top. A #item=<id> hash scrolls to that row and focuses it once.
+function reviewsAfterRender() {
+  const path = location.pathname + location.search;
+  if (reviews.path !== path) {
+    reviews.path = path;
+    for (const node of $app.querySelectorAll('.review-body, .review-scroll')) node.scrollTop = 0;
+  }
+  const item = reviewItemFromHash(location.hash);
+  const mark = path + location.hash;
+  if (!item || reviews.revealed === mark) return;
+  const row = $app.querySelector(`[data-review-row="${CSS.escape(item)}"]`);
+  if (!row) return;
+  reviews.revealed = mark;
+  row.closest('details')?.setAttribute('open', '');
+  row.scrollIntoView({ block: 'center' });
+  row.focus({ preventScroll: true });
+}
+
+function reviewRoutePack() {
+  const route = parseReviewPath(location.pathname);
+  if (!route?.pack) return null;
+  const key = reviewKey(route.slug, route.pack);
+  return { route, key, entry: reviews.packs[key], ui: reviewUi(key) };
+}
+
+async function saveReviewNote() {
+  const current = reviewRoutePack();
+  if (!current?.entry?.data || current.ui.note === null) return;
+  const { route, entry, ui } = current;
+  clearTimeout(ui.noteTimer);
+  ui.noteTimer = null;
+  if (ui.note === entry.data.note) return;
+  const note = ui.note;
+  ui.noteStatus = 'Saving…';
+  reviewsRender();
+  try {
+    const saved = await reviewFetch(`/api/reviews/${encodeURIComponent(route.slug)}/${encodeURIComponent(route.pack)}/note`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ note, rev: entry.data.noteRev }) });
+    entry.data.note = saved.note;
+    entry.data.noteRev = saved.rev;
+    ui.noteStatus = ui.note === note ? 'Saved' : 'Saving…';
+  } catch (error) {
+    if (error.status === 409 && error.body?.current) {
+      entry.data.note = error.body.current.note;
+      entry.data.noteRev = error.body.current.rev;
+      ui.note = error.body.current.note;
+      ui.noteStatus = 'The note changed on another device. The page shows the saved note.';
+    } else ui.noteStatus = `Not saved. ${error.message}`;
+  }
+  reviewsRender();
+}
+
+async function submitReview() {
+  const current = reviewRoutePack();
+  if (!current?.entry?.data || current.ui.submitting) return;
+  const { route, entry, ui } = current;
+  const verdict = ui.verdict || ui.proposed || entry.data.derived?.proposedVerdict || 'comment';
+  const note = ui.note ?? entry.data.note ?? '';
+  if (!confirm(submitConfirmText(entry.data, verdict))) return;
+  clearTimeout(ui.noteTimer);
+  ui.submitting = true;
+  ui.submitStatus = 'Sending…';
+  reviewsRender();
+  try {
+    const saved = await reviewFetch(`/api/reviews/${encodeURIComponent(route.slug)}/${encodeURIComponent(route.pack)}/submit`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ verdict, note }) });
+    ui.result = saved.result;
+    ui.submitStatus = '';
+  } catch (error) {
+    if (error.status === 409 && error.body?.result) { ui.result = error.body.result; ui.submitStatus = 'This version was submitted before. The page shows the first result.'; }
+    else ui.submitStatus = `Not sent. ${error.message}`;
+  }
+  ui.submitting = false;
+  reviews.listAt = 0;
+  await loadReviewPack(route.slug, route.pack);
+}
+
+document.addEventListener('input', (e) => {
+  if (!e.target.matches?.('[data-review-note]')) return;
+  const current = reviewRoutePack();
+  if (!current) return;
+  current.ui.note = e.target.value;
+  current.ui.noteStatus = 'Not saved yet';
+  clearTimeout(current.ui.noteTimer);
+  current.ui.noteTimer = setTimeout(saveReviewNote, REVIEW_NOTE_DELAY_MS);
+});
+document.addEventListener('change', (e) => {
+  if (e.target.matches?.('[data-review-note]')) saveReviewNote();
+  if (e.target.matches?.('[data-review-verdict]')) { const current = reviewRoutePack(); if (current) current.ui.verdict = e.target.value; }
+});
+document.addEventListener('submit', (e) => {
+  if (!e.target.matches?.('[data-review-submit]')) return;
+  e.preventDefault();
+  submitReview();
+});
+document.addEventListener('click', (e) => {
+  if (!e.target.closest?.('[data-review-retry]')) return;
+  const route = parseReviewPath(location.pathname);
+  if (route?.pack) { delete reviews.packs[reviewKey(route.slug, route.pack)]; render(); }
+  else { reviews.error = ''; reviews.listAt = 0; render(); }
+});
+
+function reviewGo(url) {
+  history.pushState(null, '', url);
+  lastRender = '';
+  render();
+}
+
+// The list keys of the review pages. See reviewKeyAction() in public/review.js. The listener runs in the capture phase,
+// so it reads the help panel and the drawer before the Esc handlers close them.
+document.addEventListener('keydown', (e) => {
+  if (currentRoute() !== 'reviews' || appDrawerOpen || !document.getElementById('help-panel').hidden || $nav.classList.contains('open')) return;
+  const inField = Boolean(e.target.closest?.('input, textarea, select, [contenteditable="true"]'));
+  const action = reviewKeyAction({ key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, inField });
+  if (!action) return;
+  const route = parseReviewPath(location.pathname);
+  const visible = (node) => node.offsetParent !== null;
+  e.preventDefault();
+  if (action === 'leave-field') { e.target.blur(); return; }
+  if (action === 'help') { setHelp(true); return; }
+  if (action === 'back') {
+    if (route.view === 'item') reviewGo(`${reviewUrl(route.slug, route.pack)}#item=${encodeURIComponent(route.item)}`);
+    else if (route.view !== 'list') reviewGo('/reviews');
+    return;
+  }
+  if (action === 'summary') {
+    const summary = document.getElementById('review-submit');
+    if (!summary) return;
+    summary.scrollIntoView({ block: 'start' });
+    document.getElementById('review-note')?.focus({ preventScroll: true });
+    return;
+  }
+  const section = action.endsWith('-section');
+  const selector = section ? '.review-sec-h' : '[data-review-row]';
+  const nodes = [...$app.querySelectorAll(selector)].filter(visible);
+  if (!nodes.length) return;
+  const here = section ? document.activeElement?.closest?.('.review-section')?.querySelector('.review-sec-h') : document.activeElement?.closest?.('[data-review-row]');
+  const index = nodes.indexOf(here);
+  const step = action.startsWith('next') ? 1 : -1;
+  const next = nodes[index < 0 ? (step > 0 ? 0 : nodes.length - 1) : Math.min(nodes.length - 1, Math.max(0, index + step))];
+  next.focus();
+  next.scrollIntoView({ block: 'nearest' });
+}, true);
 
 // ---------- Render loop ----------
 
@@ -5335,7 +5556,7 @@ function restoreScroll(route, scroll) {
 }
 
 // These routes keep their DOM across a render. A keyed patch changes only what changed.
-const KEYED_ROUTES = ['projects', 'board', 'mailbox', 'chat', 'analytics', 'settings', 'allocation'];
+const KEYED_ROUTES = ['projects', 'board', 'mailbox', 'chat', 'analytics', 'settings', 'allocation', 'reviews'];
 
 function render(force = false) {
   if (!state) return;
@@ -5366,8 +5587,8 @@ function render(force = false) {
     history.replaceState(null, '', location.pathname + location.hash);
     requestAnimationFrame(() => { centerGraphOn(slug, pick); revealCard(slug, pick, 'center'); });
   }
-  const route = m || location.pathname === '/projects' ? 'projects' : ['board', 'mailbox', 'chat', 'allocation', 'settings', 'agents', 'browsers', 'analytics'].includes(location.pathname.slice(1)) ? location.pathname.slice(1) : 'overview';
-  const page = route === 'projects' ? projectsView(state, m ? decodeURIComponent(m[1]) : null) : route === 'board' ? boardView(state) : route === 'mailbox' ? mailboxView(state) : route === 'chat' ? chatView(state) : route === 'allocation' ? allocationView(state) : route === 'settings' ? settingsView(state) : route === 'agents' ? agentsView(state) : route === 'browsers' ? browsersView(state) : route === 'analytics' ? analyticsView(state) : overview(state);
+  const route = m || location.pathname === '/projects' ? 'projects' : parseReviewPath(location.pathname) ? 'reviews' : ['board', 'mailbox', 'chat', 'allocation', 'settings', 'agents', 'browsers', 'analytics'].includes(location.pathname.slice(1)) ? location.pathname.slice(1) : 'overview';
+  const page = route === 'projects' ? projectsView(state, m ? decodeURIComponent(m[1]) : null) : route === 'board' ? boardView(state) : route === 'mailbox' ? mailboxView(state) : route === 'reviews' ? reviewsView(state) : route === 'chat' ? chatView(state) : route === 'allocation' ? allocationView(state) : route === 'settings' ? settingsView(state) : route === 'agents' ? agentsView(state) : route === 'browsers' ? browsersView(state) : route === 'analytics' ? analyticsView(state) : overview(state);
   const html = page;
   // The Mailbox and the Chat are app views: on a phone they fill the visual viewport and hide the page header.
   document.body.classList.toggle('app-view', APP_VIEW_ROUTES.includes(route));
@@ -5407,6 +5628,7 @@ function render(force = false) {
     restoreScroll(route, scroll);
     if (route === 'analytics') denialScrollToEnd();
   }
+  if (route === 'reviews') reviewsAfterRender();
   syncSettingPopup();
   if (route === 'agents' && agentsViewMode() === 'chart') orgMotion(state);
   else orgEventMark = null;
