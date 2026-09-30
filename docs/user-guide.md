@@ -618,6 +618,56 @@ The bookmarks and the start page stay in the project record in `browser-sessions
 
 Agent commands and tab rules are in [the browser service](../kit/browser-service.md).
 
+## Board page
+
+The Board page, `/board`, shows the tasks of all projects on one kanban. It uses the same task states and colors as the board on each project page. See [Live task state](#live-task-state). A project shows on the Board when it publishes at least one task.
+
+### Columns
+
+| Column | Tasks |
+|---|---|
+| Blocked | A task that waits on a task that is not done, on the Owner, on the Boss, or on an external item. |
+| Ready | A task whose dependencies are all done. |
+| Doing | A task with a live worker, or a task published as `doing`. The longest-running worker comes first. |
+| Review | A task whose worker was collected and whose branch is not merged. |
+| Done · 24 h | The tasks with an `updated` time in the last 24 hours, newest first. A done task without a valid `updated` time does not show. |
+
+Blocked, Ready, and Review keep the project order and, in a project, the order of the project board.
+
+### Cards
+
+A card shows the project name and avatar, the task ID, the title, and the worker with its model. A Doing card also shows the elapsed time. A Blocked card shows what the task waits on: the ID and the title of each open blocker, or the Owner, the Boss, or an external item with the `ask`. A card on the critical path of its project shows **path**.
+
+Select the card title to open `/projects/SLUG?task=ID`. The project page selects the task, shows its card on the board, and centers it in the dependency graph. Select a blocker to open that task the same way. Select the project name to open the project page.
+
+### Summary strip
+
+The strip at the top shows the number of tasks in each column. The counts use the project, kind, and search filters. Select a count to show only that column. Select it again to show all columns. **Needs the Owner** shows the number of open Mailbox items that need the Owner. Select it to open the Mailbox at **Needs you**.
+
+Each project has one bar. The bar shows the tasks of the project in each state, in the column colors, on one scale for all projects. Select a bar to show only that project. Select it again to show all projects.
+
+### Filters and grouping
+
+| Control | Effect |
+|---|---|
+| Search | Shows the tasks whose project, ID, title, ask, worker name, or model holds each search word. Press `/` to go to the search. |
+| Project | Shows one project. |
+| Kind | Shows the tasks that wait for the Owner, the tasks with a worker, or the tasks of one worker harness or one model. |
+| State | Shows one column. |
+| By project | Shows one swimlane for each project. Select the swimlane title to close or open it. |
+| One board | Shows all projects in one set of columns. |
+| Clear filters | Removes the search and all filters. |
+
+The page stores the grouping, the filters, and the closed swimlanes in the browser, in `localStorage` under `herdr-boss.board`. It does not store the search.
+
+### Refresh
+
+The page updates in place with a keyed patch, the same as the project page. A refresh keeps the scroll position, the focus, and the search text. When a refresh moves a card to another column, the focus moves with the card.
+
+### Phone
+
+On a screen up to 760 px wide, the Board shows one column at a time. A tab bar shows each column with its count. Select a tab or swipe sideways to change the column. The first column with work opens, in the order Doing, Ready, Blocked, Review, Done. A row of project chips replaces the swimlanes and the project filter. Select a chip to show one project. Select **All** to show all projects. The grouping switch, the state filter, and the per-project bars do not show on a phone.
+
 ## Project status pages
 
 Orchestrators do not build dashboards. They publish a status file, and Herdr Boss shows it on `/projects/SLUG`. The page shows a board of the tasks. With the optional work structure fields, the page also shows progress, the current frontier, a dependency graph, groups, specs, and all work. See [project-status.md](project-status.md).
@@ -659,7 +709,7 @@ The board shows each task in one column of the flow. The column comes from the e
 | Review | A task whose worker was collected and whose branch is not merged. |
 | Done | The last 10 done tasks by `updated`. **Show all N done** shows the rest. |
 
-Each card shows the task ID, the title, what the task waits on, and the worker. A Blocked card names each open blocker. The blocker ID is a link that selects that task. A blocker that is not in the status shows as **ID (outside)**. A wait on the Owner links to the Mailbox conversation when the task has `mailboxId`. A Doing card shows the worker, the model, the elapsed time, and the source, for example `live from worker NAME`. A Review card shows the worker and the source.
+Each card shows the task ID, the title, what the task waits on, and the worker. A Blocked card names each open blocker. The blocker ID is a link that selects that task. A blocker that is not in the status shows as **ID (outside)**. A Blocked card always shows a reason. When `waitingOn` is `task` and no blocker is open, the card says **a task that the status does not name**. When the status gives no reason, the card says **a reason that the status does not state**. A wait on the Owner links to the Mailbox conversation when the task has `mailboxId`. A Doing card shows the worker, the model, the elapsed time, and the source, for example `live from worker NAME`. A Review card shows the worker and the source.
 
 Ready sorts by priority. The tasks on the critical path come first, then the tasks in the published group order, then the tasks in the published order. Doing puts the longest-running worker first.
 
@@ -671,11 +721,11 @@ The board and the dependency graph use the same states and the same colors. Each
 
 Select a card title to select the task. The card gets a ring. The graph marks the task and its dependency chain: all tasks that it waits on and all tasks that wait on it. The other tasks fade. Select a graph box to select its task and go to its card. Select the selected task again to clear the selection.
 
-The page updates the board and the graph in place. A refresh keeps the selection, the scroll position, the phone column, and the graph zoom. The page matches each card and each graph box by its task ID.
+The page updates the board and the graph in place. A refresh keeps the selection, the scroll position, the phone column, and the graph zoom. The page matches each card and each graph box by its task ID. When a refresh moves a card to another column, the focus moves with the card.
 
 On a phone, the board shows one column at a time. A tab bar above the board shows each column with its count. Select a tab or swipe sideways to change the column. The first column with work opens, in the order Doing, Ready, Blocked, Review, Done. The board section is open by default.
 
-A link to `/projects/SLUG#board` or `/projects/SLUG#dependencies` opens the page at that section.
+A link to `/projects/SLUG#board` or `/projects/SLUG#dependencies` opens the page at that section. A link to `/projects/SLUG?task=ID` opens the page with that task selected, shows its card on the board, and centers it in the graph. The page then removes `task` from the address. A link to a published project opens it also when its workspace is closed.
 
 ### Files
 

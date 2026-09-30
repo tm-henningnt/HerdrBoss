@@ -17,9 +17,14 @@ export function taskMap(tasks) {
   return new Map((tasks || []).filter((t) => t && t.id != null).map((t) => [String(t.id), t]));
 }
 
+// The blockedBy IDs as strings. A blockedBy that is not an array gives no IDs.
+export function blockerIds(t) {
+  return (Array.isArray(t?.blockedBy) ? t.blockedBy : []).map(String);
+}
+
 // The blockedBy IDs that are not done. An ID that is not in the tasks counts as not done.
 export function openBlockers(t, map) {
-  return (Array.isArray(t?.blockedBy) ? t.blockedBy : []).map(String).filter((id) => !doneOnly(map.get(id)));
+  return blockerIds(t).filter((id) => !doneOnly(map.get(id)));
 }
 
 export function taskState(t, map = new Map()) {
@@ -35,7 +40,40 @@ export function blockReasons(t, map) {
   if (taskState(t, map) !== 'blocked') return [];
   const reasons = openBlockers(t, map).map((id) => ({ kind: 'task', id, known: map.has(id) }));
   if (t.waitingOn && t.waitingOn !== 'task') reasons.push({ kind: t.waitingOn, ask: t.ask || null });
+  // A blocked task always shows a reason. waitingOn task without an open blocker names no task; a task without waitingOn states none.
+  if (!reasons.length) reasons.push(t.waitingOn === 'task' ? { kind: 'task', id: null, known: false } : { kind: 'unstated', ask: t.ask || null });
   return reasons;
+}
+
+// A DOM id part for any value. Each character outside A-Z, a-z, 0-9, and the hyphen becomes _<hex>_, so two values never share a part.
+export function domPart(value) {
+  return String(value).replace(/[^A-Za-z0-9-]/gu, (c) => `_${c.codePointAt(0).toString(16)}_`);
+}
+
+// The column of each task in the dependency graph: 0 for a task without blockers in the set, else 1 + the deepest blocker.
+// The walk is iterative, so a long chain cannot overflow the stack. A cycle, also a task that blocks itself, is cut where the walk meets it.
+export function graphDepths(tasks, keyOf = (t) => String(t.id)) {
+  const list = (tasks || []).filter(Boolean);
+  const byKey = new Map(list.map((t) => [keyOf(t), t]));
+  const depth = new Map();
+  const onStack = new Set();
+  for (const root of list) {
+    const rootKey = keyOf(root);
+    if (depth.has(rootKey)) continue;
+    const stack = [rootKey];
+    onStack.add(rootKey);
+    while (stack.length) {
+      const key = stack.at(-1);
+      const blockers = blockerIds(byKey.get(key)).filter((id) => byKey.has(id) && id !== key);
+      const next = blockers.find((id) => !depth.has(id) && !onStack.has(id));
+      if (next) { stack.push(next); onStack.add(next); continue; }
+      const known = blockers.filter((id) => depth.has(id));
+      depth.set(key, known.length ? 1 + Math.max(...known.map((id) => depth.get(id))) : 0);
+      stack.pop();
+      onStack.delete(key);
+    }
+  }
+  return depth;
 }
 
 // All tasks that the task waits on, directly or through other tasks, and all tasks that wait on it.
@@ -45,9 +83,9 @@ export function dependencyChain(id, tasks) {
   const start = String(id);
   if (!map.has(start)) return new Set();
   const dependents = new Map();
-  for (const t of list) for (const b of t.blockedBy || []) {
-    if (!dependents.has(String(b))) dependents.set(String(b), []);
-    dependents.get(String(b)).push(String(t.id));
+  for (const t of list) for (const b of blockerIds(t)) {
+    if (!dependents.has(b)) dependents.set(b, []);
+    dependents.get(b).push(String(t.id));
   }
   const chain = new Set([start]);
   const walk = (from, next) => {
@@ -58,7 +96,7 @@ export function dependencyChain(id, tasks) {
       stack.push(other);
     }
   };
-  walk(start, (x) => (map.get(x).blockedBy || []).map(String));
+  walk(start, (x) => blockerIds(map.get(x)));
   walk(start, (x) => dependents.get(x) || []);
   return chain;
 }
@@ -74,28 +112,36 @@ export function criticalPath(tasks, groups = []) {
   const known = (Array.isArray(groups) ? groups : []).filter((g) => g && g.id);
   const milestone = known.find((g) => open.some((t) => t.group === g.id)) || null;
   const targets = milestone ? open.filter((t) => t.group === milestone.id) : open;
-  const memo = new Map();
-  const visiting = new Set();
-  const longest = (id) => {
-    if (memo.has(id)) return memo.get(id);
-    if (visiting.has(id)) return [];
-    visiting.add(id);
-    let best = [];
-    for (const b of openBlockers(map.get(id), map)) {
-      if (!openIds.has(b)) continue;
-      const chain = longest(b);
-      if (chain.length > best.length) best = chain;
+  // The longest open chain that ends in each task, as its length and the previous task. The walk is iterative and cuts a cycle.
+  const best = new Map();
+  const onStack = new Set();
+  const measure = (root) => {
+    const stack = [root];
+    onStack.add(root);
+    while (stack.length) {
+      const id = stack.at(-1);
+      const blockers = openBlockers(map.get(id), map).filter((b) => openIds.has(b) && b !== id);
+      const next = blockers.find((b) => !best.has(b) && !onStack.has(b));
+      if (next) { stack.push(next); onStack.add(next); continue; }
+      let entry = { length: 1, prev: null };
+      for (const b of blockers) {
+        const chain = best.get(b);
+        if (chain && chain.length + 1 > entry.length) entry = { length: chain.length + 1, prev: b };
+      }
+      best.set(id, entry);
+      stack.pop();
+      onStack.delete(id);
     }
-    visiting.delete(id);
-    const result = [...best, id];
-    memo.set(id, result);
-    return result;
   };
-  let path = [];
+  let end = null;
   for (const t of targets) {
-    const chain = longest(String(t.id));
-    if (chain.length > path.length) path = chain;
+    const id = String(t.id);
+    if (!best.has(id)) measure(id);
+    if (!end || best.get(id).length > best.get(end).length) end = id;
   }
+  const path = [];
+  const seen = new Set();
+  for (let id = end; id != null && !seen.has(id); id = best.get(id)?.prev ?? null) { seen.add(id); path.unshift(id); }
   return { milestone: milestone ? { id: milestone.id, title: milestone.title || milestone.id } : null, path };
 }
 
@@ -135,7 +181,97 @@ export function graphTasks(tasks, { openOnly = true } = {}) {
   for (const t of list) {
     if (taskState(t, map) === 'done') continue;
     keep.add(t);
-    for (const id of t.blockedBy || []) if (map.has(String(id))) keep.add(map.get(String(id)));
+    for (const id of blockerIds(t)) if (map.has(id)) keep.add(map.get(id));
   }
   return list.filter((t) => keep.has(t));
+}
+
+// ---------- Cross-project board ----------
+// One item for each task of each published project. The Board page shows open work and the tasks done in the last DONE_WINDOW_MS.
+
+export const DONE_WINDOW_MS = 24 * 3600000;
+
+// A done task counts when its update time is in the window. A done task without a valid time is not shown.
+export function fleetItems(projects, { now = Date.now(), doneWindowMs = DONE_WINDOW_MS } = {}) {
+  const items = [];
+  (projects || []).forEach((p, projectIndex) => {
+    if (!p?.slug || !Array.isArray(p.tasks)) return;
+    const tasks = p.tasks.filter((t) => t && t.title != null);
+    const board = boardColumns(tasks, { groups: p.groups, showAllDone: true });
+    const path = new Set(board.critical.path);
+    const label = String(p.label || p.project || p.slug);
+    for (const state of FLOW) board.columns[state].forEach((task, rank) => {
+      if (state === 'done') {
+        // A done task counts only with an update time from the last doneWindowMs up to now. A future time does not count.
+        const age = now - (time(task.updated) ?? -Infinity);
+        if (!(age >= 0 && age <= doneWindowMs)) return;
+      }
+      const id = task.id != null ? String(task.id) : `~${state}${rank}`;
+      items.push({ slug: p.slug, label, task, state, map: board.map, onPath: task.id != null && path.has(String(task.id)), key: `${p.slug}/${id}`, projectIndex, rank });
+    });
+  });
+  return items;
+}
+
+// The items in their flow columns. Doing puts the longest-running worker first and Done the newest first.
+// The other columns keep the project order and, in a project, the order of the project board.
+export function fleetColumns(items) {
+  const columns = Object.fromEntries(FLOW.map((k) => [k, []]));
+  for (const item of items || []) columns[item.state].push(item);
+  const board = (a, b) => a.projectIndex - b.projectIndex || a.rank - b.rank;
+  columns.doing.sort((a, b) => (time(a.task.worker?.startedAt) ?? Infinity) - (time(b.task.worker?.startedAt) ?? Infinity) || board(a, b));
+  columns.done.sort((a, b) => (time(b.task.updated) ?? -Infinity) - (time(a.task.updated) ?? -Infinity) || board(a, b));
+  for (const k of ['blocked', 'ready', 'review']) columns[k].sort(board);
+  const counts = Object.fromEntries(FLOW.map((k) => [k, columns[k].length]));
+  return { columns, counts };
+}
+
+// The text that the search reads for one item.
+function searchText(item) {
+  const t = item.task;
+  return [item.slug, item.label, t.id, t.title, t.ask, t.waitingOn, t.worker?.name, t.worker?.kind, t.worker?.model, ...blockerIds(t)]
+    .filter((x) => x != null).join(' ').toLowerCase();
+}
+
+// who: 'owner' (waits for the Owner), 'worker' (has a worker), 'kind:<harness>', or 'model:<model>'. Each search word must match.
+export function fleetFilter(items, { project = '', who = '', state = '', query = '' } = {}) {
+  const words = String(query || '').toLowerCase().split(/\s+/).filter(Boolean);
+  return (items || []).filter((item) => {
+    const t = item.task;
+    if (project && item.slug !== project) return false;
+    if (state && item.state !== state) return false;
+    if (who === 'owner' && t.waitingOn !== 'owner') return false;
+    if (who === 'worker' && !t.worker) return false;
+    if (who.startsWith('kind:') && t.worker?.kind !== who.slice(5)) return false;
+    if (who.startsWith('model:') && t.worker?.model !== who.slice(6)) return false;
+    if (words.length) {
+      const text = searchText(item);
+      if (!words.every((w) => text.includes(w))) return false;
+    }
+    return true;
+  });
+}
+
+// The worker harness kinds and models on the board, for the filter choices.
+export function fleetWho(items) {
+  const kinds = new Set();
+  const models = new Set();
+  for (const { task } of items || []) {
+    if (task.worker?.kind) kinds.add(String(task.worker.kind));
+    if (task.worker?.model) models.add(String(task.worker.model));
+  }
+  return { kinds: [...kinds].sort(), models: [...models].sort() };
+}
+
+// The elapsed time of a worker on a card. After the first minute the text has whole minutes only,
+// so a refresh inside the same minute gives the same HTML. An invalid start gives an empty text.
+export function elapsedText(startedAt, now = Date.now()) {
+  const start = time(startedAt);
+  if (start == null) return '';
+  const sec = Math.max(0, Math.floor((now - start) / 1000));
+  if (sec < 60) return `${sec}s`;
+  const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60);
+  if (d) return `${d}d ${h}h`;
+  if (h) return `${h}h ${m}m`;
+  return `${m}m`;
 }

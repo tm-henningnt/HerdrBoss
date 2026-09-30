@@ -14,7 +14,7 @@ function body(signature) {
 test('a render of the project page patches the page in place and does not replace it', () => {
   assert.match(app, /import \{ patchHtml \} from '\.\/keyed\.js';/);
   const renderBody = body('render(force = false)');
-  assert.match(renderBody, /if \(route === 'projects' && lastRoute === 'projects'\) patchHtml\(\$app, html\);\s*else \$app\.innerHTML = html;/);
+  assert.match(renderBody, /if \(\(route === 'projects' \|\| route === 'board'\) && lastRoute === route\) patchHtml\(\$app, html\);\s*else \$app\.innerHTML = html;/);
   assert.match(renderBody, /lastRoute = route;/);
   assert.match(renderBody, /syncBoards\(\);/);
 });
@@ -45,4 +45,34 @@ test('the automatic refresh of the project page goes through the keyed patch', (
   const keeps = new Function('pathname', body('refreshForcesRender(pathname)'));
   assert.equal(keeps('/projects/sample'), true);
   assert.doesNotMatch(body('boardBlock(p, slug)'), /innerHTML/);
+});
+
+test('the Board page patches in place and keys each card by project and task', () => {
+  const view = body('boardView(s)');
+  assert.match(view, /data-key="fleet:mixed"/);
+  assert.match(view, /data-key="fleet:lanes"/);
+  assert.match(view, /data-key="lane:\$\{esc\(p\.slug\)\}"/);
+  assert.match(view, /data-key="col:\$\{k\}"/);
+  assert.match(body('fleetCard(item, { chip, now })'), /data-key="task:\$\{esc\(item\.key\)\}"/);
+  assert.doesNotMatch(view, /innerHTML/);
+  const keeps = new Function('pathname', body('refreshForcesRender(pathname)'));
+  assert.equal(keeps('/board'), true);
+});
+
+test('a Board card links to the project page with the task selected, and the project page reads the task once', () => {
+  assert.match(app, /function fleetTaskUrl\(slug, id\) \{\s*return `\/projects\/\$\{encodeURIComponent\(slug\)\}\?task=\$\{encodeURIComponent\(id\)\}`;/);
+  const renderBody = body('render(force = false)');
+  assert.match(renderBody, /new URLSearchParams\(location\.search\)\.get\('task'\)/);
+  assert.match(renderBody, /projectView\(slug\)\.selected = pick;/);
+  assert.match(renderBody, /history\.replaceState\(null, '', location\.pathname \+ location\.hash\);/);
+});
+
+test('the Board search renders once, 150 ms after the last key', () => {
+  const handler = /let fleetQueryTimer = null;\s*document\.addEventListener\('input', \(e\) => \{([\s\S]*?)\n\}\);/.exec(app);
+  assert.ok(handler, 'the search input handler has its own timer');
+  assert.match(handler[1], /clearTimeout\(fleetQueryTimer\);/);
+  assert.match(handler[1], /setTimeout\([\s\S]*render\(\);[\s\S]*\}, 150\);/);
+  assert.doesNotMatch(handler[1].split('setTimeout')[0], /render\(\)/, 'no render before the timer');
+  // Both boards use elapsedText, so a poll inside a minute gives the same card HTML.
+  assert.equal(app.match(/const elapsed = state === 'doing' \? elapsedText\(w\?\.startedAt, now\) : '';/g)?.length, 2);
 });
