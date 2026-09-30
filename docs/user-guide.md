@@ -1200,7 +1200,7 @@ On a screen up to 760 px wide, the Mailbox and the Chat are app views. The page 
 - The Mailbox list has a floating **New** button at the bottom right.
 - In a Mailbox conversation, the actions of the open item sit in a bar at the bottom edge, above the bottom safe-area inset. The bar holds the item actions from [Answer an item](#answer-an-item):
   - An approval: **Approve**, **Reject**, a note button, and a **Dismiss** button. The note button opens the note field above the buttons.
-  - A decision with choices: one button for each choice, in a row that scrolls sideways, then a note button and **Dismiss**. The note button opens a field for another answer or a note, with **Send**.
+  - A decision with choices: one button for each choice, then a note button and **Dismiss**. The choice buttons wrap onto more rows, so each choice stays in view. The note button opens a field for another answer or a note, with **Send**.
   - An answer, or a decision without choices: **Dismiss**, the answer field, and **Send** in one row.
 - The item that the bar holds is the open item of the last agent message. An older open item keeps its form in its message. A conversation without an open item shows the reply field and **Send** in one row at the same place.
 - In **Needs you**, select one or more check boxes to start the selection. A selection bar then replaces the **New** button at the bottom edge. It shows the count, **Clear the selection**, **All**, and **Dismiss N**.
@@ -1313,7 +1313,7 @@ The dashboard adapts to a phone and to a home-screen web app.
 - On a screen up to 760 px wide, each button, select, text field, checkbox with its label, and menu link is at least 44 px high.
 - The page does not scroll sideways at any width from 320 px. A wide table or code block scrolls inside its own box.
 - A fixed bar, such as the **Apply policy** bar, moves up when the on-screen keyboard opens.
-- The expanded browser view fills the screen. One compact toolbar holds the controls. The text field and key controls appear only while **Control browser** is on. The screenshot fills the rest of the height, in portrait and landscape.
+- The expanded browser view fills the screen. One compact toolbar holds the controls. The address field and **Go** use the full width of one row. **Back**, **Forward**, and **Home** share the next row. The text field and key controls appear only while **Control browser** is on. The screenshot fills the rest of the height, in portrait and landscape.
 - The dashboard sets the home-screen web app meta tags. To add the dashboard to a phone home screen, open it in Safari, open the Share menu, and select **Add to Home Screen**.
 
 ### Check the phone layout
