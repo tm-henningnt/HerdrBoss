@@ -269,8 +269,13 @@ test('the item route shows the item page with a way back to its row', () => {
   assert.equal((page.match(/<h1\b/g) || []).length, 1);
   assert.match(page, /<h1[^>]*>Title flow-video/);
   assert.match(page, /href="\/reviews\/shop\/checkout-redesign#item=flow-video"[^>]*aria-label="Back to the sections"/);
-  assert.match(page, /3 \/ 6/, 'the place of the item in the pack');
+  assert.match(page, /Item 3 of 6<\/span> · Cart/, 'the place of the item in the pack and the section');
   assert.match(page, /class="review-page item-open"/);
+  assert.match(page, /data-key="rv-item:flow-video"/, 'the item viewer fills the main pane');
+  assert.match(page, /class="rv-answer"[^>]*data-key="rv-answer:flow-video"/, 'the answer bar replaces the submit bar');
+  assert.doesNotMatch(page, /Submit review/);
+  assert.doesNotMatch(page, /The item viewer is not ready yet/);
+  assert.match(page, /<video /);
   assert.match(packPageHtml(fullPack(), { item: 'no-such-item' }, helpers()), /This item is not in the pack\./);
 });
 
@@ -417,4 +422,92 @@ test('the proposed verdict is fixed at the first render of a version, so the sel
   assert.equal(ui.proposed, 'approve');
   // The Owner's own choice wins over the proposal.
   assert.match(packPageHtml(later, { ...ui, verdict: 'comment' }, helpers()), /value="comment" checked/);
+});
+
+// ---------- Item viewer ----------
+
+function viewerPack() {
+  const pack = fullPack();
+  pack.manifest.sections[0].items.push({ id: 'cart-themes', type: 'image-pair', variant: 'theme', a: { src: 'a.png', label: 'Light' }, b: { src: 'b.png', label: 'Dark' } });
+  return pack;
+}
+
+test('a keyed update of the item viewer keeps the note field, its text, the zoom stage, and the zoom transform', () => {
+  const root = setup(`<main>${packPageHtml(viewerPack(), { item: 'cart-themes', viewer: { pair: 'a' } }, helpers())}</main>`);
+  const main = root.firstChild;
+  const note = find(main, (el) => el.getAttribute('id') === 'rv-note-cart-themes');
+  const stage = byKey(main, 'rv-stage:cart-themes');
+  const canvas = find(stage, (el) => /rv-canvas/.test(el.getAttribute('class') || ''));
+  canvas.setAttribute('style', 'transform: translate(10px, 0px) scale(2)');
+  stage.setAttribute('class', 'rv-stage rv-zoomed');
+  note.focus();
+  note.value = 'Too faint in dark, also on the total.';
+  const next = viewerPack();
+  next.items[0].answer = { ...next.items[0].answer, decision: 'accept' };
+  patchHtml(main, packPageHtml(next, { item: 'cart-themes', viewer: { pair: 'b' } }, helpers()));
+  assert.equal(find(main, (el) => el.getAttribute('id') === 'rv-note-cart-themes'), note, 'the same field node');
+  assert.equal(note.value, 'Too faint in dark, also on the total.');
+  assert.equal(document.activeElement, note);
+  assert.equal(byKey(main, 'rv-stage:cart-themes'), stage, 'the same stage node');
+  assert.equal(canvas.getAttribute('style'), 'transform: translate(10px, 0px) scale(2)', 'the zoom stays on a pair toggle');
+  assert.match(canvas.getAttribute('class'), /rv-show-b/, 'the toggle still applies');
+  assert.equal(stage.getAttribute('class'), 'rv-stage rv-zoomed', 'the zoomed class of the gesture code stays');
+  assert.equal(find(main, (el) => el.getAttribute('data-rv-decision') === 'accept').getAttribute('aria-pressed'), 'true');
+});
+
+test('every answer write of the viewer goes through saveItemAnswer and public/review-save.js', () => {
+  const saver = fs.readFileSync(new URL('../public/review-save.js', import.meta.url), 'utf8');
+  assert.doesNotMatch(app, /\/items\/\$\{/, 'app.js sends no item PUT of its own');
+  assert.equal((saver.match(/method: 'PUT'/g) || []).length, 1, 'one PUT to the item route');
+  assert.match(saver, /JSON\.stringify\(\{ \.\.\.patch, rev \}\)/);
+  const body = /\nfunction saveItemAnswer\(item, patch(?:, [^)]*)?\) \{([\s\S]*?)\n\}/.exec(app)?.[1];
+  assert.ok(body, 'the UI defines saveItemAnswer(item, patch)');
+  assert.match(body, /reviewSaver\.save\(/);
+  assert.match(app, /data\.rvConflict === 'mine'\) reviewSaver\.keepMine\(/);
+  assert.match(app, /data\.rvConflict === 'theirs'\) reviewSaver\.useTheirs\(/);
+  assert.match(app, /REVIEW_VIEWED_MS = 1500/);
+  assert.match(app, /startViewedTimer\(\{ doc: document, ms: REVIEW_VIEWED_MS/, 'the Viewed timer counts only while the page is visible');
+  assert.match(app, /reviewRepeatTap\(`\$\{item\.id\}:\$\{kind\}:\$\{value\}`\)\) return;/, 'a double tap sends one change');
+});
+
+test('a move to another item puts the focus on the item heading', () => {
+  const body = /\nfunction reviewItemGo\(open, id\) \{([\s\S]*?)\n\}/.exec(app)?.[1];
+  assert.ok(body);
+  assert.match(body, /reviews\.focus = '\[data-rv-heading\]'/);
+  assert.ok(body.indexOf('reviews.focus') < body.indexOf('reviewGo('), 'the target is set before the render');
+  const swipe = /\nfunction reviewSwipe\(intent\) \{([\s\S]*?)\n\}/.exec(app)?.[1];
+  assert.match(swipe, /reviewItemGo\(open,/, 'a swipe uses the same move');
+  const keys = /\nfunction reviewViewerKey\(e, inField\) \{([\s\S]*?)\n\}/.exec(app)?.[1];
+  assert.doesNotMatch(keys.replace(/reviewGo\(reviewUrl\(route\.slug, route\.pack\)\)|reviewGo\(`\$\{reviewUrl\(route\.slug, route\.pack\)\}#item=/g, ''), /reviewGo\(/, 'each item move in the keys uses reviewItemGo');
+});
+
+test('the page passes the sanitizing Markdown renderer to the viewer, and no DOM pass sanitizes after insertion', () => {
+  assert.match(app, /text: \(url\) => reviews\.texts\[url\], markdown: safeMarkdownHtml \}/);
+  const safe = /\nfunction safeMarkdownHtml\(source\) \{([\s\S]*?)\n\}/.exec(app)?.[1];
+  assert.ok(safe.indexOf('sanitizeRendered(template.content)') < safe.indexOf('html = template.innerHTML'), 'the string is sanitized before it is returned');
+  assert.doesNotMatch(app, /querySelectorAll\('\.rv-md'\)/);
+});
+
+test('the page help and the user guide describe the item viewer', () => {
+  const help = /reviews: \['Reviews', `([\s\S]*?)`\]/.exec(app)?.[1] || '';
+  assert.match(help, /<h3>Item viewer<\/h3>/);
+  assert.match(help, /<h3>Zoom and pins<\/h3>/);
+  assert.match(help, /<kbd>n<\/kbd> next open item/);
+  assert.doesNotMatch(help, /The item viewer is not ready/);
+  const guide = fs.readFileSync(new URL('../docs/user-guide.md', import.meta.url), 'utf8');
+  assert.match(guide, /### Item viewer/);
+  assert.match(guide, /### Zoom, pins, and swipe/);
+  assert.match(guide, /\*\*Keep mine\*\*/);
+});
+
+test('the item viewer has 44 px targets, 16 px fields, a stage without touch scrolling, and no motion when reduced', () => {
+  assert.match(css, /\.rv-stage \{[^}]*touch-action: none/);
+  assert.match(css, /#app \.rv-act \{[^}]*min-height: 52px/);
+  assert.match(css, /#app \.rv-tool \{[^}]*min-width: 44px; min-height: 44px/);
+  assert.match(css, /#app \.rv-choice \{[^}]*min-height: 44px/);
+  assert.match(css, /#app \.rv-star \{[^}]*width: 44px; height: 44px/);
+  assert.match(css, /\.rv-check \{[^}]*min-height: 48px/);
+  assert.match(css, /\.rv-pin-field, \.rv-note-field \{[^}]*font: 16px/);
+  assert.match(css, /\.rv-table th \{[^}]*position: sticky; top: 0/);
+  assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{\s*\.rv-canvas \{ transition: none; \}\s*\.rv-hint \{ animation: none; \}/);
 });

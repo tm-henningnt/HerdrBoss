@@ -137,7 +137,7 @@ The **Reviews** page shows the review packs that projects send to the Owner. The
 |---|---|
 | `/reviews` | The pack list. `?folder=done` opens the Done folder. |
 | `/reviews/<slug>/<pack>` | The section list of one pack, with the summary and the submit form. |
-| `/reviews/<slug>/<pack>/<item>` | The page of one item. The page keeps the address of the item for the item viewer. |
+| `/reviews/<slug>/<pack>/<item>` | The item viewer of one item. |
 | `/reviews/<slug>/<pack>#item=<item>` | The section list with the row of that item marked and in view. Back from an item page uses this address. |
 
 `/reviews/<slug>/<pack>/summary` opens the section list. An address with a part that is not a slug shows **Review not found**.
@@ -171,17 +171,82 @@ A failed request shows its reason in plain words under the field or in the botto
 | Other | `The request failed.` |
  The read-only preview shows the packs and refuses each note and submit with `Not sent. This read-only preview does not allow changes.`
 
+### Item viewer
+
+The item viewer shows one item. On a screen of 899 px or less it fills the screen. On a screen of 900 px or wider it fills the pane at the right of the sections. The top bar holds Back, the item title, `Item N of M` with the section name, and the **Viewed** toggle. The answer bar is at the bottom edge. The evidence and the item text are between the two bars.
+
+| Type | Viewer |
+|---|---|
+| `image` | The image at the fit size in a stage. Pins show over it. |
+| `image-pair` | Both images in one stage. **Toggle** shows one image, and the toggle at the top uses the two labels of the manifest. **Slider** shows A at the left and B at the right of a split line. The range under the stage moves the line. The zoom and the pan stay the same when you change the image. |
+| `gallery` | A grid of the images. Select an image to open it in the stage. **All images** goes back to the grid. The arrows show the previous and the next image. |
+| `video` | The native player with controls and the poster. The player does not start by itself. The file route serves ranges. |
+| `markdown` | The text through the Markdown renderer. Raw HTML shows as text. An external link opens in a new tab and has an arrow mark. A table scrolls sideways in its own box. |
+| `table` | The rows of the manifest or of the CSV file. The header stays at the top. The box scrolls sideways and down. The viewer shows at most 2000 rows and names the count of the others. |
+| `diff` | The lines of the unified diff in the mono font, with the old and the new line number. Added lines have a `+` mark and a green background. Removed lines have a `−` mark and a red background. |
+| `file` | The lines of the file in the mono font, with line numbers. The viewer shows at most 5000 lines. |
+| `link` | A card with the label, the host name, and **Open (opens in a new tab)**. The link opens the URL in a new tab with `rel="noopener noreferrer"`. The live check control is next to it. |
+| `checklist` | One row for each entry. Select a row to tick or untick the entry. |
+| Other | The item text as Markdown, under the line `Herdr Boss has no viewer for NAME. It shows the text.` |
+
+The item text of the manifest `body` shows under the evidence. A text file loads when the item opens. A file that does not load shows `The text could not load.` and the reason.
+
+### Zoom, pins, and swipe
+
+- Pinch to zoom from 1× to 8×. Double tap to zoom to 2× at the tap point. Double tap again to go back to the fit size.
+- Drag to pan a zoomed image. The pan stops at the edges of the image.
+- Hold Ctrl and turn the wheel to zoom. Press `+` or `-` to zoom one step. Press `z` to toggle the fit size and 100 %. At 100 %, one image pixel uses one screen pixel. The fit button under the stage does the same.
+- The hint `Pinch to zoom · double tap for 2×` shows for 3 seconds on the first image. It does not show again in the same browser.
+- Select **Add pin**, then tap the image. A numbered pin appears, and the note field of the pin gets the focus. An item takes at most 20 pins. The store keeps each pin as fractions of the image, from 0 to 1. A pin of a pair keeps its side, `a` or `b`. A pin of a gallery keeps the file name of its image. Each pin note has at most 200 characters.
+- Swipe left for the next item and right for the previous item. On a pair in the toggle view, a swipe shows the other image first. On an open gallery image, a swipe shows the next or the previous image first. A swipe on a zoomed image pans the image.
+
+### Answer bar
+
+The answer bar shows only the questions in `ask` of the item:
+
+- **Deny** and **Accept** set the decision. Select the pressed button again to clear the decision.
+- **Note** opens the note field. The field grows with the text and has at most 2000 characters. The page saves the note 1 second after the last key, and when the field loses the focus.
+- **Live** marks the item **Needs live check**. The live row under the evidence has the live links of the item, or else the live links of the pack. Each link opens in a new tab. Select **Checked** after the check. Select **Live** again to clear the mark.
+- A choice shows one button for each alternative. A rating shows one star for each step.
+
+The page marks an item **Viewed** when the item stays open and visible for 1.5 seconds. The time does not count while the browser tab is hidden. The **Viewed** toggle in the top bar sets or clears the mark.
+
+Each change goes to the server at once with the `rev` of the item. The saves of one item run one after the other. A button with a running save shows busy and keeps the focus. A second tap on the same button within 400 ms is ignored, so a double tap on **Accept** does not clear the decision. The line under the item shows `Saving…`, then `Saved`, or `Not saved.` and the reason. A failed save keeps the typed note in the field. When another device changed the answer first, the server answers `409`. The page then shows the answer of the other device and two buttons. **Keep mine** sends your change again with the `rev` of the other answer. **Use theirs** keeps the other answer and drops your drafts. When the `409` does not include the stored answer, the page loads the pack again to get it. When that load fails, the page shows `The answer changed on another device, and the page could not load it. Reload the page.` The read-only preview refuses each change with `Not saved. This read-only preview does not allow changes.`
+
+The **Previous**, **Next open**, and **Next** links under the item move between the items. After a move by a key or a swipe, the focus goes to the item heading. A submitted pack shows its answers and disables the controls.
+
 ### Keys
+
+On the pack list and the section list:
 
 | Key | Action |
 |---|---|
 | `j`, `k` | Next or previous row |
 | `J`, `K` | Next or previous section |
-| `u`, `Esc` | Back: from an item to the section list, from a pack to the list |
+| `u`, `Esc` | Back: from a pack to the list |
 | `s` | Go to the summary and the pack note |
 | `?` | Open the page help |
 
-The keys do nothing while the focus is in a text field, except `Esc`, which leaves the field.
+In the item viewer:
+
+| Key | Action |
+|---|---|
+| `j` or `→`, `k` or `←` | Next or previous item |
+| `J`, `K` | First item of the next or the previous section |
+| `n` | Next open item |
+| `a`, `d`, `l` | Accept, Deny, Needs live check |
+| `c` | Open the note field |
+| `p` | Start or stop pin mode |
+| `1` to `6` | Choose an alternative, or give a rating |
+| `v` | Toggle Viewed |
+| `e` | Mark Viewed and go to the next item |
+| `t` | Toggle the two images of a pair |
+| `z`, `+`, `-` | Toggle fit and 100 %, zoom in, zoom out |
+| `s` | Go to the summary |
+| `u`, `Esc` | Back: close pin mode, close a gallery image, or go to the section list |
+| `?` | Open the page help |
+
+The keys do nothing while the focus is in a text field, except `Esc`, which leaves the field. The arrow keys keep their own action in a video, a range, and a box that scrolls sideways.
 
 ### Mailbox entry
 

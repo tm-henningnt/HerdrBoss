@@ -7,6 +7,9 @@ import { chatJumpHtml, chatJumpButtonHtml, chatAtBottom, chatJumpScroll } from '
 import { mailBarItem, mailActionBarHtml, mailSelectionBarHtml } from './mail-bar.js';
 import { APP_VIEW_ROUTES, appViewport } from './app-view.js';
 import { parseReviewPath, reviewItemFromHash, reviewUrl, packListHtml, packPageHtml, reviewMessageHtml, reviewKeyAction, reviewOpenLinkHtml, reviewErrorText, submitConfirmText, pinProposedVerdict } from './review.js';
+import { viewerKeyAction, nextOpenItem, itemNeighbors, sectionStep, addPin, removePin, setPinText, itemSpec } from './review-viewer.js';
+import { attachGestures, restoreStages, resetStages, zoomStage } from './review-gestures.js';
+import { createItemSaver, createTapGuard, startViewedTimer } from './review-save.js';
 import { createWizard } from './project-wizard-ui.js';
 import { stackedBars, lineChart, stripBars, outcomeBars, legendHtml, foldSeries, spendSeries, claudeSpend, quotaSeries, firstTimeRate, activityFilter, activityChoices, eventLevel, dayLabel, usd, minutes, compact, ACTIVITY_RANGES, ACTIVITY_LEVELS, SERIES_CLASSES, DENIAL_RANGES, DEFAULT_DENIAL_RANGE, denialRange, denialSeries, denialMarkers, denialDetailsHtml, denialLegendHtml } from './analytics.js';
 
@@ -5126,9 +5129,12 @@ const HELP = {
     <p>A project sends you a review pack when it needs your decision on evidence: screenshots, text, tables, or a live check. Each item of the pack asks one question. You answer the items, write a note for the whole pack, and submit one result. The result goes to the project orchestrator.</p>
     <h3>Pack list</h3><p><b>Open</b> holds the packs that wait for your answers. <b>Done</b> holds the submitted and the expired packs, each with its verdict. A row shows the project, the pack title, the version, the time of the last change, and the count of answered items. A row with <b>N changed</b> has items that changed after your answer. The Mailbox item of a pack opens the same page with <b>Open review</b>.</p>
     <h3>Progress bar</h3><p>The bar shows the item states in a fixed order: <b>Accepted</b>, <b>Note only</b>, <b>Needs live check</b>, <b>Denied</b>, and <b>Open</b>. Accepted also counts a choice or a rating. The Denied segment has stripes, so it differs from Needs live check without color. The legend under the bar names each state with its count.</p>
-    <h3>Sections</h3><p>The pack page shows one block for each section, with its state and its count of answered items. Select a section title to fold or unfold its items. Each item row shows the item type, the title, the state, and a check mark when you viewed it. A viewed and answered item shows as a short, faded row. <b>Changed</b> marks an item that changed after your answer. It counts as open until you answer again. Select an item to open it. The item page keeps the address of the item. Back returns to the same row.</p>
+    <h3>Sections</h3><p>The pack page shows one block for each section, with its state and its count of answered items. Select a section title to fold or unfold its items. Each item row shows the item type, the title, the state, and a check mark when you viewed it. A viewed and answered item shows as a short, faded row. <b>Changed</b> marks an item that changed after your answer. It counts as open until you answer again. Select an item to open it in the item viewer. Back returns to the same row.</p>
     <h3>Summary and submit</h3><p>The summary under the sections lists the items by state, with open items first and your notes under each item. Write a note for the whole pack in the note field. The page saves the note 1 second after you stop typing. Select a verdict: <b>Approve</b>, <b>Request changes</b>, or <b>Comment</b>. The page selects the proposed verdict from the item states when it first shows the pack version. A later answer does not move the selection. Select <b>Submit review</b> in the bar at the bottom. The page asks you to confirm and names the pack, the version, the verdict, and the counts. Then it sends the result. A submit with open items is allowed. The result lists them as open.</p>
-    <h3>Keys</h3><p><kbd>j</kbd> and <kbd>k</kbd> move to the next or the previous row. <kbd>J</kbd> and <kbd>K</kbd> move to the next or the previous section. <kbd>Enter</kbd> opens the row. <kbd>u</kbd> or <kbd>Esc</kbd> goes back. <kbd>s</kbd> goes to the summary. <kbd>?</kbd> opens this help. The keys do nothing while the focus is in a text field, except <kbd>Esc</kbd>, which leaves the field.</p>
+    <h3>Item viewer</h3><p>The top bar shows the item title, <b>Item N of M</b> with the section, and the <b>Viewed</b> toggle. The page marks an item viewed when it stays open and visible for 1.5 seconds. The evidence fills the space above the answer bar. A pair has <b>Toggle</b> and <b>Slider</b>. A gallery shows a grid: select an image to open it. A table and a code box scroll sideways in their own box. <b>Open</b> on a live link opens a new tab.</p>
+    <h3>Zoom and pins</h3><p>Pinch to zoom, or double tap for 2×. Double tap again for the fit size. Drag to pan a zoomed image. On a desktop, hold Ctrl and turn the wheel, or press <kbd>+</kbd> and <kbd>-</kbd>. <kbd>z</kbd> toggles the fit size and 100 %. Select <b>Add pin</b>, then tap the image to drop a numbered pin. Write the pin note in the field under the image. An item takes at most 20 pins.</p>
+    <h3>Answers</h3><p>The answer bar shows only the questions of the item: <b>Deny</b>, <b>Note</b>, <b>Live</b>, <b>Accept</b>, the choices, and the rating. Select a pressed button again to clear it. Each change saves at once. A second tap on the same button within 400 ms does nothing. The line under the item shows <b>Saved</b> or the reason of a failure. A failed save keeps your typed note. When another device changed the answer first, select <b>Keep mine</b> or <b>Use theirs</b>. Swipe left or right to go to the next or the previous item.</p>
+    <h3>Keys</h3><p>On the lists: <kbd>j</kbd> and <kbd>k</kbd> move to the next or the previous row. <kbd>J</kbd> and <kbd>K</kbd> move to the next or the previous section. <kbd>Enter</kbd> opens the row. <kbd>u</kbd> or <kbd>Esc</kbd> goes back. <kbd>s</kbd> goes to the summary.</p><p>In the item viewer: <kbd>j</kbd> or <kbd>→</kbd> next item, <kbd>k</kbd> or <kbd>←</kbd> previous item, <kbd>J</kbd> and <kbd>K</kbd> next or previous section, <kbd>n</kbd> next open item, <kbd>a</kbd> Accept, <kbd>d</kbd> Deny, <kbd>l</kbd> Needs live check, <kbd>c</kbd> note, <kbd>p</kbd> pin mode, <kbd>1</kbd> to <kbd>6</kbd> choice or rating, <kbd>v</kbd> Viewed, <kbd>e</kbd> Viewed and next, <kbd>t</kbd> toggle the pair, <kbd>z</kbd> fit or 100 %, <kbd>s</kbd> summary, <kbd>u</kbd> or <kbd>Esc</kbd> back.</p><p><kbd>?</kbd> opens this help. The keys do nothing while the focus is in a text field, except <kbd>Esc</kbd>, which leaves the field.</p>
     <h3>Phone and desktop</h3><p>On a phone the page fills the screen, and the bar with <b>Submit review</b> sits at the bottom edge. Select the menu button at the top left to open the other pages. On a screen of 900 px or wider, the sections are at the left and the summary is at the right.</p>
     <p>A read-only preview shows the packs and refuses each answer, note, and submit with a message.</p>`],
   chat: ['Chat', `
@@ -5280,12 +5286,12 @@ document.addEventListener('click', (e) => {
 
 const REVIEW_RELOAD_MS = 30000;
 const REVIEW_NOTE_DELAY_MS = 1000;
-const reviews = { open: null, done: null, error: '', loading: false, listAt: 0, packs: {}, ui: {}, revealed: '', path: '' };
+const reviews = { open: null, done: null, error: '', loading: false, listAt: 0, packs: {}, ui: {}, revealed: '', path: '', texts: {}, textLoading: new Set(), viewer: {}, itemPath: '', stopViewed: null, reloadTimer: null };
 const reviewKey = (slug, pack) => `${slug}/${pack}`;
 const reviewUi = (key) => (reviews.ui[key] ||= { note: null, noteStatus: '', noteTimer: null, verdict: null, submitting: false, submitStatus: '', result: null });
 
 function reviewHelpers(s) {
-  return { esc, avatar: (slug) => avatarSlot(slug, { title: avatarTitle(slug), size: 36 }), projectLabel: (slug) => avatarTitle(slug), time: (iso) => listTime(iso), menuButton: appMenuButton(s, 'reviews') };
+  return { esc, avatar: (slug) => avatarSlot(slug, { title: avatarTitle(slug), size: 36 }), projectLabel: (slug) => avatarTitle(slug), time: (iso) => listTime(iso), menuButton: appMenuButton(s, 'reviews'), text: (url) => reviews.texts[url], markdown: safeMarkdownHtml };
 }
 
 function reviewsRender() { if (currentRoute() === 'reviews') render(); }
@@ -5335,7 +5341,8 @@ function reviewsView(s) {
     if (!entry || (!entry.loading && Date.now() - entry.at > REVIEW_RELOAD_MS)) loadReviewPack(route.slug, route.pack);
     if (entry?.data) {
       const ui = pinProposedVerdict(reviewUi(key), entry.data);
-      page = packPageHtml(entry.data, { ...ui, current: reviewItemFromHash(location.hash), item: route.view === 'item' ? route.item : undefined }, h);
+      const viewer = route.view === 'item' ? reviewViewerUi(key, route.item) : undefined;
+      page = packPageHtml(entry.data, { ...ui, current: reviewItemFromHash(location.hash), item: route.view === 'item' ? route.item : undefined, viewer }, h);
     } else if (entry?.error && entry.status === 404) page = reviewMessageHtml('Review not found', 'This review pack does not exist. The project can have deleted it.', h);
     else if (entry?.error) page = reviewMessageHtml('Review', `The review could not load. ${entry.error}`, h, { alert: true, retry: true });
     else page = reviewMessageHtml('Review', 'Loading the review…', h);
@@ -5350,6 +5357,7 @@ function reviewsAfterRender() {
     reviews.path = path;
     for (const node of $app.querySelectorAll('.review-body, .review-scroll')) node.scrollTop = 0;
   }
+  reviewViewerAfterRender();
   const item = reviewItemFromHash(location.hash);
   const mark = path + location.hash;
   if (!item || reviews.revealed === mark) return;
@@ -5454,9 +5462,10 @@ function reviewGo(url) {
 document.addEventListener('keydown', (e) => {
   if (currentRoute() !== 'reviews' || appDrawerOpen || !document.getElementById('help-panel').hidden || $nav.classList.contains('open')) return;
   const inField = Boolean(e.target.closest?.('input, textarea, select, [contenteditable="true"]'));
+  const route = parseReviewPath(location.pathname);
+  if (route?.view === 'item') { reviewViewerKey(e, inField); return; }
   const action = reviewKeyAction({ key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, inField });
   if (!action) return;
-  const route = parseReviewPath(location.pathname);
   const visible = (node) => node.offsetParent !== null;
   e.preventDefault();
   if (action === 'leave-field') { e.target.blur(); return; }
@@ -5484,6 +5493,287 @@ document.addEventListener('keydown', (e) => {
   next.focus();
   next.scrollIntoView({ block: 'nearest' });
 }, true);
+
+// ---------- Review item viewer ----------
+// The item viewer of a review pack. public/review-viewer.js renders it, and public/review-gestures.js runs the zoom,
+// the pins, and the swipe. Every answer change goes through saveItemAnswer(). RP8 wraps it with the autosave queue.
+
+const REVIEW_VIEWED_MS = 1500;
+const REVIEW_ITEM_NOTE_DELAY_MS = 1000;
+const REVIEW_HINT_MS = 3000;
+const REVIEW_HINT_KEY = 'herdr-boss.review-zoom-hint';
+function reviewViewerUi(key, id) {
+  return (reviews.viewer[`${key}/${id}`] ||= { pair: 'a', pairMode: 'toggle', split: 50, gallery: null, placing: false, hint: false, noteOpen: false, note: null, noteTimer: null, pinText: {}, pinTimer: null, status: '', error: '', conflict: null, rev: 0, pending: {} });
+}
+
+// The open item of the item route, with its pack and its view state, or null.
+function reviewOpenItem() {
+  const current = reviewRoutePack();
+  if (!current || current.route.view !== 'item' || !current.entry?.data) return null;
+  const item = current.entry.data.items.find((entry) => entry.id === current.route.item);
+  return item ? { ...current, item, pack: current.entry.data, vui: reviewViewerUi(current.key, item.id) } : null;
+}
+
+// A move to another item puts the focus on the item heading, so a screen reader reads the new item.
+function reviewItemGo(open, id) {
+  if (!id) return;
+  reviews.focus = '[data-rv-heading]';
+  reviewGo(reviewUrl(open.route.slug, open.route.pack, id));
+}
+
+function scheduleReviewReload(slug, pack) {
+  clearTimeout(reviews.reloadTimer);
+  reviews.reloadTimer = setTimeout(() => { reviews.listAt = 0; loadReviewPack(slug, pack); }, 400);
+}
+
+// The saves, the conflict choice, and the repeat-tap guard are in public/review-save.js.
+const reviewSaver = createItemSaver({ fetch: (url, options) => fetch(url, options), onChange: () => reviewsRender(), reload: () => { const current = reviewRoutePack(); if (current) scheduleReviewReload(current.route.slug, current.route.pack); } });
+const reviewRepeatTap = createTapGuard();
+
+// Save one change of an item answer. Every answer write of the viewer goes through this function. RP8 wraps it with the autosave queue.
+function saveItemAnswer(item, patch, { quiet = false } = {}) {
+  const current = reviewRoutePack();
+  if (!current?.entry?.data) return Promise.resolve(null);
+  return reviewSaver.save({ route: current.route, entry: current.entry, vui: reviewViewerUi(current.key, item.id), itemId: item.id, patch, quiet });
+}
+
+async function loadReviewText(url) {
+  if (reviews.texts[url] || reviews.textLoading.has(url)) return;
+  reviews.textLoading.add(url);
+  try {
+    const response = await fetch(url);
+    if (response.ok) reviews.texts[url] = { text: await response.text() };
+    else reviews.texts[url] = { error: reviewErrorText({ status: response.status, body: await response.json().catch(() => null) }) };
+  } catch { reviews.texts[url] = { error: reviewErrorText({ network: true }) }; }
+  finally { reviews.textLoading.delete(url); reviewsRender(); }
+}
+
+function reviewViewerAfterRender() {
+  const open = reviewOpenItem();
+  const path = open ? location.pathname : '';
+  if (reviews.itemPath !== path) {
+    reviews.itemPath = path;
+    reviews.stopViewed?.();
+    reviews.stopViewed = null;
+    resetStages();
+    if (open) {
+      open.vui.placing = false;
+      // The Viewed mark: the item stays open and visible for 1.5 s. A hidden tab does not count.
+      if (!open.item.answer?.viewed && open.pack.state === 'open') {
+        reviews.stopViewed = startViewedTimer({ doc: document, ms: REVIEW_VIEWED_MS, onViewed: () => {
+          const now = reviewOpenItem();
+          if (now && now.item.id === open.item.id && !now.item.answer?.viewed) saveItemAnswer(now.item, { viewed: true }, { quiet: true });
+        } });
+      }
+    }
+  }
+  if (!open) return;
+  restoreStages($app);
+  for (const node of $app.querySelectorAll('[data-rv-text]')) loadReviewText(node.dataset.rvText);
+  // The zoom hint shows once, for 3 seconds, on the first image.
+  if (!reviews.hintShown && $app.querySelector('.rv-stage')) {
+    reviews.hintShown = true;
+    let seen = false;
+    try { seen = localStorage.getItem(REVIEW_HINT_KEY) === '1'; localStorage.setItem(REVIEW_HINT_KEY, '1'); } catch { /* storage is off */ }
+    if (!seen) {
+      open.vui.hint = true;
+      queueMicrotask(reviewsRender);
+      setTimeout(() => { open.vui.hint = false; reviewsRender(); }, REVIEW_HINT_MS);
+    }
+  }
+  if (reviews.focus) {
+    const target = $app.querySelector(reviews.focus);
+    reviews.focus = null;
+    target?.focus({ preventScroll: false });
+  }
+}
+
+function reviewFocusNext(selector) {
+  reviews.focus = selector;
+  reviewsRender();
+}
+
+// The swipe of the viewer. A pair in the toggle view shows B before the next item, and A before the previous item.
+// An open gallery image moves through the gallery first.
+function reviewSwipe(intent) {
+  const open = reviewOpenItem();
+  if (!open) return;
+  const { item, vui } = open;
+  if (intent === 'back') { reviewGo(`${reviewUrl(open.route.slug, open.route.pack)}#item=${encodeURIComponent(item.id)}`); return; }
+  if (item.type === 'image-pair' && vui.pairMode !== 'split') {
+    if (intent === 'next' && vui.pair !== 'b') { vui.pair = 'b'; reviewsRender(); return; }
+    if (intent === 'prev' && vui.pair === 'b') { vui.pair = 'a'; reviewsRender(); return; }
+  }
+  if (item.type === 'gallery' && vui.gallery !== null) {
+    const count = (itemSpec(open.pack, item.id).images || []).length;
+    const to = vui.gallery + (intent === 'next' ? 1 : -1);
+    if (to >= 0 && to < count) { vui.gallery = to; reviewsRender(); return; }
+  }
+  const { prev, next } = itemNeighbors(open.pack.items, item.id);
+  reviewItemGo(open, (intent === 'next' ? next : prev)?.id);
+}
+
+function reviewDropPin(point) {
+  const open = reviewOpenItem();
+  if (!open || open.pack.state !== 'open') return;
+  open.vui.placing = false;
+  const pins = addPin(open.item.answer?.pins || [], point);
+  if (!pins) { open.vui.error = 'An item takes at most 20 pins. Remove a pin to add one.'; reviewsRender(); return; }
+  open.vui.noteOpen = true;
+  reviews.focus = `[data-rv-pin-text="${pins[pins.length - 1].n}"]`;
+  saveItemAnswer(open.item, { pins });
+}
+
+attachGestures($app, { swipe: reviewSwipe, pin: reviewDropPin, placing: () => Boolean(reviewOpenItem()?.vui.placing) });
+
+function saveReviewItemNote(open) {
+  const { item, vui } = open;
+  clearTimeout(vui.noteTimer);
+  vui.noteTimer = null;
+  if (vui.note === null || vui.note === (item.answer?.note || '')) return;
+  saveItemAnswer(item, { note: vui.note });
+}
+
+function saveReviewPinNotes(open) {
+  const { item, vui } = open;
+  clearTimeout(vui.pinTimer);
+  vui.pinTimer = null;
+  let pins = item.answer?.pins || [];
+  for (const [n, text] of Object.entries(vui.pinText)) pins = setPinText(pins, Number(n), text);
+  vui.pinText = {};
+  if (JSON.stringify(pins) !== JSON.stringify(item.answer?.pins || [])) saveItemAnswer(item, { pins });
+}
+
+// One answer action from a button or a key. It does nothing for a question that the item does not ask.
+function reviewAnswer(open, kind, value) {
+  const { item, vui, pack } = open;
+  const ask = item.ask || [];
+  const answer = item.answer || {};
+  if (pack.state !== 'open') return;
+  // A double tap on Accept sends one change, not accept and then null.
+  if (kind !== 'note' && reviewRepeatTap(`${item.id}:${kind}:${value}`)) return;
+  if (kind === 'decision' && ask.includes(value)) saveItemAnswer(item, { decision: answer.decision === value ? null : value });
+  else if (kind === 'choice' && ask.includes('choice')) saveItemAnswer(item, { choice: answer.choice === value ? null : value });
+  else if (kind === 'rating' && ask.includes('rating')) saveItemAnswer(item, { rating: answer.rating === value ? null : value });
+  else if (kind === 'live' && ask.includes('live')) saveItemAnswer(item, { live: value === 'none' ? null : value });
+  else if (kind === 'viewed') saveItemAnswer(item, { viewed: value });
+  else if (kind === 'note' && ask.includes('note')) { vui.noteOpen = true; reviewFocusNext(`#rv-note-${CSS.escape(item.id)}`); }
+}
+
+document.addEventListener('click', (e) => {
+  const target = e.target.closest?.('[data-rv-decision], [data-rv-choice], [data-rv-rating], [data-rv-live], [data-rv-note-open], [data-rv-viewed], [data-rv-pair], [data-rv-mode], [data-rv-open], [data-rv-gallery], [data-rv-place], [data-rv-zoom], [data-rv-pin], [data-rv-pin-remove], [data-rv-conflict]');
+  if (!target || target.disabled || currentRoute() !== 'reviews') return;
+  const open = reviewOpenItem();
+  if (!open) return;
+  const { item, vui } = open;
+  const data = target.dataset;
+  if (data.rvDecision) reviewAnswer(open, 'decision', data.rvDecision);
+  else if (data.rvChoice) reviewAnswer(open, 'choice', data.rvChoice);
+  else if (data.rvRating) reviewAnswer(open, 'rating', Number(data.rvRating));
+  else if (data.rvLive) reviewAnswer(open, 'live', data.rvLive);
+  else if (data.rvNoteOpen !== undefined) reviewAnswer(open, 'note');
+  else if (data.rvViewed !== undefined) reviewAnswer(open, 'viewed', !item.answer?.viewed);
+  else if (data.rvPair) { vui.pair = data.rvPair === 'b' ? 'b' : 'a'; vui.pairMode = 'toggle'; reviewsRender(); }
+  else if (data.rvMode) { vui.pairMode = data.rvMode === 'split' ? 'split' : 'toggle'; reviewsRender(); }
+  else if (data.rvOpen) { vui.gallery = Number(data.rvOpen); vui.placing = false; reviewFocusNext('.rv-stage'); }
+  else if (data.rvGallery) { vui.gallery = data.rvGallery === 'grid' ? null : Number(data.rvGallery); vui.placing = false; reviewsRender(); }
+  else if (data.rvPlace !== undefined) { vui.placing = !vui.placing; reviewsRender(); }
+  else if (data.rvZoom) zoomStage(target.closest('.rv-evidence')?.querySelector('.rv-stage'), data.rvZoom);
+  else if (data.rvPinRemove) { if (open.pack.state === 'open') saveItemAnswer(item, { pins: removePin(item.answer?.pins || [], Number(data.rvPinRemove)) }); }
+  else if (data.rvPin) { vui.noteOpen = true; reviewFocusNext(`[data-rv-pin-text="${CSS.escape(data.rvPin)}"]`); }
+  else if (data.rvConflict === 'mine') reviewSaver.keepMine({ route: open.route, entry: open.entry, vui, itemId: item.id });
+  else if (data.rvConflict === 'theirs') reviewSaver.useTheirs({ entry: open.entry, vui, itemId: item.id });
+});
+
+document.addEventListener('input', (e) => {
+  if (currentRoute() !== 'reviews' || !e.target.matches?.('[data-rv-note], [data-rv-pin-text], [data-rv-split]')) return;
+  const open = reviewOpenItem();
+  if (!open) return;
+  const { vui } = open;
+  if (e.target.matches('[data-rv-note]')) {
+    vui.note = e.target.value;
+    vui.status = 'Not saved yet';
+    // A browser without field-sizing grows the field here.
+    if (!CSS.supports?.('field-sizing', 'content')) { e.target.style.height = 'auto'; e.target.style.height = `${e.target.scrollHeight + 2}px`; }
+    clearTimeout(vui.noteTimer);
+    vui.noteTimer = setTimeout(() => { const now = reviewOpenItem(); if (now?.item.id === open.item.id) saveReviewItemNote(now); }, REVIEW_ITEM_NOTE_DELAY_MS);
+  } else if (e.target.matches('[data-rv-pin-text]')) {
+    vui.pinText[e.target.dataset.rvPinText] = e.target.value;
+    clearTimeout(vui.pinTimer);
+    vui.pinTimer = setTimeout(() => { const now = reviewOpenItem(); if (now?.item.id === open.item.id) saveReviewPinNotes(now); }, REVIEW_ITEM_NOTE_DELAY_MS);
+  } else {
+    vui.split = Number(e.target.value);
+    e.target.closest('.rv-evidence')?.querySelector('.rv-stage')?.style.setProperty('--rv-split', `${vui.split}%`);
+  }
+});
+
+document.addEventListener('change', (e) => {
+  if (currentRoute() !== 'reviews' || !e.target.matches?.('[data-rv-note], [data-rv-pin-text], [data-rv-split], [data-rv-check]')) return;
+  const open = reviewOpenItem();
+  if (!open) return;
+  if (e.target.matches('[data-rv-note]')) saveReviewItemNote(open);
+  else if (e.target.matches('[data-rv-pin-text]')) saveReviewPinNotes(open);
+  else if (e.target.matches('[data-rv-split]')) reviewsRender();
+  else if (open.pack.state === 'open') saveItemAnswer(open.item, { checks: { ...(open.item.answer?.checks || {}), [e.target.dataset.rvCheck]: e.target.checked } });
+});
+
+// The keys of the item viewer. See viewerKeyAction() in public/review-viewer.js.
+function reviewViewerKey(e, inField) {
+  const action = viewerKeyAction({ key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, inField });
+  if (!action) return;
+  // A range, a video, and a box that scrolls sideways keep their own arrow keys.
+  if (/^Arrow/.test(e.key) && e.target.closest?.('video, input, .rv-table, .rv-code, .md-table')) return;
+  const open = reviewOpenItem();
+  e.preventDefault();
+  if (action === 'leave-field') { e.target.blur(); return; }
+  if (action === 'help') { setHelp(true); return; }
+  const route = parseReviewPath(location.pathname);
+  if (action === 'back') {
+    if (open?.vui.placing) { open.vui.placing = false; reviewsRender(); return; }
+    if (open && open.item.type === 'gallery' && open.vui.gallery !== null) { open.vui.gallery = null; reviewsRender(); return; }
+    reviewGo(`${reviewUrl(route.slug, route.pack)}#item=${encodeURIComponent(route.item)}`);
+    return;
+  }
+  if (action === 'summary') {
+    reviewGo(reviewUrl(route.slug, route.pack));
+    document.getElementById('review-submit')?.scrollIntoView({ block: 'start' });
+    document.getElementById('review-note')?.focus({ preventScroll: true });
+    return;
+  }
+  if (!open) return;
+  const { item, vui, pack } = open;
+  const stage = $app.querySelector('.rv-stage');
+  const spec = itemSpec(pack, item.id);
+  switch (action) {
+    case 'next': case 'prev': reviewItemGo(open, itemNeighbors(pack.items, item.id)[action]?.id); break;
+    case 'next-section': case 'prev-section': reviewItemGo(open, sectionStep(pack.items, item.id, action === 'next-section' ? 1 : -1)?.id); break;
+    case 'next-open': {
+      const target = nextOpenItem(pack.items, item.id);
+      if (target) reviewItemGo(open, target.id);
+      else { vui.status = 'No other item is open.'; reviewsRender(); }
+      break;
+    }
+    case 'accept': case 'deny': reviewAnswer(open, 'decision', action); break;
+    case 'live': reviewAnswer(open, 'live', item.answer?.live ? 'none' : 'pending'); break;
+    case 'note': reviewAnswer(open, 'note'); break;
+    case 'viewed': reviewAnswer(open, 'viewed', !item.answer?.viewed); break;
+    case 'viewed-next':
+      if (!item.answer?.viewed && pack.state === 'open') saveItemAnswer(item, { viewed: true }, { quiet: true });
+      reviewItemGo(open, itemNeighbors(pack.items, item.id).next?.id);
+      break;
+    case 'pin': if (stage && (item.ask || []).includes('note') && pack.state === 'open') { vui.placing = !vui.placing; reviewsRender(); } break;
+    case 'pair': if (item.type === 'image-pair') { vui.pair = vui.pair === 'b' ? 'a' : 'b'; vui.pairMode = 'toggle'; reviewsRender(); } break;
+    case 'fit': zoomStage(stage, 'fit'); break;
+    case 'zoom-in': zoomStage(stage, 'in'); break;
+    case 'zoom-out': zoomStage(stage, 'out'); break;
+    default: {
+      const n = Number(action.slice(5));
+      const choice = (item.ask || []).includes('choice') ? (spec.choices || [])[n - 1] : null;
+      if (choice) reviewAnswer(open, 'choice', choice.id);
+      else if ((item.ask || []).includes('rating') && n <= (spec.rating?.max || 5)) reviewAnswer(open, 'rating', n);
+    }
+  }
+}
 
 // ---------- Render loop ----------
 
