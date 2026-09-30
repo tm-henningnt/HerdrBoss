@@ -194,3 +194,42 @@ test('reading a field saves the draft without the URL, and discard clears it', a
   assert.equal(t.store.has(DRAFT_KEY), false);
   assert.equal(t.wizard.state.draft.slug, '');
 });
+
+test('typing the word public renders the form again with the next button enabled, and Next moves on only with the word', async () => {
+  const t = setup();
+  await t.wizard.open();
+  Object.assign(t.wizard.state.draft, { slug: 'demo', group: '/tmp/g', remote: 'gh' });
+  t.wizard.state.step = 'remote';
+  t.wizard.read({ name: 'visibility', value: 'public' });
+  t.wizard.render();
+  assert.match(t.shown.html, /<button type="submit" disabled/);
+  t.wizard.next();
+  assert.equal(t.wizard.state.step, 'remote', 'Enter without the word stays on the step');
+  assert.match(t.shown.html, /Type the word public/);
+  t.wizard.read({ id: 'wiz-confirm-public', value: 'publi' });
+  assert.match(t.shown.html, /<button type="submit" disabled/);
+  t.wizard.read({ id: 'wiz-confirm-public', value: 'public' });
+  assert.match(t.shown.html, /<button type="submit">Next<\/button>/);
+  assert.equal(t.store.get(DRAFT_KEY).includes('confirmPublic'), false);
+  t.wizard.next();
+  assert.equal(t.wizard.state.step, 'orchestrator');
+});
+
+test('the create call sends the decision, and a public one carries confirmPublic true', async () => {
+  const t = setup();
+  t.script.push({ status: 202, json: { ok: true, slug: 'demo' } }, running);
+  t.wizard.state.draft = { ...emptyDraft(), slug: 'demo', group: '/tmp/g', visibility: 'public', confirmPublic: 'public' };
+  t.wizard.state.plan = { path: '/tmp/g/demo', steps: [] };
+  await t.wizard.create();
+  assert.deepEqual(t.calls[0].body.decision, { visibility: 'public', source: 'wizard', confirmPublic: true });
+  t.wizard.stopPolling();
+});
+
+test('a server refusal of a public choice shows the API sentence', async () => {
+  const t = setup();
+  t.script.push({ status: 400, json: { ok: false, error: 'A public repository needs confirmPublic true. Type the word public to confirm it.' } });
+  t.wizard.state.draft = { ...emptyDraft(), slug: 'demo', group: '/tmp/g', visibility: 'public' };
+  t.wizard.state.plan = { path: '/tmp/g/demo', steps: [] };
+  await t.wizard.create();
+  assert.match(t.shown.html, /needs confirmPublic true/);
+});

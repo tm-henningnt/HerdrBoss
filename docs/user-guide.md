@@ -144,7 +144,7 @@ When a value stays outside, the dashboard names it and the reason. The audit and
 
 The command `herdr-boss project new` builds a new project in steps. See `docs/cli.md`, section New project flow.
 
-With `--remote gh`, the step `remote` asks you before it creates a GitHub repository. The question is a decide item in the Mailbox. The default is a private repository. A public repository needs `--visibility public` and an answer that contains the word `public`. The command exits with code 3 and waits. Answer the item, then run the same command with `--resume`. The step never pushes.
+With `--remote gh`, the step `remote` asks you before it creates a GitHub repository. The question is a decide item in the Mailbox. The dashboard wizard is the exception: your choice in the wizard is the decision, and it posts no item. The default is a private repository. A public repository needs `--visibility public` and an answer that contains the word `public`. The command exits with code 3 and waits. Answer the item, then run the same command with `--resume`. The step never pushes.
 
 The steps `policy`, `register`, and `status` put the new project into Herdr Boss:
 
@@ -177,13 +177,17 @@ The Projects page has the button **New project**. The button opens a panel on a 
 
 1. **Name.** Enter the slug. Enter a name if it must differ from the slug.
 2. **Folder.** Enter a group folder or an exact path. Herdr Boss has no default folder.
-3. **Remote.** Choose a new GitHub repository, no remote, or an existing URL. The default is a private GitHub repository. A public repository shows a warning line.
+3. **Remote.** Choose a new GitHub repository, no remote, or an existing URL. The default is a private GitHub repository. The choice of the visibility is your decision. Herdr Boss creates the repository at once and posts no Mailbox item. A public repository shows a warning and a confirmation field. Type the word `public` in the field. The button **Next** stays disabled until the word matches.
 4. **Orchestrator.** Choose the kind, enter an optional goal of at most 1000 characters, and set the tick box **Start the orchestrator**. The tick box is on by default.
 5. **Review.** The panel calls the plan route and lists the steps that the run will do. It also lists each error. Select **Create project** to start the run.
 
 Press Enter to go to the next step. Press Escape to close the panel. The panel asks first when the form has content.
 
-The wizard never creates a repository. For a GitHub remote, the flow posts a decision item to the Mailbox and waits. The progress view then shows **waiting for your decision** and a link to the Mailbox item. Answer the item, then select **Resume**.
+The wizard sends the visibility that you chose as a decision. The flow creates the GitHub repository with that visibility and does not push. The flow posts no decide item. The state file records the choice in `ids.remoteDecision` as `visibility`, `source`, and `at`.
+
+A public repository means that anyone on the internet can read all files and the full history. Do not put secrets, client names, or private data in it. If someone copies it, making it private later does not undo that. The wizard sends `confirmPublic: true` only after you typed `public`. The draft does not keep the typed word.
+
+A flow that already posted a decide item, for example from the command line, waits for an answer. Select **Resume** after you answer the item in the Mailbox. When the wizard sends a decision to such a flow, the flow uses the decision and closes the open item with the note `answered in the wizard`.
 
 The progress view reads the status route every 2 seconds. It stops when the run is done, failed, waiting, or interrupted. It also stops on a sign-in error (401) or a refusal (403). After a network error it retries after 2, 4, and 8 seconds. After 10 failures in a row it stops and shows **Resume** and **Check**. Each step shows its state and its detail. **Resume** continues the run. **Check** shows the project check.
 
@@ -199,13 +203,15 @@ The routes are for the Owner. They sit behind the dashboard access control: a lo
 
 The read-only preview refuses every route with the message `This read-only preview does not allow changes.` This includes the GET routes, because they show local paths.
 
-- `POST /api/project-new/plan` runs the dry run. The body has `slug`, `name`, `group` or `path`, `remote`, `visibility`, `org`, `kind`, `goal`, and `start`. The response lists each step with a `would ...` text and gives the resolved `path`. The route writes nothing.
+- `POST /api/project-new/plan` runs the dry run. The body has `slug`, `name`, `group` or `path`, `remote`, `visibility`, `org`, `kind`, `goal`, `start`, and `decision`. The response lists each step with a `would ...` text and gives the resolved `path`. The route writes nothing.
 - `POST /api/project-new` starts the flow with the same body. The flow runs in a separate process, so the dashboard stays responsive. The response is `202` with the `slug`, the `state` `running`, and the `url` of the status route. The flow sends the first prompt to the model only when the body has `start: true`.
 - `GET /api/project-new/<slug>` returns the status. The field `state` is `running`, `waiting`, `failed`, `interrupted`, `done`, or `idle`. Each step has a `name`, a `status`, and a `detail`. The field `exitCode` is `null` while the flow runs, `0` when it is done, `1` when a step failed, `1` also when the run was interrupted, and `3` when it waits for an Owner decision.
-- `POST /api/project-new/<slug>/resume` continues the flow at the first step that is not finished. The body can be empty. It can set `remote`, `visibility`, `org`, `kind`, and `start`. Any value that the body leaves out comes from the first request.
+- `POST /api/project-new/<slug>/resume` continues the flow at the first step that is not finished. The body can be empty. It can set `remote`, `visibility`, `org`, `kind`, `start`, and `decision`. Any value that the body leaves out comes from the first request.
 - `GET /api/project-new/<slug>/check` returns the read-only project check: `ok` and a list of items with `name`, `ok`, and `detail`.
 
-A flow with `remote: gh` waits at the step `remote`. The status then has `state: waiting` and `waiting: { reason: "waiting for an Owner decision", item: <message id> }`. Answer the decide item in the Mailbox. Then call the resume route.
+The field `decision` is `{ "visibility": "private" | "public", "confirmPublic": true, "source": "wizard" }`. It is for the Owner behind the dashboard token. It needs `remote: gh`, and `visibility` must match when the body has both. With a decision, the step `remote` creates the repository and posts no decide item. The value `public` needs `confirmPublic: true`. Without it the route answers `400`. A request without `decision` works as the command line does: the flow posts a decide item. The command line never accepts a decision.
+
+A flow with `remote: gh` and no decision waits at the step `remote`. The status then has `state: waiting` and `waiting: { reason: "waiting for an Owner decision", item: <message id> }`. Answer the decide item in the Mailbox. Then call the resume route.
 
 The routes refuse a request with these status codes:
 

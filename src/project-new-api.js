@@ -8,7 +8,7 @@ import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { NOT_BUILT, PROJECT_NEW_STEPS, ProjectNewError, markFlowCrashed, readFlowState, resolveInputs, runProjectNew } from './project-new.js';
 import { checkProject } from './project-new-check.js';
-import { ORG_NAME, RemoteError, redact, validateRemoteUrl } from './project-new-remote.js';
+import { ORG_NAME, RemoteError, checkDecision, redact, validateRemoteUrl } from './project-new-remote.js';
 import { SLUG } from './projects.js';
 
 export const MAX_RUNS = 2;
@@ -19,7 +19,7 @@ const EXIT_WAITING = 3;
 const WAITING_REASON = 'waiting for an Owner decision';
 const RUNNER = fileURLToPath(new URL('./project-new-run.js', import.meta.url));
 const OPTION_FIELDS = ['remote', 'visibility', 'org', 'kind', 'start'];
-const FIELD_TYPES = { slug: 'string', name: 'string', group: 'string', path: 'string', remote: 'string', visibility: 'string', org: 'string', kind: 'string', goal: 'string', start: 'boolean' };
+const FIELD_TYPES = { slug: 'string', name: 'string', group: 'string', path: 'string', remote: 'string', visibility: 'string', org: 'string', kind: 'string', goal: 'string', start: 'boolean', decision: 'object' };
 
 export class ApiError extends Error {
   constructor(status, message, extra = {}) { super(message); this.status = status; this.extra = extra; }
@@ -43,13 +43,25 @@ export function runFlowInChild(options) {
   });
 }
 
+const DECISION_FIELDS = ['visibility', 'source', 'confirmPublic'];
+function parseDecision(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw bad('The decision must be an object.');
+  const extra = Object.keys(value).find((key) => !DECISION_FIELDS.includes(key));
+  if (extra !== undefined) throw bad(`Unknown decision field: ${extra.slice(0, 40)}.`);
+  try { checkDecision(value); } catch (error) { if (error instanceof RemoteError) throw bad(error.message); throw error; }
+  return { visibility: value.visibility, source: value.source, ...(value.confirmPublic === true ? { confirmPublic: true } : {}) };
+}
+
 // Read the body fields into the options of the flow. Throws an ApiError with status 400.
-export function parseRequest(body, { allowed = Object.keys(FIELD_TYPES) } = {}) {
+// The decision field exists only on these routes. The command line has no way to send it.
+// requireGh false is for the resume route: the saved request holds the remote.
+export function parseRequest(body, { allowed = Object.keys(FIELD_TYPES), requireGh = true } = {}) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) throw bad('The body must be a JSON object.');
   const options = {};
   for (const [key, value] of Object.entries(body)) {
     if (!allowed.includes(key)) throw bad(`Unknown field: ${key.slice(0, 40)}.`);
     if (typeof value !== FIELD_TYPES[key]) throw bad(`${key} must be a ${FIELD_TYPES[key]}.`);
+    if (key === 'decision') { options.decision = parseDecision(value); continue; }
     if (typeof value === 'string' && (value.length > 4096 || value.includes('\0'))) throw bad(`${key} is not valid.`);
     // An empty text field is the same as no field. A form sends empty fields.
     if (value === '' && key !== 'slug') continue;
@@ -61,6 +73,10 @@ export function parseRequest(body, { allowed = Object.keys(FIELD_TYPES) } = {}) 
   }
   if (options.visibility !== undefined && !['private', 'public'].includes(options.visibility)) throw bad('visibility must be private or public.');
   if (options.visibility === 'public' && (options.remote ?? 'none') === 'none') throw bad('visibility public needs a remote that is not none.');
+  if (options.decision) {
+    if (requireGh && options.remote !== 'gh') throw bad('A decision needs remote gh.');
+    if (options.visibility !== undefined && options.visibility !== options.decision.visibility) throw bad('The decision visibility must match the visibility field.');
+  }
   if (options.kind !== undefined && !['claude', 'codex'].includes(options.kind)) throw bad('kind must be claude or codex.');
   if (options.org !== undefined && !ORG_NAME.test(options.org)) throw bad('org must be an organization or user name.');
   return options;
@@ -227,7 +243,7 @@ export function createProjectNewApi({ dataDir, runFlow = runFlowInChild, flowOpt
       if (second === 'check') { only('GET'); return { status: 200, body: checkOf(first) }; }
       if (second === 'resume') {
         only('POST');
-        const body = parseRequest(await readBody(), { allowed: OPTION_FIELDS });
+        const body = parseRequest(await readBody(), { allowed: [...OPTION_FIELDS, 'decision'], requireGh: false });
         if (runs.get(first)?.running) throw new ApiError(409, `A run of ${first} is already running.`);
         const state = readFlowState(dataDir, first);
         if (!state?.inputs) throw new ApiError(404, `There is no state for ${first}. Nothing to resume.`);

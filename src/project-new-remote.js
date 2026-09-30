@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { stripRemoteCredentials } from './harness.js';
-import { appendMessage, readMessages } from './messages.js';
+import { appendMessage, closeMailboxItems, readMessages } from './messages.js';
 
 const CHOICE_PRIVATE = 'Create private';
 const CHOICE_PUBLIC = 'Create public';
@@ -24,6 +24,19 @@ export function redact(text) {
     .replace(/\b(?:gh[posur]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})/g, '[redacted]')
     .replace(/\b(Bearer)\s+[A-Za-z0-9._~+/=-]{8,}/gi, '$1 [redacted]')
     .replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, '$1');
+}
+
+const WIZARD_CLOSE_NOTE = 'answered in the wizard';
+
+// The decision of the wizard: the Owner chose the visibility in the dashboard. Only the dashboard routes send it.
+// A public choice needs confirmPublic: true, which the wizard sends after the Owner typed the word public.
+export function checkDecision(decision) {
+  if (!decision || typeof decision !== 'object' || Array.isArray(decision)) refuse('The decision must be an object.');
+  const { visibility, source, confirmPublic } = decision;
+  if (source !== 'wizard') refuse('The decision source must be wizard.');
+  if (!['private', 'public'].includes(visibility)) refuse('The decision visibility must be private or public.');
+  if (visibility === 'public' && confirmPublic !== true) refuse('A public repository needs confirmPublic true. Type the word public to confirm it.');
+  return { visibility, source };
 }
 
 const NO_CREDENTIALS = 'The remote URL must not hold credentials. Remove the user name and the password from the URL.';
@@ -82,9 +95,12 @@ const originUrl = (inputs, context) => {
 };
 const shown = (url) => redact(stripRemoteCredentials(url));
 
+// The visibility of the flow: a saved or a new wizard decision, else the option.
+const chosenVisibility = (context) => context.decision?.visibility ?? context.ids?.remoteDecision?.visibility;
+
 function checkOptions(context) {
   const remote = context.remote ?? 'none';
-  const visibility = context.visibility ?? 'private';
+  const visibility = chosenVisibility(context) ?? context.visibility ?? 'private';
   if (!['private', 'public'].includes(visibility)) refuse('The visibility must be private or public.');
   if (remote !== 'gh' && remote !== 'none') validateRemoteUrl(remote);
   if (context.org !== undefined && context.org !== null && !ORG_NAME.test(String(context.org))) refuse('The organization must be an organization or user name: letters, digits, and hyphens, and it must not start with a hyphen.');
@@ -99,6 +115,7 @@ export function describeRemote(inputs, context) {
   const { remote, visibility, org } = checkOptions(context);
   if (remote === 'none') return 'skipped: --remote none';
   if (remote !== 'gh') return `run git remote add origin ${shown(remote)}, then git ls-remote origin; push nothing`;
+  if (chosenVisibility(context)) return `run gh repo create ${repoName(org, inputs)} --${visibility} --source ${inputs.path} --remote origin without a decide item, because the wizard chose ${visibility}; push nothing`;
   return `post a decide item for ${repoName(org, inputs)} (${visibility}), exit with code 3, and after a clear Owner answer run gh repo create ${repoName(org, inputs)} --${visibility} --source ${inputs.path} --remote origin; push nothing`;
 }
 
@@ -187,6 +204,16 @@ function ghRemote(inputs, context, { visibility, org }) {
   if (context.ids.remoteCreated) refuse(`The state says ${context.ids.remoteCreated} was created, but the remote origin is missing. Run git remote add origin URL in ${inputs.path}, then run the flow again with --resume.`);
 
   let ask = context.ids.remoteAsk;
+  // A wizard decision is the Owner choice. It needs no item, and an open item is closed.
+  if (context.decision) context.remember({ remoteDecision: { ...checkDecision(context.decision), at: new Date().toISOString() } });
+  const decided = context.ids.remoteDecision;
+  if (decided) {
+    if (ask && !ask.closed) {
+      closeMailboxItems([ask.id], WIZARD_CLOSE_NOTE, { by: 'boss', dir: context.dataDir });
+      context.remember({ remoteAsk: { ...ask, closed: true } });
+    }
+    return createRepository(inputs, context, decided.visibility);
+  }
   if (!ask) {
     const repo = repoName(org, inputs);
     const record = appendMessage({ thread: 'boss', from: 'boss', to: 'owner', kind: 'reply', text: decisionText(inputs, { repo, visibility, org }), action: 'decide', replyTo: null, status: 'new' }, { dir: context.dataDir });
@@ -199,16 +226,20 @@ function ghRemote(inputs, context, { visibility, org }) {
   if (!answer) return { status: 'waiting', detail: `waiting for an Owner decision: mailbox item ${ask.id}` };
   if (answer === 'decline') return { status: 'skipped', detail: 'skipped: Owner declined' };
 
+  return createRepository(inputs, context, answer);
+}
+
+function createRepository(inputs, context, visibility) {
   const owner = ghLogin(inputs, context);
   const repo = `${owner}/${inputs.slug}`;
-  const created = run('gh', createArgs(repo, answer, inputs), { cwd: inputs.path, env: ghEnv(context) });
+  const created = run('gh', createArgs(repo, visibility, inputs), { cwd: inputs.path, env: ghEnv(context) });
   if (created.status !== 0) {
     const message = redact(`${created.stderr}${created.stdout}`).trim().split('\n').slice(0, 3).join(' ').slice(0, 400);
     refuse(`gh repo create ${repo} failed: ${message || 'no message'}`);
   }
   context.remember({ remoteCreated: repo });
   verifyOrigin(inputs, context);
-  return `created the ${answer} repository ${repo}, added origin ${shown(originUrl(inputs, context) || '')}, and checked it with git ls-remote origin. Nothing was pushed`;
+  return `created the ${visibility} repository ${repo}, added origin ${shown(originUrl(inputs, context) || '')}, and checked it with git ls-remote origin. Nothing was pushed`;
 }
 
 export function remoteStep(inputs, context) {

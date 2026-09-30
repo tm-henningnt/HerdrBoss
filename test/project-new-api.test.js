@@ -494,3 +494,76 @@ test('the API keeps at most 20 finished runs in memory', async () => {
   assert.ok(api.stats().tracked <= 20, `tracked ${api.stats().tracked}`);
   assert.equal(api.stats().running, 0);
 });
+
+const wizardDecision = (visibility, extra = {}) => ({ visibility, source: 'wizard', ...(visibility === 'public' ? { confirmPublic: true } : {}), ...extra });
+
+test('the routes accept a wizard decision and pass it to the flow', async (t) => {
+  reset();
+  const { call } = await start(t);
+  const planned = await call('POST', '/api/project-new/plan', plan('demo', { remote: 'gh', visibility: 'private', decision: wizardDecision('private') }));
+  assert.equal(planned.status, 200, planned.text);
+  const started = await call('POST', '/api/project-new', plan('demo', { remote: 'gh', visibility: 'private', decision: wizardDecision('private') }));
+  assert.equal(started.status, 202, started.text);
+  await waitFor(async () => (await call('GET', '/api/project-new/demo')).json.state === 'done', 'done');
+  assert.deepEqual(calls[0].decision, wizardDecision('private'));
+});
+
+test('a public decision without confirmPublic true is a 400 on both routes', async (t) => {
+  reset();
+  const { call } = await start(t);
+  for (const decision of [{ visibility: 'public', source: 'wizard' }, { visibility: 'public', source: 'wizard', confirmPublic: false }, { visibility: 'public', source: 'wizard', confirmPublic: 'true' }]) {
+    for (const url of ['/api/project-new', '/api/project-new/plan']) {
+      const response = await call('POST', url, plan('demo', { remote: 'gh', visibility: 'public', decision }));
+      assert.equal(response.status, 400, `${url} ${JSON.stringify(decision)}`);
+      assert.match(response.json.error, /confirmPublic/);
+    }
+  }
+  assert.equal(calls.length, 0);
+  assert.equal(fs.existsSync(path.join(dataDir, 'flows')), false);
+});
+
+test('a bad decision is a 400: wrong source, wrong visibility, extra field, no gh remote, mismatch', async (t) => {
+  reset();
+  const { call } = await start(t);
+  const bad = [
+    [{ remote: 'gh', decision: { visibility: 'private', source: 'cli' } }, /source/],
+    [{ remote: 'gh', decision: { visibility: 'internal', source: 'wizard' } }, /visibility/],
+    [{ remote: 'gh', decision: { visibility: 'private', source: 'wizard', extra: 1 } }, /Unknown/],
+    [{ remote: 'gh', decision: 'private' }, /decision/],
+    [{ remote: 'gh', decision: null }, /decision/],
+    [{ remote: 'gh', decision: [] }, /decision/],
+    [{ remote: 'none', decision: wizardDecision('private') }, /remote/],
+    [{ decision: wizardDecision('private') }, /remote/],
+    [{ remote: 'gh', visibility: 'public', decision: wizardDecision('private') }, /match/],
+  ];
+  for (const [extra, pattern] of bad) {
+    const response = await call('POST', '/api/project-new', plan('demo', extra));
+    assert.equal(response.status, 400, JSON.stringify(extra));
+    assert.match(response.json.error, pattern, JSON.stringify(extra));
+  }
+  assert.equal(calls.length, 0);
+});
+
+test('a request without a decision behaves as before', async (t) => {
+  reset();
+  const { call } = await start(t);
+  assert.equal((await call('POST', '/api/project-new', plan('demo', { remote: 'gh' }))).status, 202);
+  await waitFor(async () => (await call('GET', '/api/project-new/demo')).json.state === 'done', 'done');
+  assert.equal('decision' in calls[0], false);
+});
+
+test('the resume route accepts a wizard decision and does not keep it in the request file', async (t) => {
+  reset();
+  remoteDetail = 'msg-decide-9';
+  const { call } = await start(t);
+  await call('POST', '/api/project-new', plan('demo', { remote: 'gh' }));
+  await waitFor(async () => (await call('GET', '/api/project-new/demo')).json.state === 'waiting', 'waiting');
+  remoteDetail = null;
+  const resumed = await call('POST', '/api/project-new/demo/resume', { decision: wizardDecision('private') });
+  assert.equal(resumed.status, 202, resumed.text);
+  await waitFor(async () => (await call('GET', '/api/project-new/demo')).json.state === 'done', 'done');
+  assert.deepEqual(calls.at(-1).decision, wizardDecision('private'));
+  assert.doesNotMatch(fs.readFileSync(path.join(dataDir, 'flows', 'demo.request.json'), 'utf8'), /decision/);
+  const publicWithout = await call('POST', '/api/project-new/demo/resume', { decision: { visibility: 'public', source: 'wizard' } });
+  assert.equal(publicWithout.status, 400);
+});

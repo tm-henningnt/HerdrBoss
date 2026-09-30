@@ -460,3 +460,138 @@ test('an organization that starts with a dash or holds a bad character is refuse
     assert.deepEqual(f.calls(), []);
   } finally { f.cleanup(); }
 });
+
+const wizard = (visibility, extra = {}) => ({ visibility, source: 'wizard', ...(visibility === 'public' ? { confirmPublic: true } : {}), ...extra });
+const stateOf = (result) => JSON.parse(fs.readFileSync(result.stateFile, 'utf8'));
+
+test('a wizard decision for private creates the repository and posts no item', () => {
+  const f = fixture();
+  try {
+    const result = runProjectNew(base(f, { decision: wizard('private') }));
+    assert.equal(result.ok, true, result.error);
+    assert.equal(result.waiting, undefined);
+    assert.equal(items(f).length, 0);
+    assert.deepEqual(createCalls(f), [`repo create octo/demo --private --source ${projectDir(f)} --remote origin`]);
+    assert.equal(step(result, 'remote').status, 'done');
+  } finally { f.cleanup(); }
+});
+
+test('a wizard decision for public with the confirmation creates a public repository and posts no item', () => {
+  const f = fixture();
+  try {
+    const result = runProjectNew(base(f, { visibility: 'public', decision: wizard('public') }));
+    assert.equal(result.ok, true, result.error);
+    assert.equal(items(f).length, 0);
+    assert.deepEqual(createCalls(f), [`repo create octo/demo --public --source ${projectDir(f)} --remote origin`]);
+  } finally { f.cleanup(); }
+});
+
+test('a wizard decision for public without confirmPublic is refused before any change', () => {
+  const f = fixture();
+  try {
+    assert.throws(() => runProjectNew(base(f, { visibility: 'public', decision: { visibility: 'public', source: 'wizard' } })), /confirm/i);
+    assert.throws(() => runProjectNew(base(f, { visibility: 'public', decision: { visibility: 'public', source: 'wizard', confirmPublic: 'yes' } })), /confirm/i);
+    assert.equal(fs.existsSync(projectDir(f)), false);
+    assert.deepEqual(f.calls(), []);
+    assert.equal(items(f).length, 0);
+  } finally { f.cleanup(); }
+});
+
+test('a decision needs source wizard and a valid visibility', () => {
+  const f = fixture();
+  try {
+    assert.throws(() => runProjectNew(base(f, { decision: { visibility: 'private', source: 'cli' } })), /decision/i);
+    assert.throws(() => runProjectNew(base(f, { decision: { visibility: 'internal', source: 'wizard' } })), /visibility/i);
+    assert.deepEqual(f.calls(), []);
+  } finally { f.cleanup(); }
+});
+
+test('the state records the wizard decision without a secret', () => {
+  const f = fixture();
+  try {
+    const result = runProjectNew(base(f, { decision: wizard('private') }));
+    const decision = stateOf(result).ids.remoteDecision;
+    assert.deepEqual(Object.keys(decision).sort(), ['at', 'source', 'visibility']);
+    assert.equal(decision.visibility, 'private');
+    assert.equal(decision.source, 'wizard');
+    assert.ok(!Number.isNaN(Date.parse(decision.at)));
+    assert.doesNotMatch(JSON.stringify(stateOf(result)), /ghp_|hunter2/);
+  } finally { f.cleanup(); }
+});
+
+test('a resumed flow that has a decision never posts an item', () => {
+  const f = fixture();
+  try {
+    f.mode('loggedout');
+    const first = runProjectNew(base(f, { decision: wizard('private') }));
+    assert.equal(first.ok, false);
+    assert.equal(step(first, 'remote').status, 'failed');
+    f.mode('ok');
+    const again = runProjectNew(base(f, { resume: true }));
+    assert.equal(again.ok, true, again.error);
+    assert.equal(createCalls(f).length, 1);
+    assert.equal(createCalls(f)[0].includes('--private'), true);
+    assert.equal(items(f).filter((r) => r.action === 'decide').length, 0);
+  } finally { f.cleanup(); }
+});
+
+test('a flow with a posted item that the wizard then decides closes the item and creates the repository', () => {
+  const f = fixture();
+  try {
+    const first = runProjectNew(base(f));
+    assert.equal(first.waiting, true);
+    const [item] = items(f);
+    assert.equal(item.closedAt, undefined);
+    const resumed = runProjectNew(base(f, { resume: true, decision: wizard('private') }));
+    assert.equal(resumed.ok, true, resumed.error);
+    assert.equal(createCalls(f).length, 1);
+    const closed = readMessages({ dir: f.dataDir }).find((r) => r.id === item.id);
+    assert.ok(closed.closedAt);
+    assert.match(closed.closeNote, /answered in the wizard/);
+    assert.equal(items(f).filter((r) => r.action === 'decide').length, 1);
+  } finally { f.cleanup(); }
+});
+
+test('a wizard decision wins over an Owner reply to an item that was posted earlier', () => {
+  const f = fixture();
+  try {
+    runProjectNew(base(f, { visibility: 'public' }));
+    ownerReply(f, items(f)[0].id, 'Create public');
+    const resumed = runProjectNew(base(f, { resume: true, decision: wizard('private') }));
+    assert.equal(resumed.ok, true, resumed.error);
+    assert.equal(createCalls(f)[0].includes('--private'), true);
+  } finally { f.cleanup(); }
+});
+
+test('cli: --visibility public still posts the decide item', () => {
+  const f = fixture();
+  try {
+    const out = [];
+    const code = projectCommand(['new', 'demo', '--group', f.group, '--remote', 'gh', '--visibility', 'public'], { env: f.env, herdr: () => { throw new Error('no call'); }, dataDir: f.dataDir, log: (l) => out.push(l), flowOptions: { repoRoot: f.repoRoot, ceiling: f.ceiling } });
+    assert.equal(code, 3);
+    assert.equal(items(f).filter((r) => r.action === 'decide').length, 1);
+    assert.deepEqual(createCalls(f), []);
+  } finally { f.cleanup(); }
+});
+
+test('cli: a decision in the options of the command is ignored', () => {
+  const f = fixture();
+  try {
+    const out = [];
+    const code = projectCommand(['new', 'demo', '--group', f.group, '--remote', 'gh'], { env: f.env, herdr: () => { throw new Error('no call'); }, dataDir: f.dataDir, log: (l) => out.push(l), flowOptions: { repoRoot: f.repoRoot, ceiling: f.ceiling, decision: wizard('private') } });
+    assert.equal(code, 3);
+    assert.equal(items(f).filter((r) => r.action === 'decide').length, 1);
+    assert.deepEqual(createCalls(f), []);
+  } finally { f.cleanup(); }
+});
+
+test('a dry run with a decision names the repository and says that no item is posted', () => {
+  const f = fixture();
+  try {
+    const result = runProjectNew(base(f, { dryRun: true, decision: wizard('private') }));
+    assert.doesNotMatch(step(result, 'remote').detail, /post a decide item/);
+    assert.match(step(result, 'remote').detail, /without a decide item/);
+    assert.match(step(result, 'remote').detail, /gh repo create .*--private/);
+    assert.equal(items(f).length, 0);
+  } finally { f.cleanup(); }
+});

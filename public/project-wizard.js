@@ -15,7 +15,7 @@ const SETTLED = new Set(['done', 'failed', 'waiting', 'interrupted']);
 const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 export function emptyDraft() {
-  return { slug: '', name: '', folderMode: 'group', group: '', path: '', remote: 'gh', url: '', visibility: 'private', org: '', kind: 'ladder', goal: '', start: true };
+  return { slug: '', name: '', folderMode: 'group', group: '', path: '', remote: 'gh', url: '', visibility: 'private', confirmPublic: '', org: '', kind: 'ladder', goal: '', start: true };
 }
 
 // True when the form holds anything that the Owner typed. Escape asks before it closes such a form.
@@ -23,6 +23,11 @@ export function hasContent(draft) {
   const empty = emptyDraft();
   return ['slug', 'name', 'group', 'path', 'url', 'org', 'goal'].some((key) => String(draft[key] ?? '').trim() !== empty[key]);
 }
+
+// The Owner confirms a public repository by typing this word.
+export const PUBLIC_WORD = 'public';
+export const publicConfirmed = (draft) => String(draft.confirmPublic ?? '').trim().toLowerCase() === PUBLIC_WORD;
+const needsConfirm = (draft) => draft.remote === 'gh' && draft.visibility === 'public' && !publicConfirmed(draft);
 
 function checkUrl(value) {
   const url = String(value ?? '').trim();
@@ -49,6 +54,7 @@ export function validateStep(step, draft) {
     }
   } else if (step === 'remote') {
     if (draft.remote === 'url' && !checkUrl(draft.url)) errors.push('Enter a https, ssh, or git URL, or user@host:path. The URL must not hold a password or a token.');
+    if (needsConfirm(draft)) errors.push(`Type the word ${PUBLIC_WORD} in the confirmation field to create a public repository.`);
     if (draft.remote === 'gh' && String(draft.org).trim() && !ORG_NAME.test(String(draft.org).trim())) errors.push('The organization is a name with letters, digits, and hyphens. It does not start with a hyphen.');
   } else if (step === 'orchestrator') {
     if (!['ladder', 'claude', 'codex'].includes(draft.kind)) errors.push('Choose the ladder default, Claude, or Codex.');
@@ -70,7 +76,10 @@ export function toRequest(draft) {
   else if (draft.remote === 'url') body.remote = String(draft.url).trim();
   else {
     body.remote = 'gh';
-    body.visibility = draft.visibility === 'public' ? 'public' : 'private';
+    const visibility = draft.visibility === 'public' ? 'public' : 'private';
+    body.visibility = visibility;
+    // The choice in the wizard is the Owner decision. The server creates the repository without a Mailbox item.
+    body.decision = { visibility, source: 'wizard', ...(visibility === 'public' && publicConfirmed(draft) ? { confirmPublic: true } : {}) };
     if (String(draft.org).trim()) body.org = String(draft.org).trim();
   }
   if (draft.kind === 'claude' || draft.kind === 'codex') body.kind = draft.kind;
@@ -91,7 +100,7 @@ export function reviewRows(draft) {
     { label: 'Folder', value: folder },
     { label: 'Remote', value: remote },
   ];
-  if (draft.remote === 'gh' && draft.visibility === 'public') rows.push({ label: 'Warning', value: 'A public repository is visible to everyone. The Mailbox decision must also say public.', warn: true });
+  if (draft.remote === 'gh' && draft.visibility === 'public') rows.push({ label: 'Warning', value: 'Anyone on the internet can read a public repository. You typed public to confirm it.', warn: true });
   rows.push({ label: 'Orchestrator', value: draft.kind === 'ladder' ? 'first usable entry of the ladder' : draft.kind });
   rows.push({ label: 'Goal', value: String(draft.goal).trim() || 'none' });
   rows.push({ label: 'Start the orchestrator', value: draft.start === true ? 'yes' : 'no' });
@@ -106,6 +115,15 @@ const field = (id, label, control, hint = '') => `<div class="wizard-field"><lab
 const text = (id, value, extra = '') => `<input id="${id}" type="text" value="${esc(value)}" autocomplete="off" autocapitalize="off" spellcheck="false" ${extra}>`;
 const radio = (name, value, current, label, hint = '') => `<label class="wizard-choice"><input type="radio" name="${name}" value="${value}"${current === value ? ' checked' : ''}><span><b>${esc(label)}</b>${hint ? `<small>${esc(hint)}</small>` : ''}</span></label>`;
 
+// The warning and the typed confirmation of a public repository. The next button is disabled until the word matches.
+function publicConfirm(d) {
+  const ok = publicConfirmed(d);
+  return '<div class="wizard-confirm" data-key="public-confirm">'
+    + '<p class="wizard-warn" id="wiz-public-warning" role="note"><b>Public means public.</b> Anyone on the internet can read all files and the full history of a public repository. Do not put secrets, client names, or private data in it. If someone copies it, making it private later does not undo that.</p>'
+    + field('wiz-confirm-public', `Type ${PUBLIC_WORD} to confirm`, text('wiz-confirm-public', d.confirmPublic, `aria-describedby="wiz-public-warning" aria-label="Type ${PUBLIC_WORD} to confirm a public repository" aria-invalid="${ok ? 'false' : 'true'}" maxlength="20" data-wizard-first`))
+    + '</div>';
+}
+
 function stepBody(step, d) {
   if (step === 'name') {
     return field('wiz-slug', 'Slug', text('wiz-slug', d.slug, 'aria-describedby="wiz-slug-hint" aria-label="Project slug" maxlength="64" data-wizard-first'), 'Lowercase letters, digits, and hyphens. Used in commands, URLs, and the workspace name.')
@@ -119,8 +137,8 @@ function stepBody(step, d) {
   }
   if (step === 'remote') {
     const gh = d.remote === 'gh';
-    return `<fieldset class="wizard-group"><legend>Remote repository</legend>${radio('remote', 'gh', d.remote, 'New GitHub repository', 'Herdr Boss asks you in the Mailbox and creates the repository only after your answer.')}${radio('remote', 'none', d.remote, 'No remote', 'Local Git only.')}${radio('remote', 'url', d.remote, 'Existing URL', 'Add a repository that already exists as origin.')}</fieldset>`
-      + (gh ? `<fieldset class="wizard-group"><legend>Visibility</legend>${radio('visibility', 'private', d.visibility, 'Private', 'The default.')}${radio('visibility', 'public', d.visibility, 'Public')}</fieldset>${d.visibility === 'public' ? '<p class="wizard-warn" role="note">Anyone on the internet can read a public repository. Check that the project holds no secret and no client data.</p>' : ''}${field('wiz-org', 'Organization (optional)', text('wiz-org', d.org, 'aria-label="GitHub organization" maxlength="39"'), 'The default is your gh login.')}` : '')
+    return `<fieldset class="wizard-group"><legend>Remote repository</legend>${radio('remote', 'gh', d.remote, 'New GitHub repository', 'Herdr Boss creates the repository with the visibility that you choose. It does not ask in the Mailbox.')}${radio('remote', 'none', d.remote, 'No remote', 'Local Git only.')}${radio('remote', 'url', d.remote, 'Existing URL', 'Add a repository that already exists as origin.')}</fieldset>`
+      + (gh ? `<fieldset class="wizard-group"><legend>Visibility</legend>${radio('visibility', 'private', d.visibility, 'Private', 'The default.')}${radio('visibility', 'public', d.visibility, 'Public')}</fieldset>${d.visibility === 'public' ? publicConfirm(d) : ''}${field('wiz-org', 'Organization (optional)', text('wiz-org', d.org, 'aria-label="GitHub organization" maxlength="39"'), 'The default is your gh login.')}` : '')
       + (d.remote === 'url' ? field('wiz-url', 'Repository URL', text('wiz-url', d.url, 'aria-label="Repository URL" inputmode="url" data-wizard-first'), 'A https, ssh, or git URL, or user@host:path. Never put a password or a token in it. The draft does not keep this URL.') : '');
   }
   if (step === 'orchestrator') {
@@ -153,7 +171,7 @@ export function wizardHtml(model) {
   const last = step === 'review';
   const nav = `<div class="wizard-actions">${index > 0 ? '<button type="button" class="quiet" data-wizard="back">Back</button>' : ''}`
     + (last ? (model.plan ? `<button type="button" data-wizard="create"${model.busy ? ' disabled' : ''}>Create project</button>` : '<button type="button" data-wizard="plan">Check again</button>')
-      : `<button type="submit">${WIZARD_STEPS[index + 1] === 'review' ? 'Review' : 'Next'}</button>`) + '</div>';
+      : `<button type="submit"${step === 'remote' && needsConfirm(draft) ? ' disabled aria-disabled="true"' : ''}>${WIZARD_STEPS[index + 1] === 'review' ? 'Review' : 'Next'}</button>`) + '</div>';
   const dots = `<ol class="wizard-steps" aria-label="Steps">${WIZARD_STEPS.map((s, i) => `<li${s === step ? ' aria-current="step"' : ''}${i < index ? ' class="past"' : ''}>${esc(STEP_TITLE[s])}</li>`).join('')}</ol>`;
   return `${head}${dots}<form class="wizard-body" data-key="wizard-step" data-wizard-form novalidate aria-labelledby="wizard-title"><h3 data-key="wizard-step-title" tabindex="-1" data-wizard-title>Step ${index + 1} of ${WIZARD_STEPS.length}: ${esc(STEP_TITLE[step])}</h3>`
     + `<div data-key="step-${esc(step)}">${last ? reviewBody(model) : stepBody(step, draft)}</div>${errorList(errors)}<p class="wizard-hint" role="status">${esc(message)}</p>${nav}</form>`;
@@ -177,10 +195,10 @@ export function progressHtml(status, { check = null, busy = false, message = '',
 const clean = (value, allowed, fallback) => (allowed.includes(value) ? value : fallback);
 const str = (value, limit = 4096) => (typeof value === 'string' ? value.slice(0, limit) : '');
 
-// The draft holds no repository URL: a URL can hold a credential.
+// The draft holds no repository URL: a URL can hold a credential. It holds no typed confirmation: the Owner types it again each time.
 export function saveDraft(storage, draft) {
   try {
-    const { url, ...rest } = draft; // eslint-disable-line no-unused-vars
+    const { url, confirmPublic, ...rest } = draft; // eslint-disable-line no-unused-vars
     storage.setItem(DRAFT_KEY, JSON.stringify({ ...rest, goal: String(rest.goal ?? '').slice(0, GOAL_LIMIT) }));
   } catch { /* Storage can be off or full. */ }
 }
@@ -193,7 +211,7 @@ export function loadDraft(storage) {
     return {
       slug: str(saved.slug, 64), name: str(saved.name, 200), folderMode: clean(saved.folderMode, ['group', 'path'], base.folderMode),
       group: str(saved.group), path: str(saved.path), remote: clean(saved.remote, ['gh', 'none', 'url'], base.remote), url: '',
-      visibility: clean(saved.visibility, ['private', 'public'], base.visibility), org: str(saved.org, 39),
+      visibility: clean(saved.visibility, ['private', 'public'], base.visibility), confirmPublic: '', org: str(saved.org, 39),
       kind: clean(saved.kind, ['ladder', 'claude', 'codex'], base.kind), goal: str(saved.goal, GOAL_LIMIT),
       start: typeof saved.start === 'boolean' ? saved.start : base.start,
     };
