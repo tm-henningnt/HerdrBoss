@@ -125,10 +125,11 @@ async function start(t, { preview = false } = {}) {
   cfg.host = '127.0.0.1';
   cfg.port = 0;
   cfg.tickSeconds = 3600;
+  let engine;
   const { server, close } = serve(cfg, {
     readOnlyPreview: preview,
     createEngine: () => {
-      const engine = new EventEmitter();
+      engine = new EventEmitter();
       engine.state = {};
       engine.tick = async () => engine.state;
       engine.log = () => {};
@@ -140,7 +141,7 @@ async function start(t, { preview = false } = {}) {
     server.once('listening', resolve);
     server.once('error', reject);
   });
-  return { base: `http://127.0.0.1:${server.address().port}`, cfg };
+  return { base: `http://127.0.0.1:${server.address().port}`, cfg, engine };
 }
 
 const REMOTE = { host: 'mac.tail0000.ts.net' };
@@ -612,4 +613,79 @@ test('an error text holds no absolute path', async (t) => {
   assert.ok(!response.text.includes(dataDir), 'no data dir');
   assert.ok(!response.text.includes('/Users/someone'), 'no home path');
   assert.match(response.text, /<path>/);
+});
+
+// ---------- Live events ----------
+
+// Listen on /api/events and collect the `review` events. It returns { events, next(check), close }.
+function listen(t, base) {
+  const url = new URL(base);
+  const events = [];
+  const waiters = [];
+  let buffer = '';
+  const req = http.get({ host: url.hostname, port: url.port, path: '/api/events' }, (res) => {
+    res.setEncoding('utf8');
+    res.on('data', (chunk) => {
+      buffer += chunk;
+      let end;
+      while ((end = buffer.indexOf('\n\n')) >= 0) {
+        const block = buffer.slice(0, end);
+        buffer = buffer.slice(end + 2);
+        const type = /^event: (.+)$/m.exec(block)?.[1];
+        const data = /^data: (.+)$/m.exec(block)?.[1];
+        if (type !== 'review' || !data) continue;
+        events.push(JSON.parse(data));
+        for (const waiter of [...waiters]) waiter();
+      }
+    });
+  });
+  const opened = new Promise((resolve) => req.once('response', resolve));
+  t.after(() => req.destroy());
+  const next = (check) => new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`No matching review event. Seen: ${JSON.stringify(events)}`)), 5000);
+    const look = () => {
+      const found = events.find(check);
+      if (!found) return;
+      clearTimeout(timer);
+      waiters.splice(waiters.indexOf(look), 1);
+      resolve(found);
+    };
+    waiters.push(look);
+    look();
+  });
+  return { events, next, opened };
+}
+
+test('an answer, a note, and a submit push a review event with ids only', async (t) => {
+  publish('event-pack');
+  const { base } = await start(t);
+  const live = listen(t, base);
+  await live.opened;
+  const put = (item, body) => raw(base, 'PUT', `/api/reviews/s-event-pack/event-pack/items/${item}`, { headers: JSON_HEADERS, body: json(body) });
+  assert.equal((await put('cart-themes', { rev: 0, decision: 'deny', note: 'The total is hard to read in dark.', opId: 'op-e1' })).status, 200);
+  const answer = await live.next((event) => event.item === 'cart-themes');
+  assert.deepEqual(answer, { slug: 's-event-pack', pack: 'event-pack', version: 1, item: 'cart-themes', rev: 1 }, 'no note text, no decision');
+
+  assert.equal((await raw(base, 'PUT', '/api/reviews/s-event-pack/event-pack/note', { headers: JSON_HEADERS, body: json({ note: 'Fix it.', rev: 0 }) })).status, 200);
+  assert.deepEqual(await live.next((event) => event.note), { slug: 's-event-pack', pack: 'event-pack', version: 1, note: true, rev: 1 });
+
+  // A refused write pushes nothing.
+  assert.equal((await put('cart-themes', { rev: 0, decision: 'accept' })).status, 409);
+  assert.equal((await raw(base, 'POST', '/api/reviews/s-event-pack/event-pack/submit', { headers: JSON_HEADERS, body: json({ verdict: 'comment' }) })).status, 200);
+  assert.deepEqual(await live.next((event) => event.state), { slug: 's-event-pack', pack: 'event-pack', version: 1, state: 'submitted' });
+  assert.equal(live.events.filter((event) => event.item).length, 1);
+});
+
+test('a new pack version pushes a review event at the next state push', async (t) => {
+  publish('version-pack');
+  const { base, engine } = await start(t);
+  const live = listen(t, base);
+  await live.opened;
+  engine.emit('state', engine.state);
+  publish('version-pack');
+  engine.emit('state', engine.state);
+  assert.deepEqual(await live.next((event) => event.version === 2), { slug: 's-version-pack', pack: 'version-pack', version: 2, state: 'open' });
+  engine.emit('state', engine.state);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(live.events.filter((event) => event.pack === 'version-pack' && event.version === 2).length, 1, 'an unchanged pack pushes nothing');
 });

@@ -1,7 +1,7 @@
 // The answer saves of the review item viewer, the repeat-tap guard, and the Viewed timer.
 // See docs/ideas/review-packs.md, section Autosave and offline. The module has no DOM use: the page passes fetch,
-// the clock, and the document, so the Node tests run it against a real server. public/app.js calls it through
-// saveItemAnswer(). RP8 wraps that function with the autosave queue.
+// the clock, and the document, so the Node tests run it against a real server. public/app.js uses the tap guard and
+// the Viewed timer. The page saves through the autosave queue of public/review-sync.js, not through createItemSaver().
 //
 // The state is the state of the page: `entry.data` is the loaded pack, and `vui` is the view state of one item
 // (rev, status, error, conflict, note, pinText, and pending: the count of running saves for each answer field).

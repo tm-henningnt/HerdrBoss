@@ -7,6 +7,7 @@
 // Markdown goes through h.markdown(): the page passes a renderer that escapes all source text and then removes each tag and
 // attribute outside the allowlist, before the string reaches the DOM. Without it, markdownOrPlain() renders the text.
 import { markdownOrPlain, safeUrl } from './markdown.js';
+import { syncStatusHtml, packStatusHtml } from './review-sync.js';
 
 export const PIN_MAX = 20;
 export const PIN_TEXT_MAX = 200;
@@ -455,10 +456,13 @@ function noteHtml(item, ui, h, disabled) {
     + `<textarea id="${id}" class="rv-note-field" data-rv-note maxlength="${NOTE_MAX}" rows="2" data-keep-attrs="style" placeholder="What should the project change or keep?"${disabled ? ' disabled' : ''}>${esc(note)}</textarea></div>`;
 }
 
+// A local message of the viewer (for example "No other item is open.") shows first. Otherwise the line shows the save
+// status of the item from public/review-sync.js.
 function statusHtml(ui, h) {
   const { esc } = h;
   if (ui.error) return `<p class="rv-status rv-status-error" role="alert">Not saved. ${esc(ui.error)}</p>`;
-  return `<p class="rv-status" role="status">${ui.status ? `${ui.status === 'Saved' ? viewerIcon('check', 'app-icon rv-status-icon') : ''}${esc(ui.status)}` : ''}</p>`;
+  if (ui.status) return `<p class="rv-status" role="status">${esc(ui.status)}</p>`;
+  return syncStatusHtml(ui.sync || { kind: '' }, esc);
 }
 
 function conflictHtml(spec, ui, h) {
@@ -547,7 +551,8 @@ export function answerBarHtml(pack, item, ui, h) {
   if (ask.includes('accept')) main.push(button('data-rv-decision="accept"', 'decision', answer.decision === 'accept', 'ok', 'check', 'Accept', 'a'));
   if (main.length) rows.push(`<div class="rv-acts" style="--rv-acts: ${main.length}">${main.join('')}</div>`);
   const readOnly = off ? '<p class="rv-help-line">Read only.</p>' : '';
-  return `<div class="rv-answer" data-key="rv-answer:${esc(item.id)}" role="group" aria-label="Answer">${readOnly}${rows.join('')}</div>`;
+  // The pill sits above the bar in its own slot, so a status change never moves a button under the finger.
+  return `<div class="rv-answer" data-key="rv-answer:${esc(item.id)}" role="group" aria-label="Answer">${packStatusHtml(ui.packSync || { kind: '' }, esc)}${readOnly}${rows.join('')}</div>`;
 }
 
 // The slim top bar of the item viewer: Back, one h1 with the title, the place and the section, and the Viewed toggle.

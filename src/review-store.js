@@ -7,7 +7,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { SLUG } from './projects.js';
-import { openSqliteStore } from './sqlite-store.js';
+import { openSqliteStore, databaseFile } from './sqlite-store.js';
 import { validatePack } from './review-pack.js';
 
 export const RESULT_SCHEMA = 'herdr-boss.review-result/1';
@@ -439,6 +439,19 @@ export function listPacks({ dir, state = 'open', slug } = {}) {
       counts: pack.derived.counts, packState: pack.derived.pack, stale: pack.items.filter((item) => item.stale).length,
     };
   });
+}
+
+// The current version and the state of each pack, for the live `review` events. It reads no pack content and
+// returns [] when the database does not exist, so a poll never creates it.
+export function packHeads({ dir, slug, pack } = {}) {
+  if (typeof dir !== 'string' || !dir || !fs.existsSync(databaseFile(dir))) return [];
+  const { db } = open(dir);
+  if (slug !== undefined) {
+    checkName(slug);
+    checkName(pack, 'slug', 'The pack ID');
+    return db.prepare('SELECT slug, pack, current_version AS version, state FROM review_packs WHERE slug = ? AND pack = ?').all(slug, pack);
+  }
+  return db.prepare('SELECT slug, pack, current_version AS version, state FROM review_packs ORDER BY slug, pack').all();
 }
 
 // One stored file of a version, looked up by its manifest path. A route never joins a client path to a folder:
