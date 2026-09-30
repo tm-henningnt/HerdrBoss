@@ -2,6 +2,9 @@
 // See docs/ideas/review-packs.md, section The reviewer UI. The module has no DOM use, so the Node tests import it directly.
 // Each render function takes helpers: esc, avatar(slug), projectLabel(slug), time(iso), and menuButton (HTML).
 // Every value from the server goes through esc(). A URL part goes through encodeURIComponent() and then esc().
+// The item route shows the item viewer of public/review-viewer.js. It takes ui.viewer (the view state of the item)
+// and the helper text(url), which gives a loaded text file of the pack.
+import { itemViewerHtml, answerBarHtml, viewerBarHtml } from './review-viewer.js';
 
 const SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
@@ -264,20 +267,17 @@ function summaryHtml(pack, ui, esc) {
   return `<section id="review-submit" class="review-summary" aria-labelledby="review-sum-title"><h2 id="review-sum-title">Summary</h2>${blocks}${form}</section>`;
 }
 
-function itemPanelHtml(pack, ui, esc) {
-  const back = `${reviewUrl(pack.slug, pack.pack)}#item=${encodeURIComponent(ui.item)}`;
-  const index = (pack.items || []).findIndex((item) => item.id === ui.item);
-  if (index < 0) return `<section class="review-item-page"><p>This item is not in the pack.</p><a class="review-button" href="${esc(back)}">Back to the sections</a></section>`;
-  const item = pack.items[index];
-  const section = (pack.derived?.sections || []).find((entry) => entry.id === item.section);
-  const note = item.answer?.note ? `<p class="review-sum-note">Your note: ${esc(item.answer.note)}</p>` : '';
-  return `<section class="review-item-page" aria-label="Item">`
-    + `<p class="review-item-meta">${chipHtml(itemChip(item, pack), esc)}<span>${esc(section?.title || item.section)} · ${esc(TYPE_LABEL[item.type] || 'Item')}</span></p>${note}`
-    + '<p>The item viewer is not ready yet. This page keeps the address of the item.</p>'
-    + `<a class="review-button" href="${esc(back)}">Back to the sections</a></section>`;
+function itemPanelHtml(pack, ui, h) {
+  const { esc } = h;
+  const item = (pack.items || []).find((entry) => entry.id === ui.item);
+  if (!item) {
+    const back = `${reviewUrl(pack.slug, pack.pack)}#item=${encodeURIComponent(ui.item)}`;
+    return `<section class="review-item-page"><p>This item is not in the pack.</p><a class="review-button" href="${esc(back)}">Back to the sections</a></section>`;
+  }
+  return itemViewerHtml(pack, item, ui.viewer || {}, h);
 }
 
-// ui: current (the item of #item=), item (the item route), note, noteStatus, verdict, submitting, submitStatus, result, time.
+// ui: current (the item of #item=), item (the item route), viewer (the view state of the open item), note, noteStatus, verdict, submitting, submitStatus, result, time.
 export function packPageHtml(pack, ui, h) {
   const { esc } = h;
   const items = pack.items || [];
@@ -288,13 +288,11 @@ export function packPageHtml(pack, ui, h) {
   const open = pack.state === 'open';
 
   let bar;
+  const openItem = ui.item ? items.find((entry) => entry.id === ui.item) : null;
   if (ui.item) {
-    const index = items.findIndex((item) => item.id === ui.item);
-    const item = items[index];
-    const section = item ? sections.find((entry) => entry.id === item.section) : null;
-    const back = `${reviewUrl(pack.slug, pack.pack)}#item=${encodeURIComponent(ui.item)}`;
-    bar = `<a href="${esc(back)}" class="app-icon-button" aria-label="Back to the sections">${icon('back')}</a>`
-      + `<h1 class="review-title">${item ? `${esc(item.title || item.id)}<small>${index + 1} / ${items.length} · ${esc(section?.title || item.section)}</small>` : 'Item not found'}</h1>`;
+    bar = openItem
+      ? viewerBarHtml(pack, openItem, h)
+      : `<a href="${esc(`${reviewUrl(pack.slug, pack.pack)}#item=${encodeURIComponent(ui.item)}`)}" class="app-icon-button" aria-label="Back to the sections">${icon('back')}</a><h1 class="review-title">Item not found</h1>`;
   } else {
     const facts = [`v${pack.version}`, plural(sections.length, 'section')];
     if (stale) facts.push(`${stale} changed`);
@@ -304,12 +302,14 @@ export function packPageHtml(pack, ui, h) {
 
   const head = `<div class="review-head"><p class="review-head-line"><span><b class="num">${answeredOf(counts)}</b> of ${esc(plural(counts.items, 'item'))} answered · <b class="num">${viewed}</b> viewed</span>${open ? '' : doneChip(pack, esc)}</p>${progressBarHtml(counts, { esc, legend: true })}</div>`;
   const list = `<nav class="review-sections" aria-label="Sections">${sections.map((section) => sectionHtml(pack, section, ui, esc)).join('')}</nav>`;
-  const main = `<div class="review-main">${ui.item ? itemPanelHtml(pack, ui, esc) : summaryHtml(pack, { ...ui, time: h.time }, esc)}</div>`;
-  const foot = open && !ui.item
-    ? `<div class="review-foot" data-key="review-foot"><span class="review-foot-count">${counts.open ? `${plural(counts.open, 'open item')}` : 'All items answered'}</span>`
+  const main = `<div class="review-main">${ui.item ? itemPanelHtml(pack, ui, h) : summaryHtml(pack, { ...ui, time: h.time }, esc)}</div>`;
+  let foot = '';
+  if (openItem) foot = answerBarHtml(pack, openItem, ui.viewer || {}, h);
+  else if (open && !ui.item) {
+    foot = `<div class="review-foot" data-key="review-foot"><span class="review-foot-count">${counts.open ? `${plural(counts.open, 'open item')}` : 'All items answered'}</span>`
       + `<p class="review-foot-status" role="status">${esc(ui.submitStatus || '')}</p>`
-      + `<button type="submit" form="review-submit-form" class="review-submit"${ui.submitting ? ' disabled' : ''}>Submit review</button></div>`
-    : '';
+      + `<button type="submit" form="review-submit-form" class="review-submit"${ui.submitting ? ' disabled' : ''}>Submit review</button></div>`;
+  }
   return `<div class="review-page${ui.item ? ' item-open' : ''}" data-key="review-page:${esc(pack.slug)}/${esc(pack.pack)}">`
     + `<div class="app-bar review-app-bar">${bar}</div>`
     + `<div class="review-body" data-key="review-body">${head}${list}${main}</div>${foot}</div>`;
