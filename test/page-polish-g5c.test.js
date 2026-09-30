@@ -28,7 +28,7 @@ test('a delivered or relayed message without a time shows no stray dash', () => 
   const { mailDeliveryState } = load(['mailDeliveryState', 'clock']);
   assert.equal(mailDeliveryState({ status: 'sent' }), 'delivered');
   assert.equal(mailDeliveryState({ status: 'relayed' }), 'relayed by the Boss');
-  assert.match(mailDeliveryState({ status: 'sent', sentAt: '2026-09-30T07:10:00Z' }), /^delivered \d\d:\d\d$/);
+  assert.match(mailDeliveryState({ status: 'sent', sentAt: new Date().toISOString() }), /^delivered \d\d:\d\d$/);
   assert.equal(mailDeliveryState({ status: 'failed' }), 'failed: unknown error');
   assert.equal(mailDeliveryState({}), 'queued');
 });
