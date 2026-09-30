@@ -690,26 +690,69 @@ test('worktree prune archives the three worker reports into the main checkout be
   assert.equal(fs.readFileSync(path.join(target, 'report.md'), 'utf8'), 'human report\n');
   assert.ok(target.startsWith(path.join(root, '.orchestration', 'reports') + path.sep));
   assert.ok(lines.includes(`archived reports of arch to ${target}`));
-  assert.equal(git(root, 'check-ignore', '.orchestration/reports/arch/report.md').trim(), '.orchestration/reports/arch/report.md');
 });
 
-test('worktree prune never overwrites an archived report and skips a missing file', (t) => {
+test('worktree prune keeps an older archive and writes a newer report to a suffixed folder', (t) => {
   const { root, worktree, target, run } = archiveFixture();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.mkdirSync(target, { recursive: true });
   fs.writeFileSync(path.join(target, 'report.md'), 'older copy\n');
   fs.rmSync(path.join(worktree, '.worker', 'report.json'));
-  run();
+  const { lines } = run({ now: Date.UTC(2026, 8, 30, 12, 0, 0) });
+  const suffixed = path.join(path.dirname(target), 'arch-20260930T120000Z');
   assert.equal(fs.existsSync(worktree), false);
   assert.equal(fs.readFileSync(path.join(target, 'report.md'), 'utf8'), 'older copy\n');
-  assert.deepEqual(fs.readdirSync(target).sort(), ['brief.md', 'report.md']);
+  assert.deepEqual(fs.readdirSync(target), ['report.md']);
+  assert.equal(fs.readFileSync(path.join(suffixed, 'report.md'), 'utf8'), 'human report\n');
+  assert.deepEqual(fs.readdirSync(suffixed).sort(), ['brief.md', 'report.md']);
+  assert.ok(lines.includes('skipped report.json: missing'));
+  assert.ok(lines.includes(`archived reports of arch to ${suffixed}`));
+});
+
+test('worktree prune adds a counter when the suffixed folder exists', (t) => {
+  const { root, target, run } = archiveFixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(target, { recursive: true });
+  fs.writeFileSync(path.join(target, 'report.md'), 'older copy\n');
+  fs.mkdirSync(path.join(path.dirname(target), 'arch-20260930T120000Z'));
+  run({ now: Date.UTC(2026, 8, 30, 12, 0, 0) });
+  assert.equal(fs.readFileSync(path.join(path.dirname(target), 'arch-20260930T120000Z-2', 'report.json'), 'utf8'), '{"issue":null}\n');
+});
+
+test('worktree prune keeps the worktree when .worker is a symlink', (t) => {
+  const { root, worktree, run } = archiveFixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-worker-link-'));
+  t.after(() => fs.rmSync(elsewhere, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(elsewhere, 'report.md'), 'outside\n');
+  fs.rmSync(path.join(worktree, '.worker'), { recursive: true });
+  fs.symlinkSync(elsewhere, path.join(worktree, '.worker'));
+  fs.appendFileSync(path.join(root, '.git', 'info', 'exclude'), '.worker\n');
+  const { lines } = run();
+  assert.equal(fs.existsSync(worktree), true);
+  assert.ok(lines.some((line) => line.startsWith('Archive of arch failed:') && line.includes('.worker is not a real directory')));
+  assert.equal(fs.existsSync(path.join(root, '.orchestration', 'reports')), false);
+});
+
+test('worktree prune keeps the worktree when the archive folder is a symlink', (t) => {
+  const { root, worktree, target, run } = archiveFixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-archive-link-'));
+  t.after(() => fs.rmSync(elsewhere, { recursive: true, force: true }));
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.symlinkSync(elsewhere, target);
+  const { lines } = run();
+  assert.equal(fs.existsSync(worktree), true);
+  assert.deepEqual(fs.readdirSync(elsewhere), []);
+  assert.ok(lines.some((line) => line.startsWith('Archive of arch failed:')));
 });
 
 test('worktree prune skips a report larger than 1 MB', (t) => {
   const { root, worktree, target, run } = archiveFixture();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.writeFileSync(path.join(worktree, '.worker', 'report.md'), Buffer.alloc(1024 * 1024 + 1, 'a'));
-  run();
+  const { lines } = run();
+  assert.ok(lines.includes('skipped report.md: over 1 MB'));
   assert.equal(fs.existsSync(worktree), false);
   assert.deepEqual(fs.readdirSync(target).sort(), ['brief.md', 'report.json']);
 });
