@@ -1158,7 +1158,7 @@ p.wizard-errors { padding-left: 10px; }
 .wizard-state { margin: 0; font-size: 13px; overflow-wrap: anywhere; }
 .wizard-check-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; font-size: 12.5px; }
 .wizard-check-list .ok b { color: var(--ok); } .wizard-check-list .bad b { color: var(--crit); }
-.wizard-panel a.button-link { display: inline-flex; align-items: center; min-height: 36px; padding: 0 12px; border: 1px solid var(--accent); border-radius: 6px; color: var(--accent); font-weight: 600; text-decoration: none; }
+.wizard-panel a.button-link { display: inline-flex; align-items: center; min-height: 44px; padding: 0 12px; border: 1px solid var(--accent); border-radius: 6px; color: var(--accent); font-weight: 600; text-decoration: none; }
 .page-intro .wizard-open { align-self: start; white-space: nowrap; }
 .wizard-panel button, .wizard-panel .wizard-open { min-height: 36px; }
 @media (max-width: 760px) {
