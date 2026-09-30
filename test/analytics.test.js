@@ -4,7 +4,7 @@ import test from 'node:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { noticeCounts, machineTimeline, readEventTail, analyticsSummary, NOTICE_PANE_LIMIT } from '../src/analytics.js';
+import { noticeCounts, machineTimeline, readEventTail, analyticsSummary, lockDaily, NOTICE_PANE_LIMIT } from '../src/analytics.js';
 
 const tmp = (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-analytics-'));
@@ -89,4 +89,42 @@ test('analyticsSummary reads the data folder and holds numbers, kinds, and pane 
   assert.equal(r.notices.total, 1);
   assert.equal(r.timeline.points.filter((p) => p.samples).length, 1);
   assert.doesNotMatch(JSON.stringify(r), /Client|\/Users|\/tmp|herdr-analytics/);
+});
+
+test('lockDaily sums the wait and the hold of each project for each local day', () => {
+  const at = (ms) => new Date(ms).toISOString();
+  const rows = [
+    { at: at(NOW - HOUR), event: 'acquire', kind: 'suite', project: 'alpha', waitMs: 60000 },
+    { at: at(NOW - HOUR), event: 'release', kind: 'suite', project: 'alpha', holdMs: 300000 },
+    { at: at(NOW - 2 * HOUR), event: 'acquire', kind: 'suite', project: 'alpha', reentrant: true, waitMs: 0 },
+    { at: at(NOW - 2 * HOUR), event: 'release', kind: 'suite', project: 'alpha', reentrant: true, holdMs: 999999 },
+    { at: at(NOW - 2 * HOUR), event: 'release', kind: 'suite', project: 'alpha', takeover: true, holdMs: 888888 },
+    { at: at(NOW - 2 * HOUR), event: 'acquire', kind: 'push', project: 'alpha', reused: true, waitMs: 0 },
+    { at: at(NOW - 26 * HOUR), event: 'acquire', kind: 'push', project: 'beta', waitMs: 120000 },
+    { at: at(NOW - 26 * HOUR), event: 'timeout', kind: 'push', project: 'beta', waitMs: 1800000 },
+    { at: at(NOW - 9 * 24 * HOUR), event: 'acquire', kind: 'suite', project: 'beta', waitMs: 5000 },
+    { at: at(NOW - HOUR), event: 'acquire', kind: 'suite', project: '/Users/x/private path', waitMs: 1000 },
+  ];
+  const r = lockDaily(rows, { days: 7, now: NOW });
+  assert.equal(r.days.length, 7);
+  assert.equal(r.days.at(-1), localDay(NOW));
+  const alpha = r.projects.find((p) => p.project === 'alpha');
+  assert.deepEqual({ wait: alpha.wait.at(-1), hold: alpha.hold.at(-1), runs: alpha.runs.at(-1) }, { wait: 60000, hold: 300000, runs: 1 });
+  const beta = r.projects.find((p) => p.project === 'beta');
+  assert.deepEqual({ wait: beta.wait.at(-2), timeouts: beta.timeouts.at(-2), total: beta.waitTotal }, { wait: 120000, timeouts: 1, total: 120000 });
+  assert.equal(r.projects[0].project, 'alpha', 'sorted by wait and hold');
+  assert.ok(r.projects.some((p) => p.project === 'other'));
+  assert.equal(r.totals.wait.at(-1), 61000);
+  assert.doesNotMatch(JSON.stringify(r), /Users|private/);
+  assert.deepEqual(lockDaily([], { days: 7, now: NOW }).projects, []);
+});
+
+test('analyticsSummary reads the lock ledger from the last 2 MB only', (t) => {
+  const dir = tmp(t);
+  const line = (n) => JSON.stringify({ at: new Date(NOW - HOUR).toISOString(), event: 'acquire', name: 'full-suite', project: 'alpha', kind: 'suite', waitMs: n });
+  const old = JSON.stringify({ at: new Date(NOW - HOUR).toISOString(), event: 'acquire', project: 'old', kind: 'suite', waitMs: 7, pad: 'x'.repeat(200) });
+  fs.writeFileSync(path.join(dir, 'lock-ledger.jsonl'), `${Array(12000).fill(old).join('\n')}\n${line(60000)}\n`);
+  const r = analyticsSummary({ dataDir: dir, now: NOW });
+  assert.equal(r.locks.projects.find((p) => p.project === 'alpha').waitTotal, 60000);
+  assert.ok(r.locks.projects.find((p) => p.project === 'old').waitTotal < 12000 * 7, 'the head of the file is not read');
 });

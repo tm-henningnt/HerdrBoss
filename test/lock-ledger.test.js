@@ -169,3 +169,17 @@ test('the reader skips a partial JSONL line and a line of another shape', (t) =>
   assert.equal(lines.length, 2);
   assert.equal(lockLedgerStats(lines).medianHoldMs, 5000);
 });
+
+test('lock ledger stats count a reused push apart and skip it in the acquires and medians', () => {
+  const lines = [
+    { event: 'acquire', kind: 'push', reused: true, waitMs: 0 },
+    { event: 'release', kind: 'push', reused: true, holdMs: 0 },
+    { event: 'acquire', kind: 'suite', waitMs: 4000 },
+    { event: 'release', kind: 'suite', holdMs: 60000 },
+  ];
+  const stats = lockLedgerStats(lines);
+  assert.equal(stats.reusedPushes, 1);
+  assert.equal(stats.acquires, 1);
+  assert.equal(stats.medianWaitMs, 4000);
+  assert.equal(stats.medianHoldMs, 60000);
+});

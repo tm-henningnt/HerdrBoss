@@ -7,6 +7,7 @@ import { quietHoursActive, readNight } from '../night.js';
 import { DEFAULT_RULES_FILE, loadProjectConfig } from './config.js';
 import { SWAP_FORCE_ENV, swapGuardFor } from './swap-guard.js';
 import { createHerdrRunner, verifyCallerPane } from './workers.js';
+import { DEFAULT_SUITE_UNTESTED, hookFileHash, hookRunsOnlySuites, reusablePushPass, writePushHookCommands } from './suite-passes.js';
 
 const LOCK_NAME = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/;
 const COMMAND = (name) => `herdr-boss lock acquire ${name}`;
@@ -545,13 +546,17 @@ function median(values) {
 }
 
 // Medians skip re-entrant lines: a re-entrant hold runs inside the hold of its push.
+// A reused push took no lock. Its lines count in reusedPushes only.
 // Hold medians also skip takeover lines. Wait medians skip failed acquires (busy, timeout); they are counted separately.
 export function lockLedgerStats(lines) {
+  const reused = lines.filter((line) => line.reused);
+  lines = lines.filter((line) => !line.reused);
   const own = lines.filter((line) => !line.reentrant);
   const waits = own.filter((line) => line.event === 'acquire' && Number.isFinite(line.waitMs)).map((line) => line.waitMs);
   const holds = own.filter((line) => line.event === 'release' && !line.takeover && Number.isFinite(line.holdMs)).map((line) => line.holdMs);
   return {
     acquires: lines.filter((line) => line.event === 'acquire').length,
+    reusedPushes: reused.filter((line) => line.event === 'acquire').length,
     busy: lines.filter((line) => line.event === 'busy').length,
     timeouts: lines.filter((line) => line.event === 'timeout').length,
     takeovers: lines.filter((line) => line.event === 'release' && line.takeover).length,
@@ -922,6 +927,32 @@ export function findPrePushHook(root) {
   return null;
 }
 
+// A push that reuses a suite pass takes no lock. The ledger still gets a push line pair, marked reused, with no wait and no hold.
+function recordReusedPush({ config, caller, tree }, { dataDir, now, run }) {
+  const record = { name: FULL_SUITE_LOCK, project: config.slug, kind: 'push', ownerPane: caller.paneId, tree };
+  appendLockLedger(dataDir, 'acquire', record, now, { waitMs: 0, reused: true });
+  const startedAt = timeValue(now);
+  let exitCode;
+  try { exitCode = run(); }
+  finally { appendLockLedger(dataDir, 'release', record, now, { holdMs: 0, reused: true, runMs: Math.max(0, timeValue(now) - startedAt) }); }
+  return exitCode;
+}
+
+function readHookSuites(file) {
+  try {
+    const seen = new Map();
+    for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
+      if (!line) continue;
+      let command;
+      try { command = JSON.parse(line); } catch { continue; }
+      if (Array.isArray(command) && command.length && command.every((part) => typeof part === 'string')) seen.set(line, command);
+    }
+    return [...seen.values()];
+  } catch {
+    return [];
+  }
+}
+
 export function pushWithLock(args, {
   config,
   env = process.env,
@@ -934,12 +965,13 @@ export function pushWithLock(args, {
   stdio = 'inherit',
   rulesFile = DEFAULT_RULES_FILE,
 } = {}) {
-  callerFor(env, herdr);
+  const caller = callerFor(env, herdr);
   const hook = findPrePushHook(config.root);
-  const push = (reuseSuitePass = false, lockToken = null) => {
+  const push = (reuseSuitePass = false, lockToken = null, suitesFile = null) => {
     const childEnv = { ...process.env, ...env };
     if (reuseSuitePass) childEnv.HERDR_BOSS_SUITE_REUSE = '1';
     if (lockToken) childEnv.HERDR_BOSS_LOCK_TOKEN = lockToken;
+    if (suitesFile) childEnv.HERDR_BOSS_PUSH_SUITES = suitesFile;
     const result = spawnSync('git', ['push', ...args], { cwd: config.root, env: childEnv, stdio });
     if (result.error) throw new Error(`Cannot run git push: ${result.error.message}`);
     return result.status ?? 1;
@@ -948,16 +980,28 @@ export function pushWithLock(args, {
     output('push: no pre-push hook found. Pushing without a lock.');
     return { exitCode: push(), locked: false, hook: null };
   }
+  const pass = reusablePushPass(config.root, { dataDir, hookFile: hook, untested: config.suiteUntested ?? DEFAULT_SUITE_UNTESTED });
+  if (pass) {
+    output(`push: a suite pass exists for tree ${pass.key.tree.slice(0, 12)}. Pushing without the full-suite lock.`);
+    const exitCode = recordReusedPush({ config, caller, tree: pass.key.tree }, { dataDir, now, run: () => push(true) });
+    return { exitCode, locked: false, reused: true, hook };
+  }
   const swapText = swapGuardFor(rulesFile, { env, herdr, now, override: `Set ${SWAP_FORCE_ENV}=1 to override.` });
   if (swapText) throw new Error(swapText);
   output(`push: pre-push hook found at ${hook}. Taking lock ${FULL_SUITE_LOCK}.`);
   const reentryToken = crypto.randomBytes(32).toString('hex');
   const lock = acquireProjectLock(FULL_SUITE_LOCK, { config, env, herdr, dataDir, waitSeconds: PUSH_LOCK_WAIT_SECONDS, output, now, pause, pidAlive, kind: 'push', reentryToken });
   const childLockToken = lock.reentrant ? env.HERDR_BOSS_LOCK_TOKEN : reentryToken;
+  const suitesFile = path.join(dataDir, `.push-suites.${process.pid}.${crypto.randomUUID()}.jsonl`);
   const heldSince = timeValue(now);
   let exitCode;
-  try { exitCode = push(true, childLockToken); }
+  try { exitCode = push(true, childLockToken, suitesFile); }
   finally {
+    // The suite commands of this hook run tell the next push which passes to look for.
+    try {
+      writePushHookCommands(dataDir, gitCommonDir(config.root), hookFileHash(hook), hookRunsOnlySuites(hook) ? readHookSuites(suitesFile) : [], new Date(timeValue(now)).toISOString());
+    } catch {}
+    try { fs.unlinkSync(suitesFile); } catch {}
     if (lock.reentrant) {
       recordLockRelease({ ...lock, project: config.slug, kind: 'push' }, { dataDir, now, holdMs: Math.max(0, timeValue(now) - heldSince), reentrant: true });
     } else {

@@ -119,6 +119,43 @@ export function machineTimeline(samples, { hours = 24, bucketMin = 10, now = Dat
   };
 }
 
+const PROJECT_SLUG = /^[a-z0-9][a-z0-9._-]{0,63}$/i;
+
+// Lock wait and hold for each project for each local day. The wait comes from acquire lines and the hold from release lines.
+// Lines of a re-entrant suite, a reused push, and a takeover add nothing: they hold no lock time of their own.
+// A timeout counts in timeouts only. The project is a slug or other.
+export function lockDaily(rows, { days = 7, now = Date.now() } = {}) {
+  const dayList = Array.from({ length: days }, (_, i) => localDay(now - (days - 1 - i) * 86400000));
+  const index = new Map(dayList.map((d, i) => [d, i]));
+  const empty = () => Array(days).fill(0);
+  const byProject = new Map();
+  for (const row of rows || []) {
+    const at = Date.parse(row?.at);
+    if (!Number.isFinite(at) || at > now) continue;
+    const i = index.get(localDay(at));
+    if (i === undefined) continue;
+    const project = typeof row.project === 'string' && PROJECT_SLUG.test(row.project) ? row.project : 'other';
+    const entry = byProject.get(project) || { project, wait: empty(), hold: empty(), runs: empty(), timeouts: empty() };
+    byProject.set(project, entry);
+    if (row.reentrant || row.reused) continue;
+    if (row.event === 'acquire') {
+      entry.runs[i] += 1;
+      entry.wait[i] += finite(row.waitMs) || 0;
+    } else if (row.event === 'release' && !row.takeover) {
+      entry.hold[i] += finite(row.holdMs) || 0;
+    } else if (row.event === 'timeout') {
+      entry.timeouts[i] += 1;
+    }
+  }
+  const sum = (values) => values.reduce((a, b) => a + b, 0);
+  const projects = [...byProject.values()].map((p) => ({ ...p, waitTotal: sum(p.wait), holdTotal: sum(p.hold) }))
+    .filter((p) => p.waitTotal + p.holdTotal + sum(p.runs) + sum(p.timeouts) > 0)
+    .sort((a, b) => (a.project === 'other') - (b.project === 'other') || b.waitTotal + b.holdTotal - (a.waitTotal + a.holdTotal) || a.project.localeCompare(b.project));
+  const totals = { wait: empty(), hold: empty() };
+  for (const p of projects) for (let i = 0; i < days; i++) { totals.wait[i] += p.wait[i]; totals.hold[i] += p.hold[i]; }
+  return { days: dayList, projects, totals };
+}
+
 // The harness change markers that fall on a day of the denial window.
 function markersIn(days, dataDir) {
   const first = days[0], last = days.at(-1);
@@ -131,6 +168,7 @@ export function analyticsSummary({ dataDir = DATA_DIR, now = Date.now() } = {}) 
   const denials = denialDaily(readDenials(dataDir), { now, days: RETAIN_DAYS });
   return {
     notices: noticeCounts(events, { days: 7, now }),
+    locks: lockDaily(readEventTail(path.join(dataDir, 'lock-ledger.jsonl')), { days: 7, now }),
     timeline: machineTimeline(samples, { hours: 24, bucketMin: 10, now }),
     denials,
     harnessChanges: markersIn(denials.days, dataDir),

@@ -1230,14 +1230,15 @@ Each chart has a title that tells what to read from it, a scope line, a legend, 
 - **Quota**: one solid line for the use of each lane and one dashed line for its expected pace, in the weekly window, one column for each hour. The source is the quota trend of `/api/usage`.
 - **Model scorecard**: one bar for each of the 8 models with the most runs. The bar shows the share of first-time, rework, failed, and not judged runs. The right column shows the runs and the median time. Details also holds the recorded work by project and provider and the recent runs.
 - **Denials**: one stacked bar for each day. The range is 3 days by default. The buttons select 7 or 30 days, and the browser remembers the choice. The switch selects one harness or all harnesses. See [Denials per day](#denials-per-day).
+- **Lock wait and hold by project**: one stacked bar for each day of the last 7 days. The lower part is the time that runs held a machine lock. The upper part is the time that runs waited for it. The switch selects one project by its slug or all projects. **Details** lists the days and, for each project, the runs, the wait, the hold, and the timeouts. A run that reused a suite pass, and a suite run inside a push, add no time. The source is the last 2 MB of `lock-ledger.jsonl`.
 - **Machine load and lock waits**: lines for the 5-minute load as a percent of the cores, the memory in use, and the swap in use, over the last 24 hours in columns of 10 minutes. A shaded column had a lock holder. The strip under the lines shows the minutes in which a suite request waited.
 - **Machine overload and idle waiting by hour**: see [Machine samples](#machine-samples).
 - **Notices per pane**: stacked bars for each day of the last 7 days. The five panes with the most notices have their own color. The other panes share one gray.
 - **Policy changes**: a list of the last writes of `policy.json`, newest first. A row shows the time, the caller kind, and the changed keys with the old and the new value. A row has at least 44 px height on a phone. **Details** holds one table row for each changed key of the last 100 writes. The section shows an empty state until the first write. See [Policy changes](#policy-changes).
 
-The charts use one color set for light mode and one for dark mode. The set passes the dataviz palette validator. The charts show no project name, client name, or path. They show harness, model, cause, lock kind, and pane ID only. The section Policy changes is the exception: its keys name the projects of the policy. On a screen up to 1180 px wide the charts are in one column. On a phone each chart scrolls sideways inside its own box.
+The charts use one color set for light mode and one for dark mode. The set passes the dataviz palette validator. The charts show no client name or path. They show harness, model, cause, lock kind, and pane ID only. Two sections are the exception: the keys of Policy changes and the lock chart name projects by their slug. On a screen up to 1180 px wide the charts are in one column. On a phone each chart scrolls sideways inside its own box.
 
-The route `/api/analytics` gives the notice counts, the machine timeline, the denial counts of the last 30 days for each day, the harness change markers of those days, and the last 100 policy changes. It reads the last 2 MB of `events.jsonl`, the machine samples of the last 25 hours, `denials.json`, `harness-changes.jsonl`, and `policy-changes.jsonl`. It keeps the result for 60 seconds. The result holds numbers, lock kinds, pane IDs, the marker labels, and the policy change keys with scalar values.
+The route `/api/analytics` gives the notice counts, the machine timeline, the wait and hold of the locks for each project and day, the denial counts of the last 30 days for each day, the harness change markers of those days, and the last 100 policy changes. It reads the last 2 MB of `events.jsonl` and of `lock-ledger.jsonl`, the machine samples of the last 25 hours, `denials.json`, `harness-changes.jsonl`, and `policy-changes.jsonl`. It keeps the result for 60 seconds. The result holds numbers, lock kinds, pane IDs, the marker labels, and the policy change keys with scalar values.
 
 ### Activity log
 
@@ -1943,7 +1944,7 @@ herdr-boss suite -- npm test
 herdr-boss push origin main
 ```
 
-`herdr-boss push` takes the lock only when a pre-push hook exists. It releases the lock also when the push fails, and it returns the exit code of `git push`.
+`herdr-boss push` takes the lock only when a pre-push hook exists and no suite pass covers the tree. When the last hook run of the repository has a pass for the clean tree, the push takes no lock and skips the queue. It releases the lock also when the push fails, and it returns the exit code of `git push`.
 
 A suite pass matches only when the repository, the tree hash, the command, the Node version, and the hash of each lockfile in the repository root are the same. Herdr Boss hashes `package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, `pnpm-lock.yaml`, `bun.lock`, `bun.lockb`, `Cargo.lock`, `poetry.lock`, `uv.lock`, `Pipfile.lock`, `Gemfile.lock`, `composer.lock`, and `go.sum` when they exist. The tree hash covers a tracked lockfile. The lockfile hash also covers an ignored lockfile. A tree with no lockfile has the same key as before.
 
