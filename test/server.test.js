@@ -665,7 +665,7 @@ test('the dashboard shows a watch symbol with a confirmed Stop, and the Agents p
   assert.match(app, /data-night-stop="true"/);
   assert.match(app, /postJson\(`\/api\/watch\/\$\{action\}`/);
   assert.match(app, /Stop the watch\?/);
-  // The Agents page starts a watch. Settings links to it.
+  // The Agents page starts a watch. The watch popover links to it.
   assert.match(app, /watchPanel\(s\),/);
   assert.match(app, /href="\/agents#watch"/);
   assert.match(app, /data-night-start="true"/);
@@ -681,7 +681,7 @@ test('the dashboard shows a watch symbol with a confirmed Stop, and the Agents p
   assert.doesNotMatch(css, /\.night-banner/);
   // The page help and the guide describe the symbol and the box.
   const settingsHelp = /settings: \['Settings', `([\s\S]*?)`\],\s+agents:/.exec(app)?.[1] || '';
-  assert.match(settingsHelp, /<h3>Watch<\/h3>/);
+  assert.doesNotMatch(settingsHelp, /<h3>Watch<\/h3>/);
   assert.match(app, /<h3>Watch symbol<\/h3>/);
   assert.match(guide, /### Watch in the dashboard/);
   assert.match(guide, /POST \/api\/watch\/start/);

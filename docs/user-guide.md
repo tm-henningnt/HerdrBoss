@@ -423,7 +423,7 @@ Each setting on the Settings page and on the Allocation page has an **i** button
 
 The Help panel of the Settings page has a guide to each group of settings: what the group controls, what it affects, which changes are safe, and if a restart is needed. The text of the popups, the guide, and the settings reference in `docs/cli.md` comes from one file, `public/setting-help.js`. A test fails when a setting has no explanation.
 
-The Settings page lists the most used groups first: Harnesses, Provider quotas, Machine, Watch, and Watch routines. The **Advanced** section holds Avatars, Token prices, Service settings, and Harness readiness. It is closed at first. The page remembers in this browser if you opened it.
+The Settings page lists the most used groups first: Harnesses, Provider quotas, Machine, and Watch routines. The **Advanced** section holds Avatars, Token prices, Service settings, and Harness readiness. It is closed at first. The page remembers in this browser if you opened it.
 
 The Advanced section opens by itself while a harness readiness row is not `ok` or a service settings save shows an error. Its header then shows how many items need attention.
 
