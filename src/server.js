@@ -27,6 +27,7 @@ import { createAccessControl, loginPage } from './access.js';
 import { appendMessage, closeMailboxItem, dismissMailboxItems, groupMessagesByConversation, listThread, mailboxCounts, mailboxFolders, mailboxView, markMailboxRead, messageChannel, messagesWithReplyState, readMessages, validThread, validateOwnerSend } from './messages.js';
 import { assertSqliteAvailable } from './sqlite-store.js';
 import { openMessageStore } from './message-store.js';
+import { BODY_LIMIT as PROJECT_NEW_BODY_LIMIT, createProjectNewApi } from './project-new-api.js';
 
 const PUBLIC = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const DOCS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'docs');
@@ -143,6 +144,13 @@ async function attachedGuard(body) {
   return null;
 }
 
+// The body of a project-new POST route: a JSON object of at most 16 KB. A bad body has a status code for the route.
+async function projectNewBody(req) {
+  if (!req.headers['content-type']?.startsWith('application/json')) throw Object.assign(new Error('Content-Type must be application/json.'), { statusCode: 400 });
+  const bytes = await readBytes(req, PROJECT_NEW_BODY_LIMIT);
+  try { return JSON.parse(bytes.toString('utf8')); } catch { throw Object.assign(new Error('The body is not valid JSON.'), { statusCode: 400 }); }
+}
+
 async function jsonBody(req) {
   if (!req.headers['content-type']?.startsWith('application/json')) throw new Error('Content-Type must be application/json.');
   return JSON.parse(await readBody(req));
@@ -162,7 +170,7 @@ export function assertPreviewHost(host) {
   return value;
 }
 
-export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine = (config, options) => new Engine(config, options), closeTab = browserCloseTab } = {}) {
+export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine = (config, options) => new Engine(config, options), closeTab = browserCloseTab, projectNew = {} } = {}) {
   const machineHoursCache = new Map();
   let analyticsCache = null;
   // A direct serve() call must refuse an unsafe preview before the access token, the watcher, or a tick writes a file.
@@ -179,6 +187,7 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine 
   });
   const engine = readOnlyPreview ? createEngine(cfg, { push: false, act: false }) : createEngine(cfg);
   const messageStore = openMessageStore({ dir: DATA_DIR });
+  const projectNewApi = createProjectNewApi({ dataDir: DATA_DIR, log: (level, text) => engine.log(level, text), ...projectNew });
   const clients = new Set();
   let closed = false;
   let timer;
@@ -229,7 +238,9 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine 
     try {
       if (readOnlyPreview && !loopbackRequest(req)) return send(res, 403, { error: 'The read-only preview accepts only local requests.' });
       if (!allowedRequest(req, p)) return send(res, 403, { error: 'This control plane requires a local interface or Tailscale host and a same-origin request.' });
-      if (readOnlyPreview && p.startsWith('/api/') && !['GET', 'HEAD'].includes(req.method)) {
+      // The project-new GET routes show local paths, so the preview refuses them too.
+      const projectNewRoute = p === '/api/project-new' || p.startsWith('/api/project-new/');
+      if (readOnlyPreview && p.startsWith('/api/') && (projectNewRoute || !['GET', 'HEAD'].includes(req.method))) {
         return send(res, 403, { error: 'This read-only preview does not allow changes.' });
       }
       if (!readOnlyPreview && p === '/login' && req.method === 'GET') return send(res, 200, loginPage(), 'text/html; charset=utf-8');
@@ -246,6 +257,10 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine 
           return res.end();
         }
         return send(res, 401, { error: 'Access token required.' });
+      }
+      if (projectNewRoute) {
+        const routed = await projectNewApi.handle(req.method, p, () => projectNewBody(req));
+        return send(res, routed.status, routed.body);
       }
       if (p === '/api/state') {
         if (engine.state) refreshMailbox();

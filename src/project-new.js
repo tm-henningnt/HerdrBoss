@@ -19,7 +19,7 @@ import { describeHarness, harnessStep } from './project-new-check.js';
 import { ORG_NAME, RemoteError, describeRemote, remoteStep, validateRemoteUrl } from './project-new-remote.js';
 
 export const PROJECT_NEW_STEPS = ['validate', 'folder', 'files', 'kit', 'commit', 'remote', 'policy', 'register', 'status', 'workspace', 'harness', 'check'];
-const NOT_BUILT = new Set(['check']);
+export const NOT_BUILT = new Set(['check']);
 // `project check --fix STEP` runs one of these. validate refuses a folder that exists. check is not a change.
 export const FIXABLE_STEPS = PROJECT_NEW_STEPS.filter((name) => !['validate', 'check'].includes(name));
 export const NEW_PROJECT_SHARE = 10;
@@ -103,6 +103,20 @@ function readState(file) {
     if (error.code === 'ENOENT') return null;
     throw error;
   }
+}
+// The saved state of a flow, or null. The dashboard status route reads it.
+export function readFlowState(dataDir, slug) { return readState(stateFilePath(path.resolve(dataDir), slug)); }
+// Mark the first unfinished step as failed after a crash of the process that ran the flow. Returns the step name, or null when there is no state.
+export function markFlowCrashed(dataDir, slug, message) {
+  const file = stateFilePath(path.resolve(dataDir), slug);
+  const state = readState(file);
+  if (!state) return null;
+  const name = PROJECT_NEW_STEPS.find((step) => !NOT_BUILT.has(step) && !['done', 'skipped'].includes(state.steps?.[step]?.status));
+  if (!name) return null;
+  state.steps[name] = { status: 'failed', at: new Date().toISOString(), detail: message };
+  state.updatedAt = new Date().toISOString();
+  writeState(file, state);
+  return name;
 }
 function writeState(file, state) {
   const text = `${JSON.stringify(state, null, 2)}\n`;
@@ -323,7 +337,13 @@ export function runProjectNew(options = {}) {
       const outcome = runners[name](inputs, context) || 'done';
       const { status = 'done', detail, reason, lines } = typeof outcome === 'string' ? { detail: outcome } : outcome;
       // A skip for a missing --start changes nothing, so a repeated run writes no state.
-      if (!(reason === 'no-start' && state.steps[name]?.reason === 'no-start')) { state.steps[name] = { status, at: new Date().toISOString(), detail, ...(reason ? { reason } : {}) }; ran = true; }
+      // Each recorded step is saved at once, so a status reader sees the progress of a running flow.
+      if (!(reason === 'no-start' && state.steps[name]?.reason === 'no-start')) {
+        state.steps[name] = { status, at: new Date().toISOString(), detail, ...(reason ? { reason } : {}) };
+        state.updatedAt = new Date().toISOString();
+        writeState(stateFile, state);
+        ran = true;
+      }
       result.steps.push({ name, status, detail, ...(lines?.length ? { lines } : {}) });
       if (status === 'waiting') {
         result.waiting = true;
@@ -333,6 +353,8 @@ export function runProjectNew(options = {}) {
     } catch (error) {
       ran = true;
       state.steps[name] = { status: 'failed', at: new Date().toISOString(), detail: error.message };
+      state.updatedAt = new Date().toISOString();
+      writeState(stateFile, state);
       result.steps.push({ name, status: 'failed', detail: error.message });
       result.ok = false;
       result.error = error.message;

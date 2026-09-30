@@ -99,6 +99,37 @@ Run `herdr-boss project check <slug>` at any time. It reads the project and prin
 
 Each step changes nothing when its result already exists. A run that stops at a failed step continues at that step on the next run. After the change, check the shares on the Allocation page.
 
+### Project setup API
+
+The dashboard wizard uses these routes. They run the same flow as `herdr-boss project new`. There is no second implementation.
+
+The routes are for the Owner. They sit behind the dashboard access control: a loopback request needs no login, and any other address needs the token. The server has no way to tell the Owner from the Boss or a worker on a loopback request. Do not give the dashboard token to an agent.
+
+The read-only preview refuses every route with the message `This read-only preview does not allow changes.` This includes the GET routes, because they show local paths.
+
+- `POST /api/project-new/plan` runs the dry run. The body has `slug`, `name`, `group` or `path`, `remote`, `visibility`, `org`, `kind`, `goal`, and `start`. The response lists each step with a `would ...` text and gives the resolved `path`. The route writes nothing.
+- `POST /api/project-new` starts the flow with the same body. The flow runs in a separate process, so the dashboard stays responsive. The response is `202` with the `slug`, the `state` `running`, and the `url` of the status route. The flow sends the first prompt to the model only when the body has `start: true`.
+- `GET /api/project-new/<slug>` returns the status. The field `state` is `running`, `waiting`, `failed`, `interrupted`, `done`, or `idle`. Each step has a `name`, a `status`, and a `detail`. The field `exitCode` is `null` while the flow runs, `0` when it is done, `1` when a step failed, `1` also when the run was interrupted, and `3` when it waits for an Owner decision.
+- `POST /api/project-new/<slug>/resume` continues the flow at the first step that is not finished. The body can be empty. It can set `remote`, `visibility`, `org`, `kind`, and `start`. Any value that the body leaves out comes from the first request.
+- `GET /api/project-new/<slug>/check` returns the read-only project check: `ok` and a list of items with `name`, `ok`, and `detail`.
+
+A flow with `remote: gh` waits at the step `remote`. The status then has `state: waiting` and `waiting: { reason: "waiting for an Owner decision", item: <message id> }`. Answer the decide item in the Mailbox. Then call the resume route.
+
+The routes refuse a request with these status codes:
+
+- `400`: the body is not a JSON object, the content type is not `application/json`, a field is unknown or has the wrong type, or the flow module refuses the inputs. A remote URL with a credential is refused.
+- `403`: the preview refuses the request.
+- `404`: the slug has no flow state, or the route does not exist.
+- `405`: the method does not fit the route.
+- `409`: a run of the same slug is running.
+- `500`: an unexpected error. The message has no credential and no absolute path, and the server logs the error.
+- `413`: the body is larger than 16 KB.
+- `429`: 2 runs already run. Try again when one ends.
+
+A run writes the marker file `flows/<slug>.running` and removes it when the run ends. After a restart of the service, a marker without a running flow gives the state `interrupted`. Call the resume route to continue. The server keeps the 20 newest finished runs in memory. The state file answers for older runs.
+
+A response never holds a token, and never holds an absolute path outside the project path of the request. A path outside the project appears as `<path>`. A crash of the flow process sets the first unfinished step to `failed` in the state file `flows/<slug>.json`.
+
 ## Project memory
 
 Store project memory in `docs/orchestration/memory.md`. Commit this file with the project repository.
