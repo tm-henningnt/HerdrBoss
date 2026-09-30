@@ -147,6 +147,7 @@ const USAGE = `herdr-boss <command>
   harness check [--live-codex]  Check the harness settings that orchestration needs. Exit 1 on a missing entry.
                         --live-codex also runs one codex exec to check the worker shell variables.
   harness sync [--dry-run] [--codex-only]  Add missing Codex writable roots and print the Claude autoMode lines.
+  harness change <harness> <label> [--date YYYY-MM-DD]  Mark a harness fix on the denial chart of the Analytics page.
   kit install [--no-hook]  Write the kit file, the AGENTS.md stub, and the Claude SessionStart hook.
   kit update [--quiet]    Install the kit, print the kit changes since the installed kit revision, and print the kit file.
                           --quiet prints nothing when the kit is current and no file changes. Otherwise it
@@ -766,7 +767,26 @@ async function main() {
         const result = syncHarness({ dryRun: flags.includes('--dry-run'), codexOnly: flags.includes('--codex-only'), url: dashboardUrl(cfg) });
         for (const line of result.lines) console.log(line);
         if (!result.ok) process.exitCode = 1;
-      } else throw new Error('Usage: harness check [--live-codex] | harness sync [--dry-run] [--codex-only]');
+      } else if (action === 'change') {
+        // The label is every word that is not the harness or the --date option, so an unquoted label works.
+        const words = [];
+        let date;
+        for (let i = 0; i < flags.length; i += 1) {
+          if (flags[i] === '--date') {
+            date = flags[i + 1];
+            if (date === undefined || date.startsWith('--')) throw new Error('Usage: harness change <harness> <label> [--date YYYY-MM-DD]. The option --date needs a date.');
+            i += 1;
+          } else words.push(flags[i]);
+        }
+        const [harness, ...label] = words;
+        if (!harness || !label.length) throw new Error('Usage: harness change <harness> <label> [--date YYYY-MM-DD]');
+        const { appendHarnessChange, assertHarnessChangeCaller } = await import('./harness-changes.js');
+        const { createHerdrRunner } = await import('./kit/workers.js');
+        assertHarnessChangeCaller(process.env, createHerdrRunner());
+        assertDataWritable();
+        const entry = appendHarnessChange(DATA_DIR, { harness, label: label.join(' '), date });
+        console.log(`Recorded the harness change: ${entry.date} ${entry.harness} ${entry.label}`);
+      } else throw new Error('Usage: harness check [--live-codex] | harness sync [--dry-run] [--codex-only] | harness change <harness> <label> [--date YYYY-MM-DD]');
       break;
     }
     case 'install': {

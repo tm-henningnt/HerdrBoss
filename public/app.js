@@ -7,7 +7,7 @@ import { chatJumpHtml, chatJumpButtonHtml, chatAtBottom, chatJumpScroll } from '
 import { mailBarItem, mailActionBarHtml, mailSelectionBarHtml } from './mail-bar.js';
 import { APP_VIEW_ROUTES, appViewport } from './app-view.js';
 import { createWizard } from './project-wizard-ui.js';
-import { stackedBars, lineChart, stripBars, heatGrid, outcomeBars, legendHtml, foldSeries, spendSeries, claudeSpend, quotaSeries, denialGrid, firstTimeRate, activityFilter, activityChoices, eventLevel, dayLabel, usd, minutes, compact, ACTIVITY_RANGES, ACTIVITY_LEVELS, SERIES_CLASSES } from './analytics.js';
+import { stackedBars, lineChart, stripBars, outcomeBars, legendHtml, foldSeries, spendSeries, claudeSpend, quotaSeries, firstTimeRate, activityFilter, activityChoices, eventLevel, dayLabel, usd, minutes, compact, ACTIVITY_RANGES, ACTIVITY_LEVELS, SERIES_CLASSES, DENIAL_RANGES, DEFAULT_DENIAL_RANGE, denialRange, denialSeries, denialMarkers, denialDetailsHtml, denialLegendHtml } from './analytics.js';
 
 const $app = document.getElementById('app');
 // A visual check can force a theme with ?theme=light or ?theme=dark. Without it, the page follows the system.
@@ -44,7 +44,11 @@ let machineHoursOpen = false;
 let spendData = null;
 let analyticsData = null;
 let pendingHash = location.pathname === '/analytics' && location.hash ? location.hash.slice(1) : null;
-const analyticsUi = { spendBy: 'role', denialHarness: 'all', open: new Set(), log: { kind: 'all', project: 'all', level: 'all', range: '24h', q: '' } };
+const DENIAL_RANGE_KEY = 'herdr-boss.denialRange';
+function loadDenialRange() {
+  try { return denialRange(localStorage.getItem(DENIAL_RANGE_KEY)); } catch { return DEFAULT_DENIAL_RANGE; }
+}
+const analyticsUi = { spendBy: 'role', denialHarness: 'all', denialRange: loadDenialRange(), open: new Set(), log: { kind: 'all', project: 'all', level: 'all', range: '24h', q: '' } };
 let browserSessions = [];
 const browserMessages = {};
 const browserPreviewOpen = new Set();
@@ -4194,43 +4198,65 @@ function denialLimitsLine(s) {
   return `<p class="denial-limits">Scans every ${minutes} min, reads at most ${megabytes} MB for each scan, keeps ${l.retainDays} days, and marks a rise at ${l.riseFactor}× the 6-day mean and ${l.riseMinEvents} events.</p>`;
 }
 
+const DENIAL_HARNESSES = ['claude', 'codex', 'opencode', 'pi'];
+
+// The newest day is at the right end of the chart. A chart wider than its box scrolls there once for each box, range, and harness.
+// A render can replace the box, so the check compares the element and not only the range.
+let denialScrollDone = { box: null, mark: '' };
+function denialScrollToEnd() {
+  const box = document.querySelector('[data-key="scroll:denials"]');
+  const mark = `${analyticsUi.denialRange}:${analyticsUi.denialHarness}`;
+  if (!box || box.scrollWidth <= box.clientWidth || (denialScrollDone.box === box && denialScrollDone.mark === mark)) return;
+  denialScrollDone = { box, mark };
+  const toEnd = () => { box.scrollLeft = box.scrollWidth; };
+  toEnd();
+  requestAnimationFrame(toEnd);
+}
+const OUTCOME_TEXT = { approved: 'Approved', refused: 'Refused' };
+
 // Counts only: the scan keeps no message text. A rising cause asks the Owner to talk with the Boss; it sends no pane prompt.
+// The bars show the events for each day from /api/analytics: refused (block, refusal, sandbox error) and approved escalations, which are friction.
 function denialsBlock(s) {
   const d = denials;
+  const daily = analyticsData?.denials;
   const base = { id: 'denials', title: 'Denials and permission prompts' };
   const limits = denialLimitsLine(s);
-  if (!d?.rows?.length) return vizCard({ ...base, notes: limits, empty: 'No denials or permission prompts are recorded yet. Herdr Boss reads the harness logs every 15 minutes.' });
-  const totals = Object.entries(d.harnessTotals || {}).filter(([, n]) => n).sort((a, b) => b[1] - a[1]);
-  const harness = analyticsUi.denialHarness !== 'all' && !d.harnessTotals?.[analyticsUi.denialHarness] ? 'all' : analyticsUi.denialHarness;
-  const grid = denialGrid(d, harness);
-  const causes = grid.causes.slice(0, 8);
-  if (grid.causes.length > 8) {
-    const counts = d.days.map((_, i) => grid.causes.slice(8).reduce((a, c) => a + c.counts[i], 0));
-    causes.push({ cause: 'Other causes', counts, total: counts.reduce((a, b) => a + b, 0) });
-  }
+  const any = denialSeries(daily, { range: 30 });
+  if (!d?.rows?.length && any.totals.refused + any.totals.approved === 0) return vizCard({ ...base, notes: limits, empty: 'No denials or permission prompts are recorded yet. Herdr Boss reads the harness logs every 15 minutes.' });
+  const range = denialRange(analyticsUi.denialRange);
+  const totals = DENIAL_HARNESSES.map((h) => [h, denialSeries(daily, { range, harness: h }).totals]).map(([h, t]) => [h, t.refused + t.approved]).filter(([, n]) => n);
+  const harness = analyticsUi.denialHarness !== 'all' && !totals.some(([h]) => h === analyticsUi.denialHarness) ? 'all' : analyticsUi.denialHarness;
+  const win = denialSeries(daily, { range, harness });
+  const markers = denialMarkers(analyticsData?.harnessChanges, win.days, harness);
   const who = harness === 'all' ? 'all harnesses' : HARNESS_NAMES[harness] || harness;
-  const top = causes[0];
-  const title = top ? `${top.cause} causes the most denials for ${who}: ${top.total.toLocaleString()} of ${grid.total.toLocaleString()} in 7 days` : `No denials for ${who} in 7 days`;
+  const period = `${range} days`;
+  const title = win.totals.refused + win.totals.approved
+    ? `${win.totals.refused.toLocaleString('en-US')} refused or blocked and ${win.totals.approved.toLocaleString('en-US')} approved escalations in ${period} (${who})`
+    : `No denials for ${who} in ${period}`;
   const arrow = (x) => { const [sign, word] = TREND_ARROW[x.trend] || TREND_ARROW.flat; return `<span class="denial-trend ${esc(x.trend)}" title="${esc(`${word}: ${x.recent} in 24 hours, 6-day mean ${x.mean}`)}">${sign}<span class="visually-hidden"> ${word}</span></span>`; };
-  const dayHead = d.days.map((day) => `<th class="mono">${esc(day.slice(5))}</th>`).join('');
-  const waiting = d.catchingUp ? `<div class="calm-state">Herdr Boss still reads older logs: ${Math.ceil(d.pendingBytes / 1024 ** 2).toLocaleString()} MB left. The counts of older days are not complete, so the trend note waits.</div>` : '';
-  const note = d.rising?.length ? `<div class="denial-note" role="status"><strong>${esc(d.note)}</strong><span>${d.rising.map((c) => `${esc(c.cause)}: ${c.recent} in 24 hours, 6-day mean ${c.mean}`).join(' · ')}</span></div>` : '';
-  const modelRows = d.modelRows || [];
+  const rows = d?.rows || [];
+  const days7 = d?.days || [];
+  const dayHead = days7.map((day) => `<th class="mono">${esc(day.slice(5))}</th>`).join('');
+  const waiting = d?.catchingUp ? `<div class="calm-state">Herdr Boss still reads older logs: ${Math.ceil(d.pendingBytes / 1024 ** 2).toLocaleString()} MB left. The counts of older days are not complete, so the trend note waits.</div>` : '';
+  const note = d?.rising?.length ? `<div class="denial-note" role="status"><strong>${esc(d.note)}</strong><span>${d.rising.map((c) => `${esc(c.cause)}: ${c.recent} in 24 hours, 6-day mean ${c.mean}`).join(' · ')}</span></div>` : '';
+  const modelRows = d?.modelRows || [];
   const modelTable = modelRows.length ? `<div class="denial-model-breakdown"><h3>Counts by harness and model</h3><div class="fleet-table-wrap"><table class="fleet-table denial-model-table"><thead><tr><th>Harness</th><th>Model</th><th>Cause</th><th>Count</th></tr></thead><tbody>`
     + modelRows.slice(0, 10).map((r) => `<tr><td data-label="Harness">${esc(HARNESS_NAMES[r.harness] || r.harness)}</td><td data-label="Model" class="mono">${esc(r.model)}</td><td data-label="Cause">${esc(r.cause)}</td><td data-label="Count" class="mono">${r.count.toLocaleString()}</td></tr>`).join('')
     + `</tbody></table></div>${d.modelMoreCount ? `<p class="denial-model-more">${d.modelMoreCount.toLocaleString()} more</p>` : ''}</div>` : '';
-  const table = `<div class="fleet-table-wrap"><table class="fleet-table denial-table"><thead><tr><th>Cause</th><th>Project</th><th>Harness</th>${dayHead}<th>Total</th><th>Trend</th></tr></thead><tbody>`
-    + d.rows.map((r) => `<tr><td data-label="Cause"><strong>${esc(r.cause)}</strong></td><td data-label="Project">${esc(state.control?.projects?.[r.project]?.label || r.project)}</td><td data-label="Harness">${esc(HARNESS_NAMES[r.harness] || r.harness)}</td>${r.counts.map((n, i) => `<td class="mono" data-label="${esc(d.days[i].slice(5))}">${n || '·'}</td>`).join('')}<td class="mono" data-label="Total">${r.total.toLocaleString()}</td><td data-label="Trend">${arrow(r)}</td></tr>`).join('')
-    + '</tbody></table></div>';
-  const cols = d.days.map((day) => dayLabel(day));
+  const causeTable = rows.length ? `<div class="denial-causes"><h3>Last 7 days by cause and project</h3><div class="fleet-table-wrap"><table class="fleet-table denial-table"><thead><tr><th>Cause</th><th>Outcome</th><th>Project</th><th>Harness</th>${dayHead}<th>Total</th><th>Trend</th></tr></thead><tbody>`
+    + rows.map((r) => `<tr><td data-label="Cause"><strong>${esc(r.cause)}</strong></td><td data-label="Outcome">${esc(OUTCOME_TEXT[r.outcome] || 'Refused')}${r.classified === false ? ' (outcome unknown)' : ''}</td><td data-label="Project">${esc(state.control?.projects?.[r.project]?.label || r.project)}</td><td data-label="Harness">${esc(HARNESS_NAMES[r.harness] || r.harness)}</td>${r.counts.map((n, i) => `<td class="mono" data-label="${esc(days7[i].slice(5))}">${n || '·'}</td>`).join('')}<td class="mono" data-label="Total">${r.total.toLocaleString()}</td><td data-label="Trend">${arrow(r)}</td></tr>`).join('')
+    + '</tbody></table></div></div>' : '';
+  const cats = win.days.map((day) => ({ label: dayLabel(day), tip: dayLabel(day, true) }));
+  const flagKey = markers.length ? '<li><i class="viz-key-flag" aria-hidden="true"></i>Harness change</li>' : '';
+  const controls = `<div class="viz-controls">${vizSwitch('denial-range', String(range), DENIAL_RANGES.map((n) => [String(n), `${n} days`]), 'Show the last')}${vizSwitch('denial-harness', harness, [['all', 'All'], ...totals.map(([h, n]) => [h, `${HARNESS_NAMES[h] || h} ${n.toLocaleString()}`])], 'Show the denials of')}</div>`;
   return vizCard({
     ...base, title,
-    sub: 'Last 7 days, counts for each cause and day. A darker cell has more events.',
-    controls: vizSwitch('denial-harness', harness, [['all', 'All'], ...totals.map(([h, n]) => [h, `${HARNESS_NAMES[h] || h} ${n.toLocaleString()}`])], 'Show the denials of'),
+    sub: `Last ${period}, one bar for each day (UTC). The solid part is refused, blocked, and sandbox events. The outlined part is escalations that a rule approved: friction, not a failure.${markers.length ? ' A flag marks a day with a harness change.' : ''}`,
+    controls,
     notes: `${limits}${waiting}${note}`,
-    legend: '<ul class="viz-legend"><li class="viz-ramp" aria-hidden="true"><i class="viz-heat-key q1"></i><i class="viz-heat-key q3"></i><i class="viz-heat-key q5"></i></li><li>Fewer to more events</li></ul>',
-    chart: causes.length ? heatGrid({ rows: causes.map((c) => c.cause), cols, values: causes.map((c) => c.counts), label: title, tip: (r, c) => `${causes[r].cause}, ${dayLabel(d.days[c], true)}\n${causes[r].counts[c]} events (${who})` }) : '<div class="calm-state">No denials for this harness.</div>',
-    details: `${table}${modelTable}`,
+    legend: denialLegendHtml(win, flagKey),
+    chart: win.days.length ? stackedBars({ cats, series: win.series, markers, label: title }) : '<div class="calm-state">No denial counts for this window yet.</div>',
+    details: `${denialDetailsHtml({ win, markers })}${causeTable}${modelTable}`,
   });
 }
 
@@ -4368,7 +4394,13 @@ document.addEventListener('click', (e) => {
   const by = e.target.closest?.('[data-spend-by]');
   if (by) { analyticsUi.spendBy = by.dataset.spendBy; render(); return; }
   const harness = e.target.closest?.('[data-denial-harness]');
-  if (harness) { analyticsUi.denialHarness = harness.dataset.denialHarness; render(); }
+  if (harness) { analyticsUi.denialHarness = harness.dataset.denialHarness; render(); return; }
+  const range = e.target.closest?.('[data-denial-range]');
+  if (range) {
+    analyticsUi.denialRange = denialRange(range.dataset.denialRange);
+    try { localStorage.setItem(DENIAL_RANGE_KEY, String(analyticsUi.denialRange)); } catch {}
+    render();
+  }
 });
 document.addEventListener('change', (e) => {
   const field = e.target.dataset?.activityFilter;
@@ -5182,7 +5214,8 @@ const HELP = {
     <h3>Charts</h3><p>The title of each chart tells what to read from it. Hover, focus, or touch a column, a cell, or a row to read its values. On a phone each chart scrolls sideways inside its own box. <b>Details</b> under a chart opens the table of the same figures.</p>
     <p><b>Spend</b>: stacked bars for each day, split by role or by harness with the switch. The USD figure is the API-price equivalent. The Owner pays a subscription, not these amounts. <b>Quota</b>: one solid line for the use of each lane and one dashed line for its expected pace, in the weekly window. <b>Model scorecard</b>: the share of first-time, rework, failed, and not judged runs for each model. <b>Details</b> also holds the recorded work by project and provider and the recent runs.</p>
     <h3>Denials and permission prompts</h3><p>Herdr Boss reads the Claude, Codex, OpenCode, and Pi logs every 15 minutes. It counts classifier refusals, sandbox errors, escalation requests, permission prompts, prompts with no answer within 10 minutes, OpenCode worker permission denials, and Herdr guard blocks. It keeps the day, harness, cause, project, model, and count. It keeps no message text.</p>
-    <p>The heat map shows the counts for each cause and day over the last 7 days. The switch selects one harness or all. The small table in Details shows counts for the last 7 days by harness, model, and cause. It shows up to 10 rows.</p>
+    <p>The chart shows one bar for each day. The solid part is events that were refused: classifier refusals, sandbox errors, guard blocks, and OpenCode denials. The outlined part is escalations that an existing rule approved. The legend gives the total of each part for the range. An approved escalation is friction, not a failure. An event with no known outcome counts as refused, and Details says how many. The range is 3 days by default. Choose 7 or 30 days with the buttons; the browser remembers the choice. The switch selects one harness or all.</p>
+    <p>A flag on the chart marks a day on which a harness fix went in. The flags come from <code>harness-changes.jsonl</code> in the data folder, one JSON object on each line: <code>date</code> (YYYY-MM-DD), <code>harness</code> (<code>claude</code>, <code>codex</code>, <code>opencode</code>, or <code>pi</code>), and <code>label</code> (up to 80 characters). Add a line with <code>herdr-boss harness change HARNESS LABEL [--date YYYY-MM-DD]</code>. Hover, focus, or touch a flag to read its date, harness, and label. Details lists the days, both series, and the flags. The small table in Details shows counts for the last 7 days by harness, model, and cause. It shows up to 10 rows.</p>
     <p>The table in Details shows the last 7 days by cause and project. The arrow compares the last 24 hours with the mean of the 6 days before. When a cause is above 2 times its mean and above 10 events, the page and the bulletin show <b>Discuss this trend with the Boss.</b> Herdr Boss sends no prompt to an orchestrator about it. While more than 1 MB of older logs is unread, the note waits, because the counts of older days are not complete.</p>
     <p>A read-only line shows the limits: the scan interval, the bytes for one scan, the days kept, and the rise rule.</p>
     <h3>Machine load and lock waits</h3><p>Lines show the 5-minute load as a percent of the cores, the memory in use, and the swap in use over the last 24 hours, in columns of 10 minutes. A shaded column had a lock holder. The strip under the chart shows the minutes in which a suite request waited in the queue.</p>
@@ -5368,6 +5401,7 @@ function render(force = false) {
     if (route === 'mailbox') mailRestoreDrafts(focusId, caret);
     if (route === 'chat') chatRestoreView(chatViewState);
     restoreScroll(route, scroll);
+    if (route === 'analytics') denialScrollToEnd();
   }
   syncSettingPopup();
   if (route === 'agents' && agentsViewMode() === 'chart') orgMotion(state);

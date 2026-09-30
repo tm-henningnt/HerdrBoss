@@ -120,6 +120,19 @@ function contentText(content) {
   if (Array.isArray(content)) return content.map((part) => (typeof part === 'string' ? part : typeof part?.text === 'string' ? part.text : '')).join('\n');
   return '';
 }
+// The outcome of a cause. An escalation request that a rule approved is friction, so it is `approved`.
+// A classifier refusal, a sandbox error, a Herdr guard block, and an OpenCode denial or unanswered prompt are `refused`.
+// The scan keeps no reply for an OpenCode prompt that was answered. A cause with no known outcome counts as `refused` and is not `classified`.
+const APPROVED_CAUSES = /^escalation:request$/;
+const REFUSED_CAUSES = /^(?:classifier:|sandbox:|guard:|permission:unanswered:)/;
+const OPENCODE_DENIED = new RegExp(`^permission:(?:${[...OPENCODE_TYPES, 'other'].join('|')})$`);
+export function denialOutcome(cause) {
+  const text = typeof cause === 'string' ? cause : '';
+  if (APPROVED_CAUSES.test(text)) return { outcome: 'approved', classified: true };
+  if (REFUSED_CAUSES.test(text) || OPENCODE_DENIED.test(text)) return { outcome: 'refused', classified: true };
+  return { outcome: 'refused', classified: false };
+}
+
 const reasonCause = (reason) => `classifier:${REASON.test(reason.trim()) ? reason.trim() : 'other'}`;
 
 // Claude: a tool result that the auto mode classifier refused.
@@ -452,6 +465,29 @@ function trendOf(byDay, now) {
   return { recent, mean, trend, rising: recent > RISE_FACTOR * mean && recent > RISE_MIN_EVENTS };
 }
 
+export const DENIAL_HARNESSES = ['claude', 'codex', 'opencode', 'pi'];
+
+// Counts for each day, oldest first, for the denial chart. Each series holds the refused events, the approved escalations,
+// and the events with no known outcome (also in refused). `all` sums every record; the harness series sum the four known harnesses.
+export function denialDaily(records, { now = Date.now(), days = RETAIN_DAYS } = {}) {
+  const dayList = Array.from({ length: days }, (_, i) => dayOf(now - (days - 1 - i) * DAY_MS));
+  const index = new Map(dayList.map((d, i) => [d, i]));
+  const empty = () => ({ refused: Array(days).fill(0), approved: Array(days).fill(0), unclassified: Array(days).fill(0) });
+  const harnesses = { all: empty(), ...Object.fromEntries(DENIAL_HARNESSES.map((h) => [h, empty()])) };
+  for (const r of Array.isArray(records) ? records : []) {
+    const i = index.get(r?.day);
+    if (i === undefined || !Number.isFinite(r.count) || r.count <= 0) continue;
+    const { outcome, classified } = denialOutcome(r.cause);
+    for (const key of new Set(['all', r.harness])) {
+      const series = Object.hasOwn(harnesses, key) ? harnesses[key] : null;
+      if (!series) continue;
+      series[outcome][i] += r.count;
+      if (!classified) series.unclassified[i] += r.count;
+    }
+  }
+  return { days: dayList, harnesses };
+}
+
 // The dashboard and bulletin view: 7 days by cause and project, harness totals, and the trend per cause.
 export function denialSummary(records, now = Date.now(), { pendingBytes = 0 } = {}) {
   const days = Array.from({ length: 7 }, (_, i) => dayOf(now - (6 - i) * DAY_MS));
@@ -472,7 +508,7 @@ export function denialSummary(records, now = Date.now(), { pendingBytes = 0 } = 
     bump(rowDays, key, r.day, r.count);
     bump(causeDays, r.cause, r.day, r.count);
     if (!index.has(r.day)) continue;
-    if (!rows.has(key)) rows.set(key, { harness: r.harness, model, cause: r.cause, project: r.project, counts: days.map(() => 0), total: 0 });
+    if (!rows.has(key)) rows.set(key, { harness: r.harness, model, cause: r.cause, project: r.project, ...denialOutcome(r.cause), counts: days.map(() => 0), total: 0 });
     const row = rows.get(key);
     row.counts[index.get(r.day)] += r.count;
     row.total += r.count;
