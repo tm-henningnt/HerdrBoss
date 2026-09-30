@@ -76,7 +76,48 @@ The first `publish` of a slug registers the project. It records `{ slug, repo, r
 
 ## New project flow
 
-The module `src/project-new.js` exports `runProjectNew(options)`. It has no command yet.
+### Command
+
+```
+herdr-boss project new <slug> [--group DIR | --path DIR] [--remote gh|URL|none]
+  [--visibility private|public] [--org NAME] [--kind claude|codex] [--goal TEXT]
+  [--start] [--dry-run] [--resume]
+herdr-boss project check <slug>
+```
+
+`project new` calls `runProjectNew` and prints one line for each step, the project path, and the next action. It never prints a token.
+
+| Flag | Meaning |
+|---|---|
+| `--group DIR` | The group folder. The project folder is `DIR/<slug>`. |
+| `--path DIR` | The project folder. Give `--group` or `--path`. There is no default folder. |
+| `--remote` | `none` (default), `gh`, or a Git URL. A URL must not hold a user name or a password. |
+| `--visibility` | `private` (default) or `public`. `public` needs a remote that is not `none`. |
+| `--org NAME` | The organization for `--remote gh`. |
+| `--kind` | The harness of the first orchestrator: `claude` or `codex`. |
+| `--goal TEXT` | One line for the README and the first status. |
+| `--start` | Start the first orchestrator. Off by default. |
+| `--dry-run` | Print each step as `would ...`. Change nothing. |
+| `--resume` | Continue a saved run. |
+
+Only the steps of `runProjectNew` that are built run. The steps `remote`, `policy`, `register`, `workspace`, `harness`, and `check` print `not built yet`. The values of `--remote`, `--visibility`, `--org`, `--kind`, and `--start` reach `runProjectNew` as options. They change nothing until those steps are built.
+
+A step prints one state: `done`, `skipped`, `failed`, `pending`, `not built yet`, or, in a dry run, `would ...`.
+
+`project check <slug>` is not built yet. It prints `project check is not built yet` and exits with code 2.
+
+| Exit code | Meaning |
+|---|---|
+| 0 | Done. |
+| 1 | Usage error or refusal. This includes an unknown flag and a failed step. |
+| 2 | Not built. |
+| 3 | Waiting for an Owner decision. Reserved. |
+
+Run `project new` in a plain terminal, in the pane labeled `boss`, or in a pane labeled `orch`. A worker pane is refused before any step runs. The pane check is the check of `herdr-boss say`.
+
+### Module
+
+The module `src/project-new.js` exports `runProjectNew(options)`. The command calls it.
 
 `runProjectNew` runs these steps in order: `validate`, `folder`, `files`, `kit`, `commit`. The steps `remote`, `policy`, `register`, `workspace`, `harness`, and `check` report `not built yet`. They change nothing.
 

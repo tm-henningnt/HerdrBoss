@@ -91,6 +91,11 @@ const USAGE = `herdr-boss <command>
   uninstall             Stop and remove the launchd agent.
   logs                  Show the server log.
   lanes                 Print one line per quota provider and the unmetered models lane.
+  project new <slug> [--group DIR | --path DIR] [--remote gh|URL|none] [--visibility private|public] [--org NAME]
+                        [--kind claude|codex] [--goal TEXT] [--start] [--dry-run] [--resume]
+                        Create a project folder with the kit files and the first commit.
+                        Exit 0 done, 1 usage or refusal, 2 not built, 3 waiting for the Owner.
+  project check <slug>  Check a project set-up. Not built yet: exits 2.
   scratch SLUG          Create the durable scratch folder of a project and print its path.
   policy show|set FILE  Show or replace the local resource policy.
   usage record FILE     Add measured or unmeasured project usage.
@@ -237,6 +242,13 @@ async function main() {
     const dir = path.join(DATA_DIR, 'scratch', args[0]);
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     console.log(path.resolve(dir));
+    return;
+  }
+  if (cmd === 'project') {
+    const { projectCommand } = await import('./project-new-cli.js');
+    const { createHerdrRunner } = await import('./kit/workers.js');
+    const code = projectCommand(args, { env: process.env, herdr: createHerdrRunner() });
+    if (code) process.exitCode = code;
     return;
   }
   if (['say', 'messages', 'mail'].includes(cmd)) {
