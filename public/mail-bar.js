@@ -12,6 +12,27 @@ export function mailBarItem(records, find) {
   return item && !item.closedAt && OPEN_ACTIONS.has(item.action) ? item : null;
 }
 
+export const ELSEWHERE_LABEL = 'Close as answered elsewhere';
+
+// The button that closes an open item that the Owner answered in another place. It has the same route and the same look on every surface.
+export function mailElsewhereButtonHtml(item, { esc, busy = false, icon = null, className = '' }) {
+  // A review item closes when the Owner submits the review.
+  if (item.kind === 'review') return '';
+  const id = esc(item.id);
+  const off = busy ? ' disabled' : '';
+  if (icon) return `<button type="button" class="app-icon-button mail-bar-icon ${className}" data-mail-elsewhere="${id}" aria-label="${ELSEWHERE_LABEL}" title="${ELSEWHERE_LABEL}"${off}>${icon('check')}</button>`;
+  return `<button type="button" class="${className}" data-mail-elsewhere="${id}"${off}>${ELSEWHERE_LABEL}</button>`;
+}
+
+// The suggestion after the Owner wrote on the thread. Keep open stores the dismissal on the item.
+export function mailSuggestionHtml(item, { esc, busy = false }) {
+  if (!item || !item.closeSuggestion || item.closedAt) return '';
+  const id = esc(item.id);
+  const off = busy ? ' disabled' : '';
+  return `<div class="mail-suggest" role="group" aria-label="Close this item?" data-key="mail-suggest:${id}"><p class="mail-suggest-text">Close this item?</p>`
+    + `<div class="mail-suggest-buttons"><button type="button" data-mail-elsewhere="${id}"${off}>${ELSEWHERE_LABEL}</button><button type="button" class="mail-suggest-keep" data-mail-keep="${id}"${off}>Keep open</button></div></div>`;
+}
+
 // helpers: esc, icon(name), busy, draft (the typed text of the item), status, and noteOpen.
 export function mailActionBarHtml(item, helpers) {
   const { esc, icon, busy = false, draft = '', status = '', noteOpen = false } = helpers;
@@ -39,6 +60,8 @@ export function mailActionBarHtml(item, helpers) {
     const label = item.action === 'decide' ? 'Decision' : 'Answer';
     rows = `<div class="mail-bar-row mail-bar-compose">${dismiss}${field(label, 2000, true, `${label}…`)}${send}</div>`;
   }
+  const elsewhere = mailElsewhereButtonHtml(item, { esc, busy });
+  if (elsewhere) rows += `<div class="mail-bar-row mail-bar-elsewhere">${elsewhere}</div>`;
   return `<form class="mail-action-bar" data-key="mail-bar:${id}" data-mail-form="${id}" aria-label="Actions">${rows}<p class="mail-status" role="status">${esc(status)}</p></form>`;
 }
 

@@ -24,7 +24,7 @@ import { listBrowserTabs, browserScreenshot, browserNavigate, browserNavigationS
 import { listHandoffs } from './handoff.js';
 import { roamgateAvailable, roamgateUrl } from './roamgate.js';
 import { createAccessControl, loginPage } from './access.js';
-import { appendMessage, chatSummaries, isMailAnswer, isMailRecord, messagesById, chatThreadPage, closeMailboxItem, dismissMailboxItems, groupMessagesByConversation, listThread, mailboxCounts, mailboxFolders, mailboxView, markMailboxRead, messageChannel, messagesWithReplyState, readMessages, validThread, validateOwnerSend, withMailAnswers } from './messages.js';
+import { appendMessage, chatSummaries, isMailAnswer, isMailRecord, messagesById, chatThreadPage, closeMailboxItem, closeResolvedOnPublish, dismissMailboxItems, keepMailboxItemsOpen, groupMessagesByConversation, listThread, mailboxCounts, mailboxFolders, mailboxView, markMailboxRead, messageChannel, messagesWithReplyState, readMessages, validThread, validateOwnerSend, withMailAnswers } from './messages.js';
 import { assertSqliteAvailable } from './sqlite-store.js';
 import { openMessageStore } from './message-store.js';
 import { BODY_LIMIT as PROJECT_NEW_BODY_LIMIT, createProjectNewApi } from './project-new-api.js';
@@ -675,6 +675,11 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine 
         if (result.error) return send(res, result.status, { error: result.error });
         return send(res, 200, { ...result, mailbox: refreshMailbox(readMessages(), true) });
       }
+      if (p === '/api/messages/keep-open' && req.method === 'POST') {
+        const result = keepMailboxItemsOpen(await jsonBody(req));
+        if (result.error) return send(res, result.status, { error: result.error });
+        return send(res, 200, { ...result, mailbox: refreshMailbox(readMessages(), true) });
+      }
       if (p === '/api/mailbox' && req.method === 'GET') {
         const records = readMessages();
         const folder = url.searchParams.get('folder');
@@ -778,7 +783,12 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine 
       if (pm && (req.method === 'PUT' || req.method === 'POST')) {
         let data;
         try { data = await jsonBody(req); } catch (e) { return send(res, 400, { ok: false, errors: [`invalid JSON: ${e.message}`] }); }
+        const submitted = structuredClone(data);
         const errors = writeProject(pm[1], data);
+        if (!errors.length) {
+          closeResolvedOnPublish(pm[1], submitted, { log: (line) => engine.log('message', line) });
+          refreshMailbox(readMessages(), true);
+        }
         return send(res, errors.length ? 400 : 200, { ok: !errors.length, errors });
       }
       if (pm && req.method === 'DELETE') {

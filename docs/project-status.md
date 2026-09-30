@@ -62,7 +62,7 @@ Only `project` is required. Omit the fields that you do not use.
 | `tasks[].note` | string | One line of detail. |
 | `tasks[].waitingOn` | string | Optional. One of `owner`, `boss`, `task`, `external`. It names the party that holds the task. The project page shows a wait label and, for the Owner, a decision group. |
 | `tasks[].ask` | string | Optional. The short question or need, at most 200 characters. It is required when `waitingOn` is `owner` or `boss`. |
-| `tasks[].mailboxId` | string | Optional. The ID of the Mailbox message for this wait. The decision group links to its conversation. |
+| `tasks[].mailboxId` | string | Optional. The ID of the Mailbox message for this wait. The decision group links to its conversation. When a publish keeps the task and the task no longer has `waitingOn: owner`, Herdr Boss closes the open Mailbox item with this ID. A publish that removes the task, or has no `tasks`, closes nothing. |
 | `metrics[]` | object | `label`, `value`, and an optional `detail`. |
 | `links[]` | object | `label` and `url`. |
 | `notes[]` | string | Short notes. Backticks show as code. |
@@ -118,7 +118,7 @@ The project data holds `doneCount`. The server does not compute a progress total
 
 Task IDs must be unique. A `blockedBy` ID that is not in `tasks[]` counts as external: the graph notes it on the task and does not draw it. Links in `links[]`, `tasks[].url`, and `groups[].refs[].url` must start with `http://` or `https://`.
 
-Use `waitingOn` to separate a wait for a person from a wait for other tasks. Set `waitingOn: owner` only when the task needs an Owner decision. Set `ask` to the short question. Post a Mailbox item for the Owner, and set `mailboxId` to its ID. Use `blockedBy` for a wait on other tasks. A `done` task must not have `waitingOn`.
+Use `waitingOn` to separate a wait for a person from a wait for other tasks. Set `waitingOn: owner` only when the task needs an Owner decision. Set `ask` to the short question. Post a Mailbox item for the Owner, and set `mailboxId` to its ID. Use `blockedBy` for a wait on other tasks. A `done` task must not have `waitingOn`. Clear `waitingOn` and `ask`, or finish the task, when the Owner has answered in any place. Then publish the status. Removing the task does not close the item. The publish closes the Mailbox item of `mailboxId` with the note `resolved by the project`. Only a publish for the same project closes its items.
 
 `herdr-boss publish` refuses a status in which a task has an active worker (working or blocked, with no report) but is not `doing`. Run it with `--force` to skip this check.
 

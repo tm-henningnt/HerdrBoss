@@ -1335,7 +1335,8 @@ Each line in `messages.jsonl` is one JSON record with these fields:
 | `relayedAt`, `relayedBy` | The relay time and the role that relayed the message. Both fields are set by the Boss relay command. |
 | `readAt` | The time that the Owner opened a mailbox item. A new item does not have this field. |
 | `closedAt`, `dismissed` | The close time and whether the Owner dismissed the item without an answer. |
-| `closedBy`, `closeNote` | The role that closed an item through the Boss, and the Boss's note. |
+| `closedBy`, `closeNote` | The party that closed an item without an Owner answer, and its note. `closedBy` is `boss` (the Boss's note), `project` (`resolved by the project`), or `owner` (`answered elsewhere`). |
+| `closeSuggestionDismissedAt` | The time that the Owner selected **Keep open** on the close suggestion. The suggestion does not show again for this item. |
 | `repliedAt` | The API view adds the time of the first reply that names this Owner message ID. It is not stored on the message. |
 
 The JSON backend appends each new record as one line. It rewrites a changed file through a temporary file and a rename. Each write deletes records that are older than 30 days. A lock file `messages.jsonl.lock` keeps writers from writing at the same time. The SQLite backend stores each record as JSON text in one database row. It uses a transaction for each change and keeps the same 30-day retention and message order.
@@ -1378,6 +1379,14 @@ The page asks for a confirmation before each send or dismissal. The answer is an
 
 Select **New message** to start a thread with the Boss or a project that has an `orch` pane. Type a message and confirm the send. The page applies the same send limit and safety gates as other Owner messages. It opens the new thread in **Sent**. Use the reply box at the bottom of a conversation to reply to its last open agent message. When that message is an open answer, approve, or decide item, the item form replaces the reply box. The page asks you to confirm each reply.
 
+### Close an item without an answer
+
+An open Needs-you item closes in three ways without an Owner answer in the Mailbox.
+
+1. The project closes it. A task in the project status has `waitingOn: owner` and a `mailboxId`. When the orchestrator publishes a status in which that task no longer has `waitingOn: owner`, Herdr Boss closes the item. This is the case when the task is done, has no wait, or waits on another party. A task that is missing from the status does not close its item. Select **Close as answered elsewhere** for a task that no longer exists. A review item closes when the Owner submits the review, and it has no **Close as answered elsewhere** button. The item gets `closedBy: project` and the note `resolved by the project`. Only a publish for the project that owns the item closes it. An item without a task reference stays open. A failed Mailbox update does not fail the publish.
+2. The Owner closes it. Select **Close as answered elsewhere** on the item. The button is in the conversation, in the list row (check-mark button), and in the bar at the bottom edge on a phone. The item gets `closedBy: owner` and the note `answered elsewhere`. It moves to **Done** and shows `Closed as answered elsewhere`. The page asks for no confirmation and sends no message.
+3. The page suggests it. When you write a chat message to the same thread after the item arrived, the item shows **Close this item?** with two buttons: **Close as answered elsewhere** and **Keep open**. **Keep open** stores `closeSuggestionDismissedAt` on the item, so the suggestion stays away on every device. The suggestion does not show for a closed or answered item.
+
 Select one or more checkboxes under **Needs you**, then select **Dismiss selected**. On a phone, select **Dismiss N** in the selection bar. A check box selects all items of its conversation. Select **Dismiss** on one item to dismiss it alone. Dismissal sets `closedAt`, `readAt`, and `dismissed: true`. It sends no message. You cannot dismiss an item that is already closed or does not need action.
 
 The choices are the list items under a Markdown heading with the text `Choices`, for example `## Choices`. The list ends at the first line that is not a list item. The page shows at most 10 choices.
@@ -1412,7 +1421,8 @@ An icon with nothing to show is faded. It has opacity 0.35 and no badge. An icon
 | `GET /api/mailbox?thread=THREAD` | Return the conversations in a Boss or project thread. |
 | `GET /api/mailbox?thread=THREAD&conversation=ID` | Return the messages in one conversation, oldest first. |
 | `POST /api/messages/read` | Set `readAt` on the items in `{ "ids": [...] }`, 1 to 200 IDs. Add `"close": true` to close items with the action `read`. |
-| `POST /api/messages/dismiss` | Dismiss 1 to 200 open Needs-you items in `{ "ids": [...] }`. It sends no Owner message. |
+| `POST /api/messages/dismiss` | Dismiss 1 to 200 open Needs-you items in `{ "ids": [...] }`. It sends no Owner message. Add `"answeredElsewhere": true` to close the items with `closedBy: owner` and the note `answered elsewhere`. |
+| `POST /api/messages/keep-open` | Set `closeSuggestionDismissedAt` on the items in `{ "ids": [...] }`, 1 to 200 IDs. |
 | `POST /api/messages` with `replyTo` | Send an answer to an open item of the same thread, and close the item. |
 
 Both mailbox `POST` routes have the same gates as `POST /api/messages`: a loopback request or an authenticated remote session, and a same-origin request. A read-only preview refuses them with HTTP 403. The 30-day retention of the store applies to the mailbox items.
@@ -1448,6 +1458,7 @@ On a screen up to 760 px wide, the Mailbox and the Chat are app views. The page 
 - The menu button opens a drawer. The drawer holds the Mailbox folders on the Mailbox, the links to all pages with the Needs-you and Chat counts, and **Help**. A dot on the menu button shows unread items on the other page.
 - The Mailbox list has a floating **New** button at the bottom right.
 - In a Mailbox conversation, the actions of the open item sit in a bar at the bottom edge, above the bottom safe-area inset. The bar holds the item actions from [Answer an item](#answer-an-item):
+  - Each bar has a last row with **Close as answered elsewhere**. The button has a 44 px target.
   - An approval: **Approve**, **Reject**, a note button, and a **Dismiss** button. The note button opens the note field above the buttons.
   - A decision with choices: one button for each choice, then a note button and **Dismiss**. The choice buttons wrap onto more rows, so each choice stays in view. The note button opens a field for another answer or a note, with **Send**.
   - An answer, or a decision without choices: **Dismiss**, the answer field, and **Send** in one row.
