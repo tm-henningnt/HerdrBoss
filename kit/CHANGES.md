@@ -45,3 +45,7 @@ Summary: Tell orchestrators to start workers with --task-id so the board shows l
 ## c13020178b65
 Impact: required
 Summary: Add the subagent and no-watching rule (subagents for reviews and reads, end the turn after a dispatch, at most one check every 20 to 30 minutes); a Kit updated notice now means run kit update and continue.
+
+## 7436456f91aa
+Impact: useful
+Summary: Publish the project status at task boundaries only; the service keeps the last 30 done tasks and counts the rest.
