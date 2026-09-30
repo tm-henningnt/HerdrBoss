@@ -111,9 +111,12 @@ Owner queue (credentials, billing, and Owner-applied settings):
 
 ## State at orchestrator handover (2026-09-30)
 
-- **Main:** `45ae7ea`, pushed and live (suite 1332 of 1332). It adds G4g (swap refusal, off by default), T1 (atomic lock tickets), SG1 (seed guard, `openMessageStore` rejects a string), M1 critique fixes, and kit revision `f73a93f04e11`.
-- **Incident 2026-09-30:** a worker seeded 17 invented messages into the live store. Removed after a backup (`~/.herdr-boss/backups/herdr-boss-20260930-incident.db`). GUI worker briefs say: seed only into a temporary `HERDR_BOSS_DIR`; the orchestrator starts the preview (`--read-only-preview`, own port) when the worker's permission classifier denies it.
-- **Running workers:** none at the time of writing.
-- **Queue:** M1 remainder (phone bottom action bar, thumb zone), G4d, P1, A1 with L1, S1, GUI pass, G3, G4h after 7 days of samples.
+- **Main:** `3018ff8`, pushed and live (suite 1489 of 1489). It contains everything queued so far: E4, E5, E5b, M1, G4d to G4g, G3 plan, P1, A1, S1, G5 (three groups), E1b, HC1, HC2, R1 to R5, R1b, PV1, SG1, T1.
+- **Waiting for the Owner:** approval of P1, A1, S1 and G5 in the Mailbox. A real iOS keyboard check of the Mailbox bars needs the Owner's phone.
+- **Waiting for data:** G4h (`herdr-boss machine thresholds`) needs 7 days of machine samples (recording since 2026-09-30). Then set the swap values in `policy.json` and record the Owner decision here.
+- **Running workers:** none.
+- **Open follow-ups:** see the 2026-09-30 follow-up lines above (M1 real-keyboard check, G4d palette validator, A1 data gaps, Now-card details). Recording `worker collect --record --outcome done --gate-passed` at review time is done for each own worker; three were refused for scope (e4status, e5bprices, hc2).
+- **Commit rule:** put `Kit-Impact: <required|useful|none>` and `Co-Authored-By:` in one final paragraph of a commit that touches `kit/`, `src/kit/` or `docs/orchestrator-instructions.md`. Add the `kit/CHANGES.md` entry for a new kit revision in the same commit.
+- **Preview rule:** a GUI worker seeds only into a temporary `HERDR_BOSS_DIR` (`scripts/seed-preview.js`); the preview binds `127.0.0.1`. The Claude permission classifier may deny a worker the preview start: start it for the worker.
 - **Old branches:** the NC1 to NC6, HB1, HB2 and other older worktrees are not verified as merged. Check `git branch --merged main` before deleting any. Ask the Boss before deleting `kit-cli` and `kit-docs`.
 - **Ledger gap:** 11 old runs have no ledger entries. Do not invent outcomes.
