@@ -105,11 +105,13 @@ Owner queue (credentials, billing, and Owner-applied settings):
 - Plan and progress: `herdr-boss publish herdrboss`, project page at `http://127.0.0.1:4477/projects/herdrboss`.
 - Handoff issue list and Chrome clone report: the HerdrBoss scratch folder (`herdr-boss scratch herdrboss`).
 
+- 2026-09-30: Follow-ups from the E4/E5b/G4e/M1 reviews. (a) T1: `test/suite.test.js` `readQueueFiles` failed once with a partial JSON read under load; make the test retry on a parse error, and check that the queue ticket write in `src/kit/locks.js` is atomic. (b) M1: the desktop Mailbox and Chat may render a second h1 in the app bar; remove the dead `font-size:15px` on `.chat-composer textarea`; the phone layout at 390 px is checked by reading CSS only, so verify it with a screenshot in the next M1 task. (c) The Settings price editor and the swap settings both edit Settings in `public/app.js`; check them together in the GUI pass. Source: orchestrator review.
+
 ## State at orchestrator handover (2026-09-30)
 
-- **Main:** `6d5c24a`, pushed and live. It contains B1b, B2, G4c and E5. The full suite passed 1239 of 1239.
-- **Running workers:** `e4status` (E4 status cap, with the idempotent `doneIds` fix), `m1phone1` (M1 T2 and T3, Mailbox and Chat phone views), `e5bprices` (E5b, Claude API-price-equivalent cost and Boss role by session id).
-- **Next:** review each report with a subagent, merge in the `integrate` worktree, run one full suite with `herdr-boss suite -- npm test`, fast-forward `main`, restart, check `/api/state`, push, and report to the Boss in one line.
-- **Queue after these:** rest of M1, P1, A1 with L1, S1, GUI pass, G4d to G4h (cache `/api/machine-hours` for 60 seconds), G3.
+- **Main:** `a13ca81`, pushed and live (suite 1302 of 1302, service restarted, `/api/state` 200). It adds E4, E5, E5b, M1 T2 and T3, G4e, G4f, and kit revision `7436456f91aa`.
+- **Kit:** the kit file update is committed with this file. Report the kit change to the Boss in one line.
+- **Running workers:** none at the time of writing.
+- **Queue:** G4g (swap refusal, off by default), T1, M1 follow-ups, G4d, P1, A1 with L1, S1, GUI pass, G3.
 - **Old branches:** the NC1 to NC6, HB1, HB2 and other older worktrees are not verified as merged. Check `git branch --merged main` before deleting any. Ask the Boss before deleting `kit-cli` and `kit-docs`.
 - **Ledger gap:** 11 old runs have no ledger entries. Do not invent outcomes.
