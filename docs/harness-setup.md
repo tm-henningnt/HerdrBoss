@@ -73,6 +73,7 @@ To apply the Claude lines:
 |---|---|
 | The `allow` push rule | An orchestrator pushes without an Owner prompt. The classifier still refuses a force-push. |
 | A wrong `**Herdr Boss projects**` line | The classifier trusts a folder that is not a project. |
+| A parent folder in the `**Herdr Boss projects**` line | The classifier trusts each repository in that folder that holds the marker file. Name only a folder that holds projects. |
 
 ## Codex
 
@@ -177,7 +178,7 @@ To apply the guard:
 - Codex: `writable_roots` holds `<repo>/.git` for each registered project, `{{HOME}}/.herdr-boss`, and `{{HOME}}/Projects/.herdr-wt`.
 - Codex: no root makes `~/.config/herdr-boss` writable.
 - Codex: `herdr.rules` forbids each of the five `ps` forms.
-- Claude: the `**Herdr Boss projects**` line in `autoMode.environment` names each registered project.
+- Claude: the `**Herdr Boss projects**` line in `autoMode.environment` names each registered project, or names a parent folder of the project. See "Parent folder line".
 - OpenCode: `agent.worker` exists.
 - Pi: `herdr-guard.ts` exists.
 - `kit/models.json`: the launch flags on this page.
@@ -188,7 +189,7 @@ To apply the guard:
 1. It copies `~/.codex/config.toml` to `config.toml.bak-<UTC timestamp>`.
 2. It rewrites the `writable_roots` array in `[sandbox_workspace_write]`. It keeps each entry and adds each missing root at the end. It changes no other line.
 3. It reads only the `autoMode` key in `~/.claude/settings.json`. It compares its `environment` and `allow` lines with the filled template.
-4. It prints each missing line and each changed labeled environment line. It shows the old line after `now:`.
+4. It prints each missing line and each changed labeled environment line. It shows the old line after `now:`. The recommended `**Herdr Boss projects**` line names parent folders. See "Parent folder line".
 5. It counts Owner lines that the template does not define. It does not show their text.
 6. If the file or the `autoMode` key is missing, it prints the full template and says why.
 7. It does not edit `~/.claude/settings.json`.
@@ -196,6 +197,39 @@ To apply the guard:
 When the section or the array is missing, or holds a comment or a value that is not a plain string, `harness sync` changes nothing. It prints the lines to add and exits 1. When no root is missing, it makes no backup. `--dry-run` prints the roots to add and writes nothing. `--codex-only` does not print the Claude lines.
 
 `harness check` checks the project line in Claude settings. It ignores other Owner lines.
+
+### Parent folder line
+
+The `**Herdr Boss projects**` line can name parent folders in place of each project. A new project inside a named parent needs no change to the line.
+
+A parent line must do these things:
+
+1. Name one or more parent folders, for example `/work/apps/` and `/work/tools/`.
+2. State the marker rule: a folder is a Herdr Boss project when it holds `docs/orchestration/herdr-boss.md`.
+3. Name the worker worktree root, `~/Projects/.herdr-wt/<repo>/<name>`.
+
+`harness check` counts a registered project as covered when its repository path lies inside a named parent folder. The line must contain `docs/orchestration/herdr-boss.md`. The output says `covers <repo> (<slug>) through the parent folder <parent>`. A project outside every named parent is `missing` and the check lists it.
+
+`harness check` compares real paths. It resolves symbolic links and `..` segments in the repository path and in each parent folder of the line. A folder such as `/work/apps.old/` does not name `/work/apps`.
+
+The marker file must follow the word `holds`, `contains`, or `has` in the sentence that states the rule. A sentence that says the file is not required does not state the rule.
+
+A line that names each project path still passes. A line that names one project does not cover its sibling projects.
+
+`harness sync` prints the parent folder line as the recommended line. It builds the line from the parent folder of each registered repository:
+
+- It names each distinct parent once, in sorted order.
+- It names at most 10 parents.
+- It drops a parent that lies inside another named parent.
+- It never names `/`, the home folder, or a folder above the home folder. A project directly under such a folder is named by its path.
+
+The Codex `writable_roots` array cannot use folders as patterns. `project new` and `harness sync` add `<repo>/.git` for each project.
+
+Example of a recommended line:
+
+```text
+**Herdr Boss projects**: every repository under /work/apps/ or /work/tools/ that contains the file docs/orchestration/herdr-boss.md is a Herdr Boss project, with its own origin remote only. Worker worktrees are in ~/Projects/.herdr-wt/<repo>/<name>. A folder without that file is not a Herdr Boss project.
+```
 
 ## Denial counts
 

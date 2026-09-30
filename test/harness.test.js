@@ -91,6 +91,8 @@ function harnessSyncFixture(t) {
   for (const key of ['environment', 'allow']) {
     filled[key] = filled[key].map((line) => line.replace(/\{\{([A-Z_]+)\}\}/g, (_all, name) => values[name]));
   }
+  // The recommended projects line names the parent folder of each registered repository.
+  filled.environment = filled.environment.map((line) => (line.startsWith('**Herdr Boss projects**') ? line.replace(`: ${values.PROJECT_LIST}.`, `: every repository under ${path.dirname(alpha)}/ that contains the file docs/orchestration/herdr-boss.md is a Herdr Boss project, with its own origin remote only.`) + ' A folder without that file is not a Herdr Boss project.' : line));
   return { ...f, alpha, expected: filled };
 }
 
@@ -277,7 +279,7 @@ test('harness sync adds the missing roots, keeps the others, makes a backup, and
   assert.equal(backups.length, 1);
   assert.equal(fs.readFileSync(path.join(path.dirname(config), backups[0]), 'utf8'), before);
   // The Claude lines are printed for the Owner; the settings file is not touched.
-  assert.match(result.stdout, /\*\*Herdr Boss projects\*\*: .*Beta \(example\/beta\), .*Alpha/);
+  assert.ok(result.stdout.includes(`**Herdr Boss projects**: every repository under ${path.join(f.home, 'Projects')}/ that contains the file docs/orchestration/herdr-boss.md is a Herdr Boss project`), result.stdout);
   assert.ok(result.stdout.includes(`Worker worktrees are in ${f.home}/Projects/.herdr-wt/<repo>/<name>.`), result.stdout);
   assert.equal(fs.existsSync(path.join(f.home, '.claude', 'settings.json')), false);
 

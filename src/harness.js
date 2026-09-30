@@ -15,6 +15,8 @@ const SECTION = '[sandbox_workspace_write]';
 const FORBIDDEN_PS = ['e', '-E', 'eww', 'auxe', 'auxeww'];
 const PROJECTS_LABEL = 'Herdr Boss projects';
 const PROJECTS_LINE = `**${PROJECTS_LABEL}**`;
+const MARKER_FILE = 'docs/orchestration/herdr-boss.md';
+const MAX_PARENTS = 10;
 const LAUNCH_FLAGS = {
   claude: [['--permission-mode', 'auto']],
   codex: [['-s', 'workspace-write']],
@@ -211,6 +213,84 @@ function namesClaudeFolder(line, value) {
   return new RegExp(`(^|[\\s,:])${escaped}(?=$|[\\s,.;)(/])`).test(line);
 }
 
+// The real path of a folder. A path that does not exist keeps its resolved form.
+function realPath(dir) {
+  try { return fs.realpathSync(dir); } catch { return path.resolve(dir); }
+}
+
+// A folder that the Claude line may not name as a parent: the root, the home folder, or a folder above it.
+function unusableParent(parent, home) { return inside(home, parent); }
+
+// Every folder above the repository that a parent line may name, nearest first. All paths are real paths.
+function parentCandidates(repo, home) {
+  const out = [];
+  const realHome = realPath(home);
+  for (let dir = path.dirname(realPath(repo)); dir !== path.dirname(dir); dir = path.dirname(dir)) {
+    if (!unusableParent(dir, realHome)) out.push(dir);
+  }
+  return out;
+}
+
+// The folders that a line names: each word that starts with / or ~/. A .. segment is resolved.
+// A trailing slash, comma, semicolon, or full stop is not part of the path, so /work/apps.old/ is not /work/apps.
+function namedFolders(line, home) {
+  const out = [];
+  for (const match of String(line).matchAll(/(?:^|[\s,:(])((?:~|\/)[^\s,;()]*)/g)) {
+    const text = match[1].replace(/[.]+$/, '');
+    const expanded = text === '~' || text.startsWith('~/') ? path.join(home, text.slice(1)) : text;
+    out.push(realPath(path.resolve(expanded)));
+  }
+  return out;
+}
+
+// The marker rule: the words holds, contains, or has, then the marker file, in a sentence that has no negation before them.
+function statesMarkerRule(line) {
+  const match = new RegExp(`\\b(?:holds|contains|has)\\s+(?:the\\s+)?(?:file\\s+)?${MARKER_FILE.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`).exec(line);
+  if (!match) return false;
+  const before = line.slice(0, match.index);
+  const sentence = before.slice(before.search(/\.\s(?!.*\.\s)/) + 1 || 0);
+  return !/(^|\s)(?:not|no|never)(\s|$)/i.test(sentence);
+}
+
+// Return the parent folder that a Claude projects line names for the repository, or null.
+// The line must state the marker rule. A line without it names projects one by one.
+export function parentCovering(line, repo, home) {
+  if (!statesMarkerRule(String(line))) return null;
+  const named = new Set(namedFolders(line, home));
+  return parentCandidates(repo, home).find((dir) => named.has(dir)) ?? null;
+}
+
+function namesRepo(line, repo, home) {
+  return namesClaudePath(normalizedClaudeLine(line, home), normalizedClaudeLine(repo, home));
+}
+
+// The parent folders for the recommended line. Each distinct parent appears once, sorted.
+// A parent inside another named parent is dropped. A project that has no usable parent is named by path.
+export function parentFolders(repos, home) {
+  const parents = new Set();
+  const single = [];
+  for (const repo of repos) {
+    const parent = path.dirname(path.resolve(repo));
+    if (unusableParent(parent, home)) single.push(repo); else parents.add(parent);
+  }
+  const sorted = [...parents].sort((a, b) => a.localeCompare(b));
+  const top = sorted.filter((dir) => !sorted.some((other) => other !== dir && inside(dir, other))).slice(0, MAX_PARENTS);
+  const uncovered = repos.filter((repo) => !top.some((dir) => inside(repo, dir)));
+  return { parents: top, single: [...new Set([...single, ...uncovered])].sort((a, b) => a.localeCompare(b)) };
+}
+
+// The recommended Herdr Boss projects line, built from the registered project repositories.
+function recommendedProjectsLine(filled, repos, home) {
+  const tail = /\. Worker worktrees.*$/s.exec(filled)?.[0] ?? '.';
+  const { parents, single } = parentFolders(repos, home);
+  if (!parents.length && !single.length) return filled;
+  const parts = [];
+  if (parents.length) parts.push(`every repository under ${parents.map((dir) => `${dir}/`).join(' or ')} that contains the file ${MARKER_FILE} is a Herdr Boss project, with its own origin remote only`);
+  if (single.length) parts.push(`${parents.length ? 'These projects are also Herdr Boss projects' : 'the Herdr Boss projects are'}: ${single.join(', ')}`);
+  const closing = parents.length ? ' A folder without that file is not a Herdr Boss project.' : '';
+  return `${PROJECTS_LINE}: ${parts.join('. ')}${tail}${closing}`;
+}
+
 function compareClaudeLines(area, expected, current, home, projectsLinePaths = []) {
   const used = new Set();
   const changes = [];
@@ -228,7 +308,7 @@ function compareClaudeLines(area, expected, current, home, projectsLinePaths = [
     used.add(index);
     const currentText = normalizedClaudeLine(current[index], home);
     if (area === 'environment' && label === PROJECTS_LABEL) {
-      const missing = projectsLinePaths.filter(({ target, folder }) => !(folder ? namesClaudeFolder : namesClaudePath)(currentText, normalizedClaudeLine(target, home)));
+      const missing = projectsLinePaths.filter(({ target, folder }) => !(folder ? namesClaudeFolder(currentText, normalizedClaudeLine(target, home)) : namesRepo(current[index], target, home) || parentCovering(current[index], target, home)));
       if (missing.length) {
         changes.push(`change environment "${label}": ${line}`, `now: ${current[index]}`);
         for (const { target } of missing) changes.push(`missing path: ${target}`);
@@ -250,6 +330,8 @@ export function claudeLines(options = {}) {
   const file = path.join(home, '.claude', 'settings.json');
   const template = JSON.parse(fs.readFileSync(path.join(TEMPLATES, 'claude-automode.json'), 'utf8'));
   const expected = Object.fromEntries(Object.entries(template).map(([key, lines]) => [key, lines.map((line) => fillTemplate(line, options))]));
+  const repos = readProjectRepos(options.dataDir ?? DATA_DIR).map((row) => row.repo);
+  expected.environment = expected.environment.map((line) => (claudeLineLabel(line) === PROJECTS_LABEL ? recommendedProjectsLine(line, repos, home) : line));
   const settings = readJson(file);
   const autoMode = settings.value?.autoMode;
   if (settings.error || !autoMode || typeof autoMode !== 'object' || Array.isArray(autoMode)) {
@@ -263,7 +345,7 @@ export function claudeLines(options = {}) {
   const environment = Array.isArray(autoMode.environment) ? autoMode.environment : [];
   const allow = Array.isArray(autoMode.allow) ? autoMode.allow : [];
   const requiredPaths = [
-    ...readProjectRepos(options.dataDir ?? DATA_DIR).map((row) => ({ target: row.repo })),
+    ...repos.map((repo) => ({ target: repo })),
     { target: sharedWorktreeRoot(home), folder: true },
   ];
   const environmentResult = compareClaudeLines('environment', expected.environment, environment, home, requiredPaths);
@@ -384,9 +466,10 @@ export function checkHarness({ home = homeDir(), dataDir = DATA_DIR, modelsFile 
     if (!line) add('missing', 'claude autoMode', 'Herdr Boss projects line', `${PROJECTS_LINE} line`);
     for (const project of projects) {
       if (!line) continue;
-      const escaped = project.repo.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const named = new RegExp(`(^|[\\s,:])${escaped}(?=$|[\\s,.;)(])`).test(line);
-      add(named ? 'ok' : 'missing', 'claude autoMode', 'Herdr Boss projects line', `${PROJECTS_LINE} ${named ? 'names' : 'does not name'} ${project.repo} (${project.slug})`);
+      const named = namesRepo(line, project.repo, home);
+      const parent = named ? null : parentCovering(line, project.repo, home);
+      if (parent) add('ok', 'claude autoMode', 'Herdr Boss projects line', `${PROJECTS_LINE} covers ${project.repo} (${project.slug}) through the parent folder ${parent}`);
+      else add(named ? 'ok' : 'missing', 'claude autoMode', 'Herdr Boss projects line', `${PROJECTS_LINE} ${named ? 'names' : 'does not name'} ${project.repo} (${project.slug})`);
     }
   }
 
