@@ -202,3 +202,14 @@ test('waited minutes in the lock ledger stay within the sample minutes with wait
   assert.ok(waitedMin <= sampledWaitMin * 1.15, `${waitedMin} waited minutes against ${sampledWaitMin} sampled`);
   assert.equal(summary.totals.samples, 6);
 });
+
+test('summarizeHours counts a duplicate minute once', () => {
+  const now = Date.parse('2026-09-29T15:00:00.000Z');
+  const line = { at: '2026-09-29T14:03:00.000Z', l5: 40, cpus: 10, cpu: 10, waiters: 1, swapMB: 0, swapTotalMB: 0 };
+  const other = { ...line, at: '2026-09-29T14:04:00.000Z' };
+  const summary = summarizeHours({ samples: [line, { ...line }, other, { ...line }], now, days: 1 });
+  assert.equal(summary.totals.samples, 2);
+  assert.equal(summary.totals.overloadMin, 2);
+  assert.equal(summary.totals.idleWaitMin, 2);
+  assert.equal(summary.coverage, +(2 / 1440).toFixed(3));
+});

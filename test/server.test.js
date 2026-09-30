@@ -2392,9 +2392,16 @@ test('GET /api/machine-hours summarizes the sample file, limits days, and works 
   const old = { ...line, at: new Date(Date.now() - 5 * 86400000).toISOString() };
   fs.writeFileSync(samplesFile, `${JSON.stringify(line)}\nbroken line\n${JSON.stringify(old)}\n`);
 
+  // The result is cached for 60 seconds: the new file is not read yet.
+  assert.equal((await (await fetch(`${base}/api/machine-hours`)).json()).totals.samples, 0);
+  const realNow = Date.now();
+  t.mock.method(Date, 'now', () => realNow + 61000);
+
   const body = await (await fetch(`${base}/api/machine-hours?days=14`)).json();
   assert.equal(body.totals.samples, 2);
   assert.equal(body.daysWithData, 2);
+  fs.appendFileSync(samplesFile, `${JSON.stringify(line)}\n`);
+  assert.equal((await (await fetch(`${base}/api/machine-hours?days=14`)).json()).totals.samples, 2, 'cached');
   assert.equal(body.hours[at.getHours()].overloadMin, 1);
   assert.equal(body.hours[at.getHours()].idleWaitMin, 1);
   assert.deepEqual(body.hours[at.getHours()].holderKinds, { suite: 1 });
@@ -2408,6 +2415,17 @@ test('GET /api/machine-hours summarizes the sample file, limits days, and works 
   for (const method of ['POST', 'PUT', 'DELETE']) {
     assert.equal((await fetch(`${base}/api/machine-hours`, { method, body: method === 'DELETE' ? undefined : '{}' })).status, 403, method);
   }
+});
+
+test('the Analytics page serves and its script fetches and draws the machine hours', () => {
+  const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  assert.match(app, /'\/api\/machine-hours'\]\.map/);
+  assert.match(app, /function machineHoursBlock/);
+  assert.match(app, /<details class="mh-details" data-mh-detail/);
+  assert.match(app, /machineHoursOpen = e\.target\.open/);
+  assert.match(app, /addEventListener\('pointerout', hideMachineTip\)/);
+  assert.match(app, /addEventListener\('focusout', hideMachineTip\)/);
+  assert.match(app, /analytics: \['Analytics'[\s\S]*Machine overload and idle waiting/);
 });
 
 test('/api/settings/prices reads the price table and writes a validated override', { timeout: 20000 }, async (t) => {

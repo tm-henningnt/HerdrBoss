@@ -1343,7 +1343,11 @@ The response has these keys:
 - `totals`: `samples`, `overloadMin`, and `idleWaitMin` over all hours.
 - `coverage`: `samples` divided by `days` times 1440.
 
-`overloadMin` and `idleWaitMin` count samples, and one sample is one minute. A minute without a sample is missing data. It is not a quiet minute. `swapPeakPct` and `memFreeMin` are the highest swap percent and the lowest free memory of the hour, or `null`. `holderKinds` counts the samples for each holder kind. The response holds no project name, pane id, or path. The dashboard does not show the hours yet.
+`overloadMin` and `idleWaitMin` count samples, and one sample is one minute. A minute without a sample is missing data. It is not a quiet minute. `swapPeakPct` and `memFreeMin` are the highest swap percent and the lowest free memory of the hour, or `null`. `holderKinds` counts the samples for each holder kind. The response holds no project name, pane id, or path.
+
+The route keeps its result for 60 seconds for each value of `days`. The summary counts a repeated minute once.
+
+The **Analytics** page shows the hours in the block **Machine overload and idle waiting by hour**. The chart has two bars for each local hour of the day. The bars show the mean minutes per day of overload and of idle waiting, from 0 to 60. The title above the chart gives the two daily means. A tooltip on hover, focus, or touch gives the values of one hour. A hatched bar marks an hour with fewer than 10 samples. A note shows when `coverage` is below 0.5. The details element under the chart holds the same 24 rows as a table. On a phone the chart scrolls sideways inside its own box.
 
 Before it removes a worktree, `herdr-boss worktree prune --apply` checks for processes whose current working directory is inside that worktree. It reports parent-PID-1 processes in missing or prunable worktree paths. Stop those processes before cleanup. Herdr Boss removes no worktrees if it cannot scan process directories. It also keeps worktrees that are dirty, unmerged, primary, used by a live pane, or uninspectable. Herdr Boss sends a notice about a parent-PID-1 process in a removed worktree only to that repository's `orch` workspace.
 

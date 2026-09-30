@@ -14,7 +14,7 @@ import { loadPolicy, savePolicy } from './control.js';
 import { recordUsage, usageSummary } from './usage.js';
 import { spendSummary, clampSpendDays, loadPrices, defaultPrices, readPriceOverrides, writePriceOverrides, COST_LABEL } from './spend.js';
 import { readDenials, denialSummary } from './denials.js';
-import { summarizeHours } from './machine-samples.js';
+import { summarizeHours, clampSummaryDays } from './machine-samples.js';
 import { buildWatchRecord, clearNight, readNight, writeNight } from './night.js';
 import { effectiveRoutines, rememberChoice, resetRoutine, saveRoutine } from './watch-routines.js';
 import { requestBrowser, listBrowserSessions, browserStatus, setBrowserWindowSize, closeBrowser, restartBrowser, listBookmarks, addBookmark, renameBookmark, moveBookmark, removeBookmark, setStartPage } from './browser-pool.js';
@@ -146,7 +146,10 @@ async function jsonBody(req) {
   return JSON.parse(await readBody(req));
 }
 
+const MACHINE_HOURS_CACHE_MS = 60000;
+
 export function serve(cfg, { readOnlyPreview = false, createEngine = (config, options) => new Engine(config, options), closeTab = browserCloseTab } = {}) {
+  const machineHoursCache = new Map();
   // A direct serve() call must refuse an unsafe preview before the access token, the watcher, or a tick writes a file.
   if (readOnlyPreview) assertPreviewDataDir();
   assertSqliteAvailable();
@@ -472,7 +475,15 @@ export function serve(cfg, { readOnlyPreview = false, createEngine = (config, op
       }
       if (watchPath === '/api/watch' && req.method === 'GET') return send(res, 200, readNight({ dataDir: DATA_DIR }));
       if (p === '/api/denials' && req.method === 'GET') return send(res, 200, denialSummary(readDenials(DATA_DIR), Date.now(), { pendingBytes: engine.memory?.denialScan?.pendingBytes || 0 }));
-      if (p === '/api/machine-hours' && req.method === 'GET') return send(res, 200, summarizeHours({ dataDir: DATA_DIR, days: url.searchParams.get('days') }));
+      if (p === '/api/machine-hours' && req.method === 'GET') {
+        // The route parses up to two 3 MB files, so the result is kept for 60 seconds for each window.
+        const days = clampSummaryDays(url.searchParams.get('days'));
+        const hit = machineHoursCache.get(days);
+        if (hit && Date.now() - hit.at < MACHINE_HOURS_CACHE_MS) return send(res, 200, hit.body);
+        const body = summarizeHours({ dataDir: DATA_DIR, days });
+        machineHoursCache.set(days, { at: Date.now(), body });
+        return send(res, 200, body);
+      }
       if (p === '/api/spend' && req.method === 'GET') return send(res, 200, spendSummary({ dataDir: DATA_DIR, days: clampSpendDays(url.searchParams.get('days')) }));
       if (p === '/api/usage' && req.method === 'GET') return send(res, 200, usageSummary());
       if (p === '/api/usage' && req.method === 'POST') {
