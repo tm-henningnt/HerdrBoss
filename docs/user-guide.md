@@ -80,6 +80,7 @@ Only the Owner answers a review pack. The server cannot tell the Owner from an a
 | `GET /api/reviews?state=open` | The packs with progress counts. `state` is `open` (default) or `done`. Another value gets `400`. `stale` is the number of items that changed after the Owner answered them. |
 | `GET /api/reviews/<slug>/<pack>` | The current version: manifest, files, item states, answers, and progress. `?version=<n>` selects an older version. A submitted version also has `verdict`, `submittedAt`, and `delivery`. An unknown pack or version gets `404`. |
 | `GET /api/reviews/<slug>/<pack>/files/<version>/<path>` | One pack file. `<path>` is the file path from the manifest. |
+| `POST /api/reviews/<slug>/<pack>/raw-token` | A token for the frame of a `page` item: `{ token, expiresAt }`. `?version=<n>` selects a version. See [Legacy HTML pages](#legacy-html-pages). |
 
 A slug, a pack ID, and an item ID match `[a-z0-9][a-z0-9-]*` and have at most 64 characters. A version is a whole number of 1 or more.
 
@@ -227,6 +228,7 @@ The item viewer shows one item. On a screen of 899 px or less it fills the scree
 | `file` | The lines of the file in the mono font, with line numbers. The viewer shows at most 5000 lines. |
 | `link` | A card with the label, the host name, and **Open (opens in a new tab)**. The link opens the URL in a new tab with `rel="noopener noreferrer"`. The live check control is next to it. |
 | `checklist` | One row for each entry. Select a row to tick or untick the entry. |
+| `page` | The HTML page in a sandboxed frame. See [Legacy HTML pages](#legacy-html-pages). Only the importer makes this type. |
 | Other | The item text as Markdown, under the line `Herdr Boss has no viewer for NAME. It shows the text.` |
 
 The item text of the manifest `body` shows under the evidence. A text file loads when the item opens. A file that does not load shows `The text could not load.` and the reason.
@@ -239,6 +241,49 @@ The item text of the manifest `body` shows under the evidence. A text file loads
 - The hint `Pinch to zoom · double tap for 2×` shows for 3 seconds on the first image. It does not show again in the same browser.
 - Select **Add pin**, then tap the image. A numbered pin appears, and the note field of the pin gets the focus. An item takes at most 20 pins. The store keeps each pin as fractions of the image, from 0 to 1. A pin of a pair keeps its side, `a` or `b`. A pin of a gallery keeps the file name of its image. Each pin note has at most 200 characters.
 - Swipe left for the next item and right for the previous item. On a pair in the toggle view, a swipe shows the other image first. On an open gallery image, a swipe shows the next or the previous image first. A swipe on a zoomed image pans the image.
+
+### Legacy HTML pages
+
+A `page` item shows an imported HTML page in a frame. The page is untrusted. It can hold scripts. The frame isolates the page from the dashboard.
+
+1. The item gets a token from `POST /api/reviews/<slug>/<pack>/raw-token`. The token is 32 random bytes in hex. It names one pack version and expires after 30 minutes. The server keeps the tokens in memory. It keeps at most 200 live tokens and drops the oldest token at the limit. The answer is `{ token, expiresAt }`. The route needs the normal access checks. The read-only preview refuses it.
+2. The frame loads `/review-raw/<token>/<path>`. The route accepts `GET` and `HEAD` only. Each other method gets `405`.
+3. The route runs before the same-origin check, because the frame has an opaque origin and sends no cookie. It checks the host with the host list of the other routes. The token is the only credential.
+4. The route serves only a file that the manifest of the token version names. It refuses a path with `..`, a backslash, or a NUL character. It refuses a symbolic link and a file outside the version folder.
+5. Each refusal gets the same `404` body. The response does not show why the route refused the request.
+
+The frame has `sandbox="allow-scripts"`, `referrerpolicy="no-referrer"`, `loading="lazy"`, and `allow=""`. It has no `allow-same-origin`. The page cannot read the dashboard cookie, the DOM of the dashboard, or local storage.
+
+Each response of the raw route has this header. The `sandbox` directive also applies when you open the raw URL in a tab.
+
+```
+Content-Security-Policy: sandbox allow-scripts; default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self'; font-src 'self' data:; connect-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'
+```
+
+The response also has `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, and `Cache-Control: no-store`. It has no `X-Frame-Options` header.
+
+The server appends `<script src="/review-raw/<token>/__hb-bridge.js"></script>` to each HTML page. The file is `public/review-bridge.js`. The bridge sends four messages to the dashboard and handles three:
+
+| Direction | Message | Effect |
+|---|---|---|
+| Frame to dashboard | `ready` | The title, the page height, and at most 500 anchors (headings and images). The dashboard builds **Page outline** and sets the frame height. |
+| Frame to dashboard | `pick` | A tap of the pin tool: the anchor, the point as fractions of the page, and the selected text. The dashboard adds a pin and opens its note. |
+| Frame to dashboard | `scroll` | The scroll position. The dashboard shows **In view** with the numbers of the pins in the visible part. |
+| Frame to dashboard | `open` | A click on an external link. The dashboard shows **Open live link** with the host name. |
+| Dashboard to frame | `pins`, `goto`, `place` | The bridge draws the numbered pins, scrolls to an anchor, and turns the pin tool on or off. |
+
+The dashboard accepts a message only from the frame window with `hb` 1, a known type, a valid shape, and strings of at most 200 characters. A page script can send the same messages. The dashboard ignores a `pick` message while the pin tool is off. It shows all page text as text. It opens an `open` URL only when it is an `http` or `https` URL. The link opens in a new tab with `rel="noopener noreferrer"`.
+
+The frame height is the page height, between 240 and 720 px. A taller page scrolls inside the frame. **Page outline** lists the anchors. Select an entry to scroll the frame to it. If the page does not answer within 10 seconds, the viewer shows **Try again**. **Try again** gets a new token. The viewer also gets a new token when the old token expires.
+
+The frame cannot support these items:
+
+- A page that loads data or fonts from the network, or that posts a form. The CSP blocks them. The importer lists the URLs.
+- Local storage, cookies, and IndexedDB. The opaque origin throws an error on access.
+- Pop-ups, downloads, printing, and `alert()`.
+- **Accept** for one block of the page. A decision belongs to the whole page item and to the image items that the importer made. A note pins to a point.
+- Links to other pages of the pack. The bridge blocks them. The pack has one item for each page.
+- A stable pin after a layout change. A pin stores the anchor ID and the fractions of the page. The bridge places the pin at the fractions.
 
 ### Answer bar
 
