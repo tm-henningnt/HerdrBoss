@@ -28,6 +28,14 @@ Start a dashboard preview with temporary data and a separate local port:
 HOME="$(mktemp -d)" HERDR_BOSS_DIR="$(mktemp -d)" HERDR_BOSS_PORT=4478 npm start -- --read-only-preview
 ```
 
+Seed invented Mailbox and Chat messages into a temporary data directory before the preview starts:
+
+```sh
+HOME="$(mktemp -d)" HERDR_BOSS_DIR="$(mktemp -d)" node scripts/seed-preview.js
+```
+
+The script refuses the live data directory, a directory inside it, and a symlink to it. Use the same `HERDR_BOSS_DIR` for the preview.
+
 Choose an unused local port if 4478 is busy.
 
 `HERDR_BOSS_DIR` selects the data directory. The live data directory defaults to `~/.herdr-boss`. Set `HERDR_BOSS_LIVE_DIR` when the service uses another live directory.
