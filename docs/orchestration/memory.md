@@ -95,6 +95,8 @@ Owner queue (credentials, billing, and Owner-applied settings):
 
 - 2026-09-30: Owner review of the Owner approvals. P1 approved, A1 approved. S1 rejected: some popups repeat with the same text, for example the quota mode text for each harness. Put one info button with the text on the section header (hover and touch) instead of one for each row, and do the same for other repeated settings. Strip the GUI of inline always-visible help text that the Help panel and the popups now cover. Keep one warning line only where a setting can lock the Owner out or lose data. Task S1b. Source: Owner, in the Mailbox (reply to m-munjnoqe-ff4e0083).
 
+- 2026-09-30: The Owner approved G5 and tested the Mailbox and Chat on a PC and a phone: both work much better. Follow-up C1: the Chat shows a large `new message` object. Replace it with a small arrow-down button (icon only, with an accessible name and the unread count as a small badge) that scrolls to the newest message. Source: Owner, in the Mailbox (reply to m-munorcy4-369d7172).
+
 ## Standing rules
 
 - The service serves `public/` from the `main` working tree at once, but the server code only after a restart. Restart the service right after a merge that changes `public/` together with the server API, before the full suite, or the dashboard breaks until the restart.
