@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { SETTING_HELP } from '../public/setting-help.js';
 
 // The price editor code of public/app.js runs here with a stub document and fetch. The prices are invented.
 const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
@@ -38,7 +39,8 @@ const table = {
 
 test('the price editor lists each model with five price columns, the source, the date, and the unconfirmed marks', () => {
   const html = editor({ table }).pricesPanel();
-  assert.match(html, /API-price equivalent/);
+  assert.doesNotMatch(html, /API-price equivalent/, 'the popup of the price columns says it');
+  assert.match(SETTING_HELP['prices.input'].what, /API-price equivalent/);
   for (const label of ['Input', 'Output', 'Cache read', 'Cache write 5 min', 'Cache write 1 h', 'Source']) assert.ok(html.includes(`>${label}<`), label);
   assert.equal((html.match(/data-price-field="cacheWrite1h"/g) || []).length, 3);
   assert.match(html, /claude\/claude-opus-5-5/);

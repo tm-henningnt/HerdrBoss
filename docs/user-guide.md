@@ -369,7 +369,7 @@ When every metered provider is ahead of pace, `worker start` allows the least-ov
 
 ### Setting help and page order
 
-Each setting on the Settings page and on the Allocation page has an **i** button next to its label. Select the button, or focus it and press Enter or Space, to open a popup. The popup shows what the setting does, its default, its unit, its range, the effect of a higher and a lower value, and how the change takes effect. On a desktop, hold the pointer over the button to show the same popup. Press Escape to close it. A popup stays open when the page refreshes.
+Each setting on the Settings page and on the Allocation page has an **i** button. A setting that repeats for each harness, provider, routine, or project has one **i** button on the section or group header. Its rows have no button. The pages show no other explanation text, except one line where a change can lock the Owner out or lose data, and the status and error lines. Select the button, or focus it and press Enter or Space, to open a popup. The popup shows what the setting does, its default, its unit, its range, the effect of a higher and a lower value, and how the change takes effect. On a desktop, hold the pointer over the button to show the same popup. Press Escape to close it. A popup stays open when the page refreshes.
 
 The Help panel of the Settings page has a guide to each group of settings: what the group controls, what it affects, which changes are safe, and if a restart is needed. The text of the popups, the guide, and the settings reference in `docs/cli.md` comes from one file, `public/setting-help.js`. A test fails when a setting has no explanation.
 
