@@ -2639,8 +2639,7 @@ function appMenuButton(s, route) {
 
 // The drawer holds the Mailbox folders (on the Mailbox) and the links to all pages. It replaces the page header on a phone.
 function appDrawer(s, route, folderLinks = '') {
-  const counts = topIconCounts(s);
-  const pages = [['/', 'Overview'], ['/board', 'Board'], ['/mailbox', 'Mailbox', counts['needs-action']], ['/reviews', 'Reviews'], ['/chat', 'Chat', counts.chat], ['/agents', 'Agents'], ['/projects', 'Projects'], ['/browsers', 'Browsers'], ['/allocation', 'Allocation'], ['/analytics', 'Analytics']];
+  const pages = [['/', 'Overview'], ['/board', 'Board'], ['/reviews', 'Reviews'], ['/agents', 'Agents'], ['/projects', 'Projects'], ['/browsers', 'Browsers'], ['/allocation', 'Allocation'], ['/analytics', 'Analytics']];
   const links = pages.map(([href, label, count]) => `<a href="${href}"${href.slice(1) === route ? ' aria-current="page"' : ''}><span>${label}</span>${count ? `<span class="app-drawer-count num">${count > 99 ? '99+' : count}</span>` : ''}</a>`).join('');
   return `<div class="app-drawer" id="app-drawer" data-key="app-drawer"${appDrawerOpen ? '' : ' hidden'}><button type="button" class="app-drawer-scrim" data-app-drawer-close tabindex="-1" aria-label="Close the menu"></button>`
     + `<nav class="app-drawer-panel" aria-label="Menu"><div class="app-drawer-head"><span class="app-drawer-brand">Herdr Boss</span><button type="button" class="app-icon-button" data-app-drawer-close aria-label="Close the menu">${appIcon('close')}</button></div>`
@@ -2718,7 +2717,7 @@ function mailboxView(s) {
   const conversationPanel = mailbox.composing ? mailComposeView(s) : mailbox.currentConversation ? mailConversationView(s) : '';
   return `<div class="mailbox-layout${open ? ' conversation-open' : ''}" data-key="mailbox"${appDrawerOpen ? ' inert' : ''}>`
     + `<aside class="mail-folder-pane" data-key="mail-rail"><button type="button" class="mail-compose-button" data-mail-compose-open${mailbox.busy ? ' disabled' : ''}>${appIcon('pencil')}<span>New message</span></button><nav class="mail-folder-nav" aria-label="Mailbox folders">${mailFolderLinks(folder, counts, 'mail-folder-link')}</nav>${messageLimitsLine(s)}</aside>`
-    + `<section class="mail-list-pane${selecting ? ' selecting' : ''}" data-key="mail-list" aria-label="${esc(label)}"><div class="app-bar mail-list-bar">${appMenuButton(s, 'mailbox')}<h1>${esc(label)}${mailbox.loaded ? `<span class="app-bar-count num">${items.length}</span>` : ''}</h1></div>`
+    + `<section class="mail-list-pane${selecting ? ' selecting' : ''}" data-key="mail-list" aria-label="${esc(label)}"><div class="app-bar mail-list-bar">${appMenuButton(s, 'mailbox')}<h1>${esc(label)}${mailbox.loaded ? `<span class="app-bar-count num">${items.length}</span>` : ''}</h1>${appBarIcons(s, 'mailbox')}</div>`
     + `<p class="mail-notice" role="status"${mailbox.error || mailbox.notice ? '' : ' hidden'}>${esc(mailbox.error || mailbox.notice)}</p>${bulk}`
     + `<div class="mail-list-scroll" data-key="mail-list-scroll">${list}</div>`
     + (selecting ? mailSelectionBarHtml({ selected, total: mailbox.needsYou.length, busy: mailbox.busy, esc, icon: appIcon }) : '')
@@ -3046,10 +3045,6 @@ document.addEventListener('click', (e) => {
 
 function updateMailboxBadge(s) {
   const unread = s?.mailbox?.needsYouUnread ?? s?.mailbox?.unread ?? 0;
-  const text = (count) => count > 99 ? '99+' : String(count);
-  for (const badge of document.querySelectorAll('[data-mailbox-badge]')) { badge.hidden = !unread; badge.textContent = text(unread); }
-  const link = $nav.querySelector('[data-nav="mailbox"]');
-  if (link) link.setAttribute('aria-label', unread ? `Mailbox, ${unread} unread` : 'Mailbox');
   $navMenu.setAttribute('aria-label', unread ? `Menu, ${unread} unread in Mailbox` : 'Menu');
   updateTopIcons(s);
 }
@@ -3063,10 +3058,34 @@ const topIconCounts = (s) => ({
   'needs-action': s?.mailbox?.needsAction ?? s?.mailbox?.open ?? 0,
 });
 
+// The icon of the open page. The Mailbox folders Needs you and Updates each have an icon.
+function topIconCurrent(route, folder) {
+  if (route === 'chat') return 'chat';
+  if (route === 'mailbox') return folder === 'needs-you' ? 'needs-action' : folder === 'updates' ? 'mail' : null;
+  return null;
+}
+
+const TOP_ICON_LINKS = { chat: '/chat', mail: '/mailbox?folder=updates', 'needs-action': '/mailbox?folder=needs-you' };
+const TOP_ICON_SVG = { chat: 'chat', mail: 'mail', 'needs-action': 'alert' };
+
+// The same three icons in the slim bar of an app view. The page header with the icons does not show on a phone there.
+function appBarIcons(s, route, folder = new URLSearchParams(location.search).get('folder')) {
+  const counts = topIconCounts(s);
+  const current = topIconCurrent(route, folder);
+  return `<div class="app-bar-icons" role="group" aria-label="Unread and open items">${Object.keys(TOP_ICON_LINKS).map((name) => {
+    const count = counts[name];
+    return `<a class="top-icon${name === 'needs-action' ? ' top-icon-needs' : ''}" data-top-icon="${name}" data-empty="${count ? 'false' : 'true'}" href="${TOP_ICON_LINKS[name]}"${name === current ? ' aria-current="page"' : ''} aria-label="${count ? TOP_ICON_COUNT_LABEL[name](count) : TOP_ICON_NAMES[name]}">${appIcon(TOP_ICON_SVG[name])}<span class="top-icon-badge" data-top-badge="${name}"${count ? '' : ' hidden'}>${count > 99 ? '99+' : count}</span></a>`;
+  }).join('')}</div>`;
+}
+
 function updateTopIcons(s) {
+  const current = topIconCurrent(currentRoute(), new URLSearchParams(location.search).get('folder'));
+  for (const icon of document.querySelectorAll('[data-top-icon]')) {
+    if (icon.dataset.topIcon === current) icon.setAttribute('aria-current', 'page');
+    else icon.removeAttribute('aria-current');
+  }
   for (const [name, count] of Object.entries(topIconCounts(s))) {
-    const icon = document.querySelector(`[data-top-icon="${name}"]`);
-    if (icon) {
+    for (const icon of document.querySelectorAll(`[data-top-icon="${name}"]`)) {
       icon.dataset.empty = count ? 'false' : 'true';
       icon.setAttribute('aria-label', count ? TOP_ICON_COUNT_LABEL[name](count) : TOP_ICON_NAMES[name]);
     }
@@ -3099,16 +3118,6 @@ function chatSortList(list) {
     if (!right.last) return -1;
     return Date.parse(right.last.at) - Date.parse(left.last.at) || left.thread.localeCompare(right.thread);
   });
-}
-
-function chatUnreadTotal() { return chat.list.reduce((sum, item) => sum + (item.unread || 0), 0); }
-
-function chatUpdateBadge() {
-  const unread = chatUnreadTotal();
-  const text = (count) => count > 99 ? '99+' : String(count);
-  for (const badge of document.querySelectorAll('[data-chat-badge]')) { badge.hidden = !unread; badge.textContent = text(unread); }
-  const link = $nav.querySelector('[data-nav="chat"]');
-  if (link) link.setAttribute('aria-label', unread ? `Chat, ${unread} unread` : 'Chat');
 }
 
 // ---------- Avatars: one stable circle per thread ----------
@@ -3210,7 +3219,7 @@ function chatView(s) {
     ? `<ul class="chat-list">${rows}</ul>`
     : `<p class="chat-empty">${chat.loaded ? 'No chats.' : 'Loading…'}</p>`;
   const conversation = chat.thread ? chatConversationView() : '<section class="chat-empty-state"><p>Select a chat to read it.</p></section>';
-  return `<div class="chat-layout${chat.thread ? ' thread-open' : ''}" data-key="chat"${appDrawerOpen ? ' inert' : ''}><aside class="chat-list-pane" data-key="chat-list" aria-label="Chats"><div class="app-bar chat-list-head">${appMenuButton(s, 'chat')}<h1>Chats<span class="app-bar-count num">${chat.list.length}</span></h1></div>`
+  return `<div class="chat-layout${chat.thread ? ' thread-open' : ''}" data-key="chat"${appDrawerOpen ? ' inert' : ''}><aside class="chat-list-pane" data-key="chat-list" aria-label="Chats"><div class="app-bar chat-list-head">${appMenuButton(s, 'chat')}<h1>Chats<span class="app-bar-count num">${chat.list.length}</span></h1>${appBarIcons(s, 'chat')}</div>`
     + `<p class="chat-notice" role="status"${chat.error || chat.status ? '' : ' hidden'}>${esc(chat.error || chat.status)}</p>`
     + `<div class="chat-list-scroll" data-key="chat-list-scroll">${list}</div></aside><section class="chat-conversation-pane" data-key="chat-thread-pane">${conversation}</section></div>`
     + appDrawer(s, 'chat');
@@ -5243,7 +5252,7 @@ const HELP = {
     <h3>Markdown</h3><p>The page shows headings, bold, italic, lists, task lists, tables, code, quotes, rules, and links. A wide table or code block scrolls sideways in its own box. Raw HTML shows as text. A link opens only when it uses <code>http</code>, <code>https</code>, or <code>mailto</code>, or a local path. An external link opens in a new tab.</p>
     <h3>Actions</h3><p><b>Answer</b>: type an answer and select <b>Send</b>. <b>Approve</b>: select <b>Approve</b> or <b>Reject</b>. A note is optional. <b>Decide</b>: select a choice, or type an answer and select <b>Send</b>. Choice buttons appear when the message has a Markdown list under a <b>Choices</b> heading. A review pack item has <b>Open review</b> in place of the answer form. The submit of the review closes the item. Each answer uses the same delivery limit and safety checks as a new message. An answered item moves to <b>Done</b>.</p>
     <h3>Compose</h3><p>Select <b>New message</b> to write to the Boss or a project with an <code>orch</code> pane. The page asks you to confirm before it sends. The new conversation opens in <b>Sent</b>.</p>
-    <h3>Phone</h3><p>The Mailbox fills the screen. The page header does not show. Select the menu button at the top left to open the drawer with the folders, the other pages, and Help. A dot on the menu button shows unread chats. Select <b>New</b> at the bottom right to write a message. The desktop Mailbox badge shows unread Needs-you items.</p><p>In a conversation, the actions of the open item sit in a bar at the bottom edge. An approval has <b>Approve</b>, <b>Reject</b>, a note button, and <b>Dismiss</b>. A decision has its choice buttons, a note button, and <b>Dismiss</b>. The choice buttons wrap onto more rows, so each choice stays in view. An answer has <b>Dismiss</b>, the answer field, and <b>Send</b>. Each bar has a last row with <b>Close as answered elsewhere</b>. The note button opens a text field. When the keyboard opens, the bar stays above it.</p><p>In Needs you, select a check box to start a selection. The selection bar replaces <b>New</b> at the bottom edge. It shows the count, a button to clear the selection, <b>All</b>, and <b>Dismiss</b> with the count.</p>
+    <h3>Phone</h3><p>The Mailbox fills the screen. The page header does not show. Select the menu button at the top left to open the drawer with the folders, the other pages, and Help. The drawer has no Chat entry: use the Chat icon in the slim bar. A dot on the menu button shows unread chats. Select <b>New</b> at the bottom right to write a message. The Needs action icon in the top bar shows the open Needs-you items.</p><p>In a conversation, the actions of the open item sit in a bar at the bottom edge. An approval has <b>Approve</b>, <b>Reject</b>, a note button, and <b>Dismiss</b>. A decision has its choice buttons, a note button, and <b>Dismiss</b>. The choice buttons wrap onto more rows, so each choice stays in view. An answer has <b>Dismiss</b>, the answer field, and <b>Send</b>. Each bar has a last row with <b>Close as answered elsewhere</b>. The note button opens a text field. When the keyboard opens, the bar stays above it.</p><p>In Needs you, select a check box to start a selection. The selection bar replaces <b>New</b> at the bottom edge. It shows the count, a button to clear the selection, <b>All</b>, and <b>Dismiss</b> with the count.</p>
     <p>The folder pane shows the fixed limits: Herdr Boss keeps messages for 30 days and accepts at most 10 Owner messages a minute. A read-only preview shows messages and refuses a read or a send.</p>`],
   reviews: ['Reviews', `
     <p>A project sends you a review pack when it needs your decision on evidence: screenshots, text, tables, or a live check. Each item of the pack asks one question. You answer the items, write a note for the whole pack, and submit one result. The result goes to the project orchestrator.</p>
@@ -5260,9 +5269,9 @@ const HELP = {
   chat: ['Chat', `
     <p>The Chat page shows one conversation for the Boss and one for each project orchestrator. The page has no large heading. On a desktop the chat list and the open chat fill the window. Above the conversation there is one slim bar with the avatar, the chat name, and a link to the Mailbox.</p>
     <h3>Channels</h3><p><b>Chat</b> holds the conversation. A normal reply, an Owner message, a nudge, and a status request stay in Chat only. A reply that asks you for an <b>answer</b>, an <b>approval</b>, or a <b>decision</b> shows in Chat and in Mailbox <b>Needs you</b> while it is open. A <b>report</b> from the Boss is mail. It shows in Mailbox <b>Updates</b> and as one short line in Chat. A normal reply never shows in Updates. Your answer to a Mailbox item shows only in the Mailbox. Your reply to a normal message stays in the Chat. An agent that needs an answer, an approval, or a decision uses <code>herdr-boss say --action</code>.</p>
-    <h3>Top bar</h3><p>The top bar has three icons: chat unread, mail unread, and open action items. An icon with nothing to show is faded and has no count. An icon with something to show is bright and shows the count. <b>Needs action</b> is the most visible icon. The three icons are on a desktop and on a phone. On a phone the Mailbox and the Chat hide the top bar, and the menu drawer shows the counts.</p>
+    <h3>Top bar</h3><p>The top bar has three icons: chat unread, mail unread, and open action items. An icon with nothing to show is faded and has no count. An icon with something to show is bright and shows the count. <b>Needs action</b> is the most visible icon. The three icons are on a desktop and on a phone. The menu has no Mailbox entry and no Chat entry. Select the Chat icon to open the Chat. Select the mail icon or the Needs action icon to open the Mailbox. The icon of the open page has a mark. On a phone the Mailbox, the Chat, and the Reviews hide the top bar. Their slim bar at the top shows the same three icons at the right of the title.</p>
     <h3>Layout</h3><p>The chat is compact. A bubble has slim padding and no card frame. The time is 11 px. The composer is one line and grows to 6 lines. Its send button is a round button. A list row is 72 px high. The first line holds the title and the time. The second line holds the last message and the unread badge. The row keeps a touch target of at least 44 px on a phone.</p>
-    <h3>List</h3><p>Each row shows the title, the last message on one line, the time, and the unread count. A report shows as <b>Report: TITLE</b>. The newest chat comes first. The menu badge shows the total unread count. The list follows the message stream. It never reloads the page. The automatic refresh keeps the list and conversation scroll. It waits until 3 seconds after you last type or scroll.</p>
+    <h3>List</h3><p>Each row shows the title, the last message on one line, the time, and the unread count. A report shows as <b>Report: TITLE</b>. The newest chat comes first. The Chat icon in the top bar shows the total unread count. The list follows the message stream. It never reloads the page. The automatic refresh keeps the list and conversation scroll. It waits until 3 seconds after you last type or scroll.</p>
     <h3>Conversation</h3><p>Select a row to open the chat. Your messages sit on the right, and the agent messages sit on the left. Each bubble shows the text as formatted Markdown and the time. A wide table or code block scrolls sideways inside the bubble. Raw HTML shows as text. Your bubble also shows the delivery state: <b>queued</b>, <b>delivered</b>, or <b>failed</b> with the reason. Opening a chat marks the messages to you as read.</p>
     <p>Scroll up to read older messages. The page asks for the page before the oldest message and keeps your reading position. It stops at the oldest message in the store. The store keeps messages for 30 days.</p>
     <p>A new message goes at the bottom. The page scrolls down only when you already read the newest message. Otherwise the page keeps your position and shows a round arrow-down button at the bottom right of the message list. The badge on the button counts the new messages. Select the button to scroll to the newest message. The button hides at the bottom.</p>
@@ -5272,7 +5281,7 @@ const HELP = {
     <p><b>Approve</b> and <b>Reject</b> answer an approval. <b>Later</b> only collapses the card. It writes nothing, and the Mailbox item stays open. A <b>decide</b> message with a Markdown list under a <b>Choices</b> heading shows one button for each choice. A decide with the choices <b>Yes</b> and <b>No</b> shows those two buttons. An <b>answer</b> message shows a one-line text field and <b>Send</b>.</p>
     <p>The card uses the same send route as the Mailbox. The item closes and the bubble shows the result, for example <b>Approved 22:05</b>. A closed item shows as a normal bubble with the result of the answer that closed it. Select <b>Open in Mailbox</b> to see the item in the Mailbox.</p>
     <h3>Keyboard</h3><p>The chat list is a list of buttons. The arrow keys, <b>Home</b>, and <b>End</b> move through the rows. Enter opens a chat. The focus then goes to the message field. <b>Escape</b> goes back to the list, and the focus goes to the row of the chat that was open. The message list is a live region, so a screen reader reads each new message once. Each bubble has a name with the sender, the time, the text, and the state.</p>
-    <h3>Phone</h3><p>The Chat fills the screen. The page header does not show. Select the menu button to open the drawer with the other pages and Help. Select a chat to open it full screen. The slim bar has the Back arrow. When the keyboard opens, the composer stays above it. The card buttons and the send button are at least 44 px.</p>
+    <h3>Phone</h3><p>The Chat fills the screen. The page header does not show. Select the menu button to open the drawer with the other pages and Help. The drawer has no Mailbox entry: use the mail icon or the Needs action icon in the slim bar. Select a chat to open it full screen. The slim bar has the Back arrow. When the keyboard opens, the composer stays above it. The card buttons and the send button are at least 44 px.</p>
     <p>A read-only preview shows the chats and refuses a send. It also refuses a read, so the unread count stays.</p>`],
   allocation: ['Allocation', `
     <p>The resource policy for all projects. Changes are a draft until you select <b>Apply policy</b>.</p>
@@ -5379,7 +5388,7 @@ function currentRoute() {
 function fillHelp() {
   const [title, body] = HELP[currentRoute()] || HELP.overview;
   document.getElementById('help-title').textContent = `${title} help`;
-  document.getElementById('help-body').innerHTML = `${body}<p class="help-more">On a screen up to 760 px wide, use the menu button at the top to change pages. On the Mailbox and the Chat the menu button opens a drawer. Commands and setup: <code>docs/cli.md</code> and <code>docs/user-guide.md</code> in the Herdr Boss repository.</p>`;
+  document.getElementById('help-body').innerHTML = `${body}<p class="help-more">On a screen up to 760 px wide, use the menu button at the top to change pages. The Mailbox and the Chat have no menu entry: use the top-bar icons. On the Mailbox, the Reviews, and the Chat the menu button opens a drawer. Commands and setup: <code>docs/cli.md</code> and <code>docs/user-guide.md</code> in the Herdr Boss repository.</p>`;
 }
 
 function setHelp(open) {
@@ -5415,7 +5424,7 @@ const reviewKey = (slug, pack) => `${slug}/${pack}`;
 const reviewUi = (key) => (reviews.ui[key] ||= { note: null, noteStatus: '', noteTimer: null, verdict: null, submitting: false, submitStatus: '', result: null });
 
 function reviewHelpers(s) {
-  return { esc, avatar: (slug) => avatarSlot(slug, { title: avatarTitle(slug), size: 36 }), projectLabel: (slug) => avatarTitle(slug), time: (iso) => listTime(iso), menuButton: appMenuButton(s, 'reviews'), text: (url) => reviews.texts[url], markdown: safeMarkdownHtml };
+  return { esc, avatar: (slug) => avatarSlot(slug, { title: avatarTitle(slug), size: 36 }), projectLabel: (slug) => avatarTitle(slug), time: (iso) => listTime(iso), menuButton: appMenuButton(s, 'reviews'), text: (url) => reviews.texts[url], markdown: safeMarkdownHtml, barIcons: appBarIcons(s, 'reviews') };
 }
 
 function reviewsRender() { if (currentRoute() === 'reviews') render(); }
@@ -6014,7 +6023,6 @@ function render(force = false) {
   }
   updateMailboxBadge(state);
   updateWatchIcon(state);
-  chatUpdateBadge();
   if (html !== lastRender) {
     const active = document.activeElement;
     const focusId = active?.dataset?.mailDraft || active?.matches?.('[data-mail-compose-draft], [data-mail-reply-draft]') ? active.id : null;

@@ -1217,6 +1217,7 @@ p.wizard-errors { padding-left: 10px; }
 .top-icon { position: relative; display: grid; place-items: center; width: 36px; height: 36px; border-radius: 8px; color: var(--text); text-decoration: none; opacity: 1; }
 .top-icon svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .top-icon[data-empty="true"] { opacity: 0.35; }
+.top-icon[aria-current="page"] { background: color-mix(in srgb, var(--accent) 14%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent); }
 .top-icon-needs { color: var(--warn); }
 .top-icon-needs svg { fill: color-mix(in srgb, currentColor 12%, transparent); }
 .top-icon-badge { position: absolute; top: 0; right: 0; min-width: 18px; padding: 0 4px; border: 2px solid var(--bg); border-radius: 10px; background: var(--accent); color: var(--on-accent); font: 700 10px/14px var(--mono); text-align: center; }
@@ -1246,7 +1247,6 @@ p.wizard-errors { padding-left: 10px; }
   .top-icon { width: 44px; height: 44px; }
   .top-icon svg { width: 22px; height: 22px; }
   .nav-menu { min-height: 44px; }
-  .nav-menu [data-mailbox-badge] { display: none; }
   .mail-buttons > button, .mail-choices > button, .mail-dismiss-row > button { flex: 1 1 100%; }
 }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .mail-choices button, :root:not([data-theme="light"]) .mail-dismiss-row button { color: var(--text); } :root:not([data-theme="light"]) button.mail-decline { color: var(--crit); } }
@@ -1468,7 +1468,8 @@ p.wizard-errors { padding-left: 10px; }
   .nav-menu { flex: 0 1 auto; min-width: 0; }
   #nav-menu-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .top-icons { flex: none; margin-left: auto; }
-  .top-icons .top-icon, .top-icons .watch-icon { width: 40px; min-width: 40px; }
+  .top-icons .top-icon { width: 44px; min-width: 44px; }
+  .top-icons .watch-icon { width: 40px; min-width: 40px; }
   .top-spacer { display: none; }
   .top .help-toggle { flex: none; min-width: 44px; padding: 0 8px; }
   .live { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
@@ -1673,6 +1674,7 @@ body.app-view textarea, body.app-view input { caret-color: var(--accent); }
 .app-icon-button:hover { background: var(--panel-2); filter: none; }
 .app-icon-button:focus-visible, .mail-entry:focus-visible, .chat-row:focus-visible, .mail-folder-link:focus-visible, .app-drawer-panel a:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .app-menu { display: none; }
+.app-bar-icons { display: none; flex: 0 0 auto; align-items: center; }
 .app-menu-dot { position: absolute; top: 10px; right: 10px; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px var(--panel); }
 
 /* Mailbox: folder rail, list, and reading pane. Without an open thread the list takes the full width, as in Gmail. */
@@ -1822,6 +1824,9 @@ body.app-view textarea, body.app-view input { caret-color: var(--accent); }
   body.app-view main { position: fixed; top: var(--app-top, 0px); left: 0; right: 0; height: var(--app-h, 100dvh); }
   .app-bar { min-height: calc(52px + env(safe-area-inset-top)); padding: env(safe-area-inset-top) max(4px, env(safe-area-inset-right)) 0 max(4px, env(safe-area-inset-left)); }
   .app-menu { display: inline-grid; }
+  .app-bar-icons { display: flex; gap: 0; }
+  .app-bar-icons .top-icon { width: 44px; min-width: 44px; height: 44px; }
+  .app-bar-icons .top-icon-badge { border-color: var(--panel); }
   .app-drawer { position: fixed; inset: 0; z-index: 30; }
   :root button.app-drawer-scrim { position: absolute; inset: 0; width: 100%; height: 100%; padding: 0; border: 0; border-radius: 0; background: rgb(0 0 0 / 0.32); }
   .app-drawer-panel { position: absolute; top: 0; bottom: 0; left: 0; display: flex; flex-direction: column; width: min(304px, 84vw); padding: calc(6px + env(safe-area-inset-top)) 10px calc(10px + env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left)); background: var(--panel); box-shadow: 4px 0 28px rgb(0 0 0 / 0.18); overflow-y: auto; animation: app-drawer-in 200ms cubic-bezier(0.22, 1, 0.36, 1); }

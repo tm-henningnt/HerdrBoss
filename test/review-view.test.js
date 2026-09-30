@@ -333,9 +333,9 @@ test('the list keys follow the Gmail set, and a text field takes every key excep
 
 // ---------- Menu entry and Mailbox button ----------
 
-test('the menu has a Reviews entry after the Mailbox, on the desktop bar and in the phone drawer', () => {
-  assert.match(html, /data-nav="mailbox">Mailbox.*?<\/a><a href="\/reviews" data-nav="reviews">Reviews<\/a><a href="\/chat"/);
-  assert.match(app, /\['\/mailbox', 'Mailbox', counts\['needs-action'\]\], \['\/reviews', 'Reviews'\]/);
+test('the menu has a Reviews entry after the Board, on the desktop bar and in the phone drawer', () => {
+  assert.match(html, /data-nav="board">Board<\/a><a href="\/reviews" data-nav="reviews">Reviews<\/a><a href="\/agents"/);
+  assert.match(app, /\['\/board', 'Board'\], \['\/reviews', 'Reviews'\], \['\/agents'/);
   assert.match(app, /NAV_LABEL = \{[^}]*reviews: 'Reviews'/);
   assert.match(app, /reviews: \['Reviews', `/, 'the page help');
   assert.match(fs.readFileSync(new URL('../public/app-view.js', import.meta.url), 'utf8'), /'reviews'/, 'the reviews page is a phone app view');
@@ -482,7 +482,7 @@ test('a move to another item puts the focus on the item heading', () => {
 });
 
 test('the page passes the sanitizing Markdown renderer to the viewer, and no DOM pass sanitizes after insertion', () => {
-  assert.match(app, /text: \(url\) => reviews\.texts\[url\], markdown: safeMarkdownHtml \}/);
+  assert.match(app, /text: \(url\) => reviews\.texts\[url\], markdown: safeMarkdownHtml[,} ]/);
   const safe = /\nfunction safeMarkdownHtml\(source\) \{([\s\S]*?)\n\}/.exec(app)?.[1];
   assert.ok(safe.indexOf('sanitizeRendered(template.content)') < safe.indexOf('html = template.innerHTML'), 'the string is sanitized before it is returned');
   assert.doesNotMatch(app, /querySelectorAll\('\.rv-md'\)/);
