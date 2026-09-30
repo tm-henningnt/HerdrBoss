@@ -1016,7 +1016,7 @@ test('worker start dry-run prints the plan and makes no worktree or agent change
   });
   assert.equal(result.dryRun, true);
   assert.match(output.join('\n'), /git worktree add -b demo/);
-  assert.match(output.join('\n'), /Validate kind\/model\/effort: codex \/ gpt-6.1-sol/);
+  assert.match(output.join('\n'), /Validate kind\/model\/effort: codex \/ gpt-6-luna/);
   assert.match(output.join('\n'), /herdr pane split ws:p1 --direction right --cwd/);
   assert.match(output.join('\n'), /New pane: <new-pane-id>/);
   assert.match(output.join('\n'), /herdr agent start demo --kind codex --pane '<new-pane-id>' --timeout 90000 --/);
@@ -3138,7 +3138,9 @@ test('worker start merges extra models into the harness allow-list and applies p
   assert.throws(() => start('extra-effort', { kind: 'pi', model: extra, effort: 'high' }), /Effort high is not allowed for pi/);
 
   write({ extraModels: { pi: [extra] }, preferredModels: { pi: extra } });
-  assert.equal(start('extra-preferred', { kind: 'pi' }).result.model, extra);
+  assert.equal(start('extra-preferred', { kind: 'pi' }).result.model, loadModels().kinds.pi.defaultModel, 'the kit default wins over the preferred model');
+  write({ extraModels: { pi: [extra] }, preferredModels: { pi: extra }, disabledModels: { pi: [loadModels().kinds.pi.defaultModel] } });
+  assert.equal(start('extra-fallback', { kind: 'pi' }).result.model, extra, 'the preferred model is the fallback for a disabled default');
 
   const shared = 'opencode-go/deepseek-v4.1-flash';
   write({ disabledModels: { opencode: [shared] } });

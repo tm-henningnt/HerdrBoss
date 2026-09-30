@@ -561,9 +561,12 @@ function readRules(file) {
 
 const OPUS_MODEL = 'claude-opus-5-5';
 
-// A bare Opus alias names the Opus model of the catalog, so the allow-list and the approval check see one name.
+// Fold case, drop a bracketed suffix such as [1m], and map each Opus spelling to the catalog model.
+// The allow-list and the approval check then see one name.
 function normalizeModel(model) {
-  return typeof model === 'string' && /^(claude-)?opus$/i.test(model.trim()) ? OPUS_MODEL : model;
+  if (typeof model !== 'string') return model;
+  const name = model.trim().toLowerCase().replace(/\[[^\]]*\]$/, '');
+  return /^(claude-)?opus(-5-5)?$/.test(name) ? OPUS_MODEL : model.trim();
 }
 
 const isOpus = (model) => /(^|[-/])opus($|[-.\d])/i.test(model);
@@ -571,18 +574,31 @@ const isOpus = (model) => /(^|[-/])opus($|[-.\d])/i.test(model);
 function validateSelection(kind, options, models, config, resourcePolicy = null) {
   const policy = models.kinds[kind];
   if (!policy) throw new Error(`Unknown agent kind: ${kind}. Choose one of ${Object.keys(models.kinds).join(', ')}.`);
+  const startable = (candidate) => policy.allowedModels.includes(candidate) && modelEnabled(kind, candidate, resourcePolicy) &&
+    (config.allowedModels === null || config.allowedModels.includes(candidate));
   const explicit = normalizeModel(options.model);
-  const model = selectModel(kind, explicit, models, resourcePolicy);
-  // The model always comes from the flag, the Owner's preferred model, or the kit default. Never leave it to the harness.
-  if (!model) throw new Error(`${kind} has no default model in kit/models.json. Pass --model.`);
-  const modelSource = explicit != null ? '--model' : model === resourcePolicy?.preferredModels?.[kind] ? 'policy' : 'default';
+  let model = explicit;
+  let modelSource = 'flag';
+  if (explicit == null) {
+    // Without --model the kit default applies. The preferred model of the policy is a fallback for a default that cannot start.
+    const kitDefault = normalizeModel(policy.defaultModel);
+    if (!kitDefault) throw new Error(`${kind} has no default model in kit/models.json. Pass --model.`);
+    model = kitDefault;
+    modelSource = 'default';
+    if (!startable(kitDefault)) {
+      const preferred = normalizeModel(resourcePolicy?.preferredModels?.[kind]);
+      if (!preferred || !startable(preferred)) throw new Error(`The default model ${kitDefault} of ${kind} cannot start and no preferred model can. Pass --model.`);
+      model = preferred;
+      modelSource = 'policy';
+    }
+  }
   if (!policy.allowedModels.includes(model)) throw new Error(`Model ${model} is not allowed for ${kind}.`);
   if (isOpus(model) && !options.force) throw new Error(`${model} needs the Owner's approval. Ask the Owner, then start with --force.`);
   if (config.allowedModels !== null && !config.allowedModels.includes(model)) throw new Error(`Project ${config.slug} does not allow model ${model}.`);
   const effort = options.effort ?? policy.defaultEffort;
   if (effort !== null && !policy.allowedEfforts.includes(effort)) throw new Error(`Effort ${effort} is not allowed for ${kind}.`);
   if (effort === null && options.effort != null) throw new Error(`${kind} does not support a reasoning effort.`);
-  const effortSource = options.effort != null ? '--effort' : effort !== null ? 'default' : null;
+  const effortSource = options.effort != null ? 'flag' : effort !== null ? 'default' : null;
   const launchArgs = policy.launchArgs.map((arg) => arg.replaceAll('{{model}}', model).replaceAll('{{effort}}', effort ?? ''));
   return { model, modelSource, effort, effortSource, launchArgs, force: isOpus(model) && !!options.force };
 }

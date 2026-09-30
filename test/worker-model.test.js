@@ -63,7 +63,7 @@ test('a claude start without --model passes the kit default model and records it
 test('an explicit sonnet model passes and its source is --model', (t) => {
   const f = fixture(t);
   const plan = f.start('wmtwo', { kind: 'claude', model: 'claude-sonnet-5-5', dryRun: true });
-  assert.equal(plan.modelSource, '--model');
+  assert.equal(plan.modelSource, 'flag');
   assert.equal(modelOf(plan.launchArgs), 'claude-sonnet-5-5');
 });
 
@@ -89,20 +89,50 @@ test('opus with --force starts and the plan notes force: true', (t) => {
   assert.equal(modelOf(plan.launchArgs), 'claude-opus-5-5');
 });
 
-test('an opus model from the policy preferredModels fails without --force', (t) => {
-  const policy = { ...structuredClone(POLICY_DEFAULTS), preferredModels: { claude: 'claude-opus-5-5' } };
-  const f = fixture(t, { rules: { policy } });
-  assert.throws(() => f.start('wmpolicy', { kind: 'claude' }), OPUS_REFUSAL);
-  assert.deepEqual(f.sideEffects(), { worktrees: [], panes: [], records: [], branch: '' });
-  const forced = f.start('wmpolicy', { kind: 'claude', force: true, dryRun: true });
-  assert.equal(forced.modelSource, 'policy');
-  assert.equal(forced.force, true);
+const withPolicy = (patch) => ({ policy: { ...structuredClone(POLICY_DEFAULTS), ...patch } });
+
+test('a policy with Opus preferred and no flag starts the kit default Sonnet', (t) => {
+  const f = fixture(t, { rules: withPolicy({ preferredModels: { claude: 'claude-opus-5-5' } }) });
+  const plan = f.start('wmpolicy', { kind: 'claude', dryRun: true });
+  assert.equal(plan.model, 'claude-sonnet-5-5');
+  assert.equal(plan.modelSource, 'default');
+  assert.equal(plan.force, false);
 });
 
-test('a preferred sonnet model from the policy is reported with the source policy', (t) => {
-  const policy = { ...structuredClone(POLICY_DEFAULTS), preferredModels: { claude: 'claude-sonnet-5-5' } };
-  const f = fixture(t, { rules: { policy } });
-  assert.equal(f.start('wmpref', { kind: 'claude', dryRun: true }).modelSource, 'policy');
+test('a policy that disables the default falls back to the preferred non-Opus model', (t) => {
+  const kitModels = structuredClone(models);
+  kitModels.kinds.claude.allowedModels.push('claude-sonnet-x');
+  const f = fixture(t, { kitModels, rules: withPolicy({ disabledModels: { claude: ['claude-sonnet-5-5'] }, preferredModels: { claude: 'claude-sonnet-x' } }) });
+  const plan = f.start('wmfall', { kind: 'claude', dryRun: true });
+  assert.equal(plan.model, 'claude-sonnet-x');
+  assert.equal(plan.modelSource, 'policy');
+});
+
+test('a fallback that would pick Opus fails with the force message and starts with --force', (t) => {
+  const f = fixture(t, { rules: withPolicy({ disabledModels: { claude: ['claude-sonnet-5-5'] }, preferredModels: { claude: 'Opus' } }) });
+  assert.throws(() => f.start('wmfopus', { kind: 'claude' }), OPUS_REFUSAL);
+  assert.deepEqual(f.sideEffects(), { worktrees: [], panes: [], records: [], branch: '' });
+  const plan = f.start('wmfopus', { kind: 'claude', force: true, dryRun: true });
+  assert.equal(plan.model, 'claude-opus-5-5');
+  assert.equal(plan.modelSource, 'policy');
+  assert.equal(plan.force, true);
+});
+
+test('a default that cannot start and no usable preferred model fail with a clear error', (t) => {
+  const f = fixture(t, { rules: withPolicy({ disabledModels: { claude: ['claude-sonnet-5-5'] } }) });
+  assert.throws(() => f.start('wmnone', { kind: 'claude' }), /default model claude-sonnet-5-5 of claude cannot start/);
+});
+
+test('each Opus spelling needs --force and starts the canonical model with it', (t) => {
+  const f = fixture(t);
+  for (const variant of ['opus', 'Opus', 'OPUS', 'claude-opus', 'opus-5-5', 'claude-opus-5-5', 'claude-opus-5-5[1m]', 'opus[1m]', ' Claude-Opus-5-5 ']) {
+    assert.throws(() => f.start('wmvar', { kind: 'claude', model: variant }), OPUS_REFUSAL, variant);
+    const plan = f.start('wmvar', { kind: 'claude', model: variant, force: true, dryRun: true });
+    assert.equal(plan.model, 'claude-opus-5-5', variant);
+    assert.equal(modelOf(plan.launchArgs), 'claude-opus-5-5', variant);
+    assert.equal(plan.force, true);
+  }
+  assert.deepEqual(f.sideEffects(), { worktrees: [], panes: [], records: [], branch: '' });
 });
 
 test('a missing kit default fails with a clear error and does not use the CLI default', (t) => {
@@ -128,4 +158,61 @@ test('the dry-run text shows the model source', (t) => {
   const f = fixture(t);
   f.start('wmtext', { kind: 'claude', dryRun: true });
   assert.ok(f.out.some((line) => line.includes('claude / claude-sonnet-5-5 / (none) (model source: default)')), f.out.join('\n'));
+});
+
+const READY = '────\n❯\n────\nauto mode';
+
+test('a real start saves the model, its source and force in the run record; a refused start saves none', (t) => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-worker-dispatch-')));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const git = (...args) => execFileSync('git', ['-C', root, ...args], { stdio: 'ignore' });
+  git('init', '-b', 'main');
+  git('config', 'user.name', 'Test User');
+  git('config', 'user.email', 'test@example.invalid');
+  fs.writeFileSync(path.join(root, 'README.md'), 'seed\n');
+  git('add', 'README.md');
+  git('commit', '-m', 'seed');
+  const template = path.join(root, 'brief-template.md');
+  fs.writeFileSync(template, 'Worker {{name}}: {{task}} Inputs: {{copyPaths}}');
+  fs.writeFileSync(path.join(root, '.herdr-boss.json'), JSON.stringify({ slug: 'herdrboss', briefTemplate: template, worktreeRoot: path.join(root, 'wt') }));
+  const config = loadProjectConfig({ cwd: root });
+  const rulesFile = path.join(root, 'rules.json');
+  fs.writeFileSync(rulesFile, JSON.stringify({ updatedAt: new Date().toISOString(), avoidKinds: [] }));
+  const calls = [];
+  let paneCwd = root;
+  const herdr = (args) => {
+    calls.push(args.slice(0, 2).join(' '));
+    if (args[0] === 'pane' && args[1] === 'get') return args[2] === 'ws:orch'
+      ? { pane: { pane_id: 'ws:orch', workspace_id: 'ws', label: 'orch' } }
+      : { pane: { pane_id: args[2], workspace_id: 'ws', foreground_cwd: paneCwd } };
+    if (args[0] === 'pane' && args[1] === 'process-info') return { process_info: { shell_pid: 10, foreground_process_group_id: 10 } };
+    if (args[0] === 'pane' && args[1] === 'read') return { text: '% ' };
+    if (args[0] === 'agent' && args[1] === 'list') return { agents: [] };
+    if (args[0] === 'tab' && args[1] === 'list') return { tabs: [{ tab_id: 'ws:t1', workspace_id: 'ws', label: 'Workers' }] };
+    if (args[0] === 'pane' && args[1] === 'list') return { panes: [{ pane_id: 'ws:p1', workspace_id: 'ws', tab_id: 'ws:t1', width: 160, height: 45 }] };
+    if (args[0] === 'pane' && args[1] === 'split') { paneCwd = args[args.indexOf('--cwd') + 1]; return { pane: { pane_id: 'ws:p2' } }; }
+    if (args[0] === 'pane' && args[1] === 'close') return {};
+    if (args[0] === 'agent' && args[1] === 'get') return { agent: { agent_status: 'idle' } };
+    if (args[0] === 'agent' && args[1] === 'read') return { text: READY };
+    if (args[0] === 'agent' && (args[1] === 'start' || args[1] === 'prompt')) return {};
+    throw new Error(`Unexpected Herdr call: ${args.join(' ')}`);
+  };
+  const env = { HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'ws', HERDR_PANE_ID: 'ws:orch' };
+  const run = (name, options) => startWorker(name, { task: 'x', allow: ['src/'], kind: 'claude', ...options }, { config, models, herdr, env, rulesFile, output: () => {} });
+
+  assert.throws(() => run('wmrefused', { model: 'opus' }), OPUS_REFUSAL);
+  assert.deepEqual(calls.filter((call) => call === 'pane split' || call === 'agent start'), []);
+  assert.equal(fs.existsSync(path.join(config.runsPath, 'wmrefused.json')), false);
+
+  const forced = run('wmforced', { model: 'opus', force: true });
+  const forcedRecord = JSON.parse(fs.readFileSync(forced.recordFile, 'utf8'));
+  assert.equal(forcedRecord.model, 'claude-opus-5-5');
+  assert.equal(forcedRecord.modelSource, 'flag');
+  assert.equal(forcedRecord.force, true);
+
+  const plain = run('wmplain', {});
+  const plainRecord = JSON.parse(fs.readFileSync(plain.recordFile, 'utf8'));
+  assert.equal(plainRecord.model, 'claude-sonnet-5-5');
+  assert.equal(plainRecord.modelSource, 'default');
+  assert.equal('force' in plainRecord, false);
 });
