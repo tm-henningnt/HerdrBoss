@@ -2,6 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DATA_DIR } from './config.js';
 import { readMachineSamples } from './machine-samples.js';
+import { readDenials, denialDaily, RETAIN_DAYS } from './denials.js';
+import { readHarnessChanges } from './harness-changes.js';
 
 // Aggregate figures for the Analytics page. The result holds numbers, lock kinds, and pane IDs only:
 // no notice text, workspace or project name, path, or command.
@@ -116,11 +118,20 @@ export function machineTimeline(samples, { hours = 24, bucketMin = 10, now = Dat
   };
 }
 
+// The harness change markers that fall on a day of the denial window.
+function markersIn(days, dataDir) {
+  const first = days[0], last = days.at(-1);
+  return readHarnessChanges(dataDir).filter((m) => m.date >= first && m.date <= last);
+}
+
 export function analyticsSummary({ dataDir = DATA_DIR, now = Date.now() } = {}) {
   const events = readEventTail(path.join(dataDir, 'events.jsonl'));
   const samples = readMachineSamples({ dataDir, sinceMs: now - 25 * 3600000 });
+  const denials = denialDaily(readDenials(dataDir), { now, days: RETAIN_DAYS });
   return {
     notices: noticeCounts(events, { days: 7, now }),
     timeline: machineTimeline(samples, { hours: 24, bucketMin: 10, now }),
+    denials,
+    harnessChanges: markersIn(denials.days, dataDir),
   };
 }

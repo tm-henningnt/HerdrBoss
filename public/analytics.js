@@ -57,19 +57,56 @@ const sizeStyle = (width, min, grow = 1.35) => `min-width:${Math.round(Math.min(
 // data-keep-attrs keeps the moved stop when a refresh patches the chart.
 const rovingTips = () => {
   let first = true;
-  return (text) => {
-    const index = first ? 0 : -1;
-    first = false;
+  return (text, forced) => {
+    const index = forced ?? (first ? 0 : -1);
+    if (forced === undefined) first = false;
     return `data-tip="${esc(text)}" tabindex="${index}" data-keep-attrs="tabindex"`;
   };
 };
 
+// The marker lines, the flags, and the hit areas over the flags. A flag opens to the right of its line, or to the left near the right edge.
+// A flag text that would overlap a flag text already drawn is left out; its pennant and its hit area stay.
+function markerLayer(marks, { left, right, top, plotH, step, width }, tipAttr) {
+  if (!marks.length) return '';
+  const PENNANT = 9;
+  const items = marks.map((m) => {
+    const x = left + m.i * step + step / 2;
+    const text = String(m.flag || '');
+    const textW = Math.round(text.length * 5.6);
+    const flip = x + 12 + textW > width - right && x - 12 - textW >= left - 30;
+    const span = (w) => (flip ? [x - w, x] : [x, x + w]);
+    return { m, x, text, textW, flip, span };
+  });
+  const clash = (a, b) => a[0] < b[1] + 4 && a[1] > b[0] - 4;
+  const taken = [];
+  const lines = [];
+  const hits = [];
+  items.forEach((it, index) => {
+    const { m, x, text, textW, flip, span } = it;
+    const sign = flip ? -1 : 1;
+    // A text shows only when it clears the pennants of the other flags and the texts already drawn.
+    const withText = !!text && !items.some((o, j) => j !== index && clash(span(12 + textW), o.span(PENNANT))) && !taken.some((t) => clash(span(12 + textW), t));
+    const box = span(withText ? 12 + textW : PENNANT);
+    taken.push(box);
+    const pennant = `M${x} 4h${PENNANT * sign}l${-3 * sign} 4.5l${3 * sign} 4.5h${-PENNANT * sign}z`;
+    lines.push(`<g><line x1="${x}" x2="${x}" y1="4" y2="${top + plotH}" class="viz-marker"/><path d="${pennant}" class="viz-flag"/>${withText ? `<text x="${x + 12 * sign}" y="12.5" text-anchor="${flip ? 'end' : 'start'}" class="viz-flag-text">${esc(text)}</text>` : ''}</g>`);
+    const hitX = Math.max(0, Math.min(box[0], x - step / 2));
+    const hitW = Math.max(step, box[1] - hitX);
+    hits.push(`<rect x="${hitX}" y="0" width="${hitW}" height="${top}" class="viz-hit viz-marker-hit" ${tipAttr(m.tip || '', -1)}/>`);
+  });
+  return `${lines.join('')}${hits.join('')}`;
+}
+
 // Stacked bars, one column for each category. The hit column over each bar holds the tooltip text for hover, focus, and touch.
-export function stackedBars({ cats, series, fmt = (n) => String(n), label = '', height = 190 }) {
+// markers: [{ i, flag, tip, note }]. A marker is a thin line at column i with a small flag at the top. The flag text is left out when it
+// would overlap another flag. The marker has its own hit area over the flag, and its note joins the tooltip of its column.
+export function stackedBars({ cats, series, fmt = (n) => String(n), label = '', height = 190, markers = [] }) {
   const n = cats.length;
-  const left = 46, right = 8, top = 10, bottom = 26;
+  const marks = markers.filter((m) => Number.isInteger(m?.i) && m.i >= 0 && m.i < n);
+  const left = 46, right = n > 21 ? 16 : 8, top = marks.length ? 28 : 10, bottom = 26;
   const plotH = height - top - bottom;
-  const step = Math.max(24, Math.min(56, 500 / Math.max(1, n)));
+  // A chart of more than 21 columns, such as 30 days, uses narrower columns so that it fits a half-width card.
+  const step = Math.max(n > 21 ? 16 : 24, Math.min(56, 500 / Math.max(1, n)));
   const width = left + right + n * step;
   const barW = Math.min(30, Math.round(step * 0.62));
   const totals = cats.map((_, i) => series.reduce((sum, s) => sum + (s.values[i] || 0), 0));
@@ -91,10 +128,11 @@ export function stackedBars({ cats, series, fmt = (n) => String(n), label = '', 
     }).join('');
     const tick = (n - 1 - i) % every === 0 ? `<text x="${left + i * step + step / 2}" y="${top + plotH + 17}" text-anchor="middle" class="viz-tick">${esc(cat.label)}</text>` : '';
     const lines = series.filter((s) => s.values[i]).map((s) => `${s.label}: ${fmt(s.values[i])}`);
-    const tip = [cat.tip || cat.label, ...lines, `Total: ${fmt(totals[i])}`].join('\n');
+    const notes = marks.filter((m) => m.i === i && m.note).map((m) => m.note);
+    const tip = [cat.tip || cat.label, ...lines, `Total: ${fmt(totals[i])}`, ...notes].join('\n');
     return `<g>${rects}${tick}<rect x="${left + i * step}" y="${top}" width="${step}" height="${plotH}" class="viz-hit" ${tipAttr(tip)}/></g>`;
   }).join('');
-  return `<svg class="viz" viewBox="0 0 ${width} ${height}" style="${sizeStyle(width, left + right + n * 22)}" role="img" aria-label="${esc(label)}">${ticks}${cols}</svg>`;
+  return `<svg class="viz" viewBox="0 0 ${width} ${height}" style="${sizeStyle(width, left + right + n * (n > 21 ? 15 : 22))}" role="img" aria-label="${esc(label)}">${ticks}${cols}${markerLayer(marks, { left, right, top, plotH, step, width }, tipAttr)}</svg>`;
 }
 
 // Lines over time on one axis. A null value leaves a gap. bands shade the columns where a lock holder held the lock.
@@ -252,6 +290,66 @@ export function denialGrid(denials, harness = 'all') {
   const causes = [...byCause].map(([cause, counts]) => ({ cause, counts, total: counts.reduce((a, b) => a + b, 0) }))
     .filter((c) => c.total).sort((a, b) => b.total - a.total || a.cause.localeCompare(b.cause));
   return { days, causes, total: causes.reduce((a, c) => a + c.total, 0) };
+}
+
+// ---------- Denials per day ----------
+
+export const DENIAL_RANGES = [3, 7, 30];
+export const DEFAULT_DENIAL_RANGE = 3;
+export const denialRange = (value) => (DENIAL_RANGES.includes(Number(value)) ? Number(value) : DEFAULT_DENIAL_RANGE);
+export const DENIAL_LABEL = { refused: 'Blocked or refused', approved: 'Escalation approved by a rule' };
+
+// The last range days of the daily series of /api/analytics for one harness or for all. Refused holds every block, refusal, and sandbox
+// error, and every event with no known outcome. Approved holds the escalations that a rule approved: it is friction, not a failure.
+export function denialSeries(daily, { range = DEFAULT_DENIAL_RANGE, harness = 'all' } = {}) {
+  const n = denialRange(range);
+  const days = Array.isArray(daily?.days) ? daily.days.slice(-n) : [];
+  const source = daily?.harnesses && Object.hasOwn(daily.harnesses, harness) ? daily.harnesses[harness] : null;
+  const pick = (key) => days.map((_, i) => {
+    const list = source?.[key];
+    const v = Array.isArray(list) ? list[list.length - days.length + i] : 0;
+    return Number.isFinite(v) ? v : 0;
+  });
+  const sum = (values) => values.reduce((a, b) => a + b, 0);
+  const refused = pick('refused'), approved = pick('approved');
+  return {
+    days,
+    series: [
+      { key: 'refused', label: DENIAL_LABEL.refused, cls: 's2', values: refused },
+      { key: 'approved', label: DENIAL_LABEL.approved, cls: 's2 lighter', values: approved },
+    ],
+    totals: { refused: sum(refused), approved: sum(approved) },
+    unclassified: sum(pick('unclassified')),
+  };
+}
+
+// The legend of the chart: each series with its total for the range, so the size difference is written and not only drawn.
+export function denialLegendHtml(win, extra = '') {
+  return legendHtml(win.series.map((s) => ({ ...s, label: `${s.label} ${(win.totals[s.key] || 0).toLocaleString('en-US')}` })), extra);
+}
+
+// The harness change markers of the window, for one harness or for all: { i, date, harness, label, flag, tip, note }.
+export function denialMarkers(changes, days, harness = 'all') {
+  const index = new Map((days || []).map((d, i) => [d, i]));
+  return (Array.isArray(changes) ? changes : []).filter((c) => index.has(c?.date) && (harness === 'all' || c.harness === harness)).map((c) => {
+    const name = HARNESS_LABEL[c.harness] || c.harness;
+    return { i: index.get(c.date), date: c.date, harness: c.harness, label: c.label, flag: name, tip: `${dayLabel(c.date, true)}\n${name}: ${c.label}`, note: `Marker: ${name}: ${c.label}` };
+  });
+}
+
+// The tables behind Details: one row for each day with both series, and one row for each marker.
+export function denialDetailsHtml({ win, markers = [] }) {
+  const cell = (label, value, mono = true) => `<td data-label="${esc(label)}"${mono ? ' class="mono"' : ''}>${value}</td>`;
+  const total = (a, b) => (a || 0) + (b || 0);
+  const [refused, approved] = win.series;
+  const dayRows = win.days.map((day, i) => `<tr>${cell('Date', esc(day), false)}${cell('Refused', refused.values[i])}${cell('Approved', approved.values[i])}${cell('Total', total(refused.values[i], approved.values[i]))}</tr>`).join('');
+  const sumRow = `<tr class="viz-total">${cell('Date', 'Total', false)}${cell('Refused', win.totals.refused)}${cell('Approved', win.totals.approved)}${cell('Total', total(win.totals.refused, win.totals.approved))}</tr>`;
+  const days = `<div class="fleet-table-wrap"><table class="fleet-table"><thead><tr><th>Date</th><th>Refused</th><th>Approved</th><th>Total</th></tr></thead><tbody>${dayRows}${sumRow}</tbody></table></div>`;
+  const note = win.unclassified ? `<p class="viz-note">${win.unclassified.toLocaleString('en-US')} ${win.unclassified === 1 ? 'event has' : 'events have'} no known outcome and ${win.unclassified === 1 ? 'counts' : 'count'} as refused.</p>` : '';
+  const marks = markers.length
+    ? `<div class="fleet-table-wrap"><table class="fleet-table"><thead><tr><th>Date</th><th>Harness</th><th>Change</th></tr></thead><tbody>${markers.map((m) => `<tr>${cell('Date', esc(m.date), false)}${cell('Harness', esc(HARNESS_LABEL[m.harness] || m.harness), false)}${cell('Change', esc(m.label), false)}</tr>`).join('')}</tbody></table></div>`
+    : '<p class="viz-note">No harness changes are recorded in this window.</p>';
+  return `${days}${note}<h3>Harness changes</h3>${marks}`;
 }
 
 export function firstTimeRate(scorecard) {

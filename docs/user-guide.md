@@ -864,14 +864,14 @@ Each chart has a title that tells what to read from it, a scope line, a legend, 
 - **Spend**: stacked bars for each day of the last 14 days. The switch splits the bars by role or by harness. The source is `/api/spend`. The USD figure is the API-price equivalent. The Owner pays a subscription, not these amounts. When no model in the window has a price, the chart shows tokens.
 - **Quota**: one solid line for the use of each lane and one dashed line for its expected pace, in the weekly window, one column for each hour. The source is the quota trend of `/api/usage`.
 - **Model scorecard**: one bar for each of the 8 models with the most runs. The bar shows the share of first-time, rework, failed, and not judged runs. The right column shows the runs and the median time. Details also holds the recorded work by project and provider and the recent runs.
-- **Denials**: a heat map of the causes by day over the last 7 days. The switch selects one harness or all harnesses. A darker cell has more events.
+- **Denials**: one stacked bar for each day. The range is 3 days by default. The buttons select 7 or 30 days, and the browser remembers the choice. The switch selects one harness or all harnesses. See [Denials per day](#denials-per-day).
 - **Machine load and lock waits**: lines for the 5-minute load as a percent of the cores, the memory in use, and the swap in use, over the last 24 hours in columns of 10 minutes. A shaded column had a lock holder. The strip under the lines shows the minutes in which a suite request waited.
 - **Machine overload and idle waiting by hour**: see [Machine samples](#machine-samples).
 - **Notices per pane**: stacked bars for each day of the last 7 days. The five panes with the most notices have their own color. The other panes share one gray.
 
 The charts use one color set for light mode and one for dark mode. The set passes the dataviz palette validator. The charts show no project name, client name, or path. They show harness, model, cause, lock kind, and pane ID only. On a screen up to 1180 px wide the charts are in one column. On a phone each chart scrolls sideways inside its own box.
 
-The route `/api/analytics` gives the notice counts and the machine timeline. It reads the last 2 MB of `events.jsonl` and the machine samples of the last 25 hours. It keeps the result for 60 seconds. The result holds numbers, lock kinds, and pane IDs only.
+The route `/api/analytics` gives the notice counts, the machine timeline, the denial counts of the last 30 days for each day, and the harness change markers of those days. It reads the last 2 MB of `events.jsonl`, the machine samples of the last 25 hours, `denials.json`, and `harness-changes.jsonl`. It keeps the result for 60 seconds. The result holds numbers, lock kinds, pane IDs, and the marker labels only.
 
 ### Activity log
 
@@ -1462,9 +1462,10 @@ Herdr Boss keeps only counts in `denials.json` in the data folder, with mode 060
 
 Herdr Boss maps each record to a project by its working folder. A folder inside a registered repository belongs to that project. A worker worktree inside `~/Projects/.herdr-wt/<repo>/` or inside a sibling `<repo>-wt-<name>` also belongs to that project. The registered repositories are in `project-repos.json`. All other folders count as `other`.
 
-The Analytics page shows the chart **Denials and permission prompts**: a heat map of the causes by day, for one harness or for all harnesses. Its Details hold these tables:
+The Analytics page shows the chart **Denials and permission prompts**: one stacked bar for each day, for one harness or for all harnesses. See [Denials per day](#denials-per-day). Its Details hold these tables:
 
-- A table of the last 7 days by cause and project, with a count for each day.
+- A table of the days in the chart, with the refused and approved counts, the total, and the harness changes in the window.
+- A table of the last 7 days by cause and project, with the outcome of each cause and a count for each day.
 - A small table of counts by harness, model, and cause. It shows the top 10 rows, then the number of extra rows.
 - A total for each harness, on the harness switch.
 - A trend arrow. It compares the last 24 hours with the mean of the 6 days before them.
@@ -1473,6 +1474,33 @@ The Analytics page shows the chart **Denials and permission prompts**: a heat ma
 The last 24 hours are the count of today (UTC) and the part of yesterday inside the window. A cause rises when its last 24 hours are above 2 times its 6-day mean and above 10 events. Then the page and the Owner section of the bulletin show "Discuss this trend with the Boss." Herdr Boss sends no pane prompt and adds no project rule for a denial trend.
 
 The first scans read the older logs at 20 MB for each scan. While more than 1 MB of logs is unread, the counts of older days are not complete. Then the page shows the unread size, and neither the page nor the bulletin shows the note.
+
+### Denials per day
+
+The chart shows the events for each day. A day is a UTC day, the same day as in `denials.json`. Each bar has two parts. The legend gives the total of each part for the range.
+
+- **Blocked or refused** (solid): a classifier refusal (`classifier:`), a sandbox error (`sandbox:`), a Herdr guard block (`guard:`), an OpenCode permission denial (`permission:<type>`), and an OpenCode prompt that got no answer in 10 minutes (`permission:unanswered:`).
+- **Escalation approved by a rule** (outlined, lighter fill, same color): a Codex escalation request (`escalation:request`). An approved escalation is friction, not a failure.
+
+The scan does not keep the reply to an OpenCode prompt that was answered (`permission:asked:`). A cause with no known outcome counts as refused. The Details of the chart show the number of such events.
+
+The range is 3 days by default. The buttons on the chart select 7 or 30 days. The browser remembers the choice in its local storage. The server sends the last 30 days in `/api/analytics`, and the page cuts the range.
+
+#### Harness change markers
+
+A marker shows the day on which a harness fix went in. It is a thin vertical line with a small flag at the top. Hover, focus, or touch the flag to read the date, the harness, and the label. The arrow keys move between the bars and the flags. The Details of the chart list each marker. When the switch selects one harness, the chart shows only the markers of that harness.
+
+The markers come from `harness-changes.jsonl` in the data directory. Each line is one JSON object with these fields:
+
+| Field | Meaning |
+|---|---|
+| `date` | Required. A real day in the form `YYYY-MM-DD`. |
+| `harness` | Required. One of `claude`, `codex`, `opencode`, `pi`. |
+| `label` | Required. Text of 1 to 80 characters, with no control character and no bidi or zero-width format character. |
+
+Example line: `{"date":"2026-01-05","harness":"codex","label":"Escalation rule added"}`.
+
+Add a line with `herdr-boss harness change <harness> <label> [--date YYYY-MM-DD]`. Only the pane labeled `boss`, a pane labeled `orch`, and a plain terminal can run the command. A worker pane is refused. The default date is today in local time. The reader skips a line that is not valid JSON or has a bad field. It reads the last 64 KB of the file and keeps the last 200 lines. It never stops the page. The chart shows the markers that fall inside the last 30 days.
 
 ## Resource leases
 
