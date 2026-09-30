@@ -1121,9 +1121,20 @@ function setBrowserView(slug, mode) {
 }
 
 // A browser whose process matches its port and profile but does not answer CDP is "not responding".
+// The service marks a browser after two failed CDP probes in a row (`notResponding`), also when /json/version still answers.
 function browserState(b) {
+  if (b.notResponding) return 'not responding';
   if (b.profileVerified) return b.responsive ? 'ready' : 'not responding';
   return b.reachable ? 'port conflict' : 'offline';
+}
+
+// A browser is usable for a preview and for the reopen-page option only when it answers and passed the CDP probe.
+const browserAnswers = (b) => !!b?.responsive && !b.notResponding;
+
+// The warning on a card of a browser that failed the CDP probe. Restart uses the same route as the Manage control, in the current mode, and reopens no page.
+function browserNotRespondingBlock(slug, b) {
+  const mode = b.headless ? 'headless' : 'visible';
+  return `<div class="browser-warning" role="alert"><div><strong>Not responding</strong><span>${esc(b.probeReason || 'The browser failed two checks in a row.')}</span></div><button type="button" data-browser-restart="${esc(slug)}" data-browser-mode="${mode}" data-browser-no-restore="1" title="Restart the browser in ${mode} mode. The current page does not reopen.">Restart</button></div>`;
 }
 
 // A small bookmark list and a start-page field for each project card.
@@ -1146,13 +1157,14 @@ function browserResources(s) {
     const b = sessions.find((x) => x.project === p.slug);
     const tabs = browserTabs[p.slug] || [];
     const size = b?.windowSize || { width: 1280, height: 800 };
-    const preview = browserPreviewOpen.has(p.slug) && !!b?.responsive;
+    const preview = browserPreviewOpen.has(p.slug) && browserAnswers(b);
     const lease = (s.resourceLeases?.leases || []).find((candidate) => candidate.pool === 'project-browsers' && candidate.project === p.slug);
     const leaseLine = lease ? `<p class="browser-lease"><span class="mono">Leased port :${esc(lease.item)}</span> · CDP <span class="mono">http://127.0.0.1:${esc(lease.item)}</span> · <a href="/allocation#lease-project-browsers-${esc(lease.item)}">View lease</a></p>` : '';
-    return `<article class="panel browser-card ${b?.profileVerified ? 'browser-card-active' : 'browser-card-idle'}"><div class="browser-card-head"><div><h3>${esc(p.label)}</h3><p>${b ? `<span class="mono">:${b.port}</span> · ${browserState(b)} · ${b.headless ? 'headless' : 'visible'}` : 'No browser running'}</p></div>${b?.profileVerified ? `<div class="browser-head-actions">${b.responsive ? `<button type="button" class="browser-preview-toggle" data-browser-preview="${esc(p.slug)}">${preview ? 'Hide preview' : 'Show preview'}</button>` : ''}<details class="browser-manage" data-browser-manage="${esc(p.slug)}" ${browserManageOpen.has(p.slug) ? 'open' : ''}><summary>Manage</summary><div class="browser-manage-content"><div class="browser-actions"><button type="button" data-browser-restart="${esc(p.slug)}" data-browser-mode="${b.headless ? 'visible' : 'headless'}">Restart ${b.headless ? 'visible' : 'headless'}</button>${b.responsive ? `<label class="browser-restore"><input type="checkbox" data-browser-restore="${esc(p.slug)}" checked> Reopen current page</label>` : ''}<button type="button" data-browser-close="${esc(p.slug)}">Close browser</button></div><form class="browser-size" data-browser-size="${esc(p.slug)}"><label>Next launch size <input type="number" name="width" min="320" max="3840" value="${size.width}" aria-label="${esc(p.label)} window width"> × <input type="number" name="height" min="240" max="2160" value="${size.height}" aria-label="${esc(p.label)} window height"> px</label><button type="submit">Save size</button></form><details class="browser-record"><summary>Connection and profile</summary><small class="mono">http://127.0.0.1:${b.port}<br>${esc(b.profile)}</small></details></div></details></div>` : '<span class="tag">Available</span>'}</div>
+    return `<article class="panel browser-card ${b?.profileVerified ? 'browser-card-active' : 'browser-card-idle'}"><div class="browser-card-head"><div><h3>${esc(p.label)}</h3><p>${b ? `<span class="mono">:${b.port}</span> · ${browserState(b)} · ${b.headless ? 'headless' : 'visible'}` : 'No browser running'}</p></div>${b?.profileVerified ? `<div class="browser-head-actions">${browserAnswers(b) ? `<button type="button" class="browser-preview-toggle" data-browser-preview="${esc(p.slug)}">${preview ? 'Hide preview' : 'Show preview'}</button>` : ''}<details class="browser-manage" data-browser-manage="${esc(p.slug)}" ${browserManageOpen.has(p.slug) ? 'open' : ''}><summary>Manage</summary><div class="browser-manage-content"><div class="browser-actions"><button type="button" data-browser-restart="${esc(p.slug)}" data-browser-mode="${b.headless ? 'visible' : 'headless'}">Restart ${b.headless ? 'visible' : 'headless'}</button>${browserAnswers(b) ? `<label class="browser-restore"><input type="checkbox" data-browser-restore="${esc(p.slug)}" checked> Reopen current page</label>` : ''}<button type="button" data-browser-close="${esc(p.slug)}">Close browser</button></div><form class="browser-size" data-browser-size="${esc(p.slug)}"><label>Next launch size <input type="number" name="width" min="320" max="3840" value="${size.width}" aria-label="${esc(p.label)} window width"> × <input type="number" name="height" min="240" max="2160" value="${size.height}" aria-label="${esc(p.label)} window height"> px</label><button type="submit">Save size</button></form><details class="browser-record"><summary>Connection and profile</summary><small class="mono">http://127.0.0.1:${b.port}<br>${esc(b.profile)}</small></details></div></details></div>` : '<span class="tag">Available</span>'}</div>
       ${leaseLine}
       ${!b?.profileVerified ? `<div class="browser-actions"><button type="button" data-browser-request="${esc(p.slug)}" data-browser-mode="visible">Open visible</button><button type="button" data-browser-request="${esc(p.slug)}" data-browser-mode="headless">Open headless</button></div>` : ''}
-      ${b?.profileVerified && !b.responsive ? '<small class="inline-feedback" role="status">Chrome does not answer on its debugging port. Restart or close it from Manage.</small>' : ''}
+      ${b?.profileVerified && b.notResponding ? browserNotRespondingBlock(p.slug, b) : ''}
+      ${b?.profileVerified && !b.responsive && !b.notResponding ? '<small class="inline-feedback" role="status">Chrome does not answer on its debugging port. Restart or close it from Manage.</small>' : ''}
       ${browserMessages[p.slug] ? `<small class="inline-feedback" role="status">${esc(browserMessages[p.slug])}</small>` : ''}
       ${browserBookmarkSection(p.slug, b)}
       ${preview ? `<div class="browser-preview"><div class="browser-preview-tools">${browserViewToggle(p.slug)}<span class="browser-grid-count">${tabs.length} tab${tabs.length === 1 ? '' : 's'}</span><button type="button" data-browser-refresh="${esc(p.slug)}">Refresh</button>${gridMode(p.slug) ? `<button type="button" data-browser-expand="${esc(p.slug)}">Expand</button>` : `<button type="button" data-browser-new-tab="${esc(p.slug)}" title="Open a blank tab of your own. Agent tabs stay unchanged.">New tab</button>`}<label class="browser-live-toggle"><input type="checkbox" data-browser-live="${esc(p.slug)}" ${browserPreviewLive.has(p.slug) ? 'checked' : ''}> Live</label><label class="browser-live-rate">Every <select data-browser-interval="${esc(p.slug)}" aria-label="${esc(p.label)} live refresh interval">${PREVIEW_INTERVALS.map((ms) => `<option value="${ms}" ${ms === previewInterval(p.slug) ? 'selected' : ''}>${ms / 1000}s</option>`).join('')}</select></label></div>
@@ -1237,7 +1249,7 @@ async function captureBrowserGrid(slug) {
 
 async function refreshBrowserPreview(slug, reloadTabs = false) {
   if (!browserPreviewOpen.has(slug) || browserPreviewPending.has(slug)) return;
-  if (browserSessions.find((b) => b.project === slug)?.responsive === false) return;
+  { const known = browserSessions.find((b) => b.project === slug); if (known?.responsive === false || known?.notResponding) return; }
   browserPreviewPending.add(slug);
   try {
     // Agents open and close tabs, so reload the list on request and at least every 10 s.
@@ -5328,7 +5340,7 @@ const HELP = {
     <p>One persistent Chrome per project. Agents drive it; you can watch and help.</p>
     <p>Each card shows the leased port and the CDP address <code>http://127.0.0.1:PORT</code> of the project, with a link to its row on the Allocation page.</p>
     <h3>Start and manage</h3><p><b>Open visible</b> or <b>Open headless</b> starts the browser. <b>Manage</b> restarts it in the other mode, closes it, or sets the window size for the next launch.</p>
-    <h3>States</h3><p><b>ready</b>: Chrome runs with the project profile and answers on its debugging port. <b>not responding</b>: Chrome runs with the project profile, but its debugging port does not answer within 2 seconds. The preview is not available. Use <b>Manage</b> to restart or close it. If Chrome does not accept the close command, Herdr Boss sends SIGTERM to that Chrome process only. <b>offline</b>: no Chrome runs with the project profile. <b>port conflict</b>: another process uses the port.</p>
+    <h3>States</h3><p><b>ready</b>: Chrome runs with the project profile and answers on its debugging port. <b>not responding</b>: Chrome runs with the project profile, but its debugging port does not answer within 2 seconds, or two checks in a row failed. A check opens a blank background tab, runs <code>1+1</code> in it, and closes it, at most once a minute. The card shows the reason and a <b>Restart</b> button. Restart keeps the current mode and does not reopen the current page. Herdr Boss never restarts a browser by itself. The preview is not available. Use <b>Manage</b> to restart or close it. If Chrome does not accept the close command, Herdr Boss sends SIGTERM to that Chrome process only. <b>offline</b>: no Chrome runs with the project profile. <b>port conflict</b>: another process uses the port.</p>
     <h3>Preview</h3><p><b>One tab</b> shows the selected tab with its address bar. <b>All tabs</b> shows every tab in one grid, without controls; select a tile to focus it. <b>Live</b> refreshes at the chosen interval. Without <b>Live</b>, the preview shows the last capture; <b>Refresh</b> takes a new one.</p>
     <h3>Tabs</h3><p><b>Agent</b> marks a tab an agent uses. Screenshots never change a page. Navigation and input on an agent tab ask for confirmation first. <b>Hidden</b> marks a tab that is not visible; some web apps do not draw there. <b>New tab</b> opens a page of your own. Each tab row has a <b>Close tab</b> control. Before it closes a tab that an agent holds, the page asks you to confirm. It also warns you before it closes the last tab. A close never stops the browser.</p>
     <h3>Address box</h3><p>The first focus of the address box selects all its text. A second click places a cursor where you select it.</p>
@@ -6815,7 +6827,7 @@ document.addEventListener('click', async (e) => {
   if (e.target.dataset.browserClose || e.target.dataset.browserRestart) {
     const restart = Boolean(e.target.dataset.browserRestart);
     const slug = e.target.dataset.browserClose || e.target.dataset.browserRestart;
-    const restorePage = document.querySelector(`[data-browser-restore="${slug}"]`)?.checked !== false;
+    const restorePage = !e.target.dataset.browserNoRestore && document.querySelector(`[data-browser-restore="${slug}"]`)?.checked !== false;
     e.target.disabled = true;
     browserMessages[slug] = restart ? 'Restarting browser…' : 'Closing browser…';
     lastRender = ''; render();
@@ -6957,7 +6969,7 @@ async function refreshExtras() {
   if (results[2].status === 'fulfilled') {
     browserSessions = results[2].value;
     if (!browserPreviewsInitialized) {
-      for (const browser of browserSessions) if (browser.profileVerified && browser.responsive) browserPreviewOpen.add(browser.project);
+      for (const browser of browserSessions) if (browser.profileVerified && browserAnswers(browser)) browserPreviewOpen.add(browser.project);
       browserPreviewsInitialized = true;
     }
   }

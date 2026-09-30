@@ -918,7 +918,7 @@ Herdr Boss decides browser ownership by the Herdr workspace. Any pane in a proje
 |---|---|
 | `browser request SLUG [--headless\|--visible] [--reserve]` | Launch the project browser. From a Herdr pane, request the browser of your workspace's project, or use the Boss. `--reserve` assigns the port and profile only. |
 | `browser list` | All project browsers, ports, profiles, and state. |
-| `browser restart SLUG --headless\|--visible [--no-restore]` | Close and relaunch in the other mode. The current page reopens unless `--no-restore`. From a Herdr pane, only a pane in that project's workspace or the Boss can run this command. |
+| `browser restart SLUG --headless\|--visible [--no-restore]` | Close and relaunch in the chosen mode. Use it for a browser in the state `not responding`; the notice to the orchestrator names the command. The current page reopens unless `--no-restore`. From a Herdr pane, only a pane in that project's workspace or the Boss can run this command. |
 | `browser close SLUG` | Close the browser. The profile and the port lease stay. From a Herdr pane, only a pane in that project's workspace or the Boss can run this command. |
 | `browser release SLUG` | Remove the port lease of the project. Refuses while the project Chrome runs. The record and the profile stay. From a Herdr pane, only a pane in that project's workspace or the Boss can run this command. |
 | `browser size SLUG WIDTH HEIGHT` | Window size for the next launch (320–3840 × 240–2160). From a Herdr pane, only a pane in that project's workspace or the Boss can run this command. |
