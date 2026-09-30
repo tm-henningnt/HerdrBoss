@@ -7,6 +7,7 @@ import { chatJumpHtml, chatJumpButtonHtml, chatAtBottom, chatJumpScroll } from '
 import { mailBarItem, mailActionBarHtml, mailSelectionBarHtml } from './mail-bar.js';
 import { APP_VIEW_ROUTES, appViewport } from './app-view.js';
 import { createWizard } from './project-wizard-ui.js';
+import { buildDraftShares, draftSignature, shareTotal, distributeRemainder, moveShares, totalHtml, checkSave, confirmText, allocationFooterHtml, staleRowHtml } from './allocation-draft.js';
 import { stackedBars, lineChart, stripBars, outcomeBars, legendHtml, foldSeries, spendSeries, claudeSpend, quotaSeries, firstTimeRate, activityFilter, activityChoices, eventLevel, dayLabel, usd, minutes, compact, ACTIVITY_RANGES, ACTIVITY_LEVELS, SERIES_CLASSES, DENIAL_RANGES, DEFAULT_DENIAL_RANGE, denialRange, denialSeries, denialMarkers, denialDetailsHtml, denialLegendHtml } from './analytics.js';
 
 const $app = document.getElementById('app');
@@ -96,6 +97,9 @@ let quotaExpanded = false;
 let machineExpanded = false;
 let policyDraft = null;
 let policyDirty = false;
+// What the Allocation form knows about its draft: the projects with a default share, the edits, and the policy it was built from.
+let allocationMeta = null;
+let policyStale = false;
 let saveMessage = '';
 let machineGuardBusy = false;
 let machineGuardMessage = '';
@@ -366,7 +370,7 @@ async function updateOverviewMachineGuard(action, hours = 1, enabled = null) {
     state.policy = result.policy;
     if (result.control) state.control = result.control;
     if (policyDraft) {
-      if (!policyDirty) policyDraft = clone(result.policy);
+      if (!policyDirty) { policyDraft = null; allocationMeta = null; }
       else {
         policyDraft.machine ||= {};
         policyDraft.machine.guardEnabled = result.policy.machine.guardEnabled;
@@ -385,18 +389,68 @@ async function updateOverviewMachineGuard(action, hours = 1, enabled = null) {
 }
 
 const clone = (x) => JSON.parse(JSON.stringify(x));
+// The signature covers the project set, the saved shares, and the policy fields outside the machine guard.
+function policySignature(s) {
+  return JSON.stringify([draftSignature(Object.keys(s.control.projects), s.policy.projects), { ...s.policy, machine: undefined }]);
+}
 function ensureDraft(s) {
-  if (policyDraft || !s.policy || !s.control) return;
+  if (!s.policy || !s.control) return;
+  if (policyDraft) {
+    policyStale = !!(policyDirty && allocationMeta && allocationMeta.signature !== policySignature(s));
+    // A project that appeared while the draft is unsaved shows a default share until the user reloads.
+    const added = Object.values(s.control.projects).filter((p) => !policyDraft.projects[p.slug]);
+    if (added.length && allocationMeta) {
+      const built = buildDraftShares(Object.keys(s.control.projects), policyDraft.projects);
+      for (const p of added) {
+        policyDraft.projects[p.slug] = { share: built.shares[p.slug], mode: p.mode, excludedKinds: [], excludedModels: [] };
+        if (!allocationMeta.defaults.includes(p.slug)) allocationMeta.defaults.push(p.slug);
+      }
+    }
+    return;
+  }
   policyDraft = clone(s.policy);
+  policyDraft.projects ||= {};
+  policyStale = false;
   const projects = Object.values(s.control.projects);
+  const built = buildDraftShares(projects.map((p) => p.slug), policyDraft.projects);
+  allocationMeta = { signature: policySignature(s), defaults: built.defaults, touched: new Set(), boundaries: new Set(), loaded: clone(s.policy.projects || {}) };
   if (!projects.length) return;
-  for (const slug of Object.keys(policyDraft.projects)) if (!s.control.projects[slug]) policyDraft.projects[slug].share = 0;
-  const saved = projects.map((p) => policyDraft.projects[p.slug]?.share);
-  const shares = saved.every((x) => Number.isInteger(x)) && saved.reduce((a, b) => a + b, 0) === 100
-    ? saved : projects.map((_p, i) => Math.floor(100 / projects.length) + (i < 100 % projects.length ? 1 : 0));
-  projects.forEach((p, i) => {
-    policyDraft.projects[p.slug] ||= { share: shares[i], mode: p.mode, excludedKinds: [], excludedModels: [] };
-    policyDraft.projects[p.slug].share = shares[i];
+  for (const p of projects) {
+    policyDraft.projects[p.slug] ||= { share: built.shares[p.slug], mode: p.mode, excludedKinds: [], excludedModels: [] };
+    policyDraft.projects[p.slug].share = built.shares[p.slug];
+  }
+}
+// A project whose share is a display default, and that the user did not change.
+function defaultShareSlugs() {
+  return (allocationMeta?.defaults || []).filter((slug) => !allocationMeta.touched.has(slug));
+}
+// A project that the policy holds and the project list does not. Its share stays as saved and counts in the total.
+function staleShares() {
+  const live = state?.control?.projects || {};
+  return Object.fromEntries(Object.entries(policyDraft?.projects || {}).filter(([slug]) => !live[slug]).map(([slug, entry]) => [slug, entry.share]));
+}
+const staleTotal = () => Object.values(staleShares()).reduce((sum, share) => sum + (Number.isInteger(share) ? share : 0), 0);
+function allocationTotal() {
+  return shareTotal(draftShares(), allocationProjects().map((p) => p.slug)) + staleTotal();
+}
+function draftShares() {
+  return Object.fromEntries(allocationProjects().map((p) => [p.slug, policyDraft.projects[p.slug]?.share || 0]));
+}
+// The policy without the project shares and without the entries of default projects. A difference shows a change outside the shares.
+function policyWithoutShares(policy, defaults) {
+  const copy = clone(policy);
+  for (const slug of defaults) delete copy.projects?.[slug];
+  for (const entry of Object.values(copy.projects || {})) delete entry.share;
+  return JSON.stringify(copy);
+}
+function allocationSaveCheck() {
+  if (!policyDraft || !allocationMeta || !state?.policy) return { action: 'save' };
+  const slugs = allocationProjects().map((p) => p.slug);
+  return checkSave({
+    slugs, loaded: allocationMeta.loaded, shares: draftShares(), defaults: allocationMeta.defaults,
+    touched: [...allocationMeta.touched], boundaries: allocationMeta.boundaries.size,
+    fixed: staleShares(),
+    otherChanged: policyWithoutShares(policyDraft, allocationMeta.defaults) !== policyWithoutShares(state.policy, allocationMeta.defaults),
   });
 }
 
@@ -438,17 +492,24 @@ function allocationSummary(s, { link = true } = {}) {
 function moveBoundary(index, position) {
   const projects = allocationProjects();
   if (!policyDraft || index < 0 || index >= projects.length - 1) return;
-  const left = projects.slice(0, index).reduce((sum, p) => sum + policyDraft.projects[p.slug].share, 0);
-  const share = Math.max(0, Math.min(100 - left, Math.round(position) - left));
-  const right = projects.slice(index + 1);
-  const remaining = 100 - left - share;
-  const total = right.reduce((sum, p) => sum + policyDraft.projects[p.slug].share, 0);
-  const parts = right.map((p, order) => ({ slug: p.slug, order, raw: remaining * (total ? policyDraft.projects[p.slug].share / total : 1 / right.length) }));
-  policyDraft.projects[projects[index].slug].share = share;
-  let spare = remaining;
-  for (const part of parts) { policyDraft.projects[part.slug].share = Math.floor(part.raw); spare -= Math.floor(part.raw); }
-  parts.sort((a, b) => (b.raw % 1) - (a.raw % 1) || a.order - b.order);
-  for (let i = 0; i < spare; i++) policyDraft.projects[parts[i].slug].share++;
+  const slugs = projects.map((p) => p.slug);
+  const before = draftShares();
+  const after = moveShares(before, slugs, index, position, staleTotal());
+  const changed = slugs.filter((slug) => after[slug] !== before[slug]);
+  if (!changed.length) return;
+  for (const slug of changed) { policyDraft.projects[slug].share = after[slug]; allocationMeta?.touched.add(slug); }
+  allocationMeta?.boundaries.add(index);
+  updateShares();
+  markPolicyDirty();
+}
+function distributeRemaining() {
+  if (!policyDraft) return;
+  const slugs = allocationProjects().map((p) => p.slug);
+  const before = draftShares();
+  const after = distributeRemainder(before, slugs, staleTotal());
+  const changed = slugs.filter((slug) => after[slug] !== before[slug]);
+  if (!changed.length) return;
+  for (const slug of changed) { policyDraft.projects[slug].share = after[slug]; allocationMeta?.touched.add(slug); }
   updateShares();
   markPolicyDirty();
 }
@@ -483,7 +544,7 @@ function controlBlock(s) {
     const activity = allocationActivity(p);
     return `<div class="allocation-row ${activity}" data-project-row="${esc(p.slug)}">
       <div class="allocation-name"><b><i class="allocation-swatch" style="background-color:${allocationColor(s, p.slug)}"></i>${esc(p.label)}</b><small>${p.running}/${p.slots} working slots${p.borrowed ? ` · +${p.borrowed} borrowed` : ''}${p.lent ? ` · ${p.lent} lent` : ''}${p.offered ? ` · ${p.offered} free for others` : ''} · ${activity}</small></div>
-      <div class="share-values"><span><small>Set</small><strong class="num share-value">${x.share}%</strong></span><span title="Applied state: ${esc(p.label)} has ${eff.slots} of ${state.policy?.maxWorkers ?? 0} worker slots now"><small>Effective</small><strong class="num">${eff.percent}% · ${eff.slots} slot${eff.slots === 1 ? '' : 's'}</strong></span></div>
+      <div class="share-values"><span><small>Set</small><strong class="num share-value">${x.share}%</strong><em class="share-default" data-share-default ${defaultShareSlugs().includes(p.slug) ? '' : 'hidden'}>default, not saved</em></span><span title="Applied state: ${esc(p.label)} has ${eff.slots} of ${state.policy?.maxWorkers ?? 0} worker slots now"><small>Effective</small><strong class="num">${eff.percent}% · ${eff.slots} slot${eff.slots === 1 ? '' : 's'}</strong></span></div>
       <select data-mode="${esc(p.slug)}" aria-label="${esc(p.label)} activity mode">${['auto','active','idle','paused'].map((m) => `<option value="${m}" ${x.mode === m ? 'selected' : ''}>${m}</option>`).join('')}</select>
       <details class="project-exclude"><summary>Exclude kinds / models</summary><div class="exclude-grid">${availableKinds.map((k) => `<label><input type="checkbox" data-exclude-kind="${esc(p.slug)}:${k}" ${x.excludedKinds.includes(k) ? 'checked' : ''}> ${esc(k)}</label>`).join('')}
       ${projectModels.map((m) => `<label><input type="checkbox" data-exclude-model="${esc(p.slug)}:${esc(m)}" ${x.excludedModels.includes(m) ? 'checked' : ''}> ${esc(m)}</label>`).join('')}</div></details>
@@ -514,7 +575,8 @@ function controlBlock(s) {
         <div class="workspace-exclusions"><h4>Workspace projects${helpButton('workspace.exclusion')}</h4>${workspaceRows || '<p class="empty">No live workspaces.</p>'}</div>
         <div class="allocation-bar" role="group" aria-label="Project allocation, 0 to 100 percent">${shareSegments}${shareHandles}</div>
         <div class="allocation-scale"><span>0%</span><span>100%</span></div>
-        ${projectRows}</div>
+        ${allocationFooterHtml(allocationTotal(), policyStale)}
+        ${projectRows}${Object.entries(staleShares()).map(([slug, share]) => staleRowHtml(slug, share)).join('')}</div>
       <div class="control-actions ${policyDirty ? 'pending' : ''}"><span data-policy-status role="status">${esc(saveMessage || (policyDirty ? 'Unsaved changes · Apply policy to keep them' : `${s.control.runningWorkers}/${d.maxWorkers} workers active · policy saved`))}</span><button id="save-policy" ${policyDirty ? '' : 'disabled'}>Apply policy</button></div>
     </div></section>`;
 }
@@ -5144,6 +5206,10 @@ const HELP = {
     <h3>Orchestrator succession</h3><p>The ranked successors for automatic handover. Use the arrows to change the order. Unlisted choices are never selected automatically.</p>
     <h3>Workspace projects</h3><p>Clear a workspace switch to include that workspace as a project. An excluded workspace stays on Agents and shows <b>Not a project</b>. It gets no project share or worker slots. Herdr Boss stores workspace labels and resolves saved Herdr IDs to labels. The Boss workspace stays excluded while a pane is labelled <code>boss</code>.</p>
     <h3>Project shares</h3><p>Drag a boundary on the bar, or focus it and use the arrow keys. Projects to the left stay fixed; the rest share the remainder. A share is advisory. The mode sets a project to auto, active, idle, or paused.</p>
+    <p>The line <b>Total</b> next to the bar shows the sum of the shares. When the sum is below 100, select <b>Distribute the remaining N</b> to add the remainder to the largest share. Herdr Boss never adds it by itself. A sum above 100 blocks <b>Apply policy</b>.</p>
+    <p>A project that is in the policy but not in the project list shows <b>not in the project list</b> with its saved share. You cannot edit that share. It counts in the total, and <b>Apply policy</b> never changes it.</p>
+    <p>A project without a saved share shows the marker <b>default, not saved</b>. The default is a part of the room that the saved shares leave. Herdr Boss writes it only when you change that share or confirm the dialog. <b>Apply policy</b> asks you to confirm when it changes more than one boundary, or changes the total by more than 5 points. The dialog lists the old and new share of every project.</p>
+    <p>When the policy changes on the server while you have unsaved edits, the page shows <b>The policy changed on the server. Reload the shares?</b> Select <b>Reload the shares</b> to discard your edits and load the saved shares.</p>
     <p>The <b>set share</b> is the share in your policy draft. The bar widths show it. The <b>effective share</b> is the number of worker slots the project has now, divided by the applied maximum of working agents. It changes only after you select <b>Apply policy</b>.</p>
     <p>A bar label such as <b>30% · 2</b> shows the set share and the effective slots. A narrow segment shows fewer labels; its tooltip shows all values.</p>
     <p>An idle project is faded. A paused project is faded and striped.</p>
@@ -5339,7 +5405,7 @@ const KEYED_ROUTES = ['projects', 'board', 'mailbox', 'chat', 'analytics', 'sett
 
 function render(force = false) {
   if (!state) return;
-  if (!policyDirty) policyDraft = null;
+  if (!policyDirty) { policyDraft = null; allocationMeta = null; policyStale = false; }
   if (!force && policyDirty && ['/allocation', '/settings'].includes(location.pathname) && document.activeElement?.closest?.('#control-plane, #settings-plane')) {
     $updated.textContent = `updated ${ago(state.updatedAt)}`;
     return;
@@ -5445,7 +5511,7 @@ function updateShares() {
   const bar = document.querySelector('.allocation-bar');
   if (!bar) return;
   for (const [index, p] of projects.entries()) {
-    const share = policyDraft.projects[p.slug].share;
+    const share = policyDraft.projects[p.slug]?.share || 0;
     const segment = [...bar.querySelectorAll('[data-segment]')].find((x) => x.dataset.segment === p.slug);
     if (segment) {
       const text = segmentText(p, share);
@@ -5469,7 +5535,11 @@ function updateShares() {
     const row = [...document.querySelectorAll('[data-project-row]')].find((x) => x.dataset.projectRow === slug);
     if (!row) continue;
     row.querySelector('.share-value').textContent = `${p.share}%`;
+    const marker = row.querySelector('[data-share-default]');
+    if (marker) marker.hidden = !defaultShareSlugs().includes(slug);
   }
+  const total = document.querySelector('[data-allocation-total]');
+  if (total) total.innerHTML = totalHtml(allocationTotal());
 }
 
 document.addEventListener('pointerdown', (e) => {
@@ -6521,11 +6591,20 @@ document.addEventListener('click', async (e) => {
   for (const [action, attr] of [['plan', 'handoffPlan'], ['prepare', 'handoffPrepare'], ['output', 'handoffOutput'], ['activate', 'handoffActivate']]) {
     if (e.target.dataset[attr]) { await runHandoffAction(action, e.target.dataset[attr]); return; }
   }
+  if (e.target.closest?.('[data-distribute-remaining]')) { distributeRemaining(); return; }
+  if (e.target.closest?.('[data-reload-shares]')) {
+    policyDirty = false; policyDraft = null; allocationMeta = null; policyStale = false; saveMessage = '';
+    lastRender = ''; render(true);
+    return;
+  }
   if (e.target.id === 'save-policy' && policyDraft) {
     e.target.disabled = true;
     try {
       const pacingError = pacingDraftError(policyDraft, state?.quotas);
       if (pacingError) throw new Error(pacingError);
+      const check = allocationSaveCheck();
+      if (check.action === 'refuse') throw new Error(check.message);
+      if (check.action === 'confirm' && !window.confirm(confirmText(check.rows))) { e.target.disabled = false; return; }
       const response = await fetch('/api/policy', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(policyDraft) });
       const result = await response.json();
       if (!response.ok) throw new Error((result.errors || [result.error || 'The policy could not be saved.']).join(' '));

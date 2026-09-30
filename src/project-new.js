@@ -135,7 +135,8 @@ function writeState(file, state) {
 
 // Add the entry of a new project to a policy object. Return { policy, changed, before, after }.
 // before and after map each slug to its share. The input is not changed.
-// The other shares scale down by floor(share * (100 - share of the new project) / total) when the total would pass 100.
+// The other shares scale down to make room for the new project when the total would pass 100.
+// The largest remainder method keeps the scaled total exact. The order of the entries breaks a tie.
 // Only shares change. A share of 1 or more that would fall below 1 is refused.
 export function addProjectPolicy(policy, slug, options = {}) {
   const share = options.share ?? NEW_PROJECT_SHARE;
@@ -151,11 +152,26 @@ export function addProjectPolicy(policy, slug, options = {}) {
   const sum = Object.values(before).reduce((acc, value) => acc + value, 0);
   const room = 100 - share;
   if (sum > room) {
-    for (const [name, project] of Object.entries(next.projects)) {
-      const scaled = Math.floor(project.share * room / sum);
-      if (project.share >= 1 && scaled < 1) refuse(`The share of ${name} would fall below 1 (${project.share} -> ${scaled}). Lower a share in the dashboard, then run the flow again with --resume.`);
-      project.share = scaled;
+    const names = Object.keys(next.projects);
+    const parts = names.map((name, order) => {
+      const exact = before[name] * room / sum;
+      return { name, order, floor: Math.floor(exact), remainder: exact - Math.floor(exact) };
+    });
+    let spare = room - parts.reduce((acc, part) => acc + part.floor, 0);
+    for (const part of [...parts].sort((a, b) => b.remainder - a.remainder || a.order - b.order)) {
+      if (spare <= 0) break;
+      part.floor += 1;
+      spare -= 1;
     }
+    // A share of 1 or more stays at 1 or more. The shares that scale the most give up the points.
+    for (const part of parts) {
+      if (before[part.name] < 1 || part.floor >= 1) continue;
+      const donor = [...parts].sort((a, b) => b.floor - a.floor || a.order - b.order)[0];
+      if (donor.floor <= 1) refuse(`The share of ${part.name} would fall below 1 (${before[part.name]} -> 0). Lower a share in the dashboard, then run the flow again with --resume.`);
+      donor.floor -= 1;
+      part.floor = 1;
+    }
+    for (const part of parts) next.projects[part.name].share = part.floor;
   }
   next.projects[slug] = { share, mode: 'auto', excludedKinds: [], excludedModels: [] };
   return { policy: next, changed: true, before, after: shares() };
