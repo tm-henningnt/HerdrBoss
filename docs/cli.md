@@ -11,7 +11,7 @@ Run project commands (`worker`, `worktree`, `ledger`, `check`, `gh`) from inside
 | `herdr-boss install` | Install and start the macOS launchd agent `no.tallmaker.herdr-boss`. Run it again after you move the repository. |
 | `herdr-boss uninstall` | Stop and remove the launchd agent. |
 | `herdr-boss serve` | Run the collector and the dashboard in the foreground. |
-| `herdr-boss serve --read-only-preview` | Run a dashboard preview. It accepts local requests only. It allows API reads and blocks API changes, prompts, notifications, process reaping, Chrome clone sweeps, handovers, and browser launches. It never reads, creates, or changes access files. It needs a `HERDR_BOSS_DIR` that the service does not use. |
+| `herdr-boss serve --read-only-preview [--host <address>]` | Run a dashboard preview. It binds `127.0.0.1` and accepts local requests only. `--host` sets another bind address, an IP address or a host name, and works only with `--read-only-preview`. The start line prints the bind address. It allows API reads and blocks API changes, prompts, notifications, process reaping, Chrome clone sweeps, handovers, and browser launches. It never reads, creates, or changes access files. It needs a `HERDR_BOSS_DIR` that the service does not use. |
 | `herdr-boss tick [--json]` | Collect once and print alerts. Sends no prompt and stops no process. `--json` prints the full snapshot. |
 | `herdr-boss logs` | Print the last 100 lines of the server log. |
 | `herdr-boss kit-path` | Print the path of the shared kit (skill, templates, model list). |

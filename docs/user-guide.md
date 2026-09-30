@@ -41,7 +41,7 @@ Herdr Boss is a script. It uses no LLM and no tokens.
 
 ## Dashboard preview
 
-A read-only preview accepts loopback requests only. It has no login page. It never reads, creates, or changes token or session files.
+A read-only preview binds `127.0.0.1` and accepts loopback requests only. The option `--host <address>` sets another bind address. Use it only with `--read-only-preview`. The main service is not affected: it keeps the configured `host`. It has no login page. It never reads, creates, or changes token or session files.
 
 Put seed data only into a temporary data directory. Never write seed data or test data into `~/.herdr-boss`. Run the preview with `--read-only-preview` on its own port. `scripts/seed-preview.js` writes invented Mailbox and Chat messages into `HERDR_BOSS_DIR`. It refuses the live data directory, a directory inside it, and a symlink to it, with the message `Refusing to write test data into the live data dir.` Each seed or fixture helper calls `assertTempDataDir(dir)` from `src/data-dir-guard.js` before it writes. `openMessageStore` takes an options object such as `{ dir }`. It throws a `TypeError` for a string.
 

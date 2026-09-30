@@ -26,7 +26,7 @@ Decide implementation, product, and design details, naming, thresholds, test des
 - Run `node --check <file>` for each changed JavaScript file.
 - For the dashboard, check the change in the project browser: run `herdr-boss browser request herdrboss`, open a tab with `herdr-boss browser tab new herdrboss http://127.0.0.1:4477/<page>`, and capture it with `herdr-boss browser screenshot herdrboss --tab <id>`. Close your tab when you are done.
 - For the phone layout, run `herdr-boss browser size herdrboss 393 852`, then `herdr-boss browser restart herdrboss --headless --no-restore`. Set the size back to 1280 by 800 when you are done.
-- For a dashboard preview, use `HOME="$(mktemp -d)" HERDR_BOSS_DIR="$(mktemp -d)" HERDR_BOSS_PORT=4478 npm start -- --read-only-preview`. Choose an unused local port if 4478 is busy.
+- For a dashboard preview, use `HOME="$(mktemp -d)" HERDR_BOSS_DIR="$(mktemp -d)" HERDR_BOSS_PORT=4478 npm start -- --read-only-preview`. Choose an unused local port if 4478 is busy. The preview binds `127.0.0.1`; pass no `--host`.
 - Loopback requests need no login. Do not change `~/.herdr-boss/` data files in a test; use a temporary directory with `HERDR_BOSS_DIR`.
 
 ## Integrate and release

@@ -1,5 +1,6 @@
 import http from 'node:http';
 import fs from 'node:fs';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
@@ -149,11 +150,26 @@ async function jsonBody(req) {
 
 const MACHINE_HOURS_CACHE_MS = 60000;
 
-export function serve(cfg, { readOnlyPreview = false, createEngine = (config, options) => new Engine(config, options), closeTab = browserCloseTab } = {}) {
+const PREVIEW_DEFAULT_HOST = '127.0.0.1';
+
+// A preview bind address is an IP address or a host name. An empty value is refused.
+export function assertPreviewHost(host) {
+  const value = typeof host === 'string' ? host.trim() : '';
+  const hostname = /^(?=.{1,253}$)[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$/;
+  if (!value || !(net.isIP(value) || hostname.test(value))) {
+    throw new Error('--host needs an IP address or a host name, for example --host 127.0.0.1.');
+  }
+  return value;
+}
+
+export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine = (config, options) => new Engine(config, options), closeTab = browserCloseTab } = {}) {
   const machineHoursCache = new Map();
   let analyticsCache = null;
   // A direct serve() call must refuse an unsafe preview before the access token, the watcher, or a tick writes a file.
   if (readOnlyPreview) assertPreviewDataDir();
+  if (previewHost !== undefined && !readOnlyPreview) throw new Error('previewHost (--host) is valid only together with --read-only-preview.');
+  // The preview has no login. It binds loopback unless the caller names another address. The main service keeps cfg.host.
+  const bindHost = readOnlyPreview ? (previewHost === undefined ? PREVIEW_DEFAULT_HOST : assertPreviewHost(previewHost)) : cfg.host;
   assertSqliteAvailable();
   openMessageStore({ dir: DATA_DIR, backend: cfg.store?.messages });
   const access = readOnlyPreview ? null : createAccessControl(cfg.access.tokenFile, {
@@ -756,8 +772,8 @@ export function serve(cfg, { readOnlyPreview = false, createEngine = (config, op
     }
   });
 
-  server.listen(cfg.port, cfg.host, () => {
-    console.log(`herdr-boss: http://${cfg.host}:${cfg.port} (push ${engine.push ? 'on' : 'off'})`);
+  server.listen(cfg.port, bindHost, () => {
+    console.log(`herdr-boss: http://${bindHost}:${cfg.port} (push ${engine.push ? 'on' : 'off'})`);
   });
 
   server.on('close', () => {

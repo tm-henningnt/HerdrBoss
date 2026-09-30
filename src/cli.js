@@ -82,7 +82,8 @@ async function verifyNightCaller(env, herdr) {
 
 const USAGE = `herdr-boss <command>
 
-  serve [--read-only-preview] Run the collector loop and the dashboard server.
+  serve [--read-only-preview [--host <address>]] Run the collector loop and the dashboard server.
+                              The preview binds 127.0.0.1 unless --host names another address.
   tick [--json]         Collect once and print alerts. Sends nothing, terminates nothing.
   publish <slug> <file> [--force] Validate a project status file and install it. Use "-" for stdin.
                         Refuses a live worker on a task that is not doing, unless --force.
@@ -647,10 +648,16 @@ async function main() {
       break;
     }
     case 'serve': {
-      if (args.some((arg) => arg !== '--read-only-preview') || args.length > 1) throw new Error('Usage: serve [--read-only-preview]');
-      if (!args.includes('--read-only-preview')) migrateAccessFiles(cfg);
-      const { serve } = await import('./server.js');
-      serve(cfg, { readOnlyPreview: args.includes('--read-only-preview') });
+      const usageServe = 'Usage: serve [--read-only-preview [--host <address>]]';
+      const preview = args.includes('--read-only-preview');
+      const hostAt = args.indexOf('--host');
+      if (hostAt !== -1 && (!preview || args.indexOf('--host', hostAt + 1) !== -1 || hostAt === args.length - 1)) throw new Error(usageServe);
+      const rest = args.filter((arg, i) => arg !== '--read-only-preview' && i !== hostAt && (hostAt === -1 || i !== hostAt + 1));
+      if (rest.length || args.filter((arg) => arg === '--read-only-preview').length > 1) throw new Error(usageServe);
+      const { serve, assertPreviewHost } = await import('./server.js');
+      const previewHost = hostAt === -1 ? undefined : assertPreviewHost(args[hostAt + 1]);
+      if (!preview) migrateAccessFiles(cfg);
+      serve(cfg, { readOnlyPreview: preview, previewHost });
       break;
     }
     case 'tick': {
