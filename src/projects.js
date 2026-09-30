@@ -51,9 +51,57 @@ export function validateProject(p) {
     const c = p.agentsCheck;
     if (typeof c !== 'object' || Array.isArray(c) || !Number.isInteger(c.errors) || c.errors < 0 || !Number.isInteger(c.warnings) || c.warnings < 0) errs.push('"agentsCheck" must be an object with errors and warnings (non-negative integers)');
   }
+  for (const key of ['doneCount', 'doneCountBase']) if (p[key] != null && (!Number.isInteger(p[key]) || p[key] < 0 || p[key] > DONE_COUNT_MAX)) errs.push(`"${key}" must be an integer from 0 to ${DONE_COUNT_MAX}`);
+  if (p.doneIds != null && (!Array.isArray(p.doneIds) || p.doneIds.length > DONE_IDS_MAX || p.doneIds.some((id) => typeof id !== 'string' || !id || id.length > 200 || /[\u0000-\u001f\u007f]/.test(id)))) errs.push(`"doneIds" must be an array of at most ${DONE_IDS_MAX} strings of 1 to 200 characters without control characters`);
   if (p.kitRevision != null && (typeof p.kitRevision !== 'string' || !KIT_REVISION.test(p.kitRevision))) errs.push('"kitRevision" must be the 12 hex characters of a kit revision');
   if (p.git != null && (typeof p.git !== 'object' || Array.isArray(p.git))) errs.push('"git" must be an object with branch, commit, and dirty');
   return errs;
+}
+
+export const DONE_KEEP = 30;
+export const DONE_IDS_MAX = 5000;
+export const DONE_COUNT_MAX = 1000000;
+export const STATUS_WARN_BYTES = 200 * 1024;
+
+// Keep the newest DONE_KEEP done tasks and remove the older ones from data.tasks. A done task that an
+// open or kept task lists in blockedBy stays. The IDs of the removed tasks go into data.doneIds, so a
+// republish of the same tasks does not count them again. An ID that is in data.tasks again leaves
+// doneIds. doneCountBase holds counts that have no ID: an earlier doneCount and IDs dropped from a full doneIds. doneCount = doneIds.length + doneCountBase.
+// stored is the status file that is installed now, or null. Returns the number of IDs added to doneIds.
+export function capDoneTasks(data, stored = null, keep = DONE_KEEP) {
+  if (!data || typeof data !== 'object' || !Array.isArray(data.tasks)) return 0;
+  // An invalid field is left for validateProject to report.
+  if (validateProject({ project: 'x', doneCount: data.doneCount, doneCountBase: data.doneCountBase, doneIds: data.doneIds }).length) return 0;
+  const sources = [data, stored && typeof stored === 'object' ? stored : {}].filter((source) => !validateProject({ project: 'x', doneCount: source.doneCount, doneCountBase: source.doneCountBase, doneIds: source.doneIds }).length);
+  let base = Math.max(0, ...sources.map((source) => source.doneCountBase ?? (Array.isArray(source.doneIds) ? 0 : source.doneCount ?? 0)));
+  const ids = [];
+  for (const source of sources) for (const id of source.doneIds || []) if (!ids.includes(id)) ids.push(id);
+  const isTask = (t) => t && typeof t === 'object';
+  const isDone = (t) => isTask(t) && (t.status || 'todo') === 'done';
+  const time = (t) => { const ms = Date.parse(t.updated); return Number.isFinite(ms) ? ms : -Infinity; };
+  const doneIndexes = data.tasks.flatMap((t, i) => (isDone(t) ? [i] : []));
+  const newest = new Set([...doneIndexes].sort((a, b) => (time(data.tasks[b]) - time(data.tasks[a])) || (b - a)).slice(0, keep));
+  const stay = new Set(data.tasks.flatMap((t, i) => (!isDone(t) || newest.has(i) ? [i] : [])));
+  const blockers = new Set();
+  for (const i of stay) for (const id of Array.isArray(data.tasks[i]?.blockedBy) ? data.tasks[i].blockedBy : []) blockers.add(String(id));
+  // A done task without a usable ID cannot be counted once, so it stays in the file.
+  const trackable = (t) => t.id != null && String(t.id).length <= 200 && !/[\u0000-\u001f\u007f]/.test(String(t.id));
+  const removedTasks = data.tasks.filter((t, i) => !stay.has(i) && trackable(t) && !blockers.has(String(t.id)));
+  data.tasks = data.tasks.filter((t) => !removedTasks.includes(t));
+  // A task that is in the file is counted by the file. This covers a task that is open again.
+  const present = new Set(data.tasks.filter((t) => isTask(t) && t.id != null).map((t) => String(t.id)));
+  const kept = ids.filter((id) => !present.has(id));
+  let added = 0;
+  for (const t of removedTasks) {
+    const id = String(t.id);
+    if (!kept.includes(id)) { kept.push(id); added += 1; }
+  }
+  if (kept.length > DONE_IDS_MAX) base += kept.splice(0, kept.length - DONE_IDS_MAX).length;
+  delete data.doneIds; delete data.doneCountBase; delete data.doneCount;
+  if (kept.length) data.doneIds = kept;
+  if (base > 0) data.doneCountBase = base;
+  if (kept.length + base > 0) data.doneCount = kept.length + base;
+  return added;
 }
 
 export function statusWarnings(p) {

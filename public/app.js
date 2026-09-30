@@ -3624,7 +3624,9 @@ function workModel(p) {
   }
   const groups = [...(Array.isArray(p.groups) ? p.groups : [])];
   if (tasks.some((t) => !t.group || !groups.some((g) => g.id === t.group))) groups.push({ id: '', title: 'Other work' });
-  return { tasks, map, openBlockers, current, next, groups, explicit };
+  // Done tasks that herdr-boss publish moved into doneCount count as done in the overall total.
+  const counted = Number.isInteger(p.doneCount) && p.doneCount > 0 ? p.doneCount : 0;
+  return { tasks, map, openBlockers, current, next, groups, explicit, counted };
 }
 
 // The short wait text of a task. A waitingOn value names the party; otherwise the open blockers are named.
@@ -3665,10 +3667,11 @@ function progressBar(done, total) {
 
 function programBlock(m) {
   if (!m.tasks.length) return '';
-  const done = m.tasks.filter(isDone).length;
+  const done = m.tasks.filter(isDone).length + m.counted;
+  const total = m.tasks.length + m.counted;
   const waiting = m.tasks.filter((t) => !isDone(t) && (t.status === 'blocked' || m.openBlockers(t).length)).length;
   const list = (set, empty) => set.size ? `<ul class="chip-list">${[...set].sort(byId).slice(0, 12).map((t) => taskChip(t)).join('')}</ul>${set.size > 12 ? `<small>+${set.size - 12} more</small>` : ''}` : `<p class="muted">${empty}</p>`;
-  return `<section class="program"><div class="panel program-total"><h2>Overall progress</h2>${progressBar(done, m.tasks.length)}<small>${m.tasks.length - done} open · ${waiting} waiting on a blocker</small></div>
+  return `<section class="program"><div class="panel program-total"><h2>Overall progress</h2>${progressBar(done, total)}<small>${total - done} open · ${waiting} waiting on a blocker</small></div>
     <div class="panel"><h2>Current frontier <span class="sub">${m.explicit ? 'set by the orchestrator' : 'open, no open blockers'}</span></h2>${list(m.current, 'No open work is ready.')}</div>
     <div class="panel"><h2>Next <span class="sub">${m.explicit ? 'set by the orchestrator' : 'waits only on the current frontier'}</span></h2>${list(m.next, 'Nothing waits only on the current frontier.')}</div></section>`;
 }

@@ -216,7 +216,7 @@ herdr agent prompt <orch-pane> "WORKER REPORT <name>: <done|blocked|stopped>. Re
 - Each `herdr-boss say` reply is an item in the Owner mailbox. Set `--action decide`, `--action approve`, or `--action answer` only when the Owner must act. Everything else is information; omit `--action`.
 - Record an Owner decision from an Owner message in `docs/orchestration/memory.md`, with its full text.
 - Use `herdr-boss publish <slug> <file>` for a validated status file. Follow `docs/project-status.md` for the status schema.
-- Update status at session start, worker completion, blockage, human gate, and session end.
+- Publish the status at task boundaries only: a task starts, a task ends, a blocker appears, or a blocker clears. Publish no more often.
 - Do not build a separate project dashboard.
 - Keep Herdr as live execution state and the issue tracker as durable work state.
 - Run `herdr-boss harness check` when a harness refuses routine work. Report missing entries to the Boss.
