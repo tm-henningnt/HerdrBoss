@@ -108,3 +108,16 @@ test('the Board view renders its h1', async () => {
   const html = app.boardView({ ...s, projects: [] });
   assert.match(html, /<h1>Board<\/h1>/);
 });
+
+test('the Settings view renders no link-only Watch panel and the Agents page keeps the Watch box', async () => {
+  const app = await views();
+  app.setModels({ codex: catalog, claude: catalog });
+  const s = fixture();
+  app.setState(s);
+  const html = app.settingsView(s);
+  assert.doesNotMatch(html, /<h2>Watch<\/h2>/);
+  assert.doesNotMatch(html, /href="\/agents#watch"/);
+  assert.match(html, /<h2>Watch routines<\/h2>/);
+  const source = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  assert.match(source, /function watchPanel\(/);
+});
