@@ -154,3 +154,45 @@ test('the phone block gives the round icon buttons a 44px width', () => {
   assert.match(body, /min-width:\s*44px/);
   assert.match(body, /(^|[;\s])height:\s*44px/);
 });
+
+test('the chat composer textarea sets its font in one top-level rule, at 15px or more', () => {
+  const fontRules = rules().filter((r) => r.media === '' && selectors(r.selector).includes('.chat-composer textarea')
+    && decls(r.body).some(([p]) => p === 'font' || p === 'font-size'));
+  assert.equal(fontRules.length, 1, fontRules.map((r) => r.body.trim()).join(' | '));
+  const size = decls(fontRules[0].body).map(([p, v]) => (p === 'font-size' ? v : p === 'font' ? /(\d+(?:\.\d+)?)px/.exec(v)?.[0] : null)).filter(Boolean).pop();
+  assert.ok(px(size) >= 15, `desktop font size ${size}`);
+});
+
+// Each app view renders one h1: the title in its app bar. The page shell has no h1.
+test('the Mailbox and the Chat each render one h1, and the page shell renders none', () => {
+  assert.doesNotMatch(html, /<h1\b/);
+  const fn = (name) => new RegExp(`\\nfunction ${name}\\([^)]*\\) \\{([\\s\\S]*?)\\n\\}`).exec(app)?.[1] || '';
+  for (const name of ['mailboxView', 'chatView']) assert.equal((fn(name).match(/<h1\b/g) || []).length, 1, name);
+  for (const name of ['mailConversationView', 'mailComposeView', 'mailRowsHtml', 'chatConversationView', 'appDrawer', 'appMenuButton']) assert.doesNotMatch(fn(name), /<h1\b/, name);
+});
+
+// The row checkbox is 18px wide at the right edge of a 40px column, so it starts at 22px. The Select all box starts there too.
+test('the Select all checkbox lines up with the row checkboxes', () => {
+  const bulk = rules().filter((r) => selectors(r.selector).includes('.mail-bulk') && decls(r.body).some(([p]) => p === 'padding'));
+  assert.ok(bulk.length >= 2, 'a desktop rule and a phone rule');
+  for (const r of bulk) {
+    const pad = decls(r.body).find(([p]) => p === 'padding')[1];
+    const parts = []; let d = 0, cur = '';
+    for (const ch of pad + ' ') { if (ch === '(') d++; if (ch === ')') d--; if (ch === ' ' && d === 0) { if (cur) parts.push(cur); cur = ''; } else cur += ch; }
+    const left = parts[3] || parts[1];
+    assert.match(left, /^(22px|max\(22px, env\(safe-area-inset-left\)\))$/, `${r.media || 'desktop'}: ${pad}`);
+  }
+});
+
+test('the answer field of a Mailbox item has the same field style as the Reply field', () => {
+  const r = rules().find((x) => x.media === '' && selectors(x.selector).includes('.mail-reply textarea') && decls(x.body).some(([p]) => p === 'background'));
+  assert.ok(selectors(r.selector).includes('.mail-actions textarea'), r.selector);
+});
+
+// At a 1280px laptop width the eleven nav links with their badges fit on one line only with the compact padding.
+test('the compact desktop nav covers a 1280px window', () => {
+  const compact = rules().filter((r) => r.selector === '#primary-nav a' && /min-width:\s*761px/.test(r.media) && /padding:\s*5px 6px/.test(r.body));
+  assert.equal(compact.length, 1);
+  const max = Number(/max-width:\s*(\d+)px/.exec(compact[0].media)?.[1]);
+  assert.ok(max >= 1360, compact[0].media);
+});

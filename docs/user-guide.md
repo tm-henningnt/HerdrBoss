@@ -1000,12 +1000,12 @@ Select a row to open its conversation. The conversation shows Owner and agent me
 | Action | Controls | Text sent |
 |---|---|---|
 | `answer` | A text field and **Send**. | The typed text. |
-| `approve` | **Approve**, **Decline**, and an optional note. | `Approved.` or `Declined.`, then the note. |
+| `approve` | **Approve**, **Reject**, and an optional note. | `Approved.` or `Rejected.`, then the note. |
 | `decide` | A text field and **Send**. Choice buttons when the text has a Markdown list under a `Choices` heading. | `Choice: CHOICE`, then the note. Or the typed text. |
 
 The page asks for a confirmation before each send or dismissal. The answer is an Owner message to the thread of the item, with `replyTo` set to the item ID. It uses the same delivery rules and rate limit as a message from the Agents page. The service then sets `closedAt` on the item, and the item moves to **Done**. A closed item refuses a second answer with HTTP 409.
 
-Select **New message** to start a thread with the Boss or a project that has an `orch` pane. Type a message and confirm the send. The page applies the same send limit and safety gates as other Owner messages. It opens the new thread in **Sent**. Use the reply box at the bottom of a conversation to reply to its last open agent message. The page asks you to confirm each reply.
+Select **New message** to start a thread with the Boss or a project that has an `orch` pane. Type a message and confirm the send. The page applies the same send limit and safety gates as other Owner messages. It opens the new thread in **Sent**. Use the reply box at the bottom of a conversation to reply to its last open agent message. When that message is an open answer, approve, or decide item, the item form replaces the reply box. The page asks you to confirm each reply.
 
 Select one or more checkboxes under **Needs you**, then select **Dismiss selected**. A check box selects all items of its conversation. Select **Dismiss** on one item to dismiss it alone. Dismissal sets `closedAt`, `readAt`, and `dismissed: true`. It sends no message. You cannot dismiss an item that is already closed or does not need action.
 

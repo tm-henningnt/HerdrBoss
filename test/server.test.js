@@ -2151,7 +2151,7 @@ test('the Chat page is compact: no page heading, slim bubbles, a round send butt
   assert.doesNotMatch(css, /\.chat-bubble \{[^}]*border: 1px solid/);
   assert.match(css, /\.chat-bubble-time \{ font-size: 11px; \}/);
   // The composer is one line that grows to 6 lines. The send button is a round 36 px button.
-  assert.match(css, /\.chat-composer textarea \{[^}]*max-height: calc\(1\.45em \* 6\);/);
+  assert.match(css, /\.chat-composer textarea \{[^}]*max-height: calc\(1\.4em \* 6\);/);
   assert.match(css, /\.chat-send \{ flex: 0 0 auto; display: grid; place-items: center; width: 36px; height: 36px; padding: 0; border-radius: 50%;/);
   assert.match(css, /\.chat-send \{ width: 44px; height: 44px; \}/);
   // A dense list: each row shows the title and the time on the first line, then the last message and the unread badge.
