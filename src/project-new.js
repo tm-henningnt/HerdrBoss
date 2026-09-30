@@ -187,7 +187,7 @@ function applyProjectPolicy(slug, dataDir) {
   const models = loadModels();
   const result = addProjectPolicy(loadPolicy({ file, models, warn: () => {} }), slug);
   if (!result.changed) return `the policy already has ${slug}, shares unchanged: ${showShares(result.after)}`;
-  const errors = savePolicy(result.policy, models, { file });
+  const errors = savePolicy(result.policy, models, { file, caller: 'project-new' });
   if (errors.length) refuse(`The policy is not valid: ${errors.join(' ')}`);
   return `added ${slug} with share ${result.after[slug]}. Shares before: ${showShares(result.before)}. Shares after: ${showShares(result.after)}`;
 }

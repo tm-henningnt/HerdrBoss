@@ -311,14 +311,18 @@ async function main() {
     case 'policy': {
       const { loadPolicy, savePolicy } = await import('./control.js');
       if (args[0] === 'show' && args.length === 1) console.log(JSON.stringify(loadPolicy(), null, 2));
-      else if (args[0] === 'set' && args.length === 2) {
+      else if (args[0] === 'set' && args.length >= 2 && args.slice(2).every((flag) => flag === '--confirmed' || flag === '--allow-sum')) {
         const { loadModels } = await import('./kit/config.js');
+        const { policyShareGuard } = await import('./control.js');
+        const draft = JSON.parse(fs.readFileSync(args[1], 'utf8'));
+        const refusal = policyShareGuard(loadPolicy(), draft, { confirmed: args.includes('--confirmed'), allowSum: args.includes('--allow-sum'), via: 'cli' });
+        if (refusal) throw new Error(refusal.error);
         const notes = [];
-        const errors = savePolicy(JSON.parse(fs.readFileSync(args[1], 'utf8')), loadModels(), { notes });
+        const errors = savePolicy(draft, loadModels(), { notes, caller: 'cli' });
         if (errors.length) throw new Error(errors.join('\n'));
         for (const note of notes) console.log(note);
         console.log('Policy saved. The service will apply it on its next tick.');
-      } else throw new Error('Usage: policy show | policy set FILE');
+      } else throw new Error('Usage: policy show | policy set FILE [--confirmed] [--allow-sum]');
       break;
     }
     case 'watch':

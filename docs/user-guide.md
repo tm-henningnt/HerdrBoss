@@ -32,6 +32,7 @@ Then it applies its rules and writes these files to `~/.herdr-boss/`:
 | `state.json` | The full snapshot that the dashboard shows. |
 | `events.jsonl` | Prompts, notifications, handovers, and stopped processes. |
 | `policy.json` | The resource policy that you set on the Settings and Allocation pages. |
+| `policy-changes.jsonl` | The change log of policy writes. One line for each write that changes a value. Keeps the last 500 lines and at most 256 KB. Mode `0600`. See [Policy changes](#policy-changes). |
 | `locks/` | Private project lock records. Each Git repository has a separate directory. |
 | `lock-ledger.jsonl` | The lock ledger. One line for each lock acquire, release, and failed acquire. Rotates at 5 MB to `lock-ledger.1.jsonl`. |
 
@@ -739,6 +740,22 @@ Both pages keep policy edits in a draft. Select **Apply policy** to save the dra
 
 The Allocation page sets the global worker limit, workspace project status, project shares and exclusions, and orchestrator succession. The project share is advisory. `worker start` enforces the global limit and the disabled harnesses and models.
 
+### Policy changes
+
+Herdr Boss guards the project shares. A write of the policy that changes 3 or more project shares needs a confirmation. A write that leaves the shares at a total other than 100 needs a second confirmation. A write that changes no share needs neither.
+
+`PUT /api/policy` refuses such a write with status 409. The error names each changed project with its old and new share and tells how to confirm. Add `"confirmed": true` to the request body to confirm a change of 3 or more shares. Add `"allowSum": true` to save a total other than 100. The two flags are separate. The server does not store them in the policy.
+
+The Allocation page shows a dialog before it saves 3 or more changed shares, and sends `confirmed: true` after you confirm. When the total is not 100, it shows a second dialog and sends `allowSum: true` after you confirm. The Settings page saves the whole policy without a share change and needs no flag.
+
+`herdr-boss policy set FILE` applies the same rule. Add `--confirmed` and `--allow-sum` for the two confirmations. The `project new` policy step is an internal write. It keeps the previous total of the shares, so the guard does not block it.
+
+Every write that changes a value adds one line to `policy-changes.jsonl` in the data directory. A line holds the time (`at`), the caller kind (`caller`), and the changed keys (`changes`). A key is the dotted path of a changed value, for example `projects.herdrboss.share` or `machine.swapWarnPercent`. Each change holds the old and the new value. A list or an object shows `changed`. A string has at most 80 characters. The log shows `changed` for a key that has a token, secret, password, credential, API key, or authorization part anywhere in its dotted path. A key has at most 120 characters. A write that changes nothing adds no line.
+
+The caller kind is `page`, `cli`, `project-new`, or `unknown`. The Allocation page and the other pages send the header `x-herdr-boss-caller: page`. The CLI sets `cli`. The `project new` policy step sets `project-new`. A write without a marker, and any other value, has the kind `unknown`. The engine writes the policy when it migrates workspace labels or clears an expired one-off pacing goal. These writes have the kind `unknown`. A client sets the header, so the caller kind is a label and not authentication. It does not prove who wrote.
+
+The file keeps the last 500 lines and at most 256 KB. Herdr Boss trims it on each write and creates it with mode `0600`. A reader skips a line that is not valid and never fails. A line that is appended during a trim can be lost. The log is for diagnosis, not for audit. The Analytics page shows the last 100 entries in the section **Policy changes**.
+
 Set `imageBudget` in `.herdr-boss.json` to a positive integer to set the project's screenshot budget in each worker brief. The default is 10 screenshots. The project setting overrides the kit default. Worker start appends any missing budget or copied input details when a project brief template omits those slots. Use `worker start --copy PATH` to copy a regular repository file into the worker's `.worker/inputs/` directory before the agent starts. Repeat `--copy` for each file. The command preserves repository subdirectories and refuses paths outside the repository.
 
 The Analytics page shows a **Model scorecard** chart. Its Details table has one row for each harness and model over the last 30 days. Each row shows the runs, the first-time, rework, and failed counts, the rework rate (rework plus failed, divided by the runs), and the median run duration. The table sorts by runs. The orchestrator records the model outcome at review time with `worker collect --record --model-result first-time|rework|failed` and, for rework or failure, `--model-reason TEXT`. The orchestrator's values win over the report's `modelOutcome`. When neither is given, the result is derived: `failed` when `--outcome failed` or `--gate-failed`, `rework` when `--rework` is more than 0, otherwise `first-time`.
@@ -1098,6 +1115,7 @@ The Analytics page (`/analytics`) shows figures and charts. It answers these que
 - Which causes of denials and permission prompts occur, for which harness?
 - When do the machine load and the lock waits slow work down?
 - How many notices does each pane get?
+- Who changed the policy, and which keys changed?
 
 ### Headline strip
 
@@ -1121,10 +1139,11 @@ Each chart has a title that tells what to read from it, a scope line, a legend, 
 - **Machine load and lock waits**: lines for the 5-minute load as a percent of the cores, the memory in use, and the swap in use, over the last 24 hours in columns of 10 minutes. A shaded column had a lock holder. The strip under the lines shows the minutes in which a suite request waited.
 - **Machine overload and idle waiting by hour**: see [Machine samples](#machine-samples).
 - **Notices per pane**: stacked bars for each day of the last 7 days. The five panes with the most notices have their own color. The other panes share one gray.
+- **Policy changes**: a list of the last writes of `policy.json`, newest first. A row shows the time, the caller kind, and the changed keys with the old and the new value. A row has at least 44 px height on a phone. **Details** holds one table row for each changed key of the last 100 writes. The section shows an empty state until the first write. See [Policy changes](#policy-changes).
 
-The charts use one color set for light mode and one for dark mode. The set passes the dataviz palette validator. The charts show no project name, client name, or path. They show harness, model, cause, lock kind, and pane ID only. On a screen up to 1180 px wide the charts are in one column. On a phone each chart scrolls sideways inside its own box.
+The charts use one color set for light mode and one for dark mode. The set passes the dataviz palette validator. The charts show no project name, client name, or path. They show harness, model, cause, lock kind, and pane ID only. The section Policy changes is the exception: its keys name the projects of the policy. On a screen up to 1180 px wide the charts are in one column. On a phone each chart scrolls sideways inside its own box.
 
-The route `/api/analytics` gives the notice counts, the machine timeline, the denial counts of the last 30 days for each day, and the harness change markers of those days. It reads the last 2 MB of `events.jsonl`, the machine samples of the last 25 hours, `denials.json`, and `harness-changes.jsonl`. It keeps the result for 60 seconds. The result holds numbers, lock kinds, pane IDs, and the marker labels only.
+The route `/api/analytics` gives the notice counts, the machine timeline, the denial counts of the last 30 days for each day, the harness change markers of those days, and the last 100 policy changes. It reads the last 2 MB of `events.jsonl`, the machine samples of the last 25 hours, `denials.json`, `harness-changes.jsonl`, and `policy-changes.jsonl`. It keeps the result for 60 seconds. The result holds numbers, lock kinds, pane IDs, the marker labels, and the policy change keys with scalar values.
 
 ### Activity log
 

@@ -74,7 +74,9 @@ export function totalHtml(total) {
 // Decide what the save does with the shares in the form.
 // loaded is the projects object of the policy from the server. touched lists the projects whose share the user changed.
 // boundaries is the number of different boundaries that the user moved. otherChanged is true when the form has a change outside the shares.
-// Return { action: 'save' | 'refuse' | 'confirm', message?, rows? }. A row is { slug, old, next }. old is null for a project without a saved share.
+// Return { action: 'save' | 'refuse' | 'confirm', message?, rows?, confirmSum? }. A row is { slug, old, next }. old is null for a project without a saved share.
+// confirmSum is true when a share changes and the total is not 100. The save then needs a second confirmation and sends allowSum: true.
+// The server refuses a change of 3 or more shares without confirmed: true, so the save shows the dialog for it.
 // fixed maps the projects that the form shows but does not edit to their share. They count in the total and never change.
 export function checkSave({ slugs, loaded = {}, shares, defaults = [], touched = [], boundaries = 0, otherChanged = false, fixed = {} }) {
   if (slugs.some((slug) => !clean(shares[slug]))) return { action: 'refuse', message: 'A share is not a whole number from 0 to 100. Reload the shares.' };
@@ -92,8 +94,10 @@ export function checkSave({ slugs, loaded = {}, shares, defaults = [], touched =
   const oldTotal = rows.reduce((sum, row) => sum + (row.old ?? 0), 0);
   const needsConfirm = untouched.length > 0
     || Math.abs(total - oldTotal) > 5
-    || (changed.length > 1 && boundaries > 1);
-  return needsConfirm ? { action: 'confirm', rows } : { action: 'save', rows };
+    || (changed.length > 1 && boundaries > 1)
+    || changed.length >= 3;
+  const confirmSum = changed.length > 0 && total !== 100;
+  return { action: needsConfirm ? 'confirm' : 'save', rows, ...(confirmSum ? { confirmSum: true } : {}) };
 }
 
 export function confirmText(rows) {
@@ -101,6 +105,11 @@ export function confirmText(rows) {
   const newTotal = rows.reduce((sum, row) => sum + row.next, 0);
   const lines = rows.map((row) => `${row.slug}: ${row.old === null ? 'not saved' : `${row.old}%`} -> ${row.next}%`);
   return `Apply these project shares?\n\n${lines.join('\n')}\n\nTotal: ${oldTotal}% -> ${newTotal}%`;
+}
+
+// The second confirmation for a total other than 100. The server saves it only with allowSum: true.
+export function sumConfirmText(total) {
+  return `The project shares add up to ${total}, not 100.\n\nSave this total anyway?`;
 }
 
 // The lines under the bar: the total, and the line that offers a reload when the server policy changed.

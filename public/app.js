@@ -11,8 +11,8 @@ import { viewerKeyAction, nextOpenItem, itemNeighbors, sectionStep, addPin, remo
 import { attachGestures, restoreStages, resetStages, zoomStage } from './review-gestures.js';
 import { createItemSaver, createTapGuard, startViewedTimer } from './review-save.js';
 import { createWizard } from './project-wizard-ui.js';
-import { buildDraftShares, draftSignature, shareTotal, distributeRemainder, moveShares, totalHtml, checkSave, confirmText, allocationFooterHtml, staleRowHtml } from './allocation-draft.js';
-import { stackedBars, lineChart, stripBars, outcomeBars, legendHtml, foldSeries, spendSeries, claudeSpend, quotaSeries, firstTimeRate, activityFilter, activityChoices, eventLevel, dayLabel, usd, minutes, compact, ACTIVITY_RANGES, ACTIVITY_LEVELS, SERIES_CLASSES, DENIAL_RANGES, DEFAULT_DENIAL_RANGE, denialRange, denialSeries, denialMarkers, denialDetailsHtml, denialLegendHtml } from './analytics.js';
+import { buildDraftShares, draftSignature, shareTotal, distributeRemainder, moveShares, totalHtml, checkSave, confirmText, sumConfirmText, allocationFooterHtml, staleRowHtml } from './allocation-draft.js';
+import { stackedBars, lineChart, stripBars, outcomeBars, legendHtml, foldSeries, spendSeries, claudeSpend, quotaSeries, firstTimeRate, activityFilter, activityChoices, eventLevel, dayLabel, usd, minutes, compact, ACTIVITY_RANGES, ACTIVITY_LEVELS, SERIES_CLASSES, DENIAL_RANGES, DEFAULT_DENIAL_RANGE, denialRange, denialSeries, denialMarkers, denialDetailsHtml, denialLegendHtml, policyChangesTitle, policyChangesListHtml, policyChangesDetailsHtml } from './analytics.js';
 
 const $app = document.getElementById('app');
 // A visual check can force a theme with ?theme=light or ?theme=dark. Without it, the page follows the system.
@@ -368,7 +368,7 @@ async function updateOverviewMachineGuard(action, hours = 1, enabled = null) {
       current.machine.guardEnabled = true;
       current.machine.guardPausedUntil = null;
     }
-    const response = await fetch('/api/policy', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(current) });
+    const response = await fetch('/api/policy', { method: 'PUT', headers: POLICY_PUT_HEADERS, body: JSON.stringify(current) });
     const result = await response.json();
     if (!response.ok) throw new Error((result.errors || [result.error || 'The machine guard could not be updated.']).join(' '));
     state.policy = result.policy;
@@ -447,6 +447,9 @@ function policyWithoutShares(policy, defaults) {
   for (const entry of Object.values(copy.projects || {})) delete entry.share;
   return JSON.stringify(copy);
 }
+// The caller header is a label for the change log of policy writes. It is not authentication.
+const POLICY_PUT_HEADERS = { 'content-type': 'application/json', 'x-herdr-boss-caller': 'page' };
+
 function allocationSaveCheck() {
   if (!policyDraft || !allocationMeta || !state?.policy) return { action: 'save' };
   const slugs = allocationProjects().map((p) => p.slug);
@@ -1980,6 +1983,7 @@ function analyticsView(s) {
     machineHoursBlock(),
     '</div></div><div class="viz-group" data-key="grp:notices"><h2>Notices and activity</h2><div class="viz-grid">',
     noticeChart(),
+    policyChangesCard(),
     activitySection(s),
     '</div></div>',
   ].join('');
@@ -4458,6 +4462,19 @@ function noticeChart() {
   });
 }
 
+// The writes of policy.json from /api/analytics: time, caller kind, and the changed keys. The caller kind is a label that the client sends.
+function policyChangesCard() {
+  const entries = analyticsData?.policyChanges || [];
+  const base = { id: 'policy-changes', title: 'Policy changes' };
+  if (!entries.length) return vizCard({ ...base, empty: 'No policy write is recorded yet. Herdr Boss logs each write of the policy from now on.' });
+  return vizCard({
+    ...base, title: policyChangesTitle(entries),
+    sub: `The last ${entries.length} ${entries.length === 1 ? 'write' : 'writes'} of the policy, newest first. The caller kind is a label that the client sends. It does not prove who wrote.`,
+    chart: policyChangesListHtml(entries),
+    details: policyChangesDetailsHtml(entries),
+  });
+}
+
 // The activity log: prompts to orchestrators, notices, handovers, and stopped processes, with filters and a search.
 function activitySection(s) {
   const f = analyticsUi.log;
@@ -5362,7 +5379,7 @@ const HELP = {
     <h3>Bookmarks</h3><p>A project keeps at most 30 bookmarks. A bookmark name has at most 60 characters. A bookmark URL must use http or https and must not hold a user name or a password. <b>Add current page</b> saves the selected tab. <b>Open</b> loads a bookmark in the current tab; <b>New tab</b> opens it in a new tab. <b>Rename</b>, the arrows, and <b>Delete</b> change the list; Delete asks you to confirm. <b>Start page</b> opens in the first tab of the next launch. <b>Save</b> stores the start page; a blank value clears it.</p>
     <h3>Control</h3><p>Select the screenshot to open the large view. The large view shows a still image of the last capture. Turn on <b>Control browser</b> or <b>Live</b> to refresh it at the chosen interval. Turn on <b>Control browser</b>, then click the image and type. Paste long text or a password into the masked field. On a phone the large view is full screen and the image fills the height. The text field and key controls appear only while <b>Control browser</b> is on.</p>`],
   analytics: ['Analytics', `
-    <p>The page answers six questions: what the fleet costs, how the quota compares with the pace, how often the models are right the first time, where the harnesses deny work, when the machine and the locks slow work down, and which panes get notices.</p>
+    <p>The page answers seven questions: what the fleet costs, how the quota compares with the pace, how often the models are right the first time, where the harnesses deny work, when the machine and the locks slow work down, which panes get notices, and which keys of the policy changed.</p>
     <h3>Headline strip</h3><p>Each tile shows one figure and its change. <b>Claude spend a day</b> is the mean of the last 7 days, with the change on the 7 days before. <b>Quota against pace</b> shows the lane with the most use above its pace line. <b>Denials this week</b> compares the last 24 hours with the 6-day mean. <b>Notices per pane a day</b> is the 7-day mean and today. <b>Lock wait and hold</b> shows the median wait and the median hold. <b>First-time success</b> counts the judged runs of the last 30 days.</p>
     <h3>Charts</h3><p>The title of each chart tells what to read from it. Hover, focus, or touch a column, a cell, or a row to read its values. On a phone each chart scrolls sideways inside its own box. <b>Details</b> under a chart opens the table of the same figures.</p>
     <p><b>Spend</b>: stacked bars for each day, split by role or by harness with the switch. The USD figure is the API-price equivalent. The Owner pays a subscription, not these amounts. <b>Quota</b>: one solid line for the use of each lane and one dashed line for its expected pace, in the weekly window. <b>Model scorecard</b>: the share of first-time, rework, failed, and not judged runs for each model. <b>Details</b> also holds the recorded work by project and provider and the recent runs.</p>
@@ -5375,6 +5392,7 @@ const HELP = {
     <h3>Machine overload and idle waiting</h3><p>The chart shows, for each hour of the day in local time, the mean minutes per day of two conditions over the last 14 days. <b>Overload</b>: swap above 90% with at least 1 GB in use, or a 5-minute load above 3 times the cores. <b>Queue waited, CPU under 50%</b>: a suite request waited in the <code>full-suite</code> queue while the CPU was not the reason.</p>
     <p>Hover, focus, or touch an hour to read its values. Hatched bars have fewer than 10 samples. A note shows when samples cover less than half of the window; a minute without a sample is missing data. The table under the chart has the same 24 rows. On a phone the chart scrolls sideways inside its own box.</p>
     <h3>Notices per pane</h3><p>Stacked bars show the notices and digest items that Herdr Boss sent to each pane on each day. The chart shows pane IDs only. The five panes with the most notices have their own color. The other panes share one gray.</p>
+    <h3>Policy changes</h3><p>The list shows the last writes of <code>policy.json</code>, newest first. A row shows the time, the caller kind (<b>Page</b>, <b>CLI</b>, <b>Project new</b>, or <b>Unknown</b>), and the changed keys with the old and the new value. A list or an object shows <code>changed</code>. <b>Details</b> holds one table row for each changed key of the last 100 writes. The caller kind is a label that the client sends. It does not prove who wrote. The Allocation page asks for a confirmation before it saves 3 or more changed shares, and asks again before it saves a total other than 100.</p>
     <h3>Activity log</h3><p>The log lists prompts sent to orchestrators, notifications, handovers, and stopped processes, newest first. Filter by kind, project, level, and time, or type in the search box. The first line tells whether Herdr Boss sends notices to orchestrators. Herdr Boss sends the <code>info</code> notices of a pane as one digest, at most once in 2 hours, and never while the pane works. <code>warn</code> and <code>critical</code> notices arrive at once. <b>Details</b> holds the raw log without filters. The old <code>/logs</code> address opens this section.</p>`],
 };
 
@@ -7182,8 +7200,11 @@ document.addEventListener('click', async (e) => {
       if (pacingError) throw new Error(pacingError);
       const check = allocationSaveCheck();
       if (check.action === 'refuse') throw new Error(check.message);
-      if (check.action === 'confirm' && !window.confirm(confirmText(check.rows))) { e.target.disabled = false; return; }
-      const response = await fetch('/api/policy', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(policyDraft) });
+      const confirmed = check.action === 'confirm';
+      if (confirmed && !window.confirm(confirmText(check.rows))) { e.target.disabled = false; return; }
+      const total = allocationTotal();
+      if (check.confirmSum && !window.confirm(sumConfirmText(total))) { e.target.disabled = false; return; }
+      const response = await fetch('/api/policy', { method: 'PUT', headers: POLICY_PUT_HEADERS, body: JSON.stringify({ ...policyDraft, ...(confirmed ? { confirmed: true } : {}), ...(check.confirmSum ? { allowSum: true } : {}) }) });
       const result = await response.json();
       if (!response.ok) throw new Error((result.errors || [result.error || 'The policy could not be saved.']).join(' '));
       policyDraft = result.policy;

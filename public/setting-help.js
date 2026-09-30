@@ -406,7 +406,7 @@ export const SETTING_HELP = Object.fromEntries([
     apply: 'policy',
   }),
   S('capacity', 'project.shares', 'Project shares', {
-    what: 'The share of the working agents for each project. Drag a boundary in the bar: only the projects to its right rebalance. The labels show the set share and the effective slots. Shares are advisory. The worker command enforces the global cap.',
+    what: 'The share of the working agents for each project. Drag a boundary in the bar: only the projects to its right rebalance. The labels show the set share and the effective slots. Shares are advisory. The worker command enforces the global cap. Apply policy asks for a confirmation when 3 or more shares change, and asks again when the total is not 100.',
     default: 'The shares in policy.json', unit: 'Percent of the working agents', range: '0 to 100, and all shares add up to 100 or less',
     raise: 'A larger share gives the project more slots when the machine is busy.',
     lower: 'A smaller share gives the project fewer slots. It can borrow idle shares of others when Borrow idle shares is on.',
