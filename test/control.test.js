@@ -1994,3 +1994,12 @@ test('an older policy without swap settings loads the defaults', () => {
     assert.equal(loaded.machine.guardEnabled, false);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('the kit digest interval has a default and a range check', () => {
+  assert.equal(POLICY_DEFAULTS.machine.kitDigestMinutes, 120);
+  const errors = (patch) => validatePolicy({ ...policy(), machine: { ...POLICY_DEFAULTS.machine, ...patch } }, models).filter((e) => /kitDigestMinutes/.test(e));
+  assert.deepEqual(errors({}), []);
+  assert.deepEqual(errors({ kitDigestMinutes: 10 }), []);
+  assert.deepEqual(errors({ kitDigestMinutes: 1440 }), []);
+  for (const bad of [9, 1441, 60.5, '120', null, NaN]) assert.match(errors({ kitDigestMinutes: bad }).join(' '), /machine.kitDigestMinutes/, `minutes ${bad}`);
+});

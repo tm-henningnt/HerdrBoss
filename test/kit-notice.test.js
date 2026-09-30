@@ -472,6 +472,18 @@ if (input.mode === 'read') {
 } else if (input.mode === 'tick') {
   const snap = await engine.tick();
   out.alerts = (snap.alerts || []).map((a) => a.key);
+} else if (input.mode === 'digest') {
+  engine.push = true;
+  const base = Date.parse('2026-09-27T10:00:00.000Z');
+  for (const round of input.rounds) {
+    if (round.pending) {
+      const alert = { key: 'kit:' + round.pending[0].hash, severity: 'info', scope: 'all', once: true, title: 'Kit updated', text: 'x' };
+      engine.memory.kitNotice = { commit: 'c'.repeat(40), at: base + round.at, revision: 'r1', pending: round.pending.map((p) => ({ ...p, at: base })), alert };
+    }
+    const before = prompts.length;
+    await engine.deliver([engine.memory.kitNotice.alert], { panes: round.panes }, base + round.at, null, new Set(round.held || []));
+    (out.sent ||= []).push(prompts.slice(before).filter((args) => args[0] === 'agent' && args[1] === 'prompt').map((args) => ({ pane: args[2], text: args.at(-1) })));
+  }
 } else {
   engine.push = true;
   const alert = { key: 'kit:abc1234', severity: 'info', scope: 'all', once: true, title: 'Kit updated', text: '[herdr-boss] Kit updated (1 change(s)): x.' };
@@ -489,6 +501,7 @@ function runEngine(t, scenario) {
   const dir = tmpDir(t, 'herdr-kit-engine-');
   fs.mkdirSync(path.join(dir, 'projects'), { recursive: true });
   if (scenario.memory) fs.writeFileSync(path.join(dir, 'memory.json'), JSON.stringify(scenario.memory));
+  if (scenario.policy) fs.writeFileSync(path.join(dir, 'policy.json'), JSON.stringify(scenario.policy));
   const result = spawnSync(process.execPath, ['--input-type=module', '-e', engineProbe], {
     cwd: repo,
     encoding: 'utf8',
@@ -567,4 +580,151 @@ test('the engine stores the kit notice state and logs the queued notice', { time
   assert.equal(out.memoryKitNotice.revision, kitRevision(repo));
   assert.match(out.memoryKitNotice.alert.text, new RegExp(`Kit revision ${kitRevision(repo)} \\(1 change\\(s\\)\\): Change the kit\\. Run herdr-boss kit update`));
   assert.deepEqual(out.events, ['Queued kit notice kit:ccccccc for each project orchestrator']);
+});
+
+const MIN = 60000;
+const digestPane = (status = 'idle', id = 'wA:p1', workspace = 'wA') => ({ id, workspace, workspaceLabel: workspace, label: 'orch', orch: true, agent: 'codex', status });
+const change = (hash) => ({ hash, subject: `Change ${hash}` });
+
+test('a second kit change inside the digest interval joins the next digest and sends nothing', { timeout: 30000 }, (t) => {
+  const out = runEngine(t, { mode: 'digest', rounds: [
+    { at: 0, panes: [digestPane()], pending: [change('aaa')] },
+    { at: 30 * MIN, panes: [digestPane()], pending: [change('bbb'), change('aaa')] },
+    { at: 119 * MIN, panes: [digestPane()] },
+  ] });
+  assert.equal(out.sent[0].length, 1);
+  assert.match(out.sent[0][0].text, /Change aaa/);
+  assert.deepEqual(out.sent[1], []);
+  assert.deepEqual(out.sent[2], []);
+});
+
+test('after the digest interval one digest lists the pending changes and not the sent ones', { timeout: 30000 }, (t) => {
+  const out = runEngine(t, { mode: 'digest', rounds: [
+    { at: 0, panes: [digestPane()], pending: [change('aaa')] },
+    { at: 30 * MIN, panes: [digestPane()], pending: [change('bbb'), change('aaa')] },
+    { at: 60 * MIN, panes: [digestPane()], pending: [change('ccc'), change('bbb'), change('aaa')] },
+    { at: 121 * MIN, panes: [digestPane()] },
+    { at: 122 * MIN, panes: [digestPane()] },
+  ] });
+  assert.equal(out.sent[3].length, 1);
+  const text = out.sent[3][0].text;
+  assert.match(text, /Change bbb/);
+  assert.match(text, /Change ccc/);
+  assert.doesNotMatch(text, /Change aaa/);
+  assert.deepEqual(out.sent[4], []);
+});
+
+test('a working pane gets no kit digest and gets it when it is idle', { timeout: 30000 }, (t) => {
+  const out = runEngine(t, { mode: 'digest', rounds: [
+    { at: 0, panes: [digestPane('working')], pending: [change('aaa')] },
+    { at: 200 * MIN, panes: [digestPane('working')] },
+    { at: 201 * MIN, panes: [digestPane('idle')] },
+    { at: 202 * MIN, panes: [digestPane('idle')] },
+  ] });
+  assert.deepEqual(out.sent[0], []);
+  assert.deepEqual(out.sent[1], []);
+  assert.equal(out.sent[2].length, 1);
+  assert.deepEqual(out.sent[3], []);
+});
+
+test('the kit digest interval follows the kitDigestMinutes policy setting', { timeout: 30000 }, (t) => {
+  const out = runEngine(t, { mode: 'digest', policy: { machine: { kitDigestMinutes: 30 } }, rounds: [
+    { at: 0, panes: [digestPane()], pending: [change('aaa')] },
+    { at: 20 * MIN, panes: [digestPane()], pending: [change('bbb'), change('aaa')] },
+    { at: 31 * MIN, panes: [digestPane()] },
+  ] });
+  assert.equal(out.sent[0].length, 1);
+  assert.deepEqual(out.sent[1], []);
+  assert.equal(out.sent[2].length, 1);
+  assert.match(out.sent[2][0].text, /Change bbb/);
+});
+
+test('a paused project gets no kit digest at any age and gets it after it resumes', { timeout: 30000 }, (t) => {
+  const out = runEngine(t, { mode: 'digest', rounds: [
+    { at: 0, panes: [digestPane()], held: ['wA'], pending: [change('aaa')] },
+    { at: 300 * MIN, panes: [digestPane()], held: ['wA'] },
+    { at: 301 * MIN, panes: [digestPane()] },
+  ] });
+  assert.deepEqual(out.sent[0], []);
+  assert.deepEqual(out.sent[1], []);
+  assert.equal(out.sent[2].length, 1);
+});
+
+test('readKitNotice keeps unsent required changes across restarts', async (t) => {
+  const root = makeRepo(t);
+  const base = gitSync(root, ['rev-parse', 'HEAD']);
+  const first = commit(root, 'kit/models.md', 'First kit change', REQUIRED);
+  const one = await readKitNotice({ root, stored: { commit: base, at: 0 }, git: recordingGit(), now: NOW });
+  assert.deepEqual(one.state.pending.map((p) => p.subject), ['First kit change']);
+  commit(root, 'kit/models.md', 'Second kit change', REQUIRED);
+  const two = await readKitNotice({ root, stored: one.state, git: recordingGit(), now: NOW + 60000 });
+  assert.deepEqual(two.state.pending.map((p) => p.subject), ['Second kit change', 'First kit change']);
+  assert.match(two.alert.text, /Second kit change; First kit change/);
+  commit(root, 'README.md', 'Unrelated');
+  const three = await readKitNotice({ root, stored: two.state, git: recordingGit(), now: NOW + 120000 });
+  assert.deepEqual(three.state.pending.map((p) => p.subject), ['Second kit change', 'First kit change']);
+  assert.ok(three.state.alert);
+  assert.equal(first.length, 40);
+});
+
+test('a clock jump backwards does not block the kit digest', { timeout: 30000 }, (t) => {
+  const out = runEngine(t, { mode: 'digest', rounds: [
+    { at: 0, panes: [digestPane()], pending: [change('aaa')] },
+    { at: -60 * MIN, panes: [digestPane()], pending: [change('bbb'), change('aaa')] },
+  ] });
+  assert.equal(out.sent[0].length, 1);
+  assert.equal(out.sent[1].length, 1);
+  assert.match(out.sent[1][0].text, /Change bbb/);
+  assert.doesNotMatch(out.sent[1][0].text, /Change aaa/);
+});
+
+test('a pane that received a change does not block a pane that did not', { timeout: 30000 }, (t) => {
+  const paneB = digestPane('idle', 'wB:p1', 'wB');
+  const out = runEngine(t, { mode: 'digest', rounds: [
+    { at: 0, panes: [digestPane()], pending: [change('aaa')] },
+    { at: 5 * MIN, panes: [digestPane(), paneB], pending: [change('bbb'), change('aaa')] },
+    { at: 125 * MIN, panes: [digestPane(), paneB] },
+  ] });
+  assert.deepEqual(out.sent[1].map((p) => p.pane), ['wB:p1']);
+  assert.match(out.sent[1][0].text, /Change bbb.*Change aaa|Change aaa.*Change bbb/);
+  assert.deepEqual(out.sent[2].map((p) => p.pane), ['wA:p1']);
+  assert.match(out.sent[2][0].text, /Change bbb/);
+  assert.doesNotMatch(out.sent[2][0].text, /Change aaa/);
+});
+
+test('the sent record of a pane survives a restart', { timeout: 30000 }, (t) => {
+  const base = Date.parse('2026-09-27T10:00:00.000Z');
+  const pending = [{ hash: 'bbb', subject: 'Change bbb', at: base }, { hash: 'aaa', subject: 'Change aaa', at: base }];
+  const out = runEngine(t, {
+    mode: 'digest',
+    memory: {
+      paneSince: {}, pushes: {}, notified: {},
+      kitNotice: { commit: 'c'.repeat(40), at: base, revision: 'r1', pending, alert: { key: 'kit:bbb', severity: 'info', scope: 'all', once: true, title: 'Kit updated', text: 'x' } },
+      kitDigests: { 'wA:p1': { at: base - 30 * MIN, hashes: ['aaa'] } },
+    },
+    rounds: [
+      { at: 0, panes: [digestPane()] },
+      { at: 100 * MIN, panes: [digestPane()] },
+    ],
+  });
+  assert.deepEqual(out.sent[0], []);
+  assert.equal(out.sent[1].length, 1);
+  assert.match(out.sent[1][0].text, /Change bbb/);
+  assert.doesNotMatch(out.sent[1][0].text, /Change aaa/);
+});
+
+test('readKitNotice reports counts when pending changes expire or pass the cap', async (t) => {
+  const root = makeRepo(t);
+  const base = gitSync(root, ['rev-parse', 'HEAD']);
+  commit(root, 'kit/models.md', 'New kit change', REQUIRED);
+  const old = { hash: 'old1', subject: 'Old', at: NOW - 8 * 86400 * 1000 };
+  const expired = await readKitNotice({ root, stored: { commit: base, at: 0, pending: [old] }, git: recordingGit(), now: NOW });
+  assert.match(expired.dropEvent, /1 expired.*0 over/);
+  assert.deepEqual(expired.state.pending.map((p) => p.subject), ['New kit change']);
+  const many = Array.from({ length: 50 }, (_, i) => ({ hash: `h${i}`, subject: `S${i}`, at: NOW }));
+  const capped = await readKitNotice({ root, stored: { commit: base, at: 0, pending: many }, git: recordingGit(), now: NOW });
+  assert.match(capped.dropEvent, /0 expired.*1 over/);
+  assert.equal(capped.state.pending.length, 50);
+  const none = await readKitNotice({ root, stored: { commit: base, at: 0 }, git: recordingGit(), now: NOW });
+  assert.equal(none.dropEvent, null);
 });

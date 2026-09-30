@@ -22,7 +22,7 @@ import { claudeContextUsage, trackBoundary, normalizeModelId } from './context-h
 import { FINISH_TIMEOUT_MS, listHandoffs, saveHandoffs, supersedeHandoffs, expireHandoff, expireMissingHandoffs, handoffNotices } from './handoff.js';
 import { deliverQueued, mailboxCounts, readMessages, RETENTION_MS, SEND_LIMIT_PER_MINUTE } from './messages.js';
 import { openMessageStore } from './message-store.js';
-import { readKitNotice, pendingKitAlert, isKitAlert, kitNoticeTargets } from './kit-notice.js';
+import { readKitNotice, pendingKitAlert, isKitAlert, kitNoticeTargets, unsentKitChanges, formatKitNotice } from './kit-notice.js';
 import { applyTaskState, readWorkerFacts, gitIsMerged, gitCounts } from './task-state.js';
 import { kitRevisionState, kitSnapshot, KIT_STATES } from './kit/agents-check.js';
 import { nextDailyTime, nightNoticeSent, quietHoursActive, readNight, readNightRecord, watchUntilPhrase, withNightReportMark, withNoticeMark, writeNight } from './night.js';
@@ -1015,6 +1015,7 @@ export class Engine extends EventEmitter {
     const result = await readKitNotice({ root: this.kitRoot, stored: this.memory.kitNotice, git: this.gitRunner, now });
     if (result.state) this.memory.kitNotice = result.state;
     if (result.event) this.log('kit', result.event);
+    if (result.dropEvent) this.log('kit', result.dropEvent);
     if (result.alert) this.log('kit', `Queued kit notice ${result.alert.key} for each project orchestrator`);
     return result;
   }
@@ -1935,7 +1936,10 @@ export class Engine extends EventEmitter {
   }
 
   async deliver(alerts, herdr, now, night = null, held = new Set()) {
-    const cooldown = loadPolicy().machine.alertCooldownSeconds * 1000;
+    const policyMachine = loadPolicy().machine;
+    const cooldown = policyMachine.alertCooldownSeconds * 1000;
+    const kitDigestMs = policyMachine.kitDigestMinutes * 60000;
+    this.memory.kitDigests ||= {};
     const orchs = (herdr?.panes || []).filter((p) => p.orch && p.agent);
     const active = new Set(alerts.map((a) => a.key));
     const quiet = quietHoursActive(night);
@@ -1984,8 +1988,20 @@ export class Engine extends EventEmitter {
           const rec = this.memory.pushes[`${a.key}@${o.id}`];
           const due = alertPromptDue(a, rec, now, cooldown);
           if (!due) continue;
+          let alert = a;
+          if (isKitAlert(a)) {
+            // A pane gets at most one kit digest in the interval. The digest lists the required changes that the pane has not received.
+            const sent = this.memory.kitDigests[o.id];
+            if (sent && now - sent.at >= 0 && now - sent.at < kitDigestMs) continue;
+            const pending = this.memory.kitNotice?.pending;
+            if (Array.isArray(pending)) {
+              const unsent = unsentKitChanges(this.memory.kitNotice, sent?.hashes);
+              if (!unsent.length) continue;
+              alert = { ...a, text: formatKitNotice(unsent, this.memory.kitNotice.revision), digestHashes: unsent.map((change) => change.hash) };
+            }
+          }
           if (!perPane.has(o.id)) perPane.set(o.id, { o, list: [] });
-          perPane.get(o.id).list.push(a);
+          perPane.get(o.id).list.push(alert);
         }
       }
       this.memory.infoPrompts ||= {};
@@ -1995,7 +2011,8 @@ export class Engine extends EventEmitter {
         const settled = o.status === 'idle' || o.status === 'done';
         const urgent = due.filter((a) => SEV[a.severity] >= SEV.warn && (settled || skipsIdleGate(a)));
         const infoAllowed = settled && now - (this.memory.infoPrompts[o.id] || 0) >= INFO_PROMPT_INTERVAL_MS;
-        const info = infoAllowed ? due.filter((a) => SEV[a.severity] < SEV.warn) : [];
+        // A kit digest has its own interval, so the shared info interval does not hold it and it does not start that interval.
+        const info = due.filter((a) => SEV[a.severity] < SEV.warn && (isKitAlert(a) ? settled : infoAllowed));
         if (!urgent.length && !info.length) continue;
         urgent.sort((x, y) => SEV[y.severity] - SEV[x.severity]);
         const list = [...urgent, ...info];
@@ -2009,7 +2026,9 @@ export class Engine extends EventEmitter {
         try {
           await this.herdrRunner('herdr', ['agent', 'prompt', o.id, text]);
           for (const a of list) this.memory.pushes[`${a.key}@${o.id}`] = { at: now, severity: a.severity };
-          if (info.length) this.memory.infoPrompts[o.id] = now;
+          if (info.some((a) => !isKitAlert(a))) this.memory.infoPrompts[o.id] = now;
+          const kitSent = list.find((a) => isKitAlert(a));
+          if (kitSent) this.memory.kitDigests[o.id] = { at: now, hashes: [...(this.memory.kitDigests[o.id]?.hashes || []), ...(kitSent.digestHashes || [])] };
           this.log('push', `Sent ${list.length} notice(s) to ${o.id} (${o.workspace})`, { pane: o.id, titles: list.map((a) => a.title) });
         } catch (e) {
           this.log('error', `Prompt to ${o.id} failed: ${(e.stderr || e.message).slice(0, 200)}`);
@@ -2022,6 +2041,12 @@ export class Engine extends EventEmitter {
     this.memory.pushes = pruneInactiveDiskPromptRecords(this.memory.pushes, active);
     for (const [k, v] of Object.entries(this.memory.pushes)) if (!active.has(k.split('@')[0]) && now - v.at > week) delete this.memory.pushes[k];
     for (const [k, at] of Object.entries(this.memory.notified)) if (!active.has(k) && now - at > week) delete this.memory.notified[k];
+    const pendingHashes = new Set((this.memory.kitNotice?.pending || []).map((change) => change.hash));
+    for (const [pane, rec] of Object.entries(this.memory.kitDigests)) {
+      const hashes = (rec.hashes || []).filter((hash) => pendingHashes.has(hash));
+      if (!hashes.length && now - rec.at > kitDigestMs) delete this.memory.kitDigests[pane];
+      else this.memory.kitDigests[pane] = { ...rec, hashes };
+    }
     for (const [pane, at] of Object.entries(this.memory.infoPrompts || {})) if (now - at > INFO_PROMPT_INTERVAL_MS) delete this.memory.infoPrompts[pane];
     // Allow a cleared machine alert to notify again when it returns.
     for (const k of Object.keys(this.memory.notified)) if (k.startsWith('machine:') && !active.has(k)) delete this.memory.notified[k];
