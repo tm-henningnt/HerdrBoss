@@ -38,6 +38,8 @@ test('the Mailbox and the Chat card use the same approval verdicts', () => {
   const mail = body('mailActions(item)');
   assert.match(mail, /data-mail-verdict="Approved\."[^>]*>Approve<\/button>/);
   assert.match(mail, /data-mail-verdict="Rejected\."[^>]*>Reject<\/button>/);
-  assert.doesNotMatch(app, /Declined\.|>Decline</);
+  // The Chat label still reads a stored `Declined.` answer from an older Mailbox; nothing sends it.
+  assert.match(app, /startsWith\('Declined\.'\)/);
+  assert.doesNotMatch(app.replace(/body\.startsWith\('Declined\.'\)/, ''), /Declined\.|>Decline</);
   assert.match(app, /\{ value: 'Rejected\.', label: 'Reject', deny: true \}/);
 });
