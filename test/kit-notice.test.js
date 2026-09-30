@@ -430,10 +430,42 @@ test('heldWorkspaces lists paused, held, and stood-down projects', () => {
   assert.deepEqual([...heldWorkspaces([], null)], []);
 });
 
+test('heldWorkspaces finds the workspace of a paused project that publishes no workspace id', () => {
+  const herdr = {
+    workspaces: [{ id: 'wF', label: 'Floppy Archiver' }, { id: 'wG', label: 'Gamma' }, { id: 'wH', label: 'Other' }],
+    panes: [
+      { id: 'wF:p1', workspace: 'wF', workspaceLabel: 'Floppy Archiver', label: 'orch', orch: true, agent: 'claude', cwd: '/x/FloppyArchiver' },
+      { id: 'wG:p1', workspace: 'wG', workspaceLabel: 'Gamma', label: 'orch', orch: true, agent: 'claude', cwd: '/x/gamma-repo/.wt/w1' },
+      { id: 'wH:p1', workspace: 'wH', workspaceLabel: 'Other', label: 'orch', orch: true, agent: 'claude', cwd: '/x/other' },
+    ],
+  };
+  const projects = [
+    { slug: 'floppyarchiver', project: 'FloppyArchiver', status: 'paused', summary: 'Stood down and paused by the Owner' },
+    { slug: 'gamma-app', project: 'Gamma App', status: 'paused', summary: 'Waiting.', repo: '/x/gamma-repo' },
+    { slug: 'other', project: 'Other', status: 'active', summary: 'Building.' },
+  ];
+  assert.deepEqual([...heldWorkspaces(projects, null, herdr)].sort(), ['wF', 'wG']);
+  assert.deepEqual([...heldWorkspaces(projects, null)], [], 'without a pane snapshot only a known workspace id can match');
+});
+
+test('the kit notice and the kit digest skip a paused project that publishes no workspace id', { timeout: 30000 }, (t) => {
+  const herdr = {
+    workspaces: [{ id: 'wF', label: 'Floppy Archiver' }, { id: 'wA', label: 'Alpha' }],
+    panes: [
+      { id: 'wF:p1', workspace: 'wF', workspaceLabel: 'Floppy Archiver', label: 'orch', orch: true, agent: 'claude', status: 'idle' },
+      { id: 'wA:p1', workspace: 'wA', workspaceLabel: 'Alpha', label: 'orch', orch: true, agent: 'claude', status: 'idle' },
+    ],
+  };
+  const projects = [{ slug: 'floppyarchiver', project: 'FloppyArchiver', status: 'paused', summary: 'Stood down and paused by the Owner' }];
+  const out = runEngine(t, { mode: 'deliver', heldFromProjects: { projects, herdr }, rounds: [herdr.panes] });
+  const targets = out.prompts.filter((args) => args[0] === 'agent' && args[1] === 'prompt').map((args) => args[2]);
+  assert.deepEqual(targets, ['wA:p1']);
+});
+
 const engineProbe = `
 import fs from 'node:fs';
 import path from 'node:path';
-import { Engine } from './src/engine.js';
+import { Engine, heldWorkspaces } from './src/engine.js';
 import { loadConfig } from './src/config.js';
 const input = JSON.parse(process.env.KIT_SCENARIO);
 const gitCalls = [];
@@ -487,7 +519,7 @@ if (input.mode === 'read') {
 } else {
   engine.push = true;
   const alert = { key: 'kit:abc1234', severity: 'info', scope: 'all', once: true, title: 'Kit updated', text: '[herdr-boss] Kit updated (1 change(s)): x.' };
-  for (const [i, panes] of input.rounds.entries()) await engine.deliver([alert], { panes }, Date.parse('2026-09-27T10:00:00.000Z') + i * 60000, null, new Set((input.heldRounds ? input.heldRounds[i] : input.held) || []));
+  for (const [i, panes] of input.rounds.entries()) await engine.deliver([alert], { panes }, Date.parse('2026-09-27T10:00:00.000Z') + i * 60000, null, input.heldFromProjects ? heldWorkspaces(input.heldFromProjects.projects, null, input.heldFromProjects.herdr) : new Set((input.heldRounds ? input.heldRounds[i] : input.held) || []));
 }
 const memoryFile = path.join(process.env.HERDR_BOSS_DIR, 'memory.json');
 out.gitCalls = gitCalls;
