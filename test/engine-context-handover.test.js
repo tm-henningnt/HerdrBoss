@@ -574,7 +574,7 @@ test('a concurrent write to handoffs.json survives the finish step', { timeout: 
 });
 
 // ---- An old pane with status done has finished its turn. It counts as idle for the cleanup.
-test('a done old pane closes and the tab is renamed after the close', { timeout: 30000 }, (t) => {
+test('a done old pane closes and the tab is renamed', { timeout: 30000 }, (t) => {
   const out = run(t, {
     handoffs: [activeRecord({ activatedAt: '2026-09-29T11:59:30.000Z' })],
     steps: [
@@ -585,7 +585,7 @@ test('a done old pane closes and the tab is renamed after the close', { timeout:
   });
   assert.deepEqual(closes(out).map(({ args }) => args), [['pane', 'close', 'w-alpha:p1']]);
   assert.deepEqual(renames(out).map(({ args }) => args.slice(2)), [['w-alpha:t9', 'Orchestrator']]);
-  assert.ok(out.herdrCalls.indexOf(closes(out)[0]) < out.herdrCalls.indexOf(renames(out)[0]), 'the rename follows the close');
+  assert.ok(out.herdrCalls.indexOf(renames(out)[0]) < out.herdrCalls.indexOf(closes(out)[0]), 'the rename does not wait for the close');
   assert.ok(out.records[0].finish.closedAt);
   assert.ok(out.records[0].finish.tabRenamedAt);
   assert.ok(out.records[0].finish.doneAt);
@@ -639,4 +639,94 @@ test('the 60-minute note names the reason when a done old pane stays open', { ti
   assert.match(bossNotes(relabeled)[0].args[3], /label is orch old, not orch previous/);
   const busy = scenario([oldPane('working'), newPane('idle'), idleWorker, bossPane]);
   assert.match(bossNotes(busy)[0].args[3], /the pane works/);
+});
+
+// ---- R2: a context successor that never runs `handoff ready` becomes ready by itself.
+const unreadyRecord = (extra = {}) => {
+  const { readyAt, ...rest } = readyRecord({ promptDelivery: 'sent', seenWorkingAt: '2026-09-29T11:59:00.000Z', ...extra });
+  return rest;
+};
+const tracked = { contextHandovers: { 'ctx-1': { pane: 'w-alpha:p1', at: 1 } } };
+const autoStep = (successorPane, minute = 1, sourceStatus = 'idle') => [{ at: at(minute), herdr: herdrOf(pane(sourceStatus), worker, successorPane), published: { alpha: status(1) } }];
+
+test('an idle context successor without readyAt becomes ready and activates', { timeout: 30000 }, (t) => {
+  const out = run(t, { tokens: 400000, memory: tracked, handoffs: [unreadyRecord()], steps: autoStep(successor) });
+  assert.ok(out.records[0].readyAt);
+  assert.equal(out.records[0].readyNote, 'auto: successor idle');
+  assert.equal(activates(out).length, 1);
+});
+
+test('a done context successor without readyAt becomes ready', { timeout: 30000 }, (t) => {
+  const out = run(t, { tokens: 400000, memory: tracked, handoffs: [unreadyRecord()], steps: autoStep({ ...successor, status: 'done' }, 1, 'working') });
+  assert.equal(out.records[0].readyNote, 'auto: successor idle');
+});
+
+test('a working context successor does not become ready and the wait names it', { timeout: 30000 }, (t) => {
+  const out = run(t, { tokens: 400000, memory: tracked, handoffs: [unreadyRecord()], steps: autoStep({ ...successor, status: 'working' }) });
+  assert.equal(out.records[0].readyAt, undefined);
+  assert.equal(out.handoverWaits['ctx-1'], 'successor not ready: it works');
+  assert.deepEqual(activates(out), []);
+});
+
+test('a context successor is not ready within 120 seconds of the prompt', { timeout: 30000 }, (t) => {
+  const out = run(t, { tokens: 400000, memory: tracked, handoffs: [unreadyRecord({ preparedAt: '2026-09-29T11:59:30.000Z' })], steps: autoStep(successor) });
+  assert.equal(out.records[0].readyAt, undefined);
+  assert.match(out.handoverWaits['ctx-1'], /^successor not ready: /);
+});
+
+test('a successor pane with another agent or no pane does not become ready', { timeout: 30000 }, (t) => {
+  const other = run(t, { tokens: 400000, memory: tracked, handoffs: [unreadyRecord()], steps: autoStep({ ...successor, agent: 'codex' }) });
+  assert.equal(other.records[0].readyAt, undefined);
+  assert.equal(other.handoverWaits['ctx-1'], 'successor not ready: the successor pane runs another agent');
+  const gone = run(t, { tokens: 400000, memory: tracked, handoffs: [unreadyRecord()], steps: [{ at: at(1), herdr: herdrOf(pane('idle'), worker), published: { alpha: status(1) } }] });
+  assert.equal(gone.records[0].readyAt, undefined);
+  assert.equal(gone.records[0].status, 'expired');
+  assert.deepEqual(activates(gone), []);
+});
+
+test('a successor that is not from the context trigger, or has a prompt error, does not become ready', { timeout: 30000 }, (t) => {
+  const untracked = run(t, { tokens: 400000, handoffs: [unreadyRecord()], steps: autoStep(successor) });
+  assert.equal(untracked.records[0].readyAt, undefined);
+  const failed = run(t, { tokens: 400000, memory: tracked, handoffs: [unreadyRecord({ promptError: 'stalled' })], steps: autoStep(successor) });
+  assert.equal(failed.records[0].readyAt, undefined);
+  assert.equal(failed.handoverWaits['ctx-1'], 'successor not ready: the prepare prompt failed');
+});
+
+// ---- R2: the tab rename does not wait for the close of the old pane.
+test('the tab is renamed after the successor answered while the old pane still works', { timeout: 30000 }, (t) => {
+  const out = run(t, {
+    handoffs: [activeRecord({ activatedAt: '2026-09-29T11:59:30.000Z' })],
+    steps: [
+      { at: at(1), herdr: herdrOf(oldPane('working'), newPane('working'), worker) },
+      { at: at(2), herdr: herdrOf(oldPane('working'), newPane('idle'), worker) },
+    ],
+  });
+  assert.deepEqual(closes(out), []);
+  assert.deepEqual(renames(out).map(({ args }) => args.slice(2)), [['w-alpha:t9', 'Orchestrator']]);
+  assert.ok(out.records[0].finish.tabRenamedAt);
+});
+
+test('an idle successor that never worked stays not ready after 120 seconds', { timeout: 30000 }, (t) => {
+  const out = run(t, { tokens: 400000, memory: tracked, handoffs: [unreadyRecord({ seenWorkingAt: undefined })], steps: autoStep(successor, 5) });
+  assert.equal(out.records[0].readyAt, undefined);
+  assert.equal(out.handoverWaits['ctx-1'], 'successor not ready: it has not started its state read');
+  assert.deepEqual(activates(out), []);
+});
+
+test('a successor becomes ready after it was seen working and is idle again', { timeout: 30000 }, (t) => {
+  const out = run(t, {
+    tokens: 400000, memory: tracked, handoffs: [unreadyRecord({ seenWorkingAt: undefined })],
+    steps: [
+      { at: at(1), herdr: herdrOf(pane('working'), worker, { ...successor, status: 'working' }), published: { alpha: status(1) } },
+      { at: at(4), herdr: herdrOf(pane('working'), worker, successor), published: { alpha: status(1) } },
+    ],
+  });
+  assert.ok(out.records[0].seenWorkingAt);
+  assert.equal(out.records[0].readyNote, 'auto: successor idle');
+});
+
+test('a stalled-retry prompt delivery blocks the automatic ready signal', { timeout: 30000 }, (t) => {
+  const out = run(t, { tokens: 400000, memory: tracked, handoffs: [unreadyRecord({ promptDelivery: 'stalled-retry' })], steps: autoStep(successor, 5) });
+  assert.equal(out.records[0].readyAt, undefined);
+  assert.equal(out.handoverWaits['ctx-1'], 'successor not ready: the prepare prompt stalled');
 });
