@@ -2,8 +2,10 @@
 // The leases are in leases.json in the data directory. Each change holds the machine mutation lock of src/kit/locks.js.
 import fs from 'node:fs';
 import path from 'node:path';
+import net from 'node:net';
+import { randomBytes } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { DATA_DIR } from './config.js';
+import { DATA_DIR, DEFAULT_IDLE_MINUTES, isPortsPool, portEnvFor } from './config.js';
 import { quietHoursActive, readNight } from './night.js';
 import { hasLiveWorkerRun, MUTATION_GUARD_WAIT_MS, withMutationLock } from './kit/locks.js';
 import { verifyCallerPane } from './kit/workers.js';
@@ -95,17 +97,62 @@ function changeLeases(dataDir, operation, waitMs = MUTATION_GUARD_WAIT_MS) {
 // and write config.json while no acquire, release, or reclaim operation is in progress.
 export function withResourcePoolMutation(operation, { dataDir = DATA_DIR } = {}) {
   fs.mkdirSync(dataDir, { recursive: true });
-  return machineMutationLock(dataDir, () => operation(readLeases(dataDir).leases));
+  return machineMutationLock(dataDir, () => {
+    const store = readLeases(dataDir);
+    // dropLeases(filter) removes the matching leases and writes leases.json inside the same lock.
+    const dropLeasesLocked = (filter) => {
+      const dropped = store.leases.filter(filter);
+      store.leases = store.leases.filter((lease) => !filter(lease));
+      writeLeases(dataDir, store);
+      return dropped;
+    };
+    return operation(store.leases, { dropLeases: dropLeasesLocked });
+  });
 }
 
-// A synchronous probe: a child Node process connects to 127.0.0.1:PORT and exits 0 when the connection opens.
+// A synchronous probe: a child Node process connects to 127.0.0.1:PORT. Return true when the connection opens, false on ECONNREFUSED,
+// and null (unknown) on a timeout or any other error. Only a refused connection means that nothing listens.
 export function tcpListening(port, { timeoutMs = 1000 } = {}) {
   const script = `const s = require('node:net').connect({ host: '127.0.0.1', port: ${Number(port)} });
 s.setTimeout(${timeoutMs}); s.on('connect', () => { s.destroy(); process.exit(0); });
-s.on('timeout', () => process.exit(1)); s.on('error', () => process.exit(1));`;
+s.on('timeout', () => process.exit(2)); s.on('error', (e) => process.exit(e.code === 'ECONNREFUSED' ? 1 : 2));`;
   const result = spawnSync(process.execPath, ['-e', script], { stdio: 'ignore', timeout: timeoutMs + 2000, env: { PATH: process.env.PATH ?? '' } });
-  return result.status === 0;
+  if (result.status === 0) return true;
+  return result.status === 1 ? false : null;
 }
+
+// The same check without a child process. Resolve true when 127.0.0.1:PORT accepts a connection, false on ECONNREFUSED,
+// and null (unknown) on a timeout or any other error.
+export function tcpListeningAsync(port, { timeoutMs = 300 } = {}) {
+  return new Promise((resolve) => {
+    const socket = net.connect({ host: '127.0.0.1', port: Number(port) });
+    let done = false;
+    const finish = (value) => { if (done) return; done = true; socket.destroy(); resolve(value); };
+    socket.setTimeout(timeoutMs);
+    socket.on('connect', () => finish(true));
+    socket.on('timeout', () => finish(null));
+    socket.on('error', (error) => finish(error.code === 'ECONNREFUSED' ? false : null));
+  });
+}
+
+// Return { alive, start } for a process, or null when the platform cannot tell. ESRCH means gone. EPERM means alive.
+// start is the process start time from ps, for example "Wed Sep 30 10:00:00 2026". It is null when ps gives none or when wantStart is false.
+export function processInfo(pid, { wantStart = true } = {}) {
+  try { process.kill(pid, 0); }
+  catch (error) {
+    if (error.code === 'ESRCH') return { alive: false, start: null };
+    if (error.code !== 'EPERM') return null;
+  }
+  let start = null;
+  if (wantStart) {
+    const result = spawnSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', timeout: 2000, env: { PATH: process.env.PATH ?? '', LC_ALL: 'C' } });
+    if (result.status === 0) start = result.stdout.trim().replace(/\s+/g, ' ') || null;
+  }
+  return { alive: true, start };
+}
+
+// A pool with an idle rule: a ports pool that is not the built-in browser pool.
+export const hasIdleRule = (pool) => !!pool && !pool.builtIn && pool.check !== 'cdp' && isPortsPool(pool);
 
 function readRunFile(file) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
@@ -113,7 +160,16 @@ function readRunFile(file) {
 
 // Decide the reclaim reason for one lease, or null to keep it. A missing browser process changes lease.cdpMisses.
 // browserProcess(lease) returns true or false when the process table is known, and null when it is not.
-function reclaimReason(lease, { pool, panes, now, probeTcp, browserProcess, quietHours = false }) {
+function idleReason(lease, pool, now) {
+  const idleMinutes = pool.idleMinutes ?? DEFAULT_IDLE_MINUTES;
+  lease.idleSince ??= new Date(now).toISOString();
+  if (now - Date.parse(lease.idleSince) < idleMinutes * 60000) return null;
+  return { text: `no listener on port ${lease.item} for ${idleMinutes} minutes${lease.pid == null ? ' and no server process bound' : ''}`, idleMinutes };
+}
+
+// A lease of a ports pool also ends when its bound server process is gone, and when its port has had no listener for idleMinutes.
+// lease.idleSince records when the first tick saw no listener. A listener clears it.
+function reclaimReason(lease, { pool, panes, now, probeTcp, browserProcess, pidInfo, quietHours = false }) {
   if (pool?.check === 'cdp') {
     // A hung Chrome still has its process. Only a missing process counts, so a browser that does not respond keeps its lease.
     const present = typeof browserProcess === 'function' ? browserProcess(lease) : null;
@@ -124,43 +180,74 @@ function reclaimReason(lease, { pool, panes, now, probeTcp, browserProcess, quie
     }
     return null;
   }
-  if (lease.pane && panes && !panes.has(lease.pane)) return `pane ${lease.pane} is gone`;
-  if (lease.worker && lease.runFile) {
-    const run = readRunFile(lease.runFile);
-    if (run?.name === lease.worker && run.finishedAt) return `worker ${lease.worker} finished`;
+  // A bound server: a gone process ends the lease at once. A process that lives and has a listener keeps the lease,
+  // whatever happens to the pane, the worker, or the TTL: a dev server outlives its worker pane.
+  // A listener that is unknown (no probe, a timeout) also keeps the lease from these reasons. The idle rule decides later.
+  let serverLives = false;
+  if (lease.pid != null && typeof pidInfo === 'function') {
+    const info = pidInfo(lease.pid, { wantStart: !!lease.pidStart });
+    if (info && !info.alive) return `server process ${lease.pid} is gone`;
+    if (info?.alive && lease.pidStart && info.start && info.start !== lease.pidStart) return `process ${lease.pid} started at a different time than the bound server`;
+    if (info?.alive && hasIdleRule(pool)) {
+      const listening = typeof probeTcp === 'function' ? probeTcp(lease.item, lease.pool) : null;
+      if (listening !== false) serverLives = true;
+      if (listening === true) delete lease.idleSince;
+      if (listening === false) { const idle = idleReason(lease, pool, now); if (idle) return idle; }
+    }
   }
-  if (lease.expiresAt != null && Date.parse(lease.expiresAt) <= now) {
-    return quietHours ? { held: 'lease TTL expiry' } : 'lease expired';
+  if (!serverLives) {
+    if (lease.pane && panes && !panes.has(lease.pane)) return `pane ${lease.pane} is gone`;
+    if (lease.worker && lease.runFile) {
+      const run = readRunFile(lease.runFile);
+      if (run?.name === lease.worker && run.finishedAt) return `worker ${lease.worker} finished`;
+    }
+    if (lease.expiresAt != null && Date.parse(lease.expiresAt) <= now) {
+      return quietHours ? { held: 'lease TTL expiry' } : 'lease expired';
+    }
   }
-  // A holder that is alive keeps its lease until its TTL, also when nothing listens yet: a worker can lease a port
-  // long before it serves on it. A port without a listener is never a reason to reclaim.
+  // The idle rule. A timeout or an error is unknown: it leaves idleSince as it was and keeps the lease.
+  if (lease.pid == null && hasIdleRule(pool) && typeof probeTcp === 'function') {
+    const listening = probeTcp(lease.item, lease.pool);
+    if (listening === true) delete lease.idleSince;
+    else if (listening === false) return idleReason(lease, pool, now);
+  }
   return null;
 }
 
-function reclaimInStore(store, { pools, panes, now, probeTcp, browserProcess, quietHours = false }) {
+function reclaimInStore(store, { pools, panes, now, probeTcp, browserProcess, pidInfo = processInfo, quietHours = false }) {
   const reclaimed = [];
   const held = [];
   store.leases = store.leases.filter((lease) => {
     const pool = pools.find((candidate) => candidate.name === lease.pool);
-    const reason = reclaimReason(lease, { pool, panes, now, probeTcp, browserProcess, quietHours });
+    const reason = reclaimReason(lease, { pool, panes, now, probeTcp, browserProcess, pidInfo, quietHours });
     if (reason?.held) {
       held.push({ pool: lease.pool, item: lease.item, project: lease.project, worker: lease.worker ?? null, pane: lease.pane ?? null, held: reason.held });
       return true;
     }
     if (!reason) return true;
-    reclaimed.push({ pool: lease.pool, item: lease.item, project: lease.project, worker: lease.worker ?? null, pane: lease.pane ?? null, reason });
+    const entry = { pool: lease.pool, item: lease.item, project: lease.project, worker: lease.worker ?? null, pane: lease.pane ?? null, reason: typeof reason === 'string' ? reason : reason.text };
+    if (reason.idleMinutes != null) entry.idleMinutes = reason.idleMinutes;
+    reclaimed.push(entry);
     return false;
   });
   return { reclaimed, held };
 }
 
+// The text that the engine sends to the pane of a holder whose lease was reclaimed.
+export function reclaimNoticeText(item) {
+  if (item.idleMinutes != null) {
+    return `Your lease of port ${item.item} in pool ${item.pool} was reclaimed after ${item.idleMinutes} minutes without a listener. Start serve-live again to take a port.`;
+  }
+  return `Your lease ${item.pool} ${item.item} was reclaimed: ${item.reason}. Stop using it, and take a new one with herdr-boss lease acquire ${item.pool}.`;
+}
+
 // Reclaim leases whose holder is gone. `panes` is the set of pane IDs from a successful pane list, or null.
 // `browserProcess` checks the leases of a cdp pool. Without it, a cdp lease is not checked.
-export function reclaimLeases({ pools, dataDir = DATA_DIR, panes = null, now = Date.now(), night = null, probeTcp = tcpListening, browserProcess = null, log = () => {}, waitMs = MUTATION_GUARD_WAIT_MS } = {}) {
+export function reclaimLeases({ pools, dataDir = DATA_DIR, panes = null, now = Date.now(), night = null, probeTcp = null, browserProcess = null, pidInfo = processInfo, log = () => {}, waitMs = MUTATION_GUARD_WAIT_MS } = {}) {
   if (!fs.existsSync(path.join(dataDir, LEASES_FILE))) return { reclaimed: [], held: [] };
   const at = timeValue(now);
   const quietHours = quietHoursActive(night ?? readNight({ dataDir, now: at }));
-  const { reclaimed, held } = changeLeases(dataDir, (store) => reclaimInStore(store, { pools, panes, now: at, probeTcp, browserProcess, quietHours }), waitMs);
+  const { reclaimed, held } = changeLeases(dataDir, (store) => reclaimInStore(store, { pools, panes, now: at, probeTcp, browserProcess, pidInfo, quietHours }), waitMs);
   for (const item of reclaimed) log(item);
   for (const item of held) log(item);
   return { reclaimed, held };
@@ -256,13 +343,36 @@ function chooseItem(pool, store, project, prefer, exclude) {
     ?? null;
 }
 
-function emptyPoolError(pool, store) {
-  const holders = store.leases.filter((lease) => lease.pool === pool.name)
+function holderLines(pool, store) {
+  return store.leases.filter((lease) => lease.pool === pool.name)
     .map((lease) => `- ${lease.item}: ${holderText(lease)}${lease.borrowed ? ' (borrowed)' : ''}, since ${lease.at}, expires ${lease.expiresAt ?? 'never'}`);
-  return fail(`No free item in pool ${pool.name}. Holders:\n${holders.join('\n')}`, 3);
 }
 
-function leaseRecord(pool, item, holder, at, ttlMinutes) {
+function emptyPoolError(pool, store, waiters = 0) {
+  const queue = waiters ? ` ${waiters} holder${waiters === 1 ? ' is' : 's are'} waiting for a free item and go${waiters === 1 ? 'es' : ''} first. Use --wait SECONDS to queue.` : '';
+  return fail(`No free item in pool ${pool.name}.${queue} Holders:\n${holderLines(pool, store).join('\n')}`, 3);
+}
+
+const waitingNoun = (pool) => (isPortsPool(pool) ? 'port' : 'item');
+
+// Waiters of a pool in FIFO order. Entries of a process that has gone are removed. The queue lives in leases.json.
+function pruneQueue(store, pidInfo) {
+  store.queue = (store.queue ?? []).filter((entry) => {
+    const info = pidInfo(entry.pid, { wantStart: false });
+    return !info || info.alive;
+  });
+  if (!store.queue.length) delete store.queue;
+  return store.queue ?? [];
+}
+
+function requireRunning(pid, pidInfo) {
+  if (!Number.isSafeInteger(pid) || pid < 1) throw fail('--pid must be a positive whole number.');
+  const info = pidInfo(pid, { wantStart: true });
+  if (info && !info.alive) throw fail(`Process ${pid} is not running.`);
+  return info;
+}
+
+function leaseRecord(pool, item, holder, at, ttlMinutes, bound = null) {
   const owner = splitOwner(pool, item);
   const minutes = ttlMinutes ?? pool.ttlMinutes;
   return {
@@ -276,33 +386,85 @@ function leaseRecord(pool, item, holder, at, ttlMinutes) {
     expiresAt: minutes == null ? null : new Date(at + minutes * 60000).toISOString(),
     borrowed: owner !== null && owner !== holder.project,
     ...(holder.runFile ? { runFile: holder.runFile } : {}),
+    ...(bound ? { pid: bound.pid, ...(bound.start ? { pidStart: bound.start } : {}) } : {}),
   };
 }
 
 // Take one item for a known holder. worker start calls this after it has verified the orchestrator pane.
 // In a pool with project holders, a project holds at most one item. A second call returns the lease that the project holds.
-export function acquireLeaseFor(poolName, holder, { pools, dataDir = DATA_DIR, prefer = null, exclude = [], ttlMinutes = null, now = Date.now(), panes = null, probeTcp = tcpListening, browserProcess = null, log = () => {} } = {}) {
+// Return { lease, reclaimed }. With a ticket ({ id, project, pid }) the call joins the FIFO queue of the pool when no item is free
+// or a waiter is ahead, and returns { lease: null, position, reclaimed } instead of throwing.
+export function acquireLeaseFor(poolName, holder, { pools, dataDir = DATA_DIR, prefer = null, exclude = [], ttlMinutes = null, now = Date.now(), panes = null, probeTcp = null, browserProcess = null, pidInfo = processInfo, pid = null, ticket = null, log = () => {}, detail = false } = {}) {
   const pool = poolNamed(pools, poolName);
   if (prefer === PROTECTED_PORT) throw fail(`Port ${PROTECTED_PORT} is protected. No pool leases it.`);
   if (prefer != null && !pool.items.includes(prefer)) throw fail(`Item ${prefer} is not in pool ${pool.name}.`);
   if (pool.holder === 'project' && (holder.worker || holder.pane || ttlMinutes != null)) throw fail(`Pool ${pool.name} leases to a project only, with no worker, pane, or TTL.`);
   if (ttlMinutes != null && (!Number.isSafeInteger(ttlMinutes) || ttlMinutes < 1)) throw fail('--ttl must be a positive whole number of minutes.');
+  const bound = pid == null ? null : { pid, start: requireRunning(pid, pidInfo)?.start ?? null };
   const at = timeValue(now);
   const skip = new Set(exclude);
-  const { lease, reclaimed } = changeLeases(dataDir, (store) => {
-    const { reclaimed: reclaimedNow } = reclaimInStore(store, { pools, panes, now: at, probeTcp, browserProcess });
+  const result = changeLeases(dataDir, (store) => {
+    const { reclaimed: reclaimedNow } = reclaimInStore(store, { pools, panes, now: at, probeTcp, browserProcess, pidInfo: (processId) => pidInfo(processId, { wantStart: false }) });
     if (pool.holder === 'project') {
       const held = store.leases.find((entry) => entry.pool === pool.name && entry.project === holder.project);
       if (held) return { lease: held, reclaimed: reclaimedNow };
     }
-    const item = chooseItem(pool, store, holder.project, prefer, skip);
-    if (item === null) throw emptyPoolError(pool, store);
-    const record = leaseRecord(pool, item, holder, at, ttlMinutes);
+    const queue = pruneQueue(store, pidInfo).filter((entry) => entry.pool === pool.name);
+    const taken = new Set(store.leases.filter((lease) => lease.pool === pool.name).map((lease) => lease.item));
+    const freeCount = pool.items.filter((item) => !taken.has(item) && item !== PROTECTED_PORT).length;
+    let ahead;
+    if (ticket) {
+      if (!queue.some((entry) => entry.id === ticket.id)) {
+        const entry = { pool: pool.name, id: ticket.id, pid: ticket.pid, project: holder.project, at: new Date(at).toISOString() };
+        store.queue = [...(store.queue ?? []), entry];
+        queue.push(entry);
+      }
+      ahead = queue.findIndex((entry) => entry.id === ticket.id);
+    } else ahead = queue.length;
+    const item = ahead < freeCount ? chooseItem(pool, store, holder.project, prefer, skip) : null;
+    if (item === null) {
+      if (ticket) return { lease: null, position: ahead + 1, reclaimed: reclaimedNow };
+      throw emptyPoolError(pool, store, queue.length);
+    }
+    const record = leaseRecord(pool, item, holder, at, ttlMinutes, bound);
     store.leases.push(record);
+    if (ticket) {
+      store.queue = store.queue.filter((entry) => entry.id !== ticket.id);
+      if (!store.queue.length) delete store.queue;
+    }
     return { lease: record, reclaimed: reclaimedNow };
   });
-  for (const item of reclaimed) log(item);
-  return lease;
+  for (const item of result.reclaimed) log(item);
+  return detail ? result : result.lease;
+}
+
+function dropTicket(dataDir, id) {
+  if (!fs.existsSync(path.join(dataDir, LEASES_FILE))) return;
+  changeLeases(dataDir, (store) => {
+    if (!store.queue) return;
+    store.queue = store.queue.filter((entry) => entry.id !== id);
+    if (!store.queue.length) delete store.queue;
+  });
+}
+
+// Bind an existing lease to the server process that uses its port. A Boss pane or the project of the lease may bind it.
+export function bindLease(poolName, item, pid, { pools, dataDir = DATA_DIR, config = null, env = process.env, herdr = null, pidInfo = processInfo } = {}) {
+  commandPool(pools, poolName, 'bind');
+  const info = requireRunning(pid, pidInfo);
+  let project = null;
+  if (herdr) {
+    const caller = verifyCaller(env, herdr, config);
+    project = caller.role === 'boss' ? null : projectOf(config);
+  }
+  return changeLeases(dataDir, (store) => {
+    const lease = store.leases.find((entry) => entry.pool === poolName && entry.item === item);
+    if (!lease) throw fail(`No lease of ${poolName} item ${item}.`);
+    if (project !== null && lease.project !== project) throw fail(`${poolName} item ${item} is held by project ${lease.project}. Only that project or the Boss can bind it.`);
+    lease.pid = pid;
+    if (info?.start) lease.pidStart = info.start; else delete lease.pidStart;
+    delete lease.idleSince;
+    return publicLease(lease);
+  });
 }
 
 // Write one project browser lease for each browser record, with its recorded port. This runs once: leases.json then records the migration.
@@ -352,27 +514,75 @@ export function dropLeases(filter, { dataDir = DATA_DIR } = {}) {
   });
 }
 
+function pauseSync(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
+
+const shellQuote = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`;
+
+// One line for each variable of the pool that the port can have: set or not set. It never holds a value.
+export function portEnvStatus(pool, item) {
+  const present = new Set(portEnvFor(pool, item).map((entry) => entry.env));
+  return Object.keys(pool.portEnv ?? {}).map((env) => ({ env, set: present.has(env) }));
+}
+
+// Write the variables of a lease to a file that a shell can source: the pool variable and each port value that is configured.
+// The file has mode 0600. The command prints no value.
+function writeEnvFile(file, pool, item) {
+  const lines = [`export ${pool.env}=${shellQuote(item)}`, ...portEnvFor(pool, item).map((entry) => `export ${entry.env}=${shellQuote(entry.value)}`)];
+  fs.writeFileSync(file, `${lines.join('\n')}\n`, { mode: 0o600 });
+  fs.chmodSync(file, 0o600);
+}
+
 export function acquireLease(poolName, {
   pools, dataDir = DATA_DIR, config = null, env = process.env, herdr, forTarget = null, prefer = null, ttlMinutes = null,
-  now = Date.now(), probeTcp = tcpListening, output = console.log, log = () => {},
+  now = Date.now(), probeTcp = null, pidInfo = processInfo, pid = null, waitSeconds = null, sleep = pauseSync, clock = Date.now,
+  envFile = null, notify = (line) => console.error(line), output = console.log, log = () => {},
 } = {}) {
-  commandPool(pools, poolName, 'request');
+  const pool = commandPool(pools, poolName, 'request');
   const caller = verifyCaller(env, herdr, config);
   const holder = holderFor(caller, config, forTarget);
-  const lease = acquireLeaseFor(poolName, holder, { pools, dataDir, prefer, ttlMinutes, now, panes: paneSet(herdr), probeTcp, log });
+  const wait = waitSeconds ?? pool.waitSeconds ?? 0;
+  if (!Number.isSafeInteger(wait) || wait < 0) throw fail('--wait must be a whole number of seconds.');
+  const options = { pools, dataDir, prefer, ttlMinutes, probeTcp, pidInfo, pid, log };
+  let lease;
+  if (!wait) lease = acquireLeaseFor(poolName, holder, { ...options, now, panes: paneSet(herdr) });
+  else {
+    const ticket = { id: randomBytes(6).toString('hex'), pid: process.pid };
+    const deadline = clock() + wait * 1000;
+    let shown = null;
+    try {
+      for (;;) {
+        const at = clock();
+        const result = acquireLeaseFor(poolName, holder, { ...options, now: at, panes: paneSet(herdr), ticket, detail: true });
+        if (result.lease) { lease = result.lease; break; }
+        if (result.position !== shown) {
+          shown = result.position;
+          notify(`waiting for a free ${waitingNoun(pool)} in pool ${pool.name}, position ${shown}`);
+        }
+        if (at >= deadline) {
+          const holders = holderLines(pool, readLeases(dataDir));
+          throw fail(`No free item in pool ${pool.name} after waiting ${wait} seconds. Holders:\n${holders.join('\n')}`, 3);
+        }
+        sleep(Math.min(1000, Math.max(1, deadline - at)));
+      }
+    } finally { dropTicket(dataDir, ticket.id); }
+  }
+  if (envFile) {
+    writeEnvFile(envFile, pool, lease.item);
+    for (const status of portEnvStatus(pool, lease.item)) notify(`${status.env} for port ${lease.item}: ${status.set ? 'set' : 'not set'}`);
+  }
   output(lease.item);
   return lease;
 }
 
 export function releaseLease(poolName, item, {
-  pools, dataDir = DATA_DIR, config = null, env = process.env, herdr, now = Date.now(), probeTcp = tcpListening, output = console.log, log = () => {},
+  pools, dataDir = DATA_DIR, config = null, env = process.env, herdr, now = Date.now(), probeTcp = null, pidInfo = processInfo, output = console.log, log = () => {},
 } = {}) {
   commandPool(pools, poolName, 'release');
   const caller = verifyCaller(env, herdr, config);
   const project = caller.role === 'boss' ? null : projectOf(config);
   const panes = paneSet(herdr);
   const { released, reclaimed } = changeLeases(dataDir, (store) => {
-    const { reclaimed: reclaimedNow } = reclaimInStore(store, { pools, panes, now: timeValue(now), probeTcp });
+    const { reclaimed: reclaimedNow } = reclaimInStore(store, { pools, panes, now: timeValue(now), probeTcp, pidInfo: (processId) => pidInfo(processId, { wantStart: false }) });
     const index = store.leases.findIndex((lease) => lease.pool === poolName && lease.item === item);
     if (index < 0) {
       const gone = reclaimedNow.find((entry) => entry.pool === poolName && entry.item === item);
@@ -408,15 +618,35 @@ export function ownerReleaseLease(pool, item, { expectedProject, dataDir = DATA_
 
 const publicLease = ({ runFile, tcpMisses, cdpMisses, ...lease }) => lease;
 
-export function listLeases({ pools, dataDir = DATA_DIR, pool = null, output = console.log } = {}) {
+
+// Mask the client id values of a pool: each entry becomes the word set. The pool object of the state and of every API answer goes through this.
+export function publicPool(pool) {
+  if (!pool?.portEnv) return pool;
+  const portEnv = Object.fromEntries(Object.entries(pool.portEnv).map(([env, entries]) => [env, Object.fromEntries(Object.keys(entries).map((spec) => [spec, 'set']))]));
+  return { ...pool, portEnv };
+}
+
+// Print the pool items and their leases. Nothing changes. A lease of a ports pool also shows bound, listener, and pidAlive, read now.
+export function listLeases({ pools, dataDir = DATA_DIR, pool = null, now = Date.now(), probeTcp = tcpListening, pidInfo = processInfo, output = console.log } = {}) {
   const selected = pool == null ? pools : [poolNamed(pools, pool)];
   const { leases } = readLeases(dataDir);
   const result = selected.map((entry) => ({
     pool: entry.name,
     env: entry.env,
+    ...(hasIdleRule(entry) ? { idleMinutes: entry.idleMinutes ?? DEFAULT_IDLE_MINUTES } : {}),
     items: entry.items.map((item) => {
       const lease = leases.find((candidate) => candidate.pool === entry.name && candidate.item === item);
-      return { item, split: splitOwner(entry, item), lease: lease ? publicLease(lease) : null };
+      let shown = null;
+      if (lease) {
+        shown = publicLease(lease);
+        if (hasIdleRule(entry)) {
+          shown.bound = lease.pid != null;
+          shown.listener = probeTcp(item, entry.name);
+          if (lease.pid != null) shown.pidAlive = pidInfo(lease.pid, { wantStart: false })?.alive ?? null;
+        }
+      }
+      const statuses = portEnvStatus(entry, item);
+      return { item, split: splitOwner(entry, item), lease: shown, ...(statuses.length ? { portEnv: Object.fromEntries(statuses.map((status) => [status.env, status.set ? 'set' : 'not set'])) } : {}) };
     }),
   }));
   output(JSON.stringify(result, null, 2));

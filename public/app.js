@@ -1665,7 +1665,7 @@ function machineLocksBlock(s) {
 let leaseMessage = '';
 let leaseBusy = false;
 const leaseRelease = { pool: '', item: '', project: '', holder: '' };
-const poolEditor = { open: false, action: 'create', name: '', values: null, status: '' };
+const poolEditor = { open: false, action: 'create', name: '', values: null, status: '', portEnv: [] };
 let poolBusy = false;
 let poolRemoveTarget = '';
 let poolRemoveBusy = false;
@@ -1674,14 +1674,46 @@ function leaseTtlText(pool) {
   return pool.ttlMinutes == null ? 'no TTL' : `${pool.ttlMinutes} min TTL`;
 }
 
+// A ports pool: only numeric items, and the tcp check or a port from 1024 up. The idle rule applies to it.
+function poolIsPorts(pool) {
+  const items = pool.items || [];
+  return !pool.builtIn && pool.check !== 'cdp' && items.length > 0 && items.every((item) => /^\d+$/.test(item)) && (pool.check === 'tcp' || items.some((item) => Number(item) >= 1024));
+}
+
 function leaseReclaimText(pool) {
   if (pool.check === 'cdp') return 'reclaim when its Chrome process is gone (cdp)';
-  if (pool.check === 'tcp') return 'reclaim when the holder is gone or the TTL ends';
-  return 'reclaim when the pane or worker is gone, or the TTL lapses';
+  const idle = poolIsPorts(pool) ? `; reclaim after ${pool.idleMinutes ?? 20} min without a listener` : '';
+  if (pool.check === 'tcp') return `reclaim when the holder or its server is gone, or the TTL ends${idle}`;
+  return `reclaim when the pane or worker is gone, or the TTL lapses${idle}`;
+}
+
+// The compact text of a port list: 8000-8004, 8010.
+function portListText(items) {
+  const numbers = items.map(Number);
+  const parts = [];
+  for (let index = 0; index < numbers.length;) {
+    let end = index;
+    while (end + 1 < numbers.length && numbers[end + 1] === numbers[end] + 1) end += 1;
+    parts.push(end > index ? `${numbers[index]}-${numbers[end]}` : String(numbers[index]));
+    index = end + 1;
+  }
+  return parts.join(', ');
 }
 
 function leaseAgeText(lease) { return lease.at ? ago(lease.at) : '–'; }
 function leaseTimeLeftText(lease) { return lease.expiresAt ? until(lease.expiresAt) : 'no TTL'; }
+// The server process of a lease: its pid, or unbound. A lease of a pool without a server check shows a dash.
+function leaseServerText(lease) {
+  if (lease.pid != null) return `pid ${lease.pid}`;
+  return lease.listener === undefined ? '–' : 'unbound';
+}
+function leaseListenerText(lease) { return lease.listener === true ? 'yes' : lease.listener === false ? 'no' : '–'; }
+// The minutes since the port had a listener. The engine records the start of the idle time in idleSince.
+function leaseIdleText(lease) {
+  if (lease.listener !== false) return '–';
+  const since = Date.parse(lease.idleSince || lease.at);
+  return Number.isFinite(since) ? `${Math.max(0, Math.floor((Date.now() - since) / 60000))}m` : '–';
+}
 
 // A project browser that runs keeps its lease, so the Release button is disabled until you close the browser.
 // The state holds the browser records and the running Chrome processes; a match needs both.
@@ -1695,14 +1727,16 @@ function leaseRow(s, pool, item) {
   const lease = (s.resourceLeases?.leases || []).find((candidate) => candidate.pool === pool.name && candidate.item === item) || null;
   const id = `lease-${esc(pool.name)}-${esc(item)}`;
   if (!lease) {
-    return `<tr id="${id}" class="lease-row lease-free"><td class="mono" data-label="Item">${esc(item)}</td><td data-label="State">Free</td><td data-label="Holder project">–</td><td data-label="Pane or worker">–</td><td data-label="Age">–</td><td data-label="Time left">–</td><td data-label=""></td></tr>`;
+    return `<tr id="${id}" class="lease-row lease-free"><td class="mono" data-label="Item">${esc(item)}</td><td data-label="State">Free</td><td data-label="Holder project">–</td><td data-label="Pane or worker">–</td><td data-label="Age">–</td><td data-label="Server">–</td><td data-label="Listener">–</td><td data-label="Idle">–</td><td data-label="Time left">–</td><td data-label=""></td></tr>`;
   }
   const holder = lease.worker || lease.pane || '';
   const running = pool.name === 'project-browsers' && browserRunningForLease(s, lease);
+  const idle = lease.listener === false;
   const action = running
     ? '<button type="button" disabled>Release</button><small class="lease-note">Close the browser first on the Browsers page.</small>'
     : `<button type="button" class="quiet" data-lease-release="${esc(pool.name)}" data-lease-item="${esc(item)}" data-lease-project="${esc(lease.project)}" data-lease-holder="${esc(holder)}">Release</button>`;
-  return `<tr id="${id}" class="lease-row lease-held"><td class="mono" data-label="Item">${esc(item)}</td><td data-label="State">Held${lease.borrowed ? ' <span class="pill ghost">borrowed</span>' : ''}</td><td data-label="Holder project">${esc(lease.project)}</td><td class="mono" data-label="Pane or worker">${esc(holder) || '–'}</td><td data-label="Age">${esc(leaseAgeText(lease))}</td><td data-label="Time left">${esc(leaseTimeLeftText(lease))}</td><td data-label="" class="lease-action">${action}</td></tr>`;
+  const idleTitle = idle ? ` title="${esc(`The lease is reclaimed after ${pool.idleMinutes ?? 20} minutes without a listener.`)}"` : '';
+  return `<tr id="${id}" class="lease-row lease-held${idle ? ' lease-idle' : ''}"><td class="mono" data-label="Item">${esc(item)}</td><td data-label="State">${idle ? 'Idle' : 'Held'}${lease.borrowed ? ' <span class="pill ghost">borrowed</span>' : ''}</td><td data-label="Holder project">${esc(lease.project)}</td><td class="mono" data-label="Pane or worker">${esc(holder) || '–'}</td><td data-label="Age">${esc(leaseAgeText(lease))}</td><td class="mono" data-label="Server">${esc(leaseServerText(lease))}</td><td data-label="Listener">${esc(leaseListenerText(lease))}</td><td${idleTitle} data-label="Idle">${esc(leaseIdleText(lease))}</td><td data-label="Time left">${esc(leaseTimeLeftText(lease))}</td><td data-label="" class="lease-action">${action}</td></tr>`;
 }
 
 function leasePoolBlock(s, pool) {
@@ -1710,12 +1744,27 @@ function leasePoolBlock(s, pool) {
   // The built-in browser pool lists only the held ports, with one line for the free ports.
   const items = pool.builtIn ? held.map((lease) => lease.item) : pool.items;
   const free = pool.items.length - held.length;
-  const rows = items.map((item) => leaseRow(s, pool, item)).join('') || '<tr><td colspan="7" class="empty">No items.</td></tr>';
+  const rows = items.map((item) => leaseRow(s, pool, item)).join('') || '<tr><td colspan="10" class="empty">No items.</td></tr>';
   const controls = pool.builtIn ? '' : `<div class="lease-pool-controls"><button type="button" class="quiet" data-pool-edit="${esc(pool.name)}"${poolBusy ? ' disabled' : ''}>Edit</button><button type="button" class="quiet" data-pool-remove="${esc(pool.name)}"${poolBusy || poolRemoveBusy ? ' disabled' : ''}>Remove</button></div>`;
   return `<div class="lease-pool">
     <div class="lease-head"><b>${esc(pool.name)}</b><span>${held.length} held · ${free} free</span><span>${esc(leaseTtlText(pool))}</span><span>${esc(leaseReclaimText(pool))}</span>${controls}</div>
-    <div class="lease-table-wrap"><table class="lease-table"><thead><tr><th>Item</th><th>State</th><th>Holder project</th><th>Pane or worker</th><th>Age</th><th>Time left</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div class="lease-table-wrap"><table class="lease-table"><thead><tr><th>Item</th><th>State</th><th>Holder project</th><th>Pane or worker</th><th>Age</th><th>Server</th><th>Listener</th><th>Idle</th><th>Time left</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
     ${pool.builtIn ? `<p class="lease-free-line">${free} free port${free === 1 ? '' : 's'}</p>` : ''}
+  </div>`;
+}
+
+// One row of the client value editor: a variable, the ports it applies to, and a masked value.
+// A stored value is never sent to the page. The row shows set and a Change button; a changed value is sent as typed, and an empty value clears it.
+function portEnvRow(row, index) {
+  const locked = row.set && !row.changing;
+  const value = locked
+    ? `<span class="pool-env-set">set</span><button type="button" class="quiet" data-pool-env-change="${index}">Change</button>`
+    : `<input name="pe-value-${index}" type="password" autocomplete="off" maxlength="200" value="${esc(row.value || '')}" placeholder="${row.set ? 'Empty clears the value' : 'Value'}" aria-label="Value">`;
+  return `<div class="pool-env-row">
+    <input name="pe-env-${index}" value="${esc(row.env)}" maxlength="64" pattern="[A-Z_][A-Z0-9_]{0,63}" placeholder="TM_SERVE_LIVE_CLIENT_ID" aria-label="Variable"${locked ? ' readonly' : ''}>
+    <input name="pe-ports-${index}" value="${esc(row.ports)}" placeholder="8005-8009" aria-label="Ports"${locked ? ' readonly' : ''}>
+    ${value}
+    <button type="button" class="quiet" data-pool-env-remove="${index}" aria-label="Remove value">Remove</button>
   </div>`;
 }
 
@@ -1728,12 +1777,20 @@ function resourcePoolForm() {
     <div><h3>${update ? `Edit ${esc(poolEditor.name)}` : 'Add a resource pool'}</h3><p>Set the pool items and the lease rules.</p></div>
     <div class="resource-pool-fields">
       <label>Pool name<input name="name" value="${esc(values.name || '')}" maxlength="64" pattern="[a-z0-9][a-z0-9-]{0,63}" required${update ? ' readonly' : ''}></label>
-      <label class="pool-items-field">Items<textarea name="items" rows="4" required placeholder="8000&#10;8001">${esc(values.items || '')}</textarea><small>Enter one item per line or separate items with commas.</small></label>
+      <label class="pool-items-field">Ports or items${helpButton('pool.ports')}<textarea name="items" rows="4" required placeholder="8000-8009">${esc(values.items || '')}</textarea><small>Enter ports, ranges such as 8000-8009, or items. Separate them with commas or lines.</small></label>
       <label class="pool-split-field">Project split (JSON)<textarea name="split" rows="4" placeholder="{&#10;  &quot;project&quot;: [&quot;8000&quot;]&#10;}">${esc(values.split || '{}')}</textarea><small>Give each project an array of pool items.</small></label>
       <label>Environment variable<input name="env" value="${esc(values.env || '')}" maxlength="64" pattern="[A-Z_][A-Z0-9_]{0,63}" required></label>
       <label>Lease TTL (minutes)<input name="ttlMinutes" type="number" min="1" step="1" value="${esc(values.ttlMinutes ?? '')}" required></label>
       <label>Reclaim check<select name="check"><option value=""${check === '' ? ' selected' : ''}>None</option><option value="tcp"${check === 'tcp' ? ' selected' : ''}>TCP</option></select></label>
       <label>Grace period (minutes)<input name="graceMinutes" type="number" min="0" step="1" value="${esc(values.graceMinutes ?? '')}" required></label>
+      <label>Idle minutes${helpButton('pool.idleMinutes')}<input name="idleMinutes" type="number" min="1" max="240" step="1" value="${esc(values.idleMinutes ?? '')}" placeholder="20"></label>
+      <label>Wait for a free item (seconds)${helpButton('pool.waitSeconds')}<input name="waitSeconds" type="number" min="0" max="3600" step="1" value="${esc(values.waitSeconds ?? '')}" placeholder="0"></label>
+    </div>
+    <div class="pool-env" data-pool-env>
+      <h4>Values by port${helpButton('pool.portEnv')}</h4>
+      ${poolEditor.portEnv.map(portEnvRow).join('')}
+      <button type="button" class="quiet" data-pool-env-add>Add value</button>
+      <p class="setting-help">The value is stored in the private config file on this machine only. The page never shows it again.</p>
     </div>
     <p class="resource-pool-status" role="status">${esc(poolEditor.status)}</p>
     <div class="resource-pool-actions"><button type="submit"${poolBusy ? ' disabled' : ''}>${poolBusy ? 'Saving…' : update ? 'Save pool' : 'Add pool'}</button><button type="button" class="quiet" data-pool-cancel${poolBusy ? ' disabled' : ''}>Cancel</button></div>
@@ -1825,24 +1882,37 @@ document.addEventListener('click', (e) => {
 });
 
 function openResourcePoolForm(action, pool = null) {
+  const ports = pool && poolIsPorts(pool);
   Object.assign(poolEditor, {
     open: true,
     action,
     name: pool?.name || '',
     status: '',
+    portEnv: Object.entries(pool?.portEnv || {}).flatMap(([env, entries]) => Object.keys(entries).map((ports) => ({ env, ports, set: true, changing: false, value: '' }))),
     values: pool ? {
       name: pool.name,
-      items: (pool.items || []).join('\n'),
+      items: ports ? portListText(pool.items || []) : (pool.items || []).join('\n'),
       split: JSON.stringify(pool.split || {}, null, 2),
       env: pool.env || '',
       ttlMinutes: pool.ttlMinutes ?? '',
       check: pool.check || '',
       graceMinutes: pool.graceMinutes ?? '',
-    } : { name: '', items: '', split: '{}', env: '', ttlMinutes: '', check: '', graceMinutes: '' },
+      idleMinutes: pool.idleMinutes ?? '',
+      waitSeconds: pool.waitSeconds ?? '',
+    } : { name: '', items: '', split: '{}', env: '', ttlMinutes: '', check: '', graceMinutes: '', idleMinutes: '', waitSeconds: '' },
   });
   lastRender = '';
   render();
   requestAnimationFrame(() => document.querySelector('[data-resource-pool-form] [name="items"]')?.focus());
+}
+
+// Copy the typed row fields from the form into the rows. A locked row has no value field.
+function syncPoolEnvRows(values) {
+  poolEditor.portEnv.forEach((row, index) => {
+    if (`pe-env-${index}` in values) row.env = values[`pe-env-${index}`];
+    if (`pe-ports-${index}` in values) row.ports = values[`pe-ports-${index}`];
+    if (`pe-value-${index}` in values) row.value = values[`pe-value-${index}`];
+  });
 }
 
 async function saveResourcePool(body) {
@@ -1904,7 +1974,9 @@ async function confirmResourcePoolRemove() {
 
 document.addEventListener('input', (e) => {
   const form = e.target.closest?.('[data-resource-pool-form]');
-  if (form) poolEditor.values = Object.fromEntries(new FormData(form).entries());
+  if (!form) return;
+  poolEditor.values = Object.fromEntries(new FormData(form).entries());
+  syncPoolEnvRows(poolEditor.values);
 });
 
 document.addEventListener('submit', async (e) => {
@@ -1914,6 +1986,7 @@ document.addEventListener('submit', async (e) => {
   if (poolBusy) return;
   const values = Object.fromEntries(new FormData(form).entries());
   poolEditor.values = values;
+  syncPoolEnvRows(values);
   let split;
   try {
     split = values.split.trim() ? JSON.parse(values.split) : {};
@@ -1924,14 +1997,29 @@ document.addEventListener('submit', async (e) => {
     render();
     return;
   }
+  const tokens = values.items.split(/[\s,]+/).filter(Boolean);
+  // Numbers and ranges go as a range text, so a later addition such as 8005-8009 needs no other change.
+  const asRange = tokens.length > 0 && tokens.every((token) => /^\d+(-\d+)?$/.test(token));
+  const portEnv = {};
+  for (const row of poolEditor.portEnv) {
+    const env = row.env.trim();
+    const ports = row.ports.trim();
+    if (!env || !ports) continue;
+    portEnv[env] ||= {};
+    portEnv[env][ports] = row.set && !row.changing ? null : row.value;
+  }
+  const number = (text) => (text === '' || text === undefined ? undefined : Number(text));
   const pool = {
     name: values.name,
-    items: values.items.split(/[\s,]+/).filter(Boolean),
+    ...(asRange ? { range: tokens.join(',') } : { items: tokens }),
     split,
     env: values.env,
     ttlMinutes: values.ttlMinutes === '' ? null : Number(values.ttlMinutes),
     check: values.check || null,
     graceMinutes: values.graceMinutes === '' ? null : Number(values.graceMinutes),
+    idleMinutes: number(values.idleMinutes),
+    waitSeconds: number(values.waitSeconds),
+    ...(Object.keys(portEnv).length ? { portEnv } : {}),
   };
   poolBusy = true;
   poolEditor.status = 'Saving…';
@@ -1940,7 +2028,7 @@ document.addEventListener('submit', async (e) => {
   try {
     await saveResourcePool({ action: poolEditor.action, pool });
     leaseMessage = `${poolEditor.action === 'create' ? 'Added' : 'Updated'} resource pool ${pool.name}.`;
-    Object.assign(poolEditor, { open: false, values: null, status: '' });
+    Object.assign(poolEditor, { open: false, values: null, status: '', portEnv: [] });
     await refreshLeaseState();
   } catch (error) {
     poolEditor.status = error.message;
@@ -1954,8 +2042,30 @@ document.addEventListener('submit', async (e) => {
 document.addEventListener('click', (e) => {
   const add = e.target.closest?.('[data-pool-add]');
   if (add) { openResourcePoolForm('create'); return; }
+  const envAdd = e.target.closest?.('[data-pool-env-add]');
+  if (envAdd) {
+    poolEditor.portEnv.push({ env: poolEditor.portEnv.at(-1)?.env || '', ports: '', set: false, changing: true, value: '' });
+    lastRender = '';
+    render();
+    return;
+  }
+  const envChange = e.target.closest?.('[data-pool-env-change]');
+  if (envChange) {
+    const row = poolEditor.portEnv[Number(envChange.dataset.poolEnvChange)];
+    if (row) row.changing = true;
+    lastRender = '';
+    render();
+    return;
+  }
+  const envRemove = e.target.closest?.('[data-pool-env-remove]');
+  if (envRemove) {
+    poolEditor.portEnv.splice(Number(envRemove.dataset.poolEnvRemove), 1);
+    lastRender = '';
+    render();
+    return;
+  }
   if (e.target.closest?.('[data-pool-cancel]')) {
-    Object.assign(poolEditor, { open: false, values: null, status: '' });
+    Object.assign(poolEditor, { open: false, values: null, status: '', portEnv: [] });
     lastRender = '';
     render();
     return;
@@ -5352,9 +5462,9 @@ const HELP = {
     <p>An idle project is faded. A paused project is faded and striped.</p>
     <p>When <b>Borrow idle shares</b> is on, a project lends its unused slots to the projects that use all their slots. An idle or paused project lends all its slots. Another project always keeps its base slots. It offers its unused slots to other projects and does not lose them. The lent and offered slots go to the full projects by share. When no project is full, no project lends. A project row shows <b>N lent</b> for an idle project, <b>N free for others</b> for a project with unused slots, and <b>+N borrowed</b> for a full project. Borrowed slots are real capacity. The global limit still applies.</p>
     <h3>Locks</h3><p>The panel lists machine locks. Each row shows the lock name, holder project and pane, kind, age, time left, and state. When no lock exists, the panel shows <b>No machine locks are held.</b> A manual lock expires after 60 minutes. A command lock ends when its command ends. Herdr Boss takes over a stale lock. The history line above the table shows the median hold time and the median wait time of all locks in the last 7 days, and of each lock name. A re-entrant suite under a push is not part of the medians. Before the first lock change, it shows <b>No lock history yet.</b> You cannot release a lock from this panel.</p>
-    <h3>Resource leases</h3><p>Each pool lists its items and the holder of each item. The head shows the held and free counts, the lease TTL, and the reclaim rule. A held row shows the holder project, the pane or worker, the lease age, and the time left. <b>borrowed</b> marks an item of another project's split. For <code>project-browsers</code>, the panel lists only the held ports and the number of free ports; that pool has 77 ports. An invalid resource pool shows an error line.</p>
+    <h3>Resource leases</h3><p>Each pool lists its items and the holder of each item. The head shows the held and free counts, the lease TTL, and the reclaim rule. A held row shows the holder project, the pane or worker, the lease age, the server (its pid, or <b>unbound</b>), whether the port has a listener, the idle minutes, and the time left. A row with no listener is idle and has a muted style. Herdr Boss reclaims an idle lease after the idle minutes of the pool. <b>borrowed</b> marks an item of another project's split. For <code>project-browsers</code>, the panel lists only the held ports and the number of free ports; that pool has 77 ports. An invalid resource pool shows an error line.</p>
     <p>Select <b>Release</b> to give a lease back. The page asks you to confirm, and names the pool, the item, the holder project, and the pane or worker. The release removes the lease only while its holder project is still the project that the page shows. Otherwise the page reports that the lease changed, and you reload the page. A release never stops a process. For a project browser that runs, the button is disabled until you close the browser on the Browsers page.</p>
-    <h3>Manage pools</h3><p>Select <b>Add pool</b> to create a pool. Enter one item per line or separate items with commas. Enter the project split as JSON. Set the environment variable, lease TTL, reclaim check, and grace period. Keep ports 9222 to 9299 out of custom pools. Select <b>Edit</b> to change a config pool. Select <b>Remove</b>, then confirm the pool name, to remove it. A held item blocks removal and any update that drops it. Herdr Boss saves the change to <code>config.json</code> and applies it at once. The built-in <code>project-browsers</code> pool has no edit or remove controls. The read-only preview refuses pool changes.</p>`],
+    <h3>Manage pools</h3><p>Select <b>Add pool</b> to create a pool. Enter ports, ranges such as 8000-8009, or items. Separate them with commas or lines. A pool holds at most 100 ports from 1024 to 65535. Enter the project split as JSON. Set the environment variable, lease TTL, reclaim check, grace period, idle minutes, and the wait default. Add a value by port to hand a worker a variable, for example a client ID, that matches its port. The value is stored in the private config file on this machine only, and the page shows <b>set</b> instead of the value. Select <b>Change</b> to replace it. An empty value clears it. Keep ports 9222 to 9299 out of custom pools. Select <b>Edit</b> to change a config pool. Select <b>Remove</b>, then confirm the pool name, to remove it. A held item blocks removal and any update that drops it. The exception is a lease that is unbound and has had no listener for the idle minutes. Herdr Boss saves the change to <code>config.json</code> and applies it at once. The built-in <code>project-browsers</code> pool has no edit or remove controls. The read-only preview refuses pool changes.</p>`],
   settings: ['Settings', `
     <p>Each harness section holds the models and provider routes of that harness. Provider quotas and machine limits are below the harnesses. The <b>Advanced</b> section holds the rarely used settings. It stays closed until you open it, and the page remembers its state.</p>
     <h3>Guide to the settings</h3>${settingsGuideHtml()}

@@ -8,7 +8,8 @@ import { goalSummary, mergeModels, modelEnabled, providerFor, selectModel, unava
 import { DATA_DIR, loadConfig } from '../config.js';
 import { workerStatusFromState } from '../worker-failures.js';
 import { checkAgentsFile, kitBehindLine } from './agents-check.js';
-import { acquireLeaseFor, dropLeases, setLeasePane } from '../leases.js';
+import { acquireLeaseFor, dropLeases, portEnvStatus, setLeasePane } from '../leases.js';
+import { portEnvFor } from '../config.js';
 import { codexShellEnvArgs } from '../harness.js';
 import { TASK_ID } from '../task-state.js';
 import { swapRefusal, swapExempt } from './swap-guard.js';
@@ -241,6 +242,22 @@ function parseHerdrJson(stdout) {
   try { data = JSON.parse(stdout); } catch (error) { throw new Error(`Herdr returned invalid JSON: ${error.message}`); }
   if (data?.error) throw new Error(data.error.message || String(data.error));
   return data?.result ?? data;
+}
+
+// Wrap a Herdr runner so that an error from a command that carried a secret value never shows the value.
+function maskingHerdr(herdr, secrets) {
+  const mask = (text) => secrets.reduce((result, secret) => result.split(secret).join('[masked]'), String(text));
+  return (args) => {
+    try { return herdr(args); }
+    catch (error) {
+      if (error && typeof error === 'object') {
+        for (const key of ['message', 'stderr', 'stdout']) if (error[key] != null) error[key] = mask(error[key]);
+        delete error.cmd;
+        delete error.spawnargs;
+      }
+      throw error;
+    }
+  };
 }
 
 export function createHerdrRunner(exec = (args) => execFileSync('herdr', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })) {
@@ -1083,6 +1100,9 @@ export function startWorker(name, options, {
   renderBrief(template, {});
   // Take the leases before the worktree or the pane exists, so an empty pool stops the start with no side effect.
   const leases = [];
+  // The port values of a pool (for example a client id) go only into the pane environment. They are never in leases, the run record, the brief, or the output.
+  const leaseExtraEnv = [];
+  const leaseEnvNotes = [];
   const leaseNotices = [];
   const leaseLog = (item) => leaseNotices.push(`Reclaimed lease ${item.pool} ${item.item} of ${item.project}: ${item.reason}.`);
   try {
@@ -1092,6 +1112,8 @@ export function startWorker(name, options, {
         pools: leaseContext.pools, dataDir: leaseContext.dataDir, probeTcp: leaseContext.probeTcp, now, log: leaseLog,
       });
       leases.push({ pool: poolName, item: lease.item, env: pool.env });
+      leaseExtraEnv.push(...portEnvFor(pool, lease.item));
+      for (const status of portEnvStatus(pool, lease.item)) leaseEnvNotes.push(`${status.env} for port ${lease.item}: ${status.set ? 'set' : 'not set'}`);
     }
   } catch (error) {
     releaseStartLeases(leases, name, config, leaseContext);
@@ -1100,6 +1122,8 @@ export function startWorker(name, options, {
   }
   for (const notice of leaseNotices) output(notice);
   for (const lease of leases) output(`Leased ${lease.pool} ${lease.item} as ${lease.env}.`);
+  for (const note of leaseEnvNotes) output(note);
+  if (leaseExtraEnv.length) herdr = maskingHerdr(herdr, leaseExtraEnv.map((entry) => entry.value));
   if (autoLeasedServePort) output('Automatically leased serve-ports for the serve:live task.');
 
   const reportPath = path.join(worktree, plan.workerDir, 'report.md');
@@ -1174,7 +1198,7 @@ export function startWorker(name, options, {
       catch (error) { throw setupFailure(error, plan.setup, plan.setupTimeoutSeconds); }
       output(`Project setup finished in ${Math.round((Date.now() - started) / 1000)} s.`);
     }
-    placement = chooseWorkerPane(workspaceId, worktree, options.kind, herdr, plan.tmpDir, paneCap, leases);
+    placement = chooseWorkerPane(workspaceId, worktree, options.kind, herdr, plan.tmpDir, paneCap, [...leases, ...leaseExtraEnv.map((entry) => ({ env: entry.env, item: entry.value }))]);
     paneId = placement.paneId;
     for (const lease of leases) setLeasePane(lease.pool, lease.item, paneId, { dataDir: leaseContext.dataDir });
     waitForWorkerPane(paneId, workspaceId, worktree, herdr, wait);

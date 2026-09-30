@@ -540,6 +540,20 @@ Do not edit this block. It comes from `public/setting-help.js`.
 | Workspace projects | `workspace.exclusion` | Decides which live workspaces count as projects. Clear a workspace switch to include it as a project. The Boss workspace stays excluded while its pane is labelled boss. | Every workspace is a project, except the Boss workspace | Switch for each workspace | On or off | Switching a workspace on removes it from the projects and from the shares. | Switching a workspace off makes it a project that takes part in the shares. | Select Apply policy. The change takes effect at the next engine tick. |
 | Project shares | `project.shares` | The share of the working agents for each project. Drag a boundary in the bar: only the projects to its right rebalance. The labels show the set share and the effective slots. Shares are advisory. The worker command enforces the global cap. Apply policy asks for a confirmation when 3 or more shares change, and asks again when the total is not 100. | The shares in policy.json | Percent of the working agents | 0 to 100, and all shares add up to 100 or less | A larger share gives the project more slots when the machine is busy. | A smaller share gives the project fewer slots. It can borrow idle shares of others when Borrow idle shares is on. | Select Apply policy. The change takes effect at the next engine tick. |
 
+#### Resource pools
+
+- Controls: The ports of a pool, the idle time after which Herdr Boss reclaims a lease, the wait default, and the client values by port. These controls are in the pools editor on the Allocation page.
+- Effect: Projects and workers that lease a port. A port that has no listener for the idle time goes back to the pool.
+- Safe to change: Safe to change. A save never drops a port that a holder uses. A client value is stored in the private config file only.
+- Restart: No restart. A save takes effect at once.
+
+| Setting | Key | What it does | Default | Unit | Range | Raise it | Lower it | Apply |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Ports of a pool | `pool.ports` | The ports or items of the pool. Enter single ports, ranges such as 8000-8009, or a list of both. | None | Ports | 1024 to 65535, at most 100 ports, no duplicate, not the dashboard port or a browser port | A new range adds ports at once. No code change is needed. | A port that a holder uses stays in the pool. Release the lease first, or wait for the idle time. | The change takes effect at once. |
+| Idle minutes of a pool | `pool.idleMinutes` | The minutes that a leased port can have no listener before Herdr Boss reclaims the lease. A holder gets one notice. | 20 | Minutes | 1 to 240 | A longer time gives a holder more time to start a server. | A shorter time frees unused ports sooner. | The change takes effect at once. |
+| Wait for a free item | `pool.waitSeconds` | The seconds that lease acquire waits for a free item when the pool is full. The command --wait option overrides it. | 0 | Seconds | 0 to 3600 | A longer wait lets a caller queue for a free port. The queue serves callers in order. | A shorter wait fails sooner when no item is free. Zero means no wait. | The change takes effect at once. |
+| Values by port | `pool.portEnv` | An environment variable with a value for each port range, for example a client ID. A lease hands the worker the value that matches its port. | None | Text | Up to 200 characters, no whitespace | Add a row to hand a value to the ports of a range. | Enter an empty value to clear a stored value. A port without a value gets no variable. | The change takes effect at once. |
+
 #### Token prices (Advanced)
 
 - Controls: The USD price per million tokens of each model.
@@ -784,9 +798,10 @@ herdr-boss worker allow fix-74 docs/parse.md --reason "the fix also needs the pa
 
 | Command | Action |
 |---|---|
-| `lease acquire POOL [--for SLUG\|WORKER] [--prefer ITEM] [--ttl MINUTES]` | Lease one free item of the pool. Print the item on its own line on standard output. |
+| `lease acquire POOL [--for SLUG\|WORKER] [--prefer ITEM] [--ttl MINUTES] [--pid PID] [--wait SECONDS] [--env-file FILE]` | Lease one free item of the pool. Print the item on its own line on standard output. |
+| `lease bind POOL ITEM --pid PID` | Bind a lease to the server process that uses its port. |
 | `lease release POOL ITEM` | Release a lease of your project. The Boss can release any lease. |
-| `lease list [POOL]` | Print each pool item and its lease as JSON. A free item has `"lease": null`. |
+| `lease list [POOL]` | Print each pool item and its lease as JSON. A free item has `"lease": null`. Nothing changes. A lease of a ports pool shows `bound`, `listener`, and `pidAlive`. An item with a `portEnv` entry shows `set` or `not set`, never the value. |
 
 Define the pools in `resourcePools` in `~/.herdr-boss/config.json`. See [Resource leases](user-guide.md#resource-leases) in the user guide.
 
@@ -798,6 +813,9 @@ Only a verified `orch` or `boss` pane, or a worker pane with a live run record, 
 - `--for WORKER` records a live worker of the project of the orchestrator.
 - `--for SLUG` records a project. Only the Boss pane can use it.
 - `--ttl MINUTES` sets the lease time. The default is `ttlMinutes` of the pool.
+- `--pid PID` binds the lease to the server process with that ID. The command fails when the process does not run. Herdr Boss stores the start time of the process with the ID. The PID must be a live process of your own server: a foreign long-lived PID keeps the lease until the idle rule applies.
+- `--wait SECONDS` waits for a free item. The default is `waitSeconds` of the pool. The waiting callers form a FIFO queue. The command prints `waiting for a free port in pool NAME, position N` on standard error and again when the position changes. After the timeout the command exits with code 3 and lists the holders. A call without `--wait` does not take an item that a queued caller waits for.
+- `--env-file FILE` writes `export VARIABLE='value'` lines to the file with mode `0600`: the variable of the pool and each `portEnv` variable that has a value for the port. Source the file in the shell of the server. Use a path in `$TMPDIR`, outside the repository. The command prints `VARIABLE for port N: set` or `not set` on standard error, never the value.
 
 `lease acquire` chooses an item in this order:
 
@@ -809,10 +827,16 @@ Only a verified `orch` or `boss` pane, or a worker pane with a live run record, 
 A borrowed lease stays until it is released or reclaimed. When no item is free, `lease acquire` exits with code 3 and lists the holders on standard error.
 
 ```sh
-PORT="$(herdr-boss lease acquire serve-ports)"
-npm run serve -- --port "$PORT"
+PORT="$(herdr-boss lease acquire serve-ports --wait 600 --env-file "$TMPDIR/serve.env")"
+. "$TMPDIR/serve.env"
+npm run serve:live &
+herdr-boss lease bind serve-ports "$PORT" --pid $!
 herdr-boss lease release serve-ports "$PORT"
 ```
+
+A lease ends before its TTL in these cases. The bound process is gone: Herdr Boss releases the lease within one tick. The process ID belongs to another process now: the start time differs. The port has no listener for `idleMinutes` of the pool (default 20), also for a lease that no server bound. The holder gets one notice. A `serve-live` helper calls `lease acquire serve-ports --wait 600`, which waits up to 10 minutes for a free port, and binds the lease to its server process.
+
+The client ID of a port: a pool can hold `portEnv` values for each port range, for example `TM_SERVE_LIVE_CLIENT_ID`. A project picks the client ID by port. The lease hands the value over through `worker start --lease` (pane environment) or `lease acquire --env-file`. A port without a value gets no variable. See [Resource leases](user-guide.md#resource-leases).
 
 `worker start --lease POOL` leases one item before it creates the worktree or the pane. It sets the variable `env` of the pool in the worker pane, for example `HERDR_SERVE_PORT=8001`. It records the lease in the run record and in the brief. When the pool has no free item, the start fails with exit code 3 and creates nothing. When the start fails later, it releases the lease. `worker collect NAME --record` releases the leases of the worker.
 

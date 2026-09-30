@@ -69,3 +69,7 @@ Summary: A lane is ahead of pace only above a tolerance (default 5 points) and a
 ## fdcccc24dac7
 Impact: useful
 Summary: Add herdr-boss gh label create|list|edit|sync and gh milestone create|list, the triage label preset, and the triage-labels template; project new sets the triage labels on a private GitHub repository.
+
+## 17e04d97cd66
+Impact: useful
+Summary: Serve-port leases end when the bound server process ends or the port has no listener for 20 minutes; lease acquire takes --pid, --wait, and --env-file, lease bind binds a server, and a pool can hand a client ID by port.

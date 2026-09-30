@@ -4,6 +4,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { validateResourcePools } from '../src/config.js';
@@ -449,10 +450,10 @@ function startFixture() {
     throw new Error(`Unexpected Herdr call: ${args.join(' ')}`);
   };
   const leaseOptions = { dataDir, pools: pools() };
-  const start = (name, options = {}) => startWorker(name, { kind: 'opencode', task: 'x', allow: ['src/'], lease: ['serve-ports'], ...options }, {
-    config, models: loadModels(), herdr, env: ORCH, rulesFile, wait: () => {}, output: () => {}, leaseOptions,
+  const start = (name, options = {}, extra = {}) => startWorker(name, { kind: 'opencode', task: 'x', allow: ['src/'], lease: ['serve-ports'], ...options }, {
+    config, models: loadModels(), herdr, env: ORCH, rulesFile, wait: () => {}, output: () => {}, leaseOptions, ...extra,
   });
-  return { root, config, dataDir, calls, creates, start, leaseOptions };
+  return { root, config, dataDir, calls, creates, start, leaseOptions, herdr };
 }
 
 const envValues = (args) => Object.fromEntries(args.flatMap((arg, index) => (args[index - 1] === '--env' ? [arg.split(/=(.*)/s).slice(0, 2)] : [])));
@@ -529,4 +530,72 @@ test('the lease CLI prints JSON, exits 3 on an empty pool, and names config erro
   const bad = run('list');
   assert.equal(bad.status, 1);
   assert.match(bad.stderr, /resourcePools\[0\]\.env must be an environment variable name/);
+});
+
+test('worker start exports the client id for the leased port and shows it nowhere else', () => {
+  const value = `test-client-${randomBytes(8).toString('hex')}`;
+  const other = `test-client-${randomBytes(8).toString('hex')}`;
+  const f = startFixture();
+  f.leaseOptions.pools = pools({ ...POOL, portEnv: { TM_SERVE_LIVE_CLIENT_ID: { '47100-47101': value, '47102-47104': other } } });
+  const output = [];
+  const run = f.start('with-id', {}, { output: (line) => output.push(line) });
+  const env = envValues(f.creates.at(-1));
+  assert.equal(env.HERDR_SERVE_PORT, '47100');
+  assert.equal(env.TM_SERVE_LIVE_CLIENT_ID, value, 'the pane gets the value that matches its port');
+  assert.ok(output.includes('Leased serve-ports 47100 as HERDR_SERVE_PORT.'));
+  assert.ok(output.includes('TM_SERVE_LIVE_CLIENT_ID for port 47100: set'));
+  const brief = fs.readFileSync(path.join(run.worktree, '.worker', 'brief.md'), 'utf8');
+  const record = fs.readFileSync(run.recordFile, 'utf8');
+  for (const [label, text] of [['output', output.join('\n')], ['brief', brief], ['run record', record], ['lease store', fs.readFileSync(path.join(f.dataDir, 'leases.json'), 'utf8')], ['returned run', JSON.stringify(run)]]) {
+    assert.equal(text.includes(value) || text.includes(other), false, `${label} holds no client id`);
+  }
+  assert.ok(!fs.readFileSync(path.join(run.worktree, '.worker', 'port'), 'utf8').includes(value));
+});
+
+test('worker start exports no client id variable for a port without an entry', () => {
+  const value = `test-client-${randomBytes(8).toString('hex')}`;
+  const f = startFixture();
+  f.leaseOptions.pools = pools({ ...POOL, portEnv: { TM_SERVE_LIVE_CLIENT_ID: { '47103-47104': value } } });
+  const output = [];
+  f.start('without-id', {}, { output: (line) => output.push(line) });
+  assert.equal('TM_SERVE_LIVE_CLIENT_ID' in envValues(f.creates.at(-1)), false);
+  assert.ok(output.includes('TM_SERVE_LIVE_CLIENT_ID for port 47100: not set'));
+});
+
+test('a failed worker start does not print the client id from the Herdr error', () => {
+  const value = `test-client-${randomBytes(8).toString('hex')}`;
+  const f = startFixture();
+  f.leaseOptions.pools = pools({ ...POOL, portEnv: { TM_SERVE_LIVE_CLIENT_ID: { '47100-47104': value } } });
+  const failing = (args) => {
+    if (args[0] === 'agent' && args[1] === 'start') throw new Error(`Command failed: herdr agent start x --env TM_SERVE_LIVE_CLIENT_ID=${value}`);
+    return f.herdr(args);
+  };
+  assert.throws(() => f.start('leaky', {}, { herdr: failing }), (error) => !error.message.includes(value) && /Command failed/.test(error.message));
+});
+
+test('lease acquire --env-file writes the port variables with owner-only mode and prints no value', () => {
+  const value = `test-client-${randomBytes(8).toString('hex')}`;
+  const ctx = context({ pool: { ...POOL, portEnv: { TM_SERVE_LIVE_CLIENT_ID: { '47100-47104': value } } } });
+  const file = path.join(tempDir('herdr-lease-env-'), 'serve.env');
+  const output = [];
+  const notes = [];
+  acquire(ctx, ORCH, { envFile: file, output: (line) => output.push(line), notify: (line) => notes.push(line) });
+  assert.equal(output.join('\n').includes(value) || notes.join('\n').includes(value), false);
+  assert.ok(notes.includes('TM_SERVE_LIVE_CLIENT_ID for port 47100: set'));
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  const text = fs.readFileSync(file, 'utf8');
+  assert.match(text, /^export HERDR_SERVE_PORT='47100'$/m);
+  assert.match(text, new RegExp(`^export TM_SERVE_LIVE_CLIENT_ID='${value}'$`, 'm'));
+});
+
+test('the files of this change hold no real client id', () => {
+  const repo = fileURLToPath(new URL('..', import.meta.url));
+  const changed = execFileSync('git', ['-C', repo, 'ls-files', '-m', '-o', '--exclude-standard'], { encoding: 'utf8' }).split('\n').filter(Boolean);
+  const committed = execFileSync('git', ['-C', repo, 'diff', '--name-only', 'main...HEAD'], { encoding: 'utf8' }).split('\n').filter(Boolean);
+  const needle = ['01a0f3', 'fb'].join('');
+  for (const file of new Set([...changed, ...committed])) {
+    const full = path.join(repo, file);
+    if (!fs.existsSync(full) || !fs.statSync(full).isFile()) continue;
+    assert.equal(fs.readFileSync(full, 'utf8').includes(needle), false, `${file} must not hold the client id`);
+  }
 });

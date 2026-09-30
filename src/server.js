@@ -7,7 +7,7 @@ import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { Engine } from './engine.js';
-import { ownerReleaseLease, withResourcePoolMutation } from './leases.js';
+import { ownerReleaseLease, withResourcePoolMutation, readLeases, leasePools, publicPool, hasIdleRule, tcpListeningAsync } from './leases.js';
 import { PROJECTS_DIR, DATA_DIR, DEFAULT_SESSION_FILE, PRIVATE_ACCESS_DIR, assertPreviewDataDir, writeServiceSettings, applyServiceSettings, serviceSettingsView, validateResourcePools, writeResourcePools } from './config.js';
 import { writeProject, listProjects } from './projects.js';
 import { loadModels } from './kit/config.js';
@@ -399,6 +399,10 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine 
         const released = ownerReleaseLease(body.pool, body.item, { expectedProject: body.project, dataDir: DATA_DIR });
         return send(res, 200, { ok: true, released });
       }
+      if (p === '/api/pools' && req.method === 'GET') {
+        const { pools, errors } = leasePools(engine.cfg ?? cfg);
+        return send(res, 200, { pools: pools.map(publicPool), errors });
+      }
       if (p === '/api/pools' && req.method === 'PUT') {
         const body = await jsonBody(req);
         if (!body || !['create', 'update', 'remove'].includes(body.action)) return send(res, 400, { error: 'action must be create, update, or remove.' });
@@ -408,16 +412,15 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine 
         }
         if (pool.name === 'project-browsers') return send(res, 400, { error: 'project-browsers is a built-in pool and cannot be changed.' });
 
-        let candidate = null;
-        if (body.action !== 'remove') {
-          const checkedPool = validateResourcePools([pool]);
-          if (checkedPool.errors.length) return send(res, 400, { error: checkedPool.errors.join(' '), errors: checkedPool.errors });
-          candidate = checkedPool.pools[0];
-          const protectedItems = candidate.items.filter((item) => /^\d+$/.test(item) && Number(item) >= 9222 && Number(item) <= 9299);
-          if (protectedItems.length) return send(res, 400, { error: `Items from 9222 to 9299 are reserved for project browsers: ${protectedItems.join(', ')}.` });
-        }
+        // Probe the ports that holders lease now, before the lock. The check below needs to know which of them have a listener.
+        const listening = new Map();
+        try {
+          await Promise.all(readLeases(DATA_DIR).leases.filter((lease) => lease.pool === pool.name)
+            .map(async (lease) => { listening.set(lease.item, await tcpListeningAsync(lease.item)); }));
+        } catch {}
+        const dashboardPort = server.address()?.port ?? cfg.port;
 
-        const changed = withResourcePoolMutation((leases) => {
+        const changed = withResourcePoolMutation((leases, { dropLeases }) => {
           const configFile = path.join(DATA_DIR, 'config.json');
           let config;
           try { config = JSON.parse(fs.readFileSync(configFile, 'utf8')); }
@@ -431,30 +434,73 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine 
           const index = currentPools.findIndex((item) => item?.name === pool.name);
           if (body.action === 'create' && index !== -1) return { status: 409, error: `Resource pool ${pool.name} already exists.` };
           if (body.action !== 'create' && index === -1) return { status: 404, error: `Resource pool ${pool.name} does not exist.` };
+          const stored = index === -1 ? null : currentPools[index];
+
+          // A port value of null keeps the stored value of the same variable and ports. An empty string clears it.
+          let next = pool;
+          if (body.action !== 'remove') {
+            const missing = [];
+            let portEnv;
+            if (pool.portEnv && typeof pool.portEnv === 'object' && !Array.isArray(pool.portEnv)) {
+              portEnv = {};
+              for (const [name, entries] of Object.entries(pool.portEnv)) {
+                if (!entries || typeof entries !== 'object' || Array.isArray(entries)) { portEnv[name] = entries; continue; }
+                portEnv[name] = {};
+                for (const [spec, value] of Object.entries(entries)) {
+                  if (value === '') continue;
+                  if (value === null) {
+                    const kept = stored?.portEnv?.[name]?.[spec];
+                    if (typeof kept === 'string') portEnv[name][spec] = kept;
+                    else missing.push(`${name} ${spec}`);
+                  } else portEnv[name][spec] = value;
+                }
+                if (!Object.keys(portEnv[name]).length) delete portEnv[name];
+              }
+              if (!Object.keys(portEnv).length) portEnv = undefined;
+            } else portEnv = pool.portEnv;
+            if (missing.length) return { status: 400, error: `No stored value to keep for ${missing.join(', ')}. Enter a value.` };
+            next = { ...pool };
+            if (portEnv === undefined) delete next.portEnv; else next.portEnv = portEnv;
+          }
+
+          let candidate = null;
+          if (body.action !== 'remove') {
+            const checkedPool = validateResourcePools([next], { dashboardPort });
+            if (checkedPool.errors.length) return { status: 400, error: checkedPool.errors.join(' '), errors: checkedPool.errors };
+            candidate = checkedPool.pools[0];
+            const protectedItems = candidate.items.filter((item) => /^\d+$/.test(item) && Number(item) >= 9222 && Number(item) <= 9299);
+            if (protectedItems.length) return { status: 400, error: `Items from 9222 to 9299 are reserved for project browsers: ${protectedItems.join(', ')}.` };
+          }
 
           let nextPools;
-          if (body.action === 'create') nextPools = [...currentPools, pool];
-          else if (body.action === 'update') nextPools = currentPools.map((item, itemIndex) => itemIndex === index ? pool : item);
+          if (body.action === 'create') nextPools = [...currentPools, next];
+          else if (body.action === 'update') nextPools = currentPools.map((item, itemIndex) => itemIndex === index ? next : item);
           else nextPools = currentPools.filter((_, itemIndex) => itemIndex !== index);
 
-          const checked = validateResourcePools(nextPools);
+          const checked = validateResourcePools(nextPools, { dashboardPort });
           if (checked.errors.length) return { status: 400, error: checked.errors.join(' '), errors: checked.errors };
 
-          const held = leases.find((lease) => lease.pool === pool.name && (
-            body.action === 'remove' || !candidate.items.includes(lease.item)
-          ));
-          if (held) {
+          // A port that a holder still uses stays in the pool. A lease that is unbound and has had no listener for idleMinutes does not count.
+          const oldPool = validateResourcePools(stored ? [stored] : []).pools[0];
+          const idleMs = (oldPool?.idleMinutes ?? 20) * 60000;
+          const dropped = [];
+          for (const held of leases.filter((lease) => lease.pool === pool.name && (body.action === 'remove' || !candidate.items.includes(lease.item)))) {
+            const idleSince = Date.parse(held.idleSince ?? held.at);
+            const idle = oldPool && hasIdleRule(oldPool) && held.pid == null && listening.get(held.item) === false
+              && Number.isFinite(idleSince) && Date.now() - idleSince >= idleMs;
+            if (idle) { dropped.push(held); continue; }
             const holder = { pool: held.pool, item: held.item, project: held.project, pane: held.pane || null, worker: held.worker || null };
             const location = [held.pane && `pane ${held.pane}`, held.worker && `worker ${held.worker}`].filter(Boolean).join(', ');
             return { status: 409, error: `Resource pool ${pool.name} cannot be ${body.action === 'remove' ? 'removed' : 'updated'} while item ${held.item} is held by project ${held.project}${location ? ` (${location})` : ''}.`, holder };
           }
 
           writeResourcePools(nextPools);
+          if (dropped.length) dropLeases((lease) => dropped.includes(lease));
           return { status: 200, pools: checked.pools };
         });
         if (changed.status !== 200) return send(res, changed.status, { error: changed.error, ...(changed.errors ? { errors: changed.errors } : {}), ...(changed.holder ? { holder: changed.holder } : {}) });
         engine.setResourcePools(changed.pools);
-        return send(res, 200, { ok: true, pools: changed.pools });
+        return send(res, 200, { ok: true, pools: changed.pools.map(publicPool) });
       }
       if (p === '/api/roamgate' && req.method === 'GET') return send(res, 200, { available: await roamgateAvailable(cfg) });
       if (p === '/roamgate' && req.method === 'GET') {

@@ -50,6 +50,13 @@ export const SETTING_GROUPS = [
     restart: 'No restart. Select Apply policy.',
   },
   {
+    id: 'pools', title: 'Resource pools', advanced: false,
+    controls: 'The ports of a pool, the idle time after which Herdr Boss reclaims a lease, the wait default, and the client values by port. These controls are in the pools editor on the Allocation page.',
+    affects: 'Projects and workers that lease a port. A port that has no listener for the idle time goes back to the pool.',
+    safe: 'Safe to change. A save never drops a port that a holder uses. A client value is stored in the private config file only.',
+    restart: 'No restart. A save takes effect at once.',
+  },
+  {
     id: 'prices', title: 'Token prices', advanced: true,
     controls: 'The USD price per million tokens of each model.',
     affects: 'Only the cost figures on the Analytics page. No price changes how workers run.',
@@ -450,6 +457,36 @@ export const SETTING_HELP = Object.fromEntries([
     what: 'Sets your own image for the Boss or for a project. The Reset button removes your image and returns to the generated avatar.',
     default: 'A generated avatar', unit: 'Image file', range: 'PNG, JPEG, or WebP, at most 512 KB. Each row holds the avatar of the Boss or of a project. Herdr Boss keeps no other format',
     raise: 'Not applicable.', lower: 'Not applicable.',
+    apply: 'now',
+  }),
+
+  // Resource pools (Allocation page)
+  S('pools', 'pool.ports', 'Ports of a pool', {
+    what: 'The ports or items of the pool. Enter single ports, ranges such as 8000-8009, or a list of both.',
+    default: 'None', unit: 'Ports', range: '1024 to 65535, at most 100 ports, no duplicate, not the dashboard port or a browser port',
+    raise: 'A new range adds ports at once. No code change is needed.',
+    lower: 'A port that a holder uses stays in the pool. Release the lease first, or wait for the idle time.',
+    apply: 'now',
+  }),
+  S('pools', 'pool.idleMinutes', 'Idle minutes of a pool', {
+    what: 'The minutes that a leased port can have no listener before Herdr Boss reclaims the lease. A holder gets one notice.',
+    default: '20', unit: 'Minutes', range: '1 to 240',
+    raise: 'A longer time gives a holder more time to start a server.',
+    lower: 'A shorter time frees unused ports sooner.',
+    apply: 'now',
+  }),
+  S('pools', 'pool.waitSeconds', 'Wait for a free item', {
+    what: 'The seconds that lease acquire waits for a free item when the pool is full. The command --wait option overrides it.',
+    default: '0', unit: 'Seconds', range: '0 to 3600',
+    raise: 'A longer wait lets a caller queue for a free port. The queue serves callers in order.',
+    lower: 'A shorter wait fails sooner when no item is free. Zero means no wait.',
+    apply: 'now',
+  }),
+  S('pools', 'pool.portEnv', 'Values by port', {
+    what: 'An environment variable with a value for each port range, for example a client ID. A lease hands the worker the value that matches its port.',
+    default: 'None', unit: 'Text', range: 'Up to 200 characters, no whitespace',
+    raise: 'Add a row to hand a value to the ports of a range.',
+    lower: 'Enter an empty value to clear a stored value. A port without a value gets no variable.',
     apply: 'now',
   }),
 
