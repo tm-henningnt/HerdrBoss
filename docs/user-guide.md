@@ -99,6 +99,26 @@ Run `herdr-boss project check <slug>` at any time. It reads the project and prin
 
 Each step changes nothing when its result already exists. A run that stops at a failed step continues at that step on the next run. After the change, check the shares on the Allocation page.
 
+### New project wizard
+
+The Projects page has the button **New project**. The button opens a panel on a wide screen and a full-screen sheet on a phone. The panel shows one step at a time.
+
+1. **Name.** Enter the slug. Enter a name if it must differ from the slug.
+2. **Folder.** Enter a group folder or an exact path. Herdr Boss has no default folder.
+3. **Remote.** Choose a new GitHub repository, no remote, or an existing URL. The default is a private GitHub repository. A public repository shows a warning line.
+4. **Orchestrator.** Choose the kind, enter an optional goal of at most 1000 characters, and set the tick box **Start the orchestrator**. The tick box is on by default.
+5. **Review.** The panel calls the plan route and lists the steps that the run will do. It also lists each error. Select **Create project** to start the run.
+
+Press Enter to go to the next step. Press Escape to close the panel. The panel asks first when the form has content.
+
+The wizard never creates a repository. For a GitHub remote, the flow posts a decision item to the Mailbox and waits. The progress view then shows **waiting for your decision** and a link to the Mailbox item. Answer the item, then select **Resume**.
+
+The progress view reads the status route every 2 seconds. It stops when the run is done, failed, waiting, or interrupted. It also stops on a sign-in error (401) or a refusal (403). After a network error it retries after 2, 4, and 8 seconds. After 10 failures in a row it stops and shows **Resume** and **Check**. Each step shows its state and its detail. **Resume** continues the run. **Check** shows the project check.
+
+The browser saves the form in local storage. The saved draft holds no repository URL. Select **Start a new form** in the progress view to clear the draft.
+
+The read-only preview does not allow a new project. The panel shows a message in place of the form.
+
 ### Project setup API
 
 The dashboard wizard uses these routes. They run the same flow as `herdr-boss project new`. There is no second implementation.
