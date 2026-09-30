@@ -65,3 +65,7 @@ Summary: Add the AGENTS.md project part and README templates for the new project
 ## 87289067cf70
 Impact: useful
 Summary: A lane is ahead of pace only above a tolerance (default 5 points) and a minimum use (default 30%); the lanes line shows the tolerance.
+
+## fdcccc24dac7
+Impact: useful
+Summary: Add herdr-boss gh label create|list|edit|sync and gh milestone create|list, the triage label preset, and the triage-labels template; project new sets the triage labels on a private GitHub repository.

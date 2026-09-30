@@ -74,7 +74,7 @@ process.exit(9);
   return { root, dataDir, group, repoRoot, ceiling: root, fake, env, calls, mode, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
 
-const base = (f, extra = {}) => ({ slug: 'demo', group: f.group, name: 'Demo', dataDir: f.dataDir, repoRoot: f.repoRoot, ceiling: f.ceiling, env: f.env, remote: 'gh', ...extra });
+const base = (f, extra = {}) => ({ slug: 'demo', group: f.group, name: 'Demo', dataDir: f.dataDir, repoRoot: f.repoRoot, ceiling: f.ceiling, env: f.env, remote: 'gh', stepRunners: { labels: () => ({ status: 'skipped', detail: 'skipped: the label step has its own tests' }) }, ...extra });
 const step = (result, name) => result.steps.find((s) => s.name === name);
 const projectDir = (f) => path.join(f.group, 'Demo');
 const items = (f) => readMessages({ dir: f.dataDir }).filter((r) => r.action === 'decide' || r.action === 'answer');
@@ -424,7 +424,7 @@ test('cli: the command exits 3 and prints the waiting message, then continues af
   const f = fixture();
   try {
     const out = [];
-    const run = (extra = []) => projectCommand(['new', 'demo', '--group', f.group, '--remote', 'gh', ...extra], { env: f.env, herdr: () => { throw new Error('no call'); }, dataDir: f.dataDir, log: (l) => out.push(l), flowOptions: { repoRoot: f.repoRoot, ceiling: f.ceiling } });
+    const run = (extra = []) => projectCommand(['new', 'demo', '--group', f.group, '--remote', 'gh', ...extra], { env: f.env, herdr: () => { throw new Error('no call'); }, dataDir: f.dataDir, log: (l) => out.push(l), flowOptions: { repoRoot: f.repoRoot, ceiling: f.ceiling, stepRunners: { labels: () => 'done' } } });
     assert.equal(run(), 3);
     const text = out.join('\n');
     assert.match(text, /waiting for an Owner decision/);

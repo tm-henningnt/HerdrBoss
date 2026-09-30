@@ -82,14 +82,14 @@ function findCommand(command, env) {
   return command;
 }
 
-function run(command, args, { cwd, env, timeout = TIMEOUT_MS } = {}) {
+export function run(command, args, { cwd, env, timeout = TIMEOUT_MS } = {}) {
   const result = spawnSync(findCommand(command, env), args, { cwd, env, encoding: 'utf8', timeout, stdio: ['ignore', 'pipe', 'pipe'] });
   return { status: result.status, error: result.error, stdout: result.stdout || '', stderr: result.stderr || '' };
 }
 
-const ghEnv = (context) => ({ ...process.env, ...(context.env || {}), GH_PROMPT_DISABLED: '1', NO_COLOR: '1' });
-const gitEnv = (context) => ({ ...process.env, ...(context.env || {}), GIT_TERMINAL_PROMPT: '0' });
-const originUrl = (inputs, context) => {
+export const ghEnv = (context) => ({ ...process.env, ...(context.env || {}), GH_PROMPT_DISABLED: '1', NO_COLOR: '1' });
+export const gitEnv = (context) => ({ ...process.env, ...(context.env || {}), GIT_TERMINAL_PROMPT: '0' });
+export const originUrl = (inputs, context) => {
   const result = run('git', ['config', '--get', 'remote.origin.url'], { cwd: inputs.path, env: gitEnv(context) });
   return result.status === 0 ? result.stdout.trim() : null;
 };

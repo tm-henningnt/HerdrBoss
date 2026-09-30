@@ -136,6 +136,7 @@ The check works for a project that `project new` did not make. It reads the fold
 | `gitignore` | `.gitignore` exists. | `files` |
 | `commit` | The repository has a first commit. | `commit` |
 | `remote` | `origin` is set, or the state records that the step `remote` was skipped. | `remote` |
+| `labels` | The item exists only for a private GitHub `origin` when `gh` is installed and logged in. The repository has every label of the `triage` preset with the preset color and description. Otherwise the check omits the item and calls no other command. The check reads the labels with `gh label list` and writes nothing. A missing label prints `run herdr-boss gh label sync --preset triage`. | `labels` |
 | `policy` | The policy has an entry for the slug. | `policy` |
 | `register` | `project-repos.json` has a row for the slug. | `register` |
 | `status` | The published status exists and has a task. | `status` |
@@ -144,7 +145,7 @@ The check works for a project that `project new` did not make. It reads the fold
 | `harness` | The Codex `writable_roots` hold every required path. | `harness` |
 | `browser` | `browser-sessions.json` has a reservation for the slug. | `harness` |
 
-`--fix STEP` runs the named flow step and no other step. Then the command prints the check again. The steps that `--fix` accepts are `folder`, `files`, `kit`, `commit`, `remote`, `policy`, `register`, `status`, `workspace`, and `harness`. `--fix remote` still posts a decide item to the Owner and waits for the answer. `--fix workspace` needs `--start`, because the step uses model quota. The flag `--fix` may be used once. `--fix` refuses a worker pane, like `project new`. Plain `project check` has no pane check. A step that cannot be fixed by a step, such as invalid JSON in `.herdr-boss.json`, needs a correction by hand.
+`--fix STEP` runs the named flow step and no other step. Then the command prints the check again. The steps that `--fix` accepts are `folder`, `files`, `kit`, `commit`, `remote`, `labels`, `policy`, `register`, `status`, `workspace`, and `harness`. `--fix remote` still posts a decide item to the Owner and waits for the answer. `--fix workspace` needs `--start`, because the step uses model quota. The flag `--fix` may be used once. `--fix` refuses a worker pane, like `project new`. Plain `project check` has no pane check. A step that cannot be fixed by a step, such as invalid JSON in `.herdr-boss.json`, needs a correction by hand.
 
 | Exit code | Meaning |
 |---|---|
@@ -160,7 +161,7 @@ Run `project new` in a plain terminal, in the pane labeled `boss`, or in a pane 
 
 The module `src/project-new.js` exports `runProjectNew(options)`. The command calls it.
 
-`runProjectNew` runs these steps in order: `validate`, `folder`, `files`, `kit`, `commit`, `remote`, `policy`, `register`, `status`, `workspace`, `harness`. The step `check` reports `not built yet`. It changes nothing. A step that returns `waiting` stops the run. The result has `waiting: true`, and the later steps are `pending`.
+`runProjectNew` runs these steps in order: `validate`, `folder`, `files`, `kit`, `commit`, `remote`, `labels`, `policy`, `register`, `status`, `workspace`, `harness`. The step `check` reports `not built yet`. It changes nothing. A step that returns `waiting` stops the run. The result has `waiting: true`, and the later steps are `pending`.
 
 | Option | Meaning |
 |---|---|
@@ -211,6 +212,13 @@ The `remote` step (`src/project-new-remote.js`) sets the Git remote `origin`. Cr
 The dashboard wizard can send a decision (`visibility`, `source: wizard`, and `confirmPublic: true` for `public`) to the routes `POST /api/project-new` and `POST /api/project-new/plan`. With a decision, the step creates the repository as in item 6 and posts no item. The state records `ids.remoteDecision` with `visibility`, `source`, and `at`. A resumed flow that has `remoteDecision` posts no item. When the flow had posted an item, the step closes it with the note `answered in the wizard` and uses the decision. The routes refuse `public` without `confirmPublic: true` with status 400. The command line ignores a decision.
 
 The step never runs `gh auth token`. It never reads, prints, or stores a token. It removes tokens and URL credentials from each line of `gh` and `git` output before it prints or records the line. The state file holds the Mailbox item ID and the created repository name in `ids`, in the fields `remoteAsk`, `remoteDecision`, `remoteLoginItem`, and `remoteCreated`. A rerun asks no second question and creates no second repository. When `origin` exists and matches, the step changes nothing. When `origin` points to another repository, the step fails.
+
+The `labels` step (`src/project-new-labels.js`) runs after `remote` and before `policy`. It sets the `triage` labels with the same sync as `herdr-boss gh label sync --preset triage`. It creates or edits a label and never deletes one.
+
+1. The step runs only when `origin` is a `github.com` repository, and it acts on that repository only (see Safe `gh` commands). Without `origin`, it prints `skipped: no remote`. With another host, it prints `skipped: the origin is not a GitHub repository`.
+2. The step runs only for a private repository. It reads the visibility from the decision of the wizard in the flow state (`remoteDecision`), but only when `remoteCreated` names the repository of `origin`. Otherwise it runs `gh repo view --json visibility`. A public or internal repository prints `skipped: the repository is public, not private`.
+3. When `gh` is not installed or not logged in, the step prints a `skipped:` line. It never runs `gh auth login`.
+4. A failed `gh` call fails the step. The message has tokens and URL credentials removed. Run the flow again with `--resume` to repeat the step. A rerun changes no label that already matches.
 
 The `policy` step adds the project to `policy.json` in the data folder. The new project gets `share` 10, `mode` `auto`, and no exclusions. When the total of all shares would pass 100, the step scales the other shares down: each new share is the old share times (100 minus 10) divided by the old total, rounded down. The step changes only shares. It keeps each mode and each exclusion. It refuses to run when a share is not a whole number of 0 or more. It refuses a change that would lower a share of 1 or more to below 1, and it writes nothing then. It saves the policy through the validation of `herdr-boss policy set`. The step is not blocked by the share guard of `policy set`, because it changes many shares on purpose. It keeps the previous total. The write adds one line with the caller kind `project-new` to `policy-changes.jsonl`. The step prints the shares of all projects before and after the change. When the policy already has an entry for the slug, the step changes nothing.
 
@@ -814,6 +822,26 @@ When a task names `serve:live` and the `serve-ports` pool exists, `worker start`
 | `kit block` | Print the marked `AGENTS.md` stub with the current hash. Old instructions use this command. Use `kit install` for a new installation. |
 | `worktree prune [--apply] [--no-archive]` | List worktrees that pass the safe checks and show processes in removal candidates. `--apply` removes only worktrees with no blocking process. Before it removes a worktree, `--apply` archives the worker reports. `--no-archive` skips the archive. |
 | `gh issue create\|comment\|edit ... --body-file FILE` | Run a GitHub issue command. An inline `--body` is refused. |
+| `gh label create NAME --color RRGGBB [--description TEXT]` | Create a GitHub label. |
+| `gh label edit NAME [--color RRGGBB] [--description TEXT] [--new-name NAME]` | Change a GitHub label. The command needs at least one option. |
+| `gh label list` | List the labels of the repository. |
+| `gh label sync --preset NAME [--dry-run]` | Create or edit the labels of a preset. The command reads `gh label list --json` first. It creates a missing label, edits a label whose color or description differs, and leaves an equal label. It never deletes a label. It prints one line for each label: `ok`, `create`, or `update`. `--dry-run` prints `would create` and `would update` and runs no write command. The only preset is `triage`. |
+| `gh milestone create TITLE [--description TEXT] [--due YYYY-MM-DD]` | Create a GitHub milestone. The command runs `gh api`, because `gh` has no milestone command. |
+| `gh milestone list` | List the open milestones. |
+
+### Safe `gh` commands
+
+Every `gh` command runs in the project root. Herdr Boss passes each value as one argument and starts no shell. It checks every value before it calls `gh`.
+
+- A label name has 1 to 50 characters. A label description has at most 100 characters. A label color has 6 hex digits, without `#`.
+- A milestone title has 1 to 255 characters. A milestone description has at most 1000 characters. A due date is a real date in the form `YYYY-MM-DD`.
+- A value has no control character. A name, title, description, or option value does not start with `-`.
+- A value that holds a secret is refused. The check is the secret scan of `src/secret-scan.js`. The message names the class of secret and never prints the value.
+- `label delete`, `milestone delete`, and every other action are refused.
+- A label command and a milestone command act on the repository of `origin`. The command reads `remote.origin.url` from Git, and it refuses a missing origin or an origin that is not a `github.com` URL. It passes `--repo OWNER/REPO` (or the path `repos/OWNER/REPO/milestones`) to `gh`. It removes `GH_REPO` from the environment of `gh` and sets `GH_HOST` to `github.com`. An `upstream` remote or a default repository of `gh` does not change the target.
+- Herdr Boss compares label names without regard to case. A sync does not rename a label whose name differs from the preset only in case.
+
+The label presets are data in `kit/label-presets.json`: a preset name and a list of `name`, `color`, and `description`. The preset `triage` holds `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, and `wontfix`. The file `kit/templates/triage-labels.md` is the template for the role table of these labels.
 
 ### Kit change impact
 

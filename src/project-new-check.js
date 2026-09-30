@@ -11,8 +11,9 @@ import { HOOK_COMMAND, KIT_FILE, checkAgentsFile, installedKitRevision, kitRevis
 import { KIT_ROOT } from './kit/config.js';
 import { SLUG } from './projects.js';
 import { redact } from './project-new-remote.js';
+import { checkLabels } from './project-new-labels.js';
 
-export const CHECK_ITEMS = ['folder', 'agents', 'memory', 'kit', 'config', 'gitignore', 'commit', 'remote', 'policy', 'register', 'status', 'workspace', 'orchestrator', 'harness', 'browser'];
+export const CHECK_ITEMS = ['folder', 'agents', 'memory', 'kit', 'config', 'gitignore', 'commit', 'remote', 'labels', 'policy', 'register', 'status', 'workspace', 'orchestrator', 'harness', 'browser'];
 const CLAUDE_CLEAN = 'Claude autoMode: nothing to change.';
 const BROWSER_TIMEOUT_MS = 60000;
 
@@ -101,7 +102,7 @@ function git(dir, args) {
 }
 
 // Check one project. Read only: no file is written, no step runs, Herdr gets list and get calls only.
-// options: dataDir, home, herdr (runner, needed only for a project that the flow started).
+// options: dataDir, home, env (the environment of gh, default: this process), herdr (runner, needed only for a project that the flow started).
 export function checkProject(slug, options = {}) {
   if (!SLUG.test(String(slug))) throw new Error('The slug must match [a-z0-9][a-z0-9-]{0,63}.');
   const dataDir = path.resolve(options.dataDir || DATA_DIR);
@@ -160,6 +161,11 @@ export function checkProject(slug, options = {}) {
   if (origin) ok('remote', `origin ${stripRemoteCredentials(origin)}`);
   else if (recorded?.status === 'skipped') ok('remote', `none recorded: ${recorded.detail}`);
   else missing('remote', 'the project has no origin and the state does not record none', 'remote');
+
+  // The labels item exists only for a private GitHub remote and a working gh. Otherwise the check skips it quietly.
+  const labels = checkLabels({ dir, url: isRepo ? git(dir, ['config', '--get', 'remote.origin.url']) : null, state, env: options.env });
+  if (labels?.ok) ok('labels', labels.detail);
+  else if (labels) missing('labels', labels.detail, 'labels');
 
   const policy = readJson(path.join(dataDir, 'policy.json')).value;
   if (policy?.projects && Object.hasOwn(policy.projects, slug)) ok('policy', `share ${policy.projects[slug].share}`);

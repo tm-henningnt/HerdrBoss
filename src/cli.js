@@ -154,6 +154,8 @@ const USAGE = `herdr-boss <command>
                           prints the digest and the summary line only.
   kit block             Print the marked Herdr Boss stub for AGENTS.md.
   gh issue ...          Run safe GitHub issue commands.
+  gh label create|list|edit|sync ...  Run safe GitHub label commands. sync --preset triage [--dry-run] sets the triage labels.
+  gh milestone create|list ...  Run safe GitHub milestone commands.
   models                Show allowed worker models.
   say [--reply-to ID] [--action answer|approve|decide|read] TEXT  Reply to the Owner from the boss pane or an orch pane.
   messages [THREAD]     Print the message records of one thread, or of all threads, as JSON.

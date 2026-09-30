@@ -4,7 +4,8 @@ import { execFileSync } from 'node:child_process';
 import { DEFAULT_RULES_FILE, findGitRoot, loadModels, loadProjectConfig } from './config.js';
 import { mergeModels } from '../control.js';
 import { appendDelegatedRun, compareChangedPaths, gitStatusPaths, readDelegatedRuns, readJson, validateAllowedPaths, validateDelegatedRun, normalizeWorkerReport, validateWorkerReport } from './orchestration.js';
-import { buildGhArgs } from './gh.js';
+import { buildGhArgs, buildGhLabelArgs, buildGhMilestoneArgs, loadLabelPreset, parseLabelSync } from './gh.js';
+import { cleanGhEnv, ghRunner, originRepo, syncLabels } from '../gh-labels.js';
 import { allowWorkerScope, collectWorker, createHerdrRunner, listWorkers, parkWorker, startWorker } from './workers.js';
 import { pruneWorktrees } from './worktrees.js';
 import { acquireProjectLock, listProjectLocks, pushWithLock, releaseProjectLock } from './locks.js';
@@ -33,6 +34,8 @@ const USAGE = `Kit commands:
   kit update [--quiet]
   kit block
   gh issue create|comment|edit ... --body-file FILE
+  gh label create|list|edit|sync ...
+  gh milestone create|list ...
   models [--kind KIND]
 `;
 
@@ -425,10 +428,21 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
   }
 
   if (command === 'gh') {
+    const GH_USAGE = 'Usage: gh issue create|comment|edit ... --body-file FILE | gh label create|list|edit|sync ... | gh milestone create|list ...';
     const [group, action, ...ghArgs] = argv;
-    if (group !== 'issue') fail('Usage: gh issue create|comment|edit ... --body-file FILE');
-    const built = buildGhArgs(action, ghArgs);
-    execFileSync('gh', built, { cwd: config.root, stdio: 'inherit' });
+    if (!['issue', 'label', 'milestone'].includes(group)) fail(GH_USAGE);
+    if (group === 'label' && action === 'sync') {
+      const { preset, dryRun } = parseLabelSync(ghArgs);
+      const labels = loadLabelPreset(preset);
+      const result = syncLabels(labels, ghRunner({ cwd: config.root, env }), { repo: originRepo(config.root), dryRun });
+      for (const line of result.lines) output(line);
+      return result;
+    }
+    // A label or milestone command acts on the repository of origin, named on the command line.
+    const built = group === 'issue' ? buildGhArgs(action, ghArgs)
+      : group === 'label' ? buildGhLabelArgs(action, ghArgs, { repo: ['create', 'edit', 'list'].includes(action) ? originRepo(config.root) : undefined })
+        : buildGhMilestoneArgs(action, ghArgs, { repo: ['create', 'list'].includes(action) ? originRepo(config.root) : undefined });
+    execFileSync('gh', built, { cwd: config.root, env: group === 'issue' ? env : cleanGhEnv(env), stdio: 'inherit' });
     return;
   }
 

@@ -127,7 +127,7 @@ test('the plan route returns the steps with would-text and writes nothing', asyn
   assert.equal(response.json.ok, true);
   assert.equal(response.json.dryRun, true);
   assert.equal(response.json.path, path.join(group, 'demo'));
-  assert.deepEqual(response.json.steps.map((step) => step.name), ['validate', 'folder', 'files', 'kit', 'commit', 'remote', 'policy', 'register', 'status', 'workspace', 'harness', 'check']);
+  assert.deepEqual(response.json.steps.map((step) => step.name), ['validate', 'folder', 'files', 'kit', 'commit', 'remote', 'labels', 'policy', 'register', 'status', 'workspace', 'harness', 'check']);
   assert.match(response.json.steps.find((step) => step.name === 'folder').detail, /^would run mkdir -p /);
   assert.equal(fs.existsSync(path.join(group, 'demo')), false);
   assert.equal(fs.existsSync(path.join(dataDir, 'flows')), false);

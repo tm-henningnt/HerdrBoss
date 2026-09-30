@@ -16,9 +16,10 @@ import { loadModels } from './kit/config.js';
 import { kitRevision } from './kit/agents-check.js';
 import { describeWorkspace, workspaceStep } from './project-new-workspace.js';
 import { describeHarness, harnessStep } from './project-new-check.js';
+import { describeLabels, labelsStep } from './project-new-labels.js';
 import { ORG_NAME, RemoteError, checkDecision, describeRemote, remoteStep, validateRemoteUrl } from './project-new-remote.js';
 
-export const PROJECT_NEW_STEPS = ['validate', 'folder', 'files', 'kit', 'commit', 'remote', 'policy', 'register', 'status', 'workspace', 'harness', 'check'];
+export const PROJECT_NEW_STEPS = ['validate', 'folder', 'files', 'kit', 'commit', 'remote', 'labels', 'policy', 'register', 'status', 'workspace', 'harness', 'check'];
 export const NOT_BUILT = new Set(['check']);
 // `project check --fix STEP` runs one of these. validate refuses a folder that exists. check is not a change.
 export const FIXABLE_STEPS = PROJECT_NEW_STEPS.filter((name) => !['validate', 'check'].includes(name));
@@ -218,6 +219,7 @@ const DESCRIBE = {
   register: (i) => `record ${i.slug} and ${i.path} in project-repos.json`,
   status: (i) => `publish the first status of ${i.slug} with the task "${FIRST_TASK}"`,
   remote: describeRemote,
+  labels: describeLabels,
   workspace: describeWorkspace,
   harness: describeHarness,
   files: (i) => `write ${projectFiles(i).map(([f]) => f).join(', ')} in ${i.path}; keep each file that exists`,
@@ -271,6 +273,7 @@ const RUN = {
     return `committed ${git(['rev-parse', '--short', 'HEAD'])}`;
   },
   remote: remoteStep,
+  labels: labelsStep,
   policy(inputs, context) { return applyProjectPolicy(inputs.slug, context.dataDir); },
   register(inputs, context) {
     const git = (args) => execFileSync('git', args, { cwd: inputs.path, stdio: ['ignore', 'pipe', 'ignore'] }).toString('utf8').trim();
