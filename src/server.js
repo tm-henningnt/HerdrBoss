@@ -29,6 +29,7 @@ import { appendMessage, chatSummaries, isMailAnswer, isMailRecord, messagesById,
 import { assertSqliteAvailable } from './sqlite-store.js';
 import { openMessageStore } from './message-store.js';
 import { BODY_LIMIT as PROJECT_NEW_BODY_LIMIT, createProjectNewApi } from './project-new-api.js';
+import { createGoalApi } from './goal-api.js';
 import { createReviewApi } from './review-api.js';
 
 const PUBLIC = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
@@ -172,7 +173,7 @@ export function assertPreviewHost(host) {
   return value;
 }
 
-export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine = (config, options) => new Engine(config, options), closeTab = browserCloseTab, projectNew = {} } = {}) {
+export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine = (config, options) => new Engine(config, options), closeTab = browserCloseTab, projectNew = {}, goalSet = {} } = {}) {
   const machineHoursCache = new Map();
   let analyticsCache = null;
   // A direct serve() call must refuse an unsafe preview before the access token, the watcher, or a tick writes a file.
@@ -190,6 +191,19 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine 
   const engine = readOnlyPreview ? createEngine(cfg, { push: false, act: false }) : createEngine(cfg);
   const messageStore = openMessageStore({ dir: DATA_DIR });
   const projectNewApi = createProjectNewApi({ dataDir: DATA_DIR, log: (level, text) => engine.log(level, text), ...projectNew });
+  // The goal routes use the Herdr runner of the engine. A test replaces run.
+  const goalApi = createGoalApi({
+    run: async (args) => {
+      const out = await engine.herdrRunner('herdr', args);
+      if (args[1] === 'read' || typeof out !== 'string') return out;
+      try { return JSON.parse(out); } catch { return out; }
+    },
+    control: () => engine.state?.control || {},
+    policy: () => loadPolicy(),
+    dataDir: DATA_DIR,
+    log: (level, text) => engine.log(level, text),
+    ...goalSet,
+  });
   const reviewApi = createReviewApi({ dataDir: DATA_DIR });
   const clients = new Set();
   let closed = false;
@@ -268,6 +282,10 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine 
           return res.end();
         }
         return send(res, 401, { error: 'Access token required.' });
+      }
+      if (p.startsWith('/api/goal/')) {
+        const routed = await goalApi.handle(req.method, p, () => projectNewBody(req));
+        return send(res, routed.status, routed.body);
       }
       if (projectNewRoute) {
         const routed = await projectNewApi.handle(req.method, p, () => projectNewBody(req));

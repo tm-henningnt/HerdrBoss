@@ -929,6 +929,27 @@ Herdr Boss watches a pane from its first tick. A pane that Herdr Boss sees for t
 
 The context trigger uses the same rules as the quota trigger. It skips the Boss, a held project, and a project that does not work. It activates no successor with a weaker or unranked model tier. It prepares no second successor while a record for the same pane is `prepared`, `preparing`, or `needs-inspection`.
 
+### Set the goal of a running orchestrator
+
+Use **Set goal** to give a running orchestrator a new `/goal`. A `/goal` that arrives while the agent works is queued as plain text and does not run. Herdr Boss therefore waits until the pane is idle.
+
+1. Open the project page or the Agents page. Find the orchestrator of the project.
+2. Select **Set goal**. A dialog opens with the text field. The field starts with the **Default orchestrator goal** from Settings. Edit the text if you need to. The limit is 1000 characters.
+3. Read the warning. The command waits until the pane of the orchestrator is idle. The wait can take up to 10 minutes.
+4. Select **Set goal** in the dialog. The dialog closes and the status line under the goal shows the progress.
+
+The status line shows `Waiting for an idle pane`, `Sending the command`, `Checking that the pane shows the goal`, `Goal active`, or `Goal not set` with the reason. The line above it shows the current goal in one collapsed line. Select it to read the whole goal.
+
+Herdr Boss sends nothing while the agent works, a dialog is open, or the input line holds text. If the pane stays busy for 10 minutes, the job fails with `the pane stayed busy`. Start it again later. If the pane does not show the goal after 3 tries, the job fails with `sent but not shown`. Look at the pane.
+
+**Cancel** in the status line stops a job that still waits. After a restart of the service, a job that was running shows `Interrupted`. Select **Set goal** to start it again. If the session expired, the line shows `Sign in again`.
+
+Herdr Boss allows **Set goal** for a project that is paused or stood down. You can prepare the goal before the project runs again.
+
+Herdr Boss counts the goal as active only when its text is new on the screen after the send, and the pane shows the goal confirmation or is idle with an empty input line. A goal that is only typed or queued in the input line does not count. An old identical `/goal` in the scrollback does not count.
+
+The command line does the same: `herdr-boss goal set <project|pane> [--text TEXT] [--dry-run]`. See `docs/cli.md`.
+
 ## Project browsers
 
 Each project can have one persistent Chrome profile. Request it with `herdr-boss browser request SLUG`, or open it from the Browsers page. Herdr Boss assigns a port from 9223 to 9299.

@@ -11,6 +11,7 @@ import { viewerKeyAction, nextOpenItem, itemNeighbors, sectionStep, addPin, remo
 import { attachGestures, restoreStages, resetStages, zoomStage } from './review-gestures.js';
 import { createItemSaver, createTapGuard, startViewedTimer } from './review-save.js';
 import { createWizard } from './project-wizard-ui.js';
+import { goalSetBlockHtml, goalDialogHtml, goalJobRunning, goalStatusText, pollGoalStatus } from './goal-set.js';
 import { buildDraftShares, draftSignature, shareTotal, distributeRemainder, moveShares, totalHtml, checkSave, confirmText, sumConfirmText, allocationFooterHtml, staleRowHtml } from './allocation-draft.js';
 import { stackedBars, lineChart, stripBars, outcomeBars, legendHtml, foldSeries, spendSeries, claudeSpend, quotaSeries, firstTimeRate, activityFilter, activityChoices, eventLevel, dayLabel, usd, minutes, compact, ACTIVITY_RANGES, ACTIVITY_LEVELS, SERIES_CLASSES, DENIAL_RANGES, DEFAULT_DENIAL_RANGE, denialRange, denialSeries, denialMarkers, denialDetailsHtml, denialLegendHtml, policyChangesTitle, policyChangesListHtml, policyChangesDetailsHtml } from './analytics.js';
 
@@ -1007,6 +1008,13 @@ function goalField(label, text, source = '') {
   return `<details class="goal-field"><summary><b>${esc(label)}</b><span class="goal-line">${esc(text)}</span></summary><p>${esc(text)}</p>${source ? `<p class="muted">Source: ${esc(source)}</p>` : ''}</details>`;
 }
 
+// The Set goal control of one project. Its status line shows the last job of this page session, else the published goal.
+const goalJobs = new Map();
+const goalStatusAsked = new Set();
+function goalSetBlock(s, slug, goal, showGoal = true) {
+  return goalSetBlockHtml({ showGoal, slug, goal, job: goalJobs.get(slug) || null, enabled: Boolean(s.control?.projects?.[slug]?.orch?.pane), esc, goalField, clock });
+}
+
 function openHandoffRecords(records, panes) {
   const live = Array.isArray(panes) ? new Set(panes.map((p) => p.id)) : null;
   return (Array.isArray(records) ? records : []).filter((x) => x && HANDOFF_OPEN.includes(x.status) && x.newPane && (!live || (live.has(x.newPane) && (!x.sourcePane || live.has(x.sourcePane)))));
@@ -1478,7 +1486,7 @@ function agentInventory(s) {
     const work = panes.filter((p) => !p.orch && p.label !== 'boss');
     const mode = !project && excluded ? 'Not a project' : project?.effectiveMode === 'paused' ? 'Paused' : project?.idle ? 'Idle' : 'Active';
     return `<section class="workspace-row"><header class="workspace-row-head"><div class="workspace-title"><h2>${slug ? `<a href="/projects/${esc(slug)}">${esc(w.label)}</a>` : esc(w.label)}</h2><span class="mono">${esc(w.id)}</span>${!project && excluded ? '<span class="tag">Not a project</span>' : ''}</div><div class="workspace-context"><span>${mode}</span><span>${work.length} worker${work.length === 1 ? '' : 's'}</span>${slug ? `<a href="/projects/${esc(slug)}">Project details →</a>` : ''}</div></header>
-      <div class="workspace-row-body"><div class="workspace-role"><h3>Orchestrator</h3>${orch ? agentProfile(orch, s) : '<div class="missing-orch">No labeled orchestrator. Label its Herdr pane <code>orch</code> to supervise this project.</div>'}</div>
+      <div class="workspace-row-body"><div class="workspace-role"><h3>Orchestrator</h3>${orch ? `${agentProfile(orch, s)}${slug && orch.label !== 'boss' ? goalSetBlock(s, slug, (s.projects || []).find((x) => x.slug === slug)?.goal) : ''}` : '<div class="missing-orch">No labeled orchestrator. Label its Herdr pane <code>orch</code> to supervise this project.</div>'}</div>
       <div class="workspace-role workspace-workers"><h3>Workers <span>${work.length}</span></h3>${work.length ? `<ul>${work.map((p) => `<li>${agentProfile(p, s)}</li>`).join('')}</ul>` : '<p class="workspace-empty">No worker agents in this workspace.</p>'}</div></div></section>`;
   }).join('');
   return `${summary}<div class="workspace-list">${rows || '<div class="calm-state">No Herdr workspaces are open.</div>'}</div>`;
@@ -3891,7 +3899,7 @@ function organizationChart(s) {
         ['Published status', published ? `${published.status || published.phase || 'Published'} · updated ${ago(published.updated)}` : 'Not published'],
       ],
     });
-    return `<section class="org-column" aria-label="${esc(p.label)}"><div class="org-lead">${node}${orgReserve(s, orgSuccessor(s, p.orch?.pane), `project:${p.slug}`)}</div><p class="org-current"><span>Current task</span> ${esc(taskText)}</p>${orgWorkers(s, workersIn(p.workspace), published, `project:${p.slug}`)}<a class="org-link" href="/projects/${esc(p.slug)}">Project details →</a></section>`;
+    return `<section class="org-column" aria-label="${esc(p.label)}"><div class="org-lead">${node}${orgReserve(s, orgSuccessor(s, p.orch?.pane), `project:${p.slug}`)}${p.orch?.pane ? goalSetBlock(s, p.slug, published?.goal) : ''}</div><p class="org-current"><span>Current task</span> ${esc(taskText)}</p>${orgWorkers(s, workersIn(p.workspace), published, `project:${p.slug}`)}<a class="org-link" href="/projects/${esc(p.slug)}">Project details →</a></section>`;
   }).join('');
 
   return [
@@ -5192,7 +5200,7 @@ function project(s, slug) {
   const links = p.links?.length ? `<div class="panel"><h2>Links</h2><ul class="links">${p.links.map((l) => safeUrl(l.url) ? `<li><a href="${esc(safeUrl(l.url))}" target="_blank" rel="noreferrer">${esc(l.label || l.url)}</a></li>` : `<li>${esc(l.label || '')}</li>`).join('')}</ul></div>` : '';
   const notes = p.notes?.length ? `<div class="panel"><h2>Notes</h2><ul class="notes">${p.notes.map((n) => `<li>${code(n)}</li>`).join('')}</ul></div>` : '';
   return [
-    `<section class="phead"><h1>${esc(p.project)}</h1>${p.goal ? `<div class="owner-goal">${goalField('Current Owner goal', p.goal)}</div>` : ''}${p.summary ? `<p>${esc(p.summary)}</p>` : ''}${phases}<div class="win-foot">${published ? `updated ${ago(p.updated)}${staleStatusTag(s, p)}${p.status ? ` · ${esc(p.status)}` : ''}` : 'No project status published yet'}${p.git && typeof p.git === 'object' && (p.git.branch || p.git.commit || p.git.dirty) ? ` · <span class="mono">${esc(p.git.branch || '')}${p.git.commit ? ` @ ${esc(String(p.git.commit).slice(0, 12))}` : ''}${p.git.dirty ? ' · uncommitted changes' : ''}</span>` : ''}</div></section>`,
+    `<section class="phead"><h1>${esc(p.project)}</h1>${p.goal ? `<div class="owner-goal">${goalField('Current Owner goal', p.goal)}</div>` : ''}${live?.orch?.pane ? goalSetBlock(s, slug, p.goal, false) : ''}${p.summary ? `<p>${esc(p.summary)}</p>` : ''}${phases}<div class="win-foot">${published ? `updated ${ago(p.updated)}${staleStatusTag(s, p)}${p.status ? ` · ${esc(p.status)}` : ''}` : 'No project status published yet'}${p.git && typeof p.git === 'object' && (p.git.branch || p.git.commit || p.git.dirty) ? ` · <span class="mono">${esc(p.git.branch || '')}${p.git.commit ? ` @ ${esc(String(p.git.commit).slice(0, 12))}` : ''}${p.git.dirty ? ' · uncommitted changes' : ''}</span>` : ''}</div></section>`,
     projectNow(s, p, slug, work),
     metrics,
     programBlock(work),
@@ -5234,6 +5242,7 @@ const HELP = {
   projects: ['Projects', `
     <p>Select a project card. The detail below it shows what the orchestrator published and what runs now.</p>
     <p>The page puts the sections in the order of use: <b>Now</b>, then the plan and progress, then history (all work, notes, and links), then <b>Details</b>.</p>
+    <h3>Set goal</h3><p><b>Set goal</b> gives the running orchestrator of a project a new <code>/goal</code>. A dialog shows the text, which starts as the <b>Default orchestrator goal</b> from Settings. Edit it if you need to. The limit is 1000 characters. The command waits until the pane of the orchestrator is idle, for up to 10 minutes. It sends nothing while the agent works, a dialog is open, or the input line holds text. <b>Cancel</b> stops a job that waits. <b>Set goal</b> is also allowed for a paused or stood down project. After a restart of the service, a job that ran shows <b>Interrupted</b>. The status line shows <b>Waiting for an idle pane</b>, <b>Sending the command</b>, <b>Checking that the pane shows the goal</b>, <b>Goal active</b>, or <b>Goal not set</b> with the reason.</p>
     <h3>Now</h3><p>The orchestrator line shows the harness, the pane, and the state of the orchestrator. Select it to open the handover form. A needed or prepared handover shows the full continuity section in its place. The cards below show the decisions that wait for you, the status issues, the running workers with their state and task, the work that waits to merge, and the next task. A card without content does not show. Select a task in a card to select it on the board.</p>
     <h3>New project</h3><p>Select <b>New project</b> to build a project. The form has five steps: name, folder, remote, orchestrator, and review. The folder is a group folder or an exact path. There is no default folder. The remote is a new GitHub repository (private by default), no remote, or an existing URL. Your choice of private or public is the decision: Herdr Boss creates the repository at once and posts nothing to the Mailbox. A public repository can be read by anyone on the internet, with all files and the full history. Type the word <code>public</code> in the confirmation field to enable <b>Next</b>. The orchestrator step sets the kind, the goal, and the tick box <b>Start the orchestrator</b>, which is on by default. The review step shows what the run will do. <b>Create project</b> starts the run. The progress view shows each step and updates every 2 seconds. When a run waits for your decision, for example after a command-line start, open the Mailbox item, answer it, then select <b>Resume</b>. <b>Check</b> reads the finished project. The form saves your entries in this browser, but not the repository URL. The read-only preview does not allow a new project.</p>
     <h3>Details</h3><p>The last section holds closed cards: <b>Files and kit</b>, <b>Worker config</b>, <b>Agents and panes</b>, and <b>Browser and leases</b>. Each header shows a short summary. The browser remembers the open or closed state of each card for each project.</p>
@@ -5343,6 +5352,7 @@ const HELP = {
     <p>Changes stay in a draft until you select <b>Apply policy</b>. A rejected save shows the server error and keeps your draft.</p>`],
   agents: ['Agents', `
     <p>One page with two views. The switch at the top changes the view. The <b>Chart</b> view shows the organization from the Owner down to the workers. The <b>List</b> view lists every Herdr workspace with its orchestrator and workers. Chart is the default. The URL holds the view as <code>?view=chart</code> or <code>?view=list</code>, and this browser remembers the last choice.</p>
+    <h3>Set goal</h3><p><b>Set goal</b> gives the running orchestrator of a project a new <code>/goal</code>. A dialog shows the text, which starts as the <b>Default orchestrator goal</b> from Settings. Edit it if you need to. The limit is 1000 characters. The command waits until the pane of the orchestrator is idle, for up to 10 minutes. It sends nothing while the agent works, a dialog is open, or the input line holds text. <b>Cancel</b> stops a job that waits. <b>Set goal</b> is also allowed for a paused or stood down project. After a restart of the service, a job that ran shows <b>Interrupted</b>. The status line shows <b>Waiting for an idle pane</b>, <b>Sending the command</b>, <b>Checking that the pane shows the goal</b>, <b>Goal active</b>, or <b>Goal not set</b> with the reason.</p>
     <h3>Watch</h3><p>The box at the top shows the watch state in its header. When no watch runs, the box is closed; select the header to open it. While a watch runs, the box is open. The browser remembers the open or closed state. Choose the end date and time in the picker. The default is the next 07:30: today when it is before 07:30, tomorrow otherwise. The length in hours shows next to the picker, and a warning shows above 48 hours. A watch has no maximum length. The end time must be in the future.</p>
     <p>Select <b>Until I cancel</b> to run the watch until you stop it. Then you can select <b>Daily report</b> and set a time, by default 07:30. A watch until cancelled sends no report unless you select this. Select <b>Quiet hours</b> to hold back the held actions.</p>
     <p>The <b>Routines</b> list shows the prompts that the service sends to the Boss pane during the watch. Clear the box of a routine to leave it out of this watch. Set its schedule: a number of minutes between runs, or a time before the end of the watch. A routine before the end has no run in a watch until cancelled.</p>
@@ -6075,6 +6085,7 @@ function render(force = false) {
   syncDepGraphs();
   syncBoards();
   syncTopHeight();
+  goalAfterRender();
   if (pendingHash) {
     const target = document.getElementById(pendingHash);
     pendingHash = null;
@@ -6683,6 +6694,109 @@ async function postJson(url, body) {
   if (!response.ok) throw Object.assign(new Error(result.error || (result.errors || []).join(' ') || 'The request failed.'), { attached: result.attached === true });
   return result;
 }
+
+// ---------- Set goal ----------
+// The Set goal button opens a confirm dialog. The service waits for an idle pane in the background. The page polls the job status.
+const goalPolls = new Set();
+
+function goalDialog() {
+  let dialog = document.getElementById('goal-dialog');
+  if (dialog) return dialog;
+  dialog = document.createElement('dialog');
+  dialog.id = 'goal-dialog';
+  dialog.className = 'lease-confirm goal-dialog';
+  dialog.setAttribute('aria-labelledby', 'goal-dialog-title');
+  dialog.innerHTML = goalDialogHtml();
+  document.body.append(dialog);
+  dialog.querySelector('[data-goal-cancel]').addEventListener('click', () => dialog.close());
+  dialog.querySelector('#goal-dialog-confirm').addEventListener('click', confirmGoalSet);
+  return dialog;
+}
+
+// Keyed update: only the status line and the button of the project change, no page render.
+function syncGoalStatus(slug) {
+  const job = goalJobs.get(slug) || null;
+  const goal = (state?.projects || []).find((x) => x.slug === slug)?.goal;
+  const key = CSS.escape(slug);
+  for (const el of document.querySelectorAll(`[data-goal-status="${key}"]`)) el.textContent = goalStatusText(goal, job, clock);
+  for (const el of document.querySelectorAll(`[data-goal-set="${key}"]`)) el.disabled = goalJobRunning(job) || !state?.control?.projects?.[slug]?.orch?.pane;
+  for (const el of document.querySelectorAll(`[data-goal-stop="${key}"]`)) el.hidden = job?.state !== 'waiting';
+}
+
+let goalPageGone = false;
+addEventListener('pagehide', () => { goalPageGone = true; });
+
+async function pollGoal(slug) {
+  if (goalPolls.has(slug)) return;
+  goalPolls.add(slug);
+  const key = CSS.escape(slug);
+  const reason = await pollGoalStatus({
+    fetchStatus: async () => {
+      const response = await fetch(`/api/goal/status/${encodeURIComponent(slug)}`);
+      let body = null;
+      try { body = await response.json(); } catch {}
+      return { status: response.status, body };
+    },
+    onJob: (job) => { if (job) goalJobs.set(slug, job); else goalJobs.delete(slug); syncGoalStatus(slug); },
+    // The page stops when the route changes or the page unloads.
+    stillShown: () => !goalPageGone && Boolean(document.querySelector(`[data-goal-slug="${key}"]`)),
+    believesRunning: () => goalJobRunning(goalJobs.get(slug)),
+    wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  });
+  goalPolls.delete(slug);
+  // After a stop for a route change, the next visit asks again.
+  if (reason === 'left') goalStatusAsked.delete(slug);
+}
+
+// After a render, ask for the last job of each project that shows the control. A running job polls again after a route change.
+function goalAfterRender() {
+  for (const el of document.querySelectorAll('[data-goal-slug]')) {
+    const slug = el.dataset.goalSlug;
+    if (goalPolls.has(slug)) continue;
+    if (goalStatusAsked.has(slug) && !goalJobRunning(goalJobs.get(slug))) continue;
+    goalStatusAsked.add(slug);
+    pollGoal(slug);
+  }
+}
+
+function openGoalSet(slug) {
+  const dialog = goalDialog();
+  dialog.dataset.slug = slug;
+  dialog.querySelector('#goal-dialog-target').textContent = `Orchestrator of ${slug}`;
+  dialog.querySelector('#goal-dialog-text').value = state?.policy?.defaultOrchestratorGoal || (state?.projects || []).find((x) => x.slug === slug)?.goal || '';
+  dialog.querySelector('#goal-dialog-status').textContent = '';
+  dialog.querySelector('#goal-dialog-confirm').disabled = false;
+  if (!dialog.open) dialog.showModal();
+}
+
+async function confirmGoalSet() {
+  const dialog = goalDialog();
+  const slug = dialog.dataset.slug;
+  const button = dialog.querySelector('#goal-dialog-confirm');
+  const status = dialog.querySelector('#goal-dialog-status');
+  button.disabled = true;
+  status.textContent = 'Starting…';
+  try {
+    await postJson('/api/goal/set', { project: slug, text: dialog.querySelector('#goal-dialog-text').value });
+    goalJobs.set(slug, { state: 'waiting' });
+    dialog.close();
+    syncGoalStatus(slug);
+    pollGoal(slug);
+  } catch (error) {
+    status.textContent = error.message;
+    button.disabled = false;
+  }
+}
+
+document.addEventListener('click', async (e) => {
+  const button = e.target.closest?.('[data-goal-set]');
+  if (button && !button.disabled) { openGoalSet(button.dataset.goalSet); return; }
+  const stop = e.target.closest?.('[data-goal-stop]');
+  if (!stop) return;
+  stop.disabled = true;
+  try { await postJson('/api/goal/cancel', { project: stop.dataset.goalStop }); } catch (error) { goalJobs.set(stop.dataset.goalStop, { state: 'failed', reason: error.message }); syncGoalStatus(stop.dataset.goalStop); }
+  stop.disabled = false;
+});
 
 // A bookmark change returns the new list and the start page. Update the loaded session in place.
 function applyBookmarkResult(slug, result) {
