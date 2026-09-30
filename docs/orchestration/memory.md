@@ -86,6 +86,8 @@ Owner queue (credentials, billing, and Owner-applied settings):
 
 - 2026-09-30: G4c follow-ups for G4d, from the review: cache the `/api/machine-hours` result for 60 seconds, because the endpoint parses up to two files of 3 MB on each request and G4d adds it to the state fetch list; drop duplicate minutes when the summary reads the file. Source: orchestrator review.
 
+- 2026-09-30: E5b, next free slot (Boss, for the Owner): (1) Add Claude prices to the spend estimate. Read the Boss file `~/.herdr-boss/scratch/boss/claude-prices-2026-09-30.md` (API prices per million tokens for opus-5-5, sonnet-5-5, haiku-4-5, fable-5-1, and the removed opus-5 and sonnet-5; source: Anthropic API pricing, cached 2026-09-25; cache read 0.1x input, 5 minute write 1.25x, 1 hour write 2x). The Opus 5.5 cache read figure is 0.20 and conflicts with 0.1x input (0.40): use 0.20 and mark the Opus cache figures `unconfirmed`. Show the USD as `API-price equivalent`, because the Owner is on a subscription. Store the prices in `kit/models.json` (or a prices file) with a source and a date, editable in Settings. (2) Match the Boss role by the agent session id of the pane labeled `boss` (`herdr agent list`, `agent_session.value`) and by the handoff records for earlier Boss sessions; everything else in the HerdrBoss transcript folder is the orchestrator or a worker. Source: Boss, for the Owner.
+
 ## Standing rules
 
 - The service serves `public/` from the `main` working tree at once, but the server code only after a restart. Restart the service right after a merge that changes `public/` together with the server API, before the full suite, or the dashboard breaks until the restart.
