@@ -1,5 +1,5 @@
 import { markdownOrPlain, plainTextHtml, sanitizeRendered } from './markdown.js';
-import { FLOW, FLOW_LABEL, DONE_LIMIT, taskMap, taskState, blockReasons, boardColumns, dependencyChain, criticalPath, graphTasks } from './board.js';
+import { FLOW, FLOW_LABEL, DONE_LIMIT, taskMap, taskState, blockReasons, boardColumns, dependencyChain, criticalPath, graphTasks, graphDepths, blockerIds, elapsedText, domPart, fleetItems, fleetColumns, fleetFilter, fleetWho } from './board.js';
 import { patchHtml } from './keyed.js';
 
 const $app = document.getElementById('app');
@@ -12,7 +12,7 @@ const $nav = document.getElementById('primary-nav');
 const $roamgate = document.getElementById('roamgate-link');
 const $navMenu = document.getElementById('nav-menu');
 const $navMenuLabel = document.getElementById('nav-menu-label');
-const NAV_LABEL = { overview: 'Overview', mailbox: 'Mailbox', chat: 'Chat', agents: 'Agents', projects: 'Projects', browsers: 'Browsers', allocation: 'Allocation', analytics: 'Analytics', logs: 'Logs', settings: 'Settings' };
+const NAV_LABEL = { overview: 'Overview', board: 'Board', mailbox: 'Mailbox', chat: 'Chat', agents: 'Agents', projects: 'Projects', browsers: 'Browsers', allocation: 'Allocation', analytics: 'Analytics', logs: 'Logs', settings: 'Settings' };
 const settingsLink = document.createElement('a');
 settingsLink.href = '/settings';
 settingsLink.dataset.nav = 'settings';
@@ -3267,7 +3267,8 @@ function orgMotion(s) {
 }
 
 function projectsView(s, slug) {
-  const selected = slug && projectSlugs(s).includes(slug) ? slug : defaultProject(s);
+  // A link to a published project opens it also when its workspace is closed, for example a link from the Board.
+  const selected = slug && (projectSlugs(s).includes(slug) || (s.projects || []).some((p) => p.slug === slug)) ? slug : defaultProject(s);
   return [
     '<header class="page-intro"><div><h1>Projects</h1><p>Select a project to inspect its status, work, agents, and orchestrator handover.</p></div></header>',
     allocationSummary(s),
@@ -3275,6 +3276,234 @@ function projectsView(s, slug) {
     selected ? `<div class="project-detail" id="project-detail">${project(s, selected)}</div>` : '',
   ].join('');
 }
+
+// ---------- Board page: one kanban across all projects ----------
+// The page uses the task model of the project board (board.js). The filters, the grouping, and the closed swimlanes are remembered
+// in this browser. The search stays in memory. On a phone the page is one mixed board with a column tab bar and a project chip row.
+
+const FLEET_KEY = 'herdr-boss.board';
+const FLEET_SLUG = '~board';
+const WHO_LABEL = { owner: 'Waits for the Owner', worker: 'Has a worker' };
+const fleet = (() => {
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(FLEET_KEY)) || {}; } catch { saved = {}; }
+  const text = (value) => (typeof value === 'string' ? value : '');
+  return {
+    group: saved.group === 'mixed' ? 'mixed' : 'project',
+    closed: saved.closed && typeof saved.closed === 'object' && !Array.isArray(saved.closed) ? saved.closed : {},
+    project: text(saved.project), who: text(saved.who), state: FLOW.includes(saved.state) ? saved.state : '', query: '',
+  };
+})();
+function saveFleet() {
+  const { group, closed, project, who, state } = fleet;
+  try { localStorage.setItem(FLEET_KEY, JSON.stringify({ group, closed, project, who, state })); } catch { /* Storage can be off. */ }
+}
+
+// The published projects with tasks, with the display name of the allocation.
+function fleetProjects(s) {
+  return (s.projects || []).filter((p) => p?.slug && Array.isArray(p.tasks) && p.tasks.length)
+    .map((p) => ({ ...p, label: avatarTitle(p.slug, p.project || p.slug) }));
+}
+
+function fleetChip(item) {
+  return `<a class="proj-chip" href="/projects/${encodeURIComponent(item.slug)}" title="Open ${esc(item.label)}">${avatarSlot(item.slug, { title: item.label, size: 20 })}<span>${esc(item.label)}</span></a>`;
+}
+
+function fleetTaskUrl(slug, id) {
+  return `/projects/${encodeURIComponent(slug)}?task=${encodeURIComponent(id)}`;
+}
+
+// What a Blocked card waits on. A blocker task shows its ID and title and links to it on its project page.
+function fleetReason(r, item) {
+  const { task: t, slug, map } = item;
+  if (r.kind === 'task' && r.id == null) return 'a task that the status does not name';
+  if (r.kind === 'task') {
+    const blocker = map.get(r.id);
+    if (!r.known) return `<span class="mono" title="This task is not in the published status">${esc(r.id)} (outside)</span>`;
+    return `<a class="wait-link" href="${fleetTaskUrl(slug, r.id)}"><span class="mono">${esc(r.id)}</span> ${esc(blocker?.title || '')}</a>`;
+  }
+  if (r.kind === 'unstated') return 'a reason that the status does not state';
+  const party = r.kind === 'owner' && t.mailboxId
+    ? `<a href="/mailbox?thread=${encodeURIComponent(slug)}&conversation=${encodeURIComponent(t.mailboxId)}">the Owner</a>`
+    : esc(WAIT_PARTY[r.kind] || r.kind);
+  return `${party}${r.ask ? `: <q>${esc(r.ask)}</q>` : ''}`;
+}
+
+function fleetCard(item, { chip, now }) {
+  const { task: t, state, slug } = item;
+  const id = t.id != null ? String(t.id) : '';
+  const reasons = blockReasons(t, item.map);
+  const wait = reasons.length ? `<p class="card-wait">Waits on ${reasons.map((r) => fleetReason(r, item)).join(', ')}</p>` : '';
+  const w = t.worker;
+  const elapsed = state === 'doing' ? elapsedText(w?.startedAt, now) : '';
+  const worker = w ? `<p class="card-worker"><span class="mono">${esc(w.name)}</span>${w.model ? ` · ${esc(w.model)}` : ''}${elapsed ? ` · <span class="num" title="Elapsed time">${esc(elapsed)}</span>` : ''}</p>` : '';
+  const title = id
+    ? `<a class="card-title" href="${fleetTaskUrl(slug, id)}" title="Open ${esc(id)} on the ${esc(item.label)} board">${esc(t.title)}</a>`
+    : `<span class="card-title">${esc(t.title)}</span>`;
+  return `<li class="card kb-card st-${state}${item.onPath ? ' on-path' : ''}" data-key="task:${esc(item.key)}" id="fleet-${esc(domPart(item.key))}">`
+    + `<div class="card-top">${chip ? fleetChip(item) : '<span class="card-dot" aria-hidden="true"></span>'}<span class="card-id mono">${esc(id)}</span>${item.onPath ? '<span class="card-flag" title="On the critical path of the project">path</span>' : ''}</div>`
+    + `${title}${wait}${worker}</li>`;
+}
+
+const FLEET_EMPTY = { blocked: 'Nothing waits.', ready: 'No task is ready.', doing: 'No worker runs.', review: 'Nothing to review.', done: 'Nothing done in 24 h.' };
+const fleetColLabel = (k) => (k === 'done' ? 'Done · 24 h' : FLOW_LABEL[k]);
+
+function fleetList(list, k, ctx) {
+  return list.length ? `<ol class="board-list">${list.map((item) => fleetCard(item, ctx)).join('')}</ol>` : `<p class="board-empty">${FLEET_EMPTY[k]}</p>`;
+}
+
+// Counts per column and a Needs the Owner count. A column count selects the state filter; select it again to clear the filter.
+function fleetCounts(counts, s) {
+  const owner = s.mailbox?.needsAction ?? s.mailbox?.open ?? 0;
+  const cells = FLOW.map((k) => `<button type="button" class="kb-count st-${k}" data-fleet-state="${k}" aria-pressed="${fleet.state === k}" title="${fleet.state === k ? 'Show all states' : `Show only ${FLOW_LABEL[k]}`}"><span class="card-dot" aria-hidden="true"></span><span class="kb-count-label">${fleetColLabel(k)}</span><span class="num">${counts[k]}</span></button>`).join('');
+  return `<div class="kb-counts" role="group" aria-label="Tasks per column">${cells}<a class="kb-owner${owner ? ' has-items' : ''}" href="/mailbox?folder=needs-you"><span class="num">${owner}</span><span>Needs the Owner</span></a></div>`;
+}
+
+// One bar per project: the open tasks of each state and the done tasks of 24 hours, on one scale for all projects.
+// Each bar is a project filter. The column counts above name the colors.
+function fleetProjectBars(projects, items) {
+  const rows = projects.map((p) => {
+    const own = items.filter((i) => i.slug === p.slug);
+    const counts = Object.fromEntries(FLOW.map((k) => [k, own.filter((i) => i.state === k).length]));
+    return { p, counts, total: own.length };
+  }).filter((r) => r.total);
+  const max = Math.max(1, ...rows.map((r) => r.total));
+  const body = rows.map(({ p, counts, total }) => {
+    const parts = FLOW.filter((k) => counts[k]).map((k) => `${counts[k]} ${FLOW_LABEL[k]}`).join(', ');
+    const segs = FLOW.filter((k) => counts[k]).map((k) => `<i class="st-${k}" style="flex-grow:${counts[k]}" title="${esc(`${p.label}: ${counts[k]} ${fleetColLabel(k)}`)}"></i>`).join('');
+    return `<button type="button" class="kb-bar-row" data-key="bar:${esc(p.slug)}" data-fleet-project="${esc(p.slug)}" aria-pressed="${fleet.project === p.slug}" aria-label="${esc(`${p.label}: ${parts}. ${fleet.project === p.slug ? 'Show all projects' : 'Show only this project'}`)}">`
+      + `${avatarSlot(p.slug, { title: p.label, size: 20 })}<span class="kb-bar-name">${esc(p.label)}</span>`
+      + `<span class="kb-bar-track"><span class="kb-bar" style="width:${(total / max) * 100}%">${segs}</span></span><span class="num">${total}</span></button>`;
+  }).join('');
+  return rows.length ? `<div class="kb-bars" role="group" aria-label="Tasks per project">${body}</div>` : '';
+}
+
+// The phone replaces the swimlanes with a row of project chips.
+function fleetProjectChips(projects, items) {
+  const open = (slug) => items.filter((i) => (!slug || i.slug === slug) && i.state !== 'done').length;
+  const chip = (slug, label, avatar) => `<button type="button" class="kb-chip" data-key="chip:${esc(slug || '*')}" data-fleet-project="${esc(slug)}" aria-pressed="${fleet.project === slug}">${avatar}<span>${esc(label)}</span><span class="num">${open(slug)}</span></button>`;
+  return `<div class="kb-chips" role="group" aria-label="Project filter">${chip('', 'All', '')}${projects.filter((p) => items.some((i) => i.slug === p.slug)).map((p) => chip(p.slug, p.label, avatarSlot(p.slug, { title: p.label, size: 20 }))).join('')}</div>`;
+}
+
+function fleetToolbar(projects, items, phone) {
+  const who = fleetWho(items);
+  const option = (value, label, current) => `<option value="${esc(value)}"${value === current ? ' selected' : ''}>${esc(label)}</option>`;
+  const whoOptions = option('', 'All kinds', fleet.who) + option('owner', WHO_LABEL.owner, fleet.who) + option('worker', WHO_LABEL.worker, fleet.who)
+    + (who.kinds.length ? `<optgroup label="Worker harness">${who.kinds.map((k) => option(`kind:${k}`, HARNESS_NAMES[k] || k, fleet.who)).join('')}</optgroup>` : '')
+    + (who.models.length ? `<optgroup label="Worker model">${who.models.map((m) => option(`model:${m}`, m, fleet.who)).join('')}</optgroup>` : '');
+  const project = phone ? '' : `<label class="kb-field"><span>Project</span><select data-fleet-filter="project">${option('', 'All projects', fleet.project)}${projects.map((p) => option(p.slug, p.label, fleet.project)).join('')}</select></label>`;
+  const state = phone ? '' : `<label class="kb-field"><span>State</span><select data-fleet-filter="state">${option('', 'All states', fleet.state)}${FLOW.map((k) => option(k, fleetColLabel(k), fleet.state)).join('')}</select></label>`;
+  const active = fleet.project || fleet.who || (fleet.state && !phone) || fleet.query;
+  return `<div class="kb-toolbar" role="search" aria-label="Filter the board">`
+    + `<label class="kb-search"><span class="visually-hidden">Search tasks</span><input type="search" id="fleet-search" data-fleet-query value="${esc(fleet.query)}" placeholder="Search tasks (press /)" autocomplete="off" spellcheck="false"></label>`
+    + `${project}<label class="kb-field"><span>Kind</span><select data-fleet-filter="who">${whoOptions}</select></label>${state}`
+    + `<button type="button" class="kb-clear" data-fleet-clear${active ? '' : ' hidden'}>Clear filters</button></div>`;
+}
+
+function boardView(s) {
+  const now = Date.now();
+  const phone = isPhone();
+  const projects = fleetProjects(s);
+  const all = fleetItems(projects, { now });
+  if (fleet.project && !projects.some((p) => p.slug === fleet.project)) fleet.project = '';
+  // A stored harness or model that no task uses now would hide every card behind a choice that the select cannot show.
+  const kinds = fleetWho(all);
+  if (/^kind:/.test(fleet.who) && !kinds.kinds.includes(fleet.who.slice(5))) fleet.who = '';
+  if (/^model:/.test(fleet.who) && !kinds.models.includes(fleet.who.slice(6))) fleet.who = '';
+  const group = phone || !projects.length ? '' : `<div class="kb-group" role="group" aria-label="Group the board"><button type="button" data-fleet-group="project" aria-pressed="${fleet.group === 'project'}">By project</button><button type="button" data-fleet-group="mixed" aria-pressed="${fleet.group === 'mixed'}">One board</button></div>`;
+  const intro = `<header class="page-intro kb-intro"><div><h1>Board</h1><p>Open work of all projects in the flow columns, and the tasks done in the last 24 hours.</p></div>${group}</header>`;
+  if (!projects.length) return `${intro}<div class="calm-state">No project publishes tasks yet. Orchestrators publish them with <code>herdr-boss publish</code>.</div>`;
+  // The phone shows the state as tabs, so its state filter is the tab and not a filter.
+  const filtered = fleetFilter(all, { ...fleet, state: phone ? '' : fleet.state });
+  const board = fleetColumns(filtered);
+  const summary = fleetColumns(fleetFilter(all, { ...fleet, state: '' })).counts;
+  const tools = `${fleetToolbar(projects, all, phone)}${phone ? fleetProjectChips(projects, fleetFilter(all, { ...fleet, project: '', state: '' })) : ''}`;
+  const strip = `<section class="kb-strip" aria-label="Summary and filters"><div class="kb-main">${fleetCounts(summary, s)}${tools}</div>${phone ? '' : fleetProjectBars(projects, fleetFilter(all, { ...fleet, project: '', state: '' }))}</section>`;
+  const empty = !filtered.length ? '<p class="kb-none" role="status">No task matches the filters. <button type="button" class="board-more" data-fleet-clear>Clear filters</button></p>' : '';
+  const cols = phone || !fleet.state ? FLOW : [fleet.state];
+  let body;
+  if (phone || fleet.group === 'mixed') {
+    const view = projectView(FLEET_SLUG);
+    const active = boardActiveColumn(view, board.counts);
+    const tabs = phone ? `<div class="board-tabs" role="tablist" aria-label="Board columns">${FLOW.map((k) => `<button type="button" role="tab" class="board-tab st-${k}" data-board-tab="${k}" data-slug="${FLEET_SLUG}" aria-selected="${k === active}" aria-controls="fleet-col-${k}" tabindex="${k === active ? 0 : -1}"><span class="card-dot" aria-hidden="true"></span><span class="tab-label">${FLOW_LABEL[k]}</span><span class="num">${board.counts[k]}</span></button>`).join('')}</div>` : '';
+    const sections = cols.map((k) => `<section class="board-col st-${k}" data-key="col:${k}" data-col="${k}" id="fleet-col-${k}"${phone ? ' role="tabpanel"' : ''} aria-label="${fleetColLabel(k)}, ${board.counts[k]}"><h3><span class="card-dot" aria-hidden="true"></span>${fleetColLabel(k)}<span class="num">${board.counts[k]}</span></h3>${fleetList(board.columns[k], k, { chip: true, now })}</section>`).join('');
+    body = `<div class="board kb-board" data-key="fleet:mixed">${tabs}<div class="board-cols kb-cols" data-board-cols="${FLEET_SLUG}" data-keep-attrs="style" style="--cols:${cols.length}">${sections}</div></div>`;
+  } else {
+    const head = `<div class="kb-head" style="--cols:${cols.length}" aria-hidden="true">${cols.map((k) => `<span class="st-${k}"><span class="card-dot"></span>${fleetColLabel(k)}<span class="num">${board.counts[k]}</span></span>`).join('')}</div>`;
+    const lanes = projects.map((p) => {
+      const own = filtered.filter((i) => i.slug === p.slug);
+      if (!own.length) return '';
+      const lane = fleetColumns(own);
+      const open = !fleet.closed[p.slug];
+      const mini = FLOW.filter((k) => lane.counts[k]).map((k) => `<span class="kb-mini st-${k}" title="${lane.counts[k]} ${fleetColLabel(k)}"><span class="card-dot" aria-hidden="true"></span><span class="num">${lane.counts[k]}</span><span class="visually-hidden"> ${fleetColLabel(k)}</span></span>`).join('');
+      const cells = cols.map((k) => `<div class="kb-cell st-${k}" data-key="col:${k}" role="group" aria-label="${esc(`${p.label}, ${fleetColLabel(k)}, ${lane.counts[k]}`)}">${lane.columns[k].length ? `<ol class="board-list">${lane.columns[k].map((item) => fleetCard(item, { chip: false, now })).join('')}</ol>` : ''}</div>`).join('');
+      return `<details class="kb-lane" data-key="lane:${esc(p.slug)}" data-fleet-lane="${esc(p.slug)}"${open ? ' open' : ''}><summary>${avatarSlot(p.slug, { title: p.label, size: 20 })}<span class="kb-lane-name">${esc(p.label)}</span><span class="kb-minis">${mini}</span><a class="kb-lane-open" href="/projects/${encodeURIComponent(p.slug)}">Project page</a><span class="fold-chevron" aria-hidden="true"></span></summary><div class="kb-lane-cols" style="--cols:${cols.length}">${cells}</div></details>`;
+    }).join('');
+    body = `<div class="kb-lanes" data-key="fleet:lanes">${head}${lanes}</div>`;
+  }
+  return `${intro}${strip}${empty}${body}`;
+}
+
+// Sticky Board parts sit below the top bar. The top bar wraps on a narrow window, so the page measures its height.
+function syncTopHeight() {
+  const height = `${document.querySelector('.top')?.offsetHeight || 0}px`;
+  if (document.documentElement.style.getPropertyValue('--top-h') !== height) document.documentElement.style.setProperty('--top-h', height);
+}
+window.addEventListener('resize', syncTopHeight);
+
+function setFleet(change) {
+  Object.assign(fleet, change);
+  saveFleet();
+  lastRender = '';
+  render();
+}
+
+document.addEventListener('click', (e) => {
+  if (location.pathname !== '/board') return;
+  const state = e.target.closest?.('[data-fleet-state]');
+  if (state) { setFleet({ state: fleet.state === state.dataset.fleetState ? '' : state.dataset.fleetState }); if (isPhone() && fleet.state) showBoardColumn(FLEET_SLUG, fleet.state); return; }
+  const project = e.target.closest?.('[data-fleet-project]');
+  if (project) { const slug = project.dataset.fleetProject; setFleet({ project: slug && fleet.project === slug ? '' : slug }); return; }
+  const group = e.target.closest?.('[data-fleet-group]');
+  if (group) { setFleet({ group: group.dataset.fleetGroup }); return; }
+  if (e.target.closest?.('[data-fleet-clear]')) {
+    setFleet({ project: '', who: '', state: '', query: '' });
+    document.getElementById('fleet-search')?.focus();
+  }
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key !== '/' || location.pathname !== '/board' || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.target.closest?.('input, textarea, select, [contenteditable="true"]')) return;
+  const search = document.getElementById('fleet-search');
+  if (!search) return;
+  e.preventDefault();
+  search.focus();
+  search.select();
+});
+document.addEventListener('change', (e) => {
+  const field = e.target.dataset?.fleetFilter;
+  if (field) setFleet({ [field]: e.target.value });
+});
+// The search renders 150 ms after the last key, not on each key.
+let fleetQueryTimer = null;
+document.addEventListener('input', (e) => {
+  if (e.target.dataset?.fleetQuery == null) return;
+  fleet.query = e.target.value;
+  clearTimeout(fleetQueryTimer);
+  fleetQueryTimer = setTimeout(() => {
+    fleetQueryTimer = null;
+    if (location.pathname !== '/board') return;
+    lastRender = '';
+    render();
+  }, 150);
+});
+document.addEventListener('toggle', (e) => {
+  const slug = e.target.dataset?.fleetLane;
+  if (slug == null) return;
+  if (e.target.open) delete fleet.closed[slug];
+  else fleet.closed[slug] = true;
+  saveFleet();
+}, true);
 
 function logsView(s) {
   return [
@@ -3379,8 +3608,8 @@ function collapsible({ slug, key, className = '', head = '', title, count = '', 
 // An orchestrator can set tasks[].frontier itself; then the Boss uses that and derives nothing.
 function workModel(p) {
   const tasks = (p.tasks || []).filter((t) => t && t.title);
-  const map = new Map(tasks.filter((t) => t.id).map((t) => [t.id, t]));
-  const openBlockers = (t) => (t.blockedBy || []).filter((id) => map.has(id) && !isDone(map.get(id)));
+  const map = new Map(tasks.filter((t) => t.id != null && t.id !== '').map((t) => [String(t.id), t]));
+  const openBlockers = (t) => blockerIds(t).filter((id) => map.has(id) && !isDone(map.get(id)));
   const explicit = tasks.some((t) => t.frontier);
   const current = new Set(), next = new Set();
   for (const t of tasks) {
@@ -3478,11 +3707,12 @@ function specsBlock(m, slug) {
 const WAIT_PARTY = { owner: 'the Owner', boss: 'the Boss', external: 'an external item', task: 'a task' };
 const BOARD_EMPTY = { blocked: 'Nothing waits.', ready: 'No task is ready.', doing: 'No worker runs a task.', review: 'Nothing waits for review.', done: 'No task is done yet.' };
 const ICON_EXTERNAL = '<svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true"><path d="M4.5 2.5h5v5M9.5 2.5 3 9" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-const domPart = (value) => String(value).replace(/[^A-Za-z0-9_-]/g, '_');
 const cardDomId = (slug, id) => `card-${domPart(slug)}-${domPart(id)}`;
 const colDomId = (slug, k) => `board-${domPart(slug)}-${k}`;
 
 function waitReason(r, t, slug) {
+  if (r.kind === 'task' && r.id == null) return 'a task that the status does not name';
+  if (r.kind === 'unstated') return 'a reason that the status does not state';
   if (r.kind === 'task') return r.known
     ? `<button type="button" class="wait-link mono" data-task-select="${esc(r.id)}" data-slug="${esc(slug)}" data-reveal="card" aria-label="Select blocking task ${esc(r.id)}">${esc(r.id)}</button>`
     : `<span class="mono" title="This task is not in the published status">${esc(r.id)} (outside)</span>`;
@@ -3500,7 +3730,7 @@ function boardCard(t, ctx) {
   const reasons = blockReasons(t, map);
   const wait = reasons.length ? `<p class="card-wait">Waits on ${reasons.map((r) => waitReason(r, t, slug)).join(', ')}</p>` : '';
   const w = t.worker;
-  const elapsed = state === 'doing' && Number.isFinite(Date.parse(w?.startedAt)) ? dur((now - Date.parse(w.startedAt)) / 1000) : '';
+  const elapsed = state === 'doing' ? elapsedText(w?.startedAt, now) : '';
   const worker = w ? `<p class="card-worker"><span class="mono">${esc(w.name)}</span>${w.model ? ` · ${esc(w.model)}` : ''}${elapsed ? ` · <span class="num">${esc(elapsed)}</span>` : ''}</p>` : '';
   const source = t.stateSource && t.stateSource !== 'published' && (state === 'doing' || state === 'review') ? `<p class="card-source">${esc(t.stateSource)}</p>` : '';
   const title = id
@@ -3556,26 +3786,14 @@ function dependencyGraph(p, slug) {
   const inSet = new Set(nodes.map((t) => keyOf.get(t)));
   const linked = new Set();
   const edgeKeys = [];
-  for (const t of nodes) for (const raw of t.blockedBy || []) {
+  for (const t of nodes) for (const raw of blockerIds(t)) {
     const id = String(raw);
     if (!map.has(id) || !inSet.has(id)) continue;
     linked.add(id); linked.add(keyOf.get(t));
     edgeKeys.push([id, keyOf.get(t)]);
   }
-  const layer = new Map();
-  const visiting = new Set();
-  const depth = (t) => {
-    const key = keyOf.get(t);
-    if (layer.has(key)) return layer.get(key);
-    if (visiting.has(key)) return 0; // a cycle in published data; break it here
-    visiting.add(key);
-    const blockers = (t.blockedBy || []).map(String).filter((id) => inSet.has(id));
-    const d = blockers.length ? 1 + Math.max(...blockers.map((id) => depth(map.get(id)))) : 0;
-    visiting.delete(key);
-    layer.set(key, d);
-    return d;
-  };
-  nodes.forEach(depth);
+  // The layer of each box. graphDepths walks without recursion and cuts a cycle in published data.
+  const layer = graphDepths(nodes, (t) => keyOf.get(t));
   const groupOrder = new Map(groups.map((g, i) => [g.id, i]));
   const columns = [];
   for (const t of nodes) (columns[layer.get(keyOf.get(t))] ||= []).push(t);
@@ -3604,14 +3822,14 @@ function dependencyGraph(p, slug) {
     const key = keyOf.get(t);
     const { x, y } = pos.get(key);
     const state = taskState(t, map);
-    const hidden = (t.blockedBy || []).map(String).filter((id) => !map.has(id)).length;
+    const hidden = blockerIds(t).filter((id) => !map.has(id)).length;
     const label = `${t.id ?? ''} · ${FLOW_LABEL[state]}${path.has(key) ? ' · path' : ''}${hidden ? ` · +${hidden} outside` : ''}`;
     const cls = `dep-node-group st-${state}${key === selected ? ' is-selected' : ''}${path.has(key) ? ' on-path' : ''}${focus(key)}`;
     const select = t.id != null ? ` data-task-select="${esc(key)}" data-slug="${esc(slug)}" data-reveal="card" role="button" tabindex="0" aria-pressed="${key === selected}" aria-label="${esc(`${t.id} ${t.title}, ${FLOW_LABEL[state]}`)}"` : '';
     return `<g class="${cls}" data-key="node:${esc(key)}"${select}><rect class="dep-node" x="${x}" y="${y}" width="${W}" height="${H}" rx="6"></rect>`
       + `<rect class="dep-mark" x="${x + 9}" y="${y + 10}" width="8" height="8" rx="2"></rect>`
       + `<text x="${x + 22}" y="${y + 18}" class="dep-id">${esc(label)}</text>`
-      + `<text x="${x + 9}" y="${y + 36}" class="dep-title">${esc(t.title.length > 25 ? `${t.title.slice(0, 24)}…` : t.title)}</text><title>${esc(`${t.id ?? ''} ${t.title} (${FLOW_LABEL[state]})`)}</title></g>`;
+      + `<text x="${x + 9}" y="${y + 36}" class="dep-title">${esc(String(t.title).length > 25 ? `${String(t.title).slice(0, 24)}…` : t.title)}</text><title>${esc(`${t.id ?? ''} ${t.title} (${FLOW_LABEL[state]})`)}</title></g>`;
   }).join('');
   const toggle = `<label class="inline-toggle"><input type="checkbox" data-graph-open="${esc(slug)}" ${view.graphAll ? '' : 'checked'}> Open work only</label>`;
   const toolbar = `<div class="dep-toolbar" role="group" aria-label="Dependency graph view">
@@ -3758,7 +3976,7 @@ function issueTable(m, slug) {
       const statusBadge = (t.status || 'todo') === 'blocked' && wait
         ? `<span class="st-badge s-blocked">${esc(wait)}</span>`
         : `<span class="st-badge s-${esc(t.status || 'todo')}">${esc(STATUS_LABEL[t.status || 'todo'] || t.status)}</span>${wait ? `<div class="wait">${esc(wait)}</div>` : ''}`;
-      return `<tr class="${m.current.has(t) ? 'row-current' : ''}"><td class="mono" data-label="ID">${esc(t.id || '')}</td><td data-label="Title">${url ? `<a href="${esc(url)}" target="_blank" rel="noreferrer">${esc(t.title)}</a>` : esc(t.title)}${t.kind ? ` <span class="tag">${esc(t.kind)}</span>` : ''}${m.current.has(t) ? ' <span class="tag current">current</span>' : m.next.has(t) ? ' <span class="tag">next</span>' : ''}</td><td data-label="Status">${statusBadge}</td><td data-label="Group">${esc(group?.title || '')}</td><td class="mono" data-label="Blocked by">${(t.blockedBy || []).map((id) => `<span class="${waits.includes(id) ? 'text-crit' : 'muted'}">${esc(id)}</span>`).join(' ')}</td><td data-label="Labels">${(t.labels || []).map((l) => `<span class="tag">${esc(l)}</span>`).join(' ')}</td><td class="mono" data-label="Updated">${t.updated ? esc(ago(t.updated)) : ''}</td></tr>`;
+      return `<tr class="${m.current.has(t) ? 'row-current' : ''}"><td class="mono" data-label="ID">${esc(t.id || '')}</td><td data-label="Title">${url ? `<a href="${esc(url)}" target="_blank" rel="noreferrer">${esc(t.title)}</a>` : esc(t.title)}${t.kind ? ` <span class="tag">${esc(t.kind)}</span>` : ''}${m.current.has(t) ? ' <span class="tag current">current</span>' : m.next.has(t) ? ' <span class="tag">next</span>' : ''}</td><td data-label="Status">${statusBadge}</td><td data-label="Group">${esc(group?.title || '')}</td><td class="mono" data-label="Blocked by">${blockerIds(t).map((id) => `<span class="${waits.includes(id) ? 'text-crit' : 'muted'}">${esc(id)}</span>`).join(' ')}</td><td data-label="Labels">${(t.labels || []).map((l) => `<span class="tag">${esc(l)}</span>`).join(' ')}</td><td class="mono" data-label="Updated">${t.updated ? esc(ago(t.updated)) : ''}</td></tr>`;
     }).join('') || '<tr><td colspan="7" class="muted" data-label="">No work matches the filter.</td></tr>'}</tbody></table></div>`;
   return collapsible({ slug, key: 'work', head: `<div class="section-head"><h2>All work <span class="sub">${rows.length} shown of ${m.tasks.length}</span></h2>${tools}</div>`, title: 'All work', count: `${rows.length} of ${m.tasks.length}`, controls: tools, body: table });
 }
@@ -3881,6 +4099,16 @@ const HELP = {
     <h3>Projects</h3><p>The bar above the cards shows the applied share of each project, in card order. Its colors match the top edge of each card. A label such as <b>30% · 2</b> shows the share and the effective slots; the tooltip shows all values. Change the shares on the Allocation page.</p><p>A card per project with its published status and task mix. The table shows the orchestrator, workers in use against the share, and the policy mode. Select a project for its details.</p>
     <h3>Watch symbol</h3><p>The eye symbol in the top bar, next to the chat, mail, and needs-action icons, shows the watch. When no watch runs, the symbol is faded. While a watch runs, the symbol is clear and, on a wide screen, shows a label such as <b>until 08:00</b> or <b>on</b>. On a phone it shows the icon only. Select it to open a popover with the end time, the mode, and <b>Stop</b>. The page asks you to confirm a stop. The page has no banner. A read-only preview shows the symbol and refuses a change.</p>
     <h3>Subscriptions and machine health</h3><p>Select a bar to open all quota windows, or the processes and load history. After a restart, "Quotas from HH:MM" shows saved quotas until the first new quota read succeeds. When the probe for one provider fails, "Claude quota from HH:MM (probe failed)" shows its last good quota for up to 60 minutes. The Machine guard switch turns CPU and load warnings and worker-start blocks on or off. Choose a pause length to suspend those rules for a time; select <b>Resume guard</b> to end a pause early. Memory and disk warnings stay on. Disk space reports the filesystem that contains the Herdr Boss data directory.</p>`],
+  board: ['Board', `
+    <p>The Board shows the tasks of all projects on one kanban. It uses the same task states as the board on each project page.</p>
+    <h3>Columns</h3><p><b>Blocked</b> holds a task that waits on another task, the Owner, the Boss, or an external item. <b>Ready</b> holds a task whose dependencies are all done. <b>Doing</b> holds a task with a live worker; the longest-running worker comes first. <b>Review</b> holds a task whose worker was collected and is not merged. <b>Done · 24 h</b> holds the tasks done in the last 24 hours, newest first. A done task without an update time does not show.</p>
+    <h3>Cards</h3><p>A card shows the project, the task ID, the title, and the worker with its model. A Doing card also shows the elapsed time. A Blocked card shows what it waits on: the ID and title of each open blocker task, or the Owner, the Boss, or an external item with the ask. When the status names no blocker, the card says so. A <b>path</b> mark shows a task on the critical path of its project.</p>
+    <p>Select a card title to open the project page with the task selected. The page shows the task card on the project board and its chain in the dependency graph. Select a blocker to open that task. Select the project name to open the project page.</p>
+    <h3>Summary</h3><p>The counts show the tasks in each column after the project, who, and search filters. Select a count to show only that column. Select it again to show all columns. <b>Needs the Owner</b> counts the open Mailbox items that need you and opens the Mailbox. Each project bar shows the tasks of that project in each state, on one scale for all projects. Select a bar to show only that project.</p>
+    <h3>Filters</h3><p><b>Project</b> shows one project. <b>Kind</b> shows the tasks that wait for the Owner, the tasks with a worker, or the tasks of one worker harness or one model. <b>State</b> shows one column. The search matches the project, the task ID, the title, the ask, and the worker name and model. Each word must match. Press <kbd>/</kbd> to go to the search. <b>Clear filters</b> removes all filters.</p>
+    <h3>Grouping</h3><p><b>By project</b> shows one swimlane for each project. Select a swimlane title to close or open it. <b>One board</b> shows all projects in one set of columns. The page remembers the grouping, the filters, and the closed swimlanes in this browser. It does not remember the search.</p>
+    <h3>Refresh</h3><p>The page updates in place. It keeps the scroll position, the focus, and the search text.</p>
+    <h3>Phone</h3><p>On a phone the page shows one column at a time. The tab bar shows each column with its count. Select a tab or swipe sideways to change the column. The row of project chips replaces the swimlanes. Select a chip to show one project, and select <b>All</b> to show all projects.</p>`],
   projects: ['Projects', `
     <p>Select a project card. The detail below it shows what the orchestrator published and what runs now.</p>
     <p><b>Current Owner goal</b> shows the durable direction set by the Owner. Keep it in every status publication until the Owner changes or clears it.</p>
@@ -3888,7 +4116,7 @@ const HELP = {
     <h3>Progress and frontier</h3><p><b>Current frontier</b> is open work with no open blocker. <b>Next</b> waits only on the current frontier. The orchestrator can set both itself.</p>
     <h3>Needs your decision</h3><p>Open work that waits on you. Each item shows its ID, title, and ask, and links to its Mailbox conversation when the orchestrator set <code>mailboxId</code>. A task that waits on other tasks shows <b>waiting on #ID</b>. A task that waits on the Boss or an external party names it and shows the ask.</p>
     <h3>Board</h3><p>The board has five columns in the order of the flow. <b>Blocked</b> holds a task that waits on another task, the Owner, the Boss, or an external item. <b>Ready</b> holds a task whose dependencies are all done. <b>Doing</b> holds a task with a live worker. <b>Review</b> holds a task whose worker was collected and is not merged. <b>Done</b> shows the last 10 done tasks. Select <b>Show all N done</b> to see the rest.</p>
-    <p>Each card shows the task ID, the title, what the task waits on, and its worker. A Doing card shows the worker, the model, the elapsed time, and the source, for example <b>live from worker NAME</b>. The state comes from the worker records, so it does not wait for a publish. Ready sorts by priority: the critical path first, then the group order, then the published order.</p>
+    <p>Each card shows the task ID, the title, what the task waits on, and its worker. A Doing card shows the worker, the model, the elapsed time, and the source, for example <b>live from worker NAME</b>. The state comes from the worker records, so it does not wait for a publish. Ready sorts by priority: the critical path first, then the group order, then the published order. A Blocked card always shows a reason. When the status names no blocker, the card says so. The <b>Board</b> page shows the tasks of all projects, and its card links open this page with the task selected.</p>
     <p>A <b>stale</b> mark with its reason shows when the published status does not match the workers or is too old. The orchestrator clears it with a new publish.</p>
     <h3>Select a task</h3><p>Select a card title to select the task. The card gets a ring, and the graph shows the task and its dependency chain; the other tasks fade. Select a graph box to select its task and go to its card. On a Blocked card, select a blocker ID to go to that task. Select the selected task again to clear the selection. A refresh keeps the selection and the scroll position.</p>
     <h3>Dependencies</h3><p>The graph uses the same states and colors as the board. Each box names its state. Columns show the order. An arrow runs from a blocker to the work that waits on it. A task without links sits in the first column, after the linked tasks. <b>Open work only</b> shows the open tasks and the done tasks that block them directly. Clear it to show all tasks.</p>
@@ -4126,8 +4354,16 @@ function render(force = false) {
   // An old Organization link opens the Agents page in the Chart view.
   if (location.pathname === '/organization') history.replaceState(null, '', '/agents?view=chart');
   const m = /^\/projects\/([^/]+)\/?$/.exec(location.pathname);
-  const route = m || location.pathname === '/projects' ? 'projects' : ['mailbox', 'chat', 'allocation', 'settings', 'agents', 'browsers', 'analytics', 'logs'].includes(location.pathname.slice(1)) ? location.pathname.slice(1) : 'overview';
-  const page = route === 'projects' ? projectsView(state, m ? decodeURIComponent(m[1]) : null) : route === 'mailbox' ? mailboxView(state) : route === 'chat' ? chatView(state) : route === 'allocation' ? allocationView(state) : route === 'settings' ? settingsView(state) : route === 'agents' ? agentsView(state) : route === 'browsers' ? browsersView(state) : route === 'analytics' ? analyticsView(state) : route === 'logs' ? logsView(state) : overview(state);
+  // A Board card links to /projects/<slug>?task=<id>. The page selects the task once, then drops the parameter from the address.
+  const pick = m ? new URLSearchParams(location.search).get('task') : null;
+  if (pick) {
+    const slug = decodeURIComponent(m[1]);
+    projectView(slug).selected = pick;
+    history.replaceState(null, '', location.pathname + location.hash);
+    requestAnimationFrame(() => { centerGraphOn(slug, pick); revealCard(slug, pick, 'center'); });
+  }
+  const route = m || location.pathname === '/projects' ? 'projects' : ['board', 'mailbox', 'chat', 'allocation', 'settings', 'agents', 'browsers', 'analytics', 'logs'].includes(location.pathname.slice(1)) ? location.pathname.slice(1) : 'overview';
+  const page = route === 'projects' ? projectsView(state, m ? decodeURIComponent(m[1]) : null) : route === 'board' ? boardView(state) : route === 'mailbox' ? mailboxView(state) : route === 'chat' ? chatView(state) : route === 'allocation' ? allocationView(state) : route === 'settings' ? settingsView(state) : route === 'agents' ? agentsView(state) : route === 'browsers' ? browsersView(state) : route === 'analytics' ? analyticsView(state) : route === 'logs' ? logsView(state) : overview(state);
   const html = page;
   $navMenuLabel.textContent = NAV_LABEL[route] || 'Menu';
   for (const a of $nav.querySelectorAll('a')) {
@@ -4146,7 +4382,7 @@ function render(force = false) {
       ? { id: active.id, range: typeof active.selectionStart === 'number' ? [active.selectionStart, active.selectionEnd] : null } : null;
     const chatViewState = route === 'chat' ? chatCaptureView() : null;
     const scroll = captureScroll(route);
-    if (route === 'projects' && lastRoute === 'projects') patchHtml($app, html);
+    if ((route === 'projects' || route === 'board') && lastRoute === route) patchHtml($app, html);
     else $app.innerHTML = html;
     lastRoute = route;
     lastRender = html;
@@ -4165,6 +4401,7 @@ function render(force = false) {
   else orgEventMark = null;
   syncDepGraphs();
   syncBoards();
+  syncTopHeight();
   if (!document.getElementById('help-panel').hidden) fillHelp();
   $updated.textContent = `updated ${ago(state.updatedAt)}`;
 }
@@ -4374,14 +4611,14 @@ function centerGraphOn(slug, id) {
   depTransform(slug);
 }
 
-function revealCard(slug, id) {
+function revealCard(slug, id, block = 'nearest') {
   const card = document.getElementById(cardDomId(slug, id));
   if (!card) return;
   const fold = card.closest('details');
   if (fold && !fold.open) fold.open = true;
   const col = card.closest('[data-col]');
   if (col) showBoardColumn(slug, col.dataset.col);
-  card.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: scrollBehavior() });
+  card.scrollIntoView({ block, inline: 'nearest', behavior: scrollBehavior() });
   card.querySelector('.card-title')?.focus({ preventScroll: true });
 }
 

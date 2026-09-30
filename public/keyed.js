@@ -2,13 +2,48 @@
 // An element with data-key matches the element with the same key, so a card or a graph node keeps its DOM node when the order changes.
 // Other nodes match by position, tag, and type. A kept element keeps its scroll position, focus, and caret.
 // data-keep-attrs="a b" names attributes that page code sets after a render; a patch does not change them.
+// A keyed element that moves to another parent, such as a card that moves to another column, gets a new DOM node.
+// The focus then goes to the same element in the new node, found by the key and the child path.
 
 const keyOf = (node) => (node.nodeType === 1 ? node.getAttribute('data-key') : null);
 
 export function patchHtml(target, html) {
+  const focus = focusMark(target);
   const template = document.createElement('template');
   template.innerHTML = html;
   patchChildren(target, template.content);
+  restoreFocus(target, focus);
+}
+
+// The focused element in target: the key of its nearest keyed ancestor and the child indexes from there.
+function focusMark(target) {
+  const active = document.activeElement;
+  if (!active || active === target || !target.contains(active)) return null;
+  const path = [];
+  let host = active;
+  while (host !== target && keyOf(host) == null) {
+    path.unshift(Array.prototype.indexOf.call(host.parentNode.childNodes, host));
+    host = host.parentNode;
+  }
+  return host === target ? null : { active, key: keyOf(host), path, name: active.nodeName };
+}
+
+function findKey(root, key) {
+  const stack = [...root.childNodes].reverse();
+  while (stack.length) {
+    const node = stack.pop();
+    if (node.nodeType !== 1) continue;
+    if (keyOf(node) === key) return node;
+    for (let i = node.childNodes.length - 1; i >= 0; i--) stack.push(node.childNodes[i]);
+  }
+  return null;
+}
+
+function restoreFocus(target, mark) {
+  if (!mark || target.contains(mark.active)) return;
+  let node = findKey(target, mark.key);
+  for (const i of mark.path) node = node?.childNodes[i];
+  if (node && node.nodeName === mark.name && typeof node.focus === 'function') node.focus({ preventScroll: true });
 }
 
 function patchAttributes(el, want) {
