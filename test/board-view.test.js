@@ -258,3 +258,16 @@ test('the elapsed time of a Doing card changes only once a minute after the firs
   const polls = new Set([0, 10, 20, 30, 40, 50].map((s) => elapsedText(start, at(600 + s))));
   assert.equal(polls.size, 1, 'six polls in one minute give one text');
 });
+
+test('a task of a finished, not collected worker stays in Review, and a merged task is Done', () => {
+  const tasks = [
+    { id: 'F1', title: 'Finished', status: 'doing', state: 'review', stateSource: 'finished, not collected (worker w-f1)', worker: { name: 'w-f1' } },
+    { id: 'F2', title: 'Merged', status: 'doing', state: 'done', stateSource: 'merged from worker w-f2', worker: { name: 'w-f2' }, updated: '2026-09-30T10:00:00Z' },
+    { id: 'F3', title: 'Gone', status: 'doing', state: 'ready', stateSource: 'worker w-f3 abandoned' },
+  ];
+  const map = byId(tasks);
+  assert.deepEqual(tasks.map((t) => taskState(t, map)), ['review', 'done', 'ready']);
+  const board = boardColumns(tasks, { groups: [] });
+  assert.deepEqual(ids(board.columns.review), ['F1']);
+  assert.deepEqual(ids(board.columns.ready), ['F3']);
+});

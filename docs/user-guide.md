@@ -714,7 +714,7 @@ The Board page, `/board`, shows the tasks of all projects on one kanban. It uses
 | Blocked | A task that waits on a task that is not done, on the Owner, on the Boss, or on an external item. |
 | Ready | A task whose dependencies are all done. |
 | Doing | A task with a live worker, or a task published as `doing`. The longest-running worker comes first. |
-| Review | A task whose worker was collected and whose branch is not merged. |
+| Review | A task whose worker finished or was collected and whose branch is not merged. |
 | Done · 24 h | The tasks with an `updated` time in the last 24 hours, newest first. A done task without a valid `updated` time does not show. |
 
 Blocked, Ready, and Review keep the project order and, in a project, the order of the project board.
@@ -844,14 +844,19 @@ The published status file holds the plan. The worker run records hold what happe
 Each task gets one effective state, `state`:
 
 1. A published `done` task stays `done`.
-2. A worker whose branch is merged makes the task `done`. A branch counts as merged when its run record has `mergedAt`, or when the branch has at least one commit beyond the base commit and its tip is in the base branch. A branch with no new commit, a deleted branch, and the base branch itself do not count. The orchestrator publishes `done` for such a task.
+2. A worker whose branch is merged makes the task `done`. A branch counts as merged, also for a worker that was not collected, when its run record has `mergedAt`. A branch also counts as merged when the run record has `baseCommit`, the branch has at least one commit beyond the base commit and its tip is in the base branch. A branch with no new commit, a deleted branch, and the base branch itself do not count. The orchestrator publishes `done` for such a task.
 3. A live worker makes the task `doing`. The source is `live from worker NAME`. A worker is live when its run record has no `finishedAt` and no `collectedAt`, and its pane is in the pane list.
 4. A collected worker whose branch is not merged makes the task `review`. `worker collect` sets `collectedAt` only when the worker reported done.
-5. A failed, partial, or abandoned worker gives no state. When the task is published as `doing` and all its workers failed or are gone, the task is open again: it is `ready`, or `blocked` when a dependency is not done. Any other published status applies.
-6. A task that is `todo`, `ready`, or `blocked` without `waitingOn` has the state `blocked` while a task in `blockedBy` is not done. `blockers` names these tasks. A `blockedBy` ID that is not in the status counts as not done. A published `waitingOn` also gives `blocked`, and the reason names the Owner, the Boss, a task, or an external item. A dependency never changes a `done` task, a `doing` task, or a `review` task.
-7. The same task has the state `ready` when all its dependencies are done.
+5. A finished worker with no collect record makes the task `review`. The source is `finished, not collected (worker NAME)`. The task stays in Review while it waits for the orchestrator. It does not return to `ready`.
+   A worker is finished when all of these are true: its pane is gone, its run record has no `finishedAt` and no `collectedAt`, and `report.json` says the work is done.
+   The worker is merged, not finished, when its branch is merged. Herdr Boss checks the merge only for a worker with a done report.
+6. A worker whose pane is gone and whose report says `stoppedEarly: true`, or a status or outcome of `blocked`, `failed`, or `partial`, is failed.
+   A worker whose pane is gone, without a usable report, `finishedAt`, or `collectedAt`, is abandoned.
+   A failed, partial, or abandoned worker gives no state. When the task is published as `doing` and all its workers failed or are gone, the task is open again: it is `ready`, or `blocked` when a dependency is not done. Any other published status applies.
+7. A task that is `todo`, `ready`, or `blocked` without `waitingOn` has the state `blocked` while a task in `blockedBy` is not done. `blockers` names these tasks. A `blockedBy` ID that is not in the status counts as not done. A published `waitingOn` also gives `blocked`, and the reason names the Owner, the Boss, a task, or an external item. A dependency never changes a `done` task, a `doing` task, or a `review` task.
+8. The same task has the state `ready` when all its dependencies are done.
 
-When more than one worker runs on a task, the latest live worker decides first. Without a live worker, the latest collected or merged worker decides. Herdr Boss ignores a finished, collected, or abandoned run that is older than 14 days.
+When more than one worker runs on a task, the latest live worker decides first. Without a live worker, the latest finished, collected, or merged worker decides. Herdr Boss ignores a finished, collected, or abandoned run that is older than 14 days.
 
 The service checks at most 5 branches for a merge in each read of the run records and keeps each answer. A merged answer stays. A not-merged answer is used again for 60 seconds.
 
@@ -871,7 +876,7 @@ The board shows each task in one column of the flow. The column comes from the e
 | Blocked | A task that waits on a task that is not done, on the Owner, on the Boss, or on an external item. |
 | Ready | A task whose dependencies are all done. |
 | Doing | A task with a live worker, or a task published as `doing`. |
-| Review | A task whose worker was collected and whose branch is not merged. |
+| Review | A task whose worker finished or was collected and whose branch is not merged. |
 | Done | The last 10 done tasks by `updated`. **Show all N done** shows the rest. |
 
 Each card shows the task ID, the title, what the task waits on, and the worker. A Blocked card names each open blocker. The blocker ID is a link that selects that task. A blocker that is not in the status shows as **ID (outside)**. A Blocked card always shows a reason. When `waitingOn` is `task` and no blocker is open, the card says **a task that the status does not name**. When the status gives no reason, the card says **a reason that the status does not state**. A wait on the Owner links to the Mailbox conversation when the task has `mailboxId`. A Doing card shows the worker, the model, the elapsed time, and the source, for example `live from worker NAME`. A Review card shows the worker and the source.
