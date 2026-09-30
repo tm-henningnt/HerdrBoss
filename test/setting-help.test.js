@@ -116,3 +116,19 @@ test('the Advanced fold opens for a warning, shows a count, and the popup closes
   assert.match(app, /addEventListener\('focusout'/);
   assert.match(app, /aria-describedby="setting-popup"/);
 });
+
+test('the settable service settings state their range and when they apply', () => {
+  const expected = {
+    tickSeconds: ['5 to 300', 'service'],
+    quotaSeconds: ['30 to 3600', 'service'],
+    push: ['On or off', 'saved-restart'],
+  };
+  for (const [id, [range, apply]] of Object.entries(expected)) {
+    assert.ok(SETTING_HELP[id].range.includes(range), `${id} range must say ${range}`);
+    assert.equal(SETTING_HELP[id].apply, apply, `${id} apply mode`);
+  }
+  assert.match(SETTING_HELP.push.what, /HERDR_BOSS_PUSH=0/);
+  assert.match(SETTING_HELP.push.what, /restart/i);
+  assert.match(SETTING_HELP.alertCooldownSeconds.what, /unused legacy value/);
+  for (const id of ['alertCooldownSeconds', 'port', 'host', 'providerKinds', 'orchestratorLabel']) assert.equal(SETTING_HELP[id].apply, 'restart', `${id} stays in config.json`);
+});

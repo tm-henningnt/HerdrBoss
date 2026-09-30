@@ -9,6 +9,7 @@ export const APPLY = {
   service: 'Select Save in the group. The change takes effect at once.',
   restart: 'Change it in config.json. Restart the service.',
   now: 'The change takes effect at once.',
+  'saved-restart': 'Select Save in the group. Restart the service for the change to take effect.',
 };
 
 // The order of a group is the order on the page. `advanced` groups sit in the collapsed Advanced section.
@@ -474,32 +475,38 @@ export const SETTING_HELP = Object.fromEntries([
   }),
   S('service', 'tickSeconds', 'Tick seconds', {
     what: 'The time between two collection passes of the engine.',
-    default: '30', unit: 'Seconds', range: 'A positive whole number',
+    default: '30', unit: 'Seconds', range: 'A whole number of 5 to 300',
     raise: 'A higher value gives slower updates and less load.',
     lower: 'A lower value gives faster updates and more load.',
-    apply: 'restart',
+    apply: 'service',
   }),
+
   S('service', 'quotaSeconds', 'Quota seconds', {
     what: 'The time between two reads of the provider quotas.',
-    default: '300', unit: 'Seconds', range: 'A positive whole number',
+    default: '300', unit: 'Seconds', range: 'A whole number of 30 to 3600',
     raise: 'A higher value reads quotas less often.',
     lower: 'A lower value reads quotas more often and calls the providers more.',
-    apply: 'restart',
+    apply: 'service',
   }),
+
   S('service', 'push', 'Push prompts', {
-    what: 'Lets the service send prompts to orchestrator panes. Notices to the Owner are always sent.',
+    what: 'Lets the service send prompts to orchestrator panes. Notices to the Owner are always sent. The environment variable HERDR_BOSS_PUSH=0 overrides the saved value. Restart the service after a change.',
     default: 'On', unit: 'Switch', range: 'On or off',
     raise: 'Turning it on lets the service prompt the orchestrators.',
     lower: 'Turning it off stops all prompts to orchestrator panes.',
-    apply: 'restart',
+    apply: 'saved-restart',
   }),
+
+
   S('service', 'alertCooldownSeconds', 'Notice cooldown (legacy)', {
-    what: 'The least time before the same notice is sent again. The machine cooldown in the Machine group takes precedence for machine notices.',
-    default: '21600 (6 hours)', unit: 'Seconds', range: 'A whole number of 0 or more',
-    raise: 'A higher value sends fewer repeat notices.',
-    lower: 'A lower value sends repeat notices sooner.',
+    what: 'An unused legacy value. Set the notice cooldown in the Machine group.',
+    default: '21600 (6 hours)', unit: 'Seconds', range: 'Read-only',
+    raise: 'No notice reads this value.',
+    lower: 'No notice reads this value.',
     apply: 'restart',
   }),
+
+
   S('service', 'providerKinds', 'Provider kinds', {
     what: 'Maps each quota provider to the agent kinds that use it.',
     default: 'claude to claude, codex to codex, opencodego to opencode and pi', unit: 'Object of lists', range: 'Kind names that exist',

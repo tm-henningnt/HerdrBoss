@@ -267,11 +267,14 @@ const SERVICE_SETTING_RANGES = new Map([
   ['watch.maxWorkersByLane', [1, 40]],
   ['browsers.staleOwnedMinutes', [5, 1440]],
   ['browsers.orphanDaemonMinAgeSeconds', [60, 86400]],
+  ['tickSeconds', [5, 300]],
+  ['quotaSeconds', [30, 3600]],
 ]);
 const SERVICE_SETTING_BOOLEANS = new Set([
   'browsers.reapOrphanDaemons',
   'browsers.sweepCodeSignClones',
   'watch.quietHours',
+  'push',
 ]);
 const NULLABLE_SERVICE_SETTINGS = new Set(['watch.maxWorkers']);
 const WATCH_WORKER_LANES = new Set(['unmetered', 'codex', 'claude', 'opencodego']);

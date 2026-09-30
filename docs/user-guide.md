@@ -160,7 +160,7 @@ Each commit that changes `kit/`, `src/kit/`, or `docs/orchestrator-instructions.
 
 The notice text is `[herdr-boss] Kit revision <revision> (<n> change(s)): <subjects>. Run herdr-boss kit update and continue. The command prints the current kit file.` It names at most 10 subjects, then `and N more`. The revision in the notice is the kit revision of the directory that the service runs from. When you get a kit notice, run `herdr-boss kit update`. The command installs the kit as `herdr-boss kit install` does, prints the digest of the kit changes since the installed kit revision, and prints the current kit file. Do not read the kit file again. Publish the new `kitRevision`. A project that stays `behind (required)` for 2 hours gets one reminder while its orchestrator works. The service starts the 2 hours when it first sees the project behind on a required change. The clock stops when the project catches up or is behind on useful changes only. The reminder text is `[herdr-boss] Your kit is behind on a required change. Run herdr-boss kit update and continue. Kit revision now <revision>.` The reminder shows no desktop notification, and an idle orchestrator does not get it. You get a desktop notification once for each warning.
 
-The notice cooldown is saved as `machine.alertCooldownSeconds` in `policy.json`. Its default is 21600 seconds (6 hours). This policy value takes precedence over the legacy top-level `alertCooldownSeconds` value in `config.json`.
+The notice cooldown is saved as `machine.alertCooldownSeconds` in `policy.json`. Its default is 21600 seconds (6 hours). The legacy top-level `alertCooldownSeconds` value in `config.json` is unused.
 
 A published project status is stale when both conditions are true:
 
@@ -367,7 +367,7 @@ The Advanced section opens by itself while a harness readiness row is not `ok` o
 
 The Settings page has one section for each harness. A harness section holds the harness availability, the preferred model, and one row for each model. Provider quota modes, quota pacing goals, and machine limits are below the harness sections. Settings shows the warning and critical quota percentages from `config.json`. The dashboard uses these values to color quota levels.
 
-The **Service settings** table shows the values that the service uses. Each row shows whether the value comes from `config.json` or a default. The table groups rows under Machine, Quota, Status, Workers, Watch, Browsers, and Service. Set values with inputs, then select **Save** for that group. Herdr Boss writes only those values to `config.json` and applies them at once. Keep the quota warning below the critical value. Rows without inputs stay read-only. Change in `config.json` and restart the service. The table does not show access or Roamgate settings.
+The **Service settings** table shows the values that the service uses. Each row shows whether the value comes from `config.json` or a default. The table groups rows under Machine, Quota, Status, Workers, Watch, Browsers, and Service. Set values with inputs, then select **Save** for that group. Herdr Boss writes only those values to `config.json` and applies them at once. Keep the quota warning below the critical value. The `tickSeconds` and `quotaSeconds` rows apply at once. The `tickSeconds` range is 5 to 300 seconds. The `quotaSeconds` range is 30 to 3600 seconds. The `alertCooldownSeconds` row is read-only. It is an unused legacy value. Set the notice cooldown in the Machine group. The `push` row is a switch. Herdr Boss reads `push` at service start, so the row shows `restart required`. The environment variable `HERDR_BOSS_PUSH=0` overrides the saved value. The `port`, `host`, `providerKinds`, and `orchestratorLabel` rows stay read-only. A wrong port or host can lock the Owner out of the dashboard. Provider kinds and the orchestrator label are structural. Change them in `config.json` and restart the service. The table does not show access or Roamgate settings.
 
 ### Avatars
 
@@ -397,7 +397,7 @@ The swap refusal is off by default. Turn it on with the switch "Refuse new work 
 
 Work that the Owner or the Boss starts is never refused. Rules older than 3 minutes never refuse. To override, add `--force-swap` to `worker start`, or set `HERDR_BOSS_FORCE_SWAP=1` for `suite` and `push`. `--force` does not override the refusal. `suite --reuse` returns 0 when it reuses a passing tree.
 
-Policy settings take precedence over legacy `config.json` values. The old `machine.loadWarnFactor` field does not control machine guards. The `machine.alertCooldownSeconds` policy value takes precedence over the legacy top-level `alertCooldownSeconds` field for notice delivery.
+Policy settings take precedence over legacy `config.json` values. The old `machine.loadWarnFactor` field does not control machine guards. The legacy top-level `alertCooldownSeconds` field is unused. Notice delivery reads `machine.alertCooldownSeconds`.
 
 Clear the **Available** box of a harness to disable that harness for every project. Choose a preferred model for a harness. Worker start and handoff use it when you omit an explicit model. An empty choice uses the harness default.
 

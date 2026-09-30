@@ -437,6 +437,9 @@ test('PUT /api/settings persists allowed values and updates the running engine c
       'quota.warnPercent': 85,
       'quota.criticalPercent': 96,
       'machine.memFreeWarnPercent': 22,
+      tickSeconds: 20,
+      quotaSeconds: 600,
+      push: false,
       'watch.maxWorkers': 20,
       'watch.maxWorkersByLane': { unmetered: 12, codex: 8, claude: null, opencodego: 4 },
     } }),
@@ -447,6 +450,11 @@ test('PUT /api/settings persists allowed values and updates the running engine c
   assert.equal(engine.cfg.quota.warnPercent, 85);
   assert.equal(engine.cfg.quota.criticalPercent, 96);
   assert.equal(engine.cfg.machine.memFreeWarnPercent, 22);
+  assert.equal(engine.cfg.tickSeconds, 20);
+  assert.equal(engine.cfg.quotaSeconds, 600);
+  assert.equal(engine.cfg.push, false);
+  assert.equal(engine.state.serviceSettings.find(({ setting }) => setting === 'push').value, false);
+  assert.equal(engine.state.serviceSettings.find(({ setting }) => setting === 'tickSeconds').source, 'config');
   assert.equal(engine.cfg.watch.maxWorkers, 20);
   assert.deepEqual(engine.cfg.watch.maxWorkersByLane, { unmetered: 12, codex: 8, claude: null, opencodego: 4 });
   assert.deepEqual(engine.state.quotaThresholds, { warnPercent: 85, criticalPercent: 96 });
@@ -458,6 +466,7 @@ test('PUT /api/settings persists allowed values and updates the running engine c
   assert.deepEqual(saved.other, { keep: true });
   assert.equal(saved.quota.note, 'keep');
   assert.equal(saved.watch.maxWorkers, 20);
+  assert.deepEqual([saved.tickSeconds, saved.quotaSeconds, saved.push], [20, 600, false]);
   assert.deepEqual(saved.watch.maxWorkersByLane, { unmetered: 12, codex: 8, claude: null, opencodego: 4 });
   assert.equal(fs.statSync(configFile).mode & 0o7777, 0o640);
 
@@ -1343,7 +1352,8 @@ test('quota colors use configured thresholds and Settings shows their values', (
   assert.match(settingsHelp, /quota colors use the warning and critical values from <code>config\.json<\/code>/i);
   assert.match(app, /data-service-setting=/);
   assert.match(app, /data-save-service-settings=/);
-  assert.match(app, /Rows without inputs are read-only\. Change in config\.json and restart\./);
+  assert.match(app, /Rows without inputs are read-only: port, host, provider kinds, and orchestrator label\. Change them in config\.json and restart\./);
+  assert.match(app, /restart required/);
   assert.match(settingsHelp, /select <b>Save<\/b>[\s\S]*?applies saved values at once/i);
 });
 
