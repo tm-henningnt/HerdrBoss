@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { GoalError, cleanReason, resolveGoalTarget, setGoal } from './goal-set.js';
 import { goalSetText } from './goal.js';
+import { postGoalNotice } from './goal-notice.js';
 import { SLUG } from './projects.js';
 
 export const MAX_GOAL_JOBS = 2;
@@ -19,7 +20,7 @@ const bad = (message) => new ApiError(400, message);
 
 // options: run (async Herdr runner), control (function that gives the control object), policy (function that gives the policy),
 // dataDir (the job files live in dataDir/goal-jobs; without it nothing is saved), log, and the clock, sleep, waitMs, pollMs of setGoal.
-export function createGoalApi({ run, control = () => ({}), policy = () => ({}), dataDir = null, log = () => {}, maxJobs = MAX_GOAL_JOBS, now = Date.now, ...timing } = {}) {
+export function createGoalApi({ run, control = () => ({}), policy = () => ({}), dataDir = null, log = () => {}, maxJobs = MAX_GOAL_JOBS, now = Date.now, mailNow = Date.now, ...timing } = {}) {
   const jobs = new Map();
   const iso = () => new Date(now()).toISOString();
   const file = (slug) => path.join(dataDir, 'goal-jobs', `${slug}.json`);
@@ -81,6 +82,7 @@ export function createGoalApi({ run, control = () => ({}), policy = () => ({}), 
     job.pane = target.pane;
     save(slug, job);
     setGoal({ pane: target.pane, kind: target.kind, goal: checked.text, run, now, signal: controller.signal, ...timing,
+      notify: ({ blocker, pane }) => postGoalNotice({ slug, pane, blocker, dir: dataDir ?? undefined, now: mailNow }),
       onState: (state, reason) => { if (job.running) update({ state, reason: state === 'waiting' ? cleanReason(reason) : undefined }); } })
       .then((result) => {
         if (result.outcome === 'active') release({ state: 'active', message: result.message, reason: undefined, verifiedAt: iso() });

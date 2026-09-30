@@ -1,7 +1,8 @@
 // The command line of `herdr-boss goal set`.
 // Exit codes: 0 goal active, 1 usage or refusal (thrown), 2 pane busy or not an orchestrator pane, 3 sent but not verified, 130 cancelled with SIGINT.
 import { verifyMessageCaller } from './messages.js';
-import { EXIT_CODES, GoalError, OUTCOME_TEXT, paneBlocker, resolveGoalTarget, setGoal } from './goal-set.js';
+import { EXIT_CODES, GoalError, OUTCOME_TEXT, blockerText, paneBlocker, resolveGoalTarget, setGoal } from './goal-set.js';
+import { postGoalNotice } from './goal-notice.js';
 import { goalSetText } from './goal.js';
 
 export const GOAL_USAGE = 'Usage: goal set <project|pane> [--text TEXT] [--dry-run]';
@@ -39,7 +40,7 @@ export function verifyGoalCaller(env, herdr) {
 
 // Run `goal set`. Returns the exit code. A usage error or a refusal throws.
 // options: env, herdr (sync runner of the CLI), control, policy, log, and the clock, sleep, waitMs, pollMs of setGoal.
-export async function goalCommand(args, { env = process.env, herdr, control = {}, policy = {}, log = console.log, ...timing } = {}) {
+export async function goalCommand(args, { env = process.env, herdr, control = {}, policy = {}, log = console.log, dataDir, mailNow, ...timing } = {}) {
   const [action, ...rest] = args;
   if (action !== 'set') throw new GoalError(GOAL_USAGE);
   // The caller check runs first: a worker pane must not reach any other step.
@@ -58,10 +59,13 @@ export async function goalCommand(args, { env = process.env, herdr, control = {}
   log(`Text: ${checked.text}`);
   if (options.dryRun) {
     const blocker = await paneBlocker({ run, pane: target.pane, kind: target.kind });
-    log(`Dry run: the pane ${blocker ? `cannot take the command now (${blocker})` : 'can take the command now'}. Nothing was sent.`);
+    log(`Dry run: the pane ${blocker ? `cannot take the command now: ${blockerText(blocker)}` : 'can take the command now'}. Nothing was sent.`);
     return EXIT_CODES.active;
   }
-  const result = await setGoal({ pane: target.pane, kind: target.kind, goal: checked.text, run, onState: (state, reason) => { if (state === 'waiting' && reason) log(`Waiting: ${reason}`); }, ...timing });
+  let lastReason = null;
+  const onState = (state, reason) => { if (state === 'waiting' && reason && reason !== lastReason) { lastReason = reason; log(`Waiting for an idle pane: ${reason}`); } };
+  const notify = ({ blocker, pane }) => postGoalNotice({ slug: target.slug, pane, blocker, dir: dataDir, now: mailNow });
+  const result = await setGoal({ pane: target.pane, kind: target.kind, goal: checked.text, run, onState, notify, ...timing });
   log(`${result.message}${result.reason ? ` (${result.reason})` : ''}`);
   return EXIT_CODES[result.outcome];
 }

@@ -934,13 +934,15 @@ The context trigger uses the same rules as the quota trigger. It skips the Boss,
 Use **Set goal** to give a running orchestrator a new `/goal`. A `/goal` that arrives while the agent works is queued as plain text and does not run. Herdr Boss therefore waits until the pane is idle.
 
 1. Open the project page or the Agents page. Find the orchestrator of the project.
-2. Select **Set goal**. A dialog opens with the text field. The field starts with the **Default orchestrator goal** from Settings. Edit the text if you need to. The limit is 1000 characters.
+2. Select **Set goal**. A dialog opens with the text field. The field starts with the **Default orchestrator goal** from Settings. Edit the text if you need to. The limit is 2000 characters.
 3. Read the warning. The command waits until the pane of the orchestrator is idle. The wait can take up to 10 minutes.
 4. Select **Set goal** in the dialog. The dialog closes and the status line under the goal shows the progress.
 
 The status line shows `Waiting for an idle pane`, `Sending the command`, `Checking that the pane shows the goal`, `Goal active`, or `Goal not set` with the reason. The line above it shows the current goal in one collapsed line. Select it to read the whole goal.
 
-Herdr Boss sends nothing while the agent works, a dialog is open, or the input line holds text. If the pane stays busy for 10 minutes, the job fails with `the pane stayed busy`. Start it again later. If the pane does not show the goal after 3 tries, the job fails with `sent but not shown`. Look at the pane.
+Herdr Boss sends nothing while the agent works, a dialog is open, or the input box holds typed text. A dim suggestion in the input box does not block the command. The status line shows the current reason: `the agent works`, `a dialog is on screen`, `the input box holds unsent text`, `the pane is not an orchestrator`, or `the pane is gone`. Herdr Boss never clears or edits the input box.
+
+The wait ends after 10 minutes for `the agent works`, and after 2 minutes for `the input box holds unsent text` and `a dialog is on screen`. The job then fails with `Goal not set` and the reason. Herdr Boss adds one Mailbox item that asks you to send or clear the draft, or answer the dialog. It adds at most one item for each project and reason in one hour. Select **Set goal** again after you act. If the pane does not show the goal after 3 tries, the job fails with `sent but not shown`. Look at the pane.
 
 **Cancel** in the status line stops a job that still waits. After a restart of the service, a job that was running shows `Interrupted`. Select **Set goal** to start it again. If the session expired, the line shows `Sign in again`.
 

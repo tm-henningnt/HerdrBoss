@@ -54,8 +54,9 @@ test('goalSetText joins line breaks, refuses control characters, and bounds the 
   assert.match(goalSetText('   ').error, /empty/);
   assert.match(goalSetText('clear').error, /clear/);
   assert.match(goalSetText(42).error, /string/);
-  assert.equal(goalSetText('x'.repeat(GOAL_SET_MAX_LENGTH)).text.length, 1000);
-  assert.match(goalSetText('x'.repeat(GOAL_SET_MAX_LENGTH + 1)).error, /at most 1000/);
+  assert.equal(GOAL_SET_MAX_LENGTH, 2000);
+  assert.equal(goalSetText('x'.repeat(GOAL_SET_MAX_LENGTH)).text.length, 2000);
+  assert.match(goalSetText('x'.repeat(GOAL_SET_MAX_LENGTH + 1)).error, /at most 2000/);
 });
 
 // ---- The pane screen.
@@ -90,20 +91,20 @@ test('setGoal treats a done pane as idle', async () => {
   assert.equal((await setGoal(opts(pane))).outcome, 'active');
 });
 
-test('setGoal never sends while a dialog is on the screen, and stops after 10 minutes', async () => {
+test('setGoal never sends while a dialog is on the screen, and stops after 2 minutes', async () => {
   const pane = fakePane({ text: DIALOG });
   const result = await setGoal(opts(pane));
   assert.equal(result.outcome, 'busy');
   assert.equal(result.message, 'the pane stayed busy');
   assert.equal(pane.prompts.length, 0);
-  assert.ok(pane.clock >= 10 * 60 * 1000 && pane.clock < 11 * 60 * 1000, `waited ${pane.clock} ms`);
+  assert.ok(pane.clock >= 2 * 60 * 1000 && pane.clock < 2.5 * 60 * 1000, `waited ${pane.clock} ms`);
 });
 
 test('setGoal never sends while the input line holds text', async () => {
   const pane = fakePane({ text: TYPED });
   const result = await setGoal(opts(pane, { waitMs: 30000 }));
   assert.equal(result.outcome, 'busy');
-  assert.match(result.reason, /input line/);
+  assert.match(result.reason, /input box holds unsent text/);
   assert.equal(pane.prompts.length, 0);
 });
 
@@ -119,7 +120,7 @@ test('setGoal reports a pane that is gone as busy without a prompt', async () =>
   pane.run = async () => { throw new Error('pane_not_found'); };
   const result = await setGoal(opts(pane));
   assert.equal(result.outcome, 'busy');
-  assert.match(result.reason, /does not exist/);
+  assert.match(result.reason, /pane is gone/);
 });
 
 test('setGoal verifies with the goal text on the screen and sends once', async () => {
@@ -158,7 +159,7 @@ test('setGoal gives a Codex pane the goal as plain text', async () => {
 
 test('setGoal refuses a bad text before any call', async () => {
   const pane = fakePane();
-  await assert.rejects(setGoal(opts(pane, { goal: 'x'.repeat(1001) })), /at most 1000/);
+  await assert.rejects(setGoal(opts(pane, { goal: 'x'.repeat(2001) })), /at most 2000/);
   assert.deepEqual(pane.calls, []);
 });
 
@@ -235,7 +236,7 @@ test('goal set --dry-run sends nothing and reports the pane state', async () => 
   const pane = syncPane(fakePane({ status: 'working' }));
   const result = await cli(['set', 'alpha', '--dry-run'], { pane });
   assert.equal(result.code, 0);
-  assert.match(result.out, /Dry run: the pane cannot take the command now \(working\)\. Nothing was sent\./);
+  assert.match(result.out, /Dry run: the pane cannot take the command now: the agent works\. Nothing was sent\./);
   assert.equal(pane.prompts.length, 0);
 });
 
@@ -280,8 +281,8 @@ test('goal set: a plain terminal, the Boss, and the orchestrator of the project 
 
 test('goal set refuses a bad text and an unusable default before any pane call', async () => {
   const pane = syncPane(fakePane());
-  const bad = await cli(['set', 'alpha', '--text', 'x'.repeat(1001)], { pane });
-  assert.match(bad.error.message, /at most 1000/);
+  const bad = await cli(['set', 'alpha', '--text', 'x'.repeat(2001)], { pane });
+  assert.match(bad.error.message, /at most 2000/);
   const none = await cli(['set', 'alpha'], { pane, policy: { defaultOrchestratorGoal: '' } });
   assert.match(none.error.message, /No --text given/);
   assert.deepEqual(pane.calls.filter((call) => !call.startsWith('pane get w1:p9')), []);

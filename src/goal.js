@@ -121,7 +121,7 @@ export function goalShown(paneText, goal) {
 // ---- Set the goal of a running orchestrator.
 // The steps below run against any Herdr runner: run(args) gives the raw output, a parsed object, or a promise of either.
 // The handover (engine) and `herdr-boss goal set` use these same steps.
-export const GOAL_SET_MAX_LENGTH = 1000;
+export const GOAL_SET_MAX_LENGTH = 2000;
 
 // The text of `goal set`: at most GOAL_SET_MAX_LENGTH characters. A line break becomes a space. Any other control character is refused.
 // Returns { text } or { error }.

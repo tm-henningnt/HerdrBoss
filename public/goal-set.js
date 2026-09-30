@@ -1,7 +1,7 @@
 // The Set goal control of an orchestrator: the block on the project page and the Agents page, and the confirm dialog.
 // The module has no DOM use, so the Node tests import it directly. app.js holds the event handlers.
 
-export const GOAL_TEXT_MAX = 1000;
+export const GOAL_TEXT_MAX = 2000;
 
 // A job is running while it waits, sends, or verifies.
 export const goalJobRunning = (job) => Boolean(job) && ['waiting', 'sending', 'verifying'].includes(job.state);
@@ -34,7 +34,7 @@ export function goalDialogHtml() {
     <p id="goal-dialog-target"></p>
     <label class="goal-dialog-field" for="goal-dialog-text">Goal text<textarea id="goal-dialog-text" rows="5" maxlength="${GOAL_TEXT_MAX}"></textarea></label>
     <p class="setting-help">At most ${GOAL_TEXT_MAX} characters. A line break becomes a space. The field starts with the default orchestrator goal from Settings.</p>
-    <p class="setting-help">The command waits until the pane of the orchestrator is idle. The wait can take up to 10 minutes. The command sends nothing while the agent works or a dialog is open.</p>
+    <p class="setting-help">The command waits until the pane of the orchestrator is idle. The wait can take up to 10 minutes while the agent works, and 2 minutes when the input box holds unsent text or a dialog is open. The command sends nothing in these cases.</p>
     <p class="goal-dialog-status" id="goal-dialog-status" role="status"></p>
     <div class="goal-dialog-actions"><button type="button" class="quiet" data-goal-cancel>Cancel</button><button type="button" id="goal-dialog-confirm">Set goal</button></div>`;
 }

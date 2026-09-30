@@ -45,7 +45,7 @@ test('the confirm dialog shows the text field, the limit, and the wait warning',
   assert.match(html, /waits until the pane of the orchestrator is idle/);
   assert.match(html, /<button type="button" class="quiet" data-goal-cancel>Cancel<\/button>/);
   assert.match(html, /id="goal-dialog-confirm"/);
-  assert.equal(GOAL_TEXT_MAX, 1000);
+  assert.equal(GOAL_TEXT_MAX, 2000);
 });
 
 test('app.js shows the goal block on the project page and on both Agents views, and the touch target is 44 px', () => {
