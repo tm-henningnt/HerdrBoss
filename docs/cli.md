@@ -274,6 +274,91 @@ herdr-boss mail post --to owner --title "Morning handback" handback.md
 herdr-boss mail close m-mg3k2x1a-1f2e3d4c --note "Answered with the Owner through the Boss."
 ```
 
+## Review packs
+
+A review pack is a folder of evidence with one question for each item. The Owner reads it in the Herdr Boss site, answers each item, and submits one result. The format and the reviewer pages are in [the design](ideas/review-packs.md). These commands publish a pack, import HTML pages, and read the result.
+
+| Command | Action |
+|---|---|
+| `herdr-boss review check FOLDER` | Validate a pack folder. Write nothing. Any pane and any terminal can run it. |
+| `herdr-boss review publish SLUG FOLDER [--note TEXT] [--dry-run]` | Validate the folder, store it as the next version of its pack, and post a Mailbox item for the Owner. |
+| `herdr-boss review import SLUG FOLDER-OR-FILE [--id ID] [--title TEXT] [--dry-run]` | Turn a folder of HTML files, or one HTML file, into a pack, and publish it. |
+| `herdr-boss review result [SLUG] PACK [--json]` | Print the result of a submitted review as Markdown, or as JSON with `--json`. |
+| `herdr-boss review delete [SLUG] PACK` | Delete the pack with its files and answers. Close its Mailbox items. |
+| `herdr-boss review list [SLUG] [--state open\|done\|all] [--json]` | List the packs. The default state is `open`. |
+
+`PACK` is the pack ID. Write it as `SLUG PACK` or as `SLUG/PACK`. An orch pane can also write only `PACK`. The command then uses the project of its workspace. A plain terminal must name the slug.
+
+### Who can publish
+
+`publish`, `import`, and `delete` check the caller.
+
+1. A plain terminal has no `HERDR_*` variable. It is the Owner. It can name any slug.
+2. A pane must pass the same check as `say`: `HERDR_ENV=1`, `HERDR_PANE_ID`, `HERDR_WORKSPACE_ID`, and a matching `herdr pane get` answer.
+3. The pane label must be `boss` or `orch`. A worker pane is refused. A worker builds the folder, runs `review check`, and names the folder in its report.
+4. An orch pane can use only the slug of the project that uses its workspace. Herdr Boss finds that project in `state.json`.
+5. The pane labeled `boss` can use only the slug `boss`.
+
+`check` reads only and has no caller rule. `result` and `list` use the same scope, and a worker pane is refused:
+
+- A plain terminal reads every project.
+- An orch pane reads only the slug of its own workspace. `review list` without a slug lists that project.
+- The pane labeled `boss` runs `review list` for every project. It runs `review result` only for the slug `boss`.
+
+### Publish
+
+1. Run `herdr-boss review check FOLDER` and correct each error.
+2. Run `herdr-boss review publish SLUG FOLDER`.
+3. Read the printed review URL.
+
+The command validates the folder with the rules of the design. The secret scan reads each text file. A finding names the file and the secret class, never the value. The command refuses a text file over 2 MB, an SVG, an HTML file outside a `page` item, and every image above 40 megapixels. It prints one line for each failed rule.
+
+The command stores the files in the data folder and adds a Mailbox item to the thread of the project. The item has the kind `review` and the action `decide`. It has the title `Review: TITLE (vN)` and a link to the pack. `--note` adds text of 1 to 1000 characters to the item. The command refuses a title or a note that looks like a token, a key, or a password, before it writes anything.
+
+A publish with an existing pack ID makes the next version. The command closes the older open Mailbox item of that pack with `closedBy: "review"` and posts a new item. The Owner sees one open item for each pack. An Owner answer to a review item stays in the Mailbox thread of that item.
+
+If the publish fails after the store write, the command prints the pack ID and the version. The pack is stored and has no complete Mailbox item. Run the same `review publish` command again. An open pack with the same content gets no new version. The command only posts or links the missing Mailbox item and prints `Repaired`. The same command on an open pack with an open item for the current version prints `Unchanged` and does nothing. A submitted pack always takes the next version. A `--note` also takes the next version.
+
+`--dry-run` validates the folder and prints what the command would publish. It writes no file, no database row, and no Mailbox item.
+
+A project can have 5 open packs. The publish command refuses a sixth. It also refuses a version that takes the packs over 2 GB, and it names the oldest submitted packs to delete.
+
+### Import
+
+`review import` reads a folder of HTML files, or one HTML file, and writes a temporary pack folder. It never fetches a URL.
+
+1. It makes one section for each HTML file. The order is `index.html`, the pages that `index.html` links to in link order, then the other pages by name.
+2. Each section has one `page` item that shows the whole page in a sandboxed frame.
+3. Each local `<img>` becomes one `image` item, with the `alt` text as the title. A file that two pages use makes one item.
+4. The command prints the external URLs that the pages use, without query string or fragment. The frame blocks them.
+5. The command prints each local file that it did not import, with the reason: an SVG, a missing file, a path outside the folder, a local script or style sheet, or a file of another type. A page item holds only one HTML file.
+
+The importer reads each page in one pass with fixed limits: 20000 tags for each page, 200 KB of CSS for each page, and 400 items for each pack. It skips each image after the item limit. Each name, URL, and title that the command prints is one line without control characters and has at most 200 characters. The command lists at most 100 external URLs and 100 skipped files.
+
+`--id` sets the pack ID. The default is the name of the folder or the file. `--title` sets the pack title. The default is the title of the first page. `--dry-run` prints the same lists and publishes nothing. The importer removes its temporary folder.
+
+### Result
+
+The Owner answer comes back as an `[owner]` prompt with the verdict and a fetch command. `review result SLUG PACK` prints the Markdown summary. It lists the denied items first, with their notes and pins. `--json` prints the result object with the schema `herdr-boss.review-result/1`.
+
+### Exit codes
+
+| Code | Meaning |
+|---|---|
+| 0 | The command finished. |
+| 1 | Usage error, or a refusal: the caller, a secret in a title or a note, the open pack limit, or the quota. |
+| 2 | The pack folder is not valid. The command printed each failed rule. |
+| 3 | The pack does not exist, or it has no result yet. |
+
+Example:
+
+```sh
+herdr-boss review check .worker/review-pack
+herdr-boss review publish shop .worker/review-pack --note "Start with the dark cart."
+herdr-boss review import shop ./site-export --id landing-redesign --dry-run
+herdr-boss review result shop checkout-redesign --json
+```
+
 ## Watch
 
 | Command | Action |

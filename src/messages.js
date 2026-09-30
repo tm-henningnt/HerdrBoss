@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DATA_DIR } from './config.js';
 import { SLUG } from './projects.js';
-import { openMessageStore, RETENTION_MS, messagesFile } from './message-store.js';
+import { openMessageStore, RETENTION_MS, messagesFile, newId } from './message-store.js';
 
 export { RETENTION_MS, messagesFile };
 
@@ -85,7 +85,7 @@ const cutCodePoints = (text, max) => {
 
 // The title of a mailbox item: the report title, or the first line of the text without Markdown marks. It holds no control character.
 export function mailboxTitle(item) {
-  const source = item?.kind === 'report' && item.title ? String(item.title) : String(item?.text ?? '').split(LINE_BREAKS).find((part) => part.trim()) ?? '';
+  const source = (item?.kind === 'report' || item?.kind === 'review') && item.title ? String(item.title) : String(item?.text ?? '').split(LINE_BREAKS).find((part) => part.trim()) ?? '';
   const plain = source.replace(/^\s{0,3}(#{1,6}\s+|>\s?|[-*+]\s+|\d+[.)]\s+)/, '').replace(/[*_`]+/g, '').replace(CONTROLS, '').replace(/\s+/g, ' ').trim();
   return cutCodePoints(plain, TITLE_MAX).text.trim();
 }
@@ -106,16 +106,16 @@ export function ownerPromptText(record, question = null) {
 // ---------- Owner mailbox ----------
 
 // Every agent reply and Boss report to the Owner is a mailbox item. An item without a known action is information.
-export const isMailboxItem = (record) => !!record && record.to === 'owner' && (record.kind === 'reply' || record.kind === 'report');
+export const isMailboxItem = (record) => !!record && record.to === 'owner' && (record.kind === 'reply' || record.kind === 'report' || record.kind === 'review');
 export const mailboxAction = (record) => (ACTIONS.includes(record?.action) ? record.action : 'read');
 const needsOwnerAction = (record) => NEEDS_YOU_ACTIONS.has(mailboxAction(record));
 // An information item is done when it is closed, closed by the Boss, or read. Old read items have no closedAt.
 const isDone = (record) => !!record.closedAt || record.closedBy === 'boss' || (!needsOwnerAction(record) && !!record.readAt);
 
-// The channel rule. A report is mail. A reply with an action for the Owner is in both channels. Every other record is a chat message.
+// The channel rule. A report and a review pack item are mail. A reply with an action for the Owner is in both channels. Every other record is a chat message.
 export function messageChannel(record) {
   if (!record) return 'chat';
-  if (record.kind === 'report') return 'mail';
+  if (record.kind === 'report' || record.kind === 'review') return 'mail';
   if (record.kind === 'reply' && NEEDS_YOU_ACTIONS.has(mailboxAction(record))) return 'both';
   return 'chat';
 }
@@ -477,7 +477,7 @@ function redactSecrets(value) {
     .replace(/\b((?:[a-z][a-z0-9]*[_-])*(?:api[_-]?key|key|access[_-]?token|auth[_-]?token|token|secret|password|passwd|pwd)\s*[:=]\s*)(?:["'][^"'\r\n]*["']|[^\s,;]+)/gi, '$1[REDACTED]');
 }
 
-function refuseSecret(text, what) {
+export function refuseSecret(text, what) {
   if (redactSecrets(text) !== text) throw new Error(`The ${what} looks like it holds a secret: a token, a key, or a password. Herdr Boss did not store it. Remove the secret and try again.`);
 }
 
@@ -545,4 +545,52 @@ export function postReport(file, { to = null, title = null, action = null } = {}
   refuseSecret(name, 'title');
   refuseSecret(text, 'report');
   return appendMessage({ thread: 'boss', from: 'boss', to: 'owner', kind: 'report', title: name, text, action: chosen, replyTo: null, status: 'new' }, { dir, now });
+}
+
+// ---------- Review pack items ----------
+
+const REVIEW_TITLE_PREFIX = 'Review: ';
+
+// Close the open review items of one pack in a record list. `except` names an item ID that stays open.
+function closeReviewRecords(records, { slug, pack, except = null }, at) {
+  let closed = 0;
+  for (const record of records) {
+    if (record.kind !== 'review' || record.id === except || record.closedAt) continue;
+    if (record.review?.slug !== slug || record.review?.pack !== pack) continue;
+    record.closedAt = at;
+    record.readAt ||= at;
+    record.closedBy = 'review';
+    closed += 1;
+  }
+  return closed;
+}
+
+// Close every open review item of one pack. Returns { closed }. The closed item carries closedBy: 'review'.
+export function closeReviewItems({ slug, pack, except = null }, { dir = DATA_DIR, now = Date.now() } = {}) {
+  return openMessageStore({ dir }).mutate((records) => ({ records, result: { closed: closeReviewRecords(records, { slug, pack, except }, new Date(now).toISOString()) } }), { now });
+}
+
+// Append the decide item of a published review pack and close the older items of the same pack in one store write,
+// so a crash never leaves two open items for one pack.
+// `text` is the summary line of the pack. The record adds the link to the review page. The caller has verified the role.
+export function postReview({ slug, pack, title, version, text, role = 'orch' } = {}, { dir = DATA_DIR, now = Date.now() } = {}) {
+  if (!validThread(slug)) throw new Error('The project slug must match [a-z0-9][a-z0-9-]* and have at most 64 characters.');
+  if (!['orch', 'boss'].includes(role)) throw new Error(`The role of a review item must be orch or boss, not ${role}.`);
+  const suffix = ` (v${version})`;
+  const name = cutCodePoints(String(title ?? '').replace(CONTROLS, '').replace(/\s+/g, ' ').trim(), TITLE_MAX - REVIEW_TITLE_PREFIX.length - suffix.length).text.trim();
+  if (!name) throw new Error('The review pack needs a title.');
+  const body = `${String(text ?? '').trim()}\n\n[Open review](/reviews/${slug}/${pack})`.trim();
+  refuseSecret(name, 'title');
+  refuseSecret(body, 'text');
+  const at = new Date(now).toISOString();
+  const record = {
+    id: newId(now), at, thread: slug, from: role, to: 'owner', kind: 'review', text: body, action: 'decide', replyTo: null, status: 'new',
+    sentAt: null, error: null, relayedAt: null, relayedBy: null,
+    title: `${REVIEW_TITLE_PREFIX}${name}${suffix}`, review: { slug, pack, version },
+  };
+  return openMessageStore({ dir }).mutate((records) => {
+    closeReviewRecords(records, { slug, pack }, at);
+    records.push(record);
+    return { records, result: record };
+  }, { now });
 }

@@ -165,6 +165,12 @@ const USAGE = `herdr-boss <command>
   watch stop           Stop the watch.
   watch routines       Print the next and last run of each routine of the running watch.
   watch                Print the current watch state. "night" is an alias of "watch".
+  review check FOLDER   Validate a review pack folder. Any pane can run it. Exit 2 when the pack is not valid.
+  review publish SLUG FOLDER [--note TEXT] [--dry-run]  Publish a review pack and post a Mailbox item. Run it from an orch pane of SLUG, the boss pane (SLUG boss), or a plain terminal.
+  review import SLUG FOLDER-OR-FILE [--id ID] [--title TEXT] [--dry-run]  Import HTML pages as a review pack and publish it.
+  review result [SLUG] PACK [--json]  Print the result of a submitted review. PACK can also be SLUG/PACK. Exit 3 when there is no result.
+  review delete [SLUG] PACK  Delete a review pack and close its Mailbox item. Same caller rules as publish.
+  review list [SLUG] [--state open|done|all] [--json]  List review packs.
   kit-path              Print the shared kit directory.
 `;
 
@@ -249,6 +255,13 @@ async function main() {
     const { projectCommand } = await import('./project-new-cli.js');
     const { createHerdrRunner } = await import('./kit/workers.js');
     const code = projectCommand(args, { env: process.env, herdr: createHerdrRunner() });
+    if (code) process.exitCode = code;
+    return;
+  }
+  if (cmd === 'review') {
+    const { reviewCommand } = await import('./review-cli.js');
+    const { createHerdrRunner } = await import('./kit/workers.js');
+    const code = reviewCommand(args, { env: process.env, herdr: createHerdrRunner() });
     if (code) process.exitCode = code;
     return;
   }
