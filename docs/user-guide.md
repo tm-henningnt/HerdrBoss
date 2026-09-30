@@ -129,7 +129,7 @@ An error text never holds an absolute path.
 
 ## Reviews page
 
-The **Reviews** page shows the review packs that projects send to the Owner. The menu entry is after **Mailbox**. The page is an app view, as the Mailbox: on a screen of 760 px or less it fills the screen, and the menu button at the top left opens the drawer.
+The **Reviews** page shows the review packs that projects send to the Owner. The menu entry is after **Board**. The page is an app view, as the Mailbox: on a screen of 760 px or less it fills the screen, and the menu button at the top left opens the drawer.
 
 ### Routes
 
@@ -1390,9 +1390,9 @@ The refresh waits while you type or scroll. It runs 3 seconds after your last in
 
 ### Unread count and the top-bar icons
 
-The desktop Mailbox badge shows open Needs-you items that the Owner has not opened. The number comes from `needsYouUnread` in the `mailbox` field in `/api/state`.
+The `needsYouUnread` count is the open Needs-you items that the Owner has not opened. The number comes from `needsYouUnread` in the `mailbox` field in `/api/state`.
 
-The top bar shows three icons on a desktop and on a phone. Each icon has a count.
+The top bar shows three icons on a desktop and on a phone. Each icon has a count. The menu has no Mailbox entry and no Chat entry. The icons open the Chat and the Mailbox. The icon of the open page has `aria-current="page"` and a mark: Chat on the Chat, Updates on the Mailbox folder Updates, and Needs action on the Mailbox folder Needs you. On a phone the Mailbox, the Chat, and the Reviews hide the top bar. Their slim bar shows the same three icons at the right of the page title, with the same counts, faded state, names, and current mark. The icons open the Chat and the Mailbox in one tap. Each icon is 44 px wide and 44 px high on a phone. Four targets of 44 px fit in a width of 320 px.
 
 | Icon | Count | Field in `mailbox` | Link |
 |---|---|---|---|
@@ -1445,7 +1445,7 @@ The Owner can use an own image for the Boss and for each project. The page uses 
 On a screen up to 760 px wide, the Mailbox and the Chat are app views. The page header, the menu bar, and the page padding do not show. The page has the height of the visual viewport. The page itself does not scroll. Only the list, the conversation, or the chat log scrolls.
 
 - The top bar is 52 px high, plus the top safe-area inset. It holds the menu button and the page title with its count. In a conversation it holds the Back arrow, the avatar, and the name.
-- The menu button opens a drawer. The drawer holds the Mailbox folders on the Mailbox, the links to all pages with the Needs-you and Chat counts, and **Help**. A dot on the menu button shows unread items on the other page.
+- The menu button opens a drawer. The drawer holds the Mailbox folders on the Mailbox, the links to the pages, and **Help**. The drawer has no Mailbox entry and no Chat entry. A dot on the menu button shows unread items on the other page.
 - The Mailbox list has a floating **New** button at the bottom right.
 - In a Mailbox conversation, the actions of the open item sit in a bar at the bottom edge, above the bottom safe-area inset. The bar holds the item actions from [Answer an item](#answer-an-item):
   - An approval: **Approve**, **Reject**, a note button, and a **Dismiss** button. The note button opens the note field above the buttons.

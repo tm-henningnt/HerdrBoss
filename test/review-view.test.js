@@ -328,9 +328,9 @@ test('the list keys follow the Gmail set, and a text field takes every key excep
 
 // ---------- Menu entry and Mailbox button ----------
 
-test('the menu has a Reviews entry after the Mailbox, on the desktop bar and in the phone drawer', () => {
-  assert.match(html, /data-nav="mailbox">Mailbox.*?<\/a><a href="\/reviews" data-nav="reviews">Reviews<\/a><a href="\/chat"/);
-  assert.match(app, /\['\/mailbox', 'Mailbox', counts\['needs-action'\]\], \['\/reviews', 'Reviews'\]/);
+test('the menu has a Reviews entry after the Board, on the desktop bar and in the phone drawer', () => {
+  assert.match(html, /data-nav="board">Board<\/a><a href="\/reviews" data-nav="reviews">Reviews<\/a><a href="\/agents"/);
+  assert.match(app, /\['\/board', 'Board'\], \['\/reviews', 'Reviews'\], \['\/agents'/);
   assert.match(app, /NAV_LABEL = \{[^}]*reviews: 'Reviews'/);
   assert.match(app, /reviews: \['Reviews', `/, 'the page help');
   assert.match(fs.readFileSync(new URL('../public/app-view.js', import.meta.url), 'utf8'), /'reviews'/, 'the reviews page is a phone app view');

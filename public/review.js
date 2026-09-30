@@ -192,7 +192,7 @@ export function packListHtml(view, h) {
     : '<div class="review-empty"><p>No finished reviews.</p><p>A pack moves here after you submit it, or when it expires.</p></div>';
   else body = `<div class="review-rows">${list.map((pack) => packRowHtml(pack, h)).join('')}</div>`;
   return `<div class="review-page review-list" data-key="reviews:list">`
-    + `<div class="app-bar review-app-bar">${h.menuButton || ''}<h1>Reviews</h1></div>`
+    + `<div class="app-bar review-app-bar">${h.menuButton || ''}<h1>Reviews</h1>${h.barIcons || ''}</div>`
     + `<nav class="review-tabs" aria-label="Review folders">${tab('open', 'Open')}${tab('done', 'Done')}</nav>`
     + `<div class="review-scroll" data-key="reviews:scroll:${folder}">${body}</div></div>`;
 }

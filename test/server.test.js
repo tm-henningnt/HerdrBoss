@@ -1452,7 +1452,7 @@ test('one Agents tab has Chart and List views, a new menu order, and an /organiz
   const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
   // The menu holds the pages in the Owner order, with no Organization entry.
   const nav = /<nav id="primary-nav"[^>]*>([\s\S]*?)<\/nav>/.exec(html)?.[1] || '';
-  assert.deepEqual([...nav.matchAll(/data-nav="([^"]+)"/g)].map((m) => m[1]), ['overview', 'board', 'mailbox', 'reviews', 'chat', 'agents', 'projects', 'browsers', 'allocation', 'analytics']);
+  assert.deepEqual([...nav.matchAll(/data-nav="([^"]+)"/g)].map((m) => m[1]), ['overview', 'board', 'reviews', 'agents', 'projects', 'browsers', 'allocation', 'analytics']);
   assert.doesNotMatch(nav, /data-nav="organization"/);
   assert.doesNotMatch(app, /organization: 'Organization'/);
   assert.doesNotMatch(app, /route === 'organization'/);
@@ -2034,12 +2034,11 @@ test('the Chat page has a route, a menu position, a composer key rule, a before 
   assert.match(app, /'mailbox', 'chat', 'allocation'/);
   assert.match(app, /route === 'chat' \? chatView\(state\)/);
   const nav = /<nav id="primary-nav"[^>]*>([\s\S]*?)<\/nav>/.exec(html)?.[1] || '';
-  assert.deepEqual([...nav.matchAll(/data-nav="([^"]+)"/g)].map((m) => m[1]), ['overview', 'board', 'mailbox', 'reviews', 'chat', 'agents', 'projects', 'browsers', 'allocation', 'analytics']);
-  assert.match(nav, /<a href="\/chat" data-nav="chat">Chat<span class="nav-badge" data-chat-badge aria-hidden="true" hidden><\/span><\/a>/);
+  assert.deepEqual([...nav.matchAll(/data-nav="([^"]+)"/g)].map((m) => m[1]), ['overview', 'board', 'reviews', 'agents', 'projects', 'browsers', 'allocation', 'analytics']);
+  assert.doesNotMatch(nav, /href="\/chat"/);
+  assert.match(html, /<a class="top-icon" data-top-icon="chat" data-empty="true" href="\/chat" aria-label="Chat">/);
   // The list reads the chat API and shows a badge with the total unread count.
   assert.match(app, /fetch\('\/api\/chats'\)/);
-  assert.match(app, /for \(const badge of document\.querySelectorAll\('\[data-chat-badge\]'\)\)/);
-  assert.match(app, /chatUnreadTotal\(\)/);
   // Enter sends. Shift+Enter makes a new line.
   assert.match(app, /if \(e\.key !== 'Enter' \|\| e\.shiftKey\) return;/);
   assert.match(app, /async function chatSend\(retry = null\)/);
