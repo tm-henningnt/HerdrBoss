@@ -559,17 +559,32 @@ function readRules(file) {
   }
 }
 
+const OPUS_MODEL = 'claude-opus-5-5';
+
+// A bare Opus alias names the Opus model of the catalog, so the allow-list and the approval check see one name.
+function normalizeModel(model) {
+  return typeof model === 'string' && /^(claude-)?opus$/i.test(model.trim()) ? OPUS_MODEL : model;
+}
+
+const isOpus = (model) => /(^|[-/])opus($|[-.\d])/i.test(model);
+
 function validateSelection(kind, options, models, config, resourcePolicy = null) {
   const policy = models.kinds[kind];
   if (!policy) throw new Error(`Unknown agent kind: ${kind}. Choose one of ${Object.keys(models.kinds).join(', ')}.`);
-  const model = selectModel(kind, options.model, models, resourcePolicy);
+  const explicit = normalizeModel(options.model);
+  const model = selectModel(kind, explicit, models, resourcePolicy);
+  // The model always comes from the flag, the Owner's preferred model, or the kit default. Never leave it to the harness.
+  if (!model) throw new Error(`${kind} has no default model in kit/models.json. Pass --model.`);
+  const modelSource = explicit != null ? '--model' : model === resourcePolicy?.preferredModels?.[kind] ? 'policy' : 'default';
   if (!policy.allowedModels.includes(model)) throw new Error(`Model ${model} is not allowed for ${kind}.`);
+  if (isOpus(model) && !options.force) throw new Error(`${model} needs the Owner's approval. Ask the Owner, then start with --force.`);
   if (config.allowedModels !== null && !config.allowedModels.includes(model)) throw new Error(`Project ${config.slug} does not allow model ${model}.`);
   const effort = options.effort ?? policy.defaultEffort;
   if (effort !== null && !policy.allowedEfforts.includes(effort)) throw new Error(`Effort ${effort} is not allowed for ${kind}.`);
   if (effort === null && options.effort != null) throw new Error(`${kind} does not support a reasoning effort.`);
+  const effortSource = options.effort != null ? '--effort' : effort !== null ? 'default' : null;
   const launchArgs = policy.launchArgs.map((arg) => arg.replaceAll('{{model}}', model).replaceAll('{{effort}}', effort ?? ''));
-  return { model, effort, launchArgs };
+  return { model, modelSource, effort, effortSource, launchArgs, force: isOpus(model) && !!options.force };
 }
 
 function branchExists(root, branch) {
@@ -795,7 +810,7 @@ function renderStartPlan(plan) {
     `1. Validate agent name: ${plan.name}`,
     `   $ herdr agent list`,
     `2. Read resource rules: ${plan.rulesFile}${plan.rulesStale ? ' (stale or missing; warn)' : ''}`,
-    `3. Validate kind/model/effort: ${plan.kind} / ${plan.model} / ${plan.effort ?? '(none)'}`,
+    `3. Validate kind/model/effort: ${plan.kind} / ${plan.model} / ${plan.effort ?? '(none)'} (model source: ${plan.modelSource}${plan.effortSource ? `, effort source: ${plan.effortSource}` : ''}${plan.force ? ', --force: Opus approved by the Owner' : ''})`,
     `4. Create worktree: ${plan.noWorktree ? '(disabled; use current worktree)' : plan.worktree}`,
     ...(plan.noWorktree ? [] : [`   $ git worktree add -b ${displayArg(plan.branch)} ${displayArg(plan.worktree)} ${displayArg(plan.base)}`]),
     `   Append /.worker/ to ${plan.excludeFile}`,
@@ -958,7 +973,7 @@ export function startWorker(name, options, {
   }
   const policy = rules.policy;
   // Local extra models from the policy join the harness allow-list and use its launch arguments.
-  const { model, effort, launchArgs } = validateSelection(options.kind, options, mergeModels(modelConfig, policy), config, policy);
+  const { model, modelSource, effort, effortSource, launchArgs, force: opusForce } = validateSelection(options.kind, options, mergeModels(modelConfig, policy), config, policy);
   const agentsWarning = agentsDrift(config.root, rulesPath);
   if (agentsWarning) output(agentsWarning);
   const projectPolicy = policy?.projects?.[config.slug];
@@ -1063,7 +1078,7 @@ export function startWorker(name, options, {
   const agentArgs = workerAgentArgs(options.kind, launchArgs, { paneId: '<pane-id>', tabId: planTabId, workspaceId, env, tmpDir, worktree });
 
   const plan = {
-    name, kind: options.kind, model, effort, rulesFile: rulesPath, rulesStale: staleRules,
+    name, kind: options.kind, model, modelSource, effort, effortSource, force: opusForce, rulesFile: rulesPath, rulesStale: staleRules,
     noWorktree: !!options.noWorktree, readOnly: !!options.readOnly, allowedPaths, worktree, branch, base, template: config.briefTemplatePath,
     workspaceId, paneId, paneCommand, paneTab, launchArgs, agentArgs, recordFile, excludeFile,
     // A worker in the current worktree uses its existing dependencies, so setup runs only for a new worktree.
@@ -1200,8 +1215,11 @@ export function startWorker(name, options, {
       name,
       kind: options.kind,
       model,
+      modelSource,
+      ...(opusForce ? { force: true } : {}),
       provider,
       effort,
+      ...(effortSource ? { effortSource } : {}),
       issue: options.issue == null ? null : Number(options.issue),
       ...(options.taskId != null ? { taskId: String(options.taskId) } : {}),
       worktree,
