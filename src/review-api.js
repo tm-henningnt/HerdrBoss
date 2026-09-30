@@ -132,10 +132,18 @@ export function parseRange(header, size) {
 
 const etagMatches = (header, etag) => header.split(',').some((part) => part.trim() === '*' || part.trim().replace(/^W\//, '') === etag);
 
-// options: dataDir, store (tests replace it), now (a function that gives the time in ms).
-export function createReviewApi({ dataDir, store = reviewStore, now = () => Date.now() } = {}) {
+// options: dataDir, store (tests replace it), now (a function that gives the time in ms), and onChange(event), which
+// the server pushes as a `review` event. An event holds ids and numbers only: slug, pack, version, and item and rev,
+// note and rev, or state. It never holds an answer, a note text, or a file name.
+export function createReviewApi({ dataDir, store = reviewStore, now = () => Date.now(), onChange = () => {} } = {}) {
   if (typeof dataDir !== 'string' || !dataDir) throw new TypeError('createReviewApi needs a data directory.');
   const where = (slug, pack) => ({ dir: dataDir, slug, pack });
+  const notify = (slug, pack, fields) => {
+    try {
+      const head = store.packHeads?.({ dir: dataDir, slug, pack })?.[0];
+      onChange({ slug, pack, version: head?.version ?? null, ...fields });
+    } catch { /* a live event is optional; the page polls too */ }
+  };
 
   function list(url) {
     const state = url.searchParams.get('state') ?? 'open';
@@ -156,6 +164,7 @@ export function createReviewApi({ dataDir, store = reviewStore, now = () => Date
     const patch = await readJson(req, ITEM_BODY_LIMIT);
     const saved = store.putAnswer({ ...where(slug, pack), now: now(), item, patch });
     if (saved.conflict) return { status: 409, body: { error: 'The answer changed on another device. The current answer is in this response.', conflict: true, current: saved.current } };
+    if (!saved.duplicate) notify(slug, pack, { item, rev: saved.answer.rev });
     return { status: 200, body: saved };
   }
 
@@ -164,6 +173,7 @@ export function createReviewApi({ dataDir, store = reviewStore, now = () => Date
     onlyFields(body, ['note', 'rev']);
     const saved = store.putPackNote({ ...where(slug, pack), now: now(), note: body.note, rev: body.rev });
     if (saved.conflict) return { status: 409, body: { error: 'The note changed on another device. The current note is in this response.', conflict: true, current: saved.current } };
+    notify(slug, pack, { note: true, rev: saved.rev });
     return { status: 200, body: saved };
   }
 
@@ -172,6 +182,7 @@ export function createReviewApi({ dataDir, store = reviewStore, now = () => Date
     onlyFields(body, ['verdict', 'note']);
     const saved = store.submitPack({ ...where(slug, pack), now: now(), verdict: body.verdict, note: body.note });
     if (saved.conflict) return { status: 409, body: { error: 'This version was submitted before. The first result is in this response.', conflict: saved.conflict, result: saved.result } };
+    notify(slug, pack, { state: 'submitted' });
     return { status: 200, body: saved };
   }
 

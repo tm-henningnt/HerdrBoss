@@ -455,16 +455,18 @@ test('a keyed update of the item viewer keeps the note field, its text, the zoom
   assert.equal(find(main, (el) => el.getAttribute('data-rv-decision') === 'accept').getAttribute('aria-pressed'), 'true');
 });
 
-test('every answer write of the viewer goes through saveItemAnswer and public/review-save.js', () => {
-  const saver = fs.readFileSync(new URL('../public/review-save.js', import.meta.url), 'utf8');
+test('every answer write of the viewer goes through saveItemAnswer and the queue of public/review-sync.js', () => {
+  const queue = fs.readFileSync(new URL('../public/review-sync.js', import.meta.url), 'utf8');
   assert.doesNotMatch(app, /\/items\/\$\{/, 'app.js sends no item PUT of its own');
-  assert.equal((saver.match(/method: 'PUT'/g) || []).length, 1, 'one PUT to the item route');
-  assert.match(saver, /JSON\.stringify\(\{ \.\.\.patch, rev \}\)/);
+  assert.doesNotMatch(app, /\/note`, \{ method: 'PUT'/, 'app.js sends no note PUT of its own');
+  assert.equal((queue.match(/itemUrl\(P, op\.item\), \{ method: 'PUT'/g) || []).length, 1, 'one PUT to the item route');
+  assert.match(queue, /JSON\.stringify\(\{ \.\.\.op\.patch, rev, opId: op\.opId \}\)/, 'each item write has the rev and the opId');
   const body = /\nfunction saveItemAnswer\(item, patch(?:, [^)]*)?\) \{([\s\S]*?)\n\}/.exec(app)?.[1];
   assert.ok(body, 'the UI defines saveItemAnswer(item, patch)');
-  assert.match(body, /reviewSaver\.save\(/);
-  assert.match(app, /data\.rvConflict === 'mine'\) reviewSaver\.keepMine\(/);
-  assert.match(app, /data\.rvConflict === 'theirs'\) reviewSaver\.useTheirs\(/);
+  assert.match(body, /queueItemAnswer\(/);
+  assert.match(app, /reviewSync\.enqueue\(\{ slug: ctx\.route\.slug/);
+  assert.match(app, /data\.rvConflict === 'mine'\) reviewSync\.keepMine\(/);
+  assert.match(app, /data\.rvConflict === 'theirs'\) reviewSync\.useTheirs\(/);
   assert.match(app, /REVIEW_VIEWED_MS = 1500/);
   assert.match(app, /startViewedTimer\(\{ doc: document, ms: REVIEW_VIEWED_MS/, 'the Viewed timer counts only while the page is visible');
   assert.match(app, /reviewRepeatTap\(`\$\{item\.id\}:\$\{kind\}:\$\{value\}`\)\) return;/, 'a double tap sends one change');

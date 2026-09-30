@@ -5,6 +5,7 @@
 // The item route shows the item viewer of public/review-viewer.js. It takes ui.viewer (the view state of the item)
 // and the helper text(url), which gives a loaded text file of the pack.
 import { itemViewerHtml, answerBarHtml, viewerBarHtml } from './review-viewer.js';
+import { syncStatusHtml, packStatusHtml, submitLock, rowSyncText } from './review-sync.js';
 
 const SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
@@ -208,6 +209,8 @@ function itemRowHtml(pack, item, ui, esc) {
   const done = viewed && item.state !== 'open';
   const sub = [TYPE_LABEL[item.type] || 'Item'];
   if (answer.note) sub.push('note');
+  const sync = rowSyncText(ui.itemSync?.(item.id));
+  if (sync) sub.push(sync);
   const current = ui.current === item.id || ui.item === item.id;
   return `<li><a class="review-item${done ? ' review-item-done' : ''}" href="${esc(reviewUrl(pack.slug, pack.pack, item.id))}" data-key="review-item:${esc(item.id)}" data-review-row="${esc(item.id)}"${current ? ' aria-current="true"' : ''}>`
     + `<span class="review-thumb">${icon(TYPE_ICON[item.type] || 'doc')}</span>`
@@ -256,7 +259,8 @@ function summaryHtml(pack, ui, esc) {
     form = `<form class="review-submit-form" id="review-submit-form" data-review-submit data-key="review-form">`
       + `<label class="review-field-label" for="review-note">Note for the whole pack</label>`
       + `<textarea id="review-note" class="review-note-field" data-review-note maxlength="2000" rows="4" placeholder="What should the project do next?">${esc(note)}</textarea>`
-      + `<p class="review-note-status" role="status">${esc(ui.noteStatus || '')}</p>`
+      + syncStatusHtml(ui.noteSync || { kind: '' }, esc)
+      + noteConflictHtml(ui.noteConflict, esc)
       + `<fieldset class="review-verdict"><legend class="review-field-label">Verdict</legend>${options}</fieldset></form>`;
   } else {
     const verdict = verdictInfo(ui.result?.verdict ?? pack.verdict);
@@ -265,6 +269,23 @@ function summaryHtml(pack, ui, esc) {
     form = `<div class="review-result"><p>${pack.state === 'expired' ? 'Expired' : 'Submitted'}${pack.closedAt ? ` ${esc(ui.time ? ui.time(pack.closedAt) : pack.closedAt)}` : ''} ${chip}</p>${note ? `<p class="review-result-note">${esc(note)}</p>` : ''}</div>`;
   }
   return `<section id="review-submit" class="review-summary" aria-labelledby="review-sum-title"><h2 id="review-sum-title">Summary</h2>${blocks}${form}</section>`;
+}
+
+// The pack note changed on another device while my note waited. The field keeps my text until I choose.
+function noteConflictHtml(conflict, esc) {
+  if (!conflict) return '';
+  return `<div class="rv-conflict" role="alert"><p><b>The note changed on another device.</b> The other note: ${esc(conflict.theirs?.note || '(empty)')}</p>`
+    + '<div class="rv-conflict-actions"><button type="button" class="rv-button" data-review-note-conflict="mine">Keep mine</button><button type="button" class="rv-button" data-review-note-conflict="theirs">Use theirs</button></div></div>';
+}
+
+// The changes that waited offline and then met an answer from another device. The page asks once for all of them.
+function conflictsHtml(pack, conflicts, esc) {
+  const batch = (conflicts || []).filter((entry) => entry.batch);
+  if (!batch.length) return '';
+  const title = (entry) => (entry.kind === 'note' ? 'Note for the whole pack' : (pack.items || []).find((item) => item.id === entry.item)?.title || entry.item);
+  return `<div class="review-conflicts rv-conflict" role="alert" data-key="review-conflicts"><p><b>${esc(plural(batch.length, 'change'))} waited offline, and another device changed the same ${batch.length === 1 ? 'answer' : 'answers'} meanwhile.</b></p>`
+    + `<ul>${batch.map((entry) => `<li>${esc(title(entry))}</li>`).join('')}</ul>`
+    + '<div class="rv-conflict-actions"><button type="button" class="rv-button" data-review-conflicts="mine">Keep mine</button><button type="button" class="rv-button" data-review-conflicts="theirs">Use theirs</button></div></div>';
 }
 
 function itemPanelHtml(pack, ui, h) {
@@ -306,13 +327,14 @@ export function packPageHtml(pack, ui, h) {
   let foot = '';
   if (openItem) foot = answerBarHtml(pack, openItem, ui.viewer || {}, h);
   else if (open && !ui.item) {
-    foot = `<div class="review-foot" data-key="review-foot"><span class="review-foot-count">${counts.open ? `${plural(counts.open, 'open item')}` : 'All items answered'}</span>`
+    const lock = submitLock(ui.packSync?.count || 0, ui.packSync?.unsaved || 0);
+    foot = `<div class="review-foot" data-key="review-foot">${packStatusHtml(ui.packSync || { kind: '' }, esc)}<span class="review-foot-count">${counts.open ? `${plural(counts.open, 'open item')}` : 'All items answered'}</span>`
       + `<p class="review-foot-status" role="status">${esc(ui.submitStatus || '')}</p>`
-      + `<button type="submit" form="review-submit-form" class="review-submit"${ui.submitting ? ' disabled' : ''}>Submit review</button></div>`;
+      + `<button type="submit" form="review-submit-form" class="review-submit"${ui.submitting || lock.disabled ? ' disabled' : ''}>${esc(lock.label)}</button></div>`;
   }
   return `<div class="review-page${ui.item ? ' item-open' : ''}" data-key="review-page:${esc(pack.slug)}/${esc(pack.pack)}">`
     + `<div class="app-bar review-app-bar">${bar}</div>`
-    + `<div class="review-body" data-key="review-body">${head}${list}${main}</div>${foot}</div>`;
+    + `<div class="review-body" data-key="review-body">${open ? conflictsHtml(pack, ui.conflicts, esc) : ''}${head}${list}${main}</div>${foot}</div>`;
 }
 
 // A page for a missing pack or a load error, with the same app bar.

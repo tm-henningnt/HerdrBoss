@@ -117,6 +117,8 @@ A request with a matching `If-None-Match` gets `304` with no body. A video respo
 
 `rev` is the revision that the client last saw. Use `0` for an item with no answer. The server changes only the fields in the body. It accepts the change only when `rev` equals the stored revision. A stale `rev` gets `409` with `conflict: true` and `current`, the stored answer or the stored note. A retry with the same `opId` gets `200` and `duplicate: true`.
 
+The page gives each item change a new `opId`. It sends the same `opId` again when it retries the change. The note route has no `opId`. When a retried note gets `409` and `current.note` is the sent text, the page counts the note as saved.
+
 The submit route stores the result of the current version and closes the pack. A second submit of the same version gets `409` with `conflict: "submitted"` and the first result. A submitted or expired pack takes no answer: the answer route gets `409`.
 
 The routes give these other errors:
@@ -127,6 +129,19 @@ The routes give these other errors:
 - `413`: a body over 64 KB for an item, or over 16 KB for a note or a submit.
 
 An error text never holds an absolute path.
+
+### Live review events
+
+The service sends a `review` event on `/api/events` after each saved answer, each saved pack note, and each submit. It also sends one when a pack gets a new version or a new state. The service finds a new version at the next state push, because a publish runs in the CLI process. The event holds ids and numbers only. It never holds an answer, a note text, or a file name.
+
+| Change | Event data |
+|---|---|
+| An answer | `{ slug, pack, version, item, rev }` |
+| The pack note | `{ slug, pack, version, note: true, rev }` |
+| A submit | `{ slug, pack, version, state: "submitted" }` |
+| A new version or state | `{ slug, pack, version, state }` |
+
+A retry with a known `opId` sends no event. The review page loads the pack again when an event names a `rev` that is newer than the page has. The page also loads the open pack again every 30 seconds.
 
 ## Reviews page
 
@@ -157,7 +172,7 @@ Each section is a fold with its title, its state chip, and its count of answered
 
 ### Summary and submit
 
-The summary follows the sections. It lists the items by state: Open first with **Review now**, then Denied, Needs live check, Note only, and Accepted. A note shows under its item. The pack note field saves the note 1 second after the last key, and when the field loses the focus. The verdict choice has **Approve**, **Request changes**, and **Comment**. The page selects the proposed verdict of the pack state and marks it **Proposed**. The page sets the proposal when it first shows a pack version. A later answer does not move the selection. A new version sets a new proposal. **Submit review** is in the bar at the bottom edge. It asks for a confirm that names the pack, the version, the verdict, and the count of each state. Then it sends the verdict and the pack note. The button stays disabled while the request runs. A submit with open items is allowed. After the submit, the page shows the result and no form. A second submit of the same version shows the first result.
+The summary follows the sections. It lists the items by state: Open first with **Review now**, then Denied, Needs live check, Note only, and Accepted. A note shows under its item. The pack note field saves the note 600 ms after the last key, and at once when the field loses the focus. The verdict choice has **Approve**, **Request changes**, and **Comment**. The page selects the proposed verdict of the pack state and marks it **Proposed**. The page sets the proposal when it first shows a pack version. A later answer does not move the selection. A new version sets a new proposal. **Submit review** is in the bar at the bottom edge. It asks for a confirm that names the pack, the version, the verdict, and the count of each state. Then it sends the verdict and the pack note. The button stays disabled while the request runs. It is also disabled while changes wait in the autosave queue. It then shows `Waiting for N changes to save`. A submit with open items is allowed. After the submit, the page shows the result and no form. A second submit of the same version shows the first result.
 
 A failed request shows its reason in plain words under the field or in the bottom bar. The page keeps the sentence of the API when the answer has one. Otherwise it shows one of these sentences:
 
@@ -170,7 +185,7 @@ A failed request shows its reason in plain words under the field or in the botto
 | `429` | `Too many requests. Wait a minute and try again.` |
 | `500` and higher | `The service reported an error.` |
 | Other | `The request failed.` |
- The read-only preview shows the packs and refuses each note and submit with `Not sent. This read-only preview does not allow changes.`
+ The read-only preview shows the packs. It refuses each note with `Not saved. This read-only preview does not allow changes.` and each submit with `Not sent. This read-only preview does not allow changes.`
 
 ### Item viewer
 
@@ -212,7 +227,39 @@ The answer bar shows only the questions in `ask` of the item:
 
 The page marks an item **Viewed** when the item stays open and visible for 1.5 seconds. The time does not count while the browser tab is hidden. The **Viewed** toggle in the top bar sets or clears the mark.
 
-Each change goes to the server at once with the `rev` of the item. The saves of one item run one after the other. A button with a running save shows busy and keeps the focus. A second tap on the same button within 400 ms is ignored, so a double tap on **Accept** does not clear the decision. The line under the item shows `Saving…`, then `Saved`, or `Not saved.` and the reason. A failed save keeps the typed note in the field. When another device changed the answer first, the server answers `409`. The page then shows the answer of the other device and two buttons. **Keep mine** sends your change again with the `rev` of the other answer. **Use theirs** keeps the other answer and drops your drafts. When the `409` does not include the stored answer, the page loads the pack again to get it. When that load fails, the page shows `The answer changed on another device, and the page could not load it. Reload the page.` The read-only preview refuses each change with `Not saved. This read-only preview does not allow changes.`
+A second tap on the same button within 400 ms is ignored, so a double tap on **Accept** does not clear the decision. A button with a running save shows busy and keeps the focus. A save never moves a button and never takes the focus.
+
+### Autosave and offline
+
+Each change saves by itself. There is no Save button. `public/review-sync.js` holds the autosave queue.
+
+- A decision, a choice, a rating, a live check, a check box, a pin, and the Viewed mark go into the queue at once. A typed note and a pin note go in 600 ms after the last key. They go in at once when the field loses the focus, when you move to another item, and when the page is hidden.
+- The queue keeps one patch for each item. A new change of the same item merges into the patch that waits, and the last value of each field wins.
+- The queue sends one write at a time, in the order of the first change. Each item write has the `rev` of the item and an `opId`. A retry sends the same `opId`, so a retry after a lost answer does not apply the change twice.
+
+The line under the item and the pill above the answer bar show the save state. The pill also shows the count of waiting changes. The bar with **Submit review** has the same pill. A section row shows a short state for an item with an unsaved change.
+
+| State | Meaning |
+|---|---|
+| `Saved` | The server stored the change. |
+| `Saving...` | The change is in the queue or on its way. |
+| `Offline, will save when back` | The service was not reachable. The queue tries again by itself. |
+| `Not saved` with **Retry** | The service answered `429` or `500` and higher. The queue tries again by itself. **Retry** tries at once. |
+| `Sign in again` | The service answered `401`. The queue stops until you sign in and return to the page. |
+| `Not saved.` and the reason | The service refused the change with `400`, `403`, or `413`. The page stops this change. The other changes still save. Select **Retry** to send it again or **Discard** to forget it. |
+| `Changed in the new version. Not saved.` | A new pack version changed the item while the change waited. The page does not send the change. Select **Discard**, or answer the item again. |
+
+A change that was not saved stays in the count until you select **Retry** or **Discard**, or answer the item again. The pill then shows `N changes were not saved`, and **Submit review** shows the same text and stays disabled. A change for a submitted, expired, or deleted pack has **Discard** only.
+
+After a failure, the queue tries again after 2, 4, 8, and 16 seconds, then every 30 seconds. It also tries at once when the browser is online again and when the page gets the focus. The queue keeps the waiting changes in `localStorage` under `herdr-boss.review-queue:<slug>/<pack>:v<version>`. The key holds only the patches, the `opId` values, the `rev` values, and the item hashes. A reload restores the queue and shows the waiting changes. When the queue is larger than 200 KB, or the browser has no storage or refuses it, the queue stays in the page only. The pill then asks you to keep the page open.
+
+Two tabs of one pack share one storage key. Each tab sends only its own changes. When a tab writes the key, it keeps the stored changes of the other tabs. A change leaves the key when the tab that owns it saves, stops, or merges it. A tab counts the waiting changes of the other tabs in the pill and in the submit lock, and updates the count at each `storage` event. **Retry** in the pill takes over the waiting changes of another tab, for example of a closed tab, and sends them. A reload also takes them over. A second send of the same change is safe: an item write carries its `opId`, and a note retry that meets its own text counts as saved.
+
+The queue stores a change as sent before the request starts. A reload after a lost answer sends the change again with the same `opId`. A new edit of the same item then waits behind it and gets the `rev` of the saved change.
+
+Before the queue sends a change that waited offline or that a reload restored, it reads the pack. It also reads the pack once when an item write gets `400`, because a new version can have replaced the item. On the same version, the queue stops the change with the server sentence. On a newer version, it applies the hash rule below. A pack that is submitted, expired, or deleted gets no write, and the page says why. When the pack has a newer version, the queue keeps a change only for an item with the same hash. The other changes show `Changed in the new version. Not saved.` The pack note moves to the new version.
+
+When another device changed the answer first, the server answers `409`. For a change that did not wait, the item shows the other answer and two buttons. **Keep mine** sends your change again with the `rev` of the other answer. **Use theirs** keeps the other answer and drops your drafts. For changes that waited offline, the pack page asks once. It lists all items with a conflict and has **Keep mine** and **Use theirs** for all of them. A pack note conflict shows the other note under the note field with the same two buttons. When the `409` does not include the stored answer, the queue loads the pack again to get it. When that load fails, the page shows `The answer changed on another device, and the page could not load it. Reload the page.` The read-only preview refuses each change with `Not saved. This read-only preview does not allow changes.`
 
 The **Previous**, **Next open**, and **Next** links under the item move between the items. After a move by a key or a swipe, the focus goes to the item heading. A submitted pack shows its answers and disables the controls.
 

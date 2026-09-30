@@ -9,7 +9,8 @@ import { APP_VIEW_ROUTES, appViewport } from './app-view.js';
 import { parseReviewPath, reviewItemFromHash, reviewUrl, packListHtml, packPageHtml, reviewMessageHtml, reviewKeyAction, reviewOpenLinkHtml, reviewErrorText, submitConfirmText, pinProposedVerdict } from './review.js';
 import { viewerKeyAction, nextOpenItem, itemNeighbors, sectionStep, addPin, removePin, setPinText, itemSpec } from './review-viewer.js';
 import { attachGestures, restoreStages, resetStages, zoomStage } from './review-gestures.js';
-import { createItemSaver, createTapGuard, startViewedTimer } from './review-save.js';
+import { createTapGuard, startViewedTimer, ANSWER_EMPTY } from './review-save.js';
+import { createReviewSync, createDrafts, NOTE_DEBOUNCE_MS } from './review-sync.js';
 import { createWizard } from './project-wizard-ui.js';
 import { goalSetBlockHtml, goalDialogHtml, goalJobRunning, goalStatusText, pollGoalStatus } from './goal-set.js';
 import { buildDraftShares, draftSignature, shareTotal, distributeRemainder, moveShares, totalHtml, checkSave, confirmText, sumConfirmText, allocationFooterHtml, staleRowHtml } from './allocation-draft.js';
@@ -5285,10 +5286,11 @@ const HELP = {
     <h3>Pack list</h3><p><b>Open</b> holds the packs that wait for your answers. <b>Done</b> holds the submitted and the expired packs, each with its verdict. A row shows the project, the pack title, the version, the time of the last change, and the count of answered items. A row with <b>N changed</b> has items that changed after your answer. The Mailbox item of a pack opens the same page with <b>Open review</b>.</p>
     <h3>Progress bar</h3><p>The bar shows the item states in a fixed order: <b>Accepted</b>, <b>Note only</b>, <b>Needs live check</b>, <b>Denied</b>, and <b>Open</b>. Accepted also counts a choice or a rating. The Denied segment has stripes, so it differs from Needs live check without color. The legend under the bar names each state with its count.</p>
     <h3>Sections</h3><p>The pack page shows one block for each section, with its state and its count of answered items. Select a section title to fold or unfold its items. Each item row shows the item type, the title, the state, and a check mark when you viewed it. A viewed and answered item shows as a short, faded row. <b>Changed</b> marks an item that changed after your answer. It counts as open until you answer again. Select an item to open it in the item viewer. Back returns to the same row.</p>
-    <h3>Summary and submit</h3><p>The summary under the sections lists the items by state, with open items first and your notes under each item. Write a note for the whole pack in the note field. The page saves the note 1 second after you stop typing. Select a verdict: <b>Approve</b>, <b>Request changes</b>, or <b>Comment</b>. The page selects the proposed verdict from the item states when it first shows the pack version. A later answer does not move the selection. Select <b>Submit review</b> in the bar at the bottom. The page asks you to confirm and names the pack, the version, the verdict, and the counts. Then it sends the result. A submit with open items is allowed. The result lists them as open.</p>
+    <h3>Summary and submit</h3><p>The summary under the sections lists the items by state, with open items first and your notes under each item. Write a note for the whole pack in the note field. The page saves the note 600 ms after you stop typing. Select a verdict: <b>Approve</b>, <b>Request changes</b>, or <b>Comment</b>. The page selects the proposed verdict from the item states when it first shows the pack version. A later answer does not move the selection. Select <b>Submit review</b> in the bar at the bottom. While changes wait to save, the button shows <b>Waiting for N changes to save</b> and stays disabled. The page asks you to confirm and names the pack, the version, the verdict, and the counts. Then it sends the result. A submit with open items is allowed. The result lists them as open.</p>
     <h3>Item viewer</h3><p>The top bar shows the item title, <b>Item N of M</b> with the section, and the <b>Viewed</b> toggle. The page marks an item viewed when it stays open and visible for 1.5 seconds. The evidence fills the space above the answer bar. A pair has <b>Toggle</b> and <b>Slider</b>. A gallery shows a grid: select an image to open it. A table and a code box scroll sideways in their own box. <b>Open</b> on a live link opens a new tab.</p>
     <h3>Zoom and pins</h3><p>Pinch to zoom, or double tap for 2×. Double tap again for the fit size. Drag to pan a zoomed image. On a desktop, hold Ctrl and turn the wheel, or press <kbd>+</kbd> and <kbd>-</kbd>. <kbd>z</kbd> toggles the fit size and 100 %. Select <b>Add pin</b>, then tap the image to drop a numbered pin. Write the pin note in the field under the image. An item takes at most 20 pins.</p>
-    <h3>Answers</h3><p>The answer bar shows only the questions of the item: <b>Deny</b>, <b>Note</b>, <b>Live</b>, <b>Accept</b>, the choices, and the rating. Select a pressed button again to clear it. Each change saves at once. A second tap on the same button within 400 ms does nothing. The line under the item shows <b>Saved</b> or the reason of a failure. A failed save keeps your typed note. When another device changed the answer first, select <b>Keep mine</b> or <b>Use theirs</b>. Swipe left or right to go to the next or the previous item.</p>
+    <h3>Answers</h3><p>The answer bar shows only the questions of the item: <b>Deny</b>, <b>Note</b>, <b>Live</b>, <b>Accept</b>, the choices, and the rating. Select a pressed button again to clear it. A second tap on the same button within 400 ms does nothing. Swipe left or right to go to the next or the previous item.</p>
+    <h3>Autosave and offline</h3><p>Each change saves by itself. There is no Save button. A typed note saves 600 ms after the last key, and at once when you leave the field or the item. The line under the item and the pill above the answer bar show <b>Saved</b>, <b>Saving...</b>, <b>Offline, will save when back</b>, or <b>Not saved</b> with <b>Retry</b>. The pill also shows the count of waiting changes. Without a network the changes wait in this browser, also over a reload. The page tries again after 2, 4, 8, and 16 seconds, then every 30 seconds, and at once when the network comes back. <b>Sign in again</b> stops the saves until you sign in. A change that the service refuses shows <b>Not saved</b>, the reason, <b>Retry</b>, and <b>Discard</b>. A change for an item that a new pack version changed shows <b>Changed in the new version</b> and <b>Discard</b>. Such a change keeps <b>Submit review</b> disabled with <b>N changes were not saved</b> until you retry it, discard it, or answer the item again. Two tabs of one pack keep each other's waiting changes. <b>Retry</b> in the pill also sends the changes that a closed tab left. When another device changed the same answer first, select <b>Keep mine</b> or <b>Use theirs</b>. For changes that waited offline, the pack page asks once for all of them. A second device shows your changes without a reload.</p>
     <h3>Keys</h3><p>On the lists: <kbd>j</kbd> and <kbd>k</kbd> move to the next or the previous row. <kbd>J</kbd> and <kbd>K</kbd> move to the next or the previous section. <kbd>Enter</kbd> opens the row. <kbd>u</kbd> or <kbd>Esc</kbd> goes back. <kbd>s</kbd> goes to the summary.</p><p>In the item viewer: <kbd>j</kbd> or <kbd>→</kbd> next item, <kbd>k</kbd> or <kbd>←</kbd> previous item, <kbd>J</kbd> and <kbd>K</kbd> next or previous section, <kbd>n</kbd> next open item, <kbd>a</kbd> Accept, <kbd>d</kbd> Deny, <kbd>l</kbd> Needs live check, <kbd>c</kbd> note, <kbd>p</kbd> pin mode, <kbd>1</kbd> to <kbd>6</kbd> choice or rating, <kbd>v</kbd> Viewed, <kbd>e</kbd> Viewed and next, <kbd>t</kbd> toggle the pair, <kbd>z</kbd> fit or 100 %, <kbd>s</kbd> summary, <kbd>u</kbd> or <kbd>Esc</kbd> back.</p><p><kbd>?</kbd> opens this help. The keys do nothing while the focus is in a text field, except <kbd>Esc</kbd>, which leaves the field.</p>
     <h3>Phone and desktop</h3><p>On a phone the page fills the screen, and the bar with <b>Submit review</b> sits at the bottom edge. Select the menu button at the top left to open the other pages. On a screen of 900 px or wider, the sections are at the left and the summary is at the right.</p>
     <p>A read-only preview shows the packs and refuses each answer, note, and submit with a message.</p>`],
@@ -5446,10 +5448,26 @@ document.addEventListener('click', (e) => {
 // The pack list and the section list of hosted review packs. public/review.js renders them. This part loads the data and handles the events.
 
 const REVIEW_RELOAD_MS = 30000;
-const REVIEW_NOTE_DELAY_MS = 1000;
-const reviews = { open: null, done: null, error: '', loading: false, listAt: 0, packs: {}, ui: {}, revealed: '', path: '', texts: {}, textLoading: new Set(), viewer: {}, itemPath: '', stopViewed: null, reloadTimer: null };
+const reviews = { open: null, done: null, error: '', loading: false, listAt: 0, packs: {}, ui: {}, revealed: '', path: '', texts: {}, textLoading: new Set(), viewer: {}, itemPath: '', stopViewed: null, reloadTimer: null, restored: new Set() };
 const reviewKey = (slug, pack) => `${slug}/${pack}`;
-const reviewUi = (key) => (reviews.ui[key] ||= { note: null, noteStatus: '', noteTimer: null, verdict: null, submitting: false, submitStatus: '', result: null });
+const reviewUi = (key) => (reviews.ui[key] ||= { note: null, verdict: null, submitting: false, submitStatus: '', result: null });
+
+// The autosave queue of public/review-sync.js. Every answer write and every pack note write goes through it. The typed
+// notes wait NOTE_DEBOUNCE_MS in reviewDrafts; a blur, a move to another item, and a hidden page send them at once.
+const reviewStorage = (() => { try { return window.localStorage; } catch { return null; } })();
+let reviewSyncFrame = false;
+const reviewSync = createReviewSync({
+  fetch: (url, options) => fetch(url, options),
+  storage: reviewStorage,
+  onChange: () => {
+    if (reviewSyncFrame) return;
+    reviewSyncFrame = true;
+    // A microtask, not an animation frame: a hidden tab gets no frames, and the change must show when the tab returns.
+    queueMicrotask(() => { reviewSyncFrame = false; reviewsRender(); });
+  },
+  onSaved: (event) => reviewSaved(event),
+});
+const reviewDrafts = createDrafts({ ms: NOTE_DEBOUNCE_MS });
 
 function reviewHelpers(s) {
   return { esc, avatar: (slug) => avatarSlot(slug, { title: avatarTitle(slug), size: 36 }), projectLabel: (slug) => avatarTitle(slug), time: (iso) => listTime(iso), menuButton: appMenuButton(s, 'reviews'), text: (url) => reviews.texts[url], markdown: safeMarkdownHtml, barIcons: appBarIcons(s, 'reviews') };
@@ -5476,10 +5494,20 @@ async function loadReviewLists() {
 }
 
 async function loadReviewPack(slug, pack) {
-  const entry = reviews.packs[reviewKey(slug, pack)] ||= { data: null, error: '', status: 0, at: 0, loading: false };
+  const key = reviewKey(slug, pack);
+  const entry = reviews.packs[key] ||= { data: null, error: '', status: 0, at: 0, loading: false };
   entry.loading = true;
+  // The first load of a pack restores the changes that waited in this browser, for example after a reload offline.
+  if (!reviews.restored.has(key)) {
+    reviews.restored.add(key);
+    if (reviewSync.restore(slug, pack)) reviewSync.retryNow();
+  }
   try {
-    entry.data = await reviewFetch(`/api/reviews/${encodeURIComponent(slug)}/${encodeURIComponent(pack)}`);
+    const data = await reviewFetch(`/api/reviews/${encodeURIComponent(slug)}/${encodeURIComponent(pack)}`);
+    // A waiting change shows over the loaded answers, and a new version makes the queue check its patches.
+    reviewSync.overlay(data);
+    reviewSync.observe(data);
+    entry.data = data;
     entry.error = '';
     entry.status = 200;
   } catch (error) { entry.error = error.message; entry.status = error.status || 0; }
@@ -5502,8 +5530,8 @@ function reviewsView(s) {
     if (!entry || (!entry.loading && Date.now() - entry.at > REVIEW_RELOAD_MS)) loadReviewPack(route.slug, route.pack);
     if (entry?.data) {
       const ui = pinProposedVerdict(reviewUi(key), entry.data);
-      const viewer = route.view === 'item' ? reviewViewerUi(key, route.item) : undefined;
-      page = packPageHtml(entry.data, { ...ui, current: reviewItemFromHash(location.hash), item: route.view === 'item' ? route.item : undefined, viewer }, h);
+      const viewer = route.view === 'item' ? reviewViewerView(key, route.item) : undefined;
+      page = packPageHtml(entry.data, { ...ui, ...reviewSyncView(key), current: reviewItemFromHash(location.hash), item: route.view === 'item' ? route.item : undefined, viewer }, h);
     } else if (entry?.error && entry.status === 404) page = reviewMessageHtml('Review not found', 'This review pack does not exist. The project can have deleted it.', h);
     else if (entry?.error) page = reviewMessageHtml('Review', `The review could not load. ${entry.error}`, h, { alert: true, retry: true });
     else page = reviewMessageHtml('Review', 'Loading the review…', h);
@@ -5537,40 +5565,55 @@ function reviewRoutePack() {
   return { route, key, entry: reviews.packs[key], ui: reviewUi(key) };
 }
 
-async function saveReviewNote() {
-  const current = reviewRoutePack();
-  if (!current?.entry?.data || current.ui.note === null) return;
-  const { route, entry, ui } = current;
-  clearTimeout(ui.noteTimer);
-  ui.noteTimer = null;
-  if (ui.note === entry.data.note) return;
-  const note = ui.note;
-  ui.noteStatus = 'Saving…';
-  reviewsRender();
-  try {
-    const saved = await reviewFetch(`/api/reviews/${encodeURIComponent(route.slug)}/${encodeURIComponent(route.pack)}/note`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ note, rev: entry.data.noteRev }) });
-    entry.data.note = saved.note;
-    entry.data.noteRev = saved.rev;
-    ui.noteStatus = ui.note === note ? 'Saved' : 'Saving…';
-  } catch (error) {
-    if (error.status === 409 && error.body?.current) {
-      entry.data.note = error.body.current.note;
-      entry.data.noteRev = error.body.current.rev;
-      ui.note = error.body.current.note;
-      ui.noteStatus = 'The note changed on another device. The page shows the saved note.';
-    } else ui.noteStatus = `Not saved. ${error.message}`;
+// The save state of a pack for the render: the pill, the status of each item row, the conflicts, and the note status.
+function reviewSyncView(key) {
+  const conflicts = reviewSync.conflicts(key);
+  return {
+    packSync: reviewSync.packStatus(key),
+    itemSync: (id) => reviewSync.itemStatus(key, id),
+    conflicts,
+    noteSync: reviewSync.noteStatus(key),
+    noteConflict: conflicts.find((entry) => entry.kind === 'note' && !entry.batch) || null,
+  };
+}
+
+// A saved write, or the other answer after Use theirs. The waiting patches of the same item stay on top.
+function reviewSaved(event) {
+  const entry = reviews.packs[event.key];
+  if (!entry?.data) return;
+  if (event.kind === 'note') {
+    entry.data.noteRev = event.rev;
+    if (!reviewSync.pendingPatch(event.key, null, 'note')) entry.data.note = event.note;
+    if (event.theirs) reviewUi(event.key).note = event.note;
+  } else {
+    const item = entry.data.items?.find((entry) => entry.id === event.item);
+    const pending = reviewSync.pendingPatch(event.key, event.item);
+    if (item) item.answer = event.answer ? { ...event.answer, ...pending } : pending ? { ...ANSWER_EMPTY, ...pending } : null;
+    // Use theirs drops my drafts of the item.
+    if (event.theirs) Object.assign(reviewViewerUi(event.key, event.item), { note: null, pinText: {}, status: '', error: '' });
   }
-  reviewsRender();
+  scheduleReviewReload(entry.data.slug, entry.data.pack);
+}
+
+// Queue the pack note. The field keeps the typed text; the queue sends the latest text with the note rev.
+function saveReviewNote(current) {
+  if (!current?.entry?.data || current.ui.note === null || current.entry.data.state !== 'open') return;
+  const { route, entry, ui } = current;
+  if (ui.note === entry.data.note) return;
+  entry.data.note = ui.note;
+  reviewSync.enqueue({ slug: route.slug, pack: route.pack, version: entry.data.version, kind: 'note', rev: entry.data.noteRev || 0, patch: { note: ui.note } });
 }
 
 async function submitReview() {
   const current = reviewRoutePack();
   if (!current?.entry?.data || current.ui.submitting) return;
   const { route, entry, ui } = current;
+  // A submit never races an unsaved change: the drafts go into the queue, and the submit waits until the queue is empty.
+  reviewDrafts.flush();
+  if (reviewSync.pendingCount(current.key)) { reviewsRender(); return; }
   const verdict = ui.verdict || ui.proposed || entry.data.derived?.proposedVerdict || 'comment';
   const note = ui.note ?? entry.data.note ?? '';
   if (!confirm(submitConfirmText(entry.data, verdict))) return;
-  clearTimeout(ui.noteTimer);
   ui.submitting = true;
   ui.submitStatus = 'Sending…';
   reviewsRender();
@@ -5592,12 +5635,10 @@ document.addEventListener('input', (e) => {
   const current = reviewRoutePack();
   if (!current) return;
   current.ui.note = e.target.value;
-  current.ui.noteStatus = 'Not saved yet';
-  clearTimeout(current.ui.noteTimer);
-  current.ui.noteTimer = setTimeout(saveReviewNote, REVIEW_NOTE_DELAY_MS);
+  reviewDrafts.set(`pack-note:${current.key}`, () => saveReviewNote(current));
 });
 document.addEventListener('change', (e) => {
-  if (e.target.matches?.('[data-review-note]')) saveReviewNote();
+  if (e.target.matches?.('[data-review-note]')) { const current = reviewRoutePack(); if (current) reviewDrafts.flush(`pack-note:${current.key}`); }
   if (e.target.matches?.('[data-review-verdict]')) { const current = reviewRoutePack(); if (current) current.ui.verdict = e.target.value; }
 });
 document.addEventListener('submit', (e) => {
@@ -5605,6 +5646,50 @@ document.addEventListener('submit', (e) => {
   e.preventDefault();
   submitReview();
 });
+// Retry, the conflicts of the waiting changes, and the pack note conflict.
+document.addEventListener('click', (e) => {
+  const target = e.target.closest?.('[data-rv-sync-retry], [data-rv-sync-redo], [data-rv-sync-discard], [data-review-conflicts], [data-review-note-conflict]');
+  if (!target || currentRoute() !== 'reviews') return;
+  const current = reviewRoutePack();
+  if (target.dataset.rvSyncRetry !== undefined) reviewSync.retryNow({ adopt: true });
+  else if (!current) return;
+  else if (target.dataset.rvSyncRedo) reviewSync.redo(current.key, target.dataset.rvSyncRedo);
+  else if (target.dataset.rvSyncDiscard) reviewSync.discard(current.key, target.dataset.rvSyncDiscard);
+  else if (target.dataset.reviewConflicts === 'mine') reviewSync.keepAllMine(current.key);
+  else if (target.dataset.reviewConflicts === 'theirs') reviewSync.useAllTheirs(current.key);
+  else if (target.dataset.reviewNoteConflict === 'mine') reviewSync.keepNote(current.key);
+  else if (target.dataset.reviewNoteConflict === 'theirs') reviewSync.useTheirNote(current.key);
+  reviewsRender();
+});
+
+// The queue tries again at once when the network comes back and when the Owner returns to the page.
+// A hidden page sends its drafts first, so a closed tab keeps the typed notes in the queue.
+addEventListener('online', () => reviewSync.retryNow());
+addEventListener('focus', () => reviewSync.retryNow());
+addEventListener('pagehide', () => reviewDrafts.flush());
+// Another tab of the same pack changed the stored queue. See persist() in public/review-sync.js.
+addEventListener('storage', (e) => reviewSync.onStorage(e.key));
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') reviewDrafts.flush();
+  else reviewSync.retryNow();
+});
+
+// A `review` event from /api/events: another device or a new version changed a pack. The event holds ids and revs only.
+// My own save comes back with a rev that the page has already, so it loads nothing.
+function onReviewEvent(event) {
+  if (!event?.slug || !event?.pack) return;
+  reviews.listAt = 0;
+  const route = parseReviewPath(location.pathname);
+  const entry = reviews.packs[reviewKey(event.slug, event.pack)];
+  if (entry?.data) {
+    const item = event.item ? entry.data.items?.find((entry) => entry.id === event.item) : null;
+    if (item && (item.answer?.rev ?? 0) >= event.rev) return;
+    if (event.note && (entry.data.noteRev ?? 0) >= event.rev) return;
+    if (route?.slug === event.slug && route?.pack === event.pack) scheduleReviewReload(event.slug, event.pack);
+    else entry.at = 0;
+  } else if (route?.view === 'list') reviewsRender();
+}
+
 document.addEventListener('click', (e) => {
   if (!e.target.closest?.('[data-review-retry]')) return;
   const route = parseReviewPath(location.pathname);
@@ -5657,14 +5742,13 @@ document.addEventListener('keydown', (e) => {
 
 // ---------- Review item viewer ----------
 // The item viewer of a review pack. public/review-viewer.js renders it, and public/review-gestures.js runs the zoom,
-// the pins, and the swipe. Every answer change goes through saveItemAnswer(). RP8 wraps it with the autosave queue.
+// the pins, and the swipe. Every answer change goes through saveItemAnswer() and the autosave queue of public/review-sync.js.
 
 const REVIEW_VIEWED_MS = 1500;
-const REVIEW_ITEM_NOTE_DELAY_MS = 1000;
 const REVIEW_HINT_MS = 3000;
 const REVIEW_HINT_KEY = 'herdr-boss.review-zoom-hint';
 function reviewViewerUi(key, id) {
-  return (reviews.viewer[`${key}/${id}`] ||= { pair: 'a', pairMode: 'toggle', split: 50, gallery: null, placing: false, hint: false, noteOpen: false, note: null, noteTimer: null, pinText: {}, pinTimer: null, status: '', error: '', conflict: null, rev: 0, pending: {} });
+  return (reviews.viewer[`${key}/${id}`] ||= { pair: 'a', pairMode: 'toggle', split: 50, gallery: null, placing: false, hint: false, noteOpen: false, note: null, pinText: {}, status: '', error: '', quiet: false });
 }
 
 // The open item of the item route, with its pack and its view state, or null.
@@ -5687,15 +5771,38 @@ function scheduleReviewReload(slug, pack) {
   reviews.reloadTimer = setTimeout(() => { reviews.listAt = 0; loadReviewPack(slug, pack); }, 400);
 }
 
-// The saves, the conflict choice, and the repeat-tap guard are in public/review-save.js.
-const reviewSaver = createItemSaver({ fetch: (url, options) => fetch(url, options), onChange: () => reviewsRender(), reload: () => { const current = reviewRoutePack(); if (current) scheduleReviewReload(current.route.slug, current.route.pack); } });
+// The repeat-tap guard and the Viewed timer are in public/review-save.js. The saves are in public/review-sync.js.
 const reviewRepeatTap = createTapGuard();
 
-// Save one change of an item answer. Every answer write of the viewer goes through this function. RP8 wraps it with the autosave queue.
-function saveItemAnswer(item, patch, { quiet = false } = {}) {
+// Save one change of an item answer of the open pack. Every answer write of the viewer goes through this function.
+function saveItemAnswer(item, patch, options) {
   const current = reviewRoutePack();
-  if (!current?.entry?.data) return Promise.resolve(null);
-  return reviewSaver.save({ route: current.route, entry: current.entry, vui: reviewViewerUi(current.key, item.id), itemId: item.id, patch, quiet });
+  if (current?.entry?.data) queueItemAnswer(current, item.id, patch, options);
+}
+
+// Show the change at once, then queue it with the rev that the page shows. `ctx` is { route, key, entry } of the pack
+// that the change belongs to, so a draft that flushes after a move to another item still saves on its own item.
+// A quiet change (the automatic Viewed mark) shows no Saving and no Saved; a failure still shows.
+function queueItemAnswer(ctx, itemId, patch, { quiet = false } = {}) {
+  const item = ctx.entry.data?.items?.find((entry) => entry.id === itemId);
+  if (!item || ctx.entry.data.state !== 'open') return;
+  const vui = reviewViewerUi(ctx.key, itemId);
+  const rev = item.answer?.rev || 0;
+  item.answer = { ...ANSWER_EMPTY, ...item.answer, ...patch, rev };
+  vui.quiet = quiet;
+  if (!quiet) { vui.status = ''; vui.error = ''; }
+  reviewSync.enqueue({ slug: ctx.route.slug, pack: ctx.route.pack, version: ctx.entry.data.version, kind: 'item', item: itemId, hash: item.hash, rev, patch });
+}
+
+// The view state of the open item with its save state: the status line, the pill, the busy fields, and a live conflict.
+function reviewViewerView(key, id) {
+  const vui = reviewViewerUi(key, id);
+  let sync = reviewSync.itemStatus(key, id);
+  if (vui.quiet && ['saving', 'saved'].includes(sync.kind)) sync = { kind: '' };
+  const conflict = reviewSync.conflicts(key).find((entry) => entry.kind === 'item' && entry.item === id && !entry.batch);
+  // A button shows busy only while its write is out, not while it waits offline.
+  const pending = sync.kind === 'saving' ? Object.fromEntries(reviewSync.pendingFields(key, id).map((field) => [field, 1])) : {};
+  return { ...vui, sync, packSync: reviewSync.packStatus(key), pending, conflict: conflict ? { mine: conflict.mine, theirs: conflict.theirs } : null };
 }
 
 async function loadReviewText(url) {
@@ -5714,6 +5821,8 @@ function reviewViewerAfterRender() {
   const path = open ? location.pathname : '';
   if (reviews.itemPath !== path) {
     reviews.itemPath = path;
+    // A move to another item sends the typed notes of the item before at once.
+    reviewDrafts.flush();
     reviews.stopViewed?.();
     reviews.stopViewed = null;
     resetStages();
@@ -5787,22 +5896,23 @@ function reviewDropPin(point) {
 
 attachGestures($app, { swipe: reviewSwipe, pin: reviewDropPin, placing: () => Boolean(reviewOpenItem()?.vui.placing) });
 
+// The note and the pin notes of one item. `open` is the item when the Owner typed; the item is looked up again,
+// because a reload can replace the pack data before the draft flushes.
 function saveReviewItemNote(open) {
-  const { item, vui } = open;
-  clearTimeout(vui.noteTimer);
-  vui.noteTimer = null;
-  if (vui.note === null || vui.note === (item.answer?.note || '')) return;
-  saveItemAnswer(item, { note: vui.note });
+  const { vui } = open;
+  const item = open.entry.data?.items?.find((entry) => entry.id === open.item.id);
+  if (!item || vui.note === null || vui.note === (item.answer?.note || '')) return;
+  queueItemAnswer(open, item.id, { note: vui.note });
 }
 
 function saveReviewPinNotes(open) {
-  const { item, vui } = open;
-  clearTimeout(vui.pinTimer);
-  vui.pinTimer = null;
+  const { vui } = open;
+  const item = open.entry.data?.items?.find((entry) => entry.id === open.item.id);
+  if (!item) return;
   let pins = item.answer?.pins || [];
   for (const [n, text] of Object.entries(vui.pinText)) pins = setPinText(pins, Number(n), text);
   vui.pinText = {};
-  if (JSON.stringify(pins) !== JSON.stringify(item.answer?.pins || [])) saveItemAnswer(item, { pins });
+  if (JSON.stringify(pins) !== JSON.stringify(item.answer?.pins || [])) queueItemAnswer(open, item.id, { pins });
 }
 
 // One answer action from a button or a key. It does nothing for a question that the item does not ask.
@@ -5842,8 +5952,8 @@ document.addEventListener('click', (e) => {
   else if (data.rvZoom) zoomStage(target.closest('.rv-evidence')?.querySelector('.rv-stage'), data.rvZoom);
   else if (data.rvPinRemove) { if (open.pack.state === 'open') saveItemAnswer(item, { pins: removePin(item.answer?.pins || [], Number(data.rvPinRemove)) }); }
   else if (data.rvPin) { vui.noteOpen = true; reviewFocusNext(`[data-rv-pin-text="${CSS.escape(data.rvPin)}"]`); }
-  else if (data.rvConflict === 'mine') reviewSaver.keepMine({ route: open.route, entry: open.entry, vui, itemId: item.id });
-  else if (data.rvConflict === 'theirs') reviewSaver.useTheirs({ entry: open.entry, vui, itemId: item.id });
+  else if (data.rvConflict === 'mine') reviewSync.keepMine(open.key, item.id);
+  else if (data.rvConflict === 'theirs') reviewSync.useTheirs(open.key, item.id);
 });
 
 document.addEventListener('input', (e) => {
@@ -5853,15 +5963,12 @@ document.addEventListener('input', (e) => {
   const { vui } = open;
   if (e.target.matches('[data-rv-note]')) {
     vui.note = e.target.value;
-    vui.status = 'Not saved yet';
     // A browser without field-sizing grows the field here.
     if (!CSS.supports?.('field-sizing', 'content')) { e.target.style.height = 'auto'; e.target.style.height = `${e.target.scrollHeight + 2}px`; }
-    clearTimeout(vui.noteTimer);
-    vui.noteTimer = setTimeout(() => { const now = reviewOpenItem(); if (now?.item.id === open.item.id) saveReviewItemNote(now); }, REVIEW_ITEM_NOTE_DELAY_MS);
+    reviewDrafts.set(`note:${open.key}/${open.item.id}`, () => saveReviewItemNote(open));
   } else if (e.target.matches('[data-rv-pin-text]')) {
     vui.pinText[e.target.dataset.rvPinText] = e.target.value;
-    clearTimeout(vui.pinTimer);
-    vui.pinTimer = setTimeout(() => { const now = reviewOpenItem(); if (now?.item.id === open.item.id) saveReviewPinNotes(now); }, REVIEW_ITEM_NOTE_DELAY_MS);
+    reviewDrafts.set(`pins:${open.key}/${open.item.id}`, () => saveReviewPinNotes(open));
   } else {
     vui.split = Number(e.target.value);
     e.target.closest('.rv-evidence')?.querySelector('.rv-stage')?.style.setProperty('--rv-split', `${vui.split}%`);
@@ -5872,8 +5979,8 @@ document.addEventListener('change', (e) => {
   if (currentRoute() !== 'reviews' || !e.target.matches?.('[data-rv-note], [data-rv-pin-text], [data-rv-split], [data-rv-check]')) return;
   const open = reviewOpenItem();
   if (!open) return;
-  if (e.target.matches('[data-rv-note]')) saveReviewItemNote(open);
-  else if (e.target.matches('[data-rv-pin-text]')) saveReviewPinNotes(open);
+  if (e.target.matches('[data-rv-note]')) reviewDrafts.flush(`note:${open.key}/${open.item.id}`);
+  else if (e.target.matches('[data-rv-pin-text]')) reviewDrafts.flush(`pins:${open.key}/${open.item.id}`);
   else if (e.target.matches('[data-rv-split]')) reviewsRender();
   else if (open.pack.state === 'open') saveItemAnswer(open.item, { checks: { ...(open.item.answer?.checks || {}), [e.target.dataset.rvCheck]: e.target.checked } });
 });
@@ -7381,6 +7488,7 @@ function connect() {
   });
   es.onopen = () => $dot.classList.add('on');
   es.addEventListener('message', (e) => onChatMessage(JSON.parse(e.data)));
+  es.addEventListener('review', (e) => { try { onReviewEvent(JSON.parse(e.data)); } catch { /* a bad event changes nothing */ } });
   es.onerror = () => { $dot.classList.remove('on'); $updated.textContent = 'reconnecting…'; };
 }
 async function refreshRoamgate() {

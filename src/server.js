@@ -31,6 +31,7 @@ import { openMessageStore } from './message-store.js';
 import { BODY_LIMIT as PROJECT_NEW_BODY_LIMIT, createProjectNewApi } from './project-new-api.js';
 import { createGoalApi } from './goal-api.js';
 import { createReviewApi } from './review-api.js';
+import * as reviewStore from './review-store.js';
 
 const PUBLIC = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const DOCS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'docs');
@@ -204,8 +205,9 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine 
     log: (level, text) => engine.log(level, text),
     ...goalSet,
   });
-  const reviewApi = createReviewApi({ dataDir: DATA_DIR });
   const clients = new Set();
+  // The review pages update a second device through `review` events: ids and numbers only, never content.
+  const reviewApi = createReviewApi({ dataDir: DATA_DIR, onChange: (event) => broadcast('review', event) });
   let closed = false;
   let timer;
   let tickPromise;
@@ -223,7 +225,22 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine 
     const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
     for (const res of clients) res.write(msg);
   };
-  engine.on('state', (s) => broadcast('state', s));
+  // A publish runs in the CLI process. At each state push, the service compares the current version and the state of
+  // each pack with the last push and sends one `review` event for each change. The first push only records them.
+  let reviewHeads = null;
+  const pushReviewHeads = () => {
+    let heads;
+    try { heads = reviewStore.packHeads({ dir: DATA_DIR }); } catch { return; }
+    const next = new Map(heads.map((head) => [`${head.slug}/${head.pack}`, head]));
+    if (reviewHeads) {
+      for (const [key, head] of next) {
+        const before = reviewHeads.get(key);
+        if (!before || before.version !== head.version || before.state !== head.state) broadcast('review', { slug: head.slug, pack: head.pack, version: head.version, state: head.state });
+      }
+    }
+    reviewHeads = next;
+  };
+  engine.on('state', (s) => { broadcast('state', s); pushReviewHeads(); });
   engine.on('message', (event) => broadcast('message', event));
   const stopMessageWatch = messageStore.onChange((event) => {
     if (typeof engine.observeMessageChange === 'function') engine.observeMessageChange(event);
