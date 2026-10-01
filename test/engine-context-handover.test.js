@@ -22,6 +22,7 @@ let now = Date.parse('2026-09-29T12:00:00.000Z');
 Date.now = () => now;
 const calls = [];
 const herdrCalls = [];
+const snapshots = [];
 const cfg = loadConfig();
 cfg.push = false;
 cfg.quotaSeconds = 300;
@@ -52,6 +53,7 @@ const engine = new Engine(cfg, {
       records.push({ id: 'late', status: 'prepared', sourcePane: 'x', newPane: 'y' });
       fs.writeFileSync(file, JSON.stringify(records));
     }
+    if (args[0] === 'pane' && args[1] === 'read') return { text: input.steps[calls.step].screen || '' };
     return '{}';
   },
   handoffRunner: async (command, args) => {
@@ -69,8 +71,9 @@ for (const [index, step] of input.steps.entries()) {
     fs.writeFileSync(path.join(process.env.HERDR_BOSS_DIR, 'projects', slug + '.json'), JSON.stringify(body));
   }
   await engine.tick();
+  snapshots.push({ handoffs: JSON.parse(fs.readFileSync(path.join(process.env.HERDR_BOSS_DIR, 'handoffs.json'), 'utf8')), alerts: engine.state?.alerts || [], memory: structuredClone(engine.memory) });
 }
-console.log(JSON.stringify({ calls, herdrCalls, events: engine.events, memory: engine.memory, handoverWaits: engine.state?.handoverWaits }));
+console.log(JSON.stringify({ calls, herdrCalls, events: engine.events, memory: engine.memory, handoverWaits: engine.state?.handoverWaits, snapshots, messages: engine.messageStore.all() }));
 `;
 
 function transcript(home, cwd, sessionId, lines) {
@@ -97,6 +100,9 @@ function run(t, scenario) {
       assistant({ input_tokens: 10, cache_read_input_tokens: 5, cache_creation_input_tokens: 5, output_tokens: 9 }),
       assistant({ input_tokens: 20, cache_read_input_tokens: scenario.tokens - 30, cache_creation_input_tokens: 10, output_tokens: 300 }, scenario.model),
     ]);
+  }
+  if (scenario.successorTokens !== undefined) {
+    transcript(dir, '/work/alpha', 'sess-2', [assistant({ input_tokens: scenario.successorTokens })]);
   }
   const result = spawnSync(process.execPath, ['--input-type=module', '-e', probe], {
     cwd: repo,
@@ -285,10 +291,10 @@ test('an existing open record for the pane blocks a second preparation', { timeo
 
 const readyRecord = (extra = {}) => ({
   id: 'ctx-1', project: 'alpha', workspace: 'w-alpha', label: 'orch', sourcePane: 'w-alpha:p1', newPane: 'w-alpha:p9',
-  fromKind: 'claude', toKind: 'claude', model: 'claude-sonnet-5-5', status: 'prepared', automatic: true,
+  displayLabel: 'Alpha', fromKind: 'claude', toKind: 'claude', model: 'claude-sonnet-5-5', status: 'prepared', automatic: true,
   readyAt: '2026-09-29T11:59:00.000Z', preparedAt: '2026-09-29T11:58:00.000Z', ...extra,
 });
-const successor = { id: 'w-alpha:p9', workspace: 'w-alpha', label: null, orch: false, agent: 'claude', status: 'idle' };
+const successor = { id: 'w-alpha:p9', workspace: 'w-alpha', label: null, orch: false, agent: 'claude', status: 'idle', sessionId: 'sess-2', cwd: '/work/alpha' };
 
 test('a ready context successor activates when the source pane is idle', { timeout: 30000 }, (t) => {
   const out = run(t, {
@@ -711,6 +717,114 @@ test('an idle successor that never worked stays not ready after 120 seconds', { 
   assert.equal(out.records[0].readyAt, undefined);
   assert.equal(out.handoverWaits['ctx-1'], 'successor not ready: it has not started its state read');
   assert.deepEqual(activates(out), []);
+});
+
+test('an idle successor with Claude context evidence becomes ready at 120 seconds, but not before', { timeout: 30000 }, (t) => {
+  const record = unreadyRecord({ seenWorkingAt: undefined, promptAt: '2026-09-29T11:59:00.000Z' });
+  const out = run(t, {
+    tokens: 400000, successorTokens: 12000, memory: tracked, handoffs: [record],
+    steps: [
+      { at: '2026-09-29T12:00:59.000Z', herdr: herdrOf(pane('idle'), worker, successor), published: { alpha: status(1) } },
+      { at: '2026-09-29T12:01:00.000Z', herdr: herdrOf(pane('idle'), worker, successor), published: { alpha: status(1) } },
+    ],
+  });
+  assert.equal(out.snapshots[0].handoffs[0].readyAt, undefined);
+  assert.ok(out.snapshots[1].handoffs[0].readyAt);
+});
+
+test('a ghost suggestion in an idle successor input does not block readiness', { timeout: 30000 }, (t) => {
+  const out = run(t, {
+    tokens: 400000, successorTokens: 12000, memory: tracked,
+    handoffs: [unreadyRecord({ seenWorkingAt: undefined })],
+    steps: [{ at: at(1), herdr: herdrOf(pane('idle'), worker, successor), published: { alpha: status(1) }, screen: '❯\x1b[0m\x1b[2m wait for the w165 report\x1b[0m' }],
+  });
+  assert.ok(out.records[0].readyAt);
+  assert.equal(out.herdrCalls.filter(({ args }) => args[0] === 'agent' && args[1] === 'send-keys').length, 0);
+});
+
+test('real unsent successor input gets one Enter and stays not ready', { timeout: 30000 }, (t) => {
+  const out = run(t, {
+    tokens: 400000, memory: tracked,
+    handoffs: [unreadyRecord({ seenWorkingAt: undefined })],
+    steps: [
+      { at: at(1), herdr: herdrOf(pane('idle'), worker, successor), published: { alpha: status(1) }, screen: '❯ run the prepared handover' },
+      { at: at(2), herdr: herdrOf(pane('idle'), worker, successor), published: { alpha: status(1) }, screen: '❯ run the prepared handover' },
+    ],
+  });
+  const enters = out.herdrCalls.filter(({ args }) => args[0] === 'agent' && args[1] === 'send-keys');
+  assert.deepEqual(enters.map(({ args }) => args), [['agent', 'send-keys', 'w-alpha:p9', 'enter']]);
+  assert.equal(out.records[0].readyAt, undefined);
+});
+
+test('an unready automatic handover expires after 30 minutes, posts once, closes only an idle successor, and cools down', { timeout: 30000 }, (t) => {
+  const handoff = unreadyRecord({ preparedAt: '2026-09-29T11:29:59.000Z', promptAt: '2026-09-29T11:29:59.000Z', seenWorkingAt: undefined });
+  const out = run(t, {
+    tokens: 400000,
+    memory: { ...tracked, contextBoundary: { 'w-alpha:p1': { done: ['T1'], status: 'idle', workUpdated: null, armed: true } } },
+    handoffs: [handoff],
+    steps: [
+      { at: '2026-09-29T12:00:00.000Z', herdr: herdrOf(pane('idle'), worker, successor), published: { alpha: status(1) } },
+      { at: '2026-09-29T12:10:00.000Z', herdr: herdrOf(pane('idle'), worker, successor), published: { alpha: status(1) } },
+      { at: '2026-09-29T12:31:00.000Z', herdr: herdrOf(pane('idle'), worker, successor), published: { alpha: status(1) } },
+    ],
+  });
+  assert.equal(out.records[0].status, 'expired');
+  assert.equal(out.records[0].expiredReason, 'successor not ready after 30 minutes');
+  assert.equal(out.messages.filter((message) => message.handoffExpiryId === 'ctx-1').length, 1);
+  assert.equal(out.messages[0].thread, 'boss');
+  assert.equal(out.messages[0].action, 'read');
+  assert.match(out.messages[0].text, /Alpha.*ctx-1/);
+  assert.deepEqual(out.herdrCalls.filter(({ args }) => args[0] === 'pane' && args[1] === 'close').map(({ args }) => args), [['pane', 'close', 'w-alpha:p9']]);
+  assert.equal(out.snapshots[0].memory.handoverCooldowns.alpha, Date.parse('2026-09-29T12:00:00.000Z'));
+  assert.equal(out.snapshots[1].memory.handoverCooldowns.alpha, Date.parse('2026-09-29T12:00:00.000Z'));
+  assert.equal(out.snapshots[2].memory.handoverCooldowns.alpha, undefined);
+  assert.equal(prepares(out).length, 1);
+  assert.equal(prepares(out)[0].step, 2, 'the project can prepare again after the 30-minute cooldown');
+});
+
+test('an expired handover never closes a working successor pane', { timeout: 30000 }, (t) => {
+  const out = run(t, {
+    memory: tracked,
+    handoffs: [unreadyRecord({ preparedAt: '2026-09-29T11:29:59.000Z', promptAt: '2026-09-29T11:29:59.000Z', seenWorkingAt: undefined })],
+    steps: [{ at: '2026-09-29T12:00:00.000Z', herdr: herdrOf(pane('idle'), worker, { ...successor, status: 'working' }), published: { alpha: status(1) } }],
+  });
+  assert.equal(out.records[0].status, 'expired');
+  assert.deepEqual(out.herdrCalls.filter(({ args }) => args[0] === 'pane' && args[1] === 'close'), []);
+});
+
+test('a 400K context warning stays active and clears below the threshold or when a successor is ready', { timeout: 30000 }, (t) => {
+  const out = run(t, {
+    tokens: 400000,
+    steps: [
+      { at: '2026-09-29T12:00:00.000Z', herdr: herdrOf(pane('idle'), worker), published: { alpha: status(1) } },
+      { at: '2026-09-29T12:30:00.000Z', herdr: herdrOf(pane('idle'), worker), published: { alpha: status(1) } },
+      { at: '2026-09-29T13:00:00.000Z', herdr: herdrOf(pane('idle'), worker), published: { alpha: status(1) } },
+    ],
+  });
+  const warnings = out.snapshots.map(({ alerts }) => alerts.find((alert) => alert.key === 'context:alpha'));
+  assert.ok(warnings.every(Boolean));
+  assert.equal(warnings[0].severity, 'warn');
+  assert.equal(warnings[0].title, 'Context at 400K tokens: handover not ready');
+  const cleared = run(t, { tokens: 399999, steps: [{ at: at(1), herdr: herdrOf(pane('idle'), worker), published: { alpha: status(1) } }] });
+  assert.equal(cleared.snapshots[0].alerts.some((alert) => alert.key === 'context:alpha'), false);
+  const ready = run(t, {
+    tokens: 400000, handoffs: [readyRecord()],
+    steps: [{ at: at(1), herdr: herdrOf(pane('idle'), worker, successor), published: { alpha: status(1) } }],
+  });
+  assert.equal(ready.snapshots[0].alerts.some((alert) => alert.key === 'context:alpha'), false);
+});
+
+test('a context warning clears after activation and can return after 60 minutes', { timeout: 30000 }, (t) => {
+  const out = run(t, {
+    tokens: 400000, successorTokens: 400000,
+    handoffs: [activeRecord({ activatedAt: '2026-09-29T11:59:30.000Z' })],
+    steps: [
+      { at: '2026-09-29T12:00:00.000Z', herdr: herdrOf(oldPane('idle'), newPane('idle'), idleWorker) },
+      { at: '2026-09-29T13:01:00.000Z', herdr: herdrOf(oldPane('idle'), newPane('idle'), idleWorker) },
+    ],
+  });
+  assert.equal(out.snapshots[0].alerts.some((alert) => alert.key === 'context:alpha'), false);
+  assert.ok(out.snapshots[1].alerts.some((alert) => alert.key === 'context:alpha'));
 });
 
 test('a successor becomes ready after it was seen working and is idle again', { timeout: 30000 }, (t) => {

@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { POLICY_DEFAULTS } from '../src/control.js';
-import { modelTier, tierAllowsAutoActivation, summaryHolds } from '../src/engine.js';
+import { alertPromptDue, modelTier, tierAllowsAutoActivation, summaryHolds } from '../src/engine.js';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const probe = `
@@ -414,6 +414,15 @@ test('the model tiers match the cost order in kit/models.md', () => {
   assert.equal(tierAllowsAutoActivation('opencode-go/muse-spark-1.3-contributor', 'gpt-6-astra').allowed, false);
   assert.match(tierAllowsAutoActivation('gpt-6.1-sol', 'opencode-go/muse-spark-1.3-contributor').reason, /does not rank/);
   assert.match(tierAllowsAutoActivation('opencode-go/muse-spark-1.3-contributor', 'gpt-6-astra').reason, /source model/);
+});
+
+test('a context warning prompt repeats no more than once per 60 minutes', () => {
+  const alert = { key: 'context:alpha', severity: 'warn' };
+  const sent = { at: 1000, severity: 'warn' };
+  const hour = 60 * 60 * 1000;
+  assert.equal(alertPromptDue(alert, null, 1000, 0), true);
+  assert.equal(alertPromptDue(alert, sent, 1000 + hour - 1, 0), false);
+  assert.equal(alertPromptDue(alert, sent, 1000 + hour, 0), true);
 });
 
 test('automatic activation needs a successor that is not weaker than the source', { timeout: 60000 }, (t) => {
