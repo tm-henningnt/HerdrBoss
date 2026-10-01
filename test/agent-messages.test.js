@@ -238,6 +238,169 @@ test('a malformed metadata row cannot prevent a valid idle response', () => {
   assert.equal(agent.readAgentMetadata({ dir }).find(row => row.id === record.id).responseMs, 2000);
 });
 
+test('an initialized empty response index reads no metadata and takes no lock', (t) => {
+  const dir = path.join(root, 'empty-response-index-data');
+  const file = path.join(dir, 'agent-message-meta.jsonl');
+  const now = Date.parse('2026-10-01T12:00:00Z');
+  const rows = Array.from({ length: 20000 }, (_, i) => ({
+    id: `old-${i}`, at: new Date(now - 180 * 86400000 + i).toISOString(),
+    from: { role: 'service', pane: null }, to: { role: 'worker', pane: `wA:p${i}` },
+    project: 'invented', kind: 'reminder', respondedAt: new Date(now - 179 * 86400000).toISOString(),
+  }));
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(file, rows.map((row) => JSON.stringify(row)).join('\n') + '\n');
+  agent.initializeAgentResponseIndex({ dir, now });
+
+  let reads = 0;
+  let locks = 0;
+  const readFileSync = fs.readFileSync;
+  const openSync = fs.openSync;
+  t.mock.method(fs, 'readFileSync', function (target, ...args) {
+    if (String(target) === file) reads++;
+    return readFileSync.call(fs, target, ...args);
+  });
+  t.mock.method(fs, 'openSync', function (target, ...args) {
+    if (String(target) === `${file}.lock`) locks++;
+    return openSync.call(fs, target, ...args);
+  });
+
+  assert.deepEqual(agent.updateAgentResponses({ dir, now }), { updated: 0, observed: {} });
+  assert.equal(reads, 0);
+  assert.equal(locks, 0);
+});
+
+test('same-process metadata writes update the index and external writes rebuild it', () => {
+  const dir = path.join(root, 'response-index-sync-data');
+  const now = Date.parse('2026-10-01T12:00:00Z');
+  agent.initializeAgentResponseIndex({ dir, now });
+  const local = agent.recordAgentMessage({
+    from: { role: 'service', project: null, name: null, pane: null },
+    to: { role: 'worker', project: 'alpha', name: 'build', pane: 'wA:p1' },
+    text: 'Local row.', kind: 'reminder', status: 'delivered', targetStatus: 'working',
+  }, { dir, now });
+  let result = agent.updateAgentResponses({ dir, now: now + 1000, panes: [{ id: 'wA:p1', agent: 'codex', status: 'idle' }] });
+  assert.equal(result.updated, 1);
+  assert.equal(agent.readAgentMetadata({ dir }).find((row) => row.id === local.id).responseMs, 1000);
+
+  const external = {
+    id: 'external-row', at: new Date(now + 2000).toISOString(),
+    from: { role: 'service', project: null, name: null, pane: null },
+    to: { role: 'worker', project: 'alpha', name: 'build', pane: 'wA:p1' },
+    project: 'alpha', kind: 'nudge', respondedAt: null, status: 'delivered', targetStatus: 'working',
+  };
+  fs.appendFileSync(path.join(dir, 'agent-message-meta.jsonl'), `${JSON.stringify(external)}\n`);
+  result = agent.updateAgentResponses({ dir, now: now + 3000, panes: [{ id: 'wA:p1', agent: 'codex', status: 'idle' }] });
+  assert.equal(result.updated, 1);
+  assert.equal(agent.readAgentMetadata({ dir }).find((row) => row.id === external.id).responseMs, 1000);
+});
+
+test('an already answered delivered tell still resolves the earlier target message', () => {
+  const dir = path.join(root, 'answered-tell-response-data');
+  const now = Date.parse('2026-10-01T12:00:00Z');
+  const target = { role: 'worker', project: 'alpha', name: 'build', pane: 'wA:p1' };
+  const rows = [
+    {
+      id: 'waiting-message', at: new Date(now - 120000).toISOString(),
+      from: { role: 'service', project: null, name: null, pane: null }, to: target,
+      project: 'alpha', kind: 'reminder', status: 'delivered', targetStatus: 'working', respondedAt: null,
+    },
+    {
+      id: 'answered-reply', at: new Date(now - 60000).toISOString(), from: target,
+      to: { role: 'invalid' }, project: 'alpha', kind: 'reply', status: 'delivered', source: 'tell',
+      respondedAt: new Date(now - 30000).toISOString(),
+    },
+  ];
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'agent-message-meta.jsonl'), rows.map((row) => JSON.stringify(row)).join('\n') + '\n');
+
+  const result = agent.updateAgentResponses({ dir, now });
+  assert.equal(result.updated, 1);
+  assert.equal(agent.readAgentMetadata({ dir }).find((row) => row.id === 'waiting-message').respondedAt, rows[1].at);
+});
+
+test('a clock moving before a row does not remove that future row from the response index', () => {
+  const dir = path.join(root, 'response-index-clock-skew-data');
+  const createdAt = Date.parse('2026-10-01T12:00:00Z');
+  const record = agent.recordAgentMessage({
+    from: { role: 'service', project: null, name: null, pane: null },
+    to: { role: 'worker', project: 'alpha', name: 'build', pane: 'wA:p1' },
+    text: 'Clock change.', kind: 'reminder', status: 'delivered', targetStatus: 'working',
+  }, { dir, now: createdAt });
+  agent.initializeAgentResponseIndex({ dir, now: createdAt + 10000 });
+
+  assert.equal(agent.updateAgentResponses({ dir, now: createdAt - 5000 }).updated, 0);
+  assert.equal(agent.updateAgentResponses({
+    dir, now: createdAt + 5000, panes: [{ id: 'wA:p1', agent: 'codex', status: 'idle' }],
+  }).updated, 1);
+  assert.equal(agent.readAgentMetadata({ dir }).find((row) => row.id === record.id).responseMs, 5000);
+});
+
+test('Engine startup initializes the response index before its first tick', async (t) => {
+  const dir = path.join(root, 'engine-start-response-index-data');
+  const at = Date.parse('2026-10-01T12:00:00Z');
+  const file = path.join(dir, 'agent-message-meta.jsonl');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(file, `${JSON.stringify({
+    id: 'startup-row', at: new Date(at).toISOString(),
+    from: { role: 'service', project: null, name: null, pane: null },
+    to: { role: 'worker', project: 'alpha', name: 'build', pane: 'wA:p1' },
+    kind: 'reminder', status: 'delivered', targetStatus: 'working', respondedAt: null,
+  })}\n`);
+  const { spawnSync } = await import('node:child_process');
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', `
+    import fs from 'node:fs';
+    import { Engine } from './src/engine.js';
+    import { loadConfig } from './src/config.js';
+    import { updateAgentResponses } from './src/agent-messages.js';
+    const dir = process.env.HERDR_BOSS_DIR;
+    const file = dir + '/agent-message-meta.jsonl';
+    const now = Number(process.env.AM_NOW);
+    new Engine(loadConfig(), { push: false, act: true, clock: () => now });
+    const original = fs.readFileSync;
+    let reads = 0;
+    fs.readFileSync = function (target, ...args) {
+      if (String(target) === file) reads++;
+      return original.call(fs, target, ...args);
+    };
+    const result = updateAgentResponses({ dir, now: now + 1000 });
+    process.stdout.write(JSON.stringify({ reads, updated: result.updated }));
+  `], {
+    cwd: path.resolve(import.meta.dirname, '..'), encoding: 'utf8',
+    env: { ...process.env, HOME: path.join(root, 'engine-start-home'), HERDR_BOSS_DIR: dir,
+      HERDR_BOSS_ALLOW_ACTIONS: '1', AM_NOW: String(at) },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), { reads: 0, updated: 0 });
+});
+
+test('a restarted process rebuilds the open response index from metadata', async (t) => {
+  const dir = path.join(root, 'response-index-restart-data');
+  const createdAt = Date.parse('2026-10-01T10:00:00Z');
+  const record = agent.recordAgentMessage({
+    from: { role: 'service', project: null, name: null, pane: null },
+    to: { role: 'worker', project: 'alpha', name: 'build', pane: 'wA:p1' },
+    text: 'Continue.', kind: 'reminder', status: 'delivered', targetStatus: 'working',
+  }, { dir, now: createdAt });
+  const { spawnSync } = await import('node:child_process');
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', `
+    import { updateAgentResponses, readAgentMetadata } from './src/agent-messages.js';
+    const dir = process.env.AM_DIR;
+    const now = Number(process.env.AM_NOW);
+    const response = updateAgentResponses({ dir, now, panes: [{ id: 'wA:p1', agent: 'codex', status: 'idle' }] });
+    const row = readAgentMetadata({ dir }).find((item) => item.id === process.env.AM_ID);
+    process.stdout.write(JSON.stringify({ response, row }));
+  `], {
+    cwd: path.resolve(import.meta.dirname, '..'), encoding: 'utf8',
+    env: { ...process.env, HOME: path.join(root, 'restart-home'), HERDR_BOSS_DIR: dir,
+      AM_DIR: dir, AM_NOW: String(createdAt + 5 * 60000), AM_ID: record.id },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const value = JSON.parse(result.stdout);
+  assert.equal(value.response.updated, 1);
+  assert.equal(value.row.respondedAt, new Date(createdAt + 5 * 60000).toISOString());
+  assert.equal(value.row.responseMs, 5 * 60000);
+});
+
 test('CLI tell reads a regular file up to 64 KB and uses a fake herdr binary', async (t) => {
   const { spawnSync } = await import('node:child_process');
   const cli = new URL('../src/cli.js', import.meta.url);
