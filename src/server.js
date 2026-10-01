@@ -6,7 +6,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { Engine } from './engine.js';
+import { Engine, standDownPlan } from './engine.js';
 import { ownerReleaseLease, withResourcePoolMutation, readLeases, leasePools, publicPool, hasIdleRule, tcpListeningAsync } from './leases.js';
 import { PROJECTS_DIR, DATA_DIR, DEFAULT_SESSION_FILE, PRIVATE_ACCESS_DIR, assertPreviewDataDir, writeServiceSettings, applyServiceSettings, serviceSettingsView, validateResourcePools, writeResourcePools } from './config.js';
 import { writeProject, listProjects } from './projects.js';
@@ -17,7 +17,7 @@ import { spendSummary, clampSpendDays, loadPrices, defaultPrices, readPriceOverr
 import { readDenials, denialSummary } from './denials.js';
 import { summarizeHours, clampSummaryDays } from './machine-samples.js';
 import { analyticsSummary } from './analytics.js';
-import { buildWatchRecord, clearNight, readNight, writeNight } from './night.js';
+import { buildWatchRecord, clearNight, readNight, readStandDown, writeNight, writeStandDown } from './night.js';
 import { effectiveRoutines, rememberChoice, resetRoutine, saveRoutine } from './watch-routines.js';
 import { withProbeState } from './browser-probe.js';
 import { requestBrowser, listBrowserSessions, browserStatus, setBrowserWindowSize, closeBrowser, restartBrowser, listBookmarks, addBookmark, renameBookmark, moveBookmark, removeBookmark, setStartPage } from './browser-pool.js';
@@ -281,6 +281,21 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine 
   projectsWatcher.on('error', (error) => {
     if (!closed) engine.log('error', `Project watcher failed: ${error.message}`);
   });
+
+  // The one policy save path of the page routes. The Allocation page and the stand-down buttons both call it, so
+  // every change reaches the policy change log. It returns { status, body } for the caller to send.
+  // confirmed and allowSum belong to the request, not to the policy. The caller header is a label and proves no identity.
+  const applyPolicyDraft = async (draft, req, { confirmed = false, allowSum = false } = {}) => {
+    const notes = [];
+    const options = { quotas: engine.state?.quotas || [], now: Date.now(), notes, caller: req.headers['x-herdr-boss-caller'] === 'page' ? 'page' : 'unknown' };
+    const errors = savePolicy(draft, loadModels(), { ...options, dryRun: true });
+    if (errors.length) return { status: 400, body: { ok: false, errors } };
+    const refusal = policyShareGuard(loadPolicy(), draft, { confirmed: confirmed === true, allowSum: allowSum === true });
+    if (refusal) return { status: refusal.status, body: { ok: false, error: refusal.error, changed: refusal.changed, sum: refusal.sum } };
+    savePolicy(draft, loadModels(), options);
+    const state = await engine.tick();
+    return { status: 200, body: { ok: true, policy: loadPolicy(), control: state?.control, notes } };
+  };
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://x');
@@ -559,19 +574,11 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine 
       }
       if (p === '/api/policy' && req.method === 'GET') return send(res, 200, loadPolicy());
       if (p === '/api/policy' && req.method === 'PUT') {
-        const notes = [];
-        // confirmed and allowSum belong to the request, not to the policy. The caller header is a label and proves no identity.
         const body = await jsonBody(req);
         if (!body || typeof body !== 'object' || Array.isArray(body)) return send(res, 400, { ok: false, error: 'The body must be a JSON object.' });
         const { confirmed, allowSum, ...draft } = body;
-        const options = { quotas: engine.state?.quotas || [], now: Date.now(), notes, caller: req.headers['x-herdr-boss-caller'] === 'page' ? 'page' : 'unknown' };
-        const errors = savePolicy(draft, loadModels(), { ...options, dryRun: true });
-        if (errors.length) return send(res, 400, { ok: false, errors });
-        const refusal = policyShareGuard(loadPolicy(), draft, { confirmed: confirmed === true, allowSum: allowSum === true });
-        if (refusal) return send(res, refusal.status, { ok: false, error: refusal.error, changed: refusal.changed, sum: refusal.sum });
-        savePolicy(draft, loadModels(), options);
-        const state = await engine.tick();
-        return send(res, 200, { ok: true, policy: loadPolicy(), control: state.control, notes });
+        const result = await applyPolicyDraft(draft, req, { confirmed, allowSum });
+        return send(res, result.status, result.body);
       }
       // The watch uses the same functions as the CLI. The routes stay under the read-only preview guard and the access control.
       // The old /api/night paths stay as aliases of /api/watch.
@@ -624,6 +631,53 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine 
         return send(res, 200, { ok: true, warning: built.warning, night: state?.night ?? readNight({ dataDir: DATA_DIR }) });
       }
       if (watchPath === '/api/watch' && req.method === 'GET') return send(res, 200, readNight({ dataDir: DATA_DIR }));
+      // The stand-down buttons of the Watch page. They park the idle project orchestrators with the policy mode
+      // paused and undo it. Every mode change goes through the same policy save path as the Allocation page.
+      if ((watchPath === '/api/watch/standdown' || watchPath === '/api/watch/standdown/undo') && req.method === 'POST') {
+        const undo = watchPath === '/api/watch/standdown/undo';
+        const standDown = readStandDown({ dataDir: DATA_DIR });
+        const policy = loadPolicy();
+        const draft = { ...policy, projects: { ...(policy.projects || {}) } };
+        const changed = [];
+        let result = {};
+        // A saved project entry needs a share and its two lists. The derived control entry holds them.
+        const projectEntry = (slug, mode) => {
+          const entry = draft.projects[slug] || {};
+          const derived = engine.state?.control?.projects?.[slug] || {};
+          return {
+            share: Number.isInteger(entry.share) ? entry.share : Number.isInteger(derived.share) ? derived.share : 0,
+            mode,
+            excludedKinds: Array.isArray(entry.excludedKinds) ? entry.excludedKinds : Array.isArray(derived.excludedKinds) ? derived.excludedKinds : [],
+            excludedModels: Array.isArray(entry.excludedModels) ? entry.excludedModels : Array.isArray(derived.excludedModels) ? derived.excludedModels : [],
+          };
+        };
+        if (undo) {
+          // Only a project that is still paused returns to its own mode.
+          for (const [slug, mode] of Object.entries(standDown?.projects || {})) {
+            const entry = draft.projects[slug] || {};
+            if ((entry.mode ?? 'auto') !== 'paused') continue;
+            draft.projects[slug] = projectEntry(slug, mode);
+            changed.push(slug);
+          }
+          result = { restored: changed.sort() };
+        } else {
+          const plan = standDownPlan(engine.state?.control, engine.state?.herdr);
+          for (const item of plan.parked) {
+            draft.projects[item.slug] = projectEntry(item.slug, 'paused');
+            changed.push(item.slug);
+          }
+          if (changed.length) writeStandDown({ at: new Date().toISOString(), projects: Object.fromEntries(plan.parked.map((item) => [item.slug, item.mode])) }, { dataDir: DATA_DIR });
+          result = { paused: changed.sort(), skipped: plan.skipped };
+        }
+        if (changed.length) {
+          const saved = await applyPolicyDraft(draft, req);
+          if (saved.status !== 200) return send(res, saved.status, saved.body);
+          // The undo clears the stored mark only after the policy write succeeded.
+          if (undo) writeStandDown(null, { dataDir: DATA_DIR });
+        }
+        const state = await engine.tick();
+        return send(res, 200, { ok: true, night: state?.night ?? readNight({ dataDir: DATA_DIR }), ...result });
+      }
       if (p === '/api/denials' && req.method === 'GET') return send(res, 200, denialSummary(readDenials(DATA_DIR), Date.now(), { pendingBytes: engine.memory?.denialScan?.pendingBytes || 0 }));
       if (p === '/api/machine-hours' && req.method === 'GET') {
         // The route parses up to two 3 MB files, so the result is kept for 60 seconds for each window.

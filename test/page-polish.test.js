@@ -85,12 +85,14 @@ test('the Watch box is a fold that is closed without a watch and open while a wa
   const context = {
     watchForm: { until: '2026-01-01T08:00', forever: false, daily: false, report: '07:30', routines: {}, adhoc: '' },
     nightBusy: false, nightMessage: '',
+    standDownBusy: false, standDownMessage: '', standDownResult: null,
+    watchLabel: () => 'Wed 20:15',
     localInputValue: (x) => x, defaultWatchUntil: () => '', watchUntilPhrase: () => 'until 08:00',
     watchRoutineLive: () => '<ul></ul>', watchRoutineFields: () => '<fieldset></fieldset>',
     localStorage: { getItem: (k) => store.get(k) ?? null, setItem: (k, v) => store.set(k, v) },
     FOLD_PREFIX: 'fold.', AGENTS_FOLD: '~agents',
   };
-  const { watchPanel } = load(['foldState', 'foldOpen', 'foldCard', 'watchPanel'], context);
+  const { watchPanel } = load(['foldState', 'foldOpen', 'foldCard', 'standDownCard', 'watchPanel'], context);
   const off = watchPanel({ night: { active: false } });
   assert.match(off, /^<details[^>]*id="watch"/);
   assert.doesNotMatch(off, /^<details[^>]* open>/);
