@@ -2511,20 +2511,22 @@ export class Engine extends EventEmitter {
     if (!this.push || !herdr?.panes) return;
     let notices;
     try { notices = readLockTakeoverNotices({ dataDir: this.lockDataDir }); }
-    catch (error) { this.log('error', `Could not read expired lock notices: ${error.message}`); return; }
+    catch (error) { this.log('error', `Could not read lock notices: ${error.message}`); return; }
     const panes = new Set(herdr.panes.map((pane) => pane.id));
     for (const notice of notices) {
-      if (!panes.has(notice.ownerPane)) continue;
+      const targetPane = notice.type === 'slow-holder'
+        ? herdr.panes.find((pane) => pane.label === 'boss' && pane.agent)?.id : notice.ownerPane;
+      if (!targetPane || !panes.has(targetPane)) continue;
       const text = [
         '[herdr-boss] Resource notice. Act on it if it concerns your work. You do not need to reply to me.',
         `- ${notice.text}`,
       ].join('\n');
       try {
-        await this.promptService(notice.ownerPane, text, { herdr });
+        await this.promptService(targetPane, text, { herdr });
         removeLockTakeoverNotice(notice.id, { dataDir: this.lockDataDir });
-        this.log('notify', notice.text, { severity: notice.severity, pane: notice.ownerPane });
+        this.log('notify', notice.text, { severity: notice.severity, pane: targetPane });
       } catch (error) {
-        this.log('error', `Expired lock notice to ${notice.ownerPane} failed: ${String(error.stderr || error.message).slice(0, 200)}`);
+        this.log('error', `Lock notice to ${targetPane} failed: ${String(error.stderr || error.message).slice(0, 200)}`);
       }
     }
   }

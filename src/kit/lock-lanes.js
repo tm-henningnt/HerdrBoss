@@ -55,6 +55,22 @@ export function readLockDurationPrediction({
   return predictLockDuration(lines, { project, kind, name, now: nowMs });
 }
 
+// Wait estimates use the last ten completed holds of the lock and lane, across projects and kinds.
+// Keep this separate from admission: a wait estimate must not change a ticket's lane.
+export function readLockLaneDurationPredictions({ dataDir = DATA_DIR, name, now = Date.now() } = {}) {
+  const current = typeof now === 'function' ? now() : now;
+  const nowMs = current instanceof Date ? current.getTime() : Number(current);
+  const lines = readLedgerLines(dataDir, -Infinity);
+  return Object.fromEntries(['long', 'short'].map((lane) => {
+    const samples = lines.filter((line) => line.name === name && (line.lane ?? 'long') === lane
+      && Number.isFinite(line.holdMs) && line.holdMs >= 0
+      && !line.takeover && !line.reentrant && !line.reused
+      && Number.isFinite(Date.parse(line.at)) && Date.parse(line.at) <= nowMs)
+      .sort((left, right) => Date.parse(left.at) - Date.parse(right.at)).slice(-10);
+    return [lane, { ms: median(samples.map((line) => line.holdMs)), samples: samples.length }];
+  }));
+}
+
 export function classifyLockLane(prediction, shortLimitMinutes) {
   const predictedMs = Number.isFinite(prediction?.ms) ? prediction.ms : null;
   return {

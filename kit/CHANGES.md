@@ -105,3 +105,7 @@ Summary: Add CI minute rules and GitHub workflow templates; create and copy miss
 ## 2db88201b003
 Impact: useful
 Summary: Use default worker collection recording in kit and command documentation.
+
+## 38b0c2cd2398
+Impact: useful
+Summary: Refresh lock wait lines with holder age and predicted end. Send one slow-holder notice to the Boss. Detect exited zombie holders.
