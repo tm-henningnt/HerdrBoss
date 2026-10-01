@@ -122,6 +122,7 @@ const USAGE = `herdr-boss <command>
                         Create a project folder with the kit files and the first commit.
                         Exit 0 done, 1 usage or refusal, 2 not built, 3 waiting for the Owner.
   project check <slug> [--fix STEP [--start]]  Check a project set-up. Exit 4 when an item is missing.
+  project paths [--json]  Print the registered paths of other projects.
   goal set <project|pane> [--text TEXT] [--dry-run]  Set the /goal of a running orchestrator when its pane is idle.
                         Exit 0 goal active, 2 pane busy or not an orchestrator, 3 sent but not shown.
   scratch SLUG          Create the durable scratch folder of a project and print its path.
@@ -330,6 +331,15 @@ async function main() {
     return;
   }
   if (cmd === 'project') {
+    if (args[0] === 'paths') {
+      if (args.length > 2 || (args.length === 2 && args[1] !== '--json')) throw new Error('Usage: project paths [--json]');
+      const { listProjectPaths } = await import('./project-paths.js');
+      const projects = listProjectPaths({ dataDir: DATA_DIR, cwd: process.cwd() });
+      console.log(args[1] === '--json'
+        ? JSON.stringify(projects, null, 2)
+        : projects.map(({ slug, path: projectPath }) => `${slug}=${projectPath}`).join(' '));
+      return;
+    }
     const { projectCommand } = await import('./project-new-cli.js');
     const { createHerdrRunner } = await import('./kit/workers.js');
     const code = projectCommand(args, { env: process.env, herdr: createHerdrRunner() });

@@ -90,6 +90,7 @@ herdr-boss project new <slug> [--group DIR | --path DIR] [--remote gh|URL|none]
   [--visibility private|public] [--org NAME] [--kind claude|codex] [--goal TEXT]
   [--start] [--dry-run] [--resume]
 herdr-boss project check <slug> [--fix STEP [--start]]
+herdr-boss project paths [--json]
 ```
 
 `project new` calls `runProjectNew` and prints one line for each step, the project path, and the next action. It never prints a token.
@@ -280,6 +281,12 @@ The state file holds the workspace ID, the pane ID, and the chosen kind and mode
 A dry run names the steps `remote`, `policy`, `register`, `status`, and `workspace`, and writes and posts nothing. With `--start`, the dry run of `workspace` prints `would create ...` and the chosen harness. It calls no Herdr command.
 
 The state file is `flows/<slug>.json` in the data folder, with mode 0600. The command writes it through a temporary file with a unique name, and never follows a symlink at that name. It holds the inputs and the status of each finished step. The repository holds no state. A run that finds a state file with the same inputs skips the finished steps. It changes nothing when all built steps are finished. A step that fails is recorded as `failed`, and the next run repeats it.
+
+### Command project paths
+
+Run `project paths` to print one line with the slug and path of each registered project. The text form separates each `slug=path` entry with a space. Use `--json` when a path can contain spaces. The command sorts the projects by slug. It leaves out the current project when you run it from its checkout or a linked worktree. It reads only the project registry. It does not open a project repository.
+
+Use `project paths --json` to print an array of objects. Each object has `slug` and `path` fields. The command exits 0 and prints an empty line when no other project is registered. The JSON form prints an empty array in this case.
 
 ## Owner messages
 

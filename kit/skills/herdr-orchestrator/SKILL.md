@@ -5,9 +5,8 @@ description: Use when coordinating delegated workers with Herdr Boss, writing wo
 
 # Herdr orchestrator
 
-- Use this skill to coordinate delegated workers through Herdr Boss.
 - Read the project's `AGENTS.md`, product documents, and current issue before choosing work.
-- Keep project rules, product contracts, acceptance commands, and project-specific browser procedures in the project files. Use this skill for the shared orchestration process.
+- Keep project rules, acceptance commands, and browser procedures in project files.
 
 ## Reference files
 
@@ -36,6 +35,10 @@ Read each file in the skill folder when its step comes:
 - Preserve existing user work before any edit, checkout, or cleanup.
 - Inspect every worker result before accepting it.
 - Run the required acceptance commands yourself.
+- Orchestrators and workers may read another Herdr Boss project repository to learn how it solved a problem.
+- Do not edit another project's repository.
+- Do not copy secrets, tenant hosts, client names, or app IDs into this project.
+- Cite each source file in `docs/orchestration/memory.md`.
 
 ## Project memory
 
@@ -63,14 +66,14 @@ Read each file in the skill folder when its step comes:
 - Before you escalate, check `docs/orchestration/memory.md` and the issue history for an Owner decision that already answers the question.
 - Ask the Boss only about a conflict between projects or a change that affects another project.
 - Ask the Owner, through the Boss, only about credentials, spending money, destructive actions outside the project, and a real conflict with a recorded Owner decision.
-- Do not edit the Herdr Boss kit or its skills from another project. Send the change request to the Boss. The Boss decides whether to relay it to the HerdrBoss orchestrator, which maintains the kit.
+- Do not edit the Herdr Boss kit or its skills from another project. Send a change request to the Boss. The HerdrBoss orchestrator decides whether to relay it.
 - Report to the Boss only when a task is merged and live, or when blocked. One or two lines. Send it with `herdr-boss tell`.
 - Do not message another project's orchestrator. The Boss relays messages between projects.
 - The kit and the Boss take precedence over conflicting project text. Report a conflict to the Boss.
 - Decide and run your own pushes, deployments, and releases under the project release rules. Neither the Boss nor the Owner approves them.
 - Before each push, read the full diff for tokens, secrets, local paths with private content, and client or tenant names from other projects.
 - Push one change set at a time.
-- Run `herdr-boss suite -- npm test` as a background command, then wait for it and read its exit code. The tool timeout is 600 seconds. The command takes the machine-wide `full-suite` lock. Never take the full-suite lock with a bare lock acquire for a suite. Push with `herdr-boss push <args>`. Use `herdr-boss push` for a push; it takes the lock when a pre-push hook exists. There is no load threshold.
+- Run `herdr-boss suite -- npm test` as a background command, then wait for it and read its exit code. The tool timeout is 600 seconds. The command takes the machine-wide `full-suite` lock. Never take the full-suite lock with a bare lock acquire for a suite. Push with `herdr-boss push`; it takes the lock when a pre-push hook exists. There is no load threshold.
 - Lease a shared resource with `herdr-boss lease acquire POOL` or `worker start --lease POOL`. Never pick a port from a pool by hand. The serve-lease rules are in [the machine and quota rules](reference/machine-and-quota.md).
 
 ### Human gates and parking
