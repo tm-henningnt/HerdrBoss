@@ -17,6 +17,27 @@ export function formatBrowserJson(value, options = {}) {
   return JSON.stringify(maskDeep(value, options), null, 2);
 }
 
+export function formatBrowserTabs(tabs, options = {}) {
+  const { full = false } = options;
+  const formatted = tabs.map((tab) => ({
+    id: tab.id,
+    title: tab.title,
+    url: (() => {
+      try {
+        const url = new URL(tab.url);
+        return full && ['http:', 'https:'].includes(url.protocol)
+          ? `${url.origin}${url.pathname}`
+          : url.href;
+      } catch {
+        return '';
+      }
+    })(),
+    visibility: tab.visibility,
+    agentAttached: tab.attached,
+  }));
+  return formatBrowserJson(formatted, options);
+}
+
 // Browser ownership follows the Herdr workspace. Any pane in a project's workspace may change that project's
 // browser. The Boss (the pane labeled boss, or any pane in the Boss workspace) may change every browser.
 async function verifyBrowserCaller(slug, { env = process.env, herdr = null } = {}) {
@@ -558,7 +579,7 @@ async function main() {
       }
       else if (args[0] === 'tabs' && args.length === 2) {
         const tabs = await listBrowserTabs(args[1]);
-        printBrowserJson(tabs.map((tab) => ({ id: tab.id, title: tab.title, url: (() => { try { return new URL(tab.url).href; } catch { return ''; } })(), visibility: tab.visibility, agentAttached: tab.attached })));
+        console.log(formatBrowserTabs(tabs, { full }));
       }
       else if (args[0] === 'tab' && args[1] === 'new' && args[2] && args.length <= 4) {
         await verifyBrowserCaller(args[2]);
@@ -905,6 +926,17 @@ async function main() {
   }
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+let directInvocation = false;
+if (process.argv[1]) {
+  const argvPath = path.resolve(process.argv[1]);
+  const modulePath = path.resolve(fileURLToPath(import.meta.url));
+  try {
+    directInvocation = fs.realpathSync(argvPath) === fs.realpathSync(modulePath);
+  } catch {
+    directInvocation = argvPath === modulePath;
+  }
+}
+
+if (directInvocation) {
   main().catch((error) => { const e = sandboxWriteError(error); console.error(e.message); process.exit(e.exitCode ?? 1); });
 }

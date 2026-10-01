@@ -5,7 +5,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { formatBrowserJson } from '../src/cli.js';
+import { formatBrowserJson, formatBrowserTabs } from '../src/cli.js';
 
 const CLI = fileURLToPath(new URL('../src/cli.js', import.meta.url));
 
@@ -51,6 +51,39 @@ test('browser JSON output masks outside URLs and keeps loopback URLs in full', (
 test('browser JSON output prints real URLs when full mode is enabled', () => {
   const value = { url: 'https://user:pass@acme.example.com:8443/a?secret=yes#frag' };
   assert.equal(JSON.parse(formatBrowserJson(value, { full: true })).url, value.url);
+});
+
+test('tabs --full keeps the legacy origin and path URL shape', () => {
+  const tabs = [{
+    id: 'tab-1',
+    title: 'Example',
+    url: 'https://acme.example.com:8443/a/b?secret=yes#frag',
+    visibility: 'visible',
+    attached: false,
+  }];
+  const output = JSON.parse(formatBrowserTabs(tabs, { full: true }));
+
+  assert.equal(output[0].url, 'https://acme.example.com:8443/a/b');
+});
+
+test('CLI prints usage when it is started through a symlink to src/cli.js', (t) => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-cli-symlink-'));
+  const dataDir = path.join(base, 'data');
+  const home = path.join(base, 'home');
+  const linkedCli = path.join(base, 'herdr-boss.mjs');
+  fs.mkdirSync(dataDir);
+  fs.mkdirSync(home);
+  fs.symlinkSync(CLI, linkedCli);
+  t.after(() => fs.rmSync(base, { recursive: true, force: true }));
+
+  const result = spawnSync(process.execPath, [linkedCli], {
+    cwd: base,
+    env: { ...process.env, HOME: home, HERDR_BOSS_DIR: dataDir },
+    encoding: 'utf8',
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /herdr-boss <command>/);
 });
 
 test('bookmarks list prints masked outside URLs and full loopback URLs', (t) => {
