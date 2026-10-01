@@ -225,11 +225,31 @@ test('lock acquire waits briefly for a busy mutation guard', async (t) => {
   assert.equal(fs.existsSync(f.lockFile), false);
 });
 
-test('lock acquire with --wait retries after the mutation guard wait ends', async (t) => {
+test('lock acquire with --wait retries after the mutation guard wait ends', (t) => {
   const f = fixture(t, 'herdr-lock-acquire-wait-guard-');
-  const { done } = await holdMutationGuardUntilReleased(t, path.join(f.dataDir, 'locks', 'machine'), 5200);
-  const acquired = runKitCommand('lock', ['acquire', 'full-suite', '--wait', '10'], f.options());
-  await done;
+  const directory = path.join(f.dataDir, 'locks', 'machine');
+  const guard = seedMutationGuard(directory, { pid: process.pid });
+  const realDateNow = Date.now;
+  let dateCalls = 0;
+  let clock = realDateNow();
+  let retries = 0;
+  Date.now = () => realDateNow() + (++dateCalls * 1000);
+  let acquired;
+  try {
+    acquired = runKitCommand('lock', ['acquire', 'full-suite', '--wait', '10'], {
+      ...f.options(),
+      now: () => clock,
+      pause: (milliseconds) => {
+        retries += 1;
+        assert.equal(fs.existsSync(guard), true, 'the live mutation guard stays busy until the retry');
+        fs.rmSync(guard, { recursive: true, force: true });
+        clock += milliseconds;
+      },
+    });
+  } finally {
+    Date.now = realDateNow;
+  }
+  assert.equal(retries, 1, 'the command retries once after the mutation guard wait');
   assert.equal(acquired.ownerPane, 'ws:orch');
   assert.equal(fs.existsSync(f.lockFile), true);
   runKitCommand('lock', ['release', 'full-suite'], f.options());
