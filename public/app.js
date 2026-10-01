@@ -1431,10 +1431,15 @@ function guidanceSummary(s) {
 function laneLine(provider, lane) {
   const name = provider === 'unmetered' ? 'Free models' : PROVIDERS[provider] || provider;
   const used = Number.isFinite(lane.usedPercent) ? ` · ${lane.usedPercent}% used${Number.isFinite(lane.expectedPercent) ? ` of ${lane.expectedPercent}% expected` : ''}${lane.window ? ` (${esc(lane.window)})` : ''}` : '';
+  const reading = lane.reading;
+  const readingAge = Number.isFinite(reading?.ageMinutes) ? `${reading.ageMinutes} min old` : 'age unknown';
+  const readingText = Number.isFinite(reading?.usedPercent)
+    ? ` · last reading ${reading.usedPercent}% ${esc(String(reading.window || 'quota').toLowerCase())}, ${readingAge}${reading.stale ? ' · stale' : ''}`
+    : '';
   const text = lane.ignored ? 'open, quota ignored' : lane.state === 'open' && Number.isFinite(lane.roomPercent) && lane.roomPercent > 0 ? 'below pace'
     : ({ open: 'open', pace: 'ahead of pace', reserve: 'near exhaustion', exhausted: 'exhausted', trickle: 'trickle', closed: 'closed', unknown: 'no quota data' })[lane.state] || lane.state;
   const tone = ['exhausted', 'closed'].includes(lane.state) ? 'crit' : ['pace', 'reserve', 'trickle'].includes(lane.state) ? 'warn' : lane.state === 'open' ? 'ok' : '';
-  return `<li class="lane-chip ${tone}"><b>${esc(name)}</b><span>${esc(text)}${used}</span></li>`;
+  return `<li class="lane-chip ${tone}"><b>${esc(name)}</b><span>${esc(text)}${used}${readingText}</span></li>`;
 }
 
 // The current guidance on the Overview: the same rules as the bulletin, collapsed by default under a one-line summary.
@@ -6058,7 +6063,7 @@ const HELP = {
     <h3>Projects</h3><p>The bar above the cards shows the applied share of each project, in card order. Its colors match the top edge of each card. A label such as <b>30% · 2</b> shows the share and the effective slots; the tooltip shows all values. Change the shares on the Allocation page.</p><p>A card per project with its published status and task mix. The table shows the orchestrator, workers in use against the share, and the policy mode. On a phone the table shows one short block for each project. Select a project for its details.</p>
     <h3>Top bar on a phone</h3><p>The top bar is one row: the Herdr Boss mark, the menu button with the page name, the four icons, and <b>Help</b>. Below 375 px the icons move to a second row. A warning line under the bar shows that the page lost its connection to the service.</p>
     <h3>Watch symbol</h3><p>The eye symbol in the top bar, next to the chat, mail, and needs-action icons, shows the watch. When no watch runs, the symbol is faded. While a watch runs, the symbol is clear and, on a wide screen, shows a label such as <b>until 08:00</b> or <b>on</b>. On a phone it shows the icon only. Select it to open a popover with the end time, the mode, and <b>Stop</b>. The page asks you to confirm a stop. The page has no banner. A read-only preview shows the symbol and refuses a change.</p>
-    <h3>Subscriptions and machine health</h3><p>Select a bar to open all quota windows, or the processes and load history. After a restart, "Quotas from HH:MM" shows saved quotas until the first new quota read succeeds. When the probe for one provider fails, "Claude quota from HH:MM (probe failed)" shows its last good quota for up to 60 minutes. The Machine guard switch turns CPU and load warnings and worker-start blocks on or off. Choose a pause length to suspend those rules for a time; select <b>Resume guard</b> to end a pause early. Memory and disk warnings stay on. Disk space reports the filesystem that contains the Herdr Boss data directory.</p>`],
+    <h3>Subscriptions and machine health</h3><p>Select a bar to open all quota windows, or the processes and load history. After a restart, "Quotas from HH:MM" shows saved quotas until the first new quota read succeeds. When a provider probe fails, the last good reading stays visible with its age. A reading becomes stale after three hours. Pacing advances expected use with the quota window time and keeps the measured used percent. The Boss gets one warning when the Claude probe fails for over 60 minutes. The Machine guard switch turns CPU and load warnings and worker-start blocks on or off. Choose a pause length to suspend those rules for a time; select <b>Resume guard</b> to end a pause early. Memory and disk warnings stay on. Disk space reports the filesystem that contains the Herdr Boss data directory.</p>`],
   board: ['Board', `
     <p>The Board shows the tasks of all projects on one kanban. It uses the same task states as the board on each project page.</p>
     <h3>Columns</h3><p><b>Blocked</b> holds a task that waits on another task, the Owner, the Boss, or an external item. <b>Ready</b> holds a task whose dependencies are all done. <b>Doing</b> holds a task with a live worker; the longest-running worker comes first. <b>Review</b> holds a task whose worker finished or was collected and whose branch is not merged. <b>Done · 24 h</b> holds the tasks done in the last 24 hours, newest first. A done task without an update time does not show.</p>

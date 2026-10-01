@@ -380,7 +380,12 @@ function inAbout(iso, now) {
 
 export function describeLane(provider, lane, now = Date.now()) {
   const goals = goalSummary(lane?.goals);
-  const suffix = goals ? `; ${goals}` : '';
+  const reading = lane?.reading;
+  const readingAge = Number.isFinite(reading?.ageMinutes) ? `${reading.ageMinutes} min old` : 'age unknown';
+  const readingText = Number.isFinite(reading?.usedPercent)
+    ? `; last reading ${reading.usedPercent}% ${String(reading.window || 'quota').toLowerCase()}, ${readingAge}${reading.stale ? ', stale' : ''}`
+    : '';
+  const suffix = `${goals ? `; ${goals}` : ''}${readingText}`;
   if (lane?.state === 'open' && lane.onPace) {
     const { usedPercent, expectedPercent, tolerancePoints } = lane.onPace;
     return `${provider} on pace (${usedPercent}% used, expected ${expectedPercent}%, tolerance ${tolerancePoints} points)${suffix}`;

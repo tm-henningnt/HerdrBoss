@@ -6,9 +6,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { collectQuotas } from '../src/collect.js';
+import * as quotaCollector from '../src/collect.js';
 import { fmtTime, renderBulletin } from '../src/rules.js';
 import { laneStatus, POLICY_DEFAULTS } from '../src/control.js';
+import { describeLane } from '../src/kit/workers.js';
+
+const { collectQuotas, keepStaleRows } = quotaCollector;
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -19,14 +22,21 @@ const rows = [
 const exitOne = (stdout) => async () => { const e = new Error('Command failed'); e.code = 1; e.stdout = stdout; e.stderr = ''; throw e; };
 
 test('a codexbar exit 1 with provider rows keeps the good rows', async () => {
-  const quotas = await collectQuotas({ runner: exitOne(JSON.stringify(rows)) });
-  assert.equal(quotas.length, 2);
+  const calls = [];
+  const runner = async (_cmd, args) => { calls.push(args.at(-1)); return exitOne(JSON.stringify(rows))(); };
+  const quotas = await collectQuotas({ runner });
+  assert.deepEqual(calls, ['codex', 'claude', 'opencodego']);
+  assert.equal(quotas.length, 3);
   assert.equal(quotas.find((q) => q.provider === 'claude').error, 'Claude usage probe timed out.');
   assert.ok(quotas.find((q) => q.provider === 'codex').windows.length >= 1);
+  assert.match(quotas.find((q) => q.provider === 'opencodego').error, /row is missing/);
 });
 
-test('a codexbar exit 1 without JSON output still fails with the exit code', async () => {
-  await assert.rejects(collectQuotas({ runner: exitOne('not json') }), { message: 'codexbar exited with code 1' });
+test('a codexbar exit 1 without JSON output returns one failed row for each provider', async () => {
+  const quotas = await collectQuotas({ runner: exitOne('not json') });
+  assert.deepEqual(quotas.map((row) => row.provider), ['codex', 'claude', 'opencodego']);
+  assert.ok(quotas.every((row) => row.error));
+  assert.match(quotas.find((row) => row.provider === 'claude').error, /Claude usage probe exited with code 1/);
 });
 
 const cfg = { quota: { warnPercent: 80 }, port: 4477, host: '127.0.0.1' };
@@ -45,50 +55,85 @@ test('the bulletin names a provider whose quota row failed', () => {
   assert.doesNotMatch(text, /No quota or active machine restrictions/);
 });
 
-// A runner that answers each codexbar call in turn and records the arguments.
-function scripted(...answers) {
+test('quota reads probe each provider once with its own back-off timeout', async () => {
   const calls = [];
-  const runner = async (cmd, args, opts) => {
-    calls.push({ cmd, args, timeout: opts?.timeout });
-    const answer = answers[calls.length - 1];
-    if (answer instanceof Error) throw answer;
-    return JSON.stringify(answer);
+  const runner = async (cmd, args, options) => {
+    calls.push({ cmd, args, timeout: options.timeout });
+    const provider = args.at(-1);
+    if (provider === 'claude') return JSON.stringify([{ provider, error: { message: 'Claude usage probe timed out.' } }]);
+    const row = provider === 'codex' ? rows[0] : { provider, usage: { primary: { usedPercent: 4 } } };
+    return JSON.stringify([row]);
   };
-  return { calls, runner };
-}
-const exitOneError = (stdout) => { const e = new Error('Command failed'); e.code = 1; e.stdout = JSON.stringify(stdout); e.stderr = ''; return e; };
-const goodClaude = { provider: 'claude', usage: { primary: { usedPercent: 33, resetsAt: '2026-10-01T00:00:00Z' } } };
-
-test('a failed provider row is read again once with --provider and the same timeout', async () => {
-  const { calls, runner } = scripted(exitOneError(rows), exitOneError([rows[1]]));
-  const quotas = await collectQuotas({ runner });
+  const quotas = await collectQuotas({ runner, timeouts: { codex: 20000, claude: 45000, opencodego: 90000 } });
   assert.deepEqual(calls, [
-    { cmd: 'codexbar', args: ['usage', '--format', 'json'], timeout: 240000 },
-    { cmd: 'codexbar', args: ['usage', '--format', 'json', '--provider', 'claude'], timeout: 240000 },
+    { cmd: 'codexbar', args: ['usage', '--format', 'json', '--provider', 'codex'], timeout: 20000 },
+    { cmd: 'codexbar', args: ['usage', '--format', 'json', '--provider', 'claude'], timeout: 45000 },
+    { cmd: 'codexbar', args: ['usage', '--format', 'json', '--provider', 'opencodego'], timeout: 90000 },
   ]);
   assert.equal(quotas.find((q) => q.provider === 'claude').error, 'Claude usage probe timed out.');
+  assert.equal(quotas.find((q) => q.provider === 'claude').windows?.length || 0, 0);
 });
 
-test('a good row from the provider retry replaces the failed row', async () => {
-  const { calls, runner } = scripted(exitOneError(rows), [goodClaude]);
-  const quotas = await collectQuotas({ runner });
-  assert.equal(calls.length, 2);
-  const claude = quotas.find((q) => q.provider === 'claude');
-  assert.equal(claude.error, undefined);
-  assert.equal(claude.windows[0].usedPercent, 33);
+test('quota history records fake slow probe durations and safe outcomes, and stays bounded', async (t) => {
+  const dir = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'herdr-quota-probes-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const historyFile = path.join(dir, 'quota-probe-history.jsonl');
+  let clock = Date.parse('2026-10-01T00:00:00.000Z');
+  const runner = async (_cmd, args) => {
+    const provider = args.at(-1);
+    clock += provider === 'claude' ? 45000 : 125;
+    if (provider === 'claude') throw Object.assign(new Error('private raw probe output'), { killed: true, signal: 'SIGKILL' });
+    return JSON.stringify([{ provider, usage: { primary: { usedPercent: 11 } } }]);
+  };
+  const timeouts = { codex: 20000, claude: 45000, opencodego: 90000 };
+  await collectQuotas({ runner, timeouts, now: () => clock, historyFile });
+  const first = fs.readFileSync(historyFile, 'utf8').trim().split('\n').map(JSON.parse);
+  assert.deepEqual(first.map(({ provider, outcome, durationMs, timeoutMs }) => ({ provider, outcome, durationMs, timeoutMs })), [
+    { provider: 'codex', outcome: 'success', durationMs: 125, timeoutMs: 20000 },
+    { provider: 'claude', outcome: 'timeout', durationMs: 45000, timeoutMs: 45000 },
+    { provider: 'opencodego', outcome: 'success', durationMs: 125, timeoutMs: 90000 },
+  ]);
+  assert.doesNotMatch(fs.readFileSync(historyFile, 'utf8'), /private raw probe output/);
+
+  for (let i = 0; i < 40; i++) await collectQuotas({ runner, timeouts, now: () => clock, historyFile });
+  const lines = fs.readFileSync(historyFile, 'utf8').trim().split('\n');
+  assert.ok(lines.length <= quotaCollector.QUOTA_PROBE_HISTORY_LIMIT, `${lines.length} rows`);
 });
 
-test('a read without a failed row does not retry', async () => {
-  const { calls, runner } = scripted([rows[0], goodClaude]);
-  await collectQuotas({ runner });
-  assert.equal(calls.length, 1);
+test('a timed-out quota command kills its process group', { timeout: 10000 }, async (t) => {
+  assert.equal(typeof quotaCollector.runQuotaCommand, 'function', 'the quota command runner is exported for a process-tree fixture');
+  const dir = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'herdr-quota-tree-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const pidFile = path.join(dir, 'child.pid');
+  await assert.rejects(quotaCollector.runQuotaCommand('/bin/sh', ['-c', 'sleep 30 & echo $! > "$QUOTA_CHILD_PID_FILE"; wait'], {
+    timeout: 5000, env: { ...process.env, QUOTA_CHILD_PID_FILE: pidFile },
+  }), /timed out/);
+  const childPid = Number(fs.readFileSync(pidFile, 'utf8'));
+  assert.ok(Number.isInteger(childPid) && childPid > 0);
+  assert.throws(() => process.kill(childPid, 0), { code: 'ESRCH' }, 'the descendant must not survive the timed-out probe');
 });
 
-test('a failed provider retry that throws keeps the first error', async () => {
-  const timeout = Object.assign(new Error('Command failed'), { killed: true, signal: 'SIGTERM' });
-  const { runner } = scripted(exitOneError(rows), timeout);
-  const quotas = await collectQuotas({ runner });
-  assert.equal(quotas.find((q) => q.provider === 'claude').error, 'Claude usage probe timed out.');
+test('a stale lane shows the last used value and age, then extrapolates expected use only', () => {
+  const now = Date.parse('2026-09-28T02:00:00.000Z');
+  const observedAt = '2026-09-28T00:40:00.000Z';
+  const lastGood = [{ provider: 'claude', windows: [{ key: 'primary', label: 'Weekly', usedPercent: 37, expectedPercent: 20, resetsAt: '2026-10-02T00:00:00.000Z', windowMinutes: 10080 }] }];
+  const stale = keepStaleRows([{ provider: 'claude', error: 'Claude usage probe timed out.' }], lastGood, Date.parse(observedAt), now)[0];
+  const lane = laneStatus([stale], structuredClone(POLICY_DEFAULTS), now).claude;
+  assert.equal(lane.reading.usedPercent, 37);
+  assert.equal(lane.reading.window, 'Weekly');
+  assert.equal(lane.reading.ageMinutes, 80);
+  assert.equal(lane.reading.stale, false);
+  assert.ok(lane.expectedPercent > 20, `expected ${lane.expectedPercent}`);
+  assert.match(describeLane('claude', lane, now), /37% weekly, 80 min old/);
+});
+
+test('a stale reading older than three hours is marked stale without changing its use', () => {
+  const readAt = Date.parse('2026-09-28T00:00:00.000Z');
+  const lastGood = [{ provider: 'claude', windows: [{ key: 'primary', label: 'Weekly', usedPercent: 37, expectedPercent: 20, resetsAt: '2026-10-02T00:00:00.000Z', windowMinutes: 10080 }] }];
+  const stale = keepStaleRows([{ provider: 'claude', error: 'Claude usage probe timed out.' }], lastGood, readAt, readAt + 3 * 60 * 60 * 1000 + 1)[0];
+  const lane = laneStatus([stale], structuredClone(POLICY_DEFAULTS), readAt + 3 * 60 * 60 * 1000 + 1).claude;
+  assert.equal(stale.windows[0].usedPercent, 37);
+  assert.equal(lane.reading.stale, true);
 });
 
 const window = { key: 'primary', label: 'Session', usedPercent: 40, resetsAt: '2026-09-28T04:00:00Z', windowMinutes: 300 };

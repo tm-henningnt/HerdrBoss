@@ -21,6 +21,7 @@ const input = JSON.parse(process.env.QR_SCENARIO);
 let clock = input.now;
 Date.now = () => clock;
 const reads = [];
+const probeTimeouts = [];
 const cfg = loadConfig();
 cfg.push = false;
 cfg.quotaSeconds = 300;
@@ -33,7 +34,10 @@ const engine = new Engine(cfg, {
     collectHerdr: async () => ({ workspaces: [], panes: [] }),
     collectMachine: async () => null,
     collectProcesses: async () => new Map(),
-    collectQuotas: () => new Promise((resolve, reject) => reads.push({ at: clock, resolve, reject })),
+    collectQuotas: (options = {}) => {
+      probeTimeouts.push(options.timeouts || null);
+      return new Promise((resolve, reject) => reads.push({ at: clock, resolve, reject }));
+    },
     collectWorktreeCounts: async () => ({}),
     collectCwdProcesses: async () => [],
     collectMissingWorktreeProcesses: async () => [],
@@ -44,7 +48,8 @@ for (const step of input.steps) {
   if (step.advance) clock += step.advance;
   if (step.tick) {
     const snap = await engine.tick();
-    out.steps.push({ reads: reads.length, quotas: snap.quotas, quotasAt: snap.quotasAt, cached: snap.quotasCached, errors: snap.errors });
+    out.steps.push({ reads: reads.length, quotas: snap.quotas, quotasAt: snap.quotasAt, cached: snap.quotasCached, errors: snap.errors, lanes: snap.lanes,
+      probeTimeouts: [...probeTimeouts], probeAlerts: (snap.alerts || []).filter((a) => a.key.startsWith('quota:probe-failed:claude:')) });
   }
   if (step.resolve || step.reject) {
     const read = reads.at(-1);
@@ -90,40 +95,72 @@ test('the read result applies on a later tick', { timeout: 30000 }, (t) => {
   assert.equal(out.steps[1].reads, 1, 'a fresh result must not start another read');
 });
 
-test('a failed read keeps the last good quotas and shows the error only after 15 minutes without new quotas', { timeout: 30000 }, (t) => {
+test('a failed read keeps the last good quotas and waits for the next quota tick before retrying', { timeout: 30000 }, (t) => {
   const out = runScenario(t, { steps: [
     { tick: true }, { resolve: QUOTAS }, { tick: true },
-    { advance: 301000, tick: true }, { reject: 'codexbar timed out after 240 s' }, { tick: true },
-    { advance: 15 * MIN, reject: 'codexbar timed out after 240 s' }, { tick: true },
+    { advance: 301000, tick: true }, { reject: 'codexbar timed out after 20 s' }, { tick: true },
+    { advance: 30000, tick: true }, { advance: 270001, tick: true },
   ] });
-  const [, fresh, retry, keptQuiet, keptLoud] = out.steps;
+  const [, fresh, retry, failedApplied, keptQuiet, retryTick] = out.steps;
   assert.deepEqual(fresh.quotas, QUOTAS);
   assert.equal(retry.reads, 2);
-  assert.equal(keptQuiet.reads, 3, 'quotas are still due, so the tick after the failure starts one new read');
-  assert.deepEqual(keptQuiet.quotas, QUOTAS);
-  assert.deepEqual(codexbarErrors(keptQuiet), []);
-  assert.equal(keptLoud.reads, 4, 'the next due tick starts one new read after the failure');
-  assert.deepEqual(keptLoud.quotas, QUOTAS);
-  assert.equal(keptLoud.quotasAt, new Date(T0).toISOString());
-  assert.deepEqual(codexbarErrors(keptLoud), ['codexbar timed out after 240 s']);
+  assert.equal(failedApplied.reads, 2);
+  assert.equal(failedApplied.quotas[0].windows[0].usedPercent, 40, 'keep the last good used percent after failure');
+  assert.match(failedApplied.quotas[0].error, /timed out/);
+  assert.equal(keptQuiet.reads, 2, 'a failed read does not retry on an engine tick');
+  assert.match(keptQuiet.quotas[0].error, /timed out/);
+  assert.equal(retryTick.reads, 3, 'the next quota tick starts one new read');
+  assert.equal(retryTick.quotas[0].windows[0].usedPercent, 40);
+  assert.equal(retryTick.quotasAt, new Date(T0).toISOString());
+});
+
+test('provider probe timeouts back off and reset after a successful read', { timeout: 30000 }, (t) => {
+  const out = runScenario(t, { steps: [
+    { tick: true }, { advance: 10000, resolve: CLAUDE_FAILED },
+    { advance: 290001, tick: true }, { advance: 1000, resolve: CLAUDE_FAILED },
+    { advance: 300001, tick: true }, { advance: 1000, resolve: CLAUDE_FAILED },
+    { advance: 300001, tick: true }, { advance: 1000, resolve: BOTH },
+    { advance: 300001, tick: true },
+  ] });
+  assert.deepEqual(out.steps.map((step) => step.probeTimeouts.at(-1)?.claude), [20000, 45000, 90000, 90000, 20000]);
+  assert.equal(out.steps.at(-1).reads, 5);
+});
+
+test('a Claude probe failure warns the Boss once after an hour and clears on success', { timeout: 30000 }, (t) => {
+  const out = runScenario(t, { steps: [
+    { tick: true }, { resolve: CLAUDE_FAILED }, { tick: true },
+    { advance: 60 * MIN, tick: true }, { advance: 30000, tick: true },
+    { resolve: BOTH }, { tick: true },
+  ] });
+  const first = out.steps[2].probeAlerts;
+  const repeated = out.steps[3].probeAlerts;
+  assert.equal(first.length, 1);
+  assert.equal(first[0].severity, 'warn');
+  assert.equal(first[0].scope, 'user');
+  assert.equal(first[0].prompt, false);
+  assert.equal(first[0].once, true);
+  assert.equal(repeated[0].key, first[0].key);
+  assert.deepEqual(out.steps[4].probeAlerts, [], 'a good reading clears the failure notice');
 });
 
 test('the engine loads young saved quotas at start and marks them cached until a new read succeeds', { timeout: 30000 }, (t) => {
   const savedAt = new Date(T0 - 6 * MIN).toISOString();
   const out = runScenario(t, { steps: [
-    { tick: true }, { reject: 'codexbar exited with code 1' }, { tick: true },
-    { resolve: NEWER }, { advance: 30000, tick: true },
+    { tick: true }, { reject: 'codexbar exited with code 1' }, { advance: 30000, tick: true },
+    { advance: 271000, tick: true }, { resolve: NEWER }, { advance: 30000, tick: true },
   ] }, { quotasAt: savedAt, quotas: QUOTAS });
   assert.deepEqual(out.atStart.quotas, QUOTAS);
   assert.equal(out.atStart.quotasAt, T0 - 6 * MIN);
   assert.equal(out.atStart.cached, true);
-  const [first, afterFailure, afterSuccess] = out.steps;
+  const [first, afterFailure, retry, afterSuccess] = out.steps;
   assert.equal(first.reads, 1, 'saved quotas older than quotaSeconds are refreshed at once');
   assert.deepEqual(first.quotas, QUOTAS);
   assert.equal(first.quotasAt, savedAt);
   assert.equal(first.cached, true);
-  assert.deepEqual(codexbarErrors(afterFailure), []);
+  assert.equal(afterFailure.reads, 1, 'the failed read does not start again before the quota interval');
+  assert.equal(afterFailure.quotas[0].windows[0].usedPercent, 40);
   assert.equal(afterFailure.cached, true);
+  assert.equal(retry.reads, 2);
   assert.deepEqual(afterSuccess.quotas, NEWER);
   assert.equal(afterSuccess.cached, false);
 });
@@ -140,19 +177,20 @@ test('the engine ignores saved quotas older than 15 minutes', { timeout: 30000 }
 const BOTH = [...QUOTAS, { provider: 'claude', plan: 'max', windows: [{ key: 'primary', label: 'Session', usedPercent: 20, resetsAt: '2026-09-27T14:00:00.000Z', windowMinutes: 300 }] }];
 const CLAUDE_FAILED = [...NEWER, { provider: 'claude', error: 'Claude usage probe timed out.' }];
 
-test('a failed provider keeps its last good row for 60 minutes as a stale row, then only the error', { timeout: 30000 }, (t) => {
+test('a failed provider keeps its last good row beyond three hours and marks its age', { timeout: 30000 }, (t) => {
   const out = runScenario(t, { steps: [
     { tick: true }, { resolve: BOTH }, { tick: true },
     { advance: 301000, tick: true }, { resolve: CLAUDE_FAILED }, { tick: true },
-    { advance: 25 * MIN, tick: true }, { resolve: CLAUDE_FAILED }, { tick: true },
-    { advance: 30 * MIN, tick: true }, { resolve: CLAUDE_FAILED }, { tick: true },
+    { advance: 3 * 60 * MIN, tick: true }, { resolve: CLAUDE_FAILED }, { tick: true },
   ] });
   const claude = (step) => step.quotas.find((q) => q.provider === 'claude');
-  const [, fresh, , kept, , keptAgain, , dropped] = out.steps;
+  const [, fresh, , kept, , keptOld] = out.steps;
   assert.equal(claude(fresh).stale, undefined);
   assert.deepEqual(claude(kept), { ...BOTH[1], stale: true, staleSince: new Date(T0).toISOString(), error: 'Claude usage probe timed out.' });
   assert.deepEqual(kept.quotas.find((q) => q.provider === 'codex'), NEWER[0]);
-  assert.equal(claude(keptAgain).staleSince, new Date(T0).toISOString(), 'a stale row keeps the time of the good read');
-  assert.equal(claude(keptAgain).stale, true);
-  assert.deepEqual(claude(dropped), { provider: 'claude', error: 'Claude usage probe timed out.' });
+  assert.equal(claude(keptOld).staleSince, new Date(T0).toISOString(), 'a stale row keeps the time of the good read');
+  assert.equal(claude(keptOld).stale, true);
+  assert.equal(claude(keptOld).windows[0].usedPercent, 20);
+  assert.equal(out.steps.at(-1).lanes.claude.reading.stale, true);
+  assert.equal(out.steps.at(-1).lanes.claude.reading.ageMinutes >= 180, true);
 });

@@ -661,13 +661,42 @@ function quotaPressure(q, policy, now = Date.now()) {
 
 const LONG_WINDOW_MINUTES = 7 * 24 * 60;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const QUOTA_READING_STALE_MS = 3 * 60 * 60 * 1000;
+function quotaObservedAt(quota, readingAt) {
+  for (const value of [quota.staleSince, quota.observedAt, quota.updatedAt]) {
+    const at = Date.parse(value);
+    if (Number.isFinite(at)) return at;
+  }
+  const fallback = Number(readingAt);
+  return readingAt != null && Number.isFinite(fallback) ? fallback : NaN;
+}
 const isLongQuotaWindow = (window) => (Number.isFinite(window.windowMinutes) && window.windowMinutes > LONG_WINDOW_MINUTES)
   || /^monthly$/i.test(String(window.label || '').trim());
 
 // One state per metered provider: open, trickle, pace, reserve, exhausted, or unknown.
-export function laneStatus(quotas, policy, now = Date.now(), { todayUse = {} } = {}) {
+export function laneStatus(quotas, policy, now = Date.now(), { todayUse = {}, readingAt = null } = {}) {
   const lanes = {};
-  for (const q of quotas || []) {
+  for (const source of quotas || []) {
+    const measuredAt = quotaObservedAt(source, readingAt);
+    const elapsed = source.stale && Number.isFinite(measuredAt) ? Math.max(0, now - measuredAt) : 0;
+    const q = source.stale ? {
+      ...source,
+      windows: (source.windows || []).map((window) => {
+        if (window.extra) return window;
+        const duration = Number(window.windowMinutes) * 60000;
+        const reset = Date.parse(window.resetsAt);
+        const start = reset - duration;
+        const baseline = Number.isFinite(window.expectedPercent)
+          ? window.expectedPercent
+          : Number.isFinite(start) && Number.isFinite(measuredAt) && duration > 0
+            ? Math.max(0, Math.min(100, (measuredAt - start) / duration * 100))
+            : null;
+        const expectedPercent = baseline != null && duration > 0
+          ? Math.max(0, Math.min(100, baseline + elapsed / duration * 100))
+          : baseline;
+        return { ...window, expectedPercent, willLast: null, etaSeconds: null, paceSummary: null };
+      }),
+    } : source;
     const goals = (q.windows || []).filter((w) => !w.extra && Object.hasOwn(policy.pacingGoals?.[q.provider] || {}, w.key)).map((w) => {
       const goal = {
         key: w.key, label: w.label, percent: pacingGoal(policy, q.provider, w.key), end: policy.pacingGoals[q.provider][w.key]?.end || null,
@@ -737,6 +766,22 @@ export function laneStatus(quotas, policy, now = Date.now(), { todayUse = {} } =
       overPercent, tolerancePoints: paceTolerancePoints(policy),
       backOnPaceAt: Number.isFinite(backOnPaceMs) ? new Date(backOnPaceMs).toISOString() : null, resetWindows, goals,
     };
+  }
+  for (const source of quotas || []) {
+    const lane = lanes[source.provider];
+    if (!lane) continue;
+    const window = (source.windows || []).find((item) => item.key === 'primary' && !item.extra)
+      || (source.windows || []).find((item) => !item.extra);
+    const measuredAt = quotaObservedAt(source, readingAt);
+    const ageMs = Number.isFinite(measuredAt) ? Math.max(0, now - measuredAt) : null;
+    lane.reading = window ? {
+      window: window.label,
+      usedPercent: Number.isFinite(window.usedPercent) ? window.usedPercent : null,
+      ageMinutes: ageMs == null ? null : Math.floor(ageMs / 60000),
+      stale: ageMs != null && ageMs >= QUOTA_READING_STALE_MS,
+      probeFailed: !!source.error,
+      observedAt: Number.isFinite(measuredAt) ? new Date(measuredAt).toISOString() : null,
+    } : null;
   }
   return lanes;
 }
