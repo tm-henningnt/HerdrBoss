@@ -51,7 +51,7 @@ export const SETTING_GROUPS = [
   },
   {
     id: 'pools', title: 'Resource pools', advanced: false,
-    controls: 'The ports of a pool, the idle time after which Herdr Boss reclaims a lease, the wait default, and the client values by port. These controls are in the pools editor on the Allocation page.',
+    controls: 'The ports of a pool, the split between projects, the wait default, and the client values by port. The idle time decides when Herdr Boss reclaims a lease. These controls are in the pools editor on the Settings page and on the Allocation page.',
     affects: 'Projects and workers that lease a port. A port that has no listener for the idle time goes back to the pool.',
     safe: 'Safe to change. A save never drops a port that a holder uses. A client value is stored in the private config file only.',
     restart: 'No restart. A save takes effect at once.',
@@ -460,7 +460,7 @@ export const SETTING_HELP = Object.fromEntries([
     apply: 'now',
   }),
 
-  // Resource pools (Allocation page)
+  // Resource pools (Settings page and Allocation page)
   S('pools', 'pool.ports', 'Ports of a pool', {
     what: 'The ports or items of the pool. Enter single ports, ranges such as 8000-8009, or a list of both.',
     default: 'None', unit: 'Ports', range: '1024 to 65535, at most 100 ports, no duplicate, not the dashboard port or a browser port',

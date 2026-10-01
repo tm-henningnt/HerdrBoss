@@ -1029,7 +1029,7 @@ function settingsView(s) {
   // The Advanced fold opens by itself while it holds a warning: a harness finding that is not ok, or a service save error.
   const advancedIssues = harnessFindings.filter((finding) => finding.status !== 'ok').length + Object.values(serviceSettingsMessages).filter((text) => text && text !== 'Saved.').length;
   const advanced = foldCard({ slug: SETTINGS_FOLD, key: 'advanced', id: 'advanced-settings', className: 'advanced-settings', title: 'Advanced', hint: advancedIssues ? `Rarely used settings · ${advancedIssues} need${advancedIssues === 1 ? 's' : ''} attention` : 'Rarely used settings', forceOpen: advancedIssues > 0, body: `<div class="settings-grid">${avatarSettings(s)}${pricesPanel()}${serviceSettings}${harnessPanel}</div>`, boxed: false });
-  const settingsPanels = `${quotaPanel}${machineSettings}${watchRoutineSettings(s)}`;
+  const settingsPanels = `${quotaPanel}${machineSettings}${watchRoutineSettings(s)}${poolSettingsPanel(s)}`;
   return `<header class="page-intro"><div><h1>Settings</h1><p>Assign models and provider routes in each harness. Set provider quotas and machine limits below.</p></div></header><section id="settings-plane" class="control-shell"><section class="panel"><h2>Harnesses</h2><div class="help-legend" role="group" aria-label="Help for the harness settings"><span>Available${helpButton('harness.available')}</span><span>Preferred model${helpButton('harness.preferredModel')}</span><span>Model${helpButton('harness.model')}</span><span>Provider${helpButton('harness.provider')}</span><span>Add model${helpButton('harness.addModel')}</span></div>${ignoredCount ? `<p class="setting-help harness-help" role="note" style="color: var(--warn)">${ignoredCount} legacy provider route${ignoredCount === 1 ? ' is' : 's are'} not compatible with ${ignoredCount === 1 ? 'its harness' : 'their harnesses'}. Herdr Boss treats ${ignoredCount === 1 ? 'it' : 'them'} as Unmetered. Choose a provider in each marked row before you apply the policy.</p>` : ''}<div class="harness-grid">${harnesses}</div></section><div class="settings-grid">${settingsPanels}</div>${advanced}<div class="control-actions ${policyDirty ? 'pending' : ''}"><span data-policy-status role="status" aria-live="polite">${esc(saveMessage || (policyDirty ? 'Unsaved changes · Apply policy to keep them' : 'Policy saved'))}</span><button id="save-policy" ${policyDirty ? '' : 'disabled'}>Apply policy</button></div></section>`;
 }
 
@@ -1732,6 +1732,12 @@ function portListText(items) {
   return parts.join(', ');
 }
 
+// The items of a pool as short text. A list of numbers becomes a range text, also for a built-in pool.
+function poolItemsText(pool) {
+  const items = pool.items || [];
+  return items.length && items.every((item) => /^\d+$/.test(item)) ? portListText(items) : items.join(', ');
+}
+
 function leaseAgeText(lease) { return lease.at ? ago(lease.at) : '–'; }
 function leaseTimeLeftText(lease) { return lease.expiresAt ? until(lease.expiresAt) : 'no TTL'; }
 // The server process of a lease: its pid, or unbound. A lease of a pool without a server check shows a dash.
@@ -1829,6 +1835,43 @@ function resourcePoolForm() {
   </form>`;
 }
 
+// One pool row of the Settings page: the pool, its ports, and its rules. The Edit, Remove, and Add actions open the editor and the dialog of the Allocation page.
+function poolSettingsRow(pool) {
+  const itemsText = poolItemsText(pool);
+  const split = Object.keys(pool.split || {}).length;
+  const idle = poolIsPorts(pool) ? `${pool.idleMinutes ?? 20} min` : '–';
+  const values = Object.entries(pool.portEnv || {}).map(([env, entries]) => `${esc(env)} <span class="pool-env-set">set</span> for ${esc(Object.keys(entries).join(', '))}`).join(' · ');
+  const controls = pool.builtIn ? '' : `<div class="lease-pool-controls"><button type="button" class="quiet" data-pool-edit="${esc(pool.name)}"${poolBusy ? ' disabled' : ''}>Edit</button><button type="button" class="quiet" data-pool-remove="${esc(pool.name)}"${poolBusy || poolRemoveBusy ? ' disabled' : ''}>Remove</button></div>`;
+  const facts = [
+    `Ports ${esc(itemsText) || '–'}`,
+    `Split ${split ? `${split} project${split === 1 ? '' : 's'}` : 'all projects'}`,
+    `Idle ${idle}`,
+    `Wait ${pool.waitSeconds ?? 0} s`,
+    esc(leaseTtlText(pool)),
+    `Variable ${esc(pool.env) || '–'}`,
+  ];
+  return `<div class="lease-pool pool-settings-row">
+    <div class="lease-head"><b>${esc(pool.name)}</b>${facts.map((fact) => `<span>${fact}</span>`).join('')}${controls}</div>
+    <p class="lease-free-line">${values ? `Values by port: ${values}.` : 'No value by port.'}</p>
+  </div>`;
+}
+
+// The Resource pools panel of the Settings page. It reuses the pool editor, the save, and the remove dialog of the Allocation page.
+function poolSettingsPanel(s) {
+  const pools = s.resourceLeases?.pools || [];
+  const errors = s.resourceLeases?.errors || [];
+  if (!pools.length) return '';
+  const errorLines = errors.map((error) => `<p class="lease-error" role="status">Resource pool config is invalid: ${esc(error)}</p>`).join('');
+  return `<section id="pool-settings" class="panel pool-settings-panel">
+    <h2>Resource pools</h2>
+    <div class="section-head"><span>Pools that projects share</span><button type="button" data-pool-add${poolBusy ? ' disabled' : ''}>Add pool</button></div>
+    ${leaseMessage ? `<p class="lease-status" role="status">${esc(leaseMessage)}</p>` : ''}
+    ${errorLines}
+    ${resourcePoolForm()}
+    ${pools.map(poolSettingsRow).join('')}
+  </section>`;
+}
+
 function leasesBlock(s) {
   const pools = s.resourceLeases?.pools || [];
   const errors = s.resourceLeases?.errors || [];
@@ -1913,9 +1956,10 @@ document.addEventListener('click', (e) => {
   openLeaseRelease(button.dataset.leaseRelease, button.dataset.leaseItem, button.dataset.leaseProject, button.dataset.leaseHolder || '');
 });
 
-function openResourcePoolForm(action, pool = null) {
+// The editor state of a create or an update. A stored client value is never read from the pool: each row only knows that a value is set.
+function poolEditorState(action, pool = null) {
   const ports = pool && poolIsPorts(pool);
-  Object.assign(poolEditor, {
+  return {
     open: true,
     action,
     name: pool?.name || '',
@@ -1932,7 +1976,12 @@ function openResourcePoolForm(action, pool = null) {
       idleMinutes: pool.idleMinutes ?? '',
       waitSeconds: pool.waitSeconds ?? '',
     } : { name: '', items: '', split: '{}', env: '', ttlMinutes: '', check: '', graceMinutes: '', idleMinutes: '', waitSeconds: '' },
-  });
+  };
+}
+
+// Both pages open the same editor. The Allocation page and the Settings page show the same form.
+function openResourcePoolForm(action, pool = null) {
+  Object.assign(poolEditor, poolEditorState(action, pool));
   lastRender = '';
   render();
   requestAnimationFrame(() => document.querySelector('[data-resource-pool-form] [name="items"]')?.focus());

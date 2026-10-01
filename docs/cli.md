@@ -544,7 +544,7 @@ Do not edit this block. It comes from `public/setting-help.js`.
 
 #### Resource pools
 
-- Controls: The ports of a pool, the idle time after which Herdr Boss reclaims a lease, the wait default, and the client values by port. These controls are in the pools editor on the Allocation page.
+- Controls: The ports of a pool, the split between projects, the wait default, and the client values by port. The idle time decides when Herdr Boss reclaims a lease. These controls are in the pools editor on the Settings page and on the Allocation page.
 - Effect: Projects and workers that lease a port. A port that has no listener for the idle time goes back to the pool.
 - Safe to change: Safe to change. A save never drops a port that a holder uses. A client value is stored in the private config file only.
 - Restart: No restart. A save takes effect at once.
