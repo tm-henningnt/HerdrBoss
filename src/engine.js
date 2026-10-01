@@ -401,6 +401,15 @@ export function orchestratorCanReceiveNotice(orch, alerts) {
 const skipsIdleGate = (alert) => !!alert.immediate && SEV[alert.severity] >= SEV.warn;
 const isStaleStatusAlert = (alert) => !!alert.key?.startsWith('status:stale:');
 
+// A machine or browser warning that is not immediate joins the info digest of the pane. It waits for
+// the info interval instead of waking the orchestrator at every tick. A disk warning has its own
+// path, and a critical warning stays urgent.
+export function joinsNoticeDigest(alert) {
+  if (SEV[alert.severity] !== SEV.warn || alert.immediate) return false;
+  if (alert.key.startsWith('machine:disk:')) return false;
+  return alert.key.startsWith('machine:') || alert.key.startsWith('browser:');
+}
+
 // A project that stays behind on a required kit change gets one reminder after this time.
 export const KIT_REMIND_MS = 2 * 3600 * 1000;
 
@@ -2552,8 +2561,16 @@ export class Engine extends EventEmitter {
               alert = { ...a, text: formatKitNotice(unsent, this.memory.kitNotice.revision), digestHashes: unsent.map((change) => change.hash) };
             }
           }
-          if (!perPane.has(o.id)) perPane.set(o.id, { o, list: [] });
-          perPane.get(o.id).list.push(alert);
+          if (!perPane.has(o.id)) perPane.set(o.id, { o, list: [], at: new Map() });
+          const bucket = perPane.get(o.id);
+          // A key that arrives twice for one pane takes one line, with the newest text.
+          const held = bucket.at.get(a.key);
+          if (held == null) {
+            bucket.at.set(a.key, bucket.list.length);
+            bucket.list.push(alert);
+          } else {
+            bucket.list[held] = alert;
+          }
         }
       }
       this.memory.infoPrompts ||= {};
@@ -2561,10 +2578,10 @@ export class Engine extends EventEmitter {
         // A notice that cannot go out now stays unsent, so it is due again at the next tick.
         if (!orchestratorCanReceiveNotice(o, due)) continue;
         const settled = o.status === 'idle' || o.status === 'done';
-        const urgent = due.filter((a) => SEV[a.severity] >= SEV.warn && (settled || skipsIdleGate(a)));
+        const urgent = due.filter((a) => SEV[a.severity] >= SEV.warn && !joinsNoticeDigest(a) && (settled || skipsIdleGate(a)));
         const infoAllowed = settled && now - (this.memory.infoPrompts[o.id] || 0) >= INFO_PROMPT_INTERVAL_MS;
         // A kit digest has its own interval, so the shared info interval does not hold it and it does not start that interval.
-        const info = due.filter((a) => SEV[a.severity] < SEV.warn && (
+        const info = due.filter((a) => (SEV[a.severity] < SEV.warn || joinsNoticeDigest(a)) && (
           isKitAlert(a) ? settled : isStaleStatusAlert(a) ? (settled || o.status === 'working') : settled && infoAllowed
         )).sort((a, b) => Number(isStaleStatusAlert(b)) - Number(isStaleStatusAlert(a)));
         if (!urgent.length && !info.length) continue;
