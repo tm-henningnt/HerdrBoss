@@ -20,6 +20,20 @@ function fixture() {
   return { root, dataDir, env, cli, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
 
+function git(cwd, ...args) {
+  const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
+  assert.equal(result.status, 0, `${args.join(' ')} failed: ${result.stderr}`);
+  return result.stdout.trim();
+}
+
+function initGitRepo(repo) {
+  fs.mkdirSync(repo, { recursive: true });
+  git(repo, 'init', '-q', '-b', 'main');
+  fs.writeFileSync(path.join(repo, 'README.md'), 'fixture\n');
+  git(repo, 'add', 'README.md');
+  git(repo, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-q', '-m', 'fixture');
+}
+
 test('project paths prints registered paths by slug and excludes the current checkout', () => {
   const f = fixture();
   try {
@@ -44,6 +58,44 @@ test('project paths prints registered paths by slug and excludes the current che
       { slug: 'alpha', path: rows[2].repo },
       { slug: 'zeta', path: rows[0].repo },
     ]);
+  } finally { f.cleanup(); }
+});
+
+test('project paths excludes the main checkout when run from a linked git worktree', () => {
+  const f = fixture();
+  try {
+    const owner = path.join(f.root, 'owner');
+    const worker = path.join(f.root, 'worker');
+    initGitRepo(owner);
+    git(owner, 'worktree', 'add', '-q', '-b', 'worker', worker);
+    const rows = [
+      { slug: 'owner', repo: owner },
+      { slug: 'alpha', repo: path.join(f.root, 'missing-alpha') },
+    ];
+    fs.writeFileSync(path.join(f.dataDir, 'project-repos.json'), JSON.stringify(rows));
+
+    const result = f.cli(worker);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, `alpha=${rows[1].repo}\n`);
+  } finally { f.cleanup(); }
+});
+
+test('project paths resolves a symlinked registered path before excluding the current checkout', () => {
+  const f = fixture();
+  try {
+    const current = path.join(f.root, 'current');
+    const registeredAlias = path.join(f.root, 'registered-alias');
+    initGitRepo(current);
+    fs.symlinkSync(current, registeredAlias, 'dir');
+    const rows = [
+      { slug: 'current', repo: registeredAlias },
+      { slug: 'other', repo: path.join(f.root, 'missing-other') },
+    ];
+    fs.writeFileSync(path.join(f.dataDir, 'project-repos.json'), JSON.stringify(rows));
+
+    const result = f.cli(current, '--json');
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), [{ slug: 'other', path: rows[1].repo }]);
   } finally { f.cleanup(); }
 });
 

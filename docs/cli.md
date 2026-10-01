@@ -284,7 +284,7 @@ The state file is `flows/<slug>.json` in the data folder, with mode 0600. The co
 
 ### Command project paths
 
-Run `project paths` to print one line with the slug and path of each registered project. The command sorts the projects by slug. It leaves out the current project when the current directory is inside its registered path. It reads only the project registry. It does not open a project repository.
+Run `project paths` to print one line with the slug and path of each registered project. The text form separates each `slug=path` entry with a space. Use `--json` when a path can contain spaces. The command sorts the projects by slug. It leaves out the current project when you run it from its checkout or a linked worktree. It reads only the project registry. It does not open a project repository.
 
 Use `project paths --json` to print an array of objects. Each object has `slug` and `path` fields. The command exits 0 and prints an empty line when no other project is registered. The JSON form prints an empty array in this case.
 
