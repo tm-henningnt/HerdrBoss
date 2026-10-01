@@ -106,36 +106,52 @@ test('the publish command closes an item for a removed task when another task re
   assert.equal(closed.closeNote, 'resolved by the project');
 });
 
-test('old unlinked decide and approve items close when the status has tasks and no Owner wait', (t) => {
+const DAY = 24 * 60 * 60_000;
+
+test('an unlinked decide or approve item stays open for any age when no task waits on the Owner', (t) => {
   const dir = freshDir(t);
   const decide = item(dir, 'alpha', {}, T0);
   const approve = item(dir, 'alpha', { action: 'approve' }, T0);
+  const answer = item(dir, 'alpha', { action: 'answer' }, T0);
   const next = { tasks: [task('1', { status: 'doing', waitingOn: undefined, ask: undefined })] };
-  const publishAt = T0 + 11 * 60_000;
-  assert.equal(closeResolvedMailboxItems('alpha', next, { dir, now: publishAt }).closed, 2);
-  for (const record of [decide, approve]) {
-    const closed = stored(dir, record.id);
-    assert.equal(closed.closedBy, 'project');
-    assert.equal(closed.closeNote, 'Closed because the project status no longer waits on the Owner.');
-    assert.equal(closed.closedAt, new Date(publishAt).toISOString());
+  assert.equal(closeResolvedMailboxItems('alpha', next, { dir, now: T0 + 2 * DAY }).closed, 0);
+  for (const record of [decide, approve, answer]) {
+    assert.equal(stored(dir, record.id).closedAt, undefined);
+    assert.equal(stored(dir, record.id).closedBy, undefined);
   }
-  assert.equal(closeResolvedMailboxItems('alpha', next, { dir, now: publishAt + 1000 }).closed, 0, 'a second publish closes nothing more');
+  assert.equal(closeResolvedMailboxItems('alpha', { tasks: [] }, { dir, now: T0 + 2 * DAY }).closed, 0, 'a status with no tasks closes nothing');
+  assert.equal(closeResolvedMailboxItems('alpha', { tasks: [task('2')] }, { dir, now: T0 + 2 * DAY }).closed, 0, 'a status task waits on the Owner');
+  for (const record of [decide, approve, answer]) assert.equal(stored(dir, record.id).closedAt, undefined);
 });
 
-test('young and other-action unlinked items stay open, and an Owner wait delays an old item', (t) => {
+test('an unlinked item that the Boss posted stays open for any age', (t) => {
   const dir = freshDir(t);
-  const young = item(dir, 'alpha', {}, T0);
+  const fromBoss = item(dir, 'alpha', { from: 'boss' }, T0);
+  const next = { tasks: [task('1', { status: 'doing', waitingOn: undefined, ask: undefined })] };
+  assert.equal(closeResolvedMailboxItems('alpha', next, { dir, now: T0 + 2 * DAY }).closed, 0);
+  assert.equal(stored(dir, fromBoss.id).closedAt, undefined);
+});
+
+test('a project item closes only through its linked task, and a second publish closes nothing more', (t) => {
+  const dir = freshDir(t);
+  const linked = item(dir, 'alpha', {}, T0);
+  const removed = item(dir, 'alpha', {}, T0);
   const waiting = item(dir, 'alpha', {}, T0);
-  const answer = item(dir, 'alpha', { action: 'answer' }, T0);
-  const noOwnerWait = { tasks: [task('1', { status: 'doing', waitingOn: undefined, ask: undefined })] };
-  assert.equal(closeResolvedMailboxItems('alpha', noOwnerWait, { dir, now: T0 + 9 * 60_000 }).closed, 0, 'younger than ten minutes');
-  assert.equal(closeResolvedMailboxItems('alpha', { tasks: [task('2')] }, { dir, now: T0 + 11 * 60_000 }).closed, 0, 'a status task waits on the Owner');
-  assert.equal(closeResolvedMailboxItems('alpha', noOwnerWait, { dir, now: T0 + 11 * 60_000 }).closed, 2, 'the old decide items close after the Owner wait clears');
-  for (const record of [young, waiting]) assert.equal(stored(dir, record.id).closedBy, 'project');
-  assert.equal(stored(dir, answer.id).closedAt, undefined, 'answer items do not close as unlinked items');
-  const noTasks = item(dir, 'alpha', {}, T0);
-  assert.equal(closeResolvedMailboxItems('alpha', { tasks: [] }, { dir, now: T0 + 11 * 60_000 }).closed, 0, 'a status with no tasks closes nothing');
-  assert.equal(stored(dir, noTasks.id).closedAt, undefined);
+  const done = item(dir, 'alpha', {}, T0);
+  const previous = { tasks: [task('1', { mailboxId: removed.id }), task('2', { mailboxId: waiting.id }), task('3', { mailboxId: done.id })] };
+  const next = { tasks: [
+    task('10', { mailboxId: linked.id, status: 'doing', waitingOn: undefined, ask: undefined }),
+    task('2', { mailboxId: waiting.id }),
+    task('3', { mailboxId: done.id, status: 'done', waitingOn: undefined, ask: undefined }),
+    task('4', { status: 'doing', waitingOn: undefined, ask: undefined }),
+  ] };
+  const publishAt = T0 + 1000;
+  assert.equal(closeResolvedMailboxItems('alpha', next, { dir, now: publishAt, previous }).closed, 3, 'linked, removed, and done');
+  assert.equal(stored(dir, linked.id).closeNote, 'resolved by the project');
+  assert.equal(stored(dir, removed.id).closeNote, 'resolved by the project');
+  assert.equal(stored(dir, done.id).closeNote, 'resolved by the project');
+  assert.equal(stored(dir, waiting.id).closedAt, undefined, 'the task of this item still waits on the Owner');
+  assert.equal(closeResolvedMailboxItems('alpha', next, { dir, now: publishAt + 1000, previous }).closed, 0, 'a second publish closes nothing more');
 });
 
 test('review items, Boss-thread items, and items from the Boss stay open', (t) => {
