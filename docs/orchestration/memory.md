@@ -140,3 +140,12 @@ Owner queue (credentials, billing, and Owner-applied settings):
 - **Preview rule:** a GUI worker seeds only into a temporary `HERDR_BOSS_DIR` (`scripts/seed-preview.js`); the preview binds `127.0.0.1`. The Claude permission classifier may deny a worker the preview start: start it for the worker.
 - **Old branches:** the NC1 to NC6, HB1, HB2 and other older worktrees are not verified as merged. Check `git branch --merged main` before deleting any. Ask the Boss before deleting `kit-cli` and `kit-docs`.
 - **Ledger gap:** 11 old runs have no ledger entries. Do not invent outcomes.
+
+## State 2026-10-01
+
+- **Main:** `178af86`, pushed and live. It holds RP2 to RP12 (review packs), MG1, LK1, LS1, WM1, T2, PC1, PC2, GS1, GS2 and GH1. The kit revision is `e4591d0a3d3d`.
+- **Claude lane:** the weekly lane is ahead of pace. Start no claude worker until the Boss says it is back on pace. Use opencode, pi, and codex.
+- **Running or queued:** BO1 (mask outside hosts in browser output, codex) and WC1 (worker collect ignores kit-managed files, pi, done, not merged). Next: merge both in an integration worktree, one suite, release, `kit update`.
+- **Commit rule:** the `Kit-Impact:` line and the `Co-Authored-By:` line go in one final paragraph with no blank line between them.
+- **Waiting for the Owner:** real-phone checks of the Reviews pages, the Chat arrow, the Mailbox bars, and the Set goal button; a Safari check of the legacy HTML page frame; the first real pack import.
+- **Open follow-ups:** BR1 browser hang follow-up, G4h swap thresholds from 2026-10-07, the user-guide paragraph on loopback caller equals Owner, the fixture token literal in `test/review-cli.test.js`.
