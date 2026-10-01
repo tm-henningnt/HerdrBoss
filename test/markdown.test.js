@@ -272,6 +272,7 @@ function element(localName, attrs = {}, children = []) {
     nodeType: 1, localName, parent: null, childNodes: [],
     get attributes() { return Object.entries(this.attrs).map(([name, value]) => ({ name, value })); },
     attrs: { ...attrs },
+    getAttribute(name) { return this.attrs[name] ?? null; },
     removeAttribute(name) { delete this.attrs[name]; },
     remove() { this.parent.childNodes.splice(this.parent.childNodes.indexOf(this), 1); },
   };
@@ -378,4 +379,31 @@ test('a table keeps at most 30 columns and drops the extra cells', () => {
   assert.match(html, /<th>h29<\/th><\/tr>/);
   assert.doesNotMatch(html, /h30|v30|v44/);
   assert.equal(MAX_TABLE_COLUMNS, 30);
+});
+
+test('only exact attachment image URLs render lazy images with escaped alt text', () => {
+  const url = `/attachments/att_${'a'.repeat(32)}`;
+  const html = md(`![A "view" <test>](${url})`);
+  assert.equal(html, `<p><img src="${url}" alt="A &quot;view&quot; &lt;test&gt;" loading="lazy" class="md-attachment"></p>`);
+  assertAllowed(html);
+  for (const target of ['https://example.invalid/image.png', 'http://example.invalid/image.png', 'data:image/png;base64,abc', 'relative.png', '//example.invalid/a', '/elsewhere/a.png', url + '?x=1', url + '.png', '/attachments/att_' + 'A'.repeat(32), url.replace('attachments', 'attach&#109;ents')]) {
+    const rendered = md(`![plain alt](${target})`);
+    assert.equal(rendered, '<p>plain alt</p>', target);
+    assert.doesNotMatch(rendered, /<img|<a|src=/i);
+  }
+  assert.equal(md(`\`![code](${url})\``), `<p><code>![code](${url})</code></p>`);
+  assert.equal(md(`\\![escaped](${url})`), `<p>!<a href="${url}">escaped</a></p>`);
+});
+
+test('the sanitizer keeps attachment images and removes other image sources and attributes', () => {
+  const url = `/attachments/att_${'b'.repeat(32)}`;
+  const tree = element('#root', {}, [
+    element('img', { src: url, alt: 'Photo', loading: 'lazy', class: 'md-attachment' }),
+    element('img', { src: 'https://example.invalid/photo.png' }),
+    element('img', { src: url, srcset: 'https://example.invalid/other.png', onerror: 'x()', loading: 'eager' }),
+  ]);
+  assert.equal(sanitizeRendered(tree), 4);
+  assert.equal(tree.childNodes.length, 2);
+  assert.deepEqual(tree.childNodes[0].attrs, { src: url, alt: 'Photo', loading: 'lazy', class: 'md-attachment' });
+  assert.deepEqual(tree.childNodes[1].attrs, { src: url });
 });

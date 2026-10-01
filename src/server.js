@@ -33,6 +33,7 @@ import { createGoalApi } from './goal-api.js';
 import { createReviewApi } from './review-api.js';
 import { createRawRoute } from './review-raw.js';
 import * as reviewStore from './review-store.js';
+import { ATTACHMENT_ID, ATTACHMENT_TYPES, MAX_ATTACHMENT_BYTES, UPLOAD_LIMIT_PER_MINUTE, readAttachment, storeAttachment } from './attachments.js';
 
 const PUBLIC = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const DOCS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'docs');
@@ -79,6 +80,7 @@ function readBytes(req, limit) {
       size += chunk.length;
       if (size > limit) {
         refused = true;
+        chunks.length = 0;
         reject(Object.assign(new Error(`The body is larger than ${limit} bytes.`), { statusCode: 413 }));
         return;
       }
@@ -111,13 +113,9 @@ function avatarFile(slug) {
   return null;
 }
 
-function readBody(req, limit = 1024 * 1024) {
-  return new Promise((resolve, reject) => {
-    let size = 0; const chunks = [];
-    req.on('data', (c) => { size += c.length; if (size > limit) { reject(new Error('body too large')); req.destroy(); } else chunks.push(c); });
-    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
-    req.on('error', reject);
-  });
+async function readBody(req, limit = 1024 * 1024, raw = false) {
+  const bytes = await readBytes(req, limit);
+  return raw ? bytes : bytes.toString('utf8');
 }
 
 // The host list of the control plane: a loopback name, a Tailscale name, or an address of this machine.
@@ -181,6 +179,7 @@ export function assertPreviewHost(host) {
 }
 
 export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine = (config, options) => new Engine(config, options), rawTokens, closeTab = browserCloseTab, projectNew = {}, goalSet = {} } = {}) {
+  let uploads = [];
   const machineHoursCache = new Map();
   let analyticsCache = null;
   // A direct serve() call must refuse an unsafe preview before the access token, the watcher, or a tick writes a file.
@@ -326,6 +325,35 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine 
           return res.end();
         }
         return send(res, 401, { error: 'Access token required.' });
+      }
+      // Check the raw route too: URL normalization must not hide traversal behind the app shell.
+      if (p === '/attachments' || req.url.startsWith('/attachments/') || p.startsWith('/attachments/')) {
+        const route = req.url.split('?')[0];
+        const id = route.slice('/attachments/'.length);
+        if (req.method !== 'GET' || !ATTACHMENT_ID.test(id)) return send(res, 404, { error: 'Attachment not found.' });
+        const attachment = readAttachment(id);
+        const download = ['image/heic', 'image/heif'].includes(attachment.type);
+        res.writeHead(200, {
+          'content-type': attachment.type, 'content-length': attachment.size,
+          'x-content-type-options': 'nosniff', 'cache-control': 'private, max-age=3600',
+          'content-security-policy': "default-src 'none'; sandbox",
+          'content-disposition': download ? `attachment; filename="${attachment.name.replace(/[^\x20-\x7e]/g, '_')}"` : 'inline',
+        });
+        return res.end(attachment.bytes);
+      }
+      if (p === '/api/attachments' && req.method === 'POST') {
+        const now = Date.now(); uploads = uploads.filter((at) => at > now - 60000);
+        if (uploads.length >= UPLOAD_LIMIT_PER_MINUTE) return send(res, 429, { error: 'Herdr Boss accepts at most 30 picture uploads a minute.' });
+        uploads.push(now);
+        const type = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+        if (!Object.hasOwn(ATTACHMENT_TYPES, type)) return send(res, 415, { error: 'Send a JPEG, PNG, WebP, GIF, HEIC or HEIF picture.' });
+        let name;
+        try { name = decodeURIComponent(req.headers['x-filename'] || ''); }
+        catch { return send(res, 400, { error: 'X-Filename must be URL-encoded.' }); }
+        if (name.length > 120) return send(res, 400, { error: 'X-Filename must be at most 120 characters.' });
+        const attachment = storeAttachment(await readBody(req, MAX_ATTACHMENT_BYTES, true), { type, name, now });
+        engine.log('attachment', `Stored picture ${attachment.id}`, { id: attachment.id, type: attachment.type, size: attachment.size });
+        return send(res, 200, attachment);
       }
       if (p.startsWith('/api/goal/')) {
         const routed = await goalApi.handle(req.method, p, () => projectNewBody(req));

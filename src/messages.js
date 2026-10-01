@@ -5,6 +5,8 @@ import { SLUG } from './projects.js';
 import { openMessageStore, RETENTION_MS, messagesFile, newId } from './message-store.js';
 import { redactSecrets } from './redact.js';
 import { promptText } from './review-result.js';
+import { uploadReportPictures } from './attachment-markdown.js';
+import { validateAttachmentIds, readAttachment, uploadLocalPictures, deleteAttachment } from './attachments.js';
 
 export { RETENTION_MS, messagesFile };
 
@@ -54,12 +56,14 @@ export function listThread(thread, { dir = DATA_DIR, limit = THREAD_LIMIT } = {}
 export function validateOwnerSend(body, { knownThreads, records = [], now = Date.now() }) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return { status: 400, error: 'Send a JSON object with thread, kind, and text.' };
   const { thread, kind } = body;
+  try { validateAttachmentIds(body.attachments === undefined ? [] : body.attachments); }
+  catch (error) { return { status: error.statusCode, error: error.message }; }
   if (!validThread(thread)) return { status: 400, error: 'The thread must be boss or a project slug.' };
   if (!OWNER_KINDS.includes(kind)) return { status: 400, error: `The kind must be one of ${OWNER_KINDS.join(', ')}.` };
   let text;
   if (kind === 'message') {
     text = typeof body.text === 'string' ? body.text.trim() : '';
-    if (text.length < 1 || text.length > OWNER_TEXT_MAX) return { status: 400, error: `The message text must be 1 to ${OWNER_TEXT_MAX} characters.` };
+    if ((!text.length && !body.attachments?.length) || text.length > OWNER_TEXT_MAX) return { status: 400, error: `The message text must be 1 to ${OWNER_TEXT_MAX} characters.` };
   } else if (kind === 'nudge') {
     if (!NUDGES.includes(body.text)) return { status: 400, error: `A nudge must be one of: ${NUDGES.join(' ')}` };
     text = body.text;
@@ -75,7 +79,7 @@ export function validateOwnerSend(body, { knownThreads, records = [], now = Date
   }
   const recent = records.filter((record) => record.from === 'owner' && Date.parse(record.at) > now - 60000).length;
   if (recent >= SEND_LIMIT_PER_MINUTE) return { status: 429, error: `Herdr Boss accepts at most ${SEND_LIMIT_PER_MINUTE} Owner messages a minute. Wait, then send again.` };
-  return { fields: { thread, from: 'owner', to: thread === 'boss' ? 'boss' : 'orch', kind, text, action: null, replyTo, status: 'queued', attempts: 0 } };
+  return { fields: { thread, from: 'owner', to: thread === 'boss' ? 'boss' : 'orch', kind, text, action: null, replyTo, status: 'queued', attempts: 0, ...(body.attachments !== undefined ? { attachments: body.attachments } : {}) } };
 }
 
 const PROMPT_QUOTE_MAX = 400;
@@ -270,6 +274,7 @@ function deliveryView(record, replies) {
     id: record.id,
     at: record.at,
     text: record.text,
+    ...(record.attachments ? { attachments: record.attachments } : {}),
     status: record.status,
     sentAt: record.sentAt ?? null,
     error: record.error ?? null,
@@ -554,11 +559,17 @@ export async function deliverQueued({ panes = [], projects = {}, prompt, log = (
     const attempts = (record.attempts || 0) + 1;
     const meta = { id: record.id, thread: record.thread, kind: record.kind, pane: pane.id };
     try {
-      await prompt(pane.id, ownerPromptText(record, questions.get(record.replyTo)));
+      const attachmentLines = (record.attachments || []).map(({ id }) => {
+        const attachment = readAttachment(id, { dir });
+        // Escape any controls in a configured directory; filenames contain only an id and a fixed extension.
+        const file = path.resolve(attachment.file).replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, (ch) => `\\u${ch.charCodeAt(0).toString(16).padStart(4, '0')}`);
+        return `Attachment: ${file} (${attachment.type}, ${Math.max(1, Math.ceil(attachment.size / 1024))} KB) — read this file with your image tool.`;
+      });
+      await prompt(pane.id, [ownerPromptText(record, questions.get(record.replyTo)), ...attachmentLines].join('\n'));
       updateMessage(record.id, { status: 'sent', sentAt: new Date(now).toISOString(), error: null, attempts }, { dir, now });
       log('message', `Delivered Owner ${record.kind} ${record.id} to ${record.thread}`, meta);
     } catch (error) {
-      const reason = shortError(error, record, questions.get(record.replyTo));
+      const reason = record.attachments?.length ? 'Herdr could not deliver the message with its pictures.' : shortError(error, record, questions.get(record.replyTo));
       updateMessage(record.id, { status: 'failed', error: reason, attempts }, { dir, now });
       const retry = attempts < MAX_DELIVERY_ATTEMPTS ? 'will retry' : 'no more retries';
       log('message', `Owner ${record.kind} ${record.id} to ${record.thread} failed (attempt ${attempts}, ${retry}): ${reason}`, { ...meta, failed: true });
@@ -603,8 +614,9 @@ function checkAction(action) {
   return action ?? null;
 }
 
-export function sayMessage(text, { replyTo = null, action = null } = {}, { env = process.env, herdr, control, dir = DATA_DIR, now = Date.now() } = {}) {
+export function sayMessage(text, { replyTo = null, action = null, images = [] } = {}, { env = process.env, herdr, control, dir = DATA_DIR, now = Date.now() } = {}) {
   const caller = verifyMessageCaller(env, herdr, 'say');
+  if (!Array.isArray(images) || images.length > 3) throw new Error('say accepts at most 3 pictures.');
   const body = typeof text === 'string' ? text.trim() : '';
   if (body.length < 1 || body.length > SAY_TEXT_MAX) throw new Error(`The text must be 1 to ${SAY_TEXT_MAX} characters.`);
   const chosen = checkAction(action);
@@ -618,7 +630,10 @@ export function sayMessage(text, { replyTo = null, action = null } = {}, { env =
   if (replyTo != null && !readMessages({ dir }).some((record) => record.id === replyTo && record.thread === thread)) {
     throw new Error(`--reply-to ${replyTo} does not name a message in the ${thread} thread.`);
   }
-  return appendMessage({ thread, from: caller.role, to: 'owner', kind: 'reply', text: body, action: chosen, replyTo: replyTo ?? null, status: 'new' }, { dir, now });
+  const attachments = uploadLocalPictures(images, { dir, now });
+  try {
+    return appendMessage({ thread, from: caller.role, to: 'owner', kind: 'reply', text: body, action: chosen, replyTo: replyTo ?? null, status: 'new', ...(attachments.length ? { attachments: attachments.map(({ id }) => id) } : {}) }, { dir, now });
+  } catch (error) { for (const { id } of attachments) deleteAttachment(id, { dir }); throw error; }
 }
 
 export function postReport(file, { to = null, title = null, action = null } = {}, { env = process.env, herdr, dir = DATA_DIR, now = Date.now() } = {}) {
@@ -635,7 +650,10 @@ export function postReport(file, { to = null, title = null, action = null } = {}
   if (!name || name.length > TITLE_MAX) throw new Error(`The title must be 1 to ${TITLE_MAX} characters.`);
   refuseSecret(name, 'title');
   refuseSecret(text, 'report');
-  return appendMessage({ thread: 'boss', from: 'boss', to: 'owner', kind: 'report', title: name, text, action: chosen, replyTo: null, status: 'new' }, { dir, now });
+  const pictures = uploadReportPictures(text, { dir, now });
+  try {
+    return appendMessage({ thread: 'boss', from: 'boss', to: 'owner', kind: 'report', title: name, text: pictures.text, action: chosen, replyTo: null, status: 'new', ...(pictures.attachments.length ? { attachments: pictures.attachments } : {}) }, { dir, now });
+  } catch (error) { pictures.rollback(); throw error; }
 }
 
 // ---------- Review pack items ----------

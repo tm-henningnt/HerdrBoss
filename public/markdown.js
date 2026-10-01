@@ -8,8 +8,8 @@ export const MAX_TABLE_COLUMNS = 30;
 const MAX_URL = 2048;
 const MAX_TITLE = 512;
 
-export const ALLOWED_TAGS = new Set(['p', 'br', 'strong', 'em', 'del', 'code', 'pre', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'input', 'blockquote', 'hr', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'div', 'a', 'span', 'svg', 'use']);
-export const ALLOWED_ATTRS = new Set(['href', 'target', 'rel', 'title', 'class', 'role', 'tabindex', 'aria-label', 'type', 'disabled', 'checked', 'start', 'style']);
+export const ALLOWED_TAGS = new Set(['p', 'br', 'strong', 'em', 'del', 'code', 'pre', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'input', 'blockquote', 'hr', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'div', 'a', 'span', 'svg', 'use', 'img']);
+export const ALLOWED_ATTRS = new Set(['href', 'target', 'rel', 'title', 'class', 'role', 'tabindex', 'aria-label', 'type', 'disabled', 'checked', 'start', 'style', 'src', 'alt', 'loading']);
 const CELL_STYLE = /^text-align:(left|center|right)$/;
 
 export function esc(value) {
@@ -39,6 +39,8 @@ export function safeUrl(raw) {
   if (/^\/(?![/\\])/.test(url) || url[0] === '#') return url;
   return null;
 }
+
+export const safeImageUrl = (url) => /^\/attachments\/att_[0-9a-f]{32}$/.test(url) ? url : null;
 
 // ---------- Inline ----------
 
@@ -116,7 +118,7 @@ function inlineTokens(text, inLink) {
   let buffer = '';
   const flush = () => { if (buffer) { push({ type: 'text', value: buffer }); buffer = ''; } };
   const delimiters = [];
-  const pairs = inLink ? null : bracketPairs(text);
+  const pairs = bracketPairs(text);
   const noCloser = new Map();
 
   for (let i = 0; i < text.length;) {
@@ -168,6 +170,18 @@ function inlineTokens(text, inLink) {
         flush();
         push(linkNode(url, '', [{ type: 'text', value: auto[1].replace(/^mailto:/i, '') }]));
         i += auto[0].length;
+        continue;
+      }
+    }
+    if (ch === '!' && text[i + 1] === '[') {
+      const close = pairs.get(i + 1);
+      const imageTail = close !== undefined && linkTail(text, close + 1);
+      if (imageTail) {
+        flush();
+        const alt = text.slice(i + 2, close).replace(/\\([!-/:-@[-`{-~])/g, '$1');
+        const url = safeImageUrl(imageTail.url);
+        push(url ? { type: 'image', url, alt } : { type: 'text', value: alt });
+        i = imageTail.end;
         continue;
       }
     }
@@ -289,6 +303,7 @@ function renderInline(nodes) {
     frame.i += 1;
     if (node.type === 'text') { html += esc(node.value); continue; }
     if (node.type === 'br') { html += '<br>'; continue; }
+    if (node.type === 'image') { html += `<img src="${esc(node.url)}" alt="${esc(node.alt)}" loading="lazy" class="md-attachment">`; continue; }
     if (node.type === 'code') { html += `<code>${esc(node.value)}</code>`; continue; }
     const depth = node.type === 'group' ? frame.depth : frame.depth + 1;
     let open = '';
@@ -549,9 +564,13 @@ export function sanitizeRendered(root) {
       if (node.nodeType !== 1) { node.remove(); removed += 1; continue; }
       const tag = node.localName;
       if (!ALLOWED_TAGS.has(tag)) { node.remove(); removed += 1; continue; }
+      if (tag === 'img' && !safeImageUrl(node.getAttribute('src') || '')) { node.remove(); removed += 1; continue; }
       for (const attr of [...node.attributes]) {
         const name = attr.name.toLowerCase();
         const bad = !ALLOWED_ATTRS.has(name)
+          || (name === 'src' && (tag !== 'img' || !safeImageUrl(attr.value)))
+          || (name === 'alt' && tag !== 'img')
+          || (name === 'loading' && (tag !== 'img' || attr.value !== 'lazy'))
           || (name === 'href' && !safeUrl(attr.value))
           || (name === 'style' && !(/^t[hd]$/.test(tag) && CELL_STYLE.test(attr.value)))
           || (name === 'type' && attr.value !== 'checkbox');

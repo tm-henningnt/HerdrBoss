@@ -7,6 +7,7 @@ import { appendPolicyChange, callerKind, diffPolicy } from './policy-log.js';
 
 const FILE = path.join(DATA_DIR, 'policy.json');
 export const POLICY_DEFAULTS = {
+  attachments: { retentionDays: 30 },
   machine: { guardEnabled: true, guardPausedUntil: null, ownerAwayMinutes: 10, presentCpuPercent: 70, awayCpuPercent: 95, presentLoadFactor: 3, awayLoadFactor: 8, diskWarnFreeGB: 20, diskCriticalFreeGB: 5, alertCooldownSeconds: 21600, swapWarnPercent: 80, swapRefusePercent: 95, swapMinUsedGB: 2, swapRefuseEnabled: false, kitDigestMinutes: 120 },
   locks: { slots: 2, shortLimitMinutes: 6, guard: { enabled: true, maxLoadPercent: 231, maxSwapPercent: 96, minFreeMemPercent: 40 } },
   maxWorkers: 8,
@@ -119,7 +120,7 @@ export function loadPolicy({ file = FILE, models = null, warn = (text) => consol
       presentCpuPercent: 95, awayCpuPercent: 95, presentLoadFactor: 3, awayLoadFactor: 8,
     });
   }
-  const policy = { ...POLICY_DEFAULTS, ...stored, machine, locks, providerModes: { ...POLICY_DEFAULTS.providerModes, ...stored.providerModes }, preferredModels: stored.preferredModels || {}, modelProviders: stored.modelProviders || {}, extraModels: stored.extraModels || {}, disabledModels: stored.disabledModels || {}, harnessRoutes: stored.harnessRoutes || {}, pacingGoals: stored.pacingGoals || {}, excludedWorkspaces: Array.isArray(stored.excludedWorkspaces) ? stored.excludedWorkspaces : [], projects: stored.projects || {} };
+  const policy = { ...POLICY_DEFAULTS, ...stored, machine, locks, attachments: { ...POLICY_DEFAULTS.attachments, ...(isObject(stored.attachments) ? stored.attachments : {}) }, providerModes: { ...POLICY_DEFAULTS.providerModes, ...stored.providerModes }, preferredModels: stored.preferredModels || {}, modelProviders: stored.modelProviders || {}, extraModels: stored.extraModels || {}, disabledModels: stored.disabledModels || {}, harnessRoutes: stored.harnessRoutes || {}, pacingGoals: stored.pacingGoals || {}, excludedWorkspaces: Array.isArray(stored.excludedWorkspaces) ? stored.excludedWorkspaces : [], projects: stored.projects || {} };
   policy.ignoredRoutes = legacyRouteConflicts(policy, models ?? loadModels());
   for (const [kind, list] of Object.entries(policy.ignoredRoutes)) for (const model of list) {
     const key = `${file}:${kind}/${model}:${policy.modelProviders[model]}`;
@@ -177,6 +178,8 @@ export function validatePolicy(value, models) {
     if (!Number.isFinite(value.machine.swapMinUsedGB) || value.machine.swapMinUsedGB < 0 || value.machine.swapMinUsedGB > 1024) errors.push('machine.swapMinUsedGB must be a number from 0 to 1024.');
     for (const [key, max] of [['diskWarnFreeGB', 1048576], ['diskCriticalFreeGB', 1048576]]) if (!Number.isFinite(value.machine[key]) || value.machine[key] < 0 || value.machine[key] > max) errors.push(`machine.${key} must be a number from 0 to ${max}.`);
   }
+  if (!isObject(value.attachments)) errors.push('attachments must be an object.');
+  else if (!Number.isInteger(value.attachments.retentionDays) || value.attachments.retentionDays < 1 || value.attachments.retentionDays > 365) errors.push('attachments.retentionDays must be an integer from 1 to 365.');
   if (!isObject(value.locks)) errors.push('locks must be an object.');
   else {
     if (!Number.isInteger(value.locks.slots) || value.locks.slots < 1 || value.locks.slots > 4) errors.push('locks.slots must be an integer from 1 to 4.');
