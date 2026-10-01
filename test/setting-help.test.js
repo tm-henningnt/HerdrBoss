@@ -145,6 +145,7 @@ test('the settable service settings state their range and when they apply', () =
   assert.match(SETTING_HELP.push.what, /restart/i);
   assert.equal(SETTING_HELP['analytics.actionsMinutes'].default, 'On');
   assert.equal(SETTING_HELP['analytics.actionsMinutes'].apply, 'service');
+  assert.match(SETTING_HELP['analytics.actionsMinutes'].what, /estimated from run times/i);
   assert.match(SETTING_HELP['analytics.actionsMinutes'].raise, /service uses its GitHub token/i);
   assert.match(SETTING_HELP.alertCooldownSeconds.what, /unused legacy value/);
   for (const id of ['alertCooldownSeconds', 'port', 'host', 'providerKinds', 'orchestratorLabel']) assert.equal(SETTING_HELP[id].apply, 'restart', `${id} stays in config.json`);

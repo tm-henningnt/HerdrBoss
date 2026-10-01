@@ -59,6 +59,12 @@ export function actionsMinutesSeries(data) {
   return { weeks, series, total: series.reduce((sum, row) => sum + row.values.reduce((a, b) => a + b, 0), 0) };
 }
 
+export function actionsMinutesScope(data) {
+  const truncated = data?.truncated ? ' Some repositories reached the 500-run limit. Their older weeks may be incomplete.' : '';
+  const updated = data?.updatedAt ? ` Updated ${new Date(data.updatedAt).toLocaleString()}.` : '';
+  return `Last 12 ISO weeks. Minutes are estimated from run times.${truncated} The service uses its GitHub token. It skips repositories when that token has no access.${updated}`;
+}
+
 export function actionsMinutesDetailsHtml(data) {
   const weeks = Array.isArray(data?.weeks) ? data.weeks : [];
   const repos = Array.isArray(data?.repos) ? data.repos : [];

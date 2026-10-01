@@ -84,7 +84,7 @@ function runStart(workflowRun) {
 
 async function collectRepo({ repo, window, run }) {
   const dates = new Map(window.weeks.map((week, i) => [week, i]));
-  const row = { repo, minutes: Array(window.weeks.length).fill(0), runs: Array(window.weeks.length).fill(0), series: [] };
+  const row = { repo, minutes: Array(window.weeks.length).fill(0), runs: Array(window.weeks.length).fill(0), series: [], truncated: false };
   for (let page = 1; page <= ACTIONS_MINUTES_MAX_PAGES; page++) {
     const result = await run(['api', `repos/${repo}/actions/runs?per_page=100&page=${page}`], { timeout: ACTIONS_MINUTES_TIMEOUT_MS });
     const list = jsonFrom(result);
@@ -111,6 +111,7 @@ async function collectRepo({ repo, window, run }) {
     const oldest = runStart(list.workflow_runs.at(-1));
     if (Number.isFinite(oldest) && oldest < window.firstStart) break;
     if (list.workflow_runs.length < 100) break;
+    if (page === ACTIONS_MINUTES_MAX_PAGES) row.truncated = true;
   }
   row.series.sort((a, b) => a.runnerType.localeCompare(b.runnerType));
   return row;
@@ -140,7 +141,7 @@ async function collectActionsMinutesResult({ repos = [], run = apiRun, now = Dat
   const successful = outcomes.filter((outcome) => outcome?.row);
   const failedRepos = outcomes.filter((outcome) => !outcome?.row).map((outcome) => outcome.repo);
   const data = successful.length
-    ? { available: true, estimated: true, weeks: window.weeks, repos: successful.map((outcome) => outcome.row).sort((a, b) => a.repo.localeCompare(b.repo)), updatedAt: new Date(now).toISOString() }
+    ? { available: true, estimated: true, truncated: successful.some((outcome) => outcome.row.truncated), weeks: window.weeks, repos: successful.map((outcome) => outcome.row).sort((a, b) => a.repo.localeCompare(b.repo)), updatedAt: new Date(now).toISOString() }
     : { ...EMPTY };
   return { data, attemptedRepos: candidates.map((item) => item.repo), failedRepos };
 }
@@ -174,11 +175,13 @@ function publicState(state, enabled) {
   return {
     available: true,
     estimated: true,
+    truncated: state.truncated === true,
     weeks: state.weeks.slice(-ACTIONS_MINUTES_WEEKS),
     repos: state.repos.filter((row) => row && typeof row.repo === 'string').map((row) => ({
       repo: row.repo,
       minutes: Array.isArray(row.minutes) ? row.minutes.slice(-ACTIONS_MINUTES_WEEKS) : [],
       runs: Array.isArray(row.runs) ? row.runs.slice(-ACTIONS_MINUTES_WEEKS) : [],
+      truncated: row.truncated === true,
       series: Array.isArray(row.series) ? row.series.map((series) => ({ runnerType: runnerName(series.runnerType), minutes: (series.minutes || []).slice(-ACTIONS_MINUTES_WEEKS) })) : [],
     })),
     updatedAt: typeof state.updatedAt === 'string' ? state.updatedAt : null,
@@ -199,12 +202,13 @@ function fitRowToWeeks(row, fromWeeks, toWeeks) {
     repo: row.repo,
     minutes: fit(row.minutes),
     runs: fit(row.runs),
+    truncated: row.truncated === true,
     series: (Array.isArray(row.series) ? row.series : []).map((series) => ({ runnerType: runnerName(series.runnerType), minutes: fit(series.minutes) })),
   };
 }
 
 function mergeRefresh(previous, result, attemptedAt) {
-  if (!result.attemptedRepos.length) return { ...EMPTY, lastAttemptAt: attemptedAt };
+  if (!result.attemptedRepos.length) return { ...(previous || EMPTY), lastAttemptAt: attemptedAt };
   if (!result.failedRepos.length) return { ...result.data, lastAttemptAt: attemptedAt };
   if (!result.data.available) return { ...(previous || EMPTY), lastAttemptAt: attemptedAt };
   const failed = new Set(result.failedRepos);
@@ -212,7 +216,7 @@ function mergeRefresh(previous, result, attemptedAt) {
     .filter((row) => failed.has(row.repo))
     .map((row) => fitRowToWeeks(row, previous.weeks, result.data.weeks));
   const repos = [...result.data.repos, ...oldRows].sort((a, b) => a.repo.localeCompare(b.repo));
-  return { ...result.data, repos, lastAttemptAt: attemptedAt };
+  return { ...result.data, truncated: result.data.truncated || oldRows.some((row) => row.truncated), repos, lastAttemptAt: attemptedAt };
 }
 
 // Share one background refresh per data directory. The attempt time also limits retries after a failed request.

@@ -345,7 +345,7 @@ Set `agentMessages.retentionDays` to keep message text for 1 to 90 days. The def
 | `GET /api/agent-messages?project=SLUG&pair=KEY&q=TEXT&limit=N&before=ID` | Read newest-first agent messages. `project` is optional. Without it, read messages from all projects. Use `before` to read the next older page. The response includes each message's pair key. |
 | `GET /api/agent-pairs[?project=SLUG]` | Read the message count and last message time for each pair. `project` is optional. Without it, read pairs from all projects. |
 | `GET /api/agent-meta?project=SLUG&since=ISO&until=ISO&limit=N` | Read newest-first metadata rows. `project` is optional. Without it, read rows from all projects. A row holds sender, receiver, project, kind, character count, task ID, run ID, delivery status, `respondedAt`, and `responseMs`. A worker target holds its kind and model when known. It has no text. |
-| `GET /api/analytics` | Read the Analytics figures. The `actionsMinutes` field shows weekly Actions minutes for registered GitHub repositories. The service uses its GitHub token and refreshes these figures at most every 6 hours. It skips repositories that the token cannot read. The `agentCommunication` field counts messages by project, day, and kind for the last 7 local days. It includes nudges per task, response medians and p90 values per orchestrator and worker kind and model, and the reminder share. Failed deliveries add no traffic. |
+| `GET /api/analytics` | Read Analytics figures. `actionsMinutes` shows weekly Actions minutes for registered GitHub repositories. The figures are estimated from run times. `actionsMinutes.truncated` warns when older weeks may be missing. The service uses its GitHub token. It refreshes Actions minutes at most every 6 hours. It skips repositories that the token cannot read. `agentCommunication` counts messages by project, day, and kind for the last 7 local days. It counts nudges per task. It reports response medians and p90 values by orchestrator, worker kind, and model. It reports the reminder share. Failed deliveries add no traffic. |
 
 These routes use the dashboard login rule. They are read-only. They do not change or delete messages.
 
@@ -746,7 +746,7 @@ Do not edit this block. It comes from `public/setting-help.js`.
 
 | Setting | Key | What it does | Default | Unit | Range | Raise it | Lower it | Apply |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| GitHub Actions minutes | `analytics.actionsMinutes` | Lets the service read Actions minutes for registered GitHub repositories. | On | Switch | On or off | The service uses its GitHub token. It skips repositories that the token cannot read. | Turn it off to stop GitHub API calls. The Analytics page hides the card. | Select Save in the group. The change takes effect at once. |
+| GitHub Actions minutes | `analytics.actionsMinutes` | Lets the service read Actions run times for registered GitHub repositories. Minutes are estimated from run times. | On | Switch | On or off | The service uses its GitHub token. It skips repositories that the token cannot read. | Turn it off to stop GitHub API calls. The Analytics page hides the card. | Select Save in the group. The change takes effect at once. |
 
 #### Harness readiness (Advanced)
 

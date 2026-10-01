@@ -18,28 +18,26 @@ function reply(value, status = 0) {
   return { status, stdout: typeof value === 'string' ? value : JSON.stringify(value), stderr: '' };
 }
 
-test('collectActionsMinutes reads workflow runs and bills their runner minutes by ISO week', async () => {
+test('collectActionsMinutes estimates completed run times by ISO week', async () => {
   const calls = [];
   const run = async (args, options) => {
     calls.push({ args, options });
     if (args.at(-1).includes('/actions/runs?')) return reply({ workflow_runs: [
-      { id: 10, created_at: '2026-09-22T10:00:00Z', status: 'completed' },
-      { id: 11, created_at: '2026-10-01T10:00:00Z', status: 'completed' },
+      { id: 10, created_at: '2026-09-22T10:00:00Z', run_started_at: '2026-09-22T10:00:00Z', updated_at: '2026-09-22T10:02:00Z', runner_type: 'UBUNTU', status: 'completed' },
+      { id: 11, created_at: '2026-10-01T10:00:00Z', run_started_at: '2026-10-01T10:00:00Z', updated_at: '2026-10-01T10:01:00Z', runner_type: 'MACOS', status: 'completed' },
     ] });
-    if (args.at(-1).endsWith('/runs/10/timing')) return reply({ billable: { UBUNTU: { total_ms: 120000 } } });
-    if (args.at(-1).endsWith('/runs/11/timing')) return reply({ billable: { MACOS: { total_ms: 60000 } } });
     return reply({}, 1);
   };
   const result = await collectActionsMinutes({ repos: [{ slug: 'sample', repo: '/tmp/sample', remote: 'https://github.com/acme/sample.git' }], run, now: NOW });
 
   assert.equal(result.available, true);
+  assert.equal(result.estimated, true);
   assert.deepEqual(result.weeks, ['2026-W29', '2026-W30', '2026-W31', '2026-W32', '2026-W33', '2026-W34', '2026-W35', '2026-W36', '2026-W37', '2026-W38', '2026-W39', '2026-W40']);
   assert.deepEqual(result.repos[0].minutes, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 1]);
   assert.deepEqual(result.repos[0].runs, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1]);
   assert.deepEqual(result.repos[0].series.map((series) => series.runnerType), ['MACOS', 'UBUNTU']);
   assert.ok(calls.every((call) => call.options.timeout === 10000));
-  assert.ok(calls.some((call) => call.args.at(-1) === 'repos/acme/sample/actions/billing/usage'));
-  assert.ok(calls.some((call) => call.args.at(-1).includes('created=>=2026-07-13')));
+  assert.deepEqual(calls.map((call) => call.args.at(-1)), ['repos/acme/sample/actions/runs?per_page=100&page=1']);
   assert.doesNotMatch(JSON.stringify(result), /stderr|stdout|token|raw response/i);
 });
 
@@ -47,10 +45,8 @@ test('collectActionsMinutes keeps ISO week numbers correct across the year bound
   const result = await collectActionsMinutes({
     repos: [{ slug: 'sample', remote: 'https://github.com/acme/sample.git' }],
     run: async (args) => args.at(-1).includes('/actions/runs?')
-      ? reply({ workflow_runs: [{ id: 1, created_at: '2021-01-07T10:00:00Z', status: 'completed' }] })
-      : args.at(-1).endsWith('/timing')
-        ? reply({ run_duration_ms: 60000 })
-        : reply({}, 1),
+      ? reply({ workflow_runs: [{ id: 1, created_at: '2021-01-07T10:00:00Z', updated_at: '2021-01-07T10:01:00Z', status: 'completed' }] })
+      : reply({}, 1),
     now: Date.parse('2021-01-08T12:00:00.000Z'),
   });
   assert.deepEqual(result.weeks, ['2020-W43', '2020-W44', '2020-W45', '2020-W46', '2020-W47', '2020-W48', '2020-W49', '2020-W50', '2020-W51', '2020-W52', '2020-W53', '2021-W01']);
@@ -77,6 +73,8 @@ test('collectActionsMinutes estimates busy repositories from five workflow-run p
   });
   assert.equal(result.available, true);
   assert.equal(result.estimated, true);
+  assert.equal(result.truncated, true, 'a full fifth page warns that older runs may be missing');
+  assert.equal(result.repos[0].truncated, true);
   assert.deepEqual(result.weeks, ['2026-W29', '2026-W30', '2026-W31', '2026-W32', '2026-W33', '2026-W34', '2026-W35', '2026-W36', '2026-W37', '2026-W38', '2026-W39', '2026-W40']);
   assert.equal(result.repos[0].runs.at(-1), 500);
   assert.equal(result.repos[0].minutes.at(-1), 500, 'round each 30-second run up before summing');
@@ -86,22 +84,22 @@ test('collectActionsMinutes estimates busy repositories from five workflow-run p
 
 test('collectActionsMinutes stops after the first page older than the window', async () => {
   const calls = [];
-  const recent = { id: 1, status: 'completed', created_at: '2026-09-30T10:00:00Z', run_started_at: '2026-09-30T10:00:00Z', updated_at: '2026-09-30T10:01:00Z' };
-  const old = { id: 2, status: 'completed', created_at: '2026-07-01T10:00:00Z', run_started_at: '2026-07-01T10:00:00Z', updated_at: '2026-07-01T10:01:00Z' };
+  const recent = Array.from({ length: 100 }, (_, id) => ({ id, status: 'completed', created_at: '2026-09-30T10:00:00Z', run_started_at: '2026-09-30T10:00:00Z', updated_at: '2026-09-30T10:01:00Z' }));
+  const old = Array.from({ length: 100 }, (_, id) => ({ id: 100 + id, status: 'completed', created_at: '2026-07-01T10:00:00Z', run_started_at: '2026-07-01T10:00:00Z', updated_at: '2026-07-01T10:01:00Z' }));
   const result = await collectActionsMinutes({
     repos: [{ slug: 'sample', remote: 'https://github.com/acme/sample.git' }],
     run: async (args) => {
       const endpoint = args.at(-1);
       calls.push(endpoint);
       const page = Number(/[?&]page=(\d+)/.exec(endpoint)?.[1] || 1);
-      return reply({ workflow_runs: page === 1 ? [recent] : page === 2 ? [old] : [] });
+      return reply({ workflow_runs: page === 1 ? recent : page === 2 ? old : [] });
     },
     now: NOW,
   });
   assert.equal(result.available, true);
   assert.deepEqual(calls.map((endpoint) => Number(/[?&]page=(\d+)/.exec(endpoint)?.[1])), [1, 2]);
-  assert.equal(result.repos[0].runs.at(-1), 1);
-  assert.equal(result.repos[0].minutes.at(-1), 1);
+  assert.equal(result.repos[0].runs.at(-1), 100);
+  assert.equal(result.repos[0].minutes.at(-1), 100);
 });
 
 test('collectActionsMinutes skips one failing repository and hides unavailable access', async () => {
@@ -124,16 +122,17 @@ test('collectActionsMinutes skips one failing repository and hides unavailable a
   assert.deepEqual(unavailable, { available: false, weeks: [], repos: [], updatedAt: null });
 });
 
-test('collectActionsMinutes skips a repository when timing would need too many API calls', async () => {
+test('collectActionsMinutes keeps 26 runs and makes no timing calls', async () => {
   const calls = [];
   const run = async (args) => {
     calls.push(args.at(-1));
-    if (args.at(-1).includes('/actions/billing/usage')) return reply({});
-    if (args.at(-1).includes('/actions/runs?')) return reply({ workflow_runs: Array.from({ length: 26 }, (_, i) => ({ id: i + 1, status: 'completed', created_at: '2026-10-01T10:00:00Z' })) });
-    return reply({ billable: { UBUNTU: { total_ms: 60000 } } });
+    if (args.at(-1).includes('/actions/runs?')) return reply({ workflow_runs: Array.from({ length: 26 }, (_, i) => ({ id: i + 1, status: 'completed', created_at: '2026-10-01T10:00:00Z', run_started_at: '2026-10-01T10:00:00Z', updated_at: '2026-10-01T10:00:30Z' })) });
+    return reply({}, 1);
   };
   const result = await collectActionsMinutes({ repos: [{ slug: 'busy', remote: 'https://github.com/acme/busy.git' }], run, now: NOW });
-  assert.equal(result.available, false);
+  assert.equal(result.available, true);
+  assert.equal(result.repos[0].runs.at(-1), 26);
+  assert.equal(result.repos[0].minutes.at(-1), 26);
   assert.equal(calls.filter((endpoint) => endpoint.endsWith('/timing')).length, 0);
 });
 
@@ -190,11 +189,10 @@ test('refreshActionsMinutes keeps earlier weeks for a repository that fails whil
   let phase = 'initial';
   const run = async (args) => {
     const endpoint = args.at(-1);
-    if (endpoint.includes('/actions/billing/usage')) return reply({});
     if (endpoint.includes('/actions/runs?')) {
       if (phase === 'partial' && endpoint.includes('repos/acme/a/')) return { status: 1 };
       const duration = phase === 'initial' ? 60_000 : 180_000;
-      return reply({ workflow_runs: [{ id: 1, status: 'completed', created_at: '2026-09-30T10:00:00Z', run_started_at: '2026-09-30T10:00:00Z', updated_at: '2026-09-30T10:01:00Z', run_duration_ms: duration }] });
+      return reply({ workflow_runs: [{ id: 1, status: 'completed', created_at: '2026-09-30T10:00:00Z', run_started_at: '2026-09-30T10:00:00Z', updated_at: new Date(Date.parse('2026-09-30T10:00:00Z') + duration).toISOString() }] });
     }
     return reply({}, 1);
   };
@@ -211,9 +209,8 @@ test('refreshActionsMinutes only updates lastAttemptAt when every repository fai
   const repos = [{ slug: 'sample', repo: '/tmp/sample', remote: 'https://github.com/acme/sample.git' }];
   let fail = false;
   const run = async (args) => {
-    if (args.at(-1).includes('/actions/billing/usage')) return reply({});
     if (args.at(-1).includes('/actions/runs?')) return fail ? { status: 1 } : reply({ workflow_runs: [
-      { id: 1, status: 'completed', created_at: '2026-09-30T10:00:00Z', run_started_at: '2026-09-30T10:00:00Z', updated_at: '2026-09-30T10:01:00Z', run_duration_ms: 60_000 },
+      { id: 1, status: 'completed', created_at: '2026-09-30T10:00:00Z', run_started_at: '2026-09-30T10:00:00Z', updated_at: '2026-09-30T10:01:00Z' },
     ] });
     return reply({}, 1);
   };
@@ -225,6 +222,24 @@ test('refreshActionsMinutes only updates lastAttemptAt when every repository fai
   const after = JSON.parse(fs.readFileSync(file, 'utf8'));
   const { lastAttemptAt: _beforeAttempt, ...beforeData } = before;
   const { lastAttemptAt, ...afterData } = after;
+  assert.deepEqual(afterData, beforeData);
+  assert.equal(lastAttemptAt, new Date(NOW + 6 * 60 * 60 * 1000).toISOString());
+});
+
+test('refreshActionsMinutes keeps old data when no current repository remotes are registered', async (t) => {
+  const dataDir = temp(t);
+  const repos = [{ slug: 'sample', remote: 'https://github.com/acme/sample.git' }];
+  const run = async () => reply({ workflow_runs: [
+    { id: 1, status: 'completed', created_at: '2026-09-30T10:00:00Z', run_started_at: '2026-09-30T10:00:00Z', updated_at: '2026-09-30T10:02:00Z' },
+  ] });
+  const before = await refreshActionsMinutes({ dataDir, repos, run, now: NOW });
+  const file = path.join(dataDir, 'actions-minutes.json');
+  const beforeState = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const after = await refreshActionsMinutes({ dataDir, repos: [], run: async () => { throw new Error('no remote should make no request'); }, now: NOW + 6 * 60 * 60 * 1000 });
+  const afterState = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const { lastAttemptAt: _beforeAttempt, ...beforeData } = beforeState;
+  const { lastAttemptAt, ...afterData } = afterState;
+  assert.deepEqual(after, before);
   assert.deepEqual(afterData, beforeData);
   assert.equal(lastAttemptAt, new Date(NOW + 6 * 60 * 60 * 1000).toISOString());
 });

@@ -685,7 +685,7 @@ export const SETTING_HELP = Object.fromEntries([
   }),
 
   S('analytics', 'analytics.actionsMinutes', 'GitHub Actions minutes', {
-    what: 'Lets the service read Actions minutes for registered GitHub repositories.',
+    what: 'Lets the service read Actions run times for registered GitHub repositories. Minutes are estimated from run times.',
     default: 'On', unit: 'Switch', range: 'On or off',
     raise: 'The service uses its GitHub token. It skips repositories that the token cannot read.',
     lower: 'Turn it off to stop GitHub API calls. The Analytics page hides the card.',

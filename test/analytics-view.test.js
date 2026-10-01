@@ -68,15 +68,26 @@ test('Actions minutes uses weekly stacked bars and stays hidden when data is una
   assert.match(svg, /class="viz-fill s1"/);
   assert.doesNotMatch(svg, /NaN|Infinity/);
   assert.equal(communicationView.actionsMinutesDetailsHtml({ weeks: [], repos: [] }), '<div class="calm-state">No GitHub Actions runs are recorded in the last 12 weeks.</div>');
+  assert.match(communicationView.actionsMinutesScope({ truncated: true }), /Minutes are estimated from run times/);
+  assert.match(communicationView.actionsMinutesScope({ truncated: true }), /500-run limit.*older weeks may be incomplete/);
+  assert.doesNotMatch(communicationView.actionsMinutesScope({ truncated: false }), /500-run limit/);
   assert.match(app, /analyticsData\?\.actionsMinutes/);
   assert.match(app, /function actionsMinutesBlock\(\)/);
   assert.match(app, /if \(!data\?\.available\) return ''/);
   assert.match(app, /title: 'GitHub Actions minutes'/);
+  const actionsBlockStart = app.indexOf('function actionsMinutesBlock()');
+  const actionsBlock = app.slice(actionsBlockStart, app.indexOf('\n}\n', actionsBlockStart));
+  assert.match(actionsBlock, /sub: actionsMinutesScope\(data\)/);
   assert.match(app, /analytics\.actionsMinutes/);
   assert.match(app, /The service uses its GitHub token/);
   assert.match(guide, /### GitHub Actions minutes/);
+  assert.match(guide, /estimated from run times/);
   assert.match(guide, /token that can read it|token cannot read it/);
-  assert.match(cli, /weekly Actions minutes.*service uses its GitHub token/i);
+  const analyticsRoute = cli.match(/\| `GET \/api\/analytics` \|([^|]+)\|/)[1];
+  const sentences = analyticsRoute.match(/[^.]+\./g).map((sentence) => sentence.trim());
+  assert.ok(sentences.every((sentence) => sentence.split(/\s+/).length <= 25), 'API help sentences are at most 25 words');
+  assert.match(analyticsRoute, /estimated from run times/);
+  assert.match(analyticsRoute, /truncated/);
 });
 
 const spend = {
