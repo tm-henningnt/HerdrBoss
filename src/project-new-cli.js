@@ -99,7 +99,7 @@ export function parseProjectCheckArgs(args) {
     else positional.push(token);
   }
   if (positional.length !== 1) throw fail('Give exactly one slug.');
-  if (fix !== undefined && !FIXABLE_STEPS.includes(fix)) throw new Error(`--fix needs one of: ${FIXABLE_STEPS.join(', ')}.`);
+  if (fix !== undefined && fix !== 'ci' && !FIXABLE_STEPS.includes(fix)) throw new Error(`--fix needs one of: ${[...FIXABLE_STEPS, 'ci'].join(', ')}.`);
   if (start && fix !== 'workspace') throw fail('--start is only for --fix workspace.');
   return { slug: positional[0], fix, start };
 }
@@ -110,15 +110,19 @@ function checkCommand(args, { herdr, dataDir, log, hooks, env, flowOptions }) {
   const { slug, fix, start } = parseProjectCheckArgs(args);
   let code = 0;
   if (fix) {
-    // A fix changes files and can spend model quota or ask the Owner. The read-only check needs no caller check.
-    verifyProjectCaller(env, herdr);
-    const { decision: _decision, ...allowedFlow } = flowOptions; // eslint-disable-line no-unused-vars
-    const fixed = runProjectStep(fix, { slug, start, dataDir, herdr, hooks, env, ...allowedFlow });
-    log(`Fix ${fix} for ${slug}`);
-    log(stepLine(fixed.step));
-    for (const line of fixed.step.lines ?? []) log(`    ${line}`);
-    if (!fixed.ok) code = 1;
-    else if (fixed.waiting) code = EXIT_WAITING;
+    if (fix === 'ci') {
+      log('Use the kit workflow template to update the project workflows by hand.');
+    } else {
+      // A fix changes files and can spend model quota or ask the Owner. The read-only check needs no caller check.
+      verifyProjectCaller(env, herdr);
+      const { decision: _decision, ...allowedFlow } = flowOptions; // eslint-disable-line no-unused-vars
+      const fixed = runProjectStep(fix, { slug, start, dataDir, herdr, hooks, env, ...allowedFlow });
+      log(`Fix ${fix} for ${slug}`);
+      log(stepLine(fixed.step));
+      for (const line of fixed.step.lines ?? []) log(`    ${line}`);
+      if (!fixed.ok) code = 1;
+      else if (fixed.waiting) code = EXIT_WAITING;
+    }
   }
   const check = checkProject(slug, { dataDir, herdr, home: flowOptions.home });
   for (const line of formatCheck(check)) log(line);

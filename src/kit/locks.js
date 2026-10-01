@@ -11,6 +11,8 @@ import { SWAP_FORCE_ENV, swapGuardFor } from './swap-guard.js';
 import { createHerdrRunner, verifyCallerPane } from './workers.js';
 import { DEFAULT_SUITE_UNTESTED, hookFileHash, hookRunsOnlySuites, reusablePushPass, writePushHookCommands } from './suite-passes.js';
 import { chooseLockSlot, classifyLockLane, isLegacyLockEntry, lockAdmissionCapacity, machineGuardReason, readLockDurationPrediction } from './lock-lanes.js';
+import { workflowPushesBranch } from '../ci-lint.js';
+import { readWorkflowFiles } from '../ci-workflows.js';
 
 const LOCK_NAME = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/;
 const COMMAND = (name) => `herdr-boss lock acquire ${name}`;
@@ -28,11 +30,106 @@ export const LOCK_LEDGER_FILE = 'lock-ledger.jsonl';
 const LEDGER_EVENTS = new Set(['acquire', 'release', 'busy', 'timeout']);
 const LEDGER_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const scopeFor = (name) => (MACHINE_LOCKS.has(name) ? 'machine' : 'repository');
+const CI_DOCS_REMINDER = 'ci: this push changes only docs and the CI runs on a main push; use [skip ci] or batch the push.';
 
 function validateName(name) {
   if (typeof name !== 'string' || !LOCK_NAME.test(name)) {
     throw new Error('Lock name must be one path-safe token of 1 to 64 letters, numbers, dots, underscores, or hyphens.');
   }
+}
+
+function readGit(root, args) {
+  const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  return !result.error && result.status === 0 ? result.stdout.trim() : null;
+}
+
+function branchName(ref) {
+  if (typeof ref !== 'string' || !ref) return null;
+  const value = ref.replace(/^\+/, '').replace(/^refs\/heads\//, '');
+  if (value === 'HEAD') return value;
+  return value.includes('*') || value.startsWith('-') ? null : value;
+}
+
+function pushArguments(args) {
+  const values = [];
+  const optionsWithValue = new Set(['-o', '--push-option', '--receive-pack', '--exec', '--repo']);
+  let options = true;
+  for (let index = 0; index < args.length; index += 1) {
+    const value = args[index];
+    if (options && value === '--') { options = false; continue; }
+    if (options && value.startsWith('-')) {
+      if (optionsWithValue.has(value)) index += 1;
+      continue;
+    }
+    values.push(value);
+  }
+  return values;
+}
+
+function pushChanges(args, root) {
+  if (args.some((value) => ['--all', '--mirror', '--tags', '--delete', '-d', '--prune'].includes(value))) return [];
+  const values = pushArguments(args);
+  const remote = values[0] ?? null;
+  const refspecs = values.slice(1);
+  let currentBranch = null;
+  let upstream = null;
+  const plans = [];
+  if (refspecs.length) {
+    for (const spec of refspecs) {
+      if (spec.startsWith(':')) continue;
+      const colon = spec.lastIndexOf(':');
+      const source = colon < 0 ? spec : spec.slice(0, colon);
+      const destination = colon < 0 ? source : spec.slice(colon + 1);
+      const target = branchName(destination || source);
+      if (!target || !['main', 'master'].includes(target)) continue;
+      let sourceRef = source || 'HEAD';
+      if (sourceRef !== 'HEAD' && !sourceRef.startsWith('refs/')) sourceRef = `refs/heads/${sourceRef.replace(/^\+/, '')}`;
+      plans.push({ branch: target, sourceRef });
+    }
+  } else {
+    currentBranch = readGit(root, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
+    if (!currentBranch) return [];
+    if (!remote) upstream = readGit(root, ['rev-parse', '--symbolic-full-name', '--verify', '@{u}']);
+    const upstreamMatch = upstream && /^refs\/remotes\/[^/]+\/(main|master)$/u.exec(upstream);
+    const upstreamBranch = upstreamMatch?.[1] ?? null;
+    const target = upstreamBranch || currentBranch;
+    if (target && ['main', 'master'].includes(target)) plans.push({ branch: target, sourceRef: 'HEAD' });
+  }
+  if (!plans.length) return [];
+
+  return plans.flatMap((plan) => {
+    let trackingRef = null;
+    if (remote && !/[:/]/u.test(remote)) {
+      const candidate = `refs/remotes/${remote}/${plan.branch}`;
+      if (readGit(root, ['rev-parse', '--verify', '--quiet', candidate])) trackingRef = candidate;
+    }
+    const upstreamMatch = upstream && /^refs\/remotes\/([^/]+)\/(main|master)$/u.exec(upstream);
+    if (!trackingRef && upstreamMatch?.[2] === plan.branch) {
+      const upstreamRemote = upstreamMatch[1];
+      if (!remote || remote === upstreamRemote) trackingRef = upstream;
+    }
+    if (!trackingRef) return [];
+    const result = spawnSync('git', ['diff', '--name-only', '-z', `${trackingRef}..${plan.sourceRef}`], {
+      cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    if (result.error || result.status !== 0) return [];
+    return [{ branch: plan.branch, files: result.stdout.split('\0').filter(Boolean) }];
+  });
+}
+
+function docsPath(file) {
+  return file.endsWith('.md') || file === 'LICENSE' || file.startsWith('docs/') || file.startsWith('.orchestration/');
+}
+
+function remindForDocsPush(args, root, output) {
+  try {
+    const changedSets = pushChanges(args, root).filter(({ branch }) => ['main', 'master'].includes(branch));
+    if (!changedSets.length) return;
+    const workflows = readWorkflowFiles(root);
+    if (changedSets.some(({ branch, files }) => files.length && files.every(docsPath) && workflowPushesBranch(workflows, branch))) {
+      output(CI_DOCS_REMINDER);
+    }
+  } catch { /* A failed local read never stops or changes a push. */ }
 }
 
 function gitCommonDir(root) {
@@ -1229,6 +1326,7 @@ export function pushWithLock(args, {
   const caller = callerFor(env, herdr);
   const hook = findPrePushHook(config.root);
   const push = (reuseSuitePass = false, lockToken = null, suitesFile = null) => {
+    remindForDocsPush(args, config.root, output);
     const childEnv = { ...process.env, ...env };
     if (reuseSuitePass) childEnv.HERDR_BOSS_SUITE_REUSE = '1';
     if (lockToken) childEnv.HERDR_BOSS_LOCK_TOKEN = lockToken;
