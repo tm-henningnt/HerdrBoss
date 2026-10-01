@@ -509,3 +509,158 @@ test('the proposed verdict is fixed at the first render of a version, so the sel
   assert.match(packPageHtml(later, { ...ui, verdict: 'deny' }, helpers()), /value="deny" checked/);
   assert.equal(pinProposedVerdict({}, fullPack({ derived: { ...fullPack().derived, proposedVerdict: undefined } })).proposed, 'accept-with-changes');
 });
+
+// ---------- Legacy HTML page frame ----------
+
+const { parseFrameMessage, frameOpenUrl, rawPageUrl, pinsInView, frameHeight, frameView } = review;
+const frameWindow = { name: 'frame' };
+const fromFrame = (data, source = frameWindow) => parseFrameMessage({ source, data }, frameWindow);
+const READY = { hb: 1, type: 'ready', title: 'Invented shop', height: 1800, anchors: [{ id: 'top', kind: 'heading', text: 'Shop', top: 0 }, { id: 'hb-1', kind: 'image', text: 'One', top: 0.4 }] };
+
+test('the frame message check accepts each known message of the frame protocol', () => {
+  assert.deepEqual(fromFrame(READY), { type: 'ready', title: 'Invented shop', height: 1800, anchors: READY.anchors });
+  assert.deepEqual(fromFrame({ hb: 1, type: 'pick', anchor: 'top', x: 0.25, y: 0.5, text: 'Shop' }), { type: 'pick', anchor: 'top', x: 0.25, y: 0.5, text: 'Shop' });
+  assert.deepEqual(fromFrame({ hb: 1, type: 'pick', anchor: null, x: 0, y: 1, text: '' }), { type: 'pick', anchor: null, x: 0, y: 1, text: '' });
+  assert.deepEqual(fromFrame({ hb: 1, type: 'scroll', top: 0.5 }), { type: 'scroll', top: 0.5 });
+  assert.deepEqual(fromFrame({ hb: 1, type: 'open', url: 'https://example.test/shop' }), { type: 'open', url: 'https://example.test/shop' });
+});
+
+test('the frame message check refuses a message from another source, without hb 1, or of an unknown type', () => {
+  assert.equal(fromFrame(READY, { name: 'other' }), null, 'wrong source');
+  assert.equal(fromFrame(READY, null), null, 'no source');
+  assert.equal(parseFrameMessage({ source: null, data: READY }, null), null, 'no frame window');
+  assert.equal(parseFrameMessage(null, frameWindow), null);
+  assert.equal(fromFrame({ ...READY, hb: 2 }), null, 'wrong hb');
+  assert.equal(fromFrame({ ...READY, hb: '1' }), null, 'hb as text');
+  const { hb, ...noHb } = READY;
+  assert.equal(fromFrame(noHb), null, 'no hb');
+  for (const type of ['pins', 'goto', 'place', 'PAGE', '', undefined, 5, '__proto__']) assert.equal(fromFrame({ hb: 1, type }), null, String(type));
+  for (const data of [null, undefined, 'ready', 7, [READY], true]) assert.equal(fromFrame(data), null, String(data));
+});
+
+test('the frame message check refuses a string of more than 200 characters', () => {
+  const long = 'x'.repeat(201);
+  const ok = 'x'.repeat(200);
+  assert.ok(fromFrame({ ...READY, title: ok }));
+  assert.equal(fromFrame({ ...READY, title: long }), null, 'title');
+  assert.equal(fromFrame({ ...READY, anchors: [{ id: long, kind: 'heading', text: 'a', top: 0 }] }), null, 'anchor id');
+  assert.equal(fromFrame({ ...READY, anchors: [{ id: 'a', kind: 'heading', text: long, top: 0 }] }), null, 'anchor text');
+  assert.equal(fromFrame({ hb: 1, type: 'pick', anchor: long, x: 0, y: 0, text: '' }), null, 'pick anchor');
+  assert.equal(fromFrame({ hb: 1, type: 'pick', anchor: null, x: 0, y: 0, text: long }), null, 'pick text');
+  assert.equal(fromFrame({ hb: 1, type: 'open', url: `https://example.test/${long}` }), null, 'open url');
+});
+
+test('the frame message check refuses more than 500 anchors and a bad shape', () => {
+  const anchor = (index) => ({ id: `a${index}`, kind: 'heading', text: 'h', top: 0 });
+  assert.ok(fromFrame({ ...READY, anchors: Array.from({ length: 500 }, (_, index) => anchor(index)) }), '500 anchors pass');
+  assert.equal(fromFrame({ ...READY, anchors: Array.from({ length: 501 }, (_, index) => anchor(index)) }), null, '501 anchors');
+  assert.equal(fromFrame({ ...READY, anchors: 'none' }), null);
+  assert.equal(fromFrame({ ...READY, anchors: [null] }), null);
+  assert.equal(fromFrame({ ...READY, anchors: [{ id: 'a', kind: 'link', text: 'h', top: 0 }] }), null, 'unknown kind');
+  assert.equal(fromFrame({ ...READY, anchors: [{ id: '', kind: 'heading', text: 'h', top: 0 }] }), null, 'empty id');
+  assert.equal(fromFrame({ ...READY, anchors: [{ id: 'a', kind: 'heading', text: 'h', top: 2 }] }), null, 'top above 1');
+  assert.equal(fromFrame({ ...READY, anchors: [{ id: 'a', kind: 'heading', text: 7, top: 0 }] }), null, 'text as number');
+  assert.equal(fromFrame({ ...READY, height: -1 }), null);
+  assert.equal(fromFrame({ ...READY, height: NaN }), null);
+  assert.equal(fromFrame({ ...READY, height: '100' }), null);
+  assert.equal(fromFrame({ ...READY, title: 5 }), null);
+  assert.equal(fromFrame({ hb: 1, type: 'pick', anchor: null, x: 1.5, y: 0, text: '' }), null, 'x above 1');
+  assert.equal(fromFrame({ hb: 1, type: 'pick', anchor: null, x: 0, y: -0.1, text: '' }), null, 'y below 0');
+  assert.equal(fromFrame({ hb: 1, type: 'pick', anchor: null, x: 0, y: 0 }), null, 'no text');
+  assert.equal(fromFrame({ hb: 1, type: 'scroll', top: 'end' }), null);
+  assert.equal(fromFrame({ hb: 1, type: 'open', url: '' }), null);
+  assert.equal(fromFrame({ hb: 1, type: 'open', url: 5 }), null);
+});
+
+test('the frame message check returns only the known fields', () => {
+  const message = fromFrame({ ...READY, evil: '<img src=x onerror=alert(1)>', anchors: [{ ...READY.anchors[0], html: '<b>' }] });
+  assert.deepEqual(Object.keys(message).sort(), ['anchors', 'height', 'title', 'type']);
+  assert.deepEqual(Object.keys(message.anchors[0]).sort(), ['id', 'kind', 'text', 'top']);
+});
+
+test('a link that the page asks to open shows only for an http or https URL', () => {
+  assert.equal(frameOpenUrl('https://example.test/a'), 'https://example.test/a');
+  assert.equal(frameOpenUrl('http://127.0.0.1:3000/'), 'http://127.0.0.1:3000/');
+  for (const url of ['javascript:alert(1)', 'JaVaScRiPt:alert(1)', 'data:text/html,x', 'mailto:a@example.test', '/local/path', '#hash', '//evil.test', '', 'https://', 'jav\tascript:alert(1)']) assert.equal(frameOpenUrl(url), null, url);
+});
+
+const PAGE_PACK = {
+  slug: 'shop', pack: 'legacy', version: 1, state: 'open',
+  manifest: { sections: [{ id: 'pages', title: 'Pages', items: [{ id: 'home', title: 'Home page', type: 'page', src: 'site/my page.html', ask: ['accept', 'deny', 'note'] }] }] },
+  derived: { sections: [], counts: { items: 1, open: 1 } },
+  items: [{ id: 'home', title: 'Home page', type: 'page', ask: ['accept', 'deny', 'note'], section: 'pages', state: 'open', answer: { pins: [{ n: 1, x: 0.5, y: 0.1 }, { n: 2, x: 0.5, y: 0.9 }] } }],
+};
+
+test('the page item renders a sandboxed frame with the exact attributes and no other sandbox flag', () => {
+  const out = packPageHtml(PAGE_PACK, { item: 'home', viewer: { frame: { token: 'a'.repeat(64), status: 'ready', height: 3000, scrollTop: 0, title: 'Invented shop', anchors: [{ id: 'top', kind: 'heading', text: '<b>Shop</b>', top: 0 }] } } }, helpers());
+  const tag = /<iframe[^>]*>/.exec(out)[0];
+  assert.match(tag, / sandbox="allow-scripts"/);
+  assert.match(tag, / referrerpolicy="no-referrer"/);
+  assert.match(tag, / loading="lazy"/);
+  assert.match(tag, / allow=""/);
+  assert.ok(!/allow-same-origin|allow-forms|allow-popups|allow-top-navigation|allow-modals|allow-downloads/.test(out));
+  assert.ok(tag.includes(`data-src="/review-raw/${'a'.repeat(64)}/site/my%20page.html"`), 'the address has the token and the encoded path');
+  assert.ok(!/ src="/.test(tag), 'page code sets src, so a render never reloads the page');
+  assert.ok(!out.includes('no viewer for page'), 'the fallback line is gone');
+  assert.ok(out.includes('Page outline'));
+  assert.ok(out.includes('&lt;b&gt;Shop&lt;/b&gt;') && !out.includes('<b>Shop</b>'), 'an anchor text is escaped');
+  assert.ok(out.includes('Add pin'));
+  assert.ok(out.includes('In view: pin 1'), 'the pins in view');
+  assert.ok(!out.includes('pin 2</'), 'a pin out of view is not listed');
+});
+
+test('the page item shows loading, an error with Try again, and a live link with its host name', () => {
+  const view = (frame) => packPageHtml(PAGE_PACK, { item: 'home', viewer: { frame } }, helpers());
+  const loading = view({ status: 'loading' });
+  assert.ok(loading.includes('Loading the page.'));
+  assert.ok(!loading.includes('<iframe class="rv-frame-el" data-key="rv-frame-el:home" data-rv-frame data-src="/'), 'no address without a token');
+  const failed = view({ status: 'error', error: 'The page did not answer.' });
+  assert.ok(failed.includes('The page did not answer.') && failed.includes('data-rv-frame-renew'));
+  const link = view({ token: 'b'.repeat(64), status: 'ready', height: 400, openUrl: 'https://shop.example.test/cart?a=1&b=2' });
+  assert.ok(link.includes('Open live link') && link.includes('<b>shop.example.test</b>'));
+  assert.ok(link.includes('rel="noopener noreferrer"') && link.includes('target="_blank"'));
+  assert.ok(link.includes('href="https://shop.example.test/cart?a=1&amp;b=2"'));
+  const evil = view({ token: 'b'.repeat(64), status: 'ready', height: 400, openUrl: 'javascript:alert(1)' });
+  assert.ok(!evil.includes('Open live link') && !evil.includes('javascript:'));
+});
+
+test('a closed pack shows the frame without the pin tool', () => {
+  const out = packPageHtml({ ...PAGE_PACK, state: 'submitted' }, { item: 'home', viewer: { frame: { token: 'c'.repeat(64), status: 'ready', height: 400 } } }, helpers());
+  assert.ok(out.includes('<iframe'));
+  assert.ok(!out.includes('Add pin'));
+});
+
+test('the frame helpers compute the address, the height, and the pins in view', () => {
+  assert.equal(rawPageUrl('t', 'a b/c#d.html'), '/review-raw/t/a%20b/c%23d.html');
+  assert.equal(frameHeight({ height: 100 }), 240);
+  assert.equal(frameHeight({ height: 400 }), 400);
+  assert.equal(frameHeight({ height: 5000 }), 720);
+  assert.equal(frameHeight({}), 480);
+  assert.equal(frameView({ height: 1440 }), 0.5);
+  assert.equal(frameView({ height: 300 }), 1, 'a page that fits shows whole');
+  assert.equal(frameView({}), 1);
+  const pins = [{ n: 1, y: 0.05 }, { n: 2, y: 0.5 }, { n: 3, y: 0.95 }];
+  assert.deepEqual(pinsInView(pins, 0, 0.3), [1]);
+  assert.deepEqual(pinsInView(pins, 0.4, 0.3), [2]);
+  assert.deepEqual(pinsInView(pins, 0, 1), [1, 2, 3]);
+  assert.deepEqual(pinsInView(undefined, 0, 1), []);
+});
+
+test('the dashboard wires the frame through the checked message path only', () => {
+  assert.match(app, /window\.addEventListener\('message'/);
+  assert.match(app, /parseFrameMessage\(event, el\?\.contentWindow\)/);
+  assert.ok(!/allow-same-origin/.test(app + fs.readFileSync(new URL('../public/review.js', import.meta.url), 'utf8')));
+});
+
+test('a pick sets an anchor only from the last ready message and cuts or drops the text', () => {
+  const { pickPinFields, looksSecret } = review;
+  const anchors = [{ id: 'top' }, { id: 'hb-1' }];
+  assert.deepEqual(pickPinFields({ anchor: 'top', text: 'Shop' }, anchors), { anchor: 'top', text: 'Shop' });
+  assert.deepEqual(pickPinFields({ anchor: 'forged', text: '' }, anchors), {}, 'an unknown anchor');
+  assert.deepEqual(pickPinFields({ anchor: 'top', text: 'x' }, undefined), { text: 'x' }, 'no ready message');
+  assert.equal(pickPinFields({ anchor: null, text: 'y'.repeat(300) }, anchors).text.length, 200);
+  for (const text of ['Bearer abc123', 'token: abc', 'sk-abcdef', 'password = "x"']) {
+    assert.ok(looksSecret(text), text);
+    assert.deepEqual(pickPinFields({ anchor: null, text }, anchors), {}, text);
+  }
+});

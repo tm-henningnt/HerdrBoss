@@ -4,7 +4,8 @@
 // Every value from the server goes through esc(). A URL part goes through encodeURIComponent() and then esc().
 // The item route shows the item viewer of public/review-viewer.js. It takes ui.viewer (the view state of the item)
 // and the helper text(url), which gives a loaded text file of the pack.
-import { itemViewerHtml, answerBarHtml, viewerBarHtml } from './review-viewer.js';
+import { itemViewerHtml, answerBarHtml, viewerBarHtml, itemSpec, viewerIcon } from './review-viewer.js';
+import { safeUrl } from './markdown.js';
 import { syncStatusHtml, packStatusHtml, submitLock, rowSyncText } from './review-sync.js';
 
 const SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -332,7 +333,136 @@ function itemPanelHtml(pack, ui, h) {
     const back = `${reviewUrl(pack.slug, pack.pack)}#item=${encodeURIComponent(ui.item)}`;
     return `<section class="review-item-page"><p>This item is not in the pack.</p><a class="review-button" href="${esc(back)}">Back to the sections</a></section>`;
   }
-  return itemViewerHtml(pack, item, ui.viewer || {}, h);
+  const html = itemViewerHtml(pack, item, ui.viewer || {}, h);
+  return item.type === 'page' ? withPageFrame(html, pack, item, ui.viewer || {}, h) : html;
+}
+
+// ---------- Legacy HTML pages ----------
+// A `page` item shows its HTML in a sandboxed frame. The viewer of public/review-viewer.js has no page type, so it writes one
+// fallback line for it. withPageFrame() puts the frame in the place of that line. The page HTML and every message that the
+// page sends are untrusted: parseFrameMessage() checks each message, and every value from the page goes through esc().
+// See docs/ideas/review-packs.md, sections Legacy HTML packs and The frame protocol.
+
+export const FRAME_STRING_MAX = 200;
+export const FRAME_ANCHORS_MAX = 500;
+export const FRAME_HEIGHT_MAX = 10_000_000;
+const FRAME_TYPES = new Set(['ready', 'pick', 'scroll', 'open']);
+const PAGE_FALLBACK = '<p class="rv-fallback">Herdr Boss has no viewer for page. It shows the text.</p>';
+const isString = (value) => typeof value === 'string' && value.length <= FRAME_STRING_MAX;
+const isFraction = (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1;
+
+// The checked message of a frame event, or null. The message must come from the frame window, have hb 1 and a known type,
+// and have the shape of its type with each string at most 200 characters. The result holds only the known fields.
+export function parseFrameMessage(event, frameWindow) {
+  if (!event || !frameWindow || event.source !== frameWindow) return null;
+  const data = event.data;
+  if (!data || typeof data !== 'object' || Array.isArray(data) || data.hb !== 1 || !FRAME_TYPES.has(data.type)) return null;
+  switch (data.type) {
+    case 'ready': {
+      if (!isString(data.title) || typeof data.height !== 'number' || !Number.isFinite(data.height) || data.height < 0 || data.height > FRAME_HEIGHT_MAX) return null;
+      if (!Array.isArray(data.anchors) || data.anchors.length > FRAME_ANCHORS_MAX) return null;
+      const anchors = [];
+      for (const anchor of data.anchors) {
+        if (!anchor || typeof anchor !== 'object' || !isString(anchor.id) || !anchor.id || !isString(anchor.text)
+          || !['heading', 'image'].includes(anchor.kind) || !isFraction(anchor.top)) return null;
+        anchors.push({ id: anchor.id, kind: anchor.kind, text: anchor.text, top: anchor.top });
+      }
+      return { type: 'ready', title: data.title, height: data.height, anchors };
+    }
+    case 'pick':
+      if (!(data.anchor === null || (isString(data.anchor) && data.anchor)) || !isFraction(data.x) || !isFraction(data.y) || !isString(data.text)) return null;
+      return { type: 'pick', anchor: data.anchor, x: data.x, y: data.y, text: data.text };
+    case 'scroll':
+      return isFraction(data.top) ? { type: 'scroll', top: data.top } : null;
+    case 'open':
+      return isString(data.url) && data.url ? { type: 'open', url: data.url } : null;
+    default: return null;
+  }
+}
+
+// The same patterns as src/redact.js. The server refuses a pin text that matches; the viewer drops such text first.
+const SECRET_PATTERNS = [
+  /\bBearer\s+[^\s"']+/i,
+  /\b(?:sk-[a-zA-Z0-9_-]{3,}|gh[pousr]_[a-zA-Z0-9_]{8,}|github_pat_[a-zA-Z0-9_]{8,}|AIza[a-zA-Z0-9_-]{12,}|xox[baprs]-[a-zA-Z0-9-]{8,})\b/,
+  /\b(?:[a-z][a-z0-9]*[_-])*(?:api[_-]?key|key|access[_-]?token|auth[_-]?token|token|secret|password|passwd|pwd)"?\s*[:=]\s*\S/i,
+];
+export const looksSecret = (text) => SECRET_PATTERNS.some((pattern) => pattern.test(String(text)));
+
+// The pin fields that a `pick` message may set. The anchor must be one from the last `ready` message, so a page script
+// cannot store an arbitrary string. The text is cut to 200 characters and dropped when it looks like a secret.
+export function pickPinFields(message, anchors) {
+  const fields = {};
+  if (message?.anchor && (anchors || []).some((anchor) => anchor.id === message.anchor)) fields.anchor = message.anchor;
+  const text = String(message?.text ?? '').slice(0, FRAME_STRING_MAX);
+  if (text && !looksSecret(text)) fields.text = text;
+  return fields;
+}
+
+// The URL of a link that the page asked to open, or null. Only http and https pass safeUrl() here.
+export function frameOpenUrl(url) {
+  const safe = safeUrl(String(url ?? ''));
+  if (!safe || !/^https?:\/\//i.test(safe)) return null;
+  try { return new URL(safe).host ? safe : null; } catch { return null; }
+}
+
+// The path of the page file in the raw URL. Each part is encoded.
+export function rawPageUrl(token, src) {
+  return `/review-raw/${encodeURIComponent(token)}/${String(src).split('/').map((part) => encodeURIComponent(part)).join('/')}`;
+}
+
+// The numbers of the pins in view: the pins whose y lies in the visible part of the page.
+// `top` is the scroll position and `view` the visible height, both as fractions of the page height.
+export function pinsInView(pins, top, view) {
+  const end = top + (view > 0 ? view : 1);
+  return (pins || []).filter((pin) => pin.y >= top - 0.0005 && pin.y <= end + 0.0005).map((pin) => pin.n);
+}
+
+// The shown height of the frame in px: the page height between 240 and 720. The frame scrolls inside when the page is taller.
+export function frameHeight(frame) {
+  return Math.round(Math.min(720, Math.max(240, Number.isFinite(frame?.height) ? frame.height : 480)));
+}
+
+// The visible part of the page as a fraction of the page height.
+export function frameView(frame) {
+  return frame?.height > 0 ? Math.min(1, frameHeight(frame) / frame.height) : 1;
+}
+
+// ui.frame: token, status ('loading', 'ready', or 'error'), error, title, height, anchors, scrollTop, openUrl.
+function pageFrameHtml(pack, item, ui, h) {
+  const { esc } = h;
+  const spec = itemSpec(pack, item.id);
+  const frame = ui.frame || {};
+  const canPin = (item.ask || []).includes('note') && pack.state === 'open';
+  const src = frame.token && typeof spec.src === 'string' ? rawPageUrl(frame.token, spec.src) : '';
+  const height = frameHeight(frame);
+  const pins = item.answer?.pins || [];
+  const visible = frame.status === 'ready' ? pinsInView(pins, frame.scrollTop || 0, frameView(frame)) : [];
+  const anchors = frame.anchors || [];
+  const pin = canPin
+    ? `<button type="button" class="rv-tool rv-tool-pin" data-rv-place aria-pressed="${ui.placing ? 'true' : 'false'}">${viewerIcon('pin')}<span>${ui.placing ? 'Tap the page' : 'Add pin'}</span></button>`
+    : '';
+  const outline = anchors.length
+    ? `<details class="rv-frame-outline" data-key="rv-frame-outline:${esc(item.id)}"><summary>Page outline <span class="num">${anchors.length}</span></summary><ul>`
+      + anchors.map((anchor, index) => `<li><button type="button" class="rv-frame-goto" data-rv-frame-goto="${index}">${esc(anchor.kind === 'image' ? `Image: ${anchor.text || 'no text'}` : anchor.text || 'Heading')}</button></li>`).join('')
+      + '</ul></details>'
+    : '';
+  let status = '';
+  if (frame.status === 'error') status = `<p class="rv-frame-status" role="alert">${esc(frame.error || 'The page could not load.')} <button type="button" class="rv-tool" data-rv-frame-renew>Try again</button></p>`;
+  else if (!src || frame.status !== 'ready') status = '<p class="rv-frame-status" role="status">Loading the page.</p>';
+  else if (frame.title) status = `<p class="rv-frame-status">${esc(frame.title)}</p>`;
+  let link = '';
+  const live = frame.openUrl ? frameOpenUrl(frame.openUrl) : null;
+  if (live) link = `<p class="rv-frame-link">The page links to <b>${esc(new URL(live).host)}</b>. <a class="rv-button" href="${esc(live)}" target="_blank" rel="noopener noreferrer">Open live link</a></p>`;
+  const inView = visible.length ? `<p class="rv-frame-pins" aria-live="polite">In view: ${visible.map((n) => `pin ${esc(n)}`).join(', ')}</p>` : '';
+  return `<div class="rv-frame" data-key="rv-frame:${esc(item.id)}">`
+    + `<div class="rv-tools rv-frame-tools">${outline}<span class="rv-tools-end">${pin}</span></div>${link}`
+    + `<div class="rv-frame-wrap${ui.placing ? ' rv-frame-placing' : ''}" style="--rv-frame-h: ${height}px">`
+    + `<iframe class="rv-frame-el" data-key="rv-frame-el:${esc(item.id)}" data-rv-frame data-src="${esc(src)}" data-keep-attrs="src" sandbox="allow-scripts" referrerpolicy="no-referrer" loading="lazy" allow="" title="${esc(`Page: ${item.title || item.id}`)}"></iframe></div>`
+    + `${status}${inView}</div>`;
+}
+
+function withPageFrame(html, pack, item, ui, h) {
+  return html.includes(PAGE_FALLBACK) ? html.replace(PAGE_FALLBACK, () => pageFrameHtml(pack, item, ui, h)) : html;
 }
 
 // ui: current (the item of #item=), item (the item route), viewer (the view state of the open item), note, noteStatus, verdict, submitting, submitStatus, result, time.

@@ -6,7 +6,7 @@ import { groupMailRows, inboxSections, listTime, mailRowHtml } from './mail-rows
 import { chatJumpHtml, chatJumpButtonHtml, chatAtBottom, chatJumpScroll } from './chat-jump.js';
 import { mailBarItem, mailActionBarHtml, mailSelectionBarHtml, mailElsewhereButtonHtml, mailSuggestionHtml } from './mail-bar.js';
 import { APP_VIEW_ROUTES, appViewport } from './app-view.js';
-import { parseReviewPath, reviewItemFromHash, reviewUrl, packListHtml, packPageHtml, reviewMessageHtml, reviewKeyAction, reviewOpenLinkHtml, reviewErrorText, submitConfirmText, pinProposedVerdict, reviewDoneLineHtml } from './review.js';
+import { parseReviewPath, reviewItemFromHash, reviewUrl, packListHtml, packPageHtml, reviewMessageHtml, reviewKeyAction, reviewOpenLinkHtml, reviewErrorText, submitConfirmText, pinProposedVerdict, reviewDoneLineHtml, parseFrameMessage, pinsInView, frameView, pickPinFields } from './review.js';
 import { viewerKeyAction, nextOpenItem, itemNeighbors, sectionStep, addPin, removePin, setPinText, itemSpec } from './review-viewer.js';
 import { attachGestures, restoreStages, resetStages, zoomStage } from './review-gestures.js';
 import { createTapGuard, startViewedTimer, ANSWER_EMPTY } from './review-save.js';
@@ -5426,6 +5426,7 @@ const HELP = {
     <h3>After the submit</h3><p>The page shows the summary as read-only. The service sends the result to the <code>orch</code> pane of the project as one message. The page shows the delivery state: <b>Queued</b>, <b>Delivered</b>, <b>Retrying</b>, or <b>Failed</b>. A failed delivery is tried again up to 4 times. The Mailbox item of the pack closes, and <b>Open review</b> on it opens this read-only summary. A pack takes at most 3 submits in one minute.</p>
     <h3>Item viewer</h3><p>The top bar shows the item title, <b>Item N of M</b> with the section, and the <b>Viewed</b> toggle. The page marks an item viewed when it stays open and visible for 1.5 seconds. The evidence fills the space above the answer bar. A pair has <b>Toggle</b> and <b>Slider</b>. A gallery shows a grid: select an image to open it. A table and a code box scroll sideways in their own box. <b>Open</b> on a live link opens a new tab.</p>
     <h3>Zoom and pins</h3><p>Pinch to zoom, or double tap for 2×. Double tap again for the fit size. Drag to pan a zoomed image. On a desktop, hold Ctrl and turn the wheel, or press <kbd>+</kbd> and <kbd>-</kbd>. <kbd>z</kbd> toggles the fit size and 100 %. Select <b>Add pin</b>, then tap the image to drop a numbered pin. Write the pin note in the field under the image. An item takes at most 20 pins.</p>
+    <h3>Legacy pages</h3><p>A page item shows an imported HTML page in a frame. The frame blocks network use, local storage, pop-ups, and downloads. Select <b>Add pin</b>, then tap the page to pin a note. <b>Page outline</b> scrolls the page to a heading or an image. When the page has an external link, a tap shows <b>Open live link</b> with the host name. A page that loads data from the network shows without that data. The read-only preview cannot load pages.</p>
     <h3>Answers</h3><p>The answer bar shows only the questions of the item: <b>Deny</b>, <b>Note</b>, <b>Live</b>, <b>Accept</b>, the choices, and the rating. Select a pressed button again to clear it. A second tap on the same button within 400 ms does nothing. Swipe left or right to go to the next or the previous item.</p>
     <h3>Autosave and offline</h3><p>Each change saves by itself. There is no Save button. A typed note saves 600 ms after the last key, and at once when you leave the field or the item. The line under the item and the pill above the answer bar show <b>Saved</b>, <b>Saving...</b>, <b>Offline, will save when back</b>, or <b>Not saved</b> with <b>Retry</b>. The pill also shows the count of waiting changes. Without a network the changes wait in this browser, also over a reload. The page tries again after 2, 4, 8, and 16 seconds, then every 30 seconds, and at once when the network comes back. <b>Sign in again</b> stops the saves until you sign in. A change that the service refuses shows <b>Not saved</b>, the reason, <b>Retry</b>, and <b>Discard</b>. A change for an item that a new pack version changed shows <b>Changed in the new version</b> and <b>Discard</b>. Such a change keeps <b>Submit review</b> disabled with <b>N changes were not saved</b> until you retry it, discard it, or answer the item again. Two tabs of one pack keep each other's waiting changes. <b>Retry</b> in the pill also sends the changes that a closed tab left. When another device changed the same answer first, select <b>Keep mine</b> or <b>Use theirs</b>. For changes that waited offline, the pack page asks once for all of them. A second device shows your changes without a reload.</p>
     <h3>Keys</h3><p>On the lists: <kbd>j</kbd> and <kbd>k</kbd> move to the next or the previous row. <kbd>J</kbd> and <kbd>K</kbd> move to the next or the previous section. <kbd>Enter</kbd> opens the row. <kbd>u</kbd> or <kbd>Esc</kbd> goes back. <kbd>s</kbd> goes to the summary.</p><p>In the item viewer: <kbd>j</kbd> or <kbd>→</kbd> next item, <kbd>k</kbd> or <kbd>←</kbd> previous item, <kbd>J</kbd> and <kbd>K</kbd> next or previous section, <kbd>n</kbd> next open item, <kbd>a</kbd> Accept, <kbd>d</kbd> Deny, <kbd>l</kbd> Needs live check, <kbd>c</kbd> note, <kbd>p</kbd> pin mode, <kbd>1</kbd> to <kbd>6</kbd> choice or rating, <kbd>v</kbd> Viewed, <kbd>e</kbd> Viewed and next, <kbd>t</kbd> toggle the pair, <kbd>z</kbd> fit or 100 %, <kbd>s</kbd> summary, <kbd>u</kbd> or <kbd>Esc</kbd> back.</p><p><kbd>?</kbd> opens this help. The keys do nothing while the focus is in a text field, except <kbd>Esc</kbd>, which leaves the field.</p>
@@ -5992,6 +5993,7 @@ function reviewViewerAfterRender() {
     }
   }
   if (!open) return;
+  if (open.item.type === 'page') reviewFrameAfterRender(open);
   restoreStages($app);
   for (const node of $app.querySelectorAll('[data-rv-text]')) loadReviewText(node.dataset.rvText);
   // The zoom hint shows once, for 3 seconds, on the first image.
@@ -6016,6 +6018,120 @@ function reviewFocusNext(selector) {
   reviews.focus = selector;
   reviewsRender();
 }
+
+// ---------- Legacy HTML page frame ----------
+// A `page` item shows its HTML in a sandboxed iframe (public/review.js). The page gets a token from the raw-token route, and the
+// frame loads /review-raw/<token>/<file>. The bridge script of the page talks to this code with postMessage. The page and its
+// messages are untrusted: parseFrameMessage() accepts only a known message from the frame window, and this code draws the
+// page data as text only. The view state is vui.frame: token, expiresAt, status, error, title, height, anchors, scrollTop, openUrl.
+
+const FRAME_READY_MS = 10000;
+
+function reviewFrameEl() { return $app.querySelector('iframe[data-rv-frame]'); }
+
+function reviewFramePost(el, message) {
+  try { el.contentWindow?.postMessage({ hb: 1, ...message }, '*'); } catch { /* the frame is gone */ }
+}
+
+// Get a token for the pack version of the page. The timer marks the token as expired at its expiry time; the next render then gets a new one.
+async function loadRawToken(open) {
+  const frame = open.vui.frame ||= { status: 'loading' };
+  if (frame.loading) return;
+  frame.loading = true;
+  frame.expired = false;
+  const { slug, pack: id } = open.route;
+  try {
+    const body = await reviewFetch(`/api/reviews/${encodeURIComponent(slug)}/${encodeURIComponent(id)}/raw-token?version=${encodeURIComponent(open.pack.version)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+    Object.assign(frame, { token: body.token, expiresAt: body.expiresAt, status: 'loading', error: '', ready: false, sent: null });
+    clearTimeout(frame.expiry);
+    frame.expiry = setTimeout(() => { frame.expired = true; reviewsRender(); }, Math.max(1000, body.expiresAt - Date.now()));
+  } catch (error) {
+    frame.token = '';
+    Object.assign(frame, { status: 'error', error: error.status === 403 ? 'This preview cannot load pages.' : error.message });
+  } finally { frame.loading = false; reviewsRender(); }
+}
+
+// After each render of an open page item: get or renew the token, set the frame address once for each token,
+// and send the pins and the pin tool state to the bridge.
+function reviewFrameAfterRender(open) {
+  const frame = open.vui.frame ||= { status: 'loading' };
+  if ((!frame.token || frame.expired) && frame.status !== 'error' && !frame.loading) { loadRawToken(open); return; }
+  const el = reviewFrameEl();
+  if (!el) return;
+  const want = el.dataset.src;
+  if (want && el.getAttribute('src') !== want) {
+    el.setAttribute('src', want);
+    Object.assign(frame, { ready: false, sent: null });
+    clearTimeout(frame.wait);
+    frame.wait = setTimeout(() => {
+      if (frame.ready) return;
+      Object.assign(frame, { status: 'error', error: 'The page did not answer.' });
+      reviewsRender();
+    }, FRAME_READY_MS);
+  }
+  if (!frame.ready) return;
+  const pins = (open.item.answer?.pins || []).map(({ n, x, y }) => ({ n, x, y }));
+  const placing = Boolean(open.vui.placing) && open.pack.state === 'open';
+  const sent = frame.sent ||= {};
+  const text = JSON.stringify(pins);
+  if (sent.pins !== text) { sent.pins = text; reviewFramePost(el, { type: 'pins', pins }); }
+  if (sent.place !== placing) { sent.place = placing; reviewFramePost(el, { type: 'place', on: placing }); }
+}
+
+// A tap of the pin tool in the frame. The pin keeps the anchor ID and the selected text, at most 200 characters each.
+function reviewDropFramePin(open, message) {
+  const { item, vui } = open;
+  vui.placing = false;
+  const pins = addPin(item.answer?.pins || [], { x: message.x, y: message.y });
+  if (!pins) { vui.error = 'An item takes at most 20 pins. Remove a pin to add one.'; reviewsRender(); return; }
+  const added = pins[pins.length - 1];
+  Object.assign(added, pickPinFields(message, open.vui.frame?.anchors));
+  vui.noteOpen = true;
+  reviews.focus = `[data-rv-pin-text="${added.n}"]`;
+  saveItemAnswer(item, { pins });
+}
+
+window.addEventListener('message', (event) => {
+  if (currentRoute() !== 'reviews') return;
+  const open = reviewOpenItem();
+  if (!open || open.item.type !== 'page') return;
+  const el = reviewFrameEl();
+  const message = parseFrameMessage(event, el?.contentWindow);
+  if (!message) return;
+  const frame = open.vui.frame ||= { status: 'loading' };
+  if (message.type === 'ready') {
+    clearTimeout(frame.wait);
+    Object.assign(frame, { status: 'ready', error: '', ready: true, sent: null, title: message.title, height: message.height, anchors: message.anchors });
+    reviewsRender();
+  } else if (message.type === 'pick') {
+    // Only the pin tool picks a point. A page script cannot add a pin by itself.
+    if (open.vui.placing && open.pack.state === 'open') reviewDropFramePin(open, message);
+  } else if (message.type === 'scroll') {
+    const pins = open.item.answer?.pins || [];
+    const before = pinsInView(pins, frame.scrollTop || 0, frameView(frame)).join();
+    frame.scrollTop = message.top;
+    if (pinsInView(pins, frame.scrollTop, frameView(frame)).join() !== before) reviewsRender();
+  } else if (message.type === 'open') {
+    frame.openUrl = message.url;
+    reviewsRender();
+  }
+});
+
+document.addEventListener('click', (e) => {
+  const target = e.target.closest?.('[data-rv-frame-goto], [data-rv-frame-renew]');
+  if (!target || currentRoute() !== 'reviews') return;
+  const open = reviewOpenItem();
+  const frame = open?.vui.frame;
+  if (!frame) return;
+  if (target.dataset.rvFrameRenew !== undefined) {
+    Object.assign(frame, { token: '', status: 'loading', error: '', ready: false, sent: null });
+    reviewsRender();
+    return;
+  }
+  const anchor = frame.anchors?.[Number(target.dataset.rvFrameGoto)];
+  const el = reviewFrameEl();
+  if (anchor && el) reviewFramePost(el, { type: 'goto', anchor: anchor.id });
+});
 
 // The swipe of the viewer. A pair in the toggle view shows B before the next item, and A before the previous item.
 // An open gallery image moves through the gallery first.
@@ -6183,7 +6299,7 @@ function reviewViewerKey(e, inField) {
       if (!item.answer?.viewed && pack.state === 'open') saveItemAnswer(item, { viewed: true }, { quiet: true });
       reviewItemGo(open, itemNeighbors(pack.items, item.id).next?.id);
       break;
-    case 'pin': if (stage && (item.ask || []).includes('note') && pack.state === 'open') { vui.placing = !vui.placing; reviewsRender(); } break;
+    case 'pin': if ((stage || item.type === 'page') && (item.ask || []).includes('note') && pack.state === 'open') { vui.placing = !vui.placing; reviewsRender(); } break;
     case 'pair': if (item.type === 'image-pair') { vui.pair = vui.pair === 'b' ? 'a' : 'b'; vui.pairMode = 'toggle'; reviewsRender(); } break;
     case 'fit': zoomStage(stage, 'fit'); break;
     case 'zoom-in': zoomStage(stage, 'in'); break;

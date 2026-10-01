@@ -31,6 +31,7 @@ import { openMessageStore } from './message-store.js';
 import { BODY_LIMIT as PROJECT_NEW_BODY_LIMIT, createProjectNewApi } from './project-new-api.js';
 import { createGoalApi } from './goal-api.js';
 import { createReviewApi } from './review-api.js';
+import { createRawRoute } from './review-raw.js';
 import * as reviewStore from './review-store.js';
 
 const PUBLIC = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
@@ -119,11 +120,16 @@ function readBody(req, limit = 1024 * 1024) {
   });
 }
 
+// The host list of the control plane: a loopback name, a Tailscale name, or an address of this machine.
+function allowedHost(req) {
+  const hostname = (req.headers.host || '').replace(/:\d+$/, '').toLowerCase();
+  const localAddresses = Object.values(os.networkInterfaces()).flat().filter(Boolean).map((iface) => iface.address.toLowerCase());
+  return ['localhost', '127.0.0.1', '[::1]'].includes(hostname) || hostname.endsWith('.ts.net') || localAddresses.includes(hostname.replace(/^\[|\]$/g, ''));
+}
+
 function allowedRequest(req, pathname) {
   const host = req.headers.host || '';
-  const hostname = host.replace(/:\d+$/, '').toLowerCase();
-  const localAddresses = Object.values(os.networkInterfaces()).flat().filter(Boolean).map((iface) => iface.address.toLowerCase());
-  if (!['localhost', '127.0.0.1', '[::1]'].includes(hostname) && !hostname.endsWith('.ts.net') && !localAddresses.includes(hostname.replace(/^\[|\]$/g, ''))) return false;
+  if (!allowedHost(req)) return false;
   const origin = req.headers.origin;
   if (origin === 'null') {
     if (pathname !== '/login' || req.method !== 'POST' || !['same-origin', 'none', undefined].includes(req.headers['sec-fetch-site'])) return false;
@@ -174,7 +180,7 @@ export function assertPreviewHost(host) {
   return value;
 }
 
-export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine = (config, options) => new Engine(config, options), closeTab = browserCloseTab, projectNew = {}, goalSet = {} } = {}) {
+export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine = (config, options) => new Engine(config, options), rawTokens, closeTab = browserCloseTab, projectNew = {}, goalSet = {} } = {}) {
   const machineHoursCache = new Map();
   let analyticsCache = null;
   // A direct serve() call must refuse an unsafe preview before the access token, the watcher, or a tick writes a file.
@@ -208,6 +214,8 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine 
   const clients = new Set();
   // The review pages update a second device through `review` events: ids and numbers only, never content.
   const reviewApi = createReviewApi({ dataDir: DATA_DIR, onChange: (event) => broadcast('review', event) });
+  // The raw route serves legacy HTML pages to a sandboxed frame. Its tokens stay in memory. See src/review-raw.js.
+  const reviewRaw = createRawRoute({ dataDir: DATA_DIR, hostAllowed: allowedHost, tokens: rawTokens });
   let closed = false;
   let timer;
   let tickPromise;
@@ -279,6 +287,10 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine 
     const p = url.pathname;
     try {
       if (readOnlyPreview && !loopbackRequest(req)) return send(res, 403, { error: 'The read-only preview accepts only local requests.' });
+      // The raw route runs before allowedRequest(): a request from the opaque origin of the frame is cross-site and has no cookie.
+      // The route checks the host list and the token itself.
+      // It tests the path as sent: the URL parser would fold a `..` part away and hide it from the route.
+      if (req.url.startsWith('/review-raw/')) return reviewRaw.handle(req, res);
       if (!allowedRequest(req, p)) return send(res, 403, { error: 'This control plane requires a local interface or Tailscale host and a same-origin request.' });
       // The project-new GET routes show local paths, so the preview refuses them too.
       const projectNewRoute = p === '/api/project-new' || p.startsWith('/api/project-new/');
@@ -309,6 +321,8 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine 
         return send(res, routed.status, routed.body);
       }
       // The review routes sit behind the same checks. The read-only preview guard above already refuses each change.
+      const rawToken = /^\/api\/reviews\/([^/]+)\/([^/]+)\/raw-token$/.exec(p);
+      if (rawToken) return reviewRaw.issue(req, res, ...rawToken.slice(1, 3).map((part) => { try { return decodeURIComponent(part); } catch { return ''; } }), url);
       if (p === '/api/reviews' || p.startsWith('/api/reviews/')) return await reviewApi.handle(req, res, url);
       if (p === '/api/state') {
         if (engine.state) refreshMailbox();
