@@ -1348,9 +1348,18 @@ p.wizard-errors { padding-left: 10px; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .chat-row:hover { background: color-mix(in srgb, var(--accent) 8%, var(--panel-2)); } }
 :root[data-theme="dark"] .chat-row:hover { background: color-mix(in srgb, var(--accent) 8%, var(--panel-2)); }
 
-/* Machine locks on the Allocation page. */
+/* Machine locks on the Agents and Allocation pages. */
 .machine-lock-panel { margin-top: 20px; }
 .machine-lock-panel h2 { margin: 0; }
+.machine-lock-lanes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
+.machine-lock-lane { min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); }
+.machine-lock-lane h3 { display: flex; justify-content: space-between; gap: 8px; margin: 0 0 8px; font-size: 13px; }
+.machine-lock-lane h3 span, .machine-lock-lane h4 { color: var(--muted); font-size: 11px; font-weight: 600; }
+.machine-lock-lane h4 { margin: 12px 0 4px; }
+.machine-lock-lane-list { margin: 0; padding-left: 20px; font-size: 12px; }
+.machine-lock-lane-list li { padding: 3px 0; overflow-wrap: anywhere; }
+.machine-lock-lane-list .muted { list-style: none; margin-left: -20px; color: var(--muted); }
+.machine-lock-guard { margin-top: 8px; }
 .machine-lock-table-wrap { overflow-x: auto; }
 .machine-lock-table { width: 100%; border-collapse: collapse; text-align: left; font-size: 12.5px; }
 .machine-lock-table th { padding: 8px 12px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 11px; font-weight: 600; white-space: nowrap; }
@@ -1422,6 +1431,7 @@ p.wizard-errors { padding-left: 10px; }
 @media (max-width: 760px) {
   .resource-pool-fields { grid-template-columns: 1fr; }
   .pool-items-field, .pool-split-field { grid-row: auto; }
+  .machine-lock-lanes { grid-template-columns: 1fr; }
   .machine-lock-table thead { display: none; }
   .machine-lock-table, .machine-lock-table tbody, .machine-lock-table tr, .machine-lock-table td { display: block; width: 100%; }
   .machine-lock-table tr { padding: 8px 0; border-bottom: 1px solid var(--line); }
@@ -2475,3 +2485,11 @@ a.rv-page-link:hover { background: var(--panel-2); }
 .pool-settings-panel h2 { margin: 0; }
 .pool-settings-row .lease-free-line { margin: 0; overflow-wrap: anywhere; }
 .pool-settings-row .lease-head { margin-bottom: 2px; }
+
+
+.lock-number-control { display: flex; flex-direction: column; align-items: flex-end; min-width: 0; }
+.lock-field-error { color: var(--crit); max-width: 180px; font-size: 12px; }
+.lock-field-error:empty { display: none; }
+.lock-number-control input[aria-invalid="true"] { border-color: var(--crit); }
+.lock-admission { margin-top: 16px; white-space: normal; }
+.lock-admission p { max-width: 80ch; }

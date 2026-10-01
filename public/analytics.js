@@ -471,3 +471,16 @@ export function activityChoices(events) {
   const projects = [...new Set((events || []).map((e) => e.project).filter(Boolean))].sort();
   return { kinds, projects };
 }
+
+
+// The machine snapshot keeps its scope when the project filter narrows predictions.
+export function lockAdmissionHtml(admission, project = 'all') {
+  if (!admission) return '';
+  const use = Number.isInteger(admission.slotsInUse) ? `${admission.slotsInUse} of ${admission.slotLimit} slots in use` : `Slot use unknown; capacity ${admission.slotLimit}`;
+  const scope = admission.sampledAt ? `Machine sample at ${admission.sampledAt}. Use is unknown after 3 minutes.` : 'No machine sample is available.';
+  const rows = (admission.predictions || []).filter((row) => project === 'all' || row.project === project)
+    .map((row) => `<tr><td data-label="Project">${esc(row.project)}</td><td data-label="Kind">${esc(row.kind)}</td><td data-label="Lane">${esc(row.lane)}</td><td data-label="Predicted hold">${row.predictedMs === null ? 'Unknown' : esc(minutes(row.predictedMs))}</td></tr>`).join('');
+  return `<div class="lock-admission"><p><b>${esc(use)}</b> for the machine-wide full-suite lock. Capacity is the saved policy. ${esc(scope)}</p>`
+    + '<p>Predicted hold: median of the last 10 releases for each project, kind, and lock in 14 days. Fewer than 3 qualifying releases means unknown.</p>'
+    + (rows ? `<div class="fleet-table-wrap"><table class="fleet-table"><thead><tr><th>Project</th><th>Kind</th><th>Lane</th><th>Predicted hold</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p>No prediction history is recorded.</p>') + '</div>';
+}

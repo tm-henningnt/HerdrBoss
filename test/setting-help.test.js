@@ -11,6 +11,7 @@ const docsPath = new URL('../docs/cli.md', import.meta.url);
 // Policy keys that have no single setting control. Each one has its own editor with its own help text, or holds a list that the page edits by other means.
 const POLICY_KEYS_WITHOUT_CONTROL = new Set([
   'machine', // the machine.* keys are checked one by one below
+  'locks', // the locks.* keys are checked one by one below
   'orchestratorLadder', // the succession list editor on Allocation
   'allowedKinds', // the Available switch of each harness: harness.available
   'excludedModels', 'disabledModels', 'extraModels', 'preferredModels', 'modelProviders', 'harnessRoutes', // the harness model rows: harness.model, harness.provider, harness.preferredModel, harness.addModel
@@ -29,6 +30,15 @@ test('every policy machine key and top-level policy setting has an explanation',
     assert.ok(SETTING_HELP[key], `policy key ${key} has no explanation. Add one, or list the key in POLICY_KEYS_WITHOUT_CONTROL with its reason.`);
   }
   for (const key of noControl) assert.ok(key in POLICY_DEFAULTS, `${key} is listed as without a control but is not a policy key`);
+});
+
+test('every lock lane policy key has a Locks group explanation', () => {
+  const keys = [
+    'locks.slots', 'locks.shortLimitMinutes', 'locks.guard.enabled',
+    'locks.guard.maxLoadPercent', 'locks.guard.maxSwapPercent', 'locks.guard.minFreeMemPercent',
+  ];
+  assert.ok(SETTING_GROUPS.some((group) => group.id === 'locks' && group.title === 'Locks'));
+  for (const key of keys) assert.equal(SETTING_HELP[key]?.group, 'locks', `${key} has a Locks explanation`);
 });
 
 test('every service setting has an explanation', () => {
@@ -63,6 +73,7 @@ test('the text follows the Simplified Technical English limits', () => {
 // The ids that the page code asks for: literal calls, the Machine rows, the price columns, and the service table rows.
 function usedIds() {
   const ids = new Set([...app.matchAll(/helpButton\('([^']+)'/g)].map((match) => match[1]).filter((id) => !id.endsWith('.')));
+  for (const key of ['locks.slots', 'locks.shortLimitMinutes', 'locks.guard.enabled', 'locks.guard.maxLoadPercent', 'locks.guard.maxSwapPercent', 'locks.guard.minFreeMemPercent']) ids.add(key);
   for (const match of app.matchAll(/machineNumber\('(\w+)'/g)) ids.add(`machine.${match[1]}`);
   for (const match of app.matchAll(/settingRow\('([^']+)'/g)) ids.add(match[1]);
   if (app.includes("helpButton('prices.' + field)")) for (const match of app.matchAll(/\['(input|output|cacheRead|cacheWrite|cacheWrite1h)', '/g)) ids.add(`prices.${match[1]}`);
@@ -94,8 +105,8 @@ test('the popup and the guide come from the same text', () => {
 test('the Advanced group holds the rarely used groups', () => {
   const advanced = SETTING_GROUPS.filter((group) => group.advanced).map((group) => group.id);
   assert.deepEqual(advanced, ['prices', 'avatars', 'service', 'readiness']);
-  const first = SETTING_GROUPS.slice(0, 3).map((group) => group.id);
-  assert.deepEqual(first, ['harnesses', 'quotas', 'machine']);
+  const first = SETTING_GROUPS.slice(0, 4).map((group) => group.id);
+  assert.deepEqual(first, ['harnesses', 'quotas', 'machine', 'locks']);
 });
 
 test('docs/cli.md holds the settings reference of the schema', () => {

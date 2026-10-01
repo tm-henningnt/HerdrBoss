@@ -6,6 +6,7 @@
 
 export const APPLY = {
   policy: 'Select Apply policy. The change takes effect at the next engine tick.',
+  'lock-policy': 'Select Apply policy. Capacity and guard changes apply to the next admission attempt, including queued jobs. A queued ticket keeps its prediction and short-limit classification.',
   service: 'Select Save in the group. The change takes effect at once.',
   restart: 'Change it in config.json. Restart the service.',
   now: 'The change takes effect at once.',
@@ -34,6 +35,13 @@ export const SETTING_GROUPS = [
     affects: 'The machine and notices. An active guard blocks new workers when the machine is busy. Disk and swap thresholds raise notices. The swap refusal can block worker starts.',
     safe: 'Safe to change. A high limit lets more work run at once. A low limit protects the machine but slows work. Disk and swap notices stay on when the guard is off.',
     restart: 'No restart. Select Apply policy.',
+  },
+  {
+    id: 'locks', title: 'Locks', advanced: false,
+    controls: 'Machine lock capacity, the short job limit, and the machine guard for a short job that starts beside a long job.',
+    affects: 'All projects that use a machine lock. The long lane always holds at most one job.',
+    safe: 'Unknown jobs use the long lane. A lower limit sends more jobs to the long lane.',
+    restart: 'No restart. Select Apply policy. The change applies to the next lock admission.',
   },
   {
     id: 'watch', title: 'Watch', advanced: false,
@@ -282,6 +290,50 @@ export const SETTING_HELP = Object.fromEntries([
     raise: 'A higher value gives the memory warning earlier.',
     lower: 'A lower value gives the memory warning later.',
     apply: 'service',
+  }),
+
+  // Locks
+  S('locks', 'locks.slots', 'Machine lock slots', {
+    what: 'The total number of holders for a machine lock. One holder uses the long lane. The other slots hold short jobs.',
+    default: '2', unit: 'Slots', range: '1 to 4',
+    raise: 'A higher value lets more short jobs run beside one long job.',
+    lower: 'A lower value limits short jobs. Existing holders finish before admission fits the lower capacity. A value of 1 keeps one exclusive lane.',
+    apply: 'lock-policy',
+  }),
+  S('locks', 'locks.shortLimitMinutes', 'Short job limit', {
+    what: 'The predicted hold time at or below which a job uses the short lane.',
+    default: '6', unit: 'Minutes', range: '1 to 60',
+    raise: 'A higher value sends more jobs to the short lane.',
+    lower: 'A lower value sends more jobs to the long lane.',
+    apply: 'lock-policy',
+  }),
+  S('locks', 'locks.guard.enabled', 'Guard for short jobs', {
+    what: 'Checks machine load, swap use, and free memory before a short job starts beside a long job.',
+    default: 'On', unit: 'Switch', range: 'On or off',
+    raise: 'Turning it on pauses a short job when a machine limit fails.',
+    lower: 'Turning it off lets a short job start beside a long job without a machine check.',
+    apply: 'lock-policy',
+  }),
+  S('locks', 'locks.guard.maxLoadPercent', 'Maximum load for a short job', {
+    what: 'The 5-minute load average as a percent of the machine core count. The guard pauses above this value.',
+    default: '231', unit: 'Percent of cores', range: '0 to 1000; a blank field is invalid',
+    raise: 'A higher value lets a short job start at a higher load.',
+    lower: 'A lower value pauses short jobs at a lower load.',
+    apply: 'lock-policy',
+  }),
+  S('locks', 'locks.guard.maxSwapPercent', 'Maximum swap for a short job', {
+    what: 'The swap use as a percent of the swap total. The guard pauses above this value.',
+    default: '96', unit: 'Percent of swap', range: '0 to 100; a blank field is invalid',
+    raise: 'A higher value lets a short job start with more swap in use.',
+    lower: 'A lower value pauses short jobs with less swap in use.',
+    apply: 'lock-policy',
+  }),
+  S('locks', 'locks.guard.minFreeMemPercent', 'Minimum free memory', {
+    what: 'The free memory percent below which the guard pauses a short job.',
+    default: '40', unit: 'Percent free', range: '0 to 100; a blank field is invalid',
+    raise: 'A higher value leaves more memory free before a short job starts.',
+    lower: 'A lower value lets a short job start with less free memory.',
+    apply: 'lock-policy',
   }),
 
   // Watch

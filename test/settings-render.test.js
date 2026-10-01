@@ -33,13 +33,18 @@ function loadApp(code = source) {
 
 async function views(code = source) {
   const context = loadApp(code);
+  const handlers = new Map();
+  const documentStub = context.document;
+  context.document = new Proxy(documentStub, { get: (target, key) => key === 'addEventListener'
+    ? (name, handler) => handlers.set(name, [...(handlers.get(name) || []), handler]) : target[key] });
+  context.handlers = handlers;
   // The module imports of the page come from the real files of public/.
   for (const match of code.matchAll(/^import \{([^}]*)\} from '\.\/([^']+)';$/gm)) {
     const module = await import(`../public/${match[2]}`);
     for (const name of match[1].split(',').map((item) => item.trim()).filter(Boolean)) context[name] = module[name];
   }
   const body = code.replace(/^import [^\n]*\n/gm, '');
-  vm.runInNewContext(`${body}\nthis.views = { settingsView, allocationView, boardView, setModels: (m) => { models = m; }, setState: (v) => { state = v; } };`, context);
+  vm.runInNewContext(`${body}\nthis.views = { settingsView, allocationView, agentsView, boardView, setModels: (m) => { models = m; }, setState: (v) => { state = v; }, setDraft: (v) => { policyDraft = v; }, getDraft: () => policyDraft };`, context);
   return { ...context.views, context };
 }
 
@@ -120,4 +125,104 @@ test('the Settings view renders no link-only Watch panel and the Agents page kee
   assert.match(html, /<h2>Watch routines<\/h2>/);
   const source = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
   assert.match(source, /function watchPanel\(/);
+});
+
+test('the Agents page shows both machine lock lanes, their queues, predictions, and guard state', async () => {
+  const app = await views();
+  const s = fixture();
+  s.locks = [
+    {
+      name: 'full-suite', scope: 'machine', state: 'live', lane: 'long', slot: 'long', kind: 'manual',
+      ownerPane: 'ws:long', project: 'alpha', ageSeconds: 60, expiresAt: '2026-10-01T13:00:00.000Z',
+      slotsInUse: 2, slotLimit: 2, predictedMs: 900000,
+      queue: [
+        { id: 'short-ticket', position: 1, lane: 'short', project: 'beta', pane: 'ws:short', kind: 'suite', waitSeconds: 12, predictedMs: 60000, slotsInUse: 2, slotLimit: 2 },
+        { id: 'long-ticket', position: 1, lane: 'long', project: 'gamma', pane: 'ws:long-wait', kind: 'suite', waitSeconds: 18, predictedMs: null, slotsInUse: 2, slotLimit: 2 },
+      ],
+    },
+    {
+      name: 'full-suite', scope: 'machine', state: 'live', lane: 'short', slot: 1, kind: 'suite',
+      ownerPane: 'ws:short-holder', project: 'beta', ageSeconds: 30, slotsInUse: 2, slotLimit: 2, predictedMs: 60000,
+    },
+  ];
+  s.lockStats = { acquires: 3, windowDays: 7, medianWaitMs: 2000, medianHoldMs: 60000, byLane: { long: { acquires: 2 }, short: { acquires: 1 } } };
+  const html = app.agentsView(s);
+  assert.match(html, /<h2>Locks<\/h2>/);
+  assert.match(html, /Long lane/);
+  assert.match(html, /Short lane/);
+  assert.match(html, /ws:long/);
+  assert.match(html, /ws:short-holder/);
+  assert.match(html, /ws:short \(suite\)/);
+  assert.match(html, /ws:long-wait/);
+  assert.match(html, /predicted 15m/);
+  assert.match(html, /predicted 1m/);
+  assert.match(html, /guard on/i);
+});
+
+test('the Settings page renders all lock lane policy controls with setting help ids', async () => {
+  const app = await views();
+  app.setModels({ codex: catalog, claude: catalog });
+  const s = fixture();
+  app.setState(s);
+  const html = app.settingsView(s);
+  assert.match(html, /<h2>Locks<\/h2>/);
+  assert.match(html, /data-policy-lock="slots"/);
+  assert.match(html, /data-policy-lock="shortLimitMinutes"/);
+  assert.match(html, /data-policy-lock-guard="enabled"/);
+  for (const key of ['maxLoadPercent', 'maxSwapPercent', 'minFreeMemPercent']) {
+    assert.ok(html.includes(`data-policy-lock-guard="${key}"`), `Locks has a control for ${key}`);
+  }
+});
+
+
+test('LK3 R8 changing a blank guard field shows its error and keeps typed zero valid', async () => {
+  const app = await views();
+  const state = fixture();
+  app.setState(state);
+  app.setDraft(state.policy);
+  for (const key of ['maxLoadPercent', 'maxSwapPercent', 'minFreeMemPercent']) {
+    const error = { textContent: '' };
+    const attributes = {};
+    const el = { dataset: { policyLockGuard: key }, value: '', checked: false,
+      closest: () => ({}), setCustomValidity: (message) => { el.validityMessage = message; },
+      setAttribute: (key, value) => { attributes[key] = value; }, removeAttribute: (key) => { delete attributes[key]; },
+    };
+    // The real change listener updates the field's accessible error element.
+    const originalDocument = app.context.document;
+    app.context.document = new Proxy(originalDocument, { get: (target, name) => name === 'getElementById' ? () => error : target[name] });
+    app.context.handlers.get('change').find((handler) => handler.toString().includes('el.dataset.policyLockGuard'))({ target: el });
+    assert.equal(app.getDraft().locks.guard[key], null, 'blank stays invalid in the request body');
+    assert.match(error.textContent, /Enter a whole number/);
+    assert.match(el.validityMessage, /Enter a whole number/);
+    assert.equal(attributes['aria-invalid'], 'true');
+    const html = app.settingsView(state);
+    assert.match(html, /role="alert"[^>]*>Enter a whole number/);
+    el.value = '0';
+    app.context.handlers.get('change').find((handler) => handler.toString().includes('el.dataset.policyLockGuard'))({ target: el });
+    assert.equal(app.getDraft().locks.guard[key], 0);
+    assert.equal(error.textContent, '');
+    assert.equal(el.validityMessage, '');
+    assert.equal(attributes['aria-invalid'], undefined);
+    app.context.document = originalDocument;
+  }
+});
+
+test('LK3 R15 the lock panel labels saved and effective capacity during legacy exclusivity', async () => {
+  const app = await views();
+  const s = fixture();
+  s.policy.locks.slots = 3;
+  s.locks = [{ name: 'full-suite', scope: 'machine', state: 'live', lane: 'long', slot: 'long', kind: 'suite',
+    ownerPane: 'ws:legacy', project: 'alpha', ageSeconds: 60, slotsInUse: 1, slotLimit: 1,
+    configuredSlotLimit: 3, admissionMode: 'legacy-exclusive', predictedMs: null,
+    queue: [{ id: 'short', position: 2, lane: 'long', project: 'beta', pane: 'ws:wait', kind: 'suite', waitSeconds: 12, predictedMs: 60000 }],
+  }];
+  app.setState(s);
+  for (const render of [app.agentsView, app.allocationView]) {
+    const html = render(s);
+    assert.match(html, /Admission capacity: 1 slot/);
+    assert.match(html, /Saved capacity: 3 slots/);
+    assert.match(html, /global FIFO queue/);
+    assert.match(html, /Short lane <span>0 \/ 0 slots/);
+    assert.match(html, /2\. beta/);
+  }
 });

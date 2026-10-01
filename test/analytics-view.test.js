@@ -2,6 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import vm from 'node:vm';
 import {
   stackedBars, lineChart, heatGrid, outcomeBars, stripBars, foldSeries, niceMax, spendSeries, claudeSpend, quotaSeries,
   denialGrid, firstTimeRate, activityFilter, activityChoices, eventLevel, dayLabel, usd,
@@ -13,6 +14,7 @@ const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8'
 const html = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
 const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
 const guide = fs.readFileSync(new URL('../docs/user-guide.md', import.meta.url), 'utf8');
+const cli = fs.readFileSync(new URL('../docs/cli.md', import.meta.url), 'utf8');
 
 const spend = {
   days: [
@@ -403,7 +405,7 @@ test('the policy changes list shows time, caller kind, and changed keys with esc
   assert.match(list, /<span class="policy-old">none<\/span> → <span class="policy-new">&lt;img src=x onerror=1&gt;<\/span>/);
   assert.match(list, /policy-caller page">Page</);
   assert.match(list, /policy-caller &lt;b&gt;odd&lt;\/b&gt;">Unknown</);
-  assert.doesNotMatch(list, /<img|<b>odd/);
+  assert.ok(!list.includes(`<${'img'}`) && !list.includes(`<${'b'}>odd`), 'untrusted values stay escaped');
   assert.match(list, /and 3 more in Details/);
   const details = policyChangesDetailsHtml(entries);
   assert.equal((details.match(/<tr>/g) || []).length, 1 + 3 + 9, 'a row for each changed key, and the header row');
@@ -468,7 +470,73 @@ test('lockWaitDetailsHtml lists each day and each project with its wait, hold, r
 test('the page has the lock wait card, its switch, its help text, and its guide entry', () => {
   assert.match(app, /function lockWaitBlock\(/);
   assert.match(app, /data-lock-project/);
+  assert.match(app, /waitByLane/);
+  assert.match(app, /medianWaitMsByLane/);
+  assert.match(app, /Short lane median wait/);
   assert.match(app, /<h3>Lock wait and hold<\/h3>/);
   assert.match(guide, /\*\*Lock wait and hold by project\*\*/);
   assert.ok(DAY > 0);
+});
+
+test('lock lane help and docs describe current admission, display, and analytics behavior', () => {
+  const helpSection = (name) => {
+    const start = app.indexOf(`  ${name}: [`);
+    const next = app.slice(start + 3).search(/\n  [A-Za-z][\w]*: \[/);
+    const end = next < 0 ? -1 : start + 3 + next;
+    return app.slice(start, end < 0 ? undefined : end);
+  };
+  assert.match(helpSection('agents'), /<h3>Locks<\/h3>[\s\S]*?long lane[\s\S]*?short lane/i);
+  assert.match(helpSection('settings'), /<h3>Locks<\/h3>[\s\S]*?short job limit[\s\S]*?guard/i);
+  assert.match(helpSection('allocation'), /<h3>Locks<\/h3>[\s\S]*?long lane[\s\S]*?short lane/i);
+  assert.match(helpSection('analytics'), /<h3>Lock wait and hold<\/h3>[\s\S]*?lane[\s\S]*?median wait/i);
+  assert.match(guide, /The \*\*Locks\*\* panel on the Agents and Allocation pages[\s\S]*?long lane[\s\S]*?short lane/i);
+  assert.match(guide, /Lock wait and hold by project[^\n]*median wait[^\n]*lane/i);
+  assert.match(cli, /`lock list`[^\n]*lane[^\n]*predicted duration/i);
+  assert.doesNotMatch(cli, /There is no load threshold\./);
+  assert.doesNotMatch(guide, /There is no load threshold\./);
+});
+
+
+test('LK3 R6 the actual Analytics card renders slot use, predictions, and their scopes', async () => {
+  const helpers = await import('../public/analytics.js');
+  const admission = { slotLimit: 3, slotsInUse: 2, sampledAt: '2026-10-01T12:00:00.000Z', predictions: [
+    { project: 'alpha', kind: 'suite', name: 'full-suite', lane: 'short', predictedMs: 120000, samples: 3 },
+    { project: 'beta', kind: 'push', name: 'full-suite', lane: 'long', predictedMs: null, samples: 1 },
+  ] };
+  const start = app.indexOf('function lockWaitBlock()');
+  const body = app.slice(start, app.indexOf('\n}\n', start) + 2);
+  const render = (project, projects = lockData.projects) => vm.runInNewContext(`${body}; lockWaitBlock()`, {
+    ...helpers, analyticsData: { locks: { ...lockData, projects, admission } }, analyticsUi: { lockProject: project },
+    vizCard: (value) => value, vizSwitch: () => '', esc: (s) => String(s),
+  });
+  for (const projects of [lockData.projects, []]) {
+    const card = render('all', projects);
+    assert.match(card.chart, /2 of 3 slots/);
+    assert.match(card.chart, /alpha/);
+    assert.match(card.chart, /suite/);
+    assert.match(card.chart, /2 min/);
+    assert.match(card.chart, /beta/);
+    assert.match(card.chart, /unknown/i);
+    assert.match(card.chart, /machine sample/i);
+    assert.match(card.chart, /14 days/);
+    assert.match(card.chart, /last 10/);
+  }
+  const selected = render('alpha');
+  assert.match(selected.chart, /alpha/);
+  assert.doesNotMatch(selected.chart, /beta/);
+  assert.match(selected.chart, /2 of 3 slots/, 'machine use keeps its machine scope under a project filter');
+});
+
+test('LK3 second review docs describe degraded reloads, legacy ticket expiry, selected re-entry, and effective capacity', () => {
+  const plan = fs.readFileSync(new URL('../docs/ideas/lock-lanes.md', import.meta.url), 'utf8');
+  for (const document of [cli, guide, plan]) {
+    assert.match(document, /last validated settings/);
+    assert.match(document, /younger than 30 minutes/);
+    assert.match(document, /waiting CLI process/);
+    assert.match(document, /re-entry release is a no-op[^\n]*slot selector/);
+    assert.match(document, /effective admission capacity[^\n]*saved capacity/);
+  }
+  assert.match(app, /last validated settings/);
+  assert.match(app, /younger than 30 minutes/);
+  assert.match(app, /re-entry release is a no-op/);
 });

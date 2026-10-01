@@ -150,45 +150,57 @@ try {
   for (const { setting } of view) assert.doesNotMatch(setting, /token|secret|password|key/i, `service settings must not include ${setting}`);
 });
 
-test('engine lock snapshots include live full-suite queue tickets', { timeout: 20000 }, async (t) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-lock-queue-state-'));
-  const lockDataDir = path.join(root, 'boss-data');
-  const machineDir = path.join(lockDataDir, 'locks', 'machine');
-  const queueDir = path.join(machineDir, 'queue', 'full-suite');
-  fs.mkdirSync(queueDir, { recursive: true, mode: 0o700 });
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const now = new Date();
-  fs.writeFileSync(path.join(machineDir, 'full-suite.json'), JSON.stringify({
-    name: 'full-suite', scope: 'machine', gitCommonDir: '/fixture/repo/.git', ownerPane: 'ws:holder',
-    pid: process.pid, kind: 'suite', command: 'herdr-boss lock acquire full-suite', acquiredAt: now.toISOString(),
-  }));
-  const ticketId = '00000000-0000-4000-8000-000000000002';
-  fs.writeFileSync(path.join(queueDir, `${ticketId}.json`), JSON.stringify({
-    id: ticketId, seq: 4, pane: 'ws:waiter', project: 'alpha', pid: process.pid, kind: 'suite',
-    command: 'herdr-boss lock acquire full-suite', createdAt: new Date(now.getTime() - 41 * 60 * 1000).toISOString(),
-  }));
-  const cfg = loadConfig();
-  cfg.host = '127.0.0.1';
-  cfg.port = 0;
-  const engine = new Engine(cfg, { push: false, act: false, lockDataDir, collectors: {
-    collectHerdr: async () => ({ panes: [{ id: 'ws:holder' }, { id: 'ws:waiter' }], workspaces: [] }),
-    collectMachine: async () => null,
-    collectProcesses: async () => new Map(),
-    collectQuotas: async () => [],
-    collectWorktreeCounts: async () => ({}),
-    collectCwdProcesses: async () => [],
-    collectMissingWorktreeProcesses: async () => [],
-    collectPiModels: async () => ({ models: [] }),
-  } });
-  const state = await engine.tick();
-  assert.equal(state.locks.length, 1);
-  assert.deepEqual(state.locks[0].queue.map((ticket) => [ticket.position, ticket.project, ticket.pane, ticket.kind]), [
-    [1, 'alpha', 'ws:waiter', 'suite'],
-  ]);
-  assert.ok(state.locks[0].queue[0].waitSeconds >= 41 * 60);
-  assert.equal(state.lockStats.acquires, 0);
-  assert.equal(state.lockStats.medianHoldMs, null);
-});
+for (const { title, lane, ageMinutes, eligible } of [
+  { title: 'engine lock snapshots include live full-suite queue tickets', lane: 'long', ageMinutes: 41, eligible: true },
+  { title: 'engine lock snapshots include legacy queue tickets younger than 30 minutes', ageMinutes: 29, eligible: true },
+  { title: 'engine lock snapshots exclude legacy queue tickets older than 30 minutes', ageMinutes: 41, eligible: false },
+]) {
+  test(title, { timeout: 20000 }, async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-lock-queue-state-'));
+    const lockDataDir = path.join(root, 'boss-data');
+    const machineDir = path.join(lockDataDir, 'locks', 'machine');
+    const queueDir = path.join(machineDir, 'queue', 'full-suite');
+    fs.mkdirSync(queueDir, { recursive: true, mode: 0o700 });
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const now = new Date();
+    fs.writeFileSync(path.join(machineDir, 'full-suite.json'), JSON.stringify({
+      name: 'full-suite', scope: 'machine', gitCommonDir: '/fixture/repo/.git', ownerPane: 'ws:holder',
+      pid: process.pid, kind: 'suite', command: 'herdr-boss lock acquire full-suite', acquiredAt: now.toISOString(),
+    }));
+    const ticketId = '00000000-0000-4000-8000-000000000002';
+    fs.writeFileSync(path.join(queueDir, `${ticketId}.json`), JSON.stringify({
+      id: ticketId, seq: 4, pane: 'ws:waiter', project: 'alpha', pid: process.pid, kind: 'suite',
+      // New-code tickets have a lane and do not use the legacy 30-minute age limit.
+      ...(lane ? { lane, predictedMs: null } : {}),
+      command: 'herdr-boss lock acquire full-suite', createdAt: new Date(now.getTime() - ageMinutes * 60 * 1000).toISOString(),
+    }));
+    const cfg = loadConfig();
+    cfg.host = '127.0.0.1';
+    cfg.port = 0;
+    const engine = new Engine(cfg, { push: false, act: false, lockDataDir, collectors: {
+      collectHerdr: async () => ({ panes: [{ id: 'ws:holder' }, { id: 'ws:waiter' }], workspaces: [] }),
+      collectMachine: async () => null,
+      collectProcesses: async () => new Map(),
+      collectQuotas: async () => [],
+      collectWorktreeCounts: async () => ({}),
+      collectCwdProcesses: async () => [],
+      collectMissingWorktreeProcesses: async () => [],
+      collectPiModels: async () => ({ models: [] }),
+    } });
+    const state = await engine.tick();
+    assert.equal(state.locks.length, 1);
+    assert.deepEqual(state.locks[0].queue.map((ticket) => [ticket.position, ticket.project, ticket.pane, ticket.kind]), eligible ? [
+      [1, 'alpha', 'ws:waiter', 'suite'],
+    ] : []);
+    if (eligible) {
+      assert.ok(state.locks[0].queue[0].waitSeconds >= ageMinutes * 60);
+      assert.equal(state.locks[0].queue[0].legacy, lane === undefined);
+      assert.equal(state.locks[0].queue[0].lane, 'long');
+    }
+    assert.equal(state.lockStats.acquires, 0);
+    assert.equal(state.lockStats.medianHoldMs, null);
+  });
+}
 
 test('engine lock snapshots include the median hold and wait from the lock ledger', { timeout: 20000 }, async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-lock-ledger-state-'));

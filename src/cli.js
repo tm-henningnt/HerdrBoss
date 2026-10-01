@@ -162,7 +162,7 @@ const USAGE = `herdr-boss <command>
   worker ...            Start, collect, or list workers.
   wait [<worker>...]    Block until the first report, question, block, stall, or lost pane of a worker.
   lock acquire <name> [--wait SECONDS]  Acquire a project lock.
-  lock release <name>   Release a project lock.
+  lock release <name> [--slot long|N]   Release a project lock.
   lock list             List project locks with their scope.
   lease acquire POOL [--for SLUG|WORKER] [--prefer ITEM] [--ttl MINUTES] [--pid PID] [--wait SECONDS] [--env-file FILE]  Lease one pool item and print it. --pid binds the lease to the server process. --wait queues for a free item. --env-file writes the pool variables for a shell to source.
   lease bind POOL ITEM --pid PID  Bind a lease to the server process that uses its port.

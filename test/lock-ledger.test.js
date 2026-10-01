@@ -91,6 +91,27 @@ test('lock ledger stats give the median hold and the median wait, and skip reent
   assert.equal(lockLedgerStats([]).medianHoldMs, null);
 });
 
+test('lock ledger stats and summaries report counts and median waits by lane', (t) => {
+  const f = fixture(t);
+  const at = new Date(f.options.now()).toISOString();
+  const lines = [
+    { at, event: 'acquire', name: 'full-suite', kind: 'suite', lane: 'long', waitMs: 1000 },
+    { at, event: 'acquire', name: 'full-suite', kind: 'suite', lane: 'short', waitMs: 3000 },
+    { at, event: 'acquire', name: 'full-suite', kind: 'push', lane: 'short', waitMs: 9000 },
+    { at, event: 'timeout', name: 'full-suite', kind: 'suite', lane: 'short', waitMs: 10000 },
+    { at, event: 'acquire', name: 'full-suite', kind: 'suite', waitMs: 7000 },
+  ];
+  fs.mkdirSync(f.dataDir, { recursive: true });
+  fs.writeFileSync(path.join(f.dataDir, LOCK_LEDGER_FILE), `${lines.map((line) => JSON.stringify(line)).join('\n')}\n`);
+  const stats = lockLedgerStats(lines);
+  assert.deepEqual(stats.byLane, {
+    long: { acquires: 2, timeouts: 0, medianWaitMs: 4000 },
+    short: { acquires: 2, timeouts: 1, medianWaitMs: 6000 },
+  });
+  const summary = lockLedgerSummary({ dataDir: f.dataDir, now: f.options.now });
+  assert.deepEqual(summary.byName['full-suite'].byLane, stats.byLane);
+});
+
 test('a no-wait busy acquire writes a busy line and a timed-out wait writes a timeout line', (t) => {
   const f = fixture(t);
   acquireProjectLock('deploy', f.options);

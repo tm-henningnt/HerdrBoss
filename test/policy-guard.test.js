@@ -70,6 +70,26 @@ function startServer(t, shares) {
 }
 const withShares = (shares, patch = {}) => ({ ...loadPolicy({ file: path.join(dataDir, 'policy.json'), models, warn: () => {} }), projects: projects(shares), ...patch });
 
+test('PUT /api/policy rejects invalid lock lane and guard ranges with field messages', async (t) => {
+  const { put } = await startServer(t, FIVE);
+  const cases = [
+    ['slots', 5, /locks\.slots must be an integer from 1 to 4/],
+    ['shortLimitMinutes', 61, /locks\.shortLimitMinutes must be an integer from 1 to 60/],
+    ['maxLoadPercent', 1001, /locks\.guard\.maxLoadPercent must be an integer from 0 to 1000/],
+    ['maxSwapPercent', 101, /locks\.guard\.maxSwapPercent must be an integer from 0 to 100/],
+    ['minFreeMemPercent', -1, /locks\.guard\.minFreeMemPercent must be an integer from 0 to 100/],
+  ];
+  for (const [key, value, expected] of cases) {
+    const draft = withShares(FIVE);
+    if (key === 'slots' || key === 'shortLimitMinutes') draft.locks[key] = value;
+    else draft.locks.guard[key] = value;
+    const response = await put(draft);
+    assert.equal(response.status, 400, key);
+    assert.match((await response.json()).errors.join(' '), expected, key);
+  }
+  assert.equal(loadPolicy().locks.slots, 2, 'rejected saves keep the defaults');
+});
+
 test('PUT /api/policy saves a change of one share with a total of 100', async (t) => {
   const { put } = await startServer(t, FIVE);
   const response = await put(withShares({ ...FIVE, a: 30, b: 10 }));
@@ -303,5 +323,23 @@ test('the page imports every name that it uses from the helper modules it import
     for (const item of exported) {
       if (new RegExp(`(?<![A-Za-z0-9_$.])${item}\\(`).test(body)) assert.ok(imported.includes(item), `app.js uses ${item} from ${name}.js but does not import it`);
     }
+  }
+});
+
+
+test('LK3 R8 PUT /api/policy refuses blank guard thresholds and saves typed zero', async (t) => {
+  const { put } = await startServer(t, FIVE);
+  for (const key of ['maxLoadPercent', 'maxSwapPercent', 'minFreeMemPercent']) {
+    for (const blank of [null, '', ' ']) {
+      const draft = withShares(FIVE);
+      draft.locks.guard[key] = blank;
+      const response = await put(draft);
+      assert.equal(response.status, 400);
+      assert.ok((await response.json()).errors.some((message) => message.startsWith(`locks.guard.${key} `)));
+    }
+    const zero = withShares(FIVE);
+    zero.locks.guard[key] = 0;
+    assert.equal((await put(zero)).status, 200);
+    assert.equal(loadPolicy().locks.guard[key], 0);
   }
 });

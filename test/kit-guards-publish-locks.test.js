@@ -925,10 +925,13 @@ test('the full-suite lock is machine-wide and other lock names stay per reposito
     ['full-suite', 'machine', 'ws:orch-a'],
   ]);
   assert.ok(lines.some((line) => /^full-suite .*machine/.test(line)), lines.join('\n'));
+  assert.ok(lines.some((line) => /^full-suite .*manual.*expires in (?:\d+h )?\d+m; PID \d+, live; lane long/.test(line)), lines.join('\n'));
+  assert.equal(Number.isFinite(listed[1].expiresInMs), true);
+  assert.ok(listed[1].expiresInMs > 0);
   assert.deepEqual(listed[1].queue.map((ticket) => [ticket.position, ticket.project, ticket.pane, ticket.kind]), [
     [1, 'alpha', 'ws:orch-b', 'suite'],
   ]);
-  assert.ok(lines.some((line) => /^  Queue: 1\. alpha ws:orch-b \(suite\) \d+m$/.test(line)), lines.join('\n'));
+  assert.ok(lines.some((line) => /^  Queue: 1\. alpha ws:orch-b \(suite\) long lane, predicted unknown, 1 of 1 slots in use, waiting \d+m$/.test(line)), lines.join('\n'));
   assert.ok(lines.some((line) => /^deploy .*repository/.test(line)), lines.join('\n'));
   fs.unlinkSync(path.join(queueDir, `${ticketId}.json`));
 
