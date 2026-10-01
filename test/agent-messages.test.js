@@ -457,9 +457,28 @@ test('agent message metadata validates its own retention setting', async () => {
   const { POLICY_DEFAULTS, validatePolicy } = await import('../src/control.js');
   const { loadModels } = await import('../src/kit/config.js');
   const defaults = structuredClone(POLICY_DEFAULTS);
-  assert.deepEqual(defaults.agentMessages, { retentionDays: 14, metaRetentionDays: 180 });
-  assert.equal(validatePolicy({ ...defaults, agentMessages: { retentionDays: 14, metaRetentionDays: 7 } }, loadModels()).length, 0);
+  assert.deepEqual(defaults.agentMessages, { retentionDays: 14, metaRetentionDays: 180, promptTimeoutSeconds: 25 });
+  assert.equal(validatePolicy({ ...defaults, agentMessages: { ...defaults.agentMessages, metaRetentionDays: 7 } }, loadModels()).length, 0);
   for (const agentMessages of [{ retentionDays: 0, metaRetentionDays: 180 }, { retentionDays: 14, metaRetentionDays: 731 }]) {
     assert.ok(validatePolicy({ ...defaults, agentMessages }, loadModels()).some((error) => error.startsWith('agentMessages.')));
+  }
+});
+
+test('agent prompt timeout has a 25-second default and an integer range from 1 to 120', async () => {
+  const { POLICY_DEFAULTS, validatePolicy, loadPolicy } = await import('../src/control.js');
+  const { loadModels } = await import('../src/kit/config.js');
+  assert.equal(POLICY_DEFAULTS.agentMessages.promptTimeoutSeconds, 25);
+  const file = path.join(root, 'legacy-policy.json');
+  fs.writeFileSync(file, JSON.stringify({ agentMessages: { retentionDays: 14, metaRetentionDays: 180 } }));
+  assert.equal(loadPolicy({ file, models: loadModels() }).agentMessages.promptTimeoutSeconds, 25);
+  for (const value of [0, 121, 2.5, '25']) {
+    const policy = structuredClone(POLICY_DEFAULTS);
+    policy.agentMessages.promptTimeoutSeconds = value;
+    assert.ok(validatePolicy(policy, loadModels()).includes('agentMessages.promptTimeoutSeconds must be an integer from 1 to 120.'));
+  }
+  for (const value of [1, 120]) {
+    const policy = structuredClone(POLICY_DEFAULTS);
+    policy.agentMessages.promptTimeoutSeconds = value;
+    assert.equal(validatePolicy(policy, loadModels()).length, 0);
   }
 });

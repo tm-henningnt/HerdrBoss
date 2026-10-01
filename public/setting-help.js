@@ -45,8 +45,8 @@ export const SETTING_GROUPS = [
   },
   {
     id: 'attachments', title: 'Pictures', advanced: false,
-    controls: 'How many days Herdr Boss keeps pictures and agent messages.',
-    affects: 'Stored pictures, agent-message text, and agent-message metadata.',
+    controls: 'How many days Herdr Boss keeps pictures and agent messages. The time limit for a Herdr agent prompt process.',
+    affects: 'Stored pictures, agent-message text, agent-message metadata, and prompt delivery.',
     safe: 'A shorter period deletes older pictures, message text, or metadata at the hourly sweep.',
     restart: 'No restart. Select Apply policy.',
   },
@@ -325,6 +325,13 @@ export const SETTING_HELP = Object.fromEntries([
     default: '180', unit: 'Days', range: '7 to 730',
     raise: 'A higher value keeps message metadata longer.',
     lower: 'A lower value removes older metadata at the next sweep.',
+    apply: 'policy',
+  }),
+  S('attachments', 'agentMessages.promptTimeoutSeconds', 'Agent prompt timeout', {
+    what: 'The time limit for one Herdr agent prompt process. On a timeout, tell reads the pane input. If it equals the sent text, tell retries submit once. It clears only its own unsubmitted input and reads the pane again.',
+    default: '25', unit: 'Seconds', range: '1 to 120',
+    raise: 'A higher value gives Herdr more time to send a prompt. A blocked prompt delays the caller longer.',
+    lower: 'A lower value ends a blocked prompt sooner. A slow delivery can time out.',
     apply: 'policy',
   }),
 

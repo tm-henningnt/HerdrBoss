@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { agentPromptTimeoutMs } from './agent-prompt.js';
 import { DATA_DIR } from './config.js';
 import { alertBossForOpus, deliverPrompt, isAgentPaneBusy, isOpus, normalizeModel, waitForWorkerPane } from './kit/workers.js';
 import { contextTokensFor, loadModels, loadProjectConfig } from './kit/config.js';
@@ -110,8 +111,8 @@ function renameSuccessorAgent(item) {
   }
 }
 
-function call(command, args, cwd, { timeout = 120000 } = {}) {
-  return execFileSync(command, args, { cwd, encoding: 'utf8', timeout, maxBuffer: 8 * 1024 * 1024,
+function call(command, args, cwd, { timeout = 120000, killSignal = 'SIGTERM' } = {}) {
+  return execFileSync(command, args, { cwd, encoding: 'utf8', timeout, killSignal, maxBuffer: 8 * 1024 * 1024,
     stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, PATH: `${path.join(os.homedir(), '.local/bin')}${path.delimiter}${process.env.PATH || ''}` } });
 }
@@ -122,7 +123,7 @@ function herdrError(envelope) {
 }
 function herdr(args) {
   let stdout;
-  try { stdout = call('herdr', args); }
+  try { stdout = call('herdr', args, undefined, args[0] === 'agent' && args[1] === 'prompt' ? { timeout: agentPromptTimeoutMs(), killSignal: 'SIGKILL' } : {}); }
   catch (e) {
     // The installed CLI exits 1 on an error and prints the JSON error envelope on stderr.
     for (const stream of [e.stderr, e.stdout]) {

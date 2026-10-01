@@ -332,6 +332,27 @@ The caller's pane label sets the sender role. Herdr Boss checks a worker run rec
 
 Use `--file FILE` to read a regular file instead of TEXT. The file limit is 64 KB. Use `--kind nudge`, `--kind reminder`, or `--kind reply` to set the message kind. The default kind is `task`. Use `--reply-to ID` to link a reply.
 
+The prompt process has a 25-second limit. Set **Agent prompt timeout** in Settings to change it from 1 to 120 seconds. The policy key is `agentMessages.promptTimeoutSeconds`. Select **Apply policy**. Recovery reads and keys each have a limit of at most 2.5 seconds. A worker start keeps its existing 20-second Herdr wait limit when that limit is shorter.
+
+| Exit code | Result |
+|---|---|
+| `0` | The prompt was delivered. |
+| `75` | The pane could not take the prompt. No matching unsubmitted input was found. |
+| `76` | The prompt was typed but not submitted. The error says whether its input was cleared or left unchanged. |
+| `1` | The command failed for another reason. |
+| `2` | The command options were invalid. |
+
+After a timeout or stalled prompt, `tell` reads the complete pane input. It retries Enter once only when the input equals the sent text. It reads the input again before it clears that text. It leaves a different draft, an unreadable input, or an unknown harness unchanged. Claude uses two Escape keys. Codex uses one Ctrl+U for each input line. If its own text remains, Codex gets one Ctrl+C. These keys are best-known defaults. A final pane read checks the clear result. No second cancel key is sent.
+
+For a long prompt, write the text to a file in the worktree or scratch folder. Send one short line that names the absolute file path. The recipient must be able to read that path. This pattern keeps the terminal input short. `--file` reads the file and sends its full text, so it does not shorten the terminal input.
+
+```sh
+cat > "$HERDR_WORKTREE/.worker/follow-up.md" <<'EOF'
+Read the task sources. Run the scoped checks. Write the worker report.
+EOF
+herdr-boss tell demo-orch "Read $HERDR_WORKTREE/.worker/follow-up.md and execute it."
+```
+
 Agent messages stay out of Owner Chat and Mailbox. Worker reports create one recorded agent message for each run and report-file version. Workers keep the `.worker/report.md`, `.worker/report.json`, and `WORKER REPORT` path.
 
 The service records each delivered notice with sender role `service`. A prompt for an idle orchestrator with ready work has kind `nudge`. Status, kit, idle-worker, resource, and handover notices have kind `reminder`. A watch routine has kind `task`. Each notice in a digest has one row. A failed service prompt creates no row. The normal notice cooldown still applies. The text masks secrets and uses the agent text retention setting.
@@ -623,8 +644,8 @@ Do not edit this block. It comes from `public/setting-help.js`.
 
 #### Pictures
 
-- Controls: How many days Herdr Boss keeps pictures and agent messages.
-- Effect: Stored pictures, agent-message text, and agent-message metadata.
+- Controls: How many days Herdr Boss keeps pictures and agent messages. The time limit for a Herdr agent prompt process.
+- Effect: Stored pictures, agent-message text, agent-message metadata, and prompt delivery.
 - Safe to change: A shorter period deletes older pictures, message text, or metadata at the hourly sweep.
 - Restart: No restart. Select Apply policy.
 
@@ -633,6 +654,7 @@ Do not edit this block. It comes from `public/setting-help.js`.
 | Picture retention days | `attachments.retentionDays` | How long Herdr Boss keeps a linked picture. An hourly sweep removes expired pictures. An upload left unlinked for one hour is deleted. Deleting or dismissing a message deletes its pictures. | 30 | Days | 1 to 365 | A higher value keeps linked pictures longer. | A lower value deletes older pictures at the next sweep. Deleted pictures cannot be recovered. | Select Apply policy. The change takes effect at the next engine tick. |
 | Agent message text retention days | `agentMessages.retentionDays` | How long Herdr Boss keeps agent-message text. An hourly sweep removes older text. | 14 | Days | 1 to 90 | A higher value keeps agent-message text longer. | A lower value removes older text at the next sweep. Metadata rows use a separate retention setting. | Select Apply policy. The change takes effect at the next engine tick. |
 | Agent message metadata retention days | `agentMessages.metaRetentionDays` | How long Herdr Boss keeps agent-message metadata after it removes the message text. A row has no message text. | 180 | Days | 7 to 730 | A higher value keeps message metadata longer. | A lower value removes older metadata at the next sweep. | Select Apply policy. The change takes effect at the next engine tick. |
+| Agent prompt timeout | `agentMessages.promptTimeoutSeconds` | The time limit for one Herdr agent prompt process. On a timeout, tell reads the pane input. If it equals the sent text, tell retries submit once. It clears only its own unsubmitted input and reads the pane again. | 25 | Seconds | 1 to 120 | A higher value gives Herdr more time to send a prompt. A blocked prompt delays the caller longer. | A lower value ends a blocked prompt sooner. A slow delivery can time out. | Select Apply policy. The change takes effect at the next engine tick. |
 
 #### Watch
 

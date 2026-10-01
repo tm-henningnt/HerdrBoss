@@ -105,3 +105,7 @@ Summary: Add CI minute rules and GitHub workflow templates; create and copy miss
 ## 2db88201b003
 Impact: useful
 Summary: Use default worker collection recording in kit and command documentation.
+
+## 8efc9e5ccec6
+Impact: useful
+Summary: Bound agent prompt delivery and document the file-path pattern for long prompts.

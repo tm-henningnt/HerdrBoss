@@ -263,6 +263,19 @@ test('agent message retention renders and edits separate text and metadata perio
   assert.equal(app.getDraft().agentMessages.metaRetentionDays, 400);
 });
 
+test('agent prompt timeout renders its default, help and range, and accepts a policy edit', async () => {
+  const app = await views(); app.setModels({ codex: catalog, claude: catalog });
+  const s = fixture(); app.setState(s);
+  const html = app.settingsView(s);
+  assert.match(html, /data-policy-agent-message="promptTimeoutSeconds"/);
+  assert.match(html, /data-setting-help="agentMessages\.promptTimeoutSeconds"/);
+  assert.match(html, /min="1" max="120"[^>]*value="25"/);
+  const input = { closest: () => ({}), dataset: { policyAgentMessage: 'promptTimeoutSeconds' }, value: '40', id: 'setting-agent-timeout', setCustomValidity() {}, setAttribute() {}, removeAttribute() {} };
+  app.context.handlers.get('change').find((handler) => handler.toString().includes('el.dataset.policyAgentMessage'))({ target: input });
+  assert.equal(app.getDraft().agentMessages.promptTimeoutSeconds, 40);
+  assert.match(app.settingsView(s), /min="1" max="120"[^>]*value="40"/);
+});
+
 test('a blank picture retention field remains blank and invalid after rendering', async () => {
   const app = await views(); app.setModels({ codex: catalog, claude: catalog });
   const s = fixture(); s.policy.attachments = { retentionDays: null }; app.setState(s);

@@ -15,6 +15,7 @@ import { TASK_ID } from '../task-state.js';
 import { swapRefusal, swapExempt } from './swap-guard.js';
 import { recordWorkerReport, workerRunId } from '../agent-messages.js';
 import { scheduleWorkerPaneClose } from '../maintenance.js';
+import { agentPromptTimeoutMs } from '../agent-prompt.js';
 
 const NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
 const AGENT_READY_MARKERS = Object.freeze({
@@ -245,7 +246,7 @@ export function renderBrief(template, slots) {
 function parseHerdrJson(stdout) {
   let data;
   try { data = JSON.parse(stdout); } catch (error) { throw new Error(`Herdr returned invalid JSON: ${error.message}`); }
-  if (data?.error) throw new Error(data.error.message || String(data.error));
+  if (data?.error) throw Object.assign(new Error(data.error.message || String(data.error)), { code: data.error.code });
   return data?.result ?? data;
 }
 
@@ -265,9 +266,10 @@ function maskingHerdr(herdr, secrets) {
   };
 }
 
-export function createHerdrRunner(exec = (args) => execFileSync('herdr', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })) {
-  return (args) => {
-    const stdout = exec(args);
+export function createHerdrRunner(exec = (args, options) => execFileSync('herdr', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], ...options })) {
+  return (args, options = {}) => {
+    const prompt = args[0] === 'agent' && args[1] === 'prompt';
+    const stdout = exec(args, { ...(prompt ? { timeout: agentPromptTimeoutMs(), killSignal: 'SIGKILL' } : {}), ...options });
     if ((args[0] === 'pane' || args[0] === 'agent') && args[1] === 'read') return { text: stdout };
     return parseHerdrJson(stdout);
   };

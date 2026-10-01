@@ -217,8 +217,8 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine 
   const projectNewApi = createProjectNewApi({ dataDir: DATA_DIR, log: (level, text) => engine.log(level, text), ...projectNew });
   // The goal routes use the Herdr runner of the engine. A test replaces run.
   const goalApi = createGoalApi({
-    run: async (args) => {
-      const out = await engine.herdrRunner('herdr', args);
+    run: async (args, options) => {
+      const out = await engine.herdrRunner('herdr', args, options);
       if (args[1] === 'read' || typeof out !== 'string') return out;
       try { return JSON.parse(out); } catch { return out; }
     },

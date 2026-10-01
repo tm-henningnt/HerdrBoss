@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
+import { agentPromptTimeoutMs } from './agent-prompt.js';
 import { DATA_DIR, LIVE_DATA_DIR, dashboardUrl, serviceSettingsView } from './config.js';
 import { collectHerdr, collectQuotas, collectMachine, collectProcesses, collectCwdProcesses, collectMissingWorktreeProcesses, collectWorktreeCounts, collectPiModels, collectBrowserClients, findBrowsers, cpuUse, keepStaleRows, run } from './collect.js';
 import { evaluate, swapWarnStep, renderBulletin, fmtDuration, providerName, broadcastTargets, staleStatuses } from './rules.js';
@@ -653,7 +654,7 @@ export class Engine extends EventEmitter {
 
   // Store only delivered service prompts. A store failure must not cause a second prompt.
   async promptService(pane, text, { herdr = this.communicationHerdr, now = this.communicationNow ?? this.clock?.() ?? Date.now(), messages = [{ text, kind: 'reminder' }] } = {}) {
-    checkHerdrResponse(await this.herdrRunner('herdr', ['agent', 'prompt', pane, text]));
+    checkHerdrResponse(await this.herdrRunner('herdr', ['agent', 'prompt', pane, text], { timeout: agentPromptTimeoutMs(), killSignal: 'SIGKILL' }));
     const target = (herdr?.panes || []).find((item) => item.id === pane);
     const run = this.communicationRuns?.find((item) => item.pane === pane);
     const project = run?.project || target?.project || Object.values(this.communicationControl?.projects || this.state?.control?.projects || {})
@@ -2370,7 +2371,7 @@ export class Engine extends EventEmitter {
   // Returns false while the step waits for the next tick. A failed step is logged and never sends the goal again.
   // The send and the check are the steps of `herdr-boss goal set` in src/goal.js. The tick spreads the waits over several ticks.
   async deliverGoal(item, successor, now, at, scope) {
-    const herdr = (args) => this.herdrRunner('herdr', args);
+    const herdr = (args, options) => this.herdrRunner('herdr', args, options);
     if (!item.goal || item.goalDelivery !== 'command' || item.goalVerifiedAt || item.goalVerifyFailedAt) return true;
     const fail = (message) => {
       this.log('error', `Goal for handoff ${item.id}: ${message}`, scope);
@@ -2503,7 +2504,7 @@ export class Engine extends EventEmitter {
     await deliverQueued({
       panes: herdr?.panes || [], projects, now, busy,
       log: (type, text, extra) => this.log(type, text, extra),
-      prompt: async (pane, text) => checkHerdrResponse(await this.herdrRunner('herdr', ['agent', 'prompt', pane, text])),
+      prompt: async (pane, text) => checkHerdrResponse(await this.herdrRunner('herdr', ['agent', 'prompt', pane, text], { timeout: agentPromptTimeoutMs(), killSignal: 'SIGKILL' })),
     });
   }
 
