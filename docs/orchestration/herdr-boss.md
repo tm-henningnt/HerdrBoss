@@ -1,4 +1,4 @@
-<!-- herdr-boss kit v=00073aec20c4 -->
+<!-- herdr-boss kit v=e7194c41b551 -->
 Herdr Boss writes this file. Do not edit it. Run herdr-boss kit install to update it.
 
 # Herdr Boss orchestration kit
@@ -30,12 +30,15 @@ These are the shared operating rules for the orchestrator of this project.
 - When a lane is ahead of pace, start ready work on a lane from the bulletin **Use now** line. Do not wait for the ahead lane.
 - Read `kit/browser-service.md` for project browser commands.
 - Browser output removes credentials, query strings, and fragments. The `--full` flag shows hosts in full. It keeps the credential filter. Use invented values in reports and tests.
+- Before a browser restart, finish browser commands and disconnect CDP drivers. Restart waits up to 30 seconds, then refuses if a command or client remains. It restores saved web pages and blank tabs in separate windows. Restore drops query strings, fragments, and path parameters. It skips login and callback paths and sign-in hosts. Read the new tab IDs after a restart.
 - Keep the orchestrator pane labeled `orch`.
 - Your orchestrator agent is named `<slug>-orch`. Prompt workers and the Boss by pane ID or by that name.
 - Use `herdr-boss worker start` to start workers. Use `--read-only` for a task that changes no repository file.
 - Put task inputs in `.orchestration/state/inputs/<worker name>/`; worker start copies them into the worktree.
 - Use lowercase, unique worker names.
 - Give every worker one bounded task and exact allowed paths.
+- For a long prompt, write the text to a file in the worktree or scratch folder. Send one short line that names its absolute path with `herdr-boss tell`. Check that the recipient can read the file. The `--file` option sends the full text and does not shorten the terminal input.
+- `herdr-boss tell` bounds each prompt process to 25 seconds by default. Set **Agent prompt timeout** in Settings to change the limit. Exit code 0 means delivered, 75 means the pane could not take the prompt, and 76 means typed but not submitted. On a timeout, the command retries Enter once only when the pane input equals the sent text. It clears only that input and checks the result. A different or unreadable draft stays unchanged. Read the failure message before you retry.
 - Run each `herdr-boss browser` command and each `ps` or `pgrep` command alone. Do not join it to other commands with `&&`, `;`, or a pipe.
 - Put the relevant Owner decisions into each worker brief.
 - Keep Git branches, worktrees, commits, and merges under orchestrator control.
@@ -73,6 +76,7 @@ These are the shared operating rules for the orchestrator of this project.
 - Report to the Boss only when a task is merged and live, or when blocked. One or two lines. Send it with `herdr-boss tell`.
 - Do not message another project's orchestrator. The Boss relays messages between projects.
 - Decide and run your own pushes, deployments, and releases. Nobody approves them. Before each push, read the full diff for secrets, private local paths, and other-project client or tenant names. Push one change set at a time. Run `herdr-boss suite -- npm test` as a background command, then wait for it and read its exit code. The tool timeout is 600 seconds. The command takes the machine-wide `full-suite` lock. Never take the full-suite lock with a bare lock acquire for a suite. Push with `herdr-boss push <args>`. Use `herdr-boss push` for a push; it takes the lock when a pre-push hook exists. The full-suite lock serves waiters in order. Start your suite once, and wait; do not restart it to jump the queue. Exit code 75 means the lock was busy and no test ran. There is no load threshold. Send a deployment that spends money to the Owner through the Boss.
+- Read the lock wait line for the holder start, age, predicted end, and queue length. The line repeats at most once every 60 seconds. A slow holder also shows its PID and process state: `alive`, `zombie`, or `unknown`. `holder is slow` sends one notice to the agent named `boss` for that acquisition. It does not release the slot. The cause of the reported 45-minute wait is unverified. A zombie holder remains a hypothesis.
 - A pre-push hook may run `herdr-boss suite` or `herdr-boss suite --reuse`. When the suite runs under `herdr-boss push`, it reuses the push lock. A changed file always runs the suite again.
 - Use `herdr-boss gh issue create|comment|edit ... --body-file FILE` for issues. Use `herdr-boss gh label create|list|edit|sync` for labels, for example `herdr-boss gh label sync --preset triage`, and `herdr-boss gh milestone create|list` for milestones. These commands refuse a delete and a secret in a value. Do not use raw `gh` for them.
 - Record an Owner request typed into your pane as an Owner decision in `docs/orchestration/memory.md`.

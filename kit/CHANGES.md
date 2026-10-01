@@ -157,3 +157,7 @@ Summary: Restore excludes authentication path prefixes and sign-in hosts. It rem
 ## b90d8cbfe22d
 Impact: required
 Summary: Record approved worker scope and the full branch diff during collection.
+
+## e7194c41b551
+Impact: useful
+Summary: Integrate: browser restart and health, lock wait status, tell timeouts, worker scope, and collect cwd with the current kit text.
