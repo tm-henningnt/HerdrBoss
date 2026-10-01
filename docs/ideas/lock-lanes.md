@@ -59,6 +59,14 @@ A 0.4 min job waits 5.7 min at the median. The wait comes from 20 min jobs of an
 - The guard does not apply when no long job holds. It never delays a long job.
 - A stale sample (older than 3 minutes) or no sample counts as a pass.
 
+The default limits come from the seven days of machine samples read on 2026-10-01. The script printed only percentiles.
+
+| Setting | Default | Sample basis |
+| --- | ---: | --- |
+| `locks.guard.maxLoadPercent` | 231% | The 90th percentile of 5-minute load as a percent of cores was 230.5%. The limit rounds up. |
+| `locks.guard.maxSwapPercent` | 96% | The median was 89.3% and the 90th percentile was 94%. The limit stays above the steady use and the measured 90th percentile. |
+| `locks.guard.minFreeMemPercent` | 40% | The 10th percentile of free memory was 40%. The guard pauses only below this floor. |
+
 ### Display
 
 - `lock list` prints for each holder and each ticket the lane, the slots in use, and the predicted duration.

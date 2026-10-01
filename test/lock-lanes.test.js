@@ -1,5 +1,10 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
+import { loadPolicy, POLICY_DEFAULTS, savePolicy, validatePolicy } from '../src/control.js';
+import { loadModels } from '../src/kit/config.js';
 import { predictLockDuration } from '../src/kit/lock-lanes.js';
 
 const NOW = Date.parse('2026-10-01T12:00:00.000Z');
@@ -44,4 +49,42 @@ test('predictLockDuration ignores releases outside the 14 day window and other k
     line(3, 4000, { name: 'other-lock' }),
     line(4, 5000), line(5, 7000),
   ], { project: 'demo', kind: 'suite', name: 'full-suite', now: NOW }), { ms: null, samples: 2 });
+});
+
+test('lock policy has safe defaults and validates each lane and guard range', () => {
+  assert.equal(POLICY_DEFAULTS.locks.slots, 2);
+  assert.equal(POLICY_DEFAULTS.locks.shortLimitMinutes, 6);
+  assert.equal(POLICY_DEFAULTS.locks.guard.enabled, true);
+  const models = loadModels();
+  const withLocks = (locks) => ({ ...structuredClone(POLICY_DEFAULTS), locks });
+  assert.deepEqual(validatePolicy(withLocks(structuredClone(POLICY_DEFAULTS.locks)), models), []);
+  assert.match(validatePolicy(withLocks({ ...POLICY_DEFAULTS.locks, slots: 0 }), models).join(' '), /locks\.slots/);
+  assert.match(validatePolicy(withLocks({ ...POLICY_DEFAULTS.locks, slots: 5 }), models).join(' '), /locks\.slots/);
+  assert.match(validatePolicy(withLocks({ ...POLICY_DEFAULTS.locks, shortLimitMinutes: 61 }), models).join(' '), /shortLimitMinutes/);
+  for (const key of ['maxLoadPercent', 'maxSwapPercent', 'minFreeMemPercent']) {
+    const invalidValues = key === 'maxLoadPercent' ? [-1, 1001, 1.5, '50'] : [-1, 101, 1.5, '50'];
+    for (const value of invalidValues) {
+      const locks = structuredClone(POLICY_DEFAULTS.locks);
+      locks.guard[key] = value;
+      assert.match(validatePolicy(withLocks(locks), models).join(' '), new RegExp(`locks\\.guard\\.${key}`));
+    }
+  }
+  const disabled = structuredClone(POLICY_DEFAULTS.locks);
+  disabled.guard.enabled = 'yes';
+  assert.match(validatePolicy(withLocks(disabled), models).join(' '), /locks\.guard\.enabled/);
+});
+
+test('partial and legacy lock policies load and save with nested defaults', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-lock-policy-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'policy.json');
+  fs.writeFileSync(file, JSON.stringify({ locks: { guard: { enabled: false } } }));
+  const loaded = loadPolicy({ file, warn: () => {} });
+  assert.deepEqual(loaded.locks, {
+    slots: 2, shortLimitMinutes: 6,
+    guard: { enabled: false, maxLoadPercent: 231, maxSwapPercent: 96, minFreeMemPercent: 40 },
+  });
+  const policy = { ...structuredClone(POLICY_DEFAULTS), locks: { guard: { enabled: false } } };
+  assert.deepEqual(savePolicy(policy, loadModels(), { file }), []);
+  assert.deepEqual(loadPolicy({ file, warn: () => {} }).locks, loaded.locks);
 });

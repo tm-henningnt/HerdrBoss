@@ -8,6 +8,7 @@ import { appendPolicyChange, callerKind, diffPolicy } from './policy-log.js';
 const FILE = path.join(DATA_DIR, 'policy.json');
 export const POLICY_DEFAULTS = {
   machine: { guardEnabled: true, guardPausedUntil: null, ownerAwayMinutes: 10, presentCpuPercent: 70, awayCpuPercent: 95, presentLoadFactor: 3, awayLoadFactor: 8, diskWarnFreeGB: 20, diskCriticalFreeGB: 5, alertCooldownSeconds: 21600, swapWarnPercent: 80, swapRefusePercent: 95, swapMinUsedGB: 2, swapRefuseEnabled: false, kitDigestMinutes: 120 },
+  locks: { slots: 2, shortLimitMinutes: 6, guard: { enabled: true, maxLoadPercent: 231, maxSwapPercent: 96, minFreeMemPercent: 40 } },
   maxWorkers: 8,
   borrowIdle: true,
   idleMinutes: 15,
@@ -104,6 +105,12 @@ export function loadPolicy({ file = FILE, models = null, warn = (text) => consol
   const { ignoredRoutes: _derived, ...stored } = saved;
   const savedMachine = isObject(stored.machine) ? stored.machine : {};
   const machine = { ...POLICY_DEFAULTS.machine, ...savedMachine };
+  const savedLocks = isObject(stored.locks) ? stored.locks : {};
+  const locks = {
+    ...POLICY_DEFAULTS.locks,
+    ...savedLocks,
+    guard: { ...POLICY_DEFAULTS.locks.guard, ...(isObject(savedLocks.guard) ? savedLocks.guard : {}) },
+  };
   if (!Object.hasOwn(savedMachine, 'guardEnabled')) {
     const legacyOff = savedMachine.presentCpuPercent === 100 && savedMachine.awayCpuPercent === null &&
       savedMachine.presentLoadFactor === null && savedMachine.awayLoadFactor === null;
@@ -112,7 +119,7 @@ export function loadPolicy({ file = FILE, models = null, warn = (text) => consol
       presentCpuPercent: 95, awayCpuPercent: 95, presentLoadFactor: 3, awayLoadFactor: 8,
     });
   }
-  const policy = { ...POLICY_DEFAULTS, ...stored, machine, providerModes: { ...POLICY_DEFAULTS.providerModes, ...stored.providerModes }, preferredModels: stored.preferredModels || {}, modelProviders: stored.modelProviders || {}, extraModels: stored.extraModels || {}, disabledModels: stored.disabledModels || {}, harnessRoutes: stored.harnessRoutes || {}, pacingGoals: stored.pacingGoals || {}, excludedWorkspaces: Array.isArray(stored.excludedWorkspaces) ? stored.excludedWorkspaces : [], projects: stored.projects || {} };
+  const policy = { ...POLICY_DEFAULTS, ...stored, machine, locks, providerModes: { ...POLICY_DEFAULTS.providerModes, ...stored.providerModes }, preferredModels: stored.preferredModels || {}, modelProviders: stored.modelProviders || {}, extraModels: stored.extraModels || {}, disabledModels: stored.disabledModels || {}, harnessRoutes: stored.harnessRoutes || {}, pacingGoals: stored.pacingGoals || {}, excludedWorkspaces: Array.isArray(stored.excludedWorkspaces) ? stored.excludedWorkspaces : [], projects: stored.projects || {} };
   policy.ignoredRoutes = legacyRouteConflicts(policy, models ?? loadModels());
   for (const [kind, list] of Object.entries(policy.ignoredRoutes)) for (const model of list) {
     const key = `${file}:${kind}/${model}:${policy.modelProviders[model]}`;
@@ -169,6 +176,17 @@ export function validatePolicy(value, models) {
     if (typeof value.machine.swapRefuseEnabled !== 'boolean') errors.push('machine.swapRefuseEnabled must be boolean.');
     if (!Number.isFinite(value.machine.swapMinUsedGB) || value.machine.swapMinUsedGB < 0 || value.machine.swapMinUsedGB > 1024) errors.push('machine.swapMinUsedGB must be a number from 0 to 1024.');
     for (const [key, max] of [['diskWarnFreeGB', 1048576], ['diskCriticalFreeGB', 1048576]]) if (!Number.isFinite(value.machine[key]) || value.machine[key] < 0 || value.machine[key] > max) errors.push(`machine.${key} must be a number from 0 to ${max}.`);
+  }
+  if (!isObject(value.locks)) errors.push('locks must be an object.');
+  else {
+    if (!Number.isInteger(value.locks.slots) || value.locks.slots < 1 || value.locks.slots > 4) errors.push('locks.slots must be an integer from 1 to 4.');
+    if (!Number.isInteger(value.locks.shortLimitMinutes) || value.locks.shortLimitMinutes < 1 || value.locks.shortLimitMinutes > 60) errors.push('locks.shortLimitMinutes must be an integer from 1 to 60.');
+    if (!isObject(value.locks.guard)) errors.push('locks.guard must be an object.');
+    else {
+      if (typeof value.locks.guard.enabled !== 'boolean') errors.push('locks.guard.enabled must be boolean.');
+      if (!Number.isInteger(value.locks.guard.maxLoadPercent) || value.locks.guard.maxLoadPercent < 0 || value.locks.guard.maxLoadPercent > 1000) errors.push('locks.guard.maxLoadPercent must be an integer from 0 to 1000.');
+      for (const key of ['maxSwapPercent', 'minFreeMemPercent']) if (!Number.isInteger(value.locks.guard[key]) || value.locks.guard[key] < 0 || value.locks.guard[key] > 100) errors.push(`locks.guard.${key} must be an integer from 0 to 100.`);
+    }
   }
   if (!Number.isInteger(value.autoHandoverPercent) || value.autoHandoverPercent < 90 || value.autoHandoverPercent > 100) errors.push('autoHandoverPercent must be an integer from 90 to 100.');
   if (!Number.isInteger(value.autoHandoverContextTokens) || value.autoHandoverContextTokens < 50000 || value.autoHandoverContextTokens > 2000000) errors.push('autoHandoverContextTokens must be an integer from 50000 to 2000000.');
@@ -409,7 +427,22 @@ export function savePolicy(value, models, { file = FILE, quotas = null, now = Da
   // ignoredRoutes is derived at load time, so a draft that carries it back does not store it.
   const { ignoredRoutes: _derived, ...draft } = value || {};
   const { policy: stored, note } = prunePolicy(draft, models);
-  const merged = { ...POLICY_DEFAULTS, ...stored, machine: { ...POLICY_DEFAULTS.machine, ...stored.machine }, providerModes: { ...POLICY_DEFAULTS.providerModes, ...stored.providerModes } };
+  const savedLocks = stored.locks;
+  const locks = savedLocks === undefined
+    ? structuredClone(POLICY_DEFAULTS.locks)
+    : isObject(savedLocks) ? {
+      ...POLICY_DEFAULTS.locks,
+      ...savedLocks,
+      guard: savedLocks.guard === undefined ? structuredClone(POLICY_DEFAULTS.locks.guard)
+        : isObject(savedLocks.guard) ? { ...POLICY_DEFAULTS.locks.guard, ...savedLocks.guard } : savedLocks.guard,
+    } : savedLocks;
+  const merged = {
+    ...POLICY_DEFAULTS,
+    ...stored,
+    machine: { ...POLICY_DEFAULTS.machine, ...stored.machine },
+    locks,
+    providerModes: { ...POLICY_DEFAULTS.providerModes, ...stored.providerModes },
+  };
   const errors = validatePolicy(merged, models);
   if (quotas) errors.push(...validatePacingGoalEnds(merged, quotas, now));
   if (errors.length) return errors;

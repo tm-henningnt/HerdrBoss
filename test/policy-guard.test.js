@@ -70,6 +70,26 @@ function startServer(t, shares) {
 }
 const withShares = (shares, patch = {}) => ({ ...loadPolicy({ file: path.join(dataDir, 'policy.json'), models, warn: () => {} }), projects: projects(shares), ...patch });
 
+test('PUT /api/policy rejects invalid lock lane and guard ranges with field messages', async (t) => {
+  const { put } = await startServer(t, FIVE);
+  const cases = [
+    ['slots', 5, /locks\.slots must be an integer from 1 to 4/],
+    ['shortLimitMinutes', 61, /locks\.shortLimitMinutes must be an integer from 1 to 60/],
+    ['maxLoadPercent', 1001, /locks\.guard\.maxLoadPercent must be an integer from 0 to 1000/],
+    ['maxSwapPercent', 101, /locks\.guard\.maxSwapPercent must be an integer from 0 to 100/],
+    ['minFreeMemPercent', -1, /locks\.guard\.minFreeMemPercent must be an integer from 0 to 100/],
+  ];
+  for (const [key, value, expected] of cases) {
+    const draft = withShares(FIVE);
+    if (key === 'slots' || key === 'shortLimitMinutes') draft.locks[key] = value;
+    else draft.locks.guard[key] = value;
+    const response = await put(draft);
+    assert.equal(response.status, 400, key);
+    assert.match((await response.json()).errors.join(' '), expected, key);
+  }
+  assert.equal(loadPolicy().locks.slots, 2, 'rejected saves keep the defaults');
+});
+
 test('PUT /api/policy saves a change of one share with a total of 100', async (t) => {
   const { put } = await startServer(t, FIVE);
   const response = await put(withShares({ ...FIVE, a: 30, b: 10 }));
