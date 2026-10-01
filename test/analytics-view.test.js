@@ -517,7 +517,8 @@ test('memorySeries stacks one bar for each hour with a series for every class an
   assert.deepEqual(win.series.map((s) => s.cls), ['s1', 's2', 's3', 's4', 's5', 's-other']);
   assert.equal(win.points.length, 2);
   assert.deepEqual(win.series.map((s) => s.values), [[6000, 9000], [1000, 1000], [4000, 4000], [0, 500], [0, 0], [500, 500]]);
-  assert.deepEqual(win.totals, { claude: 15000, codex: 2000, browsers: 8000, mcp: 500, vitest: 0, other: 1000 });
+  // The legend holds the mean of the bars of the window, not their sum.
+  assert.deepEqual(win.windowMean, { claude: 7500, codex: 1000, browsers: 4000, mcp: 250, vitest: 0, other: 500 });
   const svg = stackedBars({ cats: win.points.map((p) => ({ label: hourLabel(p.at), tip: hourLabel(p.at, true) })), series: win.series, fmt: win.fmt, label: 'Memory' });
   assert.match(svg, /Claude: 5\.9 GB/);
   assert.match(svg, /Total: 11\.2 GB/);
@@ -577,7 +578,8 @@ test('the Analytics help and the guide describe the memory chart, the classes, t
 test('the memory chart states the bucket size and the samples behind the latest figure', () => {
   const start = app.indexOf('function memoryBlock(');
   const view = app.slice(start, app.indexOf('\n}\n', start));
-  assert.match(view, /columns of \$\{m\.bucketMin\} minutes/);
+  assert.match(view, /columns of \$\{m\?\.bucketMin \?\? 60\} minutes/);
+  assert.match(view, /mean memory of all classes/);
   assert.match(view, /sample/i);
   assert.match(view, /No command/i);
 });
@@ -643,11 +645,12 @@ test('the actual Memory by class card renders one bar for each hour with the cla
   });
   const card = run(mem());
   assert.match(card.title, /Memory of processes peaked at/);
-  assert.match(card.title, /the latest sample holds/);
+  assert.match(card.title, /the newest sample holds/);
+  assert.doesNotMatch(card.title, /sample holds \d[^;]*in the latest sample/, 'the title says latest once');
   assert.match(card.sub, /columns of 60 minutes/);
   assert.match(card.sub, /No command line is recorded/);
   for (const cls of ['Claude', 'Codex', 'Browsers', 'MCP servers', 'Vitest', 'Other']) assert.match(card.legend, new RegExp(cls), cls);
-  assert.match(card.legend, /Claude 14\.6 GB/, 'the legend gives the total of each series');
+  assert.match(card.legend, /Claude 7\.3 GB/, 'the legend gives the mean of each series');
   assert.equal((card.chart.match(/class="viz-hit"/g) || []).length, 2);
   assert.match(card.chart, /role="img" aria-label="Memory of processes/);
   assert.match(card.details, /<th>Peak 24 h<\/th>/);

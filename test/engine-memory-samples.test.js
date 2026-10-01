@@ -36,16 +36,20 @@ const engine = new Engine(cfg, {
   herdrRunner: async () => '{}',
   psRunner: async (args, options) => {
     calls.push({ args, options });
+    if (input.psHangs) return new Promise(() => {});
     if (input.psFails) { const error = new Error('ps failed'); error.code = 'ETIMEDOUT'; throw error; }
     return input.ps;
   },
 });
 engine.deliver = async () => {};
+const started = process.hrtime.bigint();
 for (const at of input.ticks) {
   now = Date.parse(at);
   await engine.tick();
 }
-console.log(JSON.stringify({ act: engine.act, calls }));
+const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+await new Promise((resolve) => setTimeout(resolve, 300));
+console.log(JSON.stringify({ act: engine.act, calls, elapsedMs, inFlight: !!engine.memory.memoryInFlight }));
 `;
 
 const machine = { load: [2.4, 3.1, 2.8], cpus: 10, ownerIdleMinutes: 0, memFreePercent: 18, memTotalGB: 24, swapUsedMB: 3200, swapTotalMB: 4096 };
@@ -70,7 +74,8 @@ function run(t, scenario) {
   assert.equal(result.status, 0, result.stderr);
   const file = path.join(dir, 'memory-samples.jsonl');
   const text = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
-  return { lines: text.split('\n').filter(Boolean).map((line) => JSON.parse(line)), calls: JSON.parse(result.stdout).calls };
+  const report = JSON.parse(result.stdout);
+  return { lines: text.split('\n').filter(Boolean).map((line) => JSON.parse(line)), calls: report.calls, elapsedMs: report.elapsedMs, inFlight: report.inFlight };
 }
 
 test('Engine.tick runs ps once per 5 minutes and writes one sample line per window', { timeout: 60000 }, (t) => {
@@ -101,5 +106,15 @@ test('Engine.tick writes no memory sample and runs no ps when actions are off', 
 test('Engine.tick swallows a ps failure and does not retry before the next window', { timeout: 60000 }, (t) => {
   const { lines, calls } = run(t, { psFails: true, ticks: ['2026-09-29T14:03:05.000Z', '2026-09-29T14:04:05.000Z', '2026-09-29T14:08:05.000Z'] });
   assert.equal(calls.length, 2);
+  assert.deepEqual(lines, []);
+});
+
+test('Engine.tick does not wait for a hung ps and runs no second ps while one is in flight', { timeout: 60000 }, (t) => {
+  const { lines, calls, elapsedMs, inFlight } = run(t, { psHangs: true, ticks: [
+    '2026-09-29T14:03:05.000Z', '2026-09-29T14:08:05.000Z', '2026-09-29T14:18:05.000Z', '2026-09-29T14:28:05.000Z',
+  ] });
+  assert.equal(calls.length, 1, 'the hung call blocks every later sample');
+  assert.equal(inFlight, true, 'the guard keeps the hung call in flight');
+  assert.ok(elapsedMs < 2000, `three ticks took ${elapsedMs} ms, so a tick waits for ps`);
   assert.deepEqual(lines, []);
 });

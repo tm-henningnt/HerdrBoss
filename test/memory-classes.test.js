@@ -38,8 +38,7 @@ test('classifyCommand puts each invented command in its class', () => {
     'node /tmp/herdr-fake/chrome-devtools-mcp/build/src/index.js': 'mcp',
     '/tmp/herdr-fake/bin/node_repl': 'mcp',
     '/tmp/herdr-fake/bin/cua_repl --headless': 'mcp',
-    'node /tmp/herdr-fake/node_modules/@modelcontextprotocol/sdk/dist/server.js': 'mcp',
-    'node /tmp/herdr-fake/mcp-server-postgres/index.js': 'mcp',
+    'node /tmp/herdr-fake/node_modules/mcp-server-postgres/index.js': 'mcp',
     '/tmp/herdr-fake/node_modules/.bin/vitest run': 'vitest',
     'node /tmp/herdr-fake/node_modules/vitest/dist/chunks/worker.js': 'vitest',
     '/usr/libexec/sshd -i': 'other',
@@ -49,9 +48,47 @@ test('classifyCommand puts each invented command in its class', () => {
   for (const [command, expected] of Object.entries(table)) assert.equal(classifyCommand(command), expected, command);
 });
 
+test('classifyCommand matches claude and codex on the program, not on an argument or a folder name', () => {
+  const table = {
+    'claude --mcp-config /tmp/herdr-fake/mcp.json --print': 'claude',
+    'claude -p fix the tests': 'claude',
+    '/tmp/herdr-fake/bin/codex --config /tmp/herdr-fake/codex-x/config.toml': 'codex',
+    'node /tmp/herdr-fake/repos/claude-x/bin/run.js': 'other',
+    'node /tmp/herdr-fake/repos/codex-tools/bin/server.js': 'other',
+    '/tmp/herdr-fake/repos/claude-x/node_modules/.bin/claude-tidy': 'other',
+    'node /tmp/herdr-fake/@anthropic-ai/claude-code/cli.js --mcp-config /tmp/herdr-fake/mcp.json': 'claude',
+  };
+  for (const [command, expected] of Object.entries(table)) assert.equal(classifyCommand(command), expected, command);
+});
+
+test('classifyCommand counts a process as mcp only when the command names a server', () => {
+  const table = {
+    'claude --mcp-config /tmp/herdr-fake/mcp.json': 'claude',
+    '/tmp/herdr-fake/bin/node --mcp-config /tmp/herdr-fake/mcp.json': 'other',
+    'node /tmp/herdr-fake/node_modules/@modelcontextprotocol/sdk/dist/server.js': 'other',
+    '/tmp/herdr-fake/bin/mcp-server-filesystem /tmp/herdr-fake/socket': 'mcp',
+    'npx -y chrome-devtools-mcp@latest': 'mcp',
+    '/tmp/herdr-fake/bin/computer-use-mcp --stdio': 'mcp',
+  };
+  for (const [command, expected] of Object.entries(table)) assert.equal(classifyCommand(command), expected, command);
+});
+
+test('classifyCommand counts a process as vitest only when node or vitest runs vitest', () => {
+  const table = {
+    'node /tmp/herdr-fake/node_modules/vitest/vitest.mjs run': 'vitest',
+    '/tmp/herdr-fake/node_modules/vitest/vitest.mjs watch': 'vitest',
+    'node /tmp/herdr-fake/node_modules/vitest/dist/chunks/worker.js': 'vitest',
+    '/opt/herdr-fake/vitest/daemon': 'other',
+    'node /tmp/herdr-fake/repos/vitest-tools/bench.js': 'other',
+    '/tmp/herdr-fake/bin/vitest-lint /tmp/herdr-fake/repo': 'other',
+  };
+  for (const [command, expected] of Object.entries(table)) assert.equal(classifyCommand(command), expected, command);
+});
+
 test('classifyCommand takes the tool over the parent directory in the path', () => {
-  assert.equal(classifyCommand('node /tmp/herdr-fake/claude-suite/node_modules/vitest/dist/worker.js'), 'vitest');
-  assert.equal(classifyCommand('node /tmp/herdr-fake/codex-mcp/node_modules/@modelcontextprotocol/sdk/server.js'), 'mcp');
+  assert.equal(classifyCommand('node /tmp/herdr-fake/vitest/node_modules/mcp-server-x/index.js'), 'mcp');
+  assert.equal(classifyCommand('node /tmp/herdr-fake/codex-mcp/node_modules/mcp-server-x/index.js'), 'mcp');
+  assert.equal(classifyCommand('node /tmp/herdr-fake/claude/node_modules/mcp-server-x/index.js'), 'mcp');
 });
 
 test('classifyCommand is safe for a missing or non-string command', () => {
@@ -65,7 +102,7 @@ test('sampleMemory sums RSS per class in MB and holds every class', () => {
     ' 2048 /tmp/herdr-fake/@anthropic-ai/claude-code/cli.js',
     ' 4096 /tmp/herdr-fake/chrome-devtools-mcp/build/src/index.js',
     ' 8192 /usr/libexec/sshd -i',
-    '  512 /tmp/herdr-fake/node_modules/vitest/dist/worker.js',
+    '  512 node /tmp/herdr-fake/node_modules/vitest/dist/worker.js',
     'a line without a size',
     '  not-a-number /tmp/herdr-fake/bin/claude',
     '',

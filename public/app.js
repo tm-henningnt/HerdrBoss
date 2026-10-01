@@ -4895,21 +4895,22 @@ function timelineChart() {
 }
 
 // Resident memory of the processes of each class over the last 24 hours, from /api/analytics. One bar for each hour.
-// A column is the memory of all classes at that hour, so the top of a column reads the memory of the machine.
+// A bar is the mean of the samples of one hour, so the top of a bar reads the memory of the machine at that hour.
 function memoryBlock() {
   const m = analyticsData?.memoryByClass;
   const base = { id: 'memory', title: 'Memory by class' };
   const win = memorySeries(m);
-  if (!win.points.length) return vizCard({ ...base, sub: 'Last 24 hours in columns of one hour, local time.', empty: 'No memory samples in the last 24 hours. Herdr Boss records one sample every 5 minutes.' });
+  const sub = `Last 24 hours in columns of ${m?.bucketMin ?? 60} minutes, local time. A bar is the mean memory of all classes in that hour. Each class takes one part of the bar. No command line is recorded.`;
+  if (!win.points.length) return vizCard({ ...base, sub, empty: 'No memory samples in the last 24 hours. Herdr Boss records one sample every 5 minutes.' });
   const peakTotal = Object.values(win.peak).reduce((a, b) => a + (Number.isFinite(b) ? b : 0), 0);
   const age = win.latest ? new Date(Date.now() - Date.parse(win.latest.at)) : null;
-  const latestText = `${mbText(win.latest?.total)} in the latest sample${age ? `, ${minutes(Math.max(0, age.getTime()))} ago` : ''}`;
-  const title = `Memory of processes peaked at ${mbText(peakTotal)} in 24 hours; the latest sample holds ${latestText}`;
+  const ago = age ? `, ${minutes(Math.max(0, age.getTime()))} ago` : '';
+  const title = `Memory of processes peaked at ${mbText(peakTotal)} in 24 hours; the newest sample holds ${mbText(win.latest?.total)}${ago}`;
   const cats = win.points.map((p) => ({ label: hourLabel(p.at), tip: hourLabel(p.at, true) }));
   return vizCard({
     ...base, title,
-    sub: `Last 24 hours in columns of ${m.bucketMin} minutes, local time. A bar is the memory of all classes in that hour. Each class takes one part of the bar. No command line is recorded.`,
-    legend: legendHtml(win.series.map((series) => ({ ...series, label: `${series.label} ${mbText(win.totals[series.key] ?? series.values.reduce((a, b) => a + b, 0))}` }))),
+    sub,
+    legend: legendHtml(win.series.map((series) => ({ ...series, label: `${series.label} ${mbText(win.windowMean[series.key] ?? 0)}` }))),
     chart: stackedBars({ cats, series: win.series, fmt: win.fmt, label: title }),
     details: memoryDetailsHtml(win),
   });
@@ -5935,7 +5936,7 @@ const HELP = {
     <p>A read-only line shows the limits: the scan interval, the bytes for one scan, the days kept, and the rise rule.</p>
     <h3>Lock wait and hold</h3><p>Bars show hold time in the lower part and wait time by lane in the upper parts, for each of the last 7 days. The text shows the median wait for the long and short lanes. Choose a project to see only its runs. A push or a suite run that reused a suite pass takes no lock and adds no time. Details lists the days, wait by lane, and the projects with their runs and timeouts. The card shows saved slot capacity and machine-wide slot use from the latest usable machine sample. After 3 minutes, use is unknown. The project filter does not change that machine scope. Predicted hold is shown for each project and kind. It uses the last 10 qualifying releases within 14 days, including the rotated ledger. Fewer than 3 releases means unknown.</p>
     <h3>Memory by class</h3><p>Herdr Boss records the resident memory of its own processes every 5 minutes. It adds the memory of the processes of each class and writes one line to <code>memory-samples.jsonl</code> in the data folder. A line holds the time and the megabytes of each class: <code>at</code> (ISO time) and <code>mb</code> with <code>claude</code>, <code>codex</code>, <code>browsers</code>, <code>mcp</code>, <code>vitest</code>, and <code>other</code>. Herdr Boss keeps no command line, no path, and no pane ID.</p>
-    <p>The chart shows one bar for each hour of the last 24 hours. Each class takes one part of the bar: Claude, Codex, Browsers, MCP servers, Vitest, and Other. The top of a bar reads the memory of all processes at that hour. An hour without a sample has no bar. Details lists each class with its latest sample and its highest hour in the window. The file rotates at 3 MB, and the old file is <code>memory-samples.1.jsonl</code>.</p>
+    <p>The chart shows one bar for each hour of the last 24 hours. Each bar is the mean of the samples of that hour. Each class takes one part of the bar: Claude, Codex, Browsers, MCP servers, Vitest, and Other. The top of a bar reads the memory of all processes at that hour. An hour without a sample has no bar. Details lists each class with its latest sample and its highest mean in the window. The file rotates at 3 MB, and the old file is <code>memory-samples.1.jsonl</code>.</p>
     <h3>Machine load and lock waits</h3><p>Lines show the 5-minute load as a percent of the cores, the memory in use, and the swap in use over the last 24 hours, in columns of 10 minutes. A shaded column had a lock holder. The strip under the chart shows the minutes in which a suite request waited in the queue.</p>
     <h3>Machine overload and idle waiting</h3><p>The chart shows, for each hour of the day in local time, the mean minutes per day of two conditions over the last 14 days. <b>Overload</b>: swap above 90% with at least 1 GB in use, or a 5-minute load above 3 times the cores. <b>Queue waited, CPU under 50%</b>: a suite request waited in the <code>full-suite</code> queue while the CPU was not the reason.</p>
     <p>Hover, focus, or touch an hour to read its values. Hatched bars have fewer than 10 samples. A note shows when samples cover less than half of the window; a minute without a sample is missing data. The table under the chart has the same 24 rows. On a phone the chart scrolls sideways inside its own box.</p>

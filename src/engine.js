@@ -712,14 +712,17 @@ export class Engine extends EventEmitter {
   }
 
   // One line for each 5-minute window, read from the process list once. The command never reaches the line. The write never throws.
-  async recordMemorySample(now) {
-    try {
-      const last = this.memory.lastMemorySampleAt;
-      if (Number.isFinite(last) && now - last < MEMORY_SAMPLE_INTERVAL_MS) return;
-      this.memory.lastMemorySampleAt = now;
-      const text = await this.psRunner(['LC_ALL=C', 'ps', '-Ao', 'rss=,command='], { timeout: MEMORY_PS_TIMEOUT_MS });
-      appendMemorySample(sampleMemory(text, now), { dataDir: this.lockDataDir });
-    } catch {}
+  // The call runs without await, so a slow or hung ps never delays a tick. The guard holds one call at a time.
+  recordMemorySample(now) {
+    if (this.memory.memoryInFlight) return;
+    const last = this.memory.lastMemorySampleAt;
+    if (Number.isFinite(last) && now - last < MEMORY_SAMPLE_INTERVAL_MS) return;
+    this.memory.lastMemorySampleAt = now;
+    this.memory.memoryInFlight = true;
+    this.psRunner(['LC_ALL=C', 'ps', '-Ao', 'rss=,command='], { timeout: MEMORY_PS_TIMEOUT_MS })
+      .then((text) => { appendMemorySample(sampleMemory(text, now), { dataDir: this.lockDataDir }); })
+      .catch(() => {})
+      .finally(() => { this.memory.memoryInFlight = false; });
   }
 
   async tick() {
@@ -1012,7 +1015,7 @@ export class Engine extends EventEmitter {
         }
         if (this.act) this.recordMachineSample(snap, queue, now);
       }
-      if (this.act) await this.recordMemorySample(now);
+      if (this.act) this.recordMemorySample(now);
       // The unmetered lane lists the permitted free models that can start. It never affects least-over selection.
       snap.lanes.unmetered = unmeteredLane(this.models, policy, control.projects, this.memory.exhaustedFreeModels, {
         unavailablePiModels: unavailablePiModels(mergeModels(this.models, policy).kinds.pi?.allowedModels, this.memory.piModels),

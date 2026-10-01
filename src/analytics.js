@@ -81,16 +81,16 @@ export function noticeCounts(events, { days = 7, now = Date.now() } = {}) {
 }
 
 // Resident memory per process class over the last hours, in buckets of bucketMin minutes, oldest first.
-// Each bucket sums the memory of the samples in it, so a column reads the memory of all classes at one time.
-// peak holds the highest bucket of each class in the window. latest holds the newest sample in the window.
+// Each bucket holds the mean of the samples in it, so a column reads the memory of all classes at one time
+// and the height does not grow with the number of samples. peak holds the higher of the highest bucket mean
+// and the highest single sample of each class in the window. latest holds the newest sample in the window.
 export function memoryByClass(samples, { hours = 24, bucketMin = 60, now = Date.now() } = {}) {
   const size = bucketMin * MINUTE;
   const end = Math.ceil(now / size) * size;
   const count = Math.round((hours * 60) / bucketMin);
   const start = end - count * size;
   const empty = () => Object.fromEntries(MEMORY_CLASSES.map((key) => [key, 0]));
-  const buckets = Array.from({ length: count }, () => ({ samples: 0, mb: empty() }));
-  const peak = empty();
+  const buckets = Array.from({ length: count }, () => ({ samples: 0, sum: empty(), top: empty() }));
   let latest = null;
   for (const s of samples || []) {
     const at = Date.parse(s?.at);
@@ -104,17 +104,31 @@ export function memoryByClass(samples, { hours = 24, bucketMin = 60, now = Date.
     const b = buckets[Math.floor((at - start) / size)];
     b.samples++;
     for (const key of MEMORY_CLASSES) {
-      b.mb[key] += mb[key];
-      peak[key] = Math.max(peak[key], b.mb[key]);
+      b.sum[key] += mb[key];
+      b.top[key] = Math.max(b.top[key], mb[key]);
     }
     if (!latest || at >= Date.parse(latest.at)) latest = { at: s.at, mb, total };
   }
+  const point = (b) => {
+    const mb = empty();
+    for (const key of MEMORY_CLASSES) mb[key] = b.samples ? Math.round(b.sum[key] / b.samples) : 0;
+    return mb;
+  };
+  const peak = empty();
+  for (const b of buckets) {
+    const mb = point(b);
+    for (const key of MEMORY_CLASSES) peak[key] = Math.max(peak[key], mb[key], b.top[key]);
+  }
+  const points = buckets.map((b, i) => {
+    const mb = point(b);
+    return { at: new Date(start + i * size).toISOString(), samples: b.samples, mb, total: MEMORY_CLASSES.reduce((sum, key) => sum + mb[key], 0) };
+  });
   return {
     hours,
     bucketMin,
     classes: MEMORY_CLASSES,
     start: new Date(start).toISOString(),
-    points: buckets.map((b, i) => ({ at: new Date(start + i * size).toISOString(), samples: b.samples, mb: b.mb, total: round(MEMORY_CLASSES.reduce((sum, key) => sum + b.mb[key], 0)) })),
+    points,
     peak,
     latest,
   };

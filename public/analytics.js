@@ -411,20 +411,22 @@ export function mbText(value) {
   return value >= 1024 ? `${(value / 1024).toFixed(1)} GB` : `${Math.round(value)} MB`;
 }
 
-// One bar for each hour of the last 24 hours, one series for each process class. The 5 named classes keep a color
-// slot; the rest share the neutral one. A bucket with no sample has no bar. Data without points has no series.
+// One bar for each hour of the last 24 hours, one series for each process class. Each bar is the mean of the samples
+// of that hour. The 5 named classes keep a color slot; the rest share the neutral one. A bucket with no sample has no
+// bar. Data without points has no series.
 export function memorySeries(memory) {
   const points = Array.isArray(memory?.points) ? memory.points.filter((p) => p.samples) : [];
   const classes = Array.isArray(memory?.classes) && memory.classes.length ? memory.classes : Object.keys(MEMORY_LABEL);
-  if (!points.length) return { points: [], classes, series: [], totals: {}, peak: memory?.peak || {}, latest: memory?.latest || null, bucketMin: memory?.bucketMin || 60, fmt: mbText };
+  if (!points.length) return { points: [], classes, series: [], windowMean: {}, peak: memory?.peak || {}, latest: memory?.latest || null, bucketMin: memory?.bucketMin || 60, fmt: mbText };
   const named = classes.map((key) => ({ key, label: MEMORY_LABEL[key] || key, values: points.map((p) => (Number.isFinite(p.mb?.[key]) ? p.mb[key] : 0)) }));
   const series = foldSeries(named);
-  const totals = Object.fromEntries(named.map((s) => [s.key, s.values.reduce((a, b) => a + b, 0)]));
+  // The legend holds the mean of the bars of the window. A sum of means would add one hour to another.
+  const windowMean = Object.fromEntries(named.map((s) => [s.key, Math.round(s.values.reduce((a, b) => a + b, 0) / s.values.length)]));
   return {
     points,
     classes,
     series,
-    totals,
+    windowMean,
     peak: memory?.peak || {},
     latest: memory?.latest || null,
     bucketMin: memory?.bucketMin || 60,

@@ -1350,7 +1350,7 @@ Each chart has a title that tells what to read from it, a scope line, a legend, 
 - **Model scorecard**: one bar for each of the 8 models with the most runs. The bar shows the share of first-time, rework, failed, and not judged runs. The right column shows the runs and the median time. Details also holds the recorded work by project and provider and the recent runs.
 - **Denials**: one stacked bar for each day. The range is 3 days by default. The buttons select 7 or 30 days, and the browser remembers the choice. The switch selects one harness or all harnesses. See [Denials per day](#denials-per-day).
 - **Lock wait and hold by project**: one stacked bar for each day of the last 7 days. The lower part is hold time. The upper parts show wait time in the long and short lanes. The chart shows the median wait for each lane. The switch selects one project by its slug or all projects. **Details** shows each day's wait by lane and lists the wait, hold, runs, and timeouts for each project. A row without a lane counts as long. A run that reused a suite pass, and a suite run inside a push, add no time. The chart source is the last 2 MB of `lock-ledger.jsonl`. The card also shows full-suite slot capacity from saved policy and machine-wide slot use from the latest usable machine sample. A sample older than three minutes shows unknown use. The project filter does not change the machine scope of slot use. The prediction table shows each project and kind. Predictions use the same last 10 qualifying releases within 14 days as admission, including the rotated ledger. Fewer than three releases shows unknown. The historical short-job baseline is a follow-up.
-- **Memory by class**: stacked bars for each hour of the last 24 hours. Each class takes one part of the bar. See [Memory by class](#memory-by-class).
+- **Memory by class**: stacked bars for each hour of the last 24 hours. Each bar is the mean of the samples of that hour. See [Memory by class](#memory-by-class).
 - **Machine load and lock waits**: lines for the 5-minute load as a percent of the cores, the memory in use, and the swap in use, over the last 24 hours in columns of 10 minutes. A shaded column had a lock holder. The strip under the lines shows the minutes in which a suite request waited.
 - **Machine overload and idle waiting by hour**: see [Machine samples](#machine-samples).
 - **Notices per pane**: stacked bars for each day of the last 7 days. The five panes with the most notices have their own color. The other panes share one gray.
@@ -2163,15 +2163,15 @@ Each line has these keys:
 - `at`: the sample time, cut to the whole 5 minutes, as a UTC ISO string.
 - `mb`: the resident memory in megabytes of each class: `claude`, `codex`, `browsers`, `mcp`, `vitest`, and `other`.
 
-A line holds no command line, no path, no pane ID, and no project name. The engine reads the process table with one `ps` call for the resident size and the command of each process, under `LC_ALL=C`, with a timeout of 10 seconds. It adds each size to a class and keeps only the totals. A call that fails or times out writes nothing and waits for the next 5 minutes.
+A line holds no command line, no path, no pane ID, and no project name. The engine reads the process table with one `ps` call for the resident size and the command of each process, under `LC_ALL=C`, with a timeout of 10 seconds. It adds each size to a class and keeps only the totals. The call runs without await, so a slow or hung `ps` never delays a tick. The engine runs one call at a time and starts the next one only when the call before it has ended. A call that fails or times out writes nothing and waits for the next 5 minutes.
 
-One definition assigns each process to a class. The engine tests the classes in this order and stops at the first match:
+One definition assigns each process to a class. A class matches the program that runs, either the executable or the script of an interpreter. An argument and a folder name never make a match on their own. The engine tests the classes in this order and stops at the first match:
 
-1. `vitest`: a test runner process.
-2. `mcp`: a model context protocol server.
-3. `browsers`: a browser or browser driver.
-4. `claude`: a Claude process.
-5. `codex`: a Codex process.
+1. `browsers`: the command names a browser, such as Google Chrome, Chromium, or chrome-headless-shell.
+2. `mcp`: the command names a model context protocol server, such as chrome-devtools-mcp, node_repl, cua_repl, or a name that starts with `mcp-server-`. A file or an option with the word mcp is no server name.
+3. `claude`: the program is `claude` or `claude-code`. A folder called `claude-x` is no match.
+4. `codex`: the program is `codex`. A folder called `codex-tools` is no match.
+5. `vitest`: node runs a vitest program, or the program itself is vitest.
 6. `other`: every other process, including Herdr Boss itself.
 
 When the file passes 3 MB, the engine renames it to `memory-samples.1.jsonl` and replaces the older rotated file. Two files hold about 20 days at one sample each 5 minutes.
@@ -2180,13 +2180,13 @@ When the file passes 3 MB, the engine renames it to `memory-samples.1.jsonl` and
 
 - `hours`, `bucketMin`: the window of 24 hours, in buckets of 60 minutes.
 - `classes`: the class keys, in the order above.
-- `points`: 24 buckets, oldest first. Each bucket has `at`, `samples`, `mb`, and `total`. `mb` holds the summed memory of each class of the bucket, and `total` holds the sum of the classes.
-- `peak`: the highest bucket of each class in the window.
+- `points`: 24 buckets, oldest first. Each bucket has `at`, `samples`, `mb`, and `total`. `mb` holds the mean memory of each class over the samples of the bucket, rounded to whole megabytes, and `total` holds the sum of the classes. A bucket with no sample holds zero for each class.
+- `peak`: the higher of the highest bucket mean and the highest single sample of each class in the window.
 - `latest`: the newest sample of the window, with `at`, `mb`, and `total`, or `null` when the window holds no sample.
 
 The route keeps its result for 60 seconds. It skips a line that does not parse. The response holds no project name, pane ID, path, or command.
 
-The **Analytics** page shows the buckets in the block **Memory by class**. The chart has one stacked bar for each hour of the last 24 hours. Each class takes one part of the bar, so the top of a bar reads the memory of all processes at that hour. An hour without a sample has no bar. The chart title gives the highest total of the window and the total of the latest sample. Details lists each class with its latest sample and its highest hour.
+The **Analytics** page shows the buckets in the block **Memory by class**. The chart has one stacked bar for each hour of the last 24 hours. A bar is the mean of the samples of that hour, so the top of a bar reads the memory of all processes at that hour. An hour without a sample has no bar. The chart title gives the highest total of the window and the total of the newest sample. Details lists each class with its latest sample and its highest mean.
 
 Before it removes a worktree, `herdr-boss worktree prune --apply` checks for processes whose current working directory is inside that worktree. It reports parent-PID-1 processes in missing or prunable worktree paths. Stop those processes before cleanup. Herdr Boss removes no worktrees if it cannot scan process directories. It also keeps worktrees that are dirty, unmerged, primary, used by a live pane, or uninspectable. Herdr Boss sends a notice about a parent-PID-1 process in a removed worktree only to that repository's `orch` workspace.
 

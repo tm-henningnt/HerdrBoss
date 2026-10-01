@@ -71,7 +71,7 @@ test('machineTimeline buckets the samples, marks held and waiting time, and skip
   assert.equal(r.points[0].load, null);
 });
 
-test('memoryByClass sums each class per bucket, keeps every class, and finds the peak', () => {
+test('memoryByClass averages each class per bucket, keeps every class, and finds the peak', () => {
   const at = (ms) => new Date(ms).toISOString();
   const line = (ms, mb) => ({ at: at(ms), mb });
   const samples = [
@@ -88,18 +88,32 @@ test('memoryByClass sums each class per bucket, keeps every class, and finds the
   assert.equal(r.classes.join(), 'claude,codex,browsers,mcp,vitest,other');
   const last = r.points.at(-1);
   assert.equal(last.samples, 2);
-  // A bucket sums the classes over its samples, so the total is the memory of all classes in the bucket.
-  assert.deepEqual(last.mb, { claude: 6200, codex: 2000, browsers: 6000, mcp: 1000, vitest: 200, other: 1800 });
-  assert.equal(last.total, 17200);
+  // A bucket holds the mean of its samples, so a column reads the memory of all classes at one time.
+  // The samples add up to 6200 MB of Claude, and the mean of the bucket is 3100 MB.
+  assert.deepEqual(last.mb, { claude: 3100, codex: 1000, browsers: 3000, mcp: 500, vitest: 100, other: 900 });
+  assert.equal(last.total, 8600);
   const empty = r.points[0];
   assert.equal(empty.samples, 0);
   assert.deepEqual(empty.mb, { claude: 0, codex: 0, browsers: 0, mcp: 0, vitest: 0, other: 0 });
   assert.equal(empty.total, 0);
-  // The peak per class is the highest bucket of the window, not the highest sample.
-  assert.deepEqual(r.peak, { claude: 6200, codex: 2000, browsers: 9000, mcp: 1000, vitest: 200, other: 1800 });
+  // The peak per class is the higher of the highest bucket mean and the highest single sample.
+  assert.deepEqual(r.peak, { claude: 3200, codex: 1000, browsers: 9000, mcp: 500, vitest: 200, other: 900 });
   assert.equal(r.latest.at, at(NOW - 10 * 60000));
   assert.equal(r.latest.mb.claude, 3200);
   assert.equal(r.latest.total, 7600);
+});
+
+test('memoryByClass rounds the mean to whole MB and holds the peak of a class with one sample in the window', () => {
+  const at = (ms) => new Date(ms).toISOString();
+  const r = memoryByClass([
+    { at: at(NOW - 30 * 60000), mb: { claude: 1000, browsers: 3000 } },
+    { at: at(NOW - 25 * 60000), mb: { claude: 1001, browsers: 0 } },
+    { at: at(NOW - 3 * 3600000), mb: { codex: 777 } },
+  ], { hours: 24, bucketMin: 60, now: NOW });
+  const last = r.points.at(-1);
+  assert.deepEqual(last.mb, { claude: 1001, codex: 0, browsers: 1500, mcp: 0, vitest: 0, other: 0 }, 'the mean of 1000 and 1001 rounds to 1001');
+  assert.equal(r.points.at(-3).mb.codex, 777, 'one sample in the bucket is its own mean');
+  assert.deepEqual(r.peak, { claude: 1001, codex: 777, browsers: 3000, mcp: 0, vitest: 0, other: 0 });
 });
 
 test('memoryByClass on no samples gives 24 empty buckets, a zero peak, and no latest sample', () => {
