@@ -525,7 +525,7 @@ test('worker collect uses approved scope extensions and copies them to the ledge
     changedPaths: ['.orchestration/runs/scope-collect.json', 'docs-approved.md'],
     commands: ['focused check'], evidenceTier: ['unit'], unverified: [], stoppedEarly: false,
   }));
-  assert.throws(() => collectWorker('scope-collect', {}, {
+  assert.throws(() => collectWorker('scope-collect', { noRecord: true }, {
     config: f.config, output: () => {}, listWorktreeProcesses: () => [],
   }), /outside its allowed scope.*docs-approved\.md/);
   allowWorkerScope('scope-collect', { paths: ['docs-approved.md'], reason: 'small docs fix' }, {

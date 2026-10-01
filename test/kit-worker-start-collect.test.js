@@ -167,7 +167,7 @@ test('worker collect keeps changed paths stable after the base branch merges the
     issue: null, branch: run.branch, worktree: run.worktree, changedPaths: ['src/change.js'],
     commands: ['focused check'], evidenceTier: ['unit'], unverified: [], stoppedEarly: false,
   }));
-  const collect = () => collectWorker('stable-base', {}, {
+  const collect = () => collectWorker('stable-base', { noRecord: true }, {
     config: f.config, output: () => {}, listWorktreeProcesses: () => [],
   });
   const beforeMerge = collect();
@@ -227,7 +227,7 @@ test('worker collect ignores a kit-managed change with an empty allow list', (t)
     t.after(kit.clean);
     kit.writeChange(relative, true);
     kit.writeReport([relative]);
-    const summary = collectWorker(name, {}, { config: kit.config, output: () => {}, listWorktreeProcesses: () => [] });
+    const summary = collectWorker(name, { noRecord: true }, { config: kit.config, output: () => {}, listWorktreeProcesses: () => [] });
     assert.deepEqual(summary.actualPaths, [], `${relative} must not count as a changed path`);
     assert.deepEqual(summary.reportedPaths, [], `${relative} must not count as a reported path`);
   }
@@ -238,7 +238,7 @@ test('worker collect still refuses a change to a path next to a kit-managed path
   t.after(kit.clean);
   kit.writeChange('docs/orchestration/memory.md', true);
   kit.writeReport(['docs/orchestration/memory.md']);
-  assert.throws(() => collectWorker('kit-path-refusal', {}, {
+  assert.throws(() => collectWorker('kit-path-refusal', { noRecord: true }, {
     config: kit.config, output: () => {}, listWorktreeProcesses: () => [],
   }), /outside its allowed scope: docs\/orchestration\/memory\.md/);
 });
@@ -251,7 +251,7 @@ test('worker collect checks the product paths next to an ignored kit path', (t) 
   kit.writeChange('AGENTS.md', true);
   kit.writeChange('src/change.js', true);
   kit.writeReport(['AGENTS.md', 'src/change.js']);
-  const summary = collectWorker('kit-path-mixed', {}, { config: kit.config, output: () => {}, listWorktreeProcesses: () => [] });
+  const summary = collectWorker('kit-path-mixed', { noRecord: true }, { config: kit.config, output: () => {}, listWorktreeProcesses: () => [] });
   assert.deepEqual(summary.reportedPaths, ['src/change.js']);
   assert.deepEqual(summary.actualPaths, ['src/change.js']);
   assert.deepEqual(summary.outOfScope, []);
@@ -461,7 +461,7 @@ test('worker collection warns only for stale or missing artifacts in explicitly 
       const output = [];
       const recordOptions = scenario.name === 'stale-artifacts'
         ? { record: true, outcome: 'done', gatePassed: true }
-        : {};
+        : { noRecord: true };
       const summary = collectWorker(scenario.name, recordOptions, {
         config: f.config,
         output: (line) => output.push(line),
@@ -1348,7 +1348,7 @@ test('worker start read-only mode needs no allow path and rejects one', () => {
     issue: null, branch: run.branch, worktree: run.worktree, changedPaths: ['README.md'],
     commands: ['check'], evidenceTier: ['unit'], unverified: [], stoppedEarly: false,
   }));
-  assert.throws(() => collectWorker('read-only', {}, {
+  assert.throws(() => collectWorker('read-only', { noRecord: true }, {
     config: f.config, output: () => {}, listWorktreeProcesses: () => [],
   }), /changed paths outside its allowed scope: README\.md/);
 });
@@ -1492,4 +1492,268 @@ test('worker start load warning names the load, the limit, and the actions', asy
   assert.match(text, /--force cannot bypass/);
   assert.match(loadWarning({ machine: { owner: 'present', cpuLimit: 70, fiveMinute: 25, loadLimit: 24 } }), /CPU unknown/);
   assert.match(loadWarning({ machine: { owner: 'present', cpuPercent: 80, cpuLimit: 70, fiveMinute: 1, loadLimit: null, guardState: 'paused', guardEnabled: true, guardPausedUntil: new Date(Date.now() - 1000).toISOString() } }), /Machine limit exceeded/, 'an expired pause activates the guard again');
+});
+
+function writeWorkerReport(run, extra = {}) {
+  const reportDir = path.join(run.worktree, run.workerDir || '.worker');
+  fs.writeFileSync(path.join(reportDir, 'report.md'), 'Report.\n');
+  fs.writeFileSync(path.join(reportDir, 'report.json'), JSON.stringify({
+    issue: null,
+    branch: run.branch,
+    worktree: run.worktree,
+    changedPaths: [],
+    commands: ['focused check'],
+    evidenceTier: ['unit'],
+    unverified: [],
+    stoppedEarly: false,
+    ...extra,
+  }));
+}
+
+function cleanWorkerRun(t, fixture, run) {
+  t.after(() => {
+    try { git(fixture.root, 'worktree', 'remove', '--force', run.worktree); } catch {}
+    if (run.branch && run.branch !== 'main') {
+      try { git(fixture.root, 'branch', '-D', run.branch); } catch {}
+    }
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  });
+}
+
+test('worker collect records by default when the orchestrator gives the review result', (t) => {
+  const f = setupFixture(null);
+  const run = startWorker('collect-default', { kind: 'codex', task: 'x', taskId: 'T1', allow: ['src/'] }, {
+    config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+  });
+  cleanWorkerRun(t, f, run);
+  writeWorkerReport(run);
+
+  assert.throws(() => collectWorker('collect-default', {}, {
+    config: f.config, output: () => {}, listWorktreeProcesses: () => [], recordUsageFn: () => ({ errors: [] }),
+  }), /Use --no-record to read the report without a ledger entry\./);
+  const summary = collectWorker('collect-default', { outcome: 'done', gatePassed: true }, {
+    config: f.config, now: Date.parse('2026-10-01T12:00:00Z'), output: () => {}, listWorktreeProcesses: () => [], recordUsageFn: () => ({ errors: [] }),
+  });
+
+  assert.equal(summary.name, 'collect-default');
+  const record = JSON.parse(fs.readFileSync(run.recordFile, 'utf8'));
+  assert.equal(record.outcome, 'done');
+  assert.equal(record.finishedAt, '2026-10-01T12:00:00.000Z');
+  assert.equal(record.collectedAt, '2026-10-01T12:00:00.000Z');
+  assert.equal(readWorkerFacts(f.config.runsPath, { isLive: () => false, isMerged: () => false })[0].phase, 'review');
+  assert.equal(fs.readFileSync(f.config.ledgerPath, 'utf8').trim().split('\n').length, 1);
+});
+
+test('worker collect --no-record reads the report and changes no run or ledger record', (t) => {
+  const f = setupFixture(null);
+  const run = startWorker('collect-dry-read', { kind: 'codex', task: 'x', taskId: 'T1', allow: ['src/'] }, {
+    config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+  });
+  cleanWorkerRun(t, f, run);
+  writeWorkerReport(run);
+  const before = fs.readFileSync(run.recordFile, 'utf8');
+  const output = [];
+
+  const summary = runKitCommand('worker', ['collect', 'collect-dry-read', '--no-record'], {
+    config: f.config, env: { ...f.env, HERDR_BOSS_DIR: path.join(f.root, 'temporary-boss') }, herdr: f.herdr, output: (line) => output.push(line),
+  });
+
+  assert.equal(summary.name, 'collect-dry-read');
+  assert.ok(output.some((line) => line.includes('collect-dry-read')));
+  assert.equal(fs.readFileSync(run.recordFile, 'utf8'), before);
+  assert.equal(fs.existsSync(f.config.ledgerPath), false);
+  assert.throws(() => runKitCommand('worker', ['collect', 'collect-dry-read', '--record'], {
+    config: f.config, env: f.env, herdr: f.herdr, output: () => {},
+  }), /--record needs:[\s\S]*Use --no-record to read the report without a ledger entry/);
+  assert.throws(() => runKitCommand('worker', ['collect', 'collect-dry-read', '--record', '--no-record'], {
+    config: f.config, env: f.env, herdr: f.herdr, output: () => {},
+  }), /Use either --record or --no-record/);
+  assert.equal(fs.readFileSync(run.recordFile, 'utf8'), before);
+});
+
+test('a refused worker collect closes nothing and writes no ledger entry', (t) => {
+  const f = setupFixture(null);
+  const run = startWorker('collect-refused', { kind: 'codex', task: 'x', taskId: 'T1', allow: ['src/'] }, {
+    config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+  });
+  cleanWorkerRun(t, f, run);
+  writeWorkerReport(run, { changedPaths: ['outside.js'] });
+  const before = fs.readFileSync(run.recordFile, 'utf8');
+
+  assert.throws(() => collectWorker('collect-refused', { outcome: 'done', gatePassed: true }, {
+    config: f.config, output: () => {}, listWorktreeProcesses: () => [], recordUsageFn: () => ({ errors: [] }),
+  }), /changed paths outside its allowed scope/);
+
+  assert.equal(fs.readFileSync(run.recordFile, 'utf8'), before);
+  assert.equal(fs.existsSync(f.config.ledgerPath), false);
+});
+
+test('worker start copies local orchestration files from the main checkout safely', (t) => {
+  const f = setupFixture(null);
+  const local = path.join(f.root, '.orchestration', 'local');
+  const nested = path.join(local, 'nested');
+  const existing = path.join(nested, 'pre-existing.txt');
+  fs.mkdirSync(nested, { recursive: true });
+  fs.writeFileSync(existing, 'base version\n');
+  git(f.root, 'add', '.orchestration/local/nested/pre-existing.txt');
+  git(f.root, 'commit', '-m', 'track existing local input');
+  fs.writeFileSync(existing, 'source version\n');
+  const newDirectory = path.join(nested, 'private-dir');
+  fs.mkdirSync(newDirectory, { mode: 0o700 });
+  fs.chmodSync(newDirectory, 0o700);
+  fs.writeFileSync(path.join(newDirectory, 'private-token-name.txt'), 'copied\n', { mode: 0o600 });
+  fs.chmodSync(path.join(newDirectory, 'private-token-name.txt'), 0o600);
+  fs.writeFileSync(path.join(nested, 'oversize-private-name.bin'), Buffer.alloc(5 * 1024 * 1024 + 1));
+  fs.writeFileSync(path.join(nested, 'link-target.txt'), 'target\n');
+  const readOnlySource = path.join(nested, 'read-only-source');
+  fs.mkdirSync(readOnlySource, { mode: 0o700 });
+  fs.writeFileSync(path.join(readOnlySource, 'allowed.txt'), 'nested readonly\n');
+  fs.chmodSync(readOnlySource, 0o500);
+  fs.symlinkSync('link-target.txt', path.join(nested, 'private-link-name.txt'));
+  for (const hidden of ['.worker', '.git']) {
+    fs.mkdirSync(path.join(local, hidden));
+    fs.writeFileSync(path.join(local, hidden, 'private-name.txt'), 'do not copy\n');
+  }
+
+  const alternate = path.join(os.tmpdir(), `herdr-kit-caller-${process.pid}-${Date.now()}`);
+  git(f.root, 'worktree', 'add', '-b', 'caller-checkout', alternate, 'main');
+  const config = loadProjectConfig({ cwd: alternate });
+  const output = [];
+  const run = startWorker('copy-local', { kind: 'codex', task: 'x', taskId: 'T1', allow: ['src/'] }, {
+    config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: (line) => output.push(line),
+  });
+  t.after(() => {
+    try { fs.chmodSync(readOnlySource, 0o700); } catch {}
+    try { fs.chmodSync(path.join(run.worktree, '.orchestration', 'local', 'nested', 'read-only-source'), 0o700); } catch {}
+    try { git(f.root, 'worktree', 'remove', '--force', run.worktree); } catch {}
+    try { git(f.root, 'branch', '-D', run.branch); } catch {}
+    try { git(f.root, 'worktree', 'remove', '--force', alternate); } catch {}
+    try { git(f.root, 'branch', '-D', 'caller-checkout'); } catch {}
+    fs.rmSync(f.root, { recursive: true, force: true });
+  });
+
+  const target = path.join(run.worktree, '.orchestration', 'local', 'nested');
+  assert.equal(fs.readFileSync(path.join(target, 'pre-existing.txt'), 'utf8'), 'base version\n', 'the worker checkout keeps an existing file');
+  assert.equal(fs.readFileSync(path.join(target, 'private-dir', 'private-token-name.txt'), 'utf8'), 'copied\n');
+  assert.equal(fs.statSync(path.join(target, 'private-dir')).mode & 0o777, 0o700);
+  assert.equal(fs.statSync(path.join(target, 'private-dir', 'private-token-name.txt')).mode & 0o777, 0o600);
+  assert.equal(fs.existsSync(path.join(target, 'oversize-private-name.bin')), false);
+  assert.equal(fs.existsSync(path.join(target, 'private-link-name.txt')), false);
+  assert.equal(fs.existsSync(path.join(run.worktree, '.orchestration', 'local', '.worker')), false);
+  assert.equal(fs.existsSync(path.join(run.worktree, '.orchestration', 'local', '.git')), false);
+  assert.equal(fs.readFileSync(path.join(target, 'link-target.txt'), 'utf8'), 'target\n', 'the regular link target is copied');
+  assert.equal(fs.readFileSync(path.join(target, 'read-only-source', 'allowed.txt'), 'utf8'), 'nested readonly\n');
+  assert.equal(fs.statSync(path.join(target, 'read-only-source')).mode & 0o777, 0o500);
+  assert.equal(git(run.worktree, 'status', '--porcelain', '--untracked-files=all'), '', 'the local copy is not a product change');
+  assert.match(output.join('\n'), /Copied 3 files from \.orchestration\/local\./);
+  assert.match(output.join('\n'), /Warning: skipped 1 file over 5 MB from \.orchestration\/local\./);
+  assert.doesNotMatch(output.join('\n'), /private-token-name|oversize-private-name|private-link-name/);
+});
+
+test('worker start prints nothing about local orchestration when the folder is absent', (t) => {
+  const f = setupFixture(null);
+  const output = [];
+  const run = startWorker('no-local', { kind: 'codex', task: 'x', taskId: 'T1', allow: ['src/'] }, {
+    config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: (line) => output.push(line),
+  });
+  cleanWorkerRun(t, f, run);
+  assert.doesNotMatch(output.join('\n'), /Copied .*\.orchestration\/local|skipped .*\.orchestration\/local/);
+});
+
+test('a forced Claude Opus start logs an event and sends one line to the Boss pane', (t) => {
+  const f = setupFixture(null);
+  const dataDir = path.join(f.root, 'temporary-boss-data');
+  const env = { ...f.env, HERDR_BOSS_DIR: dataDir };
+  const bossPrompts = [];
+  const herdr = (args) => {
+    if (args[0] === 'pane' && args[1] === 'list') {
+      const result = f.herdr(args);
+      return { ...result, panes: [...result.panes, { pane_id: 'boss:p1', workspace_id: 'boss', label: 'boss' }] };
+    }
+    if (args[0] === 'agent' && args[1] === 'prompt' && args[2] === 'boss:p1') {
+      bossPrompts.push(args);
+      return {};
+    }
+    return f.herdr(args);
+  };
+  const output = [];
+
+  const run = startWorker('opus-worker', { kind: 'claude', model: 'claude-opus-5-5', task: 'x', taskId: 'OP1', allow: ['src/'], noWorktree: true, force: true }, {
+    config: f.config, models: loadModels(), herdr, env, rulesFile: f.rulesFile, output: (line) => output.push(line),
+  });
+  t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
+
+  const line = 'Opus worker: opus-worker runs claude-opus-5-5 (forced).';
+  assert.ok(output.includes(line));
+  assert.deepEqual(bossPrompts, [['agent', 'prompt', 'boss:p1', line]]);
+  const [event] = fs.readFileSync(path.join(dataDir, 'events.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(event.type, 'worker-opus');
+  assert.equal(event.worker, 'opus-worker');
+  assert.equal(event.taskId, 'OP1');
+  assert.equal(event.project, f.config.slug);
+  assert.equal(run.model, 'claude-opus-5-5');
+
+  const missingBossOutput = [];
+  startWorker('opus-no-boss', { kind: 'claude', model: 'claude-opus-5-5', task: 'x', taskId: 'OP3', allow: ['src/'], noWorktree: true, force: true }, {
+    config: f.config, models: loadModels(), herdr: f.herdr, env, rulesFile: f.rulesFile, output: (line) => missingBossOutput.push(line),
+  });
+  assert.ok(missingBossOutput.includes('Opus worker: opus-no-boss runs claude-opus-5-5 (forced).'));
+  assert.ok(missingBossOutput.includes('Warning: no Boss pane was found; the Opus start alert was not sent.'));
+  assert.equal(bossPrompts.length, 1);
+});
+
+test('an Opus refusal logs silently, and other worker models do not alert the Boss', (t) => {
+  const refused = setupFixture(null);
+  const refusedDir = path.join(refused.root, 'refused-data');
+  const refusedOutput = [];
+  assert.throws(() => startWorker('opus-refused', {
+    kind: 'claude', model: 'claude-opus-5-5', task: 'x', taskId: 'OP2', allow: ['src/'], noWorktree: true,
+  }, {
+    config: refused.config, models: loadModels(), herdr: refused.herdr,
+    env: { ...refused.env, HERDR_BOSS_DIR: refusedDir }, rulesFile: refused.rulesFile, output: (line) => refusedOutput.push(line),
+  }), /needs the Owner's approval/);
+  t.after(() => fs.rmSync(refused.root, { recursive: true, force: true }));
+  const [refusedEvent] = fs.readFileSync(path.join(refusedDir, 'events.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(refusedEvent.type, 'worker-opus-refused');
+  assert.equal(refusedEvent.worker, 'opus-refused');
+  assert.equal(refusedEvent.taskId, 'OP2');
+  assert.equal(refusedEvent.project, refused.config.slug);
+  assert.equal(refusedOutput.some((line) => line.startsWith('Opus worker:')), false);
+
+  const dryRun = setupFixture(null);
+  const dryRunDir = path.join(dryRun.root, 'dry-run-data');
+  assert.throws(() => startWorker('opus-dry-run', {
+    kind: 'claude', model: 'claude-opus-5-5', task: 'x', taskId: 'OP4', allow: ['src/'], dryRun: true,
+  }, {
+    config: dryRun.config, models: loadModels(), herdr: dryRun.herdr,
+    env: { ...dryRun.env, HERDR_BOSS_DIR: dryRunDir }, rulesFile: dryRun.rulesFile, output: () => {},
+  }), /needs the Owner's approval/);
+  assert.equal(fs.existsSync(path.join(dryRunDir, 'events.jsonl')), false, 'dry-run changes no event data');
+  t.after(() => fs.rmSync(dryRun.root, { recursive: true, force: true }));
+
+  for (const [name, kind, model] of [
+    ['codex-worker', 'codex', undefined],
+    ['claude-sonnet', 'claude', 'claude-sonnet-5-5'],
+  ]) {
+    const f = setupFixture(null);
+    const dataDir = path.join(f.root, 'temporary-boss-data');
+    const prompts = [];
+    const herdr = (args) => {
+      if (args[0] === 'pane' && args[1] === 'list') {
+        const result = f.herdr(args);
+        return { ...result, panes: [...result.panes, { pane_id: 'boss:p1', workspace_id: 'boss', label: 'boss' }] };
+      }
+      if (args[0] === 'agent' && args[1] === 'prompt' && args[2] === 'boss:p1') { prompts.push(args); return {}; }
+      return f.herdr(args);
+    };
+    const output = [];
+    const run = startWorker(name, { kind, ...(model ? { model } : {}), task: 'x', taskId: 'T3', allow: ['src/'], noWorktree: true, force: true }, {
+      config: f.config, models: loadModels(), herdr, env: { ...f.env, HERDR_BOSS_DIR: dataDir }, rulesFile: f.rulesFile, output: (line) => output.push(line),
+    });
+    assert.equal(run.model, model ?? 'gpt-6-luna');
+    assert.equal(fs.existsSync(path.join(dataDir, 'events.jsonl')), false);
+    assert.deepEqual(prompts, []);
+    assert.equal(output.some((line) => line.startsWith('Opus worker:')), false);
+    t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
+  }
 });
