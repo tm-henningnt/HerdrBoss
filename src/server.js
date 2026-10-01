@@ -345,6 +345,11 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine 
         const now = Date.now(); uploads = uploads.filter((at) => at > now - 60000);
         if (uploads.length >= UPLOAD_LIMIT_PER_MINUTE) return send(res, 429, { error: 'Herdr Boss accepts at most 30 picture uploads a minute.' });
         uploads.push(now);
+        const declaredLength = Number(req.headers['content-length']);
+        if (Number.isFinite(declaredLength) && declaredLength > MAX_ATTACHMENT_BYTES) {
+          req.resume();
+          return send(res, 413, { error: 'The picture exceeds the 10 MB limit.' });
+        }
         const type = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
         if (!Object.hasOwn(ATTACHMENT_TYPES, type)) return send(res, 415, { error: 'Send a JPEG, PNG, WebP, GIF, HEIC or HEIF picture.' });
         let name;

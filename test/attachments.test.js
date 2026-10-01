@@ -108,6 +108,13 @@ test('upload rejects a mismatched type, malformed name and a body over 10 MB', a
   assert.equal((await upload('image/png', Buffer.alloc(10 * 1024 * 1024 + 1))).status, 413);
 });
 
+test('rejects an oversized declared attachment body before consuming it', async () => {
+  const response = await raw('POST', '/api/attachments', {
+    'content-type': 'image/png', 'content-length': String(10 * 1024 * 1024 + 1), connection: 'close',
+  }, Buffer.from('small body'));
+  assert.equal(response.status, 413);
+});
+
 test('attachment reads reject invalid ids and traversal at the raw HTTP boundary', async () => {
   for (const route of ['/attachments', '/attachments/bad', '/attachments/../package.json', '/attachments/%2e%2e/package.json', '/attachments//etc/passwd', `/attachments/att_${'a'.repeat(32)}.png`]) {
     assert.equal((await raw('GET', route)).status, 404, route);
@@ -159,6 +166,18 @@ test('uploads remove GPS EXIF and other metadata and preserve image and ICC byte
     assert.deepEqual(actual, clean, type); assert.equal(actual.includes(gps), false);
     assert.equal(metadata.size, clean.length);
   }
+});
+
+test('PNG uploads drop tIME and preserve the IDAT and remaining bytes', async () => {
+  const timestamp = Buffer.from([0x07, 0xea, 1, 1, 0, 0, 0]);
+  const timed = Buffer.concat([png.subarray(0, 33), pngChunk('tIME', timestamp), png.subarray(33)]);
+  const response = await upload('image/png', timed);
+  assert.equal(response.status, 200);
+  const metadata = await response.json();
+  const fetched = await fetch(base + metadata.url);
+  const actual = Buffer.from(await fetched.arrayBuffer());
+  assert.deepEqual(actual, png);
+  assert.deepEqual(actual.subarray(33), png.subarray(33));
 });
 
 test('messages link at most six existing unused ids and expose descriptors in Chat and Mailbox', async () => {
