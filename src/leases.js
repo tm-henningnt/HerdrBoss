@@ -9,7 +9,10 @@ import { DATA_DIR, DEFAULT_IDLE_MINUTES, isPortsPool, portEnvFor } from './confi
 import { quietHoursActive, readNight } from './night.js';
 import { hasLiveWorkerRun, MUTATION_GUARD_WAIT_MS, withMutationLock } from './kit/locks.js';
 import { sharedWorktreeRoot } from './kit/config.js';
+import { processInfo } from './kit/process-info.js';
 import { verifyCallerPane } from './kit/workers.js';
+
+export { processInfo } from './kit/process-info.js';
 
 const LEASES_FILE = 'leases.json';
 const WORKER_NAME = /^[a-z][a-z0-9-]{0,31}$/;
@@ -134,22 +137,6 @@ export function tcpListeningAsync(port, { timeoutMs = 300 } = {}) {
     socket.on('timeout', () => finish(null));
     socket.on('error', (error) => finish(error.code === 'ECONNREFUSED' ? false : null));
   });
-}
-
-// Return { alive, start } for a process, or null when the platform cannot tell. ESRCH means gone. EPERM means alive.
-// start is the process start time from ps, for example "Wed Sep 30 10:00:00 2026". It is null when ps gives none or when wantStart is false.
-export function processInfo(pid, { wantStart = true } = {}) {
-  try { process.kill(pid, 0); }
-  catch (error) {
-    if (error.code === 'ESRCH') return { alive: false, start: null };
-    if (error.code !== 'EPERM') return null;
-  }
-  let start = null;
-  if (wantStart) {
-    const result = spawnSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', timeout: 2000, env: { PATH: process.env.PATH ?? '', LC_ALL: 'C' } });
-    if (result.status === 0) start = result.stdout.trim().replace(/\s+/g, ' ') || null;
-  }
-  return { alive: true, start };
 }
 
 // A pool with an idle rule: a ports pool that is not the built-in browser pool.
