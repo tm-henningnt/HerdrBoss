@@ -439,7 +439,7 @@ test('a field with a running save shows busy and stays enabled', () => {
 test('the item heading is the focus target after a move: focusable by script, not in the tab order', () => {
   const spec = { id: 'x', title: 'X', type: 'image', src: 'x.png', ask: ['accept'] };
   const pack = packWith(spec);
-  assert.match(viewerBarHtml(pack, pack.items[0], helpers()), /<h1 class="review-title" tabindex="-1" data-rv-heading>/);
+  assert.match(viewerBarHtml(pack, pack.items[0], helpers()), /<h1 class="review-title" tabindex="-1" data-rv-heading title="[^"]*">/);
 });
 
 test('markdown goes through the page renderer before the string is built, and the string has no script or event attribute', () => {

@@ -12,6 +12,7 @@ import { parseReviewPath, reviewItemFromHash, reviewUrl, packListHtml, packPageH
 import { viewerKeyAction, nextOpenItem, itemNeighbors, sectionStep, addPin, removePin, setPinText, itemSpec } from './review-viewer.js';
 import { attachGestures, restoreStages, resetStages, zoomStage } from './review-gestures.js';
 import { createTapGuard, startViewedTimer, ANSWER_EMPTY } from './review-save.js';
+import { createSidebar } from './review-sidebar.js';
 import { createReviewSync, createDrafts, NOTE_DEBOUNCE_MS } from './review-sync.js';
 import { createWizard } from './project-wizard-ui.js';
 import { goalSetBlockHtml, goalDialogHtml, goalJobRunning, goalStatusText, pollGoalStatus } from './goal-set.js';
@@ -6088,8 +6089,8 @@ const HELP = {
     <h3>Pack list</h3><p><b>Open</b> holds the packs that wait for your answers. <b>Done</b> holds the submitted and the expired packs, each with its verdict. A row shows the project, the pack title, the version, the time of the last change, and the count of answered items. A row with <b>N changed</b> has items that changed after your answer. The Mailbox item of a pack opens the same page with <b>Open review</b>.</p>
     <h3>Retention</h3><p>Herdr Boss deletes a closed pack 30 days after it closes. An open pack expires after 60 days without a change. Herdr Boss keeps each result for 180 days and the newest 3 versions. The review pack quota is 2 GiB. Run <code>herdr-boss review delete SLUG PACK</code> to delete a pack.</p>
     <h3>Progress bar</h3><p>The bar shows the item states in a fixed order: <b>Accepted</b>, <b>Note only</b>, <b>Needs live check</b>, <b>Denied</b>, and <b>Open</b>. Accepted also counts a choice or a rating. The Denied segment has stripes, so it differs from Needs live check without color. The legend under the bar names each state with its count.</p>
-    <h3>Sections</h3><p>The pack page shows one block for each section, with its state and its count of answered items. Select a section title to fold or unfold its items. Each item row shows the item type, the title, the state, and a check mark when you viewed it. A viewed and answered item shows as a short, faded row. <b>Changed</b> marks an item that changed after your answer. It counts as open until you answer again. Select an item to open it in the item viewer. Back returns to the same row.</p>
-    <h3>Summary and submit</h3><p>The summary under the sections lists the items by state: <b>Denied</b>, <b>Needs live check</b>, <b>Note only</b>, <b>Accepted</b>, and <b>Open</b> last. Your note shows under each item. An open item has <b>Review now</b>. An item that changed after your answer shows <b>changed in this version</b>. A warning above the list names the count of items that have no decision. Write a note for the whole pack in the note field. The page saves the note 600 ms after you stop typing. Select a verdict: <b>Accept pack</b>, <b>Accept with changes</b>, or <b>Deny pack</b>. The page proposes one from the item states when it first shows the pack version. You choose the verdict. A later answer does not move the selection. Select <b>Submit review</b> in the bar at the bottom. While changes wait to save, the button shows <b>Waiting for N changes to save</b> and stays disabled. The page asks you to confirm and names the pack, the version, the verdict, and the counts. Then it sends the result. A submit with open items is allowed. The result lists them as open.</p>
+    <h3>Sections</h3><p>The pack page shows one block for each section, with its state and its count of answered items. Select a section title to fold or unfold its items. Each item row shows the item type, the title, the state, and a check mark when you viewed it. A viewed and answered item shows as a short, faded row. <b>Changed</b> marks an item that changed after your answer. It counts as open until you answer again. Select an item to open it in the item viewer. Back returns to the same row. An item whose content changed in a new version shows <b>Changed</b> and no verdict, and its section shows <b>Changed</b>. The item shows <b>Was</b> with the earlier verdict and its date. <b>Keep</b> restores that verdict. A title wraps to two lines, and the tooltip shows the full title. Above 900 px, drag the handle at the edge of the sections column to change its width, or focus the handle and press the arrow keys (16 px) or <kbd>Home</kbd> to reset. The hide button collapses the column to a rail.</p>
+    <h3>Summary and submit</h3><p>The summary under the sections lists the items by state: <b>Denied</b>, <b>Needs live check</b>, <b>Note only</b>, <b>Accepted</b>, <b>Changed since accepted</b>, and <b>Open</b> last. Your note shows under each item. An open item has <b>Review now</b>. An item that changed after your answer shows <b>changed in this version</b>. A warning above the list names the count of items that have no decision. Write a note for the whole pack in the note field. The page saves the note 600 ms after you stop typing. Select a verdict: <b>Accept pack</b>, <b>Accept with changes</b>, or <b>Deny pack</b>. The page proposes one from the item states when it first shows the pack version. You choose the verdict. A later answer does not move the selection. Select <b>Submit review</b> in the bar at the bottom. While changes wait to save, the button shows <b>Waiting for N changes to save</b> and stays disabled. The page asks you to confirm and names the pack, the version, the verdict, and the counts. Then it sends the result. A submit with open items is allowed. The result lists them as open.</p>
     <h3>After the submit</h3><p>The page shows the summary as read-only. The service sends the result to the <code>orch</code> pane of the project as one message. The page shows the delivery state: <b>Queued</b>, <b>Delivered</b>, <b>Retrying</b>, or <b>Failed</b>. A failed delivery is tried again up to 4 times. The Mailbox item of the pack closes, and <b>Open review</b> on it opens this read-only summary. A pack takes at most 3 submits in one minute.</p>
     <h3>Item viewer</h3><p>The top bar shows the item title, <b>Item N of M</b> with the section, and the <b>Viewed</b> toggle. The page marks an item viewed when it stays open and visible for 1.5 seconds. A pair has <b>Toggle</b> and <b>Slider</b>. A gallery shows a grid: select an image to open it. A table and a code box scroll sideways in their own box. <b>Open</b> on a live link opens a new tab.</p>
     <p>Above 900 px, the answer controls sit in a sticky column at the right of the evidence and stay in view as the item scrolls. At 900 px and below, the answer bar stays at the bottom edge. The title, item count, and Viewed control stay in the top bar.</p>
@@ -6290,6 +6291,21 @@ const reviewSync = createReviewSync({
 });
 const reviewDrafts = createDrafts({ ms: NOTE_DEBOUNCE_MS });
 
+// The width and the collapse state of the sections column (900 px and wider), remembered per browser in public/review-sidebar.js.
+// A drag moves the column through the CSS variable at once. A key, the collapse button, and the end of a drag render the page.
+let reviewSidebarDrag = false;
+const reviewSidebar = createSidebar({
+  storage: reviewStorage,
+  viewport: () => window.innerWidth,
+  apply: (state) => {
+    if (!reviewSidebarDrag) { reviewsRender(); return; }
+    const page = $app.querySelector('.review-page');
+    page?.style.setProperty('--review-side', `${state.collapsed ? 44 : state.width}px`);
+    $app.querySelector('[data-review-resize]')?.setAttribute('aria-valuenow', String(state.width));
+  },
+});
+const reviewSidebarView = () => ({ ...reviewSidebar.get(), viewport: window.innerWidth });
+
 function reviewHelpers(s) {
   return { esc, avatar: (slug) => avatarSlot(slug, { title: avatarTitle(slug), size: 36 }), projectLabel: (slug) => avatarTitle(slug), time: (iso) => listTime(iso), menuButton: appMenuButton(s, 'reviews'), text: (url) => reviews.texts[url], markdown: safeMarkdownHtml, barIcons: appBarIcons(s, 'reviews') };
 }
@@ -6354,7 +6370,7 @@ function reviewsView(s) {
     if (entry?.data) {
       const ui = pinProposedVerdict(reviewUi(key), entry.data);
       const viewer = route.view === 'item' ? reviewViewerView(key, route.item) : undefined;
-      page = packPageHtml(entry.data, { ...ui, ...reviewSyncView(key), current: reviewItemFromHash(location.hash), item: route.view === 'item' ? route.item : undefined, viewer }, h);
+      page = packPageHtml(entry.data, { ...ui, ...reviewSyncView(key), sidebar: reviewSidebarView(), current: reviewItemFromHash(location.hash), item: route.view === 'item' ? route.item : undefined, viewer }, h);
     } else if (entry?.error && entry.status === 404) page = reviewMessageHtml('Review not found', 'This review pack does not exist. The project can have deleted it.', h);
     else if (entry?.error) page = reviewMessageHtml('Review', `The review could not load. ${entry.error}`, h, { alert: true, retry: true });
     else page = reviewMessageHtml('Review', 'Loading the review…', h);
@@ -6543,6 +6559,10 @@ function reviewGo(url) {
 // so it reads the help panel and the drawer before the Esc handlers close them.
 document.addEventListener('keydown', (e) => {
   if (currentRoute() !== 'reviews' || appDrawerOpen || !document.getElementById('help-panel').hidden || $nav.classList.contains('open')) return;
+  if (e.target.closest?.('[data-review-resize]')) {
+    if (!e.ctrlKey && !e.metaKey && !e.altKey && reviewSidebar.key(e.key)) { e.preventDefault(); reviews.focus = '[data-review-resize]'; }
+    return;
+  }
   const inField = Boolean(e.target.closest?.('input, textarea, select, [contenteditable="true"]'));
   const route = parseReviewPath(location.pathname);
   if (route?.view === 'item') { reviewViewerKey(e, inField); return; }
@@ -6665,10 +6685,11 @@ function reviewViewerAfterRender() {
     if (open) {
       open.vui.placing = false;
       // The Viewed mark: the item stays open and visible for 1.5 s. A hidden tab does not count.
-      if (!open.item.answer?.viewed && open.pack.state === 'open') {
+      // A changed item gets no automatic mark: the Owner answers it or selects Keep first.
+      if (!open.item.answer?.viewed && !open.item.stale && open.pack.state === 'open') {
         reviews.stopViewed = startViewedTimer({ doc: document, ms: REVIEW_VIEWED_MS, onViewed: () => {
           const now = reviewOpenItem();
-          if (now && now.item.id === open.item.id && !now.item.answer?.viewed) saveItemAnswer(now.item, { viewed: true }, { quiet: true });
+          if (now && now.item.id === open.item.id && !now.item.answer?.viewed && !now.item.stale) saveItemAnswer(now.item, { viewed: true }, { quiet: true });
         } });
       }
     }
@@ -6883,7 +6904,7 @@ function reviewAnswer(open, kind, value) {
 }
 
 document.addEventListener('click', (e) => {
-  const target = e.target.closest?.('[data-rv-decision], [data-rv-choice], [data-rv-rating], [data-rv-live], [data-rv-note-open], [data-rv-viewed], [data-rv-pair], [data-rv-mode], [data-rv-open], [data-rv-gallery], [data-rv-place], [data-rv-zoom], [data-rv-pin], [data-rv-pin-remove], [data-rv-conflict]');
+  const target = e.target.closest?.('[data-rv-decision], [data-rv-choice], [data-rv-rating], [data-rv-live], [data-rv-note-open], [data-rv-viewed], [data-rv-keep], [data-rv-pair], [data-rv-mode], [data-rv-open], [data-rv-gallery], [data-rv-place], [data-rv-zoom], [data-rv-pin], [data-rv-pin-remove], [data-rv-conflict]');
   if (!target || target.disabled || currentRoute() !== 'reviews') return;
   const open = reviewOpenItem();
   if (!open) return;
@@ -6895,6 +6916,7 @@ document.addEventListener('click', (e) => {
   else if (data.rvLive) reviewAnswer(open, 'live', data.rvLive);
   else if (data.rvNoteOpen !== undefined) reviewAnswer(open, 'note');
   else if (data.rvViewed !== undefined) reviewAnswer(open, 'viewed', !item.answer?.viewed);
+  else if (data.rvKeep !== undefined) { if (open.pack.state === 'open') saveItemAnswer(item, { keep: true }); }
   else if (data.rvPair) { vui.pair = data.rvPair === 'b' ? 'b' : 'a'; vui.pairMode = 'toggle'; reviewsRender(); }
   else if (data.rvMode) { vui.pairMode = data.rvMode === 'split' ? 'split' : 'toggle'; reviewsRender(); }
   else if (data.rvOpen) { vui.gallery = Number(data.rvOpen); vui.placing = false; reviewFocusNext('.rv-stage'); }
@@ -8602,3 +8624,42 @@ if (window.visualViewport) {
   setAppViewport();
   scheduleChatViewport();
 }
+
+// The sections column: collapse and expand buttons, and the drag of the handle.
+document.addEventListener('click', (e) => {
+  if (currentRoute() !== 'reviews') return;
+  const button = e.target.closest?.('[data-review-collapse], [data-review-expand]');
+  if (!button) return;
+  reviewSidebar.collapse(button.matches('[data-review-collapse]'));
+  reviews.focus = button.matches('[data-review-collapse]') ? '[data-review-expand]' : '[data-review-collapse]';
+});
+
+document.addEventListener('pointerdown', (e) => {
+  const handle = currentRoute() === 'reviews' ? e.target.closest?.('[data-review-resize]') : null;
+  if (!handle || e.button > 0) return;
+  const body = handle.closest('.review-body');
+  if (!body) return;
+  e.preventDefault();
+  reviewSidebarDrag = true;
+  handle.classList.add('dragging');
+  handle.setPointerCapture?.(e.pointerId);
+  handle.focus({ preventScroll: true });
+  const left = body.getBoundingClientRect().left;
+  const move = (event) => reviewSidebar.resize(event.clientX - left, false);
+  const end = (event) => {
+    handle.removeEventListener('pointermove', move);
+    handle.removeEventListener('pointerup', end);
+    handle.removeEventListener('pointercancel', end);
+    handle.releasePointerCapture?.(event.pointerId);
+    handle.classList.remove('dragging');
+    reviewSidebar.resize(event.clientX - left, event.type === 'pointerup');
+    reviewSidebarDrag = false;
+    reviewsRender();
+  };
+  handle.addEventListener('pointermove', move);
+  handle.addEventListener('pointerup', end);
+  handle.addEventListener('pointercancel', end);
+});
+
+// A window resize pulls the column under half of the new width.
+window.addEventListener('resize', () => { if (currentRoute() === 'reviews') reviewsRender(); });

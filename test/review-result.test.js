@@ -163,7 +163,8 @@ test('a changed item carries the stale flag in the result', (t) => {
   const result = submitPack({ ...where(dir), verdict: 'accept-with-changes' }).result;
   const item = result.items.find((entry) => entry.id === 'error-copy');
   assert.equal(item.stale, true);
-  assert.equal(item.state, 'open');
+  assert.equal(item.state, 'changed');
+  assert.equal(item.was.decision, 'accept');
   assert.equal(result.version, 2);
 });
 

@@ -305,7 +305,8 @@ function listCommand(args, ctx) {
   for (const entry of packs) {
     const answered = entry.counts.items - entry.counts.open;
     const status = entry.state === 'submitted' ? `submitted ${entry.verdict ? verdictLabel(entry.verdict) : ''}`.trim() : entry.state;
-    ctx.out(`${entry.slug}/${entry.pack}  v${entry.version}  ${status}  ${answered} of ${entry.counts.items} answered  ${safeText(entry.title)}`);
+    const changed = entry.counts.changed ? `, ${entry.counts.changed} changed` : '';
+    ctx.out(`${entry.slug}/${entry.pack}  v${entry.version}  ${status}  ${answered} of ${entry.counts.items} answered${changed}  ${safeText(entry.title)}`);
   }
   return EXIT.ok;
 }
