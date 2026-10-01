@@ -9,6 +9,8 @@ import { PLANNER_LABEL, startSession, listSessions, getSession, endSession } fro
 
 export const EXIT = Object.freeze({ ok: 0, refused: 1, missing: 3 });
 
+const projectWorkspace = (control, project) => Object.values(control?.projects || {}).find((entry) => entry?.slug === project)?.workspace ?? null;
+
 const USAGE = {
   start: 'Usage: plan start KIND PROJECT --input PATH --pane PANE',
   list: 'Usage: plan list [PROJECT] [--all] [--json]',
@@ -40,7 +42,18 @@ function startCommand(args, ctx) {
   if (!SLUG.test(project)) throw new ReviewCliError(`The project slug must match [a-z0-9][a-z0-9-]* and have at most 64 characters. ${USAGE.start}`);
   if (flags['--input'] === undefined) throw new ReviewCliError(`--input is required. ${USAGE.start}`);
   if (flags['--pane'] === undefined) throw new ReviewCliError(`--pane is required. ${USAGE.start}`);
-  verifyReviewCaller('plan start', project, ctx);
+  const caller = verifyReviewCaller('plan start', project, ctx);
+  // The target pane must belong to the workspace of the caller. A plain terminal uses the workspace of the project.
+  const expected = caller.role === 'owner' ? projectWorkspace(ctx.control(), project) : ctx.env.HERDR_WORKSPACE_ID;
+  if (!expected) throw new ReviewCliError(`No workspace is known for project ${project}. Publish the project status, then wait for the next Herdr Boss tick.`);
+  let target;
+  try { const response = ctx.herdr(['pane', 'get', flags['--pane']]); target = response?.pane ?? response ?? {}; }
+  catch (error) { throw new ReviewCliError(`Herdr could not read pane ${flags['--pane']}: ${String(error?.message ?? error).split('\n')[0].slice(0, 160)}`); }
+  const targetId = target.pane_id ?? target.paneId ?? target.id ?? null;
+  const targetWorkspace = target.workspace_id ?? target.workspaceId ?? target.workspace ?? null;
+  if (targetId !== flags['--pane']) throw new ReviewCliError(`Herdr returned the pane ${targetId ?? '(missing)'} for ${flags['--pane']}.`);
+  if (targetWorkspace !== expected) throw new ReviewCliError(`The pane ${flags['--pane']} is in workspace ${targetWorkspace ?? '(unknown)'}, not in ${expected}. A planner session needs a pane of the workspace of its project.`);
+  if (['boss', 'orch'].includes(target.label)) throw new ReviewCliError(`The pane ${flags['--pane']} is labeled ${target.label}. A planner session cannot take that pane.`);
   // The label comes first: a pane that Herdr cannot label gets no record.
   ctx.herdr(['pane', 'rename', flags['--pane'], PLANNER_LABEL]);
   let session;

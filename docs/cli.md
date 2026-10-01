@@ -411,7 +411,7 @@ A review pack is a folder of evidence with one question for each item. The Owner
 | Command | Action |
 |---|---|
 | `herdr-boss review check FOLDER` | Validate a pack folder. Write nothing. Any pane and any terminal can run it. |
-| `herdr-boss review publish SLUG FOLDER [--note TEXT] [--dry-run]` | Validate the folder, store it as the next version of its pack, and post a Mailbox item for the Owner. |
+| `herdr-boss review publish SLUG FOLDER [--note TEXT] [--round N] [--dry-run]` | Validate the folder, store it as the next version of its pack, and post a Mailbox item for the Owner. |
 | `herdr-boss review import SLUG FOLDER-OR-FILE [--id ID] [--title TEXT] [--dry-run]` | Turn a folder of HTML files, or one HTML file, into a pack, and publish it. |
 | `herdr-boss review result [SLUG] PACK [--version N] [--format json\|md]` | Print the stored result of a submitted review. The default format is Markdown. `--version N` selects a version. The default is the newest submitted version. `--json` means `--format json`. |
 | `herdr-boss review delete [SLUG] PACK` | Delete the pack with its files and answers. Close its Mailbox items. |
@@ -431,7 +431,7 @@ A review pack is a folder of evidence with one question for each item. The Owner
 
 A pane that has a planner session can run `publish` for its own project. See [Planner sessions](#planner-sessions). It cannot run `import`, `result`, `list`, or `delete`.
 
-`check` reads only and has no caller rule. `result` and `list` use the same scope, and a worker pane is refused:
+`check` reads only and has no caller rule. Any pane and any terminal can run it, also a worker pane and a planner pane. `result` and `list` use the same scope, and a worker pane is refused:
 
 - A plain terminal reads every project.
 - An orch pane reads only the slug of its own workspace. `review list` without a slug lists that project.
@@ -450,7 +450,7 @@ A planner session lets a worker pane publish review packs for its project and re
 
 The registry is the file `planner-sessions.json` in the data folder, with mode 0600. A record has the fields `id`, `project`, `pane`, `kind`, `input`, `startedAt`, `round`, and `endedAt`. A pane has at most one active session.
 
-`plan start` and `plan end` use the caller rules of `publish`: a plain terminal, an orch pane for its own project, or the pane labeled `boss` for the slug `boss`. A worker pane is refused. `plan list` uses the scope of `review list`. `worker collect` ends the session of the collected pane.
+`plan start` and `plan end` use the caller rules of `publish`: a plain terminal, an orch pane for its own project, or the pane labeled `boss` for the slug `boss`. A worker pane is refused. `plan start` reads the target pane with `herdr pane get`. The pane must be in the workspace of the caller. A plain terminal uses the workspace of the project from `state.json`. The command refuses a pane labeled `boss` or `orch`. `plan list` uses the scope of `review list`. `worker collect` ends the session of the collected pane.
 
 `plan end` exits with code 3 when the session does not exist. The other refusals exit with code 1.
 
@@ -460,7 +460,7 @@ A pane labeled `planner` with an active session has these rights:
 - `review check FOLDER` works as for every pane.
 - `review import`, `review result`, `review list`, and `review delete` are refused.
 
-The publish sets `session` and `round` in the manifest. Herdr Boss replaces a value that the manifest already holds. `round` is the number of the publish: 1 for the first pack of the session, and then 2, 3, and so on. A `--dry-run` and an `Unchanged` publish do not change the round. The Mailbox item of the pack names the session and the pane.
+Only a planner pane can publish a pack with `session` or `round`. Any other publisher gets a refusal when the manifest has either field. The publish from a planner pane sets both and replaces a value that the manifest holds. `round` counts per pack. A new pack takes the next round of the session: 1, 2, 3, and so on. A republish of a pack of the same session keeps the round of that pack. `--round N` (1 to 9999) sets another round, and only a planner pane can pass it. The session keeps the highest round. A `--dry-run` and an `Unchanged` publish do not change the round. The Mailbox item of the pack names the session and the pane.
 
 ### Publish
 

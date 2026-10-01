@@ -25,13 +25,13 @@ function dataDir() {
 const CONTROL = { projects: { shop: { slug: 'shop', workspace: 'wA', orch: { pane: 'wA:p1' } }, blog: { slug: 'blog', workspace: 'wC', orch: { pane: 'wC:p1' } } } };
 
 // A fake Herdr runner. `label` is the label of the caller pane. It records each call.
-function fixture({ label = null, workspace = 'wA', paneId = 'wA:p1' } = {}) {
+function fixture({ label = null, workspace = 'wA', paneId = 'wA:p1', targetLabel = null, targetWorkspace = workspace } = {}) {
   const dir = dataDir();
   fs.writeFileSync(path.join(dir, 'state.json'), JSON.stringify({ control: CONTROL }));
   const calls = [];
   const herdr = (args) => {
     calls.push(args);
-    if (args[0] === 'pane' && args[1] === 'get') return { pane: { pane_id: args[2], workspace_id: workspace, label } };
+    if (args[0] === 'pane' && args[1] === 'get') return args[2] === paneId ? { pane: { pane_id: args[2], workspace_id: workspace, label } } : { pane: { pane_id: args[2], workspace_id: targetWorkspace, label: targetLabel } };
     if (args[0] === 'pane' && args[1] === 'rename') return {};
     throw new Error(`unexpected herdr call: ${args.join(' ')}`);
   };
@@ -126,9 +126,30 @@ test('plan start from an orch pane works for its own project only, and a worker 
   assert.deepEqual(listSessions({ dir: worker.dir }), []);
 });
 
+test('plan start refuses a target pane of another workspace, and a pane labeled boss or orch', () => {
+  for (const options of [{ label: 'orch', targetWorkspace: 'wZ' }, { targetWorkspace: 'wZ' }, { label: 'orch', targetLabel: 'orch' }, { targetLabel: 'boss' }, { targetLabel: 'orch' }]) {
+    const f = fixture(options);
+    assert.equal(f.run('start', 'claude', 'shop', '--input', 'a.md', '--pane', 'wB:p2'), EXIT.refused, JSON.stringify(options));
+    assert.deepEqual(listSessions({ dir: f.dir }), []);
+    assert.ok(!f.calls.some((call) => call[1] === 'rename'), 'the pane is not labeled');
+  }
+  const ok = fixture({ label: 'orch', targetLabel: 'worker' });
+  assert.equal(ok.run('start', 'claude', 'shop', '--input', 'a.md', '--pane', 'wB:p2'), EXIT.ok);
+});
+
+test('plan start from a plain terminal needs a known project workspace', () => {
+  const f = fixture();
+  assert.equal(f.run('start', 'claude', 'nowhere', '--input', 'a.md', '--pane', 'wB:p2'), EXIT.refused);
+  assert.match(f.lines.err.join('\n'), /No workspace is known/);
+});
+
 test('plan start writes no record when Herdr cannot label the pane', () => {
   const dir = dataDir();
-  const herdr = () => { throw new Error('no such pane'); };
+  fs.writeFileSync(path.join(dir, 'state.json'), JSON.stringify({ control: CONTROL }));
+  const herdr = (args) => {
+    if (args[1] === 'get') return { pane: { pane_id: args[2], workspace_id: 'wA', label: null } };
+    throw new Error('no such pane');
+  };
   const errors = [];
   const code = planCommand(['start', 'claude', 'shop', '--input', 'a.md', '--pane', 'wB:p2'], { env: {}, herdr, dir, now: T0, out: () => {}, err: (line) => errors.push(line) });
   assert.equal(code, EXIT.refused);

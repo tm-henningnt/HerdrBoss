@@ -18,7 +18,7 @@ const STATES = ['open', 'done', 'all'];
 
 const USAGE = {
   check: 'Usage: review check FOLDER',
-  publish: 'Usage: review publish SLUG FOLDER [--note TEXT] [--dry-run]',
+  publish: 'Usage: review publish SLUG FOLDER [--note TEXT] [--round N] [--dry-run]',
   import: 'Usage: review import SLUG FOLDER-OR-FILE [--id ID] [--title TEXT] [--dry-run]',
   result: 'Usage: review result [SLUG] PACK [--version N] [--format json|md]. PACK can also be SLUG/PACK. --json means --format json.',
   delete: 'Usage: review delete [SLUG] PACK. PACK can also be SLUG/PACK.',
@@ -157,7 +157,7 @@ function republishUnchanged({ slug, existing, manifest, summary, caller }, ctx) 
 }
 
 // Validate, then publish or dry-run one pack folder. `imported` allows the page item type.
-function publishFolder({ slug, folder, caller, note, dryRun, imported = false }, ctx) {
+function publishFolder({ slug, folder, caller, note, dryRun, imported = false, round: wantedRound }, ctx) {
   const { out, err, dir, now, deps } = ctx;
   const validation = validatePack(folder, { allowPage: imported });
   printWarnings(validation, ctx);
@@ -169,6 +169,10 @@ function publishFolder({ slug, folder, caller, note, dryRun, imported = false },
   const { manifest, totals } = validation;
   const summary = `${plural(totals.items, 'item')} in ${plural(totals.sections, 'section')}`;
   // These checks come before the write, so a refusal publishes nothing.
+  // Only a planner pane tags a pack with a session. The tag decides where the result goes.
+  if (!caller.planner && (manifest.session !== undefined || manifest.round !== undefined)) {
+    throw new ReviewCliError('Only a pane with a planner session can publish a pack with session or round. Remove both fields from manifest.json.');
+  }
   refuseSecret(manifest.title, 'pack title');
   if (note !== undefined) {
     if (!note.trim() || note.length > NOTE_MAX) throw new ReviewCliError(`The note must be 1 to ${NOTE_MAX} characters.`);
@@ -185,7 +189,10 @@ function publishFolder({ slug, folder, caller, note, dryRun, imported = false },
     return republishUnchanged({ slug, existing, manifest, summary, caller }, ctx);
   }
   // A planner pane publishes in the name of its session. The next round is stored after the publish succeeds.
-  const round = caller.planner ? caller.session.round + 1 : null;
+  // The round counts per pack. A new pack takes the next round of the session. A republish of a pack of the same session keeps its
+  // round. `--round N` sets another round.
+  const keptRound = existing?.manifest?.session === caller.session?.id ? existing?.manifest?.round : undefined;
+  const round = caller.planner ? wantedRound ?? keptRound ?? caller.session.round + 1 : null;
   if (caller.planner) Object.assign(manifest, { session: caller.session.id, round });
   let published;
   try {
@@ -205,7 +212,7 @@ function publishFolder({ slug, folder, caller, note, dryRun, imported = false },
   if (changes) paragraph.push(changes);
   if (published.stale.length) paragraph.push(`${plural(published.stale.length, 'answer')} need a new decision.`);
   const text = [paragraph.join(' '), note?.trim()].filter(Boolean).join('\n\n');
-  if (caller.planner) {
+  if (caller.planner && round > caller.session.round) {
     try { setRound({ dir, id: caller.session.id, round }); }
     catch (error) { err(`Warning: Herdr Boss did not store round ${round} of the planner session: ${safeText(error?.message, 200)}`); }
   }
@@ -235,11 +242,17 @@ function checkCommand(args, ctx) {
 }
 
 function publishCommand(args, ctx) {
-  const { flags, positional } = parse(args, { values: ['--note'], switches: ['--dry-run'] }, USAGE.publish);
+  const { flags, positional } = parse(args, { values: ['--note', '--round'], switches: ['--dry-run'] }, USAGE.publish);
   if (positional.length !== 2) throw new ReviewCliError(USAGE.publish);
   const slug = checkSlug(positional[0], USAGE.publish);
   const caller = verifyReviewCaller('review publish', slug, ctx, { planner: true });
-  return publishFolder({ slug, folder: positional[1], caller, note: flags['--note'], dryRun: !!flags['--dry-run'] }, ctx);
+  let round;
+  if (flags['--round'] !== undefined) {
+    if (!/^[1-9]\d{0,3}$/.test(flags['--round'])) throw new ReviewCliError(`The round must be a whole number from 1 to 9999. ${USAGE.publish}`);
+    if (!caller.planner) throw new ReviewCliError('--round is only for a pane with a planner session.');
+    round = Number(flags['--round']);
+  }
+  return publishFolder({ slug, folder: positional[1], caller, note: flags['--note'], dryRun: !!flags['--dry-run'], round }, ctx);
 }
 
 function importCommand(args, ctx) {

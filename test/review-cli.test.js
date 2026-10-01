@@ -763,22 +763,48 @@ test('a planner pane publishes for its own project, and the pack and the Mailbox
   const [item] = reviewRecords(data);
   assert.deepEqual(item.planner, { session: record.id, pane: 'wB:p2' });
   assert.equal(getSession({ dir: data, id: record.id }).round, 1);
+  // A republish of the same pack keeps its round.
   const second = cli('review', 'publish', 'shop', packFolder({ tag: 1 }));
   assert.equal(second.status, 0, output(second));
-  assert.equal(storedManifest(data).round, 2);
+  assert.equal(getPack({ dir: data, slug: 'shop', pack: 'checkout-redesign' }).version, 2);
+  assert.equal(storedManifest(data).round, 1);
+  assert.equal(getSession({ dir: data, id: record.id }).round, 1);
+  // A new pack takes the next round.
+  assert.equal(cli('review', 'publish', 'shop', packFolder({ id: 'other-pack' })).status, 0);
+  assert.equal(getPack({ dir: data, slug: 'shop', pack: 'other-pack' }).manifest.round, 2);
   assert.equal(getSession({ dir: data, id: record.id }).round, 2);
 });
 
-test('the planner publish replaces a session or round that the manifest names, and a non-planner publish keeps the manifest as written', (t) => {
+test('--round sets another round for a republish, and only a planner pane may pass it', (t) => {
+  const { cli, data, record } = plannerFixture(t);
+  assert.equal(cli('review', 'publish', 'shop', packFolder()).status, 0);
+  const again = cli('review', 'publish', 'shop', packFolder({ tag: 1 }), '--round', '4');
+  assert.equal(again.status, 0, output(again));
+  assert.equal(storedManifest(data).round, 4);
+  assert.equal(getSession({ dir: data, id: record.id }).round, 4);
+  assert.equal(cli('review', 'publish', 'shop', packFolder({ tag: 2 }), '--round', '0').status, 1);
+  const orch = fixture(t, 'orch');
+  const refused = orch.cli('review', 'publish', 'shop', packFolder(), '--round', '2');
+  assert.equal(refused.status, 1, output(refused));
+  assert.ok(noStore(orch.data));
+});
+
+test('the planner publish replaces a session or round that the manifest names, and a non-planner publish with either field is refused', (t) => {
   const planner = plannerFixture(t);
   const forged = packFolder({ edit: (manifest) => { manifest.session = 'ps-forged'; manifest.round = 9; } });
   assert.equal(planner.cli('review', 'publish', 'shop', forged).status, 0);
   assert.equal(storedManifest(planner.data).session, planner.record.id);
   assert.equal(storedManifest(planner.data).round, 1);
-  const orch = fixture(t, 'orch');
-  assert.equal(orch.cli('review', 'publish', 'shop', packFolder({ edit: (manifest) => { manifest.session = 'ps-written'; manifest.round = 3; } })).status, 0);
-  assert.equal(storedManifest(orch.data).session, 'ps-written');
-  assert.equal(reviewRecords(orch.data)[0].planner, undefined, 'a publish by an orch pane routes to the orch pane');
+  for (const label of ['orch', false]) {
+    const other = fixture(t, label);
+    for (const edit of [(m) => { m.session = 'ps-written'; m.round = 3; }, (m) => { m.session = 'ps-written'; }]) {
+      const refused = other.cli('review', 'publish', 'shop', packFolder({ edit }));
+      assert.equal(refused.status, 1, output(refused));
+      assert.match(refused.stderr, /planner session/);
+    }
+    assert.ok(noStore(other.data), 'nothing was published');
+    assert.equal(other.cli('review', 'check', packFolder({ edit: (m) => { m.session = 'ps-written'; } })).status, 0, 'check stays open');
+  }
 });
 
 test('a planner pane cannot publish for another project, and a planner label without a session is refused', (t) => {
