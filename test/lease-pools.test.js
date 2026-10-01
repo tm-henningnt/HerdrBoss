@@ -212,7 +212,7 @@ test('PUT drops a leased port only when the lease is unbound and idle, and relea
 const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 const body = (name) => { const start = app.indexOf(`function ${name}(`); assert.ok(start >= 0, `${name} exists`); return app.slice(start, app.indexOf('\n}\n', start)); };
 function loadPanel() {
-  const names = ['leaseRow', 'leasePoolBlock', 'leaseTtlText', 'leaseReclaimText', 'poolIsPorts', 'leaseAgeText', 'leaseTimeLeftText', 'leaseServerText', 'leaseListenerText', 'leaseIdleText', 'browserRunningForLease'];
+  const names = ['leaseRow', 'leaseFreeRow', 'unleasedEntry', 'leasePoolBlock', 'leaseTtlText', 'leaseReclaimText', 'poolIsPorts', 'leaseAgeText', 'leaseTimeLeftText', 'leaseServerText', 'leaseListenerText', 'leaseIdleText', 'browserRunningForLease'];
   const ctx = {
     esc: (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])),
     dur: (seconds) => `${Math.max(0, Math.round(seconds / 60))}m`,
@@ -252,6 +252,39 @@ test('the Resource leases panel escapes every lease value', () => {
   const html = leasePoolBlock({ resourceLeases: { leases: [{ pool: 'serve-ports', item: '47100', project: evil, worker: evil, pane: evil, at: new Date().toISOString(), expiresAt: null, pid: evil, listener: false }] } }, pool);
   assert.equal(html.includes('<img'), false);
   assert.match(html, /&lt;img/);
+});
+
+test('the Resource leases panel shows one warning row for a listener without a lease', () => {
+  const { leasePoolBlock } = loadPanel();
+  const pool = { name: 'serve-ports', items: ['47100', '47101'], env: 'HERDR_SERVE_PORT', ttlMinutes: 240, check: 'tcp', idleMinutes: 20 };
+  const state = { resourceLeases: {
+    leases: [],
+    unleased: [{ pool: 'serve-ports', item: '47101', pid: 4242, name: 'node', firstSeen: new Date(Date.now() - 13 * 60000).toISOString(), ageMinutes: 13, owner: 'project-a' }],
+  } };
+  const html = leasePoolBlock(state, pool);
+  assert.match(html, /1 listening with no lease/, 'the pool head counts the listeners without a lease');
+  const rows = html.split('<tr id=').slice(1);
+  assert.match(rows[0], /class="lease-row lease-free"/, 'a free port without a listener is a plain free row');
+  assert.match(rows[1], /class="lease-row lease-unleased"/);
+  assert.match(rows[1], /data-label="State">Unleased</);
+  assert.match(rows[1], /data-label="Holder project">project-a</);
+  assert.match(rows[1], /data-label="Pane or worker">4242 <span class="lease-process">node<\/span></);
+  assert.match(rows[1], /data-label="Age">13m</);
+  assert.match(rows[1], /data-label="Listener">yes</);
+});
+
+test('a listener without a lease has no owner, no pid, and no release button', () => {
+  const { leasePoolBlock } = loadPanel();
+  const pool = { name: 'serve-ports', items: ['47100'], env: 'HERDR_SERVE_PORT', ttlMinutes: 240, check: 'tcp', idleMinutes: 20 };
+  const html = leasePoolBlock({ resourceLeases: { leases: [], unleased: [{ pool: 'serve-ports', item: '47100', pid: null, name: null, firstSeen: new Date().toISOString(), ageMinutes: 0, owner: null }] } }, pool);
+  const row = html.split('<tr id=')[1];
+  assert.match(row, /data-label="Holder project">–</);
+  assert.match(row, /data-label="Pane or worker">–</, 'no PID means the row shows the port only');
+  assert.equal(/data-lease-release/.test(row), false, 'Herdr Boss cannot release a lease that no project holds');
+});
+
+test('the Allocation page help explains a listener without a lease', () => {
+  assert.match(app, /listening with no lease/);
 });
 
 test('the pools editor sets the port list, idle minutes, wait default, and masked client values', () => {

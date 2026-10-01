@@ -16,7 +16,7 @@ import { renderNightReport } from './night-report.js';
 import { adhocOneLine, effectiveRoutines, routinePromptText, slotAfter, slotEnd } from './watch-routines.js';
 import { listBrowserSessions, cdpResponds, browserProcessCheck } from './browser-pool.js';
 import { probeBrowser, createBrowserProbes } from './browser-probe.js';
-import { readLeases, reclaimLeases, publicLease, publicPool, reclaimNoticeText, hasIdleRule, tcpListening, tcpListeningAsync, leasePools, migrateProjectBrowserLeases } from './leases.js';
+import { readLeases, reclaimLeases, publicLease, publicPool, reclaimNoticeText, hasIdleRule, tcpListening, tcpListeningAsync, leasePools, migrateProjectBrowserLeases, reconcileUnleasedListeners, unleasedNoticeText, markUnleasedNotified, listenerPid, processCwd, processLabel } from './leases.js';
 import { codeSignCloneDir, sweepCodeSignClones } from './clone-sweep.js';
 import { runDenialScan, readDenials, denialSummary, DENIAL_SCAN_INTERVAL_MS, SCAN_BUDGET_BYTES, RETAIN_DAYS, RISE_FACTOR, RISE_MIN_EVENTS } from './denials.js';
 import { goalOnScreen, sendGoalPrompt } from './goal.js';
@@ -487,6 +487,8 @@ function writeJson(file, data) {
 export class Engine extends EventEmitter {
   leaseListeners = new Map();
   leaseProbeCursor = 0;
+  // The first tick that saw each pool item with a listener and no lease, keyed by pool and item.
+  unleasedListeners = new Map();
   constructor(cfg, { push = cfg.push, act = true, collectors = {}, handoffRunner = run, herdrRunner = run, gitRunner = (args) => run('git', args, { timeout: 10000 }), kitRoot = KIT_ROOT, lockDataDir = DATA_DIR } = {}) {
     super();
     this.cfg = cfg;
@@ -603,6 +605,31 @@ export class Engine extends EventEmitter {
       }
     };
     await Promise.all(Array.from({ length: Math.min(LEASE_PROBE_PARALLEL, due.length) }, worker));
+  }
+
+  // Tell the orchestrator of the owner that a server listens on a port of a pool with no lease. The pane comes from the
+  // control of this tick, and it must be a live orchestrator pane. A tick with no pane for the owner tries again later.
+  async notifyUnleasedOwners(notices, { control, panes } = {}) {
+    for (const item of notices) {
+      const text = `[herdr-boss] ${unleasedNoticeText(item)}`;
+      const project = control?.projects?.[item.owner];
+      const pane = project?.orch?.pane ? panes?.find((candidate) => candidate.id === project.orch.pane && candidate.label === 'orch' && candidate.agent) : null;
+      if (!pane) {
+        this.log('lease', `No orchestrator pane for the owner of the listener on ${item.pool} ${item.item}. The notice waits for the pane.`, { project: item.owner, pool: item.pool, item: item.item, pid: item.pid });
+        continue;
+      }
+      if (!this.push) {
+        this.log('lease', `Not sent: ${text}`, { project: item.owner, pane: pane.id });
+        markUnleasedNotified(this.unleasedListeners, item);
+        continue;
+      }
+      try {
+        checkHerdrResponse(await this.herdrRunner('herdr', ['agent', 'prompt', pane.id, text]));
+        markUnleasedNotified(this.unleasedListeners, item);
+      } catch (error) {
+        this.log('error', `Unleased listener notice to ${pane.id} failed: ${String(error.stderr || error.message).slice(0, 200)}`, { project: item.owner, pane: pane.id, pool: item.pool, item: item.item });
+      }
+    }
   }
 
   setResourcePools(pools) {
@@ -773,12 +800,33 @@ export class Engine extends EventEmitter {
       }
       let leaseStore = { leases: [] };
       try { leaseStore = readLeases(DATA_DIR); } catch (e) { errors.push(`leases: ${e.message}`); }
+      // Find the pool items that a server listens on while no lease holds them. The check runs on this tick with the same
+      // TCP probe as the idle reclaim, so it starts no loop and changes no lease. A listener without an owner stays a
+      // warning in the dashboard.
+      let unleased = [];
+      const unleasedNotices = [];
+      if (this.act && this.collectors.probePort) {
+        try {
+          const checked = await reconcileUnleasedListeners({
+            pools: resourcePools, leases: leaseStore.leases, state: this.unleasedListeners, now,
+            probePort: this.collectors.probePort,
+            // A test engine injects the three reads that name a process. The defaults ask lsof and ps.
+            pidOf: this.collectors.listenerPid || listenerPid,
+            cwdOf: this.collectors.processCwd || processCwd,
+            labelOf: this.collectors.processLabel || processLabel,
+            projectPaths: readProjectRepos(DATA_DIR).map((row) => ({ slug: row.slug, path: row.repo })),
+          });
+          unleased = checked.unleased;
+          unleasedNotices.push(...checked.notices);
+        } catch (e) { errors.push(`unleased listeners: ${e.message}`); }
+      }
       const resourceLeases = {
         pools: resourcePools.map(publicPool), errors: resourcePoolErrors,
         leases: leaseStore.leases.map((lease) => {
           const listener = listenerOf(lease.pool, lease.item);
           return { ...publicLease(lease), ...(listener === null ? {} : { listener }) };
         }),
+        unleased,
       };
 
       this.trackPaneStatus(herdr, now);
@@ -921,6 +969,7 @@ export class Engine extends EventEmitter {
       snap.leastOverProvider = leastOverProvider(snap.lanes);
       snap.policy = policy;
       snap.control = control;
+      if (this.act && currentPaneList && currentHerdrSnapshot) await this.notifyUnleasedOwners(unleasedNotices, { control, panes: herdr.panes });
       this.recordStatusWork(control, now);
       this.readProjectHeads(now);
       this.readProjectConfigs(now);

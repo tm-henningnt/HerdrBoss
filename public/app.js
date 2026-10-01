@@ -1761,12 +1761,23 @@ function browserRunningForLease(s, lease) {
     && processes.some((proc) => proc.kind === 'automation-chrome' && String(proc.port) === String(browser.port) && proc.profile === browser.profile));
 }
 
+// The listener on a free pool item that no lease holds, or null when the item is free and silent.
+function unleasedEntry(s, pool, item) {
+  return (s.resourceLeases?.unleased || []).find((entry) => entry.pool === pool.name && entry.item === item) || null;
+}
+
+function leaseFreeRow(s, pool, item, id) {
+  const entry = unleasedEntry(s, pool, item);
+  if (!entry) return `<tr id="${id}" class="lease-row lease-free"><td class="mono" data-label="Item">${esc(item)}</td><td data-label="State">Free</td><td data-label="Holder project">–</td><td data-label="Pane or worker">–</td><td data-label="Age">–</td><td data-label="Server">–</td><td data-label="Listener">–</td><td data-label="Idle">–</td><td data-label="Time left">–</td><td data-label=""></td></tr>`;
+  const title = ` title="${esc(`A process listens on port ${entry.item} of pool ${entry.pool} and no lease holds it. Herdr Boss cannot show this server in the dashboard.`)}"`;
+  const process = entry.pid == null ? '–' : `${entry.pid} <span class="lease-process">${esc(entry.name || '?')}</span>`;
+  return `<tr id="${id}" class="lease-row lease-unleased"${title}><td class="mono" data-label="Item">${esc(item)}</td><td data-label="State">Unleased</td><td data-label="Holder project">${esc(entry.owner || '–')}</td><td class="mono" data-label="Pane or worker">${process}</td><td data-label="Age">${esc(`${entry.ageMinutes ?? 0}m`)}</td><td data-label="Server">–</td><td data-label="Listener">yes</td><td data-label="Idle">–</td><td data-label="Time left">–</td><td data-label=""></td></tr>`;
+}
+
 function leaseRow(s, pool, item) {
   const lease = (s.resourceLeases?.leases || []).find((candidate) => candidate.pool === pool.name && candidate.item === item) || null;
   const id = `lease-${esc(pool.name)}-${esc(item)}`;
-  if (!lease) {
-    return `<tr id="${id}" class="lease-row lease-free"><td class="mono" data-label="Item">${esc(item)}</td><td data-label="State">Free</td><td data-label="Holder project">–</td><td data-label="Pane or worker">–</td><td data-label="Age">–</td><td data-label="Server">–</td><td data-label="Listener">–</td><td data-label="Idle">–</td><td data-label="Time left">–</td><td data-label=""></td></tr>`;
-  }
+  if (!lease) return leaseFreeRow(s, pool, item, id);
   const holder = lease.worker || lease.pane || '';
   const running = pool.name === 'project-browsers' && browserRunningForLease(s, lease);
   const idle = lease.listener === false;
@@ -1779,13 +1790,14 @@ function leaseRow(s, pool, item) {
 
 function leasePoolBlock(s, pool) {
   const held = (s.resourceLeases?.leases || []).filter((lease) => lease.pool === pool.name && pool.items.includes(lease.item));
+  const unleased = (s.resourceLeases?.unleased || []).filter((entry) => entry.pool === pool.name);
   // The built-in browser pool lists only the held ports, with one line for the free ports.
   const items = pool.builtIn ? held.map((lease) => lease.item) : pool.items;
   const free = pool.items.length - held.length;
   const rows = items.map((item) => leaseRow(s, pool, item)).join('') || '<tr><td colspan="10" class="empty">No items.</td></tr>';
   const controls = pool.builtIn ? '' : `<div class="lease-pool-controls"><button type="button" class="quiet" data-pool-edit="${esc(pool.name)}"${poolBusy ? ' disabled' : ''}>Edit</button><button type="button" class="quiet" data-pool-remove="${esc(pool.name)}"${poolBusy || poolRemoveBusy ? ' disabled' : ''}>Remove</button></div>`;
   return `<div class="lease-pool">
-    <div class="lease-head"><b>${esc(pool.name)}</b><span>${held.length} held · ${free} free</span><span>${esc(leaseTtlText(pool))}</span><span>${esc(leaseReclaimText(pool))}</span>${controls}</div>
+    <div class="lease-head"><b>${esc(pool.name)}</b><span>${held.length} held · ${free} free</span>${unleased.length ? `<span class="lease-unleased-count">${unleased.length} listening with no lease</span>` : ''}<span>${esc(leaseTtlText(pool))}</span><span>${esc(leaseReclaimText(pool))}</span>${controls}</div>
     <div class="lease-table-wrap"><table class="lease-table"><thead><tr><th>Item</th><th>State</th><th>Holder project</th><th>Pane or worker</th><th>Age</th><th>Server</th><th>Listener</th><th>Idle</th><th>Time left</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
     ${pool.builtIn ? `<p class="lease-free-line">${free} free port${free === 1 ? '' : 's'}</p>` : ''}
   </div>`;
@@ -5567,6 +5579,7 @@ const HELP = {
     <h3>Locks</h3><p>The panel lists machine locks. Each row shows the lock name, holder project and pane, kind, age, time left, and state. When no lock exists, the panel shows <b>No machine locks are held.</b> A manual lock expires after 60 minutes. A command lock ends when its command ends. Herdr Boss takes over a stale lock. The history line above the table shows the median hold time and the median wait time of all locks in the last 7 days, and of each lock name. A re-entrant suite under a push is not part of the medians. Before the first lock change, it shows <b>No lock history yet.</b> You cannot release a lock from this panel.</p>
     <h3>Resource leases</h3><p>Each pool lists its items and the holder of each item. The head shows the held and free counts, the lease TTL, and the reclaim rule. A held row shows the holder project, the pane or worker, the lease age, the server (its pid, or <b>unbound</b>), whether the port has a listener, the idle minutes, and the time left. A row with no listener is idle and has a muted style. Herdr Boss reclaims an idle lease after the idle minutes of the pool. <b>borrowed</b> marks an item of another project's split. For <code>project-browsers</code>, the panel lists only the held ports and the number of free ports; that pool has 77 ports. An invalid resource pool shows an error line.</p>
     <p>Select <b>Release</b> to give a lease back. The page asks you to confirm, and names the pool, the item, the holder project, and the pane or worker. The release removes the lease only while its holder project is still the project that the page shows. Otherwise the page reports that the lease changed, and you reload the page. A release never stops a process. For a project browser that runs, the button is disabled until you close the browser on the Browsers page.</p>
+    <p>A free item that answers a connection shows <b>Unleased</b> with the process ID, the process name, the age, and the owner project when Herdr Boss knows it. Such a port is not on any lease, so Herdr Boss cannot show the server on the Project page. After 10 minutes Herdr Boss sends one notice to the orchestrator of the owner, with the commands to take the port and bind the lease. A listener with no known owner stays a warning in this panel.</p>
     <h3>Manage pools</h3><p>Select <b>Add pool</b> to create a pool. Enter ports, ranges such as 8000-8009, or items. Separate them with commas or lines. A pool holds at most 100 ports from 1024 to 65535. Enter the project split as JSON. Set the environment variable, lease TTL, reclaim check, grace period, idle minutes, and the wait default. Add a value by port to hand a worker a variable, for example a client ID, that matches its port. The value is stored in the private config file on this machine only, and the page shows <b>set</b> instead of the value. Select <b>Change</b> to replace it. An empty value clears it. Keep ports 9222 to 9299 out of custom pools. Select <b>Edit</b> to change a config pool. Select <b>Remove</b>, then confirm the pool name, to remove it. A held item blocks removal and any update that drops it. The exception is a lease that is unbound and has had no listener for the idle minutes. Herdr Boss saves the change to <code>config.json</code> and applies it at once. The built-in <code>project-browsers</code> pool has no edit or remove controls. The read-only preview refuses pool changes.</p>`],
   settings: ['Settings', `
     <p>Each harness section holds the models and provider routes of that harness. Provider quotas and machine limits are below the harnesses. The <b>Advanced</b> section holds the rarely used settings. It stays closed until you open it, and the page remembers its state.</p>

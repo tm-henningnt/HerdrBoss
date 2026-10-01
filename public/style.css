@@ -1370,6 +1370,11 @@ p.wizard-errors { padding-left: 10px; }
 .lease-free td { color: var(--muted); }
 .lease-idle td { color: var(--muted); }
 .lease-idle td:first-child { font-style: italic; }
+/* A port that answers a connection with no lease. The row keeps the normal text colour so the PID stays readable. */
+.lease-unleased td { background: color-mix(in srgb, var(--warn) 7%, transparent); }
+.lease-unleased td:nth-child(2) { color: var(--warn); font-weight: 600; }
+.lease-unleased-count { color: var(--warn); }
+.lease-process { color: var(--muted); font-family: var(--sans); }
 .lease-action { text-align: right; }
 .lease-action button { padding: 4px 10px; }
 .lease-note { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; white-space: normal; }

@@ -854,6 +854,19 @@ herdr-boss lease release serve-ports "$PORT"
 
 A lease ends before its TTL in these cases. The bound process is gone: Herdr Boss releases the lease within one tick. The process ID belongs to another process now: the start time differs. The port has no listener for `idleMinutes` of the pool (default 20), also for a lease that no server bound. The holder gets one notice. A `serve-live` helper calls `lease acquire serve-ports --wait 600`, which waits up to 10 minutes for a free port, and binds the lease to its server process.
 
+A server must bind its PID at start. Take the lease, start the server, then run `lease bind POOL PORT --pid PID` at once. A caller that knows the PID before the lease runs `lease acquire POOL --pid PID`.
+
+The engine probes every free item of a ports pool on each tick. When a process listens on such an item and no lease holds it, the port is an unleased listener. The state API lists it in `resourceLeases.unleased` with the pool, the item, the PID, the process name, the first tick that saw it, its age in minutes, and the owner project. The PID comes from `lsof -nP -iTCP:<port> -sTCP:LISTEN -Fp`, the process name from `ps -o comm= -p <pid>`, and the owner from the working directory of the process against the project registry. Herdr Boss reads no command line and no environment.
+
+An unleased listener with a known owner gives one notice to the orchestrator pane of that project after 10 minutes. The notice names the port, the PID, and the process, and gives these commands:
+
+```sh
+herdr-boss lease acquire serve-ports --for SLUG --prefer PORT --pid PID
+herdr-boss lease bind serve-ports PORT --pid PID
+```
+
+An unleased listener with an unknown owner gives no notice. The Allocation page shows a warning row for each one. Herdr Boss never takes the lease itself.
+
 The client ID of a port: a pool can hold `portEnv` values for each port range, for example `TM_SERVE_LIVE_CLIENT_ID`. A project picks the client ID by port. The lease hands the value over through `worker start --lease` (pane environment) or `lease acquire --env-file`. A port without a value gets no variable. See [Resource leases](user-guide.md#resource-leases).
 
 `worker start --lease POOL` leases one item before it creates the worktree or the pane. It sets the variable `env` of the pool in the worker pane, for example `HERDR_SERVE_PORT=8001`. It records the lease in the run record and in the brief. When the pool has no free item, the start fails with exit code 3 and creates nothing. When the start fails later, it releases the lease. `worker collect NAME --record` releases the leases of the worker.

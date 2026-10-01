@@ -253,6 +253,147 @@ export function reclaimLeases({ pools, dataDir = DATA_DIR, panes = null, now = D
   return { reclaimed, held };
 }
 
+// The age of a listener without a lease before Herdr Boss tells the orchestrator of the owner of the process.
+export const UNLEASED_NOTICE_MINUTES = 10;
+// The most probes of one tick that run at the same time.
+const UNLEASED_PROBE_PARALLEL = 8;
+
+// A pool that Herdr Boss reconciles: a ports pool with an idle rule. The built-in browser pool has none.
+export const reconcilesUnleased = (pool) => hasIdleRule(pool);
+
+let lsofFound = null;
+
+// Whether lsof is on the PATH. The check runs once. Herdr Boss names a listener process with lsof and never with a shell.
+export function lsofInstalled() {
+  if (lsofFound === null) {
+    const result = spawnSync('lsof', ['-v'], { stdio: 'ignore', timeout: 2000, env: { PATH: process.env.PATH ?? '' } });
+    lsofFound = !result.error;
+  }
+  return lsofFound;
+}
+
+// The output of lsof, or null when lsof is absent, times out, or fails.
+function lsofOutput(args) {
+  const result = spawnSync('lsof', args, { encoding: 'utf8', timeout: 2000, env: { PATH: process.env.PATH ?? '', LC_ALL: 'C' } });
+  return result.status === 0 ? result.stdout : null;
+}
+
+// The PID of the process that listens on a port, or null when lsof is absent or names no PID.
+// lsof prints a PID, a file descriptor and an address. It prints no argument and no environment of the process.
+export function listenerPid(port, { hasLsof = lsofInstalled() } = {}) {
+  if (!hasLsof) return null;
+  const pid = Number(/^p(\d+)$/m.exec(lsofOutput(['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-Fp']) || '')?.[1]);
+  return Number.isInteger(pid) && pid > 0 ? pid : null;
+}
+
+// The working directory of a process, or null when lsof is absent, the process is gone, or it has no cwd.
+// lsof prints the path of the working directory. It prints no argument and no environment of the process.
+export function processCwd(pid, { hasLsof = lsofInstalled() } = {}) {
+  if (!hasLsof || pid == null) return null;
+  const directory = /^n(.+)$/m.exec(lsofOutput(['-a', '-p', String(pid), '-d', 'cwd', '-Fn']) || '')?.[1];
+  return directory ? path.resolve(directory) : null;
+}
+
+// The name of a process, for example "node". ps prints the name only. It prints no argument and no environment.
+export function processLabel(pid) {
+  if (pid == null) return null;
+  const result = spawnSync('ps', ['-o', 'comm=', '-p', String(pid)], { encoding: 'utf8', timeout: 2000, env: { PATH: process.env.PATH ?? '', LC_ALL: 'C' } });
+  return result.status === 0 ? result.stdout.trim() || null : null;
+}
+
+// The project that owns a working directory: the first project of the registry whose path holds it. A path outside
+// every project gives null. A prefix of a project path is not inside it.
+export function projectOfCwd(directory, projectPaths = []) {
+  if (!directory) return null;
+  for (const entry of projectPaths) {
+    if (!entry?.path) continue;
+    const relative = path.relative(path.resolve(entry.path), directory);
+    if (relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))) return entry.slug || null;
+  }
+  return null;
+}
+
+const safely = (read, fallback = null) => {
+  try { return read(); } catch { return fallback; }
+};
+
+// The text that the engine sends to the orchestrator of the owner of a listener that no lease holds.
+export function unleasedNoticeText(item) {
+  const subject = item.pid == null ? 'A process' : `Process ${item.pid}${item.name ? ` (${item.name})` : ''}`;
+  return [
+    `${subject} has listened on port ${item.item} of pool ${item.pool} for ${item.ageMinutes} minutes. No lease holds this port, so the dashboard does not show this server and the pool counts the port as free.`,
+    `Take the port for ${item.owner} and bind the lease to the process: herdr-boss lease acquire ${item.pool} --for ${item.owner} --prefer ${item.item} --pid ${item.pid}`,
+    `herdr-boss lease bind ${item.pool} ${item.item} --pid ${item.pid}`,
+    'Run lease acquire first, then lease bind. Report the port and the PID to the Boss.',
+  ].join('\n');
+}
+
+// Find the pool items that a server listens on while no lease holds them. `state` is a Map of "pool\nitem" to
+// { firstSeen, notified }; the caller keeps it beside the answers of the lease probe. One tick probes each item once.
+// `probePort` is the TCP probe of the tick. `pidOf`, `cwdOf` and `labelOf` name the process that listens.
+// `projectPaths` is the [{ slug, path }] of the project registry. The check starts no loop and changes no lease.
+// It returns the listeners for the state API and the listeners that reached the notice age.
+export async function reconcileUnleasedListeners({
+  pools = [], leases = [], state = new Map(), now = Date.now(), probePort = tcpListeningAsync,
+  pidOf = listenerPid, cwdOf = processCwd, labelOf = processLabel, projectPaths = [],
+  noticeMinutes = UNLEASED_NOTICE_MINUTES, parallel = UNLEASED_PROBE_PARALLEL,
+} = {}) {
+  const at = timeValue(now);
+  const held = new Set(leases.map((lease) => `${lease.pool}\n${lease.item}`));
+  // Every free item of every pool with an idle rule gets one probe per tick. The sort gives a stable order.
+  const due = pools.filter(reconcilesUnleased)
+    .flatMap((pool) => pool.items.filter((item) => !held.has(`${pool.name}\n${item}`)).map((item) => ({ pool: pool.name, item })))
+    .sort((a, b) => `${a.pool}\n${a.item}`.localeCompare(`${b.pool}\n${b.item}`, 'en', { numeric: true }));
+  const answers = new Map();
+  let next = 0;
+  const worker = async () => {
+    while (next < due.length) {
+      const entry = due[next++];
+      let value = null;
+      try { value = await probePort(entry.item); } catch { value = null; }
+      answers.set(`${entry.pool}\n${entry.item}`, value === true ? true : value === false ? false : null);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(parallel, due.length) }, worker));
+  // A lease that takes an item, or a pool that leaves the config, clears the record of that item.
+  const dueKeys = new Set(due.map((entry) => `${entry.pool}\n${entry.item}`));
+  for (const key of [...state.keys()]) if (!dueKeys.has(key)) state.delete(key);
+
+  const unleased = [];
+  const notices = [];
+  for (const entry of due) {
+    const key = `${entry.pool}\n${entry.item}`;
+    const answer = answers.get(key);
+    // An unknown answer keeps the record and shows nothing. A refused connection ends the age of the listener.
+    if (answer !== true) {
+      if (answer === false) state.delete(key);
+      continue;
+    }
+    const record = state.get(key) || { firstSeen: at, notified: false };
+    const pid = safely(() => pidOf(entry.item));
+    const owner = pid == null ? null : projectOfCwd(safely(() => cwdOf(pid)), projectPaths);
+    const item = {
+      pool: entry.pool, item: entry.item, pid, name: pid == null ? null : safely(() => labelOf(pid)),
+      firstSeen: new Date(record.firstSeen).toISOString(),
+      ageMinutes: Math.max(0, Math.floor((at - record.firstSeen) / 60000)),
+      owner,
+    };
+    unleased.push(item);
+    // A notice needs an owner, so a listener of an unknown owner stays a warning in the dashboard. The record keeps
+    // that the notice went, so the next tick sends no second notice. markUnleasedNotified sets that flag.
+    if (owner && !record.notified && at - record.firstSeen >= noticeMinutes * 60000) notices.push(item);
+    state.set(key, record);
+  }
+  return { unleased, notices };
+}
+
+// Record that the notice for a listener went out. The caller marks the record after it sent the notice, so a tick that
+// had no orchestrator pane for the owner tries again.
+export function markUnleasedNotified(state, item) {
+  const record = state.get(`${item.pool}\n${item.item}`);
+  if (record) record.notified = true;
+}
+
 function paneSet(herdr) {
   try {
     const response = herdr(['pane', 'list']);
