@@ -53,6 +53,7 @@ const INPUT_ENTER_READY_DELAY_MS = 20_000;
 const AUTO_READY_EXPIRY_MS = 30 * 60 * 1000;
 const AUTO_READY_EXPIRY_REASON = 'successor not ready after 30 minutes';
 const UNREADY_SUCCESSOR_NOTICE_MS = 10 * 60 * 1000;
+const EXPIRED_HANDOVER_NOTICE_MAX_AGE_MS = 60 * 60 * 1000;
 const HANDOVER_EXPIRY_RETRY_MS = 5 * 60 * 1000;
 const HANDOVER_EXPIRY_MAX_FAILURES = 3;
 const CONTEXT_WARNING_TOKENS = 400_000;
@@ -1601,7 +1602,7 @@ export class Engine extends EventEmitter {
       ? 'it has not started after the engine sent Enter'
       : 'it has not started its state read';
     const wait = AUTO_READY_MS - (now - Date.parse(item.promptAt || item.preparedAt));
-    return wait > 0 ? `it settled, and the automatic ready signal waits ${Math.ceil(wait / 1000)} more seconds` : 'the ready check runs next tick';
+    return wait > 0 ? `it settled, and the ready signal waits ${Math.ceil(wait / 1000)} more seconds` : 'the ready check runs next tick';
   }
 
   projectHandoverCooling(project, now) {
@@ -1616,6 +1617,8 @@ export class Engine extends EventEmitter {
   pruneHandoverExpiryMemory(records = null) {
     const handoverRecords = records || listHandoffs();
     const handoverIds = new Set(handoverRecords.map((item) => item.id));
+    this.memory.handoverExpiryBoss ||= {};
+    for (const [id, at] of Object.entries(this.memory.handoverExpiryMailbox || {})) this.memory.handoverExpiryBoss[id] ||= at;
     delete this.memory.handoverExpiryMailbox;
     for (const key of ['handoverExpiryBoss', 'handoverExpiryHandled', 'handoverExpiryRetries', 'handoverUnreadyNotices']) {
       this.memory[key] ||= {};
@@ -1627,6 +1630,27 @@ export class Engine extends EventEmitter {
     const boss = (herdr?.panes || []).find((pane) => pane.label === 'boss' && pane.agent);
     if (!boss) throw new Error('No Boss pane was found.');
     checkHerdrResponse(await this.herdrRunner('herdr', ['agent', 'prompt', boss.id, text]));
+  }
+
+  async retryOperation(item, now, kind, description, action, scope) {
+    this.memory.handoverExpiryRetries ||= {};
+    const retries = this.memory.handoverExpiryRetries[item.id] ||= {};
+    const retry = retries[kind] ||= { failures: 0, nextAt: 0 };
+    if (retry.givenUp || now < retry.nextAt) return false;
+    try {
+      await action();
+      delete retries[kind];
+      if (!Object.keys(retries).length) delete this.memory.handoverExpiryRetries[item.id];
+      return true;
+    } catch (error) {
+      retry.failures += 1;
+      const detail = String(error?.stderr || error?.message || error).slice(0, 200);
+      if (retry.failures >= HANDOVER_EXPIRY_MAX_FAILURES) {
+        retry.givenUp = true;
+        this.log('error', `Giving up ${description} for ${item.status === 'expired' ? 'expired ' : ''}handover ${item.id} after ${HANDOVER_EXPIRY_MAX_FAILURES} failures: ${detail}`, scope);
+      } else retry.nextAt = now + HANDOVER_EXPIRY_RETRY_MS;
+      return false;
+    }
   }
 
   async expireUnreadyHandoffs(herdr, now) {
@@ -1647,34 +1671,18 @@ export class Engine extends EventEmitter {
     for (const item of records.filter((record) => record.status === 'expired'
       && record.expiredReason === AUTO_READY_EXPIRY_REASON && !record.boss && record.label !== 'boss')) {
       const label = item.displayLabel || this.state?.control?.projects?.[item.project]?.label || item.project;
-      const retryOperation = async (kind, description, action, scope) => {
-        const retries = this.memory.handoverExpiryRetries[item.id] ||= {};
-        const retry = retries[kind] ||= { failures: 0, nextAt: 0 };
-        if (retry.givenUp || now < retry.nextAt) return false;
-        try {
-          await action();
-          delete retries[kind];
-          if (!Object.keys(retries).length) delete this.memory.handoverExpiryRetries[item.id];
-          return true;
-        } catch (error) {
-          retry.failures += 1;
-          const detail = String(error?.stderr || error?.message || error).slice(0, 200);
-          if (retry.failures >= HANDOVER_EXPIRY_MAX_FAILURES) {
-            retry.givenUp = true;
-            this.log('error', `Giving up ${description} for expired handover ${item.id} after ${HANDOVER_EXPIRY_MAX_FAILURES} failures: ${detail}`, scope);
-          } else retry.nextAt = now + HANDOVER_EXPIRY_RETRY_MS;
-          return false;
-        }
-      };
       const clearRetry = (kind) => {
         const retry = this.memory.handoverExpiryRetries[item.id];
         if (!retry) return;
         delete retry[kind];
         if (!Object.keys(retry).length) delete this.memory.handoverExpiryRetries[item.id];
       };
+      // Old expiry records must not replay the notice history after deployment.
+      const expiredAt = Date.parse(item.expiredAt);
+      if (Number.isFinite(expiredAt) && now - expiredAt > EXPIRED_HANDOVER_NOTICE_MAX_AGE_MS) this.memory.handoverExpiryBoss[item.id] ||= now;
       if (this.memory.handoverExpiryBoss[item.id]) clearRetry('boss');
       else {
-        const sent = await retryOperation('boss', 'the Boss notice', () => this.promptHandoverBoss(herdr,
+        const sent = await this.retryOperation(item, now, 'boss', 'the Boss notice', () => this.promptHandoverBoss(herdr,
           `[herdr-boss] Handoff ${item.id}, pane ${item.newPane}, project ${item.project} (${label}): expired after 30 minutes unready.`), { project: item.project });
         if (sent) this.memory.handoverExpiryBoss[item.id] = now;
       }
@@ -1697,7 +1705,7 @@ export class Engine extends EventEmitter {
         continue;
       }
       try {
-        const closed = await retryOperation('close', `close of pane ${pane.id}`, async () => {
+        const closed = await this.retryOperation(item, now, 'close', `close of pane ${pane.id}`, async () => {
           checkHerdrResponse(await this.herdrRunner('herdr', ['pane', 'close', pane.id]));
         }, { project: item.project, pane: pane.id });
         if (closed) {
@@ -1850,19 +1858,16 @@ export class Engine extends EventEmitter {
     }
 
     this.memory.handoverUnreadyNotices ||= {};
-    for (const item of listHandoffs().filter((record) => record.status === 'prepared' && !record.readyAt)) {
+    for (const item of listHandoffs().filter((record) => record.status === 'prepared' && !record.readyAt
+      && !record.boss && record.label !== 'boss' && !record.promptError)) {
       if (this.memory.handoverUnreadyNotices[item.id]) continue;
       const target = panes.find((pane) => pane.id === item.newPane);
       const promptedAt = Date.parse(item.promptAt || item.preparedAt);
       if (target?.agent !== item.toKind || !settled(target) || !Number.isFinite(promptedAt)
         || now - promptedAt < UNREADY_SUCCESSOR_NOTICE_MS) continue;
-      try {
-        await this.promptHandoverBoss(herdr,
-          `[herdr-boss] Handoff ${item.id}, pane ${item.newPane}, project ${item.project}: idle or done and still unready 10 minutes after its prompt. Please inspect it: herdr agent read ${item.newPane}. Activate it by hand with herdr-boss handoff activate ${item.id} --confirmed.`);
-        this.memory.handoverUnreadyNotices[item.id] = now;
-      } catch (error) {
-        this.log('error', `Unready successor notice for handoff ${item.id} failed: ${String(error.stderr || error.message).slice(0, 200)}`, { project: item.project, pane: item.newPane });
-      }
+      const sent = await this.retryOperation(item, now, 'unready', 'the unready Boss notice', () => this.promptHandoverBoss(herdr,
+        `[herdr-boss] Handoff ${item.id}, pane ${item.newPane}, project ${item.project}: idle or done and still unready 10 minutes after its prompt. Please inspect it: herdr agent read ${item.newPane}. Activate it by hand with herdr-boss handoff activate ${item.id} --confirmed.`), { project: item.project, pane: item.newPane });
+      if (sent) this.memory.handoverUnreadyNotices[item.id] = now;
     }
   }
 
