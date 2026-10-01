@@ -111,6 +111,10 @@ let machineGuardBusy = false;
 let machineGuardMessage = '';
 let nightBusy = false;
 let nightMessage = '';
+// The stand-down buttons of the Watch page: their busy flag, their message, and the result of the last press.
+let standDownBusy = false;
+let standDownMessage = '';
+let standDownResult = null;
 // The Watch form on the Agents page. until is a datetime-local value; null means the default at the next render.
 const watchForm = { until: null, forever: false, daily: false, report: '07:30', routines: {}, adhoc: '' };
 // The routine editors on Settings keep their drafts, their open state, and their messages across renders.
@@ -318,6 +322,34 @@ document.addEventListener('keydown', (e) => {
 });
 
 // Start or stop the watch from the popover or from the Agents page. A stop asks the Owner first. Both routes return the new
+// Stand down the idle project orchestrators, or undo it. A stand-down starts no watch and cancels no goal. The card
+// shows the last result, so the Owner sees which projects changed. The buttons use no confirm dialog: the second
+// button undoes the first, and a card with a reason is never parked.
+// The routes use the policy save path of the Allocation page, so they carry the page caller label.
+async function updateStandDown(action) {
+  if (standDownBusy) return;
+  standDownBusy = true;
+  standDownMessage = action === 'standdown' ? 'Standing down the idle projects…' : 'Resuming the parked projects…';
+  lastRender = '';
+  render(true);
+  try {
+    const response = await fetch(`/api/watch/${action}`, { method: 'POST', headers: POLICY_PUT_HEADERS, body: '{}' });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || (result.errors || []).join(' ') || 'The stand-down failed.');
+    standDownResult = result;
+    standDownMessage = '';
+    if (result.night) state.night = result.night;
+    if (result.policy) state.policy = result.policy;
+    if (result.control) state.control = result.control;
+  } catch (error) { standDownMessage = error.message; standDownResult = null; }
+  finally {
+    standDownBusy = false;
+    await refreshState();
+    lastRender = '';
+    render(true);
+  }
+}
+
 // watch state, and a tick already refreshed the page state, so the page re-reads it after a change.
 async function updateNight(action) {
   if (nightBusy) return;
@@ -2443,6 +2475,26 @@ async function resetRoutineEditor(key) {
   render(true);
 }
 
+// The stand-down card of the Watch page. It parks the idle project orchestrators and undoes it. The undo button shows
+// only while a stand-down waits to be undone. The card shows the last result and the time of the last stand-down.
+function standDownCard(night, result) {
+  const mark = night?.standDown;
+  const parked = result?.paused || [];
+  const skipped = result?.skipped || [];
+  const lines = [];
+  if (result) {
+    lines.push(parked.length ? `Parked: ${parked.join(', ')}.` : 'No project was parked.');
+    if (skipped.length) lines.push(`Not parked: ${skipped.map((item) => `${item.slug}: ${item.reason}`).join(' · ')}`);
+    if (result.restored) lines.push(result.restored.length ? `Resumed: ${result.restored.join(', ')}.` : 'No project was resumed.');
+  }
+  if (standDownMessage) lines.unshift(standDownMessage);
+  const body = `<p class="setting-help">Park the idle project orchestrators. Goals stay set. Running work continues.</p>
+      <p class="stand-down-actions"><button type="button" data-stand-down="true"${standDownBusy ? ' disabled' : ''}>Stand down projects</button>${mark ? `<button type="button" data-stand-down-undo="true"${standDownBusy ? ' disabled' : ''}>Resume projects</button>` : ''}</p>
+      ${lines.length ? `<p class="setting-help stand-down-result" role="status" aria-live="polite">${esc(lines.join(' '))}</p>` : ''}
+      ${mark ? `<p class="setting-help">Last stand down ${esc(watchLabel(mark.at))}.</p>` : ''}`;
+  return `<section class="stand-down" data-stand-down-card><h3>Stand down</h3>${body}</section>`;
+}
+
 // The Watch control. It sits at the top of the Agents page in a compact box. The form values live in watchForm.
 function watchPanel(s) {
   const night = s?.night || { active: false };
@@ -2454,7 +2506,7 @@ function watchPanel(s) {
     : `<div class="watch-form" data-night-form><label class="setting-line"><span>Until</span><input type="datetime-local" data-night-until value="${esc(watchForm.until)}" aria-label="Watch end date and time"${watchForm.forever || nightBusy ? ' disabled' : ''}></label><span class="watch-length" data-night-length aria-live="polite"></span><label class="setting-line"><input type="checkbox" data-night-forever aria-label="Watch until I cancel"${watchForm.forever ? ' checked' : ''}${dis}><span>Until I cancel</span></label><span class="watch-daily" data-night-daily-row${watchForm.forever ? '' : ' hidden'}><label class="setting-line"><input type="checkbox" data-night-daily aria-label="Send a daily report"${watchForm.daily ? ' checked' : ''}${dis}><span>Daily report</span></label><input type="time" data-night-report value="${esc(watchForm.report)}" aria-label="Daily report time"${watchForm.daily && !nightBusy ? '' : ' disabled'}></span><label class="setting-line"><input type="checkbox" data-night-quiet-hours aria-label="Quiet hours during the watch"${dis}><span>Quiet hours</span></label>${watchRoutineFields(s)}<button type="button" data-night-start="true"${dis}>Start</button><p class="setting-help watch-warning" role="alert" data-night-warning></p></div>`;
   // A fold card: closed by default when no watch runs, open by default while a watch runs. The browser remembers a choice.
   const summary = night.active ? `On watch ${watchUntilPhrase(night)}` : 'No watch runs';
-  const body = `<p class="setting-help" role="status" aria-live="polite" data-night-status>${esc(status)}</p>${form}`;
+  const body = `<p class="setting-help" role="status" aria-live="polite" data-night-status>${esc(status)}</p>${form}${standDownCard(night, standDownResult)}`;
   return foldCard({ slug: AGENTS_FOLD, key: 'watch', id: 'watch', className: 'watch-compact watch-fold', title: 'Watch', count: summary, hint: night.active ? '' : 'Start a watch', body, defaultOpen: night.active === true });
 }
 
@@ -5498,6 +5550,9 @@ const HELP = {
     <p>The <b>Routines</b> list shows the prompts that the service sends to the Boss pane during the watch. Clear the box of a routine to leave it out of this watch. Set its schedule: a number of minutes between runs, or a time before the end of the watch. A routine before the end has no run in a watch until cancelled.</p>
     <p>Write <b>Instructions for this watch</b> to add a text for this watch only. The service sends the text to the Boss with each routine, and to each orchestrator in the start notice. The box keeps your last choice of routines and schedules as the default of the next watch.</p>
     <p>Select <b>Start</b> to start the watch. While the watch runs, the box lists each routine with its next run and its last run. The service prompts the Boss only when the Boss pane is idle, and once for each run. If the Boss is busy, the service tries again until the next run is due, then skips the run. Select <b>Stop the watch</b> to end it. The page asks you to confirm first. The read-only preview refuses both actions.</p>
+    <h3>Stand down</h3><p>The card <b>Stand down</b> is under the watch box. It parks the idle project orchestrators before you go offline. Select <b>Stand down projects</b>. The mode of each project becomes <code>paused</code>. The goal of each orchestrator stays set, and a worker that runs continues. The idle-orchestrator nudge, the kit reminder, and the slot lending skip a paused project. A paused project lends all its slots.</p>
+    <p>The card names each project it parked and each project it left alone with its reason: <b>worker running</b>, <b>orchestrator working</b>, or <b>already paused</b>. The Boss workspace is never changed. A project with a reason is not parked. Select <b>Stand down projects</b> again later to park it. The card shows the time of the last stand-down.</p>
+    <p>Select <b>Resume projects</b> to undo it. Each project returns to the mode it had before. A project that the Owner changed in the meantime keeps its own mode. The button shows only while a stand-down waits to be undone. The two buttons use no confirm dialog; the card shows the result of each press. The read-only preview refuses both actions.</p>
     <h3>Chart</h3><p>A chart of the organization, from top to bottom: the Owner, the Boss, one orchestrator for each project, and the workers under each orchestrator. The page cannot change resources. Use Settings for resources.</p>
     <h3>Nodes</h3><p><b>Owner</b> shows <b>At the Mac</b> or <b>Away</b> from the machine idle time. <b>Boss</b> shows the pane labeled <code>boss</code>, its harness and state, the quota use of a Codex or Claude harness, and the handover state. The Boss workspace workers are below the Boss.</p>
     <p>Each project node shows the orchestrator pane, harness, and state, the first published task with status <b>doing</b>, the worker slots in use against the slots and share, and the handover state. The projects use the project order. A workspace marked not a project has no node.</p>
@@ -7424,6 +7479,11 @@ new MutationObserver(() => syncWatchForm()).observe(document.getElementById('app
 setInterval(syncWatchForm, 30000);
 
 document.addEventListener('click', async (e) => {
+  const standDownButton = e.target.closest?.('[data-stand-down], [data-stand-down-undo]');
+  if (standDownButton) {
+    await updateStandDown(standDownButton.dataset.standDownUndo !== undefined ? 'undo' : 'standdown');
+    return;
+  }
   const nightButton = e.target.closest?.('[data-night-stop], [data-night-start]');
   if (nightButton) {
     await updateNight(nightButton.dataset.nightStop ? 'stop' : 'start');

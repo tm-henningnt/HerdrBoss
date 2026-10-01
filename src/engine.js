@@ -288,6 +288,32 @@ export function projectHeld(slug, projects = [], control = null) {
 
 const nameKey = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
 
+// The projects that a stand-down parks, and the projects that it leaves alone. It uses the same facts as the
+// idle-orchestrator nudge: the orchestrator pane of the project and the worker panes of its workspace.
+// A project is skipped when a worker runs in it, when its orchestrator works, or when it is already paused.
+// The Boss workspace never changes. Each parked project reports the mode it had, so the undo can restore it.
+export function standDownPlan(control, herdr = null) {
+  const panes = herdr?.panes || [];
+  const bossWorkspaces = new Set(panes.filter((pane) => pane.label === 'boss').map((pane) => pane.workspace));
+  const parked = [];
+  const skipped = [];
+  for (const entry of Object.values(control?.projects || {})) {
+    const slug = entry?.slug;
+    if (!slug || entry.boss === true || entry.excluded === true || bossWorkspaces.has(entry.workspace) || /^boss$/i.test(entry.label || '')) continue;
+    const mode = entry.effectiveMode ?? entry.mode ?? 'auto';
+    const local = panes.filter((pane) => pane.workspace === entry.workspace);
+    if (mode === 'paused') { skipped.push({ slug, reason: 'already paused' }); continue; }
+    const workerRuns = local.some((pane) => pane.agent && !pane.orch && pane.label !== 'boss' && ['working', 'blocked', 'failed'].includes(pane.status))
+      || (!panes.length && Number(entry.running) > 0);
+    if (workerRuns) { skipped.push({ slug, reason: 'worker running' }); continue; }
+    const orchestrator = entry.orch?.status ?? local.find((pane) => pane.orch)?.status ?? null;
+    if (orchestrator !== null && !['idle', 'done'].includes(orchestrator)) { skipped.push({ slug, reason: 'orchestrator working' }); continue; }
+    parked.push({ slug, mode });
+  }
+  const bySlug = (a, b) => a.slug.localeCompare(b.slug);
+  return { parked: parked.sort(bySlug), skipped: skipped.sort(bySlug) };
+}
+
 // The workspace ids of one project. A published or allocated workspace id comes first. Without one,
 // a workspace matches when its label equals the project slug or name, or when an orchestrator pane
 // runs inside the project repository.

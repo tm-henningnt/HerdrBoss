@@ -621,8 +621,9 @@ The stored record holds these keys:
 | `noticeStartAt` | The ISO time of the start notice, for each pane that got it. |
 | `noticeStopAt` | The ISO time of the end notice, for each pane that got it. |
 | `reportSentAt`, `retroSentAt` | The ISO time when each report was posted. |
+| `standDown` | The last stand-down of the Owner: `{ at, projects }`. Each project in `projects` is a slug and the policy mode it had before the stand-down. |
 
-A state whose `until` time has passed reads as not active. The file stays, so the engine can read its own marks. A missing or unreadable file reads as not active. The read view of an active state is `{ active, since, until, untilCancelled, reportAt, reportDaily, by, quietHours }`. The read view of any other state is `{ active: false }`.
+A state whose `until` time has passed reads as not active. The file stays, so the engine can read its own marks. A missing or unreadable file reads as not active. The read view of an active state is `{ active, since, until, untilCancelled, reportAt, reportDaily, by, quietHours }`. The read view of any other state is `{ active: false }`. A stored stand-down mark adds a `standDown` key to the read view. See [Stand down](#stand-down).
 
 An active watch state also makes the Owner away. The machine limits are the same away limits as for an idle Owner. The watch changes no machine limit.
 
@@ -690,9 +691,39 @@ The dashboard uses these routes. They use the same functions as `herdr-boss watc
 |---|---|---|
 | `POST /api/watch/start` | `{ "until": "2026-09-30T07:30:00+02:00", "quietHours": false }` or `{ "untilCancelled": true, "report": "07:30" }` | `200` with the new watch state, and a `warning` above 48 hours. |
 | `POST /api/watch/stop` | `{}` | `200` with the new watch state. |
+| `POST /api/watch/standdown` | `{}` | `200` with `paused` and `skipped`. |
+| `POST /api/watch/standdown/undo` | `{}` | `200` with `restored`. |
 | `GET /api/watch` | none | `200` with the watch state. |
 
+See [Stand down](#stand-down) for the stand-down routes.
+
 `until` is `HH:MM` local time, `YYYY-MM-DD HH:MM` local time, or an ISO time. An `HH:MM` value means the next such time. The end time must be in the future. A watch has no maximum length. A refused time answers `400` and keeps the stored state. A blank value uses the next 07:30. Do not send `until` with `untilCancelled`. The routes need the same access as the other dashboard write routes. The read-only preview refuses them. The start route records `by` as `dashboard`.
+
+### Stand down
+
+The stand-down parks the idle project orchestrators before the Owner goes offline. A stand-down changes the policy mode of a project to `paused`. It cancels no goal and starts no watch. The goal stays set in the pane, and the project resumes when the mode returns.
+
+A paused project is skipped by the idle-orchestrator nudge, the kit reminder, and slot lending. A paused project lends all its slots.
+
+The **Agents** page has a card **Stand down** under the **Watch** box. It has two buttons:
+
+- **Stand down projects**. The card lists each parked project. It lists each project it left alone with its reason.
+- **Resume projects**. The button shows only while a stand-down waits to be undone. The buttons use no confirm dialog. The card shows the last result.
+
+The reasons are `worker running`, `orchestrator working`, and `already paused`. The facts are the same as the idle-orchestrator nudge: the orchestrator pane of the project and the worker panes of its workspace. The Boss workspace is never changed. A project with a reason is not parked. Select **Stand down projects** again later to park it.
+
+The undo returns each project to the mode it had before. It restores only a project that is still paused. A project that the Owner changed in the meantime keeps its own mode. The undo clears the mark, also when it restored nothing.
+
+Every mode change goes through the same save path as the Allocation page. The policy change log records it. See [Policy changes](#policy-changes). A project with no saved share takes a part of the shares that the other projects leave, so the saved shares keep adding up to 100. A stand-down changes no share of the Owner, so it asks for no share confirmation.
+
+The routes are:
+
+| Route | Body | Answer |
+|---|---|---|
+| `POST /api/watch/standdown` | `{}` | `200` with `{ paused: [slug], skipped: [{ slug, reason }] }`. |
+| `POST /api/watch/standdown/undo` | `{}` | `200` with `{ restored: [slug] }`. |
+
+Herdr Boss stores the time of the stand-down and the mode of each changed project in `watch.json`, under `standDown`. A second press keeps the mode of every project of the mark and adds the projects of that press. The route writes the mark after the policy save. A refused write, with the answers `400` and `409`, leaves the mark and the policy as they are. A watch start and a watch stop keep the mark, in the dashboard and in `herdr-boss watch`. The undo clears it. The read-only preview refuses both routes.
 
 ### Timed reports
 

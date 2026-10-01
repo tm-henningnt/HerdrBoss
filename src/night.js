@@ -46,11 +46,15 @@ function isoOrNull(value) {
 
 // The stored record holds a state. A record that is not active, or that passed its end time, reads as not active.
 function normalize(value, now) {
-  if (!value || typeof value !== 'object' || Array.isArray(value) || value.active !== true) return { active: false };
+  // The stand-down mark is independent of a watch. It shows on the dashboard whether a watch runs or not.
+  const standDown = standDownView(value?.standDown);
+  const mark = standDown ? { standDown } : {};
+  if (!value || typeof value !== 'object' || Array.isArray(value) || value.active !== true) return { active: false, ...mark };
   const until = isoOrNull(value.until);
   // A record without an end time stays active until it is cleared.
-  if (until && Date.parse(until) <= now) return { active: false };
+  if (until && Date.parse(until) <= now) return { active: false, ...mark };
   return {
+    ...mark,
     active: true,
     since: isoOrNull(value.since ?? value.startedAt),
     until,
@@ -61,7 +65,21 @@ function normalize(value, now) {
     quietHours: value.quietHours === true,
     adhoc: typeof value.adhoc === 'string' ? value.adhoc : '',
     routines: Array.isArray(value.routines) ? value.routines.filter((item) => item && typeof item.id === 'string').map(routineView) : [],
+    // A stored stand-down mark shows on the dashboard. The record of an ended watch keeps no mark.
+    ...mark,
   };
+}
+
+// The mark of a stand-down: { at, projects: { slug: previousMode } }. A mark without a time or without a project
+// reads as null, so the dashboard shows no undo button.
+export function standDownView(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const at = isoOrNull(value.at);
+  const projects = value.projects && typeof value.projects === 'object' && !Array.isArray(value.projects)
+    ? Object.fromEntries(Object.entries(value.projects).filter(([slug, mode]) => typeof slug === 'string' && typeof mode === 'string'))
+    : {};
+  if (!at || !Object.keys(projects).length) return null;
+  return { at, projects };
 }
 
 // The fields of one armed routine that the dashboard and the CLI show.
@@ -94,14 +112,17 @@ export function readNight({ dataDir = DATA_DIR, now = Date.now() } = {}) {
 }
 
 // Write the state atomically, with a mode that only the Owner can read. Unknown keys are kept, because a later
-// task stores its own marks in the same file.
-export function writeNight(state, { dataDir = DATA_DIR } = {}) {
+// task stores its own marks in the same file. A record without its own standDown keeps the stored stand-down mark,
+// so starting a watch never drops a stand-down of the Owner. Pass keepStandDown false to clear the mark.
+export function writeNight(state, { dataDir = DATA_DIR, keepStandDown = true } = {}) {
   if (!state || typeof state !== 'object' || Array.isArray(state)) throw new TypeError('night state must be an object.');
   for (const key of REQUIRED) if (state[key] === undefined) throw new TypeError(`night state needs ${key}.`);
+  const stored = keepStandDown && state.standDown === undefined ? standDownView(readNightRecord({ dataDir })?.standDown) : null;
+  const next = stored ? { ...state, standDown: stored } : state;
   const file = nightFile(dataDir);
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, `${JSON.stringify(state, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
+  fs.writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
   fs.renameSync(tmp, file);
   fs.chmodSync(file, 0o600);
   // The new file replaces the old one, so a cleared watch cannot come back from an old night.json.
@@ -109,7 +130,9 @@ export function writeNight(state, { dataDir = DATA_DIR } = {}) {
   return file;
 }
 
+// The watch ends and the files go. A stored stand-down mark stays, because it is not part of the watch.
 export function clearNight({ dataDir = DATA_DIR } = {}) {
+  const standDown = standDownView(readNightRecord({ dataDir })?.standDown);
   let cleared = false;
   for (const file of [nightFile(dataDir), legacyNightFile(dataDir)]) {
     try {
@@ -119,6 +142,7 @@ export function clearNight({ dataDir = DATA_DIR } = {}) {
       if (error.code !== 'ENOENT') throw error;
     }
   }
+  if (cleared && standDown) writeStandDown(standDown, { dataDir });
   return cleared;
 }
 
@@ -246,6 +270,20 @@ export function readNightRecord({ dataDir = DATA_DIR } = {}) {
   } catch {
     return null;
   }
+}
+
+// Read the stored stand-down mark, or null when no stand-down waits to be undone.
+export function readStandDown({ dataDir = DATA_DIR } = {}) {
+  return standDownView(readNightRecord({ dataDir })?.standDown);
+}
+
+// Store a stand-down mark in the watch file. The record of a running watch stays as it is. A mark needs a time and at
+// least one project, so a call without them clears the mark.
+export function writeStandDown(standDown, { dataDir = DATA_DIR } = {}) {
+  const clean = standDownView(standDown);
+  const { standDown: _old, ...record } = { active: false, until: null, ...readNightRecord({ dataDir }) };
+  writeNight(clean ? { ...record, standDown: clean } : record, { dataDir, keepStandDown: false });
+  return clean;
 }
 
 // The panes that already got a notice of this phase in this night. A mark from before the night started belongs to

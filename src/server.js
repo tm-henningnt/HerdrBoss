@@ -6,7 +6,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { Engine } from './engine.js';
+import { Engine, standDownPlan } from './engine.js';
 import { ownerReleaseLease, withResourcePoolMutation, readLeases, leasePools, publicPool, hasIdleRule, tcpListeningAsync } from './leases.js';
 import { PROJECTS_DIR, DATA_DIR, DEFAULT_SESSION_FILE, PRIVATE_ACCESS_DIR, assertPreviewDataDir, writeServiceSettings, applyServiceSettings, serviceSettingsView, validateResourcePools, writeResourcePools } from './config.js';
 import { writeProject, listProjects } from './projects.js';
@@ -17,7 +17,7 @@ import { spendSummary, clampSpendDays, loadPrices, defaultPrices, readPriceOverr
 import { readDenials, denialSummary } from './denials.js';
 import { summarizeHours, clampSummaryDays } from './machine-samples.js';
 import { analyticsSummary } from './analytics.js';
-import { buildWatchRecord, clearNight, readNight, writeNight } from './night.js';
+import { buildWatchRecord, clearNight, readNight, readStandDown, writeNight, writeStandDown } from './night.js';
 import { effectiveRoutines, rememberChoice, resetRoutine, saveRoutine } from './watch-routines.js';
 import { withProbeState } from './browser-probe.js';
 import { requestBrowser, listBrowserSessions, browserStatus, setBrowserWindowSize, closeBrowser, restartBrowser, listBookmarks, addBookmark, renameBookmark, moveBookmark, removeBookmark, setStartPage } from './browser-pool.js';
@@ -281,6 +281,21 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine 
   projectsWatcher.on('error', (error) => {
     if (!closed) engine.log('error', `Project watcher failed: ${error.message}`);
   });
+
+  // The one policy save path of the page routes. The Allocation page and the stand-down buttons both call it, so
+  // every change reaches the policy change log. It returns { status, body } for the caller to send.
+  // confirmed and allowSum belong to the request, not to the policy. The caller header is a label and proves no identity.
+  const applyPolicyDraft = async (draft, req, { confirmed = false, allowSum = false } = {}) => {
+    const notes = [];
+    const options = { quotas: engine.state?.quotas || [], now: Date.now(), notes, caller: req.headers['x-herdr-boss-caller'] === 'page' ? 'page' : 'unknown' };
+    const errors = savePolicy(draft, loadModels(), { ...options, dryRun: true });
+    if (errors.length) return { status: 400, body: { ok: false, errors } };
+    const refusal = policyShareGuard(loadPolicy(), draft, { confirmed: confirmed === true, allowSum: allowSum === true });
+    if (refusal) return { status: refusal.status, body: { ok: false, error: refusal.error, changed: refusal.changed, sum: refusal.sum } };
+    savePolicy(draft, loadModels(), options);
+    const state = await engine.tick();
+    return { status: 200, body: { ok: true, policy: loadPolicy(), control: state?.control, notes } };
+  };
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://x');
@@ -559,19 +574,11 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine 
       }
       if (p === '/api/policy' && req.method === 'GET') return send(res, 200, loadPolicy());
       if (p === '/api/policy' && req.method === 'PUT') {
-        const notes = [];
-        // confirmed and allowSum belong to the request, not to the policy. The caller header is a label and proves no identity.
         const body = await jsonBody(req);
         if (!body || typeof body !== 'object' || Array.isArray(body)) return send(res, 400, { ok: false, error: 'The body must be a JSON object.' });
         const { confirmed, allowSum, ...draft } = body;
-        const options = { quotas: engine.state?.quotas || [], now: Date.now(), notes, caller: req.headers['x-herdr-boss-caller'] === 'page' ? 'page' : 'unknown' };
-        const errors = savePolicy(draft, loadModels(), { ...options, dryRun: true });
-        if (errors.length) return send(res, 400, { ok: false, errors });
-        const refusal = policyShareGuard(loadPolicy(), draft, { confirmed: confirmed === true, allowSum: allowSum === true });
-        if (refusal) return send(res, refusal.status, { ok: false, error: refusal.error, changed: refusal.changed, sum: refusal.sum });
-        savePolicy(draft, loadModels(), options);
-        const state = await engine.tick();
-        return send(res, 200, { ok: true, policy: loadPolicy(), control: state.control, notes });
+        const result = await applyPolicyDraft(draft, req, { confirmed, allowSum });
+        return send(res, result.status, result.body);
       }
       // The watch uses the same functions as the CLI. The routes stay under the read-only preview guard and the access control.
       // The old /api/night paths stay as aliases of /api/watch.
@@ -624,6 +631,83 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine 
         return send(res, 200, { ok: true, warning: built.warning, night: state?.night ?? readNight({ dataDir: DATA_DIR }) });
       }
       if (watchPath === '/api/watch' && req.method === 'GET') return send(res, 200, readNight({ dataDir: DATA_DIR }));
+      // The stand-down buttons of the Watch page. They park the idle project orchestrators with the policy mode
+      // paused and undo it. Every mode change goes through the same policy save path as the Allocation page.
+      if ((watchPath === '/api/watch/standdown' || watchPath === '/api/watch/standdown/undo') && req.method === 'POST') {
+        const undo = watchPath === '/api/watch/standdown/undo';
+        // The plan reads the panes and the modes of the last tick. A tick first, so the plan sees the state now.
+        await engine.tick();
+        const standDown = readStandDown({ dataDir: DATA_DIR });
+        const previous = standDown?.projects || {};
+        const policy = loadPolicy();
+        const draft = { ...policy, projects: { ...(policy.projects || {}) } };
+        const changed = [];
+        let result = {};
+        let parked = [];
+        if (undo) {
+          // Only a project that is still paused returns to its own mode.
+          for (const [slug, mode] of Object.entries(previous)) {
+            if ((draft.projects[slug]?.mode ?? 'auto') !== 'paused') continue;
+            changed.push(slug);
+          }
+          result = { restored: changed.sort() };
+        } else {
+          const plan = standDownPlan(engine.state?.control, engine.state?.herdr);
+          parked = plan.parked;
+          changed.push(...plan.parked.map((item) => item.slug));
+          result = { paused: changed.sort(), skipped: plan.skipped };
+        }
+        if (changed.length) {
+          // A project that has no saved share takes a share from the derived weights, so the saved shares keep
+          // adding up to 100. The mode of a project that is already in the mark stays the mode of the first press.
+          const weight = (slug) => Number.isInteger(engine.state?.control?.projects?.[slug]?.share) ? engine.state.control.projects[slug].share : 1;
+          const entries = {};
+          const open = [];
+          for (const slug of changed) {
+            const saved = draft.projects[slug] || {};
+            const derived = engine.state?.control?.projects?.[slug] || {};
+            const share = Number.isInteger(saved.share) ? saved.share : Number.isInteger(derived.share) ? derived.share : null;
+            entries[slug] = {
+              share,
+              mode: undo ? previous[slug] : 'paused',
+              excludedKinds: Array.isArray(saved.excludedKinds) ? saved.excludedKinds : Array.isArray(derived.excludedKinds) ? derived.excludedKinds : [],
+              excludedModels: Array.isArray(saved.excludedModels) ? saved.excludedModels : Array.isArray(derived.excludedModels) ? derived.excludedModels : [],
+            };
+            if (share === null) open.push(slug);
+          }
+          // Share what the other projects leave. A project that already has a saved share keeps it, so only the
+          // projects without a share take a part of what is left.
+          const rest = Math.max(0, 100 - [...new Set([...Object.keys(draft.projects), ...changed])].reduce((sum, slug) => {
+            const share = entries[slug]?.share ?? draft.projects[slug]?.share;
+            return sum + (Number.isInteger(share) ? share : 0);
+          }, 0));
+          // A floor for each project, then one more for each project with the largest remainder.
+          const total = open.reduce((sum, slug) => sum + weight(slug), 0);
+          open.sort((a, b) => weight(b) - weight(a) || a.localeCompare(b));
+          const remainders = [];
+          for (const slug of open) {
+            const exact = total ? rest * weight(slug) / total : 0;
+            entries[slug].share = Math.floor(exact);
+            remainders.push([slug, exact - Math.floor(exact)]);
+          }
+          // What the floors leave over goes one by one to the projects with the largest remainder.
+          let left = rest - open.reduce((sum, slug) => sum + entries[slug].share, 0);
+          remainders.sort((a, b) => (b[1] - a[1]) || a[0].localeCompare(b[0]));
+          for (const [slug] of remainders) if (left-- > 0) entries[slug].share += 1;
+          Object.assign(draft.projects, entries);
+          // The route changes no share of the Owner. The share guard asks its questions for a change that the
+          // Owner made on purpose, so the route passes the two confirmations of the Allocation page.
+          const saved = await applyPolicyDraft(draft, req, { confirmed: true, allowSum: true });
+          // A refused write leaves the stored mark and the stored policy as they are.
+          if (saved.status !== 200) return send(res, saved.status, saved.body);
+        }
+        // The mark is written after the policy save. A second press keeps the mode of every project of the mark and
+        // adds the projects of this press. The undo clears the mark, also when it restored nothing.
+        if (undo) writeStandDown(null, { dataDir: DATA_DIR });
+        else if (changed.length) writeStandDown({ at: new Date().toISOString(), projects: { ...Object.fromEntries(parked.map((item) => [item.slug, item.mode])), ...previous } }, { dataDir: DATA_DIR });
+        const state = await engine.tick();
+        return send(res, 200, { ok: true, night: state?.night ?? readNight({ dataDir: DATA_DIR }), ...result });
+      }
       if (p === '/api/denials' && req.method === 'GET') return send(res, 200, denialSummary(readDenials(DATA_DIR), Date.now(), { pendingBytes: engine.memory?.denialScan?.pendingBytes || 0 }));
       if (p === '/api/machine-hours' && req.method === 'GET') {
         // The route parses up to two 3 MB files, so the result is kept for 60 seconds for each window.

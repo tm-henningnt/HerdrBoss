@@ -421,6 +421,8 @@ At `reportAt`, the service posts a report to the Boss thread in the Mailbox. At 
 
 The Watch box on the Agents page sets the same values through `POST /api/watch/start` with `routines` and `adhoc`. `GET /api/watch/routines` lists the routines. `PUT /api/watch/routines/ID` saves an edit. `DELETE /api/watch/routines/ID` removes the edit.
 
+The card **Stand down** on the Agents page uses `POST /api/watch/standdown` and `POST /api/watch/standdown/undo`. The first route sets the policy mode of each idle project to `paused`. The second route gives each project its own mode back. See [Stand down](user-guide.md#stand-down).
+
 ## Harness settings
 
 | Command | Action |
