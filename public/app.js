@@ -6685,10 +6685,11 @@ function reviewViewerAfterRender() {
     if (open) {
       open.vui.placing = false;
       // The Viewed mark: the item stays open and visible for 1.5 s. A hidden tab does not count.
-      if (!open.item.answer?.viewed && open.pack.state === 'open') {
+      // A changed item gets no automatic mark: the Owner answers it or selects Keep first.
+      if (!open.item.answer?.viewed && !open.item.stale && open.pack.state === 'open') {
         reviews.stopViewed = startViewedTimer({ doc: document, ms: REVIEW_VIEWED_MS, onViewed: () => {
           const now = reviewOpenItem();
-          if (now && now.item.id === open.item.id && !now.item.answer?.viewed) saveItemAnswer(now.item, { viewed: true }, { quiet: true });
+          if (now && now.item.id === open.item.id && !now.item.answer?.viewed && !now.item.stale) saveItemAnswer(now.item, { viewed: true }, { quiet: true });
         } });
       }
     }
@@ -8659,3 +8660,6 @@ document.addEventListener('pointerdown', (e) => {
   handle.addEventListener('pointerup', end);
   handle.addEventListener('pointercancel', end);
 });
+
+// A window resize pulls the column under half of the new width.
+window.addEventListener('resize', () => { if (currentRoute() === 'reviews') reviewsRender(); });

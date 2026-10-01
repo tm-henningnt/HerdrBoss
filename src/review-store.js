@@ -30,6 +30,7 @@ const PINS_MAX = 50;
 const DECISIONS = ['accept', 'deny'];
 const DECIDING = ['accept', 'deny', 'choice', 'rating'];
 const PATCH_KEYS = new Set(['rev', 'opId', 'keep', 'decision', 'choice', 'rating', 'live', 'viewed', 'note', 'pins', 'checks']);
+const MARK_KEEPING = new Set(['rev', 'opId', 'viewed', 'note', 'pins']);
 const NOFOLLOW = fs.constants.O_NOFOLLOW ?? 0;
 const SHA256 = /^[0-9a-f]{64}$/;
 
@@ -657,14 +658,22 @@ export function putAnswer({ dir, now, slug, pack, item, patch } = {}) {
     }
     if (patch.keep === true) restorePrevious(fields, existing, current.hash, spec);
     else if (patch.keep !== undefined) throw invalid('Keep must be true.');
+    // A changed item keeps its mark and its earlier verdict for a patch that holds only viewed, note, or pins.
+    // Only a verdict change, Keep, or a change of the checks takes the mark off.
+    const keepsMark = Boolean(existing) && (existing.stale === 1 || existing.hash !== current.hash)
+      && hasVerdict(previousOf(existing)) && Object.keys(patch).every((key) => MARK_KEEPING.has(key));
+    if (keepsMark) Object.assign(fields, { decision: existing.decision, choice: existing.choice, rating: existing.rating, live: existing.live, viewed: existing.viewed, checks: existing.checks });
     applyPatch(fields, patch, spec);
+    const stored = keepsMark
+      ? { hash: existing.hash, stale: 1, previous: JSON.stringify(previousOf(existing)) }
+      : { hash: current.hash, stale: 0, previous: null };
     const rev = (existing?.rev ?? 0) + 1;
-    db.prepare(`INSERT INTO review_answers(slug, pack, item, decision, choice, rating, live, viewed, note, pins, checks, hash, stale, rev, op_id, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+    db.prepare(`INSERT INTO review_answers(slug, pack, item, decision, choice, rating, live, viewed, note, pins, checks, hash, stale, previous, rev, op_id, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(slug, pack, item) DO UPDATE SET decision = excluded.decision, choice = excluded.choice, rating = excluded.rating, live = excluded.live,
-        viewed = excluded.viewed, note = excluded.note, pins = excluded.pins, checks = excluded.checks, hash = excluded.hash, stale = 0, previous = NULL,
+        viewed = excluded.viewed, note = excluded.note, pins = excluded.pins, checks = excluded.checks, hash = excluded.hash, stale = excluded.stale, previous = excluded.previous,
         rev = excluded.rev, op_id = excluded.op_id, updated_at = excluded.updated_at`)
-      .run(slug, pack, item, fields.decision, fields.choice, fields.rating, fields.live, fields.viewed, fields.note, fields.pins, fields.checks, current.hash, rev, patch.opId ?? null, at);
+      .run(slug, pack, item, fields.decision, fields.choice, fields.rating, fields.live, fields.viewed, fields.note, fields.pins, fields.checks, stored.hash, stored.stale, stored.previous, rev, patch.opId ?? null, at);
     db.prepare('UPDATE review_packs SET updated_at = ? WHERE slug = ? AND pack = ?').run(at, slug, pack);
     const saved = db.prepare('SELECT * FROM review_answers WHERE slug = ? AND pack = ? AND item = ?').get(slug, pack, item);
     return { ok: true, answer: answerShape(saved, current.hash) };

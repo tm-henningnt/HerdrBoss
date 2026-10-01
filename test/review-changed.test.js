@@ -231,3 +231,44 @@ test('herdr-boss review list counts the changed items as open and names them', (
   assert.equal(code, 0);
   assert.match(lines.join('\n'), /1 of 4 answered, 2 changed/);
 });
+
+test('a viewed, note, or pins change keeps the mark and the earlier verdict of a changed item', (t) => {
+  const dir = dataDir(t);
+  twoVersions(dir);
+  for (const patch of [{ viewed: true }, { note: 'Looks different.' }, { pins: [{ n: 1, x: 0.5, y: 0.5 }] }]) {
+    const saved = answer(dir, 'cart-themes', patch, T1);
+    assert.equal(saved.answer.stale, true, `${Object.keys(patch)[0]} keeps the mark`);
+    assert.equal(saved.answer.decision, null);
+    assert.equal(saved.answer.previous.decision, 'accept');
+    assert.equal(saved.answer.previous.at, new Date(T0).toISOString());
+    assert.equal(find(dir, 'cart-themes').state, 'changed');
+  }
+  assert.equal(find(dir, 'cart-themes').answer.note, 'Looks different.');
+  // Keep still works after those writes.
+  const kept = answer(dir, 'cart-themes', { keep: true }, T1);
+  assert.equal(kept.answer.decision, 'accept');
+  assert.equal(kept.answer.stale, false);
+  assert.equal(kept.answer.note, 'Looks different.');
+});
+
+test('a verdict change takes the mark off, and a note on an item with no earlier verdict does too', (t) => {
+  const dir = dataDir(t);
+  twoVersions(dir);
+  answer(dir, 'cart-themes', { note: 'x' }, T1);
+  assert.equal(answer(dir, 'cart-themes', { decision: 'deny' }, T1).answer.stale, false);
+
+  const other = dataDir(t);
+  publish(other, folder());
+  answer(other, 'error-copy', { note: 'Shorter, please.' });
+  publish(other, folder({ text: 'Another text.' }), T1);
+  assert.equal(answer(other, 'error-copy', { note: 'Shorter.' }, T1).answer.stale, false);
+});
+
+test('a changed item whose row has no stale flag keeps its earlier verdict through a viewed write', (t) => {
+  const dir = dataDir(t);
+  twoVersions(dir);
+  openSqliteStore({ dir }).db.prepare("UPDATE review_answers SET stale = 0, previous = NULL WHERE item = 'cart-themes'").run();
+  const saved = answer(dir, 'cart-themes', { viewed: true }, T1);
+  assert.equal(saved.answer.stale, true);
+  assert.equal(saved.answer.previous.decision, 'accept');
+});

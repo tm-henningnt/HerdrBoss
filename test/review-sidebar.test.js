@@ -250,3 +250,9 @@ test('a changed item shows no viewed tick in the list', () => {
   assert.doesNotMatch(row.getAttribute('class'), /review-item-done/);
   assert.match(JSON.stringify(row.textContent), /Not viewed/);
 });
+
+test('the viewed timer skips a changed item and the page re-renders on a window resize', () => {
+  assert.match(app, /!open\.item\.answer\?\.viewed && !open\.item\.stale && open\.pack\.state === 'open'/);
+  assert.match(app, /!now\.item\.answer\?\.viewed && !now\.item\.stale/);
+  assert.match(app, /window\.addEventListener\('resize', \(\) => \{ if \(currentRoute\(\) === 'reviews'\) reviewsRender\(\); \}\)/);
+});
