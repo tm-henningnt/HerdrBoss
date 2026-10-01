@@ -115,10 +115,12 @@ const engineScript = `
   import { Engine } from './src/engine.js';
   import { loadConfig } from './src/config.js';
   import { createBrowserProbes } from './src/browser-probe.js';
+  let virtualNow = Date.now();
+  Date.now = () => virtualNow;
   const dir = process.env.HERDR_BOSS_DIR;
   const sessionsFile = path.join(dir, 'browser-sessions.json');
   const profile = (project) => path.join(dir, 'browser-profiles', project);
-  const chrome = (port, project) => ({ pid: port, cmd: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --remote-debugging-port=' + port + ' --user-data-dir=' + profile(project) + ' --headless' });
+  const chrome = (port, project) => ({ pid: port, cmd: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --remote-debugging-port=' + port + ' --user-data-dir=' + (process.env.FOREIGN_PROFILE === '1' && project === 'alpha' ? path.join(dir, 'other-profile') : profile(project)) + ' --headless' });
   const running = { alpha: true, beta: false };
   let outcome = { ok: true };
   const probed = [];
@@ -126,29 +128,40 @@ const engineScript = `
   cfg.push = false;
   cfg.browsers.reapOrphanDaemons = false;
   cfg.browsers.sweepCodeSignClones = false;
+  cfg.browser.idleCloseMinutes = Number(process.env.IDLE_CLOSE_MINUTES || 0);
   const engine = new Engine(cfg, { push: false, act: process.env.ACT !== '0', collectors: {
     collectProcesses: async () => new Map([[1, { pid: 1, cmd: '/sbin/launchd' }], ...Object.entries(running).filter(([, on]) => on).map(([project]) => [project === 'alpha' ? 9223 : 9224, chrome(project === 'alpha' ? 9223 : 9224, project)])]),
     cdpResponds: async () => true,
     probeBrowser: async (port) => { probed.push(port); return outcome; },
+    collectBrowserClients: async () => Number(process.env.BROWSER_CLIENTS || 0),
+    closeBrowser: async (project, { beforeClose } = {}) => {
+      const session = JSON.parse(fs.readFileSync(sessionsFile, 'utf8'))[project];
+      const approved = await beforeClose(session);
+      closeCalls.push({ project, approved });
+      return { closed: approved };
+    },
     collectPiModels: async () => null,
     runDenialScan: async () => ({ state: {}, denials: [] }),
   } });
-  engine.browserProbes = createBrowserProbes({ probe: (port) => engine.collectors.probeBrowser(port), intervalMs: 0 });
+  engine.browserProbes = createBrowserProbes({ probe: (port) => engine.collectors.probeBrowser(port), intervalMs: Number(process.env.PROBE_INTERVAL_MS || 0) });
   const before = fs.readFileSync(sessionsFile, 'utf8');
   const steps = [];
+  const closeCalls = [];
   for (const next of JSON.parse(process.env.STEPS)) {
-    outcome = next;
+    if (next.advanceMs) virtualNow += next.advanceMs;
+    outcome = next.probe || next;
     await engine.tick();
     await engine.browserProbes.idle();
     await engine.tick();
     const alpha = engine.state.managedBrowsers.find((x) => x.project === 'alpha');
     steps.push({ notResponding: alpha.notResponding, reason: alpha.probeReason, probeAt: !!alpha.probeAt,
-      alerts: engine.state.alerts.filter((a) => a.key.startsWith('browser:managed-unresponsive:')).map((a) => ({ key: a.key, text: a.text, scope: a.scope })) });
+      alerts: engine.state.alerts.filter((a) => a.key.startsWith('browser:managed-unresponsive:')).map((a) => ({ key: a.key, text: a.text, scope: a.scope })),
+      idleEvents: engine.state.events.filter((e) => e.type === 'browser-idle-close'), idleState: engine.memory.browserIdle?.alpha });
   }
-  console.log(JSON.stringify({ steps, probed, sessionsUnchanged: fs.readFileSync(sessionsFile, 'utf8') === before, rulesBrowsers: JSON.parse(fs.readFileSync(path.join(dir, 'rules.json'), 'utf8')).browsers }));
+  console.log(JSON.stringify({ steps, probed, closeCalls, sessionsUnchanged: fs.readFileSync(sessionsFile, 'utf8') === before, rulesBrowsers: JSON.parse(fs.readFileSync(path.join(dir, 'rules.json'), 'utf8')).browsers }));
 `;
 
-function runEngine(steps, { act = true, launchedAgoMs = 600000 } = {}) {
+function runEngine(steps, { act = true, launchedAgoMs = 600000, idleCloseMinutes = 0, browserClients = 0, foreignProfile = false, probeIntervalMs = 0 } = {}) {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-not-responding-engine-')));
   const bin = path.join(dir, '.local', 'bin');
   fs.mkdirSync(bin, { recursive: true });
@@ -163,7 +176,7 @@ function runEngine(steps, { act = true, launchedAgoMs = 600000 } = {}) {
   fs.writeFileSync(path.join(dir, 'browser-sessions.json'), JSON.stringify({ alpha: record('alpha', 9223), beta: record('beta', 9224) }));
   const result = spawnSync(process.execPath, ['--input-type=module', '-e', engineScript], {
     cwd: repo, encoding: 'utf8',
-    env: { PATH: `${bin}${path.delimiter}${process.env.PATH || ''}`, HOME: dir, HERDR_BOSS_DIR: dir, HERDR_BOSS_LIVE_DIR: dir, HERDR_BOSS_ALLOW_ACTIONS: '1', HERDR_BOSS_PUSH: '0', STEPS: JSON.stringify(steps), ACT: act ? '1' : '0' },
+    env: { PATH: `${bin}${path.delimiter}${process.env.PATH || ''}`, HOME: dir, HERDR_BOSS_DIR: dir, HERDR_BOSS_LIVE_DIR: dir, HERDR_BOSS_ALLOW_ACTIONS: '1', HERDR_BOSS_PUSH: '0', STEPS: JSON.stringify(steps), ACT: act ? '1' : '0', IDLE_CLOSE_MINUTES: String(idleCloseMinutes), BROWSER_CLIENTS: String(browserClients), FOREIGN_PROFILE: foreignProfile ? '1' : '0', PROBE_INTERVAL_MS: String(probeIntervalMs) },
   });
   fs.rmSync(dir, { recursive: true, force: true });
   assert.equal(result.status, 0, result.stderr);
@@ -213,9 +226,27 @@ test('a tick that does not act runs no probe', { timeout: 60000 }, () => {
   assert.equal(out.steps.at(-1).notResponding, false);
 });
 
-test('the engine code has no path that restarts or closes a browser', () => {
+test('the engine closes a quiet browser after the configured idle interval', { timeout: 60000 }, () => {
+  const out = runEngine([{ ok: true, pageIds: ['user-tab'], attachedTabIds: [], attachedClientCount: 0 },
+    { advanceMs: 61_000, probe: { ok: true, pageIds: ['user-tab'], attachedTabIds: [], attachedClientCount: 0 } }], { idleCloseMinutes: 1, probeIntervalMs: 90_000 });
+  assert.deepEqual(out.closeCalls, [{ project: 'alpha', approved: true }], JSON.stringify(out.steps));
+  assert.ok(out.steps.at(-1).idleEvents.some((event) => /Closed idle project browser alpha after 1 minutes/.test(event.text)));
+  assert.equal(out.sessionsUnchanged, true, 'closing preserves the saved profile and session record');
+});
+
+test('the engine does not close a browser while a client is connected', { timeout: 60000 }, () => {
+  const out = runEngine([{ ok: true, pageIds: ['user-tab'], attachedTabIds: [], attachedClientCount: 0 },
+    { advanceMs: 61_000, probe: { ok: true, pageIds: ['user-tab'], attachedTabIds: [], attachedClientCount: 0 } }], { idleCloseMinutes: 1, browserClients: 1, probeIntervalMs: 90_000 });
+  assert.deepEqual(out.closeCalls, []);
+  assert.ok(out.steps.every((step) => step.idleEvents.length === 0));
+});
+
+test('the engine does not close a process that uses a foreign browser profile', { timeout: 60000 }, () => {
   const engine = fs.readFileSync(path.join(repo, 'src/engine.js'), 'utf8');
-  assert.doesNotMatch(engine, /restartBrowser|closeBrowser|requestBrowser/);
+  assert.match(engine, /shouldCloseManagedBrowser\(\{ session: b, matched, closeDue: idle\.closeDue \}\)/);
   const probe = fs.readFileSync(path.join(repo, 'src/browser-probe.js'), 'utf8');
   assert.doesNotMatch(probe, /restartBrowser|closeBrowser|Browser\.close\b|process\.kill/);
+  const out = runEngine([{ ok: true, pageIds: ['user-tab'], attachedTabIds: [], attachedClientCount: 0 },
+    { advanceMs: 61_000, probe: { ok: true, pageIds: ['user-tab'], attachedTabIds: [], attachedClientCount: 0 } }], { idleCloseMinutes: 1, launchedAgoMs: 600000, foreignProfile: true, probeIntervalMs: 90_000 });
+  assert.equal(out.closeCalls.length, 0);
 });

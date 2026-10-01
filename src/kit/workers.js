@@ -14,6 +14,7 @@ import { codexShellEnvArgs } from '../harness.js';
 import { TASK_ID } from '../task-state.js';
 import { swapRefusal, swapExempt } from './swap-guard.js';
 import { recordWorkerReport, workerRunId } from '../agent-messages.js';
+import { scheduleWorkerPaneClose } from '../maintenance.js';
 
 const NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
 const AGENT_READY_MARKERS = Object.freeze({
@@ -1617,7 +1618,7 @@ export function deriveModelOutcome(options, reportJson = {}) {
   return { result: 'first-time', reason: '' };
 }
 
-export function collectWorker(name, options, { config, now = Date.now(), output = console.log, recordUsageFn = recordUsage, listWorktreeProcesses = worktreeCwdProcesses, leaseDataDir = DATA_DIR } = {}) {
+export function collectWorker(name, options, { config, now = Date.now(), output = console.log, recordUsageFn = recordUsage, listWorktreeProcesses = worktreeCwdProcesses, leaseDataDir = DATA_DIR, schedulePaneCloseFn = scheduleWorkerPaneClose } = {}) {
   const record = options.noRecord !== true && options.record !== false;
   let ledgerWritten = false;
   try {
@@ -1737,6 +1738,19 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
     if (record && !reportJson.modelOutcome && !options.modelResult) {
       const { result } = deriveModelOutcome(options, reportJson);
       output(`Warning: report.json has no modelOutcome; recorded ${result} from the outcome. Add --model-result next time.`);
+    }
+    if (record && !options.keepPane) {
+      const delayMinutes = Number.isSafeInteger(options.paneCloseDelayMinutes) ? options.paneCloseDelayMinutes : 2;
+      try {
+        schedulePaneCloseFn({
+          project: config.slug,
+          name,
+          runId: workerRunId(run, config.slug),
+          dueAt: now + delayMinutes * 60_000,
+        });
+      } catch (error) {
+        output(`Warning: worker pane close was not scheduled: ${error.message}`);
+      }
     }
     output(JSON.stringify(summary, null, 2));
     for (const warning of summary.artifactWarnings) output(`Warning: ${warning}`);

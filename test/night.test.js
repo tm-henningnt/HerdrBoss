@@ -39,6 +39,25 @@ test('night quiet hours is a settable service setting with a false default', () 
   assert.throws(() => validateServiceSettings({ 'watch.quietHours': 'yes' }), /watch\.quietHours must be true or false/);
 });
 
+test('worker and browser maintenance settings expose their defaults and validate their ranges', () => {
+  const settings = Object.fromEntries(serviceSettingsView({}).map(({ setting, value }) => [setting, value]));
+  assert.equal(settings['workers.paneCloseDelayMinutes'], 2);
+  assert.equal(settings['workers.uncollectedNoticeMinutes'], 30);
+  assert.equal(settings['browser.idleCloseMinutes'], 20);
+  assert.deepEqual(validateServiceSettings({
+    'workers.paneCloseDelayMinutes': 0,
+    'workers.uncollectedNoticeMinutes': 45,
+    'browser.idleCloseMinutes': 0,
+  }), {
+    'workers.paneCloseDelayMinutes': 0,
+    'workers.uncollectedNoticeMinutes': 45,
+    'browser.idleCloseMinutes': 0,
+  });
+  assert.throws(() => validateServiceSettings({ 'workers.paneCloseDelayMinutes': 61 }), /workers\.paneCloseDelayMinutes must be a whole number from 0 to 60/);
+  assert.throws(() => validateServiceSettings({ 'workers.uncollectedNoticeMinutes': 0 }), /workers\.uncollectedNoticeMinutes must be a whole number from 1 to 1440/);
+  assert.throws(() => validateServiceSettings({ 'browser.idleCloseMinutes': 1441 }), /browser\.idleCloseMinutes must be a whole number from 0 to 1440/);
+});
+
 test('quiet hours queues desktop notifications and shows each once after the night ends', (t) => {
   const temp = tempDir(t);
   const home = path.join(temp, 'home');

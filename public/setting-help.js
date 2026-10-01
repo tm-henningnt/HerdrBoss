@@ -87,8 +87,8 @@ export const SETTING_GROUPS = [
   },
   {
     id: 'service', title: 'Service settings', advanced: true,
-    controls: 'The values that the service itself uses: collection intervals, stale limits, browser clean-up, and the network address. Each row shows whether the value comes from config.json or is a default.',
-    affects: 'Workers, notices, browsers, and the machine. A value here changes when a status is stale, when an idle worker is reported, and when an orphan browser is stopped.',
+    controls: 'The values that the service uses: collection intervals, worker clean-up, browser clean-up, and the network address. Each row shows its source.',
+    affects: 'Workers, notices, browsers, and the machine. A value here changes when a worker pane closes, a done worker is reported, or an idle browser closes.',
     safe: 'A row with an input is safe to change. A row without an input is read-only. Change it in config.json.',
     restart: 'A row with an input needs no restart. A read-only row needs a service restart.',
   },
@@ -586,6 +586,20 @@ export const SETTING_HELP = Object.fromEntries([
     lower: 'A lower value reports an idle worker sooner.',
     apply: 'service',
   }),
+  S('service', 'workers.paneCloseDelayMinutes', 'Worker pane close delay', {
+    what: 'The time after collection before Herdr Boss closes the worker pane. The service closes it after the command exits.',
+    default: '2', unit: 'Minutes', range: '0 to 60',
+    raise: 'A higher value leaves the pane open longer.',
+    lower: 'A lower value closes the pane sooner. Zero closes it on the next service tick.',
+    apply: 'service',
+  }),
+  S('service', 'workers.uncollectedNoticeMinutes', 'Uncollected worker notice minutes', {
+    what: 'The time that a worker can stay done without collection before the service tells its project orchestrator.',
+    default: '30', unit: 'Minutes', range: '1 to 1440',
+    raise: 'A higher value sends the notice later.',
+    lower: 'A lower value sends the notice sooner.',
+    apply: 'service',
+  }),
   S('service', 'browsers.reapOrphanDaemons', 'Stop orphan browser daemons', {
     what: 'Lets Herdr Boss stop an agent-browser daemon that has no parent, no children, and the minimum age. It never stops a browser that it did not start.',
     default: 'On', unit: 'Switch', range: 'On or off',
@@ -605,6 +619,13 @@ export const SETTING_HELP = Object.fromEntries([
     default: '30', unit: 'Minutes', range: '5 to 1440',
     raise: 'A higher value reports a stale browser later.',
     lower: 'A lower value reports a stale browser sooner.',
+    apply: 'service',
+  }),
+  S('service', 'browser.idleCloseMinutes', 'Project browser idle close minutes', {
+    what: 'The time with no other CDP client or open agent tab before Herdr Boss closes a project browser that it started.',
+    default: '20', unit: 'Minutes', range: '0 to 1440',
+    raise: 'A higher value leaves an unused browser open longer.',
+    lower: 'A lower value closes an unused browser sooner. Zero turns this rule off.',
     apply: 'service',
   }),
   S('service', 'browsers.sweepCodeSignClones', 'Sweep code-sign clones', {

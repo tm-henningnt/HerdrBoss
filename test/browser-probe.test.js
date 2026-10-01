@@ -15,12 +15,23 @@ async function withCdp(options, run) {
 test('a probe that gets an answer at each step succeeds and closes its temporary tab', async () => {
   await withCdp({}, async (cdp) => {
     const result = await probeBrowser(cdp.port, fast);
-    assert.deepEqual(result, { ok: true });
+    assert.deepEqual(result, { ok: true, pageIds: ['user-tab'], attachedTabIds: ['user-tab'], attachedClientCount: 1 });
     assert.deepEqual(cdp.calls, ['Browser.getVersion', 'Target.getTargets', 'Target.createTarget', 'Target.attachToTarget', 'Runtime.evaluate', 'Target.closeTarget']);
     assert.equal(cdp.created.length, 1);
     assert.deepEqual(cdp.created[0].params, { url: 'about:blank', background: true });
     assert.deepEqual(cdp.closed, [cdp.created[0].id]);
   });
+});
+
+test('the status probe carries attached tabs and open page IDs into tracked browser state', async () => {
+  const probes = createBrowserProbes({ probe: async () => ({ ok: true, pageIds: ['page-one'], attachedTabIds: ['page-one'], attachedClientCount: 1 }) });
+  const browser = { key: 'project:9224', project: 'project', port: 9224, active: true };
+  probes.tick(browser, 10_000);
+  await probes.idle();
+  const state = probes.tick(browser, 10_000 + PROBE_INTERVAL_MS - 1);
+  assert.deepEqual(state.pageIds, ['page-one']);
+  assert.deepEqual(state.attachedTabIds, ['page-one']);
+  assert.equal(state.attachedClientCount, 1);
 });
 
 test('the probe never touches a tab that it did not create', async () => {
@@ -225,7 +236,7 @@ test('a browser that closes loses its state, and a new launch starts clean', asy
 test('the state of the browser is a plain object of the documented fields', async () => {
   const { probes } = tracker([]);
   const state = probes.tick(browser(), 1_000_000);
-  assert.deepEqual(Object.keys(state).sort(), ['failures', 'lastProbeAt', 'notResponding', 'reason', 'since']);
+  assert.deepEqual(Object.keys(state).sort(), ['attachedClientCount', 'attachedTabIds', 'failures', 'lastProbeAt', 'notResponding', 'ok', 'pageIds', 'reason', 'since']);
 });
 
 // ----- late sockets, warnings, and the probe tab registry -----

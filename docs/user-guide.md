@@ -540,6 +540,7 @@ To add the shared rules to a project, follow [orchestrator-instructions.md](orch
 | Active machine CPU limit or enabled 5-minute load backstop is exceeded | Stop new workers and full test suites. `worker start` refuses the dispatch, including with `--force`. |
 | An idle worker still owns an automation browser after 30 minutes | Notice to that project. |
 | A worker is idle for more than 2 hours | Notice to that project. Parked workers and prepared successors are skipped. |
+| A finished worker run stays uncollected for 30 minutes | One notice to the project orchestrator with the `worker collect NAME` command. Change the delay with `workers.uncollectedNoticeMinutes` (1 to 1440 minutes). |
 | An `agent-browser` daemon has no parent, no children, and is older than 2 hours | Herdr Boss stops the daemon. It never stops a browser. |
 | A parent-PID-1 process has its current working directory in a missing worktree | Notice that project's `orch` workspace. Do not notify the Boss workspace. |
 | A non-orchestrator worker stays blocked for more than 5 minutes | Notice its project orchestrator with the worker name and pane ID. |
@@ -1145,6 +1146,8 @@ The command line does the same: `herdr-boss goal set <project|pane> [--text TEXT
 
 Each project can have one persistent Chrome profile. Request it with `herdr-boss browser request SLUG`, or open it from the Browsers page. Herdr Boss assigns a port from 9223 to 9299.
 
+The service closes a project browser after `browser.idleCloseMinutes` with no other CDP client or open agent tab. The default is 20 minutes. Set it from 1 to 1440 minutes, or set it to 0 to turn off idle close. It closes only a browser that Herdr Boss started and matched to the project's port and profile. It keeps the Chrome profile. A later browser request can launch the browser again.
+
 - Give each worker its own tab. `browser tab new` opens a tab in its own window, so it stays visible in a headless browser.
 - A website or identity provider decides how long a login lasts. Sign in through the dashboard when a login is needed.
 - Herdr Boss never stops a browser that it did not start. Each project uses only its own browser.
@@ -1495,6 +1498,8 @@ The **Worker config** card in Details is read-only. It shows the non-secret fiel
 - `slug`, `baseBranch`, `worktreeRoot`, and `worktreeName`.
 - `evidenceTiers`, `allowedModels`, `workerPanesPerTab`, and `imageBudget`.
 - `setup`, `setupTimeoutSeconds`, `agentStartTimeoutMs`, and `testThreadsFlag`.
+
+The Settings page has editable rows for `workers.paneCloseDelayMinutes`, `workers.uncollectedNoticeMinutes`, and `browser.idleCloseMinutes`. Their help text gives the default, range, effect, and apply time.
 
 A field that the file sets has a **config** tag. The other fields use the default value. The `setup` command shows as `set` or `not set`. A `worktreeRoot` path in the home folder shows as `~`. A project with an invalid `.herdr-boss.json` shows the read error in place of the fields.
 
@@ -1947,7 +1952,8 @@ Put overrides in `~/.herdr-boss/config.json`, then restart the service.
   "quota": { "warnPercent": 90, "criticalPercent": 98 },
   "machine": { "memFreeWarnPercent": 15, "loadWarnFactor": 2 },
   "browsers": { "reapOrphanDaemons": true, "orphanDaemonMinAgeSeconds": 7200, "staleOwnedMinutes": 30, "sweepCodeSignClones": true },
-  "workers": { "staleIdleMinutes": 120 },
+  "browser": { "idleCloseMinutes": 20 },
+  "workers": { "staleIdleMinutes": 120, "paneCloseDelayMinutes": 2, "uncollectedNoticeMinutes": 30 },
   "roamgate": { "port": 8787, "tokenFile": "/Users/you/.config/roamgate/auth-token" },
   "providerKinds": { "claude": ["claude"], "codex": ["codex"], "opencodego": ["opencode", "pi"] },
   "resourcePools": [

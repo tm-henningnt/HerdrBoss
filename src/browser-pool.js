@@ -347,6 +347,7 @@ export async function closeBrowser(project, options = {}) {
   if (status.reachable && !status.profileVerified) throw new Error(`Port ${session.port} belongs to another process. It was not touched.`);
   if (!status.processPresent && !status.reachable) return { ...status, ...clearClone(project), closed: true };
   if (!status.profileVerified) throw new Error('Could not verify Chrome’s browser control endpoint. Close the browser manually; it was not touched.');
+  if (typeof options.beforeClose === 'function' && !(await options.beforeClose(session))) return { ...status, closed: false, skipped: true };
   let closeFailed = !status.responsive;
   let signaled = false;
   if (!closeFailed) {
