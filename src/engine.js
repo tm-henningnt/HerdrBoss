@@ -380,17 +380,19 @@ export function isBossHandoff(item, herdr) {
 export function alertPromptDue(alert, record, now, cooldown) {
   if (alert.key?.startsWith('context:')) return !record || now - record.at >= CONTEXT_WARNING_INTERVAL_MS;
   if (alert.immediate) return !record;
+  if (Number.isFinite(alert.repeatMs) && alert.repeatMs >= 0) return !record || now - record.at >= alert.repeatMs;
   if (!record) return true;
   if (SEV[alert.severity] > SEV[record.severity]) return true;
   return !alert.key.startsWith('machine:disk:') && !alert.once && now - record.at > cooldown;
 }
 
-// An immediate notice of warn or higher reaches a working orchestrator. Other notices wait until it is idle or done.
+// Stale-status notices use the existing digest path while an orchestrator works. Other notices wait until it is idle or done.
 export function orchestratorCanReceiveNotice(orch, alerts) {
-  return orch.status === 'idle' || orch.status === 'done' || alerts.some(skipsIdleGate);
+  return orch.status === 'idle' || orch.status === 'done' || alerts.some((alert) => (isStaleStatusAlert(alert) && orch.status === 'working') || skipsIdleGate(alert));
 }
 
 const skipsIdleGate = (alert) => !!alert.immediate && SEV[alert.severity] >= SEV.warn;
+const isStaleStatusAlert = (alert) => !!alert.key?.startsWith('status:stale:');
 
 // A project that stays behind on a required kit change gets one reminder after this time.
 export const KIT_REMIND_MS = 2 * 3600 * 1000;
@@ -2467,13 +2469,18 @@ export class Engine extends EventEmitter {
         if (isKitAlert(a)) targets = kitNoticeTargets(orchs, held);
         // A kit reminder goes to the project orchestrator only while it works. The kit notice reached it when it was idle.
         if (a.key.startsWith('kitremind:')) targets = kitNoticeTargets(targets.filter((o) => o.label === 'orch' && o.status === 'working'), held);
+        if (isStaleStatusAlert(a)) {
+          const target = targets.find((o) => o.workspace === a.scope && o.label === 'orch');
+          targets = target ? [target] : [];
+        }
         if (a.key.startsWith('machine:disk:')) {
           const projectOrch = targets.find((o) => o.label === 'orch');
           targets = projectOrch ? [projectOrch] : targets.filter((o) => o.label !== 'boss').slice(0, 1);
         }
         for (const o of targets) {
           const rec = this.memory.pushes[`${a.key}@${o.id}`];
-          const due = alertPromptDue(a, rec, now, cooldown);
+          const projectRec = isStaleStatusAlert(a) ? this.memory.pushes[`${a.key}@project`] : null;
+          const due = alertPromptDue(a, projectRec || rec, now, cooldown);
           if (!due) continue;
           let alert = a;
           if (isKitAlert(a)) {
@@ -2499,7 +2506,9 @@ export class Engine extends EventEmitter {
         const urgent = due.filter((a) => SEV[a.severity] >= SEV.warn && (settled || skipsIdleGate(a)));
         const infoAllowed = settled && now - (this.memory.infoPrompts[o.id] || 0) >= INFO_PROMPT_INTERVAL_MS;
         // A kit digest has its own interval, so the shared info interval does not hold it and it does not start that interval.
-        const info = due.filter((a) => SEV[a.severity] < SEV.warn && (isKitAlert(a) ? settled : infoAllowed));
+        const info = due.filter((a) => SEV[a.severity] < SEV.warn && (
+          isKitAlert(a) ? settled : isStaleStatusAlert(a) ? (settled || o.status === 'working') : settled && infoAllowed
+        )).sort((a, b) => Number(isStaleStatusAlert(b)) - Number(isStaleStatusAlert(a)));
         if (!urgent.length && !info.length) continue;
         urgent.sort((x, y) => SEV[y.severity] - SEV[x.severity]);
         const list = [...urgent, ...info];
@@ -2512,7 +2521,11 @@ export class Engine extends EventEmitter {
         ].join('\n');
         try {
           await this.herdrRunner('herdr', ['agent', 'prompt', o.id, text]);
-          for (const a of list) this.memory.pushes[`${a.key}@${o.id}`] = { at: now, severity: a.severity };
+          for (const a of list) {
+            const record = { at: now, severity: a.severity };
+            this.memory.pushes[`${a.key}@${o.id}`] = record;
+            if (isStaleStatusAlert(a)) this.memory.pushes[`${a.key}@project`] = record;
+          }
           if (info.some((a) => !isKitAlert(a))) this.memory.infoPrompts[o.id] = now;
           const kitSent = list.find((a) => isKitAlert(a));
           if (kitSent) this.memory.kitDigests[o.id] = { at: now, hashes: [...(this.memory.kitDigests[o.id]?.hashes || []), ...(kitSent.digestHashes || [])] };

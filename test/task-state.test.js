@@ -428,31 +428,29 @@ function snapshot({ updated = NOW - 30 * MIN, status = 'todo', workers = [live('
   };
 }
 
-test('a live worker on a task that is not doing makes the status stale with one notice', () => {
-  const snap = snapshot();
+test('a live worker mismatch makes the board stale and the age notice follows shared freshness', () => {
+  const snap = snapshot({ updated: NOW - 31 * MIN });
   const stale = staleStatuses(snap, CFG, NOW);
   assert.equal(stale.alpha.mismatch.length, 1);
   assert.match(stale.alpha.reason, /worker w1 runs task A/);
   assert.match(stale.alpha.reason, /todo/);
   const alerts = evaluate(snap, CFG, {}, NOW).alerts.filter((a) => a.key.startsWith('status:stale:'));
   assert.equal(alerts.length, 1);
-  assert.match(alerts[0].text, /worker w1 runs task A/);
-  assert.match(alerts[0].text, /herdr-boss publish alpha/);
+  assert.equal(alerts[0].text, 'Status published 31 min ago. Publish the current plan with herdr-boss publish alpha <file>.');
   // A doing task or a new worker inside the grace time gives no stale status.
   assert.deepEqual(staleStatuses(snapshot({ status: 'doing' }), CFG, NOW), {});
   assert.deepEqual(staleStatuses(snapshot({ workers: [live('w1', 'A', { startedAt: iso(NOW - MIN) })] }), CFG, NOW), {});
   assert.deepEqual(staleStatuses(snapshot({ workers: [live('w1', 'A', { phase: 'review' })] }), CFG, NOW), {});
 });
 
-test('an old status with workers or new commits and a worker mismatch send one notice with both reasons', () => {
+test('an old status with a live worker sends the shared freshness notice', () => {
   const snap = snapshot({ updated: NOW - 3 * HOUR, activity: { workedAt: NOW - 10 * MIN } });
   const stale = staleStatuses(snap, CFG, NOW);
   assert.equal(stale.alpha.workers, true);
   assert.equal(stale.alpha.mismatch.length, 1);
   const alerts = evaluate(snap, CFG, {}, NOW).alerts.filter((a) => a.key.startsWith('status:stale:'));
   assert.equal(alerts.length, 1);
-  assert.match(alerts[0].text, /workers ran/);
-  assert.match(alerts[0].text, /worker w1 runs task A/);
+  assert.equal(alerts[0].text, 'Status published 180 min ago. Publish the current plan with herdr-boss publish alpha <file>.');
 });
 
 test('the project data carries boardStale and the reason for the GUI', () => {
@@ -552,6 +550,7 @@ test('statusStale warns only when an old status has a live worker or a working o
   assert.deepEqual(apply([live('worker', 'A')], []), { ageMin: 31, level: 'warn' });
   assert.deepEqual(apply([], [{ workspace: 'w1', orch: true, agent: 'claude', status: 'working' }]), { ageMin: 31, level: 'warn' });
   assert.deepEqual(apply([], [{ workspace: 'w1', orch: true, agent: 'claude', status: 'idle' }]), { ageMin: 31, level: 'ok' });
+  assert.deepEqual(apply([], [{ workspace: 'w1', orch: true, agent: 'claude', status: 'blocked' }]), { ageMin: 31, level: 'ok' }, 'a blocked orchestrator counts as not working');
   const fresh = { ...oldProject, updated: iso(NOW - 30 * MIN) };
   assert.deepEqual(applyTaskState([fresh], { alpha: [live('worker', 'A')] }, { herdr: { panes: [] }, now: NOW })[0].statusStale,
     { ageMin: 30, level: 'ok' });
@@ -561,7 +560,7 @@ test('statusStale warns only when an old status has a live worker or a working o
 });
 
 test('worker start without a task id or an issue gives one warning text', () => {
-  assert.match(taskIdWarning({}), /^Warning: .*--task-id/);
+  assert.equal(taskIdWarning({}), 'No --task-id: the project board shows this worker as Unplanned work.');
   assert.equal(taskIdWarning({ taskId: 'A' }), null);
   assert.equal(taskIdWarning({ issue: '7' }), null);
 });

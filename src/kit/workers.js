@@ -1100,6 +1100,7 @@ export function startWorker(name, options, {
   now = Date.now(),
   output = console.log,
   readText = null,
+  projectStatus = null,
   wait = pause,
   runSetup = runSetupCommand,
   leaseOptions = null,
@@ -1181,9 +1182,13 @@ export function startWorker(name, options, {
   if (options.issue != null && (!/^\d+$/.test(String(options.issue)) || Number(options.issue) <= 0)) throw new Error('--issue must be a positive integer.');
   if (options.taskId != null && !TASK_ID.test(String(options.taskId))) throw new Error('--task-id must be a task id from the published status: letters, digits, ".", "_" or "-", up to 64 characters.');
   if (options.taskId != null && options.issue != null) throw new Error('Give --task-id or --issue, not both. --issue N is an alias for a numeric task id.');
-  const taskIdNote = taskIdWarning(options);
-  if (taskIdNote) output(taskIdNote);
   const task = options.taskFile ? fs.readFileSync(path.resolve(options.taskFile), 'utf8').trimEnd() : options.task;
+  const taskIdNote = taskIdWarning(options);
+  if (taskIdNote) {
+    output(taskIdNote);
+    const suggestion = suggestedTask(options, projectStatus);
+    if (suggestion) output(`Suggested: --task-id ${suggestion.id} (${suggestion.title})`);
+  }
   const browserWarning = codexBrowserWarning(options.kind, task);
   if (browserWarning) output(browserWarning);
   if (!task?.trim()) throw new Error('Task text must not be empty.');
@@ -1549,7 +1554,36 @@ export function allowWorkerScope(name, { paths = [], reason = null } = {}, {
 // A run that names no task never shows on the project board. Warn, and start the worker.
 export function taskIdWarning(options) {
   if (options?.taskId != null || options?.issue != null) return null;
-  return 'Warning: this worker has no task id. Use worker start --task-id ID with the task id from the published status, so the board shows the task as doing.';
+  return 'No --task-id: the project board shows this worker as Unplanned work.';
+}
+
+const TASK_SUGGESTION_STOPWORDS = new Set(['add', 'the', 'fix', 'test', 'tests', 'docs', 'and', 'for', 'with', 'task', 'from', 'into']);
+
+function suggestedTask(options, projectStatus) {
+  const input = options?.taskFile ? path.basename(String(options.taskFile)) : String(options?.task || '');
+  const tasks = (Array.isArray(projectStatus?.tasks) ? projectStatus.tasks : []).filter((task) =>
+    String(task?.status || '').toLowerCase() !== 'done'
+      && TASK_ID.test(String(task?.id || '')) && typeof task?.title === 'string' && task.title.trim());
+  const exactIds = tasks.filter((task) => {
+    const id = String(task?.id || '');
+    if (id.length < 2) return false;
+    const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`(?:^|[^\\p{L}\\p{N}_])${escaped}(?=$|[^\\p{L}\\p{N}_])`, 'iu').test(input);
+  });
+  if (exactIds.length === 1) return { id: exactIds[0].id, title: exactIds[0].title };
+  if (exactIds.length > 1) return null;
+
+  const tokens = (value) => new Set((String(value || '').toLowerCase().match(/[\p{L}\p{N}]+/gu) || [])
+    .filter((token) => Array.from(token).length >= 3 && !TASK_SUGGESTION_STOPWORDS.has(token)));
+  const inputTokens = tokens(input);
+  const ranked = tasks.map((task) => {
+    const id = String(task?.id || '');
+    const taskTokens = tokens(`${id} ${task.title}`);
+    const shared = [...inputTokens].filter((token) => taskTokens.has(token)).length;
+    return { id, title: task.title, shared };
+  }).filter((task) => task.shared >= 2).sort((a, b) => b.shared - a.shared);
+  if (!ranked.length || ranked[1]?.shared === ranked[0].shared) return null;
+  return ranked[0];
 }
 
 function readRun(config, name) {

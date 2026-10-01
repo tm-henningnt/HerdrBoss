@@ -310,7 +310,13 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
         dryRun: flags.dryrun,
         force: flags.force,
         forceSwap: flags.forceswap,
-      }, { config, models: modelConfig, herdr, env, output, rulesFile, now: typeof now === 'function' ? now() : now }); }
+      }, {
+        config, models: modelConfig, herdr, env, output, rulesFile,
+        projectStatus: flags.taskid == null && flags.issue == null
+          ? listProjects().find((project) => project.slug === config.slug) || null
+          : null,
+        now: typeof now === 'function' ? now() : now,
+      }); }
       catch (error) {
         if (!/\nSTART FAILED: /.test(error.message)) error.message = `${error.message}\nSTART FAILED: ${error.message.split('\n')[0]}`;
         throw error;

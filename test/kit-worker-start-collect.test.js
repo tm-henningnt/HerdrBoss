@@ -148,6 +148,117 @@ test('worker start records a real dispatch before prompting and verifies activit
   assert.equal(fs.readFileSync(path.join(result.worktree, '.worker', 'brief.md'), 'utf8'), 'Worker demo: x\n\n## Worker start details\n\nScreenshot budget: 10 screenshots. The project setting overrides the kit default.\n\nIn a Codex shell, run `setopt NO_BG_NICE` before a background command.\nReport a failing tool, a missing file, or missing evidence explicitly in your report. Never give a best guess in place of a result. The orchestrator verifies each claim at the source.');
 });
 
+test('worker start warns about unplanned work and suggests the best matching published task, including in dry-run', () => {
+  const f = setupFixture(null);
+  const projectStatus = { tasks: [
+    { id: 'BD1c', title: 'Worker warning from task text' },
+    { id: 'BD1e', title: 'Status notice' },
+    { id: 'BD1d', title: 'Update status notice timing' },
+  ] };
+  const lines = [];
+  const start = (name, options) => startWorker(name, {
+    kind: 'codex', allow: ['src/'], ...options,
+  }, {
+    config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile,
+    projectStatus, output: (line) => lines.push(line),
+  });
+
+  start('unplanned-live', { task: 'Update the status notice timing.' });
+  assert.ok(lines.includes('No --task-id: the project board shows this worker as Unplanned work.'));
+  assert.ok(lines.includes('Suggested: --task-id BD1d (Update status notice timing)'));
+  assert.ok(fs.existsSync(path.join(f.config.runsPath, 'unplanned-live.json')), 'the warning does not stop the start');
+
+  lines.length = 0;
+  start('unplanned-dry', { task: 'Update the status notice timing.', dryRun: true });
+  assert.ok(lines.includes('No --task-id: the project board shows this worker as Unplanned work.'));
+  assert.ok(lines.includes('Suggested: --task-id BD1d (Update status notice timing)'));
+
+  lines.length = 0;
+  start('one-token-match', { task: 'Fix timing.', dryRun: true });
+  assert.ok(lines.includes('No --task-id: the project board shows this worker as Unplanned work.'));
+  assert.equal(lines.some((line) => line.startsWith('Suggested:')), false, 'one shared token is not enough');
+
+  lines.length = 0;
+  start('exact-id-match', { task: 'Please check BD1c in the status.', dryRun: true });
+  assert.ok(lines.includes('Suggested: --task-id BD1c (Worker warning from task text)'), 'an exact task ID is enough');
+
+  const taskFile = path.join(f.root, 'worker-warning.md');
+  fs.writeFileSync(taskFile, 'Unrelated file contents do not set the suggestion.');
+  lines.length = 0;
+  start('task-file-name-match', { taskFile, dryRun: true });
+  assert.ok(lines.includes('Suggested: --task-id BD1c (Worker warning from task text)'), 'the task-file base name is matched');
+});
+
+test('worker task suggestions ignore stopwords and tokens shorter than three characters', () => {
+  const f = setupFixture(null);
+  const lines = [];
+  const start = (name, task, tasks) => startWorker(name, {
+    kind: 'codex', allow: ['src/'], task, dryRun: true,
+  }, {
+    config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile,
+    projectStatus: { tasks }, output: (line) => lines.push(line),
+  });
+
+  start('stopword-only', 'Add the fix test tests docs and for with task from into', [
+    { id: 'S-1', title: 'Add the fix test tests docs and for with task from into' },
+  ]);
+  assert.equal(lines.some((line) => line.startsWith('Suggested:')), false, 'stopwords cannot create a match');
+
+  lines.length = 0;
+  start('short-token-only', 'UI QA UX', [{ id: 'AB-2', title: 'UI QA UX' }]);
+  assert.equal(lines.some((line) => line.startsWith('Suggested:')), false, 'tokens shorter than three characters cannot create a match');
+});
+
+test('worker task suggestions skip done tasks and do not suggest tied best matches', () => {
+  const f = setupFixture(null);
+  const lines = [];
+  const start = (name, task, tasks) => startWorker(name, {
+    kind: 'codex', allow: ['src/'], task, dryRun: true,
+  }, {
+    config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile,
+    projectStatus: { tasks }, output: (line) => lines.push(line),
+  });
+
+  start('done-task', 'Refresh the status panel', [
+    { id: 'DONE-1', title: 'Refresh status panel', status: 'done' },
+  ]);
+  assert.equal(lines.some((line) => line.startsWith('Suggested:')), false, 'done tasks are ineligible');
+
+  lines.length = 0;
+  start('tied-tasks', 'Refresh status panel store', [
+    { id: 'ID-11', title: 'Refresh status panel' },
+    { id: 'ID-22', title: 'Refresh status store' },
+  ]);
+  assert.equal(lines.some((line) => line.startsWith('Suggested:')), false, 'a tie for the best score has no suggestion');
+});
+
+test('worker task ID suggestions need a whole-word ID of at least two characters', () => {
+  const f = setupFixture(null);
+  const tasks = [
+    { id: 'BD1c', title: 'Unrelated published work' },
+    { id: 'A', title: 'Another unrelated task' },
+    { id: 'A1', title: 'Short explicit identifier' },
+  ];
+  const lines = [];
+  const start = (name, task) => startWorker(name, {
+    kind: 'codex', allow: ['src/'], task, dryRun: true,
+  }, {
+    config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile,
+    projectStatus: { tasks }, output: (line) => lines.push(line),
+  });
+
+  start('embedded-id', 'Please inspect XBD1cY before continuing');
+  assert.equal(lines.some((line) => line.startsWith('Suggested:')), false, 'an ID inside a longer word is not an exact match');
+
+  lines.length = 0;
+  start('one-character-id', 'A');
+  assert.equal(lines.some((line) => line.startsWith('Suggested:')), false, 'one-character IDs cannot be exact matches');
+
+  lines.length = 0;
+  start('two-character-id', 'Please inspect A1 before continuing');
+  assert.ok(lines.includes('Suggested: --task-id A1 (Short explicit identifier)'), 'a whole-word ID with two characters can match exactly');
+});
+
 test('worker collect keeps changed paths stable after the base branch merges the worker', () => {
   const f = setupFixture(null);
   const baseCommit = git(f.root, 'rev-parse', 'main');
