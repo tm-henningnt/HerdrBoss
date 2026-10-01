@@ -2466,6 +2466,7 @@ a.rv-page-link:hover { background: var(--panel-2); }
   .rv-answer { padding-left: calc(300px + 28px); padding-right: 28px; }
   .rv-answer { justify-content: center; }
   .rv-answer > * { max-width: 760px; }
+  .rv-pager { max-width: 760px; }
 }
 @media (min-width: 901px) {
   .review-page.item-open { display: grid; grid-template-columns: minmax(0, 1fr) 144px; grid-template-rows: auto minmax(0, 1fr); gap: 0 12px; }

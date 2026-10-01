@@ -468,6 +468,8 @@ test('item answers use a wide sidebar above 900 px and preserve main narrow rule
   const wide = /@media \(min-width: 901px\) \{([\s\S]*?)\n\}/.exec(css)?.[1] || '';
   const narrow = /@media \(max-width: 899px\) \{[\s\S]*?\n\}/.exec(sourceCss)?.[0] || '';
   assert.equal(narrow, mainNarrowItemRules, 'the narrow item rules stay byte-for-byte equal to main');
+  const at900 = /@media \(min-width: 900px\) \{([\s\S]*?)\n\}/.exec(sourceCss)?.[1] || '';
+  assert.match(at900, /\.rv-pager \{ max-width: 760px; \}/, 'the 900 px rules keep the pager width of main');
   assert.match(wide, /\.review-page\.item-open \{[^}]*display: grid;[^}]*grid-template-columns: minmax\(0, 1fr\) 144px/);
   assert.match(wide, /\.review-page\.item-open \.review-body \{[^}]*grid-column: 1/);
   assert.match(wide, /\.review-page\.item-open \.rv-answer \{[^}]*grid-column: 2;[^}]*position: sticky/);
