@@ -971,6 +971,15 @@ async function resetAvatar(slug, button) {
 // An image of the Owner replaces the generated avatar. A missing image keeps the generated one.
 document.addEventListener('load', (e) => avatarImageLoaded(e.target), true);
 document.addEventListener('error', (e) => avatarImageFailed(e.target), true);
+// An evidence image that does not load: the viewer shows the file name as text.
+document.addEventListener('error', (e) => {
+  const file = e.target?.dataset?.rvEvfile;
+  if (!file || currentRoute() !== 'reviews') return;
+  const open = reviewOpenItem();
+  if (!open) return;
+  (open.vui.missing ||= {})[file] = true;
+  reviewsRender();
+}, true);
 
 document.addEventListener('change', (e) => {
   const upload = e.target.dataset?.avatarUpload;
@@ -6624,6 +6633,11 @@ function reviewVisible(open) {
   return visibleItems(open.pack.items, reviewFilterOf(open.key), open.item.id);
 }
 
+// The stage that a zoom key acts on: the focused stage, else the stage of the item, else the first stage (the evidence stage).
+function reviewActiveStage() {
+  return document.activeElement?.closest?.('.rv-stage') || $app.querySelector('.rv-evidence:not(.rv-evidence-agent) .rv-stage') || $app.querySelector('.rv-stage');
+}
+
 // A move to another item puts the focus on the item heading, so a screen reader reads the new item.
 function reviewItemGo(open, id) {
   if (!id) return;
@@ -6994,7 +7008,7 @@ function reviewViewerKey(e, inField) {
   }
   if (!open) return;
   const { item, vui, pack } = open;
-  const stage = $app.querySelector('.rv-stage');
+  const stage = reviewActiveStage();
   const spec = itemSpec(pack, item.id);
   switch (action) {
     case 'next': case 'prev': reviewItemGo(open, itemNeighbors(reviewVisible(open), item.id)[action]?.id); break;
@@ -8639,13 +8653,13 @@ if (window.visualViewport) {
 // The sections column: collapse and expand buttons, and the drag of the handle.
 document.addEventListener('click', (e) => {
   if (currentRoute() !== 'reviews') return;
-  const filter = e.target.closest?.('[data-review-filter]');
+  const filter = e.target.closest?.('[data-review-filter], [data-review-filter-clear]');
   if (filter) {
     const route = parseReviewPath(location.pathname);
     if (!route?.pack) return;
     const key = reviewKey(route.slug, route.pack);
     const ui = reviewUi(key);
-    ui.needsYouOnly = !reviewFilterOf(key);
+    ui.needsYouOnly = filter.hasAttribute('data-review-filter-clear') ? false : !reviewFilterOf(key);
     saveFilter(reviewStorage, key, ui.needsYouOnly);
     reviews.focus = '[data-review-filter]';
     reviewsRender();

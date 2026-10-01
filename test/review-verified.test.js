@@ -224,3 +224,63 @@ test('the Reviews help and the user guide describe the header, the badges, the e
   assert.match(app, /Needs you<\/b> filter/);
   for (const text of ['summary header', 'agent-verified', 'needs-you', 'Needs you', 'design pass']) assert.ok(guide.includes(text), text);
 });
+
+test('RV3b fix 1: the phone rules outrank the base rules by selector', () => {
+  const from = css.slice(css.lastIndexOf('@media (max-width: 760px) {'));
+  const phone = from.slice(0, from.indexOf('\n}'));
+  for (const name of ['review-item', 'review-filter-chip', 'review-summary-row']) {
+    assert.match(phone, new RegExp(`\\.review-page \\.${name}[ ,{]`), name);
+    assert.doesNotMatch(phone, new RegExp(`(^|\\n)\\s*\\.${name} \\{`), `${name} has no bare phone rule`);
+  }
+  assert.match(phone, /\.review-page \.review-filter-chip[^{]*\{[^}]*font-size: 16px/);
+});
+
+test('RV3b fix 2: no row keeps an empty fourth column', () => {
+  for (const rule of css.matchAll(/\.review-item \{([^}]*)\}/g)) {
+    const columns = /grid-template-columns:\s*([^;]+);/.exec(rule[1]);
+    if (columns && !/grid-template-areas/.test(rule[1])) assert.doesNotMatch(columns[1], /auto 20px/, columns[1]);
+  }
+  assert.match(css, /\.review-item \{ grid-template-columns: 24px minmax\(0, 1fr\) auto; \}/);
+});
+
+test('RV3b fix 3: a filter with no match shows one line and a clear action', () => {
+  const p = pack();
+  p.items = p.items.filter((i) => i.verifiedBy !== 'needs-you');
+  const html = nav(page(p, { needsYouOnly: true }));
+  assert.match(html, /<p class="review-filter-empty" role="status">Nothing needs you\./);
+  assert.match(html, /data-review-filter-clear/);
+  assert.doesNotMatch(nav(page(pack(), { needsYouOnly: true })), /review-filter-empty/);
+  assert.doesNotMatch(nav(page(p)), /review-filter-empty/);
+  assert.match(app, /data-review-filter-clear/);
+});
+
+test('RV3b fix 4: a missing evidence file shows its name and no image', () => {
+  const grid = viewer(pack(), 'a1', { missing: { 'shots/a1.png': true } });
+  assert.match(grid, /<span class="rv-ev-missing">[^<]*shots\/a1\.png/);
+  assert.equal((grid.match(/<img/g) || []).length > 0, true, 'the other image stays');
+  assert.doesNotMatch(grid, /files\/1\/shots\/a1\.png"/);
+  const stage = viewer(pack(), 'a1', { evidence: 0, missing: { 'shots/a1.png': true } });
+  assert.match(stage, /rv-ev-missing/);
+  assert.match(viewer(pack(), 'a1'), /data-rv-evfile="shots\/a1\.png"/);
+  assert.match(app, /data-rv-evfile|rvEvfile/);
+  assert.doesNotMatch(viewer(pack(), 'a1'), /onerror/);
+});
+
+test('RV3b fix 5: the zoom keys use the focused or the open stage', () => {
+  assert.match(app, /function reviewActiveStage\(/);
+  assert.doesNotMatch(app, /const stage = \$app\.querySelector\('\.rv-stage'\);/);
+});
+
+test('RV3b fix 6: a prototype key is not a verified state or a design result', () => {
+  for (const key of ['constructor', '__proto__', 'toString', 'hasOwnProperty']) {
+    assert.match(verifiedBadgeHtml({ verifiedBy: key }, esc), /review-badge-none/, key);
+    const html = summaryHeaderHtml(pack({ summary: { total: 1, agentVerified: 1, needsYou: 0, unmarked: 0, designPass: key } }), esc);
+    assert.match(html, /Design pass: <b>not-run<\/b>/, key);
+  }
+});
+
+test('the filter chip shows with a count of 0 when the pack has marked items', () => {
+  const p = pack();
+  p.items = p.items.filter((i) => i.verifiedBy !== 'needs-you');
+  assert.match(nav(page(p)), /data-review-filter[^>]*>[\s\S]*<span class="num">0<\/span>/);
+});

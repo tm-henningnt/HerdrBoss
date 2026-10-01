@@ -510,7 +510,7 @@ const BADGE = {
 
 // The badge of one item: an icon and a word, never color alone. An unmarked item has a neutral badge.
 export function verifiedBadgeHtml(item, esc) {
-  const kind = BADGE[item?.verifiedBy] || { cls: 'none', icon: 'unmarked', word: 'unmarked' };
+  const kind = (Object.hasOwn(BADGE, item?.verifiedBy ?? '') && BADGE[item.verifiedBy]) || { cls: 'none', icon: 'unmarked', word: 'unmarked' };
   return `<span class="review-badge review-badge-${kind.cls}" title="${esc(kind.word)}">${viewerIcon(kind.icon, 'app-icon review-badge-icon')}<span class="review-badge-word">${esc(kind.word)}</span></span>`;
 }
 
@@ -530,6 +530,9 @@ function anatomyHtml(item, spec, h) {
   return parts.length ? `<div class="rv-anatomy">${parts.join('')}</div>` : '';
 }
 
+// A file that did not load shows its name as text. public/app.js records the failure in ui.missing.
+const missingHtml = (ref, esc) => `<span class="rv-ev-missing">File not found: ${esc(ref)}</span>`;
+
 // The evidence images of an agent-verified item: a grid, then one image in the zoom stage, as in a gallery.
 // ui.evidence is the open image index, or null for the grid.
 function agentEvidenceHtml(pack, item, spec, ui, h) {
@@ -537,13 +540,18 @@ function agentEvidenceHtml(pack, item, spec, ui, h) {
   const refs = (Array.isArray(item.evidence) ? item.evidence : spec.evidence || []).filter((ref) => typeof ref === 'string');
   if (item.verifiedBy !== 'agent-verified' || !refs.length) return '';
   const index = Number.isInteger(ui.evidence) && ui.evidence >= 0 && ui.evidence < refs.length ? ui.evidence : null;
+  const missing = (ref) => Boolean(ui.missing && Object.hasOwn(ui.missing, ref));
   const heading = `<h3 class="rv-evidence-h">Agent evidence <span class="num">${refs.length}</span></h3>`;
   if (index === null) {
-    const tiles = refs.map((ref, i) => `<li><button type="button" class="rv-tile" data-rv-evopen="${i}" aria-label="${esc(`Open evidence image ${i + 1} of ${refs.length}`)}"><img src="${esc(fileUrl(pack, ref))}" alt="" loading="lazy" decoding="async" draggable="false"></button></li>`).join('');
+    const tiles = refs.map((ref, i) => (missing(ref)
+      ? `<li>${missingHtml(ref, esc)}</li>`
+      : `<li><button type="button" class="rv-tile" data-rv-evopen="${i}" aria-label="${esc(`Open evidence image ${i + 1} of ${refs.length}`)}"><img src="${esc(fileUrl(pack, ref))}" alt="" loading="lazy" decoding="async" draggable="false" data-rv-evfile="${esc(ref)}"></button></li>`)).join('');
     return `<section class="rv-evidence-agent-box" aria-label="Agent evidence">${heading}<ul class="rv-grid" aria-label="${esc(`${refs.length} evidence images`)}">${tiles}</ul></section>`;
   }
   const step = (to, label, name) => `<button type="button" class="rv-tool" data-rv-evgallery="${to}" aria-label="${label}"${to >= 0 && to < refs.length ? '' : ' disabled'}>${viewerIcon(name)}</button>`;
-  const canvas = `<img class="rv-img" src="${esc(fileUrl(pack, refs[index]))}" alt="${esc(`Evidence image ${index + 1} of ${refs.length}`)}" decoding="async" draggable="false">`;
+  const canvas = missing(refs[index])
+    ? missingHtml(refs[index], esc)
+    : `<img class="rv-img" src="${esc(fileUrl(pack, refs[index]))}" alt="${esc(`Evidence image ${index + 1} of ${refs.length}`)}" decoding="async" draggable="false" data-rv-evfile="${esc(refs[index])}">`;
   const tools = `<div class="rv-tools"><span class="rv-gallery-nav"><button type="button" class="rv-tool rv-tool-text" data-rv-evgallery="grid" aria-label="All evidence images">${viewerIcon('grid')}<span class="rv-tool-label" aria-hidden="true">All images</span></button>`
     + `${step(index - 1, 'Previous image', 'prev')}<span class="rv-gallery-count num">${index + 1} of ${refs.length}</span>${step(index + 1, 'Next image', 'next')}</span>`
     + `<span class="rv-tools-end"><button type="button" class="rv-tool" data-rv-zoom="out" aria-label="Zoom out">${viewerIcon('minus')}</button>`

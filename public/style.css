@@ -2085,12 +2085,12 @@ body.app-view textarea, body.app-view input { caret-color: var(--accent); }
 .viz-switch button:focus-visible, .viz-details > summary:focus-visible, .raw-log:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (max-width: 760px) {
   .hl-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .review-filter-chip { min-height: 44px; padding: 0 16px; font-size: 16px; }
-  .review-summary-row { gap: 6px 12px; font-size: 14px; }
-  .review-item { grid-template-columns: 44px minmax(0, 1fr); grid-template-areas: "thumb t" "thumb end"; gap: 4px 10px; }
-  .review-item .review-thumb { grid-area: thumb; }
-  .review-item .review-item-t { grid-area: t; }
-  .review-item .review-item-end { grid-area: end; justify-content: flex-start; }
+  .review-page .review-filter-chip, .review-page .review-filter-clear { min-height: 44px; padding: 0 16px; font-size: 16px; }
+  .review-page .review-summary-row { gap: 6px 12px; font-size: 14px; }
+  .review-page .review-item { grid-template-columns: 44px minmax(0, 1fr); grid-template-areas: "thumb t" "thumb end"; gap: 4px 10px; }
+  .review-page .review-item .review-thumb { grid-area: thumb; }
+  .review-page .review-item .review-item-t { grid-area: t; }
+  .review-page .review-item .review-item-end { grid-area: end; justify-content: flex-start; }
   .hl-tile { padding: 10px 12px 12px; }
   .hl-value { font-size: 19px; }
   .viz-card { padding: 12px; }
@@ -2198,7 +2198,7 @@ body.app-view textarea, body.app-view input { caret-color: var(--accent); }
 .review-sec-h .review-chip { flex: none; }
 .review-sec-count { flex: none; color: var(--muted); font-size: 12px; }
 .review-items { margin: 0; padding: 0; list-style: none; }
-.review-item { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto 20px; gap: 10px; align-items: center; min-height: 44px; padding: 8px 16px; border-top: 1px solid var(--line); color: var(--text); text-decoration: none; }
+.review-item { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; gap: 10px; align-items: center; min-height: 44px; padding: 8px 16px; border-top: 1px solid var(--line); color: var(--text); text-decoration: none; }
 .review-item:hover { background: var(--panel-2); }
 .review-item[aria-current="true"] { background: color-mix(in srgb, var(--accent) 10%, var(--panel)); box-shadow: inset 3px 0 0 var(--accent); }
 .review-item .review-chip { max-width: 8.5em; }
@@ -2245,7 +2245,11 @@ body.app-view textarea, body.app-view input { caret-color: var(--accent); }
 .review-filter-chip .app-icon { width: 13px; height: 13px; }
 .review-filter-chip[aria-pressed="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--panel)); }
 :root:root .review-filter-chip { color: var(--text); }
-.review-filter-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.review-filter-empty { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin: 0; padding: 12px 16px; color: var(--muted); font-size: 13px; }
+.review-filter-clear { padding: 4px 0; border: 0; background: transparent; font: 600 13px var(--sans); text-decoration: underline; cursor: pointer; }
+:root:root .review-filter-clear { color: var(--accent); }
+.rv-ev-missing { display: grid; place-items: center; min-height: 64px; padding: 8px; border: 1px dashed var(--line); border-radius: 6px; color: var(--muted); font: 12px var(--mono); overflow-wrap: anywhere; text-align: center; }
+.review-filter-chip:focus-visible, .review-filter-clear:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .rv-item-head { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 16px 0; }
 .rv-anatomy { display: grid; gap: 4px; padding: 10px 16px 12px; }
 .rv-description { margin: 0; font-size: 14px; line-height: 1.45; overflow-wrap: anywhere; }
@@ -2317,7 +2321,7 @@ body.app-view textarea, body.app-view input { caret-color: var(--accent); }
   .review-resize:hover, .review-resize.dragging { background: color-mix(in srgb, var(--accent) 35%, transparent); }
   .review-sections { container-type: inline-size; grid-column: 1; grid-row: 1 / 3; align-content: start; gap: 0; padding: 0; overflow: auto; overscroll-behavior: contain; background: var(--panel); border-right: 1px solid var(--line); }
   .review-section { border-top: 0; }
-  .review-item { grid-template-columns: 24px minmax(0, 1fr) auto 20px; }
+  .review-item { grid-template-columns: 24px minmax(0, 1fr) auto; }
   .review-thumb { width: 24px; height: 24px; border: 0; background: transparent; }
   .review-item-t small { display: none; }
   /* The narrow section column shows the icon of a state chip. The word stays for screen readers and in the tooltip. */

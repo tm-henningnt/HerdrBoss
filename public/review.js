@@ -233,7 +233,7 @@ export function summaryHeaderHtml(pack, esc) {
   const count = (n, word) => `<span><b class="num">${esc(n)}</b> ${word}</span>`;
   const cells = [count(summary.total, plural(summary.total, 'item').replace(/^\d+ /, '')), count(summary.agentVerified, 'agent-verified'), count(summary.needsYou, 'needs-you')];
   if (summary.unmarked > 0) cells.push(count(summary.unmarked, 'unmarked'));
-  const result = DESIGN_ICON[summary.designPass] !== undefined ? summary.designPass : 'not-run';
+  const result = Object.hasOwn(DESIGN_ICON, summary.designPass) ? summary.designPass : 'not-run';
   const reviewer = design?.reviewer ? ` · ${esc(design.reviewer)}` : '';
   const note = design?.note ? `<small class="review-design-note">${esc(design.note)}</small>` : '';
   cells.push(`<span class="review-design review-design-${result}">${icon(DESIGN_ICON[result])}Design pass: <b>${esc(result)}</b>${reviewer}${note}</span>`);
@@ -278,11 +278,16 @@ function sectionsNavHtml(pack, sections, ui, esc, collapsed) {
     : '<span class="review-side-title">Sections</span><button type="button" class="review-side-button" data-review-collapse aria-label="Hide the sections column" title="Hide the sections column">' + '<span class="review-side-glyph" aria-hidden="true">«</span>' + '</button>';
   const count = needsYouCount(pack.items);
   const on = ui.needsYouOnly === true;
-  const filter = !collapsed && (count || on)
+  const marked = (pack.items || []).some((item) => item.verifiedBy === 'agent-verified' || item.verifiedBy === 'needs-you');
+  const filter = !collapsed && (marked || on)
     ? `<div class="review-filter"><button type="button" class="review-filter-chip" data-review-filter aria-pressed="${on ? 'true' : 'false'}">${icon('filter')}<span>Needs you</span><span class="num">${count}</span></button></div>`
     : '';
+  const sectionRows = collapsed ? '' : sections.map((section) => sectionHtml(pack, section, ui, esc)).join('');
+  const empty = !collapsed && on && !sectionRows
+    ? '<p class="review-filter-empty" role="status">Nothing needs you. <button type="button" class="review-filter-clear" data-review-filter-clear>Show all items</button></p>'
+    : '';
   return `<nav class="review-sections${collapsed ? ' is-collapsed' : ''}" aria-label="Sections"><div class="review-side-bar">${tool}</div>${filter}`
-    + (collapsed ? '' : sections.map((section) => sectionHtml(pack, section, ui, esc)).join('')) + '</nav>';
+    + (collapsed ? '' : sectionRows + empty) + '</nav>';
 }
 
 // The summary groups in the order of the decision: denied, needs live check, notes, accepted, and open last.
