@@ -301,14 +301,14 @@ test('without lsof the process reads give null instead of a guess', () => {
 
 test('the source names a process with lsof and ps, and never reads a command line or an environment', () => {
   const source = fs.readFileSync(new URL('../src/leases.js', import.meta.url), 'utf8');
-  assert.match(source, /lsofOutput\(\['-nP', `-iTCP:\$\{port\}`, '-sTCP:LISTEN', '-Fp'\]\)/, 'the listener PID comes from lsof with a field list');
-  assert.match(source, /lsofOutput\(\['-a', '-p', String\(pid\), '-d', 'cwd', '-Fn'\]\)/, 'the working directory comes from lsof with a field list');
-  assert.match(source, /spawnSync\('ps', \['-o', 'comm=', '-p', String\(pid\)\]/, 'the process name comes from ps with a name column only');
+  assert.match(source, /lsofOutput\(\['-nP', `-iTCP:\$\{port\}`, '-sTCP:LISTEN', '-Fp'\], now\)/, 'the listener PID comes from lsof with a field list');
+  assert.match(source, /lsofOutput\(\['-a', '-p', String\(pid\), '-d', 'cwd', '-Fn'\], now\)/, 'the working directory comes from lsof with a field list');
+  assert.match(source, /processProbe\('ps', \['-o', 'comm=', '-p', String\(pid\)\], now\)/, 'the process name comes from ps with a name column only');
   // The banned forms list or dump a command line or an environment.
   for (const banned of ["'command='", "'args='", "'aux'", "'-ef'", "'-E'", "'eww'", "'-ww'"]) {
     assert.equal(source.includes(banned), false, `leases.js must not run ps with ${banned}`);
   }
-  assert.equal(/spawnSync\('ps', \[(?!'-o')/.test(source), false, 'every ps call names the columns it wants');
+  assert.equal(/(?:spawnSync|processProbe)\('ps', \[(?!'-o')/.test(source), false, 'every ps call names the columns it wants');
   assert.equal(source.includes("spawnSync('sh'"), false, 'no shell reads a process table');
 });
 
