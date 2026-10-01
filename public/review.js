@@ -6,6 +6,7 @@
 // and the helper text(url), which gives a loaded text file of the pack.
 import { itemViewerHtml, answerBarHtml, viewerBarHtml, itemSpec, viewerIcon } from './review-viewer.js';
 import { safeUrl } from './markdown.js';
+import { sidebarHandleHtml, clampWidth, SIDEBAR_DEFAULT, SIDEBAR_RAIL } from './review-sidebar.js';
 import { syncStatusHtml, packStatusHtml, submitLock, rowSyncText } from './review-sync.js';
 
 const SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -21,6 +22,7 @@ export const REVIEW_STATES = [
 ];
 
 const GROUP_CHIP = {
+  changed: { tone: 'changed', label: 'Changed', icon: 'changed' },
   accepted: { tone: 'ok', label: 'Accepted', icon: 'check' },
   denied: { tone: 'crit', label: 'Denied', icon: 'close' },
   live: { tone: 'warn', label: 'Live check', icon: 'live' },
@@ -123,7 +125,7 @@ export function progressBarHtml(counts, { esc, legend = false } = {}) {
 // The answered and total items of one section.
 export function sectionProgress(pack, sectionId) {
   const items = (pack.items || []).filter((item) => item.section === sectionId);
-  return { answered: items.filter((item) => item.state !== 'open').length, total: items.length };
+  return { answered: items.filter((item) => item.state !== 'open' && item.state !== 'changed').length, total: items.length };
 }
 
 // ---------- Chips ----------
@@ -142,7 +144,7 @@ function manifestItem(pack, id) {
 
 // The state chip of one item: a word and an icon, never color alone.
 export function itemChip(item, pack) {
-  if (item.stale) return { tone: 'changed', label: 'Changed', icon: 'changed' };
+  if (item.stale || item.state === 'changed') return { tone: 'changed', label: 'Changed', icon: 'changed' };
   const answer = item.answer || {};
   switch (item.state) {
     case 'denied': return { tone: 'crit', label: 'Denied', icon: 'close' };
@@ -214,16 +216,18 @@ export function packListHtml(view, h) {
 
 function itemRowHtml(pack, item, ui, esc) {
   const answer = item.answer || {};
-  const viewed = Boolean(answer.viewed);
-  const done = viewed && item.state !== 'open';
+  const viewed = Boolean(answer.viewed) && !item.stale;
+  const done = viewed && item.state !== 'open' && item.state !== 'changed';
   const sub = [TYPE_LABEL[item.type] || 'Item'];
   if (answer.note) sub.push('note');
   const sync = rowSyncText(ui.itemSync?.(item.id));
   if (sync) sub.push(sync);
   const current = ui.current === item.id || ui.item === item.id;
+  const title = item.title || item.id;
+  const number = (pack.items || []).indexOf(item) + 1;
   return `<li><a class="review-item${done ? ' review-item-done' : ''}" href="${esc(reviewUrl(pack.slug, pack.pack, item.id))}" data-key="review-item:${esc(item.id)}" data-review-row="${esc(item.id)}"${current ? ' aria-current="true"' : ''}>`
     + `<span class="review-thumb">${icon(TYPE_ICON[item.type] || 'doc')}</span>`
-    + `<span class="review-item-t"><span class="review-item-title">${esc(item.title || item.id)}</span><small>${esc(sub.join(' · '))}</small></span>`
+    + `<span class="review-item-t"><span class="review-item-line"><span class="review-item-n num">${number}</span><span class="review-item-title" title="${esc(title)}">${esc(title)}</span></span><small>${esc(sub.join(' · '))}</small></span>`
     + chipHtml(itemChip(item, pack), esc)
     + `<span class="review-viewed${viewed ? ' on' : ''}">${viewed ? icon('check') : ''}<span class="visually-hidden">${viewed ? 'Viewed' : 'Not viewed'}</span></span></a></li>`;
 }
@@ -232,9 +236,19 @@ function sectionHtml(pack, section, ui, esc) {
   const items = (pack.items || []).filter((item) => item.section === section.id);
   const { answered, total } = sectionProgress(pack, section.id);
   const folded = section.state === 'accepted' && items.every((item) => item.answer?.viewed) && !items.some((item) => item.id === ui.current || item.id === ui.item);
+  const title = section.title || section.id;
   return `<details class="review-section" data-key="review-sec:${esc(section.id)}" data-keep-attrs="open"${folded ? '' : ' open'}>`
-    + `<summary class="review-sec-h"><h2>${esc(section.title || section.id)}</h2>${chipHtml(GROUP_CHIP[section.state] || GROUP_CHIP.open, esc)}<span class="review-sec-count num">${answered} / ${total}</span></summary>`
+    + `<summary class="review-sec-h"><h2 title="${esc(title)}">${esc(title)}</h2>${chipHtml(GROUP_CHIP[section.state] || GROUP_CHIP.open, esc)}<span class="review-sec-count num">${answered} / ${total}</span></summary>`
     + `<ul class="review-items">${items.map((item) => itemRowHtml(pack, item, ui, esc)).join('')}</ul></details>`;
+}
+
+// The sections column. At 900 px and wider it has a bar with the collapse button, and a collapsed column is a thin rail with an expand button.
+function sectionsNavHtml(pack, sections, ui, esc, collapsed) {
+  const tool = collapsed
+    ? '<button type="button" class="review-side-button" data-review-expand aria-label="Show the sections column" title="Show the sections column">' + '<span class="review-side-glyph" aria-hidden="true">»</span>' + '</button>'
+    : '<span class="review-side-title">Sections</span><button type="button" class="review-side-button" data-review-collapse aria-label="Hide the sections column" title="Hide the sections column">' + '<span class="review-side-glyph" aria-hidden="true">«</span>' + '</button>';
+  return `<nav class="review-sections${collapsed ? ' is-collapsed' : ''}" aria-label="Sections"><div class="review-side-bar">${tool}</div>`
+    + (collapsed ? '' : sections.map((section) => sectionHtml(pack, section, ui, esc)).join('')) + '</nav>';
 }
 
 // The summary groups in the order of the decision: denied, needs live check, notes, accepted, and open last.
@@ -243,6 +257,7 @@ const SUMMARY_GROUPS = [
   { label: 'Needs live check', has: (item) => item.state === 'live' },
   { label: 'Note only', has: (item) => item.state === 'note' },
   { label: 'Accepted', has: (item) => item.state === 'accepted' || item.state === 'answered' },
+  { label: 'Changed since accepted', has: (item) => item.state === 'changed' },
   { label: 'Open', has: (item) => item.state === 'open' },
 ];
 
@@ -273,7 +288,7 @@ function deliveryHtml(delivery, esc) {
 
 function summaryHtml(pack, ui, esc) {
   const open = pack.state === 'open';
-  const missing = (pack.items || []).filter((item) => item.state === 'open').length;
+  const missing = (pack.items || []).filter((item) => item.state === 'open' || item.state === 'changed').length;
   const blocks = SUMMARY_GROUPS.map((group) => {
     const items = (pack.items || []).filter(group.has);
     if (!items.length) return '';
@@ -281,7 +296,7 @@ function summaryHtml(pack, ui, esc) {
       const note = item.answer?.note ? `<small class="review-sum-note">${esc(item.answer.note)}</small>` : '';
       const chosen = item.state === 'answered' ? `<small>${esc(itemChip(item, pack).label)}</small>` : '';
       const changed = item.stale ? '<small class="review-sum-stale">changed in this version</small>' : '';
-      const go = group.label === 'Open' && open ? `<a class="review-sum-go" href="${esc(reviewUrl(pack.slug, pack.pack, item.id))}">Review now</a>` : '';
+      const go = (group.label === 'Open' || group.label === 'Changed since accepted') && open ? `<a class="review-sum-go" href="${esc(reviewUrl(pack.slug, pack.pack, item.id))}">Review now</a>` : '';
       return `<li><a class="review-sum-title" href="${esc(reviewUrl(pack.slug, pack.pack, item.id))}">${esc(item.title || item.id)}</a>${go}${chosen}${changed}${note}</li>`;
     }).join('');
     return `<div class="review-sum-block"><h3 class="review-sum-h">${group.label} <span class="num">${items.length}</span></h3><ul>${rows}</ul></div>`;
@@ -489,7 +504,11 @@ export function packPageHtml(pack, ui, h) {
   }
 
   const head = `<div class="review-head"><p class="review-head-line"><span><b class="num">${answeredOf(counts)}</b> of ${esc(plural(counts.items, 'item'))} answered · <b class="num">${viewed}</b> viewed</span>${open ? '' : doneChip(pack, esc)}</p>${progressBarHtml(counts, { esc, legend: true })}</div>`;
-  const list = `<nav class="review-sections" aria-label="Sections">${sections.map((section) => sectionHtml(pack, section, ui, esc)).join('')}</nav>`;
+  const side = ui.sidebar || {};
+  const viewport = side.viewport || 1280;
+  const collapsed = side.collapsed === true;
+  const sideWidth = clampWidth(side.width ?? SIDEBAR_DEFAULT, viewport);
+  const list = sectionsNavHtml(pack, sections, ui, esc, collapsed) + (collapsed ? '' : sidebarHandleHtml(sideWidth, viewport));
   const main = `<div class="review-main">${ui.item ? itemPanelHtml(pack, ui, h) : summaryHtml(pack, { ...ui, time: h.time }, esc)}</div>`;
   let foot = '';
   if (openItem) foot = answerBarHtml(pack, openItem, ui.viewer || {}, h);
@@ -499,7 +518,7 @@ export function packPageHtml(pack, ui, h) {
       + `<p class="review-foot-status" role="status">${esc(ui.submitStatus || '')}</p>`
       + `<button type="submit" form="review-submit-form" class="review-submit"${ui.submitting || lock.disabled ? ' disabled' : ''}>${esc(lock.label)}</button></div>`;
   }
-  return `<div class="review-page${ui.item ? ' item-open' : ''}" data-key="review-page:${esc(pack.slug)}/${esc(pack.pack)}">`
+  return `<div class="review-page${ui.item ? ' item-open' : ''}${collapsed ? ' side-collapsed' : ''}" data-key="review-page:${esc(pack.slug)}/${esc(pack.pack)}" style="--review-side: ${collapsed ? SIDEBAR_RAIL : sideWidth}px">`
     + `<div class="app-bar review-app-bar">${bar}</div>`
     + `<div class="review-body" data-key="review-body">${open ? conflictsHtml(pack, ui.conflicts, esc) : ''}${head}${list}${main}</div>${foot}</div>`;
 }

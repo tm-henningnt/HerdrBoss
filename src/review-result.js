@@ -61,6 +61,10 @@ export function buildResult(pack, verdict, note, at) {
     const out = { id: item.id, title: item.title, section: item.section, hash: item.hash, state: item.state };
     const answer = item.answer;
     if (item.stale) out.stale = true;
+    if (item.state === 'changed' && answer?.previous) {
+      const { decision, choice, rating, live, at } = answer.previous;
+      out.was = Object.fromEntries(Object.entries({ decision, choice, rating, live, at }).filter(([, value]) => value != null));
+    }
     if (answer) {
       if (answer.decision) out.decision = answer.decision;
       if (answer.choice !== null) out.choice = answer.choice;
@@ -92,7 +96,7 @@ export function buildResult(pack, verdict, note, at) {
 
 const bytesOf = (value) => Buffer.byteLength(JSON.stringify(value));
 // The items that a cut leaves out first.
-const OMIT_ORDER = ['accepted', 'answered', 'open', 'note', 'live', 'denied'];
+const OMIT_ORDER = ['accepted', 'answered', 'open', 'changed', 'note', 'live', 'denied'];
 
 // Keep the JSON at RESULT_JSON_MAX bytes. The cut shortens the notes first, then leaves items out, and names the cut in `truncated`.
 // It returns { result, json } with the result that the JSON holds.
@@ -140,7 +144,7 @@ function cutBytes(text, max) {
   return Buffer.from(text).subarray(0, max).toString('utf8').replace(/\ufffd+$/, '');
 }
 
-const countLine = (counts = {}) => `Denied: ${counts.denied ?? 0}. Needs live check: ${counts.live ?? 0}. Notes: ${counts.noteOnly ?? 0}. Accepted: ${counts.accepted ?? 0}. Open: ${counts.open ?? 0}.`;
+const countLine = (counts = {}) => `Denied: ${counts.denied ?? 0}. Needs live check: ${counts.live ?? 0}. Notes: ${counts.noteOnly ?? 0}. Accepted: ${counts.accepted ?? 0}. Open: ${counts.open ?? 0}${counts.changed ? ` (${counts.changed} changed)` : ''}.`;
 
 // The Markdown summary of a result: the counts, then the denied and the needs-live-check items with the Owner's notes quoted,
 // then the rest. `titles` (id to title) fills the title of an item that the result holds without one.
@@ -164,6 +168,7 @@ export function resultMarkdown(result, titles = new Map()) {
   group('Needs live check', items.filter((item) => item.state === 'live'), (item) => noted(name(item), item));
   group('Notes', items.filter((item) => item.state === 'note' || (item.state === 'accepted' && item.note)), (item) => noted(name(item), item, item.state === 'accepted' ? ' (accepted)' : ''));
   group('Answered', items.filter((item) => item.state === 'answered'), (item) => noted(name(item), item, `: ${item.choice !== undefined ? `choice ${item.choice}` : item.rating !== undefined ? `rating ${item.rating}` : 'live check done'}`));
+  group('Changed since accepted', items.filter((item) => item.state === 'changed'), (item) => noted(name(item), item, item.was?.decision ? ` (was ${item.was.decision})` : ' (changed in this version)'));
   group('Open', items.filter((item) => item.state === 'open'), (item) => noted(name(item), item, item.stale ? ' (changed in this version)' : ''));
   const accepted = items.filter((item) => item.state === 'accepted' && !item.note).map((item) => item.id);
   if (accepted.length) lines.push('## Accepted', '', accepted.join(', '), '');

@@ -408,7 +408,7 @@ A review pack is a folder of evidence with one question for each item. The Owner
 | `herdr-boss review import SLUG FOLDER-OR-FILE [--id ID] [--title TEXT] [--dry-run]` | Turn a folder of HTML files, or one HTML file, into a pack, and publish it. |
 | `herdr-boss review result [SLUG] PACK [--version N] [--format json\|md]` | Print the stored result of a submitted review. The default format is Markdown. `--version N` selects a version. The default is the newest submitted version. `--json` means `--format json`. |
 | `herdr-boss review delete [SLUG] PACK` | Delete the pack with its files and answers. Close its Mailbox items. |
-| `herdr-boss review list [SLUG] [--state open\|done\|all] [--json]` | List the packs. The default state is `open`. |
+| `herdr-boss review list [SLUG] [--state open\|done\|all] [--json]` | List the packs. The default state is `open`. The line shows `N of M answered`. A changed item counts as open, and a pack with changed items adds `, N changed`. A new version marks an item whose content changed as changed and removes its verdict until the Owner answers again or selects Keep. |
 
 `PACK` is the pack ID. Write it as `SLUG PACK` or as `SLUG/PACK`. An orch pane can also write only `PACK`. The command then uses the project of its workspace. A plain terminal must name the slug.
 

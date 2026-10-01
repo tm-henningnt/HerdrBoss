@@ -460,7 +460,7 @@ test('the review page has 44 px targets, 16 px fields, a split view on the deskt
   assert.match(css, /\.review-row \{[^}]*min-height: 44px/);
   assert.match(css, /\.review-item \{[^}]*min-height: 44px/);
   assert.match(css, /\.review-note-field \{[^}]*font-size: 16px/);
-  assert.match(css, /@media \(min-width: 900px\) \{[^@]*\.review-body \{[^}]*grid-template-columns: 300px minmax\(0, 1fr\)/);
+  assert.match(css, /@media \(min-width: 900px\) \{[^@]*\.review-body \{[^}]*grid-template-columns: var\(--review-side, 300px\) minmax\(0, 1fr\)/);
   assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{[^}]*\.review-/);
 });
 

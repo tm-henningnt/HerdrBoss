@@ -29,7 +29,7 @@ const NOTE_MAX = 2000;
 const PINS_MAX = 50;
 const DECISIONS = ['accept', 'deny'];
 const DECIDING = ['accept', 'deny', 'choice', 'rating'];
-const PATCH_KEYS = new Set(['rev', 'opId', 'decision', 'choice', 'rating', 'live', 'viewed', 'note', 'pins', 'checks']);
+const PATCH_KEYS = new Set(['rev', 'opId', 'keep', 'decision', 'choice', 'rating', 'live', 'viewed', 'note', 'pins', 'checks']);
 const NOFOLLOW = fs.constants.O_NOFOLLOW ?? 0;
 const SHA256 = /^[0-9a-f]{64}$/;
 
@@ -134,10 +134,14 @@ const parseJson = (text, fallback) => {
 
 // ---------- Derived states ----------
 
-// The state of one item: accepted, denied, answered, note, live, or open.
-// A stale answer counts as open until the Owner answers again.
+// The earlier verdict of an answer, or null when the answer holds none: a decision, a choice, a rating, or a live check.
+const hasVerdict = (fields) => Boolean(fields) && (fields.decision != null || fields.choice != null || fields.rating != null || fields.live != null);
+
+// The state of one item: accepted, denied, answered, note, live, changed, or open.
+// A stale answer shows no verdict. It is `changed` when it held a verdict before the content changed, and `open` otherwise.
 function itemState(spec, answer) {
-  if (!answer || answer.stale) return 'open';
+  if (!answer) return 'open';
+  if (answer.stale) return hasVerdict(answer.previous) ? 'changed' : 'open';
   const ask = spec.ask || [];
   if (answer.decision === 'deny') return 'denied';
   if (answer.decision === 'accept') return 'accepted';
@@ -148,40 +152,57 @@ function itemState(spec, answer) {
   return 'open';
 }
 
-// The section and pack state over a list of item states: denied, live, accepted, or open.
+// The section and pack state over a list of item states: denied, changed, live, accepted, or open.
+// A section is computed from its items and never stored.
 function groupState(states) {
   if (states.includes('denied')) return 'denied';
+  if (states.includes('changed')) return 'changed';
   if (states.includes('live')) return 'live';
   if (states.length && states.every((state) => state !== 'open')) return 'accepted';
   return 'open';
 }
 
+// A changed item counts in `changed` and in `open`: it is open work.
 function countStates(states) {
-  const counts = { items: states.length, accepted: 0, denied: 0, live: 0, noteOnly: 0, open: 0 };
+  const counts = { items: states.length, accepted: 0, denied: 0, live: 0, noteOnly: 0, open: 0, changed: 0 };
   for (const state of states) {
     if (state === 'accepted' || state === 'answered') counts.accepted += 1;
     else if (state === 'denied') counts.denied += 1;
     else if (state === 'live') counts.live += 1;
     else if (state === 'note') counts.noteOnly += 1;
-    else counts.open += 1;
+    else {
+      counts.open += 1;
+      if (state === 'changed') counts.changed += 1;
+    }
   }
   return counts;
 }
 
+// The earlier verdict of a stale answer: the stored record, or the verdict fields of the row when an older build stored none.
+function previousOf(row) {
+  const stored = parseJson(row.previous, null);
+  if (hasVerdict(stored)) return stored;
+  const own = { decision: row.decision, choice: row.choice, rating: row.rating, live: row.live, hash: row.hash, at: row.updated_at };
+  return hasVerdict(own) ? own : null;
+}
+
+// A stale answer shows no verdict, no viewed mark, and no checks. It keeps the note and the pins.
+// `previous` holds the earlier verdict with its time while the answer is stale, and is null otherwise.
 function answerShape(row, currentHash) {
+  const stale = row.stale === 1 || (currentHash !== undefined && row.hash !== currentHash);
   return {
     item: row.item,
-    decision: row.decision,
-    choice: row.choice,
-    rating: row.rating,
-    live: row.live,
-    viewed: row.viewed === 1,
+    decision: stale ? null : row.decision,
+    choice: stale ? null : row.choice,
+    rating: stale ? null : row.rating,
+    live: stale ? null : row.live,
+    viewed: stale ? false : row.viewed === 1,
     note: row.note,
     pins: parseJson(row.pins, []),
-    checks: parseJson(row.checks, {}),
+    checks: stale ? {} : parseJson(row.checks, {}),
     hash: row.hash,
-    stale: row.stale === 1 || (currentHash !== undefined && row.hash !== currentHash),
-    previous: parseJson(row.previous, null),
+    stale,
+    previous: stale ? previousOf(row) : null,
     rev: row.rev,
     updatedAt: row.updated_at,
   };
@@ -595,6 +616,16 @@ function applyPatch(fields, patch, spec) {
   }
 }
 
+// Keep: put the earlier verdict of a changed item back. The row still holds the earlier decision, choice, rating,
+// live check, viewed mark, and checks. The earlier verdict must fit the changed item, or the call is refused.
+function restorePrevious(fields, existing, hash, spec) {
+  const changed = existing && (existing.stale === 1 || existing.hash !== hash);
+  if (!changed || !hasVerdict(previousOf(existing))) throw invalid('The item has no changed answer to keep.');
+  const earlier = { decision: existing.decision, choice: existing.choice, rating: existing.rating, live: existing.live };
+  applyPatch({}, Object.fromEntries(Object.entries(earlier).filter(([, value]) => value !== null)), spec);
+  Object.assign(fields, earlier, { viewed: existing.viewed, checks: existing.checks });
+}
+
 // Change one answer. `patch.rev` is the rev that the client saw (0 for a new answer). A stale rev returns
 // { ok: false, conflict: true, current }, which the route maps to 409. Only the given fields change.
 // A retried `patch.opId` returns the stored answer and changes nothing.
@@ -624,12 +655,14 @@ export function putAnswer({ dir, now, slug, pack, item, patch } = {}) {
       Object.assign(fields, { note: existing.note, pins: existing.pins });
       if (!existing.stale && existing.hash === current.hash) Object.assign(fields, { decision: existing.decision, choice: existing.choice, rating: existing.rating, live: existing.live, viewed: existing.viewed, checks: existing.checks });
     }
+    if (patch.keep === true) restorePrevious(fields, existing, current.hash, spec);
+    else if (patch.keep !== undefined) throw invalid('Keep must be true.');
     applyPatch(fields, patch, spec);
     const rev = (existing?.rev ?? 0) + 1;
     db.prepare(`INSERT INTO review_answers(slug, pack, item, decision, choice, rating, live, viewed, note, pins, checks, hash, stale, rev, op_id, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
       ON CONFLICT(slug, pack, item) DO UPDATE SET decision = excluded.decision, choice = excluded.choice, rating = excluded.rating, live = excluded.live,
-        viewed = excluded.viewed, note = excluded.note, pins = excluded.pins, checks = excluded.checks, hash = excluded.hash, stale = 0,
+        viewed = excluded.viewed, note = excluded.note, pins = excluded.pins, checks = excluded.checks, hash = excluded.hash, stale = 0, previous = NULL,
         rev = excluded.rev, op_id = excluded.op_id, updated_at = excluded.updated_at`)
       .run(slug, pack, item, fields.decision, fields.choice, fields.rating, fields.live, fields.viewed, fields.note, fields.pins, fields.checks, current.hash, rev, patch.opId ?? null, at);
     db.prepare('UPDATE review_packs SET updated_at = ? WHERE slug = ? AND pack = ?').run(at, slug, pack);

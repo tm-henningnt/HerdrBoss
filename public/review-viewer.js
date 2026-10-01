@@ -473,11 +473,15 @@ function conflictHtml(spec, ui, h) {
     + '<div class="rv-conflict-actions"><button type="button" class="rv-button" data-rv-conflict="mine">Keep mine</button><button type="button" class="rv-button" data-rv-conflict="theirs">Use theirs</button></div></div>';
 }
 
-function staleHtml(item, spec, h) {
+// The notice of a changed item: what the earlier verdict was, when, and the Keep action that restores it.
+function staleHtml(item, spec, h, disabled) {
   const { esc } = h;
   if (!item.stale) return '';
   const previous = item.answer?.previous;
-  return `<p class="rv-stale">${viewerIcon('note', 'app-icon rv-stale-icon')}<span>Changed since your answer. Answer again.${previous ? ` The earlier answer: ${esc(answerSummary(previous, spec))}.` : ''}</span></p>`;
+  const day = typeof previous?.at === 'string' ? previous.at.slice(0, 10) : '';
+  const was = previous ? ` Was: ${esc(answerSummary(previous, spec))}${day ? ` on ${esc(day)}` : ''}.` : '';
+  const keep = previous && !disabled ? '<button type="button" class="rv-button rv-keep" data-rv-keep>Keep</button>' : '';
+  return `<div class="rv-stale">${viewerIcon('note', 'app-icon rv-stale-icon')}<p><b>Changed since accepted.</b>${was} Answer again${keep ? ' or keep the earlier answer' : ''}.</p>${keep}</div>`;
 }
 
 function pagerHtml(pack, item, h, itemUrl) {
@@ -502,7 +506,7 @@ export function itemViewerHtml(pack, item, ui, h) {
   const body = spec.fallbackFrom || spec.type === 'markdown' || !KNOWN.has(spec.type) ? '' : bodyHtml(pack, spec.body, h);
   const closed = disabled ? `<p class="rv-help-line">This pack is ${esc(pack.state)}. The answers cannot change.</p>` : '';
   return `<section class="rv-item rv-type-${esc(type)}" data-key="rv-item:${esc(item.id)}" aria-label="${esc(item.title || item.id)}">`
-    + staleHtml(item, spec, h)
+    + staleHtml(item, spec, h, disabled)
     + `<div class="rv-evidence">${evidenceHtml(pack, item, spec, ui, h, disabled)}</div>`
     + liveRowHtml(pack, item, spec, h, disabled)
     + body
@@ -563,6 +567,6 @@ export function viewerBarHtml(pack, item, h) {
   const back = `/reviews/${encodeURIComponent(pack.slug)}/${encodeURIComponent(pack.pack)}#item=${encodeURIComponent(item.id)}`;
   const viewed = Boolean(item.answer?.viewed);
   return `<a href="${esc(back)}" class="app-icon-button" aria-label="Back to the sections">${viewerIcon('back')}</a>`
-    + `<h1 class="review-title" tabindex="-1" data-rv-heading>${esc(item.title || item.id)}<small><span class="num">Item ${index + 1} of ${total}</span> · ${esc(section?.title || item.section)}</small></h1>`
+    + `<h1 class="review-title" tabindex="-1" data-rv-heading title="${esc(item.title || item.id)}">${esc(item.title || item.id)}<small><span class="num review-item-count">Item ${index + 1} of ${total}</span> · ${esc(section?.title || item.section)}</small></h1>`
     + `<button type="button" class="app-icon-button rv-viewed-toggle" data-rv-viewed aria-label="Viewed" aria-pressed="${viewed ? 'true' : 'false'}"${pack.state !== 'open' ? ' disabled' : ''}><span class="review-viewed${viewed ? ' on' : ''}">${viewed ? viewerIcon('check') : ''}</span></button>`;
 }
