@@ -526,7 +526,7 @@ test('--fix ci prints the template hint and does not change workflow files', () 
     const before = fs.readFileSync(workflow, 'utf8');
     const out = [];
     assert.equal(projectCommand(['check', 'demo', '--fix', 'ci'], { env: {}, dataDir: f.dataDir, log: (line) => out.push(line), flowOptions: { home: f.home } }), 0);
-    assert.match(out.join('\n'), /template.*CI1a/i);
+    assert.match(out.join('\n'), /template/i);
     assert.equal(fs.readFileSync(workflow, 'utf8'), before);
   } finally { f.cleanup(); }
 });

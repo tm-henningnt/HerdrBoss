@@ -151,7 +151,7 @@ The check works for a project that `project new` did not make. It reads the proj
 | `harness` | The Codex `writable_roots` hold every required path. | `harness` |
 | `browser` | `browser-sessions.json` has a reservation for the slug. | `harness` |
 
-The `ci` item is present only when the project has workflow files. A project without workflow files prints no CI line. These warnings do not change the exit code. `--fix ci` prints a hint to use the workflow template from CI1a. It does not change workflow files.
+The `ci` item is present only when the project has workflow files. A project without workflow files prints no CI line. These warnings do not change the exit code. `--fix ci` prints a hint to use the kit workflow template. It does not change workflow files.
 
 | Warning id | Herdr Boss reports it when | Hint |
 |---|---|---|

@@ -111,7 +111,7 @@ function checkCommand(args, { herdr, dataDir, log, hooks, env, flowOptions }) {
   let code = 0;
   if (fix) {
     if (fix === 'ci') {
-      log('Use the workflow template from CI1a to update the project workflows by hand.');
+      log('Use the kit workflow template to update the project workflows by hand.');
     } else {
       // A fix changes files and can spend model quota or ask the Owner. The read-only check needs no caller check.
       verifyProjectCaller(env, herdr);
