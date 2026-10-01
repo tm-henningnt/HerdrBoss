@@ -2584,3 +2584,53 @@ test('/api/projects serves sync and unplanned fields from the current worker and
   assert.equal(stateAlpha.sync.unplanned, 1);
   assert.deepEqual(stateAlpha.unplanned.map(({ name, pane }) => [name, pane]), [['unplanned', 'w-alpha:p2']]);
 });
+
+test('/api/projects shows Review for a collected done worker until its branch is merged', { timeout: 20000 }, async (t) => {
+  const projectsDir = path.join(dataDir, 'projects');
+  const projectFile = path.join(projectsDir, 'alpha.json');
+  const previous = fs.existsSync(projectFile) ? fs.readFileSync(projectFile) : null;
+  const runsDir = path.join(dataDir, 'runs-bd1c');
+  fs.mkdirSync(projectsDir, { recursive: true });
+  fs.mkdirSync(runsDir, { recursive: true });
+  fs.writeFileSync(projectFile, JSON.stringify({
+    project: 'Alpha', workspace: 'w-alpha', updated: new Date().toISOString(),
+    tasks: [{ id: 'BD1', title: 'Collected worker', status: 'doing' }],
+  }));
+  fs.writeFileSync(path.join(runsDir, 'collected.json'), JSON.stringify({
+    name: 'collected', taskId: 'BD1', startedAt: new Date(Date.now() - 10 * 60000).toISOString(),
+    collectedAt: new Date(Date.now() - 60000).toISOString(), finishedAt: new Date(Date.now() - 60000).toISOString(),
+    outcome: 'done', branch: 'collected', base: 'main', baseCommit: 'abc123',
+  }));
+  const { applyTaskState, readWorkerFacts } = await import('../src/task-state.js');
+  const workers = readWorkerFacts(runsDir, { now: Date.now(), isLive: () => false, isMerged: () => false });
+  const herdr = { panes: [{ id: 'w-alpha:p1', workspace: 'w-alpha', orch: true, agent: 'claude', status: 'idle' }] };
+  const control = { projects: { alpha: { slug: 'alpha', workspace: 'w-alpha' } } };
+  const engine = new EventEmitter();
+  engine.state = { control, herdr, projects: [] };
+  engine.tick = async () => engine.state;
+  engine.log = () => {};
+  engine.decorateProjects = (projects) => applyTaskState(projects, { alpha: workers }, { herdr, control, now: Date.now() });
+  const cfg = loadConfig();
+  cfg.host = '127.0.0.1';
+  cfg.port = 0;
+  cfg.tickSeconds = 3600;
+  const { server, close } = serve(cfg, { readOnlyPreview: true, createEngine: () => engine });
+  t.after(async () => {
+    await close();
+    if (previous) fs.writeFileSync(projectFile, previous);
+    else fs.rmSync(projectFile, { force: true });
+    fs.rmSync(runsDir, { recursive: true, force: true });
+  });
+  await new Promise((resolve, reject) => {
+    server.once('listening', resolve);
+    server.once('error', reject);
+  });
+
+  const response = await fetch(`http://127.0.0.1:${server.address().port}/api/projects`);
+  assert.equal(response.status, 200);
+  const projects = await response.json();
+  const collected = projects.find((project) => project.slug === 'alpha').tasks[0];
+  assert.equal(collected.publishedStatus, 'doing');
+  assert.equal(collected.state, 'review');
+  assert.equal(collected.worker.name, 'collected');
+});

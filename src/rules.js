@@ -8,6 +8,9 @@ import { watchUntilPhrase } from './night.js';
 import { mismatchText, projectStatusFreshness, taskMismatches } from './task-state.js';
 
 const PROVIDER_NAMES = { claude: 'Claude', codex: 'Codex', opencodego: 'OpenCode Go' };
+export const STALE_STATUS_NOTICE_AFTER_MINUTES = 30;
+export const STALE_STATUS_NOTICE_INTERVAL_MINUTES = 60;
+const MINUTE_MS = 60000;
 export const providerName = (p) => PROVIDER_NAMES[p] || p;
 
 export function fmtDuration(sec) {
@@ -139,19 +142,26 @@ export function staleStatuses(snap, cfg, now = Date.now(), prior = {}) {
   return result;
 }
 
-// One notice per project and stale episode. A new publish changes the updated time, so it starts a new key.
-function staleStatusAlerts(stale) {
-  return Object.values(stale).filter((item) => item.workspace).map((item) => {
-    const why = [item.workers ? 'workers ran' : null, item.commits ? 'new commits landed' : null].filter(Boolean).join(' and ');
-    const parts = [];
-    if (why) parts.push(`Your published status is ${fmtDuration(item.ageSeconds)} old while ${why}.`);
-    if (item.mismatch?.length) parts.push(`Your published status does not match the workers: ${item.mismatch.map(mismatchText).join('; ')}.`);
-    return {
-      key: `status:stale:${item.slug}:${item.updated}`, severity: 'info', once: true, scope: item.workspace,
-      title: `${item.slug} published status is stale`,
-      text: `${parts.join(' ')} Run herdr-boss publish ${item.slug} <file> with the current plan and progress.`,
-    };
-  });
+// Remind a working project once each hour when the shared freshness rule says its status is stale.
+function staleStatusAlerts(snap, now) {
+  const alerts = [];
+  const interval = STALE_STATUS_NOTICE_INTERVAL_MINUTES * MINUTE_MS;
+  for (const project of snap.projects || []) {
+    if (!project?.slug) continue;
+    const control = snap.control?.projects?.[project.slug];
+    if (project.status === 'paused' || (control?.effectiveMode ?? control?.mode) === 'paused') continue;
+    const workspace = control?.workspace || project.workspace;
+    if (!workspace) continue;
+    const statusStale = projectStatusFreshness(project, snap.taskWorkers?.[project.slug] || [], snap.herdr, workspace, now, STALE_STATUS_NOTICE_AFTER_MINUTES);
+    if (statusStale.level !== 'warn') continue;
+    alerts.push({
+      key: `status:stale:${project.slug}:after-${STALE_STATUS_NOTICE_AFTER_MINUTES}m-every-${STALE_STATUS_NOTICE_INTERVAL_MINUTES}m`,
+      severity: 'info', repeatMs: interval, scope: workspace,
+      title: `${project.slug} published status is stale`,
+      text: `Status published ${statusStale.ageMin} min ago. Publish the current plan with herdr-boss publish ${project.slug} <file>.`,
+    });
+  }
+  return alerts;
 }
 
 // alert: { key, severity: info|warn|critical, scope: 'all' | <workspace id> | 'user', title, text }
@@ -177,7 +187,7 @@ export function evaluate(snap, cfg, paneSince, now = Date.now(), policy = null) 
   const avoidKinds = new Set();
   alerts.push(...blockedWorkerAlerts(snap, paneSince, now));
   alerts.push(...idleOrchestratorNudges(snap, paneSince, now, policy));
-  alerts.push(...staleStatusAlerts(snap.staleStatus || staleStatuses(snap, cfg, now)));
+  alerts.push(...staleStatusAlerts(snap, now));
 
   const orphanedPairs = new Set();
   const workspaceLabels = new Map((snap.herdr?.workspaces || []).map((workspace) => [workspace.id, workspace.label]));

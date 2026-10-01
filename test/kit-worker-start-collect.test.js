@@ -148,6 +148,47 @@ test('worker start records a real dispatch before prompting and verifies activit
   assert.equal(fs.readFileSync(path.join(result.worktree, '.worker', 'brief.md'), 'utf8'), 'Worker demo: x\n\n## Worker start details\n\nScreenshot budget: 10 screenshots. The project setting overrides the kit default.\n\nIn a Codex shell, run `setopt NO_BG_NICE` before a background command.\nReport a failing tool, a missing file, or missing evidence explicitly in your report. Never give a best guess in place of a result. The orchestrator verifies each claim at the source.');
 });
 
+test('worker start warns about unplanned work and suggests the best matching published task, including in dry-run', () => {
+  const f = setupFixture(null);
+  const projectStatus = { tasks: [
+    { id: 'BD1c', title: 'Worker warning from task text' },
+    { id: 'BD1e', title: 'Status notice' },
+    { id: 'BD1d', title: 'Update status notice timing' },
+  ] };
+  const lines = [];
+  const start = (name, options) => startWorker(name, {
+    kind: 'codex', allow: ['src/'], ...options,
+  }, {
+    config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile,
+    projectStatus, output: (line) => lines.push(line),
+  });
+
+  start('unplanned-live', { task: 'Update the status notice timing.' });
+  assert.ok(lines.includes('No --task-id: the project board shows this worker as Unplanned work.'));
+  assert.ok(lines.includes('Suggested: --task-id BD1d (Update status notice timing)'));
+  assert.ok(fs.existsSync(path.join(f.config.runsPath, 'unplanned-live.json')), 'the warning does not stop the start');
+
+  lines.length = 0;
+  start('unplanned-dry', { task: 'Update the status notice timing.', dryRun: true });
+  assert.ok(lines.includes('No --task-id: the project board shows this worker as Unplanned work.'));
+  assert.ok(lines.includes('Suggested: --task-id BD1d (Update status notice timing)'));
+
+  lines.length = 0;
+  start('one-token-match', { task: 'Fix timing.', dryRun: true });
+  assert.ok(lines.includes('No --task-id: the project board shows this worker as Unplanned work.'));
+  assert.equal(lines.some((line) => line.startsWith('Suggested:')), false, 'one shared token is not enough');
+
+  lines.length = 0;
+  start('exact-id-match', { task: 'Please check BD1c in the status.', dryRun: true });
+  assert.ok(lines.includes('Suggested: --task-id BD1c (Worker warning from task text)'), 'an exact task ID is enough');
+
+  const taskFile = path.join(f.root, 'worker-warning.md');
+  fs.writeFileSync(taskFile, 'Unrelated file contents do not set the suggestion.');
+  lines.length = 0;
+  start('task-file-name-match', { taskFile, dryRun: true });
+  assert.ok(lines.includes('Suggested: --task-id BD1c (Worker warning from task text)'), 'the task-file base name is matched');
+});
+
 test('worker collect keeps changed paths stable after the base branch merges the worker', () => {
   const f = setupFixture(null);
   const baseCommit = git(f.root, 'rev-parse', 'main');

@@ -1378,7 +1378,7 @@ Publish at task boundaries: a task starts, a task ends, a blocker appears, or a 
 
 ### Live task state
 
-The published status file holds the plan. The worker run records hold what happens. Herdr Boss overlays the run records on the published tasks, so the state of a task does not wait for a publish. The service reads the run records of each registered project every 15 seconds. A worker links to a task through `taskId` in its run record. Start each worker with `worker start --task-id ID`. `--issue N` works as an alias for a numeric task ID. A live worker without a task ID, or with an ID missing from the status, appears in `unplanned`. `worker start` prints a warning when it has no task ID.
+The published status file holds the plan. The worker run records hold what happens. Herdr Boss overlays the run records on the published tasks, so the state of a task does not wait for a publish. The service reads the run records of each registered project every 15 seconds. A worker links to a task through `taskId` in its run record. Start each worker with `worker start --task-id ID`. `--issue N` works as an alias for a numeric task ID. A live worker without a task ID, or with an ID missing from the status, appears in `unplanned`. Without either flag, `worker start` prints `No --task-id: the project board shows this worker as Unplanned work.` and continues. It suggests one task when at least two lower-case words match its ID or title, or when the task text contains an exact ID. With `--task-file`, it matches the file name. A dry run prints the same warning and suggestion.
 
 The project data shows the current status, task states, and agents. `GET /api/projects` refreshes the project data from the latest engine snapshot. It rereads worker run records at least every 15 seconds. The request does not start a process to collect agents. `GET /api/state` returns the same project fields.
 
@@ -1388,7 +1388,7 @@ Each live worker that has no task ID, or whose task ID is missing from the statu
 
 The `sync` object compares working agents with Doing cards. `agentsWorking` counts the working agents in the project's workspace, including the orchestrator. `liveWorkers` counts live worker runs. `doingCards` counts tasks whose effective state is `doing`. `unplanned` and `noWorker` count their matching fields. `mismatches` adds the task mismatch count, unplanned workers, and no-worker cards. `inSync` is false when agents work but no card is Doing, or when an unplanned worker or a no-worker card exists. `text` gives these counts on one line.
 
-A task with published status `doing` stays in Doing when it has no run record. After 30 minutes, it has `noWorker: true` and `noWorkerSinceMin`. A task whose workers failed or went away still returns to Ready or Blocked. `statusStale.level` is `warn` when the status is more than 30 minutes old and a worker run or the orchestrator is active. It is `ok` when the status is 30 minutes old or less, or when neither is active. Project data uses the same freshness rule as the engine's stale-status facts.
+A task with published status `doing` stays in Doing when it has no run record. After 30 minutes, it has `noWorker: true` and `noWorkerSinceMin`. A task whose workers failed or went away still returns to Ready or Blocked. `statusStale.level` is `warn` when the status is more than 30 minutes old and a worker run or the orchestrator is active. It is `ok` when the status is 30 minutes old or less, or when neither is active. Project data and the status notice use this shared freshness rule.
 
 Each task gets one effective state, `state`:
 
@@ -1414,7 +1414,7 @@ The board is stale, `boardStale: true`, when one of these is true:
 - An active worker runs a task that is not `doing` in the published status, more than 5 minutes after the worker started. A task that is not in the status also counts. A worker is active when its agent status is `working` or `blocked`, it is not parked, and it has no `report.json`. An idle worker, a parked worker, and a worker that reported done wait for the orchestrator.
 - The published status is older than `staleStatusMinutes` (default 120 minutes), a worker worked after the publish and within the last 2 hours, or new commits landed after the publish.
 
-`boardStaleReason` names the cause. Herdr Boss sends one notice to the orchestrator pane for each stale status, the same notice as for an old status. The text adds the worker and the task when a worker does not match the status. A new publish starts a new episode. `herdr-boss publish` refuses a status in which a task has an active worker but is not `doing`. Use `--force` to publish anyway. The commands are in [cli.md](cli.md).
+`boardStaleReason` names the cause. While a worker runs or the orchestrator works, Herdr Boss sends a status notice when `statusStale.level` is `warn`. The notice says `Status published N min ago. Publish the current plan with herdr-boss publish <slug> <file>.` It sends at most one notice per hour for each project. `herdr-boss publish` refuses a status in which a task has an active worker but is not `doing`. Use `--force` to publish anyway. The commands are in [cli.md](cli.md).
 
 ### Board
 

@@ -186,7 +186,7 @@ function workspacePanes(herdr, workspace) {
 }
 
 // The project status age and the current worker facts drive this shared freshness rule.
-export function projectStatusFreshness(project, workers = [], herdr = null, workspace = project?.workspace, now = Date.now()) {
+export function projectStatusFreshness(project, workers = [], herdr = null, workspace = project?.workspace, now = Date.now(), staleAfterMinutes = NO_WORKER_MINUTES) {
   const publishedMs = dateValue(project?.publishedAt ?? project?.updated);
   const ageMin = ageMinutes(publishedMs, now);
   const panes = workspacePanes(herdr, workspace);
@@ -194,7 +194,7 @@ export function projectStatusFreshness(project, workers = [], herdr = null, work
   const orchestratorWorking = panes.some((pane) => pane?.orch === true && (pane.status ?? pane.agent_status) === 'working');
   return {
     ageMin,
-    level: publishedMs != null && now - publishedMs > NO_WORKER_MINUTES * MINUTE_MS && (liveWorker || orchestratorWorking) ? 'warn' : 'ok',
+    level: publishedMs != null && now - publishedMs > staleAfterMinutes * MINUTE_MS && (liveWorker || orchestratorWorking) ? 'warn' : 'ok',
     liveWorker,
     orchestratorWorking,
   };

@@ -19,35 +19,32 @@ const NOW = Date.parse('2026-09-28T12:00:00Z');
 const CFG = { quota: { warnPercent: 90, criticalPercent: 98 }, machine: { memFreeWarnPercent: 15, loadWarnFactor: 2 }, providerKinds: {}, browsers: { staleOwnedMinutes: 30 }, workers: { staleIdleMinutes: 120 }, sharedBrowsers: [], staleStatusMinutes: 120 };
 const iso = (ms) => new Date(ms).toISOString();
 
-function snapshot({ updated = NOW - 3 * HOUR, mode = 'auto', status = 'active', activity = {} } = {}) {
+function snapshot({ updated = NOW - 3 * HOUR, mode = 'auto', status = 'active', activity = {}, workers = [], orchStatus = 'idle' } = {}) {
   return {
     updatedAt: iso(NOW),
     projects: [{ slug: 'alpha', project: 'Alpha', status, updated: iso(updated), tasks: [] }],
     control: { projects: { alpha: { slug: 'alpha', label: 'Alpha', workspace: 'w1', effectiveMode: mode, running: 0 } } },
-    herdr: { workspaces: [{ id: 'w1', label: 'Alpha' }], panes: [{ id: 'w1:p1', workspace: 'w1', orch: true, label: 'orch', agent: 'claude', status: 'idle' }] },
+    herdr: { workspaces: [{ id: 'w1', label: 'Alpha' }], panes: [{ id: 'w1:p1', workspace: 'w1', orch: true, label: 'orch', agent: 'claude', status: orchStatus }] },
     statusActivity: { alpha: activity },
+    taskWorkers: { alpha: workers },
   };
 }
 const staleAlerts = (alerts) => alerts.filter((a) => a.key.startsWith('status:stale:'));
 
-test('a status older than 2 hours is stale when a worker was working after the publish', () => {
+test('board staleness still records worker activity after an old publish', () => {
   const snap = snapshot({ activity: { workedAt: NOW - 20 * MIN } });
   const stale = staleStatuses(snap, CFG, NOW);
   assert.equal(stale.alpha.workers, true);
   assert.equal(stale.alpha.commits, false);
-  const [alert] = staleAlerts(evaluate(snap, CFG, {}, NOW).alerts);
-  assert.equal(alert.severity, 'info');
-  assert.equal(alert.scope, 'w1');
-  assert.equal(alert.text, 'Your published status is 3h 0m old while workers ran. Run herdr-boss publish alpha <file> with the current plan and progress.');
+  assert.equal(staleAlerts(evaluate(snap, CFG, {}, NOW).alerts).length, 0, 'status activity alone does not trigger the worker notice');
 });
 
-test('a status older than 2 hours is stale when new commits landed after the publish', () => {
+test('board staleness still records new commits after an old publish', () => {
   const snap = snapshot({ activity: { landedAt: NOW - 30 * MIN } });
   const stale = staleStatuses(snap, CFG, NOW);
   assert.equal(stale.alpha.commits, true);
   assert.equal(stale.alpha.workers, false);
-  const [alert] = staleAlerts(evaluate(snap, CFG, {}, NOW).alerts);
-  assert.match(alert.text, /^Your published status is 3h 0m old while new commits landed\. Run herdr-boss publish alpha <file>/);
+  assert.equal(staleAlerts(evaluate(snap, CFG, {}, NOW).alerts).length, 0, 'commits alone do not trigger the worker notice');
 });
 
 test('a status is not stale under 2 hours, when paused, or without activity after the publish', () => {
@@ -73,34 +70,42 @@ test('the default configuration has staleStatusMinutes 120', () => {
   assert.equal(loadConfig().staleStatusMinutes, 120);
 });
 
-test('one notice per stale episode, and a new episode after a publish', async () => {
+test('a stale status notice starts after 30 minutes and repeats once an hour while the orchestrator works', async () => {
   const prompts = [];
   const engine = new Engine(loadConfig(), { push: false, act: false, herdrRunner: async (_cmd, args) => { prompts.push(args); return ''; } });
   engine.push = true;
   engine.log = () => {};
-  const panes = [{ id: 'w1:p1', workspace: 'w1', orch: true, label: 'orch', agent: 'claude', status: 'idle' }];
-  const first = snapshot({ activity: { workedAt: NOW - 10 * MIN } });
-  for (const at of [NOW, NOW + 2 * HOUR, NOW + 8 * HOUR]) {
-    first.statusActivity.alpha.workedAt = at - 10 * MIN;
-    const alerts = staleAlerts(evaluate(first, CFG, {}, at).alerts);
-    assert.equal(alerts.length, 1);
-    await engine.deliver(alerts, { panes }, at);
-  }
-  assert.equal(prompts.length, 1, 'one prompt for the first episode');
-  assert.equal(prompts[0][2], 'w1:p1');
-  assert.match(prompts[0][3], /Your published status is 3h 0m old while workers ran\./);
+  const panes = [{ id: 'w1:p1', workspace: 'w1', orch: true, label: 'orch', agent: 'claude', status: 'working' }];
+  const under = snapshot({ updated: NOW - 29 * MIN, orchStatus: 'working' });
+  assert.equal(staleAlerts(evaluate(under, CFG, {}, NOW).alerts).length, 0, 'no notice below 30 minutes');
 
-  // A publish ends the episode. The status is fresh, so no notice is due.
-  const published = NOW + 9 * HOUR;
-  const fresh = snapshot({ updated: published, activity: { workedAt: published + 10 * MIN } });
-  assert.equal(staleAlerts(evaluate(fresh, CFG, {}, published + 30 * MIN).alerts).length, 0);
-  // The new status becomes stale again. That is a new episode with a new key.
-  const later = published + 3 * HOUR;
-  fresh.statusActivity.alpha.workedAt = later - MIN;
-  const second = staleAlerts(evaluate(fresh, CFG, {}, later).alerts);
-  assert.equal(second.length, 1);
-  await engine.deliver(second, { panes }, later);
-  assert.equal(prompts.length, 2, 'the new episode sends one more prompt');
+  const active = snapshot({ updated: NOW - 31 * MIN, orchStatus: 'working' });
+  const first = staleAlerts(evaluate(active, CFG, {}, NOW).alerts);
+  assert.equal(first.length, 1);
+  assert.equal(first[0].text, 'Status published 31 min ago. Publish the current plan with herdr-boss publish alpha <file>.');
+  await engine.deliver(first, { panes }, NOW);
+  assert.equal(prompts.length, 1, 'one prompt starts the interval');
+  assert.equal(prompts[0][2], 'w1:p1');
+  assert.match(prompts[0][3], /Status published 31 min ago\. Publish the current plan with herdr-boss publish alpha <file>\./);
+
+  const inInterval = NOW + 59 * MIN;
+  const stillStale = staleAlerts(evaluate(active, CFG, {}, inInterval).alerts);
+  assert.equal(stillStale.length, 1);
+  const movedPane = [{ id: 'w1:p2', workspace: 'w1', orch: true, label: 'orch', agent: 'claude', status: 'working' }];
+  await engine.deliver(stillStale, { panes: movedPane }, inInterval);
+  assert.equal(prompts.length, 1, 'no second prompt inside the hour, even after a pane change');
+
+  const afterInterval = NOW + 61 * MIN;
+  const repeat = staleAlerts(evaluate(active, CFG, {}, afterInterval).alerts);
+  assert.equal(repeat.length, 1);
+  await engine.deliver(repeat, { panes: movedPane }, afterInterval);
+  assert.equal(prompts.length, 2, 'a second prompt follows the hour');
+  assert.equal(prompts[1][2], 'w1:p2');
+
+  const workerOnly = snapshot({ updated: NOW - 31 * MIN, workers: [{ phase: 'live' }] });
+  assert.equal(staleAlerts(evaluate(workerOnly, CFG, {}, NOW).alerts).length, 1, 'a live worker also triggers the notice');
+  const quiet = snapshot({ updated: NOW - 31 * MIN });
+  assert.equal(staleAlerts(evaluate(quiet, CFG, {}, NOW).alerts).length, 0, 'no notice without a working worker or orchestrator');
 });
 
 function gitRepo(t) {
@@ -160,7 +165,7 @@ test('an engine tick records worker activity, marks the status stale, and writes
   Date.now = () => NOW;
   t.after(() => { Date.now = realNow; });
   const panes = [
-    { id: 'w1:p1', workspace: 'w1', orch: true, label: 'orch', agent: 'claude', status: 'idle', cwd: '/nonexistent/alpha' },
+    { id: 'w1:p1', workspace: 'w1', orch: true, label: 'orch', agent: 'claude', status: 'working', cwd: '/nonexistent/alpha' },
     { id: 'w1:p2', workspace: 'w1', label: 'worker', name: 'beta', agent: 'claude', status: 'working', cwd: '/nonexistent/alpha-wt-beta' },
   ];
   const engine = new Engine(loadConfig(), { push: false, act: false, collectors: {
