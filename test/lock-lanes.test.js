@@ -5,7 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { loadPolicy, POLICY_DEFAULTS, savePolicy, validatePolicy } from '../src/control.js';
 import { loadModels } from '../src/kit/config.js';
-import { chooseLockSlot, classifyLockLane, predictLockDuration } from '../src/kit/lock-lanes.js';
+import { chooseLockSlot, classifyLockLane, machineGuardReason, predictLockDuration } from '../src/kit/lock-lanes.js';
 
 const NOW = Date.parse('2026-10-01T12:00:00.000Z');
 const line = (daysAgo, holdMs, extra = {}) => ({
@@ -131,4 +131,28 @@ test('a short job uses a free long slot when its short slots are full and no lon
     lane: 'long', slots: 2,
     holders: [{ lane: 'short', slot: 'long' }],
   }), null);
+});
+
+test('machineGuardReason reports the first failed limit with its measured values', () => {
+  const guard = { enabled: true, maxLoadPercent: 150, maxSwapPercent: 96, minFreeMemPercent: 40 };
+  assert.equal(machineGuardReason({
+    at: new Date(NOW).toISOString(), l5: 4, cpus: 2, swapMB: 10, swapTotalMB: 100, memFree: 70,
+  }, guard, { now: NOW }), 'load 200% exceeds 150%');
+  assert.equal(machineGuardReason({
+    at: new Date(NOW).toISOString(), l5: 1, cpus: 2, swapMB: 97, swapTotalMB: 100, memFree: 70,
+  }, guard, { now: NOW }), 'swap 97% exceeds 96%');
+  assert.equal(machineGuardReason({
+    at: new Date(NOW).toISOString(), l5: 1, cpus: 2, swapMB: 10, swapTotalMB: 100, memFree: 35,
+  }, guard, { now: NOW }), 'memory free 35% below 40%');
+});
+
+test('machineGuardReason passes missing, stale, and disabled guard samples', () => {
+  const guard = { enabled: true, maxLoadPercent: 150, maxSwapPercent: 96, minFreeMemPercent: 40 };
+  assert.equal(machineGuardReason(null, guard, { now: NOW }), null);
+  assert.equal(machineGuardReason({
+    at: new Date(NOW - 180001).toISOString(), l5: 20, cpus: 1, swapMB: 99, swapTotalMB: 100, memFree: 1,
+  }, guard, { now: NOW }), null);
+  assert.equal(machineGuardReason({
+    at: new Date(NOW).toISOString(), l5: 20, cpus: 1, swapMB: 99, swapTotalMB: 100, memFree: 1,
+  }, { ...guard, enabled: false }, { now: NOW }), null);
 });

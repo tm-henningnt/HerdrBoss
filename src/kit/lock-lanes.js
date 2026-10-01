@@ -83,3 +83,38 @@ export function chooseLockSlot({ lane, slots, holders = [], tickets = [], ticket
   if (!longUsed && longWaiters.length === 0) return { slot: 'long' };
   return null;
 }
+
+const finiteNumber = (value) => (typeof value === 'number' && Number.isFinite(value) ? value : null);
+const percentText = (value) => `${Number(value.toFixed(1))}%`;
+
+// Return a pause reason only when a fresh machine sample crosses a configured limit.
+export function machineGuardReason(sample, guard = {}, { now = Date.now(), maxAgeMs = 3 * 60_000 } = {}) {
+  if (!sample || guard.enabled === false) return null;
+  const current = typeof now === 'function' ? now() : now;
+  const nowMs = current instanceof Date ? current.getTime() : Number(current);
+  const at = Date.parse(sample.at);
+  if (!Number.isFinite(nowMs) || !Number.isFinite(at) || at > nowMs || nowMs - at > maxAgeMs) return null;
+
+  const load = finiteNumber(sample.l5);
+  const cpus = finiteNumber(sample.cpus);
+  const maxLoadPercent = finiteNumber(guard.maxLoadPercent);
+  if (load !== null && cpus !== null && cpus > 0 && maxLoadPercent !== null) {
+    const loadPercent = load / cpus * 100;
+    if (loadPercent > maxLoadPercent) return `load ${percentText(loadPercent)} exceeds ${percentText(maxLoadPercent)}`;
+  }
+
+  const swap = finiteNumber(sample.swapMB);
+  const swapTotal = finiteNumber(sample.swapTotalMB);
+  const maxSwapPercent = finiteNumber(guard.maxSwapPercent);
+  if (swap !== null && swapTotal !== null && swapTotal > 0 && maxSwapPercent !== null) {
+    const swapPercent = swap / swapTotal * 100;
+    if (swapPercent > maxSwapPercent) return `swap ${percentText(swapPercent)} exceeds ${percentText(maxSwapPercent)}`;
+  }
+
+  const freeMem = finiteNumber(sample.memFree);
+  const minFreeMemPercent = finiteNumber(guard.minFreeMemPercent);
+  if (freeMem !== null && minFreeMemPercent !== null && freeMem < minFreeMemPercent) {
+    return `memory free ${percentText(freeMem)} below ${percentText(minFreeMemPercent)}`;
+  }
+  return null;
+}

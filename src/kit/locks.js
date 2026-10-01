@@ -5,11 +5,12 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { DATA_DIR } from '../config.js';
 import { POLICY_DEFAULTS } from '../control.js';
 import { quietHoursActive, readNight } from '../night.js';
+import { readMachineSamples } from '../machine-samples.js';
 import { DEFAULT_RULES_FILE, loadProjectConfig } from './config.js';
 import { SWAP_FORCE_ENV, swapGuardFor } from './swap-guard.js';
 import { createHerdrRunner, verifyCallerPane } from './workers.js';
 import { DEFAULT_SUITE_UNTESTED, hookFileHash, hookRunsOnlySuites, reusablePushPass, writePushHookCommands } from './suite-passes.js';
-import { chooseLockSlot, classifyLockLane, readLockDurationPrediction } from './lock-lanes.js';
+import { chooseLockSlot, classifyLockLane, machineGuardReason, readLockDurationPrediction } from './lock-lanes.js';
 
 const LOCK_NAME = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/;
 const COMMAND = (name) => `herdr-boss lock acquire ${name}`;
@@ -696,6 +697,13 @@ function lockLaneSettings(dataDir) {
   };
 }
 
+function latestMachineSample(dataDir) {
+  return readMachineSamples({ dataDir }).reduce((latest, sample) => {
+    if (!latest || Date.parse(sample.at) > Date.parse(latest.at)) return sample;
+    return latest;
+  }, null);
+}
+
 export function acquireProjectLock(name, {
   config,
   env = process.env,
@@ -709,6 +717,7 @@ export function acquireProjectLock(name, {
   kind = 'manual',
   reentryToken = null,
   lockSettings = null,
+  readMachineSample = null,
 } = {}) {
   validateName(name);
   if (!LOCK_KINDS.has(kind) || (kind !== 'manual' && name !== FULL_SUITE_LOCK)) {
@@ -739,6 +748,8 @@ export function acquireProjectLock(name, {
   let ticketOutstanding = false;
   let lastNotice = null;
   let lastNoticeAt = null;
+  let lastGuardNotice = null;
+  let lastGuardNoticeAt = null;
   let failure = null;
   try {
     for (;;) {
@@ -799,6 +810,14 @@ export function acquireProjectLock(name, {
           if (!choice) {
             const activeRecord = liveRecords.find((record) => record.slot === 'long') ?? liveRecords[0] ?? null;
             return { activeRecord, tickets: laneTickets };
+          }
+
+          const guard = settings?.guard ?? POLICY_DEFAULTS.locks.guard;
+          const longHolder = liveRecords.find((record) => (record.slot ?? 'long') === 'long');
+          if (lane === 'short' && longHolder && guard.enabled !== false) {
+            const sample = typeof readMachineSample === 'function' ? readMachineSample() : latestMachineSample(dataDir);
+            const guardReason = machineGuardReason(sample, guard, { now });
+            if (guardReason) return { activeRecord: longHolder, tickets: laneTickets, guardReason };
           }
 
           if (ticketOutstanding) {
@@ -862,6 +881,23 @@ export function acquireProjectLock(name, {
       if (outcome.reentrant) {
         appendLockLedger(dataDir, 'acquire', { ...outcome.reentrant, project: config.slug, kind, ownerPane: caller.paneId }, now, { waitMs: 0, reentrant: true });
         return outcome.reentrant;
+      }
+      if (outcome.guardReason) {
+        const observedAt = timeValue(now);
+        if (outcome.guardReason !== lastGuardNotice
+          || lastGuardNoticeAt === null || observedAt - lastGuardNoticeAt >= LOCK_WAIT_NOTICE_INTERVAL_MS) {
+          output(`short lane paused: ${outcome.guardReason}`);
+          lastGuardNotice = outcome.guardReason;
+          lastGuardNoticeAt = observedAt;
+        }
+        if (waitSeconds === null) throw noWaitBusyError(name, outcome.activeRecord, outcome.tickets);
+        if (deadline !== null && BigInt(timeValue(now)) >= deadline) {
+          throw waitBusyError(name, {
+            activeRecord: outcome.activeRecord, tickets: outcome.tickets, ticket, startedAt, now,
+          });
+        }
+        pause(Math.max(1, Math.min(100, Number(deadline - BigInt(timeValue(now))))));
+        continue;
       }
       if (waitSeconds === null) {
         throw noWaitBusyError(name, outcome.activeRecord, outcome.tickets);

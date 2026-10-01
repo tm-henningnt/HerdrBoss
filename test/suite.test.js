@@ -700,6 +700,60 @@ test('a predicted short suite acquires a short slot beside a long holder', (t) =
   releaseProjectLock('full-suite', long);
 });
 
+test('the machine guard keeps a short ticket queued until the latest sample passes', (t) => {
+  const f = fixture(t, 'herdr-suite-short-guard-');
+  const panes = ['ws:a', 'ws:b'];
+  configureLockSettings(f, {
+    slots: 2, shortLimitMinutes: 6,
+    guard: { enabled: true, maxLoadPercent: 100, maxSwapPercent: 90, minFreeMemPercent: 40 },
+  });
+  seedLockHistory(f);
+  let nowMs = Date.now();
+  const clock = () => nowMs;
+  const long = lockOptions(f, 'ws:a', panes, { now: clock });
+  acquireProjectLock('full-suite', { ...long, kind: 'manual' });
+  const samples = [
+    { at: new Date(nowMs).toISOString(), l5: 2, cpus: 1, swapMB: 10, swapTotalMB: 100, memFree: 70 },
+    { at: new Date(nowMs).toISOString(), l5: 0.5, cpus: 1, swapMB: 10, swapTotalMB: 100, memFree: 70 },
+  ];
+  let sampleIndex = 0;
+  const lines = [];
+  const short = lockOptions(f, 'ws:b', panes, {
+    now: clock,
+    pause: (ms) => { nowMs += ms; },
+    readMachineSample: () => samples[Math.min(sampleIndex++, samples.length - 1)],
+    output: (line) => lines.push(line),
+  });
+
+  const acquired = acquireProjectLock('full-suite', { ...short, kind: 'suite', waitSeconds: 1 });
+
+  assert.equal(acquired.lane, 'short');
+  assert.ok(lines.some((line) => line === 'short lane paused: load 200% exceeds 100%'));
+  assert.ok(sampleIndex >= 2, 'the guard reads again after the sample fails');
+  assert.deepEqual(readQueueFiles(f.dataDir), []);
+  releaseProjectLock('full-suite', short);
+  releaseProjectLock('full-suite', long);
+});
+
+test('the machine guard does not read a sample without a long holder or for a long job', (t) => {
+  const f = fixture(t, 'herdr-suite-short-guard-bypass-');
+  const panes = ['ws:a', 'ws:b'];
+  configureLockSettings(f, { slots: 2, shortLimitMinutes: 6, guard: { enabled: true } });
+  seedLockHistory(f);
+  let sampleReads = 0;
+  const readMachineSample = () => { sampleReads++; throw new Error('sample reader should not run'); };
+  const options = (pane) => lockOptions(f, pane, panes, { readMachineSample });
+
+  const short = acquireProjectLock('full-suite', { ...options('ws:a'), kind: 'suite', waitSeconds: 0 });
+  const long = acquireProjectLock('full-suite', { ...options('ws:b'), kind: 'manual', waitSeconds: 0 });
+
+  assert.equal(short.lane, 'short');
+  assert.equal(long.lane, 'long');
+  assert.equal(sampleReads, 0);
+  releaseProjectLock('full-suite', options('ws:a'));
+  releaseProjectLock('full-suite', options('ws:b'));
+});
+
 test('slots 3 lets two predicted short suites hold separate short slots', (t) => {
   const f = fixture(t, 'herdr-suite-two-short-slots-');
   const panes = ['ws:a', 'ws:b'];
