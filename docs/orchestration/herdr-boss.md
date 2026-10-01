@@ -1,4 +1,4 @@
-<!-- herdr-boss kit v=1b34ccad1bca -->
+<!-- herdr-boss kit v=60d55aa14e84 -->
 Herdr Boss writes this file. Do not edit it. Run herdr-boss kit install to update it.
 
 # Herdr Boss orchestration kit
@@ -73,6 +73,7 @@ These are the shared operating rules for the orchestrator of this project.
 - Record an Owner request typed into your pane as an Owner decision in `docs/orchestration/memory.md`.
 - A prompt that starts with `[owner]` is an Owner message from the dashboard. Reply with `herdr-boss say --reply-to <id> "<answer>"`. Record an Owner decision from it in `docs/orchestration/memory.md`.
 - Each `herdr-boss say` reply is an item in the Owner mailbox. Set `--action decide`, `--action approve`, or `--action answer` only when the Owner must act. Everything else is information; omit `--action`.
+- Send a picture with `herdr-boss say --image FILE "TEXT"`; `mail post` uploads local Markdown images. An Owner picture arrives as `Attachment: <path>`; read it with your image tool.
 - Write the full text of an Owner decision into `docs/orchestration/memory.md`, not a pointer.
 - The kit file and the Owner decisions in `memory.md` are the operating rules of this project. Report a conflict with them to the Boss. Do not work around them.
 - List processes with `pgrep -l`, `ps -o pid,ppid,etime,comm`, or `herdr-boss worktree prune`.
