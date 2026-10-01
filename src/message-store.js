@@ -12,6 +12,7 @@ import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { DATA_DIR } from './config.js';
 import { openSqliteStore } from './sqlite-store.js';
+import { claimAttachments, removeDeletedAttachments } from './attachments.js';
 
 export const RETENTION_MS = 30 * 86400 * 1000;
 export const messagesFile = (dir = DATA_DIR) => path.join(dir, 'messages.jsonl');
@@ -60,11 +61,13 @@ const isOpenReviewItem = (record) => record?.kind === 'review' && !record.closed
 const fresh = (records, now) => records.filter((record) => isOpenReviewItem(record) || !(Date.parse(record.at) < now - RETENTION_MS));
 
 function rewrite(dir, records) {
+  const before = readStoredRecords(dir);
   const file = messagesFile(dir);
   const tmp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, records.map((record) => `${JSON.stringify(record)}\n`).join(''), { mode: 0o600 });
   fs.chmodSync(tmp, 0o600);
   fs.renameSync(tmp, file);
+  removeDeletedAttachments(before, records, { dir });
 }
 
 export function newId(now) {
@@ -101,12 +104,14 @@ function sqliteRecords(db) {
   return db.prepare('SELECT record FROM messages ORDER BY rowid').all().map((row) => JSON.parse(row.record));
 }
 
-function withSqliteTransaction(sqlite, fn) {
+function withSqliteTransaction(sqlite, fn, dir = null) {
   const { db } = sqlite;
   db.exec('BEGIN IMMEDIATE');
   try {
+    const before = dir ? sqliteRecords(db) : [];
     const result = fn(db);
     db.exec('COMMIT');
+    if (dir) removeDeletedAttachments(before, sqliteRecords(db), { dir });
     sqlite.secureFiles();
     return result;
   } catch (error) {
@@ -184,12 +189,17 @@ function openSqliteMessageStore(dir, key, listeners, guard) {
         id: newId(now), at: new Date(now).toISOString(), thread: null, from: null, to: null, kind: null, text: '',
         action: null, replyTo: null, status: null, sentAt: null, error: null, relayedAt: null, relayedBy: null, ...fields,
       };
-      const shouldNotify = withSqliteTransaction(sqlite, (connection) => {
-        const records = fresh(sqliteRecords(connection), now);
-        const kept = fresh([...records, record], now).sort(messageOrder);
-        replaceSqliteRecords(connection, kept);
-        return kept.some((item) => item.id === record.id);
-      });
+      const claim = claimAttachments(fields.attachments ?? [], record.id, { dir, now });
+      if (fields.attachments !== undefined) record.attachments = claim.attachments;
+      let shouldNotify;
+      try {
+        shouldNotify = withSqliteTransaction(sqlite, (connection) => {
+          const records = fresh(sqliteRecords(connection), now);
+          const kept = fresh([...records, record], now).sort(messageOrder);
+          replaceSqliteRecords(connection, kept);
+          return kept.some((item) => item.id === record.id);
+        }, dir);
+      } catch (error) { claim.rollback(); throw error; }
       if (shouldNotify) emitChange(listeners, 'append', record);
       return record;
     },
@@ -204,7 +214,7 @@ function openSqliteMessageStore(dir, key, listeners, guard) {
         const kept = fresh(records, now).sort(messageOrder);
         replaceSqliteRecords(connection, kept);
         return { record: updated, notify: kept.some((record) => record.id === id) };
-      });
+      }, dir);
       if (outcome.notify) emitChange(listeners, 'update', outcome.record);
       return outcome.record;
     },
@@ -230,7 +240,7 @@ function openSqliteMessageStore(dir, key, listeners, guard) {
           else if (JSON.stringify(previous) !== JSON.stringify(record)) events.push({ type: 'update', record });
         }
         return { result: changed.result, events };
-      });
+      }, dir);
       for (const event of outcome.events) emitChange(listeners, event.type, event.record);
       return outcome.result;
     },
@@ -296,16 +306,21 @@ export function openMessageStore(options = {}) {
         id: newId(now), at: new Date(now).toISOString(), thread: null, from: null, to: null, kind: null, text: '',
         action: null, replyTo: null, status: null, sentAt: null, error: null, relayedAt: null, relayedBy: null, ...fields,
       };
-      const shouldNotify = withLock(dir, () => {
-        const records = readStoredRecords(dir);
-        const kept = fresh(records, now);
-        if (kept.length !== records.length) rewrite(dir, [...kept, record].sort(messageOrder));
-        else {
-          fs.appendFileSync(messagesFile(dir), `${JSON.stringify(record)}\n`, { mode: 0o600 });
-          fs.chmodSync(messagesFile(dir), 0o600);
-        }
-        return fresh([...kept, record], now).some((item) => item.id === record.id);
-      });
+      const claim = claimAttachments(fields.attachments ?? [], record.id, { dir, now });
+      if (fields.attachments !== undefined) record.attachments = claim.attachments;
+      let shouldNotify;
+      try {
+        shouldNotify = withLock(dir, () => {
+          const records = readStoredRecords(dir);
+          const kept = fresh(records, now);
+          if (kept.length !== records.length) rewrite(dir, [...kept, record].sort(messageOrder));
+          else {
+            fs.appendFileSync(messagesFile(dir), `${JSON.stringify(record)}\n`, { mode: 0o600 });
+            fs.chmodSync(messagesFile(dir), 0o600);
+          }
+          return fresh([...kept, record], now).some((item) => item.id === record.id);
+        });
+      } catch (error) { claim.rollback(); throw error; }
       if (shouldNotify) emitChange(listeners, 'append', record);
       return record;
     },

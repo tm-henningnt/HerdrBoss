@@ -226,3 +226,23 @@ test('LK3 R15 the lock panel labels saved and effective capacity during legacy e
     assert.match(html, /2\. beta/);
   }
 });
+
+test('picture retention renders its saved value, help and a working policy editor', async () => {
+  const app = await views(); app.setModels({ codex: catalog, claude: catalog });
+  const s = fixture(); s.policy.attachments = { retentionDays: 45 }; app.setState(s);
+  const html = app.settingsView(s);
+  assert.match(html, /<h2>Pictures<\/h2>/);
+  assert.match(html, /data-policy-attachment="retentionDays"/);
+  assert.match(html, /data-setting-help="attachments.retentionDays"/);
+  assert.match(html, /min="1" max="365"[^>]*value="45"/);
+  const input = { closest: () => ({}), dataset: { policyAttachment: 'retentionDays' }, value: '60', id: 'setting-attachment', setCustomValidity() {}, setAttribute() {}, removeAttribute() {} };
+  const event = { target: input };
+  app.context.handlers.get('change').find((handler) => handler.toString().includes('el.dataset.policyAttachment'))(event);
+  assert.equal(app.getDraft().attachments.retentionDays, 60);
+});
+
+test('a blank picture retention field remains blank and invalid after rendering', async () => {
+  const app = await views(); app.setModels({ codex: catalog, claude: catalog });
+  const s = fixture(); s.policy.attachments = { retentionDays: null }; app.setState(s);
+  assert.match(app.settingsView(s), /value="" data-policy-attachment="retentionDays"[^>]*aria-invalid="true"/);
+});

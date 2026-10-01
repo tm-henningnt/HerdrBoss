@@ -268,7 +268,7 @@ The Owner sends messages from the Organization page. The Boss and the orchestrat
 
 | Command | Action |
 |---|---|
-| `herdr-boss say [--reply-to ID] [--action answer\|approve\|decide\|read] "TEXT"` | Write a reply for the Owner. Run it from the pane labeled `boss` or from a pane labeled `orch`. |
+| `herdr-boss say [--reply-to ID] [--action answer\|approve\|decide\|read] [--image FILE] "TEXT"` | Write a reply for the Owner. Run it from the pane labeled `boss` or from a pane labeled `orch`. |
 | `herdr-boss messages [THREAD]` | Print the records of one thread as JSON, oldest first. Without `THREAD`, print the records of all threads. `THREAD` is `boss` or a project slug. |
 | `herdr-boss messages relay ID... --by boss` | Mark queued Owner messages as relayed by the Boss. Only the pane labeled `boss` can run this command. Herdr Boss never sends a relayed message. |
 | `herdr-boss mail post --to owner [--title TEXT] [--action read\|decide\|approve\|answer] FILE` | Post a Markdown report for the Owner in the `boss` thread. Only the pane labeled `boss` can post. |
@@ -306,6 +306,46 @@ herdr-boss say --reply-to m-mg3k2x1a-1f2e3d4c "Two tasks are left. The next merg
 herdr-boss mail post --to owner --title "Morning handback" handback.md
 herdr-boss mail close m-mg3k2x1a-1f2e3d4c --note "Answered with the Owner through the Boss."
 ```
+
+## Picture attachments
+
+Use `herdr-boss say --image FILE "TEXT"` to send a picture. Repeat `--image` for up to 3 pictures. The command reads a local regular file. Each file must be at most 10 MB. The file bytes must identify JPEG, PNG, WebP, GIF, HEIC or HEIF. The command uses the same private storage as the upload route.
+
+In a `mail post` report, write `![View](photo.png)` to include a local picture. The path starts from the current directory. The command uploads the picture and changes the target to `/attachments/att_<32 hex>`. A report accepts up to 6 pictures. A missing file, an unsupported picture or a file over 10 MB stops the report. Repeated targets use one upload. Code spans and fenced code blocks stay as text.
+
+Use files in the current directory tree or the system temporary directory. An outside file needs an absolute path and must be a regular file owned by the caller. Herdr Boss resolves symbolic links before it checks the directory and the owner. A relative path that escapes both allowed trees is refused.
+
+An image with an `http:`, `https:`, `data:` or other URL scheme stays in the report as text. Herdr Boss never fetches it. The renderer shows only its alt text. Only an exact `/attachments/att_<32 lower-case hex>` target becomes an image. It gets `loading="lazy"` and the class `md-attachment`.
+
+An Owner picture arrives in one agent prompt with this line:
+
+```text
+Attachment: <absolute private file path> (image/jpeg, 120 KB) — read this file with your image tool.
+```
+
+### Routes
+
+The upload and file routes use the normal dashboard access checks. Loopback needs no login. A remote request needs a login cookie or the access token. A foreign Origin gets `403`. The read-only preview refuses uploads.
+
+| Route | Contract |
+|---|---|
+| `POST /api/attachments` | Send raw bytes. Set `Content-Type` to `image/jpeg`, `image/png`, `image/webp`, `image/gif`, `image/heic` or `image/heif`. Set optional `X-Filename` to a URL-encoded name of at most 120 decoded characters. Herdr Boss sanitizes the name. The body limit is 10 MB. |
+| `GET /attachments/<id>` | Read a stored file. The id must match `att_[0-9a-f]{32}`. Invalid ids and traversal paths get `404`. The route serves only the private attachment directory. |
+| `POST /api/messages` | Set `attachments` to up to 6 unique attachment ids. Each must exist and be unlinked. A picture message may have an empty caption. |
+
+A successful upload gets `200` with `id`, `type`, `size`, `name`, `url`, `createdAt` and `metadataStripped`. The type comes from the magic bytes. The size describes the stored bytes. A bad name gets `400`. An unsupported type, a truncated supported container or a type mismatch gets `415`. A body over 10 MB gets `413`. The service allows 30 authenticated upload attempts a minute. The next gets `429`. The limit applies across callers of this service.
+
+The file route sends the stored `Content-Type`, `X-Content-Type-Options: nosniff`, `Cache-Control: private, max-age=3600` and `Content-Security-Policy: default-src 'none'; sandbox`. JPEG, PNG, WebP and GIF use `Content-Disposition: inline`. HEIC and HEIF use `Content-Disposition: attachment; filename="<sanitized name>"`.
+
+A linked message stores `attachments: [{ id, type, size, name }]`. Message, Chat and Mailbox reads return these fields. They hold no private file path. An invalid id, a duplicate id, more than 6 ids or an already linked id gets `400`. A missing upload gets `404`.
+
+### Privacy and retention
+
+Herdr Boss stores each picture as `<dataDir>/attachments/<id>.<ext>`. The directory has mode `0700`. Picture, metadata and link files have mode `0600`. The metadata holds the type, size, name, creation time and SHA-256. An exclusive `<id>.link` file records the message id. It prevents two processes from linking the same picture.
+
+JPEG uploads lose APP1 and APP13 segments. APP2 ICC profiles stay. PNG uploads lose `eXIf`, `tEXt`, `iTXt` and `zTXt` chunks. WebP uploads lose EXIF and XMP chunks. GIF uploads lose comments and application extensions except the NETSCAPE animation loop. These formats return `metadataStripped: true`. HEIC and HEIF stay unchanged and return `metadataStripped: false`.
+
+Set `attachments.retentionDays` in the policy or under **Pictures** on Settings. The default is 30 days. The range is 1 to 365 whole days. Select **Apply policy**. The engine sweeps at most once an hour. It deletes expired pictures and uploads left unlinked for more than one hour. It also removes orphan files after one hour. Deleting, dismissing or expiring a message deletes its pictures. Closing an item as answered keeps its pictures until retention removes them.
 
 ## Review packs
 
@@ -530,6 +570,17 @@ Do not edit this block. It comes from `public/setting-help.js`.
 | Maximum load for a short job | `locks.guard.maxLoadPercent` | The 5-minute load average as a percent of the machine core count. The guard pauses above this value. | 231 | Percent of cores | 0 to 1000; a blank field is invalid | A higher value lets a short job start at a higher load. | A lower value pauses short jobs at a lower load. | Select Apply policy. Capacity and guard changes apply to the next admission attempt, including queued jobs. A queued ticket keeps its prediction and short-limit classification. |
 | Maximum swap for a short job | `locks.guard.maxSwapPercent` | The swap use as a percent of the swap total. The guard pauses above this value. | 96 | Percent of swap | 0 to 100; a blank field is invalid | A higher value lets a short job start with more swap in use. | A lower value pauses short jobs with less swap in use. | Select Apply policy. Capacity and guard changes apply to the next admission attempt, including queued jobs. A queued ticket keeps its prediction and short-limit classification. |
 | Minimum free memory | `locks.guard.minFreeMemPercent` | The free memory percent below which the guard pauses a short job. | 40 | Percent free | 0 to 100; a blank field is invalid | A higher value leaves more memory free before a short job starts. | A lower value lets a short job start with less free memory. | Select Apply policy. Capacity and guard changes apply to the next admission attempt, including queued jobs. A queued ticket keeps its prediction and short-limit classification. |
+
+#### Pictures
+
+- Controls: How many days Herdr Boss keeps pictures in Chat and Mailbox.
+- Effect: Stored pictures. An expired picture is deleted at the hourly sweep.
+- Safe to change: A shorter period deletes older pictures. A deleted picture cannot be recovered.
+- Restart: No restart. Select Apply policy.
+
+| Setting | Key | What it does | Default | Unit | Range | Raise it | Lower it | Apply |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Picture retention days | `attachments.retentionDays` | How long Herdr Boss keeps a linked picture. An hourly sweep removes expired pictures. An upload left unlinked for one hour is deleted. Deleting or dismissing a message deletes its pictures. | 30 | Days | 1 to 365 | A higher value keeps linked pictures longer. | A lower value deletes older pictures at the next sweep. Deleted pictures cannot be recovered. | Select Apply policy. The change takes effect at the next engine tick. |
 
 #### Watch
 

@@ -11,6 +11,7 @@ const docsPath = new URL('../docs/cli.md', import.meta.url);
 // Policy keys that have no single setting control. Each one has its own editor with its own help text, or holds a list that the page edits by other means.
 const POLICY_KEYS_WITHOUT_CONTROL = new Set([
   'machine', // the machine.* keys are checked one by one below
+  'attachments', // the attachments.retentionDays key has its own explanation below
   'locks', // the locks.* keys are checked one by one below
   'orchestratorLadder', // the succession list editor on Allocation
   'allowedKinds', // the Available switch of each harness: harness.available
@@ -73,7 +74,7 @@ test('the text follows the Simplified Technical English limits', () => {
 // The ids that the page code asks for: literal calls, the Machine rows, the price columns, and the service table rows.
 function usedIds() {
   const ids = new Set([...app.matchAll(/helpButton\('([^']+)'/g)].map((match) => match[1]).filter((id) => !id.endsWith('.')));
-  for (const key of ['locks.slots', 'locks.shortLimitMinutes', 'locks.guard.enabled', 'locks.guard.maxLoadPercent', 'locks.guard.maxSwapPercent', 'locks.guard.minFreeMemPercent']) ids.add(key);
+  for (const key of ['attachments.retentionDays', 'locks.slots', 'locks.shortLimitMinutes', 'locks.guard.enabled', 'locks.guard.maxLoadPercent', 'locks.guard.maxSwapPercent', 'locks.guard.minFreeMemPercent']) ids.add(key);
   for (const match of app.matchAll(/machineNumber\('(\w+)'/g)) ids.add(`machine.${match[1]}`);
   for (const match of app.matchAll(/settingRow\('([^']+)'/g)) ids.add(match[1]);
   if (app.includes("helpButton('prices.' + field)")) for (const match of app.matchAll(/\['(input|output|cacheRead|cacheWrite|cacheWrite1h)', '/g)) ids.add(`prices.${match[1]}`);
@@ -197,4 +198,10 @@ test('the Settings and Allocation pages keep no always-visible explanation that 
 test('the schema holds the succession, workspace, and share explanations', () => {
   for (const id of ['succession.ladder', 'workspace.exclusion', 'project.shares']) assert.equal(SETTING_HELP[id]?.group, 'capacity', id);
   for (const id of ['succession.ladder', 'workspace.exclusion', 'project.shares']) assert.match(app, new RegExp(`helpButton\\('${id.replace('.', '\\.')}'\\)`));
+});
+
+test('picture retention has a Pictures group explanation', () => {
+  assert.equal(SETTING_HELP['attachments.retentionDays']?.group, 'attachments');
+  assert.equal(SETTING_HELP['attachments.retentionDays']?.range, '1 to 365');
+  assert.ok(SETTING_GROUPS.some(({ id, title }) => id === 'attachments' && title === 'Pictures'));
 });

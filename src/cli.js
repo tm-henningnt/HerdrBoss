@@ -188,7 +188,7 @@ const USAGE = `herdr-boss <command>
   gh label create|list|edit|sync ...  Run safe GitHub label commands. sync --preset triage [--dry-run] sets the triage labels.
   gh milestone create|list ...  Run safe GitHub milestone commands.
   models                Show allowed worker models.
-  say [--reply-to ID] [--action answer|approve|decide|read] TEXT  Reply to the Owner from the boss pane or an orch pane.
+  say [--reply-to ID] [--action answer|approve|decide|read] [--image FILE] TEXT  Reply to the Owner from the boss pane or an orch pane.
   messages [THREAD]     Print the message records of one thread, or of all threads, as JSON.
   messages relay ID... --by boss  Mark queued Owner messages as relayed by the Boss.
   mail post --to owner [--title TEXT] [--action read|decide|approve|answer] FILE  Post a Markdown report for the Owner from the boss pane.
@@ -207,18 +207,19 @@ const USAGE = `herdr-boss <command>
   kit-path              Print the shared kit directory.
 `;
 
-// Parse --flag VALUE pairs. Each flag appears at most once; other tokens are positional.
-function messageFlags(args, known, usage) {
+// Parse --flag VALUE pairs. Only the named repeat options can appear more than once.
+function messageFlags(args, known, usage, repeat = []) {
   const flags = {};
   const positional = [];
   for (let index = 0; index < args.length; index += 1) {
     const token = args[index];
     if (!token.startsWith('--')) { positional.push(token); continue; }
     if (!known.includes(token)) throw new Error(`Unknown option: ${token}. ${usage}`);
-    if (token in flags) throw new Error(`${token} may be used only once.`);
+    if (token in flags && !repeat.includes(token)) throw new Error(`${token} may be used only once.`);
     const value = args[++index];
     if (value === undefined || value.startsWith('--')) throw new Error(`${token} needs a value.`);
-    flags[token] = value;
+    if (repeat.includes(token)) (flags[token] ||= []).push(value);
+    else flags[token] = value;
   }
   return { flags, positional };
 }
@@ -244,10 +245,11 @@ async function messageCommand(cmd, args) {
   }
   const { createHerdrRunner } = await import('./kit/workers.js');
   if (cmd === 'say') {
-    const usage = 'Usage: say [--reply-to ID] [--action answer|approve|decide|read] "TEXT"';
-    const { flags, positional } = messageFlags(args, ['--reply-to', '--action'], usage);
+    const usage = 'Usage: say [--reply-to ID] [--action answer|approve|decide|read] [--image FILE] "TEXT"';
+    const { flags, positional } = messageFlags(args, ['--reply-to', '--action', '--image'], usage, ['--image']);
+    if ((flags['--image'] || []).length > 3) throw new Error('say accepts at most 3 pictures.');
     if (positional.length !== 1) throw new Error(`${usage}. Quote the text as one argument.`);
-    const record = sayMessage(positional[0], { replyTo: flags['--reply-to'] ?? null, action: flags['--action'] ?? null }, { herdr: createHerdrRunner() });
+    const record = sayMessage(positional[0], { replyTo: flags['--reply-to'] ?? null, action: flags['--action'] ?? null, images: flags['--image'] || [] }, { herdr: createHerdrRunner() });
     console.log(`Message ${record.id} is in the ${record.thread} thread for the Owner.`);
     return;
   }

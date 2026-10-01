@@ -56,6 +56,16 @@ Use `POST /api/chats/<thread>/read` to mark the unread chat records to the Owner
 
 Use `POST /api/messages` to send an Owner message. Read `GET /api/events` to receive each message change as a `message` event.
 
+## Pictures in Chat and Mailbox
+
+Send an Owner picture through Chat or Mailbox. An agent can send a picture with `herdr-boss say --image FILE "TEXT"`. A Boss report can include a local Markdown image with `mail post`. The agent receives each Owner picture as an `Attachment: <path>` line. It reads that file with its image tool.
+
+Use JPEG, PNG, WebP, GIF, HEIC or HEIF files. Each file must be at most 10 MB. A message accepts up to 6 pictures. The `say` command accepts up to 3. The service allows 30 upload attempts a minute. External image URLs show as alt text and cause no image request.
+
+Herdr Boss removes EXIF and other metadata from JPEG, PNG, WebP and GIF uploads before it stores them. JPEG ICC color profiles stay. HEIC and HEIF keep their metadata, including any location data. They download as files.
+
+Set **Picture retention days** under **Pictures** on Settings. The default is 30 days. The range is 1 to 365. The hourly sweep deletes expired pictures. An upload left unlinked for one hour is deleted. Deleting or dismissing a message deletes its pictures. A deleted picture cannot be recovered.
+
 ## Review pack API
 
 A review pack is a set of evidence with one question for each item. The routes below read packs, serve pack files, and store the Owner answers. `src/review-api.js` handles them. `src/review-store.js` keeps the data. A project publishes packs. The Owner answers them.

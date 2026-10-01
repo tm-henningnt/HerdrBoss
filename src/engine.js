@@ -26,6 +26,7 @@ import { claudeContextUsage, trackBoundary, normalizeModelId } from './context-h
 import { FINISH_TIMEOUT_MS, autoReadyHandoff, markSuccessorWorking, listHandoffs, saveHandoffs, supersedeHandoffs, expireHandoff, expireMissingHandoffs, handoffNotices } from './handoff.js';
 import { closeReviewItems, deliverQueued, mailboxCounts, readMessages, RETENTION_MS, SEND_LIMIT_PER_MINUTE } from './messages.js';
 import { sweep as sweepReviewPacks } from './review-store.js';
+import { sweepAttachments } from './attachments.js';
 import { openMessageStore } from './message-store.js';
 import { readKitNotice, pendingKitAlert, isKitAlert, kitNoticeTargets, unsentKitChanges, formatKitNotice } from './kit-notice.js';
 import { applyTaskState, readWorkerFacts, gitIsMerged, gitCounts } from './task-state.js';
@@ -539,6 +540,7 @@ export class Engine extends EventEmitter {
     this.orphanedWorktreeProcesses = [];
     this.cloneSweepAt = 0;
     this.cloneSweepRunning = false;
+    this.attachmentRetentionAt = null;
     this.reviewRetentionAt = 0;
     this.reviewRetentionRunning = false;
     this.denialScanAt = 0;
@@ -571,6 +573,7 @@ export class Engine extends EventEmitter {
       codeSignCloneDir,
       sweepCodeSignClones,
       sweepReviewPacks,
+      sweepAttachments,
       runDenialScan,
       // A test engine never reads the real harness logs unless a test injects a collector.
       runSpendScan: process.env.NODE_TEST_CONTEXT ? async () => null : scanSpend,
@@ -1022,6 +1025,7 @@ export class Engine extends EventEmitter {
       if (this.act) await this.reap(browsers);
       if (this.act) this.sweepClones(now);
       if (this.act) this.sweepReviewPacks(now, control, herdr);
+      if (this.act) this.sweepAttachments(now, policy);
       if (this.act) this.scanDenials(now);
       if (this.act) this.scanSpend(now, herdr);
       // A prepared successor waits idle by design, so the idle-worker rule skips it.
@@ -1423,6 +1427,18 @@ export class Engine extends EventEmitter {
       this.log('clone-sweep', `Deleted ${result.removed.length} orphaned Chrome code-sign clone(s) and freed ${freedGiB} GiB.`, { count: result.removed.length, freedBytes: result.freedBytes });
     })().catch((error) => this.log('clone-sweep', `Chrome code-sign clone sweep failed: ${error.message}`))
       .finally(() => { this.cloneSweepRunning = false; });
+  }
+
+  // Attachment and message retention run together, at most once an hour.
+  sweepAttachments(now, policy) {
+    if (this.attachmentRetentionAt !== null && now - this.attachmentRetentionAt < 3600000) return null;
+    this.attachmentRetentionAt = now;
+    try {
+      this.messageStore.mutate((records) => ({ records }), { now });
+      const result = this.collectors.sweepAttachments({ dir: DATA_DIR, records: this.messageStore.all(), retentionDays: policy.attachments.retentionDays, now });
+      if (result.deleted) this.log('attachment-retention', `Deleted ${result.deleted} expired pictures.`, { count: result.deleted });
+      return result;
+    } catch (error) { this.log('attachment-retention', `Picture retention failed (${error.code || 'error'}).`); return null; }
   }
 
   // The review pack sweep runs beside the tick. It closes expired Mailbox items and tries one notice for each expired pack.

@@ -130,9 +130,9 @@ function lockNumberError(value, min, max) {
 
 function readLockNumber(input) {
   const value = input.value.trim() === '' ? null : Number(input.value);
-  const key = input.dataset.policyLockGuard || input.dataset.policyLock;
-  const min = key === 'slots' || key === 'shortLimitMinutes' ? 1 : 0;
-  const max = { slots: 4, shortLimitMinutes: 60, maxLoadPercent: 1000, maxSwapPercent: 100, minFreeMemPercent: 100 }[key];
+  const key = input.dataset.policyAttachment || input.dataset.policyLockGuard || input.dataset.policyLock;
+  const min = key === 'slots' || key === 'shortLimitMinutes' || key === 'retentionDays' ? 1 : 0;
+  const max = { retentionDays: 365, slots: 4, shortLimitMinutes: 60, maxLoadPercent: 1000, maxSwapPercent: 100, minFreeMemPercent: 100 }[key];
   const error = lockNumberError(value, min, max);
   input.setCustomValidity(error);
   if (error) input.setAttribute('aria-invalid', 'true');
@@ -1015,6 +1015,7 @@ function settingsView(s) {
   const lockNumber = (key, label, min, max) => lockInput(`locks.${key}`, label, lockPolicy[key], min, max, `data-policy-lock="${key}"`);
   const lockGuardNumber = (key, label, min, max) => lockInput(`locks.guard.${key}`, label, lockGuard[key], min, max, `data-policy-lock-guard="${key}"`);
   const lockSettings = `<section class="panel"><h2>Locks</h2>${lockNumber('slots', 'Machine lock slots', 1, 4)}${lockNumber('shortLimitMinutes', 'Short job limit minutes', 1, 60)}${settingRow('locks.guard.enabled', 'Guard for short jobs', `<input id="${helpFid('locks.guard.enabled')}" type="checkbox" role="switch" aria-label="Guard for short jobs" data-policy-lock-guard="enabled" ${lockGuard.enabled !== false ? 'checked' : ''}>`)}${lockGuardNumber('maxLoadPercent', 'Maximum load % of cores', 0, 1000)}${lockGuardNumber('maxSwapPercent', 'Maximum swap % used', 0, 100)}${lockGuardNumber('minFreeMemPercent', 'Minimum free memory %', 0, 100)}</section>`;
+  const attachmentSettings = `<section class="panel"><h2>Pictures</h2>${lockInput('attachments.retentionDays', 'Picture retention days', Object.hasOwn(d.attachments || {}, 'retentionDays') ? d.attachments.retentionDays : 30, 1, 365, 'data-policy-attachment="retentionDays"')}</section>`;
   const settingsGroups = ['Machine', 'Quota', 'Status', 'Workers', 'Watch', 'Browsers', 'Service'];
   const serviceSettingRanges = {
     'machine.memFreeWarnPercent': [1, 50],
@@ -1058,7 +1059,7 @@ function settingsView(s) {
   // The Advanced fold opens by itself while it holds a warning: a harness finding that is not ok, or a service save error.
   const advancedIssues = harnessFindings.filter((finding) => finding.status !== 'ok').length + Object.values(serviceSettingsMessages).filter((text) => text && text !== 'Saved.').length;
   const advanced = foldCard({ slug: SETTINGS_FOLD, key: 'advanced', id: 'advanced-settings', className: 'advanced-settings', title: 'Advanced', hint: advancedIssues ? `Rarely used settings · ${advancedIssues} need${advancedIssues === 1 ? 's' : ''} attention` : 'Rarely used settings', forceOpen: advancedIssues > 0, body: `<div class="settings-grid">${avatarSettings(s)}${pricesPanel()}${serviceSettings}${harnessPanel}</div>`, boxed: false });
-  const settingsPanels = `${quotaPanel}${machineSettings}${lockSettings}${watchRoutineSettings(s)}${poolSettingsPanel(s)}`;
+  const settingsPanels = `${quotaPanel}${machineSettings}${lockSettings}${attachmentSettings}${watchRoutineSettings(s)}${poolSettingsPanel(s)}`;
   return `<header class="page-intro"><div><h1>Settings</h1><p>Assign models and provider routes in each harness. Set provider quotas and machine limits below.</p></div></header><section id="settings-plane" class="control-shell"><section class="panel"><h2>Harnesses</h2><div class="help-legend" role="group" aria-label="Help for the harness settings"><span>Available${helpButton('harness.available')}</span><span>Preferred model${helpButton('harness.preferredModel')}</span><span>Model${helpButton('harness.model')}</span><span>Provider${helpButton('harness.provider')}</span><span>Add model${helpButton('harness.addModel')}</span></div>${ignoredCount ? `<p class="setting-help harness-help" role="note" style="color: var(--warn)">${ignoredCount} legacy provider route${ignoredCount === 1 ? ' is' : 's are'} not compatible with ${ignoredCount === 1 ? 'its harness' : 'their harnesses'}. Herdr Boss treats ${ignoredCount === 1 ? 'it' : 'them'} as Unmetered. Choose a provider in each marked row before you apply the policy.</p>` : ''}<div class="harness-grid">${harnesses}</div></section><div class="settings-grid">${settingsPanels}</div>${advanced}<div class="control-actions ${policyDirty ? 'pending' : ''}"><span data-policy-status role="status" aria-live="polite">${esc(saveMessage || (policyDirty ? 'Unsaved changes · Apply policy to keep them' : 'Policy saved'))}</span><button id="save-policy" ${policyDirty ? '' : 'disabled'}>Apply policy</button></div></section>`;
 }
 
@@ -5672,6 +5673,7 @@ const HELP = {
   settings: ['Settings', `
     <p>Each harness section holds the models and provider routes of that harness. Provider quotas, machine limits, and lock lanes are below the harnesses. The <b>Advanced</b> section holds the rarely used settings. It stays closed until you open it, and the page remembers its state.</p>
     <h3>Guide to the settings</h3>${settingsGuideHtml()}
+    <h3>Pictures</h3><p>Set picture retention from 1 to 365 days. The default is 30 days. Select <b>Apply policy</b>. The hourly sweep deletes expired pictures and uploads left unlinked for more than one hour. A message deletion or dismissal deletes its pictures. JPEG, PNG, WebP and GIF uploads have metadata removed. HEIC and HEIF keep metadata and download as files.</p>
     <h3>Locks</h3><p>The <b>Locks</b> group sets machine lock slots, the short job limit, and the machine guard. The default is 2 slots and a 6 minute short job limit. Herdr Boss predicts a job from recent lock holds. A key with fewer than 3 releases has an unknown prediction and uses the long lane. Before a short job starts beside a long holder, the guard checks load, swap, and free memory. A missing sample or one older than 3 minutes passes. The guard never delays a long job. A short job borrowing the long slot does not activate it. Future samples are ignored. Change the settings and select <b>Apply policy</b>. Capacity and guard changes apply to the next admission attempt, including queued jobs. A missing, invalid, or partial policy on a retry keeps the last validated settings and pauses admission until a complete valid policy returns. Only startup can use legacy defaults. A ticket keeps its prediction and short-limit classification. A blank guard field is invalid and shows a field error. A typed zero is valid.</p>
     <h3>Avatars</h3><p>The <b>Avatars</b> section has one row for the Boss and one row for each project. A row shows the avatar of that chat. Select <b>Upload image</b> to use your own image. Select <b>Reset</b> to use the generated avatar again. An image is a PNG, JPEG, or WebP file of at most 512 KB. Herdr Boss keeps no other format. The image shows at once in the Chat, the Mailbox, and the Agents chart. Without an image, the page uses a generated avatar. Its color comes from the name of the project, and it stays the same. The two letters come from the project display name, the same on every page. The Boss has a crown. Each other project has two letters. The letters use the color of the best contrast on the circle.</p>
     <h3>Watch routines</h3><p>Each routine in the <b>Watch routines</b> section has a title, a model hint, a schedule, and a prompt text. Select a routine to edit it. The schedule is a number of minutes between runs, or a time before the end of the watch. Select <b>Save</b> to store the change on this machine. The change never edits the kit file, and it applies to the next prompt of a running watch. Select <b>Reset to the kit text</b> to remove your change. Use <b>Add a routine</b> to create your own routine. Turn routines on or off for a watch in the Watch box on the Agents page.</p>
@@ -7133,6 +7135,7 @@ document.addEventListener('change', (e) => {
   }
   if (el.dataset.policyMachine) { d.machine ||= {}; d.machine[el.dataset.policyMachine] = el.value === '' ? null : Number(el.value); }
   if (el.dataset.policyMachineBool) { d.machine ||= {}; d.machine[el.dataset.policyMachineBool] = el.checked; }
+  if (el.dataset.policyAttachment) { d.attachments ||= {}; d.attachments[el.dataset.policyAttachment] = readLockNumber(el); }
   if (el.dataset.policyLock) { d.locks ||= {}; d.locks[el.dataset.policyLock] = readLockNumber(el); }
   if (el.dataset.policyLockGuard) {
     d.locks ||= {};
@@ -7906,7 +7909,7 @@ document.addEventListener('click', async (e) => {
   if (e.target.id === 'save-policy' && policyDraft) {
     e.target.disabled = true;
     try {
-      const invalidLock = document.querySelector('[data-policy-lock][aria-invalid="true"], [data-policy-lock-guard][aria-invalid="true"]');
+      const invalidLock = document.querySelector('[data-policy-lock][aria-invalid="true"], [data-policy-lock-guard][aria-invalid="true"], [data-policy-attachment][aria-invalid="true"]');
       if (invalidLock) { invalidLock.reportValidity(); throw new Error(invalidLock.validationMessage); }
       const pacingError = pacingDraftError(policyDraft, state?.quotas);
       if (pacingError) throw new Error(pacingError);

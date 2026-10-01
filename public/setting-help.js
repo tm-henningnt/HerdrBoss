@@ -44,6 +44,13 @@ export const SETTING_GROUPS = [
     restart: 'No restart. Select Apply policy. The change applies to the next lock admission.',
   },
   {
+    id: 'attachments', title: 'Pictures', advanced: false,
+    controls: 'How many days Herdr Boss keeps pictures in Chat and Mailbox.',
+    affects: 'Stored pictures. An expired picture is deleted at the hourly sweep.',
+    safe: 'A shorter period deletes older pictures. A deleted picture cannot be recovered.',
+    restart: 'No restart. Select Apply policy.',
+  },
+  {
     id: 'watch', title: 'Watch', advanced: false,
     controls: 'The routines that the Boss pane gets while a watch runs, the worker caps of a watch, and quiet hours.',
     affects: 'Workers and notices. A cap limits how many workers run while the Owner is away. A routine sends a prompt to the Boss pane.',
@@ -290,6 +297,14 @@ export const SETTING_HELP = Object.fromEntries([
     raise: 'A higher value gives the memory warning earlier.',
     lower: 'A lower value gives the memory warning later.',
     apply: 'service',
+  }),
+
+  S('attachments', 'attachments.retentionDays', 'Picture retention days', {
+    what: 'How long Herdr Boss keeps a linked picture. An hourly sweep removes expired pictures. An upload left unlinked for one hour is deleted. Deleting or dismissing a message deletes its pictures.',
+    default: '30', unit: 'Days', range: '1 to 365',
+    raise: 'A higher value keeps linked pictures longer.',
+    lower: 'A lower value deletes older pictures at the next sweep. Deleted pictures cannot be recovered.',
+    apply: 'policy',
   }),
 
   // Locks
