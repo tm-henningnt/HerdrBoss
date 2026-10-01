@@ -167,3 +167,6 @@ Owner queue (credentials, billing, and Owner-applied settings):
 - **Running workers:** `ch2` (CH1 review fixes), `wk3` (WK2 port onto the split kit tests), `lk2` (lock lanes), `bd1a` (board data layer, task id `BD1`), `ls2` (LS2, opencode `big-pickle`).
 - **Release order:** review `ch1` with `ch2` and `wk2` with `wk3`. Merge both in the `integrate` worktree, run one suite, move `main` forward, restart, check, push. Then LK2, BD1b, BD1c, DG1.
 - **Claude lane:** ahead of pace until about 2026-10-01 18:00. Start no claude worker before then.
+
+- 2026-10-01: Released on `main` `e6f6d9c` (suite 2612 of 2612): CH1, WK2, BD1a, BD1b, LS2. Kit revision `1b34ccad1bca` (serve-live binds its PID at start). Follow-ups: LS2 caches the `lsof` and `ps` reads (they run with `spawnSync` each tick) and honors a project `worktreeRoot`; the kit text can drop `--record` from `worker collect` calls; an unreadable file in `.orchestration/local` should be skipped with a warning at `worker start`. Running: `lk2review` (read-only, `gpt-6.1-sol`), `bd1c`. Next: release LK2 after review and a suite, then DG1.
+- 2026-10-01: The `integrate` worktree is the integration tree. Merge `main` into it before each release (`git merge main`), not `--ff-only`.
