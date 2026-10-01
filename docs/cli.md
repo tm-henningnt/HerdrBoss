@@ -344,6 +344,12 @@ The prompt process has a 25-second limit. Set **Agent prompt timeout** in Settin
 
 After a timeout or stalled prompt, `tell` reads the complete pane input. It retries Enter once only when the input equals the sent text. It reads the input again before it clears that text. It leaves a different draft, an unreadable input, or an unknown harness unchanged. Claude uses two Escape keys. Codex uses one Ctrl+U for each input line. If its own text remains, Codex gets one Ctrl+C. These keys are best-known defaults. A final pane read checks the clear result. No second cancel key is sent.
 
+An empty input with agent status `working` or `blocked` after a timeout counts as delivered. An empty input after the Enter retry also counts as delivered. The agent may have already completed a fast reply. These checks prevent a caller from sending the same prompt again.
+
+Before each recovery key command, `tell` resolves the agent by name. It checks the pane ID and the original label. It leaves the draft alone if either changed. Each clear command also requires agent status `idle`. A working, blocked, unknown, or unavailable agent gets no clear key. This includes the Codex Ctrl+C fallback.
+
+The visible input read trims trailing spaces and joins displayed rows with line breaks. A long prompt that wraps in the terminal may not match the sent text. A cropped input may also fail the match. The command leaves that input alone. Use the short file-path prompt pattern below.
+
 For a long prompt, write the text to a file in the worktree or scratch folder. Send one short line that names the absolute file path. The recipient must be able to read that path. This pattern keeps the terminal input short. `--file` reads the file and sends its full text, so it does not shorten the terminal input.
 
 ```sh
@@ -654,7 +660,7 @@ Do not edit this block. It comes from `public/setting-help.js`.
 | Picture retention days | `attachments.retentionDays` | How long Herdr Boss keeps a linked picture. An hourly sweep removes expired pictures. An upload left unlinked for one hour is deleted. Deleting or dismissing a message deletes its pictures. | 30 | Days | 1 to 365 | A higher value keeps linked pictures longer. | A lower value deletes older pictures at the next sweep. Deleted pictures cannot be recovered. | Select Apply policy. The change takes effect at the next engine tick. |
 | Agent message text retention days | `agentMessages.retentionDays` | How long Herdr Boss keeps agent-message text. An hourly sweep removes older text. | 14 | Days | 1 to 90 | A higher value keeps agent-message text longer. | A lower value removes older text at the next sweep. Metadata rows use a separate retention setting. | Select Apply policy. The change takes effect at the next engine tick. |
 | Agent message metadata retention days | `agentMessages.metaRetentionDays` | How long Herdr Boss keeps agent-message metadata after it removes the message text. A row has no message text. | 180 | Days | 7 to 730 | A higher value keeps message metadata longer. | A lower value removes older metadata at the next sweep. | Select Apply policy. The change takes effect at the next engine tick. |
-| Agent prompt timeout | `agentMessages.promptTimeoutSeconds` | The time limit for one Herdr agent prompt process. On a timeout, tell reads the pane input. If it equals the sent text, tell retries submit once. It clears only its own unsubmitted input and reads the pane again. | 25 | Seconds | 1 to 120 | A higher value gives Herdr more time to send a prompt. A blocked prompt delays the caller longer. | A lower value ends a blocked prompt sooner. A slow delivery can time out. | Select Apply policy. The change takes effect at the next engine tick. |
+| Agent prompt timeout | `agentMessages.promptTimeoutSeconds` | The time limit for one Herdr agent prompt process. On a timeout, tell reads the pane input. If it equals the sent text, tell retries submit once. It clears only its own unsubmitted input while the agent is idle. Then it reads the pane again. | 25 | Seconds | 1 to 120 | A higher value gives Herdr more time to send a prompt. A blocked prompt delays the caller longer. | A lower value ends a blocked prompt sooner. A slow delivery can time out. | Select Apply policy. The change takes effect at the next engine tick. |
 
 #### Watch
 

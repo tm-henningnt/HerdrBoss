@@ -328,7 +328,7 @@ export const SETTING_HELP = Object.fromEntries([
     apply: 'policy',
   }),
   S('attachments', 'agentMessages.promptTimeoutSeconds', 'Agent prompt timeout', {
-    what: 'The time limit for one Herdr agent prompt process. On a timeout, tell reads the pane input. If it equals the sent text, tell retries submit once. It clears only its own unsubmitted input and reads the pane again.',
+    what: 'The time limit for one Herdr agent prompt process. On a timeout, tell reads the pane input. If it equals the sent text, tell retries submit once. It clears only its own unsubmitted input while the agent is idle. Then it reads the pane again.',
     default: '25', unit: 'Seconds', range: '1 to 120',
     raise: 'A higher value gives Herdr more time to send a prompt. A blocked prompt delays the caller longer.',
     lower: 'A lower value ends a blocked prompt sooner. A slow delivery can time out.',

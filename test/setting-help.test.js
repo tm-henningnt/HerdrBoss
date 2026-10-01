@@ -243,5 +243,7 @@ test('agent prompt timeout has complete help and a Settings control', () => {
   assert.equal(SETTING_HELP['agentMessages.promptTimeoutSeconds']?.unit, 'Seconds');
   assert.equal(SETTING_HELP['agentMessages.promptTimeoutSeconds']?.range, '1 to 120');
   assert.match(SETTING_HELP['agentMessages.promptTimeoutSeconds'].what, /submit.*once/i);
+  assert.match(SETTING_HELP['agentMessages.promptTimeoutSeconds'].what, /agent is idle/);
+  assert.match(app.slice(app.indexOf('const HELP =')), /unsubmitted input while the agent is idle/);
   assert.match(app, /lockInput\('agentMessages.promptTimeoutSeconds'/);
 });

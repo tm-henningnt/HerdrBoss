@@ -80,42 +80,66 @@ function paneInputText(raw) {
   return input.join('\n').replace(/\n+$/, '');
 }
 
-export function deliverAgentPrompt(pane, text, { herdr, kind, timeoutMs = agentPromptTimeoutMs() }) {
+export function deliverAgentPrompt(pane, text, { herdr, kind, agentName, expectedLabel, timeoutMs = agentPromptTimeoutMs() }) {
   const options = { timeout: Math.min(timeoutMs, 2500), killSignal: 'SIGKILL' };
+  const paneId = (info) => info?.pane_id ?? info?.paneId ?? info?.id;
+  const currentPane = () => {
+    const response = checked(herdr(['pane', 'get', pane], options));
+    const info = response?.pane ?? response;
+    if (paneId(info) !== pane || (info?.label ?? null) !== expectedLabel
+      || (agentName && (info?.name || info?.agent_name) && (info.name || info.agent_name) !== agentName)) {
+      throw new Error('The target pane identity changed.');
+    }
+    return info;
+  };
+  const resolveAgent = () => {
+    if (!agentName) throw new Error('The target agent name is unknown.');
+    const response = checked(herdr(['agent', 'get', agentName], options));
+    const agent = response?.agent ?? response;
+    if ((agent?.name || agent?.agent_name) !== agentName || paneId(agent) !== pane) throw new Error('The target agent moved or changed.');
+    currentPane();
+    return agent;
+  };
   const read = () => {
     try {
+      currentPane();
       const result = herdr(['pane', 'read', pane, '--source', 'visible', '--lines', '2000', '--format', 'ansi'], options);
+      currentPane();
       return paneInputText(result?.text ?? result);
     } catch { return null; }
   };
-  const keys = (...names) => checked(herdr(['agent', 'send-keys', pane, ...names], options));
+  const keys = (requireIdle, ...names) => {
+    const agent = resolveAgent();
+    if (requireIdle && agent.agent_status !== 'idle') throw new Error('The target agent is not idle.');
+    return checked(herdr(['agent', 'send-keys', paneId(agent), ...names], options));
+  };
+  const status = () => {
+    try { return resolveAgent().agent_status; } catch { return null; }
+  };
   try {
     checked(herdr(['agent', 'prompt', pane, text], { timeout: timeoutMs, killSignal: 'SIGKILL' }));
     return { exitCode: 0 };
   } catch (error) {
     if (promptFailureCode(error) !== 75) return { exitCode: 1, reason: 'Herdr could not deliver the prompt.' };
   }
-  if (read() !== text) return { exitCode: 75, reason: 'The pane could not take the prompt. Other or unreadable input was left unchanged.' };
+  const initialInput = read();
+  if (initialInput === '' && ['working', 'blocked'].includes(status())) return { exitCode: 0 };
+  if (initialInput !== text) return { exitCode: 75, reason: 'The pane could not take the prompt. Other, wrapped, cropped, or unreadable input was left unchanged. Use a short file-path prompt.' };
   // Retry submission once, only for the complete text of this send.
-  try { keys('enter'); } catch {}
+  try { keys(false, 'enter'); } catch {}
   let remaining = read();
-  if (remaining === '') {
-    try {
-      const response = checked(herdr(['agent', 'get', pane], options));
-      if (['working', 'blocked'].includes((response?.agent ?? response)?.agent_status)) return { exitCode: 0 };
-    } catch {}
-  }
-  const failed = { exitCode: 76, reason: 'The prompt was typed but not submitted. Remaining input was left alone.' };
+  if (remaining === '') return { exitCode: 0 };
+  const failed = { exitCode: 76, reason: 'The prompt was typed but not submitted. Remaining input was left alone. Wrapped or cropped input may not match. Use a short file-path prompt.' };
   if (remaining !== text || !CLEAR_KEYS[kind]) return failed;
   // A second read guards against an input change after the submit retry.
   if (read() !== text) return failed;
   try {
     const sequence = kind === 'codex' ? Array(text.split('\n').length).fill('ctrl+u') : CLEAR_KEYS[kind];
-    keys(...sequence);
+    keys(true, ...sequence);
     remaining = read();
     // Do not send the fallback into a different draft or an unknown input block.
     if (kind === 'codex' && remaining && (remaining === text || text.startsWith(`${remaining}\n`))) {
-      keys('ctrl+c');
+      keys(true, 'ctrl+c');
       remaining = read();
     }
   } catch { return failed; }
