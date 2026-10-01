@@ -123,7 +123,7 @@ try {
 
   const state = await (await fetch(`${base}/api/state`)).json();
   const slug = state.projects?.[0]?.slug;
-  const pages = ['/', '/projects', '/board', '/agents', '/agents?view=chart', '/allocation', '/analytics', '/settings', '/mailbox', '/chat', '/logs', '/browsers'];
+  const pages = ['/', '/projects', '/board', '/agents', '/agents#watch', '/agents?view=chart', '/allocation', '/analytics', '/settings', '/mailbox', '/reviews', '/chat', '/logs', '/browsers'];
   if (slug) pages.splice(2, 0, `/projects/${slug}`);
 
   for (const width of widths) {
