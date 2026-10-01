@@ -814,9 +814,9 @@ async function main() {
       const moved = SLUG.test(slug) ? capDoneTasks(data, previous) : 0;
       const errors = writeProject(slug, data);
       if (errors.length) { console.error(errors.join('\n')); process.exit(1); }
-      // The publish closes each Mailbox item of this project whose task no longer waits on the Owner. A failure only prints a warning.
+      // A failed Mailbox update does not fail the publish.
       const { closeResolvedOnPublish } = await import('./messages.js');
-      closeResolvedOnPublish(slug, submitted, { log: (line) => console.log(line), warn: (line) => console.error(`warning: ${line}`) });
+      closeResolvedOnPublish(slug, submitted, { previous, log: (line) => console.log(line), warn: (line) => console.error(`warning: ${line}`) });
       const storedBytes = Buffer.byteLength(JSON.stringify(data, null, 2));
       if (storedBytes > STATUS_WARN_BYTES) console.error(`warning: the status is larger than 200 KB (${Math.round(storedBytes / 1024)} KB). Shorten notes and task text.`);
       for (const warning of statusWarnings(data)) console.error(`Warning: ${warning}`);

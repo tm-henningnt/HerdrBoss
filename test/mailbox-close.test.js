@@ -2,6 +2,7 @@
 // The Owner can also close an item as answered elsewhere, and the thread suggests it after a later Owner message.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -65,15 +66,92 @@ test('a publish closes the item when the task is done, has no wait, or waits on 
   for (const record of [done, boss, external]) assert.equal(stored(dir, record.id).closedBy, 'project');
 });
 
-test('a task that is absent from the status never closes its item', (t) => {
+test('an absent task closes nothing without previous status or when the new status has no tasks', (t) => {
   const dir = freshDir(t);
   const a = item(dir, 'alpha');
-  const other = task('2');
-  assert.equal(closeResolvedMailboxItems('alpha', { tasks: [other] }, { dir }).closed, 0, 'the task is gone');
-  assert.equal(closeResolvedMailboxItems('alpha', { tasks: [] }, { dir }).closed, 0, 'no tasks');
-  assert.equal(closeResolvedMailboxItems('alpha', { project: 'Alpha', metrics: [] }, { dir }).closed, 0, 'a status without a tasks key');
-  assert.equal(closeResolvedMailboxItems('alpha', null, { dir }).closed, 0);
+  const other = task('2', { status: 'doing', waitingOn: undefined, ask: undefined });
+  const previous = { tasks: [task('1', { mailboxId: a.id })] };
+  const now = T0 + 1000;
+  assert.equal(closeResolvedMailboxItems('alpha', { tasks: [other] }, { dir, now }).closed, 0, 'no previous status means no removed-task close');
+  assert.equal(closeResolvedMailboxItems('alpha', { tasks: [] }, { dir, now, previous }).closed, 0, 'no tasks');
+  assert.equal(closeResolvedMailboxItems('alpha', { project: 'Alpha', metrics: [] }, { dir, now, previous }).closed, 0, 'a status without a tasks key');
+  assert.equal(closeResolvedMailboxItems('alpha', null, { dir, now, previous }).closed, 0);
   assert.equal(stored(dir, a.id).closedAt, undefined);
+});
+
+test('the publish command closes an item for a removed task when another task remains', (t) => {
+  const dir = freshDir(t);
+  const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-mbclose-cli-home-'));
+  t.after(() => fs.rmSync(tempHome, { recursive: true, force: true }));
+  const now = Date.now();
+  const a = item(dir, 'alpha', {}, now);
+  fs.mkdirSync(path.join(dir, 'projects'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'projects', 'alpha.json'), JSON.stringify({
+    project: 'Alpha',
+    tasks: [task('1', { mailboxId: a.id })],
+  }));
+  const nextFile = path.join(dir, 'next-status.json');
+  fs.writeFileSync(nextFile, JSON.stringify({
+    project: 'Alpha',
+    tasks: [task('2', { status: 'doing', waitingOn: undefined, ask: undefined })],
+  }));
+  const output = execFileSync(process.execPath, [path.join(process.cwd(), 'src/cli.js'), 'publish', 'alpha', nextFile, '--force'], {
+    cwd: process.cwd(),
+    env: { ...process.env, HOME: tempHome, HERDR_BOSS_DIR: dir, HERDR_BOSS_PORT: '0' },
+    encoding: 'utf8',
+  });
+  assert.match(output, /Closed 1 Mailbox item of alpha:/);
+  const closed = stored(dir, a.id);
+  assert.equal(closed.closedBy, 'project');
+  assert.equal(closed.closeNote, 'resolved by the project');
+});
+
+test('old unlinked decide and approve items close when the status has tasks and no Owner wait', (t) => {
+  const dir = freshDir(t);
+  const decide = item(dir, 'alpha', {}, T0);
+  const approve = item(dir, 'alpha', { action: 'approve' }, T0);
+  const next = { tasks: [task('1', { status: 'doing', waitingOn: undefined, ask: undefined })] };
+  const publishAt = T0 + 11 * 60_000;
+  assert.equal(closeResolvedMailboxItems('alpha', next, { dir, now: publishAt }).closed, 2);
+  for (const record of [decide, approve]) {
+    const closed = stored(dir, record.id);
+    assert.equal(closed.closedBy, 'project');
+    assert.equal(closed.closeNote, 'Closed because the project status no longer waits on the Owner.');
+    assert.equal(closed.closedAt, new Date(publishAt).toISOString());
+  }
+  assert.equal(closeResolvedMailboxItems('alpha', next, { dir, now: publishAt + 1000 }).closed, 0, 'a second publish closes nothing more');
+});
+
+test('young and other-action unlinked items stay open, and an Owner wait delays an old item', (t) => {
+  const dir = freshDir(t);
+  const young = item(dir, 'alpha', {}, T0);
+  const waiting = item(dir, 'alpha', {}, T0);
+  const answer = item(dir, 'alpha', { action: 'answer' }, T0);
+  const noOwnerWait = { tasks: [task('1', { status: 'doing', waitingOn: undefined, ask: undefined })] };
+  assert.equal(closeResolvedMailboxItems('alpha', noOwnerWait, { dir, now: T0 + 9 * 60_000 }).closed, 0, 'younger than ten minutes');
+  assert.equal(closeResolvedMailboxItems('alpha', { tasks: [task('2')] }, { dir, now: T0 + 11 * 60_000 }).closed, 0, 'a status task waits on the Owner');
+  assert.equal(closeResolvedMailboxItems('alpha', noOwnerWait, { dir, now: T0 + 11 * 60_000 }).closed, 2, 'the old decide items close after the Owner wait clears');
+  for (const record of [young, waiting]) assert.equal(stored(dir, record.id).closedBy, 'project');
+  assert.equal(stored(dir, answer.id).closedAt, undefined, 'answer items do not close as unlinked items');
+  const noTasks = item(dir, 'alpha', {}, T0);
+  assert.equal(closeResolvedMailboxItems('alpha', { tasks: [] }, { dir, now: T0 + 11 * 60_000 }).closed, 0, 'a status with no tasks closes nothing');
+  assert.equal(stored(dir, noTasks.id).closedAt, undefined);
+});
+
+test('review items, Boss-thread items, and items from the Boss stay open', (t) => {
+  const dir = freshDir(t);
+  const review = appendMessage({ ...ask('alpha', 'Review the pack.', { action: 'approve' }), kind: 'review' }, { dir, now: T0 });
+  const bossThread = item(dir, 'boss', {}, T0);
+  const fromBoss = item(dir, 'alpha', { from: 'boss' }, T0);
+  const next = { tasks: [
+    task('1', { mailboxId: review.id, status: 'doing', waitingOn: undefined, ask: undefined }),
+    task('2', { mailboxId: bossThread.id, status: 'doing', waitingOn: undefined, ask: undefined }),
+    task('3', { mailboxId: fromBoss.id, status: 'doing', waitingOn: undefined, ask: undefined }),
+    task('4', { status: 'doing', waitingOn: undefined, ask: undefined }),
+  ] };
+  assert.equal(closeResolvedMailboxItems('alpha', next, { dir, now: T0 + 11 * 60_000 }).closed, 0);
+  assert.equal(closeResolvedMailboxItems('boss', next, { dir, now: T0 + 11 * 60_000 }).closed, 0);
+  for (const record of [review, bossThread, fromBoss]) assert.equal(stored(dir, record.id).closedAt, undefined);
 });
 
 test('a publish for another slug never closes the item', (t) => {
@@ -94,12 +172,12 @@ test('a task that still waits on the Owner with the same mailboxId keeps the ite
   assert.equal(stored(dir, a.id).closedAt, undefined);
 });
 
-test('an item without a task reference is never closed by a publish', (t) => {
+test('a young unlinked item stays open when a linked item closes', (t) => {
   const dir = freshDir(t);
   const a = item(dir, 'alpha');
   const b = item(dir, 'alpha');
   const next = { tasks: [task('1', { mailboxId: b.id, status: 'doing', waitingOn: undefined, ask: undefined }), task('9', { status: 'done', waitingOn: undefined, ask: undefined })] };
-  closeResolvedMailboxItems('alpha', next, { dir });
+  closeResolvedMailboxItems('alpha', next, { dir, now: T0 + 1000 });
   assert.equal(stored(dir, a.id).closedAt, undefined, 'no task names this item');
   assert.equal(stored(dir, b.id).closedBy, 'project');
 });

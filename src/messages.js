@@ -23,6 +23,7 @@ export const ACTIONS = ['answer', 'approve', 'decide', 'read'];
 const NEEDS_YOU_ACTIONS = new Set(['answer', 'approve', 'decide']);
 export const READ_IDS_MAX = 200;
 export const CLOSE_NOTE_PROJECT = 'resolved by the project';
+export const CLOSE_NOTE_UNLINKED_PROJECT = 'Closed because the project status no longer waits on the Owner.';
 export const CLOSE_NOTE_ELSEWHERE = 'answered elsewhere';
 export const CHOICES_MAX = 10;
 export const CHOICE_TEXT_MAX = 200;
@@ -341,29 +342,46 @@ export function closeMailboxItem(id, { dir = DATA_DIR, now = Date.now() } = {}) 
 // The close never changes an existing closedAt.
 const taskList = (status) => (Array.isArray(status?.tasks) ? status.tasks.filter((task) => task && typeof task === 'object') : []);
 
-// Close the open Needs-you items of the thread `slug` whose task exists in the next status and no longer has waitingOn owner.
-// A task that is absent from the status never closes its item, so a status without tasks closes nothing. An item without a task is never closed.
-export function closeResolvedMailboxItems(slug, next, { dir = DATA_DIR, now = Date.now() } = {}) {
+// Close open Needs-you items that the project resolved in its published status.
+// A removed task needs the previous status. An unlinked decision or approval needs an older item and no Owner wait.
+export function closeResolvedMailboxItems(slug, next, { dir = DATA_DIR, now = Date.now(), previous = null } = {}) {
   if (!validThread(slug) || slug === 'boss') return { closed: 0 };
-  const tasks = taskList(next).filter((task) => typeof task.mailboxId === 'string' && task.mailboxId);
-  const waiting = new Set(tasks.filter((task) => task.waitingOn === 'owner').map((task) => task.mailboxId));
-  const resolved = [...new Set(tasks.map((task) => task.mailboxId))].filter((id) => !waiting.has(id));
-  if (!resolved.length) return { closed: 0 };
+  const tasks = taskList(next);
+  if (!tasks.length) return { closed: 0 };
+  const linkedIds = new Set(tasks.filter((task) => typeof task.mailboxId === 'string' && task.mailboxId).map((task) => task.mailboxId));
+  const waitingIds = new Set(tasks.filter((task) => task.waitingOn === 'owner' && typeof task.mailboxId === 'string' && task.mailboxId).map((task) => task.mailboxId));
+  const resolvedIds = new Set([...linkedIds].filter((id) => !waitingIds.has(id)));
+  const currentTaskIds = new Set(tasks.filter((task) => typeof task.id === 'string' && task.id).map((task) => task.id));
+  const removedIds = new Set(taskList(previous)
+    .filter((task) => typeof task.id === 'string' && task.id && !currentTaskIds.has(task.id) && typeof task.mailboxId === 'string' && task.mailboxId)
+    .map((task) => task.mailboxId));
+  const hasOwnerWait = tasks.some((task) => task.waitingOn === 'owner');
   const store = openMessageStore({ dir });
+  const open = (record) => record.thread === slug && record.from !== 'boss' && isMailboxItem(record) && record.kind !== 'review' && needsOwnerAction(record) && !record.closedAt && !record.closedBy && !record.dismissed;
+  const unlinkedLimit = 10 * 60_000;
+  const noteFor = (record) => {
+    if (!open(record)) return null;
+    if (resolvedIds.has(record.id)) return CLOSE_NOTE_PROJECT;
+    if (linkedIds.has(record.id)) return null;
+    if (removedIds.has(record.id)) return CLOSE_NOTE_PROJECT;
+    if (hasOwnerWait || !['decide', 'approve'].includes(mailboxAction(record))) return null;
+    const createdAt = Date.parse(record.at);
+    return Number.isFinite(createdAt) && createdAt < now - unlinkedLimit ? CLOSE_NOTE_UNLINKED_PROJECT : null;
+  };
   // Read first. A publish with no open item to close does not rewrite the store.
-  const open = (record) => record.thread === slug && isMailboxItem(record) && record.kind !== 'review' && needsOwnerAction(record) && !record.closedAt;
   const all = store.all();
-  if (!resolved.some((id) => all.some((record) => record.id === id && open(record)))) return { closed: 0 };
+  const notes = new Map(all.map((record) => [record.id, noteFor(record)]).filter(([, note]) => note));
+  if (!notes.size) return { closed: 0 };
   return store.mutate((records) => {
     const at = new Date(now).toISOString();
     let closed = 0;
-    for (const id of resolved) {
-      const item = records.find((record) => record.id === id && open(record));
-      if (!item) continue;
+    for (const item of records) {
+      const note = notes.get(item.id);
+      if (!note || !open(item)) continue;
       item.closedAt = at;
       item.readAt ||= at;
       item.closedBy = 'project';
-      item.closeNote = CLOSE_NOTE_PROJECT;
+      item.closeNote = note;
       closed += 1;
     }
     return { records, result: { closed } };
