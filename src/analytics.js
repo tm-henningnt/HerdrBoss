@@ -353,6 +353,8 @@ export function analyticsSummary({ dataDir = DATA_DIR, now = Date.now() } = {}) 
   const samples = readMachineSamples({ dataDir, sinceMs: now - 25 * 3600000 });
   const memory = readMemorySamples({ dataDir, sinceMs: now - 25 * 3600000 });
   const denials = denialDaily(readDenials(dataDir), { now, days: RETAIN_DAYS });
+  const agentDays = Array.from({ length: 7 }, (_, i) => localDay(now - (6 - i) * 86400000));
+  const agentSince = new Date(`${agentDays[0]}T00:00:00`).toISOString();
   return {
     notices: noticeCounts(events, { days: 7, now }),
     locks: { ...lockDaily(readEventTail(path.join(dataDir, 'lock-ledger.jsonl')), { days: 7, now }),
@@ -362,6 +364,6 @@ export function analyticsSummary({ dataDir = DATA_DIR, now = Date.now() } = {}) 
     denials,
     harnessChanges: markersIn(denials.days, dataDir),
     policyChanges: readPolicyChanges(dataDir),
-    agentCommunication: agentCommunication(readAgentMetadata({ dir: dataDir, limit: Number.MAX_SAFE_INTEGER }), { now }),
+    agentCommunication: agentCommunication(readAgentMetadata({ dir: dataDir, since: agentSince, limit: Number.MAX_SAFE_INTEGER }), { now }),
   };
 }

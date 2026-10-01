@@ -57,6 +57,54 @@ test('analyticsSummary reads all communication metadata without the API page lim
   assert.doesNotMatch(JSON.stringify(result.agentCommunication), /respondedAt|"text"/);
 });
 
+test('analytics summary folds only its seven-day metadata window and keeps the same figures', (t) => {
+  const dataDir = tmp(t);
+  const file = path.join(dataDir, 'agent-message-meta.jsonl');
+  const now = NOW;
+  const rows = Array.from({ length: 20000 }, (_, i) => {
+    const at = now - 180 * 86400000 + Math.floor((180 * 86400000 * i) / 19999);
+    return {
+      id: `invented-${i}`, at: new Date(at).toISOString(), project: i % 2 ? 'orchard' : 'lantern',
+      kind: i % 3 ? 'reminder' : 'nudge', taskId: `task-${i % 17}`,
+      to: { role: 'worker', kind: 'codex', model: 'invented-model' }, respondedAt: null,
+    };
+  });
+  const expectedRows = rows.map((row) => ({ ...row }));
+  const events = rows.map((row) => ({ ...row }));
+  for (const i of [19000, 19500, 19900]) {
+    events.push({ id: rows[i].id, _update: 'respondedAt', respondedAt: new Date(Date.parse(rows[i].at) + 1000).toISOString() });
+    expectedRows[i].respondedAt = new Date(Date.parse(rows[i].at) + 1000).toISOString();
+  }
+  const text = events.map((row) => JSON.stringify(row)).join('\n') + '\n';
+  fs.writeFileSync(file, text);
+
+  let metadataBytesRead = 0;
+  const metadataHandles = new Set();
+  const openSync = fs.openSync;
+  const readSync = fs.readSync;
+  const readFileSync = fs.readFileSync;
+  t.mock.method(fs, 'openSync', function (target, ...args) {
+    const fd = openSync.call(fs, target, ...args);
+    if (String(target) === file) metadataHandles.add(fd);
+    return fd;
+  });
+  t.mock.method(fs, 'readSync', function (fd, ...args) {
+    const bytes = readSync.call(fs, fd, ...args);
+    if (metadataHandles.has(fd)) metadataBytesRead += bytes;
+    return bytes;
+  });
+  t.mock.method(fs, 'readFileSync', function (target, ...args) {
+    const result = readFileSync.call(fs, target, ...args);
+    if (String(target) === file) metadataBytesRead += Buffer.byteLength(typeof result === 'string' ? result : result);
+    return result;
+  });
+
+  const actual = analyticsSummary({ dataDir, now }).agentCommunication;
+  assert.deepEqual(actual, analytics.agentCommunication(expectedRows, { now }));
+  assert.ok(metadataBytesRead > 0, 'the metadata reader reads the recent tail');
+  assert.ok(metadataBytesRead < Buffer.byteLength(text), `read ${metadataBytesRead} of ${Buffer.byteLength(text)} metadata bytes`);
+});
+
 test('noticeCounts counts each notice for its pane and local day, and a digest counts its titles', () => {
   const events = [
     { at: new Date(NOW - HOUR).toISOString(), type: 'notify', pane: 'w1:p1', text: 'secret-client quota' },

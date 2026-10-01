@@ -14,6 +14,7 @@ const META_FILE = 'agent-message-meta.jsonl';
 const REPORT_FILE = 'agent-report-recorded.jsonl';
 const LOCK_WAIT_MS = 2000;
 const LOCK_STALE_MS = 10000;
+const RESPONSE_INDEXES = new Map();
 
 const clone = (value) => JSON.parse(JSON.stringify(value));
 const messageDate = (record) => Date.parse(record?.createdAt ?? record?.at);
@@ -55,6 +56,56 @@ function readJsonl(file) {
   return rows;
 }
 
+function readJsonlFromEndSince(file, sinceMs) {
+  let fd;
+  const reverseRows = [];
+  let cursor = 0;
+  let pending = Buffer.alloc(0);
+  let stopped = false;
+  try {
+    fd = fs.openSync(file, 'r');
+    cursor = fs.fstatSync(fd).size;
+    while (cursor > 0 && !stopped) {
+      const start = Math.max(0, cursor - 65536);
+      const length = cursor - start;
+      const chunk = Buffer.alloc(length);
+      fs.readSync(fd, chunk, 0, length, start);
+      const combined = pending.length ? Buffer.concat([chunk, pending]) : chunk;
+      let end = combined.length;
+      for (;;) {
+        const newline = combined.lastIndexOf(10, end - 1);
+        if (newline < 0) break;
+        const line = combined.subarray(newline + 1, end);
+        end = newline;
+        if (!line.length) continue;
+        let event;
+        try { event = JSON.parse(line.toString('utf8')); } catch { continue; }
+        if (!event || typeof event !== 'object' || Array.isArray(event)) continue;
+        if (!['respondedAt', 'status'].includes(event._update)
+          && Number.isFinite(Date.parse(event.at)) && Date.parse(event.at) < sinceMs) {
+          stopped = true;
+          break;
+        }
+        reverseRows.push(event);
+      }
+      pending = stopped ? Buffer.alloc(0) : combined.subarray(0, end);
+      cursor = start;
+    }
+    if (!stopped && cursor === 0 && pending.length) {
+      try {
+        const event = JSON.parse(pending.toString('utf8'));
+        if (event && typeof event === 'object' && !Array.isArray(event)
+          && (!Number.isFinite(Date.parse(event.at)) || Date.parse(event.at) >= sinceMs)) reverseRows.push(event);
+      } catch {}
+    }
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+  return reverseRows.reverse();
+}
+
 function writeJsonl(file, rows) {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const temporary = `${file}.${process.pid}.${randomBytes(5).toString('hex')}.tmp`;
@@ -87,18 +138,21 @@ export function pairKeyForAgents(from, to) {
 
 function projectFor(from, to) { return from.project || to.project || null; }
 
-function appendMetadata(row, { dir }) {
+function appendMetadata(row, { dir, now = Date.now() }) {
   const file = metaPath(dir);
-  return withFileLock(file, () => {
+  const signatures = withFileLock(file, () => {
+    const before = fileSignature(file);
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
     fs.appendFileSync(file, `${JSON.stringify(row)}\n`, { mode: 0o600 });
     fs.chmodSync(file, 0o600);
+    return { before, after: fileSignature(file) };
   });
+  noteLocalMetadataEvent(dir, row, signatures, now);
 }
 
-function foldedMetadata(file) {
+function foldMetadataEvents(events) {
   const rows = new Map();
-  for (const event of readJsonl(file)) {
+  for (const event of events) {
     if (event._update === 'respondedAt') {
       const row = rows.get(event.id);
       if (row && !row.respondedAt && Number.isFinite(Date.parse(event.respondedAt))) row.respondedAt = event.respondedAt;
@@ -115,17 +169,128 @@ function foldedMetadata(file) {
   return [...rows.values()];
 }
 
+function foldedMetadata(file, { since = null } = {}) {
+  const sinceMs = since == null ? null : Date.parse(since);
+  return foldMetadataEvents(Number.isFinite(sinceMs) ? readJsonlFromEndSince(file, sinceMs) : readJsonl(file));
+}
+
+function fileSignature(file) {
+  try {
+    const stat = fs.statSync(file);
+    return { size: stat.size, mtimeMs: stat.mtimeMs };
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+function sameSignature(left, right) {
+  return left === null || right === null ? left === right : left.size === right.size && left.mtimeMs === right.mtimeMs;
+}
+
+function responseIndexKey(dir) { return path.resolve(dir); }
+
+function responseIndex(dir) {
+  const key = responseIndexKey(dir);
+  let state = RESPONSE_INDEXES.get(key);
+  if (!state) {
+    state = { rows: new Map(), signature: null, initialized: false, dirty: false };
+    RESPONSE_INDEXES.set(key, state);
+  }
+  return state;
+}
+
+function isResponseIndexRow(row, now) {
+  const at = rowDate(row);
+  return typeof row?.id === 'string' && !!row.id && !row.respondedAt
+    && Number.isFinite(at) && at <= now && now - at < AGENT_RESPONSE_WINDOW_MS
+    && validAddress(row.to) && row.status !== 'failed';
+}
+
+function responseIndexRow(row) {
+  return {
+    id: row.id, at: row.at, from: row.from, to: row.to, kind: row.kind,
+    status: row.status, source: row.source, targetStatus: row.targetStatus,
+  };
+}
+
+function replaceResponseIndex(state, rows, signature, now) {
+  state.rows = new Map(rows.filter((row) => isResponseIndexRow(row, now)).map((row) => [row.id, responseIndexRow(row)]));
+  state.signature = signature;
+  state.initialized = true;
+  state.dirty = false;
+}
+
+function noteLocalMetadataEvent(dir, event, signatures, now = Date.now()) {
+  const state = RESPONSE_INDEXES.get(responseIndexKey(dir));
+  if (!state?.initialized) return;
+  if (state.dirty || !sameSignature(state.signature, signatures.before)) {
+    state.dirty = true;
+    return;
+  }
+  if (event._update === 'respondedAt') {
+    state.rows.delete(event.id);
+  } else if (event._update === 'status') {
+    const row = state.rows.get(event.id);
+    if (row) {
+      row.status = event.status;
+      if (event.status === 'failed') state.rows.delete(event.id);
+    }
+  } else if (isResponseIndexRow(event, now)) {
+    state.rows.set(event.id, responseIndexRow(event));
+  }
+  state.signature = signatures.after;
+}
+
+function rebuildResponseIndexLocked(state, file, now) {
+  const rows = foldedMetadata(file);
+  replaceResponseIndex(state, rows, fileSignature(file), now);
+}
+
+function pruneResponseIndex(state, now) {
+  for (const [id, row] of state.rows) {
+    if (!isResponseIndexRow(row, now)) state.rows.delete(id);
+  }
+}
+
+// Load the small set of response candidates at service start. Later ticks check only the file signature.
+export function initializeAgentResponseIndex({ dir = DATA_DIR, now = Date.now() } = {}) {
+  const file = metaPath(dir);
+  const state = responseIndex(dir);
+  const current = fileSignature(file);
+  if (state.initialized && !state.dirty && sameSignature(state.signature, current)) {
+    pruneResponseIndex(state, now);
+    return state.rows.size;
+  }
+  return withFileLock(file, () => {
+    const locked = fileSignature(file);
+    if (!state.initialized || state.dirty || !sameSignature(state.signature, locked)) rebuildResponseIndexLocked(state, file, now);
+    pruneResponseIndex(state, now);
+    return state.rows.size;
+  });
+}
+
 export function updateAgentMessageRespondedAt(id, respondedAt, { dir = DATA_DIR } = {}) {
   if (typeof id !== 'string' || !id || (respondedAt !== null && (typeof respondedAt !== 'string' || !Number.isFinite(Date.parse(respondedAt))))) {
     throw new Error('Agent metadata response updates need a message ID and ISO timestamp or null.');
   }
   const file = metaPath(dir);
   return withFileLock(file, () => {
-    const row = foldedMetadata(file).find((item) => item.id === id);
+    const rows = foldedMetadata(file);
+    const row = rows.find((item) => item.id === id);
     if (!row || row.respondedAt || respondedAt === null || Date.parse(respondedAt) < rowDate(row)) return false;
+    const state = RESPONSE_INDEXES.get(responseIndexKey(dir));
+    const before = fileSignature(file);
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
     fs.appendFileSync(file, `${JSON.stringify({ id, _update: 'respondedAt', respondedAt })}\n`, { mode: 0o600 });
     fs.chmodSync(file, 0o600);
+    if (state?.initialized) {
+      if (state.dirty || !sameSignature(state.signature, before)) state.dirty = true;
+      else {
+        state.rows.delete(id);
+        state.signature = fileSignature(file);
+      }
+    }
     return true;
   });
 }
@@ -136,45 +301,57 @@ function sameAgent(target, sender) {
     && (target?.name ? target.name === sender?.name : target?.role === 'orch' || target?.role === 'boss');
 }
 
+function updateResponsesLocked(file, state, { panes, observed, now }) {
+  const current = fileSignature(file);
+  if (!state.initialized || state.dirty || !sameSignature(state.signature, current)) rebuildResponseIndexLocked(state, file, now);
+  pruneResponseIndex(state, now);
+  if (!state.rows.size) return { updated: 0, observed: {} };
+
+  const tells = new Map();
+  for (const row of state.rows.values()) {
+    if (row.source !== 'tell' || row.status !== 'delivered' || !validAddress(row.from)) continue;
+    const key = row.from?.pane || addressKey(row.from);
+    if (!tells.has(key)) tells.set(key, []);
+    tells.get(key).push(row);
+  }
+  for (const outgoing of tells.values()) outgoing.sort((a, b) => rowDate(a) - rowDate(b));
+  const live = new Map(panes.filter((pane) => pane.agent).map((pane) => [pane.id, pane]));
+  const next = {};
+  const updates = [];
+  for (const row of state.rows.values()) {
+    if (row.source === 'tell' && row.status !== 'delivered') continue;
+    const at = rowDate(row);
+    const pane = live.get(row.to?.pane);
+    const active = observed[row.id]?.active || ['working', 'blocked'].includes(row.targetStatus)
+      || ['working', 'blocked'].includes(pane?.status);
+    next[row.id] = { active: !!active };
+    const idleAt = active && ['idle', 'done'].includes(pane?.status) ? now : Infinity;
+    const outgoing = tells.get(row.to?.pane || addressKey(row.to)) || [];
+    const reply = outgoing.find((item) => rowDate(item) >= at && rowDate(item) <= now && item.id !== row.id && sameAgent(row.to, item.from));
+    const responseAt = Math.min(idleAt, reply ? rowDate(reply) : Infinity);
+    if (!Number.isFinite(responseAt)) continue;
+    updates.push({ id: row.id, _update: 'respondedAt', respondedAt: new Date(responseAt).toISOString() });
+    delete next[row.id];
+  }
+  if (updates.length) {
+    fs.appendFileSync(file, updates.map((row) => `${JSON.stringify(row)}\n`).join(''), { mode: 0o600 });
+    fs.chmodSync(file, 0o600);
+    for (const row of updates) state.rows.delete(row.id);
+    state.signature = fileSignature(file);
+  }
+  return { updated: updates.length, observed: next };
+}
+
 // Use a fresh pane snapshot and successful tell rows. A response is written once, within 24 hours.
 export function updateAgentResponses({ dir = DATA_DIR, panes = [], observed = {}, now = Date.now() } = {}) {
   const file = metaPath(dir);
-  return withFileLock(file, () => {
-    const rows = foldedMetadata(file);
-    const tells = new Map();
-    for (const row of rows) {
-      if (row.source !== 'tell' || row.status !== 'delivered' || !validAddress(row.from)
-        || rowDate(row) < now - AGENT_RESPONSE_WINDOW_MS || rowDate(row) > now) continue;
-      const key = row.from?.pane || addressKey(row.from);
-      if (!tells.has(key)) tells.set(key, []);
-      tells.get(key).push(row);
-    }
-    for (const outgoing of tells.values()) outgoing.sort((a, b) => rowDate(a) - rowDate(b));
-    const live = new Map(panes.filter((pane) => pane.agent).map((pane) => [pane.id, pane]));
-    const next = {};
-    const updates = [];
-    for (const row of rows) {
-      const at = rowDate(row);
-      if (row.respondedAt || row.status === 'failed' || (row.source === 'tell' && row.status !== 'delivered')
-        || !validAddress(row.to) || !Number.isFinite(at) || at > now || now - at >= AGENT_RESPONSE_WINDOW_MS) continue;
-      const pane = live.get(row.to?.pane);
-      const active = observed[row.id]?.active || ['working', 'blocked'].includes(row.targetStatus)
-        || ['working', 'blocked'].includes(pane?.status);
-      next[row.id] = { active: !!active };
-      const idleAt = active && ['idle', 'done'].includes(pane?.status) ? now : Infinity;
-      const outgoing = tells.get(row.to?.pane || addressKey(row.to)) || [];
-      const reply = outgoing.find((item) => rowDate(item) >= at && rowDate(item) <= now && item.id !== row.id && sameAgent(row.to, item.from));
-      const responseAt = Math.min(idleAt, reply ? rowDate(reply) : Infinity);
-      if (!Number.isFinite(responseAt)) continue;
-      updates.push({ id: row.id, _update: 'respondedAt', respondedAt: new Date(responseAt).toISOString() });
-      delete next[row.id];
-    }
-    if (updates.length) {
-      fs.appendFileSync(file, updates.map((row) => `${JSON.stringify(row)}\n`).join(''), { mode: 0o600 });
-      fs.chmodSync(file, 0o600);
-    }
-    return { updated: updates.length, observed: next };
-  });
+  const state = responseIndex(dir);
+  const current = fileSignature(file);
+  if (state.initialized && !state.dirty && sameSignature(state.signature, current)) {
+    pruneResponseIndex(state, now);
+    if (!state.rows.size) return { updated: 0, observed: {} };
+  }
+  return withFileLock(file, () => updateResponsesLocked(file, state, { panes, observed, now }));
 }
 
 export function recordAgentMessage(fields, { dir = DATA_DIR, now = Date.now() } = {}) {
@@ -217,7 +394,7 @@ export function recordAgentMessage(fields, { dir = DATA_DIR, now = Date.now() } 
     ...(fields.source ? { source: fields.source } : {}),
     ...(fields.targetStatus ? { targetStatus: fields.targetStatus } : {}),
   };
-  appendMetadata(row, { dir });
+  appendMetadata(row, { dir, now });
   return record;
 }
 
@@ -254,7 +431,7 @@ export function listAgentPairs({ dir = DATA_DIR, project = null } = {}) {
 }
 
 export function readAgentMetadata({ dir = DATA_DIR, project = null, since = null, until = null, limit = 200 } = {}) {
-  let rows = foldedMetadata(metaPath(dir));
+  let rows = foldedMetadata(metaPath(dir), { since });
   if (project != null) rows = rows.filter((row) => row.project === project);
   if (since != null) rows = rows.filter((row) => rowDate(row) >= Date.parse(since));
   if (until != null) rows = rows.filter((row) => rowDate(row) <= Date.parse(until));
@@ -275,6 +452,8 @@ export function sweepAgentMessages({ dir = DATA_DIR, retentionDays = 14, metaRet
     const rows = foldedMetadata(file);
     const kept = rows.filter((row) => rowDate(row) >= metaCutoff);
     writeJsonl(file, kept);
+    const state = RESPONSE_INDEXES.get(responseIndexKey(dir));
+    if (state?.initialized) replaceResponseIndex(state, kept, fileSignature(file), now);
     return rows.length - kept.length;
   });
   const seenFile = reportPath(dir);
@@ -421,14 +600,14 @@ export function tellAgent(target, text, { env = process.env, herdr, control = {}
     if (response?.error || response?.ok === false) throw new Error(response.error || 'Herdr refused the prompt.');
     const updated = openMessageStore({ dir }).update(record.id, { status: 'delivered' }, { now });
     let metadataWarning;
-    try { appendMetadata({ id: record.id, _update: 'status', status: 'delivered' }, { dir }); }
+    try { appendMetadata({ id: record.id, _update: 'status', status: 'delivered' }, { dir, now }); }
     catch { metadataWarning = 'The prompt was delivered. Its metadata status could not be saved.'; }
     return { exitCode: 0, record: updated || { ...record, status: 'delivered' }, ...(metadataWarning ? { metadataWarning } : {}) };
   } catch (error) {
     const reason = 'Herdr could not deliver the prompt.';
     const updated = openMessageStore({ dir }).update(record.id, { status: 'failed' }, { now });
     let metadataWarning;
-    try { appendMetadata({ id: record.id, _update: 'status', status: 'failed' }, { dir }); }
+    try { appendMetadata({ id: record.id, _update: 'status', status: 'failed' }, { dir, now }); }
     catch { metadataWarning = 'The metadata status could not be saved.'; }
     return { exitCode: 1, record: updated || { ...record, status: 'failed' }, reason, ...(metadataWarning ? { metadataWarning } : {}) };
   }
