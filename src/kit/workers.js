@@ -1630,7 +1630,9 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
       const missing = recordFlagErrors(options, reportJson);
       if (missing.length) throw new Error(`--record needs:\n- ${missing.join('\n- ')}\nUse --no-record to read the report without a ledger entry.`);
     }
-    const reportMd = readBoundedWorkerReport(path.join(reportDir, 'report.md'));
+    const reportFile = path.join(reportDir, 'report.md');
+    readBoundedWorkerReport(reportFile); // refuses a symlink or a non-regular report before the full read
+    const reportMd = fs.readFileSync(reportFile, 'utf8');
     const errors = validateWorkerReport(reportJson, { evidenceTiers: config.evidenceTiers });
     if (errors.length) throw new Error(`Invalid worker report:\n- ${errors.join('\n- ')}`);
     if (path.resolve(reportJson.worktree) !== path.resolve(run.worktree)) throw new Error(`Report worktree ${reportJson.worktree} does not match run worktree ${run.worktree}.`);
@@ -1657,13 +1659,13 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
     const omitted = changed.filter((item) => !reported.includes(item) && !folders.some((folder) => item.startsWith(folder)));
     if (scopeErrors.length) throw new Error(`Worker ${name} changed paths outside its allowed scope: ${scopeErrors.join(', ')}.`);
     if (omitted.length) throw new Error(`Worker ${name} omitted changed paths from its report: ${omitted.join(', ')}.`);
-    const reportStat = fs.statSync(path.join(reportDir, 'report.json'));
     try {
+      const reportStat = fs.statSync(path.join(reportDir, 'report.json'));
       recordWorkerReport({
         project: config.slug, name: run.name, pane: run.pane,
         taskId: run.taskId ?? run.issue ?? null,
         runId: workerRunId(run, config.slug), mtimeMs: reportStat.mtimeMs,
-        summary: reportMd, toPane: process.env.HERDR_PANE_ID || null,
+        summary: readBoundedWorkerReport(reportFile), toPane: process.env.HERDR_PANE_ID || null,
       }, { dir: DATA_DIR, now });
     } catch (error) {
       const code = typeof error?.code === 'string' && /^[A-Z0-9_-]{1,32}$/.test(error.code) ? error.code : 'error';
