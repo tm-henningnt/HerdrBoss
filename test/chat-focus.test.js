@@ -39,9 +39,11 @@ test('the viewport resize follows the bottom only when the message log was withi
   assert.equal(chatShouldStickToBottom({ scrollHeight: 1200, scrollTop: 560, clientHeight: 600 }), true);
   assert.equal(chatShouldStickToBottom({ scrollHeight: 1200, scrollTop: 559, clientHeight: 600 }), false);
   assert.equal(chatShouldStickToBottom({ scrollHeight: 1200, scrollTop: 599, clientHeight: 600 }), true);
+  assert.match(app, /if \(scroller && chatShouldStickToBottom\(scroller\)\) chatStickToBottom = true/);
+  assert.match(app, /if \(chatStickToBottom && chatPhoneOpen\)[\s\S]*?scroller\.scrollTop = scroller\.scrollHeight/);
 });
 
-test('the phone Chat fills the visual viewport and drops safe-area padding while the keyboard is open', () => {
+test('the phone Chat follows the visual viewport and drops all composer bottom padding while the keyboard is open', () => {
   const viewport = sourceBlock('const scheduleChatViewport = () => {', 'const onViewport = (event) => {');
   const phoneStart = css.indexOf('body.app-view main { position: fixed');
   assert.ok(phoneStart >= 0, 'style.css has a phone app view section');
@@ -49,9 +51,13 @@ test('the phone Chat fills the visual viewport and drops safe-area padding while
 
   assert.match(app, /addEventListener\(['"]resize['"],\s*onViewport/);
   assert.match(app, /addEventListener\(['"]scroll['"],\s*onViewport/);
+  assert.match(app, /addEventListener\(['"]focusin['"]/);
+  assert.match(app, /addEventListener\(['"]focusout['"]/);
   assert.match(viewport, /requestAnimationFrame\(/);
+  assert.match(viewport, /setProperty\(['"]--vv-top['"]/);
   assert.match(viewport, /setProperty\(['"]--vvh['"]/);
-  assert.match(phone, /\.chat-layout\s*\{[^}]*height:\s*var\(--vvh,\s*100dvh\)/);
-  assert.match(phone, /\.chat-composer\s*\{[^}]*env\(safe-area-inset-bottom\)/);
-  assert.match(phone, /body\.chat-keyboard-open \.chat-composer\s*\{[^}]*padding-bottom:\s*6px/);
+  assert.match(phone, /\.chat-layout\s*\{[^}]*position:\s*fixed[^}]*top:\s*max\(var\(--vv-top,[^)]*\),\s*0px\)[^}]*height:\s*var\(--vvh/);
+  assert.match(phone, /\.chat-composer\s*\{[^}]*var\(--chat-bottom-inset,\s*env\(safe-area-inset-bottom\)\)/);
+  assert.match(phone, /body\.chat-keyboard-open \.chat-composer\s*\{[^}]*padding-bottom:\s*0/);
+  assert.match(css, /\.chat-scroll\s*\{[^}]*overscroll-behavior:\s*contain/);
 });

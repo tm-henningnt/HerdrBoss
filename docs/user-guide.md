@@ -48,6 +48,8 @@ Put seed data only into a temporary data directory. Never write seed data or tes
 
 ## Chat API
 
+Open Chat with `?vvdebug=1` on an iPhone, then send a screenshot to the Boss.
+
 Use `GET /api/chats` to list the Boss chat and project chats with an orchestrator pane. The response gives each chat a title, a last message, and an unread count. A chat without messages has a `null` last message. The last message and each chat record have a `channel` field. The unread count leaves out a mail report.
 
 Use `GET /api/chats/<thread>?limit=<n>&before=<id>` to read a chat. Set `limit` to an integer from 1 to 100. The default is 50. Set `before` to a message ID to read older messages. The response sets `more` to `true` when older messages remain. Each record has a `channel` field of `chat`, `both`, or `mail`.

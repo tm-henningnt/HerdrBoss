@@ -6,7 +6,7 @@ import { SETTING_HELP, settingPopupHtml, settingsGuideHtml } from './setting-hel
 import { groupMailRows, inboxSections, listTime, mailRowHtml } from './mail-rows.js';
 import { chatJumpHtml, chatJumpButtonHtml, chatAtBottom, chatJumpScroll } from './chat-jump.js';
 import { mailBarItem, mailActionBarHtml, mailSelectionBarHtml, mailElsewhereButtonHtml, mailSuggestionHtml } from './mail-bar.js';
-import { APP_VIEW_ROUTES, appViewport, chatKeyboardOpen, chatShouldStickToBottom } from './app-view.js';
+import { APP_VIEW_ROUTES, appViewport, chatShouldStickToBottom, chatViewportLayout, readViewport, createChatViewportDebug } from './app-view.js';
 import { parseReviewPath, reviewItemFromHash, reviewUrl, packListHtml, packPageHtml, reviewMessageHtml, reviewKeyAction, reviewOpenLinkHtml, reviewErrorText, submitConfirmText, pinProposedVerdict, reviewDoneLineHtml, parseFrameMessage, pinsInView, frameView, pickPinFields } from './review.js';
 import { viewerKeyAction, nextOpenItem, itemNeighbors, sectionStep, addPin, removePin, setPinText, itemSpec } from './review-viewer.js';
 import { attachGestures, restoreStages, resetStages, zoomStage } from './review-gestures.js';
@@ -2921,6 +2921,10 @@ let appDrawerOpen = false;
 // The phone app view uses the same width as the CSS. On a phone the open thread replaces the list, so its title is the page h1.
 const appPhoneMedia = window.matchMedia('(max-width: 760px)');
 const appPhone = () => appPhoneMedia.matches;
+const chatViewportSearch = location.search;
+function readSessionStorage() { try { return window.sessionStorage; } catch { return null; } }
+const chatViewportDebug = createChatViewportDebug({ search: chatViewportSearch, storage: readSessionStorage(), document });
+chatViewportDebug?.setVisible(location.pathname === '/chat' && appPhone());
 const threadTitleTag = () => appPhone() ? 'h1' : 'h2';
 // The note field of an approval or a choice in the phone action bar is open.
 const mailNoteOpen = new Set();
@@ -5642,7 +5646,7 @@ const HELP = {
     <h3>Conversation</h3><p>Select a row to open the chat. Your messages sit on the right, and the agent messages sit on the left. Each bubble shows the text as formatted Markdown and the time. A wide table or code block scrolls sideways inside the bubble. Raw HTML shows as text. Your bubble also shows the delivery state: <b>queued</b>, <b>delivered</b>, or <b>failed</b> with the reason. Opening a chat marks the messages to you as read.</p>
     <p>Scroll up to read older messages. The page asks for the page before the oldest message and keeps your reading position. It stops at the oldest message in the store. The store keeps messages for 30 days.</p>
     <p>A new message goes at the bottom. The page scrolls down only when you already read the newest message. Otherwise the page keeps your position and shows a round arrow-down button at the bottom right of the message list. The badge on the button counts the new messages. Select the button to scroll to the newest message. The button hides at the bottom.</p>
-    <h3>Composer</h3><p>Select the round send button or press Enter to send the message. Select Shift and press Enter to make a new line. The text area grows with the text, up to 6 lines. A message holds at most 2000 characters. The service accepts at most 10 messages a minute.</p>
+    <h3>Composer</h3><p>Select the round send button or press Enter to send the message. Select Shift and press Enter to make a new line. The text area grows with the text, up to 6 lines. A message holds at most 2000 characters. The service accepts at most 10 messages a minute.</p><p>For an iPhone layout check, open Chat with <code>?vvdebug=1</code> and send a screenshot to the Boss.</p>
     <p>The page shows your message as <b>queued</b> at once. The stored record replaces it when the service stores it. A refused send marks the bubble <b>failed</b> and shows <b>Retry</b>. Select <b>Retry</b> to send the same text again.</p>
     <h3>Action cards</h3><p>A message from an agent that asks for a decision shows as a normal bubble with one small button per option. The bubble holds a short question line. The page drops the choice list from the text, because the buttons hold the choices. A message with no real choice shows as a plain bubble with the <b>Open in Mailbox</b> link.</p>
     <p><b>Approve</b> and <b>Reject</b> answer an approval. <b>Later</b> only collapses the card. It writes nothing, and the Mailbox item stays open. A <b>decide</b> message with a Markdown list under a <b>Choices</b> heading shows one button for each choice. A decide with the choices <b>Yes</b> and <b>No</b> shows those two buttons. An <b>answer</b> message shows a one-line text field and <b>Send</b>.</p>
@@ -6627,6 +6631,10 @@ function render(force = false) {
   const html = page;
   // The Mailbox and the Chat are app views: on a phone they fill the visual viewport and hide the page header.
   document.body.classList.toggle('app-view', APP_VIEW_ROUTES.includes(route));
+  const chatPhoneOpen = route === 'chat' && appPhone();
+  document.body.classList.toggle('chat-phone-open', chatPhoneOpen);
+  if (!chatPhoneOpen) document.body.classList.remove('chat-keyboard-open');
+  chatViewportDebug?.setVisible(chatPhoneOpen);
   if (!APP_VIEW_ROUTES.includes(route)) appDrawerOpen = false;
   $navMenuLabel.textContent = NAV_LABEL[route] || 'Menu';
   for (const a of $nav.querySelectorAll('a')) {
@@ -8045,15 +8053,23 @@ document.getElementById('browser-viewer').addEventListener('close', () => {
 });
 setInterval(autoRender, 10000);
 
-// Keep fixed bars above the on-screen keyboard. --kb-inset is the height the keyboard hides. A pinch zoom sets it to 0.
+// Keep the Chat panel inside iOS Safari's visual viewport. Other app views still use --app-h and --app-top.
 if (window.visualViewport) {
   const vv = window.visualViewport;
   const setKeyboardInset = () => document.documentElement.style.setProperty('--kb-inset', `${vv.scale > 1.01 ? 0 : Math.max(0, Math.round(innerHeight - vv.height - vv.offsetTop))}px`);
-  // The phone app view has the height of the visual viewport, so the composer sits on top of the keyboard.
   const setAppViewport = () => {
-    const view = appViewport({ height: vv.height, offsetTop: vv.offsetTop, scale: vv.scale, innerHeight });
+    const view = appViewport({ height: vv.height, offsetTop: vv.offsetTop, scale: vv.scale, innerHeight: window.innerHeight });
     document.documentElement.style.setProperty('--app-h', `${view.height}px`);
     document.documentElement.style.setProperty('--app-top', `${view.top}px`);
+  };
+  const safeAreaProbe = document.createElement('div');
+  safeAreaProbe.setAttribute('aria-hidden', 'true');
+  safeAreaProbe.style.cssText = 'position:fixed;left:-100px;top:-100px;width:0;height:0;contain:strict;visibility:hidden;pointer-events:none;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)';
+  document.body.append(safeAreaProbe);
+  const readSafeArea = () => {
+    const style = getComputedStyle(safeAreaProbe);
+    const px = (value) => Number.parseFloat(value) || 0;
+    return { top: px(style.paddingTop), right: px(style.paddingRight), bottom: px(style.paddingBottom), left: px(style.paddingLeft) };
   };
   let chatViewportFrame = 0;
   let chatStickToBottom = false;
@@ -8061,13 +8077,29 @@ if (window.visualViewport) {
     if (chatViewportFrame) return;
     chatViewportFrame = requestAnimationFrame(() => {
       chatViewportFrame = 0;
-      document.documentElement.style.setProperty('--vvh', `${Math.round(vv.height)}px`);
-      document.body.classList.toggle('chat-keyboard-open', chatKeyboardOpen(innerHeight, vv.height));
-      if (chatStickToBottom) {
+      const viewport = readViewport({ innerHeight: window.innerHeight, visualViewport: vv, search: chatViewportSearch, debugEnabled: Boolean(chatViewportDebug) });
+      const safeArea = readSafeArea();
+      const draftFocused = document.activeElement?.matches?.('[data-chat-draft]') === true;
+      const layout = chatViewportLayout({ ...viewport, safeAreaBottom: safeArea.bottom, draftFocused });
+      const chatPhoneOpen = location.pathname === '/chat' && appPhoneMedia.matches;
+      document.documentElement.style.setProperty('--vv-top', `${layout.top}px`);
+      document.documentElement.style.setProperty('--vvh', `${layout.height}px`);
+      document.documentElement.style.setProperty('--chat-bottom-inset', `${layout.bottomInset}px`);
+      document.body.classList.toggle('chat-phone-open', chatPhoneOpen);
+      document.body.classList.toggle('chat-keyboard-open', chatPhoneOpen && layout.keyboardOpen);
+      chatViewportDebug?.setVisible(chatPhoneOpen);
+      if (chatStickToBottom && chatPhoneOpen) {
         const scroller = document.querySelector('[data-chat-scroll]');
         if (scroller) scroller.scrollTop = scroller.scrollHeight;
       }
       chatStickToBottom = false;
+      const composer = document.querySelector('[data-chat-compose]')?.getBoundingClientRect();
+      const container = document.querySelector('.chat-layout')?.getBoundingClientRect();
+      const standalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+      chatViewportDebug?.update({
+        ...viewport, safeArea, composerRect: composer, containerRect: container,
+        keyboardOpen: layout.keyboardOpen, standalone,
+      });
     });
   };
   const onViewport = (event) => {
@@ -8081,7 +8113,19 @@ if (window.visualViewport) {
   };
   vv.addEventListener('resize', onViewport);
   vv.addEventListener('scroll', onViewport);
-  document.documentElement.style.setProperty('--vvh', `${Math.round(vv.height)}px`);
-  document.body.classList.toggle('chat-keyboard-open', chatKeyboardOpen(innerHeight, vv.height));
+  window.addEventListener('resize', onViewport);
+  document.addEventListener('focusin', (event) => {
+    if (event.target.matches?.('[data-chat-draft]')) scheduleChatViewport();
+  });
+  document.addEventListener('focusout', (event) => {
+    if (event.target.matches?.('[data-chat-draft]')) scheduleChatViewport();
+  });
+  const initialViewport = readViewport({ innerHeight: window.innerHeight, visualViewport: vv, search: chatViewportSearch, debugEnabled: Boolean(chatViewportDebug) });
+  const initialSafeArea = readSafeArea();
+  const initialLayout = chatViewportLayout({ ...initialViewport, safeAreaBottom: initialSafeArea.bottom });
+  document.documentElement.style.setProperty('--vv-top', `${initialLayout.top}px`);
+  document.documentElement.style.setProperty('--vvh', `${initialLayout.height}px`);
+  document.documentElement.style.setProperty('--chat-bottom-inset', `${initialLayout.bottomInset}px`);
   setAppViewport();
+  scheduleChatViewport();
 }
