@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process';
 // A worker that started less than this long ago gets time for the orchestrator to publish.
 export const MISMATCH_GRACE_MS = 5 * 60000;
 const MINUTE_MS = 60000;
-const NO_WORKER_MINUTES = 30;
+export const NO_WORKER_MINUTES = 30;
 
 export const TASK_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
@@ -191,6 +191,7 @@ export function projectStatusFreshness(project, workers = [], herdr = null, work
   const ageMin = ageMinutes(publishedMs, now);
   const panes = workspacePanes(herdr, workspace);
   const liveWorker = workers.some((worker) => worker?.phase === 'live');
+  // A blocked orchestrator cannot publish the active plan, so it counts as not working here.
   const orchestratorWorking = panes.some((pane) => pane?.orch === true && (pane.status ?? pane.agent_status) === 'working');
   return {
     ageMin,

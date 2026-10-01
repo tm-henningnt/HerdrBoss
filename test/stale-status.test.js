@@ -10,7 +10,8 @@ const DATA = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-stale-status-'));
 process.env.HERDR_BOSS_DIR = DATA;
 process.on('exit', () => fs.rmSync(DATA, { recursive: true, force: true }));
 const { Engine } = await import('../src/engine.js');
-const { evaluate, renderBulletin, staleStatuses } = await import('../src/rules.js');
+const { evaluate, renderBulletin, staleStatuses, STALE_STATUS_NOTICE_AFTER_MINUTES } = await import('../src/rules.js');
+const { NO_WORKER_MINUTES } = await import('../src/task-state.js');
 const { loadConfig } = await import('../src/config.js');
 
 const MIN = 60000;
@@ -70,6 +71,10 @@ test('the default configuration has staleStatusMinutes 120', () => {
   assert.equal(loadConfig().staleStatusMinutes, 120);
 });
 
+test('the stale status notice delay uses the no-worker threshold', () => {
+  assert.equal(STALE_STATUS_NOTICE_AFTER_MINUTES, NO_WORKER_MINUTES);
+});
+
 test('a stale status notice starts after 30 minutes and repeats once an hour while the orchestrator works', async () => {
   const prompts = [];
   const engine = new Engine(loadConfig(), { push: false, act: false, herdrRunner: async (_cmd, args) => { prompts.push(args); return ''; } });
@@ -116,8 +121,11 @@ test('stale status notices go only to the project pane labeled orch and wait whi
   engine.memory = { paneSince: {}, pushes: {}, notified: {}, infoPrompts: {} };
   const alerts = staleAlerts(evaluate(snapshot({ updated: NOW - 31 * MIN, orchStatus: 'working' }), CFG, {}, NOW).alerts);
 
-  await engine.deliver(alerts, { panes: [{ id: 'w1:p1', workspace: 'w1', orch: true, label: 'lead', agent: 'claude', status: 'working' }] }, NOW);
-  assert.equal(prompts.length, 0, 'there is no fallback to another pane in the project');
+  await engine.deliver(alerts, { panes: [
+    { id: 'w1:p1', workspace: 'w1', orch: true, label: 'lead', agent: 'claude', status: 'working' },
+    { id: 'w2:p1', workspace: 'w2', orch: true, label: 'orch', agent: 'claude', status: 'working' },
+  ] }, NOW);
+  assert.equal(prompts.length, 0, 'there is no fallback to another pane or another project');
 
   await engine.deliver(alerts, { panes: [{ id: 'w1:p2', workspace: 'w1', orch: true, label: 'orch', agent: 'claude', status: 'blocked' }] }, NOW + 1);
   assert.equal(prompts.length, 0, 'a blocked orchestrator cannot receive a stale status notice');

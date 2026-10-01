@@ -386,13 +386,13 @@ export function alertPromptDue(alert, record, now, cooldown) {
   return !alert.key.startsWith('machine:disk:') && !alert.once && now - record.at > cooldown;
 }
 
-// Stale-status notices use the existing digest path while an orchestrator works or is blocked. Other notices wait until it is idle or done.
+// Stale-status notices use the existing digest path while an orchestrator works. Other notices wait until it is idle or done.
 export function orchestratorCanReceiveNotice(orch, alerts) {
-  return orch.status === 'idle' || orch.status === 'done' || alerts.some((alert) => (isStaleStatusAlert(alert) && ['working', 'blocked'].includes(orch.status)) || skipsIdleGate(alert));
+  return orch.status === 'idle' || orch.status === 'done' || alerts.some((alert) => (isStaleStatusAlert(alert) && orch.status === 'working') || skipsIdleGate(alert));
 }
 
 const skipsIdleGate = (alert) => !!alert.immediate && SEV[alert.severity] >= SEV.warn;
-const isStaleStatusAlert = (alert) => alert.key.startsWith('status:stale:');
+const isStaleStatusAlert = (alert) => !!alert.key?.startsWith('status:stale:');
 
 // A project that stays behind on a required kit change gets one reminder after this time.
 export const KIT_REMIND_MS = 2 * 3600 * 1000;
@@ -2420,7 +2420,7 @@ export class Engine extends EventEmitter {
         // A kit reminder goes to the project orchestrator only while it works. The kit notice reached it when it was idle.
         if (a.key.startsWith('kitremind:')) targets = kitNoticeTargets(targets.filter((o) => o.label === 'orch' && o.status === 'working'), held);
         if (isStaleStatusAlert(a)) {
-          const target = targets.find((o) => o.label === 'orch') || targets[0];
+          const target = targets.find((o) => o.workspace === a.scope && o.label === 'orch');
           targets = target ? [target] : [];
         }
         if (a.key.startsWith('machine:disk:')) {
@@ -2457,7 +2457,7 @@ export class Engine extends EventEmitter {
         const infoAllowed = settled && now - (this.memory.infoPrompts[o.id] || 0) >= INFO_PROMPT_INTERVAL_MS;
         // A kit digest has its own interval, so the shared info interval does not hold it and it does not start that interval.
         const info = due.filter((a) => SEV[a.severity] < SEV.warn && (
-          isKitAlert(a) ? settled : isStaleStatusAlert(a) ? (settled || ['working', 'blocked'].includes(o.status)) : settled && infoAllowed
+          isKitAlert(a) ? settled : isStaleStatusAlert(a) ? (settled || o.status === 'working') : settled && infoAllowed
         )).sort((a, b) => Number(isStaleStatusAlert(b)) - Number(isStaleStatusAlert(a)));
         if (!urgent.length && !info.length) continue;
         urgent.sort((x, y) => SEV[y.severity] - SEV[x.severity]);

@@ -5,10 +5,10 @@ import { blockedWorkerAlerts } from './worker-failures.js';
 import { kitRevision } from './kit/agents-check.js';
 import { leaseBulletinLines } from './leases.js';
 import { watchUntilPhrase } from './night.js';
-import { mismatchText, projectStatusFreshness, taskMismatches } from './task-state.js';
+import { mismatchText, NO_WORKER_MINUTES, projectStatusFreshness, taskMismatches } from './task-state.js';
 
 const PROVIDER_NAMES = { claude: 'Claude', codex: 'Codex', opencodego: 'OpenCode Go' };
-export const STALE_STATUS_NOTICE_AFTER_MINUTES = 30;
+export const STALE_STATUS_NOTICE_AFTER_MINUTES = NO_WORKER_MINUTES;
 export const STALE_STATUS_NOTICE_INTERVAL_MINUTES = 60;
 const MINUTE_MS = 60000;
 export const providerName = (p) => PROVIDER_NAMES[p] || p;

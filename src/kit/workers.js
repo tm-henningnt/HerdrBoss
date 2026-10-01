@@ -1557,27 +1557,33 @@ export function taskIdWarning(options) {
   return 'No --task-id: the project board shows this worker as Unplanned work.';
 }
 
+const TASK_SUGGESTION_STOPWORDS = new Set(['add', 'the', 'fix', 'test', 'tests', 'docs', 'and', 'for', 'with', 'task', 'from', 'into']);
+
 function suggestedTask(options, projectStatus) {
   const input = options?.taskFile ? path.basename(String(options.taskFile)) : String(options?.task || '');
   const tasks = (Array.isArray(projectStatus?.tasks) ? projectStatus.tasks : []).filter((task) =>
-    TASK_ID.test(String(task?.id || '')) && typeof task?.title === 'string' && task.title.trim());
-  const exactId = tasks.find((task) => {
+    String(task?.status || '').toLowerCase() !== 'done'
+      && TASK_ID.test(String(task?.id || '')) && typeof task?.title === 'string' && task.title.trim());
+  const exactIds = tasks.filter((task) => {
     const id = String(task?.id || '');
+    if (id.length < 2) return false;
     const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    return new RegExp(`(?:^|[^A-Za-z0-9._-])${escaped}(?=$|[^A-Za-z0-9._-])`).test(input);
+    return new RegExp(`(?:^|[^\\p{L}\\p{N}_])${escaped}(?=$|[^\\p{L}\\p{N}_])`, 'iu').test(input);
   });
-  if (exactId) return { id: exactId.id, title: exactId.title || '' };
+  if (exactIds.length === 1) return { id: exactIds[0].id, title: exactIds[0].title };
+  if (exactIds.length > 1) return null;
 
-  const tokens = (value) => new Set(String(value || '').toLowerCase().match(/[\p{L}\p{N}]+/gu) || []);
+  const tokens = (value) => new Set((String(value || '').toLowerCase().match(/[\p{L}\p{N}]+/gu) || [])
+    .filter((token) => Array.from(token).length >= 3 && !TASK_SUGGESTION_STOPWORDS.has(token)));
   const inputTokens = tokens(input);
-  let best = null;
-  for (const task of tasks) {
+  const ranked = tasks.map((task) => {
     const id = String(task?.id || '');
     const taskTokens = tokens(`${id} ${task.title}`);
     const shared = [...inputTokens].filter((token) => taskTokens.has(token)).length;
-    if (!best || shared > best.shared) best = { id, title: task.title, shared };
-  }
-  return best?.shared >= 2 ? best : null;
+    return { id, title: task.title, shared };
+  }).filter((task) => task.shared >= 2).sort((a, b) => b.shared - a.shared);
+  if (!ranked.length || ranked[1]?.shared === ranked[0].shared) return null;
+  return ranked[0];
 }
 
 function readRun(config, name) {
