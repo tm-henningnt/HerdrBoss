@@ -227,7 +227,7 @@ test('the goal is the --goal text, else the Settings default goal', () => {
   } finally { f.cleanup(); }
 });
 
-test('the ladder takes the first usable entry and skips a disabled kind', () => {
+test('the ladder takes the first usable non-Opus entry and skips a disabled kind', () => {
   const f = fixture();
   try {
     writePolicy(f, { allowedKinds: ['claude', 'pi', 'opencode'] });
@@ -235,8 +235,20 @@ test('the ladder takes the first usable entry and skips a disabled kind', () => 
     const result = start(f, herdr);
     assert.equal(result.ok, true, result.error);
     const startCall = herdr.calls.find((c) => c[0] === 'agent' && c[1] === 'start');
-    assert.equal(startCall[startCall.indexOf('--kind') + 1], 'claude');
-    assert.ok(startCall.includes('claude-opus-5-5'));
+    assert.equal(startCall[startCall.indexOf('--kind') + 1], 'pi');
+    assert.ok(!startCall.includes('claude-opus-5-5'), 'an Opus rung is the last choice');
+  } finally { f.cleanup(); }
+});
+
+test('the ladder refuses an Opus rung without the Owner approval when no other rung can start', () => {
+  const f = fixture();
+  try {
+    writePolicy(f, { allowedKinds: ['claude'] });
+    const herdr = fakeHerdr();
+    const result = start(f, herdr);
+    assert.equal(result.ok, false);
+    assert.match(result.error, /needs the Owner's approval/);
+    assert.equal(herdr.calls.find((c) => c[0] === 'agent' && c[1] === 'start'), undefined);
   } finally { f.cleanup(); }
 });
 
