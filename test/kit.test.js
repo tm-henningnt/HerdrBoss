@@ -1294,6 +1294,86 @@ test('worker collect keeps changed paths stable after the base branch merges the
   assert.deepEqual(afterMerge.actualPaths, beforeMerge.actualPaths);
 });
 
+// The kit rewrites its own files in a worker worktree. The collect scope check must ignore them.
+const KIT_FIXTURE_FILES = ['docs/orchestration/herdr-boss.md', 'docs/orchestration/memory.md', 'AGENTS.md', '.claude/settings.json'];
+
+function setupKitPathFixture(name) {
+  const f = setupFixture(null);
+  const worktreeRoot = path.join(f.root, '.wt');
+  for (const relative of KIT_FIXTURE_FILES) {
+    const file = path.join(f.root, relative);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, 'seed\n');
+  }
+  fs.writeFileSync(path.join(f.root, '.herdr-boss.json'), JSON.stringify({
+    briefTemplate: f.config.briefTemplatePath, setup: null, worktreeRoot,
+  }));
+  const config = loadProjectConfig({ cwd: f.root });
+  git(f.root, 'add', '-A');
+  git(f.root, 'commit', '-m', 'fixture files');
+  const run = startWorker(name, { kind: 'codex', task: 'x', readOnly: true }, {
+    config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+  });
+  assert.deepEqual(run.allowedPaths, ['.worker/**'], `${name} must use an empty allow list`);
+  const writeReport = (changedPaths) => {
+    const reportDir = path.join(run.worktree, run.workerDir);
+    fs.writeFileSync(path.join(reportDir, 'report.md'), 'Status: done\n');
+    fs.writeFileSync(path.join(reportDir, 'report.json'), JSON.stringify({
+      issue: null, branch: run.branch, worktree: run.worktree, changedPaths,
+      commands: ['focused check'], evidenceTier: ['unit'], unverified: [], stoppedEarly: false,
+    }));
+  };
+  const writeChange = (relative, allow) => {
+    const file = path.join(run.worktree, relative);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, 'changed\n');
+    if (allow) { git(run.worktree, 'add', relative); git(run.worktree, 'commit', '-m', 'worker change'); }
+  };
+  const clean = () => {
+    git(f.root, 'worktree', 'remove', '--force', run.worktree);
+    fs.rmSync(f.root, { recursive: true, force: true });
+  };
+  return { f, config, run, writeReport, writeChange, clean };
+}
+
+test('worker collect ignores a kit-managed change with an empty allow list', (t) => {
+  const kitPaths = ['docs/orchestration/herdr-boss.md', 'AGENTS.md', '.claude/settings.json'];
+  for (const [index, relative] of kitPaths.entries()) {
+    const name = `kit-path-${index}`;
+    const kit = setupKitPathFixture(name);
+    t.after(kit.clean);
+    kit.writeChange(relative, true);
+    kit.writeReport([relative]);
+    const summary = collectWorker(name, {}, { config: kit.config, output: () => {}, listWorktreeProcesses: () => [] });
+    assert.deepEqual(summary.actualPaths, [], `${relative} must not count as a changed path`);
+    assert.deepEqual(summary.reportedPaths, [], `${relative} must not count as a reported path`);
+  }
+});
+
+test('worker collect still refuses a change to a path next to a kit-managed path', (t) => {
+  const kit = setupKitPathFixture('kit-path-refusal');
+  t.after(kit.clean);
+  kit.writeChange('docs/orchestration/memory.md', true);
+  kit.writeReport(['docs/orchestration/memory.md']);
+  assert.throws(() => collectWorker('kit-path-refusal', {}, {
+    config: kit.config, output: () => {}, listWorktreeProcesses: () => [],
+  }), /outside its allowed scope: docs\/orchestration\/memory\.md/);
+});
+
+test('worker collect checks the product paths next to an ignored kit path', (t) => {
+  const kit = setupKitPathFixture('kit-path-mixed');
+  t.after(kit.clean);
+  kit.run.allowedPaths.push('src/');
+  fs.writeFileSync(kit.run.recordFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(kit.run.recordFile, 'utf8')), allowedPaths: kit.run.allowedPaths }));
+  kit.writeChange('AGENTS.md', true);
+  kit.writeChange('src/change.js', true);
+  kit.writeReport(['AGENTS.md', 'src/change.js']);
+  const summary = collectWorker('kit-path-mixed', {}, { config: kit.config, output: () => {}, listWorktreeProcesses: () => [] });
+  assert.deepEqual(summary.reportedPaths, ['src/change.js']);
+  assert.deepEqual(summary.actualPaths, ['src/change.js']);
+  assert.deepEqual(summary.outOfScope, []);
+});
+
 test('worker collect --record refuses invalid reports and scopes without printing a success summary', () => {
   const cases = [
     { name: 'collect-scope-refusal', changedPath: 'docs/outside.md', allowedPaths: ['src/', '.orchestration/runs/'], reportPaths: ['docs/outside.md'], error: /outside its allowed scope/ },
