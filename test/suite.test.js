@@ -520,7 +520,7 @@ test('the machine suite lock serves three separate-process waiters in ticket ord
       }, `waiter ${pane} did not take its ticket`);
       assert.deepEqual(tickets.map((ticket) => ticket.pane), ['ws:b', 'ws:c', 'ws:d'].slice(0, index + 1));
       assert.deepEqual(tickets.map((ticket) => ticket.seq), Array.from({ length: index + 1 }, (_, item) => item + 1));
-      assert.deepEqual(Object.keys(tickets[0]).sort(), ['command', 'createdAt', 'id', 'kind', 'lane', 'pane', 'pid', 'predictedMs', 'project', 'seq']);
+      assert.deepEqual(Object.keys(tickets[0]).sort(), ['command', 'createdAt', 'id', 'kind', 'lane', 'pane', 'pid', 'pidStart', 'predictedMs', 'project', 'seq']);
     }
 
     releaseProjectLock('full-suite', holder);
@@ -1561,6 +1561,59 @@ test('LK3 R12 startup without a policy still uses legacy defaults', (t) => {
   assert.equal(acquired.slot, 'long');
 });
 
+for (const policyCase of [
+  { name: 'unreadable policy file', reason: /policy file is unreadable/, damage: (file) => fs.unlinkSync(file) },
+  { name: 'unknown lane', reason: /lock lane is unknown/, damage: (file) => fs.writeFileSync(file, JSON.stringify({ locks: { guard: POLICY_DEFAULTS.locks.guard } })) },
+]) {
+  test(`LK5 R16 a wait reports ${policyCase.name} without naming its own ticket`, (t) => {
+    const f = fixture(t, `herdr-lk5-policy-${policyCase.name.replaceAll(' ', '-')}-`);
+    const panes = ['ws:a', 'ws:b'];
+    configureLockSettings(f, { slots: 1 });
+    seedLockHistory(f);
+    let clock = Date.now();
+    const processInfo = () => ({ alive: true, start: 'invented-process-start' });
+    const options = (pane) => lockOptions(f, pane, panes, {
+      now: () => clock, pidAlive: () => true, processInfo,
+    });
+    acquireProjectLock('full-suite', { ...options('ws:a'), kind: 'suite' });
+
+    const notices = [];
+    const noticeTimes = [];
+    let pauses = 0;
+    const policyFile = path.join(f.dataDir, 'policy.json');
+    assert.throws(() => acquireProjectLock('full-suite', {
+      ...options('ws:b'),
+      kind: 'suite',
+      waitSeconds: 120,
+      output: (line) => {
+        if (line.includes('policy file is unreadable') || line.includes('lock lane is unknown')) {
+          notices.push(line);
+          noticeTimes.push(clock);
+        }
+      },
+      pause: (ms) => {
+        pauses += 1;
+        clock += 60_000;
+        if (pauses === 1) {
+          policyCase.damage(policyFile);
+          releaseProjectLock('full-suite', { ...options('ws:a'), output: () => {} });
+        }
+      },
+    }), (error) => {
+      assert.equal(error.exitCode, 75);
+      assert.match(error.message, /no active holder/);
+      assert.doesNotMatch(error.message, /ws:b/);
+      return true;
+    });
+
+    assert.equal(notices.length, 2, notices.join('\n'));
+    assert.match(notices[0], policyCase.reason);
+    assert.doesNotMatch(notices.join('\n'), /ws:b|policy\.json|herdr-suite-policy/);
+    assert.deepEqual(noticeTimes.map((time) => time - noticeTimes[0]), [0, 60_000]);
+    assert.deepEqual(readQueueFiles(f.dataDir), []);
+  });
+}
+
 test('LK3 R13 a legacy shell-PID ticket expires at 30 minutes and is reclaimed after a two-hour clock advance', (t) => {
   const f = fixture(t, 'herdr-lk3-legacy-ticket-age-');
   const panes = ['ws:a', 'ws:b', 'ws:c'];
@@ -1612,6 +1665,89 @@ test('LK3 R13 new manual wait tickets use the CLI PID and acquired manual holder
   });
   assert.equal(sawTicket, true);
   assert.equal(acquired.pid, 601);
+});
+
+test('LK5 R9 lock holders store process start identity and PID reuse makes them stale while legacy holders stay live', (t) => {
+  const f = fixture(t, 'herdr-lk5-holder-pid-start-');
+  const panes = ['ws:a', 'ws:b'];
+  const starts = new Map([[501, 'Mon Sep 28 10:00:00 2026'], [502, 'Mon Sep 28 10:01:00 2026']]);
+  const options = (name) => {
+    const base = lockOptions(f, name, panes, {
+      pidAlive: () => true,
+      processInfo: (pid) => ({ alive: true, start: starts.get(pid) ?? null }),
+    });
+    return {
+      ...base,
+      herdr: (args) => args[0] === 'pane' && args[1] === 'process-info'
+        ? { process_info: { shell_pid: name === 'ws:a' ? 501 : 502 } }
+        : base.herdr(args),
+    };
+  };
+  configureLockSettings(f, { slots: 2 });
+  seedLockHistory(f);
+
+  const first = acquireProjectLock('full-suite', { ...options('ws:a'), kind: 'manual' });
+  assert.equal(first.pidStart, 'Mon Sep 28 10:00:00 2026');
+  starts.set(501, 'Mon Sep 28 11:00:00 2026');
+  const listed = listProjectLocks({ ...options('ws:b'), output: () => {} });
+  assert.equal(listed.find((record) => record.name === 'full-suite').state, 'stale');
+
+  const notices = [];
+  const replacement = acquireProjectLock('full-suite', { ...options('ws:b'), kind: 'manual', output: (line) => notices.push(line) });
+  assert.equal(replacement.pid, 502);
+  assert.equal(replacement.pidStart, 'Mon Sep 28 10:01:00 2026');
+  assert.ok(notices.some((line) => line.includes('Taking over stale lock')));
+
+  const legacy = JSON.parse(fs.readFileSync(f.lockFile, 'utf8'));
+  delete legacy.pidStart;
+  fs.writeFileSync(f.lockFile, JSON.stringify(legacy));
+  starts.set(502, 'Mon Sep 28 12:00:00 2026');
+  assert.equal(listProjectLocks({ ...options('ws:a'), output: () => {} }).find((record) => record.name === 'full-suite').state, 'live');
+});
+
+test('LK5 R9 queue tickets store process start identity, prune reused PIDs, and keep legacy tickets valid', (t) => {
+  const f = fixture(t, 'herdr-lk5-ticket-pid-start-');
+  const panes = ['ws:a', 'ws:b', 'ws:c'];
+  const starts = new Map([[601, 'Mon Sep 28 10:00:00 2026'], [process.pid, 'Mon Sep 28 10:01:00 2026']]);
+  const processInfo = (pid) => ({ alive: true, start: starts.get(pid) ?? null });
+  const options = (pane) => lockOptions(f, pane, panes, { pidAlive: () => true, processInfo });
+  configureLockSettings(f, { slots: 1 });
+  acquireProjectLock('full-suite', { ...options('ws:a'), kind: 'suite' });
+
+  let clock = Date.now();
+  let savedTicket;
+  const waiting = acquireProjectLock('full-suite', {
+    ...options('ws:b'), kind: 'suite', waitSeconds: 1, now: () => clock,
+    pause: (ms) => {
+      const [ticket] = readQueueFiles(f.dataDir);
+      assert.ok(ticket);
+      savedTicket = ticket;
+      releaseProjectLock('full-suite', { ...options('ws:a'), now: () => clock, output: () => {} });
+      clock += ms;
+    },
+  });
+  assert.equal(savedTicket.pidStart, 'Mon Sep 28 10:01:00 2026');
+  releaseProjectLock('full-suite', { ...options('ws:b'), now: () => clock, output: () => {} });
+
+  const reused = writeLegacyTicket(f, 'ws:b');
+  Object.assign(reused.ticket, { pid: 601, lane: 'long', pidStart: 'Mon Sep 28 10:00:00 2026' });
+  fs.writeFileSync(reused.file, JSON.stringify(reused.ticket));
+  starts.set(601, 'Mon Sep 28 11:00:00 2026');
+  assert.deepEqual(readLockQueue({ dataDir: f.dataDir, livePanes: new Set(panes), pidAlive: () => true, processInfo }), []);
+
+  const acquired = acquireProjectLock('full-suite', { ...options('ws:c'), kind: 'suite' });
+  assert.equal(acquired.ownerPane, 'ws:c');
+  assert.equal(fs.existsSync(reused.file), false, 'the next admission removes the reused-PID ticket');
+  releaseProjectLock('full-suite', { ...options('ws:c'), output: () => {} });
+
+  const legacy = writeLegacyTicket(f, 'ws:b', 42);
+  Object.assign(legacy.ticket, { pid: 601, lane: undefined });
+  delete legacy.ticket.lane;
+  fs.writeFileSync(legacy.file, JSON.stringify(legacy.ticket));
+  assert.equal(readLockQueue({ dataDir: f.dataDir, livePanes: new Set(panes), pidAlive: () => true,
+    processInfo: () => ({ alive: true, start: 'Mon Sep 28 12:00:00 2026' }) }).length, 1,
+  'a legacy ticket without a saved start identity keeps its old liveness rule');
+  assert.equal(fs.existsSync(legacy.file), true);
 });
 
 for (const slot of ['long', 1]) for (const pane of ['ws:a', 'ws:b']) {
