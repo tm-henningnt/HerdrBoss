@@ -6,7 +6,7 @@
 
 export const APPLY = {
   policy: 'Select Apply policy. The change takes effect at the next engine tick.',
-  'lock-policy': 'Select Apply policy. The change applies to the next lock admission.',
+  'lock-policy': 'Select Apply policy. Capacity and guard changes apply to the next admission attempt, including queued jobs. A queued ticket keeps its prediction and short-limit classification.',
   service: 'Select Save in the group. The change takes effect at once.',
   restart: 'Change it in config.json. Restart the service.',
   now: 'The change takes effect at once.',
@@ -297,7 +297,7 @@ export const SETTING_HELP = Object.fromEntries([
     what: 'The total number of holders for a machine lock. One holder uses the long lane. The other slots hold short jobs.',
     default: '2', unit: 'Slots', range: '1 to 4',
     raise: 'A higher value lets more short jobs run beside one long job.',
-    lower: 'A lower value limits short jobs. A value of 1 keeps one exclusive lane.',
+    lower: 'A lower value limits short jobs. Existing holders finish before admission fits the lower capacity. A value of 1 keeps one exclusive lane.',
     apply: 'lock-policy',
   }),
   S('locks', 'locks.shortLimitMinutes', 'Short job limit', {
@@ -316,21 +316,21 @@ export const SETTING_HELP = Object.fromEntries([
   }),
   S('locks', 'locks.guard.maxLoadPercent', 'Maximum load for a short job', {
     what: 'The 5-minute load average as a percent of the machine core count. The guard pauses above this value.',
-    default: '231', unit: 'Percent of cores', range: '0 to 1000',
+    default: '231', unit: 'Percent of cores', range: '0 to 1000; a blank field is invalid',
     raise: 'A higher value lets a short job start at a higher load.',
     lower: 'A lower value pauses short jobs at a lower load.',
     apply: 'lock-policy',
   }),
   S('locks', 'locks.guard.maxSwapPercent', 'Maximum swap for a short job', {
     what: 'The swap use as a percent of the swap total. The guard pauses above this value.',
-    default: '96', unit: 'Percent of swap', range: '0 to 100',
+    default: '96', unit: 'Percent of swap', range: '0 to 100; a blank field is invalid',
     raise: 'A higher value lets a short job start with more swap in use.',
     lower: 'A lower value pauses short jobs with less swap in use.',
     apply: 'lock-policy',
   }),
   S('locks', 'locks.guard.minFreeMemPercent', 'Minimum free memory', {
     what: 'The free memory percent below which the guard pauses a short job.',
-    default: '40', unit: 'Percent free', range: '0 to 100',
+    default: '40', unit: 'Percent free', range: '0 to 100; a blank field is invalid',
     raise: 'A higher value leaves more memory free before a short job starts.',
     lower: 'A lower value lets a short job start with less free memory.',
     apply: 'lock-policy',

@@ -63,11 +63,20 @@ export function classifyLockLane(prediction, shortLimitMinutes) {
   };
 }
 
+export const isLegacyLockEntry = (item) => item?.legacy === true || item?.lane === undefined;
+
+export function lockAdmissionCapacity(slots, holders = [], tickets = []) {
+  if (holders.some(isLegacyLockEntry) || tickets.some(isLegacyLockEntry)) return 1;
+  return Number.isInteger(slots) && slots >= 1 ? slots : 1;
+}
+
 const laneFor = (item, slots) => (slots < 2 || item?.lane !== 'short' ? 'long' : 'short');
 
 // Choose one record slot without changing the order of either lane's queue.
 export function chooseLockSlot({ lane, slots, holders = [], tickets = [], ticketId = null } = {}) {
-  const capacity = Number.isInteger(slots) && slots >= 1 ? slots : 1;
+  const capacity = lockAdmissionCapacity(slots, holders, tickets);
+  // Retiring slots still consume capacity until their holders finish.
+  if (holders.length >= capacity) return null;
   const effectiveLane = capacity < 2 ? 'long' : lane === 'short' ? 'short' : 'long';
   const laneTickets = tickets.filter((ticket) => laneFor(ticket, capacity) === effectiveLane);
   if (ticketId === null ? laneTickets.length > 0 : laneTickets[0]?.id !== ticketId) return null;
@@ -78,7 +87,9 @@ export function chooseLockSlot({ lane, slots, holders = [], tickets = [], ticket
   if (effectiveLane === 'long') return longUsed ? null : { slot: 'long' };
 
   const shortUsed = new Set(occupied.filter((slot) => Number.isInteger(slot) && slot > 0));
-  for (let slot = 1; slot < capacity; slot++) if (!shortUsed.has(slot)) return { slot };
+  if (shortUsed.size < capacity - 1) {
+    for (let slot = 1; slot < capacity; slot++) if (!shortUsed.has(slot)) return { slot };
+  }
   const longWaiters = tickets.filter((ticket) => laneFor(ticket, capacity) === 'long');
   if (!longUsed && longWaiters.length === 0) return { slot: 'long' };
   return null;

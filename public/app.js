@@ -14,7 +14,7 @@ import { createReviewSync, createDrafts, NOTE_DEBOUNCE_MS } from './review-sync.
 import { createWizard } from './project-wizard-ui.js';
 import { goalSetBlockHtml, goalDialogHtml, goalJobRunning, goalStatusText, pollGoalStatus } from './goal-set.js';
 import { buildDraftShares, draftSignature, shareTotal, distributeRemainder, moveShares, totalHtml, checkSave, confirmText, sumConfirmText, allocationFooterHtml, staleRowHtml } from './allocation-draft.js';
-import { stackedBars, lineChart, stripBars, outcomeBars, legendHtml, foldSeries, spendSeries, claudeSpend, quotaSeries, firstTimeRate, activityFilter, activityChoices, eventLevel, dayLabel, usd, minutes, compact, ACTIVITY_RANGES, ACTIVITY_LEVELS, SERIES_CLASSES, DENIAL_RANGES, DEFAULT_DENIAL_RANGE, denialRange, denialSeries, denialMarkers, denialDetailsHtml, denialLegendHtml, policyChangesTitle, policyChangesListHtml, policyChangesDetailsHtml, lockWaitSeries, lockWaitDetailsHtml } from './analytics.js';
+import { stackedBars, lineChart, stripBars, outcomeBars, legendHtml, foldSeries, spendSeries, claudeSpend, quotaSeries, firstTimeRate, activityFilter, activityChoices, eventLevel, dayLabel, usd, minutes, compact, ACTIVITY_RANGES, ACTIVITY_LEVELS, SERIES_CLASSES, DENIAL_RANGES, DEFAULT_DENIAL_RANGE, denialRange, denialSeries, denialMarkers, denialDetailsHtml, denialLegendHtml, policyChangesTitle, policyChangesListHtml, policyChangesDetailsHtml, lockWaitSeries, lockWaitDetailsHtml, lockAdmissionHtml } from './analytics.js';
 
 const $app = document.getElementById('app');
 // A visual check can force a theme with ?theme=light or ?theme=dark. Without it, the page follows the system.
@@ -122,6 +122,24 @@ const routineDrafts = {};
 const routineOpen = new Set();
 const routineMessages = {};
 let hashScrolled = false;
+
+function lockNumberError(value, min, max) {
+  return Number.isInteger(value) && value >= min && value <= max ? '' : `Enter a whole number from ${min} to ${max}.`;
+}
+
+function readLockNumber(input) {
+  const value = input.value.trim() === '' ? null : Number(input.value);
+  const key = input.dataset.policyLockGuard || input.dataset.policyLock;
+  const min = key === 'slots' || key === 'shortLimitMinutes' ? 1 : 0;
+  const max = { slots: 4, shortLimitMinutes: 60, maxLoadPercent: 1000, maxSwapPercent: 100, minFreeMemPercent: 100 }[key];
+  const error = lockNumberError(value, min, max);
+  input.setCustomValidity(error);
+  if (error) input.setAttribute('aria-invalid', 'true');
+  else input.removeAttribute('aria-invalid');
+  const message = document.getElementById(`${input.id || helpFid(`locks.${input.dataset.policyLockGuard ? 'guard.' : ''}${key}`)}-error`);
+  if (message) message.textContent = error;
+  return value;
+}
 
 function markPolicyDirty() {
   policyDirty = true;
@@ -988,8 +1006,13 @@ function settingsView(s) {
   const quotaPanel = `<section class="panel"><h2>Provider quotas</h2><h3>Quota mode${helpButton('quota.mode')}</h3>${providerRows}<h3 class="quota-goals">Pacing goals${helpButton('quota.goalPercent')}</h3>${goalRows}<h3 class="quota-goals">Pace tolerance</h3>${settingRow('paceTolerancePoints', 'Pace tolerance points', `<input id="${helpFid('paceTolerancePoints')}" type="number" min="0" max="50" step="1" value="${d.paceTolerancePoints}" data-policy-number="paceTolerancePoints">`)}${settingRow('paceMinUsePercent', 'Minimum use for ahead of pace %', `<input id="${helpFid('paceMinUsePercent')}" type="number" min="0" max="100" step="1" value="${d.paceMinUsePercent}" data-policy-number="paceMinUsePercent">`)}</section>`;
   const lockPolicy = d.locks || {};
   const lockGuard = lockPolicy.guard || {};
-  const lockNumber = (key, label, min, max) => settingRow(`locks.${key}`, label, `<input id="${helpFid(`locks.${key}`)}" type="number" min="${min}" max="${max}" step="1" value="${lockPolicy[key] ?? ''}" data-policy-lock="${key}">`);
-  const lockGuardNumber = (key, label, min, max) => settingRow(`locks.guard.${key}`, label, `<input id="${helpFid(`locks.guard.${key}`)}" type="number" min="${min}" max="${max}" step="1" value="${lockGuard[key] ?? ''}" data-policy-lock-guard="${key}">`);
+  const lockInput = (key, label, value, min, max, dataset) => {
+    const id = helpFid(key);
+    const error = lockNumberError(value, min, max);
+    return settingRow(key, label, `<span class="lock-number-control"><input id="${id}" type="number" min="${min}" max="${max}" step="1" required value="${esc(value ?? '')}" ${dataset} data-lock-min="${min}" data-lock-max="${max}" aria-describedby="${id}-error"${error ? ' aria-invalid="true"' : ''}><span id="${id}-error" class="lock-field-error" role="alert">${esc(error)}</span></span>`);
+  };
+  const lockNumber = (key, label, min, max) => lockInput(`locks.${key}`, label, lockPolicy[key], min, max, `data-policy-lock="${key}"`);
+  const lockGuardNumber = (key, label, min, max) => lockInput(`locks.guard.${key}`, label, lockGuard[key], min, max, `data-policy-lock-guard="${key}"`);
   const lockSettings = `<section class="panel"><h2>Locks</h2>${lockNumber('slots', 'Machine lock slots', 1, 4)}${lockNumber('shortLimitMinutes', 'Short job limit minutes', 1, 60)}${settingRow('locks.guard.enabled', 'Guard for short jobs', `<input id="${helpFid('locks.guard.enabled')}" type="checkbox" role="switch" aria-label="Guard for short jobs" data-policy-lock-guard="enabled" ${lockGuard.enabled !== false ? 'checked' : ''}>`)}${lockGuardNumber('maxLoadPercent', 'Maximum load % of cores', 0, 1000)}${lockGuardNumber('maxSwapPercent', 'Maximum swap % used', 0, 100)}${lockGuardNumber('minFreeMemPercent', 'Minimum free memory %', 0, 100)}</section>`;
   const settingsGroups = ['Machine', 'Quota', 'Status', 'Workers', 'Watch', 'Browsers', 'Service'];
   const serviceSettingRanges = {
@@ -4699,7 +4722,8 @@ function timelineChart() {
 function lockWaitBlock() {
   const locks = analyticsData?.locks;
   const base = { id: 'lock-wait', title: 'Lock wait and hold' };
-  if (!locks?.projects?.length) return vizCard({ ...base, empty: 'No lock use is recorded in the last 7 days.' });
+  const admission = lockAdmissionHtml(locks?.admission, analyticsUi.lockProject);
+  if (!locks?.projects?.length) return vizCard({ ...base, sub: 'No lock use is recorded in the last 7 days.', chart: admission });
   const win = lockWaitSeries(locks, analyticsUi.lockProject);
   const rows = win.project === 'all' ? locks.projects : locks.projects.filter((project) => project.project === win.project);
   const laneWait = (lane) => win.days.map((_, index) => rows.reduce((total, project) => {
@@ -4727,7 +4751,7 @@ function lockWaitBlock() {
     sub: `Last 7 days, one bar for each day. The lower part is hold time. The upper parts are wait time by lane. ${medianText} Rows without a lane count as long. A run that reused a pass adds nothing.`,
     controls,
     legend: legendHtml(chartSeries.map((series) => ({ ...series, label: `${series.label} ${minutes(series.values.reduce((sum, value) => sum + value, 0))}` }))),
-    chart: stackedBars({ cats: win.days.map((day) => ({ label: dayLabel(day), tip: dayLabel(day, true) })), series: chartSeries, fmt, label: title }),
+    chart: `${stackedBars({ cats: win.days.map((day) => ({ label: dayLabel(day), tip: dayLabel(day, true) })), series: chartSeries, fmt, label: title })}${lockAdmissionHtml(locks.admission, win.project)}`,
     details: `${lockWaitDetailsHtml(win, locks)}${laneDetails}`,
   });
 }
@@ -5613,14 +5637,14 @@ const HELP = {
     <p>A bar label such as <b>30% · 2</b> shows the set share and the effective slots. A narrow segment shows fewer labels; its tooltip shows all values.</p>
     <p>An idle project is faded. A paused project is faded and striped.</p>
     <p>When <b>Borrow idle shares</b> is on, a project lends its unused slots to the projects that use all their slots. An idle or paused project lends all its slots. Another project always keeps its base slots. It offers its unused slots to other projects and does not lose them. The lent and offered slots go to the full projects by share. When no project is full, no project lends. A project row shows <b>N lent</b> for an idle project, <b>N free for others</b> for a project with unused slots, and <b>+N borrowed</b> for a full project. Borrowed slots are real capacity. The global limit still applies.</p>
-    <h3>Locks</h3><p>The panel on the Agents and Allocation pages shows the long and short lanes, their holders, queues, and predicted durations. The long lane has one slot. The short lane has one fewer slot than the machine lock capacity. A short job can use a free long slot only when no long job waits. The panel shows the machine guard limits and the median wait by lane. A re-entrant suite under a push is not part of the medians. You cannot release a lock from this panel.</p>
+    <h3>Locks</h3><p>The panel on the Agents and Allocation pages shows the long and short lanes, their holders, queues, and predicted durations. The long lane has one slot. The short lane has one fewer slot than the machine lock capacity. A short job can use a free long slot only when no long job waits. The panel shows the machine guard limits and the median wait by lane. A re-entrant suite under a push is not part of the medians. Release a lock from its owner pane with the CLI. With several live records in that pane, select a record with <code>lock release NAME --slot N</code> or <code>--slot long</code>. A live holder or ticket without a lane makes admission exclusive until legacy records drain. You cannot release a lock from this panel.</p>
     <h3>Resource leases</h3><p>Each pool lists its items and the holder of each item. The head shows the held and free counts, the lease TTL, and the reclaim rule. A held row shows the holder project, the pane or worker, the lease age, the server (its pid, or <b>unbound</b>), whether the port has a listener, the idle minutes, and the time left. A row with no listener is idle and has a muted style. Herdr Boss reclaims an idle lease after the idle minutes of the pool. <b>borrowed</b> marks an item of another project's split. For <code>project-browsers</code>, the panel lists only the held ports and the number of free ports; that pool has 77 ports. An invalid resource pool shows an error line.</p>
     <p>Select <b>Release</b> to give a lease back. The page asks you to confirm, and names the pool, the item, the holder project, and the pane or worker. The release removes the lease only while its holder project is still the project that the page shows. Otherwise the page reports that the lease changed, and you reload the page. A release never stops a process. For a project browser that runs, the button is disabled until you close the browser on the Browsers page.</p>
     <h3>Manage pools</h3><p>Select <b>Add pool</b> to create a pool. Enter ports, ranges such as 8000-8009, or items. Separate them with commas or lines. A pool holds at most 100 ports from 1024 to 65535. Enter the project split as JSON. Set the environment variable, lease TTL, reclaim check, grace period, idle minutes, and the wait default. Add a value by port to hand a worker a variable, for example a client ID, that matches its port. The value is stored in the private config file on this machine only, and the page shows <b>set</b> instead of the value. Select <b>Change</b> to replace it. An empty value clears it. Keep ports 9222 to 9299 out of custom pools. Select <b>Edit</b> to change a config pool. Select <b>Remove</b>, then confirm the pool name, to remove it. A held item blocks removal and any update that drops it. The exception is a lease that is unbound and has had no listener for the idle minutes. Herdr Boss saves the change to <code>config.json</code> and applies it at once. The built-in <code>project-browsers</code> pool has no edit or remove controls. The read-only preview refuses pool changes.</p>`],
   settings: ['Settings', `
     <p>Each harness section holds the models and provider routes of that harness. Provider quotas, machine limits, and lock lanes are below the harnesses. The <b>Advanced</b> section holds the rarely used settings. It stays closed until you open it, and the page remembers its state.</p>
     <h3>Guide to the settings</h3>${settingsGuideHtml()}
-    <h3>Locks</h3><p>The <b>Locks</b> group sets machine lock slots, the short job limit, and the machine guard. The default is 2 slots and a 6 minute short job limit. Herdr Boss predicts a job from recent lock holds. A key with fewer than 3 releases has an unknown prediction and uses the long lane. Before a short job starts beside a long holder, the guard checks load, swap, and free memory. A missing sample or one older than 3 minutes passes. The guard never delays a long job. Change the settings and select <b>Apply policy</b>. They apply to the next lock admission.</p>
+    <h3>Locks</h3><p>The <b>Locks</b> group sets machine lock slots, the short job limit, and the machine guard. The default is 2 slots and a 6 minute short job limit. Herdr Boss predicts a job from recent lock holds. A key with fewer than 3 releases has an unknown prediction and uses the long lane. Before a short job starts beside a long holder, the guard checks load, swap, and free memory. A missing sample or one older than 3 minutes passes. The guard never delays a long job. A short job borrowing the long slot does not activate it. Future samples are ignored. Change the settings and select <b>Apply policy</b>. Capacity and guard changes apply to the next admission attempt, including queued jobs. A ticket keeps its prediction and short-limit classification. A blank guard field is invalid and shows a field error. A typed zero is valid.</p>
     <h3>Avatars</h3><p>The <b>Avatars</b> section has one row for the Boss and one row for each project. A row shows the avatar of that chat. Select <b>Upload image</b> to use your own image. Select <b>Reset</b> to use the generated avatar again. An image is a PNG, JPEG, or WebP file of at most 512 KB. Herdr Boss keeps no other format. The image shows at once in the Chat, the Mailbox, and the Agents chart. Without an image, the page uses a generated avatar. Its color comes from the name of the project, and it stays the same. The two letters come from the project display name, the same on every page. The Boss has a crown. Each other project has two letters. The letters use the color of the best contrast on the circle.</p>
     <h3>Watch routines</h3><p>Each routine in the <b>Watch routines</b> section has a title, a model hint, a schedule, and a prompt text. Select a routine to edit it. The schedule is a number of minutes between runs, or a time before the end of the watch. Select <b>Save</b> to store the change on this machine. The change never edits the kit file, and it applies to the next prompt of a running watch. Select <b>Reset to the kit text</b> to remove your change. Use <b>Add a routine</b> to create your own routine. Turn routines on or off for a watch in the Watch box on the Agents page.</p>
     <h3>Service settings</h3><p>The table shows the values that the service uses. Each row shows whether the value comes from <code>config.json</code> or a default. Rows with inputs can be changed in the dashboard. Change the values in a group, then select <b>Save</b>. Herdr Boss applies saved values at once. Keep the quota warning below the critical value. Rows without inputs are read-only: port, host, provider kinds, and orchestrator label. Change them in <code>config.json</code> and restart. A row marked restart required saves at once and takes effect after the next service restart.</p>
@@ -5693,7 +5717,7 @@ const HELP = {
     <p>A flag on the chart marks a day on which a harness fix went in. The flags come from <code>harness-changes.jsonl</code> in the data folder, one JSON object on each line: <code>date</code> (YYYY-MM-DD), <code>harness</code> (<code>claude</code>, <code>codex</code>, <code>opencode</code>, or <code>pi</code>), and <code>label</code> (up to 80 characters). Add a line with <code>herdr-boss harness change HARNESS LABEL [--date YYYY-MM-DD]</code>. Hover, focus, or touch a flag to read its date, harness, and label. Details lists the days, both series, and the flags. The small table in Details shows counts for the last 7 days by harness, model, and cause. It shows up to 10 rows.</p>
     <p>The table in Details shows the last 7 days by cause and project. The arrow compares the last 24 hours with the mean of the 6 days before. When a cause is above 2 times its mean and above 10 events, the page and the bulletin show <b>Discuss this trend with the Boss.</b> Herdr Boss sends no prompt to an orchestrator about it. While more than 1 MB of older logs is unread, the note waits, because the counts of older days are not complete.</p>
     <p>A read-only line shows the limits: the scan interval, the bytes for one scan, the days kept, and the rise rule.</p>
-    <h3>Lock wait and hold</h3><p>Bars show hold time in the lower part and wait time by lane in the upper parts, for each of the last 7 days. The text shows the median wait for the long and short lanes. Choose a project to see only its runs. A push or a suite run that reused a suite pass takes no lock and adds no time. Details lists the days, wait by lane, and the projects with their runs and timeouts.</p>
+    <h3>Lock wait and hold</h3><p>Bars show hold time in the lower part and wait time by lane in the upper parts, for each of the last 7 days. The text shows the median wait for the long and short lanes. Choose a project to see only its runs. A push or a suite run that reused a suite pass takes no lock and adds no time. Details lists the days, wait by lane, and the projects with their runs and timeouts. The card shows saved slot capacity and machine-wide slot use from the latest usable machine sample. After 3 minutes, use is unknown. The project filter does not change that machine scope. Predicted hold is shown for each project and kind. It uses the last 10 qualifying releases within 14 days, including the rotated ledger. Fewer than 3 releases means unknown.</p>
     <h3>Machine load and lock waits</h3><p>Lines show the 5-minute load as a percent of the cores, the memory in use, and the swap in use over the last 24 hours, in columns of 10 minutes. A shaded column had a lock holder. The strip under the chart shows the minutes in which a suite request waited in the queue.</p>
     <h3>Machine overload and idle waiting</h3><p>The chart shows, for each hour of the day in local time, the mean minutes per day of two conditions over the last 14 days. <b>Overload</b>: swap above 90% with at least 1 GB in use, or a 5-minute load above 3 times the cores. <b>Queue waited, CPU under 50%</b>: a suite request waited in the <code>full-suite</code> queue while the CPU was not the reason.</p>
     <p>Hover, focus, or touch an hour to read its values. Hatched bars have fewer than 10 samples. A note shows when samples cover less than half of the window; a minute without a sample is missing data. The table under the chart has the same 24 rows. On a phone the chart scrolls sideways inside its own box.</p>
@@ -7081,12 +7105,12 @@ document.addEventListener('change', (e) => {
   }
   if (el.dataset.policyMachine) { d.machine ||= {}; d.machine[el.dataset.policyMachine] = el.value === '' ? null : Number(el.value); }
   if (el.dataset.policyMachineBool) { d.machine ||= {}; d.machine[el.dataset.policyMachineBool] = el.checked; }
-  if (el.dataset.policyLock) { d.locks ||= {}; d.locks[el.dataset.policyLock] = Number(el.value); }
+  if (el.dataset.policyLock) { d.locks ||= {}; d.locks[el.dataset.policyLock] = readLockNumber(el); }
   if (el.dataset.policyLockGuard) {
     d.locks ||= {};
     d.locks.guard ||= {};
     const key = el.dataset.policyLockGuard;
-    d.locks.guard[key] = key === 'enabled' ? el.checked : Number(el.value);
+    d.locks.guard[key] = key === 'enabled' ? el.checked : readLockNumber(el);
   }
   if (el.dataset.policyBool) d[el.dataset.policyBool] = el.checked;
   if (el.dataset.provider) d.providerModes[el.dataset.provider] = el.value;
@@ -7854,6 +7878,8 @@ document.addEventListener('click', async (e) => {
   if (e.target.id === 'save-policy' && policyDraft) {
     e.target.disabled = true;
     try {
+      const invalidLock = document.querySelector('[data-policy-lock][aria-invalid="true"], [data-policy-lock-guard][aria-invalid="true"]');
+      if (invalidLock) { invalidLock.reportValidity(); throw new Error(invalidLock.validationMessage); }
       const pacingError = pacingDraftError(policyDraft, state?.quotas);
       if (pacingError) throw new Error(pacingError);
       const check = allocationSaveCheck();

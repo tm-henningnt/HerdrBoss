@@ -22,7 +22,7 @@ const USAGE = `Kit commands:
   wait [<worker>...] [--timeout SECONDS] [--stall SECONDS]
   worker park <name> --reason TEXT | worker unpark <name>
   worker allow <name> <path>... --reason TEXT
-  lock acquire <name> [--wait SECONDS] | lock release <name> | lock list
+  lock acquire <name> [--wait SECONDS] | lock release <name> [--slot long|N] | lock list
   push [git push arguments]
   suite [--wait SECONDS] [--keep NAME]... [--reuse] -- <command...> | suite --list-passes
   worktree prune [--apply] [--no-archive]
@@ -252,16 +252,19 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
     }
     if (action === 'release') {
       const { positional, flags } = parseArgs(rest);
-      if (positional.length !== 1 || Object.keys(flags).length) fail('Usage: lock release <name>');
+      if (positional.length !== 1) fail('Usage: lock release <name> [--slot long|N]');
+      knownFlags(flags, ['slot']);
+      const slot = flags.slot === undefined ? null : flags.slot === 'long' ? 'long' : /^[1-4]$/.test(flags.slot) ? Number(flags.slot) : NaN;
+      if (Number.isNaN(slot)) fail('--slot must be long or an integer from 1 to 4.');
       return releaseProjectLock(positional[0], {
-        config, env, herdr, dataDir: lockDataDir, output, pidAlive,
+        config, env, herdr, dataDir: lockDataDir, output, pidAlive, now, slot,
       });
     }
     if (action === 'list') {
       if (rest.length) fail('Usage: lock list');
       return listProjectLocks({ config, env, herdr, dataDir: lockDataDir, output, pidAlive, now });
     }
-    fail('Usage: lock acquire <name> [--wait SECONDS] | lock release <name> | lock list');
+    fail('Usage: lock acquire <name> [--wait SECONDS] | lock release <name> [--slot long|N] | lock list');
   }
   if (command === 'push') {
     // All arguments go to git push unchanged.

@@ -145,3 +145,32 @@ test('analyticsSummary reads the lock ledger from the last 2 MB only', (t) => {
   assert.equal(r.locks.projects.find((p) => p.project === 'alpha').waitTotal, 60000);
   assert.ok(r.locks.projects.find((p) => p.project === 'old').waitTotal < 12000 * 7, 'the head of the file is not read');
 });
+
+
+test('LK3 R6 Analytics supplies sampled slot use and predictions for each project and kind', (t) => {
+  const dir = tmp(t);
+  fs.writeFileSync(path.join(dir, 'policy.json'), JSON.stringify({ locks: { slots: 3, shortLimitMinutes: 2 } }));
+  const release = (project, kind, holdMs, index) => ({ at: new Date(NOW - (8 + index) * 86400000).toISOString(),
+    event: 'release', name: 'full-suite', project, kind, holdMs });
+  const rows = [0, 1, 2].flatMap((i) => [release('alpha', 'suite', 60000 + i * 60000, i), release('alpha', 'push', 900000, i)]);
+  rows.push(release('beta', 'manual', 30000, 0));
+  rows.push(release('alpha', 'suite', 999999, 0), release('/private/path', 'suite', 1, 0));
+  rows.at(-2).takeover = true;
+  fs.writeFileSync(path.join(dir, 'lock-ledger.1.jsonl'), rows.map(JSON.stringify).join('\n'));
+  fs.writeFileSync(path.join(dir, 'machine-samples.jsonl'), [
+    { at: new Date(NOW - 60000).toISOString(), holders: ['suite', 'push'] },
+    { at: new Date(NOW + 60000).toISOString(), holders: [] },
+  ].map(JSON.stringify).join('\n'));
+  const admission = analyticsSummary({ dataDir: dir, now: NOW }).locks.admission;
+  assert.ok(admission, 'Analytics must include admission data even without 7-day history');
+  assert.equal(admission.slotLimit, 3);
+  assert.equal(admission.slotsInUse, 2);
+  assert.equal(admission.sampledAt, new Date(NOW - 60000).toISOString());
+  const suite = admission.predictions.find((p) => p.project === 'alpha' && p.kind === 'suite');
+  assert.deepEqual(suite, { project: 'alpha', kind: 'suite', name: 'full-suite', lane: 'short', predictedMs: 120000, samples: 3 });
+  assert.equal(admission.predictions.find((p) => p.kind === 'push').lane, 'long');
+  assert.equal(admission.predictions.find((p) => p.project === 'beta').predictedMs, null);
+  assert.doesNotMatch(JSON.stringify(admission), /private|path/);
+  fs.writeFileSync(path.join(dir, 'machine-samples.jsonl'), JSON.stringify({ at: new Date(NOW - 180001).toISOString(), holders: ['suite'] }));
+  assert.equal(analyticsSummary({ dataDir: dir, now: NOW }).locks.admission.slotsInUse, null, 'stale use is unknown, not zero');
+});

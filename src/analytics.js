@@ -5,6 +5,8 @@ import { readMachineSamples } from './machine-samples.js';
 import { readDenials, denialDaily, RETAIN_DAYS } from './denials.js';
 import { readHarnessChanges } from './harness-changes.js';
 import { readPolicyChanges } from './policy-log.js';
+import { lockLaneSettings } from './kit/locks.js';
+import { classifyLockLane, readLockDurationPrediction } from './kit/lock-lanes.js';
 
 // Aggregate figures for the Analytics page. The result holds numbers, lock kinds, and pane IDs only:
 // no notice text, workspace name, path, or command. The policy changes hold policy keys, which name a project, and scalar values.
@@ -198,13 +200,40 @@ function markersIn(days, dataDir) {
   return readHarnessChanges(dataDir).filter((m) => m.date >= first && m.date <= last);
 }
 
+// Capacity is the saved policy. Use is a machine sample snapshot, never a project count.
+// Predictions use the same retained 14-day history as lock admission, including the rotated ledger.
+function lockAdmissionSummary(samples, { dataDir, now }) {
+  const settings = lockLaneSettings(dataDir);
+  const sample = samples.filter((row) => Date.parse(row.at) <= now && Array.isArray(row.holders))
+    .sort((a, b) => Date.parse(b.at) - Date.parse(a.at))[0];
+  const fresh = sample && now - Date.parse(sample.at) <= 180000;
+  const keys = new Map();
+  for (const file of ['lock-ledger.1.jsonl', 'lock-ledger.jsonl']) {
+    for (const row of readEventTail(path.join(dataDir, file), { maxBytes: 5 * 1024 * 1024 })) {
+      const at = Date.parse(row.at);
+      if (row.name !== 'full-suite' || !PROJECT_SLUG.test(row.project ?? '')
+        || !['suite', 'push', 'manual'].includes(row.kind) || !Number.isFinite(at)
+        || at > now || now - at > 14 * 86400000) continue;
+      const key = { project: row.project, kind: row.kind, name: row.name };
+      keys.set(JSON.stringify(key), key);
+    }
+  }
+  const predictions = [...keys.values()].map((key) => {
+    const prediction = readLockDurationPrediction({ ...key, dataDir, now });
+    return { ...key, ...classifyLockLane(prediction, settings.shortLimitMinutes), samples: prediction.samples };
+  }).sort((a, b) => a.project.localeCompare(b.project) || a.kind.localeCompare(b.kind));
+  return { slotLimit: settings.slots, slotsInUse: fresh ? sample.holders.length : null,
+    sampledAt: sample?.at ?? null, predictions };
+}
+
 export function analyticsSummary({ dataDir = DATA_DIR, now = Date.now() } = {}) {
   const events = readEventTail(path.join(dataDir, 'events.jsonl'));
   const samples = readMachineSamples({ dataDir, sinceMs: now - 25 * 3600000 });
   const denials = denialDaily(readDenials(dataDir), { now, days: RETAIN_DAYS });
   return {
     notices: noticeCounts(events, { days: 7, now }),
-    locks: lockDaily(readEventTail(path.join(dataDir, 'lock-ledger.jsonl')), { days: 7, now }),
+    locks: { ...lockDaily(readEventTail(path.join(dataDir, 'lock-ledger.jsonl')), { days: 7, now }),
+      admission: lockAdmissionSummary(samples, { dataDir, now }) },
     timeline: machineTimeline(samples, { hours: 24, bucketMin: 10, now }),
     denials,
     harnessChanges: markersIn(denials.days, dataDir),

@@ -113,7 +113,7 @@ export function runSuite(command, {
     if (lock.reentrant) {
       recordLockRelease({ ...lock, project: config?.slug ?? null, kind: 'suite' }, { dataDir, now, holdMs: Math.max(0, now() - heldSince), reentrant: true });
     } else {
-      try { releaseProjectLock(FULL_SUITE_LOCK, { config, env, herdr, dataDir, output, pidAlive, now }); }
+      try { releaseProjectLock(FULL_SUITE_LOCK, { config, env, herdr, dataDir, output, pidAlive, now, expectedRecord: lock }); }
       catch (error) {
         const reason = String(error?.message ?? error).replace(/\s+/g, ' ').replace(/[. ]+$/, '');
         output(`Warning: could not release lock ${FULL_SUITE_LOCK}: ${reason}. The lock is stale when this process ends.`);

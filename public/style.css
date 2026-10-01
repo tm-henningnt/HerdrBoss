@@ -2470,3 +2470,11 @@ a.rv-page-link:hover { background: var(--panel-2); }
 .pool-settings-panel h2 { margin: 0; }
 .pool-settings-row .lease-free-line { margin: 0; overflow-wrap: anywhere; }
 .pool-settings-row .lease-head { margin-bottom: 2px; }
+
+
+.lock-number-control { display: flex; flex-direction: column; align-items: flex-end; min-width: 0; }
+.lock-field-error { color: var(--crit); max-width: 180px; font-size: 12px; }
+.lock-field-error:empty { display: none; }
+.lock-number-control input[aria-invalid="true"] { border-color: var(--crit); }
+.lock-admission { margin-top: 16px; white-space: normal; }
+.lock-admission p { max-width: 80ch; }

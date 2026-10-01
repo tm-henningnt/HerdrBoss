@@ -33,13 +33,18 @@ function loadApp(code = source) {
 
 async function views(code = source) {
   const context = loadApp(code);
+  const handlers = new Map();
+  const documentStub = context.document;
+  context.document = new Proxy(documentStub, { get: (target, key) => key === 'addEventListener'
+    ? (name, handler) => handlers.set(name, [...(handlers.get(name) || []), handler]) : target[key] });
+  context.handlers = handlers;
   // The module imports of the page come from the real files of public/.
   for (const match of code.matchAll(/^import \{([^}]*)\} from '\.\/([^']+)';$/gm)) {
     const module = await import(`../public/${match[2]}`);
     for (const name of match[1].split(',').map((item) => item.trim()).filter(Boolean)) context[name] = module[name];
   }
   const body = code.replace(/^import [^\n]*\n/gm, '');
-  vm.runInNewContext(`${body}\nthis.views = { settingsView, allocationView, agentsView, boardView, setModels: (m) => { models = m; }, setState: (v) => { state = v; } };`, context);
+  vm.runInNewContext(`${body}\nthis.views = { settingsView, allocationView, agentsView, boardView, setModels: (m) => { models = m; }, setState: (v) => { state = v; }, setDraft: (v) => { policyDraft = v; }, getDraft: () => policyDraft };`, context);
   return { ...context.views, context };
 }
 
@@ -166,5 +171,38 @@ test('the Settings page renders all lock lane policy controls with setting help 
   assert.match(html, /data-policy-lock-guard="enabled"/);
   for (const key of ['maxLoadPercent', 'maxSwapPercent', 'minFreeMemPercent']) {
     assert.ok(html.includes(`data-policy-lock-guard="${key}"`), `Locks has a control for ${key}`);
+  }
+});
+
+
+test('LK3 R8 changing a blank guard field shows its error and keeps typed zero valid', async () => {
+  const app = await views();
+  const state = fixture();
+  app.setState(state);
+  app.setDraft(state.policy);
+  for (const key of ['maxLoadPercent', 'maxSwapPercent', 'minFreeMemPercent']) {
+    const error = { textContent: '' };
+    const attributes = {};
+    const el = { dataset: { policyLockGuard: key }, value: '', checked: false,
+      closest: () => ({}), setCustomValidity: (message) => { el.validityMessage = message; },
+      setAttribute: (key, value) => { attributes[key] = value; }, removeAttribute: (key) => { delete attributes[key]; },
+    };
+    // The real change listener updates the field's accessible error element.
+    const originalDocument = app.context.document;
+    app.context.document = new Proxy(originalDocument, { get: (target, name) => name === 'getElementById' ? () => error : target[name] });
+    app.context.handlers.get('change').find((handler) => handler.toString().includes('el.dataset.policyLockGuard'))({ target: el });
+    assert.equal(app.getDraft().locks.guard[key], null, 'blank stays invalid in the request body');
+    assert.match(error.textContent, /Enter a whole number/);
+    assert.match(el.validityMessage, /Enter a whole number/);
+    assert.equal(attributes['aria-invalid'], 'true');
+    const html = app.settingsView(state);
+    assert.match(html, /role="alert"[^>]*>Enter a whole number/);
+    el.value = '0';
+    app.context.handlers.get('change').find((handler) => handler.toString().includes('el.dataset.policyLockGuard'))({ target: el });
+    assert.equal(app.getDraft().locks.guard[key], 0);
+    assert.equal(error.textContent, '');
+    assert.equal(el.validityMessage, '');
+    assert.equal(attributes['aria-invalid'], undefined);
+    app.context.document = originalDocument;
   }
 });

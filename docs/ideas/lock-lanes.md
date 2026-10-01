@@ -72,7 +72,7 @@ The default limits come from the seven days of machine samples read on 2026-10-0
 - `lock list` prints for each holder and each ticket the lane, the slots in use, and the predicted duration.
 - `lockStats` in `/api/state` adds the counts by lane and the median wait by lane.
 - The Locks panel of the Agents page shows the two lanes with their holders, the queue of each lane, the predicted duration, and the guard state.
-- Analytics: the chart of lock wait and hold shows the lanes (wait by lane and the median wait of short jobs before and after).
+- Analytics: the chart of lock wait and hold shows wait and median wait by lane. The card shows saved slot capacity, slot use from the latest usable machine sample, and predicted hold per project and kind from the admission history. Each view states its scope. The historical short-job baseline is a follow-up.
 
 ### Settings, tests, and docs
 
@@ -86,3 +86,16 @@ The default limits come from the seven days of machine samples read on 2026-10-0
 2. The default short limit is 6 minutes: the median of this project's suites is 4.2 minutes and the Viz suites are 20 minutes.
 3. An unknown key is long. This is the safe choice: an unknown job never runs beside a long job.
 4. The earlier plan stays in the repository as a record. The build follows this plan.
+
+
+## LK3 admission corrections
+
+A capacity or guard change applies at each admission attempt, including a queued job. A queued ticket keeps its prediction, short-limit classification, and sequence. A short-limit change classifies new tickets. With one slot, all tickets use the exclusive long lane. After a capacity reduction, every existing holder still counts. New jobs wait until total capacity and slot capacity allow admission. The guard identifies a long job by its lane. A short job that borrows the long slot does not activate the guard. The guard reads the newest sample at or before the current time. A future sample cannot hide a current sample. A missing usable sample or one older than three minutes passes.
+
+A live holder or queue ticket without a `lane` field is a legacy record. While any live legacy record exists, admission uses one exclusive long slot and one global FIFO queue. No short second job starts. Existing holders finish before another job starts. Normal lane admission returns after the legacy records drain. A suite hook can re-enter a legacy push with its live token. Old code cannot read a new short-slot record. An old hook cannot re-enter a push in that short slot. This old-code limit is accepted. Do not treat the long record filename as full protocol compatibility.
+
+Release a lock from its owner pane. When exactly one live record belongs to the pane, no selector is needed. With several live records in that pane, use `lock release NAME --slot N` for a short slot or `lock release NAME --slot long` for the long slot. Automatic suite and push cleanup selects the exact record that the command acquired.
+
+Herdr Boss publishes the queue sequence with an atomic rename. If a legacy writer left an invalid sequence, the next guarded write starts above the highest live ticket sequence. A valid sequence also remains a lower bound.
+
+A blank guard field is invalid and shows a field error. A typed zero is valid. Process start identity and PID reuse remain a follow-up (R9).

@@ -2,6 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import vm from 'node:vm';
 import {
   stackedBars, lineChart, heatGrid, outcomeBars, stripBars, foldSeries, niceMax, spendSeries, claudeSpend, quotaSeries,
   denialGrid, firstTimeRate, activityFilter, activityChoices, eventLevel, dayLabel, usd,
@@ -492,4 +493,36 @@ test('lock lane help and docs describe current admission, display, and analytics
   assert.match(guide, /Lock wait and hold by project[^\n]*median wait[^\n]*lane/i);
   assert.match(cli, /`lock list`[^\n]*lane[^\n]*predicted duration/i);
   assert.doesNotMatch(cli, /There is no load threshold\./);
+  assert.doesNotMatch(guide, /There is no load threshold\./);
+});
+
+
+test('LK3 R6 the actual Analytics card renders slot use, predictions, and their scopes', async () => {
+  const helpers = await import('../public/analytics.js');
+  const admission = { slotLimit: 3, slotsInUse: 2, sampledAt: '2026-10-01T12:00:00.000Z', predictions: [
+    { project: 'alpha', kind: 'suite', name: 'full-suite', lane: 'short', predictedMs: 120000, samples: 3 },
+    { project: 'beta', kind: 'push', name: 'full-suite', lane: 'long', predictedMs: null, samples: 1 },
+  ] };
+  const start = app.indexOf('function lockWaitBlock()');
+  const body = app.slice(start, app.indexOf('\n}\n', start) + 2);
+  const render = (project, projects = lockData.projects) => vm.runInNewContext(`${body}; lockWaitBlock()`, {
+    ...helpers, analyticsData: { locks: { ...lockData, projects, admission } }, analyticsUi: { lockProject: project },
+    vizCard: (value) => value, vizSwitch: () => '', esc: (s) => String(s),
+  });
+  for (const projects of [lockData.projects, []]) {
+    const card = render('all', projects);
+    assert.match(card.chart, /2 of 3 slots/);
+    assert.match(card.chart, /alpha/);
+    assert.match(card.chart, /suite/);
+    assert.match(card.chart, /2 min/);
+    assert.match(card.chart, /beta/);
+    assert.match(card.chart, /unknown/i);
+    assert.match(card.chart, /machine sample/i);
+    assert.match(card.chart, /14 days/);
+    assert.match(card.chart, /last 10/);
+  }
+  const selected = render('alpha');
+  assert.match(selected.chart, /alpha/);
+  assert.doesNotMatch(selected.chart, /beta/);
+  assert.match(selected.chart, /2 of 3 slots/, 'machine use keeps its machine scope under a project filter');
 });

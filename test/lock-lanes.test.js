@@ -156,3 +156,22 @@ test('machineGuardReason passes missing, stale, and disabled guard samples', () 
     at: new Date(NOW).toISOString(), l5: 20, cpus: 1, swapMB: 99, swapTotalMB: 100, memFree: 1,
   }, { ...guard, enabled: false }, { now: NOW }), null);
 });
+
+
+test('LK3 R1 capacity reductions count holders outside the configured slot range', () => {
+  assert.equal(chooseLockSlot({ lane: 'long', slots: 1, holders: [{ lane: 'short', slot: 1 }] }), null);
+  for (const lane of ['long', 'short']) assert.equal(chooseLockSlot({
+    lane, slots: 2, holders: [{ lane: 'short', slot: 2 }, { lane: 'short', slot: 3 }],
+  }), null);
+  assert.deepEqual(chooseLockSlot({ lane: 'short', slots: 3, holders: [{ lane: 'short', slot: 3 }] }), { slot: 1 });
+  assert.equal(chooseLockSlot({ lane: 'short', slots: 2, holders: [{ lane: 'short', slot: 3 }],
+    tickets: [{ id: 'long', lane: 'long' }, { id: 'short', lane: 'short' }], ticketId: 'short' }), null);
+});
+
+test('LK3 R3 a legacy holder or ticket makes admission exclusive and globally FIFO', () => {
+  assert.equal(chooseLockSlot({ lane: 'short', slots: 2, holders: [{ slot: 'long' }] }), null);
+  assert.equal(chooseLockSlot({ lane: 'short', slots: 2,
+    tickets: [{ id: 'old' }, { id: 'new', lane: 'short' }], ticketId: 'new' }), null);
+  assert.deepEqual(chooseLockSlot({ lane: 'long', slots: 2,
+    tickets: [{ id: 'old' }, { id: 'new', lane: 'short' }], ticketId: 'old' }), { slot: 'long' });
+});

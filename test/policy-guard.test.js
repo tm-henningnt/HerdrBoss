@@ -325,3 +325,21 @@ test('the page imports every name that it uses from the helper modules it import
     }
   }
 });
+
+
+test('LK3 R8 PUT /api/policy refuses blank guard thresholds and saves typed zero', async (t) => {
+  const { put } = await startServer(t, FIVE);
+  for (const key of ['maxLoadPercent', 'maxSwapPercent', 'minFreeMemPercent']) {
+    for (const blank of [null, '', ' ']) {
+      const draft = withShares(FIVE);
+      draft.locks.guard[key] = blank;
+      const response = await put(draft);
+      assert.equal(response.status, 400);
+      assert.ok((await response.json()).errors.some((message) => message.startsWith(`locks.guard.${key} `)));
+    }
+    const zero = withShares(FIVE);
+    zero.locks.guard[key] = 0;
+    assert.equal((await put(zero)).status, 200);
+    assert.equal(loadPolicy().locks.guard[key], 0);
+  }
+});
