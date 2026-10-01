@@ -56,6 +56,8 @@ When `NODE_TEST_CONTEXT` is set, or the data directory differs from the configur
 | `herdr-boss usage summary` | Usage per project and provider. |
 | `herdr-boss spend [--days N] [--json]` | Token use and cost for the last N days (1 to 90, default 7). It prints one line for each day and role, then one total line for each day. The cost is in USD and carries the label `API-price equivalent`: the Owner is on a subscription and is not billed per token. `unpriced` marks tokens of a model without a price. A last line lists models with `unconfirmed` price figures. `--json` prints the full summary, with the harness split, `costLabel`, and `unconfirmedPrices`. The service updates the numbers every 5 minutes. |
 
+Each quota lane shows the last good reading and its age. Herdr Boss keeps that reading after a probe fails. It marks the reading stale after three hours. Pacing advances the expected percent with the window time. It keeps the measured used percent. Herdr Boss probes each provider once per quota interval. It uses timeouts of 20, 45, then 90 seconds after repeated failures. A good reading resets the timeout to 20 seconds. A timeout kills the `codexbar` process group. If the Claude probe fails for over 60 minutes, Herdr Boss sends one warning to the Boss. It sends no orchestrator prompt. The service keeps the last 100 provider probe durations and outcomes in `quota-probe-history.jsonl`. The file does not store probe error text.
+
 ## Project status
 
 | Command | Action |

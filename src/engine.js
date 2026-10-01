@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
 import { agentPromptTimeoutMs } from './agent-prompt.js';
 import { DATA_DIR, LIVE_DATA_DIR, dashboardUrl, serviceSettingsView } from './config.js';
-import { collectHerdr, collectQuotas, collectMachine, collectProcesses, collectCwdProcesses, collectMissingWorktreeProcesses, collectWorktreeCounts, collectPiModels, collectBrowserClients, findBrowsers, cpuUse, keepStaleRows, run } from './collect.js';
+import { collectHerdr, collectQuotas, collectMachine, collectProcesses, collectCwdProcesses, collectMissingWorktreeProcesses, collectWorktreeCounts, collectPiModels, collectBrowserClients, findBrowsers, cpuUse, keepStaleRows, run, QUOTA_PROVIDERS, QUOTA_TIMEOUT_BACKOFF_MS } from './collect.js';
 import { evaluate, swapWarnStep, renderBulletin, fmtDuration, providerName, broadcastTargets, staleStatuses } from './rules.js';
 import { listProjects } from './projects.js';
 import { checkHarness, readProjectRepos } from './harness.js';
@@ -476,6 +476,17 @@ export function quotaRecoveredAlert(id, recovery) {
     title: 'Quota restriction cleared', text: recovery.text };
 }
 
+const CLAUDE_QUOTA_FAILURE_NOTICE_MS = 60 * 60 * 1000;
+function claudeQuotaFailureAlert(failure, now) {
+  const startedAt = Date.parse(failure?.startedAt);
+  if (!Number.isFinite(startedAt) || now - startedAt < CLAUDE_QUOTA_FAILURE_NOTICE_MS) return null;
+  return {
+    key: `quota:probe-failed:claude:${failure.startedAt}`, severity: 'warn', once: true, scope: 'boss', prompt: false,
+    title: 'Claude quota probe is failing',
+    text: 'The Claude quota probe has failed for over 60 minutes. Herdr Boss keeps the last good reading and uses the window time for pacing.',
+  };
+}
+
 export function browserReadyAlert(b, workspace) {
   return {
     // One notice per port and mode, so a restart in the same mode does not repeat it.
@@ -566,6 +577,8 @@ export class Engine extends EventEmitter {
     this.quotaRead = null;
     this.quotaResult = null;
     this.quotaError = null;
+    this.quotaNextAt = 0;
+    this.quotaTimeoutIndexes = Object.fromEntries(QUOTA_PROVIDERS.map((provider) => [provider, 0]));
     this.worktreeCounts = {};
     this.worktreeCountsAt = 0;
     this.orphanedWorktreeProcesses = [];
@@ -647,6 +660,7 @@ export class Engine extends EventEmitter {
       this.quotasAt = savedAt;
       this.quotasCached = true;
     }
+    this.quotaNextAt = this.quotasAt ? this.quotasAt + this.cfg.quotaSeconds * 1000 : 0;
     this.events = [];
     try {
       this.events = fs.readFileSync(EVENTS_FILE, 'utf8').trim().split('\n').slice(-200).map((l) => maskDeep(JSON.parse(l)));
@@ -812,7 +826,10 @@ export class Engine extends EventEmitter {
     const harness = this.readHarness(now);
     try {
       this.applyQuotaResult();
-      if (!this.quotas || now - this.quotasAt > this.cfg.quotaSeconds * 1000) this.readQuotas();
+      if (now >= this.quotaNextAt) {
+        if (this.quotaRead) this.quotaNextAt = now + this.cfg.quotaSeconds * 1000;
+        else this.readQuotas();
+      }
       // Pi lists only the models it can use. A failed run keeps the last good result; no result means availability is unknown.
       const refreshPiModels = !Number.isFinite(this.piModelsCheckedAt) || now - this.piModelsCheckedAt >= PI_MODELS_INTERVAL_MS;
       if (refreshPiModels) this.piModelsCheckedAt = now;
@@ -1148,7 +1165,7 @@ export class Engine extends EventEmitter {
       // Apply the failure status before deriving control, so a failed worker does not count as running.
       snap.herdr = herdr ? { ...herdr, panes: applyWorkerFailureStatuses(herdr.panes, workerTransitions.failures) } : herdr;
       const todayUse = quotaUsageToday(snap.quotas, undefined, now);
-      snap.lanes = laneStatus(snap.quotas, policy, now, { todayUse });
+      snap.lanes = laneStatus(snap.quotas, policy, now, { todayUse, readingAt: this.quotasAt });
       const nightConfig = this.cfg.watch || {};
       const laneCapsActive = snap.night?.active === true &&
         Object.values(nightConfig.maxWorkersByLane || {}).some((cap) => Number.isInteger(cap));
@@ -1346,6 +1363,8 @@ export class Engine extends EventEmitter {
           probeReason: safeReason, probeFailures: b.probeFailures, processState: b.processState, pid: b.processPid,
           commandInFlight: command?.inFlight ?? null, lastCommandAt: command?.lastCommandAt ?? null, externalClients: b.externalClients });
       }
+      const quotaProbeAlert = claudeQuotaFailureAlert(this.memory.claudeQuotaProbeFailure, now);
+      if (quotaProbeAlert) evaluation.alerts.push(quotaProbeAlert);
       snap.alerts = evaluation.alerts;
       snap.advice = evaluation.advice;
       const quotaAlerts = evaluation.alerts.filter((alert) => alert.key.startsWith('quota:') && alert.severity !== 'info');
@@ -1595,19 +1614,28 @@ export class Engine extends EventEmitter {
     this.log('reap', `Terminated ${victims.length} orphaned agent-browser daemon(s): ${victims.map((v) => `${v.pid} (${fmtDuration(v.age)})`).join(', ')}`);
   }
 
-  // The quota read runs beside the tick, because codexbar can take minutes on a loaded machine.
-  // A later tick applies the result. Only one read runs at a time.
+  // The quota read runs beside the tick. One call probes each provider in sequence and never overlaps another read.
   readQuotas() {
     if (this.quotaRead) return this.quotaRead;
+    const startedAt = this.clock();
+    const timeoutIndexes = this.quotaTimeoutIndexes;
+    const timeouts = Object.fromEntries(QUOTA_PROVIDERS.map((provider) => [
+      provider, QUOTA_TIMEOUT_BACKOFF_MS[timeoutIndexes[provider] || 0],
+    ]));
+    this.quotaNextAt = startedAt + this.cfg.quotaSeconds * 1000;
     let read;
-    try { read = Promise.resolve(this.collectors.collectQuotas()); } catch (error) { read = Promise.reject(error); }
+    try { read = Promise.resolve(this.collectors.collectQuotas({ timeouts, now: this.clock })); } catch (error) { read = Promise.reject(error); }
     this.quotaRead = read.then(
-      (quotas) => { this.quotaResult = { quotas, at: Date.now() }; },
+      (quotas) => { this.quotaResult = { quotas, at: this.clock() }; },
       (error) => {
         const message = String(error?.message || error);
-        this.quotaResult = { error: /^codexbar\b/.test(message) ? message : `codexbar: ${message}` };
+        this.quotaResult = { error: /^codexbar\b/.test(message) ? message : `codexbar: ${message}`, at: this.clock() };
       },
-    ).finally(() => { this.quotaRead = null; });
+    ).finally(() => {
+      this.quotaRead = null;
+      const completedAt = this.clock();
+      if (completedAt >= this.quotaNextAt) this.quotaNextAt = completedAt + this.cfg.quotaSeconds * 1000;
+    });
     return this.quotaRead;
   }
 
@@ -1618,12 +1646,26 @@ export class Engine extends EventEmitter {
     if (result.error || !Array.isArray(result.quotas)) {
       // A failed read keeps the last good quotas.
       this.quotaError = result.error || 'codexbar: no quota rows';
+      if (this.quotas?.length) {
+        const failed = this.quotas.map((quota) => ({ provider: quota.provider, error: this.quotaError }));
+        this.quotas = keepStaleRows(failed, this.quotas, this.quotasAt, result.at);
+      }
+      for (const provider of QUOTA_PROVIDERS) this.quotaTimeoutIndexes[provider] = Math.min((this.quotaTimeoutIndexes[provider] || 0) + 1, QUOTA_TIMEOUT_BACKOFF_MS.length - 1);
+      this.memory.claudeQuotaProbeFailure ||= { startedAt: new Date(result.at).toISOString() };
       return;
     }
     this.quotas = keepStaleRows(result.quotas, this.quotas, this.quotasAt, result.at);
     this.quotasAt = result.at;
     this.quotasCached = false;
     this.quotaError = null;
+    for (const provider of QUOTA_PROVIDERS) {
+      const row = result.quotas.find((quota) => quota.provider === provider);
+      if (row && !row.error) this.quotaTimeoutIndexes[provider] = 0;
+      else this.quotaTimeoutIndexes[provider] = Math.min((this.quotaTimeoutIndexes[provider] || 0) + 1, QUOTA_TIMEOUT_BACKOFF_MS.length - 1);
+    }
+    const claude = result.quotas.find((quota) => quota.provider === 'claude');
+    if (claude && !claude.error) delete this.memory.claudeQuotaProbeFailure;
+    else this.memory.claudeQuotaProbeFailure ||= { startedAt: new Date(result.at).toISOString() };
     recordQuotaSnapshot(this.quotas, new Date(result.at).toISOString());
   }
 
@@ -1903,10 +1945,10 @@ export class Engine extends EventEmitter {
     }
   }
 
-  async promptHandoverBoss(herdr, text) {
+  async promptHandoverBoss(herdr, text, options = {}) {
     const boss = (herdr?.panes || []).find((pane) => pane.label === 'boss' && pane.agent);
     if (!boss) throw new Error('No Boss pane was found.');
-    await this.promptService(boss.id, text, { herdr });
+    await this.promptService(boss.id, text, { herdr, ...options });
   }
 
   async retryOperation(item, now, kind, description, action, scope) {
@@ -2770,10 +2812,25 @@ export class Engine extends EventEmitter {
 
     // Prompts to orchestrators, grouped per pane.
     if (this.push) {
+      const bossPane = (herdr?.panes || []).find((pane) => pane.label === 'boss' && pane.agent);
+      for (const a of alerts) {
+        if (a.scope !== 'boss' || !bossPane) continue;
+        const recordKey = `${a.key}@boss`;
+        if (!alertPromptDue(a, this.memory.pushes[recordKey], now, cooldown)) continue;
+        try {
+          await this.promptHandoverBoss(herdr, `[herdr-boss] Warning for the Boss. You do not need to reply to me.\n${a.text}`, {
+            now, messages: [{ text: a.text, kind: 'reminder' }],
+          });
+          this.memory.pushes[recordKey] = { at: now, severity: a.severity };
+          this.log('push', `Sent one notice to ${bossPane.id}`, { pane: bossPane.id, title: a.title });
+        } catch (error) {
+          this.log('error', `Prompt to Boss failed: ${(error.stderr || error.message).slice(0, 200)}`);
+        }
+      }
       const perPane = new Map();
       const broadcast = broadcastTargets(orchs, herdr?.panes);
       for (const a of alerts) {
-        if (a.prompt === false || a.scope === 'user') continue;
+        if (a.prompt === false || a.scope === 'user' || a.scope === 'boss') continue;
         // A skipped broadcast stays unsent, so it reaches the orchestrator when its workers become active.
         let targets = a.scope === 'all' ? broadcast : orchs.filter((o) => o.workspace === a.scope);
         // A kit notice goes to every project orchestrator, also one without active workers.

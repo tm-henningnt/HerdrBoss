@@ -1427,6 +1427,9 @@ test('organization cards show an unavailable or stale quota bar, and the header 
   assert.match(app, /aria-label="\$\{esc\(`\$\{PROVIDERS\[agent\]\} quota unavailable`\)\}"/);
   assert.match(app, /class="org-quota-note" aria-hidden="true">quota unavailable</);
   assert.match(app, /quota from \$\{clock\(quota\.staleSince\)\}, the last probe failed/);
+  assert.match(app, /last reading \$\{reading\.usedPercent\}%/);
+  assert.match(app, /\$\{readingAge\}\$\{reading\.stale \? ' · stale' : ''\}/);
+  assert.match(app, /The Boss gets one warning when the Claude probe fails for over 60 minutes/);
   assert.match(css, /\.org-quota\.unavailable\b/);
   assert.match(css, /\.org-quota\.stale > i\b[^{]*\{/);
   assert.match(css, /\.org-quota-note\b[^{]*\{[^}]*color: var\(--muted\)/);

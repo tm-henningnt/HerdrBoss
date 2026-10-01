@@ -1,7 +1,8 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
+import { DATA_DIR } from './config.js';
 
 const PATH = [path.join(os.homedir(), '.local/bin'), '/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin', process.env.PATH].join(':');
 
@@ -83,16 +84,122 @@ export async function collectHerdr(orchLabel) {
 
 // ---------- Quotas ----------
 
-const QUOTA_TIMEOUT_MS = 240000;
+export const QUOTA_PROVIDERS = Object.freeze(['codex', 'claude', 'opencodego']);
+export const QUOTA_TIMEOUT_BACKOFF_MS = Object.freeze([20_000, 45_000, 90_000]);
+export const DEFAULT_QUOTA_TIMEOUTS_MS = Object.freeze(Object.fromEntries(QUOTA_PROVIDERS.map((provider) => [provider, QUOTA_TIMEOUT_BACKOFF_MS[0]])));
+export const QUOTA_PROBE_HISTORY_LIMIT = 100;
+const QUOTA_PROBE_HISTORY_FILE = path.join(DATA_DIR, 'quota-probe-history.jsonl');
+const DEFAULT_QUOTA_TIMEOUT_MS = QUOTA_TIMEOUT_BACKOFF_MS[0];
+const QUOTA_KILL_GRACE_MS = 250;
+
+// Run quota commands in their own process group. A timeout kills codexbar and every child it started.
+export function runQuotaCommand(cmd, args, { timeout = DEFAULT_QUOTA_TIMEOUT_MS, maxBuffer = 32 * 1024 * 1024, env = {} } = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, args, {
+      detached: process.platform !== 'win32',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, ...env, PATH },
+    });
+    let stdout = '', stderr = '', bytes = 0, timedOut = false, tooLarge = false, settled = false;
+    let timer, killGraceTimer, killStarted = false;
+    const clearTimers = () => { clearTimeout(timer); clearTimeout(killGraceTimer); };
+    const destroyStdio = () => {
+      for (const stream of child.stdio || []) {
+        try { stream?.destroy(); } catch {}
+      }
+    };
+    const timeoutError = (signal) => {
+      const error = new Error(`codexbar timed out after ${Math.round(timeout / 1000)} s`);
+      error.killed = true;
+      error.signal = signal || 'SIGKILL';
+      error.stdout = stdout;
+      error.stderr = stderr;
+      return error;
+    };
+    const tooLargeError = () => {
+      const error = new Error('codexbar returned too much output');
+      error.code = 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
+      error.stdout = stdout;
+      error.stderr = stderr;
+      return error;
+    };
+    const finishKilled = (signal) => {
+      if (settled) return;
+      settled = true;
+      clearTimers();
+      const error = timedOut ? timeoutError(signal) : tooLargeError();
+      destroyStdio();
+      reject(error);
+    };
+    const killAndSettle = () => {
+      if (killStarted) return;
+      killStarted = true;
+      clearTimeout(timer);
+      killTree();
+      killGraceTimer = setTimeout(() => finishKilled('SIGKILL'), QUOTA_KILL_GRACE_MS);
+    };
+    const killTree = () => {
+      if (process.platform !== 'win32' && child.pid) {
+        try { process.kill(-child.pid, 'SIGKILL'); return; } catch {}
+      }
+      try { child.kill('SIGKILL'); } catch {}
+    };
+    const collect = (target, chunk) => {
+      bytes += chunk.length;
+      if (bytes > maxBuffer) {
+        tooLarge = true;
+        killAndSettle();
+        return;
+      }
+      if (target === 'stdout') stdout += chunk.toString();
+      else stderr += chunk.toString();
+    };
+    child.stdout.on('data', (chunk) => collect('stdout', chunk));
+    child.stderr.on('data', (chunk) => collect('stderr', chunk));
+    child.once('error', (error) => {
+      if (settled) return;
+      if (killStarted) { finishKilled('SIGKILL'); return; }
+      settled = true;
+      clearTimers();
+      reject(error);
+    });
+    child.once('exit', (_code, signal) => {
+      // A grandchild can keep the pipes open after the timed-out parent exits.
+      if (killStarted) finishKilled(signal);
+    });
+    child.once('close', (code, signal) => {
+      if (settled) return;
+      settled = true;
+      clearTimers();
+      if (timedOut) {
+        reject(timeoutError(signal));
+      } else if (tooLarge) {
+        reject(tooLargeError());
+      } else if (code !== 0) {
+        const error = new Error('Command failed');
+        error.code = code;
+        error.signal = signal;
+        error.stdout = stdout;
+        error.stderr = stderr;
+        reject(error);
+      } else resolve(stdout);
+    });
+    timer = setTimeout(() => {
+      timedOut = true;
+      killAndSettle();
+    }, Math.max(1, timeout));
+  });
+}
 
 // Replace the generic "Command failed" text with the cause: a timeout or the exit code.
-export function codexbarError(err, timeoutMs = QUOTA_TIMEOUT_MS) {
-  if (err?.killed || err?.signal) return `codexbar timed out after ${Math.round(timeoutMs / 1000)} s`;
+export function codexbarError(err, timeoutMs = DEFAULT_QUOTA_TIMEOUT_MS, provider = null) {
+  const name = provider === 'claude' ? 'Claude usage probe' : provider ? `${provider} quota probe` : 'codexbar';
+  if (err?.killed || err?.signal) return `${name} timed out after ${Math.round(timeoutMs / 1000)} s`;
   if (Number.isInteger(err?.code)) {
     const line = String(err.stderr || '').split(/\r?\n/).map((x) => x.trim()).find(Boolean);
-    return `codexbar exited with code ${err.code}${line ? `: ${line}` : ''}`;
+    return `${name} exited with code ${err.code}${line ? `: ${line}` : ''}`;
   }
-  return `codexbar failed: ${err?.message || err}`;
+  return `${name} failed: ${err?.message || err}`;
 }
 
 function partialRows(err) {
@@ -103,27 +210,71 @@ function partialRows(err) {
   } catch { return null; }
 }
 
-async function codexbarRows(runner, args) {
-  try { return JSON.parse(await runner('codexbar', ['usage', '--format', 'json', ...args], { timeout: QUOTA_TIMEOUT_MS })); }
+async function codexbarRows(runner, args, timeoutMs) {
+  try {
+    const rows = JSON.parse(await runner('codexbar', ['usage', '--format', 'json', ...args], { timeout: timeoutMs }));
+    if (!Array.isArray(rows) || !rows.every((row) => row && typeof row.provider === 'string')) throw new Error('codexbar returned invalid quota rows');
+    return rows;
+  }
   catch (err) {
-    // codexbar exits 1 when one provider fails, but it still prints rows for every provider. Keep the good rows.
+    // codexbar may exit 1 while still returning the selected provider row.
     const rows = partialRows(err);
-    if (!rows) throw new Error(codexbarError(err));
+    if (!rows) throw err;
     return rows;
   }
 }
 
-export async function collectQuotas({ runner = run } = {}) {
-  const rows = await codexbarRows(runner, []);
-  // A provider probe can fail once and work on the next call. Read each failed provider again, one time.
-  for (const [i, r] of rows.entries()) {
-    if (!r.error) continue;
-    const retry = await codexbarRows(runner, ['--provider', r.provider]).catch(() => null);
-    const good = retry?.find((x) => x?.provider === r.provider && !x.error);
-    if (good) rows[i] = good;
+function quotaProbeOutcome(row, error = null) {
+  if (error) return error.killed || error.signal || /timed out/i.test(error.message || '') ? 'timeout' : 'failed';
+  if (!row || row.error) {
+    const message = typeof row?.error === 'string' ? row.error : row?.error?.message || '';
+    return /timed out/i.test(message) ? 'timeout' : 'failed';
   }
-  return rows.map((r) => {
-    if (r.error) return { provider: r.provider, error: r.error.message };
+  return 'success';
+}
+
+function writeQuotaProbeHistory(row, file = QUOTA_PROBE_HISTORY_FILE) {
+  let rows = [];
+  try {
+    for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
+      if (!line) continue;
+      try { rows.push(JSON.parse(line)); } catch {}
+    }
+  } catch {}
+  rows.push(row);
+  rows = rows.slice(-QUOTA_PROBE_HISTORY_LIMIT);
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(file, `${rows.map((item) => JSON.stringify(item)).join('\n')}\n`, { mode: 0o600 });
+  } catch {}
+}
+
+export async function collectQuotas({ runner = runQuotaCommand, timeouts = DEFAULT_QUOTA_TIMEOUTS_MS, now = () => Date.now(), historyFile = QUOTA_PROBE_HISTORY_FILE } = {}) {
+  const result = [];
+  for (const provider of QUOTA_PROVIDERS) {
+    const timeoutMs = Number.isFinite(timeouts?.[provider]) ? timeouts[provider] : DEFAULT_QUOTA_TIMEOUT_MS;
+    const startedAt = Number(now());
+    let row = null, failure = null;
+    try {
+      const rows = await codexbarRows(runner, ['--provider', provider], timeoutMs);
+      row = rows.find((item) => item.provider === provider) || null;
+      if (!row) failure = new Error(`${provider} quota row is missing`);
+    } catch (error) { failure = error; }
+    const finishedAt = Number(now());
+    const outcome = quotaProbeOutcome(row, failure);
+    writeQuotaProbeHistory({
+      at: new Date(finishedAt).toISOString(), provider,
+      durationMs: Math.max(0, finishedAt - startedAt), timeoutMs, outcome,
+    }, historyFile);
+    if (failure) {
+      result.push({ provider, error: codexbarError(failure, timeoutMs, provider) });
+      continue;
+    }
+    if (row.error) {
+      result.push({ provider, error: typeof row.error === 'string' ? row.error : row.error.message || `${provider} quota probe failed` });
+      continue;
+    }
+    const r = row;
     const u = r.usage || {};
     const labels = r.rateWindowLabels || {};
     const windows = [];
@@ -146,32 +297,44 @@ export async function collectQuotas({ runner = run } = {}) {
     for (const x of u.extraRateWindows || []) {
       windows.push({ key: x.id, label: x.title, usedPercent: x.window.usedPercent, resetsAt: x.window.resetsAt, windowMinutes: x.window.windowMinutes, extra: true });
     }
-    return {
+    result.push({
       provider: r.provider,
       plan: u.loginMethod || u.identity?.loginMethod || null,
       windows,
       credits: r.credits ? { remaining: r.credits.remaining } : null,
       resetCredits: u.codexResetCredits?.availableCount ?? null,
       updatedAt: u.updatedAt || null,
-    };
-  });
+      observedAt: new Date(finishedAt).toISOString(),
+    });
+  }
+  return result;
 }
 
-// A provider row keeps its last good data this long after its probe starts to fail.
-export const STALE_QUOTA_MS = 60 * 60 * 1000;
+// A provider reading becomes stale after three hours. Keep it after that point for pacing and display.
+export const STALE_QUOTA_MS = 3 * 60 * 60 * 1000;
 
-// Replace a failed provider row with its last good row from the previous read, marked stale, while that row is young.
-// A previous stale row keeps the time of its good read.
+// Replace a failed or missing provider row with its last good row. Preserve the original read time.
 export function keepStaleRows(quotas, previous, previousAt, now = Date.now()) {
-  return quotas.map((q) => {
+  const rows = Array.isArray(quotas) ? quotas : [];
+  const oldRows = Array.isArray(previous) ? previous : [];
+  const seen = new Set(rows.map((row) => row.provider));
+  const current = rows.map((q) => {
     if (!q.error) return q;
-    const old = (previous || []).find((x) => x.provider === q.provider && (!x.error || x.stale));
+    const old = oldRows.find((x) => x.provider === q.provider && (!x.error || x.stale));
     if (!old) return q;
-    const since = old.stale ? Date.parse(old.staleSince) : previousAt;
-    if (!Number.isFinite(since) || now - since > STALE_QUOTA_MS) return q;
+    const since = old.stale ? Date.parse(old.staleSince) : Date.parse(old.observedAt) || Date.parse(old.updatedAt) || previousAt;
+    if (!Number.isFinite(since)) return q;
     const { stale, staleSince, error, ...data } = old;
     return { ...data, stale: true, staleSince: new Date(since).toISOString(), error: q.error };
   });
+  for (const old of oldRows) {
+    if (seen.has(old.provider)) continue;
+    const since = old.stale ? Date.parse(old.staleSince) : Date.parse(old.observedAt) || Date.parse(old.updatedAt) || previousAt;
+    if (!Number.isFinite(since)) continue;
+    const { stale, staleSince, error, ...data } = old;
+    current.push({ ...data, stale: true, staleSince: new Date(since).toISOString(), error: error || 'Quota row missing from the latest probe.' });
+  }
+  return current;
 }
 
 // ---------- Machine ----------

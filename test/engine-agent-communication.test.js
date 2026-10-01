@@ -49,6 +49,35 @@ test('service delivery records one nudge with its target and task across repeate
   assert.equal(messages[0].text, 'Continue task T1.');
 });
 
+test('a quota probe warning reaches the Boss pane once and does not reach orchestrators', (t) => {
+  const source = `
+    import { Engine } from './src/engine.js';
+    import { loadConfig } from './src/config.js';
+    import { readAgentMetadata, readAgentMessages } from './src/agent-messages.js';
+    const now = Number(process.env.AM_NOW);
+    const prompts = [];
+    const engine = new Engine(loadConfig(), { push: true, act: true, clock: () => now });
+    engine.herdrRunner = async (command, args) => { prompts.push({ command, args }); return '{}'; };
+    const boss = { id: 'wB:pBH', workspace: 'wB', orch: true, label: 'boss', agent: 'claude', status: 'working' };
+    const orch = { id: 'wA:p1', workspace: 'wA', orch: true, label: 'orch', agent: 'codex', project: 'orchard', status: 'idle' };
+    const alert = { key: 'quota:probe-failed:claude:2026-10-01T10:00:00.000Z', severity: 'warn', once: true,
+      scope: 'boss', prompt: false, title: 'Claude quota probe is failing', text: 'The Claude quota probe failed.' };
+    const herdr = { panes: [boss, orch] };
+    await engine.deliver([alert], herdr, now);
+    await engine.deliver([alert], herdr, now + 30000);
+    console.log(JSON.stringify({ prompts, rows: readAgentMetadata(), messages: readAgentMessages() }));
+  `;
+  const { prompts, rows, messages } = run(t, source);
+  assert.equal(prompts.length, 1, JSON.stringify(prompts));
+  assert.deepEqual(prompts[0].args.slice(0, 3), ['agent', 'prompt', 'wB:pBH']);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].to.role, 'boss');
+  assert.equal(rows[0].to.pane, 'wB:pBH');
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].text, 'The Claude quota probe failed.');
+  assert.ok(prompts.every((prompt) => !prompt.args.includes('wA:p1')));
+});
+
 test('stale status, kit and idle notices are masked service reminders', (t) => {
   const source = probe.replace("await engine.deliver(alerts, { panes: [pane] }, now);", `
       alerts.splice(0, 1,

@@ -1,3 +1,4 @@
+import './helpers/test-env.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { collectMachine, collectQuotas, collectWorktreeCounts } from '../src/collect.js';
@@ -53,20 +54,24 @@ test('failed Git worktree listing skips that project', async () => {
   assert.deepEqual(await collectWorktreeCounts([{ orch: true, workspace: 'failed', cwd: '/failed' }], { now: 900000, runner }), {});
 });
 
-test('a codexbar timeout reports the timeout and the read waits 240 seconds', async () => {
-  let options;
-  const runner = async (_cmd, _args, opts) => {
-    options = opts;
+test('a timed-out quota probe reports the provider and uses the first back-off timeout', async () => {
+  const calls = [];
+  const runner = async (_cmd, args, opts) => {
+    calls.push({ provider: args.at(-1), timeout: opts.timeout });
     throw Object.assign(new Error('Command failed: codexbar usage --format json'), { killed: true, signal: 'SIGTERM', code: null, stderr: '' });
   };
-  await assert.rejects(collectQuotas({ runner }), { message: 'codexbar timed out after 240 s' });
-  assert.equal(options.timeout, 240000);
+  const rows = await collectQuotas({ runner });
+  assert.deepEqual(calls, ['codex', 'claude', 'opencodego'].map((provider) => ({ provider, timeout: 20000 })));
+  assert.match(rows.find((row) => row.provider === 'claude').error, /Claude usage probe timed out after 20 s/);
+  assert.ok(rows.every((row) => row.error));
 });
 
-test('a codexbar non-zero exit reports the exit code and the first stderr line', async () => {
+test('a codexbar non-zero exit reports the exit code and the first stderr line per provider', async () => {
   const fail = (stderr) => async () => { throw Object.assign(new Error('Command failed: codexbar usage --format json'), { killed: false, signal: null, code: 2, stderr }); };
-  await assert.rejects(collectQuotas({ runner: fail('login expired\nsecond line\n') }), { message: 'codexbar exited with code 2: login expired' });
-  await assert.rejects(collectQuotas({ runner: fail('\n') }), { message: 'codexbar exited with code 2' });
+  const first = await collectQuotas({ runner: fail('login expired\nsecond line\n') });
+  assert.ok(first.every((row) => row.error.includes('exited with code 2: login expired')));
+  const second = await collectQuotas({ runner: fail('\n') });
+  assert.ok(second.every((row) => row.error.includes('exited with code 2')));
 });
 
 test('collectQuotas parses the codexbar rows from the runner', async () => {
