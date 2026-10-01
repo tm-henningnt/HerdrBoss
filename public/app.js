@@ -13,6 +13,7 @@ import { viewerKeyAction, nextOpenItem, itemNeighbors, sectionStep, addPin, remo
 import { attachGestures, restoreStages, resetStages, zoomStage } from './review-gestures.js';
 import { createTapGuard, startViewedTimer, ANSWER_EMPTY } from './review-save.js';
 import { createSidebar } from './review-sidebar.js';
+import { visibleItems, loadFilter, saveFilter } from './review-filter.js';
 import { createReviewSync, createDrafts, NOTE_DEBOUNCE_MS } from './review-sync.js';
 import { createWizard } from './project-wizard-ui.js';
 import { goalSetBlockHtml, goalDialogHtml, goalJobRunning, goalStatusText, pollGoalStatus } from './goal-set.js';
@@ -6086,10 +6087,10 @@ const HELP = {
     <p>The folder pane shows the fixed limits: Herdr Boss keeps messages for 30 days and accepts at most 10 Owner messages a minute. A read-only preview shows messages and refuses a read or a send.</p>`],
   reviews: ['Reviews', `
     <p>A project sends you a review pack when it needs your decision on evidence: screenshots, text, tables, or a live check. Each item of the pack asks one question. You answer the items, write a note for the whole pack, and submit one result. The result goes to the project orchestrator.</p>
-    <h3>Pack list</h3><p><b>Open</b> holds the packs that wait for your answers. <b>Done</b> holds the submitted and the expired packs, each with its verdict. A row shows the project, the pack title, the version, the time of the last change, and the count of answered items. A row with <b>N changed</b> has items that changed after your answer. The pack header shows the item total, the agent-verified count, the needs-you count, and the design-pass result. The Mailbox item of a pack opens the same page with <b>Open review</b>.</p>
+    <h3>Pack list</h3><p><b>Open</b> holds the packs that wait for your answers. <b>Done</b> holds the submitted and the expired packs, each with its verdict. A row shows the project, the pack title, the version, the time of the last change, and the count of answered items. A row with <b>N changed</b> has items that changed after your answer. The summary header at the top of a pack shows the item total, the agent-verified count, the needs-you count, the unmarked count when it is above 0, and the design-pass result with the reviewer name. The Mailbox item of a pack opens the same page with <b>Open review</b>.</p>
     <h3>Retention</h3><p>Herdr Boss deletes a closed pack 30 days after it closes. An open pack expires after 60 days without a change. Herdr Boss keeps each result for 180 days and the newest 3 versions. The review pack quota is 2 GiB. Run <code>herdr-boss review delete SLUG PACK</code> to delete a pack.</p>
     <h3>Progress bar</h3><p>The bar shows the item states in a fixed order: <b>Accepted</b>, <b>Note only</b>, <b>Needs live check</b>, <b>Denied</b>, and <b>Open</b>. Accepted also counts a choice or a rating. The Denied segment has stripes, so it differs from Needs live check without color. The legend under the bar names each state with its count.</p>
-    <h3>Sections</h3><p>The pack page shows one block for each section, with its state and its count of answered items. Select a section title to fold or unfold its items. Each item row shows the item type, the title, the state, and a check mark when you viewed it. It also marks agent-verified or needs-you, and the item shows any evidence images. Select Needs you to focus on items that need a human decision. A viewed and answered item shows as a short, faded row. <b>Changed</b> marks an item that changed after your answer. It counts as open until you answer again. Select an item to open it in the item viewer. Back returns to the same row. An item whose content changed in a new version shows <b>Changed</b> and no verdict, and its section shows <b>Changed</b>. The item shows <b>Was</b> with the earlier verdict and its date. <b>Keep</b> restores that verdict. A title wraps to two lines, and the tooltip shows the full title. Above 900 px, drag the handle at the edge of the sections column to change its width, or focus the handle and press the arrow keys (16 px) or <kbd>Home</kbd> to reset. The hide button collapses the column to a rail.</p>
+    <h3>Sections</h3><p>The pack page shows one block for each section, with its state and its count of answered items. Select a section title to fold or unfold its items. Each item row shows the item type, the title, the state, and a check mark when you viewed it. Each row also has a badge: <b>agent-verified</b>, <b>needs-you</b>, or <b>unmarked</b>. An item with agent-verified evidence shows its evidence images under <b>Agent evidence</b>, with zoom. The item view shows the description, the numbered steps, the expected result, and a link to the app that opens in a new tab. The <b>Needs you</b> filter above the sections shows only the needs-you items with their count. It keeps the headings that still have items, and the next and previous item keys skip the hidden items. The filter is off by default, and the browser remembers it for each pack. A viewed and answered item shows as a short, faded row. <b>Changed</b> marks an item that changed after your answer. It counts as open until you answer again. Select an item to open it in the item viewer. Back returns to the same row. An item whose content changed in a new version shows <b>Changed</b> and no verdict, and its section shows <b>Changed</b>. The item shows <b>Was</b> with the earlier verdict and its date. <b>Keep</b> restores that verdict. A title wraps to two lines, and the tooltip shows the full title. Above 900 px, drag the handle at the edge of the sections column to change its width, or focus the handle and press the arrow keys (16 px) or <kbd>Home</kbd> to reset. The hide button collapses the column to a rail.</p>
     <h3>Summary and submit</h3><p>The summary under the sections lists the items by state: <b>Denied</b>, <b>Needs live check</b>, <b>Note only</b>, <b>Accepted</b>, <b>Changed since accepted</b>, and <b>Open</b> last. Your note shows under each item. An open item has <b>Review now</b>. An item that changed after your answer shows <b>changed in this version</b>. A warning above the list names the count of items that have no decision. Write a note for the whole pack in the note field. The page saves the note 600 ms after you stop typing. Select a verdict: <b>Accept pack</b>, <b>Accept with changes</b>, or <b>Deny pack</b>. The page proposes one from the item states when it first shows the pack version. You choose the verdict. A later answer does not move the selection. Select <b>Submit review</b> in the bar at the bottom. While changes wait to save, the button shows <b>Waiting for N changes to save</b> and stays disabled. The page asks you to confirm and names the pack, the version, the verdict, and the counts. Then it sends the result. A submit with open items is allowed. The result lists them as open.</p>
     <h3>After the submit</h3><p>The page shows the summary as read-only. The service sends the result to the <code>orch</code> pane of the project as one message. The page shows the delivery state: <b>Queued</b>, <b>Delivered</b>, <b>Retrying</b>, or <b>Failed</b>. A failed delivery is tried again up to 4 times. The Mailbox item of the pack closes, and <b>Open review</b> on it opens this read-only summary. A pack takes at most 3 submits in one minute.</p>
     <h3>Item viewer</h3><p>The top bar shows the item title, <b>Item N of M</b> with the section, and the <b>Viewed</b> toggle. The page marks an item viewed when it stays open and visible for 1.5 seconds. A pair has <b>Toggle</b> and <b>Slider</b>. A gallery shows a grid: select an image to open it. A table and a code box scroll sideways in their own box. <b>Open</b> on a live link opens a new tab.</p>
@@ -6304,6 +6305,9 @@ const reviewSidebar = createSidebar({
     $app.querySelector('[data-review-resize]')?.setAttribute('aria-valuenow', String(state.width));
   },
 });
+// The Needs you filter of a pack, kept per pack in the browser (public/review-filter.js). The state loads once for each pack.
+const reviewFilterOf = (key) => { const ui = reviewUi(key); if (ui.needsYouOnly === undefined) ui.needsYouOnly = loadFilter(reviewStorage, key); return ui.needsYouOnly; };
+const reviewNeedsYou = (key) => reviewFilterOf(key);
 const reviewSidebarView = () => ({ ...reviewSidebar.get(), viewport: window.innerWidth });
 
 function reviewHelpers(s) {
@@ -6370,7 +6374,7 @@ function reviewsView(s) {
     if (entry?.data) {
       const ui = pinProposedVerdict(reviewUi(key), entry.data);
       const viewer = route.view === 'item' ? reviewViewerView(key, route.item) : undefined;
-      page = packPageHtml(entry.data, { ...ui, ...reviewSyncView(key), sidebar: reviewSidebarView(), current: reviewItemFromHash(location.hash), item: route.view === 'item' ? route.item : undefined, viewer }, h);
+      page = packPageHtml(entry.data, { ...ui, ...reviewSyncView(key), sidebar: reviewSidebarView(), needsYouOnly: reviewNeedsYou(key), current: reviewItemFromHash(location.hash), item: route.view === 'item' ? route.item : undefined, viewer }, h);
     } else if (entry?.error && entry.status === 404) page = reviewMessageHtml('Review not found', 'This review pack does not exist. The project can have deleted it.', h);
     else if (entry?.error) page = reviewMessageHtml('Review', `The review could not load. ${entry.error}`, h, { alert: true, retry: true });
     else page = reviewMessageHtml('Review', 'Loading the review…', h);
@@ -6615,6 +6619,11 @@ function reviewOpenItem() {
   return item ? { ...current, item, pack: current.entry.data, vui: reviewViewerUi(current.key, item.id) } : null;
 }
 
+// The items that the next, previous, and section keys walk: all items, or the needs-you items with the Needs you filter on.
+function reviewVisible(open) {
+  return visibleItems(open.pack.items, reviewFilterOf(open.key), open.item.id);
+}
+
 // A move to another item puts the focus on the item heading, so a screen reader reads the new item.
 function reviewItemGo(open, id) {
   if (!id) return;
@@ -6851,7 +6860,7 @@ function reviewSwipe(intent) {
     const to = vui.gallery + (intent === 'next' ? 1 : -1);
     if (to >= 0 && to < count) { vui.gallery = to; reviewsRender(); return; }
   }
-  const { prev, next } = itemNeighbors(open.pack.items, item.id);
+  const { prev, next } = itemNeighbors(reviewVisible(open), item.id);
   reviewItemGo(open, (intent === 'next' ? next : prev)?.id);
 }
 
@@ -6904,7 +6913,7 @@ function reviewAnswer(open, kind, value) {
 }
 
 document.addEventListener('click', (e) => {
-  const target = e.target.closest?.('[data-rv-decision], [data-rv-choice], [data-rv-rating], [data-rv-live], [data-rv-note-open], [data-rv-viewed], [data-rv-keep], [data-rv-pair], [data-rv-mode], [data-rv-open], [data-rv-gallery], [data-rv-place], [data-rv-zoom], [data-rv-pin], [data-rv-pin-remove], [data-rv-conflict]');
+  const target = e.target.closest?.('[data-rv-decision], [data-rv-choice], [data-rv-rating], [data-rv-live], [data-rv-note-open], [data-rv-viewed], [data-rv-keep], [data-rv-pair], [data-rv-mode], [data-rv-open], [data-rv-gallery], [data-rv-evopen], [data-rv-evgallery], [data-rv-place], [data-rv-zoom], [data-rv-pin], [data-rv-pin-remove], [data-rv-conflict]');
   if (!target || target.disabled || currentRoute() !== 'reviews') return;
   const open = reviewOpenItem();
   if (!open) return;
@@ -6921,6 +6930,8 @@ document.addEventListener('click', (e) => {
   else if (data.rvMode) { vui.pairMode = data.rvMode === 'split' ? 'split' : 'toggle'; reviewsRender(); }
   else if (data.rvOpen) { vui.gallery = Number(data.rvOpen); vui.placing = false; reviewFocusNext('.rv-stage'); }
   else if (data.rvGallery) { vui.gallery = data.rvGallery === 'grid' ? null : Number(data.rvGallery); vui.placing = false; reviewsRender(); }
+  else if (data.rvEvopen) { vui.evidence = Number(data.rvEvopen); vui.placing = false; reviewFocusNext('.rv-evidence-agent .rv-stage'); }
+  else if (data.rvEvgallery) { vui.evidence = data.rvEvgallery === 'grid' ? null : Number(data.rvEvgallery); vui.placing = false; reviewsRender(); }
   else if (data.rvPlace !== undefined) { vui.placing = !vui.placing; reviewsRender(); }
   else if (data.rvZoom) zoomStage(target.closest('.rv-evidence')?.querySelector('.rv-stage'), data.rvZoom);
   else if (data.rvPinRemove) { if (open.pack.state === 'open') saveItemAnswer(item, { pins: removePin(item.answer?.pins || [], Number(data.rvPinRemove)) }); }
@@ -6986,10 +6997,10 @@ function reviewViewerKey(e, inField) {
   const stage = $app.querySelector('.rv-stage');
   const spec = itemSpec(pack, item.id);
   switch (action) {
-    case 'next': case 'prev': reviewItemGo(open, itemNeighbors(pack.items, item.id)[action]?.id); break;
-    case 'next-section': case 'prev-section': reviewItemGo(open, sectionStep(pack.items, item.id, action === 'next-section' ? 1 : -1)?.id); break;
+    case 'next': case 'prev': reviewItemGo(open, itemNeighbors(reviewVisible(open), item.id)[action]?.id); break;
+    case 'next-section': case 'prev-section': reviewItemGo(open, sectionStep(reviewVisible(open), item.id, action === 'next-section' ? 1 : -1)?.id); break;
     case 'next-open': {
-      const target = nextOpenItem(pack.items, item.id);
+      const target = nextOpenItem(reviewVisible(open), item.id);
       if (target) reviewItemGo(open, target.id);
       else { vui.status = 'No other item is open.'; reviewsRender(); }
       break;
@@ -7000,7 +7011,7 @@ function reviewViewerKey(e, inField) {
     case 'viewed': reviewAnswer(open, 'viewed', !item.answer?.viewed); break;
     case 'viewed-next':
       if (!item.answer?.viewed && pack.state === 'open') saveItemAnswer(item, { viewed: true }, { quiet: true });
-      reviewItemGo(open, itemNeighbors(pack.items, item.id).next?.id);
+      reviewItemGo(open, itemNeighbors(reviewVisible(open), item.id).next?.id);
       break;
     case 'pin': if ((stage || item.type === 'page') && (item.ask || []).includes('note') && pack.state === 'open') { vui.placing = !vui.placing; reviewsRender(); } break;
     case 'pair': if (item.type === 'image-pair') { vui.pair = vui.pair === 'b' ? 'a' : 'b'; vui.pairMode = 'toggle'; reviewsRender(); } break;
@@ -8628,6 +8639,18 @@ if (window.visualViewport) {
 // The sections column: collapse and expand buttons, and the drag of the handle.
 document.addEventListener('click', (e) => {
   if (currentRoute() !== 'reviews') return;
+  const filter = e.target.closest?.('[data-review-filter]');
+  if (filter) {
+    const route = parseReviewPath(location.pathname);
+    if (!route?.pack) return;
+    const key = reviewKey(route.slug, route.pack);
+    const ui = reviewUi(key);
+    ui.needsYouOnly = !reviewFilterOf(key);
+    saveFilter(reviewStorage, key, ui.needsYouOnly);
+    reviews.focus = '[data-review-filter]';
+    reviewsRender();
+    return;
+  }
   const button = e.target.closest?.('[data-review-collapse], [data-review-expand]');
   if (!button) return;
   reviewSidebar.collapse(button.matches('[data-review-collapse]'));

@@ -153,7 +153,7 @@ export function attachGestures(root, handlers) {
     const dx = e.clientX - current.startX;
     const dy = e.clientY - current.startY;
     if (!current.moved && e.timeStamp - current.at < TAP_MS * 2) {
-      if (handlers.placing?.()) {
+      if (handlers.placing?.() && !stage.closest('.rv-evidence-agent')) {
         const pin = pinAt(stage, e.clientX, e.clientY);
         if (pin) handlers.pin?.(pin);
         lastTap = null;
