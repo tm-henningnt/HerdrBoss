@@ -1,9 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { createDocument, byKey } from './fake-dom.js';
+import { patchHtml } from '../public/keyed.js';
 
 const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 const keyed = fs.readFileSync(new URL('../public/keyed.js', import.meta.url), 'utf8');
+const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
 
 function body(signature) {
   const match = new RegExp(`function ${signature.replace(/[()]/g, '\\$&')} \\{([\\s\\S]*?)\\n\\}`).exec(app);
@@ -46,6 +49,58 @@ test('the automatic refresh of the project page goes through the keyed patch', (
   const keeps = new Function('pathname', body('refreshForcesRender(pathname)'));
   assert.equal(keeps('/projects/sample'), true);
   assert.doesNotMatch(body('boardBlock(p, slug)'), /innerHTML/);
+});
+
+test('project live data uses stable view nodes and the server-derived values', () => {
+  assert.ok(/from '\.\/project-live-view\.js'/.test(app), 'the project uses pure live-view helpers');
+  assert.ok(/unplannedCardView\(worker, i\)/.test(body('boardBlock(p, slug)')), 'the Doing column maps unplanned workers');
+  assert.ok(/if \(!tasks\.length && !unplanned\.length\) return ''/.test(body('boardBlock(p, slug)')), 'unplanned workers can show without published tasks');
+  assert.ok(/noWorkerBadgeView\(t\)/.test(body('boardCard(t, ctx)')), 'Doing cards read the server noWorker flag');
+  const projectBody = body('project(s, slug)');
+  assert.ok(/publishedAgeBadgeView\(p\.publishedAgeMin, p\.statusStale\?\.level\)/.test(projectBody));
+  assert.ok(/phaseAgeText\(p\.phaseAgeMin\)/.test(projectBody));
+  assert.ok(/summaryAgeText\(p\.summaryAgeMin\)/.test(projectBody));
+  assert.ok(/projectSyncLineView\(p\.sync\)/.test(projectBody));
+  assert.ok(/data-key="project-sync"/.test(projectBody));
+  assert.ok(/data-key="project-published-age"/.test(projectBody));
+  assert.ok(/\.project-published-row\s*\{[^}]*min-height:\s*22px/.test(css), 'the published badge keeps its row height');
+  assert.ok(/\.project-sync-line\s*\{[^}]*min-height:\s*1\.4em/.test(css), 'the sync line keeps its row height');
+  assert.ok(/state === 'doing' \|\| noWorker \|\| pathBadge/.test(body('boardCard(t, ctx)')), 'Doing cards keep a badge row');
+  assert.ok(/\.card-badges\s*\{[^}]*min-height:\s*18px/.test(css), 'the Doing badge row has a reserved height');
+});
+
+function liveProject(status, sync, selected = 'doing') {
+  return `<section class="phead" data-key="project-head"><div data-key="project-published-age">${status}</div><p data-key="project-sync">${sync}</p></section>`
+    + `<details data-key="section:board" open><div class="board" data-key="board:demo"><div data-key="board-cols"><section data-key="col:doing"><button data-key="tab:doing" aria-selected="${selected === 'doing'}">Doing</button><ol><li data-key="task:A"><button data-key="task-title:A">Task A</button></li></ol></section><section data-key="col:ready"><button data-key="tab:ready" aria-selected="${selected === 'ready'}">Ready</button></section></div></div></details>`;
+}
+
+test('a project refresh keeps scroll, focus, the open Board section, and the selected column', () => {
+  globalThis.document = createDocument();
+  const root = document.html(liveProject('status published 2 min ago', 'Agents 1 working, board Doing 1: in sync'));
+  const board = byKey(root, 'board-cols');
+  const taskTitle = byKey(root, 'task-title:A');
+  root.scrollTop = 245;
+  board.scrollLeft = 320;
+  taskTitle.focus();
+
+  patchHtml(root, liveProject('status published 3 min ago', 'Agents 2 working, board Doing 1: out of sync'));
+
+  assert.equal(root.scrollTop, 245);
+  assert.equal(byKey(root, 'board-cols'), board);
+  assert.equal(board.scrollLeft, 320);
+  assert.equal(byKey(root, 'task-title:A'), taskTitle);
+  assert.equal(document.activeElement, taskTitle);
+  assert.equal(byKey(root, 'section:board').getAttribute('open'), '');
+  assert.equal(byKey(root, 'tab:doing').getAttribute('aria-selected'), 'true');
+});
+
+test('a phone project board opens Doing when it has only unplanned work', () => {
+  const activeColumn = new Function('FLOW', 'view', 'counts', 'hasUnplanned', body('boardActiveColumn(view, counts, hasUnplanned = false)'));
+  const counts = { blocked: 0, ready: 0, doing: 0, review: 0, done: 0 };
+  const flow = ['blocked', 'ready', 'doing', 'review', 'done'];
+  assert.equal(activeColumn(flow, {}, counts, true), 'doing');
+  assert.equal(activeColumn(flow, {}, counts, false), 'ready');
+  assert.equal(activeColumn(flow, { boardCol: 'review' }, counts, true), 'review');
 });
 
 test('the Board page patches in place and keys each card by project and task', () => {

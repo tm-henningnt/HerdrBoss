@@ -226,6 +226,15 @@ h2 .sub { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(
 .phases li:last-child { border-radius: 0 6px 6px 0; }
 .phases li.done { color: var(--ok); }
 .phases li.current { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
+.project-phase-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+.project-phase-row .phases { margin-top: 0; }
+.project-age { flex: 0 0 auto; color: var(--muted); font-size: 11.5px; white-space: nowrap; }
+.project-summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 8px; }
+.project-summary > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+.project-published-row { display: flex; align-items: center; min-height: 22px; }
+.project-published-row .tag, .project-published-row .stale-mark { display: inline-flex; align-items: center; min-height: 20px; white-space: nowrap; }
+.project-sync-line { min-height: 1.4em; font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
+.project-sync-line.is-warn { color: var(--warn); }
 .metrics { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
 .metric .v { font: 600 22px var(--mono); letter-spacing: -0.02em; }
 .metric .k { font-size: 12px; color: var(--muted); }
@@ -247,8 +256,9 @@ h2 .sub { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(
 .card.in-chain { border-color: color-mix(in srgb, var(--st) 60%, var(--line)); }
 .card.is-selected { border-color: var(--st); box-shadow: 0 0 0 1px var(--st), 0 2px 8px -2px color-mix(in srgb, var(--text) 18%, transparent); }
 .card-top { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.card-id { color: var(--muted); font-size: 11px; font-weight: 600; }
+.card-id { flex: 0 0 auto; color: var(--muted); font-size: 11px; font-weight: 600; white-space: nowrap; }
 .card-flag { padding: 0 6px; border-radius: 4px; background: color-mix(in srgb, var(--accent) 14%, var(--panel)); color: var(--text); font-size: 10.5px; font-weight: 600; white-space: nowrap; }
+.card-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-height: 18px; }
 .card-link { display: inline-flex; margin-left: auto; padding: 2px; border-radius: 4px; color: var(--muted); }
 .card-link:hover { color: var(--text); }
 .card-title { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; padding: 0; border: 0; background: none; color: var(--text); font: 600 13px/1.35 var(--sans); text-align: left; cursor: pointer; overflow-wrap: anywhere; }
