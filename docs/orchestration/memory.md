@@ -143,9 +143,11 @@ Owner queue (credentials, billing, and Owner-applied settings):
 
 ## State 2026-10-01
 
-- **Main:** `178af86`, pushed and live. It holds RP2 to RP12 (review packs), MG1, LK1, LS1, WM1, T2, PC1, PC2, GS1, GS2 and GH1. The kit revision is `e4591d0a3d3d`.
+- **Main:** `e530d97`, pushed and live. It holds the review packs (RP2 to RP12), T2, BO1, WC1, MX1 and MX2, SD1 (Watch page Stand down and Resume), and PG1 (pool settings on the Settings page). The kit revision is `e4591d0a3d3d`.
 - **Claude lane:** the weekly lane is ahead of pace. Start no claude worker until the Boss says it is back on pace. Use opencode, pi, and codex.
-- **Running or queued:** BO1 (mask outside hosts in browser output, codex) and WC1 (worker collect ignores kit-managed files, pi, done, not merged). Next: merge both in an integration worktree, one suite, release, `kit update`.
+- **Mailbox rule (Owner, via the Boss):** an item closes only through its linked task (`mailboxId`): done, removed from the status, or no longer waiting on the Owner. An unlinked item and each item that the Boss posts never close by time.
+- **Test files at a time:** on this repo, 4 files at a time ran about 35 percent faster than 2 (about 210 s against 320 s), with more load (average 8.6 against 6.2) and no failure. Nothing is changed. The Viz measurement needs the lock list empty, the Viz orchestrator asked first, and the time after 08:40.
+- **Running or queued:** none.
 - **Commit rule:** the `Kit-Impact:` line and the `Co-Authored-By:` line go in one final paragraph with no blank line between them.
 - **Waiting for the Owner:** real-phone checks of the Reviews pages, the Chat arrow, the Mailbox bars, and the Set goal button; a Safari check of the legacy HTML page frame; the first real pack import.
-- **Open follow-ups:** BR1 browser hang follow-up, G4h swap thresholds from 2026-10-07, the user-guide paragraph on loopback caller equals Owner, the fixture token literal in `test/review-cli.test.js`.
+- **Open follow-ups:** BR1 browser hang follow-up, G4h swap thresholds from 2026-10-07, the fixture token literal in `test/review-cli.test.js`.
