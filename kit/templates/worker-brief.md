@@ -30,6 +30,8 @@ The agent name stays the same after an orchestrator handover. The pane ID can ch
 
 {{kindWaitNote}}
 
+Run a long command in the foreground, or wait for a background job with the tool that reports its end. Do not wait with `sleep` in a loop, and do not poll with `until` or `while` loops. To wait for a Herdr Boss run, use `herdr-boss wait`, unless the kind note above says not to.
+
 List processes only with `pgrep -l NAME` or `ps -o pid,ppid,etime,comm`.
 
 Never use `ps e`, `ps -E`, `ps eww`, `ps aux`, `ps -ef`, or `pgrep -fl`. They print command lines and environments, and those can hold another session's token.
