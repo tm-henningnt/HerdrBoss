@@ -10,8 +10,8 @@ Orchestrators get a kit notice only for a change that they must act on. Other ki
 
 | Task | What | Main files | Size |
 | --- | --- | --- | --- |
-| N1 | Compute the kit revision only from the files that `kit install` writes: the kit file, the templates, the skill and its reference files, and `kit/models.json`. A merge of service, dashboard, or website code does not move it. | `src/kit/agents-check.js` (`projectKit()`, `kitRevision()`), `test/kit.test.js` | S |
-| N2 | An impact level for each kit change: `required`, `useful`, or `none`, from a `Kit-Impact:` commit trailer or `kit/CHANGES.md`. Keep a list of changes between revisions. | `src/kit/agents-check.js`, `kit/CHANGES.md` (new), `test/kit.test.js` | M |
+| N1 | Compute the kit revision only from the files that `kit install` writes: the kit file, the templates, the skill and its reference files, and `kit/models.json`. A merge of service, dashboard, or website code does not move it. | `src/kit/agents-check.js` (`projectKit()`, `kitRevision()`), `test/kit-config-worktrees.test.js` | S |
+| N2 | An impact level for each kit change: `required`, `useful`, or `none`, from a `Kit-Impact:` commit trailer or `kit/CHANGES.md`. Keep a list of changes between revisions. | `src/kit/agents-check.js`, `kit/CHANGES.md` (new), `test/kit-config-worktrees.test.js` | M |
 | N3 | Send the "Kit updated" notice only for `required`. Add `herdr-boss kit update [--quiet]`: print the digest since the project's revision, then install. | `src/kit-notice.js`, `src/kit/cli.js`, `test/kit-notice.test.js` | M |
 | N4 | Pull at natural moments: `worker start`, `publish`, and `handoff` print one line when the project is behind. The SessionStart hook stub runs `herdr-boss kit update --quiet`. | `src/kit/workers.js`, `src/cli.js`, `src/handoff.js`, `src/kit/agents-check.js` (hook stub) | M |
 | N5 | `check kit` reports `current`, `behind (useful only)`, and `behind (required)`. Only `behind (required)` fails. The dashboard shows `behind (useful only)` muted, and one reminder goes out after 2 hours behind on a required change while the pane works. | `src/kit/cli.js`, `public/app.js`, `src/engine.js` | S |
