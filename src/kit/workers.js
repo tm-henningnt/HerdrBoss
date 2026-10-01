@@ -29,6 +29,8 @@ const AGENT_READY_MARKERS = Object.freeze({
   pi: null,
 });
 const KNOWN_AGENT_STATUSES = new Set(['idle', 'working', 'blocked', 'done']);
+// The kit installs and updates these files. It writes them in a worker worktree, so a worker never has to report them.
+export const KIT_MANAGED_PATHS = Object.freeze(['docs/orchestration/herdr-boss.md', 'AGENTS.md', '.claude/settings.json']);
 const READY_POLL_MS = 500;
 const READY_WAIT_MS = 45_000;
 const STALLED_PROMPT_WAIT_MS = 20_000;
@@ -1464,7 +1466,8 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
     const baseRef = run.baseCommit || run.base;
     const log = gitLog(run.worktree, baseRef);
     // The worker's own brief and report files live under .worker/ and never count as changed product paths.
-    const ownFile = (item) => item === '.worker' || String(item).startsWith('.worker/');
+    // The kit writes its own files in the worktree. They never count as changed product paths either.
+    const ownFile = (item) => item === '.worker' || String(item).startsWith('.worker/') || KIT_MANAGED_PATHS.includes(String(item));
     const reported = (reportJson.changedPaths || []).filter((item) => !ownFile(item));
     const changed = gitChangedPaths(run.worktree, baseRef).filter((item) => !ownFile(item));
     const reportScope = compareChangedPaths(reported, run.allowedPaths ?? []);
