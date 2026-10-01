@@ -675,7 +675,7 @@ A Codex tool shell can run under a shared app-server daemon with another environ
 | `--orch PANE` | The verified caller pane for reports. If set, it must match `HERDR_PANE_ID`. |
 | `--no-worktree` | Use the current checkout. The worker gets `.worker/NAME/` for its brief and reports. |
 | `--dry-run` | Print the plan. Change nothing. |
-| `--force` | Override quota, capacity, and paused-project refusals. Start `claude-opus-5-5` only with the Owner's approval: without `--force`, `worker start` fails with `claude-opus-5-5 needs the Owner's approval. Ask the Owner, then start with --force.` The refusal also applies to the Opus spellings that `--model` normalizes, and to an Opus fallback from the policy. A refusal writes a `worker-opus-refused` event. It happens before a worktree, a pane, or a run record exists. A forced Claude Opus start prints and sends the Boss `Opus worker: NAME runs claude-opus-5-5 (forced).` and writes a `worker-opus` event. With `--force`, the run record holds `force: true`. It cannot enable a disabled model. It cannot override the swap refusal. |
+| `--force` | Override quota, capacity, and paused-project refusals. Start `claude-opus-5-5` only with the Owner's approval: without `--force`, `worker start` fails with `claude-opus-5-5 needs the Owner's approval. Ask the Owner, then start with --force.` The refusal also applies to the Opus spellings that `--model` normalizes, and to an Opus fallback from the policy. A refusal of a `claude` worker writes a `worker-opus-refused` event. It happens before a worktree, a pane, or a run record exists. A forced Claude Opus start prints and sends the Boss `Opus worker: NAME runs claude-opus-5-5 (forced).` and writes a `worker-opus` event. With `--force`, the run record holds `force: true`. It cannot enable a disabled model. It cannot override the swap refusal. |
 | `--force-swap` | Override the swap refusal (see below). |
 
 Worker brief templates support two Herdr command slots:
@@ -716,7 +716,7 @@ herdr-boss worker start fix-74 --kind claude --task-file brief.md --allow src/pa
 |---|---|
 | `worker list` | Unfinished run records with the live agent status. |
 | `worker collect NAME [--record] [--outcome done\|partial\|failed --gate-passed\|--gate-failed] [--defects N] [--rework N] [--model-result first-time\|rework\|failed] [--model-reason TEXT]` | Check the worker report and its changed paths, report configured stale-artifact warnings, append the run to the ledger, record usage, and release its leases. Recording needs the outcome, one gate result, and any supplied defect or rework counts. It sets `collectedAt` and `finishedAt` after a successful collect. A refused collect closes nothing. `--record` is accepted for compatibility. After success, merge the branch, then prune safe worktrees. |
-| `worker collect NAME --no-record` | Read and print the report summary. Do not write a ledger entry or close the run record. Use this option when you only need to inspect the report. |
+| `worker collect NAME --no-record` | Read and print the report summary. Do not write a ledger entry or close the run record. Use this option when you only need to inspect the report. Do not combine it with `--record`: the command refuses both flags. |
 | `worker park NAME --reason TEXT` | Mark a worker that waits on purpose. Idle notices skip it. |
 | `worker unpark NAME` | Clear the park mark. |
 | `worker allow NAME PATH... --reason TEXT` | Approve extra paths for a running worker after a `WORKER QUESTION`. |
