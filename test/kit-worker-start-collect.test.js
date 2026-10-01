@@ -189,6 +189,76 @@ test('worker start warns about unplanned work and suggests the best matching pub
   assert.ok(lines.includes('Suggested: --task-id BD1c (Worker warning from task text)'), 'the task-file base name is matched');
 });
 
+test('worker task suggestions ignore stopwords and tokens shorter than three characters', () => {
+  const f = setupFixture(null);
+  const lines = [];
+  const start = (name, task, tasks) => startWorker(name, {
+    kind: 'codex', allow: ['src/'], task, dryRun: true,
+  }, {
+    config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile,
+    projectStatus: { tasks }, output: (line) => lines.push(line),
+  });
+
+  start('stopword-only', 'Add the fix test tests docs and for with task from into', [
+    { id: 'S-1', title: 'Add the fix test tests docs and for with task from into' },
+  ]);
+  assert.equal(lines.some((line) => line.startsWith('Suggested:')), false, 'stopwords cannot create a match');
+
+  lines.length = 0;
+  start('short-token-only', 'UI QA UX', [{ id: 'AB-2', title: 'UI QA UX' }]);
+  assert.equal(lines.some((line) => line.startsWith('Suggested:')), false, 'tokens shorter than three characters cannot create a match');
+});
+
+test('worker task suggestions skip done tasks and do not suggest tied best matches', () => {
+  const f = setupFixture(null);
+  const lines = [];
+  const start = (name, task, tasks) => startWorker(name, {
+    kind: 'codex', allow: ['src/'], task, dryRun: true,
+  }, {
+    config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile,
+    projectStatus: { tasks }, output: (line) => lines.push(line),
+  });
+
+  start('done-task', 'Refresh the status panel', [
+    { id: 'DONE-1', title: 'Refresh status panel', status: 'done' },
+  ]);
+  assert.equal(lines.some((line) => line.startsWith('Suggested:')), false, 'done tasks are ineligible');
+
+  lines.length = 0;
+  start('tied-tasks', 'Refresh status panel store', [
+    { id: 'ID-11', title: 'Refresh status panel' },
+    { id: 'ID-22', title: 'Refresh status store' },
+  ]);
+  assert.equal(lines.some((line) => line.startsWith('Suggested:')), false, 'a tie for the best score has no suggestion');
+});
+
+test('worker task ID suggestions need a whole-word ID of at least two characters', () => {
+  const f = setupFixture(null);
+  const tasks = [
+    { id: 'BD1c', title: 'Unrelated published work' },
+    { id: 'A', title: 'Another unrelated task' },
+    { id: 'A1', title: 'Short explicit identifier' },
+  ];
+  const lines = [];
+  const start = (name, task) => startWorker(name, {
+    kind: 'codex', allow: ['src/'], task, dryRun: true,
+  }, {
+    config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile,
+    projectStatus: { tasks }, output: (line) => lines.push(line),
+  });
+
+  start('embedded-id', 'Please inspect XBD1cY before continuing');
+  assert.equal(lines.some((line) => line.startsWith('Suggested:')), false, 'an ID inside a longer word is not an exact match');
+
+  lines.length = 0;
+  start('one-character-id', 'A');
+  assert.equal(lines.some((line) => line.startsWith('Suggested:')), false, 'one-character IDs cannot be exact matches');
+
+  lines.length = 0;
+  start('two-character-id', 'Please inspect A1 before continuing');
+  assert.ok(lines.includes('Suggested: --task-id A1 (Short explicit identifier)'), 'a whole-word ID with two characters can match exactly');
+});
+
 test('worker collect keeps changed paths stable after the base branch merges the worker', () => {
   const f = setupFixture(null);
   const baseCommit = git(f.root, 'rev-parse', 'main');

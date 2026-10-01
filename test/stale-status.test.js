@@ -108,6 +108,21 @@ test('a stale status notice starts after 30 minutes and repeats once an hour whi
   assert.equal(staleAlerts(evaluate(quiet, CFG, {}, NOW).alerts).length, 0, 'no notice without a working worker or orchestrator');
 });
 
+test('stale status notices go only to the project pane labeled orch and wait while it is blocked', async () => {
+  const prompts = [];
+  const engine = new Engine(loadConfig(), { push: false, act: false, herdrRunner: async (_cmd, args) => { prompts.push(args); return ''; } });
+  engine.push = true;
+  engine.log = () => {};
+  engine.memory = { paneSince: {}, pushes: {}, notified: {}, infoPrompts: {} };
+  const alerts = staleAlerts(evaluate(snapshot({ updated: NOW - 31 * MIN, orchStatus: 'working' }), CFG, {}, NOW).alerts);
+
+  await engine.deliver(alerts, { panes: [{ id: 'w1:p1', workspace: 'w1', orch: true, label: 'lead', agent: 'claude', status: 'working' }] }, NOW);
+  assert.equal(prompts.length, 0, 'there is no fallback to another pane in the project');
+
+  await engine.deliver(alerts, { panes: [{ id: 'w1:p2', workspace: 'w1', orch: true, label: 'orch', agent: 'claude', status: 'blocked' }] }, NOW + 1);
+  assert.equal(prompts.length, 0, 'a blocked orchestrator cannot receive a stale status notice');
+});
+
 function gitRepo(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-stale-repo-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));

@@ -550,6 +550,7 @@ test('statusStale warns only when an old status has a live worker or a working o
   assert.deepEqual(apply([live('worker', 'A')], []), { ageMin: 31, level: 'warn' });
   assert.deepEqual(apply([], [{ workspace: 'w1', orch: true, agent: 'claude', status: 'working' }]), { ageMin: 31, level: 'warn' });
   assert.deepEqual(apply([], [{ workspace: 'w1', orch: true, agent: 'claude', status: 'idle' }]), { ageMin: 31, level: 'ok' });
+  assert.deepEqual(apply([], [{ workspace: 'w1', orch: true, agent: 'claude', status: 'blocked' }]), { ageMin: 31, level: 'ok' }, 'a blocked orchestrator counts as not working');
   const fresh = { ...oldProject, updated: iso(NOW - 30 * MIN) };
   assert.deepEqual(applyTaskState([fresh], { alpha: [live('worker', 'A')] }, { herdr: { panes: [] }, now: NOW })[0].statusStale,
     { ageMin: 30, level: 'ok' });
