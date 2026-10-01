@@ -64,7 +64,7 @@ test('a decision with choices shows one button for each choice in a sideways row
 
 test('an answer bar is a composer: Dismiss, the answer field, and Send', () => {
   const html = mailActionBarHtml({ id: 'q1', action: 'answer' }, helpers());
-  assert.match(html, /data-mail-dismiss="q1"[\s\S]*<textarea id="mail-text-q1" data-mail-draft="q1" maxlength="2000" rows="1" required placeholder="Answer…"[\s\S]*class="mail-bar-send" aria-label="Send"/);
+  assert.match(html, /data-mail-dismiss="q1"[\s\S]*<textarea id="mail-text-q1" data-mail-draft="q1" maxlength="2000" rows="1" placeholder="Answer…"[\s\S]*class="mail-bar-send" aria-label="Send"/);
   assert.match(html, /<label class="visually-hidden" for="mail-text-q1">Answer<\/label>/);
   const decision = mailActionBarHtml({ id: 'q2', action: 'decide', choices: [] }, helpers());
   assert.match(decision, /for="mail-text-q2">Decision<\/label>/);
