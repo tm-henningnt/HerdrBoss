@@ -125,3 +125,7 @@ Summary: Integrate: combine the collect default, the read-only research rule, an
 ## fe8a51e665fd
 Impact: useful
 Summary: Browser output masks titles and removes credentials, query strings, and fragments in every host mode. Apply the same filter to browser API responses, dashboard state, and new event log records.
+
+## 00073aec20c4
+Impact: useful
+Summary: Integrate: browser output redaction with the current kit text.
