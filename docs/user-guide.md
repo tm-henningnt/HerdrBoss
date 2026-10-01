@@ -228,7 +228,7 @@ A failed request shows its reason in plain words under the field or in the botto
 
 ### Item viewer
 
-The item viewer shows one item. On a screen of 899 px or less it fills the screen. On a screen of 900 px or wider it fills the pane at the right of the sections. The top bar holds Back, the item title, `Item N of M` with the section name, and the **Viewed** toggle. The answer bar is at the bottom edge. The evidence and the item text are between the two bars.
+The item viewer shows one item. On a screen of 899 px or less it fills the screen. On a screen of 900 px or wider it fills the pane at the right of the sections. The top bar holds Back, the item title, `Item N of M` with the section name, and the **Viewed** toggle. The evidence and the item text are below the top bar. Above 900 px, the answer controls sit in a sticky column at the right of the evidence and stay in view as the item scrolls. At 900 px and below, the answer bar stays at the bottom edge.
 
 | Type | Viewer |
 |---|---|
