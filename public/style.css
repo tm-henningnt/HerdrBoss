@@ -1911,7 +1911,7 @@ body.app-view textarea, body.app-view input { caret-color: var(--accent); }
   .chat-bubbles > .chat-bubble, .chat-bubbles > .chat-report { max-width: 84%; }
   .chat-entry .chat-bubble { max-width: calc(84% - 34px); }
   .chat-composer { padding: 6px max(8px, env(safe-area-inset-right)) calc(6px + var(--chat-bottom-inset, env(safe-area-inset-bottom))) max(8px, env(safe-area-inset-left)); }
-  body.chat-keyboard-open .chat-composer { padding-bottom: 0; }
+  body.chat-keyboard-open .chat-composer { padding-bottom: 6px; }
   .chat-hint { display: none; }
   .chat-jump { width: 44px; height: 44px; right: max(8px, env(safe-area-inset-right)); bottom: 6px; }
   .chat-jump-badge { top: 0; right: 0; }
