@@ -162,6 +162,14 @@ Do not print full process command lines or environments. Do not use `pgrep -fl`,
 
 Treat a secret that reaches a transcript as disclosed. Report it to the orchestrator, who reports it to the Boss.
 
+For a browser task, use only the project browser.
+
+Use only the tab that you create with `herdr-boss browser tab new`. Record its tab ID. Never use or change another tab.
+
+Close your tab when the task ends. Never print cookies, storage, or tokens. Never run an evaluate command that reads `document.cookie` or `localStorage`.
+
+Use `herdr-boss browser screenshot` for each screenshot.
+
 For a visual check of a served page, use the project browser. Every worker kind can use it, also `codex`:
 
 1. Start the server on a free local port, or on a port from `herdr-boss lease acquire serve-ports`. In a Codex shell, start it in the background with `setopt NO_BG_NICE; <server command> > .worker/tmp/serve.log 2>&1 &`. Without `NO_BG_NICE`, zsh prints `nice(5) failed: operation not permitted`, but the server still starts.

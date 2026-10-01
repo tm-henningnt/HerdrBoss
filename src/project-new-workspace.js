@@ -193,7 +193,8 @@ export function workspaceStep(inputs, context) {
   let kind = info.agent || target.kind;
   if (!info.agent) {
     hooks.waitForPane(pane, workspace, cwd, herdr, hooks.wait);
-    const launch = successorAgentArgs({ toKind: target.kind, newPane: pane, newTab: info.tab_id ?? info.tabId, workspace }, target.launchArgs, context.env ?? process.env);
+    const launch = successorAgentArgs({ toKind: target.kind, project: inputs.slug, newPane: pane, newTab: info.tab_id ?? info.tabId, workspace },
+      target.launchArgs, { ...(context.env ?? process.env), HERDR_BOSS_DIR: context.dataDir }, { browserLookup: hooks.browserLookup });
     try { herdr(['agent', 'start', name, '--kind', target.kind, '--pane', pane, '--', ...launch]); } catch (error) { if (!isAgentPaneBusy(error)) throw error; }
     context.remember({ agentStarted: true, kind: target.kind, model: target.model });
   } else if (!ids.kind) context.remember({ agentStarted: true, kind });

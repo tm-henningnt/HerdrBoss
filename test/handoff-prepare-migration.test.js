@@ -149,6 +149,26 @@ test('a codex migrated successor gets the same shell environment settings after 
   });
 });
 
+test('fresh and migrated Codex handovers pass the project browser override to agent start', (t) => {
+  for (const mode of ['fresh', 'migrate']) {
+    const f = codexEnvFixture(t, { sessionId: mode === 'migrate' ? 'old-session' : null });
+    const handoffUrl = new URL('../src/handoff.js', import.meta.url).href;
+    const source = `import { prepareHandoff } from ${JSON.stringify(handoffUrl)};
+const projects = [];
+const result = prepareHandoff('ws:p1', 'codex', { mode: ${JSON.stringify(mode)} }, {
+  browserLookup: (project) => { projects.push(project); return { port: 9247 }; },
+});
+console.log(JSON.stringify({ result, projects }));`;
+    const { result, projects } = JSON.parse(runHandoffModule(f.root, source, f.env));
+    assert.equal(result.status, 'prepared');
+    assert.deepEqual(projects, ['project']);
+    const args = successorStartArgs(f);
+    const override = 'mcp_servers.chrome-devtools.args=["chrome-devtools-mcp@latest","--browserUrl=http://127.0.0.1:9247"]';
+    assert.ok(args.some((arg, index) => arg === '-c' && args[index + 1] === override));
+    if (mode === 'migrate') assert.deepEqual(args.slice(0, 2), ['resume', 'migrated-session']);
+  }
+});
+
 test('a claude successor gets no shell environment settings', (t) => {
   const f = codexEnvFixture(t);
   const result = JSON.parse(runHandoffCli(f.root, ['handoff', 'prepare', 'ws:p1', '--to', 'claude', '--mode', 'fresh'], f.env));
