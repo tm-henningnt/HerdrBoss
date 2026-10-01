@@ -130,6 +130,18 @@ Describe each screenshot in text immediately after viewing it.
 
 Save the artifact path and state what the pixels show.
 
+## Review pack
+
+When the task asks for a review pack, write it to `.worker/review-pack/`. Do not publish it. The orchestrator publishes it.
+
+Write `manifest.json` with `"schema": "herdr-boss.review-pack/1"`, an `id`, a `title`, and sections of items. Give each item an `id`, a `title`, a `type`, and `ask`.
+
+Include one item for each thing that the Owner must decide. Add light and dark images for a visual change. Add before and after images for a changed screen. Add the exact text for a document change. Add a `link` item for each live check.
+
+Use only invented or public sample data. Do not add secrets, tokens, or private names.
+
+Check the folder with `herdr-boss review check .worker/review-pack`. Name the folder in the report.
+
 ## Gates on a shared machine
 
 Run only the scoped acceptance commands named in this brief or task contract.
