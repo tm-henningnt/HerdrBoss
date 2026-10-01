@@ -1096,9 +1096,9 @@ An unknown tool-call count stays `null`. The ledger accepts `null` as unknown. T
 
 Each project has one persistent Chrome profile on a port from 9223 to 9299. The port is a lease in the built-in pool `project-browsers`. See [Port leases](user-guide.md#port-leases). Add `--tab ID` to page commands when the browser has several tabs; `browser tabs` lists the IDs.
 
-The browser command output masks outside hosts in `http`, `https`, `ws`, and `wss` URLs. It replaces the first host label with `<tenant>`, or an IP address with `<ip>`. It keeps the scheme, remaining host labels, port, and path. It removes the query and fragment. It keeps loopback URLs in full, including their query and fragment. It removes user names and passwords from all URLs. It prints `data:` and `javascript:` URLs as `<redacted-url>`. Other URL types stay unchanged.
+The browser command output masks outside hosts in `http`, `https`, `ws`, and `wss` URLs. It replaces the first host label with `<tenant>`, or an IP address with `<ip>`. It keeps the scheme, remaining host labels, port, and path. It removes the query and fragment. It keeps loopback URLs in full, including their query and fragment. It removes user names and passwords from all URLs. It prints `data:` and `javascript:` URLs as `<redacted-url>`. Other URL types stay unchanged. Herdr Boss stores bookmark names as given, then masks non-loopback hosts in their output by the same rule.
 
-Add `--full` anywhere in a supported command to print real URLs. Use this flag only when the Owner needs the real address, at a terminal.
+Add `--full` anywhere in a supported command to print real URLs and stored bookmark names. Use this flag only when the Owner needs the real address, at a terminal.
 
 Herdr Boss decides browser ownership by the Herdr workspace. Any pane in a project's workspace can change that project's browser, also an unlabeled pane and a worker. The Boss pane and every pane in the Boss workspace can change any project browser. This rule covers browser requests, size changes, close, release, restart, tab changes, page navigation and input, and bookmark changes. A refusal names the pane's workspace and the browser's project. A plain terminal outside Herdr skips the check with a warning.
 

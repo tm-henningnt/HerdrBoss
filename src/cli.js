@@ -152,7 +152,7 @@ const USAGE = `herdr-boss <command>
   browser bookmarks SLUG rm INDEX  Remove one bookmark.
   browser bookmarks SLUG open INDEX [--new-tab] [--full]  Open a bookmark in the current tab or a new tab.
   browser bookmarks SLUG start URL|none [--full]  Set or clear the start page of the next launch.
-  --full prints real URLs. Use it only as the Owner at a terminal.
+  --full prints real URLs and stored bookmark names. Use it only as the Owner at a terminal.
   browser sweep-clones [--dry-run]  Delete orphaned Chrome code-sign clones now; --dry-run only lists them.
   handoff plan PANE --to KIND [--mode migrate|fresh] [--model MODEL] [--effort EFFORT] [--force]
   handoff prepare PANE --to KIND [--mode migrate|fresh] [--model MODEL] [--effort EFFORT] [--force]
@@ -647,11 +647,11 @@ async function main() {
       else if (args[0] === 'bookmarks' && args[1] && args[2] === 'list' && args.length === 3) printBrowserJson(listBookmarks(args[1]));
       else if (args[0] === 'bookmarks' && args[1] && args[2] === 'add' && args[3] && args[4] && args.length === 5) {
         await verifyBrowserCaller(args[1]);
-        console.log(JSON.stringify(addBookmark(args[1], { name: args[3], url: args[4] }), null, 2));
+        printBrowserJson(addBookmark(args[1], { name: args[3], url: args[4] }));
       }
       else if (args[0] === 'bookmarks' && args[1] && args[2] === 'rm' && args[3] && args.length === 4) {
         await verifyBrowserCaller(args[1]);
-        console.log(JSON.stringify(removeBookmark(args[1], args[3]), null, 2));
+        printBrowserJson(removeBookmark(args[1], args[3]));
       }
       else if (args[0] === 'bookmarks' && args[1] && args[2] === 'start' && args[3] && args.length === 4) {
         await verifyBrowserCaller(args[1]);
