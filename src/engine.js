@@ -621,7 +621,7 @@ export class Engine extends EventEmitter {
   }
 
   // Store only delivered service prompts. A store failure must not cause a second prompt.
-  async promptService(pane, text, { herdr = this.communicationHerdr, now = this.communicationNow ?? this.clock(), messages = [{ text, kind: 'reminder' }] } = {}) {
+  async promptService(pane, text, { herdr = this.communicationHerdr, now = this.communicationNow ?? this.clock?.() ?? Date.now(), messages = [{ text, kind: 'reminder' }] } = {}) {
     checkHerdrResponse(await this.herdrRunner('herdr', ['agent', 'prompt', pane, text]));
     const target = (herdr?.panes || []).find((item) => item.id === pane);
     const run = this.communicationRuns?.find((item) => item.pane === pane);
