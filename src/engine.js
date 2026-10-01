@@ -378,7 +378,7 @@ export function isBossHandoff(item, herdr) {
 }
 
 export function alertPromptDue(alert, record, now, cooldown) {
-  if (alert.key.startsWith('context:')) return !record || now - record.at >= CONTEXT_WARNING_INTERVAL_MS;
+  if (alert.key?.startsWith('context:')) return !record || now - record.at >= CONTEXT_WARNING_INTERVAL_MS;
   if (alert.immediate) return !record;
   if (!record) return true;
   if (SEV[alert.severity] > SEV[record.severity]) return true;

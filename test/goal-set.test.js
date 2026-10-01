@@ -291,7 +291,7 @@ test('goal set refuses a bad text and an unusable default before any pane call',
 // ---- The handover uses the same steps.
 test('the handover goal step sends and checks the goal with the shared functions of goal.js', () => {
   const engine = fs.readFileSync(new URL('../src/engine.js', import.meta.url), 'utf8');
-  assert.match(engine, /import \{ goalOnScreen, sendGoalPrompt \} from '\.\/goal\.js'/);
+  assert.match(engine, /import \{ goalOnScreen, paneText, sendGoalPrompt \} from '\.\/goal\.js'/);
   assert.match(engine, /sendGoalPrompt\(\{ run: herdr/);
   assert.match(engine, /goalOnScreen\(\{ run: herdr/);
   assert.doesNotMatch(engine, /`\/goal \$\{item\.goal\}`/);
