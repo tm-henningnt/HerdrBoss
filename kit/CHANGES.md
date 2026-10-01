@@ -117,3 +117,7 @@ Summary: Require review packs to report interaction evidence, app steps, human d
 ## dfe6fcc602e2
 Impact: useful
 Summary: Document review-pack item types, ask values, and evidence rules in the orchestrator reference.
+
+## 90f73eb6c2f1
+Impact: useful
+Summary: Integrate: combine the collect default, the read-only research rule, and the review pack rules into one kit revision.
