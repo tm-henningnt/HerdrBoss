@@ -89,12 +89,13 @@ Read each file in the skill folder when its step comes:
 - Give each item a two-line description (what and why), exact steps, expected result, and app/sheet link. Set verifiedBy to agent-verified and list image refs in evidence, or use needs-you.
 - Send only items needing a human decision to the Owner: taste, business meaning, or a final call.
 - Before shipping, get an independent reviewer to run a design pass: gpt-6.1-sol, or claude-opus-5-5 with --force when the Owner asked. Record passed, issues, or not-run in designPass.
-- Use manifest.json, one question per item, supported types, and ask values. Include light/dark and before/after images, exact document text, and a link item for each live check.
+- Use `manifest.json` with one question per item. See [the review-pack values and evidence rules](reference/review-tasks.md#review-pack-values).
 - Keep secrets, tokens, and private data out. Publish scans text files and stops on a finding.
 - Publish with `herdr-boss review publish <slug> <folder>`. Import an existing HTML folder with `herdr-boss review import <slug> <folder>`.
 - Do not wait; continue independent work. The result arrives as an [owner] prompt with the verdict and a fetch command.
 - Read the result with `herdr-boss review result <slug> <pack> --json`. Fix denied items and notes. Record Owner decisions from pack notes in `docs/orchestration/memory.md`.
 - Publish a new version with the same pack id after fixes. Unchanged items keep their answers.
+
 ## Resume from an unknown state
 
 - Use [the resume prompt](../../templates/orchestrator-resume.md) when you need a full discovery checklist.

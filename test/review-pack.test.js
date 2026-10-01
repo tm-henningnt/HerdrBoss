@@ -150,6 +150,24 @@ test('review guidance fields reject invalid values and evidence outside image it
   for (const field of ['description', 'steps', 'expected', 'link', 'verifiedBy', 'evidence', 'designPass']) assert.ok(messages.includes(field), field + ' is reported');
 });
 
+test('descriptions trim one trailing newline and require exactly two lines', () => {
+  const description = oneItem({
+    type: 'markdown', text: 'Review the flow.', description: 'The checkout flow.\nIt shows the payment result.\n',
+    steps: ['Open the test app.'], expected: 'The receipt appears.', link: 'https://app.example.test/checkout', verifiedBy: 'needs-you',
+  }).result();
+  assert.deepEqual(description.errors, []);
+  assert.equal(item(description).description, 'The checkout flow.\nIt shows the payment result.');
+
+  const badDescription = oneItem({ type: 'markdown', text: 'Review the flow.', description: 'One line.' }).result();
+  assert.match(badDescription.errors.find((entry) => entry.rule === 'description').message, /description needs exactly two lines/i);
+});
+
+test('invalid steps are not normalized as undefined array entries', () => {
+  const badSteps = oneItem({ type: 'markdown', text: 'Review the flow.', steps: ['Open the test app.', 3] }).result();
+  assert.ok(badSteps.errors.some((entry) => entry.rule === 'field'));
+  assert.equal(Object.hasOwn(item(badSteps), 'steps'), false);
+});
+
 test('the manifest must exist, parse, be an object, and use the schema', () => {
   assert.deepEqual(rules(makePack({}, null).result()), ['manifest-missing']);
   assert.deepEqual(rules(makePack({}, '{ nope').result()), ['manifest-json']);

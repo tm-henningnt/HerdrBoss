@@ -536,10 +536,11 @@ export function validatePack(folder, options = {}) {
     else out.verifiedBy = source.verifiedBy;
 
     if (source.description !== undefined) {
-      const description = checkText(source.description, where + '.description', TEXT_MAX, { required: true });
+      const checkedDescription = checkText(source.description, where + '.description', TEXT_MAX, { required: true });
+      const description = checkedDescription?.replace(/\r?\n$/, '');
       if (description !== undefined) {
         const lines = description.split(/\r?\n/);
-        if (lines.length !== 2 || lines.some((line) => !line.trim())) error('description', where + '.description must have two non-empty lines: what it is and why.', { where });
+        if (lines.length !== 2 || lines.some((line) => !line.trim())) error('description', where + '.description needs exactly two lines: what it is and why.', { where });
         else out.description = description;
       }
     }
@@ -547,7 +548,8 @@ export function validatePack(folder, options = {}) {
       if (!Array.isArray(source.steps) || source.steps.length < 1 || source.steps.length > 30) {
         error('steps', where + '.steps must be a list of 1 to 30 strings.', { where });
       } else {
-        out.steps = source.steps.map((step, index) => checkText(step, where + '.steps[' + index + ']', 500, { required: true }));
+        const steps = source.steps.map((step, index) => checkText(step, where + '.steps[' + index + ']', 500, { required: true }));
+        if (steps.every((step) => step !== undefined)) out.steps = steps;
       }
     }
     if (source.expected !== undefined) out.expected = checkText(source.expected, where + '.expected', TEXT_MAX, { required: true });

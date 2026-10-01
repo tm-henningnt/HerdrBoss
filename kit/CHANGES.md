@@ -109,3 +109,7 @@ Summary: Use default worker collection recording in kit and command documentatio
 ## 8708369d28dd
 Impact: useful
 Summary: Require review packs to report interaction evidence, app steps, human decisions, and an independent design pass.
+
+## dfe6fcc602e2
+Impact: useful
+Summary: Document review-pack item types, ask values, and evidence rules in the orchestrator reference.
