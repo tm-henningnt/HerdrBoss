@@ -1824,6 +1824,75 @@ test('worker start copies local orchestration files from the main checkout safel
   assert.doesNotMatch(output.join('\n'), /private-token-name|oversize-private-name|private-link-name/);
 });
 
+test('worker start skips unreadable local orchestration files and warns', { skip: process.getuid?.() === 0 }, (t) => {
+  const f = setupFixture(null);
+  const local = path.join(f.root, '.orchestration', 'local');
+  fs.mkdirSync(local, { recursive: true });
+  const copied = path.join(local, 'readable.txt');
+  const unreadable = path.join(local, 'unreadable.txt');
+  fs.writeFileSync(copied, 'copy me\n');
+  fs.writeFileSync(unreadable, 'skip me\n');
+  fs.chmodSync(unreadable, 0o000);
+
+  const alternate = path.join(os.tmpdir(), `herdr-kit-caller-unreadable-${process.pid}-${Date.now()}`);
+  git(f.root, 'worktree', 'add', '-b', 'caller-unreadable', alternate, 'main');
+  const config = loadProjectConfig({ cwd: alternate });
+  const output = [];
+  let run = null;
+  t.after(() => {
+    try { fs.chmodSync(unreadable, 0o600); } catch {}
+    const worktree = run?.worktree ?? config.worktreePath('copy-unreadable');
+    try { fs.chmodSync(path.join(worktree, '.orchestration', 'local', 'unreadable.txt'), 0o600); } catch {}
+    try { git(f.root, 'worktree', 'remove', '--force', worktree); } catch {}
+    try { git(f.root, 'worktree', 'prune'); } catch {}
+    try { git(f.root, 'branch', '-D', run?.branch ?? 'copy-unreadable'); } catch {}
+    try { git(f.root, 'worktree', 'remove', '--force', alternate); } catch {}
+    try { git(f.root, 'branch', '-D', 'caller-unreadable'); } catch {}
+    fs.rmSync(f.root, { recursive: true, force: true });
+  });
+  run = startWorker('copy-unreadable', { kind: 'codex', task: 'x', taskId: 'T1', allow: ['src/'] }, {
+    config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: (line) => output.push(line),
+  });
+
+  const target = path.join(run.worktree, '.orchestration', 'local');
+  assert.equal(fs.readFileSync(path.join(target, 'readable.txt'), 'utf8'), 'copy me\n');
+  assert.equal(fs.existsSync(path.join(target, 'unreadable.txt')), false);
+  assert.ok(output.includes('Warning: skipped 1 unreadable file(s) from .orchestration/local.'));
+});
+
+test('worker start rejects a local orchestration destination symlink', (t) => {
+  const f = setupFixture(null);
+  const local = path.join(f.root, '.orchestration', 'local');
+  fs.mkdirSync(local, { recursive: true });
+  fs.writeFileSync(path.join(local, 'readable.txt'), 'copy me\n');
+
+  const alternate = path.join(os.tmpdir(), `herdr-kit-caller-local-link-${process.pid}-${Date.now()}`);
+  git(f.root, 'worktree', 'add', '-b', 'caller-local-link', alternate, 'main');
+  const destinationParent = path.join(alternate, '.orchestration');
+  fs.mkdirSync(destinationParent, { recursive: true });
+  fs.symlinkSync('missing-local-target', path.join(destinationParent, 'local'));
+  git(alternate, 'add', '.orchestration/local');
+  git(alternate, 'commit', '-m', 'add local orchestration destination link');
+
+  const config = loadProjectConfig({ cwd: alternate });
+  let run = null;
+  t.after(() => {
+    const worktree = run?.worktree ?? config.worktreePath('copy-local-link');
+    try { git(f.root, 'worktree', 'remove', '--force', worktree); } catch {}
+    try { git(f.root, 'worktree', 'prune'); } catch {}
+    try { git(f.root, 'branch', '-D', run?.branch ?? 'copy-local-link'); } catch {}
+    try { git(f.root, 'worktree', 'remove', '--force', alternate); } catch {}
+    try { git(f.root, 'branch', '-D', 'caller-local-link'); } catch {}
+    fs.rmSync(f.root, { recursive: true, force: true });
+  });
+
+  assert.throws(() => {
+    run = startWorker('copy-local-link', { kind: 'codex', task: 'x', taskId: 'T1', allow: ['src/'], base: 'caller-local-link' }, {
+      config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+    });
+  }, /Could not copy local orchestration files/);
+});
+
 test('worker start prints nothing about local orchestration when the folder is absent', (t) => {
   const f = setupFixture(null);
   const output = [];

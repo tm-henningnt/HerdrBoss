@@ -9,7 +9,7 @@ import { randomBytes } from 'node:crypto';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { validateResourcePools } from '../src/config.js';
-import { acquireLease, listLeases, ownerReleaseLease, readLeases, reclaimLeases, releaseLease, tcpListening } from '../src/leases.js';
+import { acquireLease, listLeases, ownerReleaseLease, processCwd, processLabel, readLeases, reclaimLeases, releaseLease, tcpListening } from '../src/leases.js';
 import { writeNight } from '../src/night.js';
 import { renderBulletin } from '../src/rules.js';
 import { loadModels, loadProjectConfig } from '../src/kit/config.js';
@@ -25,6 +25,56 @@ function git(cwd, ...args) {
 }
 
 function tempDir(prefix) { return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix))); }
+
+test('process probes cache successes for five seconds and failures for one second', (t) => {
+  const bin = tempDir('herdr-lease-probe-');
+  const ps = path.join(bin, 'ps');
+  const lsof = path.join(bin, 'lsof');
+  const psCalls = path.join(bin, 'ps-calls');
+  const lsofCalls = path.join(bin, 'lsof-calls');
+  const pid = process.pid + 1000000;
+  const secondPid = pid + 1;
+  const failedPid = pid + 2;
+  fs.writeFileSync(ps, `#!/bin/sh\nprintf "call\\n" >> "\${0%/*}/ps-calls"\nif [ "$4" = "${failedPid}" ]; then exit 1; fi\nprintf "fake-process\\n"\n`);
+  fs.chmodSync(ps, 0o700);
+  fs.writeFileSync(lsof, '#!/bin/sh\nprintf "call\\n" >> "${0%/*}/lsof-calls"\nprintf "n/tmp/fake-process-cwd\\n"\n');
+  fs.chmodSync(lsof, 0o700);
+  const previousPath = process.env.PATH;
+  process.env.PATH = bin;
+  t.after(() => {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+    fs.rmSync(bin, { recursive: true, force: true });
+  });
+
+  let now = 1000;
+  const clock = () => now;
+  assert.equal(processLabel(pid, { now: clock }), 'fake-process');
+  now += 4999;
+  assert.equal(processLabel(pid, { now: clock }), 'fake-process');
+  assert.equal(fs.readFileSync(psCalls, 'utf8').trim().split('\n').length, 1);
+  assert.equal(processLabel(secondPid, { now: clock }), 'fake-process');
+  assert.equal(fs.readFileSync(psCalls, 'utf8').trim().split('\n').length, 2, 'the cache key includes command arguments');
+
+  now += 2;
+  assert.equal(processLabel(pid, { now: clock }), 'fake-process');
+  assert.equal(fs.readFileSync(psCalls, 'utf8').trim().split('\n').length, 3);
+  assert.equal(processLabel(failedPid, { now: clock }), null);
+  now += 999;
+  assert.equal(processLabel(failedPid, { now: clock }), null);
+  assert.equal(fs.readFileSync(psCalls, 'utf8').trim().split('\n').length, 4);
+  now += 2;
+  assert.equal(processLabel(failedPid, { now: clock }), null);
+  assert.equal(fs.readFileSync(psCalls, 'utf8').trim().split('\n').length, 5);
+
+  assert.equal(processCwd(pid, { hasLsof: true, now: clock }), path.resolve('/tmp/fake-process-cwd'));
+  now += 4999;
+  assert.equal(processCwd(pid, { hasLsof: true, now: clock }), path.resolve('/tmp/fake-process-cwd'));
+  assert.equal(fs.readFileSync(lsofCalls, 'utf8').trim().split('\n').length, 1);
+  now += 2;
+  assert.equal(processCwd(pid, { hasLsof: true, now: clock }), path.resolve('/tmp/fake-process-cwd'));
+  assert.equal(fs.readFileSync(lsofCalls, 'utf8').trim().split('\n').length, 2);
+});
 
 // Worker worktrees default to ~/Projects/.herdr-wt. Keep them out of the real home folder.
 const TEST_HOME = tempDir('herdr-lease-home-');
