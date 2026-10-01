@@ -9,12 +9,55 @@ import {
   DENIAL_RANGES, DEFAULT_DENIAL_RANGE, denialRange, denialSeries, denialMarkers, denialDetailsHtml, denialLegendHtml,
   lockWaitSeries, lockWaitDetailsHtml, memorySeries, memoryDetailsHtml, hourLabel,
 } from '../public/analytics.js';
+import * as communicationView from '../public/analytics.js';
 
 const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 const html = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
 const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
 const guide = fs.readFileSync(new URL('../docs/user-guide.md', import.meta.url), 'utf8');
 const cli = fs.readFileSync(new URL('../docs/cli.md', import.meta.url), 'utf8');
+
+test('communication helpers keep empty figures honest', () => {
+  const win = communicationView.communicationSeries(null);
+  assert.deepEqual(win.days, []);
+  assert.equal(win.total, 0);
+  assert.match(communicationView.communicationResponseHtml(null), /No response times/);
+  assert.match(communicationView.communicationNudgeDetailsHtml(null), /No nudges/);
+});
+
+test('communication charts keep six kinds and seven daily columns with many projects', () => {
+  const data = { days: ['2026-09-30', '2026-10-01'], projects: Array.from({ length: 250 }, (_, i) => ({
+    project: `p${i}`, counts: { task: [1, 2], nudge: [0, 1], reminder: [0, 0], report: [0, 0], reply: [0, 0], other: [0, 0] },
+  })) };
+  const win = communicationView.communicationSeries(data);
+  assert.equal(win.series.length, 6);
+  assert.deepEqual(win.series[0].values, [250, 500]);
+  assert.equal(win.total, 1000);
+  assert.equal(win.series[5].cls, 's-other');
+  const svg = stackedBars({ cats: win.days.map(label => ({ label })), series: win.series });
+  assert.doesNotMatch(svg, /NaN|Infinity/);
+  assert.equal((svg.match(/class="viz-hit"/g) || []).length, 2);
+  assert.equal(communicationView.communicationSeries(data, 'p1').total, 4);
+  const rows = Array.from({ length: 250 }, (_, i) => ({ project: `p${i}`, taskId: '<task>', nudges: 7 }));
+  const details = communicationView.communicationNudgeDetailsHtml({ nudgesPerTask: rows });
+  assert.match(details, /Showing 200 of 250/);
+  assert.doesNotMatch(details, /<task>/);
+  const responses = communicationView.communicationResponseHtml({ orchestrators: [{ project: '<project>', name: null, pane: 'wA:p1', messages: 5, responses: 2, medianMs: 60000, p90Ms: 120000 }], workers: [{ kind: 'codex', model: '<model>', messages: 1, responses: 0, medianMs: null, p90Ms: null }] });
+  assert.match(responses, /1 min/);
+  assert.match(responses, /2 min/);
+  assert.match(responses, /&lt;model&gt;/);
+  assert.doesNotMatch(responses, /NaN|Infinity|<project>/);
+});
+
+test('Analytics wires Agent communication to read-only summary data and page help', () => {
+  assert.match(app, /analyticsData\?\.agentCommunication/);
+  assert.match(app, /<h2>Agent communication<\/h2>/);
+  for (const fn of ['agentCommunicationBlock', 'agentResponseBlock', 'agentNudgeBlock']) assert.match(app, new RegExp(`${fn}\\(`));
+  assert.match(app, /data-communication-project/);
+  assert.match(app, /<h3>Agent communication<\/h3>/);
+  assert.match(guide, /### Agent communication/);
+  assert.match(cli, /responseMs/);
+});
 
 const spend = {
   days: [
@@ -564,7 +607,7 @@ test('the Analytics help and the guide describe the memory chart, the classes, t
   assert.match(app, /<h3>Memory by class<\/h3>/);
   assert.match(app, /memory-samples\.jsonl/);
   assert.match(app, /every 5 minutes/);
-  assert.match(app, /<p>The page answers eight questions/);
+  assert.match(app, /<p>The page answers nine questions/);
   for (const cls of ['Claude', 'Codex', 'Browsers', 'MCP servers', 'Vitest']) assert.match(app, new RegExp(cls), cls);
   assert.match(guide, /## Memory by class/);
   assert.match(guide, /memory-samples\.jsonl/);

@@ -8,6 +8,7 @@ import { readProjectRepos } from './harness.js';
 import { loadProjectConfig } from './kit/config.js';
 
 export const AGENT_MESSAGE_KINDS = Object.freeze(['task', 'nudge', 'report', 'reminder', 'reply', 'other']);
+export const AGENT_RESPONSE_WINDOW_MS = 24 * 60 * 60 * 1000;
 const TELL_KINDS = new Set(['task', 'nudge', 'reminder', 'reply']);
 const META_FILE = 'agent-message-meta.jsonl';
 const REPORT_FILE = 'agent-report-recorded.jsonl';
@@ -67,11 +68,12 @@ function reportPath(dir) { return path.join(dir, REPORT_FILE); }
 
 function validAddress(address) {
   return !!address && typeof address === 'object' && !Array.isArray(address)
-    && ['boss', 'orch', 'worker', 'unknown'].includes(address.role)
+    && ['boss', 'orch', 'worker', 'service', 'unknown'].includes(address.role)
     && ['project', 'name', 'pane'].every((key) => address[key] == null || (typeof address[key] === 'string' && address[key].length <= 256));
 }
 
 function addressKey(address) {
+  if (address.role === 'service') return 'service';
   if (address.role === 'boss') return 'boss';
   if (address.role === 'orch') return `orch:${address.project || 'unknown'}`;
   if (address.role === 'worker') return `worker:${address.name || address.pane || 'unknown'}`;
@@ -96,17 +98,19 @@ function appendMetadata(row, { dir }) {
 
 function foldedMetadata(file) {
   const rows = new Map();
-  const updates = new Map();
   for (const event of readJsonl(file)) {
-    if (event._update === 'respondedAt' && typeof event.id === 'string') {
-      updates.set(event.id, event.respondedAt);
+    if (event._update === 'respondedAt') {
+      const row = rows.get(event.id);
+      if (row && !row.respondedAt && Number.isFinite(Date.parse(event.respondedAt))) row.respondedAt = event.respondedAt;
+    } else if (event._update === 'status') {
+      const row = rows.get(event.id);
+      if (row && ['delivered', 'failed'].includes(event.status)) row.status = event.status;
     } else if (typeof event.id === 'string') {
       rows.set(event.id, event);
     }
   }
-  for (const [id, respondedAt] of updates) {
-    const row = rows.get(id);
-    if (row && (respondedAt === null || typeof respondedAt === 'string')) row.respondedAt = respondedAt;
+  for (const row of rows.values()) {
+    row.responseMs = row.respondedAt ? Math.max(0, Date.parse(row.respondedAt) - rowDate(row)) : null;
   }
   return [...rows.values()];
 }
@@ -117,9 +121,59 @@ export function updateAgentMessageRespondedAt(id, respondedAt, { dir = DATA_DIR 
   }
   const file = metaPath(dir);
   return withFileLock(file, () => {
+    const row = foldedMetadata(file).find((item) => item.id === id);
+    if (!row || row.respondedAt || respondedAt === null || Date.parse(respondedAt) < rowDate(row)) return false;
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
     fs.appendFileSync(file, `${JSON.stringify({ id, _update: 'respondedAt', respondedAt })}\n`, { mode: 0o600 });
     fs.chmodSync(file, 0o600);
+    return true;
+  });
+}
+
+function sameAgent(target, sender) {
+  if (target?.pane) return target.pane === sender?.pane;
+  return target?.role === sender?.role && target?.project === sender?.project
+    && (target?.name ? target.name === sender?.name : target?.role === 'orch' || target?.role === 'boss');
+}
+
+// Use a fresh pane snapshot and successful tell rows. A response is written once, within 24 hours.
+export function updateAgentResponses({ dir = DATA_DIR, panes = [], observed = {}, now = Date.now() } = {}) {
+  const file = metaPath(dir);
+  return withFileLock(file, () => {
+    const rows = foldedMetadata(file);
+    const tells = new Map();
+    for (const row of rows) {
+      if (row.source !== 'tell' || row.status !== 'delivered' || !validAddress(row.from)
+        || rowDate(row) < now - AGENT_RESPONSE_WINDOW_MS || rowDate(row) > now) continue;
+      const key = row.from?.pane || addressKey(row.from);
+      if (!tells.has(key)) tells.set(key, []);
+      tells.get(key).push(row);
+    }
+    for (const outgoing of tells.values()) outgoing.sort((a, b) => rowDate(a) - rowDate(b));
+    const live = new Map(panes.filter((pane) => pane.agent).map((pane) => [pane.id, pane]));
+    const next = {};
+    const updates = [];
+    for (const row of rows) {
+      const at = rowDate(row);
+      if (row.respondedAt || row.status === 'failed' || (row.source === 'tell' && row.status !== 'delivered')
+        || !validAddress(row.to) || !Number.isFinite(at) || at > now || now - at >= AGENT_RESPONSE_WINDOW_MS) continue;
+      const pane = live.get(row.to?.pane);
+      const active = observed[row.id]?.active || ['working', 'blocked'].includes(row.targetStatus)
+        || ['working', 'blocked'].includes(pane?.status);
+      next[row.id] = { active: !!active };
+      const idleAt = active && ['idle', 'done'].includes(pane?.status) ? now : Infinity;
+      const outgoing = tells.get(row.to?.pane || addressKey(row.to)) || [];
+      const reply = outgoing.find((item) => rowDate(item) >= at && rowDate(item) <= now && item.id !== row.id && sameAgent(row.to, item.from));
+      const responseAt = Math.min(idleAt, reply ? rowDate(reply) : Infinity);
+      if (!Number.isFinite(responseAt)) continue;
+      updates.push({ id: row.id, _update: 'respondedAt', respondedAt: new Date(responseAt).toISOString() });
+      delete next[row.id];
+    }
+    if (updates.length) {
+      fs.appendFileSync(file, updates.map((row) => `${JSON.stringify(row)}\n`).join(''), { mode: 0o600 });
+      fs.chmodSync(file, 0o600);
+    }
+    return { updated: updates.length, observed: next };
   });
 }
 
@@ -159,6 +213,9 @@ export function recordAgentMessage(fields, { dir = DATA_DIR, now = Date.now() } 
     taskId: fields.taskId == null ? null : String(fields.taskId),
     runId: fields.runId == null ? null : String(fields.runId),
     respondedAt: null,
+    status: fields.status ?? 'recorded',
+    ...(fields.source ? { source: fields.source } : {}),
+    ...(fields.targetStatus ? { targetStatus: fields.targetStatus } : {}),
   };
   appendMetadata(row, { dir });
   return record;
@@ -311,7 +368,7 @@ function resolveTarget(target, herdr, control, runs = []) {
     let pane;
     try { pane = herdr(['pane', 'get', id])?.pane; } catch (error) { throw new Error(`Cannot resolve project ${target}: ${error.message}`); }
     if (!pane || paneId(pane) !== id || pane.label !== 'orch') throw new Error(`Project ${target} does not have a live pane labeled orch.`);
-    return { role: 'orch', project: project.slug || target, name: null, pane: id };
+    return { ...targetAddress(pane, control, runs), project: project.slug || target };
   }
 
   try {
@@ -335,10 +392,16 @@ function resolveTarget(target, herdr, control, runs = []) {
 function targetAddress(pane, control, runs = []) {
   const id = paneId(pane);
   const project = projectForWorkspace(control, paneWorkspace(pane));
-  if (pane.label === 'boss') return { role: 'boss', project: null, name: null, pane: id };
-  if (pane.label === 'orch') return { role: 'orch', project, name: null, pane: id };
   const run = runs.find((item) => item.pane === id && !item.finishedAt);
-  if (run) return { role: 'worker', project: run.project || project, name: run.name || pane.name || null, pane: id };
+  const details = {
+    ...(run?.kind || typeof pane.agent === 'string' ? { kind: run?.kind || pane.agent } : {}),
+    ...(run?.model || pane.model ? { model: run?.model || pane.model } : {}),
+    ...(pane.agent_status || pane.status ? { status: pane.agent_status || pane.status } : {}),
+  };
+  if (pane.label === 'boss') return { role: 'boss', project: null, name: null, pane: id, ...details };
+  if (pane.label === 'orch') return { role: 'orch', project, name: pane.name || pane.agent_name || null, pane: id, ...details };
+  if (run) return { role: 'worker', project: run.project || project, name: run.name || pane.name || null, pane: id, ...details,
+    taskId: run.taskId ?? run.issue ?? null, runId: workerRunId(run, run.project || project) };
   return { role: 'unknown', project, name: pane.name || pane.agent_name || pane.agent || null, pane: id };
 }
 
@@ -350,16 +413,23 @@ export function tellAgent(target, text, { env = process.env, herdr, control = {}
     const runRows = readRuns({ runs, control, dataDir });
     const from = verifyAgentCaller(env, herdr, control, runRows);
     const to = resolveTarget(String(target), herdr, control, runRows);
-    record = recordAgentMessage({ from, to, text, kind, status: 'recorded', replyTo, taskId: from.taskId, runId: from.runId }, { dir, now });
+    record = recordAgentMessage({ from, to, text, kind, status: 'recorded', source: 'tell', targetStatus: to.status,
+      replyTo, taskId: from.taskId ?? to.taskId, runId: from.runId ?? to.runId }, { dir, now });
   } catch (error) { return { exitCode: 1, reason: String(error?.message ?? error).replace(/\s+/g, ' ').slice(0, 200) }; }
   try {
     const response = herdr(['agent', 'prompt', record.to.pane, text]);
     if (response?.error || response?.ok === false) throw new Error(response.error || 'Herdr refused the prompt.');
     const updated = openMessageStore({ dir }).update(record.id, { status: 'delivered' }, { now });
-    return { exitCode: 0, record: updated || { ...record, status: 'delivered' } };
+    let metadataWarning;
+    try { appendMetadata({ id: record.id, _update: 'status', status: 'delivered' }, { dir }); }
+    catch { metadataWarning = 'The prompt was delivered. Its metadata status could not be saved.'; }
+    return { exitCode: 0, record: updated || { ...record, status: 'delivered' }, ...(metadataWarning ? { metadataWarning } : {}) };
   } catch (error) {
     const reason = 'Herdr could not deliver the prompt.';
     const updated = openMessageStore({ dir }).update(record.id, { status: 'failed' }, { now });
-    return { exitCode: 1, record: updated || { ...record, status: 'failed' }, reason };
+    let metadataWarning;
+    try { appendMetadata({ id: record.id, _update: 'status', status: 'failed' }, { dir }); }
+    catch { metadataWarning = 'The metadata status could not be saved.'; }
+    return { exitCode: 1, record: updated || { ...record, status: 'failed' }, reason, ...(metadataWarning ? { metadataWarning } : {}) };
   }
 }

@@ -28,6 +28,50 @@ export function compact(n) {
   return n >= 1e9 ? `${(n / 1e9).toFixed(1)}G` : n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}K` : String(Math.round(n));
 }
 
+const COMMUNICATION_KINDS = ['task', 'nudge', 'report', 'reminder', 'reply', 'other'];
+const COMMUNICATION_LABELS = ['Task', 'Nudge', 'Report', 'Reminder', 'Reply', 'Other'];
+const countValue = (value) => Number.isFinite(value) && value > 0 ? value : 0;
+
+// Aggregate projects into six fixed series. The chart size depends on days, not project count.
+export function communicationSeries(data, project = 'all') {
+  const days = data?.days || [];
+  const projects = (data?.projects || []).filter((row) => project === 'all' || row.project === project);
+  const series = COMMUNICATION_KINDS.map((kind, i) => ({ key: kind, label: COMMUNICATION_LABELS[i], cls: SERIES_CLASSES[i] || 's-other',
+    values: days.map((_, day) => projects.reduce((sum, row) => sum + countValue(row.counts?.[kind]?.[day]), 0)),
+  }));
+  return { days, projects, series, total: series.reduce((sum, row) => sum + row.values.reduce((a, b) => a + b, 0), 0) };
+}
+
+const communicationTable = (heads, rows) => {
+  const shown = rows.slice(0, 200);
+  return `<div class="fleet-table-wrap"><table class="fleet-table"><thead><tr>${heads.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${shown.map(row => `<tr>${row.map((value, i) => `<td data-label="${esc(heads[i])}"${i ? ' class="mono"' : ''}>${esc(value)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`
+    + (rows.length > shown.length ? `<p class="viz-note">Showing ${shown.length} of ${rows.length} rows. The figures include all rows.</p>` : '');
+};
+
+export function communicationDailyDetailsHtml(win) {
+  const rows = [];
+  for (const project of win.projects) for (let day = 0; day < win.days.length; day++) {
+    const counts = COMMUNICATION_KINDS.map(kind => countValue(project.counts?.[kind]?.[day]));
+    if (counts.some(Boolean)) rows.push([project.project, win.days[day], ...counts]);
+  }
+  return communicationTable(['Project', 'Day', ...COMMUNICATION_LABELS], rows);
+}
+
+export function communicationResponseHtml(data) {
+  const orchs = data?.orchestrators || [], workers = data?.workers || [];
+  if (!orchs.length && !workers.length) return '<div class="calm-state">No response times are recorded yet.</div>';
+  const figures = row => [row.messages, row.responses, minutes(row.medianMs), minutes(row.p90Ms)];
+  const heads = ['Messages', 'Responses', 'Median', 'p90'];
+  return (orchs.length ? `<h4>Per orchestrator</h4>${communicationTable(['Project', 'Agent', ...heads], orchs.map(row => [row.project, row.name || row.pane || 'Unknown', ...figures(row)]))}` : '')
+    + (workers.length ? `<h4>Per worker kind and model</h4>${communicationTable(['Kind', 'Model', ...heads], workers.map(row => [row.kind, row.model, ...figures(row)]))}` : '');
+}
+
+export function communicationNudgeDetailsHtml(data) {
+  const rows = data?.nudgesPerTask || [];
+  if (!rows.length) return '<div class="calm-state">No nudges are recorded in this window.</div>';
+  return communicationTable(['Project', 'Task', 'Nudges'], rows.map(row => [row.project, row.taskId ?? 'Task not known', row.nudges]));
+}
+
 // A round top for an axis at or above the value. The half of each step is round too, for the middle tick.
 export function niceMax(value) {
   if (!(value > 0)) return 1;

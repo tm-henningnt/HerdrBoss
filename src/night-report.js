@@ -1,3 +1,5 @@
+import { agentCommunication } from './analytics.js';
+
 const METERED_LANES = new Set(['codex', 'claude', 'opencodego']);
 const REPORT_LINES_MAX = 60;
 
@@ -69,13 +71,20 @@ function reportEvents(project, events, herdr, since, now) {
 }
 
 // Render a short plain-text snapshot from engine state and usage records.
-export function renderNightReport({ night, kind = 'report', now = Date.now(), projects = [], control = {}, herdr = {}, paneSince = {}, usage = [], events = [] }) {
+export function renderNightReport({ night, kind = 'report', now = Date.now(), projects = [], control = {}, herdr = {}, paneSince = {}, usage = [], events = [], agentMetadata = null }) {
   const since = timestamp(night?.since) ?? now;
   const lines = [
     kind === 'retro' ? 'Watch retro' : 'Watch report',
     `Since: ${new Date(since).toISOString()}`,
     `As of: ${new Date(now).toISOString()}`,
   ];
+  if (agentMetadata) {
+    const figures = agentCommunication(agentMetadata, { now, since: new Date(since).toISOString() });
+    const nudges = figures.nudgesPerTask.reduce((sum, task) => sum + task.nudges, 0);
+    const seconds = value => value === null ? 'unknown' : `${Math.round(value / 1000)} s`;
+    const share = figures.reminderShare === null ? 'unknown' : `${Math.round(figures.reminderShare * 100)}%`;
+    lines.push(`Agent communication: ${figures.total} messages; ${nudges} nudges; ${figures.reminders} reminders (${share}); ${figures.responses} responses; median ${seconds(figures.medianMs)}; p90 ${seconds(figures.p90Ms)}.`);
+  }
   const ordered = [...projects].sort((a, b) => String(a.slug).localeCompare(String(b.slug)));
   if (!ordered.length) lines.push('No project status is available.');
   for (const project of ordered) {

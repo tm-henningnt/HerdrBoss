@@ -41,7 +41,7 @@ test('agent messages use stable unordered pair keys and store a text-free metada
   assert.equal(agent.readAgentMessages({ dir }).length, 1);
   assert.deepEqual(agent.readAgentMetadata({ dir }), [{
     id: record.id, at: new Date(1000).toISOString(), from, to, project: 'alpha', kind: 'task', chars: 12,
-    taskId: 'AM1a', runId: null, respondedAt: null,
+    taskId: 'AM1a', runId: null, respondedAt: null, responseMs: null, status: 'recorded',
   }]);
   assert.doesNotMatch(JSON.stringify(agent.readAgentMetadata({ dir })), /Do the work/);
   assert.equal(Object.hasOwn(JSON.parse(fs.readFileSync(path.join(dir, 'agent-message-meta.jsonl'), 'utf8')), 'text'), false);
@@ -183,6 +183,59 @@ test('agent tell does not resolve an inherited project lookup', () => {
   assert.equal(result.exitCode, 1);
   assert.match(result.reason, /No pane or agent named alpha/);
   assert.equal(calls.some((args) => args[0] === 'pane' && args[1] === 'get' && args[2] === 'wA:p1'), false);
+});
+
+test('tell metadata keeps the target worker kind, model and active state', () => {
+  const dir = path.join(root, 'tell-worker-data');
+  const boss = { pane_id: 'wB:p1', workspace_id: 'wB', label: 'boss' };
+  const worker = { pane_id: 'wA:p2', workspace_id: 'wA', agent_status: 'working' };
+  const result = agent.tellAgent('wA:p2', 'Task.', {
+    dir, now: 1000, env: { HERDR_ENV: '1', HERDR_PANE_ID: 'wB:p1', HERDR_WORKSPACE_ID: 'wB' },
+    control: { projects: { orchard: { slug: 'orchard', workspace: 'wA' } } },
+    runs: [{ name: 'build', project: 'orchard', pane: 'wA:p2', kind: 'codex', model: 'sample-model', taskId: 'T1', startedAt: '2026-10-01' }],
+    herdr: args => args[0] === 'pane' ? { pane: args[2] === boss.pane_id ? boss : worker } : {},
+  });
+  assert.equal(result.exitCode, 0);
+  const row = agent.readAgentMetadata({ dir })[0];
+  assert.equal(row.to.kind, 'codex');
+  assert.equal(row.to.model, 'sample-model');
+  assert.equal(row.taskId, 'T1');
+  assert.equal(row.targetStatus, 'working');
+});
+
+test('a metadata status write failure does not relabel a delivered tell as failed', () => {
+  const dir = path.join(root, 'tell-status-failure');
+  const boss = { pane_id: 'wB:p1', workspace_id: 'wB', label: 'boss' };
+  const orch = { pane_id: 'wA:p1', workspace_id: 'wA', label: 'orch' };
+  const result = agent.tellAgent('wA:p1', 'Task.', {
+    dir, env: { HERDR_ENV: '1', HERDR_PANE_ID: 'wB:p1', HERDR_WORKSPACE_ID: 'wB' }, runs: [],
+    herdr: args => {
+      if (args[0] === 'pane') return { pane: args[2] === boss.pane_id ? boss : orch };
+      const file = path.join(dir, 'agent-message-meta.jsonl');
+      fs.unlinkSync(file);
+      fs.mkdirSync(file);
+      return {};
+    },
+  });
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.record.status, 'delivered');
+  assert.equal(typeof result.metadataWarning, 'string');
+  assert.equal(agent.readAgentMessages({ dir })[0].status, 'delivered');
+});
+
+test('a malformed metadata row cannot prevent a valid idle response', () => {
+  const dir = path.join(root, 'response-malformed-data');
+  const record = agent.recordAgentMessage({
+    from: { role: 'service', project: null, name: null, pane: null },
+    to: { role: 'worker', project: 'orchard', name: 'build', pane: 'wA:p2' },
+    text: 'Continue.', kind: 'nudge', status: 'delivered', targetStatus: 'working',
+  }, { dir, now: 1000 });
+  fs.appendFileSync(path.join(dir, 'agent-message-meta.jsonl'), JSON.stringify({ id: 'broken', at: new Date(2000).toISOString() }) + '\n');
+  const result = agent.updateAgentResponses({ dir, now: 3000, panes: [{ id: 'wA:p2', agent: 'codex', status: 'idle' }] });
+  assert.equal(result.updated, 1);
+  assert.equal(agent.readAgentMetadata({ dir }).find(row => row.id === record.id).responseMs, 2000);
+  assert.equal(agent.updateAgentMessageRespondedAt(record.id, new Date(4000).toISOString(), { dir }), false);
+  assert.equal(agent.readAgentMetadata({ dir }).find(row => row.id === record.id).responseMs, 2000);
 });
 
 test('CLI tell reads a regular file up to 64 KB and uses a fake herdr binary', async (t) => {

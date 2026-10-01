@@ -278,6 +278,7 @@ async function messageCommand(cmd, args) {
       env: process.env, herdr: createHerdrRunner(), control: readControl(), dir: DATA_DIR,
       kind, replyTo: flags['--reply-to'] ?? null,
     });
+    if (result.metadataWarning) console.error(result.metadataWarning);
     if (result.exitCode) {
       console.error(`Agent message${result.record ? ` ${result.record.id}` : ''} failed: ${result.reason}`);
       process.exitCode = result.exitCode;
