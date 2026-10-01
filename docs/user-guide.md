@@ -1325,6 +1325,7 @@ The Analytics page (`/analytics`) shows figures and charts. It answers these que
 - Does the quota use of each lane stay at or below its expected pace?
 - How often is each model right the first time?
 - Which causes of denials and permission prompts occur, for which harness?
+- What memory do the agent, browser, and test processes use?
 - When do the machine load and the lock waits slow work down?
 - How many notices does each pane get?
 - Who changed the policy, and which keys changed?
@@ -1349,6 +1350,7 @@ Each chart has a title that tells what to read from it, a scope line, a legend, 
 - **Model scorecard**: one bar for each of the 8 models with the most runs. The bar shows the share of first-time, rework, failed, and not judged runs. The right column shows the runs and the median time. Details also holds the recorded work by project and provider and the recent runs.
 - **Denials**: one stacked bar for each day. The range is 3 days by default. The buttons select 7 or 30 days, and the browser remembers the choice. The switch selects one harness or all harnesses. See [Denials per day](#denials-per-day).
 - **Lock wait and hold by project**: one stacked bar for each day of the last 7 days. The lower part is hold time. The upper parts show wait time in the long and short lanes. The chart shows the median wait for each lane. The switch selects one project by its slug or all projects. **Details** shows each day's wait by lane and lists the wait, hold, runs, and timeouts for each project. A row without a lane counts as long. A run that reused a suite pass, and a suite run inside a push, add no time. The chart source is the last 2 MB of `lock-ledger.jsonl`. The card also shows full-suite slot capacity from saved policy and machine-wide slot use from the latest usable machine sample. A sample older than three minutes shows unknown use. The project filter does not change the machine scope of slot use. The prediction table shows each project and kind. Predictions use the same last 10 qualifying releases within 14 days as admission, including the rotated ledger. Fewer than three releases shows unknown. The historical short-job baseline is a follow-up.
+- **Memory by class**: stacked bars for each hour of the last 24 hours. Each bar is the mean of the samples of that hour. See [Memory by class](#memory-by-class).
 - **Machine load and lock waits**: lines for the 5-minute load as a percent of the cores, the memory in use, and the swap in use, over the last 24 hours in columns of 10 minutes. A shaded column had a lock holder. The strip under the lines shows the minutes in which a suite request waited.
 - **Machine overload and idle waiting by hour**: see [Machine samples](#machine-samples).
 - **Notices per pane**: stacked bars for each day of the last 7 days. The five panes with the most notices have their own color. The other panes share one gray.
@@ -1356,7 +1358,7 @@ Each chart has a title that tells what to read from it, a scope line, a legend, 
 
 The charts use one color set for light mode and one for dark mode. The set passes the dataviz palette validator. The charts show no client name or path. They show harness, model, cause, lock kind, and pane ID only. Two sections are the exception: the keys of Policy changes and the lock chart name projects by their slug. On a screen up to 1180 px wide the charts are in one column. On a phone each chart scrolls sideways inside its own box.
 
-The route `/api/analytics` gives the notice counts, the machine timeline, the wait and hold of the locks for each project and day, the denial counts of the last 30 days for each day, the harness change markers of those days, and the last 100 policy changes. It reads the last 2 MB of `events.jsonl` and of `lock-ledger.jsonl`, the machine samples of the last 25 hours, `denials.json`, `harness-changes.jsonl`, and `policy-changes.jsonl`. It keeps the result for 60 seconds. The result holds numbers, lock kinds, pane IDs, the marker labels, and the policy change keys with scalar values.
+The route `/api/analytics` gives the notice counts, the machine timeline, the memory of each class, the wait and hold of the locks for each project and day, the denial counts of the last 30 days for each day, the harness change markers of those days, and the last 100 policy changes. It reads the last 2 MB of `events.jsonl` and of `lock-ledger.jsonl`, the machine samples of the last 25 hours, the memory samples of the last 25 hours, `denials.json`, `harness-changes.jsonl`, and `policy-changes.jsonl`. It keeps the result for 60 seconds. The result holds numbers, lock kinds, pane IDs, the marker labels, and the policy change keys with scalar values.
 
 ### Activity log
 
@@ -2152,6 +2154,40 @@ The route keeps its result for 60 seconds for each value of `days`. The summary 
 
 The **Analytics** page shows the hours in the block **Machine overload and idle waiting by hour**. The chart has two bars for each local hour of the day. The bars show the mean minutes per day of overload and of idle waiting, from 0 to 60. The chart title gives the two daily means. A tooltip on hover, focus, or touch gives the values of one hour. A hatched bar marks an hour with fewer than 10 samples. A note shows when `coverage` is below 0.5. The details element under the chart holds the same 24 rows as a table. On a phone the chart scrolls sideways inside its own box.
 
+## Memory by class
+
+The engine reads the process table every 5 minutes while actions are on. It adds the resident memory of the processes of each class and writes one line to `memory-samples.jsonl` in the data directory. The file uses mode 0600. It is append-only JSONL. The engine takes no sample while the action state is off. A sample that cannot be read waits for the next 5 minutes. A write error never stops or slows a tick.
+
+Each line has these keys:
+
+- `at`: the sample time, cut to the whole 5 minutes, as a UTC ISO string.
+- `mb`: the resident memory in megabytes of each class: `claude`, `codex`, `browsers`, `mcp`, `vitest`, and `other`.
+
+A line holds no command line, no path, no pane ID, and no project name. The engine reads the process table with one `ps` call for the resident size and the command of each process, under `LC_ALL=C`, with a timeout of 10 seconds. It adds each size to a class and keeps only the totals. The call runs without await, so a slow or hung `ps` never delays a tick. The engine runs one call at a time and starts the next one only when the call before it has ended. A call that fails or times out writes nothing and waits for the next 5 minutes.
+
+One definition assigns each process to a class. A class matches the program that runs, either the executable or the script of an interpreter. An argument and a folder name never make a match on their own. The engine tests the classes in this order and stops at the first match:
+
+1. `browsers`: the command names a browser, such as Google Chrome, Chromium, or chrome-headless-shell.
+2. `mcp`: the command names a model context protocol server, such as chrome-devtools-mcp, node_repl, cua_repl, or a name that starts with `mcp-server-`. A file or an option with the word mcp is no server name.
+3. `claude`: the program is `claude` or `claude-code`. A folder called `claude-x` is no match.
+4. `codex`: the program is `codex`. A folder called `codex-tools` is no match.
+5. `vitest`: node runs a vitest program, or the program itself is vitest.
+6. `other`: every other process, including Herdr Boss itself.
+
+When the file passes 3 MB, the engine renames it to `memory-samples.1.jsonl` and replaces the older rotated file. Two files hold about 20 days at one sample each 5 minutes.
+
+`GET /api/analytics` returns the samples in the field `memoryByClass`. The field has these keys:
+
+- `hours`, `bucketMin`: the window of 24 hours, in buckets of 60 minutes.
+- `classes`: the class keys, in the order above.
+- `points`: 24 buckets, oldest first. Each bucket has `at`, `samples`, `mb`, and `total`. `mb` holds the mean memory of each class over the samples of the bucket, rounded to whole megabytes, and `total` holds the sum of the classes. A bucket with no sample holds zero for each class.
+- `peak`: the higher of the highest bucket mean and the highest single sample of each class in the window.
+- `latest`: the newest sample of the window, with `at`, `mb`, and `total`, or `null` when the window holds no sample.
+
+The route keeps its result for 60 seconds. It skips a line that does not parse. The response holds no project name, pane ID, path, or command.
+
+The **Analytics** page shows the buckets in the block **Memory by class**. The chart has one stacked bar for each hour of the last 24 hours. A bar is the mean of the samples of that hour, so the top of a bar reads the memory of all processes at that hour. An hour without a sample has no bar. The chart title gives the highest total of the window and the total of the newest sample. Details lists each class with its latest sample and its highest mean.
+
 Before it removes a worktree, `herdr-boss worktree prune --apply` checks for processes whose current working directory is inside that worktree. It reports parent-PID-1 processes in missing or prunable worktree paths. Stop those processes before cleanup. Herdr Boss removes no worktrees if it cannot scan process directories. It also keeps worktrees that are dirty, unmerged, primary, used by a live pane, or uninspectable. Herdr Boss sends a notice about a parent-PID-1 process in a removed worktree only to that repository's `orch` workspace.
 
 Before it removes a worktree, `worktree prune --apply` copies the worker reports `report.md`, `report.json`, and `brief.md` to `.orchestration/reports/<worker name>/` in the main checkout. It never overwrites an archived file. If the folder already holds a report, it writes the new reports to `<worker name>-<UTC time>`. If the copy fails, it keeps the worktree. Use `--no-archive` to skip the copy.
@@ -2167,7 +2203,7 @@ The dashboard uses these routes. A request from another host needs the access to
 | `GET /api/models` | The model allow-list. |
 | `GET`, `POST /api/usage` | Read usage, or record an event. |
 | `GET /api/machine-hours?days=N` | The machine samples of the last N days (1 to 14, default 14) by local hour of day: overload minutes, idle-wait minutes, swap peak, lowest free memory, holder kinds, and coverage. |
-| `GET /api/analytics` | The notice counts for each pane and local day of the last 7 days, and the machine timeline of the last 24 hours in columns of 10 minutes. Numbers, lock kinds, and pane IDs only. The service keeps the result for 60 seconds. |
+| `GET /api/analytics` | The notice counts for each pane and local day of the last 7 days, the machine timeline of the last 24 hours in columns of 10 minutes, and the memory of each class in columns of 60 minutes. Numbers, lock kinds, and pane IDs only. The service keeps the result for 60 seconds. |
 | `GET /api/spend?days=N` | The token use and cost per day, role, and harness for the last N days (1 to 90, default 7), the cost label `API-price equivalent`, the models with `unconfirmed` prices, the harness log status, and the unread log bytes. |
 | `GET`, `PUT /api/settings/prices` | Read the price table and the override, or replace the override. See Token use and spend by role. |
 | `GET /api/denials` | The denial counts of the last 7 days by harness, model, and cause, the harness totals, and the trend of each cause. |

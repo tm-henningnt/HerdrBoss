@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DATA_DIR } from './config.js';
 import { readMachineSamples } from './machine-samples.js';
+import { readMemorySamples, MEMORY_CLASSES } from './memory-classes.js';
 import { readDenials, denialDaily, RETAIN_DAYS } from './denials.js';
 import { readHarnessChanges } from './harness-changes.js';
 import { readPolicyChanges } from './policy-log.js';
@@ -77,6 +78,60 @@ export function noticeCounts(events, { days = 7, now = Date.now() } = {}) {
     kept.push({ pane: 'other', counts, total: counts.reduce((a, b) => a + b, 0) });
   }
   return { days: dayList, panes: kept, total: kept.reduce((a, r) => a + r.total, 0) };
+}
+
+// Resident memory per process class over the last hours, in buckets of bucketMin minutes, oldest first.
+// Each bucket holds the mean of the samples in it, so a column reads the memory of all classes at one time
+// and the height does not grow with the number of samples. peak holds the higher of the highest bucket mean
+// and the highest single sample of each class in the window. latest holds the newest sample in the window.
+export function memoryByClass(samples, { hours = 24, bucketMin = 60, now = Date.now() } = {}) {
+  const size = bucketMin * MINUTE;
+  const end = Math.ceil(now / size) * size;
+  const count = Math.round((hours * 60) / bucketMin);
+  const start = end - count * size;
+  const empty = () => Object.fromEntries(MEMORY_CLASSES.map((key) => [key, 0]));
+  const buckets = Array.from({ length: count }, () => ({ samples: 0, sum: empty(), top: empty() }));
+  let latest = null;
+  for (const s of samples || []) {
+    const at = Date.parse(s?.at);
+    if (!Number.isFinite(at) || at < start || at >= end) continue;
+    const mb = empty();
+    for (const key of MEMORY_CLASSES) {
+      const value = finite(s.mb?.[key]);
+      if (value !== null) mb[key] = value;
+    }
+    const total = MEMORY_CLASSES.reduce((sum, key) => sum + mb[key], 0);
+    const b = buckets[Math.floor((at - start) / size)];
+    b.samples++;
+    for (const key of MEMORY_CLASSES) {
+      b.sum[key] += mb[key];
+      b.top[key] = Math.max(b.top[key], mb[key]);
+    }
+    if (!latest || at >= Date.parse(latest.at)) latest = { at: s.at, mb, total };
+  }
+  const point = (b) => {
+    const mb = empty();
+    for (const key of MEMORY_CLASSES) mb[key] = b.samples ? Math.round(b.sum[key] / b.samples) : 0;
+    return mb;
+  };
+  const peak = empty();
+  for (const b of buckets) {
+    const mb = point(b);
+    for (const key of MEMORY_CLASSES) peak[key] = Math.max(peak[key], mb[key], b.top[key]);
+  }
+  const points = buckets.map((b, i) => {
+    const mb = point(b);
+    return { at: new Date(start + i * size).toISOString(), samples: b.samples, mb, total: MEMORY_CLASSES.reduce((sum, key) => sum + mb[key], 0) };
+  });
+  return {
+    hours,
+    bucketMin,
+    classes: MEMORY_CLASSES,
+    start: new Date(start).toISOString(),
+    points,
+    peak,
+    latest,
+  };
 }
 
 // Machine samples of the last hours in buckets of bucketMin minutes, oldest first.
@@ -229,12 +284,14 @@ function lockAdmissionSummary(samples, { dataDir, now }) {
 export function analyticsSummary({ dataDir = DATA_DIR, now = Date.now() } = {}) {
   const events = readEventTail(path.join(dataDir, 'events.jsonl'));
   const samples = readMachineSamples({ dataDir, sinceMs: now - 25 * 3600000 });
+  const memory = readMemorySamples({ dataDir, sinceMs: now - 25 * 3600000 });
   const denials = denialDaily(readDenials(dataDir), { now, days: RETAIN_DAYS });
   return {
     notices: noticeCounts(events, { days: 7, now }),
     locks: { ...lockDaily(readEventTail(path.join(dataDir, 'lock-ledger.jsonl')), { days: 7, now }),
       admission: lockAdmissionSummary(samples, { dataDir, now }) },
     timeline: machineTimeline(samples, { hours: 24, bucketMin: 10, now }),
+    memoryByClass: memoryByClass(memory, { hours: 24, bucketMin: 60, now }),
     denials,
     harnessChanges: markersIn(denials.days, dataDir),
     policyChanges: readPolicyChanges(dataDir),

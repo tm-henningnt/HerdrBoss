@@ -15,7 +15,7 @@ import { createReviewSync, createDrafts, NOTE_DEBOUNCE_MS } from './review-sync.
 import { createWizard } from './project-wizard-ui.js';
 import { goalSetBlockHtml, goalDialogHtml, goalJobRunning, goalStatusText, pollGoalStatus } from './goal-set.js';
 import { buildDraftShares, draftSignature, shareTotal, distributeRemainder, moveShares, totalHtml, checkSave, confirmText, sumConfirmText, allocationFooterHtml, staleRowHtml } from './allocation-draft.js';
-import { stackedBars, lineChart, stripBars, outcomeBars, legendHtml, foldSeries, spendSeries, claudeSpend, quotaSeries, firstTimeRate, activityFilter, activityChoices, eventLevel, dayLabel, usd, minutes, compact, ACTIVITY_RANGES, ACTIVITY_LEVELS, SERIES_CLASSES, DENIAL_RANGES, DEFAULT_DENIAL_RANGE, denialRange, denialSeries, denialMarkers, denialDetailsHtml, denialLegendHtml, policyChangesTitle, policyChangesListHtml, policyChangesDetailsHtml, lockWaitSeries, lockWaitDetailsHtml, lockAdmissionHtml } from './analytics.js';
+import { stackedBars, lineChart, stripBars, outcomeBars, legendHtml, foldSeries, spendSeries, claudeSpend, quotaSeries, firstTimeRate, activityFilter, activityChoices, eventLevel, dayLabel, usd, minutes, compact, ACTIVITY_RANGES, ACTIVITY_LEVELS, SERIES_CLASSES, DENIAL_RANGES, DEFAULT_DENIAL_RANGE, denialRange, denialSeries, denialMarkers, denialDetailsHtml, denialLegendHtml, policyChangesTitle, policyChangesListHtml, policyChangesDetailsHtml, lockWaitSeries, lockWaitDetailsHtml, lockAdmissionHtml, memorySeries, memoryDetailsHtml, hourLabel, mbText } from './analytics.js';
 import { ATTACHMENT_LIMIT, attachmentFileError, attachmentStripState, attachmentPickerHtml, attachmentStripHtml } from './attachment-ui.js';
 
 const $app = document.getElementById('app');
@@ -2252,6 +2252,7 @@ function analyticsView(s) {
     denialsBlock(s),
     '</div></div><div class="viz-group" data-key="grp:machine"><h2>Machine and locks</h2><div class="viz-grid">',
     timelineChart(s),
+    memoryBlock(),
     lockWaitBlock(),
     machineHoursBlock(),
     '</div></div><div class="viz-group" data-key="grp:notices"><h2>Notices and activity</h2><div class="viz-grid">',
@@ -4893,6 +4894,28 @@ function timelineChart() {
   });
 }
 
+// Resident memory of the processes of each class over the last 24 hours, from /api/analytics. One bar for each hour.
+// A bar is the mean of the samples of one hour, so the top of a bar reads the memory of the machine at that hour.
+function memoryBlock() {
+  const m = analyticsData?.memoryByClass;
+  const base = { id: 'memory', title: 'Memory by class' };
+  const win = memorySeries(m);
+  const sub = `Last 24 hours in columns of ${m?.bucketMin ?? 60} minutes, local time. A bar is the mean memory of all classes in that hour. Each class takes one part of the bar. No command line is recorded.`;
+  if (!win.points.length) return vizCard({ ...base, sub, empty: 'No memory samples in the last 24 hours. Herdr Boss records one sample every 5 minutes.' });
+  const peakTotal = Object.values(win.peak).reduce((a, b) => a + (Number.isFinite(b) ? b : 0), 0);
+  const age = win.latest ? new Date(Date.now() - Date.parse(win.latest.at)) : null;
+  const ago = age ? `, ${minutes(Math.max(0, age.getTime()))} ago` : '';
+  const title = `Memory of processes peaked at ${mbText(peakTotal)} in 24 hours; the newest sample holds ${mbText(win.latest?.total)}${ago}`;
+  const cats = win.points.map((p) => ({ label: hourLabel(p.at), tip: hourLabel(p.at, true) }));
+  return vizCard({
+    ...base, title,
+    sub,
+    legend: legendHtml(win.series.map((series) => ({ ...series, label: `${series.label} ${mbText(win.windowMean[series.key] ?? 0)}` }))),
+    chart: stackedBars({ cats, series: win.series, fmt: win.fmt, label: title }),
+    details: memoryDetailsHtml(win),
+  });
+}
+
 // Wait and hold of the machine-wide locks for each day from /api/analytics, counted from the lock ledger. The filter picks one project.
 function lockWaitBlock() {
   const locks = analyticsData?.locks;
@@ -5903,7 +5926,7 @@ const HELP = {
     <h3>Bookmarks</h3><p>A project keeps at most 30 bookmarks. A bookmark name has at most 60 characters. A bookmark URL must use http or https and must not hold a user name or a password. <b>Add current page</b> saves the selected tab. <b>Open</b> loads a bookmark in the current tab; <b>New tab</b> opens it in a new tab. <b>Rename</b>, the arrows, and <b>Delete</b> change the list; Delete asks you to confirm. <b>Start page</b> opens in the first tab of the next launch. <b>Save</b> stores the start page; a blank value clears it.</p>
     <h3>Control</h3><p>Select the screenshot to open the large view. The large view shows a still image of the last capture. Turn on <b>Control browser</b> or <b>Live</b> to refresh it at the chosen interval. Turn on <b>Control browser</b>, then click the image and type. Paste long text or a password into the masked field. On a phone the large view is full screen and the image fills the height. The text field and key controls appear only while <b>Control browser</b> is on.</p>`],
   analytics: ['Analytics', `
-    <p>The page answers seven questions: what the fleet costs, how the quota compares with the pace, how often the models are right the first time, where the harnesses deny work, when the machine and the locks slow work down, which panes get notices, and which keys of the policy changed.</p>
+    <p>The page answers eight questions: what the fleet costs, how the quota compares with the pace, how often the models are right the first time, where the harnesses deny work, what memory the processes use, when the machine and the locks slow work down, which panes get notices, and which keys of the policy changed.</p>
     <h3>Headline strip</h3><p>Each tile shows one figure and its change. <b>Claude spend a day</b> is the mean of the last 7 days, with the change on the 7 days before. <b>Quota against pace</b> shows the lane with the most use above its pace line. <b>Denials this week</b> compares the last 24 hours with the 6-day mean. <b>Notices per pane a day</b> is the 7-day mean and today. <b>Lock wait and hold</b> shows the median wait and the median hold. <b>First-time success</b> counts the judged runs of the last 30 days.</p>
     <h3>Charts</h3><p>The title of each chart tells what to read from it. Hover, focus, or touch a column, a cell, or a row to read its values. On a phone each chart scrolls sideways inside its own box. <b>Details</b> under a chart opens the table of the same figures.</p>
     <p><b>Spend</b>: stacked bars for each day, split by role or by harness with the switch. The USD figure is the API-price equivalent. The Owner pays a subscription, not these amounts. <b>Quota</b>: one solid line for the use of each lane and one dashed line for its expected pace, in the weekly window. <b>Model scorecard</b>: the share of first-time, rework, failed, and not judged runs for each model. <b>Details</b> also holds the recorded work by project and provider and the recent runs.</p>
@@ -5913,6 +5936,8 @@ const HELP = {
     <p>The table in Details shows the last 7 days by cause and project. The arrow compares the last 24 hours with the mean of the 6 days before. When a cause is above 2 times its mean and above 10 events, the page and the bulletin show <b>Discuss this trend with the Boss.</b> Herdr Boss sends no prompt to an orchestrator about it. While more than 1 MB of older logs is unread, the note waits, because the counts of older days are not complete.</p>
     <p>A read-only line shows the limits: the scan interval, the bytes for one scan, the days kept, and the rise rule.</p>
     <h3>Lock wait and hold</h3><p>Bars show hold time in the lower part and wait time by lane in the upper parts, for each of the last 7 days. The text shows the median wait for the long and short lanes. Choose a project to see only its runs. A push or a suite run that reused a suite pass takes no lock and adds no time. Details lists the days, wait by lane, and the projects with their runs and timeouts. The card shows saved slot capacity and machine-wide slot use from the latest usable machine sample. After 3 minutes, use is unknown. The project filter does not change that machine scope. Predicted hold is shown for each project and kind. It uses the last 10 qualifying releases within 14 days, including the rotated ledger. Fewer than 3 releases means unknown.</p>
+    <h3>Memory by class</h3><p>Herdr Boss records the resident memory of its own processes every 5 minutes. It adds the memory of the processes of each class and writes one line to <code>memory-samples.jsonl</code> in the data folder. A line holds the time and the megabytes of each class: <code>at</code> (ISO time) and <code>mb</code> with <code>claude</code>, <code>codex</code>, <code>browsers</code>, <code>mcp</code>, <code>vitest</code>, and <code>other</code>. Herdr Boss keeps no command line, no path, and no pane ID.</p>
+    <p>The chart shows one bar for each hour of the last 24 hours. Each bar is the mean of the samples of that hour. Each class takes one part of the bar: Claude, Codex, Browsers, MCP servers, Vitest, and Other. The top of a bar reads the memory of all processes at that hour. An hour without a sample has no bar. Details lists each class with its latest sample and its highest mean in the window. The file rotates at 3 MB, and the old file is <code>memory-samples.1.jsonl</code>.</p>
     <h3>Machine load and lock waits</h3><p>Lines show the 5-minute load as a percent of the cores, the memory in use, and the swap in use over the last 24 hours, in columns of 10 minutes. A shaded column had a lock holder. The strip under the chart shows the minutes in which a suite request waited in the queue.</p>
     <h3>Machine overload and idle waiting</h3><p>The chart shows, for each hour of the day in local time, the mean minutes per day of two conditions over the last 14 days. <b>Overload</b>: swap above 90% with at least 1 GB in use, or a 5-minute load above 3 times the cores. <b>Queue waited, CPU under 50%</b>: a suite request waited in the <code>full-suite</code> queue while the CPU was not the reason.</p>
     <p>Hover, focus, or touch an hour to read its values. Hatched bars have fewer than 10 samples. A note shows when samples cover less than half of the window; a minute without a sample is missing data. The table under the chart has the same 24 rows. On a phone the chart scrolls sideways inside its own box.</p>

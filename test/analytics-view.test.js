@@ -7,7 +7,7 @@ import {
   stackedBars, lineChart, heatGrid, outcomeBars, stripBars, foldSeries, niceMax, spendSeries, claudeSpend, quotaSeries,
   denialGrid, firstTimeRate, activityFilter, activityChoices, eventLevel, dayLabel, usd,
   DENIAL_RANGES, DEFAULT_DENIAL_RANGE, denialRange, denialSeries, denialMarkers, denialDetailsHtml, denialLegendHtml,
-  lockWaitSeries, lockWaitDetailsHtml,
+  lockWaitSeries, lockWaitDetailsHtml, memorySeries, memoryDetailsHtml, hourLabel,
 } from '../public/analytics.js';
 
 const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
@@ -497,6 +497,93 @@ test('lock lane help and docs describe current admission, display, and analytics
 });
 
 
+// ---------- Memory by class ----------
+
+const MEM_NOW = Date.parse('2026-03-30T14:00:00.000Z');
+const hourAgo = (n) => new Date(MEM_NOW - n * 3600000).toISOString();
+const mem = () => ({ hours: 24, bucketMin: 60, classes: ['claude', 'codex', 'browsers', 'mcp', 'vitest', 'other'],
+  points: [
+    { at: hourAgo(2), samples: 1, mb: { claude: 6000, codex: 1000, browsers: 4000, mcp: 0, vitest: 0, other: 500 }, total: 11500 },
+    { at: hourAgo(1), samples: 12, mb: { claude: 9000, codex: 1000, browsers: 4000, mcp: 500, vitest: 0, other: 500 }, total: 15000 },
+  ],
+  peak: { claude: 9000, codex: 1000, browsers: 4000, mcp: 500, vitest: 0, other: 500 },
+  latest: { at: hourAgo(1), mb: { claude: 750, codex: 250, browsers: 500, mcp: 50, vitest: 0, other: 50 }, total: 1600 } });
+
+test('memorySeries stacks one bar for each hour with a series for every class and a total in the tooltip', () => {
+  const win = memorySeries(mem());
+  assert.deepEqual(win.classes, ['claude', 'codex', 'browsers', 'mcp', 'vitest', 'other']);
+  assert.deepEqual(win.series.map((s) => s.label), ['Claude', 'Codex', 'Browsers', 'MCP servers', 'Vitest', 'Other']);
+  // Five named classes keep a color slot; the rest share the neutral one.
+  assert.deepEqual(win.series.map((s) => s.cls), ['s1', 's2', 's3', 's4', 's5', 's-other']);
+  assert.equal(win.points.length, 2);
+  assert.deepEqual(win.series.map((s) => s.values), [[6000, 9000], [1000, 1000], [4000, 4000], [0, 500], [0, 0], [500, 500]]);
+  // The legend holds the mean of the bars of the window, not their sum.
+  assert.deepEqual(win.windowMean, { claude: 7500, codex: 1000, browsers: 4000, mcp: 250, vitest: 0, other: 500 });
+  const svg = stackedBars({ cats: win.points.map((p) => ({ label: hourLabel(p.at), tip: hourLabel(p.at, true) })), series: win.series, fmt: win.fmt, label: 'Memory' });
+  assert.match(svg, /Claude: 5\.9 GB/);
+  assert.match(svg, /Total: 11\.2 GB/);
+  assert.match(svg, /Other: 500 MB/);
+  assert.equal((svg.match(/class="viz-hit"/g) || []).length, 2);
+  assert.equal((svg.match(/tabindex="0"/g) || []).length, 1);
+});
+
+test('memorySeries names every class, and reads a missing or empty block as no samples', () => {
+  assert.deepEqual(memorySeries(null).series, []);
+  assert.deepEqual(memorySeries(null).points, []);
+  assert.equal(memorySeries({ points: [] }).points.length, 0);
+  assert.equal(memorySeries(mem()).latest.total, 1600);
+  // One sample in a bucket shows that bucket once, not 12 times over.
+  assert.equal(memorySeries({ ...mem, points: [{ at: hourAgo(1), samples: 1, mb: { claude: 1000 }, total: 1000 }] }).series[0].values[0], 1000);
+});
+
+test('memoryDetailsHtml lists each class with its latest sample and its 24-hour peak in MB and GB', () => {
+  const html = memoryDetailsHtml(memorySeries(mem()));
+  assert.match(html, /<th>Latest<\/th>/);
+  assert.match(html, /<th>Peak 24 h<\/th>/);
+  for (const label of ['Claude', 'Codex', 'Browsers', 'MCP servers', 'Vitest', 'Other']) assert.match(html, new RegExp(`>${label}<`), label);
+  assert.match(html, /8\.8 GB/, 'the peak of Claude');
+  assert.match(html, /750 MB/, 'the latest sample of Claude');
+  assert.match(html, /500 MB/);
+  assert.doesNotMatch(memoryDetailsHtml(memorySeries(null)), /<tr>/);
+});
+
+test('the page draws Memory by class from the analytics aggregate, with the classes, the peak, and the empty state', () => {
+  const start = app.indexOf('function memoryBlock(');
+  const view = app.slice(start, app.indexOf('\n}\n', start));
+  assert.ok(start > 0, 'memoryBlock exists');
+  for (const part of ['analyticsData?.memoryByClass', 'memorySeries', 'stackedBars', 'memoryDetailsHtml', 'legendHtml']) assert.match(view, new RegExp(part.replace('?', '\\?')), part);
+  assert.match(view, /Memory by class/);
+  assert.match(view, /No memory samples in the last 24 hours/);
+  assert.match(view, /peak/i);
+  assert.match(app, /analyticsData = results\[9\]\.value/);
+  const startAnalytics = app.indexOf('function analyticsView(');
+  assert.match(app.slice(startAnalytics, app.indexOf('\n}\n', startAnalytics)), /memoryBlock\(/);
+});
+
+test('the Analytics help and the guide describe the memory chart, the classes, the sample, and the file', () => {
+  assert.match(app, /<h3>Memory by class<\/h3>/);
+  assert.match(app, /memory-samples\.jsonl/);
+  assert.match(app, /every 5 minutes/);
+  assert.match(app, /<p>The page answers eight questions/);
+  for (const cls of ['Claude', 'Codex', 'Browsers', 'MCP servers', 'Vitest']) assert.match(app, new RegExp(cls), cls);
+  assert.match(guide, /## Memory by class/);
+  assert.match(guide, /memory-samples\.jsonl/);
+  assert.match(guide, /5 minutes/);
+  assert.match(guide, /resident memory/i);
+  const section = guide.slice(guide.indexOf('## Memory by class'), guide.indexOf('## Memory by class') + 2500);
+  assert.match(section, /A line holds no command line/);
+  assert.doesNotMatch(section, /\/Users\/|\/private\/|\/var\/folders|node --test| -o pid/);
+});
+
+test('the memory chart states the bucket size and the samples behind the latest figure', () => {
+  const start = app.indexOf('function memoryBlock(');
+  const view = app.slice(start, app.indexOf('\n}\n', start));
+  assert.match(view, /columns of \$\{m\?\.bucketMin \?\? 60\} minutes/);
+  assert.match(view, /mean memory of all classes/);
+  assert.match(view, /sample/i);
+  assert.match(view, /No command/i);
+});
+
 test('LK3 R6 the actual Analytics card renders slot use, predictions, and their scopes', async () => {
   const helpers = await import('../public/analytics.js');
   const admission = { slotLimit: 3, slotsInUse: 2, sampledAt: '2026-10-01T12:00:00.000Z', predictions: [
@@ -539,4 +626,38 @@ test('LK3 second review docs describe degraded reloads, legacy ticket expiry, se
   assert.match(app, /last validated settings/);
   assert.match(app, /younger than 30 minutes/);
   assert.match(app, /re-entry release is a no-op/);
+});
+
+test('the actual Memory by class card renders one bar for each hour with the classes, the totals, and an empty state', async () => {
+  const helpers = await import('../public/analytics.js');
+  const start = app.indexOf('function memoryBlock()');
+  const body = app.slice(start, app.indexOf('\n}\n', start) + 2);
+  const run = (memory) => vm.runInNewContext(`${body}; memoryBlock()`, {
+    ...helpers,
+    analyticsData: { memoryByClass: memory },
+    analyticsUi: { open: new Set() },
+    vizCard: (value) => value,
+    esc: (s) => String(s ?? ''),
+    legendHtml: helpers.legendHtml,
+    Date,
+    Math,
+    Object,
+  });
+  const card = run(mem());
+  assert.match(card.title, /Memory of processes peaked at/);
+  assert.match(card.title, /the newest sample holds/);
+  assert.doesNotMatch(card.title, /sample holds \d[^;]*in the latest sample/, 'the title says latest once');
+  assert.match(card.sub, /columns of 60 minutes/);
+  assert.match(card.sub, /No command line is recorded/);
+  for (const cls of ['Claude', 'Codex', 'Browsers', 'MCP servers', 'Vitest', 'Other']) assert.match(card.legend, new RegExp(cls), cls);
+  assert.match(card.legend, /Claude 7\.3 GB/, 'the legend gives the mean of each series');
+  assert.equal((card.chart.match(/class="viz-hit"/g) || []).length, 2);
+  assert.match(card.chart, /role="img" aria-label="Memory of processes/);
+  assert.match(card.details, /<th>Peak 24 h<\/th>/);
+  assert.match(card.details, /750 MB/);
+  const empty = run({ points: [], classes: mem().classes, peak: {}, latest: null, bucketMin: 60, hours: 24 });
+  assert.match(empty.empty, /No memory samples in the last 24 hours/);
+  assert.ok(!empty.chart, 'an empty window draws no chart');
+  const none = run(undefined);
+  assert.match(none.empty, /No memory samples in the last 24 hours/);
 });
