@@ -81,3 +81,7 @@ Summary: Add the review pack section to the orchestrator skill and the worker br
 ## 315d28e0a176
 Impact: useful
 Summary: The worker brief forbids sleep loops and until or while polling and names herdr-boss wait; the orchestrator skill sends a reviewer the same rule and a temporary HOME and HERDR_BOSS_DIR.
+
+## 1b34ccad1bca
+Impact: useful
+Summary: A serve-live server binds its PID to its lease at start with lease bind, so Herdr Boss can tell its port from an unleased listener.
