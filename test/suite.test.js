@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 import test from 'node:test';
 import { loadProjectConfig } from '../src/kit/config.js';
 import { runKitCommand } from '../src/kit/cli.js';
-import { acquireProjectLock, releaseProjectLock, withMutationLock } from '../src/kit/locks.js';
+import { acquireProjectLock, recordLockRelease, releaseProjectLock, withMutationLock } from '../src/kit/locks.js';
 import { writeNight } from '../src/night.js';
 
 function git(cwd, ...args) {
@@ -186,6 +186,18 @@ function lockOptions(f, pane, panes, extra = {}) {
     output: () => {},
     ...extra,
   };
+}
+
+function configureLockSettings(f, locks) {
+  fs.mkdirSync(f.dataDir, { recursive: true });
+  fs.writeFileSync(path.join(f.dataDir, 'policy.json'), JSON.stringify({ locks }));
+}
+
+function seedLockHistory(f, kind = 'suite', holdMs = 60_000, count = 3) {
+  const now = Date.now();
+  for (let index = 0; index < count; index++) recordLockRelease({
+    name: 'full-suite', project: f.config.slug, kind,
+  }, { dataDir: f.dataDir, now: now - index * 60_000, holdMs });
 }
 
 test('quiet hours holds an expired live manual full-suite lock', (t) => {
@@ -499,7 +511,7 @@ test('the machine suite lock serves three separate-process waiters in ticket ord
       }, `waiter ${pane} did not take its ticket`);
       assert.deepEqual(tickets.map((ticket) => ticket.pane), ['ws:b', 'ws:c', 'ws:d'].slice(0, index + 1));
       assert.deepEqual(tickets.map((ticket) => ticket.seq), Array.from({ length: index + 1 }, (_, item) => item + 1));
-      assert.deepEqual(Object.keys(tickets[0]).sort(), ['command', 'createdAt', 'id', 'kind', 'pane', 'pid', 'project', 'seq']);
+      assert.deepEqual(Object.keys(tickets[0]).sort(), ['command', 'createdAt', 'id', 'kind', 'lane', 'pane', 'pid', 'predictedMs', 'project', 'seq']);
     }
 
     releaseProjectLock('full-suite', holder);
@@ -661,6 +673,112 @@ test('a broken lock queue ticket is skipped and never blocks the queue', async (
   fs.writeFileSync(path.join(queue, '00000000-0000-4000-8000-000000000001.json'), '{"id": "00000000-0000-4000-8000-0000');
   const tickets = readLockQueue({ dataDir, livePanes: new Set(), pidAlive: () => false });
   assert.ok(Array.isArray(tickets.queue ?? tickets));
+});
+
+test('a predicted short suite acquires a short slot beside a long holder', (t) => {
+  const f = fixture(t, 'herdr-suite-short-lane-');
+  const panes = ['ws:a', 'ws:b'];
+  fs.mkdirSync(f.dataDir, { recursive: true });
+  fs.writeFileSync(path.join(f.dataDir, 'policy.json'), JSON.stringify({ locks: { slots: 2, shortLimitMinutes: 6 } }));
+  const now = Date.now();
+  for (let index = 0; index < 3; index++) recordLockRelease({
+    name: 'full-suite', project: f.config.slug, kind: 'suite',
+  }, { dataDir: f.dataDir, now: now - index * 60000, holdMs: 60000 });
+  const long = lockOptions(f, 'ws:a', panes);
+  const short = lockOptions(f, 'ws:b', panes);
+  const holder = acquireProjectLock('full-suite', { ...long, kind: 'manual' });
+
+  const acquired = acquireProjectLock('full-suite', { ...short, kind: 'suite', waitSeconds: 0 });
+  const shortFile = path.join(f.dataDir, 'locks', 'machine', 'full-suite.short.1.json');
+  assert.equal(fs.existsSync(shortFile), true);
+  const record = JSON.parse(fs.readFileSync(shortFile, 'utf8'));
+  assert.equal(record.lane, 'short');
+  assert.equal(record.slot, 1);
+  assert.equal(record.predictedMs, 60000);
+  assert.equal(acquired.ownerPane, 'ws:b');
+  releaseProjectLock('full-suite', { ...short, kind: 'suite' });
+  releaseProjectLock('full-suite', long);
+});
+
+test('slots 3 lets two predicted short suites hold separate short slots', (t) => {
+  const f = fixture(t, 'herdr-suite-two-short-slots-');
+  const panes = ['ws:a', 'ws:b'];
+  configureLockSettings(f, { slots: 3, shortLimitMinutes: 6 });
+  seedLockHistory(f);
+  const first = acquireProjectLock('full-suite', { ...lockOptions(f, 'ws:a', panes), kind: 'suite', waitSeconds: 0 });
+  const second = acquireProjectLock('full-suite', { ...lockOptions(f, 'ws:b', panes), kind: 'suite', waitSeconds: 0 });
+  assert.equal(first.lane, 'short');
+  assert.equal(second.lane, 'short');
+  assert.deepEqual([first.slot, second.slot].sort(), [1, 2]);
+  releaseProjectLock('full-suite', lockOptions(f, 'ws:a', panes));
+  releaseProjectLock('full-suite', lockOptions(f, 'ws:b', panes));
+});
+
+test('one configured slot keeps short predictions in the exclusive long queue', (t) => {
+  const f = fixture(t, 'herdr-suite-one-lock-slot-');
+  const panes = ['ws:a', 'ws:b'];
+  configureLockSettings(f, { slots: 1, shortLimitMinutes: 6 });
+  seedLockHistory(f);
+  const holder = acquireProjectLock('full-suite', { ...lockOptions(f, 'ws:a', panes), kind: 'manual' });
+  assert.throws(() => acquireProjectLock('full-suite', {
+    ...lockOptions(f, 'ws:b', panes), kind: 'suite', waitSeconds: 0,
+  }), (error) => error.exitCode === 75);
+  assert.deepEqual(readQueueFiles(f.dataDir), []);
+  assert.equal(fs.existsSync(path.join(f.dataDir, 'locks', 'machine', 'full-suite.short.1.json')), false);
+  releaseProjectLock('full-suite', lockOptions(f, 'ws:a', panes));
+});
+
+test('a short job borrows the free long slot only after short slots fill and no long ticket waits', (t) => {
+  const f = fixture(t, 'herdr-suite-work-conserving-');
+  const panes = ['ws:a', 'ws:b', 'ws:c'];
+  configureLockSettings(f, { slots: 2, shortLimitMinutes: 6 });
+  seedLockHistory(f);
+  const first = acquireProjectLock('full-suite', { ...lockOptions(f, 'ws:a', panes), kind: 'suite', waitSeconds: 0 });
+  const second = acquireProjectLock('full-suite', { ...lockOptions(f, 'ws:b', panes), kind: 'suite', waitSeconds: 0 });
+  assert.equal(first.slot, 1);
+  assert.equal(second.slot, 'long');
+  assert.throws(() => acquireProjectLock('full-suite', {
+    ...lockOptions(f, 'ws:c', panes), kind: 'manual', waitSeconds: 0,
+  }), (error) => error.exitCode === 75, 'a long job waits for the borrowed long slot');
+  releaseProjectLock('full-suite', lockOptions(f, 'ws:a', panes));
+  releaseProjectLock('full-suite', lockOptions(f, 'ws:b', panes));
+});
+
+test('a stale short record is removed without blocking a long job', (t) => {
+  const f = fixture(t, 'herdr-suite-stale-short-lane-');
+  const panes = ['ws:a', 'ws:b'];
+  configureLockSettings(f, { slots: 2, shortLimitMinutes: 6 });
+  seedLockHistory(f);
+  const stale = acquireProjectLock('full-suite', { ...lockOptions(f, 'ws:a', panes), kind: 'suite', waitSeconds: 0 });
+  assert.equal(stale.slot, 1);
+  const long = acquireProjectLock('full-suite', {
+    ...lockOptions(f, 'ws:b', panes), kind: 'manual', waitSeconds: 0, pidAlive: () => false,
+  });
+  assert.equal(long.lane, 'long');
+  assert.equal(fs.existsSync(path.join(f.dataDir, 'locks', 'machine', 'full-suite.short.1.json')), false);
+  releaseProjectLock('full-suite', { ...lockOptions(f, 'ws:b', panes), pidAlive: () => false });
+});
+
+test('a re-entrant suite keeps a predicted short push lane', (t) => {
+  const f = fixture(t, 'herdr-suite-short-reentry-');
+  const panes = ['ws:a'];
+  configureLockSettings(f, { slots: 2, shortLimitMinutes: 6 });
+  seedLockHistory(f, 'push', 45_000);
+  const token = 'push-reentry-short-token-0001';
+  const options = { ...lockOptions(f, 'ws:a', panes), pidAlive: (pid) => pid === process.pid };
+  const push = acquireProjectLock('full-suite', { ...options, kind: 'push', reentryToken: token });
+  assert.equal(push.lane, 'short');
+  assert.equal(push.slot, 1);
+  const hook = acquireProjectLock('full-suite', {
+    ...options, env: { ...options.env, HERDR_BOSS_LOCK_TOKEN: token }, kind: 'suite', waitSeconds: 0,
+  });
+  assert.equal(hook.reentrant, true);
+  assert.equal(hook.lane, 'short');
+  assert.equal(hook.slot, 1);
+  releaseProjectLock('full-suite', { ...options, env: { ...options.env, HERDR_BOSS_LOCK_TOKEN: token } });
+  const retained = JSON.parse(fs.readFileSync(path.join(f.dataDir, 'locks', 'machine', 'full-suite.short.1.json'), 'utf8'));
+  assert.equal(retained.kind, 'push');
+  releaseProjectLock('full-suite', options);
 });
 
 test('suite records a clean pass and reuses it only when requested', (t) => {

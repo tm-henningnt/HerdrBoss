@@ -62,3 +62,24 @@ export function classifyLockLane(prediction, shortLimitMinutes) {
     predictedMs,
   };
 }
+
+const laneFor = (item, slots) => (slots < 2 || item?.lane !== 'short' ? 'long' : 'short');
+
+// Choose one record slot without changing the order of either lane's queue.
+export function chooseLockSlot({ lane, slots, holders = [], tickets = [], ticketId = null } = {}) {
+  const capacity = Number.isInteger(slots) && slots >= 1 ? slots : 1;
+  const effectiveLane = capacity < 2 ? 'long' : lane === 'short' ? 'short' : 'long';
+  const laneTickets = tickets.filter((ticket) => laneFor(ticket, capacity) === effectiveLane);
+  if (ticketId === null ? laneTickets.length > 0 : laneTickets[0]?.id !== ticketId) return null;
+
+  const occupied = holders.map((holder) => holder?.slot ?? 'long');
+  const longUsed = occupied.includes('long');
+  if (capacity < 2) return longUsed ? null : { slot: 'long' };
+  if (effectiveLane === 'long') return longUsed ? null : { slot: 'long' };
+
+  const shortUsed = new Set(occupied.filter((slot) => Number.isInteger(slot) && slot > 0));
+  for (let slot = 1; slot < capacity; slot++) if (!shortUsed.has(slot)) return { slot };
+  const longWaiters = tickets.filter((ticket) => laneFor(ticket, capacity) === 'long');
+  if (!longUsed && longWaiters.length === 0) return { slot: 'long' };
+  return null;
+}

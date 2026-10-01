@@ -5,7 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { loadPolicy, POLICY_DEFAULTS, savePolicy, validatePolicy } from '../src/control.js';
 import { loadModels } from '../src/kit/config.js';
-import { predictLockDuration } from '../src/kit/lock-lanes.js';
+import { chooseLockSlot, classifyLockLane, predictLockDuration } from '../src/kit/lock-lanes.js';
 
 const NOW = Date.parse('2026-10-01T12:00:00.000Z');
 const line = (daysAgo, holdMs, extra = {}) => ({
@@ -87,4 +87,48 @@ test('partial and legacy lock policies load and save with nested defaults', (t) 
   const policy = { ...structuredClone(POLICY_DEFAULTS), locks: { guard: { enabled: false } } };
   assert.deepEqual(savePolicy(policy, loadModels(), { file }), []);
   assert.deepEqual(loadPolicy({ file, warn: () => {} }).locks, loaded.locks);
+});
+
+test('unknown predictions stay long and one slot keeps the exclusive lane', () => {
+  assert.deepEqual(classifyLockLane({ ms: null }, 6), { lane: 'long', predictedMs: null });
+  assert.deepEqual(chooseLockSlot({ lane: 'short', slots: 1 }), { slot: 'long' });
+  assert.equal(chooseLockSlot({ lane: 'long', slots: 1, holders: [{ lane: 'long', slot: 'long' }] }), null);
+});
+
+test('short jobs can use a short slot beside a long holder and short slots run to capacity', () => {
+  assert.deepEqual(chooseLockSlot({
+    lane: 'short', slots: 2, holders: [{ lane: 'long', slot: 'long' }], tickets: [{ id: 's1', lane: 'short' }], ticketId: 's1',
+  }), { slot: 1 });
+  assert.deepEqual(chooseLockSlot({ lane: 'short', slots: 3, ticketId: 's1', tickets: [{ id: 's1', lane: 'short' }] }), { slot: 1 });
+  assert.deepEqual(chooseLockSlot({
+    lane: 'short', slots: 3, holders: [{ lane: 'short', slot: 1 }], tickets: [{ id: 's2', lane: 'short' }], ticketId: 's2',
+  }), { slot: 2 });
+});
+
+test('long jobs serialize and a short job cannot jump a long ticket when borrowing', () => {
+  assert.equal(chooseLockSlot({ lane: 'long', slots: 3, holders: [{ lane: 'long', slot: 'long' }] }), null);
+  assert.equal(chooseLockSlot({
+    lane: 'short', slots: 2,
+    holders: [{ lane: 'short', slot: 1 }],
+    tickets: [{ id: 'long-1', lane: 'long' }, { id: 'short-1', lane: 'short' }],
+    ticketId: 'short-1',
+  }), null);
+  assert.equal(chooseLockSlot({
+    lane: 'long', slots: 2,
+    tickets: [{ id: 'long-1', lane: 'long' }, { id: 'long-2', lane: 'long' }],
+    ticketId: 'long-2',
+  }), null);
+});
+
+test('a short job uses a free long slot when its short slots are full and no long job waits', () => {
+  assert.deepEqual(chooseLockSlot({
+    lane: 'short', slots: 2,
+    holders: [{ lane: 'short', slot: 1 }],
+    tickets: [{ id: 'short-2', lane: 'short' }],
+    ticketId: 'short-2',
+  }), { slot: 'long' });
+  assert.equal(chooseLockSlot({
+    lane: 'long', slots: 2,
+    holders: [{ lane: 'short', slot: 'long' }],
+  }), null);
 });
