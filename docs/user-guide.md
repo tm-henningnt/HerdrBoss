@@ -1900,6 +1900,30 @@ The card uses the same send route as the Mailbox. It calls `POST /api/messages` 
 
 Every card keeps an **Open in Mailbox** link. A read-only preview refuses the send and shows the reason in the card.
 
+### Agents tab
+
+The Chat page has two tabs: **Owner** and **Agents**. **Owner** is the conversation of the Owner. **Agents** shows the messages that agents send to each other. Select **Agents** to open `/chat?tab=agents`.
+
+The Agents tab is read-only. It has no field to send a message and no control to delete one. Agent messages never show in the Owner chats or in the Mailbox. They never count as unread, and the tab shows no unread badge.
+
+The list shows one row for each agent pair. A pair is two agents that exchange messages. The row shows the two agent labels, the number of messages, and the time of the last message. A label has the role, the name, and the project, for example `Worker build (alpha)`. The newest activity comes first. The page reads the rows from `GET /api/agent-pairs`.
+
+Select a row to open the pair. The conversation shows the messages in time order. The newest message is at the bottom. The first agent of the pair is on the left. The second agent is on the right. Each message shows the text as formatted Markdown, the time, and the kind of the message when the record has one: `task`, `nudge`, `report`, `reminder`, `reply`, or `other`. A message with the status `failed` or `recorded` shows that status as a badge. A `failed` message did not reach the pane. A `recorded` message is stored and has no delivery result. Worker reports show as `recorded` messages.
+
+Select **Load older** to read the page before the oldest message. The page uses the `before` parameter of `GET /api/agent-messages`. It keeps your reading position.
+
+Type text in the search box and press Enter to search the message text. The list then shows only the pairs that hold a match. An open pair shows only its matching messages. Select the project filter to show one project. The address keeps the filter, the search text, and the open pair: `/chat?tab=agents&project=SLUG&pair=KEY&q=TEXT`.
+
+The page refreshes with the other extras every 30 seconds. It keeps the scroll position. It scrolls down only when you already read the newest message.
+
+The service keeps the message text for 14 days and the metadata rows for 180 days. A row of metadata has no text. The Agents tab shows only messages that still have text. After 14 days a pair disappears from the tab. Set `agentMessages.retentionDays` and `agentMessages.metaRetentionDays` under **Pictures** on Settings to change the periods. The metadata is available with `GET /api/agent-meta`.
+
+On a phone the Agents tab has two steps. The list fills the screen. Select a pair to open the conversation. Select **Back** to return to the list. **Escape** does the same on a keyboard. The arrow keys, **Home**, and **End** move the focus between the rows.
+
+### Messages section
+
+Each project page has a **Messages** section. It is closed by default. The header shows the number of pairs and messages of that project. The body shows up to 5 pairs and the last 5 messages of the project. The rows and the messages look like the rows and the messages of the Agents tab. Select a pair to open it in the Agents tab. Select **Open all in the Agents tab** to open the tab with the project filter set. The section is read-only and uses the same routes with the `project` parameter.
+
 ### Keyboard and screen readers
 
 - The chat list holds one button per chat. The arrow keys, **Home**, and **End** move the focus between the rows. Enter opens a chat.

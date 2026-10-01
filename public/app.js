@@ -4,6 +4,7 @@ import { patchHtml } from './keyed.js';
 import { noWorkerBadgeView, phaseAgeText, publishedAgeBadgeView, projectSyncLineView, summaryAgeText, unplannedCardView } from './project-live-view.js';
 import { SETTING_HELP, settingPopupHtml, settingsGuideHtml } from './setting-help.js';
 import { groupMailRows, inboxSections, listTime, mailRowHtml } from './mail-rows.js';
+import { AGENT_DIRECTORY_LIMIT, AGENT_PAGE_LIMIT, addressKey as agentAddressKey, agentMessagesHtml, agentPairRowHtml, agentQuery, agentsUrl, buildDirectory as agentBuildDirectory, conversationOrder as agentConversationOrder, filterPairs as agentFilterPairs, mergeNewest as agentMergeNewest, mergeOlder as agentMergeOlder, pairEnds as agentPairEnds, pairProject as agentPairProject, pairTitle as agentPairTitle, projectOptions as agentProjectOptions } from './agent-chat.js';
 import { chatJumpHtml, chatJumpButtonHtml, chatAtBottom, chatJumpScroll } from './chat-jump.js';
 import { mailBarItem, mailActionBarHtml, mailSelectionBarHtml, mailElsewhereButtonHtml, mailSuggestionHtml } from './mail-bar.js';
 import { APP_VIEW_ROUTES, appViewport, chatShouldStickToBottom, chatViewportLayout, readViewport, createChatViewportDebug } from './app-view.js';
@@ -3667,7 +3668,13 @@ function chatTitle(thread) {
   return state?.control?.projects?.[thread]?.label || thread;
 }
 
+function chatTabs(active) {
+  const tab = (id, label, href) => `<a class="chat-tab" href="${href}" data-chat-tab="${id}"${active === id ? ' aria-current="page"' : ''}>${label}</a>`;
+  return `<nav class="chat-tabs" aria-label="Chat views">${tab('owner', 'Owner', '/chat')}${tab('agents', 'Agents', '/chat?tab=agents')}</nav>`;
+}
+
 function chatView(s) {
+  if (new URLSearchParams(location.search).get('tab') === 'agents') return agentChatView(s);
   if (!chat.loaded && !chat.loading) loadChats();
   chatSyncLocation();
   const rows = chat.list.map(chatRow).join('');
@@ -3676,6 +3683,7 @@ function chatView(s) {
     : `<p class="chat-empty">${chat.loaded ? 'No chats.' : 'Loading…'}</p>`;
   const conversation = chat.thread ? chatConversationView() : '<section class="chat-empty-state"><p>Select a chat to read it.</p></section>';
   return `<div class="chat-layout${chat.thread ? ' thread-open' : ''}" data-key="chat"${appDrawerOpen ? ' inert' : ''}><aside class="chat-list-pane" data-key="chat-list" aria-label="Chats"><div class="app-bar chat-list-head">${appMenuButton(s, 'chat')}<h1>Chats<span class="app-bar-count num">${chat.list.length}</span></h1>${appBarIcons(s, 'chat')}</div>`
+    + chatTabs('owner')
     + `<p class="chat-notice" role="status"${chat.error || chat.status ? '' : ' hidden'}>${esc(chat.error || chat.status)}</p>`
     + `<div class="chat-list-scroll" data-key="chat-list-scroll">${list}</div></aside><section class="chat-conversation-pane" data-key="chat-thread-pane">${conversation}</section></div>`
     + appDrawer(s, 'chat');
@@ -4120,6 +4128,223 @@ document.addEventListener('keydown', (e) => {
   e.preventDefault();
   chatSend();
 });
+
+// ---------- Agent messages ----------
+// A read-only view of the messages between agents. The page cannot send or delete one, and no message counts as unread.
+const agentChat = { pairs: [], allPairs: [], directory: new Map(), matching: null, loaded: false, loading: false, listKey: null, error: '', pair: null, pairKey: null, messages: [], more: false, loadingPair: false, moreLoading: false, scrollBottom: false };
+const agentProjects = {};
+const AGENT_PROJECT_ROWS = 5;
+const AGENT_PROJECT_MESSAGES = 5;
+
+const agentParams = () => {
+  const params = new URLSearchParams(location.search);
+  return { project: params.get('project') || '', pair: params.get('pair') || '', q: (params.get('q') || '').trim() };
+};
+
+async function agentFetch(path) {
+  const response = await fetch(path);
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || 'The agent messages could not be read.');
+  return result;
+}
+
+const agentMarkup = () => ({ esc, markdown: safeMarkdownHtml, clock, time: listTime });
+
+// A reload of the list keeps the old list on screen until the new one arrives.
+async function agentsLoadList() {
+  const { project, q } = agentParams();
+  const key = `${project}|${q}`;
+  agentChat.loading = true;
+  try {
+    const [allPairs, records, pairs, matching] = await Promise.all([
+      agentFetch('/api/agent-pairs'),
+      agentFetch(`/api/agent-messages${agentQuery({ limit: AGENT_DIRECTORY_LIMIT })}`),
+      project ? agentFetch(`/api/agent-pairs${agentQuery({ project })}`) : null,
+      q ? agentFetch(`/api/agent-messages${agentQuery({ project, q, limit: AGENT_DIRECTORY_LIMIT })}`) : null,
+    ]);
+    if (agentsKey() !== key) return;
+    agentChat.allPairs = allPairs;
+    agentChat.pairs = pairs || allPairs;
+    agentChat.directory = agentBuildDirectory(records);
+    agentChat.matching = matching;
+    agentChat.loaded = true;
+    agentChat.listKey = key;
+    agentChat.error = '';
+  } catch (error) { agentChat.error = error.message; agentChat.listKey = key; }
+  finally { agentChat.loading = false; render(); }
+}
+
+const agentsKey = () => { const { project, q } = agentParams(); return `${project}|${q}`; };
+
+async function agentsLoadPair({ older = false, refresh = false } = {}) {
+  const { pair, q, project } = agentParams();
+  if (!pair) return;
+  const key = `${pair}|${q}`;
+  const oldest = older ? agentChat.messages[0] : null;
+  if (older) agentChat.moreLoading = true; else if (!refresh) agentChat.loadingPair = true;
+  const box = $app.querySelector('[data-agent-scroll]');
+  const fromBottom = box ? box.scrollHeight - box.scrollTop : 0;
+  const atBottom = box ? box.scrollHeight - box.scrollTop - box.clientHeight < 48 : true;
+  try {
+    const page = await agentFetch(`/api/agent-messages${agentQuery({ project, pair, q, before: oldest?.id, limit: AGENT_PAGE_LIMIT })}`);
+    if (agentParams().pair !== pair) return;
+    if (older) {
+      agentChat.messages = agentMergeOlder(agentChat.messages, page);
+      agentChat.more = page.length >= AGENT_PAGE_LIMIT;
+    } else {
+      const fresh = agentMergeNewest(refresh && agentChat.pairKey === key ? agentChat.messages : [], page);
+      if (!(refresh && agentChat.pairKey === key)) agentChat.more = page.length >= AGENT_PAGE_LIMIT;
+      agentChat.messages = fresh;
+    }
+    agentChat.pairKey = key;
+    agentChat.error = '';
+    if (!older && !refresh) agentChat.scrollBottom = true;
+    else if (refresh && atBottom) agentChat.scrollBottom = true;
+  } catch (error) { agentChat.error = error.message; agentChat.pairKey = key; }
+  finally {
+    agentChat.loadingPair = false;
+    agentChat.moreLoading = false;
+    render();
+    const next = $app.querySelector('[data-agent-scroll]');
+    if (older && next) next.scrollTop = next.scrollHeight - fromBottom;
+  }
+}
+
+// The address decides the open pair, the project filter, and the search text. A change loads what the page needs.
+function agentsSync() {
+  const { pair, q } = agentParams();
+  if (!agentChat.loading && agentChat.listKey !== agentsKey()) agentsLoadList();
+  const key = `${pair}|${q}`;
+  if (!pair) { agentChat.pairKey = null; agentChat.messages = []; agentChat.more = false; return; }
+  if (!agentChat.loadingPair && agentChat.pairKey !== key) {
+    agentChat.pairKey = null;
+    agentChat.messages = [];
+    agentsLoadPair();
+  }
+}
+
+function agentsNavigate(changes, { replace = false } = {}) {
+  const next = { ...agentParams(), ...changes };
+  history[replace ? 'replaceState' : 'pushState'](null, '', agentsUrl(next));
+  lastRender = '';
+  render();
+}
+
+function agentsFirstEnd(pairKey) { return String(pairKey || '').split('+')[0] || null; }
+
+function agentChatView(s) {
+  agentsSync();
+  const { project, pair, q } = agentParams();
+  const pairs = agentFilterPairs(agentChat.pairs, q ? agentChat.matching : null);
+  const options = agentProjectOptions(agentChat.allPairs, agentChat.directory);
+  const markup = agentMarkup();
+  const rows = pairs.map((item) => agentPairRowHtml(item, { ...markup, directory: agentChat.directory, open: item.pairKey === pair })).join('');
+  const list = pairs.length
+    ? `<ul class="chat-list">${rows}</ul>`
+    : `<p class="chat-empty">${agentChat.loaded ? (q || project ? 'No pair matches.' : 'No agent messages.') : 'Loading…'}</p>`;
+  const select = `<select data-agent-project aria-label="Project">${['', ...options, ...(project && !options.includes(project) ? [project] : [])].map((slug) => `<option value="${esc(slug)}"${slug === project ? ' selected' : ''}>${slug ? esc(slug) : 'All projects'}</option>`).join('')}</select>`;
+  const filters = `<form class="agent-filters" data-agent-filters role="search"><label class="visually-hidden" for="agent-q">Search the agent messages</label><input id="agent-q" type="search" data-agent-q value="${esc(q)}" placeholder="Search messages" maxlength="200" autocomplete="off">${select}</form>`;
+  const conversation = pair ? agentConversationView(pair) : '<section class="chat-empty-state"><p>Select a pair to read its messages.</p></section>';
+  return `<div class="chat-layout agent-layout${pair ? ' thread-open' : ''}" data-key="chat"${appDrawerOpen ? ' inert' : ''}><aside class="chat-list-pane" data-key="chat-list" aria-label="Agent pairs"><div class="app-bar chat-list-head">${appMenuButton(s, 'chat')}<h1>Chats<span class="app-bar-count num">${agentChat.pairs.length}</span></h1>${appBarIcons(s, 'chat')}</div>`
+    + chatTabs('agents') + filters
+    + `<p class="chat-notice" role="status"${agentChat.error ? '' : ' hidden'}>${esc(agentChat.error)}</p>`
+    + `<div class="chat-list-scroll" data-key="chat-list-scroll">${list}</div></aside><section class="chat-conversation-pane" data-key="chat-thread-pane">${conversation}</section></div>`
+    + appDrawer(s, 'chat');
+}
+
+function agentConversationView(pair) {
+  const title = agentPairTitle(pair, agentChat.directory);
+  const markup = agentMarkup();
+  const { q } = agentParams();
+  const messages = agentChat.loadingPair && !agentChat.messages.length
+    ? '<p class="chat-empty">Loading messages…</p>'
+    : agentMessagesHtml(agentChat.messages, { ...markup, emptyText: q ? 'No message matches.' : 'No messages in this pair.', firstEnd: agentsFirstEnd(pair) });
+  const older = agentChat.more ? `<p class="agent-older"><button type="button" data-agent-older${agentChat.moreLoading ? ' disabled' : ''}>${agentChat.moreLoading ? 'Loading older messages…' : 'Load older'}</button></p>` : '';
+  return `<div class="chat-panel"><div class="app-bar chat-panel-head"><button type="button" class="app-icon-button chat-back" data-agent-back aria-label="Back to agent pairs">${appIcon('back')}</button><h2 class="agent-title">${esc(title)}</h2></div><div class="chat-scroll" data-key="agent-scroll:${esc(pair)}" data-agent-scroll tabindex="0">${older}${messages}</div></div>`;
+}
+
+// The Messages section of a project page. It uses the same rows and bubbles with the project fixed.
+async function agentsLoadProject(slug) {
+  const entry = agentProjects[slug] || (agentProjects[slug] = { pairs: [], messages: [], loaded: false, loading: false, error: '' });
+  if (entry.loading) return;
+  entry.loading = true;
+  try {
+    const [pairs, messages] = await Promise.all([
+      agentFetch(`/api/agent-pairs${agentQuery({ project: slug })}`),
+      agentFetch(`/api/agent-messages${agentQuery({ project: slug, limit: AGENT_DIRECTORY_LIMIT })}`),
+    ]);
+    entry.pairs = pairs;
+    entry.messages = messages;
+    entry.directory = agentBuildDirectory(messages);
+    entry.loaded = true;
+    entry.error = '';
+  } catch (error) { entry.error = error.message; entry.loaded = true; }
+  finally { entry.loading = false; render(); }
+}
+
+function agentMessagesSection(slug) {
+  const entry = agentProjects[slug];
+  if (!entry) { agentsLoadProject(slug); }
+  const data = entry || { pairs: [], messages: [], loaded: false, directory: new Map() };
+  const markup = agentMarkup();
+  const count = !data.loaded ? '' : data.error ? 'unreadable' : data.pairs.length ? `${data.pairs.length} pair${data.pairs.length === 1 ? '' : 's'} · ${data.messages.length >= AGENT_DIRECTORY_LIMIT ? `${AGENT_DIRECTORY_LIMIT}+` : data.messages.length} message${data.messages.length === 1 ? '' : 's'}` : 'none';
+  const rows = data.pairs.slice(0, AGENT_PROJECT_ROWS).map((item) => agentPairRowHtml(item, { ...markup, directory: data.directory, href: agentsUrl({ project: slug, pair: item.pairKey }), project: slug })).join('');
+  const last = agentConversationOrder(data.messages.slice(0, AGENT_PROJECT_MESSAGES));
+  const body = data.error ? `<p class="chat-notice" role="status">${esc(data.error)}</p>`
+    : !data.loaded ? '<p class="chat-empty">Loading…</p>'
+      : `${rows ? `<ul class="chat-list agent-project-pairs">${rows}</ul>` : ''}${agentMessagesHtml(last, { ...markup, emptyText: 'No agent messages for this project.', showEnds: true })}<p class="agent-all"><a href="${esc(agentsUrl({ project: slug }))}">Open all in the Agents tab</a></p>`;
+  return foldCard({ slug, key: 'agent-messages', className: 'agent-messages', title: 'Messages', count, body });
+}
+
+document.addEventListener('click', (e) => {
+  const open = e.target.closest?.('[data-agent-open]');
+  if (open) { agentsNavigate({ pair: open.dataset.agentOpen }); return; }
+  if (e.target.closest?.('[data-agent-back]')) { agentChat.focusRow = agentParams().pair; agentsNavigate({ pair: '' }); return; }
+  if (e.target.closest?.('[data-agent-older]') && !agentChat.moreLoading) agentsLoadPair({ older: true });
+});
+
+document.addEventListener('submit', (e) => {
+  if (!e.target.matches?.('[data-agent-filters]')) return;
+  e.preventDefault();
+  agentsNavigate({ q: e.target.querySelector('[data-agent-q]').value.trim(), pair: '' });
+});
+
+document.addEventListener('change', (e) => {
+  if (e.target.matches?.('[data-agent-project]')) agentsNavigate({ project: e.target.value, pair: '' });
+  else if (e.target.matches?.('[data-agent-q]')) agentsNavigate({ q: e.target.value.trim(), pair: '' });
+});
+
+document.addEventListener('keydown', (e) => {
+  const row = e.target.closest?.('[data-agent-open]');
+  if (row) {
+    const rows = [...$app.querySelectorAll('[data-agent-open]')];
+    const index = rows.indexOf(row);
+    const step = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : e.key === 'Home' ? -index : e.key === 'End' ? rows.length - 1 - index : 0;
+    if (!step) return;
+    e.preventDefault();
+    rows[Math.min(rows.length - 1, Math.max(0, index + step))]?.focus();
+    return;
+  }
+  if (e.key === 'Escape' && location.pathname === '/chat' && agentParams().pair && new URLSearchParams(location.search).get('tab') === 'agents') { agentChat.focusRow = agentParams().pair; agentsNavigate({ pair: '' }); }
+});
+
+// After a render, a new pair opens at its newest message, and Back puts the focus on the row.
+function agentsAfterRender() {
+  const box = $app.querySelector('[data-agent-scroll]');
+  if (box && agentChat.scrollBottom) { box.scrollTop = box.scrollHeight; agentChat.scrollBottom = false; }
+  if (agentChat.focusRow) { $app.querySelector(`[data-agent-open="${CSS.escape(agentChat.focusRow)}"]`)?.focus(); agentChat.focusRow = null; }
+}
+
+// The refresh reads the list, the open pair, and the Messages section again. It runs with the other extras.
+function agentsRefresh() {
+  if (location.pathname === '/chat' && new URLSearchParams(location.search).get('tab') === 'agents') {
+    if (!agentChat.loading) { agentChat.listKey = null; }
+    if (agentParams().pair && !agentChat.loadingPair && !agentChat.moreLoading) agentsLoadPair({ refresh: true });
+  }
+  const project = /^\/projects\/([^/]+)\/?$/.exec(location.pathname);
+  if (project) agentsLoadProject(decodeURIComponent(project[1]));
+}
+// ---------- End agent messages ----------
 
 // ---------- Organization ----------
 // A read-only chart from existing state: Owner, Boss, project orchestrators, and their workers.
@@ -5733,6 +5958,7 @@ function project(s, slug) {
     gatesRisksBlock(p),
     issueTable(work, slug),
     links || notes ? `<section class="two">${notes}${links}</section>` : '',
+    agentMessagesSection(slug),
     projectDetails(s, p, slug, published),
   ].join('');
 }
@@ -5767,6 +5993,7 @@ const HELP = {
     <h3>Set goal</h3><p><b>Set goal</b> gives the running orchestrator of a project a new <code>/goal</code>. A dialog shows the text, which starts as the <b>Default orchestrator goal</b> from Settings. Edit it if you need to. The limit is 2000 characters. The command waits until the pane of the orchestrator is idle, for up to 10 minutes. It waits for 2 minutes when the input box holds unsent text or a dialog is open. It sends nothing while the agent works, a dialog is open, or the input box holds typed text. A dim suggestion in the input box does not block it. A failed job adds one Mailbox item. <b>Cancel</b> stops a job that waits. <b>Set goal</b> is also allowed for a paused or stood down project. After a restart of the service, a job that ran shows <b>Interrupted</b>. The status line shows <b>Waiting for an idle pane</b>, <b>Sending the command</b>, <b>Checking that the pane shows the goal</b>, <b>Goal active</b>, or <b>Goal not set</b> with the reason.</p>
     <h3>Now</h3><p>The orchestrator line shows the harness, the pane, and the state of the orchestrator. Select it to open the handover form. A needed or prepared handover shows the full continuity section in its place. The cards below show the decisions that wait for you, the status issues, the running workers with their state and task, the work that waits to merge, and the next task. A card without content does not show. Select a task in a card to select it on the board.</p>
     <h3>New project</h3><p>Select <b>New project</b> to build a project. The form has five steps: name, folder, remote, orchestrator, and review. The folder is a group folder or an exact path. There is no default folder. The remote is a new GitHub repository (private by default), no remote, or an existing URL. Your choice of private or public is the decision: Herdr Boss creates the repository at once and posts nothing to the Mailbox. A public repository can be read by anyone on the internet, with all files and the full history. Type the word <code>public</code> in the confirmation field to enable <b>Next</b>. The orchestrator step sets the kind, the goal, and the tick box <b>Start the orchestrator</b>, which is on by default. The review step shows what the run will do. <b>Create project</b> starts the run. The progress view shows each step and updates every 2 seconds. When a run waits for your decision, for example after a command-line start, open the Mailbox item, answer it, then select <b>Resume</b>. <b>Check</b> reads the finished project. The form saves your entries in this browser, but not the repository URL. The read-only preview does not allow a new project.</p>
+    <h3>Messages</h3><p>The closed section <b>Messages</b> shows the pairs of agents and the last messages of this project. It is read-only. Select a pair, or <b>Open all in the Agents tab</b>, to read the whole conversation on the Chat page. Herdr Boss keeps the message text for 14 days and the metadata for 180 days.</p>
     <h3>Details</h3><p>The last section holds closed cards: <b>Files and kit</b>, <b>Worker config</b>, <b>Agents and panes</b>, and <b>Browser and leases</b>. Each header shows a short summary. The browser remembers the open or closed state of each card for each project.</p>
     <p><b>Current Owner goal</b> shows the durable direction set by the Owner. Keep it in every status publication until the Owner changes or clears it.</p>
     <p>The bar above the cards shows the applied share and the effective slots of each project, in card order. Its colors match the top edge of each card. An idle project is faded. A paused project is faded and striped.</p>
@@ -5836,6 +6063,9 @@ const HELP = {
     <h3>Action cards</h3><p>A message from an agent that asks for a decision shows as a normal bubble with one small button per option. The bubble holds a short question line. The page drops the choice list from the text, because the buttons hold the choices. A message with no real choice shows as a plain bubble with the <b>Open in Mailbox</b> link.</p>
     <p><b>Approve</b> and <b>Reject</b> answer an approval. <b>Later</b> only collapses the card. It writes nothing, and the Mailbox item stays open. A <b>decide</b> message with a Markdown list under a <b>Choices</b> heading shows one button for each choice. A decide with the choices <b>Yes</b> and <b>No</b> shows those two buttons. An <b>answer</b> message shows a one-line text field and <b>Send</b>.</p>
     <p>The card uses the same send route as the Mailbox. The item closes and the bubble shows the result, for example <b>Approved 22:05</b>. A closed item shows as a normal bubble with the result of the answer that closed it. Select <b>Open in Mailbox</b> to see the item in the Mailbox.</p>
+    <h3>Agents tab</h3><p>The <b>Agents</b> tab next to <b>Owner</b> shows the messages that agents send to each other. It is read-only: you cannot send or delete a message. These messages never show in the Owner chats or in the Mailbox, and the tab has no unread badge.</p>
+    <p>One row shows one pair of agents with their roles, names, and projects, the number of messages, and the time of the last message. The newest activity comes first. Select a row to read the conversation. The newest message is at the bottom. A badge shows <b>failed</b> or <b>recorded</b>, and the kind of the message, for example <b>task</b> or <b>reply</b>. Select <b>Load older</b> to read earlier messages. Use the search box and the project filter to find a pair. The page refreshes with the other pages.</p>
+    <p>Herdr Boss keeps the message text for 14 days and the metadata for 180 days. On a phone, select a pair to open it, and select Back to return to the list.</p>
     <h3>Keyboard</h3><p>The chat list is a list of buttons. The arrow keys, <b>Home</b>, and <b>End</b> move through the rows. Enter opens a chat. The focus then goes to the message field. <b>Escape</b> goes back to the list, and the focus goes to the row of the chat that was open. The message list is a live region, so a screen reader reads each new message once. Each bubble has a name with the sender, the time, the text, and the state.</p>
     <h3>Phone</h3><p>The Chat fills the screen. The page header does not show. Select the menu button to open the drawer with the other pages and Help. The drawer has no Mailbox entry: use the mail icon or the Needs action icon in the slim bar. Select a chat to open it full screen. The slim bar has the Back arrow. When the keyboard opens, the composer stays above it. The attach and send buttons are at least 44 px.</p>
     <p>A read-only preview shows the chats and refuses a send. It also refuses a read, so the unread count stays.</p>`],
@@ -6854,7 +7084,7 @@ function render(force = false) {
     // A refresh clears the tooltip. The hit area that has the focus shows its tooltip again.
     if (document.activeElement?.classList?.contains('viz-hit')) showVizTip(document.activeElement);
     if (route === 'mailbox') mailRestoreDrafts(focusId, caret);
-    if (route === 'chat') chatRestoreView(chatViewState);
+    if (route === 'chat') { chatRestoreView(chatViewState); agentsAfterRender(); }
     restoreScroll(route, scroll);
     if (route === 'analytics') denialScrollToEnd();
   }
@@ -8212,6 +8442,7 @@ async function refreshExtras() {
   if (results[9].status === 'fulfilled' && results[9].value?.timeline) analyticsData = results[9].value;
   if (results[10].status === 'fulfilled' && results[10].value?.hours) machineHours = results[10].value;
   if (location.pathname === '/mailbox' && !mailbox.loading) await loadMailbox(true);
+  agentsRefresh();
   if (refreshForcesRender(location.pathname)) lastRender = '';
   autoRender();
   if (location.pathname === '/browsers') for (const slug of browserPreviewOpen) if (!browserPreviewUrls[slug]) refreshBrowserPreview(slug, true);
