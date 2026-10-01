@@ -240,11 +240,18 @@ function copyFile(root, stage, file) {
   fs.chmodSync(target, 0o600);
 }
 
+const REVIEW_ITEM_FIELDS = ['description', 'steps', 'expected', 'link', 'verifiedBy', 'evidence'];
+
+function reviewFields(item) {
+  return Object.fromEntries(REVIEW_ITEM_FIELDS.filter((field) => item[field] !== undefined).map((field) => [field, item[field]]));
+}
+
 function itemSpec(item) {
   const spec = { title: item.title, type: item.type, ask: item.ask };
   if (item.choices) spec.choices = item.choices;
   if (item.rating) spec.rating = item.rating;
   if (item.entries) spec.entries = item.entries;
+  Object.assign(spec, reviewFields(item));
   return spec;
 }
 
@@ -411,7 +418,7 @@ export function getPack({ dir, slug, pack, version } = {}) {
   const items = itemRows.map((entry) => {
     const spec = parseJson(entry.spec, { ask: [] });
     const answer = answers.has(entry.item) ? answerShape(answers.get(entry.item), entry.hash) : null;
-    return { id: entry.item, section: entry.section, title: spec.title, type: spec.type, ask: spec.ask, hash: entry.hash, position: entry.position, spec, state: itemState(spec, answer), stale: answer?.stale ?? false, answer };
+    return { id: entry.item, section: entry.section, title: spec.title, type: spec.type, ask: spec.ask, ...reviewFields(spec), hash: entry.hash, position: entry.position, spec, state: itemState(spec, answer), stale: answer?.stale ?? false, answer };
   });
   const removed = [...answers.values()].filter((answer) => !present.has(answer.item)).map((answer) => ({ id: answer.item, answer: answerShape(answer) }));
   const manifest = parseJson(versionRow.manifest, {});

@@ -147,6 +147,32 @@ test('review check warns about a file that no field names and still exits 0', (t
   assert.match(output(result), /notes\/extra\.txt/);
 });
 
+test('review check warns once per item with missing guidance and once per pack metadata gap', (t) => {
+  const { cli } = fixture(t, false);
+  const result = cli('review', 'check', packFolder());
+  assert.equal(result.status, 0, output(result));
+  const warnings = result.stdout.split('\n').filter((line) => line.startsWith('Warning:'));
+  assert.equal(warnings.filter((line) => /needs description, steps, expected, link/.test(line)).length, 4);
+  assert.equal(warnings.filter((line) => /items that lack verifiedBy/.test(line)).length, 1);
+  assert.equal(warnings.filter((line) => /design pass is missing or not-run/.test(line)).length, 1);
+});
+
+test('review check warns when an agent-verified item has no evidence', (t) => {
+  const { cli } = fixture(t, false);
+  const folder = packFolder({ edit: (manifest) => {
+    manifest.designPass = { reviewer: 'gpt-6.1-sol', result: 'passed' };
+    for (const section of manifest.sections) for (const item of section.items) Object.assign(item, {
+      description: 'The checkout step.\nWhy it matters.', steps: ['Open the test app.'],
+      expected: 'The result appears.', link: 'https://app.example.test/checkout', verifiedBy: 'needs-you',
+    });
+    manifest.sections[0].items[0].verifiedBy = 'agent-verified';
+  } });
+  const result = cli('review', 'check', folder);
+  assert.equal(result.status, 0, output(result));
+  assert.equal(result.stdout.split('\n').filter((line) => line.startsWith('Warning:')).length, 1);
+  assert.match(result.stdout, /agent-verified item cart-themes has no evidence/i);
+});
+
 // ---------- publish ----------
 
 test('review publish from the orch pane stores version 1 and posts one Mailbox item', (t) => {

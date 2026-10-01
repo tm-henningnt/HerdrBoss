@@ -105,3 +105,7 @@ Summary: Add CI minute rules and GitHub workflow templates; create and copy miss
 ## 2db88201b003
 Impact: useful
 Summary: Use default worker collection recording in kit and command documentation.
+
+## 8708369d28dd
+Impact: useful
+Summary: Require review packs to report interaction evidence, app steps, human decisions, and an independent design pass.

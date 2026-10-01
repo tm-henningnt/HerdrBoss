@@ -50,6 +50,8 @@ const TYPES = new Set(['image', 'image-pair', 'gallery', 'video', 'markdown', 't
 const ASK = ['accept', 'deny', 'note', 'live', 'choice', 'rating'];
 const DEFAULT_ASK = ['accept', 'deny', 'note'];
 const VARIANTS = new Set(['theme', 'before-after', 'compare']);
+const VERIFIED_BY = new Set(['agent-verified', 'needs-you']);
+const DESIGN_RESULTS = new Set(['passed', 'issues', 'not-run']);
 const IMAGE_TYPES = new Set(['png', 'jpeg', 'webp', 'gif']);
 const VIDEO_TYPES = new Set(['mp4', 'webm']);
 const EXTENSION_TYPES = { '.png': 'png', '.jpg': 'jpeg', '.jpeg': 'jpeg', '.webp': 'webp', '.gif': 'gif', '.mp4': 'mp4', '.webm': 'webm', '.svg': 'svg', '.html': 'html', '.htm': 'html' };
@@ -81,6 +83,7 @@ function itemPaths(item) {
   add(item.a); add(item.b);
   for (const image of item.images || []) add(image);
   add(item.body);
+  for (const evidence of item.evidence || []) if (typeof evidence === 'string') paths.push(evidence);
   return paths;
 }
 
@@ -520,11 +523,48 @@ export function validatePack(folder, options = {}) {
     } else if (source.liveUrl !== undefined) warn('ignored', `${where}.liveUrl has no effect without live in ask.`, { where });
   };
 
+  let hasUnmarkedItem = false;
   const checkItem = (source, where, ids) => {
     if (!isObject(source)) { error('field', `${where} must be an object.`, { where }); return null; }
     const out = { id: checkId(source.id, `${where}.id`, ids, 'item'), title: checkTitle(source.title, `${where}.title`) };
     if (out.id === 'summary') error('id', `${where}.id must not be summary.`, { where });
     const id = out.id;
+    const missing = ['description', 'steps', 'expected', 'link'].filter((field) => source[field] === undefined);
+    if (missing.length) warn('item-guidance', 'Item ' + (id || '(unknown)') + ' needs ' + missing.join(', ') + '.', { where });
+    if (source.verifiedBy === undefined) hasUnmarkedItem = true;
+    else if (!VERIFIED_BY.has(source.verifiedBy)) error('verified-by', where + '.verifiedBy must be agent-verified or needs-you.', { where });
+    else out.verifiedBy = source.verifiedBy;
+
+    if (source.description !== undefined) {
+      const description = checkText(source.description, where + '.description', TEXT_MAX, { required: true });
+      if (description !== undefined) {
+        const lines = description.split(/\r?\n/);
+        if (lines.length !== 2 || lines.some((line) => !line.trim())) error('description', where + '.description must have two non-empty lines: what it is and why.', { where });
+        else out.description = description;
+      }
+    }
+    if (source.steps !== undefined) {
+      if (!Array.isArray(source.steps) || source.steps.length < 1 || source.steps.length > 30) {
+        error('steps', where + '.steps must be a list of 1 to 30 strings.', { where });
+      } else {
+        out.steps = source.steps.map((step, index) => checkText(step, where + '.steps[' + index + ']', 500, { required: true }));
+      }
+    }
+    if (source.expected !== undefined) out.expected = checkText(source.expected, where + '.expected', TEXT_MAX, { required: true });
+    if (source.link !== undefined) out.link = checkUrl(source.link, where + '.link');
+    if (source.evidence !== undefined) {
+      if (!Array.isArray(source.evidence) || source.evidence.length > 60) error('evidence', where + '.evidence must be a list of at most 60 image file references.', { where });
+      else {
+        out.evidence = source.evidence.map((ref, index) => {
+          if (!isText(ref)) { error('evidence', where + '.evidence[' + index + '] must be a file reference.', { where }); return undefined; }
+          return ref;
+        }).filter((ref) => ref !== undefined);
+        if (new Set(out.evidence).size !== out.evidence.length) error('evidence', where + '.evidence lists a file reference twice.', { where });
+      }
+    }
+    if (source.verifiedBy === 'agent-verified' && (!Array.isArray(source.evidence) || source.evidence.length === 0)) {
+      warn('evidence', 'Agent-verified item ' + (id || '(unknown)') + ' has no evidence.', { where });
+    }
     let type = source.type;
     if (!isText(type) || !type) { error('field', `${where}.type is required.`, { where }); type = 'markdown'; }
     if (type === 'page' && !options.allowPage) { error('type', `${where}: The item type page is only for the importer.`, { where }); }
@@ -619,6 +659,16 @@ export function validatePack(folder, options = {}) {
   manifest.id = checkId(input.id, 'id');
   manifest.title = checkTitle(input.title, 'title');
   if (input.summary !== undefined) manifest.summary = checkBody(input.summary, 'summary');
+  if (input.designPass === undefined) warn('design-pass', 'The pack design pass is missing or not-run.', { where: 'designPass' });
+  else if (!isObject(input.designPass)) error('design-pass', 'designPass must be an object.', { where: 'designPass' });
+  else {
+    const reviewer = checkText(input.designPass.reviewer, 'designPass.reviewer', LABEL_MAX, { required: true });
+    const result = input.designPass.result;
+    if (!DESIGN_RESULTS.has(result)) error('design-pass', 'designPass.result must be passed, issues, or not-run.', { where: 'designPass.result' });
+    manifest.designPass = { reviewer, result: DESIGN_RESULTS.has(result) ? result : undefined };
+    if (input.designPass.note !== undefined) manifest.designPass.note = checkText(input.designPass.note, 'designPass.note', TEXT_MAX);
+    if (result === 'not-run') warn('design-pass', 'The pack design pass is missing or not-run.', { where: 'designPass' });
+  }
   if (input.live !== undefined) {
     if (!Array.isArray(input.live) || input.live.length > 10) error('field', 'live must be a list of at most 10 links.', { where: 'live' });
     else manifest.live = input.live.map((link, index) => {
@@ -669,6 +719,25 @@ export function validatePack(folder, options = {}) {
     }
   }
   if (halted) return finish(null, [], { files: fileInfo.size + 1, bytes: totalBytes, items: itemCount, sections: manifest.sections.length });
+
+  const imageItemFiles = new Set();
+  for (const section of manifest.sections) for (const item of section.items) {
+    const refs = item.type === 'image' ? [item.src]
+      : item.type === 'image-pair' ? [item.a?.src, item.b?.src]
+        : item.type === 'gallery' ? (item.images || []).map((image) => image.src)
+          : [];
+    for (const ref of refs) {
+      const record = fileInfo.get(ref);
+      if (record?.ok && IMAGE_TYPES.has(record.type)) imageItemFiles.add(ref);
+    }
+  }
+  for (const [sectionIndex, section] of manifest.sections.entries()) for (const [itemIndex, item] of section.items.entries()) {
+    const where = 'sections[' + sectionIndex + '].items[' + itemIndex + ']';
+    for (const ref of item.evidence || []) if (!imageItemFiles.has(ref)) {
+      error('evidence', where + '.evidence names ' + ref + ', which is not a file used by an image item.', { where });
+    }
+  }
+  if (hasUnmarkedItem) warn('verified-by', 'The pack has items that lack verifiedBy.', { where: 'sections' });
 
   // Item hashes, over the normalized fields and the file hashes.
   const hashes = new Map([...fileInfo].filter(([, record]) => record.ok).map(([rel, record]) => [rel, record.sha256]));

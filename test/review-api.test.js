@@ -79,7 +79,9 @@ function manifest(id) {
 // Each pack has its own project slug: a project holds at most 5 open packs.
 const slugOf = (id) => `s-${id}`;
 
-function publish(id) {
+function publish(id, edit = () => {}) {
+  const packManifest = manifest(id);
+  edit(packManifest);
   const root = tmp('herdr-review-api-pack-');
   const files = {
     'img/cart-light.png': png(390, 800, 1),
@@ -93,7 +95,7 @@ function publish(id) {
     fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
     fs.writeFileSync(path.join(root, rel), content);
   }
-  fs.writeFileSync(path.join(root, 'manifest.json'), JSON.stringify(manifest(id)));
+  fs.writeFileSync(path.join(root, 'manifest.json'), JSON.stringify(packManifest));
   return store.publishVersion({ dir: dataDir, now: Date.now(), slug: slugOf(id), folder: root, publishedBy: 'orch' });
 }
 
@@ -185,6 +187,34 @@ test('the get route returns the current version, an older version, and clear err
   assert.equal((await raw(base, 'GET', '/api/reviews/s-no-such-pack/no-such-pack')).status, 404);
   assert.equal((await raw(base, 'GET', '/api/reviews/Not_A_Slug/get-pack')).status, 400);
   assert.equal((await raw(base, 'GET', '/api/reviews/s-get-pack/get-pack/unknown-part')).status, 404);
+});
+
+test('the get route exposes review guidance and a computed review summary', async (t) => {
+  publish('summary-pack', (pack) => {
+    pack.designPass = { reviewer: 'gpt-6.1-sol', result: 'issues', note: 'One flow needs work.' };
+    const items = pack.sections.flatMap((section) => section.items);
+    const shared = {
+      description: 'The checkout step.\nWhy it matters.',
+      steps: ['Open the test app.', 'Submit a valid card.'],
+      expected: 'The receipt appears.',
+      link: 'https://app.example.test/checkout',
+    };
+    Object.assign(items[0], shared, { verifiedBy: 'agent-verified', evidence: ['img/cart-light.png'] });
+    Object.assign(items[1], shared, { verifiedBy: 'needs-you' });
+  });
+  const { base } = await start(t);
+  const response = await raw(base, 'GET', '/api/reviews/s-summary-pack/summary-pack');
+  assert.equal(response.status, 200);
+  const pack = JSON.parse(response.text);
+  assert.deepEqual(pack.summary, { total: 5, agentVerified: 1, needsYou: 1, unmarked: 3, designPass: 'issues' });
+  const agentItem = pack.items.find((item) => item.id === 'cart-themes');
+  assert.equal(agentItem.description, 'The checkout step.\nWhy it matters.');
+  assert.deepEqual(agentItem.steps, ['Open the test app.', 'Submit a valid card.']);
+  assert.equal(agentItem.expected, 'The receipt appears.');
+  assert.equal(agentItem.link, 'https://app.example.test/checkout');
+  assert.equal(agentItem.verifiedBy, 'agent-verified');
+  assert.deepEqual(agentItem.evidence, ['img/cart-light.png']);
+  assert.equal(pack.items.find((item) => item.id === 'pay-button').verifiedBy, 'needs-you');
 });
 
 // ---------- File route ----------

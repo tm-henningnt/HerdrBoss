@@ -84,15 +84,17 @@ Read each file in the skill folder when its step comes:
 
 ### Review packs
 
-- Make a review pack when the Owner must see visual or written evidence to decide: a UI change, a document, a design, an API reference, or a data result. Do not make a pack for a question that one Mailbox line answers.
-- Write a folder with `manifest.json`. Put one question in each item. Use the item types `image`, `image-pair`, `gallery`, `video`, `markdown`, `table`, `diff`, `file`, `link`, and `checklist`. Use `ask` to name the questions: `accept`, `deny`, `note`, `live`, `choice`, and `rating`.
-- Include the evidence that the Owner needs and nothing more: light and dark pairs for a UI, before and after pairs for a change, the exact text for a document, and a `link` item with `live` for each item that the Owner must operate.
-- Keep secrets, tokens, and private data out of the pack. The publish command scans each text file and stops on a finding.
+- Make a pack when the Owner needs evidence for a UI, document, design, API, or data decision. Do not make a pack for a question that one Mailbox line answers.
+- Run interaction checks yourself. Include before and after screenshots as evidence. Put one shared-space test app per scenario, named after its item.
+- Give each item a two-line description (what and why), exact steps, expected result, and app/sheet link. Set verifiedBy to agent-verified and list image refs in evidence, or use needs-you.
+- Send only items needing a human decision to the Owner: taste, business meaning, or a final call.
+- Before shipping, get an independent reviewer to run a design pass: gpt-6.1-sol, or claude-opus-5-5 with --force when the Owner asked. Record passed, issues, or not-run in designPass.
+- Use manifest.json, one question per item, supported types, and ask values. Include light/dark and before/after images, exact document text, and a link item for each live check.
+- Keep secrets, tokens, and private data out. Publish scans text files and stops on a finding.
 - Publish with `herdr-boss review publish <slug> <folder>`. Import an existing HTML folder with `herdr-boss review import <slug> <folder>`.
-- Do not wait for the result. Continue independent work. The result arrives as an `[owner]` prompt with the verdict and a fetch command.
-- Read the result with `herdr-boss review result <slug> <pack> --json`. Plan a fix for each denied item and each note. Record an Owner decision from the pack note in `docs/orchestration/memory.md`.
-- Publish a new version with the same pack `id` after the fixes. Unchanged items keep their answers.
-
+- Do not wait; continue independent work. The result arrives as an [owner] prompt with the verdict and a fetch command.
+- Read the result with `herdr-boss review result <slug> <pack> --json`. Fix denied items and notes. Record Owner decisions from pack notes in `docs/orchestration/memory.md`.
+- Publish a new version with the same pack id after fixes. Unchanged items keep their answers.
 ## Resume from an unknown state
 
 - Use [the resume prompt](../../templates/orchestrator-resume.md) when you need a full discovery checklist.
