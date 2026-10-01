@@ -154,8 +154,9 @@ const USAGE = `herdr-boss <command>
   browser bookmarks SLUG start URL|none [--full]  Set or clear the start page of the next launch.
   --full prints real URLs. Use it only as the Owner at a terminal.
   browser sweep-clones [--dry-run]  Delete orphaned Chrome code-sign clones now; --dry-run only lists them.
-  handoff plan PANE --to KIND [--mode migrate|fresh] [--model MODEL] [--effort EFFORT]
-  handoff prepare PANE --to KIND [--mode migrate|fresh] [--model MODEL] [--effort EFFORT]
+  handoff plan PANE --to KIND [--mode migrate|fresh] [--model MODEL] [--effort EFFORT] [--force]
+  handoff prepare PANE --to KIND [--mode migrate|fresh] [--model MODEL] [--effort EFFORT] [--force]
+  handoff cancel ID [--force]  Cancel a prepared successor; --force closes a working successor.
   handoff activate ID --confirmed
   handoff ready ID      Signal automatic successor readiness.
   worker ...            Start, collect, or list workers.
@@ -670,16 +671,22 @@ async function main() {
       break;
     }
     case 'handoff': {
-      const { planHandoff, prepareHandoff, activateHandoff, markHandoffReady, listHandoffs } = await import('./handoff.js');
+      const { planHandoff, prepareHandoff, activateHandoff, cancelHandoff, markHandoffReady, listHandoffs } = await import('./handoff.js');
       const [action, target] = args;
       // A sandbox cannot write handoff records. Fail before the first Herdr call or file write.
-      if (['prepare', 'activate', 'ready'].includes(action)) assertDataWritable();
+      if (['prepare', 'activate', 'ready', 'cancel'].includes(action)) assertDataWritable();
       if (action === 'list') { console.log(JSON.stringify(listHandoffs(), null, 2)); break; }
       if (action === 'activate') { console.log(JSON.stringify(activateHandoff(target, { confirmed: args.includes('--confirmed') }), null, 2)); break; }
       if (action === 'ready') { console.log(JSON.stringify(markHandoffReady(target), null, 2)); break; }
+      if (action === 'cancel') {
+        if (!target || args.length > 3 || (args.length === 3 && args[2] !== '--force')) throw new Error('Usage: handoff cancel ID [--force]');
+        const result = cancelHandoff(target, { force: args.includes('--force') });
+        console.log(result.closed ? `Cancelled handoff ${target}; closed successor pane ${result.item.newPane}.` : `Cancelled handoff ${target}; successor pane ${result.item.newPane} was already absent.`);
+        break;
+      }
       const value = (flag, fallback) => { const i = args.indexOf(flag); return i < 0 ? fallback : args[i + 1]; };
       const to = value('--to');
-      if (!target || !to || !['plan', 'prepare'].includes(action)) throw new Error('Usage: handoff plan|prepare PANE --to KIND [--mode migrate|fresh] [--model MODEL]');
+      if (!target || !to || !['plan', 'prepare'].includes(action)) throw new Error('Usage: handoff plan|prepare PANE --to KIND [--mode migrate|fresh] [--model MODEL] [--effort EFFORT] [--force]');
       // The JSON result goes to stdout, so the kit line goes to stderr.
       try {
         const top = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();

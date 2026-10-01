@@ -1000,6 +1000,10 @@ When an orchestrator's quota comes near its reserve, Herdr Boss recommends a suc
 3. Inspect the successor's response.
 4. Confirm activation. For a project, the successor pane gets the label `orch`, and the old pane gets `orch previous`. For the Boss, the successor pane gets `boss`, and the old pane gets `boss previous`.
 
+Without `--model`, plan and prepare use the target kind's default model in `kit/models.json`. The policy's `preferredModels` value does not replace this default. The result shows `modelSource: "default"`; a model passed with `--model` shows `modelSource: "flag"`. The model `claude-opus-5-5` and its aliases `opus` and `claude-opus` need the Owner's approval. Ask the Owner, then run `handoff plan` or `handoff prepare` with `--force`. A forced Opus prepare sends the Boss the same one-line alert as a forced Opus worker start.
+
+Run `herdr-boss handoff cancel ID` to cancel a prepared handoff. The command marks it expired with reason `cancelled` and prints one line. It closes the successor pane when no agent is attached or its agent is idle or done. It refuses a working, blocked, or unknown-status agent; add `--force` to close that pane. It refuses a handoff that is already active or expired. A cancelled handoff does not create the 30-minute expiry Mailbox item.
+
 Activation checks that the successor agent is settled and ready. The handoff record keeps the activation time, the source pane ID, and the successor pane ID.
 
 Herdr Boss activates a prepared automatic successor when all of these are true:

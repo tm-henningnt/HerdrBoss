@@ -1060,13 +1060,20 @@ A project keeps at most 30 bookmarks. A bookmark URL must use `http` or `https` 
 
 | Command | Action |
 |---|---|
-| `handoff plan PANE --to KIND [--model M] [--effort E] [--mode migrate\|fresh]` | Check the target and whether session migration is available. Changes nothing. |
-| `handoff prepare PANE --to KIND [...]` | Start a successor in a new `Orchestrator Next` tab. The source keeps control. |
+| `handoff plan PANE --to KIND [--model M] [--effort E] [--mode migrate\|fresh] [--force]` | Check the target and whether session migration is available. Changes nothing. |
+| `handoff prepare PANE --to KIND [--model M] [--effort E] [--mode migrate\|fresh] [--force]` | Start a successor in a new `Orchestrator Next` tab. The source keeps control. |
+| `handoff cancel ID [--force]` | Expire a prepared handoff and close its successor pane when it has no agent or its agent is idle or done. `--force` also closes a working or unsettled agent. |
 | `handoff activate ID --confirmed` | Label a project successor `orch` and name its agent `<slug>-orch`. Label a Boss successor `boss` and name its agent `boss`. Clear the new name from the source agent first when it uses that name. Label the source pane `orch previous` or `boss previous`. A failed agent rename keeps activation active and prints a command to run by hand. A project handover prompts each running worker once with the line `Your orchestrator is now <slug>-orch (pane <new pane>). Send WORKER REPORT and WORKER QUESTION there.` and records the result in `workerPrompts`. A failed worker prompt is logged and does not fail the activation. Herdr Boss makes one attempt for each worker and handoff, and does not prompt that worker again. A project handover also notifies the project workers and the Boss. A Boss handover notifies the Boss-workspace peers and the Owner. If Herdr reports `pane_not_found` for the source pane, activation skips the source label and the source prompt. The successor prompt says that the source pane was closed before activation. |
 | `handoff ready ID` | Sent by an automatic successor when it is ready. |
 | `handoff list` | All handover records. Status can be `preparing`, `prepared`, `needs-inspection`, `active`, `superseded`, or `expired`. An automatic record without `readyAt` expires 30 minutes after preparation. Herdr Boss posts one Mailbox item to the Owner. It closes the successor pane only when it runs the expected agent, is idle, and is not the source pane. |
 
-`--mode migrate` (the default) converts the session with `session-migrate`. If migration is unavailable or transfer fails, preparation uses fresh mode and records the reason. `--mode fresh` starts the successor without a migrated session. `--force` allows a target provider near exhaustion.
+Without `--model`, plan and prepare use the target kind's default model from `kit/models.json`. The policy field `preferredModels` does not replace this default. The result has `modelSource: "default"`; a model passed with `--model` has `modelSource: "flag"`.
+
+The model `claude-opus-5-5` and the aliases `opus` and `claude-opus` need the Owner's approval. Ask the Owner, then run plan or prepare with `--force`. A forced Opus prepare sends the Boss the same one-line alert as a forced Opus worker start. `--force` also allows a target provider near exhaustion.
+
+`--mode migrate` (the default) converts the session with `session-migrate`. If migration is unavailable or transfer fails, preparation uses fresh mode and records the reason. `--mode fresh` starts the successor without a migrated session.
+
+`handoff cancel` accepts a `preparing`, `prepared`, or `needs-inspection` record. It marks the record `expired` with reason `cancelled` and prints one line. It closes the successor pane when no agent is attached or its agent is idle or done. It refuses a working, blocked, or unknown-status agent unless you pass `--force`. It refuses an active or expired record. A cancelled record does not get the 30-minute expiry Mailbox item.
 
 `handoff plan` reports when Claude session migration is unavailable because the active graph has an ancestry cycle. `handoff prepare` then uses fresh mode automatically.
 

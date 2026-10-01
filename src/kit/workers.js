@@ -589,7 +589,7 @@ function normalizeModel(model) {
   return /^(claude-)?opus(-5-5)?$/.test(name) ? OPUS_MODEL : model.trim();
 }
 
-const isOpus = (model) => /(^|[-/])opus($|[-.\d])/i.test(model);
+export const isOpus = (model) => /(^|[-/])opus($|[-.\d])/i.test(model);
 
 function validateSelection(kind, options, models, config, resourcePolicy = null, onOpusRefused = null) {
   const policy = models.kinds[kind];
@@ -641,7 +641,7 @@ function taskIdForEvent(options) {
   return null;
 }
 
-function alertBossForOpus(name, model, options, config, env, herdr, now, output) {
+export function alertBossForOpus(name, model, options, config, env, herdr, now, output) {
   const text = `Opus worker: ${name} runs ${model} (forced).`;
   const taskId = taskIdForEvent(options);
   appendWorkerEvent(env, { type: 'worker-opus', text, worker: name, taskId, project: config.slug }, now);

@@ -31,10 +31,11 @@ if (args[0] === 'pane' && args[1] === 'get' && args[2] === 'ws:p1') result = { p
 } };
 if (args[0] === 'pane' && args[1] === 'get' && args[2] !== 'ws:p1') result = { pane: {
   pane_id: args[2], workspace_id: 'ws', foreground_cwd: process.env.TEST_CWD,
+  ...(process.env.TEST_SUCCESSOR_STATUS ? { agent: 'claude', agent_status: process.env.TEST_SUCCESSOR_STATUS } : {}),
 } };
 if (args[0] === 'pane' && args[1] === 'list') {
   if (process.env.TEST_PANE_LIST_FAIL === '1') process.exit(1);
-  result = { panes: [{ pane_id: 'ws:p1', workspace_id: 'ws' }, ...(process.env.TEST_EXISTING_PANE ? [{ pane_id: process.env.TEST_EXISTING_PANE, workspace_id: 'ws' }] : [])] };
+  result = { panes: [{ pane_id: 'ws:p1', workspace_id: 'ws' }, ...(process.env.TEST_EXISTING_PANE ? [{ pane_id: process.env.TEST_EXISTING_PANE, workspace_id: 'ws' }] : []), ...(process.env.TEST_BOSS_PANE ? [{ pane_id: process.env.TEST_BOSS_PANE, label: 'boss' }] : [])] };
 }
 if (args[0] === 'tab' && args[1] === 'create') result = process.env.TEST_NO_TAB_ID === '1' ? { root_pane: { pane_id: 'ws:p2' } }
   : { tab: { tab_id: 'ws:t2' }, root_pane: { pane_id: 'ws:p2', tab_id: 'ws:t2' } };
