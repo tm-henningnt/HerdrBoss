@@ -1710,7 +1710,7 @@ The folders are **Needs you**, **Inbox**, **Reports and updates**, and **Done**.
 
 The list has one row for each conversation. A conversation is one thread and one `replyTo` chain. The row shows the newest item of the conversation in the folder. On a phone the row has two lines. Line 1 holds the avatar, the project name or `Boss`, the message count when the conversation has more than one item, and the action tag: **Approve**, **Answer**, **Decide**, or **Report**. Line 2 holds the subject and a one-line preview. The time and an unread dot sit on the right. An unread row shows the name, the subject, and the time in bold. On a wide desktop list without an open conversation, each row is one 44 px line. The time is `HH:MM` for today, `Yesterday`, a weekday for the last 6 days, or the day and the month.
 
-Select a row to open its conversation. The conversation shows Owner and agent messages in time order. The answer of the Owner to an item is in the conversation of that item, with its time and its delivery state. Each message and each report shows as safe Markdown, with the same renderer as the message panel and the Chat. See [Markdown in messages](#markdown-in-messages). Opening an item sets `readAt` on the record. On a desktop the conversation opens at the right of the list, and the list keeps its position. On a phone the conversation fills the screen. Select the Back arrow to return to the list.
+Select a row to open its conversation. The conversation shows Owner and agent messages in time order. The answer of the Owner to an item is in the conversation of that item, with its time and its delivery state. Each message and each report shows as safe Markdown, with the same renderer as the message panel and the Chat. See [Markdown in messages](#markdown-in-messages). A picture shows as a thumbnail. Select it to open the full picture. HEIC and HEIF pictures show as file links. Select **Download** to save one. Opening an item sets `readAt` on the record. On a desktop the conversation opens at the right of the list, and the list keeps its position. On a phone the conversation fills the screen. Select the Back arrow to return to the list.
 
 ### Answer an item
 
@@ -1719,10 +1719,11 @@ Select a row to open its conversation. The conversation shows Owner and agent me
 | `answer` | A text field and **Send**. | The typed text. |
 | `approve` | **Approve**, **Reject**, and an optional note. | `Approved.` or `Rejected.`, then the note. |
 | `decide` | A text field and **Send**. Choice buttons when the text has a Markdown list under a `Choices` heading. | `Choice: CHOICE`, then the note. Or the typed text. |
+| Pictures | **Attach a picture**. | Up to 6 pictures, at most 10 MB each. |
 
-The page asks for a confirmation before each send or dismissal. The answer is an Owner message to the thread of the item, with `replyTo` set to the item ID. It uses the same delivery rules and rate limit as a message from the Agents page. The service then sets `closedAt` on the item, and the item moves to **Done**. A closed item refuses a second answer with HTTP 409.
+Select **Attach a picture** to choose pictures from your device. The picker can offer the camera and the photo library. Herdr Boss accepts JPEG, PNG, WebP, GIF, HEIC, and HEIF. It refuses a file that is too large or has an unsupported type before upload. Remove a picture from the strip to leave it out. You can send pictures with text or without text. The page asks for a confirmation before each send or dismissal. The answer is an Owner message to the thread of the item, with `replyTo` set to the item ID. It uses the same delivery rules and rate limit as a message from the Agents page. The service then sets `closedAt` on the item, and the item moves to **Done**. A closed item refuses a second answer with HTTP 409.
 
-Select **New message** to start a thread with the Boss or a project that has an `orch` pane. Type a message and confirm the send. The page applies the same send limit and safety gates as other Owner messages. It opens the new thread in **Sent**. Use the reply box at the bottom of a conversation to reply to its last open agent message. When that message is an open answer, approve, or decide item, the item form replaces the reply box. The page asks you to confirm each reply.
+Select **New message** to start a thread with the Boss or a project that has an `orch` pane. Type a message or attach a picture, then confirm the send. The page applies the same send limit and safety gates as other Owner messages. It opens the new thread in **Sent**. Use the reply box at the bottom of a conversation to reply to its last open agent message. When that message is an open answer, approve, or decide item, the item form replaces the reply box. You can attach pictures to a reply. The page asks you to confirm each reply.
 
 ### Close an item without an answer
 
@@ -1861,7 +1862,7 @@ The automatic refresh keeps the scroll position of the chat list and of the conv
 
 ### Conversation
 
-Select a row to open the chat. The conversation shows the messages in time order. An Owner message sits on the right. An agent message sits on the left. The avatar of the agent shows at the first message of each run of messages from that agent. It does not show again inside the same run. Each bubble shows the text as safe Markdown, the sender, and the time. A wide table or code block scrolls sideways inside the bubble. An Owner bubble also shows the delivery state from the record: `queued`, `delivered`, `relayed`, or `failed` with the reason.
+Select a row to open the chat. The conversation shows the messages in time order. An Owner message sits on the right. An agent message sits on the left. The avatar of the agent shows at the first message of each run of messages from that agent. It does not show again inside the same run. Each bubble shows the text as safe Markdown, the sender, and the time. A wide table or code block scrolls sideways inside the bubble. Pictures show as thumbnails with a fixed size. Select a thumbnail to open the full picture. HEIC and HEIF pictures show as file links. Select **Download** to save one. An Owner bubble also shows the delivery state from the record: `queued`, `delivered`, `relayed`, or `failed` with the reason.
 
 Opening a chat calls `POST /api/chats/<thread>/read`. It marks each chat record to the Owner as read. A mail report keeps its own read state. The page stops the count for that chat. A read-only preview refuses the read, so the count stays.
 
@@ -1873,7 +1874,7 @@ While you read older messages, a round arrow-down button shows at the bottom rig
 
 ### Composer
 
-Select the round send button or press Enter to send the message. Select Shift and press Enter to make a new line. The text area grows with the text, up to 6 lines. The composer hides the scroll bar until the text is longer than 6 lines. A message holds at most 2000 characters. The service accepts at most 10 Owner messages a minute. The focus stays in the text area after a send.
+Select **Attach a picture** to choose pictures from your device. The picker can offer the camera and the photo library. Attach up to 6 pictures. Each picture can be at most 10 MB. Herdr Boss accepts JPEG, PNG, WebP, GIF, HEIC, and HEIF. It refuses a file that is too large or has an unsupported type before upload. Remove a picture from the strip to leave it out. Select the round send button or press Enter to send the message. You can send pictures without text. Select Shift and press Enter to make a new line. The text area grows with the text, up to 6 lines. The composer hides the scroll bar until the text is longer than 6 lines. A message holds at most 2000 characters. The service accepts at most 10 Owner messages a minute. The focus stays in the text area after a send.
 
 The page adds a `queued` bubble at once. The stored record replaces the bubble. A refused send marks the bubble `failed` and shows **Retry**. Select **Retry** to send the same text again. `POST /api/messages` is the only write path of the page.
 
@@ -2178,7 +2179,9 @@ The dashboard uses these routes. A request from another host needs the access to
 | `GET /api/pools` | List the pools. A `portEnv` entry shows `set`, never the value. |
 | `PUT /api/pools` | Create, update, or remove a config pool: `{ action, pool }`. A `portEnv` value of `null` keeps the stored value. An empty string clears it. The answer shows `set` flags only. Returns 409 when a holder uses a port that the change drops. |
 | `GET /api/messages?thread=THREAD` | The records of one thread, oldest first, at most 200. |
-| `POST /api/messages` | Queue an Owner message: `{ thread, kind, text }`. `kind` is `message`, `nudge`, or `status-request`. Returns 400 for invalid input, 404 for an unknown thread, and 429 above 10 sends a minute. |
+| `POST /api/attachments` | Upload raw picture bytes. Set `Content-Type` to `image/jpeg`, `image/png`, `image/webp`, `image/gif`, `image/heic`, or `image/heif`. Set `X-Filename` to the URL-encoded file name. The limit is 10 MB. The answer has the attachment ID and metadata. |
+| `GET /attachments/ID` | Read a picture by its attachment ID. A remote request needs login. HEIC and HEIF pictures download as files. |
+| `POST /api/messages` | Queue an Owner message: `{ thread, kind, text, attachments }`. `kind` is `message`, `nudge`, or `status-request`. `attachments` is an optional list of up to 6 uploaded IDs. A message can have pictures and no text. Returns 400 for invalid input, 404 for an unknown thread or picture, and 429 above 10 sends a minute. |
 | `POST /api/tick` | Collect now. |
 | `GET`, `POST`, `DELETE /api/avatars/SLUG` | Read, store, or remove the image of one avatar. The slug is `boss` or a project slug. `POST` takes the image as the body, at most 512 KB, and accepts only a PNG, JPEG, or WebP file. It returns 415 for any other format and 413 for a larger body. A read-only preview refuses the two write routes. |
 | `GET /bulletin.md` | The current bulletin. |

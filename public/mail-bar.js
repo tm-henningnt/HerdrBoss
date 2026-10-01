@@ -1,6 +1,7 @@
 // The phone bars of the Mailbox. On a phone the actions of the open item and of a selection sit in a bar at the bottom edge, in reach of the thumb.
 // The module has no DOM use, so the Node tests import it directly.
 import { reviewOpenLinkHtml } from './review.js';
+import { attachmentPickerHtml, attachmentStripHtml } from './attachment-ui.js';
 
 const OPEN_ACTIONS = new Set(['answer', 'approve', 'decide']);
 
@@ -35,9 +36,12 @@ export function mailSuggestionHtml(item, { esc, busy = false }) {
 
 // helpers: esc, icon(name), busy, draft (the typed text of the item), status, and noteOpen.
 export function mailActionBarHtml(item, helpers) {
-  const { esc, icon, busy = false, draft = '', status = '', noteOpen = false } = helpers;
+  const { esc, icon, busy = false, draft = '', status = '', noteOpen = false, attachments = [], attachmentNotice = '' } = helpers;
   const id = esc(item.id);
   const off = busy ? ' disabled' : '';
+  const attachContext = `mail-item:${item.id}`;
+  const attach = attachmentPickerHtml(attachContext, icon, esc, { disabled: busy });
+  const strip = attachmentStripHtml(attachContext, attachments, esc, attachmentNotice);
   const choices = item.action === 'decide' && item.choices?.length ? item.choices : null;
   const dismiss = `<button type="button" class="app-icon-button mail-bar-icon" data-mail-dismiss="${id}" aria-label="Dismiss" title="Dismiss without an answer"${off}>${icon('archive')}</button>`;
   const send = `<button type="submit" class="mail-bar-send" aria-label="Send"${off}>${icon('send')}</button>`;
@@ -51,18 +55,18 @@ export function mailActionBarHtml(item, helpers) {
     rows = `<div class="mail-bar-row">${review}${dismiss}</div>`;
   } else if (item.action === 'approve') {
     rows = `${noteShown ? `<div class="mail-bar-row mail-bar-compose">${field('Note (optional)', 1700, false, 'Note (optional)')}</div>` : ''}`
-      + `<div class="mail-bar-row"><button type="submit" class="mail-bar-primary" data-mail-verdict="Approved."${off}>Approve</button><button type="submit" class="mail-decline" data-mail-verdict="Rejected."${off}>Reject</button>${noteShown ? '' : note('Add a note')}${dismiss}</div>`;
+      + `<div class="mail-bar-row"><button type="submit" class="mail-bar-primary" data-mail-verdict="Approved."${off}>Approve</button><button type="submit" class="mail-decline" data-mail-verdict="Rejected."${off}>Reject</button>${attach}${noteShown ? '' : note('Add a note')}${dismiss}</div>`;
   } else if (choices) {
     const buttons = choices.map((choice) => `<button type="button" data-mail-choice="${esc(choice)}" data-mail-item="${id}"${off}>${esc(choice)}</button>`).join('');
-    rows = `<div class="mail-bar-row"><div class="mail-bar-choices" role="group" aria-label="Choices">${buttons}</div>${noteShown ? '' : note('Write another answer or a note')}${dismiss}</div>`
+    rows = `<div class="mail-bar-row"><div class="mail-bar-choices" role="group" aria-label="Choices">${buttons}</div>${attach}${noteShown ? '' : note('Write another answer or a note')}${dismiss}</div>`
       + (noteShown ? `<div class="mail-bar-row mail-bar-compose">${field('Other answer, or a note for the choice', 1700, false, 'Other answer or note…')}${send}</div>` : '');
   } else {
     const label = item.action === 'decide' ? 'Decision' : 'Answer';
-    rows = `<div class="mail-bar-row mail-bar-compose">${dismiss}${field(label, 2000, true, `${label}…`)}${send}</div>`;
+    rows = `<div class="mail-bar-row mail-bar-compose">${dismiss}${field(label, 2000, false, `${label}…`)}${attach}${send}</div>`;
   }
   const elsewhere = mailElsewhereButtonHtml(item, { esc, busy });
   if (elsewhere) rows += `<div class="mail-bar-row mail-bar-elsewhere">${elsewhere}</div>`;
-  return `<form class="mail-action-bar" data-key="mail-bar:${id}" data-mail-form="${id}" aria-label="Actions">${rows}<p class="mail-status" role="status">${esc(status)}</p></form>`;
+  return `<form class="mail-action-bar" data-key="mail-bar:${id}" data-mail-form="${id}" aria-label="Actions">${review ? '' : strip}${rows}<p class="mail-status" role="status">${esc(status)}</p></form>`;
 }
 
 // The selection bar replaces the New button while rows of Needs you are selected.

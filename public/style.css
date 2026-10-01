@@ -1242,9 +1242,31 @@ p.wizard-errors { padding-left: 10px; }
 .mail-message .msg-text, .mail-message .msg-report { margin: 0; overflow-wrap: anywhere; }
 .mail-message-state { margin: 0; color: var(--muted); font-size: 11.5px; overflow-wrap: anywhere; }
 .mail-message .mail-actions { border-top: 1px solid var(--line); padding-top: 9px; }
+.attachment-picker { display: inline-flex; flex: 0 0 44px; width: 44px; height: 44px; }
+:root button.attachment-open { display: grid; place-items: center; flex: 0 0 44px; width: 44px; height: 44px; min-height: 44px; padding: 0; border: 1px solid var(--line); border-radius: 50%; background: var(--panel-2); color: var(--text); }
+.attachment-open .app-icon { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; }
+.attachment-strip { min-width: 0; }
+.attachment-strip[hidden] { display: none; }
+.attachment-strip > ul { display: flex; gap: 7px; min-width: 0; margin: 0; padding: 2px 1px 4px; list-style: none; overflow-x: auto; overscroll-behavior-inline: contain; }
+.attachment-chip { position: relative; display: grid; grid-template-columns: 44px minmax(0, 1fr); grid-template-rows: 1fr auto; align-items: center; gap: 0 7px; flex: 0 0 150px; min-width: 0; min-height: 62px; padding: 5px 38px 5px 5px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); }
+.attachment-preview { display: grid; grid-row: 1 / 3; place-items: center; width: 44px; height: 50px; overflow: hidden; border-radius: 6px; background: var(--panel); color: var(--muted); font: 650 10px var(--mono); }
+.attachment-preview img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.attachment-file-icon { display: grid; flex: 0 0 36px; place-items: center; width: 36px; height: 36px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel-2); color: var(--muted); font: 650 10px var(--mono); }
+.attachment-chip-name { min-width: 0; overflow: hidden; color: var(--text); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.attachment-chip-state { min-width: 0; overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.attachment-chip.failed .attachment-chip-state, .attachment-notice { color: var(--crit); }
+.attachment-remove { position: absolute; top: 4px; right: 3px; display: grid; place-items: center; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 50%; background: var(--panel); color: var(--text); font-size: 20px; line-height: 1; }
+.attachment-notice { margin: 0 0 4px; font-size: 12px; }
+.message-attachments { display: flex; gap: 8px; max-width: 100%; margin: 6px 0 0; padding: 0; list-style: none; overflow-x: auto; }
+.message-attachment-thumb { display: block; width: 144px; height: 108px; overflow: hidden; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); }
+.message-attachment-thumb img { display: block; width: 144px; height: 108px; object-fit: cover; }
+.message-attachment-file { display: flex; align-items: center; gap: 8px; width: min(280px, 100%); min-height: 52px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); }
+.message-attachment-name { flex: 1 1 auto; min-width: 0; overflow: hidden; color: var(--text); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.message-attachment-file a { flex: 0 0 auto; font-size: 12px; }
 .mail-reply { display: grid; gap: 6px; flex: 0 0 auto; padding: 10px 12px 12px; border-top: 1px solid var(--line); background: var(--panel); }
+.mail-reply .attachment-strip { grid-column: 1 / -1; }
 .mail-reply label, .mail-compose label { color: var(--muted); font-size: 12px; }
-.mail-reply textarea, .mail-actions textarea, .mail-compose textarea, .mail-compose select { width: 100%; min-width: 0; padding: 9px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--text); font: inherit; }
+.mail-reply textarea, .mail-actions textarea, .mail-compose textarea, .mail-compose select { width: 100%; min-width: 0; padding: 9px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--text); font: 16px/1.4 var(--sans); }
 .mail-reply textarea, .mail-compose textarea { resize: vertical; }
 .mail-reply > div, .mail-compose-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .mail-reply button, .mail-compose-actions button { min-height: 44px; padding: 8px 18px; }
@@ -1317,7 +1339,7 @@ p.wizard-errors { padding-left: 10px; }
 .chat-jump-badge { position: absolute; top: -2px; right: -2px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--accent); color: var(--panel); font: 650 10.5px/18px var(--mono); text-align: center; box-sizing: border-box; }
 .chat-composer { display: grid; gap: 3px; flex: 0 0 auto; padding: 6px 10px calc(6px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: var(--panel); }
 .chat-composer-row { display: flex; align-items: flex-end; gap: 6px; }
-.chat-composer textarea { flex: 1 1 auto; min-width: 0; min-height: 34px; max-height: calc(1.4em * 6); padding: 7px 10px; border: 1px solid var(--line); border-radius: 17px; background: var(--bg); color: var(--text); font: 15px/1.4 var(--sans); resize: none; overflow-y: hidden; }
+.chat-composer textarea { flex: 1 1 auto; min-width: 0; min-height: 34px; max-height: calc(1.4em * 6); padding: 7px 10px; border: 1px solid var(--line); border-radius: 17px; background: var(--bg); color: var(--text); font: 16px/1.4 var(--sans); resize: none; overflow-y: hidden; }
 /* The scroll bar of the composer shows only when the text is longer than 6 lines. */
 .chat-composer textarea.chat-overflow { overflow-y: auto; scrollbar-width: thin; }
 /* A round send button of 36 px. The touch area is 44 px on a phone. */

@@ -16,6 +16,7 @@ import { createWizard } from './project-wizard-ui.js';
 import { goalSetBlockHtml, goalDialogHtml, goalJobRunning, goalStatusText, pollGoalStatus } from './goal-set.js';
 import { buildDraftShares, draftSignature, shareTotal, distributeRemainder, moveShares, totalHtml, checkSave, confirmText, sumConfirmText, allocationFooterHtml, staleRowHtml } from './allocation-draft.js';
 import { stackedBars, lineChart, stripBars, outcomeBars, legendHtml, foldSeries, spendSeries, claudeSpend, quotaSeries, firstTimeRate, activityFilter, activityChoices, eventLevel, dayLabel, usd, minutes, compact, ACTIVITY_RANGES, ACTIVITY_LEVELS, SERIES_CLASSES, DENIAL_RANGES, DEFAULT_DENIAL_RANGE, denialRange, denialSeries, denialMarkers, denialDetailsHtml, denialLegendHtml, policyChangesTitle, policyChangesListHtml, policyChangesDetailsHtml, lockWaitSeries, lockWaitDetailsHtml, lockAdmissionHtml } from './analytics.js';
+import { ATTACHMENT_LIMIT, attachmentFileError, attachmentStripState, attachmentPickerHtml, attachmentStripHtml } from './attachment-ui.js';
 
 const $app = document.getElementById('app');
 // A visual check can force a theme with ?theme=light or ?theme=dark. Without it, the page follows the system.
@@ -2689,11 +2690,23 @@ function mailDeliveryState(m) {
   return 'queued';
 }
 
+function messageAttachmentsHtml(attachments) {
+  const pictures = (Array.isArray(attachments) ? attachments : []).filter((item) => /^att_[0-9a-f]{32}$/.test(item?.id || '')).map((item) => {
+    const url = `/attachments/${item.id}`;
+    const name = item.name || 'Picture';
+    if (item.type === 'image/heic' || item.type === 'image/heif') {
+      return `<li class="message-attachment-file"><span class="attachment-file-icon" aria-hidden="true">IMG</span><span class="message-attachment-name">${esc(name)}</span><a href="${url}" download="${esc(name)}">Download</a></li>`;
+    }
+    return `<li><a class="message-attachment-thumb" href="${url}" target="_blank" rel="noopener noreferrer" aria-label="Open picture ${esc(name)}"><img src="${url}" alt="${esc(name)}" width="144" height="108" loading="lazy" decoding="async"></a></li>`;
+  }).join('');
+  return pictures ? `<ul class="message-attachments" aria-label="Pictures">${pictures}</ul>` : '';
+}
+
 // Each record body is safe Markdown. A report also shows its title when the text does not start with it.
 function messageBody(m) {
-  if (m.kind !== 'report') return markdownBlock(m.text, 'msg-text');
+  if (m.kind !== 'report') return `${markdownBlock(m.text, 'msg-text')}${messageAttachmentsHtml(m.attachments)}`;
   const title = m.title && /^#{1,6}\s+(.*)/.exec(String(m.text).trimStart())?.[1]?.trim() !== m.title ? `<h3>${esc(m.title)}</h3>` : '';
-  return `<div class="md msg-report">${title}${safeMarkdownHtml(m.text)}</div>`;
+  return `<div class="md msg-report">${title}${safeMarkdownHtml(m.text)}</div>${messageAttachmentsHtml(m.attachments)}`;
 }
 
 function messageItem(m) {
@@ -2800,6 +2813,103 @@ const mailbox = { needsYou: [], inbox: [], updates: [], sent: [], done: [], upda
 const mailReading = new Set();
 const mailSelected = new Set();
 const mailDrafts = {};
+const attachmentDrafts = new Map();
+const attachmentNotices = new Map();
+let attachmentSequence = 0;
+
+function attachmentItems(context) {
+  if (!attachmentDrafts.has(context)) attachmentDrafts.set(context, []);
+  return attachmentDrafts.get(context);
+}
+
+function attachmentPicker(context) {
+  return attachmentPickerHtml(context, appIcon, esc);
+}
+
+function attachmentStrip(context) {
+  return attachmentStripHtml(context, attachmentItems(context), esc, attachmentNotices.get(context) || '');
+}
+
+function attachmentSendState(context) {
+  const items = attachmentItems(context);
+  const state = attachmentStripState(items);
+  if (state.uploading) return { error: 'Wait for picture uploads to finish.', ids: [], descriptors: [] };
+  if (state.failed) return { error: 'Remove failed pictures before sending.', ids: [], descriptors: [] };
+  return {
+    error: '',
+    ids: state.ids,
+    descriptors: items.filter((item) => item.status === 'ready' && item.id).map(({ id, type, size, name }) => ({ id, type, size, name })),
+  };
+}
+
+function clearAttachmentDraft(context) {
+  for (const item of attachmentDrafts.get(context) || []) if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
+  attachmentDrafts.delete(context);
+  attachmentNotices.delete(context);
+}
+
+function attachmentRender() {
+  render();
+}
+
+async function uploadAttachment(context, item) {
+  try {
+    const response = await fetch('/api/attachments', {
+      method: 'POST',
+      headers: { 'Content-Type': item.file.type, 'X-Filename': encodeURIComponent(item.file.name || 'picture') },
+      body: item.file,
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || 'The picture could not be uploaded.');
+    if (!/^att_[0-9a-f]{32}$/.test(result.id || '')) throw new Error('The picture upload returned an invalid id.');
+    const current = attachmentItems(context).find((candidate) => candidate.key === item.key);
+    if (!current) return;
+    Object.assign(current, result, { status: 'ready', error: '' });
+  } catch (error) {
+    const current = attachmentItems(context).find((candidate) => candidate.key === item.key);
+    if (!current) return;
+    current.status = 'failed';
+    current.error = error.message || 'The picture could not be uploaded.';
+  }
+  attachmentRender();
+}
+
+function chooseAttachmentFiles(input) {
+  const context = input.dataset.attachmentInput;
+  const files = [...(input.files || [])];
+  input.value = '';
+  if (!context || !files.length) return;
+  const items = attachmentItems(context);
+  let full = false;
+  const uploads = [];
+  for (const file of files) {
+    if (items.length >= ATTACHMENT_LIMIT) { full = true; break; }
+    const key = `picture-${Date.now()}-${++attachmentSequence}`;
+    const type = String(file.type || '').toLowerCase().split(';')[0].trim();
+    const previewUrl = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(type) ? URL.createObjectURL(file) : '';
+    const error = attachmentFileError(file);
+    const item = { key, file, name: file.name || 'Picture', type, size: file.size, previewUrl, status: error ? 'failed' : 'uploading', error };
+    items.push(item);
+    if (!error) uploads.push(item);
+  }
+  attachmentNotices.set(context, full ? 'You can attach up to 6 pictures.' : '');
+  attachmentRender();
+  for (const item of uploads) uploadAttachment(context, item);
+}
+
+function removeAttachment(value) {
+  const split = value.lastIndexOf(':');
+  if (split < 1) return;
+  const context = value.slice(0, split);
+  const key = value.slice(split + 1);
+  const items = attachmentItems(context);
+  const index = items.findIndex((item) => item.key === key);
+  if (index < 0) return;
+  if (items[index].previewUrl) URL.revokeObjectURL(items[index].previewUrl);
+  items.splice(index, 1);
+  attachmentNotices.delete(context);
+  attachmentRender();
+}
 
 function resolveMailboxFolder(requested, remembered, needsYouCount) {
   if (MAIL_FOLDERS.includes(requested)) return requested;
@@ -2843,17 +2953,20 @@ function mailActions(item) {
   const id = esc(item.id);
   const off = mailbox.busy ? ' disabled' : '';
   const status = `<p class="mail-status" role="status">${esc(mailbox.status[item.id] || '')}</p>`;
+  const attachContext = `mail-item:${item.id}`;
+  const attachments = attachmentStrip(attachContext);
+  const attach = attachmentPickerHtml(attachContext, appIcon, esc, { disabled: mailbox.busy });
   const dismiss = `<div class="mail-dismiss-row"><button type="button" data-mail-dismiss="${id}"${off}>Dismiss</button>${mailElsewhereButtonHtml(item, { esc, busy: mailbox.busy })}</div>`;
   if (item.action === 'approve') {
-    return `<form class="mail-actions" data-mail-form="${id}">${mailField(item, 'Note (optional)', 1700, false)}
-      <div class="mail-buttons"><button type="submit" data-mail-verdict="Approved."${off}>Approve</button><button type="submit" class="mail-decline" data-mail-verdict="Rejected."${off}>Reject</button></div>${dismiss}${status}</form>`;
+    return `<form class="mail-actions" data-mail-form="${id}">${attachments}${mailField(item, 'Note (optional)', 1700, false)}
+      <div class="mail-buttons">${attach}<button type="submit" data-mail-verdict="Approved."${off}>Approve</button><button type="submit" class="mail-decline" data-mail-verdict="Rejected."${off}>Reject</button></div>${dismiss}${status}</form>`;
   }
   const choices = item.action === 'decide' && item.choices?.length
     ? `<div class="mail-choices" role="group" aria-label="Choices">${item.choices.map((choice) => `<button type="button" data-mail-choice="${esc(choice)}" data-mail-item="${id}"${off}>${esc(choice)}</button>`).join('')}</div>`
     : '';
   const label = item.action === 'decide' ? (choices ? 'Other answer, or a note for the choice' : 'Decision') : 'Answer';
-  return `<form class="mail-actions" data-mail-form="${id}">${choices}${mailField(item, label, choices ? 1700 : 2000, !choices)}
-    <div class="mail-buttons"><button type="submit"${off}>Send</button></div>${dismiss}${status}</form>`;
+  return `<form class="mail-actions" data-mail-form="${id}">${attachments}${choices}${mailField(item, label, choices ? 1700 : 2000, false)}
+    <div class="mail-buttons">${attach}<button type="submit"${off}>Send</button></div>${dismiss}${status}</form>`;
 }
 
 function mailDoneLine(item) {
@@ -2912,6 +3025,7 @@ const APP_ICON = {
   chat: '<path d="M4 5.5h16v11H9l-5 4v-15Z"/>',
   help: '<circle cx="12" cy="12" r="8.5"/><path d="M9.6 9.5a2.5 2.5 0 1 1 3.4 2.3c-.6.3-1 .8-1 1.5v.4m0 2.6v.01"/>',
   close: '<path d="M6 6l12 12M18 6 6 18"/>',
+  attach: '<path d="m8.5 12.5 6.2-6.2a3.2 3.2 0 0 1 4.5 4.5l-8.1 8.1a5 5 0 0 1-7.1-7.1l8.1-8.1"/><path d="m7.2 16.8 8.1-8.1"/>',
   down: '<path d="M12 5v14M6 13l6 6 6-6"/>',
   archive: '<path d="M3.5 5h17v4h-17z"/><path d="M5 9v10h14V9M10 13h4"/>',
 };
@@ -2931,7 +3045,10 @@ const threadTitleTag = () => appPhone() ? 'h1' : 'h2';
 const mailNoteOpen = new Set();
 
 // The phone action bar of the open item.
-const mailBar = (item) => mailActionBarHtml(item, { esc, icon: appIcon, busy: mailbox.busy, draft: mailDrafts[item.id] || '', status: mailbox.status[item.id] || '', noteOpen: mailNoteOpen.has(item.id) });
+const mailBar = (item) => {
+  const context = `mail-item:${item.id}`;
+  return mailActionBarHtml(item, { esc, icon: appIcon, busy: mailbox.busy, draft: mailDrafts[item.id] || '', status: mailbox.status[item.id] || '', noteOpen: mailNoteOpen.has(item.id), attachments: attachmentItems(context), attachmentNotice: attachmentNotices.get(context) || '' });
+};
 
 // The menu button of the phone app bar. A dot shows unread items on the other page.
 function appMenuButton(s, route) {
@@ -3057,7 +3174,7 @@ function mailComposeView(s) {
   const titleTag = threadTitleTag();
   const projects = Object.values(s.control?.projects || {}).filter((project) => project.orch?.pane).map((project) => ({ thread: project.slug, name: project.label || project.slug }));
   const options = [{ thread: 'boss', name: 'Boss' }, ...projects].map((item) => `<option value="${esc(item.thread)}"${mailbox.composeThread === item.thread ? ' selected' : ''}>${esc(item.name)}</option>`).join('');
-  return `<section class="mail-compose"><div class="app-bar mail-panel-head"><button type="button" class="app-icon-button mail-back" data-mail-back aria-label="Back to ${esc(MAIL_FOLDER_LABEL[mailbox.folder])}">${appIcon('back')}</button><${titleTag}>New message</${titleTag}></div><form data-mail-compose><label for="mail-compose-recipient">To</label><select id="mail-compose-recipient" name="thread">${options}</select><label for="mail-compose-text">Message</label><textarea id="mail-compose-text" data-mail-compose-draft maxlength="2000" rows="8" required>${esc(mailbox.composeDraft)}</textarea><div class="mail-compose-actions"><button type="submit"${mailbox.busy ? ' disabled' : ''}>Send</button></div><p class="mail-status" role="status">${esc(mailbox.status.compose || '')}</p></form></section>`;
+  return `<section class="mail-compose"><div class="app-bar mail-panel-head"><button type="button" class="app-icon-button mail-back" data-mail-back aria-label="Back to ${esc(MAIL_FOLDER_LABEL[mailbox.folder])}">${appIcon('back')}</button><${titleTag}>New message</${titleTag}></div><form data-mail-compose data-mail-attachment-context="mail-compose"><label for="mail-compose-recipient">To</label><select id="mail-compose-recipient" name="thread">${options}</select><label for="mail-compose-text">Message</label>${attachmentStrip('mail-compose')}<textarea id="mail-compose-text" data-mail-compose-draft maxlength="2000" rows="8">${esc(mailbox.composeDraft)}</textarea><div class="mail-compose-actions">${attachmentPickerHtml('mail-compose', appIcon, esc, { disabled: mailbox.busy })}<button type="submit"${mailbox.busy ? ' disabled' : ''}>Send</button></div><p class="mail-status" role="status">${esc(mailbox.status.compose || '')}</p></form></section>`;
 }
 
 // An open answer, approve, or decide item shows its own form in the conversation. The Reply form then does not show, so the item has one form and one Send button.
@@ -3069,6 +3186,7 @@ function mailReplyFormShown(records, find) {
 
 function mailConversationView(s) {
   const selected = mailbox.currentConversation;
+  const replyContext = `mail-reply:${selected.thread}:${selected.id}`;
   const records = mailbox.conversationRecords;
   // On a phone the actions of the open item sit in a bar at the bottom edge. On a desktop they stay in the message.
   const barItem = appPhone() ? mailBarItem(records, mailFind) : null;
@@ -3078,7 +3196,7 @@ function mailConversationView(s) {
   const lastAgent = [...records].reverse().find((record) => ['boss', 'orch'].includes(record.from) && record.to === 'owner');
   const replyTo = lastAgent && !lastAgent.closedAt ? lastAgent.id : '';
   const titleTag = threadTitleTag();
-  return `<section class="mail-reading"><div class="app-bar mail-panel-head"><button type="button" class="app-icon-button mail-back" data-mail-back aria-label="Back to ${esc(MAIL_FOLDER_LABEL[mailbox.folder])}">${appIcon('back')}</button>${avatarSlot(selected.thread, { title: avatarTitle(selected.thread), size: 28 })}<${titleTag}>${esc(title)}</${titleTag}></div><div class="mail-conversation-scroll" data-key="mail-thread:${esc(selected.thread)}:${esc(selected.id)}">${messages}</div>${barItem ? mailBar(barItem) : mailReplyFormShown(records, mailFind) ? `<form class="mail-reply" data-mail-reply data-mail-thread="${esc(selected.thread)}" data-mail-reply-to="${esc(replyTo)}"><label for="mail-reply-text">Reply</label><textarea id="mail-reply-text" data-mail-reply-draft maxlength="2000" rows="3" required placeholder="Reply…">${esc(mailbox.replyDraft)}</textarea><div><span class="sub">${replyTo ? 'Replies to the last message.' : 'Starts a new message in this thread.'}</span><button type="submit"${mailbox.busy ? ' disabled' : ''}>Send</button></div><p class="mail-status" role="status">${esc(mailbox.status.reply || '')}</p></form>` : ''}</section>`;
+  return `<section class="mail-reading"><div class="app-bar mail-panel-head"><button type="button" class="app-icon-button mail-back" data-mail-back aria-label="Back to ${esc(MAIL_FOLDER_LABEL[mailbox.folder])}">${appIcon('back')}</button>${avatarSlot(selected.thread, { title: avatarTitle(selected.thread), size: 28 })}<${titleTag}>${esc(title)}</${titleTag}></div><div class="mail-conversation-scroll" data-key="mail-thread:${esc(selected.thread)}:${esc(selected.id)}">${messages}</div>${barItem ? mailBar(barItem) : mailReplyFormShown(records, mailFind) ? `<form class="mail-reply" data-mail-reply data-mail-thread="${esc(selected.thread)}" data-mail-reply-to="${esc(replyTo)}" data-mail-attachment-context="${esc(replyContext)}"><label for="mail-reply-text">Reply</label>${attachmentStrip(replyContext)}<textarea id="mail-reply-text" data-mail-reply-draft maxlength="2000" rows="3" placeholder="Reply…">${esc(mailbox.replyDraft)}</textarea><div><span class="sub">${replyTo ? 'Replies to the last message.' : 'Starts a new message in this thread.'}</span>${attachmentPickerHtml(replyContext, appIcon, esc, { disabled: mailbox.busy })}<button type="submit"${mailbox.busy ? ' disabled' : ''}>Send</button></div><p class="mail-status" role="status">${esc(mailbox.status.reply || '')}</p></form>` : ''}</section>`;
 }
 
 function mailConversationMessage(s, record, barItem) {
@@ -3122,12 +3240,20 @@ async function mailSendReply(form) {
   const thread = form.dataset.mailThread;
   const replyTo = form.dataset.mailReplyTo || null;
   const text = mailbox.replyDraft.trim();
-  if (!text || mailbox.busy || !confirm(`Send this reply to ${thread === 'boss' ? 'the Boss' : mailProject(state || {}, { thread })}?\n\n${text}`)) return;
+  const context = form.dataset.mailAttachmentContext;
+  const attached = attachmentSendState(context);
+  if (mailbox.busy) return;
+  if (attached.error) { mailbox.status.reply = attached.error; attachmentNotices.set(context, attached.error); render(); return; }
+  if (!text && !attached.ids.length) { mailbox.status.reply = 'Write a reply or attach a picture.'; render(); return; }
+  const recipient = thread === 'boss' ? 'the Boss' : mailProject(state || {}, { thread });
+  const content = text || `${attached.ids.length} picture${attached.ids.length === 1 ? '' : 's'}`;
+  if (!confirm(`Send this reply to ${recipient}?\n\n${content}`)) return;
   mailbox.busy = true;
   mailbox.status.reply = 'Sending…';
   render();
   try {
-    await postJson('/api/messages', { thread, kind: 'message', text, ...(replyTo ? { replyTo } : {}) });
+    await postJson('/api/messages', { thread, kind: 'message', text, ...(replyTo ? { replyTo } : {}), ...(attached.ids.length ? { attachments: attached.ids } : {}) });
+    clearAttachmentDraft(context);
     mailbox.replyDraft = '';
     mailbox.status.reply = 'Queued. Herdr Boss delivers it when the agent is working, idle, or done.';
     await loadMailbox();
@@ -3139,13 +3265,20 @@ async function mailSendReply(form) {
 async function mailSendNewMessage(form) {
   const thread = form.elements.thread.value;
   const text = mailbox.composeDraft.trim();
+  const context = form.dataset.mailAttachmentContext;
+  const attached = attachmentSendState(context);
+  if (mailbox.busy) return;
+  if (attached.error) { mailbox.status.compose = attached.error; attachmentNotices.set(context, attached.error); render(); return; }
+  if (!text && !attached.ids.length) { mailbox.status.compose = 'Write a message or attach a picture.'; render(); return; }
   const name = thread === 'boss' ? 'the Boss' : mailProject(state || {}, { thread });
-  if (!text || mailbox.busy || !confirm(`Send this message to ${name}?\n\n${text}`)) return;
+  const content = text || `${attached.ids.length} picture${attached.ids.length === 1 ? '' : 's'}`;
+  if (!confirm(`Send this message to ${name}?\n\n${content}`)) return;
   mailbox.busy = true;
   mailbox.status.compose = 'Sending…';
   render();
   try {
-    const result = await postJson('/api/messages', { thread, kind: 'message', text });
+    const result = await postJson('/api/messages', { thread, kind: 'message', text, ...(attached.ids.length ? { attachments: attached.ids } : {}) });
+    clearAttachmentDraft(context);
     mailbox.composeDraft = '';
     mailbox.composeThread = thread;
     mailbox.composing = false;
@@ -3177,10 +3310,18 @@ async function mailOpened(item) {
 }
 
 async function mailSend(item, text, question) {
-  if (mailbox.busy || !confirm(question)) return;
+  const context = `mail-item:${item.id}`;
+  const attached = attachmentSendState(context);
+  if (mailbox.busy) return;
+  if (attached.error) { mailbox.status[item.id] = attached.error; attachmentNotices.set(context, attached.error); render(); return; }
+  if (!text && !attached.ids.length) { mailbox.status[item.id] = 'Write an answer or attach a picture.'; render(); return; }
+  const who = mailItemLabel(state || {}, item);
+  const confirmQuestion = text ? question : `Send ${attached.ids.length} picture${attached.ids.length === 1 ? '' : 's'} to ${who}?`;
+  if (!confirm(confirmQuestion)) return;
   mailbox.busy = true; mailbox.status[item.id] = 'Sending…'; mailbox.notice = ''; render();
   try {
-    await postJson('/api/messages', { thread: item.thread, kind: 'message', text, replyTo: item.id });
+    await postJson('/api/messages', { thread: item.thread, kind: 'message', text, replyTo: item.id, ...(attached.ids.length ? { attachments: attached.ids } : {}) });
+    clearAttachmentDraft(context);
     delete mailDrafts[item.id];
     delete mailbox.status[item.id];
     mailbox.notice = `Queued for ${mailItemLabel(state || {}, item)}. Herdr Boss delivers it when the agent is working, idle, or done. The item is in Done.`;
@@ -3262,7 +3403,9 @@ document.addEventListener('input', (e) => {
   if (e.target.matches?.('[data-mail-reply-draft]')) { mailbox.replyDraft = e.target.value; if (appPhone()) chatGrowField(e.target); }
 });
 document.addEventListener('change', (e) => {
-  if (e.target.matches?.('[data-mail-select]')) {
+  if (e.target.matches?.('[data-attachment-input]')) {
+    chooseAttachmentFiles(e.target);
+  } else if (e.target.matches?.('[data-mail-select]')) {
     for (const id of e.target.dataset.mailSelect.split(',')) {
       if (e.target.checked) mailSelected.add(id);
       else mailSelected.delete(id);
@@ -3288,9 +3431,18 @@ document.addEventListener('submit', (e) => {
   const verdict = e.submitter?.dataset.mailVerdict;
   const who = mailItemLabel(state || {}, item);
   if (verdict) mailSend(item, note ? `${verdict} ${note}` : verdict, `Send "${verdict}" to ${who}?${note ? `\n\n${note}` : ''}`);
-  else if (note) mailSend(item, note, `Send this answer to ${who}?\n\n${note}`);
+  else mailSend(item, note, `Send this answer to ${who}?\n\n${note}`);
 });
 document.addEventListener('click', (e) => {
+  const attachOpen = e.target.closest?.('[data-attachment-open]');
+  if (attachOpen) {
+    const context = attachOpen.dataset.attachmentOpen;
+    const input = [...$app.querySelectorAll('[data-attachment-input]')].find((candidate) => candidate.dataset.attachmentInput === context);
+    input?.click();
+    return;
+  }
+  const removePicture = e.target.closest?.('[data-attachment-remove]');
+  if (removePicture) { removeAttachment(removePicture.dataset.attachmentRemove); return; }
   if (e.target.closest?.('[data-mail-compose-open]')) {
     mailbox.composing = true;
     mailbox.currentConversation = null;
@@ -3544,6 +3696,7 @@ function chatRow(item) {
 function chatConversationView() {
   const title = chatTitle(chat.thread);
   const titleTag = threadTitleTag();
+  const attachmentContext = `chat:${chat.thread}`;
   const bubbles = chat.loadingThread && !chat.messages.length
     ? '<p class="chat-empty">Loading messages…</p>'
     : chat.messages.length || chat.pending.length
@@ -3551,7 +3704,7 @@ function chatConversationView() {
       : '<p class="chat-empty">No messages in this chat.</p>';
   const older = chat.more ? `<p class="chat-more">${chat.moreLoading ? 'Loading older messages…' : 'Scroll up for older messages.'}</p>` : '';
   const jump = chatJumpHtml({ visible: chat.scroll !== null, unread: chat.unseen, icon: appIcon });
-  return `<div class="chat-panel"><div class="app-bar chat-panel-head"><button type="button" class="app-icon-button chat-back" data-chat-back aria-label="Back to chats">${appIcon('back')}</button>${avatarSlot(chat.thread, { title: avatarTitle(chat.thread, title), size: 28 })}<${titleTag}>${esc(title)}</${titleTag}><a class="app-icon-button chat-mail-link" href="/mailbox?folder=inbox" aria-label="Open the Mailbox">${appIcon('mail')}</a></div><div class="chat-scroll" data-key="chat-scroll:${esc(chat.thread)}" data-chat-scroll tabindex="0">${older}${bubbles}</div>${jump}<form class="chat-composer" data-key="chat-composer" data-chat-compose><label class="visually-hidden" for="chat-draft">Message to ${esc(title)}</label><div class="chat-composer-row"><textarea id="chat-draft" data-chat-draft maxlength="2000" rows="1" placeholder="Message…">${esc(chat.draft)}</textarea><button type="submit" class="chat-send" aria-label="Send"${chat.busy ? ' disabled' : ''}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 20 21 12 3.5 4v6l12 2-12 2v6Z"/></svg></button></div><p class="chat-hint">Enter sends · Shift+Enter makes a new line</p></form></div>`;
+  return `<div class="chat-panel"><div class="app-bar chat-panel-head"><button type="button" class="app-icon-button chat-back" data-chat-back aria-label="Back to chats">${appIcon('back')}</button>${avatarSlot(chat.thread, { title: avatarTitle(chat.thread, title), size: 28 })}<${titleTag}>${esc(title)}</${titleTag}><a class="app-icon-button chat-mail-link" href="/mailbox?folder=inbox" aria-label="Open the Mailbox">${appIcon('mail')}</a></div><div class="chat-scroll" data-key="chat-scroll:${esc(chat.thread)}" data-chat-scroll tabindex="0">${older}${bubbles}</div>${jump}<form class="chat-composer" data-key="chat-composer" data-chat-compose><label class="visually-hidden" for="chat-draft">Message to ${esc(title)}</label>${attachmentStrip(attachmentContext)}<div class="chat-composer-row"><textarea id="chat-draft" data-chat-draft maxlength="2000" rows="1" placeholder="Message…">${esc(chat.draft)}</textarea>${attachmentPicker(attachmentContext)}<button type="submit" class="chat-send" aria-label="Send"${chat.busy ? ' disabled' : ''}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 20 21 12 3.5 4v6l12 2-12 2v6Z"/></svg></button></div><p class="chat-hint">Enter sends · Shift+Enter makes a new line</p></form></div>`;
 }
 
 // The same rule as parseChoices in src/messages.js: the Markdown list items under a Choices heading.
@@ -3653,8 +3806,9 @@ function chatBubble(record, startOfRun = false) {
   const text = isCard ? chatQuestionText(record.text) : record.text;
   const action = !owner && record.action ? `<a class="chat-action-link" href="/mailbox?thread=${encodeURIComponent(record.thread)}">Open in Mailbox</a>` : '';
   const retry = record.local && record.error ? `<p class="chat-bubble-retry"><button type="button" data-chat-retry="${esc(record.id)}">Retry</button></p>` : '';
+  const pictures = messageAttachmentsHtml(record.attachments);
   const label = esc(chatBubbleLabel(sender, { ...record, text }, state));
-  const content = `<div class="chat-bubble-text md">${safeMarkdownHtml(text)}</div><p class="chat-bubble-meta"><span class="chat-bubble-time">${esc(clock(record.at))}</span>${state ? ` <span class="chat-state${tone}">${esc(state)}</span>` : ''}</p>${card}${action}${retry}`;
+  const content = `${text ? `<div class="chat-bubble-text md">${safeMarkdownHtml(text)}</div>` : ''}${pictures}<p class="chat-bubble-meta"><span class="chat-bubble-time">${esc(clock(record.at))}</span>${state ? ` <span class="chat-state${tone}">${esc(state)}</span>` : ''}</p>${card}${action}${retry}`;
   // The avatar of the other party shows on the first bubble of a run of messages from that sender.
   if (!owner && startOfRun) return `<li class="chat-entry" data-key="msg:${esc(record.id)}" data-chat-bubble="${esc(record.id)}" aria-label="${label}">${avatarSlot(record.thread, { title: avatarTitle(record.thread), size: 20 })}<div class="chat-bubble from-agent${card ? ' chat-card' : ''}" data-chat-bubble="${esc(record.id)}" aria-label="${label}">${content}</div></li>`;
   return `<li class="chat-bubble${owner ? ' from-owner' : ' from-agent'}${startOfRun ? ' run-start' : ''}${card ? ' chat-card' : ''}" data-key="msg:${esc(record.id)}" data-chat-bubble="${esc(record.id)}" aria-label="${label}">${content}</li>`;
@@ -3824,21 +3978,26 @@ function chatUpsertRecord(record) {
 // The page shows a queued bubble at once. A refused send marks it failed and offers a retry.
 async function chatSend(retry = null) {
   const thread = chat.thread;
+  const attachmentContext = `chat:${thread}`;
   const field = $app.querySelector('[data-chat-draft]');
   const text = String(retry ? retry.text : field ? field.value : chat.draft).trim();
-  if (!thread || !text || chat.busy) return;
-  const pending = retry || { id: `local-${Date.now()}-${chat.pending.length}`, local: true, thread, from: 'owner', at: new Date().toISOString(), text, status: 'queued', error: '' };
+  const attached = retry ? { ids: (retry.attachments || []).map((item) => item.id), descriptors: retry.attachments || [], error: '' } : attachmentSendState(attachmentContext);
+  if (!thread || chat.busy) return;
+  if (attached.error) { chat.status = attached.error; attachmentNotices.set(attachmentContext, attached.error); render(); return; }
+  if (!text && !attached.ids.length) { chat.status = 'Write a message or attach a picture.'; render(); return; }
+  const pending = retry || { id: `local-${Date.now()}-${chat.pending.length}`, local: true, thread, from: 'owner', at: new Date().toISOString(), text, attachments: attached.descriptors, status: 'queued', error: '' };
   pending.status = 'queued';
   pending.error = '';
   chat.busy = true;
   chat.draft = '';
   chat.status = 'Sending…';
   if (field) field.value = '';
+  if (!retry) clearAttachmentDraft(attachmentContext);
   chat.pending = [...chat.pending.filter((item) => item.id !== pending.id), pending];
   chat.scroll = null;
   render();
   try {
-    const result = await postJson('/api/messages', { thread, kind: 'message', text });
+    const result = await postJson('/api/messages', { thread, kind: 'message', text, ...(attached.ids.length ? { attachments: attached.ids } : {}) });
     chat.pending = chat.pending.filter((item) => item.id !== pending.id);
     chatUpsertRecord(result.message);
     chat.status = 'Queued. Herdr Boss delivers the message when the agent is working, idle, or done.';
@@ -5614,13 +5773,14 @@ const HELP = {
     <h3>Folders</h3><p><b>Needs you</b> is the default folder when an open item needs an answer, approval, or decision. <b>Inbox</b> holds the open Needs-you items and the unread information items: Needs you first, then reports and updates. <b>Reports and updates</b> holds unread information items with action <code>read</code> or no action. Opening an information item marks it read and moves it to Done. <b>Done</b> holds read information items, closed or dismissed items, and relayed messages. <b>Sent</b>, below the divider, holds your messages with the queued, delivered, failed, or relayed state and the reply time.</p>
     <p>The folder stays in the page address. The page remembers your last folder. When Needs you has items, it opens that folder by default. When it is empty, the page says <b>Nothing needs you</b> and links to the Inbox.</p>
     <h3>Rows</h3><p>Each row is one conversation. It shows the project or the Boss, the message count, the action tag, the subject, a preview, and the time. An unread row is bold and has a dot. Select a row to open the conversation. Select one or more check boxes in Needs you to dismiss items without an answer. The page asks you to confirm. Dismissal sends nothing. Select <b>Close as answered elsewhere</b> (the check-mark button on a row) when you answered the item in another place. The item moves to Done and no message goes out.</p><p>An item also closes when the project publishes a status in which its task no longer waits on you. When you write to the same thread after an item arrived, the item asks <b>Close this item?</b>. Select <b>Keep open</b> to hide the question for that item.</p>
-    <h3>Conversations</h3><p>The conversation shows Owner and agent messages in time order. Your answer to an item stays in the conversation of that item, with its time and its delivery state. The Chat does not show it. Each message and each report shows as formatted Markdown. Opening an item marks it read. On a desktop the conversation opens at the right of the list. On a phone it fills the screen. Select the Back arrow to return to the list.</p>
+    <h3>Conversations</h3><p>The conversation shows Owner and agent messages in time order. Your answer to an item stays in the conversation of that item, with its time and its delivery state. The Chat does not show it. Each message and each report shows as formatted Markdown. A picture shows as a thumbnail. Select it to open the full picture. HEIC and HEIF pictures show as file links. Select <b>Download</b> to save one. Opening an item marks it read. On a desktop the conversation opens at the right of the list. On a phone it fills the screen. Select the Back arrow to return to the list.</p>
     <h3>Refresh</h3><p>The page reads new data every 30 seconds. It changes only the rows and messages that changed. It keeps the open conversation, the selection, the typed text, the caret, and the scroll position. The refresh waits until 3 seconds after you last type or scroll.</p>
+    <p>Select <b>Attach a picture</b> to choose pictures from your device. Attach up to 6 pictures. Each picture can be at most 10 MB. Herdr Boss accepts JPEG, PNG, WebP, GIF, HEIC, and HEIF. It refuses a file that is too large or has an unsupported type before upload. Remove a picture from the strip to leave it out. You can send pictures with text or without text.</p>
     <p>Use the reply box to answer the last agent message. When that message is an open item, its own form replaces the reply box. The page asks you to confirm each send. Herdr Boss delivers the message when the agent is working, idle, or done.</p>
     <h3>Markdown</h3><p>The page shows headings, bold, italic, lists, task lists, tables, code, quotes, rules, and links. A wide table or code block scrolls sideways in its own box. Raw HTML shows as text. A link opens only when it uses <code>http</code>, <code>https</code>, or <code>mailto</code>, or a local path. An external link opens in a new tab.</p>
     <h3>Actions</h3><p><b>Answer</b>: type an answer and select <b>Send</b>. <b>Approve</b>: select <b>Approve</b> or <b>Reject</b>. A note is optional. <b>Decide</b>: select a choice, or type an answer and select <b>Send</b>. Choice buttons appear when the message has a Markdown list under a <b>Choices</b> heading. A review pack item has <b>Open review</b> in place of the answer form. The submit of the review closes the item. Each answer uses the same delivery limit and safety checks as a new message. An answered item moves to <b>Done</b>.</p>
-    <h3>Compose</h3><p>Select <b>New message</b> to write to the Boss or a project with an <code>orch</code> pane. The page asks you to confirm before it sends. The new conversation opens in <b>Sent</b>.</p>
-    <h3>Phone</h3><p>The Mailbox fills the screen. The page header does not show. Select the menu button at the top left to open the drawer with the folders, the other pages, and Help. The drawer has no Chat entry: use the Chat icon in the slim bar. A dot on the menu button shows unread chats. Select <b>New</b> at the bottom right to write a message. The Needs action icon in the top bar shows the open Needs-you items.</p><p>In a conversation, the actions of the open item sit in a bar at the bottom edge. An approval has <b>Approve</b>, <b>Reject</b>, a note button, and <b>Dismiss</b>. A decision has its choice buttons, a note button, and <b>Dismiss</b>. The choice buttons wrap onto more rows, so each choice stays in view. An answer has <b>Dismiss</b>, the answer field, and <b>Send</b>. Each bar has a last row with <b>Close as answered elsewhere</b>. The note button opens a text field. When the keyboard opens, the bar stays above it.</p><p>In Needs you, select a check box to start a selection. The selection bar replaces <b>New</b> at the bottom edge. It shows the count, a button to clear the selection, <b>All</b>, and <b>Dismiss</b> with the count.</p>
+    <h3>Compose</h3><p>Select <b>New message</b> to write to the Boss or a project with an <code>orch</code> pane. Write text or attach a picture. The page asks you to confirm before it sends. The new conversation opens in <b>Sent</b>.</p>
+    <h3>Phone</h3><p>The Mailbox fills the screen. The page header does not show. Select the menu button at the top left to open the drawer with the folders, the other pages, and Help. The drawer has no Chat entry: use the Chat icon in the slim bar. A dot on the menu button shows unread chats. Select <b>New</b> at the bottom right to write a message. The Needs action icon in the top bar shows the open Needs-you items.</p><p>In a conversation, the actions of the open item sit in a bar at the bottom edge. An approval has <b>Approve</b>, <b>Reject</b>, a note button, <b>Attach a picture</b>, and <b>Dismiss</b>. A decision has its choice buttons, a note button, <b>Attach a picture</b>, and <b>Dismiss</b>. The choice buttons wrap onto more rows, so each choice stays in view. An answer has <b>Dismiss</b>, the answer field, <b>Attach a picture</b>, and <b>Send</b>. Each bar has a last row with <b>Close as answered elsewhere</b>. The note button opens a text field. When the keyboard opens, the bar stays above it.</p><p>In Needs you, select a check box to start a selection. The selection bar replaces <b>New</b> at the bottom edge. It shows the count, a button to clear the selection, <b>All</b>, and <b>Dismiss</b> with the count.</p>
     <p>The folder pane shows the fixed limits: Herdr Boss keeps messages for 30 days and accepts at most 10 Owner messages a minute. A read-only preview shows messages and refuses a read or a send.</p>`],
   reviews: ['Reviews', `
     <p>A project sends you a review pack when it needs your decision on evidence: screenshots, text, tables, or a live check. Each item of the pack asks one question. You answer the items, write a note for the whole pack, and submit one result. The result goes to the project orchestrator.</p>
@@ -5644,16 +5804,16 @@ const HELP = {
     <h3>Top bar</h3><p>The top bar has three icons: chat unread, mail unread, and open action items. An icon with nothing to show is faded and has no count. An icon with something to show is bright and shows the count. <b>Needs action</b> is the most visible icon. The three icons are on a desktop and on a phone. The menu has no Mailbox entry and no Chat entry. Select the Chat icon to open the Chat. Select the mail icon or the Needs action icon to open the Mailbox. The icon of the open page has a mark. On a phone the Mailbox, the Chat, and the Reviews hide the top bar. Their slim bar at the top shows the same three icons at the right of the title.</p>
     <h3>Layout</h3><p>The chat is compact. A bubble has slim padding and no card frame. The time is 11 px. The composer is one line and grows to 6 lines. Its send button is a round button. A list row is 72 px high. The first line holds the title and the time. The second line holds the last message and the unread badge. The row keeps a touch target of at least 44 px on a phone.</p>
     <h3>List</h3><p>Each row shows the title, the last message on one line, the time, and the unread count. A report shows as <b>Report: TITLE</b>. The newest chat comes first. The Chat icon in the top bar shows the total unread count. The list follows the message stream. It never reloads the page. The automatic refresh keeps the list and conversation scroll. It waits until 3 seconds after you last type or scroll.</p>
-    <h3>Conversation</h3><p>Select a row to open the chat. Your messages sit on the right, and the agent messages sit on the left. Each bubble shows the text as formatted Markdown and the time. A wide table or code block scrolls sideways inside the bubble. Raw HTML shows as text. Your bubble also shows the delivery state: <b>queued</b>, <b>delivered</b>, or <b>failed</b> with the reason. Opening a chat marks the messages to you as read.</p>
+    <h3>Conversation</h3><p>Select a row to open the chat. Your messages sit on the right, and the agent messages sit on the left. Each bubble shows the text as formatted Markdown and the time. A wide table or code block scrolls sideways inside the bubble. Raw HTML shows as text. Pictures show as thumbnails with a fixed size. Select one to open the full picture. HEIC and HEIF pictures show as file links. Select <b>Download</b> to save one. Your bubble also shows the delivery state: <b>queued</b>, <b>delivered</b>, or <b>failed</b> with the reason. Opening a chat marks the messages to you as read.</p>
     <p>Scroll up to read older messages. The page asks for the page before the oldest message and keeps your reading position. It stops at the oldest message in the store. The store keeps messages for 30 days.</p>
     <p>A new message goes at the bottom. The page scrolls down only when you already read the newest message. Otherwise the page keeps your position and shows a round arrow-down button at the bottom right of the message list. The badge on the button counts the new messages. Select the button to scroll to the newest message. The button hides at the bottom.</p>
-    <h3>Composer</h3><p>Select the round send button or press Enter to send the message. Select Shift and press Enter to make a new line. The text area grows with the text, up to 6 lines. A message holds at most 2000 characters. The service accepts at most 10 messages a minute.</p><p>For an iPhone layout check, open Chat with <code>?vvdebug=1</code> and send a screenshot to the Boss.</p>
+    <h3>Composer</h3><p>Select <b>Attach a picture</b> to choose pictures from your device. Attach up to 6 pictures. Each picture can be at most 10 MB. Herdr Boss accepts JPEG, PNG, WebP, GIF, HEIC, and HEIF. It refuses a file that is too large or has an unsupported type before upload. Remove a picture from the strip to leave it out. You can send pictures without text.</p><p>Select the round send button or press Enter to send the message. Select Shift and press Enter to make a new line. The text area grows with the text, up to 6 lines. A message holds at most 2000 characters. The service accepts at most 10 messages a minute.</p><p>For an iPhone layout check, open Chat with <code>?vvdebug=1</code> and send a screenshot to the Boss.</p>
     <p>The page shows your message as <b>queued</b> at once. The stored record replaces it when the service stores it. A refused send marks the bubble <b>failed</b> and shows <b>Retry</b>. Select <b>Retry</b> to send the same text again.</p>
     <h3>Action cards</h3><p>A message from an agent that asks for a decision shows as a normal bubble with one small button per option. The bubble holds a short question line. The page drops the choice list from the text, because the buttons hold the choices. A message with no real choice shows as a plain bubble with the <b>Open in Mailbox</b> link.</p>
     <p><b>Approve</b> and <b>Reject</b> answer an approval. <b>Later</b> only collapses the card. It writes nothing, and the Mailbox item stays open. A <b>decide</b> message with a Markdown list under a <b>Choices</b> heading shows one button for each choice. A decide with the choices <b>Yes</b> and <b>No</b> shows those two buttons. An <b>answer</b> message shows a one-line text field and <b>Send</b>.</p>
     <p>The card uses the same send route as the Mailbox. The item closes and the bubble shows the result, for example <b>Approved 22:05</b>. A closed item shows as a normal bubble with the result of the answer that closed it. Select <b>Open in Mailbox</b> to see the item in the Mailbox.</p>
     <h3>Keyboard</h3><p>The chat list is a list of buttons. The arrow keys, <b>Home</b>, and <b>End</b> move through the rows. Enter opens a chat. The focus then goes to the message field. <b>Escape</b> goes back to the list, and the focus goes to the row of the chat that was open. The message list is a live region, so a screen reader reads each new message once. Each bubble has a name with the sender, the time, the text, and the state.</p>
-    <h3>Phone</h3><p>The Chat fills the screen. The page header does not show. Select the menu button to open the drawer with the other pages and Help. The drawer has no Mailbox entry: use the mail icon or the Needs action icon in the slim bar. Select a chat to open it full screen. The slim bar has the Back arrow. When the keyboard opens, the composer stays above it. The card buttons and the send button are at least 44 px.</p>
+    <h3>Phone</h3><p>The Chat fills the screen. The page header does not show. Select the menu button to open the drawer with the other pages and Help. The drawer has no Mailbox entry: use the mail icon or the Needs action icon in the slim bar. Select a chat to open it full screen. The slim bar has the Back arrow. When the keyboard opens, the composer stays above it. The attach and send buttons are at least 44 px.</p>
     <p>A read-only preview shows the chats and refuses a send. It also refuses a read, so the unread count stays.</p>`],
   allocation: ['Allocation', `
     <p>The resource policy for all projects. Changes are a draft until you select <b>Apply policy</b>.</p>
