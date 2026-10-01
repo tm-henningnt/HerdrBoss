@@ -97,7 +97,10 @@ export async function probeBrowser(port, { stepMs = STEP_MS, totalMs = TOTAL_MS,
       await holder.session.send('Browser.getVersion');
     })(), limit(), 'getVersion timed out', 'getVersion failed');
     const session = holder.session;
-    await step(session.send('Target.getTargets'), limit(), 'getTargets timed out', 'getTargets failed');
+    const targets = await step(session.send('Target.getTargets'), limit(), 'getTargets timed out', 'getTargets failed');
+    const pageTargets = Array.isArray(targets?.targetInfos) ? targets.targetInfos.filter((info) => info?.type === 'page' && typeof info.targetId === 'string') : [];
+    const pageIds = pageTargets.map((info) => info.targetId);
+    const attachedTabIds = pageTargets.filter((info) => info.attached === true).map((info) => info.targetId);
     holder.creating = session.send('Target.createTarget', { url: 'about:blank', background: true }).then((result) => {
       holder.created = result.targetId || null;
       if (holder.created) probeTabs.set(holder.created, Date.now());
@@ -111,7 +114,7 @@ export async function probeBrowser(port, { stepMs = STEP_MS, totalMs = TOTAL_MS,
       return (await session.send('Runtime.evaluate', { expression: '1+1', returnByValue: true }, sessionId))?.result?.value;
     })(), limit(), 'evaluate did not return', 'evaluate failed');
     if (value !== 2) throw new StepError('evaluate returned a wrong value');
-    return finish({ ok: true });
+    return finish({ ok: true, pageIds, attachedTabIds, attachedClientCount: attachedTabIds.length });
   } catch (error) {
     return finish({ ok: false, reason: error instanceof StepError ? error.reason : 'probe failed' });
   }
@@ -149,7 +152,7 @@ async function closeTemporaryTab({ port, holder, cleanupMs, fetchImpl }) {
   return `The probe tab ${id} on port ${port} did not close.`;
 }
 
-const freshState = () => ({ notResponding: false, lastProbeAt: null, reason: null, failures: 0, since: null });
+const freshState = () => ({ ok: null, notResponding: false, lastProbeAt: null, reason: null, failures: 0, since: null, pageIds: null, attachedTabIds: null, attachedClientCount: null });
 
 // Track the probe state of each managed browser. tick() returns the state at once and starts a background probe when one is due.
 // A browser is due when it is active, no probe of it runs, and the last probe started at least intervalMs ago.
@@ -160,6 +163,10 @@ export function createBrowserProbes({ probe = probeBrowser, intervalMs = PROBE_I
 
   function start(record, browser, now) {
     record.startedAt = now;
+    record.state.ok = null;
+    record.state.pageIds = null;
+    record.state.attachedTabIds = null;
+    record.state.attachedClientCount = null;
     running.add(record);
     const work = (async () => {
       let result;
@@ -167,8 +174,17 @@ export function createBrowserProbes({ probe = probeBrowser, intervalMs = PROBE_I
       for (const warning of Array.isArray(result?.warnings) ? result.warnings : []) { try { onWarning(warning, browser); } catch {} }
       const state = record.state;
       state.lastProbeAt = new Date(now).toISOString();
-      if (result?.ok) Object.assign(state, { notResponding: false, reason: null, failures: 0, since: null });
+      if (result?.ok) Object.assign(state, {
+        ok: true, notResponding: false, reason: null, failures: 0, since: null,
+        pageIds: Array.isArray(result.pageIds) ? result.pageIds.filter((id) => typeof id === 'string') : null,
+        attachedTabIds: Array.isArray(result.attachedTabIds) ? result.attachedTabIds.filter((id) => typeof id === 'string') : null,
+        attachedClientCount: Number.isSafeInteger(result.attachedClientCount) && result.attachedClientCount >= 0 ? result.attachedClientCount : null,
+      });
       else {
+        state.ok = false;
+        state.pageIds = null;
+        state.attachedTabIds = null;
+        state.attachedClientCount = null;
         state.failures++;
         state.reason = typeof result?.reason === 'string' ? result.reason : 'probe failed';
         if (state.failures >= failuresToMark && !state.notResponding) { state.notResponding = true; state.since = state.lastProbeAt; }

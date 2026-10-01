@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
 import { DATA_DIR, LIVE_DATA_DIR, dashboardUrl, serviceSettingsView } from './config.js';
-import { collectHerdr, collectQuotas, collectMachine, collectProcesses, collectCwdProcesses, collectMissingWorktreeProcesses, collectWorktreeCounts, collectPiModels, findBrowsers, cpuUse, keepStaleRows, run } from './collect.js';
+import { collectHerdr, collectQuotas, collectMachine, collectProcesses, collectCwdProcesses, collectMissingWorktreeProcesses, collectWorktreeCounts, collectPiModels, collectBrowserClients, findBrowsers, cpuUse, keepStaleRows, run } from './collect.js';
 import { evaluate, swapWarnStep, renderBulletin, fmtDuration, providerName, broadcastTargets, staleStatuses } from './rules.js';
 import { listProjects } from './projects.js';
 import { checkHarness, readProjectRepos } from './harness.js';
@@ -15,8 +15,10 @@ import { scanSpend, SPEND_SCAN_INTERVAL_MS } from './spend.js';
 import { quotaUsageToday, recordQuotaSnapshot, readUsage } from './usage.js';
 import { renderNightReport } from './night-report.js';
 import { adhocOneLine, effectiveRoutines, routinePromptText, slotAfter, slotEnd } from './watch-routines.js';
-import { listBrowserSessions, cdpResponds, browserProcessCheck } from './browser-pool.js';
-import { probeBrowser, createBrowserProbes } from './browser-probe.js';
+import { listBrowserSessions, cdpResponds, browserProcessCheck, closeBrowser } from './browser-pool.js';
+import { agentBrowserTabIds } from './browser-activity.js';
+import { probeBrowser, createBrowserProbes, PROBE_INTERVAL_MS } from './browser-probe.js';
+import { inspectUncollectedWorkers, processDueWorkerPaneCloses, shouldCloseManagedBrowser, trackBrowserIdle } from './maintenance.js';
 import { readLeases, reclaimLeases, publicLease, publicPool, reclaimNoticeText, hasIdleRule, tcpListening, tcpListeningAsync, leasePools, migrateProjectBrowserLeases, reconcileUnleasedListeners, unleasedNoticeText, markUnleasedNotified, listenerPid, processCwd, processLabel, projectWorktreeRoot } from './leases.js';
 import { codeSignCloneDir, sweepCodeSignClones } from './clone-sweep.js';
 import { runDenialScan, readDenials, denialSummary, DENIAL_SCAN_INTERVAL_MS, SCAN_BUDGET_BYTES, RETAIN_DAYS, RISE_FACTOR, RISE_MIN_EVENTS } from './denials.js';
@@ -194,6 +196,25 @@ function readActiveWorkerRuns() {
     }
   }
   return runs;
+}
+
+function readWorkerRunForClose(job) {
+  const project = readProjectRepos(DATA_DIR).find((entry) => entry.slug === job.project);
+  if (!project) return null;
+  let config;
+  try { config = loadProjectConfig({ cwd: project.repo }); } catch { return null; }
+  const relative = path.relative(config.mainRoot, config.runsPath);
+  if (relative.startsWith('..') || path.isAbsolute(relative)) return null;
+  try {
+    const directory = fs.lstatSync(config.runsPath);
+    if (!directory.isDirectory() || directory.isSymbolicLink()) return null;
+    const file = path.join(config.runsPath, `${job.name}.json`);
+    const stat = fs.lstatSync(file);
+    if (!stat.isFile() || stat.isSymbolicLink()) return null;
+    const run = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (run?.name !== job.name || workerRunId(run, job.project) !== job.runId) return null;
+    return { ...run, project: job.project };
+  } catch { return null; }
 }
 
 // Keep one timer across idle and done states. A working or other state ends the idle period.
@@ -568,9 +589,11 @@ export class Engine extends EventEmitter {
       collectCwdProcesses,
       collectMissingWorktreeProcesses,
       collectWorktreeCounts,
+      collectBrowserClients: process.env.NODE_TEST_CONTEXT ? async () => null : collectBrowserClients,
       cdpResponds,
       // A test engine never probes a real browser port unless a test injects a probe.
       probeBrowser: process.env.NODE_TEST_CONTEXT ? async () => ({ ok: true }) : probeBrowser,
+      closeBrowser,
       probeTcp: tcpListening,
       probePort: tcpListeningAsync,
       codeSignCloneDir,
@@ -795,6 +818,17 @@ export class Engine extends EventEmitter {
           this.memory.agentResponseObserved = responses.observed;
         } catch (error) { errors.push(`agent responses: ${error.code || 'error'}`); }
       }
+      if (this.act && currentHerdrSnapshot && currentPaneList) {
+        try {
+          await processDueWorkerPaneCloses({
+            panes: herdr.panes,
+            now,
+            readRun: readWorkerRunForClose,
+            closePane: async (pane) => checkHerdrResponse(await this.herdrRunner('herdr', ['pane', 'close', pane])),
+            onError: (job, error) => this.log('error', `Worker pane close for ${job.name} failed: ${String(error?.stderr || error?.message || error).slice(0, 200)}`, { project: job.project }),
+          });
+        } catch (error) { errors.push(`worker pane close queue: ${error.message}`); }
+      }
       if (this.act) {
         try {
           const handoffs = listHandoffs();
@@ -832,8 +866,49 @@ export class Engine extends EventEmitter {
       // A browser that started less than 120 seconds ago gets no probe, as in the offline check below.
       // The CDP round trip runs in the background, at most once a minute for each browser, and only on an acting tick.
       const managedBrowsers = await Promise.all(browserSessions.map(async (b) => {
-        const matched = browsers.some((x) => x.kind === 'automation-chrome' && x.port === String(b.port) && x.profile === b.profile);
+        const browser = browsers.find((x) => x.kind === 'automation-chrome' && x.port === String(b.port) && x.profile === b.profile);
+        const matched = !!browser;
         const probe = this.browserProbes.tick({ key: `${b.project}:${b.port}:${b.launchedAt || ''}`, project: b.project, port: b.port, active: matched && this.act && !(b.launchedAt && now - Date.parse(b.launchedAt) < 120000) }, now);
+        const probedAt = Date.parse(probe.lastProbeAt);
+        const freshProbe = probe.ok === true && Number.isFinite(probedAt) && now - probedAt <= PROBE_INTERVAL_MS * 2 ? probe : null;
+        let clientCount = null;
+        if (matched && this.act && b.launchedAt && (this.cfg.browser?.idleCloseMinutes ?? 20) > 0) {
+          try { clientCount = await this.collectors.collectBrowserClients(b.port, { servicePid: process.pid, browserPid: browser.pid }); }
+          catch {}
+        }
+        let agentTabIds = [];
+        try { agentTabIds = agentBrowserTabIds(b.project); } catch {}
+        const idle = trackBrowserIdle(this.memory.browserIdle || {}, b, { probe: freshProbe, clientCount, agentTabIds }, {
+          now, idleCloseMinutes: this.cfg.browser?.idleCloseMinutes ?? 20,
+        });
+        this.memory.browserIdle = idle.state;
+        if (this.act && shouldCloseManagedBrowser({ session: b, matched, closeDue: idle.closeDue })) {
+          try {
+            const closed = await this.collectors.closeBrowser(b.project, {
+              beforeClose: async (session) => {
+                let latest;
+                let latestClients = null;
+                try { latest = await this.collectors.probeBrowser(session.port); } catch {}
+                try { latestClients = await this.collectors.collectBrowserClients(session.port, { servicePid: process.pid, browserPid: browser.pid }); } catch {}
+                let currentAgentTabs = [];
+                try { currentAgentTabs = agentBrowserTabIds(b.project); } catch {}
+                const guard = trackBrowserIdle(this.memory.browserIdle || {}, session, {
+                  probe: latest,
+                  clientCount: latestClients,
+                  agentTabIds: currentAgentTabs,
+                }, { now: Date.now(), idleCloseMinutes: this.cfg.browser?.idleCloseMinutes ?? 20 });
+                this.memory.browserIdle = guard.state;
+                return guard.closeDue;
+              },
+            });
+            if (closed?.closed) {
+              delete this.memory.browserIdle[b.project];
+              this.log('browser-idle-close', `Closed idle project browser ${b.project} after ${this.cfg.browser?.idleCloseMinutes ?? 20} minutes.`, { project: b.project, port: b.port });
+            }
+          } catch (error) {
+            this.log('error', `Could not close idle browser ${b.project}: ${String(error?.message || error).slice(0, 200)}`, { project: b.project, port: b.port });
+          }
+        }
         return { ...b, responsive: matched ? await this.collectors.cdpResponds(b.port) : false, notResponding: probe.notResponding, probeAt: probe.lastProbeAt, probeReason: probe.reason, probeSince: probe.since };
       }));
       const night = readNight({ dataDir: DATA_DIR, now });
@@ -930,6 +1005,14 @@ export class Engine extends EventEmitter {
       this.memory.workerFailures = workerTransitions.failures;
       this.memory.exhaustedFreeModels ||= {};
       const workerRuns = this.communicationRuns;
+      const uncollectedTransitions = herdr && currentHerdrSnapshot && currentPaneList ? inspectUncollectedWorkers({
+        panes: herdr.panes,
+        runs: workerRuns,
+        observed: this.memory.uncollectedWorkers,
+        now,
+        minutes: this.cfg.workers?.uncollectedNoticeMinutes ?? 30,
+      }) : { observed: this.memory.uncollectedWorkers || {}, notices: [] };
+      this.memory.uncollectedWorkers = uncollectedTransitions.observed;
       const reportTransitions = herdr ? await inspectWorkerReports(
         herdr.panes, this.memory.workerReportObserved, now, undefined,
         this.collectors.readWorkerScreen || ((args) => run('herdr', args, { timeout: 10000 })),
@@ -1110,6 +1193,7 @@ export class Engine extends EventEmitter {
       evaluation.alerts.push(...this.contextHandoverAlerts(control, herdr, now));
       evaluation.alerts.push(...workerTransitions.notices);
       evaluation.alerts.push(...reportTransitions.notices);
+      evaluation.alerts.push(...uncollectedTransitions.notices);
       evaluation.alerts.push(...noReportTransitions.notices);
       if (this.act) {
         if (!this.kitNoticeRead) {
@@ -2649,7 +2733,7 @@ export class Engine extends EventEmitter {
         }
         for (const o of targets) {
           const rec = this.memory.pushes[`${a.key}@${o.id}`];
-          const projectRec = isStaleStatusAlert(a) ? this.memory.pushes[`${a.key}@project`] : null;
+          const projectRec = isStaleStatusAlert(a) || a.key.startsWith('workers:uncollected:') ? this.memory.pushes[`${a.key}@project`] : null;
           const due = alertPromptDue(a, projectRec || rec, now, cooldown);
           if (!due) continue;
           let alert = a;
@@ -2704,7 +2788,7 @@ export class Engine extends EventEmitter {
           for (const a of list) {
             const record = { at: now, severity: a.severity };
             this.memory.pushes[`${a.key}@${o.id}`] = record;
-            if (isStaleStatusAlert(a)) this.memory.pushes[`${a.key}@project`] = record;
+            if (isStaleStatusAlert(a) || a.key.startsWith('workers:uncollected:')) this.memory.pushes[`${a.key}@project`] = record;
           }
           if (info.some((a) => !isKitAlert(a))) this.memory.infoPrompts[o.id] = now;
           const kitSent = list.find((a) => isKitAlert(a));

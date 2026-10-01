@@ -1,4 +1,5 @@
 import { isProbeTab } from './browser-probe.js';
+import { forgetAgentBrowserTab, recordAgentBrowserTab } from './browser-activity.js';
 import { browserStatus, listBrowserSessions, listBrowserTabViewports, setBrowserTabViewport } from './browser-pool.js';
 
 async function verifiedSession(project) {
@@ -88,6 +89,7 @@ export async function browserNewTab(project, url = 'about:blank') {
   const session = await verifiedSession(project);
   const result = await command(await browserEndpoint(session), 'Target.createTarget', { url: tabUrl(url), newWindow: true, background: true });
   if (!result?.targetId) throw new Error('Browser did not open a new tab.');
+  try { recordAgentBrowserTab(project, result.targetId); } catch {}
   return { id: result.targetId };
 }
 
@@ -97,6 +99,7 @@ export async function browserCloseTab(project, tabId, { force = false } = {}) {
   if (!force && (await attachedTargets(session)).has(tabId)) throw new Error('An agent is attached to this tab. Close it when that agent is done, or pass --force.');
   const result = await command(await browserEndpoint(session), 'Target.closeTarget', { targetId: tabId });
   if (result?.success === false) throw new Error('Browser did not close the tab.');
+  try { forgetAgentBrowserTab(project, tabId); } catch {}
   setBrowserTabViewport(project, tabId, null);
   return { closed: tabId };
 }

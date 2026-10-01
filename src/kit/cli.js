@@ -17,7 +17,7 @@ import { createWaitHerdr, parseWaitArgs, waitForWorkers } from './wait.js';
 
 const USAGE = `Kit commands:
   worker start <name> --kind <kind> (--task TEXT | --task-file FILE) [--task-id ID] [--lease POOL]... [options]
-  worker collect <name> [--no-record] [--outcome done|partial|failed --gate-passed|--gate-failed]
+  worker collect <name> [--no-record] [--keep-pane] [--outcome done|partial|failed --gate-passed|--gate-failed]
   worker list
   wait [<worker>...] [--timeout SECONDS] [--stall SECONDS]
   worker park <name> --reason TEXT | worker unpark <name>
@@ -99,7 +99,7 @@ function herdrAgentName(agent) { return agent?.name ?? agent?.agent_name ?? null
 function herdrPaneId(value) { return value?.pane_id ?? value?.paneId ?? value?.id ?? null; }
 function herdrWorkspace(value) { return value?.workspace_id ?? value?.workspaceId ?? value?.workspace ?? null; }
 
-function commandKit(command, argv, { output = console.log, env = process.env, herdr = null, config: injectedConfig = null, rulesFile = DEFAULT_RULES_FILE, lockDataDir, now, pause, pidAlive, pushStdio, suiteStdio } = {}) {
+function commandKit(command, argv, { output = console.log, env = process.env, herdr = null, config: injectedConfig = null, serviceConfig: injectedServiceConfig = null, schedulePaneCloseFn, rulesFile = DEFAULT_RULES_FILE, lockDataDir, now, pause, pidAlive, pushStdio, suiteStdio } = {}) {
   herdr ??= command === 'wait' ? createWaitHerdr(createHerdrRunner) : createHerdrRunner();
   if (command === 'models') {
     const modelConfig = mergeModels(loadModels(), rulesPolicy(rulesFile));
@@ -332,13 +332,16 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
       return parkWorker(positional[0], { reason: flags.reason, unpark: action === 'unpark' }, { config, herdr, output });
     }
     if (action === 'collect') {
-      const { positional, flags } = parseArgs(rest, { boolean: ['--record', '--no-record', '--gate-passed', '--gate-failed'] });
+      const { positional, flags } = parseArgs(rest, { boolean: ['--record', '--no-record', '--gate-passed', '--gate-failed', '--keep-pane'] });
       if (positional.length !== 1) fail('Usage: worker collect <name> [options]');
-      knownFlags(flags, ['record', 'norecord', 'outcome', 'gatepassed', 'gatefailed', 'defects', 'rework', 'modelresult', 'modelreason']);
+      knownFlags(flags, ['record', 'norecord', 'outcome', 'gatepassed', 'gatefailed', 'keeppane', 'defects', 'rework', 'modelresult', 'modelreason']);
       if (flags.record && flags.norecord) fail('Use either --record or --no-record, not both.');
+      const serviceConfig = injectedServiceConfig ?? loadConfig();
       return collectWorker(positional[0], {
         record: flags.record,
         noRecord: flags.norecord,
+        keepPane: flags.keeppane,
+        paneCloseDelayMinutes: serviceConfig.workers?.paneCloseDelayMinutes ?? 2,
         outcome: flags.outcome,
         gatePassed: flags.gatepassed,
         gateFailed: flags.gatefailed,
@@ -346,7 +349,7 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
         rework: flags.rework == null ? 0 : Number(flags.rework),
         modelResult: flags.modelresult || null,
         modelReason: flags.modelreason || null,
-      }, { config, output });
+      }, { config, output, schedulePaneCloseFn });
     }
     if (action === 'allow') {
       const { positional, flags } = parseArgs(rest);

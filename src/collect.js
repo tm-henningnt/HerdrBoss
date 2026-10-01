@@ -329,6 +329,16 @@ export async function collectCwdProcesses() {
   return parseCwdProcesses(output);
 }
 
+// Count connected CDP clients from the process table. The browser process and this service process are not agents.
+export async function collectBrowserClients(port, { runner = run, servicePid = process.pid, browserPid = null } = {}) {
+  if (!Number.isSafeInteger(Number(port)) || Number(port) < 1 || Number(port) > 65535) return null;
+  const output = await runner('lsof', ['-nP', `-iTCP:${Number(port)}`, '-sTCP:ESTABLISHED', '-Fp'], { timeout: 3000 });
+  const pids = new Set([...String(output).matchAll(/^p(\d+)$/gm)].map((match) => Number(match[1])));
+  pids.delete(Number(servicePid));
+  if (Number.isSafeInteger(Number(browserPid))) pids.delete(Number(browserPid));
+  return pids.size;
+}
+
 function parseEtime(s) {
   // [[dd-]hh:]mm:ss
   let days = 0;

@@ -1649,8 +1649,11 @@ test('worker collect records by default when the orchestrator gives the review r
   assert.throws(() => collectWorker('collect-default', {}, {
     config: f.config, output: () => {}, listWorktreeProcesses: () => [], recordUsageFn: () => ({ errors: [] }),
   }), /Use --no-record to read the report without a ledger entry\./);
-  const summary = collectWorker('collect-default', { outcome: 'done', gatePassed: true }, {
-    config: f.config, now: Date.parse('2026-10-01T12:00:00Z'), output: () => {}, listWorktreeProcesses: () => [], recordUsageFn: () => ({ errors: [] }),
+  const scheduled = [];
+  const collectionNow = Date.parse('2026-10-01T12:00:00Z');
+  const summary = collectWorker('collect-default', { outcome: 'done', gatePassed: true, paneCloseDelayMinutes: 2 }, {
+    config: f.config, now: collectionNow, output: () => {}, listWorktreeProcesses: () => [], recordUsageFn: () => ({ errors: [] }),
+    schedulePaneCloseFn: (entry) => scheduled.push(entry),
   });
 
   assert.equal(summary.name, 'collect-default');
@@ -1658,8 +1661,36 @@ test('worker collect records by default when the orchestrator gives the review r
   assert.equal(record.outcome, 'done');
   assert.equal(record.finishedAt, '2026-10-01T12:00:00.000Z');
   assert.equal(record.collectedAt, '2026-10-01T12:00:00.000Z');
+  assert.deepEqual(scheduled, [{
+    project: f.config.slug,
+    name: 'collect-default',
+    runId: workerRunId(record, f.config.slug),
+    dueAt: collectionNow + 2 * 60_000,
+  }]);
   assert.equal(readWorkerFacts(f.config.runsPath, { isLive: () => false, isMerged: () => false })[0].phase, 'review');
   assert.equal(fs.readFileSync(f.config.ledgerPath, 'utf8').trim().split('\n').length, 1);
+});
+
+test('worker collect --keep-pane does not schedule a pane close', (t) => {
+  const f = setupFixture(null);
+  const run = startWorker('collect-keep-pane', { kind: 'codex', task: 'x', taskId: 'T1', allow: ['src/'] }, {
+    config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+  });
+  cleanWorkerRun(t, f, run);
+  writeWorkerReport(run);
+  const scheduled = [];
+
+  const summary = runKitCommand('worker', ['collect', 'collect-keep-pane', '--outcome', 'done', '--gate-passed', '--keep-pane'], {
+    config: f.config,
+    env: f.env,
+    herdr: f.herdr,
+    output: () => {},
+    serviceConfig: { workers: { paneCloseDelayMinutes: 2 } },
+    schedulePaneCloseFn: (entry) => scheduled.push(entry),
+  });
+
+  assert.equal(summary.name, 'collect-keep-pane');
+  assert.deepEqual(scheduled, []);
 });
 
 test('worker collect --no-record reads the report and changes no run or ledger record', (t) => {
@@ -1697,13 +1728,16 @@ test('a refused worker collect closes nothing and writes no ledger entry', (t) =
   cleanWorkerRun(t, f, run);
   writeWorkerReport(run, { changedPaths: ['outside.js'] });
   const before = fs.readFileSync(run.recordFile, 'utf8');
+  const scheduled = [];
 
   assert.throws(() => collectWorker('collect-refused', { outcome: 'done', gatePassed: true }, {
     config: f.config, output: () => {}, listWorktreeProcesses: () => [], recordUsageFn: () => ({ errors: [] }),
+    schedulePaneCloseFn: (job) => scheduled.push(job),
   }), /changed paths outside its allowed scope/);
 
   assert.equal(fs.readFileSync(run.recordFile, 'utf8'), before);
   assert.equal(fs.existsSync(f.config.ledgerPath), false);
+  assert.deepEqual(scheduled, [], 'a refused collect schedules no pane close');
 });
 
 test('worker collect refuses a symlink report.md', (t) => {

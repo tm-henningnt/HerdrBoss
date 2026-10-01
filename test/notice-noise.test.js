@@ -240,6 +240,23 @@ test('a worker report notice has one key per report path across mtime changes', 
   assert.notEqual(otherRun[0].key, first[0].key, 'a new report path gets a new key');
 });
 
+test('an uncollected worker notice reaches one project orchestrator once per run', (t) => {
+  const alert = {
+    key: 'workers:uncollected:worker:alpha:demo:2026-09-27T11:00:00.000Z',
+    severity: 'warn', scope: 'w1', immediate: true, once: true, noDesktop: true,
+    title: 'Worker demo is done and not collected',
+    text: 'Worker demo has been done for 30 minutes. Run herdr-boss worker collect demo.',
+  };
+  const replacementOrch = { ...orch(), id: 'w1:p2' };
+  const prompts = deliverRounds(t, [
+    { alerts: [alert], panes: [orch()] },
+    { alerts: [alert], panes: [replacementOrch] },
+  ]);
+  assert.equal(prompts.length, 1);
+  assert.equal(prompts[0].pane, 'w1:p1');
+  assert.match(prompts[0].text, /Worker demo.*30 minutes.*herdr-boss worker collect demo/);
+});
+
 test('a rewritten report reaches the orchestrator once', async (t) => {
   const panes = [orch('idle'), { id: 'w1:p2', workspace: 'w1', agent: 'claude', name: 'alpha', cwd: '/tmp/wt-alpha', status: 'done' }];
   const observed = { 'w1:p2': { agent: 'claude', name: 'alpha', sessionId: null, firstSeen: NOW - 10 * MIN,

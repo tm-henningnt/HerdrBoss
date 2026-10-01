@@ -48,6 +48,22 @@ test('every service setting has an explanation', () => {
   for (const { setting } of serviceSettingsView({})) assert.ok(SETTING_HELP[setting], `${setting} has no explanation`);
 });
 
+test('worker and browser maintenance settings have editable rows and help text', () => {
+  const expected = {
+    'workers.paneCloseDelayMinutes': { range: '0 to 60', default: '2' },
+    'workers.uncollectedNoticeMinutes': { range: '1 to 1440', default: '30' },
+    'browser.idleCloseMinutes': { range: '0 to 1440', default: '20' },
+  };
+  for (const [setting, values] of Object.entries(expected)) {
+    const help = SETTING_HELP[setting];
+    assert.ok(help, `${setting} has help text`);
+    assert.equal(help.group, 'service');
+    assert.equal(help.range, values.range);
+    assert.equal(help.default, values.default);
+    assert.match(app, new RegExp(`['"]${setting.replaceAll('.', '\\.')}['"]\\s*:\\s*\\[`));
+  }
+});
+
 test('every explanation has all fields, a known group, and an apply mode', () => {
   const groups = new Set(SETTING_GROUPS.map((group) => group.id));
   for (const [id, item] of Object.entries(SETTING_HELP)) {
