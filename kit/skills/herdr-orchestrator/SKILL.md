@@ -215,7 +215,7 @@ herdr agent prompt <orch-pane> "WORKER REPORT <name>: <done|blocked|stopped>. Re
 - Put the two rules from [the review task rules](reference/review-tasks.md) in every review task brief.
 - Return focused findings to the same warm worker when it can repair them safely.
 - Re-run affected gates after every repair.
-- Run `herdr-boss worker collect <name> --record ...` after independent review and before merging the worker branch.
+- Run `herdr-boss worker collect <name> ...` after independent review and before merging the worker branch.
 - Update the issue with commands, results, evidence tier, remaining gaps, and the next frontier.
 - Close an issue only after its acceptance criteria and evidence are satisfied.
 
@@ -234,4 +234,3 @@ herdr agent prompt <orch-pane> "WORKER REPORT <name>: <done|blocked|stopped>. Re
 - Do not build a separate project dashboard.
 - Keep Herdr as live execution state and the issue tracker as durable work state.
 - Run `herdr-boss harness check` when a harness refuses routine work. Report missing entries to the Boss.
-

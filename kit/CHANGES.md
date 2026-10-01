@@ -101,3 +101,7 @@ Summary: Codex workers attach the Chrome DevTools MCP to the project browser. Th
 ## 3ffd68a69e47
 Impact: required
 Summary: Add CI minute rules and GitHub workflow templates; create and copy missing project workflows.
+
+## 2db88201b003
+Impact: useful
+Summary: Use default worker collection recording in kit and command documentation.

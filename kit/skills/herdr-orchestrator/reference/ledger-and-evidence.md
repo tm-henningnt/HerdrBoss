@@ -5,12 +5,13 @@ Read this file when you record a worker run, check the ledger, or decide which e
 ## Run ledger
 
 - Record every delegated run in the configured run ledger.
-- Use `herdr-boss worker collect <name> --record` to add a project usage event when the review is complete.
-- Run `herdr-boss worker collect <name> --record ...` after independent review and before merging the worker branch.
-- Record an outcome with `--record --outcome done|partial|failed` when ready.
+- Use `herdr-boss worker collect <name>` to add a project usage event when the review is complete.
+- Run `herdr-boss worker collect <name> ...` after independent review and before merging the worker branch.
+- Record an outcome with `--outcome done|partial|failed` when ready.
 - Record gate status with `--gate-passed` or `--gate-failed`.
 - Record defect and rework counts when the review found them.
 - `worker collect` uses the approved paths and copies the approval history into the ledger entry.
+- Collection records by default. Use `--no-record` only for a dry read of the report.
 - Record measured token counts in `.worker/report.json` under `usage` when the harness provides them.
 - Leave unknown token counts as `null`; do not estimate them from CodexBar percentages.
 - Record failed, timed-out, abandoned, and successful runs.

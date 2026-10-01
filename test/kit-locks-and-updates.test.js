@@ -540,7 +540,7 @@ test('Analytics page includes the Model scorecard table', async () => {
 test('project kit includes the model outcome rule', async () => {
   const fs = await import('fs');
   const kit = fs.readFileSync('kit/templates/project-kit.md', 'utf8');
-  assert.ok(kit.includes('worker collect --record --model-result'));
+  assert.ok(kit.includes('worker collect --model-result'));
   assert.ok(kit.includes('--model-reason'));
 });
 
