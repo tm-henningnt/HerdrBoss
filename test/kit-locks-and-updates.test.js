@@ -758,15 +758,15 @@ test('worker start saves the task id in the run record, accepts the issue alias,
   });
   const withTask = start('by-task', { taskId: 'B1a' });
   assert.equal(JSON.parse(fs.readFileSync(withTask.recordFile, 'utf8')).taskId, 'B1a');
-  assert.equal(lines.filter((line) => /has no task id/.test(line)).length, 0);
+  assert.equal(lines.filter((line) => /No --task-id/.test(line)).length, 0);
   const withIssue = start('by-issue', { issue: '7' });
   const issueRecord = JSON.parse(fs.readFileSync(withIssue.recordFile, 'utf8'));
   assert.equal(issueRecord.issue, 7);
   assert.equal(issueRecord.taskId, undefined);
-  assert.equal(lines.filter((line) => /has no task id/.test(line)).length, 0);
+  assert.equal(lines.filter((line) => /No --task-id/.test(line)).length, 0);
   const without = start('no-task', {});
   assert.ok(fs.existsSync(without.recordFile), 'a missing task id warns and does not fail');
-  assert.equal(lines.filter((line) => /has no task id/.test(line)).length, 1);
+  assert.equal(lines.filter((line) => /No --task-id/.test(line)).length, 1);
   assert.throws(() => start('bad-task', { taskId: 'bad id!' }), /--task-id must be a task id/);
   assert.throws(() => start('both-task', { taskId: 'A', issue: '7' }), /not both/);
 });
