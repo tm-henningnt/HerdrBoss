@@ -6,6 +6,11 @@ import path from 'node:path';
 import test from 'node:test';
 import { workerRunId } from '../src/agent-messages.js';
 import { collectBrowserClients } from '../src/collect.js';
+
+test('the client collector treats lsof with no matches as zero clients and keeps read errors', async () => {
+  assert.equal(await collectBrowserClients(9224, { runner: async () => { throw Object.assign(new Error('no matches'), { code: 1, stdout: '', stderr: '' }); } }), 0);
+  await assert.rejects(collectBrowserClients(9224, { runner: async () => { throw Object.assign(new Error('denied'), { code: 1, stdout: '', stderr: 'denied' }); } }), /denied/);
+});
 import { agentBrowserTabIds, forgetAgentBrowserTab, recordAgentBrowserTab } from '../src/browser-activity.js';
 import {
   inspectUncollectedWorkers,

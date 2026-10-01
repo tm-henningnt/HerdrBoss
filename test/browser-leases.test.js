@@ -297,6 +297,8 @@ const engineProbe = `
   const engine = new Engine(cfg, { push: false, act: true, collectors: {
     collectProcesses: async () => { const table = tables[tickIndex]; if (!table) throw new Error('fake ps failed'); return new Map(table); },
     cdpResponds: async () => false,
+    probeBrowser: async () => ({ ok: true }),
+    collectBrowserClients: async () => 0,
     collectPiModels: async () => null,
     runDenialScan: async () => ({ state: {}, denials: [] }),
   } });

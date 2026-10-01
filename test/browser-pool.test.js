@@ -493,6 +493,7 @@ test('restartBrowser skips the page restore for a hung browser, closes it, and l
   };
   try {
     const result = await pool.restartBrowser('hung-restart', true, {
+      collectBrowserClients: async () => 0,
       collectProcesses: machine.collectProcesses, kill, spawn, chromePath: process.execPath, cloneDir: null, portOpen: launchNet.portOpen, fetch: launchNet.fetch,
     });
     assert.deepEqual(machine.kills, [[4101, 'SIGTERM']]);
@@ -526,6 +527,7 @@ test('restartBrowser restarts a browser that answers /json/version but cannot li
   const closeViaCdp = async () => { machine.procs.delete(4101); machine.procs.delete(4102); server.closeAllConnections(); server.close(); };
   try {
     const result = await pool.restartBrowser('tabs-hung-restart', true, {
+      collectBrowserClients: async () => 0,
       collectProcesses: machine.collectProcesses, closeViaCdp, spawn, chromePath: process.execPath, cloneDir: null, portOpen: launchNet.portOpen,
       // The recorded port belongs to the fake server. The relaunch uses the fake launch network.
       fetch: (url, options) => (Number(new URL(url).port) === session.port ? fetch(url, options) : launchNet.fetch(url, options)),

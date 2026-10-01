@@ -126,6 +126,18 @@ Summary: Integrate: combine the collect default, the read-only research rule, an
 Impact: useful
 Summary: Browser output masks titles and removes credentials, query strings, and fragments in every host mode. Apply the same filter to browser API responses, dashboard state, and new event log records.
 
+## 2ac9048be57b
+Impact: useful
+Summary: Wait for browser commands and CDP clients before restart. Restore saved tabs in separate windows and read their new IDs.
+
 ## 00073aec20c4
 Impact: useful
 Summary: Integrate: browser output redaction with the current kit text.
+
+## f41d3a0b4d1e
+Impact: useful
+Summary: Restore drops query strings and fragments. Login and callback pages are not saved or restored. Pages that need query strings or fragments reopen at their path.
+
+## c1ca454f9191
+Impact: useful
+Summary: Restore excludes authentication path prefixes and sign-in hosts. It removes path parameters and rejects paths with invalid or excessive encoding.

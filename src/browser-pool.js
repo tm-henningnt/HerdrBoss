@@ -3,10 +3,11 @@ import path from 'node:path';
 import net from 'node:net';
 import { spawn as spawnProcess } from 'node:child_process';
 import { DATA_DIR } from './config.js';
-import { maskBrowserText } from './browser-url-mask.js';
-import { collectProcesses } from './collect.js';
+import { collectProcesses, collectBrowserClients } from './collect.js';
 import { codeSignCloneDir, listCloneNames, readProcesses, removeCodeSignClone } from './clone-sweep.js';
 import { PROJECT_BROWSER_POOL_NAME, acquireLeaseFor, dropLeases, projectBrowserPool, readLeases } from './leases.js';
+import { withBrowserRestart } from './browser-activity.js';
+import { withMutationLock } from './kit/locks.js';
 
 const FILE = path.join(DATA_DIR, 'browser-sessions.json');
 const PROFILE_ROOT = path.join(DATA_DIR, 'browser-profiles');
@@ -15,6 +16,8 @@ const DEFAULT_SIZE = { width: 1280, height: 800 };
 const MAX_BOOKMARKS = 30;
 const MAX_BOOKMARK_NAME = 60;
 const CDP_TIMEOUT_MS = 2000;
+const RESTORE_AUTH_PATH = /^(log-?in|log-?on|sign-?in|sign-?on|oauth\d*|auth\w*|callback|sso|saml|oidc|openid|connect|consent|token)/i;
+const RESTORE_AUTH_HOSTS = new Set(['login', 'accounts', 'sso', 'auth', 'id', 'idp', 'signin', 'adfs']);
 
 // Tests replace the network, process table, signal, launch, and code-sign clone functions through the options object.
 // A cloneDir of null turns off the clone record and the clone delete.
@@ -23,6 +26,7 @@ function deps(options) {
   return {
     fetch: o.fetch || globalThis.fetch,
     collectProcesses: o.collectProcesses || collectProcesses,
+    collectBrowserClients: o.collectBrowserClients || collectBrowserClients,
     kill: o.kill || ((pid, signal) => process.kill(pid, signal)),
     spawn: o.spawn || spawnProcess,
     closeViaCdp: o.closeViaCdp || askBrowserToClose,
@@ -49,6 +53,66 @@ export function validWindowSize(width, height) {
 export function listBrowserSessions() {
   try { return JSON.parse(fs.readFileSync(FILE, 'utf8')); }
   catch (e) { if (e.code === 'ENOENT') return {}; throw e; }
+}
+
+function stripPathParameters(pathname) {
+  return pathname.replaceAll('\\', '/').split('/').map((segment) => segment.split(';')[0]).join('/');
+}
+
+function restorePathname(pathname) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const decoded = decodeURIComponent(stripPathParameters(pathname));
+    if (decoded === pathname) break;
+    pathname = decoded;
+  }
+  pathname = stripPathParameters(pathname);
+  // Do not restore a path that still has an encoded layer after the bounded decode.
+  if (pathname.includes('%')) return null;
+  if (pathname.split('/').some((segment) => RESTORE_AUTH_PATH.test(segment.replace(/\.[^.]*$/, '')))) return null;
+  return pathname;
+}
+
+function restorableTab(tab) {
+  if (typeof tab?.id !== 'string' || !tab.id || typeof tab.url !== 'string') return null;
+  try {
+    const url = new URL(tab.url);
+    url.search = '';
+    url.hash = '';
+    if (url.username || url.password) return null;
+    if (url.href !== 'about:blank' && !['http:', 'https:'].includes(url.protocol)) return null;
+    if (RESTORE_AUTH_HOSTS.has(url.hostname.split('.')[0])) return null;
+    const pathname = restorePathname(url.pathname);
+    if (pathname === null) return null;
+    url.pathname = pathname;
+    return { id: tab.id, url: url.href };
+  } catch { return null; }
+}
+
+const restorableTabs = (tabs) => Array.isArray(tabs) ? tabs.map(restorableTab).filter(Boolean) : [];
+
+// Keep URLs in the private session file, without titles. The snapshot is also used when CDP stops answering.
+function updateRememberedTabs(project, update) {
+  const guard = path.join(DATA_DIR, 'browser-session-lock');
+  fs.mkdirSync(guard, { recursive: true, mode: 0o700 });
+  withMutationLock(guard, () => {
+    const sessions = listBrowserSessions();
+    if (!sessions[project]) return;
+    const tabs = Array.isArray(sessions[project].restoreTabs) ? sessions[project].restoreTabs : [];
+    sessions[project].restoreTabs = restorableTabs(update(tabs));
+    save(sessions);
+  });
+}
+
+export function rememberBrowserTabs(project, tabs) {
+  updateRememberedTabs(project, () => tabs);
+}
+
+export function rememberBrowserTab(project, id, url) {
+  updateRememberedTabs(project, (tabs) => [...tabs.filter((tab) => tab.id !== id), { id, url }]);
+}
+
+export function forgetBrowserTab(project, id) {
+  updateRememberedTabs(project, (tabs) => tabs.filter((tab) => tab.id !== id));
 }
 
 function save(sessions) {
@@ -179,7 +243,8 @@ export async function browserStatus(session, options) {
   const owner = browserOwner(await d.collectProcesses(), session);
   const profileVerified = reachable && !!owner;
   const responsive = profileVerified && await cdpResponds(session.port, d);
-  return { ...session, windowSize: session.windowSize || DEFAULT_SIZE, reachable, profileVerified, responsive, processPresent: !!owner,
+  const { restoreTabs, ...publicSession } = session;
+  return { ...publicSession, windowSize: session.windowSize || DEFAULT_SIZE, reachable, profileVerified, responsive, processPresent: !!owner,
     headless: owner ? /--headless(?:=|\s|$)/.test(owner.cmd) : !!session.headless, pid: owner?.pid ?? session.pid };
 }
 
@@ -376,35 +441,68 @@ export async function closeBrowser(project, options = {}) {
 }
 
 export async function restartBrowser(project, headless, options = {}) {
-  const { restorePage = true, tabId = null } = options;
   if (typeof headless !== 'boolean') throw new Error('Choose visible or headless mode.');
   const d = deps(options);
-  let pageUrl = null;
+  const externalClients = async () => {
+    const session = listBrowserSessions()[project];
+    if (!session) return 0;
+    const owner = browserOwner(await d.collectProcesses(), session);
+    return d.collectBrowserClients(session.port, { browserPid: owner?.pid, servicePid: process.pid });
+  };
+  return withBrowserRestart(project, (restartId) => restoreBrowser(project, headless, options, restartId, externalClients), { ...options.activity, externalClients });
+}
+
+async function restoreBrowser(project, headless, options, restartId, externalClients) {
+  const { restorePage = true, tabId = null } = options;
+  const d = deps(options);
   const session = listBrowserSessions()[project];
-  // A browser that does not respond cannot list its pages, so the restart skips the restore.
+  let pages = restorableTabs(session?.restoreTabs);
+  const preview = options.preview || await import('./browser-preview.js');
+  // The snapshot stays intact until the restore finishes, including partial failures.
+  const adapters = { rememberTabs: false, activity: { ...options.activity, restartId } };
   const responsive = restorePage && session ? (await browserStatus(session, d)).responsive : false;
   if (restorePage && responsive) {
-    const { listBrowserTabs } = await import('./browser-preview.js');
-    // A browser can answer /json/version and still fail to list its pages. The restart then skips the restore.
     let tabs = null;
-    try { tabs = await listBrowserTabs(project); } catch {}
+    try { tabs = await preview.listBrowserTabs(project, adapters); } catch {}
     if (tabs) {
-      const selected = tabId ? tabs.find((tab) => tab.id === tabId) : tabs.find((tab) => /^https?:\/\//i.test(tab.url));
-      if (tabId && !selected) throw new Error('The selected page is no longer open. Refresh the preview before restarting.');
-      if (selected && /^https?:\/\//i.test(selected.url)) pageUrl = selected.url;
+      if (tabId && !tabs.some((tab) => tab.id === tabId)) throw new Error('The selected page is no longer open. Refresh the preview before restarting.');
+      pages = restorableTabs(tabs);
     }
   }
-  await closeBrowser(project, d);
-  const status = await requestBrowser(project, { ...options, headless });
-  if (!pageUrl) return { ...status, restoredPage: false };
-  try {
-    const { listBrowserTabs, browserNavigate } = await import('./browser-preview.js');
-    const tabs = await listBrowserTabs(project);
-    await browserNavigate(project, tabs[0]?.id, pageUrl);
-    return { ...status, restoredPage: true };
-  } catch (error) {
-    return { ...status, restoredPage: false, restoreError: maskBrowserText(error.message, { full: true }) };
+  rememberBrowserTabs(project, pages);
+  const closed = await closeBrowser(project, { ...d, beforeClose: async () => await externalClients() === 0 });
+  if (!closed.closed) {
+    const error = new Error('Browser restart refused: a CDP client connected before the close. Disconnect it, then retry.');
+    error.exitCode = 3;
+    throw error;
   }
+  const status = await requestBrowser(project, { ...options, headless });
+  if (!restorePage || !pages.length) return { ...status, restoredPage: false, restoredTabs: 0 };
+  let startupTabs = null;
+  try { startupTabs = await preview.listBrowserTabs(project, adapters); } catch {}
+  let restoredTabs = 0;
+  const restored = [];
+  for (const page of pages) {
+    try {
+      const tab = await preview.browserNewTab(project, page.url, adapters);
+      restored.push({ id: tab.id, url: page.url });
+      restoredTabs++;
+    } catch {
+      // Keep the failed URL for a later restart. Never put a CDP error, URL, or title into output.
+      restored.push(page);
+    }
+  }
+  if (restoredTabs) {
+    if (startupTabs) for (const tab of startupTabs) {
+      try { await preview.browserCloseTab(project, tab.id, adapters); } catch {}
+    }
+    else {
+      try { await preview.browserCloseBlankTabs(project, restored.map((tab) => tab.id), adapters); } catch {}
+    }
+  }
+  rememberBrowserTabs(project, restored);
+  return { ...status, restoredPage: restoredTabs === pages.length, restoredTabs,
+    ...(restoredTabs < pages.length ? { restoreError: `${pages.length - restoredTabs} tab(s) could not reopen. The saved addresses stay local.` } : {}) };
 }
 
 export async function requestBrowser(project, options = {}) {
@@ -432,7 +530,7 @@ export async function requestBrowser(project, options = {}) {
   const profile = path.join(PROFILE_ROOT, project);
   fs.mkdirSync(profile, { recursive: true, mode: 0o700 });
   const windowSize = existing?.windowSize || DEFAULT_SIZE;
-  const session = { project, port, profile, headless: useHeadless, windowSize, pid: null, codeSignClone: null, bookmarks: existing?.bookmarks || [], startPage: existing?.startPage ?? null, createdAt: existing?.createdAt || new Date().toISOString(), launchedAt: null };
+  const session = { project, port, profile, headless: useHeadless, windowSize, pid: null, codeSignClone: null, bookmarks: existing?.bookmarks || [], startPage: existing?.startPage ?? null, restoreTabs: existing?.restoreTabs || [], createdAt: existing?.createdAt || new Date().toISOString(), launchedAt: null };
   sessions[project] = session;
   save(sessions);
   let cloneDir = null;

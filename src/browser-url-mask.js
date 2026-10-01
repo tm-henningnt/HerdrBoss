@@ -5,6 +5,8 @@ const URL_FIELDS = new Set(['url', 'start', 'startUrl', 'startPage', 'pageUrl', 
 const URL_TEXT_SOURCE = '(?<![\\p{L}\\p{N}_.-])(?:[a-z][a-z\\d+.-]*:\\/\\/|about:|data:|javascript:|blob:)[^\\s"\'`<>]+';
 const MAX_JWT_PART_LENGTH = 4096;
 const SECRET_FIELDS = /^[A-Za-z0-9_]*(?:code|state|session_state|access_token|id_token|refresh_token|token|key)$/i;
+// Status fields with fixed enum values. Their names end in a secret suffix, but they hold no secret.
+const STATUS_FIELDS = new Set(['processState']);
 const HOST_TEXT_TOKEN = /(?<![\p{L}\p{N}_.-])(?:\[[\da-f:.]+\]|(?:[\p{L}\p{N}](?:[\p{L}\p{N}-]{0,61}[\p{L}\p{N}])?\.)+[\p{L}\p{N}](?:[\p{L}\p{N}-]{0,61}[\p{L}\p{N}])?|(?:\d{1,3}\.){3}\d{1,3})(?![\p{L}\p{N}_-])/giu;
 
 function explicitPort(value) {
@@ -132,7 +134,7 @@ export function maskDeep(value, options = {}) {
     const isBookmark = typeof value.name === 'string' && typeof value.url === 'string';
     for (const [key, item] of Object.entries(value)) {
       const shouldMask = URL_FIELDS.has(key) && typeof item === 'string';
-      if (SECRET_FIELDS.test(key) && item !== null && ['string', 'number', 'boolean'].includes(typeof item)) result[key] = '<redacted>';
+      if (SECRET_FIELDS.test(key) && !STATUS_FIELDS.has(key) && item !== null && ['string', 'number', 'boolean'].includes(typeof item)) result[key] = '<redacted>';
       else if (typeof item === 'string' && (key === 'title' || (key === 'name' && isBookmark))) result[key] = maskBrowserText(item, { ...options, maskHosts: true });
       else if (shouldMask) result[key] = maskUrl(item, options);
       else result[key] = maskDeep(item, options);

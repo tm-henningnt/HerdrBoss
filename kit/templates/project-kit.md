@@ -27,6 +27,7 @@ These are the shared operating rules for the orchestrator of this project.
 - When a lane is ahead of pace, start ready work on a lane from the bulletin **Use now** line. Do not wait for the ahead lane.
 - Read `kit/browser-service.md` for project browser commands.
 - Browser output removes credentials, query strings, and fragments. The `--full` flag shows hosts in full. It keeps the credential filter. Use invented values in reports and tests.
+- Before a browser restart, finish browser commands and disconnect CDP drivers. Restart waits up to 30 seconds, then refuses if a command or client remains. It restores saved web pages and blank tabs in separate windows. Restore drops query strings, fragments, and path parameters. It skips login and callback paths and sign-in hosts. Read the new tab IDs after a restart.
 - Keep the orchestrator pane labeled `orch`.
 - Your orchestrator agent is named `<slug>-orch`. Prompt workers and the Boss by pane ID or by that name.
 - Use `herdr-boss worker start` to start workers. Use `--read-only` for a task that changes no repository file.
