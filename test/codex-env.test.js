@@ -41,7 +41,7 @@ function temporaryRepo() {
 }
 
 // A fake Herdr with one Workers tab. A split returns the new pane ws:p2 in tab ws:t1.
-function startFixture() {
+function startFixture({ browserLookup } = {}) {
   const root = temporaryRepo();
   const config = loadProjectConfig({ cwd: root });
   const rulesFile = path.join(root, 'rules.json');
@@ -65,7 +65,7 @@ function startFixture() {
   };
   const lines = [];
   const start = (name, options = {}, env = ORCH) => startWorker(name, { kind: 'codex', task: 'x', allow: ['src/'], ...options }, {
-    config, models: loadModels(), herdr, env, rulesFile, wait: () => {}, output: (line) => lines.push(line),
+    config, models: loadModels(), herdr, env, rulesFile, wait: () => {}, output: (line) => lines.push(line), browserLookup,
   });
   return { root, config, starts, lines, start };
 }
@@ -82,6 +82,51 @@ function setArgs(args) {
 }
 
 const launchPart = (args) => args.slice(args.indexOf('--') + 1);
+
+test('a codex worker attaches DevTools to its project browser without changing user config', () => {
+  const calls = [];
+  const f = startFixture({ browserLookup: (project) => { calls.push(project); return { port: 9247 }; } });
+  const configFile = path.join(TEST_HOME, '.codex', 'config.toml');
+  fs.mkdirSync(path.dirname(configFile), { recursive: true });
+  const before = '[mcp_servers.chrome-devtools]\ncommand = "npx"\nargs = ["chrome-devtools-mcp@latest"]\n';
+  fs.writeFileSync(configFile, before);
+  f.start('cxbrowser');
+  const args = launchPart(f.starts.at(-1));
+  const override = 'mcp_servers.chrome-devtools.args=["chrome-devtools-mcp@latest","--browserUrl=http://127.0.0.1:9247"]';
+  assert.ok(args.some((arg, index) => arg === '-c' && args[index + 1] === override));
+  assert.deepEqual(calls, ['alpha']);
+  assert.equal(fs.readFileSync(configFile, 'utf8'), before);
+  assert.equal(args.some((arg) => /mcp_servers\.(?:node_repl|cua_repl)\./.test(arg)), false);
+});
+
+test('a failed browser lookup still launches the Codex worker with DevTools disabled', () => {
+  const f = startFixture({ browserLookup: () => { throw new Error('private fixture error'); } });
+  f.start('cxfallback');
+  const args = launchPart(f.starts.at(-1));
+  assert.ok(args.some((arg, index) => arg === '-c' && args[index + 1] === 'mcp_servers.chrome-devtools.enabled=false'));
+  assert.equal(f.lines.filter((line) => line.startsWith('Codex:')).length, 1);
+  assert.doesNotMatch(f.lines.join('\n'), /private fixture error/);
+});
+
+test('a non-Codex worker does not look up or override DevTools', () => {
+  for (const kind of ['claude', 'opencode']) {
+    const f = startFixture({ browserLookup: () => { assert.fail('only Codex looks up a browser'); } });
+    f.start(`browser-${kind}`, { kind });
+    assert.equal(launchPart(f.starts.at(-1)).some((arg) => arg.startsWith('mcp_servers.')), false);
+  }
+});
+
+test('the standard worker brief gives each browser task private tab and capture rules', () => {
+  const f = startFixture();
+  const run = f.start('browserbrief', { kind: 'claude' });
+  const brief = fs.readFileSync(path.join(run.worktree, '.worker', 'brief.md'), 'utf8');
+  assert.match(brief, /Use only the tab that you create with `herdr-boss browser tab new`\./);
+  assert.match(brief, /Record its tab ID\. Never use or change another tab\./);
+  assert.match(brief, /Close your tab when the task ends\./);
+  assert.match(brief, /Never print cookies, storage, or tokens\./);
+  assert.match(brief, /Never run an evaluate command that reads `document\.cookie` or `localStorage`\./);
+  assert.match(brief, /Use `herdr-boss browser screenshot` for each screenshot\./);
+});
 
 test('a codex worker start passes the pane Herdr variables, TMPDIR, and HERDR_WORKTREE to the agent', () => {
   const f = startFixture();

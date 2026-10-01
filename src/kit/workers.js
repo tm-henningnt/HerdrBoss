@@ -10,7 +10,7 @@ import { workerStatusFromState } from '../worker-failures.js';
 import { checkAgentsFile, kitBehindLine } from './agents-check.js';
 import { acquireLeaseFor, dropLeases, portEnvStatus, setLeasePane } from '../leases.js';
 import { portEnvFor } from '../config.js';
-import { codexShellEnvArgs } from '../harness.js';
+import { codexBrowserArgs, codexShellEnvArgs } from '../harness.js';
 import { TASK_ID } from '../task-state.js';
 import { swapRefusal, swapExempt } from './swap-guard.js';
 
@@ -1104,6 +1104,7 @@ export function startWorker(name, options, {
   wait = pause,
   runSetup = runSetupCommand,
   leaseOptions = null,
+  browserLookup,
 } = {}) {
   if (!NAME_PATTERN.test(name)) throw new Error('Worker name must match [a-z][a-z0-9-]{0,31}.');
   if (env.HERDR_ENV !== '1') throw new Error('Run worker start from a Herdr-managed pane (HERDR_ENV=1).');
@@ -1247,7 +1248,9 @@ export function startWorker(name, options, {
     if (panePlan.tab) planTabId = getTab(panePlan.tab);
   }
   // The placeholders also check the caller values, so a bad value stops the start before any side effect.
-  const agentArgs = workerAgentArgs(options.kind, launchArgs, { paneId: '<pane-id>', tabId: planTabId, workspaceId, env, tmpDir, worktree });
+  const envAgentArgs = workerAgentArgs(options.kind, launchArgs, { paneId: '<pane-id>', tabId: planTabId, workspaceId, env, tmpDir, worktree });
+  const browserArgs = codexBrowserArgs(options.kind, config.slug, { lookup: browserLookup, output, env, launch: !options.dryRun });
+  const agentArgs = [...envAgentArgs, ...browserArgs];
 
   const plan = {
     name, kind: options.kind, model, modelSource, effort, effortSource, force: opusForce, rulesFile: rulesPath, rulesStale: staleRules,
@@ -1382,7 +1385,7 @@ export function startWorker(name, options, {
     for (const lease of leases) setLeasePane(lease.pool, lease.item, paneId, { dataDir: leaseContext.dataDir });
     waitForWorkerPane(paneId, workspaceId, worktree, herdr, wait);
     const shellPid = workerPaneShellPid(paneId, herdr);
-    const paneAgentArgs = workerAgentArgs(options.kind, launchArgs, { paneId, tabId: placement.tabId, workspaceId, env, tmpDir: plan.tmpDir, worktree });
+    const paneAgentArgs = [...workerAgentArgs(options.kind, launchArgs, { paneId, tabId: placement.tabId, workspaceId, env, tmpDir: plan.tmpDir, worktree }), ...browserArgs];
     try {
       herdr(['agent', 'start', name, '--kind', options.kind, '--pane', paneId, '--timeout', String(plan.agentStartTimeoutMs), '--', ...paneAgentArgs]);
     } catch (startError) {

@@ -6,7 +6,7 @@ import { DATA_DIR } from './config.js';
 import { alertBossForOpus, deliverPrompt, isAgentPaneBusy, isOpus, normalizeModel, waitForWorkerPane } from './kit/workers.js';
 import { contextTokensFor, loadModels, loadProjectConfig } from './kit/config.js';
 import { loadPolicy, mergeModels, modelEnabled, providerFor } from './control.js';
-import { codexShellEnvArgs } from './harness.js';
+import { codexBrowserArgs, codexShellEnvArgs } from './harness.js';
 import { cleanGoal, goalDelivery, goalFromTranscript } from './goal.js';
 
 const FILE = path.join(DATA_DIR, 'handoffs.json');
@@ -307,15 +307,18 @@ export function planHandoff(id, toKind, { mode = 'migrate', model = null, effort
 
 // A Codex tool shell can run under a shared app-server daemon with another environment, so a codex successor gets
 // the Herdr variables of its new pane as -c shell_environment_policy.set.* launch arguments. Other kinds get none.
-export function successorAgentArgs(item, launchArgs, env) {
+export function successorAgentArgs(item, launchArgs, env, { browserLookup, output = console.error } = {}) {
   if (item.toKind !== 'codex') return launchArgs;
-  return [...launchArgs, ...codexShellEnvArgs({
+  const envArgs = codexShellEnvArgs({
     HERDR_ENV: '1', HERDR_PANE_ID: item.newPane, HERDR_TAB_ID: item.newTab, HERDR_WORKSPACE_ID: item.workspace,
     HERDR_SOCKET_PATH: env.HERDR_SOCKET_PATH, HERDR_BIN_PATH: env.HERDR_BIN_PATH, TMPDIR: env.TMPDIR,
-  })];
+  });
+  // The initial validation call has no new pane. It must not request a browser.
+  const browserArgs = item.newPane ? codexBrowserArgs(item.toKind, item.project, { lookup: browserLookup, output, env }) : [];
+  return [...launchArgs, ...envArgs, ...browserArgs];
 }
 
-export function prepareHandoff(id, toKind, options = {}, { waitForPane = waitForWorkerPane, wait, env = process.env } = {}) {
+export function prepareHandoff(id, toKind, options = {}, { waitForPane = waitForWorkerPane, wait, env = process.env, browserLookup } = {}) {
   // Refuse a caller value that Codex cannot receive before any record or tab changes.
   if (toKind === 'codex') successorAgentArgs({ toKind }, [], env);
   const currentPanes = expireMissingSuccessors();
@@ -385,7 +388,7 @@ export function prepareHandoff(id, toKind, options = {}, { waitForPane = waitFor
   }
 
   const { launchArgs } = handoffTarget(item.toKind, { model: item.model, effort: item.effort, force: item.force === true, command: 'prepare' }, loadPolicy(), loadModels());
-  const agentArgs = successorAgentArgs(item, launchArgs, env);
+  const agentArgs = successorAgentArgs(item, launchArgs, env, { browserLookup });
   const args = migratedId && item.toKind === 'codex' ? ['resume', migratedId, ...agentArgs]
     : migratedId && item.toKind === 'claude' ? ['--resume', migratedId, ...agentArgs]
       : agentArgs;

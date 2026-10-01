@@ -504,6 +504,28 @@ export function codexShellEnvArgs(values) {
   return args;
 }
 
+function lookupCodexBrowser(project, { env, launch }) {
+  if (!project) return null;
+  const helper = fileURLToPath(new URL('./codex-browser.js', import.meta.url));
+  const result = spawnSync(process.execPath, [helper, project, ...(launch ? [] : ['--no-launch'])], {
+    env: { ...process.env, ...env }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 15_000, maxBuffer: 64 * 1024,
+  });
+  if (result.error || result.status !== 0) return null;
+  return JSON.parse(result.stdout);
+}
+
+// Pass the project browser address to DevTools for this launch only. Do not change the user config.
+export function codexBrowserArgs(kind, project, { lookup = lookupCodexBrowser, output = console.log, env = process.env, launch = true } = {}) {
+  if (kind !== 'codex') return [];
+  let browser;
+  try { browser = lookup(project, { env, launch }); } catch { /* Do not print an error that can hold private data. */ }
+  if (Number.isInteger(browser?.port) && browser.port > 0 && browser.port <= 65535) {
+    return ['-c', `mcp_servers.chrome-devtools.args=["chrome-devtools-mcp@latest","--browserUrl=http://127.0.0.1:${browser.port}"]`];
+  }
+  output('Codex: no project browser is available. Chrome DevTools MCP is disabled for this launch.');
+  return ['-c', 'mcp_servers.chrome-devtools.enabled=false'];
+}
+
 const LIVE_PROMPT = "Run this exact shell command and print its output line and nothing else: sh -c 'echo HERDR_ENV=${HERDR_ENV:+set} PANE=${HERDR_PANE_ID:+set}'";
 
 // Run one codex exec with the worker shell variables of the caller pane. Report only set or missing, never a value.

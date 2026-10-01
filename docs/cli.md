@@ -724,6 +724,12 @@ Each worker gets an absolute `TMPDIR` under its worker folder. When the path is 
 
 A Codex tool shell can run under a shared app-server daemon with another environment. For `--kind codex`, `worker start` therefore adds `-c shell_environment_policy.set.<NAME>="<value>"` to the agent launch arguments. It adds one argument for each of `HERDR_ENV`, `HERDR_PANE_ID`, `HERDR_TAB_ID`, `HERDR_WORKSPACE_ID`, `HERDR_SOCKET_PATH`, `HERDR_BIN_PATH`, `TMPDIR`, and `HERDR_WORKTREE`. The pane, tab, and workspace IDs come from the new pane. The socket and binary paths come from the caller environment. A variable with an unknown value is left out. `worker start` refuses a value with a quote, a backslash, or a control character before it creates the worktree. The dry-run plan shows `<pane-id>` for the new pane, and `<tab-id>` when the start creates a tab.
 
+For `--kind codex`, Chrome DevTools MCP uses the project browser. The launch adds `-c 'mcp_servers.chrome-devtools.args=["chrome-devtools-mcp@latest","--browserUrl=http://127.0.0.1:<port>"]'`. The port comes from the browser pool. If the recorded browser is stopped, the launch requests it through the same pool as `browser request`.
+
+If the project has no browser record, the launch disables DevTools MCP. A failed request or an unresponsive browser has the same result. The launch adds `-c mcp_servers.chrome-devtools.enabled=false`. It prints one line. The lookup stops after 15 seconds. These arguments apply only to this launch. They do not change the user config file, `node_repl`, or `cua_repl`.
+
+Codex handover and `project new --start` use the same browser arguments. A worker dry run checks the recorded browser but starts no browser. Its printed browser arguments can change at the actual start.
+
 `worker start` saves the resolved base commit in the run record. Review the worker, then collect it before you merge its branch. Collection records the run by default. It uses the saved commit so changed paths stay stable after the merge.
 
 | Option | Meaning |
@@ -1095,6 +1101,8 @@ An unknown tool-call count stays `null`. The ledger accepts `null` as unknown. T
 `herdr-boss browser` is a thin helper for visual checks of a project page. It is not a Playwright or agent-browser replacement. Do not add general page automation or scripting to it.
 
 Each project has one persistent Chrome profile on a port from 9223 to 9299. The port is a lease in the built-in pool `project-browsers`. See [Port leases](user-guide.md#port-leases). Add `--tab ID` to page commands when the browser has several tabs; `browser tabs` lists the IDs.
+
+For a browser task, create your own tab with `browser tab new`. Record its tab ID. Use only that tab. Close it when the task ends. Never use or change another tab. Never print cookies, storage, or tokens. Never run an evaluate command that reads `document.cookie` or `localStorage`. Use `herdr-boss browser screenshot` for each screenshot.
 
 The browser command output masks outside hosts in `http`, `https`, `ws`, and `wss` URLs. It replaces the first host label with `<tenant>`, or an IP address with `<ip>`. It keeps the scheme, remaining host labels, port, and path. It removes the query and fragment. It keeps loopback URLs in full, including their query and fragment. It removes user names and passwords from all URLs. It prints `data:` and `javascript:` URLs as `<redacted-url>`. Other URL types stay unchanged. Herdr Boss stores bookmark names as given, then masks non-loopback hosts in their output by the same rule.
 

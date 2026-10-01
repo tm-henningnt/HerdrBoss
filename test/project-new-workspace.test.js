@@ -98,6 +98,22 @@ function writePolicy(f, patch) {
   fs.writeFileSync(path.join(f.dataDir, 'policy.json'), JSON.stringify(policy));
 }
 
+test('project new starts a Codex orchestrator on the project browser', () => {
+  const f = fixture();
+  try {
+    const herdr = fakeHerdr();
+    const calls = [];
+    const result = start(f, herdr, { kind: 'codex', hooks: {
+      ...hooks(herdr),
+      browserLookup: (project, options) => { calls.push({ project, dataDir: options.env.HERDR_BOSS_DIR }); return { port: 9247 }; },
+    } });
+    assert.equal(result.ok, true, result.error);
+    const startCall = herdr.calls.find((args) => args[0] === 'agent' && args[1] === 'start');
+    assert.ok(startCall.includes('mcp_servers.chrome-devtools.args=["chrome-devtools-mcp@latest","--browserUrl=http://127.0.0.1:9247"]'));
+    assert.deepEqual(calls, [{ project: 'demo', dataDir: f.dataDir }]);
+  } finally { f.cleanup(); }
+});
+
 test('goalDelivery gives command for Claude, prompt for other kinds, and nothing without a goal or for the Boss', () => {
   assert.equal(goalDelivery({ goal: GOAL, kind: 'claude' }), 'command');
   assert.equal(goalDelivery({ goal: GOAL, kind: 'codex' }), 'prompt');
