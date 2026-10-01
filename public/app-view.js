@@ -8,3 +8,11 @@ export function appViewport({ height, offsetTop, scale, innerHeight }) {
   if (!height || scale > 1.01) return { height: Math.round(innerHeight), top: 0 };
   return { height: Math.round(height), top: Math.max(0, Math.round(offsetTop || 0)) };
 }
+
+export function chatKeyboardOpen(layoutHeight, visualHeight) {
+  return layoutHeight - visualHeight > 150;
+}
+
+export function chatShouldStickToBottom({ scrollHeight, scrollTop, clientHeight } = {}) {
+  return scrollHeight - scrollTop - clientHeight <= 40;
+}
