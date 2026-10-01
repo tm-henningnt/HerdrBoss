@@ -19,7 +19,8 @@ import { probeBrowser, createBrowserProbes } from './browser-probe.js';
 import { readLeases, reclaimLeases, publicLease, publicPool, reclaimNoticeText, hasIdleRule, tcpListening, tcpListeningAsync, leasePools, migrateProjectBrowserLeases } from './leases.js';
 import { codeSignCloneDir, sweepCodeSignClones } from './clone-sweep.js';
 import { runDenialScan, readDenials, denialSummary, DENIAL_SCAN_INTERVAL_MS, SCAN_BUDGET_BYTES, RETAIN_DAYS, RISE_FACTOR, RISE_MIN_EVENTS } from './denials.js';
-import { goalOnScreen, sendGoalPrompt } from './goal.js';
+import { goalOnScreen, paneText, sendGoalPrompt } from './goal.js';
+import { hasTypedText, screenBlocker, stripAnsi } from './goal-set.js';
 import { claudeContextUsage, trackBoundary, normalizeModelId } from './context-handover.js';
 import { FINISH_TIMEOUT_MS, autoReadyHandoff, markSuccessorWorking, listHandoffs, saveHandoffs, supersedeHandoffs, expireHandoff, expireMissingHandoffs, handoffNotices } from './handoff.js';
 import { closeReviewItems, deliverQueued, mailboxCounts, readMessages, RETENTION_MS, SEND_LIMIT_PER_MINUTE } from './messages.js';
@@ -47,6 +48,10 @@ const CLI_FILE = fileURLToPath(new URL('./cli.js', import.meta.url));
 // The wait for a working successor to settle before the goal step gives up.
 const GOAL_WAIT_MS = 10 * 60 * 1000;
 const AUTO_READY_MS = 120 * 1000;
+const AUTO_READY_EXPIRY_MS = 30 * 60 * 1000;
+const AUTO_READY_EXPIRY_REASON = 'successor not ready after 30 minutes';
+const CONTEXT_WARNING_TOKENS = 400_000;
+const CONTEXT_WARNING_INTERVAL_MS = 60 * 60 * 1000;
 const SEV = { info: 0, warn: 1, critical: 2 };
 const POLICY_FILE = path.join(DATA_DIR, 'policy.json');
 
@@ -369,6 +374,7 @@ export function isBossHandoff(item, herdr) {
 }
 
 export function alertPromptDue(alert, record, now, cooldown) {
+  if (alert.key.startsWith('context:')) return !record || now - record.at >= CONTEXT_WARNING_INTERVAL_MS;
   if (alert.immediate) return !record;
   if (!record) return true;
   if (SEV[alert.severity] > SEV[record.severity]) return true;
@@ -693,6 +699,8 @@ export class Engine extends EventEmitter {
       if (this.act && currentHerdrSnapshot && currentPaneList) {
         try { expireMissingHandoffs(herdr?.panes); }
         catch (e) { errors.push(`handoffs: ${e.message}`); }
+        try { await this.expireUnreadyHandoffs(herdr, now); }
+        catch (e) { errors.push(`handoff expiry: ${e.message}`); }
         try { await this.finishActivations(herdr, now); }
         catch (e) { errors.push(`handoff finish: ${e.message}`); }
         try { await this.retirePreviousOrchestrators(herdr, now); }
@@ -942,6 +950,7 @@ export class Engine extends EventEmitter {
       try { snap.standbyPanes = listHandoffs().filter((h) => ['preparing', 'prepared', 'needs-inspection'].includes(h.status)).map((h) => h.newPane); }
       catch { snap.standbyPanes = []; }
       const evaluation = evaluate(snap, this.cfg, this.memory.paneSince, now, policy);
+      evaluation.alerts.push(...this.contextHandoverAlerts(control, herdr, now));
       evaluation.alerts.push(...workerTransitions.notices);
       evaluation.alerts.push(...reportTransitions.notices);
       evaluation.alerts.push(...noReportTransitions.notices);
@@ -1461,6 +1470,7 @@ export class Engine extends EventEmitter {
       // A held or inactive project waits. A stopped project with a working worker stays eligible.
       if (projectHeld(h.project, projects, control)) continue;
       if (!workspaceActive(h.project, h.workspace, herdr, control)) continue;
+      if (this.projectHandoverCooling(h.project, now)) continue;
       // A stale row is data for pacing, but not proof for a handover.
       if (h.provider && this.quotas.find((q) => q.provider === h.provider)?.stale) continue;
       if (records.some((x) => x.sourcePane === h.pane && ['prepared', 'preparing', 'needs-inspection'].includes(x.status))) continue;
@@ -1494,15 +1504,120 @@ export class Engine extends EventEmitter {
   }
 
   // Why a prepared successor has no readyAt yet.
+  successorHasStarted(item, target) {
+    if (item.seenWorkingAt) return true;
+    // Claude context starts at zero in a fresh pane. A positive assistant usage record proves that
+    // the successor has run after the prepare prompt. Other harnesses have no context signal here.
+    if (target?.agent !== 'claude') return true;
+    const usage = claudeContextUsage({ sessionId: target.sessionId, cwd: target.cwd });
+    return usage.available && usage.tokens > 0;
+  }
+
   successorNotReady(item, target, now = Date.now()) {
     if (item.promptError) return 'the prepare prompt failed';
     if (!target) return 'the successor pane is absent';
     if (target.agent !== item.toKind) return 'the successor pane runs another agent';
     if (!['idle', 'done'].includes(target.status)) return 'it works';
     if (item.promptDelivery === 'stalled-retry') return 'the prepare prompt stalled';
-    if (!item.seenWorkingAt) return 'it has not started its state read';
+    if (!this.successorHasStarted(item, target)) return 'it has not started its state read';
+    if (item.unsentInputAt && item.inputEnterSentAt) return 'it had unsent input, and the engine sent Enter once';
     const wait = AUTO_READY_MS - (now - Date.parse(item.promptAt || item.preparedAt));
     return wait > 0 ? `it settled, and the automatic ready signal waits ${Math.ceil(wait / 1000)} more seconds` : 'the ready check runs next tick';
+  }
+
+  projectHandoverCooling(project, now) {
+    this.memory.handoverCooldowns ||= {};
+    const at = this.memory.handoverCooldowns[project];
+    if (!Number.isFinite(at)) return false;
+    if (now - at < AUTO_READY_EXPIRY_MS) return true;
+    delete this.memory.handoverCooldowns[project];
+    return false;
+  }
+
+  async expireUnreadyHandoffs(herdr, now) {
+    let records = listHandoffs();
+    for (const item of records.filter((record) => record.status === 'prepared' && record.automatic && !record.readyAt
+      && !record.boss && record.label !== 'boss' && Number.isFinite(Date.parse(record.preparedAt))
+      && now - Date.parse(record.preparedAt) >= AUTO_READY_EXPIRY_MS)) {
+      const expired = expireHandoff(item.id, AUTO_READY_EXPIRY_REASON);
+      if (!expired) continue;
+      this.memory.handoverCooldowns ||= {};
+      this.memory.handoverCooldowns[expired.project] = now;
+      this.log('handoff', `Expired automatic handover ${expired.id}: ${AUTO_READY_EXPIRY_REASON}`, { project: expired.project, pane: expired.newPane });
+      records = listHandoffs();
+    }
+
+    records = listHandoffs();
+    for (const item of records.filter((record) => record.status === 'expired' && record.automatic
+      && record.expiredReason === AUTO_READY_EXPIRY_REASON && !record.boss && record.label !== 'boss')) {
+      const label = item.displayLabel || this.state?.control?.projects?.[item.project]?.label || item.project;
+      this.memory.handoverExpiryMailbox ||= {};
+      const mailboxPosted = this.memory.handoverExpiryMailbox[item.id]
+        || this.messageStore.all().some((message) => message.handoffExpiryId === item.id);
+      if (mailboxPosted) this.memory.handoverExpiryMailbox[item.id] ||= now;
+      else {
+        try {
+          this.messageStore.append({
+            thread: 'boss', from: 'boss', to: 'owner', kind: 'report', action: 'read', replyTo: null, status: 'new',
+            title: `${label} handover expired`,
+            text: `The automatic handover for ${label} (${item.id}) expired because the successor did not become ready after 30 minutes.`,
+            handoffExpiryId: item.id,
+          }, { now });
+          this.memory.handoverExpiryMailbox[item.id] = now;
+        } catch (error) {
+          this.log('error', `Mailbox item for expired handover ${item.id} failed: ${String(error?.message || error).slice(0, 200)}`, { project: item.project });
+        }
+      }
+
+      this.memory.handoverExpiryHandled ||= {};
+      if (this.memory.handoverExpiryHandled[item.id]) continue;
+      const pane = (herdr?.panes || []).find((candidate) => candidate.id === item.newPane);
+      const recordsUsePane = records.some((other) => other.id !== item.id
+        && ['prepared', 'preparing', 'needs-inspection', 'active', 'superseded'].includes(other.status)
+        && (other.sourcePane === item.newPane || other.newPane === item.newPane));
+      if (!pane) {
+        this.memory.handoverExpiryHandled[item.id] = now;
+        continue;
+      }
+      if (pane.id === item.sourcePane || pane.agent !== item.toKind || pane.status !== 'idle'
+        || pane.label || pane.orch || recordsUsePane) {
+        this.memory.handoverExpiryHandled[item.id] = now;
+        this.log('handoff', `Kept the expired successor pane ${pane.id}: it is not an idle, unused ${item.toKind} pane`, { project: item.project, pane: pane.id });
+        continue;
+      }
+      try {
+        checkHerdrResponse(await this.herdrRunner('herdr', ['pane', 'close', pane.id]));
+        this.memory.handoverExpiryHandled[item.id] = now;
+        this.log('handoff', `Closed idle successor pane ${pane.id} for expired handover ${item.id}`, { project: item.project, pane: pane.id });
+      } catch (error) {
+        this.log('error', `Could not close idle successor pane ${pane.id} for expired handover ${item.id}: ${String(error.stderr || error.message).slice(0, 200)}`, { project: item.project, pane: pane.id });
+      }
+    }
+  }
+
+  contextHandoverAlerts(control, herdr, now = Date.now()) {
+    let records = [];
+    try { records = listHandoffs(); } catch { return []; }
+    const panes = herdr?.panes || [];
+    const alerts = [];
+    for (const project of Object.values(control.projects || {})) {
+      const orch = project.orch;
+      const pane = orch && panes.find((candidate) => candidate.id === orch.pane);
+      if (!pane || orch.kind !== 'claude') continue;
+      const usage = claudeContextUsage({ sessionId: pane.sessionId, cwd: pane.cwd });
+      if (!usage.available || usage.tokens < CONTEXT_WARNING_TOKENS) continue;
+      const ready = records.some((item) => item.project === project.slug && item.status === 'prepared' && item.readyAt);
+      const active = records.some((item) => item.project === project.slug && item.newPane === pane.id && item.status === 'active'
+        && now - Date.parse(item.activatedAt) < CONTEXT_WARNING_INTERVAL_MS);
+      if (ready || active) continue;
+      const thousands = Math.round(usage.tokens / 1000);
+      alerts.push({
+        key: `context:${project.slug}`, severity: 'warn', scope: project.workspace,
+        title: `Context at ${thousands}K tokens: handover not ready`,
+        text: `[herdr-boss] ${project.label || project.slug} has ${thousands}K tokens of Claude context and no prepared successor is ready. Check the handover before the context grows further.`,
+      });
+    }
+    return alerts;
   }
 
   // Why a prepared successor is not activated yet. The reason is empty when activation may go ahead.
@@ -1576,8 +1691,41 @@ export class Engine extends EventEmitter {
         const seen = markSuccessorWorking(item.id, new Date(now).toISOString());
         if (seen) item.seenWorkingAt = seen.seenWorkingAt;
       }
-      if (!settled(target) || !item.seenWorkingAt || item.promptDelivery === 'stalled-retry') continue;
+      if (!settled(target) || item.promptDelivery === 'stalled-retry') continue;
       if (now - Date.parse(item.promptAt || item.preparedAt) < AUTO_READY_MS) continue;
+      let screen;
+      try {
+        screen = paneText(await this.herdrRunner('herdr', ['pane', 'read', target.id, '--source', 'visible', '--lines', '80', '--format', 'ansi']));
+      } catch (error) {
+        this.log('error', `Could not inspect successor input for handoff ${item.id}: ${String(error.stderr || error.message).slice(0, 200)}`, { project: item.project, pane: target.id });
+        continue;
+      }
+      const rawLines = String(screen).split(/\r?\n/);
+      const visibleLines = rawLines.map((line) => stripAnsi(line).trim());
+      let typedInput = false;
+      if (target.agent === 'claude') {
+        let inputAt = -1;
+        visibleLines.forEach((line, index) => { if (/^❯/.test(line) && !/^❯\s+\d+[.)]/.test(line)) inputAt = index; });
+        typedInput = inputAt >= 0 && /^❯\s+\S/.test(visibleLines[inputAt]) && hasTypedText(rawLines[inputAt]);
+      } else typedInput = screenBlocker(target.agent, screen) === 'input';
+      if (typedInput) {
+        const current = listHandoffs();
+        const latest = current.find((record) => record.id === item.id && record.status === 'prepared' && !record.readyAt);
+        if (!latest) continue;
+        if (!latest.inputEnterSentAt) {
+          latest.unsentInputAt = new Date(now).toISOString();
+          latest.inputEnterSentAt = new Date(now).toISOString();
+          saveHandoffs(current);
+          try {
+            checkHerdrResponse(await this.herdrRunner('herdr', ['agent', 'send-keys', target.id, 'enter']));
+            this.log('handoff', `Sent Enter once to submit unsent input in successor pane ${target.id} for handoff ${item.id}`, { project: item.project, pane: target.id });
+          } catch (error) {
+            this.log('error', `Enter for unsent successor input in handoff ${item.id} failed: ${String(error.stderr || error.message).slice(0, 200)}`, { project: item.project, pane: target.id });
+          }
+        }
+        continue;
+      }
+      if (!this.successorHasStarted(item, target)) continue;
       const ready = autoReadyHandoff(item.id, 'auto: successor idle');
       if (!ready) continue;
       Object.assign(item, { readyAt: ready.readyAt, readyNote: ready.readyNote });
@@ -1610,6 +1758,7 @@ export class Engine extends EventEmitter {
       this.memory.contextBoundary[pane.id] = entry;
       if (!entry.armed || !settled(pane)) continue;
       if (!eligible(project.slug, project.workspace, pane.label)) continue;
+      if (this.projectHandoverCooling(project.slug, now)) continue;
       if (records.some((x) => x.sourcePane === pane.id && open.includes(x.status))) continue;
       const name = pane.label || project.slug;
       if (orch.kind !== 'claude') {
@@ -1767,7 +1916,8 @@ export class Engine extends EventEmitter {
       this.log('handoff', `Closed previous ${role} pane ${item.sourcePane} after ${finish.confirmedBy === 'answered' ? 'the successor answered' : 'the 15-minute wait'} (handoff ${item.id})`, scope);
     }
     const busy = new Set(records.filter((x) => ['active', 'superseded', 'prepared', 'preparing', 'needs-inspection'].includes(x.status)).flatMap((x) => [x.sourcePane, x.newPane]));
-    for (const item of records.filter((x) => x.status === 'expired' && x.newPane && !x.boss && x.label !== 'boss' && !x.cleanedAt && now - Date.parse(x.expiredAt) < 7 * 86400 * 1000)) {
+    for (const item of records.filter((x) => x.status === 'expired' && x.expiredReason !== AUTO_READY_EXPIRY_REASON
+      && x.newPane && !x.boss && x.label !== 'boss' && !x.cleanedAt && now - Date.parse(x.expiredAt) < 7 * 86400 * 1000)) {
       const pane = panes.get(item.newPane);
       // A pane that left Herdr needs no close. A role pane, or a pane that another record uses, stays open.
       if (!pane) { item.cleanedAt = at; continue; }
@@ -2140,6 +2290,14 @@ export class Engine extends EventEmitter {
     const quiet = quietHoursActive(night);
     this.memory.notified ||= {};
     this.memory.quietNotifications = Array.isArray(this.memory.quietNotifications) ? this.memory.quietNotifications : [];
+    this.memory.quietNotifications = this.memory.quietNotifications.filter((notice) => !notice.key?.startsWith('context:') || active.has(notice.key));
+    for (const key of Object.keys(this.memory.notified)) {
+      if (key.startsWith('context:') && !active.has(key)) delete this.memory.notified[key];
+    }
+    for (const key of Object.keys(this.memory.pushes)) {
+      const alertKey = key.split('@')[0];
+      if (alertKey.startsWith('context:') && !active.has(alertKey)) delete this.memory.pushes[key];
+    }
 
     // Deliver notifications once when quiet hours end. The service keeps the queue in memory.json across restarts.
     if (!quiet && this.memory.quietNotifications.length) {
@@ -2152,7 +2310,10 @@ export class Engine extends EventEmitter {
 
     // User notifications: warn and critical, once per alert key.
     for (const a of alerts) {
-      if (SEV[a.severity] < 1 || a.noDesktop || this.memory.notified[a.key]) continue;
+      const previous = this.memory.notified[a.key];
+      const contextRepeatDue = a.key.startsWith('context:') && Number.isFinite(previous)
+        && now - previous >= CONTEXT_WARNING_INTERVAL_MS;
+      if (SEV[a.severity] < 1 || a.noDesktop || (previous && !contextRepeatDue)) continue;
       this.memory.notified[a.key] = now;
       if (quiet) {
         this.memory.quietNotifications.push({ key: a.key, title: a.title, text: a.text, severity: a.severity });
