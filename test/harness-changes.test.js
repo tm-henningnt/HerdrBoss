@@ -1,3 +1,4 @@
+import './helpers/test-env.js';
 // The harness change markers: the reader of harness-changes.jsonl, the append helper, and the `harness change` command.
 import assert from 'node:assert/strict';
 import test from 'node:test';

@@ -1,3 +1,4 @@
+import './helpers/test-env.js';
 // Aggregate figures for the Analytics page: notices per pane per day and the machine timeline.
 import assert from 'node:assert/strict';
 import test from 'node:test';

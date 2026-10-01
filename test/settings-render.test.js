@@ -1,3 +1,4 @@
+import './helpers/test-env.js';
 // The Settings and Allocation views render with a fixture state. No two info buttons of one section may explain the same setting.
 import test from 'node:test';
 import assert from 'node:assert/strict';
