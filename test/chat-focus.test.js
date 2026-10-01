@@ -43,7 +43,7 @@ test('the viewport resize follows the bottom only when the message log was withi
   assert.match(app, /if \(chatStickToBottom && chatPhoneOpen\)[\s\S]*?scroller\.scrollTop = scroller\.scrollHeight/);
 });
 
-test('the phone Chat follows the visual viewport and drops all composer bottom padding while the keyboard is open', () => {
+test('the phone Chat follows the visual viewport and sets a small composer bottom padding while the keyboard is open', () => {
   const viewport = sourceBlock('const scheduleChatViewport = () => {', 'const onViewport = (event) => {');
   const phoneStart = css.indexOf('body.app-view main { position: fixed');
   assert.ok(phoneStart >= 0, 'style.css has a phone app view section');
@@ -58,6 +58,6 @@ test('the phone Chat follows the visual viewport and drops all composer bottom p
   assert.match(viewport, /setProperty\(['"]--vvh['"]/);
   assert.match(phone, /\.chat-layout\s*\{[^}]*position:\s*fixed[^}]*top:\s*max\(var\(--vv-top,[^)]*\),\s*0px\)[^}]*height:\s*var\(--vvh/);
   assert.match(phone, /\.chat-composer\s*\{[^}]*var\(--chat-bottom-inset,\s*env\(safe-area-inset-bottom\)\)/);
-  assert.match(phone, /body\.chat-keyboard-open \.chat-composer\s*\{[^}]*padding-bottom:\s*0/);
+  assert.match(phone, /body\.chat-keyboard-open \.chat-composer\s*\{[^}]*padding-bottom:\s*6px/);
   assert.match(css, /\.chat-scroll\s*\{[^}]*overscroll-behavior:\s*contain/);
 });
