@@ -443,6 +443,8 @@ A review pack is a folder of evidence with one question for each item. The Owner
 
 The command validates the folder with the rules of the design. The secret scan reads each text file. A finding names the file and the secret class, never the value. The command refuses a text file over 2 MB, an SVG, an HTML file outside a `page` item, and every image above 40 megapixels. It prints one line for each failed rule.
 
+`review check` and `review publish` also print one warning per item that misses description, steps, expected, or link. They print one pack warning when any item has no `verifiedBy`, one item warning when an `agent-verified` item has no evidence, and one pack warning when `designPass` is missing or has result `not-run`. These warnings do not change the exit code. An invalid value is an error.
+
 The command stores the files in the data folder and adds a Mailbox item to the thread of the project. The item has the kind `review` and the action `decide`. It has the title `Review: TITLE (vN)` and a link to the pack. `--note` adds text of 1 to 1000 characters to the item. The command refuses a title or a note that looks like a token, a key, or a password, before it writes anything.
 
 A publish with an existing pack ID makes the next version. The command closes the older open Mailbox item of that pack with `closedBy: "review"` and posts a new item. The Owner sees one open item for each pack. An Owner answer to a review item stays in the Mailbox thread of that item.

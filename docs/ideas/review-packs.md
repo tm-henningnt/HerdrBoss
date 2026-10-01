@@ -116,6 +116,21 @@ Each item has `id`, `title`, `type`, and `ask`. It can have `body`: Markdown tex
 
 A project adds a custom type with `"type": "custom"` and `"renderer": "<name>"`. The name is a slug. Herdr Boss has no custom renderers in the first build. An unknown renderer, and an unknown type, show the item `body` as Markdown with the line "Herdr Boss has no viewer for NAME. It shows the text." The answer controls stay the same.
 
+### Item review metadata
+
+An item may use these fields in addition to its type fields:
+
+| Field | Meaning |
+|---|---|
+| `description` | Two non-empty lines: what the item shows and why it matters. At most 2000 characters. |
+| `steps` | A list of 1 to 30 exact actions. Each action has at most 500 characters. |
+| `expected` | A non-empty result of at most 2000 characters. |
+| `link` | An HTTPS URL to the app and sheet, or HTTP for a loopback or `.test` host. |
+| `verifiedBy` | `agent-verified` or `needs-you`. |
+| `evidence` | Up to 60 image file references used by image, image-pair, or gallery items. An agent-verified item needs at least one. |
+
+A pack may have `designPass: { reviewer, result, note }`. The reviewer is non-empty and has at most 200 characters. The result is `passed`, `issues`, or `not-run`. The optional note has at most 2000 characters. The reviewer runs the pass before the pack ships and reports the result.
+
 ### Questions
 
 `ask` lists the questions of the item. The default is `["accept", "deny", "note"]`.
@@ -139,12 +154,12 @@ The section state comes from its items: **Denied** when one item is denied, **Ne
 
 1. `manifest.json` exists, is at most 1 MB, and holds one JSON object. `schema` is `herdr-boss.review-pack/1`.
 2. `id` matches `SLUG` from `src/projects.js`. Section and item IDs are slugs of at most 64 characters. Each item ID is unique in the pack and is not `summary`, because the summary route uses that name.
-3. `title` is 1 to 200 characters (`TITLE_MAX`). Each text field passes `refuseSecret()`.
+3. `title` is 1 to 200 characters (`TITLE_MAX`). Each text field passes `refuseSecret()`. When set, item guidance fields and `designPass` have the types and limits in [Item review metadata](#item-review-metadata).
 4. The pack has 1 to 40 sections and 1 to 400 items. A section has at most 100 items.
 5. `type` is a known type or `custom`. Each type has its required fields. `ask` holds only the six known values, each at most once. `choices` has 2 to 6 entries.
 6. Each path is relative, has no `..` part, no leading `/`, no backslash, and no NUL. It resolves inside the folder after `fs.realpathSync()`. A symbolic link that points outside the folder is an error.
 7. Each named file exists. Each file in the folder is named in the manifest, or the command warns and does not copy it.
-8. A URL (`live`, `liveUrl`, `link.url`) passes `safeUrl()` and uses `https`, or `http` for a loopback or `.test` host.
+8. A URL (`live`, `liveUrl`, an item `link`, or a `link` item URL) passes `safeUrl()` and uses `https`, or `http` for a loopback or `.test` host.
 9. The limits in [Limits](#limits) hold.
 
 ## Publish

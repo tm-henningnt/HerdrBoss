@@ -107,6 +107,67 @@ test('a valid pack returns a normalized manifest, file hashes, and totals', () =
   assert.deepEqual(out.manifest.summary, { src: 'intro.md' });
 });
 
+test('review guidance fields validate, normalize, and enter the item content hash', () => {
+  const build = ({ why = 'Why the result matters.', imageTag = 1 } = {}) => makePack({ 'img/proof.png': png(24, 36, imageTag) }, {
+    designPass: { reviewer: 'gpt-6.1-sol', result: 'passed', note: 'The flow is clear.' },
+    sections: [{ id: 'checkout', title: 'Checkout', items: [
+      { id: 'scenario', title: 'Card flow', type: 'markdown', text: 'Review the card flow.',
+        description: 'The card flow.\n' + why, steps: ['Open the test app.', 'Submit a valid card.'],
+        expected: 'The receipt appears.', link: 'https://app.example.test/checkout',
+        verifiedBy: 'agent-verified', evidence: ['img/proof.png'] },
+      { id: 'proof', title: 'Receipt screenshot', type: 'image', src: 'img/proof.png',
+        description: 'The receipt view.\nIt shows the saved result.', steps: ['Open the receipt.'],
+        expected: 'The total is visible.', link: 'https://app.example.test/receipt', verifiedBy: 'needs-you' },
+    ] }],
+  });
+  const first = build().result();
+  assert.deepEqual(first.errors, []);
+  assert.deepEqual(first.warnings, []);
+  assert.equal(item(first).description, 'The card flow.\nWhy the result matters.');
+  assert.deepEqual(item(first).steps, ['Open the test app.', 'Submit a valid card.']);
+  assert.equal(item(first).expected, 'The receipt appears.');
+  assert.equal(item(first).link, 'https://app.example.test/checkout');
+  assert.equal(item(first).verifiedBy, 'agent-verified');
+  assert.deepEqual(item(first).evidence, ['img/proof.png']);
+  assert.deepEqual(first.manifest.designPass, { reviewer: 'gpt-6.1-sol', result: 'passed', note: 'The flow is clear.' });
+
+  const changedDescription = build({ why: 'Why the total matters.' }).result();
+  const changedEvidenceBytes = build({ imageTag: 2 }).result();
+  assert.notEqual(item(first).hash, item(changedDescription).hash);
+  assert.notEqual(item(first).hash, item(changedEvidenceBytes).hash);
+});
+
+test('review guidance fields reject invalid values and evidence outside image items', () => {
+  const result = makePack({ 'notes/readme.md': 'A text file.\n' }, {
+    designPass: { reviewer: '', result: 'unknown', note: 3 },
+    sections: [{ id: 'checkout', title: 'Checkout', items: [{
+      id: 'scenario', title: 'Card flow', type: 'markdown', text: 'Review the card flow.',
+      description: 'One line only.', steps: 'Open the app.', expected: 7, link: 'javascript:alert(1)',
+      verifiedBy: 'human', evidence: ['notes/readme.md'],
+    }] }],
+  }).result();
+  const messages = result.errors.map((entry) => entry.message).join('\n');
+  for (const field of ['description', 'steps', 'expected', 'link', 'verifiedBy', 'evidence', 'designPass']) assert.ok(messages.includes(field), field + ' is reported');
+});
+
+test('descriptions trim one trailing newline and require exactly two lines', () => {
+  const description = oneItem({
+    type: 'markdown', text: 'Review the flow.', description: 'The checkout flow.\nIt shows the payment result.\n',
+    steps: ['Open the test app.'], expected: 'The receipt appears.', link: 'https://app.example.test/checkout', verifiedBy: 'needs-you',
+  }).result();
+  assert.deepEqual(description.errors, []);
+  assert.equal(item(description).description, 'The checkout flow.\nIt shows the payment result.');
+
+  const badDescription = oneItem({ type: 'markdown', text: 'Review the flow.', description: 'One line.' }).result();
+  assert.match(badDescription.errors.find((entry) => entry.rule === 'description').message, /description needs exactly two lines/i);
+});
+
+test('invalid steps are not normalized as undefined array entries', () => {
+  const badSteps = oneItem({ type: 'markdown', text: 'Review the flow.', steps: ['Open the test app.', 3] }).result();
+  assert.ok(badSteps.errors.some((entry) => entry.rule === 'field'));
+  assert.equal(Object.hasOwn(item(badSteps), 'steps'), false);
+});
+
 test('the manifest must exist, parse, be an object, and use the schema', () => {
   assert.deepEqual(rules(makePack({}, null).result()), ['manifest-missing']);
   assert.deepEqual(rules(makePack({}, '{ nope').result()), ['manifest-json']);
@@ -371,7 +432,7 @@ test('markdown refuses script constructs and unsafe links, and warns about raw H
   assert.equal(warned.warnings.filter((w) => w.rule === 'markdown').length, 2);
   const code = oneItem({ type: 'markdown', text: 'Use `<script>` like this:\n\n```html\n<script>x()</script>\n```\n\n[docs](https://example.test/api)' }).result();
   assert.deepEqual(code.errors, []);
-  assert.deepEqual(code.warnings, []);
+  assert.deepEqual(code.warnings.filter((w) => w.rule === 'markdown'), []);
 });
 
 test('URLs must pass safeUrl and use https, or http for loopback and .test hosts', () => {

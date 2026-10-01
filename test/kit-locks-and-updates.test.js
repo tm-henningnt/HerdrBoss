@@ -200,6 +200,13 @@ test('the review pack section sits in the orchestrator skill and the worker brie
   assert.match(section, /herdr-boss review import <slug> <folder>/);
   assert.match(section, /herdr-boss review result <slug> <pack> --json/);
   assert.match(section, /Do not make a pack for a question that one Mailbox line answers\./);
+  for (const rule of [
+    'Run interaction checks yourself. Include before and after screenshots as evidence.',
+    'Give each item a two-line description (what and why), exact steps, expected result, and app/sheet link.',
+    'Send only items needing a human decision to the Owner: taste, business meaning, or a final call.',
+    'Put one shared-space test app per scenario, named after its item.',
+    'Before shipping, get an independent reviewer to run a design pass:',
+  ]) assert.ok(section.includes(rule), rule);
 
   const template = fs.readFileSync(path.resolve('kit/templates/worker-brief.md'), 'utf8');
   const pack = template.slice(template.indexOf('## Review pack'), template.indexOf('## Gates on a shared machine'));

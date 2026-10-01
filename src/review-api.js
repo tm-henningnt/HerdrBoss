@@ -180,6 +180,14 @@ export function createReviewApi({ dataDir, store = reviewStore, mail = mailbox, 
     if (text !== null && !VERSION.test(text)) throw new HttpError(400, 'The version must be a whole number of 1 or more.');
     const found = store.getPack({ ...where(slug, pack), version: text === null ? undefined : Number(text) });
     if (!found) throw new HttpError(404, 'The pack or the version does not exist.');
+    const items = found.items || [];
+    found.summary = {
+      total: items.length,
+      agentVerified: items.filter((item) => item.verifiedBy === 'agent-verified').length,
+      needsYou: items.filter((item) => item.verifiedBy === 'needs-you').length,
+      unmarked: items.filter((item) => item.verifiedBy !== 'agent-verified' && item.verifiedBy !== 'needs-you').length,
+      designPass: found.manifest?.designPass?.result ?? 'not-run',
+    };
     if (found.verdict) found.delivery = delivery(slug, pack, found.version);
     return { status: 200, body: found };
   }

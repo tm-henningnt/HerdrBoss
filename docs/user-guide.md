@@ -72,6 +72,16 @@ Set **Picture retention days** under **Pictures** on Settings. The default is 30
 
 A review pack is a set of evidence with one question for each item. The routes below read packs, serve pack files, and store the Owner answers. `src/review-api.js` handles them. `src/review-store.js` keeps the data. A project publishes packs. The Owner answers them.
 
+### Item guidance and summary
+
+Each review item can describe what the Owner should inspect. Use `description` for two non-empty lines: what the item shows, then why it matters. The field can have up to 2000 characters. Use `steps` for 1 to 30 exact actions. Each step can have up to 500 characters. Use `expected` for a non-empty result of up to 2000 characters. Use `link` for the app and sheet URL. The URL must use HTTPS. HTTP works only for loopback and `.test` hosts.
+
+Set `verifiedBy` to `agent-verified` when an agent ran the interaction check, or to `needs-you` when the item needs a human decision. Set `evidence` to up to 60 image file references from image, image-pair, or gallery items. An agent-verified item needs at least one evidence image. A missing evidence image produces a warning. An evidence reference that does not name an image item is an error.
+
+A pack can set `designPass` to an object with a non-empty reviewer name of up to 200 characters, a result (`passed`, `issues`, or `not-run`), and an optional note of up to 2000 characters. `review check` warns when the design pass is missing or has result `not-run`.
+
+The pack response includes a server-computed `summary` object. It has `total`, `agentVerified`, `needsYou`, `unmarked`, and `designPass`. The first four fields are counts. `designPass` is the result string, or `not-run` when no design pass is set. Each returned item also includes its `description`, `steps`, `expected`, `link`, `verifiedBy`, and `evidence` fields when set.
+
 ### Access
 
 The routes sit behind the same checks as the other `/api/` routes, in this order: host check, same-origin check, access check, read-only preview check, then the route.

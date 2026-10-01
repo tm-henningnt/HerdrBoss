@@ -9,3 +9,9 @@ Read this file before you dispatch a reviewer or a review subagent.
 ## Herdr Boss data
 
 - Put this rule in a review task brief: run any command that reads Herdr Boss data with a temporary `HOME` and `HERDR_BOSS_DIR` (`mktemp -d`). Do not import modules of `src/` that open the live data directory.
+
+## Review-pack values
+
+- Use these item types in `manifest.json`: `image`, `image-pair`, `gallery`, `video`, `markdown`, `table`, `diff`, `file`, `link`, and `checklist`.
+- Use these `ask` values to name each question: `accept`, `deny`, `note`, `live`, `choice`, and `rating`.
+- Include light and dark images for a UI change, before and after images for a change, the exact text for a document, and a `link` item with `live` for each live check.
