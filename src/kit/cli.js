@@ -10,7 +10,7 @@ import { allowWorkerScope, collectWorker, createHerdrRunner, listWorkers, parkWo
 import { pruneWorktrees } from './worktrees.js';
 import { acquireProjectLock, listProjectLocks, pushWithLock, releaseProjectLock } from './locks.js';
 import { SUITE_WAIT_SECONDS, listSuitePasses, runSuite } from './suite.js';
-import { agentsBlock, checkAgentsFile, installedKitRevision, installKit, kitChangesSince, kitRevision, kitRevisionState, KIT_FILE, KIT_STATES, rulesPolicy } from './agents-check.js';
+import { agentsBlock, checkAgentsFile, installedKitRevision, installKit, kitChangesSince, kitRequiredBehind, kitRevision, kitRevisionState, KIT_FILE, KIT_STATES, rulesPolicy } from './agents-check.js';
 import { loadConfig } from '../config.js';
 import { listProjects } from '../projects.js';
 import { createWaitHerdr, parseWaitArgs, waitForWorkers } from './wait.js';
@@ -164,8 +164,11 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
       const state = kitRevisionState(loaded, current, entries);
       const c = project.agentsCheck;
       const counts = c && Number.isInteger(c.errors) && Number.isInteger(c.warnings) ? `${c.errors} errors, ${c.warnings} warnings` : 'not published';
-      output(`${project.slug}: kit revision ${loaded ?? 'none'} (${state}); agents check ${counts}`);
-      return { slug: project.slug, kitRevision: loaded, state, agentsCheck: c ?? null };
+      const installed = typeof project.installedKitRevision === 'string' && project.installedKitRevision ? project.installedKitRevision : null;
+      const requiredBehind = kitRequiredBehind(loaded, current, entries);
+      const gap = requiredBehind ? `; ${requiredBehind} required change${requiredBehind === 1 ? '' : 's'} behind` : '';
+      output(`${project.slug}: kit revision ${loaded ?? 'none'} (${state})${gap}; installed ${installed ?? 'none'}; agents check ${counts}`);
+      return { slug: project.slug, kitRevision: loaded, installedKitRevision: installed, requiredBehind, state, agentsCheck: c ?? null };
     });
     const count = (state) => rows.filter((row) => row.state === state).length;
     const required = count(KIT_STATES.required);

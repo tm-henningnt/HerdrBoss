@@ -21,7 +21,9 @@ const MAX_SUBJECT_LENGTH = 90;
 const MAX_TEXT_LENGTH = 1199;
 const PENDING_MS = 7 * 86400 * 1000;
 const MAX_PENDING = 50;
-const TAIL = '. Run herdr-boss kit update and continue. The command prints the current kit file.';
+// The steps that finish a kit adoption. The reminder in src/engine.js uses the same sentence.
+export const KIT_ADOPT_STEPS = 'Run herdr-boss kit update, set kitRevision in the status to the v= value of docs/orchestration/herdr-boss.md, and publish.';
+const TAIL = `. ${KIT_ADOPT_STEPS} The command prints the current kit file.`;
 
 function shortSubject(subject) {
   const text = String(subject || '').replace(/\s+/g, ' ').trim();

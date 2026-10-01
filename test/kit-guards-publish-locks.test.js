@@ -776,9 +776,9 @@ console.log(JSON.stringify({ result }));
   const result = spawnSync(process.execPath, [cli, 'check', 'kit'], { cwd: home, env, encoding: 'utf8' });
   assert.equal(result.status, 1, result.stderr);
   assert.deepEqual(result.stdout.trimEnd().split('\n'), [
-    `alpha: kit revision ${current} (current); agents check 0 errors, 2 warnings`,
-    'beta: kit revision abcdef012345 (behind (required)); agents check 1 errors, 0 warnings',
-    'gamma: kit revision none (not published); agents check not published',
+    `alpha: kit revision ${current} (current); installed none; agents check 0 errors, 2 warnings`,
+    'beta: kit revision abcdef012345 (behind (required)); installed none; agents check 1 errors, 0 warnings',
+    'gamma: kit revision none (not published); installed none; agents check not published',
     `check kit: FAIL (current revision ${current}; 3 projects, 1 behind (required), 1 not published)`,
   ]);
 
@@ -852,7 +852,8 @@ test('publish keeps the kitRevision of the status file', () => {
   const status = path.join(home, 'status.json');
   fs.writeFileSync(status, JSON.stringify({ project: 'Demo', kitRevision: 'abcdef012345' }));
   const dataDir = path.join(home, 'boss');
-  const env = { ...process.env, HOME: home, HERDR_BOSS_DIR: dataDir, TMPDIR: home };
+  // The ceiling keeps Git from finding a repository above the temporary directory, so the status has no disk kit.
+  const env = { ...process.env, HOME: home, HERDR_BOSS_DIR: dataDir, TMPDIR: home, GIT_CEILING_DIRECTORIES: path.dirname(home) };
   const cli = fileURLToPath(new URL('../src/cli.js', import.meta.url));
   const result = spawnSync(process.execPath, [cli, 'publish', 'demo', status], { cwd: home, env, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);
@@ -901,7 +902,7 @@ test('the project page shows the AGENTS.md drift line and its help', () => {
   assert.match(app, /AGENTS\.md drift: \$\{errors\} errors, \$\{warnings\} warnings\. Run <span class="mono">herdr-boss check agents<\/span>\./);
   assert.match(app, /agentsDriftLine\(p\.agentsCheck\)/);
   assert.match(app, /<h3>AGENTS\.md drift<\/h3>/);
-  assert.match(app, /Kit revision \$\{esc\(loaded\)\}, current \$\{esc\(current\)\}/);
+  assert.match(app, /Kit revision published \$\{esc\(loaded\)\}, on disk \$\{esc\(disk \|\| 'unknown'\)\}, current \$\{esc\(current\)\}/);
   assert.match(app, /kitRevisionLine\(p, kit\)/);
   assert.match(app, /<h3>Kit revision<\/h3>/);
 });

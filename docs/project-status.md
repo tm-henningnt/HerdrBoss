@@ -110,7 +110,7 @@ Publish every tracked issue as a task, including closed issues with `"status": "
 | `gates[]` | object | A human gate: `title` is required; `id`, `needs`, `evidence`, and `status` are optional. |
 | `risks[]` | string[] | Open risks. |
 | `git` | object | `branch`, `commit`, and `dirty` (boolean). |
-| `kitRevision` | string | Optional. The kit revision that the orchestrator loaded: the `v=` value in the first line of `docs/orchestration/herdr-boss.md`. It has 12 lowercase hex characters. The project page shows a warning when it is not the current kit revision. |
+| `kitRevision` | string | Optional. The kit revision that the orchestrator loaded: the `v=` value in the first line of `docs/orchestration/herdr-boss.md`. It has 12 lowercase hex characters. `herdr-boss publish` sets it from the kit file on disk, after it refreshes a behind kit. The project page shows the published revision, the revision on disk, and the current revision. It shows a warning with the number of required changes when the published revision is behind. |
 
 `herdr-boss publish` keeps at most the newest 30 done tasks in the stored status. It orders them by `updated`, or by file order when `updated` is missing. A done task that another task lists in `blockedBy` stays. The command records the IDs of the removed tasks in `doneIds` and counts them in `doneCount`. It prints one line when it counts new tasks. The orchestrator keeps its own file unchanged. Publishing the same file again leaves `doneCount` unchanged. The command warns when the stored status is larger than 200 KB.
 

@@ -161,7 +161,7 @@ test('two kit commits and one non-kit commit give one alert with only the kit su
   assert.equal(result.alert.severity, 'info');
   assert.equal(result.alert.scope, 'all');
   assert.equal(result.alert.once, true);
-  assert.equal(result.alert.text, `[herdr-boss] Kit revision ${revision} (2 change(s)): Change worker start; Change the orchestrator skill. Run herdr-boss kit update and continue. The command prints the current kit file.`);
+  assert.equal(result.alert.text, `[herdr-boss] Kit revision ${revision} (2 change(s)): Change worker start; Change the orchestrator skill. Run herdr-boss kit update, set kitRevision in the status to the v= value of docs/orchestration/herdr-boss.md, and publish. The command prints the current kit file.`);
   assert.deepEqual(result.state.alert, result.alert);
   assert.deepEqual(git.calls, [
     ['-C', root, 'rev-parse', 'HEAD'],
@@ -219,7 +219,7 @@ test('a mixed batch names only the required changes', async (t) => {
   commit(root, 'kit/models.md', 'A change that needs action', 'Kit-Impact: required');
   commit(root, 'kit/models.md', 'A cosmetic change', 'Kit-Impact: none');
   const result = await readKitNotice({ root, stored: { commit: base, at: 0 }, git: recordingGit(), now: NOW });
-  assert.equal(result.alert.text, `[herdr-boss] Kit revision ${REV} (1 change(s)): A change that needs action. Run herdr-boss kit update and continue. The command prints the current kit file.`);
+  assert.equal(result.alert.text, `[herdr-boss] Kit revision ${REV} (1 change(s)): A change that needs action. Run herdr-boss kit update, set kitRevision in the status to the v= value of docs/orchestration/herdr-boss.md, and publish. The command prints the current kit file.`);
 });
 
 test('a missing, invalid, or ambiguous impact sends no notice', async (t) => {
@@ -260,7 +260,7 @@ test('a recorded required change sends a notice when the change log lines up wit
   });
   assert.ok(result.alert);
   // The project kit template is an installed kit asset, so the kit commit moves the fixture revision.
-  assert.equal(result.alert.text, `[herdr-boss] Kit revision ${kitRevision(root)} (1 change(s)): Record a change that needs action. Run herdr-boss kit update and continue. The command prints the current kit file.`);
+  assert.equal(result.alert.text, `[herdr-boss] Kit revision ${kitRevision(root)} (1 change(s)): Record a change that needs action. Run herdr-boss kit update, set kitRevision in the status to the v= value of docs/orchestration/herdr-boss.md, and publish. The command prints the current kit file.`);
 });
 
 test('a batch of asset commits takes one record per commit, newest first', async (t) => {
@@ -274,7 +274,7 @@ test('a batch of asset commits takes one record per commit, newest first', async
   // The newest commit takes the newest record, which is the required one. Only it is named.
   assert.ok(result.alert);
   // Both commits change an installed kit asset, so they move the fixture revision.
-  assert.equal(result.alert.text, `[herdr-boss] Kit revision ${kitRevision(root)} (1 change(s)): Record the newer useful change. Run herdr-boss kit update and continue. The command prints the current kit file.`);
+  assert.equal(result.alert.text, `[herdr-boss] Kit revision ${kitRevision(root)} (1 change(s)): Record the newer useful change. Run herdr-boss kit update, set kitRevision in the status to the v= value of docs/orchestration/herdr-boss.md, and publish. The command prints the current kit file.`);
 });
 
 test('a change log that does not line up with the commits sends no notice', async (t) => {
@@ -348,7 +348,7 @@ test('more than 10 kit commits list the 10 newest and then and N more', async (t
   for (let i = 1; i <= 13; i += 1) commit(root, 'kit/models.md', `Kit change ${i}`, REQUIRED);
   const result = await readKitNotice({ root, stored: { commit: base, at: 0 }, git: recordingGit(), now: NOW });
   const subjects = Array.from({ length: 10 }, (_, i) => `Kit change ${13 - i}`).join('; ');
-  assert.equal(result.alert.text, `[herdr-boss] Kit revision ${REV} (13 change(s)): ${subjects}; and 3 more. Run herdr-boss kit update and continue. The command prints the current kit file.`);
+  assert.equal(result.alert.text, `[herdr-boss] Kit revision ${REV} (13 change(s)): ${subjects}; and 3 more. Run herdr-boss kit update, set kitRevision in the status to the v= value of docs/orchestration/herdr-boss.md, and publish. The command prints the current kit file.`);
 });
 
 test('the notice text stays under 1200 characters with long subjects', () => {
@@ -356,7 +356,7 @@ test('the notice text stays under 1200 characters with long subjects', () => {
   const text = formatKitNotice(commits, 'abcdef012345');
   assert.ok(text.length < 1200, `length ${text.length}`);
   assert.match(text, /^\[herdr-boss\] Kit revision abcdef012345 \(30 change\(s\)\): /);
-  assert.match(text, /; and 20 more\. Run herdr-boss kit update and continue\. The command prints the current kit file\.$/);
+  assert.match(text, /; and 20 more\. Run herdr-boss kit update, set kitRevision in the status to the v= value of docs\/orchestration\/herdr-boss\.md, and publish\. The command prints the current kit file\.$/);
 });
 
 test('a git failure sends nothing, stores HEAD, and gives one event', async (t) => {

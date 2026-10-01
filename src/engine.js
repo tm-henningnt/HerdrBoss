@@ -33,7 +33,7 @@ import { initializeAgentResponseIndex, readAgentMetadata, recordAgentMessage, re
 import { sweep as sweepReviewPacks } from './review-store.js';
 import { sweepAttachments } from './attachments.js';
 import { openMessageStore } from './message-store.js';
-import { readKitNotice, pendingKitAlert, isKitAlert, kitNoticeTargets, unsentKitChanges, formatKitNotice } from './kit-notice.js';
+import { readKitNotice, pendingKitAlert, isKitAlert, kitNoticeTargets, unsentKitChanges, formatKitNotice, KIT_ADOPT_STEPS } from './kit-notice.js';
 import { applyTaskState, readWorkerFacts, gitIsMerged, gitCounts } from './task-state.js';
 import { kitRevisionState, kitSnapshot, KIT_STATES } from './kit/agents-check.js';
 import { nextDailyTime, nightNoticeSent, quietHoursActive, readNight, readNightRecord, watchUntilPhrase, withNightReportMark, withNoticeMark, writeNight } from './night.js';
@@ -413,8 +413,8 @@ export function isBossHandoff(item, herdr) {
 
 export function alertPromptDue(alert, record, now, cooldown) {
   if (alert.key?.startsWith('context:')) return !record || now - record.at >= CONTEXT_WARNING_INTERVAL_MS;
-  if (alert.immediate) return !record;
   if (Number.isFinite(alert.repeatMs) && alert.repeatMs >= 0) return !record || now - record.at >= alert.repeatMs;
+  if (alert.immediate) return !record;
   if (!record) return true;
   if (SEV[alert.severity] > SEV[record.severity]) return true;
   return !alert.key.startsWith('machine:disk:') && !alert.once && now - record.at > cooldown;
@@ -437,13 +437,14 @@ export function joinsNoticeDigest(alert) {
   return alert.key.startsWith('machine:') || alert.key.startsWith('browser:');
 }
 
-// A project that stays behind on a required kit change gets one reminder after this time.
+// A project that stays behind on a required kit change gets a reminder after this time, and again each time this time passes.
 export const KIT_REMIND_MS = 2 * 3600 * 1000;
 
 // tracker maps a project slug to the time when it was first seen behind on a required change. The
 // caller stores it in memory. A project that catches up, or is behind on useful changes only,
 // leaves the tracker. The reminder is an immediate warning for the project workspace, and it has
-// no desktop notice. The delivery step sends it to a working orchestrator only.
+// no desktop notice. It repeats every KIT_REMIND_MS while the revision stays the same. The
+// delivery step sends it to the project orchestrator in any state.
 export function kitReminderAlerts({ projects, tracker, now, current, changes, held = () => false }) {
   const entries = changes.map((change) => ({ ...change }));
   const alerts = [];
@@ -457,9 +458,9 @@ export function kitReminderAlerts({ projects, tracker, now, current, changes, he
     if (!Number.isFinite(since)) { tracker[project.slug] = { since: now }; continue; }
     if (now - since < KIT_REMIND_MS || !project.workspace) continue;
     alerts.push({
-      key: `kitremind:${project.slug}:${current}`, severity: 'warn', scope: project.workspace, immediate: true, once: true, noDesktop: true,
+      key: `kitremind:${project.slug}:${current}`, severity: 'warn', scope: project.workspace, immediate: true, repeatMs: KIT_REMIND_MS, noDesktop: true,
       title: 'Kit behind',
-      text: `[herdr-boss] Your kit is behind on a required change. Run herdr-boss kit update and continue. Kit revision now ${current}.`,
+      text: `[herdr-boss] Your kit is behind on a required change. ${KIT_ADOPT_STEPS} Kit revision now ${current}.`,
     });
   }
   for (const slug of Object.keys(tracker)) if (!seen.has(slug)) delete tracker[slug];
@@ -2835,8 +2836,8 @@ export class Engine extends EventEmitter {
         let targets = a.scope === 'all' ? broadcast : orchs.filter((o) => o.workspace === a.scope);
         // A kit notice goes to every project orchestrator, also one without active workers.
         if (isKitAlert(a)) targets = kitNoticeTargets(orchs, held);
-        // A kit reminder goes to the project orchestrator only while it works. The kit notice reached it when it was idle.
-        if (a.key.startsWith('kitremind:')) targets = kitNoticeTargets(targets.filter((o) => o.label === 'orch' && o.status === 'working'), held);
+        // A kit reminder goes to the project orchestrator in any state.
+        if (a.key.startsWith('kitremind:')) targets = kitNoticeTargets(targets.filter((o) => o.label === 'orch'), held);
         if (isStaleStatusAlert(a)) {
           const target = targets.find((o) => o.workspace === a.scope && o.label === 'orch');
           targets = target ? [target] : [];

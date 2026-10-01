@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { checkAgentsExclude, globMatches, KIT_ROOT, loadModels } from './config.js';
 import { mergeModels } from '../control.js';
 
@@ -179,6 +180,65 @@ export function kitBehindLine(root, { changesFile = CHANGES_FILE, current = kitR
   if (!required && !useful) return null;
   const parts = [required && `${required} required`, useful && `${useful} useful`].filter(Boolean).join(' and ');
   return `Kit update: this project kit is behind by ${parts} change(s). Run herdr-boss kit update.`;
+}
+
+// The number of required changes after a kit revision, up to the current revision. The result is
+// null when the revision is missing or the change log does not know it.
+export function kitRequiredBehind(revision, current = kitRevision(), entries = readKitChanges()) {
+  if (!revision) return null;
+  if (revision === current) return 0;
+  const index = entries.findIndex((entry) => entry.revision === revision);
+  if (index < 0) return null;
+  return entries.slice(index + 1).filter((entry) => entry.impact === 'required').length;
+}
+
+// The kit files that a refresh writes and that a person may have edited. A file has hand edits when
+// the stub hash does not match its text, or when the kit file lacks its header or differs from the
+// committed copy. A refresh does not overwrite such a file.
+function handEditedKitFiles(root) {
+  const edited = [];
+  let kitText = null;
+  try { kitText = fs.readFileSync(path.join(root, KIT_FILE), 'utf8'); } catch {}
+  if (kitText != null) {
+    const lines = kitText.split('\n');
+    let changed = lines[1]?.trim() !== KIT_NOTE;
+    if (!changed) {
+      try {
+        execFileSync('git', ['ls-files', '--error-unmatch', '--', KIT_FILE], { cwd: root, stdio: 'ignore' });
+        const diff = execFileSync('git', ['diff', '--name-only', 'HEAD', '--', KIT_FILE], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+        changed = diff.trim() !== '';
+      } catch { /* an untracked file or a missing repository has no committed copy to compare */ }
+    }
+    if (changed) edited.push(KIT_FILE);
+  }
+  try {
+    const lines = fs.readFileSync(path.join(root, 'AGENTS.md'), 'utf8').replace(/\r\n?/g, '\n').split('\n');
+    const begins = lines.flatMap((line, index) => (BEGIN.test(line) ? [index] : []));
+    const ends = lines.flatMap((line, index) => (END.test(line) ? [index] : []));
+    if (begins.length === 1 && ends.length === 1 && ends[0] > begins[0]) {
+      const version = BEGIN.exec(lines[begins[0]])[1] || '';
+      if (blockHash(lines.slice(begins[0] + 1, ends[0]).join('\n')) !== version) edited.push('AGENTS.md');
+    }
+  } catch { /* a missing AGENTS.md gets a new stub */ }
+  return edited;
+}
+
+// Bring the kit files of a project to the current kit when the disk copy is behind on a required
+// change. It writes the same files as herdr-boss kit install and commits nothing. It skips a file
+// set that has hand edits. It returns { status, written, line }: status is current, refreshed, or
+// skipped, and line is one line for the caller to print, or null.
+export function refreshKitIfRequired(root, { changesFile = CHANGES_FILE, current = kitRevision() } = {}) {
+  const installed = installedKitRevision(root);
+  if (!installed || kitRevisionState(installed, current, readKitChanges(changesFile)) !== KIT_STATES.required) {
+    return { status: 'current', written: [], line: null };
+  }
+  const skip = (reason) => ({ status: 'skipped', written: [], line: `Warning: kit files not refreshed: ${reason}. Run herdr-boss kit update.` });
+  const edited = handEditedKitFiles(root);
+  if (edited.length) return skip(`${edited.join(' and ')} ${edited.length === 1 ? 'has' : 'have'} hand edits`);
+  try {
+    const result = installKit(root);
+    return { status: 'refreshed', written: result.written, line: `Kit refreshed: wrote ${result.written.join(', ')} (kit revision ${installed} to ${result.revision}). Commit the files with your next commit.` };
+  } catch (error) { return skip(String(error?.message || error).split('\n')[0]); }
 }
 
 // The state of a project kit revision against the current kit revision. A revision that the change

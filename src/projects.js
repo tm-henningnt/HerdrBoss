@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { PROJECTS_DIR } from './config.js';
 import { readProjectRepos } from './harness.js';
-import { kitRevision } from './kit/agents-check.js';
+import { installedKitRevision, kitRevision } from './kit/agents-check.js';
 
 export const SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const TASK_STATUS = new Set(['todo', 'doing', 'review', 'blocked', 'done']);
@@ -128,7 +128,7 @@ function tildePath(value, home) {
 }
 
 export function listProjects() {
-  // currentKitRevision is not part of the status file. The project page compares it with kitRevision.
+  // currentKitRevision and installedKitRevision are not part of the status file. The project page compares them with kitRevision.
   const currentKitRevision = kitRevision();
   const home = os.homedir();
   const repos = readProjectRepos();
@@ -139,13 +139,15 @@ export function listProjects() {
     const file = path.join(PROJECTS_DIR, f);
     const registered = repos.find((row) => row.slug === slug)?.repo;
     const repo = tildePath(registered, home);
+    // The disk copy of the kit file in the registered repository. null when there is no repository or no kit file.
+    const installedKit = registered ? installedKitRevision(registered) : null;
     try {
       const data = JSON.parse(fs.readFileSync(file, 'utf8'));
       const errors = validateProject(data);
       const publishedAt = data.updated || fs.statSync(file).mtime.toISOString();
-      return { slug, ...data, currentKitRevision, repo, updated: publishedAt, publishedAt, errors: errors.length ? errors : undefined };
+      return { slug, ...data, currentKitRevision, installedKitRevision: installedKit, repo, updated: publishedAt, publishedAt, errors: errors.length ? errors : undefined };
     } catch (e) {
-      return { slug, project: slug, currentKitRevision, repo, errors: [`invalid JSON: ${e.message}`] };
+      return { slug, project: slug, currentKitRevision, installedKitRevision: installedKit, repo, errors: [`invalid JSON: ${e.message}`] };
     }
   }).sort((a, b) => a.project.localeCompare(b.project));
 }

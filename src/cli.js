@@ -848,9 +848,17 @@ async function main() {
       if (!slug || !file) { console.error('usage: herdr-boss publish <slug> <file|-> [--force]'); process.exit(2); }
       const text = file === '-' ? fs.readFileSync(0, 'utf8') : fs.readFileSync(file, 'utf8');
       const data = JSON.parse(text);
-      // Check AGENTS.md at the Git top level. Findings are warnings here; the status still publishes.
       let top = null;
       try { top = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() || null; } catch {}
+      // Refresh a behind kit first, then set kitRevision from the disk copy, so a stale status shows no false gap.
+      let refresh = null;
+      if (top && data && typeof data === 'object' && !Array.isArray(data)) {
+        const { installedKitRevision, refreshKitIfRequired } = await import('./kit/agents-check.js');
+        refresh = refreshKitIfRequired(top);
+        const disk = installedKitRevision(top);
+        if (disk) data.kitRevision = disk;
+      }
+      // Check AGENTS.md at the Git top level. Findings are warnings here; the status still publishes.
       const agentsFile = top && path.join(top, 'AGENTS.md');
       if (agentsFile && fs.existsSync(agentsFile) && data && typeof data === 'object' && !Array.isArray(data)) {
         const { checkAgentsFile } = await import('./kit/agents-check.js');
@@ -897,8 +905,9 @@ async function main() {
       for (const warning of statusWarnings(data)) console.error(`Warning: ${warning}`);
       if (top) {
         const { kitBehindLine } = await import('./kit/agents-check.js');
-        const kitLine = kitBehindLine(top);
-        if (kitLine) console.error(kitLine);
+        if (refresh?.line) console.error(refresh.line);
+        const line = refresh?.status === 'refreshed' ? null : kitBehindLine(top);
+        if (line) console.error(line);
       }
       console.log(`published ${dashboardUrl(cfg)}/projects/${slug}`);
       if (moved) console.log(`moved ${moved} done ${moved === 1 ? 'task' : 'tasks'} into doneCount`);

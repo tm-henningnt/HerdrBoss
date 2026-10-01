@@ -5871,17 +5871,38 @@ function kitState(loaded, kit) {
   return changes.slice(index + 1).some((c) => c.impact === 'required') ? 'behind (required)' : 'behind (useful only)';
 }
 
-// The kit revision that the orchestrator loaded, against the current kit revision of Herdr Boss.
-// A project that is behind on useful changes only shows a muted line. A required change shows a warning.
+// The number of required changes after a kit revision, up to the current revision. It is null for
+// a missing revision or a revision that the change log does not know. It matches kitRequiredBehind() in src/kit/agents-check.js.
+function kitRequiredBehind(revision, kit) {
+  if (!revision) return null;
+  if (revision === kit.current) return 0;
+  const changes = kit.changes || [];
+  const index = changes.findIndex((c) => c.revision === revision);
+  return index < 0 ? null : changes.slice(index + 1).filter((c) => c.impact === 'required').length;
+}
+
+const requiredChanges = (n) => `${n} required change${n === 1 ? '' : 's'} behind`;
+
+// The kit revision that the orchestrator published, the kit revision on disk in the project
+// repository, and the current kit revision of Herdr Boss. A project that is behind on useful changes
+// only shows a muted line. A required change shows a warning with the number of required changes.
 function kitRevisionLine(p, kit) {
   const current = p.currentKitRevision;
   if (!current) return '';
   const loaded = p.kitRevision || 'not published';
-  const text = `Kit revision ${esc(loaded)}, current ${esc(current)}`;
-  const state = kitState(p.kitRevision, { current, changes: kit?.changes });
+  const disk = p.installedKitRevision || null;
+  const text = `Kit revision published ${esc(loaded)}, on disk ${esc(disk || 'unknown')}, current ${esc(current)}`;
+  const snapshot = { current, changes: kit?.changes };
+  const state = kitState(p.kitRevision, snapshot);
+  const behind = kitRequiredBehind(p.kitRevision, snapshot);
+  const gap = behind ? ` ${requiredChanges(behind)}.` : '';
+  // The disk copy is ahead of the status when the orchestrator has not published since the last kit update.
+  const diskNote = disk && disk !== p.kitRevision
+    ? (disk === current ? ' The disk copy is current. The orchestrator must set <span class="mono">kitRevision</span> in the status and publish.' : ` The disk copy is behind${kitRequiredBehind(disk, snapshot) ? ` (${requiredChanges(kitRequiredBehind(disk, snapshot))})` : ''}.`)
+    : '';
   if (state === 'current') return `<div class="win-foot">${text}.</div>`;
-  if (state === 'behind (useful only)') return `<div class="win-foot muted">${text}. Behind (useful only): the kit changes since then need no action. Run <span class="mono">herdr-boss kit update</span> when convenient.</div>`;
-  return `<div class="warnbox">${text}. The orchestrator uses an old kit. Run <span class="mono">herdr-boss kit update</span> in the project, and read its digest of the kit changes.</div>`;
+  if (state === 'behind (useful only)') return `<div class="win-foot muted">${text}. Behind (useful only): the kit changes since then need no action. Run <span class="mono">herdr-boss kit update</span> when convenient.${diskNote}</div>`;
+  return `<div class="warnbox">${text}.${gap}${diskNote} The orchestrator uses an old kit. Run <span class="mono">herdr-boss kit update</span> in the project, set <span class="mono">kitRevision</span> to the <span class="mono">v=</span> value of the kit file, and publish.</div>`;
 }
 
 // The read-only file paths that an orchestrator reads. Show paths only, never file contents.
@@ -6102,7 +6123,7 @@ const HELP = {
     <h3>AGENTS.md drift</h3><p><b>AGENTS.md drift</b> shows the errors and warnings that <b>herdr-boss publish</b> found in the project AGENTS.md. An error is a missing, old, or hand-edited Herdr Boss stub, or a missing, old, or hand-edited kit file <code>docs/orchestration/herdr-boss.md</code>. A warning is stale orchestration text, such as a fixed pane ID, a dated line, a copied model list, or text that sends pushes or product decisions to the Boss. Run <b>herdr-boss check agents</b> in the project for each finding. Run <b>herdr-boss kit install</b> to fix an error.</p>
     <h3>Files</h3><p><b>Files and kit</b> in Details shows the paths that the orchestrator reads: the project memory file, the installed kit file, and the Boss memory file. The home folder shows as <b>~</b>. The panel shows paths only. It never shows the contents of a memory or kit file.</p>
     <h3>Worker config</h3><p><b>Worker config</b> in Details shows the fields that Herdr Boss read from <code>.herdr-boss.json</code> in the project repository. A <b>config</b> tag marks a field that the file sets; the other fields use the default. The <code>setup</code> command shows as <b>set</b> or <b>not set</b>, and a home folder path shows as <b>~</b>. Change a field in <code>.herdr-boss.json</code> in the repository.</p>
-    <h3>Kit revision</h3><p><b>Kit revision</b> shows the kit revision that the orchestrator loaded, from <code>kitRevision</code> in its status file, and the current kit revision. A muted line shows when the project is behind on changes that need no action (<b>behind (useful only)</b>). A warning shows when the project is behind on a required change, or when its revision is not in the change log. The <b>Kit updated</b> notice then tells the orchestrator to run <b>herdr-boss kit update</b> and to continue. The command prints the kit file. A pane gets at most one <b>Kit updated</b> digest in the number of minutes in <b>Kit digest interval minutes</b> (default 120). A pane that works gets no digest. A change that arrives sooner joins the next digest. A working orchestrator that stays behind on a required change for 2 hours gets one reminder. The command first prints a digest of the kit changes since the installed kit revision. The digest names the impact and the summary of each change, oldest first. The command then installs the kit as <b>herdr-boss kit install</b> does. The Claude session hook runs <b>herdr-boss kit update --quiet</b> at each session start. <b>worker start</b>, <b>publish</b>, and <b>handoff</b> print one line when the project kit is behind for a required or useful change.</p>
+    <h3>Kit revision</h3><p><b>Kit revision</b> shows the kit revision that the orchestrator published (<code>kitRevision</code> in its status file), the kit revision on disk in the project repository, and the current kit revision. A warning also shows how many required changes the project is behind. A muted line shows when the project is behind on changes that need no action (<b>behind (useful only)</b>). A warning shows when the project is behind on a required change, or when its revision is not in the change log. The <b>Kit updated</b> notice then tells the orchestrator to run <b>herdr-boss kit update</b> and to continue. The command prints the kit file. A pane gets at most one <b>Kit updated</b> digest in the number of minutes in <b>Kit digest interval minutes</b> (default 120). A pane that works gets no digest. A change that arrives sooner joins the next digest. An orchestrator in any state that stays behind on a required change for 2 hours gets a reminder, and gets it again every 2 hours until the kit is current. The command first prints a digest of the kit changes since the installed kit revision. The digest names the impact and the summary of each change, oldest first. The command then installs the kit as <b>herdr-boss kit install</b> does. The Claude session hook runs <b>herdr-boss kit update --quiet</b> at each session start. <b>worker start</b> and <b>publish</b> first refresh the kit files of the project when the disk copy is behind on a required change, unless the kit file or the AGENTS.md stub has hand edits. They commit nothing. <b>publish</b> also sets <code>kitRevision</code> in the status from the disk copy. <b>handoff</b> prints one line when the project kit is behind for a required or useful change.</p>
     <h3>Stale status</h3><p><b>Status stale: AGE</b> shows next to the updated time when the published status is older than the stale-status limit and a worker worked after the publish or new commits landed. A paused project is never stale. While a worker runs or the orchestrator works, a status older than 30 minutes also sends the orchestrator a notice, at most once per hour for that project. Publish the current plan and progress to clear the mark.</p>
     <p>The data comes from the project's status file. When a section is missing, the orchestrator has not published those fields.</p>`],
   mailbox: ['Mailbox', `

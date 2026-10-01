@@ -7,7 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { kitRevisionState, kitSnapshot } from '../src/kit/agents-check.js';
-import { kitReminderAlerts, KIT_REMIND_MS } from '../src/engine.js';
+import { alertPromptDue, kitReminderAlerts, KIT_REMIND_MS } from '../src/engine.js';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const A = 'aaaaaaaaaaaa';
@@ -82,7 +82,7 @@ test('check kit reports current, behind (useful only), and behind (required); on
   ];
   const useful = runCheckKit(t, { alpha: { kitRevision: C }, beta: { kitRevision: B } }, entries, C);
   assert.deepEqual(useful.states, [['alpha', 'current'], ['beta', 'behind (useful only)']]);
-  assert.match(useful.lines[1], /^beta: kit revision bbbbbbbbbbbb \(behind \(useful only\)\); agents check not published$/);
+  assert.match(useful.lines[1], /^beta: kit revision bbbbbbbbbbbb \(behind \(useful only\)\); installed none; agents check not published$/);
   assert.match(useful.lines.at(-1), /^check kit: PASS \(current revision cccccccccccc; 2 projects, 1 behind \(useful only\)\)$/);
   assert.equal(useful.exitCode, 0);
 
@@ -94,7 +94,7 @@ test('check kit reports current, behind (useful only), and behind (required); on
   assert.equal(gone.exitCode, 1);
 });
 
-test('kitReminderAlerts warns once after 2 hours behind on a required change', () => {
+test('kitReminderAlerts warns after 2 hours behind on a required change and repeats every 2 hours', () => {
   const entries = [{ revision: A, impact: 'required', summary: 'a' }, { revision: B, impact: 'required', summary: 'b' }];
   const projects = [
     { slug: 'alpha', workspace: 'wA', kitRevision: A },
@@ -112,8 +112,16 @@ test('kitReminderAlerts warns once after 2 hours behind on a required change', (
   assert.equal(alerts[0].key, `kitremind:alpha:${B}`);
   assert.equal(alerts[0].scope, 'wA');
   assert.equal(alerts[0].immediate, true);
-  assert.equal(alerts[0].once, true);
-  assert.match(alerts[0].text, /^\[herdr-boss\] Your kit is behind on a required change\. Run herdr-boss kit update/);
+  assert.equal(alerts[0].once, undefined);
+  assert.equal(alerts[0].repeatMs, KIT_REMIND_MS);
+  assert.match(alerts[0].text, /^\[herdr-boss\] Your kit is behind on a required change\. Run herdr-boss kit update, set kitRevision in the status to the v= value of docs\/orchestration\/herdr-boss\.md, and publish\./);
+  assert.match(alerts[0].text, new RegExp(`Kit revision now ${B}\\.$`));
+  // The key stays the same at the next reminder, so the repeat clock belongs to one revision.
+  assert.equal(kitReminderAlerts(args(NOW + 3 * KIT_REMIND_MS))[0].key, alerts[0].key);
+  const [alert] = alerts;
+  assert.equal(alertPromptDue(alert, null, NOW, 0), true);
+  assert.equal(alertPromptDue(alert, { at: NOW, severity: 'warn' }, NOW + KIT_REMIND_MS - 1, 0), false);
+  assert.equal(alertPromptDue(alert, { at: NOW, severity: 'warn' }, NOW + KIT_REMIND_MS, 0), true);
 });
 
 test('kitReminderAlerts stops and resets the clock when the project catches up or the change is useful only', () => {
@@ -147,13 +155,13 @@ const cfg = loadConfig();
 cfg.push = false;
 const engine = new Engine(cfg, { push: false, act: false, gitRunner: async () => '', kitRoot: '/kit-root', herdrRunner: async (cmd, args) => { prompts.push(args); return ''; } });
 engine.push = true;
-const alert = { key: 'kitremind:alpha:bbbbbbbbbbbb', severity: 'warn', scope: 'wA', immediate: true, once: true, noDesktop: true, title: 'Kit behind', text: '[herdr-boss] Your kit is behind on a required change. Run herdr-boss kit update.' };
+const alert = { key: 'kitremind:alpha:bbbbbbbbbbbb', severity: 'warn', scope: 'wA', immediate: true, repeatMs: 2 * 3600 * 1000, noDesktop: true, title: 'Kit behind', text: '[herdr-boss] Your kit is behind on a required change. Run herdr-boss kit update.' };
 const now = Date.parse('2026-09-29T10:00:00.000Z');
-for (const [i, panes] of input.rounds.entries()) await engine.deliver([alert], { panes }, now + i * 60000, null, input.heldProjects ? heldWorkspaces(input.heldProjects, null, input.herdr) : new Set(input.held || []));
+for (const [i, panes] of input.rounds.entries()) await engine.deliver([alert], { panes }, now + (input.offsets?.[i] ?? i * 60000), null, input.heldProjects ? heldWorkspaces(input.heldProjects, null, input.herdr) : new Set(input.held || []));
 console.log(JSON.stringify({ prompts: prompts.filter((a) => a[0] === 'agent' && a[1] === 'prompt').map((a) => a[2]) }));
 `;
 
-test('the kit reminder reaches a working project orchestrator once and no other pane', (t) => {
+test('the kit reminder reaches an idle or working project orchestrator once in a short time and no other pane', (t) => {
   const dir = tmpDir(t, 'herdr-kit-remind-');
   fs.mkdirSync(path.join(dir, 'projects'), { recursive: true });
   const orch = (id, workspace, status, label = 'orch') => ({ id, workspace, workspaceLabel: workspace, label, orch: true, agent: 'claude', status });
@@ -168,6 +176,20 @@ test('the kit reminder reaches a working project orchestrator once and no other 
   });
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout.trim()).prompts, ['wA:p1']);
+});
+
+test('the kit reminder repeats every 2 hours for a pane in any state', (t) => {
+  const dir = tmpDir(t, 'herdr-kit-remind-repeat-');
+  fs.mkdirSync(path.join(dir, 'projects'), { recursive: true });
+  const orch = (status) => ({ id: 'wA:p1', workspace: 'wA', workspaceLabel: 'wA', label: 'orch', orch: true, agent: 'claude', status });
+  const rounds = [[orch('idle')], [orch('working')], [orch('done')], [orch('working')], [orch('idle')]];
+  const offsets = [0, 60000, KIT_REMIND_MS - 1, KIT_REMIND_MS, 2 * KIT_REMIND_MS + 1];
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', deliverProbe], {
+    cwd: repo, encoding: 'utf8',
+    env: { ...process.env, HOME: dir, HERDR_BOSS_DIR: dir, HERDR_BOSS_LIVE_DIR: dir, KIT_SCENARIO: JSON.stringify({ rounds, offsets }) },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout.trim()).prompts, ['wA:p1', 'wA:p1', 'wA:p1']);
 });
 
 test('the kit reminder skips the orchestrator of a held project', (t) => {
@@ -194,4 +216,27 @@ test('the kit reminder skips the orchestrator of a project with the published st
   });
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout.trim()).prompts, []);
+});
+
+test('check kit shows the installed revision of the project repository and the required changes behind', (t) => {
+  const entries = [
+    { revision: A, impact: 'required', summary: 'a' },
+    { revision: B, impact: 'required', summary: 'b' },
+    { revision: C, impact: 'useful', summary: 'c' },
+    { revision: D, impact: 'required', summary: 'd' },
+  ];
+  const dir = tmpDir(t, 'herdr-kit-installed-');
+  const repoDir = path.join(dir, 'alpha-repo');
+  fs.mkdirSync(path.join(repoDir, 'docs', 'orchestration'), { recursive: true });
+  fs.writeFileSync(path.join(repoDir, 'docs', 'orchestration', 'herdr-boss.md'), `<!-- herdr-boss kit v=${D} -->\n`);
+  fs.mkdirSync(path.join(dir, 'projects'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'projects', 'alpha.json'), JSON.stringify({ project: 'alpha', kitRevision: A }));
+  fs.writeFileSync(path.join(dir, 'project-repos.json'), JSON.stringify([{ slug: 'alpha', repo: repoDir }]));
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', cliProbe], {
+    cwd: repo, encoding: 'utf8',
+    env: { ...process.env, HOME: dir, HERDR_BOSS_DIR: dir, KIT_SCENARIO: JSON.stringify({ entries, current: D }) },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const out = JSON.parse(result.stdout.trim());
+  assert.match(out.lines[0], new RegExp(`^alpha: kit revision ${A} \\(behind \\(required\\)\\); 2 required changes behind; installed ${D}; agents check not published$`));
 });
