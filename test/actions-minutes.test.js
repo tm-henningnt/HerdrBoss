@@ -58,6 +58,52 @@ test('collectActionsMinutes keeps ISO week numbers correct across the year bound
   assert.equal(result.repos[0].minutes.at(-1), 1);
 });
 
+test('collectActionsMinutes estimates busy repositories from five workflow-run pages without billing or timing calls', async () => {
+  const calls = [];
+  const start = Date.parse('2026-09-30T10:00:00Z');
+  const pages = new Map(Array.from({ length: 5 }, (_, page) => [page + 1, Array.from({ length: 100 }, (_, index) => {
+    const started = new Date(start + index * 1000).toISOString();
+    return { id: page * 100 + index, status: 'completed', run_started_at: started, created_at: started, updated_at: new Date(Date.parse(started) + 30_000).toISOString(), runner_type: 'UBUNTU' };
+  })]));
+  const result = await collectActionsMinutes({
+    repos: [{ slug: 'busy', remote: 'https://github.com/acme/busy.git' }],
+    run: async (args) => {
+      const endpoint = args.at(-1);
+      calls.push(endpoint);
+      const page = Number(/[?&]page=(\d+)/.exec(endpoint)?.[1] || 1);
+      return reply({ workflow_runs: pages.get(page) || [] });
+    },
+    now: NOW,
+  });
+  assert.equal(result.available, true);
+  assert.equal(result.estimated, true);
+  assert.deepEqual(result.weeks, ['2026-W29', '2026-W30', '2026-W31', '2026-W32', '2026-W33', '2026-W34', '2026-W35', '2026-W36', '2026-W37', '2026-W38', '2026-W39', '2026-W40']);
+  assert.equal(result.repos[0].runs.at(-1), 500);
+  assert.equal(result.repos[0].minutes.at(-1), 500, 'round each 30-second run up before summing');
+  assert.deepEqual(calls.map((endpoint) => Number(/[?&]page=(\d+)/.exec(endpoint)?.[1])), [1, 2, 3, 4, 5]);
+  assert.ok(calls.every((endpoint) => !/billing\/usage|\/timing/.test(endpoint)));
+});
+
+test('collectActionsMinutes stops after the first page older than the window', async () => {
+  const calls = [];
+  const recent = { id: 1, status: 'completed', created_at: '2026-09-30T10:00:00Z', run_started_at: '2026-09-30T10:00:00Z', updated_at: '2026-09-30T10:01:00Z' };
+  const old = { id: 2, status: 'completed', created_at: '2026-07-01T10:00:00Z', run_started_at: '2026-07-01T10:00:00Z', updated_at: '2026-07-01T10:01:00Z' };
+  const result = await collectActionsMinutes({
+    repos: [{ slug: 'sample', remote: 'https://github.com/acme/sample.git' }],
+    run: async (args) => {
+      const endpoint = args.at(-1);
+      calls.push(endpoint);
+      const page = Number(/[?&]page=(\d+)/.exec(endpoint)?.[1] || 1);
+      return reply({ workflow_runs: page === 1 ? [recent] : page === 2 ? [old] : [] });
+    },
+    now: NOW,
+  });
+  assert.equal(result.available, true);
+  assert.deepEqual(calls.map((endpoint) => Number(/[?&]page=(\d+)/.exec(endpoint)?.[1])), [1, 2]);
+  assert.equal(result.repos[0].runs.at(-1), 1);
+  assert.equal(result.repos[0].minutes.at(-1), 1);
+});
+
 test('collectActionsMinutes skips one failing repository and hides unavailable access', async () => {
   const run = async (args) => {
     const endpoint = args.at(-1);
@@ -133,6 +179,64 @@ test('refreshActionsMinutes persists a 6 hour limit, shares in-flight work, and 
   release();
   assert.equal((await a).available, true);
   assert.equal((await b).available, true);
+});
+
+test('refreshActionsMinutes keeps earlier weeks for a repository that fails while another refreshes', async (t) => {
+  const dataDir = temp(t);
+  const repos = [
+    { slug: 'a', repo: '/tmp/a', remote: 'https://github.com/acme/a.git' },
+    { slug: 'b', repo: '/tmp/b', remote: 'https://github.com/acme/b.git' },
+  ];
+  let phase = 'initial';
+  const run = async (args) => {
+    const endpoint = args.at(-1);
+    if (endpoint.includes('/actions/billing/usage')) return reply({});
+    if (endpoint.includes('/actions/runs?')) {
+      if (phase === 'partial' && endpoint.includes('repos/acme/a/')) return { status: 1 };
+      const duration = phase === 'initial' ? 60_000 : 180_000;
+      return reply({ workflow_runs: [{ id: 1, status: 'completed', created_at: '2026-09-30T10:00:00Z', run_started_at: '2026-09-30T10:00:00Z', updated_at: '2026-09-30T10:01:00Z', run_duration_ms: duration }] });
+    }
+    return reply({}, 1);
+  };
+  await refreshActionsMinutes({ dataDir, repos, run, now: NOW });
+  const before = readActionsMinutes(dataDir);
+  phase = 'partial';
+  const after = await refreshActionsMinutes({ dataDir, repos, run, now: NOW + 6 * 60 * 60 * 1000 });
+  assert.deepEqual(after.repos.find((row) => row.repo === 'acme/a').minutes, before.repos.find((row) => row.repo === 'acme/a').minutes);
+  assert.equal(after.repos.find((row) => row.repo === 'acme/b').minutes.at(-1), 3);
+});
+
+test('refreshActionsMinutes only updates lastAttemptAt when every repository fails', async (t) => {
+  const dataDir = temp(t);
+  const repos = [{ slug: 'sample', repo: '/tmp/sample', remote: 'https://github.com/acme/sample.git' }];
+  let fail = false;
+  const run = async (args) => {
+    if (args.at(-1).includes('/actions/billing/usage')) return reply({});
+    if (args.at(-1).includes('/actions/runs?')) return fail ? { status: 1 } : reply({ workflow_runs: [
+      { id: 1, status: 'completed', created_at: '2026-09-30T10:00:00Z', run_started_at: '2026-09-30T10:00:00Z', updated_at: '2026-09-30T10:01:00Z', run_duration_ms: 60_000 },
+    ] });
+    return reply({}, 1);
+  };
+  await refreshActionsMinutes({ dataDir, repos, run, now: NOW });
+  const file = path.join(dataDir, 'actions-minutes.json');
+  const before = JSON.parse(fs.readFileSync(file, 'utf8'));
+  fail = true;
+  await refreshActionsMinutes({ dataDir, repos, run, now: NOW + 6 * 60 * 60 * 1000 });
+  const after = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const { lastAttemptAt: _beforeAttempt, ...beforeData } = before;
+  const { lastAttemptAt, ...afterData } = after;
+  assert.deepEqual(afterData, beforeData);
+  assert.equal(lastAttemptAt, new Date(NOW + 6 * 60 * 60 * 1000).toISOString());
+});
+
+test('collectActionsMinutes rejects repository and owner names made only of dots', async () => {
+  let calls = 0;
+  const run = async () => { calls++; return reply({ workflow_runs: [] }); };
+  for (const remote of ['https://github.com/acme/...git', 'https://github.com/../sample.git']) {
+    const result = await collectActionsMinutes({ repos: [{ slug: 'bad', remote }], run, now: NOW });
+    assert.equal(result.available, false, remote);
+  }
+  assert.equal(calls, 0);
 });
 
 test('Actions minutes view helpers handle empty data and bound repository colors', async () => {
