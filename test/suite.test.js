@@ -106,7 +106,7 @@ async function waitFor(condition, message, timeoutMs = 4000) {
   assert.fail(message);
 }
 
-function startLockWaiter(t, f, pane, panes, { waitSeconds = 30, noticesFile = null } = {}) {
+function startLockWaiter(t, f, pane, panes, { waitSeconds = 30, noticesFile = null, clockFile = null } = {}) {
   const script = path.join(f.base, `${pane.replaceAll(':', '-')}.mjs`);
   const locksUrl = pathToFileURL(path.resolve('src/kit/locks.js')).href;
   const configUrl = pathToFileURL(path.resolve('src/kit/config.js')).href;
@@ -116,6 +116,7 @@ function startLockWaiter(t, f, pane, panes, { waitSeconds = 30, noticesFile = nu
     const panes = ${JSON.stringify(panes)};
     const fs = await import('node:fs');
     const noticesFile = ${JSON.stringify(noticesFile)};
+    const clockFile = ${JSON.stringify(clockFile)};
     const herdr = (args) => {
       if (args[0] === 'pane' && args[1] === 'get') return { pane: { pane_id: args[2], workspace_id: 'ws', label: 'orch' } };
       if (args[0] === 'pane' && args[1] === 'list') return { panes: panes.map((pane_id) => ({ pane_id })) };
@@ -123,7 +124,9 @@ function startLockWaiter(t, f, pane, panes, { waitSeconds = 30, noticesFile = nu
     };
     const config = loadProjectConfig({ cwd: process.argv[2] });
     const env = { HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'ws', HERDR_PANE_ID: process.argv[4] };
-    const options = { config, env, herdr, dataDir: process.argv[3], waitSeconds: Number(process.argv[5]), kind: 'suite', output: (line) => { if (noticesFile) fs.appendFileSync(noticesFile, line + '\\n'); } };
+    const options = { config, env, herdr, dataDir: process.argv[3], waitSeconds: Number(process.argv[5]), kind: 'suite',
+      now: () => clockFile ? Number(fs.readFileSync(clockFile, 'utf8')) : Date.now(),
+      output: (line) => { if (noticesFile) fs.appendFileSync(noticesFile, line + '\\n'); } };
     try {
       const lock = acquireProjectLock('full-suite', options);
       process.stdout.write(JSON.stringify({ type: 'acquired', pane: lock.ownerPane }) + '\\n');
@@ -411,6 +414,14 @@ test('suite releases the lock when the command cannot start', (t) => {
   assert.equal(fs.existsSync(f.lockFile), false);
 });
 
+test('a killed test child releases the suite slot while the wrapper PID remains alive', (t) => {
+  const f = fixture(t, 'herdr-suite-killed-child-');
+  const result = f.runCommand([], [process.execPath, '-e', "process.kill(process.pid, 'SIGKILL')"]);
+  assert.equal(result.exitCode, 1);
+  assert.equal(fs.existsSync(f.lockFile), false);
+  assert.doesNotThrow(() => process.kill(process.pid, 0), 'the calling wrapper remains alive');
+});
+
 test('suite keeps a failed command code when lock release stays busy, then the next acquire takes over', (t) => {
   const f = fixture(t, 'herdr-suite-release-busy-');
   const guard = path.join(f.dataDir, 'locks', 'machine', '.mutation');
@@ -551,7 +562,7 @@ test('suite lock timeout returns EX_TEMPFAIL and does not run the test command',
   } catch (caught) { error = caught; }
   assert.equal(error?.exitCode, 75);
   assert.match(error?.message ?? '', /^lock busy: .*ws:a \(manual\).*queue position 1 of 1.*waited 0 seconds/i);
-  assert.ok(output.some((line) => line === 'waiting for full-suite, position 1 of 1, held by ws:a (manual)'));
+  assert.ok(output.some((line) => /waiting for full-suite, lane long, position 1 of 1, held by .* ws:a \(manual\).*queue length 1/.test(line)));
   assert.equal(fs.existsSync(path.join(f.base, 'seen.json')), false, 'the suite command does not run before it gets the lock');
   releaseProjectLock('full-suite', lockOptions(f, 'ws:a', panes));
 });
@@ -586,10 +597,9 @@ test('a waiter reports its start and changed position no more than once a minute
     },
   });
   assert.equal(acquired.ownerPane, 'ws:b');
-  assert.deepEqual(output.filter((line) => line.startsWith('waiting for full-suite')), [
-    'waiting for full-suite, position 2 of 2, held by ws:a (manual)',
-    'waiting for full-suite, position 1 of 1, held by ws:a (manual)',
-  ]);
+  const waits = output.filter((line) => line.startsWith('waiting for full-suite'));
+  assert.deepEqual(waits.map((line) => /position (\d+ of \d+)/.exec(line)?.[1]), ['2 of 2', '1 of 1']);
+  for (const line of waits) assert.match(line, /lane long.*held by .* ws:a \(manual\).*started .*age .*predicted end .*queue length/);
   releaseProjectLock('full-suite', lockOptions(f, 'ws:b', panes));
 });
 
@@ -737,7 +747,7 @@ test('the machine guard keeps a short ticket queued until the latest sample pass
   const acquired = acquireProjectLock('full-suite', { ...short, kind: 'suite', waitSeconds: 1 });
 
   assert.equal(acquired.lane, 'short');
-  assert.ok(lines.some((line) => line === 'short lane paused: load 200% exceeds 100%'));
+  assert.ok(lines.some((line) => /^waiting for full-suite.*lane short.*short lane paused: load 200% exceeds 100%$/.test(line)));
   assert.ok(sampleIndex >= 2, 'the guard reads again after the sample fails');
   assert.deepEqual(readQueueFiles(f.dataDir), []);
   releaseProjectLock('full-suite', short);
@@ -1436,11 +1446,18 @@ test('LK3 R2 a real waiting process observes guard enable and disable without re
   acquireProjectLock('full-suite', { ...options('ws:c'), kind: 'suite' });
   fs.writeFileSync(path.join(f.dataDir, 'machine-samples.jsonl'), JSON.stringify({ at: new Date().toISOString(), l5: 2, cpus: 1 }));
   const noticesFile = path.join(f.base, 'waiter-notices.log');
-  const waiter = startLockWaiter(t, f, 'ws:b', panes, { noticesFile });
+  const clockFile = path.join(f.base, 'waiter-clock');
+  const clock = Date.now();
+  fs.writeFileSync(clockFile, String(clock));
+  const waiter = startLockWaiter(t, f, 'ws:b', panes, { noticesFile, clockFile, waitSeconds: 180 });
   const queued = await waitFor(() => readQueueFiles(f.dataDir).find((ticket) => ticket.pane === 'ws:b'), 'the subprocess did not queue');
   locks.guard.enabled = true;
   configureLockSettings(f, locks);
   releaseProjectLock('full-suite', options('ws:c'));
+  // Advance the notice clock to its next permitted line. Do not wait one real minute.
+  const advancedClockFile = `${clockFile}.next`;
+  fs.writeFileSync(advancedClockFile, String(clock + 60_000));
+  fs.renameSync(advancedClockFile, clockFile);
   await waitFor(() => fs.existsSync(noticesFile) && fs.readFileSync(noticesFile, 'utf8').includes('short lane paused: load'), 'the subprocess ignored the newly enabled guard');
   assert.equal(readQueueFiles(f.dataDir).find((ticket) => ticket.pane === 'ws:b').seq, queued.seq);
   locks.guard.enabled = false;

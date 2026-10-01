@@ -4,6 +4,7 @@ import { DATA_DIR } from '../config.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const LOCK_LEDGER_FILES = ['lock-ledger.1.jsonl', 'lock-ledger.jsonl'];
+const WAIT_LEDGER_MAX_BYTES = 512 * 1024;
 
 function median(values) {
   if (!values.length) return null;
@@ -28,11 +29,35 @@ export function predictLockDuration(lines, { project, kind, name, now = Date.now
   return { ms: samples.length < 3 ? null : median(samples.map((line) => line.holdMs)), samples: samples.length };
 }
 
-function readLedgerLines(dataDir, cutoff) {
+function readLedgerTail(file, maxBytes) {
+  const fd = fs.openSync(file, 'r');
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile()) return '';
+    const start = Math.max(0, stat.size - maxBytes);
+    const buffer = Buffer.alloc(Math.min(stat.size, maxBytes));
+    let bytesRead = 0;
+    while (bytesRead < buffer.length) {
+      const count = fs.readSync(fd, buffer, bytesRead, buffer.length - bytesRead, start + bytesRead);
+      if (!count) break;
+      bytesRead += count;
+    }
+    const text = buffer.subarray(0, bytesRead).toString('utf8');
+    // The byte boundary can split a JSON line or UTF-8 character. Use only complete lines after it.
+    if (start === 0) return text;
+    const newline = text.indexOf('\n');
+    return newline < 0 ? '' : text.slice(newline + 1);
+  } finally { fs.closeSync(fd); }
+}
+
+function readLedgerLines(dataDir, cutoff, maxBytes = null) {
   const lines = [];
   for (const fileName of LOCK_LEDGER_FILES) {
     let text;
-    try { text = fs.readFileSync(path.join(dataDir, fileName), 'utf8'); }
+    try {
+      const file = path.join(dataDir, fileName);
+      text = maxBytes === null ? fs.readFileSync(file, 'utf8') : readLedgerTail(file, maxBytes);
+    }
     catch (error) { if (error.code === 'ENOENT' || error.code === 'EISDIR') continue; throw error; }
     for (const raw of text.split('\n')) {
       if (!raw) continue;
@@ -53,6 +78,22 @@ export function readLockDurationPrediction({
   const nowMs = current instanceof Date ? current.getTime() : Number(current);
   const lines = readLedgerLines(dataDir, nowMs - 14 * DAY_MS);
   return predictLockDuration(lines, { project, kind, name, now: nowMs });
+}
+
+// Wait estimates use the last ten completed holds of the lock and lane, across projects and kinds.
+// Keep this separate from admission: a wait estimate must not change a ticket's lane.
+export function readLockLaneDurationPredictions({ dataDir = DATA_DIR, name, now = Date.now() } = {}) {
+  const current = typeof now === 'function' ? now() : now;
+  const nowMs = current instanceof Date ? current.getTime() : Number(current);
+  const lines = readLedgerLines(dataDir, -Infinity, WAIT_LEDGER_MAX_BYTES);
+  return Object.fromEntries(['long', 'short'].map((lane) => {
+    const samples = lines.filter((line) => line.name === name && (line.lane ?? 'long') === lane
+      && Number.isFinite(line.holdMs) && line.holdMs >= 0
+      && !line.takeover && !line.reentrant && !line.reused
+      && Number.isFinite(Date.parse(line.at)) && Date.parse(line.at) <= nowMs)
+      .sort((left, right) => Date.parse(left.at) - Date.parse(right.at)).slice(-10);
+    return [lane, { ms: median(samples.map((line) => line.holdMs)), samples: samples.length }];
+  }));
 }
 
 export function classifyLockLane(prediction, shortLimitMinutes) {

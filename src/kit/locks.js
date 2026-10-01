@@ -10,7 +10,7 @@ import { DEFAULT_RULES_FILE, loadProjectConfig } from './config.js';
 import { SWAP_FORCE_ENV, swapGuardFor } from './swap-guard.js';
 import { createHerdrRunner, verifyCallerPane } from './workers.js';
 import { DEFAULT_SUITE_UNTESTED, hookFileHash, hookRunsOnlySuites, reusablePushPass, writePushHookCommands } from './suite-passes.js';
-import { chooseLockSlot, classifyLockLane, isLegacyLockEntry, lockAdmissionCapacity, machineGuardReason, readLockDurationPrediction } from './lock-lanes.js';
+import { chooseLockSlot, classifyLockLane, isLegacyLockEntry, lockAdmissionCapacity, machineGuardReason, readLockDurationPrediction, readLockLaneDurationPredictions } from './lock-lanes.js';
 import { workflowPushesBranch } from '../ci-lint.js';
 import { readWorkflowFiles } from '../ci-workflows.js';
 import { processInfo as defaultProcessInfo } from './process-info.js';
@@ -248,7 +248,10 @@ function lockIsLive(record, {
   }
   if (!alive) return false;
   if (record.pidStart) {
-    const currentStart = processStart(processInfo, record.pid);
+    let info = null;
+    try { info = processInfo(record.pid, { wantStart: true }); } catch {}
+    if (info?.alive === false) return false;
+    const currentStart = typeof info?.start === 'string' ? info.start.trim().replace(/\s+/g, ' ') : null;
     if (currentStart && currentStart !== record.pidStart) return false;
   }
   return (livePanes ?? paneIds(herdr)).has(record.ownerPane);
@@ -397,6 +400,16 @@ function writeNewRecord(file, record) {
   }
 }
 
+function replaceRecord(file, record) {
+  const temporary = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(temporary, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
+    fs.renameSync(temporary, file);
+  } finally {
+    try { fs.unlinkSync(temporary); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  }
+}
+
 function sleep(milliseconds) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds); }
 
 const MUTATION_OWNER_FILE = 'owner.json';
@@ -497,6 +510,63 @@ function writeManualExpiryNotice(record, dataDir, now) {
   return notice;
 }
 
+const oneLine = (value) => String(value ?? 'unknown').replace(/[\s\x00-\x1f\x7f]+/g, ' ').trim();
+
+function slowHolderId(record) {
+  const hash = crypto.createHash('sha256').update(JSON.stringify([
+    record.name, record.slot ?? 'long', record.ownerPane, record.pid, record.pidStart ?? null, record.acquiredAt,
+  ])).digest('hex').slice(0, 32);
+  return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20)}`;
+}
+
+function holderWaitDetails(record, prediction, observedAt, processReader) {
+  const ageMs = Math.max(0, observedAt - Date.parse(record.acquiredAt));
+  const ageSeconds = Math.floor(ageMs / 1000);
+  const age = ageSeconds < 60 ? `${ageSeconds}s` : formatDuration(ageSeconds);
+  const duration = prediction?.ms ?? null;
+  const endMs = duration === null ? null : Date.parse(record.acquiredAt) + duration;
+  const end = endMs === null || !Number.isFinite(endMs) || Math.abs(endMs) > 8.64e15 ? 'unknown' : new Date(endMs).toISOString();
+  const slow = duration !== null && ageMs > 2 * duration;
+  let state = 'unknown';
+  if (slow && processReader) {
+    try {
+      const info = processReader(record.pid, { wantStart: false, wantState: true });
+      if (['alive', 'zombie', 'unknown'].includes(info?.state)) state = info.state;
+    } catch { /* An unreadable process table leaves the diagnostic state unknown. */ }
+  }
+  return {
+    text: `${oneLine(record.project)} ${oneLine(record.ownerPane)} (${record.kind}); holder lane ${record.lane ?? 'long'}; started ${record.acquiredAt}; age ${age}; predicted end ${end}${slow ? `; holder is slow; PID ${record.pid}, state ${state}` : ''}`,
+    slow,
+  };
+}
+
+function writeSlowHolderNotice(record, detail, dataDir, now) {
+  const id = slowHolderId(record);
+  const holder = {
+    name: record.name, slot: record.slot, lane: record.lane ?? 'long', project: record.project ?? null,
+    ownerPane: record.ownerPane, pid: record.pid, pidStart: record.pidStart ?? null, acquiredAt: record.acquiredAt, kind: record.kind,
+  };
+  const notice = {
+    id, type: 'slow-holder', severity: 'warn', ownerPane: record.ownerPane, holder,
+    text: `Lock ${record.name}: holder is slow; ${detail.text}.`,
+    createdAt: new Date(timeValue(now)).toISOString(),
+  };
+  const directory = path.join(dataDir, 'locks', 'machine');
+  withMutationLock(directory, () => {
+    const current = readRecord(recordFile(directory, record.name, record.slot), '', 'machine');
+    if (!current || slowHolderId(current) !== id) return;
+    try { writeNewRecord(path.join(lockNoticesDirectory(dataDir), `${id}.json`), notice); }
+    catch (error) { if (error.code !== 'EEXIST') throw error; }
+  });
+}
+
+function removeDeliveredSlowNotice(record, dataDir) {
+  const file = path.join(dataDir, 'locks', 'machine', 'notices', `${slowHolderId(record)}.json`);
+  try {
+    if (JSON.parse(fs.readFileSync(file, 'utf8')).deliveredAt) fs.unlinkSync(file);
+  } catch { /* A failed notice cleanup must not block a lock release or takeover. */ }
+}
+
 export function readLockTakeoverNotices({ dataDir = DATA_DIR } = {}) {
   const directory = path.join(dataDir, 'locks', 'machine', 'notices');
   let files;
@@ -507,17 +577,36 @@ export function readLockTakeoverNotices({ dataDir = DATA_DIR } = {}) {
     try { notice = JSON.parse(fs.readFileSync(path.join(directory, file), 'utf8')); }
     catch (error) { throw new Error(`Cannot read lock notice ${path.basename(file)}: ${error.message}`); }
     if (!notice || notice.id !== path.basename(file, '.json') || notice.severity !== 'warn'
-      || typeof notice.ownerPane !== 'string' || notice.text !== LOCK_NOTICE_TEXT
+      || typeof notice.ownerPane !== 'string'
+      || (notice.type === 'slow-holder'
+        ? !notice.holder || notice.holder.name !== FULL_SUITE_LOCK || notice.holder.ownerPane !== notice.ownerPane
+          || !['long', 'short'].includes(notice.holder.lane) || !LOCK_KINDS.has(notice.holder.kind)
+          || !Number.isSafeInteger(notice.holder.pid) || notice.holder.pid < 1
+          || !Number.isFinite(Date.parse(notice.holder.acquiredAt)) || slowHolderId(notice.holder) !== notice.id
+          || typeof notice.text !== 'string' || !notice.text.startsWith(`Lock ${FULL_SUITE_LOCK}: holder is slow; `)
+          || /[\r\n]/.test(notice.text)
+          || (notice.deliveredAt !== undefined && !Number.isFinite(Date.parse(notice.deliveredAt)))
+        : notice.text !== LOCK_NOTICE_TEXT)
       || typeof notice.createdAt !== 'string' || !Number.isFinite(Date.parse(notice.createdAt))) {
       throw new Error(`Lock notice ${path.basename(file)} is invalid.`);
     }
     return notice;
-  });
+  }).filter((notice) => !notice.deliveredAt);
 }
 
-export function removeLockTakeoverNotice(id, { dataDir = DATA_DIR } = {}) {
+export function removeLockTakeoverNotice(id, { dataDir = DATA_DIR, now = Date.now } = {}) {
   if (typeof id !== 'string' || !/^[0-9a-f-]{36}$/i.test(id)) throw new Error('Lock notice ID is invalid.');
-  try { fs.unlinkSync(path.join(dataDir, 'locks', 'machine', 'notices', `${id}.json`)); }
+  const file = path.join(dataDir, 'locks', 'machine', 'notices', `${id}.json`);
+  try {
+    const notice = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (notice.type !== 'slow-holder') { fs.unlinkSync(file); return; }
+    const directory = path.join(dataDir, 'locks', 'machine');
+    // Mark the successful prompt before cleanup. A busy mutation guard must not make it pending again.
+    replaceRecord(file, { ...notice, deliveredAt: new Date(timeValue(now)).toISOString() });
+    // Keep the marker while this acquisition exists. Another waiter cannot queue it again.
+    const holder = readRecord(recordFile(directory, notice.holder.name, notice.holder.slot), '', 'machine');
+    if (!holder || slowHolderId(holder) !== id) fs.unlinkSync(file);
+  }
   catch (error) { if (error.code !== 'ENOENT') throw error; }
 }
 
@@ -891,11 +980,7 @@ export function acquireProjectLock(name, {
   const deadline = waitSeconds === null ? null : BigInt(timeValue(now)) + BigInt(waitSeconds) * 1000n;
   let ticket = null;
   let ticketOutstanding = false;
-  let lastNotice = null;
   let lastNoticeAt = null;
-  let lastGuardNotice = null;
-  let lastGuardNoticeAt = null;
-  let lastPolicyNoticeAt = null;
   let failure = null;
   let firstAttempt = true;
   try {
@@ -943,6 +1028,7 @@ export function acquireProjectLock(name, {
             staleRecords.push(record);
             if (name === FULL_SUITE_LOCK && record.kind === 'manual' && record.expiresAt
               && Date.parse(record.expiresAt) <= timeValue(now)) writeManualExpiryNotice(record, dataDir, now);
+            removeDeliveredSlowNotice(record, dataDir);
             fs.unlinkSync(entry.file);
           }
           // Check every live slot before making a ticket. A suite hook re-enters the push's lane.
@@ -966,7 +1052,7 @@ export function acquireProjectLock(name, {
           const laneTickets = tickets.filter((entry) => ticketLane(entry, slots) === lane);
           if (!choice || policyUnavailable) {
             const activeRecord = liveRecords.find((record) => record.slot === 'long') ?? liveRecords[0] ?? null;
-            return { activeRecord, tickets: laneTickets, ...(policyUnavailable ? { policyUnavailable } : {}) };
+            return { activeRecord, holders: liveRecords, queueLength: tickets.length, tickets: laneTickets, ...(policyUnavailable ? { policyUnavailable } : {}) };
           }
 
           const guard = settings?.guard ?? POLICY_DEFAULTS.locks.guard;
@@ -974,7 +1060,7 @@ export function acquireProjectLock(name, {
           if (lane === 'short' && longHolder && guard.enabled !== false) {
             const sample = typeof readMachineSample === 'function' ? readMachineSample() : latestMachineSample(dataDir, now);
             const guardReason = machineGuardReason(sample, guard, { now });
-            if (guardReason) return { activeRecord: longHolder, tickets: laneTickets, guardReason };
+            if (guardReason) return { activeRecord: longHolder, holders: liveRecords, queueLength: tickets.length, tickets: laneTickets, guardReason };
           }
 
           if (ticketOutstanding) {
@@ -1040,38 +1126,6 @@ export function acquireProjectLock(name, {
         appendLockLedger(dataDir, 'acquire', { ...outcome.reentrant, project: config.slug, kind, ownerPane: caller.paneId }, now, { waitMs: 0, reentrant: true });
         return outcome.reentrant;
       }
-      if (outcome.guardReason) {
-        const observedAt = timeValue(now);
-        if (outcome.guardReason !== lastGuardNotice
-          || lastGuardNoticeAt === null || observedAt - lastGuardNoticeAt >= LOCK_WAIT_NOTICE_INTERVAL_MS) {
-          output(`short lane paused: ${outcome.guardReason}`);
-          lastGuardNotice = outcome.guardReason;
-          lastGuardNoticeAt = observedAt;
-        }
-        if (waitSeconds === null) throw noWaitBusyError(name, outcome.activeRecord, outcome.tickets);
-        if (deadline !== null && BigInt(timeValue(now)) >= deadline) {
-          throw waitBusyError(name, {
-            activeRecord: outcome.activeRecord, tickets: outcome.tickets, ticket, startedAt, now,
-          });
-        }
-        pause(Math.max(1, Math.min(100, Number(deadline - BigInt(timeValue(now))))));
-        continue;
-      }
-      if (outcome.policyUnavailable) {
-        const observedAt = timeValue(now);
-        if (lastPolicyNoticeAt === null || observedAt - lastPolicyNoticeAt >= LOCK_WAIT_NOTICE_INTERVAL_MS) {
-          output(`waiting for ${name}: ${outcome.policyUnavailable}; admission waits for a complete lock policy.`);
-          lastPolicyNoticeAt = observedAt;
-        }
-        if (waitSeconds === null) throw noWaitBusyError(name, outcome.activeRecord, outcome.tickets);
-        if (deadline !== null && BigInt(timeValue(now)) >= deadline) {
-          throw waitBusyError(name, {
-            activeRecord: outcome.activeRecord, tickets: outcome.tickets, ticket, startedAt, now,
-          });
-        }
-        pause(Math.max(1, Math.min(100, Number(deadline - BigInt(timeValue(now))))));
-        continue;
-      }
       if (waitSeconds === null) {
         throw noWaitBusyError(name, outcome.activeRecord, outcome.tickets);
       }
@@ -1080,15 +1134,27 @@ export function acquireProjectLock(name, {
       const ownPosition = ticket ? tickets.findIndex((entry) => entry.id === ticket.id) + 1 : 1;
       const active = outcome.activeRecord;
       const head = tickets.find((entry) => entry.id !== ticket?.id);
-      const holderPane = active?.ownerPane ?? head?.pane ?? 'no active holder';
-      const holderKind = active?.kind ?? head?.kind ?? '';
       if (queued) {
-        const signature = `${lane}:${ownPosition}/${tickets.length}`;
         const observedAt = timeValue(now);
-        if (signature !== lastNotice && (lastNoticeAt === null || observedAt - lastNoticeAt >= LOCK_WAIT_NOTICE_INTERVAL_MS)) {
-          const laneText = lane === 'short' ? ' short lane' : '';
-          output(`waiting for ${name}${laneText}, position ${ownPosition} of ${tickets.length}, held by ${holderPane}${holderKind ? ` (${holderKind})` : ''}`);
-          lastNotice = signature;
+        if (lastNoticeAt === null || observedAt - lastNoticeAt >= LOCK_WAIT_NOTICE_INTERVAL_MS) {
+          let predictions = {};
+          try { predictions = readLockLaneDurationPredictions({ dataDir, name, now: observedAt }); }
+          catch { /* Unreadable history gives an unknown end, never a guessed time. */ }
+          const holders = outcome.holders ?? (active ? [active] : []);
+          const details = holders.map((record) => {
+            const prediction = predictions[record.lane ?? 'long'];
+            const detail = holderWaitDetails(record, prediction, observedAt, processInfo);
+            if (detail.slow) {
+              try { writeSlowHolderNotice(record, detail, dataDir, now); }
+              catch { detail.text += '; Boss notice could not be queued'; }
+            }
+            return detail.text;
+          });
+          const held = details.length ? `held by ${details.join(' | ')}` : 'no active holder';
+          const behind = !details.length && head ? `; waiting behind ${oneLine(head.project)} ${oneLine(head.pane)}` : '';
+          const reason = outcome.guardReason ? `; short lane paused: ${outcome.guardReason}`
+            : outcome.policyUnavailable ? `; ${outcome.policyUnavailable}; admission waits for a complete lock policy` : '';
+          output(`waiting for ${name}, lane ${lane}, position ${ownPosition} of ${tickets.length}, ${held}; queue length ${outcome.queueLength ?? tickets.length} (${tickets.length} in lane)${behind}${reason}`);
           lastNoticeAt = observedAt;
         }
       }
@@ -1171,6 +1237,7 @@ export function releaseProjectLock(name, {
       }
     }
     fs.unlinkSync(owned.file);
+    removeDeliveredSlowNotice(owned.record, dataDir);
     recordLockRelease(owned.record, { dataDir, now });
     output(`Lock ${name} released.`);
     return owned.record;

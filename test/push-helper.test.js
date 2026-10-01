@@ -413,7 +413,9 @@ test('push lock timeout returns EX_TEMPFAIL before running git push', (t) => {
   } catch (caught) { error = caught; }
   assert.equal(error?.exitCode, 75);
   assert.match(error?.message ?? '', /^lock busy: .*ws:orch \(manual\).*queue position 1 of 1.*waited 1800 seconds/i);
-  assert.ok(f.lines.some((line) => line === 'waiting for full-suite, position 1 of 1, held by ws:orch (manual)'));
+  const waits = f.lines.filter((line) => line.startsWith('waiting for full-suite'));
+  assert.ok(waits.length > 0);
+  assert.match(waits[0], /^waiting for full-suite, lane long, position 1 of 1, held by \S+ ws:orch \(manual\); holder lane long; started \S+; age \S+; predicted end unknown; queue length 1 \(1 in lane\)$/);
   assert.equal(fs.existsSync(path.join(f.base, 'hook-saw')), false, 'git push does not run before it gets the lock');
   runKitCommand('lock', ['release', 'full-suite'], f.options());
 });

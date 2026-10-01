@@ -126,6 +126,10 @@ Summary: Integrate: combine the collect default, the read-only research rule, an
 Impact: useful
 Summary: Browser output masks titles and removes credentials, query strings, and fragments in every host mode. Apply the same filter to browser API responses, dashboard state, and new event log records.
 
+## 38b0c2cd2398
+Impact: useful
+Summary: Refresh lock wait lines with holder age and predicted end. Send one slow-holder notice to the Boss. Detect zombie holders with a recorded process start. The cause of the reported 45-minute wait remains unverified.
+
 ## 2ac9048be57b
 Impact: useful
 Summary: Wait for browser commands and CDP clients before restart. Restore saved tabs in separate windows and read their new IDs.
@@ -137,6 +141,10 @@ Summary: Integrate: browser output redaction with the current kit text.
 ## f41d3a0b4d1e
 Impact: useful
 Summary: Restore drops query strings and fragments. Login and callback pages are not saved or restored. Pages that need query strings or fragments reopen at their path.
+
+## 91ddc9504e48
+Impact: useful
+Summary: Show the PID state of a slow lock holder. Find the Boss by agent name. Keep the delivered notice marker during mutation contention. Limit wait prediction reads to 512 KB per ledger file. The historical wait cause remains a hypothesis.
 
 ## c1ca454f9191
 Impact: useful
