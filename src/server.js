@@ -340,7 +340,10 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine 
       if (rawToken) return reviewRaw.issue(req, res, ...rawToken.slice(1, 3).map((part) => { try { return decodeURIComponent(part); } catch { return ''; } }), url);
       if (p === '/api/reviews' || p.startsWith('/api/reviews/')) return await reviewApi.handle(req, res, url);
       if (p === '/api/state') {
-        if (engine.state) refreshMailbox();
+        if (engine.state) {
+          refreshMailbox();
+          if (typeof engine.decorateProjects === 'function') engine.state.projects = decorateProjects(listProjects());
+        }
         return send(res, 200, engine.state || {});
       }
       if (p === '/api/chats' && req.method === 'GET') {

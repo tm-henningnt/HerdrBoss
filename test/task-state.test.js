@@ -69,6 +69,12 @@ test('a published doing task with only a failed worker returns to ready, or to b
   assert.deepEqual(result.B.blockers, ['C']);
   assert.equal(result.D.state, 'doing', 'a published doing task without any worker stays doing');
   assert.equal(result.E.state, 'review', 'only doing returns to ready');
+  const [project] = applyTaskState([{ slug: 'alpha', updated: iso(NOW - 31 * MIN), tasks: [task('F', { status: 'doing' })] }], {
+    alpha: [live('failed', 'F', { phase: 'failed' })],
+  }, { now: NOW });
+  assert.equal(project.tasks[0].state, 'ready');
+  assert.equal(project.tasks[0].noWorker, undefined, 'a failed worker follows the existing ready rule');
+  assert.equal(project.sync.noWorker, 0);
 });
 
 test('an open dependency blocks todo, ready, and blocked tasks but never a done task or a live doing task', () => {
@@ -158,8 +164,9 @@ test('worker facts come from run records with the task id or the issue alias', (
   const phase = Object.fromEntries(facts.map((f) => [f.name, [f.taskId, f.phase]]));
   assert.deepEqual(phase, {
     a: ['A', 'live'], b: ['7', 'live'], c: ['C', 'review'], d: ['D', 'merged'], e: ['E', 'failed'], f: ['F', 'failed'], g: ['G', 'abandoned'],
+    h: [null, 'live'],
   });
-  assert.equal(workerFactFromRun(run('h'), {}), null, 'a record without a task has no fact');
+  assert.equal(workerFactFromRun(run('h'), {}).taskId, null, 'a record without a task still has a live worker fact');
   assert.equal(readWorkerFacts(path.join(dir, 'missing'), {}).length, 0);
 });
 
@@ -450,19 +457,107 @@ test('an old status with workers or new commits and a worker mismatch send one n
 
 test('the project data carries boardStale and the reason for the GUI', () => {
   const snap = snapshot();
-  const [project] = applyTaskState(snap.projects, snap.taskWorkers, { stale: staleStatuses(snap, CFG, NOW) });
+  const stale = staleStatuses(snap, CFG, NOW);
+  const [project] = applyTaskState(snap.projects, snap.taskWorkers, { stale, now: NOW });
   assert.equal(project.boardStale, true);
   assert.match(project.boardStaleReason, /worker w1 runs task A/);
   assert.equal(project.tasks[0].state, 'doing');
   assert.equal(project.tasks[0].publishedStatus, 'todo');
+  assert.deepEqual(stale.alpha.statusStale, project.statusStale);
+  assert.deepEqual(project.statusStale, { ageMin: 30, level: 'ok' });
   const fresh = snapshot({ status: 'doing' });
-  const [ok] = applyTaskState(fresh.projects, fresh.taskWorkers, { stale: staleStatuses(fresh, CFG, NOW) });
+  const [ok] = applyTaskState(fresh.projects, fresh.taskWorkers, { stale: staleStatuses(fresh, CFG, NOW), now: NOW });
   assert.equal(ok.boardStale, false);
   assert.equal(ok.boardStaleReason, null);
   const old = snapshot({ status: 'doing', updated: NOW - 3 * HOUR, activity: { landedAt: NOW - HOUR } });
-  const [aged] = applyTaskState(old.projects, old.taskWorkers, { stale: staleStatuses(old, CFG, NOW) });
+  const [aged] = applyTaskState(old.projects, old.taskWorkers, { stale: staleStatuses(old, CFG, NOW), now: NOW });
   assert.equal(aged.boardStale, true);
   assert.match(aged.boardStaleReason, /3h 0m old/);
+});
+
+test('project data lists unplanned live workers and counts them in sync', () => {
+  const workers = [
+    live('without-task', null, { startedAt: iso(NOW - 35 * MIN), pane: 'w1:p2' }),
+    live('unknown-task', 'MISSING', { startedAt: iso(NOW - 40 * MIN), pane: 'w1:p3' }),
+  ];
+  const herdr = { panes: [
+    { workspace: 'w1', orch: true, agent: 'claude', status: 'working' },
+    { workspace: 'w1', agent: 'codex', status: 'working' },
+  ] };
+  const projects = [{ slug: 'alpha', project: 'Alpha', workspace: 'w1', updated: iso(NOW - 5 * MIN), tasks: [task('A')] }];
+  const [project] = applyTaskState(projects, { alpha: workers }, { herdr, now: NOW });
+  assert.deepEqual(project.unplanned, [
+    { name: 'without-task', kind: 'claude', model: 'claude-sonnet-5-5', startedAt: iso(NOW - 35 * MIN), ageMin: 35, pane: 'w1:p2' },
+    { name: 'unknown-task', kind: 'claude', model: 'claude-sonnet-5-5', startedAt: iso(NOW - 40 * MIN), ageMin: 40, pane: 'w1:p3' },
+  ]);
+  assert.deepEqual(project.sync, {
+    agentsWorking: 2, liveWorkers: 2, doingCards: 0, unplanned: 2,
+    noWorker: 0, mismatches: 3, inSync: false,
+    text: 'Agents 2 working, board Doing 0: out of sync',
+  });
+});
+
+test('sync counts a live task as Doing and marks an idle published Doing task after thirty minutes', () => {
+  const projects = [{ slug: 'alpha', project: 'Alpha', workspace: 'w1', updated: iso(NOW - 31 * MIN), tasks: [
+    task('A'), task('B', { status: 'doing' }),
+  ] }];
+  const herdr = { panes: [{ workspace: 'w1', orch: true, agent: 'claude', status: 'working' }] };
+  const [project] = applyTaskState(projects, { alpha: [live('w1', 'A')] }, { herdr, now: NOW });
+  assert.equal(project.tasks[0].state, 'doing', 'the live worker still maps to its published task');
+  assert.equal(project.tasks[0].noWorker, undefined);
+  assert.equal(project.tasks[1].state, 'doing', 'a task without a run record stays Doing');
+  assert.equal(project.tasks[1].noWorker, true);
+  assert.equal(project.tasks[1].noWorkerSinceMin, 31);
+  assert.deepEqual(project.sync, {
+    agentsWorking: 1, liveWorkers: 1, doingCards: 2, unplanned: 0,
+    noWorker: 1, mismatches: 2, inSync: false,
+    text: 'Agents 1 working, board Doing 2: out of sync',
+  });
+  const [fresh] = applyTaskState([{ slug: 'fresh', project: 'Fresh', updated: iso(NOW - 29 * MIN), tasks: [task('C', { status: 'doing' })] }], {}, { now: NOW });
+  assert.equal(fresh.tasks[0].state, 'doing');
+  assert.equal(fresh.tasks[0].noWorker, undefined, 'a status younger than 30 minutes has no no-worker flag');
+  assert.equal(fresh.sync.noWorker, 0);
+});
+
+test('sync is in step when each working agent has a Doing card and no worker is unplanned', () => {
+  const projects = [{ slug: 'alpha', project: 'Alpha', workspace: 'w1', updated: iso(NOW), tasks: [task('A')] }];
+  const herdr = { panes: [
+    { workspace: 'w1', orch: true, agent: 'claude', status: 'working' },
+    { workspace: 'w1', agent: 'codex', status: 'working' },
+  ] };
+  const [project] = applyTaskState(projects, { alpha: [live('worker', 'A')] }, { herdr, now: NOW });
+  assert.equal(project.sync.text, 'Agents 2 working, board Doing 1: in sync');
+  assert.equal(project.sync.inSync, true);
+});
+
+test('published and phase ages use task times, while summary age uses its own time', () => {
+  const projects = [{ slug: 'alpha', project: 'Alpha', updated: iso(NOW - 60 * MIN), summaryUpdated: iso(NOW - 9 * MIN), tasks: [
+    task('A', { updated: iso(NOW - 5 * MIN) }), task('B', { updated: iso(NOW - 20 * MIN) }),
+  ] }];
+  const [project] = applyTaskState(projects, {}, { now: NOW });
+  assert.equal(project.publishedAt, iso(NOW - 60 * MIN));
+  assert.equal(project.publishedAgeMin, 60);
+  assert.equal(project.phaseAgeMin, 5);
+  assert.equal(project.summaryAgeMin, 9);
+  assert.deepEqual(project.statusStale, { ageMin: 60, level: 'ok' });
+
+  const [fallback] = applyTaskState([{ slug: 'beta', project: 'Beta', updated: iso(NOW - 12 * MIN), tasks: [] }], {}, { now: NOW });
+  assert.equal(fallback.phaseAgeMin, fallback.publishedAgeMin);
+  assert.equal(fallback.summaryAgeMin, fallback.publishedAgeMin);
+});
+
+test('statusStale warns only when an old status has a live worker or a working orchestrator', () => {
+  const oldProject = { slug: 'alpha', project: 'Alpha', workspace: 'w1', updated: iso(NOW - 31 * MIN), tasks: [task('A')] };
+  const apply = (workers, panes) => applyTaskState([oldProject], { alpha: workers }, { herdr: { panes }, now: NOW })[0].statusStale;
+  assert.deepEqual(apply([live('worker', 'A')], []), { ageMin: 31, level: 'warn' });
+  assert.deepEqual(apply([], [{ workspace: 'w1', orch: true, agent: 'claude', status: 'working' }]), { ageMin: 31, level: 'warn' });
+  assert.deepEqual(apply([], [{ workspace: 'w1', orch: true, agent: 'claude', status: 'idle' }]), { ageMin: 31, level: 'ok' });
+  const fresh = { ...oldProject, updated: iso(NOW - 30 * MIN) };
+  assert.deepEqual(applyTaskState([fresh], { alpha: [live('worker', 'A')] }, { herdr: { panes: [] }, now: NOW })[0].statusStale,
+    { ageMin: 30, level: 'ok' });
+  const justOld = { ...oldProject, updated: iso(NOW - 30 * MIN - 1) };
+  assert.deepEqual(applyTaskState([justOld], { alpha: [live('worker', 'A')] }, { herdr: { panes: [] }, now: NOW })[0].statusStale,
+    { ageMin: 30, level: 'warn' });
 });
 
 test('worker start without a task id or an issue gives one warning text', () => {
@@ -497,6 +592,26 @@ test('the engine reads worker facts from the run records of a registered project
   assert.equal(decorated.tasks[1].state, 'ready');
   assert.equal(decorated.boardStale, true);
   assert.match(decorated.boardStaleReason, /worker live-one runs task A/);
+});
+
+test('project reads refresh worker facts when their cache is older than fifteen seconds', async (t) => {
+  const { Engine } = await import('../src/engine.js');
+  const { loadConfig } = await import('../src/config.js');
+  const env = projectRepo(t, []);
+  fs.writeFileSync(path.join(DATA, 'project-repos.json'), JSON.stringify([{ slug: 'alpha', repo: env.repo, remote: '' }]));
+  t.after(() => fs.rmSync(path.join(DATA, 'project-repos.json'), { force: true }));
+  const engine = new Engine(loadConfig(), { push: false, act: false });
+  engine.log = () => {};
+  engine.memory = { paneSince: {}, pushes: {}, notified: {} };
+  assert.deepEqual(engine.readTaskWorkers(NOW, { panes: [] }), { alpha: [] });
+  fs.writeFileSync(path.join(env.repo, '.orchestration', 'runs', 'live.json'), JSON.stringify(run('live', { taskId: 'A', pane: 'w1:p2', startedAt: iso(NOW) })));
+  engine.state = {
+    control: { projects: { alpha: { slug: 'alpha', workspace: 'w1' } } },
+    herdr: { panes: [{ id: 'w1:p2', workspace: 'w1', agent: 'codex', status: 'working' }] },
+  };
+  const [project] = engine.decorateProjects([{ slug: 'alpha', project: 'Alpha', workspace: 'w1', updated: iso(NOW), tasks: [task('A')] }], NOW + 15001);
+  assert.equal(project.tasks[0].state, 'doing');
+  assert.equal(project.sync.liveWorkers, 1);
 });
 
 // A temporary repository with a bare upstream. No real project repository is read.

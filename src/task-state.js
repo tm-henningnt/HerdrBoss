@@ -6,6 +6,8 @@ import { execFileSync } from 'node:child_process';
 
 // A worker that started less than this long ago gets time for the orchestrator to publish.
 export const MISMATCH_GRACE_MS = 5 * 60000;
+const MINUTE_MS = 60000;
+const NO_WORKER_MINUTES = 30;
 
 export const TASK_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
@@ -48,7 +50,7 @@ export function reportStatus(record) {
 // can make the published status wrong. An idle, parked, or reported worker is waiting for the orchestrator.
 export function workerFactFromRun(record, { isLive = () => true, isMerged = () => false, hasReport = () => false, reportStatus: statusOf = (r) => (hasReport(r) ? 'done' : null), agentStatus = () => null, now = Date.now() } = {}) {
   const taskId = runTaskId(record);
-  if (!taskId || !record?.name) return null;
+  if (!record?.name) return null;
   // Answers without a merge check. mergeable: a merged branch changes the phase.
   let phase;
   let mergeable = false;
@@ -65,7 +67,7 @@ export function workerFactFromRun(record, { isLive = () => true, isMerged = () =
     if (Number.isFinite(newest) && now - newest > HISTORY_MS) return null;
   }
   if (mergeable && isMerged(record)) phase = 'merged';
-  const fact = { name: record.name, taskId, phase, kind: record.kind ?? null, model: record.model ?? null, startedAt: record.startedAt ?? null };
+  const fact = { name: record.name, taskId, phase, kind: record.kind ?? null, model: record.model ?? null, startedAt: record.startedAt ?? null, pane: record.pane ?? null };
   if (phase === 'live') fact.active = !record.parked && !hasReport(record) && ACTIVE_AGENT_STATUSES.has(agentStatus(record));
   return fact;
 }
@@ -159,6 +161,45 @@ function workerView(worker) {
   return worker ? { name: worker.name, kind: worker.kind, model: worker.model, startedAt: worker.startedAt } : null;
 }
 
+function dateValue(value) {
+  const ms = typeof value === 'number' ? value : Date.parse(value);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function ageMinutes(value, now) {
+  const ms = dateValue(value);
+  return ms == null ? null : Math.max(0, Math.floor((now - ms) / MINUTE_MS));
+}
+
+function newestDate(values) {
+  const times = values.map(dateValue).filter((value) => value != null);
+  return times.length ? new Date(Math.max(...times)).toISOString() : null;
+}
+
+function projectWorkspace(project, control) {
+  return project?.workspace || control?.projects?.[project?.slug]?.workspace || null;
+}
+
+function workspacePanes(herdr, workspace) {
+  if (!workspace) return [];
+  return (Array.isArray(herdr?.panes) ? herdr.panes : []).filter((pane) => (pane?.workspace ?? pane?.workspace_id) === workspace);
+}
+
+// The project status age and the current worker facts drive this shared freshness rule.
+export function projectStatusFreshness(project, workers = [], herdr = null, workspace = project?.workspace, now = Date.now()) {
+  const publishedMs = dateValue(project?.publishedAt ?? project?.updated);
+  const ageMin = ageMinutes(publishedMs, now);
+  const panes = workspacePanes(herdr, workspace);
+  const liveWorker = workers.some((worker) => worker?.phase === 'live');
+  const orchestratorWorking = panes.some((pane) => pane?.orch === true && (pane.status ?? pane.agent_status) === 'working');
+  return {
+    ageMin,
+    level: publishedMs != null && now - publishedMs > NO_WORKER_MINUTES * MINUTE_MS && (liveWorker || orchestratorWorking) ? 'warn' : 'ok',
+    liveWorker,
+    orchestratorWorking,
+  };
+}
+
 function groupByTask(workers) {
   const map = new Map();
   for (const worker of workers) {
@@ -219,7 +260,7 @@ export function taskMismatches(data, workers = [], { now = Date.now(), graceMs =
   const tasks = new Map((Array.isArray(data?.tasks) ? data.tasks : []).filter((t) => t && t.id != null).map((t) => [String(t.id), t]));
   const result = [];
   for (const worker of workers) {
-    if (worker.phase !== 'live' || worker.active === false) continue;
+    if (worker.phase !== 'live' || worker.active === false || worker.taskId == null) continue;
     const started = Date.parse(worker.startedAt);
     if (graceMs > 0 && Number.isFinite(started) && now - started < graceMs) continue;
     const found = tasks.get(worker.taskId);
@@ -242,14 +283,63 @@ export function publishConflicts(data, workers = []) {
 // Decorate published projects with the derived task state and the board stale flag.
 // stale is the result of staleStatuses().
 // counts holds { slug: { ahead, unmerged } } and joins the git state of the project.
-export function applyTaskState(projects, taskWorkers = {}, { stale = {}, gitCounts: counts = {} } = {}) {
+export function applyTaskState(projects, taskWorkers = {}, { stale = {}, gitCounts: counts = {}, herdr = null, control = {}, now = Date.now() } = {}) {
   return (projects || []).map((project) => {
     if (!project?.slug) return project;
     const entry = stale[project.slug];
     const flags = { boardStale: Boolean(entry), boardStaleReason: entry?.reason ?? null };
     const count = counts[project.slug];
     if (count) flags.git = { ...(project.git && typeof project.git === 'object' && !Array.isArray(project.git) ? project.git : {}), ahead: count.ahead, unmerged: count.unmerged };
-    if (!Array.isArray(project.tasks)) return { ...project, ...flags };
-    return { ...project, tasks: overlayTasks(project.tasks, taskWorkers[project.slug] || []), ...flags };
+    const workers = taskWorkers[project.slug] || [];
+    const publishedMs = dateValue(project.publishedAt) ?? dateValue(project.updated);
+    const publishedAt = publishedMs == null ? null : new Date(publishedMs).toISOString();
+    const publishedAgeMin = ageMinutes(publishedAt, now);
+    const phaseUpdated = newestDate([
+      project.phaseUpdated, project.phaseUpdatedAt, project.phase?.updated,
+      ...(Array.isArray(project.tasks) ? project.tasks.map((task) => task?.updated) : []),
+    ]);
+    const summaryUpdated = newestDate([project.summaryUpdated, project.summaryUpdatedAt, project.summary?.updated]);
+    const phaseAgeMin = ageMinutes(phaseUpdated || publishedAt, now);
+    const summaryAgeMin = ageMinutes(summaryUpdated || publishedAt, now);
+    const workspace = projectWorkspace(project, control);
+    const panes = workspacePanes(herdr, workspace);
+    const agentsWorking = panes.filter((pane) => (pane.status ?? pane.agent_status) === 'working').length;
+    const liveWorkers = workers.filter((worker) => worker?.phase === 'live');
+    const taskIds = new Set((Array.isArray(project.tasks) ? project.tasks : []).filter((task) => task?.id != null).map((task) => String(task.id)));
+    const unplanned = liveWorkers.filter((worker) => worker.taskId == null || !taskIds.has(String(worker.taskId))).map((worker) => ({
+      name: worker.name,
+      kind: worker.kind ?? null,
+      model: worker.model ?? null,
+      startedAt: worker.startedAt ?? null,
+      ageMin: ageMinutes(worker.startedAt, now),
+      pane: worker.pane ?? null,
+    }));
+    const tasks = Array.isArray(project.tasks) ? overlayTasks(project.tasks, workers).map((task) => {
+      if (task?.publishedStatus !== 'doing' || task?.state !== 'doing' || task.id == null || liveWorkers.some((worker) => String(worker.taskId) === String(task.id)) || publishedAgeMin == null || publishedAgeMin < NO_WORKER_MINUTES) return task;
+      return { ...task, noWorker: true, noWorkerSinceMin: publishedAgeMin };
+    }) : [];
+    const doingCards = tasks.filter((task) => task?.state === 'doing').length;
+    const noWorker = tasks.filter((task) => task?.noWorker === true).length;
+    const syncMismatchCount = taskMismatches(project, workers, { now }).length;
+    const inSync = !((agentsWorking > 0 && doingCards === 0) || unplanned.length > 0 || noWorker > 0);
+    const statusFreshness = projectStatusFreshness({ ...project, publishedAt }, workers, herdr, workspace, now);
+    const statusStale = entry?.statusStale || { ageMin: statusFreshness.ageMin, level: statusFreshness.level };
+    return {
+      ...project,
+      ...(Array.isArray(project.tasks) ? { tasks } : {}),
+      publishedAt,
+      publishedAgeMin,
+      phaseAgeMin,
+      summaryAgeMin,
+      statusStale,
+      unplanned,
+      sync: {
+        agentsWorking, liveWorkers: liveWorkers.length, doingCards, unplanned: unplanned.length,
+        noWorker, mismatches: syncMismatchCount + unplanned.length + noWorker,
+        inSync,
+        text: `Agents ${agentsWorking} working, board Doing ${doingCards}: ${inSync ? 'in sync' : 'out of sync'}`,
+      },
+      ...flags,
+    };
   });
 }
