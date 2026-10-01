@@ -84,6 +84,8 @@ test('the card shows Not responding, the reason, and a Restart button in the cur
   assert.match(html, /<button type="button" data-browser-restart="alpha" data-browser-mode="headless"[^>]*>Restart<\/button>/);
   assert.match(html, /saved tabs.*separate window/i);
   assert.match(html, /drops query strings and fragments/i);
+  assert.match(html, /path parameters/i);
+  assert.match(html, /sign-in hosts/i);
   assert.match(html, /skips login and callback pages/i);
   assert.match(browserNotRespondingBlock('alpha', { ...card, headless: false }), /data-browser-mode="visible"/);
 });
@@ -110,6 +112,7 @@ test('the card block shows only for a verified browser that Herdr Boss started',
 test('the Browsers help describes the state and the restart rule', () => {
   assert.match(app, /<b>not responding<\/b>[^`]*two checks in a row failed[^`]*<b>Restart<\/b>[^`]*never restarts a browser by itself/);
   assert.match(app, /drops query strings and fragments[^`]*page that needs them reopens at its path[^`]*skips login and callback pages/);
+  assert.match(app, /drops path parameters[^`]*sign-in hosts/);
 });
 
 // ----- the engine -----

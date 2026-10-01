@@ -16,7 +16,8 @@ const DEFAULT_SIZE = { width: 1280, height: 800 };
 const MAX_BOOKMARKS = 30;
 const MAX_BOOKMARK_NAME = 60;
 const CDP_TIMEOUT_MS = 2000;
-const RESTORE_AUTH_PATH = /(?:^|\/)(?:callback|oauth|login|auth|signin)(?:\/|$)/i;
+const RESTORE_AUTH_PATH = /^(log-?in|log-?on|sign-?in|sign-?on|oauth\d*|auth\w*|callback|sso|saml|oidc|openid|connect|consent|token)/i;
+const RESTORE_AUTH_HOSTS = new Set(['login', 'accounts', 'sso', 'auth', 'id', 'idp', 'signin', 'adfs']);
 
 // Tests replace the network, process table, signal, launch, and code-sign clone functions through the options object.
 // A cloneDir of null turns off the clone record and the clone delete.
@@ -54,6 +55,23 @@ export function listBrowserSessions() {
   catch (e) { if (e.code === 'ENOENT') return {}; throw e; }
 }
 
+function stripPathParameters(pathname) {
+  return pathname.replaceAll('\\', '/').split('/').map((segment) => segment.split(';')[0]).join('/');
+}
+
+function restorePathname(pathname) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const decoded = decodeURIComponent(stripPathParameters(pathname));
+    if (decoded === pathname) break;
+    pathname = decoded;
+  }
+  pathname = stripPathParameters(pathname);
+  // Do not restore a path that still has an encoded layer after the bounded decode.
+  if (pathname.includes('%')) return null;
+  if (pathname.split('/').some((segment) => RESTORE_AUTH_PATH.test(segment.replace(/\.[^.]*$/, '')))) return null;
+  return pathname;
+}
+
 function restorableTab(tab) {
   if (typeof tab?.id !== 'string' || !tab.id || typeof tab.url !== 'string') return null;
   try {
@@ -62,7 +80,10 @@ function restorableTab(tab) {
     url.hash = '';
     if (url.username || url.password) return null;
     if (url.href !== 'about:blank' && !['http:', 'https:'].includes(url.protocol)) return null;
-    if (RESTORE_AUTH_PATH.test(decodeURIComponent(url.pathname))) return null;
+    if (RESTORE_AUTH_HOSTS.has(url.hostname.split('.')[0])) return null;
+    const pathname = restorePathname(url.pathname);
+    if (pathname === null) return null;
+    url.pathname = pathname;
     return { id: tab.id, url: url.href };
   } catch { return null; }
 }

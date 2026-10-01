@@ -151,6 +151,19 @@ test('the restored-tab path creates a separate background window', async () => {
   assert.deepEqual(pool.listBrowserSessions()['own-window'].restoreTabs, [{ id: 'own-tab', url: 'https://sample.example.com/page' }]);
 });
 
+const authUrls = [
+  ...['authorize', 'connect/authorize', 'signin-oidc', 'sso', 'saml', 'oauth2/callback', 'login.html',
+    'sign-in', 'logon', 'authenticate', 'log-in', 'log-on', 'sign-on', 'signon', 'oidc', 'openid',
+    'connect', 'consent', 'token', 'nested/LOGIN.HTML', 'login;jsessionid=FAKE',
+    '%256cogin', '%25256cogin', '%252561uthorize', '%252Flogin', 'docs%255Cauthorize',
+    'docs/%ZZ', 'docs/%E0%A4%A', 'docs/%25ZZ', 'docs/%2525ZZ', '%25252561uthorize',
+  ].map((part) => `https://sample.example.com/${part}?code=FAKE_CODE#FAKE_FRAGMENT`),
+  ...['login', 'accounts', 'sso', 'auth', 'id', 'idp', 'signin', 'adfs'].map((label) =>
+    `https://${label}.sample.example.com/page?code=FAKE_CODE#FAKE_FRAGMENT`),
+  'https://login.microsoftonline.com/page?code=FAKE_CODE#FAKE_FRAGMENT',
+  'https://LOGIN.sample.example.com/page?code=FAKE_CODE#FAKE_FRAGMENT',
+];
+
 const unsafeTabs = [
   { id: 'safe', url: 'https://sample.example.com/page?code=FAKE_CODE#FAKE_FRAGMENT' },
   ...['callback', 'oauth', 'login', 'auth', 'signin', 'nested/Callback', '%61uth'].map((part, index) => ({
@@ -158,6 +171,7 @@ const unsafeTabs = [
   })),
 ];
 const safeTabs = [{ id: 'safe', url: 'https://sample.example.com/page' }];
+unsafeTabs.push(...authUrls.map((url, index) => ({ id: `auth-case-${index}`, url })));
 
 test('saved snapshots and individual updates drop query strings, fragments, and login or callback pages', () => {
   fixture('safe-snapshot');
@@ -165,8 +179,8 @@ test('saved snapshots and individual updates drop query strings, fragments, and 
   assert.deepEqual(pool.listBrowserSessions()['safe-snapshot'].restoreTabs, safeTabs);
   pool.rememberBrowserTab('safe-snapshot', 'safe', 'https://sample.example.com/callback?code=FAKE_CODE');
   assert.deepEqual(pool.listBrowserSessions()['safe-snapshot'].restoreTabs, [], 'navigation to a callback removes the prior saved address');
-  pool.rememberBrowserTab('safe-snapshot', 'ordinary', 'https://sample.example.com/author?choice=1#fake');
-  assert.deepEqual(pool.listBrowserSessions()['safe-snapshot'].restoreTabs, [{ id: 'ordinary', url: 'https://sample.example.com/author' }]);
+  pool.rememberBrowserTab('safe-snapshot', 'ordinary', 'https://sample.example.com/article?choice=1#fake');
+  assert.deepEqual(pool.listBrowserSessions()['safe-snapshot'].restoreTabs, [{ id: 'ordinary', url: 'https://sample.example.com/article' }]);
   assert.doesNotMatch(fs.readFileSync(path.join(dir, 'browser-sessions.json'), 'utf8'), /FAKE_CODE|FAKE_FRAGMENT|choice=/);
 });
 
@@ -281,4 +295,38 @@ test('blank-tab cleanup uses browser CDP and preserves restored, attached, and n
     },
   });
   assert.deepEqual(calls, [['Target.getTargets', undefined], ['Target.closeTarget', { targetId: 'startup' }]]);
+});
+
+
+test('each auth URL is excluded from bulk saves and individual tab updates', async (t) => {
+  for (const [index, url] of authUrls.entries()) {
+    await t.test(`auth URL ${index + 1}: ${new URL(url).hostname}${new URL(url).pathname}`, () => {
+      const project = `auth-url-${index}`;
+      fixture(project);
+      pool.rememberBrowserTabs(project, [{ id: 'unsafe', url }]);
+      assert.deepEqual(pool.listBrowserSessions()[project].restoreTabs, []);
+      pool.rememberBrowserTabs(project, safeTabs);
+      pool.rememberBrowserTab(project, 'safe', url);
+      assert.deepEqual(pool.listBrowserSessions()[project].restoreTabs, [], 'individual navigation removes the prior saved address');
+    });
+  }
+});
+
+test('path parameters are removed from every segment before saving and again before legacy restore', async () => {
+  const tabs = [
+    { id: 'raw', url: 'https://sample.example.com/docs;jsessionid=FAKE/page.html;session=FAKE?choice=1#FAKE_FRAGMENT' },
+    { id: 'encoded', url: 'https://sample.example.com/docs%3Bsid%3DFAKE/page%253Bsid%253DFAKE' },
+    { id: 'triple', url: 'https://sample.example.com/docs%25253Bsid%25253DFAKE/page%25253Bsid%25253DFAKE' },
+  ];
+  const expected = ['https://sample.example.com/docs/page.html', 'https://sample.example.com/docs/page', 'https://sample.example.com/docs/page'];
+  const f = fixture('safe-path-params', { hung: true });
+  pool.rememberBrowserTabs('safe-path-params', tabs);
+  assert.deepEqual(pool.listBrowserSessions()['safe-path-params'].restoreTabs.map((tab) => tab.url), expected);
+  const sessions = pool.listBrowserSessions();
+  sessions['safe-path-params'].restoreTabs = tabs;
+  fs.writeFileSync(path.join(dir, 'browser-sessions.json'), JSON.stringify(sessions));
+  await pool.restartBrowser('safe-path-params', true, f.options);
+  assert.deepEqual(f.restored, expected);
+  assert.deepEqual(pool.listBrowserSessions()['safe-path-params'].restoreTabs.map((tab) => tab.url), expected);
+  assert.doesNotMatch(fs.readFileSync(path.join(dir, 'browser-sessions.json'), 'utf8'), /FAKE|jsessionid|sid%|;session/);
 });
