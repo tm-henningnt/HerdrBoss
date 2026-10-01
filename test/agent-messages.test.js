@@ -294,6 +294,85 @@ test('same-process metadata writes update the index and external writes rebuild 
   assert.equal(agent.readAgentMetadata({ dir }).find((row) => row.id === external.id).responseMs, 1000);
 });
 
+test('an already answered delivered tell still resolves the earlier target message', () => {
+  const dir = path.join(root, 'answered-tell-response-data');
+  const now = Date.parse('2026-10-01T12:00:00Z');
+  const target = { role: 'worker', project: 'alpha', name: 'build', pane: 'wA:p1' };
+  const rows = [
+    {
+      id: 'waiting-message', at: new Date(now - 120000).toISOString(),
+      from: { role: 'service', project: null, name: null, pane: null }, to: target,
+      project: 'alpha', kind: 'reminder', status: 'delivered', targetStatus: 'working', respondedAt: null,
+    },
+    {
+      id: 'answered-reply', at: new Date(now - 60000).toISOString(), from: target,
+      to: { role: 'invalid' }, project: 'alpha', kind: 'reply', status: 'delivered', source: 'tell',
+      respondedAt: new Date(now - 30000).toISOString(),
+    },
+  ];
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'agent-message-meta.jsonl'), rows.map((row) => JSON.stringify(row)).join('\n') + '\n');
+
+  const result = agent.updateAgentResponses({ dir, now });
+  assert.equal(result.updated, 1);
+  assert.equal(agent.readAgentMetadata({ dir }).find((row) => row.id === 'waiting-message').respondedAt, rows[1].at);
+});
+
+test('a clock moving before a row does not remove that future row from the response index', () => {
+  const dir = path.join(root, 'response-index-clock-skew-data');
+  const createdAt = Date.parse('2026-10-01T12:00:00Z');
+  const record = agent.recordAgentMessage({
+    from: { role: 'service', project: null, name: null, pane: null },
+    to: { role: 'worker', project: 'alpha', name: 'build', pane: 'wA:p1' },
+    text: 'Clock change.', kind: 'reminder', status: 'delivered', targetStatus: 'working',
+  }, { dir, now: createdAt });
+  agent.initializeAgentResponseIndex({ dir, now: createdAt + 10000 });
+
+  assert.equal(agent.updateAgentResponses({ dir, now: createdAt - 5000 }).updated, 0);
+  assert.equal(agent.updateAgentResponses({
+    dir, now: createdAt + 5000, panes: [{ id: 'wA:p1', agent: 'codex', status: 'idle' }],
+  }).updated, 1);
+  assert.equal(agent.readAgentMetadata({ dir }).find((row) => row.id === record.id).responseMs, 5000);
+});
+
+test('Engine startup initializes the response index before its first tick', async (t) => {
+  const dir = path.join(root, 'engine-start-response-index-data');
+  const at = Date.parse('2026-10-01T12:00:00Z');
+  const file = path.join(dir, 'agent-message-meta.jsonl');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(file, `${JSON.stringify({
+    id: 'startup-row', at: new Date(at).toISOString(),
+    from: { role: 'service', project: null, name: null, pane: null },
+    to: { role: 'worker', project: 'alpha', name: 'build', pane: 'wA:p1' },
+    kind: 'reminder', status: 'delivered', targetStatus: 'working', respondedAt: null,
+  })}\n`);
+  const { spawnSync } = await import('node:child_process');
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', `
+    import fs from 'node:fs';
+    import { Engine } from './src/engine.js';
+    import { loadConfig } from './src/config.js';
+    import { updateAgentResponses } from './src/agent-messages.js';
+    const dir = process.env.HERDR_BOSS_DIR;
+    const file = dir + '/agent-message-meta.jsonl';
+    const now = Number(process.env.AM_NOW);
+    new Engine(loadConfig(), { push: false, act: true, clock: () => now });
+    const original = fs.readFileSync;
+    let reads = 0;
+    fs.readFileSync = function (target, ...args) {
+      if (String(target) === file) reads++;
+      return original.call(fs, target, ...args);
+    };
+    const result = updateAgentResponses({ dir, now: now + 1000 });
+    process.stdout.write(JSON.stringify({ reads, updated: result.updated }));
+  `], {
+    cwd: path.resolve(import.meta.dirname, '..'), encoding: 'utf8',
+    env: { ...process.env, HOME: path.join(root, 'engine-start-home'), HERDR_BOSS_DIR: dir,
+      HERDR_BOSS_ALLOW_ACTIONS: '1', AM_NOW: String(at) },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), { reads: 0, updated: 0 });
+});
+
 test('a restarted process rebuilds the open response index from metadata', async (t) => {
   const dir = path.join(root, 'response-index-restart-data');
   const createdAt = Date.parse('2026-10-01T10:00:00Z');

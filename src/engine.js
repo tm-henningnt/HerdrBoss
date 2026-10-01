@@ -27,7 +27,7 @@ import { hasTypedText, screenBlocker, stripAnsi } from './goal-set.js';
 import { claudeContextUsage, trackBoundary, normalizeModelId } from './context-handover.js';
 import { FINISH_TIMEOUT_MS, autoReadyHandoff, markSuccessorWorking, listHandoffs, saveHandoffs, supersedeHandoffs, expireHandoff, expireMissingHandoffs, handoffNotices } from './handoff.js';
 import { closeReviewItems, deliverQueued, mailboxCounts, readMessages, RETENTION_MS, SEND_LIMIT_PER_MINUTE } from './messages.js';
-import { readAgentMetadata, recordAgentMessage, recordWorkerReport, sweepAgentMessages, updateAgentResponses, workerRunId } from './agent-messages.js';
+import { initializeAgentResponseIndex, readAgentMetadata, recordAgentMessage, recordWorkerReport, sweepAgentMessages, updateAgentResponses, workerRunId } from './agent-messages.js';
 import { sweep as sweepReviewPacks } from './review-store.js';
 import { sweepAttachments } from './attachments.js';
 import { openMessageStore } from './message-store.js';
@@ -551,6 +551,10 @@ export class Engine extends EventEmitter {
     const actionsAllowed = guardReasons.length === 0 || process.env.HERDR_BOSS_ALLOW_ACTIONS === '1';
     this.push = actionsAllowed && push;
     this.act = actionsAllowed && act; // false: collect and evaluate only (no reaping, notifications or prompts)
+    if (this.act) {
+      try { initializeAgentResponseIndex({ dir: DATA_DIR, now: this.clock() }); }
+      catch { /* The first acting tick retries a failed startup scan. */ }
+    }
     this.memory = readJson(MEMORY_FILE, { paneSince: {}, pushes: {}, notified: {} });
     this.successorInputReads = new Map();
     this.quotas = null;

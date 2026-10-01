@@ -194,7 +194,7 @@ function responseIndex(dir) {
   const key = responseIndexKey(dir);
   let state = RESPONSE_INDEXES.get(key);
   if (!state) {
-    state = { rows: new Map(), signature: null, initialized: false, dirty: false };
+    state = { rows: new Map(), tells: new Map(), signature: null, initialized: false, dirty: false };
     RESPONSE_INDEXES.set(key, state);
   }
   return state;
@@ -203,8 +203,15 @@ function responseIndex(dir) {
 function isResponseIndexRow(row, now) {
   const at = rowDate(row);
   return typeof row?.id === 'string' && !!row.id && !row.respondedAt
-    && Number.isFinite(at) && at <= now && now - at < AGENT_RESPONSE_WINDOW_MS
+    && Number.isFinite(at) && now - at < AGENT_RESPONSE_WINDOW_MS
     && validAddress(row.to) && row.status !== 'failed';
+}
+
+function isResponseTellRow(row, now) {
+  const at = rowDate(row);
+  return typeof row?.id === 'string' && !!row.id && row.source === 'tell'
+    && row.status === 'delivered' && validAddress(row.from)
+    && Number.isFinite(at) && now - at < AGENT_RESPONSE_WINDOW_MS;
 }
 
 function responseIndexRow(row) {
@@ -214,8 +221,11 @@ function responseIndexRow(row) {
   };
 }
 
+function responseTellRow(row) { return { id: row.id, at: row.at, from: row.from }; }
+
 function replaceResponseIndex(state, rows, signature, now) {
   state.rows = new Map(rows.filter((row) => isResponseIndexRow(row, now)).map((row) => [row.id, responseIndexRow(row)]));
+  state.tells = new Map(rows.filter((row) => isResponseTellRow(row, now)).map((row) => [row.id, responseTellRow(row)]));
   state.signature = signature;
   state.initialized = true;
   state.dirty = false;
@@ -234,10 +244,16 @@ function noteLocalMetadataEvent(dir, event, signatures, now = Date.now()) {
     const row = state.rows.get(event.id);
     if (row) {
       row.status = event.status;
-      if (event.status === 'failed') state.rows.delete(event.id);
+      if (event.status === 'failed') {
+        state.rows.delete(event.id);
+        state.tells.delete(event.id);
+      } else if (event.status === 'delivered' && isResponseTellRow(row, now)) {
+        state.tells.set(row.id, responseTellRow(row));
+      }
     }
-  } else if (isResponseIndexRow(event, now)) {
-    state.rows.set(event.id, responseIndexRow(event));
+  } else {
+    if (isResponseIndexRow(event, now)) state.rows.set(event.id, responseIndexRow(event));
+    if (isResponseTellRow(event, now)) state.tells.set(event.id, responseTellRow(event));
   }
   state.signature = signatures.after;
 }
@@ -249,8 +265,18 @@ function rebuildResponseIndexLocked(state, file, now) {
 
 function pruneResponseIndex(state, now) {
   for (const [id, row] of state.rows) {
-    if (!isResponseIndexRow(row, now)) state.rows.delete(id);
+    const at = rowDate(row);
+    if (Number.isFinite(at) && now - at >= AGENT_RESPONSE_WINDOW_MS) state.rows.delete(id);
   }
+  for (const [id, row] of state.tells) {
+    const at = rowDate(row);
+    if (Number.isFinite(at) && now - at >= AGENT_RESPONSE_WINDOW_MS) state.tells.delete(id);
+  }
+}
+
+function currentResponseRows(state, now) {
+  return [...state.rows.values()].filter((row) => rowDate(row) <= now
+    && !(row.source === 'tell' && row.status !== 'delivered'));
 }
 
 // Load the small set of response candidates at service start. Later ticks check only the file signature.
@@ -305,11 +331,13 @@ function updateResponsesLocked(file, state, { panes, observed, now }) {
   const current = fileSignature(file);
   if (!state.initialized || state.dirty || !sameSignature(state.signature, current)) rebuildResponseIndexLocked(state, file, now);
   pruneResponseIndex(state, now);
-  if (!state.rows.size) return { updated: 0, observed: {} };
+  const waiting = currentResponseRows(state, now);
+  if (!waiting.length) return { updated: 0, observed: {} };
 
   const tells = new Map();
-  for (const row of state.rows.values()) {
-    if (row.source !== 'tell' || row.status !== 'delivered' || !validAddress(row.from)) continue;
+  for (const row of state.tells.values()) {
+    const at = rowDate(row);
+    if (!Number.isFinite(at) || at > now || now - at >= AGENT_RESPONSE_WINDOW_MS) continue;
     const key = row.from?.pane || addressKey(row.from);
     if (!tells.has(key)) tells.set(key, []);
     tells.get(key).push(row);
@@ -318,8 +346,7 @@ function updateResponsesLocked(file, state, { panes, observed, now }) {
   const live = new Map(panes.filter((pane) => pane.agent).map((pane) => [pane.id, pane]));
   const next = {};
   const updates = [];
-  for (const row of state.rows.values()) {
-    if (row.source === 'tell' && row.status !== 'delivered') continue;
+  for (const row of waiting) {
     const at = rowDate(row);
     const pane = live.get(row.to?.pane);
     const active = observed[row.id]?.active || ['working', 'blocked'].includes(row.targetStatus)
@@ -349,7 +376,7 @@ export function updateAgentResponses({ dir = DATA_DIR, panes = [], observed = {}
   const current = fileSignature(file);
   if (state.initialized && !state.dirty && sameSignature(state.signature, current)) {
     pruneResponseIndex(state, now);
-    if (!state.rows.size) return { updated: 0, observed: {} };
+    if (!currentResponseRows(state, now).length) return { updated: 0, observed: {} };
   }
   return withFileLock(file, () => updateResponsesLocked(file, state, { panes, observed, now }));
 }
