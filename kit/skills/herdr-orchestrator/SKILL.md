@@ -235,14 +235,3 @@ herdr agent prompt <orch-pane> "WORKER REPORT <name>: <done|blocked|stopped>. Re
 - Keep Herdr as live execution state and the issue tracker as durable work state.
 - Run `herdr-boss harness check` when a harness refuses routine work. Report missing entries to the Boss.
 
-## CI minutes
-
-- Run a quick check for each pull request.
-- Run a changed-files verify on pushes to `main`.
-- Run the full gate once per work wave or release, against the exact commit.
-- Set concurrency to cancel an older run when a newer run starts.
-- Ignore changes under `docs/` and `.orchestration/` in push and pull request workflows.
-- Do not add schedules to private repositories.
-- Do not run CI to test a workflow change.
-- Batch commits and push `main` once per wave.
-- Run `herdr-boss project check SLUG` for the CI findings.
