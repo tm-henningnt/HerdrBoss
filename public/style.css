@@ -1890,6 +1890,7 @@ body.app-view textarea, body.app-view input { caret-color: var(--accent); }
   .mail-list-pane.selecting .mail-list-scroll { padding-bottom: 0; }
   .mail-reply .sub { display: none; }
   .chat-layout { grid-template-columns: minmax(0, 1fr); }
+  .chat-layout { height: var(--vvh, 100dvh); }
   .chat-list-pane { border-right: 0; }
   .chat-layout.thread-open .chat-list-pane, .chat-layout:not(.thread-open) .chat-conversation-pane { display: none; }
   .chat-layout.thread-open .chat-conversation-pane { animation: app-slide-in 200ms cubic-bezier(0.22, 1, 0.36, 1); }
@@ -1899,6 +1900,7 @@ body.app-view textarea, body.app-view input { caret-color: var(--accent); }
   .chat-bubbles > .chat-bubble, .chat-bubbles > .chat-report { max-width: 84%; }
   .chat-entry .chat-bubble { max-width: calc(84% - 34px); }
   .chat-composer { padding: 6px max(8px, env(safe-area-inset-right)) calc(6px + env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left)); }
+  body.chat-keyboard-open .chat-composer { padding-bottom: 6px; }
   .chat-hint { display: none; }
   .chat-jump { width: 44px; height: 44px; right: max(8px, env(safe-area-inset-right)); bottom: 6px; }
   .chat-jump-badge { top: 0; right: 0; }

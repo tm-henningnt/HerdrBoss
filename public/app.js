@@ -6,7 +6,7 @@ import { SETTING_HELP, settingPopupHtml, settingsGuideHtml } from './setting-hel
 import { groupMailRows, inboxSections, listTime, mailRowHtml } from './mail-rows.js';
 import { chatJumpHtml, chatJumpButtonHtml, chatAtBottom, chatJumpScroll } from './chat-jump.js';
 import { mailBarItem, mailActionBarHtml, mailSelectionBarHtml, mailElsewhereButtonHtml, mailSuggestionHtml } from './mail-bar.js';
-import { APP_VIEW_ROUTES, appViewport } from './app-view.js';
+import { APP_VIEW_ROUTES, appViewport, chatKeyboardOpen, chatShouldStickToBottom } from './app-view.js';
 import { parseReviewPath, reviewItemFromHash, reviewUrl, packListHtml, packPageHtml, reviewMessageHtml, reviewKeyAction, reviewOpenLinkHtml, reviewErrorText, submitConfirmText, pinProposedVerdict, reviewDoneLineHtml, parseFrameMessage, pinsInView, frameView, pickPinFields } from './review.js';
 import { viewerKeyAction, nextOpenItem, itemNeighbors, sectionStep, addPin, removePin, setPinText, itemSpec } from './review-viewer.js';
 import { attachGestures, restoreStages, resetStages, zoomStage } from './review-gestures.js';
@@ -3650,7 +3650,6 @@ function openChat(thread) {
   if (chat.thread === thread) return;
   history.pushState(null, '', chatUrl(thread));
   chatSyncLocation();
-  chat.focus = 'composer';
   render();
 }
 
@@ -3680,7 +3679,7 @@ async function chatMarkRead(thread) {
 function chatCaptureView() {
   chatScrolled();
   const field = $app.querySelector('[data-chat-draft]');
-  return { focus: field === document.activeElement, caret: field && document.activeElement === field ? field.selectionStart : null };
+  return { caret: field && document.activeElement === field ? field.selectionStart : null };
 }
 
 function chatRestoreView(view) {
@@ -3700,10 +3699,7 @@ function chatRestoreView(view) {
   if (field && field !== document.activeElement) {
     field.value = chat.draft;
     chatGrowField(field);
-    if (view?.focus || chat.focus === 'composer') {
-      field.focus();
-      if (view?.caret != null) field.setSelectionRange(view.caret, view.caret);
-    }
+    if (view?.caret != null) field.setSelectionRange(view.caret, view.caret);
   }
   // On Back the focus goes to the list row of the chat that was open.
   if (chat.focus === 'row' && chat.backThread) $app.querySelector(`[data-chat-open="${CSS.escape(chat.backThread)}"]`)?.focus();
@@ -3788,7 +3784,6 @@ async function chatSend(retry = null) {
     pending.error = error.message;
     chat.status = error.message;
   } finally { chat.busy = false; render(); }
-  $app.querySelector('[data-chat-draft]')?.focus();
 }
 
 // One write path. The card sends the same request the Mailbox sends, with replyTo set to the item.
@@ -7973,8 +7968,33 @@ if (window.visualViewport) {
     document.documentElement.style.setProperty('--app-h', `${view.height}px`);
     document.documentElement.style.setProperty('--app-top', `${view.top}px`);
   };
-  const onViewport = () => { setKeyboardInset(); setAppViewport(); };
+  let chatViewportFrame = 0;
+  let chatStickToBottom = false;
+  const scheduleChatViewport = () => {
+    if (chatViewportFrame) return;
+    chatViewportFrame = requestAnimationFrame(() => {
+      chatViewportFrame = 0;
+      document.documentElement.style.setProperty('--vvh', `${Math.round(vv.height)}px`);
+      document.body.classList.toggle('chat-keyboard-open', chatKeyboardOpen(innerHeight, vv.height));
+      if (chatStickToBottom) {
+        const scroller = document.querySelector('[data-chat-scroll]');
+        if (scroller) scroller.scrollTop = scroller.scrollHeight;
+      }
+      chatStickToBottom = false;
+    });
+  };
+  const onViewport = (event) => {
+    if (event.type === 'resize') {
+      const scroller = document.querySelector('[data-chat-scroll]');
+      if (scroller && chatShouldStickToBottom(scroller)) chatStickToBottom = true;
+    }
+    setKeyboardInset();
+    setAppViewport();
+    scheduleChatViewport();
+  };
   vv.addEventListener('resize', onViewport);
   vv.addEventListener('scroll', onViewport);
+  document.documentElement.style.setProperty('--vvh', `${Math.round(vv.height)}px`);
+  document.body.classList.toggle('chat-keyboard-open', chatKeyboardOpen(innerHeight, vv.height));
   setAppViewport();
 }
