@@ -8,6 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { DATA_DIR, DEFAULT_IDLE_MINUTES, isPortsPool, portEnvFor } from './config.js';
 import { quietHoursActive, readNight } from './night.js';
 import { hasLiveWorkerRun, MUTATION_GUARD_WAIT_MS, withMutationLock } from './kit/locks.js';
+import { sharedWorktreeRoot } from './kit/config.js';
 import { verifyCallerPane } from './kit/workers.js';
 
 const LEASES_FILE = 'leases.json';
@@ -253,6 +254,181 @@ export function reclaimLeases({ pools, dataDir = DATA_DIR, panes = null, now = D
   return { reclaimed, held };
 }
 
+// The key of a pool item in the records of a listener without a lease, and in the unleased list of the state.
+export const unleasedKey = (pool, item) => `${pool}\n${item}`;
+
+// The age of a listener without a lease before Herdr Boss tells the orchestrator of the owner of the process.
+export const UNLEASED_NOTICE_MINUTES = 10;
+// The most probes of one tick that run at the same time.
+const UNLEASED_PROBE_PARALLEL = 8;
+
+// A pool that Herdr Boss reconciles for unleased listeners: a pool with an idle rule. The built-in browser pool has none.
+export const reconcilesUnleased = (pool) => hasIdleRule(pool);
+
+let lsofFound = null;
+
+// Whether lsof is on the PATH. The check runs once. Herdr Boss names a listener process with lsof and never with a shell.
+export function lsofInstalled() {
+  if (lsofFound === null) {
+    const result = spawnSync('lsof', ['-v'], { stdio: 'ignore', timeout: 2000, env: { PATH: process.env.PATH ?? '' } });
+    lsofFound = !result.error;
+  }
+  return lsofFound;
+}
+
+// The output of lsof, or null when lsof is absent, times out, or fails.
+function lsofOutput(args) {
+  const result = spawnSync('lsof', args, { encoding: 'utf8', timeout: 2000, env: { PATH: process.env.PATH ?? '', LC_ALL: 'C' } });
+  return result.status === 0 ? result.stdout : null;
+}
+
+// The PID of the process that listens on a port, or null when lsof is absent or names no PID.
+// lsof prints a PID, a file descriptor and an address. It prints no argument and no environment of the process.
+export function listenerPid(port, { hasLsof = lsofInstalled() } = {}) {
+  if (!hasLsof) return null;
+  const pid = Number(/^p(\d+)$/m.exec(lsofOutput(['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-Fp']) || '')?.[1]);
+  return Number.isInteger(pid) && pid > 0 ? pid : null;
+}
+
+// The working directory of a process, or null when lsof is absent, the process is gone, or it has no cwd.
+// lsof prints the path of the working directory. It prints no argument and no environment of the process.
+export function processCwd(pid, { hasLsof = lsofInstalled() } = {}) {
+  if (!hasLsof || pid == null) return null;
+  const directory = /^n(.+)$/m.exec(lsofOutput(['-a', '-p', String(pid), '-d', 'cwd', '-Fn']) || '')?.[1];
+  return directory ? path.resolve(directory) : null;
+}
+
+// The name of a process, for example "node". ps prints the name only. It prints no argument and no environment.
+export function processLabel(pid) {
+  if (pid == null) return null;
+  const result = spawnSync('ps', ['-o', 'comm=', '-p', String(pid)], { encoding: 'utf8', timeout: 2000, env: { PATH: process.env.PATH ?? '', LC_ALL: 'C' } });
+  return result.status === 0 ? result.stdout.trim() || null : null;
+}
+
+// Whether a directory is a path or a child of a path. A sibling with the same start is not inside it.
+const holds = (root, directory) => {
+  const relative = path.relative(path.resolve(root), directory);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+};
+
+// The folder that holds the worker worktrees of a project: the shared worktree root plus the folder name of its repo.
+// The kit lays a worktree out as <worktree root>/<repo folder>/<worktree name>, so this folder holds every worktree of
+// that project. The root comes from the kit setting, not from a path in this file.
+export function projectWorktreeRoot(repo, { worktreeRoot = sharedWorktreeRoot() } = {}) {
+  return repo ? path.join(path.resolve(worktreeRoot), path.basename(path.resolve(repo))) : null;
+}
+
+// The project that owns a working directory: the project with the longest registry path or worktree path that holds
+// it. Both count, so a server that runs in a worker worktree has an owner. A path outside every project gives null.
+export function projectOfCwd(directory, projectPaths = []) {
+  if (!directory) return null;
+  let owner = null;
+  let length = -1;
+  for (const entry of projectPaths) {
+    if (!entry?.slug) continue;
+    for (const root of [entry.path, entry.worktreePath]) {
+      if (!root || !holds(root, directory)) continue;
+      // The longest match wins when a worktree sits inside another project path.
+      const size = path.resolve(root).length;
+      if (size <= length) continue;
+      length = size;
+      owner = entry.slug;
+    }
+  }
+  return owner;
+}
+
+const safely = (read, fallback = null) => {
+  try { return read(); } catch { return fallback; }
+};
+
+// The text that the engine sends to the orchestrator of the owner of a listener that no lease holds.
+export function unleasedNoticeText(item) {
+  const subject = item.pid == null ? 'A process' : `Process ${item.pid}${item.name ? ` (${item.name})` : ''}`;
+  return [
+    `${subject} has listened on port ${item.item} of pool ${item.pool} for ${item.ageMinutes} minutes. No lease holds this port, so the dashboard does not show this server and the pool counts the port as free.`,
+    `Take the port for ${item.owner} and bind the lease to the process: herdr-boss lease acquire ${item.pool} --for ${item.owner} --prefer ${item.item} --pid ${item.pid}`,
+    `herdr-boss lease bind ${item.pool} ${item.item} --pid ${item.pid}`,
+    'Run lease acquire first, then lease bind. Report the port and the PID to the Boss.',
+  ].join('\n');
+}
+
+// Find the pool items that a server listens on while no lease holds them. `state` is a Map of "pool\nitem" to
+// { firstSeen, notified }; the caller keeps it beside the answers of the lease probe. One tick probes each item once.
+// `probePort` is the TCP probe of the tick. `pidOf`, `cwdOf` and `labelOf` name the process that listens.
+// `projectPaths` is the [{ slug, path, worktreePath }] of the project registry. The check starts no loop and changes no lease.
+// It returns the listeners for the state API and the listeners that reached the notice age.
+export async function reconcileUnleasedListeners({
+  pools = [], leases = [], state = new Map(), now = Date.now(), probePort = tcpListeningAsync,
+  pidOf = listenerPid, cwdOf = processCwd, labelOf = processLabel, projectPaths = [],
+  noticeMinutes = UNLEASED_NOTICE_MINUTES, parallel = UNLEASED_PROBE_PARALLEL,
+} = {}) {
+  const at = timeValue(now);
+  const held = new Set(leases.map((lease) => `${lease.pool}\n${lease.item}`));
+  // Every free item of every pool with an idle rule gets one probe per tick. The sort gives a stable order.
+  const due = pools.filter(reconcilesUnleased)
+    .flatMap((pool) => pool.items.filter((item) => !held.has(`${pool.name}\n${item}`)).map((item) => ({ pool: pool.name, item })))
+    .sort((a, b) => `${a.pool}\n${a.item}`.localeCompare(`${b.pool}\n${b.item}`, 'en', { numeric: true }));
+  const answers = new Map();
+  let next = 0;
+  const worker = async () => {
+    while (next < due.length) {
+      const entry = due[next++];
+      let value = null;
+      try { value = await probePort(entry.item); } catch { value = null; }
+      answers.set(unleasedKey(entry.pool, entry.item), value === true ? true : value === false ? false : null);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(parallel, due.length) }, worker));
+  // A lease that takes an item, or a pool that leaves the config, clears the record of that item.
+  const dueKeys = new Set(due.map((entry) => unleasedKey(entry.pool, entry.item)));
+  for (const key of [...state.keys()]) if (!dueKeys.has(key)) state.delete(key);
+
+  const unleased = [];
+  const notices = [];
+  for (const entry of due) {
+    const key = unleasedKey(entry.pool, entry.item);
+    const answer = answers.get(key);
+    // An unknown answer keeps the record and shows nothing. A refused connection ends the age of the listener.
+    if (answer !== true) {
+      if (answer === false) state.delete(key);
+      continue;
+    }
+    const record = state.get(key) || { firstSeen: at, notified: false };
+    const pid = safely(() => pidOf(entry.item));
+    const owner = pid == null ? null : projectOfCwd(safely(() => cwdOf(pid)), projectPaths);
+    const item = {
+      pool: entry.pool, item: entry.item, pid, name: pid == null ? null : safely(() => labelOf(pid)),
+      firstSeen: new Date(record.firstSeen).toISOString(),
+      ageMinutes: Math.max(0, Math.floor((at - record.firstSeen) / 60000)),
+      owner,
+    };
+    unleased.push(item);
+    // A notice needs an owner, so a listener of an unknown owner stays a warning in the dashboard. The record keeps
+    // that the notice went, so the next tick sends no second notice. markUnleasedNotified sets that flag.
+    if (owner && !record.notified && at - record.firstSeen >= noticeMinutes * 60000) notices.push(item);
+    state.set(key, record);
+  }
+  return { unleased, notices };
+}
+
+// Record that the notice for a listener went out. The caller marks the record after it sent the notice, so a tick that
+// had no orchestrator pane for the owner tries again.
+export function markUnleasedNotified(state, item) {
+  const record = state.get(unleasedKey(item.pool, item.item));
+  if (record) record.notified = true;
+}
+
+// The keys of the items that the last tick of the engine found listening with no lease. `lease acquire` reads them to
+// hand out a port that nothing listens on. The list comes from the last state snapshot, so it can be a tick old. A
+// snapshot that is missing, unreadable, or holds no list gives an empty set.
+export function readUnleasedKeys(dataDir = DATA_DIR) {
+  try {
+    const rows = JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8'))?.resourceLeases?.unleased;
+    return new Set((Array.isArray(rows) ? rows : []).map((row) => unleasedKey(row.pool, row.item)));
+  } catch { return new Set(); }
+}
+
 function paneSet(herdr) {
   try {
     const response = herdr(['pane', 'list']);
@@ -331,15 +507,18 @@ function holderText(lease) {
 
 // Choose an item: the preferred item when it is free, then own split items, then unsplit items, then free split items of other projects.
 // An item in `exclude` is not chosen, except as the preferred item. Port 9222 is never chosen.
-function chooseItem(pool, store, project, prefer, exclude) {
+// `--prefer` wins before the list, so a named port is given out even when a process listens on it. Otherwise the tiers
+// keep their order and an item that no process listens on comes before an item in `unleased`.
+function chooseItem(pool, store, project, prefer, exclude, unleased = new Set()) {
   const taken = new Set(store.leases.filter((lease) => lease.pool === pool.name).map((lease) => lease.item));
   const free = pool.items.filter((item) => !taken.has(item) && item !== PROTECTED_PORT);
   if (prefer != null && free.includes(prefer)) return prefer;
   const usable = free.filter((item) => !exclude.has(item));
   const own = pool.split[project] ?? [];
-  return usable.find((item) => own.includes(item))
-    ?? usable.find((item) => splitOwner(pool, item) === null)
-    ?? usable[0]
+  const pick = (list) => list.find((item) => !unleased.has(unleasedKey(pool.name, item))) ?? list[0];
+  return pick(usable.filter((item) => own.includes(item)))
+    ?? pick(usable.filter((item) => splitOwner(pool, item) === null))
+    ?? pick(usable)
     ?? null;
 }
 
@@ -392,9 +571,11 @@ function leaseRecord(pool, item, holder, at, ttlMinutes, bound = null) {
 
 // Take one item for a known holder. worker start calls this after it has verified the orchestrator pane.
 // In a pool with project holders, a project holds at most one item. A second call returns the lease that the project holds.
+// `unleased` holds the keys of the items that a process listens on with no lease; the function reads the last state
+// snapshot when the caller passes none.
 // Return { lease, reclaimed }. With a ticket ({ id, project, pid }) the call joins the FIFO queue of the pool when no item is free
 // or a waiter is ahead, and returns { lease: null, position, reclaimed } instead of throwing.
-export function acquireLeaseFor(poolName, holder, { pools, dataDir = DATA_DIR, prefer = null, exclude = [], ttlMinutes = null, now = Date.now(), panes = null, probeTcp = null, browserProcess = null, pidInfo = processInfo, pid = null, ticket = null, log = () => {}, detail = false } = {}) {
+export function acquireLeaseFor(poolName, holder, { pools, dataDir = DATA_DIR, prefer = null, exclude = [], ttlMinutes = null, now = Date.now(), panes = null, probeTcp = null, browserProcess = null, pidInfo = processInfo, pid = null, ticket = null, log = () => {}, detail = false, unleased = null } = {}) {
   const pool = poolNamed(pools, poolName);
   if (prefer === PROTECTED_PORT) throw fail(`Port ${PROTECTED_PORT} is protected. No pool leases it.`);
   if (prefer != null && !pool.items.includes(prefer)) throw fail(`Item ${prefer} is not in pool ${pool.name}.`);
@@ -403,6 +584,8 @@ export function acquireLeaseFor(poolName, holder, { pools, dataDir = DATA_DIR, p
   const bound = pid == null ? null : { pid, start: requireRunning(pid, pidInfo)?.start ?? null };
   const at = timeValue(now);
   const skip = new Set(exclude);
+  // The items that a process listens on with no lease, read from the last tick of the engine when the caller gives none.
+  const listening = unleased ?? readUnleasedKeys(dataDir);
   const result = changeLeases(dataDir, (store) => {
     const { reclaimed: reclaimedNow } = reclaimInStore(store, { pools, panes, now: at, probeTcp, browserProcess, pidInfo: (processId) => pidInfo(processId, { wantStart: false }) });
     if (pool.holder === 'project') {
@@ -421,7 +604,7 @@ export function acquireLeaseFor(poolName, holder, { pools, dataDir = DATA_DIR, p
       }
       ahead = queue.findIndex((entry) => entry.id === ticket.id);
     } else ahead = queue.length;
-    const item = ahead < freeCount ? chooseItem(pool, store, holder.project, prefer, skip) : null;
+    const item = ahead < freeCount ? chooseItem(pool, store, holder.project, prefer, skip, listening) : null;
     if (item === null) {
       if (ticket) return { lease: null, position: ahead + 1, reclaimed: reclaimedNow };
       throw emptyPoolError(pool, store, queue.length);
