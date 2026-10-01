@@ -863,13 +863,18 @@ herdr-boss worker start fix-74 --kind claude --task-file brief.md --allow src/pa
 | Command | Action |
 |---|---|
 | `worker list` | Unfinished run records with the live agent status. |
-| `worker collect NAME [--keep-pane] [--outcome done\|partial\|failed --gate-passed\|--gate-failed] [--defects N] [--rework N] [--model-result first-time\|rework\|failed] [--model-reason TEXT]` | Check the worker report and its changed paths, report configured stale-artifact warnings, append the run to the ledger, record usage, and release its leases. Recording needs the outcome, one gate result, and any supplied defect or rework counts. It sets `collectedAt` and `finishedAt` after a successful collect. A successful collect schedules the pane to close after `workers.paneCloseDelayMinutes` (2 minutes by default). `--keep-pane` skips that close. A refused collect closes nothing. The `--record` flag is accepted for compatibility. After success, merge the branch, then prune safe worktrees. |
+| `worker collect NAME [--keep-pane] [--allow PATH]... [--outcome done\|partial\|failed --gate-passed\|--gate-failed] [--defects N] [--rework N] [--model-result first-time\|rework\|failed] [--model-reason TEXT]` | Check the worker report and its changed paths, report configured stale-artifact warnings, append the run to the ledger, record usage, and release its leases. Recording needs the outcome, one gate result, and any supplied defect or rework counts. It sets `collectedAt` and `finishedAt` after a successful collect. A successful collect schedules the pane to close after `workers.paneCloseDelayMinutes` (2 minutes by default). `--keep-pane` skips that close. A refused collect closes nothing. The `--record` flag is accepted for compatibility. After success, merge the branch, then prune safe worktrees. |
 | `worker collect NAME --no-record` | Read and print the report summary. Do not write a ledger entry, close the run record, or schedule the pane to close. Use this option when you only need to inspect the report. Do not combine it with `--record`: the command refuses both flags. |
 | `worker park NAME --reason TEXT` | Mark a worker that waits on purpose. Idle notices skip it. |
 | `worker unpark NAME` | Clear the park mark. |
 | `worker allow NAME PATH... --reason TEXT` | Approve extra paths for a running worker after a `WORKER QUESTION`. |
+| `worker scope add NAME PATH... --reason TEXT` | Approve and record extra paths for a running worker after a `WORKER QUESTION`. |
 
 `worker collect` checks changed paths against the paths in the run record. It ignores the worker's `.worker/` folder. It also ignores `docs/orchestration/herdr-boss.md`, `AGENTS.md`, and `.claude/settings.json`, because the kit writes these files in a worker worktree. It checks artifacts when a `report.md` line starts with `Status: done` and the next character is whitespace, punctuation, or the end of the line. It accepts lines such as `Status: done.` and `Status: done — checks complete`. It ignores `Status: doneish`, `Status: done-partial`, `Status: partial`, and `Status: failed`. It compares the newest matching source file with the oldest matching artifact file. It warns when a source is newer or when sources match but no artifacts do. It prints each warning and includes the warnings in the `artifactWarnings` summary field. A warning does not change the independent gate result. The orchestrator decides whether the gate passed.
+
+Collection checks paths in both `allowedPaths` and `scopeExtensions`. If `report.json` omits changed paths that are inside the approved scope, collection prints `report.json omits N changed path(s); recorded the diff paths`. It uses the Git diff paths in the ledger. It still refuses a changed path outside the approved scope. Use `--allow PATH` to approve a path for one collect only. Repeat `--allow` for each path. Use `worker scope add` to save an approval in the run record. The string `"none"` in the report's `issue` field becomes null, and collection prints a warning.
+
+Collection ignores the caller's own process tree when it checks worktree processes. If the caller shell has its current directory in the worktree, collection prints `cd <main checkout>` and continues. A separate background shell with its current directory in the worktree blocks collection. The error names its PID and command and says to change directory or stop it.
 
 The command completes every check before it writes the ledger and closes the run. It uses the ledger and run folder in the main checkout, including when you run it from a worker worktree. If the recording flags are missing, it prints the missing flag list and says to use `--no-record` for a dry read.
 
@@ -970,11 +975,13 @@ Use `herdr-boss suite --reuse -- <command>` to request reuse outside a pre-push 
 
 `herdr-boss push` finds a pre-push hook in two ways. A `pre-push` file exists at `git rev-parse --git-path hooks/pre-push`, which respects `core.hooksPath`. Or a husky or lefthook config names `pre-push`. With a hook, it takes `full-suite`, runs `git push`, and releases the lock also when the push fails. With no hook, it runs `git push` and takes no lock. It prints which case it used. Its exit code is the exit code of `git push`. Only a verified `orch` or `boss` pane can run it.
 
-### `worker allow NAME PATH...`
+### `worker scope add NAME PATH...` and `worker allow NAME PATH...`
 
-Approve extra scope after a worker asks a question. Only the verified `orch` or `boss` pane may approve. `worker allow` requires `HERDR_ENV=1` and verifies the caller pane with the same checks as `worker start`.
+Approve extra scope after a worker asks a question. Only the verified `orch` or `boss` pane may approve. The command requires `HERDR_ENV=1` and verifies the caller pane with the same checks as `worker start`.
 
-The paths must be repository-relative and inside the worker worktree. It refuses an absolute path, a parent traversal, a path that resolves outside the repository through a symlink, and every path under `.worker/`. It refuses the whole request when any path is invalid, and it refuses a finished run. A valid approval adds the new paths to the run's allowed paths and appends a history item with the paths, the reason, the time, and the verified caller pane.
+Use `herdr-boss worker scope add NAME PATH... --reason TEXT`. The older `worker allow NAME PATH... --reason TEXT` command is an alias.
+
+The paths must be repository-relative and inside the worker worktree. The command refuses an absolute path, a parent traversal, a path that resolves outside the repository through a symlink, and every path under `.worker/`. It refuses the whole request when any path is invalid, and it refuses a finished run. A valid approval adds the paths to `allowedPaths` and records the paths, reason, time, and verified caller pane in `scopeExtensions`.
 
 `worker collect` uses the approved paths. Its summary and ledger entry include the approval history. A prompt or message alone does not change the approved paths.
 
@@ -985,7 +992,7 @@ Collection records the run before merge. After a successful collection, merge th
 Before `worktree prune --apply` removes a worktree, it copies `.worker/report.md`, `.worker/report.json`, and `.worker/brief.md` to `.orchestration/reports/<worker name>/` in the main checkout. It copies no other file. It skips a missing file and a file larger than 1 MB, and prints one line for each skipped file, for example `skipped report.md: over 1 MB`. It never overwrites a file. If the archive folder already holds one of the files, the command writes all files to the new folder `<worker name>-<UTC time>`. It adds `-2`, `-3` when that folder also exists. It prints one line for each archive: `archived reports of <name> to <path>`. The `.gitignore` of the project holds `.orchestration/`. If `.worker` or the archive folder is a symlink, or a copy fails, the command prints the error and keeps that worktree. Use `--no-archive` to remove a worktree without the copy.
 
 ```sh
-herdr-boss worker allow fix-74 docs/parse.md --reason "the fix also needs the parser docs"
+herdr-boss worker scope add fix-74 docs/parse.md --reason "the fix also needs the parser docs"
 ```
 
 ### Resource leases

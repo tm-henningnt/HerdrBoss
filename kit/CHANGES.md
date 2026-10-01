@@ -121,3 +121,7 @@ Summary: Document review-pack item types, ask values, and evidence rules in the 
 ## 90f73eb6c2f1
 Impact: useful
 Summary: Integrate: combine the collect default, the read-only research rule, and the review pack rules into one kit revision.
+
+## b90d8cbfe22d
+Impact: required
+Summary: Record approved worker scope and the full branch diff during collection.

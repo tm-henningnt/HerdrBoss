@@ -532,6 +532,9 @@ test('worker collect uses approved scope extensions and copies them to the ledge
   allowWorkerScope('scope-collect', { paths: ['docs-approved.md'], reason: 'small docs fix' }, {
     config: f.config, herdr: f.herdr, env: f.env, now: Date.parse('2026-09-26T12:00:00Z'), output: () => {},
   });
+  const runRecord = JSON.parse(fs.readFileSync(run.recordFile, 'utf8'));
+  runRecord.allowedPaths = runRecord.allowedPaths.filter((item) => item !== 'docs-approved.md');
+  fs.writeFileSync(run.recordFile, JSON.stringify(runRecord));
   const lines = [];
   const summary = collectWorker('scope-collect', { record: true, outcome: 'done', gatePassed: true }, {
     config: f.config, now: Date.parse('2026-09-26T12:30:00Z'), output: (text) => lines.push(text),
@@ -575,6 +578,49 @@ test('worker allow CLI parses paths and reason and rejects missing or unknown op
   assert.throws(() => runKitCommand('worker', ['allow', 'scope-cli', '--reason', 'r'], options), /Usage: worker allow/);
   assert.throws(() => runKitCommand('worker', ['allow', 'scope-cli', 'docs/a.md'], options), /needs --reason/);
   assert.throws(() => runKitCommand('worker', ['allow', 'scope-cli', 'docs/a.md', '--reason', 'r', '--bogus', 'x'], options), /Unknown option/);
+});
+
+test('worker scope add records verified scope extensions through the same scope history', () => {
+  const f = setupFixture(null);
+  const run = startWorker('scope-add-cli', { kind: 'codex', task: 'x', allow: ['src/'], noWorktree: true }, {
+    config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+  });
+  const options = { config: f.config, herdr: f.herdr, env: f.env, output: () => {} };
+  runKitCommand('worker', ['scope', 'add', 'scope-add-cli', 'docs/a.md', 'test/a.test.js', '--reason', 'second round needs docs and tests'], options);
+  const record = JSON.parse(fs.readFileSync(run.recordFile, 'utf8'));
+  assert.ok(record.allowedPaths.includes('docs/a.md'));
+  assert.ok(record.allowedPaths.includes('test/a.test.js'));
+  assert.deepEqual(record.scopeExtensions, [{
+    paths: ['docs/a.md', 'test/a.test.js'], reason: 'second round needs docs and tests',
+    at: record.scopeExtensions[0].at, by: 'ws:orch',
+  }]);
+  assert.throws(() => runKitCommand('worker', ['scope', 'add', 'scope-add-cli', 'docs/b.md'], options), /needs --reason/);
+  assert.throws(() => runKitCommand('worker', ['scope', 'add', 'scope-add-cli', '--reason', 'r'], options), /Usage: worker scope add/);
+});
+
+test('worker collect --allow accepts repeated one-time paths', () => {
+  const f = setupFixture(null);
+  git(f.root, 'add', '-A');
+  git(f.root, 'commit', '--allow-empty', '-m', 'fixture configuration');
+  const run = startWorker('collect-cli-allow', { kind: 'codex', task: 'x', allow: ['src/', '.orchestration/runs/'] }, {
+    config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+  });
+  fs.mkdirSync(path.join(run.worktree, 'docs'));
+  fs.writeFileSync(path.join(run.worktree, 'docs', 'change.md'), 'one-time scoped change\n');
+  git(run.worktree, 'add', 'docs/change.md');
+  git(run.worktree, 'commit', '-m', 'worker change');
+  const reportDir = path.join(run.worktree, run.workerDir);
+  fs.writeFileSync(path.join(reportDir, 'report.md'), 'Collection uses two explicit one-time paths.\n');
+  fs.writeFileSync(path.join(reportDir, 'report.json'), JSON.stringify({
+    issue: null, branch: run.branch, worktree: run.worktree, changedPaths: ['docs/change.md'],
+    commands: ['focused check'], evidenceTier: ['unit'], unverified: [], stoppedEarly: false,
+  }));
+  const summary = runKitCommand('worker', [
+    'collect', 'collect-cli-allow', '--no-record', '--allow', 'docs/change.md', '--allow', 'test/',
+  ], { config: f.config, env: f.env, herdr: f.herdr, output: () => {} });
+  assert.deepEqual(summary.actualPaths, ['docs/change.md']);
+  assert.deepEqual(JSON.parse(fs.readFileSync(run.recordFile, 'utf8')).allowedPaths, run.allowedPaths);
+  assert.equal(fs.existsSync(f.config.ledgerPath), false);
 });
 
 test('worker start merges extra models into the harness allow-list and applies per-harness state', () => {

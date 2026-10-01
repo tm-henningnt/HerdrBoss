@@ -74,6 +74,10 @@ function tiers(value, errors, allowedTiers) {
 export function normalizeWorkerReport(report) {
   const warnings = [];
   if (isObject(report) && typeof report.issue === 'string') {
+    if (report.issue.trim().toLowerCase() === 'none') {
+      warnings.push(`Warning: the report issue is the string ${JSON.stringify(report.issue)}; it is read as null. Write issue as null.`);
+      return { report: { ...report, issue: null }, warnings };
+    }
     const match = /^#?\s*([1-9][0-9]*)$/.exec(report.issue.trim());
     if (match) {
       warnings.push(`Warning: the report issue is the string ${JSON.stringify(report.issue)}; it is read as the number ${Number(match[1])}. Write issue as a number.`);

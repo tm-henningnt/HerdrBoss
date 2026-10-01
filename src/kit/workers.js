@@ -147,9 +147,35 @@ export function parseWorktreeCwdProcesses(output, worktree) {
   return parseCwdProcesses(output).filter(({ cwd }) => cwd === root || cwd.startsWith(`${root}${path.sep}`));
 }
 
-export function filterCollectProcesses(processes, { worktree, shellPid = null }) {
+function callerProcessTree(processes, callerPid, callerPpid = null) {
+  const byPid = new Map(processes.map((item) => [Number(item.pid), item]));
+  const tree = [];
+  const seen = new Set();
+  let current = Number(callerPid) > 1
+    ? byPid.get(Number(callerPid)) ?? { pid: Number(callerPid), ppid: callerPpid }
+    : null;
+  while (current && Number(current.pid) > 1 && !seen.has(Number(current.pid))) {
+    seen.add(Number(current.pid));
+    tree.push(current);
+    const parentPid = Number(current.ppid);
+    current = parentPid > 1 ? byPid.get(parentPid) : null;
+  }
+  return tree;
+}
+
+function isInWorktree(item, root) {
+  return item.cwd && (path.resolve(item.cwd) === root || path.resolve(item.cwd).startsWith(`${root}${path.sep}`));
+}
+
+function isShellProcess(item) {
+  return /^(?:-?)(?:zsh|bash|fish|sh|dash|ksh|tcsh|csh)$/i.test(String(item?.command ?? ''));
+}
+
+export function filterCollectProcesses(processes, { worktree, shellPid = null, callerPid = null, callerPpid = null } = {}) {
   const root = path.resolve(worktree);
-  const inTree = processes.filter((item) => item.cwd && (path.resolve(item.cwd) === root || path.resolve(item.cwd).startsWith(`${root}${path.sep}`)));
+  const callerTree = callerProcessTree(processes, callerPid, callerPpid);
+  const callerPids = new Set(callerTree.map((item) => Number(item.pid)));
+  const inTree = processes.filter((item) => isInWorktree(item, root));
   const byPid = new Map(processes.map((item) => [Number(item.pid), item]));
   const daemon = (item) => /(?:^|\/)Codex\.app\/Contents\/Resources\/app-server-daemon(?:\s|$)/.test(String(item.executable ?? item.args ?? ''));
   const workerRuntime = (item) => {
@@ -174,6 +200,7 @@ export function filterCollectProcesses(processes, { worktree, shellPid = null })
   };
   const workload = (item) => /(?:\bnode\s+--test\b|\b(?:jest|vitest|mocha|playwright)\b|\b(?:nodemon|watcher|watchpack|chokidar)\b|\b(?:vite|webpack|next)\s+(?:dev|serve)\b|\b(?:server|serve)\.js\b)/i.test(String(item.args ?? ''));
   return inTree.filter((item) => {
+    if (callerPids.has(Number(item.pid))) return false;
     if (Number(item.ppid) === 1 || workload(item)) return true;
     if (daemon(item) || sharedRuntime(item) || workerRuntime(item)) return false;
     return true;
@@ -1637,7 +1664,7 @@ export function deriveModelOutcome(options, reportJson = {}) {
   return { result: 'first-time', reason: '' };
 }
 
-export function collectWorker(name, options, { config, now = Date.now(), output = console.log, recordUsageFn = recordUsage, listWorktreeProcesses = worktreeCwdProcesses, leaseDataDir = DATA_DIR, schedulePaneCloseFn = scheduleWorkerPaneClose } = {}) {
+export function collectWorker(name, options, { config, now = Date.now(), output = console.log, recordUsageFn = recordUsage, listWorktreeProcesses = worktreeCwdProcesses, leaseDataDir = DATA_DIR, schedulePaneCloseFn = scheduleWorkerPaneClose, callerPid = process.pid, callerPpid = process.ppid } = {}) {
   const record = options.noRecord !== true && options.record !== false;
   let ledgerWritten = false;
   try {
@@ -1659,7 +1686,14 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
     const actualBranch = git(run.worktree, ['branch', '--show-current']).trim();
     if (actualBranch !== run.branch) throw new Error(`Worktree branch ${actualBranch || '(detached)'} does not match run branch ${run.branch}.`);
     const processList = listWorktreeProcesses(run.worktree);
-    const leftovers = filterCollectProcesses(processList, { worktree: run.worktree, shellPid: run.shellPid });
+    const root = path.resolve(run.worktree);
+    const callerShell = callerProcessTree(processList, callerPid, callerPpid)
+      .find((item) => isShellProcess(item) && isInWorktree(item, root));
+    const leftovers = filterCollectProcesses(processList, { worktree: run.worktree, shellPid: run.shellPid, callerPid, callerPpid });
+    const backgroundShell = leftovers.find(isShellProcess);
+    if (backgroundShell) {
+      throw new Error(`your own background shell (pid ${backgroundShell.pid}, command ${backgroundShell.command}) has its cwd in the worktree. Change directory or stop it.`);
+    }
     if (leftovers.length) throw new Error(`Worker ${name} still has processes in its worktree: ${leftovers.map((process) => `${process.command || 'unknown'} (pid ${process.pid}, ppid ${process.ppid ?? 'unknown'}, cwd ${process.cwd})`).join('; ')}. Stop them before collection.`);
     if (run.issue != null && reportJson.issue !== run.issue) throw new Error(`Report issue ${reportJson.issue} does not match run issue ${run.issue}.`);
     if (reportJson.branch !== run.branch) throw new Error(`Report branch ${reportJson.branch} does not match run branch ${run.branch}.`);
@@ -1668,17 +1702,25 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
     // The worker's own brief and report files live under .worker/ and never count as changed product paths.
     // The kit writes its own files in the worktree. They never count as changed product paths either.
     const ownFile = (item) => item === '.worker' || String(item).startsWith('.worker/') || KIT_MANAGED_PATHS.includes(String(item));
+    const extensionPaths = (Array.isArray(run.scopeExtensions) ? run.scopeExtensions : []).flatMap((extension) => Array.isArray(extension?.paths) ? extension.paths : []);
+    const oneTimePaths = Array.isArray(options.allow) ? options.allow : [];
+    for (const [label, paths] of [['approved', extensionPaths], ['--allow', oneTimePaths]]) {
+      if (!paths.length) continue;
+      const errors = scopeEscapeErrors(run.worktree, paths);
+      if (errors.length) throw new Error(`Worker ${name} has invalid ${label} paths: ${errors.join(', ')}.`);
+    }
+    const allowedPaths = [...new Set([...(run.allowedPaths ?? []), ...extensionPaths, ...oneTimePaths])];
     const reported = (reportJson.changedPaths || []).filter((item) => !ownFile(item));
     const changed = gitChangedPaths(run.worktree, baseRef).filter((item) => !ownFile(item));
-    const reportScope = compareChangedPaths(reported, run.allowedPaths ?? []);
-    const actualScope = compareChangedPaths(changed, run.allowedPaths ?? []);
+    const reportScope = compareChangedPaths(reported, allowedPaths);
+    const actualScope = compareChangedPaths(changed, allowedPaths);
     const scopeErrors = [...new Set([...reportScope, ...actualScope])];
     // A report entry that ends in / covers every changed file under that folder, when the folder is inside the
     // allowed paths. The scope check above still runs on each real file.
-    const folders = reported.filter((item) => item.endsWith('/') && compareChangedPaths([item], run.allowedPaths ?? []).length === 0);
+    const folders = reported.filter((item) => item.endsWith('/') && compareChangedPaths([item], allowedPaths).length === 0);
     const omitted = changed.filter((item) => !reported.includes(item) && !folders.some((folder) => item.startsWith(folder)));
     if (scopeErrors.length) throw new Error(`Worker ${name} changed paths outside its allowed scope: ${scopeErrors.join(', ')}.`);
-    if (omitted.length) throw new Error(`Worker ${name} omitted changed paths from its report: ${omitted.join(', ')}.`);
+    const recordedPaths = omitted.length ? changed : reported;
     try {
       const reportStat = fs.statSync(path.join(reportDir, 'report.json'));
       recordWorkerReport({
@@ -1701,6 +1743,7 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
       commits: log ? log.split('\n') : [],
       reportedPaths: reported,
       actualPaths: changed,
+      recordedPaths,
       outOfScope: scopeErrors,
       scopeExtensions: run.scopeExtensions ?? [],
       artifactWarnings: collectArtifactWarnings(run.worktree, reportMd, config.artifactChecks ?? []),
@@ -1721,7 +1764,7 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
         timedOut: false,
         // null means unknown. A harness that counts tool calls can report usage.toolCalls.
         toolCalls: Number.isSafeInteger(reportJson.usage?.toolCalls) && reportJson.usage.toolCalls >= 0 ? reportJson.usage.toolCalls : null,
-        changedPaths: reported,
+        changedPaths: recordedPaths,
         independentGate: { passed: !!options.gatePassed, command: 'Independent gate result supplied by orchestrator; command and evidence are in the worker report and review.' },
         defectsFound: Array.from({ length: options.defects ?? 0 }, (_value, index) => `defect ${index + 1}`),
         rework: Array.from({ length: options.rework ?? 0 }, (_value, index) => `rework ${index + 1}`),
@@ -1753,6 +1796,8 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
         releasedLeases.push(...dropLeases((lease) => lease.project === config.slug && lease.worker === name && taken.has(`${lease.pool}\n${lease.item}`), { dataDir: leaseDataDir }));
       }
     }
+    if (omitted.length) output(`report.json omits ${omitted.length} changed path(s); recorded the diff paths`);
+    if (callerShell) output(`cd ${displayArg(config.mainRoot ?? config.root)}`);
     for (const warning of normalized.warnings) output(warning);
     if (record && !reportJson.modelOutcome && !options.modelResult) {
       const { result } = deriveModelOutcome(options, reportJson);
