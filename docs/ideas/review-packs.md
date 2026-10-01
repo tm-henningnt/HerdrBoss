@@ -463,7 +463,7 @@ Write a failing regression test before each behavior change. Run only the change
 | RP9 | Summary, submit, result JSON and Markdown, `review-result` delivery, Mailbox close. | `src/review-store.js`, `src/messages.js`, `public/review.js` | `test/review-result.test.js`: prompt text cut at 1500, denied first, delivery retry, close, rate limit | `docs/user-guide.md`, `docs/cli.md` | M |
 | RP10 | Legacy `page` items: raw token route, CSP, bridge script, overlay pins. | `src/server.js`, `public/review-bridge.js` (new), `public/review.js` | `test/review-raw.test.js`: token expiry, wrong version, CSP header, no `X-Frame-Options`, host check, `POST` refused; browser check in Chrome and Safari that the pack images and the bridge load under `'self'` in the opaque origin (else name the host in each source), that a page `fetch()` fails, and that a pin lands | `docs/user-guide.md` | L |
 | RP11 | Retention tick, expiry notice, quota refusal, delete. | `src/engine.js`, `src/review-store.js` | `test/review-store.test.js` (expiry, quota) | `docs/user-guide.md` | S |
-| RP12 | Kit review pack text and kit `CHANGES.md` entry. | `kit/skills/herdr-orchestrator/SKILL.md`, `kit/templates/worker-brief.md`, `kit/CHANGES.md` | `test/kit.test.js` (template renders), `herdr-boss check agents` | the kit files | S |
+| RP12 | Kit review pack text and kit `CHANGES.md` entry. | `kit/skills/herdr-orchestrator/SKILL.md`, `kit/templates/worker-brief.md`, `kit/CHANGES.md` | `test/kit-locks-and-updates.test.js` (template renders), `herdr-boss check agents` | the kit files | S |
 
 ### Order
 
