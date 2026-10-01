@@ -402,6 +402,8 @@ The command `herdr-boss project new` builds a new project in steps. See `docs/cl
 
 With `--remote gh`, the step `remote` asks you before it creates a GitHub repository. The question is a decide item in the Mailbox. The dashboard wizard is the exception: your choice in the wizard is the decision, and it posts no item. The default is a private repository. A public repository needs `--visibility public` and an answer that contains the word `public`. The command exits with code 3 and waits. Answer the item, then run the same command with `--resume`. The step never pushes.
 
+When the remote is a GitHub repository, `project new` adds three workflow templates under `.github/workflows/`. The files run a quick check for pull requests, a changed-files verify for pushes to `main`, and the full gate by manual request or on a published release. Replace each placeholder `run:` command with a command for the project. Run `herdr-boss project check <slug>` to read the `ci` item. Run `herdr-boss project check <slug> --fix ci` to copy missing templates. This command keeps files that already exist.
+
 The steps `policy`, `register`, and `status` put the new project into Herdr Boss:
 
 1. `policy` gives the project a share of 10 percent. The other projects give up part of their share, so the total stays at most 100. When the previous total was 100, the scaled shares add up to exactly 90 by the largest remainder method, and no share of 1 or more falls below 1. Each project keeps its mode and its exclusions. You see the shares before and after the change.
@@ -426,7 +428,7 @@ The step `harness` prepares the machine for the project:
 
 Run the command again with `--resume --start` after a failure. The run uses the workspace and the pane that it created. It sends no message twice.
 
-Run `herdr-boss project check <slug>` at any time. It reads the project and prints `ok` or `missing:` for each part: the folder, `AGENTS.md`, the kit, the first commit, the remote, the policy entry, the registration, the status, the workspace, the Codex roots, and the browser reservation. It changes nothing. Each missing part names a fix. Run `herdr-boss project check <slug> --fix STEP` to run that one step again. The command then prints the check again. The exit code is 0 when all parts are present and 4 when a part is missing.
+Run `herdr-boss project check <slug>` at any time. It reads the project and prints `ok` or `missing:` for each part, including the CI workflows when they exist. It changes nothing. Each missing part names a fix. Run `herdr-boss project check <slug> --fix STEP` to run that one step again. The command then prints the check again. The exit code is 0 when all parts are present and 4 when a part is missing.
 
 Each step changes nothing when its result already exists. A run that stops at a failed step continues at that step on the next run. After the change, check the shares on the Allocation page.
 

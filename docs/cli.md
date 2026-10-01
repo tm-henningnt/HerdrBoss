@@ -98,7 +98,7 @@ herdr-boss project check <slug> [--fix STEP [--start]]
 |---|---|
 | `--group DIR` | The group folder. The project folder is `DIR/<slug>`. |
 | `--path DIR` | The project folder. Give `--group` or `--path`. There is no default folder. |
-| `--remote` | `none` (default), `gh`, or a Git URL. `gh` creates a GitHub repository after an Owner decision. A URL is https, ssh, or git, or `user@host:path`. A URL must not hold a user name or a password. |
+| `--remote` | `none` (default), `gh`, or a Git URL. `gh` creates a GitHub repository after an Owner decision. A URL is https, ssh, or git, or `user@host:path`. A URL must not hold a user name or a password. A GitHub remote adds the CI workflow templates. |
 | `--visibility` | `private` (default) or `public`. `public` needs a remote that is not `none`. With `--remote gh`, `public` only offers the choice `Create public` to the Owner. |
 | `--org NAME` | The organization for `--remote gh`. Without it, the repository belongs to the `gh` login. |
 | `--kind` | The harness of the first orchestrator: `claude` or `codex`. It overrides the first usable entry of `orchestratorLadder`. The model comes from the policy for that kind. |
@@ -108,6 +108,14 @@ herdr-boss project check <slug> [--fix STEP [--start]]
 | `--resume` | Continue a saved run. |
 
 Only the steps of `runProjectNew` that are built run. The step `check` prints `not built yet`. The values of `--remote`, `--visibility`, and `--org` control the step `remote`. The values of `--kind` and `--start` control the step `workspace`.
+
+For a GitHub remote, the `files` step copies these files from `kit/templates/workflows/` into `.github/workflows/`:
+
+- `quick.yml` runs a quick check on each pull request.
+- `verify-changed.yml` runs a changed-files verify on pushes to `main`.
+- `full-gate.yml` runs by manual request or on a published release.
+
+Each file has a placeholder `run:` command. Replace it with a command for the project. Keep the concurrency setting and the path filters. Do not run the full gate for each push to `main`.
 
 The step `harness` runs the Codex part of `herdr-boss harness sync` and reserves the project browser. It prints the Claude autoMode lines. It never edits `~/.claude/settings.json`. See "Step harness" below.
 
@@ -141,7 +149,7 @@ The check works for a project that `project new` did not make. It reads the proj
 | `gitignore` | `.gitignore` exists. | `files` |
 | `commit` | The repository has a first commit. | `commit` |
 | `remote` | `origin` is set, or the state records that the step `remote` was skipped. | `remote` |
-| `ci` | The project has workflow files in `.github/workflows`. Herdr Boss prints warnings for workflow rules that it finds. | `ci` (hint only) |
+| `ci` | The project has workflow files in `.github/workflows`. Herdr Boss prints warnings for workflow rules that it finds. | `ci` |
 | `labels` | The item exists only for a private GitHub `origin` when `gh` is installed and logged in. The repository has every label of the `triage` preset with the preset color and description. Otherwise the check omits the item and calls no other command. The check reads the labels with `gh label list` and writes nothing. A missing label prints `run herdr-boss gh label sync --preset triage`. | `labels` |
 | `policy` | The policy has an entry for the slug. | `policy` |
 | `register` | `project-repos.json` has a row for the slug. | `register` |
@@ -151,7 +159,7 @@ The check works for a project that `project new` did not make. It reads the proj
 | `harness` | The Codex `writable_roots` hold every required path. | `harness` |
 | `browser` | `browser-sessions.json` has a reservation for the slug. | `harness` |
 
-The `ci` item is present only when the project has workflow files. A project without workflow files prints no CI line. These warnings do not change the exit code. `--fix ci` prints a hint to use the kit workflow template. It does not change workflow files.
+The `ci` item is present only when the project has workflow files. A project without workflow files prints no CI line. These warnings do not change the exit code. `--fix ci` copies each missing workflow template into `.github/workflows/`. It keeps every existing workflow file. The command prints each file that it copies or skips, then it prints the project check again.
 
 | Warning id | Herdr Boss reports it when | Hint |
 |---|---|---|
@@ -161,7 +169,7 @@ The `ci` item is present only when the project has workflow files. A project wit
 | `no-paths-ignore` | A push or pull request workflow has no path filter for `docs/` and `.orchestration/`. | Add `paths-ignore` for `docs/**` and `.orchestration/**`. |
 | `matrix-or-non-linux` | A workflow uses a matrix or a runner other than `ubuntu-*`. | Use one Ubuntu runner without a matrix. |
 
-`--fix STEP` runs the named flow step and no other step. Then the command prints the check again. The steps that `--fix` accepts are `folder`, `files`, `kit`, `commit`, `remote`, `labels`, `policy`, `register`, `status`, `workspace`, and `harness`. `--fix remote` still posts a decide item to the Owner and waits for the answer. `--fix workspace` needs `--start`, because the step uses model quota. The flag `--fix` may be used once. A `--fix` step that changes the project refuses a worker pane, like `project new`. `--fix ci` only prints a hint. Plain `project check` has no pane check. A step that cannot be fixed by a step, such as invalid JSON in `.herdr-boss.json`, needs a correction by hand.
+`--fix STEP` runs the named step and no other step. Then the command prints the check again. The steps that `--fix` accepts are `folder`, `files`, `kit`, `commit`, `remote`, `labels`, `policy`, `register`, `status`, `workspace`, `harness`, and `ci`. `--fix remote` still posts a decide item to the Owner and waits for the answer. `--fix workspace` needs `--start`, because the step uses model quota. The flag `--fix` may be used once. A `--fix` step that changes the project refuses a worker pane, like `project new`. Plain `project check` has no pane check. A step that cannot be fixed by a step, such as invalid JSON in `.herdr-boss.json`, needs a correction by hand.
 
 | Exit code | Meaning |
 |---|---|

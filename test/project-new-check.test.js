@@ -10,6 +10,7 @@ import { runProjectNew, runProjectStep } from '../src/project-new.js';
 import { checkProject, formatCheck, reserveBrowserCommand } from '../src/project-new-check.js';
 import { projectCommand } from '../src/project-new-cli.js';
 import { readMessages } from '../src/messages.js';
+import { lintWorkflows } from '../src/ci-lint.js';
 
 // Git reads its identity from a temporary global file, never from the machine.
 const GIT_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-project-check-git-'));
@@ -105,6 +106,32 @@ test('a finished project has every item present', () => {
     for (const entry of check.items) assert.equal(entry.ok, true, `${entry.name}: ${entry.detail}`);
     assert.equal(check.ok, true);
     assert.equal(check.path, fs.realpathSync(f.dir));
+    assert.equal(fs.existsSync(path.join(f.dir, '.github', 'workflows')), false);
+  } finally { f.cleanup(); }
+});
+
+test('each workflow template passes the private-repository CI lint', () => {
+  const directory = path.resolve('kit/templates/workflows');
+  const files = ['quick.yml', 'verify-changed.yml', 'full-gate.yml'].map((name) => ({
+    path: `.github/workflows/${name}`,
+    text: fs.readFileSync(path.join(directory, name), 'utf8'),
+  }));
+  assert.deepEqual(lintWorkflows(files, { privateRepo: true }), []);
+});
+
+test('project new copies workflow templates for a GitHub remote', () => {
+  const f = fixture();
+  try {
+    const { result } = flow(f, {
+      remote: 'gh',
+      stepRunners: { remote: () => ({ status: 'skipped', detail: 'skipped: test remote' }) },
+    });
+    assert.equal(result.ok, true, result.error);
+    const workflowDir = path.join(f.dir, '.github', 'workflows');
+    const names = ['quick.yml', 'verify-changed.yml', 'full-gate.yml'];
+    for (const name of names) assert.equal(fs.existsSync(path.join(workflowDir, name)), true, name);
+    const files = names.map((name) => ({ path: `.github/workflows/${name}`, text: fs.readFileSync(path.join(workflowDir, name), 'utf8') }));
+    assert.deepEqual(lintWorkflows(files, { privateRepo: true }), []);
   } finally { f.cleanup(); }
 });
 
@@ -515,19 +542,23 @@ test('project check uses recorded remote visibility for private schedule warning
   } finally { f.cleanup(); }
 });
 
-test('--fix ci prints the template hint and does not change workflow files', () => {
+test('--fix ci copies missing templates and skips existing workflow files', () => {
   const f = fixture();
   try {
     flow(f);
     const workflowDir = path.join(f.dir, '.github', 'workflows');
     fs.mkdirSync(workflowDir, { recursive: true });
-    const workflow = path.join(workflowDir, 'verify.yml');
-    fs.writeFileSync(workflow, 'on: push\n');
-    const before = fs.readFileSync(workflow, 'utf8');
+    const existing = path.join(workflowDir, 'quick.yml');
+    fs.writeFileSync(existing, 'project-owned quick check\n');
     const out = [];
     assert.equal(projectCommand(['check', 'demo', '--fix', 'ci'], { env: {}, dataDir: f.dataDir, log: (line) => out.push(line), flowOptions: { home: f.home } }), 0);
-    assert.match(out.join('\n'), /template/i);
-    assert.equal(fs.readFileSync(workflow, 'utf8'), before);
+    const text = out.join('\n');
+    assert.match(text, /skipped existing .*quick\.yml/i);
+    assert.match(text, /copied .*verify-changed\.yml/i);
+    assert.match(text, /copied .*full-gate\.yml/i);
+    assert.equal(fs.readFileSync(existing, 'utf8'), 'project-owned quick check\n');
+    assert.equal(fs.existsSync(path.join(workflowDir, 'verify-changed.yml')), true);
+    assert.equal(fs.existsSync(path.join(workflowDir, 'full-gate.yml')), true);
   } finally { f.cleanup(); }
 });
 
