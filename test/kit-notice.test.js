@@ -432,15 +432,15 @@ test('heldWorkspaces lists paused, held, and stood-down projects', () => {
 
 test('heldWorkspaces finds the workspace of a paused project that publishes no workspace id', () => {
   const herdr = {
-    workspaces: [{ id: 'wF', label: 'Floppy Archiver' }, { id: 'wG', label: 'Gamma' }, { id: 'wH', label: 'Other' }],
+    workspaces: [{ id: 'wF', label: 'Example App' }, { id: 'wG', label: 'Gamma' }, { id: 'wH', label: 'Other' }],
     panes: [
-      { id: 'wF:p1', workspace: 'wF', workspaceLabel: 'Floppy Archiver', label: 'orch', orch: true, agent: 'claude', cwd: '/x/FloppyArchiver' },
+      { id: 'wF:p1', workspace: 'wF', workspaceLabel: 'Example App', label: 'orch', orch: true, agent: 'claude', cwd: '/x/example-app' },
       { id: 'wG:p1', workspace: 'wG', workspaceLabel: 'Gamma', label: 'orch', orch: true, agent: 'claude', cwd: '/x/gamma-repo/.wt/w1' },
       { id: 'wH:p1', workspace: 'wH', workspaceLabel: 'Other', label: 'orch', orch: true, agent: 'claude', cwd: '/x/other' },
     ],
   };
   const projects = [
-    { slug: 'floppyarchiver', project: 'FloppyArchiver', status: 'paused', summary: 'Stood down and paused by the Owner' },
+    { slug: 'example-app', project: 'ExampleApp', status: 'paused', summary: 'Stood down and paused by the Owner' },
     { slug: 'gamma-app', project: 'Gamma App', status: 'paused', summary: 'Waiting.', repo: '/x/gamma-repo' },
     { slug: 'other', project: 'Other', status: 'active', summary: 'Building.' },
   ];
@@ -450,13 +450,13 @@ test('heldWorkspaces finds the workspace of a paused project that publishes no w
 
 test('the kit notice and the kit digest skip a paused project that publishes no workspace id', { timeout: 30000 }, (t) => {
   const herdr = {
-    workspaces: [{ id: 'wF', label: 'Floppy Archiver' }, { id: 'wA', label: 'Alpha' }],
+    workspaces: [{ id: 'wF', label: 'Example App' }, { id: 'wA', label: 'Alpha' }],
     panes: [
-      { id: 'wF:p1', workspace: 'wF', workspaceLabel: 'Floppy Archiver', label: 'orch', orch: true, agent: 'claude', status: 'idle' },
+      { id: 'wF:p1', workspace: 'wF', workspaceLabel: 'Example App', label: 'orch', orch: true, agent: 'claude', status: 'idle' },
       { id: 'wA:p1', workspace: 'wA', workspaceLabel: 'Alpha', label: 'orch', orch: true, agent: 'claude', status: 'idle' },
     ],
   };
-  const projects = [{ slug: 'floppyarchiver', project: 'FloppyArchiver', status: 'paused', summary: 'Stood down and paused by the Owner' }];
+  const projects = [{ slug: 'example-app', project: 'ExampleApp', status: 'paused', summary: 'Stood down and paused by the Owner' }];
   const out = runEngine(t, { mode: 'deliver', heldFromProjects: { projects, herdr }, rounds: [herdr.panes] });
   const targets = out.prompts.filter((args) => args[0] === 'agent' && args[1] === 'prompt').map((args) => args[2]);
   assert.deepEqual(targets, ['wA:p1']);

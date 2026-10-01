@@ -1077,9 +1077,9 @@ Herdr Boss decides browser ownership by the Herdr workspace. Any pane in a proje
 | `browser sweep-clones [--dry-run]` | Delete orphaned Chrome code-sign clones now. Prints the count and the freed GiB. `--dry-run` lists each clone by name and age and deletes nothing. |
 
 ```sh
-id=$(herdr-boss browser tab new tmprocessmining | jq -r .id)
-herdr-boss browser navigate tmprocessmining https://example.com --tab "$id"
-herdr-boss browser screenshot tmprocessmining --tab "$id"
+id=$(herdr-boss browser tab new example-app | jq -r .id)
+herdr-boss browser navigate example-app https://example.com --tab "$id"
+herdr-boss browser screenshot example-app --tab "$id"
 ```
 
 The screenshot command writes under `$TMPDIR` when it is set. Otherwise, it creates a safe temporary directory. Pass `--out DIR` to choose an output directory. This option overrides `$TMPDIR` and can be used with `--tab`.
