@@ -4,7 +4,8 @@
 // Every value from the server goes through esc(). A URL part goes through encodeURIComponent() and then esc().
 // The item route shows the item viewer of public/review-viewer.js. It takes ui.viewer (the view state of the item)
 // and the helper text(url), which gives a loaded text file of the pack.
-import { itemViewerHtml, answerBarHtml, viewerBarHtml, itemSpec, viewerIcon } from './review-viewer.js';
+import { itemViewerHtml, answerBarHtml, viewerBarHtml, itemSpec, viewerIcon, verifiedBadgeHtml } from './review-viewer.js';
+import { visibleItems, needsYouCount } from './review-filter.js';
 import { safeUrl } from './markdown.js';
 import { sidebarHandleHtml, clampWidth, SIDEBAR_DEFAULT, SIDEBAR_RAIL } from './review-sidebar.js';
 import { syncStatusHtml, packStatusHtml, submitLock, rowSyncText } from './review-sync.js';
@@ -67,6 +68,7 @@ const ICON = {
   table: '<rect x="3.5" y="5" width="17" height="14" rx="1.5"/><path d="M3.5 10h17M3.5 14.5h17M10 5v14"/>',
   diff: '<path d="M8 4v10M3 9h10M12 18h9"/>',
   list: '<path d="M9 7h11M9 12h11M9 17h11"/><path d="M4 7l1 1 2-2M4 12l1 1 2-2M4 17l1 1 2-2"/>',
+  filter: '<path d="M4 6h16l-6 7v5l-4 2v-7z"/>',
   link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3A4 4 0 0 0 13 5.3l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3A4 4 0 0 0 11 18.7l1-1"/>',
 };
 const icon = (name, className = 'app-icon') => (ICON[name] ? `<svg class="${className}" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${ICON[name]}</svg>` : '');
@@ -212,6 +214,32 @@ export function packListHtml(view, h) {
     + `<div class="review-scroll" data-key="reviews:scroll:${folder}">${body}</div></div>`;
 }
 
+// ---------- Summary header ----------
+
+const DESIGN_ICON = { passed: 'check', issues: 'note', 'not-run': '' };
+
+// One compact row above the progress: the item counts and the design pass. A pack without the new fields has no row.
+export function summaryHeaderHtml(pack, esc) {
+  const items = pack.items || [];
+  const summary = pack.summary || {
+    total: items.length,
+    agentVerified: items.filter((item) => item.verifiedBy === 'agent-verified').length,
+    needsYou: needsYouCount(items),
+    unmarked: items.filter((item) => item.verifiedBy !== 'agent-verified' && item.verifiedBy !== 'needs-you').length,
+    designPass: pack.manifest?.designPass?.result ?? 'not-run',
+  };
+  const design = pack.manifest?.designPass;
+  if (!summary.agentVerified && !summary.needsYou && !design) return '';
+  const count = (n, word) => `<span><b class="num">${esc(n)}</b> ${word}</span>`;
+  const cells = [count(summary.total, plural(summary.total, 'item').replace(/^\d+ /, '')), count(summary.agentVerified, 'agent-verified'), count(summary.needsYou, 'needs-you')];
+  if (summary.unmarked > 0) cells.push(count(summary.unmarked, 'unmarked'));
+  const result = Object.hasOwn(DESIGN_ICON, summary.designPass) ? summary.designPass : 'not-run';
+  const reviewer = design?.reviewer ? ` · ${esc(design.reviewer)}` : '';
+  const note = design?.note ? `<small class="review-design-note">${esc(design.note)}</small>` : '';
+  cells.push(`<span class="review-design review-design-${result}">${icon(DESIGN_ICON[result])}Design pass: <b>${esc(result)}</b>${reviewer}${note}</span>`);
+  return `<div class="review-summary-row" role="group" aria-label="Pack summary">${cells.join('')}</div>`;
+}
+
 // ---------- Section list ----------
 
 function itemRowHtml(pack, item, ui, esc) {
@@ -228,12 +256,13 @@ function itemRowHtml(pack, item, ui, esc) {
   return `<li><a class="review-item${done ? ' review-item-done' : ''}" href="${esc(reviewUrl(pack.slug, pack.pack, item.id))}" data-key="review-item:${esc(item.id)}" data-review-row="${esc(item.id)}"${current ? ' aria-current="true"' : ''}>`
     + `<span class="review-thumb">${icon(TYPE_ICON[item.type] || 'doc')}</span>`
     + `<span class="review-item-t"><span class="review-item-line"><span class="review-item-n num">${number}</span><span class="review-item-title" title="${esc(title)}">${esc(title)}</span></span><small>${esc(sub.join(' · '))}</small></span>`
-    + chipHtml(itemChip(item, pack), esc)
-    + `<span class="review-viewed${viewed ? ' on' : ''}">${viewed ? icon('check') : ''}<span class="visually-hidden">${viewed ? 'Viewed' : 'Not viewed'}</span></span></a></li>`;
+    + `<span class="review-item-end">${verifiedBadgeHtml(item, esc)}${chipHtml(itemChip(item, pack), esc)}`
+    + `<span class="review-viewed${viewed ? ' on' : ''}">${viewed ? icon('check') : ''}<span class="visually-hidden">${viewed ? 'Viewed' : 'Not viewed'}</span></span></span></a></li>`;
 }
 
 function sectionHtml(pack, section, ui, esc) {
-  const items = (pack.items || []).filter((item) => item.section === section.id);
+  const items = visibleItems(pack.items, ui.needsYouOnly === true, ui.current || ui.item).filter((item) => item.section === section.id);
+  if (ui.needsYouOnly === true && !items.length) return '';
   const { answered, total } = sectionProgress(pack, section.id);
   const folded = section.state === 'accepted' && items.every((item) => item.answer?.viewed) && !items.some((item) => item.id === ui.current || item.id === ui.item);
   const title = section.title || section.id;
@@ -247,8 +276,18 @@ function sectionsNavHtml(pack, sections, ui, esc, collapsed) {
   const tool = collapsed
     ? '<button type="button" class="review-side-button" data-review-expand aria-label="Show the sections column" title="Show the sections column">' + '<span class="review-side-glyph" aria-hidden="true">»</span>' + '</button>'
     : '<span class="review-side-title">Sections</span><button type="button" class="review-side-button" data-review-collapse aria-label="Hide the sections column" title="Hide the sections column">' + '<span class="review-side-glyph" aria-hidden="true">«</span>' + '</button>';
-  return `<nav class="review-sections${collapsed ? ' is-collapsed' : ''}" aria-label="Sections"><div class="review-side-bar">${tool}</div>`
-    + (collapsed ? '' : sections.map((section) => sectionHtml(pack, section, ui, esc)).join('')) + '</nav>';
+  const count = needsYouCount(pack.items);
+  const on = ui.needsYouOnly === true;
+  const marked = (pack.items || []).some((item) => item.verifiedBy === 'agent-verified' || item.verifiedBy === 'needs-you');
+  const filter = !collapsed && (marked || on)
+    ? `<div class="review-filter"><button type="button" class="review-filter-chip" data-review-filter aria-pressed="${on ? 'true' : 'false'}">${icon('filter')}<span>Needs you</span><span class="num">${count}</span></button></div>`
+    : '';
+  const sectionRows = collapsed ? '' : sections.map((section) => sectionHtml(pack, section, ui, esc)).join('');
+  const empty = !collapsed && on && !sectionRows
+    ? '<p class="review-filter-empty" role="status">Nothing needs you. <button type="button" class="review-filter-clear" data-review-filter-clear>Show all items</button></p>'
+    : '';
+  return `<nav class="review-sections${collapsed ? ' is-collapsed' : ''}" aria-label="Sections"><div class="review-side-bar">${tool}</div>${filter}`
+    + (collapsed ? '' : sectionRows + empty) + '</nav>';
 }
 
 // The summary groups in the order of the decision: denied, needs live check, notes, accepted, and open last.
@@ -348,7 +387,8 @@ function itemPanelHtml(pack, ui, h) {
     const back = `${reviewUrl(pack.slug, pack.pack)}#item=${encodeURIComponent(ui.item)}`;
     return `<section class="review-item-page"><p>This item is not in the pack.</p><a class="review-button" href="${esc(back)}">Back to the sections</a></section>`;
   }
-  const html = itemViewerHtml(pack, item, ui.viewer || {}, h);
+  const viewer = { ...(ui.viewer || {}), needsYouOnly: ui.needsYouOnly === true };
+  const html = itemViewerHtml(pack, item, viewer, h);
   return item.type === 'page' ? withPageFrame(html, pack, item, ui.viewer || {}, h) : html;
 }
 
@@ -503,7 +543,7 @@ export function packPageHtml(pack, ui, h) {
       + `<h1 class="review-title">${esc(pack.title)}<small>${esc(facts.join(' · '))} · ${esc(h.projectLabel(pack.slug))}</small></h1>`;
   }
 
-  const head = `<div class="review-head"><p class="review-head-line"><span><b class="num">${answeredOf(counts)}</b> of ${esc(plural(counts.items, 'item'))} answered · <b class="num">${viewed}</b> viewed</span>${open ? '' : doneChip(pack, esc)}</p>${progressBarHtml(counts, { esc, legend: true })}</div>`;
+  const head = `<div class="review-head"><p class="review-head-line"><span><b class="num">${answeredOf(counts)}</b> of ${esc(plural(counts.items, 'item'))} answered · <b class="num">${viewed}</b> viewed</span>${open ? '' : doneChip(pack, esc)}</p>${summaryHeaderHtml(pack, esc)}${progressBarHtml(counts, { esc, legend: true })}</div>`;
   const side = ui.sidebar || {};
   const viewport = side.viewport || 1280;
   const collapsed = side.collapsed === true;

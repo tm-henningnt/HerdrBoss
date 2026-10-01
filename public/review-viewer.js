@@ -8,6 +8,7 @@
 // attribute outside the allowlist, before the string reaches the DOM. Without it, markdownOrPlain() renders the text.
 import { markdownOrPlain, safeUrl } from './markdown.js';
 import { syncStatusHtml, packStatusHtml } from './review-sync.js';
+import { visibleItems } from './review-filter.js';
 
 export const PIN_MAX = 20;
 export const PIN_TEXT_MAX = 200;
@@ -31,6 +32,9 @@ const ICON = {
   grid: '<rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/>',
   link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3A4 4 0 0 0 13 5.3l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3A4 4 0 0 0 11 18.7l1-1"/>',
   split: '<rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="M12 3v18"/>',
+  agent: '<rect x="4.5" y="8" width="15" height="11" rx="3"/><path d="M12 4v4M9 13h.01M15 13h.01M9.5 16h5"/>',
+  person: '<circle cx="12" cy="8" r="3.5"/><path d="M5 20c.8-4 3.5-6 7-6s6.2 2 7 6"/>',
+  unmarked: '<circle cx="12" cy="12" r="8"/><path d="M8.5 12h7"/>',
   pair: '<rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="M12 5h6.5a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H12z" fill="currentColor" stroke="none" opacity=".35"/>',
 };
 const ICON_NEW_TAB = `<svg class="app-icon rv-open-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${ICON.live}</svg>`;
@@ -484,10 +488,11 @@ function staleHtml(item, spec, h, disabled) {
   return `<div class="rv-stale">${viewerIcon('note', 'app-icon rv-stale-icon')}<p><b>Changed since accepted.</b>${was} Answer again${keep ? ' or keep the earlier answer' : ''}.</p>${keep}</div>`;
 }
 
-function pagerHtml(pack, item, h, itemUrl) {
+function pagerHtml(pack, item, h, itemUrl, needsYouOnly = false) {
   const { esc } = h;
-  const { prev, next } = itemNeighbors(pack.items, item.id);
-  const open = nextOpenItem(pack.items, item.id);
+  const items = visibleItems(pack.items, needsYouOnly, item.id);
+  const { prev, next } = itemNeighbors(items, item.id);
+  const open = nextOpenItem(items, item.id);
   const link = (target, label, icon, rel) => (target
     ? `<a class="rv-page-link" href="${esc(itemUrl(target.id))}"${rel ? ` rel="${rel}"` : ''}>${icon === 'prev' ? viewerIcon(icon) : ''}<span>${label}</span>${icon === 'next' ? viewerIcon(icon) : ''}</a>`
     : `<span class="rv-page-link" aria-disabled="true">${icon === 'prev' ? viewerIcon(icon) : ''}<span>${label}</span>${icon === 'next' ? viewerIcon(icon) : ''}</span>`);
@@ -495,6 +500,65 @@ function pagerHtml(pack, item, h, itemUrl) {
 }
 
 const itemUrlOf = (pack) => (id) => `/reviews/${encodeURIComponent(pack.slug)}/${encodeURIComponent(pack.pack)}/${encodeURIComponent(id)}`;
+
+// ---------- Verified badge, item anatomy, and agent evidence ----------
+
+const BADGE = {
+  'agent-verified': { cls: 'agent', icon: 'agent', word: 'agent-verified' },
+  'needs-you': { cls: 'you', icon: 'person', word: 'needs-you' },
+};
+
+// The badge of one item: an icon and a word, never color alone. An unmarked item has a neutral badge.
+export function verifiedBadgeHtml(item, esc) {
+  const kind = (Object.hasOwn(BADGE, item?.verifiedBy ?? '') && BADGE[item.verifiedBy]) || { cls: 'none', icon: 'unmarked', word: 'unmarked' };
+  return `<span class="review-badge review-badge-${kind.cls}" title="${esc(kind.word)}">${viewerIcon(kind.icon, 'app-icon review-badge-icon')}<span class="review-badge-word">${esc(kind.word)}</span></span>`;
+}
+
+// The description (two lines), the numbered steps, the expected result, and the link to the app. Every field goes through esc().
+function anatomyHtml(item, spec, h) {
+  const { esc } = h;
+  const field = (name) => item[name] ?? spec[name];
+  const description = typeof field('description') === 'string' ? field('description').split(/\r?\n/).filter((line) => line.trim()) : [];
+  const steps = Array.isArray(field('steps')) ? field('steps').filter((step) => typeof step === 'string') : [];
+  const expected = typeof field('expected') === 'string' ? field('expected') : '';
+  const url = safeHttp(field('link'));
+  const parts = [];
+  if (description.length) parts.push(`<p class="rv-description">${description.map((line) => esc(line)).join('<br>')}</p>`);
+  if (steps.length) parts.push(`<h3 class="rv-anatomy-h">Steps</h3><ol class="rv-steps">${steps.map((step) => `<li>${esc(step)}</li>`).join('')}</ol>`);
+  if (expected) parts.push(`<h3 class="rv-anatomy-h">Expected</h3><p class="rv-expected">${esc(expected)}</p>`);
+  if (url) parts.push(`<p class="rv-app-link"><a class="rv-open" href="${esc(url)}" target="_blank" rel="noopener noreferrer">Open the app${newTab}</a></p>`);
+  return parts.length ? `<div class="rv-anatomy">${parts.join('')}</div>` : '';
+}
+
+// A file that did not load shows its name as text. public/app.js records the failure in ui.missing.
+const missingHtml = (ref, esc) => `<span class="rv-ev-missing">File not found: ${esc(ref)}</span>`;
+
+// The evidence images of an agent-verified item: a grid, then one image in the zoom stage, as in a gallery.
+// ui.evidence is the open image index, or null for the grid.
+function agentEvidenceHtml(pack, item, spec, ui, h) {
+  const { esc } = h;
+  const refs = (Array.isArray(item.evidence) ? item.evidence : spec.evidence || []).filter((ref) => typeof ref === 'string');
+  if (item.verifiedBy !== 'agent-verified' || !refs.length) return '';
+  const index = Number.isInteger(ui.evidence) && ui.evidence >= 0 && ui.evidence < refs.length ? ui.evidence : null;
+  const missing = (ref) => Boolean(ui.missing && Object.hasOwn(ui.missing, ref));
+  const heading = `<h3 class="rv-evidence-h">Agent evidence <span class="num">${refs.length}</span></h3>`;
+  if (index === null) {
+    const tiles = refs.map((ref, i) => (missing(ref)
+      ? `<li>${missingHtml(ref, esc)}</li>`
+      : `<li><button type="button" class="rv-tile" data-rv-evopen="${i}" aria-label="${esc(`Open evidence image ${i + 1} of ${refs.length}`)}"><img src="${esc(fileUrl(pack, ref))}" alt="" loading="lazy" decoding="async" draggable="false" data-rv-evfile="${esc(ref)}"></button></li>`)).join('');
+    return `<section class="rv-evidence-agent-box" aria-label="Agent evidence">${heading}<ul class="rv-grid" aria-label="${esc(`${refs.length} evidence images`)}">${tiles}</ul></section>`;
+  }
+  const step = (to, label, name) => `<button type="button" class="rv-tool" data-rv-evgallery="${to}" aria-label="${label}"${to >= 0 && to < refs.length ? '' : ' disabled'}>${viewerIcon(name)}</button>`;
+  const canvas = missing(refs[index])
+    ? missingHtml(refs[index], esc)
+    : `<img class="rv-img" src="${esc(fileUrl(pack, refs[index]))}" alt="${esc(`Evidence image ${index + 1} of ${refs.length}`)}" decoding="async" draggable="false" data-rv-evfile="${esc(refs[index])}">`;
+  const tools = `<div class="rv-tools"><span class="rv-gallery-nav"><button type="button" class="rv-tool rv-tool-text" data-rv-evgallery="grid" aria-label="All evidence images">${viewerIcon('grid')}<span class="rv-tool-label" aria-hidden="true">All images</span></button>`
+    + `${step(index - 1, 'Previous image', 'prev')}<span class="rv-gallery-count num">${index + 1} of ${refs.length}</span>${step(index + 1, 'Next image', 'next')}</span>`
+    + `<span class="rv-tools-end"><button type="button" class="rv-tool" data-rv-zoom="out" aria-label="Zoom out">${viewerIcon('minus')}</button>`
+    + `<button type="button" class="rv-tool" data-rv-zoom="fit" aria-label="Fit or 100 percent">${viewerIcon('fit')}</button>`
+    + `<button type="button" class="rv-tool" data-rv-zoom="in" aria-label="Zoom in">${viewerIcon('plus')}</button></span></div>`;
+  return `<section class="rv-evidence rv-evidence-agent" aria-label="Agent evidence">${heading}${stageHtml(`${esc(item.id)}:ev${index}`, { canvas, label: stageLabel, ui })}${tools}</section>`;
+}
 
 // ui: pair ('a' or 'b'), pairMode ('toggle' or 'split'), split (0 to 100), gallery (an image index, or null for the grid),
 // placing (the next tap drops a pin), hint, noteOpen, note (the draft), pinText (drafts by pin number), status, error, conflict.
@@ -507,15 +571,18 @@ export function itemViewerHtml(pack, item, ui, h) {
   const closed = disabled ? `<p class="rv-help-line">This pack is ${esc(pack.state)}. The answers cannot change.</p>` : '';
   return `<section class="rv-item rv-type-${esc(type)}" data-key="rv-item:${esc(item.id)}" aria-label="${esc(item.title || item.id)}">`
     + staleHtml(item, spec, h, disabled)
+    + (item.verifiedBy ? `<div class="rv-item-head">${verifiedBadgeHtml(item, esc)}</div>` : '')
+    + anatomyHtml(item, spec, h)
     + `<div class="rv-evidence">${evidenceHtml(pack, item, spec, ui, h, disabled)}</div>`
     + liveRowHtml(pack, item, spec, h, disabled)
+    + agentEvidenceHtml(pack, item, spec, ui, h)
     + body
     + pinNotesHtml(item, ui, h, disabled)
     + noteHtml(item, ui, h, disabled)
     + statusHtml(ui, h)
     + conflictHtml(spec, ui, h)
     + closed
-    + pagerHtml(pack, item, h, itemUrlOf(pack))
+    + pagerHtml(pack, item, h, itemUrlOf(pack), ui.needsYouOnly === true)
     + '</section>';
 }
 
