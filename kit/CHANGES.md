@@ -77,3 +77,7 @@ Summary: Serve-port leases end when the bound server process ends or the port ha
 ## e4591d0a3d3d
 Impact: useful
 Summary: Add the review pack section to the orchestrator skill and the worker brief template.
+
+## 315d28e0a176
+Impact: useful
+Summary: The worker brief forbids sleep loops and until or while polling and names herdr-boss wait; the orchestrator skill sends a reviewer the same rule and a temporary HOME and HERDR_BOSS_DIR.

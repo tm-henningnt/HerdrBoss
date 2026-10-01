@@ -18,6 +18,7 @@ Read each file in the skill folder when its step comes:
 - [reference/handover.md](reference/handover.md): read when your harness quota threatens the orchestrator.
 - [reference/ledger-and-evidence.md](reference/ledger-and-evidence.md): read when you record a run or decide which evidence a gate needs.
 - [reference/git-and-worktrees.md](reference/git-and-worktrees.md): read before you dispatch work, integrate a change, or clean up a worktree.
+- [reference/review-tasks.md](reference/review-tasks.md): read before you dispatch a reviewer or a review subagent.
 - [The model lanes](../../models.md): read before you select a worker kind or model.
 - [The dedicated browser service](../../browser-service.md): read before browser work.
 
@@ -211,6 +212,7 @@ herdr agent prompt <orch-pane> "WORKER REPORT <name>: <done|blocked|stopped>. Re
 - Review generated artifacts directly.
 - Keep each evidence tier separate.
 - Request a standards and specification review when the change needs one.
+- Put the two rules from [the review task rules](reference/review-tasks.md) in every review task brief.
 - Return focused findings to the same warm worker when it can repair them safely.
 - Re-run affected gates after every repair.
 - Run `herdr-boss worker collect <name> --record ...` after independent review and before merging the worker branch.
