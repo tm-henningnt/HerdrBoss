@@ -113,7 +113,7 @@ try {
     'workers.paneCloseDelayMinutes',
     'workers.uncollectedNoticeMinutes',
     'watch.maxWorkers', 'watch.maxWorkersByLane', 'watch.quietHours',
-    'browsers.reapOrphanDaemons', 'browsers.orphanDaemonMinAgeSeconds', 'browsers.staleOwnedMinutes', 'browsers.sweepCodeSignClones',
+    'browsers.reapOrphanDaemons', 'browsers.orphanDaemonMinAgeSeconds', 'browsers.staleOwnedMinutes', 'browsers.sweepCodeSignClones', 'browser.idleCloseMinutes',
     'tickSeconds', 'quotaSeconds', 'push', 'alertCooldownSeconds', 'providerKinds', 'orchestratorLabel', 'port', 'host',
   ]);
   assert.deepEqual(view.map(({ source }) => source), [
