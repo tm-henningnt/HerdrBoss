@@ -1,7 +1,7 @@
 # Herdr Boss factories: research summary, specification and design proposal
 
 Status: proposal for the Owner. Nothing is built.
-Author: the Boss, with five research advisors (notes A to E in the same folder) and one independent review (`review-fable.md`). This version includes the review corrections (section 3a).
+Author: the Boss, with five research advisors (notes A to E in the same folder) and one independent review (`review-fable.md`). Version 2 adds head office succession, users and access, Windows and client-premises hosts, and project transfer (sections 16 to 20). Version 1 text is kept where it still holds. Where sections 16 to 20 differ from sections 1 to 15, sections 16 to 20 win.
 Scope: run several Herdr Boss "software factories" from Docker images, manage them from one place, and connect to them with Herdr.
 
 ## 1. Summary
@@ -13,7 +13,7 @@ A factory is one Herdr server, one Herdr Boss service, its projects, its harness
 3. A connection from the Owner's Herdr to each factory over SSH.
 4. A hub view in Herdr Boss that shows all factories in one place.
 
-The Mac factory stays native and becomes "factory zero". Each container factory is independent. A hub failure never affects a factory.
+The Mac factory may stay native for now. The head office is a role that any factory can hold, so it can move to a home server (section 16). Each factory is independent. A head office failure never stops a factory.
 
 Recommendation in one line: one Debian-based multi-arch image, one container per factory, sshd inside for Herdr, a pulling hub with a small read-only summary route, and a resumable configuration wizard in the style of `project new`.
 
@@ -30,7 +30,7 @@ Goals:
 
 Non-goals for the first phases:
 
-- Moving a running project between factories.
+- Moving a running project between factories without a freeze (a planned transfer is in section 19).
 - A fleet-wide Boss agent.
 - Controlling workers of another factory from the hub.
 - Running on a public cloud service.
@@ -41,7 +41,7 @@ Non-goals for the first phases:
 |---|---|
 | Factory | One Herdr server, one Herdr Boss service, its data, projects and harnesses. |
 | Factory zero | The current native Mac factory. |
-| Hub | The Herdr Boss instance that polls factories and shows the Fleet page. It is the Mac factory in phase 1. |
+| Hub or head office | The factory that holds the head office role. It polls factories and shows the Fleet page. The role can move (section 16). |
 | Profile | A template for a factory: policy, models, wizard steps, naming. |
 | Image | The container image. It holds tools and a seed of the Herdr Boss code. It holds no data and no secret. |
 
@@ -62,7 +62,7 @@ Other corrections: keep host secrets and SSH keys where agents of factory zero c
 Owner's Mac
   Herdr (TUI) ----ssh----+---------------------------+
   Browser ---https/ts----|                           |
-  herdr-boss (factory zero, native, also the hub)    |
+  herdr-boss (factory zero, native; may hold the role) |
   herdr-boss factory ... (host tool, uses Docker)    |
         |  polls GET /api/fleet/summary (read token) |
         v                                            v
@@ -352,7 +352,7 @@ Result: a short report with measured numbers and the changes that the code needs
 |---|---|---|
 | 1 | Codex in a container: relax the seccomp profile, or let the container be the sandbox (`--dangerously-bypass-approvals-and-sandbox`)? The bypass conflicts with `docs/harness-setup.md:253` and removes the guard that keeps a worker away from the login files on the `home` volume. | Decide after the spike. Test a narrow seccomp profile first. Prefer it to the bypass. |
 | 2 | Accounts: may client factories use your subscription, or do they need separate API keys or accounts? | Separate accounts or keys for any client factory. Subscription only for your own factories, a few at a time. |
-| 3 | Where does the hub run: the Mac factory, or a container? | The Mac factory (factory zero). |
+| 3 | Where does the hub (head office) run? | Superseded by section 16: it is a role. Start on an always-on box at home, with a cold standby. |
 | 4 | Runtime: client work is commercial, so OrbStack needs a paid licence. | Colima by default, OrbStack if you buy a licence. |
 | 5 | May item titles reach the hub, or counts only? | Counts only in phase 1. Titles as a setting. |
 | 6 | Registry: private GHCR or local images only? | Private GHCR once there is a second host. Local images first. |
@@ -361,6 +361,214 @@ Result: a short report with measured numbers and the changes that the code needs
 | 9 | `qlik-cli` on arm64 Linux. | Build it from source in a Go build stage. |
 | 10 | Network: one tailnet for all factories? | Yes. |
 
-## 15. Sources
 
-Research notes in `~/.herdr-boss/scratch/boss/factories/`: A containers, B authentication, C Herdr connectivity, D fleet aggregation, E lifecycle. The notes list their own sources and mark unverified claims. Unverified items in this proposal: size of the image, Herdr headless behaviour in a container, CodexBar on Linux, OpenAI terms on login sharing, the Claude Linux managed-settings path, the qlik-cli contexts path.
+## 16. Head office as a role, handover and succession (version 2)
+
+Requirement: the head office may run on any factory, even a home server. The Owner can move it. If it goes offline, the online factories agree on a temporary head office.
+
+### 16.1 What the head office holds
+
+The role record (who is head office, epoch, ranked succession list), the factory registry, access lists and trusted keys, policy, Mailbox reply state and enrolment tokens. A signed, encrypted SQLite snapshot of 1 to 20 MB covers it (estimate, not measured). Each factory owns its own items, history and state. A successor rebuilds the fleet view by polling.
+
+### 16.2 Replication
+
+- Phase 1: a snapshot to the cold standby on each change and every hour. A standby is a factory of the Owner on an always-on host. A client-premises factory is never a standby and never receives a snapshot, because the snapshot holds the registry and access lists of all factories. A host that sleeps (a Windows box without a service setup) cannot be a standby.
+- Phase 2: an add-only change log shipped to every factory on the succession list.
+- Not used: Litestream, LiteFS (poor fit), rqlite and Raft (heavy, and they break the no-dependency rule).
+
+### 16.3 Election
+
+A ranked succession list set by the Owner, plus a time-limited lease and a fencing epoch.
+
+- The highest-ranked online factory claims the role when the lease of the current head office has expired and it cannot reach the head office for N missed polls.
+- Every grant, token and message carries the epoch. A factory ignores anything with a lower epoch.
+- An epoch alone does not stop two head offices: in a network split each side can mint the same next epoch. Three rules close the gap. First, a claim is valid only when the claimant is on the Owner-signed list, its epoch is the last known epoch plus one, and its rank beats every holder it still sees. Second, a holder stops acting when its lease expires on a monotonic clock (not the wall clock), and a sleeping holder that wakes with an old lease first checks the list before it acts. Third, a clock offset above 60 seconds blocks a claim. A split can still give two temporary head offices of equal epoch. This is harmless because the temporary role cannot change policy, credentials or enrolment (section 16.4).
+- In phase 1 there is no automatic election. The epoch is kept for the manual `hub promote`.
+- It works with 2 or more factories and with the Owner offline. Raft needs a quorum and gives no failover with 2.
+- Optional single-winner arbiter: a conditional write on an object store.
+
+### 16.4 What a temporary head office may do
+
+It may show the fleet view and relay Mailbox items. It may not change policy, enrol factories, issue credentials or spend, until the Owner confirms. When the preferred head office returns, it takes the role back after a delta sync. Conflicts are merged by epoch and time. The Owner sees every temporary period in the audit log.
+
+### 16.5 Planned move
+
+The move follows the orchestrator handover states: plan, prepare, ready, freeze, delta, Owner-confirmed activate, switch pointer, resume, cancel. A signed owner anchor key authorizes it. The old head office becomes a standby.
+
+### 16.6 Discovery
+
+Each factory keeps a pointer to the head office. A signed discovery record at a stable name (a DNS name or a file in a private repository) tells new factories and the Owner's devices where the role is. A factory follows the highest signed epoch.
+
+### 16.7 Security
+
+Only a factory on the succession list may claim the role. Heartbeats are signed. A factory that lies about its state can only hurt itself, because the head office reads summaries and does not trust them for access. A stolen factory is revoked on the head office first, by key.
+
+### 16.7a Trust model
+
+- One key pair for each factory. The private key never leaves the factory.
+- The Owner holds an anchor key. The Owner-signed succession list binds each rank to a factory key id. The list is the trust root.
+- A factory accepts head office signatures only from the key of the current epoch holder on the list. The snapshot holds public keys and the list. It never holds private keys.
+- Enrolment tokens are not replicated: a successor cannot enrol new factories until the Owner confirms.
+- Anchor key custody: kept offline by the Owner (for example a hardware key or a sealed file). If the anchor key is lost, the Owner creates a new anchor and re-enrols every factory by hand. State this in the runbook.
+
+### 16.7b Runbook: a stolen or lost factory
+
+1. Remove the factory from the succession list (signed by the anchor).
+2. Revoke its key and all grants. Cached grants expire in at most 72 hours, so also push a revocation list.
+3. Rotate the read token of every factory it could reach.
+4. Revoke harness tokens (Claude, Codex, OpenCode), the `gh` login and the tenant keys at the vendor.
+5. Tell the client if it was a client factory. Check the audit chain for the time before the loss.
+
+### 16.8 Phase 1 and later
+
+Phase 1: one head office, one cold standby with a snapshot, the epoch, and a manual `hub promote`. Later: the change log, then the automatic election with the rules of section 16.3 and the temporary role limits.
+
+## 17. Users, roles and access (version 2)
+
+Requirement: users and roles. Not every user may reach every factory. A client user may have view rights only, on the client's own factory, directly and not through the head office. The Owner has his own and some client factories. A colleague has another set.
+
+### 17.1 Facts in the code
+
+Today there is one token with all rights and a loopback bypass (`src/access.js:50-53`, `src/server.js:341`). Agents on loopback can call every route. The review route `/review-raw/` runs before login, and `--read-only-preview` still serves `/api/state` with paths. The 636 KB `public/app.js` holds every route and the help text.
+
+Therefore the client viewer is a separate process. It has its own handler, cookie, sessions and page. It imports nothing from `server.js`, never calls `access.authorized`, accepts only the client hostname (also behind a client reverse proxy that forwards to 127.0.0.1), and answers 404 for everything it does not list. A test asserts 404 for every `server.js` route on the viewer port. It uses an allow-list serializer, and every listed route maps to one permission.
+
+### 17.2 Model
+
+- Fixed roles: owner, operator, reviewer, viewer, service. Grants are user, role, scope (factory, optionally project), stored locally.
+- Each factory is the authority for its own access list, so a client factory works with no head office.
+- The head office adds signed grants (Ed25519, short expiry) for the factories that trust its key. A factory also keeps local users. An offline owner anchor key authorizes a head office move.
+- A client's direct view needs no head office. The head office cannot read it unless the client grants it.
+
+### 17.3 Permission matrix (summary)
+
+| Action | viewer | reviewer | operator | owner | service |
+|---|---|---|---|---|---|
+| Read state, boards, packs | yes | yes | yes | yes | summary only |
+| Read Owner items addressed to the user | yes | yes | yes | yes | no |
+| Answer an item or a review pack | no | yes | yes | yes | no |
+| Start, stop or nudge workers | no | no | yes | yes | no |
+| Change policy | no | no | no | yes | no |
+| Manage users and enrol factories | no | no | no | yes | no |
+| View spend and quota | no | no | yes | yes | summary |
+| Transcripts, paths, pane output, secrets | no | no | no | yes | no |
+
+Note: Herdr access over SSH is owner-level control of a factory (section 13 item 9). It is outside this matrix. Give the SSH key only to owners, and log each session.
+
+### 17.4 Login
+
+In phase 1 the credential scheme is local per-user tokens with a role and a factory list. The head office read token and the signed grants come with later phases. Then passkeys (WebAuthn). Then single sign-on (OIDC) for client users who have it. Between factories and the head office: short-lived signed tokens plus network access lists (Tailscale).
+
+### 17.5 What a viewer must never see
+
+Agent transcripts, pane output, local paths, spend, other projects, settings, tokens, message text of other users. Review packs and items addressed to the viewer are visible. The serializer is an allow-list.
+
+### 17.6 Audit
+
+A hash-chained, append-only table: who did what, when, and from where (the address truncated; the retention period defined per factory). A daily witness of the chain head is stored at the head office. Revocation removes grants and sessions at once. Offboarding a user removes all grants in one command.
+
+### 17.7 Phases
+
+G1 named tokens with a role and a factory list, the viewer listener and the audit log. G2 signed grants from the head office. G3 passkeys. G4 single sign-on.
+
+## 18. Hosts, remote management and client premises (version 2)
+
+Requirement: Linux containers on Docker Desktop or Portainer on Windows, on a home server, in the cloud and on client premises with the client's compute. The Owner's own local factory may also be a container. The Mac stops being special.
+
+### 18.1 Transports
+
+The host tool treats each host as a transport in the registry: `local`, `ssh` (Docker over SSH with a Docker context), `portainer`, `agent`. The wizard and the update logic stay in the host tool. Phase H1 supports `local` and `ssh`. The factory commands do not change.
+
+### 18.2 Windows hosts
+
+- For an unattended box use Docker Engine in a WSL2 distribution or a Hyper-V Ubuntu VM, with a startup task. It starts at boot and needs no Docker Desktop licence.
+- Use Docker Desktop only where a person works on the box and the licence is paid (free only under 250 employees and 10 M USD revenue).
+- Keep all volumes named and inside the Linux file system. A bind mount of a Windows folder is slow and loses permissions and file events. Never bind-mount `home` or `data`.
+- Set memory and CPU in `.wslconfig`. A reboot, a sleep or a Windows update stops factories: the head office shows "last seen" and alerts.
+- The Linux image runs unchanged. Add an `amd64` build before the first Windows or cloud host. Whether the Codex sandbox works in WSL2 with a narrow seccomp profile is an open test.
+
+### 18.3 Portainer
+
+Portainer is optional. It manages containers, not factories. Deploy the same Compose file as a stack where the Owner or a client already runs Portainer. Do not depend on its API for the update logic. The Edge Agent dials out (standard mode uses port 8000 and dials in to the Portainer server; the asynchronous mode needs the Business Edition). The Portainer API key is a root-equivalent secret.
+
+### 18.4 Client-premises factory
+
+- Connection: the factory pushes its summary to the head office over HTTPS on port 443, and keeps a reverse SSH forward (or the client's VPN) for Herdr and for `docker exec` by the host tool. No inbound port at the client.
+- Test a TLS inspection proxy before the contract. Support the client's own CA and proxy settings.
+- Data: client code and data stay on the client's compute. The head office sees counts, states and links only. Model vendors still receive prompts and code: the contract must allow it (not legal advice; check it).
+- Updates: a registry mirror at the client, or a signed offline bundle.
+- Accounts: use the client's own accounts and keys for harnesses, GitHub and the Qlik tenant.
+- Access: the head office has write scope off for client sites. A client user gets the viewer role on their own factory directly (section 17).
+- Herdr over the reverse forward shows client code on the Owner's screen with no audit unless it is logged. Name it in the contract and log each session.
+- Client users stay local to the client factory. `fleet.shareItemTitles` is a per-factory setting, default off. A data processing agreement may be needed.
+- Client IT questions: Tailscale, reverse SSH or only a client VPN? Who patches the host OS and Docker, in what window?
+
+### 18.5 The local factory in a container
+
+Move the Owner's own factory into a container too. Stay on the host: signed-in GUI Chrome profiles, the Owner's `~/.claude` and `~/.codex`, and the Boss pane while it runs natively. Migration: build the container factory beside the native one, move one project by transfer (section 19), then the rest, then retire the native service.
+
+### 18.6 Remote Herdr
+
+Attach from a Mac or a Windows client with OpenSSH. One key per factory. On a client site, Herdr goes through the reverse forward.
+
+### 18.7 Phases
+
+H0 spike with the Docker context over SSH. H1 `local` and `ssh` transports. H2 Windows host setup (Engine in WSL2) and the amd64 image. H3 the client-site push and reverse forward. H4 offline update bundle. H5 optional Portainer stacks. H6 an in-host agent for sites with no usable inbound path.
+
+## 19. Project transfer between factories (version 2)
+
+Requirement: move a project from one factory to another, through GitHub and a handover like the orchestrator handover.
+
+### 19.1 Steps
+
+1. Plan: `herdr-boss project transfer plan SLUG --to FACTORY` checks that the target exists, has a matching kit version, enough quota and an access list that fits, and that the repository is on GitHub. A Qlik project also needs a tenant administrator at the target.
+2. Lock and freeze: create a transfer id. Both factories then refuse `worker start` for the project (a lock file named for the transfer id, on `herdr/transfer-<id>`). The source orchestrator publishes its status and commits `memory.md`. Workers finish or stop. The source closes its orchestrator pane at the end of the freeze.
+3. Push: every branch and every worktree with unpushed work goes to GitHub. The transfer branch holds the state files that live in the repository (`memory.md`, briefs, status).
+4. Export: a small bundle of the project record, board, ledger entries and kit revision, encrypted to the target factory key. Owner items, review packs and message text stay at the source. The target gets a pointer, not the text.
+5. Import on the target: clone from GitHub, apply the bundle, run `kit install`, create the project record and the access grants, and ask for secrets again in the wizard.
+6. Start: a fresh orchestrator on the target reads `memory.md`, as in a normal handover. It runs `project check` and publishes its status. Only now may it start workers.
+7. Switch: the target proves a clean build. The Owner confirms. The source marks the project `transferred` and parks it. Before the switch, `project transfer cancel` removes the target project, the clone and the grants, lifts the lock, and returns control to the source.
+
+### 19.2 Rules
+
+- Secrets, tenant logins and harness logins never move.
+- Tenant apps and spaces belong to a tenant, not a factory: the target needs its own tenant access first.
+- Unpushed work blocks the freeze. List it and stop.
+- The access list of the project moves with it. Client viewers are re-granted on the target.
+- Quota: the target's shares change. The plan shows the effect.
+- Only one orchestrator owns the repository at any time: the source pane is closed before the target orchestrator starts.
+- Client factories are not a transfer source or target unless the Owner and the client agree in writing.
+- The transfer leaves an audit entry on both factories.
+
+## 20. Version 2 phases, decisions and open questions
+
+### 20.1 Revised order
+
+1. Spike (section 12) plus the Docker context over SSH test. Test the viewer process: a 404 for every route.
+2. Phases 1 and 2: Linux portability and the image (section 11), with the corrections of section 3a.
+3. Tool core, wizard (8 steps) and the transports `local` and `ssh`.
+4. Access G1: named tokens, roles, viewer listener, audit log. This is needed before the first client factory.
+5. Fleet phase 1 and the head office role with the epoch, a cold standby and a manual `hub promote`. The host tool stays on the Mac.
+6. Project transfer in its small form (push, `project new` on the target, copy `memory.md`, transfer lock, cancel) and the local factory in a container.
+7. The amd64 image (before the first home server or Windows host). Windows hosts with Docker Engine in WSL2. Client-site push and the reverse forward.
+8. Later, only when needed: automatic election, signed grants from the head office, passkeys and single sign-on, the full transfer bundle, Portainer stacks, the in-host agent, the offline update bundle.
+
+### 20.2 New decisions for the Owner
+
+| # | Question | Recommendation |
+|---|---|---|
+| 11 | Head office: where does it live first? | An always-on box at home, with the Mac as the cold standby if the Mac is awake. A host that sleeps cannot be a standby. |
+| 12 | Succession: who is on the ranked list, and may a temporary head office read item titles? | The home box, then one cloud or Windows factory. Counts only until you confirm. |
+| 13 | Roles and the first users: owner, operator, reviewer, viewer. Who is the first colleague and which factories? | Fixed roles. Decide the first user set when G1 starts. |
+| 14 | Client sites: Tailscale, reverse SSH or only the client's VPN? | Reverse SSH over 443 plus the client's own VPN if required. Ask the client IT early. |
+| 15 | Windows hosts: Docker Engine in WSL2 for unattended boxes, Docker Desktop only with a paid licence? | Yes. |
+| 16 | Portainer: optional only? | Yes. The host tool is the factory-aware layer. |
+| 17 | Contract: may client code and prompts reach the model vendors? | Check with the client before the first client factory. |
+
+### 20.3 Open tests
+
+Herdr client on Windows and the Herdr server in WSL2. Codex sandbox in WSL2 with a narrow seccomp profile. The election with a split network (fake network test). Reverse SSH through a TLS inspection proxy. The viewer listener: a test that no route leaks.
+
+## 21. Sources
+
+Research notes in `~/.herdr-boss/scratch/boss/factories/`: A containers, B authentication, C Herdr connectivity, D fleet aggregation, E lifecycle, F succession, G identity and access, H hosts and client premises. The notes list their own sources and mark unverified claims. Unverified items in this proposal: size of the image, Herdr headless behaviour in a container, CodexBar on Linux, OpenAI terms on login sharing, the Claude Linux managed-settings path, the qlik-cli contexts path.
