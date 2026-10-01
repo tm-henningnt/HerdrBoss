@@ -2115,11 +2115,9 @@ test('the Chat page shows the Mailbox action cards, uses the Mailbox write route
   assert.match(app, /const label = esc\(chatBubbleLabel\(sender, \{ \.\.\.record, text \}, state\)\);/);
   assert.match(app, /aria-label="\$\{label\}"/);
   assert.match(app, /function chatBubbleLabel\(sender, record, state\)/);
-  // The focus moves to the composer when a chat opens, and to the list row on Back.
-  assert.match(app, /function openChat\(thread\) \{[\s\S]*?chat\.focus = 'composer';/);
+  // Opening a chat does not focus the composer, so the keyboard stays closed. The focus moves to the list row on Back.
+  assert.doesNotMatch(app, /chat\.focus = 'composer'/);
   assert.match(app, /function closeChat\(\) \{[\s\S]*?chat\.focus = 'row';/);
-  assert.match(app, /if \(view\?\.focus \|\| chat\.focus === 'composer'\) \{/);
-  assert.match(app, /field\.focus\(\);/);
   assert.match(app, /if \(chat\.focus === 'row' && chat\.backThread\) \$app\.querySelector\(`\[data-chat-open="\$\{CSS\.escape\(chat\.backThread\)\}"\]`\)\?\.focus\(\);/);
   // The keyboard: arrow keys move through the list, Enter opens a row, and Escape goes back.
   assert.match(app, /<button class="chat-row" type="button" data-chat-open=/);
