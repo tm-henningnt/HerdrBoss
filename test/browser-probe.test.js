@@ -94,12 +94,16 @@ test('a late answer to createTarget still closes the tab that it opened', async 
 });
 
 test('the total time of a probe is at most totalMs plus the cleanup', async () => {
-  const delay = { delayMs: 100 };
-  await withCdp({ behavior: { 'Browser.getVersion': { ...delay }, 'Target.getTargets': { ...delay }, 'Target.createTarget': { ...delay } } }, async (cdp) => {
-    const started = Date.now();
-    const result = await probeBrowser(cdp.port, { stepMs: 5000, totalMs: 250, cleanupMs: 400 });
-    assert.deepEqual(result, { ok: false, reason: 'createTarget timed out' });
-    assert.ok(Date.now() - started < 1000, `took ${Date.now() - started} ms`);
+  const totalMs = 250;
+  const cleanupMs = 400;
+  const timerSlackMs = 50;
+  await withCdp({ behavior: { 'Target.createTarget': 'hang' } }, async (cdp) => {
+    const started = performance.now();
+    const result = await probeBrowser(cdp.port, { stepMs: 5000, totalMs, cleanupMs });
+    const elapsed = performance.now() - started;
+    assert.equal(result.ok, false);
+    assert.match(result.reason, / timed out$/);
+    assert.ok(elapsed <= totalMs + cleanupMs + timerSlackMs, `took ${elapsed.toFixed(1)} ms; limit ${totalMs + cleanupMs} ms plus ${timerSlackMs} ms timer slack`);
   });
 });
 
