@@ -15,22 +15,22 @@ process.env.HOME = homeDir;
 process.env.HERDR_BOSS_DIR = dataDir;
 process.env.HERDR_BOSS_PORT = '0';
 
-const [{ serve }, { loadConfig }] = await Promise.all([
+const [{ serve }, { loadConfig }, { clearNight, writeNight }] = await Promise.all([
   import('../src/server.js'),
   import('../src/config.js'),
+  import('../src/night.js'),
 ]);
 
 // Invented projects. alpha is idle, bravo has a worker that runs, charlie is already paused, and delta has an
 // orchestrator that works. The last entry is the Boss workspace, which the stand-down never changes.
-const CONTROL = {
-  projects: {
+// The projects of the fake engine. A test adds a project before a press.
+const PROJECTS = {
     alpha: { slug: 'alpha', workspace: 'ws-alpha', label: 'Alpha', mode: 'auto', effectiveMode: 'auto', running: 0, orch: { pane: 'w1', status: 'idle' } },
     bravo: { slug: 'bravo', workspace: 'ws-bravo', label: 'Bravo', mode: 'active', effectiveMode: 'active', running: 1, orch: { pane: 'w2', status: 'working' } },
     charlie: { slug: 'charlie', workspace: 'ws-charlie', label: 'Charlie', mode: 'paused', effectiveMode: 'paused', running: 0, orch: { pane: 'w3', status: 'idle' } },
     delta: { slug: 'delta', workspace: 'ws-delta', label: 'Delta', mode: 'auto', effectiveMode: 'auto', running: 0, orch: { pane: 'w4', status: 'working' } },
     echo: { slug: 'echo', workspace: 'ws-echo', label: 'Echo', mode: 'active', effectiveMode: 'active', running: 0, orch: { pane: 'w5', status: 'done' } },
     bossproject: { slug: 'bossproject', workspace: 'ws-boss', label: 'Boss', boss: true, mode: 'auto', effectiveMode: 'auto', running: 0, orch: { pane: 'w9', status: 'idle' } },
-  },
 };
 
 const PANES = [
@@ -49,13 +49,14 @@ function savedPolicy() {
 }
 
 // The fake engine reads the saved policy on each tick, so the routes see the mode of the previous change.
-function startServer(t, { readOnlyPreview = false } = {}) {
-  // The Allocation page of an earlier session: each project has a share and its two lists.
-  fs.writeFileSync(path.join(dataDir, 'policy.json'), `${JSON.stringify({
-    projects: Object.fromEntries(Object.values(CONTROL.projects)
-      .filter((entry) => !entry.boss)
-      .map((entry) => [entry.slug, { share: 20, mode: entry.mode, excludedKinds: [], excludedModels: [] }])),
-  }, null, 2)}\n`);
+// shares sets the saved policy of the start: 'default' gives every project a share of 20, 'none' stores no project.
+function startServer(t, { readOnlyPreview = false, shares = 'default', projects = PROJECTS, panes = PANES } = {}) {
+  const stored = shares === 'none'
+    ? {}
+    : Object.fromEntries(Object.values(projects).filter((entry) => !entry.boss)
+      .map((entry) => [entry.slug, { share: 20, mode: entry.mode, excludedKinds: [], excludedModels: [] }]));
+  fs.writeFileSync(path.join(dataDir, 'policy.json'), `${JSON.stringify({ projects: stored }, null, 2)}\n`);
+  fs.rmSync(path.join(dataDir, 'watch.json'), { force: true });
   const cfg = loadConfig();
   cfg.host = '127.0.0.1';
   cfg.port = 0;
@@ -69,8 +70,9 @@ function startServer(t, { readOnlyPreview = false } = {}) {
       engine.log = () => {};
       engine.tick = async () => {
         const stored = savedPolicy().projects || {};
-        const projects = Object.fromEntries(Object.entries(CONTROL.projects).map(([slug, entry]) => [slug, { ...entry, effectiveMode: stored[slug]?.mode ?? entry.effectiveMode }]));
-        engine.state = { control: { projects }, herdr: { panes: PANES }, night: { active: false } };
+        // The derived share is the even share of the projects, so it is a fraction without a saved share.
+        const derived = Object.fromEntries(Object.entries(projects).map(([slug, entry]) => [slug, { ...entry, share: entry.share ?? Math.round(1000 / Object.keys(projects).length) / 10, effectiveMode: stored[slug]?.mode ?? entry.effectiveMode }]));
+        engine.state = { control: { projects: derived }, herdr: { panes }, night: { active: false } };
         return engine.state;
       };
       return engine;
@@ -155,6 +157,119 @@ test('the read-only preview refuses both routes', { timeout: 20000 }, async (t) 
   const { base } = await startServer(t, { readOnlyPreview: true });
   assert.equal((await post(base, '/api/watch/standdown')).status, 403);
   assert.equal((await post(base, '/api/watch/standdown/undo')).status, 403);
+});
+
+const standDownMark = () => JSON.parse(fs.readFileSync(path.join(dataDir, 'watch.json'), 'utf8')).standDown;
+
+// A project that falls idle after the first press. It is the last pane in PANES, so the clean up pops it.
+function addFoxtrot() {
+  PROJECTS.foxtrot = { slug: 'foxtrot', workspace: 'ws-foxtrot', label: 'Foxtrot', mode: 'active', effectiveMode: 'active', running: 0, orch: { pane: 'w7', status: 'idle' } };
+  PANES.push({ id: 'w7', workspace: 'ws-foxtrot', label: 'orch', orch: true, agent: 'pi', status: 'idle' });
+}
+
+function removeFoxtrot() {
+  delete PROJECTS.foxtrot;
+  PANES.pop();
+}
+
+// Save the policy of a test.
+function savePolicyFile(policy) {
+  fs.writeFileSync(path.join(dataDir, 'policy.json'), `${JSON.stringify(policy, null, 2)}\n`);
+}
+
+test('a second press keeps the stored mode of the projects of the first press', { timeout: 20000 }, async (t) => {
+  const { base } = await startServer(t);
+  assert.deepEqual((await (await post(base, '/api/watch/standdown')).json()).paused, ['alpha', 'echo']);
+  const first = standDownMark();
+  // The Owner resumes both projects by hand, then another project falls idle.
+  const policy = savedPolicy();
+  policy.projects.alpha.mode = 'auto';
+  policy.projects.echo.mode = 'idle';
+  savePolicyFile(policy);
+  addFoxtrot();
+  t.after(removeFoxtrot);
+  const second = await (await post(base, '/api/watch/standdown')).json();
+  assert.deepEqual(second.paused.sort(), ['alpha', 'echo', 'foxtrot']);
+  const merged = standDownMark();
+  assert.equal(merged.projects.alpha, 'auto', 'a project of the mark keeps the mode of the first press');
+  assert.equal(merged.projects.echo, 'active', 'a project of the mark keeps the mode of the first press');
+  assert.equal(merged.projects.foxtrot, 'active', 'a new project joins the mark');
+  assert.deepEqual(Object.keys(merged.projects).sort(), [...Object.keys(first.projects), 'foxtrot'].sort());
+});
+
+test('a refused policy write keeps the stored mark', { timeout: 20000 }, async (t) => {
+  const { base } = await startServer(t);
+  await post(base, '/api/watch/standdown');
+  const before = standDownMark();
+  // A saved policy that no write can pass. savePolicy answers with errors, so the route answers 400.
+  const broken = savedPolicy();
+  broken.maxWorkers = 999;
+  broken.projects.alpha.mode = 'auto';
+  broken.projects.echo.mode = 'active';
+  savePolicyFile(broken);
+  const refused = await post(base, '/api/watch/standdown');
+  assert.equal(refused.status, 400, 'the invalid policy refuses the write');
+  assert.deepEqual(standDownMark(), before, 'the refused write leaves the old mark');
+  assert.equal(savedPolicy().projects.alpha.mode, 'auto', 'the refused write changes no mode');
+});
+
+test('a project without a saved share keeps the shares at 100', { timeout: 20000 }, async (t) => {
+  const projects = {
+    one: { slug: 'one', workspace: 'ws-one', label: 'One', mode: 'auto', effectiveMode: 'auto', running: 0, orch: { pane: 'p1', status: 'idle' } },
+    two: { slug: 'two', workspace: 'ws-two', label: 'Two', mode: 'auto', effectiveMode: 'auto', running: 0, orch: { pane: 'p2', status: 'idle' } },
+    three: { slug: 'three', workspace: 'ws-three', label: 'Three', mode: 'active', effectiveMode: 'active', running: 0, orch: { pane: 'p3', status: 'done' } },
+  };
+  const { base } = await startServer(t, { shares: 'none', projects, panes: [{ id: 'p1', workspace: 'ws-one', label: 'orch', orch: true, agent: 'pi', status: 'idle' }, { id: 'p2', workspace: 'ws-two', label: 'orch', orch: true, agent: 'pi', status: 'idle' }, { id: 'p3', workspace: 'ws-three', label: 'orch', orch: true, agent: 'pi', status: 'done' }] });
+  const response = await post(base, '/api/watch/standdown');
+  assert.equal(response.status, 200, 'a stand-down asks for no share confirmation');
+  const stored = savedPolicy().projects;
+  assert.deepEqual(Object.keys(stored).sort(), ['one', 'three', 'two']);
+  const total = Object.values(stored).reduce((sum, entry) => sum + entry.share, 0);
+  assert.equal(total, 100, `the saved shares add up to 100, not ${total}`);
+  for (const entry of Object.values(stored)) assert.ok(Number.isInteger(entry.share), 'each share is a whole number');
+  assert.equal(stored.one.mode, 'paused');
+  assert.equal(stored.two.mode, 'paused');
+  assert.equal(stored.three.mode, 'paused');
+});
+
+test('a stand-down keeps the saved shares of a policy that has them', { timeout: 20000 }, async (t) => {
+  const { base } = await startServer(t);
+  const before = Object.fromEntries(Object.entries(savedPolicy().projects).map(([slug, entry]) => [slug, entry.share]));
+  const response = await post(base, '/api/watch/standdown');
+  assert.equal(response.status, 200);
+  const after = Object.fromEntries(Object.entries(savedPolicy().projects).map(([slug, entry]) => [slug, entry.share]));
+  assert.deepEqual(after, before, 'a stand-down changes no share');
+});
+
+test('a stand-down survives a start and a stop of the watch', { timeout: 20000 }, async (t) => {
+  const { base } = await startServer(t);
+  await post(base, '/api/watch/standdown');
+  const mark = standDownMark();
+  const started = await fetch(`${base}/api/watch/start`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ until: '23:30' }) });
+  assert.equal(started.status, 200);
+  assert.deepEqual(standDownMark(), mark, 'a watch start keeps the mark');
+  const stopped = await post(base, '/api/watch/stop');
+  assert.equal(stopped.status, 200);
+  assert.deepEqual(standDownMark(), mark, 'a watch stop keeps the mark');
+  // The CLI watch path calls the same two functions, so the command keeps the mark too.
+  clearNight({ dataDir });
+  assert.deepEqual(standDownMark(), mark, 'clearNight of the command keeps the mark');
+  writeNight({ active: true, since: new Date().toISOString(), until: null }, { dataDir });
+  assert.deepEqual(standDownMark(), mark, 'writeNight of the command keeps the mark');
+});
+
+test('the undo clears the mark when no project is still paused', { timeout: 20000 }, async (t) => {
+  const { base } = await startServer(t);
+  await post(base, '/api/watch/standdown');
+  const policy = savedPolicy();
+  policy.projects.alpha.mode = 'active';
+  policy.projects.echo.mode = 'idle';
+  savePolicyFile(policy);
+  const response = await post(base, '/api/watch/standdown/undo');
+  assert.equal(response.status, 200);
+  assert.deepEqual((await response.json()).restored, [], 'nothing is paused, so nothing is restored');
+  assert.equal(standDownMark(), undefined, 'the undo clears the mark');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dataDir, 'watch.json'), 'utf8')).active, false);
 });
 
 // The card of the Watch page, read from public/app.js in the style of the other view tests.

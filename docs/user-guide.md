@@ -712,9 +712,9 @@ The **Agents** page has a card **Stand down** under the **Watch** box. It has tw
 
 The reasons are `worker running`, `orchestrator working`, and `already paused`. The facts are the same as the idle-orchestrator nudge: the orchestrator pane of the project and the worker panes of its workspace. The Boss workspace is never changed. A project with a reason is not parked. Select **Stand down projects** again later to park it.
 
-The undo returns each project to the mode it had before. It restores only a project that is still paused. A project that the Owner changed in the meantime keeps its own mode.
+The undo returns each project to the mode it had before. It restores only a project that is still paused. A project that the Owner changed in the meantime keeps its own mode. The undo clears the mark, also when it restored nothing.
 
-Every mode change goes through the same save path as the Allocation page. The policy change log records it. See [Policy changes](#policy-changes).
+Every mode change goes through the same save path as the Allocation page. The policy change log records it. See [Policy changes](#policy-changes). A project with no saved share takes a part of the shares that the other projects leave, so the saved shares keep adding up to 100. A stand-down changes no share of the Owner, so it asks for no share confirmation.
 
 The routes are:
 
@@ -723,7 +723,7 @@ The routes are:
 | `POST /api/watch/standdown` | `{}` | `200` with `{ paused: [slug], skipped: [{ slug, reason }] }`. |
 | `POST /api/watch/standdown/undo` | `{}` | `200` with `{ restored: [slug] }`. |
 
-Herdr Boss stores the time of the stand-down and the mode of each changed project in `watch.json`, under `standDown`. The undo clears the mark. The read-only preview refuses both routes.
+Herdr Boss stores the time of the stand-down and the mode of each changed project in `watch.json`, under `standDown`. A second press keeps the mode of every project of the mark and adds the projects of that press. The route writes the mark after the policy save. A refused write, with the answers `400` and `409`, leaves the mark and the policy as they are. A watch start and a watch stop keep the mark, in the dashboard and in `herdr-boss watch`. The undo clears it. The read-only preview refuses both routes.
 
 ### Timed reports
 
