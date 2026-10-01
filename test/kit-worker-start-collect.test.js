@@ -1728,13 +1728,16 @@ test('a refused worker collect closes nothing and writes no ledger entry', (t) =
   cleanWorkerRun(t, f, run);
   writeWorkerReport(run, { changedPaths: ['outside.js'] });
   const before = fs.readFileSync(run.recordFile, 'utf8');
+  const scheduled = [];
 
   assert.throws(() => collectWorker('collect-refused', { outcome: 'done', gatePassed: true }, {
     config: f.config, output: () => {}, listWorktreeProcesses: () => [], recordUsageFn: () => ({ errors: [] }),
+    schedulePaneCloseFn: (job) => scheduled.push(job),
   }), /changed paths outside its allowed scope/);
 
   assert.equal(fs.readFileSync(run.recordFile, 'utf8'), before);
   assert.equal(fs.existsSync(f.config.ledgerPath), false);
+  assert.deepEqual(scheduled, [], 'a refused collect schedules no pane close');
 });
 
 test('worker collect refuses a symlink report.md', (t) => {

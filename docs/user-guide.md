@@ -540,7 +540,7 @@ To add the shared rules to a project, follow [orchestrator-instructions.md](orch
 | Active machine CPU limit or enabled 5-minute load backstop is exceeded | Stop new workers and full test suites. `worker start` refuses the dispatch, including with `--force`. |
 | An idle worker still owns an automation browser after 30 minutes | Notice to that project. |
 | A worker is idle for more than 2 hours | Notice to that project. Parked workers and prepared successors are skipped. |
-| A finished worker run stays uncollected for 30 minutes | One notice to the project orchestrator with the `worker collect NAME` command. Change the delay with `workers.uncollectedNoticeMinutes` (1 to 1440 minutes). |
+| A finished worker run stays uncollected for 30 minutes | One notice to the project orchestrator with the `worker collect NAME` command. The timer starts from the report or finish time in the run record when present. Otherwise, it starts when the service first sees the done pane. Change the delay with `workers.uncollectedNoticeMinutes` (1 to 1440 minutes). |
 | An `agent-browser` daemon has no parent, no children, and is older than 2 hours | Herdr Boss stops the daemon. It never stops a browser. |
 | A parent-PID-1 process has its current working directory in a missing worktree | Notice that project's `orch` workspace. Do not notify the Boss workspace. |
 | A non-orchestrator worker stays blocked for more than 5 minutes | Notice its project orchestrator with the worker name and pane ID. |

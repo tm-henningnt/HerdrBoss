@@ -250,3 +250,17 @@ test('the engine does not close a process that uses a foreign browser profile', 
     { advanceMs: 61_000, probe: { ok: true, pageIds: ['user-tab'], attachedTabIds: [], attachedClientCount: 0 } }], { idleCloseMinutes: 1, launchedAgoMs: 600000, foreignProfile: true, probeIntervalMs: 90_000 });
   assert.equal(out.closeCalls.length, 0);
 });
+
+test('the engine calls closeBrowser only inside the shouldCloseManagedBrowser gate', () => {
+  const engine = fs.readFileSync(path.join(repo, 'src/engine.js'), 'utf8');
+  const closeCall = 'this.collectors.closeBrowser(';
+  const closeCalls = [...engine.matchAll(/this\.collectors\.closeBrowser\s*\(/g)];
+  assert.equal(closeCalls.length, 1, 'Engine has one browser close call site');
+  const guard = 'if (this.act && shouldCloseManagedBrowser({ session: b, matched, closeDue: idle.closeDue })) {';
+  const guardAt = engine.indexOf(guard);
+  const closeAt = engine.indexOf(closeCall);
+  assert.ok(guardAt >= 0 && closeAt > guardAt, 'the browser close call follows the managed-browser guard');
+  const beforeClose = engine.slice(guardAt, closeAt);
+  const depth = [...beforeClose.matchAll(/\{/g)].length - [...beforeClose.matchAll(/\}/g)].length;
+  assert.equal(depth, 2, 'the close call is inside the shouldCloseManagedBrowser and try blocks');
+});

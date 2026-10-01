@@ -6,6 +6,9 @@ import { workerRunId } from './agent-messages.js';
 const WORKER_CLOSE_FILE = 'worker-pane-closes.json';
 const PROJECT_SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const WORKER_NAME = /^[a-z][a-z0-9-]{0,31}$/;
+const WORKER_CLOSE_MAX_ATTEMPTS = 5;
+const LOCK_WAIT_MS = 2000;
+const LOCK_STALE_MS = 10000;
 
 function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); }
@@ -20,10 +23,40 @@ function writeJsonAtomic(file, value) {
   fs.renameSync(tmp, file);
 }
 
+function pause(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function withFileLock(file, fn) {
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  const lock = `${file}.lock`;
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  for (;;) {
+    try { fs.closeSync(fs.openSync(lock, 'wx', 0o600)); break; }
+    catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      try { if (Date.now() - fs.statSync(lock).mtimeMs > LOCK_STALE_MS) { fs.unlinkSync(lock); continue; } } catch {}
+      if (Date.now() > deadline) throw new Error('The worker pane close queue is locked. Try again.');
+      pause(20);
+    }
+  }
+  try { return fn(); }
+  finally { try { fs.unlinkSync(lock); } catch {} }
+}
+
 function validCloseJob(job) {
   return job && PROJECT_SLUG.test(job.project) && WORKER_NAME.test(job.name)
     && typeof job.runId === 'string' && job.runId.length <= 256
-    && Number.isSafeInteger(job.dueAt) && job.dueAt >= 0;
+    && Number.isSafeInteger(job.dueAt) && job.dueAt >= 0
+    && (job.attempts === undefined || (Number.isSafeInteger(job.attempts) && job.attempts >= 0 && job.attempts < WORKER_CLOSE_MAX_ATTEMPTS));
+}
+
+function firstTimestamp(...values) {
+  for (const value of values) {
+    const timestamp = Number.isFinite(value) ? value : Date.parse(value);
+    if (Number.isFinite(timestamp)) return timestamp;
+  }
+  return null;
 }
 
 export function readWorkerPaneCloses({ dir = DATA_DIR } = {}) {
@@ -33,12 +66,14 @@ export function readWorkerPaneCloses({ dir = DATA_DIR } = {}) {
 }
 
 export function scheduleWorkerPaneClose({ project, name, runId, dueAt, dir = DATA_DIR } = {}) {
-  const job = { project, name, runId, dueAt };
+  const job = { project, name, runId, dueAt, attempts: 0 };
   if (!validCloseJob(job)) throw new Error('Worker pane close needs a project, worker name, run ID, and due time.');
   const file = path.join(dir, WORKER_CLOSE_FILE);
-  const jobs = readWorkerPaneCloses({ dir }).filter((item) => item.runId !== runId);
-  jobs.push(job);
-  writeJsonAtomic(file, jobs);
+  withFileLock(file, () => {
+    const jobs = readWorkerPaneCloses({ dir }).filter((item) => item.runId !== runId);
+    jobs.push(job);
+    writeJsonAtomic(file, jobs);
+  });
   return job;
 }
 
@@ -46,35 +81,63 @@ export function scheduleWorkerPaneClose({ project, name, runId, dueAt, dir = DAT
 export async function processDueWorkerPaneCloses({ panes, now = Date.now(), dir = DATA_DIR, readRun, closePane, onError = () => {} } = {}) {
   const jobs = readWorkerPaneCloses({ dir });
   if (!Array.isArray(panes) || typeof readRun !== 'function' || typeof closePane !== 'function') {
-    return { closed: 0, skipped: 0, failed: 0, pending: jobs.length };
+    return { closed: 0, skipped: 0, failed: 0, dropped: 0, pending: jobs.length };
   }
-  const keep = [];
+  const outcomes = new Map();
+  const jobKey = (job) => JSON.stringify([job.project, job.name, job.runId, job.dueAt, job.attempts ?? 0]);
   let closed = 0, skipped = 0, failed = 0;
   for (const job of jobs) {
-    if (job.dueAt > now) { keep.push(job); continue; }
+    if (job.dueAt > now) continue;
+    const key = jobKey(job);
     let run;
     try { run = await readRun(job); }
-    catch (error) { failed++; keep.push(job); onError(job, error); continue; }
+    catch (error) { failed++; outcomes.set(key, { type: 'failed', job, error }); continue; }
     if (!run || run.name !== job.name || workerRunId(run, job.project) !== job.runId || !run.finishedAt || !run.pane) {
       skipped++;
+      outcomes.set(key, { type: 'remove' });
       continue;
     }
     const pane = panes.find((item) => item.id === run.pane && item.name === job.name);
     if (!pane || pane.agent !== run.kind) {
       skipped++;
+      outcomes.set(key, { type: 'remove' });
       continue;
     }
+    if (!['done', 'idle'].includes(pane.agent_status ?? pane.status)) continue;
     try {
       await closePane(pane.id);
       closed++;
+      outcomes.set(key, { type: 'remove' });
     } catch (error) {
       failed++;
-      keep.push(job);
-      onError(job, error);
+      outcomes.set(key, { type: 'failed', job, error });
     }
   }
-  if (keep.length !== jobs.length || keep.some((job, index) => job !== jobs[index])) writeJsonAtomic(path.join(dir, WORKER_CLOSE_FILE), keep);
-  return { closed, skipped, failed, pending: keep.length };
+  const file = path.join(dir, WORKER_CLOSE_FILE);
+  let dropped = 0;
+  const terminalErrors = [];
+  const keep = withFileLock(file, () => {
+    const latest = readWorkerPaneCloses({ dir });
+    const next = [];
+    for (const current of latest) {
+      const outcome = outcomes.get(jobKey(current));
+      if (!outcome) { next.push(current); continue; }
+      if (outcome.type === 'remove') continue;
+      if (outcome.type === 'failed') {
+        const attempts = (current.attempts ?? 0) + 1;
+        if (attempts >= WORKER_CLOSE_MAX_ATTEMPTS) {
+          dropped++;
+          terminalErrors.push(outcome);
+        } else next.push({ ...current, attempts });
+        continue;
+      }
+      next.push(current);
+    }
+    if (JSON.stringify(next) !== JSON.stringify(latest)) writeJsonAtomic(file, next);
+    return next;
+  });
+  for (const outcome of terminalErrors) onError(outcome.job, outcome.error);
+  return { closed, skipped, failed, dropped, pending: keep.length };
 }
 
 export function inspectUncollectedWorkers({ panes, runs, observed = {}, now = Date.now(), minutes = 30 } = {}) {
@@ -82,14 +145,15 @@ export function inspectUncollectedWorkers({ panes, runs, observed = {}, now = Da
   const nextObserved = {};
   const notices = [];
   for (const run of runs || []) {
-    if (run.finishedAt || !run.name || !run.pane || !run.startedAt || !run.project) continue;
+    if (run.collectedAt || !run.name || !run.pane || !run.startedAt || !run.project) continue;
     const pane = live.get(run.pane);
     if (!pane || pane.name !== run.name || pane.agent !== run.kind || pane.status !== 'done' || !pane.workspace) continue;
     const runId = workerRunId(run, run.project);
     if (!runId) continue;
     const previous = observed[runId];
     const sameRun = previous?.project === run.project && previous?.name === run.name && previous?.runId === runId;
-    const since = sameRun && Number.isFinite(previous.since) ? previous.since : now;
+    const parsedTimestamp = firstTimestamp(run.reportAt, run.reportedAt, run.reportMtimeMs, run.finishedAt);
+    const since = Number.isFinite(parsedTimestamp) ? parsedTimestamp : sameRun && Number.isFinite(previous.since) ? previous.since : now;
     nextObserved[runId] = { project: run.project, name: run.name, runId, since };
     if (!Number.isFinite(now) || !Number.isSafeInteger(minutes) || minutes < 1 || now - since < minutes * 60_000) continue;
     notices.push({

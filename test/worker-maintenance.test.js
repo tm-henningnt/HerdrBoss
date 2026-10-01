@@ -75,6 +75,91 @@ test('worker pane close skips a pane that now runs another agent', async (t) => 
   assert.deepEqual(readWorkerPaneCloses({ dir }), []);
 });
 
+test('a worker pane close keeps jobs added while it waits for the run lookup', async (t) => {
+  const dir = tempDir(t);
+  const run = runRecord({ finishedAt: '2026-10-01T10:01:00.000Z' });
+  scheduleWorkerPaneClose({ project: run.project, name: run.name, runId: workerRunId(run), dueAt: 1, dir });
+  const later = { ...runRecord({ name: 'later-worker' }), project: run.project };
+  const laterJob = scheduleWorkerPaneClose({ project: later.project, name: later.name, runId: workerRunId(later), dueAt: 10_000, dir });
+
+  // Add a second job during the await, after the processor has read its initial snapshot.
+  const replacement = { ...runRecord({ name: 'arrived-during-await' }), project: run.project };
+  const result = await processDueWorkerPaneCloses({
+    dir,
+    now: 1,
+    panes: [{ id: run.pane, name: run.name, agent: run.kind, status: 'idle' }],
+    readRun: async () => {
+      scheduleWorkerPaneClose({ project: replacement.project, name: replacement.name, runId: workerRunId(replacement), dueAt: 20_000, dir });
+      return run;
+    },
+    closePane: async () => {},
+  });
+
+  assert.equal(result.closed, 1);
+  assert.deepEqual(readWorkerPaneCloses({ dir }), [laterJob, {
+    project: replacement.project,
+    name: replacement.name,
+    runId: workerRunId(replacement),
+    dueAt: 20_000,
+    attempts: 0,
+  }]);
+});
+
+test('worker pane close counts failures and drops a job after five attempts with one terminal log', async (t) => {
+  const dir = tempDir(t);
+  const run = runRecord({ finishedAt: '2026-10-01T10:01:00.000Z' });
+  scheduleWorkerPaneClose({ project: run.project, name: run.name, runId: workerRunId(run), dueAt: 1, dir });
+  const logged = [];
+
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    const result = await processDueWorkerPaneCloses({
+      dir,
+      now: 1,
+      panes: [{ id: run.pane, name: run.name, agent: run.kind, status: 'done' }],
+      readRun: () => run,
+      closePane: async () => { throw new Error('fixture close failure'); },
+      onError: (job, error) => logged.push({ job, message: error.message }),
+    });
+    assert.equal(result.failed, 1);
+    if (attempt < 5) assert.equal(readWorkerPaneCloses({ dir })[0].attempts, attempt);
+    else {
+      assert.deepEqual(readWorkerPaneCloses({ dir }), []);
+      assert.equal(result.dropped, 1);
+    }
+  }
+  assert.equal(logged.length, 1);
+  assert.equal(logged[0].message, 'fixture close failure');
+});
+
+test('worker pane close waits while the same agent is working or blocked without using an attempt', async (t) => {
+  const dir = tempDir(t);
+  const run = runRecord({ finishedAt: '2026-10-01T10:01:00.000Z' });
+  scheduleWorkerPaneClose({ project: run.project, name: run.name, runId: workerRunId(run), dueAt: 1, dir });
+  const closed = [];
+
+  for (const status of ['working', 'blocked']) {
+    const result = await processDueWorkerPaneCloses({
+      dir,
+      now: 1,
+      panes: [{ id: run.pane, name: run.name, agent: run.kind, agent_status: status }],
+      readRun: () => run,
+      closePane: async (pane) => closed.push(pane),
+    });
+    assert.equal(result.skipped, 0);
+    assert.equal(readWorkerPaneCloses({ dir })[0].attempts, 0);
+  }
+  assert.deepEqual(closed, []);
+
+  await processDueWorkerPaneCloses({
+    dir,
+    now: 1,
+    panes: [{ id: run.pane, name: run.name, agent: run.kind, agent_status: 'idle' }],
+    readRun: () => run,
+    closePane: async (pane) => closed.push(pane),
+  });
+  assert.deepEqual(closed, [run.pane]);
+});
+
 test('uncollected worker alerts wait for the configured age and use one key per run', () => {
   const now = 1000;
   const run = runRecord();
@@ -88,6 +173,17 @@ test('uncollected worker alerts wait for the configured age and use one key per 
   assert.equal(due.notices[0].scope, 'fixture-workspace');
   assert.match(due.notices[0].text, /fixture-worker.*30 minutes.*herdr-boss worker collect fixture-worker/);
   assert.equal(due.notices[0].once, true);
+});
+
+test('uncollected worker age starts from a report or finish timestamp when the run has one', () => {
+  const reportAt = Date.parse('2026-10-01T10:00:00.000Z');
+  for (const field of ['reportAt', 'finishedAt']) {
+    const run = runRecord({ [field]: new Date(reportAt).toISOString() });
+    const pane = { id: run.pane, name: run.name, agent: run.kind, status: 'done', workspace: 'fixture-workspace' };
+    const due = inspectUncollectedWorkers({ panes: [pane], runs: [run], now: reportAt + 30 * 60_000, minutes: 30 });
+    assert.equal(due.notices.length, 1, field);
+    assert.equal(due.observed[workerRunId(run)].since, reportAt, field);
+  }
 });
 
 test('a project browser closes only after a quiet interval with no attached client or agent tab', () => {
