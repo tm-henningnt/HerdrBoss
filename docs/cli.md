@@ -843,7 +843,7 @@ herdr-boss worker start fix-74 --kind claude --task-file brief.md --allow src/pa
 | Command | Action |
 |---|---|
 | `worker list` | Unfinished run records with the live agent status. |
-| `worker collect NAME [--record] [--keep-pane] [--outcome done\|partial\|failed --gate-passed\|--gate-failed] [--defects N] [--rework N] [--model-result first-time\|rework\|failed] [--model-reason TEXT]` | Check the worker report and its changed paths, report configured stale-artifact warnings, append the run to the ledger, record usage, and release its leases. Recording needs the outcome, one gate result, and any supplied defect or rework counts. It sets `collectedAt` and `finishedAt` after a successful collect. A successful collect schedules the pane to close after `workers.paneCloseDelayMinutes` (2 minutes by default). `--keep-pane` skips that close. A refused collect closes nothing. `--record` is accepted for compatibility. After success, merge the branch, then prune safe worktrees. |
+| `worker collect NAME [--keep-pane] [--outcome done\|partial\|failed --gate-passed\|--gate-failed] [--defects N] [--rework N] [--model-result first-time\|rework\|failed] [--model-reason TEXT]` | Check the worker report and its changed paths, report configured stale-artifact warnings, append the run to the ledger, record usage, and release its leases. Recording needs the outcome, one gate result, and any supplied defect or rework counts. It sets `collectedAt` and `finishedAt` after a successful collect. A successful collect schedules the pane to close after `workers.paneCloseDelayMinutes` (2 minutes by default). `--keep-pane` skips that close. A refused collect closes nothing. The `--record` flag is accepted for compatibility. After success, merge the branch, then prune safe worktrees. |
 | `worker collect NAME --no-record` | Read and print the report summary. Do not write a ledger entry, close the run record, or schedule the pane to close. Use this option when you only need to inspect the report. Do not combine it with `--record`: the command refuses both flags. |
 | `worker park NAME --reason TEXT` | Mark a worker that waits on purpose. Idle notices skip it. |
 | `worker unpark NAME` | Clear the park mark. |
@@ -958,7 +958,7 @@ The paths must be repository-relative and inside the worker worktree. It refuses
 
 `worker collect` uses the approved paths. Its summary and ledger entry include the approval history. A prompt or message alone does not change the approved paths.
 
-Collection records the run before merge. After a successful `--record`, merge the branch, then run `herdr-boss worktree prune --apply` to remove worktrees that pass the safe checks. Collection does not prune worktrees.
+Collection records the run before merge. After a successful collection, merge the branch, then run `herdr-boss worktree prune --apply` to remove worktrees that pass the safe checks. Collection does not prune worktrees.
 
 `worktree prune` checks the current working directory of processes in every existing worktree it could remove. It also reports parent-PID-1 processes that still use a missing or prunable worktree path. It never removes a worktree while a matching process runs. It blocks all removals when it cannot scan processes. It does not remove dirty, unmerged, primary, live-pane, or uninspectable worktrees.
 
@@ -1027,7 +1027,7 @@ An unleased listener with an unknown owner gives no notice. The Allocation page 
 
 The client ID of a port: a pool can hold `portEnv` values for each port range, for example `TM_SERVE_LIVE_CLIENT_ID`. A project picks the client ID by port. The lease hands the value over through `worker start --lease` (pane environment) or `lease acquire --env-file`. A port without a value gets no variable. See [Resource leases](user-guide.md#resource-leases).
 
-`worker start --lease POOL` leases one item before it creates the worktree or the pane. It sets the variable `env` of the pool in the worker pane, for example `HERDR_SERVE_PORT=8001`. It records the lease in the run record and in the brief. When the pool has no free item, the start fails with exit code 3 and creates nothing. When the start fails later, it releases the lease. `worker collect NAME --record` releases the leases of the worker.
+`worker start --lease POOL` leases one item before it creates the worktree or the pane. It sets the variable `env` of the pool in the worker pane, for example `HERDR_SERVE_PORT=8001`. It records the lease in the run record and in the brief. When the pool has no free item, the start fails with exit code 3 and creates nothing. When the start fails later, it releases the lease. `worker collect NAME` releases the leases of the worker.
 
 When a task names `serve:live` and the `serve-ports` pool exists, `worker start` leases one port when needed. It prints that it took the lease. It writes the port to `.worker/port`, one line, and tells the worker to use only that port. With `--no-worktree`, the port file is `.worker/NAME/port`.
 
