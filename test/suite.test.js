@@ -7,7 +7,8 @@ import { pathToFileURL } from 'node:url';
 import test from 'node:test';
 import { loadProjectConfig } from '../src/kit/config.js';
 import { runKitCommand } from '../src/kit/cli.js';
-import { acquireProjectLock, listProjectLocks, recordLockRelease, releaseProjectLock, withMutationLock } from '../src/kit/locks.js';
+import { acquireProjectLock, listProjectLocks, readLockQueue, readMachineLocks, recordLockRelease, releaseProjectLock, withMutationLock } from '../src/kit/locks.js';
+import { POLICY_DEFAULTS } from '../src/control.js';
 import { writeNight } from '../src/night.js';
 
 function git(cwd, ...args) {
@@ -30,6 +31,8 @@ function fixture(t, prefix) {
   git(root, 'add', 'README.md');
   git(root, 'commit', '-m', 'seed');
   const config = loadProjectConfig({ cwd: root });
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.writeFileSync(path.join(dataDir, 'policy.json'), JSON.stringify({ locks: POLICY_DEFAULTS.locks }));
   const livePanes = ['ws:orch'];
   const herdr = (args) => {
     if (args[0] === 'pane' && args[1] === 'get') return { pane: { pane_id: args[2], workspace_id: 'ws', label: args[2] === 'ws:orch' ? 'orch' : 'worker' } };
@@ -192,7 +195,10 @@ function lockOptions(f, pane, panes, extra = {}) {
 
 function configureLockSettings(f, locks) {
   fs.mkdirSync(f.dataDir, { recursive: true });
-  fs.writeFileSync(path.join(f.dataDir, 'policy.json'), JSON.stringify({ locks }));
+  // Saved policies include the defaults, as savePolicy does at the real boundary.
+  fs.writeFileSync(path.join(f.dataDir, 'policy.json'), JSON.stringify({ locks: {
+    ...POLICY_DEFAULTS.locks, ...locks, guard: { ...POLICY_DEFAULTS.locks.guard, ...locks.guard },
+  } }));
 }
 
 function seedLockHistory(f, kind = 'suite', holdMs = 60_000, count = 3) {
@@ -1498,4 +1504,167 @@ test('LK3 R5 automatic cleanup selects its exact record and refuses a replacemen
   fs.writeFileSync(f.lockFile, JSON.stringify(replacement));
   assert.throws(() => releaseProjectLock('full-suite', { ...options, expectedRecord: second }), /Refusing to release another record/);
   assert.equal(JSON.parse(fs.readFileSync(f.lockFile, 'utf8')).acquiredAt, replacement.acquiredAt);
+});
+
+for (const constraint of ['capacity', 'guard']) for (const damage of ['missing', 'invalid JSON', 'invalid setting', 'partial locks', 'partial guard']) {
+  test(`LK3 R12 ${damage} reload keeps the last ${constraint} policy and waits for a complete policy`, (t) => {
+    const f = fixture(t, 'herdr-lk3-degraded-policy-');
+    const panes = ['ws:a', 'ws:b'];
+    const locks = { slots: constraint === 'capacity' ? 1 : 2, guard: { enabled: true, maxLoadPercent: 100 } };
+    configureLockSettings(f, locks);
+    seedLockHistory(f);
+    let clock = Date.now();
+    const options = (pane) => lockOptions(f, pane, panes, { now: () => clock });
+    acquireProjectLock('full-suite', { ...options('ws:a'), kind: 'push' });
+    const policyFile = path.join(f.dataDir, 'policy.json');
+    let pauses = 0;
+    let ticketId;
+    const acquired = acquireProjectLock('full-suite', { ...options('ws:b'), kind: 'suite', waitSeconds: 2,
+      readMachineSample: () => ({ at: new Date(clock).toISOString(), l5: 2, cpus: 1 }),
+      pause: (ms) => {
+        clock += ms;
+        pauses++;
+        const [ticket] = readQueueFiles(f.dataDir);
+        assert.ok(ticket, 'the queued process must keep waiting during a degraded reload');
+        ticketId ??= ticket.id;
+        assert.equal(ticket.id, ticketId, 'the queued process must keep its original ticket');
+        assert.equal(fs.existsSync(path.join(f.dataDir, 'locks', 'machine', 'full-suite.short.1.json')), false);
+        if (pauses === 1) {
+          const valid = JSON.parse(fs.readFileSync(policyFile, 'utf8'));
+          if (damage === 'missing') fs.unlinkSync(policyFile);
+          else if (damage === 'invalid JSON') fs.writeFileSync(policyFile, '{cut');
+          else {
+            if (damage === 'invalid setting') {
+              if (constraint === 'capacity') valid.locks.slots = 0;
+              else valid.locks.guard.maxLoadPercent = '100';
+            }
+            if (damage === 'partial locks') delete valid.locks.slots;
+            if (damage === 'partial guard') delete valid.locks.guard.maxLoadPercent;
+            fs.writeFileSync(policyFile, JSON.stringify(valid));
+          }
+          releaseProjectLock('full-suite', options('ws:a'));
+        }
+        if (pauses === 3) configureLockSettings(f, { slots: 2, guard: { enabled: false } });
+      },
+    });
+    assert.equal(pauses, 3, 'admission must resume only after a complete valid policy returns');
+    assert.equal(acquired.slot, 1);
+    assert.deepEqual(readQueueFiles(f.dataDir), []);
+  });
+}
+
+test('LK3 R12 startup without a policy still uses legacy defaults', (t) => {
+  const f = fixture(t, 'herdr-lk3-startup-policy-');
+  fs.unlinkSync(path.join(f.dataDir, 'policy.json'));
+  const acquired = acquireProjectLock('full-suite', { ...lockOptions(f, 'ws:a', ['ws:a']), kind: 'suite' });
+  assert.equal(acquired.slot, 'long');
+});
+
+test('LK3 R13 a legacy shell-PID ticket expires at 30 minutes and is reclaimed after a two-hour clock advance', (t) => {
+  const f = fixture(t, 'herdr-lk3-legacy-ticket-age-');
+  const panes = ['ws:a', 'ws:b', 'ws:c'];
+  configureLockSettings(f, { slots: 2, guard: { enabled: false } });
+  seedLockHistory(f);
+  const start = Date.now();
+  const options = (pane, now) => lockOptions(f, pane, panes, { now, pidAlive: () => true });
+  acquireProjectLock('full-suite', { ...options('ws:a', start), kind: 'push' });
+  const legacy = writeLegacyTicket(f, 'ws:b');
+  Object.assign(legacy.ticket, { kind: 'manual', pid: 601, createdAt: new Date(start).toISOString() });
+  fs.writeFileSync(legacy.file, JSON.stringify(legacy.ticket));
+  const queueAt = (now) => readLockQueue({ dataDir: f.dataDir, livePanes: new Set(panes), pidAlive: () => true, now });
+  assert.equal(queueAt(start + 30 * 60_000 - 1).length, 1, 'a younger live legacy ticket still constrains admission');
+  assert.equal(queueAt(start + 30 * 60_000).length, 0, 'the legacy ticket lifetime is strictly younger than 30 minutes');
+  const acquired = acquireProjectLock('full-suite', { ...options('ws:c', start + 2 * 60 * 60_000), kind: 'suite', waitSeconds: 0 });
+  assert.equal(acquired.slot, 1);
+  assert.equal(fs.existsSync(legacy.file), false);
+});
+
+test('LK3 R13 a two-hour-old live legacy holder still requires exclusive admission', (t) => {
+  const f = fixture(t, 'herdr-lk3-legacy-holder-age-');
+  const panes = ['ws:a', 'ws:b'];
+  configureLockSettings(f, { slots: 2 });
+  seedLockHistory(f);
+  const holder = writeLegacyHolder(f, 'ws:a');
+  const now = Date.parse(holder.acquiredAt) + 2 * 60 * 60_000;
+  assert.throws(() => acquireProjectLock('full-suite', { ...lockOptions(f, 'ws:b', panes, { now }), kind: 'suite', waitSeconds: 0 }), (error) => error.exitCode === 75);
+});
+
+test('LK3 R13 new manual wait tickets use the CLI PID and acquired manual holders use the shell PID', (t) => {
+  const f = fixture(t, 'herdr-lk3-manual-ticket-pid-');
+  const panes = ['ws:a', 'ws:b'];
+  configureLockSettings(f, { slots: 1 });
+  const original = lockOptions(f, 'ws:a', panes);
+  const herdr = (args) => args[0] === 'pane' && args[1] === 'process-info'
+    ? { process_info: { shell_pid: 601 } } : original.herdr(args);
+  let clock = Date.now();
+  const options = (pane) => ({ ...lockOptions(f, pane, panes), herdr, now: () => clock, pidAlive: () => true });
+  acquireProjectLock('full-suite', { ...options('ws:a'), kind: 'suite' });
+  let sawTicket = false;
+  const acquired = acquireProjectLock('full-suite', { ...options('ws:b'), kind: 'manual', waitSeconds: 1,
+    pause: (ms) => {
+      clock += ms;
+      const [ticket] = readQueueFiles(f.dataDir);
+      assert.equal(ticket.pid, process.pid, 'canceling the waiting CLI must make its ticket stale');
+      sawTicket = true;
+      releaseProjectLock('full-suite', options('ws:a'));
+    },
+  });
+  assert.equal(sawTicket, true);
+  assert.equal(acquired.pid, 601);
+});
+
+for (const slot of ['long', 1]) for (const pane of ['ws:a', 'ws:b']) {
+  test(`LK3 R14 a token re-entry release selecting ${slot} from ${pane} preserves the outer push`, (t) => {
+    const f = fixture(t, 'herdr-lk3-selected-reentry-');
+    const panes = ['ws:a', 'ws:b'];
+    configureLockSettings(f, { slots: 2 });
+    if (slot === 1) seedLockHistory(f, 'push');
+    const token = 'selected-push-reentry-fixture-0001';
+    const owner = lockOptions(f, 'ws:a', panes);
+    const outer = acquireProjectLock('full-suite', { ...owner, kind: 'push', reentryToken: token });
+    assert.equal(outer.slot, slot);
+    const file = slot === 'long' ? f.lockFile : path.join(path.dirname(f.lockFile), `full-suite.short.${slot}.json`);
+    const before = fs.readFileSync(file, 'utf8');
+    const inner = { ...lockOptions(f, pane, panes), env: { ...lockOptions(f, pane, panes).env, HERDR_BOSS_LOCK_TOKEN: token } };
+    assert.equal(acquireProjectLock('full-suite', { ...inner, kind: 'suite' }).reentrant, true);
+    const released = releaseProjectLock('full-suite', { ...inner, slot });
+    assert.equal(released.reentrant, true);
+    assert.equal(fs.readFileSync(file, 'utf8'), before);
+    releaseProjectLock('full-suite', { ...owner, env: { ...owner.env, HERDR_BOSS_LOCK_TOKEN: token }, expectedRecord: outer });
+    assert.equal(fs.existsSync(file), false, 'the real owner still performs exact automatic cleanup');
+  });
+}
+
+test('LK3 R14 a selector for another owned record releases that record while preserving the token push', (t) => {
+  const f = fixture(t, 'herdr-lk3-other-selected-release-');
+  configureLockSettings(f, { slots: 2, guard: { enabled: false } });
+  seedLockHistory(f);
+  const owner = lockOptions(f, 'ws:a', ['ws:a']);
+  const token = 'other-selected-reentry-fixture-0001';
+  acquireProjectLock('full-suite', { ...owner, kind: 'push', reentryToken: token });
+  acquireProjectLock('full-suite', { ...owner, kind: 'suite' });
+  releaseProjectLock('full-suite', { ...owner, env: { ...owner.env, HERDR_BOSS_LOCK_TOKEN: token }, slot: 1 });
+  assert.equal(fs.existsSync(f.lockFile), true);
+  assert.equal(fs.existsSync(path.join(path.dirname(f.lockFile), 'full-suite.short.1.json')), false);
+});
+
+test('LK3 R15 legacy exclusivity displays effective capacity and global FIFO apart from saved capacity', (t) => {
+  const f = fixture(t, 'herdr-lk3-legacy-display-');
+  const panes = ['ws:a', 'ws:b', 'ws:c', 'ws:d'];
+  configureLockSettings(f, { slots: 3 });
+  writeLegacyHolder(f, 'ws:a');
+  const legacy = writeLegacyTicket(f, 'ws:b', 1);
+  for (const [seq, lane, pane] of [[2, 'short', 'ws:c'], [3, 'long', 'ws:d']]) {
+    const id = `00000000-0000-4000-8000-${String(seq).padStart(12, '0')}`;
+    fs.writeFileSync(path.join(legacy.queue, `${id}.json`), JSON.stringify({ ...legacy.ticket, id, seq, pane, lane }));
+  }
+  const options = { dataDir: f.dataDir, livePanes: new Set(panes), pidAlive: () => true };
+  const queue = readLockQueue(options);
+  assert.deepEqual(queue.map((ticket) => ticket.position), [1, 2, 3]);
+  for (const entry of [...queue, ...readMachineLocks(options)]) {
+    assert.equal(entry.slotLimit, 1);
+    assert.equal(entry.configuredSlotLimit, 3);
+    assert.equal(entry.admissionMode, 'legacy-exclusive');
+  }
+  assert.deepEqual(queue.map((ticket) => ticket.lane), ['long', 'long', 'long']);
 });

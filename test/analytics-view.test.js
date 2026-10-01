@@ -526,3 +526,17 @@ test('LK3 R6 the actual Analytics card renders slot use, predictions, and their 
   assert.doesNotMatch(selected.chart, /beta/);
   assert.match(selected.chart, /2 of 3 slots/, 'machine use keeps its machine scope under a project filter');
 });
+
+test('LK3 second review docs describe degraded reloads, legacy ticket expiry, selected re-entry, and effective capacity', () => {
+  const plan = fs.readFileSync(new URL('../docs/ideas/lock-lanes.md', import.meta.url), 'utf8');
+  for (const document of [cli, guide, plan]) {
+    assert.match(document, /last validated settings/);
+    assert.match(document, /younger than 30 minutes/);
+    assert.match(document, /waiting CLI process/);
+    assert.match(document, /re-entry release is a no-op[^\n]*slot selector/);
+    assert.match(document, /effective admission capacity[^\n]*saved capacity/);
+  }
+  assert.match(app, /last validated settings/);
+  assert.match(app, /younger than 30 minutes/);
+  assert.match(app, /re-entry release is a no-op/);
+});

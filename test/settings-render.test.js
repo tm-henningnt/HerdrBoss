@@ -206,3 +206,23 @@ test('LK3 R8 changing a blank guard field shows its error and keeps typed zero v
     app.context.document = originalDocument;
   }
 });
+
+test('LK3 R15 the lock panel labels saved and effective capacity during legacy exclusivity', async () => {
+  const app = await views();
+  const s = fixture();
+  s.policy.locks.slots = 3;
+  s.locks = [{ name: 'full-suite', scope: 'machine', state: 'live', lane: 'long', slot: 'long', kind: 'suite',
+    ownerPane: 'ws:legacy', project: 'alpha', ageSeconds: 60, slotsInUse: 1, slotLimit: 1,
+    configuredSlotLimit: 3, admissionMode: 'legacy-exclusive', predictedMs: null,
+    queue: [{ id: 'short', position: 2, lane: 'long', project: 'beta', pane: 'ws:wait', kind: 'suite', waitSeconds: 12, predictedMs: 60000 }],
+  }];
+  app.setState(s);
+  for (const render of [app.agentsView, app.allocationView]) {
+    const html = render(s);
+    assert.match(html, /Admission capacity: 1 slot/);
+    assert.match(html, /Saved capacity: 3 slots/);
+    assert.match(html, /global FIFO queue/);
+    assert.match(html, /Short lane <span>0 \/ 0 slots/);
+    assert.match(html, /2\. beta/);
+  }
+});

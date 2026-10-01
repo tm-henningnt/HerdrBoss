@@ -10,7 +10,7 @@ import { DEFAULT_RULES_FILE, loadProjectConfig } from './config.js';
 import { SWAP_FORCE_ENV, swapGuardFor } from './swap-guard.js';
 import { createHerdrRunner, verifyCallerPane } from './workers.js';
 import { DEFAULT_SUITE_UNTESTED, hookFileHash, hookRunsOnlySuites, reusablePushPass, writePushHookCommands } from './suite-passes.js';
-import { chooseLockSlot, classifyLockLane, lockAdmissionCapacity, machineGuardReason, readLockDurationPrediction } from './lock-lanes.js';
+import { chooseLockSlot, classifyLockLane, isLegacyLockEntry, lockAdmissionCapacity, machineGuardReason, readLockDurationPrediction } from './lock-lanes.js';
 
 const LOCK_NAME = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/;
 const COMMAND = (name) => `herdr-boss lock acquire ${name}`;
@@ -20,6 +20,7 @@ export const FULL_SUITE_LOCK = 'full-suite';
 const PUSH_LOCK_WAIT_SECONDS = 1800;
 export const MUTATION_GUARD_WAIT_MS = 5000;
 const MANUAL_LOCK_TTL_MS = 60 * 60 * 1000;
+export const LEGACY_TICKET_TTL_MS = 30 * 60 * 1000;
 const LOCK_WAIT_NOTICE_INTERVAL_MS = 60 * 1000;
 const LOCK_KINDS = new Set(['manual', 'suite', 'push']);
 const LOCK_NOTICE_TEXT = 'Your full-suite lock expired after 60 minutes and was released. Use herdr-boss suite -- <command> next time.';
@@ -181,6 +182,8 @@ function readQueueTickets(directory, name = FULL_SUITE_LOCK) {
 }
 
 function ticketIsLive(ticket, { livePanes, pidAlive = pidIsAlive, now = Date.now }) {
+  // Old manual waiters stored a persistent shell PID, so cancellation cannot prove they exited.
+  if (ticket.legacy && timeValue(now) - Date.parse(ticket.createdAt) >= LEGACY_TICKET_TTL_MS) return false;
   return lockIsLive({ name: FULL_SUITE_LOCK, ownerPane: ticket.pane, pid: ticket.pid, kind: ticket.kind }, {
     livePanes, pidAlive, now,
   });
@@ -680,12 +683,19 @@ export function lockLedgerSummary({ dataDir = DATA_DIR, now = Date.now } = {}) {
 
 const defaultPause = sleep;
 const ticketLane = (ticket, slots) => (slots < 2 || ticket?.lane !== 'short' ? 'long' : 'short');
-export function lockLaneSettings(dataDir) {
+export function lockLaneSettings(dataDir, { requireComplete = false } = {}) {
   let policy = {};
   try { policy = JSON.parse(fs.readFileSync(path.join(dataDir, 'policy.json'), 'utf8')); }
-  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  catch (error) {
+    if (requireComplete) return null;
+    if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
+  }
   const saved = policy?.locks && typeof policy.locks === 'object' && !Array.isArray(policy.locks) ? policy.locks : {};
   const guard = saved.guard && typeof saved.guard === 'object' && !Array.isArray(saved.guard) ? saved.guard : {};
+  const validNumber = (value, min, max) => Number.isInteger(value) && value >= min && value <= max;
+  if (requireComplete && (!validNumber(saved.slots, 1, 4) || !validNumber(saved.shortLimitMinutes, 1, 60)
+    || typeof guard.enabled !== 'boolean' || !validNumber(guard.maxLoadPercent, 0, 1000)
+    || !validNumber(guard.maxSwapPercent, 0, 100) || !validNumber(guard.minFreeMemPercent, 0, 100))) return null;
   const defaults = POLICY_DEFAULTS.locks;
   return {
     slots: Number.isInteger(saved.slots) && saved.slots >= 1 && saved.slots <= 4 ? saved.slots : defaults.slots,
@@ -761,6 +771,7 @@ export function acquireProjectLock(name, {
   let lastGuardNotice = null;
   let lastGuardNoticeAt = null;
   let failure = null;
+  let firstAttempt = true;
   try {
     for (;;) {
       let staleRecords = [];
@@ -769,8 +780,11 @@ export function acquireProjectLock(name, {
       try {
         outcome = withMutationLock(directory, () => {
           staleRecords = [];
-          // Saved capacity and guard settings apply at every guarded admission attempt.
-          settings = lockSettings ?? lockLaneSettings(dataDir);
+          // Startup alone may use legacy defaults. A degraded reload keeps the last policy and waits.
+          const reloaded = firstAttempt || lockSettings || !queued ? settings : lockLaneSettings(dataDir, { requireComplete: true });
+          firstAttempt = false;
+          const policyUnavailable = reloaded === null;
+          if (reloaded !== null) settings = reloaded;
           const configuredSlots = queued ? settings.slots : 1;
           let tickets = [];
           let livePanes = null;
@@ -810,7 +824,7 @@ export function acquireProjectLock(name, {
           if (reentrant) return { reentrant: { ...reentrant, reentrant: true }, tickets };
 
           if (queued && waitSeconds !== null && !ticket) {
-            ticket = createQueueTicket(directory, name, { config, caller, pid, kind, lane: classifiedLane, predictedMs, now }, tickets);
+            ticket = createQueueTicket(directory, name, { config, caller, pid: process.pid, kind, lane: classifiedLane, predictedMs, now }, tickets);
             ticketOutstanding = true;
             tickets.push(ticket);
             tickets.sort((left, right) => left.seq - right.seq || left.id.localeCompare(right.id));
@@ -822,7 +836,7 @@ export function acquireProjectLock(name, {
             lane, slots, holders: liveRecords, tickets, ticketId: ticket?.id ?? null,
           });
           const laneTickets = tickets.filter((entry) => ticketLane(entry, slots) === lane);
-          if (!choice) {
+          if (!choice || policyUnavailable) {
             const activeRecord = liveRecords.find((record) => record.slot === 'long') ?? liveRecords[0] ?? null;
             return { activeRecord, tickets: laneTickets };
           }
@@ -979,9 +993,10 @@ export function releaseProjectLock(name, {
   return withMutationLock(directory, () => {
     const entries = readLockRecords(directory, name, commonDir, scope);
     if (!entries.length) throw new Error(`Lock ${name} does not exist.`);
-    const reentrant = entries.find(({ record }) => reentryTokenMatches(record, env, pidAlive)
+    const reentrant = entries.find(({ record }) => (slot === null || record.slot === slot)
+      && reentryTokenMatches(record, env, pidAlive)
       && lockIsLive(record, { herdr, pidAlive, now, quietHours }));
-    if (reentrant && !expectedRecord && slot === null) {
+    if (reentrant && !expectedRecord) {
       const { record } = reentrant;
       recordLockRelease({ ...record, project: config.slug, ownerPane: caller.paneId }, { dataDir, now, holdMs: null, reentrant: true });
       return { ...record, reentrant: true };
@@ -1081,8 +1096,10 @@ export function readLockQueue({ dataDir = DATA_DIR, livePanes = null, herdr = cr
   const panes = livePanes ?? paneIds(herdr);
   const live = tickets.filter((ticket) => ticketIsLive(ticket, { livePanes: panes, pidAlive, now }));
   const settings = lockLaneSettings(dataDir);
-  const slots = Number.isInteger(settings?.slots) && settings.slots >= 1 && settings.slots <= 4 ? settings.slots : POLICY_DEFAULTS.locks.slots;
+  const configuredSlotLimit = settings.slots;
   const holders = readMachineLocks({ dataDir, livePanes: panes, pidAlive, now }).filter((record) => record.name === FULL_SUITE_LOCK && record.state === 'live');
+  const slots = lockAdmissionCapacity(configuredSlotLimit, holders, live);
+  const admissionMode = [...holders, ...live].some(isLegacyLockEntry) ? 'legacy-exclusive' : slots === 1 ? 'exclusive' : 'lanes';
   const lanes = new Map();
   return live.map((ticket) => {
     const lane = ticketLane(ticket, slots);
@@ -1097,6 +1114,8 @@ export function readLockQueue({ dataDir = DATA_DIR, livePanes = null, herdr = cr
       waitSeconds: Math.floor(waitMs / 1000),
       slotsInUse: holders.length,
       slotLimit: slots,
+      configuredSlotLimit,
+      admissionMode,
     };
   });
 }
@@ -1108,7 +1127,8 @@ export function readMachineLocks({ dataDir = DATA_DIR, livePanes = new Set(), pi
   try { files = fs.readdirSync(directory).filter((file) => file.endsWith('.json')).sort(); }
   catch (error) { if (error.code === 'ENOENT') return []; throw error; }
   const settings = lockLaneSettings(dataDir);
-  const slotLimit = Number.isInteger(settings?.slots) && settings.slots >= 1 && settings.slots <= 4 ? settings.slots : POLICY_DEFAULTS.locks.slots;
+  const configuredSlotLimit = settings.slots;
+  const tickets = readQueueTickets(directory).filter((ticket) => ticketIsLive(ticket, { livePanes, pidAlive, now }));
   const records = files.map((file) => {
     const record = readRecord(path.join(directory, file), null, 'machine');
     const ageMs = Math.max(0, timeValue(now) - Date.parse(record.acquiredAt));
@@ -1121,10 +1141,13 @@ export function readMachineLocks({ dataDir = DATA_DIR, livePanes = new Set(), pi
   });
   return records.map((record) => {
     const sameLock = records.filter((other) => other.name === record.name && other.state === 'live');
+    const slotLimit = lockAdmissionCapacity(configuredSlotLimit, sameLock, tickets);
     return {
       ...record,
       slotsInUse: sameLock.length,
       slotLimit,
+      configuredSlotLimit,
+      admissionMode: [...sameLock, ...tickets].some(isLegacyLockEntry) ? 'legacy-exclusive' : slotLimit === 1 ? 'exclusive' : 'lanes',
       laneSlotsInUse: {
         long: sameLock.filter((holder) => holder.slot === 'long').length,
         short: sameLock.filter((holder) => holder.slot !== 'long').length,
