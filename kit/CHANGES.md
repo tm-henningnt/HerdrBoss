@@ -153,3 +153,7 @@ Summary: Show the PID state of a slow lock holder. Find the Boss by agent name. 
 ## c1ca454f9191
 Impact: useful
 Summary: Restore excludes authentication path prefixes and sign-in hosts. It removes path parameters and rejects paths with invalid or excessive encoding.
+
+## b90d8cbfe22d
+Impact: required
+Summary: Record approved worker scope and the full branch diff during collection.

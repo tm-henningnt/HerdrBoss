@@ -377,6 +377,10 @@ test('a numeric string issue in a worker report is normalized with a warning', a
     assert.deepEqual(warnings, []);
     assert.ok(validateWorkerReport(report).some((error) => /issue must be null or a positive integer/.test(error)));
   }
+  const none = normalizeWorkerReport({ issue: 'none' });
+  assert.equal(none.report.issue, null);
+  assert.match(none.warnings[0], /issue is the string "none"; it is read as null/);
+  assert.deepEqual(validateWorkerReport({ ...validReport, issue: none.report.issue }, { evidenceTiers: ['unit'] }), []);
   assert.deepEqual(normalizeWorkerReport({ issue: 12 }).warnings, []);
   const brief = fs.readFileSync(path.resolve('kit/templates/worker-brief.md'), 'utf8');
   assert.ok(brief.includes('"issue": 204,'));
@@ -593,7 +597,7 @@ test('worker collect --record with --model-result writes the ledger and a valid 
   assert.equal(ledger[0].modelOutcome.result, 'first-time');
 });
 
-test('worker collect accepts a folder entry with a trailing slash inside the allowed paths, and still refuses a real omission', () => {
+test('worker collect accepts folder entries and records the branch diff when report paths are omitted', (t) => {
   const setup = (name, changedPaths, extraFile = null) => {
     const f = setupFixture(null);
     fs.writeFileSync(f.rulesFile, JSON.stringify({ policy: { allowedKinds: ['codex'], excludedModels: [], modelProviders: { 'gpt-6-luna': 'codex' } } }));
@@ -612,18 +616,28 @@ test('worker collect accepts a folder entry with a trailing slash inside the all
     fs.writeFileSync(path.join(reportDir, 'report.json'), JSON.stringify({
       issue: null, branch: run.branch, worktree: run.worktree, changedPaths, commands: ['focused check'], evidenceTier: ['unit'], unverified: [], stoppedEarly: false,
     }));
-    return () => collectWorker(name, { record: true, outcome: 'done', gatePassed: true }, {
-      config: f.config, now: Date.parse('2026-09-25T17:00:00Z'), output: () => {}, listWorktreeProcesses: () => [],
+    t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
+    const output = [];
+    const collect = () => collectWorker(name, { record: true, outcome: 'done', gatePassed: true }, {
+      config: f.config, now: Date.parse('2026-09-25T17:00:00Z'), output: (line) => output.push(line), listWorktreeProcesses: () => [],
       recordUsageFn: () => ({ errors: [], duplicate: false }),
     });
+    return { collect, output, f };
   };
   const runs = (name) => `.orchestration/runs/${name}.json`;
   // The folder entry covers both screenshots.
-  assert.doesNotThrow(setup('folder-ok', ['docs/shots/', runs('folder-ok')]));
-  // A file outside the folder that the report does not name is still an omission.
-  assert.throws(setup('folder-omit', ['docs/shots/', runs('folder-omit')], 'docs/notes.md'), /omitted changed paths from its report: docs\/notes\.md/);
-  // A folder entry without the trailing slash covers nothing.
-  assert.throws(setup('folder-noslash', ['docs/shots', runs('folder-noslash')]), /omitted changed paths/);
+  const folder = setup('folder-ok', ['docs/shots/', runs('folder-ok')]);
+  assert.doesNotThrow(folder.collect);
+  // The Git diff supplies paths that the report omits outside its folder entry.
+  const omitted = setup('folder-omit', ['docs/shots/', runs('folder-omit')], 'docs/notes.md');
+  const omittedSummary = omitted.collect();
+  assert.ok(omitted.output.includes('report.json omits 1 changed path(s); recorded the diff paths'));
+  assert.deepEqual(JSON.parse(fs.readFileSync(omitted.f.config.ledgerPath, 'utf8').trim()).changedPaths, omittedSummary.actualPaths);
+  // A folder entry without the trailing slash covers neither screenshot.
+  const noSlash = setup('folder-noslash', ['docs/shots', runs('folder-noslash')]);
+  const noSlashSummary = noSlash.collect();
+  assert.ok(noSlash.output.includes('report.json omits 2 changed path(s); recorded the diff paths'));
+  assert.deepEqual(JSON.parse(fs.readFileSync(noSlash.f.config.ledgerPath, 'utf8').trim()).changedPaths, noSlashSummary.actualPaths);
 });
 
 // A real git repository with its own HOME, so the Claude settings file stays in a temporary folder.

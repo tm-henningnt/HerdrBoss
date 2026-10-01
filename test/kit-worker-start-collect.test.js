@@ -378,7 +378,6 @@ test('worker collect checks the product paths next to an ignored kit path', (t) 
 test('worker collect --record refuses invalid reports and scopes without printing a success summary', () => {
   const cases = [
     { name: 'collect-scope-refusal', changedPath: 'docs/outside.md', allowedPaths: ['src/', '.orchestration/runs/'], reportPaths: ['docs/outside.md'], error: /outside its allowed scope/ },
-    { name: 'collect-omitted-refusal', changedPath: 'src/change.js', allowedPaths: ['src/', '.orchestration/runs/'], reportPaths: [], error: /omitted changed paths/ },
     { name: 'collect-report-branch-refusal', changedPath: null, reportPatch: { branch: 'other' }, error: /Report branch other does not match/ },
     { name: 'collect-report-worktree-refusal', changedPath: null, reportPatch: { worktree: '/missing/worktree' }, error: /does not match run worktree/ },
     { name: 'collect-report-issue-refusal', issue: 74, reportPatch: { issue: 75 }, error: /Report issue 75 does not match run issue 74/ },
@@ -433,6 +432,92 @@ test('worker collect --record refuses invalid reports and scopes without printin
     if (run.worktree !== f.root) git(f.root, 'worktree', 'remove', '--force', run.worktree);
     fs.rmSync(f.root, { recursive: true, force: true });
   }
+});
+
+test('worker collect records the branch diff when report.json omits an allowed changed path', (t) => {
+  const f = setupFixture(null);
+  git(f.root, 'add', '-A');
+  git(f.root, 'commit', '--allow-empty', '-m', 'fixture configuration');
+  const run = startWorker('collect-omitted-path', { kind: 'codex', task: 'x', allow: ['src/', '.orchestration/runs/'], noWorktree: true }, {
+    config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+  });
+  t.after(() => {
+    if (run.worktree !== f.root) git(f.root, 'worktree', 'remove', '--force', run.worktree);
+    fs.rmSync(f.root, { recursive: true, force: true });
+  });
+  fs.mkdirSync(path.join(run.worktree, 'src'));
+  fs.writeFileSync(path.join(run.worktree, 'src', 'change.js'), 'export const changed = true;\n');
+  git(run.worktree, 'add', 'src/change.js');
+  git(run.worktree, 'commit', '-m', 'worker change');
+  const reportDir = path.join(run.worktree, run.workerDir);
+  fs.writeFileSync(path.join(reportDir, 'report.md'), 'The final round report omits an earlier round path.\n');
+  fs.writeFileSync(path.join(reportDir, 'report.json'), JSON.stringify({
+    issue: null, branch: run.branch, worktree: run.worktree, changedPaths: [`.orchestration/runs/${run.name}.json`],
+    commands: ['focused check'], evidenceTier: ['unit'], unverified: [], stoppedEarly: false,
+  }));
+  const output = [];
+  const summary = collectWorker('collect-omitted-path', { record: true, outcome: 'done', gatePassed: true }, {
+    config: f.config, output: (line) => output.push(line), listWorktreeProcesses: () => [],
+    recordUsageFn: () => ({ errors: [], duplicate: false }),
+  });
+  const ledgerEntry = JSON.parse(fs.readFileSync(f.config.ledgerPath, 'utf8').trim());
+  assert.deepEqual(summary.reportedPaths, [`.orchestration/runs/${run.name}.json`]);
+  assert.ok(summary.actualPaths.includes('src/change.js'));
+  assert.deepEqual(ledgerEntry.changedPaths, summary.actualPaths);
+  assert.ok(output.includes('report.json omits 1 changed path(s); recorded the diff paths'));
+});
+
+test('worker collect normalizes issue none to null and warns', (t) => {
+  const f = setupFixture(null);
+  git(f.root, 'add', '-A');
+  git(f.root, 'commit', '--allow-empty', '-m', 'fixture configuration');
+  const run = startWorker('collect-issue-none', { kind: 'codex', task: 'x', allow: ['src/', '.orchestration/runs/'], noWorktree: true }, {
+    config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+  });
+  t.after(() => {
+    if (run.worktree !== f.root) git(f.root, 'worktree', 'remove', '--force', run.worktree);
+    fs.rmSync(f.root, { recursive: true, force: true });
+  });
+  const reportDir = path.join(run.worktree, run.workerDir);
+  fs.writeFileSync(path.join(reportDir, 'report.md'), 'Report uses the accepted null issue marker.\n');
+  fs.writeFileSync(path.join(reportDir, 'report.json'), JSON.stringify({
+    issue: 'none', branch: run.branch, worktree: run.worktree, changedPaths: [`.orchestration/runs/${run.name}.json`],
+    commands: ['focused check'], evidenceTier: ['unit'], unverified: [], stoppedEarly: false,
+  }));
+  const output = [];
+  const summary = collectWorker('collect-issue-none', { noRecord: true }, {
+    config: f.config, output: (line) => output.push(line), listWorktreeProcesses: () => [],
+  });
+  assert.equal(summary.issue, null);
+  assert.ok(output.some((line) => /issue is the string "none"; it is read as null/.test(line)));
+});
+
+test('worker collect advises its caller shell to leave the worktree and ignores that process tree', (t) => {
+  const fixture = setupKitPathFixture('collect-caller-shell');
+  t.after(fixture.clean);
+  fixture.writeReport([]);
+  const output = [];
+  const summary = collectWorker('collect-caller-shell', { noRecord: true }, {
+    config: fixture.config, output: (line) => output.push(line), callerPid: 500, callerPpid: 400,
+    listWorktreeProcesses: () => [
+      { pid: 500, ppid: 400, command: 'node', cwd: fixture.run.worktree },
+      { pid: 400, ppid: 1, command: 'zsh', cwd: fixture.run.worktree },
+    ],
+  });
+  assert.equal(summary.name, 'collect-caller-shell');
+  assert.ok(output.includes(`cd ${fixture.config.mainRoot}`));
+});
+
+test('worker collect names a separate background shell that keeps the worktree cwd', (t) => {
+  const fixture = setupKitPathFixture('collect-background-shell');
+  t.after(fixture.clean);
+  fixture.writeReport([]);
+  assert.throws(() => collectWorker('collect-background-shell', { noRecord: true }, {
+    config: fixture.config, output: () => {}, callerPid: 500, callerPpid: 400,
+    listWorktreeProcesses: () => [
+      { pid: 600, ppid: 1, command: 'zsh', cwd: fixture.run.worktree },
+    ],
+  }), new RegExp(`your own background shell \\(pid 600, command zsh\\) has its cwd in the worktree\\. Change directory or stop it\\.`));
 });
 
 test('worker collect --record after merge and pane close writes one main-checkout ledger entry', (t) => {
