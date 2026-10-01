@@ -77,7 +77,7 @@ function stripPng(bytes) {
     if (first && (type !== 'IHDR' || length !== 13)) invalid();
     first = false;
     if (type === 'IDAT') image = true;
-    if (!['eXIf', 'tEXt', 'iTXt', 'zTXt'].includes(type)) parts.push(bytes.subarray(at, end));
+    if (!['eXIf', 'tEXt', 'iTXt', 'zTXt', 'tIME'].includes(type)) parts.push(bytes.subarray(at, end));
     at = end;
     if (type === 'IEND') {
       if (length || at !== bytes.length || !image) invalid();
