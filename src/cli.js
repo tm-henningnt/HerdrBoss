@@ -207,6 +207,9 @@ const USAGE = `herdr-boss <command>
   review result [SLUG] PACK [--version N] [--format json|md]  Print the stored result of a submitted review: Markdown by default. PACK can also be SLUG/PACK. Exit 3 when there is no result.
   review delete [SLUG] PACK  Delete a review pack and close its Mailbox item. Same caller rules as publish.
   review list [SLUG] [--state open|done|all] [--json]  List review packs.
+  plan start KIND PROJECT --input PATH --pane PANE  Start a planner session for a pane and label the pane planner. The pane can then run review publish for PROJECT.
+  plan list [PROJECT] [--all] [--json]  List the active planner sessions. --all adds ended sessions.
+  plan end ID  End a planner session and clear the pane label.
   kit-path              Print the shared kit directory.
 `;
 
@@ -362,6 +365,13 @@ async function main() {
     const { reviewCommand } = await import('./review-cli.js');
     const { createHerdrRunner } = await import('./kit/workers.js');
     const code = reviewCommand(args, { env: process.env, herdr: createHerdrRunner() });
+    if (code) process.exitCode = code;
+    return;
+  }
+  if (cmd === 'plan') {
+    const { planCommand } = await import('./plan-cli.js');
+    const { createHerdrRunner } = await import('./kit/workers.js');
+    const code = planCommand(args, { env: process.env, herdr: createHerdrRunner() });
     if (code) process.exitCode = code;
     return;
   }

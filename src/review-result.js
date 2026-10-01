@@ -8,6 +8,7 @@ export const RESULT_JSON_MAX = 256 * 1024;
 export const RESULT_MARKDOWN_MAX = 64 * 1024;
 export const PROMPT_MAX = 1500;
 export const PROMPT_LINE_MAX = 200;
+export const PLANNER_PROMPT_MAX = 4000;
 const PROMPT_TITLE_MAX = 60;
 const PROMPT_ID_MAX = 80;
 
@@ -61,13 +62,18 @@ export function buildResult(pack, verdict, note, at) {
     const out = { id: item.id, title: item.title, section: item.section, hash: item.hash, state: item.state };
     const answer = item.answer;
     if (item.stale) out.stale = true;
+    if (item.skipped) out.skipped = true;
     if (item.state === 'changed' && answer?.previous) {
       const { decision, choice, rating, live, at } = answer.previous;
       out.was = Object.fromEntries(Object.entries({ decision, choice, rating, live, at }).filter(([, value]) => value != null));
     }
     if (answer) {
-      if (answer.decision) out.decision = answer.decision;
-      if (answer.choice !== null) out.choice = answer.choice;
+      if (answer.decision === 'accept' || answer.decision === 'deny') out.decision = answer.decision;
+      if (answer.choice !== null) {
+        out.choice = answer.choice;
+        const label = specs.get(item.id)?.choices?.find((choice) => choice.id === answer.choice)?.label;
+        if (label) out.choiceLabel = label;
+      }
       if (answer.rating !== null) out.rating = answer.rating;
       if (answer.live) out.live = answer.live;
       if (answer.note) out.note = answer.note;
@@ -84,6 +90,7 @@ export function buildResult(pack, verdict, note, at) {
     pack: pack.pack,
     title: pack.title,
     version: pack.version,
+    ...(pack.manifest.session ? { session: pack.manifest.session, ...(pack.manifest.round ? { round: pack.manifest.round } : {}) } : {}),
     submittedAt: at,
     verdict,
     note,
@@ -155,6 +162,7 @@ export function resultMarkdown(result, titles = new Map()) {
   };
   const lines = [`# Review result: ${singleLine(result.title ?? result.pack, 120)} v${result.version}, ${verdictLabel(result.verdict)}`, ''];
   lines.push(`${countLine(result.counts)} Submitted ${result.submittedAt}.`, '');
+  if (result.session) lines.push(`Session ${singleLine(result.session, 64)}${result.round ? `, round ${result.round}` : ''}.`, '');
   if (result.note) lines.push('## Pack note', '', quote(result.note), '');
   const group = (heading, items, render) => {
     if (!items.length) return;
@@ -169,7 +177,7 @@ export function resultMarkdown(result, titles = new Map()) {
   group('Notes', items.filter((item) => item.state === 'note' || (item.state === 'accepted' && item.note)), (item) => noted(name(item), item, item.state === 'accepted' ? ' (accepted)' : ''));
   group('Answered', items.filter((item) => item.state === 'answered'), (item) => noted(name(item), item, `: ${item.choice !== undefined ? `choice ${item.choice}` : item.rating !== undefined ? `rating ${item.rating}` : 'live check done'}`));
   group('Changed since accepted', items.filter((item) => item.state === 'changed'), (item) => noted(name(item), item, item.was?.decision ? ` (was ${item.was.decision})` : ' (changed in this version)'));
-  group('Open', items.filter((item) => item.state === 'open'), (item) => noted(name(item), item, item.stale ? ' (changed in this version)' : ''));
+  group('Open', items.filter((item) => item.state === 'open'), (item) => noted(name(item), item, item.skipped ? ' (skipped)' : item.stale ? ' (changed in this version)' : ''));
   const accepted = items.filter((item) => item.state === 'accepted' && !item.note).map((item) => item.id);
   if (accepted.length) lines.push('## Accepted', '', accepted.join(', '), '');
   group('Unticked checklist entries', items.filter((item) => item.unchecked?.length), (item) => `- ${item.id}: ${item.unchecked.join(', ')}`);
@@ -206,4 +214,44 @@ export function promptText(result) {
   }
   const left = candidates.length - included.length;
   return [header, ...included, ...(left ? [`… ${left} more`] : []), footer].join('\n');
+}
+
+// The message for a planner pane. It lists each choice with its label, the notes, and each skipped item. It has at most
+// PLANNER_PROMPT_MAX characters and each line at most PROMPT_LINE_MAX. Every Owner text goes through singleLine() and
+// redactSecrets(), so a note cannot add a line to the prompt. The planner pane cannot run `review result`, so the text holds the answers.
+export function plannerPromptText(result) {
+  const counts = result.counts ?? {};
+  const one = (value, max) => singleLine(redactSecrets(String(value ?? '')), max);
+  const tag = result.session ? (result.round ? `, round ${result.round} (session ${one(result.session, 64)})` : `, session ${one(result.session, 64)}`) : '';
+  const header = cutText(`[owner] Review result for ${one(result.title ?? result.pack, PROMPT_TITLE_MAX)} v${result.version}${tag}: ${verdictLabel(result.verdict)}. Denied: ${counts.denied ?? 0}, needs live check: ${counts.live ?? 0}, accepted: ${counts.accepted ?? 0}, open: ${counts.open ?? 0}.`, PROMPT_LINE_MAX);
+  const items = result.items ?? [];
+  const noteOf = (item) => (item.note ? ` Note: ${one(item.note, PROMPT_LINE_MAX)}` : '');
+  const sections = [];
+  if (result.note) sections.push({ title: null, lines: [cutText(`Pack note: ${one(result.note, PROMPT_LINE_MAX)}`, PROMPT_LINE_MAX)] });
+  const choices = items.filter((item) => item.choice !== undefined && item.choice !== null);
+  sections.push({ title: 'Choices:', lines: choices.map((item) => cutText(`- ${one(item.id, PROMPT_ID_MAX)}: ${one(item.choiceLabel ?? item.choice, 100)}.${noteOf(item)}`, PROMPT_LINE_MAX)) });
+  const choiceIds = new Set(choices.map((item) => item.id));
+  sections.push({ title: 'Denied:', lines: items.filter((item) => item.state === 'denied').map((item) => cutText(`- ${one(item.id, PROMPT_ID_MAX)}.${noteOf(item)}`, PROMPT_LINE_MAX)) });
+  sections.push({ title: 'Needs live check:', lines: items.filter((item) => item.state === 'live').map((item) => cutText(`- ${one(item.id, PROMPT_ID_MAX)}.${noteOf(item)}`, PROMPT_LINE_MAX)) });
+  sections.push({ title: 'Notes:', lines: items.filter((item) => item.note && !choiceIds.has(item.id) && !item.skipped && item.state !== 'denied' && item.state !== 'live').map((item) => cutText(`- ${one(item.id, PROMPT_ID_MAX)}: ${one(item.note, PROMPT_LINE_MAX)}`, PROMPT_LINE_MAX)) });
+  sections.push({ title: 'Skipped (ask later):', lines: items.filter((item) => item.skipped).map((item) => cutText(`- ${one(item.id, PROMPT_ID_MAX)}.${noteOf(item)}`, PROMPT_LINE_MAX)) });
+  const lines = [];
+  for (const section of sections) {
+    if (!section.lines.length) continue;
+    if (section.title) lines.push({ text: section.title });
+    for (const line of section.lines) lines.push({ text: line });
+  }
+  const out = [header];
+  let used = header.length;
+  for (const [index, line] of lines.entries()) {
+    const remaining = lines.length - index;
+    // Keep room for the "… N more" line.
+    if (used + 1 + line.text.length + (remaining > 1 ? 16 : 0) > PLANNER_PROMPT_MAX) {
+      out.push(`… ${remaining} more`);
+      break;
+    }
+    out.push(line.text);
+    used += 1 + line.text.length;
+  }
+  return out.join('\n');
 }

@@ -15,6 +15,7 @@ import { TASK_ID } from '../task-state.js';
 import { swapRefusal, swapExempt } from './swap-guard.js';
 import { recordWorkerReport, workerRunId } from '../agent-messages.js';
 import { scheduleWorkerPaneClose } from '../maintenance.js';
+import { PLANNER_LABEL, activeSessionForPane, endSession, startSession } from '../planner-sessions.js';
 
 const NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
 const AGENT_READY_MARKERS = Object.freeze({
@@ -911,6 +912,7 @@ function renderStartPlan(plan) {
     `8. Write run record: ${plan.recordFile}`,
     `9. Send task prompt and observe agent activity:`,
     `   $ herdr agent prompt ${displayArg(plan.name)} "${briefPrompt(plan.workerDir)}"`,
+    ...(plan.planner ? [`10. Start a planner session for the worker pane and label the pane ${PLANNER_LABEL}:`, `   $ herdr pane rename ${displayArg(plan.paneId)} ${PLANNER_LABEL}`] : []),
   ];
   return lines.join('\n');
 }
@@ -1277,6 +1279,7 @@ export function startWorker(name, options, {
     workerDir, tmpDir,
     copyFiles,
     leasePools,
+    planner: !!options.planner,
   };
   if (options.dryRun) {
     output(renderStartPlan(plan));
@@ -1444,6 +1447,12 @@ export function startWorker(name, options, {
       startedAt: new Date(now).toISOString(),
     };
     writeJsonAtomic(recordFile, record);
+    if (options.planner) {
+      // The worker pane gets the label planner and a registry record. The pane can then run `review publish` for this project.
+      herdr(['pane', 'rename', paneId, PLANNER_LABEL]);
+      const session = startSession({ dir: env.HERDR_BOSS_DIR || path.join(os.homedir(), '.herdr-boss'), now, kind: options.kind, project: config.slug, pane: paneId, input: path.join(worktree, plan.workerDir, 'brief.md') });
+      output(`Started planner session ${session.id} for ${config.slug} on pane ${paneId}.`);
+    }
     if (options.kind === 'claude' && opusForce) alertBossForOpus(name, model, options, config, env, herdr, now, output);
     const delivery = deliverBrief(name, options.kind, herdr, readWorkerText, wait, output, plan.workerDir);
     if (delivery === 'resent') output(`Resent the brief prompt to ${name}: the first prompt did not reach the agent.`);
@@ -1752,6 +1761,16 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
         const taken = new Set(run.leases.map((lease) => `${lease.pool}\n${lease.item}`));
         releasedLeases.push(...dropLeases((lease) => lease.project === config.slug && lease.worker === name && taken.has(`${lease.pool}\n${lease.item}`), { dataDir: leaseDataDir }));
       }
+    }
+    // The collected worker is done, so its planner session ends. A later result goes to the orch pane.
+    if (record && run.pane) {
+      try {
+        const planner = activeSessionForPane({ dir: leaseDataDir, pane: run.pane });
+        if (planner) {
+          endSession({ dir: leaseDataDir, now, id: planner.id });
+          output(`Ended planner session ${planner.id}.`);
+        }
+      } catch (error) { output(`Warning: planner session was not ended: ${error.message}`); }
     }
     for (const warning of normalized.warnings) output(warning);
     if (record && !reportJson.modelOutcome && !options.modelResult) {

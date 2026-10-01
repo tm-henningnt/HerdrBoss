@@ -22,6 +22,7 @@ const ICON = {
   close: '<path d="M6 6l12 12M18 6 6 18"/>',
   note: '<path d="M5 4.5h14v11H10l-5 4v-15Z"/><path d="M9 9h6M9 12h4"/>',
   live: '<path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v5H5V6h5"/>',
+  later: '<circle cx="12" cy="12" r="8"/><path d="M12 8v4.5l3 1.5"/>',
   star: '<path d="m12 4 2.4 5 5.4.6-4 3.7 1.1 5.4L12 16l-4.9 2.7 1.1-5.4-4-3.7 5.4-.6z"/>',
   pin: '<path d="M12 21s-6-5.6-6-10.5a6 6 0 0 1 12 0C18 15.4 12 21 12 21Z"/><circle cx="12" cy="10.5" r="2"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
@@ -48,7 +49,7 @@ const newTab = `${ICON_NEW_TAB}<span class="rv-open-note">(opens in a new tab)</
 
 const VIEWER_KEYS = {
   j: 'next', ArrowRight: 'next', k: 'prev', ArrowLeft: 'prev', J: 'next-section', K: 'prev-section', n: 'next-open',
-  a: 'accept', d: 'deny', l: 'live', c: 'note', p: 'pin', v: 'viewed', e: 'viewed-next', t: 'pair', z: 'fit',
+  a: 'accept', d: 'deny', b: 'skip', l: 'live', c: 'note', p: 'pin', v: 'viewed', e: 'viewed-next', t: 'pair', z: 'fit',
   '+': 'zoom-in', '=': 'zoom-in', '-': 'zoom-out', s: 'summary', u: 'back', Escape: 'back', '?': 'help',
 };
 
@@ -601,7 +602,7 @@ export function answerBarHtml(pack, item, ui, h) {
   const rows = [];
   if (ask.includes('choice')) {
     const choices = (spec.choices || []).filter(Boolean).map((choice, i) => `<button type="button" class="rv-choice" data-rv-choice="${esc(choice.id)}" aria-pressed="${answer.choice === choice.id ? 'true' : 'false'}"${busy('choice')}${off}>`
-      + `${answer.choice === choice.id ? viewerIcon('check') : ''}<span>${esc(choice.label)}</span>${kbd(i + 1)}</button>`).join('');
+      + `${answer.choice === choice.id ? viewerIcon('check') : ''}<span>${esc(choice.label)}</span>${choice.recommended === true ? '<span class="rv-recommended">Recommended</span>' : ''}${kbd(i + 1)}</button>`).join('');
     rows.push(`<div class="rv-choices" role="group" aria-label="Choice">${choices}</div>`);
   }
   if (ask.includes('rating')) {
@@ -621,6 +622,8 @@ export function answerBarHtml(pack, item, ui, h) {
   }
   if (ask.includes('accept')) main.push(button('data-rv-decision="accept"', 'decision', answer.decision === 'accept', 'ok', 'check', 'Accept', 'a'));
   if (main.length) rows.push(`<div class="rv-acts" style="--rv-acts: ${main.length}">${main.join('')}</div>`);
+  // Ask later is built in. It needs no `ask` entry. The item stays open and moves to the end of the pack.
+  rows.push(`<div class="rv-later">${button('data-rv-decision="skip"', 'decision', answer.decision === 'skip', '', 'later', 'Ask later', 'b')}</div>`);
   const readOnly = off ? '<p class="rv-help-line">Read only.</p>' : '';
   // The pill sits above the bar in its own slot, so a status change never moves a button under the finger.
   return `<div class="rv-answer" data-key="rv-answer:${esc(item.id)}" role="group" aria-label="Answer">${packStatusHtml(ui.packSync || { kind: '' }, esc)}${readOnly}${rows.join('')}</div>`;

@@ -9,6 +9,7 @@ import { buildImport, safeText } from './review-import.js';
 import { publishVersion, getPack, getResultRecord, listPacks, deletePack, setMailId, ReviewStoreError } from './review-store.js';
 import { resultMarkdown, verdictLabel } from './review-result.js';
 import { verifyMessageCaller, readControl, readMessages, postReview, closeReviewItems, refuseSecret } from './messages.js';
+import { PLANNER_LABEL, activeSessionForPane, setRound } from './planner-sessions.js';
 
 export const EXIT = Object.freeze({ ok: 0, refused: 1, invalid: 2, missing: 3 });
 
@@ -25,7 +26,7 @@ const USAGE = {
 };
 const USAGE_ALL = `Usage: review check|publish|import|result|delete|list. Run herdr-boss with no command to see each form.`;
 
-class ReviewCliError extends Error {
+export class ReviewCliError extends Error {
   constructor(message, code = EXIT.refused) {
     super(message);
     this.exitCode = code;
@@ -56,16 +57,24 @@ const checkSlug = (slug, usage) => {
   return slug;
 };
 
-const isPlainTerminal = (env) => env.HERDR_ENV !== '1' && !env.HERDR_PANE_ID && !env.HERDR_WORKSPACE_ID;
+export const isPlainTerminal = (env) => env.HERDR_ENV !== '1' && !env.HERDR_PANE_ID && !env.HERDR_WORKSPACE_ID;
 
-const projectOf = (control, workspace) => Object.values(control?.projects || {}).find((project) => project?.workspace === workspace)?.slug ?? null;
+export const projectOf = (control, workspace) => Object.values(control?.projects || {}).find((project) => project?.workspace === workspace)?.slug ?? null;
 
 // The caller rules of publish, import, and delete. Returns { role, from }.
 // A plain terminal is the Owner and may name any slug. A pane goes through the same check as `say`: the label is boss or orch.
 // An orch pane must name the slug of its own workspace. The boss pane must name the slug boss, its own thread.
-function verifyReviewCaller(command, slug, { env, herdr, control }) {
+// With `planner`, a pane labeled planner may call too. It needs an active planner session and must name the project of that session.
+// The result then has role planner and the session.
+export function verifyReviewCaller(command, slug, { env, herdr, control, dir }, { planner = false } = {}) {
   if (isPlainTerminal(env)) return { role: 'owner', from: 'orch' };
-  const caller = verifyMessageCaller(env, herdr, command);
+  const caller = verifyMessageCaller(env, herdr, command, { labels: planner ? ['boss', 'orch', PLANNER_LABEL] : ['boss', 'orch'] });
+  if (caller.role === PLANNER_LABEL) {
+    const session = activeSessionForPane({ dir, pane: caller.paneId });
+    if (!session) throw new ReviewCliError(`The pane ${caller.paneId} is labeled ${PLANNER_LABEL} but has no active planner session. Ask the orchestrator to run herdr-boss plan start.`);
+    if (session.project !== slug) throw new ReviewCliError(`This pane has a planner session for project ${session.project}. It can run herdr-boss ${command} only for the slug ${session.project}, not for ${slug}.`);
+    return { role: 'planner', from: 'orch', session, planner: { session: session.id, pane: session.pane } };
+  }
   if (caller.role === 'boss') {
     if (slug !== 'boss') throw new ReviewCliError(`The pane labeled boss can run herdr-boss ${command} only for the slug boss, not for ${slug}.`);
     return { role: 'boss', from: 'boss' };
@@ -122,7 +131,7 @@ const changeText = (published) => {
 // and the repair: the same publish command posts the missing item and makes no new version.
 function postItem({ slug, pack, version, title, text, caller }, { dir, now, deps }) {
   try {
-    const record = deps.postReview({ slug, pack, title, version, text, role: caller.from }, { dir, now });
+    const record = deps.postReview({ slug, pack, title, version, text, role: caller.from, planner: caller.planner }, { dir, now });
     deps.setMailId({ dir, slug, pack, mailId: record.id });
     return record;
   } catch (error) {
@@ -170,9 +179,14 @@ function publishFolder({ slug, folder, caller, note, dryRun, imported = false },
     return EXIT.ok;
   }
   const existing = getPack({ dir, slug, pack: manifest.id });
-  if (existing && existing.state === 'open' && note === undefined && JSON.stringify(existing.manifest) === JSON.stringify(manifest)) {
+  // A planner publish fills session and round, so the compare leaves both out.
+  const content = (value) => { const { session, round, ...rest } = value; return caller.planner ? rest : value; };
+  if (existing && existing.state === 'open' && note === undefined && JSON.stringify(content(existing.manifest)) === JSON.stringify(content(manifest))) {
     return republishUnchanged({ slug, existing, manifest, summary, caller }, ctx);
   }
+  // A planner pane publishes in the name of its session. The next round is stored after the publish succeeds.
+  const round = caller.planner ? caller.session.round + 1 : null;
+  if (caller.planner) Object.assign(manifest, { session: caller.session.id, round });
   let published;
   try {
     published = deps.publishVersion({ dir, now, slug, folder, publishedBy: caller.from, validation });
@@ -191,8 +205,12 @@ function publishFolder({ slug, folder, caller, note, dryRun, imported = false },
   if (changes) paragraph.push(changes);
   if (published.stale.length) paragraph.push(`${plural(published.stale.length, 'answer')} need a new decision.`);
   const text = [paragraph.join(' '), note?.trim()].filter(Boolean).join('\n\n');
+  if (caller.planner) {
+    try { setRound({ dir, id: caller.session.id, round }); }
+    catch (error) { err(`Warning: Herdr Boss did not store round ${round} of the planner session: ${safeText(error?.message, 200)}`); }
+  }
   const record = postItem({ slug, pack: published.pack, version: published.version, title: manifest.title, text, caller }, ctx);
-  out(`Published ${slug}/${published.pack} v${published.version}: ${summary}.`);
+  out(`Published ${slug}/${published.pack} v${published.version}: ${summary}.${caller.planner ? ` Session ${caller.session.id}, round ${round}.` : ''}`);
   out(`Review: ${reviewUrl(slug, published.pack, ctx.baseUrl)}`);
   out(`Mailbox item ${record.id} asks the Owner to decide.`);
   if (published.stale.length) out(`${plural(published.stale.length, 'answer')} need a new decision: ${published.stale.join(', ')}.`);
@@ -220,7 +238,7 @@ function publishCommand(args, ctx) {
   const { flags, positional } = parse(args, { values: ['--note'], switches: ['--dry-run'] }, USAGE.publish);
   if (positional.length !== 2) throw new ReviewCliError(USAGE.publish);
   const slug = checkSlug(positional[0], USAGE.publish);
-  const caller = verifyReviewCaller('review publish', slug, ctx);
+  const caller = verifyReviewCaller('review publish', slug, ctx, { planner: true });
   return publishFolder({ slug, folder: positional[1], caller, note: flags['--note'], dryRun: !!flags['--dry-run'] }, ctx);
 }
 

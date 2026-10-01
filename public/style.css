@@ -2560,6 +2560,12 @@ a.rv-page-link:hover { background: var(--panel-2); }
 #app .rv-star.on { color: var(--warn); }
 .rv-star.on .app-icon { fill: currentColor; }
 .rv-rating-text { margin-left: 8px; color: var(--muted); font-size: 13px; }
+.rv-later { flex: 1 0 100%; display: flex; justify-content: center; }
+#app .rv-later .rv-act { grid-auto-flow: column; min-height: 40px; padding: 4px 14px; gap: 8px; }
+#app .rv-later .rv-act[aria-pressed="true"] { background: var(--panel-2); color: var(--text); }
+.rv-later .app-icon { width: 18px; height: 18px; }
+.rv-recommended { padding: 1px 6px; border-radius: 999px; background: color-mix(in srgb, var(--ok) 14%, transparent); color: var(--ok); font: 650 11px var(--sans); white-space: nowrap; }
+.review-head-session { margin: -4px 0 10px; color: var(--muted); font-size: 12px; }
 .rv-kbd { display: none; }
 #app .rv-viewed-toggle[aria-pressed="true"] .review-viewed { border-color: var(--ok); background: var(--ok); color: var(--panel); }
 
