@@ -143,11 +143,20 @@ Owner queue (credentials, billing, and Owner-applied settings):
 
 ## State 2026-10-01
 
-- **Main:** `e530d97`, pushed and live. It holds the review packs (RP2 to RP12), T2, BO1, WC1, MX1 and MX2, SD1 (Watch page Stand down and Resume), and PG1 (pool settings on the Settings page). The kit revision is `e4591d0a3d3d`.
+- **Main:** `e3f5026`, pushed and live. It holds the review packs (RP2 to RP12), T2, BO1, WC1, MX1, MX2, SD1 (Watch page Stand down and Resume), PG1, DD1, DD2, TP1, TP2 (test/handoff and test/kit split), and BR2. The kit revision is `315d28e0a176`.
 - **Claude lane:** the weekly lane is ahead of pace. Start no claude worker until the Boss says it is back on pace. Use opencode, pi, and codex.
 - **Mailbox rule (Owner, via the Boss):** an item closes only through its linked task (`mailboxId`): done, removed from the status, or no longer waiting on the Owner. An unlinked item and each item that the Boss posts never close by time.
-- **Test files at a time:** on this repo, 4 files at a time ran about 35 percent faster than 2 (about 210 s against 320 s), with more load (average 8.6 against 6.2) and no failure. Nothing is changed. The Viz measurement needs the lock list empty, the Viz orchestrator asked first, and the time after 08:40.
-- **Running or queued:** none.
+- **Test files at a time:** on this repo, 4 files at a time ran about 35 percent faster than 2 with no failure. On the Viz suite it was 44 percent faster (541 s to 301 s). Nothing is changed.
 - **Commit rule:** the `Kit-Impact:` line and the `Co-Authored-By:` line go in one final paragraph with no blank line between them.
 - **Waiting for the Owner:** real-phone checks of the Reviews pages, the Chat arrow, the Mailbox bars, and the Set goal button; a Safari check of the legacy HTML page frame; the first real pack import.
-- **Open follow-ups:** BR1 browser hang follow-up, G4h swap thresholds from 2026-10-07, the fixture token literal in `test/review-cli.test.js`.
+- **Open follow-ups:** BR1 browser hang follow-up, G4h swap thresholds from 2026-10-07, the fixture token literal in `test/review-cli.test.js`, DG1 (fold machine and browser notices into the digest; after CH1 because of `src/engine.js`).
+
+### Holds (stand-down 2026-10-01 08:00)
+
+- **Running workers:** none. Both panes are closed.
+- **Unreleased work, not reviewed, no green suite yet. Review each diff, merge in an integration worktree, run one suite, release:**
+  - `ch1` (branch `ch1`, commit `f8088db`, worktree `~/Projects/.herdr-wt/HerdrBoss/ch1`): context handover ready check (idle successor with evidence of a state read), 30 minute expiry with a Mailbox item and idle pane close, 400K context warning. Retro task 1.
+  - `wk2` (branch `wk2`, commit `2f2a64c`, message starts with WIP and needs a final message with `Kit-Impact: useful`; worktree `~/Projects/.herdr-wt/HerdrBoss/wk2`): `worker collect` records by default with `--no-record`, collect closes the run, `worker start` copies `.orchestration/local`, Opus start alert. Retro tasks 2, 4 and 6. It changes `test/kit.test.js`, which `main` deleted: move its test changes into the `test/kit-*.test.js` files. The phase `abandoned` is derived in `src/task-state.js`, outside its allowed paths; check that a collected run no longer reads `abandoned`.
+  - Run `herdr-boss worker collect NAME --record --outcome done --gate-passed --model-result first-time` for both after the review.
+- **Next tasks:** review and release CH1 and WK2, then DG1. Then the open follow-ups.
+- **Browser:** the project browser of `herdrboss` is closed and its port lease is released. Request it again before browser work.
