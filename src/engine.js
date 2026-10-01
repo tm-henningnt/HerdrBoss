@@ -929,7 +929,9 @@ export class Engine extends EventEmitter {
       snap.taskWorkers = this.readTaskWorkers(now, herdr);
       snap.staleStatus = staleStatuses(snap, this.cfg, now, this.memory.staleStatus);
       this.memory.staleStatus = snap.staleStatus;
-      snap.projects = applyTaskState(snap.projects, snap.taskWorkers, { stale: snap.staleStatus, gitCounts: this.readGitCounts(now) });
+      snap.projects = applyTaskState(snap.projects, snap.taskWorkers, {
+        stale: snap.staleStatus, gitCounts: this.readGitCounts(now), herdr: snap.herdr, control: snap.control, now,
+      });
       this.memory.lastOrchestrators ||= {};
       for (const p of Object.values(control.projects)) if (p.orch?.kind) this.memory.lastOrchestrators[p.workspace] = { pane: p.orch.pane, kind: p.orch.kind, project: p.slug };
       for (const pane of herdr?.panes || []) if (pane.label === 'boss' && pane.agent) this.memory.lastOrchestrators[pane.workspace] = { pane: pane.id, kind: pane.agent, project: 'Boss', label: 'Boss', boss: true };
@@ -1208,8 +1210,12 @@ export class Engine extends EventEmitter {
 
   // Apply the task state to a fresh project list, for example after a publish between two ticks.
   decorateProjects(projects, now = Date.now()) {
-    const snap = { projects, control: this.state?.control, statusActivity: this.statusActivity(), taskWorkers: this.taskWorkers };
-    return applyTaskState(projects, this.taskWorkers, { stale: staleStatuses(snap, this.cfg, now, this.memory.staleStatus), gitCounts: this.gitCounts });
+    const herdr = this.state?.herdr || null;
+    const control = this.state?.control || {};
+    const taskWorkers = this.readTaskWorkers(now, herdr);
+    const snap = { projects, control, herdr, statusActivity: this.statusActivity(), taskWorkers };
+    const stale = staleStatuses(snap, this.cfg, now, this.memory.staleStatus);
+    return applyTaskState(projects, taskWorkers, { stale, gitCounts: this.gitCounts, herdr, control, now });
   }
 
   // The read-only worker config of each registered project, with allow-listed fields only.

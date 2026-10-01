@@ -1714,8 +1714,9 @@ test('the project page shows the memory and kit file paths with a home-relative 
   // The registered repository path reaches the state as a home-relative path.
   const { listProjects } = await import('../src/projects.js');
   const repo = path.join(homeDir, 'Projects', 'demo');
+  const statusFile = path.join(dataDir, 'projects', 'demo.json');
   fs.mkdirSync(path.join(dataDir, 'projects'), { recursive: true });
-  fs.writeFileSync(path.join(dataDir, 'projects', 'demo.json'), JSON.stringify({ project: 'Demo' }));
+  fs.writeFileSync(statusFile, JSON.stringify({ project: 'Demo' }));
   fs.writeFileSync(path.join(dataDir, 'project-repos.json'), JSON.stringify([{ slug: 'demo', repo, remote: '' }]));
   t.after(() => {
     fs.rmSync(path.join(dataDir, 'projects', 'demo.json'), { force: true });
@@ -1723,6 +1724,7 @@ test('the project page shows the memory and kit file paths with a home-relative 
   });
   const row = listProjects().find((p) => p.slug === 'demo');
   assert.equal(row.repo, '~/Projects/demo');
+  assert.equal(row.publishedAt, fs.statSync(statusFile).mtime.toISOString(), 'the status file modification time is the publish time');
 });
 
 test('the engine state shows the allow-listed worker config of each project and one bad config as an error', { timeout: 30000 }, (t) => {
@@ -2534,4 +2536,51 @@ test('/api/settings/prices reads the price table and writes a validated override
   const cleared = await put({ models: {} });
   assert.equal(cleared.status, 200);
   assert.equal(fs.existsSync(path.join(dataDir, 'spend-prices.override.json')), false);
+});
+
+test('/api/projects serves sync and unplanned fields from the current worker and agent facts', { timeout: 20000 }, async (t) => {
+  const projectsDir = path.join(dataDir, 'projects');
+  const projectFile = path.join(projectsDir, 'alpha.json');
+  const previous = fs.existsSync(projectFile) ? fs.readFileSync(projectFile) : null;
+  fs.mkdirSync(projectsDir, { recursive: true });
+  fs.writeFileSync(projectFile, JSON.stringify({
+    project: 'Alpha', workspace: 'w-alpha', updated: new Date(Date.now() - 40 * 60000).toISOString(),
+    tasks: [{ id: 'A', title: 'A task', status: 'todo' }],
+  }));
+  const { applyTaskState } = await import('../src/task-state.js');
+  const workers = [{ name: 'unplanned', taskId: null, phase: 'live', kind: 'codex', model: 'gpt-6-luna', startedAt: new Date(Date.now() - 8 * 60000).toISOString(), pane: 'w-alpha:p2' }];
+  const herdr = { panes: [{ id: 'w-alpha:p1', workspace: 'w-alpha', orch: true, agent: 'claude', status: 'working' }] };
+  const control = { projects: { alpha: { slug: 'alpha', workspace: 'w-alpha' } } };
+  const engine = new EventEmitter();
+  engine.state = { control, herdr, projects: [] };
+  engine.tick = async () => engine.state;
+  engine.log = () => {};
+  engine.decorateProjects = (projects) => applyTaskState(projects, { alpha: workers }, { herdr, control, now: Date.now() });
+  const cfg = loadConfig();
+  cfg.host = '127.0.0.1';
+  cfg.port = 0;
+  cfg.tickSeconds = 3600;
+  const { server, close } = serve(cfg, { readOnlyPreview: true, createEngine: () => engine });
+  t.after(async () => {
+    await close();
+    if (previous) fs.writeFileSync(projectFile, previous);
+    else fs.rmSync(projectFile, { force: true });
+  });
+  await new Promise((resolve, reject) => {
+    server.once('listening', resolve);
+    server.once('error', reject);
+  });
+
+  const response = await fetch(`http://127.0.0.1:${server.address().port}/api/projects`);
+  assert.equal(response.status, 200);
+  const projects = await response.json();
+  const alpha = projects.find((project) => project.slug === 'alpha');
+  assert.deepEqual(alpha.unplanned.map(({ name, pane }) => [name, pane]), [['unplanned', 'w-alpha:p2']]);
+  assert.equal(alpha.sync.unplanned, 1);
+  assert.equal(alpha.sync.agentsWorking, 1);
+  assert.equal(alpha.sync.inSync, false);
+  const state = await (await fetch(`http://127.0.0.1:${server.address().port}/api/state`)).json();
+  const stateAlpha = state.projects.find((project) => project.slug === 'alpha');
+  assert.equal(stateAlpha.sync.unplanned, 1);
+  assert.deepEqual(stateAlpha.unplanned.map(({ name, pane }) => [name, pane]), [['unplanned', 'w-alpha:p2']]);
 });

@@ -1372,7 +1372,17 @@ Publish at task boundaries: a task starts, a task ends, a blocker appears, or a 
 
 ### Live task state
 
-The published status file holds the plan. The worker run records hold what happens. Herdr Boss overlays the run records on the published tasks, so the state of a task does not wait for a publish. The service reads the run records of each registered project every 15 seconds. A worker links to a task through `taskId` in its run record. Start each worker with `worker start --task-id ID`. `--issue N` works as an alias for a numeric task ID. A run without a task ID has no effect on the board, and `worker start` prints a warning.
+The published status file holds the plan. The worker run records hold what happens. Herdr Boss overlays the run records on the published tasks, so the state of a task does not wait for a publish. The service reads the run records of each registered project every 15 seconds. A worker links to a task through `taskId` in its run record. Start each worker with `worker start --task-id ID`. `--issue N` works as an alias for a numeric task ID. A live worker without a task ID, or with an ID missing from the status, appears in `unplanned`. `worker start` prints a warning when it has no task ID.
+
+The project data shows the current status, task states, and agents. `GET /api/projects` refreshes the project data from the latest engine snapshot. It rereads worker run records at least every 15 seconds. The request does not start a process to collect agents. `GET /api/state` returns the same project fields.
+
+The project data has `publishedAt` and age in minutes. `publishedAgeMin` is the age of the status file. `phaseAgeMin` uses `phaseUpdated` or the newest `tasks[].updated` time. `summaryAgeMin` uses `summaryUpdated`. When a status has no time for one field, that age equals `publishedAgeMin`.
+
+Each live worker that has no task ID, or whose task ID is missing from the status, appears in `unplanned`. Each item shows its name, kind, model, start time, age, and pane. It does not show the worker brief or path.
+
+The `sync` object compares working agents with Doing cards. `agentsWorking` counts the working agents in the project's workspace, including the orchestrator. `liveWorkers` counts live worker runs. `doingCards` counts tasks whose effective state is `doing`. `unplanned` and `noWorker` count their matching fields. `mismatches` adds the task mismatch count, unplanned workers, and no-worker cards. `inSync` is false when agents work but no card is Doing, or when an unplanned worker or a no-worker card exists. `text` gives these counts on one line.
+
+A task with published status `doing` stays in Doing when it has no run record. After 30 minutes, it has `noWorker: true` and `noWorkerSinceMin`. A task whose workers failed or went away still returns to Ready or Blocked. `statusStale.level` is `warn` when the status is more than 30 minutes old and a worker run or the orchestrator is active. It is `ok` when the status is 30 minutes old or less, or when neither is active. Project data uses the same freshness rule as the engine's stale-status facts.
 
 Each task gets one effective state, `state`:
 
@@ -2104,7 +2114,7 @@ The dashboard uses these routes. A request from another host needs the access to
 | `GET /api/spend?days=N` | The token use and cost per day, role, and harness for the last N days (1 to 90, default 7), the cost label `API-price equivalent`, the models with `unconfirmed` prices, the harness log status, and the unread log bytes. |
 | `GET`, `PUT /api/settings/prices` | Read the price table and the override, or replace the override. See Token use and spend by role. |
 | `GET /api/denials` | The denial counts of the last 7 days by harness, model, and cause, the harness totals, and the trend of each cause. |
-| `GET /api/projects`, `PUT`, `DELETE /api/projects/SLUG` | Read, write, or delete project status. |
+| `GET /api/projects`, `PUT`, `DELETE /api/projects/SLUG` | Read, write, or delete project status. The GET route returns current task state, `unplanned`, `sync`, and status age fields. `GET /api/state` returns the same project fields. |
 | `GET /api/handoffs`, `GET /api/handoffs/output?id=ID` | Handover records, and a successor's pane output. |
 | `POST /api/handoffs/plan`, `/prepare`, `/activate` | The handover steps. Activation needs `confirmed: true`. |
 | `GET`, `POST /api/browser-sessions...` | Browser list, request, tabs, screenshot, navigation, input, new tab, tab close, close, restart, and bookmarks. Input to an agent tab returns 409 unless the body has `confirmAttached: true`. Tab close returns 409 for a tab that an agent holds unless the body has `force: true`. `GET /api/browser-sessions/bookmarks?project=SLUG` reads the bookmarks and the start page. `POST /api/browser-sessions/bookmarks` changes them with `{ project, action }`. |

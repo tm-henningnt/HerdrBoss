@@ -5,7 +5,7 @@ import { blockedWorkerAlerts } from './worker-failures.js';
 import { kitRevision } from './kit/agents-check.js';
 import { leaseBulletinLines } from './leases.js';
 import { watchUntilPhrase } from './night.js';
-import { mismatchText, taskMismatches } from './task-state.js';
+import { mismatchText, projectStatusFreshness, taskMismatches } from './task-state.js';
 
 const PROVIDER_NAMES = { claude: 'Claude', codex: 'Codex', opencodego: 'OpenCode Go' };
 export const providerName = (p) => PROVIDER_NAMES[p] || p;
@@ -111,11 +111,13 @@ export function staleStatuses(snap, cfg, now = Date.now(), prior = {}) {
   const limitMs = (Number.isFinite(cfg?.staleStatusMinutes) ? cfg.staleStatusMinutes : 120) * 60000;
   const result = {};
   for (const project of snap.projects || []) {
-    const updatedMs = Date.parse(project?.updated);
+    const publishedAt = project?.publishedAt ?? project?.updated;
+    const updatedMs = Date.parse(publishedAt);
     if (!project?.slug || !Number.isFinite(updatedMs)) continue;
     const control = snap.control?.projects?.[project.slug];
     if (project.status === 'paused' || (control?.effectiveMode ?? control?.mode) === 'paused') continue;
     const activity = snap.statusActivity?.[project.slug] || {};
+    const statusStale = projectStatusFreshness(project, snap.taskWorkers?.[project.slug] || [], snap.herdr, control?.workspace || project.workspace, now);
     const aged = now - updatedMs > limitMs;
     const workers = aged && Number.isFinite(activity.workedAt) && activity.workedAt > updatedMs && now - activity.workedAt <= STALE_STATUS_WORK_WINDOW_MS;
     const commits = aged && Number.isFinite(activity.landedAt) && activity.landedAt > updatedMs;
@@ -128,9 +130,10 @@ export function staleStatuses(snap, cfg, now = Date.now(), prior = {}) {
     if (why) reasons.push(`published status is ${fmtDuration(ageSeconds)} old while ${why}`);
     for (const item of mismatch) reasons.push(mismatchText(item));
     result[project.slug] = {
-      slug: project.slug, workspace: control?.workspace || null, updated: project.updated,
-      since: earlier?.updated === project.updated && Number.isFinite(earlier.since) ? earlier.since : now,
+      slug: project.slug, workspace: control?.workspace || null, updated: publishedAt,
+      since: earlier?.updated === publishedAt && Number.isFinite(earlier.since) ? earlier.since : now,
       ageSeconds, workers, commits, mismatch, reason: reasons.join('; '),
+      statusStale: { ageMin: statusStale.ageMin, level: statusStale.level },
     };
   }
   return result;

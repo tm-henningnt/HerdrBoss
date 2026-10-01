@@ -142,7 +142,8 @@ export function listProjects() {
     try {
       const data = JSON.parse(fs.readFileSync(file, 'utf8'));
       const errors = validateProject(data);
-      return { slug, ...data, currentKitRevision, repo, updated: data.updated || fs.statSync(file).mtime.toISOString(), errors: errors.length ? errors : undefined };
+      const publishedAt = data.updated || fs.statSync(file).mtime.toISOString();
+      return { slug, ...data, currentKitRevision, repo, updated: publishedAt, publishedAt, errors: errors.length ? errors : undefined };
     } catch (e) {
       return { slug, project: slug, currentKitRevision, repo, errors: [`invalid JSON: ${e.message}`] };
     }
