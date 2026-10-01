@@ -40,6 +40,7 @@ const BRIEF_SLOTS = new Set([
   'kindHeaderNote', 'kindWaitNote', 'portInstruction',
 ]);
 const MAX_COPIED_INPUT_BYTES = 200 * 1024 * 1024;
+const MAX_LOCAL_FILE_BYTES = 5 * 1024 * 1024;
 
 function git(root, args, { encoding = 'utf8' } = {}) {
   return execFileSync('git', ['-C', root, ...args], { encoding });
@@ -590,7 +591,7 @@ function normalizeModel(model) {
 
 const isOpus = (model) => /(^|[-/])opus($|[-.\d])/i.test(model);
 
-function validateSelection(kind, options, models, config, resourcePolicy = null) {
+function validateSelection(kind, options, models, config, resourcePolicy = null, onOpusRefused = null) {
   const policy = models.kinds[kind];
   if (!policy) throw new Error(`Unknown agent kind: ${kind}. Choose one of ${Object.keys(models.kinds).join(', ')}.`);
   const startable = (candidate) => policy.allowedModels.includes(candidate) && modelEnabled(kind, candidate, resourcePolicy) &&
@@ -612,7 +613,10 @@ function validateSelection(kind, options, models, config, resourcePolicy = null)
     }
   }
   if (!policy.allowedModels.includes(model)) throw new Error(`Model ${model} is not allowed for ${kind}.`);
-  if (isOpus(model) && !options.force) throw new Error(`${model} needs the Owner's approval. Ask the Owner, then start with --force.`);
+  if (isOpus(model) && !options.force) {
+    onOpusRefused?.(model);
+    throw new Error(`${model} needs the Owner's approval. Ask the Owner, then start with --force.`);
+  }
   if (config.allowedModels !== null && !config.allowedModels.includes(model)) throw new Error(`Project ${config.slug} does not allow model ${model}.`);
   const effort = options.effort ?? policy.defaultEffort;
   if (effort !== null && !policy.allowedEfforts.includes(effort)) throw new Error(`Effort ${effort} is not allowed for ${kind}.`);
@@ -620,6 +624,49 @@ function validateSelection(kind, options, models, config, resourcePolicy = null)
   const effortSource = options.effort != null ? 'flag' : effort !== null ? 'default' : null;
   const launchArgs = policy.launchArgs.map((arg) => arg.replaceAll('{{model}}', model).replaceAll('{{effort}}', effort ?? ''));
   return { model, modelSource, effort, effortSource, launchArgs, force: isOpus(model) && !!options.force };
+}
+
+function appendWorkerEvent(env, event, now) {
+  const dir = env.HERDR_BOSS_DIR || DATA_DIR;
+  const line = { at: new Date(now).toISOString(), ...event };
+  try {
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    fs.appendFileSync(path.join(dir, 'events.jsonl'), `${JSON.stringify(line)}\n`, { mode: 0o600 });
+  } catch { /* The event log does not control whether a worker can start. */ }
+}
+
+function taskIdForEvent(options) {
+  if (options.taskId != null) return String(options.taskId);
+  if (options.issue != null) return String(options.issue);
+  return null;
+}
+
+function alertBossForOpus(name, model, options, config, env, herdr, now, output) {
+  const text = `Opus worker: ${name} runs ${model} (forced).`;
+  const taskId = taskIdForEvent(options);
+  appendWorkerEvent(env, { type: 'worker-opus', text, worker: name, taskId, project: config.slug }, now);
+  output(text);
+  let boss = null;
+  try { boss = listFrom(herdr(['pane', 'list']), 'panes').find((pane) => pane.label === 'boss' && getPane(pane)) ?? null; }
+  catch { /* A missing pane is reported below. */ }
+  if (!boss) {
+    output('Warning: no Boss pane was found; the Opus start alert was not sent.');
+    return;
+  }
+  try { herdr(['agent', 'prompt', getPane(boss), text]); }
+  catch { output('Warning: the Opus start alert could not reach the Boss pane.'); }
+}
+
+function recordOpusRefusal(name, model, options, config, env, now) {
+  const taskId = taskIdForEvent(options);
+  appendWorkerEvent(env, {
+    type: 'worker-opus-refused',
+    text: `Opus worker start refused for ${name}; --force was not set.`,
+    worker: name,
+    model,
+    taskId,
+    project: config.slug,
+  }, now);
 }
 
 function branchExists(root, branch) {
@@ -637,7 +684,9 @@ function addExclude(worktree) {
   const file = path.isAbsolute(exclude) ? exclude : path.resolve(worktree, exclude);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const current = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
-  if (!current.split(/\r?\n/).includes('/.worker/')) fs.appendFileSync(file, `${current && !current.endsWith('\n') ? '\n' : ''}/.worker/\n`, 'utf8');
+  const lines = current.split(/\r?\n/);
+  const missing = ['/.worker/', '/.orchestration/local/'].filter((entry) => !lines.includes(entry));
+  if (missing.length) fs.appendFileSync(file, `${current && !current.endsWith('\n') ? '\n' : ''}${missing.join('\n')}\n`, 'utf8');
 }
 
 function writeJsonAtomic(file, value) {
@@ -848,7 +897,7 @@ function renderStartPlan(plan) {
     `3. Validate kind/model/effort: ${plan.kind} / ${plan.model} / ${plan.effort ?? '(none)'} (model source: ${plan.modelSource}${plan.effortSource ? `, effort source: ${plan.effortSource}` : ''}${plan.force ? ', --force: Opus approved by the Owner' : ''})`,
     `4. Create worktree: ${plan.noWorktree ? '(disabled; use current worktree)' : plan.worktree}`,
     ...(plan.noWorktree ? [] : [`   $ git worktree add -b ${displayArg(plan.branch)} ${displayArg(plan.worktree)} ${displayArg(plan.base)}`]),
-    `   Append /.worker/ to ${plan.excludeFile}`,
+    `   Append /.worker/ and /.orchestration/local/ to ${plan.excludeFile}`,
     `5. Render brief: ${plan.worktree}/${plan.workerDir}/brief.md from ${plan.template}`,
     ...plan.leasePools.map((pool) => `   Lease one item of pool ${pool} and pass it in the pane environment`),
     ...(plan.setup ? [`   Run project setup in the worktree (timeout ${plan.setupTimeoutSeconds} s):`, `   $ ${plan.setup}`] : []),
@@ -962,6 +1011,86 @@ function workerInputFiles(root, name) {
   return files;
 }
 
+function mainCheckout(root) {
+  const worktrees = git(root, ['worktree', 'list', '--porcelain'])
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith('worktree '))
+    .map((line) => line.slice('worktree '.length));
+  return worktrees.find((candidate) => {
+    try { return fs.statSync(path.join(candidate, '.git')).isDirectory(); } catch { return false; }
+  }) ?? worktrees[0] ?? root;
+}
+
+function lstatMaybe(file) {
+  try { return fs.lstatSync(file); }
+  catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+}
+
+// Copy the local orchestration inputs to a new worker checkout. Do not follow links or replace files.
+function copyLocalOrchestration(mainRoot, worktree) {
+  const sourceParent = path.join(mainRoot, '.orchestration');
+  const sourceParentStat = lstatMaybe(sourceParent);
+  if (!sourceParentStat || !sourceParentStat.isDirectory() || sourceParentStat.isSymbolicLink()) return null;
+  const sourceRoot = path.join(sourceParent, 'local');
+  const sourceRootStat = lstatMaybe(sourceRoot);
+  if (!sourceRootStat || !sourceRootStat.isDirectory() || sourceRootStat.isSymbolicLink()) return null;
+
+  const destinationParent = path.join(worktree, '.orchestration');
+  const destinationParentStat = lstatMaybe(destinationParent);
+  if (destinationParentStat && (!destinationParentStat.isDirectory() || destinationParentStat.isSymbolicLink())) {
+    throw new Error('Could not copy local orchestration files into the worker worktree.');
+  }
+  if (!destinationParentStat) fs.mkdirSync(destinationParent, { mode: 0o700 });
+  const destinationRoot = path.join(destinationParent, 'local');
+  let copied = 0;
+  let oversized = 0;
+
+  const visit = (source, destination, sourceStat) => {
+    const destinationStat = lstatMaybe(destination);
+    let created = false;
+    if (destinationStat) {
+      if (!destinationStat.isDirectory() || destinationStat.isSymbolicLink()) return;
+    } else {
+      fs.mkdirSync(destination, { mode: (sourceStat.mode & 0o777) | 0o700 });
+      created = true;
+    }
+    const entries = fs.readdirSync(source, { withFileTypes: true })
+      .sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0);
+    for (const entry of entries) {
+      if (entry.name === '.worker' || entry.name === '.git') continue;
+      const sourceFile = path.join(source, entry.name);
+      const destinationFile = path.join(destination, entry.name);
+      const stat = lstatMaybe(sourceFile);
+      if (!stat || stat.isSymbolicLink()) continue;
+      if (stat.isDirectory()) {
+        visit(sourceFile, destinationFile, stat);
+      } else if (stat.isFile()) {
+        if (stat.size > MAX_LOCAL_FILE_BYTES) {
+          oversized += 1;
+          continue;
+        }
+        if (lstatMaybe(destinationFile)) continue;
+        try {
+          fs.copyFileSync(sourceFile, destinationFile, fs.constants.COPYFILE_EXCL);
+        } catch (error) {
+          if (error.code === 'EEXIST') continue;
+          throw new Error('Could not copy local orchestration files into the worker worktree.');
+        }
+        fs.chmodSync(destinationFile, stat.mode & 0o777);
+        copied += 1;
+      }
+    }
+    if (created) fs.chmodSync(destination, sourceStat.mode & 0o777);
+  };
+
+  try { visit(sourceRoot, destinationRoot, sourceRootStat); }
+  catch (error) {
+    if (/Could not copy local orchestration/.test(error.message)) throw error;
+    throw new Error('Could not copy local orchestration files into the worker worktree.');
+  }
+  return { copied, oversized };
+}
+
 export function startWorker(name, options, {
   config,
   models,
@@ -1008,7 +1137,10 @@ export function startWorker(name, options, {
   }
   const policy = rules.policy;
   // Local extra models from the policy join the harness allow-list and use its launch arguments.
-  const { model, modelSource, effort, effortSource, launchArgs, force: opusForce } = validateSelection(options.kind, options, mergeModels(modelConfig, policy), config, policy);
+  const onOpusRefused = options.kind === 'claude' && !options.dryRun
+    ? (model) => recordOpusRefusal(name, model, options, config, env, now)
+    : null;
+  const { model, modelSource, effort, effortSource, launchArgs, force: opusForce } = validateSelection(options.kind, options, mergeModels(modelConfig, policy), config, policy, onOpusRefused);
   const agentsWarning = agentsDrift(config.root, rulesPath);
   if (agentsWarning) output(agentsWarning);
   const projectPolicy = policy?.projects?.[config.slug];
@@ -1211,6 +1343,15 @@ export function startWorker(name, options, {
       fs.mkdirSync(path.dirname(worktree), { recursive: true });
       git(config.root, ['worktree', 'add', '-b', branch, worktree, base]);
       createdWorktree = true;
+      const localCopy = copyLocalOrchestration(mainCheckout(config.root), worktree);
+      if (localCopy) {
+        const fileWord = localCopy.copied === 1 ? 'file' : 'files';
+        output(`Copied ${localCopy.copied} ${fileWord} from .orchestration/local.`);
+        if (localCopy.oversized) {
+          const skippedWord = localCopy.oversized === 1 ? 'file' : 'files';
+          output(`Warning: skipped ${localCopy.oversized} ${skippedWord} over 5 MB from .orchestration/local.`);
+        }
+      }
     }
     addExclude(worktree);
     fs.mkdirSync(path.join(worktree, plan.workerDir), { recursive: true });
@@ -1277,6 +1418,7 @@ export function startWorker(name, options, {
       startedAt: new Date(now).toISOString(),
     };
     writeJsonAtomic(recordFile, record);
+    if (options.kind === 'claude' && opusForce) alertBossForOpus(name, model, options, config, env, herdr, now, output);
     const delivery = deliverBrief(name, options.kind, herdr, readWorkerText, wait, output, plan.workerDir);
     if (delivery === 'resent') output(`Resent the brief prompt to ${name}: the first prompt did not reach the agent.`);
     if (delivery === 'stalled-retry') output(`Resent the brief prompt to ${name} after agent_prompt_stalled.`);
@@ -1418,7 +1560,7 @@ function readRun(config, name) {
   return { file, run };
 }
 
-// Name every missing --record flag at once, with a hint from the worker report. The orchestrator still decides.
+// Name every missing recording flag at once, with a hint from the worker report. The orchestrator still decides.
 export function recordFlagErrors(options, reportJson = {}) {
   const missing = [];
   if (!['done', 'partial', 'failed'].includes(options.outcome)) {
@@ -1441,6 +1583,7 @@ export function deriveModelOutcome(options, reportJson = {}) {
 }
 
 export function collectWorker(name, options, { config, now = Date.now(), output = console.log, recordUsageFn = recordUsage, listWorktreeProcesses = worktreeCwdProcesses, leaseDataDir = DATA_DIR } = {}) {
+  const record = options.noRecord !== true && options.record !== false;
   let ledgerWritten = false;
   try {
     const { file, run } = readRun(config, name);
@@ -1448,9 +1591,9 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
     const reportDir = path.join(run.worktree, run.workerDir || '.worker');
     const normalized = normalizeWorkerReport(readJson(path.join(reportDir, 'report.json')));
     const reportJson = normalized.report;
-    if (options.record) {
+    if (record) {
       const missing = recordFlagErrors(options, reportJson);
-      if (missing.length) throw new Error(`--record needs:\n- ${missing.join('\n- ')}`);
+      if (missing.length) throw new Error(`--record needs:\n- ${missing.join('\n- ')}\nUse --no-record to read the report without a ledger entry.`);
     }
     const reportMd = fs.readFileSync(path.join(reportDir, 'report.md'), 'utf8');
     const errors = validateWorkerReport(reportJson, { evidenceTiers: config.evidenceTiers });
@@ -1496,7 +1639,7 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
     };
     let usageWarning = null;
     const releasedLeases = [];
-    if (options.record) {
+    if (record) {
       const modelOutcome = deriveModelOutcome(options, reportJson);
       const entry = {
         issue: run.issue,
@@ -1534,21 +1677,15 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
       ledgerWritten = true;
       run.finishedAt = entry.endedAt;
       run.outcome = entry.outcome;
+      run.collectedAt = run.collectedAt || entry.endedAt;
       writeJsonAtomic(file, run);
       if (run.leases?.length) {
         const taken = new Set(run.leases.map((lease) => `${lease.pool}\n${lease.item}`));
         releasedLeases.push(...dropLeases((lease) => lease.project === config.slug && lease.worker === name && taken.has(`${lease.pool}\n${lease.item}`), { dataDir: leaseDataDir }));
       }
     }
-    // The mark tells the project board that the worker reported done and was collected. A collect that only reads
-    // a running or failed worker changes nothing.
-    const reportedDone = options.record ? options.outcome === 'done' : reportJson.stoppedEarly !== true;
-    if (reportedDone && !run.collectedAt) {
-      run.collectedAt = new Date(now).toISOString();
-      writeJsonAtomic(file, run);
-    }
     for (const warning of normalized.warnings) output(warning);
-    if (options.record && !reportJson.modelOutcome && !options.modelResult) {
+    if (record && !reportJson.modelOutcome && !options.modelResult) {
       const { result } = deriveModelOutcome(options, reportJson);
       output(`Warning: report.json has no modelOutcome; recorded ${result} from the outcome. Add --model-result next time.`);
     }
@@ -1556,10 +1693,10 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
     for (const warning of summary.artifactWarnings) output(`Warning: ${warning}`);
     if (usageWarning) output(usageWarning);
     for (const lease of releasedLeases) output(`Released lease ${lease.pool} ${lease.item}.`);
-    if (options.record) output('After you review this collection, remove the worktree with herdr-boss worktree prune --apply');
+    if (record) output('After you review this collection, remove the worktree with herdr-boss worktree prune --apply');
     return summary;
   } catch (error) {
-    if (!options.record) throw error;
+    if (!record) throw error;
     const reason = String(error?.message ?? error).replace(/\s+/g, ' ').trim();
     const message = ledgerWritten
       ? `worker collect: ledger entry written, but collection did not finish: ${reason}`

@@ -771,7 +771,7 @@ test('worker start saves the task id in the run record, accepts the issue alias,
   assert.throws(() => start('both-task', { taskId: 'A', issue: '7' }), /not both/);
 });
 
-test('worker collect marks the run record collected and the task facts follow the merge', () => {
+test('worker collect records by default and the task facts follow the merge', () => {
   const f = setupFixture(null);
   const run = startWorker('task-mark', { kind: 'codex', task: 'x', allow: ['src/'], taskId: 'T1' }, {
     config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
@@ -788,21 +788,23 @@ test('worker collect marks the run record collected and the task facts follow th
   }));
   const phase = () => readWorkerFacts(f.config.runsPath, { isLive: () => true, isMerged: gitIsMerged(f.root) })[0].phase;
   assert.equal(phase(), 'live');
-  collectWorker('task-mark', {}, { config: f.config, output: () => {}, listWorktreeProcesses: () => [] });
+  collectWorker('task-mark', { outcome: 'done', gatePassed: true }, {
+    config: f.config, output: () => {}, listWorktreeProcesses: () => [], recordUsageFn: () => ({ errors: [] }),
+  });
   const record = JSON.parse(fs.readFileSync(run.recordFile, 'utf8'));
   assert.match(record.collectedAt, /^\d{4}-\d\d-\d\dT/);
-  assert.equal(record.finishedAt, undefined);
+  assert.match(record.finishedAt, /^\d{4}-\d\d-\d\dT/);
   assert.equal(phase(), 'review');
   git(f.root, 'merge', '--ff-only', run.branch);
   assert.equal(phase(), 'merged');
 });
 
-test('worker collect marks collectedAt only for a worker that reported done, and a peek changes nothing', () => {
+test('worker collect closes each recorded outcome while --no-record changes nothing', () => {
   const scenarios = [
-    { name: 'peek-early', report: { stoppedEarly: true }, options: {}, marked: false },
-    { name: 'peek-done', report: { stoppedEarly: false }, options: {}, marked: true },
-    { name: 'rec-failed', report: { stoppedEarly: false }, options: { record: true, outcome: 'failed', gateFailed: true }, marked: false },
-    { name: 'rec-partial', report: { stoppedEarly: true }, options: { record: true, outcome: 'partial', gateFailed: true }, marked: false },
+    { name: 'peek-early', report: { stoppedEarly: true }, options: { noRecord: true }, marked: false },
+    { name: 'peek-done', report: { stoppedEarly: false }, options: { noRecord: true }, marked: false },
+    { name: 'rec-failed', report: { stoppedEarly: false }, options: { outcome: 'failed', gateFailed: true }, marked: true },
+    { name: 'rec-partial', report: { stoppedEarly: true }, options: { outcome: 'partial', gateFailed: true }, marked: true },
     { name: 'rec-done', report: { stoppedEarly: false }, options: { record: true, outcome: 'done', gatePassed: true }, marked: true },
   ];
   for (const scenario of scenarios) {
@@ -820,7 +822,8 @@ test('worker collect marks collectedAt only for a worker that reported done, and
     collectWorker(scenario.name, scenario.options, { config: f.config, output: () => {}, listWorktreeProcesses: () => [], recordUsageFn: () => ({ errors: [] }) });
     const after = JSON.parse(fs.readFileSync(run.recordFile, 'utf8'));
     assert.equal(Boolean(after.collectedAt), scenario.marked, scenario.name);
-    if (!scenario.options.record && !scenario.marked) assert.equal(fs.readFileSync(run.recordFile, 'utf8'), before, `${scenario.name}: the record is unchanged`);
+    assert.equal(Boolean(after.finishedAt), scenario.marked, `${scenario.name}: finishedAt`);
+    if (scenario.options.noRecord) assert.equal(fs.readFileSync(run.recordFile, 'utf8'), before, `${scenario.name}: the record is unchanged`);
   }
 });
 
