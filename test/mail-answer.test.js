@@ -252,7 +252,7 @@ test('the Mailbox thread view renders the question, the answer, the time, and th
   const question = { id: 'm-q', from: 'orch', to: 'owner', thread: 'alpha', at: iso(1), action: 'decide', text: 'Which <database>?', closedAt: iso(2) };
   const answer = { id: 'm-a', from: 'owner', to: 'orch', thread: 'alpha', at: iso(2), text: 'Choice: SQLite', replyTo: 'm-q', status: 'sent', sentAt: iso(3), repliedAt: iso(9) };
   const item = { ...question, answer };
-  const api = load(['clock', 'mailDeliveryState', 'mailDoneLine', 'markdownBlock', 'messageBody', 'mailItemLabel', 'mailConversationMessage'], { mailFind: (id) => (id === 'm-q' ? item : undefined) });
+  const api = load(['clock', 'mailDeliveryState', 'mailDoneLine', 'markdownBlock', 'messageAttachmentsHtml', 'messageBody', 'mailItemLabel', 'mailConversationMessage'], { mailFind: (id) => (id === 'm-q' ? item : undefined) });
   const asked = api.mailConversationMessage({}, question, null);
   assert.ok(asked.includes('Which <database>?'), 'the question text is there');
   assert.ok(asked.includes(`Your answer · delivered ${api.clock(answer.sentAt)} · ${api.clock(answer.at)} · replied ${api.clock(answer.repliedAt)}`), 'the question shows the answer with its delivery state and its time');
