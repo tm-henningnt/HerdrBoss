@@ -13,6 +13,7 @@ const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8'
 const html = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
 const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
 const guide = fs.readFileSync(new URL('../docs/user-guide.md', import.meta.url), 'utf8');
+const cli = fs.readFileSync(new URL('../docs/cli.md', import.meta.url), 'utf8');
 
 const spend = {
   days: [
@@ -403,7 +404,7 @@ test('the policy changes list shows time, caller kind, and changed keys with esc
   assert.match(list, /<span class="policy-old">none<\/span> → <span class="policy-new">&lt;img src=x onerror=1&gt;<\/span>/);
   assert.match(list, /policy-caller page">Page</);
   assert.match(list, /policy-caller &lt;b&gt;odd&lt;\/b&gt;">Unknown</);
-  assert.doesNotMatch(list, /<img|<b>odd/);
+  assert.ok(!list.includes(`<${'img'}`) && !list.includes(`<${'b'}>odd`), 'untrusted values stay escaped');
   assert.match(list, /and 3 more in Details/);
   const details = policyChangesDetailsHtml(entries);
   assert.equal((details.match(/<tr>/g) || []).length, 1 + 3 + 9, 'a row for each changed key, and the header row');
@@ -468,7 +469,27 @@ test('lockWaitDetailsHtml lists each day and each project with its wait, hold, r
 test('the page has the lock wait card, its switch, its help text, and its guide entry', () => {
   assert.match(app, /function lockWaitBlock\(/);
   assert.match(app, /data-lock-project/);
+  assert.match(app, /waitByLane/);
+  assert.match(app, /medianWaitMsByLane/);
+  assert.match(app, /Short lane median wait/);
   assert.match(app, /<h3>Lock wait and hold<\/h3>/);
   assert.match(guide, /\*\*Lock wait and hold by project\*\*/);
   assert.ok(DAY > 0);
+});
+
+test('lock lane help and docs describe current admission, display, and analytics behavior', () => {
+  const helpSection = (name) => {
+    const start = app.indexOf(`  ${name}: [`);
+    const next = app.slice(start + 3).search(/\n  [A-Za-z][\w]*: \[/);
+    const end = next < 0 ? -1 : start + 3 + next;
+    return app.slice(start, end < 0 ? undefined : end);
+  };
+  assert.match(helpSection('agents'), /<h3>Locks<\/h3>[\s\S]*?long lane[\s\S]*?short lane/i);
+  assert.match(helpSection('settings'), /<h3>Locks<\/h3>[\s\S]*?short job limit[\s\S]*?guard/i);
+  assert.match(helpSection('allocation'), /<h3>Locks<\/h3>[\s\S]*?long lane[\s\S]*?short lane/i);
+  assert.match(helpSection('analytics'), /<h3>Lock wait and hold<\/h3>[\s\S]*?lane[\s\S]*?median wait/i);
+  assert.match(guide, /The \*\*Locks\*\* panel on the Agents and Allocation pages[\s\S]*?long lane[\s\S]*?short lane/i);
+  assert.match(guide, /Lock wait and hold by project[^\n]*median wait[^\n]*lane/i);
+  assert.match(cli, /`lock list`[^\n]*lane[^\n]*predicted duration/i);
+  assert.doesNotMatch(cli, /There is no load threshold\./);
 });

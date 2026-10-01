@@ -119,6 +119,23 @@ test('lockDaily sums the wait and the hold of each project for each local day', 
   assert.deepEqual(lockDaily([], { days: 7, now: NOW }).projects, []);
 });
 
+test('lockDaily separates lane waits and reports the short wait median', () => {
+  const at = new Date(NOW - HOUR).toISOString();
+  const rows = [
+    { at, event: 'acquire', project: 'alpha', lane: 'short', waitMs: 4000 },
+    { at, event: 'acquire', project: 'alpha', lane: 'short', waitMs: 8000 },
+    { at, event: 'acquire', project: 'alpha', lane: 'long', waitMs: 1000 },
+    { at, event: 'acquire', project: 'alpha', waitMs: 9000 },
+  ];
+  const result = lockDaily(rows, { days: 7, now: NOW });
+  const alpha = result.projects.find((project) => project.project === 'alpha');
+  assert.equal(alpha.waitByLane.short.at(-1), 12000);
+  assert.equal(alpha.waitByLane.long.at(-1), 10000, 'a record without a lane counts as long');
+  assert.equal(alpha.medianWaitMsByLane.short, 6000);
+  assert.equal(result.byLane.short.medianWaitMs, 6000);
+  assert.equal(result.byLane.long.medianWaitMs, 5000);
+});
+
 test('analyticsSummary reads the lock ledger from the last 2 MB only', (t) => {
   const dir = tmp(t);
   const line = (n) => JSON.stringify({ at: new Date(NOW - HOUR).toISOString(), event: 'acquire', name: 'full-suite', project: 'alpha', kind: 'suite', waitMs: n });

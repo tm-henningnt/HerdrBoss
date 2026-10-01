@@ -986,6 +986,11 @@ function settingsView(s) {
     }).join('')
     : '<p class="setting-help">No measured quota window yet. A goal field appears after the next quota reading.</p>';
   const quotaPanel = `<section class="panel"><h2>Provider quotas</h2><h3>Quota mode${helpButton('quota.mode')}</h3>${providerRows}<h3 class="quota-goals">Pacing goals${helpButton('quota.goalPercent')}</h3>${goalRows}<h3 class="quota-goals">Pace tolerance</h3>${settingRow('paceTolerancePoints', 'Pace tolerance points', `<input id="${helpFid('paceTolerancePoints')}" type="number" min="0" max="50" step="1" value="${d.paceTolerancePoints}" data-policy-number="paceTolerancePoints">`)}${settingRow('paceMinUsePercent', 'Minimum use for ahead of pace %', `<input id="${helpFid('paceMinUsePercent')}" type="number" min="0" max="100" step="1" value="${d.paceMinUsePercent}" data-policy-number="paceMinUsePercent">`)}</section>`;
+  const lockPolicy = d.locks || {};
+  const lockGuard = lockPolicy.guard || {};
+  const lockNumber = (key, label, min, max) => settingRow(`locks.${key}`, label, `<input id="${helpFid(`locks.${key}`)}" type="number" min="${min}" max="${max}" step="1" value="${lockPolicy[key] ?? ''}" data-policy-lock="${key}">`);
+  const lockGuardNumber = (key, label, min, max) => settingRow(`locks.guard.${key}`, label, `<input id="${helpFid(`locks.guard.${key}`)}" type="number" min="${min}" max="${max}" step="1" value="${lockGuard[key] ?? ''}" data-policy-lock-guard="${key}">`);
+  const lockSettings = `<section class="panel"><h2>Locks</h2>${lockNumber('slots', 'Machine lock slots', 1, 4)}${lockNumber('shortLimitMinutes', 'Short job limit minutes', 1, 60)}${settingRow('locks.guard.enabled', 'Guard for short jobs', `<input id="${helpFid('locks.guard.enabled')}" type="checkbox" role="switch" aria-label="Guard for short jobs" data-policy-lock-guard="enabled" ${lockGuard.enabled !== false ? 'checked' : ''}>`)}${lockGuardNumber('maxLoadPercent', 'Maximum load % of cores', 0, 1000)}${lockGuardNumber('maxSwapPercent', 'Maximum swap % used', 0, 100)}${lockGuardNumber('minFreeMemPercent', 'Minimum free memory %', 0, 100)}</section>`;
   const settingsGroups = ['Machine', 'Quota', 'Status', 'Workers', 'Watch', 'Browsers', 'Service'];
   const serviceSettingRanges = {
     'machine.memFreeWarnPercent': [1, 50],
@@ -1029,7 +1034,7 @@ function settingsView(s) {
   // The Advanced fold opens by itself while it holds a warning: a harness finding that is not ok, or a service save error.
   const advancedIssues = harnessFindings.filter((finding) => finding.status !== 'ok').length + Object.values(serviceSettingsMessages).filter((text) => text && text !== 'Saved.').length;
   const advanced = foldCard({ slug: SETTINGS_FOLD, key: 'advanced', id: 'advanced-settings', className: 'advanced-settings', title: 'Advanced', hint: advancedIssues ? `Rarely used settings · ${advancedIssues} need${advancedIssues === 1 ? 's' : ''} attention` : 'Rarely used settings', forceOpen: advancedIssues > 0, body: `<div class="settings-grid">${avatarSettings(s)}${pricesPanel()}${serviceSettings}${harnessPanel}</div>`, boxed: false });
-  const settingsPanels = `${quotaPanel}${machineSettings}${watchRoutineSettings(s)}${poolSettingsPanel(s)}`;
+  const settingsPanels = `${quotaPanel}${machineSettings}${lockSettings}${watchRoutineSettings(s)}${poolSettingsPanel(s)}`;
   return `<header class="page-intro"><div><h1>Settings</h1><p>Assign models and provider routes in each harness. Set provider quotas and machine limits below.</p></div></header><section id="settings-plane" class="control-shell"><section class="panel"><h2>Harnesses</h2><div class="help-legend" role="group" aria-label="Help for the harness settings"><span>Available${helpButton('harness.available')}</span><span>Preferred model${helpButton('harness.preferredModel')}</span><span>Model${helpButton('harness.model')}</span><span>Provider${helpButton('harness.provider')}</span><span>Add model${helpButton('harness.addModel')}</span></div>${ignoredCount ? `<p class="setting-help harness-help" role="note" style="color: var(--warn)">${ignoredCount} legacy provider route${ignoredCount === 1 ? ' is' : 's are'} not compatible with ${ignoredCount === 1 ? 'its harness' : 'their harnesses'}. Herdr Boss treats ${ignoredCount === 1 ? 'it' : 'them'} as Unmetered. Choose a provider in each marked row before you apply the policy.</p>` : ''}<div class="harness-grid">${harnesses}</div></section><div class="settings-grid">${settingsPanels}</div>${advanced}<div class="control-actions ${policyDirty ? 'pending' : ''}"><span data-policy-status role="status" aria-live="polite">${esc(saveMessage || (policyDirty ? 'Unsaved changes · Apply policy to keep them' : 'Policy saved'))}</span><button id="save-policy" ${policyDirty ? '' : 'disabled'}>Apply policy</button></div></section>`;
 }
 
@@ -1667,28 +1672,54 @@ function allocationView(s) {
 
 function machineLocksBlock(s) {
   const locks = Array.isArray(s.locks) ? s.locks : [];
+  const machineLocks = locks.filter((lock) => lock.scope === 'machine' && lock.name === 'full-suite');
+  const laneTickets = [...new Map(machineLocks.flatMap((lock) => lock.queue || []).map((ticket) => [ticket.id || `${ticket.lane}:${ticket.seq}`, ticket])).values()];
+  const policyLocks = s.policy?.locks || {};
+  const slots = policyLocks.slots ?? machineLocks[0]?.slotLimit ?? 2;
+  const guard = policyLocks.guard || { enabled: true, maxLoadPercent: 231, maxSwapPercent: 96, minFreeMemPercent: 40 };
+  const prediction = (value) => value == null ? 'unknown' : dur(Math.ceil(value / 1000));
+  const laneName = (item) => item.lane === 'short' ? 'short' : 'long';
+  const laneHolder = (lock) => `${esc(lock.project || 'Unknown project')} · ${esc(lock.ownerPane || 'Unknown pane')} (${esc(lock.kind)}) · ${laneName(lock)} job${lock.lane === 'short' && lock.slot === 'long' ? ' · borrowed long slot' : ''} · predicted ${prediction(lock.predictedMs)}`;
+  const liveMachineLocks = machineLocks.filter((lock) => lock.state === 'live');
+  const laneCard = (lane, capacity, holders, tickets) => `<section class="machine-lock-lane" data-lock-lane="${lane}">
+    <h3>${lane === 'long' ? 'Long lane' : 'Short lane'} <span>${holders.length} / ${capacity} slots</span></h3>
+    <ul class="machine-lock-lane-list">${holders.length ? holders.map((lock) => `<li>${laneHolder(lock)}</li>`).join('') : '<li class="muted">No holder</li>'}</ul>
+    <h4>Queue</h4>
+    <ol class="machine-lock-lane-list">${tickets.length ? tickets.map((ticket) => `<li>${esc(ticket.position)}. ${esc(ticket.project)} · ${esc(ticket.pane)} (${esc(ticket.kind)}) · predicted ${prediction(ticket.predictedMs)} · waiting ${esc(dur(ticket.waitSeconds))}</li>`).join('') : '<li class="muted">No queued jobs</li>'}</ol>
+  </section>`;
+  const longHolders = liveMachineLocks.filter((lock) => lock.slot === 'long' || lock.slot == null);
+  const shortHolders = liveMachineLocks.filter((lock) => Number.isInteger(lock.slot) && lock.slot > 0);
+  const lanes = `<div class="machine-lock-lanes">${laneCard('long', 1, longHolders, laneTickets.filter((ticket) => laneName(ticket) === 'long'))}${laneCard('short', Math.max(0, slots - 1), shortHolders, laneTickets.filter((ticket) => laneName(ticket) === 'short'))}</div>`;
+  const guardStatus = guard.enabled === false
+    ? 'Guard off.'
+    : `Guard on. Pause above ${esc(guard.maxLoadPercent ?? 231)}% load or ${esc(guard.maxSwapPercent ?? 96)}% swap, and below ${esc(guard.minFreeMemPercent ?? 40)}% free memory.`;
   const rows = locks.map((lock) => {
     const queue = Array.isArray(lock.queue) ? lock.queue : [];
-    const queueRow = queue.length ? `<tr class="machine-lock-queue"><td colspan="6"><strong>Queue</strong><ol>${queue.map((ticket) => `<li>${esc(ticket.position)}. ${esc(ticket.project)} ${esc(ticket.pane)} (${esc(ticket.kind)}) ${esc(dur(ticket.waitSeconds))}</li>`).join('')}</ol></td></tr>` : '';
+    const queueRow = queue.length ? `<tr class="machine-lock-queue"><td colspan="9"><strong>Queue</strong><ol>${queue.map((ticket) => `<li>${esc(ticket.position)}. ${esc(ticket.project)} ${esc(ticket.pane)} (${esc(ticket.kind)}) ${esc(ticket.lane || 'long')} lane · predicted ${prediction(ticket.predictedMs)} · ${esc(dur(ticket.waitSeconds))}</li>`).join('')}</ol></td></tr>` : '';
     return `<tr>
     <td class="mono" data-label="Lock">${esc(lock.name)}</td>
     <td data-label="Holder">${esc(lock.project || 'Unknown project')} · ${esc(lock.ownerPane || 'Unknown pane')}</td>
     <td data-label="Kind">${esc(lock.kind)}</td>
+    <td data-label="Lane">${esc(laneName(lock))}</td>
+    <td data-label="Slot">${typeof lock.slot === 'number' ? `short ${esc(lock.slot)}` : 'long'}</td>
     <td data-label="Age">${esc(dur(lock.ageSeconds))}</td>
     <td data-label="Time left">${lock.kind === 'manual' ? `${esc(until(lock.expiresAt))} left` : 'until the command ends'}</td>
+    <td data-label="Predicted">${esc(prediction(lock.predictedMs))}</td>
     <td data-label="State"><span class="tag machine-lock-state ${lock.state === 'live' ? 'is-live' : 'is-stale'}">${esc(lock.state)}</span></td>
   </tr>${queueRow}`;
   }).join('');
   const stats = s.lockStats;
   const ms = (value) => (value == null ? '–' : dur(value / 1000));
   const statsLine = stats && stats.acquires
-    ? `<p class="machine-lock-help machine-lock-stats" data-lock-stats>Last ${esc(stats.windowDays)} days: median hold <strong>${esc(ms(stats.medianHoldMs))}</strong>, median wait <strong>${esc(ms(stats.medianWaitMs))}</strong>, ${esc(stats.acquires)} acquires.${Object.entries(stats.byName || {}).map(([name, n]) => ` ${esc(name)}: hold ${esc(ms(n.medianHoldMs))}, wait ${esc(ms(n.medianWaitMs))}.`).join('')}</p>`
+    ? `<p class="machine-lock-help machine-lock-stats" data-lock-stats>Last ${esc(stats.windowDays)} days: median hold <strong>${esc(ms(stats.medianHoldMs))}</strong>, median wait <strong>${esc(ms(stats.medianWaitMs))}</strong>, long lane wait <strong>${esc(ms(stats.byLane?.long?.medianWaitMs))}</strong>, short lane wait <strong>${esc(ms(stats.byLane?.short?.medianWaitMs))}</strong>, ${esc(stats.acquires)} acquires.${Object.entries(stats.byName || {}).map(([name, n]) => ` ${esc(name)}: hold ${esc(ms(n.medianHoldMs))}, wait ${esc(ms(n.medianWaitMs))}.`).join('')}</p>`
     : '<p class="machine-lock-help machine-lock-stats" data-lock-stats>No lock history yet.</p>';
   return `<section class="machine-lock-panel panel">
     <div class="section-head"><h2>Locks</h2><span>Machine locks</span></div>
+    <p class="machine-lock-help machine-lock-guard" data-lock-guard>${guardStatus}</p>
+    ${lanes}
     ${statsLine}
-    ${locks.length ? `<div class="machine-lock-table-wrap"><table class="machine-lock-table"><thead><tr><th>Lock</th><th>Holder</th><th>Kind</th><th>Age</th><th>Time left</th><th>State</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="machine-lock-empty">No machine locks are held.</p>'}
-    <p class="machine-lock-help">A command lock ends when its command ends. A manual lock expires after 60 minutes. Herdr Boss takes over a stale lock. A full-suite queue shows each waiter's position, project, pane, kind, and wait time. The history line shows the median hold time and median wait time of the last 7 days, from the lock ledger.</p>
+    ${locks.length ? `<div class="machine-lock-table-wrap"><table class="machine-lock-table"><thead><tr><th>Lock</th><th>Holder</th><th>Kind</th><th>Lane</th><th>Slot</th><th>Age</th><th>Time left</th><th>Predicted</th><th>State</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="machine-lock-empty">No machine locks are held.</p>'}
+    <p class="machine-lock-help">A command lock ends when its command ends. A manual lock expires after 60 minutes. Herdr Boss takes over a stale lock. The lane queues follow ticket order. A short job that uses the long slot is marked as borrowed.</p>
   </section>`;
 }
 
@@ -2568,6 +2599,7 @@ function agentsView(s) {
     `<header class="page-intro"><div><h1>Agents</h1><p>Chart or list of the Owner, the Boss, project orchestrators, and workers. Use the switch to change the view.</p></div><div class="page-switches">${viewSwitch}${chart ? styleSwitch : ''}</div></header>`,
     watchPanel(s),
     chart ? organizationChart(s) : agentInventory(s),
+    machineLocksBlock(s),
   ].join('');
 }
 
@@ -4669,17 +4701,34 @@ function lockWaitBlock() {
   const base = { id: 'lock-wait', title: 'Lock wait and hold' };
   if (!locks?.projects?.length) return vizCard({ ...base, empty: 'No lock use is recorded in the last 7 days.' });
   const win = lockWaitSeries(locks, analyticsUi.lockProject);
+  const rows = win.project === 'all' ? locks.projects : locks.projects.filter((project) => project.project === win.project);
+  const laneWait = (lane) => win.days.map((_, index) => rows.reduce((total, project) => {
+    const value = project.waitByLane?.[lane]?.[index];
+    if (Number.isFinite(value)) return total + value;
+    return lane === 'long' && !project.waitByLane && Number.isFinite(project.wait?.[index]) ? total + project.wait[index] : total;
+  }, 0));
+  const longWait = laneWait('long');
+  const shortWait = laneWait('short');
+  const chartSeries = [
+    { key: 'hold', label: 'Hold', cls: 's1', values: win.series[0].values },
+    { key: 'waitLong', label: 'Long lane wait', cls: 's2', values: longWait },
+    { key: 'waitShort', label: 'Short lane wait', cls: 's3', values: shortWait },
+  ];
+  const laneStats = win.project === 'all' ? locks.byLane : rows[0]?.medianWaitMsByLane;
+  const medianText = `Long lane median wait ${minutes(laneStats?.long?.medianWaitMs ?? (win.project === 'all' ? null : laneStats?.long))}; Short lane median wait ${minutes(laneStats?.short?.medianWaitMs ?? (win.project === 'all' ? null : laneStats?.short))}.`;
   const who = win.project === 'all' ? 'all projects' : win.project;
   const title = `${minutes(win.totals.wait)} waiting and ${minutes(win.totals.hold)} holding in 7 days (${who})`;
   const fmt = (v) => minutes(v);
   const controls = `<div class="viz-controls">${vizSwitch('lock-project', win.project, [['all', 'All'], ...win.projects.map((p) => [p, p])], 'Show the locks of')}</div>`;
+  const laneRows = win.days.map((day, index) => `<tr><td data-label="Date">${esc(day)}</td><td data-label="Long lane wait" class="mono">${esc(minutes(longWait[index]))}</td><td data-label="Short lane wait" class="mono">${esc(minutes(shortWait[index]))}</td></tr>`).join('');
+  const laneDetails = `<h3>Wait by lane</h3><div class="fleet-table-wrap"><table class="fleet-table"><thead><tr><th>Date</th><th>Long lane</th><th>Short lane</th></tr></thead><tbody>${laneRows}</tbody></table></div>`;
   return vizCard({
     ...base, title,
-    sub: 'Last 7 days, one bar for each day. The lower part is the time a run held the lock. The upper part is the time a run waited for it. A run that reused a pass holds no lock and adds nothing.',
+    sub: `Last 7 days, one bar for each day. The lower part is hold time. The upper parts are wait time by lane. ${medianText} Rows without a lane count as long. A run that reused a pass adds nothing.`,
     controls,
-    legend: legendHtml(win.series.map((x) => ({ ...x, label: `${x.label} ${minutes(win.totals[x.key])}` }))),
-    chart: stackedBars({ cats: win.days.map((day) => ({ label: dayLabel(day), tip: dayLabel(day, true) })), series: win.series, fmt, label: title }),
-    details: lockWaitDetailsHtml(win, locks),
+    legend: legendHtml(chartSeries.map((series) => ({ ...series, label: `${series.label} ${minutes(series.values.reduce((sum, value) => sum + value, 0))}` }))),
+    chart: stackedBars({ cats: win.days.map((day) => ({ label: dayLabel(day), tip: dayLabel(day, true) })), series: chartSeries, fmt, label: title }),
+    details: `${lockWaitDetailsHtml(win, locks)}${laneDetails}`,
   });
 }
 
@@ -5564,13 +5613,14 @@ const HELP = {
     <p>A bar label such as <b>30% · 2</b> shows the set share and the effective slots. A narrow segment shows fewer labels; its tooltip shows all values.</p>
     <p>An idle project is faded. A paused project is faded and striped.</p>
     <p>When <b>Borrow idle shares</b> is on, a project lends its unused slots to the projects that use all their slots. An idle or paused project lends all its slots. Another project always keeps its base slots. It offers its unused slots to other projects and does not lose them. The lent and offered slots go to the full projects by share. When no project is full, no project lends. A project row shows <b>N lent</b> for an idle project, <b>N free for others</b> for a project with unused slots, and <b>+N borrowed</b> for a full project. Borrowed slots are real capacity. The global limit still applies.</p>
-    <h3>Locks</h3><p>The panel lists machine locks. Each row shows the lock name, holder project and pane, kind, age, time left, and state. When no lock exists, the panel shows <b>No machine locks are held.</b> A manual lock expires after 60 minutes. A command lock ends when its command ends. Herdr Boss takes over a stale lock. The history line above the table shows the median hold time and the median wait time of all locks in the last 7 days, and of each lock name. A re-entrant suite under a push is not part of the medians. Before the first lock change, it shows <b>No lock history yet.</b> You cannot release a lock from this panel.</p>
+    <h3>Locks</h3><p>The panel on the Agents and Allocation pages shows the long and short lanes, their holders, queues, and predicted durations. The long lane has one slot. The short lane has one fewer slot than the machine lock capacity. A short job can use a free long slot only when no long job waits. The panel shows the machine guard limits and the median wait by lane. A re-entrant suite under a push is not part of the medians. You cannot release a lock from this panel.</p>
     <h3>Resource leases</h3><p>Each pool lists its items and the holder of each item. The head shows the held and free counts, the lease TTL, and the reclaim rule. A held row shows the holder project, the pane or worker, the lease age, the server (its pid, or <b>unbound</b>), whether the port has a listener, the idle minutes, and the time left. A row with no listener is idle and has a muted style. Herdr Boss reclaims an idle lease after the idle minutes of the pool. <b>borrowed</b> marks an item of another project's split. For <code>project-browsers</code>, the panel lists only the held ports and the number of free ports; that pool has 77 ports. An invalid resource pool shows an error line.</p>
     <p>Select <b>Release</b> to give a lease back. The page asks you to confirm, and names the pool, the item, the holder project, and the pane or worker. The release removes the lease only while its holder project is still the project that the page shows. Otherwise the page reports that the lease changed, and you reload the page. A release never stops a process. For a project browser that runs, the button is disabled until you close the browser on the Browsers page.</p>
     <h3>Manage pools</h3><p>Select <b>Add pool</b> to create a pool. Enter ports, ranges such as 8000-8009, or items. Separate them with commas or lines. A pool holds at most 100 ports from 1024 to 65535. Enter the project split as JSON. Set the environment variable, lease TTL, reclaim check, grace period, idle minutes, and the wait default. Add a value by port to hand a worker a variable, for example a client ID, that matches its port. The value is stored in the private config file on this machine only, and the page shows <b>set</b> instead of the value. Select <b>Change</b> to replace it. An empty value clears it. Keep ports 9222 to 9299 out of custom pools. Select <b>Edit</b> to change a config pool. Select <b>Remove</b>, then confirm the pool name, to remove it. A held item blocks removal and any update that drops it. The exception is a lease that is unbound and has had no listener for the idle minutes. Herdr Boss saves the change to <code>config.json</code> and applies it at once. The built-in <code>project-browsers</code> pool has no edit or remove controls. The read-only preview refuses pool changes.</p>`],
   settings: ['Settings', `
-    <p>Each harness section holds the models and provider routes of that harness. Provider quotas and machine limits are below the harnesses. The <b>Advanced</b> section holds the rarely used settings. It stays closed until you open it, and the page remembers its state.</p>
+    <p>Each harness section holds the models and provider routes of that harness. Provider quotas, machine limits, and lock lanes are below the harnesses. The <b>Advanced</b> section holds the rarely used settings. It stays closed until you open it, and the page remembers its state.</p>
     <h3>Guide to the settings</h3>${settingsGuideHtml()}
+    <h3>Locks</h3><p>The <b>Locks</b> group sets machine lock slots, the short job limit, and the machine guard. The default is 2 slots and a 6 minute short job limit. Herdr Boss predicts a job from recent lock holds. A key with fewer than 3 releases has an unknown prediction and uses the long lane. Before a short job starts beside a long holder, the guard checks load, swap, and free memory. A missing sample or one older than 3 minutes passes. The guard never delays a long job. Change the settings and select <b>Apply policy</b>. They apply to the next lock admission.</p>
     <h3>Avatars</h3><p>The <b>Avatars</b> section has one row for the Boss and one row for each project. A row shows the avatar of that chat. Select <b>Upload image</b> to use your own image. Select <b>Reset</b> to use the generated avatar again. An image is a PNG, JPEG, or WebP file of at most 512 KB. Herdr Boss keeps no other format. The image shows at once in the Chat, the Mailbox, and the Agents chart. Without an image, the page uses a generated avatar. Its color comes from the name of the project, and it stays the same. The two letters come from the project display name, the same on every page. The Boss has a crown. Each other project has two letters. The letters use the color of the best contrast on the circle.</p>
     <h3>Watch routines</h3><p>Each routine in the <b>Watch routines</b> section has a title, a model hint, a schedule, and a prompt text. Select a routine to edit it. The schedule is a number of minutes between runs, or a time before the end of the watch. Select <b>Save</b> to store the change on this machine. The change never edits the kit file, and it applies to the next prompt of a running watch. Select <b>Reset to the kit text</b> to remove your change. Use <b>Add a routine</b> to create your own routine. Turn routines on or off for a watch in the Watch box on the Agents page.</p>
     <h3>Service settings</h3><p>The table shows the values that the service uses. Each row shows whether the value comes from <code>config.json</code> or a default. Rows with inputs can be changed in the dashboard. Change the values in a group, then select <b>Save</b>. Herdr Boss applies saved values at once. Keep the quota warning below the critical value. Rows without inputs are read-only: port, host, provider kinds, and orchestrator label. Change them in <code>config.json</code> and restart. A row marked restart required saves at once and takes effect after the next service restart.</p>
@@ -5595,6 +5645,7 @@ const HELP = {
     <p>One page with two views. The switch at the top changes the view. The <b>Chart</b> view shows the organization from the Owner down to the workers. The <b>List</b> view lists every Herdr workspace with its orchestrator and workers. Chart is the default. The URL holds the view as <code>?view=chart</code> or <code>?view=list</code>, and this browser remembers the last choice.</p>
     <h3>Set goal</h3><p><b>Set goal</b> gives the running orchestrator of a project a new <code>/goal</code>. A dialog shows the text, which starts as the <b>Default orchestrator goal</b> from Settings. Edit it if you need to. The limit is 2000 characters. The command waits until the pane of the orchestrator is idle, for up to 10 minutes. It waits for 2 minutes when the input box holds unsent text or a dialog is open. It sends nothing while the agent works, a dialog is open, or the input box holds typed text. A dim suggestion in the input box does not block it. A failed job adds one Mailbox item. <b>Cancel</b> stops a job that waits. <b>Set goal</b> is also allowed for a paused or stood down project. After a restart of the service, a job that ran shows <b>Interrupted</b>. The status line shows <b>Waiting for an idle pane</b>, <b>Sending the command</b>, <b>Checking that the pane shows the goal</b>, <b>Goal active</b>, or <b>Goal not set</b> with the reason.</p>
     <h3>Watch</h3><p>The box at the top shows the watch state in its header. When no watch runs, the box is closed; select the header to open it. While a watch runs, the box is open. The browser remembers the open or closed state. Choose the end date and time in the picker. The default is the next 07:30: today when it is before 07:30, tomorrow otherwise. The length in hours shows next to the picker, and a warning shows above 48 hours. A watch has no maximum length. The end time must be in the future.</p>
+    <h3>Locks</h3><p>The panel below the agent chart shows machine lock lanes and the queue in each lane. The long lane holds one job. The short lane holds up to the other configured slots. Each row shows a predicted duration. The panel also shows whether the machine guard is on and its limits. The Allocation page shows the same panel.</p>
     <p>Select <b>Until I cancel</b> to run the watch until you stop it. Then you can select <b>Daily report</b> and set a time, by default 07:30. A watch until cancelled sends no report unless you select this. Select <b>Quiet hours</b> to hold back the held actions.</p>
     <p>The <b>Routines</b> list shows the prompts that the service sends to the Boss pane during the watch. Clear the box of a routine to leave it out of this watch. Set its schedule: a number of minutes between runs, or a time before the end of the watch. A routine before the end has no run in a watch until cancelled.</p>
     <p>Write <b>Instructions for this watch</b> to add a text for this watch only. The service sends the text to the Boss with each routine, and to each orchestrator in the start notice. The box keeps your last choice of routines and schedules as the default of the next watch.</p>
@@ -5642,7 +5693,7 @@ const HELP = {
     <p>A flag on the chart marks a day on which a harness fix went in. The flags come from <code>harness-changes.jsonl</code> in the data folder, one JSON object on each line: <code>date</code> (YYYY-MM-DD), <code>harness</code> (<code>claude</code>, <code>codex</code>, <code>opencode</code>, or <code>pi</code>), and <code>label</code> (up to 80 characters). Add a line with <code>herdr-boss harness change HARNESS LABEL [--date YYYY-MM-DD]</code>. Hover, focus, or touch a flag to read its date, harness, and label. Details lists the days, both series, and the flags. The small table in Details shows counts for the last 7 days by harness, model, and cause. It shows up to 10 rows.</p>
     <p>The table in Details shows the last 7 days by cause and project. The arrow compares the last 24 hours with the mean of the 6 days before. When a cause is above 2 times its mean and above 10 events, the page and the bulletin show <b>Discuss this trend with the Boss.</b> Herdr Boss sends no prompt to an orchestrator about it. While more than 1 MB of older logs is unread, the note waits, because the counts of older days are not complete.</p>
     <p>A read-only line shows the limits: the scan interval, the bytes for one scan, the days kept, and the rise rule.</p>
-    <h3>Lock wait and hold</h3><p>Bars show, for each of the last 7 days, the time that runs held a machine lock (lower part) and the time that runs waited for it (upper part). Choose a project to see only its runs. A push or a suite run that reused a suite pass takes no lock and adds no time. Details lists the days and the projects with their runs and timeouts.</p>
+    <h3>Lock wait and hold</h3><p>Bars show hold time in the lower part and wait time by lane in the upper parts, for each of the last 7 days. The text shows the median wait for the long and short lanes. Choose a project to see only its runs. A push or a suite run that reused a suite pass takes no lock and adds no time. Details lists the days, wait by lane, and the projects with their runs and timeouts.</p>
     <h3>Machine load and lock waits</h3><p>Lines show the 5-minute load as a percent of the cores, the memory in use, and the swap in use over the last 24 hours, in columns of 10 minutes. A shaded column had a lock holder. The strip under the chart shows the minutes in which a suite request waited in the queue.</p>
     <h3>Machine overload and idle waiting</h3><p>The chart shows, for each hour of the day in local time, the mean minutes per day of two conditions over the last 14 days. <b>Overload</b>: swap above 90% with at least 1 GB in use, or a 5-minute load above 3 times the cores. <b>Queue waited, CPU under 50%</b>: a suite request waited in the <code>full-suite</code> queue while the CPU was not the reason.</p>
     <p>Hover, focus, or touch an hour to read its values. Hatched bars have fewer than 10 samples. A note shows when samples cover less than half of the window; a minute without a sample is missing data. The table under the chart has the same 24 rows. On a phone the chart scrolls sideways inside its own box.</p>
@@ -7030,6 +7081,13 @@ document.addEventListener('change', (e) => {
   }
   if (el.dataset.policyMachine) { d.machine ||= {}; d.machine[el.dataset.policyMachine] = el.value === '' ? null : Number(el.value); }
   if (el.dataset.policyMachineBool) { d.machine ||= {}; d.machine[el.dataset.policyMachineBool] = el.checked; }
+  if (el.dataset.policyLock) { d.locks ||= {}; d.locks[el.dataset.policyLock] = Number(el.value); }
+  if (el.dataset.policyLockGuard) {
+    d.locks ||= {};
+    d.locks.guard ||= {};
+    const key = el.dataset.policyLockGuard;
+    d.locks.guard[key] = key === 'enabled' ? el.checked : Number(el.value);
+  }
   if (el.dataset.policyBool) d[el.dataset.policyBool] = el.checked;
   if (el.dataset.provider) d.providerModes[el.dataset.provider] = el.value;
   if (el.dataset.preferredModel) {

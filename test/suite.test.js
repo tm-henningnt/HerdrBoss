@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 import test from 'node:test';
 import { loadProjectConfig } from '../src/kit/config.js';
 import { runKitCommand } from '../src/kit/cli.js';
-import { acquireProjectLock, recordLockRelease, releaseProjectLock, withMutationLock } from '../src/kit/locks.js';
+import { acquireProjectLock, listProjectLocks, recordLockRelease, releaseProjectLock, withMutationLock } from '../src/kit/locks.js';
 import { writeNight } from '../src/night.js';
 
 function git(cwd, ...args) {
@@ -752,6 +752,34 @@ test('the machine guard does not read a sample without a long holder or for a lo
   assert.equal(sampleReads, 0);
   releaseProjectLock('full-suite', options('ws:a'));
   releaseProjectLock('full-suite', options('ws:b'));
+});
+
+test('lock list text and returned data show holder and ticket lanes, slots, and predictions', (t) => {
+  const f = fixture(t, 'herdr-suite-lock-list-lanes-');
+  configureLockSettings(f, { slots: 2, shortLimitMinutes: 6 });
+  seedLockHistory(f);
+  const options = lockOptions(f, 'ws:orch', ['ws:orch']);
+  acquireProjectLock('full-suite', { ...options, kind: 'suite', waitSeconds: 0 });
+  const queue = path.join(f.dataDir, 'locks', 'machine', 'queue', 'full-suite');
+  fs.mkdirSync(queue, { recursive: true, mode: 0o700 });
+  const ticket = {
+    id: '00000000-0000-4000-8000-000000000042', seq: 1, pane: 'ws:orch', project: f.config.slug, pid: process.pid,
+    kind: 'suite', lane: 'long', predictedMs: 300000, command: 'herdr-boss lock acquire full-suite',
+    createdAt: new Date().toISOString(),
+  };
+  fs.writeFileSync(path.join(queue, `${ticket.id}.json`), JSON.stringify(ticket), { mode: 0o600 });
+  const lines = [];
+  const locks = listProjectLocks({ ...options, output: (line) => lines.push(line), pidAlive: () => true });
+  const lock = locks.find((entry) => entry.name === 'full-suite');
+
+  assert.equal(lock.lane, 'short');
+  assert.equal(lock.predictedMs, 60000);
+  assert.equal(lock.queue[0].lane, 'long');
+  assert.equal(lock.queue[0].predictedMs, 300000);
+  assert.match(lines.join('\n'), /lane short, short slot 1, 1 of 2 slots in use, predicted 1m/);
+  assert.match(lines.join('\n'), new RegExp(`1\\. ${f.config.slug} ws:orch \\(suite\\) long lane, predicted 5m, 1 of 2 slots in use`));
+  assert.equal(JSON.parse(JSON.stringify(locks))[0].queue[0].slotsInUse, 1);
+  releaseProjectLock('full-suite', options);
 });
 
 test('slots 3 lets two predicted short suites hold separate short slots', (t) => {

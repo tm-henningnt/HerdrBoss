@@ -21,6 +21,12 @@ const localDay = (ms) => {
 const mean = (values) => (values.length ? values.reduce((a, b) => a + b, 0) / values.length : null);
 const round = (value) => (value === null ? null : Math.round(value));
 const finite = (value) => (value === null || value === undefined || value === '' ? null : Number.isFinite(Number(value)) ? Number(value) : null);
+const median = (values) => {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[middle] : Math.round((sorted[middle - 1] + sorted[middle]) / 2);
+};
 
 // Reads the last maxBytes of a JSONL file. The first line of the tail can be cut, so a line that does not parse is skipped.
 export function readEventTail(file, { maxBytes = EVENT_TAIL_BYTES } = {}) {
@@ -128,6 +134,11 @@ export function lockDaily(rows, { days = 7, now = Date.now() } = {}) {
   const dayList = Array.from({ length: days }, (_, i) => localDay(now - (days - 1 - i) * 86400000));
   const index = new Map(dayList.map((d, i) => [d, i]));
   const empty = () => Array(days).fill(0);
+  const emptyLanes = () => ({ long: empty(), short: empty() });
+  const laneWaitSamples = { long: [], short: [] };
+  const laneWait = emptyLanes();
+  const laneRuns = emptyLanes();
+  const laneTimeouts = emptyLanes();
   const byProject = new Map();
   for (const row of rows || []) {
     const at = Date.parse(row?.at);
@@ -135,25 +146,50 @@ export function lockDaily(rows, { days = 7, now = Date.now() } = {}) {
     const i = index.get(localDay(at));
     if (i === undefined) continue;
     const project = typeof row.project === 'string' && PROJECT_SLUG.test(row.project) ? row.project : 'other';
-    const entry = byProject.get(project) || { project, wait: empty(), hold: empty(), runs: empty(), timeouts: empty() };
+    const entry = byProject.get(project) || {
+      project, wait: empty(), hold: empty(), runs: empty(), timeouts: empty(),
+      waitByLane: emptyLanes(), laneWaitSamples: { long: [], short: [] },
+    };
     byProject.set(project, entry);
     if (row.reentrant || row.reused) continue;
     if (row.event === 'acquire') {
       entry.runs[i] += 1;
-      entry.wait[i] += finite(row.waitMs) || 0;
+      const waitMs = finite(row.waitMs) || 0;
+      const lane = row.lane === 'short' ? 'short' : 'long';
+      entry.wait[i] += waitMs;
+      entry.waitByLane[lane][i] += waitMs;
+      entry.laneWaitSamples[lane].push(waitMs);
+      laneWait[lane][i] += waitMs;
+      laneWaitSamples[lane].push(waitMs);
+      laneRuns[lane][i] += 1;
     } else if (row.event === 'release' && !row.takeover) {
       entry.hold[i] += finite(row.holdMs) || 0;
     } else if (row.event === 'timeout') {
       entry.timeouts[i] += 1;
+      const lane = row.lane === 'short' ? 'short' : 'long';
+      laneTimeouts[lane][i] += 1;
     }
   }
   const sum = (values) => values.reduce((a, b) => a + b, 0);
-  const projects = [...byProject.values()].map((p) => ({ ...p, waitTotal: sum(p.wait), holdTotal: sum(p.hold) }))
+  const projects = [...byProject.values()].map((p) => {
+    const { laneWaitSamples: samples, ...entry } = p;
+    return {
+      ...entry,
+      waitTotal: sum(p.wait), holdTotal: sum(p.hold),
+      medianWaitMsByLane: { long: median(samples.long), short: median(samples.short) },
+    };
+  })
     .filter((p) => p.waitTotal + p.holdTotal + sum(p.runs) + sum(p.timeouts) > 0)
     .sort((a, b) => (a.project === 'other') - (b.project === 'other') || b.waitTotal + b.holdTotal - (a.waitTotal + a.holdTotal) || a.project.localeCompare(b.project));
   const totals = { wait: empty(), hold: empty() };
   for (const p of projects) for (let i = 0; i < days; i++) { totals.wait[i] += p.wait[i]; totals.hold[i] += p.hold[i]; }
-  return { days: dayList, projects, totals };
+  return {
+    days: dayList, projects, totals,
+    byLane: Object.fromEntries(['long', 'short'].map((lane) => [lane, {
+      wait: laneWait[lane], runs: laneRuns[lane], timeouts: laneTimeouts[lane],
+      medianWaitMs: median(laneWaitSamples[lane]),
+    }])),
+  };
 }
 
 // The harness change markers that fall on a day of the denial window.
