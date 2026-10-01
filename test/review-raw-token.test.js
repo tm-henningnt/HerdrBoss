@@ -1,3 +1,4 @@
+import './helpers/test-env.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRawTokens, TOKEN_TTL_MS, TOKEN_MAX } from '../src/review-raw.js';

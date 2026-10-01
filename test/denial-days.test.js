@@ -1,3 +1,4 @@
+import './helpers/test-env.js';
 // Denials per day: the outcome of each cause, the daily series for 3, 7, and 30 days, and the aggregate of /api/analytics.
 import assert from 'node:assert/strict';
 import test from 'node:test';

@@ -1,3 +1,4 @@
+import './helpers/test-env.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { deriveControl, laneStatus, POLICY_DEFAULTS, validatePolicy } from '../src/control.js';

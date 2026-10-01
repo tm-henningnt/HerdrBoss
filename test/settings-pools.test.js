@@ -1,3 +1,4 @@
+import './helpers/test-env.js';
 // The Settings page shows the resource pools with the same editor as the Allocation page. A client value never reaches the page.
 import test from 'node:test';
 import assert from 'node:assert/strict';
