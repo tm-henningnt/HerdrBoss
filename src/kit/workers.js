@@ -382,7 +382,7 @@ export function describeLane(provider, lane, now = Date.now()) {
   const goals = goalSummary(lane?.goals);
   const reading = lane?.reading;
   const readingAge = Number.isFinite(reading?.ageMinutes) ? `${reading.ageMinutes} min old` : 'age unknown';
-  const readingText = Number.isFinite(reading?.usedPercent)
+  const readingText = Number.isFinite(reading?.usedPercent) && (Number.isFinite(reading?.ageMinutes) || reading.stale)
     ? `; last reading ${reading.usedPercent}% ${String(reading.window || 'quota').toLowerCase()}, ${readingAge}${reading.stale ? ', stale' : ''}`
     : '';
   const suffix = `${goals ? `; ${goals}` : ''}${readingText}`;

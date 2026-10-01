@@ -1433,7 +1433,7 @@ function laneLine(provider, lane) {
   const used = Number.isFinite(lane.usedPercent) ? ` · ${lane.usedPercent}% used${Number.isFinite(lane.expectedPercent) ? ` of ${lane.expectedPercent}% expected` : ''}${lane.window ? ` (${esc(lane.window)})` : ''}` : '';
   const reading = lane.reading;
   const readingAge = Number.isFinite(reading?.ageMinutes) ? `${reading.ageMinutes} min old` : 'age unknown';
-  const readingText = Number.isFinite(reading?.usedPercent)
+  const readingText = Number.isFinite(reading?.usedPercent) && (Number.isFinite(reading?.ageMinutes) || reading.stale)
     ? ` · last reading ${reading.usedPercent}% ${esc(String(reading.window || 'quota').toLowerCase())}, ${readingAge}${reading.stale ? ' · stale' : ''}`
     : '';
   const text = lane.ignored ? 'open, quota ignored' : lane.state === 'open' && Number.isFinite(lane.roomPercent) && lane.roomPercent > 0 ? 'below pace'
