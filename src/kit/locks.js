@@ -1132,10 +1132,12 @@ export function readMachineLocks({ dataDir = DATA_DIR, livePanes = new Set(), pi
   const records = files.map((file) => {
     const record = readRecord(path.join(directory, file), null, 'machine');
     const ageMs = Math.max(0, timeValue(now) - Date.parse(record.acquiredAt));
+    const expiresInMs = record.kind === 'manual' && record.expiresAt ? Math.max(0, Date.parse(record.expiresAt) - timeValue(now)) : null;
     return {
       ...record,
       ageMs,
       ageSeconds: Math.floor(ageMs / 1000),
+      expiresInMs,
       state: lockIsLive(record, { livePanes, pidAlive, now, quietHours }) ? 'live' : 'stale',
     };
   });

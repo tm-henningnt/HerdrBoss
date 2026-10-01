@@ -1668,3 +1668,28 @@ test('LK3 R15 legacy exclusivity displays effective capacity and global FIFO apa
   }
   assert.deepEqual(queue.map((ticket) => ticket.lane), ['long', 'long', 'long']);
 });
+
+for (const kind of ['manual', 'suite', 'push']) {
+  test(`LK3 integration lock list carries finite expiry only for a ${kind} machine holder`, (t) => {
+    const f = fixture(t, 'herdr-lk3-list-expiry-');
+    let clock = Date.parse('2026-10-01T12:00:00.000Z');
+    const options = lockOptions(f, 'ws:orch-a', ['ws:orch-a'], { now: () => clock });
+    acquireProjectLock('full-suite', { ...options, kind });
+    clock += 3 * 60_000;
+    const lines = [];
+    const [listed] = listProjectLocks({ ...options, output: (line) => lines.push(line) });
+    assert.equal(listed.expiresInMs, kind === 'manual' ? 57 * 60_000 : null);
+    assert.doesNotMatch(lines.join('\n'), /NaN/);
+    if (kind === 'manual') {
+      assert.match(lines[0], /full-suite .*ws:orch-a.*manual.*3m.*57m/);
+      assert.match(lines[0], /expires in 57m; PID \d+, live; lane long, long slot/);
+      clock += 58 * 60_000;
+      const [expired] = listProjectLocks({ ...options, output: (line) => lines.push(line) });
+      assert.equal(expired.expiresInMs, 0);
+      assert.match(lines.at(-1), /expires in 0m; PID \d+, stale; lane long/);
+    } else {
+      assert.doesNotMatch(lines[0], /expires in/);
+      assert.match(lines[0], /; lane long, long slot/);
+    }
+  });
+}
