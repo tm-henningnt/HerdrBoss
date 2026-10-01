@@ -26,6 +26,7 @@ These are the shared operating rules for the orchestrator of this project.
 - Follow its worker cap, your project's effective slots, and provider pacing rules. The effective slots include borrowed slots. Your project always keeps its own base slots unless it is idle or paused. Use an authorized override only when needed.
 - When a lane is ahead of pace, start ready work on a lane from the bulletin **Use now** line. Do not wait for the ahead lane.
 - Read `kit/browser-service.md` for project browser commands.
+- Browser output removes credentials, query strings, and fragments. The `--full` flag shows hosts in full. It keeps the credential filter. Use invented values in reports and tests.
 - Keep the orchestrator pane labeled `orch`.
 - Your orchestrator agent is named `<slug>-orch`. Prompt workers and the Boss by pane ID or by that name.
 - Use `herdr-boss worker start` to start workers. Use `--read-only` for a task that changes no repository file.

@@ -1,8 +1,10 @@
 import { isIP } from 'node:net';
 
 const WEB_PROTOCOLS = new Set(['http:', 'https:', 'ws:', 'wss:']);
-const URL_FIELDS = new Set(['url', 'start', 'startUrl', 'webSocketDebuggerUrl']);
-const WEB_URL_PREFIX = /^(?:https?|wss?):\/\//i;
+const URL_FIELDS = new Set(['url', 'start', 'startUrl', 'startPage', 'pageUrl', 'targetUrl', 'webSocketDebuggerUrl']);
+const URL_TEXT_SOURCE = '(?<![\\p{L}\\p{N}_.-])(?:[a-z][a-z\\d+.-]*:\\/\\/|about:|data:|javascript:|blob:)[^\\s"\'`<>]+';
+const MAX_JWT_PART_LENGTH = 4096;
+const SECRET_FIELDS = /^[A-Za-z0-9_]*(?:code|state|session_state|access_token|id_token|refresh_token|token|key)$/i;
 const HOST_TEXT_TOKEN = /(?<![\p{L}\p{N}_.-])(?:\[[\da-f:.]+\]|(?:[\p{L}\p{N}](?:[\p{L}\p{N}-]{0,61}[\p{L}\p{N}])?\.)+[\p{L}\p{N}](?:[\p{L}\p{N}-]{0,61}[\p{L}\p{N}])?|(?:\d{1,3}\.){3}\d{1,3})(?![\p{L}\p{N}_-])/giu;
 
 function explicitPort(value) {
@@ -32,51 +34,119 @@ function maskedHost(hostname) {
   return labels.length === 1 ? '<tenant>' : `<tenant>.${labels.slice(1).join('.')}`;
 }
 
-function maskBookmarkName(value, { full = false } = {}) {
-  if (typeof value !== 'string' || full) return value;
-  return value.replace(HOST_TEXT_TOKEN, (token) => {
-    const host = token.replace(/^\[|\]$/g, '');
-    if (isLoopback(host) || (!isIP(host) && !/[\p{L}]/u.test(host))) return token;
-    return maskedHost(host);
-  });
+function redactJwtTokens(value) {
+  const output = [];
+  const parts = [];
+  let copiedUntil = 0;
+  // Consume each run once. A failed candidate never retries inside a long run.
+  for (const match of value.matchAll(/[A-Za-z0-9_-]+={0,2}/g)) {
+    const start = match.index;
+    const previous = parts.at(-1);
+    if (previous && (start !== previous.end + 1 || value[previous.end] !== '.')) parts.length = 0;
+    parts.push({ start, end: start + match[0].length, text: match[0] });
+    if (parts.length < 3) continue;
+    const header = parts[0].text;
+    let redact = parts.some((part) => part.text.length > MAX_JWT_PART_LENGTH);
+    if (!redact && header.length >= 3) {
+      redact = header.startsWith('eyJ');
+      if (!redact) {
+        // A JSON header distinguishes a JWT from an ordinary three-label host.
+        const decoded = Buffer.from(header, 'base64url').toString('utf8').trimStart();
+        if (decoded.startsWith('{')) {
+          try {
+            const parsed = JSON.parse(decoded);
+            redact = parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed);
+          } catch {}
+        }
+      }
+    }
+    if (redact) {
+      output.push(value.slice(copiedUntil, parts[0].start), '<redacted>');
+      copiedUntil = parts[2].end;
+      parts.length = 0;
+    } else parts.shift();
+  }
+  output.push(value.slice(copiedUntil));
+  return output.join('');
+}
+
+export function redactBrowserSecrets(value) {
+  if (typeof value !== 'string') return value;
+  return redactJwtTokens(value
+    .replace(/\b([A-Za-z0-9_]*(?:code|state|session_state|access_token|id_token|refresh_token|token|key)\s*(?:=|%3d|:)\s*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s&?#"'<>;,\\]+)/gi, '$1<redacted>')
+    .replace(/\b(Bearer\s+)[^\s"'<>;,\\]+/gi, '$1<redacted>'));
+}
+
+export function maskBrowserText(value, { full = false, maskHosts = false } = {}) {
+  if (typeof value !== 'string') return value;
+  // Decode raw text once, before JSON serialization can introduce escapes.
+  try { value = decodeURIComponent(value); } catch {}
+  const maskText = (text) => {
+    // Redact the complete JWT, including padding, before matching host names.
+    const redacted = redactBrowserSecrets(text);
+    if (!maskHosts || full) return redacted;
+    return redacted.replace(HOST_TEXT_TOKEN, (token) => {
+      const host = token.replace(/^\[|\]$/g, '');
+      if (isLoopback(host) || (!isIP(host) && !/[\p{L}]/u.test(host))) return token;
+      return maskedHost(host);
+    });
+  };
+  const output = [];
+  let copiedUntil = 0;
+  // Strip each URL as a whole before redaction can add markers to its query.
+  for (const match of value.matchAll(new RegExp(URL_TEXT_SOURCE, 'giu'))) {
+    output.push(maskText(value.slice(copiedUntil, match.index)), maskUrl(match[0], { full }));
+    copiedUntil = match.index + match[0].length;
+  }
+  output.push(maskText(value.slice(copiedUntil)));
+  return redactBrowserSecrets(output.join(''));
 }
 
 export function maskUrl(value, { full = false } = {}) {
-  if (typeof value !== 'string' || full) return value;
+  if (typeof value !== 'string') return value;
 
   let parsed;
   try { parsed = new URL(value); }
-  catch { return value; }
+  catch { return redactBrowserSecrets(value.split(/[?#]/, 1)[0]); }
 
   if (parsed.protocol === 'data:' || parsed.protocol === 'javascript:') return '<redacted-url>';
 
-  const hadCredentials = parsed.username !== '' || parsed.password !== '';
   if (!WEB_PROTOCOLS.has(parsed.protocol)) {
-    if (!hadCredentials) return value;
     parsed.username = '';
     parsed.password = '';
-    return parsed.href;
+    parsed.search = '';
+    parsed.hash = '';
+    return redactBrowserSecrets(parsed.href);
   }
 
-  const host = isLoopback(parsed.hostname) ? parsed.hostname : maskedHost(parsed.hostname);
+  const host = full || isLoopback(parsed.hostname) ? parsed.hostname : maskedHost(parsed.hostname);
   const port = explicitPort(value) || (parsed.port ? `:${parsed.port}` : '');
-  const suffix = isLoopback(parsed.hostname) ? `${parsed.search}${parsed.hash}` : '';
-  return `${parsed.protocol}//${host}${port}${parsed.pathname}${suffix}`;
+  return redactBrowserSecrets(`${parsed.protocol}//${host}${port}${parsed.pathname}`);
 }
 
 export function maskDeep(value, options = {}) {
-  if (typeof value === 'string') return WEB_URL_PREFIX.test(value) ? maskUrl(value, options) : value;
+  if (typeof value === 'string') return maskBrowserText(value, options);
   if (Array.isArray(value)) return value.map((item) => maskDeep(item, options));
   if (value && typeof value === 'object') {
     const result = Object.create(Object.getPrototypeOf(value));
     const isBookmark = typeof value.name === 'string' && typeof value.url === 'string';
     for (const [key, item] of Object.entries(value)) {
       const shouldMask = URL_FIELDS.has(key) && typeof item === 'string';
-      if (key === 'name' && isBookmark) result[key] = maskBookmarkName(item, options);
-      else if (shouldMask || (typeof item === 'string' && WEB_URL_PREFIX.test(item))) result[key] = maskUrl(item, options);
+      if (SECRET_FIELDS.test(key) && item !== null && ['string', 'number', 'boolean'].includes(typeof item)) result[key] = '<redacted>';
+      else if (typeof item === 'string' && (key === 'title' || (key === 'name' && isBookmark))) result[key] = maskBrowserText(item, { ...options, maskHosts: true });
+      else if (shouldMask) result[key] = maskUrl(item, options);
       else result[key] = maskDeep(item, options);
     }
     return result;
   }
   return value;
+}
+
+export function maskBrowserState(state) {
+  if (!state || typeof state !== 'object') return state;
+  const result = { ...state };
+  for (const key of ['managedBrowsers', 'browsers', 'events']) {
+    if (Object.hasOwn(result, key)) result[key] = maskDeep(result[key]);
+  }
+  return result;
 }

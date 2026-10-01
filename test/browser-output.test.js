@@ -77,6 +77,21 @@ test('browser CLI refuses a project orchestrator changing another project browse
   assert.equal(result.stderr.trim(), 'The beta browser belongs to project beta. This pane is in workspace Alpha (workspace-alpha), which belongs to project alpha. Only a pane in the beta workspace or the Boss can change it.');
 });
 
+test('browser CLI filters secrets in its text error path with and without --full', (t) => {
+  const fixture = browserCliFixture(t);
+  const file = path.join(fixture.dataDir, 'rules.json');
+  const rules = JSON.parse(fs.readFileSync(file, 'utf8'));
+  rules.control.workspaces[0].label = 'Bearer xyz code=AAAAfakecode eyJfake.eyJfake.fakesig';
+  fs.writeFileSync(file, JSON.stringify(rules));
+  for (const extra of [[], ['--full']]) {
+    const result = fixture.run(['navigate', 'beta', 'https://tenant1.example.test/', ...extra]);
+    assert.equal(result.status, 1);
+    for (const secret of ['xyz', 'AAAAfakecode', 'eyJfake', 'fakesig']) assert.ok(!result.stderr.includes(secret), 'Text error disclosed a fake secret');
+    assert.match(result.stderr, /Bearer <redacted>/);
+    assert.match(result.stderr, /belongs to project beta/);
+  }
+});
+
 test('browser viewport refuses a project orchestrator changing another project browser', (t) => {
   const fixture = browserCliFixture(t);
   const result = fixture.run(['viewport', 'beta', '--tab', 'tab-1', '--reset']);

@@ -7,14 +7,14 @@ import { execFileSync } from 'node:child_process';
 import { loadConfig, migrateAccessFiles, assertPreviewDataDir, assertDataWritable, sandboxWriteError, DATA_DIR, PROJECTS_DIR, dashboardUrl } from './config.js';
 import { writeProject, statusWarnings, capDoneTasks, STATUS_WARN_BYTES, SLUG } from './projects.js';
 import { loadProjectConfig } from './kit/config.js';
-import { maskDeep } from './browser-url-mask.js';
+import { maskDeep, maskBrowserText, redactBrowserSecrets } from './browser-url-mask.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const LABEL = 'no.tallmaker.herdr-boss';
 const PLIST = path.join(os.homedir(), 'Library', 'LaunchAgents', `${LABEL}.plist`);
 
 export function formatBrowserJson(value, options = {}) {
-  return JSON.stringify(maskDeep(value, options), null, 2);
+  return redactBrowserSecrets(JSON.stringify(maskDeep(value, options), null, 2));
 }
 
 export function formatBrowserTabs(tabs, options = {}) {
@@ -44,7 +44,7 @@ async function verifyBrowserCaller(slug, { env = process.env, herdr = null } = {
   const paneId = env.HERDR_PANE_ID;
   const workspaceId = env.HERDR_WORKSPACE_ID;
   if (!paneId && !workspaceId) {
-    console.error('Warning: no Herdr pane; the project check is skipped.');
+    console.error(maskBrowserText('Warning: no Herdr pane; the project check is skipped.'));
     return;
   }
   if (!paneId || !workspaceId) throw new Error('Set both HERDR_PANE_ID and HERDR_WORKSPACE_ID, or neither.');
@@ -61,7 +61,7 @@ async function verifyBrowserCaller(slug, { env = process.env, herdr = null } = {
     if (!['EPERM', 'EACCES', 'ENOENT'].includes(code) && !/\b(EPERM|EACCES|Operation not permitted)\b/.test(String(error?.message))) {
       throw new Error(`Herdr could not read pane ${paneId}: ${error.message}`);
     }
-    console.error(`Warning: Herdr is not reachable from this shell (${code || 'EPERM'}); workspace ${workspaceId} from the environment decides.`);
+    console.error(maskBrowserText(`Warning: Herdr is not reachable from this shell (${code || 'EPERM'}); workspace ${workspaceId} from the environment decides.`));
   }
   let paneWorkspace = workspaceId;
   if (pane) {
@@ -537,9 +537,9 @@ async function main() {
       const full = fullCount === 1;
       if (full) {
         args.splice(0, args.length, ...args.filter((arg) => arg !== '--full'));
-        const supportsFull = ['request', 'tabs', 'navigate'].includes(args[0])
+        const supportsFull = ['request', 'tabs', 'navigate', 'list', 'size', 'viewport', 'close', 'release', 'restart', 'screenshot'].includes(args[0])
           || (args[0] === 'tab' && args[1] === 'new')
-          || (args[0] === 'bookmarks' && ['list', 'open', 'start'].includes(args[2]));
+          || (args[0] === 'bookmarks' && ['list', 'open', 'start', 'add', 'rm'].includes(args[2]));
         if (!supportsFull) throw new Error('--full is for the Owner at a terminal. Use it with browser request, tabs, tab new, navigate, or bookmarks list, open, or start.');
       }
       const { parseScreenshotOptions, saveBrowserScreenshot } = await import('./browser-output.js');
@@ -566,24 +566,25 @@ async function main() {
         if (!match) throw new Error(`${subject} must be percentages from 0% to 100%, for example 42% 65%.`);
         return Number(value.slice(0, -1)) / 100;
       };
-      const printBrowserJson = (value) => console.log(formatBrowserJson(value, { full }));
+      const printBrowser = (value, formatter = maskBrowserText) => console.log(redactBrowserSecrets(formatter(value, { full })));
+      const printBrowserJson = (value) => printBrowser(value, formatBrowserJson);
       if (args[0] === 'sweep-clones' && (args.length === 1 || (args.length === 2 && args[1] === '--dry-run'))) {
         const { codeSignCloneDir, sweepCodeSignClones } = await import('./clone-sweep.js');
         const { fmtDuration } = await import('./rules.js');
         const dryRun = args[1] === '--dry-run';
         const dir = codeSignCloneDir();
-        if (!dir) { console.log('No Chrome code-sign clone folder on this machine. Nothing to do.'); break; }
+        if (!dir) { printBrowser('No Chrome code-sign clone folder on this machine. Nothing to do.'); break; }
         const result = await sweepCodeSignClones({ dir, dryRun });
         if (result.error) throw new Error(result.error);
         if (dryRun) {
-          for (const c of result.candidates) console.log(`${c.name}  ${fmtDuration(Math.round(c.ageMs / 1000))} old`);
-          console.log(`Dry run: ${result.candidates.length} orphaned clone(s) would be deleted. Nothing was deleted.`);
-        } else console.log(`Deleted ${result.removed.length} orphaned clone(s) and freed ${(result.freedBytes / 1024 ** 3).toFixed(1)} GiB.`);
+          for (const c of result.candidates) printBrowser(`${c.name}  ${fmtDuration(Math.round(c.ageMs / 1000))} old`);
+          printBrowser(`Dry run: ${result.candidates.length} orphaned clone(s) would be deleted. Nothing was deleted.`);
+        } else printBrowser(`Deleted ${result.removed.length} orphaned clone(s) and freed ${(result.freedBytes / 1024 ** 3).toFixed(1)} GiB.`);
       }
-      else if (args[0] === 'list' && args.length === 1) console.log(JSON.stringify(await Promise.all(Object.values(listBrowserSessions()).map(browserStatus)), null, 2));
+      else if (args[0] === 'list' && args.length === 1) printBrowserJson(await Promise.all(Object.values(listBrowserSessions()).map(browserStatus)));
       else if (args[0] === 'size' && args.length === 4) {
         await verifyBrowserCaller(args[1]);
-        console.log(JSON.stringify(setBrowserWindowSize(args[1], Number(args[2]), Number(args[3])), null, 2));
+        printBrowserJson(setBrowserWindowSize(args[1], Number(args[2]), Number(args[3])));
       }
       else if (args[0] === 'viewport' && args[1]) {
         await verifyBrowserCaller(args[1]);
@@ -613,29 +614,29 @@ async function main() {
         const tab = await selectedTab(args[1], ['--tab', args[3]]);
         const viewportResult = await browserViewport(args[1], tab, viewport);
         if (viewportResult.reset) {
-          console.log('viewport: reset');
+          printBrowser('viewport: reset');
         } else if (viewportResult.method === 'window') {
-          console.log(`viewport: window ${viewportResult.width}x${viewportResult.height} (inner ${viewportResult.innerWidth}x${viewportResult.innerHeight})`);
+          printBrowser(`viewport: window ${viewportResult.width}x${viewportResult.height} (inner ${viewportResult.innerWidth}x${viewportResult.innerHeight})`);
         } else {
-          console.log(`viewport: emulation ${viewportResult.width}x${viewportResult.height} (window resize not possible: ${viewportResult.reason})`);
+          printBrowser(`viewport: emulation ${viewportResult.width}x${viewportResult.height} (window resize not possible: ${viewportResult.reason})`);
         }
       }
       else if (args[0] === 'close' && args.length === 2) {
         await verifyBrowserCaller(args[1]);
-        console.log(JSON.stringify(await closeBrowser(args[1]), null, 2));
+        printBrowserJson(await closeBrowser(args[1]));
       }
       else if (args[0] === 'release' && args.length === 2) {
         await verifyBrowserCaller(args[1]);
         const released = await releaseBrowser(args[1]);
-        console.log(`Released project browser port ${released.port} of ${released.project}.`);
+        printBrowser(`Released project browser port ${released.port} of ${released.project}.`);
       }
       else if (args[0] === 'restart' && [3, 4].includes(args.length) && ['--headless', '--visible'].includes(args[2]) && (args.length === 3 || args[3] === '--no-restore')) {
         await verifyBrowserCaller(args[1]);
-        console.log(JSON.stringify(await restartBrowser(args[1], args[2] === '--headless', { restorePage: !args.includes('--no-restore') }), null, 2));
+        printBrowserJson(await restartBrowser(args[1], args[2] === '--headless', { restorePage: !args.includes('--no-restore') }));
       }
       else if (args[0] === 'tabs' && args.length === 2) {
         const tabs = await listBrowserTabs(args[1]);
-        console.log(formatBrowserTabs(tabs, { full }));
+        printBrowser(tabs, formatBrowserTabs);
       }
       else if (args[0] === 'tab' && args[1] === 'new' && args[2] && args.length <= 4) {
         await verifyBrowserCaller(args[2]);
@@ -643,13 +644,13 @@ async function main() {
       }
       else if (args[0] === 'tab' && args[1] === 'close' && args[2] && args[3] === '--tab' && args[4] && (args.length === 5 || (args.length === 6 && args[5] === '--force'))) {
         await verifyBrowserCaller(args[2]);
-        console.log(JSON.stringify(await browserCloseTab(args[2], args[4], { force: args[5] === '--force' })));
+        printBrowserJson(await browserCloseTab(args[2], args[4], { force: args[5] === '--force' }));
       }
       else if (args[0] === 'screenshot' && args[1]) {
         const screenshotOptions = parseScreenshotOptions(args.slice(2));
         const tab = await selectedTab(args[1], screenshotOptions.tab ? ['--tab', screenshotOptions.tab] : []);
         const image = await browserScreenshot(args[1], tab);
-        console.log(saveBrowserScreenshot(image, { out: screenshotOptions.out }));
+        printBrowser(saveBrowserScreenshot(image, { out: screenshotOptions.out }));
       }
       else if (args[0] === 'navigate' && args[1] && args[2]) {
         await verifyBrowserCaller(args[1]);
@@ -660,13 +661,13 @@ async function main() {
         await verifyBrowserCaller(args[1]);
         const tab = await selectedTab(args[1], args.slice(4));
         await browserClick(args[1], tab, percent(args[2]), percent(args[3]));
-        console.log('Click sent.');
+        printBrowser('Click sent.');
       }
       else if (args[0] === 'hover' && args[1] && args[2] && args[3]) {
         await verifyBrowserCaller(args[1]);
         const tab = await selectedTab(args[1], args.slice(4));
         await browserHover(args[1], tab, percent(args[2], 'Hover coordinates'), percent(args[3], 'Hover coordinates'));
-        console.log('Hover sent.');
+        printBrowser('Hover sent.');
       }
       else if (args[0] === 'drag' && args[1] && args[2] && args[3] && args[4] && args[5]) {
         await verifyBrowserCaller(args[1]);
@@ -683,19 +684,19 @@ async function main() {
         const tab = await selectedTab(args[1], rest);
         await browserDrag(args[1], tab, { x: percent(args[2], 'Drag coordinates'), y: percent(args[3], 'Drag coordinates') },
           { x: percent(args[4], 'Drag coordinates'), y: percent(args[5], 'Drag coordinates') }, { steps });
-        console.log('Drag sent.');
+        printBrowser('Drag sent.');
       }
       else if (args[0] === 'text' && args[1] && args[2] === '--stdin') {
         await verifyBrowserCaller(args[1]);
         const tab = await selectedTab(args[1], args.slice(3));
         await browserInsertText(args[1], tab, fs.readFileSync(0, 'utf8'));
-        console.log('Text sent.');
+        printBrowser('Text sent.');
       }
       else if (args[0] === 'key' && args[1] && args[2]) {
         await verifyBrowserCaller(args[1]);
         const tab = await selectedTab(args[1], args.slice(3));
         await browserKey(args[1], tab, args[2]);
-        console.log('Key sent.');
+        printBrowser('Key sent.');
       }
       else if (args[0] === 'bookmarks' && args[1] && args[2] === 'list' && args.length === 3) printBrowserJson(listBookmarks(args[1]));
       else if (args[0] === 'bookmarks' && args[1] && args[2] === 'add' && args[3] && args[4] && args.length === 5) {
@@ -1002,5 +1003,5 @@ if (process.argv[1]) {
 }
 
 if (directInvocation) {
-  main().catch((error) => { const e = sandboxWriteError(error); console.error(e.message); process.exit(e.exitCode ?? 1); });
+  main().catch((error) => { const e = sandboxWriteError(error); console.error(process.argv[2] === 'browser' ? maskBrowserText(e.message, { full: process.argv.includes('--full') }) : e.message); process.exit(e.exitCode ?? 1); });
 }

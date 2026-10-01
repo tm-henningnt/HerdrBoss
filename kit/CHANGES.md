@@ -121,3 +121,7 @@ Summary: Document review-pack item types, ask values, and evidence rules in the 
 ## 90f73eb6c2f1
 Impact: useful
 Summary: Integrate: combine the collect default, the read-only research rule, and the review pack rules into one kit revision.
+
+## fe8a51e665fd
+Impact: useful
+Summary: Browser output masks titles and removes credentials, query strings, and fragments in every host mode. Apply the same filter to browser API responses, dashboard state, and new event log records.
