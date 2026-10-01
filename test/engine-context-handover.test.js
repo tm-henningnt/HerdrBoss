@@ -53,6 +53,7 @@ const engine = new Engine(cfg, {
       records.push({ id: 'late', status: 'prepared', sourcePane: 'x', newPane: 'y' });
       fs.writeFileSync(file, JSON.stringify(records));
     }
+    if (input.steps[calls.step].failClose && args[0] === 'pane' && args[1] === 'close') throw new Error('fake close failure');
     if (args[0] === 'pane' && args[1] === 'read') return { text: input.steps[calls.step].screen || '' };
     return '{}';
   },
@@ -62,6 +63,19 @@ const engine = new Engine(cfg, {
     return JSON.stringify({ ok: true });
   },
 });
+const logs = [];
+const originalLog = engine.log.bind(engine);
+engine.log = (level, message, ...args) => { logs.push({ level, message }); return originalLog(level, message, ...args); };
+let mailboxFailuresLeft = input.mailboxFailures || 0;
+const mailboxAttempts = [];
+const appendMessage = engine.messageStore.append.bind(engine.messageStore);
+engine.messageStore.append = (message, ...args) => {
+  if (message.handoffExpiryId) {
+    mailboxAttempts.push({ id: message.handoffExpiryId, step: calls.step });
+    if (mailboxFailuresLeft > 0) { mailboxFailuresLeft -= 1; throw new Error('fake append failure'); }
+  }
+  return appendMessage(message, ...args);
+};
 engine.deliver = async () => {};
 for (const [index, step] of input.steps.entries()) {
   now = Date.parse(step.at);
@@ -73,7 +87,7 @@ for (const [index, step] of input.steps.entries()) {
   await engine.tick();
   snapshots.push({ handoffs: JSON.parse(fs.readFileSync(path.join(process.env.HERDR_BOSS_DIR, 'handoffs.json'), 'utf8')), alerts: engine.state?.alerts || [], memory: structuredClone(engine.memory) });
 }
-console.log(JSON.stringify({ calls, herdrCalls, events: engine.events, memory: engine.memory, handoverWaits: engine.state?.handoverWaits, snapshots, messages: engine.messageStore.all() }));
+console.log(JSON.stringify({ calls, herdrCalls, events: engine.events, memory: engine.memory, handoverWaits: engine.state?.handoverWaits, snapshots, messages: engine.messageStore.all(), logs, mailboxAttempts }));
 `;
 
 function transcript(home, cwd, sessionId, lines) {
@@ -109,7 +123,7 @@ function run(t, scenario) {
     encoding: 'utf8',
     env: {
       ...process.env, HOME: dir, HERDR_BOSS_DIR: dir, HERDR_BOSS_LIVE_DIR: dir, HERDR_BOSS_ALLOW_ACTIONS: '1',
-      NODE_TEST_CONTEXT: '', E1_SCENARIO: JSON.stringify({ steps: scenario.steps, mutateOnClose: scenario.mutateOnClose }),
+      NODE_TEST_CONTEXT: '', E1_SCENARIO: JSON.stringify({ steps: scenario.steps, mutateOnClose: scenario.mutateOnClose, mailboxFailures: scenario.mailboxFailures }),
     },
   });
   assert.equal(result.status, 0, result.stderr);
@@ -156,6 +170,49 @@ test('claudeContextUsage reports unavailable when the data is missing', (t) => {
   assert.equal(claudeContextUsage({ sessionId: null, cwd: '/work/alpha', home }).available, false);
   transcript(home, '/work/alpha', 'empty', [{ type: 'user', message: { content: 'x' } }]);
   assert.equal(claudeContextUsage({ sessionId: 'empty', cwd: '/work/alpha', home }).available, false);
+});
+
+test('claude context usage caches by session and file signature for 30 seconds', (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-e1-cache-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  transcript(home, '/work/alpha', 'cache-session', [assistant({ input_tokens: 12 })]);
+  const counts = { openSync: 0, readSync: 0, statSync: 0, existsSync: 0, readdirSync: 0 };
+  const filesystem = new Proxy(fs, {
+    get(target, key) {
+      const value = Reflect.get(target, key, target);
+      if (typeof value !== 'function') return value;
+      return (...args) => {
+        if (Object.hasOwn(counts, key)) counts[key] += 1;
+        return value.apply(target, args);
+      };
+    },
+  });
+  let now = 1_000_000;
+  const read = () => claudeContextUsage({ sessionId: 'cache-session', cwd: '/elsewhere', home, clock: () => now, filesystem });
+  assert.equal(read().tokens, 12);
+  const firstReads = counts.readSync;
+  const firstOpens = counts.openSync;
+  const firstStats = counts.statSync;
+  const firstScans = counts.readdirSync;
+  assert.ok(firstScans > 0, 'the first lookup scans for the transcript when cwd does not identify its folder');
+  now += 29_999;
+  assert.equal(read().tokens, 12);
+  assert.equal(counts.readSync, firstReads);
+  assert.equal(counts.openSync, firstOpens);
+  assert.equal(counts.statSync, firstStats, 'a fresh result needs no file-system read');
+  assert.equal(counts.readdirSync, firstScans, 'a fresh result needs no directory scan');
+
+  now += 1;
+  assert.equal(read().tokens, 12);
+  assert.equal(counts.statSync, firstStats + 1, 'the reader checks the cached file signature at 30 seconds');
+  assert.equal(counts.readSync, firstReads, 'an unchanged file does not need a new tail read');
+
+  const file = path.join(home, '.claude', 'projects', '-work-alpha', 'cache-session.jsonl');
+  fs.writeFileSync(file, `${JSON.stringify(assistant({ input_tokens: 1200 }))}\n`);
+  now += 30_001;
+  assert.equal(read().tokens, 1200);
+  assert.ok(counts.readSync > firstReads, 'a changed size or mtime refreshes the usage value');
+  assert.equal(counts.readdirSync, firstScans, 'the cached transcript path avoids another directory scan');
 });
 
 test('policy validates autoHandoverContextTokens', () => {
@@ -652,6 +709,7 @@ const unreadyRecord = (extra = {}) => {
   const { readyAt, ...rest } = readyRecord({ promptDelivery: 'sent', seenWorkingAt: '2026-09-29T11:59:00.000Z', ...extra });
   return rest;
 };
+const expiredRecord = (extra = {}) => unreadyRecord({ status: 'expired', expiredReason: 'successor not ready after 30 minutes', ...extra });
 const tracked = { contextHandovers: { 'ctx-1': { pane: 'w-alpha:p1', at: 1 } } };
 const autoStep = (successorPane, minute = 1, sourceStatus = 'idle') => [{ at: at(minute), herdr: herdrOf(pane(sourceStatus), worker, successorPane), published: { alpha: status(1) } }];
 
@@ -732,6 +790,15 @@ test('an idle successor with Claude context evidence becomes ready at 120 second
   assert.ok(out.snapshots[1].handoffs[0].readyAt);
 });
 
+test('a non-Claude successor becomes ready by the idle rule without context evidence', { timeout: 30000 }, (t) => {
+  const out = run(t, {
+    tokens: 400000, memory: tracked,
+    handoffs: [unreadyRecord({ toKind: 'codex', model: 'gpt-5', seenWorkingAt: undefined })],
+    steps: autoStep({ ...successor, agent: 'codex' }),
+  });
+  assert.equal(out.records[0].readyNote, 'auto: successor idle');
+});
+
 test('a ghost suggestion in an idle successor input does not block readiness', { timeout: 30000 }, (t) => {
   const out = run(t, {
     tokens: 400000, successorTokens: 12000, memory: tracked,
@@ -754,6 +821,96 @@ test('real unsent successor input gets one Enter and stays not ready', { timeout
   const enters = out.herdrCalls.filter(({ args }) => args[0] === 'agent' && args[1] === 'send-keys');
   assert.deepEqual(enters.map(({ args }) => args), [['agent', 'send-keys', 'w-alpha:p9', 'enter']]);
   assert.equal(out.records[0].readyAt, undefined);
+});
+
+test('the successor input screen is read at most once every 15 seconds', { timeout: 30000 }, (t) => {
+  const out = run(t, {
+    tokens: 400000, memory: tracked,
+    handoffs: [unreadyRecord({ seenWorkingAt: undefined })],
+    steps: [
+      { at: '2026-09-29T12:01:00.000Z', herdr: herdrOf(pane('idle'), worker, successor), published: { alpha: status(1) }, screen: '❯ run the prepared handover' },
+      { at: '2026-09-29T12:01:05.000Z', herdr: herdrOf(pane('idle'), worker, successor), published: { alpha: status(1) }, screen: '' },
+      { at: '2026-09-29T12:01:14.000Z', herdr: herdrOf(pane('idle'), worker, successor), published: { alpha: status(1) }, screen: '' },
+      { at: '2026-09-29T12:01:15.000Z', herdr: herdrOf(pane('idle'), worker, successor), published: { alpha: status(1) }, screen: '' },
+    ],
+  });
+  const reads = out.herdrCalls.filter(({ args }) => args[0] === 'pane' && args[1] === 'read');
+  assert.deepEqual(reads.map(({ step }) => step), [0, 3]);
+  assert.equal(out.herdrCalls.filter(({ args }) => args[0] === 'agent' && args[1] === 'send-keys').length, 1);
+  assert.equal(out.records[0].readyAt, undefined);
+});
+
+test('input submitted with Enter needs new start evidence and a delay before readiness', { timeout: 30000 }, (t) => {
+  const record = unreadyRecord({ seenWorkingAt: '2026-09-29T12:00:00.000Z' });
+  const out = run(t, {
+    tokens: 400000, memory: tracked, handoffs: [record],
+    steps: [
+      { at: '2026-09-29T12:01:00.000Z', herdr: herdrOf(pane('idle'), worker, successor), published: { alpha: status(1) }, screen: '❯ run the prepared handover' },
+      { at: '2026-09-29T12:01:15.000Z', herdr: herdrOf(pane('idle'), worker, successor), published: { alpha: status(1) }, screen: '' },
+      { at: '2026-09-29T12:01:20.000Z', herdr: herdrOf(pane('idle'), worker, { ...successor, status: 'working' }), published: { alpha: status(1) }, screen: '' },
+      { at: '2026-09-29T12:01:21.000Z', herdr: herdrOf(pane('idle'), worker, successor), published: { alpha: status(1) }, screen: '' },
+    ],
+  });
+  assert.ok(out.records[0].inputEnterSentAt);
+  assert.equal(out.snapshots[1].handoffs[0].readyAt, undefined, 'an idle tick after Enter cannot use the earlier seen-working evidence');
+  assert.equal(out.snapshots[2].handoffs[0].readyAt, undefined, 'the evidence tick is still working');
+  assert.ok(out.snapshots[3].handoffs[0].readyAt, 'new evidence and the post-Enter delay allow readiness');
+});
+
+test('expired handover expiry keys are pruned when their records are removed', { timeout: 30000 }, (t) => {
+  const out = run(t, {
+    memory: {
+      handoverExpiryMailbox: { removed: 1, 'ctx-1': 2 },
+      handoverExpiryHandled: { removed: 3, 'ctx-1': 4 },
+    },
+    handoffs: [expiredRecord(), { id: 'other-live', status: 'prepared', automatic: true }],
+    steps: [{ at: at(1), herdr: { workspaces: [{ id: 'w-alpha', label: 'Alpha' }] }, published: { alpha: status(1) } }],
+  });
+  assert.deepEqual(Object.keys(out.memory.handoverExpiryMailbox), ['ctx-1']);
+  assert.deepEqual(Object.keys(out.memory.handoverExpiryHandled), ['ctx-1']);
+});
+
+test('expired handover does not close its source, a different agent, or a pane used by another handover', { timeout: 30000 }, (t) => {
+  const source = run(t, {
+    handoffs: [expiredRecord({ sourcePane: successor.id })],
+    steps: [{ at: at(1), herdr: herdrOf(pane('idle'), worker, successor), published: { alpha: status(1) } }],
+  });
+  assert.equal(source.herdrCalls.some(({ args }) => args[0] === 'pane' && args[1] === 'close'), false);
+
+  const otherAgent = run(t, {
+    handoffs: [expiredRecord()],
+    steps: [{ at: at(1), herdr: herdrOf(pane('idle'), worker, { ...successor, agent: 'codex' }), published: { alpha: status(1) } }],
+  });
+  assert.equal(otherAgent.herdrCalls.some(({ args }) => args[0] === 'pane' && args[1] === 'close'), false);
+
+  const inUse = run(t, {
+    handoffs: [expiredRecord(), { id: 'other-live', status: 'active', sourcePane: successor.id, newPane: 'w-alpha:p10' }],
+    steps: [{ at: at(1), herdr: herdrOf(pane('idle'), worker, successor), published: { alpha: status(1) } }],
+  });
+  assert.equal(inUse.herdrCalls.some(({ args }) => args[0] === 'pane' && args[1] === 'close'), false);
+});
+
+test('expired handover retries Mailbox and close failures every five minutes and logs once at give-up', { timeout: 30000 }, (t) => {
+  const mailbox = run(t, {
+    mailboxFailures: 3,
+    handoffs: [expiredRecord()],
+    steps: ['12:01:00', '12:05:00', '12:06:00', '12:11:00', '12:16:00'].map((time) => ({ at: `2026-09-29T${time}.000Z`, herdr: herdrOf(pane('idle'), worker, successor), published: { alpha: status(1) } })),
+  });
+  assert.deepEqual(mailbox.mailboxAttempts.map(({ id, step }) => [id, step]), [['ctx-1', 0], ['ctx-1', 2], ['ctx-1', 3]]);
+  assert.equal(mailbox.messages.filter((message) => message.handoffExpiryId === 'ctx-1').length, 0);
+  const mailboxErrors = mailbox.logs.filter(({ level, message }) => level === 'error' && /handover ctx-1/i.test(message));
+  assert.equal(mailboxErrors.length, 1);
+  assert.match(mailboxErrors[0].message, /giving up the Mailbox notice/i);
+
+  const close = run(t, {
+    handoffs: [expiredRecord()],
+    steps: ['12:01:00', '12:05:00', '12:06:00', '12:11:00', '12:16:00'].map((time) => ({ at: `2026-09-29T${time}.000Z`, herdr: herdrOf(pane('idle'), worker, successor), published: { alpha: status(1) }, failClose: true })),
+  });
+  const closeAttempts = close.herdrCalls.filter(({ args }) => args[0] === 'pane' && args[1] === 'close');
+  assert.deepEqual(closeAttempts.map(({ step }) => step), [0, 2, 3]);
+  const closeErrors = close.logs.filter(({ level, message }) => level === 'error' && /handover ctx-1/i.test(message));
+  assert.equal(closeErrors.length, 1);
+  assert.match(closeErrors[0].message, /giving up close of pane/i);
 });
 
 test('an unready automatic handover expires after 30 minutes, posts once, closes only an idle successor, and cools down', { timeout: 30000 }, (t) => {
