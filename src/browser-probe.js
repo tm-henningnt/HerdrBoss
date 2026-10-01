@@ -1,5 +1,6 @@
 // A CDP round trip against a project browser. /json/version can answer while the browser serves no tab,
 // so the probe opens a temporary background tab and evaluates 1+1 in it. It closes only the tab that it opened.
+import { BROWSER_QUIET_MS } from './browser-activity.js';
 
 export const PROBE_INTERVAL_MS = 60000;
 const STEP_MS = 3000;
@@ -79,7 +80,7 @@ async function endpointOf(port, fetchImpl) {
 
 // Return { ok: true } or { ok: false, reason }. The reason is a plain phrase without a URL or a tab title.
 // The function never throws. stepMs limits each step and totalMs limits all steps together.
-export async function probeBrowser(port, { stepMs = STEP_MS, totalMs = TOTAL_MS, cleanupMs = CLEANUP_MS, fetch: fetchImpl = globalThis.fetch, WebSocket: WebSocketImpl = globalThis.WebSocket } = {}) {
+export async function probeBrowser(port, { stepMs = STEP_MS, totalMs = TOTAL_MS, cleanupMs = CLEANUP_MS, fetch: fetchImpl = globalThis.fetch, WebSocket: WebSocketImpl = globalThis.WebSocket, onTabs = () => {} } = {}) {
   const deadline = Date.now() + totalMs;
   const limit = () => Math.max(1, Math.min(stepMs, deadline - Date.now()));
   // The holder lets the cleanup reach a socket that the getVersion step opens late. After cancel, a step that still runs opens and sends nothing.
@@ -99,6 +100,7 @@ export async function probeBrowser(port, { stepMs = STEP_MS, totalMs = TOTAL_MS,
     const session = holder.session;
     const targets = await step(session.send('Target.getTargets'), limit(), 'getTargets timed out', 'getTargets failed');
     const pageTargets = Array.isArray(targets?.targetInfos) ? targets.targetInfos.filter((info) => info?.type === 'page' && typeof info.targetId === 'string') : [];
+    onTabs(pageTargets.filter((info) => !isProbeTab(info.targetId)).map((info) => ({ id: info.targetId, url: info.url })));
     const pageIds = pageTargets.map((info) => info.targetId);
     const attachedTabIds = pageTargets.filter((info) => info.attached === true).map((info) => info.targetId);
     holder.creating = session.send('Target.createTarget', { url: 'about:blank', background: true }).then((result) => {
@@ -156,12 +158,19 @@ const freshState = () => ({ ok: null, notResponding: false, lastProbeAt: null, r
 
 // Track the probe state of each managed browser. tick() returns the state at once and starts a background probe when one is due.
 // A browser is due when it is active, no probe of it runs, and the last probe started at least intervalMs ago.
-export function createBrowserProbes({ probe = probeBrowser, intervalMs = PROBE_INTERVAL_MS, failuresToMark = FAILURES_TO_MARK, onWarning = () => {} } = {}) {
+export function createBrowserProbes({ probe = probeBrowser, intervalMs = PROBE_INTERVAL_MS, failuresToMark = FAILURES_TO_MARK, onWarning = () => {}, onTabs = () => {}, activity = () => ({ inFlight: 0, lastCommandAt: null }), clock = Date.now } = {}) {
   const records = new Map();
   const running = new Set();
   const settle = new Set();
 
   function start(record, browser, now) {
+    const busy = (at) => {
+      try {
+        const command = activity(browser.project);
+        return command.restarting || command.inFlight > 0 || (Number.isFinite(command.lastCommandAt) && at - command.lastCommandAt < BROWSER_QUIET_MS);
+      } catch { return true; } // Unknown activity must not count as a quiet failure.
+    };
+    const startedBusy = busy(now);
     record.startedAt = now;
     record.state.ok = null;
     record.state.pageIds = null;
@@ -170,7 +179,8 @@ export function createBrowserProbes({ probe = probeBrowser, intervalMs = PROBE_I
     running.add(record);
     const work = (async () => {
       let result;
-      try { result = await probe(browser.port); } catch { result = { ok: false, reason: 'probe failed' }; }
+      try { result = await probe(browser.port, { onTabs: (tabs) => onTabs(tabs, browser),
+        ...(browser.externalClients > 0 ? { stepMs: STEP_MS * 2, totalMs: TOTAL_MS * 2 } : {}) }); } catch { result = { ok: false, reason: 'probe failed' }; }
       for (const warning of Array.isArray(result?.warnings) ? result.warnings : []) { try { onWarning(warning, browser); } catch {} }
       const state = record.state;
       state.lastProbeAt = new Date(now).toISOString();
@@ -185,7 +195,8 @@ export function createBrowserProbes({ probe = probeBrowser, intervalMs = PROBE_I
         state.pageIds = null;
         state.attachedTabIds = null;
         state.attachedClientCount = null;
-        state.failures++;
+        const counted = !startedBusy && !busy(clock());
+        state.failures = counted ? state.failures + 1 : 0;
         state.reason = typeof result?.reason === 'string' ? result.reason : 'probe failed';
         if (state.failures >= failuresToMark && !state.notResponding) { state.notResponding = true; state.since = state.lastProbeAt; }
       }

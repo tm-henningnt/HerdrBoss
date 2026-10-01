@@ -621,7 +621,7 @@ async function main() {
       }
       else if (args[0] === 'restart' && [3, 4].includes(args.length) && ['--headless', '--visible'].includes(args[2]) && (args.length === 3 || args[3] === '--no-restore')) {
         await verifyBrowserCaller(args[1]);
-        console.log(JSON.stringify(await restartBrowser(args[1], args[2] === '--headless', { restorePage: !args.includes('--no-restore') }), null, 2));
+        printBrowserJson(await restartBrowser(args[1], args[2] === '--headless', { restorePage: !args.includes('--no-restore') }));
       }
       else if (args[0] === 'tabs' && args.length === 2) {
         const tabs = await listBrowserTabs(args[1]);

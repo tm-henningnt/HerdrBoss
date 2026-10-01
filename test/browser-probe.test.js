@@ -14,7 +14,8 @@ async function withCdp(options, run) {
 
 test('a probe that gets an answer at each step succeeds and closes its temporary tab', async () => {
   await withCdp({}, async (cdp) => {
-    const result = await probeBrowser(cdp.port, fast);
+    // Use the production limits for a cold HTTP client on a shared machine. Failure tests keep short limits.
+    const result = await probeBrowser(cdp.port);
     assert.deepEqual(result, { ok: true, pageIds: ['user-tab'], attachedTabIds: ['user-tab'], attachedClientCount: 1 });
     assert.deepEqual(cdp.calls, ['Browser.getVersion', 'Target.getTargets', 'Target.createTarget', 'Target.attachToTarget', 'Runtime.evaluate', 'Target.closeTarget']);
     assert.equal(cdp.created.length, 1);
@@ -39,6 +40,18 @@ test('the probe never touches a tab that it did not create', async () => {
     await probeBrowser(cdp.port, fast);
     assert.ok(!cdp.closed.includes('user-tab'));
     assert.equal(cdp.calls.filter((m) => m === 'Target.closeTarget').length, 1);
+  });
+});
+
+test('the probe saves real page addresses privately, without adding them to its result', async () => {
+  let saved;
+  await withCdp({ behavior: { 'Target.getTargets': () => ({ targetInfos: [
+    { targetId: 'one', type: 'page', url: 'https://sample.example.com/one?choice=1', title: 'Sample' },
+    { targetId: 'worker', type: 'worker', url: 'https://sample.example.com/worker' },
+  ] }) } }, async (cdp) => {
+    const result = await probeBrowser(cdp.port, { ...fast, onTabs: (tabs) => { saved = tabs; } });
+    assert.deepEqual(saved, [{ id: 'one', url: 'https://sample.example.com/one?choice=1' }]);
+    assert.doesNotMatch(JSON.stringify(result), /sample\.example\.com|Sample|choice=1/);
   });
 });
 
@@ -143,6 +156,57 @@ function tracker(results, extra = {}) {
   return { probes, calls };
 }
 const browser = (over = {}) => ({ key: 'alpha:9223:t1', project: 'alpha', port: 9223, active: true, ...over });
+
+test('the tracker doubles probe limits while a separate CDP client is connected', async () => {
+  let options;
+  const probes = createBrowserProbes({ probe: async (_port, actual) => { options = actual; return { ok: true }; } });
+  probes.tick(browser({ externalClients: 1 }), 1_000_000);
+  await probes.idle();
+  assert.equal(options.stepMs, 6000);
+  assert.equal(options.totalMs, 16000);
+});
+
+test('a failure during a command or within 20 seconds of it does not count', async () => {
+  let now = 1_000_000;
+  let activity = { inFlight: 1, lastCommandAt: now };
+  const { probes } = tracker(Array(4).fill({ ok: false, reason: 'evaluate did not return' }), {
+    intervalMs: 0, clock: () => now, activity: () => activity,
+  });
+  probes.tick(browser(), now);
+  await probes.idle();
+  assert.equal(probes.tick(browser(), now).failures, 0);
+  await probes.idle();
+  activity = { inFlight: 0, lastCommandAt: now };
+  now += 19_999;
+  probes.tick(browser(), now);
+  await probes.idle();
+  assert.equal(probes.tick(browser(), now).notResponding, false);
+  await probes.idle();
+});
+
+test('a command that starts during a probe breaks the run of consecutive failed probes', async () => {
+  let now = 1_000_000;
+  let activity = { inFlight: 0, lastCommandAt: null };
+  let release;
+  let pending = false;
+  const probes = createBrowserProbes({ intervalMs: 0, clock: () => now, activity: () => activity, probe: async () => {
+    if (pending) await new Promise((resolve) => { release = resolve; });
+    return { ok: false, reason: 'getTargets timed out' };
+  } });
+  probes.tick(browser(), now);
+  await probes.idle();
+  pending = true;
+  probes.tick(browser(), ++now);
+  activity = { inFlight: 0, lastCommandAt: now };
+  release();
+  await probes.idle();
+  pending = false;
+  activity = { inFlight: 0, lastCommandAt: null };
+  const state = probes.tick(browser(), now + 60_000);
+  assert.equal(state.failures, 0);
+  assert.equal(state.notResponding, false);
+  await probes.idle();
+});
 
 test('one failed probe does not mark the browser, two in a row do', async () => {
   const { probes } = tracker([{ ok: false, reason: 'getVersion timed out' }, { ok: false, reason: 'getTargets failed' }]);

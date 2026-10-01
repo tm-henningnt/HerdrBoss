@@ -15,8 +15,8 @@ import { scanSpend, SPEND_SCAN_INTERVAL_MS } from './spend.js';
 import { quotaUsageToday, recordQuotaSnapshot, readUsage } from './usage.js';
 import { renderNightReport } from './night-report.js';
 import { adhocOneLine, effectiveRoutines, routinePromptText, slotAfter, slotEnd } from './watch-routines.js';
-import { listBrowserSessions, cdpResponds, browserProcessCheck, closeBrowser } from './browser-pool.js';
-import { agentBrowserTabIds } from './browser-activity.js';
+import { listBrowserSessions, cdpResponds, browserProcessCheck, closeBrowser, rememberBrowserTabs } from './browser-pool.js';
+import { agentBrowserTabIds, browserCommandActivity } from './browser-activity.js';
 import { probeBrowser, createBrowserProbes, PROBE_INTERVAL_MS } from './browser-probe.js';
 import { inspectUncollectedWorkers, processDueWorkerPaneCloses, shouldCloseManagedBrowser, trackBrowserIdle } from './maintenance.js';
 import { readLeases, reclaimLeases, publicLease, publicPool, reclaimNoticeText, hasIdleRule, tcpListening, tcpListeningAsync, leasePools, migrateProjectBrowserLeases, reconcileUnleasedListeners, unleasedNoticeText, markUnleasedNotified, listenerPid, processCwd, processLabel, projectWorktreeRoot } from './leases.js';
@@ -596,6 +596,7 @@ export class Engine extends EventEmitter {
       collectWorktreeCounts,
       collectBrowserClients: process.env.NODE_TEST_CONTEXT ? async () => null : collectBrowserClients,
       cdpResponds,
+      browserCommandActivity,
       // A test engine never probes a real browser port unless a test injects a probe.
       probeBrowser: process.env.NODE_TEST_CONTEXT ? async () => ({ ok: true }) : probeBrowser,
       closeBrowser,
@@ -613,7 +614,17 @@ export class Engine extends EventEmitter {
       collectPiModels: process.env.NODE_TEST_CONTEXT ? async () => null : collectPiModels,
       ...collectors,
     };
-    this.browserProbes = createBrowserProbes({ probe: (port) => this.collectors.probeBrowser(port), onWarning: (text, b) => this.log('browser', text, { project: b.project }) });
+    this.browserProbes = createBrowserProbes({ probe: (port, options) => this.collectors.probeBrowser(port, options),
+      activity: (project) => this.collectors.browserCommandActivity(project), clock: () => this.clock?.() ?? Date.now(),
+      onTabs: (tabs, b) => {
+        try {
+          const session = listBrowserSessions()[b.project];
+          if (!session || b.key !== `${session.project}:${session.port}:${session.launchedAt || ''}` || this.collectors.browserCommandActivity(b.project).restarting) return;
+          rememberBrowserTabs(b.project, tabs);
+        }
+        catch { this.log('browser', 'Could not save the browser tab addresses.', { project: b.project }); }
+      },
+      onWarning: (text, b) => this.log('browser', text, { project: b.project }) });
     this.handoffRunner = handoffRunner;
     this.herdrRunner = herdrRunner;
     this.gitRunner = gitRunner;
@@ -877,14 +888,14 @@ export class Engine extends EventEmitter {
       const managedBrowsers = await Promise.all(browserSessions.map(async (b) => {
         const browser = browsers.find((x) => x.kind === 'automation-chrome' && x.port === String(b.port) && x.profile === b.profile);
         const matched = !!browser;
-        const probe = this.browserProbes.tick({ key: `${b.project}:${b.port}:${b.launchedAt || ''}`, project: b.project, port: b.port, active: matched && this.act && !(b.launchedAt && now - Date.parse(b.launchedAt) < 120000) }, now);
-        const probedAt = Date.parse(probe.lastProbeAt);
-        const freshProbe = probe.ok === true && Number.isFinite(probedAt) && now - probedAt <= PROBE_INTERVAL_MS * 2 ? probe : null;
         let clientCount = null;
-        if (matched && this.act && b.launchedAt && (this.cfg.browser?.idleCloseMinutes ?? 20) > 0) {
+        if (matched && this.act && b.launchedAt) {
           try { clientCount = await this.collectors.collectBrowserClients(b.port, { servicePid: process.pid, browserPid: browser.pid }); }
           catch {}
         }
+        const probe = this.browserProbes.tick({ key: `${b.project}:${b.port}:${b.launchedAt || ''}`, project: b.project, port: b.port, externalClients: clientCount, active: matched && this.act && !(b.launchedAt && now - Date.parse(b.launchedAt) < 120000) }, now);
+        const probedAt = Date.parse(probe.lastProbeAt);
+        const freshProbe = probe.ok === true && Number.isFinite(probedAt) && now - probedAt <= PROBE_INTERVAL_MS * 2 ? probe : null;
         let agentTabIds = [];
         try { agentTabIds = agentBrowserTabIds(b.project); } catch {}
         const idle = trackBrowserIdle(this.memory.browserIdle || {}, b, { probe: freshProbe, clientCount, agentTabIds }, {
@@ -918,7 +929,9 @@ export class Engine extends EventEmitter {
             this.log('error', `Could not close idle browser ${b.project}: ${String(error?.message || error).slice(0, 200)}`, { project: b.project, port: b.port });
           }
         }
-        return { ...b, responsive: matched ? await this.collectors.cdpResponds(b.port) : false, notResponding: probe.notResponding, probeAt: probe.lastProbeAt, probeReason: probe.reason, probeSince: probe.since };
+        const { restoreTabs, ...publicSession } = b;
+        return { ...publicSession, processState: processesKnown ? matched ? 'running' : 'missing' : 'unknown', processPid: browser?.pid ?? null, externalClients: clientCount,
+          responsive: matched ? await this.collectors.cdpResponds(b.port) : false, notResponding: probe.notResponding, probeAt: probe.lastProbeAt, probeReason: probe.reason, probeSince: probe.since, probeFailures: probe.failures };
       }));
       const night = readNight({ dataDir: DATA_DIR, now });
 
@@ -1312,6 +1325,24 @@ export class Engine extends EventEmitter {
           title: `${b.project} browser is offline`,
           text: `The recorded browser for ${b.project} on port ${b.port} is offline. Request it again with herdr-boss browser request ${b.project} before browser work.`,
         });
+      }
+      // Record one safe diagnostic row for each health notice during the first week. Keep its start across service restarts.
+      const healthNotices = this.act ? evaluation.alerts.filter((alert) => /^browser:managed-(?:unresponsive|down):/.test(alert.key)) : [];
+      const healthMarks = this.memory.browserHealthNotices ||= {};
+      for (const key of Object.keys(healthMarks)) if (!healthNotices.some((alert) => alert.key === key)) delete healthMarks[key];
+      for (const alert of healthNotices) {
+        if (healthMarks[alert.key]) continue;
+        healthMarks[alert.key] = true;
+        this.memory.browserHealthDiagnosisStartedAt ??= now;
+        if (now - this.memory.browserHealthDiagnosisStartedAt >= 7 * 86400_000) continue;
+        const b = managedBrowsers.find((item) => alert.key.startsWith(`browser:managed-unresponsive:${item.project}:${item.port}:`) || alert.key === `browser:managed-down:${item.project}:${item.port}`);
+        if (!b) continue;
+        let command = null;
+        try { command = this.collectors.browserCommandActivity(b.project); } catch {}
+        const safeReason = /^(?:getVersion|getTargets|createTarget|evaluate|probe) (?:timed out|failed|did not return|returned a wrong value|cancelled)$/.test(b.probeReason || '') ? b.probeReason : b.probeReason ? 'probe failed' : 'no probe';
+        this.log('browser-health', `Project browser ${b.project} health notice.`, { project: b.project, port: b.port,
+          probeReason: safeReason, probeFailures: b.probeFailures, processState: b.processState, pid: b.processPid,
+          commandInFlight: command?.inFlight ?? null, lastCommandAt: command?.lastCommandAt ?? null, externalClients: b.externalClients });
       }
       snap.alerts = evaluation.alerts;
       snap.advice = evaluation.advice;

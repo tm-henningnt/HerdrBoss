@@ -1,6 +1,6 @@
 import { isProbeTab } from './browser-probe.js';
-import { forgetAgentBrowserTab, recordAgentBrowserTab } from './browser-activity.js';
-import { browserStatus, listBrowserSessions, listBrowserTabViewports, setBrowserTabViewport } from './browser-pool.js';
+import { forgetAgentBrowserTab, recordAgentBrowserTab, withBrowserCommand } from './browser-activity.js';
+import { browserStatus, forgetBrowserTab, rememberBrowserTab, rememberBrowserTabs, listBrowserSessions, listBrowserTabViewports, setBrowserTabViewport } from './browser-pool.js';
 
 async function verifiedSession(project) {
   const session = listBrowserSessions()[project];
@@ -58,10 +58,11 @@ async function pageVisibility(entry, port, viewport = null) {
   } catch { return null; }
 }
 
-export async function listBrowserTabs(project) {
-  const session = await verifiedSession(project);
+async function listBrowserTabsImpl(project, adapters = {}) {
+  const session = await (adapters.verifySession || verifiedSession)(project);
   // The tab of a running or failed CDP probe is not a page of an agent or the Owner.
   const pages = (await targets(session)).filter((page) => !isProbeTab(page.id));
+  rememberBrowserTabs(project, pages);
   const viewports = listBrowserTabViewports(project, pages.map((page) => page.id));
   let attached = null;
   try { attached = await attachedTargets(session); } catch {}
@@ -69,7 +70,7 @@ export async function listBrowserTabs(project) {
   return pages.map((entry, index) => ({ id: entry.id, title: entry.title || 'Untitled page', url: entry.url, attached: attached ? attached.has(entry.id) : null, visibility: visibility[index] }));
 }
 
-export async function tabAttached(project, tabId) {
+async function tabAttachedImpl(project, tabId) {
   if (!tabId) return false;
   return (await attachedTargets(await verifiedSession(project))).has(tabId);
 }
@@ -85,15 +86,16 @@ function tabUrl(value) {
 
 // A tab in its own window stays visible in a headless browser, so each worker can have one without hiding another.
 // It opens in the background, so the Owner's focus and every agent tab stay unchanged.
-export async function browserNewTab(project, url = 'about:blank') {
-  const session = await verifiedSession(project);
-  const result = await command(await browserEndpoint(session), 'Target.createTarget', { url: tabUrl(url), newWindow: true, background: true });
+async function browserNewTabImpl(project, url = 'about:blank', adapters = {}) {
+  const session = await (adapters.verifySession || verifiedSession)(project);
+  const result = await (adapters.command || command)(await (adapters.browserEndpoint || browserEndpoint)(session), 'Target.createTarget', { url: tabUrl(url), newWindow: true, background: true });
   if (!result?.targetId) throw new Error('Browser did not open a new tab.');
-  try { recordAgentBrowserTab(project, result.targetId); } catch {}
+  recordAgentBrowserTab(project, result.targetId);
+  rememberBrowserTab(project, result.targetId, tabUrl(url));
   return { id: result.targetId };
 }
 
-export async function browserCloseTab(project, tabId, { force = false } = {}) {
+async function browserCloseTabImpl(project, tabId, { force = false } = {}) {
   const session = await verifiedSession(project);
   if (!(await targets(session)).some((entry) => entry.id === tabId)) throw new Error('That tab is no longer open. Run browser tabs again.');
   if (!force && (await attachedTargets(session)).has(tabId)) throw new Error('An agent is attached to this tab. Close it when that agent is done, or pass --force.');
@@ -101,6 +103,7 @@ export async function browserCloseTab(project, tabId, { force = false } = {}) {
   if (result?.success === false) throw new Error('Browser did not close the tab.');
   try { forgetAgentBrowserTab(project, tabId); } catch {}
   setBrowserTabViewport(project, tabId, null);
+  forgetBrowserTab(project, tabId);
   return { closed: tabId };
 }
 
@@ -176,7 +179,7 @@ function oneAtATime(project, task) {
   return next;
 }
 
-export function browserScreenshot(project, tabId, adapters = {}) {
+function browserScreenshotImpl(project, tabId, adapters = {}) {
   return oneAtATime(project, () => captureTab(project, tabId, adapters));
 }
 
@@ -192,7 +195,7 @@ async function captureTab(project, tabId, adapters = {}) {
   return image;
 }
 
-export async function browserNavigate(project, tabId, value, adapters = {}) {
+async function browserNavigateImpl(project, tabId, value, adapters = {}) {
   let url;
   const input = String(value || '').trim();
   try { url = new URL(/^https?:\/\//i.test(input) ? input : `https://${input}`); } catch { throw new Error('Enter a valid web address.'); }
@@ -202,26 +205,29 @@ export async function browserNavigate(project, tabId, value, adapters = {}) {
     { method: 'Page.navigate', params: { url: url.href } },
   ], undefined, undefined, adapters)).at(-1);
   if (result?.errorText) throw new Error(result.errorText);
+  rememberBrowserTab(project, context.target.id, url.href);
   return { url: displayUrl(url.href) };
 }
 
-export async function browserNavigationState(project, tabId, adapters = {}) {
+async function browserNavigationStateImpl(project, tabId, adapters = {}) {
   const context = await pageContext(project, tabId, adapters);
   const history = (await pageCommands(context.endpoint, context.viewport, [
     { method: 'Page.getNavigationHistory' },
   ], undefined, undefined, adapters)).at(-1);
   const entries = history?.entries || [];
   const currentIndex = history?.currentIndex ?? -1;
+  if (entries[currentIndex]?.url) rememberBrowserTab(project, context.target.id, entries[currentIndex].url);
   return { url: entries[currentIndex]?.url || '', canGoBack: currentIndex > 0, canGoForward: currentIndex >= 0 && currentIndex < entries.length - 1 };
 }
 
-export async function browserHistoryAction(project, tabId, action, adapters = {}) {
+async function browserHistoryActionImpl(project, tabId, action, adapters = {}) {
   const context = await pageContext(project, tabId, adapters);
   if (action === 'home') {
     const result = (await pageCommands(context.endpoint, context.viewport, [
       { method: 'Page.navigate', params: { url: 'about:blank' } },
     ], undefined, undefined, adapters)).at(-1);
     if (result?.errorText) throw new Error(result.errorText);
+    rememberBrowserTab(project, context.target.id, 'about:blank');
     return { url: 'about:blank' };
   }
   if (!['back', 'forward'].includes(action)) throw new Error('Unknown navigation action.');
@@ -234,11 +240,12 @@ export async function browserHistoryAction(project, tabId, action, adapters = {}
   await pageCommands(context.endpoint, context.viewport, [
     { method: 'Page.navigateToHistoryEntry', params: { entryId: entry.id } },
   ], undefined, undefined, adapters);
+  rememberBrowserTab(project, context.target.id, entry.url);
   return { url: entry.url };
 }
 
 // Move the mouse to a position relative to the screenshot, with no press, so a hover state or a tooltip shows.
-export async function browserHover(project, tabId, relativeX, relativeY, adapters = {}) {
+async function browserHoverImpl(project, tabId, relativeX, relativeY, adapters = {}) {
   if (![relativeX, relativeY].every((n) => typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 1)) throw new Error('Hover position must be inside the screenshot.');
   const context = await pageContext(project, tabId, adapters);
   await pageCommands(context.endpoint, context.viewport, [
@@ -254,7 +261,7 @@ export async function browserHover(project, tabId, relativeX, relativeY, adapter
   return { ok: true };
 }
 
-export async function browserClick(project, tabId, relativeX, relativeY, adapters = {}) {
+async function browserClickImpl(project, tabId, relativeX, relativeY, adapters = {}) {
   if (![relativeX, relativeY].every((n) => typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 1)) throw new Error('Click position must be inside the screenshot.');
   const context = await pageContext(project, tabId, adapters);
   let point;
@@ -279,7 +286,7 @@ function dragPosition(value) {
   return { x, y };
 }
 
-export async function browserDrag(project, tabId, from, to, { steps = 10, adapters = {} } = {}) {
+async function browserDragImpl(project, tabId, from, to, { steps = 10, adapters = {} } = {}) {
   const start = dragPosition(from);
   const end = dragPosition(to);
   if (!Number.isInteger(steps) || steps < 1 || steps > 60) throw new Error('Drag steps must be from 1 to 60.');
@@ -369,7 +376,7 @@ async function resetWindow(context, tabId, runCommand) {
   await runCommand(context.endpoint, 'Emulation.clearDeviceMetricsOverride', {});
 }
 
-export async function browserViewport(project, tabId, viewport, adapters = {}) {
+async function browserViewportImpl(project, tabId, viewport, adapters = {}) {
   if (!tabId) throw new Error('Select a browser tab.');
   const reset = viewport?.reset === true;
   if (reset) {
@@ -409,7 +416,7 @@ export async function browserViewport(project, tabId, viewport, adapters = {}) {
   return saved;
 }
 
-export async function browserInsertText(project, tabId, text, adapters = {}) {
+async function browserInsertTextImpl(project, tabId, text, adapters = {}) {
   if (typeof text !== 'string' || !text.length || text.length > 4096) throw new Error('Text must contain 1 to 4096 characters.');
   const context = await pageContext(project, tabId, adapters);
   await pageCommands(context.endpoint, context.viewport, [
@@ -422,7 +429,7 @@ const KEYS = { Tab: ['Tab', 9], Enter: ['Enter', 13], Backspace: ['Backspace', 8
   ArrowLeft: ['ArrowLeft', 37], ArrowUp: ['ArrowUp', 38], ArrowRight: ['ArrowRight', 39], ArrowDown: ['ArrowDown', 40],
   Home: ['Home', 36], End: ['End', 35], Escape: ['Escape', 27] };
 
-export async function browserKey(project, tabId, key, adapters = {}) {
+async function browserKeyImpl(project, tabId, key, adapters = {}) {
   const selected = key === 'SelectAll' ? ['KeyA', 65] : KEYS[key];
   if (!selected) throw new Error('Unsupported browser key.');
   const params = { key: key === 'SelectAll' ? 'a' : key, code: selected[0], windowsVirtualKeyCode: selected[1],
@@ -434,4 +441,48 @@ export async function browserKey(project, tabId, key, adapters = {}) {
     { method: 'Input.dispatchKeyEvent', params: { type: 'keyUp', ...params, text: undefined, unmodifiedText: undefined } },
   ], undefined, undefined, adapters);
   return { ok: true };
+}
+
+// Keep the activity record for the entire operation, including verification and a queued screenshot.
+export function listBrowserTabs(project, adapters = {}) {
+  return withBrowserCommand(project, () => listBrowserTabsImpl(project, adapters), adapters.activity);
+}
+export function tabAttached(project, tabId) {
+  return withBrowserCommand(project, () => tabAttachedImpl(project, tabId));
+}
+export function browserNewTab(project, url = 'about:blank', adapters = {}) {
+  return withBrowserCommand(project, () => browserNewTabImpl(project, url, adapters), adapters.activity);
+}
+export function browserCloseTab(project, tabId, options = {}) {
+  return withBrowserCommand(project, () => browserCloseTabImpl(project, tabId, options), options.activity);
+}
+export function browserDrag(project, tabId, from, to, options = {}) {
+  return withBrowserCommand(project, () => browserDragImpl(project, tabId, from, to, options), options.adapters?.activity);
+}
+export function browserScreenshot(project, tabId, adapters = {}) {
+  return withBrowserCommand(project, () => browserScreenshotImpl(project, tabId, adapters), adapters.activity);
+}
+export function browserNavigate(project, tabId, value, adapters = {}) {
+  return withBrowserCommand(project, () => browserNavigateImpl(project, tabId, value, adapters), adapters.activity);
+}
+export function browserNavigationState(project, tabId, adapters = {}) {
+  return withBrowserCommand(project, () => browserNavigationStateImpl(project, tabId, adapters), adapters.activity);
+}
+export function browserHistoryAction(project, tabId, action, adapters = {}) {
+  return withBrowserCommand(project, () => browserHistoryActionImpl(project, tabId, action, adapters), adapters.activity);
+}
+export function browserHover(project, tabId, relativeX, relativeY, adapters = {}) {
+  return withBrowserCommand(project, () => browserHoverImpl(project, tabId, relativeX, relativeY, adapters), adapters.activity);
+}
+export function browserClick(project, tabId, relativeX, relativeY, adapters = {}) {
+  return withBrowserCommand(project, () => browserClickImpl(project, tabId, relativeX, relativeY, adapters), adapters.activity);
+}
+export function browserViewport(project, tabId, viewport, adapters = {}) {
+  return withBrowserCommand(project, () => browserViewportImpl(project, tabId, viewport, adapters), adapters.activity);
+}
+export function browserInsertText(project, tabId, text, adapters = {}) {
+  return withBrowserCommand(project, () => browserInsertTextImpl(project, tabId, text, adapters), adapters.activity);
+}
+export function browserKey(project, tabId, key, adapters = {}) {
+  return withBrowserCommand(project, () => browserKeyImpl(project, tabId, key, adapters), adapters.activity);
 }

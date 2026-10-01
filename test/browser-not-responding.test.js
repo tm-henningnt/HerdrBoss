@@ -81,7 +81,8 @@ test('the card shows Not responding, the reason, and a Restart button in the cur
   const html = browserNotRespondingBlock('alpha', card);
   assert.match(html, /Not responding/);
   assert.match(html, /getTargets failed/);
-  assert.match(html, /<button type="button" data-browser-restart="alpha" data-browser-mode="headless" data-browser-no-restore="1"[^>]*>Restart<\/button>/);
+  assert.match(html, /<button type="button" data-browser-restart="alpha" data-browser-mode="headless"[^>]*>Restart<\/button>/);
+  assert.match(html, /saved tabs.*separate window/i);
   assert.match(browserNotRespondingBlock('alpha', { ...card, headless: false }), /data-browser-mode="visible"/);
 });
 
@@ -90,11 +91,12 @@ test('the card escapes the reason', () => {
   assert.doesNotMatch(browserNotRespondingBlock('alpha', { probeReason: '<img src=x>' }), /<img/);
 });
 
-test('the Restart button uses the existing restart route and never reopens a page', () => {
+test('the Restart button uses the existing route and restores tabs by default', () => {
   const start = app.indexOf('if (e.target.dataset.browserClose || e.target.dataset.browserRestart)');
   const handler = app.slice(start, app.indexOf('await refreshExtras();', start));
   assert.match(handler, /\/api\/browser-sessions\/\$\{restart \? 'restart' : 'close'\}/);
-  assert.match(handler, /const restorePage = !e\.target\.dataset\.browserNoRestore/);
+  assert.doesNotMatch(app, /data-browser-no-restore="1"/);
+  assert.match(handler, /const restorePage = document\.querySelector/);
 });
 
 test('the card block shows only for a verified browser that Herdr Boss started', () => {
@@ -115,6 +117,7 @@ const engineScript = `
   import { Engine } from './src/engine.js';
   import { loadConfig } from './src/config.js';
   import { createBrowserProbes } from './src/browser-probe.js';
+  import * as activity from './src/browser-activity.js';
   let virtualNow = Date.now();
   Date.now = () => virtualNow;
   const dir = process.env.HERDR_BOSS_DIR;
@@ -143,12 +146,16 @@ const engineScript = `
     collectPiModels: async () => null,
     runDenialScan: async () => ({ state: {}, denials: [] }),
   } });
-  engine.browserProbes = createBrowserProbes({ probe: (port) => engine.collectors.probeBrowser(port), intervalMs: Number(process.env.PROBE_INTERVAL_MS || 0) });
+  engine.browserProbes = createBrowserProbes({ probe: (port) => engine.collectors.probeBrowser(port), intervalMs: Number(process.env.PROBE_INTERVAL_MS || 0),
+    clock: () => virtualNow, activity: (project) => engine.collectors.browserCommandActivity(project) });
   const before = fs.readFileSync(sessionsFile, 'utf8');
   const steps = [];
   const closeCalls = [];
+  let command;
   for (const next of JSON.parse(process.env.STEPS)) {
     if (next.advanceMs) virtualNow += next.advanceMs;
+    if (next.command === 'start') command = activity.beginBrowserCommand('alpha', { now: () => virtualNow });
+    if (next.command === 'end') activity.endBrowserCommand('alpha', command, { now: () => virtualNow });
     outcome = next.probe || next;
     await engine.tick();
     await engine.browserProbes.idle();
@@ -158,7 +165,9 @@ const engineScript = `
       alerts: engine.state.alerts.filter((a) => a.key.startsWith('browser:managed-unresponsive:')).map((a) => ({ key: a.key, text: a.text, scope: a.scope })),
       idleEvents: engine.state.events.filter((e) => e.type === 'browser-idle-close'), idleState: engine.memory.browserIdle?.alpha });
   }
-  console.log(JSON.stringify({ steps, probed, closeCalls, sessionsUnchanged: fs.readFileSync(sessionsFile, 'utf8') === before, rulesBrowsers: JSON.parse(fs.readFileSync(path.join(dir, 'rules.json'), 'utf8')).browsers }));
+  const eventsFile = path.join(dir, 'events.jsonl');
+  const healthEvents = fs.existsSync(eventsFile) ? fs.readFileSync(eventsFile, 'utf8').trim().split('\\n').filter(Boolean).map(JSON.parse).filter((e) => e.type === 'browser-health') : [];
+  console.log(JSON.stringify({ steps, probed, closeCalls, healthEvents, sessionsUnchanged: fs.readFileSync(sessionsFile, 'utf8') === before, rulesBrowsers: JSON.parse(fs.readFileSync(path.join(dir, 'rules.json'), 'utf8')).browsers }));
 `;
 
 function runEngine(steps, { act = true, launchedAgoMs = 600000, idleCloseMinutes = 0, browserClients = 0, foreignProfile = false, probeIntervalMs = 0 } = {}) {
@@ -184,6 +193,37 @@ function runEngine(steps, { act = true, launchedAgoMs = 600000, idleCloseMinutes
 }
 
 const fail = (reason) => ({ ok: false, reason });
+
+test('each new health notice logs safe probe and process evidence to the fixture event file', { timeout: 60000 }, () => {
+  const out = runEngine([fail('getVersion timed out'), { advanceMs: 60_000, probe: fail('getTargets timed out') },
+    { advanceMs: 60_000, probe: fail('getTargets timed out') }, { advanceMs: 60_000, probe: { ok: true } }], { probeIntervalMs: 60_000 });
+  const events = out.healthEvents.filter((event) => event.project === 'alpha');
+  assert.equal(events.length, 1);
+  assert.equal(events[0].probeReason, 'getTargets timed out');
+  assert.equal(events[0].probeFailures, 2);
+  assert.equal(events[0].processState, 'running');
+  assert.equal(events[0].pid, 9223);
+  assert.equal(events[0].commandInFlight, 0);
+  assert.doesNotMatch(JSON.stringify(out.healthEvents), /https?:|profile|title|url|cmd/);
+  assert.ok(out.healthEvents.some((event) => event.project === 'beta' && event.processState === 'missing'));
+});
+
+test('the engine excludes failures during commands and waits for 20 quiet seconds', { timeout: 60000 }, () => {
+  const out = runEngine([{ command: 'start', probe: fail('getTargets timed out') },
+    { advanceMs: 60_000, probe: fail('getTargets timed out') },
+    { command: 'end', probe: fail('getTargets timed out') },
+    { advanceMs: 19_999, probe: fail('getTargets timed out') },
+    { advanceMs: 1, probe: fail('getTargets timed out') }, fail('getTargets timed out')]);
+  assert.ok(out.steps.slice(0, 5).every((step) => !step.notResponding));
+  assert.equal(out.steps[5].notResponding, true);
+});
+
+test('browser notice diagnosis ends after a week', { timeout: 60000 }, () => {
+  const out = runEngine([fail('getVersion timed out'), fail('getVersion timed out'), { ok: true },
+    { advanceMs: 7 * 86400_000, probe: fail('evaluate did not return') }, fail('evaluate did not return')]);
+  assert.equal(out.healthEvents.filter((event) => event.project === 'alpha').length, 1);
+  assert.equal(out.steps.at(-1).notResponding, true, 'the health rule continues after the diagnosis period');
+});
 
 test('the engine marks a browser after two failed probes, keeps one notice, and clears it on a success', { timeout: 60000 }, () => {
   const out = runEngine([fail('getVersion timed out'), fail('evaluate did not return'), fail('evaluate did not return'), { ok: true }]);

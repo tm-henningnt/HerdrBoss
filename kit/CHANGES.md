@@ -105,3 +105,7 @@ Summary: Add CI minute rules and GitHub workflow templates; create and copy miss
 ## 2db88201b003
 Impact: useful
 Summary: Use default worker collection recording in kit and command documentation.
+
+## 2ac9048be57b
+Impact: useful
+Summary: Wait for browser commands and CDP clients before restart. Restore saved tabs in separate windows and read their new IDs.
