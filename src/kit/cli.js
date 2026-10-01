@@ -17,7 +17,7 @@ import { createWaitHerdr, parseWaitArgs, waitForWorkers } from './wait.js';
 
 const USAGE = `Kit commands:
   worker start <name> --kind <kind> (--task TEXT | --task-file FILE) [--task-id ID] [--lease POOL]... [options]
-  worker collect <name> [--record --outcome done|partial|failed --gate-passed|--gate-failed]
+  worker collect <name> [--no-record] [--outcome done|partial|failed --gate-passed|--gate-failed]
   worker list
   wait [<worker>...] [--timeout SECONDS] [--stall SECONDS]
   worker park <name> --reason TEXT | worker unpark <name>
@@ -323,11 +323,13 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
       return parkWorker(positional[0], { reason: flags.reason, unpark: action === 'unpark' }, { config, herdr, output });
     }
     if (action === 'collect') {
-      const { positional, flags } = parseArgs(rest, { boolean: ['--record', '--gate-passed', '--gate-failed'] });
+      const { positional, flags } = parseArgs(rest, { boolean: ['--record', '--no-record', '--gate-passed', '--gate-failed'] });
       if (positional.length !== 1) fail('Usage: worker collect <name> [options]');
-      knownFlags(flags, ['record', 'outcome', 'gatepassed', 'gatefailed', 'defects', 'rework', 'modelresult', 'modelreason']);
+      knownFlags(flags, ['record', 'norecord', 'outcome', 'gatepassed', 'gatefailed', 'defects', 'rework', 'modelresult', 'modelreason']);
+      if (flags.record && flags.norecord) fail('Use either --record or --no-record, not both.');
       return collectWorker(positional[0], {
         record: flags.record,
+        noRecord: flags.norecord,
         outcome: flags.outcome,
         gatePassed: flags.gatepassed,
         gateFailed: flags.gatefailed,

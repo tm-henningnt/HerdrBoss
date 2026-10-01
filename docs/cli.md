@@ -641,6 +641,8 @@ Create a branch and worktree, write the brief, add a worker pane, start the agen
 
 Put task input files in `.orchestration/state/inputs/<worker name>/` in the main checkout. `worker start` copies regular files from that folder into `.worker/inputs/` and keeps their relative paths. It lists the copied paths in the brief. The folder can be empty or missing. Input files and `--copy` files share a 200 MB total limit.
 
+`worker start` also copies `.orchestration/local/` from the main checkout into a new worker worktree. It copies folders and regular files recursively. It skips symbolic links and files that already exist in the worker worktree. It skips files over 5 MB and prints one warning with their count. It keeps file and folder modes. It prints only the count of files copied. It does not copy `.worker/` or `.git/`. When `.orchestration/local/` is missing, it prints nothing about this copy.
+
 `worker start` counts the live panes of each worker tab in `herdr pane list`. It uses the first worker tab in label order that has fewer than 3 panes. It runs `herdr pane split` from the newest pane in that tab. When all worker tabs are full, it runs `herdr tab create` with the lowest free label, for example `--label 'Workers 2'`. The worker then uses the root pane of the new tab. A listed worker tab with 0 live panes counts as free. Herdr has no pane to split in that tab, so `worker start` creates a new tab with the same label.
 
 If the start fails before the agent starts, `worker start` closes only its own pane. It closes a worker tab only when the same start created that tab. The dry-run plan names the chosen tab, its tab ID, and its pane count, or `new tab`.
@@ -655,7 +657,7 @@ Each worker gets an absolute `TMPDIR` under its worker folder. When the path is 
 
 A Codex tool shell can run under a shared app-server daemon with another environment. For `--kind codex`, `worker start` therefore adds `-c shell_environment_policy.set.<NAME>="<value>"` to the agent launch arguments. It adds one argument for each of `HERDR_ENV`, `HERDR_PANE_ID`, `HERDR_TAB_ID`, `HERDR_WORKSPACE_ID`, `HERDR_SOCKET_PATH`, `HERDR_BIN_PATH`, `TMPDIR`, and `HERDR_WORKTREE`. The pane, tab, and workspace IDs come from the new pane. The socket and binary paths come from the caller environment. A variable with an unknown value is left out. `worker start` refuses a value with a quote, a backslash, or a control character before it creates the worktree. The dry-run plan shows `<pane-id>` for the new pane, and `<tab-id>` when the start creates a tab.
 
-`worker start` saves the resolved base commit in the run record. Review the worker, then collect it with `--record` before you merge its branch. Collection uses that saved commit so changed paths stay stable after the merge.
+`worker start` saves the resolved base commit in the run record. Review the worker, then collect it before you merge its branch. Collection records the run by default. It uses the saved commit so changed paths stay stable after the merge.
 
 | Option | Meaning |
 |---|---|
@@ -673,7 +675,7 @@ A Codex tool shell can run under a shared app-server daemon with another environ
 | `--orch PANE` | The verified caller pane for reports. If set, it must match `HERDR_PANE_ID`. |
 | `--no-worktree` | Use the current checkout. The worker gets `.worker/NAME/` for its brief and reports. |
 | `--dry-run` | Print the plan. Change nothing. |
-| `--force` | Override quota, capacity, and paused-project refusals. Start `claude-opus-5-5` only with the Owner's approval: without `--force`, `worker start` fails with `claude-opus-5-5 needs the Owner's approval. Ask the Owner, then start with --force.` The refusal also applies to the Opus spellings that `--model` normalizes, and to an Opus fallback from the policy. It happens before a worktree, a pane, or a run record exists. With `--force`, the run record holds `force: true`. It cannot enable a disabled model. It cannot override the swap refusal. |
+| `--force` | Override quota, capacity, and paused-project refusals. Start `claude-opus-5-5` only with the Owner's approval: without `--force`, `worker start` fails with `claude-opus-5-5 needs the Owner's approval. Ask the Owner, then start with --force.` The refusal also applies to the Opus spellings that `--model` normalizes, and to an Opus fallback from the policy. A refusal writes a `worker-opus-refused` event. It happens before a worktree, a pane, or a run record exists. A forced Claude Opus start prints and sends the Boss `Opus worker: NAME runs claude-opus-5-5 (forced).` and writes a `worker-opus` event. With `--force`, the run record holds `force: true`. It cannot enable a disabled model. It cannot override the swap refusal. |
 | `--force-swap` | Override the swap refusal (see below). |
 
 Worker brief templates support two Herdr command slots:
@@ -713,15 +715,15 @@ herdr-boss worker start fix-74 --kind claude --task-file brief.md --allow src/pa
 | Command | Action |
 |---|---|
 | `worker list` | Unfinished run records with the live agent status. |
-| `worker collect NAME` | Read the worker report, check its changed paths against `--allow`, and report configured stale-artifact warnings. It sets `collectedAt` in the run record only when the worker reported done: the report has `stoppedEarly` other than `true`, or `--record` has `--outcome done`. A collect of a running, stopped-early, failed, or partial worker changes nothing in the run record. Without a collect record, the board shows the task as `review` with the source `finished, not collected` when its pane is gone and `report.json` says done. A report with `stoppedEarly: true` or a status of blocked, failed, or partial gives a failed worker, and the task is open again. The board shows the task as `done` with the source `merged` when the branch is merged into the base branch. |
-| `worker collect NAME --record --outcome done\|partial\|failed --gate-passed\|--gate-failed [--defects N] [--rework N] [--model-result first-time\|rework\|failed] [--model-reason TEXT]` | Also append the run to the ledger, record usage, and release the leases of the worker. After success, merge the branch, then prune safe worktrees. |
+| `worker collect NAME [--record] [--outcome done\|partial\|failed --gate-passed\|--gate-failed] [--defects N] [--rework N] [--model-result first-time\|rework\|failed] [--model-reason TEXT]` | Check the worker report and its changed paths, report configured stale-artifact warnings, append the run to the ledger, record usage, and release its leases. Recording needs the outcome, one gate result, and any supplied defect or rework counts. It sets `collectedAt` and `finishedAt` after a successful collect. A refused collect closes nothing. `--record` is accepted for compatibility. After success, merge the branch, then prune safe worktrees. |
+| `worker collect NAME --no-record` | Read and print the report summary. Do not write a ledger entry or close the run record. Use this option when you only need to inspect the report. |
 | `worker park NAME --reason TEXT` | Mark a worker that waits on purpose. Idle notices skip it. |
 | `worker unpark NAME` | Clear the park mark. |
 | `worker allow NAME PATH... --reason TEXT` | Approve extra paths for a running worker after a `WORKER QUESTION`. |
 
 `worker collect` checks changed paths against the paths in the run record. It ignores the worker's `.worker/` folder. It also ignores `docs/orchestration/herdr-boss.md`, `AGENTS.md`, and `.claude/settings.json`, because the kit writes these files in a worker worktree. It checks artifacts when a `report.md` line starts with `Status: done` and the next character is whitespace, punctuation, or the end of the line. It accepts lines such as `Status: done.` and `Status: done — checks complete`. It ignores `Status: doneish`, `Status: done-partial`, `Status: partial`, and `Status: failed`. It compares the newest matching source file with the oldest matching artifact file. It warns when a source is newer or when sources match but no artifacts do. It prints each warning and includes the warnings in the `artifactWarnings` summary field. A warning does not change the independent gate result. The orchestrator decides whether the gate passed.
 
-With `--record`, the command completes every check before it prints the summary. It uses the ledger and run folder in the main checkout, including when you run it from a worker worktree.
+The command completes every check before it writes the ledger and closes the run. It uses the ledger and run folder in the main checkout, including when you run it from a worker worktree. If the recording flags are missing, it prints the missing flag list and says to use `--no-record` for a dry read.
 
 When `report.json` has no `modelOutcome` and you do not set `--model-result`, collection records a result from the outcome. It records `failed` when the outcome or gate failed. It records `rework` when `--rework` is greater than 0. Otherwise, it records `first-time`. Collection prints a warning with the result and recommends `--model-result` next time. An explicit `--model-result` takes precedence.
 
