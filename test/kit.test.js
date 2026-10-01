@@ -3687,11 +3687,39 @@ test('the worker brief template uses absolute worker paths and the kit names no 
   assert.doesNotMatch(cli, /herdr-boss lock acquire full-suite --wait 1800/);
 });
 
+test('the review pack section sits in the orchestrator skill and the worker brief template', () => {
+  const skill = fs.readFileSync(path.resolve('kit/skills/herdr-orchestrator/SKILL.md'), 'utf8');
+  const section = skill.slice(skill.indexOf('### Review packs'), skill.indexOf('## Resume from an unknown state'));
+  assert.ok(skill.indexOf('### Human gates and parking') < skill.indexOf('### Review packs'));
+  assert.ok(skill.indexOf('### Review packs') > 0 && skill.indexOf('### Review packs') < skill.indexOf('## Resume from an unknown state'));
+  assert.match(section, /herdr-boss review publish <slug> <folder>/);
+  assert.match(section, /herdr-boss review import <slug> <folder>/);
+  assert.match(section, /herdr-boss review result <slug> <pack> --json/);
+  assert.match(section, /Do not make a pack for a question that one Mailbox line answers\./);
+
+  const template = fs.readFileSync(path.resolve('kit/templates/worker-brief.md'), 'utf8');
+  const pack = template.slice(template.indexOf('## Review pack'), template.indexOf('## Gates on a shared machine'));
+  assert.ok(template.indexOf('## Image budget') < template.indexOf('## Review pack'));
+  assert.ok(template.indexOf('## Review pack') > 0 && template.indexOf('## Review pack') < template.indexOf('## Gates on a shared machine'));
+  assert.match(pack, /write it to `\.worker\/review-pack\/`\. Do not publish it\./);
+  assert.match(pack, /herdr-boss review check \.worker\/review-pack/);
+  // The section has no slot, so the rendered brief keeps it.
+  const rendered = renderBrief('## Review pack\n\nCheck the folder with `herdr-boss review check .worker/review-pack`.\n', {});
+  assert.match(rendered, /## Review pack/);
+
+  // Every command in the two sections is a command of the CLI help.
+  const help = fs.readFileSync(path.resolve('src/cli.js'), 'utf8');
+  for (const usage of ['review check FOLDER', 'review publish SLUG FOLDER', 'review import SLUG FOLDER-OR-FILE', 'review result [SLUG] PACK']) {
+    assert.ok(help.includes(usage), usage);
+  }
+});
+
 test('the orchestrator skill stays short and links each reference file', () => {
   const dir = path.resolve('kit/skills/herdr-orchestrator');
   const skill = fs.readFileSync(path.join(dir, 'SKILL.md'), 'utf8');
   const words = skill.split(/\s+/).filter(Boolean).length;
-  assert.ok(words >= 2300 && words <= 2700, `SKILL.md has ${words} words`);
+  // The upper bound grew with the review pack section. The skill keeps its length limit.
+  assert.ok(words >= 2300 && words <= 3000, `SKILL.md has ${words} words`);
   assert.match(skill, /^---\nname: herdr-orchestrator\ndescription: Use when /);
   assert.match(skill, /Use `--read-only` for a task that changes no repository file\./);
   const references = ['herdr-control.md', 'machine-and-quota.md', 'handover.md', 'ledger-and-evidence.md'];
