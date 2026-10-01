@@ -48,8 +48,12 @@ const CLI_FILE = fileURLToPath(new URL('./cli.js', import.meta.url));
 // The wait for a working successor to settle before the goal step gives up.
 const GOAL_WAIT_MS = 10 * 60 * 1000;
 const AUTO_READY_MS = 120 * 1000;
+const SUCCESSOR_INPUT_READ_MS = 15_000;
+const INPUT_ENTER_READY_DELAY_MS = 20_000;
 const AUTO_READY_EXPIRY_MS = 30 * 60 * 1000;
 const AUTO_READY_EXPIRY_REASON = 'successor not ready after 30 minutes';
+const HANDOVER_EXPIRY_RETRY_MS = 5 * 60 * 1000;
+const HANDOVER_EXPIRY_MAX_FAILURES = 3;
 const CONTEXT_WARNING_TOKENS = 400_000;
 const CONTEXT_WARNING_INTERVAL_MS = 60 * 60 * 1000;
 const SEV = { info: 0, warn: 1, critical: 2 };
@@ -503,6 +507,7 @@ export class Engine extends EventEmitter {
     this.push = actionsAllowed && push;
     this.act = actionsAllowed && act; // false: collect and evaluate only (no reaping, notifications or prompts)
     this.memory = readJson(MEMORY_FILE, { paneSince: {}, pushes: {}, notified: {} });
+    this.successorInputReads = new Map();
     this.quotas = null;
     this.quotasAt = 0;
     this.quotasCached = false;
@@ -661,6 +666,9 @@ export class Engine extends EventEmitter {
     this.running = true;
     const errors = [];
     const now = Date.now();
+    if (this.act) {
+      try { this.pruneHandoverExpiryMemory(); } catch {}
+    }
     try { this.checkMessageChanges(); }
     catch (error) { errors.push(`messages: ${error.message}`); }
     const harness = this.readHarness(now);
@@ -1024,8 +1032,7 @@ export class Engine extends EventEmitter {
           title: `${h.project} successor did not get its prompt`,
           text: `The bootstrap prompt did not reach the proposed successor ${h.id} in pane ${h.newPane}. It cannot report ready, so automatic activation cannot happen. Read the pane with herdr agent read ${h.newPane}, then send the prompt again or close the pane and prepare a new successor.`,
         });
-        // Expire an automatic successor two hours after preparation when its source provider is no longer at risk.
-        // A successor of the context trigger waits up to 24 hours for a task boundary.
+        // An unready automatic successor expires after 30 minutes. A ready successor can expire when its source quota is safe.
         const sourceProvider = providerFor(h.fromKind, policy.preferredModels?.[h.fromKind] ?? this.models.kinds[h.fromKind]?.defaultModel, policy);
         if (h.status === 'prepared' && h.automatic && now - Date.parse(h.preparedAt) > (this.memory.contextHandovers?.[h.id] ? 24 : 2) * 3600000 && !control.risks[sourceProvider]) {
           const expired = this.act ? expireHandoff(h.id, `${sourceProvider || 'the source provider'} is no longer near its limit`) : null;
@@ -1505,6 +1512,13 @@ export class Engine extends EventEmitter {
 
   // Why a prepared successor has no readyAt yet.
   successorHasStarted(item, target) {
+    const enteredAt = Date.parse(item.inputEnterSentAt);
+    if (Number.isFinite(enteredAt)) {
+      if (Date.parse(item.seenWorkingAt) > enteredAt) return true;
+      if (target?.agent !== 'claude') return true;
+      const usage = claudeContextUsage({ sessionId: target.sessionId, cwd: target.cwd, notBeforeMs: enteredAt });
+      return usage.available && usage.tokens > 0;
+    }
     if (item.seenWorkingAt) return true;
     // Claude context starts at zero in a fresh pane. A positive assistant usage record proves that
     // the successor has run after the prepare prompt. Other harnesses have no context signal here.
@@ -1519,8 +1533,12 @@ export class Engine extends EventEmitter {
     if (target.agent !== item.toKind) return 'the successor pane runs another agent';
     if (!['idle', 'done'].includes(target.status)) return 'it works';
     if (item.promptDelivery === 'stalled-retry') return 'the prepare prompt stalled';
-    if (!this.successorHasStarted(item, target)) return 'it has not started its state read';
-    if (item.unsentInputAt && item.inputEnterSentAt) return 'it had unsent input, and the engine sent Enter once';
+    if (Number.isFinite(Date.parse(item.inputEnterSentAt)) && now - Date.parse(item.inputEnterSentAt) < INPUT_ENTER_READY_DELAY_MS) {
+      return 'it is waiting for submitted input to start';
+    }
+    if (!this.successorHasStarted(item, target)) return item.inputEnterSentAt
+      ? 'it has not started after the engine sent Enter'
+      : 'it has not started its state read';
     const wait = AUTO_READY_MS - (now - Date.parse(item.promptAt || item.preparedAt));
     return wait > 0 ? `it settled, and the automatic ready signal waits ${Math.ceil(wait / 1000)} more seconds` : 'the ready check runs next tick';
   }
@@ -1534,8 +1552,18 @@ export class Engine extends EventEmitter {
     return false;
   }
 
+  pruneHandoverExpiryMemory(records = null) {
+    const handoverRecords = records || listHandoffs();
+    const handoverIds = new Set(handoverRecords.map((item) => item.id));
+    for (const key of ['handoverExpiryMailbox', 'handoverExpiryHandled', 'handoverExpiryRetries']) {
+      this.memory[key] ||= {};
+      for (const id of Object.keys(this.memory[key])) if (!handoverIds.has(id)) delete this.memory[key][id];
+    }
+  }
+
   async expireUnreadyHandoffs(herdr, now) {
     let records = listHandoffs();
+    this.pruneHandoverExpiryMemory(records);
     for (const item of records.filter((record) => record.status === 'prepared' && record.automatic && !record.readyAt
       && !record.boss && record.label !== 'boss' && Number.isFinite(Date.parse(record.preparedAt))
       && now - Date.parse(record.preparedAt) >= AUTO_READY_EXPIRY_MS)) {
@@ -1551,44 +1579,74 @@ export class Engine extends EventEmitter {
     for (const item of records.filter((record) => record.status === 'expired' && record.automatic
       && record.expiredReason === AUTO_READY_EXPIRY_REASON && !record.boss && record.label !== 'boss')) {
       const label = item.displayLabel || this.state?.control?.projects?.[item.project]?.label || item.project;
-      this.memory.handoverExpiryMailbox ||= {};
+      const retryOperation = async (kind, description, action, scope) => {
+        const retries = this.memory.handoverExpiryRetries[item.id] ||= {};
+        const retry = retries[kind] ||= { failures: 0, nextAt: 0 };
+        if (retry.givenUp || now < retry.nextAt) return false;
+        try {
+          await action();
+          delete retries[kind];
+          if (!Object.keys(retries).length) delete this.memory.handoverExpiryRetries[item.id];
+          return true;
+        } catch (error) {
+          retry.failures += 1;
+          const detail = String(error?.stderr || error?.message || error).slice(0, 200);
+          if (retry.failures >= HANDOVER_EXPIRY_MAX_FAILURES) {
+            retry.givenUp = true;
+            this.log('error', `Giving up ${description} for expired handover ${item.id} after ${HANDOVER_EXPIRY_MAX_FAILURES} failures: ${detail}`, scope);
+          } else retry.nextAt = now + HANDOVER_EXPIRY_RETRY_MS;
+          return false;
+        }
+      };
+      const clearRetry = (kind) => {
+        const retry = this.memory.handoverExpiryRetries[item.id];
+        if (!retry) return;
+        delete retry[kind];
+        if (!Object.keys(retry).length) delete this.memory.handoverExpiryRetries[item.id];
+      };
       const mailboxPosted = this.memory.handoverExpiryMailbox[item.id]
         || this.messageStore.all().some((message) => message.handoffExpiryId === item.id);
-      if (mailboxPosted) this.memory.handoverExpiryMailbox[item.id] ||= now;
+      if (mailboxPosted) {
+        this.memory.handoverExpiryMailbox[item.id] ||= now;
+        const retry = this.memory.handoverExpiryRetries[item.id];
+        if (retry) delete retry.mailbox;
+        if (retry && !Object.keys(retry).length) delete this.memory.handoverExpiryRetries[item.id];
+      }
       else {
-        try {
-          this.messageStore.append({
+        const posted = await retryOperation('mailbox', 'the Mailbox notice', () => this.messageStore.append({
             thread: 'boss', from: 'boss', to: 'owner', kind: 'report', action: 'read', replyTo: null, status: 'new',
             title: `${label} handover expired`,
             text: `The automatic handover for ${label} (${item.id}) expired because the successor did not become ready after 30 minutes.`,
             handoffExpiryId: item.id,
-          }, { now });
-          this.memory.handoverExpiryMailbox[item.id] = now;
-        } catch (error) {
-          this.log('error', `Mailbox item for expired handover ${item.id} failed: ${String(error?.message || error).slice(0, 200)}`, { project: item.project });
-        }
+          }, { now }), { project: item.project });
+        if (posted) this.memory.handoverExpiryMailbox[item.id] = now;
       }
 
-      this.memory.handoverExpiryHandled ||= {};
       if (this.memory.handoverExpiryHandled[item.id]) continue;
       const pane = (herdr?.panes || []).find((candidate) => candidate.id === item.newPane);
       const recordsUsePane = records.some((other) => other.id !== item.id
         && ['prepared', 'preparing', 'needs-inspection', 'active', 'superseded'].includes(other.status)
         && (other.sourcePane === item.newPane || other.newPane === item.newPane));
       if (!pane) {
+        clearRetry('close');
         this.memory.handoverExpiryHandled[item.id] = now;
         continue;
       }
       if (pane.id === item.sourcePane || pane.agent !== item.toKind || pane.status !== 'idle'
         || pane.label || pane.orch || recordsUsePane) {
+        clearRetry('close');
         this.memory.handoverExpiryHandled[item.id] = now;
         this.log('handoff', `Kept the expired successor pane ${pane.id}: it is not an idle, unused ${item.toKind} pane`, { project: item.project, pane: pane.id });
         continue;
       }
       try {
-        checkHerdrResponse(await this.herdrRunner('herdr', ['pane', 'close', pane.id]));
-        this.memory.handoverExpiryHandled[item.id] = now;
-        this.log('handoff', `Closed idle successor pane ${pane.id} for expired handover ${item.id}`, { project: item.project, pane: pane.id });
+        const closed = await retryOperation('close', `close of pane ${pane.id}`, async () => {
+          checkHerdrResponse(await this.herdrRunner('herdr', ['pane', 'close', pane.id]));
+        }, { project: item.project, pane: pane.id });
+        if (closed) {
+          this.memory.handoverExpiryHandled[item.id] = now;
+          this.log('handoff', `Closed idle successor pane ${pane.id} for expired handover ${item.id}`, { project: item.project, pane: pane.id });
+        } else if (this.memory.handoverExpiryRetries[item.id]?.close?.givenUp) this.memory.handoverExpiryHandled[item.id] = now;
       } catch (error) {
         this.log('error', `Could not close idle successor pane ${pane.id} for expired handover ${item.id}: ${String(error.stderr || error.message).slice(0, 200)}`, { project: item.project, pane: pane.id });
       }
@@ -1659,6 +1717,22 @@ export class Engine extends EventEmitter {
     return waits;
   }
 
+  async successorInputScreen(item, target, now) {
+    const cached = this.successorInputReads.get(target.id);
+    if (cached && now >= cached.at && now - cached.at < SUCCESSOR_INPUT_READ_MS) return cached;
+    try {
+      const screen = paneText(await this.herdrRunner('herdr', ['pane', 'read', target.id, '--source', 'visible', '--lines', '80', '--format', 'ansi']));
+      const result = { at: now, screen };
+      this.successorInputReads.set(target.id, result);
+      return result;
+    } catch (error) {
+      const result = { at: now, error };
+      this.successorInputReads.set(target.id, result);
+      this.log('error', `Could not inspect successor input for handoff ${item.id}: ${String(error.stderr || error.message).slice(0, 200)}`, { project: item.project, pane: target.id });
+      return result;
+    }
+  }
+
   // The second automatic handover trigger. At a task boundary, an orchestrator whose context is above
   // the policy threshold gets a fresh successor from the project memory file. The successor keeps the
   // model of the source. Activation waits until the source pane is not working.
@@ -1669,6 +1743,9 @@ export class Engine extends EventEmitter {
     const panes = herdr?.panes || [];
     const records = listHandoffs();
     const open = ['prepared', 'preparing', 'needs-inspection'];
+    const inputCandidates = new Set(records.filter((x) => x.status === 'prepared' && x.automatic && !x.readyAt && !x.promptError
+      && this.memory.contextHandovers[x.id]).map((x) => x.newPane));
+    for (const paneId of this.successorInputReads.keys()) if (!inputCandidates.has(paneId)) this.successorInputReads.delete(paneId);
     for (const id of Object.keys(this.memory.contextHandovers)) {
       if (!records.some((x) => x.id === id && open.includes(x.status))) delete this.memory.contextHandovers[id];
     }
@@ -1693,13 +1770,9 @@ export class Engine extends EventEmitter {
       }
       if (!settled(target) || item.promptDelivery === 'stalled-retry') continue;
       if (now - Date.parse(item.promptAt || item.preparedAt) < AUTO_READY_MS) continue;
-      let screen;
-      try {
-        screen = paneText(await this.herdrRunner('herdr', ['pane', 'read', target.id, '--source', 'visible', '--lines', '80', '--format', 'ansi']));
-      } catch (error) {
-        this.log('error', `Could not inspect successor input for handoff ${item.id}: ${String(error.stderr || error.message).slice(0, 200)}`, { project: item.project, pane: target.id });
-        continue;
-      }
+      const input = await this.successorInputScreen(item, target, now);
+      if (input.error) continue;
+      const screen = input.screen;
       const rawLines = String(screen).split(/\r?\n/);
       const visibleLines = rawLines.map((line) => stripAnsi(line).trim());
       let typedInput = false;
@@ -1713,6 +1786,7 @@ export class Engine extends EventEmitter {
         const latest = current.find((record) => record.id === item.id && record.status === 'prepared' && !record.readyAt);
         if (!latest) continue;
         if (!latest.inputEnterSentAt) {
+          delete latest.seenWorkingAt;
           latest.unsentInputAt = new Date(now).toISOString();
           latest.inputEnterSentAt = new Date(now).toISOString();
           saveHandoffs(current);
@@ -1725,6 +1799,7 @@ export class Engine extends EventEmitter {
         }
         continue;
       }
+      if (Number.isFinite(Date.parse(item.inputEnterSentAt)) && now - Date.parse(item.inputEnterSentAt) < INPUT_ENTER_READY_DELAY_MS) continue;
       if (!this.successorHasStarted(item, target)) continue;
       const ready = autoReadyHandoff(item.id, 'auto: successor idle');
       if (!ready) continue;

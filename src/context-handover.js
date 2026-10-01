@@ -6,41 +6,95 @@ import path from 'node:path';
 const SESSION_ID = /^[A-Za-z0-9_-]{1,128}$/;
 // The transcript tail that holds the last assistant message. A second pass reads more when a long line hides it.
 const TAIL_BYTES = [256 * 1024, 4 * 1024 * 1024];
+const USAGE_CACHE_MS = 30_000;
+const USAGE_CACHE_MAX_AGE_MS = 30 * 60_000;
+const USAGE_CACHE_MAX_ENTRIES = 512;
+const usageCache = new Map();
 
-export function transcriptFile(sessionId, cwd, home) {
+export function transcriptFile(sessionId, cwd, home, filesystem = fs) {
   const root = path.join(home, '.claude', 'projects');
   const name = `${sessionId}.jsonl`;
   const direct = typeof cwd === 'string' && cwd ? path.join(root, cwd.replace(/[^a-zA-Z0-9]/g, '-'), name) : null;
-  if (direct && fs.existsSync(direct)) return direct;
+  if (direct && filesystem.existsSync(direct)) return direct;
   let dirs = [];
-  try { dirs = fs.readdirSync(root, { withFileTypes: true }).filter((entry) => entry.isDirectory()); } catch { return null; }
+  try { dirs = filesystem.readdirSync(root, { withFileTypes: true }).filter((entry) => entry.isDirectory()); } catch { return null; }
   for (const dir of dirs) {
     const file = path.join(root, dir.name, name);
-    if (fs.existsSync(file)) return file;
+    if (filesystem.existsSync(file)) return file;
   }
   return null;
 }
 
-function readTail(file, bytes) {
-  const fd = fs.openSync(file, 'r');
+function readTail(file, bytes, filesystem) {
+  const fd = filesystem.openSync(file, 'r');
   try {
-    const { size } = fs.fstatSync(fd);
+    const { size } = filesystem.fstatSync(fd);
     const length = Math.min(size, bytes);
     const buffer = Buffer.alloc(length);
-    fs.readSync(fd, buffer, 0, length, size - length);
+    filesystem.readSync(fd, buffer, 0, length, size - length);
     return { text: buffer.toString('utf8'), whole: length === size };
-  } finally { fs.closeSync(fd); }
+  } finally { filesystem.closeSync(fd); }
 }
 
 // The last main-thread assistant message of a Claude session transcript holds the usage of the
 // latest request. Its input, cache read, and cache creation tokens are the context size.
-export function claudeContextUsage({ sessionId, cwd = null, home = os.homedir() } = {}) {
+export function claudeContextUsage({ sessionId, cwd = null, home = os.homedir(), clock = Date.now, filesystem = fs, notBeforeMs = null } = {}) {
   if (typeof sessionId !== 'string' || !SESSION_ID.test(sessionId)) return { available: false, reason: 'the pane has no session ID' };
-  const file = transcriptFile(sessionId, cwd, home);
-  if (!file) return { available: false, reason: 'no Claude session transcript was found' };
+  const now = clock();
+  const cacheKey = `${home}\0${sessionId}`;
+  const cached = usageCache.get(cacheKey);
+  const resultAfter = (result, mtimeMs) => result.available && Number.isFinite(notBeforeMs) && !(mtimeMs > notBeforeMs)
+    ? { available: false, reason: 'no context usage was recorded after input was submitted' }
+    : result;
+  const remember = (entry) => {
+    usageCache.delete(cacheKey);
+    usageCache.set(cacheKey, entry);
+    for (const [key, value] of usageCache) if (now - value.checkedAt > USAGE_CACHE_MAX_AGE_MS) usageCache.delete(key);
+    while (usageCache.size > USAGE_CACHE_MAX_ENTRIES) usageCache.delete(usageCache.keys().next().value);
+  };
+  if (cached && now >= cached.checkedAt && now - cached.checkedAt < USAGE_CACHE_MS) {
+    cached.lastUsedAt = now;
+    return resultAfter(cached.result, cached.mtimeMs);
+  }
+
+  let file = cached?.file || null;
+  let stat = null;
+  if (file) {
+    try {
+      stat = filesystem.statSync(file);
+      if (stat.isFile() && stat.size === cached.size && stat.mtimeMs === cached.mtimeMs) {
+        cached.checkedAt = now;
+        cached.lastUsedAt = now;
+        return resultAfter(cached.result, cached.mtimeMs);
+      }
+      if (!stat.isFile()) file = null;
+    } catch { file = null; }
+  }
+  if (!file) {
+    file = transcriptFile(sessionId, cwd, home, filesystem);
+    if (!file) {
+      const result = { available: false, reason: 'no Claude session transcript was found' };
+      remember({ file: null, size: null, mtimeMs: null, checkedAt: now, lastUsedAt: now, result });
+      return result;
+    }
+    try { stat = filesystem.statSync(file); }
+    catch (e) {
+      const result = { available: false, reason: `the transcript is unreadable (${e.code || 'error'})` };
+      remember({ file: null, size: null, mtimeMs: null, checkedAt: now, lastUsedAt: now, result });
+      return result;
+    }
+  }
+
+  if (cached && file === cached.file && stat?.isFile() && stat.size === cached.size && stat.mtimeMs === cached.mtimeMs) {
+    cached.checkedAt = now;
+    cached.lastUsedAt = now;
+    return resultAfter(cached.result, cached.mtimeMs);
+  }
+
+  let result = { available: false, reason: 'the transcript has no usage record' };
   try {
     for (const bytes of TAIL_BYTES) {
-      const { text, whole } = readTail(file, bytes);
+      const { text, whole } = readTail(file, bytes, filesystem);
       const lines = text.split('\n');
       for (let i = lines.length - 1; i >= 0; i -= 1) {
         if (!lines[i].trim()) continue;
@@ -51,12 +105,15 @@ export function claudeContextUsage({ sessionId, cwd = null, home = os.homedir() 
         const tokens = ['input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens']
           .reduce((sum, key) => sum + (Number.isFinite(usage[key]) ? usage[key] : 0), 0);
         if (tokens <= 0) continue;
-        return { available: true, tokens, model: normalizeModelId(row.message.model) };
+        result = { available: true, tokens, model: normalizeModelId(row.message.model) };
+        break;
       }
+      if (result.available) break;
       if (whole) break;
     }
-  } catch (e) { return { available: false, reason: `the transcript is unreadable (${e.code || 'error'})` }; }
-  return { available: false, reason: 'the transcript has no usage record' };
+  } catch (e) { result = { available: false, reason: `the transcript is unreadable (${e.code || 'error'})` }; }
+  remember({ file, size: stat.size, mtimeMs: stat.mtimeMs, checkedAt: now, lastUsedAt: now, result });
+  return resultAfter(result, stat.mtimeMs);
 }
 
 // A transcript can name a model with a date suffix or a context-window suffix. The catalog uses neither.
