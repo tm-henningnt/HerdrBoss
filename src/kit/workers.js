@@ -6,13 +6,14 @@ import { appendDelegatedRun, compareChangedPaths, gitChangedPaths, gitLog, readJ
 import { recordUsage } from '../usage.js';
 import { goalSummary, mergeModels, modelEnabled, providerFor, selectModel, unavailablePiModels, unmeteredClosedParts, unmeteredSummary } from '../control.js';
 import { DATA_DIR, loadConfig } from '../config.js';
-import { workerStatusFromState } from '../worker-failures.js';
+import { readBoundedWorkerReport, workerStatusFromState } from '../worker-failures.js';
 import { checkAgentsFile, kitBehindLine } from './agents-check.js';
 import { acquireLeaseFor, dropLeases, portEnvStatus, setLeasePane } from '../leases.js';
 import { portEnvFor } from '../config.js';
 import { codexShellEnvArgs } from '../harness.js';
 import { TASK_ID } from '../task-state.js';
 import { swapRefusal, swapExempt } from './swap-guard.js';
+import { recordWorkerReport, workerRunId } from '../agent-messages.js';
 
 const NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
 const AGENT_READY_MARKERS = Object.freeze({
@@ -1629,7 +1630,7 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
       const missing = recordFlagErrors(options, reportJson);
       if (missing.length) throw new Error(`--record needs:\n- ${missing.join('\n- ')}\nUse --no-record to read the report without a ledger entry.`);
     }
-    const reportMd = fs.readFileSync(path.join(reportDir, 'report.md'), 'utf8');
+    const reportMd = readBoundedWorkerReport(path.join(reportDir, 'report.md'));
     const errors = validateWorkerReport(reportJson, { evidenceTiers: config.evidenceTiers });
     if (errors.length) throw new Error(`Invalid worker report:\n- ${errors.join('\n- ')}`);
     if (path.resolve(reportJson.worktree) !== path.resolve(run.worktree)) throw new Error(`Report worktree ${reportJson.worktree} does not match run worktree ${run.worktree}.`);
@@ -1656,6 +1657,18 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
     const omitted = changed.filter((item) => !reported.includes(item) && !folders.some((folder) => item.startsWith(folder)));
     if (scopeErrors.length) throw new Error(`Worker ${name} changed paths outside its allowed scope: ${scopeErrors.join(', ')}.`);
     if (omitted.length) throw new Error(`Worker ${name} omitted changed paths from its report: ${omitted.join(', ')}.`);
+    const reportStat = fs.statSync(path.join(reportDir, 'report.json'));
+    try {
+      recordWorkerReport({
+        project: config.slug, name: run.name, pane: run.pane,
+        taskId: run.taskId ?? run.issue ?? null,
+        runId: workerRunId(run, config.slug), mtimeMs: reportStat.mtimeMs,
+        summary: reportMd, toPane: process.env.HERDR_PANE_ID || null,
+      }, { dir: DATA_DIR, now });
+    } catch (error) {
+      const code = typeof error?.code === 'string' && /^[A-Z0-9_-]{1,32}$/.test(error.code) ? error.code : 'error';
+      output(`Warning: worker report store failed (${code}).`);
+    }
     const summary = {
       name,
       issue: reportJson.issue,

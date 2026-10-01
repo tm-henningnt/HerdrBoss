@@ -47,7 +47,7 @@ export function updateMessage(id, patch, { dir = DATA_DIR, now = Date.now() } = 
 }
 
 export function listThread(thread, { dir = DATA_DIR, limit = THREAD_LIMIT } = {}) {
-  return openMessageStore({ dir }).thread(thread, { limit });
+  return openMessageStore({ dir }).thread(thread, { limit }).filter((record) => record.kind !== 'agent');
 }
 
 // ---------- Owner sends ----------
@@ -126,6 +126,7 @@ const isDone = (record) => !!record.closedAt || record.closedBy === 'boss' || (!
 // The channel rule. A report and a review pack item are mail. A reply with an action for the Owner is in both channels. Every other record is a chat message.
 export function messageChannel(record) {
   if (!record) return 'chat';
+  if (record.kind === 'agent') return 'agent';
   if (record.kind === 'report' || record.kind === 'review') return 'mail';
   if (record.kind === 'reply' && NEEDS_YOU_ACTIONS.has(mailboxAction(record))) return 'both';
   return 'chat';
@@ -144,7 +145,7 @@ export function isMailAnswer(record, byId) {
 // The records that the Chat shows. A Mailbox answer stays in the Mailbox.
 export function chatRecords(records) {
   const byId = messagesById(records);
-  return records.filter((record) => !isMailAnswer(record, byId));
+  return records.filter((record) => record.kind !== 'agent' && !isMailAnswer(record, byId));
 }
 
 // One summary for each thread from the chat records: the last record, the count, and the unread records to the Owner.
@@ -210,7 +211,7 @@ export function mailboxCounts(records) {
   const needsYou = items.filter((item) => needsOwnerAction(item) && !item.closedAt);
   const needsYouUnread = needsYou.filter((item) => !item.readAt).length;
   const updates = items.filter((item) => !needsOwnerAction(item) && !isDone(item)).length;
-  const chatUnread = records.filter((record) => record.to === 'owner' && !record.readAt && messageChannel(record) !== 'mail').length;
+  const chatUnread = records.filter((record) => record.kind !== 'agent' && record.to === 'owner' && !record.readAt && messageChannel(record) !== 'mail').length;
   const mailUnread = items.filter((item) => messageChannel(item) === 'mail' && !item.readAt).length;
   return { needsYou: needsYou.length, needsYouUnread, updates, unread: needsYouUnread, open: needsYou.length, chatUnread, mailUnread, needsAction: needsYou.length };
 }

@@ -25,6 +25,7 @@ import { hasTypedText, screenBlocker, stripAnsi } from './goal-set.js';
 import { claudeContextUsage, trackBoundary, normalizeModelId } from './context-handover.js';
 import { FINISH_TIMEOUT_MS, autoReadyHandoff, markSuccessorWorking, listHandoffs, saveHandoffs, supersedeHandoffs, expireHandoff, expireMissingHandoffs, handoffNotices } from './handoff.js';
 import { closeReviewItems, deliverQueued, mailboxCounts, readMessages, RETENTION_MS, SEND_LIMIT_PER_MINUTE } from './messages.js';
+import { recordWorkerReport, sweepAgentMessages, workerRunId } from './agent-messages.js';
 import { sweep as sweepReviewPacks } from './review-store.js';
 import { sweepAttachments } from './attachments.js';
 import { openMessageStore } from './message-store.js';
@@ -32,7 +33,7 @@ import { readKitNotice, pendingKitAlert, isKitAlert, kitNoticeTargets, unsentKit
 import { applyTaskState, readWorkerFacts, gitIsMerged, gitCounts } from './task-state.js';
 import { kitRevisionState, kitSnapshot, KIT_STATES } from './kit/agents-check.js';
 import { nextDailyTime, nightNoticeSent, quietHoursActive, readNight, readNightRecord, watchUntilPhrase, withNightReportMark, withNoticeMark, writeNight } from './night.js';
-import { inspectWorkerTransitions, inspectWorkerReports, isWorkerPane, applyWorkerFailureStatuses, resolveFreeUsageRun, activeFreeModelExhaustions, extendFreeModelExhaustion, activeFreeLaneExhaustions, extendFreeLaneExhaustion, freeUsageLaneRetry } from './worker-failures.js';
+import { inspectWorkerTransitions, inspectWorkerReports, readBoundedWorkerReport, isWorkerPane, applyWorkerFailureStatuses, resolveFreeUsageRun, activeFreeModelExhaustions, extendFreeModelExhaustion, activeFreeLaneExhaustions, extendFreeLaneExhaustion, freeUsageLaneRetry } from './worker-failures.js';
 import { appendMachineSample, highSwapHoursLine, sampleLine } from './machine-samples.js';
 import { FULL_SUITE_LOCK, lockLedgerSummary, readLockQueue, readLockTakeoverNotices, readMachineLocks, removeLockTakeoverNotice } from './kit/locks.js';
 
@@ -168,7 +169,7 @@ function runningWorkerCountsByLane(herdr, policy, models) {
 
 function readActiveWorkerRuns() {
   const runs = [];
-  for (const { repo } of readProjectRepos(DATA_DIR)) {
+  for (const { repo, slug } of readProjectRepos(DATA_DIR)) {
     let config;
     try { config = loadProjectConfig({ cwd: repo }); }
     catch { continue; }
@@ -187,7 +188,7 @@ function readActiveWorkerRuns() {
         const stat = fs.lstatSync(file);
         if (!stat.isFile() || stat.isSymbolicLink()) continue;
         const run = JSON.parse(fs.readFileSync(file, 'utf8'));
-        if (!run.finishedAt && run.name && run.pane && path.isAbsolute(run.worktree)) runs.push(run);
+        if (!run.finishedAt && run.name && run.pane && path.isAbsolute(run.worktree)) runs.push({ ...run, project: slug });
       } catch {}
     }
   }
@@ -675,6 +676,7 @@ export class Engine extends EventEmitter {
 
   observeMessageChange(event) {
     if (!event || !['append', 'update'].includes(event.type) || typeof event.record?.id !== 'string') return;
+    if (event.record.kind === 'agent') return;
     const serialized = JSON.stringify(event.record);
     if (this.messageSnapshot.get(event.record.id) === serialized) return;
     this.messageSnapshot.set(event.record.id, serialized);
@@ -690,8 +692,10 @@ export class Engine extends EventEmitter {
     for (const record of records) {
       const serialized = JSON.stringify(record);
       const previous = this.messageSnapshot.get(record.id);
-      if (!previous) this.emit('message', { type: 'append', record });
-      else if (previous !== serialized) this.emit('message', { type: 'update', record });
+      if (record.kind !== 'agent') {
+        if (!previous) this.emit('message', { type: 'append', record });
+        else if (previous !== serialized) this.emit('message', { type: 'update', record });
+      }
       next.set(record.id, serialized);
     }
     this.messageSnapshot = next;
@@ -875,13 +879,32 @@ export class Engine extends EventEmitter {
       this.memory.workerObserved = workerTransitions.observed;
       this.memory.workerFailures = workerTransitions.failures;
       this.memory.exhaustedFreeModels ||= {};
+      const workerRuns = readActiveWorkerRuns();
       const reportTransitions = herdr ? await inspectWorkerReports(
         herdr.panes, this.memory.workerReportObserved, now, undefined,
         this.collectors.readWorkerScreen || ((args) => run('herdr', args, { timeout: 10000 })),
+        ({ pane, reportPath, mtimeMs }) => {
+          const worker = workerRuns.find((item) => item.pane === pane.id);
+          if (!worker) return;
+          let summary = '';
+          try { summary = readBoundedWorkerReport(path.join(path.dirname(reportPath), 'report.md')); } catch {}
+          const project = worker.project || null;
+          try {
+            recordWorkerReport({
+              project, name: worker.name, pane: worker.pane,
+              taskId: worker.taskId ?? worker.issue ?? null,
+              runId: workerRunId(worker, project), mtimeMs, summary,
+              toPane: control?.projects?.[project]?.orch?.pane ?? null,
+            }, { dir: DATA_DIR, now });
+          } catch (error) {
+            const code = typeof error?.code === 'string' && /^[A-Z0-9_-]{1,32}$/.test(error.code) ? error.code : 'error';
+            this.log('agent-report', `Worker report store failed (${code}).`);
+          }
+        },
       ) : { observed: this.memory.workerReportObserved || {}, notices: [] };
       this.memory.workerReportObserved = reportTransitions.observed;
       const noReportTransitions = herdr ? inspectWorkerNoReports(
-        herdr.panes, readActiveWorkerRuns(), this.memory.workerNoReportObserved, now,
+        herdr.panes, workerRuns, this.memory.workerNoReportObserved, now,
       ) : { observed: this.memory.workerNoReportObserved || {}, notices: [] };
       this.memory.workerNoReportObserved = noReportTransitions.observed;
       if (machine) {
@@ -1433,12 +1456,22 @@ export class Engine extends EventEmitter {
   sweepAttachments(now, policy) {
     if (this.attachmentRetentionAt !== null && now - this.attachmentRetentionAt < 3600000) return null;
     this.attachmentRetentionAt = now;
+    let result;
     try {
       this.messageStore.mutate((records) => ({ records }), { now });
-      const result = this.collectors.sweepAttachments({ dir: DATA_DIR, records: this.messageStore.all(), retentionDays: policy.attachments.retentionDays, now });
+      result = this.collectors.sweepAttachments({ dir: DATA_DIR, records: this.messageStore.all(), retentionDays: policy.attachments.retentionDays, now });
       if (result.deleted) this.log('attachment-retention', `Deleted ${result.deleted} expired pictures.`, { count: result.deleted });
-      return result;
-    } catch (error) { this.log('attachment-retention', `Picture retention failed (${error.code || 'error'}).`); return null; }
+    } catch (error) { this.log('attachment-retention', `Picture retention failed (${error.code || 'error'}).`); }
+    try {
+      const agentResult = sweepAgentMessages({
+        dir: DATA_DIR,
+        retentionDays: policy.agentMessages?.retentionDays ?? 14,
+        metaRetentionDays: policy.agentMessages?.metaRetentionDays ?? 180,
+        now,
+      });
+      if (agentResult.textDeleted || agentResult.rowsDeleted) this.log('agent-message-retention', `Deleted ${agentResult.textDeleted} agent message texts and ${agentResult.rowsDeleted} metadata rows.`, { textDeleted: agentResult.textDeleted, rowsDeleted: agentResult.rowsDeleted });
+    } catch (error) { this.log('agent-message-retention', `Agent message retention failed (${error.code || 'error'}).`); }
+    return result ?? null;
   }
 
   // The review pack sweep runs beside the tick. It closes expired Mailbox items and tries one notice for each expired pack.

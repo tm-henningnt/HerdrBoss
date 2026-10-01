@@ -9,7 +9,7 @@ import { promisify } from 'node:util';
 import { Engine, standDownPlan } from './engine.js';
 import { ownerReleaseLease, withResourcePoolMutation, readLeases, leasePools, publicPool, hasIdleRule, tcpListeningAsync } from './leases.js';
 import { PROJECTS_DIR, DATA_DIR, DEFAULT_SESSION_FILE, PRIVATE_ACCESS_DIR, assertPreviewDataDir, writeServiceSettings, applyServiceSettings, serviceSettingsView, validateResourcePools, writeResourcePools } from './config.js';
-import { writeProject, listProjects } from './projects.js';
+import { writeProject, listProjects, SLUG } from './projects.js';
 import { loadModels } from './kit/config.js';
 import { loadPolicy, savePolicy, policyShareGuard } from './control.js';
 import { recordUsage, usageSummary } from './usage.js';
@@ -28,6 +28,7 @@ import { createAccessControl, loginPage } from './access.js';
 import { appendMessage, chatSummaries, isMailAnswer, isMailRecord, messagesById, chatThreadPage, closeMailboxItem, closeResolvedOnPublish, dismissMailboxItems, keepMailboxItemsOpen, groupMessagesByConversation, listThread, mailboxCounts, mailboxFolders, mailboxView, markMailboxRead, messageChannel, messagesWithReplyState, readMessages, validThread, validateOwnerSend, withMailAnswers } from './messages.js';
 import { assertSqliteAvailable } from './sqlite-store.js';
 import { openMessageStore } from './message-store.js';
+import { listAgentPairs, readAgentMessages, readAgentMetadata } from './agent-messages.js';
 import { BODY_LIMIT as PROJECT_NEW_BODY_LIMIT, createProjectNewApi } from './project-new-api.js';
 import { createGoalApi } from './goal-api.js';
 import { createReviewApi } from './review-api.js';
@@ -164,6 +165,23 @@ async function jsonBody(req) {
   return JSON.parse(await readBody(req));
 }
 
+function queryLimit(url, max, label, fallback = 100) {
+  const value = url.searchParams.get('limit');
+  const limit = value === null ? fallback : Number(value);
+  if ((value !== null && !/^\d+$/.test(value)) || !Number.isInteger(limit) || limit < 1 || limit > max) {
+    return { error: `The ${label} limit must be an integer from 1 to ${max}.` };
+  }
+  return { limit };
+}
+
+function validQueryTime(value) {
+  if (value === null) return true;
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/.test(value)) return false;
+  const date = value.slice(0, 10);
+  const dayStart = Date.parse(`${date}T00:00:00.000Z`);
+  return Number.isFinite(Date.parse(value)) && Number.isFinite(dayStart) && new Date(dayStart).toISOString().slice(0, 10) === date;
+}
+
 const MACHINE_HOURS_CACHE_MS = 60000;
 
 const PREVIEW_DEFAULT_HOST = '127.0.0.1';
@@ -250,6 +268,7 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine 
   engine.on('state', (s) => { broadcast('state', s); pushReviewHeads(); });
   engine.on('message', (event) => broadcast('message', event));
   const stopMessageWatch = messageStore.onChange((event) => {
+    if (event.record?.kind === 'agent') return;
     if (typeof engine.observeMessageChange === 'function') engine.observeMessageChange(event);
     else broadcast('message', event);
   });
@@ -899,6 +918,35 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine 
         const result = keepMailboxItemsOpen(await jsonBody(req));
         if (result.error) return send(res, result.status, { error: result.error });
         return send(res, 200, { ...result, mailbox: refreshMailbox(readMessages(), true) });
+      }
+      if (p === '/api/agent-messages' && req.method === 'GET') {
+        const project = url.searchParams.get('project');
+        const pair = url.searchParams.get('pair');
+        const before = url.searchParams.get('before');
+        const limitResult = queryLimit(url, 200, 'agent message');
+        if (project !== null && !SLUG.test(project)) return send(res, 400, { error: 'project must be a project slug.' });
+        if (pair === '') return send(res, 400, { error: 'pair must be a pair key.' });
+        if (before === '') return send(res, 400, { error: 'before must be a message ID.' });
+        if (limitResult.error) return send(res, 400, { error: limitResult.error });
+        return send(res, 200, readAgentMessages({
+          dir: DATA_DIR, project, pair, q: url.searchParams.get('q'), limit: limitResult.limit, before,
+        }));
+      }
+      if (p === '/api/agent-pairs' && req.method === 'GET') {
+        const project = url.searchParams.get('project');
+        if (project !== null && !SLUG.test(project)) return send(res, 400, { error: 'project must be a project slug.' });
+        return send(res, 200, listAgentPairs({ dir: DATA_DIR, project }));
+      }
+      if (p === '/api/agent-meta' && req.method === 'GET') {
+        const project = url.searchParams.get('project');
+        const since = url.searchParams.get('since');
+        const until = url.searchParams.get('until');
+        const limitResult = queryLimit(url, 500, 'agent metadata');
+        if (project !== null && !SLUG.test(project)) return send(res, 400, { error: 'project must be a project slug.' });
+        if (!validQueryTime(since) || !validQueryTime(until)) return send(res, 400, { error: 'since and until must be ISO timestamps.' });
+        if (since && until && Date.parse(since) > Date.parse(until)) return send(res, 400, { error: 'since must be before until.' });
+        if (limitResult.error) return send(res, 400, { error: limitResult.error });
+        return send(res, 200, readAgentMetadata({ dir: DATA_DIR, project, since, until, limit: limitResult.limit }));
       }
       if (p === '/api/mailbox' && req.method === 'GET') {
         const records = readMessages();

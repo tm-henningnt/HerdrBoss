@@ -1,8 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 import {
   matchWorkerFailure,
+  readBoundedWorkerReport,
   parseFreeUsageRetryTime,
   resolveFreeUsageRun,
   activeFreeModelExhaustions,
@@ -13,6 +17,25 @@ import {
   workerStatusFromState,
   inspectWorkerTransitions,
 } from '../src/worker-failures.js';
+
+test('worker report reader rejects symlinks and reads at most 4 KB before a surrogate-safe slice', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'worker-report-read-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const report = path.join(root, 'report.md');
+  fs.writeFileSync(report, '界'.repeat(3000));
+  assert.equal(readBoundedWorkerReport(report), '界'.repeat(1365), 'the 4 KB read stops before the next incomplete UTF-8 character');
+
+  fs.writeFileSync(report, `${'x'.repeat(1999)}😀${'y'.repeat(3000)}`);
+  const boundary = readBoundedWorkerReport(report);
+  assert.equal(boundary, 'x'.repeat(1999), 'the 2000-character slice does not return half of a surrogate pair');
+  assert.equal(boundary.length, 1999);
+
+  const target = path.join(root, 'outside.md');
+  fs.writeFileSync(target, 'Do not read through a symlink.');
+  fs.unlinkSync(report);
+  fs.symlinkSync(target, report);
+  assert.throws(() => readBoundedWorkerReport(report), (error) => error.code === 'ERR_WORKER_REPORT_UNSAFE');
+});
 
 test('worker failure matching returns only a fixed case-insensitive label', () => {
   for (const [line, label] of [

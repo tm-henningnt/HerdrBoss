@@ -14,6 +14,7 @@ process.env.HOME = homeDir;
 process.env.HERDR_BOSS_DIR = dataDir;
 
 const { openMessageStore, RETENTION_MS } = await import('../src/message-store.js');
+const { mailboxFolders } = await import('../src/messages.js');
 
 test.after(() => {
   fs.rmSync(dataDir, { recursive: true, force: true });
@@ -152,6 +153,30 @@ function contractSuite(name, createStore, backend = 'json') {
     ]);
     assert.equal(chats.find((chat) => chat.thread === 'alpha').last.id, last.id);
     assert.deepEqual(Object.keys(chats[0]), ['thread', 'last', 'count', 'unreadForOwner']);
+  });
+
+  test(`${name}: chats and Mailbox lists exclude agent messages`, (t) => {
+    const store = createStore({ dir: freshDir(t) });
+    const chat = store.append({ thread: 'alpha', from: 'orch', to: 'owner', kind: 'message', text: 'Chat.' });
+    const mail = store.append({ thread: 'alpha', from: 'orch', to: 'owner', kind: 'reply', action: 'answer', text: 'Please choose.' });
+    store.append({
+      thread: null,
+      from: { role: 'orch', project: 'alpha', name: null, pane: 'wA:p1' },
+      to: { role: 'worker', project: 'alpha', name: 'build', pane: 'wA:p2' },
+      kind: 'agent', text: 'Internal task.',
+    });
+
+    const chats = store.chats();
+    assert.deepEqual(chats.map((item) => item.thread), ['alpha']);
+    assert.equal(chats[0].count, 2);
+    assert.equal(chats[0].last.id, mail.id);
+    assert.notEqual(chats[0].last.id, chat.id);
+
+    const mailbox = mailboxFolders(store.all());
+    assert.deepEqual(mailbox.needsYou.map((item) => item.id), [mail.id]);
+    for (const folder of [mailbox.needsYou, mailbox.updates, mailbox.done, mailbox.inbox, mailbox.sent]) {
+      assert.equal(folder.some((item) => item.kind === 'agent'), false);
+    }
   });
 
   test(`${name}: onChange reports append and update events`, (t) => {

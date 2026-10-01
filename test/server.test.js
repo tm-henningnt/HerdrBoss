@@ -345,6 +345,9 @@ test('read-only preview allows reads and rejects all API methods that can change
     ['POST', '/api/messages'],
     ['POST', '/api/messages/read'],
     ['POST', '/api/messages/dismiss'],
+    ['POST', '/api/agent-messages'],
+    ['POST', '/api/agent-pairs'],
+    ['POST', '/api/agent-meta'],
     ['POST', '/api/watch/start'],
     ['POST', '/api/watch/stop'],
     ['POST', '/api/night/start'],
@@ -1067,6 +1070,8 @@ test('the messages API validates Owner sends, refuses cross-origin and unauthent
   assert.equal(remote.status, 401, 'a remote send without a session is refused');
   const remoteRead = await rawRequest(base, 'GET', '/api/messages?thread=boss', { headers: { host: 'mac.tail0000.ts.net' } });
   assert.equal(remoteRead.status, 401, 'a remote read without a session is refused');
+  const remoteAgentMeta = await rawRequest(base, 'GET', '/api/agent-meta?project=alpha', { headers: { host: 'mac.tail0000.ts.net' } });
+  assert.equal(remoteAgentMeta.status, 401, 'agent metadata uses the same remote login rule');
   assert.deepEqual(readMessages(), [], 'no refused request reaches the store');
 
   const token = fs.readFileSync(cfg.access.tokenFile, 'utf8').trim();
@@ -1193,6 +1198,13 @@ test('the chat routes mark each record with its channel, and a report is not cha
   const chatReply = append('alpha', { from: 'orch', to: 'owner', kind: 'reply', text: 'Information only.' }, 1);
   const approve = append('alpha', { from: 'orch', to: 'owner', kind: 'reply', text: 'Approve the plan?', action: 'approve' }, 2);
   const report = append('alpha', { from: 'boss', to: 'owner', kind: 'report', title: 'Morning handback', text: '# Morning handback' }, 3);
+  const { recordAgentMessage } = await import('../src/agent-messages.js');
+  const boss = { role: 'boss', project: null, name: null, pane: 'wB:p1' };
+  const orch = { role: 'orch', project: 'alpha', name: null, pane: 'wA:p1' };
+  const agentFirst = recordAgentMessage({ from: boss, to: orch, text: 'Internal task for alpha.', kind: 'task' }, { dir: dataDir, now: now + 4 });
+  const agentSecond = recordAgentMessage({ from: orch, to: boss, text: 'Follow-up on the task.', kind: 'reply' }, { dir: dataDir, now: now + 5 });
+  const betaOrch = { role: 'orch', project: 'beta', name: null, pane: 'wB:p2' };
+  const betaAgent = recordAgentMessage({ from: boss, to: betaOrch, text: 'Internal task for beta.', kind: 'task' }, { dir: dataDir, now: now + 6 });
   const cfg = loadConfig();
   cfg.host = '127.0.0.1';
   cfg.port = 0;
@@ -1233,6 +1245,38 @@ test('the chat routes mark each record with its channel, and a report is not cha
   assert.equal(state.mailbox.mailUnread, 1, 'the report stays mail unread');
   assert.equal(state.mailbox.chatUnread, 0);
   assert.equal(state.mailbox.needsAction, 1, 'the approve item is open in Needs you');
+
+  const query = new URLSearchParams({ project: 'alpha', pair: agentFirst.pairKey, q: 'internal', limit: '10' });
+  const agentPage = await fetch(`${base}/api/agent-messages?${query}`);
+  assert.equal(agentPage.status, 200);
+  assert.deepEqual((await agentPage.json()).map((item) => item.id), [agentFirst.id]);
+  const recentQuery = new URLSearchParams({ project: 'alpha', pair: agentFirst.pairKey, limit: '1' });
+  const recentAgentPage = await (await fetch(`${base}/api/agent-messages?${recentQuery}`)).json();
+  assert.deepEqual(recentAgentPage.map((item) => item.id), [agentSecond.id]);
+  recentQuery.set('before', agentSecond.id);
+  const olderAgentPage = await (await fetch(`${base}/api/agent-messages?${recentQuery}`)).json();
+  assert.deepEqual(olderAgentPage.map((item) => item.id), [agentFirst.id]);
+  const pairs = await (await fetch(`${base}/api/agent-pairs?project=alpha`)).json();
+  assert.deepEqual(pairs, [{ pairKey: agentFirst.pairKey, count: 2, lastAt: agentSecond.createdAt }]);
+  const allAgentMessages = await (await fetch(`${base}/api/agent-messages`)).json();
+  assert.deepEqual(new Set(allAgentMessages.map((item) => item.id)), new Set([agentFirst.id, agentSecond.id, betaAgent.id]));
+  const allPairs = await (await fetch(`${base}/api/agent-pairs`)).json();
+  assert.deepEqual(allPairs.map((item) => item.pairKey).sort(), [agentFirst.pairKey, betaAgent.pairKey].sort());
+  const since = agentFirst.createdAt;
+  const until = agentSecond.createdAt;
+  const metaQuery = new URLSearchParams({ project: 'alpha', since, until, limit: '10' });
+  const metaResponse = await fetch(`${base}/api/agent-meta?${metaQuery}`);
+  assert.equal(metaResponse.status, 200);
+  const metadata = await metaResponse.json();
+  assert.deepEqual(metadata.map((row) => row.id), [agentSecond.id, agentFirst.id]);
+  assert.ok(metadata.every((row) => row.respondedAt === null && !Object.hasOwn(row, 'text')));
+  const allMetadata = await (await fetch(`${base}/api/agent-meta`)).json();
+  assert.deepEqual(new Set(allMetadata.map((row) => row.id)), new Set([agentFirst.id, agentSecond.id, betaAgent.id]));
+  const standardIso = new URLSearchParams({ project: 'alpha', since: '2026-01-01T00:00:00Z' });
+  assert.equal((await fetch(`${base}/api/agent-meta?${standardIso}`)).status, 200, 'ISO timestamps without fractional seconds are valid');
+  assert.equal((await fetch(`${base}/api/agent-meta?project=alpha&since=not-an-iso-time`)).status, 400);
+  assert.equal((await fetch(`${base}/api/agent-meta?project=alpha&since=2026-02-30T00%3A00%3A00Z`)).status, 400);
+  assert.equal((await fetch(`${base}/api/agent-meta`, { method: 'POST' })).status, 404, 'the Owner has no metadata write route');
 });
 
 test('message events stream local changes and report a second process append once on the next tick', { timeout: 30000 }, async (t) => {

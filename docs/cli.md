@@ -299,6 +299,32 @@ The Mailbox shows action items under **Needs you**. It shows information under *
 
 The `say` text is 1 to 4000 characters. The report file is Markdown, up to 64 KB. The report title defaults to the first Markdown heading, or to `Report`. The `mail close` note is 1 to 500 characters. The close command refuses an unknown or already closed ID and names that ID in its error. The Boss note does not send a reply. These commands refuse text that looks like a token, a key, or a password. The error does not print the text.
 
+## Agent messages
+
+| Command | Action |
+|---|---|
+| `herdr-boss tell TARGET TEXT [--file FILE] [--kind nudge\|reminder\|reply] [--reply-to ID]` | Store an agent message and send it to a pane, agent, or project's orchestrator. |
+
+`TARGET` can be a pane ID, an agent name, or a project slug. A project slug sends the message to that project's orchestrator pane.
+
+The command stores the message before it sends the prompt. The stored text masks secrets. The prompt keeps the text that you gave the command. A failed prompt keeps the message with status `failed`.
+
+The caller's pane label sets the sender role. Herdr Boss checks a worker run record for a worker name, task ID, and run ID. It uses `unknown` when no role is known.
+
+Use `--file FILE` to read a regular file instead of TEXT. The file limit is 64 KB. Use `--kind nudge`, `--kind reminder`, or `--kind reply` to set the message kind. The default kind is `task`. Use `--reply-to ID` to link a reply.
+
+Agent messages stay out of Owner Chat and Mailbox. Worker reports create one recorded agent message for each run and report-file version. Workers keep the `.worker/report.md`, `.worker/report.json`, and `WORKER REPORT` path.
+
+Set `agentMessages.retentionDays` to keep message text for 1 to 90 days. The default is 14 days. Set `agentMessages.metaRetentionDays` to keep metadata rows for 7 to 730 days. The default is 180 days. Metadata rows contain no message text. Select **Apply policy** to save either setting. The hourly retention sweep removes expired text and metadata.
+
+| Route | Contract |
+|---|---|
+| `GET /api/agent-messages?project=SLUG&pair=KEY&q=TEXT&limit=N&before=ID` | Read newest-first agent messages. `project` is optional. Without it, read messages from all projects. Use `before` to read the next older page. The response includes each message's pair key. |
+| `GET /api/agent-pairs[?project=SLUG]` | Read the message count and last message time for each pair. `project` is optional. Without it, read pairs from all projects. |
+| `GET /api/agent-meta?project=SLUG&since=ISO&until=ISO&limit=N` | Read newest-first metadata rows. `project` is optional. Without it, read rows from all projects. A row holds sender, receiver, project, kind, character count, task ID, run ID, and `respondedAt: null`. It has no text. |
+
+These routes use the dashboard login rule. They are read-only. They do not change or delete messages.
+
 Example:
 
 ```sh
@@ -573,14 +599,16 @@ Do not edit this block. It comes from `public/setting-help.js`.
 
 #### Pictures
 
-- Controls: How many days Herdr Boss keeps pictures in Chat and Mailbox.
-- Effect: Stored pictures. An expired picture is deleted at the hourly sweep.
-- Safe to change: A shorter period deletes older pictures. A deleted picture cannot be recovered.
+- Controls: How many days Herdr Boss keeps pictures and agent messages.
+- Effect: Stored pictures, agent-message text, and agent-message metadata.
+- Safe to change: A shorter period deletes older pictures, message text, or metadata at the hourly sweep.
 - Restart: No restart. Select Apply policy.
 
 | Setting | Key | What it does | Default | Unit | Range | Raise it | Lower it | Apply |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Picture retention days | `attachments.retentionDays` | How long Herdr Boss keeps a linked picture. An hourly sweep removes expired pictures. An upload left unlinked for one hour is deleted. Deleting or dismissing a message deletes its pictures. | 30 | Days | 1 to 365 | A higher value keeps linked pictures longer. | A lower value deletes older pictures at the next sweep. Deleted pictures cannot be recovered. | Select Apply policy. The change takes effect at the next engine tick. |
+| Agent message text retention days | `agentMessages.retentionDays` | How long Herdr Boss keeps agent-message text. An hourly sweep removes older text. | 14 | Days | 1 to 90 | A higher value keeps agent-message text longer. | A lower value removes older text at the next sweep. Metadata rows use a separate retention setting. | Select Apply policy. The change takes effect at the next engine tick. |
+| Agent message metadata retention days | `agentMessages.metaRetentionDays` | How long Herdr Boss keeps agent-message metadata after it removes the message text. A row has no message text. | 180 | Days | 7 to 730 | A higher value keeps message metadata longer. | A lower value removes older metadata at the next sweep. | Select Apply policy. The change takes effect at the next engine tick. |
 
 #### Watch
 

@@ -193,6 +193,8 @@ const USAGE = `herdr-boss <command>
   messages relay ID... --by boss  Mark queued Owner messages as relayed by the Boss.
   mail post --to owner [--title TEXT] [--action read|decide|approve|answer] FILE  Post a Markdown report for the Owner from the boss pane.
   mail close ID... --note TEXT  Close open Owner mailbox items as answered through the Boss.
+  tell TARGET TEXT [--file FILE] [--kind nudge|reminder|reply] [--reply-to ID]
+                        Store an agent message, then send it to a pane, agent, or project's orchestrator.
   watch start [--until 'YYYY-MM-DD HH:MM'|HH:MM|--until-cancelled] [--report HH:MM] [--retro HH:MM] [--quiet-hours|--no-quiet-hours] [--routines ID,ID|none] [--adhoc TEXT]
                        Start the watch. The default end time is the next 07:30 local time.
   watch stop           Stop the watch.
@@ -225,7 +227,7 @@ function messageFlags(args, known, usage, repeat = []) {
 }
 
 async function messageCommand(cmd, args) {
-  const { sayMessage, postReport, readMessages, listThread, relayOwnerMessages, closeMailboxItems, validThread, verifyMessageCaller } = await import('./messages.js');
+  const { sayMessage, postReport, readMessages, listThread, relayOwnerMessages, closeMailboxItems, validThread, verifyMessageCaller, readControl, REPORT_MAX_BYTES } = await import('./messages.js');
   if (cmd === 'messages') {
     if (args[0] === 'relay') {
       const usage = 'Usage: messages relay ID... --by boss';
@@ -244,6 +246,46 @@ async function messageCommand(cmd, args) {
     return;
   }
   const { createHerdrRunner } = await import('./kit/workers.js');
+  if (cmd === 'tell') {
+    const usage = 'Usage: tell TARGET TEXT [--file FILE] [--kind nudge|reminder|reply] [--reply-to ID]';
+    let parsed;
+    try { parsed = messageFlags(args, ['--file', '--kind', '--reply-to'], usage); }
+    catch (error) { error.exitCode = 2; throw error; }
+    const { flags, positional } = parsed;
+    const fromFile = flags['--file'] !== undefined;
+    if ((fromFile && positional.length !== 1) || (!fromFile && positional.length !== 2)) {
+      const error = new Error(`${usage}. Give TEXT or --file, not both.`);
+      error.exitCode = 2;
+      throw error;
+    }
+    const kind = flags['--kind'] ?? 'task';
+    if (flags['--kind'] && !['nudge', 'reminder', 'reply'].includes(kind)) {
+      const error = new Error(`${usage}. --kind must be nudge, reminder, or reply.`);
+      error.exitCode = 2;
+      throw error;
+    }
+    let text = positional[1] ?? '';
+    if (fromFile) {
+      let stat;
+      try { stat = fs.lstatSync(flags['--file']); }
+      catch (error) { throw new Error(`Cannot read --file: ${error.message}`); }
+      if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('--file must name a regular file.');
+      if (stat.size > REPORT_MAX_BYTES) throw new Error(`The file is ${stat.size} bytes. The limit is 64 KB (${REPORT_MAX_BYTES} bytes).`);
+      text = fs.readFileSync(flags['--file'], 'utf8');
+    }
+    const { tellAgent } = await import('./agent-messages.js');
+    const result = tellAgent(positional[0], text, {
+      env: process.env, herdr: createHerdrRunner(), control: readControl(), dir: DATA_DIR,
+      kind, replyTo: flags['--reply-to'] ?? null,
+    });
+    if (result.exitCode) {
+      console.error(`Agent message${result.record ? ` ${result.record.id}` : ''} failed: ${result.reason}`);
+      process.exitCode = result.exitCode;
+      return;
+    }
+    console.log(`Agent message ${result.record.id} was delivered.`);
+    return;
+  }
   if (cmd === 'say') {
     const usage = 'Usage: say [--reply-to ID] [--action answer|approve|decide|read] [--image FILE] "TEXT"';
     const { flags, positional } = messageFlags(args, ['--reply-to', '--action', '--image'], usage, ['--image']);
@@ -312,7 +354,7 @@ async function main() {
     if (code) process.exitCode = code;
     return;
   }
-  if (['say', 'messages', 'mail'].includes(cmd)) {
+  if (['say', 'messages', 'mail', 'tell'].includes(cmd)) {
     await messageCommand(cmd, args);
     return;
   }

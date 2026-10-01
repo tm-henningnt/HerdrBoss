@@ -89,3 +89,7 @@ Summary: A serve-live server binds its PID to its lease at start with lease bind
 ## 60d55aa14e84
 Impact: useful
 Summary: Add the picture line to the orchestrator skill and the project kit: send a picture with herdr-boss say --image, and read an Owner Attachment path with the image tool.
+
+## 2ce7a7451a5e
+Impact: useful
+Summary: Keep the Boss reporting rule and send reports with herdr-boss tell.
