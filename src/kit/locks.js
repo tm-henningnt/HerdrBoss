@@ -278,6 +278,7 @@ function noWaitBusyError(name, activeRecord, tickets) {
     return Object.assign(new Error(`Lock ${name} is held by active pane ${activeRecord.ownerPane} (PID ${activeRecord.pid}, since ${activeRecord.acquiredAt}); queue length ${queueLength}.`), { ledgerEvent: 'busy' });
   }
   const first = tickets[0];
+  if (!first) return Object.assign(new Error(`Lock ${name} is busy.`), { ledgerEvent: 'busy' });
   return Object.assign(new Error(`Lock ${name} is waiting for pane ${first.pane} (${first.kind}); queue length ${queueLength}.`), { ledgerEvent: 'busy' });
 }
 
