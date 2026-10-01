@@ -34,6 +34,7 @@ import { kitRevisionState, kitSnapshot, KIT_STATES } from './kit/agents-check.js
 import { nextDailyTime, nightNoticeSent, quietHoursActive, readNight, readNightRecord, watchUntilPhrase, withNightReportMark, withNoticeMark, writeNight } from './night.js';
 import { inspectWorkerTransitions, inspectWorkerReports, isWorkerPane, applyWorkerFailureStatuses, resolveFreeUsageRun, activeFreeModelExhaustions, extendFreeModelExhaustion, activeFreeLaneExhaustions, extendFreeLaneExhaustion, freeUsageLaneRetry } from './worker-failures.js';
 import { appendMachineSample, highSwapHoursLine, sampleLine } from './machine-samples.js';
+import { appendMemorySample, sampleMemory, MEMORY_SAMPLE_INTERVAL_MS, MEMORY_PS_TIMEOUT_MS } from './memory-classes.js';
 import { FULL_SUITE_LOCK, lockLedgerSummary, readLockQueue, readLockTakeoverNotices, readMachineLocks, removeLockTakeoverNotice } from './kit/locks.js';
 
 const TASK_WORKERS_INTERVAL_MS = 15_000;
@@ -518,7 +519,7 @@ export class Engine extends EventEmitter {
   leaseProbeCursor = 0;
   // The first tick that saw each pool item with a listener and no lease, keyed by pool and item.
   unleasedListeners = new Map();
-  constructor(cfg, { push = cfg.push, act = true, collectors = {}, handoffRunner = run, herdrRunner = run, gitRunner = (args) => run('git', args, { timeout: 10000 }), kitRoot = KIT_ROOT, lockDataDir = DATA_DIR } = {}) {
+  constructor(cfg, { push = cfg.push, act = true, collectors = {}, handoffRunner = run, herdrRunner = run, gitRunner = (args) => run('git', args, { timeout: 10000 }), psRunner = (args, options) => run('env', args, options), kitRoot = KIT_ROOT, lockDataDir = DATA_DIR } = {}) {
     super();
     this.cfg = cfg;
     const guardReasons = [];
@@ -586,6 +587,7 @@ export class Engine extends EventEmitter {
     this.handoffRunner = handoffRunner;
     this.herdrRunner = herdrRunner;
     this.gitRunner = gitRunner;
+    this.psRunner = psRunner;
     this.kitRoot = kitRoot;
     this.lockDataDir = lockDataDir;
     this.kitNoticeRead = false;
@@ -706,6 +708,17 @@ export class Engine extends EventEmitter {
       this.memory.lastSampleMinute = minute;
       const holders = (snap.locks || []).filter((lock) => lock.name === FULL_SUITE_LOCK && lock.state === 'live');
       appendMachineSample(sampleLine({ machine: snap.machine, holders, waiters: queue, now }), { dataDir: this.lockDataDir });
+    } catch {}
+  }
+
+  // One line for each 5-minute window, read from the process list once. The command never reaches the line. The write never throws.
+  async recordMemorySample(now) {
+    try {
+      const last = this.memory.lastMemorySampleAt;
+      if (Number.isFinite(last) && now - last < MEMORY_SAMPLE_INTERVAL_MS) return;
+      this.memory.lastMemorySampleAt = now;
+      const text = await this.psRunner(['LC_ALL=C', 'ps', '-Ao', 'rss=,command='], { timeout: MEMORY_PS_TIMEOUT_MS });
+      appendMemorySample(sampleMemory(text, now), { dataDir: this.lockDataDir });
     } catch {}
   }
 
@@ -999,6 +1012,7 @@ export class Engine extends EventEmitter {
         }
         if (this.act) this.recordMachineSample(snap, queue, now);
       }
+      if (this.act) await this.recordMemorySample(now);
       // The unmetered lane lists the permitted free models that can start. It never affects least-over selection.
       snap.lanes.unmetered = unmeteredLane(this.models, policy, control.projects, this.memory.exhaustedFreeModels, {
         unavailablePiModels: unavailablePiModels(mergeModels(this.models, policy).kinds.pi?.allowedModels, this.memory.piModels),

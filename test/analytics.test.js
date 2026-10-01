@@ -5,7 +5,7 @@ import test from 'node:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { noticeCounts, machineTimeline, readEventTail, analyticsSummary, lockDaily, NOTICE_PANE_LIMIT } from '../src/analytics.js';
+import { noticeCounts, machineTimeline, memoryByClass, readEventTail, analyticsSummary, lockDaily, NOTICE_PANE_LIMIT } from '../src/analytics.js';
 
 const tmp = (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-analytics-'));
@@ -69,6 +69,61 @@ test('machineTimeline buckets the samples, marks held and waiting time, and skip
   assert.equal(filled[1].heldMin, 0);
   assert.equal(r.points[0].samples, 0);
   assert.equal(r.points[0].load, null);
+});
+
+test('memoryByClass sums each class per bucket, keeps every class, and finds the peak', () => {
+  const at = (ms) => new Date(ms).toISOString();
+  const line = (ms, mb) => ({ at: at(ms), mb });
+  const samples = [
+    line(NOW - 20 * 60000, { claude: 3000, codex: 1000, browsers: 4000, mcp: 500, vitest: 200, other: 900 }),
+    line(NOW - 10 * 60000, { claude: 3200, codex: 1000, browsers: 2000, mcp: 500, vitest: 0, other: 900 }),
+    line(NOW - 2 * 3600000, { claude: 1000, codex: 0, browsers: 9000, mcp: 0, vitest: 0, other: 100 }),
+    line(NOW - 40 * 3600000, { claude: 99999, codex: 0, browsers: 0, mcp: 0, vitest: 0, other: 0 }),
+    line(NOW + 3600000, { claude: 99999, codex: 0, browsers: 0, mcp: 0, vitest: 0, other: 0 }),
+  ];
+  const r = memoryByClass(samples, { hours: 24, bucketMin: 60, now: NOW });
+  assert.equal(r.bucketMin, 60);
+  assert.equal(r.hours, 24);
+  assert.equal(r.points.length, 24);
+  assert.equal(r.classes.join(), 'claude,codex,browsers,mcp,vitest,other');
+  const last = r.points.at(-1);
+  assert.equal(last.samples, 2);
+  // A bucket sums the classes over its samples, so the total is the memory of all classes in the bucket.
+  assert.deepEqual(last.mb, { claude: 6200, codex: 2000, browsers: 6000, mcp: 1000, vitest: 200, other: 1800 });
+  assert.equal(last.total, 17200);
+  const empty = r.points[0];
+  assert.equal(empty.samples, 0);
+  assert.deepEqual(empty.mb, { claude: 0, codex: 0, browsers: 0, mcp: 0, vitest: 0, other: 0 });
+  assert.equal(empty.total, 0);
+  // The peak per class is the highest bucket of the window, not the highest sample.
+  assert.deepEqual(r.peak, { claude: 6200, codex: 2000, browsers: 9000, mcp: 1000, vitest: 200, other: 1800 });
+  assert.equal(r.latest.at, at(NOW - 10 * 60000));
+  assert.equal(r.latest.mb.claude, 3200);
+  assert.equal(r.latest.total, 7600);
+});
+
+test('memoryByClass on no samples gives 24 empty buckets, a zero peak, and no latest sample', () => {
+  const r = memoryByClass([], { hours: 24, bucketMin: 60, now: NOW });
+  assert.equal(r.points.length, 24);
+  assert.equal(r.points.filter((p) => p.samples).length, 0);
+  assert.equal(r.peak.claude, 0);
+  assert.equal(r.latest, null);
+  assert.equal(memoryByClass(undefined, { now: NOW }).points.length, 24);
+  assert.equal(memoryByClass([{ at: 'nope', mb: { claude: 1 } }], { now: NOW }).points.filter((p) => p.samples).length, 0);
+  assert.equal(memoryByClass([{ at: new Date(NOW - 60000).toISOString(), mb: { private: 5 } }], { now: NOW }).points.filter((p) => p.samples).length, 1, 'an unknown class counts as a sample but adds no MB');
+  assert.equal(memoryByClass([{ at: new Date(NOW - 60000).toISOString(), mb: { private: 5 } }], { now: NOW }).latest.mb.claude, 0);
+});
+
+test('analyticsSummary adds memoryByClass from the memory samples', (t) => {
+  const dir = tmp(t);
+  const mb = { claude: 4000, codex: 2000, browsers: 6000, mcp: 500, vitest: 100, other: 3000 };
+  fs.writeFileSync(path.join(dir, 'memory-samples.jsonl'), `${JSON.stringify({ at: new Date(NOW - 300000).toISOString(), mb })}\n`);
+  fs.writeFileSync(path.join(dir, 'memory-samples.1.jsonl'), `${JSON.stringify({ at: new Date(NOW - 40 * 3600000).toISOString(), mb: { claude: 1, codex: 0, browsers: 0, mcp: 0, vitest: 0, other: 0 } })}\n`);
+  const r = analyticsSummary({ dataDir: dir, now: NOW });
+  assert.equal(r.memoryByClass.points.filter((p) => p.samples).length, 1, 'the rotated line is outside the 24-hour window');
+  assert.equal(r.memoryByClass.points.at(-1).mb.claude, 4000);
+  assert.deepEqual(r.memoryByClass.peak, mb);
+  assert.doesNotMatch(JSON.stringify(r), /private|herdr-analytics/);
 });
 
 test('readEventTail reads only the end of a large log and skips a broken line', (t) => {

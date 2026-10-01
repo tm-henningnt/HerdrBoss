@@ -2484,6 +2484,46 @@ test('GET /api/analytics returns notice counts and the machine timeline, cached 
   assert.equal((await fetch(`${base}/api/analytics`, { method: 'POST', body: '{}' })).status, 403);
 });
 
+test('GET /api/analytics returns memoryByClass from the memory samples in the data directory', { timeout: 20000 }, async (t) => {
+  const cfg = loadConfig();
+  cfg.host = '127.0.0.1';
+  cfg.port = 0;
+  cfg.tickSeconds = 3600;
+  const { server, close } = serve(cfg, {
+    readOnlyPreview: true,
+    createEngine: (_config, actions) => {
+      const engine = new EventEmitter();
+      engine.act = actions.act;
+      engine.push = actions.push;
+      engine.state = {};
+      engine.tick = async () => engine.state;
+      engine.log = () => {};
+      return engine;
+    },
+  });
+  const file = path.join(dataDir, 'memory-samples.jsonl');
+  const had = fs.existsSync(file) ? fs.readFileSync(file) : null;
+  t.after(async () => {
+    await close();
+    if (had) fs.writeFileSync(file, had);
+    else fs.rmSync(file, { force: true });
+  });
+  await new Promise((resolve, reject) => {
+    server.once('listening', resolve);
+    server.once('error', reject);
+  });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const mb = { claude: 5000, codex: 1200, browsers: 8000, mcp: 600, vitest: 300, other: 2400 };
+  fs.writeFileSync(file, `${JSON.stringify({ at: new Date(Date.now() - 60000).toISOString(), mb })}\n`);
+  const body = await (await fetch(`${base}/api/analytics`)).json();
+  assert.equal(body.memoryByClass.bucketMin, 60);
+  assert.equal(body.memoryByClass.hours, 24);
+  assert.deepEqual(body.memoryByClass.classes, ['claude', 'codex', 'browsers', 'mcp', 'vitest', 'other']);
+  assert.equal(body.memoryByClass.points.filter((p) => p.samples).length, 1);
+  assert.deepEqual(body.memoryByClass.latest.mb, mb);
+  assert.deepEqual(body.memoryByClass.peak, mb);
+});
+
 test('the Analytics page serves and its script fetches and draws the machine hours', () => {
   const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
   assert.match(app, /'\/api\/machine-hours'\]\.map/);

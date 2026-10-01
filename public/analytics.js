@@ -391,6 +391,55 @@ export function lockWaitDetailsHtml(win, locks) {
   return `${days}${projects}`;
 }
 
+// ---------- Memory by class ----------
+
+export const MEMORY_LABEL = { claude: 'Claude', codex: 'Codex', browsers: 'Browsers', mcp: 'MCP servers', vitest: 'Vitest', other: 'Other' };
+const HOUR_MS = 3600000;
+
+// A bucket start as a short label '14:00'. The long form 'Mon 30 Mar 14:00' goes into a tooltip.
+export function hourLabel(at, long = false) {
+  const d = new Date(Date.parse(at));
+  if (Number.isNaN(d.getTime())) return '–';
+  const time = `${String(d.getHours()).padStart(2, '0')}:00`;
+  if (!long) return time;
+  return `${WEEKDAY[d.getDay()]} ${d.getDate()} ${MONTH[d.getMonth()]} ${time}`;
+}
+
+// Megabytes as '6.0 GB' above 1024 and '500 MB' below it.
+export function mbText(value) {
+  if (!Number.isFinite(value)) return '–';
+  return value >= 1024 ? `${(value / 1024).toFixed(1)} GB` : `${Math.round(value)} MB`;
+}
+
+// One bar for each hour of the last 24 hours, one series for each process class. The 5 named classes keep a color
+// slot; the rest share the neutral one. A bucket with no sample has no bar. Data without points has no series.
+export function memorySeries(memory) {
+  const points = Array.isArray(memory?.points) ? memory.points.filter((p) => p.samples) : [];
+  const classes = Array.isArray(memory?.classes) && memory.classes.length ? memory.classes : Object.keys(MEMORY_LABEL);
+  if (!points.length) return { points: [], classes, series: [], totals: {}, peak: memory?.peak || {}, latest: memory?.latest || null, bucketMin: memory?.bucketMin || 60, fmt: mbText };
+  const named = classes.map((key) => ({ key, label: MEMORY_LABEL[key] || key, values: points.map((p) => (Number.isFinite(p.mb?.[key]) ? p.mb[key] : 0)) }));
+  const series = foldSeries(named);
+  const totals = Object.fromEntries(named.map((s) => [s.key, s.values.reduce((a, b) => a + b, 0)]));
+  return {
+    points,
+    classes,
+    series,
+    totals,
+    peak: memory?.peak || {},
+    latest: memory?.latest || null,
+    bucketMin: memory?.bucketMin || 60,
+    fmt: mbText,
+  };
+}
+
+// The table behind Details: one row for each class with its latest sample and its peak in the window.
+export function memoryDetailsHtml(win) {
+  if (!win?.points?.length) return '<p class="viz-note">No memory samples in the last 24 hours.</p>';
+  const cell = (label, value) => `<td data-label="${esc(label)}" class="mono">${value}</td>`;
+  const rows = win.classes.map((key) => `<tr>${cell('Class', esc(MEMORY_LABEL[key] || key))}${cell('Latest', mbText(win.latest?.mb?.[key]))}${cell('Peak 24 h', mbText(win.peak?.[key]))}</tr>`).join('');
+  return `<div class="fleet-table-wrap"><table class="fleet-table"><thead><tr><th>Class</th><th>Latest</th><th>Peak 24 h</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
 // ---------- Policy changes ----------
 
 export const POLICY_CALLER_LABEL = { page: 'Page', cli: 'CLI', 'project-new': 'Project new', unknown: 'Unknown' };
