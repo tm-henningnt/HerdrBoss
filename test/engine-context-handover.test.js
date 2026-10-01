@@ -11,6 +11,15 @@ import { claudeContextUsage, normalizeModelId } from '../src/context-handover.js
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
+// SYNTHETIC Claude screen. All words and values are invented.
+const successorScreen = [
+  '❯ ',
+  '※ recap: The state is read. The next step waits for activation.',
+  '✻ Churned for 15s · done 12:20 PM',
+  '➜  Project git:(main)  Sonnet 5.5 ctx:6% | Est. usage: $0.23',
+  '⏵⏵ auto mode on (shift+tab to cycle)',
+].join('\n');
+
 // Each step sets the pane list and the published files for one tick.
 const probe = `
 import fs from 'node:fs';
@@ -19,7 +28,11 @@ import { Engine } from './src/engine.js';
 import { loadConfig } from './src/config.js';
 const input = JSON.parse(process.env.E1_SCENARIO);
 let now = Date.parse('2026-09-29T12:00:00.000Z');
-Date.now = () => now;
+const RealDate = Date;
+globalThis.Date = class extends RealDate {
+  constructor(...args) { super(...(args.length ? args : [now])); }
+  static now() { return now; }
+};
 const calls = [];
 const herdrCalls = [];
 const snapshots = [];
@@ -36,7 +49,7 @@ const engine = new Engine(cfg, {
     collectHerdr: async () => herdr,
     collectMachine: async () => null,
     collectProcesses: async () => new Map(),
-    collectQuotas: async () => [],
+    collectQuotas: async () => input.quotas || [],
     collectWorktreeCounts: async () => ({}),
     collectCwdProcesses: async () => [],
     collectMissingWorktreeProcesses: async () => [],
@@ -54,7 +67,10 @@ const engine = new Engine(cfg, {
       fs.writeFileSync(file, JSON.stringify(records));
     }
     if (input.steps[calls.step].failClose && args[0] === 'pane' && args[1] === 'close') throw new Error('fake close failure');
-    if (args[0] === 'pane' && args[1] === 'read') return { text: input.steps[calls.step].screen || '' };
+    if (args[0] === 'agent' && args[1] === 'prompt' && args[2] === 'w-boss:p1' && input.steps[calls.step].failBossPrompt) {
+      return JSON.stringify({ error: { message: 'fake Boss prompt failure' } });
+    }
+    if (args[0] === 'pane' && args[1] === 'read') return { text: input.steps[calls.step].screen ?? input.successorScreen };
     return '{}';
   },
   handoffRunner: async (command, args) => {
@@ -77,6 +93,7 @@ engine.messageStore.append = (message, ...args) => {
   return appendMessage(message, ...args);
 };
 engine.deliver = async () => {};
+if (input.quotas) { engine.readQuotas(); await engine.quotaRead; }
 for (const [index, step] of input.steps.entries()) {
   now = Date.parse(step.at);
   herdr = step.herdr;
@@ -123,7 +140,7 @@ function run(t, scenario) {
     encoding: 'utf8',
     env: {
       ...process.env, HOME: dir, HERDR_BOSS_DIR: dir, HERDR_BOSS_LIVE_DIR: dir, HERDR_BOSS_ALLOW_ACTIONS: '1',
-      NODE_TEST_CONTEXT: '', E1_SCENARIO: JSON.stringify({ steps: scenario.steps, mutateOnClose: scenario.mutateOnClose, mailboxFailures: scenario.mailboxFailures }),
+      NODE_TEST_CONTEXT: '', E1_SCENARIO: JSON.stringify({ steps: scenario.steps, mutateOnClose: scenario.mutateOnClose, mailboxFailures: scenario.mailboxFailures, successorScreen, quotas: scenario.quotas }),
     },
   });
   assert.equal(result.status, 0, result.stderr);
@@ -709,7 +726,7 @@ const unreadyRecord = (extra = {}) => {
   const { readyAt, ...rest } = readyRecord({ promptDelivery: 'sent', seenWorkingAt: '2026-09-29T11:59:00.000Z', ...extra });
   return rest;
 };
-const expiredRecord = (extra = {}) => unreadyRecord({ status: 'expired', expiredReason: 'successor not ready after 30 minutes', ...extra });
+const expiredRecord = (extra = {}) => unreadyRecord({ status: 'expired', expiredAt: at(0), expiredReason: 'successor not ready after 30 minutes', ...extra });
 const tracked = { contextHandovers: { 'ctx-1': { pane: 'w-alpha:p1', at: 1 } } };
 const autoStep = (successorPane, minute = 1, sourceStatus = 'idle') => [{ at: at(minute), herdr: herdrOf(pane(sourceStatus), worker, successorPane), published: { alpha: status(1) } }];
 
@@ -748,9 +765,10 @@ test('a successor pane with another agent or no pane does not become ready', { t
   assert.deepEqual(activates(gone), []);
 });
 
-test('a successor that is not from the context trigger, or has a prompt error, does not become ready', { timeout: 30000 }, (t) => {
+test('a successor outside the context trigger becomes ready, while a prompt error blocks readiness', { timeout: 30000 }, (t) => {
   const untracked = run(t, { tokens: 400000, handoffs: [unreadyRecord()], steps: autoStep(successor) });
-  assert.equal(untracked.records[0].readyAt, undefined);
+  assert.ok(untracked.records[0].readyAt);
+  assert.deepEqual(activates(untracked), []);
   const failed = run(t, { tokens: 400000, memory: tracked, handoffs: [unreadyRecord({ promptError: 'stalled' })], steps: autoStep(successor) });
   assert.equal(failed.records[0].readyAt, undefined);
   assert.equal(failed.handoverWaits['ctx-1'], 'successor not ready: the prepare prompt failed');
@@ -803,7 +821,7 @@ test('a ghost suggestion in an idle successor input does not block readiness', {
   const out = run(t, {
     tokens: 400000, successorTokens: 12000, memory: tracked,
     handoffs: [unreadyRecord({ seenWorkingAt: undefined })],
-    steps: [{ at: at(1), herdr: herdrOf(pane('idle'), worker, successor), published: { alpha: status(1) }, screen: '❯\x1b[0m\x1b[2m wait for the w165 report\x1b[0m' }],
+    steps: [{ at: at(1), herdr: herdrOf(pane('idle'), worker, successor), published: { alpha: status(1) }, screen: successorScreen.replace('❯ ', '❯\x1b[0m\x1b[2m wait for a report\x1b[0m') }],
   });
   assert.ok(out.records[0].readyAt);
   assert.equal(out.herdrCalls.filter(({ args }) => args[0] === 'agent' && args[1] === 'send-keys').length, 0);
@@ -846,9 +864,9 @@ test('input submitted with Enter needs new start evidence and a delay before rea
     tokens: 400000, memory: tracked, handoffs: [record],
     steps: [
       { at: '2026-09-29T12:01:00.000Z', herdr: herdrOf(pane('idle'), worker, successor), published: { alpha: status(1) }, screen: '❯ run the prepared handover' },
-      { at: '2026-09-29T12:01:15.000Z', herdr: herdrOf(pane('idle'), worker, successor), published: { alpha: status(1) }, screen: '' },
+      { at: '2026-09-29T12:01:15.000Z', herdr: herdrOf(pane('idle'), worker, successor), published: { alpha: status(1) } },
       { at: '2026-09-29T12:01:20.000Z', herdr: herdrOf(pane('idle'), worker, { ...successor, status: 'working' }), published: { alpha: status(1) }, screen: '' },
-      { at: '2026-09-29T12:01:21.000Z', herdr: herdrOf(pane('idle'), worker, successor), published: { alpha: status(1) }, screen: '' },
+      { at: '2026-09-29T12:01:21.000Z', herdr: herdrOf(pane('idle'), worker, successor), published: { alpha: status(1) } },
     ],
   });
   assert.ok(out.records[0].inputEnterSentAt);
@@ -860,14 +878,16 @@ test('input submitted with Enter needs new start evidence and a delay before rea
 test('expired handover expiry keys are pruned when their records are removed', { timeout: 30000 }, (t) => {
   const out = run(t, {
     memory: {
-      handoverExpiryMailbox: { removed: 1, 'ctx-1': 2 },
+      handoverExpiryBoss: { removed: 1, 'ctx-1': 2 },
       handoverExpiryHandled: { removed: 3, 'ctx-1': 4 },
+      handoverUnreadyNotices: { removed: 5, 'other-live': 6 },
     },
     handoffs: [expiredRecord(), { id: 'other-live', status: 'prepared', automatic: true }],
     steps: [{ at: at(1), herdr: { workspaces: [{ id: 'w-alpha', label: 'Alpha' }] }, published: { alpha: status(1) } }],
   });
-  assert.deepEqual(Object.keys(out.memory.handoverExpiryMailbox), ['ctx-1']);
+  assert.deepEqual(Object.keys(out.memory.handoverExpiryBoss), ['ctx-1']);
   assert.deepEqual(Object.keys(out.memory.handoverExpiryHandled), ['ctx-1']);
+  assert.deepEqual(Object.keys(out.memory.handoverUnreadyNotices), ['other-live']);
 });
 
 test('expired handover does not close its source, a different agent, or a pane used by another handover', { timeout: 30000 }, (t) => {
@@ -890,21 +910,20 @@ test('expired handover does not close its source, a different agent, or a pane u
   assert.equal(inUse.herdrCalls.some(({ args }) => args[0] === 'pane' && args[1] === 'close'), false);
 });
 
-test('expired handover retries Mailbox and close failures every five minutes and logs once at give-up', { timeout: 30000 }, (t) => {
-  const mailbox = run(t, {
-    mailboxFailures: 3,
+test('expired handover retries Boss prompt and close failures every five minutes and logs once at give-up', { timeout: 30000 }, (t) => {
+  const boss = run(t, {
     handoffs: [expiredRecord()],
-    steps: ['12:01:00', '12:05:00', '12:06:00', '12:11:00', '12:16:00'].map((time) => ({ at: `2026-09-29T${time}.000Z`, herdr: herdrOf(pane('idle'), worker, successor), published: { alpha: status(1) } })),
+    steps: ['12:01:00', '12:05:00', '12:06:00', '12:11:00', '12:16:00'].map((time) => ({ at: `2026-09-29T${time}.000Z`, herdr: herdrOf(pane('idle'), worker, successor, bossPane), published: { alpha: status(1) }, failBossPrompt: true })),
   });
-  assert.deepEqual(mailbox.mailboxAttempts.map(({ id, step }) => [id, step]), [['ctx-1', 0], ['ctx-1', 2], ['ctx-1', 3]]);
-  assert.equal(mailbox.messages.filter((message) => message.handoffExpiryId === 'ctx-1').length, 0);
-  const mailboxErrors = mailbox.logs.filter(({ level, message }) => level === 'error' && /handover ctx-1/i.test(message));
-  assert.equal(mailboxErrors.length, 1);
-  assert.match(mailboxErrors[0].message, /giving up the Mailbox notice/i);
+  assert.deepEqual(bossNotes(boss).map(({ step }) => step), [0, 2, 3]);
+  assert.equal(boss.messages.filter((message) => message.handoffExpiryId === 'ctx-1').length, 0);
+  const bossErrors = boss.logs.filter(({ level, message }) => level === 'error' && /handover ctx-1/i.test(message));
+  assert.equal(bossErrors.length, 1);
+  assert.match(bossErrors[0].message, /giving up the Boss notice/i);
 
   const close = run(t, {
     handoffs: [expiredRecord()],
-    steps: ['12:01:00', '12:05:00', '12:06:00', '12:11:00', '12:16:00'].map((time) => ({ at: `2026-09-29T${time}.000Z`, herdr: herdrOf(pane('idle'), worker, successor), published: { alpha: status(1) }, failClose: true })),
+    steps: ['12:01:00', '12:05:00', '12:06:00', '12:11:00', '12:16:00'].map((time) => ({ at: `2026-09-29T${time}.000Z`, herdr: herdrOf(pane('idle'), worker, successor, bossPane), published: { alpha: status(1) }, failClose: true })),
   });
   const closeAttempts = close.herdrCalls.filter(({ args }) => args[0] === 'pane' && args[1] === 'close');
   assert.deepEqual(closeAttempts.map(({ step }) => step), [0, 2, 3]);
@@ -913,24 +932,23 @@ test('expired handover retries Mailbox and close failures every five minutes and
   assert.match(closeErrors[0].message, /giving up close of pane/i);
 });
 
-test('an unready automatic handover expires after 30 minutes, posts once, closes only an idle successor, and cools down', { timeout: 30000 }, (t) => {
+test('an unready automatic handover expires after 30 minutes, prompts the Boss once, closes only an idle successor, and cools down', { timeout: 30000 }, (t) => {
   const handoff = unreadyRecord({ preparedAt: '2026-09-29T11:29:59.000Z', promptAt: '2026-09-29T11:29:59.000Z', seenWorkingAt: undefined });
   const out = run(t, {
     tokens: 400000,
     memory: { ...tracked, contextBoundary: { 'w-alpha:p1': { done: ['T1'], status: 'idle', workUpdated: null, armed: true } } },
     handoffs: [handoff],
     steps: [
-      { at: '2026-09-29T12:00:00.000Z', herdr: herdrOf(pane('idle'), worker, successor), published: { alpha: status(1) } },
-      { at: '2026-09-29T12:10:00.000Z', herdr: herdrOf(pane('idle'), worker, successor), published: { alpha: status(1) } },
-      { at: '2026-09-29T12:31:00.000Z', herdr: herdrOf(pane('idle'), worker, successor), published: { alpha: status(1) } },
+      { at: '2026-09-29T12:00:00.000Z', herdr: herdrOf(pane('idle'), worker, successor, bossPane), published: { alpha: status(1) } },
+      { at: '2026-09-29T12:10:00.000Z', herdr: herdrOf(pane('idle'), worker, successor, bossPane), published: { alpha: status(1) } },
+      { at: '2026-09-29T12:31:00.000Z', herdr: herdrOf(pane('idle'), worker, successor, bossPane), published: { alpha: status(1) } },
     ],
   });
   assert.equal(out.records[0].status, 'expired');
   assert.equal(out.records[0].expiredReason, 'successor not ready after 30 minutes');
-  assert.equal(out.messages.filter((message) => message.handoffExpiryId === 'ctx-1').length, 1);
-  assert.equal(out.messages[0].thread, 'boss');
-  assert.equal(out.messages[0].action, 'read');
-  assert.match(out.messages[0].text, /Alpha.*ctx-1/);
+  assert.equal(out.messages.filter((message) => message.handoffExpiryId === 'ctx-1').length, 0);
+  assert.equal(bossNotes(out).length, 1);
+  assert.match(bossNotes(out)[0].args[3], /ctx-1.*w-alpha:p9.*alpha.*expired after 30 minutes unready/);
   assert.deepEqual(out.herdrCalls.filter(({ args }) => args[0] === 'pane' && args[1] === 'close').map(({ args }) => args), [['pane', 'close', 'w-alpha:p9']]);
   assert.equal(out.snapshots[0].memory.handoverCooldowns.alpha, Date.parse('2026-09-29T12:00:00.000Z'));
   assert.equal(out.snapshots[1].memory.handoverCooldowns.alpha, Date.parse('2026-09-29T12:00:00.000Z'));
@@ -1000,4 +1018,244 @@ test('a stalled-retry prompt delivery blocks the automatic ready signal', { time
   const out = run(t, { tokens: 400000, memory: tracked, handoffs: [unreadyRecord({ promptDelivery: 'stalled-retry' })], steps: autoStep(successor, 5) });
   assert.equal(out.records[0].readyAt, undefined);
   assert.equal(out.handoverWaits['ctx-1'], 'successor not ready: the prepare prompt stalled');
+});
+
+// ---- HO2: all prepared successors use the readiness check; manual activation stays manual.
+test('HO2: a manual Claude successor reads its state and becomes ready at 120 seconds with automatic handover off', { timeout: 30000 }, (t) => {
+  for (const settled of ['idle', 'done']) {
+    const out = run(t, {
+      autoHandover: false,
+      handoffs: [unreadyRecord({ automatic: undefined, seenWorkingAt: undefined, promptAt: at(0) })],
+      steps: [
+        { at: at(0), herdr: herdrOf(pane('idle'), worker, { ...successor, status: 'working' }) },
+        { at: '2026-09-29T12:01:59.000Z', herdr: herdrOf(pane('idle'), worker, { ...successor, status: settled }) },
+        { at: at(2), herdr: herdrOf(pane('idle'), worker, { ...successor, status: settled }) },
+      ],
+    });
+    assert.equal(out.snapshots[0].handoffs[0].seenWorkingAt, at(0));
+    assert.equal(out.snapshots[1].handoffs[0].readyAt, undefined);
+    assert.equal(out.records[0].readyAt, at(2));
+    assert.equal(out.records[0].status, 'prepared');
+    assert.equal(Object.hasOwn(out.records[0], 'automatic'), false);
+    assert.deepEqual(activates(out), []);
+    assert.equal(out.herdrCalls.some(({ args }) => args[1] === 'send-keys'), false, 'the empty input needs no Enter');
+  }
+});
+
+test('HO2: a ready manual record cannot activate through the context or quota loop', { timeout: 30000 }, (t) => {
+  const out = run(t, {
+    tokens: 400000, memory: tracked,
+    quotas: [{ provider: 'claude', windows: [{ key: 'primary', label: 'Weekly', usedPercent: 99, resetsAt: '2026-10-01T12:00:00.000Z' }] }],
+    handoffs: [unreadyRecord({ automatic: false })],
+    steps: autoStep(successor),
+  });
+  assert.ok(out.records[0].readyAt);
+  assert.equal(out.records[0].automatic, false);
+  assert.equal(out.records[0].status, 'prepared');
+  assert.deepEqual(activates(out), []);
+});
+
+test('HO2: quota-safe expiry applies only to automatic records', { timeout: 30000 }, (t) => {
+  for (const automatic of [undefined, true]) {
+    const out = run(t, {
+      handoffs: [readyRecord({ automatic, preparedAt: '2026-09-29T09:00:00.000Z' })],
+      steps: autoStep(successor),
+    });
+    assert.equal(out.records[0].status, automatic ? 'expired' : 'prepared');
+    if (automatic) assert.equal(out.records[0].expiredReason, 'claude is no longer near its limit');
+    else assert.equal(out.records[0].expiredReason, undefined);
+    assert.deepEqual(activates(out), []);
+  }
+});
+
+test('HO2: a blank pane and a trust dialog cannot become ready or receive Enter', { timeout: 30000 }, (t) => {
+  for (const screen of ['', 'Do you trust the files in this folder?\n❯ 1. Yes, proceed\n  2. No, exit']) {
+    for (const seenWorkingAt of [undefined, '2026-09-29T11:59:00.000Z']) {
+      const out = run(t, {
+        handoffs: [unreadyRecord({ seenWorkingAt })], memory: tracked,
+        steps: [{ ...autoStep(successor, 5)[0], screen }],
+      });
+      assert.equal(out.records[0].readyAt, undefined);
+      assert.deepEqual(activates(out), []);
+      assert.equal(out.herdrCalls.some(({ args }) => args[1] === 'send-keys'), false);
+    }
+  }
+});
+
+test('HO2: manual typed unsent input gets one Enter and requires fresh work before readiness', { timeout: 30000 }, (t) => {
+  const typed = successorScreen.replace('❯ ', '❯ Read the state again');
+  const out = run(t, {
+    autoHandover: false,
+    handoffs: [unreadyRecord({ automatic: undefined })],
+    steps: [
+      { at: at(1), herdr: herdrOf(pane('idle'), successor), screen: typed },
+      { at: '2026-09-29T12:01:30.000Z', herdr: herdrOf(pane('idle'), successor), screen: typed },
+      { at: at(2), herdr: herdrOf(pane('idle'), successor) },
+      { at: at(3), herdr: herdrOf(pane('idle'), { ...successor, status: 'working' }) },
+      { at: at(4), herdr: herdrOf(pane('idle'), successor) },
+    ],
+  });
+  assert.deepEqual(out.herdrCalls.filter(({ args }) => args[1] === 'send-keys').map(({ args }) => args), [['agent', 'send-keys', successor.id, 'enter']]);
+  assert.ok(out.snapshots.slice(0, 4).every(({ handoffs }) => !handoffs[0].readyAt));
+  assert.equal(out.records[0].readyAt, at(4));
+  assert.equal(out.records[0].seenWorkingAt, at(3));
+  assert.deepEqual(activates(out), []);
+});
+
+test('HO2: an idle unready successor tells the Boss once at 10 minutes after its prompt', { timeout: 30000 }, (t) => {
+  for (const automatic of [undefined, true]) {
+    const out = run(t, {
+      autoHandover: false,
+      handoffs: [unreadyRecord({ automatic, seenWorkingAt: undefined, promptAt: at(0) })],
+      steps: ['12:09:59', '12:10:00', '12:11:00'].map((time) => ({
+        at: `2026-09-29T${time}.000Z`, herdr: herdrOf(pane('idle'), { ...successor, status: 'done' }, bossPane), screen: '',
+      })),
+    });
+    assert.deepEqual(bossNotes(out).map(({ step }) => step), [1]);
+    const text = bossNotes(out)[0].args[3];
+    assert.match(text, /ctx-1.*w-alpha:p9/);
+    assert.match(text, /inspect it: herdr agent read w-alpha:p9/);
+    assert.match(text, /herdr-boss handoff activate ctx-1 --confirmed/);
+    assert.equal(out.records[0].readyAt, undefined);
+    assert.equal(out.messages.length, 0);
+    const restarted = run(t, {
+      autoHandover: false, handoffs: out.records, memory: out.memory,
+      steps: [{ at: at(12), herdr: herdrOf(pane('idle'), successor, bossPane), screen: '' }],
+    });
+    assert.deepEqual(bossNotes(restarted), [], 'a service restart retains the once-per-record mark');
+  }
+});
+
+test('HO2: ready, working, blocked and other-agent successors send no idle unready notice', { timeout: 30000 }, (t) => {
+  for (const [record, target] of [
+    [readyRecord({ automatic: false }), successor],
+    [unreadyRecord({ automatic: false }), successor],
+    [unreadyRecord({ automatic: false }), { ...successor, status: 'working' }],
+    [unreadyRecord({ automatic: false }), { ...successor, status: 'blocked' }],
+    [unreadyRecord({ automatic: false }), { ...successor, agent: 'codex' }],
+  ]) {
+    const out = run(t, {
+      autoHandover: false, handoffs: [record],
+      steps: [{ at: at(10), herdr: herdrOf(pane('idle'), target, bossPane) }],
+    });
+    assert.deepEqual(bossNotes(out), []);
+  }
+});
+
+test('HO2 review: a failed idle unready notice retries after five minutes and sends only once after success', { timeout: 30000 }, (t) => {
+  const out = run(t, {
+    autoHandover: false, handoffs: [unreadyRecord({ automatic: false, seenWorkingAt: undefined, promptAt: at(0) })],
+    steps: [10, 11, 15, 16].map((minute) => ({ at: at(minute), herdr: herdrOf(pane('idle'), successor, bossPane), screen: '', failBossPrompt: minute === 10 })),
+  });
+  assert.deepEqual(bossNotes(out).map(({ step }) => step), [0, 2]);
+  assert.equal(Object.keys(out.snapshots[0].memory.handoverUnreadyNotices || {}).length, 0);
+  assert.equal(Object.keys(out.memory.handoverUnreadyNotices).length, 1);
+});
+
+test('HO2: a manual unready successor expires at 30 minutes and tells only the Boss', { timeout: 30000 }, (t) => {
+  const out = run(t, {
+    autoHandover: false,
+    handoffs: [unreadyRecord({ automatic: undefined, seenWorkingAt: undefined, preparedAt: at(0), promptAt: at(0) })],
+    steps: ['12:29:59', '12:30:00', '12:31:00'].map((time) => ({ at: `2026-09-29T${time}.000Z`, herdr: herdrOf(pane('idle'), successor, bossPane), screen: '' })),
+  });
+  assert.equal(out.snapshots[0].handoffs[0].status, 'prepared');
+  assert.equal(out.snapshots[1].handoffs[0].status, 'expired');
+  const expired = bossNotes(out).filter(({ args }) => args[3].includes('expired after 30 minutes unready'));
+  assert.equal(expired.length, 1);
+  assert.match(expired[0].args[3], /ctx-1.*w-alpha:p9.*alpha/);
+  assert.deepEqual(closes(out).map(({ args }) => args), [['pane', 'close', successor.id]]);
+  assert.equal(out.messages.length, 0);
+  assert.deepEqual(out.mailboxAttempts, []);
+});
+
+test('HO2 review: no Boss pane causes three five-minute unready notice attempts and one give-up error', { timeout: 30000 }, (t) => {
+  const out = run(t, {
+    autoHandover: false,
+    handoffs: [unreadyRecord({ automatic: false, seenWorkingAt: undefined, preparedAt: at(0), promptAt: at(0) })],
+    steps: [10, 11, 15, 16, 20, 25].map((minute) => ({ at: at(minute), herdr: herdrOf(pane('idle'), successor), screen: '' })),
+  });
+  const retries = out.snapshots.map(({ memory }) => memory.handoverExpiryRetries['ctx-1']?.unready);
+  assert.deepEqual(retries.map((retry) => retry?.failures), [1, 1, 2, 2, 3, 3]);
+  assert.equal(retries[0].nextAt, Date.parse(at(15)));
+  assert.equal(retries[2].nextAt, Date.parse(at(20)));
+  assert.equal(retries[4].givenUp, true);
+  const errors = out.logs.filter(({ level, message }) => level === 'error' && /handoff ctx-1|handover ctx-1/.test(message));
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].message, /Giving up the unready Boss notice.*after 3 failures.*No Boss pane/);
+  assert.deepEqual(bossNotes(out), []);
+  const restarted = run(t, {
+    autoHandover: false, handoffs: out.records, memory: out.memory,
+    steps: [{ at: at(26), herdr: herdrOf(pane('idle'), successor, bossPane), screen: '' }],
+  });
+  assert.deepEqual(bossNotes(restarted), [], 'a service restart retains the retry give-up mark');
+});
+
+test('HO2 review: failed Boss prompts also stop the unready notice after three attempts', { timeout: 30000 }, (t) => {
+  const out = run(t, {
+    autoHandover: false,
+    handoffs: [unreadyRecord({ automatic: false, seenWorkingAt: undefined, preparedAt: at(0), promptAt: at(0) })],
+    steps: [10, 11, 15, 16, 20, 25].map((minute) => ({ at: at(minute), herdr: herdrOf(pane('idle'), successor, bossPane), screen: '', failBossPrompt: true })),
+  });
+  assert.deepEqual(bossNotes(out).map(({ step }) => step), [0, 2, 4]);
+  const errors = out.logs.filter(({ level, message }) => level === 'error' && /handoff ctx-1|handover ctx-1/.test(message));
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].message, /Giving up the unready Boss notice.*after 3 failures/);
+});
+
+test('HO2 review: Boss records and prompt errors send no idle unready notice or retries', { timeout: 30000 }, (t) => {
+  for (const extra of [{ boss: true }, { label: 'boss' }, { promptError: 'synthetic prompt failure' }]) {
+    const out = run(t, {
+      autoHandover: false,
+      handoffs: [unreadyRecord({ automatic: false, seenWorkingAt: undefined, preparedAt: at(0), promptAt: at(0), ...extra })],
+      steps: [10, 15, 20].map((minute) => ({ at: at(minute), herdr: herdrOf(pane('idle'), successor, bossPane), screen: '' })),
+    });
+    assert.deepEqual(bossNotes(out), []);
+    assert.deepEqual(out.memory.handoverExpiryRetries, {});
+    assert.equal(out.records[0].readyAt, undefined);
+    assert.equal(out.records[0].status, 'prepared');
+  }
+});
+
+test('HO2 review: an old unready expiry sends no historical Boss prompt and keeps safe pane cleanup', { timeout: 30000 }, (t) => {
+  const out = run(t, {
+    autoHandover: false,
+    handoffs: [expiredRecord({ expiredAt: '2026-09-29T10:00:00.000Z' })],
+    steps: [1, 2].map((minute) => ({ at: at(minute), herdr: herdrOf(pane('idle'), successor, bossPane) })),
+  });
+  assert.deepEqual(bossNotes(out), []);
+  assert.deepEqual(closes(out).map(({ args }) => args), [['pane', 'close', successor.id]]);
+  assert.ok(out.memory.handoverExpiryBoss['ctx-1']);
+  assert.deepEqual(out.messages, []);
+});
+
+test('HO2 review: a legacy Mailbox expiry mark suppresses a duplicate Boss prompt', { timeout: 30000 }, (t) => {
+  const markedAt = Date.parse(at(0));
+  const out = run(t, {
+    autoHandover: false,
+    memory: { handoverExpiryMailbox: { 'ctx-1': markedAt, removed: markedAt } },
+    handoffs: [expiredRecord()],
+    steps: [{ at: at(1), herdr: herdrOf(pane('idle'), successor, bossPane) }],
+  });
+  assert.deepEqual(bossNotes(out), []);
+  assert.deepEqual(out.memory.handoverExpiryBoss, { 'ctx-1': markedAt });
+  assert.equal(out.memory.handoverExpiryMailbox, undefined);
+  assert.deepEqual(closes(out).map(({ args }) => args), [['pane', 'close', successor.id]]);
+});
+
+test('HO2: expiry waits for a missing Boss and retries a failed prompt before marking it sent', { timeout: 30000 }, (t) => {
+  const out = run(t, {
+    autoHandover: false, handoffs: [expiredRecord({ automatic: false })],
+    steps: [
+      { at: at(1), herdr: herdrOf(pane('idle'), successor) },
+      { at: at(5), herdr: herdrOf(pane('idle'), successor, bossPane) },
+      { at: at(6), herdr: herdrOf(pane('idle'), successor, bossPane), failBossPrompt: true },
+      { at: at(10), herdr: herdrOf(pane('idle'), successor, bossPane) },
+      { at: at(11), herdr: herdrOf(pane('idle'), successor, bossPane) },
+      { at: at(16), herdr: herdrOf(pane('idle'), successor, bossPane) },
+    ],
+  });
+  assert.deepEqual(bossNotes(out).map(({ step }) => step), [2, 4]);
+  assert.equal(Object.keys(out.snapshots[2].memory.handoverExpiryBoss || {}).length, 0);
+  assert.equal(Object.keys(out.memory.handoverExpiryBoss).length, 1);
+  assert.deepEqual(out.mailboxAttempts, []);
 });

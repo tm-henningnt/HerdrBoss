@@ -430,7 +430,7 @@ export function prepareHandoff(id, toKind, options = {}, { waitForPane = waitFor
 // An automatic successor that was never needed expires, so its pane can be closed and a later handover can start.
 export function expireHandoff(id, reason) {
   const records = listHandoffs();
-  const item = records.find((x) => x.id === id && x.status === 'prepared' && x.automatic);
+  const item = records.find((x) => x.id === id && x.status === 'prepared');
   if (!item) return null;
   item.status = 'expired';
   item.expiredAt = new Date().toISOString();
@@ -454,7 +454,7 @@ export function markHandoffReady(id) {
 // The engine calls this for an idle successor that never ran `handoff ready`. The pane checks are the caller's.
 export function markSuccessorWorking(id, at) {
   const records = listHandoffs();
-  const item = records.find((x) => x.id === id && x.status === 'prepared' && x.automatic && !x.seenWorkingAt);
+  const item = records.find((x) => x.id === id && x.status === 'prepared' && !x.seenWorkingAt);
   if (!item) return null;
   item.seenWorkingAt = at;
   save(records);
@@ -463,7 +463,7 @@ export function markSuccessorWorking(id, at) {
 
 export function autoReadyHandoff(id, note) {
   const records = listHandoffs();
-  const item = records.find((x) => x.id === id && x.status === 'prepared' && x.automatic && !x.readyAt);
+  const item = records.find((x) => x.id === id && x.status === 'prepared' && !x.readyAt);
   if (!item) return null;
   item.readyAt = new Date().toISOString();
   item.readyNote = note;
