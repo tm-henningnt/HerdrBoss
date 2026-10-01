@@ -85,3 +85,7 @@ Summary: The worker brief forbids sleep loops and until or while polling and nam
 ## 1b34ccad1bca
 Impact: useful
 Summary: A serve-live server binds its PID to its lease at start with lease bind, so Herdr Boss can tell its port from an unleased listener.
+
+## 60d55aa14e84
+Impact: useful
+Summary: Add the picture line to the orchestrator skill and the project kit: send a picture with herdr-boss say --image, and read an Owner Attachment path with the image tool.
