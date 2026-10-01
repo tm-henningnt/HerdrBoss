@@ -331,6 +331,58 @@ test('withMutationLock records its PID and timestamp, then removes the owner fil
   assert.equal(fs.existsSync(path.join(directory, '.mutation')), false);
 });
 
+test('a claim publishes the guard with its owner record, and a release removes the whole guard', (t) => {
+  const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-mutation-atomic-')));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const guard = path.join(directory, '.mutation');
+  const summaryFile = path.join(directory, 'samples.json');
+  const sampler = path.join(directory, 'sampler.mjs');
+  // The sampler reads the guard folder while another process claims and releases it. It records the contents of the folder
+  // and checks that the same folder was there before and after the read. A claim or a release that works in two steps
+  // leaves a folder without owner.json.
+  fs.writeFileSync(sampler, [
+    "import fs from 'node:fs';",
+    `const guard = ${JSON.stringify(guard)};`,
+    `const summaryFile = ${JSON.stringify(summaryFile)};`,
+    'const wanted = 400;',
+    'const deadline = Date.now() + 20000;',
+    'const seen = [];',
+    'const statOf = () => { try { return fs.statSync(guard); } catch { return null; } };',
+    'for (;;) {',
+    '  const before = statOf();',
+    '  if (before) {',
+    '    let names = null;',
+    '    try { names = fs.readdirSync(guard); } catch { names = null; }',
+    '    const after = statOf();',
+    '    // A folder that was removed while the read ran keeps its name for the reader. Skip that sample.',
+    '    if (names && after && after.dev === before.dev && after.ino === before.ino) {',
+    '      seen.push(names.sort().join(\',\'));',
+    '    }',
+    '  } else {',
+    '    await new Promise((resolve) => setTimeout(resolve, 1));',
+    '  }',
+    '  if (seen.length >= wanted || Date.now() >= deadline) break;',
+    '}',
+    "fs.writeFileSync(summaryFile, JSON.stringify({ seen }));",
+  ].join('\n'));
+
+  const child = spawn(process.execPath, [sampler], { stdio: ['ignore', 'ignore', 'inherit'] });
+  t.after(() => {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+  });
+  const deadline = Date.now() + 30_000;
+  let claims = 0;
+  while (!fs.existsSync(summaryFile) && Date.now() < deadline) {
+    withMutationLock(directory, () => { claims += 1; });
+  }
+
+  assert.ok(fs.existsSync(summaryFile), 'the sampler did not finish inside its deadline');
+  const { seen } = JSON.parse(fs.readFileSync(summaryFile, 'utf8'));
+  assert.ok(seen.length >= 100, `the sampler saw the guard ${seen.length} times, which is too few`);
+  assert.ok(claims >= 100, `this process made ${claims} claims, which is too few`);
+  assert.deepEqual([...new Set(seen)], ['owner.json'], 'every observation of the guard folder also found its owner record');
+});
+
 test('suite releases the lock when the command cannot start', (t) => {
   const f = fixture(t, 'herdr-suite-missing-');
   const result = runKitCommand('suite', ['--', path.join(f.base, 'no-such-command')], f.options());
