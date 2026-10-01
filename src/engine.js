@@ -25,7 +25,7 @@ import { hasTypedText, screenBlocker, stripAnsi } from './goal-set.js';
 import { claudeContextUsage, trackBoundary, normalizeModelId } from './context-handover.js';
 import { FINISH_TIMEOUT_MS, autoReadyHandoff, markSuccessorWorking, listHandoffs, saveHandoffs, supersedeHandoffs, expireHandoff, expireMissingHandoffs, handoffNotices } from './handoff.js';
 import { closeReviewItems, deliverQueued, mailboxCounts, readMessages, RETENTION_MS, SEND_LIMIT_PER_MINUTE } from './messages.js';
-import { recordWorkerReport, sweepAgentMessages, workerRunId } from './agent-messages.js';
+import { readAgentMetadata, recordAgentMessage, recordWorkerReport, sweepAgentMessages, updateAgentResponses, workerRunId } from './agent-messages.js';
 import { sweep as sweepReviewPacks } from './review-store.js';
 import { sweepAttachments } from './attachments.js';
 import { openMessageStore } from './message-store.js';
@@ -520,9 +520,10 @@ export class Engine extends EventEmitter {
   leaseProbeCursor = 0;
   // The first tick that saw each pool item with a listener and no lease, keyed by pool and item.
   unleasedListeners = new Map();
-  constructor(cfg, { push = cfg.push, act = true, collectors = {}, handoffRunner = run, herdrRunner = run, gitRunner = (args) => run('git', args, { timeout: 10000 }), psRunner = (args, options) => run('env', args, options), kitRoot = KIT_ROOT, lockDataDir = DATA_DIR } = {}) {
+  constructor(cfg, { push = cfg.push, act = true, collectors = {}, clock = () => Date.now(), handoffRunner = run, herdrRunner = run, gitRunner = (args) => run('git', args, { timeout: 10000 }), psRunner = (args, options) => run('env', args, options), kitRoot = KIT_ROOT, lockDataDir = DATA_DIR } = {}) {
     super();
     this.cfg = cfg;
+    this.clock = clock;
     const guardReasons = [];
     if (process.env.NODE_TEST_CONTEXT) guardReasons.push('NODE_TEST_CONTEXT is set');
     if (DATA_DIR !== LIVE_DATA_DIR) guardReasons.push(`data directory ${DATA_DIR} is not the configured live data directory ${LIVE_DATA_DIR}`);
@@ -619,6 +620,29 @@ export class Engine extends EventEmitter {
     this.emit('event', e);
   }
 
+  // Store only delivered service prompts. A store failure must not cause a second prompt.
+  async promptService(pane, text, { herdr = this.communicationHerdr, now = this.communicationNow ?? this.clock(), messages = [{ text, kind: 'reminder' }] } = {}) {
+    checkHerdrResponse(await this.herdrRunner('herdr', ['agent', 'prompt', pane, text]));
+    const target = (herdr?.panes || []).find((item) => item.id === pane);
+    const run = this.communicationRuns?.find((item) => item.pane === pane);
+    const project = run?.project || target?.project || Object.values(this.communicationControl?.projects || this.state?.control?.projects || {})
+      .find((item) => item.workspace === target?.workspace)?.slug || this.communicationProjects?.find((item) => item.workspace === target?.workspace)?.slug || null;
+    const role = target?.label === 'boss' ? 'boss' : target?.orch || target?.label === 'orch' ? 'orch' : run || target?.agent ? 'worker' : 'unknown';
+    for (const message of messages) {
+      try {
+        recordAgentMessage({
+          from: { role: 'service', project: null, name: 'herdr-boss', pane: null },
+          to: { role, project: message.project || project, name: run?.name || target?.name || null, pane,
+            kind: run?.kind || target?.agent || null, model: run?.model || target?.model || null },
+          status: 'delivered', ...message,
+          targetStatus: target?.status,
+          taskId: message.taskId ?? run?.taskId ?? run?.issue ?? null,
+          runId: run ? workerRunId(run, project) : null,
+        }, { dir: DATA_DIR, now });
+      } catch (error) { this.log('agent-message', `Service message store failed (${error.code || 'error'}).`); }
+    }
+  }
+
   async probeLeaseListeners(pools, now) {
     let store;
     try { store = readLeases(DATA_DIR); } catch { return; }
@@ -659,7 +683,7 @@ export class Engine extends EventEmitter {
         continue;
       }
       try {
-        checkHerdrResponse(await this.herdrRunner('herdr', ['agent', 'prompt', pane.id, text]));
+        await this.promptService(pane.id, text, { herdr: { panes } });
         markUnleasedNotified(this.unleasedListeners, item);
       } catch (error) {
         this.log('error', `Unleased listener notice to ${pane.id} failed: ${String(error.stderr || error.message).slice(0, 200)}`, { project: item.owner, pane: pane.id, pool: item.pool, item: item.item });
@@ -733,7 +757,8 @@ export class Engine extends EventEmitter {
     if (this.running) return this.state;
     this.running = true;
     const errors = [];
-    const now = Date.now();
+    const now = this.clock();
+    this.communicationNow = now;
     if (this.act) {
       try { this.pruneHandoverExpiryMemory(); } catch {}
     }
@@ -761,6 +786,15 @@ export class Engine extends EventEmitter {
           if (Array.isArray(result?.models)) this.memory.piModels = { at: Number.isFinite(result.at) ? result.at : now, models: [...result.models] };
         }).catch(() => {}) : null,
       ]);
+      this.communicationHerdr = currentHerdrSnapshot && currentPaneList ? herdr : null;
+      this.communicationRuns = readActiveWorkerRuns();
+      this.communicationProjects = listProjects();
+      if (this.act) {
+        try {
+          const responses = updateAgentResponses({ dir: DATA_DIR, panes: this.communicationHerdr?.panes || [], observed: this.memory.agentResponseObserved, now });
+          this.memory.agentResponseObserved = responses.observed;
+        } catch (error) { errors.push(`agent responses: ${error.code || 'error'}`); }
+      }
       if (this.act) {
         try {
           const handoffs = listHandoffs();
@@ -851,7 +885,7 @@ export class Engine extends EventEmitter {
         for (const item of reclaimedLeases) {
           if (!item.pane || !livePanes.has(item.pane)) continue;
           const text = `[herdr-boss] ${reclaimNoticeText(item)}`;
-          try { checkHerdrResponse(await this.herdrRunner('herdr', ['agent', 'prompt', item.pane, text])); }
+          try { await this.promptService(item.pane, text, { herdr, now }); }
           catch (error) { this.log('error', `Lease reclaim notice to ${item.pane} failed: ${String(error.stderr || error.message).slice(0, 200)}`); }
         }
       }
@@ -895,7 +929,7 @@ export class Engine extends EventEmitter {
       this.memory.workerObserved = workerTransitions.observed;
       this.memory.workerFailures = workerTransitions.failures;
       this.memory.exhaustedFreeModels ||= {};
-      const workerRuns = readActiveWorkerRuns();
+      const workerRuns = this.communicationRuns;
       const reportTransitions = herdr ? await inspectWorkerReports(
         herdr.panes, this.memory.workerReportObserved, now, undefined,
         this.collectors.readWorkerScreen || ((args) => run('herdr', args, { timeout: 10000 })),
@@ -910,7 +944,7 @@ export class Engine extends EventEmitter {
               project, name: worker.name, pane: worker.pane,
               taskId: worker.taskId ?? worker.issue ?? null,
               runId: workerRunId(worker, project), mtimeMs, summary,
-              toPane: control?.projects?.[project]?.orch?.pane ?? null,
+              toPane: herdr?.panes?.find((item) => item.workspace === pane.workspace && item.label === 'orch')?.id ?? null,
             }, { dir: DATA_DIR, now });
           } catch (error) {
             const code = typeof error?.code === 'string' && /^[A-Z0-9_-]{1,32}$/.test(error.code) ? error.code : 'error';
@@ -980,7 +1014,7 @@ export class Engine extends EventEmitter {
         }).map((lock) => lock.name === FULL_SUITE_LOCK ? { ...lock, queue } : lock);
         snap.lockStats = lockLedgerSummary({ dataDir: this.lockDataDir, now });
       } catch (error) { errors.push(`locks: ${error.message}`); }
-      snap.projects = listProjects();
+      snap.projects = this.communicationProjects;
       snap.kit = kitSnapshot();
       const policy = migrateWorkspacePolicy(loadPolicy(), snap, { file: POLICY_FILE });
       this.memory.exhaustedFreeModels = activeFreeModelExhaustions(this.memory.exhaustedFreeModels, now);
@@ -1016,6 +1050,7 @@ export class Engine extends EventEmitter {
         exhaustedFreeLanes: this.memory.exhaustedFreeLanes, piModels: this.memory.piModels, lanes: snap.lanes,
         nightMaxWorkers: nightConfig.maxWorkers,
       });
+      this.communicationControl = control;
       const profileWorkspaces = Object.fromEntries(managedBrowsers.map((b) => [b.profile, control.projects[b.project]?.workspace]).filter(([, ws]) => ws));
       snap.cpuUse = cpuUse(procs, herdr?.panes || [], profileWorkspaces);
       if (machine) {
@@ -1521,7 +1556,7 @@ export class Engine extends EventEmitter {
           continue;
         }
         try {
-          checkHerdrResponse(await this.herdrRunner('herdr', ['agent', 'prompt', pane.id, notice]));
+          await this.promptService(pane.id, notice, { herdr, now });
         } catch (error) {
           this.log('error', `Review pack expiry notice failed for ${entry.pack} (${error.code || 'error'}).`, { project: entry.slug, pane: pane.id });
         }
@@ -1646,7 +1681,7 @@ export class Engine extends EventEmitter {
           const effort = h.target.effort ? ` --effort ${h.target.effort}` : '';
           const notice = `[herdr-boss] Automatic handover for ${h.label || h.project} did not prepare ${h.target.kind} ${model}. Owner approval is needed. After approval, run: herdr-boss handoff prepare ${h.pane} --to ${h.target.kind} --model ${model} --force${effort}.`;
           try {
-            checkHerdrResponse(await this.herdrRunner('herdr', ['agent', 'prompt', boss.id, notice]));
+            await this.promptService(boss.id, notice, { herdr, now });
             this.log('handoff', `Sent Boss an Owner-approval notice for the Opus handover from ${h.pane}`, { project: h.project, pane: boss.id });
           } catch (error) {
             this.log('error', `Boss Opus approval notice for ${h.pane} failed: ${String(error.stderr || error.message).slice(0, 200)}`, { project: h.project, pane: boss.id });
@@ -1732,7 +1767,7 @@ export class Engine extends EventEmitter {
   async promptHandoverBoss(herdr, text) {
     const boss = (herdr?.panes || []).find((pane) => pane.label === 'boss' && pane.agent);
     if (!boss) throw new Error('No Boss pane was found.');
-    checkHerdrResponse(await this.herdrRunner('herdr', ['agent', 'prompt', boss.id, text]));
+    await this.promptService(boss.id, text, { herdr });
   }
 
   async retryOperation(item, now, kind, description, action, scope) {
@@ -2100,8 +2135,8 @@ export class Engine extends EventEmitter {
         this.memory.handoffPeerAttempts[key] = now;
         const recipient = notice.owner ? 'the Owner' : notice.pane;
         try {
-          const args = notice.owner ? ['notification', 'show', notice.title, '--body', notice.text, '--sound', 'none'] : ['agent', 'prompt', notice.pane, notice.text];
-          checkHerdrResponse(await this.herdrRunner('herdr', args));
+          if (notice.owner) checkHerdrResponse(await this.herdrRunner('herdr', ['notification', 'show', notice.title, '--body', notice.text, '--sound', 'none']));
+          else await this.promptService(notice.pane, notice.text, { herdr, now });
           this.memory.handoffPeerNotices[key] = now;
           this.log(notice.owner ? 'notify' : 'push', `Notified ${recipient} of ${item.displayLabel || item.project} orchestrator handover`, notice.owner ? {} : { pane: notice.pane, project: item.project });
         } catch (e) { this.log('error', `Handover notice to ${recipient} failed: ${String(e.stderr || e.message).slice(0, 200)}`); }
@@ -2151,7 +2186,7 @@ export class Engine extends EventEmitter {
         const boss = [...panes.values()].find((pane) => pane.label === 'boss' && pane.agent && pane.id !== source.id);
         if (boss) {
           try {
-            checkHerdrResponse(await this.herdrRunner('herdr', ['agent', 'prompt', boss.id, `[herdr-boss] Old ${role === 'boss' ? 'Boss' : 'orchestrator'} pane ${source.id} of ${item.displayLabel || item.project} is still ${source.status} 60 minutes after handover: ${reasons.join(', ')}. Herdr Boss keeps it open until it is idle or done and none of these applies. Successor: ${item.newPane}.`]));
+            await this.promptService(boss.id, `[herdr-boss] Old ${role === 'boss' ? 'Boss' : 'orchestrator'} pane ${source.id} of ${item.displayLabel || item.project} is still ${source.status} 60 minutes after handover: ${reasons.join(', ')}. Herdr Boss keeps it open until it is idle or done and none of these applies. Successor: ${item.newPane}.`, { herdr, now });
             finish.bossNotifiedAt = at;
           } catch (error) { this.log('error', `Boss note for handoff ${item.id} failed: ${String(error.stderr || error.message).slice(0, 200)}`, scope); }
         }
@@ -2332,7 +2367,7 @@ export class Engine extends EventEmitter {
     const roleName = role === 'boss' ? 'Boss' : 'orchestrator';
     const message = `[herdr-boss] The 120-minute handover grace period ended. The previous ${roleName} pane ${item.sourcePane} was closed. Continue using pane ${successor.id}.`;
     try {
-      checkHerdrResponse(await this.herdrRunner('herdr', ['agent', 'prompt', successor.id, message]));
+      await this.promptService(successor.id, message, { herdr: { panes: [successor] }, now });
       this.memory.handoffRetirementNotices[noticeKey] = now;
       writeJson(MEMORY_FILE, this.memory);
     } catch (error) {
@@ -2379,7 +2414,7 @@ export class Engine extends EventEmitter {
         `- ${notice.text}`,
       ].join('\n');
       try {
-        checkHerdrResponse(await this.herdrRunner('herdr', ['agent', 'prompt', notice.ownerPane, text]));
+        await this.promptService(notice.ownerPane, text, { herdr });
         removeLockTakeoverNotice(notice.id, { dataDir: this.lockDataDir });
         this.log('notify', notice.text, { severity: notice.severity, pane: notice.ownerPane });
       } catch (error) {
@@ -2410,7 +2445,7 @@ export class Engine extends EventEmitter {
     let marks = record;
     for (const pane of targets) {
       try {
-        checkHerdrResponse(await this.herdrRunner('herdr', ['agent', 'prompt', pane, text]));
+        await this.promptService(pane, text, { herdr, now });
         marks = withNoticeMark(marks, phase, pane, new Date(now).toISOString());
         marked = true;
         this.log('notify', text, { pane });
@@ -2476,7 +2511,8 @@ export class Engine extends EventEmitter {
         continue;
       }
       try {
-        checkHerdrResponse(await this.herdrRunner('herdr', ['agent', 'prompt', boss.id, routinePromptText({ ...definition, ...item, prompt: definition.prompt }, record.adhoc)]));
+        const text = routinePromptText({ ...definition, ...item, prompt: definition.prompt }, record.adhoc);
+        await this.promptService(boss.id, text, { herdr, now, messages: [{ text, kind: 'task' }] });
       } catch (error) {
         const message = String(error.stderr || error.message).slice(0, 200);
         this.log('error', `Watch routine ${item.title} to ${boss.id} failed: ${message}`);
@@ -2527,6 +2563,7 @@ export class Engine extends EventEmitter {
             paneSince: this.memory.paneSince,
             usage: readUsage(),
             events: this.events,
+            agentMetadata: readAgentMetadata({ dir: DATA_DIR, since: record.since, limit: Number.MAX_SAFE_INTEGER }),
           });
           this.messageStore.append({
             thread: 'boss', from: 'boss', to: 'owner', kind: 'report',
@@ -2661,7 +2698,9 @@ export class Engine extends EventEmitter {
           `Current rules: ${path.join(DATA_DIR, 'bulletin.md')}. Dashboard: ${dashboardUrl(this.cfg)}`,
         ].join('\n');
         try {
-          await this.herdrRunner('herdr', ['agent', 'prompt', o.id, text]);
+          await this.promptService(o.id, text, { herdr, now, messages: [...urgent, ...info.slice(0, INFO_PROMPT_LINES)].map((a) => ({
+            text: a.text, kind: a.key.startsWith('nudge:') ? 'nudge' : 'reminder', project: a.project, taskId: a.taskId,
+          })) });
           for (const a of list) {
             const record = { at: now, severity: a.severity };
             this.memory.pushes[`${a.key}@${o.id}`] = record;

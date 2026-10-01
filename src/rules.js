@@ -93,6 +93,7 @@ function idleOrchestratorNudges(snap, paneSince = {}, now = Date.now(), policy =
     const firstLane = entry.slots > entry.running ? useNowLanes(snap.lanes)[0] : null;
     notices.push({
       key: `nudge:idle:${entry.slug || taskKeyPart(label)}:${taskKeyPart(task)}`,
+      project: entry.slug, taskId: task.id ?? null,
       severity: 'info', scope: workspace,
       title: `Orchestrator idle with ready work in ${label}`,
       text: `The ${label} orchestrator has been idle for ${minutes} minutes while ${ref} is ready. ${firstLane ? `Start ready work on ${firstLane.kind} now.` : names.length ? `Resume an idle or done worker (${names.join(', ')}) or start suitable work.` : 'Start suitable work.'}`,

@@ -1118,7 +1118,11 @@ test('HO2: an idle unready successor tells the Boss once at 10 minutes after its
     assert.match(text, /inspect it: herdr agent read w-alpha:p9/);
     assert.match(text, /herdr-boss handoff activate ctx-1 --confirmed/);
     assert.equal(out.records[0].readyAt, undefined);
-    assert.equal(out.messages.length, 0);
+    assert.equal(out.messages.filter(message => message.kind !== 'agent').length, 0, 'the notice creates no Owner message');
+    assert.equal(out.messages.length, 1);
+    assert.equal(out.messages[0].from.role, 'service');
+    assert.equal(out.messages[0].agentKind, 'reminder');
+    assert.equal(out.messages[0].to.role, 'boss');
     const restarted = run(t, {
       autoHandover: false, handoffs: out.records, memory: out.memory,
       steps: [{ at: at(12), herdr: herdrOf(pane('idle'), successor, bossPane), screen: '' }],
@@ -1165,7 +1169,9 @@ test('HO2: a manual unready successor expires at 30 minutes and tells only the B
   assert.equal(expired.length, 1);
   assert.match(expired[0].args[3], /ctx-1.*w-alpha:p9.*alpha/);
   assert.deepEqual(closes(out).map(({ args }) => args), [['pane', 'close', successor.id]]);
-  assert.equal(out.messages.length, 0);
+  assert.equal(out.messages.filter(message => message.kind !== 'agent').length, 0, 'expiry creates no Owner message');
+  assert.equal(out.messages.length, 2, 'the unready and expiry notices each have one service row');
+  assert.ok(out.messages.every(message => message.from.role === 'service' && message.agentKind === 'reminder' && message.to.role === 'boss'));
   assert.deepEqual(out.mailboxAttempts, []);
 });
 

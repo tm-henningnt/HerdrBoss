@@ -1356,9 +1356,25 @@ Each chart has a title that tells what to read from it, a scope line, a legend, 
 - **Notices per pane**: stacked bars for each day of the last 7 days. The five panes with the most notices have their own color. The other panes share one gray.
 - **Policy changes**: a list of the last writes of `policy.json`, newest first. A row shows the time, the caller kind, and the changed keys with the old and the new value. A row has at least 44 px height on a phone. **Details** holds one table row for each changed key of the last 100 writes. The section shows an empty state until the first write. See [Policy changes](#policy-changes).
 
-The charts use one color set for light mode and one for dark mode. The set passes the dataviz palette validator. The charts show no client name or path. They show harness, model, cause, lock kind, and pane ID only. Two sections are the exception: the keys of Policy changes and the lock chart name projects by their slug. On a screen up to 1180 px wide the charts are in one column. On a phone each chart scrolls sideways inside its own box.
+The charts use one color set for light mode and one for dark mode. The set passes the dataviz palette validator. The charts show no client name or path. They show harness, model, cause, lock kind, and pane ID only. The policy keys, lock chart, and Agent communication section can name projects by their slug. Agent communication also shows task IDs and agent names. On a screen up to 1180 px wide the charts are in one column. On a phone each chart scrolls sideways inside its own box.
 
-The route `/api/analytics` gives the notice counts, the machine timeline, the memory of each class, the wait and hold of the locks for each project and day, the denial counts of the last 30 days for each day, the harness change markers of those days, and the last 100 policy changes. It reads the last 2 MB of `events.jsonl` and of `lock-ledger.jsonl`, the machine samples of the last 25 hours, the memory samples of the last 25 hours, `denials.json`, `harness-changes.jsonl`, and `policy-changes.jsonl`. It keeps the result for 60 seconds. The result holds numbers, lock kinds, pane IDs, the marker labels, and the policy change keys with scalar values.
+The route `/api/analytics` gives the agent communication figures, the notice counts, the machine timeline, the memory of each class, the wait and hold of the locks for each project and day, the denial counts of the last 30 days for each day, the harness change markers of those days, and the last 100 policy changes. It reads the last 2 MB of `events.jsonl` and of `lock-ledger.jsonl`, the machine samples of the last 25 hours, the memory samples of the last 25 hours, `denials.json`, `harness-changes.jsonl`, `policy-changes.jsonl`, and `agent-message-meta.jsonl`. It keeps the result for 60 seconds. The result holds numbers, lock kinds, pane IDs, the marker labels, and the policy change keys with scalar values.
+
+### Agent communication
+
+The **Agent communication** section uses metadata from `/api/analytics`. It shows the last 7 local days. It has no message text.
+
+- **Messages per project and day** shows one stacked bar for each day. Each message kind has one colour. Select **Message project** to show one project or all projects. The title shows the number and share of reminders for that selection. **Details** lists the counts by project, day, and kind.
+- **Response time** shows the median and p90 time for each orchestrator and for each worker kind and model. The p90 value has at least 90% of measured times at or below it. Each row shows message and response counts. Unknown kind or model stays `unknown`. An unanswered row adds no time sample.
+- **Nudges per task** shows the 10 tasks with the most nudges. The project and task ID identify a task. A nudge without a task ID shows **Task not known** in Details.
+
+Each table shows at most 200 rows. The figures include all metadata rows in the time window. Failed deliveries add no traffic or response sample. The message project filter changes the daily bars only. The response and nudge figures use all projects.
+
+The service stores each delivered notice with sender role `service`. A prompt to an idle orchestrator with ready work is a nudge. Status, kit, idle-worker, resource, and handover notices are reminders. Watch routines are tasks. Agent messages use the text and metadata retention settings in Settings.
+
+The engine records the first idle or done transition after delivery, or the first delivered `tell` from the target. It uses the earlier time. An agent that was idle at delivery must become active before idle counts. A fresh pane snapshot is required for an idle response. The check runs at each engine tick. It records one response per message. After 24 hours, an unanswered message stays without a response.
+
+The stored watch retro and watch report include one compact line of communication figures. The line covers messages since the watch started. It gives the message, nudge, reminder, and response counts, the reminder share, and the median and p90 response times.
 
 ### Activity log
 

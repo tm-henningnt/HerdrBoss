@@ -318,7 +318,7 @@ The `say` text is 1 to 4000 characters. The report file is Markdown, up to 64 KB
 
 `TARGET` can be a pane ID, an agent name, or a project slug. A project slug sends the message to that project's orchestrator pane.
 
-The command stores the message before it sends the prompt. The stored text masks secrets. The prompt keeps the text that you gave the command. A failed prompt keeps the message with status `failed`.
+The command stores the message before it sends the prompt. The stored text masks secrets. The prompt keeps the text that you gave the command. A failed prompt keeps the message with status `failed`. The command warns if it cannot save the metadata delivery status.
 
 The caller's pane label sets the sender role. Herdr Boss checks a worker run record for a worker name, task ID, and run ID. It uses `unknown` when no role is known.
 
@@ -326,13 +326,18 @@ Use `--file FILE` to read a regular file instead of TEXT. The file limit is 64 K
 
 Agent messages stay out of Owner Chat and Mailbox. Worker reports create one recorded agent message for each run and report-file version. Workers keep the `.worker/report.md`, `.worker/report.json`, and `WORKER REPORT` path.
 
+The service records each delivered notice with sender role `service`. A prompt for an idle orchestrator with ready work has kind `nudge`. Status, kit, idle-worker, resource, and handover notices have kind `reminder`. A watch routine has kind `task`. Each notice in a digest has one row. A failed service prompt creates no row. The normal notice cooldown still applies. The text masks secrets and uses the agent text retention setting.
+
+The engine checks responses on each tick. It uses a fresh pane snapshot and delivered `tell` metadata. The first transition to idle or done, or the first delivered `tell` from the target, sets `respondedAt`. An agent that was idle at delivery must become active before idle counts as a response. A response is recorded once. After 24 hours, an unanswered row keeps `respondedAt: null`. `responseMs` is the elapsed time in milliseconds. It is `null` without a response. The pane check has the time resolution of an engine tick.
+
 Set `agentMessages.retentionDays` to keep message text for 1 to 90 days. The default is 14 days. Set `agentMessages.metaRetentionDays` to keep metadata rows for 7 to 730 days. The default is 180 days. Metadata rows contain no message text. Select **Apply policy** to save either setting. The hourly retention sweep removes expired text and metadata.
 
 | Route | Contract |
 |---|---|
 | `GET /api/agent-messages?project=SLUG&pair=KEY&q=TEXT&limit=N&before=ID` | Read newest-first agent messages. `project` is optional. Without it, read messages from all projects. Use `before` to read the next older page. The response includes each message's pair key. |
 | `GET /api/agent-pairs[?project=SLUG]` | Read the message count and last message time for each pair. `project` is optional. Without it, read pairs from all projects. |
-| `GET /api/agent-meta?project=SLUG&since=ISO&until=ISO&limit=N` | Read newest-first metadata rows. `project` is optional. Without it, read rows from all projects. A row holds sender, receiver, project, kind, character count, task ID, run ID, and `respondedAt: null`. It has no text. |
+| `GET /api/agent-meta?project=SLUG&since=ISO&until=ISO&limit=N` | Read newest-first metadata rows. `project` is optional. Without it, read rows from all projects. A row holds sender, receiver, project, kind, character count, task ID, run ID, delivery status, `respondedAt`, and `responseMs`. A worker target holds its kind and model when known. It has no text. |
+| `GET /api/analytics` | Read the `agentCommunication` figures for the last 7 local days. The figures count messages by project, day, and kind. They include nudges per task, response medians and p90 values per orchestrator and worker kind and model, and the reminder share. Failed deliveries add no traffic. |
 
 These routes use the dashboard login rule. They are read-only. They do not change or delete messages.
 

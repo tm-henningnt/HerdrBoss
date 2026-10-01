@@ -15,7 +15,7 @@ import { createReviewSync, createDrafts, NOTE_DEBOUNCE_MS } from './review-sync.
 import { createWizard } from './project-wizard-ui.js';
 import { goalSetBlockHtml, goalDialogHtml, goalJobRunning, goalStatusText, pollGoalStatus } from './goal-set.js';
 import { buildDraftShares, draftSignature, shareTotal, distributeRemainder, moveShares, totalHtml, checkSave, confirmText, sumConfirmText, allocationFooterHtml, staleRowHtml } from './allocation-draft.js';
-import { stackedBars, lineChart, stripBars, outcomeBars, legendHtml, foldSeries, spendSeries, claudeSpend, quotaSeries, firstTimeRate, activityFilter, activityChoices, eventLevel, dayLabel, usd, minutes, compact, ACTIVITY_RANGES, ACTIVITY_LEVELS, SERIES_CLASSES, DENIAL_RANGES, DEFAULT_DENIAL_RANGE, denialRange, denialSeries, denialMarkers, denialDetailsHtml, denialLegendHtml, policyChangesTitle, policyChangesListHtml, policyChangesDetailsHtml, lockWaitSeries, lockWaitDetailsHtml, lockAdmissionHtml, memorySeries, memoryDetailsHtml, hourLabel, mbText } from './analytics.js';
+import { stackedBars, lineChart, stripBars, outcomeBars, legendHtml, foldSeries, spendSeries, claudeSpend, quotaSeries, firstTimeRate, activityFilter, activityChoices, eventLevel, dayLabel, usd, minutes, compact, ACTIVITY_RANGES, ACTIVITY_LEVELS, SERIES_CLASSES, DENIAL_RANGES, DEFAULT_DENIAL_RANGE, denialRange, denialSeries, denialMarkers, denialDetailsHtml, denialLegendHtml, policyChangesTitle, policyChangesListHtml, policyChangesDetailsHtml, lockWaitSeries, lockWaitDetailsHtml, lockAdmissionHtml, memorySeries, memoryDetailsHtml, hourLabel, mbText, communicationSeries, communicationDailyDetailsHtml, communicationResponseHtml, communicationNudgeDetailsHtml } from './analytics.js';
 import { ATTACHMENT_LIMIT, attachmentFileError, attachmentStripState, attachmentPickerHtml, attachmentStripHtml } from './attachment-ui.js';
 
 const $app = document.getElementById('app');
@@ -57,7 +57,7 @@ const DENIAL_RANGE_KEY = 'herdr-boss.denialRange';
 function loadDenialRange() {
   try { return denialRange(localStorage.getItem(DENIAL_RANGE_KEY)); } catch { return DEFAULT_DENIAL_RANGE; }
 }
-const analyticsUi = { spendBy: 'role', lockProject: 'all', denialHarness: 'all', denialRange: loadDenialRange(), open: new Set(), log: { kind: 'all', project: 'all', level: 'all', range: '24h', q: '' } };
+const analyticsUi = { spendBy: 'role', lockProject: 'all', communicationProject: 'all', denialHarness: 'all', denialRange: loadDenialRange(), open: new Set(), log: { kind: 'all', project: 'all', level: 'all', range: '24h', q: '' } };
 let browserSessions = [];
 const browserMessages = {};
 const browserPreviewOpen = new Set();
@@ -2255,6 +2255,10 @@ function analyticsView(s) {
     memoryBlock(),
     lockWaitBlock(),
     machineHoursBlock(),
+    '</div></div><div class="viz-group" data-key="grp:communication"><h2>Agent communication</h2><div class="viz-grid">',
+    agentCommunicationBlock(),
+    agentResponseBlock(),
+    agentNudgeBlock(),
     '</div></div><div class="viz-group" data-key="grp:notices"><h2>Notices and activity</h2><div class="viz-grid">',
     noticeChart(),
     policyChangesCard(),
@@ -2276,6 +2280,45 @@ function vizSwitch(attr, current, options, label) {
   return `<div class="viz-switch" role="group" aria-label="${esc(label)}">${options.map(([value, text]) => `<button type="button" data-${attr}="${esc(value)}" aria-pressed="${value === current}">${esc(text)}</button>`).join('')}</div>`;
 }
 const vizTable = (head, rows) => `<div class="fleet-table-wrap"><table class="fleet-table"><thead><tr>${head.map((h) => `<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.map((r) => `<tr>${r.map((c, i) => `<td data-label="${esc(head[i])}"${i ? ' class="mono"' : ''}>${c}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+
+function agentCommunicationBlock() {
+  const data = analyticsData?.agentCommunication;
+  const projects = data?.projects || [];
+  const project = projects.some(row => row.project === analyticsUi.communicationProject) ? analyticsUi.communicationProject : 'all';
+  const win = communicationSeries(data, project);
+  const base = { id: 'agent-communication', title: 'Messages per project and day' };
+  if (!data?.total) return vizCard({ ...base, empty: 'No agent messages are recorded in the last 7 days.' });
+  const controls = `<label class="kb-field"><span>Message project</span><select data-communication-project><option value="all"${project === 'all' ? ' selected' : ''}>All projects</option>${projects.map(row => `<option value="${esc(row.project)}"${project === row.project ? ' selected' : ''}>${esc(row.project)}</option>`).join('')}</select></label>`;
+  const reminders = win.series.find(row => row.key === 'reminder').values.reduce((a, b) => a + b, 0);
+  return vizCard({ ...base, controls,
+    title: `${win.total.toLocaleString()} messages; ${reminders.toLocaleString()} reminders (${win.total ? Math.round(reminders * 100 / win.total) : 0}%)`,
+    sub: `Last 7 local days. One bar for each day, split by kind. ${project === 'all' ? 'All projects.' : `Project ${esc(project)}.`} Failed deliveries add no traffic.`,
+    legend: legendHtml(win.series), chart: stackedBars({ cats: win.days.map(day => ({ label: dayLabel(day), tip: dayLabel(day, true) })), series: win.series, label: 'Agent messages per day by kind' }),
+    details: communicationDailyDetailsHtml(win),
+  });
+}
+
+function agentResponseBlock() {
+  const data = analyticsData?.agentCommunication;
+  const base = { id: 'agent-responses', title: 'Response time' };
+  if (!data?.total) return vizCard({ ...base, empty: 'No agent response data is recorded in the last 7 days.' });
+  return vizCard({ ...base,
+    sub: `Last 7 local days, all projects. ${data.responses} responses. The first idle transition or delivered tell sets the time. Rows without a response within 24 hours add no time sample.`,
+    chart: communicationResponseHtml(data),
+  });
+}
+
+function agentNudgeBlock() {
+  const data = analyticsData?.agentCommunication;
+  const rows = (data?.nudgesPerTask || []).slice(0, 10);
+  const base = { id: 'agent-nudges', title: 'Nudges per task' };
+  if (!rows.length) return vizCard({ ...base, empty: 'No nudges are recorded in the last 7 days.' });
+  const series = [{ label: 'Nudges', cls: 's2', values: rows.map(row => row.nudges) }];
+  return vizCard({ ...base, sub: 'Last 7 local days, all projects. The chart shows the 10 tasks with the most nudges. Details shows up to 200 tasks.',
+    chart: stackedBars({ cats: rows.map(row => ({ label: row.taskId ?? 'Unknown', tip: `${row.project}: ${row.taskId ?? 'Task not known'}` })), series, label: 'Nudges per task' }),
+    legend: legendHtml(series), details: communicationNudgeDetailsHtml(data),
+  });
+}
 const pctText = (x) => `${Math.round(x * 100)}%`;
 const trendSpan = (dir, text) => `<span class="hl-trend ${dir}">${dir === 'up' ? '↑' : dir === 'down' ? '↓' : '→'} ${esc(text)}</span>`;
 const hhmm = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
@@ -5073,6 +5116,11 @@ document.addEventListener('click', (e) => {
   }
 });
 document.addEventListener('change', (e) => {
+  if (e.target.matches?.('[data-communication-project]')) {
+    analyticsUi.communicationProject = e.target.value;
+    render();
+    return;
+  }
   const field = e.target.dataset?.activityFilter;
   if (!field || field === 'q') return;
   analyticsUi.log[field] = e.target.value;
@@ -5926,7 +5974,7 @@ const HELP = {
     <h3>Bookmarks</h3><p>A project keeps at most 30 bookmarks. A bookmark name has at most 60 characters. A bookmark URL must use http or https and must not hold a user name or a password. <b>Add current page</b> saves the selected tab. <b>Open</b> loads a bookmark in the current tab; <b>New tab</b> opens it in a new tab. <b>Rename</b>, the arrows, and <b>Delete</b> change the list; Delete asks you to confirm. <b>Start page</b> opens in the first tab of the next launch. <b>Save</b> stores the start page; a blank value clears it.</p>
     <h3>Control</h3><p>Select the screenshot to open the large view. The large view shows a still image of the last capture. Turn on <b>Control browser</b> or <b>Live</b> to refresh it at the chosen interval. Turn on <b>Control browser</b>, then click the image and type. Paste long text or a password into the masked field. On a phone the large view is full screen and the image fills the height. The text field and key controls appear only while <b>Control browser</b> is on.</p>`],
   analytics: ['Analytics', `
-    <p>The page answers eight questions: what the fleet costs, how the quota compares with the pace, how often the models are right the first time, where the harnesses deny work, what memory the processes use, when the machine and the locks slow work down, which panes get notices, and which keys of the policy changed.</p>
+    <p>The page answers nine questions: what the fleet costs, how the quota compares with the pace, how often the models are right the first time, where the harnesses deny work, what memory the processes use, when the machine and the locks slow work down, how agents communicate, which panes get notices, and which keys of the policy changed.</p>
     <h3>Headline strip</h3><p>Each tile shows one figure and its change. <b>Claude spend a day</b> is the mean of the last 7 days, with the change on the 7 days before. <b>Quota against pace</b> shows the lane with the most use above its pace line. <b>Denials this week</b> compares the last 24 hours with the 6-day mean. <b>Notices per pane a day</b> is the 7-day mean and today. <b>Lock wait and hold</b> shows the median wait and the median hold. <b>First-time success</b> counts the judged runs of the last 30 days.</p>
     <h3>Charts</h3><p>The title of each chart tells what to read from it. Hover, focus, or touch a column, a cell, or a row to read its values. On a phone each chart scrolls sideways inside its own box. <b>Details</b> under a chart opens the table of the same figures.</p>
     <p><b>Spend</b>: stacked bars for each day, split by role or by harness with the switch. The USD figure is the API-price equivalent. The Owner pays a subscription, not these amounts. <b>Quota</b>: one solid line for the use of each lane and one dashed line for its expected pace, in the weekly window. <b>Model scorecard</b>: the share of first-time, rework, failed, and not judged runs for each model. <b>Details</b> also holds the recorded work by project and provider and the recent runs.</p>
@@ -5941,6 +5989,7 @@ const HELP = {
     <h3>Machine load and lock waits</h3><p>Lines show the 5-minute load as a percent of the cores, the memory in use, and the swap in use over the last 24 hours, in columns of 10 minutes. A shaded column had a lock holder. The strip under the chart shows the minutes in which a suite request waited in the queue.</p>
     <h3>Machine overload and idle waiting</h3><p>The chart shows, for each hour of the day in local time, the mean minutes per day of two conditions over the last 14 days. <b>Overload</b>: swap above 90% with at least 1 GB in use, or a 5-minute load above 3 times the cores. <b>Queue waited, CPU under 50%</b>: a suite request waited in the <code>full-suite</code> queue while the CPU was not the reason.</p>
     <p>Hover, focus, or touch an hour to read its values. Hatched bars have fewer than 10 samples. A note shows when samples cover less than half of the window; a minute without a sample is missing data. The table under the chart has the same 24 rows. On a phone the chart scrolls sideways inside its own box.</p>
+    <h3>Agent communication</h3><p>The section shows the last 7 local days from message metadata. Stacked bars split daily messages by kind. Select a message project to show one project or all projects. The title gives the reminder share. The filter changes the daily bars only. Response time and nudges per task use all projects. The response tables show the median and p90 time per orchestrator and per worker kind and model. At least 90% of measured times are at or below p90. Each row shows message and response counts. The first idle or done transition, or delivered <code>tell</code> from the target, sets the response time. An initially idle target must become active before idle counts. The engine writes one response per message. Unanswered rows after 24 hours add no time sample. Failed deliveries add no traffic. The nudge chart shows the 10 tasks with the most nudges. Each table shows at most 200 rows; the figures include all rows. Service status, kit, idle-worker, resource, and handover notices are reminders. A prompt to an idle orchestrator with ready work is a nudge. No message text enters these figures.</p>
     <h3>Notices per pane</h3><p>Stacked bars show the notices and digest items that Herdr Boss sent to each pane on each day. The chart shows pane IDs only. The five panes with the most notices have their own color. The other panes share one gray.</p>
     <h3>Policy changes</h3><p>The list shows the last writes of <code>policy.json</code>, newest first. A row shows the time, the caller kind (<b>Page</b>, <b>CLI</b>, <b>Project new</b>, or <b>Unknown</b>), and the changed keys with the old and the new value. A list or an object shows <code>changed</code>. <b>Details</b> holds one table row for each changed key of the last 100 writes. The caller kind is a label that the client sends. It does not prove who wrote. The Allocation page asks for a confirmation before it saves 3 or more changed shares, and asks again before it saves a total other than 100.</p>
     <h3>Activity log</h3><p>The log lists prompts sent to orchestrators, notifications, handovers, and stopped processes, newest first. Filter by kind, project, level, and time, or type in the search box. The first line tells whether Herdr Boss sends notices to orchestrators. Herdr Boss sends the <code>info</code> notices of a pane as one digest, at most once in 2 hours, and never while the pane works. <code>warn</code> and <code>critical</code> notices arrive at once. <b>Details</b> holds the raw log without filters. The old <code>/logs</code> address opens this section.</p>`],

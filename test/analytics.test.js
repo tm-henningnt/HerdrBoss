@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { noticeCounts, machineTimeline, memoryByClass, readEventTail, analyticsSummary, lockDaily, NOTICE_PANE_LIMIT } from '../src/analytics.js';
+import * as analytics from '../src/analytics.js';
 
 const tmp = (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-analytics-'));
@@ -15,6 +16,46 @@ const tmp = (t) => {
 const NOW = new Date(2026, 8, 30, 12, 0, 0).getTime();
 const HOUR = 3600000;
 const localDay = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+
+test('agent communication counts projects, kinds, task nudges and response percentiles', () => {
+  const at = new Date(NOW - HOUR).toISOString();
+  const rows = Array.from({ length: 10 }, (_, i) => ({
+    id: `a${i}`, at, project: 'orchard', kind: i < 2 ? 'nudge' : i < 5 ? 'reminder' : 'task', taskId: 'T1',
+    to: { role: 'worker', kind: 'codex', model: 'sample-model' },
+    respondedAt: new Date(NOW - HOUR + (i + 1) * 1000).toISOString(),
+  }));
+  rows.push({ id: 'b', at, project: 'lantern', kind: 'reply', to: { role: 'orch', project: 'lantern', pane: 'wB:p1' }, respondedAt: null });
+  rows.push({ id: 'old', at: new Date(NOW - 10 * 24 * HOUR).toISOString(), project: 'orchard', kind: 'reminder' });
+  rows.push({ id: 'future', at: new Date(NOW + HOUR).toISOString(), project: 'orchard', kind: 'task' });
+  rows.push({ id: 'failed', at, project: 'orchard', kind: 'nudge', status: 'failed' });
+  const result = analytics.agentCommunication(rows, { now: NOW });
+  assert.equal(result.total, 11);
+  assert.equal(result.reminders, 3);
+  assert.equal(result.reminderShare, 3 / 11);
+  assert.equal(result.projects.find(p => p.project === 'orchard').counts.nudge.at(-1), 2);
+  assert.deepEqual(result.nudgesPerTask, [{ project: 'orchard', taskId: 'T1', nudges: 2 }]);
+  assert.deepEqual(result.workers, [{ kind: 'codex', model: 'sample-model', messages: 10, responses: 10, medianMs: 5500, p90Ms: 9000 }]);
+  assert.equal(result.orchestrators[0].responses, 0);
+  assert.equal(result.orchestrators[0].medianMs, null);
+  const empty = analytics.agentCommunication([], { now: NOW });
+  assert.equal(empty.total, 0);
+  assert.equal(empty.reminderShare, null);
+  assert.deepEqual(empty.workers, []);
+});
+
+test('analyticsSummary reads all communication metadata without the API page limit or writes', (t) => {
+  const dataDir = tmp(t);
+  const file = path.join(dataDir, 'agent-message-meta.jsonl');
+  const rows = Array.from({ length: 501 }, (_, i) => ({ id: `a${i}`, at: new Date(NOW - HOUR).toISOString(), project: 'orchard', kind: 'reminder', to: { role: 'orch', pane: 'wA:p1' } }));
+  const text = rows.map(r => JSON.stringify(r)).join('\n') + '\n';
+  fs.writeFileSync(file, text);
+  const result = analyticsSummary({ dataDir, now: NOW });
+  assert.equal(result.agentCommunication.total, 501);
+  assert.equal(result.agentCommunication.reminderShare, 1);
+  assert.equal(fs.readFileSync(file, 'utf8'), text);
+  assert.equal(fs.existsSync(`${file}.lock`), false);
+  assert.doesNotMatch(JSON.stringify(result.agentCommunication), /respondedAt|"text"/);
+});
 
 test('noticeCounts counts each notice for its pane and local day, and a digest counts its titles', () => {
   const events = [

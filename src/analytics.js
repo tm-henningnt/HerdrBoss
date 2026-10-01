@@ -8,9 +8,11 @@ import { readHarnessChanges } from './harness-changes.js';
 import { readPolicyChanges } from './policy-log.js';
 import { lockLaneSettings } from './kit/locks.js';
 import { classifyLockLane, readLockDurationPrediction } from './kit/lock-lanes.js';
+import { readAgentMetadata, AGENT_MESSAGE_KINDS, AGENT_RESPONSE_WINDOW_MS } from './agent-messages.js';
 
-// Aggregate figures for the Analytics page. The result holds numbers, lock kinds, and pane IDs only:
-// no notice text, workspace name, path, or command. The policy changes hold policy keys, which name a project, and scalar values.
+// Aggregate figures for the Analytics page. No message text, workspace name, path, or command.
+// Communication figures also hold project slugs, task IDs, agent names, worker kinds and models.
+// Policy changes hold policy keys, which name a project, and scalar values.
 
 export const NOTICE_PANE_LIMIT = 5;
 export const EVENT_TAIL_BYTES = 2 * 1024 * 1024;
@@ -184,6 +186,71 @@ export function machineTimeline(samples, { hours = 24, bucketMin = 10, now = Dat
 
 const PROJECT_SLUG = /^[a-z0-9][a-z0-9._-]{0,63}$/i;
 
+const responseFigures = (values) => {
+  const sorted = [...values].sort((a, b) => a - b);
+  return { responses: sorted.length, medianMs: median(sorted), p90Ms: sorted.length ? sorted[Math.ceil(sorted.length * 0.9) - 1] : null };
+};
+
+// Text-free communication figures. Failed deliveries add no traffic or response sample.
+// A caller can set since to include a whole watch in the totals; the daily bars keep the last days.
+export function agentCommunication(rows, { days = 7, now = Date.now(), since = null } = {}) {
+  const dayList = Array.from({ length: days }, (_, i) => localDay(now - (days - 1 - i) * 86400000));
+  const dayIndex = new Map(dayList.map((day, i) => [day, i]));
+  const sinceMs = since === null ? new Date(`${dayList[0]}T00:00:00`).getTime() : Date.parse(since);
+  const projects = new Map(), tasks = new Map(), orchestrators = new Map(), workers = new Map();
+  const responses = [];
+  let total = 0, reminders = 0;
+  for (const row of rows || []) {
+    const at = Date.parse(row?.at);
+    if (!Number.isFinite(at) || at < sinceMs || at > now || row.status === 'failed') continue;
+    const project = PROJECT_SLUG.test(row.project || '') ? row.project : 'other';
+    const kind = AGENT_MESSAGE_KINDS.includes(row.kind) ? row.kind : 'other';
+    total++;
+    if (kind === 'reminder') reminders++;
+    const entry = projects.get(project) || { project, counts: Object.fromEntries(AGENT_MESSAGE_KINDS.map((key) => [key, Array(days).fill(0)])), total: 0 };
+    projects.set(project, entry);
+    entry.total++;
+    const day = dayIndex.get(localDay(at));
+    if (day !== undefined) entry.counts[kind][day]++;
+    if (kind === 'nudge') {
+      const taskId = row.taskId == null ? null : String(row.taskId);
+      const key = JSON.stringify([project, taskId]);
+      const task = tasks.get(key) || { project, taskId, nudges: 0 };
+      task.nudges++;
+      tasks.set(key, task);
+    }
+    const responseMs = Date.parse(row.respondedAt) - at;
+    const answered = Number.isFinite(responseMs) && responseMs >= 0 && responseMs < AGENT_RESPONSE_WINDOW_MS && Date.parse(row.respondedAt) <= now;
+    if (answered) responses.push(responseMs);
+    const target = row.to || {};
+    let groups, key, fields;
+    if (target.role === 'orch') {
+      groups = orchestrators;
+      fields = { project, name: target.name || null, pane: target.pane || null };
+      key = JSON.stringify([project, fields.pane || fields.name]);
+    } else if (target.role === 'worker') {
+      groups = workers;
+      fields = { kind: target.kind || 'unknown', model: target.model || 'unknown' };
+      key = JSON.stringify([fields.kind, fields.model]);
+    }
+    if (groups) {
+      const group = groups.get(key) || { ...fields, messages: 0, samples: [] };
+      group.messages++;
+      if (answered) group.samples.push(responseMs);
+      groups.set(key, group);
+    }
+  }
+  const groupRows = (groups) => [...groups.values()].map(({ samples, ...row }) => ({ ...row, ...responseFigures(samples) }))
+    .sort((a, b) => b.messages - a.messages || JSON.stringify(a).localeCompare(JSON.stringify(b)));
+  return {
+    days: dayList, kinds: AGENT_MESSAGE_KINDS, total, reminders, reminderShare: total ? reminders / total : null,
+    ...responseFigures(responses),
+    projects: [...projects.values()].sort((a, b) => b.total - a.total || a.project.localeCompare(b.project)),
+    nudgesPerTask: [...tasks.values()].sort((a, b) => b.nudges - a.nudges || a.project.localeCompare(b.project) || String(a.taskId).localeCompare(String(b.taskId))),
+    orchestrators: groupRows(orchestrators), workers: groupRows(workers),
+  };
+}
+
 // Lock wait and hold for each project for each local day. The wait comes from acquire lines and the hold from release lines.
 // Lines of a re-entrant suite, a reused push, and a takeover add nothing: they hold no lock time of their own.
 // A timeout counts in timeouts only. The project is a slug or other.
@@ -295,5 +362,6 @@ export function analyticsSummary({ dataDir = DATA_DIR, now = Date.now() } = {}) 
     denials,
     harnessChanges: markersIn(denials.days, dataDir),
     policyChanges: readPolicyChanges(dataDir),
+    agentCommunication: agentCommunication(readAgentMetadata({ dir: dataDir, limit: Number.MAX_SAFE_INTEGER }), { now }),
   };
 }

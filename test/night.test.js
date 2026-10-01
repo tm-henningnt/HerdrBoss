@@ -485,6 +485,20 @@ console.log(JSON.stringify({ before, at: atDeadline, records: check.messageStore
   assert.ok(result.night.retroSentAt);
 });
 
+test('watch retro data includes compact communication figures for the watch window', async () => {
+  const { renderNightReport } = await import('../src/night-report.js');
+  const since = '2026-10-01T10:00:00Z';
+  const at = '2026-10-01T11:00:00Z';
+  const text = renderNightReport({ kind: 'retro', night: { since }, now: Date.parse('2026-10-01T12:00:00Z'),
+    agentMetadata: [
+      { at, kind: 'nudge', project: 'orchard', taskId: 'T1', respondedAt: '2026-10-01T11:01:00Z' },
+      { at, kind: 'reminder', project: 'orchard' },
+      { at: '2026-10-01T09:00:00Z', kind: 'reminder', project: 'orchard' },
+    ],
+  });
+  assert.match(text, /Agent communication: 2 messages; 1 nudges; 1 reminders \(50%\); 1 responses; median 60 s; p90 60 s\./);
+});
+
 test('a daily report of a watch until cancelled posts once a day and arms the next day', (t) => {
   const temp = tempDir(t);
   const dataDir = path.join(temp, 'data');
