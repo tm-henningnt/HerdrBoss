@@ -7,10 +7,36 @@ import { execFileSync } from 'node:child_process';
 import { loadConfig, migrateAccessFiles, assertPreviewDataDir, assertDataWritable, sandboxWriteError, DATA_DIR, PROJECTS_DIR, dashboardUrl } from './config.js';
 import { writeProject, statusWarnings, capDoneTasks, STATUS_WARN_BYTES, SLUG } from './projects.js';
 import { loadProjectConfig } from './kit/config.js';
+import { maskDeep } from './browser-url-mask.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const LABEL = 'no.tallmaker.herdr-boss';
 const PLIST = path.join(os.homedir(), 'Library', 'LaunchAgents', `${LABEL}.plist`);
+
+export function formatBrowserJson(value, options = {}) {
+  return JSON.stringify(maskDeep(value, options), null, 2);
+}
+
+export function formatBrowserTabs(tabs, options = {}) {
+  const { full = false } = options;
+  const formatted = tabs.map((tab) => ({
+    id: tab.id,
+    title: tab.title,
+    url: (() => {
+      try {
+        const url = new URL(tab.url);
+        return full && ['http:', 'https:'].includes(url.protocol)
+          ? `${url.origin}${url.pathname}`
+          : url.href;
+      } catch {
+        return '';
+      }
+    })(),
+    visibility: tab.visibility,
+    agentAttached: tab.attached,
+  }));
+  return formatBrowserJson(formatted, options);
+}
 
 // Browser ownership follows the Herdr workspace. Any pane in a project's workspace may change that project's
 // browser. The Boss (the pane labeled boss, or any pane in the Boss workspace) may change every browser.
@@ -104,7 +130,7 @@ const USAGE = `herdr-boss <command>
   usage summary         Summarize project and provider usage.
   spend [--days N] [--json]  Print the token use and estimated cost per day and role for all harnesses.
   store import|export messages  Import or export messages through SQLite.
-  browser request SLUG [--reserve] [--headless|--visible]  Reserve or launch a persistent project browser.
+  browser request SLUG [--full] [--reserve] [--headless|--visible]  Reserve or launch a persistent project browser.
   browser size SLUG WIDTH HEIGHT  Save window size for the next browser launch.
   browser viewport SLUG --tab ID WIDTHxHEIGHT [--scale N] [--mobile]  Set one tab's device metrics.
   browser viewport SLUG --tab ID --reset  Clear one tab's device metrics.
@@ -112,20 +138,21 @@ const USAGE = `herdr-boss <command>
   browser release SLUG    Give back the port lease of a closed project browser.
   browser restart SLUG --headless|--visible [--no-restore]  Switch mode and restore the current page.
   browser list          List registered browser sessions.
-  browser tabs SLUG      List the pages, their visibility, and whether an agent is attached.
-  browser tab new SLUG [URL]  Open a tab in its own background window and print its ID.
+  browser tabs SLUG [--full]  List the pages, their visibility, and whether an agent is attached.
+  browser tab new SLUG [URL] [--full]  Open a tab in its own background window and print its ID.
   browser tab close SLUG --tab ID [--force]  Close a tab; refuses a tab an agent is attached to.
   browser screenshot SLUG [--tab ID] [--out DIR]  Save a private JPEG and print its path.
-  browser navigate SLUG URL [--tab ID]  Open an HTTP(S) page.
+  browser navigate SLUG URL [--tab ID] [--full]  Open an HTTP(S) page.
   browser click SLUG X% Y% [--tab ID]  Click at screenshot-relative percentages.
   browser drag SLUG X1% Y1% X2% Y2% [--tab ID] [--steps N]  Press at the first position, move to the second, and release. N is 1 to 60 and defaults to 10.
   browser text SLUG --stdin [--tab ID]  Send text from standard input without echoing it.
   browser key SLUG KEY [--tab ID]  Send Tab, Enter, Backspace, arrow keys, etc.
-  browser bookmarks SLUG list  List the project bookmarks and the start page.
+  browser bookmarks SLUG list [--full]  List the project bookmarks and the start page.
   browser bookmarks SLUG add NAME URL  Add one bookmark.
   browser bookmarks SLUG rm INDEX  Remove one bookmark.
-  browser bookmarks SLUG open INDEX [--new-tab]  Open a bookmark in the current tab or a new tab.
-  browser bookmarks SLUG start URL|none  Set or clear the start page of the next launch.
+  browser bookmarks SLUG open INDEX [--new-tab] [--full]  Open a bookmark in the current tab or a new tab.
+  browser bookmarks SLUG start URL|none [--full]  Set or clear the start page of the next launch.
+  --full prints real URLs. Use it only as the Owner at a terminal.
   browser sweep-clones [--dry-run]  Delete orphaned Chrome code-sign clones now; --dry-run only lists them.
   handoff plan PANE --to KIND [--mode migrate|fresh] [--model MODEL] [--effort EFFORT]
   handoff prepare PANE --to KIND [--mode migrate|fresh] [--model MODEL] [--effort EFFORT]
@@ -449,6 +476,16 @@ async function main() {
       break;
     }
     case 'browser': {
+      const fullCount = args.filter((arg) => arg === '--full').length;
+      if (fullCount > 1) throw new Error('--full may be used only once.');
+      const full = fullCount === 1;
+      if (full) {
+        args.splice(0, args.length, ...args.filter((arg) => arg !== '--full'));
+        const supportsFull = ['request', 'tabs', 'navigate'].includes(args[0])
+          || (args[0] === 'tab' && args[1] === 'new')
+          || (args[0] === 'bookmarks' && ['list', 'open', 'start'].includes(args[2]));
+        if (!supportsFull) throw new Error('--full is for the Owner at a terminal. Use it with browser request, tabs, tab new, navigate, or bookmarks list, open, or start.');
+      }
       const { parseScreenshotOptions, saveBrowserScreenshot } = await import('./browser-output.js');
       const { requestBrowser, listBrowserSessions, browserStatus, setBrowserWindowSize, closeBrowser, restartBrowser, releaseBrowser, listBookmarks, addBookmark, removeBookmark, setStartPage } = await import('./browser-pool.js');
       const { listBrowserTabs, browserScreenshot, browserNavigate, browserClick, browserHover, browserDrag, browserInsertText, browserKey, browserViewport, browserNewTab, browserCloseTab } = await import('./browser-preview.js');
@@ -473,6 +510,7 @@ async function main() {
         if (!match) throw new Error(`${subject} must be percentages from 0% to 100%, for example 42% 65%.`);
         return Number(value.slice(0, -1)) / 100;
       };
+      const printBrowserJson = (value) => console.log(formatBrowserJson(value, { full }));
       if (args[0] === 'sweep-clones' && (args.length === 1 || (args.length === 2 && args[1] === '--dry-run'))) {
         const { codeSignCloneDir, sweepCodeSignClones } = await import('./clone-sweep.js');
         const { fmtDuration } = await import('./rules.js');
@@ -541,11 +579,11 @@ async function main() {
       }
       else if (args[0] === 'tabs' && args.length === 2) {
         const tabs = await listBrowserTabs(args[1]);
-        console.log(JSON.stringify(tabs.map((tab) => ({ id: tab.id, title: tab.title, url: (() => { try { const url = new URL(tab.url); return ['http:', 'https:'].includes(url.protocol) ? `${url.origin}${url.pathname}` : url.href; } catch { return ''; } })(), visibility: tab.visibility, agentAttached: tab.attached })), null, 2));
+        console.log(formatBrowserTabs(tabs, { full }));
       }
       else if (args[0] === 'tab' && args[1] === 'new' && args[2] && args.length <= 4) {
         await verifyBrowserCaller(args[2]);
-        console.log(JSON.stringify(await browserNewTab(args[2], args[3])));
+        printBrowserJson(await browserNewTab(args[2], args[3]));
       }
       else if (args[0] === 'tab' && args[1] === 'close' && args[2] && args[3] === '--tab' && args[4] && (args.length === 5 || (args.length === 6 && args[5] === '--force'))) {
         await verifyBrowserCaller(args[2]);
@@ -560,7 +598,7 @@ async function main() {
       else if (args[0] === 'navigate' && args[1] && args[2]) {
         await verifyBrowserCaller(args[1]);
         const tab = await selectedTab(args[1], args.slice(3));
-        console.log(JSON.stringify(await browserNavigate(args[1], tab, args[2])));
+        printBrowserJson(await browserNavigate(args[1], tab, args[2]));
       }
       else if (args[0] === 'click' && args[1] && args[2] && args[3]) {
         await verifyBrowserCaller(args[1]);
@@ -603,7 +641,7 @@ async function main() {
         await browserKey(args[1], tab, args[2]);
         console.log('Key sent.');
       }
-      else if (args[0] === 'bookmarks' && args[1] && args[2] === 'list' && args.length === 3) console.log(JSON.stringify(listBookmarks(args[1]), null, 2));
+      else if (args[0] === 'bookmarks' && args[1] && args[2] === 'list' && args.length === 3) printBrowserJson(listBookmarks(args[1]));
       else if (args[0] === 'bookmarks' && args[1] && args[2] === 'add' && args[3] && args[4] && args.length === 5) {
         await verifyBrowserCaller(args[1]);
         console.log(JSON.stringify(addBookmark(args[1], { name: args[3], url: args[4] }), null, 2));
@@ -614,19 +652,19 @@ async function main() {
       }
       else if (args[0] === 'bookmarks' && args[1] && args[2] === 'start' && args[3] && args.length === 4) {
         await verifyBrowserCaller(args[1]);
-        console.log(JSON.stringify(setStartPage(args[1], args[3] === 'none' ? null : args[3]), null, 2));
+        printBrowserJson(setStartPage(args[1], args[3] === 'none' ? null : args[3]));
       }
       else if (args[0] === 'bookmarks' && args[1] && args[2] === 'open' && args[3] && (args.length === 4 || (args.length === 5 && args[4] === '--new-tab'))) {
         await verifyBrowserCaller(args[1]);
         const bookmark = listBookmarks(args[1]).bookmarks[Number(args[3])];
         if (!bookmark) throw new Error('Bookmark index is out of range.');
-        if (args[4] === '--new-tab') console.log(JSON.stringify(await browserNewTab(args[1], bookmark.url)));
-        else console.log(JSON.stringify(await browserNavigate(args[1], null, bookmark.url)));
+        if (args[4] === '--new-tab') printBrowserJson(await browserNewTab(args[1], bookmark.url));
+        else printBrowserJson(await browserNavigate(args[1], null, bookmark.url));
       }
       else if (args[0] === 'request' && args[1] && args.includes('--headless') && args.includes('--visible')) throw new Error('Choose either --headless or --visible.');
       else if (args[0] === 'request' && args[1] && args.slice(2).every((flag) => ['--reserve', '--headless', '--visible'].includes(flag))) {
         await verifyBrowserCaller(args[1]);
-        console.log(JSON.stringify(await requestBrowser(args[1], { launch: !args.includes('--reserve'), headless: args.includes('--headless') ? true : args.includes('--visible') ? false : null }), null, 2));
+        printBrowserJson(await requestBrowser(args[1], { launch: !args.includes('--reserve'), headless: args.includes('--headless') ? true : args.includes('--visible') ? false : null }));
       }
       else throw new Error('Usage: browser request|size|viewport|close|release|restart|list|tabs|tab new|tab close|screenshot|navigate|click|hover|drag|text|key|bookmarks|sweep-clones. Run herdr-boss without arguments for details.');
       break;
@@ -888,4 +926,17 @@ async function main() {
   }
 }
 
-main().catch((error) => { const e = sandboxWriteError(error); console.error(e.message); process.exit(e.exitCode ?? 1); });
+let directInvocation = false;
+if (process.argv[1]) {
+  const argvPath = path.resolve(process.argv[1]);
+  const modulePath = path.resolve(fileURLToPath(import.meta.url));
+  try {
+    directInvocation = fs.realpathSync(argvPath) === fs.realpathSync(modulePath);
+  } catch {
+    directInvocation = argvPath === modulePath;
+  }
+}
+
+if (directInvocation) {
+  main().catch((error) => { const e = sandboxWriteError(error); console.error(e.message); process.exit(e.exitCode ?? 1); });
+}
