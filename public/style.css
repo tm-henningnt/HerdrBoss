@@ -2454,3 +2454,9 @@ a.rv-page-link:hover { background: var(--panel-2); }
 .pool-env-row input { flex: 1 1 140px; min-width: 0; }
 .pool-env-set { color: var(--muted); font-size: 12.5px; flex: 1 1 140px; }
 .pool-env > button[data-pool-env-add] { justify-self: start; }
+
+/* The Resource pools panel of the Settings page. It shares the row and the editor styles of the Allocation page. */
+.pool-settings-panel { grid-column: 1 / -1; }
+.pool-settings-panel h2 { margin: 0; }
+.pool-settings-row .lease-free-line { margin: 0; overflow-wrap: anywhere; }
+.pool-settings-row .lease-head { margin-bottom: 2px; }
