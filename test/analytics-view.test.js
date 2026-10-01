@@ -59,6 +59,37 @@ test('Analytics wires Agent communication to read-only summary data and page hel
   assert.match(cli, /responseMs/);
 });
 
+test('Actions minutes uses weekly stacked bars and stays hidden when data is unavailable', () => {
+  const data = { weeks: ['2026-W39', '2026-W40'], repos: [{ repo: 'owner/sample', minutes: [3, 5], runs: [2, 3] }] };
+  const win = communicationView.actionsMinutesSeries(data);
+  assert.deepEqual(win.weeks, data.weeks);
+  assert.deepEqual(win.series[0].values, [3, 5]);
+  const svg = stackedBars({ cats: win.weeks.map((week) => ({ label: week, tip: week })), series: win.series, label: 'Actions minutes by repository' });
+  assert.match(svg, /class="viz-fill s1"/);
+  assert.doesNotMatch(svg, /NaN|Infinity/);
+  assert.equal(communicationView.actionsMinutesDetailsHtml({ weeks: [], repos: [] }), '<div class="calm-state">No GitHub Actions runs are recorded in the last 12 weeks.</div>');
+  assert.match(communicationView.actionsMinutesScope({ truncated: true }), /Minutes are estimated from run times/);
+  assert.match(communicationView.actionsMinutesScope({ truncated: true }), /500-run limit.*older weeks may be incomplete/);
+  assert.doesNotMatch(communicationView.actionsMinutesScope({ truncated: false }), /500-run limit/);
+  assert.match(app, /analyticsData\?\.actionsMinutes/);
+  assert.match(app, /function actionsMinutesBlock\(\)/);
+  assert.match(app, /if \(!data\?\.available\) return ''/);
+  assert.match(app, /title: 'GitHub Actions minutes'/);
+  const actionsBlockStart = app.indexOf('function actionsMinutesBlock()');
+  const actionsBlock = app.slice(actionsBlockStart, app.indexOf('\n}\n', actionsBlockStart));
+  assert.match(actionsBlock, /sub: actionsMinutesScope\(data\)/);
+  assert.match(app, /analytics\.actionsMinutes/);
+  assert.match(app, /The service uses its GitHub token/);
+  assert.match(guide, /### GitHub Actions minutes/);
+  assert.match(guide, /estimated from run times/);
+  assert.match(guide, /token that can read it|token cannot read it/);
+  const analyticsRoute = cli.match(/\| `GET \/api\/analytics` \|([^|]+)\|/)[1];
+  const sentences = analyticsRoute.match(/[^.]+\./g).map((sentence) => sentence.trim());
+  assert.ok(sentences.every((sentence) => sentence.split(/\s+/).length <= 25), 'API help sentences are at most 25 words');
+  assert.match(analyticsRoute, /estimated from run times/);
+  assert.match(analyticsRoute, /truncated/);
+});
+
 const spend = {
   days: [
     { day: '2026-09-29', roles: [{ role: 'worker', costUsd: 10, harnesses: { claude: { costUsd: 6 }, codex: { costUsd: 4 } } }, { role: 'boss', costUsd: 2, harnesses: { claude: { costUsd: 2 } } }] },
@@ -607,7 +638,7 @@ test('the Analytics help and the guide describe the memory chart, the classes, t
   assert.match(app, /<h3>Memory by class<\/h3>/);
   assert.match(app, /memory-samples\.jsonl/);
   assert.match(app, /every 5 minutes/);
-  assert.match(app, /<p>The page answers nine questions/);
+  assert.match(app, /<p>The page shows cost, quota use, model quality, denied work, machine use, lock waits, GitHub Actions minutes/);
   for (const cls of ['Claude', 'Codex', 'Browsers', 'MCP servers', 'Vitest']) assert.match(app, new RegExp(cls), cls);
   assert.match(guide, /## Memory by class/);
   assert.match(guide, /memory-samples\.jsonl/);

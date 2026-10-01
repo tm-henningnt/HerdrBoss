@@ -102,6 +102,7 @@ const DEFAULTS = {
   },
   browser: { idleCloseMinutes: 20 },
   workers: { staleIdleMinutes: 120, paneCloseDelayMinutes: 2, uncollectedNoticeMinutes: 30 },
+  analytics: { actionsMinutes: true },
   watch: {
     quietHours: false,
     maxWorkers: null,
@@ -142,6 +143,7 @@ const SERVICE_SETTINGS = [
   ['Service', 'orchestratorLabel'],
   ['Service', 'port'],
   ['Service', 'host'],
+  ['Analytics', 'analytics.actionsMinutes'],
 ];
 
 const POOL_KEYS = new Set(['name', 'items', 'range', 'split', 'env', 'ttlMinutes', 'check', 'graceMinutes', 'idleMinutes', 'waitSeconds', 'portEnv']);
@@ -367,6 +369,7 @@ const SERVICE_SETTING_BOOLEANS = new Set([
   'browsers.sweepCodeSignClones',
   'watch.quietHours',
   'push',
+  'analytics.actionsMinutes',
 ]);
 const NULLABLE_SERVICE_SETTINGS = new Set(['watch.maxWorkers']);
 const WATCH_WORKER_LANES = new Set(['unmetered', 'codex', 'claude', 'opencodego']);

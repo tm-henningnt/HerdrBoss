@@ -93,6 +93,13 @@ export const SETTING_GROUPS = [
     restart: 'A row with an input needs no restart. A read-only row needs a service restart.',
   },
   {
+    id: 'analytics', title: 'Analytics', advanced: true,
+    controls: 'Whether the service reads GitHub Actions minutes for registered repositories.',
+    affects: 'Only the GitHub Actions minutes card on the Analytics page.',
+    safe: 'Safe to change. Turn it off to stop GitHub API calls.',
+    restart: 'No restart. Select Save in the group.',
+  },
+  {
     id: 'readiness', title: 'Harness readiness', advanced: true,
     controls: 'A read-only table that shows if each harness entry that orchestration needs is present.',
     affects: 'Nothing. The table only reports.',
@@ -696,6 +703,14 @@ export const SETTING_HELP = Object.fromEntries([
     raise: 'Not applicable.',
     lower: 'Set 127.0.0.1 to turn remote access off.',
     apply: 'restart',
+  }),
+
+  S('analytics', 'analytics.actionsMinutes', 'GitHub Actions minutes', {
+    what: 'Lets the service read Actions run times for registered GitHub repositories. Minutes are estimated from run times.',
+    default: 'On', unit: 'Switch', range: 'On or off',
+    raise: 'The service uses its GitHub token. It skips repositories that the token cannot read.',
+    lower: 'Turn it off to stop GitHub API calls. The Analytics page hides the card.',
+    apply: 'service',
   }),
 
   // Harness readiness

@@ -42,6 +42,45 @@ export function communicationSeries(data, project = 'all') {
   return { days, projects, series, total: series.reduce((sum, row) => sum + row.values.reduce((a, b) => a + b, 0), 0) };
 }
 
+// GitHub Actions minutes by repository and ISO week. Five repositories keep separate colors; the rest share Other.
+export function actionsMinutesSeries(data) {
+  const weeks = Array.isArray(data?.weeks) ? data.weeks.slice(-12) : [];
+  const repos = Array.isArray(data?.repos) ? data.repos : [];
+  const raw = repos.map((row, i) => ({
+    key: row.repo,
+    label: row.repo,
+    cls: SERIES_CLASSES[i] || 's-other',
+    values: weeks.map((_, week) => {
+      const value = Number(row.minutes?.[week]);
+      return Number.isFinite(value) && value > 0 ? value : 0;
+    }),
+  }));
+  const series = foldSeries(raw, SERIES_CLASSES.length);
+  return { weeks, series, total: series.reduce((sum, row) => sum + row.values.reduce((a, b) => a + b, 0), 0) };
+}
+
+export function actionsMinutesScope(data) {
+  const truncated = data?.truncated ? ' Some repositories reached the 500-run limit. Their older weeks may be incomplete.' : '';
+  const updated = data?.updatedAt ? ` Updated ${new Date(data.updatedAt).toLocaleString()}.` : '';
+  return `Last 12 ISO weeks. Minutes are estimated from run times.${truncated} The service uses its GitHub token. It skips repositories when that token has no access.${updated}`;
+}
+
+export function actionsMinutesDetailsHtml(data) {
+  const weeks = Array.isArray(data?.weeks) ? data.weeks : [];
+  const repos = Array.isArray(data?.repos) ? data.repos : [];
+  if (!weeks.length || !repos.length) return '<div class="calm-state">No GitHub Actions runs are recorded in the last 12 weeks.</div>';
+  const thisWeek = weeks.length - 1;
+  const lastWeek = thisWeek - 1;
+  const amount = (value) => Number.isFinite(Number(value)) ? Number(value).toLocaleString('en-US', { maximumFractionDigits: 1 }) : '0';
+  const rows = repos.slice(0, 200).map((row) => [
+    row.repo,
+    `${amount(row.minutes?.[thisWeek])} min`,
+    lastWeek >= 0 ? `${amount(row.minutes?.[lastWeek])} min` : '–',
+    amount(row.runs?.[thisWeek]),
+  ]);
+  return communicationTable(['Repository', 'This week', 'Last week', 'Runs this week'], rows);
+}
+
 const communicationTable = (heads, rows) => {
   const shown = rows.slice(0, 200);
   return `<div class="fleet-table-wrap"><table class="fleet-table"><thead><tr>${heads.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${shown.map(row => `<tr>${row.map((value, i) => `<td data-label="${esc(heads[i])}"${i ? ' class="mono"' : ''}>${esc(value)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`

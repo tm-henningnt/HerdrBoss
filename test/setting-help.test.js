@@ -123,7 +123,7 @@ test('the popup and the guide come from the same text', () => {
 
 test('the Advanced group holds the rarely used groups', () => {
   const advanced = SETTING_GROUPS.filter((group) => group.advanced).map((group) => group.id);
-  assert.deepEqual(advanced, ['prices', 'avatars', 'service', 'readiness']);
+  assert.deepEqual(advanced, ['prices', 'avatars', 'service', 'analytics', 'readiness']);
   const first = SETTING_GROUPS.slice(0, 4).map((group) => group.id);
   assert.deepEqual(first, ['harnesses', 'quotas', 'machine', 'locks']);
 });
@@ -159,6 +159,10 @@ test('the settable service settings state their range and when they apply', () =
   }
   assert.match(SETTING_HELP.push.what, /HERDR_BOSS_PUSH=0/);
   assert.match(SETTING_HELP.push.what, /restart/i);
+  assert.equal(SETTING_HELP['analytics.actionsMinutes'].default, 'On');
+  assert.equal(SETTING_HELP['analytics.actionsMinutes'].apply, 'service');
+  assert.match(SETTING_HELP['analytics.actionsMinutes'].what, /estimated from run times/i);
+  assert.match(SETTING_HELP['analytics.actionsMinutes'].raise, /service uses its GitHub token/i);
   assert.match(SETTING_HELP.alertCooldownSeconds.what, /unused legacy value/);
   for (const id of ['alertCooldownSeconds', 'port', 'host', 'providerKinds', 'orchestratorLabel']) assert.equal(SETTING_HELP[id].apply, 'restart', `${id} stays in config.json`);
 });
