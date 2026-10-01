@@ -465,6 +465,72 @@ test('projectCommand check: exit 0 when all is present, 4 when something is miss
   } finally { f.cleanup(); }
 });
 
+test('project check reports CI warnings without changing its exit code', () => {
+  const f = fixture();
+  try {
+    flow(f);
+    const workflowDir = path.join(f.dir, '.github', 'workflows');
+    fs.mkdirSync(workflowDir, { recursive: true });
+    fs.writeFileSync(path.join(workflowDir, 'verify.yml'), 'on: push\njobs:\n  verify:\n    runs-on: ubuntu-latest\n');
+    const out = [];
+    const code = projectCommand(['check', 'demo'], { env: {}, dataDir: f.dataDir, log: (line) => out.push(line), flowOptions: { home: f.home } });
+    const text = out.join('\n');
+    assert.equal(code, 0);
+    assert.match(text, /ci\s+ok/);
+    assert.match(text, /warning \[push-main-full\].*quick check on pull requests/i);
+    assert.match(text, /hint:/i);
+    assert.equal(item(checkProject('demo', checkOpts(f)), 'ci').ok, true);
+  } finally { f.cleanup(); }
+});
+
+test('project check prints no CI line when the project has no workflows', () => {
+  const f = fixture();
+  try {
+    flow(f);
+    const out = [];
+    assert.equal(projectCommand(['check', 'demo'], { env: {}, dataDir: f.dataDir, log: (line) => out.push(line), flowOptions: { home: f.home } }), 0);
+    assert.doesNotMatch(out.join('\n'), /\bci\b/i);
+  } finally { f.cleanup(); }
+});
+
+test('project check uses recorded remote visibility for private schedule warnings', () => {
+  const f = fixture();
+  try {
+    flow(f);
+    const stateFile = path.join(f.dataDir, 'flows', 'demo.json');
+    const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+    state.inputs.remote = 'gh';
+    state.inputs.visibility = 'private';
+    fs.writeFileSync(stateFile, JSON.stringify(state));
+    const workflowDir = path.join(f.dir, '.github', 'workflows');
+    fs.mkdirSync(workflowDir, { recursive: true });
+    fs.writeFileSync(path.join(workflowDir, 'scheduled.yml'), 'on:\n  schedule:\n    - cron: "0 0 * * *"\n');
+
+    const privateCheck = checkProject('demo', checkOpts(f));
+    assert.ok(item(privateCheck, 'ci').findings.some((finding) => finding.id === 'schedule-private'));
+    state.inputs.visibility = 'public';
+    fs.writeFileSync(stateFile, JSON.stringify(state));
+    const publicCheck = checkProject('demo', checkOpts(f));
+    assert.ok(!item(publicCheck, 'ci').findings.some((finding) => finding.id === 'schedule-private'));
+  } finally { f.cleanup(); }
+});
+
+test('--fix ci prints the template hint and does not change workflow files', () => {
+  const f = fixture();
+  try {
+    flow(f);
+    const workflowDir = path.join(f.dir, '.github', 'workflows');
+    fs.mkdirSync(workflowDir, { recursive: true });
+    const workflow = path.join(workflowDir, 'verify.yml');
+    fs.writeFileSync(workflow, 'on: push\n');
+    const before = fs.readFileSync(workflow, 'utf8');
+    const out = [];
+    assert.equal(projectCommand(['check', 'demo', '--fix', 'ci'], { env: {}, dataDir: f.dataDir, log: (line) => out.push(line), flowOptions: { home: f.home } }), 0);
+    assert.match(out.join('\n'), /template.*CI1a/i);
+    assert.equal(fs.readFileSync(workflow, 'utf8'), before);
+  } finally { f.cleanup(); }
+});
+
 test('projectCommand check: usage errors exit 1 by throwing the usage line', () => {
   const f = fixture();
   try {

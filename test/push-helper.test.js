@@ -163,6 +163,73 @@ test('herdr-boss push enables suite pass reuse for its pre-push hook', (t) => {
   assert.equal(f.hookSuiteReuse(), '1');
 });
 
+test('herdr-boss push reminds when a main push contains only docs and has a push workflow', (t) => {
+  const f = fixture(t, 'herdr-push-docs-reminder-');
+  const workflowDir = path.join(f.root, '.github', 'workflows');
+  fs.mkdirSync(workflowDir, { recursive: true });
+  fs.writeFileSync(path.join(workflowDir, 'verify.yml'), 'on:\n  push:\n    branches: [main]\njobs:\n  verify:\n    runs-on: ubuntu-latest\n');
+  git(f.root, 'add', '.github/workflows/verify.yml');
+  git(f.root, 'commit', '-m', 'add workflow');
+  git(f.root, 'push', '-u', 'origin', 'main');
+
+  fs.mkdirSync(path.join(f.root, 'docs'));
+  fs.writeFileSync(path.join(f.root, 'docs', 'guide.md'), '# Guide\n');
+  git(f.root, 'add', 'docs/guide.md');
+  git(f.root, 'commit', '-m', 'update docs');
+  const hook = f.writeHook(path.join(f.root, '.git', 'hooks'));
+  const calls = installFakeGit(t, f, hook);
+
+  const result = runKitCommand('push', ['origin', 'main'], f.options());
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(fs.readFileSync(calls, 'utf8'), 'push\n');
+  assert.ok(f.lines.includes('ci: this push changes only docs and the CI runs on a main push; use [skip ci] or batch the push.'));
+});
+
+test('herdr-boss push does not remind for a source change', (t) => {
+  const f = fixture(t, 'herdr-push-no-docs-reminder-');
+  const workflowDir = path.join(f.root, '.github', 'workflows');
+  fs.mkdirSync(workflowDir, { recursive: true });
+  fs.writeFileSync(path.join(workflowDir, 'verify.yml'), 'on: push\n');
+  git(f.root, 'add', '.github/workflows/verify.yml');
+  git(f.root, 'commit', '-m', 'add workflow');
+  git(f.root, 'push', '-u', 'origin', 'main');
+
+  fs.mkdirSync(path.join(f.root, 'src'));
+  fs.writeFileSync(path.join(f.root, 'src', 'app.js'), 'export const value = 1;\n');
+  git(f.root, 'add', 'src/app.js');
+  git(f.root, 'commit', '-m', 'change source');
+  const hook = f.writeHook(path.join(f.root, '.git', 'hooks'));
+  installFakeGit(t, f, hook);
+
+  const result = runKitCommand('push', ['origin', 'main'], f.options());
+
+  assert.equal(result.exitCode, 0);
+  assert.ok(!f.lines.some((line) => line.startsWith('ci:')));
+});
+
+test('herdr-boss push stays quiet when the remote comparison is unavailable', (t) => {
+  const f = fixture(t, 'herdr-push-no-remote-ref-');
+  const workflowDir = path.join(f.root, '.github', 'workflows');
+  fs.mkdirSync(workflowDir, { recursive: true });
+  fs.writeFileSync(path.join(workflowDir, 'verify.yml'), 'on: push\n');
+  git(f.root, 'add', '.github/workflows/verify.yml');
+  git(f.root, 'commit', '-m', 'add workflow');
+  git(f.root, 'push', '-u', 'origin', 'main');
+
+  fs.writeFileSync(path.join(f.root, 'README.md'), '# Docs\n');
+  git(f.root, 'commit', '-am', 'change docs');
+  git(f.root, 'update-ref', '-d', 'refs/remotes/origin/main');
+  const hook = f.writeHook(path.join(f.root, '.git', 'hooks'));
+  const calls = installFakeGit(t, f, hook);
+
+  const result = runKitCommand('push', ['origin', 'main'], f.options());
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(fs.readFileSync(calls, 'utf8'), 'push\n');
+  assert.ok(!f.lines.some((line) => line.startsWith('ci:')));
+});
+
 test('a pre-push suite reuses the push lock and leaves it for the push to release', (t) => {
   const f = fixture(t, 'herdr-push-suite-lock-reentry-');
   const cli = path.resolve('src/cli.js');

@@ -12,8 +12,10 @@ import { KIT_ROOT } from './kit/config.js';
 import { SLUG } from './projects.js';
 import { redact } from './project-new-remote.js';
 import { checkLabels } from './project-new-labels.js';
+import { lintWorkflows } from './ci-lint.js';
+import { readWorkflowFiles } from './ci-workflows.js';
 
-export const CHECK_ITEMS = ['folder', 'agents', 'memory', 'kit', 'config', 'gitignore', 'commit', 'remote', 'labels', 'policy', 'register', 'status', 'workspace', 'orchestrator', 'harness', 'browser'];
+export const CHECK_ITEMS = ['folder', 'agents', 'memory', 'kit', 'config', 'gitignore', 'commit', 'remote', 'ci', 'labels', 'policy', 'register', 'status', 'workspace', 'orchestrator', 'harness', 'browser'];
 const CLAUDE_CLEAN = 'Claude autoMode: nothing to change.';
 const BROWSER_TIMEOUT_MS = 60000;
 
@@ -162,6 +164,18 @@ export function checkProject(slug, options = {}) {
   else if (recorded?.status === 'skipped') ok('remote', `none recorded: ${recorded.detail}`);
   else missing('remote', 'the project has no origin and the state does not record none', 'remote');
 
+  const workflows = dir ? readWorkflowFiles(dir) : [];
+  if (workflows.length) {
+    const remoteSetting = state?.inputs?.remote ?? row?.remote;
+    const visibility = state?.ids?.remoteDecision?.visibility ?? state?.inputs?.visibility;
+    const privateRepo = remoteSetting && remoteSetting !== 'none' && ['private', 'public'].includes(visibility)
+      ? visibility === 'private'
+      : undefined;
+    const findings = lintWorkflows(workflows, { privateRepo });
+    ok('ci', findings.length ? `${findings.length} warning(s)` : '');
+    items.at(-1).findings = findings;
+  }
+
   // The labels item exists only for a private GitHub remote and a working gh. Otherwise the check skips it quietly.
   const labels = checkLabels({ dir, url: isRepo ? git(dir, ['config', '--get', 'remote.origin.url']) : null, state, env: options.env });
   if (labels?.ok) ok('labels', labels.detail);
@@ -235,6 +249,9 @@ export function formatCheck(check) {
       ? `ok${item.detail ? `: ${item.detail}` : ''}`
       : `missing: ${item.detail} (${item.fix ? `fix: herdr-boss project check ${check.slug} --fix ${item.fix}` : 'fix by hand'})`;
     lines.push(`  ${item.name.padEnd(13)}${text}`);
+    if (item.name === 'ci') {
+      for (const issue of item.findings ?? []) lines.push(`  ci warning [${issue.id}] ${issue.message} Hint: ${issue.hint}`);
+    }
   }
   const bad = check.items.filter((item) => !item.ok).length;
   lines.push(bad ? `${bad} of ${check.items.length} items missing.` : `All ${check.items.length} items present.`);
