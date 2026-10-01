@@ -4,6 +4,10 @@ These are the shared operating rules for the orchestrator of this project.
 
 
 - Use the Herdr Boss orchestrator skill when you coordinate workers or resume an unknown project state.
+- Orchestrators and workers may read another Herdr Boss project repository to learn how it solved a problem.
+- Do not edit another project's repository.
+- Do not copy secrets, tenant hosts, client names, or app IDs into this project.
+- Cite each source file in `docs/orchestration/memory.md`.
 - Read this file and `docs/orchestration/memory.md` at start and at resume, before you choose work. The session start hook prints both files.
 - When a `Kit updated` notice arrives, run `herdr-boss kit update` and continue. The command prints the current kit file. Do not read the file again.
 - Commit a changed kit file, `AGENTS.md` stub, or hook with your next commit. Do not make a separate commit for it.

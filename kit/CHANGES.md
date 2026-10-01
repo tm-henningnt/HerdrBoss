@@ -101,3 +101,7 @@ Summary: Codex workers attach the Chrome DevTools MCP to the project browser. Th
 ## 3ffd68a69e47
 Impact: required
 Summary: Add CI minute rules and GitHub workflow templates; create and copy missing project workflows.
+
+## 89d669ba137a
+Impact: useful
+Summary: Allow read-only research in other Herdr Boss projects and add the project paths command.
