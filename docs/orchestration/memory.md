@@ -173,3 +173,13 @@ Owner queue (credentials, billing, and Owner-applied settings):
 - 2026-10-01: Decision (orchestrator, from the Owner rule that Opus needs `--force`): `handoff plan` and `handoff prepare` use the kit default model of the target kind and refuse `claude-opus-5-5` without `--force`. An automatic handover and `project new` never use `--force`: `pickSuccessor` takes the first usable non-Opus ladder rung and uses an Opus rung only when nothing else can start; then the start is refused and the Boss gets one notice with the `--force` command. The Owner can approve an Opus orchestrator by hand with `--force`.
 - 2026-10-01: Commit a worker tree only after its `WORKER REPORT`. A tree committed in the middle of a review-fix round holds red tests.
 - 2026-10-01: Lock lanes follow-ups after the third review (`lk4review`, no blocker): R16 a policy-unavailable wait has no diagnostic and can blame its own ticket (carry a `policyUnavailable` reason, print a rate-limited notice); R9 PID reuse (store the process start identity for holders and tickets); the queue-only dashboard state with legacy exclusive capacity.
+
+## State 2026-10-01 14:50 (orchestrator pane `wB:p9Q`)
+
+- **Main:** `837d704`, pushed and live (suite 2739 of 2739). Released today: CH1, WK2, BD1a to BD1c, LS2, HO1, HO2, DG1, LK2 (lock lanes), CF1 (phone Chat). Kit revision `1b34ccad1bca`.
+- **Running workers:** none. The `integrate` worktree is at `main`; merge `main` into it before each release.
+- **Waiting for data:** G4h (swap thresholds from 7 days of machine samples, due 2026-10-07).
+- **Waiting for the Owner:** real-phone checks (Reviews pages, Chat keyboard and no-autofocus, Mailbox bars, Set goal button), a Safari check of the legacy HTML page frame, the first real pack import.
+- **Follow-ups:** lock lanes R16, R9 and the legacy dashboard state; LS2 caches the `lsof` and `ps` reads and honors a project `worktreeRoot`; an unreadable file in `.orchestration/local` should be skipped with a warning at `worker start`; the kit text can drop `--record` from `worker collect`; the pane label match in the readiness check; BR1 browser hang; the fixture token literal in `test/review-cli.test.js`. Old unmerged worktrees (`mb1`, `pn1`, `pna` to `pnd`, `png`, `hb2handover`) stay until the Boss decides.
+- **Watch 2026-10-01:** stand down from 16:15, watch ends 16:30.
+- **Claude lane:** ahead of pace until about 18:00. Start no claude worker before then.
