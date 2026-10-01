@@ -479,7 +479,7 @@ function claudeQuotaFailureAlert(failure, now) {
   const startedAt = Date.parse(failure?.startedAt);
   if (!Number.isFinite(startedAt) || now - startedAt < CLAUDE_QUOTA_FAILURE_NOTICE_MS) return null;
   return {
-    key: `quota:probe-failed:claude:${failure.startedAt}`, severity: 'warn', once: true, scope: 'user', prompt: false,
+    key: `quota:probe-failed:claude:${failure.startedAt}`, severity: 'warn', once: true, scope: 'boss', prompt: false,
     title: 'Claude quota probe is failing',
     text: 'The Claude quota probe has failed for over 60 minutes. Herdr Boss keeps the last good reading and uses the window time for pacing.',
   };
@@ -1912,10 +1912,10 @@ export class Engine extends EventEmitter {
     }
   }
 
-  async promptHandoverBoss(herdr, text) {
+  async promptHandoverBoss(herdr, text, options = {}) {
     const boss = (herdr?.panes || []).find((pane) => pane.label === 'boss' && pane.agent);
     if (!boss) throw new Error('No Boss pane was found.');
-    await this.promptService(boss.id, text, { herdr });
+    await this.promptService(boss.id, text, { herdr, ...options });
   }
 
   async retryOperation(item, now, kind, description, action, scope) {
@@ -2777,10 +2777,25 @@ export class Engine extends EventEmitter {
 
     // Prompts to orchestrators, grouped per pane.
     if (this.push) {
+      const bossPane = (herdr?.panes || []).find((pane) => pane.label === 'boss' && pane.agent);
+      for (const a of alerts) {
+        if (a.scope !== 'boss' || !bossPane) continue;
+        const recordKey = `${a.key}@boss`;
+        if (!alertPromptDue(a, this.memory.pushes[recordKey], now, cooldown)) continue;
+        try {
+          await this.promptHandoverBoss(herdr, `[herdr-boss] Warning for the Boss. You do not need to reply to me.\n${a.text}`, {
+            now, messages: [{ text: a.text, kind: 'reminder' }],
+          });
+          this.memory.pushes[recordKey] = { at: now, severity: a.severity };
+          this.log('push', `Sent one notice to ${bossPane.id}`, { pane: bossPane.id, title: a.title });
+        } catch (error) {
+          this.log('error', `Prompt to Boss failed: ${(error.stderr || error.message).slice(0, 200)}`);
+        }
+      }
       const perPane = new Map();
       const broadcast = broadcastTargets(orchs, herdr?.panes);
       for (const a of alerts) {
-        if (a.prompt === false || a.scope === 'user') continue;
+        if (a.prompt === false || a.scope === 'user' || a.scope === 'boss') continue;
         // A skipped broadcast stays unsent, so it reaches the orchestrator when its workers become active.
         let targets = a.scope === 'all' ? broadcast : orchs.filter((o) => o.workspace === a.scope);
         // A kit notice goes to every project orchestrator, also one without active workers.

@@ -100,6 +100,34 @@ test('quota history records fake slow probe durations and safe outcomes, and sta
   assert.ok(lines.length <= quotaCollector.QUOTA_PROBE_HISTORY_LIMIT, `${lines.length} rows`);
 });
 
+test('quota collection skips malformed history lines and keeps valid entries', async (t) => {
+  const dir = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'herdr-quota-history-lines-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const historyFile = path.join(dir, 'quota-probe-history.jsonl');
+  fs.writeFileSync(historyFile, '{"provider":"before"}\nnot-json\n{"provider":"after"}\n');
+  const runner = async (_cmd, args) => JSON.stringify([{ provider: args.at(-1), usage: { primary: { usedPercent: 11 } } }]);
+
+  const quotas = await collectQuotas({ runner, historyFile });
+
+  assert.equal(quotas.length, 3);
+  const history = fs.readFileSync(historyFile, 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(history.length, 5);
+  assert.deepEqual(history.slice(0, 2).map((row) => row.provider), ['before', 'after']);
+});
+
+test('quota collection succeeds when the history file cannot be written', async (t) => {
+  const dir = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'herdr-quota-history-write-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const historyFile = path.join(dir, 'is-a-directory');
+  fs.mkdirSync(historyFile);
+  const runner = async (_cmd, args) => JSON.stringify([{ provider: args.at(-1), usage: { primary: { usedPercent: 11 } } }]);
+
+  const quotas = await collectQuotas({ runner, historyFile });
+
+  assert.deepEqual(quotas.map((row) => row.provider), ['codex', 'claude', 'opencodego']);
+  assert.ok(quotas.every((row) => !row.error));
+});
+
 test('a timed-out quota command kills its process group', { timeout: 10000 }, async (t) => {
   assert.equal(typeof quotaCollector.runQuotaCommand, 'function', 'the quota command runner is exported for a process-tree fixture');
   const dir = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'herdr-quota-tree-'));
@@ -111,6 +139,55 @@ test('a timed-out quota command kills its process group', { timeout: 10000 }, as
   const childPid = Number(fs.readFileSync(pidFile, 'utf8'));
   assert.ok(Number.isInteger(childPid) && childPid > 0);
   assert.throws(() => process.kill(childPid, 0), { code: 'ESRCH' }, 'the descendant must not survive the timed-out probe');
+});
+
+test('a timed-out quota command settles when a detached grandchild holds its pipes', { timeout: 15000 }, async (t) => {
+  const dir = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'herdr-quota-held-pipes-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const parentPidFile = path.join(dir, 'parent.pid');
+  const grandchildPidFile = path.join(dir, 'grandchild.pid');
+  const fixture = `
+    const fs = require('node:fs');
+    const { spawn } = require('node:child_process');
+    const grandchild = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+      detached: true, stdio: ['ignore', 'inherit', 'inherit'],
+    });
+    fs.writeFileSync(process.argv[1], String(process.pid));
+    fs.writeFileSync(process.argv[2], String(grandchild.pid));
+    setInterval(() => {}, 1000);
+  `;
+  let settled = false;
+  let failure = null;
+  const command = quotaCollector.runQuotaCommand(process.execPath, ['-e', fixture, parentPidFile, grandchildPidFile], { timeout: 3000 })
+    .then(() => { settled = true; }, (error) => { failure = error; settled = true; });
+  let parentPid = null;
+  let grandchildPid = null;
+  const stop = (pid) => { if (Number.isInteger(pid) && pid > 0) { try { process.kill(pid, 'SIGKILL'); } catch {} } };
+  const waitFor = async (condition, maxMs) => {
+    const deadline = Date.now() + maxMs;
+    while (Date.now() < deadline) {
+      if (condition()) return true;
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    return false;
+  };
+
+  try {
+    assert.equal(await waitFor(() => fs.existsSync(parentPidFile) && fs.existsSync(grandchildPidFile), 5000), true, 'the fixture must start');
+    parentPid = Number(fs.readFileSync(parentPidFile, 'utf8'));
+    grandchildPid = Number(fs.readFileSync(grandchildPidFile, 'utf8'));
+    const parentExited = await waitFor(() => {
+      try { process.kill(parentPid, 0); return false; } catch (error) { return error.code === 'ESRCH'; }
+    }, 7000);
+    assert.equal(parentExited, true, 'the timed-out parent must exit');
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(settled, true, 'the quota promise must settle when its parent exits, even while a grandchild holds stdio');
+    assert.match(failure?.message || '', /timed out/);
+  } finally {
+    stop(grandchildPid);
+    stop(parentPid);
+    await command;
+  }
 });
 
 test('a stale lane shows the last used value and age, then extrapolates expected use only', () => {

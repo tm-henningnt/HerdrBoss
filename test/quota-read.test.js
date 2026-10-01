@@ -49,7 +49,8 @@ for (const step of input.steps) {
   if (step.tick) {
     const snap = await engine.tick();
     out.steps.push({ reads: reads.length, quotas: snap.quotas, quotasAt: snap.quotasAt, cached: snap.quotasCached, errors: snap.errors, lanes: snap.lanes,
-      probeTimeouts: [...probeTimeouts], probeAlerts: (snap.alerts || []).filter((a) => a.key.startsWith('quota:probe-failed:claude:')) });
+      probeTimeouts: [...probeTimeouts], claudeQuotaProbeFailure: engine.memory.claudeQuotaProbeFailure || null,
+      probeAlerts: (snap.alerts || []).filter((a) => a.key.startsWith('quota:probe-failed:claude:')) });
   }
   if (step.resolve || step.reject) {
     const read = reads.at(-1);
@@ -129,18 +130,22 @@ test('provider probe timeouts back off and reset after a successful read', { tim
 test('a Claude probe failure warns the Boss once after an hour and clears on success', { timeout: 30000 }, (t) => {
   const out = runScenario(t, { steps: [
     { tick: true }, { resolve: CLAUDE_FAILED }, { tick: true },
-    { advance: 60 * MIN, tick: true }, { advance: 30000, tick: true },
+    { advance: 60 * MIN - 1, tick: true }, { advance: 1, tick: true }, { advance: 30000, tick: true },
     { resolve: BOTH }, { tick: true },
   ] });
-  const first = out.steps[2].probeAlerts;
-  const repeated = out.steps[3].probeAlerts;
+  const before = out.steps[2].probeAlerts;
+  const first = out.steps[3].probeAlerts;
+  const repeated = out.steps[4].probeAlerts;
+  assert.deepEqual(out.steps[1].claudeQuotaProbeFailure, { startedAt: new Date(T0).toISOString() });
+  assert.deepEqual(before, [], 'do not alert before 60 minutes');
   assert.equal(first.length, 1);
   assert.equal(first[0].severity, 'warn');
-  assert.equal(first[0].scope, 'user');
+  assert.equal(first[0].scope, 'boss');
   assert.equal(first[0].prompt, false);
   assert.equal(first[0].once, true);
   assert.equal(repeated[0].key, first[0].key);
-  assert.deepEqual(out.steps[4].probeAlerts, [], 'a good reading clears the failure notice');
+  assert.equal(out.steps[5].claudeQuotaProbeFailure, null, 'a good reading clears the failure state');
+  assert.deepEqual(out.steps[5].probeAlerts, [], 'a good reading clears the failure notice');
 });
 
 test('the engine loads young saved quotas at start and marks them cached until a new read succeeds', { timeout: 30000 }, (t) => {

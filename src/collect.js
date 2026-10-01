@@ -90,6 +90,7 @@ export const DEFAULT_QUOTA_TIMEOUTS_MS = Object.freeze(Object.fromEntries(QUOTA_
 export const QUOTA_PROBE_HISTORY_LIMIT = 100;
 const QUOTA_PROBE_HISTORY_FILE = path.join(DATA_DIR, 'quota-probe-history.jsonl');
 const DEFAULT_QUOTA_TIMEOUT_MS = QUOTA_TIMEOUT_BACKOFF_MS[0];
+const QUOTA_KILL_GRACE_MS = 250;
 
 // Run quota commands in their own process group. A timeout kills codexbar and every child it started.
 export function runQuotaCommand(cmd, args, { timeout = DEFAULT_QUOTA_TIMEOUT_MS, maxBuffer = 32 * 1024 * 1024, env = {} } = {}) {
@@ -100,7 +101,43 @@ export function runQuotaCommand(cmd, args, { timeout = DEFAULT_QUOTA_TIMEOUT_MS,
       env: { ...process.env, ...env, PATH },
     });
     let stdout = '', stderr = '', bytes = 0, timedOut = false, tooLarge = false, settled = false;
-    let timer;
+    let timer, killGraceTimer, killStarted = false;
+    const clearTimers = () => { clearTimeout(timer); clearTimeout(killGraceTimer); };
+    const destroyStdio = () => {
+      for (const stream of child.stdio || []) {
+        try { stream?.destroy(); } catch {}
+      }
+    };
+    const timeoutError = (signal) => {
+      const error = new Error(`codexbar timed out after ${Math.round(timeout / 1000)} s`);
+      error.killed = true;
+      error.signal = signal || 'SIGKILL';
+      error.stdout = stdout;
+      error.stderr = stderr;
+      return error;
+    };
+    const tooLargeError = () => {
+      const error = new Error('codexbar returned too much output');
+      error.code = 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
+      error.stdout = stdout;
+      error.stderr = stderr;
+      return error;
+    };
+    const finishKilled = (signal) => {
+      if (settled) return;
+      settled = true;
+      clearTimers();
+      const error = timedOut ? timeoutError(signal) : tooLargeError();
+      destroyStdio();
+      reject(error);
+    };
+    const killAndSettle = () => {
+      if (killStarted) return;
+      killStarted = true;
+      clearTimeout(timer);
+      killTree();
+      killGraceTimer = setTimeout(() => finishKilled('SIGKILL'), QUOTA_KILL_GRACE_MS);
+    };
     const killTree = () => {
       if (process.platform !== 'win32' && child.pid) {
         try { process.kill(-child.pid, 'SIGKILL'); return; } catch {}
@@ -111,7 +148,7 @@ export function runQuotaCommand(cmd, args, { timeout = DEFAULT_QUOTA_TIMEOUT_MS,
       bytes += chunk.length;
       if (bytes > maxBuffer) {
         tooLarge = true;
-        killTree();
+        killAndSettle();
         return;
       }
       if (target === 'stdout') stdout += chunk.toString();
@@ -121,27 +158,23 @@ export function runQuotaCommand(cmd, args, { timeout = DEFAULT_QUOTA_TIMEOUT_MS,
     child.stderr.on('data', (chunk) => collect('stderr', chunk));
     child.once('error', (error) => {
       if (settled) return;
+      if (killStarted) { finishKilled('SIGKILL'); return; }
       settled = true;
-      clearTimeout(timer);
+      clearTimers();
       reject(error);
+    });
+    child.once('exit', (_code, signal) => {
+      // A grandchild can keep the pipes open after the timed-out parent exits.
+      if (killStarted) finishKilled(signal);
     });
     child.once('close', (code, signal) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      clearTimers();
       if (timedOut) {
-        const error = new Error(`codexbar timed out after ${Math.round(timeout / 1000)} s`);
-        error.killed = true;
-        error.signal = signal || 'SIGKILL';
-        error.stdout = stdout;
-        error.stderr = stderr;
-        reject(error);
+        reject(timeoutError(signal));
       } else if (tooLarge) {
-        const error = new Error('codexbar returned too much output');
-        error.code = 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
-        error.stdout = stdout;
-        error.stderr = stderr;
-        reject(error);
+        reject(tooLargeError());
       } else if (code !== 0) {
         const error = new Error('Command failed');
         error.code = code;
@@ -153,7 +186,7 @@ export function runQuotaCommand(cmd, args, { timeout = DEFAULT_QUOTA_TIMEOUT_MS,
     });
     timer = setTimeout(() => {
       timedOut = true;
-      killTree();
+      killAndSettle();
     }, Math.max(1, timeout));
   });
 }
@@ -202,12 +235,18 @@ function quotaProbeOutcome(row, error = null) {
 
 function writeQuotaProbeHistory(row, file = QUOTA_PROBE_HISTORY_FILE) {
   let rows = [];
-  try { rows = fs.readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line)); }
-  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  try {
+    for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
+      if (!line) continue;
+      try { rows.push(JSON.parse(line)); } catch {}
+    }
+  } catch {}
   rows.push(row);
   rows = rows.slice(-QUOTA_PROBE_HISTORY_LIMIT);
-  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(file, `${rows.map((item) => JSON.stringify(item)).join('\n')}\n`, { mode: 0o600 });
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(file, `${rows.map((item) => JSON.stringify(item)).join('\n')}\n`, { mode: 0o600 });
+  } catch {}
 }
 
 export async function collectQuotas({ runner = runQuotaCommand, timeouts = DEFAULT_QUOTA_TIMEOUTS_MS, now = () => Date.now(), historyFile = QUOTA_PROBE_HISTORY_FILE } = {}) {
