@@ -41,6 +41,29 @@ function contractSuite(name, createStore, backend = 'json') {
     assert.equal(store.all().at(-1).id, kept.id);
   });
 
+  test(`${name}: an open review item survives 30 days and is pruned after it closes`, (t) => {
+    const store = createStore({ dir: freshDir(t) });
+    const now = Date.now();
+    const openedAt = now - RETENTION_MS - 10000;
+    const review = store.append({ thread: 'shop', from: 'orch', to: 'owner', kind: 'review' }, { now: openedAt });
+    store.append({ thread: 'shop', from: 'orch', to: 'owner', kind: 'report', text: 'Old report.' }, { now: openedAt + 1 });
+
+    assert.deepEqual(store.all().map((record) => record.id), [review.id]);
+    const closedAt = new Date(now).toISOString();
+    let closed;
+    store.mutate((records) => {
+      const item = records.find((record) => record.id === review.id);
+      assert.ok(item, 'the open review item stays available to the retention tick');
+      item.closedAt = closedAt;
+      item.closedBy = 'review';
+      closed = { ...item };
+      return { records, result: null };
+    }, { now });
+
+    assert.equal(closed.closedBy, 'review');
+    assert.deepEqual(store.all(), []);
+  });
+
   test(`${name}: version changes after an append and an update`, (t) => {
     const store = createStore({ dir: freshDir(t) });
     const initial = store.version();
