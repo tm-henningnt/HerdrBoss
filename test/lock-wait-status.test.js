@@ -6,6 +6,7 @@ import test from 'node:test';
 import { POLICY_DEFAULTS } from '../src/control.js';
 import { Engine } from '../src/engine.js';
 import { loadProjectConfig } from '../src/kit/config.js';
+import { readLockLaneDurationPredictions } from '../src/kit/lock-lanes.js';
 import { acquireProjectLock, readLockTakeoverNotices, releaseProjectLock } from '../src/kit/locks.js';
 import { temporaryRepo } from './helpers/kit-fixture.js';
 
@@ -112,7 +113,10 @@ test('slow notices go to the Boss once per holder across waiters and service rea
   engine.push = true;
   engine.log = () => {};
   engine.herdrRunner = async (...args) => { calls.push(args); return '{}'; };
-  const panes = { panes: [{ id: 'ws:boss', label: 'boss', agent: { name: 'boss' } }, { id: 'ws:holder' }] };
+  const panes = { panes: [
+    { id: 'ws:decoy', label: 'boss', agent: { name: 'other-agent' } },
+    { id: 'ws:boss', label: 'orch', agent: { name: 'boss' } }, { id: 'ws:holder' },
+  ] };
   await engine.deliverLockTakeoverNotices({ panes: [{ id: 'ws:holder' }] });
   assert.equal(calls.length, 0, 'a missing Boss retains the notice');
   engine.herdrRunner = async () => { throw new Error('invented delivery failure'); };
@@ -134,6 +138,96 @@ test('slow notices go to the Boss once per holder across waiters and service rea
   f.wait();
   await engine.deliverLockTakeoverNotices(panes);
   assert.equal(calls.length, 2, 'a new acquisition in the same pane gets a new notice');
+});
+
+test('a successful slow-holder prompt stays delivered while the mutation guard is busy', async (t) => {
+  const f = fixture(t);
+  f.history();
+  f.holder();
+  f.advance(33 * MINUTE);
+  f.wait();
+  const guard = path.join(path.dirname(f.file), '.mutation');
+  const calls = [];
+  const engine = Object.create(Engine.prototype);
+  engine.lockDataDir = f.dataDir;
+  engine.push = true;
+  engine.log = () => {};
+  engine.herdrRunner = async (...args) => {
+    calls.push(args);
+    fs.mkdirSync(guard);
+    fs.writeFileSync(path.join(guard, 'owner.json'), JSON.stringify({ pid: process.pid }));
+    return '{}';
+  };
+  const panes = { panes: [{ id: 'ws:boss', label: 'boss', agent: { name: 'boss' } }] };
+  let clock = Date.now();
+  // Reach the old guard timeout without sleeping or making the live guard stale.
+  t.mock.method(Date, 'now', () => { clock += 6000; return clock; });
+  await engine.deliverLockTakeoverNotices(panes);
+  t.mock.restoreAll();
+  assert.equal(fs.existsSync(guard), true, 'notice delivery does not remove another operation guard');
+  assert.deepEqual(readLockTakeoverNotices({ dataDir: f.dataDir }), [], 'the successful prompt is marked delivered');
+  await engine.deliverLockTakeoverNotices(panes);
+  assert.equal(calls.length, 1, 'contention must not resend the prompt');
+  fs.rmSync(guard, { recursive: true });
+  f.wait();
+  await engine.deliverLockTakeoverNotices(panes);
+  assert.equal(calls.length, 1, 'a later waiter also keeps the delivered marker');
+});
+
+for (const state of ['alive', 'zombie', 'unknown']) {
+  test(`a slow legacy holder defaults to long and reports PID state ${state}`, (t) => {
+    const f = fixture(t);
+    f.history();
+    f.holder();
+    const record = JSON.parse(fs.readFileSync(f.file));
+    delete record.lane;
+    delete record.pidStart;
+    fs.writeFileSync(f.file, JSON.stringify(record));
+    f.advance(45 * MINUTE);
+    const probes = [];
+    f.wait({ processInfo: (pid, options) => {
+      probes.push({ pid, options });
+      return state === 'unknown' ? null : { alive: state === 'alive', start: null, state };
+    } });
+    const line = f.lines.at(-1).line;
+    assert.match(line, /holder lane long/);
+    assert.match(line, new RegExp(`holder is slow; PID ${record.pid}, state ${state}`));
+    assert.doesNotMatch(line, /undefined/);
+    assert.ok(probes.some((probe) => probe.pid === record.pid && probe.options.wantState === true));
+    assert.equal(fs.existsSync(f.file), true, 'a diagnostic state does not change legacy reclamation rules');
+  });
+}
+
+test('wait predictions read at most the last 512 KB of each ledger and skip a partial first line', (t) => {
+  const f = fixture(t);
+  const limit = 512 * 1024;
+  const files = ['lock-ledger.1.jsonl', 'lock-ledger.jsonl'];
+  for (const [index, file] of files.entries()) {
+    const release = (lane, holdMs) => ({ event: 'release', at: new Date(START - index * MINUTE).toISOString(),
+      name: 'full-suite', lane, holdMs });
+    const partial = { ...release('long', 999 * MINUTE), padding: 'x'.repeat(limit + 1024) };
+    fs.writeFileSync(path.join(f.dataDir, file), [partial,
+      release('long', (13 + 6 * index) * MINUTE), release('short', (1 + 2 * index) * MINUTE),
+    ].map((line) => JSON.stringify(line)).join('\n') + '\n');
+  }
+  const readFileSync = fs.readFileSync;
+  t.mock.method(fs, 'readFileSync', (...args) => {
+    assert.ok(!files.includes(path.basename(String(args[0]))), 'wait predictions must not read the entire ledger');
+    return readFileSync(...args);
+  });
+  const readSync = fs.readSync;
+  const reads = [];
+  t.mock.method(fs, 'readSync', (...args) => {
+    const count = readSync(...args);
+    reads.push({ count, length: args[3], position: args[4] });
+    return count;
+  });
+  assert.deepEqual(readLockLaneDurationPredictions({ dataDir: f.dataDir, name: 'full-suite', now: START }), {
+    long: { ms: 16 * MINUTE, samples: 2 }, short: { ms: 2 * MINUTE, samples: 2 },
+  });
+  assert.equal(reads.length, 2);
+  assert.ok(reads.every((read) => read.count <= limit && read.length <= limit && read.position > 0));
+  assert.equal(reads.reduce((sum, read) => sum + read.count, 0), 2 * limit);
 });
 
 test('a guard pause still prints holder details and the queue on one wait line', (t) => {

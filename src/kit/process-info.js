@@ -14,11 +14,12 @@ export function processStartIdentity(pid) {
   }
 }
 
-// Return { alive, start } for a process, or null when the platform cannot tell. ESRCH means gone. EPERM means alive.
+// Return { alive, start } and an optional diagnostic state. ESRCH means gone. EPERM means alive.
 export function processInfo(pid, { wantStart = true, wantState = false } = {}) {
+  const info = (alive, start, state = 'unknown') => ({ alive, start, ...(wantState ? { state } : {}) });
   try { process.kill(pid, 0); }
   catch (error) {
-    if (error.code === 'ESRCH') return { alive: false, start: null };
+    if (error.code === 'ESRCH') return info(false, null);
     if (error.code !== 'EPERM') return null;
   }
   if (!wantStart && !wantState) return { alive: true, start: null };
@@ -31,9 +32,9 @@ export function processInfo(pid, { wantStart = true, wantState = false } = {}) {
     });
     if (result.status === 0) {
       const [state, ...start] = result.stdout.trim().split(/\s+/);
-      if (state.startsWith('Z')) return { alive: false, start: null };
-      return { alive: true, start: wantStart ? start.join(' ') || null : null };
+      if (state.startsWith('Z')) return info(false, null, 'zombie');
+      if (/^[A-Z]/.test(state)) return info(true, wantStart ? start.join(' ') || null : null, 'alive');
     }
   } catch { /* An unavailable process table does not prove that the PID is dead. */ }
-  return { alive: true, start: null };
+  return info(true, null);
 }

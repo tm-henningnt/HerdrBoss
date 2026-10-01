@@ -14,7 +14,7 @@ test('processInfo treats a zombie as dead although the PID probe succeeds', (t) 
   syncBuiltinESMExports();
   t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
   assert.deepEqual(processInfo(process.pid), { alive: false, start: null });
-  assert.deepEqual(processInfo(process.pid, { wantStart: false, wantState: true }), { alive: false, start: null });
+  assert.deepEqual(processInfo(process.pid, { wantStart: false, wantState: true }), { alive: false, start: null, state: 'zombie' });
 });
 
 test('processInfo reads a live start and keeps unreadable state conservative', (t) => {
@@ -25,6 +25,10 @@ test('processInfo reads a live start and keeps unreadable state conservative', (
   assert.deepEqual(processInfo(process.pid), { alive: true, start: 'Mon Sep 28 10:00:00 2026' });
   assert.deepEqual(processInfo(process.pid, { wantStart: false }), { alive: true, start: null });
   assert.equal(probe.mock.callCount(), 1, 'a PID-only lease probe still needs no process-table call');
+  assert.deepEqual(processInfo(process.pid, { wantStart: false, wantState: true }), { alive: true, start: null, state: 'alive' });
   response = { status: 1, stdout: '' };
   assert.deepEqual(processInfo(process.pid), { alive: true, start: null });
+  assert.deepEqual(processInfo(process.pid, { wantStart: false, wantState: true }), { alive: true, start: null, state: 'unknown' });
+  response = { status: 0, stdout: '' };
+  assert.deepEqual(processInfo(process.pid, { wantStart: false, wantState: true }), { alive: true, start: null, state: 'unknown' });
 });

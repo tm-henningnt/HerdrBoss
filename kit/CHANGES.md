@@ -108,4 +108,8 @@ Summary: Use default worker collection recording in kit and command documentatio
 
 ## 38b0c2cd2398
 Impact: useful
-Summary: Refresh lock wait lines with holder age and predicted end. Send one slow-holder notice to the Boss. Detect exited zombie holders.
+Summary: Refresh lock wait lines with holder age and predicted end. Send one slow-holder notice to the Boss. Detect zombie holders with a recorded process start. The cause of the reported 45-minute wait remains unverified.
+
+## 91ddc9504e48
+Impact: useful
+Summary: Show the PID state of a slow lock holder. Find the Boss by agent name. Keep the delivered notice marker during mutation contention. Limit wait prediction reads to 512 KB per ledger file. The historical wait cause remains a hypothesis.

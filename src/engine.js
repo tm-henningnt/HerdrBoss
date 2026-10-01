@@ -2515,7 +2515,7 @@ export class Engine extends EventEmitter {
     const panes = new Set(herdr.panes.map((pane) => pane.id));
     for (const notice of notices) {
       const targetPane = notice.type === 'slow-holder'
-        ? herdr.panes.find((pane) => pane.label === 'boss' && pane.agent)?.id : notice.ownerPane;
+        ? herdr.panes.find((pane) => pane.agent?.name === 'boss')?.id : notice.ownerPane;
       if (!targetPane || !panes.has(targetPane)) continue;
       const text = [
         '[herdr-boss] Resource notice. Act on it if it concerns your work. You do not need to reply to me.',

@@ -519,7 +519,7 @@ function slowHolderId(record) {
   return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20)}`;
 }
 
-function holderWaitDetails(record, prediction, observedAt) {
+function holderWaitDetails(record, prediction, observedAt, processReader) {
   const ageMs = Math.max(0, observedAt - Date.parse(record.acquiredAt));
   const ageSeconds = Math.floor(ageMs / 1000);
   const age = ageSeconds < 60 ? `${ageSeconds}s` : formatDuration(ageSeconds);
@@ -527,21 +527,28 @@ function holderWaitDetails(record, prediction, observedAt) {
   const endMs = duration === null ? null : Date.parse(record.acquiredAt) + duration;
   const end = endMs === null || !Number.isFinite(endMs) || Math.abs(endMs) > 8.64e15 ? 'unknown' : new Date(endMs).toISOString();
   const slow = duration !== null && ageMs > 2 * duration;
+  let state = 'unknown';
+  if (slow && processReader) {
+    try {
+      const info = processReader(record.pid, { wantStart: false, wantState: true });
+      if (['alive', 'zombie', 'unknown'].includes(info?.state)) state = info.state;
+    } catch { /* An unreadable process table leaves the diagnostic state unknown. */ }
+  }
   return {
-    text: `${oneLine(record.project)} ${oneLine(record.ownerPane)} (${record.kind}); holder lane ${record.lane}; started ${record.acquiredAt}; age ${age}; predicted end ${end}${slow ? '; holder is slow' : ''}`,
+    text: `${oneLine(record.project)} ${oneLine(record.ownerPane)} (${record.kind}); holder lane ${record.lane ?? 'long'}; started ${record.acquiredAt}; age ${age}; predicted end ${end}${slow ? `; holder is slow; PID ${record.pid}, state ${state}` : ''}`,
     slow,
   };
 }
 
-function writeSlowHolderNotice(record, prediction, dataDir, now) {
+function writeSlowHolderNotice(record, detail, dataDir, now) {
   const id = slowHolderId(record);
   const holder = {
-    name: record.name, slot: record.slot, lane: record.lane, project: record.project ?? null,
+    name: record.name, slot: record.slot, lane: record.lane ?? 'long', project: record.project ?? null,
     ownerPane: record.ownerPane, pid: record.pid, pidStart: record.pidStart ?? null, acquiredAt: record.acquiredAt, kind: record.kind,
   };
   const notice = {
     id, type: 'slow-holder', severity: 'warn', ownerPane: record.ownerPane, holder,
-    text: `Lock ${record.name}: holder is slow; ${holderWaitDetails(record, prediction, timeValue(now)).text}.`,
+    text: `Lock ${record.name}: holder is slow; ${detail.text}.`,
     createdAt: new Date(timeValue(now)).toISOString(),
   };
   const directory = path.join(dataDir, 'locks', 'machine');
@@ -594,12 +601,11 @@ export function removeLockTakeoverNotice(id, { dataDir = DATA_DIR, now = Date.no
     const notice = JSON.parse(fs.readFileSync(file, 'utf8'));
     if (notice.type !== 'slow-holder') { fs.unlinkSync(file); return; }
     const directory = path.join(dataDir, 'locks', 'machine');
-    // Keep a delivered marker while this acquisition exists. Another waiter cannot queue it again.
-    withMutationLock(directory, () => {
-      const holder = readRecord(recordFile(directory, notice.holder.name, notice.holder.slot), '', 'machine');
-      if (holder && slowHolderId(holder) === id) replaceRecord(file, { ...notice, deliveredAt: new Date(timeValue(now)).toISOString() });
-      else fs.unlinkSync(file);
-    });
+    // Mark the successful prompt before cleanup. A busy mutation guard must not make it pending again.
+    replaceRecord(file, { ...notice, deliveredAt: new Date(timeValue(now)).toISOString() });
+    // Keep the marker while this acquisition exists. Another waiter cannot queue it again.
+    const holder = readRecord(recordFile(directory, notice.holder.name, notice.holder.slot), '', 'machine');
+    if (!holder || slowHolderId(holder) !== id) fs.unlinkSync(file);
   }
   catch (error) { if (error.code !== 'ENOENT') throw error; }
 }
@@ -1136,10 +1142,10 @@ export function acquireProjectLock(name, {
           catch { /* Unreadable history gives an unknown end, never a guessed time. */ }
           const holders = outcome.holders ?? (active ? [active] : []);
           const details = holders.map((record) => {
-            const prediction = predictions[record.lane];
-            const detail = holderWaitDetails(record, prediction, observedAt);
+            const prediction = predictions[record.lane ?? 'long'];
+            const detail = holderWaitDetails(record, prediction, observedAt, processInfo);
             if (detail.slow) {
-              try { writeSlowHolderNotice(record, prediction, dataDir, now); }
+              try { writeSlowHolderNotice(record, detail, dataDir, now); }
               catch { detail.text += '; Boss notice could not be queued'; }
             }
             return detail.text;
