@@ -16,7 +16,14 @@ const { mailActionBarHtml } = await import('../public/mail-bar.js');
 const { patchHtml } = await import('../public/keyed.js');
 const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 const html = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
-const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+const sourceCss = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
+const css = sourceCss.replace(/\/\*[\s\S]*?\*\//g, '');
+const userGuide = fs.readFileSync(new URL('../docs/user-guide.md', import.meta.url), 'utf8');
+// Exact narrow item-viewer block from main before RV1.
+const mainNarrowItemRules = `@media (max-width: 899px) {
+  .review-page.item-open .review-head, .review-page.item-open .review-sections { display: none; }
+  .review-page.item-open .review-main { padding-top: 10px; }
+}`;
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const helpers = (extra = {}) => ({
@@ -358,6 +365,15 @@ test('the item route shows the item page with a way back to its row', () => {
   assert.match(page, /class="review-page item-open"/);
   assert.match(page, /data-key="rv-item:flow-video"/, 'the item viewer fills the main pane');
   assert.match(page, /class="rv-answer"[^>]*data-key="rv-answer:flow-video"/, 'the answer bar replaces the submit bar');
+  const root = setup(page);
+  const body = byKey(root, 'review-body');
+  const viewer = byKey(root, 'rv-item:flow-video');
+  assert.ok(body?.contains(viewer), 'the item stays in the review body');
+  const answerStart = page.indexOf('<div class="rv-answer"');
+  const bodyStart = page.indexOf('<div class="review-body"');
+  const tags = page.slice(bodyStart, answerStart).match(/<\/?div\b[^>]*>/g) || [];
+  const bodyDepth = tags.reduce((depth, tag) => depth + (tag.startsWith('</') ? -1 : 1), 0);
+  assert.equal(bodyDepth, 0, 'the answer bar stays a flex sibling of the review body');
   assert.doesNotMatch(page, /Submit review/);
   assert.doesNotMatch(page, /The item viewer is not ready yet/);
   assert.match(page, /<video /);
@@ -446,6 +462,22 @@ test('the review page has 44 px targets, 16 px fields, a split view on the deskt
   assert.match(css, /\.review-note-field \{[^}]*font-size: 16px/);
   assert.match(css, /@media \(min-width: 900px\) \{[^@]*\.review-body \{[^}]*grid-template-columns: 300px minmax\(0, 1fr\)/);
   assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{[^}]*\.review-/);
+});
+
+test('item answers use a wide sidebar above 900 px and preserve main narrow rules', () => {
+  const wide = /@media \(min-width: 901px\) \{([\s\S]*?)\n\}/.exec(css)?.[1] || '';
+  const narrow = /@media \(max-width: 899px\) \{[\s\S]*?\n\}/.exec(sourceCss)?.[0] || '';
+  assert.equal(narrow, mainNarrowItemRules, 'the narrow item rules stay byte-for-byte equal to main');
+  assert.match(wide, /\.review-page\.item-open \{[^}]*display: grid;[^}]*grid-template-columns: minmax\(0, 1fr\) 144px/);
+  assert.match(wide, /\.review-page\.item-open \.review-body \{[^}]*grid-column: 1/);
+  assert.match(wide, /\.review-page\.item-open \.rv-answer \{[^}]*grid-column: 2;[^}]*position: sticky/);
+  assert.doesNotMatch(wide, /\.review-page\.item-open \.rv-answer \{[^}]*position: absolute/);
+  assert.doesNotMatch(css, /@media \(min-width: 900px\) and \(max-width: 900px\)/);
+  assert.doesNotMatch(css, /\.rv-item-layout/);
+  assert.match(css, /\.rv-answer \{[^}]*env\(safe-area-inset-bottom\)/, 'the phone bar keeps its bottom safe area');
+  const thresholdText = 'Above 900 px, the answer controls sit in a sticky column at the right of the evidence and stay in view as the item scrolls. At 900 px and below, the answer bar stays at the bottom edge.';
+  assert.ok(userGuide.includes(thresholdText), 'the user guide documents the 900 px boundary');
+  assert.ok(app.includes(thresholdText), 'the review help documents the same 900 px boundary');
 });
 
 // ---------- Review fixes: confirm, error text, fixed proposed verdict ----------
