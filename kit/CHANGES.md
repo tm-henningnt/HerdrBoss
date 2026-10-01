@@ -93,3 +93,7 @@ Summary: Add the picture line to the orchestrator skill and the project kit: sen
 ## 2ce7a7451a5e
 Impact: useful
 Summary: Keep the Boss reporting rule and send reports with herdr-boss tell.
+
+## 0d84a561a0cf
+Impact: useful
+Summary: Codex workers attach the Chrome DevTools MCP to the project browser. The worker brief gets rules for browser tasks: own tab only, close the tab, no cookies, storage, or tokens.
