@@ -97,3 +97,7 @@ Summary: Keep the Boss reporting rule and send reports with herdr-boss tell.
 ## 0d84a561a0cf
 Impact: useful
 Summary: Codex workers attach the Chrome DevTools MCP to the project browser. The worker brief gets rules for browser tasks: own tab only, close the tab, no cookies, storage, or tokens.
+
+## 55c0aa699188
+Impact: required
+Summary: Add CI minute rules and GitHub workflow templates; create and copy missing project workflows.

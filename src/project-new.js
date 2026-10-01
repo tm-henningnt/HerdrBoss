@@ -18,11 +18,12 @@ import { describeWorkspace, workspaceStep } from './project-new-workspace.js';
 import { describeHarness, harnessStep } from './project-new-check.js';
 import { describeLabels, labelsStep } from './project-new-labels.js';
 import { ORG_NAME, RemoteError, checkDecision, describeRemote, remoteStep, validateRemoteUrl } from './project-new-remote.js';
+import { CI_WORKFLOW_TEMPLATES, copyWorkflowTemplates } from './ci-workflows.js';
 
 export const PROJECT_NEW_STEPS = ['validate', 'folder', 'files', 'kit', 'commit', 'remote', 'labels', 'policy', 'register', 'status', 'workspace', 'harness', 'check'];
 export const NOT_BUILT = new Set(['check']);
 // `project check --fix STEP` runs one of these. validate refuses a folder that exists. check is not a change.
-export const FIXABLE_STEPS = PROJECT_NEW_STEPS.filter((name) => !['validate', 'check'].includes(name));
+export const FIXABLE_STEPS = [...PROJECT_NEW_STEPS.filter((name) => !['validate', 'check'].includes(name)), 'ci'];
 export const NEW_PROJECT_SHARE = 10;
 const TEMPLATES = path.join(KIT_ROOT, 'kit', 'templates');
 const GITIGNORE = 'node_modules/\n.DS_Store\n.orchestration/\n.worker/\n';
@@ -197,10 +198,16 @@ function template(file, values) {
   return fs.readFileSync(path.join(TEMPLATES, file), 'utf8').replace(/\{\{(\w+)\}\}/g, (_, key) => values[key] ?? '');
 }
 
+function hasGithubRemote(remote) {
+  if (remote === 'gh') return true;
+  const match = String(remote ?? '').match(/^(?:[a-z][a-z0-9+.-]*:\/\/)?(?:[^/@]+@)?([^/:]+)(?::|\/)/iu);
+  return match?.[1]?.toLowerCase() === 'github.com';
+}
+
 // The files of the `files` step, each as [relative path, content].
-function projectFiles(inputs) {
+function projectFiles(inputs, context = {}) {
   const values = { name: inputs.name, slug: inputs.slug, goal: inputs.goal || DEFAULT_GOAL };
-  return [
+  const files = [
     ['AGENTS.md', () => agentsWithStub(template('agents-project.md', values))],
     ['docs/orchestration/memory.md', () => `# ${inputs.name} project memory\n\n${template('project-memory.md', values)}`],
     ['.herdr-boss.json', () => `${JSON.stringify({ slug: inputs.slug }, null, 2)}\n`],
@@ -208,6 +215,10 @@ function projectFiles(inputs) {
     ['README.md', () => template('readme.md', values)],
     ['docs/ideas/.gitkeep', () => ''],
   ];
+  if (hasGithubRemote(context.remote)) {
+    files.push(...CI_WORKFLOW_TEMPLATES.map((name) => [`.github/workflows/${name}`, () => template(`workflows/${name}`, values)]));
+  }
+  return files;
 }
 
 const DESCRIBE = {
@@ -222,7 +233,7 @@ const DESCRIBE = {
   labels: describeLabels,
   workspace: describeWorkspace,
   harness: describeHarness,
-  files: (i) => `write ${projectFiles(i).map(([f]) => f).join(', ')} in ${i.path}; keep each file that exists`,
+  files: (i, c) => `write ${projectFiles(i, c).map(([f]) => f).join(', ')} in ${i.path}; keep each file that exists`,
 };
 
 const RUN = {
@@ -238,10 +249,10 @@ const RUN = {
     }
     return `created ${inputs.path} with a Git repository on main`;
   },
-  files(inputs) {
+  files(inputs, context) {
     const written = [];
     const kept = [];
-    for (const [relative, content] of projectFiles(inputs)) {
+    for (const [relative, content] of projectFiles(inputs, context)) {
       const file = path.join(inputs.path, relative);
       if (fs.existsSync(file)) { kept.push(relative); continue; }
       fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -273,6 +284,13 @@ const RUN = {
     return `committed ${git(['rev-parse', '--short', 'HEAD'])}`;
   },
   remote: remoteStep,
+  ci(inputs) {
+    const result = copyWorkflowTemplates(inputs.path);
+    return {
+      detail: `copied ${result.copied.length} workflow template(s), skipped ${result.skipped.length}`,
+      lines: result.lines,
+    };
+  },
   labels: labelsStep,
   policy(inputs, context) { return applyProjectPolicy(inputs.slug, context.dataDir); },
   register(inputs, context) {
