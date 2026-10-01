@@ -673,3 +673,44 @@ test('live URLs refuse data:, javascript:, and a user name or password', () => {
   }
   assert.deepEqual(rules(oneItem({ type: 'link', url: 'http://[::1]:3000/', label: 'X' }).result()), []);
 });
+
+// ---------- PS1: recommended choice and session tag ----------
+
+const choiceItem = (choices) => oneItem({ type: 'markdown', text: 'x', ask: ['choice', 'note'], choices }).result();
+
+test('one choice may carry recommended: true and the normalized choice keeps it', () => {
+  const result = choiceItem([{ id: 'a', label: 'Keep before' }, { id: 'b', label: 'Use after', recommended: true }]);
+  assert.equal(result.ok, true, JSON.stringify(result.errors));
+  assert.deepEqual(item(result).choices, [{ id: 'a', label: 'Keep before' }, { id: 'b', label: 'Use after', recommended: true }]);
+});
+
+test('two recommended choices, or a recommended value that is not a boolean, are errors', () => {
+  const two = choiceItem([{ id: 'a', label: 'A', recommended: true }, { id: 'b', label: 'B', recommended: true }]);
+  assert.ok(rules(two).includes('choices'), JSON.stringify(two.errors));
+  assert.match(two.errors.find((error) => error.rule === 'choices').message, /at most one/);
+  const text = choiceItem([{ id: 'a', label: 'A', recommended: 'yes' }, { id: 'b', label: 'B' }]);
+  assert.ok(rules(text).includes('choices'));
+  const falsy = choiceItem([{ id: 'a', label: 'A', recommended: false }, { id: 'b', label: 'B', recommended: true }]);
+  assert.equal(falsy.ok, true);
+  assert.deepEqual(item(falsy).choices, [{ id: 'a', label: 'A' }, { id: 'b', label: 'B', recommended: true }]);
+});
+
+test('recommended changes the item hash, so a moved recommendation marks the item changed', () => {
+  const before = item(choiceItem([{ id: 'a', label: 'A', recommended: true }, { id: 'b', label: 'B' }])).hash;
+  const after = item(choiceItem([{ id: 'a', label: 'A' }, { id: 'b', label: 'B', recommended: true }])).hash;
+  assert.notEqual(before, after);
+});
+
+test('session and round are checked and kept in the manifest', () => {
+  const ok = makePack({}, { session: 'ps-abc123', round: 2, sections: [{ id: 'cart', title: 'Cart', items: [{ id: 'one', title: 'One', type: 'markdown', text: 'x' }] }] }).result();
+  assert.equal(ok.ok, true, JSON.stringify(ok.errors));
+  assert.equal(ok.manifest.session, 'ps-abc123');
+  assert.equal(ok.manifest.round, 2);
+  const plain = oneItem({ type: 'markdown', text: 'x' }).result();
+  assert.ok(!('session' in plain.manifest) && !('round' in plain.manifest));
+  const sections = [{ id: 'cart', title: 'Cart', items: [{ id: 'one', title: 'One', type: 'markdown', text: 'x' }] }];
+  for (const bad of [{ session: 'Bad Session' }, { session: 5 }, { session: 'ps-abc123', round: 0 }, { session: 'ps-abc123', round: 1.5 }, { session: 'ps-abc123', round: '2' }, { round: 2 }]) {
+    const result = makePack({}, { ...bad, sections }).result();
+    assert.ok(rules(result).includes('session'), JSON.stringify(bad));
+  }
+});

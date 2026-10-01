@@ -147,6 +147,7 @@ function manifestItem(pack, id) {
 // The state chip of one item: a word and an icon, never color alone.
 export function itemChip(item, pack) {
   if (item.stale || item.state === 'changed') return { tone: 'changed', label: 'Changed', icon: 'changed' };
+  if (item.skipped && item.state === 'open') return { tone: 'open', label: 'Ask later', icon: '' };
   const answer = item.answer || {};
   switch (item.state) {
     case 'denied': return { tone: 'crit', label: 'Denied', icon: 'close' };
@@ -543,7 +544,8 @@ export function packPageHtml(pack, ui, h) {
       + `<h1 class="review-title">${esc(pack.title)}<small>${esc(facts.join(' · '))} · ${esc(h.projectLabel(pack.slug))}</small></h1>`;
   }
 
-  const head = `<div class="review-head"><p class="review-head-line"><span><b class="num">${answeredOf(counts)}</b> of ${esc(plural(counts.items, 'item'))} answered · <b class="num">${viewed}</b> viewed</span>${open ? '' : doneChip(pack, esc)}</p>${summaryHeaderHtml(pack, esc)}${progressBarHtml(counts, { esc, legend: true })}</div>`;
+  const tag = pack.manifest?.session ? `<p class="review-head-session">Session ${esc(pack.manifest.session)}${pack.manifest.round ? ` · round ${esc(pack.manifest.round)}` : ''}</p>` : '';
+  const head = `<div class="review-head"><p class="review-head-line"><span><b class="num">${answeredOf(counts)}</b> of ${esc(plural(counts.items, 'item'))} answered · <b class="num">${viewed}</b> viewed</span>${open ? '' : doneChip(pack, esc)}</p>${tag}${summaryHeaderHtml(pack, esc)}${progressBarHtml(counts, { esc, legend: true })}</div>`;
   const side = ui.sidebar || {};
   const viewport = side.viewport || 1280;
   const collapsed = side.collapsed === true;

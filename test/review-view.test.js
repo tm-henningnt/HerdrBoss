@@ -697,3 +697,20 @@ test('a pick sets an anchor only from the last ready message and cuts or drops t
     assert.deepEqual(pickPinFields({ anchor: null, text }, anchors), {}, text);
   }
 });
+
+// ---------- PS1: session header and ask later ----------
+
+test('the pack header shows the planner session and round, and no line for a pack without a session', () => {
+  const tagged = fullPack({ manifest: { ...fullPack().manifest, session: 'ps-abc12345', round: 2 } });
+  assert.match(packPageHtml(tagged, {}, helpers()), /<p class="review-head-session">Session ps-abc12345 · round 2<\/p>/);
+  assert.ok(!packPageHtml(fullPack(), {}, helpers()).includes('review-head-session'));
+  const noRound = fullPack({ manifest: { ...fullPack().manifest, session: 'ps-abc12345' } });
+  assert.match(packPageHtml(noRound, {}, helpers()), /review-head-session">Session ps-abc12345<\/p>/);
+  const evil = fullPack({ manifest: { ...fullPack().manifest, session: EVIL, round: 1 } });
+  assert.ok(!packPageHtml(evil, {}, helpers()).includes('<img src=x'));
+});
+
+test('a skipped item shows the Ask later chip in place of Open', () => {
+  assert.deepEqual(itemChip(item('later', 'cart', 'open', { skipped: true }), fullPack()), { tone: 'open', label: 'Ask later', icon: '' });
+  assert.equal(itemChip(item('later', 'cart', 'open'), fullPack()).label, 'Open');
+});

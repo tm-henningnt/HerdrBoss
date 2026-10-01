@@ -345,7 +345,8 @@ test('choices and a rating show in the bar with their labels and state', () => {
   assert.equal((html.match(/data-rv-rating="/g) || []).length, 5);
   assert.match(html, /data-rv-rating="3"[^>]*aria-pressed="true"/);
   assert.match(html, /data-rv-rating="4"[^>]*aria-pressed="false"/);
-  assert.doesNotMatch(html, /data-rv-decision/);
+  // Ask later is the one built-in decision. Accept and Deny need an entry in ask.
+  assert.doesNotMatch(html, /data-rv-decision="(accept|deny)"/);
 });
 
 test('the note field grows, has 16 px text in CSS, and shows the draft over the stored note', () => {
@@ -459,4 +460,44 @@ test('markdown goes through the page renderer before the string is built, and th
     assert.doesNotMatch(plain, /<[a-z][^>]*\son[a-z]+\s*=/i, `${spec.id}: no event attribute on a tag`);
     assert.doesNotMatch(plain, /href="javascript:/i);
   }
+});
+
+// ---------- PS1: recommended choice and ask later ----------
+
+test('the choice that the pack marks as recommended shows one Recommended badge, and no other choice does', () => {
+  const spec = { id: 'one', title: 'One', type: 'markdown', text: 'x', ask: ['choice', 'note'], choices: [{ id: 'a', label: 'Keep before' }, { id: 'b', label: 'Use after', recommended: true }, { id: 'c', label: 'Neither' }] };
+  const html = bar(packWith(spec));
+  assert.equal((html.match(/rv-recommended/g) || []).length, 1);
+  const choice = (id) => new RegExp(`<button[^>]*data-rv-choice="${id}"[^>]*>[\\s\\S]*?</button>`).exec(html)[0];
+  assert.match(choice('b'), /rv-recommended[^>]*>Recommended</);
+  assert.ok(!/Recommended/.test(choice('a')) && !/Recommended/.test(choice('c')));
+  const plain = bar(packWith({ ...spec, choices: spec.choices.map(({ recommended, ...rest }) => rest) }));
+  assert.ok(!/Recommended/.test(plain));
+});
+
+test('the badge text of a recommended choice is escaped like the label', () => {
+  const spec = { id: 'one', title: 'One', type: 'markdown', text: 'x', ask: ['choice'], choices: [{ id: 'a', label: EVIL, recommended: true }, { id: 'b', label: 'B' }] };
+  const html = bar(packWith(spec));
+  assert.ok(!html.includes('<img'), 'no raw tag from the label');
+});
+
+test('the answer bar always offers Ask later, and the button shows its pressed state', () => {
+  for (const ask of [['accept', 'deny', 'note'], ['choice'], ['note']]) {
+    const spec = { id: 'one', title: 'One', type: 'markdown', text: 'x', ask, ...(ask.includes('choice') ? { choices: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }] } : {}) };
+    const html = bar(packWith(spec));
+    assert.match(html, /data-rv-decision="skip"[^>]*aria-pressed="false"/, ask.join());
+    assert.match(html, /Ask later/);
+  }
+  const spec = { id: 'one', title: 'One', type: 'markdown', text: 'x', ask: ['accept'] };
+  assert.match(bar(packWith(spec, { decision: 'skip', note: '', pins: [], rev: 1 })), /data-rv-decision="skip"[^>]*aria-pressed="true"/);
+  const closed = packWith(spec);
+  closed.state = 'submitted';
+  assert.match(bar(closed), /data-rv-decision="skip"[^>]*disabled/);
+});
+
+test('the key b asks later, and the other keys keep their action', () => {
+  assert.equal(viewerKeyAction({ key: 'b' }), 'skip');
+  assert.equal(viewerKeyAction({ key: 'b', inField: true }), null);
+  assert.equal(viewerKeyAction({ key: 'b', ctrlKey: true }), null);
+  assert.equal(viewerKeyAction({ key: 'a' }), 'accept');
 });

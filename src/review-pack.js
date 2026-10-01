@@ -505,11 +505,16 @@ export function validatePack(folder, options = {}) {
       if (!Array.isArray(choices) || choices.length < 2 || choices.length > 6) error('choices', `${where}.choices must have 2 to 6 entries when ask holds choice.`, { where });
       else {
         const seen = new Set();
+        let recommended = 0;
         out.choices = choices.map((choice, index) => {
           const at = `${where}.choices[${index}]`;
           if (!isObject(choice)) { error('choices', `${at} must be an object with id and label.`, { where: at }); return null; }
-          return { id: checkId(choice.id, `${at}.id`, seen, 'choice'), label: checkText(choice.label, `${at}.label`, 100, { required: true }) };
+          const entry = { id: checkId(choice.id, `${at}.id`, seen, 'choice'), label: checkText(choice.label, `${at}.label`, 100, { required: true }) };
+          if (choice.recommended !== undefined && typeof choice.recommended !== 'boolean') error('choices', `${at}.recommended must be true or false.`, { where: at });
+          else if (choice.recommended === true) { entry.recommended = true; recommended += 1; }
+          return entry;
         });
+        if (recommended > 1) error('choices', `${where}.choices may mark at most one choice as recommended.`, { where });
       }
     } else if (source.choices !== undefined) warn('ignored', `${where}.choices has no effect without choice in ask.`, { where });
     if (ask.includes('rating')) {
@@ -661,6 +666,16 @@ export function validatePack(folder, options = {}) {
   manifest.id = checkId(input.id, 'id');
   manifest.title = checkTitle(input.title, 'title');
   if (input.summary !== undefined) manifest.summary = checkBody(input.summary, 'summary');
+  // The planner session tag. `round` needs `session`. The publish command fills both for a planner pane.
+  if (input.session !== undefined) {
+    if (!isText(input.session) || !SLUG.test(input.session)) error('session', 'session must match [a-z0-9][a-z0-9-]* and have at most 64 characters.', { where: 'session' });
+    else manifest.session = input.session;
+  }
+  if (input.round !== undefined) {
+    if (input.session === undefined) error('session', 'round needs session.', { where: 'round' });
+    else if (!Number.isInteger(input.round) || input.round < 1 || input.round > 9999) error('session', 'round must be a whole number from 1 to 9999.', { where: 'round' });
+    else manifest.round = input.round;
+  }
   if (input.designPass === undefined) warn('design-pass', 'The pack design pass is missing or not-run.', { where: 'designPass' });
   else if (!isObject(input.designPass)) error('design-pass', 'designPass must be an object.', { where: 'designPass' });
   else {

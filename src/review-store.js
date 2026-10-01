@@ -28,6 +28,8 @@ const STAGE_MAX_AGE = 60 * 60 * 1000;
 const NOTE_MAX = 2000;
 const PINS_MAX = 50;
 const DECISIONS = ['accept', 'deny'];
+// The built-in answer `skip` (ask later) is not a verdict. The item stays open and moves to the end of the pack.
+const SKIP = 'skip';
 const DECIDING = ['accept', 'deny', 'choice', 'rating'];
 const PATCH_KEYS = new Set(['rev', 'opId', 'keep', 'decision', 'choice', 'rating', 'live', 'viewed', 'note', 'pins', 'checks']);
 const MARK_KEEPING = new Set(['rev', 'opId', 'viewed', 'note', 'pins']);
@@ -136,7 +138,7 @@ const parseJson = (text, fallback) => {
 // ---------- Derived states ----------
 
 // The earlier verdict of an answer, or null when the answer holds none: a decision, a choice, a rating, or a live check.
-const hasVerdict = (fields) => Boolean(fields) && (fields.decision != null || fields.choice != null || fields.rating != null || fields.live != null);
+const hasVerdict = (fields) => Boolean(fields) && (DECISIONS.includes(fields.decision) || fields.choice != null || fields.rating != null || fields.live != null);
 
 // The state of one item: accepted, denied, answered, note, live, changed, or open.
 // A stale answer shows no verdict. It is `changed` when it held a verdict before the content changed, and `open` otherwise.
@@ -418,8 +420,12 @@ export function getPack({ dir, slug, pack, version } = {}) {
   const items = itemRows.map((entry) => {
     const spec = parseJson(entry.spec, { ask: [] });
     const answer = answers.has(entry.item) ? answerShape(answers.get(entry.item), entry.hash) : null;
-    return { id: entry.item, section: entry.section, title: spec.title, type: spec.type, ask: spec.ask, ...reviewFields(spec), hash: entry.hash, position: entry.position, spec, state: itemState(spec, answer), stale: answer?.stale ?? false, answer };
+    const state = itemState(spec, answer);
+    return { id: entry.item, section: entry.section, title: spec.title, type: spec.type, ask: spec.ask, ...reviewFields(spec), hash: entry.hash, position: entry.position, spec, state, skipped: state === 'open' && answer?.decision === SKIP, stale: answer?.stale ?? false, answer };
   });
+  // A skipped item moves to the end of the pack. The skipped items keep the order in which they were skipped.
+  const skippedAt = (item) => item.answer?.updatedAt ?? '';
+  items.sort((a, b) => (a.skipped - b.skipped) || (a.skipped ? (skippedAt(a) < skippedAt(b) ? -1 : skippedAt(a) > skippedAt(b) ? 1 : 0) : 0) || a.position - b.position);
   const removed = [...answers.values()].filter((answer) => !present.has(answer.item)).map((answer) => ({ id: answer.item, answer: answerShape(answer) }));
   const manifest = parseJson(versionRow.manifest, {});
   const sections = (manifest.sections || []).map((section) => ({ id: section.id, title: section.title, state: groupState(items.filter((item) => item.section === section.id).map((item) => item.state)) }));
@@ -583,8 +589,8 @@ function applyPatch(fields, patch, spec) {
   const ask = spec.ask || [];
   const has = (name) => Object.hasOwn(patch, name);
   if (has('decision')) {
-    if (patch.decision !== null && !DECISIONS.includes(patch.decision)) throw invalid('The decision must be accept, deny, or null.');
-    if (patch.decision !== null && !ask.includes(patch.decision)) throw invalid(`The item does not ask for ${patch.decision}.`);
+    if (patch.decision !== null && patch.decision !== SKIP && !DECISIONS.includes(patch.decision)) throw invalid('The decision must be accept, deny, skip, or null.');
+    if (patch.decision !== null && patch.decision !== SKIP && !ask.includes(patch.decision)) throw invalid(`The item does not ask for ${patch.decision}.`);
     fields.decision = patch.decision;
   }
   if (has('choice')) {
@@ -605,6 +611,8 @@ function applyPatch(fields, patch, spec) {
     if (patch.live !== null && !ask.includes('live')) throw invalid('The item does not ask for a live check.');
     fields.live = patch.live;
   }
+  // A choice, a rating, or a live check answers the item, so it is no longer skipped.
+  if (!has('decision') && fields.decision === SKIP && ['choice', 'rating', 'live'].some((name) => has(name) && patch[name] !== null)) fields.decision = null;
   if (has('viewed')) {
     if (typeof patch.viewed !== 'boolean') throw invalid('Viewed must be true or false.');
     fields.viewed = patch.viewed ? 1 : 0;

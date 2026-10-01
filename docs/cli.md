@@ -438,7 +438,7 @@ A review pack is a folder of evidence with one question for each item. The Owner
 | Command | Action |
 |---|---|
 | `herdr-boss review check FOLDER` | Validate a pack folder. Write nothing. Any pane and any terminal can run it. |
-| `herdr-boss review publish SLUG FOLDER [--note TEXT] [--dry-run]` | Validate the folder, store it as the next version of its pack, and post a Mailbox item for the Owner. |
+| `herdr-boss review publish SLUG FOLDER [--note TEXT] [--round N] [--dry-run]` | Validate the folder, store it as the next version of its pack, and post a Mailbox item for the Owner. |
 | `herdr-boss review import SLUG FOLDER-OR-FILE [--id ID] [--title TEXT] [--dry-run]` | Turn a folder of HTML files, or one HTML file, into a pack, and publish it. |
 | `herdr-boss review result [SLUG] PACK [--version N] [--format json\|md]` | Print the stored result of a submitted review. The default format is Markdown. `--version N` selects a version. The default is the newest submitted version. `--json` means `--format json`. |
 | `herdr-boss review delete [SLUG] PACK` | Delete the pack with its files and answers. Close its Mailbox items. |
@@ -456,11 +456,38 @@ A review pack is a folder of evidence with one question for each item. The Owner
 4. An orch pane can use only the slug of the project that uses its workspace. Herdr Boss finds that project in `state.json`.
 5. The pane labeled `boss` can use only the slug `boss`.
 
-`check` reads only and has no caller rule. `result` and `list` use the same scope, and a worker pane is refused:
+A pane that has a planner session can run `publish` for its own project. See [Planner sessions](#planner-sessions). It cannot run `import`, `result`, `list`, or `delete`.
+
+`check` reads only and has no caller rule. Any pane and any terminal can run it, also a worker pane and a planner pane. `result` and `list` use the same scope, and a worker pane is refused:
 
 - A plain terminal reads every project.
 - An orch pane reads only the slug of its own workspace. `review list` without a slug lists that project.
 - The pane labeled `boss` runs `review list` for every project. It runs `review result` only for the slug `boss`.
+
+### Planner sessions
+
+A planner session lets a worker pane publish review packs for its project and receive the results. Use it when an agent plans with the Owner in rounds: the agent publishes options, the Owner answers, and the answers go back to that agent.
+
+| Command | Action |
+|---|---|
+| `herdr-boss plan start KIND PROJECT --input PATH --pane PANE` | Create a session record and label the pane `planner`. `KIND` is the harness kind of the agent, for example `claude` or `codex`. `PATH` is the document that the agent plans from. |
+| `herdr-boss plan list [PROJECT] [--all] [--json]` | List the active sessions. `--all` adds ended sessions. |
+| `herdr-boss plan end ID` | End the session and clear the pane label. |
+| `herdr-boss worker start NAME --planner ...` | Start a worker and create the session for its new pane. The kind is the worker kind. The input is the brief of the worker. |
+
+The registry is the file `planner-sessions.json` in the data folder, with mode 0600. A record has the fields `id`, `project`, `pane`, `kind`, `input`, `startedAt`, `round`, and `endedAt`. A pane has at most one active session.
+
+`plan start` and `plan end` use the caller rules of `publish`: a plain terminal, an orch pane for its own project, or the pane labeled `boss` for the slug `boss`. A worker pane is refused. `plan start` reads the target pane with `herdr pane get`. The pane must be in the workspace of the caller. A plain terminal uses the workspace of the project from `state.json`. The command refuses a pane labeled `boss` or `orch`. `plan list` uses the scope of `review list`. `worker collect` ends the session of the collected pane.
+
+`plan end` exits with code 3 when the session does not exist. The other refusals exit with code 1.
+
+A pane labeled `planner` with an active session has these rights:
+
+- `review publish SLUG FOLDER` works only for the project of the session. Another slug is refused.
+- `review check FOLDER` works as for every pane.
+- `review import`, `review result`, `review list`, and `review delete` are refused.
+
+Only a planner pane can publish a pack with `session` or `round`. Any other publisher gets a refusal when the manifest has either field. The publish from a planner pane sets both and replaces a value that the manifest holds. `round` counts per pack. A new pack takes the next round of the session: 1, 2, 3, and so on. A republish of a pack of the same session keeps the round of that pack. `--round N` (1 to 9999) sets another round, and only a planner pane can pass it. The session keeps the highest round. A `--dry-run` and an `Unchanged` publish do not change the round. The Mailbox item of the pack names the session and the pane.
 
 ### Publish
 
@@ -499,6 +526,10 @@ The importer reads each page in one pass with fixed limits: 20000 tags for each 
 ### Result
 
 The Owner answer comes back as an `[owner]` prompt with the verdict, the counts, the denied items with their notes, and a fetch command. The prompt has at most 1500 characters. The command in the prompt is `herdr-boss review result PACK --version N --format json|md`.
+
+When a planner pane published the pack, the prompt goes to that pane and not to the orch pane. It lists the pack note, each choice with its label and note, each denied item, each item with a note, and each skipped item. It has at most 4000 characters and ends with `… N more` when it is cut. It has no fetch command, because a planner pane cannot run `review result`. The message follows the rules of every result message: one message for each pack and version, the same retries, and no secret. When the session has ended, the message goes to the orch pane. While the session is active and its pane is absent, the message waits.
+
+The result JSON has `session` and `round` when the manifest has them. A choice has `choiceLabel`. A skipped item has `state: "open"` and `skipped: true`.
 
 `review result` prints the stored Markdown summary. The summary starts with the counts. It lists the denied items and the items that need a live check first, with the Owner's notes quoted. `--format json` prints the result object with the schema `herdr-boss.review-result/1`. The verdict is `accept`, `accept-with-changes`, or `deny`. Exit code 3 means that the pack, the version, or the result does not exist. The Owner has then not submitted that version.
 
@@ -840,6 +871,7 @@ Codex handover and `project new --start` use the same browser arguments. A worke
 | `--kind KIND` | Required. `codex`, `claude`, `opencode`, or `pi`. |
 | `--task TEXT` or `--task-file FILE` | Required. The work order for the brief. |
 | `--allow PATH` | A repository path that the worker may change. Repeat for each path. The worker can write its own `.worker/` folder without this option. |
+| `--planner` | Create a planner session for the new worker pane and label the pane `planner`. See [Planner sessions](#planner-sessions). |
 | `--read-only` | Allow changes in the worker's own folder only. Use this option when the task changes no repository file. Do not use it with `--allow`. |
 | `--copy PATH` | Copy a regular repository file into `.worker/inputs/` before the agent starts. Repeat for each file. Keep its repository subdirectories. The 200 MB limit also counts automatic task inputs. |
 | `--lease POOL` | Lease one item of a resource pool for the worker. Repeat for each pool. See [Resource leases](#resource-leases). A task that names `serve:live` automatically leases `serve-ports` when that pool exists and `--lease` does not name it. |

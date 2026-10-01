@@ -4,7 +4,8 @@ import { DATA_DIR } from './config.js';
 import { SLUG } from './projects.js';
 import { openMessageStore, RETENTION_MS, messagesFile, newId } from './message-store.js';
 import { redactSecrets } from './redact.js';
-import { promptText } from './review-result.js';
+import { promptText, plannerPromptText } from './review-result.js';
+import { getSession } from './planner-sessions.js';
 import { uploadReportPictures } from './attachment-markdown.js';
 import { validateAttachmentIds, readAttachment, uploadLocalPictures, deleteAttachment } from './attachments.js';
 
@@ -531,7 +532,13 @@ export function relayOwnerMessages(ids, { by, dir = DATA_DIR, now = Date.now() }
 
 // ---------- Delivery ----------
 
-function targetPane(thread, panes, projects) {
+// A result message of a planner pack goes to the pane of the active planner session. When the session has ended or is unknown, the
+// message goes to the orch pane. While the session is active and its pane is absent, the message waits.
+function targetPane(thread, panes, projects, record = null, dir = DATA_DIR) {
+  if (record?.planner?.session) {
+    const session = getSession({ dir, id: record.planner.session });
+    if (session && !session.endedAt) return panes.find((pane) => pane.id === session.pane && pane.agent) || null;
+  }
   if (thread === 'boss') return panes.find((pane) => pane.label === 'boss' && pane.agent) || null;
   const id = projects?.[thread]?.orch?.pane;
   return (id && panes.find((pane) => pane.id === id && pane.label === 'orch' && pane.agent)) || null;
@@ -554,7 +561,7 @@ export async function deliverQueued({ panes = [], projects = {}, prompt, log = (
   const pending = all.filter((record) => record.from === 'owner'
     && (record.status === 'queued' || (record.status === 'failed' && (record.attempts || 0) < MAX_DELIVERY_ATTEMPTS)));
   for (const record of pending) {
-    const pane = targetPane(record.thread, panes, projects);
+    const pane = targetPane(record.thread, panes, projects, record, dir);
     if (!pane || used.has(pane.id) || !['idle', 'done', 'working'].includes(pane.status)) continue;
     used.add(pane.id);
     const attempts = (record.attempts || 0) + 1;
@@ -585,7 +592,8 @@ export function refuseSecret(text, what) {
 }
 
 // The same checks as `worker allow`: HERDR_ENV, the pane ID and workspace from Herdr, and an exact label.
-export function verifyMessageCaller(env, herdr, command) {
+// `labels` names the pane labels that may call. The default is boss and orch.
+export function verifyMessageCaller(env, herdr, command, { labels = ['boss', 'orch'] } = {}) {
   if (env.HERDR_ENV !== '1') throw new Error(`Run herdr-boss ${command} from a Herdr-managed pane (HERDR_ENV=1).`);
   const paneId = env.HERDR_PANE_ID;
   const workspaceId = env.HERDR_WORKSPACE_ID;
@@ -597,7 +605,7 @@ export function verifyMessageCaller(env, herdr, command) {
   const pane = response?.pane ?? response ?? {};
   const returnedId = pane.pane_id ?? pane.paneId ?? pane.id ?? null;
   if (returnedId !== paneId) throw new Error(`Cannot verify the caller pane: the returned pane ID (${returnedId ?? '(missing)'}) differs from HERDR_PANE_ID (${paneId}).`);
-  if (!['boss', 'orch'].includes(pane.label)) {
+  if (!labels.includes(pane.label)) {
     throw new Error(`Only the pane labeled boss or a pane labeled orch can run herdr-boss ${command}. This pane is labeled ${pane.label ?? '(none)'}. A worker does not message the Owner: ask your orchestrator with a WORKER QUESTION.`);
   }
   const paneWorkspace = pane.workspace_id ?? pane.workspaceId ?? pane.workspace ?? null;
@@ -683,7 +691,8 @@ export function closeReviewItems({ slug, pack, except = null }, { dir = DATA_DIR
 // Append the decide item of a published review pack and close the older items of the same pack in one store write,
 // so a crash never leaves two open items for one pack.
 // `text` is the summary line of the pack. The record adds the link to the review page. The caller has verified the role.
-export function postReview({ slug, pack, title, version, text, role = 'orch' } = {}, { dir = DATA_DIR, now = Date.now() } = {}) {
+// `planner` ({ session, pane }) names the planner session of the publisher. The result of the pack then goes to that pane.
+export function postReview({ slug, pack, title, version, text, role = 'orch', planner = null } = {}, { dir = DATA_DIR, now = Date.now() } = {}) {
   if (!validThread(slug)) throw new Error('The project slug must match [a-z0-9][a-z0-9-]* and have at most 64 characters.');
   if (!['orch', 'boss'].includes(role)) throw new Error(`The role of a review item must be orch or boss, not ${role}.`);
   const suffix = ` (v${version})`;
@@ -697,6 +706,7 @@ export function postReview({ slug, pack, title, version, text, role = 'orch' } =
     id: newId(now), at, thread: slug, from: role, to: 'owner', kind: 'review', text: body, action: 'decide', replyTo: null, status: 'new',
     sentAt: null, error: null, relayedAt: null, relayedBy: null,
     title: `${REVIEW_TITLE_PREFIX}${name}${suffix}`, review: { slug, pack, version },
+    ...(planner?.session && planner?.pane ? { planner: { session: String(planner.session), pane: String(planner.pane) } } : {}),
   };
   return openMessageStore({ dir }).mutate((records) => {
     closeReviewRecords(records, { slug, pack }, at);
@@ -716,14 +726,16 @@ export function postReviewResult({ result, replyTo = null } = {}, { dir = DATA_D
   const ref = { slug: result?.slug, pack: result?.pack, version: result?.version };
   if (!validThread(ref.slug) || ref.slug === 'boss') throw new Error('The project slug must match [a-z0-9][a-z0-9-]* and have at most 64 characters.');
   if (!Number.isInteger(ref.version) || ref.version < 1) throw new Error('The review result needs a version.');
-  const text = promptText(result);
   const at = new Date(now).toISOString();
   return openMessageStore({ dir }).mutate((records) => {
     const existing = records.find((record) => record.kind === 'review-result' && sameReview(record, ref));
     if (existing) return { records, result: existing };
+    // The review item of the pack version names the planner session of the publisher. The result goes to that pane.
+    const planner = records.find((record) => record.id === replyTo && record.kind === 'review' && sameReview(record, ref))?.planner ?? null;
+    const text = planner ? plannerPromptText(result) : promptText(result);
     const record = {
       id: newId(now), at, thread: ref.slug, from: 'owner', to: 'orch', kind: 'review-result', text, action: null, replyTo, status: 'queued',
-      sentAt: null, error: null, attempts: 0, review: ref,
+      sentAt: null, error: null, attempts: 0, review: ref, ...(planner ? { planner } : {}),
     };
     records.push(record);
     return { records, result: record };

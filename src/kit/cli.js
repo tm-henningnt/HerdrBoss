@@ -16,7 +16,7 @@ import { listProjects } from '../projects.js';
 import { createWaitHerdr, parseWaitArgs, waitForWorkers } from './wait.js';
 
 const USAGE = `Kit commands:
-  worker start <name> --kind <kind> (--task TEXT | --task-file FILE) [--task-id ID] [--lease POOL]... [options]
+  worker start <name> --kind <kind> (--task TEXT | --task-file FILE) [--task-id ID] [--lease POOL]... [--planner] [options]
   worker collect <name> [--no-record] [--keep-pane] [--allow PATH]... [--outcome done|partial|failed --gate-passed|--gate-failed]
   worker list
   wait [<worker>...] [--timeout SECONDS] [--stall SECONDS]
@@ -293,9 +293,9 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
   if (command === 'worker') {
     const [action, ...rest] = argv;
     if (action === 'start') {
-      const { positional, flags } = parseArgs(rest, { boolean: ['--no-worktree', '--dry-run', '--force', '--force-swap', '--read-only'], repeat: ['--allow', '--copy', '--lease'] });
+      const { positional, flags } = parseArgs(rest, { boolean: ['--no-worktree', '--dry-run', '--force', '--force-swap', '--read-only', '--planner'], repeat: ['--allow', '--copy', '--lease'] });
       if (positional.length !== 1) fail('Usage: worker start <name> --kind <kind> --task TEXT [options]');
-      knownFlags(flags, ['kind', 'model', 'effort', 'issue', 'taskid', 'task', 'taskfile', 'allow', 'copy', 'lease', 'base', 'orch', 'noworktree', 'dryrun', 'force', 'forceswap', 'readonly']);
+      knownFlags(flags, ['kind', 'model', 'effort', 'issue', 'taskid', 'task', 'taskfile', 'allow', 'copy', 'lease', 'base', 'orch', 'noworktree', 'dryrun', 'force', 'forceswap', 'readonly', 'planner']);
       try { return startWorker(positional[0], {
         kind: flags.kind,
         model: flags.model,
@@ -314,6 +314,7 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
         dryRun: flags.dryrun,
         force: flags.force,
         forceSwap: flags.forceswap,
+        planner: flags.planner,
       }, {
         config, models: modelConfig, herdr, env, output, rulesFile,
         projectStatus: flags.taskid == null && flags.issue == null

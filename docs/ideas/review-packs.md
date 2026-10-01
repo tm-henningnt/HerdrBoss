@@ -129,6 +129,8 @@ An item may use these fields in addition to its type fields:
 | `verifiedBy` | `agent-verified` or `needs-you`. |
 | `evidence` | Up to 60 image file references used by image, image-pair, or gallery items. An agent-verified item needs at least one. |
 
+A pack may have `session` and `round`. `session` is a planner session ID, a slug of at most 64 characters. `round` is a whole number from 1 to 9999 and needs `session`. The pack header in the viewer shows `Session <id> · round <n>`. See [Planner sessions](#planner-sessions).
+
 A pack may have `designPass: { reviewer, result, note }`. The reviewer is non-empty and has at most 200 characters. The result is `passed`, `issues`, or `not-run`. The optional note has at most 2000 characters. The reviewer runs the pass before the pack ships and reports the result.
 
 ### Questions
@@ -143,6 +145,10 @@ A pack may have `designPass: { reviewer, result, note }`. The reviewer is non-em
 | `live` | **Needs live check**, with the item `liveUrl` or the pack `live` links | `live: "pending"` or `"done"` |
 | `choice` | One button for each entry in `choices` (2 to 6) | `choice: "<id>"` |
 | `rating` | 1 to `rating.max` (3 to 10) stars | `rating: <n>` |
+
+Each choice may have `recommended: true`. At most one choice of an item has it. The viewer shows the badge **Recommended** on that choice. The Owner can pick any choice.
+
+Every item also has the built-in answer **Ask later**. It needs no entry in `ask`. It stores the decision `skip`. The item stays open and moves to the end of the pack. The section list shows the chip **Ask later**. The result lists the item as `open` with `skipped: true`. A decision, a choice, a rating, or a live check on the item removes the mark. A new version that changes the item removes it too.
 
 An item is **answered** when it has a decision, a choice, or a rating, or when its `ask` holds only `note` and the note is not empty. A **Needs live check** item stays open until the Owner sets it to done or decides the item.
 
@@ -168,7 +174,7 @@ The section state comes from its items: **Denied** when one item is denied, **Ne
 herdr-boss review publish <slug> <folder> [--note TEXT]
 ```
 
-1. The command verifies the caller with `verifyMessageCaller()`: the pane label is `orch` or `boss`. The slug must be the project of the caller workspace, as for `say`. A worker does not publish. It builds the folder and names it in its report.
+1. The command verifies the caller with `verifyMessageCaller()`: the pane label is `orch` or `boss`, or `planner` with an active planner session. The slug must be the project of the caller workspace, as for `say`. A worker does not publish. It builds the folder and names it in its report.
 2. It validates the folder. On an error it prints each rule that failed and stops.
 3. It scans each text file (`.md`, `.csv`, `.diff`, `.patch`, `.txt`, `.json`, `.html`, `.css`, and source files) with `scanText()`. A finding names the file and the class, never the value. A finding stops the publish. It refuses a file name that matches `ENV_FILE`.
 4. It checks each image and video by its magic bytes. PNG, JPEG, WebP, GIF, MP4, and WebM pass. SVG, HTML outside a `page` item, and every other binary type are refused. It reads the image size from the header and refuses an image above 40 megapixels or above 16,384 px on one side.
@@ -371,6 +377,17 @@ Fetch the full result: herdr-boss review result shop checkout-redesign --json
 The prompt text is at most 1500 characters. It lists the denied items and their notes first, then cuts with "… N more". The full Markdown summary is in `herdr-boss review result <slug> <pack>`, and the JSON is in `--json`. The submit calls `closeMailboxItem()` on the review record. The Owner record counts toward the limit of 10 Owner messages a minute.
 
 The orchestrator records the verdict and the note in its memory file when they hold a decision, and plans the follow-up. It can publish a new version of the same pack.
+
+## Planner sessions
+
+A planner session lets one agent pane run review rounds with the Owner. The agent publishes a pack with options, the Owner answers, and the result goes back to that pane.
+
+- The registry is the file `planner-sessions.json` in the data folder. A record has the session ID, the project slug, the pane ID, the kind, the input path, and the start time. It also has the round counter and the end time.
+- `herdr-boss plan start KIND PROJECT --input PATH --pane PANE` creates a record and labels the pane `planner`. `herdr-boss worker start --planner` does the same for the new worker pane. `plan list` and `plan end ID` read and close records. `docs/cli.md` has the details.
+- A pane with an active session can run `review publish` and `review check`. `publish` works only for the project of the session.
+- `review publish` from a planner pane sets `session` and `round` in the manifest. Any other publisher is refused when the manifest has either field. The round counts per pack: a new pack takes the next round of the session, a republish of the same pack keeps its round, and `--round N` sets another one. The Mailbox item of the pack names the session and the pane.
+- The result of such a pack goes as one message to the planner pane, not to the orch pane. The message lists the pack note, each choice with its label and note, and each skipped item. It has at most 4000 characters, and no secret. The message uses the existing path: the key is the pack and the version, and the delivery retries are the same. When the session has ended, the message goes to the orch pane.
+- The result JSON has `session` and `round`. A choice has `choiceLabel`. A skipped item has `skipped: true`.
 
 ## Versioning
 

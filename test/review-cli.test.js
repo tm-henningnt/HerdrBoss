@@ -11,6 +11,7 @@ import { openSqliteStore } from '../src/sqlite-store.js';
 import { getPack, getResultRecord, submitPack, putAnswer, publishVersion } from '../src/review-store.js';
 import { reviewCommand } from '../src/review-cli.js';
 import { readMessages } from '../src/messages.js';
+import { startSession, getSession, endSession } from '../src/planner-sessions.js';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const roots = [];
@@ -740,4 +741,114 @@ test('the import output holds no control character and no long line from a hosti
   assert.ok(!/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/.test(output(result)), JSON.stringify(output(result)));
   assert.ok(output(result).split('\n').every((line) => line.length < 500), 'each line is short');
   assert.match(output(result), /img\//);
+});
+
+// ---------- PS1: planner panes ----------
+
+// A planner pane in workspace wB with an active session for the project shop.
+function plannerFixture(t, { project = 'shop', session = true } = {}) {
+  const f = fixture(t, 'planner', 'wB', 'wB:p2');
+  const record = session ? startSession({ dir: f.data, now: Date.now(), kind: 'claude', project, pane: 'wB:p2', input: 'docs/plan.md' }) : null;
+  return { ...f, record };
+}
+
+const storedManifest = (data) => getPack({ dir: data, slug: 'shop', pack: 'checkout-redesign' })?.manifest;
+
+test('a planner pane publishes for its own project, and the pack and the Mailbox item carry the session and round', (t) => {
+  const { cli, data, record } = plannerFixture(t);
+  const result = cli('review', 'publish', 'shop', packFolder());
+  assert.equal(result.status, 0, output(result));
+  assert.equal(storedManifest(data).session, record.id);
+  assert.equal(storedManifest(data).round, 1);
+  const [item] = reviewRecords(data);
+  assert.deepEqual(item.planner, { session: record.id, pane: 'wB:p2' });
+  assert.equal(getSession({ dir: data, id: record.id }).round, 1);
+  // A republish of the same pack keeps its round.
+  const second = cli('review', 'publish', 'shop', packFolder({ tag: 1 }));
+  assert.equal(second.status, 0, output(second));
+  assert.equal(getPack({ dir: data, slug: 'shop', pack: 'checkout-redesign' }).version, 2);
+  assert.equal(storedManifest(data).round, 1);
+  assert.equal(getSession({ dir: data, id: record.id }).round, 1);
+  // A new pack takes the next round.
+  assert.equal(cli('review', 'publish', 'shop', packFolder({ id: 'other-pack' })).status, 0);
+  assert.equal(getPack({ dir: data, slug: 'shop', pack: 'other-pack' }).manifest.round, 2);
+  assert.equal(getSession({ dir: data, id: record.id }).round, 2);
+});
+
+test('--round sets another round for a republish, and only a planner pane may pass it', (t) => {
+  const { cli, data, record } = plannerFixture(t);
+  assert.equal(cli('review', 'publish', 'shop', packFolder()).status, 0);
+  const again = cli('review', 'publish', 'shop', packFolder({ tag: 1 }), '--round', '4');
+  assert.equal(again.status, 0, output(again));
+  assert.equal(storedManifest(data).round, 4);
+  assert.equal(getSession({ dir: data, id: record.id }).round, 4);
+  assert.equal(cli('review', 'publish', 'shop', packFolder({ tag: 2 }), '--round', '0').status, 1);
+  const orch = fixture(t, 'orch');
+  const refused = orch.cli('review', 'publish', 'shop', packFolder(), '--round', '2');
+  assert.equal(refused.status, 1, output(refused));
+  assert.ok(noStore(orch.data));
+});
+
+test('the planner publish replaces a session or round that the manifest names, and a non-planner publish with either field is refused', (t) => {
+  const planner = plannerFixture(t);
+  const forged = packFolder({ edit: (manifest) => { manifest.session = 'ps-forged'; manifest.round = 9; } });
+  assert.equal(planner.cli('review', 'publish', 'shop', forged).status, 0);
+  assert.equal(storedManifest(planner.data).session, planner.record.id);
+  assert.equal(storedManifest(planner.data).round, 1);
+  for (const label of ['orch', false]) {
+    const other = fixture(t, label);
+    for (const edit of [(m) => { m.session = 'ps-written'; m.round = 3; }, (m) => { m.session = 'ps-written'; }]) {
+      const refused = other.cli('review', 'publish', 'shop', packFolder({ edit }));
+      assert.equal(refused.status, 1, output(refused));
+      assert.match(refused.stderr, /planner session/);
+    }
+    assert.ok(noStore(other.data), 'nothing was published');
+    assert.equal(other.cli('review', 'check', packFolder({ edit: (m) => { m.session = 'ps-written'; } })).status, 0, 'check stays open');
+  }
+});
+
+test('a planner pane cannot publish for another project, and a planner label without a session is refused', (t) => {
+  const other = plannerFixture(t);
+  const refused = other.cli('review', 'publish', 'blog', packFolder());
+  assert.equal(refused.status, 1, output(refused));
+  assert.match(refused.stderr, /planner session for project shop/);
+  assert.ok(noStore(other.data));
+  const none = plannerFixture(t, { session: false });
+  const noSession = none.cli('review', 'publish', 'shop', packFolder());
+  assert.equal(noSession.status, 1, output(noSession));
+  assert.match(noSession.stderr, /no active planner session/);
+  assert.ok(noStore(none.data));
+});
+
+test('a planner pane cannot import, read a result, or delete, and it can check a folder', (t) => {
+  const { cli, data } = plannerFixture(t);
+  assert.equal(cli('review', 'publish', 'shop', packFolder()).status, 0);
+  for (const args of [['import', 'shop', htmlSource()], ['result', 'shop', 'checkout-redesign'], ['delete', 'shop', 'checkout-redesign']]) {
+    const refused = cli('review', ...args);
+    assert.equal(refused.status, 1, output(refused));
+    assert.match(refused.stderr, /boss or a pane labeled orch/);
+  }
+  assert.ok(getPack({ dir: data, slug: 'shop', pack: 'checkout-redesign' }), 'the pack was not deleted');
+  assert.equal(cli('review', 'check', packFolder()).status, 0);
+});
+
+test('a dry run and an unchanged republish do not move the round', (t) => {
+  const { cli, data, record } = plannerFixture(t);
+  assert.equal(cli('review', 'publish', 'shop', packFolder(), '--dry-run').status, 0);
+  assert.equal(getSession({ dir: data, id: record.id }).round, 0);
+  assert.equal(cli('review', 'publish', 'shop', packFolder()).status, 0);
+  const same = cli('review', 'publish', 'shop', packFolder());
+  assert.equal(same.status, 0, output(same));
+  assert.match(output(same), /Unchanged/);
+  assert.equal(getSession({ dir: data, id: record.id }).round, 1);
+  assert.equal(storedManifest(data).round, 1);
+});
+
+test('an ended session cannot publish', (t) => {
+  const { cli, data, record } = plannerFixture(t);
+  assert.equal(cli('review', 'publish', 'shop', packFolder()).status, 0);
+  endSession({ dir: data, now: Date.now(), id: record.id });
+  const after = cli('review', 'publish', 'shop', packFolder({ tag: 2 }));
+  assert.equal(after.status, 1, output(after));
+  assert.match(after.stderr, /no active planner session/);
 });
