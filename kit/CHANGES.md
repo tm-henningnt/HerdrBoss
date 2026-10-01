@@ -73,3 +73,7 @@ Summary: Add herdr-boss gh label create|list|edit|sync and gh milestone create|l
 ## 17e04d97cd66
 Impact: useful
 Summary: Serve-port leases end when the bound server process ends or the port has no listener for 20 minutes; lease acquire takes --pid, --wait, and --env-file, lease bind binds a server, and a pool can hand a client ID by port.
+
+## e4591d0a3d3d
+Impact: useful
+Summary: Add the review pack section to the orchestrator skill and the worker brief template.
