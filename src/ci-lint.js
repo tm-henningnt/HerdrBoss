@@ -137,7 +137,8 @@ function parseEventBlock(lines, start, eventIndent, config = {}) {
     }
     const list = [];
     let next = index + 1;
-    while (next < lines.length && lines[next].indent > line.indent) {
+    // A list item may sit at the indent of its key.
+    while (next < lines.length && (lines[next].indent > line.indent || (lines[next].indent === line.indent && lines[next].text.startsWith('- ')))) {
       const item = lines[next];
       if (item.text.startsWith('- ')) list.push(parseInline(item.text.slice(2)));
       next += 1;
@@ -162,7 +163,7 @@ function parseTriggers(lines) {
   if (inline !== null) return events;
 
   let end = start + 1;
-  while (end < lines.length && lines[end].indent > lines[start].indent) end += 1;
+  while (end < lines.length && (lines[end].indent > lines[start].indent || (lines[end].indent === lines[start].indent && lines[end].text.startsWith('- ')))) end += 1;
   if (end === start + 1) return events;
   const body = lines.slice(start + 1, end);
   const baseIndent = Math.min(...body.map((line) => line.indent));

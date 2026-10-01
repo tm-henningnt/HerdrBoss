@@ -91,3 +91,28 @@ test('recognizes branch filters for push triggers', () => {
   assert.equal(workflowPushesBranch([{ path: 'ci.yml', text: 'on: pull_request\n' }], 'main'), false);
   assert.equal(workflowPushesBranch([{ path: 'ci.yml', text: 'on: { push: { branches: [main] } }\n' }], 'main'), true);
 });
+
+test('block lists with items at the indent of their key parse', () => {
+  const same = `name: Quick check
+on:
+  pull_request:
+    paths-ignore:
+    - docs/**
+    - .orchestration/**
+  push:
+    branches:
+    - develop
+    paths-ignore:
+    - docs/**
+    - .orchestration/**
+concurrency:
+  group: x
+  cancel-in-progress: true
+jobs:
+  quick:
+    runs-on: ubuntu-latest
+`;
+  assert.deepEqual(findingIds([{ path: '.github/workflows/q.yml', text: same }]), []);
+  const list = 'name: Full\non:\n- push\njobs:\n  build:\n    runs-on: ubuntu-latest\n';
+  assert.ok(findingIds([{ path: '.github/workflows/f.yml', text: list }]).includes('push-main-full'));
+});
