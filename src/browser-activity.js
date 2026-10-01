@@ -28,7 +28,7 @@ function mutate(project, options, fn) {
       if (!(options.isAlive || alive)(command.pid)) delete entry.commands[id];
     }
     if (entry.restart && !(options.isAlive || alive)(entry.restart.pid)) delete entry.restart;
-    const result = fn(entry);
+    const result = fn(entry, store);
     writeStore(store, dir);
     return result;
   });
@@ -58,11 +58,14 @@ export function endBrowserCommand(project, id, options = {}) {
 }
 
 export function browserCommandActivity(project, options = {}) {
-  return mutate(project, options, (entry) => ({
-    inFlight: Object.keys(entry.commands).length,
+  if (!PROJECT.test(project)) throw new Error('A browser command needs a project slug.');
+  const entry = readStore(options.dir ?? DATA_DIR)[project] || {};
+  const isAlive = options.isAlive || alive;
+  return {
+    inFlight: Object.values(entry.commands || {}).filter((command) => isAlive(command.pid)).length,
     lastCommandAt: Number.isFinite(entry.lastCommandAt) ? entry.lastCommandAt : null,
-    restarting: !!entry.restart,
-  }));
+    restarting: !!entry.restart && isAlive(entry.restart.pid),
+  };
 }
 
 export async function withBrowserCommand(project, work, options = {}) {
@@ -143,5 +146,8 @@ export function recordAgentBrowserTab(project, tabId, { now = Date.now(), dir = 
 
 export function forgetAgentBrowserTab(project, tabId, { dir = DATA_DIR } = {}) {
   if (!PROJECT.test(project) || typeof tabId !== 'string' || !tabId) return;
-  mutate(project, { dir }, (entry) => { if (entry.tabs) delete entry.tabs[tabId]; });
+  mutate(project, { dir }, (entry, store) => {
+    if (entry.tabs) delete entry.tabs[tabId];
+    if (!Object.keys(entry.tabs || {}).length && !Object.keys(entry.commands).length && !entry.restart) delete store[project];
+  });
 }

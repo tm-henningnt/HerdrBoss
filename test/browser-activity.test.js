@@ -117,3 +117,35 @@ test('a command in a separate CLI process is visible until that process finishes
   } finally { child.send('finish'); await ended; }
   assert.equal(activity.browserCommandActivity('separate-process').inFlight, 0);
 });
+
+
+test('activity reads create no directories or records for an unknown browser', () => {
+  const missing = path.join(dir, 'missing-store');
+  assert.deepEqual(activity.browserCommandActivity('unknown', { dir: missing }), { inFlight: 0, lastCommandAt: null, restarting: false });
+  assert.equal(fs.existsSync(missing), false);
+});
+
+test('activity reads ignore dead owners without locking or rewriting the store', () => {
+  const id = activity.beginBrowserCommand('read-only');
+  const file = path.join(dir, 'browser-activity.json');
+  const before = fs.readFileSync(file, 'utf8');
+  const inode = fs.statSync(file).ino;
+  assert.equal(activity.browserCommandActivity('read-only', { isAlive: () => false }).inFlight, 0);
+  assert.equal(fs.readFileSync(file, 'utf8'), before);
+  assert.equal(fs.statSync(file).ino, inode);
+  activity.endBrowserCommand('read-only', id);
+});
+
+test('forgetting the last agent tab deletes an empty project but preserves active commands', () => {
+  const file = path.join(dir, 'browser-activity.json');
+  activity.recordAgentBrowserTab('empty-tabs', 'last');
+  activity.forgetAgentBrowserTab('empty-tabs', 'last');
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8'))['empty-tabs'], undefined);
+  activity.forgetAgentBrowserTab('missing-tabs', 'unknown');
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8'))['missing-tabs'], undefined);
+  const command = activity.beginBrowserCommand('active-tabs');
+  activity.recordAgentBrowserTab('active-tabs', 'last');
+  activity.forgetAgentBrowserTab('active-tabs', 'last');
+  assert.equal(activity.browserCommandActivity('active-tabs').inFlight, 1);
+  activity.endBrowserCommand('active-tabs', command);
+});

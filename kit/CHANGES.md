@@ -109,3 +109,7 @@ Summary: Use default worker collection recording in kit and command documentatio
 ## 2ac9048be57b
 Impact: useful
 Summary: Wait for browser commands and CDP clients before restart. Restore saved tabs in separate windows and read their new IDs.
+
+## f41d3a0b4d1e
+Impact: useful
+Summary: Restore drops query strings and fragments. Login and callback pages are not saved or restored. Pages that need query strings or fragments reopen at their path.

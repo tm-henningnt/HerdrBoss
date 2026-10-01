@@ -44,16 +44,16 @@ function fixture(project, { hung = false, tabs = [] } = {}) {
 
 test('restart restores every open tab, including duplicate URLs, rather than only the selected page', async () => {
   const tabs = [{ id: 'one', url: 'https://sample.example.com/a?choice=1' },
-    { id: 'two', url: 'https://sample.example.com/a?choice=1' }, { id: 'three', url: 'about:blank' }];
+    { id: 'two', url: 'https://sample.example.com/a?choice=1#fake-fragment' }, { id: 'three', url: 'about:blank' }];
   const f = fixture('restore-all', { tabs });
   const result = await pool.restartBrowser('restore-all', true, { ...f.options, tabId: 'one' });
   assert.equal(result.restoredPage, true);
   assert.equal(result.restoredTabs, 3);
-  assert.deepEqual(f.restored, tabs.map((tab) => tab.url));
+  assert.deepEqual(f.restored, ['https://sample.example.com/a', 'https://sample.example.com/a', 'about:blank']);
   assert.deepEqual(f.startupClosed, ['startup'], 'the launch tab does not add a duplicate page');
   assert.doesNotMatch(JSON.stringify(result), /sample\.example\.com|choice=1/);
   const saved = pool.listBrowserSessions()['restore-all'].restoreTabs;
-  assert.deepEqual(saved.map((tab) => tab.url), tabs.map((tab) => tab.url));
+  assert.deepEqual(saved.map((tab) => tab.url), f.restored);
   assert.equal(fs.statSync(path.join(dir, 'browser-sessions.json')).mode & 0o777, 0o600);
 });
 
@@ -86,7 +86,7 @@ test('a hung browser restores the locally saved tab URLs', async () => {
   const result = await pool.restartBrowser('restore-hung', false, f.options);
   assert.equal(result.restoredPage, true);
   assert.equal(result.restoredTabs, 1);
-  assert.deepEqual(f.restored, ['https://sample.example.com/saved?choice=2']);
+  assert.deepEqual(f.restored, ['https://sample.example.com/saved']);
 });
 
 test('restart refuses without closing or spawning while a command stays in flight', async () => {
@@ -149,4 +149,136 @@ test('the restored-tab path creates a separate background window', async () => {
     url: 'https://sample.example.com/page', newWindow: true, background: true,
   }]);
   assert.deepEqual(pool.listBrowserSessions()['own-window'].restoreTabs, [{ id: 'own-tab', url: 'https://sample.example.com/page' }]);
+});
+
+const unsafeTabs = [
+  { id: 'safe', url: 'https://sample.example.com/page?code=FAKE_CODE#FAKE_FRAGMENT' },
+  ...['callback', 'oauth', 'login', 'auth', 'signin', 'nested/Callback', '%61uth'].map((part, index) => ({
+    id: `login-${index}`, url: `https://sample.example.com/${part}?code=FAKE_CODE#FAKE_FRAGMENT`,
+  })),
+];
+const safeTabs = [{ id: 'safe', url: 'https://sample.example.com/page' }];
+
+test('saved snapshots and individual updates drop query strings, fragments, and login or callback pages', () => {
+  fixture('safe-snapshot');
+  pool.rememberBrowserTabs('safe-snapshot', unsafeTabs);
+  assert.deepEqual(pool.listBrowserSessions()['safe-snapshot'].restoreTabs, safeTabs);
+  pool.rememberBrowserTab('safe-snapshot', 'safe', 'https://sample.example.com/callback?code=FAKE_CODE');
+  assert.deepEqual(pool.listBrowserSessions()['safe-snapshot'].restoreTabs, [], 'navigation to a callback removes the prior saved address');
+  pool.rememberBrowserTab('safe-snapshot', 'ordinary', 'https://sample.example.com/author?choice=1#fake');
+  assert.deepEqual(pool.listBrowserSessions()['safe-snapshot'].restoreTabs, [{ id: 'ordinary', url: 'https://sample.example.com/author' }]);
+  assert.doesNotMatch(fs.readFileSync(path.join(dir, 'browser-sessions.json'), 'utf8'), /FAKE_CODE|FAKE_FRAGMENT|choice=/);
+});
+
+test('a hung browser sanitizes a legacy snapshot again before restore and replaces unsafe storage', async () => {
+  const f = fixture('legacy-snapshot', { hung: true });
+  const sessions = pool.listBrowserSessions();
+  sessions['legacy-snapshot'].restoreTabs = unsafeTabs;
+  fs.writeFileSync(path.join(dir, 'browser-sessions.json'), JSON.stringify(sessions));
+  await pool.restartBrowser('legacy-snapshot', true, f.options);
+  assert.deepEqual(f.restored, [safeTabs[0].url]);
+  assert.deepEqual(pool.listBrowserSessions()['legacy-snapshot'].restoreTabs, [{ id: 'new-1', url: safeTabs[0].url }]);
+  assert.doesNotMatch(fs.readFileSync(path.join(dir, 'browser-sessions.json'), 'utf8'), /FAKE_CODE|FAKE_FRAGMENT/);
+});
+
+test('explicit tab navigation keeps its URL but saves only a safe restore address', async () => {
+  fixture('safe-new-tab');
+  const opened = [];
+  const adapters = {
+    verifySession: async () => ({ port: 9223 }),
+    browserEndpoint: async () => 'ws://127.0.0.1:9223/devtools/browser/fake',
+    command: async (_endpoint, _method, params) => { opened.push(params.url); return { targetId: `new-${opened.length}` }; },
+  };
+  for (const tab of unsafeTabs.slice(0, 2)) await preview.browserNewTab('safe-new-tab', tab.url, adapters);
+  assert.deepEqual(opened, unsafeTabs.slice(0, 2).map((tab) => tab.url));
+  assert.deepEqual(pool.listBrowserSessions()['safe-new-tab'].restoreTabs, [{ id: 'new-1', url: safeTabs[0].url }]);
+});
+
+test('the Engine onTabs callback saves sanitized addresses', async () => {
+  const { Engine } = await import('../src/engine.js');
+  const { loadConfig } = await import('../src/config.js');
+  fixture('engine-snapshot');
+  const session = pool.listBrowserSessions()['engine-snapshot'];
+  const engine = new Engine(loadConfig(), { push: false, act: false, collectors: {
+    probeBrowser: async (_port, options) => { options.onTabs(unsafeTabs); return { ok: true }; },
+  } });
+  engine.browserProbes.tick({ key: `${session.project}:${session.port}:${session.launchedAt}`, project: session.project, port: session.port, active: true });
+  await engine.browserProbes.idle();
+  assert.deepEqual(pool.listBrowserSessions()['engine-snapshot'].restoreTabs, safeTabs);
+});
+
+test('post-launch tab reads and partial restores never overwrite the saved snapshot in progress', async () => {
+  const tabs = [{ id: 'old-one', url: 'https://sample.example.com/one' }, { id: 'old-two', url: 'https://sample.example.com/two' }];
+  const f = fixture('snapshot-in-progress', { tabs });
+  const originalFetch = globalThis.fetch;
+  const originalSocket = globalThis.WebSocket;
+  globalThis.WebSocket = class { constructor() { throw new Error('fake page endpoint unavailable'); } };
+  globalThis.fetch = async () => new Response(JSON.stringify([{ id: 'startup', type: 'page', url: 'about:blank', webSocketDebuggerUrl: 'ws://127.0.0.1:9223/devtools/page/startup' }]), { status: 200 });
+  let snapshotAfterListing;
+  const snapshotsAtCreate = [];
+  let snapshotAtClose;
+  try {
+    f.options.preview.listBrowserTabs = async (project, adapters) => {
+      if (!f.relaunched()) return tabs;
+      const listed = await preview.listBrowserTabs(project, { ...adapters,
+        verifySession: async () => ({ port: 9223 }),
+        attachedTargets: async () => new Set(), pageVisibility: async () => 'visible',
+      });
+      snapshotAfterListing = pool.listBrowserSessions()[project].restoreTabs;
+      return listed;
+    };
+    f.options.preview.browserNewTab = (project, url, adapters) => preview.browserNewTab(project, url, { ...adapters,
+      verifySession: async () => ({ port: 9223 }), browserEndpoint: async () => 'ws://127.0.0.1:9223/devtools/browser/fake',
+      command: async () => {
+        snapshotsAtCreate.push(pool.listBrowserSessions()[project].restoreTabs);
+        if (url.endsWith('/two')) throw new Error('fake partial failure');
+        return { targetId: 'new-one' };
+      },
+    });
+    f.options.preview.browserCloseTab = async (project, id, adapters) => {
+      await preview.browserCloseTab(project, id, { ...adapters,
+        verifySession: async () => ({ port: 9223 }), listTargets: async () => [{ id: 'startup' }],
+        attachedTargets: async () => new Set(), browserEndpoint: async () => 'ws://127.0.0.1:9223/devtools/browser/fake',
+        command: async () => ({ success: true }),
+      });
+      snapshotAtClose = pool.listBrowserSessions()[project].restoreTabs;
+    };
+    const result = await pool.restartBrowser('snapshot-in-progress', true, f.options);
+    assert.equal(result.restoredTabs, 1);
+    assert.deepEqual(snapshotAfterListing, tabs);
+    assert.deepEqual(snapshotsAtCreate, [tabs, tabs]);
+    assert.deepEqual(snapshotAtClose, tabs);
+    assert.deepEqual(pool.listBrowserSessions()['snapshot-in-progress'].restoreTabs, [{ id: 'new-one', url: tabs[0].url }, tabs[1]]);
+  } finally { globalThis.fetch = originalFetch; globalThis.WebSocket = originalSocket; }
+});
+
+test('a failed post-launch listing still closes the startup blank tab after a successful restore', async () => {
+  const f = fixture('startup-list-failure', { tabs: [{ id: 'old', url: 'https://sample.example.com/page' }] });
+  const list = f.options.preview.listBrowserTabs;
+  f.options.preview.listBrowserTabs = (...args) => { if (f.relaunched()) throw new Error('fake listing failure'); return list(...args); };
+  const excluded = [];
+  f.options.preview.browserCloseBlankTabs = async (_project, ids) => { excluded.push(...ids); f.startupClosed.push('startup'); };
+  const result = await pool.restartBrowser('startup-list-failure', true, f.options);
+  assert.equal(result.restoredTabs, 1);
+  assert.deepEqual(f.startupClosed, ['startup']);
+  assert.deepEqual(excluded, ['new-1'], 'newly restored blank tabs must survive fallback cleanup');
+});
+
+test('blank-tab cleanup uses browser CDP and preserves restored, attached, and nonblank tabs', async () => {
+  fixture('blank-cleanup');
+  const calls = [];
+  await preview.browserCloseBlankTabs('blank-cleanup', ['restored-blank'], {
+    verifySession: async () => ({ port: 9223 }),
+    browserEndpoint: async () => 'ws://127.0.0.1:9223/devtools/browser/fake',
+    command: async (_endpoint, method, params) => {
+      calls.push([method, params]);
+      return method === 'Target.getTargets' ? { targetInfos: [
+        { targetId: 'startup', type: 'page', url: 'about:blank', attached: false },
+        { targetId: 'restored-blank', type: 'page', url: 'about:blank', attached: false },
+        { targetId: 'attached', type: 'page', url: 'about:blank', attached: true },
+        { targetId: 'page', type: 'page', url: 'https://sample.example.com/page', attached: false },
+      ] } : { success: true };
+    },
+  });
+  assert.deepEqual(calls, [['Target.getTargets', undefined], ['Target.closeTarget', { targetId: 'startup' }]]);
 });

@@ -16,6 +16,7 @@ const DEFAULT_SIZE = { width: 1280, height: 800 };
 const MAX_BOOKMARKS = 30;
 const MAX_BOOKMARK_NAME = 60;
 const CDP_TIMEOUT_MS = 2000;
+const RESTORE_AUTH_PATH = /(?:^|\/)(?:callback|oauth|login|auth|signin)(?:\/|$)/i;
 
 // Tests replace the network, process table, signal, launch, and code-sign clone functions through the options object.
 // A cloneDir of null turns off the clone record and the clone delete.
@@ -54,10 +55,19 @@ export function listBrowserSessions() {
 }
 
 function restorableTab(tab) {
-  if (typeof tab?.id !== 'string' || !tab.id || typeof tab.url !== 'string') return false;
-  try { return ['http:', 'https:', 'about:'].includes(new URL(tab.url).protocol) && (!tab.url.startsWith('about:') || tab.url === 'about:blank'); }
-  catch { return false; }
+  if (typeof tab?.id !== 'string' || !tab.id || typeof tab.url !== 'string') return null;
+  try {
+    const url = new URL(tab.url);
+    url.search = '';
+    url.hash = '';
+    if (url.username || url.password) return null;
+    if (url.href !== 'about:blank' && !['http:', 'https:'].includes(url.protocol)) return null;
+    if (RESTORE_AUTH_PATH.test(decodeURIComponent(url.pathname))) return null;
+    return { id: tab.id, url: url.href };
+  } catch { return null; }
 }
+
+const restorableTabs = (tabs) => Array.isArray(tabs) ? tabs.map(restorableTab).filter(Boolean) : [];
 
 // Keep URLs in the private session file, without titles. The snapshot is also used when CDP stops answering.
 function updateRememberedTabs(project, update) {
@@ -67,7 +77,7 @@ function updateRememberedTabs(project, update) {
     const sessions = listBrowserSessions();
     if (!sessions[project]) return;
     const tabs = Array.isArray(sessions[project].restoreTabs) ? sessions[project].restoreTabs : [];
-    sessions[project].restoreTabs = update(tabs).filter(restorableTab).map(({ id, url }) => ({ id, url }));
+    sessions[project].restoreTabs = restorableTabs(update(tabs));
     save(sessions);
   });
 }
@@ -425,19 +435,20 @@ async function restoreBrowser(project, headless, options, restartId, externalCli
   const { restorePage = true, tabId = null } = options;
   const d = deps(options);
   const session = listBrowserSessions()[project];
-  let pages = Array.isArray(session?.restoreTabs) ? session.restoreTabs.filter(restorableTab) : [];
+  let pages = restorableTabs(session?.restoreTabs);
   const preview = options.preview || await import('./browser-preview.js');
-  const adapters = { activity: { ...options.activity, restartId } };
+  // The snapshot stays intact until the restore finishes, including partial failures.
+  const adapters = { rememberTabs: false, activity: { ...options.activity, restartId } };
   const responsive = restorePage && session ? (await browserStatus(session, d)).responsive : false;
   if (restorePage && responsive) {
     let tabs = null;
     try { tabs = await preview.listBrowserTabs(project, adapters); } catch {}
     if (tabs) {
       if (tabId && !tabs.some((tab) => tab.id === tabId)) throw new Error('The selected page is no longer open. Refresh the preview before restarting.');
-      pages = tabs.filter(restorableTab);
-      rememberBrowserTabs(project, pages);
+      pages = restorableTabs(tabs);
     }
   }
+  rememberBrowserTabs(project, pages);
   const closed = await closeBrowser(project, { ...d, beforeClose: async () => await externalClients() === 0 });
   if (!closed.closed) {
     const error = new Error('Browser restart refused: a CDP client connected before the close. Disconnect it, then retry.');
@@ -446,7 +457,7 @@ async function restoreBrowser(project, headless, options, restartId, externalCli
   }
   const status = await requestBrowser(project, { ...options, headless });
   if (!restorePage || !pages.length) return { ...status, restoredPage: false, restoredTabs: 0 };
-  let startupTabs = [];
+  let startupTabs = null;
   try { startupTabs = await preview.listBrowserTabs(project, adapters); } catch {}
   let restoredTabs = 0;
   const restored = [];
@@ -460,8 +471,13 @@ async function restoreBrowser(project, headless, options, restartId, externalCli
       restored.push(page);
     }
   }
-  if (restoredTabs) for (const tab of startupTabs) {
-    try { await preview.browserCloseTab(project, tab.id, adapters); } catch {}
+  if (restoredTabs) {
+    if (startupTabs) for (const tab of startupTabs) {
+      try { await preview.browserCloseTab(project, tab.id, adapters); } catch {}
+    }
+    else {
+      try { await preview.browserCloseBlankTabs(project, restored.map((tab) => tab.id), adapters); } catch {}
+    }
   }
   rememberBrowserTabs(project, restored);
   return { ...status, restoredPage: restoredTabs === pages.length, restoredTabs,

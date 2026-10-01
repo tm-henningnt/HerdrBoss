@@ -61,12 +61,12 @@ async function pageVisibility(entry, port, viewport = null) {
 async function listBrowserTabsImpl(project, adapters = {}) {
   const session = await (adapters.verifySession || verifiedSession)(project);
   // The tab of a running or failed CDP probe is not a page of an agent or the Owner.
-  const pages = (await targets(session)).filter((page) => !isProbeTab(page.id));
-  rememberBrowserTabs(project, pages);
+  const pages = (await (adapters.listTargets || targets)(session)).filter((page) => !isProbeTab(page.id));
+  if (adapters.rememberTabs !== false) rememberBrowserTabs(project, pages);
   const viewports = listBrowserTabViewports(project, pages.map((page) => page.id));
   let attached = null;
-  try { attached = await attachedTargets(session); } catch {}
-  const visibility = await Promise.all(pages.map((entry) => pageVisibility(entry, session.port, viewports[entry.id])));
+  try { attached = await (adapters.attachedTargets || attachedTargets)(session); } catch {}
+  const visibility = await Promise.all(pages.map((entry) => (adapters.pageVisibility || pageVisibility)(entry, session.port, viewports[entry.id])));
   return pages.map((entry, index) => ({ id: entry.id, title: entry.title || 'Untitled page', url: entry.url, attached: attached ? attached.has(entry.id) : null, visibility: visibility[index] }));
 }
 
@@ -91,20 +91,38 @@ async function browserNewTabImpl(project, url = 'about:blank', adapters = {}) {
   const result = await (adapters.command || command)(await (adapters.browserEndpoint || browserEndpoint)(session), 'Target.createTarget', { url: tabUrl(url), newWindow: true, background: true });
   if (!result?.targetId) throw new Error('Browser did not open a new tab.');
   recordAgentBrowserTab(project, result.targetId);
-  rememberBrowserTab(project, result.targetId, tabUrl(url));
+  if (adapters.rememberTabs !== false) rememberBrowserTab(project, result.targetId, tabUrl(url));
   return { id: result.targetId };
 }
 
-async function browserCloseTabImpl(project, tabId, { force = false } = {}) {
-  const session = await verifiedSession(project);
-  if (!(await targets(session)).some((entry) => entry.id === tabId)) throw new Error('That tab is no longer open. Run browser tabs again.');
-  if (!force && (await attachedTargets(session)).has(tabId)) throw new Error('An agent is attached to this tab. Close it when that agent is done, or pass --force.');
-  const result = await command(await browserEndpoint(session), 'Target.closeTarget', { targetId: tabId });
+async function browserCloseTabImpl(project, tabId, adapters = {}) {
+  const session = await (adapters.verifySession || verifiedSession)(project);
+  if (!(await (adapters.listTargets || targets)(session)).some((entry) => entry.id === tabId)) throw new Error('That tab is no longer open. Run browser tabs again.');
+  if (!adapters.force && (await (adapters.attachedTargets || attachedTargets)(session)).has(tabId)) throw new Error('An agent is attached to this tab. Close it when that agent is done, or pass --force.');
+  const result = await (adapters.command || command)(await (adapters.browserEndpoint || browserEndpoint)(session), 'Target.closeTarget', { targetId: tabId });
   if (result?.success === false) throw new Error('Browser did not close the tab.');
+  forgetClosedTab(project, tabId, adapters);
+  return { closed: tabId };
+}
+
+function forgetClosedTab(project, tabId, adapters) {
   try { forgetAgentBrowserTab(project, tabId); } catch {}
   setBrowserTabViewport(project, tabId, null);
-  forgetBrowserTab(project, tabId);
-  return { closed: tabId };
+  if (adapters.rememberTabs !== false) forgetBrowserTab(project, tabId);
+}
+
+// If the HTTP tab listing fails after a relaunch, use browser CDP to remove its unused blank tab.
+async function browserCloseBlankTabsImpl(project, excludedIds, adapters) {
+  const session = await (adapters.verifySession || verifiedSession)(project);
+  const endpoint = await (adapters.browserEndpoint || browserEndpoint)(session);
+  const runCommand = adapters.command || command;
+  const result = await runCommand(endpoint, 'Target.getTargets');
+  const excluded = new Set(excludedIds);
+  for (const tab of result?.targetInfos || []) {
+    if (tab.type !== 'page' || tab.url !== 'about:blank' || tab.attached !== false || excluded.has(tab.targetId)) continue;
+    const closed = await runCommand(endpoint, 'Target.closeTarget', { targetId: tab.targetId });
+    if (closed?.success !== false) forgetClosedTab(project, tab.targetId, adapters);
+  }
 }
 
 async function pageContext(project, tabId, adapters = {}) {
@@ -455,6 +473,9 @@ export function browserNewTab(project, url = 'about:blank', adapters = {}) {
 }
 export function browserCloseTab(project, tabId, options = {}) {
   return withBrowserCommand(project, () => browserCloseTabImpl(project, tabId, options), options.activity);
+}
+export function browserCloseBlankTabs(project, excludedIds = [], adapters = {}) {
+  return withBrowserCommand(project, () => browserCloseBlankTabsImpl(project, excludedIds, adapters), adapters.activity);
 }
 export function browserDrag(project, tabId, from, to, options = {}) {
   return withBrowserCommand(project, () => browserDragImpl(project, tabId, from, to, options), options.adapters?.activity);

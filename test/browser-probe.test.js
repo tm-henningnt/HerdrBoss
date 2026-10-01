@@ -377,5 +377,5 @@ test('the registry holds the probe tab while the probe runs, drops it after a cl
 
 test('the tab list hides the tabs of the probe', () => {
   const source = fs.readFileSync(new URL('../src/browser-preview.js', import.meta.url), 'utf8');
-  assert.match(source, /\(await targets\(session\)\)\.filter\(\(page\) => !isProbeTab\(page\.id\)\)/);
+  assert.match(source, /\(await \(adapters\.listTargets \|\| targets\)\(session\)\)\.filter\(\(page\) => !isProbeTab\(page\.id\)\)/);
 });

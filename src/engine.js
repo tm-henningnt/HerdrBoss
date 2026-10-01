@@ -889,7 +889,7 @@ export class Engine extends EventEmitter {
         const browser = browsers.find((x) => x.kind === 'automation-chrome' && x.port === String(b.port) && x.profile === b.profile);
         const matched = !!browser;
         let clientCount = null;
-        if (matched && this.act && b.launchedAt) {
+        if (matched && this.act && b.launchedAt && (this.cfg.browser?.idleCloseMinutes ?? 20) > 0) {
           try { clientCount = await this.collectors.collectBrowserClients(b.port, { servicePid: process.pid, browserPid: browser.pid }); }
           catch {}
         }

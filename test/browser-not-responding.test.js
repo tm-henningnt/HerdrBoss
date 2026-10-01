@@ -83,6 +83,8 @@ test('the card shows Not responding, the reason, and a Restart button in the cur
   assert.match(html, /getTargets failed/);
   assert.match(html, /<button type="button" data-browser-restart="alpha" data-browser-mode="headless"[^>]*>Restart<\/button>/);
   assert.match(html, /saved tabs.*separate window/i);
+  assert.match(html, /drops query strings and fragments/i);
+  assert.match(html, /skips login and callback pages/i);
   assert.match(browserNotRespondingBlock('alpha', { ...card, headless: false }), /data-browser-mode="visible"/);
 });
 
@@ -107,6 +109,7 @@ test('the card block shows only for a verified browser that Herdr Boss started',
 
 test('the Browsers help describes the state and the restart rule', () => {
   assert.match(app, /<b>not responding<\/b>[^`]*two checks in a row failed[^`]*<b>Restart<\/b>[^`]*never restarts a browser by itself/);
+  assert.match(app, /drops query strings and fragments[^`]*page that needs them reopens at its path[^`]*skips login and callback pages/);
 });
 
 // ----- the engine -----
@@ -127,6 +130,7 @@ const engineScript = `
   const running = { alpha: true, beta: false };
   let outcome = { ok: true };
   const probed = [];
+  let clientReads = 0;
   const cfg = loadConfig();
   cfg.push = false;
   cfg.browsers.reapOrphanDaemons = false;
@@ -136,7 +140,7 @@ const engineScript = `
     collectProcesses: async () => new Map([[1, { pid: 1, cmd: '/sbin/launchd' }], ...Object.entries(running).filter(([, on]) => on).map(([project]) => [project === 'alpha' ? 9223 : 9224, chrome(project === 'alpha' ? 9223 : 9224, project)])]),
     cdpResponds: async () => true,
     probeBrowser: async (port) => { probed.push(port); return outcome; },
-    collectBrowserClients: async () => Number(process.env.BROWSER_CLIENTS || 0),
+    collectBrowserClients: async () => { clientReads++; return Number(process.env.BROWSER_CLIENTS || 0); },
     closeBrowser: async (project, { beforeClose } = {}) => {
       const session = JSON.parse(fs.readFileSync(sessionsFile, 'utf8'))[project];
       const approved = await beforeClose(session);
@@ -167,7 +171,7 @@ const engineScript = `
   }
   const eventsFile = path.join(dir, 'events.jsonl');
   const healthEvents = fs.existsSync(eventsFile) ? fs.readFileSync(eventsFile, 'utf8').trim().split('\\n').filter(Boolean).map(JSON.parse).filter((e) => e.type === 'browser-health') : [];
-  console.log(JSON.stringify({ steps, probed, closeCalls, healthEvents, sessionsUnchanged: fs.readFileSync(sessionsFile, 'utf8') === before, rulesBrowsers: JSON.parse(fs.readFileSync(path.join(dir, 'rules.json'), 'utf8')).browsers }));
+  console.log(JSON.stringify({ steps, probed, closeCalls, clientReads, healthEvents, sessionsUnchanged: fs.readFileSync(sessionsFile, 'utf8') === before, rulesBrowsers: JSON.parse(fs.readFileSync(path.join(dir, 'rules.json'), 'utf8')).browsers }));
 `;
 
 function runEngine(steps, { act = true, launchedAgoMs = 600000, idleCloseMinutes = 0, browserClients = 0, foreignProfile = false, probeIntervalMs = 0 } = {}) {
@@ -303,4 +307,12 @@ test('the engine calls closeBrowser only inside the shouldCloseManagedBrowser ga
   const beforeClose = engine.slice(guardAt, closeAt);
   const depth = [...beforeClose.matchAll(/\{/g)].length - [...beforeClose.matchAll(/\}/g)].length;
   assert.equal(depth, 2, 'the close call is inside the shouldCloseManagedBrowser and try blocks');
+});
+
+
+test('the engine reads external clients only when idle closing is enabled', { timeout: 60000 }, () => {
+  const disabled = runEngine([{ ok: true }], { idleCloseMinutes: 0 });
+  assert.equal(disabled.clientReads, 0);
+  const enabled = runEngine([{ ok: true }], { idleCloseMinutes: 1 });
+  assert.ok(enabled.clientReads > 0);
 });
