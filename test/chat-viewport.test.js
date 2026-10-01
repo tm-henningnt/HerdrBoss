@@ -86,9 +86,44 @@ test('the Chat viewport is fixed to the visual viewport and body scroll lock is 
   assert.match(app, /classList\.toggle\(['"]chat-phone-open['"]/);
   assert.match(css, /html:has\(body\.chat-phone-open\), body\.chat-phone-open\s*\{[^}]*overflow:\s*hidden[^}]*overscroll-behavior:\s*none/);
   assert.match(css, /\.chat-layout\s*\{[^}]*position:\s*fixed[^}]*top:\s*max\(var\(--vv-top[^)]*\),\s*0px\)[^}]*left:\s*0[^}]*right:\s*0[^}]*height:\s*var\(--vvh/);
-  assert.match(css, /body\.chat-keyboard-open \.chat-composer\s*\{[^}]*padding-bottom:\s*0/);
+  assert.match(css, /body\.chat-keyboard-open \.chat-composer\s*\{[^}]*padding-bottom:\s*6px/);
   assert.match(css, /\.chat-scroll\s*\{[^}]*overscroll-behavior:\s*contain/);
   assert.match(css, /env\(safe-area-inset-top\)/, 'the Chat header retains its safe-area padding');
+});
+
+test('the phone composer outline and newest message fit above the keyboard at 393 by 500', () => {
+  const visualViewport = { width: 393, height: 500, offsetTop: 0 };
+  const layout = appView.chatViewportLayout({
+    innerHeight: 852, height: visualViewport.height, offsetTop: visualViewport.offsetTop,
+    scale: 1, safeAreaBottom: 34, draftFocused: true,
+  });
+  assert.deepEqual(layout, { top: 0, height: 500, keyboardOpen: true, bottomInset: 0 });
+  const composerRule = css.match(/body\.chat-keyboard-open \.chat-composer\s*\{([^}]*)\}/);
+  assert.ok(composerRule, 'keyboard-open composer rule exists');
+  const paddingBottom = Number(composerRule[1].match(/padding-bottom:\s*(\d+)px/)?.[1]);
+  assert.ok(paddingBottom >= 3, 'leave the textarea border and a 2 px visual margin above the viewport edge');
+
+  const viewportBottom = layout.top + layout.height;
+  const composerHeight = 1 + 6 + 44 + paddingBottom;
+  const composer = { top: viewportBottom - composerHeight, bottom: viewportBottom };
+  const textareaBottom = composer.bottom - paddingBottom;
+  assert.ok(composer.bottom <= viewportBottom, 'the composer remains inside the visual viewport');
+  assert.ok(textareaBottom + paddingBottom <= viewportBottom, 'the composer padding stays inside the visual viewport');
+  assert.ok(textareaBottom < viewportBottom, 'the textarea outline is not clipped at the viewport edge');
+
+  assert.match(css, /\.chat-panel\s*\{[^}]*display:\s*flex[^}]*flex-direction:\s*column/);
+  assert.match(css, /\.chat-scroll\s*\{[^}]*min-height:\s*0[^}]*flex:\s*1[^}]*overflow:\s*auto/);
+  assert.match(css, /\.chat-composer\s*\{[^}]*flex:\s*0 0 auto/);
+  assert.match(css, /\.chat-hint\s*\{[^}]*display:\s*none/);
+  assert.match(css, /\.chat-scroll\s*>\s*\.chat-bubbles\s*\{[^}]*margin:\s*auto auto 0/);
+  assert.match(css, /\.chat-bubbles\s*\{[^}]*padding:[^;]*10px/);
+  assert.match(app, /data-chat-scroll[^>]*>[\s\S]*?<\/div>\$\{jump\}<form class="chat-composer"/);
+  const scrollBottom = composer.top;
+  const lastMessageBottom = scrollBottom - 10;
+  assert.ok(lastMessageBottom <= composer.top, 'the newest message stays above the composer');
+  assert.match(css, /input,\s*select,\s*textarea\s*\{\s*font-size:\s*16px\s*!important/);
+  assert.doesNotMatch(app, /\bautofocus\b/i);
+  assert.doesNotMatch(html, /user-scalable|maximum-scale/i);
 });
 
 test('the home-screen metadata and Chat help describe the iPhone viewport check', () => {
