@@ -475,9 +475,10 @@ export function selectModel(kind, explicitModel, models, policy = null) {
   return explicitModel ?? policy?.preferredModels?.[kind] ?? models.kinds[kind]?.defaultModel;
 }
 
-// The first ladder rung that can start. A rung is skipped when its model or its free lane is exhausted,
-// or when the last good Pi model result does not list its Pi model. An unknown Pi result skips nothing.
+// The first eligible non-Opus rung, or the first eligible Opus rung when no non-Opus choice can start.
+// A rung is skipped when its model or lane is exhausted, or when the last good Pi result does not list it.
 export function pickSuccessor(project, currentKind, currentProvider, policy, control, now = Date.now()) {
+  let opus = null;
   for (const rung of policy.orchestratorLadder || []) {
     const provider = providerFor(rung.kind, rung.model, policy);
     const lane = provider && control.lanes?.[provider];
@@ -489,9 +490,14 @@ export function pickSuccessor(project, currentKind, currentProvider, policy, con
         (!provider && Number.isFinite(control.exhaustedFreeLanes?.[rung.kind]?.retryAt) && control.exhaustedFreeLanes[rung.kind].retryAt > now) ||
         (rung.kind === 'pi' && unavailablePiModels([rung.model], control.piModels).length) ||
         (provider && (control.risks[provider] || control.exhausted?.[provider])) || trickleAtLimit) continue;
-    return { ...rung, provider: provider || 'unmetered' };
+    const candidate = { ...rung, provider: provider || 'unmetered' };
+    if (/(^|[-/])opus($|[-.\d]|\[)/i.test(String(rung.model))) {
+      opus ||= candidate;
+      continue;
+    }
+    return candidate;
   }
-  return null;
+  return opus;
 }
 
 export function workspaceProjects(snap, policy = POLICY_DEFAULTS) {

@@ -681,7 +681,9 @@ async function main() {
       if (action === 'cancel') {
         if (!target || args.length > 3 || (args.length === 3 && args[2] !== '--force')) throw new Error('Usage: handoff cancel ID [--force]');
         const result = cancelHandoff(target, { force: args.includes('--force') });
-        console.log(result.closed ? `Cancelled handoff ${target}; closed successor pane ${result.item.newPane}.` : `Cancelled handoff ${target}; successor pane ${result.item.newPane} was already absent.`);
+        console.log(result.closed ? `Cancelled handoff ${target}; closed successor pane ${result.item.newPane}.`
+          : result.panePresent ? `Cancelled handoff ${target}; left pane ${result.item.newPane} open because it was not a safely closable successor pane.`
+            : `Cancelled handoff ${target}; successor pane ${result.item.newPane} was already absent.`);
         break;
       }
       const value = (flag, fallback) => { const i = args.indexOf(flag); return i < 0 ? fallback : args[i + 1]; };

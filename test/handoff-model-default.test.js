@@ -49,7 +49,7 @@ test('handoff plan uses the kit default and reports its source despite a preferr
 test('handoff plan and prepare refuse every Opus spelling without --force', (t) => {
   const f = handoffFixture(t);
   preferClaudeOpus(f);
-  const aliases = ['claude-opus-5-5', 'opus', 'claude-opus'];
+  const aliases = ['claude-opus-5-5', 'opus', 'claude-opus', 'opus-5-5', 'OPUS', 'claude-opus-5-5[1m]'];
 
   for (const action of ['plan', 'prepare']) for (const alias of aliases) {
     const result = runCli(f, ['handoff', action, 'ws:p1', '--to', 'claude', '--mode', 'fresh', '--model', alias]);
@@ -99,8 +99,9 @@ test('handoff prepare also uses the kit default when policy prefers Opus', (t) =
 test('handoff cancel expires a prepared record and closes its idle successor pane', (t) => {
   const f = handoffFixture(t);
   writeRecord(f);
+  const env = { ...f.env, TEST_SUCCESSOR_AGENT: 'claude', TEST_SUCCESSOR_STATUS: 'idle' };
 
-  const result = runCli(f, ['handoff', 'cancel', 'handoff-cancel']);
+  const result = runCli(f, ['handoff', 'cancel', 'handoff-cancel'], env);
 
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout.trim().split('\n').length, 1);
@@ -141,6 +142,44 @@ test('handoff cancel refuses active and expired records', (t) => {
     assert.equal(JSON.parse(fs.readFileSync(path.join(f.root, 'handoffs.json'), 'utf8'))[0].status, status);
   }
   assert.equal(herdrCalls(f).some((args) => args[0] === 'pane' && args[1] === 'close'), false);
+});
+
+test('handoff cancel re-reads and preserves a concurrent status change before saving', (t) => {
+  const f = handoffFixture(t);
+  writeRecord(f);
+  const env = {
+    ...f.env,
+    TEST_SUCCESSOR_AGENT: 'claude',
+    TEST_SUCCESSOR_STATUS: 'idle',
+    TEST_CANCEL_RACE_STATUS: 'active',
+  };
+
+  const result = runCli(f, ['handoff', 'cancel', 'handoff-cancel'], env);
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /already active/);
+  const [record] = JSON.parse(fs.readFileSync(path.join(f.root, 'handoffs.json'), 'utf8'));
+  assert.equal(record.status, 'active');
+  assert.equal(record.expiredReason, 'concurrent update');
+});
+
+test('handoff cancel leaves a source, another agent, and role panes open', (t) => {
+  const cases = [
+    { name: 'source pane', newPane: 'ws:p1', env: {} },
+    { name: 'different agent', newPane: 'ws:p2', env: { TEST_SUCCESSOR_AGENT: 'codex', TEST_SUCCESSOR_STATUS: 'idle' } },
+    { name: 'orch role', newPane: 'ws:p2', env: { TEST_SUCCESSOR_AGENT: 'claude', TEST_SUCCESSOR_STATUS: 'idle', TEST_SUCCESSOR_LABEL: 'orch' } },
+    { name: 'Boss role', newPane: 'ws:p2', env: { TEST_SUCCESSOR_AGENT: 'claude', TEST_SUCCESSOR_STATUS: 'idle', TEST_SUCCESSOR_LABEL: 'boss' } },
+  ];
+  for (const entry of cases) {
+    const f = handoffFixture(t);
+    writeRecord(f, { newPane: entry.newPane });
+
+    const result = runCli(f, ['handoff', 'cancel', 'handoff-cancel'], { ...f.env, ...entry.env });
+
+    assert.equal(result.status, 0, `${entry.name}: ${result.stderr}`);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(f.root, 'handoffs.json'), 'utf8'))[0].status, 'expired', entry.name);
+    assert.equal(herdrCalls(f).some((args) => args[0] === 'pane' && args[1] === 'close'), false, entry.name);
+  }
 });
 
 test('a cancelled automatic handoff does not get the 30-minute expiry Mailbox item', (t) => {

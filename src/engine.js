@@ -9,6 +9,7 @@ import { evaluate, swapWarnStep, renderBulletin, fmtDuration, providerName, broa
 import { listProjects } from './projects.js';
 import { checkHarness, readProjectRepos } from './harness.js';
 import { loadModels, loadProjectConfig, KIT_ROOT, workerConfigView } from './kit/config.js';
+import { isOpus, normalizeModel } from './kit/workers.js';
 import { loadPolicy, clearExpiredOneOffGoals, deriveControl, migrateWorkspacePolicy, providerFor, selectModel, pickSuccessor, laneStatus, leastOverProvider, machineLimits, unmeteredLane, unavailablePiModels, mergeModels } from './control.js';
 import { scanSpend, SPEND_SCAN_INTERVAL_MS } from './spend.js';
 import { quotaUsageToday, recordQuotaSnapshot, readUsage } from './usage.js';
@@ -223,6 +224,10 @@ export function inspectWorkerNoReports(panes, runs, observed = {}, now = Date.no
 
 function handoffCandidates(control) {
   return [...(control.handoffs || []), ...(control.bossHandoff ? [control.bossHandoff] : [])];
+}
+
+function isOpusModel(model) {
+  return isOpus(normalizeModel(model));
 }
 
 // The cost order of the models that kit/models.md ranks, lowest tier first. Two models in one
@@ -1064,6 +1069,9 @@ export class Engine extends EventEmitter {
         evaluation.alerts.push(quotaRecoveredAlert(id, recovery));
       }
       for (const h of handoffCandidates(control).filter((candidate) => candidate.window)) {
+        const model = h.target ? normalizeModel(h.target.model) : null;
+        const opusForce = h.target && isOpusModel(model) ? ' --force' : '';
+        const effort = h.target?.effort ? ` --effort ${h.target.effort}` : '';
         evaluation.alerts.push({
           key: `handoff:${h.workspace}:${h.provider}:${h.window.resetsAt}`,
           severity: h.window.usedPercent >= 98 ? 'critical' : 'warn',
@@ -1072,7 +1080,7 @@ export class Engine extends EventEmitter {
           ...(h.window.usedPercent >= 98 ? { prompt: false } : {}),
           title: `Prepare ${h.label || h.project} orchestrator handover`,
           text: h.target
-            ? `${h.provider} is at ${h.window.usedPercent}% in its ${h.window.label} window. Prepare a ${h.target.kind} (${h.target.model}${h.target.effort ? `, ${h.target.effort}` : ''}) successor before the orchestrator runs out. Use herdr-boss handoff plan ${h.pane} --to ${h.target.kind} --model ${h.target.model}${h.target.effort ? ` --effort ${h.target.effort}` : ''}, then handoff prepare after review. Keep the current orchestrator until the successor is ready.`
+            ? `${h.provider} is at ${h.window.usedPercent}% in its ${h.window.label} window. Prepare a ${h.target.kind} (${model}${h.target.effort ? `, ${h.target.effort}` : ''}) successor before the orchestrator runs out. Use herdr-boss handoff plan ${h.pane} --to ${h.target.kind} --model ${model}${effort}${opusForce}, then ${opusForce ? `herdr-boss handoff prepare ${h.pane} --to ${h.target.kind} --model ${model}${effort}${opusForce} after Owner approval` : 'handoff prepare after review'}. Keep the current orchestrator until the successor is ready.`
             : `${h.provider} is at ${h.window.usedPercent}% in its ${h.window.label} window, but no eligible choice remains in the orchestrator succession ladder. Review Allocation and prepare a successor manually before this quota runs out.`,
         });
       }
@@ -1542,6 +1550,24 @@ export class Engine extends EventEmitter {
         if (!this.memory.autoHandoverAttempts[key]) {
           this.memory.autoHandoverAttempts[key] = now;
           this.log('error', `Automatic handover for ${h.label || h.project} has no eligible alternative provider`, h.boss ? { workspace: h.workspace, pane: h.pane } : { project: h.project });
+        }
+        continue;
+      }
+      if (isOpusModel(h.target.model)) {
+        const approvalKey = `opus-approval:${h.pane}:${h.window.resetsAt}`;
+        const boss = (herdr?.panes || []).find((pane) => pane.label === 'boss' && pane.agent);
+        if (!this.memory.autoHandoverAttempts[approvalKey] && boss && this.push) {
+          this.memory.autoHandoverAttempts[approvalKey] = now;
+          writeJson(MEMORY_FILE, this.memory);
+          const model = normalizeModel(h.target.model);
+          const effort = h.target.effort ? ` --effort ${h.target.effort}` : '';
+          const notice = `[herdr-boss] Automatic handover for ${h.label || h.project} did not prepare ${h.target.kind} ${model}. Owner approval is needed. After approval, run: herdr-boss handoff prepare ${h.pane} --to ${h.target.kind} --model ${model} --force${effort}.`;
+          try {
+            checkHerdrResponse(await this.herdrRunner('herdr', ['agent', 'prompt', boss.id, notice]));
+            this.log('handoff', `Sent Boss an Owner-approval notice for the Opus handover from ${h.pane}`, { project: h.project, pane: boss.id });
+          } catch (error) {
+            this.log('error', `Boss Opus approval notice for ${h.pane} failed: ${String(error.stderr || error.message).slice(0, 200)}`, { project: h.project, pane: boss.id });
+          }
         }
         continue;
       }

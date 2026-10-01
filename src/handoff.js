@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { DATA_DIR } from './config.js';
-import { alertBossForOpus, deliverPrompt, isAgentPaneBusy, isOpus, waitForWorkerPane } from './kit/workers.js';
+import { alertBossForOpus, deliverPrompt, isAgentPaneBusy, isOpus, normalizeModel, waitForWorkerPane } from './kit/workers.js';
 import { contextTokensFor, loadModels, loadProjectConfig } from './kit/config.js';
 import { loadPolicy, mergeModels, modelEnabled, providerFor } from './control.js';
 import { codexShellEnvArgs } from './harness.js';
@@ -207,9 +207,7 @@ export function handoffTarget(toKind, { model = null, effort = null, force = fal
   const cfg = models[toKind];
   if (!cfg) throw new Error(`Unsupported target kind: ${toKind}.`);
   const modelSource = model == null ? 'default' : 'flag';
-  let targetModel = model ?? cfg.defaultModel;
-  const alias = typeof model === 'string' ? model.trim().toLowerCase() : '';
-  if (['opus', 'claude-opus'].includes(alias)) targetModel = cfg.allowedModels.find(isOpus) || targetModel;
+  const targetModel = normalizeModel(model ?? cfg.defaultModel);
   if (!policy.allowedKinds.includes(toKind)) throw new Error('Target is disabled by global policy.');
   if (!cfg.allowedModels.includes(targetModel)) throw new Error('Target model is not in the allow-list.');
   if (isOpus(targetModel) && !force) {
@@ -453,9 +451,12 @@ export function cancelHandoff(id, { force = false } = {}) {
   const records = listHandoffs();
   const item = records.find((record) => record.id === id);
   if (!item) throw new Error('Handoff not found.');
-  if (item.status === 'active') throw new Error('Handoff is already active.');
-  if (item.status === 'expired') throw new Error('Handoff is already expired.');
-  if (!['prepared', 'preparing', 'needs-inspection'].includes(item.status)) throw new Error(`Handoff cannot be cancelled while it is ${item.status}.`);
+  const assertCancellable = (record) => {
+    if (record.status === 'active') throw new Error('Handoff is already active.');
+    if (record.status === 'expired') throw new Error('Handoff is already expired.');
+    if (!['prepared', 'preparing', 'needs-inspection'].includes(record.status)) throw new Error(`Handoff cannot be cancelled while it is ${record.status}.`);
+  };
+  assertCancellable(item);
   if (typeof item.newPane !== 'string' || !item.newPane) throw new Error('Handoff has no successor pane to cancel.');
 
   let pane = null;
@@ -464,18 +465,28 @@ export function cancelHandoff(id, { force = false } = {}) {
   if (pane) {
     const paneId = pane.pane_id ?? pane.paneId ?? pane.id;
     if (paneId !== item.newPane) throw new Error(`Herdr returned pane ${paneId ?? '(missing)'} while cancelling successor pane ${item.newPane}.`);
+  }
+  const closePane = !!pane && item.newPane !== item.sourcePane && pane.agent === item.toKind && !['orch', 'boss'].includes(pane.label);
+  if (closePane) {
     const agentStatus = pane.agent_status ?? pane.status ?? null;
-    if (pane.agent && !['idle', 'done'].includes(agentStatus) && !force) {
+    if (!['idle', 'done'].includes(agentStatus) && !force) {
       throw new Error(`Successor pane ${item.newPane} is ${agentStatus || 'not idle'}; pass --force to close it anyway.`);
     }
     herdr(['pane', 'close', item.newPane]);
   }
 
-  item.status = 'expired';
-  item.expiredAt = new Date().toISOString();
-  item.expiredReason = 'cancelled';
-  save(records);
-  return { item, closed: !!pane };
+  const latestRecords = listHandoffs();
+  const latest = latestRecords.find((record) => record.id === id);
+  if (!latest) throw new Error('Handoff not found.');
+  assertCancellable(latest);
+  if (latest.newPane !== item.newPane || latest.sourcePane !== item.sourcePane || latest.toKind !== item.toKind) {
+    throw new Error('Handoff successor changed while cancelling. Review it, then retry.');
+  }
+  latest.status = 'expired';
+  latest.expiredAt = new Date().toISOString();
+  latest.expiredReason = 'cancelled';
+  save(latestRecords);
+  return { item: latest, closed: closePane, panePresent: !!pane };
 }
 
 export function markHandoffReady(id) {
