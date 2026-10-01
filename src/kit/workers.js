@@ -583,13 +583,13 @@ const OPUS_MODEL = 'claude-opus-5-5';
 
 // Fold case, drop a bracketed suffix such as [1m], and map each Opus spelling to the catalog model.
 // The allow-list and the approval check then see one name.
-function normalizeModel(model) {
+export function normalizeModel(model) {
   if (typeof model !== 'string') return model;
   const name = model.trim().toLowerCase().replace(/\[[^\]]*\]$/, '');
   return /^(claude-)?opus(-5-5)?$/.test(name) ? OPUS_MODEL : model.trim();
 }
 
-const isOpus = (model) => /(^|[-/])opus($|[-.\d])/i.test(model);
+export const isOpus = (model) => /(^|[-/])opus($|[-.\d])/i.test(model);
 
 function validateSelection(kind, options, models, config, resourcePolicy = null, onOpusRefused = null) {
   const policy = models.kinds[kind];
@@ -641,7 +641,7 @@ function taskIdForEvent(options) {
   return null;
 }
 
-function alertBossForOpus(name, model, options, config, env, herdr, now, output) {
+export function alertBossForOpus(name, model, options, config, env, herdr, now, output) {
   const text = `Opus worker: ${name} runs ${model} (forced).`;
   const taskId = taskIdForEvent(options);
   appendWorkerEvent(env, { type: 'worker-opus', text, worker: name, taskId, project: config.slug }, now);

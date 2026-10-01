@@ -16,15 +16,18 @@ const input = JSON.parse(process.env.H24_SCENARIO);
 let now = Date.parse('2026-09-26T12:00:00.000Z');
 Date.now = () => now;
 const calls = [];
+const herdrCalls = [];
+const delivered = [];
 const collectorCalls = { herdr: 0, processes: 0, quotas: 0 };
 const cfg = loadConfig();
-cfg.push = false;
+cfg.push = input.push === true;
 cfg.quotaSeconds = 300;
 cfg.tickSeconds = 30;
 cfg.browsers.reapOrphanDaemons = false;
 const engine = new Engine(cfg, {
-  push: false,
+  push: input.push === true,
   act: true,
+  herdrRunner: async (command, args) => { herdrCalls.push({ command, args }); return '{"id":"fixture"}'; },
   collectors: {
     collectHerdr: async () => { collectorCalls.herdr += 1; return input.herdr; },
     collectMachine: async () => null,
@@ -43,15 +46,15 @@ const engine = new Engine(cfg, {
     return JSON.stringify({ ok: true });
   },
 });
-engine.deliver = async () => {};
+engine.deliver = async (alerts) => { delivered.push(...alerts); };
 // The quota read runs beside the tick. Finish one read first, so the tick applies its quotas.
 engine.readQuotas();
 await engine.quotaRead;
 for (const at of input.ticks || ['2026-09-26T12:00:00.000Z']) { now = Date.parse(at); await engine.tick(); }
-console.log(JSON.stringify({ calls, collectorCalls, control: engine.state.control, lanes: engine.state.lanes, events: engine.events }));
+console.log(JSON.stringify({ calls, herdrCalls, delivered, collectorCalls, control: engine.state.control, lanes: engine.state.lanes, events: engine.events }));
 `;
 
-const liveQuota = (usedPercent) => [{ provider: 'claude', windows: [{
+const liveQuota = (usedPercent, provider = 'claude') => [{ provider, windows: [{
   key: 'primary', label: 'Weekly', usedPercent, expectedPercent: 60,
   resetsAt: '2026-10-01T12:00:00.000Z',
 }] }];
@@ -65,7 +68,7 @@ function runScenario(t, scenario) {
   policy.providerModes.claude = 'ignore';
   if (scenario.ladder) {
     policy.orchestratorLadder = scenario.ladder;
-    policy.harnessRoutes = { pi: { 'opencode-go/deepseek-v4.1-flash': null } };
+    policy.harnessRoutes = { pi: { 'opencode-go/deepseek-v4.1-flash': null }, ...(scenario.harnessRoutes || {}) };
   }
   if (scenario.projects) policy.projects = scenario.projects;
   fs.writeFileSync(path.join(dir, 'policy.json'), JSON.stringify(policy));
@@ -93,7 +96,7 @@ function runScenario(t, scenario) {
       HERDR_BOSS_ALLOW_ACTIONS: '1',
       NODE_TEST_CONTEXT: '',
       H24_SCENARIO: JSON.stringify({
-        herdr: scenario.herdr, quotas: liveQuota(scenario.usedPercent ?? 98), ticks: scenario.ticks,
+        herdr: scenario.herdr, quotas: liveQuota(scenario.usedPercent ?? 98, scenario.provider), ticks: scenario.ticks, push: scenario.push,
       }),
     },
   });
@@ -135,6 +138,51 @@ test('automatic handover skips a project with no working agent and no running wo
   });
   assert.deepEqual(project.control.projects.alpha.running, 0);
   assert.deepEqual(project.calls, []);
+});
+
+test('automatic handover prefers a later non-Opus rung when the first rung is Opus', { timeout: 30000 }, (t) => {
+  const result = runScenario(t, {
+    usedPercent: 98,
+    provider: 'codex',
+    lastOrchestrators: { 'w-alpha': { pane: 'w-alpha:p1', kind: 'codex', project: 'alpha' } },
+    herdr: idleOrchestrator,
+    ladder: [
+      { kind: 'claude', model: 'claude-opus-5-5', effort: null },
+      { kind: 'pi', model: 'opencode-go/deepseek-v4.1-flash', effort: null },
+    ],
+    harnessRoutes: { claude: { 'claude-opus-5-5': null } },
+  });
+
+  assert.deepEqual(result.calls.map(({ args }) => [args[2], args[args.indexOf('--model') + 1]]), [
+    ['plan', 'opencode-go/deepseek-v4.1-flash'], ['prepare', 'opencode-go/deepseek-v4.1-flash'],
+  ]);
+});
+
+test('automatic handover skips Opus and sends the Boss one approval command per handover key', { timeout: 30000 }, (t) => {
+  const result = runScenario(t, {
+    usedPercent: 98,
+    provider: 'codex',
+    push: true,
+    ticks: ['2026-09-26T12:00:00.000Z', '2026-09-26T12:01:00.000Z'],
+    ladder: [{ kind: 'claude', model: 'claude-opus-5-5', effort: null }],
+    harnessRoutes: { claude: { 'claude-opus-5-5': null } },
+    herdr: {
+      workspaces: [{ id: 'w-alpha', label: 'Alpha' }, { id: 'w-boss', label: 'Boss' }],
+      panes: [
+        { id: 'w-alpha:p1', workspace: 'w-alpha', label: 'orch', orch: true, agent: 'codex', status: 'working' },
+        { id: 'w-alpha:p3', workspace: 'w-alpha', label: 'worker', orch: false, agent: 'codex', status: 'working' },
+        { id: 'w-boss:p1', workspace: 'w-boss', label: 'boss', orch: true, agent: 'claude', status: 'idle' },
+      ],
+    },
+  });
+
+  assert.deepEqual(result.calls, []);
+  const prompts = result.herdrCalls.filter(({ args }) => args[0] === 'agent' && args[1] === 'prompt' && args[2] === 'w-boss:p1');
+  assert.equal(prompts.length, 1);
+  assert.match(prompts[0].args[3], /Owner approval is needed/);
+  assert.match(prompts[0].args[3], /herdr-boss handoff prepare w-alpha:p1 --to claude --model claude-opus-5-5 --force/);
+  const hint = result.delivered.find((alert) => alert.key.startsWith('handoff:w-alpha:'));
+  assert.match(hint.text, /handoff plan w-alpha:p1 --to claude --model claude-opus-5-5 --force/);
 });
 
 test('automatic handover never prepares or activates the Boss pane', { timeout: 30000 }, (t) => {
