@@ -842,6 +842,8 @@ Only a verified `orch` or `boss` pane, or a worker pane with a live run record, 
 3. A free item that is in no `split` list.
 4. A free item in the `split` list of another project. The lease has `"borrowed": true`.
 
+Within steps 2 to 4, an item that no process listens on comes before an item with a listener and no lease. The list comes from the last tick of the engine, so it can be a tick old. Step 1 wins before the list: `--prefer PORT` gives that port out even when a process listens on it.
+
 A borrowed lease stays until it is released or reclaimed. When no item is free, `lease acquire` exits with code 3 and lists the holders on standard error.
 
 ```sh
@@ -856,7 +858,7 @@ A lease ends before its TTL in these cases. The bound process is gone: Herdr Bos
 
 A server must bind its PID at start. Take the lease, start the server, then run `lease bind POOL PORT --pid PID` at once. A caller that knows the PID before the lease runs `lease acquire POOL --pid PID`.
 
-The engine probes every free item of a ports pool on each tick. When a process listens on such an item and no lease holds it, the port is an unleased listener. The state API lists it in `resourceLeases.unleased` with the pool, the item, the PID, the process name, the first tick that saw it, its age in minutes, and the owner project. The PID comes from `lsof -nP -iTCP:<port> -sTCP:LISTEN -Fp`, the process name from `ps -o comm= -p <pid>`, and the owner from the working directory of the process against the project registry. Herdr Boss reads no command line and no environment.
+The engine probes every free item of a pool with an idle rule on each tick. When a process listens on such an item and no lease holds it, the port is an unleased listener. The state API lists it in `resourceLeases.unleased` with the pool, the item, the PID, the process name, the first tick that saw it, its age in minutes, and the owner project. The PID comes from `lsof -nP -iTCP:<port> -sTCP:LISTEN -Fp`, the process name from `ps -o comm= -p <pid>`, and the owner from the working directory of the process against the project registry. The registry path and the worktree folder of a project both count, so a server in a worker worktree has an owner. When two paths hold the directory, the longer path wins. Herdr Boss reads no command line and no environment.
 
 An unleased listener with a known owner gives one notice to the orchestrator pane of that project after 10 minutes. The notice names the port, the PID, and the process, and gives these commands:
 

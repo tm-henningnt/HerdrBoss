@@ -16,7 +16,7 @@ import { renderNightReport } from './night-report.js';
 import { adhocOneLine, effectiveRoutines, routinePromptText, slotAfter, slotEnd } from './watch-routines.js';
 import { listBrowserSessions, cdpResponds, browserProcessCheck } from './browser-pool.js';
 import { probeBrowser, createBrowserProbes } from './browser-probe.js';
-import { readLeases, reclaimLeases, publicLease, publicPool, reclaimNoticeText, hasIdleRule, tcpListening, tcpListeningAsync, leasePools, migrateProjectBrowserLeases, reconcileUnleasedListeners, unleasedNoticeText, markUnleasedNotified, listenerPid, processCwd, processLabel } from './leases.js';
+import { readLeases, reclaimLeases, publicLease, publicPool, reclaimNoticeText, hasIdleRule, tcpListening, tcpListeningAsync, leasePools, migrateProjectBrowserLeases, reconcileUnleasedListeners, unleasedNoticeText, markUnleasedNotified, listenerPid, processCwd, processLabel, projectWorktreeRoot } from './leases.js';
 import { codeSignCloneDir, sweepCodeSignClones } from './clone-sweep.js';
 import { runDenialScan, readDenials, denialSummary, DENIAL_SCAN_INTERVAL_MS, SCAN_BUDGET_BYTES, RETAIN_DAYS, RISE_FACTOR, RISE_MIN_EVENTS } from './denials.js';
 import { goalOnScreen, sendGoalPrompt } from './goal.js';
@@ -814,7 +814,8 @@ export class Engine extends EventEmitter {
             pidOf: this.collectors.listenerPid || listenerPid,
             cwdOf: this.collectors.processCwd || processCwd,
             labelOf: this.collectors.processLabel || processLabel,
-            projectPaths: readProjectRepos(DATA_DIR).map((row) => ({ slug: row.slug, path: row.repo })),
+            // The registry path and the worktree root both name the owner, so a server in a worker worktree has one.
+            projectPaths: readProjectRepos(DATA_DIR).map((row) => ({ slug: row.slug, path: row.repo, worktreePath: projectWorktreeRoot(row.repo) })),
           });
           unleased = checked.unleased;
           unleasedNotices.push(...checked.notices);

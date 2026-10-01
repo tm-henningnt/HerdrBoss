@@ -6,7 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { EventEmitter } from 'node:events';
 import { validateResourcePools } from '../src/config.js';
-import { acquireLeaseFor, acquireLease, bindLease, listLeases, publicPool, readLeases, reclaimLeases, reclaimNoticeText, releaseLease, tcpListening, tcpListeningAsync } from '../src/leases.js';
+import { acquireLeaseFor, acquireLease, bindLease, listLeases, publicPool, readLeases, reclaimLeases, reclaimNoticeText, releaseLease, tcpListening, tcpListeningAsync, unleasedKey } from '../src/leases.js';
 
 // Ports in these tests are high and never bound by a project. The real listener test binds an ephemeral port.
 const POOL = { name: 'serve-ports', range: '47300-47304', env: 'HERDR_SERVE_PORT', ttlMinutes: 240, check: 'tcp' };
@@ -143,6 +143,32 @@ test('the five-lease scenario: four leases without a listener are reclaimed afte
   }
   assert.deepEqual(log, [[20, ['47301', '47302', '47303', '47304']]]);
   assert.deepEqual(readLeases(ctx.dataDir).leases.map((item) => item.item), ['47300']);
+});
+
+test('lease acquire hands out a port that nothing listens on before one that has a listener', () => {
+  const holder = { project: 'worker-a-project', worker: 'worker-a', pane: null };
+  const open = () => { const ctx = context(); seed(ctx.dataDir, []); return ctx; };
+  const take = (ctx, extra = {}) => acquireLeaseFor('serve-ports', holder, { pools: ctx.pools, dataDir: ctx.dataDir, now: NOW, probeTcp: () => true, ...extra });
+  const listening = new Set([unleasedKey('serve-ports', '47300')]);
+
+  const plain = open();
+  assert.equal(take(plain).item, '47300', 'without the list the first free item is given');
+
+  const skipped = open();
+  assert.equal(take(skipped, { unleased: listening }).item, '47301', 'an item with a listener is skipped');
+  assert.equal(take(skipped, { unleased: listening, prefer: '47300' }).item, '47300', '--prefer wins over the list');
+
+  const every = open();
+  const all = new Set(['47300', '47301', '47302', '47303', '47304'].map((item) => unleasedKey('serve-ports', item)));
+  assert.equal(take(every, { unleased: all }).item, '47300', 'a listener on every item still gives one out');
+
+  const snapshot = open();
+  fs.writeFileSync(path.join(snapshot.dataDir, 'state.json'), JSON.stringify({ resourceLeases: { unleased: [{ pool: 'serve-ports', item: '47300', pid: 4242, name: 'node', firstSeen: new Date(NOW).toISOString(), ageMinutes: 3, owner: 'worker-a-project' }] } }));
+  assert.equal(take(snapshot).item, '47301', 'the last state snapshot steers the choice');
+
+  const broken = open();
+  fs.writeFileSync(path.join(broken.dataDir, 'state.json'), 'not json');
+  assert.equal(take(broken).item, '47300', 'an unreadable snapshot changes nothing');
 });
 
 test('bindLease records the pid and its start time, and acquire --pid binds at once', () => {

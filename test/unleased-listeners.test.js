@@ -18,7 +18,7 @@ process.on('exit', () => {
   fs.rmSync(homeDir, { recursive: true, force: true });
 });
 
-const [{ reconcileUnleasedListeners, markUnleasedNotified, projectOfCwd, listenerPid, processCwd, processLabel, unleasedNoticeText, UNLEASED_NOTICE_MINUTES }, { validateResourcePools, loadConfig }, { Engine }] = await Promise.all([
+const [{ reconcileUnleasedListeners, markUnleasedNotified, projectOfCwd, projectWorktreeRoot, listenerPid, processCwd, processLabel, unleasedNoticeText, UNLEASED_NOTICE_MINUTES }, { validateResourcePools, loadConfig }, { Engine }] = await Promise.all([
   import('../src/leases.js'),
   import('../src/config.js'),
   import('../src/engine.js'),
@@ -194,7 +194,7 @@ test('a process without a listener PID gives a warning and no notice', async () 
   assert.deepEqual(due.notices, [], 'lsof cannot name the process, so no notice goes out');
 });
 
-test('one tick probes every free item of a ports pool once, at most 8 at a time, and skips the pools with no idle rule', async () => {
+test('one tick probes every free item of a pool with an idle rule once, at most 8 at a time, and skips the pools without one', async () => {
   const big = poolOf({ name: 'big-ports', range: '47500-47519', check: 'tcp' });
   const cdp = poolOf({ name: 'cdp-ports', range: '47600-47601', check: 'cdp' });
   const browser = { name: 'project-browsers', builtIn: true, items: ['9223'], check: 'cdp' };
@@ -238,6 +238,56 @@ test('projectOfCwd holds the project path itself, a child path, and nothing else
   assert.equal(projectOfCwd(`${REPO}-copy`, PROJECTS), null);
   assert.equal(projectOfCwd(null, PROJECTS), null);
   assert.equal(projectOfCwd(REPO, []), null, 'an empty registry has no owner');
+});
+
+test('projectOfCwd names the owner of a working directory in a worker worktree', () => {
+  const root = path.join(dataDir, 'wt');
+  const registry = [
+    { slug: 'other-project', path: REPO, worktreePath: path.join(root, 'other-project') },
+    { slug: 'third-project', path: OTHER_REPO, worktreePath: path.join(root, 'third-project') },
+  ];
+  const worktree = path.join(root, 'other-project', 'ls2');
+  assert.equal(projectOfCwd(worktree, registry), 'other-project', 'the worktree itself');
+  assert.equal(projectOfCwd(path.join(worktree, 'src', 'pages'), registry), 'other-project', 'a nested path in the worktree');
+  assert.equal(projectOfCwd(path.join(root, 'other-project-copy'), registry), null, 'a folder that only starts with the root');
+  assert.equal(projectOfCwd(path.join(root, 'third-project', 'tp1'), registry), 'third-project');
+  assert.equal(projectOfCwd(path.join(root), registry), null, 'the root above every worktree belongs to nobody');
+});
+
+test('projectOfCwd takes the longest path when one project sits inside the path of another', () => {
+  const outer = { slug: 'outer', path: path.join(dataDir, 'repos'), worktreePath: null };
+  const inner = { slug: 'inner', path: REPO, worktreePath: null };
+  assert.equal(projectOfCwd(REPO, [outer, inner]), 'inner', 'the longer path wins whatever the order');
+  assert.equal(projectOfCwd(REPO, [inner, outer]), 'inner');
+  assert.equal(projectOfCwd(path.join(dataDir, 'repos', 'other'), [outer, inner]), 'outer', 'the outer path still holds it');
+  const worktreeOfInner = { slug: 'inner', path: null, worktreePath: path.join(dataDir, 'wt', 'inner') };
+  const wideWorktree = { slug: 'wide', path: null, worktreePath: path.join(dataDir, 'wt') };
+  assert.equal(projectOfCwd(path.join(dataDir, 'wt', 'inner', 'w1', 'src'), [wideWorktree, worktreeOfInner]), 'inner', 'a worktree path beats the root above it');
+});
+
+test('projectWorktreeRoot puts the worktrees of a repo in the shared root under its folder name', () => {
+  const root = path.join(dataDir, 'shared-wt');
+  assert.equal(projectWorktreeRoot(REPO, { worktreeRoot: root }), path.join(root, 'other-project'));
+  assert.equal(projectWorktreeRoot(`${REPO}/`, { worktreeRoot: root }), path.join(root, 'other-project'));
+  assert.equal(projectWorktreeRoot(null, { worktreeRoot: root }), null, 'no repo gives no worktree root');
+  assert.equal(projectWorktreeRoot(REPO, { worktreeRoot: path.join(root, 'a', '..', 'b') }), path.join(root, 'b', 'other-project'), 'a relative root resolves');
+});
+
+test('a listener in a worker worktree reaches its owner and the notice', async () => {
+  const registry = [
+    { slug: 'other-project', path: REPO, worktreePath: projectWorktreeRoot(REPO, { worktreeRoot: path.join(dataDir, 'wt') }) },
+    { slug: 'third-project', path: OTHER_REPO, worktreePath: projectWorktreeRoot(OTHER_REPO, { worktreeRoot: path.join(dataDir, 'wt') }) },
+  ];
+  const state = new Map();
+  const probePort = listeningOn(['47402']);
+  const inWorktree = reads({ cwd: path.join(registry[0].worktreePath, 'ls2', 'src') });
+  const first = await reconcileUnleasedListeners({ pools: [POOL], state, now: NOW, probePort, ...inWorktree, projectPaths: registry });
+  assert.equal(first.unleased[0].owner, 'other-project', 'the worktree of the registry repo names the owner');
+  assert.deepEqual(first.notices, [], 'the listener is young');
+  const due = await reconcileUnleasedListeners({ pools: [POOL], state, now: NOW + UNLEASED_NOTICE_MINUTES * MINUTE, probePort, ...inWorktree, projectPaths: registry });
+  assert.equal(due.notices.length, 1, 'the owner of a worktree gets the notice');
+  assert.match(unleasedNoticeText(due.notices[0]), /other-project/);
+  assert.match(unleasedNoticeText(due.notices[0]), /ageMinutes|minutes/, 'the notice states the age');
 });
 
 test('without lsof the process reads give null instead of a guess', () => {
