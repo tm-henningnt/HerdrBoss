@@ -556,8 +556,8 @@ async function main() {
         if (!match) throw new Error(`${subject} must be percentages from 0% to 100%, for example 42% 65%.`);
         return Number(value.slice(0, -1)) / 100;
       };
-      const printBrowser = (value) => console.log(redactBrowserSecrets(typeof value === 'string' ? maskBrowserText(value, { full }) : formatBrowserJson(value, { full })));
-      const printBrowserJson = (value) => printBrowser(formatBrowserJson(value, { full }));
+      const printBrowser = (value, formatter = maskBrowserText) => console.log(redactBrowserSecrets(formatter(value, { full })));
+      const printBrowserJson = (value) => printBrowser(value, formatBrowserJson);
       if (args[0] === 'sweep-clones' && (args.length === 1 || (args.length === 2 && args[1] === '--dry-run'))) {
         const { codeSignCloneDir, sweepCodeSignClones } = await import('./clone-sweep.js');
         const { fmtDuration } = await import('./rules.js');
@@ -626,7 +626,7 @@ async function main() {
       }
       else if (args[0] === 'tabs' && args.length === 2) {
         const tabs = await listBrowserTabs(args[1]);
-        printBrowser(formatBrowserTabs(tabs, { full }));
+        printBrowser(tabs, formatBrowserTabs);
       }
       else if (args[0] === 'tab' && args[1] === 'new' && args[2] && args.length <= 4) {
         await verifyBrowserCaller(args[2]);

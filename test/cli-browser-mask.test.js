@@ -8,8 +8,100 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { formatBrowserJson, formatBrowserTabs } from '../src/cli.js';
 import { browserNavigate } from '../src/browser-preview.js';
+import { maskBrowserText, redactBrowserSecrets } from '../src/browser-url-mask.js';
 
 const CLI = fileURLToPath(new URL('../src/cli.js', import.meta.url));
+
+test('hostile browser strings finish filtering in under 200 ms in both output modes', (t) => {
+  const masker = new URL('../src/browser-url-mask.js', import.meta.url).href;
+  const script = `
+    import { performance } from 'node:perf_hooks';
+    import { redactBrowserSecrets, maskBrowserText } from ${JSON.stringify(masker)};
+    import { formatBrowserJson } from ${JSON.stringify(new URL('../src/cli.js', import.meta.url).href)};
+    const timings = [];
+    for (const input of ['a'.repeat(50000) + '.' + 'b'.repeat(50000), 'a.'.repeat(30000), 'a'.repeat(50000)]) {
+      for (const full of [false, true]) {
+        for (const [name, filter] of [
+          ['redactor', () => redactBrowserSecrets(input)],
+          ['text', () => maskBrowserText(input, { full, maskHosts: true })],
+          ['json', () => JSON.parse(formatBrowserJson({ title: input, error: input }, { full }))],
+        ]) {
+          const start = performance.now();
+          filter();
+          timings.push({ name, full, length: input.length, ms: performance.now() - start });
+        }
+      }
+    }
+    process.stdout.write(JSON.stringify(timings));
+  `;
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8', timeout: 2000 });
+  assert.equal(result.error, undefined, 'Hostile input exceeded the isolated two-second guard');
+  assert.equal(result.status, 0, result.stderr);
+  const timings = JSON.parse(result.stdout);
+  for (const { name, full, length, ms } of timings) assert.ok(ms < 200, `${name} full=${full} length=${length} took ${ms.toFixed(1)} ms`);
+  const slowest = timings.reduce((max, timing) => timing.ms > max.ms ? timing : max);
+  t.diagnostic(`Hostile-input maximum: ${slowest.ms.toFixed(1)} ms across ${timings.length} checks (${slowest.name}, full=${slowest.full}, length=${slowest.length})`);
+});
+
+test('browser text and JSON redact encoded and colon delimiters after compound key suffixes', () => {
+  const keys = ['code', 'state', 'session_state', 'access_token', 'id_token', 'refresh_token', 'token', 'key'];
+  for (const full of [false, true]) {
+    for (const key of keys) {
+      for (const prefix of ['', 'api_', 'my_']) {
+        for (const delimiter of ['=', '%3D', '%3d', ':', ': ']) {
+          for (const name of [`${prefix}${key}`, `${prefix}${key}`.toUpperCase()]) {
+            const input = `${name}${delimiter}abc123`;
+            const expected = `${name}${delimiter.startsWith('%') ? '=' : delimiter}<redacted>`;
+            assert.equal(maskBrowserText(input, { full, maskHosts: true }), expected);
+            const body = JSON.parse(formatBrowserJson({ title: input, error: input, bookmark: { name: input, url: 'about:blank' } }, { full }));
+            assert.deepEqual([body.title, body.error, body.bookmark.name], [expected, expected, expected]);
+            assert.ok(!formatBrowserTabs([{ id: 'tab-1', title: input, url: 'about:blank' }], { full }).includes('abc123'));
+          }
+        }
+      }
+    }
+    for (const input of ['code%3Dabc123', 'access_token%3Dabc', 'code: abc123', 'token:abc', 'api_key=abc', 'my_token=abc']) {
+      for (const output of [maskBrowserText(input, { full }), formatBrowserJson({ title: input }, { full })]) assert.ok(!output.includes('abc'), 'Output disclosed an invented value');
+    }
+    const body = JSON.parse(formatBrowserJson({ api_key: 'abc', my_token: 'abc' }, { full }));
+    assert.deepEqual(body, { api_key: '<redacted>', my_token: '<redacted>' });
+  }
+});
+
+test('browser text decodes each title once and retains JSON escaping', () => {
+  for (const full of [false, true]) {
+    const input = 'Login%20https%3A%2F%2Ftenant1.example.test%2Fcallback%3Fcode%3Dabc123%26state%3Dabc';
+    const host = full ? 'tenant1.example.test' : '<tenant>.example.test';
+    assert.equal(maskBrowserText(input, { full, maskHosts: true }), `Login https://${host}/callback`);
+    assert.equal(JSON.parse(formatBrowserJson({ title: 'Quoted%20%22code%3Dabc123%22' }, { full })).title, 'Quoted "code=<redacted>"');
+  }
+});
+
+test('browser text and JSON redact bearer values after tabs and non-breaking spaces', () => {
+  for (const full of [false, true]) {
+    for (const whitespace of ['\t', '\u00a0', '%09', '%C2%A0']) {
+      const input = `bEaReR${whitespace}abc123`;
+      const text = maskBrowserText(input, { full, maskHosts: true });
+      assert.ok(!text.includes('abc123'));
+      assert.match(text, /bEaReR\s+<redacted>/);
+      const body = JSON.parse(formatBrowserJson({ title: input, error: input }, { full }));
+      assert.equal(body.title, text);
+      assert.equal(body.error, text);
+    }
+  }
+});
+
+test('browser JWT redaction includes padding in text and JSON in both host modes', () => {
+  for (const full of [false, true]) {
+    for (const jwt of ['eyJfake.eyJfake.fakesig==', 'eyJfake==.eyJfake==.fakesig==', 'ewoJImFsZyI6IkhTMjU2In0.eyJfake.fakesig==']) {
+      assert.equal(redactBrowserSecrets(`JWT ${jwt} end`), 'JWT <redacted> end');
+      const text = maskBrowserText(`JWT ${jwt} end`, { full, maskHosts: true });
+      assert.equal(text, 'JWT <redacted> end');
+      const body = JSON.parse(formatBrowserJson({ title: `JWT ${jwt} end`, error: `JWT ${jwt} end` }, { full }));
+      assert.deepEqual(body, { title: 'JWT <redacted> end', error: 'JWT <redacted> end' });
+    }
+  }
+});
 
 test('browser output strips callback secrets from titles and URLs in both host modes', () => {
   const callback = 'https://tenant1.example.test/login/callback?code=AAAAfakecode&state=eyJfake.eyJfake.fakesig&session_state=AAAAfakesession#access_token=AAAAfakeaccess';
@@ -93,6 +185,20 @@ function bookmarksCli(t) {
   const run = (args) => spawnSync(process.execPath, [CLI, 'browser', ...args], { cwd: base, env, encoding: 'utf8' });
   return { run, dataDir };
 }
+
+test('browser CLI decodes bookmark names once before JSON serialization', (t) => {
+  const { run, dataDir } = bookmarksCli(t);
+  const file = path.join(dataDir, 'browser-sessions.json');
+  const sessions = JSON.parse(fs.readFileSync(file, 'utf8'));
+  sessions.alpha.bookmarks = [{ name: 'Keep%2522literal%20code%3Dabc123', url: 'about:blank' }];
+  fs.writeFileSync(file, JSON.stringify(sessions));
+  for (const full of [false, true]) {
+    const result = run(['bookmarks', 'alpha', 'list', ...(full ? ['--full'] : [])]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.ok(!result.stdout.includes('abc123'));
+    assert.equal(JSON.parse(result.stdout).bookmarks[0].name, 'Keep%22literal code=<redacted>');
+  }
+});
 
 test('browser size output use the same final filter as bookmarks', (t) => {
   const { run, dataDir } = bookmarksCli(t);

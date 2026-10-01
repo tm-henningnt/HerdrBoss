@@ -1183,6 +1183,8 @@ Browser command output masks outside hosts in URLs, tab titles, and bookmark nam
 
 The final output filter applies to text and JSON. It replaces values after `code=`, `state=`, `session_state=`, `access_token=`, `id_token=`, `refresh_token=`, `token=`, `key=`, and `Bearer ` with `<redacted>`. It also replaces JWT strings. The filter applies to bookmark names and errors. The browser API, dashboard state, and new event log records use the same rules.
 
+The filter decodes browser text once before it checks for secrets. Key names can have a prefix, such as `api_key` or `my_token`. A key can use `=`, `%3D`, or `:` before its value. The filter ignores letter case. It also removes bearer values after a tab or a non-breaking space. A JWT replacement includes its padding.
+
 Add `--full` to a supported command to show hosts in full. This flag still removes query strings and fragments. It still removes credentials. Use this flag only when the Owner needs the host, at a terminal.
 
 The dashboard opens a bookmark by its stored index. **Add current page** reads the selected tab on the server. These actions use the stored address without returning it. Enter a complete address to navigate or change a start page. A masked address cannot be used for navigation.
