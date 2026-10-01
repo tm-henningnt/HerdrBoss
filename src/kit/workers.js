@@ -1046,12 +1046,15 @@ function copyLocalOrchestration(mainRoot, worktree) {
   const destinationRoot = path.join(destinationParent, 'local');
   let copied = 0;
   let oversized = 0;
+  let unreadable = 0;
 
   const visit = (source, destination, sourceStat) => {
     const destinationStat = lstatMaybe(destination);
     let created = false;
     if (destinationStat) {
-      if (!destinationStat.isDirectory() || destinationStat.isSymbolicLink()) return;
+      if (!destinationStat.isDirectory() || destinationStat.isSymbolicLink()) {
+        throw new Error('Could not copy local orchestration files into the worker worktree.');
+      }
     } else {
       fs.mkdirSync(destination, { mode: (sourceStat.mode & 0o777) | 0o700 });
       created = true;
@@ -1076,6 +1079,16 @@ function copyLocalOrchestration(mainRoot, worktree) {
           fs.copyFileSync(sourceFile, destinationFile, fs.constants.COPYFILE_EXCL);
         } catch (error) {
           if (error.code === 'EEXIST') continue;
+          if (error.code === 'EACCES' || error.code === 'EPERM') {
+            let sourceUnreadable = false;
+            try { fs.accessSync(sourceFile, fs.constants.R_OK); }
+            catch (accessError) { sourceUnreadable = accessError.code === 'EACCES' || accessError.code === 'EPERM'; }
+            if (!sourceUnreadable) throw new Error('Could not copy local orchestration files into the worker worktree.');
+            try { fs.unlinkSync(destinationFile); }
+            catch (cleanupError) { if (cleanupError.code !== 'ENOENT') throw new Error('Could not copy local orchestration files into the worker worktree.'); }
+            unreadable += 1;
+            continue;
+          }
           throw new Error('Could not copy local orchestration files into the worker worktree.');
         }
         fs.chmodSync(destinationFile, stat.mode & 0o777);
@@ -1090,7 +1103,7 @@ function copyLocalOrchestration(mainRoot, worktree) {
     if (/Could not copy local orchestration/.test(error.message)) throw error;
     throw new Error('Could not copy local orchestration files into the worker worktree.');
   }
-  return { copied, oversized };
+  return { copied, oversized, unreadable };
 }
 
 export function startWorker(name, options, {
@@ -1360,6 +1373,9 @@ export function startWorker(name, options, {
         if (localCopy.oversized) {
           const skippedWord = localCopy.oversized === 1 ? 'file' : 'files';
           output(`Warning: skipped ${localCopy.oversized} ${skippedWord} over 5 MB from .orchestration/local.`);
+        }
+        if (localCopy.unreadable) {
+          output(`Warning: skipped ${localCopy.unreadable} unreadable file(s) from .orchestration/local.`);
         }
       }
     }

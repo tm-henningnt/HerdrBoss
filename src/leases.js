@@ -252,43 +252,62 @@ const UNLEASED_PROBE_PARALLEL = 8;
 // A pool that Herdr Boss reconciles for unleased listeners: a pool with an idle rule. The built-in browser pool has none.
 export const reconcilesUnleased = (pool) => hasIdleRule(pool);
 
-let lsofFound = null;
+const PROCESS_PROBE_CACHE_MS = 5000;
+const PROCESS_PROBE_ERROR_CACHE_MS = 1000;
+const processProbeCache = new Map();
 
-// Whether lsof is on the PATH. The check runs once. Herdr Boss names a listener process with lsof and never with a shell.
-export function lsofInstalled() {
-  if (lsofFound === null) {
-    const result = spawnSync('lsof', ['-v'], { stdio: 'ignore', timeout: 2000, env: { PATH: process.env.PATH ?? '' } });
-    lsofFound = !result.error;
+function processProbe(command, args, now) {
+  const key = JSON.stringify([command, args]);
+  const time = now();
+  for (const [cacheKey, entry] of processProbeCache) {
+    if (entry.expiresAt <= time) processProbeCache.delete(cacheKey);
   }
-  return lsofFound;
+  const cached = processProbeCache.get(key);
+  if (cached && cached.expiresAt > time) return cached.result;
+
+  const result = spawnSync(command, args, {
+    encoding: 'utf8',
+    timeout: 2000,
+    env: { PATH: process.env.PATH ?? '', LC_ALL: 'C' },
+  });
+  const successful = !result.error && result.status === 0;
+  const ttl = successful ? PROCESS_PROBE_CACHE_MS : PROCESS_PROBE_ERROR_CACHE_MS;
+  processProbeCache.set(key, { result, expiresAt: now() + ttl });
+  return result;
+}
+
+// Whether lsof is on the PATH. The result is cached briefly. Herdr Boss names a listener process with lsof and never with a shell.
+export function lsofInstalled({ now = Date.now } = {}) {
+  const result = processProbe('lsof', ['-v'], now);
+  return !result.error;
 }
 
 // The output of lsof, or null when lsof is absent, times out, or fails.
-function lsofOutput(args) {
-  const result = spawnSync('lsof', args, { encoding: 'utf8', timeout: 2000, env: { PATH: process.env.PATH ?? '', LC_ALL: 'C' } });
+function lsofOutput(args, now) {
+  const result = processProbe('lsof', args, now);
   return result.status === 0 ? result.stdout : null;
 }
 
 // The PID of the process that listens on a port, or null when lsof is absent or names no PID.
 // lsof prints a PID, a file descriptor and an address. It prints no argument and no environment of the process.
-export function listenerPid(port, { hasLsof = lsofInstalled() } = {}) {
+export function listenerPid(port, { hasLsof = lsofInstalled(), now = Date.now } = {}) {
   if (!hasLsof) return null;
-  const pid = Number(/^p(\d+)$/m.exec(lsofOutput(['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-Fp']) || '')?.[1]);
+  const pid = Number(/^p(\d+)$/m.exec(lsofOutput(['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-Fp'], now) || '')?.[1]);
   return Number.isInteger(pid) && pid > 0 ? pid : null;
 }
 
 // The working directory of a process, or null when lsof is absent, the process is gone, or it has no cwd.
 // lsof prints the path of the working directory. It prints no argument and no environment of the process.
-export function processCwd(pid, { hasLsof = lsofInstalled() } = {}) {
+export function processCwd(pid, { hasLsof = lsofInstalled(), now = Date.now } = {}) {
   if (!hasLsof || pid == null) return null;
-  const directory = /^n(.+)$/m.exec(lsofOutput(['-a', '-p', String(pid), '-d', 'cwd', '-Fn']) || '')?.[1];
+  const directory = /^n(.+)$/m.exec(lsofOutput(['-a', '-p', String(pid), '-d', 'cwd', '-Fn'], now) || '')?.[1];
   return directory ? path.resolve(directory) : null;
 }
 
 // The name of a process, for example "node". ps prints the name only. It prints no argument and no environment.
-export function processLabel(pid) {
+export function processLabel(pid, { now = Date.now } = {}) {
   if (pid == null) return null;
-  const result = spawnSync('ps', ['-o', 'comm=', '-p', String(pid)], { encoding: 'utf8', timeout: 2000, env: { PATH: process.env.PATH ?? '', LC_ALL: 'C' } });
+  const result = processProbe('ps', ['-o', 'comm=', '-p', String(pid)], now);
   return result.status === 0 ? result.stdout.trim() || null : null;
 }
 
