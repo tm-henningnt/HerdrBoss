@@ -11,6 +11,59 @@ import { browserNavigate } from '../src/browser-preview.js';
 
 const CLI = fileURLToPath(new URL('../src/cli.js', import.meta.url));
 
+test('browser output strips callback secrets from titles and URLs in both host modes', () => {
+  const callback = 'https://tenant1.example.test/login/callback?code=AAAAfakecode&state=eyJfake.eyJfake.fakesig&session_state=AAAAfakesession#access_token=AAAAfakeaccess';
+  for (const full of [false, true]) {
+    const output = formatBrowserTabs([{ id: 'tab-1', title: `Login ${callback}`, url: callback }], { full });
+    for (const secret of ['AAAAfakecode', 'eyJfake.eyJfake.fakesig', 'AAAAfakesession', 'AAAAfakeaccess']) {
+      assert.ok(!output.includes(secret), `Browser output disclosed fake secret in full=${full}`);
+    }
+    const tab = JSON.parse(output)[0];
+    const host = full ? 'tenant1.example.test' : '<tenant>.example.test';
+    assert.equal(tab.url, `https://${host}/login/callback`);
+    assert.equal(tab.title, `Login https://${host}/login/callback`);
+  }
+});
+
+test('browser text and JSON remove token assignments, bearer values, and standalone JWTs', async () => {
+  const { maskBrowserText } = await import('../src/browser-url-mask.js');
+  const fields = ['code', 'state', 'session_state', 'access_token', 'id_token', 'refresh_token', 'token', 'key'];
+  const message = `${fields.map((field, index) => `${field}=AAAAfake${index}`).join(' ')} Bearer xyz eyJfake.eyJfake.fakesig`;
+  for (const full of [false, true]) {
+    for (const output of [maskBrowserText(message, { full }), formatBrowserJson({ title: message, error: message, bookmark: { name: message, url: 'http://localhost/callback?code=AAAAfakecode#state=AAAAfakestate' } }, { full })]) {
+      for (const secret of [...fields.map((_, index) => `AAAAfake${index}`), 'xyz', 'eyJfake', 'fakesig', 'AAAAfakecode', 'AAAAfakestate']) {
+        assert.ok(!output.includes(secret), `Browser output disclosed fake secret in full=${full}`);
+      }
+      assert.match(output, /Bearer <redacted>/);
+    }
+  }
+});
+
+test('browser errors that start with URLs and JWTs with JSON whitespace cannot bypass the filter', () => {
+  const jwt = 'ewoJImFsZyI6IkhTMjU2In0.eyJfake.fakesig';
+  for (const full of [false, true]) {
+    const output = formatBrowserJson({ error: `https://tenant1.example.test/callback Bearer xyz ${jwt}`, title: jwt }, { full });
+    for (const secret of ['xyz', 'ewoJImFsZyI6IkhTMjU2In0', 'eyJfake', 'fakesig']) assert.ok(!output.includes(secret), 'Final filter disclosed a fake secret');
+    assert.doesNotThrow(() => JSON.parse(output));
+  }
+});
+
+test('callback query and fragment values never appear in JSON for outside or loopback hosts', () => {
+  for (const full of [false, true]) {
+    for (const origin of ['https://tenant1.example.test', 'http://127.0.0.1:4477', 'http://localhost:4477', 'http://[::1]:4477']) {
+      for (const separator of ['?', '#']) {
+        const url = `${origin}/login/callback${separator}code=AAAAfakecode&state=eyJfake.eyJfake.fakesig&session_state=AAAAfakesession`;
+        const output = formatBrowserJson({ title: `Login ${url}`, url, pageUrl: url, targetUrl: url, startPage: url, token: 'AAAAfaketoken', nested: { access_token: 'AAAAfakeaccess' } }, { full });
+        for (const secret of ['AAAAfakecode', 'eyJfake', 'AAAAfakesession', 'AAAAfaketoken', 'AAAAfakeaccess']) assert.ok(!output.includes(secret), 'Callback JSON disclosed a fake secret');
+        const body = JSON.parse(output);
+        const host = full || origin.startsWith('http:') ? origin : 'https://<tenant>.example.test';
+        assert.equal(body.url, `${host}/login/callback`);
+        assert.equal(body.title, `Login ${host}/login/callback`);
+      }
+    }
+  }
+});
+
 function bookmarksCli(t) {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-browser-mask-'));
   const dataDir = path.join(base, 'data');
@@ -41,7 +94,24 @@ function bookmarksCli(t) {
   return { run, dataDir };
 }
 
-test('browser JSON output masks outside URLs and keeps loopback URLs in full', () => {
+test('browser size output use the same final filter as bookmarks', (t) => {
+  const { run, dataDir } = bookmarksCli(t);
+  const file = path.join(dataDir, 'browser-sessions.json');
+  const sessions = JSON.parse(fs.readFileSync(file, 'utf8'));
+  sessions.alpha.bookmarks = [{ name: 'token=AAAAfakebookmark Bearer xyz', url: 'https://tenant1.example.test/callback?code=AAAAfakecode#session_state=AAAAfakesession' }];
+  sessions.alpha.startPage = 'http://localhost/callback#state=eyJfake.eyJfake.fakesig';
+  fs.writeFileSync(file, JSON.stringify(sessions));
+  for (const args of [['size', 'alpha', '1280', '800'], ['bookmarks', 'alpha', 'list'], ['bookmarks', 'alpha', 'list', '--full']]) {
+    const result = run(args);
+    assert.equal(result.status, 0, result.stderr);
+    for (const secret of ['AAAAfakebookmark', 'xyz', 'AAAAfakecode', 'AAAAfakesession', 'eyJfake']) {
+      assert.ok(!`${result.stdout}${result.stderr}`.includes(secret), `CLI disclosed fake secret in ${args[0]}`);
+    }
+    assert.doesNotThrow(() => JSON.parse(result.stdout));
+  }
+});
+
+test('browser JSON output masks outside hosts and keeps loopback hosts', () => {
   const value = {
     tabs: [
       { url: 'https://acme.example.com:8443/a?secret=yes#frag' },
@@ -52,13 +122,13 @@ test('browser JSON output masks outside URLs and keeps loopback URLs in full', (
   const output = JSON.parse(formatBrowserJson(value));
 
   assert.equal(output.tabs[0].url, 'https://<tenant>.example.com:8443/a');
-  assert.equal(output.tabs[1].url, 'http://127.0.0.1:4477/local?debug=yes#here');
+  assert.equal(output.tabs[1].url, 'http://127.0.0.1:4477/local');
   assert.equal(output.bookmarks[0].url, 'https://<tenant>.example.com/start');
 });
 
-test('browser JSON output prints real URLs when full mode is enabled', () => {
+test('browser JSON full mode exposes only hosts and paths', () => {
   const value = { url: 'https://user:pass@acme.example.com:8443/a?secret=yes#frag' };
-  assert.equal(JSON.parse(formatBrowserJson(value, { full: true })).url, value.url);
+  assert.equal(JSON.parse(formatBrowserJson(value, { full: true })).url, 'https://acme.example.com:8443/a');
 });
 
 test('tabs --full keeps the legacy origin and path URL shape', () => {
@@ -94,13 +164,13 @@ test('CLI prints usage when it is started through a symlink to src/cli.js', (t) 
   assert.match(result.stdout, /herdr-boss <command>/);
 });
 
-test('bookmarks list prints masked outside URLs and full loopback URLs', (t) => {
+test('bookmarks list prints masked outside hosts and loopback hosts', (t) => {
   const { run } = bookmarksCli(t);
   const result = run(['bookmarks', 'alpha', 'list']);
   assert.equal(result.status, 0, result.stderr);
   const output = JSON.parse(result.stdout);
   assert.equal(output.bookmarks[0].url, 'https://<tenant>.example.com/start');
-  assert.equal(output.bookmarks[1].url, 'http://127.0.0.1:4477/local?debug=yes#here');
+  assert.equal(output.bookmarks[1].url, 'http://127.0.0.1:4477/local');
   assert.equal(output.startPage, 'https://<tenant>.example.com/home');
 });
 
@@ -108,11 +178,11 @@ test('bookmarks list accepts --full before or after its arguments', (t) => {
   const { run } = bookmarksCli(t);
   const before = run(['--full', 'bookmarks', 'alpha', 'list']);
   assert.equal(before.status, 0, before.stderr);
-  assert.equal(JSON.parse(before.stdout).bookmarks[0].url, 'https://acme.example.com/start?secret=yes#frag');
+  assert.equal(JSON.parse(before.stdout).bookmarks[0].url, 'https://acme.example.com/start');
   assert.equal(JSON.parse(before.stdout).bookmarks[2].name, 'acme.example.com');
   const after = run(['bookmarks', 'alpha', 'list', '--full']);
   assert.equal(after.status, 0, after.stderr);
-  assert.equal(JSON.parse(after.stdout).startPage, 'https://acme.example.com/home?secret=yes');
+  assert.equal(JSON.parse(after.stdout).startPage, 'https://acme.example.com/home');
 });
 
 test('bookmark names mask non-loopback hosts and keep plain and loopback names', (t) => {

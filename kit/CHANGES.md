@@ -105,3 +105,7 @@ Summary: Add CI minute rules and GitHub workflow templates; create and copy miss
 ## 2db88201b003
 Impact: useful
 Summary: Use default worker collection recording in kit and command documentation.
+
+## fe8a51e665fd
+Impact: useful
+Summary: Browser output masks titles and removes credentials, query strings, and fragments in every host mode. Apply the same filter to browser API responses, dashboard state, and new event log records.

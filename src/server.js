@@ -20,6 +20,7 @@ import { analyticsSummary } from './analytics.js';
 import { buildWatchRecord, clearNight, readNight, readStandDown, writeNight, writeStandDown } from './night.js';
 import { effectiveRoutines, rememberChoice, resetRoutine, saveRoutine } from './watch-routines.js';
 import { withProbeState } from './browser-probe.js';
+import { maskDeep, maskBrowserState, maskBrowserText } from './browser-url-mask.js';
 import { requestBrowser, listBrowserSessions, browserStatus, setBrowserWindowSize, closeBrowser, restartBrowser, listBookmarks, addBookmark, renameBookmark, moveBookmark, removeBookmark, setStartPage } from './browser-pool.js';
 import { listBrowserTabs, browserScreenshot, browserNavigate, browserNavigationState, browserHistoryAction, browserClick, browserInsertText, browserKey, browserNewTab, browserCloseTab, tabAttached } from './browser-preview.js';
 import { listHandoffs } from './handoff.js';
@@ -62,6 +63,7 @@ function handoffSourceMatches(state, body) {
 }
 
 function send(res, code, body, type = 'application/json; charset=utf-8') {
+  if (res.browserOutput && !Buffer.isBuffer(body)) body = maskDeep(body);
   res.writeHead(code, { 'content-type': type, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' });
   res.end(typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body));
 }
@@ -146,9 +148,9 @@ function loopbackRequest(req) {
 }
 
 // Dashboard control of a tab that an agent holds needs explicit confirmation. Agent CLI commands do not pass through here.
-async function attachedGuard(body) {
+async function attachedGuard(body, checkAttached = tabAttached) {
   if (body.confirmAttached === true) return null;
-  try { if (await tabAttached(body.project, body.tab)) return { error: 'An agent is using this tab. Navigation or input can disturb its work. Confirm to continue, or open a new tab.', attached: true }; }
+  try { if (await checkAttached(body.project, body.tab)) return { error: 'An agent is using this tab. Navigation or input can disturb its work. Confirm to continue, or open a new tab.', attached: true }; }
   catch {}
   return null;
 }
@@ -196,7 +198,8 @@ export function assertPreviewHost(host) {
   return value;
 }
 
-export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine = (config, options) => new Engine(config, options), rawTokens, closeTab = browserCloseTab, projectNew = {}, goalSet = {} } = {}) {
+export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine = (config, options) => new Engine(config, options), rawTokens, closeTab = browserCloseTab, browserActions = {}, projectNew = {}, goalSet = {} } = {}) {
+  const browser = { browserStatus, listBrowserTabs, browserScreenshot, browserNavigate, browserNavigationState, browserHistoryAction, browserClick, browserInsertText, browserKey, browserNewTab, tabAttached, ...browserActions };
   let uploads = [];
   const machineHoursCache = new Map();
   let analyticsCache = null;
@@ -247,6 +250,8 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine 
   };
   const broadcast = (event, data) => {
     if (event === 'message') data = annotateMessage(data);
+    if (event === 'state') data = maskBrowserState(data);
+    if (event === 'event') data = maskDeep(data);
     const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
     for (const res of clients) res.write(msg);
   };
@@ -318,6 +323,7 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://x');
     const p = url.pathname;
+    res.browserOutput = p === '/api/browser-sessions' || p.startsWith('/api/browser-sessions/');
     try {
       if (readOnlyPreview && !loopbackRequest(req)) return send(res, 403, { error: 'The read-only preview accepts only local requests.' });
       // The raw route runs before allowedRequest(): a request from the opaque origin of the frame is cross-site and has no cookie.
@@ -396,7 +402,7 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine 
           refreshMailbox();
           if (typeof engine.decorateProjects === 'function') engine.state.projects = decorateProjects(listProjects());
         }
-        return send(res, 200, engine.state || {});
+        return send(res, 200, maskBrowserState(engine.state || {}));
       }
       if (p === '/api/chats' && req.method === 'GET') {
         const projects = engine.state?.control?.projects || {};
@@ -787,26 +793,26 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine 
         return send(res, result.errors.length ? 400 : 200, { ok: !result.errors.length, ...result });
       }
       if (p === '/api/browser-sessions' && req.method === 'GET') {
-        const sessions = await Promise.all(Object.values(listBrowserSessions()).map(browserStatus));
+        const sessions = await Promise.all(Object.values(listBrowserSessions()).map(browser.browserStatus));
         // The CDP probe state comes from the last engine tick.
         return send(res, 200, withProbeState(sessions, engine.state?.managedBrowsers));
       }
       if (p === '/api/browser-sessions/tabs' && req.method === 'GET') {
         const project = url.searchParams.get('project');
         if (!engine.state?.control?.projects?.[project]) return send(res, 404, { error: 'Unknown open project.' });
-        try { return send(res, 200, await listBrowserTabs(project)); }
+        try { return send(res, 200, await browser.listBrowserTabs(project)); }
         catch (e) { return send(res, 409, { error: e.message }); }
       }
       if (p === '/api/browser-sessions/screenshot' && req.method === 'GET') {
         const project = url.searchParams.get('project');
         if (!engine.state?.control?.projects?.[project]) return send(res, 404, { error: 'Unknown open project.' });
-        try { return send(res, 200, await browserScreenshot(project, url.searchParams.get('tab')), 'image/jpeg'); }
+        try { return send(res, 200, await browser.browserScreenshot(project, url.searchParams.get('tab')), 'image/jpeg'); }
         catch (e) { return send(res, 409, { error: e.message }); }
       }
       if (p === '/api/browser-sessions/navigation' && req.method === 'GET') {
         const project = url.searchParams.get('project');
         if (!engine.state?.control?.projects?.[project]) return send(res, 404, { error: 'Unknown open project.' });
-        try { return send(res, 200, await browserNavigationState(project, url.searchParams.get('tab'))); }
+        try { return send(res, 200, await browser.browserNavigationState(project, url.searchParams.get('tab'))); }
         catch (e) { return send(res, 409, { error: e.message }); }
       }
       if (p === '/api/browser-sessions/bookmarks' && req.method === 'GET') {
@@ -819,6 +825,22 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine 
         const body = await jsonBody(req);
         if (!engine.state?.control?.projects?.[body.project]) return send(res, 404, { error: 'Unknown open project.' });
         try {
+          if (body.action === 'add-current') {
+            const tabs = await browser.listBrowserTabs(body.project);
+            const tab = body.tab ? tabs.find((entry) => entry.id === body.tab) : tabs.length === 1 ? tabs[0] : null;
+            if (!tab) throw new Error('Select an open tab to bookmark.');
+            const name = maskBrowserText(tab.title || tab.url, { full: true }).slice(0, 60);
+            return send(res, 200, addBookmark(body.project, { name, url: tab.url }));
+          }
+          if (body.action === 'open') {
+            const index = Number(body.index);
+            const bookmark = Number.isInteger(index) && index >= 0 ? listBookmarks(body.project).bookmarks[index] : null;
+            if (!bookmark) throw new Error('Bookmark index is out of range.');
+            if (body.newTab === true) return send(res, 200, await browser.browserNewTab(body.project, bookmark.url));
+            const guard = await attachedGuard(body, browser.tabAttached);
+            if (guard) return send(res, 409, guard);
+            return send(res, 200, await browser.browserNavigate(body.project, body.tab, bookmark.url));
+          }
           if (body.action === 'add') return send(res, 200, addBookmark(body.project, { name: body.name, url: body.url }));
           if (body.action === 'rename') return send(res, 200, renameBookmark(body.project, body.index, body.name));
           if (body.action === 'move') return send(res, 200, moveBookmark(body.project, body.index, body.to));
@@ -836,35 +858,35 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine 
       if (p === '/api/browser-sessions/navigate' && req.method === 'POST') {
         const body = await jsonBody(req);
         if (!engine.state?.control?.projects?.[body.project]) return send(res, 404, { error: 'Unknown open project.' });
-        const guard = await attachedGuard(body);
+        const guard = await attachedGuard(body, browser.tabAttached);
         if (guard) return send(res, 409, guard);
-        try { return send(res, 200, await browserNavigate(body.project, body.tab, body.url)); }
+        try { return send(res, 200, await browser.browserNavigate(body.project, body.tab, body.url)); }
         catch (e) { return send(res, 409, { error: e.message }); }
       }
       if (p === '/api/browser-sessions/history' && req.method === 'POST') {
         const body = await jsonBody(req);
         if (!engine.state?.control?.projects?.[body.project]) return send(res, 404, { error: 'Unknown open project.' });
-        const guard = await attachedGuard(body);
+        const guard = await attachedGuard(body, browser.tabAttached);
         if (guard) return send(res, 409, guard);
-        try { return send(res, 200, await browserHistoryAction(body.project, body.tab, body.action)); }
+        try { return send(res, 200, await browser.browserHistoryAction(body.project, body.tab, body.action)); }
         catch (e) { return send(res, 409, { error: e.message }); }
       }
       if (p === '/api/browser-sessions/input' && req.method === 'POST') {
         const body = await jsonBody(req);
         if (!engine.state?.control?.projects?.[body.project]) return send(res, 404, { error: 'Unknown open project.' });
-        const guard = await attachedGuard(body);
+        const guard = await attachedGuard(body, browser.tabAttached);
         if (guard) return send(res, 409, guard);
         try {
-          if (body.type === 'click') return send(res, 200, await browserClick(body.project, body.tab, body.x, body.y));
-          if (body.type === 'text') return send(res, 200, await browserInsertText(body.project, body.tab, body.text));
-          if (body.type === 'key') return send(res, 200, await browserKey(body.project, body.tab, body.key));
+          if (body.type === 'click') return send(res, 200, await browser.browserClick(body.project, body.tab, body.x, body.y));
+          if (body.type === 'text') return send(res, 200, await browser.browserInsertText(body.project, body.tab, body.text));
+          if (body.type === 'key') return send(res, 200, await browser.browserKey(body.project, body.tab, body.key));
           return send(res, 400, { error: 'Unknown browser input type.' });
         } catch (e) { return send(res, 409, { error: e.message }); }
       }
       if (p === '/api/browser-sessions/new-tab' && req.method === 'POST') {
         const body = await jsonBody(req);
         if (!engine.state?.control?.projects?.[body.project]) return send(res, 404, { error: 'Unknown open project.' });
-        try { return send(res, 200, await browserNewTab(body.project)); }
+        try { return send(res, 200, await browser.browserNewTab(body.project)); }
         catch (e) { return send(res, 409, { error: e.message }); }
       }
       if (p === '/api/browser-sessions/tab-close' && req.method === 'POST') {
@@ -1012,7 +1034,7 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine 
       if (p === '/api/events') {
         res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' });
         res.write(`retry: 3000\n\n`);
-        if (engine.state) res.write(`event: state\ndata: ${JSON.stringify(engine.state)}\n\n`);
+        if (engine.state) res.write(`event: state\ndata: ${JSON.stringify(maskBrowserState(engine.state))}\n\n`);
         clients.add(res);
         const ping = setInterval(() => res.write(': ping\n\n'), 25000);
         req.on('close', () => { clearInterval(ping); clients.delete(res); });
@@ -1100,7 +1122,7 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine 
     try {
       tickPromise = engine.tick();
       await tickPromise;
-    } catch (e) { engine.log('error', `tick failed: ${e.message}`); console.error(e); }
+    } catch (e) { engine.log('error', `tick failed: ${e.message}`); console.error(maskBrowserText(e.stack || e.message)); }
     finally { tickPromise = null; }
     if (!closed) timer = setTimeout(loop, cfg.tickSeconds * 1000);
   };

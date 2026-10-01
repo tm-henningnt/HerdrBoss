@@ -248,6 +248,19 @@ test('the orchestrator skill stays short and links each reference file', () => {
   ]) assert.ok(all.includes(rule), rule);
 });
 
+test('browser guidance keeps credentials out of every output mode', () => {
+  for (const file of ['docs/cli.md', 'kit/browser-service.md']) {
+    const text = fs.readFileSync(path.resolve(file), 'utf8');
+    assert.match(text, /--full[^\n]*hosts/);
+    assert.match(text, /query strings and fragments/);
+    assert.match(text, /Bearer/);
+    assert.match(text, /JWT/);
+    assert.match(text, /<redacted>/);
+  }
+  const app = fs.readFileSync(path.resolve('public/app.js'), 'utf8');
+  assert.match(app.slice(app.indexOf("browsers: ['Browsers'")), /query strings and fragments/);
+});
+
 test('the brief template has the leased resources line and the kit names the lease rule', () => {
   const template = fs.readFileSync(path.resolve('kit/templates/worker-brief.md'), 'utf8');
   assert.match(template, /^- Leased resources: {{leases}}$/m);

@@ -1624,7 +1624,7 @@ test('the bookmark API lists, adds, renames, moves, removes, sets the start page
   assert.deepEqual(await (await get()).json(), { bookmarks: [], startPage: null }, 'a fresh project has no bookmarks');
   const added = await post({ project: 'alpha', action: 'add', name: 'Docs', url: 'https://docs.example/' });
   assert.equal(added.status, 200);
-  assert.deepEqual((await added.json()).bookmarks, [{ name: 'Docs', url: 'https://docs.example/' }]);
+  assert.deepEqual((await added.json()).bookmarks, [{ name: 'Docs', url: 'https://<tenant>.example/' }]);
   await post({ project: 'alpha', action: 'add', name: 'Code', url: 'https://code.example/' });
   assert.deepEqual((await (await get()).json()).bookmarks.map((b) => b.name), ['Docs', 'Code']);
 
@@ -1638,7 +1638,7 @@ test('the bookmark API lists, adds, renames, moves, removes, sets the start page
 
   const start = await post({ project: 'alpha', action: 'start', url: 'https://start.example/' });
   assert.equal(start.status, 200);
-  assert.equal((await start.json()).startPage, 'https://start.example/');
+  assert.equal((await start.json()).startPage, 'https://<tenant>.example/');
   assert.equal((await post({ project: 'alpha', action: 'start', url: '' })).status, 200, 'an empty start page clears it');
   assert.equal((await (await get()).json()).startPage, null);
 

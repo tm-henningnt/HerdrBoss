@@ -3,6 +3,7 @@ import path from 'node:path';
 import net from 'node:net';
 import { spawn as spawnProcess } from 'node:child_process';
 import { DATA_DIR } from './config.js';
+import { maskBrowserText } from './browser-url-mask.js';
 import { collectProcesses } from './collect.js';
 import { codeSignCloneDir, listCloneNames, readProcesses, removeCodeSignClone } from './clone-sweep.js';
 import { PROJECT_BROWSER_POOL_NAME, acquireLeaseFor, dropLeases, projectBrowserPool, readLeases } from './leases.js';
@@ -402,7 +403,7 @@ export async function restartBrowser(project, headless, options = {}) {
     await browserNavigate(project, tabs[0]?.id, pageUrl);
     return { ...status, restoredPage: true };
   } catch (error) {
-    return { ...status, restoredPage: false, restoreError: error.message };
+    return { ...status, restoredPage: false, restoreError: maskBrowserText(error.message, { full: true }) };
   }
 }
 

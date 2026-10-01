@@ -1,4 +1,5 @@
 import { isProbeTab } from './browser-probe.js';
+import { maskUrl, maskBrowserText } from './browser-url-mask.js';
 import { forgetAgentBrowserTab, recordAgentBrowserTab } from './browser-activity.js';
 import { browserStatus, listBrowserSessions, listBrowserTabViewports, setBrowserTabViewport } from './browser-pool.js';
 
@@ -27,8 +28,7 @@ async function targets(session) {
 }
 
 function displayUrl(value) {
-  try { const url = new URL(value); return (['http:', 'https:'].includes(url.protocol) ? `${url.origin}${url.pathname}` : url.href).slice(0, 160); }
-  catch { return String(value || '').slice(0, 160); }
+  return maskUrl(String(value || ''), { full: true }).slice(0, 160);
 }
 
 async function browserEndpoint(session) {
@@ -139,7 +139,7 @@ function commands(endpoint, requests, timeoutMs = 8000, timeoutMessage = null) {
       settled = true;
       clearTimeout(timer);
       try { socket.close(); } catch {}
-      if (error) reject(error); else resolve(result);
+      if (error) reject(new Error(maskBrowserText(error.message, { full: true }))); else resolve(result);
     }
     const sendNext = () => {
       try {
@@ -201,7 +201,7 @@ export async function browserNavigate(project, tabId, value, adapters = {}) {
   const result = (await pageCommands(context.endpoint, context.viewport, [
     { method: 'Page.navigate', params: { url: url.href } },
   ], undefined, undefined, adapters)).at(-1);
-  if (result?.errorText) throw new Error(result.errorText);
+  if (result?.errorText) throw new Error(maskBrowserText(result.errorText, { full: true }));
   return { url: displayUrl(url.href) };
 }
 
@@ -212,7 +212,7 @@ export async function browserNavigationState(project, tabId, adapters = {}) {
   ], undefined, undefined, adapters)).at(-1);
   const entries = history?.entries || [];
   const currentIndex = history?.currentIndex ?? -1;
-  return { url: entries[currentIndex]?.url || '', canGoBack: currentIndex > 0, canGoForward: currentIndex >= 0 && currentIndex < entries.length - 1 };
+  return { url: maskUrl(entries[currentIndex]?.url || '', { full: true }), canGoBack: currentIndex > 0, canGoForward: currentIndex >= 0 && currentIndex < entries.length - 1 };
 }
 
 export async function browserHistoryAction(project, tabId, action, adapters = {}) {
@@ -221,7 +221,7 @@ export async function browserHistoryAction(project, tabId, action, adapters = {}
     const result = (await pageCommands(context.endpoint, context.viewport, [
       { method: 'Page.navigate', params: { url: 'about:blank' } },
     ], undefined, undefined, adapters)).at(-1);
-    if (result?.errorText) throw new Error(result.errorText);
+    if (result?.errorText) throw new Error(maskBrowserText(result.errorText, { full: true }));
     return { url: 'about:blank' };
   }
   if (!['back', 'forward'].includes(action)) throw new Error('Unknown navigation action.');
@@ -234,7 +234,7 @@ export async function browserHistoryAction(project, tabId, action, adapters = {}
   await pageCommands(context.endpoint, context.viewport, [
     { method: 'Page.navigateToHistoryEntry', params: { entryId: entry.id } },
   ], undefined, undefined, adapters);
-  return { url: entry.url };
+  return { url: maskUrl(entry.url, { full: true }) };
 }
 
 // Move the mouse to a position relative to the screenshot, with no press, so a hover state or a tooltip shows.

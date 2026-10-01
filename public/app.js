@@ -6218,6 +6218,7 @@ const HELP = {
     <p>A status dot shows working, blocked, failed, idle, or done. Failed means the last visible worker output matched a known provider error, including <b>Free usage exceeded</b>. Herdr Boss reads only the last eight visible lines: on every tick while a worker is working, and when a worker first appears idle or done or changes into either state. A worker can show failed while Herdr still reports it working; the engine then does not count it as a running worker. The failed status clears when a later read shows no known failure, or when a different worker uses the pane. Herdr Boss sends the matched error label, worker name, and pane ID to the project orchestrator. Blocked workers get a notice after five minutes. Idle and done agents are ready for input; they have not always finished their task. Rows with the <b>orch</b> or <b>boss</b> label are orchestrators.</p>
     <p>An orchestrator that stays idle gets a nudge when its published status still has an actionable task: status <b>todo</b>, <b>doing</b>, or <b>review</b> with every task in its <b>blocked by</b> list done. The project must be in <b>auto</b> or <b>active</b> mode, no other worker in that workspace may work, be blocked, or have failed, and the idle period must reach the configured idle minutes. The notice names the task ID and title. Resume an idle or done worker on that task, or start suitable work. One key per project and task keeps the normal notice cooldown in charge; a different next task prompts again.</p>`],
   browsers: ['Browsers', `
+    <p>Addresses, tab titles, and bookmark names mask outside hosts. Output removes query strings and fragments, bearer values, tokens, and JWT strings. Enter a complete address to navigate or change a start page. Bookmarks open through their stored index.</p>
     <p>One persistent Chrome per project. Agents drive it; you can watch and help.</p>
     <p>Each card shows the leased port and the CDP address <code>http://127.0.0.1:PORT</code> of the project, with a link to its row on the Allocation page.</p>
     <h3>Start and manage</h3><p><b>Open visible</b> or <b>Open headless</b> starts the browser. <b>Manage</b> restarts it in the other mode, closes it, or sets the window size for the next launch.</p>
@@ -8036,7 +8037,8 @@ document.addEventListener('submit', async (e) => {
   button.disabled = true;
   try {
     if (startSlug) {
-      await postBookmark(startSlug, { action: 'start', url: form.elements.url.value });
+      const saved = browserSessions.find((browser) => browser.project === startSlug)?.startPage ?? '';
+      if (form.elements.url.value !== saved) await postBookmark(startSlug, { action: 'start', url: form.elements.url.value });
     } else if (renameSlug) {
       await postBookmark(renameSlug, { action: 'rename', index: Number(form.dataset.index), name: form.elements.name.value });
     } else if (sizeSlug) {
@@ -8303,7 +8305,7 @@ document.addEventListener('click', async (e) => {
     const tab = tabs.find((t) => t.id === browserSelectedTab[slug]) || tabs[0];
     if (!tab) { browserMessages[slug] = 'No page is open to bookmark.'; lastRender = ''; render(); return; }
     e.target.disabled = true;
-    try { await postBookmark(slug, { action: 'add', name: tab.title || tab.url, url: tab.url }); }
+    try { await postBookmark(slug, { action: 'add-current', tab: tab.id }); }
     catch (error) { browserMessages[slug] = error.message; lastRender = ''; render(); }
     finally { e.target.disabled = false; }
     return;
@@ -8316,11 +8318,10 @@ document.addEventListener('click', async (e) => {
     e.target.disabled = true;
     try {
       if (newTab) {
-        const created = await postJson('/api/browser-sessions/new-tab', { project: slug });
+        const created = await postJson('/api/browser-sessions/bookmarks', { project: slug, action: 'open', index: Number(e.target.dataset.index), newTab: true });
         browserSelectedTab[slug] = created.id;
-        await postBrowserAction('/api/browser-sessions/navigate', { project: slug, tab: created.id, url: bookmark.url });
       } else {
-        await postBrowserAction('/api/browser-sessions/navigate', { project: slug, tab: browserSelectedTab[slug], url: bookmark.url });
+        await postBrowserAction('/api/browser-sessions/bookmarks', { project: slug, action: 'open', index: Number(e.target.dataset.index), tab: browserSelectedTab[slug] });
       }
       delete browserAddressDraft[slug];
       previewMessage(slug, 'Opening bookmark…');

@@ -16,6 +16,7 @@ import { quotaUsageToday, recordQuotaSnapshot, readUsage } from './usage.js';
 import { renderNightReport } from './night-report.js';
 import { adhocOneLine, effectiveRoutines, routinePromptText, slotAfter, slotEnd } from './watch-routines.js';
 import { listBrowserSessions, cdpResponds, browserProcessCheck, closeBrowser } from './browser-pool.js';
+import { maskDeep, maskBrowserState, maskBrowserText } from './browser-url-mask.js';
 import { agentBrowserTabIds } from './browser-activity.js';
 import { probeBrowser, createBrowserProbes, PROBE_INTERVAL_MS } from './browser-probe.js';
 import { inspectUncollectedWorkers, processDueWorkerPaneCloses, shouldCloseManagedBrowser, trackBrowserIdle } from './maintenance.js';
@@ -624,7 +625,7 @@ export class Engine extends EventEmitter {
     this.kitRoot = kitRoot;
     this.lockDataDir = lockDataDir;
     this.kitNoticeRead = false;
-    this.state = readJson(STATE_FILE, null);
+    this.state = maskBrowserState(readJson(STATE_FILE, null));
     this.messageStore = openMessageStore({ dir: DATA_DIR });
     this.messageVersion = this.messageStore.version();
     this.messageSnapshot = new Map(this.messageStore.all().map((record) => [record.id, JSON.stringify(record)]));
@@ -636,7 +637,7 @@ export class Engine extends EventEmitter {
     }
     this.events = [];
     try {
-      this.events = fs.readFileSync(EVENTS_FILE, 'utf8').trim().split('\n').slice(-200).map((l) => JSON.parse(l));
+      this.events = fs.readFileSync(EVENTS_FILE, 'utf8').trim().split('\n').slice(-200).map((l) => maskDeep(JSON.parse(l)));
     } catch {}
     this.running = false;
     this.models = loadModels();
@@ -644,7 +645,7 @@ export class Engine extends EventEmitter {
   }
 
   log(type, text, extra = {}) {
-    const e = { at: new Date().toISOString(), type, text, ...extra };
+    const e = maskDeep({ at: new Date().toISOString(), type, text, ...extra });
     this.events.push(e);
     if (this.events.length > 200) this.events.shift();
     try { fs.appendFileSync(EVENTS_FILE, JSON.stringify(e) + '\n'); } catch {}
@@ -915,10 +916,10 @@ export class Engine extends EventEmitter {
               this.log('browser-idle-close', `Closed idle project browser ${b.project} after ${this.cfg.browser?.idleCloseMinutes ?? 20} minutes.`, { project: b.project, port: b.port });
             }
           } catch (error) {
-            this.log('error', `Could not close idle browser ${b.project}: ${String(error?.message || error).slice(0, 200)}`, { project: b.project, port: b.port });
+            this.log('error', `Could not close idle browser ${b.project}: ${maskBrowserText(String(error?.message || error)).slice(0, 200)}`, { project: b.project, port: b.port });
           }
         }
-        return { ...b, responsive: matched ? await this.collectors.cdpResponds(b.port) : false, notResponding: probe.notResponding, probeAt: probe.lastProbeAt, probeReason: probe.reason, probeSince: probe.since };
+        return maskDeep({ ...b, responsive: matched ? await this.collectors.cdpResponds(b.port) : false, notResponding: probe.notResponding, probeAt: probe.lastProbeAt, probeReason: probe.reason, probeSince: probe.since });
       }));
       const night = readNight({ dataDir: DATA_DIR, now });
 
