@@ -117,8 +117,8 @@ try {
     'tickSeconds', 'quotaSeconds', 'push', 'alertCooldownSeconds', 'providerKinds', 'orchestratorLabel', 'port', 'host',
   ]);
   assert.deepEqual(view.map(({ source }) => source), [
-    'config', 'config', 'config', 'config', 'config', 'config', 'config', 'default', 'config', 'config', 'config', 'default',
-    'config', 'config', 'config', 'default', 'config', 'config', 'config', 'config',
+    'config', 'config', 'config', 'config', 'config', 'default', 'default', 'config', 'config', 'default', 'config', 'config',
+    'config', 'default', 'default', 'config', 'config', 'config', 'default', 'config', 'config', 'config', 'config',
   ]);
   assert.deepEqual(view.find(({ setting }) => setting === 'watch.maxWorkers'), {
     group: 'Workers', setting: 'watch.maxWorkers', value: 16, source: 'config',
