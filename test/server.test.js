@@ -2069,7 +2069,7 @@ test('the Chat page has a route, a menu position, a composer key rule, a before 
   assert.match(app, /data-chat-jump/);
   // Opening a chat marks it read. A send is the only write path, and a refused send offers a retry.
   assert.match(app, /fetch\(`\/api\/chats\/\$\{encodeURIComponent\(thread\)\}\/read`, \{ method: 'POST' \}\)/);
-  assert.match(app, /postJson\('\/api\/messages', \{ thread, kind: 'message', text \}\)/);
+  assert.match(app, /postJson\('\/api\/messages', \{ thread, kind: 'message', text, \.\.\.\(attached\.ids\.length \? \{ attachments: attached\.ids \} : \{\}\) \}\);/);
   assert.match(app, /data-chat-retry/);
   assert.match(css, /\.chat-layout\b/);
   assert.match(css, /\.chat-bubble\.from-owner\b/);
