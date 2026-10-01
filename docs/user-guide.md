@@ -1382,6 +1382,8 @@ Each live worker that has no task ID, or whose task ID is missing from the statu
 
 The `sync` object compares working agents with Doing cards. `agentsWorking` counts the working agents in the project's workspace, including the orchestrator. `liveWorkers` counts live worker runs. `doingCards` counts tasks whose effective state is `doing`. `unplanned` and `noWorker` count their matching fields. `mismatches` adds the task mismatch count, unplanned workers, and no-worker cards. `inSync` is false when agents work but no card is Doing, or when an unplanned worker or a no-worker card exists. `text` gives these counts on one line.
 
+The project page shows `status published N min ago`. The badge is amber when `statusStale.level` is `warn`. The phase and summary lines show the age of their data. The sync line uses `sync.text` and is amber when `sync.inSync` is false. The page refreshes from live state events. It keeps the scroll position, focus, and open Board column.
+
 A task with published status `doing` stays in Doing when it has no run record. After 30 minutes, it has `noWorker: true` and `noWorkerSinceMin`. A task whose workers failed or went away still returns to Ready or Blocked. `statusStale.level` is `warn` when the status is more than 30 minutes old and a worker run or the orchestrator is active. It is `ok` when the status is 30 minutes old or less, or when neither is active. Project data uses the same freshness rule as the engine's stale-status facts.
 
 Each task gets one effective state, `state`:
@@ -1422,7 +1424,9 @@ The board shows each task in one column of the flow. The column comes from the e
 | Review | A task whose worker finished or was collected and whose branch is not merged. |
 | Done | The last 10 done tasks by `updated`. **Show all N done** shows the rest. |
 
-Each card shows the task ID, the title, what the task waits on, and the worker. A Blocked card names each open blocker. The blocker ID is a link that selects that task. A blocker that is not in the status shows as **ID (outside)**. A Blocked card always shows a reason. When `waitingOn` is `task` and no blocker is open, the card says **a task that the status does not name**. When the status gives no reason, the card says **a reason that the status does not state**. A wait on the Owner links to the Mailbox conversation when the task has `mailboxId`. A Doing card shows the worker, the model, the elapsed time, and the source, for example `live from worker NAME`. A Review card shows the worker and the source.
+Each card shows the task ID, the title, what the task waits on, and the worker. A Blocked card names each open blocker. The blocker ID is a link that selects that task. A blocker that is not in the status shows as **ID (outside)**. A Blocked card always shows a reason. When `waitingOn` is `task` and no blocker is open, the card says **a task that the status does not name**. When the status gives no reason, the card says **a reason that the status does not state**. A wait on the Owner links to the Mailbox conversation when the task has `mailboxId`. A Doing card shows the worker, the model, the elapsed time, and the source, for example `live from worker NAME`. A task with `noWorker: true` shows an amber **No worker** badge. A Review card shows the worker and the source.
+
+The Doing column also shows one **Unplanned work** card for each live worker without a matching task. Each card shows the worker name, kind, model, and age.
 
 Ready sorts by priority. The tasks on the critical path come first, then the tasks in the published group order, then the tasks in the published order. Doing puts the longest-running worker first.
 
@@ -1484,7 +1488,7 @@ On a phone, the graph has its natural size and scrolls sideways in its own box. 
 
 For a visual check, add `?theme=light` or `?theme=dark` to a dashboard address. The page then uses that theme and ignores the system setting.
 
-When the published status is stale, the project page and the Projects list show `Status stale: <age>` next to the updated time. The mark stays until the orchestrator publishes again. See [Rules and notices](#rules-and-notices) for the stale rule.
+The project page shows `status published N min ago`. The badge is amber when the server marks the status stale. The Projects list shows `Status stale: <age>` when a stale status has been marked. The mark stays until the orchestrator publishes again. See [Rules and notices](#rules-and-notices) for the stale rule.
 
 ## Agents page
 

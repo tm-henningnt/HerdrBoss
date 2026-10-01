@@ -1,6 +1,7 @@
 import { markdownOrPlain, plainTextHtml, sanitizeRendered } from './markdown.js';
 import { FLOW, FLOW_LABEL, DONE_LIMIT, taskMap, taskState, blockReasons, boardColumns, dependencyChain, criticalPath, graphTasks, graphDepths, blockerIds, elapsedText, domPart, fleetItems, fleetColumns, fleetFilter, fleetWho } from './board.js';
 import { patchHtml } from './keyed.js';
+import { noWorkerBadgeView, phaseAgeText, publishedAgeBadgeView, projectSyncLineView, summaryAgeText, unplannedCardView } from './project-live-view.js';
 import { SETTING_HELP, settingPopupHtml, settingsGuideHtml } from './setting-help.js';
 import { groupMailRows, inboxSections, listTime, mailRowHtml } from './mail-rows.js';
 import { chatJumpHtml, chatJumpButtonHtml, chatAtBottom, chatJumpScroll } from './chat-jump.js';
@@ -5000,29 +5001,34 @@ function boardCard(t, ctx) {
   const w = t.worker;
   const elapsed = state === 'doing' ? elapsedText(w?.startedAt, now) : '';
   const worker = w ? `<p class="card-worker"><span class="mono">${esc(w.name)}</span>${w.model ? ` · ${esc(w.model)}` : ''}${elapsed ? ` · <span class="num">${esc(elapsed)}</span>` : ''}</p>` : '';
+  const noWorker = noWorkerBadgeView(t);
+  const pathBadge = id && path.has(id) ? '<span class="card-flag">critical path</span>' : '';
+  const flags = state === 'doing' || noWorker || pathBadge
+    ? `<div class="card-badges" data-key="card-badges">${noWorker ? `<span class="stale-mark no-worker-badge">${esc(noWorker.text)}</span>` : ''}${pathBadge}</div>` : '';
   const source = t.stateSource && t.stateSource !== 'published' && (state === 'doing' || state === 'review' || (state === 'done' && /^merged/.test(t.stateSource))) ? `<p class="card-source">${esc(t.stateSource)}</p>` : '';
   const title = id
     ? `<button type="button" class="card-title" data-task-select="${esc(id)}" data-slug="${esc(slug)}" data-reveal="graph" aria-pressed="${id === selected}">${esc(t.title)}</button>`
     : `<span class="card-title">${esc(t.title)}</span>`;
   return `<li class="${cls}" data-key="task:${esc(key)}"${id ? ` id="${esc(cardDomId(slug, id))}" data-task-card="${esc(id)}"` : ''}>`
-    + `<div class="card-top"><span class="card-dot" aria-hidden="true"></span><span class="card-id mono">${esc(id)}</span>${id && path.has(id) ? '<span class="card-flag">critical path</span>' : ''}${url ? `<a class="card-link" href="${esc(url)}" target="_blank" rel="noreferrer" aria-label="Open issue ${esc(id)}">${ICON_EXTERNAL}</a>` : ''}</div>`
-    + `${title}${wait}${worker}${source}</li>`;
+    + `<div class="card-top"><span class="card-dot" aria-hidden="true"></span><span class="card-id mono">${esc(id)}</span>${url ? `<a class="card-link" href="${esc(url)}" target="_blank" rel="noreferrer" aria-label="Open issue ${esc(id)}">${ICON_EXTERNAL}</a>` : ''}</div>`
+    + `${flags}${title}${wait}${worker}${source}</li>`;
 }
 
 // The phone shows one column at a time. The first column with work opens, in the order Doing, Ready, Blocked, Review, Done.
-function boardActiveColumn(view, counts) {
+function boardActiveColumn(view, counts, hasUnplanned = false) {
   if (FLOW.includes(view.boardCol)) return view.boardCol;
-  return ['doing', 'ready', 'blocked', 'review', 'done'].find((k) => counts[k] > 0) || 'ready';
+  return ['doing', 'ready', 'blocked', 'review', 'done'].find((k) => counts[k] > 0 || (k === 'doing' && hasUnplanned)) || 'ready';
 }
 
 function boardBlock(p, slug) {
   const tasks = (p.tasks || []).filter((t) => t && t.title != null);
-  if (!tasks.length) return '';
+  const unplanned = Array.isArray(p.unplanned) ? p.unplanned : [];
+  if (!tasks.length && !unplanned.length) return '';
   const view = projectView(slug);
   const b = boardColumns(tasks, { groups: p.groups, showAllDone: view.doneAll });
   const selected = view.selected && b.map.has(view.selected) ? view.selected : null;
   const ctx = { slug, map: b.map, selected, chain: selected ? dependencyChain(selected, tasks) : new Set(), path: new Set(b.critical.path), now: Date.now() };
-  const active = boardActiveColumn(view, b.counts);
+  const active = boardActiveColumn(view, b.counts, unplanned.length > 0);
   const open = tasks.length - b.counts.done;
   const steps = b.critical.path.length;
   const pathText = steps ? ` · critical path${b.critical.milestone ? ` to ${b.critical.milestone.title}` : ''}: ${steps} ${steps === 1 ? 'task' : 'tasks'}` : '';
@@ -5030,9 +5036,13 @@ function boardBlock(p, slug) {
   const tabs = `<div class="board-tabs" role="tablist" aria-label="Board columns">${FLOW.map((k) => `<button type="button" role="tab" class="board-tab st-${k}" data-board-tab="${k}" data-slug="${esc(slug)}" aria-selected="${k === active}" aria-controls="${esc(colDomId(slug, k))}" tabindex="${k === active ? 0 : -1}"><span class="card-dot" aria-hidden="true"></span><span class="tab-label">${FLOW_LABEL[k]}</span><span class="num">${b.counts[k]}</span></button>`).join('')}</div>`;
   const cols = FLOW.map((k) => {
     const list = b.columns[k];
+    const unplannedCards = k === 'doing' ? unplanned.map((worker, i) => {
+      const card = unplannedCardView(worker, i);
+      return `<li class="card st-doing unplanned-card" data-key="${esc(card.key)}"><div class="card-top"><span class="card-dot" aria-hidden="true"></span><span class="card-flag">Unplanned work</span></div><span class="card-title">${esc(card.name)}</span><p class="card-worker">${esc(card.kind)} · ${esc(card.model)} · <span class="num">${esc(card.age)}</span></p></li>`;
+    }).join('') : '';
     const more = k === 'done' && (b.hiddenDone || (view.doneAll && b.counts.done > DONE_LIMIT))
       ? `<button type="button" class="board-more" data-board-done="${esc(slug)}">${b.hiddenDone ? `Show all ${b.counts.done} done` : `Show the last ${DONE_LIMIT}`}</button>` : '';
-    const cards = list.length ? `<ol class="board-list">${list.map((t, i) => boardCard(t, { ...ctx, index: `${k}${i}` })).join('')}</ol>` : `<p class="board-empty">${BOARD_EMPTY[k]}</p>`;
+    const cards = list.length || unplannedCards ? `<ol class="board-list">${unplannedCards}${list.map((t, i) => boardCard(t, { ...ctx, index: `${k}${i}` })).join('')}</ol>` : `<p class="board-empty">${BOARD_EMPTY[k]}</p>`;
     return `<section class="board-col st-${k}" data-key="col:${k}" data-col="${k}" id="${esc(colDomId(slug, k))}" role="tabpanel" aria-label="${FLOW_LABEL[k]}, ${b.counts[k]}"><h3><span class="card-dot" aria-hidden="true"></span>${FLOW_LABEL[k]}<span class="num">${b.counts[k]}</span></h3>${cards}${more}</section>`;
   }).join('');
   const body = `<div class="board" data-key="board:${esc(slug)}">${stale}${tabs}<div class="board-cols" data-board-cols="${esc(slug)}" data-keep-attrs="style">${cols}</div></div>`;
@@ -5427,17 +5437,22 @@ function project(s, slug) {
   const live = s.control?.projects?.[slug];
   const p = published || (live ? { slug, project: live.label, workspace: live.workspace, tasks: [] } : null);
   if (!p) return `<div class="panel empty">No open project "${esc(slug)}".</div>`;
-  const phases = p.phases?.length ? `<ol class="phases">${p.phases.map((ph) => {
+  const phaseList = p.phases?.length ? `<ol class="phases">${p.phases.map((ph) => {
     const idx = p.phases.indexOf(p.phase);
     const i = p.phases.indexOf(ph);
     return `<li class="${ph === p.phase ? 'current' : idx >= 0 && i < idx ? 'done' : ''}">${esc(ph)}</li>`;
   }).join('')}</ol>` : p.phase ? `<div><span class="tag">${esc(p.phase)}</span></div>` : '';
+  const phases = phaseList ? `<div class="project-phase-row" data-key="project-phase">${phaseList}<span class="project-age" data-key="project-phase-age">${esc(phaseAgeText(p.phaseAgeMin))}</span></div>` : '';
+  const summary = p.summary ? `<p class="project-summary" data-key="project-summary"><span>${esc(p.summary)}</span><span class="project-age" data-key="project-summary-age">${esc(summaryAgeText(p.summaryAgeMin))}</span></p>` : '';
+  const publishedAge = published ? publishedAgeBadgeView(p.publishedAgeMin, p.statusStale?.level) : { text: 'status not published', tone: 'plain' };
+  const statusBadgeClass = publishedAge.tone === 'warn' ? 'stale-mark stale' : 'tag';
+  const syncLine = projectSyncLineView(p.sync);
   const metrics = p.metrics?.length ? `<section class="metrics">${p.metrics.map((m) => `<div class="panel metric"><div class="k">${esc(m.label)}</div><div class="v">${esc(m.value)}</div>${m.detail ? `<div class="d">${esc(m.detail)}</div>` : ''}</div>`).join('')}</section>` : '';
   const work = workModel(p);
   const links = p.links?.length ? `<div class="panel"><h2>Links</h2><ul class="links">${p.links.map((l) => safeUrl(l.url) ? `<li><a href="${esc(safeUrl(l.url))}" target="_blank" rel="noreferrer">${esc(l.label || l.url)}</a></li>` : `<li>${esc(l.label || '')}</li>`).join('')}</ul></div>` : '';
   const notes = p.notes?.length ? `<div class="panel"><h2>Notes</h2><ul class="notes">${p.notes.map((n) => `<li>${code(n)}</li>`).join('')}</ul></div>` : '';
   return [
-    `<section class="phead"><h1>${esc(p.project)}</h1>${p.goal ? `<div class="owner-goal">${goalField('Current Owner goal', p.goal)}</div>` : ''}${live?.orch?.pane ? goalSetBlock(s, slug, p.goal, false) : ''}${p.summary ? `<p>${esc(p.summary)}</p>` : ''}${phases}<div class="win-foot">${published ? `updated ${ago(p.updated)}${staleStatusTag(s, p)}${p.status ? ` · ${esc(p.status)}` : ''}` : 'No project status published yet'}${p.git && typeof p.git === 'object' && (p.git.branch || p.git.commit || p.git.dirty) ? ` · <span class="mono">${esc(p.git.branch || '')}${p.git.commit ? ` @ ${esc(String(p.git.commit).slice(0, 12))}` : ''}${p.git.dirty ? ' · uncommitted changes' : ''}</span>` : ''}</div></section>`,
+    `<section class="phead" data-key="project-head"><h1>${esc(p.project)}</h1>${p.goal ? `<div class="owner-goal">${goalField('Current Owner goal', p.goal)}</div>` : ''}${live?.orch?.pane ? goalSetBlock(s, slug, p.goal, false) : ''}${summary}${phases}<div class="project-published-row" data-key="project-published-age"><span class="${statusBadgeClass}" data-key="project-published-badge">${esc(publishedAge.text)}</span></div><p class="project-sync-line${syncLine.tone === 'warn' ? ' is-warn' : ''}" data-key="project-sync" role="status">${esc(syncLine.text)}</p><div class="win-foot">${published && p.status ? esc(p.status) : ''}${p.git && typeof p.git === 'object' && (p.git.branch || p.git.commit || p.git.dirty) ? `${published && p.status ? ' · ' : ''}<span class="mono">${esc(p.git.branch || '')}${p.git.commit ? ` @ ${esc(String(p.git.commit).slice(0, 12))}` : ''}${p.git.dirty ? ' · uncommitted changes' : ''}</span>` : ''}</div></section>`,
     projectNow(s, p, slug, work),
     metrics,
     programBlock(work),
@@ -5489,7 +5504,9 @@ const HELP = {
     <h3>Needs your decision</h3><p>Open work that waits on you. Each item shows its ID, title, and ask, and links to its Mailbox conversation when the orchestrator set <code>mailboxId</code>. A task that waits on other tasks shows <b>waiting on #ID</b>. A task that waits on the Boss or an external party names it and shows the ask.</p>
     <h3>Board</h3><p>The board has five columns in the order of the flow. <b>Blocked</b> holds a task that waits on another task, the Owner, the Boss, or an external item. <b>Ready</b> holds a task whose dependencies are all done. <b>Doing</b> holds a task with a live worker. <b>Review</b> holds a task whose worker finished or was collected and whose branch is not merged. The card source says <b>finished, not collected</b> when the worker wrote its report and no collect is recorded. A task whose branch is merged shows in Done with the source <b>merged</b>. <b>Done</b> shows the last 10 done tasks. Select <b>Show all N done</b> to see the rest.</p>
     <p>Each card shows the task ID, the title, what the task waits on, and its worker. A Doing card shows the worker, the model, the elapsed time, and the source, for example <b>live from worker NAME</b>. The state comes from the worker records, so it does not wait for a publish. Ready sorts by priority: the critical path first, then the group order, then the published order. A Blocked card always shows a reason. When the status names no blocker, the card says so. The <b>Board</b> page shows the tasks of all projects, and its card links open this page with the task selected.</p>
+    <p><b>Unplanned work</b> cards in Doing show live workers that have no task in the published status. A <b>No worker</b> badge marks a Doing task with no live worker for 30 minutes.</p>
     <p>A <b>stale</b> mark with its reason shows when the published status does not match the workers or is too old. The orchestrator clears it with a new publish.</p>
+    <h3>Live status</h3><p><b>status published N min ago</b> shows the age of the project status. It is amber when the server gives <code>statusStale.level</code> the value <code>warn</code>. The phase and summary lines show the age of their data. The sync line compares working agents with Doing cards. It is amber when <code>sync.inSync</code> is false. The page refreshes from live state events. It keeps the scroll position, focus, and open Board column.</p>
     <h3>Select a task</h3><p>Select a card title to select the task. The card gets a ring, and the graph shows the task and its dependency chain; the other tasks fade. Select a graph box to select its task and go to its card. On a Blocked card, select a blocker ID to go to that task. Select the selected task again to clear the selection. A refresh keeps the selection and the scroll position.</p>
     <h3>Dependencies</h3><p>The graph uses the same states and colors as the board. Each box names its state. Columns show the order. An arrow runs from a blocker to the work that waits on it. A task without links sits in the first column, after the linked tasks. <b>Open work only</b> shows the open tasks and the done tasks that block them directly. Clear it to show all tasks.</p>
     <p>The orange line is the critical path: the longest chain of open tasks to the next milestone. The next milestone is the first group with open work. Its boxes say <b>path</b>, and its cards say <b>critical path</b>.</p>
