@@ -71,17 +71,6 @@ Read each file in the skill folder when its step comes:
 - Before each push, read the full diff for tokens, secrets, local paths with private content, and client or tenant names from other projects.
 - Push one change set at a time.
 - Run `herdr-boss suite -- npm test` as a background command, then wait for it and read its exit code. The tool timeout is 600 seconds. The command takes the machine-wide `full-suite` lock. Never take the full-suite lock with a bare lock acquire for a suite. Push with `herdr-boss push <args>`. Use `herdr-boss push` for a push; it takes the lock when a pre-push hook exists. There is no load threshold.
-
-## CI minutes
-
-- Run a quick check for each pull request.
-- Run a changed-files verify on pushes to `main`.
-- Run the full gate once per work wave or release, against the exact commit.
-- Set concurrency to cancel an older run when a newer run starts.
-- Ignore changes under `docs/` and `.orchestration/` in push and pull request workflows.
-- Do not add schedules to private repositories.
-- Do not run CI to test a workflow change; batch commits and push `main` once per wave.
-- Run `herdr-boss project check SLUG` and heed the docs-only reminder from `herdr-boss push`.
 - Lease a shared resource with `herdr-boss lease acquire POOL` or `worker start --lease POOL`. Never pick a port from a pool by hand. The serve-lease rules are in [the machine and quota rules](reference/machine-and-quota.md).
 
 ### Human gates and parking
@@ -245,3 +234,15 @@ herdr agent prompt <orch-pane> "WORKER REPORT <name>: <done|blocked|stopped>. Re
 - Do not build a separate project dashboard.
 - Keep Herdr as live execution state and the issue tracker as durable work state.
 - Run `herdr-boss harness check` when a harness refuses routine work. Report missing entries to the Boss.
+
+## CI minutes
+
+- Run a quick check for each pull request.
+- Run a changed-files verify on pushes to `main`.
+- Run the full gate once per work wave or release, against the exact commit.
+- Set concurrency to cancel an older run when a newer run starts.
+- Ignore changes under `docs/` and `.orchestration/` in push and pull request workflows.
+- Do not add schedules to private repositories.
+- Do not run CI to test a workflow change.
+- Batch commits and push `main` once per wave.
+- Run `herdr-boss project check SLUG` for the CI findings.
