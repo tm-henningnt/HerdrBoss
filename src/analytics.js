@@ -9,6 +9,7 @@ import { readPolicyChanges } from './policy-log.js';
 import { lockLaneSettings } from './kit/locks.js';
 import { classifyLockLane, readLockDurationPrediction } from './kit/lock-lanes.js';
 import { readAgentMetadata, AGENT_MESSAGE_KINDS, AGENT_RESPONSE_WINDOW_MS } from './agent-messages.js';
+import { readActionsMinutes } from './actions-minutes.js';
 
 // Aggregate figures for the Analytics page. No message text, workspace name, path, or command.
 // Communication figures also hold project slugs, task IDs, agent names, worker kinds and models.
@@ -348,7 +349,7 @@ function lockAdmissionSummary(samples, { dataDir, now }) {
     sampledAt: sample?.at ?? null, predictions };
 }
 
-export function analyticsSummary({ dataDir = DATA_DIR, now = Date.now() } = {}) {
+export function analyticsSummary({ dataDir = DATA_DIR, now = Date.now(), actionsMinutesEnabled = true } = {}) {
   const events = readEventTail(path.join(dataDir, 'events.jsonl'));
   const samples = readMachineSamples({ dataDir, sinceMs: now - 25 * 3600000 });
   const memory = readMemorySamples({ dataDir, sinceMs: now - 25 * 3600000 });
@@ -363,5 +364,6 @@ export function analyticsSummary({ dataDir = DATA_DIR, now = Date.now() } = {}) 
     harnessChanges: markersIn(denials.days, dataDir),
     policyChanges: readPolicyChanges(dataDir),
     agentCommunication: agentCommunication(readAgentMetadata({ dir: dataDir, limit: Number.MAX_SAFE_INTEGER }), { now }),
+    actionsMinutes: readActionsMinutes(dataDir, { enabled: actionsMinutesEnabled }),
   };
 }

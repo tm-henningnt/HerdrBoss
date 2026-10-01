@@ -51,10 +51,12 @@ test('analyticsSummary reads all communication metadata without the API page lim
   fs.writeFileSync(file, text);
   const result = analyticsSummary({ dataDir, now: NOW });
   assert.equal(result.agentCommunication.total, 501);
+  assert.deepEqual(result.actionsMinutes, { available: false, weeks: [], repos: [], updatedAt: null });
   assert.equal(result.agentCommunication.reminderShare, 1);
   assert.equal(fs.readFileSync(file, 'utf8'), text);
   assert.equal(fs.existsSync(`${file}.lock`), false);
   assert.doesNotMatch(JSON.stringify(result.agentCommunication), /respondedAt|"text"/);
+  assert.deepEqual(analyticsSummary({ dataDir, now: NOW, actionsMinutesEnabled: false }).actionsMinutes, { available: false, weeks: [], repos: [], updatedAt: null });
 });
 
 test('noticeCounts counts each notice for its pane and local day, and a digest counts its titles', () => {

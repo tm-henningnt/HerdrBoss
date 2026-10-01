@@ -37,6 +37,7 @@ import { inspectWorkerTransitions, inspectWorkerReports, readBoundedWorkerReport
 import { appendMachineSample, highSwapHoursLine, sampleLine } from './machine-samples.js';
 import { appendMemorySample, sampleMemory, MEMORY_SAMPLE_INTERVAL_MS, MEMORY_PS_TIMEOUT_MS } from './memory-classes.js';
 import { FULL_SUITE_LOCK, lockLedgerSummary, readLockQueue, readLockTakeoverNotices, readMachineLocks, removeLockTakeoverNotice } from './kit/locks.js';
+import { refreshActionsMinutes, ACTIONS_MINUTES_REFRESH_MS } from './actions-minutes.js';
 
 const TASK_WORKERS_INTERVAL_MS = 15_000;
 const TASK_MERGE_CHECKS = 5;
@@ -520,7 +521,7 @@ export class Engine extends EventEmitter {
   leaseProbeCursor = 0;
   // The first tick that saw each pool item with a listener and no lease, keyed by pool and item.
   unleasedListeners = new Map();
-  constructor(cfg, { push = cfg.push, act = true, collectors = {}, clock = () => Date.now(), handoffRunner = run, herdrRunner = run, gitRunner = (args) => run('git', args, { timeout: 10000 }), psRunner = (args, options) => run('env', args, options), kitRoot = KIT_ROOT, lockDataDir = DATA_DIR } = {}) {
+  constructor(cfg, { push = cfg.push, act = true, collectors = {}, clock = () => Date.now(), handoffRunner = run, herdrRunner = run, gitRunner = (args) => run('git', args, { timeout: 10000 }), psRunner = (args, options) => run('env', args, options), actionsMinutesRun, kitRoot = KIT_ROOT, lockDataDir = DATA_DIR } = {}) {
     super();
     this.cfg = cfg;
     this.clock = clock;
@@ -590,6 +591,9 @@ export class Engine extends EventEmitter {
     this.herdrRunner = herdrRunner;
     this.gitRunner = gitRunner;
     this.psRunner = psRunner;
+    this.actionsMinutesRun = actionsMinutesRun;
+    this.actionsMinutesRunning = false;
+    this.actionsMinutesAt = null;
     this.kitRoot = kitRoot;
     this.lockDataDir = lockDataDir;
     this.kitNoticeRead = false;
@@ -759,6 +763,7 @@ export class Engine extends EventEmitter {
     const errors = [];
     const now = this.clock();
     this.communicationNow = now;
+    this.refreshActionsMinutes(now);
     if (this.act) {
       try { this.pruneHandoverExpiryMemory(); } catch {}
     }
@@ -1298,6 +1303,19 @@ export class Engine extends EventEmitter {
     } finally {
       this.running = false;
     }
+  }
+
+  // GitHub calls run in the background. The service tick never waits for them.
+  refreshActionsMinutes(now) {
+    if (this.cfg.analytics?.actionsMinutes === false || this.actionsMinutesRunning || (this.actionsMinutesAt !== null && now - this.actionsMinutesAt < ACTIONS_MINUTES_REFRESH_MS)) return null;
+    this.actionsMinutesAt = now;
+    this.actionsMinutesRunning = true;
+    return Promise.resolve().then(() => refreshActionsMinutes({
+      dataDir: this.lockDataDir,
+      repos: readProjectRepos(this.lockDataDir),
+      run: this.actionsMinutesRun,
+      now,
+    })).catch(() => {}).finally(() => { this.actionsMinutesRunning = false; });
   }
 
   // Runs once per service start: git reads only, no timers.

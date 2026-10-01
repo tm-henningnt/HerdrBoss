@@ -605,6 +605,7 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine 
         catch (error) { return send(res, error.code === 'DATA_NOT_WRITABLE' ? 500 : 400, { ok: false, error: error.message }); }
         applyServiceSettings(cfg, changes);
         if (engine.cfg !== cfg) applyServiceSettings(engine.cfg, changes);
+        analyticsCache = null;
         const settings = serviceSettingsView(engine.cfg);
         if (engine.state) {
           engine.state.serviceSettings = settings;
@@ -776,7 +777,7 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine 
       if (p === '/api/analytics' && req.method === 'GET') {
         // Aggregate figures for the Analytics charts. The route reads the tail of the event log and the samples, so it keeps the result for 60 seconds.
         if (analyticsCache && Date.now() - analyticsCache.at < MACHINE_HOURS_CACHE_MS) return send(res, 200, analyticsCache.body);
-        analyticsCache = { at: Date.now(), body: analyticsSummary({ dataDir: DATA_DIR }) };
+        analyticsCache = { at: Date.now(), body: analyticsSummary({ dataDir: DATA_DIR, actionsMinutesEnabled: cfg.analytics?.actionsMinutes !== false }) };
         return send(res, 200, analyticsCache.body);
       }
       if (p === '/api/spend' && req.method === 'GET') return send(res, 200, spendSummary({ dataDir: DATA_DIR, days: clampSpendDays(url.searchParams.get('days')) }));

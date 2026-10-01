@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { writeServiceSettings } from '../src/config.js';
+import { writeServiceSettings, serviceSettingsView } from '../src/config.js';
 
 function configDir(t, config = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-settings-config-'));
@@ -71,6 +71,18 @@ test('service settings require quota warning below critical and refuse non-allow
   for (const key of ['host', 'port', 'access', 'roamgate', 'alertCooldownSeconds', 'providerKinds', 'orchestratorLabel', 'unknown.setting']) {
     assertRejectedSetting(t, key, true);
   }
+});
+
+test('GitHub Actions minutes is an on-by-default boolean service setting', (t) => {
+  const dataDir = configDir(t);
+  assertSetting(t, 'analytics.actionsMinutes', true);
+  assertSetting(t, 'analytics.actionsMinutes', false);
+  assertRejectedSetting(t, 'analytics.actionsMinutes', 'true');
+  assert.deepEqual(serviceSettingsView({}).find(({ setting }) => setting === 'analytics.actionsMinutes'), {
+    group: 'Analytics', setting: 'analytics.actionsMinutes', value: true, source: 'default',
+  });
+  writeServiceSettings({ 'analytics.actionsMinutes': false }, { dataDir });
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dataDir, 'config.json'), 'utf8')).analytics, { actionsMinutes: false });
 });
 
 test('service settings update only selected keys, retain key order, and keep the config file mode', (t) => {

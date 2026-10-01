@@ -16,7 +16,7 @@ import { createReviewSync, createDrafts, NOTE_DEBOUNCE_MS } from './review-sync.
 import { createWizard } from './project-wizard-ui.js';
 import { goalSetBlockHtml, goalDialogHtml, goalJobRunning, goalStatusText, pollGoalStatus } from './goal-set.js';
 import { buildDraftShares, draftSignature, shareTotal, distributeRemainder, moveShares, totalHtml, checkSave, confirmText, sumConfirmText, allocationFooterHtml, staleRowHtml } from './allocation-draft.js';
-import { stackedBars, lineChart, stripBars, outcomeBars, legendHtml, foldSeries, spendSeries, claudeSpend, quotaSeries, firstTimeRate, activityFilter, activityChoices, eventLevel, dayLabel, usd, minutes, compact, ACTIVITY_RANGES, ACTIVITY_LEVELS, SERIES_CLASSES, DENIAL_RANGES, DEFAULT_DENIAL_RANGE, denialRange, denialSeries, denialMarkers, denialDetailsHtml, denialLegendHtml, policyChangesTitle, policyChangesListHtml, policyChangesDetailsHtml, lockWaitSeries, lockWaitDetailsHtml, lockAdmissionHtml, memorySeries, memoryDetailsHtml, hourLabel, mbText, communicationSeries, communicationDailyDetailsHtml, communicationResponseHtml, communicationNudgeDetailsHtml } from './analytics.js';
+import { stackedBars, lineChart, stripBars, outcomeBars, legendHtml, foldSeries, spendSeries, claudeSpend, quotaSeries, firstTimeRate, activityFilter, activityChoices, eventLevel, dayLabel, usd, minutes, compact, ACTIVITY_RANGES, ACTIVITY_LEVELS, SERIES_CLASSES, DENIAL_RANGES, DEFAULT_DENIAL_RANGE, denialRange, denialSeries, denialMarkers, denialDetailsHtml, denialLegendHtml, policyChangesTitle, policyChangesListHtml, policyChangesDetailsHtml, lockWaitSeries, lockWaitDetailsHtml, lockAdmissionHtml, memorySeries, memoryDetailsHtml, hourLabel, mbText, communicationSeries, communicationDailyDetailsHtml, communicationResponseHtml, communicationNudgeDetailsHtml, actionsMinutesSeries, actionsMinutesDetailsHtml } from './analytics.js';
 import { ATTACHMENT_LIMIT, attachmentFileError, attachmentStripState, attachmentPickerHtml, attachmentStripHtml } from './attachment-ui.js';
 
 const $app = document.getElementById('app');
@@ -1018,7 +1018,7 @@ function settingsView(s) {
   const lockGuardNumber = (key, label, min, max) => lockInput(`locks.guard.${key}`, label, lockGuard[key], min, max, `data-policy-lock-guard="${key}"`);
   const lockSettings = `<section class="panel"><h2>Locks</h2>${lockNumber('slots', 'Machine lock slots', 1, 4)}${lockNumber('shortLimitMinutes', 'Short job limit minutes', 1, 60)}${settingRow('locks.guard.enabled', 'Guard for short jobs', `<input id="${helpFid('locks.guard.enabled')}" type="checkbox" role="switch" aria-label="Guard for short jobs" data-policy-lock-guard="enabled" ${lockGuard.enabled !== false ? 'checked' : ''}>`)}${lockGuardNumber('maxLoadPercent', 'Maximum load % of cores', 0, 1000)}${lockGuardNumber('maxSwapPercent', 'Maximum swap % used', 0, 100)}${lockGuardNumber('minFreeMemPercent', 'Minimum free memory %', 0, 100)}</section>`;
   const attachmentSettings = `<section class="panel"><h2>Pictures and agent messages</h2>${lockInput('attachments.retentionDays', 'Picture retention days', Object.hasOwn(d.attachments || {}, 'retentionDays') ? d.attachments.retentionDays : 30, 1, 365, 'data-policy-attachment="retentionDays"')}${lockInput('agentMessages.retentionDays', 'Agent message text retention days', Object.hasOwn(d.agentMessages || {}, 'retentionDays') ? d.agentMessages.retentionDays : 14, 1, 90, 'data-policy-agent-message="retentionDays"')}${lockInput('agentMessages.metaRetentionDays', 'Agent message metadata retention days', Object.hasOwn(d.agentMessages || {}, 'metaRetentionDays') ? d.agentMessages.metaRetentionDays : 180, 7, 730, 'data-policy-agent-message="metaRetentionDays"')}</section>`;
-  const settingsGroups = ['Machine', 'Quota', 'Status', 'Workers', 'Watch', 'Browsers', 'Service'];
+  const settingsGroups = ['Machine', 'Quota', 'Status', 'Workers', 'Watch', 'Browsers', 'Service', 'Analytics'];
   const serviceSettingRanges = {
     'machine.memFreeWarnPercent': [1, 50],
     'quota.warnPercent': [50, 99],
@@ -1032,7 +1032,7 @@ function settingsView(s) {
     tickSeconds: [5, 300],
     quotaSeconds: [30, 3600],
   };
-  const serviceSettingBooleans = new Set(['browsers.reapOrphanDaemons', 'browsers.sweepCodeSignClones', 'watch.quietHours', 'push']);
+  const serviceSettingBooleans = new Set(['browsers.reapOrphanDaemons', 'browsers.sweepCodeSignClones', 'watch.quietHours', 'push', 'analytics.actionsMinutes']);
   const serviceRows = settingsGroups.map((group) => {
     const groupRows = (s.serviceSettings || []).filter((item) => item.group === group).map((item) => {
       const value = item.value !== null && typeof item.value === 'object' ? JSON.stringify(item.value) : item.value == null ? '' : String(item.value);
@@ -2248,6 +2248,7 @@ function analyticsView(s) {
     '<div class="viz-group" data-key="grp:cost"><h2>Cost and quota</h2><div class="viz-grid">',
     spendChart(),
     quotaChart(),
+    actionsMinutesBlock(),
     '</div></div><div class="viz-group" data-key="grp:quality"><h2>Quality and friction</h2><div class="viz-grid">',
     scorecardChart(s),
     denialsBlock(s),
@@ -2395,6 +2396,26 @@ function spendChart() {
     legend: legendHtml(series),
     chart: stackedBars({ cats: days.map((d) => ({ label: dayLabel(d), tip: dayLabel(d, true) })), series, fmt, label: title }),
     details: `<p class="viz-note">Columns: roles, then harnesses. The Boss role is the pane labeled boss and the earlier Boss sessions.</p>${vizTable(head, rows)}`,
+  });
+}
+
+function actionsMinutesBlock() {
+  const data = analyticsData?.actionsMinutes;
+  if (!data?.available) return '';
+  const win = actionsMinutesSeries(data);
+  const runs = data.repos.reduce((sum, row) => sum + (row.runs || []).reduce((a, b) => a + (Number(b) || 0), 0), 0);
+  const base = { id: 'actions-minutes', title: 'GitHub Actions minutes' };
+  if (!win.weeks.length || !runs) return vizCard({ ...base, empty: 'No GitHub Actions runs are recorded in the last 12 weeks.' });
+  const thisWeek = win.series.reduce((sum, series) => sum + (series.values.at(-1) || 0), 0);
+  const title = `${thisWeek.toLocaleString('en-US', { maximumFractionDigits: 1 })} minutes this week across ${runs.toLocaleString()} runs in 12 weeks`;
+  const cats = win.weeks.map((week, i) => ({ label: week.slice(-3), tip: `${week}\n${win.series.map((series) => `${series.label}: ${(series.values[i] || 0).toFixed(1)} min`).join('\n')}` }));
+  const chart = stackedBars({ cats, series: win.series, fmt: (value) => `${Number(value).toFixed(1)} min`, label: 'GitHub Actions minutes by repository and week' });
+  const updated = data.updatedAt ? ` Updated ${new Date(data.updatedAt).toLocaleString()}.` : '';
+  return vizCard({
+    ...base, title,
+    sub: `Last 12 ISO weeks. The service uses its GitHub token. It skips repositories when that token has no access.${updated}`,
+    legend: legendHtml(win.series), chart,
+    details: actionsMinutesDetailsHtml(data),
   });
 }
 
@@ -6204,9 +6225,10 @@ const HELP = {
     <h3>Bookmarks</h3><p>A project keeps at most 30 bookmarks. A bookmark name has at most 60 characters. A bookmark URL must use http or https and must not hold a user name or a password. <b>Add current page</b> saves the selected tab. <b>Open</b> loads a bookmark in the current tab; <b>New tab</b> opens it in a new tab. <b>Rename</b>, the arrows, and <b>Delete</b> change the list; Delete asks you to confirm. <b>Start page</b> opens in the first tab of the next launch. <b>Save</b> stores the start page; a blank value clears it.</p>
     <h3>Control</h3><p>Select the screenshot to open the large view. The large view shows a still image of the last capture. Turn on <b>Control browser</b> or <b>Live</b> to refresh it at the chosen interval. Turn on <b>Control browser</b>, then click the image and type. Paste long text or a password into the masked field. On a phone the large view is full screen and the image fills the height. The text field and key controls appear only while <b>Control browser</b> is on.</p>`],
   analytics: ['Analytics', `
-    <p>The page answers nine questions: what the fleet costs, how the quota compares with the pace, how often the models are right the first time, where the harnesses deny work, what memory the processes use, when the machine and the locks slow work down, how agents communicate, which panes get notices, and which keys of the policy changed.</p>
+    <p>The page shows cost, quota use, model quality, denied work, machine use, lock waits, GitHub Actions minutes, agent messages, notices, and policy changes.</p>
     <h3>Headline strip</h3><p>Each tile shows one figure and its change. <b>Claude spend a day</b> is the mean of the last 7 days, with the change on the 7 days before. <b>Quota against pace</b> shows the lane with the most use above its pace line. <b>Denials this week</b> compares the last 24 hours with the 6-day mean. <b>Notices per pane a day</b> is the 7-day mean and today. <b>Lock wait and hold</b> shows the median wait and the median hold. <b>First-time success</b> counts the judged runs of the last 30 days.</p>
     <h3>Charts</h3><p>The title of each chart tells what to read from it. Hover, focus, or touch a column, a cell, or a row to read its values. On a phone each chart scrolls sideways inside its own box. <b>Details</b> under a chart opens the table of the same figures.</p>
+    <h3>GitHub Actions minutes</h3><p>The stacked bars show minutes for each registered GitHub repository by ISO week. Details shows this week, last week, and this week's run count. The service uses its GitHub token. It skips a repository when the token cannot read it. If no repository is available, the page hides this card. Turn off <code>analytics.actionsMinutes</code> in Settings to stop these API calls.</p>
     <p><b>Spend</b>: stacked bars for each day, split by role or by harness with the switch. The USD figure is the API-price equivalent. The Owner pays a subscription, not these amounts. <b>Quota</b>: one solid line for the use of each lane and one dashed line for its expected pace, in the weekly window. <b>Model scorecard</b>: the share of first-time, rework, failed, and not judged runs for each model. <b>Details</b> also holds the recorded work by project and provider and the recent runs.</p>
     <h3>Denials and permission prompts</h3><p>Herdr Boss reads the Claude, Codex, OpenCode, and Pi logs every 15 minutes. It counts classifier refusals, sandbox errors, escalation requests, permission prompts, prompts with no answer within 10 minutes, OpenCode worker permission denials, and Herdr guard blocks. It keeps the day, harness, cause, project, model, and count. It keeps no message text.</p>
     <p>The chart shows one bar for each day. The solid part is events that were refused: classifier refusals, sandbox errors, guard blocks, and OpenCode denials. The outlined part is escalations that an existing rule approved. The legend gives the total of each part for the range. An approved escalation is friction, not a failure. An event with no known outcome counts as refused, and Details says how many. The range is 3 days by default. Choose 7 or 30 days with the buttons; the browser remembers the choice. The switch selects one harness or all.</p>

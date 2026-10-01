@@ -97,6 +97,10 @@ test('the rendered Settings and Allocation views hold no two buttons with the sa
       assert.ok(!key.includes('#'), `${name}: ${key} is a per-row button`);
     }
   }
+  const settings = app.settingsView(s);
+  assert.match(settings, /<span>Analytics<\/span>/);
+  assert.match(settings, /<code>analytics\.actionsMinutes<\/code>/);
+  assert.match(settings, /type="checkbox"[^>]*data-service-setting="analytics\.actionsMinutes"/);
 });
 
 // cec19c0 is the commit before the header buttons. Its page has one button on each row.

@@ -345,7 +345,7 @@ Set `agentMessages.retentionDays` to keep message text for 1 to 90 days. The def
 | `GET /api/agent-messages?project=SLUG&pair=KEY&q=TEXT&limit=N&before=ID` | Read newest-first agent messages. `project` is optional. Without it, read messages from all projects. Use `before` to read the next older page. The response includes each message's pair key. |
 | `GET /api/agent-pairs[?project=SLUG]` | Read the message count and last message time for each pair. `project` is optional. Without it, read pairs from all projects. |
 | `GET /api/agent-meta?project=SLUG&since=ISO&until=ISO&limit=N` | Read newest-first metadata rows. `project` is optional. Without it, read rows from all projects. A row holds sender, receiver, project, kind, character count, task ID, run ID, delivery status, `respondedAt`, and `responseMs`. A worker target holds its kind and model when known. It has no text. |
-| `GET /api/analytics` | Read the `agentCommunication` figures for the last 7 local days. The figures count messages by project, day, and kind. They include nudges per task, response medians and p90 values per orchestrator and worker kind and model, and the reminder share. Failed deliveries add no traffic. |
+| `GET /api/analytics` | Read the Analytics figures. The `actionsMinutes` field shows weekly Actions minutes for registered GitHub repositories. The service uses its GitHub token and refreshes these figures at most every 6 hours. It skips repositories that the token cannot read. The `agentCommunication` field counts messages by project, day, and kind for the last 7 local days. It includes nudges per task, response medians and p90 values per orchestrator and worker kind and model, and the reminder share. Failed deliveries add no traffic. |
 
 These routes use the dashboard login rule. They are read-only. They do not change or delete messages.
 
@@ -736,6 +736,17 @@ Do not edit this block. It comes from `public/setting-help.js`.
 | Orchestrator label | `orchestratorLabel` | The pane label that marks the orchestrator of a project. | orch | Text | One pane label | Not applicable. | A wrong label makes Herdr Boss miss the orchestrator panes. | Change it in config.json. Restart the service. |
 | Port | `port` | The port of the dashboard and the API. | 4477 | TCP port | 1 to 65535 | Not applicable. | A change also changes the address that other tools use. | Change it in config.json. Restart the service. |
 | Host | `host` | The network address that the server listens on. 0.0.0.0 allows remote access with the access token. 127.0.0.1 allows only this machine. | 0.0.0.0 | Address | An IP address of this machine | Not applicable. | Set 127.0.0.1 to turn remote access off. | Change it in config.json. Restart the service. |
+
+#### Analytics (Advanced)
+
+- Controls: Whether the service reads GitHub Actions minutes for registered repositories.
+- Effect: Only the GitHub Actions minutes card on the Analytics page.
+- Safe to change: Safe to change. Turn it off to stop GitHub API calls.
+- Restart: No restart. Select Save in the group.
+
+| Setting | Key | What it does | Default | Unit | Range | Raise it | Lower it | Apply |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| GitHub Actions minutes | `analytics.actionsMinutes` | Lets the service read Actions minutes for registered GitHub repositories. | On | Switch | On or off | The service uses its GitHub token. It skips repositories that the token cannot read. | Turn it off to stop GitHub API calls. The Analytics page hides the card. | Select Save in the group. The change takes effect at once. |
 
 #### Harness readiness (Advanced)
 

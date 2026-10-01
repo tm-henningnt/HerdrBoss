@@ -59,6 +59,26 @@ test('Analytics wires Agent communication to read-only summary data and page hel
   assert.match(cli, /responseMs/);
 });
 
+test('Actions minutes uses weekly stacked bars and stays hidden when data is unavailable', () => {
+  const data = { weeks: ['2026-W39', '2026-W40'], repos: [{ repo: 'owner/sample', minutes: [3, 5], runs: [2, 3] }] };
+  const win = communicationView.actionsMinutesSeries(data);
+  assert.deepEqual(win.weeks, data.weeks);
+  assert.deepEqual(win.series[0].values, [3, 5]);
+  const svg = stackedBars({ cats: win.weeks.map((week) => ({ label: week, tip: week })), series: win.series, label: 'Actions minutes by repository' });
+  assert.match(svg, /class="viz-fill s1"/);
+  assert.doesNotMatch(svg, /NaN|Infinity/);
+  assert.equal(communicationView.actionsMinutesDetailsHtml({ weeks: [], repos: [] }), '<div class="calm-state">No GitHub Actions runs are recorded in the last 12 weeks.</div>');
+  assert.match(app, /analyticsData\?\.actionsMinutes/);
+  assert.match(app, /function actionsMinutesBlock\(\)/);
+  assert.match(app, /if \(!data\?\.available\) return ''/);
+  assert.match(app, /title: 'GitHub Actions minutes'/);
+  assert.match(app, /analytics\.actionsMinutes/);
+  assert.match(app, /The service uses its GitHub token/);
+  assert.match(guide, /### GitHub Actions minutes/);
+  assert.match(guide, /token that can read it|token cannot read it/);
+  assert.match(cli, /weekly Actions minutes.*service uses its GitHub token/i);
+});
+
 const spend = {
   days: [
     { day: '2026-09-29', roles: [{ role: 'worker', costUsd: 10, harnesses: { claude: { costUsd: 6 }, codex: { costUsd: 4 } } }, { role: 'boss', costUsd: 2, harnesses: { claude: { costUsd: 2 } } }] },
@@ -607,7 +627,7 @@ test('the Analytics help and the guide describe the memory chart, the classes, t
   assert.match(app, /<h3>Memory by class<\/h3>/);
   assert.match(app, /memory-samples\.jsonl/);
   assert.match(app, /every 5 minutes/);
-  assert.match(app, /<p>The page answers nine questions/);
+  assert.match(app, /<p>The page shows cost, quota use, model quality, denied work, machine use, lock waits, GitHub Actions minutes/);
   for (const cls of ['Claude', 'Codex', 'Browsers', 'MCP servers', 'Vitest']) assert.match(app, new RegExp(cls), cls);
   assert.match(guide, /## Memory by class/);
   assert.match(guide, /memory-samples\.jsonl/);

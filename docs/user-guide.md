@@ -1329,6 +1329,7 @@ The Analytics page (`/analytics`) shows figures and charts. It answers these que
 - Which causes of denials and permission prompts occur, for which harness?
 - What memory do the agent, browser, and test processes use?
 - When do the machine load and the lock waits slow work down?
+- How many GitHub Actions minutes does each repository use each week?
 - How many notices does each pane get?
 - Who changed the policy, and which keys changed?
 
@@ -1355,12 +1356,19 @@ Each chart has a title that tells what to read from it, a scope line, a legend, 
 - **Memory by class**: stacked bars for each hour of the last 24 hours. Each bar is the mean of the samples of that hour. See [Memory by class](#memory-by-class).
 - **Machine load and lock waits**: lines for the 5-minute load as a percent of the cores, the memory in use, and the swap in use, over the last 24 hours in columns of 10 minutes. A shaded column had a lock holder. The strip under the lines shows the minutes in which a suite request waited.
 - **Machine overload and idle waiting by hour**: see [Machine samples](#machine-samples).
+- **GitHub Actions minutes**: stacked bars show minutes per registered GitHub repository for each of the last 12 ISO weeks. **Details** shows this week, last week, and this week's run count. The service uses its GitHub token. It skips a repository when the token cannot read it. The page hides the card when no repository is available. Set `analytics.actionsMinutes` to `false` in Settings to stop these API calls.
 - **Notices per pane**: stacked bars for each day of the last 7 days. The five panes with the most notices have their own color. The other panes share one gray.
 - **Policy changes**: a list of the last writes of `policy.json`, newest first. A row shows the time, the caller kind, and the changed keys with the old and the new value. A row has at least 44 px height on a phone. **Details** holds one table row for each changed key of the last 100 writes. The section shows an empty state until the first write. See [Policy changes](#policy-changes).
 
 The charts use one color set for light mode and one for dark mode. The set passes the dataviz palette validator. The charts show no client name or path. They show harness, model, cause, lock kind, and pane ID only. The policy keys, lock chart, and Agent communication section can name projects by their slug. Agent communication also shows task IDs and agent names. On a screen up to 1180 px wide the charts are in one column. On a phone each chart scrolls sideways inside its own box.
 
-The route `/api/analytics` gives the agent communication figures, the notice counts, the machine timeline, the memory of each class, the wait and hold of the locks for each project and day, the denial counts of the last 30 days for each day, the harness change markers of those days, and the last 100 policy changes. It reads the last 2 MB of `events.jsonl` and of `lock-ledger.jsonl`, the machine samples of the last 25 hours, the memory samples of the last 25 hours, `denials.json`, `harness-changes.jsonl`, `policy-changes.jsonl`, and `agent-message-meta.jsonl`. It keeps the result for 60 seconds. The result holds numbers, lock kinds, pane IDs, the marker labels, and the policy change keys with scalar values.
+The route `/api/analytics` gives the Actions minutes, agent communication figures, notice counts, machine timeline, memory by class, lock wait and hold, denial counts, harness change markers, and policy changes. It reads the last 2 MB of `events.jsonl` and `lock-ledger.jsonl`, machine and memory samples from the last 25 hours, `denials.json`, `harness-changes.jsonl`, `policy-changes.jsonl`, and `agent-message-meta.jsonl`. It reads Actions minutes from `actions-minutes.json`. The route keeps its result for 60 seconds. The response holds numbers, lock kinds, pane IDs, marker labels, and policy keys with scalar values.
+
+### GitHub Actions minutes
+
+The service refreshes the figures at most once every 6 hours. It keeps at most 12 ISO weeks. The service uses its GitHub token to read registered repository remotes. It does not use the token of the browser or the Owner's session. A repository that the token cannot read does not appear. The service also skips a repository when its timing data needs more than 25 extra API calls. If no repository can be read, the API returns `available: false` and the page hides the card without an error.
+
+Set `analytics.actionsMinutes` to `false` in Settings to stop the API calls. The default is `true`. The `/api/analytics` field `actionsMinutes` has `available`, `weeks`, `repos`, and `updatedAt`. Each repository has weekly `minutes`, `runs`, and runner-type series when the GitHub API gives runner details.
 
 ### Agent communication
 
@@ -2245,7 +2253,7 @@ The dashboard uses these routes. A request from another host needs the access to
 | `GET /api/models` | The model allow-list. |
 | `GET`, `POST /api/usage` | Read usage, or record an event. |
 | `GET /api/machine-hours?days=N` | The machine samples of the last N days (1 to 14, default 14) by local hour of day: overload minutes, idle-wait minutes, swap peak, lowest free memory, holder kinds, and coverage. |
-| `GET /api/analytics` | The notice counts for each pane and local day of the last 7 days, the machine timeline of the last 24 hours in columns of 10 minutes, and the memory of each class in columns of 60 minutes. Numbers, lock kinds, and pane IDs only. The service keeps the result for 60 seconds. |
+| `GET /api/analytics` | Analytics figures, including `actionsMinutes` for weekly GitHub Actions minutes and `agentCommunication` for the last 7 local days. The service uses its GitHub token. It skips repositories that the token cannot read. The service keeps the result for 60 seconds. |
 | `GET /api/spend?days=N` | The token use and cost per day, role, and harness for the last N days (1 to 90, default 7), the cost label `API-price equivalent`, the models with `unconfirmed` prices, the harness log status, and the unread log bytes. |
 | `GET`, `PUT /api/settings/prices` | Read the price table and the override, or replace the override. See Token use and spend by role. |
 | `GET /api/denials` | The denial counts of the last 7 days by harness, model, and cause, the harness totals, and the trend of each cause. |

@@ -112,11 +112,11 @@ try {
     'workers.staleIdleMinutes',
     'watch.maxWorkers', 'watch.maxWorkersByLane', 'watch.quietHours',
     'browsers.reapOrphanDaemons', 'browsers.orphanDaemonMinAgeSeconds', 'browsers.staleOwnedMinutes', 'browsers.sweepCodeSignClones',
-    'tickSeconds', 'quotaSeconds', 'push', 'alertCooldownSeconds', 'providerKinds', 'orchestratorLabel', 'port', 'host',
+    'tickSeconds', 'quotaSeconds', 'push', 'alertCooldownSeconds', 'providerKinds', 'orchestratorLabel', 'port', 'host', 'analytics.actionsMinutes',
   ]);
   assert.deepEqual(view.map(({ source }) => source), [
     'config', 'config', 'config', 'config', 'config', 'config', 'config', 'default', 'config', 'config', 'config', 'default',
-    'config', 'config', 'config', 'default', 'config', 'config', 'config', 'config',
+    'config', 'config', 'config', 'default', 'config', 'config', 'config', 'config', 'default',
   ]);
   assert.deepEqual(view.find(({ setting }) => setting === 'watch.maxWorkers'), {
     group: 'Workers', setting: 'watch.maxWorkers', value: 16, source: 'config',
@@ -456,6 +456,7 @@ test('PUT /api/settings persists allowed values and updates the running engine c
       tickSeconds: 20,
       quotaSeconds: 600,
       push: false,
+      'analytics.actionsMinutes': false,
       'watch.maxWorkers': 20,
       'watch.maxWorkersByLane': { unmetered: 12, codex: 8, claude: null, opencodego: 4 },
     } }),
@@ -469,7 +470,9 @@ test('PUT /api/settings persists allowed values and updates the running engine c
   assert.equal(engine.cfg.tickSeconds, 20);
   assert.equal(engine.cfg.quotaSeconds, 600);
   assert.equal(engine.cfg.push, false);
+  assert.equal(engine.cfg.analytics.actionsMinutes, false);
   assert.equal(engine.state.serviceSettings.find(({ setting }) => setting === 'push').value, false);
+  assert.equal(engine.state.serviceSettings.find(({ setting }) => setting === 'analytics.actionsMinutes').value, false);
   assert.equal(engine.state.serviceSettings.find(({ setting }) => setting === 'tickSeconds').source, 'config');
   assert.equal(engine.cfg.watch.maxWorkers, 20);
   assert.deepEqual(engine.cfg.watch.maxWorkersByLane, { unmetered: 12, codex: 8, claude: null, opencodego: 4 });
@@ -2519,6 +2522,7 @@ test('GET /api/analytics returns notice counts and the machine timeline, cached 
   assert.equal(body.notices.total, 1);
   assert.equal(body.notices.days.length, 7);
   assert.equal(body.timeline.points.length, 144);
+  assert.deepEqual(body.actionsMinutes, { available: false, weeks: [], repos: [], updatedAt: null });
   assert.doesNotMatch(JSON.stringify(body), /Client Name|\/Users|\/tmp/);
   fs.appendFileSync(eventsFile, `${JSON.stringify({ at: new Date().toISOString(), type: 'notify', pane: 'w1:p1' })}\n`);
   assert.equal((await (await fetch(`${base}/api/analytics`)).json()).notices.total, 1, 'cached');

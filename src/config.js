@@ -101,6 +101,7 @@ const DEFAULTS = {
     sweepCodeSignClones: true,
   },
   workers: { staleIdleMinutes: 120 },
+  analytics: { actionsMinutes: true },
   watch: {
     quietHours: false,
     maxWorkers: null,
@@ -138,6 +139,7 @@ const SERVICE_SETTINGS = [
   ['Service', 'orchestratorLabel'],
   ['Service', 'port'],
   ['Service', 'host'],
+  ['Analytics', 'analytics.actionsMinutes'],
 ];
 
 const POOL_KEYS = new Set(['name', 'items', 'range', 'split', 'env', 'ttlMinutes', 'check', 'graceMinutes', 'idleMinutes', 'waitSeconds', 'portEnv']);
@@ -360,6 +362,7 @@ const SERVICE_SETTING_BOOLEANS = new Set([
   'browsers.sweepCodeSignClones',
   'watch.quietHours',
   'push',
+  'analytics.actionsMinutes',
 ]);
 const NULLABLE_SERVICE_SETTINGS = new Set(['watch.maxWorkers']);
 const WATCH_WORKER_LANES = new Set(['unmetered', 'codex', 'claude', 'opencodego']);
