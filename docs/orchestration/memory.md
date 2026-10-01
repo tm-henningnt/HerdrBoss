@@ -160,3 +160,10 @@ Owner queue (credentials, billing, and Owner-applied settings):
   - Run `herdr-boss worker collect NAME --record --outcome done --gate-passed --model-result first-time` for both after the review.
 - **Next tasks:** review and release CH1 and WK2, then DG1. Then the open follow-ups.
 - **Browser:** the project browser of `herdrboss` is closed and its port lease is released. Request it again before browser work.
+
+## State 2026-10-01 after the handover to pane wB:p9Q
+
+- **Orchestrator:** pane `wB:p9Q`. The previous orchestrator is pane `wB:p6P`.
+- **Running workers:** `ch2` (CH1 review fixes), `wk3` (WK2 port onto the split kit tests), `lk2` (lock lanes), `bd1a` (board data layer, task id `BD1`), `ls2` (LS2, opencode `big-pickle`).
+- **Release order:** review `ch1` with `ch2` and `wk2` with `wk3`. Merge both in the `integrate` worktree, run one suite, move `main` forward, restart, check, push. Then LK2, BD1b, BD1c, DG1.
+- **Claude lane:** ahead of pace until about 2026-10-01 18:00. Start no claude worker before then.
