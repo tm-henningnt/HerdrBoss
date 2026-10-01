@@ -10,7 +10,7 @@ Use one of these methods. All three give the same result.
 2. Run `herdr-boss publish <slug> <file>`. The command validates the file before it installs it.
 3. Send `PUT http://127.0.0.1:4477/api/projects/<slug>` with the JSON as the body.
 
-The slug must match `[a-z0-9][a-z0-9-]*`. Use the project directory name in lower case, for example `tmprocessmining`.
+The slug must match `[a-z0-9][a-z0-9-]*`. Use the project directory name in lower case, for example `example-app`.
 
 The dashboard updates less than one second after the file changes. Update the file when a task changes status. Do not update it on a timer.
 
@@ -22,7 +22,7 @@ Only `project` is required. Omit the fields that you do not use.
 
 ```json
 {
-  "project": "TmProcessMining",
+  "project": "ExampleApp",
   "workspace": "w9",
   "summary": "One sentence that tells what the project does now.",
   "goal": "The durable Owner direction for this project.",
