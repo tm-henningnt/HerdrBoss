@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { transcriptFile } from './context-handover.js';
+import { agentPromptTimeoutMs } from './agent-prompt.js';
 
 export const GOAL_MAX_LENGTH = 4000;
 const TAIL_BYTES = 1024 * 1024;
@@ -154,7 +155,7 @@ export function herdrResponseError(raw) {
 
 // Send the goal to a pane as one prompt, without --wait. Throws when Herdr refuses it.
 export async function sendGoalPrompt({ run, pane, goal, kind }) {
-  const error = herdrResponseError(await run(['agent', 'prompt', pane, goalPromptText({ goal, kind })]));
+  const error = herdrResponseError(await run(['agent', 'prompt', pane, goalPromptText({ goal, kind })], { timeout: agentPromptTimeoutMs(), killSignal: 'SIGKILL' }));
   if (error) throw new Error(error);
 }
 

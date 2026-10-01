@@ -13,7 +13,7 @@ const docsPath = new URL('../docs/cli.md', import.meta.url);
 const POLICY_KEYS_WITHOUT_CONTROL = new Set([
   'machine', // the machine.* keys are checked one by one below
   'attachments', // the attachments.retentionDays key has its own explanation below
-  'agentMessages', // both agent-message retention controls have their own explanations below
+  'agentMessages', // the retention and prompt timeout controls have their own explanations below
   'locks', // the locks.* keys are checked one by one below
   'orchestratorLadder', // the succession list editor on Allocation
   'allowedKinds', // the Available switch of each harness: harness.available
@@ -92,6 +92,7 @@ test('the text follows the Simplified Technical English limits', () => {
 // The ids that the page code asks for: literal calls, the Machine rows, the price columns, and the service table rows.
 function usedIds() {
   const ids = new Set([...app.matchAll(/helpButton\('([^']+)'/g)].map((match) => match[1]).filter((id) => !id.endsWith('.')));
+  for (const match of app.matchAll(/lockInput\('([^']+)'/g)) ids.add(match[1]);
   for (const key of ['attachments.retentionDays', 'agentMessages.retentionDays', 'agentMessages.metaRetentionDays', 'locks.slots', 'locks.shortLimitMinutes', 'locks.guard.enabled', 'locks.guard.maxLoadPercent', 'locks.guard.maxSwapPercent', 'locks.guard.minFreeMemPercent']) ids.add(key);
   for (const match of app.matchAll(/machineNumber\('(\w+)'/g)) ids.add(`machine.${match[1]}`);
   for (const match of app.matchAll(/settingRow\('([^']+)'/g)) ids.add(match[1]);
@@ -235,4 +236,14 @@ test('agent message text and metadata retention use separate settings', () => {
   assert.equal(SETTING_HELP['agentMessages.metaRetentionDays']?.default, '180');
   assert.equal(SETTING_HELP['agentMessages.metaRetentionDays']?.range, '7 to 730');
   assert.match(SETTING_HELP['agentMessages.metaRetentionDays'].what, /no message text/);
+});
+
+test('agent prompt timeout has complete help and a Settings control', () => {
+  assert.equal(SETTING_HELP['agentMessages.promptTimeoutSeconds']?.default, '25');
+  assert.equal(SETTING_HELP['agentMessages.promptTimeoutSeconds']?.unit, 'Seconds');
+  assert.equal(SETTING_HELP['agentMessages.promptTimeoutSeconds']?.range, '1 to 120');
+  assert.match(SETTING_HELP['agentMessages.promptTimeoutSeconds'].what, /submit.*once/i);
+  assert.match(SETTING_HELP['agentMessages.promptTimeoutSeconds'].what, /agent is idle/);
+  assert.match(app.slice(app.indexOf('const HELP =')), /unsubmitted input while the agent is idle/);
+  assert.match(app, /lockInput\('agentMessages.promptTimeoutSeconds'/);
 });

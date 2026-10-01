@@ -5,9 +5,9 @@ import fs from 'node:fs';
 
 const PATH = [path.join(os.homedir(), '.local/bin'), '/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin', process.env.PATH].join(':');
 
-export function run(cmd, args, { timeout = 30000 } = {}) {
+export function run(cmd, args, { timeout = 30000, killSignal = 'SIGTERM' } = {}) {
   return new Promise((resolve, reject) => {
-    execFile(cmd, args, { timeout, maxBuffer: 32 * 1024 * 1024, env: { ...process.env, PATH } }, (err, stdout, stderr) => {
+    execFile(cmd, args, { timeout, killSignal, maxBuffer: 32 * 1024 * 1024, env: { ...process.env, PATH } }, (err, stdout, stderr) => {
       if (err) { err.stderr = stderr; err.stdout = stdout; reject(err); } else resolve(stdout);
     });
   });

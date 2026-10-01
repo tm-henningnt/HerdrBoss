@@ -6,6 +6,7 @@ import { redactSecrets } from './redact.js';
 import { openMessageStore } from './message-store.js';
 import { readProjectRepos } from './harness.js';
 import { loadProjectConfig } from './kit/config.js';
+import { agentPromptTimeoutMs, deliverAgentPrompt } from './agent-prompt.js';
 
 export const AGENT_MESSAGE_KINDS = Object.freeze(['task', 'nudge', 'report', 'reminder', 'reply', 'other']);
 export const AGENT_RESPONSE_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -600,6 +601,8 @@ function targetAddress(pane, control, runs = []) {
   const project = projectForWorkspace(control, paneWorkspace(pane));
   const run = runs.find((item) => item.pane === id && !item.finishedAt);
   const details = {
+    agentName: pane.name || pane.agent_name || run?.name || null,
+    expectedLabel: typeof pane.label === 'string' ? pane.label : null,
     ...(run?.kind || typeof pane.agent === 'string' ? { kind: run?.kind || pane.agent } : {}),
     ...(run?.model || pane.model ? { model: run?.model || pane.model } : {}),
     ...(pane.agent_status || pane.status ? { status: pane.agent_status || pane.status } : {}),
@@ -608,34 +611,37 @@ function targetAddress(pane, control, runs = []) {
   if (pane.label === 'orch') return { role: 'orch', project, name: pane.name || pane.agent_name || null, pane: id, ...details };
   if (run) return { role: 'worker', project: run.project || project, name: run.name || pane.name || null, pane: id, ...details,
     taskId: run.taskId ?? run.issue ?? null, runId: workerRunId(run, run.project || project) };
-  return { role: 'unknown', project, name: pane.name || pane.agent_name || pane.agent || null, pane: id };
+  return { role: 'unknown', project, name: pane.name || pane.agent_name || pane.agent || null, pane: id,
+    agentName: details.agentName, expectedLabel: details.expectedLabel };
 }
 
 export function tellAgent(target, text, { env = process.env, herdr, control = {}, runs = null, dir = DATA_DIR, dataDir = dir, kind = 'task', replyTo = null, now = Date.now() } = {}) {
   if (!TELL_KINDS.has(kind)) return { exitCode: 2, reason: `--kind must be one of ${[...TELL_KINDS].join(', ')}.` };
   if (typeof text !== 'string' || !text.trim()) return { exitCode: 1, reason: 'The agent message text is empty.' };
   let record;
+  let deliveryTarget;
   try {
     const runRows = readRuns({ runs, control, dataDir });
     const from = verifyAgentCaller(env, herdr, control, runRows);
-    const to = resolveTarget(String(target), herdr, control, runRows);
+    const { agentName, expectedLabel, ...to } = resolveTarget(String(target), herdr, control, runRows);
+    deliveryTarget = { agentName, expectedLabel };
     record = recordAgentMessage({ from, to, text, kind, status: 'recorded', source: 'tell', targetStatus: to.status,
       replyTo, taskId: from.taskId ?? to.taskId, runId: from.runId ?? to.runId }, { dir, now });
   } catch (error) { return { exitCode: 1, reason: String(error?.message ?? error).replace(/\s+/g, ' ').slice(0, 200) }; }
   try {
-    const response = herdr(['agent', 'prompt', record.to.pane, text]);
-    if (response?.error || response?.ok === false) throw new Error(response.error || 'Herdr refused the prompt.');
+    const delivery = deliverAgentPrompt(record.to.pane, text, { herdr, kind: record.to.kind, ...deliveryTarget, timeoutMs: agentPromptTimeoutMs({ dir: dataDir }) });
+    if (delivery.exitCode) throw Object.assign(new Error(delivery.reason), { exitCode: delivery.exitCode });
     const updated = openMessageStore({ dir }).update(record.id, { status: 'delivered' }, { now });
     let metadataWarning;
     try { appendMetadata({ id: record.id, _update: 'status', status: 'delivered' }, { dir, now }); }
     catch { metadataWarning = 'The prompt was delivered. Its metadata status could not be saved.'; }
     return { exitCode: 0, record: updated || { ...record, status: 'delivered' }, ...(metadataWarning ? { metadataWarning } : {}) };
   } catch (error) {
-    const reason = 'Herdr could not deliver the prompt.';
+    const reason = error.exitCode ? error.message : 'Herdr could not deliver the prompt.';
     const updated = openMessageStore({ dir }).update(record.id, { status: 'failed' }, { now });
     let metadataWarning;
     try { appendMetadata({ id: record.id, _update: 'status', status: 'failed' }, { dir, now }); }
     catch { metadataWarning = 'The metadata status could not be saved.'; }
-    return { exitCode: 1, record: updated || { ...record, status: 'failed' }, reason, ...(metadataWarning ? { metadataWarning } : {}) };
+    return { exitCode: error.exitCode || 1, record: updated || { ...record, status: 'failed' }, reason, ...(metadataWarning ? { metadataWarning } : {}) };
   }
 }

@@ -130,6 +130,10 @@ Summary: Browser output masks titles and removes credentials, query strings, and
 Impact: useful
 Summary: Refresh lock wait lines with holder age and predicted end. Send one slow-holder notice to the Boss. Detect zombie holders with a recorded process start. The cause of the reported 45-minute wait remains unverified.
 
+## 8efc9e5ccec6
+Impact: useful
+Summary: Bound agent prompt delivery and document the file-path pattern for long prompts.
+
 ## 2ac9048be57b
 Impact: useful
 Summary: Wait for browser commands and CDP clients before restart. Restore saved tabs in separate windows and read their new IDs.
