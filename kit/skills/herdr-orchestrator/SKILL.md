@@ -64,7 +64,7 @@ Read each file in the skill folder when its step comes:
 - Ask the Boss only about a conflict between projects or a change that affects another project.
 - Ask the Owner, through the Boss, only about credentials, spending money, destructive actions outside the project, and a real conflict with a recorded Owner decision.
 - Do not edit the Herdr Boss kit or its skills from another project. Send the change request to the Boss. The Boss decides whether to relay it to the HerdrBoss orchestrator, which maintains the kit.
-- Report to the Boss only when a task is merged and live, or when you are blocked. Use one or two lines. Send with `herdr agent prompt <boss-pane> "..."` without `--wait`.
+- Report to the Boss only when a task is merged and live, or when blocked. One or two lines. Send it with `herdr-boss tell`.
 - Do not message another project's orchestrator. The Boss relays messages between projects.
 - The kit and the Boss take precedence over conflicting project text. Report a conflict to the Boss.
 - Decide and run your own pushes, deployments, and releases under the project release rules. Neither the Boss nor the Owner approves them.

@@ -2,6 +2,47 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { findGitRoot, loadProjectConfig } from './kit/config.js';
 
+const WORKER_REPORT_PREFIX_BYTES = 4096;
+const WORKER_REPORT_SUMMARY_CHARS = 2000;
+
+function completeUtf8PrefixLength(buffer, length) {
+  let start = length - 1;
+  while (start >= 0 && (buffer[start] & 0xC0) === 0x80 && length - start <= 4) start -= 1;
+  if (start < 0) return length;
+  const lead = buffer[start];
+  const expected = lead >= 0xF0 && lead <= 0xF4 ? 4
+    : lead >= 0xE0 && lead <= 0xEF ? 3
+      : lead >= 0xC2 && lead <= 0xDF ? 2 : 1;
+  return expected > length - start ? start : length;
+}
+
+export function readBoundedWorkerReport(file) {
+  const linkStat = fs.lstatSync(file);
+  if (!linkStat.isFile() || linkStat.isSymbolicLink()) {
+    throw Object.assign(new Error('Worker report must be a regular file.'), { code: 'ERR_WORKER_REPORT_UNSAFE' });
+  }
+  const noFollow = fs.constants.O_NOFOLLOW || 0;
+  const nonBlocking = fs.constants.O_NONBLOCK || 0;
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | noFollow | nonBlocking);
+  let text;
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile() || stat.dev !== linkStat.dev || stat.ino !== linkStat.ino) {
+      throw Object.assign(new Error('Worker report must be a regular file.'), { code: 'ERR_WORKER_REPORT_UNSAFE' });
+    }
+    const buffer = Buffer.alloc(WORKER_REPORT_PREFIX_BYTES);
+    const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0);
+    const completeBytes = bytesRead === buffer.length ? completeUtf8PrefixLength(buffer, bytesRead) : bytesRead;
+    text = buffer.toString('utf8', 0, completeBytes);
+  } finally {
+    fs.closeSync(fd);
+  }
+  let summary = text.slice(0, WORKER_REPORT_SUMMARY_CHARS);
+  const last = summary.charCodeAt(summary.length - 1);
+  if (last >= 0xD800 && last <= 0xDBFF) summary = summary.slice(0, -1);
+  return summary;
+}
+
 export const WORKER_FAILURE_LABELS = Object.freeze([
   'API Error', '401', '429', 'Connection lost', 'usage limit', 'rate limit', 'overloaded', 'Free usage exceeded',
 ]);
@@ -152,7 +193,7 @@ export function workerReportPromptSent(screen, name) {
   return String(screen ?? '').split(/\r?\n/).some((line) => /herdr agent prompt/.test(line) && pattern.test(line));
 }
 
-// Report files are treated as metadata only. Never open or parse their contents. The worker pane is
+// Read the bounded report summary once when a new report-file version appears. The worker pane is
 // read only to look for the report prompt, and only while a report file waits for its decision.
 export async function inspectWorkerReports(panes, observed, now = Date.now(), getMetadata = (file) => {
   try {
@@ -161,7 +202,7 @@ export async function inspectWorkerReports(panes, observed, now = Date.now(), ge
   } catch {
     return null;
   }
-}, readScreen = null) {
+}, readScreen = null, onReport = null) {
   const nextObserved = {};
   const notices = [];
   for (const pane of panes || []) {
@@ -188,7 +229,11 @@ export async function inspectWorkerReports(panes, observed, now = Date.now(), ge
       if (!metadata?.isFile || !Number.isFinite(metadata.mtimeMs) || metadata.mtimeMs <= firstSeen) continue;
       // One notice per report path. A rewrite of the same report changes only its mtime.
       const key = `workers:report:${absoluteReportPath}`;
-      const record = reports[key] = { ...(reports[key] || { seenAt: now }) };
+      const previous = reports[key];
+      const record = reports[key] = { ...(previous || { seenAt: now }) };
+      const newVersion = record.mtimeMs !== metadata.mtimeMs;
+      record.mtimeMs = metadata.mtimeMs;
+      if (newVersion && onReport) await onReport({ pane, reportPath: absoluteReportPath, mtimeMs: metadata.mtimeMs });
       if (record.state === 'prompted') continue;
       if (record.state !== 'noticed') {
         if (readScreen) {

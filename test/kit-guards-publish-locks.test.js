@@ -813,8 +813,13 @@ test('publish keeps the kitRevision of the status file', () => {
   assert.equal(JSON.parse(fs.readFileSync(path.join(dataDir, 'projects', 'demo.json'), 'utf8')).kitRevision, 'abcdef012345');
 });
 
-test('publish warns about a blocked task with no blocker and an Owner wait with no Mailbox item', () => {
+test('publish warns about a blocked task with no blocker and an Owner wait with no Mailbox item', (t) => {
   const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-publish-wait-')));
+  const repo = temporaryRepo('herdr-publish-wait-repo-');
+  t.after(() => {
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(repo, { recursive: true, force: true });
+  });
   const status = path.join(home, 'status.json');
   fs.writeFileSync(status, JSON.stringify({
     project: 'Demo',
@@ -826,7 +831,7 @@ test('publish warns about a blocked task with no blocker and an Owner wait with 
   const dataDir = path.join(home, 'boss');
   const env = { ...process.env, HOME: home, HERDR_BOSS_DIR: dataDir, TMPDIR: home };
   const cli = fileURLToPath(new URL('../src/cli.js', import.meta.url));
-  const result = spawnSync(process.execPath, [cli, 'publish', 'demo', status], { cwd: home, env, encoding: 'utf8' });
+  const result = spawnSync(process.execPath, [cli, 'publish', 'demo', status], { cwd: repo, env, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stderr, /^Warning: task 12 is blocked but names no blocker\. Set blockedBy or waitingOn\.$/m);
   assert.match(result.stderr, /^Warning: task V12 waits on the Owner but has no Mailbox item\. Post one with herdr-boss mail post and set mailboxId\.$/m);

@@ -13,6 +13,8 @@ import { formatKitDigest, runKitCommand } from '../src/kit/cli.js';
 import { allowWorkerScope, collectWorker, createHerdrRunner, filterCollectProcesses, listWorkers, parseWorktreeCwdProcesses, renderBrief, startWorker, waitForAgentReady, waitForWorkerPane } from '../src/kit/workers.js';
 import { classifyWorktrees, pruneWorktrees } from '../src/kit/worktrees.js';
 import { usageProvider, validateUsage } from '../src/usage.js';
+import { DATA_DIR } from '../src/config.js';
+import { readAgentMessages, workerRunId } from '../src/agent-messages.js';
 import { validateProject } from '../src/projects.js';
 import { Engine } from '../src/engine.js';
 import { renderBulletin } from '../src/rules.js';
@@ -55,6 +57,10 @@ test('worker collect --record uses the provider recorded at start, including nul
       continue;
     }
     collect();
+    const agentReport = readAgentMessages({ dir: DATA_DIR }).find((item) => item.runId === workerRunId(run, f.config.slug));
+    assert.equal(agentReport?.agentKind, 'report', 'worker collect records one agent report');
+    assert.equal(agentReport?.status, 'recorded');
+    assert.equal(agentReport?.text, 'Done.\n');
     const savedRun = JSON.parse(fs.readFileSync(run.recordFile, 'utf8'));
     assert.equal(savedRun.provider, expected);
     assert.equal(savedRun.finishedAt, '2026-09-25T17:00:00.000Z');
@@ -1697,6 +1703,28 @@ test('a refused worker collect closes nothing and writes no ledger entry', (t) =
   }), /changed paths outside its allowed scope/);
 
   assert.equal(fs.readFileSync(run.recordFile, 'utf8'), before);
+  assert.equal(fs.existsSync(f.config.ledgerPath), false);
+});
+
+test('worker collect refuses a symlink report.md', (t) => {
+  const f = setupFixture(null);
+  const run = startWorker('collect-report-link', { kind: 'codex', task: 'x', taskId: 'T1', allow: ['src/'] }, {
+    config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+  });
+  cleanWorkerRun(t, f, run);
+  writeWorkerReport(run);
+  const reportDir = path.join(run.worktree, run.workerDir || '.worker');
+  const reportPath = path.join(reportDir, 'report.md');
+  const targetPath = path.join(run.worktree, 'report-target.md');
+  const recordBefore = fs.readFileSync(run.recordFile, 'utf8');
+  fs.writeFileSync(targetPath, 'Outside report.');
+  fs.unlinkSync(reportPath);
+  fs.symlinkSync(targetPath, reportPath);
+
+  assert.throws(() => collectWorker('collect-report-link', { outcome: 'done', gatePassed: true }, {
+    config: f.config, output: () => {}, listWorktreeProcesses: () => [], recordUsageFn: () => ({ errors: [] }),
+  }), /Worker report must be a regular file/);
+  assert.equal(fs.readFileSync(run.recordFile, 'utf8'), recordBefore);
   assert.equal(fs.existsSync(f.config.ledgerPath), false);
 });
 

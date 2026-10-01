@@ -1016,7 +1016,7 @@ function settingsView(s) {
   const lockNumber = (key, label, min, max) => lockInput(`locks.${key}`, label, lockPolicy[key], min, max, `data-policy-lock="${key}"`);
   const lockGuardNumber = (key, label, min, max) => lockInput(`locks.guard.${key}`, label, lockGuard[key], min, max, `data-policy-lock-guard="${key}"`);
   const lockSettings = `<section class="panel"><h2>Locks</h2>${lockNumber('slots', 'Machine lock slots', 1, 4)}${lockNumber('shortLimitMinutes', 'Short job limit minutes', 1, 60)}${settingRow('locks.guard.enabled', 'Guard for short jobs', `<input id="${helpFid('locks.guard.enabled')}" type="checkbox" role="switch" aria-label="Guard for short jobs" data-policy-lock-guard="enabled" ${lockGuard.enabled !== false ? 'checked' : ''}>`)}${lockGuardNumber('maxLoadPercent', 'Maximum load % of cores', 0, 1000)}${lockGuardNumber('maxSwapPercent', 'Maximum swap % used', 0, 100)}${lockGuardNumber('minFreeMemPercent', 'Minimum free memory %', 0, 100)}</section>`;
-  const attachmentSettings = `<section class="panel"><h2>Pictures</h2>${lockInput('attachments.retentionDays', 'Picture retention days', Object.hasOwn(d.attachments || {}, 'retentionDays') ? d.attachments.retentionDays : 30, 1, 365, 'data-policy-attachment="retentionDays"')}</section>`;
+  const attachmentSettings = `<section class="panel"><h2>Pictures and agent messages</h2>${lockInput('attachments.retentionDays', 'Picture retention days', Object.hasOwn(d.attachments || {}, 'retentionDays') ? d.attachments.retentionDays : 30, 1, 365, 'data-policy-attachment="retentionDays"')}${lockInput('agentMessages.retentionDays', 'Agent message text retention days', Object.hasOwn(d.agentMessages || {}, 'retentionDays') ? d.agentMessages.retentionDays : 14, 1, 90, 'data-policy-agent-message="retentionDays"')}${lockInput('agentMessages.metaRetentionDays', 'Agent message metadata retention days', Object.hasOwn(d.agentMessages || {}, 'metaRetentionDays') ? d.agentMessages.metaRetentionDays : 180, 7, 730, 'data-policy-agent-message="metaRetentionDays"')}</section>`;
   const settingsGroups = ['Machine', 'Quota', 'Status', 'Workers', 'Watch', 'Browsers', 'Service'];
   const serviceSettingRanges = {
     'machine.memFreeWarnPercent': [1, 50],
@@ -7305,6 +7305,7 @@ document.addEventListener('change', (e) => {
   if (el.dataset.policyMachine) { d.machine ||= {}; d.machine[el.dataset.policyMachine] = el.value === '' ? null : Number(el.value); }
   if (el.dataset.policyMachineBool) { d.machine ||= {}; d.machine[el.dataset.policyMachineBool] = el.checked; }
   if (el.dataset.policyAttachment) { d.attachments ||= {}; d.attachments[el.dataset.policyAttachment] = readLockNumber(el); }
+  if (el.dataset.policyAgentMessage) { d.agentMessages ||= {}; d.agentMessages[el.dataset.policyAgentMessage] = readLockNumber(el); }
   if (el.dataset.policyLock) { d.locks ||= {}; d.locks[el.dataset.policyLock] = readLockNumber(el); }
   if (el.dataset.policyLockGuard) {
     d.locks ||= {};

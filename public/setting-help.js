@@ -45,9 +45,9 @@ export const SETTING_GROUPS = [
   },
   {
     id: 'attachments', title: 'Pictures', advanced: false,
-    controls: 'How many days Herdr Boss keeps pictures in Chat and Mailbox.',
-    affects: 'Stored pictures. An expired picture is deleted at the hourly sweep.',
-    safe: 'A shorter period deletes older pictures. A deleted picture cannot be recovered.',
+    controls: 'How many days Herdr Boss keeps pictures and agent messages.',
+    affects: 'Stored pictures, agent-message text, and agent-message metadata.',
+    safe: 'A shorter period deletes older pictures, message text, or metadata at the hourly sweep.',
     restart: 'No restart. Select Apply policy.',
   },
   {
@@ -304,6 +304,20 @@ export const SETTING_HELP = Object.fromEntries([
     default: '30', unit: 'Days', range: '1 to 365',
     raise: 'A higher value keeps linked pictures longer.',
     lower: 'A lower value deletes older pictures at the next sweep. Deleted pictures cannot be recovered.',
+    apply: 'policy',
+  }),
+  S('attachments', 'agentMessages.retentionDays', 'Agent message text retention days', {
+    what: 'How long Herdr Boss keeps agent-message text. An hourly sweep removes older text.',
+    default: '14', unit: 'Days', range: '1 to 90',
+    raise: 'A higher value keeps agent-message text longer.',
+    lower: 'A lower value removes older text at the next sweep. Metadata rows use a separate retention setting.',
+    apply: 'policy',
+  }),
+  S('attachments', 'agentMessages.metaRetentionDays', 'Agent message metadata retention days', {
+    what: 'How long Herdr Boss keeps agent-message metadata after it removes the message text. A row has no message text.',
+    default: '180', unit: 'Days', range: '7 to 730',
+    raise: 'A higher value keeps message metadata longer.',
+    lower: 'A lower value removes older metadata at the next sweep.',
     apply: 'policy',
   }),
 

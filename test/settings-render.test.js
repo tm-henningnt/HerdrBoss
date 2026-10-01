@@ -232,7 +232,7 @@ test('picture retention renders its saved value, help and a working policy edito
   const app = await views(); app.setModels({ codex: catalog, claude: catalog });
   const s = fixture(); s.policy.attachments = { retentionDays: 45 }; app.setState(s);
   const html = app.settingsView(s);
-  assert.match(html, /<h2>Pictures<\/h2>/);
+  assert.match(html, /<h2>Pictures and agent messages<\/h2>/);
   assert.match(html, /data-policy-attachment="retentionDays"/);
   assert.match(html, /data-setting-help="attachments.retentionDays"/);
   assert.match(html, /min="1" max="365"[^>]*value="45"/);
@@ -240,6 +240,23 @@ test('picture retention renders its saved value, help and a working policy edito
   const event = { target: input };
   app.context.handlers.get('change').find((handler) => handler.toString().includes('el.dataset.policyAttachment'))(event);
   assert.equal(app.getDraft().attachments.retentionDays, 60);
+});
+
+test('agent message retention renders and edits separate text and metadata periods', async () => {
+  const app = await views(); app.setModels({ codex: catalog, claude: catalog });
+  const s = fixture();
+  s.policy.agentMessages = { retentionDays: 30, metaRetentionDays: 365 };
+  app.setState(s);
+  const html = app.settingsView(s);
+  assert.match(html, /data-policy-agent-message="retentionDays"/);
+  assert.match(html, /data-setting-help="agentMessages\.retentionDays"/);
+  assert.match(html, /min="1" max="90"[^>]*value="30"/);
+  assert.match(html, /data-policy-agent-message="metaRetentionDays"/);
+  assert.match(html, /data-setting-help="agentMessages\.metaRetentionDays"/);
+  assert.match(html, /min="7" max="730"[^>]*value="365"/);
+  const input = { closest: () => ({}), dataset: { policyAgentMessage: 'metaRetentionDays' }, value: '400', id: 'setting-agent-meta', setCustomValidity() {}, setAttribute() {}, removeAttribute() {} };
+  app.context.handlers.get('change').find((handler) => handler.toString().includes('el.dataset.policyAgentMessage'))({ target: input });
+  assert.equal(app.getDraft().agentMessages.metaRetentionDays, 400);
 });
 
 test('a blank picture retention field remains blank and invalid after rendering', async () => {
