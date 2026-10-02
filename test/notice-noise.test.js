@@ -290,6 +290,7 @@ test('an idle worker without report.json reaches its orchestrator once per idle 
   observe({ ...worker, status: 'working' }, NOW + 12 * MIN);
   observe(worker, NOW + 13 * MIN);
   observe(worker, NOW + 23 * MIN);
+  observe(worker, NOW + 133 * MIN);
 
   assert.equal(rounds[0].alerts.length, 0, 'the idle period starts on first observation');
   assert.equal(rounds[1].alerts.length, 0, 'the watchdog waits for the full 10 minutes');
@@ -300,7 +301,8 @@ test('an idle worker without report.json reaches its orchestrator once per idle 
   assert.equal(rounds[6].alerts.length, 1, 'a new idle period can trigger a new notice');
 
   const prompts = deliverRounds(t, rounds);
-  assert.equal(prompts.length, 2, 'delivery sends one notice for each idle period');
+  assert.equal(prompts.length, 2, 'delivery sends the next idle-period reminder after the two-hour digest interval');
+  assert.deepEqual(prompts.map((prompt) => prompt.round), [2, 7]);
   assert.deepEqual(prompts.map((prompt) => prompt.pane), ['w1:p1', 'w1:p1']);
   assert.ok(prompts.every((prompt) => prompt.text.includes('Worker alpha in w1:p2 is idle for 10 min with no report.json. Check it, then resume or collect it.')));
 });
@@ -332,6 +334,36 @@ test('an info immediate notice waits for an idle orchestrator and a warn immedia
   const third = prompts.filter((p) => p.round === 2);
   assert.equal(third.length, 1);
   assert.match(third[0].text, /Info notice report/, 'the info notice goes out at idle');
+});
+
+test('stale status and no-report notices wait for the pane digest', (t) => {
+  const stale = info('stale', { key: 'status:stale:alpha:after-30m-every-60m', repeatMs: 60 * MIN, scope: 'w1' });
+  const noReport = (name) => ({ key: `workers:no-report:${name}:w1:p2:run:${name}`, severity: 'info', once: true, scope: 'w1',
+    title: `Worker ${name} is idle without a report`, text: `Worker ${name} has no report.json.` });
+  const alerts = [stale, noReport('alpha'), noReport('beta')];
+  const prompts = deliverRounds(t, [
+    { at: NOW, panes: [orch('working')], alerts },
+    { at: NOW + MIN, panes: [orch('idle')], alerts },
+    { at: NOW + 61 * MIN, panes: [orch('idle')], alerts },
+    { at: NOW + 121 * MIN, panes: [orch('idle')], alerts },
+  ]);
+  assert.equal(prompts.some((prompt) => prompt.round === 0), false, 'these reminders do not interrupt a working pane');
+  const first = prompts.filter((prompt) => prompt.round === 1);
+  assert.equal(first.length, 1, 'one pane digest carries repeated stale and no-report reminders');
+  for (const line of ['Info notice stale.', 'Worker alpha has no report.json.', 'Worker beta has no report.json.']) assert.ok(first[0].text.includes(line), line);
+  assert.equal(prompts.filter((prompt) => prompt.round === 2).length, 0, 'the next due reminders wait for the two-hour digest interval');
+  assert.equal(prompts.filter((prompt) => prompt.round === 3).length, 1, 'the active stale notice joins the next digest');
+});
+
+test('the no-report watchdog creates a non-urgent info notice', () => {
+  const worker = { id: 'w1:p2', workspace: 'w1', agent: 'claude', name: 'alpha', cwd: '/tmp/wt-alpha', status: 'idle' };
+  const run = { name: 'alpha', pane: worker.id, worktree: worker.cwd, startedAt: '2026-09-27T11:00:00.000Z' };
+  const first = inspectWorkerNoReports([worker], [run], {}, NOW, () => false);
+  const due = inspectWorkerNoReports([worker], [run], first.observed, NOW + 10 * MIN, () => false);
+  assert.equal(due.notices.length, 1);
+  assert.equal(due.notices[0].severity, 'info');
+  assert.equal(due.notices[0].immediate, undefined);
+  assert.equal(due.notices[0].once, true);
 });
 
 test('quota, quota recovery, and browser-ready alerts are in the bulletin but produce no prompt', (t) => {

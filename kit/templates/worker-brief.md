@@ -40,7 +40,11 @@ Stop only a process that you started, by the PID that you saved when you started
 
 Run each `herdr-boss browser` command and each `ps` or `pgrep` command alone. Do not join it to other commands with `&&`, `;`, or a pipe.
 
-Run `herdr-boss suite -- npm test` as a background command, then wait for it and read its exit code. The tool timeout is 600 seconds. The command takes the machine-wide `full-suite` lock. Never take the full-suite lock with a bare lock acquire for a suite. Push with `herdr-boss push <args>`.
+Run a long gate in the foreground with `herdr-boss suite --wait 3600 -- <command>`. Set the command tool timeout to at least 3,600,000 ms. Do not run a long gate in a background shell with its default timeout. The `--wait` value is the maximum time to wait for the full-suite lock. Never take the full-suite lock with a bare lock acquire for a suite. Push with `herdr-boss push <args>`.
+
+## Shared catalogues
+
+For a shared catalogue, do not append to it. Write your findings to `catalogue/<worker>.md`. Let the orchestrator merge worker files at collect time.
 
 ## Edit scope
 

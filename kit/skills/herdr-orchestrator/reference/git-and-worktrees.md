@@ -18,3 +18,5 @@ Read this file before you dispatch work, stage or integrate a change, or clean u
 - Use `herdr-boss worktree prune` to review stale worktrees.
 - Inspect prune candidates before applying cleanup.
 - Use `herdr-boss worktree prune --apply` only after verifying the candidates and their ownership.
+- Run a long gate in the foreground with `herdr-boss suite --wait 3600 -- <command>`. Set the command tool timeout to at least 3,600,000 ms. Do not run a long gate in a background shell with its default timeout. The `--wait` value is the maximum time to wait for the full-suite lock.
+- Never take the full-suite lock with a bare lock acquire for a suite.

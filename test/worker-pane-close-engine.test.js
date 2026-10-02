@@ -114,6 +114,36 @@ process.stdout.write(JSON.stringify({ ok: true }) + '\\n');
   return {
     data, home, bin, root, checkout, calls, run,
     pane: { id: run.pane, name: run.name, agent: run.kind, status: 'done', workspace: 'ws-fixture' },
+    collect() {
+      fs.unlinkSync(path.join(data, 'worker-pane-closes.json'));
+      delete run.finishedAt;
+      Object.assign(run, { issue: null, model: 'gpt-6-luna', branch: 'fixture-worker', base: 'main', allowedPaths: [] });
+      fs.writeFileSync(path.join(runs, 'fixture-worker.json'), JSON.stringify(run));
+      fs.appendFileSync(path.join(checkout, '.git', 'info', 'exclude'), '\n.worker/\n');
+      fs.mkdirSync(path.join(worktree, '.worker'));
+      fs.writeFileSync(path.join(worktree, '.worker', 'report.md'), 'Fixture report.\n');
+      fs.writeFileSync(path.join(worktree, '.worker', 'report.json'), JSON.stringify({
+        issue: null, branch: run.branch, worktree, changedPaths: [], commands: ['fixture check'],
+        evidenceTier: ['unit'], unverified: [], stoppedEarly: false,
+      }));
+      const result = spawnSync(process.execPath, ['--input-type=module', '-e', `
+        import { collectWorker } from './src/kit/workers.js';
+        import { loadProjectConfig } from './src/kit/config.js';
+        collectWorker('fixture-worker', { outcome: 'done', gatePassed: true, paneCloseDelayMinutes: 2 }, {
+          config: loadProjectConfig({ cwd: process.env.TEST_CHECKOUT }),
+          now: Number(process.env.FIXED_NOW) - 120001,
+          leaseDataDir: process.env.HERDR_BOSS_DIR,
+          listWorktreeProcesses: () => [], recordUsageFn: () => ({ errors: [] }), output: () => {},
+        });
+      `], { cwd: repo, encoding: 'utf8', env: {
+        ...process.env, HOME: home, HERDR_BOSS_DIR: data, HERDR_BOSS_LIVE_DIR: data,
+        TEST_CHECKOUT: checkout, FIXED_NOW: String(FIXED_NOW),
+      } });
+      assert.equal(result.status, 0, result.stderr);
+      const scheduled = JSON.parse(fs.readFileSync(path.join(data, 'worker-pane-closes.json'), 'utf8'));
+      assert.equal(scheduled.length, 1);
+      assert.equal(scheduled[0].dueAt, FIXED_NOW - 1, 'collection preserves its two-minute delay');
+    },
     runTick(act, failClose = false) {
       const result = spawnSync(process.execPath, ['--input-type=module', '-e', probe], {
         cwd: repo,
@@ -140,6 +170,7 @@ process.stdout.write(JSON.stringify({ ok: true }) + '\\n');
 
 test('Engine gates, retries, and resumes pane closes from the queue after a service restart', { timeout: 60000 }, (t) => {
   const fixture = setup(t);
+  fixture.collect();
 
   const passive = fixture.runTick(false);
   assert.equal(passive.act, false);

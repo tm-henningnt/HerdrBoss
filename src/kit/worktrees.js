@@ -2,6 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createHerdrRunner, listCwdProcesses } from './workers.js';
+import { archiveWorkerReports } from './worker-archive.js';
+export { archiveWorkerReports } from './worker-archive.js';
 
 function git(root, args, options = {}) {
   return execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', ...options });
@@ -63,7 +65,12 @@ export function classifyWorktrees(config, { panes = [], now = Date.now() } = {})
     try { stat = fs.statSync(worktree.path); } catch { stat = null; }
     const createdAt = stat?.birthtimeMs || stat?.mtimeMs || now;
     const ageMs = Math.max(0, now - createdAt);
-    const livePane = panes.some((pane) => (pane.foreground_cwd ?? pane.cwd) && cwdIsInWorktree(pane.foreground_cwd ?? pane.cwd, worktree.path));
+    const livePane = panes.some((pane) => {
+      const cwd = pane.foreground_cwd ?? pane.cwd;
+      const parked = (pane.label ?? pane.name) === 'parked';
+      return cwd && cwdIsInWorktree(cwd, worktree.path)
+        && (parked || (pane.agent_status ?? pane.status) !== 'done');
+    });
     const isPrimary = pathKey(worktree.path) === projectRoot;
     const removable = merged && clean && !livePane && !isPrimary && !worktree.detached && !worktree.prunable;
     return {
@@ -86,61 +93,6 @@ export function formatAge(milliseconds) {
   const hours = Math.floor(milliseconds / 3600000);
   if (hours) return `${hours}h`;
   return `${Math.floor(milliseconds / 60000)}m`;
-}
-
-const ARCHIVE_FILES = ['report.md', 'report.json', 'brief.md'];
-const ARCHIVE_MAX_BYTES = 1024 * 1024;
-const ARCHIVE_FOLDER = path.join('.orchestration', 'reports');
-
-function realDirectory(folder, label) {
-  let stat;
-  try { stat = fs.lstatSync(folder); } catch (error) {
-    if (error.code === 'ENOENT') return false;
-    throw error;
-  }
-  if (!stat.isDirectory()) throw new Error(`${label} is not a real directory (${folder}).`);
-  return true;
-}
-
-function utcStamp(now) {
-  return new Date(now).toISOString().replace(/\.\d+Z$/, 'Z').replace(/[-:]/g, '');
-}
-
-// Copies the worker reports of a worktree to <main checkout>/.orchestration/reports/<name>/.
-// It skips a missing file and a file over 1 MB, and reports each skip through output.
-// It never overwrites a file. When the folder already holds one of the files, it writes all files to
-// a new folder <name>-<UTC time>, with -2, -3 added when that folder also exists.
-// It throws when .worker or a target folder is a symlink or a file, or when a copy fails.
-// Returns the target folder, or null when nothing was copied.
-export function archiveWorkerReports(worktree, name, mainRoot, { output = () => {}, now = Date.now() } = {}) {
-  const workerFolder = path.join(worktree, '.worker');
-  if (!realDirectory(workerFolder, '.worker')) return null;
-  const sources = [];
-  for (const file of ARCHIVE_FILES) {
-    const source = path.join(workerFolder, file);
-    let stat;
-    try { stat = fs.lstatSync(source); } catch (error) {
-      if (error.code !== 'ENOENT') throw error;
-      output(`skipped ${file}: missing`);
-      continue;
-    }
-    if (!stat.isFile()) output(`skipped ${file}: not a regular file`);
-    else if (stat.size > ARCHIVE_MAX_BYTES) output(`skipped ${file}: over 1 MB`);
-    else sources.push({ file, source });
-  }
-  if (!sources.length) return null;
-  const reports = path.join(mainRoot, ARCHIVE_FOLDER);
-  realDirectory(path.join(mainRoot, '.orchestration'), '.orchestration');
-  realDirectory(reports, 'Report archive folder');
-  let target = path.join(reports, name);
-  if (realDirectory(target, 'Archive folder') && sources.some(({ file }) => fs.existsSync(path.join(target, file)))) {
-    const base = path.join(reports, `${name}-${utcStamp(now)}`);
-    target = base;
-    for (let counter = 2; fs.existsSync(target) || fs.lstatSync(target, { throwIfNoEntry: false }); counter += 1) target = `${base}-${counter}`;
-  }
-  fs.mkdirSync(target, { recursive: true });
-  for (const { file, source } of sources) fs.copyFileSync(source, path.join(target, file), fs.constants.COPYFILE_EXCL);
-  return target;
 }
 
 function workerNameOf(worktreePath, mainRoot) {

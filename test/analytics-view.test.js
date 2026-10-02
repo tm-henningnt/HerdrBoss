@@ -7,7 +7,7 @@ import {
   stackedBars, lineChart, heatGrid, outcomeBars, stripBars, foldSeries, niceMax, spendSeries, claudeSpend, quotaSeries,
   denialGrid, firstTimeRate, activityFilter, activityChoices, eventLevel, dayLabel, usd,
   DENIAL_RANGES, DEFAULT_DENIAL_RANGE, denialRange, denialSeries, denialMarkers, denialDetailsHtml, denialLegendHtml,
-  lockWaitSeries, lockWaitDetailsHtml, memorySeries, memoryDetailsHtml, hourLabel,
+  lockWaitSeries, lockWaitDetailsHtml, lockLaneHourSeries, lockLaneHourDetailsHtml, memorySeries, memoryDetailsHtml, hourLabel,
 } from '../public/analytics.js';
 import * as communicationView from '../public/analytics.js';
 
@@ -23,6 +23,27 @@ test('communication helpers keep empty figures honest', () => {
   assert.equal(win.total, 0);
   assert.match(communicationView.communicationResponseHtml(null), /No response times/);
   assert.match(communicationView.communicationNudgeDetailsHtml(null), /No nudges/);
+});
+
+test('the Analytics page imports the denial series used by its chart', () => {
+  assert.ok(/import \{[^}]*\bdenialSeries\b[^}]*\} from '\.\/analytics\.js';/.test(app), 'the denial chart helper must be in the Analytics module import');
+});
+
+test('lockLaneHourSeries shows long and short wait and hold by hour for one project', () => {
+  const hours = ['2026-09-30T10:00:00.000Z', '2026-09-30T11:00:00.000Z'];
+  const hourly = { hours, projects: [
+    { project: 'alpha', waitByLane: { long: [60000, 120000], short: [30000, 0] }, holdByLane: { long: [300000, 0], short: [0, 60000] } },
+    { project: 'beta', waitByLane: { long: [999000, 999000], short: [0, 0] }, holdByLane: { long: [0, 0], short: [0, 0] } },
+  ] };
+  const win = lockLaneHourSeries(hourly, 'alpha');
+  assert.deepEqual(win.hours, hours);
+  assert.equal(win.project, 'alpha');
+  assert.deepEqual(win.series.map((series) => [series.key, series.label, series.values]), [
+    ['waitLong', 'Long lane wait', [60000, 120000]],
+    ['holdLong', 'Long lane hold', [300000, 0]],
+    ['waitShort', 'Short lane wait', [30000, 0]],
+    ['holdShort', 'Short lane hold', [0, 60000]],
+  ]);
 });
 
 test('communication charts keep six kinds and seven daily columns with many projects', () => {
@@ -505,6 +526,10 @@ test('the Analytics page has the Policy changes section with an empty state, hel
 const DAY = 86400000;
 const lockData = {
   days: ['2026-09-28', '2026-09-29', '2026-09-30'],
+  hourly: { hours: ['2026-09-30T10:00:00.000Z', '2026-09-30T11:00:00.000Z'], projects: [
+    { project: 'alpha', waitByLane: { long: [60000, 120000], short: [0, 30000] }, holdByLane: { long: [300000, 0], short: [0, 60000] } },
+    { project: 'beta', waitByLane: { long: [0, 0], short: [0, 0] }, holdByLane: { long: [0, 0], short: [0, 0] } },
+  ] },
   projects: [
     { project: 'alpha', wait: [0, 60000, 120000], hold: [0, 300000, 600000], runs: [0, 1, 2], timeouts: [0, 0, 1], waitTotal: 180000, holdTotal: 900000 },
     { project: 'beta', wait: [0, 0, 60000], hold: [0, 0, 60000], runs: [0, 0, 1], timeouts: [0, 0, 0], waitTotal: 60000, holdTotal: 60000 },
@@ -541,10 +566,23 @@ test('lockWaitDetailsHtml lists each day and each project with its wait, hold, r
   assert.doesNotMatch(lockWaitDetailsHtml(lockWaitSeries(lockData, 'beta'), lockData), /alpha/);
 });
 
+test('lockLaneHourDetailsHtml lists lane wait and hold for each hour', () => {
+  const html = lockLaneHourDetailsHtml(lockLaneHourSeries(lockData.hourly, 'alpha'));
+  assert.match(html, /By lane and hour/);
+  assert.ok(html.includes(hourLabel('2026-09-30T11:00:00.000Z', true)));
+  assert.match(html, /Long lane wait/);
+  assert.match(html, /Short lane hold/);
+  assert.match(html, /2 min/);
+  assert.doesNotMatch(html, /beta/);
+});
+
 test('the page has the lock wait card, its switch, its help text, and its guide entry', () => {
   assert.match(app, /function lockWaitBlock\(/);
   assert.match(app, /data-lock-project/);
   assert.match(app, /waitByLane/);
+  assert.match(app, /lockLaneHourSeries\(locks\.hourly, win\.project\)/);
+  assert.match(app, /Last 24 hours by lane/);
+  assert.match(app, /lockLaneHourDetailsHtml\(hourly\)/);
   assert.match(app, /medianWaitMsByLane/);
   assert.match(app, /Short lane median wait/);
   assert.match(app, /<h3>Lock wait and hold<\/h3>/);
@@ -563,8 +601,11 @@ test('lock lane help and docs describe current admission, display, and analytics
   assert.match(helpSection('settings'), /<h3>Locks<\/h3>[\s\S]*?short job limit[\s\S]*?guard/i);
   assert.match(helpSection('allocation'), /<h3>Locks<\/h3>[\s\S]*?long lane[\s\S]*?short lane/i);
   assert.match(helpSection('analytics'), /<h3>Lock wait and hold<\/h3>[\s\S]*?lane[\s\S]*?median wait/i);
+  assert.match(helpSection('analytics'), /second chart shows long and short lane wait and hold for each hour/);
+  assert.match(helpSection('analytics'), /Hourly buckets use UTC\. A lock's hold time counts in the hour when it is released\./);
   assert.match(guide, /The \*\*Locks\*\* panel on the Agents and Allocation pages[\s\S]*?long lane[\s\S]*?short lane/i);
-  assert.match(guide, /Lock wait and hold by project[^\n]*median wait[^\n]*lane/i);
+  assert.match(guide, /Lock wait and hold by project[^\n]*median wait[^\n]*lane[^\n]*each hour[^\n]*24 hours/i);
+  assert.match(guide, /Hourly buckets use UTC\. A lock's hold time counts in the hour when it is released\./);
   assert.match(cli, /`lock list`[^\n]*lane[^\n]*predicted duration/i);
   assert.doesNotMatch(cli, /There is no load threshold\./);
   assert.doesNotMatch(guide, /There is no load threshold\./);
@@ -682,9 +723,14 @@ test('LK3 R6 the actual Analytics card renders slot use, predictions, and their 
     assert.match(card.chart, /14 days/);
     assert.match(card.chart, /last 10/);
   }
+  const all = render('all');
+  assert.match(all.chart, /Last 24 hours by lane/);
+  assert.match(all.chart, /Long lane wait/);
+  assert.match(all.chart, /Short lane hold/);
   const selected = render('alpha');
   assert.match(selected.chart, /alpha/);
   assert.doesNotMatch(selected.chart, /beta/);
+  assert.match(selected.details, /By lane and hour/);
   assert.match(selected.chart, /2 of 3 slots/, 'machine use keeps its machine scope under a project filter');
 });
 
