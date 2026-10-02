@@ -479,15 +479,26 @@ test('harness sync --dry-run prints the change and writes nothing', (t) => {
 // Load the guard template as a module and return its tool_call handler. The template holds no placeholder.
 // TMPDIR points at an empty folder inside the fixture home, so the temporary roots hold no fixture path.
 async function guardHandler(t) {
-  const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-guard-')));
+  const scratch = path.join(ROOT, '.worker');
+  fs.mkdirSync(scratch, { recursive: true });
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(scratch, 'herdr-guard-')));
   const file = path.join(home, 'herdr-guard.ts');
+  const bin = path.join(home, 'bin');
+  fs.mkdirSync(bin);
+  const pi = path.join(bin, 'pi');
+  fs.writeFileSync(pi, '#!/bin/sh\nprintf "fake pi\\n"\n');
+  fs.chmodSync(pi, 0o755);
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   fs.writeFileSync(file, fs.readFileSync(path.join(TEMPLATES, 'pi-herdr-guard.ts'), 'utf8'));
-  const previous = { home: process.env.HOME, tmp: process.env.TMPDIR };
+  const previous = { home: process.env.HOME, tmp: process.env.TMPDIR, path: process.env.PATH };
   process.env.HOME = home;
   process.env.TMPDIR = path.join(home, 'empty-tmp');
+  process.env.PATH = bin;
+  const piProbe = spawnSync('pi', ['--version'], { cwd: home, env: { ...process.env, PATH: bin }, encoding: 'utf8' });
+  assert.equal(piProbe.status, 0, piProbe.stderr);
+  assert.equal(piProbe.stdout, 'fake pi\n');
   t.after(() => {
-    for (const [key, value] of [['HOME', previous.home], ['TMPDIR', previous.tmp]]) {
+    for (const [key, value] of [['HOME', previous.home], ['TMPDIR', previous.tmp], ['PATH', previous.path]]) {
       if (value === undefined) delete process.env[key]; else process.env[key] = value;
     }
   });

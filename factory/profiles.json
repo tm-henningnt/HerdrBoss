@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "profiles": {
+    "personal": {
+      "codexContainer": {
+        "enabled": true,
+        "seccompProfile": "seccomp-codex.json",
+        "systempaths": "unconfined"
+      }
+    }
+  }
+}

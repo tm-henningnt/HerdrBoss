@@ -1,0 +1,3 @@
+#!/command/with-contenv sh
+cd /home/factory
+exec s6-setuidgid factory env HOME=/home/factory USER=factory herdr server

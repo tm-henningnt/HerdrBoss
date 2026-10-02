@@ -1,0 +1,47 @@
+#!/command/with-contenv sh
+# Prepare the volumes before the services start. Run as root at each container start. Each step is safe to repeat.
+set -eu
+home=/home/factory
+for dir in .herdr-boss work .config .ssh .claude .codex; do mkdir -p "$home/$dir"; done
+chmod 700 "$home/.ssh"
+# A named volume can mount as root. Give the user the volume roots without a deep walk of the work volume.
+chown factory:factory "$home" "$home/.herdr-boss" "$home/work" "$home/.config" "$home/.ssh" "$home/.claude" "$home/.codex"
+# The code volume starts empty. Copy the seed checkout, with its .git directory, only when no checkout exists.
+if [ ! -d "$home/herdr-boss/.git" ]; then
+  mkdir -p "$home/herdr-boss"
+  cp -a /opt/herdr-boss-seed/. "$home/herdr-boss/"
+  chown -R factory:factory "$home/herdr-boss"
+fi
+# The sshd host keys stay on the home volume. A new container then keeps the host fingerprint.
+keys="$home/.config/herdr-factory"
+mkdir -p "$keys"
+[ -f "$keys/ssh_host_ed25519_key" ] || ssh-keygen -q -t ed25519 -N '' -f "$keys/ssh_host_ed25519_key"
+chown root:root "$keys" "$keys"/ssh_host_ed25519_key*
+chmod 755 "$keys"
+chmod 600 "$keys/ssh_host_ed25519_key"
+# Codex does not check for updates. A harness changes only with an image rebuild.
+# The setting must be in the root table of config.toml, before the first table header. Replace an existing value.
+codex_config="$home/.codex/config.toml"
+[ -f "$codex_config" ] || : > "$codex_config"
+awk '
+  /^[ \t]*check_for_update_on_startup[ \t]*=/ && !table { dropped = 1; next }
+  dropped { dropped = 0; if (/^[ \t]*$/) next }
+  /^[ \t]*\[/ && !table { table = 1; print "check_for_update_on_startup = false"; print "" }
+  { print }
+  END { if (!table) print "check_for_update_on_startup = false" }
+' "$codex_config" > "$codex_config.new"
+cat "$codex_config.new" > "$codex_config"
+rm -f "$codex_config.new"
+chown factory:factory "$codex_config"
+# The Linux browser is Chromium. Set chromePath in the config.json of the data volume, but keep a value that the Owner set.
+# A config.json that is not a JSON object stays as it is.
+s6-setuidgid factory env HOME="$home" node -e '
+  const fs = require("fs");
+  const file = process.argv[1] + "/config.json";
+  let config = {};
+  try { config = JSON.parse(fs.readFileSync(file, "utf8")); }
+  catch (error) { if (error.code !== "ENOENT") process.exit(0); }
+  if (!config || typeof config !== "object" || Array.isArray(config) || "chromePath" in config) process.exit(0);
+  config.chromePath = "/usr/bin/chromium";
+  fs.writeFileSync(file, JSON.stringify(config, null, 2) + "\n", { mode: 0o600 });
+' "$home/.herdr-boss"

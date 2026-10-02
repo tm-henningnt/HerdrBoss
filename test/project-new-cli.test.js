@@ -1,10 +1,10 @@
-import './helpers/test-env.js';
+import { withTestGitIdentity } from './helpers/test-env.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { parseProjectNewArgs, verifyProjectCaller, projectCommand } from '../src/project-new-cli.js';
 
@@ -20,7 +20,9 @@ function fixture() {
   fs.mkdirSync(dataDir);
   const group = path.join(root, 'group');
   fs.mkdirSync(group);
-  const env = { PATH: process.env.PATH, HOME: root, HERDR_BOSS_DIR: dataDir };
+  const gitConfig = path.join(root, 'gitconfig');
+  fs.writeFileSync(gitConfig, '[user]\n\tuseConfigOnly = true\n');
+  const env = withTestGitIdentity({ PATH: process.env.PATH, HOME: root, HERDR_BOSS_DIR: dataDir, GIT_CONFIG_GLOBAL: gitConfig, GIT_CONFIG_NOSYSTEM: '1' });
   const cli = (...args) => spawnSync(process.execPath, [CLI, ...args], { cwd: root, env, encoding: 'utf8' });
   return { root, dataDir, group, env, cli, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
@@ -141,6 +143,7 @@ test('cli: a real run creates the folder, prints done states, and exits 0', () =
     assert.match(result.stdout, /folder\s+done/);
     assert.match(result.stdout, /commit\s+done/);
     assert.match(result.stdout, /workspace\s+skipped: no --start/);
+    assert.equal(execFileSync('git', ['-C', path.join(f.group, 'demo'), 'log', '-1', '--format=%an <%ae>'], { encoding: 'utf8' }).trim(), 'Test User <test@example.invalid>');
     assert.ok(fs.existsSync(path.join(f.group, 'demo', 'AGENTS.md')));
   } finally { f.cleanup(); }
 });

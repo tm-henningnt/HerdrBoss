@@ -655,14 +655,36 @@ test('lease acquire --env-file writes the port variables with owner-only mode an
   assert.match(text, new RegExp(`^export TM_SERVE_LIVE_CLIENT_ID='${value}'$`, 'm'));
 });
 
-test('the files of this change hold no real client id', () => {
-  const repo = fileURLToPath(new URL('..', import.meta.url));
-  const changed = execFileSync('git', ['-C', repo, 'ls-files', '-m', '-o', '--exclude-standard'], { encoding: 'utf8' }).split('\n').filter(Boolean);
-  const committed = execFileSync('git', ['-C', repo, 'diff', '--name-only', 'main...HEAD'], { encoding: 'utf8' }).split('\n').filter(Boolean);
+test('project files hold no real client id', (t) => {
+  const source = fileURLToPath(new URL('..', import.meta.url));
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-lease-client-id-'));
+  t.after(() => fs.rmSync(repo, { recursive: true, force: true }));
+  const env = {
+    ...process.env,
+    GIT_AUTHOR_NAME: 'Test User',
+    GIT_AUTHOR_EMAIL: 'test@example.invalid',
+    GIT_COMMITTER_NAME: 'Test User',
+    GIT_COMMITTER_EMAIL: 'test@example.invalid',
+    GIT_CONFIG_GLOBAL: '/dev/null',
+    GIT_CONFIG_NOSYSTEM: '1',
+  };
+  const runGit = (...args) => execFileSync('git', ['-C', repo, ...args], { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  runGit('init', '-q', '-b', 'main');
+  const files = execFileSync('git', ['-C', source, 'ls-files', '--cached', '--others', '--exclude-standard', '-z'], { encoding: 'utf8' }).split('\0').filter(Boolean);
+  for (const relative of files) {
+    const from = path.join(source, relative);
+    if (!fs.lstatSync(from).isFile()) continue;
+    const to = path.join(repo, relative);
+    fs.mkdirSync(path.dirname(to), { recursive: true });
+    fs.copyFileSync(from, to);
+  }
+  runGit('add', '--all');
+  runGit('commit', '-q', '-m', 'Project snapshot');
+  assert.equal(runGit('rev-list', '--count', 'HEAD'), '1');
+  const tracked = runGit('ls-files', '-z').split('\0').filter(Boolean);
   const needle = ['01a0f3', 'fb'].join('');
-  for (const file of new Set([...changed, ...committed])) {
+  for (const file of tracked) {
     const full = path.join(repo, file);
-    if (!fs.existsSync(full) || !fs.statSync(full).isFile()) continue;
     assert.equal(fs.readFileSync(full, 'utf8').includes(needle), false, `${file} must not hold the client id`);
   }
 });

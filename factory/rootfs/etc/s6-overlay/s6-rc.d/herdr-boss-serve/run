@@ -1,0 +1,3 @@
+#!/command/with-contenv sh
+cd /home/factory/herdr-boss
+exec s6-setuidgid factory env HOME=/home/factory USER=factory HERDR_BOSS_PORT=4477 node src/cli.js serve

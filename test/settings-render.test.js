@@ -2,7 +2,10 @@ import './helpers/test-env.js';
 // The Settings and Allocation views render with a fixture state. No two info buttons of one section may explain the same setting.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import vm from 'node:vm';
 import { POLICY_DEFAULTS } from '../src/control.js';
 import { serviceSettingsView } from '../src/config.js';
@@ -90,6 +93,47 @@ test('Settings renders editable roots and saves paths as strings', async () => {
   assert.equal(button.disabled, false);
 });
 
+test('a Quota save shows the value that the server stored and notes a difference from the typed value', async () => {
+  const app = await views();
+  const inputs = [
+    { type: 'number', dataset: { serviceSetting: 'quota.warnPercent' }, value: '90' },
+    { type: 'number', dataset: { serviceSetting: 'quota.criticalPercent' }, value: '100' },
+  ];
+  const status = { textContent: '' };
+  app.context.document = { querySelectorAll: () => inputs, querySelector: () => status };
+  // The server answers with the stored values. The critical level differs from the typed value.
+  app.context.fetch = async () => ({ ok: true, json: async () => ({ settings: [
+    { group: 'Quota', setting: 'quota.warnPercent', value: 90, source: 'config' },
+    { group: 'Quota', setting: 'quota.criticalPercent', value: 98, source: 'default' },
+  ] }) });
+  await app.saveServiceSettings('Quota', { disabled: false });
+  assert.equal(inputs[0].value, '90');
+  assert.equal(inputs[1].value, '98', 'the field shows the stored value');
+  assert.match(status.textContent, /quota\.criticalPercent is stored as 98\. You typed 100\./);
+  assert.doesNotMatch(status.textContent, /quota\.warnPercent/);
+
+  // A stored value equal to the typed value gives the plain message.
+  inputs[1].value = '100';
+  app.context.fetch = async () => ({ ok: true, json: async () => ({ settings: [
+    { group: 'Quota', setting: 'quota.warnPercent', value: 90, source: 'config' },
+    { group: 'Quota', setting: 'quota.criticalPercent', value: 100, source: 'config' },
+  ] }) });
+  await app.saveServiceSettings('Quota', { disabled: false });
+  assert.equal(inputs[1].value, '100');
+  assert.equal(status.textContent, 'Saved.');
+});
+
+test('a rejected Quota save shows the server error and keeps the typed value', async () => {
+  const app = await views();
+  const inputs = [{ type: 'number', dataset: { serviceSetting: 'quota.criticalPercent' }, value: '101' }];
+  const status = { textContent: '' };
+  app.context.document = { querySelectorAll: () => inputs, querySelector: () => status };
+  app.context.fetch = async () => ({ ok: false, json: async () => ({ ok: false, error: 'quota.criticalPercent must be a whole number from 51 to 100.' }) });
+  await app.saveServiceSettings('Quota', { disabled: false });
+  assert.match(status.textContent, /from 51 to 100/);
+  assert.equal(inputs[0].value, '101');
+});
+
 // The section of each info button: the nearest h2 or h3 before it.
 function buttons(html) {
   const found = [];
@@ -99,6 +143,28 @@ function buttons(html) {
     else section = match[0].replace(/<button[^]*?<\/button>/g, '').replace(/<[^>]+>/g, '');
   }
   return found;
+}
+
+function committedPage(t, code) {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-settings-render-'));
+  t.after(() => fs.rmSync(repo, { recursive: true, force: true }));
+  const env = {
+    ...process.env,
+    GIT_AUTHOR_NAME: 'Test User',
+    GIT_AUTHOR_EMAIL: 'test@example.invalid',
+    GIT_COMMITTER_NAME: 'Test User',
+    GIT_COMMITTER_EMAIL: 'test@example.invalid',
+    GIT_CONFIG_GLOBAL: '/dev/null',
+    GIT_CONFIG_NOSYSTEM: '1',
+  };
+  const git = (...args) => execFileSync('git', ['-C', repo, ...args], { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  git('init', '-q', '-b', 'main');
+  fs.mkdirSync(path.join(repo, 'public'), { recursive: true });
+  fs.writeFileSync(path.join(repo, 'public', 'app.js'), code);
+  git('add', 'public/app.js');
+  git('commit', '-q', '-m', 'Legacy page fixture');
+  assert.equal(git('rev-list', '--count', 'HEAD'), '1');
+  return git('show', 'HEAD:public/app.js');
 }
 
 test('the rendered Settings and Allocation views hold no two buttons with the same explanation in one section', async () => {
@@ -144,9 +210,12 @@ test('Allocation shows the default-off automatic Claude goal command switch', as
   assert.equal(s.policy.goals.autoCommand, true, 'the switch updates the nested policy draft');
 });
 
-// cec19c0 is the commit before the header buttons. Its page has one button on each row.
-test('the check fails on the version of the page that put one button on each row', async () => {
-  const previous = (await import('node:child_process')).execFileSync('git', ['show', 'cec19c0:public/app.js'], { cwd: new URL('..', import.meta.url), maxBuffer: 1 << 26 }).toString();
+// The old page gave repeated settings a per-row key.
+test('the check fails when the page gives every help button a per-row key', async (t) => {
+  const oldKey = 'const key = instance ? `${id}#${instance}` : id;';
+  const legacy = source.replace(oldKey, 'const key = `${id}#${instance || "row"}`;');
+  assert.notEqual(legacy, source, 'the legacy help-key rule is present');
+  const previous = committedPage(t, legacy);
   const app = await views(previous);
   app.setModels({ codex: catalog, claude: catalog });
   const keys = buttons(app.settingsView(fixture())).map((item) => item.key);

@@ -6265,7 +6265,7 @@ const HELP = {
     <h3>Locks</h3><p>The <b>Locks</b> group sets machine lock slots, the short job limit, and the machine guard. The default is 2 slots and a 6 minute short job limit. Herdr Boss predicts a job from recent lock holds. A key with fewer than 3 releases has an unknown prediction and uses the long lane. Before a short job starts beside a long holder, the guard checks load, swap, and free memory. A missing sample or one older than 3 minutes passes. The guard never delays a long job. A short job borrowing the long slot does not activate it. Future samples are ignored. Change the settings and select <b>Apply policy</b>. Capacity and guard changes apply to the next admission attempt, including queued jobs. A missing, invalid, or partial policy on a retry keeps the last validated settings and pauses admission until a complete valid policy returns. Only startup can use legacy defaults. A ticket keeps its prediction and short-limit classification. A blank guard field is invalid and shows a field error. A typed zero is valid.</p>
     <h3>Avatars</h3><p>The <b>Avatars</b> section has one row for the Boss and one row for each project. A row shows the avatar of that chat. Select <b>Upload image</b> to use your own image. Select <b>Reset</b> to use the generated avatar again. An image is a PNG, JPEG, or WebP file of at most 512 KB. Herdr Boss keeps no other format. The image shows at once in the Chat, the Mailbox, and the Agents chart. Without an image, the page uses a generated avatar. Its color comes from the name of the project, and it stays the same. The two letters come from the project display name, the same on every page. The Boss has a crown. Each other project has two letters. The letters use the color of the best contrast on the circle.</p>
     <h3>Watch routines</h3><p>Each routine in the <b>Watch routines</b> section has a title, a model hint, a schedule, and a prompt text. Select a routine to edit it. The schedule is a number of minutes between runs, or a time before the end of the watch. Select <b>Save</b> to store the change on this machine. The change never edits the kit file, and it applies to the next prompt of a running watch. Select <b>Reset to the kit text</b> to remove your change. Use <b>Add a routine</b> to create your own routine. Turn routines on or off for a watch in the Watch box on the Agents page.</p>
-    <h3>Service settings</h3><p>The table shows the values that the service uses. Each row shows whether the value comes from <code>config.json</code> or a default. Rows with inputs can be changed in the dashboard. Change the values in a group, then select <b>Save</b>. Herdr Boss applies saved values at once. Keep the quota warning below the critical value. Rows without inputs are read-only: port, host, provider kinds, and orchestrator label. Change them in <code>config.json</code> and restart. A row marked restart required saves at once and takes effect after the next service restart.</p>
+    <h3>Service settings</h3><p>The table shows the values that the service uses. Each row shows whether the value comes from <code>config.json</code> or a default. Rows with inputs can be changed in the dashboard. Change the values in a group, then select <b>Save</b>. Herdr Boss applies saved values at once. Keep the quota warning below the critical value. After a save, each field shows the stored value. When the stored value differs from the typed value, the status line names both values. Rows without inputs are read-only: port, host, provider kinds, and orchestrator label. Change them in <code>config.json</code> and restart. A row marked restart required saves at once and takes effect after the next service restart.</p>
     <h3>Token prices</h3><p>The <b>Token prices</b> section lists the price of each model in USD per million tokens: input, output, cache read, cache write for 5 minutes, and cache write for 1 hour. It shows the source and date of each entry. <b>unconfirmed</b> marks a figure that does not match the published pricing rule. Herdr Boss shows the cost as an <b>API-price equivalent</b>, because a subscription is not billed per token. Change a figure and select <b>Save prices</b>. A blank field uses the default. <b>Reset to defaults</b> removes all changes. A figure that you save is no longer unconfirmed.</p>
     <h3>Harness readiness</h3><p>This read-only table shows the status of each harness entry that orchestration needs. A row shows the status, the area, and the item. The status is <code>ok</code>, <code>missing</code>, or <code>bad</code>. The table shows no file path and no setting value. Herdr Boss reads these entries at each service start and then every 10 minutes. Run <code>herdr-boss harness sync</code> to see the changes to make.</p>
     <h3>Harnesses</h3><p>Clear <b>Available</b> to stop all workers from using a harness. The preferred model is the model that worker start and handover use when no model is given. An empty choice uses the harness default.</p>
@@ -7910,6 +7910,30 @@ function settingsRerender(kind, focus) {
   if (status) status.textContent = settingsMessages[kind] || '';
 }
 
+// A saved value that differs from the typed value gets a note. The list and lane settings are not compared.
+function storedValueNotes(changes, stored) {
+  const notes = [];
+  for (const [setting, typed] of Object.entries(changes)) {
+    if (typeof typed === 'object' && typed !== null) continue;
+    const item = (stored || []).find((entry) => entry.setting === setting);
+    if (!item) notes.push(`${setting} is not in the stored settings.`);
+    else if (item.value !== typed) notes.push(`${setting} is stored as ${item.value}. You typed ${typed}.`);
+  }
+  return notes;
+}
+
+// A field that the Owner edited keeps its typed value after a render. Set each field of the group to the stored value.
+function showStoredValues(group, stored) {
+  for (const input of document.querySelectorAll(`[data-service-group="${CSS.escape(group)}"][data-service-setting]`)) {
+    const item = (stored || []).find((entry) => entry.setting === input.dataset.serviceSetting);
+    if (!item) continue;
+    if (input.dataset.serviceLane) input.value = item.value?.[input.dataset.serviceLane] ?? '';
+    else if (input.type === 'checkbox') input.checked = !!item.value;
+    else if (input.dataset.serviceList !== undefined) input.value = (item.value || []).join(', ');
+    else input.value = item.value == null ? '' : String(item.value);
+  }
+}
+
 async function saveServiceSettings(group, button) {
   const inputs = [...document.querySelectorAll(`[data-service-group="${CSS.escape(group)}"][data-service-setting]`)];
   const changes = {};
@@ -7934,7 +7958,8 @@ async function saveServiceSettings(group, button) {
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || 'Service settings could not be saved.');
-    serviceSettingsMessages[group] = 'Saved.';
+    const notes = storedValueNotes(changes, result.settings);
+    serviceSettingsMessages[group] = ['Saved.', ...notes].join(' ');
     if (state) {
       state.serviceSettings = result.settings;
       state.quotaThresholds = {
@@ -7943,7 +7968,8 @@ async function saveServiceSettings(group, button) {
       };
       lastRender = '';
       render();
-    } else if (status) status.textContent = 'Saved.';
+    } else if (status) status.textContent = serviceSettingsMessages[group];
+    showStoredValues(group, result.settings);
   } catch (error) {
     serviceSettingsMessages[group] = error.message;
     if (status) status.textContent = error.message;
