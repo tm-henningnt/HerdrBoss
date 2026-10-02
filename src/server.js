@@ -217,9 +217,12 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine 
     privateDirectory: PRIVATE_ACCESS_DIR,
   });
   const engine = readOnlyPreview ? createEngine(cfg, { push: false, act: false }) : createEngine(cfg);
-  const toolsReady = checkMachineTools(machineTools).then((warnings) => {
-    for (const warning of warnings) { engine.log('warn', warning); console.warn(`herdr-boss: ${warning}`); }
-  });
+  // The tool check runs beside the first tick. Its warnings are logged when they arrive.
+  if (!readOnlyPreview) {
+    checkMachineTools(machineTools).then((warnings) => {
+      for (const warning of warnings) { engine.log('warn', warning); console.warn(`herdr-boss: ${warning}`); }
+    }).catch((e) => engine.log('error', `machine tool check failed: ${e.message}`));
+  }
   const messageStore = openMessageStore({ dir: DATA_DIR });
   const projectNewApi = createProjectNewApi({ dataDir: DATA_DIR, log: (level, text) => engine.log(level, text), ...projectNew });
   // The goal routes use the Herdr runner of the engine. A test replaces run.
@@ -1124,7 +1127,6 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, createEngine 
   });
   const loop = async () => {
     try {
-      await toolsReady;
       if (closed) return;
       tickPromise = engine.tick();
       await tickPromise;

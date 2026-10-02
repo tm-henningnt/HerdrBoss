@@ -16,7 +16,7 @@ Run project commands (`worker`, `worktree`, `ledger`, `check`, `gh`) from inside
 | `herdr-boss logs` | Print the last 100 lines of the server log. |
 | `herdr-boss kit-path` | Print the path of the shared kit (skill, templates, model list). |
 
-On Linux, `serve` checks for `lsof` and the procps `ps` command at start. A missing tool gives an installation warning in standard error and in the dashboard event log. The service continues. Install the named package to enable its process checks.
+On Linux, `serve` checks for `lsof` and the procps `ps` command at start. A missing tool gives an installation warning in standard error and in the dashboard event log. The service continues. The check runs beside the first tick and does not delay it. The read-only preview skips the check. Install the named package to enable its process checks.
 
 Restart the service after a configuration change:
 
@@ -846,7 +846,7 @@ Do not edit this block. It comes from `public/setting-help.js`.
 
 ## Linux machine samples
 
-On Linux, the collector reads `/proc/meminfo`, `/proc/loadavg`, and `/proc/pressure`. It finds the process group from `/proc/self/cgroup` and its cgroup v2 mount from `/proc/self/mountinfo`. CPU capacity uses the smallest CPU quota, effective CPU set, or host CPU count. A quota can give a fraction of one CPU. Memory capacity and free memory use the cgroup memory limit and current use. Visible parent limits also apply. Swap uses a finite cgroup swap limit and current use when available. Unlimited or unreadable limits keep the host values. A known memory or swap limit with unreadable current use gives an unknown use value.
+On Linux, the collector reads `/proc/meminfo`, `/proc/loadavg`, and `/proc/pressure`. It finds the process group from `/proc/self/cgroup` and its cgroup v2 mount from `/proc/self/mountinfo`. CPU capacity uses the smallest CPU quota, effective CPU set, or host CPU count. A quota can give a fraction of one CPU. Memory capacity and free memory use the cgroup memory limit and current use. The collector subtracts `inactive_file` and `active_file` from `memory.stat` from the current use, never below 0. The CPU count has at most 2 decimals. The collector does not read cgroup v1 hosts and uses host values on them. Visible parent limits also apply. Swap uses a finite cgroup swap limit and current use when available. Unlimited or unreadable limits keep the host values. A known memory or swap limit with unreadable current use gives an unknown use value.
 
 The collector measures cgroup CPU use between two reads of `cpu.stat`. The first read, a counter reset, or an unreadable counter uses the process CPU sample. Load averages are host values. The guard compares them with the effective CPU capacity. Use the existing Machine and Locks settings to change the guard thresholds. No new setting is required.
 

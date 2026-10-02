@@ -9,6 +9,7 @@ import { collectMachine } from '../src/collect.js';
 import { Engine } from '../src/engine.js';
 import { loadConfig } from '../src/config.js';
 import { serve } from '../src/server.js';
+import { renderBulletin } from '../src/rules.js';
 
 const GB = 2 ** 30;
 const MB = 2 ** 20;
@@ -282,3 +283,51 @@ for (const scenario of [
     if (scenario.warnings) assert.match(warnings[0].text, /Install procps/);
   });
 }
+
+test('Linux cgroup free memory excludes reclaimable file cache', async (t) => {
+  const f = fixture(t, {
+    'cgroup/factory/memory.max': `${8 * GB}\n`,
+    'cgroup/factory/memory.current': `${6 * GB}\n`,
+    'cgroup/factory/memory.stat': `anon ${GB}\ninactive_file ${2 * GB}\nactive_file ${GB}\n`,
+  });
+  assert.equal((await collectMachine(f.root, f.options)).memFreePercent, 62.5, '3 GB of file cache is reclaimable');
+  f.write('cgroup/factory/memory.stat', `inactive_file ${8 * GB}\nactive_file ${8 * GB}\n`);
+  assert.equal((await collectMachine(f.root, f.options)).memFreePercent, 100, 'used memory never goes below 0');
+  f.write('cgroup/factory/memory.stat', 'bad\n');
+  assert.equal((await collectMachine(f.root, f.options)).memFreePercent, 25, 'an unreadable stat keeps the current value');
+});
+
+test('Linux rounds a fractional CPU count to 2 decimals and the rules text prints it cleanly', async (t) => {
+  const { root, options } = fixture(t, { 'cgroup/factory/cpu.max': '33333 100000\n' });
+  const sample = await collectMachine(root, options);
+  assert.equal(sample.cpus, 0.33);
+  sample.load = [2, 2, 2];
+  const state = await makeEngine({ ...sample, cpus: 0.5 }).tick();
+  const alert = state.alerts.find((row) => row.key === 'machine:load');
+  assert.ok(alert, 'load 2 on 0.5 cores raises the load alert');
+  assert.match(alert.title, /on 0\.5 cores$/);
+  const bulletin = renderBulletin({ machine: { ...sample, cpus: 0.1 + 0.2 }, updatedAt: Date.now(), workspaces: [], panes: [] }, { alerts: [], advice: [] }, loadConfig());
+  assert.match(bulletin, /- Load: 2 \/ 2 \/ 2 on 0\.3 cores/);
+  const noisy = await makeEngine({ ...sample, cpus: 0.1 + 0.2 }).tick();
+  assert.match(noisy.alerts.find((row) => row.key === 'machine:load').title, /on 0\.3 cores$/);
+});
+
+test('service tool check does not delay the first tick', async (t) => {
+  const cfg = loadConfig();
+  cfg.port = 0;
+  cfg.host = '127.0.0.1';
+  const engine = makeEngine(null);
+  const calls = [];
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const stateReady = once(engine, 'state');
+  const app = serve(cfg, { createEngine: () => engine,
+    machineTools: { platform: 'linux', runner: async (cmd) => { calls.push(cmd); await gate; throw new Error('not installed'); } } });
+  t.after(() => app.close());
+  if (!app.server.listening) await once(app.server, 'listening');
+  await stateReady;
+  assert.ok(calls.includes('lsof'), 'the check started');
+  const warned = new Promise((resolve) => { const log = engine.log.bind(engine); engine.log = (...args) => { log(...args); if (args[0] === 'warn') resolve(); }; });
+  release();
+  await warned;
+});

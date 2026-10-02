@@ -85,14 +85,22 @@ function cpuSetCount(text) {
   return Number.isSafeInteger(count) && count > 0 ? count : null;
 }
 
+// Page cache that the kernel can reclaim is not memory pressure. Subtract it from the used memory of the group.
+function reclaimableAdjusted(used, statText) {
+  if (used === null) return null;
+  let cache = 0;
+  for (const name of ['inactive_file', 'active_file']) cache += unsigned(new RegExp(`^${name}\\s+(\\d+)$`, 'm').exec(statText)?.[1]) ?? 0;
+  return Math.max(0, used - cache);
+}
+
 async function groupSample(dir) {
-  const names = ['cpu.max', 'cpuset.cpus.effective', 'memory.max', 'memory.current', 'memory.swap.max', 'memory.swap.current'];
+  const names = ['cpu.max', 'cpuset.cpus.effective', 'memory.max', 'memory.current', 'memory.swap.max', 'memory.swap.current', 'memory.stat'];
   const values = await Promise.all(names.map((name) => read(path.join(dir, name))));
   const [quota, period] = values[0].trim().split(/\s+/);
   return {
     cpuLimit: positive(quota) && positive(period) ? Number(quota) / Number(period) : null,
     cpuSet: cpuSetCount(values[1]),
-    memoryLimit: positive(values[2].trim()), memoryUsed: unsigned(values[3].trim()),
+    memoryLimit: positive(values[2].trim()), memoryUsed: reclaimableAdjusted(unsigned(values[3].trim()), values[6]),
     swapLimit: unsigned(values[4].trim()), swapUsed: unsigned(values[5].trim()),
   };
 }
@@ -114,7 +122,7 @@ export async function collectLinuxMachine({ procRoot = '/proc', system = os, now
   }
   const swapGroups = groups.filter((g) => g.swapLimit !== null);
   const swap = swapGroups.reduce((tightest, g) => !tightest || g.swapLimit < tightest.swapLimit ? g : tightest, null);
-  const cpus = Math.min(system.cpus().length || 1, ...groups.flatMap((g) => [g.cpuLimit, g.cpuSet].filter((n) => n !== null)));
+  const cpus = +Math.min(system.cpus().length || 1, ...groups.flatMap((g) => [g.cpuLimit, g.cpuSet].filter((n) => n !== null))).toFixed(2);
   const parsedLoad = loadText.trim().split(/\s+/).slice(0, 3).map((n) => n === '' ? NaN : Number(n));
   const load = parsedLoad.length === 3 && parsedLoad.every((n) => Number.isFinite(n) && n >= 0) ? parsedLoad : system.loadavg();
   const pressureRows = await Promise.all(['cpu', 'memory', 'io'].map(async (name) => {
