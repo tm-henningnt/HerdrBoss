@@ -18,7 +18,7 @@ import { scheduleWorkerPaneClose } from '../maintenance.js';
 import { agentPromptTimeoutMs } from '../agent-prompt.js';
 import { PLANNER_LABEL, activeSessionForPane, endSession, startSession } from '../planner-sessions.js';
 import { closeFailedWorkerPane, retryOpenCodeStart, withOpenCodeStartLock } from './opencode-start.js';
-import { activeLaunchRecords, detectLaunchBlock, launchBlockedError, markModelUnavailable, untilText } from './model-unavailable.js';
+import { activeLaunchRecords, detectLaunchBlock, launchBlockedError, markModelUnavailable, newPaneLines, untilText } from './model-unavailable.js';
 import { archiveWorkerReports } from './worker-archive.js';
 
 const NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
@@ -867,7 +867,7 @@ function chooseWorkerPane(workspaceId, worktree, kind, herdr, tmpDir, cap, lease
   return { paneId, tabId: getTab(plan.tab), command, createdTab: false, createdPane: true };
 }
 
-export function waitForWorkerPane(paneId, workspaceId, worktree, herdr, wait = pause, { retryCommand = 'worker start', timeoutMs = 20_000 } = {}) {
+export function waitForWorkerPane(paneId, workspaceId, worktree, herdr, wait = pause, { retryCommand = 'worker start', timeoutMs = 20_000, launchBlock = null } = {}) {
   const intervalMs = 250;
   let elapsedMs = 0;
   let previousScreen = null;
@@ -897,7 +897,8 @@ export function waitForWorkerPane(paneId, workspaceId, worktree, herdr, wait = p
             ? screenResponse
             : screenResponse?.text ?? screenResponse?.output ?? '';
           const lines = String(screen).replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '').split(/\r?\n/).map((line) => line.trimEnd());
-          const block = detectLaunchBlock(lines.join('\n'));
+          // Only an OpenCode launch passes `launchBlock`. Its baseline hides text that was on the pane before the launch.
+          const block = launchBlock ? detectLaunchBlock(newPaneLines(lines.join('\n'), launchBlock.baseline).join('\n')) : null;
           if (block) {
             const error = new Error(`Worker pane ${paneId} shows "${block.phrase}" at launch.`);
             error.code = 'model_launch_blocked';
@@ -1182,7 +1183,9 @@ export function startWorker(name, options, deps = {}) {
   for (let attempt = 1; ; attempt++) {
     try { return startWorkerOnce(name, options, deps); }
     catch (error) {
-      if (error?.code !== 'model_launch_blocked' || options.model != null || attempt >= 4) throw error;
+      if (error?.code !== 'model_launch_blocked') throw error;
+      if (!error.blockedModel) throw new Error(`A launch block was reported without a model: ${error.message} Herdr Boss did not mark a model and did not retry.`);
+      if (options.model != null || attempt >= 4) throw error;
       (deps.output ?? console.log)(`Model ${error.blockedModel} cannot start (${error.launchBlock.phrase}). Trying the next model of the same lane.`);
     }
   }
@@ -1494,28 +1497,44 @@ function startWorkerOnce(name, options, {
     for (const lease of leases) setLeasePane(lease.pool, lease.item, paneId, { dataDir: leaseContext.dataDir });
     // Answer nothing at a launch block. Mark the model, close the TUI, and stop this model.
     const stopForLaunchBlock = (block) => {
-      markModelUnavailable(bossDir, {
-        kind: options.kind, model, provider: providerFor(options.kind, model, policy), untilReenabled: block.untilReenabled,
-        label: block.phrase, reason: block.phrase, now,
-      });
+      try {
+        markModelUnavailable(bossDir, {
+          kind: options.kind, model, provider: providerFor(options.kind, model, policy), untilReenabled: block.untilReenabled,
+          label: block.phrase, reason: block.phrase, now,
+        });
+      } catch (markError) { output(`Warning: could not record ${model} as unavailable: ${markError.message}`); }
       try { herdr(['agent', 'close', name]); } catch { /* The pane cleanup below closes what remains. */ }
       const error = launchBlockedError(model, block, { fallback: modelSource !== 'flag' });
       error.blockedModel = model;
       throw error;
     };
-    const checkLaunchBlock = () => {
-      if (options.kind !== 'opencode') return;
-      let text = '';
+    const readPaneSnapshot = () => {
       try {
         const response = herdr(['pane', 'read', paneId, '--source', 'recent-unwrapped', '--lines', '40', '--format', 'text']);
-        text = typeof response === 'string' ? response : response?.text ?? response?.output ?? '';
-      } catch { return; }
-      const block = detectLaunchBlock(text);
+        return typeof response === 'string' ? response : response?.text ?? response?.output ?? '';
+      } catch { return null; }
+    };
+    // The pane text before the agent starts. A reused pane can hold the phrase of an earlier launch.
+    let launchBaseline = null;
+    // `cutAtBrief` stops the scan at the first line of the typed brief, so brief text never counts.
+    const checkLaunchBlock = ({ baseline = launchBaseline, cutAtBrief = false } = {}) => {
+      if (options.kind !== 'opencode' || baseline == null) return;
+      const text = readPaneSnapshot();
+      if (text == null) return;
+      let lines = newPaneLines(text, baseline);
+      if (cutAtBrief) {
+        const marker = briefPrompt(plan.workerDir).slice(0, 24);
+        const at = lines.findIndex((line) => line.includes(marker));
+        if (at >= 0) lines = lines.slice(0, at);
+      }
+      const block = detectLaunchBlock(lines.join('\n'));
       if (block) stopForLaunchBlock(block);
     };
     const waitForShell = () => {
-      try { waitForWorkerPane(paneId, workspaceId, worktree, herdr, wait); }
-      catch (error) {
+      try {
+        waitForWorkerPane(paneId, workspaceId, worktree, herdr, wait,
+          options.kind === 'opencode' && launchBaseline != null ? { launchBlock: { baseline: launchBaseline } } : {});
+      } catch (error) {
         if (error?.code === 'model_launch_blocked' && options.kind === 'opencode') stopForLaunchBlock(error.launchBlock);
         throw error;
       }
@@ -1524,6 +1543,7 @@ function startWorkerOnce(name, options, {
       startAttempts = attempt;
       waitForShell();
       const shellPid = workerPaneShellPid(paneId, herdr);
+      if (options.kind === 'opencode') launchBaseline = readPaneSnapshot();
       const paneAgentArgs = [...workerAgentArgs(options.kind, launchArgs, { paneId, tabId: placement.tabId, workspaceId, env, tmpDir: plan.tmpDir, worktree }), ...browserArgs];
       try {
         herdr(['agent', 'start', name, '--kind', options.kind, '--pane', paneId, '--timeout', String(plan.agentStartTimeoutMs), '--', ...paneAgentArgs]);
@@ -1578,8 +1598,14 @@ function startWorkerOnce(name, options, {
       }
       if (options.kind === 'claude' && opusForce) alertBossForOpus(name, model, options, config, env, herdr, now, output);
       let delivery;
+      const preBriefBaseline = options.kind === 'opencode' ? readPaneSnapshot() : null;
       try { delivery = deliverBrief(name, options.kind, herdr, readWorkerText, wait, output, plan.workerDir); }
-      catch (deliverError) { checkLaunchBlock(); throw deliverError; }
+      catch (deliverError) {
+        // The brief text stays on the pane. A retry must not scan it.
+        launchBaseline = null;
+        checkLaunchBlock({ baseline: preBriefBaseline, cutAtBrief: true });
+        throw deliverError;
+      }
       if (delivery === 'resent') output(`Resent the brief prompt to ${name}: the first prompt did not reach the agent.`);
       if (delivery === 'stalled-retry') output(`Resent the brief prompt to ${name} after agent_prompt_stalled.`);
       if (delivery === 'submitted') output(`Sent Enter to ${name}: the brief prompt was typed but not submitted.`);

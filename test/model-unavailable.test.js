@@ -50,3 +50,58 @@ test('trialModelStatus counts results per model and drops a model at 5 results',
   assert.deepEqual(trialModelStatus(models, events), [{ kind: 'opencode', model: 'opencode/ling-3.1-flash-free', results: 4 }]);
   assert.deepEqual(trialModelStatus(models, []).map((item) => item.results), [0, 0]);
 });
+
+test('a corrupt unavailable-models.json counts as empty, warns once, and does not throw', (t) => {
+  const dir = tempDir(t);
+  fs.writeFileSync(path.join(dir, 'unavailable-models.json'), '{ not json');
+  const written = [];
+  const original = process.stderr.write;
+  process.stderr.write = (chunk) => { written.push(String(chunk)); return true; };
+  try {
+    assert.deepEqual(activeLaunchRecords(dir), []);
+    assert.equal(enableModel(dir, 'opencode', 'opencode/a'), false);
+    const record = markModelUnavailable(dir, { kind: 'opencode', model: 'opencode/a', untilReenabled: true, label: 'x' });
+    assert.equal(record.model, 'opencode/a');
+  } finally { process.stderr.write = original; }
+  assert.equal(written.filter((line) => /could not read/i.test(line)).length, 1);
+  assert.equal(activeLaunchRecords(dir).length, 1);
+});
+
+test('markModelUnavailable and enableModel take a lock file and release it', (t) => {
+  const dir = tempDir(t);
+  const lock = path.join(dir, 'unavailable-models.json.lock');
+  const seen = [];
+  const realWrite = fs.renameSync;
+  fs.renameSync = (...args) => { seen.push(fs.existsSync(lock)); return realWrite(...args); };
+  try {
+    markModelUnavailable(dir, { kind: 'opencode', model: 'opencode/a', label: 'x' });
+    enableModel(dir, 'opencode', 'opencode/a');
+  } finally { fs.renameSync = realWrite; }
+  assert.deepEqual(seen, [true, true], 'each write happens while the lock exists');
+  assert.equal(fs.existsSync(lock), false);
+});
+
+test('a held lock makes a second writer wait, and a stale lock is taken over', (t) => {
+  const dir = tempDir(t);
+  const lock = path.join(dir, 'unavailable-models.json.lock');
+  fs.writeFileSync(lock, '');
+  const old = new Date(Date.now() - 60_000);
+  fs.utimesSync(lock, old, old);
+  const record = markModelUnavailable(dir, { kind: 'opencode', model: 'opencode/a', label: 'x' });
+  assert.equal(record.model, 'opencode/a');
+  assert.equal(fs.existsSync(lock), false);
+});
+
+test('two concurrent processes keep both records', async (t) => {
+  const dir = tempDir(t);
+  const module = new URL('../src/kit/model-unavailable.js', import.meta.url).href;
+  const { spawn } = await import('node:child_process');
+  const run = (model) => new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['--input-type=module', '-e',
+      `import { markModelUnavailable } from ${JSON.stringify(module)}; for (let i = 0; i < 20; i++) markModelUnavailable(${JSON.stringify(dir)}, { kind: 'opencode', model: '${model}' + i, label: 'x' });`]);
+    child.on('error', reject);
+    child.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(`exit ${code}`))));
+  });
+  await Promise.all([run('a'), run('b')]);
+  assert.equal(activeLaunchRecords(dir).length, 40);
+});

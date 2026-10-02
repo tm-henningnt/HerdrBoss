@@ -2460,10 +2460,102 @@ test('waitForWorkerPane raises model_launch_blocked for each launch phrase befor
       if (args[1] === 'read') return { text: `% opencode\n${text}\n` };
       throw new Error(`Unexpected Herdr call: ${args.join(' ')}`);
     };
-    assert.throws(() => waitForWorkerPane('ws:p2', 'ws', '/work', herdr, () => {}), (error) => {
+    assert.throws(() => waitForWorkerPane('ws:p2', 'ws', '/work', herdr, () => {}, { launchBlock: { baseline: '' } }), (error) => {
       assert.equal(error.code, 'model_launch_blocked');
       assert.doesNotMatch(error.message, /interactive question/);
       return true;
     });
   }
+});
+
+test('waitForWorkerPane without the launchBlock option ignores a launch phrase on the screen', () => {
+  const herdr = (args) => {
+    if (args[1] === 'get') return { pane: { pane_id: 'ws:p2', workspace_id: 'ws', foreground_cwd: '/work' } };
+    if (args[0] === 'agent' && args[1] === 'list') return { agents: [] };
+    if (args[1] === 'process-info') return { process_info: { shell_pid: 10, foreground_process_group_id: 10 } };
+    if (args[1] === 'read') return { text: '% claude\nThis model is not available in your country\n% ' };
+    throw new Error(`Unexpected Herdr call: ${args.join(' ')}`);
+  };
+  assert.doesNotThrow(() => waitForWorkerPane('ws:p2', 'ws', '/work', herdr, () => {}));
+});
+
+test('waitForWorkerPane ignores a launch phrase that is in the baseline', () => {
+  const herdr = (args) => {
+    if (args[1] === 'get') return { pane: { pane_id: 'ws:p2', workspace_id: 'ws', foreground_cwd: '/work' } };
+    if (args[0] === 'agent' && args[1] === 'list') return { agents: [] };
+    if (args[1] === 'process-info') return { process_info: { shell_pid: 10, foreground_process_group_id: 10 } };
+    if (args[1] === 'read') return { text: 'Rate limit exceeded\n% ' };
+    throw new Error(`Unexpected Herdr call: ${args.join(' ')}`);
+  };
+  assert.doesNotThrow(() => waitForWorkerPane('ws:p2', 'ws', '/work', herdr, () => {}, { launchBlock: { baseline: 'Rate limit exceeded\n% ' } }));
+});
+
+test('a claude start with a launch phrase on the pane is not affected', (t) => {
+  const f = setupFixture(null);
+  f.env.HERDR_BOSS_DIR = path.join(f.root, 'boss-data');
+  const name = 'claude-phrase-ignored';
+  t.after(() => {
+    try { git(f.root, 'worktree', 'remove', '--force', f.config.worktreePath(name)); } catch {}
+    fs.rmSync(f.root, { recursive: true, force: true });
+  });
+  const herdr = (args) => {
+    if (args[0] === 'pane' && args[1] === 'read') return { text: 'This model is not available in your country\nRate limit exceeded\n% ' };
+    return f.herdr(args);
+  };
+  const run = startWorker(name, { kind: 'claude', task: 'x', allow: ['src/'] }, {
+    config: f.config, models: loadModels(), herdr, env: f.env, rulesFile: f.rulesFile, wait: () => {}, output: () => {},
+  });
+  assert.equal(run.kind, 'claude');
+  const dataDir = f.env.HERDR_BOSS_DIR;
+  assert.equal(fs.existsSync(path.join(dataDir, 'unavailable-models.json')), false);
+});
+
+test('OpenCode start does not mark a model for a phrase inside the typed brief', (t) => {
+  const fixture = openCodeFixture(t, 'opencode-brief-phrase');
+  const model = 'opencode/mimo-v2.6-flash-free';
+  let typed = false;
+  const herdr = (args) => {
+    if (args[0] === 'agent' && args[1] === 'prompt') {
+      typed = true;
+      throw Object.assign(new Error('prompt failed: socket closed'), { code: 'prompt_failed' });
+    }
+    if (args[0] === 'pane' && args[1] === 'read' && typed) {
+      return { text: 'opencode\nRead .worker/brief.md in your working directory and execute it.\nThe brief says: Rate limit exceeded\n' };
+    }
+    return fixture.herdr(args);
+  };
+  assert.throws(() => fixture.start(herdr, { model }), /prompt failed/);
+  const file = path.join(fixture.f.env.HERDR_BOSS_DIR, 'unavailable-models.json');
+  assert.equal(fs.existsSync(file), false, 'no model is marked');
+});
+
+test('OpenCode start does not mark a model for a leftover phrase in a reused pane', (t) => {
+  const fixture = openCodeFixture(t, 'opencode-leftover-phrase');
+  const model = 'opencode/mimo-v2.6-flash-free';
+  const herdr = (args) => {
+    if (args[0] === 'pane' && args[1] === 'read') return { text: 'previous run\nRate limit exceeded\n% ' };
+    return fixture.herdr(args);
+  };
+  const run = fixture.start(herdr, { model });
+  assert.equal(run.model, model);
+  const file = path.join(fixture.f.env.HERDR_BOSS_DIR, 'unavailable-models.json');
+  assert.equal(fs.existsSync(file), false, 'no model is marked');
+});
+
+test('startWorker stops once with a clear error when a launch block names no model', (t) => {
+  const fixture = openCodeFixture(t, 'opencode-block-no-model');
+  let launches = 0;
+  const herdr = (args) => {
+    if (args[0] === 'agent' && args[1] === 'start') {
+      launches++;
+      throw Object.assign(new Error('blocked'), { code: 'model_launch_blocked', launchBlock: { phrase: 'Did you mean this?', untilReenabled: true } });
+    }
+    return fixture.herdr(args);
+  };
+  assert.throws(() => fixture.start(herdr), (error) => {
+    assert.doesNotMatch(error.message, /undefined/);
+    assert.match(error.message, /without a model/);
+    return true;
+  });
+  assert.equal(launches, 1);
 });
