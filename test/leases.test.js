@@ -14,6 +14,7 @@ import { writeNight } from '../src/night.js';
 import { renderBulletin } from '../src/rules.js';
 import { loadModels, loadProjectConfig } from '../src/kit/config.js';
 import { collectWorker, startWorker } from '../src/kit/workers.js';
+import { readyAgent } from './helpers/ready-agent.js';
 
 const CLI = fileURLToPath(new URL('../src/cli.js', import.meta.url));
 // Tests use high ports that no project serves. They never bind 8000 to 8004.
@@ -493,6 +494,7 @@ function startFixture() {
     if (args[0] === 'pane' && args[1] === 'process-info') return { process_info: { shell_pid: 10, foreground_process_group_id: 10 } };
     if (args[0] === 'pane' && args[1] === 'read') return { text: '% ' };
     if (args[0] === 'agent' && args[1] === 'list') return { agents: [] };
+    if (args[0] === 'agent' && args[1] === 'get') return readyAgent();
     if (args[0] === 'tab' && args[1] === 'list') return { tabs: [{ tab_id: 'ws:t1', workspace_id: 'ws', label: 'Workers' }] };
     if (args[0] === 'pane' && args[1] === 'list') return { panes: [{ pane_id: 'ws:p1', workspace_id: 'ws', tab_id: 'ws:t1', width: 160, height: 45 }] };
     if (args[0] === 'pane' && args[1] === 'split') { creates.push(args); paneCwd = args[args.indexOf('--cwd') + 1]; return { pane: { pane_id: 'ws:p2' } }; }

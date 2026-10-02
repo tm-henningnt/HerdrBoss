@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { loadProjectConfig } from '../../src/kit/config.js';
+import { readyAgent } from './ready-agent.js';
 
 export const CLAUDE_READY_SCREEN = '────\n❯\n────\nauto mode';
 
@@ -81,7 +82,7 @@ export function setupFixture(setup) {
     if (args[0] === 'pane' && args[1] === 'list') return { panes: [{ pane_id: 'ws:p1', workspace_id: 'ws', tab_id: 'ws:t1', width: 160, height: 45 }] };
     if (args[0] === 'pane' && args[1] === 'split') { paneCwd = args[args.indexOf('--cwd') + 1]; return { pane: { pane_id: 'ws:p2' } }; }
     if (args[0] === 'pane' && args[1] === 'close') return {};
-    if (args[0] === 'agent' && args[1] === 'get') return { agent: { agent_status: 'idle' } };
+    if (args[0] === 'agent' && args[1] === 'get') return readyAgent();
     if (args[0] === 'agent' && args[1] === 'read') return { text: ALL_READY_SCREENS };
     if (args[0] === 'agent' && (args[1] === 'start' || args[1] === 'prompt')) return {};
     throw new Error(`Unexpected Herdr call: ${args.join(' ')}`);

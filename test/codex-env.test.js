@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { codexShellEnvArgs, liveCodexCheck } from '../src/harness.js';
 import { loadModels, loadProjectConfig } from '../src/kit/config.js';
 import { startWorker } from '../src/kit/workers.js';
+import { readyAgent } from './helpers/ready-agent.js';
 
 // Worker worktrees default to ~/Projects/.herdr-wt. Keep them out of the real home folder.
 const TEST_HOME = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-codexenv-home-')));
@@ -55,6 +56,7 @@ function startFixture({ browserLookup } = {}) {
     if (args[0] === 'pane' && args[1] === 'process-info') return { process_info: { shell_pid: 10, foreground_process_group_id: 10 } };
     if (args[0] === 'pane' && args[1] === 'read') return { text: '% ' };
     if (args[0] === 'agent' && args[1] === 'list') return { agents: [] };
+    if (args[0] === 'agent' && args[1] === 'get') return readyAgent();
     if (args[0] === 'tab' && args[1] === 'list') return { tabs: [{ tab_id: 'ws:t1', workspace_id: 'ws', label: 'Workers' }] };
     if (args[0] === 'pane' && args[1] === 'list') return { panes: [{ pane_id: 'ws:p1', workspace_id: 'ws', tab_id: 'ws:t1', width: 160, height: 45 }] };
     if (args[0] === 'pane' && args[1] === 'split') { paneCwd = args[args.indexOf('--cwd') + 1]; return { pane: { pane_id: 'ws:p2' } }; }
