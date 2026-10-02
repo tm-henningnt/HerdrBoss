@@ -1,0 +1,5 @@
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin no
+AllowUsers factory
+PubkeyAuthentication yes
