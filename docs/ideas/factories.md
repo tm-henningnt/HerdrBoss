@@ -544,6 +544,8 @@ Requirement: move a project from one factory to another, through GitHub and a ha
 
 ### 20.1 Revised order
 
+The first plan is the spec `docs/specs/factories.md` with the tickets in `docs/tickets/factories/` (ADR 0021). It covers the personal fleet. The list below stays as the order of the full proposal.
+
 1. Spike (section 12) plus the Docker context over SSH test. Test the viewer process: a 404 for every route.
 2. Phases 1 and 2: Linux portability and the image (section 11), with the corrections of section 3a.
 3. Tool core, wizard (8 steps) and the transports `local` and `ssh`.
@@ -558,8 +560,8 @@ Requirement: move a project from one factory to another, through GitHub and a ha
 | # | Question | Recommendation |
 |---|---|---|
 | 11 | Head office: where does it live first? | An always-on box at home, with the Mac as the cold standby if the Mac is awake. A host that sleeps cannot be a standby. **Decided: factory zero until a second host exists, ADR 0009.** |
-| 12 | Succession: who is on the ranked list, and may a temporary head office read item titles? | The home box, then one cloud or Windows factory. Counts only until you confirm. |
-| 13 | Roles and the first users: owner, operator, reviewer, viewer. Who is the first colleague and which factories? | Fixed roles. Decide the first user set when G1 starts. |
+| 12 | Succession: who is on the ranked list, and may a temporary head office read item titles? | The home box, then one cloud or Windows factory. Counts only until you confirm. **Decided: manual `hub promote` first, ADR 0022.** |
+| 13 | Roles and the first users: owner, operator, reviewer, viewer. Who is the first colleague and which factories? | Fixed roles. Decide the first user set when G1 starts. **Deferred to a later spec, ADR 0021.** |
 | 14 | Client sites: Tailscale, reverse SSH or only the client's VPN? | Reverse SSH over 443 plus the client's own VPN if required. Ask the client IT early. |
 | 15 | Windows hosts: Docker Engine in WSL2 for unattended boxes, Docker Desktop only with a paid licence? | Yes. **Decided: Docker Engine in WSL2, ADR 0014.** |
 | 16 | Portainer: optional only? | Yes. The host tool is the factory-aware layer. |
