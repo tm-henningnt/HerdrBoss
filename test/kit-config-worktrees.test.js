@@ -604,6 +604,33 @@ test('worktree apply removes a clean merged worker tree in a temporary repo', ()
   assert.ok(output.some((line) => line.includes(`Removed ${safe}`)));
 });
 
+test('worktree prune ignores done agents but keeps parked and unknown existing panes live', (t) => {
+  const root = temporaryRepo();
+  const worktree = path.join(path.dirname(root), `${path.basename(root)}-wt-done`);
+  git(root, 'worktree', 'add', '-b', 'done-worker', worktree, 'main');
+  t.after(() => {
+    try { git(root, 'worktree', 'remove', '--force', worktree); } catch {}
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  const config = loadProjectConfig({ cwd: root });
+  const classify = (pane) => classifyWorktrees(config, { panes: pane ? [pane] : [] }).find((item) => item.path === worktree);
+  for (const status of ['working', 'blocked', 'idle', 'unknown', undefined]) {
+    assert.equal(classify({ cwd: worktree, status }).livePane, true, String(status));
+  }
+  assert.equal(classify({ foreground_cwd: worktree, agent_status: 'done' }).livePane, false);
+  assert.equal(classify({ cwd: worktree, status: 'done' }).removable, true);
+  assert.equal(classify({ cwd: worktree, status: 'done', label: 'parked' }).livePane, true);
+  assert.equal(classify({ cwd: worktree, status: 'done', name: 'parked' }).livePane, true);
+  assert.equal(classify(null).livePane, false);
+  const pruned = pruneWorktrees(config, {
+    herdr: () => ({ panes: [{ cwd: worktree, agent_status: 'done' }] }),
+    listProcesses: () => [{ pid: 55, ppid: 1, command: 'node', cwd: worktree }], output: () => {},
+  }).find((item) => item.path === worktree);
+  assert.equal(pruned.livePane, false);
+  assert.equal(pruned.processBlocked, true, 'process safety still applies to a done pane');
+  assert.equal(pruned.removable, false);
+});
+
 function archiveFixture(name = 'arch') {
   const root = temporaryRepo();
   const worktree = path.join(path.dirname(root), `${path.basename(root)}-wt-${name}`);
