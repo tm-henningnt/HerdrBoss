@@ -8,9 +8,9 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import vm from 'node:vm';
 import { successorPrompt } from '../src/handoff.js';
-import { POLICY_DEFAULTS, validatePolicy } from '../src/control.js';
+import { loadPolicy, POLICY_DEFAULTS, validatePolicy } from '../src/control.js';
 import { loadModels } from '../src/kit/config.js';
-import { cleanGoal, goalFromTranscript, goalShown, goalTextError, GOAL_MAX_LENGTH } from '../src/goal.js';
+import { cleanGoal, goalDelivery, goalFromTranscript, goalPromptText, goalShown, goalTextError, GOAL_MAX_LENGTH } from '../src/goal.js';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const tmp = (t, prefix) => {
@@ -90,6 +90,29 @@ test('the default orchestrator goal is the Boss default text', () => {
   assert.equal(typeof POLICY_DEFAULTS.defaultOrchestratorGoal, 'string');
   assert.match(POLICY_DEFAULTS.defaultOrchestratorGoal, /^Keep the build moving end to end\./);
   assert.equal(goalTextError(POLICY_DEFAULTS.defaultOrchestratorGoal), null);
+});
+
+test('automatic Claude goal commands default off, validate as booleans, and keep manual goal set', (t) => {
+  const models = loadModels();
+  const file = path.join(tmp(t, 'herdr-goal-policy-'), 'policy.json');
+  fs.writeFileSync(file, '{}');
+  assert.equal(POLICY_DEFAULTS.goals.autoCommand, false);
+  assert.equal(loadPolicy({ file, models, warn: () => {} }).goals.autoCommand, false);
+  fs.writeFileSync(file, JSON.stringify({ goals: { autoCommand: true } }));
+  assert.equal(loadPolicy({ file, models, warn: () => {} }).goals.autoCommand, true);
+
+  const valid = structuredClone(POLICY_DEFAULTS);
+  assert.deepEqual(validatePolicy(valid, models), []);
+  valid.goals.autoCommand = true;
+  assert.deepEqual(validatePolicy(valid, models), []);
+  valid.goals.autoCommand = 'true';
+  assert.match(validatePolicy(valid, models).join(' '), /goals\.autoCommand must be boolean/);
+
+  const goal = 'Ship the release safely.';
+  assert.equal(goalDelivery({ goal, kind: 'claude' }), 'prompt');
+  assert.equal(goalDelivery({ goal, kind: 'claude', autoCommand: true }), 'command');
+  assert.equal(goalPromptText({ goal, kind: 'claude' }), `/goal ${goal}`, 'manual goal set keeps its Claude command');
+  assert.equal(goalPromptText({ goal, kind: 'claude', autoCommand: false }), `[herdr-boss] The current Owner goal is: ${goal}`);
 });
 
 test('Settings save validation: the goal text has a length cap and no control characters', () => {
@@ -199,7 +222,9 @@ const activeRecord = (extra = {}) => ({
 function run(t, scenario) {
   const dir = tmp(t, 'herdr-h2-engine-');
   fs.mkdirSync(path.join(dir, 'projects'), { recursive: true });
-  fs.writeFileSync(path.join(dir, 'policy.json'), JSON.stringify(structuredClone(POLICY_DEFAULTS)));
+  const policy = structuredClone(POLICY_DEFAULTS);
+  policy.goals.autoCommand = scenario.autoCommand ?? true;
+  fs.writeFileSync(path.join(dir, 'policy.json'), JSON.stringify(policy));
   fs.writeFileSync(path.join(dir, 'memory.json'), JSON.stringify({ paneSince: {}, pushes: {}, notified: {} }));
   fs.writeFileSync(path.join(dir, 'handoffs.json'), JSON.stringify(scenario.handoffs));
   const result = spawnSync(process.execPath, ['--input-type=module', '-e', probe], {
@@ -233,6 +258,18 @@ test('the engine sends /goal to the successor once, after the successor confirms
   assert.ok(out.records[0].goalSentAt);
   assert.ok(out.records[0].goalVerifiedAt);
   assert.equal(out.records[0].finish.confirmedBy, 'answered');
+});
+
+test('the engine does not send a stale automatic Claude command when policy is off', { timeout: 30000 }, (t) => {
+  const out = run(t, {
+    autoCommand: false,
+    handoffs: [activeRecord({ goalSendingAt: at(0) })],
+    paneTexts: ['no active goal'],
+    steps: answered,
+  });
+  assert.deepEqual(goalPrompts(out), []);
+  assert.equal(out.records[0].goalSentAt, undefined);
+  assert.equal(out.records[0].goalSendingAt, at(0));
 });
 
 test('the engine sends nothing before the successor answers', { timeout: 30000 }, (t) => {

@@ -446,7 +446,7 @@ The step `workspace` starts the first orchestrator. It runs only when you give `
 1. `workspace` creates a Herdr workspace with the label of the slug. The root pane gets the label `orch`.
 2. The step starts the agent `<slug>-orch`. It uses `--kind` when you give it. Otherwise it uses the first usable entry of the orchestrator ladder in Settings.
 3. The step watches the new pane for a folder trust prompt. See the paragraph below.
-4. The step gives the agent your goal, or the **Default orchestrator goal** from Settings. A Claude agent gets `/goal`. A Codex agent gets the goal in the first prompt.
+4. The step gives the agent your goal, or the **Default orchestrator goal** from Settings. By default, Claude and Codex get the goal as plain text in the first prompt. Turn on `goals.autoCommand` in Allocation to send `/goal` to Claude instead.
 5. The step sends the first prompt. The agent reads `AGENTS.md`, the project memory, and the kit file. Then it starts the task `Set up the project`.
 
 The Owner accepts the trust prompt. Herdr Boss only tells the Owner where it is. Claude Code and Codex show a folder trust prompt in a new folder. Herdr Boss reads only the pane that this run created, every 2 seconds, for 3 minutes. When the pane shows the known prompt for exactly the project folder, Herdr Boss posts one item to the Mailbox. The item names the pane and links to the Agents page. Open the Agents page, choose the pane, and press Enter on the option that trusts the folder. Herdr Boss never presses a key in a pane for this. If the agent is neither ready nor working after 3 minutes and the prompt was not seen, Herdr Boss posts one item that says the pane may wait for input. Claude Code and Codex have a known prompt. Pi and OpenCode show no folder trust prompt, so Herdr Boss does not watch them.
@@ -1135,7 +1135,7 @@ The automatic handover activates a prepared successor only when the successor mo
 
 The automatic handover has a second trigger, the context size. It runs only when `autoHandover` is on. Set the limit in Settings as **Hand over at context tokens**, or in `policy.json` as `autoHandoverContextTokens`. The default is 300000 tokens. The value is an integer from 50000 to 2000000.
 
-A handover carries the Owner goal to the successor. Set the goal for an orchestrator with no goal in Settings as **Default orchestrator goal**, or in `policy.json` as `defaultOrchestratorGoal`. The value is one line of at most 4000 characters. An empty value turns the default off. The handover record and the project page show the goal as one collapsed line.
+A handover carries the Owner goal to the successor as plain text by default. Set the goal for an orchestrator with no goal in Settings as **Default orchestrator goal**, or in `policy.json` as `defaultOrchestratorGoal`. The value is one line of at most 4000 characters. An empty value turns the default off. The handover record and the project page show the goal as one collapsed line. Turn on **Automatic Claude goal command** in Allocation, or set `goals.autoCommand` to `true`, to send `/goal` to Claude after activation. This setting also controls new-project setup. It does not change manual **Set goal** or `herdr-boss goal set`. A prepared successor prompt always gives the goal as plain text. It never sends a `/goal` command before activation.
 
 A task boundary starts the check. A boundary is one of these events:
 

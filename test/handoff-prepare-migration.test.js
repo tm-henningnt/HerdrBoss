@@ -30,6 +30,8 @@ test('fresh handoff carries only the published Owner goal and redacted recent co
   const calls = fs.readFileSync(f.callsFile, 'utf8').trim().split('\n').map(JSON.parse);
   const prompt = calls.find((args) => args[0] === 'agent' && args[1] === 'prompt')[3];
   assert.match(prompt, /Finish the release safely/);
+  assert.match(prompt, /\n\[herdr-boss\] The current Owner goal is: Finish the release safely\./);
+  assert.doesNotMatch(prompt, /^\/goal/m, 'the prepared prompt never contains a goal command line');
   assert.match(prompt, /historical context/i);
   assert.match(prompt, /Continue from the failing test/);
   assert.match(prompt, /handoff ready /);

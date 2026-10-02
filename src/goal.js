@@ -105,11 +105,11 @@ export function goalFromTranscript({ kind, sessionId, cwd = null, home = os.home
   } catch { return null; }
 }
 
-// How the Owner goal reaches a new agent: a Claude agent gets the /goal command, other kinds get the goal in the first prompt.
-// Returns 'command', 'prompt', or undefined when there is no goal or the agent is the Boss (a Boss handover carries no goal).
-export function goalDelivery({ goal, kind, boss = false }) {
+// How an automatic Owner goal reaches a new agent. Claude gets /goal only when the policy allows it.
+// Returns 'command', 'prompt', or undefined when there is no goal or the agent is the Boss.
+export function goalDelivery({ goal, kind, boss = false, autoCommand = false }) {
   if (!goal || boss) return undefined;
-  return kind === 'claude' ? 'command' : 'prompt';
+  return kind === 'claude' && autoCommand === true ? 'command' : 'prompt';
 }
 
 // The pane text wraps long lines, so compare without whitespace. The first 60 characters identify the goal.
@@ -137,9 +137,9 @@ export function goalSetText(value) {
   return { text };
 }
 
-// The text that one prompt carries. A Claude pane runs the /goal command. Another harness gets the goal as plain text.
-export function goalPromptText({ goal, kind }) {
-  return goalDelivery({ goal, kind }) === 'command' ? `/goal ${goal}` : `[herdr-boss] The current Owner goal is: ${goal}`;
+// The text for a goal prompt. Explicit goal-set calls keep the Claude command unless the caller overrides it.
+export function goalPromptText({ goal, kind, autoCommand = true }) {
+  return goalDelivery({ goal, kind, autoCommand }) === 'command' ? `/goal ${goal}` : `[herdr-boss] The current Owner goal is: ${goal}`;
 }
 
 // Text of a pane read. The runner gives a string or an object with text.
@@ -154,8 +154,8 @@ export function herdrResponseError(raw) {
 }
 
 // Send the goal to a pane as one prompt, without --wait. Throws when Herdr refuses it.
-export async function sendGoalPrompt({ run, pane, goal, kind }) {
-  const error = herdrResponseError(await run(['agent', 'prompt', pane, goalPromptText({ goal, kind })], { timeout: agentPromptTimeoutMs(), killSignal: 'SIGKILL' }));
+export async function sendGoalPrompt({ run, pane, goal, kind, autoCommand = true }) {
+  const error = herdrResponseError(await run(['agent', 'prompt', pane, goalPromptText({ goal, kind, autoCommand })], { timeout: agentPromptTimeoutMs(), killSignal: 'SIGKILL' }));
   if (error) throw new Error(error);
 }
 

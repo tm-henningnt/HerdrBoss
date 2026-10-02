@@ -103,6 +103,26 @@ test('the rendered Settings and Allocation views hold no two buttons with the sa
   assert.match(settings, /type="checkbox"[^>]*data-service-setting="analytics\.actionsMinutes"/);
 });
 
+test('Allocation shows the default-off automatic Claude goal command switch', async () => {
+  const app = await views();
+  app.setModels({ codex: catalog, claude: catalog });
+  const s = fixture();
+  app.setState(s);
+  app.setDraft(s.policy);
+  const html = app.allocationView(s);
+  assert.match(html, /Automatic Claude goal command/);
+  const input = html.match(/<input id="sf-goals-autoCommand"[^>]*>/)?.[0];
+  assert.ok(input, 'the nested policy switch renders');
+  assert.doesNotMatch(input, /\bchecked\b/, 'the default is off');
+  assert.match(input, /data-policy-goal-bool="autoCommand"/);
+  assert.match(html, /data-setting-help="goals\.autoCommand"/);
+
+  const change = app.context.handlers.get('change').find((handler) => handler.toString().includes('policyGoalBool'));
+  assert.ok(change, 'the policy change handler is registered');
+  change({ target: { dataset: { policyGoalBool: 'autoCommand' }, checked: true, closest: () => true } });
+  assert.equal(s.policy.goals.autoCommand, true, 'the switch updates the nested policy draft');
+});
+
 // cec19c0 is the commit before the header buttons. Its page has one button on each row.
 test('the check fails on the version of the page that put one button on each row', async () => {
   const previous = (await import('node:child_process')).execFileSync('git', ['show', 'cec19c0:public/app.js'], { cwd: new URL('..', import.meta.url), maxBuffer: 1 << 26 }).toString();

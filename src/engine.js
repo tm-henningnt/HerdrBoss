@@ -24,7 +24,7 @@ import { inspectUncollectedWorkers, processDueWorkerPaneCloses, shouldCloseManag
 import { readLeases, reclaimLeases, publicLease, publicPool, reclaimNoticeText, hasIdleRule, tcpListening, tcpListeningAsync, leasePools, migrateProjectBrowserLeases, reconcileUnleasedListeners, unleasedNoticeText, markUnleasedNotified, listenerPid, processCwd, processLabel, projectWorktreeRoot } from './leases.js';
 import { codeSignCloneDir, sweepCodeSignClones } from './clone-sweep.js';
 import { runDenialScan, readDenials, denialSummary, DENIAL_SCAN_INTERVAL_MS, SCAN_BUDGET_BYTES, RETAIN_DAYS, RISE_FACTOR, RISE_MIN_EVENTS } from './denials.js';
-import { goalOnScreen, paneText, sendGoalPrompt } from './goal.js';
+import { goalDelivery, goalOnScreen, paneText, sendGoalPrompt } from './goal.js';
 import { hasTypedText, screenBlocker, stripAnsi } from './goal-set.js';
 import { claudeContextUsage, trackBoundary, normalizeModelId } from './context-handover.js';
 import { FINISH_TIMEOUT_MS, autoReadyHandoff, markSuccessorWorking, listHandoffs, saveHandoffs, supersedeHandoffs, expireHandoff, expireMissingHandoffs, handoffNotices } from './handoff.js';
@@ -2457,7 +2457,8 @@ export class Engine extends EventEmitter {
   // The send and the check are the steps of `herdr-boss goal set` in src/goal.js. The tick spreads the waits over several ticks.
   async deliverGoal(item, successor, now, at, scope) {
     const herdr = (args, options) => this.herdrRunner('herdr', args, options);
-    if (!item.goal || item.goalDelivery !== 'command' || item.goalVerifiedAt || item.goalVerifyFailedAt) return true;
+    const policy = loadPolicy();
+    if (!item.goal || item.goalDelivery !== 'command' || goalDelivery({ goal: item.goal, kind: item.toKind, boss: item.boss === true, autoCommand: policy.goals.autoCommand }) !== 'command' || item.goalVerifiedAt || item.goalVerifyFailedAt) return true;
     const goalSendingAt = Date.parse(item.goalSendingAt);
     if (Number.isFinite(goalSendingAt) && now >= goalSendingAt && now - goalSendingAt < 3 * 60 * 1000) return false;
     const fail = (message) => {
@@ -2471,7 +2472,7 @@ export class Engine extends EventEmitter {
       }
       // The mark comes before the send, so a failed save or a crash never sends the goal twice.
       this.patchGoalFields(item, { goalSentAt: at });
-      try { await sendGoalPrompt({ run: herdr, pane: item.newPane, goal: item.goal, kind: 'claude' }); }
+      try { await sendGoalPrompt({ run: herdr, pane: item.newPane, goal: item.goal, kind: 'claude', autoCommand: policy.goals.autoCommand }); }
       catch (error) { return fail(`the /goal prompt failed: ${String(error.stderr || error.message).slice(0, 200)}`); }
     }
     if (await goalOnScreen({ run: herdr, pane: item.newPane, goal: item.goal })) {

@@ -20,6 +20,7 @@ const POLICY_KEYS_WITHOUT_CONTROL = new Set([
   'excludedModels', 'disabledModels', 'extraModels', 'preferredModels', 'modelProviders', 'harnessRoutes', // the harness model rows: harness.model, harness.provider, harness.preferredModel, harness.addModel
   'providerModes', // quota.mode
   'pacingGoals', // quota.goalPercent (goal and goal end)
+  'goals', // the goals.autoCommand switch on Allocation
   'excludedWorkspaces', 'projects', // the workspace switches and project shares on Allocation
 ]);
 
@@ -221,6 +222,13 @@ test('the Settings and Allocation pages keep no always-visible explanation that 
 test('the schema holds the succession, workspace, and share explanations', () => {
   for (const id of ['succession.ladder', 'workspace.exclusion', 'project.shares']) assert.equal(SETTING_HELP[id]?.group, 'capacity', id);
   for (const id of ['succession.ladder', 'workspace.exclusion', 'project.shares']) assert.match(app, new RegExp(`helpButton\\('${id.replace('.', '\\.')}'\\)`));
+});
+
+test('automatic Claude goal delivery has a policy control and help text', () => {
+  assert.equal(POLICY_DEFAULTS.goals.autoCommand, false);
+  assert.equal(SETTING_HELP['goals.autoCommand']?.group, 'capacity');
+  assert.match(app, /data-policy-goal-bool="autoCommand"/);
+  assert.ok(app.includes("settingRow('goals.autoCommand'"));
 });
 
 test('picture retention has a Pictures group explanation', () => {
