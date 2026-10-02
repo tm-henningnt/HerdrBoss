@@ -1,5 +1,5 @@
 import { markdownOrPlain, plainTextHtml, sanitizeRendered } from './markdown.js';
-import { FLOW, FLOW_LABEL, DONE_LIMIT, taskMap, taskState, blockReasons, boardColumns, dependencyChain, criticalPath, graphTasks, graphDepths, blockerIds, elapsedText, domPart, fleetItems, fleetColumns, fleetFilter, fleetWho } from './board.js';
+import { FLOW, FLOW_LABEL, DONE_LIMIT, taskMap, taskState, blockReasons, boardColumns, dependencyChain, criticalPath, graphTasks, graphDepths, blockerIds, elapsedText, domPart, fleetItems, fleetColumns, fleetFilter, fleetWho, visibleLanes, cardFacts, divergenceText } from './board.js';
 import { patchHtml } from './keyed.js';
 import { noWorkerBadgeView, phaseAgeText, publishedAgeBadgeView, projectSyncLineView, summaryAgeText, unplannedCardView } from './project-live-view.js';
 import { SETTING_HELP, settingPopupHtml, settingsGuideHtml } from './setting-help.js';
@@ -1598,9 +1598,18 @@ function agentInventory(s) {
   return `${summary}<div class="workspace-list">${rows || '<div class="calm-state">No Herdr workspaces are open.</div>'}</div>`;
 }
 
+// The status of a card for the counts: the computed state when the service sent one, else the published status.
+// A stuck card counts as doing. A computed todo keeps a published blocked.
+function cardStatus(t) {
+  const computed = t.computedState;
+  if (!computed) return t.status || 'todo';
+  if (computed === 'stuck') return 'doing';
+  if (computed === 'todo') return t.status === 'blocked' ? 'blocked' : 'todo';
+  return computed;
+}
 function taskCounts(p) {
   const c = Object.fromEntries(STATUSES.map((k) => [k, 0]));
-  for (const t of p.tasks || []) c[t.status || 'todo']++;
+  for (const t of p.tasks || []) c[cardStatus(t)]++;
   return c;
 }
 function segBar(c) {
@@ -4652,7 +4661,7 @@ function organizationChart(s) {
     const published = (s.projects || []).find((x) => x.slug === p.slug);
     const orch = p.orch && panes.find((x) => x.id === p.orch.pane);
     const risk = (s.control?.handoffs || []).find((h) => h.project === p.slug);
-    const current = (published?.tasks || []).filter((t) => t && t.title && t.status === 'doing');
+    const current = (published?.tasks || []).filter((t) => t && t.title && cardStatus(t) === 'doing');
     const taskText = current.length ? `${current[0].id ? `${current[0].id} · ` : ''}${current[0].title}${current.length > 1 ? ` (+${current.length - 1} more)` : ''}` : NOT_REPORTED;
     const slots = `${p.running} / ${p.slots} slots · ${Math.round(p.share || 0)}% share`;
     const handover = orgHandover(s, p.orch?.pane, risk);
@@ -4917,6 +4926,16 @@ function fleetReason(r, item) {
   return `${party}${r.ask ? `: <q>${esc(r.ask)}</q>` : ''}`;
 }
 
+// The auto badge with the fact of a card, the published and computed states when they differ, and the reason of a stuck card.
+function cardFactsView(t, now) {
+  const f = cardFacts(t, now);
+  if (!f.auto && !f.stuck) return '';
+  const auto = f.auto ? `<div class="card-auto" data-key="card-auto"><span class="auto-badge" title="Herdr Boss computed this state from git, workers or issues">auto</span><span class="card-fact mono" title="${esc(f.factTitle)}">${esc(f.fact)}</span></div>` : '';
+  const diverge = f.diverge ? `<p class="card-diverge">${esc(f.diverge)}</p>` : '';
+  const stuck = f.stuck ? `<p class="card-stuck">${esc(f.stuck.reason)}. ${esc(f.stuck.age)}.</p>` : '';
+  return `${auto}${diverge}${stuck}`;
+}
+
 function fleetCard(item, { chip, now }) {
   const { task: t, state, slug } = item;
   const id = t.id != null ? String(t.id) : '';
@@ -4930,10 +4949,10 @@ function fleetCard(item, { chip, now }) {
     : `<span class="card-title">${esc(t.title)}</span>`;
   return `<li class="card kb-card st-${state}${item.onPath ? ' on-path' : ''}" data-key="task:${esc(item.key)}" id="fleet-${esc(domPart(item.key))}">`
     + `<div class="card-top">${chip ? fleetChip(item, { plain: chip === 'plain' }) : '<span class="card-dot" aria-hidden="true"></span>'}<span class="card-id mono">${esc(id)}</span>${item.onPath ? '<span class="card-flag" title="On the critical path of the project">path</span>' : ''}</div>`
-    + `${title}${wait}${worker}</li>`;
+    + `${cardFactsView(t, now)}${title}${wait}${worker}</li>`;
 }
 
-const FLEET_EMPTY = { blocked: 'Nothing waits.', ready: 'No task is ready.', doing: 'No worker runs.', review: 'Nothing to review.', done: 'Nothing done in 24 h.' };
+const FLEET_EMPTY = { blocked: 'Nothing waits.', ready: 'No task is ready.', doing: 'No worker runs.', stuck: 'No card is stuck.', review: 'Nothing to review.', done: 'Nothing done in 24 h.' };
 const fleetColLabel = (k) => (k === 'done' ? 'Done · 24 h' : FLOW_LABEL[k]);
 
 function fleetList(list, k, ctx) {
@@ -4943,8 +4962,8 @@ function fleetList(list, k, ctx) {
 // Counts per column and a Needs the Owner count. A column count selects the state filter; select it again to clear the filter.
 function fleetCounts(counts, s) {
   const owner = s.mailbox?.needsAction ?? s.mailbox?.open ?? 0;
-  const cells = FLOW.map((k) => `<button type="button" class="kb-count st-${k}" data-fleet-state="${k}" aria-pressed="${fleet.state === k}" title="${fleet.state === k ? 'Show all states' : `Show only ${FLOW_LABEL[k]}`}"><span class="card-dot" aria-hidden="true"></span><span class="kb-count-label">${fleetColLabel(k)}</span><span class="num">${counts[k]}</span></button>`).join('');
-  return `<div class="kb-counts" role="group" aria-label="Tasks per column">${cells}<a class="kb-owner${owner ? ' has-items' : ''}" href="/mailbox?folder=needs-you"><span class="num">${owner}</span><span>Needs the Owner</span></a></div>`;
+  const cells = visibleLanes(counts).map((k) => `<button type="button" class="kb-count st-${k}" data-fleet-state="${k}" aria-pressed="${fleet.state === k}" title="${fleet.state === k ? 'Show all states' : `Show only ${FLOW_LABEL[k]}`}"><span class="card-dot" aria-hidden="true"></span><span class="kb-count-label">${fleetColLabel(k)}</span><span class="num">${counts[k]}</span></button>`).join('');
+  return `<div class="kb-counts${counts.stuck > 0 ? ' has-stuck' : ''}" role="group" aria-label="Tasks per column">${cells}<a class="kb-owner${owner ? ' has-items' : ''}" href="/mailbox?folder=needs-you"><span class="num">${owner}</span><span>Needs the Owner</span></a></div>`;
 }
 
 // One bar per project: the open tasks of each state and the done tasks of 24 hours, on one scale for all projects.
@@ -5008,14 +5027,15 @@ function boardView(s) {
   const tools = `${fleetToolbar(projects, all, phone)}${phone ? fleetProjectChips(projects, fleetFilter(all, { ...fleet, project: '', state: '' })) : ''}`;
   const strip = `<section class="kb-strip" aria-label="Summary and filters"><div class="kb-main">${fleetCounts(summary, s)}${tools}</div>${phone ? '' : fleetProjectBars(projects, fleetFilter(all, { ...fleet, project: '', state: '' }))}</section>`;
   const empty = !filtered.length ? '<p class="kb-none" role="status">No task matches the filters. <button type="button" class="board-more" data-fleet-clear>Clear filters</button></p>' : '';
-  const cols = phone || !fleet.state ? FLOW : [fleet.state];
+  const lanes = visibleLanes(summary);
+  const cols = phone || !fleet.state ? lanes : [fleet.state];
   let body;
   if (phone || fleet.group === 'mixed') {
     const view = projectView(FLEET_SLUG);
     const active = boardActiveColumn(view, board.counts);
-    const tabs = phone ? `<div class="board-tabs" role="tablist" aria-label="Board columns">${FLOW.map((k) => `<button type="button" role="tab" class="board-tab st-${k}" data-board-tab="${k}" data-slug="${FLEET_SLUG}" aria-selected="${k === active}" aria-controls="fleet-col-${k}" tabindex="${k === active ? 0 : -1}"><span class="card-dot" aria-hidden="true"></span><span class="tab-label">${FLOW_LABEL[k]}</span><span class="num">${board.counts[k]}</span></button>`).join('')}</div>` : '';
+    const tabs = phone ? `<div class="board-tabs${summary.stuck > 0 ? ' has-stuck' : ''}" role="tablist" aria-label="Board columns">${lanes.map((k) => `<button type="button" role="tab" class="board-tab st-${k}" data-board-tab="${k}" data-slug="${FLEET_SLUG}" aria-selected="${k === active}" aria-controls="fleet-col-${k}" tabindex="${k === active ? 0 : -1}"><span class="card-dot" aria-hidden="true"></span><span class="tab-label">${FLOW_LABEL[k]}</span><span class="num">${board.counts[k]}</span></button>`).join('')}</div>` : '';
     const sections = cols.map((k) => `<section class="board-col st-${k}" data-key="col:${k}" data-col="${k}" id="fleet-col-${k}"${phone ? ' role="tabpanel"' : ''} aria-label="${fleetColLabel(k)}, ${board.counts[k]}"><h3><span class="card-dot" aria-hidden="true"></span>${fleetColLabel(k)}<span class="num">${board.counts[k]}</span></h3>${fleetList(board.columns[k], k, { chip: phone ? 'plain' : true, now })}</section>`).join('');
-    body = `<div class="board kb-board" data-key="fleet:mixed">${tabs}<div class="board-cols kb-cols" data-board-cols="${FLEET_SLUG}" data-keep-attrs="style" style="--cols:${cols.length}">${sections}</div></div>`;
+    body = `<div class="board kb-board" data-key="fleet:mixed" style="--cols:${cols.length}">${tabs}<div class="board-cols kb-cols" data-board-cols="${FLEET_SLUG}" data-keep-attrs="style">${sections}</div></div>`;
   } else {
     const head = `<div class="kb-head" style="--cols:${cols.length}" aria-hidden="true">${cols.map((k) => `<span class="st-${k}"><span class="card-dot"></span>${fleetColLabel(k)}<span class="num">${board.counts[k]}</span></span>`).join('')}</div>`;
     const lanes = projects.map((p) => {
@@ -5025,7 +5045,7 @@ function boardView(s) {
       const open = !fleet.closed[p.slug];
       const mini = FLOW.filter((k) => lane.counts[k]).map((k) => `<span class="kb-mini st-${k}" title="${lane.counts[k]} ${fleetColLabel(k)}"><span class="card-dot" aria-hidden="true"></span><span class="num">${lane.counts[k]}</span><span class="visually-hidden"> ${fleetColLabel(k)}</span></span>`).join('');
       const cells = cols.map((k) => `<div class="kb-cell st-${k}" data-key="col:${k}" role="group" aria-label="${esc(`${p.label}, ${fleetColLabel(k)}, ${lane.counts[k]}`)}">${lane.columns[k].length ? `<ol class="board-list">${lane.columns[k].map((item) => fleetCard(item, { chip: false, now })).join('')}</ol>` : ''}</div>`).join('');
-      return `<details class="kb-lane" data-key="lane:${esc(p.slug)}" data-fleet-lane="${esc(p.slug)}"${open ? ' open' : ''}><summary>${avatarSlot(p.slug, { title: p.label, size: 20 })}<span class="kb-lane-name">${esc(p.label)}</span><span class="kb-minis">${mini}</span><a class="kb-lane-open" href="/projects/${encodeURIComponent(p.slug)}">Project page</a><span class="fold-chevron" aria-hidden="true"></span></summary><div class="kb-lane-cols" style="--cols:${cols.length}">${cells}</div></details>`;
+      return `<details class="kb-lane" data-key="lane:${esc(p.slug)}" data-fleet-lane="${esc(p.slug)}"${open ? ' open' : ''}><summary>${avatarSlot(p.slug, { title: p.label, size: 20 })}<span class="kb-lane-name">${esc(p.label)}</span>${divergenceText(p) ? `<span class="kb-lane-diverge" title="${esc(divergenceText(p))}">${esc(String(Number(p.boardDiverged) || 0))} differ from git</span>` : ''}<span class="kb-minis">${mini}</span><a class="kb-lane-open" href="/projects/${encodeURIComponent(p.slug)}">Project page</a><span class="fold-chevron" aria-hidden="true"></span></summary><div class="kb-lane-cols" style="--cols:${cols.length}">${cells}</div></details>`;
     }).join('');
     body = `<div class="kb-lanes" data-key="fleet:lanes">${head}${lanes}</div>`;
   }
@@ -5584,7 +5604,7 @@ function specsBlock(m, slug) {
 // A selected task highlights its card, its graph node, and its dependency chain. The selection lives in the project view.
 
 const WAIT_PARTY = { owner: 'the Owner', boss: 'the Boss', external: 'an external item', task: 'a task' };
-const BOARD_EMPTY = { blocked: 'Nothing waits.', ready: 'No task is ready.', doing: 'No worker runs a task.', review: 'Nothing waits for review.', done: 'No task is done yet.' };
+const BOARD_EMPTY = { blocked: 'Nothing waits.', ready: 'No task is ready.', doing: 'No worker runs a task.', stuck: 'No card is stuck.', review: 'Nothing waits for review.', done: 'No task is done yet.' };
 const ICON_EXTERNAL = '<svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true"><path d="M4.5 2.5h5v5M9.5 2.5 3 9" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const cardDomId = (slug, id) => `card-${domPart(slug)}-${domPart(id)}`;
 const colDomId = (slug, k) => `board-${domPart(slug)}-${k}`;
@@ -5621,13 +5641,13 @@ function boardCard(t, ctx) {
     : `<span class="card-title">${esc(t.title)}</span>`;
   return `<li class="${cls}" data-key="task:${esc(key)}"${id ? ` id="${esc(cardDomId(slug, id))}" data-task-card="${esc(id)}"` : ''}>`
     + `<div class="card-top"><span class="card-dot" aria-hidden="true"></span><span class="card-id mono">${esc(id)}</span>${url ? `<a class="card-link" href="${esc(url)}" target="_blank" rel="noreferrer" aria-label="Open issue ${esc(id)}">${ICON_EXTERNAL}</a>` : ''}</div>`
-    + `${flags}${title}${wait}${worker}${source}</li>`;
+    + `${flags}${cardFactsView(t, ctx.now)}${title}${wait}${worker}${source}</li>`;
 }
 
 // The phone shows one column at a time. The first column with work opens, in the order Doing, Ready, Blocked, Review, Done.
 function boardActiveColumn(view, counts, hasUnplanned = false) {
-  if (FLOW.includes(view.boardCol)) return view.boardCol;
-  return ['doing', 'ready', 'blocked', 'review', 'done'].find((k) => counts[k] > 0 || (k === 'doing' && hasUnplanned)) || 'ready';
+  if (FLOW.includes(view.boardCol) && (view.boardCol !== 'stuck' || counts.stuck > 0)) return view.boardCol;
+  return ['doing', 'stuck', 'ready', 'blocked', 'review', 'done'].find((k) => counts[k] > 0 || (k === 'doing' && hasUnplanned)) || 'ready';
 }
 
 function boardBlock(p, slug) {
@@ -5643,8 +5663,12 @@ function boardBlock(p, slug) {
   const steps = b.critical.path.length;
   const pathText = steps ? ` · critical path${b.critical.milestone ? ` to ${b.critical.milestone.title}` : ''}: ${steps} ${steps === 1 ? 'task' : 'tasks'}` : '';
   const stale = p.boardStale ? `<p class="board-stale" role="status"><span class="stale-mark">stale</span> ${esc(p.boardStaleReason || 'The published status does not match the workers.')}</p>` : '';
-  const tabs = `<div class="board-tabs" role="tablist" aria-label="Board columns">${FLOW.map((k) => `<button type="button" role="tab" class="board-tab st-${k}" data-board-tab="${k}" data-slug="${esc(slug)}" aria-selected="${k === active}" aria-controls="${esc(colDomId(slug, k))}" tabindex="${k === active ? 0 : -1}"><span class="card-dot" aria-hidden="true"></span><span class="tab-label">${FLOW_LABEL[k]}</span><span class="num">${b.counts[k]}</span></button>`).join('')}</div>`;
-  const cols = FLOW.map((k) => {
+  const lanes = visibleLanes(b.counts);
+  const hasStuck = b.counts.stuck > 0 ? ' has-stuck' : '';
+  const diverge = divergenceText(p);
+  const divergeLine = diverge ? `<p class="board-diverge" data-key="board-diverge" role="status"><span class="auto-badge">auto</span> ${esc(diverge)}</p>` : '';
+  const tabs = `<div class="board-tabs${hasStuck}" role="tablist" aria-label="Board columns">${lanes.map((k) => `<button type="button" role="tab" class="board-tab st-${k}" data-board-tab="${k}" data-slug="${esc(slug)}" aria-selected="${k === active}" aria-controls="${esc(colDomId(slug, k))}" tabindex="${k === active ? 0 : -1}"><span class="card-dot" aria-hidden="true"></span><span class="tab-label">${FLOW_LABEL[k]}</span><span class="num">${b.counts[k]}</span></button>`).join('')}</div>`;
+  const cols = lanes.map((k) => {
     const list = b.columns[k];
     const unplannedCards = k === 'doing' ? unplanned.map((worker, i) => {
       const card = unplannedCardView(worker, i);
@@ -5655,7 +5679,7 @@ function boardBlock(p, slug) {
     const cards = list.length || unplannedCards ? `<ol class="board-list">${unplannedCards}${list.map((t, i) => boardCard(t, { ...ctx, index: `${k}${i}` })).join('')}</ol>` : `<p class="board-empty">${BOARD_EMPTY[k]}</p>`;
     return `<section class="board-col st-${k}" data-key="col:${k}" data-col="${k}" id="${esc(colDomId(slug, k))}" role="tabpanel" aria-label="${FLOW_LABEL[k]}, ${b.counts[k]}"><h3><span class="card-dot" aria-hidden="true"></span>${FLOW_LABEL[k]}<span class="num">${b.counts[k]}</span></h3>${cards}${more}</section>`;
   }).join('');
-  const body = `<div class="board" data-key="board:${esc(slug)}">${stale}${tabs}<div class="board-cols" data-board-cols="${esc(slug)}" data-keep-attrs="style">${cols}</div></div>`;
+  const body = `<div class="board" data-key="board:${esc(slug)}">${stale}${divergeLine}${tabs}<div class="board-cols${hasStuck}" data-board-cols="${esc(slug)}" data-keep-attrs="style">${cols}</div></div>`;
   return collapsible({ slug, key: 'board', id: 'board', className: 'board-section', defaultOpen: true, head: `<div class="section-head"><h2>Board <span class="sub">${open} open${esc(pathText)}</span></h2></div>`, title: 'Board', count: `${open} open${p.boardStale ? ' · stale' : ''}`, body });
 }
 
@@ -5728,7 +5752,7 @@ function dependencyGraph(p, slug) {
     <button type="button" class="dep-btn" data-dep-action="full" data-dep-slug="${esc(slug)}" aria-label="Show the graph at full size">Full size</button>
     <span class="dep-zoom" data-dep-readout="${esc(slug)}" aria-hidden="true">100%</span></div>`;
   const milestone = critical.milestone ? ` to ${critical.milestone.title}` : '';
-  const legend = `<div class="dep-legend">${FLOW.map((k) => `<span class="st-${k}">${FLOW_LABEL[k]}</span>`).join('')}${critical.path.length ? `<span class="on-path">Critical path${esc(milestone)}</span>` : ''}${selected ? `<span class="in-chain">Chain of ${esc(selected)}</span>` : ''}</div>`;
+  const legend = `<div class="dep-legend">${FLOW.filter((k) => k !== 'stuck' || nodes.some((t) => taskState(t, map) === 'stuck')).map((k) => `<span class="st-${k}">${FLOW_LABEL[k]}</span>`).join('')}${critical.path.length ? `<span class="on-path">Critical path${esc(milestone)}</span>` : ''}${selected ? `<span class="in-chain">Chain of ${esc(selected)}</span>` : ''}</div>`;
   const body = `<div class="dep" data-key="graph:${esc(slug)}">${toolbar}${legend}
     <div class="panel dep-scroll"><div class="dep-stage" data-dep-stage="${esc(slug)}" data-keep-attrs="style">
       <button type="button" class="dep-close" data-dep-action="close" data-dep-slug="${esc(slug)}" aria-label="Close full size">Close</button>
@@ -6115,8 +6139,9 @@ const HELP = {
     <h3>Subscriptions and machine health</h3><p>Select a bar to open all quota windows, or the processes and load history. After a restart, "Quotas from HH:MM" shows saved quotas until the first new quota read succeeds. When a provider probe fails, the last good reading stays visible with its age. A reading becomes stale after three hours. Pacing advances expected use with the quota window time and keeps the measured used percent. The Claude probe starts with a 60-second timeout. A timeout permits one 90-second retry after the probe child exits. Failed readings raise the next Claude timeout to 90 seconds. A good reading resets it to 60 seconds. Codex and OpenCode Go keep the 20, 45, then 90-second timeout sequence. On timeout, Herdr Boss sends SIGTERM to the owned child by PID and to its own process group. It sends SIGKILL if the child remains after three seconds. It never selects a process by name. An unconfirmed exit prevents the retry. The last 100 probe attempts record the killed PID state and retry flag. The Boss gets one warning when the Claude probe fails for over 60 minutes. The Machine guard switch turns CPU and load warnings and worker-start blocks on or off. Choose a pause length to suspend those rules for a time; select <b>Resume guard</b> to end a pause early. Memory and disk warnings stay on. Disk space reports the filesystem that contains the Herdr Boss data directory.</p>`],
   board: ['Board', `
     <p>The Board shows the tasks of all projects on one kanban. It uses the same task states as the board on each project page.</p>
-    <h3>Columns</h3><p><b>Blocked</b> holds a task that waits on another task, the Owner, the Boss, or an external item. <b>Ready</b> holds a task whose dependencies are all done. <b>Doing</b> holds a task with a live worker; the longest-running worker comes first. <b>Review</b> holds a task whose worker finished or was collected and whose branch is not merged. <b>Done · 24 h</b> holds the tasks done in the last 24 hours, newest first. A done task without an update time does not show.</p>
+    <h3>Columns</h3><p><b>Blocked</b> holds a task that waits on another task, the Owner, the Boss, or an external item. <b>Ready</b> holds a task whose dependencies are all done. <b>Doing</b> holds a task with a live worker; the longest-running worker comes first. <b>Stuck</b> shows only while a card is stuck: a Doing card with no live worker and no commit for 3 hours. <b>Review</b> holds a task whose worker finished or was collected and whose branch is not merged. <b>Done · 24 h</b> holds the tasks done in the last 24 hours, newest first. A done task without an update time does not show.</p>
     <h3>Cards</h3><p>A card shows the project, the task ID, the title, and the worker with its model. A Doing card also shows the elapsed time. A Blocked card shows what it waits on: the ID and title of each open blocker task, or the Owner, the Boss, or an external item with the ask. When the status names no blocker, the card says so. A <b>path</b> mark shows a task on the critical path of its project.</p>
+    <p>An <b>auto</b> badge shows that Herdr Boss computed the state of the card from a fact. The badge has the fact: the short commit ID, the worker name, or the issue number. When the published state differs from the computed state, the card shows both states and the fact. A Stuck card shows the reason and the time of its last activity. In the swimlane view, a project with cards that differ from git shows a mark with the count.</p>
     <p>Select a card to open the project page with the task selected. The page shows the task card on the project board and its chain in the dependency graph. Select a blocker to open that task. Select the project name to open the project page.</p>
     <h3>Summary</h3><p>The counts show the tasks in each column after the project, who, and search filters. Select a count to show only that column. Select it again to show all columns. <b>Needs the Owner</b> counts the open Mailbox items that need you and opens the Mailbox. Each project bar shows the tasks of that project in each state, on one scale for all projects. Select a bar to show only that project.</p>
     <h3>Filters</h3><p><b>Project</b> shows one project. <b>Kind</b> shows the tasks that wait for the Owner, the tasks with a worker, or the tasks of one worker harness or one model. <b>State</b> shows one column. The search matches the project, the task ID, the title, the ask, and the worker name and model. Each word must match. Press <kbd>/</kbd> to go to the search. <b>Clear filters</b> removes all filters.</p>
@@ -6135,10 +6160,11 @@ const HELP = {
     <p>The bar above the cards shows the applied share and the effective slots of each project, in card order. Its colors match the top edge of each card. An idle project is faded. A paused project is faded and striped.</p>
     <h3>Progress and frontier</h3><p><b>Current frontier</b> is open work with no open blocker. <b>Next</b> waits only on the current frontier. The orchestrator can set both itself.</p>
     <h3>Needs your decision</h3><p>Open work that waits on you. Each item shows its ID, title, and ask, and links to its Mailbox conversation when the orchestrator set <code>mailboxId</code>. A task that waits on other tasks shows <b>waiting on #ID</b>. A task that waits on the Boss or an external party names it and shows the ask.</p>
-    <h3>Board</h3><p>The board has five columns in the order of the flow. <b>Blocked</b> holds a task that waits on another task, the Owner, the Boss, or an external item. <b>Ready</b> holds a task whose dependencies are all done. <b>Doing</b> holds a task with a live worker. <b>Review</b> holds a task whose worker finished or was collected and whose branch is not merged. The card source says <b>finished, not collected</b> when the worker wrote its report and no collect is recorded. A task whose branch is merged shows in Done with the source <b>merged</b>. <b>Done</b> shows the last 10 done tasks. Select <b>Show all N done</b> to see the rest.</p>
+    <h3>Board</h3><p>The board has up to six columns in the order of the flow. <b>Blocked</b> holds a task that waits on another task, the Owner, the Boss, or an external item. <b>Ready</b> holds a task whose dependencies are all done. <b>Doing</b> holds a task with a live worker. <b>Stuck</b> holds a Doing task with no live worker and no commit for 3 hours. The column shows only while a task is stuck. The card shows the reason and the time of the last activity. <b>Review</b> holds a task whose worker finished or was collected and whose branch is not merged. The card source says <b>finished, not collected</b> when the worker wrote its report and no collect is recorded. A task whose branch is merged shows in Done with the source <b>merged</b>. <b>Done</b> shows the last 10 done tasks. Select <b>Show all N done</b> to see the rest.</p>
     <p>Each card shows the task ID, the title, what the task waits on, and its worker. A Doing card shows the worker, the model, the elapsed time, and the source, for example <b>live from worker NAME</b>. The state comes from the worker records, so it does not wait for a publish. Ready sorts by priority: the critical path first, then the group order, then the published order. A Blocked card always shows a reason. When the status names no blocker, the card says so. The <b>Board</b> page shows the tasks of all projects, and its card links open this page with the task selected.</p>
     <p><b>Unplanned work</b> cards in Doing show live workers that have no task in the published status. A <b>No worker</b> badge marks a Doing task with no live worker for 30 minutes.</p>
     <p>The service computes the state of each card from facts: a commit on the base branch that names the task ID, then the worker records, then the issue tracker. The API fields are <code>computedState</code>, <code>publishedState</code>, and <code>source</code>. A card diverges when its computed state differs from its published state. <code>boardDiverged</code> counts the diverged cards of the project. A Doing card with no live worker and no commit for 3 hours is stuck. <code>stuck</code> holds the reason and the age. The service never writes the status file.</p>
+    <p>Each card with a fact shows an <b>auto</b> badge and the fact: the short commit ID, the worker name, or the issue number. A card that diverges shows <b>published: doing, computed: done, merged abc1234 3 hours ago</b>. A line above the board counts the cards that differ from git and names their IDs. The board counts and columns use the computed state. When a project has a divergence for more than 30 minutes, Herdr Boss sends the orchestrator one line, at most once each hour. After 3 hours, it sends the Boss one notice. Run <code>herdr-boss publish SLUG FILE --sync</code> to set the card states from the facts before the publish.</p>
     <p>A <b>stale</b> mark with its reason shows when the published status does not match the workers or is too old. The orchestrator clears it with a new publish.</p>
     <h3>Live status</h3><p><b>status published N min ago</b> shows the age of the project status. It is amber when the server gives <code>statusStale.level</code> the value <code>warn</code>. The phase and summary lines show the age of their data. The sync line compares working agents with Doing cards. It is amber when <code>sync.inSync</code> is false. The page refreshes from live state events. It keeps the scroll position, focus, and open Board column.</p>
     <h3>Select a task</h3><p>Select a card title to select the task. The card gets a ring, and the graph shows the task and its dependency chain; the other tasks fade. Select a graph box to select its task and go to its card. On a Blocked card, select a blocker ID to go to that task. Select the selected task again to clear the selection. A refresh keeps the selection and the scroll position.</p>
@@ -6148,7 +6174,7 @@ const HELP = {
     <h3>Groups and specs</h3><p>Progress per release or phase, and the work under each spec.</p>
     <h3>All work</h3><p>The list sorts and filters all work by the published status.</p>
     <h3>Project continuity</h3><p>Open the orchestrator line to plan a handover to another harness. Prepare copies the published Owner goal to the successor. The handover record shows the goal as one collapsed line. Codex, Pi, and OpenCode get the goal in the successor prompt, so activation does not check or send it again. For Claude, activation checks that the successor shows the goal. It uses <code>goal set</code> with a 90-second wait and two attempts when the goal is missing. If the engine already sent the goal, activation only checks the screen and records a warning when the goal is missing. Exit code 2 or 3 records a warning and leaves the engine free to try the send. The handover notice waits for the check and includes its saved warning. An invalid published goal, such as a blank value or a value over 1000 characters, is omitted. If migration is unavailable or fails, Prepare starts fresh and records the reason. Fresh preparation captures at most 200 recent source-pane lines and 20,000 characters, and both caps include the truncation marker. It redacts likely credentials and marks the snapshot as historical context. If recent text is unavailable, it tries the visible pane; if both reads fail, it marks context unavailable. The successor only reads and reports until activation. Inspect its answer, then confirm activation. For a project, activation labels the successor <b>orch</b> and the old pane <b>orch previous</b>. For the Boss, it labels them <b>boss</b> and <b>boss previous</b>. Herdr Boss closes the old pane and renames the successor tab to <b>Orchestrator</b> when the successor has answered, or after 15 minutes with the old pane idle. It never closes a pane that works or a pane of a project with a running worker, and it does not do this for the Boss. It tells the Boss when the old pane is still busy after 60 minutes. The Overview shows <b>closing old orchestrator at</b> a time until then. Otherwise it closes the old pane after 120 minutes when the same handoff and pane roles are still confirmed. Unavailable pane data defers retirement until a later engine tick. The successor gets one notice after retirement. The old agent is asked for a final summary for the successor. A project handover notifies the project workers and the Boss. A Boss handover notifies the Boss-workspace peers and the Owner.</p>
-    <h3>Phone</h3><p>On a phone, the long sections start collapsed. Select a section title to open it. The browser remembers each open section for this project. The Now section, overall progress, the frontier, and the board stay open.</p><p>The board shows one column at a time. The tab bar above it shows each column with its count. Select a tab or swipe sideways to change the column. The graph has its natural size and scrolls sideways in its own box.</p>
+    <h3>Phone</h3><p>On a phone, the long sections start collapsed. Select a section title to open it. The browser remembers each open section for this project. The Now section, overall progress, the frontier, and the board stay open.</p><p>The board shows one column at a time. The tab bar above it shows each column with its count. A Stuck tab shows only while a card is stuck. Select a tab or swipe sideways to change the column. The graph has its natural size and scrolls sideways in its own box.</p>
     <h3>AGENTS.md drift</h3><p><b>AGENTS.md drift</b> shows the errors and warnings that <b>herdr-boss publish</b> found in the project AGENTS.md. An error is a missing, old, or hand-edited Herdr Boss stub, or a missing, old, or hand-edited kit file <code>docs/orchestration/herdr-boss.md</code>. A warning is stale orchestration text, such as a fixed pane ID, a dated line, a copied model list, or text that sends pushes or product decisions to the Boss. Run <b>herdr-boss check agents</b> in the project for each finding. Run <b>herdr-boss kit install</b> to fix an error.</p>
     <h3>Files</h3><p><b>Files and kit</b> in Details shows the paths that the orchestrator reads: the project memory file, the installed kit file, and the Boss memory file. The home folder shows as <b>~</b>. The panel shows paths only. It never shows the contents of a memory or kit file.</p>
     <h3>Worker config</h3><p><b>Worker config</b> in Details shows the fields that Herdr Boss read from <code>.herdr-boss.json</code> in the project repository. A <b>config</b> tag marks a field that the file sets; the other fields use the default. The <code>setup</code> command shows as <b>set</b> or <b>not set</b>, and a home folder path shows as <b>~</b>. Change a field in <code>.herdr-boss.json</code> in the repository.</p>
@@ -7623,10 +7649,12 @@ document.addEventListener('keydown', (e) => {
   const tab = e.target.closest?.('[data-board-tab]');
   if (!tab || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
   e.preventDefault();
-  const i = FLOW.indexOf(tab.dataset.boardTab);
-  const next = e.key === 'Home' ? 0 : e.key === 'End' ? FLOW.length - 1 : (i + (e.key === 'ArrowRight' ? 1 : -1) + FLOW.length) % FLOW.length;
-  showBoardColumn(tab.dataset.slug, FLOW[next]);
-  tab.parentElement.querySelector(`[data-board-tab="${FLOW[next]}"]`)?.focus();
+  // The Stuck tab exists only while a card is stuck, so the keys walk the tabs that the page shows.
+  const keys = [...tab.parentElement.querySelectorAll('[data-board-tab]')].map((el) => el.dataset.boardTab);
+  const i = keys.indexOf(tab.dataset.boardTab);
+  const next = e.key === 'Home' ? 0 : e.key === 'End' ? keys.length - 1 : (i + (e.key === 'ArrowRight' ? 1 : -1) + keys.length) % keys.length;
+  showBoardColumn(tab.dataset.slug, keys[next]);
+  tab.parentElement.querySelector(`[data-board-tab="${keys[next]}"]`)?.focus();
 });
 document.addEventListener('keydown', (e) => {
   const viewer = document.getElementById('browser-viewer');

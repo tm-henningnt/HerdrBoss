@@ -169,3 +169,7 @@ Summary: Write shared catalogue findings to per-worker files and run long gates 
 ## 0084129d473c
 Impact: useful
 Summary: Detect Did you mean this, not available in your country and Rate limit exceeded at an opencode launch, mark the model unavailable and fall back; add trial models with a trial tag; new models enable and disable commands.
+
+## 591e80a2bfbe
+Impact: useful
+Summary: Publish the status with --sync at task boundaries, so the card states come from git, workers and issues.

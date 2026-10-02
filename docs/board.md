@@ -48,7 +48,7 @@ The service adds these fields to each task of `GET /api/projects/<slug>`. The ex
 
 `source` is `null` when the card has no fact. The computed state then equals the published state.
 
-`state` is the board column. It takes the computed result: `done`, `doing` or `review` from a fact, and `blocked` or `ready` from the dependencies for a `todo` card. A stuck card keeps `state` `doing`, because the page has no Stuck lane yet.
+`state` is the board column. It takes the computed result: `done`, `doing` or `review` from a fact, and `blocked` or `ready` from the dependencies for a `todo` card. A stuck card keeps `state` `doing`. The page puts a card with `computedState` `stuck` in the Stuck lane.
 
 ## Stuck rule
 
@@ -68,6 +68,35 @@ A card diverges when the computed state differs from the published state and the
 
 The project list row has `boardDiverged`: the number of diverged cards. `boardStuck` is the number of stuck cards. `GET /api/projects/<slug>` has the same two counts and the ids in `boardDivergedIds`.
 
+## Badges on the cards
+
+The project board and the Board page show these items on a card. Both pages use the same text from `public/board.js` (`cardFacts`).
+
+- A card with a `source` shows an `auto` badge and the fact. The fact is the short commit id, the worker name, or `#` and the issue number. The title of the fact has the long text, for example `merged abc1234 3 hours ago`.
+- A card with `diverges` `true` also shows both states and the fact: `published: doing, computed: done, merged abc1234 3 hours ago`. A worker fact reads `worker NAME`. An issue fact reads `issue #12`.
+- A card without a `source` shows no badge. A card from a service without the board fields shows no badge.
+- The project page shows one line above the board when `boardDiverged` is greater than 0: `N cards differ from git: <ids>. Publish the status with --sync.` The swimlane of the project on the Board page shows the count.
+- The counts, the flow columns and the progress bar use the computed state. A stuck card counts as doing in the progress bar.
+
+A card done by a commit counts for the Done column of the Board page from the time of the commit, also when its `updated` time is older or missing.
+
+## Stuck lane
+
+A card with `computedState` `stuck` shows in the Stuck lane. The lane sits between Doing and Review. It shows only while a card is stuck. The card shows the reason and the age: `no live worker and no commit for 3 hours. Last activity 3 h 10 min ago.` The oldest card comes first. On a phone the lane is one more tab in the tab bar. The tab keeps the 48 px height. A saved Stuck tab opens another tab when no card is stuck.
+
+## Digest
+
+The engine checks each project at each tick. It keeps the time when the project first had a divergence. The time restarts when the divergence ends. A paused or stood-down project has no digest and no clock.
+
+1. After more than 30 minutes of divergence, the engine sends the project orchestrator one line: `N cards differ from git: <ids>. Publish the status with --sync.` The line lists at most 10 ids. It goes at most once each hour for each project. A working orchestrator receives it when it is idle or done.
+2. After 3 hours of divergence, the engine sends the Boss one notice for that divergence period.
+
+The engine finds the orchestrator pane in the live Herdr pane list at each tick, by the workspace of the project and the label `orch`. It does not keep a pane id. The once-each-hour record belongs to the project, so a pane id change does not send the line again. The code is in `src/board-digest.js`. The stuck state does not count as a divergence, so it sends no digest.
+
+## Publish with sync
+
+`herdr-boss publish SLUG FILE --sync` reads the same facts as the service: git log of the base branch, the worker records and the issue tracker. It sets `status` of each card that diverges to its computed state before it installs the status. A stuck card gets `doing`. It prints one line with the number of cards that changed, and one `sync:` line for each card on standard error. A card without a fact keeps its status. The `--force` check for a live worker runs after the sync. Without `--sync` the status stays as the file has it. The code is in `src/board-sync.js`.
+
 ## Cache
 
 - Git: the service reads `git log` of each registered project at most once each minute. The read is asynchronous, so no tick and no request waits for git. It runs `git -C <repo> log` with a 5 second timeout and without a shell. It never runs a git command that writes. The overlay uses the last answer.
@@ -80,6 +109,6 @@ The project list row has `boardDiverged`: the number of diverged cards. `boardSt
 - The issue number of a card is the number in `tasks[].url` (`.../issues/<n>`). A card without such a URL uses its id when the id is only digits.
 - A published `done` card stays `done` against worker facts. Only a live worker started after the done commit, or an open issue, reopens it.
 - A commit wins over an open issue. A merged commit that names the task means the work is on the base branch.
-- The stuck state is not a divergence, so the digest of BD2b does not send for it.
-- Analytics today holds no task counts from the published state. It needs no change in BD2a. The state API and the board counts use `state`, which now holds the computed result.
-- The digest to the orchestrator, the notice to the Boss and the kit note belong to BD2b.
+- The stuck state is not a divergence, so the digest does not send for it.
+- Analytics holds no task counts from the published state. The state API and the board counts use `state`, which holds the computed result.
+- The digest, the Boss notice and `publish --sync` are in the sections above. The kit text tells orchestrators to publish with `--sync` at task boundaries.

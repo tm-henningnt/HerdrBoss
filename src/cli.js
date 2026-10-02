@@ -112,7 +112,7 @@ const USAGE = `herdr-boss <command>
   serve [--read-only-preview [--host <address>]] Run the collector loop and the dashboard server.
                               The preview binds 127.0.0.1 unless --host names another address.
   tick [--json]         Collect once and print alerts. Sends nothing, terminates nothing.
-  publish <slug> <file> [--force] Validate a project status file and install it. Use "-" for stdin.
+  publish <slug> <file> [--force] [--sync] Validate a project status file and install it. Use "-" for stdin. --sync sets each card state from git, workers and issues first.
                         Refuses a live worker on a task that is not doing, unless --force.
   install               Install and start the launchd agent.
   uninstall             Stop and remove the launchd agent.
@@ -854,8 +854,9 @@ async function main() {
     }
     case 'publish': {
       const force = args.includes('--force');
-      const [slug, file] = args.filter((arg) => arg !== '--force');
-      if (!slug || !file) { console.error('usage: herdr-boss publish <slug> <file|-> [--force]'); process.exit(2); }
+      const sync = args.includes('--sync');
+      const [slug, file] = args.filter((arg) => arg !== '--force' && arg !== '--sync');
+      if (!slug || !file) { console.error('usage: herdr-boss publish <slug> <file|-> [--force] [--sync]'); process.exit(2); }
       const text = file === '-' ? fs.readFileSync(0, 'utf8') : fs.readFileSync(file, 'utf8');
       const data = JSON.parse(text);
       let top = null;
@@ -884,22 +885,44 @@ async function main() {
         if (result.findings.length) console.error(`warning: ${result.summary}. Run herdr-boss check agents.`);
         data.agentsCheck = { checkedAt: new Date().toISOString(), errors: result.errors, warnings: result.warnings, file: result.file };
       }
-      if (!force && top && data && typeof data === 'object' && Array.isArray(data.tasks)) {
-        // A live worker on a task that is not doing means the status is wrong. A failed check never blocks a publish.
-        let conflicts = [];
+      // The worker facts of this repository. Only a working or blocked agent counts. When Herdr lists nothing, no
+      // worker is live. A failed read gives no facts.
+      let projectConfig = null;
+      let workerFacts = null;
+      const readFacts = async () => {
+        if (workerFacts) return workerFacts;
+        workerFacts = [];
         try {
-          const { readWorkerFacts, publishConflicts, gitIsMerged, agentStatuses } = await import('./task-state.js');
+          const { readWorkerFacts, gitIsMerged, agentStatuses } = await import('./task-state.js');
           const { createHerdrRunner } = await import('./kit/workers.js');
-          const projectConfig = loadProjectConfig({ cwd: top });
-          // Only a working or blocked agent counts. When Herdr lists nothing, no worker blocks the publish.
+          projectConfig = loadProjectConfig({ cwd: top });
           let statuses = null;
           try { statuses = agentStatuses(createHerdrRunner()(['agent', 'list'])); } catch {}
-          const facts = readWorkerFacts(projectConfig.runsPath, {
+          workerFacts = readWorkerFacts(projectConfig.runsPath, {
             isLive: (run) => Boolean(statuses?.has(run.name)),
             agentStatus: (run) => statuses?.get(run.name) ?? null,
             isMerged: gitIsMerged(projectConfig.root),
           });
-          conflicts = publishConflicts(data, facts);
+        } catch {}
+        return workerFacts;
+      };
+      if (sync) {
+        if (top && data && typeof data === 'object' && Array.isArray(data.tasks)) {
+          const { syncStatuses } = await import('./board-sync.js');
+          const { readCommits, readIssues } = await import('./board-facts.js');
+          const workers = await readFacts();
+          const branch = projectConfig?.baseBranch || 'main';
+          const changed = syncStatuses(data, { workers, facts: { commits: await readCommits(top, { branch }), issues: await readIssues(top) } });
+          for (const { id, from, to } of changed) console.error(`sync: ${id} ${from} -> ${to}`);
+          console.log(`synced ${changed.length} ${changed.length === 1 ? 'card' : 'cards'} from git and workers`);
+        } else console.error('warning: --sync needs a Git repository and a status with tasks. No card changed.');
+      }
+      if (!force && top && data && typeof data === 'object' && Array.isArray(data.tasks)) {
+        // A live worker on a task that is not doing means the status is wrong. A failed check never blocks a publish.
+        let conflicts = [];
+        try {
+          const { publishConflicts } = await import('./task-state.js');
+          conflicts = publishConflicts(data, await readFacts());
         } catch {}
         if (conflicts.length) {
           for (const line of conflicts) console.error(`error: ${line}.`);

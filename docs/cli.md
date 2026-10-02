@@ -92,7 +92,9 @@ The service keeps the last 100 probe attempts in `quota-probe-history.jsonl`. Ea
 
 | Command | Action |
 |---|---|
-| `herdr-boss publish SLUG FILE [--force]` | Validate a status file and install it for `/projects/SLUG`. Use `-` for standard input. Refuse a status in which a task has a live worker but is not `doing`. `--force` skips this check. Schema: [project-status.md](project-status.md). |
+| `herdr-boss publish SLUG FILE [--force] [--sync]` | Validate a status file and install it for `/projects/SLUG`. Use `-` for standard input. Refuse a status in which a task has a live worker but is not `doing`. `--force` skips this check. `--sync` sets each card state from git, workers and issues before the install and prints how many cards changed. Schema: [project-status.md](project-status.md). |
+
+`publish --sync` reads the commits of the base branch, the run records and the issue tracker of the project in the Git top level, with the rules of [board.md](board.md). It sets `status` of each card that differs from its computed state. A card without a fact keeps its status. The command prints `synced N cards from git and workers` and one `sync: ID from -> to` line on standard error for each changed card. Use it at each task boundary. The check below runs after the sync.
 
 `publish` reads the run records of the project in the Git top level. A worker blocks the publish when all of these are true:
 
@@ -125,7 +127,7 @@ Each task has these fields. The fields `state`, `stateSource`, `publishedStatus`
 - `diverges`: `true` when `computedState` differs from `publishedState`.
 - `stuck`: `{ reason, ageMin }` when `computedState` is `stuck`, otherwise `null`.
 
-`state` is the board column. It uses the computed result. A stuck card keeps `state` `doing`.
+`state` is the board column. It uses the computed result. A stuck card keeps `state` `doing`. The page shows a card with `computedState` `stuck` in the Stuck lane.
 
 Each project has `boardDiverged` (the number of cards that diverge), `boardDivergedIds` and `boardStuck`. The project list row has the same counts. The overlay never writes the status file. See [board.md](board.md).
 

@@ -37,6 +37,7 @@ import { openMessageStore } from './message-store.js';
 import { readKitNotice, pendingKitAlert, isKitAlert, kitNoticeTargets, unsentKitChanges, formatKitNotice, KIT_ADOPT_STEPS } from './kit-notice.js';
 import { applyTaskState, readWorkerFacts, gitIsMerged, gitCounts } from './task-state.js';
 import { BoardFactsCache } from './board-facts.js';
+import { boardDigestAlerts, isBoardDigest } from './board-digest.js';
 import { kitRevisionState, kitSnapshot, KIT_STATES } from './kit/agents-check.js';
 import { nextDailyTime, nightNoticeSent, quietHoursActive, readNight, readNightRecord, watchUntilPhrase, withNightReportMark, withNoticeMark, writeNight } from './night.js';
 import { inspectWorkerTransitions, inspectWorkerReports, readBoundedWorkerReport, isWorkerPane, applyWorkerFailureStatuses, resolveWorkerRun, activeUnavailableModels, extendModelUnavailability, workerModelCooldown, activeFreeModelExhaustions, extendFreeModelExhaustion } from './worker-failures.js';
@@ -1283,6 +1284,7 @@ export class Engine extends EventEmitter {
         }
         const kitAlert = pendingKitAlert(this.memory.kitNotice, now);
         if (kitAlert) evaluation.alerts.push(kitAlert);
+        evaluation.alerts.push(...boardDigestAlerts({ projects: snap.projects, tracker: (this.memory.boardDiverged ||= {}), now, held: (slug) => projectHeld(slug, snap.projects, snap.control) }));
         evaluation.alerts.push(...kitReminderAlerts({ projects: snap.projects, tracker: (this.memory.kitBehind ||= {}), now, current: snap.kit.current, changes: snap.kit.changes, held: (slug) => projectHeld(slug, snap.projects, snap.control) }));
       }
       this.memory.quotaRecoveries ||= {};
@@ -2928,6 +2930,8 @@ export class Engine extends EventEmitter {
         if (isKitAlert(a)) targets = kitNoticeTargets(orchs, held);
         // A kit reminder goes to the project orchestrator in any state.
         if (a.key.startsWith('kitremind:')) targets = kitNoticeTargets(targets.filter((o) => o.label === 'orch'), held);
+        // A board digest goes to the project orchestrator only, and not to a held project.
+        if (isBoardDigest(a)) targets = kitNoticeTargets(targets.filter((o) => o.label === 'orch'), held);
         if (isStaleStatusAlert(a)) {
           const target = targets.find((o) => o.workspace === a.scope && o.label === 'orch');
           targets = target ? [target] : [];
@@ -2938,7 +2942,7 @@ export class Engine extends EventEmitter {
         }
         for (const o of targets) {
           const rec = this.memory.pushes[`${a.key}@${o.id}`];
-          const projectRec = isStaleStatusAlert(a) || a.key.startsWith('workers:uncollected:') ? this.memory.pushes[`${a.key}@project`] : null;
+          const projectRec = isStaleStatusAlert(a) || isBoardDigest(a) || a.key.startsWith('workers:uncollected:') ? this.memory.pushes[`${a.key}@project`] : null;
           const due = alertPromptDue(a, projectRec || rec, now, cooldown);
           if (!due) continue;
           // Keep the first due time while the item stays active, including across engine restarts.
@@ -3004,7 +3008,7 @@ export class Engine extends EventEmitter {
           for (const a of sentAlerts) {
             const record = { at: now, severity: a.severity };
             this.memory.pushes[`${a.key}@${o.id}`] = record;
-            if (isStaleStatusAlert(a) || a.key.startsWith('workers:uncollected:')) this.memory.pushes[`${a.key}@project`] = record;
+            if (isStaleStatusAlert(a) || isBoardDigest(a) || a.key.startsWith('workers:uncollected:')) this.memory.pushes[`${a.key}@project`] = record;
           }
           if (sentAlerts.some((a) => !isKitAlert(a) && (SEV[a.severity] < SEV.warn || joinsNoticeDigest(a)))) this.memory.infoPrompts[o.id] = now;
           const kitSent = sentAlerts.find((a) => isKitAlert(a));

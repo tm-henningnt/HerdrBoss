@@ -22,8 +22,8 @@ function sample() {
 }
 const groups = [{ id: 'm1', title: 'M1' }, { id: 'm2', title: 'M2' }];
 
-test('the flow has five columns in order', () => {
-  assert.deepEqual(FLOW, ['blocked', 'ready', 'doing', 'review', 'done']);
+test('the flow has six columns in order', () => {
+  assert.deepEqual(FLOW, ['blocked', 'ready', 'doing', 'stuck', 'review', 'done']);
 });
 
 test('taskState uses the overlay state and derives a state for a task without one', () => {
@@ -192,7 +192,7 @@ test('fleetItems holds each open task of each project and the done tasks of the 
   const items = fleetItems(fleet(now), { now });
   assert.deepEqual(items.map((i) => `${i.slug}/${i.task.id}`).sort(), ['north/N2', 'north/N3', 'north/N4', 'north/N5', 'south/S1', 'south/S2', 'south/S3']);
   const board = fleetColumns(items);
-  assert.deepEqual(board.counts, { blocked: 2, ready: 1, doing: 2, review: 1, done: 1 });
+  assert.deepEqual(board.counts, { blocked: 2, ready: 1, doing: 2, stuck: 0, review: 1, done: 1 });
   assert.deepEqual(board.columns.doing.map((i) => i.task.id), ['S3', 'N3'], 'the longest-running worker comes first');
   assert.equal(items.find((i) => i.task.id === 'N5').key, 'north/N5');
 });

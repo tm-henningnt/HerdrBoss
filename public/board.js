@@ -1,8 +1,8 @@
 // Pure view logic of the project board and the dependency graph. Both use the same states.
 // The service adds state, worker, and blockers to each task (src/task-state.js). A task without them gets a derived state here.
 
-export const FLOW = ['blocked', 'ready', 'doing', 'review', 'done'];
-export const FLOW_LABEL = { blocked: 'Blocked', ready: 'Ready', doing: 'Doing', review: 'Review', done: 'Done' };
+export const FLOW = ['blocked', 'ready', 'doing', 'stuck', 'review', 'done'];
+export const FLOW_LABEL = { blocked: 'Blocked', ready: 'Ready', doing: 'Doing', stuck: 'Stuck', review: 'Review', done: 'Done' };
 export const DONE_LIMIT = 10;
 
 const FLOW_SET = new Set(FLOW);
@@ -27,7 +27,14 @@ export function openBlockers(t, map) {
   return blockerIds(t).filter((id) => !doneOnly(map.get(id)));
 }
 
+// The lanes that a board shows. The Stuck lane shows only when a card is stuck.
+export function visibleLanes(counts = {}) {
+  return FLOW.filter((k) => k !== 'stuck' || counts.stuck > 0);
+}
+
 export function taskState(t, map = new Map()) {
+  // The service keeps state doing on a stuck card. The computed state decides the lane.
+  if (t?.computedState === 'stuck' && t.state === 'doing') return 'stuck';
   if (FLOW_SET.has(t?.state)) return t.state;
   const status = t?.status || 'todo';
   if (status === 'done' || status === 'doing' || status === 'review') return status;
@@ -150,6 +157,15 @@ const time = (value) => {
   return Number.isFinite(ms) ? ms : null;
 };
 
+// The time of a done card: the newest of its update time and the time of the fact that made it done.
+const doneTime = (t) => {
+  const times = [time(t?.updated), t?.source?.kind === 'commit' || t?.computedState === 'done' ? time(t?.source?.at) : null].filter((v) => v != null);
+  return times.length ? Math.max(...times) : null;
+};
+
+// The stuck cards sort with the oldest first.
+const stuckAge = (t) => (Number.isFinite(t?.stuck?.ageMin) ? t.stuck.ageMin : 0);
+
 // Each task in its flow column. Ready sorts by priority: the critical path first, then the group order, then the published order.
 // Doing puts the longest-running worker first. Done shows the last DONE_LIMIT tasks by update time unless showAllDone is set.
 export function boardColumns(tasks, { groups = [], showAllDone = false, doneLimit = DONE_LIMIT } = {}) {
@@ -165,7 +181,8 @@ export function boardColumns(tasks, { groups = [], showAllDone = false, doneLimi
   const rank = (t) => (t.id != null && onPath.has(String(t.id)) ? onPath.get(String(t.id)) : Infinity);
   columns.ready.sort((a, b) => rank(a) - rank(b) || (groupOrder.get(a.group) ?? Infinity) - (groupOrder.get(b.group) ?? Infinity) || published(a, b));
   columns.doing.sort((a, b) => (time(a.worker?.startedAt) ?? Infinity) - (time(b.worker?.startedAt) ?? Infinity) || published(a, b));
-  columns.done.sort((a, b) => (time(b.updated) ?? -Infinity) - (time(a.updated) ?? -Infinity) || published(b, a));
+  columns.stuck.sort((a, b) => stuckAge(b) - stuckAge(a) || published(a, b));
+  columns.done.sort((a, b) => (doneTime(b) ?? -Infinity) - (doneTime(a) ?? -Infinity) || published(b, a));
   const counts = Object.fromEntries(FLOW.map((k) => [k, columns[k].length]));
   const hiddenDone = showAllDone ? 0 : Math.max(0, columns.done.length - doneLimit);
   if (hiddenDone) columns.done = columns.done.slice(0, doneLimit);
@@ -203,7 +220,7 @@ export function fleetItems(projects, { now = Date.now(), doneWindowMs = DONE_WIN
     for (const state of FLOW) board.columns[state].forEach((task, rank) => {
       if (state === 'done') {
         // A done task counts only with an update time from the last doneWindowMs up to now. A future time does not count.
-        const age = now - (time(task.updated) ?? -Infinity);
+        const age = now - (doneTime(task) ?? -Infinity);
         if (!(age >= 0 && age <= doneWindowMs)) return;
       }
       const id = task.id != null ? String(task.id) : `~${state}${rank}`;
@@ -220,7 +237,8 @@ export function fleetColumns(items) {
   for (const item of items || []) columns[item.state].push(item);
   const board = (a, b) => a.projectIndex - b.projectIndex || a.rank - b.rank;
   columns.doing.sort((a, b) => (time(a.task.worker?.startedAt) ?? Infinity) - (time(b.task.worker?.startedAt) ?? Infinity) || board(a, b));
-  columns.done.sort((a, b) => (time(b.task.updated) ?? -Infinity) - (time(a.task.updated) ?? -Infinity) || board(a, b));
+  columns.done.sort((a, b) => (doneTime(b.task) ?? -Infinity) - (doneTime(a.task) ?? -Infinity) || board(a, b));
+  columns.stuck.sort((a, b) => stuckAge(b.task) - stuckAge(a.task) || board(a, b));
   for (const k of ['blocked', 'ready', 'review']) columns[k].sort(board);
   const counts = Object.fromEntries(FLOW.map((k) => [k, columns[k].length]));
   return { columns, counts };
@@ -274,4 +292,58 @@ export function elapsedText(startedAt, now = Date.now()) {
   if (d) return `${d}d ${h}h`;
   if (h) return `${h}h ${m}m`;
   return `${m}m`;
+}
+
+// ---------- Card facts ----------
+// The service computes the state of each card from git, workers and issues (docs/board.md). These texts show the fact.
+
+// The age of a time as text: just now, N minutes ago, N hours ago, or N days ago. A missing time gives an empty text.
+export function agoText(at, now = Date.now()) {
+  const ms = time(at);
+  if (ms == null) return '';
+  const min = Math.max(0, Math.floor((now - ms) / 60000));
+  const unit = (n, name) => `${n} ${name}${n === 1 ? '' : 's'} ago`;
+  if (min < 1) return 'just now';
+  if (min < 60) return unit(min, 'minute');
+  if (min < 1440) return unit(Math.floor(min / 60), 'hour');
+  return unit(Math.floor(min / 1440), 'day');
+}
+
+// A length of time in minutes as text: N min, N h M min, or N d M h. Zero parts do not show.
+export function durationText(minutes) {
+  const min = Math.max(0, Math.floor(Number(minutes) || 0));
+  const d = Math.floor(min / 1440), h = Math.floor((min % 1440) / 60), m = min % 60;
+  if (d) return h ? `${d} d ${h} h` : `${d} d`;
+  if (h) return m ? `${h} h ${m} min` : `${h} h`;
+  return `${m} min`;
+}
+
+// The short fact and the long fact text of a source: a commit, a worker, or an issue.
+function sourceTexts(source) {
+  if (source.kind === 'commit') return { fact: source.ref, text: `merged ${source.ref}` };
+  if (source.kind === 'worker') return { fact: source.ref, text: `worker ${source.ref}` };
+  if (source.kind === 'issue') return { fact: `#${source.ref}`, text: `issue #${source.ref}` };
+  return { fact: String(source.ref ?? ''), text: String(source.ref ?? '') };
+}
+
+// What a card shows beside its title. auto: the service computed the state from a fact. fact: the commit short id,
+// the worker name or the issue number. diverge: both states and the fact, when the published state differs.
+// stuck: the reason and the age of a stuck card.
+export function cardFacts(task, now = Date.now()) {
+  const source = task?.source && typeof task.source === 'object' ? task.source : null;
+  const stuck = task?.stuck && task.stuck.reason ? { reason: String(task.stuck.reason), age: `Last activity ${durationText(task.stuck.ageMin)} ago` } : null;
+  if (!source) return { auto: false, fact: '', factTitle: '', diverge: null, stuck };
+  const { fact, text } = sourceTexts(source);
+  const ago = agoText(source.at, now);
+  const factTitle = ago ? `${text} ${ago}` : text;
+  const diverge = task.diverges === true ? `published: ${task.publishedState}, computed: ${task.computedState}, ${factTitle}` : null;
+  return { auto: true, fact, factTitle, diverge, stuck };
+}
+
+// The line of a project with cards that differ from git. An empty text when no card differs.
+export function divergenceText(project) {
+  const count = Number(project?.boardDiverged) || 0;
+  if (count < 1) return '';
+  const ids = Array.isArray(project.boardDivergedIds) ? project.boardDivergedIds : [];
+  return `${count} ${count === 1 ? 'card differs' : 'cards differ'} from git: ${ids.join(', ')}. Publish the status with --sync.`;
 }
