@@ -426,7 +426,7 @@ const yieldTurn = () => new Promise((resolve) => setImmediate(resolve));
 export async function scanSpend({
   dataDir = DATA_DIR, home = os.homedir(), now = Date.now(), panes = [], repos = readProjectRepos(dataDir),
   handoffs = readJson(path.join(dataDir, 'handoffs.json'), []),
-  worktreeRoot = sharedWorktreeRoot(home), budgetBytes = SPEND_BUDGET_BYTES,
+  worktreeRoot = sharedWorktreeRoot(home, dataDir), budgetBytes = SPEND_BUDGET_BYTES,
   maxLineBytes = SPEND_MAX_LINE_BYTES, chunkBytes = SPEND_CHUNK_BYTES, fillUsage = true, usageFile = path.join(dataDir, 'usage.jsonl'),
 } = {}) {
   const state = loadState(dataDir);

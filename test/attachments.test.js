@@ -55,7 +55,7 @@ gpsTiff.writeUInt16LE(2, 40); gpsTiff.writeUInt16LE(5, 42); gpsTiff.writeUInt32L
 for (const [index, value] of [59, 55, 0].entries()) { gpsTiff.writeUInt32LE(value, 56 + index * 8); gpsTiff.writeUInt32LE(1, 60 + index * 8); }
 const gps = Buffer.concat([Buffer.from('Exif\0\0', 'latin1'), gpsTiff]);
 const cfg = loadConfig(); cfg.host = '127.0.0.1'; cfg.port = 0; cfg.tickSeconds = 3600;
-const app = serve(cfg, { createEngine: () => {
+const app = serve(cfg, { liveDataDir: process.env.HERDR_BOSS_DIR, createEngine: () => {
   const engine = new EventEmitter(); engine.state = { control: { projects: {} } };
   engine.tick = async () => engine.state; engine.log = () => {}; return engine;
 } });

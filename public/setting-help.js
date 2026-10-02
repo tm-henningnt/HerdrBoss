@@ -90,7 +90,7 @@ export const SETTING_GROUPS = [
     controls: 'The values that the service uses: collection intervals, worker clean-up, browser clean-up, and the network address. Each row shows its source.',
     affects: 'Workers, notices, browsers, and the machine. A value here changes when a worker pane closes, a done worker is reported, or an idle browser closes.',
     safe: 'A row with an input is safe to change. A row without an input is read-only. Change it in config.json.',
-    restart: 'A row with an input needs no restart. A read-only row needs a service restart.',
+    restart: 'The push row needs a service restart. Other rows with inputs apply after Save. A read-only row needs a service restart.',
   },
   {
     id: 'analytics', title: 'Analytics', advanced: true,
@@ -586,6 +586,18 @@ export const SETTING_HELP = Object.fromEntries([
   }),
 
   // Service settings
+  S('service', 'worktreeRoot', 'Worktree root', {
+    what: 'The parent folder for new worker worktrees. A project worktreeRoot in .herdr-boss.json takes precedence. Existing worktrees stay in place.',
+    default: '~/Projects/.herdr-wt', unit: 'Path', range: 'An absolute path or a path that starts with ~',
+    raise: 'Set another folder for new worker worktrees. Run herdr-boss harness sync to check harness access.',
+    lower: 'The value does not move or delete existing worktrees.', apply: 'service',
+  }),
+  S('service', 'projectRoot', 'Project root', {
+    what: 'The suggested group folder for New project in the dashboard. An entered group or exact path takes precedence.',
+    default: '~/Projects', unit: 'Path', range: 'An absolute path or a path that starts with ~',
+    raise: 'Set another suggested group folder. The CLI still requires --group or --path.',
+    lower: 'The value does not move or delete existing projects.', apply: 'service',
+  }),
   S('service', 'staleStatusMinutes', 'Stale status minutes', {
     what: 'The age after which a published project status is stale while workers run or new commits land.',
     default: '120', unit: 'Minutes', range: '5 to 1440',

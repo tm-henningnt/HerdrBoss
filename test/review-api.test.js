@@ -131,6 +131,7 @@ async function start(t, { preview = false } = {}) {
   cfg.tickSeconds = 3600;
   let engine;
   const { server, close } = serve(cfg, {
+    liveDataDir: process.env.HERDR_BOSS_DIR,
     readOnlyPreview: preview,
     createEngine: () => {
       engine = new EventEmitter();

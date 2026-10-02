@@ -20,7 +20,7 @@ export function failureMessage(status, apiError) {
 
 const failure = (message, extra) => Object.assign(new Error(message), extra);
 
-export function createWizard({ view, fetchJson, storage, setTimer, clearTimer, confirmClose }) {
+export function createWizard({ view, fetchJson, storage, setTimer, clearTimer, confirmClose, suggestedGroup = () => '' }) {
   const w = { draft: null, step: 'name', errors: [], plan: null, planning: false, busy: false, message: '', readOnly: false, run: null, check: null, timer: null, focus: false, stalled: false, failures: 0 };
 
   function render() {
@@ -45,6 +45,7 @@ export function createWizard({ view, fetchJson, storage, setTimer, clearTimer, c
 
   async function open() {
     if (!w.draft) w.draft = loadDraft(storage);
+    if (w.draft.folderMode === 'group' && !w.draft.group && !w.draft.path) w.draft.group = suggestedGroup();
     w.errors = []; w.message = ''; w.focus = true;
     if (!view.isOpen()) view.show();
     render();
@@ -66,6 +67,7 @@ export function createWizard({ view, fetchJson, storage, setTimer, clearTimer, c
   function discard() {
     stopPolling();
     Object.assign(w, { run: null, check: null, plan: null, step: 'name', message: '', errors: [], stalled: false, failures: 0, draft: emptyDraft(), focus: true });
+    w.draft.group = suggestedGroup();
     try { storage.removeItem(DRAFT_KEY); } catch { /* Storage can be off. */ }
     render();
   }

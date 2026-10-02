@@ -48,7 +48,7 @@ export function validateStep(step, draft) {
     if (draft.folderMode === 'path') {
       if (!String(draft.path).trim()) errors.push('Enter the full path of the project folder.');
     } else {
-      if (!String(draft.group).trim()) errors.push('Enter the group folder. Herdr Boss has no default folder.');
+      if (!String(draft.group).trim()) errors.push('Enter the group folder.');
       const name = String(draft.name || draft.slug).trim();
       if (/[\\/\0]/.test(name) || name === '..' || name.startsWith('.')) errors.push('With a group folder the name must be one folder name: no slash, no "..", no leading dot.');
     }
@@ -133,7 +133,7 @@ function stepBody(step, d) {
     const path = d.folderMode === 'path';
     return `<fieldset class="wizard-group"><legend>Where does the project go?</legend>${radio('folderMode', 'group', d.folderMode, 'In a group folder', 'The project folder is the group folder plus the name.')}${radio('folderMode', 'path', d.folderMode, 'At an exact path', 'The folder must not exist or must be empty.')}</fieldset>`
       + (path ? field('wiz-path', 'Project path', text('wiz-path', d.path, 'aria-label="Project path" placeholder="/Users/you/Projects/my-project" data-wizard-first'), 'The full path of the project folder.')
-        : field('wiz-group', 'Group folder', text('wiz-group', d.group, 'aria-label="Group folder" placeholder="/Users/you/Projects" data-wizard-first'), 'The full path of the folder that holds the project folder. Herdr Boss has no default folder.'));
+        : field('wiz-group', 'Group folder', text('wiz-group', d.group, 'aria-label="Group folder" placeholder="/path/to/projects" data-wizard-first'), 'The full path of the folder that holds the project folder. Settings supplies the suggested group. You can change it.'));
   }
   if (step === 'remote') {
     const gh = d.remote === 'gh';

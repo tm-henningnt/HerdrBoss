@@ -677,6 +677,7 @@ async function startServer(t) {
   const cfg = loadConfig();
   Object.assign(cfg, { host: '127.0.0.1', port: 0, tickSeconds: 3600 });
   const { server, close } = serve(cfg, {
+    liveDataDir: process.env.HERDR_BOSS_DIR,
     createEngine: () => {
       const engine = new EventEmitter();
       engine.state = {};

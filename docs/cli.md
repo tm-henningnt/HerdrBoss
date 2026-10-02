@@ -6,6 +6,12 @@ Run project commands (`worker`, `worktree`, `ledger`, `check`, `gh`) from inside
 
 ## Service
 
+`serve` stops before it writes a file when the data directory and the live data directory differ. The default for both is `~/.herdr-boss`. `HERDR_BOSS_DIR` selects the data directory. `HERDR_BOSS_LIVE_DIR` selects the live data directory. The configured paths must match after path normalization. Two different paths to the same directory do not pass the check. This is the same rule that enables engine actions. Use `--read-only-preview` with a separate temporary data directory for a preview.
+
+Set `worktreeRoot` and `projectRoot` in `config.json`, or in **Settings → Advanced → Service settings → Paths**. Select **Save**. Use an absolute path or a path that starts with `~`. The defaults are `~/Projects/.herdr-wt` and `~/Projects`. A project `worktreeRoot` in `.herdr-boss.json` takes precedence for its workers. The new root applies to new workers, leases, harness checks, and log attribution. Run `herdr-boss harness sync` after a worktree root change. Existing worktrees stay in place.
+
+`projectRoot` supplies the suggested group folder for **New project** in the dashboard. An entered group or exact path takes precedence. The CLI still requires `--group` or `--path`.
+
 | Command | Action |
 |---|---|
 | `herdr-boss install` | Install and start the macOS launchd agent `no.tallmaker.herdr-boss`. Run it again after you move the repository. |
@@ -607,7 +613,7 @@ The card **Stand down** on the Agents page uses `POST /api/watch/standdown` and 
 | Command | Action |
 |---|---|
 | `harness check [--live-codex]` | Check the harness settings that orchestration needs. Print one line per entry: `ok`, `missing`, or `bad`, the harness, and the entry. The Claude `**Herdr Boss projects**` line passes for a project when it names the project path, or names a parent folder of the project and states the marker file `docs/orchestration/herdr-boss.md`. The output names the parent folder of a covered project. Exit 1 when an entry is `missing` or `bad`. The command prints only paths and entry names. Owner lines that the Claude template does not define are not findings. `--live-codex` also runs one `codex exec -s workspace-write` with the worker shell variables of the caller pane. It passes when the tool shell has `HERDR_ENV` and `HERDR_PANE_ID`, and it prints only `set` or `missing`. The timeout is 180 seconds. Without `--live-codex`, the command calls no model. |
-| `harness sync [--dry-run] [--codex-only]` | Back up `~/.codex/config.toml` to `config.toml.bak-<UTC timestamp>`, and add the missing roots to `writable_roots` in `[sandbox_workspace_write]`. The roots are `~/.herdr-boss`, `~/Projects/.herdr-wt`, and `<repo>/.git` for each registered project. Then compare the Claude template with `autoMode` and print only its differences. `--dry-run` prints the roots to add and writes nothing. `--codex-only` skips the Claude check. |
+| `harness sync [--dry-run] [--codex-only]` | Back up `~/.codex/config.toml` to `config.toml.bak-<UTC timestamp>`, and add the missing roots to `writable_roots` in `[sandbox_workspace_write]`. The roots are `~/.herdr-boss`, the service worktree root (default `~/Projects/.herdr-wt`), and `<repo>/.git` for each registered project. Then compare the Claude template with `autoMode` and print only its differences. `--dry-run` prints the roots to add and writes nothing. `--codex-only` skips the Claude check. |
 | `harness change <harness> <label> [--date YYYY-MM-DD]` | Append one line to `harness-changes.jsonl` in the data directory. The line marks the day of a harness fix on the denial chart of the Analytics page. `<harness>` is `claude`, `codex`, `opencode`, or `pi`. `<label>` has 1 to 80 characters. The default date is today in local time. Only the pane labeled `boss`, a pane labeled `orch`, and a plain terminal can run it. A worker pane is refused. The command validates every field, writes nothing on an error, and exits 1. See [Denials per day](user-guide.md#denials-per-day). |
 
 `harness sync` keeps each existing root and each other line of the Codex file. It adds `~/.herdr-boss` and `<repo>/.git` for each registered project, when they are missing. When the Codex section or array is missing or cannot be parsed safely, it changes nothing, prints the roots to add, and exits 1.
@@ -852,7 +858,7 @@ OpenCode starts share one machine-wide start lock. The lock stays held until the
 
 After a final start failure, startup closes the failed pane only when it can confirm ownership and a safe agent state. It archives the brief, available reports, and run record in `.orchestration/reports/<worker name>/` in the main checkout. It removes the active run record after the archive succeeds. It removes the worktree and branch only when the worktree has no changes and no commits beyond the start base. You can then reuse the worker name. The error states why it kept a pane, worktree, branch, or run record. Inspect a retained pane before you retry.
 
-`worker start` puts a new worktree in `~/Projects/.herdr-wt/<repo>/<name>`. It creates the parent folders when they are missing. Set `worktreeRoot` and `worktreeName` in `.herdr-boss.json` to use another place. The dry-run plan shows the worktree path.
+`worker start` puts a new worktree in `<worktreeRoot>/<repo>/<name>`. The service default is `~/Projects/.herdr-wt`. It creates the parent folders when they are missing. Set `worktreeRoot` and `worktreeName` in `.herdr-boss.json` to use another place for one project. The dry-run plan shows the worktree path.
 
 Put task input files in `.orchestration/state/inputs/<worker name>/` in the main checkout. `worker start` copies regular files from that folder into `.worker/inputs/` and keeps their relative paths. It lists the copied paths in the brief. The folder can be empty or missing. Input files and `--copy` files share a 200 MB total limit.
 
@@ -1470,7 +1476,7 @@ The routes need the dashboard login and a same-origin request, as the project-ne
 |---|---|---|
 | `slug` | directory name, lower case | The project slug for status and policy. |
 | `baseBranch` | `main` | The base for new worker branches. |
-| `worktreeRoot` | `~/Projects/.herdr-wt` | The parent folder of the worker worktrees. A leading `~` is the home folder. A relative path is relative to the repository. |
+| `worktreeRoot` | The service setting, default `~/Projects/.herdr-wt` | The parent folder of the worker worktrees. A leading `~` is the home folder. A relative path is relative to the repository. |
 | `worktreeName` | `{repo}/{name}` | The worktree path inside `worktreeRoot`. `{repo}` is the repository folder name. `{name}` is the worker name. Set `worktreeRoot` to `..` and `worktreeName` to `{repo}-wt-{name}` for sibling folders. |
 | `evidenceTiers` | `unit, integration, local-browser, hosted, owner` | The tiers that reports and the ledger accept. |
 | `ledger` | `.orchestration/delegated-runs.jsonl` | The run ledger. |

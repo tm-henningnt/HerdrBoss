@@ -23,6 +23,13 @@ test('the empty draft is private, has no folder, and starts the orchestrator', (
   assert.equal(d.path, '');
 });
 
+test('the folder step explains that Settings supplies an editable suggested group', () => {
+  const html = wizardHtml({ draft: filled(), step: 'folder', errors: [] });
+  assert.match(html, /Settings supplies the suggested group/);
+  assert.doesNotMatch(html, /has no default folder/);
+  assert.match(html, /At an exact path/);
+});
+
 test('the name step refuses a bad slug', () => {
   assert.deepEqual(validateStep('name', filled()), []);
   for (const slug of ['', 'Demo', '-a', 'a b', 'a/b', 'x'.repeat(65)]) assert.equal(validateStep('name', filled({ slug })).length, 1, JSON.stringify(slug));

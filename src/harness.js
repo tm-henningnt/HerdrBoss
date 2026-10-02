@@ -128,7 +128,7 @@ export function parseCodexRoots(text) {
 export function requiredRoots({ home = homeDir(), dataDir = DATA_DIR } = {}) {
   const projects = readProjectRepos(dataDir).map((row) => ({ path: path.join(row.repo, '.git'), slug: row.slug }))
     .sort((a, b) => a.path.localeCompare(b.path));
-  return [{ path: path.join(home, '.herdr-boss'), slug: null }, { path: sharedWorktreeRoot(home), slug: null }, ...projects];
+  return [{ path: path.join(home, '.herdr-boss'), slug: null }, { path: sharedWorktreeRoot(home, dataDir), slug: null }, ...projects];
 }
 
 function quote(value) { return JSON.stringify(value); }
@@ -148,7 +148,8 @@ export function projectList(dataDir = DATA_DIR) {
 
 export function fillTemplate(text, { home = homeDir(), dataDir = DATA_DIR, url = 'http://127.0.0.1:4477' } = {}) {
   const values = { HOME: home, UID: String(process.getuid?.() ?? ''), HERDR_BOSS_REPO: ROOT, HERDR_BOSS_URL: url, PROJECT_LIST: projectList(dataDir) };
-  return text.replace(/\{\{([A-Z_]+)\}\}/g, (all, name) => (name in values ? values[name] : all));
+  return text.replaceAll('{{HOME}}/Projects/.herdr-wt', sharedWorktreeRoot(home, dataDir))
+    .replace(/\{\{([A-Z_]+)\}\}/g, (all, name) => (name in values ? values[name] : all));
 }
 
 function stamp(date = new Date()) { return date.toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z'); }
@@ -429,7 +430,7 @@ export function checkHarness({ home = homeDir(), dataDir = DATA_DIR, modelsFile 
     const exposing = roots.filter((root) => inside(secret, root));
     if (exposing.length) add('bad', 'codex writable_roots', 'Private config folder not writable', `${exposing.join(', ')} makes ${secret} writable; ${secret} must not be writable`);
     else add('ok', 'codex writable_roots', 'Private config folder not writable', `${secret} is not writable`);
-    const worktrees = sharedWorktreeRoot(home);
+    const worktrees = sharedWorktreeRoot(home, dataDir);
     add(roots.some((root) => samePath(root, worktrees)) ? 'ok' : 'missing', 'codex writable_roots', 'Worker worktrees root', `${worktrees} (worker worktrees)`);
     // Workers commit through the .git folder of the main repository.
     for (const project of projects) {

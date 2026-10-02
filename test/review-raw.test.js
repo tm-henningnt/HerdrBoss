@@ -102,6 +102,7 @@ async function start(t, { preview = false, rawTokens } = {}) {
   cfg.port = 0;
   cfg.tickSeconds = 3600;
   const { server, close } = serve(cfg, {
+    liveDataDir: process.env.HERDR_BOSS_DIR,
     readOnlyPreview: preview,
     rawTokens,
     createEngine: () => {

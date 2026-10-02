@@ -31,6 +31,37 @@ export function resolveAlias(target) {
   }
 }
 
+// Refuse an active service before it writes credentials, state, or action records.
+export function assertLiveDataDir(liveDataDir = LIVE_DATA_DIR) {
+  if (DATA_DIR !== path.resolve(liveDataDir)) {
+    throw new Error(`Herdr Boss cannot start: the data directory ${DATA_DIR} differs from the live data directory ${liveDataDir}. Use the live directory for serve. Use --read-only-preview for a separate data directory.`);
+  }
+  return DATA_DIR;
+}
+
+export const ROOT_DEFAULTS = Object.freeze({ worktreeRoot: '~/Projects/.herdr-wt', projectRoot: '~/Projects' });
+
+export function resolveRootPath(value, home = os.homedir()) {
+  if (typeof value !== 'string' || !value.trim() || /[\u0000-\u001f\u007f]/.test(value)
+    || !(path.isAbsolute(value) || value === '~' || value.startsWith('~/'))) {
+    throw new Error('A root must be an absolute path or a path that starts with ~. Control characters are not allowed.');
+  }
+  return path.resolve(value === '~' ? home : value.startsWith('~/') ? path.join(home, value.slice(2)) : value);
+}
+
+// Read roots without creating the data directory. CLI consumers use the saved values on each invocation.
+export function readRootSettings({ dataDir = DATA_DIR } = {}) {
+  let config = {};
+  try { config = JSON.parse(fs.readFileSync(path.join(dataDir, 'config.json'), 'utf8')); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  const roots = { ...ROOT_DEFAULTS };
+  for (const setting of Object.keys(roots)) {
+    if (Object.hasOwn(config, setting)) roots[setting] = config[setting];
+    try { resolveRootPath(roots[setting]); } catch (error) { throw new Error(`${setting}: ${error.message}`); }
+  }
+  return roots;
+}
+
 // A preview tick writes state.json, rules.json, bulletin.md, and quota history. Refuse a preview that would write them
 // into the service data directory. Compare real paths, so a symlink cannot point the preview at that directory. A data
 // directory that holds files from an earlier preview is allowed. Call this before loadConfig() and before serve() write
@@ -76,6 +107,7 @@ export function assertDataWritable(dir = DATA_DIR) {
 }
 
 const DEFAULTS = {
+  ...ROOT_DEFAULTS,
   store: { messages: 'json' },
   port: 4477,
   host: '0.0.0.0',
@@ -120,6 +152,8 @@ const DEFAULTS = {
 
 const CONFIG_SOURCE = Symbol('configSource');
 const SERVICE_SETTINGS = [
+  ['Paths', 'worktreeRoot'],
+  ['Paths', 'projectRoot'],
   ['Machine', 'machine.memFreeWarnPercent'],
   ['Quota', 'quota.warnPercent'],
   ['Quota', 'quota.criticalPercent'],
@@ -342,7 +376,7 @@ export function serviceSettingsView(cfg) {
     return {
       group,
       setting,
-      value: value && typeof value === 'object' ? structuredClone(value) : value,
+      value: Object.hasOwn(ROOT_DEFAULTS, setting) ? resolveRootPath(value) : value && typeof value === 'object' ? structuredClone(value) : value,
       source: isConfigured ? 'config' : 'default',
     };
   });
@@ -395,6 +429,11 @@ function validateServiceSettingValues(changes) {
   const normalizedChanges = {};
   for (const [setting, value] of entries) {
     const range = SERVICE_SETTING_RANGES.get(setting);
+    if (Object.hasOwn(ROOT_DEFAULTS, setting)) {
+      try { resolveRootPath(value); } catch (error) { throw new Error(`${setting}: ${error.message}`); }
+      normalizedChanges[setting] = value;
+      continue;
+    }
     if (setting === 'watch.maxWorkersByLane') {
       if (!isRecord(value)) throw new Error('watch.maxWorkersByLane must be an object of optional lane caps.');
       const normalized = { ...DEFAULTS.watch.maxWorkersByLane };

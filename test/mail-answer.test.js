@@ -139,6 +139,7 @@ test('the chat routes leave out a Mailbox answer and give a card its answer', { 
   cfg.port = 0;
   cfg.tickSeconds = 3600;
   const { server, close } = serve(cfg, {
+    liveDataDir: process.env.HERDR_BOSS_DIR,
     createEngine: () => {
       const engine = new EventEmitter();
       engine.state = { control: { projects: { alpha: { project: 'Alpha Project', orch: { pane: 'wA:p1' } } } } };
@@ -188,6 +189,7 @@ test('an Owner reply to a plain chat reply stays in Chat and does not close the 
   cfg.port = 0;
   cfg.tickSeconds = 3600;
   const { server, close } = serve(cfg, {
+    liveDataDir: process.env.HERDR_BOSS_DIR,
     createEngine: () => {
       const engine = new EventEmitter();
       engine.state = { control: { projects: { alpha: { project: 'Alpha Project', orch: { pane: 'wA:p1' } } } } };

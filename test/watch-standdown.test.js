@@ -62,6 +62,7 @@ function startServer(t, { readOnlyPreview = false, shares = 'default', projects 
   cfg.port = 0;
   cfg.tickSeconds = 3600;
   const { server, close } = serve(cfg, {
+    liveDataDir: process.env.HERDR_BOSS_DIR,
     readOnlyPreview,
     createEngine: (config) => {
       const engine = new EventEmitter();

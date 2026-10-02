@@ -96,6 +96,7 @@ async function poolServer(t, pools) {
   cfg.port = 0;
   let engine;
   const { server, close } = serve(cfg, {
+    liveDataDir: process.env.HERDR_BOSS_DIR,
     createEngine: (engineCfg, options) => {
       engine = new Engine(engineCfg, { ...options, act: false, push: false });
       engine.state = { resourceLeases: { pools: [], errors: [], leases: [] } };

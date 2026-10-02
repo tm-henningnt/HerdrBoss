@@ -417,6 +417,7 @@ async function startServer(t) {
   cfg.port = 0;
   cfg.tickSeconds = 3600;
   const { server, close } = serve(cfg, {
+    liveDataDir: process.env.HERDR_BOSS_DIR,
     createEngine: () => {
       const engine = new EventEmitter();
       engine.state = { control: { projects: { alpha: { slug: 'alpha', label: 'Alpha', workspace: 'wA', orch: { pane: 'wA:p1' } } } }, herdr: { panes: [] } };
