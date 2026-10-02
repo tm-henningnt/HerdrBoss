@@ -321,6 +321,28 @@ test('a submitted pack is a read-only summary: the decisions and notes, the resu
   assert.doesNotMatch(expired, /review-delivery|<textarea/);
 });
 
+test('a locked open item links to its carried copy or asks the planner to reopen it', () => {
+  const submitted = fullPack({ state: 'submitted', closedAt: '2026-09-30T09:00:00.000Z' });
+  const open = submitted.items.find((entry) => entry.id === 'error-copy');
+  open.nextPack = { pack: 'next-round', title: 'Next round' };
+  const linked = packPageHtml(submitted, { item: 'error-copy' }, helpers());
+  assert.match(linked, /This pack is submitted\. The open item is in <a[^>]*href="\/reviews\/shop\/next-round\/error-copy"[^>]*>Next round<\/a>\./);
+  const noNext = fullPack({ state: 'submitted', closedAt: '2026-09-30T09:00:00.000Z' });
+  assert.match(packPageHtml(noNext, { item: 'error-copy' }, helpers()), /This pack is submitted\. Ask the planner to reopen the item\./);
+  const reopened = fullPack({ state: 'submitted' });
+  reopened.items.find((entry) => entry.id === 'error-copy').reopened = true;
+  assert.match(packPageHtml(reopened, { item: 'error-copy' }, helpers()), /data-review-answer/);
+});
+
+test('submit confirmation lists open item titles and offers two clear actions', () => {
+  const page = packPageHtml(fullPack(), { submitConfirm: true }, helpers());
+  assert.match(page, /1 item is still open: submit anyway, or answer it first\./);
+  assert.match(page, /Title error-copy/);
+  assert.match(page, /data-review-submit-anyway[^>]*>Submit anyway/);
+  assert.match(page, /data-review-answer-open="error-copy"[^>]*>Answer it first/);
+  assert.match(page, /data-review-submit-cancel[^>]*>Cancel/);
+});
+
 test('the verdict chip of a result is not cut', () => {
   assert.match(css, /\.review-result \.review-chip \{[^}]*max-width: none/);
 });
@@ -490,12 +512,18 @@ test('the submit confirm names the pack, the version, the verdict, and each coun
   assert.match(submitConfirmText(fullPack(), 'deny'), /Verdict: Deny pack\n/);
 });
 
-test('the app asks for the confirm before the submit request and keeps the button disabled while it runs', () => {
-  const body = /\nasync function submitReview\(\) \{([\s\S]*?)\n\}/.exec(app)?.[1];
+test('the app asks about open items before the submit request and keeps the button disabled while it runs', () => {
+  const body = /\nasync function submitReview\(allowOpen = false\) \{([\s\S]*?)\n\}/.exec(app)?.[1];
   assert.ok(body, 'the UI defines submitReview');
+  assert.match(body, /submitConfirm = true/);
+  assert.match(app, /data-review-submit-anyway/);
+  assert.match(app, /data-review-answer-open/);
+  assert.match(app, /data-review-submit-cancel/);
+  assert.match(app, /e\.key !== 'Escape' \|\| !document\.querySelector\('\.review-submit-confirm'\)/);
   const ask = body.indexOf('confirm(submitConfirmText(');
-  assert.ok(ask > 0, 'the submit asks for a confirm');
+  assert.ok(ask > 0, 'the submit without open items asks for a confirm');
   assert.ok(ask < body.indexOf('ui.submitting = true'), 'the confirm comes before the busy state');
+  assert.match(body, /if \(!confirm\(submitConfirmText\(/, 'Submit anyway still asks for the verdict confirmation');
   assert.ok(body.indexOf('ui.submitting = true') < body.indexOf("method: 'POST'"), 'the button is disabled before the request');
   assert.match(body, /error\.status === 409 && error\.body\?\.result/, 'a repeat submit shows the stored result');
 });

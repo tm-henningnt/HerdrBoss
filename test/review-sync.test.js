@@ -624,6 +624,48 @@ test('a queue for a closed pack sends nothing and says why', async () => {
   assert.match(queue.itemStatus(KEY, 'cart').text, /submitted/);
 });
 
+test('a submitted pack sends only an item that the planner reopened', async () => {
+  const storage = fakeStorage();
+  storage.map.set(queueKey('shop', 'checkout', 1), JSON.stringify({ v: 1, ops: [
+    { kind: 'item', item: 'cart', hash: 'h-cart', patch: { decision: 'accept' }, opId: 'op-open', rev: 0, sent: true },
+    { kind: 'item', item: 'locked', hash: 'h-locked', patch: { decision: 'deny' }, opId: 'op-locked', rev: 0, sent: true },
+  ] }));
+  const { queue, fetch } = setup({ storage });
+  queue.restore('shop', 'checkout');
+  fetch.push(
+    { status: 200, body: { slug: 'shop', pack: 'checkout', version: 1, currentVersion: 1, state: 'submitted', items: [
+      { id: 'cart', hash: 'h-cart', reopened: true }, { id: 'locked', hash: 'h-locked' },
+    ] } },
+    { status: 200, body: { ok: true, answer: { decision: 'accept', rev: 1 } } },
+  );
+  queue.retryNow();
+  await drain(20);
+  assert.deepEqual(fetch.calls.filter((call) => call.method === 'PUT').map((call) => call.url.split('/').at(-1)), ['cart']);
+  assert.equal(queue.itemStatus(KEY, 'locked').kind, 'dropped');
+});
+
+test('a submitted pack retries the saved reopened operation but drops a later edit', async () => {
+  const storage = fakeStorage();
+  storage.map.set(queueKey('shop', 'checkout', 1), JSON.stringify({ v: 1, ops: [
+    { kind: 'item', item: 'done', hash: 'h-done', patch: { decision: 'accept' }, opId: 'op-saved', rev: 0, sent: true },
+    { kind: 'item', item: 'done', hash: 'h-done', patch: { note: 'A later edit.' }, opId: 'op-later', rev: 1, sent: true },
+  ] }));
+  const { queue, fetch, events } = setup({ storage });
+  queue.restore('shop', 'checkout');
+  fetch.push(
+    { status: 200, body: { slug: 'shop', pack: 'checkout', version: 1, currentVersion: 1, state: 'submitted', items: [
+      { id: 'done', hash: 'h-done', reopenUsed: true, reopenUsedOpId: 'op-saved' },
+    ] } },
+    { status: 200, body: { ok: true, answer: { decision: 'accept', rev: 1 } } },
+  );
+  queue.retryNow();
+  await drain(20);
+  assert.deepEqual(fetch.calls.filter((call) => call.method === 'PUT').map((call) => call.body.opId), ['op-saved']);
+  assert.equal(queue.pendingCount(KEY), 0);
+  assert.deepEqual(events.map((event) => [event.item, event.answer.decision]), [['done', 'accept']]);
+  assert.equal(queue.itemStatus(KEY, 'done').kind, 'dropped');
+});
+
 test('a newer version re-targets a queued patch when the item hash is unchanged, else marks it changed', async () => {
   const storage = fakeStorage();
   storage.map.set(queueKey('shop', 'checkout', 1), JSON.stringify({ v: 1, ops: [

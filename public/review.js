@@ -337,7 +337,8 @@ function summaryHtml(pack, ui, esc) {
       const note = item.answer?.note ? `<small class="review-sum-note">${esc(item.answer.note)}</small>` : '';
       const chosen = item.state === 'answered' ? `<small>${esc(itemChip(item, pack).label)}</small>` : '';
       const changed = item.stale ? '<small class="review-sum-stale">changed in this version</small>' : '';
-      const go = (group.label === 'Open' || group.label === 'Changed since accepted') && open ? `<a class="review-sum-go" href="${esc(reviewUrl(pack.slug, pack.pack, item.id))}">Review now</a>` : '';
+      const canReview = open || item.reopened === true;
+      const go = (group.label === 'Open' || group.label === 'Changed since accepted') && canReview ? `<a class="review-sum-go" href="${esc(reviewUrl(pack.slug, pack.pack, item.id))}">Review now</a>` : '';
       return `<li><a class="review-sum-title" href="${esc(reviewUrl(pack.slug, pack.pack, item.id))}">${esc(item.title || item.id)}</a>${go}${chosen}${changed}${note}</li>`;
     }).join('');
     return `<div class="review-sum-block"><h3 class="review-sum-h">${group.label} <span class="num">${items.length}</span></h3><ul>${rows}</ul></div>`;
@@ -363,6 +364,20 @@ function summaryHtml(pack, ui, esc) {
     form = `<div class="review-result"><p>${pack.state === 'expired' ? 'Expired' : 'Submitted'}${pack.closedAt ? ` ${esc(ui.time ? ui.time(pack.closedAt) : pack.closedAt)}` : ''} ${chip}</p>${note ? `<p class="review-result-note">${esc(note)}</p>` : ''}${deliveryHtml(pack.delivery ?? ui.delivery, esc)}</div>`;
   }
   return `<section id="review-submit" class="review-summary" aria-labelledby="review-sum-title"><h2 id="review-sum-title">Summary</h2>${warning}${blocks}${form}</section>`;
+}
+
+function submitOpenConfirmHtml(pack, esc) {
+  const items = (pack.items || []).filter((item) => item.state === 'open' || item.state === 'changed');
+  if (!items.length) return '';
+  const plural = items.length === 1;
+  const sentence = plural
+    ? '1 item is still open: submit anyway, or answer it first.'
+    : `${items.length} items are still open: submit anyway, or answer them first.`;
+  const rows = items.map((item) => `<li><b>${esc(item.title || item.id)}</b> <span class="review-submit-open-id">${esc(item.id)}</span></li>`).join('');
+  const answer = plural ? 'Answer it first' : 'Answer them first';
+  return `<div class="review-submit-confirm-backdrop"><section class="review-submit-confirm" role="dialog" aria-modal="true" aria-labelledby="review-submit-confirm-title">`
+    + `<h2 id="review-submit-confirm-title">Open items</h2><p>${sentence}</p><ul>${rows}</ul>`
+    + `<div class="review-submit-confirm-actions"><button type="button" class="quiet" data-review-answer-open="${esc(items[0].id)}">${answer}</button><button type="button" class="quiet" data-review-submit-cancel>Cancel</button><button type="button" data-review-submit-anyway>Submit anyway</button></div></section></div>`;
 }
 
 // The pack note changed on another device while my note waited. The field keeps my text until I choose.
@@ -555,16 +570,24 @@ export function packPageHtml(pack, ui, h) {
   const main = `<div class="review-main">${ui.item ? itemPanelHtml(pack, ui, h) : summaryHtml(pack, { ...ui, time: h.time }, esc)}</div>`;
   let foot = '';
   const answerWidth = clampAnswer(ui.answerWidth ?? ANSWER_DEFAULT, viewport);
-  if (openItem) foot = answerHandleHtml(answerWidth, viewport) + answerBarHtml(pack, openItem, ui.viewer || {}, h);
+  if (openItem && (open || openItem.reopened === true)) foot = answerHandleHtml(answerWidth, viewport) + answerBarHtml(pack, openItem, ui.viewer || {}, h);
+  else if (openItem && pack.state === 'submitted' && (openItem.state === 'open' || openItem.state === 'changed')) {
+    const next = openItem.nextPack;
+    const text = next
+      ? `This pack is submitted. The open item is in <a href="${esc(reviewUrl(pack.slug, next.pack, openItem.id))}">${esc(next.title || next.pack)}</a>.`
+      : 'This pack is submitted. Ask the planner to reopen the item.';
+    foot = `<div class="review-foot"><p class="review-foot-status" role="status">${text}</p></div>`;
+  }
   else if (open && !ui.item) {
     const lock = submitLock(ui.packSync?.count || 0, ui.packSync?.unsaved || 0);
     foot = `<div class="review-foot" data-key="review-foot">${packStatusHtml(ui.packSync || { kind: '' }, esc)}<span class="review-foot-count">${counts.open ? `${plural(counts.open, 'open item')}` : 'All items answered'}</span>`
       + `<p class="review-foot-status" role="status">${esc(ui.submitStatus || '')}</p>`
       + `<button type="submit" form="review-submit-form" class="review-submit"${ui.submitting || lock.disabled ? ' disabled' : ''}>${esc(lock.label)}</button></div>`;
   }
-  return `<div class="review-page${ui.item ? ' item-open' : ''}${collapsed ? ' side-collapsed' : ''}" data-key="review-page:${esc(pack.slug)}/${esc(pack.pack)}" style="--review-side: ${collapsed ? SIDEBAR_RAIL : sideWidth}px${openItem ? `; --review-answer: ${answerWidth}px` : ''}">`
+  const submitConfirm = ui.submitConfirm ? submitOpenConfirmHtml(pack, esc) : '';
+  return `<div class="review-page${ui.item ? ' item-open' : ''}${collapsed ? ' side-collapsed' : ''}" data-key="review-page:${esc(pack.slug)}/${esc(pack.pack)}" style="--review-side: ${collapsed ? SIDEBAR_RAIL : sideWidth}px${openItem && (open || openItem.reopened === true) ? `; --review-answer: ${answerWidth}px` : ''}">`
     + `<div class="app-bar review-app-bar">${bar}</div>`
-    + `<div class="review-body" data-key="review-body">${open ? conflictsHtml(pack, ui.conflicts, esc) : ''}${head}${list}${main}</div>${foot}</div>`;
+    + `<div class="review-body" data-key="review-body">${open ? conflictsHtml(pack, ui.conflicts, esc) : ''}${head}${list}${main}</div>${foot}${submitConfirm}</div>`;
 }
 
 // A page for a missing pack or a load error, with the same app bar.

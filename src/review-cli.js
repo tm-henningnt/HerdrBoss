@@ -2,11 +2,12 @@
 // Exit codes: 0 done, 1 usage or refusal (caller, secret in a note, quota, open pack limit), 2 the pack is not valid,
 // 3 the pack or its result does not exist.
 // Every function takes the environment, the Herdr runner, the data dir, and the time as options, so a test never reads the live data dir.
+import crypto from 'node:crypto';
 import { DATA_DIR, dashboardUrl, loadConfig } from './config.js';
 import { SLUG } from './projects.js';
-import { validatePack } from './review-pack.js';
+import { DEFAULT_LIMITS, itemHash, validatePack } from './review-pack.js';
 import { buildImport, safeText } from './review-import.js';
-import { publishVersion, getPack, getResultRecord, listPacks, deletePack, setMailId, ReviewStoreError } from './review-store.js';
+import { publishVersion, getPack, getFile, packDirectory, getResultRecord, listPacks, deletePack, reopenItem, putAnswer, setMailId, ReviewStoreError } from './review-store.js';
 import { resultMarkdown, verdictLabel } from './review-result.js';
 import { verifyMessageCaller, readControl, readMessages, postReview, closeReviewItems, refuseSecret } from './messages.js';
 import { PLANNER_LABEL, activeSessionForPane, setRound } from './planner-sessions.js';
@@ -18,13 +19,14 @@ const STATES = ['open', 'done', 'all'];
 
 const USAGE = {
   check: 'Usage: review check FOLDER',
-  publish: 'Usage: review publish SLUG FOLDER [--note TEXT] [--round N] [--dry-run]',
+  publish: 'Usage: review publish SLUG FOLDER [--note TEXT] [--round N] [--dry-run] [--carry-open]',
   import: 'Usage: review import SLUG FOLDER-OR-FILE [--id ID] [--title TEXT] [--dry-run]',
   result: 'Usage: review result [SLUG] PACK [--version N] [--format json|md]. PACK can also be SLUG/PACK. --json means --format json.',
   delete: 'Usage: review delete [SLUG] PACK. PACK can also be SLUG/PACK.',
+  reopen: 'Usage: review reopen SLUG PACK ITEM',
   list: 'Usage: review list [SLUG] [--state open|done|all] [--json]',
 };
-const USAGE_ALL = `Usage: review check|publish|import|result|delete|list. Run herdr-boss with no command to see each form.`;
+const USAGE_ALL = `Usage: review check|publish|import|result|delete|reopen|list. Run herdr-boss with no command to see each form.`;
 
 export class ReviewCliError extends Error {
   constructor(message, code = EXIT.refused) {
@@ -156,8 +158,105 @@ function republishUnchanged({ slug, existing, manifest, summary, caller }, ctx) 
   return EXIT.ok;
 }
 
+function cloneValue(value) { return JSON.parse(JSON.stringify(value)); }
+
+function fileReferences(value, known, found = new Set()) {
+  if (typeof value === 'string') { if (known.has(value)) found.add(value); }
+  else if (Array.isArray(value)) for (const entry of value) fileReferences(entry, known, found);
+  else if (value && typeof value === 'object') for (const entry of Object.values(value)) fileReferences(entry, known, found);
+  return found;
+}
+
+function replaceFileReferences(value, renamed) {
+  if (typeof value === 'string') return renamed.get(value) ?? value;
+  if (Array.isArray(value)) return value.map((entry) => replaceFileReferences(entry, renamed));
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, replaceFileReferences(entry, renamed)]));
+  return value;
+}
+
+// Copy open item specs and any files they use from one earlier result in the same planner session.
+function carryItems(validation, previous, { dir }) {
+  const manifest = validation.manifest;
+  const present = new Set(manifest.sections.flatMap((section) => section.items.map((item) => item.id)));
+  const sourceSections = new Map(previous.manifest.sections.map((section) => [section.id, section]));
+  const specs = new Map(previous.manifest.sections.flatMap((section) => section.items.map((item) => [item.id, item])));
+  const open = previous.items.filter((item) => item.state === 'open' || item.state === 'changed');
+  const additions = open.filter((item) => !present.has(item.id));
+  const sourceFiles = new Map(previous.files.map((file) => [file.path, file]));
+  const targetFiles = new Map(validation.files.map((file) => [file.path, file]));
+  const fileSources = {};
+  const answers = {};
+  let extraBytes = 0;
+
+  for (const item of additions) {
+    const sourceSection = sourceSections.get(item.section);
+    if (!sourceSection) throw new ReviewCliError(`Herdr Boss cannot carry item ${item.id}; its section is missing.`);
+    let section = manifest.sections.find((entry) => entry.id === sourceSection.id);
+    if (!section) {
+      if (manifest.sections.length >= DEFAULT_LIMITS.sections) throw new ReviewCliError(`The new pack would have more than ${DEFAULT_LIMITS.sections} sections after carrying open items.`);
+      section = { id: sourceSection.id, title: sourceSection.title, ...(sourceSection.summary ? { summary: sourceSection.summary } : {}), items: [] };
+      manifest.sections.push(section);
+    }
+    if (section.items.length >= DEFAULT_LIMITS.itemsPerSection) throw new ReviewCliError(`Section ${section.id} would have more than ${DEFAULT_LIMITS.itemsPerSection} items after carrying open items.`);
+
+    const spec = cloneValue(specs.get(item.id));
+    const renamed = new Map();
+    for (const filePath of fileReferences(spec, new Set(sourceFiles.keys()))) {
+      const source = sourceFiles.get(filePath);
+      const target = targetFiles.get(filePath);
+      if (target && target.sha256 === source.sha256) continue;
+      let destination = filePath;
+      if (target) {
+        const key = crypto.createHash('sha256').update(`${previous.pack}\0${previous.version}\0${filePath}\0${source.sha256}`).digest('hex');
+        destination = `carry/${previous.pack}/${key}`;
+        const collision = targetFiles.get(destination);
+        if (collision && collision.sha256 !== source.sha256) throw new ReviewCliError(`Herdr Boss cannot carry file ${filePath}; its carried path is already in use.`);
+        renamed.set(filePath, destination);
+      }
+      if (!targetFiles.has(destination)) {
+        const verified = getFile({ dir, slug: previous.slug, pack: previous.pack, version: previous.version, file: filePath });
+        if (!verified) throw new ReviewCliError(`Herdr Boss cannot carry file ${filePath}; the submitted pack no longer has it.`);
+        const copied = { path: destination, sha256: source.sha256, bytes: source.bytes, type: source.type };
+        validation.files.push(copied);
+        targetFiles.set(destination, copied);
+        fileSources[destination] = { root: packDirectory(dir, previous.slug, previous.pack, previous.version), path: filePath };
+        extraBytes += source.bytes;
+      }
+    }
+    const copiedSpec = replaceFileReferences(spec, renamed);
+    copiedSpec.hash = itemHash(copiedSpec, new Map([...targetFiles].map(([file, entry]) => [file, entry.sha256])));
+    section.items.push(copiedSpec);
+    present.add(item.id);
+    if (item.answer && (item.answer.note || item.answer.pins?.length || item.skipped)) {
+      answers[item.id] = {
+        ...(item.skipped ? { decision: 'skip' } : {}),
+        ...(item.answer.note ? { note: item.answer.note } : {}),
+        ...(item.answer.pins?.length ? { pins: item.answer.pins } : {}),
+      };
+    }
+  }
+
+  const itemCount = manifest.sections.reduce((sum, section) => sum + section.items.length, 0);
+  if (itemCount > DEFAULT_LIMITS.items) throw new ReviewCliError(`The new pack would have more than ${DEFAULT_LIMITS.items} items after carrying open items.`);
+  if (validation.files.length > DEFAULT_LIMITS.files) throw new ReviewCliError(`The new pack would have more than ${DEFAULT_LIMITS.files} files after carrying open items.`);
+  const manifestBytes = Buffer.byteLength(JSON.stringify(manifest));
+  if (manifestBytes > DEFAULT_LIMITS.manifestBytes) throw new ReviewCliError(`The new pack manifest would be larger than ${DEFAULT_LIMITS.manifestBytes} bytes after carrying open items.`);
+  const bytes = validation.files.reduce((sum, file) => sum + file.bytes, 0) + manifestBytes;
+  if (bytes > DEFAULT_LIMITS.totalBytes) throw new ReviewCliError(`The new pack would be larger than ${DEFAULT_LIMITS.totalBytes} bytes after carrying open items.`);
+  validation.totals.items = itemCount;
+  validation.totals.sections = manifest.sections.length;
+  validation.totals.bytes = bytes;
+  return { count: additions.length, fileSources, answers };
+}
+
+function previousSubmittedPack(slug, session, dir, excludePack) {
+  return listPacks({ dir, slug, state: 'done' }).map((entry) => getPack({ dir, slug, pack: entry.pack }))
+    .filter((pack) => pack?.pack !== excludePack && pack?.state === 'submitted' && pack.manifest?.session === session)
+    .sort((a, b) => (b.submittedAt || '').localeCompare(a.submittedAt || '') || a.pack.localeCompare(b.pack))[0] ?? null;
+}
+
 // Validate, then publish or dry-run one pack folder. `imported` allows the page item type.
-function publishFolder({ slug, folder, caller, note, dryRun, imported = false, round: wantedRound }, ctx) {
+function publishFolder({ slug, folder, caller, note, dryRun, imported = false, round: wantedRound, carryOpen = false }, ctx) {
   const { out, err, dir, now, deps } = ctx;
   const validation = validatePack(folder, { allowPage: imported });
   printWarnings(validation, ctx);
@@ -167,6 +266,13 @@ function publishFolder({ slug, folder, caller, note, dryRun, imported = false, r
     return EXIT.invalid;
   }
   const { manifest, totals } = validation;
+  let carried = { count: 0, fileSources: {}, answers: {} };
+  let previous = null;
+  if (carryOpen) {
+    if (!caller.planner) throw new ReviewCliError('--carry-open needs an active planner session.');
+    previous = previousSubmittedPack(slug, caller.session.id, dir, manifest.id);
+    if (previous) carried = carryItems(validation, previous, { dir });
+  }
   const summary = `${plural(totals.items, 'item')} in ${plural(totals.sections, 'section')}`;
   // These checks come before the write, so a refusal publishes nothing.
   // Only a planner pane tags a pack with a session. The tag decides where the result goes.
@@ -179,7 +285,7 @@ function publishFolder({ slug, folder, caller, note, dryRun, imported = false, r
     refuseSecret(note, 'note');
   }
   if (dryRun) {
-    out(`Dry run: ${slug}/${manifest.id} "${safeText(manifest.title)}" would be published as the next version. ${summary}, ${plural(validation.files.length + 1, 'file')}, ${totals.bytes} bytes. Nothing was written.`);
+    out(`Dry run: ${slug}/${manifest.id} "${safeText(manifest.title)}" would be published as the next version. ${summary}, ${plural(validation.files.length + 1, 'file')}, ${totals.bytes} bytes.${carryOpen ? ` ${plural(carried.count, 'open item')} would be carried${previous ? ` from ${slug}/${previous.pack}` : ''}.` : ''} Nothing was written.`);
     return EXIT.ok;
   }
   const existing = getPack({ dir, slug, pack: manifest.id });
@@ -196,7 +302,7 @@ function publishFolder({ slug, folder, caller, note, dryRun, imported = false, r
   if (caller.planner) Object.assign(manifest, { session: caller.session.id, round });
   let published;
   try {
-    published = deps.publishVersion({ dir, now, slug, folder, publishedBy: caller.from, validation });
+    published = deps.publishVersion({ dir, now, slug, folder, publishedBy: caller.from, validation, fileSources: carried.fileSources });
   } catch (error) {
     if (!(error instanceof ReviewStoreError)) throw error;
     if (error.code === 'validation') {
@@ -206,6 +312,10 @@ function publishFolder({ slug, folder, caller, note, dryRun, imported = false, r
     }
     const oldest = error.code === 'quota' && error.oldest?.length ? ` Delete a submitted pack first: ${error.oldest.map((entry) => `${entry.slug}/${entry.pack}`).join(', ')}.` : '';
     throw new ReviewCliError(`Herdr Boss did not publish the pack. ${error.message}${oldest}`);
+  }
+  for (const [item, patch] of Object.entries(carried.answers)) {
+    try { deps.putAnswer({ dir, now, slug, pack: published.pack, item, patch: { rev: 0, ...patch } }); }
+    catch (error) { err(`Warning: Herdr Boss published ${slug}/${published.pack} but did not copy the saved note or pins for item ${item}: ${safeText(error?.message, 200)}`); }
   }
   const paragraph = [`${summary}.`];
   const changes = changeText(published);
@@ -220,6 +330,7 @@ function publishFolder({ slug, folder, caller, note, dryRun, imported = false, r
   out(`Published ${slug}/${published.pack} v${published.version}: ${summary}.${caller.planner ? ` Session ${caller.session.id}, round ${round}.` : ''}`);
   out(`Review: ${reviewUrl(slug, published.pack, ctx.baseUrl)}`);
   out(`Mailbox item ${record.id} asks the Owner to decide.`);
+  if (carryOpen) out(`Carried ${plural(carried.count, 'open item')}${previous ? ` from ${slug}/${previous.pack}` : ''}.`);
   if (published.stale.length) out(`${plural(published.stale.length, 'answer')} need a new decision: ${published.stale.join(', ')}.`);
   return EXIT.ok;
 }
@@ -242,7 +353,7 @@ function checkCommand(args, ctx) {
 }
 
 function publishCommand(args, ctx) {
-  const { flags, positional } = parse(args, { values: ['--note', '--round'], switches: ['--dry-run'] }, USAGE.publish);
+  const { flags, positional } = parse(args, { values: ['--note', '--round'], switches: ['--dry-run', '--carry-open'] }, USAGE.publish);
   if (positional.length !== 2) throw new ReviewCliError(USAGE.publish);
   const slug = checkSlug(positional[0], USAGE.publish);
   const caller = verifyReviewCaller('review publish', slug, ctx, { planner: true });
@@ -252,7 +363,20 @@ function publishCommand(args, ctx) {
     if (!caller.planner) throw new ReviewCliError('--round is only for a pane with a planner session.');
     round = Number(flags['--round']);
   }
-  return publishFolder({ slug, folder: positional[1], caller, note: flags['--note'], dryRun: !!flags['--dry-run'], round }, ctx);
+  return publishFolder({ slug, folder: positional[1], caller, note: flags['--note'], dryRun: !!flags['--dry-run'], round, carryOpen: !!flags['--carry-open'] }, ctx);
+}
+
+function reopenCommand(args, ctx) {
+  const { positional } = parse(args, {}, USAGE.reopen);
+  if (positional.length !== 3) throw new ReviewCliError(USAGE.reopen);
+  const [rawSlug, pack, item] = positional;
+  const slug = checkSlug(rawSlug, USAGE.reopen);
+  if (typeof pack !== 'string' || !SLUG.test(pack)) throw new ReviewCliError(`The pack ID must match [a-z0-9][a-z0-9-]* and have at most 64 characters. ${USAGE.reopen}`);
+  if (typeof item !== 'string' || !SLUG.test(item)) throw new ReviewCliError(`The item ID must match [a-z0-9][a-z0-9-]* and have at most 64 characters. ${USAGE.reopen}`);
+  const caller = verifyReviewCaller('review reopen', slug, ctx, { planner: true });
+  ctx.deps.reopenItem({ dir: ctx.dir, now: ctx.now, slug, pack, item, ...(caller.session ? { session: caller.session.id } : {}) });
+  ctx.out(`Reopened ${slug}/${pack} item ${item}.`);
+  return EXIT.ok;
 }
 
 function importCommand(args, ctx) {
@@ -346,8 +470,8 @@ function listCommand(args, ctx) {
 export function reviewCommand(args, { env = process.env, herdr, dir = DATA_DIR, now = Date.now(), baseUrl = null, deps = {}, out = (line) => console.log(line), err = (line) => console.error(line) } = {}) {
   const [sub, ...rest] = args;
   let control = null;
-  const ctx = { env, herdr, dir, now, baseUrl, out, err, deps: { publishVersion, postReview, setMailId, ...deps }, control: () => (control ??= readControl(dir)) };
-  const commands = { check: checkCommand, publish: publishCommand, import: importCommand, result: resultCommand, delete: deleteCommand, list: listCommand };
+  const ctx = { env, herdr, dir, now, baseUrl, out, err, deps: { publishVersion, postReview, putAnswer, setMailId, reopenItem, ...deps }, control: () => (control ??= readControl(dir)) };
+  const commands = { check: checkCommand, publish: publishCommand, import: importCommand, result: resultCommand, delete: deleteCommand, reopen: reopenCommand, list: listCommand };
   try {
     if (!Object.hasOwn(commands, sub)) throw new ReviewCliError(USAGE_ALL);
     return commands[sub](rest, ctx);
@@ -359,4 +483,3 @@ export function reviewCommand(args, { env = process.env, herdr, dir = DATA_DIR, 
     return EXIT.refused;
   }
 }
-

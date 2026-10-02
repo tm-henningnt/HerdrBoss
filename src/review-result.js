@@ -97,6 +97,7 @@ export function buildResult(pack, verdict, note, at) {
     counts: pack.derived.counts,
     sections: pack.derived.sections.map((section) => ({ id: section.id, state: section.state })),
     items,
+    openItems: items.filter((item) => item.state === 'open' || item.state === 'changed').map((item) => item.id),
     removed: pack.removed.map((entry) => ({ id: entry.id, decision: entry.answer.decision, note: entry.answer.note })),
   };
 }
@@ -164,6 +165,7 @@ export function resultMarkdown(result, titles = new Map()) {
   lines.push(`${countLine(result.counts)} Submitted ${result.submittedAt}.`, '');
   if (result.session) lines.push(`Session ${singleLine(result.session, 64)}${result.round ? `, round ${result.round}` : ''}.`, '');
   if (result.note) lines.push('## Pack note', '', quote(result.note), '');
+  const openItems = result.openItems ?? (result.items ?? []).filter((item) => item.state === 'open' || item.state === 'changed').map((item) => item.id);
   const group = (heading, items, render) => {
     if (!items.length) return;
     lines.push(`## ${heading}`, '');
@@ -180,6 +182,7 @@ export function resultMarkdown(result, titles = new Map()) {
   group('Open', items.filter((item) => item.state === 'open'), (item) => noted(name(item), item, item.skipped ? ' (skipped)' : item.stale ? ' (changed in this version)' : ''));
   const accepted = items.filter((item) => item.state === 'accepted' && !item.note).map((item) => item.id);
   if (accepted.length) lines.push('## Accepted', '', accepted.join(', '), '');
+  if (openItems.length) lines.push('## Open items', '', ...openItems.map((id) => `- ${singleLine(id, PROMPT_ID_MAX)}`), '');
   group('Unticked checklist entries', items.filter((item) => item.unchecked?.length), (item) => `- ${item.id}: ${item.unchecked.join(', ')}`);
   group('Removed in this version', result.removed ?? [], (item) => noted(`**${item.id}**`, item, item.decision ? ` (was ${item.decision})` : ''));
   if (result.truncated?.marker) lines.push(`> ${result.truncated.marker}`, '');
@@ -204,6 +207,8 @@ export function promptText(result) {
     ...(result.note ? [cutText(`Pack note: ${one(result.note, PROMPT_LINE_MAX)}`, PROMPT_LINE_MAX)] : []),
     ...(result.items ?? []).filter((item) => item.state === 'denied').map((item) => itemLine('Denied', item)),
     ...(result.items ?? []).filter((item) => item.state === 'live').map((item) => itemLine('Needs live check', item)),
+    ...(result.openItems ?? (result.items ?? []).filter((item) => item.state === 'open' || item.state === 'changed').map((item) => item.id))
+      .map((id) => cutText(`Open item: ${one(id, PROMPT_ID_MAX)}`, PROMPT_LINE_MAX)),
   ];
   const included = [];
   for (const line of candidates) {
@@ -235,6 +240,8 @@ export function plannerPromptText(result) {
   sections.push({ title: 'Needs live check:', lines: items.filter((item) => item.state === 'live').map((item) => cutText(`- ${one(item.id, PROMPT_ID_MAX)}.${noteOf(item)}`, PROMPT_LINE_MAX)) });
   sections.push({ title: 'Notes:', lines: items.filter((item) => item.note && !choiceIds.has(item.id) && !item.skipped && item.state !== 'denied' && item.state !== 'live').map((item) => cutText(`- ${one(item.id, PROMPT_ID_MAX)}: ${one(item.note, PROMPT_LINE_MAX)}`, PROMPT_LINE_MAX)) });
   sections.push({ title: 'Skipped (ask later):', lines: items.filter((item) => item.skipped).map((item) => cutText(`- ${one(item.id, PROMPT_ID_MAX)}.${noteOf(item)}`, PROMPT_LINE_MAX)) });
+  const openItems = result.openItems ?? items.filter((item) => item.state === 'open' || item.state === 'changed').map((item) => item.id);
+  sections.push({ title: 'Open items:', lines: openItems.map((id) => cutText(`- ${one(id, PROMPT_ID_MAX)}`, PROMPT_LINE_MAX)) });
   const lines = [];
   for (const section of sections) {
     if (!section.lines.length) continue;
@@ -254,4 +261,21 @@ export function plannerPromptText(result) {
     used += 1 + line.text.length;
   }
   return out.join('\n');
+}
+
+// A short message for the planner when the Owner completes an item that was reopened after submit.
+export function reviewAnswerPromptText({ pack, item, answer } = {}) {
+  const one = (value, max) => singleLine(redactSecrets(String(value ?? '')), max);
+  const parts = [];
+  if (answer?.decision) parts.push(answer.decision === 'skip' ? 'Ask later' : one(answer.decision, 40));
+  if (answer?.choice !== null && answer?.choice !== undefined) parts.push(`choice ${one(answer.choice, 80)}`);
+  if (answer?.rating !== null && answer?.rating !== undefined) parts.push(`rating ${one(answer.rating, 20)}`);
+  if (answer?.live) parts.push(`live check ${one(answer.live, 20)}`);
+  if (answer?.note) parts.push(`note: ${one(answer.note, 240)}`);
+  if (answer?.pins?.length) {
+    const pins = answer.pins.slice(0, 4).map((pin) => `#${pin.n} (${Math.round(pin.x * 100)}%, ${Math.round(pin.y * 100)}%)${pin.text ? ` ${one(pin.text, 80)}` : ''}`);
+    if (answer.pins.length > pins.length) pins.push(`and ${answer.pins.length - pins.length} more`);
+    parts.push(`pins: ${pins.join(', ')}`);
+  }
+  return cutText(`Review answer for ${one(pack, 64)}, item ${one(item, 64)}: ${parts.join('; ') || 'saved'}.`, 1000);
 }

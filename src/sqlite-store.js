@@ -188,6 +188,22 @@ const MIGRATIONS = [
     version: 3,
     run: (db) => { addColumnIfMissing(db, 'review_results', 'markdown', 'TEXT'); },
   },
+  {
+    version: 4,
+    sql: `
+      CREATE TABLE review_reopened_items (
+        slug TEXT NOT NULL,
+        pack TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        item TEXT NOT NULL,
+        active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+        op_id TEXT,
+        opened_at TEXT NOT NULL,
+        PRIMARY KEY (slug, pack, version, item),
+        FOREIGN KEY (slug, pack) REFERENCES review_packs(slug, pack) ON DELETE CASCADE
+      );
+    `,
+  },
 ];
 
 function migrate(db, file, guard) {

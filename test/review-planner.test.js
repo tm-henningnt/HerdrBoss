@@ -143,8 +143,10 @@ test('the result carries the session and round, the choice label, and the skippe
   const schedule = result.items.find((item) => item.id === 'schedule');
   assert.equal(schedule.state, 'open');
   assert.equal(schedule.skipped, true);
+  assert.deepEqual(result.openItems, ['naming', 'remarks', 'schedule']);
   assert.equal(result.items.find((item) => item.id === 'naming').skipped, undefined);
   const markdown = resultMarkdown(result);
+  assert.match(markdown, /## Open items\n\n- naming\n- remarks\n- schedule/);
   assert.match(markdown, /schedule[^\n]*skipped/i);
   assert.match(markdown, /Session ps-abc12345, round 2/);
 });
@@ -178,8 +180,10 @@ test('the planner message lists each choice with its label, the notes, and each 
   assert.match(text, /format: JSON file/);
   assert.match(text, /JSON is easier for us\./);
   assert.match(text, /Pack note: Decide the schedule next round\./);
-  assert.match(text, /Skipped[^\n]*\n(?:[^\n]*\n)*?[^\n]*schedule/);
-  assert.ok(!/\bremarks\b/.test(text), 'an open item that was not skipped is not listed as skipped');
+  const skipped = /Skipped \(ask later\):\n([\s\S]*?)(?:\nOpen items:|$)/.exec(text)?.[1] ?? '';
+  assert.match(skipped, /schedule/);
+  assert.match(text, /Open items:\n- schedule\n- remarks/);
+  assert.ok(!/\bremarks\b/.test(skipped), 'an open item that was not skipped is not listed as skipped');
   assert.ok(text.length <= PLANNER_PROMPT_MAX);
 });
 

@@ -322,7 +322,7 @@ export function createReviewSync({ fetch, base = '', storage = null, setTimer = 
     P.timer = setTimer(() => { P.timer = null; run(P); }, backoffMs(P.attempt));
   }
 
-  // Read the pack before a flush. A closed pack gets no write. A newer version keeps a patch only for an item with the same hash.
+  // Read the pack before a flush. A submitted pack accepts only a planner-reopened item. A newer version keeps a patch only for an item with the same hash.
   async function check(P) {
     const reply = await request(packUrl(P));
     if (reply.network || reply.status >= 500 || reply.status === 429) { fail(P, reply.network ? 'offline' : 'retrying'); return false; }
@@ -330,13 +330,30 @@ export function createReviewSync({ fetch, base = '', storage = null, setTimer = 
     if (reply.status === 404) { dropAll(P, 'The pack does not exist any more.'); return false; }
     const data = reply.body;
     if (!reply.ok || !plain(data) || !Number.isInteger(data.version)) { fail(P, 'retrying'); return false; }
-    if (data.state !== 'open') { dropAll(P, `The pack is ${String(data.state || 'closed').slice(0, 20)}. The change cannot be saved.`); return false; }
     const items = new Map((Array.isArray(data.items) ? data.items : []).map((item) => [item.id, item]));
+    if (data.state !== 'open') {
+      if (data.state === 'submitted') {
+        const keep = [];
+        for (const op of P.ops) {
+          const item = items.get(op.item);
+          const retrySavedAnswer = item?.reopenUsed === true && item.reopenUsedOpId === op.opId;
+          if (op.kind === 'item' && (item?.reopened === true || retrySavedAnswer)) keep.push(op);
+          else P.messages.set(op.id, unsaved(op, 'dropped', 'This pack is submitted. Ask the planner to reopen the item.', true));
+        }
+        P.ops = keep;
+        if (!keep.length) { P.failure = ''; return false; }
+      } else {
+        dropAll(P, `The pack is ${String(data.state || 'closed').slice(0, 20)}. The change cannot be saved.`);
+        return false;
+      }
+    }
     P.ops = P.ops.filter((op) => {
+      const item = items.get(op.item);
+      const retrySavedAnswer = item?.reopenUsed === true && item.reopenUsedOpId === op.opId;
+      if (data.state === 'submitted' && !(op.kind === 'item' && (item?.reopened === true || retrySavedAnswer))) return false;
       // A 400 on the same version is a real refusal: drop the patch with the server sentence.
       if (op.recheck && op.version === data.version) { P.messages.set(op.id, unsaved(op, 'dropped', op.recheck)); return false; }
       if (op.version === data.version || op.kind === 'note') { op.version = data.version; return true; }
-      const item = items.get(op.item);
       if (item && item.hash === op.hash) { op.version = data.version; return true; }
       P.messages.set(op.id, unsaved(op, 'changed', '', false));
       return false;

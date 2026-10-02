@@ -116,20 +116,21 @@ function walk(root) {
 }
 
 const count = (dir, table) => openSqliteStore({ dir }).db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n;
-const TABLES = ['review_packs', 'review_versions', 'review_items', 'review_files', 'review_answers', 'review_results'];
+const TABLES = ['review_packs', 'review_versions', 'review_items', 'review_files', 'review_answers', 'review_results', 'review_reopened_items'];
 
 // ---------- Migration ----------
 
-test('migration 2 creates the review tables in an empty database', (t) => {
+test('the migrations create the review tables in an empty database', (t) => {
   const dir = dataDir(t);
   const { db } = openSqliteStore({ dir });
-  assert.deepEqual(db.prepare('SELECT version FROM schema_version ORDER BY version').all().map((row) => row.version), [1, 2, 3]);
+  assert.deepEqual(db.prepare('SELECT version FROM schema_version ORDER BY version').all().map((row) => row.version), [1, 2, 3, 4]);
   const names = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((row) => row.name);
   for (const table of TABLES) assert.ok(names.includes(table), `table ${table} exists`);
+  assert.ok(db.prepare('PRAGMA table_info(review_reopened_items)').all().some((column) => column.name === 'op_id'));
   assert.ok(names.includes('messages'), 'the message table stays');
 });
 
-test('migration 2 upgrades a database that has migration 1 only', (t) => {
+test('the migrations upgrade a database that has migration 1 only', (t) => {
   const dir = dataDir(t);
   const file = path.join(dir, 'herdr-boss.db');
   const old = new DatabaseSync(file);
@@ -143,7 +144,7 @@ test('migration 2 upgrades a database that has migration 1 only', (t) => {
   `);
   old.close();
   const { db } = openSqliteStore({ dir });
-  assert.deepEqual(db.prepare('SELECT version FROM schema_version ORDER BY version').all().map((row) => row.version), [1, 2, 3]);
+  assert.deepEqual(db.prepare('SELECT version FROM schema_version ORDER BY version').all().map((row) => row.version), [1, 2, 3, 4]);
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM messages').get().n, 1);
   for (const table of TABLES) assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n, 0);
 });

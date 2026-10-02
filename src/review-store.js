@@ -215,9 +215,10 @@ function answerShape(row, currentHash) {
 
 // Copy one source file into the staging folder. The copy checks the hash and the size that the validator
 // recorded, so a file that changed after the validation is refused.
-function copyFile(root, stage, file) {
+function copyFile(root, stage, file, sourcePath = file.path) {
   const parts = safeRelative(file.path);
-  const real = fs.realpathSync(path.join(root, ...parts));
+  const sourceParts = safeRelative(sourcePath);
+  const real = fs.realpathSync(path.join(root, ...sourceParts));
   if (!inside(root, real)) throw new Error('the path leaves the pack folder');
   const target = path.join(stage, ...parts);
   if (!inside(stage, path.resolve(target))) throw new Error('the stored path leaves the version folder');
@@ -287,7 +288,7 @@ function checkOpenPacks(db, slug, pack, maxOpenPacks) {
 
 // Publish the folder as the next version of its pack. `validation` is the result of validatePack(); without it
 // the function validates the folder. It returns { slug, pack, version, files, bytes, items, changed, added, removed, stale }.
-export function publishVersion({ dir, now, slug, folder, publishedBy = null, validation, quotaBytes = LIMITS.quotaBytes, maxOpenPacks = LIMITS.openPacks } = {}) {
+export function publishVersion({ dir, now, slug, folder, publishedBy = null, validation, fileSources = {}, quotaBytes = LIMITS.quotaBytes, maxOpenPacks = LIMITS.openPacks } = {}) {
   checkName(slug);
   const validated = validation ?? validatePack(folder);
   if (!validated?.ok || !validated.manifest) throw new ReviewStoreError('validation', 'The pack folder is not valid.', { errors: validated?.errors ?? [] });
@@ -314,9 +315,19 @@ export function publishVersion({ dir, now, slug, folder, publishedBy = null, val
   try {
     let root;
     try { root = fs.realpathSync(folder ?? ''); } catch (error) { throw ioError(error, 'read the pack folder'); }
+    const dataRoot = fs.realpathSync(path.resolve(dir));
+    const roots = new Map();
+    for (const [file, source] of Object.entries(fileSources)) {
+      safeRelative(file);
+      let resolved;
+      try { resolved = fs.realpathSync(source.root); } catch (error) { throw ioError(error, 'read a carried review folder'); }
+      if (!inside(dataRoot, resolved)) throw new ReviewStoreError('path', 'A carried file source is outside the review data folder.');
+      roots.set(file, { root: resolved, path: source.path });
+    }
     privateDirectory(stage);
     for (const file of files) {
-      try { copyFile(root, stage, file); }
+      const source = roots.get(file.path);
+      try { copyFile(source?.root ?? root, stage, file, source?.path ?? file.path); }
       catch (error) { throw ioError(error, 'copy', file.path); }
     }
   } catch (error) {
@@ -415,13 +426,16 @@ export function getPack({ dir, slug, pack, version } = {}) {
   if (!versionRow) return null;
   const itemRows = db.prepare('SELECT * FROM review_items WHERE slug = ? AND pack = ? AND version = ? ORDER BY position').all(slug, pack, wanted);
   const answers = new Map(db.prepare('SELECT * FROM review_answers WHERE slug = ? AND pack = ?').all(slug, pack).map((answer) => [answer.item, answer]));
+  const reopenRows = db.prepare('SELECT item, active, op_id AS opId FROM review_reopened_items WHERE slug = ? AND pack = ? AND version = ?').all(slug, pack, wanted);
+  const reopened = new Set(reopenRows.filter((entry) => entry.active === 1).map((entry) => entry.item));
+  const reopenUsed = new Map(reopenRows.filter((entry) => entry.active === 0).map((entry) => [entry.item, entry.opId]));
   const present = new Set(itemRows.map((item) => item.item));
 
   const items = itemRows.map((entry) => {
     const spec = parseJson(entry.spec, { ask: [] });
     const answer = answers.has(entry.item) ? answerShape(answers.get(entry.item), entry.hash) : null;
     const state = itemState(spec, answer);
-    return { id: entry.item, section: entry.section, title: spec.title, type: spec.type, ask: spec.ask, ...reviewFields(spec), hash: entry.hash, position: entry.position, spec, state, skipped: state === 'open' && answer?.decision === SKIP, stale: answer?.stale ?? false, answer };
+    return { id: entry.item, section: entry.section, title: spec.title, type: spec.type, ask: spec.ask, ...reviewFields(spec), hash: entry.hash, position: entry.position, spec, state, skipped: state === 'open' && answer?.decision === SKIP, stale: answer?.stale ?? false, ...(reopened.has(entry.item) ? { reopened: true } : {}), ...(reopenUsed.has(entry.item) ? { reopenUsed: true, ...(reopenUsed.get(entry.item) ? { reopenUsedOpId: reopenUsed.get(entry.item) } : {}) } : {}), answer };
   });
   // A skipped item moves to the end of the pack. The skipped items keep the order in which they were skipped.
   const skippedAt = (item) => item.answer?.updatedAt ?? '';
@@ -458,6 +472,46 @@ export function getPack({ dir, slug, pack, version } = {}) {
     removed,
     derived: { sections, pack: packState, counts: countStates(states), proposedVerdict: proposeVerdict(countStates(states)) },
   };
+}
+
+// The next later round in the same planner session that contains this item. A carried item has the same id, so the
+// Owner can follow it without guessing which pack holds the question.
+export function nextPacksForItems({ dir, slug, pack, items = [] } = {}) {
+  checkName(slug);
+  checkName(pack, 'slug', 'The pack ID');
+  if (!Array.isArray(items) || items.some((item) => typeof item !== 'string' || !SLUG.test(item))) throw invalid('The item IDs are not valid.');
+  const wantedItems = [...new Set(items)];
+  if (!wantedItems.length) return {};
+  const current = getPack({ dir, slug, pack });
+  const session = current?.manifest?.session;
+  const round = current?.manifest?.round;
+  if (!current || current.state !== 'submitted' || !session || !Number.isInteger(round)) return {};
+  const { db } = open(dir);
+  const marks = wantedItems.map(() => '?').join(', ');
+  const rows = db.prepare(`SELECT p.pack, p.title, v.manifest, v.published_at AS publishedAt, i.item
+    FROM review_packs p
+    JOIN review_versions v ON v.slug = p.slug AND v.pack = p.pack AND v.version = p.current_version
+    JOIN review_items i ON i.slug = p.slug AND i.pack = p.pack AND i.version = v.version
+    WHERE p.slug = ? AND p.pack <> ? AND p.state IN ('open', 'submitted') AND i.item IN (${marks})`).all(slug, pack, ...wantedItems);
+  const grouped = new Map();
+  for (const row of rows) {
+    const entry = grouped.get(row.pack) ?? { ...row, manifest: parseJson(row.manifest, {}), items: new Set() };
+    entry.items.add(row.item);
+    grouped.set(row.pack, entry);
+  }
+  const candidates = [...grouped.values()]
+    .filter((row) => row.manifest.session === session && Number.isInteger(row.manifest.round) && row.manifest.round > round)
+    .sort((a, b) => a.manifest.round - b.manifest.round || a.publishedAt.localeCompare(b.publishedAt) || a.pack.localeCompare(b.pack));
+  const links = Object.create(null);
+  for (const candidate of candidates) {
+    for (const item of candidate.items) if (!Object.hasOwn(links, item)) links[item] = { pack: candidate.pack, title: candidate.title };
+  }
+  return links;
+}
+
+export function nextPackForItem({ dir, slug, pack, item } = {}) {
+  if (typeof item !== 'string' || !SLUG.test(item)) throw invalid('The item ID is not valid.');
+  return nextPacksForItems({ dir, slug, pack, items: [item] })[item] ?? null;
 }
 
 // The packs of one state: `open` (default), `done` (submitted or expired), or `all`. It returns no file content.
@@ -553,6 +607,37 @@ export function setMailId({ dir, slug, pack, mailId } = {}) {
 }
 
 // ---------- Answers ----------
+
+// Reopen one unanswered or changed item of the submitted current version. Other items stay locked.
+export function reopenItem({ dir, now, slug, pack, item, session } = {}) {
+  checkName(slug);
+  checkName(pack, 'slug', 'The pack ID');
+  checkName(item, 'invalid', 'The item ID');
+  const at = stamp(now);
+  return transaction(open(dir), (db) => {
+    const row = loadPack(db, slug, pack);
+    if (!row) throw new ReviewStoreError('not-found', 'The pack does not exist.');
+    if (row.state !== 'submitted') throw new ReviewStoreError('closed', `The pack is ${row.state}. Only a submitted pack has locked items to reopen.`);
+    if (session !== undefined) {
+      const version = db.prepare('SELECT manifest FROM review_versions WHERE slug = ? AND pack = ? AND version = ?').get(slug, pack, row.current_version);
+      if (parseJson(version?.manifest, {}).session !== session) throw new ReviewStoreError('invalid', 'A planner session can reopen only a pack published by that session.');
+    }
+    const current = db.prepare('SELECT i.hash, i.spec FROM review_items i WHERE i.slug = ? AND i.pack = ? AND i.version = ? AND i.item = ?')
+      .get(slug, pack, row.current_version, item);
+    if (!current) throw invalid('The item is not in the current version of the pack.');
+    const spec = parseJson(current.spec, { ask: [] });
+    const answerRow = db.prepare('SELECT * FROM review_answers WHERE slug = ? AND pack = ? AND item = ?').get(slug, pack, item);
+    const answer = answerRow ? answerShape(answerRow, current.hash) : null;
+    if (!['open', 'changed'].includes(itemState(spec, answer))) throw invalid('Only an open item can be reopened.');
+    const existing = db.prepare('SELECT active FROM review_reopened_items WHERE slug = ? AND pack = ? AND version = ? AND item = ?')
+      .get(slug, pack, row.current_version, item);
+    if (existing?.active === 1) return { ok: true, already: true };
+    db.prepare(`INSERT INTO review_reopened_items(slug, pack, version, item, active, opened_at) VALUES (?, ?, ?, ?, 1, ?)
+      ON CONFLICT(slug, pack, version, item) DO UPDATE SET active = 1, op_id = NULL, opened_at = excluded.opened_at`)
+      .run(slug, pack, row.current_version, item, at);
+    return { ok: true, already: false };
+  });
+}
 
 function requireOpenPack(db, slug, pack) {
   const row = loadPack(db, slug, pack);
@@ -655,11 +740,21 @@ export function putAnswer({ dir, now, slug, pack, item, patch } = {}) {
   const at = stamp(now);
   const sqlite = open(dir);
   return transaction(sqlite, (db) => {
-    requireOpenPack(db, slug, pack);
+    const packRow = loadPack(db, slug, pack);
+    if (!packRow) throw new ReviewStoreError('not-found', 'The pack does not exist.');
     const current = db.prepare('SELECT i.hash, i.spec FROM review_items i JOIN review_packs p ON p.slug = i.slug AND p.pack = i.pack AND p.current_version = i.version WHERE i.slug = ? AND i.pack = ? AND i.item = ?').get(slug, pack, item);
     if (!current) throw invalid('The item is not in the current version of the pack.');
     const spec = parseJson(current.spec, { ask: [] });
     const existing = db.prepare('SELECT * FROM review_answers WHERE slug = ? AND pack = ? AND item = ?').get(slug, pack, item);
+    const reopened = packRow.state === 'submitted'
+      ? db.prepare('SELECT active FROM review_reopened_items WHERE slug = ? AND pack = ? AND version = ? AND item = ?').get(slug, pack, packRow.current_version, item)
+      : null;
+    if (existing && patch.opId !== undefined && existing.op_id === patch.opId && reopened?.active === 0) {
+      return { ok: true, duplicate: true, deactivatedReopen: true, answer: answerShape(existing, current.hash) };
+    }
+    if (packRow.state !== 'open' && !(packRow.state === 'submitted' && reopened?.active === 1)) {
+      throw new ReviewStoreError('closed', `The pack is ${packRow.state}. Publish a new version to review it again.`);
+    }
     if (existing && patch.opId !== undefined && existing.op_id === patch.opId) return { ok: true, duplicate: true, answer: answerShape(existing, current.hash) };
     if ((existing?.rev ?? 0) !== patch.rev) return { ok: false, conflict: true, current: existing ? answerShape(existing, current.hash) : null };
 
@@ -691,6 +786,11 @@ export function putAnswer({ dir, now, slug, pack, item, patch } = {}) {
       .run(slug, pack, item, fields.decision, fields.choice, fields.rating, fields.live, fields.viewed, fields.note, fields.pins, fields.checks, stored.hash, stored.stale, stored.previous, rev, patch.opId ?? null, at);
     db.prepare('UPDATE review_packs SET updated_at = ? WHERE slug = ? AND pack = ?').run(at, slug, pack);
     const saved = db.prepare('SELECT * FROM review_answers WHERE slug = ? AND pack = ? AND item = ?').get(slug, pack, item);
+    if (reopened?.active === 1 && !['open', 'changed'].includes(itemState(spec, answerShape(saved, current.hash)))) {
+      db.prepare('UPDATE review_reopened_items SET active = 0, op_id = ? WHERE slug = ? AND pack = ? AND version = ? AND item = ?')
+        .run(patch.opId ?? null, slug, pack, packRow.current_version, item);
+      return { ok: true, deactivatedReopen: true, answer: answerShape(saved, current.hash) };
+    }
     return { ok: true, answer: answerShape(saved, current.hash) };
   });
 }
