@@ -17,6 +17,8 @@ import { recordWorkerReport, workerRunId } from '../agent-messages.js';
 import { scheduleWorkerPaneClose } from '../maintenance.js';
 import { agentPromptTimeoutMs } from '../agent-prompt.js';
 import { PLANNER_LABEL, activeSessionForPane, endSession, startSession } from '../planner-sessions.js';
+import { closeFailedWorkerPane, retryOpenCodeStart, withOpenCodeStartLock } from './opencode-start.js';
+import { archiveWorkerReports } from './worker-archive.js';
 
 const NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
 const AGENT_READY_MARKERS = Object.freeze({
@@ -336,7 +338,9 @@ export function waitForAgentReady(name, kind, { herdr, readText = readAgentText,
     try {
       const result = herdr(['agent', 'get', name]);
       const agent = result?.agent ?? result;
-      statusKnown = KNOWN_AGENT_STATUSES.has(agent?.agent_status);
+      statusKnown = kind === 'opencode'
+        ? ['idle', 'done'].includes(agent?.agent_status) && agent?.interactive_ready === true
+        : KNOWN_AGENT_STATUSES.has(agent?.agent_status);
     } catch {}
     if (statusKnown) {
       if (!marker) return true;
@@ -397,6 +401,7 @@ export function deliverPrompt(name, text, marker, { herdr, readText = readAgentT
 
 function deliverBrief(name, kind, herdr, readText, wait, output, dir = '.worker') {
   const ready = waitForAgentReady(name, kind, { herdr, readText, wait });
+  if (!ready && kind === 'opencode') throw new Error(`OpenCode TUI ${name} did not become idle and interactive in 45 s; the brief was not sent.`);
   if (!ready) output(`Notice: ${name} did not show a ready prompt in 45 s; sent the brief anyway.`);
   return deliverPrompt(name, briefPrompt(dir), `${dir}/brief.md`, { herdr, readText, wait, kind });
 }
@@ -1403,6 +1408,8 @@ export function startWorker(name, options, {
   let createdWorktree = false;
   let agentStarted = false;
   let placement = null;
+  let plannerRegistered = false;
+  let startAttempts = 0;
   try {
     if (!options.noWorktree) {
       fs.mkdirSync(path.dirname(worktree), { recursive: true });
@@ -1443,98 +1450,143 @@ export function startWorker(name, options, {
     placement = chooseWorkerPane(workspaceId, worktree, options.kind, herdr, plan.tmpDir, paneCap, [...leases, ...leaseExtraEnv.map((entry) => ({ env: entry.env, item: entry.value }))]);
     paneId = placement.paneId;
     for (const lease of leases) setLeasePane(lease.pool, lease.item, paneId, { dataDir: leaseContext.dataDir });
-    waitForWorkerPane(paneId, workspaceId, worktree, herdr, wait);
-    const shellPid = workerPaneShellPid(paneId, herdr);
-    const paneAgentArgs = [...workerAgentArgs(options.kind, launchArgs, { paneId, tabId: placement.tabId, workspaceId, env, tmpDir: plan.tmpDir, worktree }), ...browserArgs];
-    try {
-      herdr(['agent', 'start', name, '--kind', options.kind, '--pane', paneId, '--timeout', String(plan.agentStartTimeoutMs), '--', ...paneAgentArgs]);
-    } catch (startError) {
-      // Herdr can report agent_not_ready while leaving a blocked agent in the pane.
-      try { agentStarted = listFrom(herdr(['agent', 'list']), 'agents').some((agent) => getName(agent) === name); } catch {}
-      if (!agentStarted && isAgentPaneBusy(startError)) {
-        waitForWorkerPane(paneId, workspaceId, worktree, herdr, wait);
-        try {
-          herdr(['agent', 'start', name, '--kind', options.kind, '--pane', paneId, '--timeout', String(plan.agentStartTimeoutMs), '--', ...paneAgentArgs]);
-        } catch (retryError) {
-          try { agentStarted = listFrom(herdr(['agent', 'list']), 'agents').some((agent) => getName(agent) === name); } catch {}
-          throw retryError;
-        }
-      } else throw startError;
-    }
-    agentStarted = true;
-    const record = {
-      name,
-      kind: options.kind,
-      model,
-      modelSource,
-      ...(opusForce ? { force: true } : {}),
-      provider,
-      effort,
-      ...(effortSource ? { effortSource } : {}),
-      issue: options.issue == null ? null : Number(options.issue),
-      ...(options.taskId != null ? { taskId: String(options.taskId) } : {}),
-      worktree,
-      branch,
-      base,
-      baseCommit,
-      shellPid,
-      pane: paneId,
-      workerDir: plan.workerDir,
-      allowedPaths,
-      readOnly: !!options.readOnly,
-      ...(leases.length ? { leases } : {}),
-      startedAt: new Date(now).toISOString(),
+    const startAndDeliver = (attempt = 1) => {
+      startAttempts = attempt;
+      waitForWorkerPane(paneId, workspaceId, worktree, herdr, wait);
+      const shellPid = workerPaneShellPid(paneId, herdr);
+      const paneAgentArgs = [...workerAgentArgs(options.kind, launchArgs, { paneId, tabId: placement.tabId, workspaceId, env, tmpDir: plan.tmpDir, worktree }), ...browserArgs];
+      try {
+        herdr(['agent', 'start', name, '--kind', options.kind, '--pane', paneId, '--timeout', String(plan.agentStartTimeoutMs), '--', ...paneAgentArgs]);
+      } catch (startError) {
+        // Herdr can report agent_not_ready while leaving a blocked agent in the pane.
+        try { agentStarted ||= listFrom(herdr(['agent', 'list']), 'agents').some((agent) => getName(agent) === name); } catch {}
+        if (options.kind !== 'opencode' && !agentStarted && isAgentPaneBusy(startError)) {
+          waitForWorkerPane(paneId, workspaceId, worktree, herdr, wait);
+          try {
+            herdr(['agent', 'start', name, '--kind', options.kind, '--pane', paneId, '--timeout', String(plan.agentStartTimeoutMs), '--', ...paneAgentArgs]);
+          } catch (retryError) {
+            try { agentStarted ||= listFrom(herdr(['agent', 'list']), 'agents').some((agent) => getName(agent) === name); } catch {}
+            throw retryError;
+          }
+        } else throw startError;
+      }
+      agentStarted = true;
+      const record = {
+        name,
+        kind: options.kind,
+        model,
+        modelSource,
+        ...(options.kind === 'opencode' ? { startAttempts: attempt } : {}),
+        ...(opusForce ? { force: true } : {}),
+        provider,
+        effort,
+        ...(effortSource ? { effortSource } : {}),
+        issue: options.issue == null ? null : Number(options.issue),
+        ...(options.taskId != null ? { taskId: String(options.taskId) } : {}),
+        worktree,
+        branch,
+        base,
+        baseCommit,
+        shellPid,
+        pane: paneId,
+        workerDir: plan.workerDir,
+        allowedPaths,
+        readOnly: !!options.readOnly,
+        ...(leases.length ? { leases } : {}),
+        startedAt: new Date(now).toISOString(),
+      };
+      writeJsonAtomic(recordFile, record);
+      if (options.planner && !plannerRegistered) {
+        // The worker pane gets the label planner and a registry record. The pane can then run `review publish` for this project.
+        herdr(['pane', 'rename', paneId, PLANNER_LABEL]);
+        const session = startSession({ dir: env.HERDR_BOSS_DIR || path.join(os.homedir(), '.herdr-boss'), now, kind: options.kind, project: config.slug, pane: paneId, input: path.join(worktree, plan.workerDir, 'brief.md') });
+        plannerRegistered = true;
+        output(`Started planner session ${session.id} for ${config.slug} on pane ${paneId}.`);
+      }
+      if (options.kind === 'claude' && opusForce) alertBossForOpus(name, model, options, config, env, herdr, now, output);
+      const delivery = deliverBrief(name, options.kind, herdr, readWorkerText, wait, output, plan.workerDir);
+      if (delivery === 'resent') output(`Resent the brief prompt to ${name}: the first prompt did not reach the agent.`);
+      if (delivery === 'stalled-retry') output(`Resent the brief prompt to ${name} after agent_prompt_stalled.`);
+      if (delivery === 'submitted') output(`Sent Enter to ${name}: the brief prompt was typed but not submitted.`);
+      return { ...record, recordFile, dryRun: false };
     };
-    writeJsonAtomic(recordFile, record);
-    if (options.planner) {
-      // The worker pane gets the label planner and a registry record. The pane can then run `review publish` for this project.
-      herdr(['pane', 'rename', paneId, PLANNER_LABEL]);
-      const session = startSession({ dir: env.HERDR_BOSS_DIR || path.join(os.homedir(), '.herdr-boss'), now, kind: options.kind, project: config.slug, pane: paneId, input: path.join(worktree, plan.workerDir, 'brief.md') });
-      output(`Started planner session ${session.id} for ${config.slug} on pane ${paneId}.`);
+    if (options.kind === 'opencode') {
+      return withOpenCodeStartLock(env.HERDR_BOSS_DIR || path.join(os.homedir(), '.herdr-boss'),
+        () => retryOpenCodeStart(name, paneId, startAndDeliver, { herdr, output }), { wait, output });
     }
-    if (options.kind === 'claude' && opusForce) alertBossForOpus(name, model, options, config, env, herdr, now, output);
-    const delivery = deliverBrief(name, options.kind, herdr, readWorkerText, wait, output, plan.workerDir);
-    if (delivery === 'resent') output(`Resent the brief prompt to ${name}: the first prompt did not reach the agent.`);
-    if (delivery === 'stalled-retry') output(`Resent the brief prompt to ${name} after agent_prompt_stalled.`);
-    if (delivery === 'submitted') output(`Sent Enter to ${name}: the brief prompt was typed but not submitted.`);
-    return { ...record, recordFile, dryRun: false };
+    return startAndDeliver();
   } catch (error) {
     const failedReason = error.message;
-    if (!agentStarted && placement) {
+    let safeCleanup = !agentStarted;
+    let paneStopped = !placement && !agentStarted;
+    if (placement && (options.kind === 'opencode' || agentStarted)) {
+      safeCleanup = false;
+      try {
+        closeFailedWorkerPane(name, options.kind, paneId, workspaceId, worktree, herdr);
+        safeCleanup = true;
+        paneStopped = true;
+        agentStarted = false;
+        if (plannerRegistered) {
+          const dir = env.HERDR_BOSS_DIR || path.join(os.homedir(), '.herdr-boss');
+          const planner = activeSessionForPane({ dir, pane: paneId });
+          if (planner) endSession({ dir, id: planner.id });
+        }
+      } catch (cleanupError) {
+        safeCleanup = false;
+        error.message += ` Failed-start cleanup stopped: ${cleanupError.message} Worktree, branch, and run record were kept.`;
+      }
+    } else if (placement) {
       try {
         // Close only what this start created: the worker tab when it made the tab, or else its own pane.
         if (placement.createdTab) herdr(['tab', 'close', placement.tabId]);
         else if (placement.createdPane) herdr(['pane', 'close', placement.paneId]);
+        paneStopped = true;
       } catch (cleanupError) {
+        safeCleanup = false;
         error.message += ` (Herdr pane cleanup also failed: ${cleanupError.message})`;
       }
     }
-    if (createdWorktree && !agentStarted) {
-      let worktreeRemoved = false;
+    if (safeCleanup) {
       try {
-        git(config.root, ['worktree', 'remove', worktree]);
-        worktreeRemoved = true;
+        const runFile = fs.existsSync(recordFile) ? recordFile : null;
+        if (runFile) {
+          if (!fs.lstatSync(runFile).isFile()) throw new Error('The failed run record is not a regular file.');
+          const run = readJson(runFile);
+          if (run.name !== name || run.worktree !== worktree) throw new Error('The failed run record belongs to another start.');
+          writeJsonAtomic(runFile, {
+            ...run, finishedAt: new Date().toISOString(), outcome: 'failed', startFailed: true,
+            ...(options.kind === 'opencode' ? { startAttempts } : {}),
+          });
+        }
+        const archive = archiveWorkerReports(worktree, name, mainCheckout(config.root), {
+          output, now, runFile, workerDir: plan.workerDir,
+        });
+        if (runFile) fs.unlinkSync(runFile);
+        if (archive) error.message += ` Failed-start evidence archived to ${archive}.`;
       } catch (cleanupError) {
-        error.message += ` (worktree cleanup also failed: ${cleanupError.message})`;
-      }
-      if (!worktreeRemoved) {
-        error.message += ` Failed-start branch ${branch} was kept because its worktree could not be removed.`;
-      } else {
-        let uniqueCommits;
-        try { uniqueCommits = git(config.root, ['rev-list', `${baseCommit}..${branch}`]).trim(); }
-        catch (cleanupError) {
-          error.message += ` Failed-start branch ${branch} was kept because its commits against base ${base} could not be checked: ${cleanupError.message}`;
-        }
-        if (uniqueCommits) {
-          error.message += ` Failed-start branch ${branch} was kept because it has commits beyond base ${base}.`;
-        } else if (uniqueCommits === '') {
-          try { git(config.root, ['branch', '-D', branch]); }
-          catch (cleanupError) { error.message += ` Failed-start branch ${branch} could not be deleted: ${cleanupError.message}`; }
-        }
+        safeCleanup = false;
+        error.message += ` Failed-start archive failed: ${cleanupError.message} Worktree, branch, and run record were kept.`;
       }
     }
-    if (!agentStarted) releaseStartLeases(leases, name, config, leaseContext);
-    if (agentStarted) error.message += ` Agent ${name} may still be running in pane ${paneId}; inspect it before retrying.`;
+    if (createdWorktree && safeCleanup) {
+      try {
+        const changes = git(worktree, ['status', '--porcelain=v1', '--untracked-files=all']).trim();
+        const uniqueCommits = git(worktree, ['rev-list', `${baseCommit}..HEAD`, `${baseCommit}..${branch}`]).trim();
+        if (changes) {
+          error.message += ` Failed-start worktree and branch ${branch} were kept because the worktree has changes.`;
+        } else if (uniqueCommits) {
+          error.message += ` Failed-start branch ${branch} was kept because it has commits beyond base ${base}; its worktree was also kept.`;
+        } else {
+          git(config.root, ['worktree', 'remove', worktree]);
+          git(config.root, ['branch', '-D', branch]);
+          error.message += ` Clean failed-start worktree and branch removed; worker name ${name} is reusable.`;
+        }
+      } catch (cleanupError) {
+        error.message += ` Failed-start worktree or branch cleanup failed: ${cleanupError.message}`;
+      }
+    }
+    if (paneStopped) releaseStartLeases(leases, name, config, leaseContext);
+    else error.message += ` Agent ${name} may still be running in pane ${paneId}; inspect it before retrying.`;
     error.message = `${error.message}\nSTART FAILED: ${failedReason.split('\n')[0]}`;
     throw error;
   }

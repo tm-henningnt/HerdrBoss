@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { checkAgentsExclude, contextTokensFor, globMatches, loadModels, loadProjectConfig, PROJECT_DEFAULTS, workerConfigView } from '../src/kit/config.js';
@@ -1428,7 +1428,7 @@ test('failed worker start deletes only its empty branch from a non-main base', (
   } catch (error) { failure = error; }
   assert.match(failure?.message ?? '', /Failed-start branch branch-with-work was kept because it has commits beyond base integrate\/wave-18/);
   assert.match(git(root, 'branch', '--list', 'branch-with-work'), /branch-with-work/);
-  assert.equal(fs.existsSync(config.worktreePath('branch-with-work')), false);
+  assert.equal(fs.existsSync(config.worktreePath('branch-with-work')), true);
 });
 
 test('worker start submits a brief that was typed but not sent', () => {
@@ -1511,7 +1511,7 @@ test('worker readiness requires Claude input line, box rules, and footer', () =>
 });
 
 test('worker readiness uses a known status when a kind has no ready marker', () => {
-  for (const kind of ['pi', 'opencode', 'future-harness']) {
+  for (const kind of ['pi', 'future-harness']) {
     let reads = 0;
     const ready = waitForAgentReady('demo', kind, {
       herdr: () => ({ agent: { agent_status: 'blocked' } }),
@@ -1520,6 +1520,289 @@ test('worker readiness uses a known status when a kind has no ready marker', () 
     });
     assert.equal(ready, true);
     assert.equal(reads, 0);
+  }
+});
+
+test('OpenCode readiness waits for an idle interactive TUI before the brief', () => {
+  const states = [
+    { agent_status: 'working', interactive_ready: true },
+    { agent_status: 'blocked', interactive_ready: true },
+    { agent_status: 'idle', interactive_ready: false },
+    { agent_status: 'idle', interactive_ready: true },
+  ];
+  const waits = [];
+  assert.equal(waitForAgentReady('demo', 'opencode', {
+    herdr: () => ({ agent: states.shift() }),
+    wait: (ms) => waits.push(ms),
+  }), true);
+  assert.equal(states.length, 0);
+  assert.deepEqual(waits, [500, 500, 500]);
+});
+
+function openCodeFixture(t, name) {
+  const f = setupFixture(null);
+  f.env.HERDR_BOSS_DIR = path.join(f.root, 'boss-data');
+  const commands = [];
+  let registered = false;
+  let starts = 0;
+  const missing = () => Object.assign(new Error('agent_not_found: fake TUI exited'), { code: 'agent_not_found' });
+  const herdr = (args) => {
+    commands.push(args);
+    if (args[0] === 'agent' && args[1] === 'get') {
+      if (!registered) throw missing();
+      return { agent: { name, pane_id: 'ws:p2', agent: 'opencode', agent_status: 'idle', interactive_ready: true } };
+    }
+    if (args[0] === 'agent' && args[1] === 'start') { starts++; registered = true; return {}; }
+    if (args[0] === 'agent' && args[1] === 'close') { registered = false; return {}; }
+    if (args[0] === 'pane' && args[1] === 'close') { registered = false; return f.herdr(args); }
+    return f.herdr(args);
+  };
+  t.after(() => {
+    try { git(f.root, 'worktree', 'remove', '--force', f.config.worktreePath(name)); } catch {}
+    fs.rmSync(f.root, { recursive: true, force: true });
+  });
+  return {
+    f, commands, missing,
+    get starts() { return starts; },
+    exit: () => { registered = false; },
+    start: (override = herdr, options = {}) => startWorker(name, { kind: 'opencode', task: 'x', allow: ['src/'], ...options }, {
+      config: f.config, models: loadModels(), herdr: override, env: f.env, rulesFile: f.rulesFile,
+      wait: () => {}, output: () => {},
+    }),
+    herdr,
+  };
+}
+
+test('OpenCode start relaunches a fake TUI that exits at launch', (t) => {
+  const f = openCodeFixture(t, 'opencode-launch-race');
+  let failed = false;
+  const run = f.start((args) => {
+    const result = f.herdr(args);
+    if (args[0] === 'agent' && args[1] === 'start' && !failed) {
+      failed = true;
+      f.exit();
+      throw f.missing();
+    }
+    return result;
+  });
+  assert.equal(f.starts, 2);
+  assert.equal(run.pane, 'ws:p2');
+  assert.equal(f.commands.filter((args) => args[0] === 'agent' && args[1] === 'prompt').length, 1);
+});
+
+test('OpenCode start relaunches a fake TUI that exits after its first prompt', (t) => {
+  const f = openCodeFixture(t, 'opencode-prompt-race');
+  let failed = false;
+  const run = f.start((args) => {
+    if (args[0] === 'agent' && args[1] === 'prompt' && !failed) {
+      failed = true;
+      f.exit();
+      throw f.missing();
+    }
+    return f.herdr(args);
+  });
+  assert.equal(f.starts, 2);
+  assert.equal(run.name, 'opencode-prompt-race');
+  assert.equal(JSON.parse(fs.readFileSync(run.recordFile, 'utf8')).pane, 'ws:p2');
+});
+
+test('OpenCode startup retries a stalled idle TUI twice and gives a clear final error', (t) => {
+  const f = openCodeFixture(t, 'opencode-stalled');
+  assert.throws(() => f.start((args) => {
+    if (args[0] === 'agent' && args[1] === 'prompt') {
+      throw Object.assign(new Error('agent_prompt_stalled: fake input failed'), { code: 'agent_prompt_stalled' });
+    }
+    return f.herdr(args);
+  }), /OpenCode worker opencode-stalled failed after 3 launch attempts.*Brief prompt failed/s);
+  assert.equal(f.starts, 3);
+  assert.equal(f.commands.filter((args) => args[0] === 'agent' && args[1] === 'close').length, 2);
+  assert.equal(f.commands.filter((args) => args[0] === 'pane' && args[1] === 'close').length, 1, 'final failure closes the failed pane');
+});
+
+test('OpenCode starts in separate processes share a lock through brief delivery', { timeout: 20000 }, async (t) => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-opencode-starts-'));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const script = `
+    import fs from 'node:fs';
+    import { startWorker } from './src/kit/workers.js';
+    import { loadModels } from './src/kit/config.js';
+    import { setupFixture, git } from './test/helpers/kit-fixture.js';
+    const f = setupFixture(null);
+    const name = process.env.TEST_START_NAME;
+    f.env.HERDR_BOSS_DIR = process.env.TEST_START_DIR;
+    const event = (text) => {
+      fs.appendFileSync(process.env.TEST_START_DIR + '/events', name + ':' + text + '\\n');
+      process.send(text);
+    };
+    let registered = false;
+    try {
+      startWorker(name, { kind: 'opencode', task: 'x', allow: ['src/'] }, {
+        config: f.config, models: loadModels(), env: f.env, rulesFile: f.rulesFile, wait: () => {},
+        output: (line) => { if (line.includes('Waiting for OpenCode start lock')) event('waiting'); },
+        herdr: (args) => {
+          if (args[0] === 'agent' && args[1] === 'start') {
+            registered = true;
+            event('launch');
+          }
+          if (args[0] === 'agent' && args[1] === 'get') {
+            return { agent: { name, pane_id: 'ws:p2', agent: 'opencode', agent_status: 'idle', interactive_ready: registered } };
+          }
+          if (args[0] === 'agent' && args[1] === 'prompt') {
+            if (name === 'first') fs.readSync(0, Buffer.alloc(1), 0, 1);
+            event('brief');
+            return {};
+          }
+          return f.herdr(args);
+        },
+      });
+    } finally {
+      try { git(f.root, 'worktree', 'remove', '--force', f.config.worktreePath(name)); } catch {}
+      fs.rmSync(f.root, { recursive: true, force: true });
+      process.disconnect();
+    }
+  `;
+  const start = (name) => {
+    const child = spawn(process.execPath, ['--input-type=module', '-e', script], {
+      cwd: path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'),
+      env: { ...process.env, TEST_START_NAME: name, TEST_START_DIR: dataDir },
+      stdio: ['pipe', 'ignore', 'pipe', 'ipc'],
+    });
+    let stderr = '';
+    child.stderr.on('data', (text) => { stderr += text; });
+    const messages = [];
+    let consume;
+    child.on('message', (event) => { messages.push(event); consume?.(); });
+    const next = () => messages.length ? Promise.resolve(messages.shift()) : new Promise((resolve) => {
+      consume = () => { consume = null; resolve(messages.shift()); };
+    });
+    const exited = new Promise((resolve, reject) => {
+      child.on('error', reject);
+      child.on('exit', (code) => code === 0 ? resolve() : reject(new Error(`${name}: exit ${code}: ${stderr}`)));
+    });
+    exited.catch(() => {});
+    t.after(() => { if (child.exitCode === null) child.kill(); });
+    return { child, next, exited };
+  };
+  const first = start('first');
+  assert.equal(await first.next(), 'launch');
+  const second = start('second');
+  try {
+    assert.equal(await second.next(), 'waiting', 'another process must wait before it launches');
+  } finally { first.child.stdin.end('x'); }
+  await Promise.all([first.exited, second.exited]);
+  assert.deepEqual(fs.readFileSync(path.join(dataDir, 'events'), 'utf8').trim().split('\n'),
+    ['first:launch', 'second:waiting', 'first:brief', 'second:launch', 'second:brief']);
+});
+
+test('OpenCode startup never relaunches a working, blocked, unknown, or reassigned agent', (t) => {
+  for (const [name, state] of [
+    ['working', { agent_status: 'working' }],
+    ['blocked', { agent_status: 'blocked' }],
+    ['unknown', { agent_status: 'unknown' }],
+    ['reassigned', { pane_id: 'ws:other' }],
+  ]) {
+    const f = openCodeFixture(t, `opencode-${name}`);
+    let launched = false;
+    assert.throws(() => f.start((args) => {
+      if (args[0] === 'agent' && args[1] === 'start') {
+        f.herdr(args);
+        launched = true;
+        throw new Error('fake startup error');
+      }
+      if (launched && args[0] === 'agent' && args[1] === 'get') {
+        return { agent: { name: `opencode-${name}`, pane_id: 'ws:p2', agent: 'opencode', agent_status: 'idle', ...state } };
+      }
+      return f.herdr(args);
+    }), /Relaunch stopped/);
+    assert.equal(f.starts, 1);
+    assert.equal(f.commands.some((args) => args[0] === 'agent' && args[1] === 'close'), false);
+    assert.equal(f.commands.some((args) => args[0] === 'pane' && args[1] === 'close'), false);
+  }
+});
+
+test('OpenCode planner relaunch preserves its one planner session', (t) => {
+  const f = openCodeFixture(t, 'opencode-planner');
+  let failed = false;
+  const run = f.start((args) => {
+    if (args[0] === 'pane' && args[1] === 'rename') return {};
+    if (args[0] === 'agent' && args[1] === 'prompt' && !failed) {
+      failed = true;
+      f.exit();
+      throw f.missing();
+    }
+    return f.herdr(args);
+  }, { planner: true });
+  assert.equal(run.startAttempts, 2);
+  const sessions = JSON.parse(fs.readFileSync(path.join(f.f.env.HERDR_BOSS_DIR, 'planner-sessions.json'), 'utf8'));
+  assert.equal(sessions.length, 1);
+  assert.equal(sessions[0].pane, run.pane);
+});
+
+test('OpenCode relaunch budget also bounds agent_pane_busy launch errors', (t) => {
+  const f = openCodeFixture(t, 'opencode-busy-start');
+  assert.throws(() => f.start((args) => {
+    const result = f.herdr(args);
+    if (args[0] === 'agent' && args[1] === 'start') {
+      f.exit();
+      throw Object.assign(new Error('agent_pane_busy: fake launch race'), { code: 'agent_pane_busy' });
+    }
+    return result;
+  }), /OpenCode worker opencode-busy-start failed after 3 launch attempts/);
+  assert.equal(f.starts, 3, 'all launch attempts use the same three-attempt budget');
+});
+
+test('OpenCode final failure archives its run and permits clean reuse of the worker name', (t) => {
+  const f = openCodeFixture(t, 'opencode-keep-evidence');
+  assert.throws(() => f.start((args) => {
+    if (args[0] === 'agent' && args[1] === 'prompt') {
+      f.exit();
+      throw f.missing();
+    }
+    const result = f.herdr(args);
+    if (args[0] === 'agent' && args[1] === 'start' && f.starts > 1) {
+      f.exit();
+      throw f.missing();
+    }
+    return result;
+  }), /OpenCode worker opencode-keep-evidence failed after 3 launch attempts/);
+  assert.equal(f.starts, 3);
+  assert.equal(fs.existsSync(f.f.config.worktreePath('opencode-keep-evidence')), false);
+  assert.equal(fs.existsSync(path.join(f.f.config.runsPath, 'opencode-keep-evidence.json')), false);
+  assert.equal(git(f.f.root, 'branch', '--list', 'opencode-keep-evidence'), '');
+  const archive = path.join(f.f.root, '.orchestration', 'reports', 'opencode-keep-evidence');
+  const archivedRun = JSON.parse(fs.readFileSync(path.join(archive, 'run.json'), 'utf8'));
+  assert.equal(archivedRun.name, 'opencode-keep-evidence');
+  assert.equal(archivedRun.outcome, 'failed');
+  assert.equal(archivedRun.startAttempts, 3);
+  assert.ok(fs.existsSync(path.join(archive, 'brief.md')));
+  assert.equal(f.commands.filter((args) => args[0] === 'pane' && args[1] === 'close').length, 1);
+  const reused = f.start();
+  assert.equal(reused.name, 'opencode-keep-evidence');
+});
+
+test('OpenCode final failure keeps dirty or committed worktrees and archives their runs', (t) => {
+  for (const mode of ['dirty', 'committed']) {
+    const name = `opencode-keep-${mode}`;
+    const f = openCodeFixture(t, name);
+    let madeChange = false;
+    assert.throws(() => f.start((args) => {
+      if (args[0] === 'agent' && args[1] === 'prompt') {
+        if (!madeChange) {
+          const worktree = f.f.config.worktreePath(name);
+          fs.writeFileSync(path.join(worktree, 'worker-change.txt'), 'keep this work\n');
+          if (mode === 'committed') { git(worktree, 'add', 'worker-change.txt'); git(worktree, 'commit', '-m', 'worker change'); }
+          madeChange = true;
+        }
+        f.exit();
+        throw f.missing();
+      }
+      return f.herdr(args);
+    }), /kept because.*(?:changes|commits beyond base)/);
+    assert.equal(fs.existsSync(f.f.config.worktreePath(name)), true);
+    assert.equal(fs.readFileSync(path.join(f.f.config.worktreePath(name), 'worker-change.txt'), 'utf8'), 'keep this work\n');
+    assert.match(git(f.f.root, 'branch', '--list', name), new RegExp(name));
+    assert.equal(fs.existsSync(path.join(f.f.config.runsPath, `${name}.json`)), false);
+    assert.ok(fs.existsSync(path.join(f.f.root, '.orchestration', 'reports', name, 'run.json')));
   }
 });
 
