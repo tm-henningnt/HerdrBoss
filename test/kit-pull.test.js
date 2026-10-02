@@ -92,12 +92,13 @@ test('publish prints the kit line to stderr when the project kit is behind', (t)
   const status = path.join(home, 'status.json');
   fs.writeFileSync(status, JSON.stringify({ project: 'Demo' }));
   const env = { ...process.env, HOME: home, HERDR_BOSS_DIR: path.join(home, 'boss'), TMPDIR: home };
-  const publish = (repo) => spawnSync(process.execPath, [CLI, 'publish', 'demo', status], { cwd: repo, env, encoding: 'utf8' });
-  const behind = publish(gitRepo(t, { kit: OLD }));
+  // The first publish registers the repository of a slug, and later publishes use it. Each repository gets its own slug.
+  const publish = (repo, slug) => spawnSync(process.execPath, [CLI, 'publish', slug, status], { cwd: repo, env, encoding: 'utf8' });
+  const behind = publish(gitRepo(t, { kit: OLD }), 'demo');
   assert.equal(behind.status, 0, behind.stderr);
   assert.match(behind.stderr, /^Kit update: this project kit is behind by .* Run herdr-boss kit update\.$/m);
   assert.doesNotMatch(behind.stdout, /Kit update/);
-  const current = publish(gitRepo(t, { kit: kitRevision() }));
+  const current = publish(gitRepo(t, { kit: kitRevision() }), 'demo-current');
   assert.equal(current.status, 0, current.stderr);
   assert.doesNotMatch(current.stderr, /Kit update:/);
 });

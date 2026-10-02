@@ -192,9 +192,34 @@ export function kitRequiredBehind(revision, current = kitRevision(), entries = r
   return entries.slice(index + 1).filter((entry) => entry.impact === 'required').length;
 }
 
-// The kit files that a refresh writes and that a person may have edited. A file has hand edits when
-// the stub hash does not match its text, or when the kit file lacks its header or differs from the
-// committed copy. A refresh does not overwrite such a file.
+// installKit records the hash of the kit file text that it wrote. The record is a file in the Git
+// directory of the project, so it is never committed. A refresh compares the kit file with it, so
+// an earlier install that nobody committed is not a hand edit.
+const KIT_RECORD = 'herdr-boss-kit.json';
+const sha = (text) => createHash('sha256').update(text).digest('hex');
+
+function kitRecordFile(root) {
+  try {
+    const out = execFileSync('git', ['rev-parse', '--git-path', KIT_RECORD], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    return out ? path.resolve(root, out) : null;
+  } catch { return null; }
+}
+
+function readKitRecord(root) {
+  try { return JSON.parse(fs.readFileSync(kitRecordFile(root), 'utf8'))?.kitFileHash ?? null; } catch { return null; }
+}
+
+function writeKitRecord(root, text) {
+  try {
+    const file = kitRecordFile(root);
+    if (file) fs.writeFileSync(file, `${JSON.stringify({ kitFileHash: sha(text) })}\n`);
+  } catch { /* the record is an aid; a failed write leaves the git comparison in use */ }
+}
+
+// The kit files that a refresh writes and that a person may have edited. The kit file has hand
+// edits when its note line is missing or when its text differs from the text that the last install
+// wrote. A project with no install record falls back to the committed copy. The stub has hand edits
+// when its text does not match its own hash. A refresh does not overwrite such a file.
 function handEditedKitFiles(root) {
   const edited = [];
   let kitText = null;
@@ -202,7 +227,9 @@ function handEditedKitFiles(root) {
   if (kitText != null) {
     const lines = kitText.split('\n');
     let changed = lines[1]?.trim() !== KIT_NOTE;
-    if (!changed) {
+    const recorded = changed ? null : readKitRecord(root);
+    if (!changed && recorded) changed = recorded !== sha(kitText);
+    else if (!changed) {
       try {
         execFileSync('git', ['ls-files', '--error-unmatch', '--', KIT_FILE], { cwd: root, stdio: 'ignore' });
         const diff = execFileSync('git', ['diff', '--name-only', 'HEAD', '--', KIT_FILE], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
@@ -239,6 +266,14 @@ export function refreshKitIfRequired(root, { changesFile = CHANGES_FILE, current
     const result = installKit(root);
     return { status: 'refreshed', written: result.written, line: `Kit refreshed: wrote ${result.written.join(', ')} (kit revision ${installed} to ${result.revision}). Commit the files with your next commit.` };
   } catch (error) { return skip(String(error?.message || error).split('\n')[0]); }
+}
+
+// refreshKitIfRequired that never throws. An error becomes a skipped result with a warning line, so
+// publish and worker start go on. refresh is a test seam.
+export function safeRefreshKit(root, { refresh = refreshKitIfRequired, ...options } = {}) {
+  try { return refresh(root, options); } catch (error) {
+    return { status: 'skipped', written: [], line: `Warning: kit files not refreshed: ${String(error?.message || error).split('\n')[0]}. Run herdr-boss kit update.` };
+  }
 }
 
 // The state of a project kit revision against the current kit revision. A revision that the change
@@ -555,5 +590,6 @@ export function installKit(root, { hook = true } = {}) {
     fs.renameSync(`${file}.tmp`, file);
     written.push(relative);
   }
+  writeKitRecord(root, plan[0][2]);
   return { root, written, unchanged, revision: projectKit().revision, hash: agentsBlock().hash };
 }

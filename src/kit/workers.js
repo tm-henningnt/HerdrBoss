@@ -7,7 +7,7 @@ import { recordUsage } from '../usage.js';
 import { goalSummary, mergeModels, modelEnabled, providerFor, selectModel, unavailablePiModels, unmeteredClosedParts, unmeteredSummary } from '../control.js';
 import { DATA_DIR, loadConfig } from '../config.js';
 import { readBoundedWorkerReport, workerStatusFromState } from '../worker-failures.js';
-import { checkAgentsFile, kitBehindLine, refreshKitIfRequired } from './agents-check.js';
+import { checkAgentsFile, kitBehindLine, refreshKitIfRequired, safeRefreshKit } from './agents-check.js';
 import { acquireLeaseFor, dropLeases, portEnvStatus, setLeasePane } from '../leases.js';
 import { portEnvFor } from '../config.js';
 import { codexBrowserArgs, codexShellEnvArgs } from '../harness.js';
@@ -1156,6 +1156,7 @@ export function startWorker(name, options, {
   runSetup = runSetupCommand,
   leaseOptions = null,
   browserLookup,
+  refreshKit = refreshKitIfRequired,
 } = {}) {
   if (!NAME_PATTERN.test(name)) throw new Error('Worker name must match [a-z][a-z0-9-]{0,31}.');
   if (env.HERDR_ENV !== '1') throw new Error('Run worker start from a Herdr-managed pane (HERDR_ENV=1).');
@@ -1177,7 +1178,7 @@ export function startWorker(name, options, {
   const machineStatus = describeMachine(rules);
   if (machineStatus) output(machineStatus);
   // A dry run writes no file, so it only reports the gap.
-  const kitRefresh = config?.root && !options.dryRun ? refreshKitIfRequired(config.root) : null;
+  const kitRefresh = config?.root && !options.dryRun ? safeRefreshKit(config.root, { refresh: refreshKit }) : null;
   if (kitRefresh?.line) output(kitRefresh.line);
   // A refreshed kit is current. In every other case the gap line stays.
   const kitLine = kitRefresh?.status === 'refreshed' || !config?.root ? null : kitBehindLine(config.root);

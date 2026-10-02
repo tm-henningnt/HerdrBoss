@@ -850,12 +850,19 @@ async function main() {
       const data = JSON.parse(text);
       let top = null;
       try { top = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() || null; } catch {}
+      // The kit files live in the registered repository of the slug. Without a registration, the Git top level holds them.
+      let kitRoot = top;
+      try {
+        const { readProjectRepos } = await import('./harness.js');
+        const registered = readProjectRepos().find((row) => row.slug === slug)?.repo;
+        if (registered && fs.existsSync(registered)) kitRoot = registered;
+      } catch {}
       // Refresh a behind kit first, then set kitRevision from the disk copy, so a stale status shows no false gap.
       let refresh = null;
-      if (top && data && typeof data === 'object' && !Array.isArray(data)) {
-        const { installedKitRevision, refreshKitIfRequired } = await import('./kit/agents-check.js');
-        refresh = refreshKitIfRequired(top);
-        const disk = installedKitRevision(top);
+      if (kitRoot && data && typeof data === 'object' && !Array.isArray(data)) {
+        const { installedKitRevision, safeRefreshKit } = await import('./kit/agents-check.js');
+        refresh = safeRefreshKit(kitRoot);
+        const disk = installedKitRevision(kitRoot);
         if (disk) data.kitRevision = disk;
       }
       // Check AGENTS.md at the Git top level. Findings are warnings here; the status still publishes.
@@ -903,10 +910,10 @@ async function main() {
       const storedBytes = Buffer.byteLength(JSON.stringify(data, null, 2));
       if (storedBytes > STATUS_WARN_BYTES) console.error(`warning: the status is larger than 200 KB (${Math.round(storedBytes / 1024)} KB). Shorten notes and task text.`);
       for (const warning of statusWarnings(data)) console.error(`Warning: ${warning}`);
-      if (top) {
+      if (kitRoot) {
         const { kitBehindLine } = await import('./kit/agents-check.js');
         if (refresh?.line) console.error(refresh.line);
-        const line = refresh?.status === 'refreshed' ? null : kitBehindLine(top);
+        const line = refresh?.status === 'refreshed' ? null : kitBehindLine(kitRoot);
         if (line) console.error(line);
       }
       console.log(`published ${dashboardUrl(cfg)}/projects/${slug}`);
