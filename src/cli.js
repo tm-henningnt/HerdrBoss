@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { loadConfig, migrateAccessFiles, assertPreviewDataDir, assertDataWritable, sandboxWriteError, DATA_DIR, PROJECTS_DIR, dashboardUrl } from './config.js';
 import { writeProject, statusWarnings, capDoneTasks, STATUS_WARN_BYTES, SLUG } from './projects.js';
 import { loadProjectConfig } from './kit/config.js';
-import { maskDeep, maskBrowserText, redactBrowserSecrets } from './browser-url-mask.js';
+import { maskDeep, maskBrowserText, maskCliError, redactBrowserSecrets } from './browser-url-mask.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const LABEL = 'no.tallmaker.herdr-boss';
@@ -1029,5 +1029,13 @@ if (process.argv[1]) {
 }
 
 if (directInvocation) {
-  main().catch((error) => { const e = sandboxWriteError(error); console.error(process.argv[2] === 'browser' ? maskBrowserText(e.message, { full: process.argv.includes('--full') }) : e.message); process.exit(e.exitCode ?? 1); });
+  main().catch((error) => {
+    const e = sandboxWriteError(error);
+    const full = process.argv.includes('--full');
+    const message = process.argv[2] === 'browser'
+      ? maskBrowserText(e.message, { full })
+      : maskCliError(e.message, { full });
+    console.error(message);
+    process.exit(e.exitCode ?? 1);
+  });
 }

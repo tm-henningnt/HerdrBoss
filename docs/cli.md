@@ -1281,6 +1281,8 @@ Browser command output masks outside hosts in URLs, tab titles, and bookmark nam
 
 The final output filter applies to text and JSON. It replaces values after `code=`, `state=`, `session_state=`, `access_token=`, `id_token=`, `refresh_token=`, `token=`, `key=`, and `Bearer ` with `<redacted>`. It also replaces JWT strings. The filter applies to bookmark names and errors. The browser API, dashboard state, and new event log records use the same rules.
 
+The filter also applies to every command error. A usage error, an uncaught exception, and a child process error pass through it. It masks a UUID that follows `--app`, `--app-id`, `--id`, `/apps/`, or `app/`, and it prints that UUID as `<uuid>`. It keeps a bare UUID. A command that is not `browser` keeps a plain file name, such as `src/cli.js`, and masks a host inside a URL. It masks a bare host on a `Command failed:` line only, because that line holds the argument vector of the child. A `browser` error keeps the browser rules. Add `--full` as the Owner at a terminal to keep the outside host and the app UUID.
+
 The filter decodes browser text once before it checks for secrets. Key names can have a prefix, such as `api_key` or `my_token`. A key can use `=`, `%3D`, or `:` before its value. The filter ignores letter case. It also removes bearer values after a tab or a non-breaking space. A JWT replacement includes its padding.
 
 Add `--full` to a supported command to show hosts in full. This flag still removes query strings and fragments. It still removes credentials. Use this flag only when the Owner needs the host, at a terminal.
