@@ -472,7 +472,7 @@ test('PUT /api/settings persists allowed values and updates the running engine c
   const result = await response.json();
   assert.equal(result.ok, true);
   assert.equal(engine.cfg.worktreeRoot, '/tmp/fixture worker trees');
-  assert.equal(engine.cfg.projectRoot, '~/fixture projects');
+  assert.equal(engine.cfg.projectRoot, path.join(homeDir, 'fixture projects'));
   assert.equal(result.settings.find(({ setting }) => setting === 'projectRoot').value, path.join(homeDir, 'fixture projects'));
   assert.equal(engine.cfg.quota.warnPercent, 85);
   assert.equal(engine.cfg.quota.criticalPercent, 96);
@@ -494,7 +494,7 @@ test('PUT /api/settings persists allowed values and updates the running engine c
   const saved = JSON.parse(fs.readFileSync(configFile, 'utf8'));
   assert.deepEqual(saved.other, { keep: true });
   assert.equal(saved.worktreeRoot, '/tmp/fixture worker trees');
-  assert.equal(saved.projectRoot, '~/fixture projects');
+  assert.equal(saved.projectRoot, path.join(homeDir, 'fixture projects'));
   assert.equal(saved.quota.note, 'keep');
   assert.equal(saved.watch.maxWorkers, 20);
   assert.deepEqual([saved.tickSeconds, saved.quotaSeconds, saved.push], [20, 600, false]);

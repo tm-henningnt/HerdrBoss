@@ -238,7 +238,7 @@ test('Linux service startup reports missing lsof and procps in the state API', a
   const engine = makeEngine(null);
   const calls = [];
   const stateReady = once(engine, 'state');
-  const app = serve(cfg, { createEngine: () => engine,
+  const app = serve(cfg, { liveDataDir: process.env.HERDR_BOSS_DIR, createEngine: () => engine,
     machineTools: { platform: 'linux', runner: async (cmd, args, options) => {
       calls.push([cmd, args, options.timeout]);
       throw new Error('not installed');
@@ -267,7 +267,7 @@ for (const scenario of [
     const before = engine.events.length;
     const calls = [];
     const stateReady = once(engine, 'state');
-    const app = serve(cfg, { createEngine: () => engine,
+    const app = serve(cfg, { liveDataDir: process.env.HERDR_BOSS_DIR, createEngine: () => engine,
       machineTools: { platform: scenario.platform, runner: async (cmd) => {
         calls.push(cmd);
         return cmd === 'ps' ? scenario.psVersion : '';
@@ -321,7 +321,7 @@ test('service tool check does not delay the first tick', async (t) => {
   let release;
   const gate = new Promise((resolve) => { release = resolve; });
   const stateReady = once(engine, 'state');
-  const app = serve(cfg, { createEngine: () => engine,
+  const app = serve(cfg, { liveDataDir: process.env.HERDR_BOSS_DIR, createEngine: () => engine,
     machineTools: { platform: 'linux', runner: async (cmd) => { calls.push(cmd); await gate; throw new Error('not installed'); } } });
   t.after(() => app.close());
   if (!app.server.listening) await once(app.server, 'listening');
