@@ -38,6 +38,8 @@ Never use `ps e`, `ps -E`, `ps eww`, `ps aux`, `ps -ef`, or `pgrep -fl`. They pr
 
 Stop only a process that you started, by the PID that you saved when you started it. Save `$!` right after a background start, for example `setopt NO_BG_NICE; npm run serve:live > .worker/tmp/serve.log 2>&1 & echo $! > .worker/tmp/serve.pid`, or use the PID that the server prints. Stop it with `kill <pid>`. Never use `pkill`, `killall`, or `kill` with a name pattern such as `kill $(pgrep …)`. A name pattern can stop another project's server.
 
+Never run `docker system prune`, `docker builder prune`, `docker image prune`, `docker container prune`, `docker volume prune`, `docker rm`, `docker rmi`, or `docker volume rm` on a shared daemon. The exception is a resource that carries the label `herdr-factory-spike=<worker>`. Give every Docker resource that you create this label. Use a dedicated buildx builder or Docker context for factory work, and remove only that one.
+
 Run each `herdr-boss browser` command and each `ps` or `pgrep` command alone. Do not join it to other commands with `&&`, `;`, or a pipe.
 
 Run a long gate in the foreground with `herdr-boss suite --wait 3600 -- <command>`. Set the command tool timeout to at least 3,600,000 ms. Do not run a long gate in a background shell with its default timeout. The `--wait` value is the maximum time to wait for the full-suite lock. Never take the full-suite lock with a bare lock acquire for a suite. Push with `herdr-boss push <args>`.

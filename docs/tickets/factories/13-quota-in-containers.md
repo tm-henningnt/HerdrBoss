@@ -12,3 +12,5 @@
 - [ ] Tests cover a missing reader and a partial reading.
 
 Update `docs/cli.md`, `docs/user-guide.md`, and the dashboard help in the same change as the behaviour.
+
+Follow the Docker safety rule in the README.

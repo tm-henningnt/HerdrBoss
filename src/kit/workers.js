@@ -213,7 +213,13 @@ export function filterCollectProcesses(processes, { worktree, shellPid = null, c
 }
 
 export function listCwdProcesses() {
-  const output = execFileSync('lsof', ['-a', '-d', 'cwd', '-FpcnR'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  let output;
+  try {
+    output = execFileSync('lsof', ['-a', '-d', 'cwd', '-FpcnR'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch (error) {
+    if (error.code === 'ENOENT') return [];
+    throw error;
+  }
   return parseCwdProcesses(output);
 }
 

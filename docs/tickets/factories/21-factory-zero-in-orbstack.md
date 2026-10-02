@@ -13,3 +13,5 @@
 - [ ] The user guide describes the Mac setup after the move.
 
 Update `docs/cli.md`, `docs/user-guide.md`, and the dashboard help in the same change as the behaviour.
+
+Follow the Docker safety rule in the README.

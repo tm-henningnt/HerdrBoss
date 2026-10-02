@@ -173,3 +173,7 @@ Summary: Detect Did you mean this, not available in your country and Rate limit 
 ## 591e80a2bfbe
 Impact: useful
 Summary: Publish the status with --sync at task boundaries, so the card states come from git, workers and issues.
+
+## 7aa9adf4d8a8
+Impact: useful
+Summary: Never prune or remove Docker resources on a shared daemon unless they carry the label herdr-factory-spike=<worker>; use a dedicated builder or context.

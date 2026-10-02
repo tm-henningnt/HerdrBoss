@@ -14,3 +14,5 @@
 - [ ] The Windows runbook from ticket 03 is in `docs/` and the user guide links it.
 
 Update `docs/cli.md`, `docs/user-guide.md`, and the dashboard help in the same change as the behaviour.
+
+Follow the Docker safety rule in the README.

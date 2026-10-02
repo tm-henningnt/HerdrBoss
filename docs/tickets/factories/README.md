@@ -25,3 +25,9 @@ Tickets for the spec [`docs/specs/factories.md`](../../specs/factories.md). One 
 | 19 | [Head office role record and the move to Windows](19-head-office-role.md) | 12, 18 |
 | 20 | [Project transfer, small form](20-project-transfer.md) | 12 |
 | 21 | [Move factory zero into OrbStack on the Mac](21-factory-zero-in-orbstack.md) | 15, 19, 20 |
+
+## Docker safety
+
+Never run `docker system prune`, `docker builder prune`, `docker image prune`, `docker container prune`, `docker volume prune`, `docker rm`, `docker rmi`, or `docker volume rm` on a shared daemon. The exception is a resource that carries the label `herdr-factory-spike=<worker>`.
+
+Give every Docker resource that you create this label. Use a dedicated buildx builder or Docker context for factory work, and remove only that one.
