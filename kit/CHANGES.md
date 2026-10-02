@@ -165,3 +165,7 @@ Summary: Integrate: browser restart and health, lock wait status, tell timeouts,
 ## 63a8014b2a45
 Impact: useful
 Summary: Write shared catalogue findings to per-worker files and run long gates through the suite command with a 60-minute lock wait and command timeout.
+
+## 0084129d473c
+Impact: useful
+Summary: Detect Did you mean this, not available in your country and Rate limit exceeded at an opencode launch, mark the model unavailable and fall back; add trial models with a trial tag; new models enable and disable commands.
