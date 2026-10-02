@@ -855,7 +855,10 @@ function pruneProjectModels(d) {
   for (const p of Object.values(d.projects)) p.excludedModels = (p.excludedModels || []).filter((model) => enabled.has(model));
 }
 
-function harnessSection(kind, cfg, d, unavailableModels = []) {
+// A record that ends in the year 9999 lasts until the Owner runs `herdr-boss models enable`.
+const UNTIL_REENABLED_MS = Date.parse('9999-01-01T00:00:00Z');
+
+function harnessSection(kind, cfg, d, unavailableModels = [], trialModels = []) {
   const extras = d.extraModels?.[kind] || [];
   const list = kindModels(kind, d);
   const providers = harnessProviders(kind);
@@ -864,13 +867,18 @@ function harnessSection(kind, cfg, d, unavailableModels = []) {
     const ignored = ignoredLegacyRoute(kind, model, d);
     const local = extras.includes(model);
     const unavailable = unavailableModels.find((item) => item.kind === kind && item.model === model && item.retryAt > Date.now());
-    const unavailableTag = unavailable ? ` <span class="tag" title="${esc(unavailable.reason || unavailable.label || 'Provider cooldown')}">unavailable until ${esc(new Date(unavailable.retryAt).toLocaleString())}</span>` : '';
+    const held = unavailable && (unavailable.untilReenabled || unavailable.retryAt >= UNTIL_REENABLED_MS);
+    const unavailableTag = unavailable ? ` <span class="tag" title="${esc(unavailable.reason || unavailable.label || 'Provider cooldown')}">unavailable until ${held ? 're-enabled' : esc(new Date(unavailable.retryAt).toLocaleString())}</span>` : '';
+    const trial = trialModels.find((item) => item.kind === kind && item.model === model);
+    const trialTag = trial ? ` <span class="tag" title="Trial model: ${esc(trial.results)} of 5 scorecard results. Evidence is limited. Verify the full diff.">trial</span>` : '';
+    const reenableHelp = held ? `<p class="setting-help" data-reenable-note style="grid-column: 1 / -1; max-width: none; margin: 0 0 6px">To re-enable this model, run <code>herdr-boss models enable ${esc(kind)}/${esc(model)}</code>.</p>` : '';
     const noteId = `route-note-${kind}-${model}`.replace(/[^A-Za-z0-9_-]/g, '-');
     const choices = providers.map((provider) => PROVIDERS[provider]).concat('Unmetered').join(' or ');
     // An ignored legacy route has a placeholder that cannot be chosen again, so any choice stores a compatible harness route.
-    return `<li class="harness-model"><label><input type="checkbox" data-harness-model="${esc(kind)}" data-model="${esc(model)}" ${modelOn(kind, model, d) ? 'checked' : ''}> <span>${esc(model)}</span>${local ? ' <span class="tag">local</span>' : ''}${unavailableTag}</label>
+    return `<li class="harness-model"><label><input type="checkbox" data-harness-model="${esc(kind)}" data-model="${esc(model)}" ${modelOn(kind, model, d) ? 'checked' : ''}> <span>${esc(model)}</span>${local ? ' <span class="tag">local</span>' : ''}${trialTag}${unavailableTag}</label>
       <select data-harness-route="${esc(kind)}" data-model="${esc(model)}" aria-label="Provider for ${esc(model)} in ${esc(kind)}" ${ignored ? `aria-describedby="${noteId}"` : ''}>${ignored ? '<option value="" disabled selected data-ignored-route>Ignored</option>' : ''}<option value="unmetered" ${route === null && !ignored ? 'selected' : ''}>Unmetered</option>${providers.map((provider) => `<option value="${provider}" ${route === provider ? 'selected' : ''}>${esc(PROVIDERS[provider])}</option>`).join('')}</select>
       ${local ? `<button type="button" class="quiet" data-remove-model="${esc(kind)}" data-model="${esc(model)}" aria-label="Remove ${esc(model)} from ${esc(kind)}">Remove</button>` : '<span aria-hidden="true"></span>'}
+      ${reenableHelp}
       ${ignored ? `<p class="setting-help" id="${noteId}" data-route-note style="grid-column: 1 / -1; max-width: none; margin: 0 0 6px; color: var(--warn)">The legacy route to ${esc(PROVIDERS[ignored] || ignored)} is ignored. ${esc(kind)} treats this model as Unmetered. Choose ${esc(choices)}, then Apply policy.</p>` : ''}</li>`;
   }).join('');
   return `<section class="harness" data-harness="${esc(kind)}" aria-labelledby="harness-${esc(kind)}">
@@ -995,7 +1003,7 @@ function settingsView(s) {
   ensureDraft(s);
   if (!policyDraft) return '';
   const d = policyDraft;
-  const harnesses = Object.entries(models || {}).map(([kind, cfg]) => harnessSection(kind, cfg, d, s?.unavailableModels || [])).join('');
+  const harnesses = Object.entries(models || {}).map(([kind, cfg]) => harnessSection(kind, cfg, d, s?.unavailableModels || [], s?.trialModels || [])).join('');
   const ignoredCount = Object.keys(models || {}).reduce((n, kind) => n + kindModels(kind, d).filter((model) => ignoredLegacyRoute(kind, model, d)).length, 0);
   const providerRows = Object.keys(d.providerModes).map((p) => settingRow(null, esc(PROVIDERS[p] || p), `<select id="${helpFid(`quota.mode.${p}`)}" data-provider="${esc(p)}" aria-label="${esc(PROVIDERS[p] || p)} quota mode"><option value="managed" ${d.providerModes[p] === 'managed' ? 'selected' : ''}>Manage pace</option><option value="ignore" ${d.providerModes[p] === 'ignore' ? 'selected' : ''}>Ignore quota</option></select>`, { field: `quota.mode.${p}` })).join('');
   const machine = d.machine || {};
@@ -6222,6 +6230,8 @@ const HELP = {
     <p><code>projectRoot</code> supplies the suggested group folder for <b>New project</b>. An entered group or exact path takes precedence. The CLI still requires <code>--group</code> or <code>--path</code>.</p>
     <p>Each harness section holds the models and provider routes of that harness. Provider quotas, machine limits, and lock lanes are below the harnesses. The <b>Advanced</b> section holds the rarely used settings. It stays closed until you open it, and the page remembers its state.</p>
     <p>A model with an active provider cooldown shows <b>unavailable until</b> with its retry time. The same status appears in <code>herdr-boss models</code> and <code>herdr-boss lanes</code>. When you omit <code>--model</code>, worker start can choose the next available model in the same lane. The run record shows the fallback.</p>
+    <p>When an OpenCode pane shows <b>Did you mean this?</b> or <b>not available in your country</b> at launch, worker start closes the pane, marks the model <b>unavailable until re-enabled</b>, and does not launch it again. <b>Rate limit exceeded</b> marks the model for 30 minutes. To re-enable a model, run <code>herdr-boss models enable KIND/MODEL</code>. The row shows the exact command.</p>
+    <p>A model with the <b>trial</b> tag has fewer than 5 scorecard results. Record <code>--model-result</code> at each <code>worker collect</code>. The tag disappears at the fifth result.</p>
     <h3>Guide to the settings</h3>${settingsGuideHtml()}
     <h3>Pictures</h3><p>Set picture retention from 1 to 365 days. The default is 30 days. Select <b>Apply policy</b>. The hourly sweep deletes expired pictures and uploads left unlinked for more than one hour. A message deletion or dismissal deletes its pictures. JPEG, PNG, WebP and GIF uploads have metadata removed. HEIC and HEIF keep metadata and download as files.</p>
     <h3>Locks</h3><p>The <b>Locks</b> group sets machine lock slots, the short job limit, and the machine guard. The default is 2 slots and a 6 minute short job limit. Herdr Boss predicts a job from recent lock holds. A key with fewer than 3 releases has an unknown prediction and uses the long lane. Before a short job starts beside a long holder, the guard checks load, swap, and free memory. A missing sample or one older than 3 minutes passes. The guard never delays a long job. A short job borrowing the long slot does not activate it. Future samples are ignored. Change the settings and select <b>Apply policy</b>. Capacity and guard changes apply to the next admission attempt, including queued jobs. A missing, invalid, or partial policy on a retry keeps the last validated settings and pauses admission until a complete valid policy returns. Only startup can use legacy defaults. A ticket keeps its prediction and short-limit classification. A blank guard field is invalid and shows a field error. A typed zero is valid.</p>

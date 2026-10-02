@@ -13,6 +13,7 @@ import { loadModels, loadProjectConfig, KIT_ROOT, workerConfigView } from './kit
 import { isOpus, normalizeModel } from './kit/workers.js';
 import { loadPolicy, clearExpiredOneOffGoals, deriveControl, migrateWorkspacePolicy, providerFor, selectModel, pickSuccessor, laneStatus, leastOverProvider, machineLimits, unmeteredLane, unavailablePiModels, mergeModels } from './control.js';
 import { scanSpend, SPEND_SCAN_INTERVAL_MS } from './spend.js';
+import { activeLaunchRecords, TRIAL_RESULT_TARGET } from './kit/model-unavailable.js';
 import { quotaUsageToday, recordQuotaSnapshot, readUsage } from './usage.js';
 import { renderNightReport } from './night-report.js';
 import { adhocOneLine, effectiveRoutines, routinePromptText, slotAfter, slotEnd } from './watch-routines.js';
@@ -102,6 +103,20 @@ export function buildModelScorecard(events = [], now = Date.now()) {
     }))
     .sort((a, b) => b.runs - a.runs || a.kind.localeCompare(b.kind) || a.model.localeCompare(b.model));
 }
+// The models that kit/models.json lists in trialModels and that have fewer than TRIAL_RESULT_TARGET results.
+// A result is a usage event with a recorded model outcome. Events of every age count.
+export function trialModelStatus(models, events = []) {
+  const counts = {};
+  for (const e of events) {
+    if (!e?.modelOutcome?.result) continue;
+    const key = `${e.kind}\n${e.model}`;
+    counts[key] = (counts[key] || 0) + 1;
+  }
+  return Object.entries(models?.kinds || {}).flatMap(([kind, cfg]) => (Array.isArray(cfg?.trialModels) ? cfg.trialModels : [])
+    .map((model) => ({ kind, model, results: counts[`${kind}\n${model}`] || 0 }))
+    .filter((item) => item.results < TRIAL_RESULT_TARGET));
+}
+
 const WORKTREE_SCAN_INTERVAL_MS = 5 * 60 * 1000;
 const CLONE_SWEEP_INTERVAL_MS = 10 * 60 * 1000;
 const REVIEW_RETENTION_INTERVAL_MS = 60 * 60 * 1000;
@@ -1168,7 +1183,14 @@ export class Engine extends EventEmitter {
         this.memory.unavailableModels = extendModelUnavailability(this.memory.unavailableModels, association, cooldown, now);
         if (association.provider === null) this.memory.exhaustedFreeModels = extendFreeModelExhaustion(this.memory.exhaustedFreeModels, association, cooldown.retryAt, now);
       }
-      snap.unavailableModels = Object.values(this.memory.unavailableModels).sort((a, b) => a.model.localeCompare(b.model));
+      // Launch records come from `worker start` and `models disable`. The service never writes them.
+      const unavailableByModel = new Map();
+      for (const item of [...Object.values(this.memory.unavailableModels), ...activeLaunchRecords(DATA_DIR, now)]) {
+        const key = `${item.kind}\n${item.model}`;
+        if ((unavailableByModel.get(key)?.retryAt ?? 0) <= item.retryAt) unavailableByModel.set(key, item);
+      }
+      snap.unavailableModels = [...unavailableByModel.values()].sort((a, b) => a.model.localeCompare(b.model));
+      snap.trialModels = trialModelStatus(this.models, readUsage());
       clearExpiredOneOffGoals(policy, snap.quotas, now, { log: (message) => this.log('policy', message) });
       // Apply the failure status before deriving control, so a failed worker does not count as running.
       snap.herdr = herdr ? { ...herdr, panes: applyWorkerFailureStatuses(herdr.panes, workerTransitions.failures) } : herdr;
@@ -1209,7 +1231,7 @@ export class Engine extends EventEmitter {
       }
       if (this.act) this.recordMemorySample(now);
       // The unmetered lane lists the permitted free models that can start. It never affects least-over selection.
-      const unavailableFreeModels = Object.fromEntries(Object.values(this.memory.unavailableModels)
+      const unavailableFreeModels = Object.fromEntries(snap.unavailableModels
         .filter((item) => item.provider === null).map((item) => [item.model, { model: item.model, retryAt: item.retryAt }]));
       snap.lanes.unmetered = unmeteredLane(this.models, policy, control.projects, { ...this.memory.exhaustedFreeModels, ...unavailableFreeModels }, {
         unavailablePiModels: unavailablePiModels(mergeModels(this.models, policy).kinds.pi?.allowedModels, this.memory.piModels),
@@ -1405,6 +1427,7 @@ export class Engine extends EventEmitter {
         notes: evaluation.advice,
         browsers: managedBrowsers.map((b) => ({ project: b.project, port: b.port, profile: b.profile, headless: !!b.headless, windowSize: b.windowSize || { width: 1280, height: 800 }, ready: browsers.some((x) => x.kind === 'automation-chrome' && x.port === String(b.port) && x.profile === b.profile), responsive: b.responsive, closed: b.closed, notResponding: b.notResponding, probeAt: b.probeAt, probeReason: b.probeReason })),
         unavailableModels: snap.unavailableModels,
+        trialModels: snap.trialModels,
         policy,
         night: { active: snap.night?.active === true, maxWorkersByLane: nightConfig.maxWorkersByLane || {} },
         control: { runningWorkers: control.runningWorkers, maxWorkers: control.maxWorkers, runningByLane, projects: control.projects, workspaces: control.workspaces },

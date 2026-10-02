@@ -7,6 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { loadConfig, migrateAccessFiles, assertPreviewDataDir, assertLiveDataDir, assertDataWritable, sandboxWriteError, DATA_DIR, PROJECTS_DIR, dashboardUrl } from './config.js';
 import { writeProject, statusWarnings, capDoneTasks, STATUS_WARN_BYTES, SLUG } from './projects.js';
 import { loadProjectConfig } from './kit/config.js';
+import { TRIAL_RESULT_TARGET, untilText } from './kit/model-unavailable.js';
 import { maskDeep, maskBrowserText, maskCliError, redactBrowserSecrets } from './browser-url-mask.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -413,7 +414,7 @@ async function main() {
         if (lane.unmetered) {
           console.log(describeUnmetered(lane, project));
           const exhausted = (lane.exhausted || []).filter((item) => !project || item.projects?.includes(project))
-            .map((item) => `${item.model} until ${new Date(item.retryAt).toISOString()}`).sort();
+            .map((item) => `${item.model} until ${untilText(item.retryAt)}`).sort();
           if (exhausted.length) console.log(`unmetered exhausted: ${exhausted.join('; ')}`);
           continue;
         }
@@ -422,7 +423,9 @@ async function main() {
       const unavailable = Object.values(rules.unavailableModels || {}).filter((item) => typeof item?.model === 'string'
         && item.provider !== null && Number.isSafeInteger(item.retryAt) && item.retryAt > Date.now())
         .sort((a, b) => a.model.localeCompare(b.model));
-      if (unavailable.length) console.log(`models unavailable: ${unavailable.map((item) => `${item.model} (${item.lane || item.provider || 'unmetered'}) until ${new Date(item.retryAt).toISOString()}${item.reason ? `: ${item.reason}` : ''}`).join('; ')}`);
+      const trial = (Array.isArray(rules.trialModels) ? rules.trialModels : []).filter((item) => typeof item?.model === 'string');
+      if (trial.length) console.log(`trial models (fewer than ${TRIAL_RESULT_TARGET} scorecard results): ${trial.map((item) => `${item.model} (${item.results ?? 0})`).join('; ')}`);
+      if (unavailable.length) console.log(`models unavailable: ${unavailable.map((item) => `${item.model} (${item.lane || item.provider || 'unmetered'}) until ${untilText(item.retryAt)}${item.reason ? `: ${item.reason}` : ''}`).join('; ')}`);
       break;
     }
     case 'policy': {

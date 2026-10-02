@@ -2,7 +2,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { DEFAULT_RULES_FILE, findGitRoot, loadModels, loadProjectConfig } from './config.js';
-import { mergeModels } from '../control.js';
+import os from 'node:os';
+import { mergeModels, providerFor } from '../control.js';
+import { activeLaunchRecords, enableModel, markModelUnavailable } from './model-unavailable.js';
 import { appendDelegatedRun, compareChangedPaths, gitStatusPaths, readDelegatedRuns, readJson, validateAllowedPaths, validateDelegatedRun, normalizeWorkerReport, validateWorkerReport } from './orchestration.js';
 import { buildGhArgs, buildGhLabelArgs, buildGhMilestoneArgs, loadLabelPreset, parseLabelSync } from './gh.js';
 import { cleanGhEnv, ghRunner, originRepo, syncLabels } from '../gh-labels.js';
@@ -105,12 +107,32 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
   if (command === 'models') {
     const modelConfig = mergeModels(loadModels(), rulesPolicy(rulesFile));
     const { positional, flags } = parseArgs(argv);
-    if (positional.length || Object.keys(flags).some((key) => key !== 'kind')) fail('Usage: models [--kind KIND]');
+    if (positional[0] === 'enable' || positional[0] === 'disable') {
+      const usage = 'Usage: models enable KIND/MODEL | models disable KIND/MODEL [--reason TEXT]';
+      const target = positional[1] ?? '';
+      const split = target.indexOf('/');
+      const kind = split > 0 ? target.slice(0, split) : '';
+      const model = split > 0 ? target.slice(split + 1) : '';
+      if (positional.length !== 2 || !model || Object.keys(flags).some((key) => key !== 'reason' || positional[0] === 'enable')) fail(usage);
+      if (!modelConfig.kinds[kind]) fail(`Unknown model kind: ${kind}.`);
+      if (!modelConfig.kinds[kind].allowedModels.includes(model)) fail(`Model ${model} is not allowed for ${kind}.`);
+      const dir = env.HERDR_BOSS_DIR || path.join(os.homedir(), '.herdr-boss');
+      if (positional[0] === 'enable') {
+        const removed = enableModel(dir, kind, model);
+        output(removed ? `Enabled ${kind}/${model}.` : `${kind}/${model} had no unavailable record.`);
+        return { kind, model, enabled: removed };
+      }
+      const reason = typeof flags.reason === 'string' && flags.reason ? flags.reason : 'disabled by the Owner';
+      const record = markModelUnavailable(dir, { kind, model, provider: providerFor(kind, model, rulesPolicy(rulesFile)), untilReenabled: true, label: reason, reason });
+      output(`Disabled ${kind}/${model} until it is re-enabled with herdr-boss models enable ${kind}/${model}.`);
+      return record;
+    }
+    if (positional.length || Object.keys(flags).some((key) => key !== 'kind')) fail('Usage: models [--kind KIND] | models enable KIND/MODEL | models disable KIND/MODEL [--reason TEXT]');
     if (flags.kind && !modelConfig.kinds[flags.kind]) fail(`Unknown model kind: ${flags.kind}.`);
     let unavailableModels = {};
     try { unavailableModels = JSON.parse(fs.readFileSync(rulesFile, 'utf8')).unavailableModels || {}; }
     catch (error) { if (error.code !== 'ENOENT') throw error; }
-    const activeUnavailable = Object.values(unavailableModels).filter((item) => typeof item?.model === 'string' && typeof item?.kind === 'string'
+    const activeUnavailable = [...Object.values(unavailableModels), ...activeLaunchRecords(env.HERDR_BOSS_DIR || path.join(os.homedir(), '.herdr-boss'))].filter((item) => typeof item?.model === 'string' && typeof item?.kind === 'string'
       && modelConfig.kinds[item.kind]?.allowedModels.includes(item.model)
       && Number.isSafeInteger(item.retryAt) && item.retryAt > Date.now());
     // localModels lists the models that come from the policy extraModels and not from kit/models.json.
