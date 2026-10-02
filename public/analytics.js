@@ -459,6 +459,35 @@ export function lockWaitSeries(locks, project = 'all') {
   };
 }
 
+// Lane wait and hold by hour. The filter uses one project or all projects.
+export function lockLaneHourSeries(hourly, project = 'all') {
+  const hours = Array.isArray(hourly?.hours) ? hourly.hours : [];
+  const list = Array.isArray(hourly?.projects) ? hourly.projects : [];
+  const chosen = project !== 'all' && list.some((row) => row.project === project) ? project : 'all';
+  const rows = chosen === 'all' ? list : list.filter((row) => row.project === chosen);
+  const values = (key, lane) => hours.map((_, i) => rows.reduce((sum, row) => {
+    const value = row[key]?.[lane]?.[i];
+    return sum + (Number.isFinite(value) ? value : 0);
+  }, 0));
+  return {
+    hours, project: chosen, projects: list.map((row) => row.project),
+    series: [
+      { key: 'waitLong', label: 'Long lane wait', cls: 's1', values: values('waitByLane', 'long') },
+      { key: 'holdLong', label: 'Long lane hold', cls: 's2', values: values('holdByLane', 'long') },
+      { key: 'waitShort', label: 'Short lane wait', cls: 's3', values: values('waitByLane', 'short') },
+      { key: 'holdShort', label: 'Short lane hold', cls: 's4', values: values('holdByLane', 'short') },
+    ],
+  };
+}
+
+// The table behind the hourly lane chart.
+export function lockLaneHourDetailsHtml(win) {
+  const cell = (label, value, mono = true) => `<td data-label="${esc(label)}"${mono ? ' class="mono"' : ''}>${value}</td>`;
+  const values = Object.fromEntries((win?.series || []).map((series) => [series.key, series.values]));
+  const rows = (win?.hours || []).map((at, i) => `<tr>${cell('Hour', esc(hourLabel(at, true)), false)}${cell('Long lane wait', minutes(values.waitLong?.[i] ?? 0))}${cell('Long lane hold', minutes(values.holdLong?.[i] ?? 0))}${cell('Short lane wait', minutes(values.waitShort?.[i] ?? 0))}${cell('Short lane hold', minutes(values.holdShort?.[i] ?? 0))}</tr>`).join('');
+  return `<h3>By lane and hour</h3><div class="fleet-table-wrap"><table class="fleet-table"><thead><tr><th>Hour</th><th>Long wait</th><th>Long hold</th><th>Short wait</th><th>Short hold</th></tr></thead><tbody>${rows || '<tr><td colspan="5">No hourly lock data.</td></tr>'}</tbody></table></div>`;
+}
+
 // The tables behind Details: one row for each day, and one row for each project of the window.
 export function lockWaitDetailsHtml(win, locks) {
   const cell = (label, value, mono = true) => `<td data-label="${esc(label)}"${mono ? ' class="mono"' : ''}>${value}</td>`;

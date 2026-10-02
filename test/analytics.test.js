@@ -5,7 +5,7 @@ import test from 'node:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { noticeCounts, machineTimeline, memoryByClass, readEventTail, analyticsSummary, lockDaily, NOTICE_PANE_LIMIT } from '../src/analytics.js';
+import { noticeCounts, machineTimeline, memoryByClass, readEventTail, analyticsSummary, lockDaily, lockHourly, NOTICE_PANE_LIMIT } from '../src/analytics.js';
 import * as analytics from '../src/analytics.js';
 
 const tmp = (t) => {
@@ -297,6 +297,32 @@ test('lockDaily separates lane waits and reports the short wait median', () => {
   assert.equal(result.byLane.long.medianWaitMs, 5000);
 });
 
+test('lockHourly separates wait and hold by lane and project for the last 24 hours', () => {
+  const at = (ms) => new Date(ms).toISOString();
+  const rows = [
+    { at: at(NOW - HOUR / 2), event: 'acquire', project: 'alpha', lane: 'short', waitMs: 4000 },
+    { at: at(NOW - HOUR / 2), event: 'release', project: 'alpha', lane: 'short', holdMs: 120000 },
+    { at: at(NOW - HOUR / 2), event: 'acquire', project: 'alpha', lane: 'long', waitMs: 60000 },
+    { at: at(NOW - HOUR / 2), event: 'release', project: 'alpha', lane: 'long', holdMs: 300000 },
+    { at: at(NOW - HOUR / 2), event: 'release', project: 'alpha', lane: 'long', takeover: true, holdMs: 999999 },
+    { at: at(NOW - HOUR / 2), event: 'acquire', project: 'alpha', lane: 'short', reentrant: true, waitMs: 999999 },
+    { at: at(NOW - 25 * HOUR), event: 'acquire', project: 'alpha', lane: 'long', waitMs: 999999 },
+    { at: at(NOW - HOUR / 2), event: 'acquire', project: '/private/path', lane: 'short', waitMs: 1000 },
+  ];
+  const result = lockHourly(rows, { hours: 24, now: NOW });
+  assert.equal(result.hours.length, 24);
+  assert.equal(result.projects.some((row) => row.project === 'alpha'), true);
+  const alpha = result.projects.find((row) => row.project === 'alpha');
+  const last = result.hours.length - 1;
+  assert.deepEqual({ longWait: alpha.waitByLane.long[last], shortWait: alpha.waitByLane.short[last], longHold: alpha.holdByLane.long[last], shortHold: alpha.holdByLane.short[last] }, {
+    longWait: 60000, shortWait: 4000, longHold: 300000, shortHold: 120000,
+  });
+  assert.equal(result.byLane.long.hold[last], 300000);
+  assert.equal(result.byLane.short.wait[last], 5000, 'the combined lane total includes the sanitized other project');
+  assert.ok(result.projects.some((row) => row.project === 'other'));
+  assert.doesNotMatch(JSON.stringify(result), /private|Users/);
+});
+
 test('analyticsSummary reads the lock ledger from the last 2 MB only', (t) => {
   const dir = tmp(t);
   const line = (n) => JSON.stringify({ at: new Date(NOW - HOUR).toISOString(), event: 'acquire', name: 'full-suite', project: 'alpha', kind: 'suite', waitMs: n });
@@ -304,6 +330,8 @@ test('analyticsSummary reads the lock ledger from the last 2 MB only', (t) => {
   fs.writeFileSync(path.join(dir, 'lock-ledger.jsonl'), `${Array(12000).fill(old).join('\n')}\n${line(60000)}\n`);
   const r = analyticsSummary({ dataDir: dir, now: NOW });
   assert.equal(r.locks.projects.find((p) => p.project === 'alpha').waitTotal, 60000);
+  assert.equal(r.locks.hourly.hours.length, 24);
+  assert.equal(r.locks.hourly.projects.find((p) => p.project === 'alpha').waitByLane.long.at(-1), 60000);
   assert.ok(r.locks.projects.find((p) => p.project === 'old').waitTotal < 12000 * 7, 'the head of the file is not read');
 });
 

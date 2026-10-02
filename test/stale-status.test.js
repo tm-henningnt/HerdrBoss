@@ -75,7 +75,7 @@ test('the stale status notice delay uses the no-worker threshold', () => {
   assert.equal(STALE_STATUS_NOTICE_AFTER_MINUTES, NO_WORKER_MINUTES);
 });
 
-test('a stale status notice starts after 30 minutes and repeats once an hour while the orchestrator works', async () => {
+test('a stale status notice joins the pane digest after 30 minutes and repeats no sooner than 2 hours', async () => {
   const prompts = [];
   const engine = new Engine(loadConfig(), { push: false, act: false, herdrRunner: async (_cmd, args) => { prompts.push(args); return ''; } });
   engine.push = true;
@@ -89,28 +89,73 @@ test('a stale status notice starts after 30 minutes and repeats once an hour whi
   assert.equal(first.length, 1);
   assert.equal(first[0].text, 'Status published 31 min ago. Publish the current plan with herdr-boss publish alpha <file>.');
   await engine.deliver(first, { panes }, NOW);
-  assert.equal(prompts.length, 1, 'one prompt starts the interval');
+  assert.equal(prompts.length, 0, 'a working orchestrator does not receive the digest');
+
+  const idlePane = [{ ...panes[0], status: 'idle' }];
+  await engine.deliver(first, { panes: idlePane }, NOW + MIN);
+  assert.equal(prompts.length, 1, 'the stale item goes in the first idle pane digest');
   assert.equal(prompts[0][2], 'w1:p1');
   assert.match(prompts[0][3], /Status published 31 min ago\. Publish the current plan with herdr-boss publish alpha <file>\./);
 
   const inInterval = NOW + 59 * MIN;
   const stillStale = staleAlerts(evaluate(active, CFG, {}, inInterval).alerts);
   assert.equal(stillStale.length, 1);
-  const movedPane = [{ id: 'w1:p2', workspace: 'w1', orch: true, label: 'orch', agent: 'claude', status: 'working' }];
+  const movedPane = [{ id: 'w1:p2', workspace: 'w1', orch: true, label: 'orch', agent: 'claude', status: 'idle' }];
   await engine.deliver(stillStale, { panes: movedPane }, inInterval);
-  assert.equal(prompts.length, 1, 'no second prompt inside the hour, even after a pane change');
+  assert.equal(prompts.length, 1, 'no second digest goes out inside 2 hours, even after a pane change');
 
-  const afterInterval = NOW + 61 * MIN;
+  const afterInterval = NOW + 121 * MIN;
   const repeat = staleAlerts(evaluate(active, CFG, {}, afterInterval).alerts);
   assert.equal(repeat.length, 1);
   await engine.deliver(repeat, { panes: movedPane }, afterInterval);
-  assert.equal(prompts.length, 2, 'a second prompt follows the hour');
+  assert.equal(prompts.length, 2, 'a second digest follows the two-hour interval');
   assert.equal(prompts[1][2], 'w1:p2');
 
   const workerOnly = snapshot({ updated: NOW - 31 * MIN, workers: [{ phase: 'live' }] });
   assert.equal(staleAlerts(evaluate(workerOnly, CFG, {}, NOW).alerts).length, 1, 'a live worker also triggers the notice');
   const quiet = snapshot({ updated: NOW - 31 * MIN });
   assert.equal(staleAlerts(evaluate(quiet, CFG, {}, NOW).alerts).length, 0, 'no notice without a working worker or orchestrator');
+});
+
+test('an overdue digest reaches a working orchestrator after 3 hours and still uses the 2-hour gate', async () => {
+  let clockNow = NOW;
+  const clock = () => clockNow;
+  const prompts = [];
+  const engine = new Engine(loadConfig(), {
+    push: false, act: false, clock,
+    herdrRunner: async (_cmd, args) => { prompts.push(args); return ''; },
+  });
+  engine.push = true;
+  engine.log = () => {};
+  engine.memory = { paneSince: {}, pushes: {}, notified: {}, infoPrompts: {} };
+  const panes = [{ id: 'w1:p1', workspace: 'w1', orch: true, label: 'orch', agent: 'claude', status: 'working' }];
+  const stale = staleAlerts(evaluate(snapshot({ updated: NOW - 31 * MIN, orchStatus: 'working' }), CFG, {}, clockNow).alerts);
+  const noReport = {
+    key: 'workers:no-report:alpha:w1:p2:run-1:period-1', severity: 'info', once: true, scope: 'w1',
+    title: 'Worker alpha is idle without a report', text: 'Worker alpha has no report.json.',
+  };
+  const alerts = [...stale, noReport];
+
+  await engine.deliver(alerts, { panes }, clock());
+  assert.equal(prompts.length, 0, 'a new digest does not interrupt a working orchestrator');
+
+  clockNow += 3 * HOUR;
+  await engine.deliver(alerts, { panes }, clock());
+  assert.equal(prompts.length, 0, 'the overdue limit is more than 3 hours');
+
+  clockNow += 1;
+  await engine.deliver(alerts, { panes }, clock());
+  assert.equal(prompts.length, 1, 'the overdue digest reaches a pane that stays working');
+  assert.match(prompts[0][3], /Status published 31 min ago/);
+  assert.match(prompts[0][3], /Worker alpha has no report\.json\./);
+
+  clockNow += 2 * HOUR - 1;
+  await engine.deliver(alerts, { panes }, clock());
+  assert.equal(prompts.length, 1, 'the existing 2-hour pane gate still applies');
+
+  clockNow += 1;
+  await engine.deliver(alerts, { panes }, clock());
+  assert.equal(prompts.length, 2, 'the overdue digest can send again when the 2-hour gate opens');
 });
 
 test('stale status notices go only to the project pane labeled orch and wait while it is blocked', async () => {

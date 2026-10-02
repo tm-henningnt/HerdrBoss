@@ -18,6 +18,7 @@ import { readActionsMinutes } from './actions-minutes.js';
 export const NOTICE_PANE_LIMIT = 5;
 export const EVENT_TAIL_BYTES = 2 * 1024 * 1024;
 const MINUTE = 60000;
+const HOUR = 60 * MINUTE;
 const PANE_ID = /^[A-Za-z0-9_-]{1,24}(:[A-Za-z0-9_-]{1,24})?$/;
 
 const localDay = (ms) => {
@@ -317,6 +318,37 @@ export function lockDaily(rows, { days = 7, now = Date.now() } = {}) {
   };
 }
 
+// Lock wait and hold for each project and lane in hourly buckets of the last 24 hours.
+// A row without a lane counts as long. Re-entry, reuse, and takeover rows add no time.
+export function lockHourly(rows, { hours = 24, now = Date.now() } = {}) {
+  const end = Math.ceil(now / HOUR) * HOUR;
+  const start = end - hours * HOUR;
+  const hourList = Array.from({ length: hours }, (_, i) => new Date(start + i * HOUR).toISOString());
+  const emptyLanes = () => ({ long: Array(hours).fill(0), short: Array(hours).fill(0) });
+  const byProject = new Map();
+  for (const row of rows || []) {
+    const at = Date.parse(row?.at);
+    if (!Number.isFinite(at) || at < start || at >= end) continue;
+    const i = Math.floor((at - start) / HOUR);
+    const project = typeof row.project === 'string' && PROJECT_SLUG.test(row.project) ? row.project : 'other';
+    const entry = byProject.get(project) || { project, waitByLane: emptyLanes(), holdByLane: emptyLanes() };
+    byProject.set(project, entry);
+    if (row.reentrant || row.reused) continue;
+    const lane = row.lane === 'short' ? 'short' : 'long';
+    if (row.event === 'acquire') entry.waitByLane[lane][i] += finite(row.waitMs) || 0;
+    else if (row.event === 'release' && !row.takeover) entry.holdByLane[lane][i] += finite(row.holdMs) || 0;
+  }
+  const projects = [...byProject.values()]
+    .filter((project) => ['long', 'short'].some((lane) => project.waitByLane[lane].some((value, i) => value || project.holdByLane[lane][i])))
+    .sort((a, b) => (a.project === 'other') - (b.project === 'other') || a.project.localeCompare(b.project));
+  const total = (key, lane) => Array.from({ length: hours }, (_, i) => projects.reduce((sum, project) => sum + project[key][lane][i], 0));
+  return {
+    hours: hourList,
+    projects,
+    byLane: Object.fromEntries(['long', 'short'].map((lane) => [lane, { wait: total('waitByLane', lane), hold: total('holdByLane', lane) }])),
+  };
+}
+
 // The harness change markers that fall on a day of the denial window.
 function markersIn(days, dataDir) {
   const first = days[0], last = days.at(-1);
@@ -351,6 +383,7 @@ function lockAdmissionSummary(samples, { dataDir, now }) {
 
 export function analyticsSummary({ dataDir = DATA_DIR, now = Date.now(), actionsMinutesEnabled = true } = {}) {
   const events = readEventTail(path.join(dataDir, 'events.jsonl'));
+  const lockRows = readEventTail(path.join(dataDir, 'lock-ledger.jsonl'));
   const samples = readMachineSamples({ dataDir, sinceMs: now - 25 * 3600000 });
   const memory = readMemorySamples({ dataDir, sinceMs: now - 25 * 3600000 });
   const denials = denialDaily(readDenials(dataDir), { now, days: RETAIN_DAYS });
@@ -358,7 +391,7 @@ export function analyticsSummary({ dataDir = DATA_DIR, now = Date.now(), actions
   const agentSince = new Date(`${agentDays[0]}T00:00:00`).toISOString();
   return {
     notices: noticeCounts(events, { days: 7, now }),
-    locks: { ...lockDaily(readEventTail(path.join(dataDir, 'lock-ledger.jsonl')), { days: 7, now }),
+    locks: { ...lockDaily(lockRows, { days: 7, now }), hourly: lockHourly(lockRows, { hours: 24, now }),
       admission: lockAdmissionSummary(samples, { dataDir, now }) },
     timeline: machineTimeline(samples, { hours: 24, bucketMin: 10, now }),
     memoryByClass: memoryByClass(memory, { hours: 24, bucketMin: 60, now }),
