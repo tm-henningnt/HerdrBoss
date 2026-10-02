@@ -828,7 +828,7 @@ test('a ghost suggestion in an idle successor input does not block readiness', {
   assert.equal(out.herdrCalls.filter(({ args }) => args[0] === 'agent' && args[1] === 'send-keys').length, 0);
 });
 
-test('real unsent successor input gets a second Enter after the delay and one Boss notice', { timeout: 30000 }, (t) => {
+test('real unsent successor input gets a second Enter after the delay and one Boss notice in a later tick', { timeout: 30000 }, (t) => {
   const out = run(t, {
     tokens: 400000, memory: tracked,
     handoffs: [unreadyRecord({ seenWorkingAt: undefined })],
@@ -836,6 +836,7 @@ test('real unsent successor input gets a second Enter after the delay and one Bo
       { at: at(1), herdr: herdrOf(pane('idle'), worker, successor, bossPane), published: { alpha: status(1) }, screen: '❯ run the prepared handover' },
       { at: at(2), herdr: herdrOf(pane('idle'), worker, successor, bossPane), published: { alpha: status(1) }, screen: '❯ run the prepared handover' },
       { at: at(3), herdr: herdrOf(pane('idle'), worker, successor, bossPane), published: { alpha: status(1) }, screen: '❯ run the prepared handover' },
+      { at: at(4), herdr: herdrOf(pane('idle'), worker, successor, bossPane), published: { alpha: status(1) }, screen: '❯ run the prepared handover' },
     ],
   });
   const enters = out.herdrCalls.filter(({ args }) => args[0] === 'agent' && args[1] === 'send-keys');
@@ -845,10 +846,29 @@ test('real unsent successor input gets a second Enter after the delay and one Bo
   ], 'the engine sends at most two Enters in total');
   assert.ok(out.records[0].inputEnterSentAt);
   assert.ok(out.records[0].inputEnterRetryAt);
+  assert.ok(out.records[0].inputNoticeAt);
   assert.equal(out.records[0].readyAt, undefined);
-  assert.deepEqual(bossNotes(out).map(({ step }) => step), [1]);
+  assert.deepEqual(bossNotes(out).map(({ step }) => step), [2], 'the notice goes out one tick after the retry, not with it');
   assert.match(bossNotes(out)[0].args[3], /ctx-1.*w-alpha:p9/);
   assert.match(bossNotes(out)[0].args[3], /herdr agent read w-alpha:p9/);
+});
+
+test('a successor input that is cleared before the second wait gets the retry and no Boss notice', { timeout: 30000 }, (t) => {
+  const out = run(t, {
+    tokens: 400000, memory: tracked,
+    handoffs: [unreadyRecord({ seenWorkingAt: undefined })],
+    steps: [
+      { at: at(1), herdr: herdrOf(pane('idle'), worker, successor, bossPane), published: { alpha: status(1) }, screen: '❯ run the prepared handover' },
+      { at: at(2), herdr: herdrOf(pane('idle'), worker, successor, bossPane), published: { alpha: status(1) }, screen: '❯ run the prepared handover' },
+      { at: at(3), herdr: herdrOf(pane('idle'), worker, successor, bossPane), published: { alpha: status(1) } },
+    ],
+  });
+  const enters = out.herdrCalls.filter(({ args }) => args[0] === 'agent' && args[1] === 'send-keys');
+  assert.deepEqual(enters.map(({ args }) => args), [
+    ['agent', 'send-keys', 'w-alpha:p9', 'enter'],
+    ['agent', 'send-keys', 'w-alpha:p9', 'enter'],
+  ], 'the retry still goes out after the first wait');
+  assert.deepEqual(bossNotes(out), [], 'a cleared input sends no notice');
 });
 
 test('a cleared successor input gets no second Enter and becomes ready', { timeout: 30000 }, (t) => {

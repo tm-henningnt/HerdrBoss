@@ -2259,17 +2259,27 @@ export class Engine extends EventEmitter {
         }
         // The first Enter did not submit the input. Wait the same delay, then send the one retry.
         if (now - Date.parse(latest.inputEnterSentAt) < INPUT_ENTER_READY_DELAY_MS) continue;
-        if (latest.inputEnterRetryAt) continue;
-        latest.inputEnterRetryAt = new Date(now).toISOString();
-        saveHandoffs(current);
-        try {
-          checkHerdrResponse(await this.herdrRunner('herdr', ['agent', 'send-keys', target.id, 'enter']));
-          this.log('handoff', `Sent the one Enter retry to submit unsent input in successor pane ${target.id} for handoff ${item.id}`, { project: item.project, pane: target.id });
-        } catch (error) {
-          this.log('error', `Enter retry for unsent successor input in handoff ${item.id} failed: ${String(error.stderr || error.message).slice(0, 200)}`, { project: item.project, pane: target.id });
+        if (!latest.inputEnterRetryAt) {
+          latest.inputEnterRetryAt = new Date(now).toISOString();
+          saveHandoffs(current);
+          try {
+            checkHerdrResponse(await this.herdrRunner('herdr', ['agent', 'send-keys', target.id, 'enter']));
+            this.log('handoff', `Sent the one Enter retry to submit unsent input in successor pane ${target.id} for handoff ${item.id}`, { project: item.project, pane: target.id });
+          } catch (error) {
+            this.log('error', `Enter retry for unsent successor input in handoff ${item.id} failed: ${String(error.stderr || error.message).slice(0, 200)}`, { project: item.project, pane: target.id });
+          }
+          continue;
         }
-        await this.retryOperation(latest, now, 'input', 'the unsent input notice', () => this.promptHandoverBoss(herdr,
+        // The retry did not submit the input either. Wait the same delay again, then read the screen. The typedInput
+        // result of this tick is that read. Tell the Boss once only when the input line still holds typed text.
+        if (latest.inputNoticeAt) continue;
+        if (now - Date.parse(latest.inputEnterRetryAt) < INPUT_ENTER_READY_DELAY_MS) continue;
+        const notified = await this.retryOperation(latest, now, 'input', 'the unsent input notice', () => this.promptHandoverBoss(herdr,
           `[herdr-boss] Handoff ${item.id}, pane ${item.newPane}: the bootstrap prompt is typed in the input line and Enter did not submit it. Read the pane with herdr agent read ${item.newPane}, then submit the prompt by hand or close the pane and prepare a new successor.`), { project: item.project, pane: item.newPane });
+        if (notified) {
+          latest.inputNoticeAt = new Date(now).toISOString();
+          saveHandoffs(current);
+        }
         continue;
       }
       if (Number.isFinite(Date.parse(item.inputEnterSentAt)) && now - Date.parse(item.inputEnterSentAt) < INPUT_ENTER_READY_DELAY_MS) continue;

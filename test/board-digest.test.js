@@ -126,6 +126,15 @@ test('the digest reaches only an idle orchestrator of the project, once each hou
   assert.match(prompts[0].text, /- 2 cards differ from git: A1, A2\. Publish the status with --sync\./);
 });
 
+test('a working orchestrator pane gets no digest line, and an idle pane gets it at the next tick', (t) => {
+  const prompts = run(t, {
+    rounds: [[pane('wA:p1', 'wA', 'working')], [pane('wA:p1', 'wA', 'idle')]],
+    offsets: [0, MIN],
+  });
+  assert.deepEqual(prompts.map((p) => p.pane), ['wA:p1'], 'the busy pane gets no line; the idle pane gets the line on the next tick');
+  assert.match(prompts[0].text, /- 2 cards differ from git: A1, A2\. Publish the status with --sync\./);
+});
+
 test('the digest finds the orchestrator by the live pane list after a pane id change', (t) => {
   const prompts = run(t, { rounds: [[pane('wA:p1', 'wA', 'idle')], [pane('wA:p7', 'wA', 'idle')]], offsets: [0, 5 * MIN] });
   assert.deepEqual(prompts.map((p) => p.pane), ['wA:p1']);
