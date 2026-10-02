@@ -36,6 +36,7 @@ import { sweepAttachments } from './attachments.js';
 import { openMessageStore } from './message-store.js';
 import { readKitNotice, pendingKitAlert, isKitAlert, kitNoticeTargets, unsentKitChanges, formatKitNotice, KIT_ADOPT_STEPS } from './kit-notice.js';
 import { applyTaskState, readWorkerFacts, gitIsMerged, gitCounts } from './task-state.js';
+import { BoardFactsCache } from './board-facts.js';
 import { kitRevisionState, kitSnapshot, KIT_STATES } from './kit/agents-check.js';
 import { nextDailyTime, nightNoticeSent, quietHoursActive, readNight, readNightRecord, watchUntilPhrase, withNightReportMark, withNoticeMark, writeNight } from './night.js';
 import { inspectWorkerTransitions, inspectWorkerReports, readBoundedWorkerReport, isWorkerPane, applyWorkerFailureStatuses, resolveWorkerRun, activeUnavailableModels, extendModelUnavailability, workerModelCooldown, activeFreeModelExhaustions, extendFreeModelExhaustion } from './worker-failures.js';
@@ -623,6 +624,9 @@ export class Engine extends EventEmitter {
     this.mergedCache = new Map();
     this.gitCounts = {};
     this.gitCountsAt = 0;
+    this.boardFactsCache = new BoardFactsCache();
+    this.boardFacts = {};
+    this.boardFactsAt = 0;
     this.collectors = {
       collectHerdr,
       collectQuotas,
@@ -1252,7 +1256,7 @@ export class Engine extends EventEmitter {
       snap.staleStatus = staleStatuses(snap, this.cfg, now, this.memory.staleStatus);
       this.memory.staleStatus = snap.staleStatus;
       snap.projects = applyTaskState(snap.projects, snap.taskWorkers, {
-        stale: snap.staleStatus, gitCounts: this.readGitCounts(now), herdr: snap.herdr, control: snap.control, now,
+        stale: snap.staleStatus, gitCounts: this.readGitCounts(now), boardFacts: this.readBoardFacts(now), herdr: snap.herdr, control: snap.control, now,
       });
       this.memory.lastOrchestrators ||= {};
       for (const p of Object.values(control.projects)) if (p.orch?.kind) this.memory.lastOrchestrators[p.workspace] = { pane: p.orch.pane, kind: p.orch.kind, project: p.slug };
@@ -1574,6 +1578,26 @@ export class Engine extends EventEmitter {
     return next;
   }
 
+  // The commit and issue facts of each registered project. The cache reads git at most once a minute and the issue
+  // tracker at most every 10 minutes. A project without a repository path has no facts.
+  readBoardFacts(now) {
+    if (now - this.boardFactsAt < TASK_WORKERS_INTERVAL_MS) return this.boardFacts;
+    this.boardFactsAt = now;
+    const next = {};
+    for (const { slug, repo } of readProjectRepos(DATA_DIR)) {
+      let base = 'main';
+      try { base = loadProjectConfig({ cwd: repo }).baseBranch || 'main'; } catch { /* the default base applies */ }
+      try {
+        this.boardFactsCache.refresh(slug, repo, { branch: base, now });
+        next[slug] = this.boardFactsCache.get(slug);
+      } catch (error) {
+        this.log('status', `Board facts for ${slug} failed (${error.code || 'error'}).`, { project: slug });
+      }
+    }
+    this.boardFacts = next;
+    return next;
+  }
+
   // Apply the task state to a fresh project list, for example after a publish between two ticks.
   decorateProjects(projects, now = Date.now()) {
     const herdr = this.state?.herdr || null;
@@ -1581,7 +1605,7 @@ export class Engine extends EventEmitter {
     const taskWorkers = this.readTaskWorkers(now, herdr);
     const snap = { projects, control, herdr, statusActivity: this.statusActivity(), taskWorkers };
     const stale = staleStatuses(snap, this.cfg, now, this.memory.staleStatus);
-    return applyTaskState(projects, taskWorkers, { stale, gitCounts: this.gitCounts, herdr, control, now });
+    return applyTaskState(projects, taskWorkers, { stale, gitCounts: this.gitCounts, boardFacts: this.readBoardFacts(now), herdr, control, now });
   }
 
   // The read-only worker config of each registered project, with allow-listed fields only.

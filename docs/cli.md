@@ -111,6 +111,22 @@ The orchestrator keeps its own file unchanged. Publishing the same file again le
 
 The first `publish` of a slug registers the project. It records `{ slug, repo, remote }` in `project-repos.json` in the data folder, with mode 0600, when the Git top level exists. `repo` is the Git top level. `remote` is the `origin` URL without a user name and a password. A later publish keeps the first record. For a new slug, `publish` runs `harness sync --codex-only` and prints its result as `warning: harness sync:` lines.
 
+### Board state routes
+
+`GET /api/projects/SLUG` returns the status of one project with the live overlay. It answers 404 when no project has the slug. `GET /api/projects` and `GET /api/state` return the same fields for each project.
+
+Each task has these fields. The fields `state`, `stateSource`, `publishedStatus` and `worker` stay.
+
+- `computedState`: `todo`, `doing`, `review`, `done` or `stuck`. The service computes it from git, worker records and the issue tracker.
+- `publishedState`: the `status` that the orchestrator published.
+- `source`: `{ kind, ref, at }`, or `null` when no fact applies. `kind` is `commit`, `worker`, `issue` or `review`. `ref` is the short commit id, the worker name or the issue number.
+- `diverges`: `true` when `computedState` differs from `publishedState`.
+- `stuck`: `{ reason, ageMin }` when `computedState` is `stuck`, otherwise `null`.
+
+`state` is the board column. It uses the computed result. A stuck card keeps `state` `doing`.
+
+Each project has `boardDiverged` (the number of cards that diverge), `boardDivergedIds` and `boardStuck`. The project list row has the same counts. The overlay never writes the status file. See [board.md](board.md).
+
 ## New project flow
 
 ### Command

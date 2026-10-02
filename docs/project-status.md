@@ -141,6 +141,21 @@ Herdr Boss derives the effective state of each task from the published status an
 | `boardStale` | boolean | `true` when the published status no longer describes the work. |
 | `boardStaleReason` | string or null | The reason for `boardStale`. |
 
+Herdr Boss also computes the state of each task from facts. The facts are commits on the base branch, worker records and the issue tracker. The state API adds these fields to each task.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `tasks[].computedState` | string | `todo`, `doing`, `review`, `done`, or `stuck`. |
+| `tasks[].publishedState` | string | The `status` that the orchestrator published. |
+| `tasks[].source` | object or null | `{ kind, ref, at }`. `kind` is `commit`, `worker`, `issue`, or `review`. `ref` is the short commit id, the worker name, or the issue number. |
+| `tasks[].diverges` | boolean | `true` when the computed state differs from the published state. |
+| `tasks[].stuck` | object or null | `{ reason, ageMin }` for a stuck task. |
+| `boardDiverged` | number | The number of tasks that diverge. |
+| `boardDivergedIds` | string[] | The IDs of the tasks that diverge. |
+| `boardStuck` | number | The number of stuck tasks. |
+
+To make the computed state match the published state, publish the status again. The overlay never writes the status file. See [Board state from facts](board.md).
+
 The rules are in [Live task state](user-guide.md#live-task-state).
 
 ## Remove a project

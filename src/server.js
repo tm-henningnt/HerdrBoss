@@ -1100,6 +1100,12 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
       }
       if (p === '/api/projects' && req.method === 'GET') return send(res, 200, decorateProjects(listProjects()));
       const pm = /^\/api\/projects\/([^/]+)$/.exec(p);
+      if (pm && req.method === 'GET') {
+        let slug;
+        try { slug = decodeURIComponent(pm[1]); } catch { return send(res, 400, { error: 'The slug is not valid.' }); }
+        const found = decorateProjects(listProjects()).find((project) => project?.slug === slug);
+        return found ? send(res, 200, found) : send(res, 404, { error: 'No project has this slug.' });
+      }
       if (pm && (req.method === 'PUT' || req.method === 'POST')) {
         let data;
         try { data = await jsonBody(req); } catch (e) { return send(res, 400, { ok: false, errors: [`invalid JSON: ${e.message}`] }); }
