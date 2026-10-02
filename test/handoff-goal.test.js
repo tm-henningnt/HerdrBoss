@@ -241,6 +241,18 @@ test('the engine sends nothing before the successor answers', { timeout: 30000 }
   assert.equal(out.records[0].goalSentAt, undefined);
 });
 
+test('the engine waits while activation owns a recent goal send', { timeout: 30000 }, (t) => {
+  const recent = run(t, {
+    handoffs: [activeRecord({ goalSendingAt: at(0) })], paneTexts: [GOAL], steps: answered.slice(0, 3),
+  });
+  assert.deepEqual(goalPrompts(recent), []);
+  assert.equal(recent.records[0].goalSendingAt, at(0));
+  assert.equal(recent.records[0].goalSentAt, undefined);
+
+  const stale = run(t, { handoffs: [activeRecord({ goalSendingAt: at(0) })], paneTexts: [`> /goal ${GOAL}`], steps: answered });
+  assert.equal(goalPrompts(stale).length, 1, 'the engine resumes after the three-minute send marker expires');
+});
+
 test('the engine does not send /goal again when goalSentAt is set', { timeout: 30000 }, (t) => {
   const out = run(t, { handoffs: [activeRecord({ goalSentAt: '2026-09-29T11:59:50.000Z', goalVerifiedAt: '2026-09-29T11:59:51.000Z' })], steps: answered });
   assert.deepEqual(goalPrompts(out), []);

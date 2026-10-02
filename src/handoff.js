@@ -583,10 +583,13 @@ export function handoffNotices(item, panes = []) {
     const latest = listHandoffs().find((record) => record.id === item.id);
     if (latest) item = { ...item, ...latest };
   } catch { /* Use the caller's current record when the store is unavailable. */ }
-  if (item.goalDelivery === 'command' && item.goal && !item.goalVerifiedAt && !item.goalWarning && !item.goalVerifyFailedAt) return [];
+  const activatedAt = Date.parse(item.activatedAt);
+  const activationWaitExpired = Number.isFinite(activatedAt) && Date.now() - activatedAt >= 5 * 60 * 1000;
+  if (item.goalDelivery === 'command' && item.goal && !item.goalVerifiedAt && !item.goalWarning && !item.goalVerifyFailedAt && !activationWaitExpired) return [];
   const boss = handoffRole(item) === 'boss';
-  const goalWarningMessage = item.goalWarning?.message
-    || (!item.goalVerifiedAt && item.goalVerifyFailedAt ? `The Owner goal is not confirmed in pane ${item.newPane}.` : '');
+  const goalWarningMessage = !item.goalVerifiedAt
+    ? item.goalWarning?.message || (item.goalVerifyFailedAt ? `The Owner goal is not confirmed in pane ${item.newPane}.` : '')
+    : '';
   const goalWarning = goalWarningMessage ? ` Goal warning: ${goalWarningMessage}` : '';
   const skip = new Set([item.newPane, item.sourcePane]);
   for (const pane of panes) if (PREVIOUS_LABELS.has(pane.label)) skip.add(pane.id);
@@ -772,6 +775,7 @@ async function verifyActivationGoal(item, { goalSetter = setGoal } = {}) {
   }
 
   const sentAt = new Date().toISOString();
+  patchActivationGoalFields(item, { goalSendingAt: sentAt });
   try {
     const result = await goalSetter({ pane: latest.newPane, kind: latest.toKind, goal: latest.goal, run: herdr, attempts: 2, waitMs: 90_000 });
     latest = current();

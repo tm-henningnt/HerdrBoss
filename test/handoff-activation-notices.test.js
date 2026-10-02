@@ -139,6 +139,41 @@ console.log(JSON.stringify({ during, after, saved: listHandoffs()[0].goalWarning
   assert.equal(result.saved.exitCode, 2);
 });
 
+test('handoff notices proceed when activation goal verification has been pending for five minutes', (t) => {
+  const f = activationFixture(t);
+  const handoffUrl = new URL('../src/handoff.js', import.meta.url).href;
+  const item = {
+    id: 'orphan-handoff', project: 'alpha', workspace: 'ws', sourcePane: 'ws:p1', newPane: 'ws:p2', toKind: 'claude',
+    status: 'active', activatedAt: '2000-01-01T00:00:00.000Z', goalDelivery: 'command', goal: 'Ship the release safely.',
+    peerPanes: ['ws:p3'],
+  };
+  const out = runHandoffModule(f.root, `import { handoffNotices } from ${JSON.stringify(handoffUrl)};
+console.log(JSON.stringify(handoffNotices(JSON.parse(process.env.TEST_WARNING_ITEM), [
+  { id: 'ws:p3', workspace: 'ws', agent: 'pi' }, { id: 'other:p1', label: 'boss', agent: 'claude' },
+])));`, { ...f.env, TEST_WARNING_ITEM: JSON.stringify(item) });
+  const notices = JSON.parse(out);
+  assert.equal(notices.length, 2);
+  assert.ok(notices.every((notice) => /new orchestrator/.test(notice.text)));
+});
+
+test('handoff notices omit a goal warning after the goal is verified', (t) => {
+  const f = activationFixture(t);
+  const handoffUrl = new URL('../src/handoff.js', import.meta.url).href;
+  const item = {
+    id: 'orphan-handoff', project: 'alpha', workspace: 'ws', sourcePane: 'ws:p1', newPane: 'ws:p2', toKind: 'claude',
+    status: 'active', activatedAt: '2000-01-01T00:00:00.000Z', goalDelivery: 'command', goal: 'Ship the release safely.',
+    goalVerifiedAt: '2000-01-01T00:01:00.000Z',
+    goalWarning: { message: 'The stale goal warning should not be shown.' }, peerPanes: ['ws:p3'],
+  };
+  const out = runHandoffModule(f.root, `import { handoffNotices } from ${JSON.stringify(handoffUrl)};
+console.log(JSON.stringify(handoffNotices(JSON.parse(process.env.TEST_WARNING_ITEM), [
+  { id: 'ws:p3', workspace: 'ws', agent: 'pi' }, { id: 'other:p1', label: 'boss', agent: 'claude' },
+])));`, { ...f.env, TEST_WARNING_ITEM: JSON.stringify(item) });
+  const notices = JSON.parse(out);
+  assert.equal(notices.length, 2);
+  assert.ok(notices.every((notice) => !notice.text.includes('stale goal warning')));
+});
+
 test('a different Herdr error for the source pane stops activation', (t) => {
   const f = activationFixture(t, { paneErrors: { 'ws:p1': 'internal_error' } });
   assert.throws(() => f.activate(), /internal_error/);
@@ -177,7 +212,7 @@ test('dashboard and CLI docs describe the activation labels without standby', ()
   assert.match(row, /failed agent rename keeps activation active/);
   assert.match(row, /Codex, Pi, and OpenCode get the goal in the successor prompt/);
   assert.match(row, /90-second wait and two attempts/);
-  assert.match(row, /handover notices wait for this check/i);
+  assert.match(row, /handover notices wait up to five minutes for this check/i);
   assert.doesNotMatch(row, /standby/);
 });
 

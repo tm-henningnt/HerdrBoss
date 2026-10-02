@@ -34,10 +34,14 @@ test('activation checks a missing Claude goal with the bounded goal-set wait', (
     record: { toKind: 'claude', goal, goalSource: 'status' },
   });
   const handoffUrl = new URL('../src/handoff.js', import.meta.url).href;
-  const result = JSON.parse(runHandoffModule(f.root, `import { activateHandoff } from ${JSON.stringify(handoffUrl)};
+const result = JSON.parse(runHandoffModule(f.root, `import { activateHandoff } from ${JSON.stringify(handoffUrl)};
+import { readFileSync } from 'node:fs';
 let seen;
-const item = await activateHandoff('handoff-activate', { confirmed: true, goalSetter: async (options) => { seen = options; return { outcome: 'active', attempts: 1 }; } });
-console.log(JSON.stringify({ item, waitMs: seen.waitMs, attempts: seen.attempts }));`, f.env));
+const item = await activateHandoff('handoff-activate', { confirmed: true, goalSetter: async (options) => {
+  seen = { ...options, goalSendingAt: JSON.parse(readFileSync(process.env.HERDR_BOSS_DIR + '/handoffs.json', 'utf8'))[0].goalSendingAt };
+  return { outcome: 'active', attempts: 1 };
+} });
+console.log(JSON.stringify({ item, waitMs: seen.waitMs, attempts: seen.attempts, goalSendingAt: seen.goalSendingAt }));`, f.env));
   const calls = f.calls();
   const goalRead = calls.findIndex((args) => args[0] === 'pane' && args[1] === 'read' && args[2] === 'ws:p2');
   const goalPrompt = calls.findIndex((args) => args[0] === 'agent' && args[1] === 'prompt' && args[2] === 'ws:p2' && args[3] === `/goal ${goal}`);
@@ -48,6 +52,7 @@ console.log(JSON.stringify({ item, waitMs: seen.waitMs, attempts: seen.attempts 
   assert.equal(result.item.goalWarning, undefined);
   assert.ok(result.item.goalSentAt);
   assert.ok(result.item.goalVerifiedAt);
+  assert.ok(Number.isFinite(Date.parse(result.goalSendingAt)), 'activation saves the send marker before calling goal set');
   assert.equal(goalPrompt, -1, 'the injected goal setter owns the send');
 });
 
