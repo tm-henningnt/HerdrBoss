@@ -410,7 +410,10 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
       const rawToken = /^\/api\/reviews\/([^/]+)\/([^/]+)\/raw-token$/.exec(p);
       if (rawToken) return reviewRaw.issue(req, res, ...rawToken.slice(1, 3).map((part) => { try { return decodeURIComponent(part); } catch { return ''; } }), url);
       if (p === '/api/reviews' || p.startsWith('/api/reviews/')) return await reviewApi.handle(req, res, url);
-      if (p === '/api/health' && req.method === 'GET') return send(res, 200, await health(engine));
+      if (p === '/api/health' && req.method === 'GET') {
+        const body = await health(engine);
+        return send(res, body.error ? 503 : 200, body);
+      }
       if (p === '/api/state') {
         if (engine.state) {
           refreshMailbox();

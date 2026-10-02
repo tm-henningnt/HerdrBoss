@@ -2073,7 +2073,7 @@ The session lasts 30 days and renews while the device uses the dashboard. It sur
 
 ### Allowed hosts
 
-The server accepts a request only when its `Host` header names `localhost`, `127.0.0.1`, `[::1]`, an address of this machine, or a name that ends in `.ts.net`. Set `allowedHosts` to accept more names. The default is an empty list, so the rule does not change.
+The server accepts a request only when its `Host` header names `localhost`, `127.0.0.1`, `[::1]`, an address of this machine, or a name that ends in `.ts.net`. Set `allowedHosts` to accept more names. The default is an empty list, so the rule does not change. A wildcard such as `*.example.test` needs two labels after `*.`. `*.localhost` is the only exception. An invalid `allowedHosts`, `log.maxMegabytes`, or `log.keepFiles` value in `config.json` gives the default and one warning on standard error that names the key.
 
 Each entry is a host name such as `factory-two`, or a wildcard such as `*.localhost`. The wildcard matches each name below `localhost`, such as `a.localhost`. It does not match `localhost` itself. An entry has no port, no path, and no address. Herdr Boss writes each entry in lower case. A list holds at most 50 entries.
 
@@ -2099,7 +2099,7 @@ The body has no path, no host name, and no secret. An unavailable reading is `nu
 
 ### Server log
 
-The server writes its log lines to standard output and to `service.log` in the data directory. The log holds the start line, tick failures, and engine events of type `error` and `guard`. The service log file rotates when it reaches `log.maxMegabytes` (default 10). Herdr Boss renames `service.log` to `service.log.1`, and `service.log.1` to `service.log.2`. It keeps `log.keepFiles` old files (1 or 2, default 2) and deletes the older ones. Both settings are in **Settings → Advanced → Service settings → Service**. They take effect at the next write. The launchd agent also writes standard output to `server.log`. Herdr Boss does not rotate that file. `herdr-boss logs` prints `service.log` when it exists.
+The server writes its log lines to standard output and to `service.log` in the data directory. The log holds the start line, tick failures, and engine events of type `error` and `guard`. The service log file rotates when it reaches `log.maxMegabytes` (default 10). Herdr Boss renames `service.log` to `service.log.1`, and `service.log.1` to `service.log.2`. It keeps `log.keepFiles` old files (1 or 2, default 2) and deletes the older ones at the next rotation. If the rename fails, Herdr Boss still writes the line to `service.log` and prints one warning each minute on standard error. Both settings are in **Settings → Advanced → Service settings → Service**. They take effect at the next write. The launchd agent also writes standard output to `server.log`. Herdr Boss does not rotate that file. `herdr-boss logs` prints `service.log` when it exists.
 
 When Roamgate runs and its token file exists, the header shows a **Roamgate** link. Herdr Boss reads that token only when you open the link.
 

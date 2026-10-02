@@ -21,19 +21,21 @@ export function readClockOffset(run = execFile) {
 }
 
 // The body of GET /api/health. It follows factory-health.v1.schema.json: no path, no host name, no secret.
-// An unavailable reading is null, never zero.
-export function createHealth({ readOffset = readClockOffset, now = () => Date.now() } = {}) {
+// An unavailable reading is null, never zero. An unknown kit revision gives { error }, which the route sends as 503.
+export function createHealth({ readOffset = readClockOffset, readKit = kitRevision, now = () => Date.now() } = {}) {
   let offset = { at: 0, value: null };
   return async (engine) => {
     const state = engine.state;
     const updated = Date.parse(state?.updatedAt);
     const herdrFailed = (state?.errors || []).some((message) => String(message).startsWith('herdr:'));
     if (now() - offset.at > OFFSET_CACHE_MS) offset = { at: now(), value: await readOffset().catch(() => null) };
+    const revision = state?.kit?.current ?? readKit();
+    if (typeof revision !== 'string' || !/^[a-f0-9]{12,64}$/.test(revision)) return { error: 'kit revision unknown' };
     return {
       schema: HEALTH_SCHEMA,
       contractVersion: HEALTH_CONTRACT_VERSION,
       version: VERSION,
-      kitRevision: state?.kit?.current ?? kitRevision(),
+      kitRevision: revision,
       tickAgeSeconds: Number.isFinite(updated) ? Math.max(0, Math.floor((now() - updated) / 1000)) : null,
       herdrReachable: !state ? null : Array.isArray(state.herdr?.panes) && !herdrFailed,
       clockOffsetSeconds: offset.value,

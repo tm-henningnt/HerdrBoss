@@ -724,7 +724,7 @@ export const SETTING_HELP = Object.fromEntries([
     apply: 'restart',
   }),
   S('service', 'allowedHosts', 'Allowed hosts', {
-    what: 'Host names that the server accepts in addition to localhost, this machine, and names that end in .ts.net. Enter a name such as factory-two, or *.localhost for each name below localhost. A port, an address, and a bare * are not allowed.',
+    what: 'Host names that the server accepts in addition to localhost, this machine, and names that end in .ts.net. Enter a name such as factory-two, *.localhost for each name below localhost, or *.example.test for each name below example.test. A wildcard needs two labels after *., except *.localhost. A port, an address, and a bare * are not allowed.',
     default: 'Empty list', unit: 'List of host names', range: 'Up to 50 names',
     raise: 'A request that names a listed host passes the host check. A request from another machine still needs the access token.',
     lower: 'Remove a name to refuse requests that use it.',

@@ -177,3 +177,73 @@ test('the rotating log keeps a line longer than the limit and never throws on a 
   const broken = createRotatingLog({ file: path.join(dir, 'missing', 'deep', 'a.log'), maxBytes: () => 10, keepFiles: () => 2 });
   assert.doesNotThrow(() => broken.write('hello'));
 });
+
+test('GET /api/health answers 503 with no path when the kit revision is unknown', async (t) => {
+  const { createHealth } = await import('../src/health.js');
+  const { port } = await start(t, { state: { updatedAt: new Date().toISOString(), herdr: { panes: [] }, errors: [] }, health: createHealth({ readKit: () => null }) });
+  const response = await get(port, '/api/health');
+  assert.equal(response.status, 503);
+  assert.deepEqual(JSON.parse(response.text), { error: 'kit revision unknown' });
+});
+
+test('the rotating log removes surplus old files when keepFiles is lowered', (t) => {
+  const dir = tmp(t, 'herdr-rotating-log-');
+  const file = path.join(dir, 'service.log');
+  fs.writeFileSync(`${file}.2`, 'old\n');
+  const log = createRotatingLog({ file, maxBytes: () => 20, keepFiles: () => 1 });
+  for (let n = 0; n < 6; n += 1) log.write(`line number ${n}`);
+  assert.deepEqual(fs.readdirSync(dir).sort(), ['service.log', 'service.log.1']);
+});
+
+test('a failed rotation keeps the line, keeps the log open, and warns at most once per minute', (t) => {
+  const dir = tmp(t, 'herdr-rotating-log-');
+  const file = path.join(dir, 'service.log');
+  fs.mkdirSync(`${file}.1`);
+  fs.writeFileSync(path.join(`${file}.1`, 'block'), 'x');
+  const warnings = [];
+  let clock = 1_000_000;
+  const log = createRotatingLog({ file, maxBytes: () => 20, keepFiles: () => 1, warn: (message) => warnings.push(message), now: () => clock });
+  for (let n = 0; n < 4; n += 1) log.write(`line number ${n}`);
+  const text = fs.readFileSync(file, 'utf8');
+  for (let n = 0; n < 4; n += 1) assert.ok(text.includes(`line number ${n}`), `line ${n} is kept`);
+  assert.equal(warnings.length, 1);
+  clock += 61_000;
+  log.write('line number 4');
+  assert.equal(warnings.length, 2);
+  assert.ok(!warnings.join('').includes(dir), 'the warning holds no path');
+});
+
+test('loadConfig validates hand-edited allowedHosts and log values like the API', (t) => {
+  const file = path.join(process.env.HERDR_BOSS_DIR, 'config.json');
+  const before = fs.existsSync(file) ? fs.readFileSync(file) : null;
+  t.after(() => { if (before === null) fs.rmSync(file, { force: true }); else fs.writeFileSync(file, before); });
+  const stderr = [];
+  const original = process.stderr.write;
+  const load = (config) => {
+    fs.writeFileSync(file, JSON.stringify(config));
+    stderr.length = 0;
+    process.stderr.write = (chunk) => { stderr.push(String(chunk)); return true; };
+    try { return loadConfig(); } finally { process.stderr.write = original; }
+  };
+  for (const bad of [['*.'], ['*.com'], ['host:4477'], ['*'], 'factory']) {
+    const cfg = load({ allowedHosts: bad });
+    assert.deepEqual(cfg.allowedHosts, [], `falls back for ${JSON.stringify(bad)}`);
+    assert.equal(stderr.length, 1);
+    assert.match(stderr[0], /allowedHosts/);
+    assert.ok(!stderr[0].includes('4477'), 'the warning does not print the value');
+  }
+  assert.deepEqual(load({ allowedHosts: ['*.localhost', '*.example.test', 'Factory-Two'] }).allowedHosts, ['*.localhost', '*.example.test', 'factory-two']);
+  assert.equal(stderr.length, 0);
+  const bad = load({ log: { maxMegabytes: 'ten', keepFiles: 5 } });
+  assert.deepEqual(bad.log, { maxMegabytes: 10, keepFiles: 2 });
+  assert.equal(stderr.length, 2);
+  assert.match(stderr.join(''), /log\.maxMegabytes/);
+  assert.match(stderr.join(''), /log\.keepFiles/);
+  assert.ok(!stderr.join('').includes('ten'));
+  assert.deepEqual(load({ log: { maxMegabytes: 50, keepFiles: 1 } }).log, { maxMegabytes: 50, keepFiles: 1 });
+});
+
+test('allowedHosts wildcards need two labels after *. except *.localhost', () => {
+  for (const bad of ['*.com', '*.test']) assert.throws(() => validateServiceSettings({ allowedHosts: [bad] }), /allowedHosts/, bad);
+  for (const good of ['*.localhost', '*.example.test', '*.a.b.c']) assert.deepEqual(validateServiceSettings({ allowedHosts: [good] }), { allowedHosts: [good] });
+});
