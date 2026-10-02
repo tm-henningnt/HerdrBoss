@@ -7,7 +7,7 @@ import { overlayTasks } from './task-state.js';
 const statusOf = (computedState) => (computedState === 'stuck' ? 'doing' : computedState);
 
 // Change data.tasks in place. facts is { commits, issues } as BoardFactsCache.get() gives it.
-// Returns the changed cards as [{ id, from, to }].
+// Returns the changed cards as [{ id, from, to, commit? }]. A commit fact includes the short id and subject.
 export function syncStatuses(data, { workers = [], facts = {}, now = Date.now() } = {}) {
   if (!Array.isArray(data?.tasks)) return [];
   const computed = applyBoardFacts(overlayTasks(data.tasks, workers), workers, facts, { now });
@@ -19,7 +19,13 @@ export function syncStatuses(data, { workers = [], facts = {}, now = Date.now() 
     const from = task.status || 'todo';
     if (to === from) return;
     task.status = to;
-    changed.push({ id: String(task.id), from, to });
+    const match = result.source?.kind === 'commit'
+      ? facts.commits?.find((commit) => commit.short === result.source.ref)
+      : null;
+    changed.push({
+      id: String(task.id), from, to,
+      ...(match ? { commit: { short: match.short, subject: match.subject } } : {}),
+    });
   });
   return changed;
 }

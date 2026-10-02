@@ -913,7 +913,10 @@ async function main() {
           const workers = await readFacts();
           const branch = projectConfig?.baseBranch || 'main';
           const changed = syncStatuses(data, { workers, facts: { commits: await readCommits(top, { branch }), issues: await readIssues(top) } });
-          for (const { id, from, to } of changed) console.error(`sync: ${id} ${from} -> ${to}`);
+          for (const { id, from, to, commit } of changed) {
+            const evidence = commit ? ` (${commit.short}: ${commit.subject.slice(0, 60)})` : '';
+            console.error(`sync: ${id} ${from} -> ${to}${evidence}`);
+          }
           console.log(`synced ${changed.length} ${changed.length === 1 ? 'card' : 'cards'} from git and workers`);
         } else console.error('warning: --sync needs a Git repository and a status with tasks. No card changed.');
       }

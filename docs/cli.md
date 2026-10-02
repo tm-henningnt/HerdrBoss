@@ -94,7 +94,7 @@ The service keeps the last 100 probe attempts in `quota-probe-history.jsonl`. Ea
 |---|---|
 | `herdr-boss publish SLUG FILE [--force] [--sync]` | Validate a status file and install it for `/projects/SLUG`. Use `-` for standard input. Refuse a status in which a task has a live worker but is not `doing`. `--force` skips this check. `--sync` sets each card state from git, workers and issues before the install and prints how many cards changed. Schema: [project-status.md](project-status.md). |
 
-`publish --sync` reads the commits of the base branch, the run records and the issue tracker of the project in the Git top level, with the rules of [board.md](board.md). It sets `status` of each card that differs from its computed state. A card without a fact keeps its status. The command prints `synced N cards from git and workers` and one `sync: ID from -> to` line on standard error for each changed card. Use it at each task boundary. The check below runs after the sync.
+`publish --sync` reads the commits of the base branch, the run records and the issue tracker of the project in the Git top level, with the rules of [board.md](board.md). It sets `status` of each card that differs from its computed state. A card without a fact keeps its status. The command prints `synced N cards from git and workers` and one `sync: ID from -> to` line on standard error for each changed card. A commit fact adds its short id and the first 60 characters of its subject, for example `sync: G4 doing -> done (abc1234: G4: record samples)`. Use it at each task boundary. The check below runs after the sync.
 
 `publish` reads the run records of the project in the Git top level. A worker blocks the publish when all of these are true:
 

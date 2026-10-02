@@ -47,6 +47,26 @@ function fixtureRepo() {
   return { repo, git, commit };
 }
 
+function fixedDateFixtureRepo() {
+  const repo = fs.mkdtempSync(path.join(ROOT, 'fixed-repo-'));
+  const baseEnv = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' };
+  const gitAt = (date, ...args) => execFileSync('git', ['-C', repo, '-c', 'user.name=T', '-c', 'user.email=t@example.invalid', ...args], {
+    env: { ...baseEnv, GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+  });
+  const git = (...args) => execFileSync('git', ['-C', repo, '-c', 'user.name=T', '-c', 'user.email=t@example.invalid', ...args], { env: baseEnv, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  git('init', '-q', '-b', 'main');
+  const commit = (subject, file, date, body = '') => {
+    fs.writeFileSync(path.join(repo, file), `${subject}\n${body}`);
+    gitAt(date, 'add', '.');
+    gitAt(date, 'commit', '-q', '-m', subject, ...(body ? ['-m', body] : []));
+  };
+  commit('docs: record G4 build approval and order', 'a.txt', '2026-10-01T10:00:00Z');
+  commit('docs: plan G4 machine samples', 'b.txt', '2026-10-01T11:00:00Z');
+  commit('G4a: record machine samples', 'c.txt', '2026-10-01T12:00:00Z');
+  commit('G4g: swap warning', 'd.txt', '2026-10-01T13:00:00Z');
+  return { repo, git, gitAt, commit };
+}
+
 test('idPattern matches an id as a whole token and needs a hash for digits', () => {
   assert.ok(idPattern('68').test('Add the parser (#68)'));
   assert.ok(idPattern('12').test('Closes #12'));
@@ -132,6 +152,33 @@ test('a collected worker gives review and a collected worker whose branch is mer
   assert.equal(c.diverges, true);
   assert.equal(d.computedState, 'done');
   assert.equal(d.source.ref, 'wm4');
+});
+
+test('a merged worker keeps a published blocked card blocked, while commit and issue facts still complete it', () => {
+  const workers = [worker('wmG4', 'G4', 'merged', { collectedAt: iso(Date.now() - MIN) })];
+  const [blocked] = applyBoardFacts(
+    overlayTasks([task('G4', { status: 'blocked', waitingOn: 'external' })], workers), workers, {},
+  );
+  const [doing] = applyBoardFacts(overlayTasks([task('G4', { status: 'doing' })], workers), workers, {});
+  assert.equal(blocked.computedState, 'blocked');
+  assert.equal(blocked.state, 'blocked');
+  assert.equal(blocked.blockedReason, 'waits on the external');
+  assert.deepEqual(blocked.source, { kind: 'worker', ref: 'wmG4', at: workers[0].startedAt });
+  assert.equal(doing.computedState, 'done');
+  assert.deepEqual(doing.source, { kind: 'worker', ref: 'wmG4', at: workers[0].startedAt });
+
+  const commit = { id: 'commit-id', short: 'abc1234', at: iso(Date.now()), parents: 1, subject: 'G4: record task', body: '' };
+  const [committed] = applyBoardFacts(overlayTasks([task('G4', { status: 'blocked' })], workers), workers, { commits: [commit] });
+  assert.equal(committed.computedState, 'done');
+  assert.equal(committed.source.kind, 'commit');
+
+  const issues = new Map([[7, { state: 'closed', closedAt: iso(Date.now()) }]]);
+  const issueWorker = worker('wm7', '7', 'merged', { collectedAt: iso(Date.now() - MIN) });
+  const [closedIssue] = applyBoardFacts(
+    overlayTasks([task('7', { status: 'blocked', waitingOn: 'external', url: 'https://github.com/example/demo/issues/7' })], [issueWorker]), [issueWorker], { issues },
+  );
+  assert.equal(closedIssue.computedState, 'done');
+  assert.equal(closedIssue.source.kind, 'issue');
 });
 
 test('a doing card with no live worker and no commit for three hours is stuck', () => {
@@ -292,6 +339,7 @@ test('explicitPattern accepts the explicit forms and rejects a bare id', () => {
   yes('12', 'fixes #12: retry');
   yes('12', 'Resolved #12');
   yes('BD2a', 'BD2a: computed card state');
+  yes('G4', 'G4: card state');
   yes('b68', 'Add cache (b68)');
   yes('B68', 'closes b68');
   no('12', 'refs #12');
@@ -299,6 +347,42 @@ test('explicitPattern accepts the explicit forms and rejects a bare id', () => {
   no('12', 'see (12)');
   no('12', 'Closes #123');
   no('BD2a', 'work on BD2a later');
+  no('G4', 'docs: record (G4) in a plan');
+  no('G4', 'G4a: record machine samples');
+  no('G4h', 'G4: machine samples');
+  no('G4', 'test: record G4 machine samples');
+  no('G4', 'chore: record G4 machine samples');
+  no('G4', 'Record G4 machine samples');
+});
+
+test('G4 plan and child-task commits do not close G4, while exact child prefixes do', async () => {
+  const { repo } = fixedDateFixtureRepo();
+  const commits = await readCommits(repo, { branch: 'main' });
+  const index = commitIndex(commits, [task('G4'), task('G4a'), task('G4g'), task('G4h')]);
+  assert.equal(index.has('G4'), false);
+  assert.equal(index.has('G4h'), false);
+  assert.equal(index.get('G4a').subject, 'G4a: record machine samples');
+  assert.equal(index.get('G4g').subject, 'G4g: swap warning');
+  for (const subject of ['docs: record G4 build approval and order', 'docs: plan G4 machine samples']) {
+    assert.equal(explicitPattern('G4').test(subject), false);
+    assert.equal(explicitPattern('G4a').test(subject), false);
+    assert.equal(explicitPattern('G4g').test(subject), false);
+  }
+});
+
+test('Closes G4 and a merge of branch g4 mark G4 done', async () => {
+  const closed = fixedDateFixtureRepo();
+  closed.commit('Closes G4', 'close.txt', '2026-10-02T10:00:00Z');
+  const closedIndex = commitIndex(await readCommits(closed.repo, { branch: 'main' }), [task('G4')]);
+  assert.equal(closedIndex.get('G4').subject, 'Closes G4');
+
+  const merged = fixedDateFixtureRepo();
+  merged.git('checkout', '-q', '-b', 'g4');
+  merged.commit('record samples', 'branch.txt', '2026-10-02T10:00:00Z');
+  merged.git('checkout', '-q', 'main');
+  merged.gitAt('2026-10-02T11:00:00Z', 'merge', '--no-ff', '-q', '-m', "Merge branch 'g4' into main", 'g4');
+  const mergedIndex = commitIndex(await readCommits(merged.repo, { branch: 'main' }), [task('G4')]);
+  assert.equal(mergedIndex.get('G4').subject, "Merge branch 'g4' into main");
 });
 
 test('a commit that only refs or works toward an id does not make the card done', async () => {
@@ -314,6 +398,15 @@ test('a commit that only refs or works toward an id does not make the card done'
   const [a] = applyBoardFacts(overlayTasks([task('12', { status: 'doing' })], []), [], { commits });
   assert.equal(a.computedState, 'doing');
   assert.equal(a.source, null);
+});
+
+test('a closing keyword in a commit body names the task', async () => {
+  const { repo, commit } = fixedDateFixtureRepo();
+  commit('docs: record machine sampling', 'body.txt', '2026-10-02T10:00:00Z', 'Closes G4');
+  const commits = await readCommits(repo, { branch: 'main' });
+  const index = commitIndex(commits, [task('G4')]);
+  assert.match(commits[0].body, /Closes G4/);
+  assert.equal(index.get('G4').subject, 'docs: record machine sampling');
 });
 
 test('a branch value that starts with a dash never reaches git', async () => {

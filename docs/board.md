@@ -14,18 +14,20 @@ The sources are listed from the strongest to the weakest. The first source that 
 
 A live worker that started after the newest commit of the task overrides the commit. The task is in rework and the computed state is `doing`.
 
+A worker fact does not change a published `blocked` card. The card keeps `blocked` in `computedState` and keeps the worker as its source. A commit fact or a closed issue keeps its existing rule and can still give `done`.
+
 ## What counts as a commit fact
 
 The service reads `git log` of the base branch of the project. The base branch is `baseBranch` of the project config, `main` by default. It reads at most the newest 1000 commits. A branch name that starts with `-` is refused. The branch follows `--end-of-options` in the git command.
 
-A commit names a task id in one of these forms. The match ignores case. The id is a whole token: no letter or digit directly before or after it.
+A commit names a task id only in one of these forms. The match ignores case. The id is a whole token. No letter or digit can come directly before or after it.
 
 - A merge commit: the id is a whole token in the merged branch name, for example `Merge branch 'w222-fix'` or `sv-b68`. The target branch of the merge does not count.
-- Any other commit: the id in parentheses, for example `(#68)` or `(BD2a)`.
-- Any other commit: `Closes`, `Fixes` or `Resolves` before the id, for example `Closes #12`.
-- Any other commit, an id that is not only digits: the id as the prefix of the subject, for example `BD2a: card state`.
+- A non-merge commit subject ends with the id in parentheses, for example `Add parser (#68)` or `Finish BD2a (BD2a)`.
+- A non-merge commit subject or body has `Closes`, `Fixes` or `Resolves` before the id, for example `Closes #12` or `Fixes G4`.
+- A non-merge commit subject starts with the whole id and a colon, for example `BD2a: card state`.
 
-An id that is only digits needs a `#` in every form. A bare id does not count. `refs #12` and `WIP for #12` do not make a card done.
+An id that is only digits needs `#` in every form. A bare mention does not count. A word prefix such as `docs:`, `test:`, `chore:` or `Record` does not name a task. `docs: record G4 machine samples` does not make G4 done. `G4a:` does not name G4, and `G4:` does not name G4h. `refs #12` and `WIP for #12` do not make a card done.
 
 A commit that names the worker name or the worker branch of a worker with that task id counts for that task, in the same forms. The worker records give the mapping (`worker start --task-id`).
 
@@ -37,7 +39,7 @@ The service adds these fields to each task of `GET /api/projects/<slug>`. The ex
 
 | Field | Value |
 | --- | --- |
-| `computedState` | `todo`, `doing`, `review`, `done` or `stuck`. |
+| `computedState` | `todo`, `doing`, `review`, `done`, `stuck`, or `blocked` when a worker fact applies to a published blocked card. |
 | `publishedState` | The `status` of the published card: `todo`, `doing`, `review`, `blocked` or `done`. |
 | `source` | `{ kind, ref, at }` or `null`. |
 | `source.kind` | `commit`, `worker` or `issue`. The value `review` is reserved for a later task. |
@@ -46,7 +48,7 @@ The service adds these fields to each task of `GET /api/projects/<slug>`. The ex
 | `diverges` | `true` when the computed state differs from the published state. |
 | `stuck` | `{ reason, ageMin }` when `computedState` is `stuck`, otherwise `null`. |
 
-`source` is `null` when the card has no fact. The computed state then equals the published state.
+`source` is `null` when the card has no fact. The computed state then equals the published state, except that `blocked` and `ready` compare as `todo`.
 
 `state` is the board column. It takes the computed result: `done`, `doing` or `review` from a fact, and `blocked` or `ready` from the dependencies for a `todo` card. A stuck card keeps `state` `doing`. The page puts a card with `computedState` `stuck` in the Stuck lane.
 
@@ -95,7 +97,7 @@ The engine finds the orchestrator pane in the live Herdr pane list at each tick,
 
 ## Publish with sync
 
-`herdr-boss publish SLUG FILE --sync` reads the same facts as the service: git log of the base branch, the worker records and the issue tracker. It sets `status` of each card that diverges to its computed state before it installs the status. A stuck card gets `doing`. It prints one line with the number of cards that changed, and one `sync:` line for each card on standard error. A card without a fact keeps its status. The `--force` check for a live worker runs after the sync. Without `--sync` the status stays as the file has it. The code is in `src/board-sync.js`.
+`herdr-boss publish SLUG FILE --sync` reads the same facts as the service: git log of the base branch, the worker records and the issue tracker. It sets `status` of each card that diverges to its computed state before it installs the status. A stuck card gets `doing`. It prints one line with the number of cards that changed. It prints one `sync:` line for each changed card on standard error. A commit fact adds its short id and the first 60 characters of its subject: `sync: G4 doing -> done (abc1234: G4: record samples)`. A card without a fact keeps its status. The `--force` check for a live worker runs after the sync. Without `--sync` the status stays as the file has it. The code is in `src/board-sync.js`.
 
 ## Cache
 

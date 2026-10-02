@@ -17,7 +17,7 @@ export const ISSUE_INTERVAL_MS = 10 * MINUTE_MS;
 
 const FIELD = '\x1f';
 const RECORD = '\x1e';
-const LOG_FORMAT = ['%H', '%h', '%cI', '%P', '%s'].join('%x1f') + '%x1e';
+const LOG_FORMAT = ['%H', '%h', '%cI', '%P', '%s', '%b'].join('%x1f') + '%x1e';
 const ALNUM_BEFORE = '(?<![A-Za-z0-9])';
 const ALNUM_AFTER = '(?![A-Za-z0-9])';
 
@@ -31,9 +31,9 @@ export function idPattern(id) {
   return new RegExp(`${ALNUM_BEFORE}${body}${ALNUM_AFTER}`, 'i');
 }
 
-// A pattern for the explicit forms in the subject of a commit that is not a merge: the id in parentheses, as in
-// `(#68)` or `(BD2a)`, a Closes, Fixes or Resolves keyword before the id, or a non-digit id as the prefix `BD2a:`.
-// A bare id, as in `refs #12` or `WIP for #12`, matches none of them. The match ignores case.
+// The explicit forms in a non-merge subject are a trailing parenthesized id, a closing keyword before the id, or
+// a non-digit id as the subject prefix. The body accepts only closing keywords. A bare id never matches.
+// The match ignores case.
 export function explicitPattern(id) {
   const text = String(id ?? '').trim();
   if (!text) return null;
@@ -41,11 +41,22 @@ export function explicitPattern(id) {
   const token = escapeRegex(text);
   const hash = digits ? '#' : '#?';
   const forms = [
-    `\\(${hash}${token}\\)`,
-    `${ALNUM_BEFORE}(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\\s*:?\\s+${hash}${token}${ALNUM_AFTER}`,
+    `\\(${hash}${token}\\)\\s*$`,
+    closingPatternSource(token, hash),
   ];
   if (!digits) forms.push(`^${hash}${token}\\s*:`);
   return new RegExp(forms.join('|'), 'i');
+}
+
+function closingPatternSource(token, hash) {
+  return `${ALNUM_BEFORE}(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\\s*:?\\s+${hash}${token}${ALNUM_AFTER}`;
+}
+
+function closingPattern(id) {
+  const text = String(id ?? '').trim();
+  if (!text) return null;
+  const hash = /^[0-9]+$/.test(text) ? '#' : '#?';
+  return new RegExp(closingPatternSource(escapeRegex(text), hash), 'i');
 }
 
 // The merged branch name of a merge subject, or null when the subject is not a known merge form.
@@ -59,10 +70,13 @@ export function mergedBranchName(subject) {
   return match ? match[1] : null;
 }
 
-// The text of a commit that a task id can match: the merged branch name for a merge commit, else the subject.
-function matchText(commit) {
-  if (commit.parents > 1) return mergedBranchName(commit.subject) ?? commit.subject.replace(/ into \S+$/, '');
-  return commit.subject;
+// A merge matches its merged branch. Other commits use an explicit subject form or a closing keyword in the body.
+function matchesCommit(commit, term) {
+  if (commit.parents > 1) {
+    const branch = mergedBranchName(commit.subject) ?? commit.subject.replace(/ into \S+$/, '');
+    return term.merge?.test(branch) ?? false;
+  }
+  return Boolean(term.plain?.test(commit.subject) || term.body?.test(commit.body ?? ''));
 }
 
 // Run git without a shell and without blocking the event loop. The promise rejects on a timeout or an error.
@@ -82,9 +96,9 @@ export async function readCommits(repo, { branch = 'main', limit = GIT_LOG_LIMIT
   try { out = await git(repo, ['log', `--max-count=${limit}`, `--format=${LOG_FORMAT}`, '--end-of-options', branch, '--'], timeout); } catch { return null; }
   const commits = [];
   for (const row of String(out).split(RECORD)) {
-    const [id, short, at, parents, ...subject] = row.replace(/^\n/, '').split(FIELD);
+    const [id, short, at, parents, subject = '', ...body] = row.replace(/^\n/, '').split(FIELD);
     if (!id || !short) continue;
-    commits.push({ id, short, at, parents: parents ? parents.split(' ').filter(Boolean).length : 0, subject: subject.join(FIELD) });
+    commits.push({ id, short, at, parents: parents ? parents.split(' ').filter(Boolean).length : 0, subject, body: body.join(FIELD).replace(/\n+$/, '') });
   }
   return commits;
 }
@@ -116,7 +130,7 @@ export function issueNumber(task) {
 const memo = new WeakMap();
 
 // For each task id, the newest commit that names the task id, or a worker name or worker branch of that task.
-// A merge commit names it through the merged branch name. Any other commit names it in an explicit form (explicitPattern).
+// A merge commit names it through the merged branch name. Other commits use explicit subject or body forms.
 // Returns a Map of task id to { id, short, at, subject, via }.
 export function commitIndex(commits, tasks, workers = []) {
   const result = new Map();
@@ -125,21 +139,20 @@ export function commitIndex(commits, tasks, workers = []) {
   for (const task of tasks || []) {
     if (task?.id == null) continue;
     const id = String(task.id);
-    if (!terms.has(id)) terms.set(id, [{ via: id, merge: idPattern(id), plain: explicitPattern(id) }]);
+    if (!terms.has(id)) terms.set(id, [{ via: id, merge: idPattern(id), plain: explicitPattern(id), body: closingPattern(id) }]);
   }
   for (const worker of workers) {
     const list = worker?.taskId != null ? terms.get(String(worker.taskId)) : null;
     if (!list) continue;
-    for (const via of [worker.name, worker.branch]) if (via) list.push({ via: String(via), merge: idPattern(via), plain: explicitPattern(via) });
+    for (const via of [worker.name, worker.branch]) if (via) list.push({ via: String(via), merge: idPattern(via), plain: explicitPattern(via), body: closingPattern(via) });
   }
   const key = [...terms].map(([id, list]) => `${id}:${list.map((term) => term.via).join(',')}`).join('|');
   let byKey = memo.get(commits);
   if (!byKey) memo.set(commits, byKey = new Map());
   if (byKey.has(key)) return byKey.get(key);
-  const texts = commits.map(matchText);
   for (const [id, list] of terms) {
     for (const [index, commit] of commits.entries()) {
-      const hit = list.find((term) => (commit.parents > 1 ? term.merge : term.plain)?.test(texts[index]));
+      const hit = list.find((term) => matchesCommit(commit, term));
       if (hit) { result.set(id, { id: commit.id, short: commit.short, at: commit.at, subject: commit.subject, via: hit.via }); break; }
     }
   }
@@ -177,7 +190,8 @@ export function applyBoardFacts(tasks, workers = [], facts = {}, { now = Date.no
     if (commit && !reworking) {
       state = 'done';
       source = { kind: 'commit', ref: commit.short, at: commit.at };
-    } else if (workerName) {
+    } else if (workerName && !(publishedState === 'blocked' && issue?.state === 'closed')) {
+      if (publishedState === 'blocked') state = 'blocked';
       source = { kind: 'worker', ref: workerName, at: task.worker?.startedAt ?? null };
     } else if (issue?.state === 'closed' && publishedState !== 'done') {
       state = 'done';
@@ -188,7 +202,8 @@ export function applyBoardFacts(tasks, workers = [], facts = {}, { now = Date.no
     }
 
     // The board column keeps ready and blocked for a todo card. Dependencies decide between them.
-    let computedState = state === 'ready' || state === 'blocked' ? 'todo' : state;
+    const keepBlockedWorkerState = publishedState === 'blocked' && source?.kind === 'worker';
+    let computedState = state === 'ready' || (state === 'blocked' && !keepBlockedWorkerState) ? 'todo' : state;
     let stuck = null;
     if (computedState === 'doing' && !liveWorker) {
       const times = [ms(task.updated), commitMs, ...own.flatMap((worker) => [worker.startedAt, worker.collectedAt, worker.finishedAt].map(ms))].filter((v) => v != null);

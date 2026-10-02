@@ -29,7 +29,10 @@ test('syncStatuses rewrites a card state that differs from the computed state an
   };
   const workers = [worker('w4', 'T4', 'review', { collectedAt: iso(NOW - 20 * MIN) })];
   const changed = syncStatuses(data, { workers, facts: { commits: [commit('T1: add the parser')], issues: null }, now: NOW });
-  assert.deepEqual(changed, [{ id: 'T1', from: 'doing', to: 'done' }, { id: 'T4', from: 'doing', to: 'review' }]);
+  assert.deepEqual(changed, [
+    { id: 'T1', from: 'doing', to: 'done', commit: { short: 'abc1234', subject: 'T1: add the parser' } },
+    { id: 'T4', from: 'doing', to: 'review' },
+  ]);
   assert.deepEqual(data.tasks.map((task) => task.status), ['done', 'todo', 'blocked', 'review', 'done']);
 });
 
@@ -47,7 +50,7 @@ test('syncStatuses reads a closed issue and leaves a status without tasks alone'
   assert.deepEqual(syncStatuses({ project: 'Demo' }, { workers: [], facts: {}, now: NOW }), []);
 });
 
-function publish(t, args, { repo = true } = {}) {
+function publish(t, args, { repo = true, commitSubject = 'T1: add the parser' } = {}) {
   const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-publish-sync-')));
   const root = repo
     ? temporaryRepo('herdr-publish-sync-repo-')
@@ -59,7 +62,7 @@ function publish(t, args, { repo = true } = {}) {
   if (repo) {
     fs.writeFileSync(path.join(root, 'a.txt'), 'a');
     git(root, 'add', 'a.txt');
-    git(root, 'commit', '-m', 'T1: add the parser');
+    git(root, 'commit', '-m', commitSubject);
   }
   const status = path.join(home, 'status.json');
   fs.writeFileSync(status, JSON.stringify({ project: 'Demo', tasks: [{ id: 'T1', title: 'Parser', status: 'doing' }, { id: 'T2', title: 'Docs', status: 'todo' }] }));
@@ -76,8 +79,19 @@ test('publish --sync installs the computed card states and prints how many cards
   const { result, stored } = publish(t, ['--sync']);
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /^synced 1 card from git and workers$/m);
+  assert.match(result.stderr, /^sync: T1 doing -> done \([0-9a-f]{7,}: T1: add the parser\)$/m);
   assert.match(result.stdout, /^published .*\/projects\/demo$/m);
   assert.deepEqual(stored.tasks.map((task) => task.status), ['done', 'todo']);
+});
+
+test('publish --sync truncates the matching commit subject to 60 characters', (t) => {
+  const subject = `T1: ${'a'.repeat(80)}`;
+  const { result } = publish(t, ['--sync'], { commitSubject: subject });
+  assert.equal(result.status, 0, result.stderr);
+  const line = result.stderr.split('\n').find((item) => item.startsWith('sync: T1 '));
+  const match = /^sync: T1 doing -> done \([0-9a-f]{7,}: (.*)\)$/.exec(line);
+  assert.ok(match, line);
+  assert.equal(match[1], subject.slice(0, 60));
 });
 
 test('publish without --sync keeps the card states of the file', (t) => {

@@ -221,6 +221,7 @@ export function overlayTasks(tasks, workers = []) {
     const own = t && t.id != null ? byTask.get(String(t.id)) || [] : [];
     const worker = pickWorker(own);
     if (published === 'done') return { state: 'done', stateSource: 'published', worker: null };
+    if (published === 'blocked' && worker) return { state: 'blocked', stateSource: `blocked by published status, worker ${worker.name}`, worker };
     if (worker?.phase === 'merged') return { state: 'done', stateSource: `merged from worker ${worker.name}`, worker };
     if (worker?.phase === 'live') return { state: 'doing', stateSource: `live from worker ${worker.name}`, worker };
     if (worker?.phase === 'review') return { state: 'review', stateSource: `collected from worker ${worker.name}`, worker };
@@ -240,7 +241,7 @@ export function overlayTasks(tasks, workers = []) {
     const blockers = (Array.isArray(t.blockedBy) ? t.blockedBy : []).filter((id) => !doneIds.has(String(id)));
     let blockedReason = null;
     if (state === 'todo' || state === 'ready' || state === 'blocked') {
-      const waiting = state === 'blocked' && stateSource === 'published' && t.waitingOn != null;
+      const waiting = state === 'blocked' && published === 'blocked' && t.waitingOn != null;
       if (blockers.length || waiting) {
         const reasons = [];
         if (blockers.length) reasons.push(blockers.map((id) => `task ${id}`).join(', '));
