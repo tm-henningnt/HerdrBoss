@@ -8,6 +8,14 @@ const SECRET_FIELDS = /^[A-Za-z0-9_]*(?:code|state|session_state|access_token|id
 // Status fields with fixed enum values. Their names end in a secret suffix, but they hold no secret.
 const STATUS_FIELDS = new Set(['processState']);
 const HOST_TEXT_TOKEN = /(?<![\p{L}\p{N}_.-])(?:\[[\da-f:.]+\]|(?:[\p{L}\p{N}](?:[\p{L}\p{N}-]{0,61}[\p{L}\p{N}])?\.)+[\p{L}\p{N}](?:[\p{L}\p{N}-]{0,61}[\p{L}\p{N}])?|(?:\d{1,3}\.){3}\d{1,3})(?![\p{L}\p{N}_-])/giu;
+// A UUID is masked only after --app, --app-id, --id, /apps/, or app/. A bare UUID stays readable, because
+// ordinary identifiers in a message must survive the filter.
+const APP_UUID_TOKEN = /(?:(--app(?:-id)?|--id)(?:=|\s+)|(\/apps\/|app\/))([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})/gi;
+
+function maskAppUuid(value, { full = false } = {}) {
+  if (full || typeof value !== 'string') return value;
+  return value.replace(APP_UUID_TOKEN, (match, flag, prefix, uuid) => `${match.slice(0, match.length - uuid.length)}<uuid>`);
+}
 
 function explicitPort(value) {
   const authority = /^[a-z][a-z\d+.-]*:\/\/([^/?#]*)/i.exec(value)?.[1];
@@ -85,7 +93,7 @@ export function maskBrowserText(value, { full = false, maskHosts = false } = {})
   try { value = decodeURIComponent(value); } catch {}
   const maskText = (text) => {
     // Redact the complete JWT, including padding, before matching host names.
-    const redacted = redactBrowserSecrets(text);
+    const redacted = maskAppUuid(redactBrowserSecrets(text), { full });
     if (!maskHosts || full) return redacted;
     return redacted.replace(HOST_TEXT_TOKEN, (token) => {
       const host = token.replace(/^\[|\]$/g, '');
@@ -101,7 +109,18 @@ export function maskBrowserText(value, { full = false, maskHosts = false } = {})
     copiedUntil = match.index + match[0].length;
   }
   output.push(maskText(value.slice(copiedUntil)));
-  return redactBrowserSecrets(output.join(''));
+  return maskAppUuid(redactBrowserSecrets(output.join('')), { full });
+}
+
+// A command error keeps a plain file name, such as src/cli.js, intact. Mask the secrets, the app UUID forms,
+// and the host inside a URL. A child command line ("Command failed: ...") can hold a bare host, so mask a
+// bare host on that line only.
+export function maskCliError(value, { full = false } = {}) {
+  if (typeof value !== 'string') return value;
+  if (full) return maskBrowserText(value, { full });
+  return value.split('\n')
+    .map((line) => maskBrowserText(line, { maskHosts: /Command failed:/.test(line) }))
+    .join('\n');
 }
 
 export function maskUrl(value, { full = false } = {}) {
@@ -109,7 +128,7 @@ export function maskUrl(value, { full = false } = {}) {
 
   let parsed;
   try { parsed = new URL(value); }
-  catch { return redactBrowserSecrets(value.split(/[?#]/, 1)[0]); }
+  catch { return maskAppUuid(redactBrowserSecrets(value.split(/[?#]/, 1)[0]), { full }); }
 
   if (parsed.protocol === 'data:' || parsed.protocol === 'javascript:') return '<redacted-url>';
 
@@ -118,12 +137,12 @@ export function maskUrl(value, { full = false } = {}) {
     parsed.password = '';
     parsed.search = '';
     parsed.hash = '';
-    return redactBrowserSecrets(parsed.href);
+    return maskAppUuid(redactBrowserSecrets(parsed.href), { full });
   }
 
   const host = full || isLoopback(parsed.hostname) ? parsed.hostname : maskedHost(parsed.hostname);
   const port = explicitPort(value) || (parsed.port ? `:${parsed.port}` : '');
-  return redactBrowserSecrets(`${parsed.protocol}//${host}${port}${parsed.pathname}`);
+  return maskAppUuid(redactBrowserSecrets(`${parsed.protocol}//${host}${port}${parsed.pathname}`), { full });
 }
 
 export function maskDeep(value, options = {}) {
