@@ -8,7 +8,7 @@ import { pathToFileURL } from 'node:url';
 import test from 'node:test';
 import { loadProjectConfig } from '../src/kit/config.js';
 import { runKitCommand } from '../src/kit/cli.js';
-import { acquireProjectLock, listProjectLocks, readLockQueue, readMachineLocks, recordLockRelease, releaseProjectLock, withMutationLock } from '../src/kit/locks.js';
+import { acquireProjectLock, listProjectLocks, readLockQueue, readMachineLocks, recordLockRelease, releaseProjectLock, reownProjectLocks, withMutationLock } from '../src/kit/locks.js';
 import { POLICY_DEFAULTS } from '../src/control.js';
 import { writeNight } from '../src/night.js';
 
@@ -253,6 +253,96 @@ test('suite holds the full-suite lock around the command and passes the exit cod
   assert.equal(f.readSeen().locked, true);
   assert.equal(fs.existsSync(f.lockFile), false, 'the lock is released after a failed command');
   assert.ok(f.lines.some((line) => /acquired/.test(line)) && f.lines.some((line) => /released/.test(line)), f.lines.join('\n'));
+});
+
+test('suite releases its lock by PID and token after its owning pane is gone, records the pass, and exits 0', (t) => {
+  const f = fixture(t, 'herdr-suite-handover-release-');
+  const gone = path.join(f.base, 'pane-gone');
+  const herdr = (args) => {
+    if (args[0] === 'pane' && args[1] === 'get') {
+      if (fs.existsSync(gone)) throw new Error('pane_not_found');
+      return { pane: { pane_id: args[2], workspace_id: 'ws', label: 'orch' } };
+    }
+    if (args[0] === 'pane' && args[1] === 'list') {
+      return { panes: fs.existsSync(gone) ? [] : f.livePanes.map((pane_id) => ({ pane_id })) };
+    }
+    if (args[0] === 'pane' && args[1] === 'process-info') return { process_info: { shell_pid: 601 } };
+    throw new Error(`Unexpected Herdr call: ${args.join(' ')}`);
+  };
+  const script = path.join(f.base, 'gone.mjs');
+  fs.writeFileSync(script, [
+    "import fs from 'node:fs';",
+    `fs.writeFileSync(${JSON.stringify(gone)}, 'yes');`,
+  ].join('\n'));
+
+  const result = runKitCommand('suite', ['--', process.execPath, script], f.options({ herdr }));
+
+  assert.equal(result.exitCode, 0, 'a passing suite exits 0 although its pane is gone at release');
+  assert.equal(fs.existsSync(f.lockFile), false, 'the lock is released by PID and token without a pane check');
+  assert.equal(fs.existsSync(gone), true, 'the command ran and the pane was gone');
+  const passes = JSON.parse(fs.readFileSync(path.join(f.dataDir, 'suite-passes.json'), 'utf8'));
+  assert.equal(passes.length, 1, 'the pass is recorded');
+  assert.ok(!f.lines.some((line) => line.startsWith('Warning: could not release lock')), f.lines.join('\n'));
+});
+
+test('a suite lock is live while its process runs after its pane is gone, and a dead process is reclaimed at once', (t) => {
+  const f = fixture(t, 'herdr-suite-process-owner-');
+  let alive = true;
+  const lines = [];
+  const options = { ...lockOptions(f, 'ws:orch', ['ws:orch']), pidAlive: (pid) => pid === process.pid && alive, output: (line) => lines.push(line) };
+  const first = acquireProjectLock('full-suite', { ...options, kind: 'suite' });
+  // The pane is gone, but the process that holds the lock is alive.
+  const goneHerdr = (args) => {
+    if (args[0] === 'pane' && args[1] === 'get') return { pane: { pane_id: args[2], workspace_id: 'ws', label: 'orch' } };
+    if (args[0] === 'pane' && args[1] === 'list') return { panes: [] };
+    throw new Error(`Unexpected Herdr call: ${args.join(' ')}`);
+  };
+  assert.throws(() => acquireProjectLock('full-suite', { ...options, herdr: goneHerdr, kind: 'suite', waitSeconds: 0 }),
+    (error) => error.exitCode === 75, 'a live process keeps the lock after its pane is gone');
+  assert.equal(JSON.parse(fs.readFileSync(f.lockFile, 'utf8')).token, first.token, 'the live process still owns the record');
+  alive = false;
+  const takeover = acquireProjectLock('full-suite', { ...options, herdr: goneHerdr, kind: 'suite', waitSeconds: 0 });
+  assert.notEqual(takeover.token, first.token, 'a dead process is reclaimed at once');
+  assert.ok(lines.some((line) => /NOTICE: Taking over stale lock full-suite/.test(line)), lines.join('\n'));
+  releaseProjectLock('full-suite', { ...options, herdr: goneHerdr, expectedRecord: takeover });
+});
+
+test('the full-suite queue moves on when a suite releases its lock after its pane is gone', async (t) => {
+  const f = fixture(t, 'herdr-suite-handover-queue-');
+  const holderOptions = lockOptions(f, 'ws:orch', ['ws:orch']);
+  const holder = acquireProjectLock('full-suite', { ...holderOptions, kind: 'suite' });
+  const waiter = startLockWaiter(t, f, 'ws:b', ['ws:b']);
+  await waitFor(() => readQueueFiles(f.dataDir).length === 1, 'the waiter queues behind the live suite process');
+  assert.equal(JSON.parse(fs.readFileSync(f.lockFile, 'utf8')).token, holder.token, 'the gone pane does not release the live suite lock');
+  releaseProjectLock('full-suite', { ...holderOptions, expectedRecord: holder });
+  const acquired = await waiter.nextMessage('acquired');
+  assert.equal(acquired.pane, 'ws:b', 'the queue moves on after the release');
+  waiter.release();
+  await waiter.nextMessage('released');
+  waiter.child.stdin.end();
+  assert.equal(await waiter.exited, 0);
+});
+
+test('reownProjectLocks moves a machine suite lock, a repository lock, and a queue ticket to the new pane', (t) => {
+  const f = fixture(t, 'herdr-suite-reown-');
+  const holderOptions = lockOptions(f, 'ws:orch', ['ws:orch']);
+  const holder = acquireProjectLock('full-suite', { ...holderOptions, kind: 'suite' });
+  acquireProjectLock('deploy', holderOptions);
+  const queue = path.join(f.dataDir, 'locks', 'machine', 'queue', 'full-suite');
+  fs.mkdirSync(queue, { recursive: true, mode: 0o700 });
+  const ticket = { id: '00000000-0000-4000-8000-000000000055', seq: 1, pane: 'ws:orch', project: f.config.slug, pid: process.pid, kind: 'suite', command: 'herdr-boss lock acquire full-suite', createdAt: new Date().toISOString() };
+  fs.writeFileSync(path.join(queue, `${ticket.id}.json`), JSON.stringify(ticket), { mode: 0o600 });
+
+  const changed = reownProjectLocks({ config: f.config, dataDir: f.dataDir, fromPane: 'ws:orch', toPane: 'ws:new' });
+
+  assert.deepEqual(changed.locks.map((lock) => [lock.name, lock.project]), [['deploy', f.config.slug], ['full-suite', f.config.slug]]);
+  assert.deepEqual(changed.tickets.map((item) => item.id), [ticket.id]);
+  assert.equal(JSON.parse(fs.readFileSync(f.lockFile, 'utf8')).ownerPane, 'ws:new', 'the machine suite lock moves');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(queue, `${ticket.id}.json`), 'utf8')).pane, 'ws:new', 'the queue ticket moves');
+  const repoDir = fs.readdirSync(path.join(f.dataDir, 'locks')).find((name) => name !== 'machine');
+  const repoFile = fs.readdirSync(path.join(f.dataDir, 'locks', repoDir)).find((name) => name.endsWith('.json'));
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.dataDir, 'locks', repoDir, repoFile), 'utf8')).ownerPane, 'ws:new', 'the repository lock moves');
+  releaseProjectLock('full-suite', { ...holderOptions, expectedRecord: holder });
 });
 
 test('a matching push token re-enters without a queue ticket and cannot release the push lock', (t) => {
@@ -988,6 +1078,21 @@ test('suite lists the ten most recent pass records', (t) => {
   assert.ok(f.lines.some((line) => line.includes('repo')));
   assert.ok(f.lines.some((line) => line.includes(records[0].tree.slice(0, 12))));
   assert.ok(f.lines.some((line) => line.includes(JSON.stringify(records[0].command))));
+});
+
+test('suite --list-passes also shows the full-suite holder and queue', (t) => {
+  const f = fixture(t, 'herdr-suite-list-passes-holder-');
+  assert.equal(f.run([]).exitCode, 0);
+  const holderOptions = lockOptions(f, 'ws:orch', ['ws:orch']);
+  const holder = acquireProjectLock('full-suite', { ...holderOptions, kind: 'suite' });
+  f.lines.length = 0;
+
+  runKitCommand('suite', ['--list-passes'], f.options({ pidAlive: (pid) => pid === process.pid }));
+
+  const text = f.lines.join('\n');
+  assert.ok(f.lines.some((line) => line.startsWith('suite: ')), text);
+  assert.match(text, /full-suite \(machine\): held by pane ws:orch \(suite\)/);
+  releaseProjectLock('full-suite', { ...holderOptions, expectedRecord: holder });
 });
 
 test('suite keeps only the last 200 pass records', (t) => {

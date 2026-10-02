@@ -9,6 +9,8 @@ import { contextTokensFor, loadModels, loadProjectConfig } from './kit/config.js
 import { loadPolicy, mergeModels, modelEnabled, providerFor } from './control.js';
 import { codexBrowserArgs, codexShellEnvArgs } from './harness.js';
 import { cleanGoal, goalDelivery, goalFromTranscript } from './goal.js';
+import { reownProjectLocks } from './kit/locks.js';
+import { reownLeases } from './leases.js';
 
 const FILE = path.join(DATA_DIR, 'handoffs.json');
 const TARGETS = new Set(['codex', 'claude', 'pi', 'opencode']);
@@ -640,6 +642,25 @@ export function promptRunningWorkers(item, records = null) {
   }
 }
 
+// Re-own the locks, leases, and waiting suite runs of the old pane to the new pane at activation.
+// The project workspace filter keeps the change inside this project. A failure warns and never stops activation.
+function reownHandoverResources(item) {
+  if (handoffRole(item) === 'boss') return;
+  let config;
+  try { config = loadProjectConfig({ cwd: item.cwd }); }
+  catch (error) {
+    // A project without a Git root has no locks or leases to re-own.
+    if (!/Could not find a git repository/.test(String(error.message))) {
+      console.warn(`Warning: could not re-own the resources of pane ${item.sourcePane}: ${String(error.message).slice(0, 200)}`);
+    }
+    return;
+  }
+  try { reownProjectLocks({ config, dataDir: DATA_DIR, fromPane: item.sourcePane, toPane: item.newPane }); }
+  catch (error) { console.warn(`Warning: could not re-own the locks of pane ${item.sourcePane}: ${String(error.message).slice(0, 200)}`); }
+  try { reownLeases({ fromPane: item.sourcePane, toPane: item.newPane, project: item.project, dataDir: DATA_DIR }); }
+  catch (error) { console.warn(`Warning: could not re-own the leases of pane ${item.sourcePane}: ${String(error.message).slice(0, 200)}`); }
+}
+
 export function activateHandoff(id, { confirmed = false } = {}) {
   if (!confirmed) throw new Error('Review the successor output, then pass --confirmed.');
   const records = listHandoffs();
@@ -678,6 +699,7 @@ export function activateHandoff(id, { confirmed = false } = {}) {
       .map((pane) => pane.pane_id);
   } catch { item.peerPanes = null; /* The engine uses its current pane snapshot instead. */ }
   save(records);
+  reownHandoverResources(item);
   if (sourceMissing) item.previousPromptSkipped = 'source pane gone';
   else {
     try { herdr(['agent', 'prompt', item.sourcePane, previousAgentPrompt(item)]); item.previousPromptAt = new Date().toISOString(); }

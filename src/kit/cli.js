@@ -279,7 +279,7 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
     const usage = 'Usage: suite [--wait SECONDS] [--keep NAME]... [--reuse] -- <command...> | suite --list-passes';
     if (argv[0] === '--list-passes') {
       if (argv.length !== 1) fail(usage);
-      return listSuitePasses({ dataDir: lockDataDir, output });
+      return listSuitePasses({ dataDir: lockDataDir, output, herdr, pidAlive, now });
     }
     const separator = argv.indexOf('--');
     if (separator < 0 || separator === argv.length - 1) fail(usage);

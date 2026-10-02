@@ -9,7 +9,7 @@ import { randomBytes } from 'node:crypto';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { validateResourcePools } from '../src/config.js';
-import { acquireLease, listLeases, ownerReleaseLease, processCwd, processLabel, readLeases, reclaimLeases, releaseLease, tcpListening } from '../src/leases.js';
+import { acquireLease, listLeases, ownerReleaseLease, processCwd, processLabel, readLeases, reclaimLeases, releaseLease, reownLeases, tcpListening } from '../src/leases.js';
 import { writeNight } from '../src/night.js';
 import { renderBulletin } from '../src/rules.js';
 import { loadModels, loadProjectConfig } from '../src/kit/config.js';
@@ -382,6 +382,20 @@ test('reclaim removes leases of a gone pane, a finished run, and an expired leas
   ]);
   assert.equal(result.reclaimed.length, 3);
   assert.deepEqual(readLeases(ctx.dataDir).leases.map((item) => item.item), ['47103']);
+});
+
+test('reownLeases moves the leases of one pane to its successor in the same project', () => {
+  const ctx = context();
+  seedLeases(ctx.dataDir, [
+    lease('47100', { pane: 'ws:orch' }),
+    lease('47101', { pane: 'ws:other' }),
+    lease('47102', { pane: 'ws:orch', project: 'beta' }),
+  ]);
+  const changed = reownLeases({ fromPane: 'ws:orch', toPane: 'ws:new', project: 'alpha', dataDir: ctx.dataDir });
+  assert.deepEqual(changed.map((item) => item.item), ['47100']);
+  assert.deepEqual(readLeases(ctx.dataDir).leases.map((item) => [item.item, item.pane]), [
+    ['47100', 'ws:new'], ['47101', 'ws:other'], ['47102', 'ws:orch'],
+  ]);
 });
 
 test('quiet hours holds a TTL lease reclaim but still reclaims a gone pane', () => {

@@ -693,6 +693,22 @@ export function setLeasePane(poolName, item, pane, { dataDir = DATA_DIR } = {}) 
   });
 }
 
+// Re-own the leases of one pane to its successor pane at a handover. The project filter keeps a handover
+// inside its own workspace. Return the changed leases.
+export function reownLeases({ fromPane, toPane, project = null, dataDir = DATA_DIR } = {}) {
+  if (typeof fromPane !== 'string' || typeof toPane !== 'string' || !fromPane || !toPane || fromPane === toPane) return [];
+  if (!fs.existsSync(path.join(dataDir, LEASES_FILE))) return [];
+  return changeLeases(dataDir, (store) => {
+    const changed = [];
+    for (const lease of store.leases) {
+      if (lease.pane !== fromPane || (project !== null && lease.project !== project)) continue;
+      lease.pane = toPane;
+      changed.push({ pool: lease.pool, item: lease.item, project: lease.project });
+    }
+    return changed;
+  });
+}
+
 // Remove leases that match the filter without a caller check. worker start and worker collect use it for their own worker.
 export function dropLeases(filter, { dataDir = DATA_DIR } = {}) {
   if (!fs.existsSync(path.join(dataDir, LEASES_FILE))) return [];

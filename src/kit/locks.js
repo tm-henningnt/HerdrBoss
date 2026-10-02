@@ -176,6 +176,7 @@ function readRecord(file, commonDir, scope = 'repository') {
     || !['long', 'short'].includes(lane) || (predictedMs !== null && (!Number.isFinite(predictedMs) || predictedMs < 0))
     || value.command !== COMMAND(value.name) || typeof value.acquiredAt !== 'string'
     || (value.reentryToken !== undefined && (typeof value.reentryToken !== 'string' || value.reentryToken.length < 16 || value.reentryToken.length > 256))
+    || (value.token !== undefined && (typeof value.token !== 'string' || value.token.length < 16 || value.token.length > 256))
     || !Number.isFinite(Date.parse(value.acquiredAt))) {
     throw new Error(`Lock record ${path.basename(file)} is invalid. Refusing to change it.`);
   }
@@ -254,6 +255,9 @@ function lockIsLive(record, {
     const currentStart = typeof info?.start === 'string' ? info.start.trim().replace(/\s+/g, ' ') : null;
     if (currentStart && currentStart !== record.pidStart) return false;
   }
+  // A suite or push lock belongs to the process that holds it. Its pane is only a label, so a handover that
+  // removes the old pane does not make a running suite stale. A manual lock belongs to its pane.
+  if (record.kind === 'suite' || record.kind === 'push') return true;
   return (livePanes ?? paneIds(herdr)).has(record.ownerPane);
 }
 
@@ -1082,6 +1086,7 @@ export function acquireProjectLock(name, {
             predictedMs,
             command: COMMAND(name),
             acquiredAt,
+            token: crypto.randomBytes(32).toString('hex'),
             ...(scope === 'machine' && kind === 'manual' ? { expiresAt: new Date(Date.parse(acquiredAt) + MANUAL_LOCK_TTL_MS).toISOString() } : {}),
             ...(reentryToken !== null ? { reentryToken } : {}),
             ...(scope === 'machine' ? { scope } : {}),
@@ -1198,8 +1203,24 @@ export function releaseProjectLock(name, {
   if (slot !== null && slot !== 'long' && (!Number.isInteger(slot) || slot < 1 || slot > 4)) {
     throw new Error('--slot must be long or an integer from 1 to 4.');
   }
-  const caller = callerFor(env, herdr, { name, config });
   const { commonDir, directory, scope } = lockContext(config, dataDir, scopeFor(name));
+  // A suite or push process releases the record that it holds by PID and token. The caller pane can be gone after a
+  // handover, so this path has no pane check. The owner of a lock is the process that holds it.
+  if (expectedRecord) {
+    return withMutationLock(directory, () => {
+      const entries = readLockRecords(directory, name, commonDir, scope);
+      const owned = entries.find(({ record }) => record.slot === expectedRecord.slot
+        && record.pid === expectedRecord.pid && record.acquiredAt === expectedRecord.acquiredAt
+        && (typeof expectedRecord.token !== 'string' || record.token === expectedRecord.token));
+      if (!owned) throw new Error(`The acquired lock ${name} no longer exists. Refusing to release another record.`);
+      fs.unlinkSync(owned.file);
+      removeDeliveredSlowNotice(owned.record, dataDir);
+      recordLockRelease(owned.record, { dataDir, now });
+      output(`Lock ${name} released.`);
+      return owned.record;
+    });
+  }
+  const caller = callerFor(env, herdr, { name, config });
   const quietHours = quietHoursActive(readNight({ dataDir, now: timeValue(now) }));
   return withMutationLock(directory, () => {
     const entries = readLockRecords(directory, name, commonDir, scope);
@@ -1207,19 +1228,14 @@ export function releaseProjectLock(name, {
     const reentrant = entries.find(({ record }) => (slot === null || record.slot === slot)
       && reentryTokenMatches(record, env, pidAlive)
       && lockIsLive(record, { herdr, pidAlive, processInfo, now, quietHours }));
-    if (reentrant && !expectedRecord) {
+    if (reentrant) {
       const { record } = reentrant;
       recordLockRelease({ ...record, project: config.slug, ownerPane: caller.paneId }, { dataDir, now, holdMs: null, reentrant: true });
       return { ...record, reentrant: true };
     }
     const samePane = entries.filter(({ record }) => record.ownerPane === caller.paneId);
     let owned;
-    if (expectedRecord) {
-      // Automatic cleanup must never release a replacement record or another job in this pane.
-      owned = samePane.find(({ record }) => record.slot === expectedRecord.slot
-        && record.pid === expectedRecord.pid && record.acquiredAt === expectedRecord.acquiredAt);
-      if (!owned) throw new Error(`The acquired lock ${name} no longer exists. Refusing to release another record.`);
-    } else if (slot !== null) {
+    if (slot !== null) {
       owned = samePane.find(({ record }) => record.slot === slot);
       if (!owned) {
         const selected = entries.find(({ record }) => record.slot === slot);
@@ -1262,10 +1278,11 @@ export function listProjectLocks({
     const { commonDir, directory } = lockContext(config, dataDir, 'repository');
     return fs.readdirSync(directory).filter((file) => file.endsWith('.json')).sort().map((fileName) => {
       const record = readRecord(path.join(directory, fileName), commonDir, 'repository');
+      const { token, ...publicRecord } = record;
       const ageMs = Math.max(0, timeValue(now) - Date.parse(record.acquiredAt));
       const expiresInMs = record.kind === 'manual' && record.expiresAt ? Math.max(0, Date.parse(record.expiresAt) - timeValue(now)) : null;
       return {
-        ...record,
+        ...publicRecord,
         ageMs,
         ageSeconds: Math.floor(ageMs / 1000),
         expiresInMs,
@@ -1279,6 +1296,12 @@ export function listProjectLocks({
     .map((record) => ({ ...record, ...(record.name === FULL_SUITE_LOCK ? { queue: machineQueue } : {}) }));
   const locks = [...repository, ...machine];
   if (!locks.length) output('No project locks.');
+  printLockRecords(locks, output);
+  return locks;
+}
+
+// Print one line for each lock, in the same text that `lock list` uses.
+export function printLockRecords(locks, output = console.log) {
   for (const lock of locks) {
     const age = formatDuration(lock.ageSeconds);
     const expiry = lock.expiresInMs === null ? '' : `; expires in ${formatDuration(Math.ceil(lock.expiresInMs / 1000))}`;
@@ -1289,7 +1312,44 @@ export function listProjectLocks({
       output(`  Queue: ${lock.queue.map((ticket) => `${ticket.position}. ${ticket.project} ${ticket.pane} (${ticket.kind}) ${ticket.lane} lane, predicted ${ticket.predictedMs === null ? 'unknown' : formatDuration(Math.ceil(ticket.predictedMs / 1000))}, ${ticket.slotsInUse} of ${ticket.slotLimit} slots in use, waiting ${formatDuration(ticket.waitSeconds)}`).join(', ')}`);
     }
   }
-  return locks;
+}
+
+// Read every lock record in one scope directory, for a handover re-own. A broken record stops the scan.
+function readAllLockRecords(directory, commonDir, scope) {
+  let files;
+  try { files = fs.readdirSync(directory).filter((file) => file.endsWith('.json')).sort(); }
+  catch (error) { if (error.code === 'ENOENT') return []; throw error; }
+  return files.map((file) => ({ file: path.join(directory, file), record: readRecord(path.join(directory, file), commonDir, scope) }));
+}
+
+// Re-own the locks and the full-suite queue tickets of one pane to its successor pane at a handover.
+// The project filter keeps a handover inside its own workspace. Return the changed records.
+export function reownProjectLocks({ config, dataDir = DATA_DIR, fromPane, toPane } = {}) {
+  if (typeof fromPane !== 'string' || typeof toPane !== 'string' || !fromPane || !toPane || fromPane === toPane) {
+    return { locks: [], tickets: [] };
+  }
+  const project = config.slug;
+  const changed = { locks: [], tickets: [] };
+  for (const scope of ['repository', 'machine']) {
+    const { commonDir, directory } = lockContext(config, dataDir, scope);
+    withMutationLock(directory, () => {
+      for (const { file, record } of readAllLockRecords(directory, commonDir, scope)) {
+        if (record.ownerPane !== fromPane || record.project !== project) continue;
+        replaceRecord(file, { ...record, ownerPane: toPane });
+        changed.locks.push({ name: record.name, slot: record.slot, project: record.project, kind: record.kind });
+      }
+      if (scope !== 'machine') return;
+      // A waiting suite run also carries the pane of its caller.
+      const queue = path.join(directory, 'queue', FULL_SUITE_LOCK);
+      for (const ticket of readQueueTickets(directory, FULL_SUITE_LOCK)) {
+        if (ticket.pane !== fromPane || ticket.project !== project) continue;
+        const { legacy, ...raw } = ticket;
+        replaceRecord(path.join(queue, `${ticket.id}.json`), { ...raw, pane: toPane });
+        changed.tickets.push({ id: ticket.id, project: ticket.project, kind: ticket.kind });
+      }
+    });
+  }
+  return changed;
 }
 
 function formatDuration(seconds) {
@@ -1363,8 +1423,9 @@ export function readMachineLocks({
   return records.map((record) => {
     const sameLock = records.filter((other) => other.name === record.name && other.state === 'live');
     const slotLimit = lockAdmissionCapacity(configuredSlotLimit, sameLock, tickets);
+    const { token, ...publicRecord } = record;
     return {
-      ...record,
+      ...publicRecord,
       slotsInUse: sameLock.length,
       slotLimit,
       configuredSlotLimit,

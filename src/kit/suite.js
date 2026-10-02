@@ -5,7 +5,7 @@ import { DATA_DIR } from '../config.js';
 import { createHerdrRunner } from './workers.js';
 import { DEFAULT_RULES_FILE } from './config.js';
 import { SWAP_FORCE_ENV, swapGuardFor } from './swap-guard.js';
-import { FULL_SUITE_LOCK, acquireProjectLock, recordLockRelease, releaseProjectLock } from './locks.js';
+import { FULL_SUITE_LOCK, acquireProjectLock, printLockRecords, readLockQueue, readMachineLocks, recordLockRelease, releaseProjectLock } from './locks.js';
 import { DEFAULT_SUITE_UNTESTED, SUITE_PASSES_FILE, cleanTreeKey, readSuitePasses, samePassKey, sameTreeKey, writeSuitePasses } from './suite-passes.js';
 
 export { SUITE_PASSES_FILE };
@@ -26,7 +26,9 @@ export function cleanSuiteEnvironment(env, keep = []) {
   return { env: clean, removed };
 }
 
-export function listSuitePasses({ dataDir = DATA_DIR, output = console.log } = {}) {
+export function listSuitePasses({
+  dataDir = DATA_DIR, output = console.log, herdr = null, pidAlive, processInfo, now = Date.now,
+} = {}) {
   const records = readSuitePasses(dataDir).slice(-10);
   for (const record of records) {
     const commonDirName = path.basename(record.repo ?? '');
@@ -35,6 +37,15 @@ export function listSuitePasses({ dataDir = DATA_DIR, output = console.log } = {
     const command = Array.isArray(record.command) ? JSON.stringify(record.command) : '[]';
     output(`suite: ${record.time ?? 'unknown time'} ${repoName || 'unknown repo'} ${tree} ${command}`);
   }
+  // Show the full-suite holder and queue, in the same text that `lock list` uses. A failed pane list prints nothing.
+  try {
+    const locks = readMachineLocks({ dataDir, ...(herdr ? { herdr } : {}), pidAlive, processInfo, now })
+      .filter((record) => record.name === FULL_SUITE_LOCK);
+    if (locks.length) {
+      const queue = readLockQueue({ dataDir, ...(herdr ? { herdr } : { livePanes: new Set() }), pidAlive, processInfo, now });
+      printLockRecords(locks.map((lock) => ({ ...lock, queue })), output);
+    }
+  } catch { /* A missing pane list or a broken record never stops the pass list. */ }
   return records;
 }
 
@@ -117,7 +128,7 @@ export function runSuite(command, {
       catch (error) {
         const reason = String(error?.message ?? error).replace(/\s+/g, ' ').replace(/[. ]+$/, '');
         output(`Warning: could not release lock ${FULL_SUITE_LOCK}: ${reason}. The lock is stale when this process ends.`);
-        if (exitCode === 0) exitCode = 1;
+        // A pass is a pass. A failed lock release never changes the exit code of a passing suite.
       }
     }
   }
