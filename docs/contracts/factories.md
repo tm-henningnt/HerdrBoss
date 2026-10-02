@@ -112,6 +112,7 @@ The schema does not set a minimum byte size.
 
 **Example files:** `fleet-summary.valid.personal.json`,
 `fleet-summary.valid.titles-off.json`, `fleet-summary.valid.unknown-readings.json`,
+`fleet-summary.valid.transferred.json`,
 `fleet-summary.invalid.title-with-sharing-off.json`, and
 `fleet-summary.invalid.message-text.json` in [examples/](examples/).
 
@@ -200,7 +201,9 @@ Do not permit a temporary head office to enrol factories.
 Do not issue a credential on a refused join.
 
 **Example files:** `fleet-join.valid.request.json` and
-`fleet-join.invalid.write-scope.json` in [examples/](examples/).
+`fleet-join.valid.port-65535.json`, `fleet-join.invalid.write-scope.json`,
+`fleet-join.invalid.port-zero.json`, `fleet-join.invalid.port-65536.json`, and
+`fleet-join.invalid.port-99999.json` in [examples/](examples/).
 
 ## Fleet enrolment result
 
@@ -286,6 +289,7 @@ The repository reference holds a transfer branch and exact commit.
 Committed `memory.md`, briefs, and status travel through GitHub.
 Source pointers hold a dashboard base URL and item or pack IDs only.
 Owner items, packs, messages, logins, and secrets stay at the source.
+The project `status` value `transferred` marks a project that the source has switched away.
 **Add-only rules:** Add optional manifest metadata only.
 A full archive with board, ledger, or access records needs a later contract.
 **Error and refusal behavior:** Refuse equal source and target IDs.
@@ -301,6 +305,7 @@ Cancel before the switch removes the target clone and project record.
 Keep an audit entry on each factory.
 
 **Example files:** `project-transfer.valid.small-form.json`,
+`project-transfer.valid.transferred.json`,
 `project-transfer.invalid.message-text.json`, and
 `project-transfer.invalid.unpinned-commit.json` in [examples/](examples/).
 
@@ -317,11 +322,13 @@ Keep an audit entry on each factory.
 The file holds `minimumFactoryVersion`, `hosts`, and `factories`.
 A host record holds its ID, runtime, personal-use flag, and Codex sandbox setting.
 A `local` host has no remote address.
-An `ssh` host also holds its hostname and Docker context name.
+An `ssh` host also holds its address and Docker context name.
+The address is a DNS name or a single-label tailnet name.
 Neither record holds an SSH key, key path, or credential.
 A factory record binds its ID and name to a host and profile.
 It holds the dashboard base URL, software version, and kit revision.
 A container factory also has its container name, loopback ports, and image metadata.
+It can hold the container hostname that the host tool sets at creation.
 Image metadata holds the build time and pins hash.
 The native factory record needs no image or container ports.
 **Add-only rules:** Add optional record metadata only.
@@ -339,14 +346,78 @@ Do not use a registry entry to bypass the live data directory check.
 Keep the worktree and project root settings local to each factory.
 
 **Example files:** `factory-registry.valid.local-and-ssh.json`,
-`factory-registry.invalid.port-range.json`, and
-`factory-registry.invalid.credential-path.json` in [examples/](examples/).
+`factory-registry.valid.single-label-host.json`,
+`factory-registry.invalid.port-range.json`,
+`factory-registry.invalid.credential-path.json`,
+`factory-registry.invalid.address-user-info.json`, and
+`factory-registry.invalid.hostname-one-label.json` in [examples/](examples/).
+
+## Fleet guidance
+
+**Purpose:** Give a factory Boss the factory shares and nudges of the head office.
+**Producer:** The head office guidance sender.
+**Consumer:** The factory handler of `POST /api/fleet/guidance`.
+**Version:** 1.0.0; major schema number 1.
+**Schema:** [fleet-guidance.v1.schema.json](schema/fleet-guidance.v1.schema.json).
+**Sources:** [ADR 0011](../adr/0011-factory-shares-and-guidance.md),
+ticket [18](../tickets/factories/18-factory-shares-and-guidance.md), and the spec
+section "Factory shares and guidance".
+
+The body holds `headOfficeFactoryId`, `senderEpoch`, `sentAt`, `shares`, and `nudges`.
+Each share binds an `accountKey` digest to a `share` from 0 to 100.
+Each nudge holds a `nudgeId` and a `text` of 1 to 500 characters.
+Both arrays are required. An array can be empty.
+The body holds no policy, worker command, or credential field.
+**Add-only rules:** Add optional guidance metadata only.
+A new guidance kind requires a new major contract.
+**Error and refusal behavior:** Accept the route only with the `fleetGuide` credential.
+Refuse the `fleetRead` credential with 403.
+Refuse a `senderEpoch` below the highest accepted epoch.
+Refuse a `headOfficeFactoryId` that is not the holder of the accepted epoch.
+The shares of one account must total at most 100 across the factories.
+The schema cannot check that total. Check it at the head office before sending.
+The factory checks only its own share against the account scope.
+Keep the last accepted shares when the head office is offline.
+Post each nudge to the factory Boss pane as an agent message.
+The credential cannot change policy, start or stop workers, or read message text.
+
+**Example files:** `fleet-guidance.valid.share-and-nudge.json`,
+`fleet-guidance.valid.empty.json`, `fleet-guidance.invalid.share-over-100.json`,
+`fleet-guidance.invalid.zero-epoch.json`, `fleet-guidance.invalid.account-identity.json`,
+and `fleet-guidance.invalid.policy-field.json` in [examples/](examples/).
+
+## Factory health body
+
+**Purpose:** Report the liveness of one factory without a path or a secret.
+**Producer:** The factory handler of `GET /api/health`.
+**Consumer:** The head office poller and the host tool.
+**Version:** 1.0.0; major schema number 1.
+**Schema:** [factory-health.v1.schema.json](schema/factory-health.v1.schema.json).
+**Source:** Ticket [06](../tickets/factories/06-factory-hostnames-health-log-rotation.md).
+
+The body holds `version`, `kitRevision`, `tickAgeSeconds`, `herdrReachable`, and
+`clockOffsetSeconds`.
+The `schema` number and `contractVersion` identify the contract.
+`version` is the factory software version.
+Use `null` for an unavailable reading.
+**Add-only rules:** Add optional reading fields only.
+The fleet summary `health.status` value stays a head office judgement.
+It is not part of this body.
+**Error and refusal behavior:** The body holds no path, hostname, token, or log text.
+Accept the route with the `fleetRead` credential.
+Refuse an unknown field.
+Keep the last good body after a poll failure.
+
+**Example files:** `factory-health.valid.healthy.json`,
+`factory-health.valid.unknown-readings.json`, `factory-health.invalid.path.json`,
+`factory-health.invalid.negative-tick-age.json`, and
+`factory-health.invalid.missing-reading.json` in [examples/](examples/).
 
 ## Shared value definitions
 
 **Purpose:** Keep the contract value rules consistent.
 **Producer:** The contract maintainers.
-**Consumer:** All eight exchange schemas.
+**Consumer:** All ten exchange schemas.
 **Version:** 1.0.0.
 **Schema:** [common.v1.schema.json](schema/common.v1.schema.json).
 This file defines values and is not an exchanged document.
@@ -425,7 +496,7 @@ These choices complete the initial contracts.
     signatures, expiry, epoch order, transfer locks, and Owner confirmation.
     The permitted schema subset cannot prove those conditions.
 13. Use the state values `ready`, `doing`, `review`, `blocked`, `done`,
-    `paused`, and `unknown` for a project.
+    `paused`, `transferred`, and `unknown` for a project.
     Use `ok`, `ahead`, `exhausted`, and `unknown` for a quota lane.
     Use `healthy`, `degraded`, `offline`, and `unknown` for health.
     The first image supports `claude`, `codex`, and `opencode` harness rows.
@@ -436,3 +507,21 @@ These choices complete the initial contracts.
     Use 64 hexadecimal characters for a digest and 40 for a Git commit.
     Use ports from 1 to 65535.
     These limits are initial contract choices, not measured resource limits.
+15. Add `transferred` to the project state before any release of contract 1.0.0.
+    The source marks a project `transferred` after the Owner confirms the switch.
+    The value is part of the first published enum, so no old consumer exists.
+    A later enum change needs a new major contract.
+16. Check the dashboard URL port in the pattern: no leading zero, 1 to 65535.
+    The pattern lists the digit ranges because the validator subset has no port keyword.
+17. Define `hostname` for DNS names that need a dot.
+    Define `hostAddress` for an SSH host address.
+    It accepts one label, such as a tailnet name, or a dotted name.
+    Neither definition accepts user information, a port, or a path.
+    The registry `address` uses `hostAddress`.
+    The optional container `hostname` uses `hostname`, because the host tool sets a dotted name.
+18. Define the guidance body with a required `shares` array and a required `nudges` array.
+    Name the share key `accountKey` and limit each share to 0 to 100.
+    Limit a nudge text to 500 characters.
+    Check the 100 total per account at the sender and the account scope at the receiver.
+19. Define the health body with the fields of ticket 06 and the standard document header.
+    Keep the status judgement in the fleet summary.

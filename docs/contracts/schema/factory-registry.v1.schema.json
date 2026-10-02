@@ -85,7 +85,7 @@
                 "const": "ssh"
               },
               "address": {
-                "$ref": "common.v1.schema.json#/$defs/hostname"
+                "$ref": "common.v1.schema.json#/$defs/hostAddress"
               },
               "dockerContext": {
                 "$ref": "common.v1.schema.json#/$defs/slug"
@@ -188,6 +188,9 @@
                 "minLength": 1,
                 "maxLength": 67,
                 "pattern": "^hf-[a-z][a-z0-9-]*$(?![\\s\\S])"
+              },
+              "hostname": {
+                "$ref": "common.v1.schema.json#/$defs/hostname"
               },
               "ports": {
                 "type": "object",

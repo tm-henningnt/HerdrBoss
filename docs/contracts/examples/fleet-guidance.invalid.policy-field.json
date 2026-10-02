@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "contractVersion": "1.0.0",
+  "headOfficeFactoryId": "factory-zero",
+  "senderEpoch": 2,
+  "sentAt": "2026-10-02T10:00:00Z",
+  "shares": [],
+  "nudges": [],
+  "policy": {
+    "paused": true
+  }
+}

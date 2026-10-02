@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.example/factories/1.0.0/schema/factory-health.v1.schema.json",
+  "title": "Factory health body",
+  "version": "1.0.0",
+  "description": "Version 1.0.0. See docs/contracts/factories.md for producers, consumers, and refusal rules.",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "integer",
+      "const": 1
+    },
+    "contractVersion": {
+      "$ref": "common.v1.schema.json#/$defs/contractVersion"
+    },
+    "version": {
+      "$ref": "common.v1.schema.json#/$defs/version"
+    },
+    "kitRevision": {
+      "$ref": "common.v1.schema.json#/$defs/kitRevision"
+    },
+    "tickAgeSeconds": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "herdrReachable": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "clockOffsetSeconds": {
+      "type": [
+        "number",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "schema",
+    "contractVersion",
+    "version",
+    "kitRevision",
+    "tickAgeSeconds",
+    "herdrReachable",
+    "clockOffsetSeconds"
+  ],
+  "additionalProperties": false
+}

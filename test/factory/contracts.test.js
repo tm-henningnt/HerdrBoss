@@ -9,6 +9,7 @@ const contractDoc = new URL('../../docs/contracts/factories.md', import.meta.url
 const contracts = [
   'fleet-summary', 'head-office-role', 'succession-list', 'fleet-join',
   'fleet-enrolment', 'viewer-routes', 'project-transfer', 'factory-registry',
+  'fleet-guidance', 'factory-health',
 ];
 const readJson = path => JSON.parse(readFileSync(path, 'utf8'));
 
@@ -117,4 +118,20 @@ test('unsupported or malformed schemas cannot produce a false pass', async () =>
     { format: 'uri' }, { type: 'unknown' }, { required: 'id' },
     { oneOf: [] }, { pattern: '[' }, { minItems: -1 }, { additionalProperties: 3 },
   ]) assert.throws(() => validate({}, schema));
+});
+
+test('shared definitions enforce port bounds, host names, and the transferred state', async () => {
+  const { validate } = await import('./schema-check.js');
+  const options = { schemaFile: `${schemaDir}/fleet-summary.v1.schema.json` };
+  const def = name => ({ $ref: `common.v1.schema.json#/$defs/${name}` });
+  const accepts = (name, values) => values.forEach(value => assert.deepEqual(validate(value, def(name), options), [], `${name}: ${value}`));
+  const refuses = (name, values) => values.forEach(value => assert.ok(validate(value, def(name), options).length > 0, `${name}: ${value}`));
+  accepts('dashboardUrl', ['http://factory-a.example:1', 'https://factory-a.example:4477/', 'http://factory-a.example:65535', 'http://localhost:9999']);
+  refuses('dashboardUrl', ['http://factory-a.example:0', 'http://factory-a.example:00080', 'http://factory-a.example:65536', 'http://factory-a.example:99999', 'http://factory-a.example:100000', 'http://factory-a.example:']);
+  accepts('hostname', ['host-b.example', 'factory-a.localhost']);
+  refuses('hostname', ['host-b', 'host-b.', '.example', 'user@host-b.example']);
+  accepts('hostAddress', ['host-b', 'host-b.example', 'a1']);
+  refuses('hostAddress', ['', 'host-b.', '-host', 'host_b', 'user@host-b', 'host-b:22', 'host-b\n']);
+  accepts('state', ['transferred', 'ready', 'unknown']);
+  refuses('state', ['moved']);
 });

@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "contractVersion": "1.0.0",
+  "transferId": "transfer-a",
+  "sourceFactoryId": "factory-a",
+  "targetFactoryId": "factory-b",
+  "createdAt": "2026-10-02T10:00:00Z",
+  "kitRevision": "abcdef012345",
+  "project": {
+    "slug": "sample-project",
+    "name": "Sample project",
+    "phase": "build",
+    "status": "transferred"
+  },
+  "repository": {
+    "provider": "github",
+    "owner": "sample-owner",
+    "name": "sample-project",
+    "transferBranch": "herdr/transfer-transfer-a",
+    "commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "sourcePointers": {
+    "dashboardUrl": "https://factory-a.example",
+    "ownerItemIds": [
+      "item-a"
+    ],
+    "reviewPackIds": [
+      "pack-a"
+    ]
+  }
+}
