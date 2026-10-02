@@ -58,7 +58,7 @@ test('the browsers API adds the probe state to a verified browser only', () => {
 test('the bulletin lists a probe-marked browser as not responding with the reason', () => {
   const snap = {
     updatedAt: '2026-09-30T10:00:00.000Z', resourceLeases: { pools: [], errors: [], leases: [] }, browsers: [{ kind: 'automation-chrome', port: '9223', profile: '/p/alpha' }],
-    managedBrowsers: [{ project: 'alpha', port: 9223, profile: '/p/alpha', headless: true, responsive: true, notResponding: true, probeReason: 'evaluate did not return' }],
+    managedBrowsers: [{ project: 'alpha', port: 9223, profile: '/p/alpha', headless: true, responsive: false, notResponding: true, probeReason: 'evaluate did not return' }],
   };
   const text = renderBulletin(snap, { alerts: [], advice: [] }, { host: '127.0.0.1', port: 4477 });
   assert.match(text, /- alpha: not responding \(headless\).*\(evaluate did not return\)/);
@@ -76,7 +76,9 @@ function load(names, context = {}) {
 test('the card shows Not responding, the reason, and a Restart button in the current mode', () => {
   const { browserNotRespondingBlock, browserState } = load(['browserNotRespondingBlock', 'browserState']);
   const card = { port: 9223, profileVerified: true, responsive: true, notResponding: true, headless: true, probeReason: 'getTargets failed' };
-  assert.equal(browserState(card), 'not responding');
+  assert.equal(browserState(card), 'ready', 'a responsive debugging endpoint clears the visible failure state');
+  assert.equal(browserState({ ...card, responsive: false }), 'not responding');
+  assert.equal(browserState({ ...card, closed: true }), 'closed');
   assert.equal(browserState({ ...card, notResponding: false }), 'ready');
   const html = browserNotRespondingBlock('alpha', card);
   assert.match(html, /Not responding/);
@@ -105,7 +107,7 @@ test('the Restart button uses the existing route and restores tabs by default', 
 
 test('the card block shows only for a verified browser that Herdr Boss started', () => {
   const card = app.slice(app.indexOf('function browserResources('), app.indexOf('\n}\n', app.indexOf('function browserResources(')));
-  assert.match(card, /b\?\.profileVerified && b\.notResponding \? browserNotRespondingBlock\(p\.slug, b\)/);
+  assert.match(card, /b\?\.profileVerified && b\.notResponding && !b\.responsive \? browserNotRespondingBlock\(p\.slug, b\)/);
   assert.match(card, /const b = sessions\.find\(\(x\) => x\.project === p\.slug\)/);
 });
 
@@ -141,7 +143,7 @@ const engineScript = `
   cfg.browser.idleCloseMinutes = Number(process.env.IDLE_CLOSE_MINUTES || 0);
   const engine = new Engine(cfg, { push: false, act: process.env.ACT !== '0', collectors: {
     collectProcesses: async () => new Map([[1, { pid: 1, cmd: '/sbin/launchd' }], ...Object.entries(running).filter(([, on]) => on).map(([project]) => [project === 'alpha' ? 9223 : 9224, chrome(project === 'alpha' ? 9223 : 9224, project)])]),
-    cdpResponds: async () => true,
+    cdpResponds: async () => process.env.CDP_RESPONSIVE !== '0',
     probeBrowser: async (port) => { probed.push(port); return outcome; },
     collectBrowserClients: async () => { clientReads++; return Number(process.env.BROWSER_CLIENTS || 0); },
     closeBrowser: async (project, { beforeClose } = {}) => {
@@ -161,6 +163,12 @@ const engineScript = `
   let command;
   for (const next of JSON.parse(process.env.STEPS)) {
     if (next.advanceMs) virtualNow += next.advanceMs;
+    if (next.close) {
+      running.alpha = false;
+      const sessions = JSON.parse(fs.readFileSync(sessionsFile, 'utf8'));
+      sessions.alpha.closedAt = new Date(virtualNow).toISOString();
+      fs.writeFileSync(sessionsFile, JSON.stringify(sessions));
+    }
     if (next.command === 'start') command = activity.beginBrowserCommand('alpha', { now: () => virtualNow });
     if (next.command === 'end') activity.endBrowserCommand('alpha', command, { now: () => virtualNow });
     outcome = next.probe || next;
@@ -168,7 +176,7 @@ const engineScript = `
     await engine.browserProbes.idle();
     await engine.tick();
     const alpha = engine.state.managedBrowsers.find((x) => x.project === 'alpha');
-    steps.push({ notResponding: alpha.notResponding, reason: alpha.probeReason, probeAt: !!alpha.probeAt,
+    steps.push({ notResponding: alpha.notResponding, closed: alpha.closed, processState: alpha.processState, reason: alpha.probeReason, probeAt: !!alpha.probeAt,
       alerts: engine.state.alerts.filter((a) => a.key.startsWith('browser:managed-unresponsive:')).map((a) => ({ key: a.key, text: a.text, scope: a.scope })),
       idleEvents: engine.state.events.filter((e) => e.type === 'browser-idle-close'), idleState: engine.memory.browserIdle?.alpha });
   }
@@ -177,7 +185,7 @@ const engineScript = `
   console.log(JSON.stringify({ steps, probed, closeCalls, clientReads, healthEvents, sessionsUnchanged: fs.readFileSync(sessionsFile, 'utf8') === before, rulesBrowsers: JSON.parse(fs.readFileSync(path.join(dir, 'rules.json'), 'utf8')).browsers }));
 `;
 
-function runEngine(steps, { act = true, launchedAgoMs = 600000, idleCloseMinutes = 0, browserClients = 0, foreignProfile = false, probeIntervalMs = 0 } = {}) {
+function runEngine(steps, { act = true, launchedAgoMs = 600000, idleCloseMinutes = 0, browserClients = 0, foreignProfile = false, probeIntervalMs = 0, cdpResponsive = true } = {}) {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-not-responding-engine-')));
   const bin = path.join(dir, '.local', 'bin');
   fs.mkdirSync(bin, { recursive: true });
@@ -192,7 +200,7 @@ function runEngine(steps, { act = true, launchedAgoMs = 600000, idleCloseMinutes
   fs.writeFileSync(path.join(dir, 'browser-sessions.json'), JSON.stringify({ alpha: record('alpha', 9223), beta: record('beta', 9224) }));
   const result = spawnSync(process.execPath, ['--input-type=module', '-e', engineScript], {
     cwd: repo, encoding: 'utf8',
-    env: { PATH: `${bin}${path.delimiter}${process.env.PATH || ''}`, HOME: dir, HERDR_BOSS_DIR: dir, HERDR_BOSS_LIVE_DIR: dir, HERDR_BOSS_ALLOW_ACTIONS: '1', HERDR_BOSS_PUSH: '0', STEPS: JSON.stringify(steps), ACT: act ? '1' : '0', IDLE_CLOSE_MINUTES: String(idleCloseMinutes), BROWSER_CLIENTS: String(browserClients), FOREIGN_PROFILE: foreignProfile ? '1' : '0', PROBE_INTERVAL_MS: String(probeIntervalMs) },
+    env: { PATH: `${bin}${path.delimiter}${process.env.PATH || ''}`, HOME: dir, HERDR_BOSS_DIR: dir, HERDR_BOSS_LIVE_DIR: dir, HERDR_BOSS_ALLOW_ACTIONS: '1', HERDR_BOSS_PUSH: '0', STEPS: JSON.stringify(steps), ACT: act ? '1' : '0', IDLE_CLOSE_MINUTES: String(idleCloseMinutes), BROWSER_CLIENTS: String(browserClients), FOREIGN_PROFILE: foreignProfile ? '1' : '0', PROBE_INTERVAL_MS: String(probeIntervalMs), CDP_RESPONSIVE: cdpResponsive ? '1' : '0' },
   });
   fs.rmSync(dir, { recursive: true, force: true });
   assert.equal(result.status, 0, result.stderr);
@@ -203,7 +211,7 @@ const fail = (reason) => ({ ok: false, reason });
 
 test('each new health notice logs safe probe and process evidence to the fixture event file', { timeout: 60000 }, () => {
   const out = runEngine([fail('getVersion timed out'), { advanceMs: 60_000, probe: fail('getTargets timed out') },
-    { advanceMs: 60_000, probe: fail('getTargets timed out') }, { advanceMs: 60_000, probe: { ok: true } }], { probeIntervalMs: 60_000 });
+    { advanceMs: 60_000, probe: fail('getTargets timed out') }, { advanceMs: 60_000, probe: { ok: true } }], { probeIntervalMs: 60_000, cdpResponsive: false });
   const events = out.healthEvents.filter((event) => event.project === 'alpha');
   assert.equal(events.length, 1);
   assert.equal(events[0].probeReason, 'getTargets timed out');
@@ -220,20 +228,20 @@ test('the engine excludes failures during commands and waits for 20 quiet second
     { advanceMs: 60_000, probe: fail('getTargets timed out') },
     { command: 'end', probe: fail('getTargets timed out') },
     { advanceMs: 19_999, probe: fail('getTargets timed out') },
-    { advanceMs: 1, probe: fail('getTargets timed out') }, fail('getTargets timed out')]);
+    { advanceMs: 1, probe: fail('getTargets timed out') }, fail('getTargets timed out')], { cdpResponsive: false });
   assert.ok(out.steps.slice(0, 5).every((step) => !step.notResponding));
   assert.equal(out.steps[5].notResponding, true);
 });
 
 test('browser notice diagnosis ends after a week', { timeout: 60000 }, () => {
   const out = runEngine([fail('getVersion timed out'), fail('getVersion timed out'), { ok: true },
-    { advanceMs: 7 * 86400_000, probe: fail('evaluate did not return') }, fail('evaluate did not return')]);
+    { advanceMs: 7 * 86400_000, probe: fail('evaluate did not return') }, fail('evaluate did not return')], { cdpResponsive: false });
   assert.equal(out.healthEvents.filter((event) => event.project === 'alpha').length, 1);
   assert.equal(out.steps.at(-1).notResponding, true, 'the health rule continues after the diagnosis period');
 });
 
 test('the engine marks a browser after two failed probes, keeps one notice, and clears it on a success', { timeout: 60000 }, () => {
-  const out = runEngine([fail('getVersion timed out'), fail('evaluate did not return'), fail('evaluate did not return'), { ok: true }]);
+  const out = runEngine([fail('getVersion timed out'), fail('evaluate did not return'), fail('evaluate did not return'), { ok: true }], { cdpResponsive: false });
   const [first, second, third, fourth] = out.steps;
   assert.equal(first.notResponding, false);
   assert.deepEqual(first.alerts, []);
@@ -247,6 +255,21 @@ test('the engine marks a browser after two failed probes, keeps one notice, and 
   assert.deepEqual(fourth.alerts, []);
   const alpha = out.rulesBrowsers.find((x) => x.project === 'alpha');
   assert.equal(alpha.notResponding, false);
+});
+
+test('the engine does not notify when /json/version answers, even if the deeper probe fails', { timeout: 60000 }, () => {
+  const out = runEngine([fail('getVersion timed out'), fail('evaluate did not return')], { cdpResponsive: true });
+  assert.equal(out.steps.at(-1).notResponding, true, 'the probe state still reports its deeper failure');
+  assert.deepEqual(out.steps.at(-1).alerts, [], 'a responsive CDP endpoint suppresses the notice');
+});
+
+test('a deliberate close clears the probe notice and reports closed state', { timeout: 60000 }, () => {
+  const out = runEngine([fail('getVersion timed out'), fail('evaluate did not return'), { close: true }], { cdpResponsive: false });
+  const closed = out.steps.at(-1);
+  assert.equal(closed.closed, true);
+  assert.equal(closed.processState, 'missing');
+  assert.equal(closed.notResponding, false);
+  assert.deepEqual(closed.alerts, []);
 });
 
 test('the engine never probes a browser without a matching process, and starts no restart', { timeout: 60000 }, () => {

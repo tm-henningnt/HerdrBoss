@@ -81,7 +81,6 @@ function runScenario(t, scenario) {
   fs.writeFileSync(path.join(dir, 'memory.json'), JSON.stringify({
     paneSince: {}, pushes: {}, notified: {}, lastOrchestrators: scenario.lastOrchestrators,
     exhaustedFreeModels: scenario.exhaustedFreeModels || {},
-    exhaustedFreeLanes: scenario.exhaustedFreeLanes || {},
     ...(scenario.piModels ? { piModels: scenario.piModels } : {}),
   }));
   fs.writeFileSync(path.join(dir, 'handoffs.json'), JSON.stringify(scenario.handoffs || []));
@@ -384,15 +383,15 @@ function assertCodexSuccessor(t, common) {
   }
 }
 
-test('automatic project and Boss handovers skip unmetered rungs of an exhausted free lane', { timeout: 60000 }, (t) => {
+test('automatic project and Boss handovers skip the exhausted free model only', { timeout: 60000 }, (t) => {
   assertCodexSuccessor(t, {
     usedPercent: 98,
     ladder: [
       { kind: 'opencode', model: 'opencode/big-pickle' },
       { kind: 'codex', model: 'gpt-6-luna', effort: 'xhigh' },
     ],
-    exhaustedFreeLanes: {
-      opencode: { kind: 'opencode', retryAt: Date.parse('2026-09-26T12:01:00.000Z'), retryKnown: true, at: Date.parse('2026-09-26T11:59:00.000Z') },
+    exhaustedFreeModels: {
+      'opencode/big-pickle': { model: 'opencode/big-pickle', retryAt: Date.parse('2026-09-26T12:01:00.000Z') },
     },
   });
 });

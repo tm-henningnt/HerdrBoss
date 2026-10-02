@@ -416,6 +416,10 @@ async function main() {
         }
         console.log(`${describeLane(provider, lane)}${rules.leastOverProvider === provider ? ' (least over; worker start allows it)' : ''}`);
       }
+      const unavailable = Object.values(rules.unavailableModels || {}).filter((item) => typeof item?.model === 'string'
+        && item.provider !== null && Number.isSafeInteger(item.retryAt) && item.retryAt > Date.now())
+        .sort((a, b) => a.model.localeCompare(b.model));
+      if (unavailable.length) console.log(`models unavailable: ${unavailable.map((item) => `${item.model} (${item.lane || item.provider || 'unmetered'}) until ${new Date(item.retryAt).toISOString()}${item.reason ? `: ${item.reason}` : ''}`).join('; ')}`);
       break;
     }
     case 'policy': {

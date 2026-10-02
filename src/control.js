@@ -519,7 +519,7 @@ export function selectModel(kind, explicitModel, models, policy = null) {
 }
 
 // The first eligible non-Opus rung, or the first eligible Opus rung when no non-Opus choice can start.
-// A rung is skipped when its model or lane is exhausted, or when the last good Pi result does not list it.
+// A rung is skipped when its model is exhausted or the last good Pi result does not list it.
 export function pickSuccessor(project, currentKind, currentProvider, policy, control, now = Date.now()) {
   let opus = null;
   for (const rung of policy.orchestratorLadder || []) {
@@ -530,7 +530,6 @@ export function pickSuccessor(project, currentKind, currentProvider, policy, con
         !control.globalAllowed[rung.kind]?.includes(rung.model) ||
         project.excludedKinds.includes(rung.kind) || project.excludedModels.includes(rung.model) ||
         (!provider && Number.isFinite(control.exhaustedFreeModels?.[rung.model]?.retryAt) && control.exhaustedFreeModels[rung.model].retryAt > now) ||
-        (!provider && Number.isFinite(control.exhaustedFreeLanes?.[rung.kind]?.retryAt) && control.exhaustedFreeLanes[rung.kind].retryAt > now) ||
         (rung.kind === 'pi' && unavailablePiModels([rung.model], control.piModels).length) ||
         (provider && (control.risks[provider] || control.exhausted?.[provider])) || trickleAtLimit) continue;
     const candidate = { ...rung, provider: provider || 'unmetered' };
@@ -848,13 +847,12 @@ export function unavailablePiModels(piAllowedModels, piModels) {
 
 // One lane that lists every permitted unmetered model that can start, grouped by project and harness.
 // A model is unmetered when the configured route and the provider rules give it no metered provider.
-// An exhausted model, an unavailable Pi model, and an exhausted harness free lane are left out and reported.
-export function unmeteredLane(baseModels, policy, projects = {}, exhaustedModels = {}, { unavailablePiModels: unavailablePi = [], exhaustedLanes = {}, now = Date.now() } = {}) {
+// An exhausted model and an unavailable Pi model are left out and reported.
+export function unmeteredLane(baseModels, policy, projects = {}, exhaustedModels = {}, { unavailablePiModels: unavailablePi = [], now = Date.now() } = {}) {
   const models = mergeModels(baseModels, policy);
   const byProject = {};
   const applicable = new Map();
   const unavailableEntries = new Map();
-  const laneEntries = new Map();
   const unavailableByModel = new Map((unavailablePi || []).map((item) => [item.model, item]));
   const projectModes = {};
   const note = (map, key, create, slug) => {
@@ -874,11 +872,6 @@ export function unmeteredLane(baseModels, policy, projects = {}, exhaustedModels
         modelEnabled(kind, model, policy)
         && !(project.excludedModels || []).includes(model)
         && providerFor(kind, model, policy) === null);
-      const laneExhaustion = exhaustedLanes?.[kind];
-      if (permitted.length && Number.isFinite(laneExhaustion?.retryAt) && laneExhaustion.retryAt > now) {
-        note(laneEntries, kind, () => ({ kind, retryAt: laneExhaustion.retryAt, retryKnown: laneExhaustion.retryKnown === true, reason: 'free usage exceeded', projects: [] }), slug);
-        continue;
-      }
       const available = permitted.filter((model) => {
         const missing = kind === 'pi' && unavailableByModel.get(model);
         if (missing) {
@@ -900,17 +893,16 @@ export function unmeteredLane(baseModels, policy, projects = {}, exhaustedModels
   const exhausted = [...applicable.values()].sort((a, b) => a.model.localeCompare(b.model));
   for (const entry of exhausted) { entry.projects.sort(); entry.kinds.sort(); }
   const unavailable = [...unavailableEntries.values()].sort((a, b) => a.model.localeCompare(b.model));
-  const lanes = [...laneEntries.values()].sort((a, b) => a.kind.localeCompare(b.kind));
-  for (const entry of [...unavailable, ...lanes]) entry.projects.sort();
-  // The lane closes only when something was left out and no unmetered model remains for any project.
+  for (const entry of unavailable) entry.projects.sort();
+  // The lane closes only when models are unavailable and none can start for any project.
   const anyOpen = Object.values(byProject).some((kinds) => Object.keys(kinds).length);
-  const state = !anyOpen && (exhausted.length || unavailable.length || lanes.length) ? 'closed' : 'open';
-  return { state, unmetered: true, byProject, projectModes, exhausted, unavailable, exhaustedLanes: lanes };
+  const state = !anyOpen && (exhausted.length || unavailable.length) ? 'closed' : 'open';
+  return { state, unmetered: true, byProject, projectModes, exhausted, unavailable };
 }
 
-// One sentence per closed part of the unmetered lane: unavailable Pi models and exhausted harness free lanes.
+// One sentence per group of unavailable Pi models.
 // A project filter keeps only the parts that apply to that project.
-export function unmeteredClosedParts(lane, formatTime = (ms) => new Date(ms).toISOString(), project = null) {
+export function unmeteredClosedParts(lane, project = null) {
   const applies = (item) => !project || (item.projects || []).includes(project);
   const parts = [];
   const groups = new Map();
@@ -923,9 +915,6 @@ export function unmeteredClosedParts(lane, formatTime = (ms) => new Date(ms).toI
   for (const group of [...groups.values()].sort((a, b) => `${a.kind}:${a.provider}`.localeCompare(`${b.kind}:${b.provider}`))) {
     if (group.reason === 'no-credential') parts.push(`Unmetered ${group.kind} ${group.provider}/ models: unavailable. Pi has no credential for the ${group.provider} provider.`);
     else parts.push(`Unmetered ${group.kind} ${group.models.sort().join(', ')}: unavailable. \`pi --list-models\` does not list ${group.models.length === 1 ? 'it' : 'them'}.`);
-  }
-  for (const item of (lane?.exhaustedLanes || []).filter(applies)) {
-    parts.push(`Unmetered ${item.kind}: exhausted (${item.reason || 'free usage exceeded'}); retry after ${formatTime(item.retryAt)}${item.retryKnown ? '' : ' (reset time unknown)'}.`);
   }
   return parts;
 }
@@ -972,7 +961,7 @@ function displayUnmeteredModel(model) {
 }
 
 export function deriveControl(snap, policy, baseModels, paneSince = {}, now = Date.now(), exhaustedFreeModels = {}, {
-  exhaustedFreeLanes = {}, piModels = null, lanes = {}, nightMaxWorkers = null,
+  piModels = null, lanes = {}, nightMaxWorkers = null,
 } = {}) {
   const models = mergeModels(baseModels, policy);
   const workspaces = workspaceProjects(snap, policy);
@@ -1027,7 +1016,7 @@ export function deriveControl(snap, policy, baseModels, paneSince = {}, now = Da
     const currentProvider = providerFor(p.orch.kind, policy.preferredModels?.[p.orch.kind] ?? currentKindConfig?.defaultModel, policy);
     const window = risks[currentProvider];
     if (!window) continue;
-    const preferred = pickSuccessor(p, p.orch.kind, currentProvider, policy, { globalAllowed, risks, exhausted, exhaustedFreeModels, exhaustedFreeLanes, piModels, lanes }, now);
+    const preferred = pickSuccessor(p, p.orch.kind, currentProvider, policy, { globalAllowed, risks, exhausted, exhaustedFreeModels, piModels, lanes }, now);
     handoffs.push({ project: p.slug, workspace: p.workspace, pane: p.orch.pane, fromKind: p.orch.kind, sessionId: p.orch.sessionId, provider: currentProvider, window, target: preferred });
   }
   let bossHandoff = null;
@@ -1037,7 +1026,7 @@ export function deriveControl(snap, policy, baseModels, paneSince = {}, now = Da
     const currentProvider = kindConfig && providerFor(bossPane.agent, policy.preferredModels?.[bossPane.agent] ?? kindConfig.defaultModel, policy);
     const window = risks[currentProvider] || null;
     const bossProject = { excludedKinds: [], excludedModels: [] };
-    const target = kindConfig ? pickSuccessor(bossProject, bossPane.agent, currentProvider, policy, { globalAllowed, risks, exhausted, exhaustedFreeModels, exhaustedFreeLanes, piModels, lanes }, now) : null;
+    const target = kindConfig ? pickSuccessor(bossProject, bossPane.agent, currentProvider, policy, { globalAllowed, risks, exhausted, exhaustedFreeModels, piModels, lanes }, now) : null;
     bossHandoff = {
       project: 'Boss', label: 'Boss', boss: true, workspace: bossPane.workspace, pane: bossPane.id,
       fromKind: bossPane.agent || null, sessionId: bossPane.agent ? bossPane.sessionId || (bossPane.agent_session?.kind === 'id' ? bossPane.agent_session.value : null) : null,

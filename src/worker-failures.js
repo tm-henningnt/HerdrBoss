@@ -47,6 +47,9 @@ export const WORKER_FAILURE_LABELS = Object.freeze([
   'API Error', '401', '429', 'Connection lost', 'usage limit', 'rate limit', 'overloaded', 'Free usage exceeded',
 ]);
 
+export const FREE_MODEL_COOLDOWN_MS = 60 * 60 * 1000;
+export const OVERLOAD_MODEL_COOLDOWN_MS = 30 * 60 * 1000;
+
 export function parseFreeUsageRetryTime(text, now = Date.now()) {
   const value = String(text ?? '');
   if (!/free usage exceeded/i.test(value)) return null;
@@ -69,7 +72,7 @@ export function parseFreeUsageRetryTime(text, now = Date.now()) {
   return Number.isFinite(retryAt) && Number.isFinite(new Date(retryAt).getTime()) && retryAt > now ? retryAt : null;
 }
 
-export function resolveFreeUsageRun(pane, { providerFor, policy, runsCwd = pane?.cwd } = {}) {
+export function resolveWorkerRun(pane, { providerFor, policy, runsCwd = pane?.cwd } = {}) {
   if (!pane?.cwd || !runsCwd || !pane?.name || !pane?.id) return null;
   try {
     // Worker run records live beside the orchestrator checkout, while pane.cwd points at the worker worktree.
@@ -83,9 +86,51 @@ export function resolveFreeUsageRun(pane, { providerFor, policy, runsCwd = pane?
     const run = JSON.parse(fs.readFileSync(actual, 'utf8'));
     const paneRoot = fs.realpathSync(findGitRoot(pane.cwd));
     if (!run.worktree || fs.realpathSync(run.worktree) !== paneRoot || run.name !== name || run.pane !== pane.id || run.finishedAt || !run.kind || !run.model
-      || typeof providerFor !== 'function' || providerFor(run.kind, run.model, policy) !== null) return null;
-    return { project: config.slug, kind: run.kind, model: run.model };
+      || typeof providerFor !== 'function') return null;
+    const provider = providerFor(run.kind, run.model, policy);
+    return { project: config.slug, kind: run.kind, model: run.model, provider, lane: provider || 'unmetered' };
   } catch { return null; }
+}
+
+export function resolveFreeUsageRun(pane, options = {}) {
+  const run = resolveWorkerRun(pane, options);
+  return run?.provider === null ? { project: run.project, kind: run.kind, model: run.model } : null;
+}
+
+export function workerModelCooldown(failure, now = Date.now()) {
+  if (!Number.isFinite(failure?.at)) return null;
+  if (failure.label === 'Free usage exceeded') {
+    const retryAt = Number.isSafeInteger(failure.retryAt) && failure.retryAt > failure.at
+      ? failure.retryAt : failure.at + FREE_MODEL_COOLDOWN_MS;
+    return retryAt > now ? { retryAt, label: failure.label, reason: failure.label, at: failure.at } : null;
+  }
+  if (failure.label === 'overloaded') {
+    const retryAt = failure.at + OVERLOAD_MODEL_COOLDOWN_MS;
+    return retryAt > now ? { retryAt, label: failure.label, reason: failure.label, at: failure.at } : null;
+  }
+  return null;
+}
+
+export function activeUnavailableModels(existing, now = Date.now()) {
+  return Object.fromEntries(Object.entries(existing || {}).filter(([, item]) =>
+    typeof item?.model === 'string' && Number.isSafeInteger(item.retryAt)
+      && Number.isFinite(new Date(item.retryAt).getTime()) && item.retryAt > now));
+}
+
+export function extendModelUnavailability(existing, association, cooldown, now = Date.now()) {
+  if (!association?.project || !association?.kind || !association?.model || !cooldown
+    || !Number.isSafeInteger(cooldown.retryAt) || !Number.isFinite(new Date(cooldown.retryAt).getTime()) || cooldown.retryAt <= now) return existing || {};
+  const prior = existing?.[association.model];
+  if (prior && prior.retryAt >= cooldown.retryAt) return existing;
+  return {
+    ...(existing || {}),
+    [association.model]: {
+      model: association.model, kind: association.kind, provider: association.provider ?? null,
+      lane: association.lane || association.provider || 'unmetered', retryAt: cooldown.retryAt,
+      at: Number.isFinite(prior?.at) ? prior.at : Number.isFinite(cooldown.at) ? cooldown.at : now,
+      label: cooldown.label, reason: cooldown.reason,
+    },
+  };
 }
 
 export function activeFreeModelExhaustions(existing, now = Date.now()) {
@@ -106,37 +151,6 @@ export function extendFreeModelExhaustion(existing, association, retryAt, now = 
   return { ...(existing || {}), [association.model]: { model: association.model, retryAt: Math.max(prior?.retryAt || 0, retryAt) } };
 }
 
-// The OpenCode free-usage limit applies to the whole harness free lane, not to one model.
-// Without a parsed retry time the lane closes for this long after the failure.
-export const FREE_LANE_FALLBACK_MS = 60 * 60 * 1000;
-
-export function freeUsageLaneRetry(failure, now = Date.now()) {
-  if (failure?.label !== 'Free usage exceeded') return null;
-  if (Number.isSafeInteger(failure.retryAt) && failure.retryAt > now) return { retryAt: failure.retryAt, retryKnown: true };
-  if (!Number.isFinite(failure.at)) return null;
-  const retryAt = failure.at + FREE_LANE_FALLBACK_MS;
-  return retryAt > now ? { retryAt, retryKnown: false } : null;
-}
-
-export function activeFreeLaneExhaustions(existing, now = Date.now()) {
-  const active = {};
-  for (const item of Object.values(existing || {})) {
-    if (!Number.isSafeInteger(item?.retryAt) || !Number.isFinite(new Date(item.retryAt).getTime()) || item.retryAt <= now
-      || typeof item.kind !== 'string') continue;
-    active[item.kind] = { kind: item.kind, retryAt: item.retryAt, retryKnown: item.retryKnown === true, at: Number.isFinite(item.at) ? item.at : item.retryAt };
-  }
-  return active;
-}
-
-// A later retry time extends the lane record. A shorter one never shortens it.
-export function extendFreeLaneExhaustion(existing, kind, { retryAt, retryKnown = false, at } = {}, now = Date.now()) {
-  if (typeof kind !== 'string' || !kind || !Number.isSafeInteger(retryAt) || !Number.isFinite(new Date(retryAt).getTime()) || retryAt <= now) return existing || {};
-  const prior = existing?.[kind];
-  if (prior && prior.retryAt >= retryAt) return existing;
-  const first = Number.isFinite(prior?.at) ? prior.at : Number.isFinite(at) ? at : now;
-  return { ...(existing || {}), [kind]: { kind, retryAt, retryKnown: retryKnown === true, at: first } };
-}
-
 // A repeat keeps the first observation as the anchor, so unchanged relative retry text does not
 // slide forward on every tick. A newly reported absolute timestamp is taken when it extends the deadline.
 function nextFreeUsageRetryAt(text, existing, now = Date.now()) {
@@ -154,6 +168,7 @@ export function matchWorkerFailure(lines) {
   return WORKER_FAILURE_LABELS.find((label) => {
     if (label === '401') return /\b(?:http\s+401|status\s+401|401\s+unauthorized)\b/i.test(content);
     if (label === 'usage limit') return /\b(?:usage\s+limit\s+(?:reached|exceeded)|hit\s+your\s+usage\s+limit)\b/i.test(content);
+    if (label === 'overloaded') return lower.includes('overloaded') || /\b503\b.{0,80}\b(?:service\s+unavailable|unavailable)\b/i.test(content);
     return lower.includes(label.toLowerCase());
   }) || null;
 }

@@ -462,7 +462,7 @@ export function renderBulletin(snap, evaluation, cfg) {
         const exhausted = (lane.exhausted || []).map((item) => `${item.model} until ${fmtTime(new Date(item.retryAt).toISOString())}`).sort();
         const exhaustedText = exhausted.length ? ` Exhausted models: ${exhausted.join('; ')}.` : '';
         L.push(lane.state === 'closed' ? `- Unmetered: closed: no unmetered model can start.${exhaustedText}` : `- Unmetered: open${summary ? `: ${summary}` : ''}.${exhaustedText}`);
-        for (const part of unmeteredClosedParts(lane, (ms) => fmtTime(new Date(ms).toISOString()))) L.push(`- ${part}`);
+        for (const part of unmeteredClosedParts(lane)) L.push(`- ${part}`);
         continue;
       }
       const back = lane.backOnPaceAt ? ` Back ${lane.state === 'reserve' ? 'at reset' : 'on pace if unused'} about ${fmtTime(lane.backOnPaceAt)}.` : '';
@@ -499,7 +499,7 @@ export function renderBulletin(snap, evaluation, cfg) {
     L.push('', '## Project browsers', '');
     for (const b of snap.managedBrowsers) {
       const running = (snap.browsers || []).some((x) => x.kind === 'automation-chrome' && x.port === String(b.port) && x.profile === b.profile);
-      const state = !running ? 'offline' : b.responsive === false || b.notResponding ? 'not responding' : 'ready';
+      const state = b.closed ? 'closed' : !running ? 'offline' : b.responsive === false || (b.notResponding && b.responsive !== true) ? 'not responding' : 'ready';
       const size = b.windowSize || { width: 1280, height: 800 };
       if (state === 'not responding') {
         L.push(`- ${b.project}: not responding (${b.headless ? 'headless' : 'visible'}); CDP http://127.0.0.1:${b.port} does not answer${b.probeReason ? ` (${b.probeReason})` : ''}. Do not use it. Ask the Owner to restart it on the Browsers page, or run \`herdr-boss browser restart ${b.project} --${b.headless ? 'headless' : 'visible'}\` for your own project. Do not stop another project's browser.`);
