@@ -1,6 +1,6 @@
 # Spec: the personal factory fleet
 
-Status: proposed for Owner approval. Source: the proposal `docs/ideas/factories.md`, the factories interview (rounds 1 to 3), and ADRs 0002 to 0022. The glossary is `docs/CONTEXT.md`. The tickets are in `docs/tickets/factories/`.
+Status: proposed for Owner approval. Source: the proposal `docs/ideas/factories.md`, the factories interview (rounds 1 to 3 and the final pack), and ADRs 0002 to 0023. The glossary is `docs/CONTEXT.md`. The tickets are in `docs/tickets/factories/`.
 
 ## Problem Statement
 
@@ -198,7 +198,7 @@ The Owner talks to each factory Boss directly. The head office is code, not an a
 
 - Docker Engine in a WSL2 distribution with systemd. A scheduled task starts the distribution at boot. `.wslconfig` sets the VM memory and CPU.
 - All volumes are named volumes in the Linux file system. No bind mount of a Windows folder.
-- The host joins the tailnet with a host tag. sshd in the WSL2 distribution accepts only key login. The host tool on the Mac drives Docker through that SSH path. Who may use the key is asked in the final review pack.
+- The host joins the tailnet with a host tag. sshd in the WSL2 distribution accepts only key login. The host tool on the Mac drives Docker through that SSH path. Agents may use the key through the host tool without a confirmation for each use. `factory destroy` and `factory restore` need the Owner's typed confirmation (ADR 0023).
 - A runbook in `docs/` lists each setup step.
 
 ### Wizard
