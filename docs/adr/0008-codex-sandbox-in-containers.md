@@ -1,6 +1,6 @@
 # ADR 0008: Codex in a container uses a narrow seccomp profile only
 
-Status: Accepted. Owner decisions, factories interview round 1, item `codex`, and round 2, item `codex-fallback`. Spec decision 1.
+Status: Superseded in part by ADR 0024 (the tested settings and the fallback). Owner decisions, factories interview round 1, item `codex`, and round 2, item `codex-fallback`. Spec decision 1.
 
 ## Context
 

@@ -161,11 +161,12 @@ The Owner talks to each factory Boss directly. The head office is code, not an a
 - Compose limits: `cpus`, `mem_limit`, `memswap_limit`, `pids_limit`, and `shm_size: 1g`. Start values: 4 CPU and 8 GB. The Windows host has room for more.
 - The dashboard is published on `127.0.0.1:<port>` of the host, and sshd on another loopback port. CDP stays inside the container.
 
-### Codex sandbox (ADR 0008)
+### Codex sandbox (ADRs 0008, 0024)
 
 - Codex runs only with its own sandbox on. A factory never uses the bypass flag.
-- The spike tests a custom seccomp profile (the Docker default plus user namespaces), then `seccomp=unconfined` with `apparmor=unconfined` where AppArmor is active. The first setting that works is stored as a per-profile container setting.
-- If both fail on a host, the `personal` profile on that host excludes Codex, and the Owner reviews the rule with the spike result.
+- A container factory starts Codex workers with the custom seccomp profile (the Docker default plus user namespaces) and `systempaths=unconfined` together. Spike 02 shows that neither setting alone starts the sandbox. The pair is a per-profile container setting and is ON for the factory profiles.
+- The container has no Docker socket, no host mounts, no added capabilities, and is not privileged. The factory wizard checks this before it enables Codex workers.
+- The spike on the Windows host (ticket 03) tests the same pair. A different result there changes the setting for that host only.
 
 ### Linux portability
 
