@@ -255,6 +255,42 @@ test('suite holds the full-suite lock around the command and passes the exit cod
   assert.ok(f.lines.some((line) => /acquired/.test(line)) && f.lines.some((line) => /released/.test(line)), f.lines.join('\n'));
 });
 
+test('suite --wait accepts 3600 seconds without truncating the queue deadline', (t) => {
+  const f = fixture(t, 'herdr-suite-hour-wait-');
+  let clock = Date.now();
+  const now = () => clock;
+  const pidAlive = (pid) => pid === process.pid;
+  const herdr = (args) => {
+    if (args[0] === 'pane' && args[1] === 'get' && args[2] === 'ws:holder') {
+      return { pane: { pane_id: 'ws:holder', workspace_id: 'ws', label: 'orch' } };
+    }
+    return f.options().herdr(args);
+  };
+  f.livePanes.push('ws:holder');
+  const holderOptions = {
+    ...f.options({ env: { ...f.env, HERDR_PANE_ID: 'ws:holder' }, herdr, now, pidAlive }),
+    dataDir: f.dataDir,
+  };
+  const holder = acquireProjectLock('full-suite', { ...holderOptions, kind: 'suite', waitSeconds: 0 });
+  let releasedAfterLongWait = false;
+
+  const result = runKitCommand('suite', ['--wait', '3600', '--', process.execPath, f.script, '0'], f.options({
+    herdr,
+    now,
+    pidAlive,
+    pause: () => {
+      assert.equal(releasedAfterLongWait, false, 'the virtual clock advances only once');
+      clock += 3_599_000;
+      releasedAfterLongWait = true;
+      releaseProjectLock('full-suite', { ...holderOptions, expectedRecord: holder, output: () => {} });
+    },
+  }));
+
+  assert.equal(releasedAfterLongWait, true);
+  assert.equal(result.exitCode, 0);
+  assert.equal(f.readSeen().runs, 1);
+});
+
 test('suite releases its lock by PID and token after its owning pane is gone, records the pass, and exits 0', (t) => {
   const f = fixture(t, 'herdr-suite-handover-release-');
   const gone = path.join(f.base, 'pane-gone');
