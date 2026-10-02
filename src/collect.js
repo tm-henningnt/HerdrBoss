@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
 import { DATA_DIR } from './config.js';
+import { collectLinuxMachine } from './linux-machine.js';
 
 const PATH = [path.join(os.homedir(), '.local/bin'), '/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin', process.env.PATH].join(':');
 
@@ -377,17 +378,34 @@ export function keepStaleRows(quotas, previous, previousAt, now = Date.now()) {
 
 // ---------- Machine ----------
 
-export async function collectMachine(dataDir = os.homedir()) {
+export async function collectMachine(dataDir = os.homedir(), { platform = process.platform, runner = run, system = os, ...linuxOptions } = {}) {
+  if (platform === 'linux') {
+    const sample = await collectLinuxMachine({ system, ...linuxOptions });
+    return { ...sample, ...await collectDisk(dataDir) };
+  }
   const [mp, swap, idle] = await Promise.all([
-    run('memory_pressure', []).catch(() => ''),
-    run('sysctl', ['-n', 'vm.swapusage']).catch(() => ''),
-    run('ioreg', ['-c', 'IOHIDSystem']).catch(() => ''),
+    runner('memory_pressure', []).catch(() => ''),
+    runner('sysctl', ['-n', 'vm.swapusage']).catch(() => ''),
+    runner('ioreg', ['-c', 'IOHIDSystem']).catch(() => ''),
   ]);
   const free = /free percentage:\s*(\d+)%/.exec(mp);
   const sw = /used = ([\d.]+)M/.exec(swap);
   const swTotal = /total = ([\d.]+)M/.exec(swap);
   const ownerIdleMinutes = parseOwnerIdleMinutes(idle);
-  const [l1, l5, l15] = os.loadavg();
+  const [l1, l5, l15] = system.loadavg();
+  return {
+    cpus: system.cpus().length,
+    ownerIdleMinutes,
+    memTotalGB: +(system.totalmem() / 2 ** 30).toFixed(1),
+    memFreePercent: free ? Number(free[1]) : null,
+    swapUsedMB: sw ? Math.round(Number(sw[1])) : null,
+    swapTotalMB: swTotal ? Math.round(Number(swTotal[1])) : null,
+    ...await collectDisk(dataDir),
+    load: [l1, l5, l15].map((x) => +x.toFixed(2)),
+  };
+}
+
+async function collectDisk(dataDir) {
   let diskFreeBytes = null, diskTotalBytes = null, diskFreePercent = null;
   try {
     const disk = await fs.promises.statfs(dataDir);
@@ -395,16 +413,22 @@ export async function collectMachine(dataDir = os.homedir()) {
     diskTotalBytes = Number(disk.blocks) * Number(disk.bsize);
     if (diskTotalBytes > 0) diskFreePercent = diskFreeBytes / diskTotalBytes * 100;
   } catch {}
-  return {
-    cpus: os.cpus().length,
-    ownerIdleMinutes,
-    memTotalGB: +(os.totalmem() / 2 ** 30).toFixed(1),
-    memFreePercent: free ? Number(free[1]) : null,
-    swapUsedMB: sw ? Math.round(Number(sw[1])) : null,
-    swapTotalMB: swTotal ? Math.round(Number(swTotal[1])) : null,
-    diskFreeBytes, diskTotalBytes, diskFreePercent,
-    load: [l1, l5, l15].map((x) => +x.toFixed(2)),
-  };
+  return { diskFreeBytes, diskTotalBytes, diskFreePercent };
+}
+
+export async function checkMachineTools({ platform = process.platform, runner = run } = {}) {
+  if (platform !== 'linux') return [];
+  const checks = [
+    ['lsof', ['-v'], 'lsof'],
+    ['ps', ['--version'], 'procps'],
+  ];
+  return (await Promise.all(checks.map(async ([command, args, packageName]) => {
+    try {
+      const output = await runner(command, args, { timeout: 3000, killSignal: 'SIGKILL' });
+      if (packageName !== 'procps' || /procps/i.test(output)) return null;
+    } catch {}
+    return `Linux machine tools: Install ${packageName}. Process checks need this package.`;
+  }))).filter(Boolean);
 }
 
 const worktreeCache = new Map();

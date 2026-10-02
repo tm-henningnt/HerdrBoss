@@ -7,6 +7,7 @@ import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { Engine, standDownPlan } from './engine.js';
+import { checkMachineTools } from './collect.js';
 import { ownerReleaseLease, withResourcePoolMutation, readLeases, leasePools, publicPool, hasIdleRule, tcpListeningAsync } from './leases.js';
 import { PROJECTS_DIR, DATA_DIR, DEFAULT_SESSION_FILE, PRIVATE_ACCESS_DIR, assertPreviewDataDir, assertLiveDataDir, writeServiceSettings, applyServiceSettings, serviceSettingsView, validateResourcePools, writeResourcePools } from './config.js';
 import { writeProject, listProjects, SLUG } from './projects.js';
@@ -198,7 +199,7 @@ export function assertPreviewHost(host) {
   return value;
 }
 
-export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, createEngine = (config, options) => new Engine(config, options), rawTokens, closeTab = browserCloseTab, browserActions = {}, projectNew = {}, goalSet = {} } = {}) {
+export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, createEngine = (config, options) => new Engine(config, options), rawTokens, closeTab = browserCloseTab, browserActions = {}, projectNew = {}, goalSet = {}, machineTools = {} } = {}) {
   const browser = { browserStatus, listBrowserTabs, browserScreenshot, browserNavigate, browserNavigationState, browserHistoryAction, browserClick, browserInsertText, browserKey, browserNewTab, tabAttached, ...browserActions };
   let uploads = [];
   const machineHoursCache = new Map();
@@ -217,6 +218,12 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
     privateDirectory: PRIVATE_ACCESS_DIR,
   });
   const engine = readOnlyPreview ? createEngine(cfg, { push: false, act: false }) : createEngine(cfg);
+  // The tool check runs beside the first tick. Its warnings are logged when they arrive.
+  if (!readOnlyPreview) {
+    checkMachineTools(machineTools).then((warnings) => {
+      for (const warning of warnings) { engine.log('warn', warning); console.warn(`herdr-boss: ${warning}`); }
+    }).catch((e) => engine.log('error', `machine tool check failed: ${e.message}`));
+  }
   const messageStore = openMessageStore({ dir: DATA_DIR });
   const projectNewApi = createProjectNewApi({ dataDir: DATA_DIR, log: (level, text) => engine.log(level, text), ...projectNew });
   // The goal routes use the Herdr runner of the engine. A test replaces run.
@@ -1121,6 +1128,7 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
   });
   const loop = async () => {
     try {
+      if (closed) return;
       tickPromise = engine.tick();
       await tickPromise;
     } catch (e) { engine.log('error', `tick failed: ${e.message}`); console.error(maskBrowserText(e.stack || e.message)); }

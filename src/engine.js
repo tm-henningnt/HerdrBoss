@@ -1187,7 +1187,9 @@ export class Engine extends EventEmitter {
       snap.cpuUse = cpuUse(procs, herdr?.panes || [], profileWorkspaces);
       if (machine) {
         snap.machine.cpuUse = snap.cpuUse;
-        snap.machine.cpuTotalSample = [...procs.values()].reduce((sum, proc) => sum + Math.max(0, proc.cpu), 0);
+        if (snap.machine.cpuSampleSource !== 'cgroup-v2' || !Number.isFinite(snap.machine.cpuTotalSample)) {
+          snap.machine.cpuTotalSample = [...procs.values()].reduce((sum, proc) => sum + Math.max(0, proc.cpu), 0);
+        }
         snap.machine.limits = machineLimits(snap.machine, policy, now, snap.night);
         this.memory.swapWarn = swapWarnStep(this.memory.swapWarn, snap.machine.limits);
         snap.machine.limits.swapWarning = this.memory.swapWarn.active;

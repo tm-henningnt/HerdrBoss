@@ -313,17 +313,17 @@ export function evaluate(snap, cfg, paneSince, now = Date.now(), policy = null) 
       // A project that uses at least one core gets its own notice; the others are not woken.
       const sources = Object.entries(snap.cpuUse || {}).filter(([ws, use]) => ws !== 'other' && use.cpu >= 100).sort((a, b) => b[1].cpu - a[1].cpu);
       const summary = sources.map(([ws, use]) => `${label(ws)} ${use.cpu}% (${top(use)})`).join('; ');
-      const title = cpuExceeded ? `Machine CPU high: ${cpuPercent}% of capacity (limit ${limits.cpuLimit}%)` : `CPU load high: ${m.load[1]} (5 min) on ${m.cpus} cores`;
+      const title = cpuExceeded ? `Machine CPU high: ${cpuPercent}% of capacity (limit ${limits.cpuLimit}%)` : `CPU load high: ${m.load[1]} (5 min) on ${Number(m.cpus.toFixed(2))} cores`;
       if (sources.length) {
         for (const [ws, use] of sources) alerts.push({
           key: `machine:load:${ws}`, severity: 'warn', scope: ws, title,
-          text: limits ? `Machine CPU is ${cpuPercent}% of total capacity (active limit ${limits.cpuLimit ?? 'disabled'}${limits.cpuLimit == null ? '' : '%' }, Owner ${limits.owner}); 5-minute load is ${m.load[1]}${limits.loadLimit == null ? ' (backstop disabled)' : ` (backstop ${limits.loadLimit})`}. Your project uses about ${use.cpu}% CPU (1 core = 100%): ${top(use)}. ${advice}` : `The 5-minute load average is ${m.load[1]} on ${m.cpus} cores. Your project uses about ${use.cpu}% CPU now (1 core = 100%): ${top(use)}. ${advice}`,
+          text: limits ? `Machine CPU is ${cpuPercent}% of total capacity (active limit ${limits.cpuLimit ?? 'disabled'}${limits.cpuLimit == null ? '' : '%' }, Owner ${limits.owner}); 5-minute load is ${m.load[1]}${limits.loadLimit == null ? ' (backstop disabled)' : ` (backstop ${limits.loadLimit})`}. Your project uses about ${use.cpu}% CPU (1 core = 100%): ${top(use)}. ${advice}` : `The 5-minute load average is ${m.load[1]} on ${Number(m.cpus.toFixed(2))} cores. Your project uses about ${use.cpu}% CPU now (1 core = 100%): ${top(use)}. ${advice}`,
         });
-        alerts.push({ key: 'machine:load', severity: 'warn', scope: 'user', title, text: limits ? `Owner ${limits.owner}; machine CPU ${cpuPercent}% (active limit ${limits.cpuLimit == null ? 'disabled' : `${limits.cpuLimit}%`}). 5-minute load ${m.load[1]}${limits.loadLimit == null ? ' (backstop disabled)' : ` (backstop ${limits.loadLimit})`}. CPU by project: ${summary}.` : `The 5-minute load average is ${m.load[1]} on ${m.cpus} cores. CPU by project now: ${summary}.${snap.cpuUse?.other?.cpu >= 100 ? ` Other processes: ${top(snap.cpuUse.other)}.` : ''}` });
+        alerts.push({ key: 'machine:load', severity: 'warn', scope: 'user', title, text: limits ? `Owner ${limits.owner}; machine CPU ${cpuPercent}% (active limit ${limits.cpuLimit == null ? 'disabled' : `${limits.cpuLimit}%`}). 5-minute load ${m.load[1]}${limits.loadLimit == null ? ' (backstop disabled)' : ` (backstop ${limits.loadLimit})`}. CPU by project: ${summary}.` : `The 5-minute load average is ${m.load[1]} on ${Number(m.cpus.toFixed(2))} cores. CPU by project now: ${summary}.${snap.cpuUse?.other?.cpu >= 100 ? ` Other processes: ${top(snap.cpuUse.other)}.` : ''}` });
       } else {
         alerts.push({
           key: 'machine:load', severity: 'warn', scope: 'all', title,
-          text: `${limits ? `Owner ${limits.owner}; machine CPU ${cpuPercent}% (active limit ${limits.cpuLimit == null ? 'disabled' : `${limits.cpuLimit}%`}). 5-minute load ${m.load[1]}${limits.loadLimit == null ? ' (backstop disabled)' : ` (backstop ${limits.loadLimit})`}.` : `The 5-minute load average is ${m.load[1]} on ${m.cpus} cores.`}${snap.cpuUse?.other ? ` The largest processes are outside the projects: ${top(snap.cpuUse.other)}.` : ''} ${advice}`,
+          text: `${limits ? `Owner ${limits.owner}; machine CPU ${cpuPercent}% (active limit ${limits.cpuLimit == null ? 'disabled' : `${limits.cpuLimit}%`}). 5-minute load ${m.load[1]}${limits.loadLimit == null ? ' (backstop disabled)' : ` (backstop ${limits.loadLimit})`}.` : `The 5-minute load average is ${m.load[1]} on ${Number(m.cpus.toFixed(2))} cores.`}${snap.cpuUse?.other ? ` The largest processes are outside the projects: ${top(snap.cpuUse.other)}.` : ''} ${advice}`,
         });
       }
     }
@@ -477,7 +477,7 @@ export function renderBulletin(snap, evaluation, cfg) {
   const m = snap.machine;
   if (m) {
     L.push('', '## Machine', '');
-    L.push(`- Load: ${m.load.join(' / ')} on ${m.cpus} cores`);
+    L.push(`- Load: ${m.load.join(' / ')} on ${Number(m.cpus.toFixed(2))} cores`);
     const disk = Number.isFinite(m.diskFreeBytes) && Number.isFinite(m.diskFreePercent)
       ? `${(m.diskFreeBytes / 2 ** 30).toFixed(1)} GB (${m.diskFreePercent.toFixed(1)}%) free`
       : 'unavailable';
