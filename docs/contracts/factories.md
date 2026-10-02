@@ -499,7 +499,10 @@ These choices complete the initial contracts.
     `paused`, `transferred`, and `unknown` for a project.
     Use `ok`, `ahead`, `exhausted`, and `unknown` for a quota lane.
     Use `healthy`, `degraded`, `offline`, and `unknown` for health.
-    The first image supports `claude`, `codex`, and `opencode` harness rows.
+    A harness is an open identifier of 1 to 32 characters. Use lowercase
+    letters, digits, and hyphens. Start with a letter. Consumers show an
+    unknown harness as it is and never reject a summary for that value.
+    The first image installs `claude`, `codex`, `opencode`, and `pi`.
 14. Limit slugs and version strings to 64 characters.
     Limit titles to 160 characters and project display names to 80 characters.
     Limit dashboard base URLs to 300 characters and hostnames to 253 characters.

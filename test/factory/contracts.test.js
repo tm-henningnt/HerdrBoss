@@ -135,3 +135,21 @@ test('shared definitions enforce port bounds, host names, and the transferred st
   accepts('state', ['transferred', 'ready', 'unknown']);
   refuses('state', ['moved']);
 });
+
+test('fleet summaries accept open harness identifiers and reject invalid identifiers', async () => {
+  const { validateFile } = await import('./schema-check.js');
+  const schemaFile = `${schemaDir}/fleet-summary.v1.schema.json`;
+  const summary = readJson(`${exampleDir}/fleet-summary.valid.personal.json`);
+  for (const harness of ['pi', 'my-harness']) {
+    const candidate = structuredClone(summary);
+    candidate.quotas[0].harness = harness;
+    candidate.spend[0].harness = harness;
+    assert.deepEqual(validateFile(candidate, schemaFile), [], `accepts ${harness}`);
+  }
+  for (const harness of ['Claude', '1x', '', 'a'.repeat(33)]) {
+    const candidate = structuredClone(summary);
+    candidate.quotas[0].harness = harness;
+    candidate.spend[0].harness = harness;
+    assert.ok(validateFile(candidate, schemaFile).length > 0, `rejects ${JSON.stringify(harness)}`);
+  }
+});

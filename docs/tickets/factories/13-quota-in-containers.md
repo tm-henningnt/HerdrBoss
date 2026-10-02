@@ -6,7 +6,7 @@
 
 **Status:** ready-for-agent
 
-- [ ] The factory reads Claude, Codex, and OpenCode Go usage with the Linux reader that the spike confirmed.
+- [ ] The factory reads usage for each installed harness with the Linux reader that the spike confirmed. The initial set includes Claude, Codex, OpenCode Go, and Pi. The set is open to later harnesses.
 - [ ] Each quota row has an `accountKey`: an HMAC of the account identity, never the identity.
 - [ ] Each harness account has an account scope, set in the dashboard.
 - [ ] Tests cover a missing reader and a partial reading.
