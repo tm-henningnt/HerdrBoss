@@ -828,18 +828,58 @@ test('a ghost suggestion in an idle successor input does not block readiness', {
   assert.equal(out.herdrCalls.filter(({ args }) => args[0] === 'agent' && args[1] === 'send-keys').length, 0);
 });
 
-test('real unsent successor input gets one Enter and stays not ready', { timeout: 30000 }, (t) => {
+test('real unsent successor input gets a second Enter after the delay and one Boss notice', { timeout: 30000 }, (t) => {
   const out = run(t, {
     tokens: 400000, memory: tracked,
     handoffs: [unreadyRecord({ seenWorkingAt: undefined })],
     steps: [
-      { at: at(1), herdr: herdrOf(pane('idle'), worker, successor), published: { alpha: status(1) }, screen: '❯ run the prepared handover' },
-      { at: at(2), herdr: herdrOf(pane('idle'), worker, successor), published: { alpha: status(1) }, screen: '❯ run the prepared handover' },
+      { at: at(1), herdr: herdrOf(pane('idle'), worker, successor, bossPane), published: { alpha: status(1) }, screen: '❯ run the prepared handover' },
+      { at: at(2), herdr: herdrOf(pane('idle'), worker, successor, bossPane), published: { alpha: status(1) }, screen: '❯ run the prepared handover' },
+      { at: at(3), herdr: herdrOf(pane('idle'), worker, successor, bossPane), published: { alpha: status(1) }, screen: '❯ run the prepared handover' },
+    ],
+  });
+  const enters = out.herdrCalls.filter(({ args }) => args[0] === 'agent' && args[1] === 'send-keys');
+  assert.deepEqual(enters.map(({ args }) => args), [
+    ['agent', 'send-keys', 'w-alpha:p9', 'enter'],
+    ['agent', 'send-keys', 'w-alpha:p9', 'enter'],
+  ], 'the engine sends at most two Enters in total');
+  assert.ok(out.records[0].inputEnterSentAt);
+  assert.ok(out.records[0].inputEnterRetryAt);
+  assert.equal(out.records[0].readyAt, undefined);
+  assert.deepEqual(bossNotes(out).map(({ step }) => step), [1]);
+  assert.match(bossNotes(out)[0].args[3], /ctx-1.*w-alpha:p9/);
+  assert.match(bossNotes(out)[0].args[3], /herdr agent read w-alpha:p9/);
+});
+
+test('a cleared successor input gets no second Enter and becomes ready', { timeout: 30000 }, (t) => {
+  const out = run(t, {
+    tokens: 400000, memory: tracked,
+    handoffs: [unreadyRecord({ seenWorkingAt: undefined })],
+    steps: [
+      { at: at(1), herdr: herdrOf(pane('idle'), worker, successor, bossPane), published: { alpha: status(1) }, screen: '❯ run the prepared handover' },
+      { at: '2026-09-29T12:02:00.000Z', herdr: herdrOf(pane('idle'), worker, { ...successor, status: 'working' }), published: { alpha: status(1) } },
+      { at: at(3), herdr: herdrOf(pane('idle'), worker, successor, bossPane), published: { alpha: status(1) } },
     ],
   });
   const enters = out.herdrCalls.filter(({ args }) => args[0] === 'agent' && args[1] === 'send-keys');
   assert.deepEqual(enters.map(({ args }) => args), [['agent', 'send-keys', 'w-alpha:p9', 'enter']]);
-  assert.equal(out.records[0].readyAt, undefined);
+  assert.deepEqual(bossNotes(out), []);
+  assert.ok(out.records[0].readyAt);
+  assert.equal(out.records[0].inputEnterRetryAt, undefined);
+});
+
+test('the successor input Enter retry ignores a pane of another agent kind', { timeout: 30000 }, (t) => {
+  const out = run(t, {
+    tokens: 400000, memory: tracked,
+    handoffs: [unreadyRecord({ seenWorkingAt: undefined })],
+    steps: [
+      { at: at(1), herdr: herdrOf(pane('idle'), worker, { ...successor, agent: 'codex' }, bossPane), published: { alpha: status(1) }, screen: '❯ run the prepared handover' },
+      { at: at(2), herdr: herdrOf(pane('idle'), worker, { ...successor, agent: 'codex' }, bossPane), published: { alpha: status(1) }, screen: '❯ run the prepared handover' },
+    ],
+  });
+  assert.deepEqual(out.herdrCalls.filter(({ args }) => args[1] === 'send-keys'), []);
+  assert.deepEqual(bossNotes(out), []);
+  assert.equal(out.records[0].inputEnterSentAt, undefined);
 });
 
 test('the successor input screen is read at most once every 15 seconds', { timeout: 30000 }, (t) => {
@@ -1083,7 +1123,7 @@ test('HO2: a blank pane and a trust dialog cannot become ready or receive Enter'
   }
 });
 
-test('HO2: manual typed unsent input gets one Enter and requires fresh work before readiness', { timeout: 30000 }, (t) => {
+test('HO2: manual typed unsent input gets the Enter retry and requires fresh work before readiness', { timeout: 30000 }, (t) => {
   const typed = successorScreen.replace('❯ ', '❯ Read the state again');
   const out = run(t, {
     autoHandover: false,
@@ -1096,7 +1136,10 @@ test('HO2: manual typed unsent input gets one Enter and requires fresh work befo
       { at: at(4), herdr: herdrOf(pane('idle'), successor) },
     ],
   });
-  assert.deepEqual(out.herdrCalls.filter(({ args }) => args[1] === 'send-keys').map(({ args }) => args), [['agent', 'send-keys', successor.id, 'enter']]);
+  assert.deepEqual(out.herdrCalls.filter(({ args }) => args[1] === 'send-keys').map(({ args }) => args), [
+    ['agent', 'send-keys', successor.id, 'enter'],
+    ['agent', 'send-keys', successor.id, 'enter'],
+  ]);
   assert.ok(out.snapshots.slice(0, 4).every(({ handoffs }) => !handoffs[0].readyAt));
   assert.equal(out.records[0].readyAt, at(4));
   assert.equal(out.records[0].seenWorkingAt, at(3));
