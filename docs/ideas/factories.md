@@ -1,6 +1,6 @@
 # Herdr Boss factories: research summary, specification and design proposal
 
-Status: proposal for the Owner. Nothing is built.
+Status: proposal for the Owner, under interview. Nothing is built. Decided points link to ADRs in `docs/adr/` (0002 and later). The glossary is `docs/CONTEXT.md`.
 Author: the Boss, with five research advisors (notes A to E in the same folder) and one independent review (`review-fable.md`). Version 2 adds head office succession, users and access, Windows and client-premises hosts, and project transfer (sections 16 to 20). Version 1 text is kept where it still holds. Where sections 16 to 20 differ from sections 1 to 15, sections 16 to 20 win.
 Scope: run several Herdr Boss "software factories" from Docker images, manage them from one place, and connect to them with Herdr.
 
@@ -33,7 +33,7 @@ Non-goals for the first phases:
 - Moving a running project between factories without a freeze (a planned transfer is in section 19).
 - A fleet-wide Boss agent.
 - Controlling workers of another factory from the hub.
-- Running on a public cloud service.
+- Running on a public cloud service with a public IP address. A cloud VM that is reachable only over the tailnet is allowed as a host (ADR 0009).
 
 ## 3. Terms
 
@@ -52,7 +52,7 @@ The review found four code facts that break the first draft. Each is verified in
 1. **Data directory.** `src/engine.js:551-552` turns off all actions (no prompts, no reaping, no notifications) when the data directory is not the configured live directory. `src/data-dir-guard.js` also treats a custom path as not live, so the migration guard does not protect it. A factory with `HERDR_BOSS_DIR=/data` would be inert. Fix: mount the data volume at `/home/factory/.herdr-boss`, or set `HERDR_BOSS_LIVE_DIR` to the volume path and assert at start that both paths match.
 2. **Supervisor.** tini reaps processes and forwards signals. It does not restart a crashed service. Use s6-overlay (or supervisord) with one service for sshd, `herdr server` and `herdr-boss serve`, restart on exit, and a Docker `HEALTHCHECK` on `/api/health`. It replaces launchd `KeepAlive` (`src/cli.js:961-968`).
 3. **Cookies and hostnames.** `src/access.js` sets the session cookie `herdr_boss_session` with `Path=/`. A browser does not scope cookies by port, so a login to one factory on `127.0.0.1:<port>` overwrites the cookie of another factory and of factory zero. Give each factory its own hostname (`<name>.localhost` or the tailnet name) and extend `allowedHost` (`src/server.js`) to accept `*.localhost`.
-4. **Shared quota.** Quota rows carry no account id (`src/collect.js`). Until the hub computes pace per account (phase 5 and later), run one factory per account, or copy the Mac quota snapshot into each factory as a read-only file. The research notes disagree on CodexBar on Linux: one says macOS only, one says there is a Linux CLI. The spike settles it.
+4. **Shared quota.** Quota rows carry no account id (`src/collect.js`). Each account has an account scope, and each factory has a factory share of each shared account. The factory enforces its share locally. The head office sets the shares with a slider and sends guidance to each factory Boss (ADR 0011). The research notes disagree on CodexBar on Linux: one says macOS only, one says there is a Linux CLI. The spike settles it.
 
 Other corrections: keep host secrets and SSH keys where agents of factory zero cannot read them (section 7); order the Codex sandbox decision after the spike (section 14); build `qlik-cli` from source for arm64 (section 5.2); OrbStack is paid for commercial use, so Colima is the default unless the Owner buys a licence (section 5.1).
 
@@ -83,7 +83,7 @@ Rules:
 
 ### 5.1 Runtime
 
-Use Docker. On the Mac use Colima by default, or OrbStack if the Owner buys a licence (OrbStack is free for personal use only, so client work needs a paid licence). On Linux use Docker Engine. Colima and OrbStack use the same Docker API, so the image does not change. Podman and Apple's `container` tool are not recommended now.
+Use Docker. On the Mac use OrbStack without a paid licence. The Mac runs only personal factories, because OrbStack is free for personal use only. Client and commercial factories run on the Owner's Windows host (ADR 0006). Colima is the fallback on the Mac. On Linux use Docker Engine. Colima and OrbStack use the same Docker API, so the image does not change. Podman and Apple's `container` tool are not recommended now.
 
 Keep repositories and worktrees on a named volume inside the Docker VM. A bind mount from macOS is slow for many small files.
 
@@ -100,7 +100,7 @@ Pin OrbStack or Colima updates, and keep the Mac awake on power. A sleep, a rebo
 - Herdr Boss at a pinned commit, as a git checkout (see section 9), with its `.git` directory.
 - A non-root user `factory` (UID 1000). s6-overlay is PID 1 with one supervised service each for sshd, `herdr server` and `herdr-boss serve`. Set `TZ` in the image, because the analytics day uses the process time zone. Set a `max-size` on the Docker log driver.
 - Git identity, `gh auth setup-git`, GitHub `known_hosts` and the Herdr integration install are part of the image or the wizard.
-- First image set: Debian, Node, git, gh, Herdr, sshd, Claude Code, Codex CLI, Herdr Boss. Add Chrome, OpenCode, Pi and `qlik-cli` in the next phase. The browser features need a way to sign in to a web app in a headless Chrome (a VNC or CDP screencast route). Until that exists, factories have no browser features.
+- First image set: Debian, Node, git, gh, Herdr, sshd, Claude Code, Codex CLI, OpenCode, Chrome, Herdr Boss. Add Pi and `qlik-cli` in the next phase. OpenCode is in the first set because each factory has its own OpenCode subscription (ADR 0007). Chrome is in the first set because a browser sign-in route comes before the first container factory (ADR 0010).
 - Code location: the image holds a seed checkout. The run-time checkout is on the `code` volume (section 9.4). A kit update inside a factory changes the volume, not the image.
 - Pi must not use a Claude subscription (the vendor terms forbid it). The image defaults enforce this.
 
@@ -128,8 +128,8 @@ No Mac home directory, no `~/.config` and no Docker socket is mounted into a fac
 
 - `docker buildx bake` with one `pins.json` for all versions.
 - Tags `herdr-factory:<kit-version>-<yyyymmdd>` and a moving `stable`. Pins are OCI labels.
-- Registry: local images first. A private GHCR repository when a second host exists. The Dockerfile may be public. The image holds no private data.
-- Phase 2 builds `arm64` only. Add `amd64`, SBOM, a vulnerability scan and a weekly CI job when a second host exists. Add a Linux CI run for the Linux readers (the repository has no `.github/workflows` for it today). Keep three tags for rollback.
+- Registry: none. Each host builds its own image with `factory build` (ADR 0015). The Dockerfile is public. The image holds no private data. `factory status` shows the build date and the pins hash.
+- Each host builds for its own CPU type. The first container factory is on an amd64 Windows host (ADR 0013). Add SBOM, a vulnerability scan and a weekly CI job later. Add a Linux CI run for the Linux readers (the repository has no `.github/workflows` for it today). Keep three tags for rollback.
 
 ### 5.6 Differences from macOS
 
@@ -188,7 +188,7 @@ Design:
 
 A pulling hub. The hub polls each factory every 30 seconds with a read-only token over Tailscale or a private Docker network. A hub outage changes nothing in a factory. A factory outage shows as the last good data with its age.
 
-Add a push ping from a factory for urgent Owner items in phase 2. Keep a push mode with the same payload for a factory behind NAT. A mesh is rejected.
+The head office also sends guidance to each factory Boss: factory shares and nudge messages, with the narrow `fleetGuide` credential (ADR 0011). Add a push ping from a factory for urgent Owner items in phase 2. Keep a push mode with the same payload for a factory behind NAT. A mesh is rejected.
 
 ### 8.2 What a factory must add
 
@@ -197,18 +197,19 @@ Add a push ping from a factory for urgent Owner items in phase 2. Keep a push mo
 3. A host rule that accepts per-factory hostnames (`*.localhost`, tailnet names) and container names. Today `allowedHost` refuses both.
 4. A stable `factoryId`, a `schema` number, and an `accountKey` (an HMAC of the account identity, never the identity) on quota rows.
 5. `GET /api/health`: version, schema, kit revision, tick age, Herdr reachable.
+6. `POST /api/fleet/guidance`: factory shares and nudge messages from the head office. Only the `fleetGuide` credential may call it.
 
 ### 8.3 Summary content
 
 Identity and version; health and machine load; projects with phase, status and status age; board counts (Doing, Review, Blocked, Done 7 d); quotas with `accountKey`; spend per day, role, harness; alerts; Owner items (counts, ids, kinds); review packs waiting; the factory's dashboard base URL.
 
-Never leaves a factory: tokens and sessions, cookies, message and chat text, transcripts, attachments, screenshots, local paths, pane output, lock commands, private repository URLs, Claude settings. A test fails when a summary key is not on the allow-list. Item titles go to the hub only when `fleet.shareItemTitles` is on (default off).
+Never leaves a factory: tokens and sessions, cookies, message and chat text, transcripts, attachments, screenshots, local paths, pane output, lock commands, private repository URLs, Claude settings. A test fails when a summary key is not on the allow-list. Item titles go to the head office only when `fleet.shareItemTitles` is on. The `personal` profile sets it on, the `client` profile off (ADR 0016).
 
 ### 8.4 Owner views
 
 1. Fleet page: one line per factory with name, version, last seen, status dot, projects needing attention, worst quota lane, spend today and open Owner items. Red or amber rules are defined in `research-D`.
 2. Combined Mailbox: Owner items with a factory tag. Phase 1 links to the factory. Phase 2 answers through the factory's own message route. The factory owns the item.
-3. Quota view: grouped by `accountKey`. Factories on one account read the same percentage, so the hub does not add them.
+3. Quota view: grouped by `accountKey`. Factories on one account read the same percentage, so the head office does not add them. One slider per factory sets its factory share of each shared account (ADR 0011).
 4. Spend page: the sum by day, role, harness and factory.
 5. Kit and version drift per factory and per project.
 
@@ -217,7 +218,7 @@ One Boss per factory stays. The hub Mailbox gives the Owner one inbox and routes
 ### 8.5 Enrolment and trust
 
 - In the first phases, on one Mac, the host tool creates the read token inside the factory and hands it to the hub. Later, for a second host: `herdr-boss fleet invite NAME` on the hub prints a single-use join token (15 minutes). The factory runs `fleet join <hub-url> <token>`. The hub returns the factory credential. Deliver it as a Docker secret or a 0600 file.
-- Separate `fleetRead` and `fleetWrite` credentials. Phase 1 issues read only. Rotation keeps the old token valid for 10 minutes. Revoke on the hub first for a lost factory.
+- Separate `fleetRead`, `fleetGuide` and `fleetWrite` credentials. Phase 1 issues `fleetRead` and `fleetGuide` only. Rotation keeps the old token valid for 10 minutes. Revoke on the hub first for a lost factory.
 - `factoryId` lives in the data directory. A cloned volume gives a second factory with the same id: the hub refuses it and flags it.
 - The schema is add-only. The hub ignores unknown fields and shows "hub older" or "factory older".
 - History in the hub database: 5 minute snapshots for 48 hours, hourly for 30 days, daily for a year.
@@ -246,7 +247,7 @@ Host files: `~/.herdr-factories/registry.json` (no secrets); per factory `factor
 
 ### 9.3 The wizard
 
-The full wizard has 17 steps. The first release implements 8: container, volumes, herdr, service, harness-claude, harness-codex, github, project. Steps 5 (kit), 8 to 9, 11 to 13 and 15 to 17 follow later. A resumable state machine like `project new`. A finished step is skipped when its check still passes. Exit code 3 means waiting for the Owner, either for a Mailbox decision item or for an interactive login at a host terminal. No secret enters the Mailbox.
+The full wizard has 17 steps. The first release implements 9: container, volumes, herdr, service, harness-claude, harness-codex, harness-other (OpenCode), github, project. Steps 5 (kit), 8 to 9, 11 to 13 and 15 to 17 follow later. A resumable state machine like `project new`. A finished step is skipped when its check still passes. Exit code 3 means waiting for the Owner, either for a Mailbox decision item or for an interactive login at a host terminal. No secret enters the Mailbox.
 
 | # | Step | Check |
 |---|---|---|
@@ -282,7 +283,7 @@ Migration safety: take `store.backup` before each update. The migration guard ne
 
 ### 9.5 Profiles
 
-A profile is a folder with `factory.json`, a `policy.json` seed, a `config.json` seed and the required wizard steps. Examples: `client` (approved models, one project, a client org and tenant, updates after canary) and `experiments` (all models, free first, higher worker cap, updates first). Container name `hf-<name>`, volumes `hf-<name>-data|home|work|code`.
+A profile is a folder with `factory.json`, a `policy.json` seed, a `config.json` seed and the required wizard steps. Examples: `client` (approved models, one project, a client org and tenant, separate accounts, updates after canary) and `personal` (all models, free first, higher worker cap, the Owner's subscriptions, updates first). The first container factory uses `personal` (ADR 0005). The host tool refuses a `client` profile on a host whose runtime is personal-use only (ADR 0006). Container name `hf-<name>`, volumes `hf-<name>-data|home|work|code`.
 
 ### 9.6 Operations
 
@@ -307,7 +308,7 @@ Logs go to stdout and to `server.log` with rotation. Health uses `/api/health` a
 
 | Phase | Work | Size |
 |---|---|---|
-| 0 | Spike: run Herdr and a worker in a minimal container, test the Codex seccomp profile and CodexBar on Linux (section 12). Then the Owner decides question 1. | half a day |
+| 0 | Spike on the Mac with OrbStack (ADR 0006): run Herdr and a worker in a minimal container, test the Codex seccomp profile and CodexBar on Linux (section 12). Codex in containers needs the narrow profile (ADR 0008). | half a day |
 | 1 | Portability: Linux paths and readers, `allowedHosts`, `/api/health`, stdout log and rotation. | 2 medium, 2 small |
 | 2 | Image: Dockerfile, pins, supervisor, `.git` checkout, start-and-migrate smoke test. | 1 large, 1 medium |
 | 3 | Tool core: registry, `new build start stop status list`. | 1 large, 1 medium |
@@ -350,16 +351,16 @@ Result: a short report with measured numbers and the changes that the code needs
 
 | # | Question | Recommendation |
 |---|---|---|
-| 1 | Codex in a container: relax the seccomp profile, or let the container be the sandbox (`--dangerously-bypass-approvals-and-sandbox`)? The bypass conflicts with `docs/harness-setup.md:253` and removes the guard that keeps a worker away from the login files on the `home` volume. | Decide after the spike. Test a narrow seccomp profile first. Prefer it to the bypass. |
-| 2 | Accounts: may client factories use your subscription, or do they need separate API keys or accounts? | Separate accounts or keys for any client factory. Subscription only for your own factories, a few at a time. |
-| 3 | Where does the hub (head office) run? | Superseded by section 16: it is a role. Start on an always-on box at home, with a cold standby. |
-| 4 | Runtime: client work is commercial, so OrbStack needs a paid licence. | Colima by default, OrbStack if you buy a licence. |
-| 5 | May item titles reach the hub, or counts only? | Counts only in phase 1. Titles as a setting. |
-| 6 | Registry: private GHCR or local images only? | Private GHCR once there is a second host. Local images first. |
-| 7 | May `PRODUCT.md` widen from "all Herdr projects on this machine" to "all factories"? | Yes. |
-| 8 | Tool form: `herdr-boss factory` or a separate binary? | `herdr-boss factory`. |
-| 9 | `qlik-cli` on arm64 Linux. | Build it from source in a Go build stage. |
-| 10 | Network: one tailnet for all factories? | Yes. |
+| 1 | Codex in a container: relax the seccomp profile, or let the container be the sandbox (`--dangerously-bypass-approvals-and-sandbox`)? The bypass conflicts with `docs/harness-setup.md:253` and removes the guard that keeps a worker away from the login files on the `home` volume. | Decide after the spike. Test a narrow seccomp profile first. Prefer it to the bypass. **Decided: ADR 0008.** |
+| 2 | Accounts: may client factories use your subscription, or do they need separate API keys or accounts? | Separate accounts or keys for any client factory. Subscription only for your own factories, a few at a time. **Decided: ADR 0007.** |
+| 3 | Where does the hub (head office) run? | Superseded by section 16: it is a role. Start on an always-on box at home, with a cold standby. **Decided: factory zero first, ADR 0009.** |
+| 4 | Runtime: client work is commercial, so OrbStack needs a paid licence. | Colima by default, OrbStack if you buy a licence. **Decided: OrbStack, personal use on the Mac; client work on the Windows host, ADR 0006.** |
+| 5 | May item titles reach the hub, or counts only? | Counts only in phase 1. Titles as a setting. **Decided: per factory, on for personal, ADR 0016.** |
+| 6 | Registry: private GHCR or local images only? | Private GHCR once there is a second host. Local images first. **Decided: each host builds, ADR 0015.** |
+| 7 | May `PRODUCT.md` widen from "all Herdr projects on this machine" to "all factories"? | Yes. **Decided: ADR 0004.** |
+| 8 | Tool form: `herdr-boss factory` or a separate binary? | `herdr-boss factory`. **Decided: ADR 0002.** |
+| 9 | `qlik-cli` on arm64 Linux. | Build it from source in a Go build stage. **Decided: ADR 0003.** |
+| 10 | Network: one tailnet for all factories? | Yes. **Decided: one tailnet with tags and access rules, ADR 0017.** |
 
 
 ## 16. Head office as a role, handover and succession (version 2)
@@ -481,8 +482,7 @@ The host tool treats each host as a transport in the registry: `local`, `ssh` (D
 
 ### 18.2 Windows hosts
 
-- For an unattended box use Docker Engine in a WSL2 distribution or a Hyper-V Ubuntu VM, with a startup task. It starts at boot and needs no Docker Desktop licence.
-- Use Docker Desktop only where a person works on the box and the licence is paid (free only under 250 employees and 10 M USD revenue).
+- Use Docker Engine in a WSL2 distribution with systemd, started at boot by a scheduled task (ADR 0014). It needs no Docker Desktop licence.
 - Keep all volumes named and inside the Linux file system. A bind mount of a Windows folder is slow and loses permissions and file events. Never bind-mount `home` or `data`.
 - Set memory and CPU in `.wslconfig`. A reboot, a sleep or a Windows update stops factories: the head office shows "last seen" and alerts.
 - The Linux image runs unchanged. Add an `amd64` build before the first Windows or cloud host. Whether the Codex sandbox works in WSL2 with a narrow seccomp profile is an open test.
@@ -544,6 +544,8 @@ Requirement: move a project from one factory to another, through GitHub and a ha
 
 ### 20.1 Revised order
 
+The first plan is the spec `docs/specs/factories.md` with the tickets in `docs/tickets/factories/` (ADR 0021). It covers the personal fleet. The list below stays as the order of the full proposal.
+
 1. Spike (section 12) plus the Docker context over SSH test. Test the viewer process: a 404 for every route.
 2. Phases 1 and 2: Linux portability and the image (section 11), with the corrections of section 3a.
 3. Tool core, wizard (8 steps) and the transports `local` and `ssh`.
@@ -557,11 +559,11 @@ Requirement: move a project from one factory to another, through GitHub and a ha
 
 | # | Question | Recommendation |
 |---|---|---|
-| 11 | Head office: where does it live first? | An always-on box at home, with the Mac as the cold standby if the Mac is awake. A host that sleeps cannot be a standby. |
-| 12 | Succession: who is on the ranked list, and may a temporary head office read item titles? | The home box, then one cloud or Windows factory. Counts only until you confirm. |
-| 13 | Roles and the first users: owner, operator, reviewer, viewer. Who is the first colleague and which factories? | Fixed roles. Decide the first user set when G1 starts. |
+| 11 | Head office: where does it live first? | An always-on box at home, with the Mac as the cold standby if the Mac is awake. A host that sleeps cannot be a standby. **Decided: factory zero until a second host exists, ADR 0009.** |
+| 12 | Succession: who is on the ranked list, and may a temporary head office read item titles? | The home box, then one cloud or Windows factory. Counts only until you confirm. **Decided: manual `hub promote` first, ADR 0022.** |
+| 13 | Roles and the first users: owner, operator, reviewer, viewer. Who is the first colleague and which factories? | Fixed roles. Decide the first user set when G1 starts. **Deferred to a later spec, ADR 0021.** |
 | 14 | Client sites: Tailscale, reverse SSH or only the client's VPN? | Reverse SSH over 443 plus the client's own VPN if required. Ask the client IT early. |
-| 15 | Windows hosts: Docker Engine in WSL2 for unattended boxes, Docker Desktop only with a paid licence? | Yes. |
+| 15 | Windows hosts: Docker Engine in WSL2 for unattended boxes, Docker Desktop only with a paid licence? | Yes. **Decided: Docker Engine in WSL2, ADR 0014.** |
 | 16 | Portainer: optional only? | Yes. The host tool is the factory-aware layer. |
 | 17 | Contract: may client code and prompts reach the model vendors? | Check with the client before the first client factory. |
 

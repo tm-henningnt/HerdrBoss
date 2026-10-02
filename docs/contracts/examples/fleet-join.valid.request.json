@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "contractVersion": "1.0.0",
+  "requestId": "request-a",
+  "invitationId": "invitation-a",
+  "factoryId": "factory-a",
+  "name": "factory-a",
+  "dashboardUrl": "https://factory-a.example",
+  "requestedScopes": [
+    "fleetRead",
+    "fleetGuide"
+  ]
+}

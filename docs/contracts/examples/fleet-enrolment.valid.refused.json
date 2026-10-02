@@ -1,0 +1,7 @@
+{
+  "schema": 1,
+  "contractVersion": "1.0.0",
+  "requestId": "request-a",
+  "status": "refused",
+  "code": "duplicate-factory"
+}

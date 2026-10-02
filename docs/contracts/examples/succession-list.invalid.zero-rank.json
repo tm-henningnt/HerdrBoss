@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "contractVersion": "1.0.0",
+  "listId": "succession-a",
+  "issuedAt": "2026-10-02T10:00:00Z",
+  "entries": [
+    {
+      "factoryId": "factory-b",
+      "rank": 0,
+      "factoryKeyId": "factory-b-signing"
+    },
+    {
+      "factoryId": "factory-c",
+      "rank": 2,
+      "factoryKeyId": "factory-c-signing"
+    }
+  ],
+  "ownerSignature": {
+    "algorithm": "Ed25519",
+    "keyId": "owner-anchor",
+    "signatureRef": "signature-a"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "contractVersion": "1.0.0",
+  "listId": "succession-a",
+  "issuedAt": "2026-10-02T10:00:00Z",
+  "entries": [],
+  "ownerSignature": {
+    "algorithm": "Ed25519",
+    "keyId": "owner-anchor",
+    "signatureRef": "signature-a"
+  }
+}

@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.example/factories/1.0.0/schema/project-transfer.v1.schema.json",
+  "title": "Small-form project transfer manifest",
+  "version": "1.0.0",
+  "description": "Version 1.0.0. See docs/contracts/factories.md for producers, consumers, and refusal rules.",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "integer",
+      "const": 1
+    },
+    "contractVersion": {
+      "$ref": "common.v1.schema.json#/$defs/contractVersion"
+    },
+    "transferId": {
+      "$ref": "common.v1.schema.json#/$defs/slug"
+    },
+    "sourceFactoryId": {
+      "$ref": "common.v1.schema.json#/$defs/slug"
+    },
+    "targetFactoryId": {
+      "$ref": "common.v1.schema.json#/$defs/slug"
+    },
+    "createdAt": {
+      "$ref": "common.v1.schema.json#/$defs/timestamp"
+    },
+    "kitRevision": {
+      "$ref": "common.v1.schema.json#/$defs/kitRevision"
+    },
+    "project": {
+      "type": "object",
+      "properties": {
+        "slug": {
+          "$ref": "common.v1.schema.json#/$defs/slug"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "phase": {
+          "$ref": "common.v1.schema.json#/$defs/slug"
+        },
+        "status": {
+          "$ref": "common.v1.schema.json#/$defs/state"
+        }
+      },
+      "required": [
+        "slug",
+        "name",
+        "phase",
+        "status"
+      ],
+      "additionalProperties": false
+    },
+    "repository": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "const": "github"
+        },
+        "owner": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 39,
+          "pattern": "^[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?$(?![\\s\\S])"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_-]*$(?![\\s\\S])"
+        },
+        "transferBranch": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "pattern": "^herdr/transfer-[a-z0-9-]+$(?![\\s\\S])"
+        },
+        "commit": {
+          "$ref": "common.v1.schema.json#/$defs/commit"
+        }
+      },
+      "required": [
+        "provider",
+        "owner",
+        "name",
+        "transferBranch",
+        "commit"
+      ],
+      "additionalProperties": false
+    },
+    "sourcePointers": {
+      "type": "object",
+      "properties": {
+        "dashboardUrl": {
+          "$ref": "common.v1.schema.json#/$defs/dashboardUrl"
+        },
+        "ownerItemIds": {
+          "type": "array",
+          "items": {
+            "$ref": "common.v1.schema.json#/$defs/slug"
+          },
+          "minItems": 0
+        },
+        "reviewPackIds": {
+          "type": "array",
+          "items": {
+            "$ref": "common.v1.schema.json#/$defs/slug"
+          },
+          "minItems": 0
+        }
+      },
+      "required": [
+        "dashboardUrl",
+        "ownerItemIds",
+        "reviewPackIds"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "schema",
+    "contractVersion",
+    "transferId",
+    "sourceFactoryId",
+    "targetFactoryId",
+    "createdAt",
+    "kitRevision",
+    "project",
+    "repository",
+    "sourcePointers"
+  ],
+  "additionalProperties": false
+}

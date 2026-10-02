@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.example/factories/1.0.0/schema/fleet-guidance.v1.schema.json",
+  "title": "Fleet guidance",
+  "version": "1.0.0",
+  "description": "Version 1.0.0. See docs/contracts/factories.md for producers, consumers, and refusal rules.",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "integer",
+      "const": 1
+    },
+    "contractVersion": {
+      "$ref": "common.v1.schema.json#/$defs/contractVersion"
+    },
+    "headOfficeFactoryId": {
+      "$ref": "common.v1.schema.json#/$defs/slug"
+    },
+    "senderEpoch": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "sentAt": {
+      "$ref": "common.v1.schema.json#/$defs/timestamp"
+    },
+    "shares": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "accountKey": {
+            "$ref": "common.v1.schema.json#/$defs/digest"
+          },
+          "share": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "accountKey",
+          "share"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "nudges": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "nudgeId": {
+            "$ref": "common.v1.schema.json#/$defs/slug"
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "nudgeId",
+          "text"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "contractVersion",
+    "headOfficeFactoryId",
+    "senderEpoch",
+    "sentAt",
+    "shares",
+    "nudges"
+  ],
+  "additionalProperties": false
+}

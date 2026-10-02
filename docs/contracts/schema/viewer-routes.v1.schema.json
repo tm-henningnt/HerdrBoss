@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.example/factories/1.0.0/schema/viewer-routes.v1.schema.json",
+  "title": "Viewer route allow-list",
+  "version": "1.0.0",
+  "description": "Version 1.0.0. See docs/contracts/factories.md for producers, consumers, and refusal rules.",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "integer",
+      "const": 1
+    },
+    "contractVersion": {
+      "$ref": "common.v1.schema.json#/$defs/contractVersion"
+    },
+    "routes": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "method": {
+                "const": "GET"
+              },
+              "path": {
+                "const": "/"
+              },
+              "permission": {
+                "const": "state.read"
+              }
+            },
+            "required": [
+              "method",
+              "path",
+              "permission"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "method": {
+                "const": "GET"
+              },
+              "path": {
+                "const": "/api/viewer/state"
+              },
+              "permission": {
+                "const": "state.read"
+              }
+            },
+            "required": [
+              "method",
+              "path",
+              "permission"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "method": {
+                "const": "GET"
+              },
+              "path": {
+                "const": "/api/viewer/boards/{project}"
+              },
+              "permission": {
+                "const": "boards.read"
+              }
+            },
+            "required": [
+              "method",
+              "path",
+              "permission"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "method": {
+                "const": "GET"
+              },
+              "path": {
+                "const": "/api/viewer/packs/{id}"
+              },
+              "permission": {
+                "const": "packs.read"
+              }
+            },
+            "required": [
+              "method",
+              "path",
+              "permission"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "method": {
+                "const": "GET"
+              },
+              "path": {
+                "const": "/api/viewer/items"
+              },
+              "permission": {
+                "const": "items.read"
+              }
+            },
+            "required": [
+              "method",
+              "path",
+              "permission"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "minItems": 1
+    }
+  },
+  "required": [
+    "schema",
+    "contractVersion",
+    "routes"
+  ],
+  "additionalProperties": false
+}

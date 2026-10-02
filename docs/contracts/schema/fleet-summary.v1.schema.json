@@ -1,0 +1,510 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.example/factories/1.0.0/schema/fleet-summary.v1.schema.json",
+  "title": "Fleet summary",
+  "version": "1.0.0",
+  "description": "Version 1.0.0. See docs/contracts/factories.md for producers, consumers, and refusal rules.",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "integer",
+      "const": 1
+    },
+    "contractVersion": {
+      "$ref": "common.v1.schema.json#/$defs/contractVersion"
+    },
+    "factoryId": {
+      "$ref": "common.v1.schema.json#/$defs/slug"
+    },
+    "name": {
+      "$ref": "common.v1.schema.json#/$defs/slug"
+    },
+    "version": {
+      "$ref": "common.v1.schema.json#/$defs/version"
+    },
+    "kitRevision": {
+      "$ref": "common.v1.schema.json#/$defs/kitRevision"
+    },
+    "generatedAt": {
+      "$ref": "common.v1.schema.json#/$defs/timestamp"
+    },
+    "dashboardUrl": {
+      "$ref": "common.v1.schema.json#/$defs/dashboardUrl"
+    },
+    "health": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "enum": [
+            "healthy",
+            "degraded",
+            "offline",
+            "unknown"
+          ]
+        },
+        "tickAgeSeconds": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "herdrReachable": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "clockOffsetSeconds": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "status",
+        "tickAgeSeconds",
+        "herdrReachable",
+        "clockOffsetSeconds"
+      ],
+      "additionalProperties": false
+    },
+    "machine": {
+      "type": "object",
+      "properties": {
+        "load1": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "load5": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "load15": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "cpus": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "memoryTotalMb": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "memoryFreePercent": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 100
+        },
+        "swapUsedMb": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        }
+      },
+      "required": [
+        "load1",
+        "load5",
+        "load15",
+        "cpus",
+        "memoryTotalMb",
+        "memoryFreePercent",
+        "swapUsedMb"
+      ],
+      "additionalProperties": false
+    },
+    "projects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "$ref": "common.v1.schema.json#/$defs/slug"
+          },
+          "phase": {
+            "$ref": "common.v1.schema.json#/$defs/slug"
+          },
+          "status": {
+            "$ref": "common.v1.schema.json#/$defs/state"
+          },
+          "statusAgeSeconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "kitRevision": {
+            "$ref": "common.v1.schema.json#/$defs/kitRevision"
+          },
+          "board": {
+            "type": "object",
+            "properties": {
+              "doing": {
+                "$ref": "common.v1.schema.json#/$defs/count"
+              },
+              "review": {
+                "$ref": "common.v1.schema.json#/$defs/count"
+              },
+              "blocked": {
+                "$ref": "common.v1.schema.json#/$defs/count"
+              },
+              "done7d": {
+                "$ref": "common.v1.schema.json#/$defs/count"
+              }
+            },
+            "required": [
+              "doing",
+              "review",
+              "blocked",
+              "done7d"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "slug",
+          "phase",
+          "status",
+          "statusAgeSeconds",
+          "kitRevision",
+          "board"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 0
+    },
+    "quotas": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "harness": {
+            "$ref": "common.v1.schema.json#/$defs/harness"
+          },
+          "accountKey": {
+            "$ref": "common.v1.schema.json#/$defs/digest"
+          },
+          "lane": {
+            "$ref": "common.v1.schema.json#/$defs/slug"
+          },
+          "usedPercent": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 100
+          },
+          "resetAt": {
+            "oneOf": [
+              {
+                "$ref": "common.v1.schema.json#/$defs/timestamp"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "ahead",
+              "exhausted",
+              "unknown"
+            ]
+          }
+        },
+        "required": [
+          "harness",
+          "accountKey",
+          "lane",
+          "usedPercent",
+          "resetAt",
+          "status"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 0
+    },
+    "spend": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "day": {
+            "$ref": "common.v1.schema.json#/$defs/day"
+          },
+          "role": {
+            "enum": [
+              "boss",
+              "orchestrator",
+              "worker"
+            ]
+          },
+          "harness": {
+            "$ref": "common.v1.schema.json#/$defs/harness"
+          },
+          "usd": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0
+          }
+        },
+        "required": [
+          "day",
+          "role",
+          "harness",
+          "usd"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 0
+    },
+    "alerts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "$ref": "common.v1.schema.json#/$defs/slug"
+          },
+          "severity": {
+            "enum": [
+              "info",
+              "warning",
+              "error"
+            ]
+          },
+          "projectSlug": {
+            "$ref": "common.v1.schema.json#/$defs/slug"
+          }
+        },
+        "required": [
+          "code",
+          "severity"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 0
+    },
+    "shareItemTitles": {
+      "type": "boolean"
+    },
+    "ownerItems": {
+      "type": "object",
+      "properties": {
+        "total": {
+          "$ref": "common.v1.schema.json#/$defs/count"
+        },
+        "needsOwner": {
+          "$ref": "common.v1.schema.json#/$defs/count"
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "$ref": "common.v1.schema.json#/$defs/slug"
+              },
+              "kind": {
+                "enum": [
+                  "decide",
+                  "approve",
+                  "answer"
+                ]
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 160
+              }
+            },
+            "required": [
+              "id",
+              "kind"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 0
+        }
+      },
+      "required": [
+        "total",
+        "needsOwner",
+        "rows"
+      ],
+      "additionalProperties": false
+    },
+    "reviewPacks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "common.v1.schema.json#/$defs/slug"
+          },
+          "waitingItems": {
+            "$ref": "common.v1.schema.json#/$defs/count"
+          }
+        },
+        "required": [
+          "id",
+          "waitingItems"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 0
+    }
+  },
+  "required": [
+    "schema",
+    "contractVersion",
+    "factoryId",
+    "name",
+    "version",
+    "kitRevision",
+    "generatedAt",
+    "dashboardUrl",
+    "health",
+    "machine",
+    "projects",
+    "quotas",
+    "spend",
+    "alerts",
+    "shareItemTitles",
+    "ownerItems",
+    "reviewPacks"
+  ],
+  "additionalProperties": false,
+  "oneOf": [
+    {
+      "properties": {
+        "shareItemTitles": {
+          "const": false
+        },
+        "ownerItems": {
+          "type": "object",
+          "properties": {
+            "total": {
+              "$ref": "common.v1.schema.json#/$defs/count"
+            },
+            "needsOwner": {
+              "$ref": "common.v1.schema.json#/$defs/count"
+            },
+            "rows": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "$ref": "common.v1.schema.json#/$defs/slug"
+                  },
+                  "kind": {
+                    "enum": [
+                      "decide",
+                      "approve",
+                      "answer"
+                    ]
+                  }
+                },
+                "required": [
+                  "id",
+                  "kind"
+                ],
+                "additionalProperties": false
+              },
+              "minItems": 0
+            }
+          },
+          "required": [
+            "total",
+            "needsOwner",
+            "rows"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "properties": {
+        "shareItemTitles": {
+          "const": true
+        },
+        "ownerItems": {
+          "type": "object",
+          "properties": {
+            "total": {
+              "$ref": "common.v1.schema.json#/$defs/count"
+            },
+            "needsOwner": {
+              "$ref": "common.v1.schema.json#/$defs/count"
+            },
+            "rows": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "$ref": "common.v1.schema.json#/$defs/slug"
+                  },
+                  "kind": {
+                    "enum": [
+                      "decide",
+                      "approve",
+                      "answer"
+                    ]
+                  },
+                  "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 160
+                  }
+                },
+                "required": [
+                  "id",
+                  "kind"
+                ],
+                "additionalProperties": false
+              },
+              "minItems": 0
+            }
+          },
+          "required": [
+            "total",
+            "needsOwner",
+            "rows"
+          ],
+          "additionalProperties": false
+        }
+      }
+    }
+  ]
+}

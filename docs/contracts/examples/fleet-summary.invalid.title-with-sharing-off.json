@@ -1,0 +1,83 @@
+{
+  "schema": 1,
+  "contractVersion": "1.0.0",
+  "factoryId": "factory-a",
+  "name": "factory-a",
+  "version": "0.1.0",
+  "kitRevision": "abcdef012345",
+  "generatedAt": "2026-10-02T10:00:00Z",
+  "dashboardUrl": "https://factory-a.example",
+  "health": {
+    "status": "healthy",
+    "tickAgeSeconds": 3,
+    "herdrReachable": true,
+    "clockOffsetSeconds": -2
+  },
+  "machine": {
+    "load1": 0.4,
+    "load5": 0.5,
+    "load15": 0.6,
+    "cpus": 4,
+    "memoryTotalMb": 8192,
+    "memoryFreePercent": 60,
+    "swapUsedMb": 0
+  },
+  "projects": [
+    {
+      "slug": "sample-project",
+      "phase": "build",
+      "status": "doing",
+      "statusAgeSeconds": 25,
+      "kitRevision": "abcdef012345",
+      "board": {
+        "doing": 1,
+        "review": 0,
+        "blocked": 0,
+        "done7d": 2
+      }
+    }
+  ],
+  "quotas": [
+    {
+      "harness": "codex",
+      "accountKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "lane": "weekly",
+      "usedPercent": 20,
+      "resetAt": "2026-10-09T10:00:00Z",
+      "status": "ok"
+    }
+  ],
+  "spend": [
+    {
+      "day": "2026-10-02",
+      "role": "worker",
+      "harness": "codex",
+      "usd": 0.15
+    }
+  ],
+  "alerts": [
+    {
+      "code": "status-stale",
+      "severity": "warning",
+      "projectSlug": "sample-project"
+    }
+  ],
+  "shareItemTitles": false,
+  "ownerItems": {
+    "total": 1,
+    "needsOwner": 1,
+    "rows": [
+      {
+        "id": "item-a",
+        "kind": "decide",
+        "title": "Choose the sample colour"
+      }
+    ]
+  },
+  "reviewPacks": [
+    {
+      "id": "pack-a",
+      "waitingItems": 1
+    }
+  ]
+}

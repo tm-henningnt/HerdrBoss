@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.example/factories/1.0.0/schema/fleet-join.v1.schema.json",
+  "title": "Fleet join request metadata",
+  "version": "1.0.0",
+  "description": "Version 1.0.0. See docs/contracts/factories.md for producers, consumers, and refusal rules.",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "integer",
+      "const": 1
+    },
+    "contractVersion": {
+      "$ref": "common.v1.schema.json#/$defs/contractVersion"
+    },
+    "requestId": {
+      "$ref": "common.v1.schema.json#/$defs/slug"
+    },
+    "invitationId": {
+      "$ref": "common.v1.schema.json#/$defs/slug"
+    },
+    "factoryId": {
+      "$ref": "common.v1.schema.json#/$defs/slug"
+    },
+    "name": {
+      "$ref": "common.v1.schema.json#/$defs/slug"
+    },
+    "dashboardUrl": {
+      "$ref": "common.v1.schema.json#/$defs/dashboardUrl"
+    },
+    "requestedScopes": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "fleetRead",
+          "fleetGuide"
+        ]
+      },
+      "minItems": 1
+    }
+  },
+  "required": [
+    "schema",
+    "contractVersion",
+    "requestId",
+    "invitationId",
+    "factoryId",
+    "name",
+    "dashboardUrl",
+    "requestedScopes"
+  ],
+  "additionalProperties": false
+}
