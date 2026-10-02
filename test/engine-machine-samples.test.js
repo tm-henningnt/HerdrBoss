@@ -80,3 +80,10 @@ test('Engine.tick writes no sample when the machine is unreadable', { timeout: 6
 test('Engine.tick writes no sample when actions are off', { timeout: 60000 }, (t) => {
   assert.deepEqual(run(t, { act: false, ticks: ['2026-09-29T14:03:05.000Z'] }), []);
 });
+
+test('Engine.tick records CPU against the cgroup capacity', { timeout: 60000 }, (t) => {
+  const lines = run(t, { machine: { ...machine, cpus: 2, cpuTotalSample: 180, cpuSampleSource: 'cgroup-v2' },
+    ticks: ['2026-09-29T14:03:05.000Z'] });
+  assert.equal(lines[0].cpus, 2);
+  assert.equal(lines[0].cpu, 90);
+});
