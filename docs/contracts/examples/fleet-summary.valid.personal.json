@@ -45,6 +45,14 @@
       "usedPercent": 20,
       "resetAt": "2026-10-09T10:00:00Z",
       "status": "ok"
+    },
+    {
+      "harness": "pi",
+      "accountKey": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "lane": "weekly",
+      "usedPercent": 12,
+      "resetAt": "2026-10-09T10:00:00Z",
+      "status": "ok"
     }
   ],
   "spend": [
@@ -53,6 +61,12 @@
       "role": "worker",
       "harness": "codex",
       "usd": 0.15
+    },
+    {
+      "day": "2026-10-02",
+      "role": "worker",
+      "harness": "pi",
+      "usd": 0.06
     }
   ],
   "alerts": [

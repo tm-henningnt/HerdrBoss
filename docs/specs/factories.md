@@ -149,8 +149,8 @@ The Owner talks to each factory Boss directly. The head office is code, not an a
 
 ### Factory image (ADRs 0003, 0007, 0010, 0015)
 
-- Base: Debian trixie slim. Contents: s6-overlay as PID 1 with one supervised service each for sshd, `herdr server`, and `herdr-boss serve`; ca-certificates, curl, git, openssh-server, procps, lsof, ripgrep, jq; Node 26.10 or newer; gh; Herdr at a pinned version (0.9.3 or newer); Claude Code, Codex CLI, OpenCode; Chrome; a seed checkout of Herdr Boss with its `.git` directory.
-- Pi and `qlik-cli` come in a later image change. `qlik-cli` for arm64 builds from source in a Go build stage.
+- Base: Debian trixie slim. Contents: s6-overlay as PID 1 with one supervised service each for sshd, `herdr server`, and `herdr-boss serve`; ca-certificates, curl, git, openssh-server, procps, lsof, ripgrep, jq; Node 26.10 or newer; gh; Herdr at a pinned version (0.9.3 or newer); Claude Code, Codex CLI, OpenCode, and Pi; Chrome; a seed checkout of Herdr Boss with its `.git` directory.
+- The initial harness set includes Claude Code, Codex CLI, OpenCode, and Pi. The set is open. `qlik-cli` comes in a later image change. `qlik-cli` for arm64 builds from source in a Go build stage.
 - A non-root user `factory` with UID 1000. `TZ` set in the image. A `max-size` on the Docker log driver. A Docker `HEALTHCHECK` on `/api/health`.
 - One `pins.json` holds every version. Pins go into OCI labels.
 - Harness self-update is off. A harness update is an image rebuild.

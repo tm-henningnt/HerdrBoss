@@ -71,11 +71,8 @@
       "maximum": 9007199254740991
     },
     "harness": {
-      "enum": [
-        "claude",
-        "codex",
-        "opencode"
-      ]
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{0,31}$"
     },
     "state": {
       "enum": [
