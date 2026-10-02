@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.example/factories/1.0.0/schema/head-office-role.v1.schema.json",
+  "title": "Head office role record",
+  "version": "1.0.0",
+  "description": "Version 1.0.0. See docs/contracts/factories.md for producers, consumers, and refusal rules.",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "integer",
+      "const": 1
+    },
+    "contractVersion": {
+      "$ref": "common.v1.schema.json#/$defs/contractVersion"
+    },
+    "headOfficeFactoryId": {
+      "$ref": "common.v1.schema.json#/$defs/slug"
+    },
+    "epoch": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "updatedAt": {
+      "$ref": "common.v1.schema.json#/$defs/timestamp"
+    }
+  },
+  "required": [
+    "schema",
+    "contractVersion",
+    "headOfficeFactoryId",
+    "epoch",
+    "updatedAt"
+  ],
+  "additionalProperties": false
+}

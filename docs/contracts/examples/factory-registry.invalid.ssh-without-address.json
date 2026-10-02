@@ -1,0 +1,53 @@
+{
+  "schema": 1,
+  "contractVersion": "1.0.0",
+  "minimumFactoryVersion": "0.1.0",
+  "hosts": [
+    {
+      "hostId": "host-a",
+      "runtime": "orbstack",
+      "personalOnly": true,
+      "codexSandbox": "user-namespaces",
+      "transport": "local"
+    },
+    {
+      "hostId": "host-b",
+      "runtime": "docker-engine-wsl2",
+      "personalOnly": false,
+      "codexSandbox": "unconfined",
+      "transport": "ssh",
+      "dockerContext": "host-b-context"
+    }
+  ],
+  "factories": [
+    {
+      "factoryId": "factory-zero",
+      "name": "factory-zero",
+      "hostId": "host-a",
+      "profile": "personal",
+      "dashboardUrl": "http://factory-zero.example:4477",
+      "version": "0.1.0",
+      "kitRevision": "abcdef012345",
+      "kind": "native"
+    },
+    {
+      "factoryId": "factory-a",
+      "name": "factory-a",
+      "hostId": "host-b",
+      "profile": "personal",
+      "dashboardUrl": "https://factory-a.example",
+      "version": "0.1.0",
+      "kitRevision": "abcdef012345",
+      "kind": "container",
+      "containerName": "hf-factory-a",
+      "ports": {
+        "dashboard": 4478,
+        "ssh": 2222
+      },
+      "image": {
+        "builtAt": "2026-10-02T10:00:00Z",
+        "pinsHash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      }
+    }
+  ]
+}

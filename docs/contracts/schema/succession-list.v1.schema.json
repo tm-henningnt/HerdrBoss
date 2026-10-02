@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.example/factories/1.0.0/schema/succession-list.v1.schema.json",
+  "title": "Owner-signed succession list metadata",
+  "version": "1.0.0",
+  "description": "Version 1.0.0. See docs/contracts/factories.md for producers, consumers, and refusal rules.",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "integer",
+      "const": 1
+    },
+    "contractVersion": {
+      "$ref": "common.v1.schema.json#/$defs/contractVersion"
+    },
+    "listId": {
+      "$ref": "common.v1.schema.json#/$defs/slug"
+    },
+    "issuedAt": {
+      "$ref": "common.v1.schema.json#/$defs/timestamp"
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "factoryId": {
+            "$ref": "common.v1.schema.json#/$defs/slug"
+          },
+          "rank": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "factoryKeyId": {
+            "$ref": "common.v1.schema.json#/$defs/slug"
+          }
+        },
+        "required": [
+          "factoryId",
+          "rank",
+          "factoryKeyId"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 0
+    },
+    "ownerSignature": {
+      "type": "object",
+      "properties": {
+        "algorithm": {
+          "const": "Ed25519"
+        },
+        "keyId": {
+          "$ref": "common.v1.schema.json#/$defs/slug"
+        },
+        "signatureRef": {
+          "$ref": "common.v1.schema.json#/$defs/slug"
+        }
+      },
+      "required": [
+        "algorithm",
+        "keyId",
+        "signatureRef"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "schema",
+    "contractVersion",
+    "listId",
+    "issuedAt",
+    "entries",
+    "ownerSignature"
+  ],
+  "additionalProperties": false
+}

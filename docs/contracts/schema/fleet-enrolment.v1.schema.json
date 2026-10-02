@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.example/factories/1.0.0/schema/fleet-enrolment.v1.schema.json",
+  "title": "Fleet enrolment result metadata",
+  "version": "1.0.0",
+  "description": "Version 1.0.0. See docs/contracts/factories.md for producers, consumers, and refusal rules.",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "type": "integer",
+          "const": 1
+        },
+        "contractVersion": {
+          "$ref": "common.v1.schema.json#/$defs/contractVersion"
+        },
+        "requestId": {
+          "$ref": "common.v1.schema.json#/$defs/slug"
+        },
+        "status": {
+          "const": "enrolled"
+        },
+        "factoryId": {
+          "$ref": "common.v1.schema.json#/$defs/slug"
+        },
+        "headOfficeFactoryId": {
+          "$ref": "common.v1.schema.json#/$defs/slug"
+        },
+        "epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "credentialRefs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "scope": {
+                "enum": [
+                  "fleetRead",
+                  "fleetGuide"
+                ]
+              },
+              "credentialRef": {
+                "$ref": "common.v1.schema.json#/$defs/slug"
+              },
+              "issuedAt": {
+                "$ref": "common.v1.schema.json#/$defs/timestamp"
+              },
+              "expiresAt": {
+                "$ref": "common.v1.schema.json#/$defs/timestamp"
+              },
+              "previousValidUntil": {
+                "$ref": "common.v1.schema.json#/$defs/timestamp"
+              }
+            },
+            "required": [
+              "scope",
+              "credentialRef",
+              "issuedAt",
+              "expiresAt"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 1
+        }
+      },
+      "required": [
+        "schema",
+        "contractVersion",
+        "requestId",
+        "status",
+        "factoryId",
+        "headOfficeFactoryId",
+        "epoch",
+        "credentialRefs"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "type": "integer",
+          "const": 1
+        },
+        "contractVersion": {
+          "$ref": "common.v1.schema.json#/$defs/contractVersion"
+        },
+        "requestId": {
+          "$ref": "common.v1.schema.json#/$defs/slug"
+        },
+        "status": {
+          "const": "refused"
+        },
+        "code": {
+          "enum": [
+            "invalid-invitation",
+            "expired-invitation",
+            "used-invitation",
+            "duplicate-factory",
+            "scope-refused",
+            "unsupported-version"
+          ]
+        }
+      },
+      "required": [
+        "schema",
+        "contractVersion",
+        "requestId",
+        "status",
+        "code"
+      ],
+      "additionalProperties": false
+    }
+  ]
+}
