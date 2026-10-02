@@ -1015,7 +1015,10 @@ async function main() {
       break;
     }
     case 'logs': {
-      process.stdout.write(fs.readFileSync(path.join(DATA_DIR, 'server.log'), 'utf8').split('\n').slice(-100).join('\n'));
+      // service.log rotates by size. Before the first start of a server that writes it, show the launchd file.
+      const rotating = path.join(DATA_DIR, 'service.log');
+      const file = fs.existsSync(rotating) ? rotating : path.join(DATA_DIR, 'server.log');
+      process.stdout.write(fs.readFileSync(file, 'utf8').split('\n').slice(-100).join('\n'));
       break;
     }
     default:

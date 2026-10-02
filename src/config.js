@@ -126,6 +126,10 @@ const DEFAULTS = {
   store: { messages: 'json' },
   port: 4477,
   host: '0.0.0.0',
+  // Host names that the control plane accepts in addition to the built-in rule. See hostAllowedByList().
+  allowedHosts: [],
+  // The server log file: rotate at this size and keep this number of old files.
+  log: { maxMegabytes: 10, keepFiles: 2 },
   access: { tokenFile: DEFAULT_TOKEN_FILE, sessionDays: 30 },
   // Seconds between collection passes.
   tickSeconds: 30,
@@ -192,6 +196,9 @@ const SERVICE_SETTINGS = [
   ['Service', 'orchestratorLabel'],
   ['Service', 'port'],
   ['Service', 'host'],
+  ['Service', 'allowedHosts'],
+  ['Service', 'log.maxMegabytes'],
+  ['Service', 'log.keepFiles'],
   ['Analytics', 'analytics.actionsMinutes'],
 ];
 
@@ -412,6 +419,8 @@ const SERVICE_SETTING_RANGES = new Map([
   ['browsers.orphanDaemonMinAgeSeconds', [60, 86400]],
   ['tickSeconds', [5, 300]],
   ['quotaSeconds', [30, 3600]],
+  ['log.maxMegabytes', [1, 1000]],
+  ['log.keepFiles', [1, 2]],
 ]);
 const SERVICE_SETTING_BOOLEANS = new Set([
   'browsers.reapOrphanDaemons',
@@ -420,6 +429,36 @@ const SERVICE_SETTING_BOOLEANS = new Set([
   'push',
   'analytics.actionsMinutes',
 ]);
+const MAX_ALLOWED_HOSTS = 50;
+// One lower-case DNS label, or a list of labels. A pattern is a name or `*.` and a name. It has no port, user, or path.
+const HOST_NAME = /^(?=.{1,253}$)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$/;
+
+// Check an allowedHosts list. Return the lower-case list. A name matches itself. `*.name` matches each name below `name`.
+export function validateAllowedHosts(value) {
+  if (!Array.isArray(value)) throw new Error('allowedHosts must be a list of host names.');
+  if (value.length > MAX_ALLOWED_HOSTS) throw new Error(`allowedHosts must have at most ${MAX_ALLOWED_HOSTS} entries.`);
+  const seen = new Set();
+  return value.map((entry, index) => {
+    const pattern = typeof entry === 'string' ? entry.trim().toLowerCase() : '';
+    const name = pattern.startsWith('*.') ? pattern.slice(2) : pattern;
+    if (!HOST_NAME.test(name)) throw new Error(`allowedHosts[${index}] must be a host name such as factory-two or *.localhost. A port, a path, an address, and a bare * are not allowed.`);
+    if (pattern.startsWith('*.') && name !== 'localhost' && name.split('.').length < 2) throw new Error(`allowedHosts[${index}] needs at least two labels after *. A wildcard such as *.com is not allowed. *.localhost is the only exception.`);
+    if (seen.has(pattern)) throw new Error(`allowedHosts has a duplicate entry: ${pattern}.`);
+    seen.add(pattern);
+    return pattern;
+  });
+}
+
+// True when the host name matches an entry of the allowedHosts list. hostname has no port and no brackets.
+export function hostAllowedByList(hostname, list) {
+  const host = String(hostname || '').toLowerCase();
+  if (!host || !Array.isArray(list)) return false;
+  return list.some((item) => {
+    const entry = typeof item === 'string' ? item.toLowerCase() : '';
+    return entry.startsWith('*.') ? host.length > entry.length - 1 && host.endsWith(entry.slice(1)) : host === entry;
+  });
+}
+
 const NULLABLE_SERVICE_SETTINGS = new Set(['watch.maxWorkers']);
 const WATCH_WORKER_LANES = new Set(['unmetered', 'codex', 'claude', 'opencodego']);
 
@@ -446,6 +485,10 @@ function validateServiceSettingValues(changes) {
     const range = SERVICE_SETTING_RANGES.get(setting);
     if (Object.hasOwn(ROOT_DEFAULTS, setting)) {
       try { normalizedChanges[setting] = resolveRootPath(value); } catch (error) { throw new Error(`${setting}: ${error.message}`); }
+      continue;
+    }
+    if (setting === 'allowedHosts') {
+      normalizedChanges[setting] = validateAllowedHosts(value);
       continue;
     }
     if (setting === 'watch.maxWorkersByLane') {
@@ -553,6 +596,23 @@ export function loadConfig() {
   // An invalid pool list gives no pools. The lease commands and the bulletin name each error.
   if (process.env.HERDR_BOSS_PUSH === '0') cfg.push = false;
   if (process.env.HERDR_BOSS_PORT) cfg.port = Number(process.env.HERDR_BOSS_PORT);
+  // A hand-edited allowedHosts or log value goes through the same check as the API. An invalid value gives the default.
+  const fallback = (key, check, value, def, set) => {
+    try { check(value); } catch {
+      process.stderr.write(`herdr-boss: config.json ${key} is invalid. Using the default.\n`);
+      set(def);
+    }
+  };
+  fallback('allowedHosts', validateAllowedHosts, cfg.allowedHosts, [], (v) => { cfg.allowedHosts = v; });
+  if (Array.isArray(cfg.allowedHosts) && cfg.allowedHosts.length) cfg.allowedHosts = validateAllowedHosts(cfg.allowedHosts);
+  for (const key of ['maxMegabytes', 'keepFiles']) {
+    const [min, max] = SERVICE_SETTING_RANGES.get(`log.${key}`);
+    const value = cfg.log?.[key];
+    if (!Number.isSafeInteger(value) || value < min || value > max) {
+      process.stderr.write(`herdr-boss: config.json log.${key} is invalid. Using the default.\n`);
+      cfg.log = { ...DEFAULTS.log, ...(isRecord(cfg.log) ? cfg.log : {}), [key]: DEFAULTS.log[key] };
+    }
+  }
   const pools = validateResourcePools(cfg.resourcePools, { dashboardPort: cfg.port });
   cfg.resourcePools = pools.errors.length ? [] : pools.pools;
   cfg.resourcePoolErrors = pools.errors;

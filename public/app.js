@@ -1035,6 +1035,7 @@ function settingsView(s) {
   const attachmentSettings = `<section class="panel"><h2>Pictures and agent messages</h2>${lockInput('attachments.retentionDays', 'Picture retention days', Object.hasOwn(d.attachments || {}, 'retentionDays') ? d.attachments.retentionDays : 30, 1, 365, 'data-policy-attachment="retentionDays"')}${lockInput('agentMessages.retentionDays', 'Agent message text retention days', Object.hasOwn(d.agentMessages || {}, 'retentionDays') ? d.agentMessages.retentionDays : 14, 1, 90, 'data-policy-agent-message="retentionDays"')}${lockInput('agentMessages.metaRetentionDays', 'Agent message metadata retention days', Object.hasOwn(d.agentMessages || {}, 'metaRetentionDays') ? d.agentMessages.metaRetentionDays : 180, 7, 730, 'data-policy-agent-message="metaRetentionDays"')}${lockInput('agentMessages.promptTimeoutSeconds', 'Agent prompt timeout', Object.hasOwn(d.agentMessages || {}, 'promptTimeoutSeconds') ? d.agentMessages.promptTimeoutSeconds : 25, 1, 120, 'data-policy-agent-message="promptTimeoutSeconds"')}</section>`;
   const settingsGroups = ['Paths', 'Machine', 'Quota', 'Status', 'Workers', 'Watch', 'Browsers', 'Service', 'Analytics'];
   const serviceSettingPaths = new Set(['worktreeRoot', 'projectRoot']);
+  const serviceSettingLists = new Set(['allowedHosts']);
   const serviceSettingRanges = {
     'machine.memFreeWarnPercent': [1, 50],
     'quota.warnPercent': [50, 99],
@@ -1050,6 +1051,8 @@ function settingsView(s) {
     'browsers.orphanDaemonMinAgeSeconds': [60, 86400],
     tickSeconds: [5, 300],
     quotaSeconds: [30, 3600],
+    'log.maxMegabytes': [1, 1000],
+    'log.keepFiles': [1, 2],
   };
   const serviceSettingBooleans = new Set(['browsers.reapOrphanDaemons', 'browsers.sweepCodeSignClones', 'watch.quietHours', 'push', 'analytics.actionsMinutes']);
   const serviceRows = settingsGroups.map((group) => {
@@ -1060,6 +1063,8 @@ function settingsView(s) {
         ? `<div class="lane-limits">${[['unmetered', 'Unmetered'], ['codex', 'Codex'], ['claude', 'Claude'], ['opencodego', 'OpenCode Go']].map(([lane, label]) => `<label><span>${label}</span><input type="number" min="1" max="40" step="1" value="${esc(item.value?.[lane] ?? '')}" placeholder="Day value" data-service-setting="${esc(item.setting)}" data-service-lane="${lane}" data-service-group="${esc(group)}" aria-label="Watch ${label} worker cap"></label>`).join('')}</div>`
         : serviceSettingBooleans.has(item.setting)
         ? `<input type="checkbox" data-service-setting="${esc(item.setting)}" data-service-group="${esc(group)}" aria-label="${esc(item.setting)}" ${item.value ? 'checked' : ''}>`
+        : serviceSettingLists.has(item.setting)
+          ? `<input type="text" value="${esc((item.value || []).join(', '))}" placeholder="*.localhost, factory-two" data-service-setting="${esc(item.setting)}" data-service-list data-service-group="${esc(group)}" aria-label="${esc(item.setting)}">`
         : serviceSettingPaths.has(item.setting)
           ? `<input type="text" required value="${esc(value)}" data-service-setting="${esc(item.setting)}" data-service-group="${esc(group)}" aria-label="${esc(item.setting)}">`
         : range
@@ -1067,7 +1072,7 @@ function settingsView(s) {
           : `<code>${esc(value)}</code>`;
       return `<tr><th scope="row"><code>${esc(item.setting)}</code>${helpButton(item.setting)}</th><td>${input}</td><td>${item.source === 'config' ? 'from config.json' : 'default'}${SETTING_HELP[item.setting]?.apply === 'saved-restart' ? ' · restart required' : ''}</td></tr>`;
     }).join('');
-    const canSave = (s.serviceSettings || []).some((item) => item.group === group && (serviceSettingRanges[item.setting] || serviceSettingBooleans.has(item.setting) || serviceSettingPaths.has(item.setting)));
+    const canSave = (s.serviceSettings || []).some((item) => item.group === group && (serviceSettingRanges[item.setting] || serviceSettingBooleans.has(item.setting) || serviceSettingPaths.has(item.setting) || serviceSettingLists.has(item.setting)));
     const controls = canSave ? `<span class="service-settings-group-actions"><span role="status" aria-live="polite" data-service-settings-status="${esc(group)}">${esc(serviceSettingsMessages[group] || '')}</span><button type="button" data-save-service-settings="${esc(group)}">Save</button></span>` : '';
     return `<tr class="service-settings-group"><th colspan="3" scope="colgroup"><span>${group}</span>${controls}</th></tr>${groupRows}`;
   }).join('');
@@ -7869,6 +7874,7 @@ async function saveServiceSettings(group, button) {
       changes[setting] ||= {};
       changes[setting][input.dataset.serviceLane] = input.value === '' ? null : Number(input.value);
     } else if (input.type === 'checkbox') changes[setting] = input.checked;
+    else if (input.dataset.serviceList !== undefined) changes[setting] = input.value.split(/[\s,]+/).filter(Boolean);
     else if (input.type === 'text') changes[setting] = input.value;
     else changes[setting] = input.value === '' && nullableServiceSettings.has(setting) ? null : Number(input.value);
   }

@@ -2081,6 +2081,36 @@ The session lasts 30 days and renews while the device uses the dashboard. It sur
 - Set `host` to `127.0.0.1` to turn off remote access.
 - To change the token, write a new token to the token file and restart the service.
 
+### Allowed hosts
+
+The server accepts a request only when its `Host` header names `localhost`, `127.0.0.1`, `[::1]`, an address of this machine, or a name that ends in `.ts.net`. Set `allowedHosts` to accept more names. The default is an empty list, so the rule does not change. A wildcard such as `*.example.test` needs two labels after `*.`. `*.localhost` is the only exception. An invalid `allowedHosts`, `log.maxMegabytes`, or `log.keepFiles` value in `config.json` gives the default and one warning on standard error that names the key.
+
+Each entry is a host name such as `factory-two`, or a wildcard such as `*.localhost`. The wildcard matches each name below `localhost`, such as `a.localhost`. It does not match `localhost` itself. An entry has no port, no path, and no address. Herdr Boss writes each entry in lower case. A list holds at most 50 entries.
+
+Edit the list in **Settings → Advanced → Service settings → Service**, or in `config.json`. Separate the names with commas. The change takes effect at once.
+
+A listed host name passes only the host check. A request that does not come from `127.0.0.1` still needs the access token. A request from `127.0.0.1` with a `Host` header of `a.localhost` also needs the token.
+
+### Health route
+
+`GET /api/health` returns the liveness of this Herdr Boss. It follows the factory health contract, version 1.0.0. The route has the same access rule as the other `/api/` routes: a request from `127.0.0.1` needs no login, and any other request needs the token.
+
+| Field | Value |
+|---|---|
+| `schema` | The number `1`. |
+| `contractVersion` | The contract version, `1.0.0`. |
+| `version` | The Herdr Boss version from `package.json`. |
+| `kitRevision` | The current kit revision, 12 hexadecimal characters. |
+| `tickAgeSeconds` | The whole seconds since the last collection pass, or `null` before the first pass. |
+| `herdrReachable` | `true` when the last pass read Herdr, `false` when it failed, or `null` before the first pass. |
+| `clockOffsetSeconds` | The clock offset in seconds when `chronyc` reports it, or `null`. Positive means the clock is ahead. |
+
+The body has no path, no host name, and no secret. An unavailable reading is `null`.
+
+### Server log
+
+The server writes its log lines to standard output and to `service.log` in the data directory. The log holds the start line, tick failures, and engine events of type `error` and `guard`. The service log file rotates when it reaches `log.maxMegabytes` (default 10). Herdr Boss renames `service.log` to `service.log.1`, and `service.log.1` to `service.log.2`. It keeps `log.keepFiles` old files (1 or 2, default 2) and deletes the older ones at the next rotation. If the rename fails, Herdr Boss still writes the line to `service.log` and prints one warning each minute on standard error. Both settings are in **Settings → Advanced → Service settings → Service**. They take effect at the next write. The launchd agent also writes standard output to `server.log`. Herdr Boss does not rotate that file. `herdr-boss logs` prints `service.log` when it exists.
+
 When Roamgate runs and its token file exists, the header shows a **Roamgate** link. Herdr Boss reads that token only when you open the link.
 
 ## Usage records
@@ -2317,6 +2347,7 @@ The dashboard uses these routes. A request from another host needs the access to
 | Method and path | Result |
 |---|---|
 | `GET /api/state`, `GET /api/events` | The snapshot, and a server-sent event stream of snapshots. |
+| `GET /api/health` | The health body of the factory contract: version, kit revision, tick age, Herdr reachability, and clock offset. See Health route. |
 | `GET`, `PUT /api/policy` | Read or replace the policy. |
 | `GET /api/models` | The model allow-list. |
 | `GET`, `POST /api/usage` | Read usage, or record an event. |

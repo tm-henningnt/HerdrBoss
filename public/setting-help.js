@@ -730,6 +730,27 @@ export const SETTING_HELP = Object.fromEntries([
     lower: 'Set 127.0.0.1 to turn remote access off.',
     apply: 'restart',
   }),
+  S('service', 'allowedHosts', 'Allowed hosts', {
+    what: 'Host names that the server accepts in addition to localhost, this machine, and names that end in .ts.net. Enter a name such as factory-two, *.localhost for each name below localhost, or *.example.test for each name below example.test. A wildcard needs two labels after *., except *.localhost. A port, an address, and a bare * are not allowed.',
+    default: 'Empty list', unit: 'List of host names', range: 'Up to 50 names',
+    raise: 'A request that names a listed host passes the host check. A request from another machine still needs the access token.',
+    lower: 'Remove a name to refuse requests that use it.',
+    apply: 'service',
+  }),
+  S('service', 'log.maxMegabytes', 'Log size limit', {
+    what: 'The size at which the server log file service.log rotates. The server also writes the log to standard output.',
+    default: '10', unit: 'Megabytes', range: '1 to 1000',
+    raise: 'The log file holds more history and uses more disk space.',
+    lower: 'The log file rotates sooner and holds less history.',
+    apply: 'service',
+  }),
+  S('service', 'log.keepFiles', 'Old log files', {
+    what: 'The number of rotated log files that Herdr Boss keeps, as service.log.1 and service.log.2.',
+    default: '2', unit: 'Files', range: '1 to 2',
+    raise: 'More history stays on disk.',
+    lower: 'Herdr Boss deletes the older file at the next rotation.',
+    apply: 'service',
+  }),
 
   S('analytics', 'analytics.actionsMinutes', 'GitHub Actions minutes', {
     what: 'Lets the service read Actions run times for registered GitHub repositories. Minutes are estimated from run times.',
