@@ -10,6 +10,8 @@ import { isTempDir } from './helpers/test-env.js';
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const realHome = path.resolve(os.userInfo().homedir || os.homedir());
 const realDataDir = path.resolve(path.join(realHome, '.herdr-boss'));
+// Every module that reads the data directory at load time or as a default. A test file that loads one of them must
+// import ./helpers/test-env.js first, so a direct `node --test test/<file>.js` run cannot freeze the live data dir.
 const riskyModules = new Set([
   '../src/engine.js',
   '../src/project-new.js',
@@ -18,6 +20,18 @@ const riskyModules = new Set([
   '../src/server.js',
   '../src/message-store.js',
   '../src/leases.js',
+  '../src/analytics.js',
+  '../src/spend.js',
+  '../src/denials.js',
+  '../src/handoff.js',
+  '../src/agent-messages.js',
+  '../src/collect.js',
+  '../src/task-state.js',
+  '../src/sqlite-store.js',
+  '../src/review-store.js',
+  '../src/kit/workers.js',
+  '../src/kit/locks.js',
+  '../src/harness.js',
 ]);
 
 test('test environment uses temporary home and data paths', () => {

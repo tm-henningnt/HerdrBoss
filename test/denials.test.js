@@ -108,6 +108,11 @@ test('Codex parser counts sandbox causes only for failed outputs and escalation 
   assert.deepEqual(parseCodexLine(JSON.stringify(codexOutput({ stderr: 'Mach port bootstrap_look_up failed (1100)', exit_code: 1 })), ctx).map((e) => e.cause), ['sandbox:mach-port']);
   const metadataOutput = { type: 'response_item', payload: { type: 'function_call_output', output: JSON.stringify({ output: 'EPERM', metadata: { exit_code: 1 } }) } };
   assert.deepEqual(parseCodexLine(JSON.stringify(metadataOutput), ctx).map((e) => e.cause), ['sandbox:eperm']);
+  // Only a function_call row is an escalation request. A custom_tool_call holds a patch or an exec body, and that
+  // body can quote the escalation text, for example a patch to test/denials.test.js. It is not an escalation.
+  const patchCall = { timestamp: iso(NOW), type: 'response_item', payload: { type: 'custom_tool_call', name: 'apply_patch', input: '*** Update File: test/denials.test.js\n+const ESCALATION = /sandbox_permissions: "require_escalated"/;' } };
+  assert.deepEqual(parseCodexLine(JSON.stringify(patchCall), ctx), []);
+  // A code-mode exec body is a real escalation, but an apply_patch body is not.
   const escalation = parseCodexLine(JSON.stringify(codexCall(`await tools.exec_command({ cmd: "git push", sandbox_permissions: "require_escalated", justification: "${SECRET}" })`)), ctx);
   assert.deepEqual(escalation.map((e) => e.cause), ['escalation:request']);
   const fnCall = { timestamp: iso(NOW), type: 'response_item', payload: { type: 'function_call', name: 'shell', arguments: JSON.stringify({ command: ['ls'], sandbox_permissions: 'require_escalated' }) } };

@@ -36,9 +36,9 @@ function fixture(t, { rules = {}, kitModels = models } = {}) {
     if (args[0] === 'pane' && args[1] === 'list') return { panes: [] };
     throw new Error(`Unexpected Herdr call: ${args.join(' ')}`);
   };
-  const env = { HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'ws', HERDR_PANE_ID: 'ws:orch' };
+  const env = { HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'ws', HERDR_PANE_ID: 'ws:orch', HERDR_BOSS_DIR: path.join(root, 'data') };
   const start = (name, options) => startWorker(name, { task: 'x', allow: ['src/'], ...options }, {
-    config, models: kitModels, herdr, env, rulesFile, output: (line) => out.push(line),
+    config, models: kitModels, herdr, env, rulesFile, output: (line) => out.push(line), browserLookup: () => null,
   });
   const sideEffects = () => ({
     worktrees: fs.existsSync(path.join(root, 'wt')) ? fs.readdirSync(path.join(root, 'wt')) : [],
@@ -198,8 +198,8 @@ test('a real start saves the model, its source and force in the run record; a re
     if (args[0] === 'agent' && (args[1] === 'start' || args[1] === 'prompt')) return {};
     throw new Error(`Unexpected Herdr call: ${args.join(' ')}`);
   };
-  const env = { HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'ws', HERDR_PANE_ID: 'ws:orch' };
-  const run = (name, options) => startWorker(name, { task: 'x', allow: ['src/'], kind: 'claude', ...options }, { config, models, herdr, env, rulesFile, output: () => {} });
+  const env = { HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'ws', HERDR_PANE_ID: 'ws:orch', HERDR_BOSS_DIR: path.join(root, 'data') };
+  const run = (name, options) => startWorker(name, { task: 'x', allow: ['src/'], kind: 'claude', ...options }, { config, models, herdr, env, rulesFile, output: () => {}, browserLookup: () => null });
 
   assert.throws(() => run('wmrefused', { model: 'opus' }), OPUS_REFUSAL);
   assert.deepEqual(calls.filter((call) => call === 'pane split' || call === 'agent start'), []);
