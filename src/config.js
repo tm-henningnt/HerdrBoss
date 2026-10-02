@@ -4,6 +4,8 @@ import path from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
 
 const DEFAULT_DATA_DIR = path.resolve(path.join(os.homedir(), '.herdr-boss'));
+// The service data directory. The serve guard compares against DEFAULT_DATA_DIR. The engine and the test harness read
+// HERDR_BOSS_LIVE_DIR through this constant.
 export const LIVE_DATA_DIR = path.resolve(process.env.HERDR_BOSS_LIVE_DIR || DEFAULT_DATA_DIR);
 export const DATA_DIR = path.resolve(process.env.HERDR_BOSS_DIR || LIVE_DATA_DIR);
 export const PROJECTS_DIR = path.join(DATA_DIR, 'projects');
@@ -29,6 +31,50 @@ export function resolveAlias(target) {
       current = parent;
     }
   }
+}
+
+// Refuse an active service before it writes credentials, state, or action records.
+export function assertLiveDataDir(liveDataDir = DEFAULT_DATA_DIR) {
+  if (DATA_DIR !== path.resolve(liveDataDir)) {
+    throw new Error(`Herdr Boss cannot start: the data directory ${DATA_DIR} differs from the live data directory ${liveDataDir}. Use the live directory for serve. Use --read-only-preview for a separate data directory.`);
+  }
+  return DATA_DIR;
+}
+
+export const ROOT_DEFAULTS = Object.freeze({ worktreeRoot: '~/Projects/.herdr-wt', projectRoot: '~/Projects' });
+
+export function resolveRootPath(value, home = os.homedir()) {
+  if (typeof value !== 'string' || !value.trim() || /[\u0000-\u001f\u007f]/.test(value)
+    || !(path.isAbsolute(value) || value === '~' || value.startsWith('~/'))) {
+    throw new Error('A root must be an absolute path or a path that starts with ~. Control characters are not allowed.');
+  }
+  if (value.split(/[\\/]/).includes('..')) throw new Error('A root must not contain a .. segment.');
+  const resolved = path.resolve(value === '~' ? home : value.startsWith('~/') ? path.join(home, value.slice(2)) : value);
+  if (resolved === path.parse(resolved).root) throw new Error('A root must not be the file system root.');
+  return resolved;
+}
+
+// Read roots without creating the data directory. CLI consumers use the saved values on each invocation.
+export function readRootSettings({ dataDir = DATA_DIR } = {}) {
+  const file = path.join(dataDir, 'config.json');
+  const roots = { ...ROOT_DEFAULTS };
+  let config = {};
+  try { config = JSON.parse(fs.readFileSync(file, 'utf8')); }
+  catch (error) {
+    if (error.code === 'ENOENT') return roots;
+    console.error(`Herdr Boss: ${file} is not valid JSON. Using the default roots.`);
+    return roots;
+  }
+  if (!config || typeof config !== 'object' || Array.isArray(config)) {
+    console.error(`Herdr Boss: ${file} is not a JSON object. Using the default roots.`);
+    return roots;
+  }
+  for (const setting of Object.keys(roots)) {
+    if (!Object.hasOwn(config, setting)) continue;
+    try { resolveRootPath(config[setting]); roots[setting] = config[setting]; }
+    catch { console.error(`Herdr Boss: ${file} has an invalid ${setting}. Using the default ${setting}.`); }
+  }
+  return roots;
 }
 
 // A preview tick writes state.json, rules.json, bulletin.md, and quota history. Refuse a preview that would write them
@@ -76,6 +122,7 @@ export function assertDataWritable(dir = DATA_DIR) {
 }
 
 const DEFAULTS = {
+  ...ROOT_DEFAULTS,
   store: { messages: 'json' },
   port: 4477,
   host: '0.0.0.0',
@@ -120,6 +167,8 @@ const DEFAULTS = {
 
 const CONFIG_SOURCE = Symbol('configSource');
 const SERVICE_SETTINGS = [
+  ['Paths', 'worktreeRoot'],
+  ['Paths', 'projectRoot'],
   ['Machine', 'machine.memFreeWarnPercent'],
   ['Quota', 'quota.warnPercent'],
   ['Quota', 'quota.criticalPercent'],
@@ -342,7 +391,7 @@ export function serviceSettingsView(cfg) {
     return {
       group,
       setting,
-      value: value && typeof value === 'object' ? structuredClone(value) : value,
+      value: Object.hasOwn(ROOT_DEFAULTS, setting) ? resolveRootPath(value) : value && typeof value === 'object' ? structuredClone(value) : value,
       source: isConfigured ? 'config' : 'default',
     };
   });
@@ -395,6 +444,10 @@ function validateServiceSettingValues(changes) {
   const normalizedChanges = {};
   for (const [setting, value] of entries) {
     const range = SERVICE_SETTING_RANGES.get(setting);
+    if (Object.hasOwn(ROOT_DEFAULTS, setting)) {
+      try { normalizedChanges[setting] = resolveRootPath(value); } catch (error) { throw new Error(`${setting}: ${error.message}`); }
+      continue;
+    }
     if (setting === 'watch.maxWorkersByLane') {
       if (!isRecord(value)) throw new Error('watch.maxWorkersByLane must be an object of optional lane caps.');
       const normalized = { ...DEFAULTS.watch.maxWorkersByLane };

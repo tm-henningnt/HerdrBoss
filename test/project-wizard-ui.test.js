@@ -4,7 +4,7 @@ import { createWizard, failureMessage, NETWORK_MESSAGE, MAX_FAILURES } from '../
 import { DRAFT_KEY, emptyDraft } from '../public/project-wizard.js';
 
 // A fake page: a view that records the HTML, a scripted fetch, a manual timer queue, and a memory storage.
-function setup({ responses = [], content = false, confirmAnswer = true } = {}) {
+function setup({ responses = [], content = false, confirmAnswer = true, suggestedGroup } = {}) {
   const calls = [];
   const queue = [];
   let ids = 0;
@@ -13,6 +13,7 @@ function setup({ responses = [], content = false, confirmAnswer = true } = {}) {
   const shown = { open: false, html: '', focus: 0, confirms: 0 };
   const script = [...responses];
   const wizard = createWizard({
+    suggestedGroup,
     view: { patch: (html) => { shown.html = html; }, focusFirst: () => { shown.focus += 1; }, isOpen: () => shown.open, show: () => { shown.open = true; }, hide: () => { shown.open = false; } },
     fetchJson: async (method, url, body) => {
       calls.push({ method, url, body });
@@ -49,6 +50,24 @@ test('failureMessage maps each status to a fixed sentence', () => {
   assert.equal(failureMessage(400, 'The slug is taken.'), 'The slug is taken.');
   assert.equal(failureMessage(502, 'stack trace /Users/x'), 'The service reported an error.');
   assert.equal(failureMessage(404, ''), 'The project was not found.');
+});
+
+test('the wizard uses the current project root suggestion and keeps explicit saved folders', async () => {
+  let root = '/tmp/projects one';
+  const t = setup({ suggestedGroup: () => root });
+  await t.wizard.open();
+  assert.equal(t.wizard.state.draft.group, root);
+  t.wizard.state.draft.group = '/tmp/explicit group';
+  await t.wizard.open();
+  assert.equal(t.wizard.state.draft.group, '/tmp/explicit group');
+  root = '/tmp/projects two';
+  t.wizard.discard();
+  assert.equal(t.wizard.state.draft.group, root);
+  const saved = setup({ suggestedGroup: () => root });
+  saved.store.set(DRAFT_KEY, JSON.stringify({ ...emptyDraft(), folderMode: 'path', path: '/tmp/explicit/path' }));
+  await saved.wizard.open();
+  assert.equal(saved.wizard.state.draft.path, '/tmp/explicit/path');
+  assert.equal(saved.wizard.state.draft.group, '');
 });
 
 test('a non-JSON 401 shows Sign in again, and a thrown fetch shows the fixed network sentence', async () => {

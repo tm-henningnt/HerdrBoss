@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
-import { loadConfig, migrateAccessFiles, assertPreviewDataDir, assertDataWritable, sandboxWriteError, DATA_DIR, PROJECTS_DIR, dashboardUrl } from './config.js';
+import { loadConfig, migrateAccessFiles, assertPreviewDataDir, assertLiveDataDir, assertDataWritable, sandboxWriteError, DATA_DIR, PROJECTS_DIR, dashboardUrl } from './config.js';
 import { writeProject, statusWarnings, capDoneTasks, STATUS_WARN_BYTES, SLUG } from './projects.js';
 import { loadProjectConfig } from './kit/config.js';
 import { maskDeep, maskBrowserText, maskCliError, redactBrowserSecrets } from './browser-url-mask.js';
@@ -385,8 +385,11 @@ async function main() {
     if (result?.exitCode) process.exitCode = result.exitCode;
     return;
   }
-  // Refuse an unsafe preview before loadConfig() creates the data directory.
-  if (cmd === 'serve' && args.includes('--read-only-preview')) assertPreviewDataDir();
+  // Check the startup data directory before loadConfig() creates it.
+  if (cmd === 'serve') {
+    if (args.includes('--read-only-preview')) assertPreviewDataDir();
+    else if (!args.includes('--host')) assertLiveDataDir(); // --host without a preview is a usage error below
+  }
   const cfg = loadConfig();
   switch (cmd) {
     case 'lanes': {

@@ -106,6 +106,7 @@ try {
   const { view, state } = JSON.parse(result.trim());
   const keys = view.map((item) => item.setting);
   assert.deepEqual(keys, [
+    'worktreeRoot', 'projectRoot',
     'machine.memFreeWarnPercent',
     'quota.warnPercent', 'quota.criticalPercent',
     'staleStatusMinutes',
@@ -117,6 +118,7 @@ try {
     'tickSeconds', 'quotaSeconds', 'push', 'alertCooldownSeconds', 'providerKinds', 'orchestratorLabel', 'port', 'host', 'analytics.actionsMinutes',
   ]);
   assert.deepEqual(view.map(({ source }) => source), [
+    'default', 'default',
     'config', 'config', 'config', 'config', 'config', 'default', 'default', 'config', 'config', 'default', 'config', 'config',
     'config', 'default', 'default', 'config', 'config', 'config', 'default', 'config', 'config', 'config', 'config', 'default',
   ]);
@@ -425,6 +427,7 @@ test('PUT /api/settings persists allowed values and updates the running engine c
   cfg.tickSeconds = 3600;
   let engine;
   const { server, close } = serve(cfg, {
+    liveDataDir: process.env.HERDR_BOSS_DIR,
     createEngine: (config) => {
       engine = new EventEmitter();
       engine.cfg = config;
@@ -452,6 +455,8 @@ test('PUT /api/settings persists allowed values and updates the running engine c
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ changes: {
+      worktreeRoot: '/tmp/fixture worker trees',
+      projectRoot: '~/fixture projects',
       'quota.warnPercent': 85,
       'quota.criticalPercent': 96,
       'machine.memFreeWarnPercent': 22,
@@ -466,6 +471,9 @@ test('PUT /api/settings persists allowed values and updates the running engine c
   assert.equal(response.status, 200);
   const result = await response.json();
   assert.equal(result.ok, true);
+  assert.equal(engine.cfg.worktreeRoot, '/tmp/fixture worker trees');
+  assert.equal(engine.cfg.projectRoot, '~/fixture projects');
+  assert.equal(result.settings.find(({ setting }) => setting === 'projectRoot').value, path.join(homeDir, 'fixture projects'));
   assert.equal(engine.cfg.quota.warnPercent, 85);
   assert.equal(engine.cfg.quota.criticalPercent, 96);
   assert.equal(engine.cfg.machine.memFreeWarnPercent, 22);
@@ -485,6 +493,8 @@ test('PUT /api/settings persists allowed values and updates the running engine c
     { unmetered: 12, codex: 8, claude: null, opencodego: 4 });
   const saved = JSON.parse(fs.readFileSync(configFile, 'utf8'));
   assert.deepEqual(saved.other, { keep: true });
+  assert.equal(saved.worktreeRoot, '/tmp/fixture worker trees');
+  assert.equal(saved.projectRoot, '~/fixture projects');
   assert.equal(saved.quota.note, 'keep');
   assert.equal(saved.watch.maxWorkers, 20);
   assert.deepEqual([saved.tickSeconds, saved.quotaSeconds, saved.push], [20, 600, false]);
@@ -545,6 +555,7 @@ test('POST /api/watch/start and /api/watch/stop write and clear the watch state,
   cfg.port = 0;
   cfg.tickSeconds = 3600;
   const { server, close } = serve(cfg, {
+    liveDataDir: process.env.HERDR_BOSS_DIR,
     createEngine: (config) => {
       const engine = new EventEmitter();
       engine.cfg = config;
@@ -730,6 +741,7 @@ test('the policy API saves per-harness model assignments and rejects unsafe mode
   cfg.port = 0;
   cfg.tickSeconds = 3600;
   const { server, close } = serve(cfg, {
+    liveDataDir: process.env.HERDR_BOSS_DIR,
     createEngine: () => {
       const engine = new EventEmitter();
       engine.state = { control: null, quotas: [{ provider: 'codex', windows: [{ key: 'primary', label: 'Daily', windowMinutes: 1440, resetsAt: new Date(Date.now() + 12 * 3600000).toISOString() }] }] };
@@ -843,6 +855,7 @@ test('the model catalog endpoint lists free opencode/ models only for the openco
   cfg.port = 0;
   cfg.tickSeconds = 3600;
   const { server, close } = serve(cfg, {
+    liveDataDir: process.env.HERDR_BOSS_DIR,
     createEngine: () => {
       const engine = new EventEmitter();
       engine.state = { control: null, quotas: [] };
@@ -896,6 +909,7 @@ console.log(JSON.stringify({ result }));
   const bossHandoff = { pane: 'ws-boss:p1', workspace: 'ws-boss', label: 'Boss' };
   let engine;
   const { server, close } = serve(cfg, {
+    liveDataDir: process.env.HERDR_BOSS_DIR,
     createEngine: () => {
       engine = new EventEmitter();
       engine.state = {
@@ -959,6 +973,7 @@ test('the lease release endpoint refuses a changed lease and releases a matching
   cfg.port = 0;
   cfg.tickSeconds = 3600;
   const { server, close } = serve(cfg, {
+    liveDataDir: process.env.HERDR_BOSS_DIR,
     createEngine: () => {
       const engine = new EventEmitter();
       engine.state = { control: null, quotas: [] };
@@ -1021,6 +1036,7 @@ test('the messages API validates Owner sends, refuses cross-origin and unauthent
   cfg.tickSeconds = 3600;
   let engine;
   const { server, close } = serve(cfg, {
+    liveDataDir: process.env.HERDR_BOSS_DIR,
     createEngine: () => {
       engine = new EventEmitter();
       engine.state = { control: { projects: { alpha: { slug: 'alpha', workspace: 'wA', orch: { pane: 'wA:p1' } } } }, herdr: { panes: [] } };
@@ -1142,6 +1158,7 @@ test('chat routes list writable threads, page messages, and mark Owner messages 
   cfg.port = 0;
   cfg.tickSeconds = 3600;
   const { server, close } = serve(cfg, {
+    liveDataDir: process.env.HERDR_BOSS_DIR,
     createEngine: () => {
       const engine = new EventEmitter();
       engine.state = { control: { projects: {
@@ -1215,6 +1232,7 @@ test('the chat routes mark each record with its channel, and a report is not cha
   cfg.port = 0;
   cfg.tickSeconds = 3600;
   const { server, close } = serve(cfg, {
+    liveDataDir: process.env.HERDR_BOSS_DIR,
     createEngine: () => {
       const engine = new EventEmitter();
       engine.state = { control: { projects: { alpha: { project: 'Alpha Project', orch: { pane: 'wA:p1' } } } } };
@@ -1308,6 +1326,7 @@ test('message events stream local changes and report a second process append onc
   };
   let engine;
   const { server, close } = serve(cfg, {
+    liveDataDir: process.env.HERDR_BOSS_DIR,
     createEngine: (config, options) => {
       engine = new Engine(config, { ...options, collectors, kitRoot: path.join(dataDir, 'kit'), lockDataDir: dataDir });
       return engine;
@@ -1548,6 +1567,7 @@ test('the browser tab-close route closes one tab, refuses an attached tab, repor
   cfg.tickSeconds = 3600;
   const calls = [];
   const { server, close } = serve(cfg, {
+    liveDataDir: process.env.HERDR_BOSS_DIR,
     createEngine: () => {
       const engine = new EventEmitter();
       engine.state = { control: { projects: { alpha: {} } } };
@@ -1607,6 +1627,7 @@ test('the bookmark API lists, adds, renames, moves, removes, sets the start page
   cfg.port = 0;
   cfg.tickSeconds = 3600;
   const { server, close } = serve(cfg, {
+    liveDataDir: process.env.HERDR_BOSS_DIR,
     createEngine: () => {
       const engine = new EventEmitter();
       engine.state = { control: { projects: { alpha: {} } } };
@@ -1999,6 +2020,7 @@ test('the resource pool API creates, updates, and removes pools safely', { timeo
   cfg.tickSeconds = 3600;
   let poolEngine;
   const { server, close } = serve(cfg, {
+    liveDataDir: process.env.HERDR_BOSS_DIR,
     createEngine: (engineCfg, options) => {
       poolEngine = new Engine(engineCfg, { ...options, act: false, push: false });
       poolEngine.state = { resourceLeases: { pools: engineCfg.resourcePools, errors: [], leases: [] } };
@@ -2298,6 +2320,7 @@ test('the avatar routes store an image with mode 0600, and read and remove it ag
   cfg.port = 0;
   cfg.tickSeconds = 3600;
   const { server, close } = serve(cfg, {
+    liveDataDir: process.env.HERDR_BOSS_DIR,
     createEngine: () => {
       const engine = new EventEmitter();
       engine.state = { control: { projects: { alpha: { slug: 'alpha', label: 'Alpha', orch: { pane: 'w1' } } } } };
@@ -2596,6 +2619,7 @@ test('/api/settings/prices reads the price table and writes a validated override
   cfg.port = 0;
   cfg.tickSeconds = 3600;
   const { server, close } = serve(cfg, {
+    liveDataDir: process.env.HERDR_BOSS_DIR,
     createEngine: (config) => {
       const engine = new EventEmitter();
       engine.cfg = config;

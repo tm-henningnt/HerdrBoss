@@ -45,7 +45,7 @@ async function views(code = source) {
     for (const name of match[1].split(',').map((item) => item.trim()).filter(Boolean)) context[name] = module[name];
   }
   const body = code.replace(/^import [^\n]*\n/gm, '');
-  vm.runInNewContext(`${body}\nthis.views = { settingsView, allocationView, agentsView, boardView, setModels: (m) => { models = m; }, setState: (v) => { state = v; }, setDraft: (v) => { policyDraft = v; }, getDraft: () => policyDraft };`, context);
+  vm.runInNewContext(`${body}\nthis.views = { settingsView, allocationView, agentsView, boardView, saveServiceSettings, setModels: (m) => { models = m; }, setState: (v) => { state = v; }, setDraft: (v) => { policyDraft = v; }, getDraft: () => policyDraft };`, context);
   return { ...context.views, context };
 }
 
@@ -68,6 +68,27 @@ function fixture() {
   };
 }
 const catalog = { defaultModel: 'a', defaultEffort: 'high', allowedEfforts: ['high'], allowedModels: ['a', 'b'] };
+
+test('Settings renders editable roots and saves paths as strings', async () => {
+  const app = await views();
+  app.setModels({ codex: catalog, claude: catalog });
+  const html = app.settingsView(fixture());
+  for (const setting of ['worktreeRoot', 'projectRoot']) assert.match(html, new RegExp(`type="text"[^>]*data-service-setting="${setting}"[^>]*data-service-group="Paths"`));
+  assert.match(html, /data-save-service-settings="Paths"/);
+  let sent;
+  app.context.document = {
+    querySelectorAll: () => [
+      { type: 'text', dataset: { serviceSetting: 'worktreeRoot' }, value: '/tmp/worker trees' },
+      { type: 'text', dataset: { serviceSetting: 'projectRoot' }, value: '~/projects' },
+    ],
+    querySelector: () => ({ textContent: '' }),
+  };
+  app.context.fetch = async (_url, request) => { sent = JSON.parse(request.body); return { ok: true, json: async () => ({ settings: [] }) }; };
+  const button = { disabled: false };
+  await app.saveServiceSettings('Paths', button);
+  assert.deepEqual(sent.changes, { worktreeRoot: '/tmp/worker trees', projectRoot: '~/projects' });
+  assert.equal(button.disabled, false);
+});
 
 // The section of each info button: the nearest h2 or h3 before it.
 function buttons(html) {

@@ -356,7 +356,7 @@ const collectors = {
   collectProcesses: async () => new Map(), collectQuotas: async () => [], collectWorktreeCounts: async () => ({}),
   collectCwdProcesses: async () => [], collectMissingWorktreeProcesses: async () => [], collectPiModels: async () => ({ models: [] }),
 };
-const app = serve(loadConfig(), { createEngine: (config, options) => new Engine(config, { ...options, collectors }) });
+const app = serve(loadConfig(), { liveDataDir: process.env.HERDR_BOSS_DIR, createEngine: (config, options) => new Engine(config, { ...options, collectors }) });
 try {
   if (!app.server.listening) await new Promise((resolve, reject) => { app.server.once('listening', resolve); app.server.once('error', reject); });
   const base = 'http://127.0.0.1:' + app.server.address().port;

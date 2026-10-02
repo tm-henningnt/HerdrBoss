@@ -363,7 +363,7 @@ async function startServer(t, { readOnlyPreview = false, run } = {}) {
   cfg.tickSeconds = 3600;
   const createEngine = () => { const engine = new EventEmitter(); engine.state = { control }; engine.tick = async () => engine.state; engine.log = () => {}; return engine; };
   const pane = fakePane({ onPrompt: (p) => { p.text = SHOWN; } });
-  const app = serve(cfg, { readOnlyPreview, createEngine, goalSet: { run: run ?? pane.run, now: pane.now, sleep: pane.sleep } });
+  const app = serve(cfg, { liveDataDir: process.env.HERDR_BOSS_DIR, readOnlyPreview, createEngine, goalSet: { run: run ?? pane.run, now: pane.now, sleep: pane.sleep } });
   t.after(async () => { await app.close(); });
   await new Promise((resolve, reject) => { app.server.once('listening', resolve); app.server.once('error', reject); });
   const base = `http://127.0.0.1:${app.server.address().port}`;

@@ -168,6 +168,19 @@ test('a folder that Boss and orchestrator panes share gives no folder role', () 
   assert.equal(classify({ sessionId: 'old', cwd: '/x/both' }, { ...state, repos: [{ slug: 'p', repo: '/x/both' }], worktreeRoot: '/wt' }).role, 'orchestrator');
 });
 
+test('a spend scan uses the saved service worktree root when no root option is supplied', async () => {
+  const home = newHome();
+  const { dataDir } = dirs(home);
+  fs.mkdirSync(dataDir, { recursive: true });
+  const trees = path.join(home, 'custom worker trees');
+  fs.writeFileSync(path.join(dataDir, 'config.json'), JSON.stringify({ worktreeRoot: trees }));
+  writeLines(path.join(home, '.claude', 'projects', '-x', 'w1.jsonl'), [claudeRow({ cwd: path.join(trees, 'Shop', 'fix1') })]);
+  await scanSpend({ home, dataDir, now: NOW, repos: [{ slug: 'shop', repo: path.join(home, 'Shop') }], fillUsage: false });
+  const summary = spendSummary({ dataDir, now: NOW, prices: {} });
+  assert.equal(summary.days[0].roles.find((row) => row.role === 'worker').tokens, 135);
+  assert.equal(summary.days[0].roles.some((row) => row.role === 'other'), false);
+});
+
 test('a scan sums per day and role, reads incrementally, and prices only the known models', async () => {
   const home = newHome();
   const { dataDir, worktreeRoot } = dirs(home);

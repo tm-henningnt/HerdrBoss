@@ -76,7 +76,7 @@ async function start(t, { readOnlyPreview = false } = {}) {
   cfg.host = '127.0.0.1';
   cfg.port = 0;
   cfg.tickSeconds = 3600;
-  const app = serve(cfg, { readOnlyPreview, createEngine: collectorsEngine, projectNew: { runFlow, flowOptions: flowOptions() } });
+  const app = serve(cfg, { liveDataDir: process.env.HERDR_BOSS_DIR, readOnlyPreview, createEngine: collectorsEngine, projectNew: { runFlow, flowOptions: flowOptions() } });
   t.after(async () => { await app.close(); });
   await new Promise((resolve, reject) => { app.server.once('listening', resolve); app.server.once('error', reject); });
   const base = `http://127.0.0.1:${app.server.address().port}`;

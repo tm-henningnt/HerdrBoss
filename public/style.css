@@ -1485,6 +1485,7 @@ p.wizard-errors { padding-left: 10px; }
 .service-settings-group-actions [role="status"] { color: color-mix(in srgb, var(--ok) 70%, var(--text)); font-size: 11px; font-weight: 500; }
 .service-settings-group-actions button { padding: 4px 9px; font-size: 11px; }
 .service-settings-table td:nth-child(2) input[type="number"] { width: 112px; max-width: 100%; }
+.service-settings-table td:nth-child(2) input[type="text"] { width: 32ch; max-width: 100%; }
 .service-settings-table td:nth-child(2) input[type="checkbox"] { width: 16px; height: 16px; vertical-align: middle; }
 .service-settings-note { margin: 12px 0 0; color: var(--muted); font-size: 12.5px; }
 
@@ -1608,6 +1609,7 @@ pre { max-width: 100%; overflow-x: auto; }
   .agent .who .pill { flex-shrink: 1; min-width: 0; }
   .browser-navigate button { min-height: 44px; }
   .service-settings-table td:nth-child(2) input[type="checkbox"] { width: 22px; height: 22px; }
+  .service-settings-table td:nth-child(2) input[type="text"] { width: 112px; }
   .service-settings-table td:has(> input[type="checkbox"]) { display: flex; align-items: center; min-height: 44px; }
 }
 

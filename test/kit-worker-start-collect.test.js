@@ -1010,6 +1010,8 @@ test('the worker config view masks setup and shows the home folder as ~', () => 
   assert.deepEqual(field(plain, 'setup'), { key: 'setup', value: 'not set', source: 'default' });
   assert.deepEqual(field(plain, 'worktreeRoot'), { key: 'worktreeRoot', value: '~/Projects/.herdr-wt', source: 'default' });
   assert.deepEqual(field(plain, 'allowedModels'), { key: 'allowedModels', value: 'not set', source: 'default' });
+  const machine = workerConfigView({ ...PROJECT_DEFAULTS, worktreeRoot: `${home}/Projects/.herdr-wt` }, { home });
+  assert.deepEqual(field(machine, 'worktreeRoot'), { key: 'worktreeRoot', value: '~/Projects/.herdr-wt', source: 'default' });
 });
 
 test('worker dialog and screen reads use the recent-unwrapped source', async () => {

@@ -183,6 +183,19 @@ test('serve refuses a data directory that is a symlink to the live service direc
   assert.deepEqual(fs.readdirSync(liveDir), [], 'a refused preview writes nothing into the live service directory');
 });
 
+test('an injected live directory cannot make a live data directory safe for a preview', (t) => {
+  const home = temporaryDir('injected-home');
+  const dataDir = temporaryDir('injected-data');
+  t.after(() => { fs.rmSync(home, { recursive: true, force: true }); fs.rmSync(dataDir, { recursive: true, force: true }); });
+  const source = refusalProbe.replace('readOnlyPreview: true,', "readOnlyPreview: true, liveDataDir: process.env.HOME + '/other',");
+  const result = runProbe(home, { HERDR_BOSS_DIR: dataDir, HERDR_BOSS_LIVE_DIR: dataDir }, source);
+  assert.equal(result.status, 0, result.stderr);
+  const answer = JSON.parse(result.stdout.trim().split('\n').at(-1).slice('RESULT '.length));
+  assert.equal(answer.engineCreated, false);
+  assert.match(answer.refused, /live service data directory/);
+  assert.deepEqual(fs.readdirSync(dataDir), []);
+});
+
 test('serve refuses a data directory that is a symlink to the default service directory', { timeout: 40000 }, async (t) => {
   const home = temporaryDir('home');
   const root = temporaryDir('alias');

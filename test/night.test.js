@@ -783,7 +783,7 @@ const collectors = {
   collectPiModels: async () => ({ models: [] }),
 };
 const cfg = loadConfig();
-const app = serve(cfg, { createEngine: (config, options) => new Engine(config, { ...options, collectors }) });
+const app = serve(cfg, { liveDataDir: process.env.HERDR_BOSS_DIR, createEngine: (config, options) => new Engine(config, { ...options, collectors }) });
 try {
   if (!app.server.listening) await new Promise((resolve, reject) => {
     app.server.once('listening', resolve);

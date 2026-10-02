@@ -23,6 +23,21 @@ function assertRejectedSetting(t, key, value, config = {}) {
   assert.throws(() => writeServiceSettings({ [key]: value }, { dataDir }), `${key} refuses ${value}`);
 }
 
+test('project and worktree roots are visible path settings with the current defaults', (t) => {
+  const defaults = serviceSettingsView({});
+  for (const [setting, leaf] of [['projectRoot', 'Projects'], ['worktreeRoot', 'Projects/.herdr-wt']]) {
+    assert.deepEqual(defaults.find((item) => item.setting === setting), {
+      group: 'Paths', setting, value: path.join(os.homedir(), leaf), source: 'default',
+    });
+    const dataDir = configDir(t, { untouched: true });
+    const target = path.join(dataDir, 'custom root');
+    writeServiceSettings({ [setting]: target }, { dataDir });
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dataDir, 'config.json'), 'utf8')), { untouched: true, [setting]: target });
+    for (const value of ['', 'relative/path', 1, null, '/tmp/root\nother', '/tmp/root\0other']) assertRejectedSetting(t, setting, value);
+    assertSetting(t, setting, '~/custom roots');
+  }
+});
+
 test('service settings accept each documented range and reject values outside it', (t) => {
   for (const [key, minimum, maximum] of [
     ['machine.memFreeWarnPercent', 1, 50],

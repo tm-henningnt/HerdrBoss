@@ -46,6 +46,7 @@ test('browser APIs filter sessions, tabs, navigation, bookmarks, state, and erro
   engine.tick = async () => engine.state;
   engine.log = () => {};
   const app = serve(cfg, {
+    liveDataDir: process.env.HERDR_BOSS_DIR,
     createEngine: () => engine,
     browserActions: {
       browserStatus: async (value) => value,
@@ -137,7 +138,7 @@ test('dashboard bookmarks open stored URLs and save the current tab without retu
   engine.log = () => {};
   const calls = [];
   let attached = false;
-  const app = serve(cfg, { createEngine: () => engine, browserActions: {
+  const app = serve(cfg, { liveDataDir: process.env.HERDR_BOSS_DIR, createEngine: () => engine, browserActions: {
     listBrowserTabs: async () => [{ id: 'tab-1', title: 'Callback', url: callback }],
     tabAttached: async () => attached,
     browserNavigate: async (project, tab, url) => { calls.push({ project, tab, url }); return { url }; },

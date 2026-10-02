@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { DATA_DIR, ROOT_DEFAULTS, readRootSettings } from '../config.js';
 
 export const KIT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 export const MODELS_FILE = path.join(KIT_ROOT, 'kit', 'models.json');
@@ -10,7 +11,7 @@ export const DEFAULT_BRIEF_TEMPLATE = path.join(KIT_ROOT, 'kit', 'templates', 'w
 export const DEFAULT_RULES_FILE = path.join(process.env.HERDR_BOSS_DIR || path.join(os.homedir(), '.herdr-boss'), 'rules.json');
 
 // All worker worktrees share one parent folder, so a Codex sandbox needs one writable root for them.
-export const DEFAULT_WORKTREE_ROOT = '~/Projects/.herdr-wt';
+export const DEFAULT_WORKTREE_ROOT = ROOT_DEFAULTS.worktreeRoot;
 
 export function expandHome(value, home = os.homedir()) {
   if (value === '~') return home;
@@ -18,8 +19,8 @@ export function expandHome(value, home = os.homedir()) {
   return value;
 }
 
-export function sharedWorktreeRoot(home = os.homedir()) {
-  return expandHome(DEFAULT_WORKTREE_ROOT, home);
+export function sharedWorktreeRoot(home = os.homedir(), dataDir = DATA_DIR) {
+  return path.resolve(expandHome(readRootSettings({ dataDir }).worktreeRoot, home));
 }
 
 export const PROJECT_DEFAULTS = Object.freeze({
@@ -175,6 +176,7 @@ export function loadProjectConfig({ cwd = process.cwd(), file = '.herdr-boss.jso
   const repo = path.basename(mainRoot);
   const config = {
     ...PROJECT_DEFAULTS,
+    worktreeRoot: readRootSettings().worktreeRoot,
     ...user,
     slug: user.slug ?? repo.toLowerCase(),
   };
@@ -230,6 +232,11 @@ function sameValue(a, b) {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
+function sameRoot(a, b, home) {
+  if (typeof a !== 'string' || typeof b !== 'string') return sameValue(a, b);
+  return path.resolve(expandHome(a, home)) === path.resolve(expandHome(b, home));
+}
+
 // Show the home folder as ~, and keep one ~ form when the value already uses it.
 function homeRelative(value, home = os.homedir()) {
   if (typeof value !== 'string' || !home) return value;
@@ -243,7 +250,7 @@ function homeRelative(value, home = os.homedir()) {
 export function workerConfigView(config, { home = os.homedir() } = {}) {
   const fields = WORKER_CONFIG_FIELDS.map((key) => {
     const raw = config?.[key];
-    const source = sameValue(raw, PROJECT_DEFAULTS[key]) ? 'default' : 'config';
+    const source = (key === 'worktreeRoot' ? sameRoot(raw, PROJECT_DEFAULTS[key], home) : sameValue(raw, PROJECT_DEFAULTS[key])) ? 'default' : 'config';
     let value = raw;
     if (key === 'setup') value = raw ? 'set' : 'not set';
     else if (key === 'worktreeRoot') value = homeRelative(raw, home);
