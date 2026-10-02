@@ -123,7 +123,9 @@ test('provider probe timeouts back off and reset after a successful read', { tim
     { advance: 300001, tick: true }, { advance: 1000, resolve: BOTH },
     { advance: 300001, tick: true },
   ] });
-  assert.deepEqual(out.steps.map((step) => step.probeTimeouts.at(-1)?.claude), [20000, 45000, 90000, 90000, 20000]);
+  assert.deepEqual(out.steps.map((step) => step.probeTimeouts.at(-1)?.claude), [60000, 90000, 90000, 90000, 60000]);
+  assert.deepEqual(out.steps.map((step) => step.probeTimeouts.at(-1)?.opencodego), [20000, 45000, 90000, 90000, 90000]);
+  assert.deepEqual(out.steps.map((step) => step.probeTimeouts.at(-1)?.codex), [20000, 20000, 20000, 20000, 20000]);
   assert.equal(out.steps.at(-1).reads, 5);
 });
 

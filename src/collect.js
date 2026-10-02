@@ -86,13 +86,19 @@ export async function collectHerdr(orchLabel) {
 
 export const QUOTA_PROVIDERS = Object.freeze(['codex', 'claude', 'opencodego']);
 export const QUOTA_TIMEOUT_BACKOFF_MS = Object.freeze([20_000, 45_000, 90_000]);
-export const DEFAULT_QUOTA_TIMEOUTS_MS = Object.freeze(Object.fromEntries(QUOTA_PROVIDERS.map((provider) => [provider, QUOTA_TIMEOUT_BACKOFF_MS[0]])));
+export const QUOTA_TIMEOUT_BACKOFF_BY_PROVIDER_MS = Object.freeze({
+  codex: QUOTA_TIMEOUT_BACKOFF_MS,
+  claude: Object.freeze([60_000, 90_000]),
+  opencodego: QUOTA_TIMEOUT_BACKOFF_MS,
+});
+export const DEFAULT_QUOTA_TIMEOUTS_MS = Object.freeze(Object.fromEntries(QUOTA_PROVIDERS.map((provider) => [provider, QUOTA_TIMEOUT_BACKOFF_BY_PROVIDER_MS[provider][0]])));
 export const QUOTA_PROBE_HISTORY_LIMIT = 100;
 const QUOTA_PROBE_HISTORY_FILE = path.join(DATA_DIR, 'quota-probe-history.jsonl');
 const DEFAULT_QUOTA_TIMEOUT_MS = QUOTA_TIMEOUT_BACKOFF_MS[0];
-const QUOTA_KILL_GRACE_MS = 250;
+const QUOTA_KILL_GRACE_MS = 3000;
+const QUOTA_KILL_SETTLE_MS = 250;
 
-// Run quota commands in their own process group. A timeout kills codexbar and every child it started.
+// Signal the owned child by PID. Its private process group also contains children it started.
 export function runQuotaCommand(cmd, args, { timeout = DEFAULT_QUOTA_TIMEOUT_MS, maxBuffer = 32 * 1024 * 1024, env = {} } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, {
@@ -101,8 +107,8 @@ export function runQuotaCommand(cmd, args, { timeout = DEFAULT_QUOTA_TIMEOUT_MS,
       env: { ...process.env, ...env, PATH },
     });
     let stdout = '', stderr = '', bytes = 0, timedOut = false, tooLarge = false, settled = false;
-    let timer, killGraceTimer, killStarted = false;
-    const clearTimers = () => { clearTimeout(timer); clearTimeout(killGraceTimer); };
+    let timer, killGraceTimer, killSettleTimer, killStarted = false, killSignal = null;
+    const clearTimers = () => { clearTimeout(timer); clearTimeout(killGraceTimer); clearTimeout(killSettleTimer); };
     const destroyStdio = () => {
       for (const stream of child.stdio || []) {
         try { stream?.destroy(); } catch {}
@@ -111,7 +117,9 @@ export function runQuotaCommand(cmd, args, { timeout = DEFAULT_QUOTA_TIMEOUT_MS,
     const timeoutError = (signal) => {
       const error = new Error(`codexbar timed out after ${Math.round(timeout / 1000)} s`);
       error.killed = true;
-      error.signal = signal || 'SIGKILL';
+      error.signal = signal || killSignal;
+      error.killedPid = child.pid || null;
+      error.killedPidState = killedPidState();
       error.stdout = stdout;
       error.stderr = stderr;
       return error;
@@ -135,14 +143,28 @@ export function runQuotaCommand(cmd, args, { timeout = DEFAULT_QUOTA_TIMEOUT_MS,
       if (killStarted) return;
       killStarted = true;
       clearTimeout(timer);
-      killTree();
-      killGraceTimer = setTimeout(() => finishKilled('SIGKILL'), QUOTA_KILL_GRACE_MS);
+      killSignal = timedOut ? 'SIGTERM' : 'SIGKILL';
+      killTree(killSignal);
+      if (timedOut) {
+        killGraceTimer = setTimeout(() => {
+          killSignal = 'SIGKILL';
+          killTree(killSignal);
+          killSettleTimer = setTimeout(() => finishKilled(killSignal), QUOTA_KILL_SETTLE_MS);
+        }, QUOTA_KILL_GRACE_MS);
+      } else killSettleTimer = setTimeout(() => finishKilled(killSignal), QUOTA_KILL_SETTLE_MS);
     };
-    const killTree = () => {
+    const killedPidState = () => {
+      if (!child.pid) return 'unknown';
+      // An observed exit is the answer; a pid probe could hit an unrelated process that reused the pid.
+      if (child.exitCode !== null || child.signalCode !== null) return 'exited';
+      try { process.kill(child.pid, 0); return 'alive'; }
+      catch (error) { return error.code === 'ESRCH' ? 'exited' : 'unknown'; }
+    };
+    const killTree = (signal) => {
+      try { child.kill(signal); } catch {}
       if (process.platform !== 'win32' && child.pid) {
-        try { process.kill(-child.pid, 'SIGKILL'); return; } catch {}
+        try { process.kill(-child.pid, signal); } catch {}
       }
-      try { child.kill('SIGKILL'); } catch {}
     };
     const collect = (target, chunk) => {
       bytes += chunk.length;
@@ -158,14 +180,18 @@ export function runQuotaCommand(cmd, args, { timeout = DEFAULT_QUOTA_TIMEOUT_MS,
     child.stderr.on('data', (chunk) => collect('stderr', chunk));
     child.once('error', (error) => {
       if (settled) return;
-      if (killStarted) { finishKilled('SIGKILL'); return; }
+      if (killStarted) { finishKilled(killSignal); return; }
       settled = true;
       clearTimers();
       reject(error);
     });
     child.once('exit', (_code, signal) => {
       // A grandchild can keep the pipes open after the timed-out parent exits.
-      if (killStarted) finishKilled(signal);
+      if (killStarted) {
+        // Reap children in the owned group even if they ignored SIGTERM and hold the pipes.
+        killTree('SIGKILL');
+        finishKilled(signal || killSignal);
+      }
     });
     child.once('close', (code, signal) => {
       if (settled) return;
@@ -252,20 +278,32 @@ function writeQuotaProbeHistory(row, file = QUOTA_PROBE_HISTORY_FILE) {
 export async function collectQuotas({ runner = runQuotaCommand, timeouts = DEFAULT_QUOTA_TIMEOUTS_MS, now = () => Date.now(), historyFile = QUOTA_PROBE_HISTORY_FILE } = {}) {
   const result = [];
   for (const provider of QUOTA_PROVIDERS) {
-    const timeoutMs = Number.isFinite(timeouts?.[provider]) ? timeouts[provider] : DEFAULT_QUOTA_TIMEOUT_MS;
-    const startedAt = Number(now());
-    let row = null, failure = null;
-    try {
-      const rows = await codexbarRows(runner, ['--provider', provider], timeoutMs);
-      row = rows.find((item) => item.provider === provider) || null;
-      if (!row) failure = new Error(`${provider} quota row is missing`);
-    } catch (error) { failure = error; }
-    const finishedAt = Number(now());
-    const outcome = quotaProbeOutcome(row, failure);
-    writeQuotaProbeHistory({
-      at: new Date(finishedAt).toISOString(), provider,
-      durationMs: Math.max(0, finishedAt - startedAt), timeoutMs, outcome,
-    }, historyFile);
+    let timeoutMs = Number.isFinite(timeouts?.[provider]) ? timeouts[provider] : DEFAULT_QUOTA_TIMEOUTS_MS[provider];
+    let row = null, failure = null, finishedAt;
+    for (let attempt = 0; attempt < (provider === 'claude' ? 2 : 1); attempt += 1) {
+      const startedAt = Number(now());
+      row = null;
+      failure = null;
+      try {
+        const rows = await codexbarRows(runner, ['--provider', provider], timeoutMs);
+        row = rows.find((item) => item.provider === provider) || null;
+        if (!row) failure = new Error(`${provider} quota row is missing`);
+      } catch (error) { failure = error; }
+      finishedAt = Number(now());
+      const outcome = quotaProbeOutcome(row, failure);
+      const killedPid = Number.isInteger(failure?.killedPid) && failure.killedPid > 0 ? failure.killedPid : null;
+      const killedPidState = ['exited', 'alive', 'unknown'].includes(failure?.killedPidState) ? failure.killedPidState : null;
+      writeQuotaProbeHistory({
+        at: new Date(finishedAt).toISOString(), provider,
+        durationMs: Math.max(0, finishedAt - startedAt), timeoutMs, outcome,
+        killedPid, killedPidState,
+        killSignal: ['SIGTERM', 'SIGKILL'].includes(failure?.signal) ? failure.signal : null,
+        retry: attempt > 0,
+      }, historyFile);
+      // Do not overlap a retry with an owned process whose exit is unconfirmed.
+      if (provider !== 'claude' || attempt > 0 || outcome !== 'timeout' || (killedPid && killedPidState !== 'exited')) break;
+      timeoutMs = QUOTA_TIMEOUT_BACKOFF_BY_PROVIDER_MS.claude.at(-1);
+    }
     if (failure) {
       result.push({ provider, error: codexbarError(failure, timeoutMs, provider) });
       continue;

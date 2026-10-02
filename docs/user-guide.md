@@ -10,16 +10,20 @@ Use Node.js 26.10 or later. Herdr Boss uses the built-in `node:sqlite` module.
 
 Every 30 seconds, Herdr Boss reads Herdr workspaces and agents, machine load and memory, and automation browsers and their owner panes. Every 5 minutes, it reads subscription quotas with `codexbar usage --format json`.
 
-The quota read runs beside the 30-second cycle. A slow `codexbar` does not delay the other reads. A later cycle applies the result. Only one quota read runs at a time. Herdr Boss stops `codexbar` after 240 seconds.
+The quota read runs beside the 30-second cycle. A slow `codexbar` does not delay the other reads. A later cycle applies the result. Only one quota read runs at a time. Herdr Boss probes each provider in sequence with `codexbar usage --format json --provider NAME`.
 
-When a quota read fails, Herdr Boss keeps the last good quotas. The dashboard shows the error only when no quotas are younger than 15 minutes. The error text tells the cause:
+The Claude probe starts with a 60-second timeout. If it times out, Herdr Boss retries it once with a 90-second timeout. After a failed reading, the next Claude probe uses 90 seconds. A good reading resets its timeout to 60 seconds. Codex and OpenCode Go use timeouts of 20, 45, then 90 seconds after repeated failures. A good reading resets their timeout to 20 seconds.
 
-- `codexbar timed out after 240 s`: the read took longer than 240 seconds.
-- `codexbar exited with code N`: `codexbar` failed. The text adds the first line of its error output when there is one.
+On timeout, Herdr Boss sends SIGTERM to the probe child by PID and to its own process group. It gives the child three seconds to exit. It then sends SIGKILL if the child remains. It also stops children in that group when the probe child exits. It never selects a process by name. A retry starts only after the owned child has exited. An unconfirmed exit prevents the retry.
 
-`codexbar` returns one row for each provider. When the probe for one provider fails, `codexbar` exits with code 1 but still returns the good rows. Herdr Boss keeps these rows. Then it reads each failed provider again one time with `codexbar usage --format json --provider NAME`. This retry also stops after 240 seconds. Herdr Boss uses the retry row when it has no error.
+When a quota read fails, Herdr Boss keeps the last good quotas. The error text names the provider and the cause:
 
-When the retry also fails, Herdr Boss keeps the last good row of that provider for 60 minutes. It marks this row as stale and adds the new error. The bulletin quota table shows the row as "Claude quota from HH:MM (probe failed)". The rules line is "Quota data for Claude is from HH:MM; the last probe failed." The dashboard shows the same text on the provider card. Pacing, quota notices, and provider lanes use a stale row as data. Automatic handover does not use a stale row. After 60 minutes, Herdr Boss removes the row and keeps only the error. The bulletin then says "Quota data unavailable for Claude".
+- `Claude usage probe timed out after 90 s`: the retry exceeded its timeout.
+- `Claude usage probe exited with code N`: the probe failed. The text adds the first line of its error output when there is one.
+
+`codexbar` can exit with code 1 and still return a good provider row. Herdr Boss keeps that row. It retries a Claude timeout once. Other errors wait for the next quota interval. The service keeps the last 100 probe attempts in `quota-probe-history.jsonl`. Each row records the provider, duration, timeout, outcome, killed PID and PID state, kill signal, and retry flag. The file does not store probe error text.
+
+When the retry also fails, Herdr Boss keeps the last good row of that provider and adds the new error. The bulletin quota table shows the row as "Claude quota from HH:MM (probe failed)". The rules line is "Quota data for Claude is from HH:MM; the last probe failed." The dashboard shows the same text on the provider card. Pacing, quota notices, and provider lanes use the last good row as data. Automatic handover does not use it after a failed probe. The reading becomes stale after three hours, but it stays available. Without a last good row, the bulletin says "Quota data unavailable for Claude". If the Claude probe fails for over 60 minutes, Herdr Boss sends one warning to the Boss.
 
 At start, Herdr Boss loads the saved quotas from `state.json` when they are younger than 15 minutes. The dashboard shows "Quotas from HH:MM" for these saved quotas until the first new read succeeds. Automatic handover does not use saved quotas.
 
