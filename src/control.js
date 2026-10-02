@@ -25,6 +25,8 @@ export const POLICY_DEFAULTS = {
   // The /goal text for a new orchestrator that has no goal. A handover copies it to the successor. An empty string turns it off.
   defaultOrchestratorGoal: 'Keep the build moving end to end. Work through the published plan in priority order, and start the next ready task as soon as a slot is free, on a Use now lane with the free models first. Decide product, design and technical details yourself with good judgment and taste: check docs/orchestration/memory.md for a recorded Owner decision first, choose the simpler and more robust option, and record each decision. Respect herdr-boss messages, the kit and the Boss. When something is unclear, risky or needs a second opinion, ask the Boss, who decides with you. Stop only when no task can progress without a human. Then escalate through the Boss with one mail or chat item that names the decision, the options and your recommendation. Keep your main thread small: use subagents for reviews and reading, end your turn after a dispatch, and wait for worker reports. Before you stop, leave memory.md, the published status and the next task current. A running worker, a gate, a push or a lock wait is progress: dispatch, end the turn, wait for the report, and treat the goal as met for that turn.',
   goals: { autoCommand: false },
+  // After backoffAfterTimeouts Claude quota probe timeouts in a row, probe every backoffMinutes.
+  quotaProbe: { backoffAfterTimeouts: 2, backoffMinutes: 20 },
   orchestratorLadder: [
     { kind: 'codex', model: 'gpt-6-luna', effort: 'xhigh' },
     { kind: 'claude', model: 'claude-opus-5-5', effort: null },
@@ -122,7 +124,7 @@ export function loadPolicy({ file = FILE, models = null, warn = (text) => consol
       presentCpuPercent: 95, awayCpuPercent: 95, presentLoadFactor: 3, awayLoadFactor: 8,
     });
   }
-  const policy = { ...POLICY_DEFAULTS, ...stored, machine, locks, attachments: { ...POLICY_DEFAULTS.attachments, ...(isObject(stored.attachments) ? stored.attachments : {}) }, agentMessages: { ...POLICY_DEFAULTS.agentMessages, ...(isObject(stored.agentMessages) ? stored.agentMessages : {}) }, goals: { ...POLICY_DEFAULTS.goals, ...(isObject(stored.goals) ? stored.goals : {}) }, providerModes: { ...POLICY_DEFAULTS.providerModes, ...stored.providerModes }, preferredModels: stored.preferredModels || {}, modelProviders: stored.modelProviders || {}, extraModels: stored.extraModels || {}, disabledModels: stored.disabledModels || {}, harnessRoutes: stored.harnessRoutes || {}, pacingGoals: stored.pacingGoals || {}, excludedWorkspaces: Array.isArray(stored.excludedWorkspaces) ? stored.excludedWorkspaces : [], projects: stored.projects || {} };
+  const policy = { ...POLICY_DEFAULTS, ...stored, machine, locks, attachments: { ...POLICY_DEFAULTS.attachments, ...(isObject(stored.attachments) ? stored.attachments : {}) }, agentMessages: { ...POLICY_DEFAULTS.agentMessages, ...(isObject(stored.agentMessages) ? stored.agentMessages : {}) }, goals: { ...POLICY_DEFAULTS.goals, ...(isObject(stored.goals) ? stored.goals : {}) }, quotaProbe: { ...POLICY_DEFAULTS.quotaProbe, ...(isObject(stored.quotaProbe) ? stored.quotaProbe : {}) }, providerModes: { ...POLICY_DEFAULTS.providerModes, ...stored.providerModes }, preferredModels: stored.preferredModels || {}, modelProviders: stored.modelProviders || {}, extraModels: stored.extraModels || {}, disabledModels: stored.disabledModels || {}, harnessRoutes: stored.harnessRoutes || {}, pacingGoals: stored.pacingGoals || {}, excludedWorkspaces: Array.isArray(stored.excludedWorkspaces) ? stored.excludedWorkspaces : [], projects: stored.projects || {} };
   policy.ignoredRoutes = legacyRouteConflicts(policy, models ?? loadModels());
   for (const [kind, list] of Object.entries(policy.ignoredRoutes)) for (const model of list) {
     const key = `${file}:${kind}/${model}:${policy.modelProviders[model]}`;
@@ -167,6 +169,12 @@ export function validatePolicy(value, models) {
   if (typeof value.autoHandover !== 'boolean') errors.push('autoHandover must be boolean.');
   if (!isObject(value.goals)) errors.push('goals must be an object.');
   else if (typeof value.goals.autoCommand !== 'boolean') errors.push('goals.autoCommand must be boolean.');
+  if (!isObject(value.quotaProbe)) errors.push('quotaProbe must be an object.');
+  else {
+    for (const [key, min, max] of [['backoffAfterTimeouts', 1, 10], ['backoffMinutes', 1, 1440]]) {
+      if (!Number.isInteger(value.quotaProbe[key]) || value.quotaProbe[key] < min || value.quotaProbe[key] > max) errors.push(`quotaProbe.${key} must be an integer from ${min} to ${max}.`);
+    }
+  }
   if (!value.machine || typeof value.machine !== 'object' || Array.isArray(value.machine)) errors.push('machine must be an object.');
   else {
     if (typeof value.machine.guardEnabled !== 'boolean') errors.push('machine.guardEnabled must be boolean.');

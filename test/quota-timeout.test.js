@@ -46,7 +46,7 @@ test('a hung quota probe receives SIGTERM and exits before the timeout rejection
   assert.equal(failure.signal, 'SIGTERM');
 });
 
-test('a Claude timeout kills its hung child before one 90-second retry and records both attempts', { timeout: 15000 }, async (t) => {
+test('a Claude timeout kills its hung child and records one attempt without a retry', { timeout: 15000 }, async (t) => {
   const { dir, pidFile, signalFile } = fixture(t);
   const historyFile = path.join(dir, 'quota-probe-history.jsonl');
   const script = `
@@ -60,33 +60,28 @@ test('a Claude timeout kills its hung child before one 90-second retry and recor
   const runner = async (_cmd, args, options) => {
     const provider = args.at(-1);
     calls.push({ provider, timeout: options.timeout });
-    if (provider === 'claude' && calls.filter((call) => call.provider === provider).length === 1) {
+    if (provider === 'claude') {
       try { return await runQuotaCommand(process.execPath, ['-e', script, pidFile, signalFile], options); }
       catch (error) { failure = error; throw error; }
-    }
-    if (provider === 'claude') {
-      const pid = Number(fs.readFileSync(pidFile, 'utf8'));
-      assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' }, 'retry starts only after the first owned child has exited');
     }
     return JSON.stringify([{ provider, usage: { primary: { usedPercent: 12 } } }]);
   };
   const quotas = await collectQuotas({ runner, timeouts: { claude: 1000 }, historyFile });
   assert.deepEqual(calls.filter((call) => call.provider === 'claude'), [
-    { provider: 'claude', timeout: 1000 }, { provider: 'claude', timeout: 90000 },
+    { provider: 'claude', timeout: 1000 },
   ]);
-  assert.equal(quotas.find((row) => row.provider === 'claude').windows[0].usedPercent, 12);
+  assert.match(quotas.find((row) => row.provider === 'claude').error, /timed out/);
   const pid = Number(fs.readFileSync(pidFile, 'utf8'));
   assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
   assert.ok(Date.now() - Number(fs.readFileSync(signalFile, 'utf8')) >= 2900, 'SIGKILL follows the three-second grace period');
   assert.equal(failure.signal, 'SIGKILL');
   const attempts = fs.readFileSync(historyFile, 'utf8').trim().split('\n').map(JSON.parse).filter((row) => row.provider === 'claude');
-  assert.deepEqual(attempts.map(({ timeoutMs, outcome, killedPid, killedPidState, killSignal, retry }) => ({ timeoutMs, outcome, killedPid, killedPidState, killSignal, retry })), [
-    { timeoutMs: 1000, outcome: 'timeout', killedPid: pid, killedPidState: 'exited', killSignal: 'SIGKILL', retry: false },
-    { timeoutMs: 90000, outcome: 'success', killedPid: null, killedPidState: null, killSignal: null, retry: true },
+  assert.deepEqual(attempts.map(({ timeoutMs, outcome, endedStep, killedPid, killedPidState, killSignal }) => ({ timeoutMs, outcome, endedStep, killedPid, killedPidState, killSignal })), [
+    { timeoutMs: 1000, outcome: 'timeout', endedStep: 'our-timer', killedPid: pid, killedPidState: 'exited', killSignal: 'SIGKILL' },
   ]);
 });
 
-test('a Claude timeout with an unconfirmed child exit records the PID state and prevents an overlapping retry', async (t) => {
+test('a Claude timeout with an unconfirmed child exit records the PID state and does not retry', async (t) => {
   const { dir } = fixture(t);
   for (const killedPidState of ['alive', 'unknown']) {
     const calls = [];
@@ -107,7 +102,6 @@ test('a Claude timeout with an unconfirmed child exit records the PID state and 
     const attempt = history.trim().split('\n').map(JSON.parse).find((row) => row.provider === 'claude');
     assert.equal(attempt.killedPid, 12345);
     assert.equal(attempt.killedPidState, killedPidState);
-    assert.equal(attempt.retry, false);
   }
 });
 

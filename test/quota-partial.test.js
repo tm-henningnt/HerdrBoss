@@ -25,7 +25,7 @@ test('a codexbar exit 1 with provider rows keeps the good rows', async () => {
   const calls = [];
   const runner = async (_cmd, args) => { calls.push(args.at(-1)); return exitOne(JSON.stringify(rows))(); };
   const quotas = await collectQuotas({ runner });
-  assert.deepEqual(calls, ['codex', 'claude', 'claude', 'opencodego']);
+  assert.deepEqual(calls, ['codex', 'claude', 'opencodego']);
   assert.equal(quotas.length, 3);
   assert.equal(quotas.find((q) => q.provider === 'claude').error, 'Claude usage probe timed out.');
   assert.ok(quotas.find((q) => q.provider === 'codex').windows.length >= 1);
@@ -55,7 +55,7 @@ test('the bulletin names a provider whose quota row failed', () => {
   assert.doesNotMatch(text, /No quota or active machine restrictions/);
 });
 
-test('quota reads use provider back-off timeouts and retry a Claude timeout once', async () => {
+test('quota reads use provider back-off timeouts and do not retry a Claude timeout', async () => {
   const calls = [];
   const runner = async (cmd, args, options) => {
     calls.push({ cmd, args, timeout: options.timeout });
@@ -68,7 +68,6 @@ test('quota reads use provider back-off timeouts and retry a Claude timeout once
   assert.deepEqual(calls, [
     { cmd: 'codexbar', args: ['usage', '--format', 'json', '--provider', 'codex'], timeout: 20000 },
     { cmd: 'codexbar', args: ['usage', '--format', 'json', '--provider', 'claude'], timeout: 45000 },
-    { cmd: 'codexbar', args: ['usage', '--format', 'json', '--provider', 'claude'], timeout: 90000 },
     { cmd: 'codexbar', args: ['usage', '--format', 'json', '--provider', 'opencodego'], timeout: 90000 },
   ]);
   assert.equal(quotas.find((q) => q.provider === 'claude').error, 'Claude usage probe timed out.');
@@ -92,7 +91,6 @@ test('quota history records fake slow probe durations and safe outcomes, and sta
   assert.deepEqual(first.map(({ provider, outcome, durationMs, timeoutMs }) => ({ provider, outcome, durationMs, timeoutMs })), [
     { provider: 'codex', outcome: 'success', durationMs: 125, timeoutMs: 20000 },
     { provider: 'claude', outcome: 'timeout', durationMs: 45000, timeoutMs: 45000 },
-    { provider: 'claude', outcome: 'timeout', durationMs: 45000, timeoutMs: 90000 },
     { provider: 'opencodego', outcome: 'success', durationMs: 125, timeoutMs: 90000 },
   ]);
   assert.doesNotMatch(fs.readFileSync(historyFile, 'utf8'), /private raw probe output/);
