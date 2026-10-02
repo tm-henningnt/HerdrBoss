@@ -4,7 +4,7 @@ import { DATA_DIR } from './config.js';
 import { SLUG } from './projects.js';
 import { openMessageStore, RETENTION_MS, messagesFile, newId } from './message-store.js';
 import { redactSecrets } from './redact.js';
-import { promptText, plannerPromptText } from './review-result.js';
+import { promptText, plannerPromptText, reviewAnswerPromptText } from './review-result.js';
 import { getSession } from './planner-sessions.js';
 import { uploadReportPictures } from './attachment-markdown.js';
 import { validateAttachmentIds, readAttachment, uploadLocalPictures, deleteAttachment } from './attachments.js';
@@ -105,6 +105,7 @@ export function mailboxTitle(item) {
 export function ownerPromptText(record, question = null) {
   // The text of a review result is the finished prompt: one header line, the denied items, and the fetch command.
   if (record.kind === 'review-result') return record.text;
+  if (record.kind === 'review-answer') return `[owner] ${record.text}`;
   const hint = `(Reply with: herdr-boss say --reply-to ${record.id} "<answer>")`;
   if (!record.replyTo) return `[owner] ${record.text} ${hint}`;
   if (!question) return `[owner] Answer to ${record.replyTo}: ${record.text} ${hint}`;
@@ -736,6 +737,30 @@ export function postReviewResult({ result, replyTo = null } = {}, { dir = DATA_D
     const record = {
       id: newId(now), at, thread: ref.slug, from: 'owner', to: 'orch', kind: 'review-result', text, action: null, replyTo, status: 'queued',
       sentAt: null, error: null, attempts: 0, review: ref, ...(planner ? { planner } : {}),
+    };
+    records.push(record);
+    return { records, result: record };
+  }, { now });
+}
+
+// Queue the answer to an item reopened after submit. It uses the same delivery queue and planner-pane routing as a result prompt.
+export function postReviewAnswer({ slug, pack, version, item, answer, replyTo = null } = {}, { dir = DATA_DIR, now = Date.now() } = {}) {
+  if (!validThread(slug) || slug === 'boss' || typeof pack !== 'string' || !SLUG.test(pack) || typeof item !== 'string' || !SLUG.test(item)) {
+    throw new Error('The review answer needs a valid project, pack, and item.');
+  }
+  if (!Number.isInteger(version) || version < 1 || !Number.isInteger(answer?.rev) || answer.rev < 1) throw new Error('The review answer needs a version and saved revision.');
+  const ref = { slug, pack, version };
+  const at = new Date(now).toISOString();
+  return openMessageStore({ dir }).mutate((records) => {
+    const existing = records.find((record) => record.kind === 'review-answer' && sameReview(record, ref)
+      && record.reviewAnswer?.item === item && record.reviewAnswer?.rev === answer.rev);
+    if (existing) return { records, result: existing };
+    const source = records.find((record) => record.kind === 'review' && sameReview(record, ref) && (replyTo == null || record.id === replyTo));
+    const record = {
+      id: newId(now), at, thread: slug, from: 'owner', to: 'orch', kind: 'review-answer',
+      text: reviewAnswerPromptText({ pack, item, answer }), action: null, replyTo: replyTo ?? null,
+      status: 'queued', sentAt: null, error: null, attempts: 0, review: ref, reviewAnswer: { item, rev: answer.rev },
+      ...(source?.planner ? { planner: source.planner } : {}),
     };
     records.push(record);
     return { records, result: record };

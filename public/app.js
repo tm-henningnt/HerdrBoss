@@ -6155,8 +6155,8 @@ const HELP = {
     <h3>Retention</h3><p>Herdr Boss deletes a closed pack 30 days after it closes. An open pack expires after 60 days without a change. Herdr Boss keeps each result for 180 days and the newest 3 versions. The review pack quota is 2 GiB. Run <code>herdr-boss review delete SLUG PACK</code> to delete a pack.</p>
     <h3>Progress bar</h3><p>The bar shows the item states in a fixed order: <b>Accepted</b>, <b>Note only</b>, <b>Needs live check</b>, <b>Denied</b>, and <b>Open</b>. Accepted also counts a choice or a rating. The Denied segment has stripes, so it differs from Needs live check without color. The legend under the bar names each state with its count.</p>
     <h3>Sections</h3><p>The pack page shows one block for each section, with its state and its count of answered items. Select a section title to fold or unfold its items. Each item row shows the item type, the title, the state, and a check mark when you viewed it. Each row also has a badge: <b>agent-verified</b>, <b>needs-you</b>, or <b>unmarked</b>. An item with agent-verified evidence shows its evidence images under <b>Agent evidence</b>, with zoom. The item view shows the description, the numbered steps, the expected result, and a link to the app that opens in a new tab. The <b>Needs you</b> filter above the sections shows only the needs-you items with their count. It keeps the headings that still have items, and the next and previous item keys skip the hidden items. The filter is off by default, and the browser remembers it for each pack. A viewed and answered item shows as a short, faded row. <b>Changed</b> marks an item that changed after your answer. It counts as open until you answer again. Select an item to open it in the item viewer. Back returns to the same row. An item whose content changed in a new version shows <b>Changed</b> and no verdict, and its section shows <b>Changed</b>. The item shows <b>Was</b> with the earlier verdict and its date. <b>Keep</b> restores that verdict. A title wraps to two lines, and the tooltip shows the full title. Above 900 px, drag the handle at the edge of the sections column to change its width, or focus the handle and press the arrow keys (16 px) or <kbd>Home</kbd> to reset. The hide button collapses the column to a rail.</p>
-    <h3>Summary and submit</h3><p>The summary under the sections lists the items by state: <b>Denied</b>, <b>Needs live check</b>, <b>Note only</b>, <b>Accepted</b>, <b>Changed since accepted</b>, and <b>Open</b> last. Your note shows under each item. An open item has <b>Review now</b>. An item that changed after your answer shows <b>changed in this version</b>. A warning above the list names the count of items that have no decision. Write a note for the whole pack in the note field. The page saves the note 600 ms after you stop typing. Select a verdict: <b>Accept pack</b>, <b>Accept with changes</b>, or <b>Deny pack</b>. The page proposes one from the item states when it first shows the pack version. You choose the verdict. A later answer does not move the selection. Select <b>Submit review</b> in the bar at the bottom. While changes wait to save, the button shows <b>Waiting for N changes to save</b> and stays disabled. The page asks you to confirm and names the pack, the version, the verdict, and the counts. Then it sends the result. A submit with open items is allowed. The result lists them as open.</p>
-    <h3>After the submit</h3><p>The page shows the summary as read-only. The service sends the result to the <code>orch</code> pane of the project as one message. When a planner pane published the pack, the message goes to that pane and lists each choice with its label, the notes, and each skipped item. The page shows the delivery state: <b>Queued</b>, <b>Delivered</b>, <b>Retrying</b>, or <b>Failed</b>. A failed delivery is tried again up to 4 times. The Mailbox item of the pack closes, and <b>Open review</b> on it opens this read-only summary. A pack takes at most 3 submits in one minute.</p>
+    <h3>Summary and submit</h3><p>The summary under the sections lists the items by state: <b>Denied</b>, <b>Needs live check</b>, <b>Note only</b>, <b>Accepted</b>, <b>Changed since accepted</b>, and <b>Open</b> last. Your note shows under each item. An open item has <b>Review now</b>. An item that changed after your answer shows <b>changed in this version</b>. A warning above the list names the count of items that have no decision. Write a note for the whole pack in the note field. The page saves the note 600 ms after you stop typing. Select a verdict: <b>Accept pack</b>, <b>Accept with changes</b>, or <b>Deny pack</b>. The page proposes one from the item states when it first shows the pack version. You choose the verdict. A later answer does not move the selection. Select <b>Submit review</b> in the bar at the bottom. While changes wait to save, the button shows <b>Waiting for N changes to save</b> and stays disabled. When items are still open, a dialog lists their titles. Select <b>Submit anyway</b> or <b>Answer them first</b>. Select <b>Cancel</b> or press <b>Escape</b> to close it. <b>Submit anyway</b> still asks you to confirm the selected verdict. The result lists open item IDs.</p>
+    <h3>After the submit</h3><p>The page shows the summary as read-only. The service sends the result to the <code>orch</code> pane of the project as one message. When a planner pane published the pack, the message goes to that pane and lists each choice with its label, the notes, each skipped item, and the open item IDs. A locked open item links to the next pack that has the same item. If no such pack exists, ask the planner to reopen the item. A planner pane can reopen only a pack whose <code>manifest.session</code> matches its session. The project orchestrator pane and a plain terminal can also reopen an item. The page then lets you answer that item. Herdr Boss sends the planner session pane a short message with the pack, item ID, and saved answer. Add <code>--carry-open</code> to a planner publish to copy open items from the latest submitted pack in the same session, excluding the pack being published. The copy keeps saved notes and pins. The page shows the delivery state: <b>Queued</b>, <b>Delivered</b>, <b>Retrying</b>, or <b>Failed</b>. A failed delivery is tried again up to 4 times. The Mailbox item of the pack closes, and <b>Open review</b> on it opens this read-only summary. A pack takes at most 3 submits in one minute.</p>
     <h3>Item viewer</h3><p>The top bar shows the item title, <b>Item N of M</b> with the section, and the <b>Viewed</b> toggle. The page marks an item viewed when it stays open and visible for 1.5 seconds. A pair has <b>Toggle</b> and <b>Slider</b>. A gallery shows a grid: select an image to open it. A table and a code box scroll sideways in their own box. <b>Open</b> on a live link opens a new tab.</p>
     <p>Above 900 px, the answer controls sit in a sticky column at the right of the evidence and stay in view as the item scrolls. At 900 px and below, the answer bar stays at the bottom edge. The title, item count, and Viewed control stay in the top bar.</p>
     <h3>Zoom and pins</h3><p>Pinch to zoom, or double tap for 2×. Double tap again for the fit size. Drag to pan a zoomed image. On a desktop, hold Ctrl and turn the wheel, or press <kbd>+</kbd> and <kbd>-</kbd>. <kbd>z</kbd> toggles the fit size and 100 %. Select <b>Add pin</b>, then tap the image to drop a numbered pin. Write the pin note in the field under the image. An item takes at most 20 pins.</p>
@@ -6530,7 +6530,7 @@ function saveReviewNote(current) {
   reviewSync.enqueue({ slug: route.slug, pack: route.pack, version: entry.data.version, kind: 'note', rev: entry.data.noteRev || 0, patch: { note: ui.note } });
 }
 
-async function submitReview() {
+async function submitReview(allowOpen = false) {
   const current = reviewRoutePack();
   if (!current?.entry?.data || current.ui.submitting) return;
   const { route, entry, ui } = current;
@@ -6539,6 +6539,14 @@ async function submitReview() {
   if (reviewSync.pendingCount(current.key)) { reviewsRender(); return; }
   const verdict = ui.verdict || ui.proposed || entry.data.derived?.proposedVerdict || 'accept-with-changes';
   const note = ui.note ?? entry.data.note ?? '';
+  const openItems = (entry.data.items || []).filter((item) => item.state === 'open' || item.state === 'changed');
+  if (openItems.length && !allowOpen) {
+    ui.submitConfirm = true;
+    reviewsRender();
+    document.querySelector('[data-review-submit-anyway]')?.focus();
+    return;
+  }
+  ui.submitConfirm = false;
   if (!confirm(submitConfirmText(entry.data, verdict))) return;
   ui.submitting = true;
   ui.submitStatus = 'Sending…';
@@ -6572,6 +6580,28 @@ document.addEventListener('submit', (e) => {
   if (!e.target.matches?.('[data-review-submit]')) return;
   e.preventDefault();
   submitReview();
+});
+document.addEventListener('click', (e) => {
+  const submitAnyway = e.target.closest?.('[data-review-submit-anyway]');
+  const answerOpen = e.target.closest?.('[data-review-answer-open]');
+  const cancel = e.target.closest?.('[data-review-submit-cancel]');
+  if (!submitAnyway && !answerOpen && !cancel) return;
+  const current = reviewRoutePack();
+  if (!current) return;
+  current.ui.submitConfirm = false;
+  if (cancel) {
+    reviewsRender();
+    document.querySelector('.review-submit')?.focus();
+    return;
+  }
+  if (submitAnyway) {
+    reviewsRender();
+    submitReview(true);
+    return;
+  }
+  const item = answerOpen.dataset.reviewAnswerOpen;
+  history.pushState(null, '', reviewUrl(current.route.slug, current.route.pack, item));
+  reviewsRender();
 });
 // Retry, the conflicts of the waiting changes, and the pack note conflict.
 document.addEventListener('click', (e) => {
@@ -6641,6 +6671,18 @@ function reviewGo(url) {
   lastRender = '';
   render();
 }
+
+// The open-item dialog handles Escape before the review list keys can move back to another page.
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || !document.querySelector('.review-submit-confirm')) return;
+  const current = reviewRoutePack();
+  if (!current) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  current.ui.submitConfirm = false;
+  reviewsRender();
+  document.querySelector('.review-submit')?.focus();
+}, true);
 
 // The list keys of the review pages. See reviewKeyAction() in public/review.js. The listener runs in the capture phase,
 // so it reads the help panel and the drawer before the Esc handlers close them.

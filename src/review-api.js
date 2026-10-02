@@ -181,6 +181,11 @@ export function createReviewApi({ dataDir, store = reviewStore, mail = mailbox, 
     const found = store.getPack({ ...where(slug, pack), version: text === null ? undefined : Number(text) });
     if (!found) throw new HttpError(404, 'The pack or the version does not exist.');
     const items = found.items || [];
+    if (found.state === 'submitted' && found.version === found.currentVersion) {
+      const openItems = items.filter((item) => item.state === 'open' || item.state === 'changed');
+      const links = store.nextPacksForItems?.({ ...where(slug, pack), items: openItems.map((item) => item.id) });
+      for (const item of openItems) item.nextPack = links ? links[item.id] ?? null : store.nextPackForItem?.({ ...where(slug, pack), item: item.id }) ?? null;
+    }
     found.summary = {
       total: items.length,
       agentVerified: items.filter((item) => item.verifiedBy === 'agent-verified').length,
@@ -197,6 +202,10 @@ export function createReviewApi({ dataDir, store = reviewStore, mail = mailbox, 
     const patch = await readJson(req, ITEM_BODY_LIMIT);
     const saved = store.putAnswer({ ...where(slug, pack), now: now(), item, patch });
     if (saved.conflict) return { status: 409, body: { error: 'The answer changed on another device. The current answer is in this response.', conflict: true, current: saved.current } };
+    if (saved.deactivatedReopen) {
+      const current = store.getPack({ ...where(slug, pack) });
+      mail.postReviewAnswer({ slug, pack, version: current?.version, item, answer: saved.answer, replyTo: current?.mailId }, { dir: dataDir, now: now() });
+    }
     if (!saved.duplicate) notify(slug, pack, { item, rev: saved.answer.rev });
     return { status: 200, body: saved };
   }

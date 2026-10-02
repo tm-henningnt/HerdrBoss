@@ -79,7 +79,7 @@ function manifest(id) {
 // Each pack has its own project slug: a project holds at most 5 open packs.
 const slugOf = (id) => `s-${id}`;
 
-function publish(id, edit = () => {}) {
+function publish(id, edit = () => {}, dir = dataDir) {
   const packManifest = manifest(id);
   edit(packManifest);
   const root = tmp('herdr-review-api-pack-');
@@ -96,7 +96,7 @@ function publish(id, edit = () => {}) {
     fs.writeFileSync(path.join(root, rel), content);
   }
   fs.writeFileSync(path.join(root, 'manifest.json'), JSON.stringify(packManifest));
-  return store.publishVersion({ dir: dataDir, now: Date.now(), slug: slugOf(id), folder: root, publishedBy: 'orch' });
+  return store.publishVersion({ dir, now: Date.now(), slug: slugOf(id), folder: root, publishedBy: 'orch' });
 }
 
 const packState = (id) => store.getPack({ dir: dataDir, slug: slugOf(id), pack: id });
@@ -495,6 +495,106 @@ test('a submit stores the result once and a second submit returns 409 with the f
   assert.ok(JSON.parse(late.text).error);
   assert.equal((await submit({ verdict: 'accept' })).status, 409);
   assert.equal((await raw(base, 'POST', '/api/reviews/s-no-such-pack/no-such-pack/submit', { headers: JSON_HEADERS, body: json({ verdict: 'accept' }) })).status, 404);
+});
+
+test('a submitted pack names open item ids, shows the next same-session pack, and accepts only a reopened item answer', async (t) => {
+  const old = manifest('series-round-one');
+  old.session = 'ps-series123'; old.round = 1;
+  const oldRoot = tmp('herdr-review-api-series-old-');
+  for (const [rel, content] of Object.entries({
+    'img/cart-light.png': png(390, 800, 1), 'img/cart-dark': png(390, 800, 2), 'img/pay-before.png': png(390, 800, 3),
+    'img/pay-after.png': png(390, 800, 4), 'media/checkout.mp4': VIDEO, 'data/errors.csv': CSV,
+  })) { fs.mkdirSync(path.dirname(path.join(oldRoot, rel)), { recursive: true }); fs.writeFileSync(path.join(oldRoot, rel), content); }
+  fs.writeFileSync(path.join(oldRoot, 'manifest.json'), JSON.stringify(old));
+  store.publishVersion({ dir: dataDir, now: 1000, slug: 's-series-round-one', folder: oldRoot, publishedBy: 'planner' });
+  const skipped = store.putAnswer({ dir: dataDir, now: 1100, slug: 's-series-round-one', pack: 'series-round-one', item: 'error-copy', patch: { rev: 0, decision: 'skip' } });
+  assert.equal(skipped.ok, true);
+  const submitted = store.submitPack({ dir: dataDir, now: 1200, slug: 's-series-round-one', pack: 'series-round-one', verdict: 'accept-with-changes' });
+  assert.deepEqual(submitted.result.openItems, ['cart-themes', 'pay-button', 'flow-video', 'release-notes', 'error-copy']);
+
+  const next = manifest('series-round-two');
+  next.session = 'ps-series123'; next.round = 2;
+  const nextRoot = tmp('herdr-review-api-series-next-');
+  for (const [rel, content] of Object.entries({
+    'img/cart-light.png': png(390, 800, 1), 'img/cart-dark': png(390, 800, 2), 'img/pay-before.png': png(390, 800, 3),
+    'img/pay-after.png': png(390, 800, 4), 'media/checkout.mp4': VIDEO, 'data/errors.csv': CSV,
+  })) { fs.mkdirSync(path.dirname(path.join(nextRoot, rel)), { recursive: true }); fs.writeFileSync(path.join(nextRoot, rel), content); }
+  fs.writeFileSync(path.join(nextRoot, 'manifest.json'), JSON.stringify(next));
+  store.publishVersion({ dir: dataDir, now: 2000, slug: 's-series-round-one', folder: nextRoot, publishedBy: 'planner' });
+  const { base } = await start(t);
+  const loaded = JSON.parse((await raw(base, 'GET', '/api/reviews/s-series-round-one/series-round-one')).text);
+  const openItem = loaded.items.find((entry) => entry.id === 'pay-button');
+  assert.deepEqual(openItem.nextPack, { pack: 'series-round-two', title: 'Checkout flow redesign' });
+  const resultRoute = '/api/reviews/s-series-round-one/series-round-one/items/pay-button';
+  const locked = await raw(base, 'PUT', resultRoute, { headers: JSON_HEADERS, body: json({ rev: 0, choice: 'a' }) });
+  assert.equal(locked.status, 409);
+  assert.match(JSON.parse(locked.text).error, /submitted/i);
+  store.reopenItem({ dir: dataDir, now: 2100, slug: 's-series-round-one', pack: 'series-round-one', item: 'pay-button' });
+  const unlocked = await raw(base, 'PUT', resultRoute, { headers: JSON_HEADERS, body: json({ rev: 0, choice: 'a' }) });
+  assert.equal(unlocked.status, 200, unlocked.text);
+  const stillLocked = await raw(base, 'PUT', '/api/reviews/s-series-round-one/series-round-one/items/release-notes', { headers: JSON_HEADERS, body: json({ rev: 0, note: 'No.' }) });
+  assert.equal(stillLocked.status, 409);
+});
+
+test('saving an answer that closes a reopened item queues the answer for its planner pane', async (t) => {
+  const reviewDir = tmp('herdr-review-api-reopen-answer-');
+  assertTempDataDir(reviewDir);
+  t.after(() => openSqliteStore({ dir: reviewDir }).close());
+  const slug = 's-reopen-answer-pack';
+  const { startSession } = await import('../src/planner-sessions.js');
+  const planner = startSession({ dir: reviewDir, now: Date.now(), kind: 'claude', project: slug, pane: 'wA:p2', input: 'docs/plan.md' });
+  publish('reopen-answer-pack', (pack) => { pack.session = planner.id; pack.round = 1; }, reviewDir);
+  const review = messages.postReview({ slug, pack: 'reopen-answer-pack', title: 'Review answer pack', version: 1, text: 'Review submitted.', planner: { session: planner.id, pane: planner.pane } }, { dir: reviewDir });
+  store.setMailId({ dir: reviewDir, slug, pack: 'reopen-answer-pack', mailId: review.id });
+  store.submitPack({ dir: reviewDir, now: 2000, slug, pack: 'reopen-answer-pack', verdict: 'accept-with-changes' });
+  store.reopenItem({ dir: reviewDir, now: 2100, slug, pack: 'reopen-answer-pack', item: 'cart-themes' });
+  const { createReviewApi } = await import('../src/review-api.js');
+  const api = createReviewApi({ dataDir: reviewDir, store, mail: messages });
+  const server = http.createServer((req, res) => { api.handle(req, res, new URL(req.url, 'http://x')).catch((error) => { res.writeHead(500); res.end(error.message); }); });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const route = '/api/reviews/s-reopen-answer-pack/reopen-answer-pack/items/cart-themes';
+  const response = await raw(base, 'PUT', route, { headers: JSON_HEADERS, body: json({ rev: 0, decision: 'accept', note: 'Keep the spacing.', opId: 'answer-reopen-1' }) });
+  assert.equal(response.status, 200, response.text);
+  const queued = messages.readMessages({ dir: reviewDir }).filter((record) => record.kind === 'review-answer');
+  assert.equal(queued.length, 1, JSON.stringify(queued));
+  assert.equal(queued[0].status, 'queued');
+  assert.deepEqual(queued[0].planner, { session: planner.id, pane: 'wA:p2' });
+  assert.match(queued[0].text, /reopen-answer-pack/);
+  assert.match(queued[0].text, /cart-themes/);
+  assert.match(queued[0].text, /accept/);
+  assert.match(queued[0].text, /Keep the spacing/);
+  const delivered = [];
+  await messages.deliverQueued({ dir: reviewDir, now: Date.now(), panes: [{ id: planner.pane, agent: 'claude', status: 'idle' }], prompt: async (pane, text) => delivered.push({ pane, text }) });
+  assert.equal(delivered.length, 1);
+  assert.equal(delivered[0].pane, planner.pane);
+  assert.match(delivered[0].text, /reopen-answer-pack/);
+  assert.match(delivered[0].text, /cart-themes/);
+
+  const retry = await raw(base, 'PUT', route, { headers: JSON_HEADERS, body: json({ rev: 0, decision: 'accept', note: 'Keep the spacing.', opId: 'answer-reopen-1' }) });
+  assert.equal(retry.status, 200, retry.text);
+  assert.equal(messages.readMessages({ dir: reviewDir }).filter((record) => record.kind === 'review-answer').length, 1, 'an operation retry does not send another notification');
+});
+
+test('a submitted pack computes next-pack links with one lookup per request', async (t) => {
+  publish('batch-next-pack', (pack) => { pack.session = 'ps-batch-123'; pack.round = 1; });
+  store.submitPack({ dir: dataDir, now: 3000, slug: 's-batch-next-pack', pack: 'batch-next-pack', verdict: 'accept-with-changes' });
+  const { createReviewApi } = await import('../src/review-api.js');
+  let lookups = 0;
+  const countedStore = new Proxy(store, { get(target, name) {
+    const value = target[name];
+    if (name === 'nextPacksForItems') return (where) => { lookups += 1; return value(where); };
+    return value;
+  } });
+  const api = createReviewApi({ dataDir, store: countedStore });
+  const server = http.createServer((req, res) => { api.handle(req, res, new URL(req.url, 'http://x')).catch((error) => { res.writeHead(500); res.end(error.message); }); });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const response = await raw(`http://127.0.0.1:${server.address().port}`, 'GET', '/api/reviews/s-batch-next-pack/batch-next-pack');
+  assert.equal(response.status, 200, response.text);
+  assert.equal(lookups, 1);
+  assert.ok(JSON.parse(response.text).items.filter((item) => item.state === 'open' || item.state === 'changed').every((item) => item.nextPack === null));
 });
 
 // ---------- Result delivery ----------

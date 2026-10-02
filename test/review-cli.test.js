@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { assertTempDataDir } from '../src/data-dir-guard.js';
 import { openSqliteStore } from '../src/sqlite-store.js';
-import { getPack, getResultRecord, submitPack, putAnswer, publishVersion } from '../src/review-store.js';
+import { getPack, getFile, getResultRecord, submitPack, putAnswer, publishVersion } from '../src/review-store.js';
 import { reviewCommand } from '../src/review-cli.js';
 import { readMessages } from '../src/messages.js';
 import { startSession, getSession, endSession } from '../src/planner-sessions.js';
@@ -773,6 +773,112 @@ test('a planner pane publishes for its own project, and the pack and the Mailbox
   assert.equal(cli('review', 'publish', 'shop', packFolder({ id: 'other-pack' })).status, 0);
   assert.equal(getPack({ dir: data, slug: 'shop', pack: 'other-pack' }).manifest.round, 2);
   assert.equal(getSession({ dir: data, id: record.id }).round, 2);
+});
+
+test('planner publish --carry-open copies open items from the latest submitted pack in the same session', (t) => {
+  const { cli, data } = plannerFixture(t);
+  assert.equal(cli('review', 'publish', 'shop', packFolder()).status, 0);
+  const note = 'Keep the existing spacing.';
+  const pins = [{ n: 1, src: 'a', x: 0.72, y: 0.41, text: 'Check the total.' }];
+  putAnswer({ dir: data, now: Date.now(), slug: 'shop', pack: 'checkout-redesign', item: 'cart-themes', patch: { rev: 0, decision: 'accept', note, pins } });
+  submitPack({ dir: data, now: Date.now(), slug: 'shop', pack: 'checkout-redesign', verdict: 'accept-with-changes' });
+  const changedFolder = packFolder({ tag: 1, edit: (_manifest, files) => { files['img/cart-light.png'] = png(390, 800, 9); } });
+  assert.equal(cli('review', 'publish', 'shop', changedFolder).status, 0);
+  assert.equal(getPack({ dir: data, slug: 'shop', pack: 'checkout-redesign' }).items.find((entry) => entry.id === 'cart-themes').state, 'changed');
+  submitPack({ dir: data, now: Date.now(), slug: 'shop', pack: 'checkout-redesign', verdict: 'accept-with-changes' });
+  const nextFolder = packFolder({ id: 'next-pack', edit: (manifest) => {
+    manifest.sections = [{ id: 'cart', title: 'Cart', items: [
+      { id: 'error-copy', title: 'New error question', type: 'markdown', text: 'Keep this new text.', ask: ['accept', 'deny'] },
+      { id: 'new-image', title: 'New image', type: 'image', src: 'img/cart-light.png', ask: ['accept', 'deny'] },
+    ] }];
+  } });
+  const published = cli('review', 'publish', 'shop', nextFolder, '--carry-open');
+  assert.equal(published.status, 0, output(published));
+  assert.match(published.stdout, /carried 3 open items/i);
+  const next = getPack({ dir: data, slug: 'shop', pack: 'next-pack' });
+  const specs = new Map(next.manifest.sections.flatMap((section) => section.items.map((entry) => [entry.id, entry])));
+  assert.equal(next.manifest.session, getPack({ dir: data, slug: 'shop', pack: 'checkout-redesign' }).manifest.session);
+  assert.deepEqual(next.items.map((entry) => entry.id).sort(), ['cart-themes', 'error-copy', 'live-form', 'new-image', 'release-notes']);
+  assert.equal(next.items.find((entry) => entry.id === 'error-copy').title, 'New error question', 'a duplicate id in the new pack is not copied twice');
+  assert.equal(specs.get('error-copy').text, 'Keep this new text.', 'the new pack keeps its own duplicate');
+  assert.equal(specs.get('live-form').url, 'https://staging.example.test/checkout', 'the carried link stays');
+  assert.equal(specs.get('release-notes').text, 'Notes for the release.', 'the carried item text stays');
+  const carriedImage = specs.get('cart-themes');
+  const carriedAnswer = next.items.find((entry) => entry.id === 'cart-themes').answer;
+  assert.equal(carriedAnswer.note, note, 'the changed item keeps the Owner note');
+  assert.deepEqual(carriedAnswer.pins, pins, 'the changed item keeps the Owner pins');
+  assert.match(carriedImage.a.src, /^carry\/checkout-redesign\//, 'a conflicting file path is renamed and linked from the copied item');
+  const carriedFile = getFile({ dir: data, slug: 'shop', pack: 'next-pack', version: 1, file: carriedImage.a.src });
+  assert.equal(carriedFile.sha256, getPack({ dir: data, slug: 'shop', pack: 'checkout-redesign' }).files.find((file) => file.path === 'img/cart-light.png').sha256);
+});
+
+test('carry-open excludes the pack being republished when it chooses the prior submitted pack', (t) => {
+  const { cli, data } = plannerFixture(t);
+  const oneItem = (id, itemId, text) => packFolder({ id, edit: (manifest) => {
+    manifest.sections = [{ id: 'only', title: 'Only', items: [{ id: itemId, title: itemId, type: 'markdown', text, ask: ['accept', 'deny'] }] }];
+  } });
+  assert.equal(cli('review', 'publish', 'shop', oneItem('checkout-redesign', 'self-only', 'Old target item.')).status, 0);
+  submitPack({ dir: data, now: Date.now(), slug: 'shop', pack: 'checkout-redesign', verdict: 'accept-with-changes' });
+  assert.equal(cli('review', 'publish', 'shop', oneItem('other-pack', 'other-only', 'Other submitted item.')).status, 0);
+  submitPack({ dir: data, now: Date.now() + 1, slug: 'shop', pack: 'other-pack', verdict: 'accept-with-changes' });
+
+  const published = cli('review', 'publish', 'shop', oneItem('checkout-redesign', 'target-new', 'New target item.'), '--carry-open');
+  assert.equal(published.status, 0, output(published));
+  assert.match(published.stdout, /from shop\/other-pack/i);
+  const current = getPack({ dir: data, slug: 'shop', pack: 'checkout-redesign' });
+  const ids = current.manifest.sections.flatMap((section) => section.items.map((item) => item.id));
+  assert.ok(ids.includes('other-only'), 'the other latest submitted pack supplies the carried item');
+  assert.ok(!ids.includes('self-only'), 'the republished pack does not supply its own old item');
+});
+
+test('review reopen unlocks only one open item of a submitted pack', (t) => {
+  const { cli, data } = plannerFixture(t);
+  assert.equal(cli('review', 'publish', 'shop', packFolder()).status, 0);
+  submitPack({ dir: data, now: Date.now(), slug: 'shop', pack: 'checkout-redesign', verdict: 'accept-with-changes' });
+  const opened = cli('review', 'reopen', 'shop', 'checkout-redesign', 'error-copy');
+  assert.equal(opened.status, 0, output(opened));
+  assert.match(opened.stdout, /Reopened shop\/checkout-redesign item error-copy/);
+  const pack = getPack({ dir: data, slug: 'shop', pack: 'checkout-redesign' });
+  assert.equal(pack.items.find((entry) => entry.id === 'error-copy').reopened, true);
+  assert.equal(Boolean(pack.items.find((entry) => entry.id === 'release-notes').reopened), false);
+  assert.throws(() => putAnswer({ dir: data, now: Date.now(), slug: 'shop', pack: 'checkout-redesign', item: 'release-notes', patch: { rev: 0, note: 'Not unlocked.' } }), /submitted/);
+  const answer = putAnswer({ dir: data, now: Date.now(), slug: 'shop', pack: 'checkout-redesign', item: 'error-copy', patch: { rev: 0, decision: 'accept', opId: 'reopen-answer' } });
+  assert.equal(answer.ok, true);
+  const completed = getPack({ dir: data, slug: 'shop', pack: 'checkout-redesign' }).items.find((entry) => entry.id === 'error-copy');
+  assert.equal(Boolean(completed.reopened), false, 'a saved answer closes the one-item unlock');
+  assert.equal(completed.reopenUsed, true, 'the queue can retry the saved operation after a lost response');
+  assert.equal(completed.reopenUsedOpId, 'reopen-answer');
+});
+
+test('reopen keeps project orchestrators and plain terminals allowed, but refuses workers and other sessions', (t) => {
+  const orch = fixture(t, 'orch', 'wA', 'wA:p1');
+  assert.equal(orch.cli('review', 'publish', 'shop', packFolder()).status, 0);
+  submitPack({ dir: orch.data, now: Date.now(), slug: 'shop', pack: 'checkout-redesign', verdict: 'accept-with-changes' });
+  const orchOpen = orch.cli('review', 'reopen', 'shop', 'checkout-redesign', 'error-copy');
+  assert.equal(orchOpen.status, 0, output(orchOpen));
+
+  const terminal = fixture(t, false);
+  publishVersion({ dir: terminal.data, now: Date.now(), slug: 'shop', folder: packFolder(), publishedBy: 'orch' });
+  submitPack({ dir: terminal.data, now: Date.now(), slug: 'shop', pack: 'checkout-redesign', verdict: 'accept-with-changes' });
+  const terminalOpen = terminal.cli('review', 'reopen', 'shop', 'checkout-redesign', 'error-copy');
+  assert.equal(terminalOpen.status, 0, output(terminalOpen));
+
+  const worker = fixture(t, 'worker', 'wA', 'wA:p2');
+  publishVersion({ dir: worker.data, now: Date.now(), slug: 'shop', folder: packFolder(), publishedBy: 'orch' });
+  submitPack({ dir: worker.data, now: Date.now(), slug: 'shop', pack: 'checkout-redesign', verdict: 'accept-with-changes' });
+  const workerOpen = worker.cli('review', 'reopen', 'shop', 'checkout-redesign', 'error-copy');
+  assert.equal(workerOpen.status, 1, output(workerOpen));
+  assert.match(workerOpen.stderr, /worker|orch/i);
+
+  const planner = plannerFixture(t);
+  assert.equal(planner.cli('review', 'publish', 'shop', packFolder()).status, 0);
+  submitPack({ dir: planner.data, now: Date.now(), slug: 'shop', pack: 'checkout-redesign', verdict: 'accept-with-changes' });
+  endSession({ dir: planner.data, now: Date.now(), id: planner.record.id });
+  startSession({ dir: planner.data, now: Date.now() + 1, kind: 'claude', project: 'shop', pane: 'wB:p2', input: 'docs/plan-next.md' });
+  const crossSession = planner.cli('review', 'reopen', 'shop', 'checkout-redesign', 'error-copy');
+  assert.equal(crossSession.status, 1, output(crossSession));
+  assert.match(crossSession.stderr, /session/i);
+  assert.equal(getPack({ dir: planner.data, slug: 'shop', pack: 'checkout-redesign' }).items.find((entry) => entry.id === 'error-copy').reopened, undefined);
 });
 
 test('--round sets another round for a republish, and only a planner pane may pass it', (t) => {

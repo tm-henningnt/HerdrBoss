@@ -494,6 +494,7 @@ The registry is the file `planner-sessions.json` in the data folder, with mode 0
 A pane labeled `planner` with an active session has these rights:
 
 - `review publish SLUG FOLDER` works only for the project of the session. Another slug is refused.
+- `review reopen SLUG PACK ITEM` opens one unanswered item of a submitted pack from the session.
 - `review check FOLDER` works as for every pane.
 - `review import`, `review result`, `review list`, and `review delete` are refused.
 
@@ -519,6 +520,12 @@ If the publish fails after the store write, the command prints the pack ID and t
 
 A project can have 5 open packs. The publish command refuses a sixth. It also refuses a version that takes the packs over 2 GB, and it names the oldest submitted packs to delete.
 
+Add `--carry-open` to a planner publish to copy the open items from an earlier submitted pack in the same session. Herdr Boss excludes the pack being published, then chooses the most recently submitted pack for the project and session. If two packs have the same submit time, it chooses the pack ID that comes first in sort order. The copy keeps each item ID, its full item text, links, files, saved note, and pins. If an item ID is already in the new folder, Herdr Boss keeps the new folder's item and does not add a duplicate. The command prints the number of items it copied. Without an earlier submitted pack, it copies no items.
+
+### Reopen an item
+
+Run `herdr-boss review reopen SLUG PACK ITEM` to unlock one unanswered or changed item in the current submitted version. A planner pane can reopen only a pack whose `manifest.session` matches its session. The project orchestrator pane and a plain terminal can also reopen an item. A Boss pane can reopen only a pack in the `boss` thread. Worker panes and panes from another project get a refusal. Only that item accepts an answer. Other items stay locked. The item locks again when the Owner saves an answer. Herdr Boss queues a short message with the pack, item ID, and saved answer for the planner session pane.
+
 ### Import
 
 `review import` reads a folder of HTML files, or one HTML file, and writes a temporary pack folder. It never fetches a URL.
@@ -539,7 +546,7 @@ The Owner answer comes back as an `[owner]` prompt with the verdict, the counts,
 
 When a planner pane published the pack, the prompt goes to that pane and not to the orch pane. It lists the pack note, each choice with its label and note, each denied item, each item with a note, and each skipped item. It has at most 4000 characters and ends with `… N more` when it is cut. It has no fetch command, because a planner pane cannot run `review result`. The message follows the rules of every result message: one message for each pack and version, the same retries, and no secret. When the session has ended, the message goes to the orch pane. While the session is active and its pane is absent, the message waits.
 
-The result JSON has `session` and `round` when the manifest has them. A choice has `choiceLabel`. A skipped item has `state: "open"` and `skipped: true`.
+The result JSON has `session` and `round` when the manifest has them. It also has `openItems`, a list of the IDs of each unanswered, Ask later, or changed item. A choice has `choiceLabel`. A skipped item has `state: "open"` and `skipped: true`. The Markdown result and the message to the planner list the open item IDs too.
 
 `review result` prints the stored Markdown summary. The summary starts with the counts. It lists the denied items and the items that need a live check first, with the Owner's notes quoted. `--format json` prints the result object with the schema `herdr-boss.review-result/1`. The verdict is `accept`, `accept-with-changes`, or `deny`. Exit code 3 means that the pack, the version, or the result does not exist. The Owner has then not submitted that version.
 
