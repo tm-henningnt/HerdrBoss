@@ -13,6 +13,7 @@ const { Engine } = await import('../src/engine.js');
 const { evaluate, renderBulletin, staleStatuses, STALE_STATUS_NOTICE_AFTER_MINUTES } = await import('../src/rules.js');
 const { NO_WORKER_MINUTES } = await import('../src/task-state.js');
 const { loadConfig } = await import('../src/config.js');
+const { listProjects } = await import('../src/projects.js');
 
 const MIN = 60000;
 const HOUR = 60 * MIN;
@@ -73,6 +74,28 @@ test('the default configuration has staleStatusMinutes 120', () => {
 
 test('the stale status notice delay uses the no-worker threshold', () => {
   assert.equal(STALE_STATUS_NOTICE_AFTER_MINUTES, NO_WORKER_MINUTES);
+});
+
+test('published time uses the newer of the status record and file modification time', () => {
+  const projectsDir = path.join(DATA, 'projects');
+  fs.mkdirSync(projectsDir, { recursive: true });
+  const file = path.join(projectsDir, 'alpha.json');
+  const older = NOW - 4 * HOUR;
+  const newerFileTime = NOW - 10 * MIN;
+  fs.writeFileSync(file, JSON.stringify({ project: 'Alpha', updated: iso(older), tasks: [] }));
+  fs.utimesSync(file, new Date(newerFileTime), new Date(newerFileTime));
+  let [project] = listProjects().filter((item) => item.slug === 'alpha');
+  assert.equal(Date.parse(project.publishedAt), newerFileTime);
+  assert.equal(Date.parse(project.updated), newerFileTime);
+  let snap = snapshot({ updated: Date.parse(project.publishedAt), activity: { workedAt: NOW - MIN }, orchStatus: 'working' });
+  snap.projects = [project];
+  assert.deepEqual(staleAlerts(evaluate(snap, CFG, {}, NOW).alerts), [], 'a newer file timestamp prevents an old-record notice');
+
+  const newerRecordTime = NOW - 5 * MIN;
+  fs.writeFileSync(file, JSON.stringify({ project: 'Alpha', updated: iso(newerRecordTime), tasks: [] }));
+  fs.utimesSync(file, new Date(newerFileTime), new Date(newerFileTime));
+  [project] = listProjects().filter((item) => item.slug === 'alpha');
+  assert.equal(Date.parse(project.publishedAt), newerRecordTime, 'a newer recorded publish time wins');
 });
 
 test('a stale status notice joins the pane digest after 30 minutes and repeats no sooner than 2 hours', async () => {
@@ -227,8 +250,10 @@ test('a project without a repository record uses only the worker rule', async ()
 test('an engine tick records worker activity, marks the status stale, and writes the bulletin line', async (t) => {
   const projects = path.join(DATA, 'projects');
   fs.mkdirSync(projects, { recursive: true });
-  fs.writeFileSync(path.join(projects, 'alpha.json'), JSON.stringify({ project: 'Alpha', status: 'active', updated: iso(NOW - 3 * HOUR), tasks: [] }));
-  t.after(() => fs.rmSync(path.join(projects, 'alpha.json'), { force: true }));
+  const statusFile = path.join(projects, 'alpha.json');
+  fs.writeFileSync(statusFile, JSON.stringify({ project: 'Alpha', status: 'active', updated: iso(NOW - 3 * HOUR), tasks: [] }));
+  fs.utimesSync(statusFile, new Date(NOW - 3 * HOUR), new Date(NOW - 3 * HOUR));
+  t.after(() => fs.rmSync(statusFile, { force: true }));
   const realNow = Date.now;
   Date.now = () => NOW;
   t.after(() => { Date.now = realNow; });

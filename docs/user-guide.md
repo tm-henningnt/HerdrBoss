@@ -587,7 +587,7 @@ To add the shared rules to a project, follow [orchestrator-instructions.md](orch
 
 The no-report watchdog starts its timer when a worker first appears idle or done. A change between these two states does not reset the timer. The reminder joins the shared info digest for that project's `orch` pane. Herdr Boss sends it once in the idle period. A working pane resets the worker's idle period. If the digest item stays due for more than 3 hours, Herdr Boss can send the digest while the orchestrator works. It still sends no more than one digest in 2 hours. An existing `report.json` prevents the reminder.
 
-The failure labels are `API Error`, `401`, `429`, `Connection lost`, `usage limit`, `rate limit`, `overloaded`, and `Free usage exceeded`. Matching ignores letter case and ignores each line whose trimmed text starts with `Tip:`. The matcher requires error forms for `401` (`401 Unauthorized`, `HTTP 401`, or `status 401`) and `usage limit` (`usage limit reached`, `usage limit exceeded`, or `hit your usage limit`). Herdr Boss stores and sends only the matched label and a parsed retry time. It does not store or forward pane output. Herdr Boss reads a working pane on every engine tick, so a failure is found while the worker still works. A matched worker shows the failed status in the snapshot even when Herdr reports it working. The engine then does not count it as running, so its slot becomes free. A failure found in a working pane clears when a later read shows no known failure. A failure found on an idle or done pane clears when that pane starts working and a later read shows no known failure. Any failed status clears when a different worker uses the pane. A later failure creates a new notice. A valid free-usage retry time exhausts the matching unmetered model until that time. The unmetered lane lists it separately from available models. A `Free usage exceeded` failure of an `opencode` worker with an unmetered model also exhausts the whole `opencode` free lane. This closes every unmetered model of the `opencode` harness. The lane uses the parsed retry time. Without a parsed retry time, the lane closes for 1 hour after the failure, and the lane shows that the reset time is unknown. A later absolute retry time in the same pane extends the exhaustion to that time. Herdr Boss measures a relative retry time from the first observation of the failure.
+The failure labels are `API Error`, `401`, `429`, `Connection lost`, `usage limit`, `rate limit`, `overloaded`, and `Free usage exceeded`. Matching ignores letter case and ignores each line whose trimmed text starts with `Tip:`. The matcher requires error forms for `401` (`401 Unauthorized`, `HTTP 401`, or `status 401`) and `usage limit` (`usage limit reached`, `usage limit exceeded`, or `hit your usage limit`). Herdr Boss stores and sends only the matched label and a parsed retry time. It does not store or forward pane output. Herdr Boss reads a working pane on every engine tick, so a failure is found while the worker still works. A matched worker shows the failed status in the snapshot even when Herdr reports it working. The engine then does not count it as running, so its slot becomes free. A failure found in a working pane clears when a later read shows no known failure. A failure found on an idle or done pane clears when that pane starts working and a later read shows no known failure. Any failed status clears when a different worker uses the pane. A later failure creates a new notice. A valid free-usage retry time marks only the matching model unavailable until that time. Other models in its harness stay available. Without a parsed retry time, the model uses a 60-minute cooldown. A later absolute retry time in the same pane extends the model cooldown. Herdr Boss measures a relative retry time from the first observation of the failure.
 
 An idle-orchestrator nudge reads the published project status file. Herdr Boss sends it only when the project mode is `auto` or `active`. It skips the `idle` and `paused` modes and the Boss workspace. The `orch` pane must be `idle` or `done` for at least the configured idle minutes. No other worker in that workspace may be `working`, `blocked`, or `failed`.
 
@@ -833,11 +833,10 @@ The same output has one **unmetered** lane. It lists every permitted unmetered m
 
 - A model with an active free-usage retry. The line shows its retry time.
 - A Pi model that Pi cannot use. Herdr Boss runs `pi --list-models` at most once every 15 minutes. Pi lists only the models that it can use. A Pi model is unavailable when the last good result does not list it. When Pi lists no row for the provider of the model, the line states that Pi has no credential for that provider. A failed run, or output without a header row, keeps the last good result. Without a good result, Herdr Boss does not hide a Pi model.
-- Every unmetered model of a harness whose free lane is exhausted. The line shows the retry time, and `(reset time unknown)` when Herdr Boss uses the 1-hour default.
 
-The lane is closed when it leaves out a model and no unmetered model remains. The bulletin, `herdr-boss lanes`, and the worker-start refusal text use the same data. They never offer a closed model as an alternative. The unmetered lane never changes least-over selection, avoid-provider rules, quota warnings, or quota accounting.
+The lane is closed when it leaves out a model and no unmetered model remains. The bulletin and `herdr-boss lanes` use the same data. They do not offer an unavailable model as an alternative. The unmetered lane never changes least-over selection, avoid-provider rules, quota warnings, or quota accounting.
 
-`worker start` refuses a Pi model that the last good `pi --list-models` result does not list. `--force` does not bypass this refusal, because such a worker cannot run. `worker start` also refuses an unmetered model of a harness whose free lane is exhausted. Use `--force` only for an authorized override.
+`worker start` refuses a Pi model that the last good `pi --list-models` result does not list. `--force` does not bypass this refusal, because such a worker cannot run.
 
 When every metered provider is ahead of pace, `worker start` allows the least-over provider. A refusal or warning names the current project's unmetered alternatives first, then the least-over metered provider. A window whose reset time has passed shows "reset, not yet measured" until the next reading.
 
@@ -894,6 +893,8 @@ Policy settings take precedence over legacy `config.json` values. The old `machi
 Clear the **Available** box of a harness to disable that harness for every project. Choose a preferred model for a harness. Worker start and handoff use it when you omit an explicit model. An empty choice uses the harness default.
 
 Each model row has a box and a provider route. Clear the box to disable the model in that harness for every project. A model can be in more than one harness. Each harness keeps its own box and its own route for the model, so a change in one harness does not change another harness.
+
+An active provider cooldown marks a model unavailable and shows its retry time in Settings and `herdr-boss models`. `herdr-boss lanes` shows the model and its lane. A worker pane that reports `Free usage exceeded` puts that model on cooldown for 60 minutes, or until a later retry time that the provider reports. An overload such as `503 service_overloaded` puts that model on a fixed 30-minute cooldown. Other models in the lane stay available. When you omit `--model`, `worker start` chooses the next available model in the same lane. The run record stores `modelSource: "fallback"` and `modelFallback` with the unavailable model, retry time, and reason. An explicit `--model` does not fall back.
 
 To add a model, type its string in the harness section and select **Add model**. A model string has 1 to 128 characters. It starts with a letter or a digit. It holds only letters, digits, dots (`.`), underscores (`_`), slashes (`/`), and hyphens (`-`). The server refuses whitespace and shell or control characters. A new model shows the **local** tag and starts unmetered. Select **Remove** to delete a local model. Remove also deletes its route, its disabled entry, its preferred-model choice, and its orchestrator succession choices.
 
@@ -1116,7 +1117,6 @@ Herdr Boss recommends the first succession choice that can start, preferring a n
 - The harness or the model is not allowed, or the project excludes it.
 - The metered provider of the model is near its limit or exhausted.
 - The unmetered model is exhausted until its retry time.
-- The harness free lane is exhausted, and the model is unmetered. The choice becomes available again at the retry time of the lane.
 - The choice is a Pi model that the last good `pi --list-models` result does not list. Without a good result, Herdr Boss does not skip a Pi model.
 
 If Opus is the only eligible choice, automatic handover does not prepare it. The engine sends the Boss one notice for that handover key. The notice says that Owner approval is needed and gives the `herdr-boss handoff prepare PANE --to claude --model claude-opus-5-5 --force` command.
@@ -1209,7 +1209,8 @@ Herdr Boss shows one state for each project browser:
 | State | Meaning |
 |---|---|
 | ready | Chrome runs with the project port and profile. `GET /json/version` on the port returns HTTP 200 with JSON within 2 seconds. |
-| not responding | Chrome runs with the project port and profile, and one of two conditions holds. Either `GET /json/version` does not answer within 2 seconds, or two CDP probes in a row failed. |
+| not responding | Chrome runs with the project port and profile. `GET /json/version` does not answer, or two CDP probes in a row failed while that endpoint did not answer. |
+| closed | You used `herdr-boss browser close`. Herdr Boss clears the not-responding notice and does not report the deliberate close as offline. A new browser request clears this state. |
 | offline | No Chrome process runs with the project port and profile. |
 | port conflict | Another process uses the port. Herdr Boss does not touch it. |
 
@@ -1230,7 +1231,7 @@ The probe records the ID of its blank tab. `browser tabs`, the preview grid, and
 
 The service runs at most one probe for each browser in 60 seconds. It never runs two probes of one browser at the same time. It runs no probe for a closed browser, for a browser that Herdr Boss did not start, for a browser that started less than 120 seconds ago, or in the read-only preview.
 
-One failed probe changes nothing. Two failed probes in a row mark the browser `not responding`. One successful probe clears the mark. The engine state and `GET /api/browser-sessions` show `notResponding`, `probeAt` (time of the last probe), and `probeReason`. The reason is one of these phrases:
+One failed probe changes nothing. Two failed probes in a row mark the browser `not responding`. One successful probe clears the mark. The service sends no not-responding notice while `GET /json/version` answers. A deliberate close clears the notice and marks the browser `closed`. The engine state and `GET /api/browser-sessions` show `closed`, `notResponding`, `probeAt` (time of the last probe), and `probeReason`. The reason is one of these phrases:
 
 | Reason | Meaning |
 |---|---|
@@ -1472,7 +1473,7 @@ The published status file holds the plan. The worker run records hold what happe
 
 The project data shows the current status, task states, and agents. `GET /api/projects` refreshes the project data from the latest engine snapshot. It rereads worker run records at least every 15 seconds. The request does not start a process to collect agents. `GET /api/state` returns the same project fields.
 
-The project data has `publishedAt` and age in minutes. `publishedAgeMin` is the age of the status file. `phaseAgeMin` uses `phaseUpdated` or the newest `tasks[].updated` time. `summaryAgeMin` uses `summaryUpdated`. When a status has no time for one field, that age equals `publishedAgeMin`.
+The project data has `publishedAt` and age in minutes. `publishedAt` uses the newer of the status file modification time and its recorded publish time. `publishedAgeMin` is the age of that time. `phaseAgeMin` uses `phaseUpdated` or the newest `tasks[].updated` time. `summaryAgeMin` uses `summaryUpdated`. When a status has no time for one field, that age equals `publishedAgeMin`.
 
 Each live worker that has no task ID, or whose task ID is missing from the status, appears in `unplanned`. Each item shows its name, kind, model, start time, age, and pane. It does not show the worker brief or path.
 

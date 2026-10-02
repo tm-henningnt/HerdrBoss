@@ -9,8 +9,7 @@ import { loadModels, loadProjectConfig } from '../src/kit/config.js';
 import { startWorker } from '../src/kit/workers.js';
 import { POLICY_DEFAULTS, unavailablePiModels, unmeteredLane, unmeteredSummary } from '../src/control.js';
 import { parsePiModels } from '../src/collect.js';
-import { activeFreeLaneExhaustions, extendFreeLaneExhaustion, freeUsageLaneRetry, FREE_LANE_FALLBACK_MS } from '../src/worker-failures.js';
-import { fmtTime, renderBulletin } from '../src/rules.js';
+import { renderBulletin } from '../src/rules.js';
 
 const models = loadModels();
 // A fixture Pi model of a provider that Pi has no credential for. The kit allow-list has no such model.
@@ -92,66 +91,25 @@ test('an unknown Pi result hides no Pi model', () => {
   assert.deepEqual(lane.unavailable, []);
 });
 
-test('Free usage exceeded without a retry time closes the opencode lane for 1 hour with retryKnown false', () => {
-  const at = Date.parse('2026-09-27T12:00:00Z');
-  assert.equal(FREE_LANE_FALLBACK_MS, 3600000);
-  assert.deepEqual(freeUsageLaneRetry({ label: 'Free usage exceeded', at }, at + 60000), { retryAt: at + 3600000, retryKnown: false });
-  const lanes = extendFreeLaneExhaustion({}, 'opencode', { ...freeUsageLaneRetry({ label: 'Free usage exceeded', at }, at), at }, at);
-  assert.deepEqual(lanes, { opencode: { kind: 'opencode', retryAt: at + 3600000, retryKnown: false, at } });
-  const lane = unmeteredLane(fixtureModels, policy(), projects, {}, { exhaustedLanes: lanes, now: at + 1000 });
-  assert.equal(lane.byProject.a.opencode, undefined, 'every unmetered opencode model is closed');
-  assert.ok(lane.byProject.a.pi.includes(FIXTURE_PI_MODEL), 'the pi harness keeps its unmetered models');
-  assert.deepEqual(lane.exhaustedLanes, [{ kind: 'opencode', retryAt: at + 3600000, retryKnown: false, reason: 'free usage exceeded', projects: ['a'] }]);
-});
-
-test('a parsed retry time is used for the opencode lane when the screen gives one', () => {
-  const at = Date.parse('2026-09-27T12:00:00Z');
-  assert.deepEqual(freeUsageLaneRetry({ label: 'Free usage exceeded', at, retryAt: at + 5 * 3600000 }, at), { retryAt: at + 5 * 3600000, retryKnown: true });
-  const first = extendFreeLaneExhaustion({}, 'opencode', { retryAt: at + 3600000, retryKnown: false, at }, at);
-  const later = extendFreeLaneExhaustion(first, 'opencode', { retryAt: at + 5 * 3600000, retryKnown: true, at: at + 10 }, at + 10);
-  assert.deepEqual(later.opencode, { kind: 'opencode', retryAt: at + 5 * 3600000, retryKnown: true, at });
-  assert.deepEqual(extendFreeLaneExhaustion(later, 'opencode', { retryAt: at + 3600000, retryKnown: false, at: at + 20 }, at + 20).opencode, later.opencode, 'a shorter retry does not shorten the lane record');
-});
-
-test('the opencode lane reopens at retryAt', () => {
-  const at = Date.parse('2026-09-27T12:00:00Z');
-  const lanes = { opencode: { kind: 'opencode', retryAt: at + 3600000, retryKnown: false, at } };
-  assert.deepEqual(activeFreeLaneExhaustions(lanes, at + 3599999), lanes);
-  assert.deepEqual(activeFreeLaneExhaustions(lanes, at + 3600000), {});
-  const reopened = unmeteredLane(models, policy(), projects, {}, { exhaustedLanes: lanes, now: at + 3600000 });
-  assert.ok(reopened.byProject.a.opencode.includes('opencode/big-pickle'));
-  assert.deepEqual(reopened.exhaustedLanes, []);
-});
-
-test('the lane is not open when no unmetered model remains', () => {
-  const at = Date.parse('2026-09-27T12:00:00Z');
-  const only = policy({ allowedKinds: ['opencode'] });
-  const lane = unmeteredLane(models, only, projects, {}, { exhaustedLanes: { opencode: { kind: 'opencode', retryAt: at + 3600000, retryKnown: true, at } }, now: at });
-  assert.equal(lane.state, 'closed');
-});
-
 function bulletinFor(lane) {
   return renderBulletin({ updatedAt: new Date().toISOString(), lanes: { unmetered: lane } }, { alerts: [], advice: [] }, { dashboardUrl: 'http://127.0.0.1:4477/' });
 }
 
-test('the bulletin lists only models that can start and one line per closed part', () => {
+test('the bulletin lists only models that can start and reports unavailable Pi models', () => {
   const now = Date.now();
-  const retryAt = now + 3600000;
   const unavailable = unavailablePiModels(fixtureModels.kinds.pi.allowedModels, { at: 1, models: parsePiModels(TABLE) });
   const lane = unmeteredLane(fixtureModels, policy(), projects, {}, {
     unavailablePiModels: unavailable,
-    exhaustedLanes: { opencode: { kind: 'opencode', retryAt, retryKnown: false, at: now } }, now,
+    now,
   });
   const text = bulletinFor(lane);
   const open = text.split('\n').find((line) => line.startsWith('- Unmetered: '));
   assert.ok(open, text);
   assert.doesNotMatch(open, /free-a/, 'the open line lists no closed model');
-  assert.doesNotMatch(open, /opencode:/, 'the open line lists no model of the exhausted opencode lane');
+  assert.match(open, /opencode:/, 'available OpenCode models stay in the open line');
   assert.ok(text.split('\n').includes('- Unmetered pi fixturezen/ models: unavailable. Pi has no credential for the fixturezen provider.'), text);
   assert.doesNotMatch(text, /Owner's decision/);
-  assert.ok(text.includes(`- Unmetered opencode: exhausted (free usage exceeded); retry after ${fmtTime(new Date(retryAt).toISOString())} (reset time unknown).`), text);
-  const known = bulletinFor(unmeteredLane(models, policy(), projects, {}, { exhaustedLanes: { opencode: { kind: 'opencode', retryAt, retryKnown: true, at: now } }, now }));
-  assert.ok(known.includes(`- Unmetered opencode: exhausted (free usage exceeded); retry after ${fmtTime(new Date(retryAt).toISOString())}.`), known);
+  assert.doesNotMatch(text, /Unmetered opencode: exhausted/);
 });
 
 function startFixture(rules, kitModels = models) {
@@ -195,19 +153,15 @@ test('worker start refuses a Pi model that pi --list-models does not list, also 
   assert.doesNotThrow(() => unknown.start('pifour', { kind: 'pi', model: FIXTURE_PI_MODEL }), 'an unknown Pi result refuses nothing');
 });
 
-test('worker start refuses an unmetered opencode model while the opencode free lane is exhausted', (t) => {
+test('worker start ignores a legacy free-lane exhaustion rule', (t) => {
   const retryAt = Date.now() + 3600000;
   const lane = { state: 'open', unmetered: true, byProject: {}, exhausted: [], unavailable: [], exhaustedLanes: [{ kind: 'opencode', retryAt, retryKnown: false, reason: 'free usage exceeded', projects: ['herdrboss'] }] };
   const f = startFixture({ lanes: { unmetered: lane } });
   t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
-  assert.throws(() => f.start('ocone', { kind: 'opencode', model: 'opencode/space-bunny-free' }), /opencode free lane is exhausted \(free usage exceeded\).*reset time unknown/);
-  assert.doesNotThrow(() => f.start('octwo', { kind: 'opencode', model: 'opencode/space-bunny-free', force: true }), '--force is an authorized override for an exhausted lane');
-  const expired = startFixture({ lanes: { unmetered: { ...lane, exhaustedLanes: [{ ...lane.exhaustedLanes[0], retryAt: Date.now() - 1 }] } } });
-  t.after(() => fs.rmSync(expired.root, { recursive: true, force: true }));
-  assert.doesNotThrow(() => expired.start('octhree', { kind: 'opencode', model: 'opencode/space-bunny-free' }));
+  assert.doesNotThrow(() => f.start('ocone', { kind: 'opencode', model: 'opencode/space-bunny-free' }));
 });
 
-test('Engine closes the opencode free lane for 1 hour after Free usage exceeded without a retry time, and records Pi models', (t) => {
+test('Engine marks only the failed free model unavailable for 1 hour and records Pi models', (t) => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-engine-free-lane-'));
   t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
   const engineUrl = new URL('../src/engine.js', import.meta.url).href;
@@ -269,8 +223,8 @@ const keptAfterFailure = engine.memory.piModels;
 now = start + 3600000;
 const reopened = await engine.tick();
 console.log(JSON.stringify({
-  lane: memory.exhaustedFreeLanes,
-  laneAfterTick: first.lanes.unmetered.exhaustedLanes,
+  modelUnavailable: memory.unavailableModels['opencode/big-pickle'],
+  laneAfterTick: first.lanes.unmetered.exhausted,
   opencodeOpen: first.lanes.unmetered.byProject.sample.opencode || [],
   piOpen: first.lanes.unmetered.byProject.sample.pi || [],
   piUnavailable: first.lanes.unmetered.unavailable.map((item) => item.model),
@@ -279,7 +233,6 @@ console.log(JSON.stringify({
   bulletin,
   callsAt10, piCalls, keptAfterFailure,
   reopenedOpen: reopened.lanes.unmetered.byProject.sample.opencode || [],
-  reopenedLanes: reopened.lanes.unmetered.exhaustedLanes,
 }));
 `;
   const result = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', script], {
@@ -287,18 +240,21 @@ console.log(JSON.stringify({
     encoding: 'utf8',
   }));
   const start = Date.parse('2026-09-27T10:00:00.000Z');
-  assert.deepEqual(result.lane, { opencode: { kind: 'opencode', retryAt: start + 3600000, retryKnown: false, at: start } });
-  assert.deepEqual(result.laneAfterTick, [{ kind: 'opencode', retryAt: start + 3600000, retryKnown: false, reason: 'free usage exceeded', projects: ['sample'] }]);
-  assert.deepEqual(result.opencodeOpen, []);
+  assert.deepEqual(result.modelUnavailable, {
+    model: 'opencode/big-pickle', kind: 'opencode', provider: null, lane: 'unmetered',
+    retryAt: start + 3600000, at: start, label: 'Free usage exceeded', reason: 'Free usage exceeded',
+  });
+  assert.deepEqual(result.laneAfterTick, [{ model: 'opencode/big-pickle', retryAt: start + 3600000, projects: ['sample'], kinds: ['opencode'] }]);
+  assert.ok(result.opencodeOpen.length > 0, 'other models in the free lane stay available');
+  assert.ok(!result.opencodeOpen.includes('opencode/big-pickle'));
   assert.ok(!result.piOpen.some((model) => model.startsWith('opencode/')));
   assert.ok(result.piUnavailable.includes(FIXTURE_PI_MODEL));
   assert.deepEqual(result.rememberedPi, { at: start, models: ['opencode-go/deepseek-v4.1-flash'] });
   assert.deepEqual(result.rulesPi, result.rememberedPi);
-  assert.match(result.bulletin, /- Unmetered opencode: exhausted \(free usage exceeded\); retry after .* \(reset time unknown\)\./);
+  assert.doesNotMatch(result.bulletin, /- Unmetered opencode: exhausted/);
   assert.match(result.bulletin, /- Unmetered pi fixturezen\/ models: unavailable\. Pi has no credential for the fixturezen provider\.\n/);
   assert.equal(result.callsAt10, 1, 'the collector runs at most once every 15 minutes');
   assert.equal(result.piCalls, 3);
   assert.deepEqual(result.keptAfterFailure, result.rememberedPi, 'a failed collection keeps the last good result');
-  assert.ok(result.reopenedOpen.includes('opencode/big-pickle'), 'the lane reopens at retryAt');
-  assert.deepEqual(result.reopenedLanes, []);
+  assert.ok(result.reopenedOpen.includes('opencode/big-pickle'), 'the model reopens at its cooldown deadline');
 });

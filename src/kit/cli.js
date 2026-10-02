@@ -107,11 +107,18 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
     const { positional, flags } = parseArgs(argv);
     if (positional.length || Object.keys(flags).some((key) => key !== 'kind')) fail('Usage: models [--kind KIND]');
     if (flags.kind && !modelConfig.kinds[flags.kind]) fail(`Unknown model kind: ${flags.kind}.`);
+    let unavailableModels = {};
+    try { unavailableModels = JSON.parse(fs.readFileSync(rulesFile, 'utf8')).unavailableModels || {}; }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+    const activeUnavailable = Object.values(unavailableModels).filter((item) => typeof item?.model === 'string' && typeof item?.kind === 'string'
+      && modelConfig.kinds[item.kind]?.allowedModels.includes(item.model)
+      && Number.isSafeInteger(item.retryAt) && item.retryAt > Date.now());
     // localModels lists the models that come from the policy extraModels and not from kit/models.json.
     const base = loadModels().kinds;
     const kinds = Object.fromEntries(Object.entries(modelConfig.kinds).map(([kind, cfg]) => {
       const localModels = cfg.allowedModels.filter((model) => !base[kind]?.allowedModels.includes(model));
-      return [kind, localModels.length ? { ...cfg, localModels } : cfg];
+      const cooldowns = activeUnavailable.filter((item) => item.kind === kind && cfg.allowedModels.includes(item.model)).sort((a, b) => a.model.localeCompare(b.model));
+      return [kind, { ...cfg, ...(localModels.length ? { localModels } : {}), ...(cooldowns.length ? { unavailableModels: cooldowns } : {}) }];
     }));
     const result = flags.kind ? { [flags.kind]: kinds[flags.kind] } : kinds;
     output(JSON.stringify(result, null, 2));

@@ -37,7 +37,7 @@ import { readKitNotice, pendingKitAlert, isKitAlert, kitNoticeTargets, unsentKit
 import { applyTaskState, readWorkerFacts, gitIsMerged, gitCounts } from './task-state.js';
 import { kitRevisionState, kitSnapshot, KIT_STATES } from './kit/agents-check.js';
 import { nextDailyTime, nightNoticeSent, quietHoursActive, readNight, readNightRecord, watchUntilPhrase, withNightReportMark, withNoticeMark, writeNight } from './night.js';
-import { inspectWorkerTransitions, inspectWorkerReports, readBoundedWorkerReport, isWorkerPane, applyWorkerFailureStatuses, resolveFreeUsageRun, activeFreeModelExhaustions, extendFreeModelExhaustion, activeFreeLaneExhaustions, extendFreeLaneExhaustion, freeUsageLaneRetry } from './worker-failures.js';
+import { inspectWorkerTransitions, inspectWorkerReports, readBoundedWorkerReport, isWorkerPane, applyWorkerFailureStatuses, resolveWorkerRun, activeUnavailableModels, extendModelUnavailability, workerModelCooldown, activeFreeModelExhaustions, extendFreeModelExhaustion } from './worker-failures.js';
 import { appendMachineSample, highSwapHoursLine, sampleLine } from './machine-samples.js';
 import { appendMemorySample, sampleMemory, MEMORY_SAMPLE_INTERVAL_MS, MEMORY_PS_TIMEOUT_MS } from './memory-classes.js';
 import { FULL_SUITE_LOCK, lockLedgerSummary, readLockQueue, readLockTakeoverNotices, readMachineLocks, removeLockTakeoverNotice } from './kit/locks.js';
@@ -954,8 +954,10 @@ export class Engine extends EventEmitter {
           }
         }
         const { restoreTabs, ...publicSession } = b;
+        const responsive = matched ? await this.collectors.cdpResponds(b.port) : false;
+        const closed = !!b.closedAt && !matched;
         return maskDeep({ ...publicSession, processState: processesKnown ? matched ? 'running' : 'missing' : 'unknown', processPid: browser?.pid ?? null, externalClients: clientCount,
-          responsive: matched ? await this.collectors.cdpResponds(b.port) : false, notResponding: probe.notResponding, probeAt: probe.lastProbeAt, probeReason: probe.reason, probeSince: probe.since, probeFailures: probe.failures });
+          responsive, closed, notResponding: !closed && probe.notResponding, probeAt: probe.lastProbeAt, probeReason: probe.reason, probeSince: probe.since, probeFailures: probe.failures });
       }));
       const night = readNight({ dataDir: DATA_DIR, now });
 
@@ -1050,6 +1052,8 @@ export class Engine extends EventEmitter {
       this.memory.workerObserved = workerTransitions.observed;
       this.memory.workerFailures = workerTransitions.failures;
       this.memory.exhaustedFreeModels ||= {};
+      delete this.memory.exhaustedFreeLanes;
+      this.memory.unavailableModels = activeUnavailableModels(this.memory.unavailableModels, now);
       const workerRuns = this.communicationRuns;
       const uncollectedTransitions = herdr && currentHerdrSnapshot && currentPaneList ? inspectUncollectedWorkers({
         panes: herdr.panes,
@@ -1147,25 +1151,24 @@ export class Engine extends EventEmitter {
       snap.kit = kitSnapshot();
       const policy = migrateWorkspacePolicy(loadPolicy(), snap, { file: POLICY_FILE });
       this.memory.exhaustedFreeModels = activeFreeModelExhaustions(this.memory.exhaustedFreeModels, now);
-      this.memory.exhaustedFreeLanes = activeFreeLaneExhaustions(this.memory.exhaustedFreeLanes, now);
       for (const pane of herdr?.panes || []) {
         const failure = workerTransitions.failures[pane.id];
-        const laneRetry = freeUsageLaneRetry(failure, now);
-        if (!laneRetry) continue;
+        const cooldown = workerModelCooldown(failure, now);
+        if (!cooldown) continue;
         const checkoutPaths = [...new Set([
           ...herdr.panes.filter((candidate) => candidate.workspace === pane.workspace && candidate.orch && candidate.cwd).map((candidate) => candidate.cwd),
           pane.cwd,
         ])];
         let association = null;
         for (const runsCwd of checkoutPaths) {
-          association = resolveFreeUsageRun(pane, { providerFor, policy, runsCwd });
+          association = resolveWorkerRun(pane, { providerFor, policy, runsCwd });
           if (association) break;
         }
         if (!association) continue;
-        if (laneRetry.retryKnown) this.memory.exhaustedFreeModels = extendFreeModelExhaustion(this.memory.exhaustedFreeModels, association, failure.retryAt, now);
-        // The OpenCode free-usage limit closes every unmetered model of the opencode harness.
-        if (association.kind === 'opencode') this.memory.exhaustedFreeLanes = extendFreeLaneExhaustion(this.memory.exhaustedFreeLanes, 'opencode', { ...laneRetry, at: failure.at }, now);
+        this.memory.unavailableModels = extendModelUnavailability(this.memory.unavailableModels, association, cooldown, now);
+        if (association.provider === null) this.memory.exhaustedFreeModels = extendFreeModelExhaustion(this.memory.exhaustedFreeModels, association, cooldown.retryAt, now);
       }
+      snap.unavailableModels = Object.values(this.memory.unavailableModels).sort((a, b) => a.model.localeCompare(b.model));
       clearExpiredOneOffGoals(policy, snap.quotas, now, { log: (message) => this.log('policy', message) });
       // Apply the failure status before deriving control, so a failed worker does not count as running.
       snap.herdr = herdr ? { ...herdr, panes: applyWorkerFailureStatuses(herdr.panes, workerTransitions.failures) } : herdr;
@@ -1176,7 +1179,7 @@ export class Engine extends EventEmitter {
         Object.values(nightConfig.maxWorkersByLane || {}).some((cap) => Number.isInteger(cap));
       const runningByLane = laneCapsActive ? runningWorkerCountsByLane(snap.herdr, policy, this.models) : {};
       const control = deriveControl(snap, policy, this.models, this.memory.paneSince, now, this.memory.exhaustedFreeModels, {
-        exhaustedFreeLanes: this.memory.exhaustedFreeLanes, piModels: this.memory.piModels, lanes: snap.lanes,
+        piModels: this.memory.piModels, lanes: snap.lanes,
         nightMaxWorkers: nightConfig.maxWorkers,
       });
       this.communicationControl = control;
@@ -1204,9 +1207,11 @@ export class Engine extends EventEmitter {
       }
       if (this.act) this.recordMemorySample(now);
       // The unmetered lane lists the permitted free models that can start. It never affects least-over selection.
-      snap.lanes.unmetered = unmeteredLane(this.models, policy, control.projects, this.memory.exhaustedFreeModels, {
+      const unavailableFreeModels = Object.fromEntries(Object.values(this.memory.unavailableModels)
+        .filter((item) => item.provider === null).map((item) => [item.model, { model: item.model, retryAt: item.retryAt }]));
+      snap.lanes.unmetered = unmeteredLane(this.models, policy, control.projects, { ...this.memory.exhaustedFreeModels, ...unavailableFreeModels }, {
         unavailablePiModels: unavailablePiModels(mergeModels(this.models, policy).kinds.pi?.allowedModels, this.memory.piModels),
-        exhaustedLanes: this.memory.exhaustedFreeLanes, now,
+        now,
       });
       snap.leastOverProvider = leastOverProvider(snap.lanes);
       snap.policy = policy;
@@ -1340,9 +1345,9 @@ export class Engine extends EventEmitter {
           if (p?.workspace) evaluation.alerts.push(browserReadyAlert(b, p.workspace));
         }
         // The notice has one key for each change to "not responding". It ends when the browser answers again. Herdr Boss never restarts the browser.
-        if (running && b.notResponding) evaluation.alerts.push(browserUnresponsiveAlert(b, control.projects[b.project]?.workspace || null));
+        if (running && !b.closed && !b.responsive && b.notResponding) evaluation.alerts.push(browserUnresponsiveAlert(b, control.projects[b.project]?.workspace || null));
         if (!b.launchedAt || now - Date.parse(b.launchedAt) < 120000) continue;
-        if (running) continue;
+        if (running || b.closed) continue;
         const p = control.projects[b.project];
         evaluation.alerts.push({
           key: `browser:managed-down:${b.project}:${b.port}`, severity: 'warn', scope: p?.workspace || 'user',
@@ -1396,7 +1401,8 @@ export class Engine extends EventEmitter {
         load: machine ? { oneMinute: machine.load[0], fiveMinute: machine.load[1], cpus: machine.cpus, limit: machineLimits(snap.machine, policy, now, snap.night).loadLimit } : null,
         machine: snap.machine?.limits || null,
         notes: evaluation.advice,
-        browsers: managedBrowsers.map((b) => ({ project: b.project, port: b.port, profile: b.profile, headless: !!b.headless, windowSize: b.windowSize || { width: 1280, height: 800 }, ready: browsers.some((x) => x.kind === 'automation-chrome' && x.port === String(b.port) && x.profile === b.profile), responsive: b.responsive, notResponding: b.notResponding, probeAt: b.probeAt, probeReason: b.probeReason })),
+        browsers: managedBrowsers.map((b) => ({ project: b.project, port: b.port, profile: b.profile, headless: !!b.headless, windowSize: b.windowSize || { width: 1280, height: 800 }, ready: browsers.some((x) => x.kind === 'automation-chrome' && x.port === String(b.port) && x.profile === b.profile), responsive: b.responsive, closed: b.closed, notResponding: b.notResponding, probeAt: b.probeAt, probeReason: b.probeReason })),
+        unavailableModels: snap.unavailableModels,
         policy,
         night: { active: snap.night?.active === true, maxWorkersByLane: nightConfig.maxWorkersByLane || {} },
         control: { runningWorkers: control.runningWorkers, maxWorkers: control.maxWorkers, runningByLane, projects: control.projects, workspaces: control.workspaces },
@@ -1829,7 +1835,7 @@ export class Engine extends EventEmitter {
         this.log('handoff', `Automatically activated ${item.toKind} successor for ${item.label || item.project}`, item.boss ? { workspace: item.workspace, pane: item.newPane } : { project: item.project, pane: item.newPane });
       } catch (e) { this.log('error', `Automatic activation for ${item.label || item.project} failed: ${String(e.stderr || e.message).slice(0, 300)}`); }
     }
-    const successorLimits = { exhaustedFreeModels: this.memory.exhaustedFreeModels, exhaustedFreeLanes: this.memory.exhaustedFreeLanes, piModels: this.memory.piModels, lanes };
+    const successorLimits = { exhaustedFreeModels: this.memory.exhaustedFreeModels, piModels: this.memory.piModels, lanes };
     const stopped = Object.values(control.projects).flatMap((p) => {
       const last = this.memory.lastOrchestrators[p.workspace];
       if (!p.orch || p.orch.kind || last?.pane !== p.orch.pane) return [];

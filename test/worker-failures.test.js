@@ -9,8 +9,12 @@ import {
   readBoundedWorkerReport,
   parseFreeUsageRetryTime,
   resolveFreeUsageRun,
+  resolveWorkerRun,
   activeFreeModelExhaustions,
   extendFreeModelExhaustion,
+  activeUnavailableModels,
+  extendModelUnavailability,
+  workerModelCooldown,
   shouldReadWorkerScreen,
   applyWorkerFailureStatuses,
   blockedWorkerAlerts,
@@ -50,6 +54,8 @@ test('worker failure matching returns only a fixed case-insensitive label', () =
     ['hit your usage limit', 'usage limit'],
     ['RATE LIMIT exceeded', 'rate limit'],
     ['provider overloaded', 'overloaded'],
+    ['HTTP 503 service_overloaded', 'overloaded'],
+    ['503 Service Unavailable', 'overloaded'],
     ['FREE USAGE EXCEEDED. Retry in 5h 48m.', 'Free usage exceeded'],
   ]) assert.equal(matchWorkerFailure([line]), label);
   for (const line of ['401', 'usage limit']) assert.equal(matchWorkerFailure([line]), null);
@@ -64,6 +70,40 @@ test('free usage retry parser accepts fixed-clock relative and absolute times on
   assert.equal(parseFreeUsageRetryTime('Free usage exceeded.', now), null);
   assert.equal(parseFreeUsageRetryTime('Free usage exceeded. retry at 2026-09-26T09:00:00Z', now), null);
   assert.equal(parseFreeUsageRetryTime('Free usage exceeded. retry at 2026-02-30T15:48:00Z', now), null);
+});
+
+test('provider cooldowns use 60 minutes for free usage and 30 minutes for overloads', () => {
+  const now = Date.parse('2026-09-26T10:00:00.000Z');
+  assert.deepEqual(workerModelCooldown({ label: 'Free usage exceeded', at: now }, now), {
+    retryAt: now + 60 * 60000, label: 'Free usage exceeded', reason: 'Free usage exceeded', at: now,
+  });
+  assert.deepEqual(workerModelCooldown({ label: 'Free usage exceeded', at: now, retryAt: now + 5 * 3600000 }, now), {
+    retryAt: now + 5 * 3600000, label: 'Free usage exceeded', reason: 'Free usage exceeded', at: now,
+  });
+  assert.deepEqual(workerModelCooldown({ label: 'overloaded', at: now }, now), {
+    retryAt: now + 30 * 60000, label: 'overloaded', reason: 'overloaded', at: now,
+  });
+  assert.equal(workerModelCooldown({ label: 'overloaded', at: now }, now + 30 * 60000), null);
+});
+
+test('an overload without a provider retry uses exactly the fixed 30-minute cooldown', () => {
+  const now = Date.parse('2026-09-26T10:00:00.000Z');
+  const cooldown = workerModelCooldown({ label: 'overloaded', at: now }, now);
+  assert.equal(cooldown.retryAt - now, 30 * 60 * 1000);
+  assert.equal(cooldown.retryAt, Date.parse('2026-09-26T10:30:00.000Z'));
+});
+
+test('model unavailability remains model-specific and expires at its retry time', () => {
+  const now = Date.parse('2026-09-26T10:00:00.000Z');
+  const association = { project: 'sample', kind: 'codex', model: 'gpt-test', provider: 'codex', lane: 'codex' };
+  const cooldown = { at: now, retryAt: now + 30 * 60000, label: 'overloaded', reason: 'overloaded' };
+  const unavailable = extendModelUnavailability({}, association, cooldown, now);
+  assert.deepEqual(unavailable['gpt-test'], {
+    model: 'gpt-test', kind: 'codex', provider: 'codex', lane: 'codex', retryAt: cooldown.retryAt,
+    at: now, label: 'overloaded', reason: 'overloaded',
+  });
+  assert.deepEqual(Object.keys(activeUnavailableModels(unavailable, now)), ['gpt-test']);
+  assert.deepEqual(activeUnavailableModels(unavailable, cooldown.retryAt), {});
 });
 
 test('free usage failure stores only its fixed label and parsed retry time', async () => {
@@ -96,6 +136,9 @@ test('free usage model association requires matching recorded name and pane and 
   assert.deepEqual(resolveFreeUsageRun(pane, { providerFor: () => null, policy: {} }), { project: 'sample', kind: 'opencode', model: 'opencode/free' });
   assert.deepEqual(resolveFreeUsageRun(pane, { providerFor: () => null, policy: {}, runsCwd: checkout }), { project: 'sample', kind: 'opencode', model: 'opencode/free' });
   assert.equal(resolveFreeUsageRun(pane, { providerFor: () => 'opencodego', policy: {}, runsCwd: checkout }), null);
+  assert.deepEqual(resolveWorkerRun(pane, { providerFor: () => 'opencodego', policy: {}, runsCwd: checkout }), {
+    project: 'sample', kind: 'opencode', model: 'opencode/free', provider: 'opencodego', lane: 'opencodego',
+  });
   fs.writeFileSync(record, JSON.stringify({ name: 'worker-a', pane: 'other:pane', kind: 'opencode', model: 'opencode/free', worktree: worker }));
   assert.equal(resolveFreeUsageRun(pane, { providerFor: () => null, policy: {}, runsCwd: checkout }), null);
   fs.writeFileSync(record, JSON.stringify({ name: 'worker-a', pane: pane.id, kind: 'opencode', model: 'opencode/free', worktree: worker, finishedAt: '2026-09-26T09:00:00Z' }));

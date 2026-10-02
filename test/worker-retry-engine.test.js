@@ -49,7 +49,6 @@ console.log(JSON.stringify({
   running: snap.control?.projects?.alpha?.running ?? null,
   runningWorkers: snap.control?.runningWorkers ?? null,
   exhausted: snap.lanes?.unmetered?.exhausted || [],
-  exhaustedLanes: snap.lanes?.unmetered?.exhaustedLanes || [],
   available: snap.lanes?.unmetered?.byProject?.alpha?.opencode || [],
   failureNotices: (snap.alerts || []).filter((a) => a.key.startsWith('workers:failed:')).map((a) => ({ key: a.key, title: a.title, text: a.text })),
   memory: engine.memory,
@@ -164,10 +163,10 @@ test('a free-usage failure from a working pane exhausts the unmetered model unti
   assert.equal(before.paneStatuses['w-alpha:p2'].failureLabel, 'Free usage exceeded');
   assert.equal(before.memory.workerFailures['w-alpha:p2'].retryAt, retryAt);
   assert.equal(before.memory.exhaustedFreeModels[MODEL].retryAt, retryAt);
-  assert.deepEqual(before.exhausted, [], 'the model runs only in the opencode harness, so the lane record covers it');
-  assert.deepEqual(before.exhaustedLanes.map(({ kind, retryAt: until }) => [kind, until]), [['opencode', retryAt]]);
+  assert.deepEqual(before.exhausted, [{ model: MODEL, retryAt, projects: ['alpha'], kinds: ['opencode'] }]);
+  assert.ok(before.available.length > 0, 'other models in the OpenCode lane stay available');
   assert.equal(before.available.includes(MODEL), false, 'the exhausted model leaves the available list');
-  assert.equal(before.bulletin.includes('- Unmetered opencode: exhausted (free usage exceeded); retry after '), true);
+  assert.equal(before.bulletin.includes(`Exhausted models: ${MODEL} until `), true);
   assert.equal(before.running, 0);
   assert.equal(JSON.stringify(before).includes('Free usage exceeded. retry at'), false, 'raw pane text must not be stored');
 
@@ -175,7 +174,6 @@ test('a free-usage failure from a working pane exhausts the unmetered model unti
   assert.deepEqual(after.errors, []);
   assert.deepEqual(after.memory.exhaustedFreeModels, {}, 'the exhaustion expires at the retry time');
   assert.deepEqual(after.exhausted, []);
-  assert.deepEqual(after.exhaustedLanes, []);
   assert.equal(after.available.includes(MODEL), true, 'the model returns to the available list');
   assert.equal(after.bulletin.includes('Exhausted models:'), false);
   assert.equal(after.failureNotices[0].key, before.failureNotices[0].key, 'the notice stays deduplicated across ticks');
@@ -211,7 +209,6 @@ test('a later absolute retry timestamp extends the exhausted model until that ti
   assert.equal(extended.failureNotices.length, 1);
   assert.equal(extended.failureNotices[0].key, first.failureNotices[0].key, 'the notice stays deduplicated');
   assert.equal(extended.memory.exhaustedFreeModels[MODEL].retryAt, laterDeadline, 'the engine extends the exhaustion');
-  assert.equal(extended.exhaustedLanes[0].retryAt, laterDeadline);
   assert.equal(extended.available.includes(MODEL), false, 'the model stays unavailable past the old deadline');
   assert.equal(JSON.stringify(extended).includes('retry at 2026'), false, 'raw pane text must not be stored');
 

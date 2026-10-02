@@ -155,7 +155,12 @@ test('closeBrowser keeps the lease, and releaseBrowser removes it', async () => 
   await pool.requestBrowser('alpha', { launch: false, ...fakeMachine() });
   const closed = await pool.closeBrowser('alpha', fakeMachine());
   assert.equal(closed.closed, true);
+  assert.equal(Date.parse(pool.listBrowserSessions().alpha.closedAt) > 0, true, 'a deliberate close stays in the session record');
+  assert.equal((await pool.browserStatus(pool.listBrowserSessions().alpha, fakeMachine())).closed, true);
   assert.deepEqual(browserLeases().map((lease) => lease.item), ['9241']);
+  const requested = await pool.requestBrowser('alpha', { launch: false, headless: true, ...fakeMachine() });
+  assert.equal(requested.closed, false, 'a new request clears the deliberate-close state');
+  assert.equal(pool.listBrowserSessions().alpha.closedAt, undefined);
   const released = await pool.releaseBrowser('alpha', fakeMachine());
   assert.equal(released.released, true);
   assert.equal(released.port, 9241);

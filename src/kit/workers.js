@@ -440,16 +440,15 @@ export function describeLane(provider, lane, now = Date.now()) {
 
 export function describeUnmetered(lane, project = null) {
   const summary = unmeteredSummary(lane, project);
-  const closed = unmeteredClosedParts(lane, undefined, project);
+  const closed = unmeteredClosedParts(lane, project);
   const head = lane?.state === 'closed' ? 'unmetered closed: no unmetered model can start'
     : project && !Object.hasOwn(lane?.byProject || {}, project) ? 'unmetered open; no unmetered models are available after exclusions'
       : summary ? `unmetered open: ${summary}` : 'unmetered open; no unmetered models are available after exclusions';
   return [head, ...closed].join('\n');
 }
 
-// Refuse a free model that cannot start. A Pi model that the last good `pi --list-models` result does not list
-// cannot run, so --force does not bypass it. An exhausted harness free lane yields to an authorized --force.
-export function unmeteredGate(kind, model, provider, rules, { force = false, now = Date.now(), project = null, allowedModels = null } = {}) {
+// A Pi model that the last good `pi --list-models` result does not list cannot run, so --force does not bypass it.
+export function unmeteredGate(kind, model, rules) {
   if (kind === 'pi' && Array.isArray(rules?.piModels?.models) && !rules.piModels.models.includes(model)) {
     const [missing] = unavailablePiModels([model], rules.piModels);
     const reason = missing.reason === 'no-credential'
@@ -457,13 +456,7 @@ export function unmeteredGate(kind, model, provider, rules, { force = false, now
       : 'Pi does not list this model.';
     return { error: `pi cannot run ${model}: the last pi --list-models result does not list it. ${reason} --force cannot bypass this refusal.` };
   }
-  if (provider !== null) return {};
-  const lane = (rules?.lanes?.unmetered?.exhaustedLanes || []).find((item) => item.kind === kind && Number.isFinite(item.retryAt) && item.retryAt > now);
-  if (!lane) return {};
-  const detail = `The ${kind} free lane is exhausted (${lane.reason || 'free usage exceeded'}); retry after ${new Date(lane.retryAt).toISOString()}${lane.retryKnown ? '' : ' (reset time unknown)'}.`;
-  if (force) return { warning: `Warning: --force overrides the free lane guard. ${detail}` };
-  const alternatives = unmeteredAlternatives(rules, project, allowedModels);
-  return { error: `${detail}${alternatives ? ` ${alternatives}` : ''} Use --force only for an authorized override.` };
+  return {};
 }
 
 // The current project's permitted unmetered models, after its allow-list. Empty when none apply.
@@ -633,7 +626,13 @@ export function normalizeModel(model) {
 
 export const isOpus = (model) => /(^|[-/])opus($|[-.\d])/i.test(model);
 
-function validateSelection(kind, options, models, config, resourcePolicy = null, onOpusRefused = null) {
+function activeUnavailableModel(unavailableModels, kind, model, now) {
+  const records = Array.isArray(unavailableModels) ? unavailableModels : Object.values(unavailableModels || {});
+  return records.find((item) => item?.kind === kind && item?.model === model
+    && Number.isSafeInteger(item.retryAt) && item.retryAt > now);
+}
+
+function validateSelection(kind, options, models, config, resourcePolicy = null, onOpusRefused = null, unavailableModels = {}, now = Date.now()) {
   const policy = models.kinds[kind];
   if (!policy) throw new Error(`Unknown agent kind: ${kind}. Choose one of ${Object.keys(models.kinds).join(', ')}.`);
   const startable = (candidate) => policy.allowedModels.includes(candidate) && modelEnabled(kind, candidate, resourcePolicy) &&
@@ -641,13 +640,31 @@ function validateSelection(kind, options, models, config, resourcePolicy = null,
   const explicit = normalizeModel(options.model);
   let model = explicit;
   let modelSource = 'flag';
+  let modelFallback;
   if (explicit == null) {
     // Without --model the kit default applies. The preferred model of the policy is a fallback for a default that cannot start.
     const kitDefault = normalizeModel(policy.defaultModel);
     if (!kitDefault) throw new Error(`${kind} has no default model in kit/models.json. Pass --model.`);
     model = kitDefault;
     modelSource = 'default';
-    if (!startable(kitDefault)) {
+    const unavailable = activeUnavailableModel(unavailableModels, kind, kitDefault, now);
+    if (unavailable) {
+      const lane = providerFor(kind, kitDefault, resourcePolicy);
+      const defaultIndex = policy.allowedModels.indexOf(kitDefault);
+      const projectPolicy = resourcePolicy?.projects?.[config.slug];
+      const ordered = defaultIndex < 0 ? policy.allowedModels : [
+        ...policy.allowedModels.slice(defaultIndex + 1), ...policy.allowedModels.slice(0, defaultIndex),
+      ];
+      const candidate = ordered.find((item) => item !== kitDefault && startable(item)
+        && providerFor(kind, item, resourcePolicy) === lane
+        && !projectPolicy?.excludedKinds?.includes(kind) && !projectPolicy?.excludedModels?.includes(item)
+        && !activeUnavailableModel(unavailableModels, kind, item, now)
+        && (!isOpus(item) || options.force));
+      if (!candidate) throw new Error(`The default model ${kitDefault} of ${kind} is unavailable until ${new Date(unavailable.retryAt).toISOString()} and no available model in the same lane can start.`);
+      model = candidate;
+      modelSource = 'fallback';
+      modelFallback = { from: kitDefault, retryAt: unavailable.retryAt, reason: unavailable.reason || unavailable.label || 'provider cooldown' };
+    } else if (!startable(kitDefault)) {
       const preferred = normalizeModel(resourcePolicy?.preferredModels?.[kind]);
       if (!preferred || !startable(preferred)) throw new Error(`The default model ${kitDefault} of ${kind} cannot start and no preferred model can. Pass --model.`);
       model = preferred;
@@ -665,7 +682,7 @@ function validateSelection(kind, options, models, config, resourcePolicy = null,
   if (effort === null && options.effort != null) throw new Error(`${kind} does not support a reasoning effort.`);
   const effortSource = options.effort != null ? 'flag' : effort !== null ? 'default' : null;
   const launchArgs = policy.launchArgs.map((arg) => arg.replaceAll('{{model}}', model).replaceAll('{{effort}}', effort ?? ''));
-  return { model, modelSource, effort, effortSource, launchArgs, force: isOpus(model) && !!options.force };
+  return { model, modelSource, modelFallback, effort, effortSource, launchArgs, force: isOpus(model) && !!options.force };
 }
 
 function appendWorkerEvent(env, event, now) {
@@ -937,6 +954,7 @@ function renderStartPlan(plan) {
     `   $ herdr agent list`,
     `2. Read resource rules: ${plan.rulesFile}${plan.rulesStale ? ' (stale or missing; warn)' : ''}`,
     `3. Validate kind/model/effort: ${plan.kind} / ${plan.model} / ${plan.effort ?? '(none)'} (model source: ${plan.modelSource}${plan.effortSource ? `, effort source: ${plan.effortSource}` : ''}${plan.force ? ', --force: Opus approved by the Owner' : ''})`,
+    ...(plan.modelFallback ? [`   Fallback: ${plan.modelFallback.from} unavailable until ${new Date(plan.modelFallback.retryAt).toISOString()} (${plan.modelFallback.reason})`] : []),
     `4. Create worktree: ${plan.noWorktree ? '(disabled; use current worktree)' : plan.worktree}`,
     ...(plan.noWorktree ? [] : [`   $ git worktree add -b ${displayArg(plan.branch)} ${displayArg(plan.worktree)} ${displayArg(plan.base)}`]),
     `   Append /.worker/ and /.orchestration/local/ to ${plan.excludeFile}`,
@@ -1203,7 +1221,7 @@ export function startWorker(name, options, {
   const onOpusRefused = options.kind === 'claude' && !options.dryRun
     ? (model) => recordOpusRefusal(name, model, options, config, env, now)
     : null;
-  const { model, modelSource, effort, effortSource, launchArgs, force: opusForce } = validateSelection(options.kind, options, mergeModels(modelConfig, policy), config, policy, onOpusRefused);
+  const { model, modelSource, modelFallback, effort, effortSource, launchArgs, force: opusForce } = validateSelection(options.kind, options, mergeModels(modelConfig, policy), config, policy, onOpusRefused, rules.unavailableModels, now);
   const agentsWarning = agentsDrift(config.root, rulesPath);
   if (agentsWarning) output(agentsWarning);
   const projectPolicy = policy?.projects?.[config.slug];
@@ -1221,9 +1239,8 @@ export function startWorker(name, options, {
       (rules.control?.runningByLane?.[laneName] || 0) >= nightLaneCap && !options.force) {
     throw new Error(`Watch worker lane limit (${nightLaneCap}) for ${laneName} is reached; wait for a slot to open.`);
   }
-  const freeGate = unmeteredGate(options.kind, model, provider, rules, { force: options.force, now, project: config.slug, allowedModels: config.allowedModels });
+  const freeGate = unmeteredGate(options.kind, model, rules);
   if (freeGate.error) throw new Error(freeGate.error);
-  if (freeGate.warning) output(freeGate.warning);
   const gate = providerGate(provider, rules, { force: options.force, now, project: config.slug, allowedModels: config.allowedModels });
   if (gate.error) throw new Error(gate.error);
   if (gate.warning) output(gate.warning);
@@ -1314,7 +1331,7 @@ export function startWorker(name, options, {
   const agentArgs = [...envAgentArgs, ...browserArgs];
 
   const plan = {
-    name, kind: options.kind, model, modelSource, effort, effortSource, force: opusForce, rulesFile: rulesPath, rulesStale: staleRules,
+    name, kind: options.kind, model, modelSource, ...(modelFallback ? { modelFallback } : {}), effort, effortSource, force: opusForce, rulesFile: rulesPath, rulesStale: staleRules,
     noWorktree: !!options.noWorktree, readOnly: !!options.readOnly, allowedPaths, worktree, branch, base, template: config.briefTemplatePath,
     workspaceId, paneId, paneCommand, paneTab, launchArgs, agentArgs, recordFile, excludeFile,
     // A worker in the current worktree uses its existing dependencies, so setup runs only for a new worktree.
@@ -1476,6 +1493,7 @@ export function startWorker(name, options, {
         kind: options.kind,
         model,
         modelSource,
+        ...(modelFallback ? { modelFallback } : {}),
         ...(options.kind === 'opencode' ? { startAttempts: attempt } : {}),
         ...(opusForce ? { force: true } : {}),
         provider,

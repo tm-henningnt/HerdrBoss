@@ -7,6 +7,7 @@ import { execFileSync } from 'node:child_process';
 import test from 'node:test';
 import { loadModels, loadProjectConfig } from '../src/kit/config.js';
 import { startWorker } from '../src/kit/workers.js';
+import { runKitCommand } from '../src/kit/cli.js';
 import { POLICY_DEFAULTS } from '../src/control.js';
 
 const models = loadModels();
@@ -46,10 +47,10 @@ function fixture(t, { rules = {}, kitModels = models } = {}) {
     records: fs.existsSync(config.runsPath) ? fs.readdirSync(config.runsPath) : [],
     branch: execFileSync('git', ['-C', root, 'branch', '--list', 'wm*'], { encoding: 'utf8' }).trim(),
   });
-  return { start, sideEffects, out };
+  return { root, config, rulesFile, start, sideEffects, out };
 }
 
-const modelOf = (launchArgs) => launchArgs[launchArgs.indexOf('--model') + 1];
+const modelOf = (launchArgs) => launchArgs[launchArgs.indexOf(launchArgs.includes('--model') ? '--model' : '-m') + 1];
 
 test('a claude start without --model passes the kit default model and records its source', (t) => {
   const f = fixture(t);
@@ -107,6 +108,83 @@ test('a policy that disables the default falls back to the preferred non-Opus mo
   const plan = f.start('wmfall', { kind: 'claude', dryRun: true });
   assert.equal(plan.model, 'claude-sonnet-x');
   assert.equal(plan.modelSource, 'policy');
+});
+
+test('an unavailable default falls back to the next available model on the same lane only without --model', (t) => {
+  const unavailable = {
+    model: 'gpt-6-luna', lane: 'codex', provider: 'codex', kind: 'codex',
+    retryAt: Date.now() + 30 * 60 * 1000, reason: '503 service_overloaded', label: 'overloaded',
+  };
+  const f = fixture(t, { rules: { unavailableModels: { [unavailable.model]: unavailable } } });
+  const fallback = f.start('wmnext', { kind: 'codex', dryRun: true });
+  assert.equal(fallback.model, 'gpt-6.1-sol');
+  assert.equal(fallback.modelSource, 'fallback');
+  assert.deepEqual(fallback.modelFallback, {
+    from: 'gpt-6-luna', retryAt: unavailable.retryAt, reason: '503 service_overloaded',
+  });
+  assert.equal(modelOf(fallback.launchArgs), 'gpt-6.1-sol');
+
+  const explicit = f.start('wmexplicit', { kind: 'codex', model: 'gpt-6-luna', dryRun: true });
+  assert.equal(explicit.model, 'gpt-6-luna');
+  assert.equal(explicit.modelSource, 'flag');
+  assert.equal(explicit.modelFallback, undefined);
+});
+
+test('engine-shaped unavailable model records make the default fall back', (t) => {
+  const unavailable = {
+    model: 'gpt-6-luna', kind: 'codex', provider: 'codex', lane: 'codex',
+    retryAt: Date.now() + 30 * 60 * 1000, reason: 'overloaded', label: 'overloaded',
+  };
+  // Engine writes snap.unavailableModels as this array before serializing rules.json.
+  const engineSnapshot = { unavailableModels: [unavailable] };
+  const f = fixture(t, { rules: { unavailableModels: engineSnapshot.unavailableModels } });
+  const fallback = f.start('wmengine-shape', { kind: 'codex', dryRun: true });
+  assert.equal(fallback.model, 'gpt-6.1-sol');
+  assert.equal(fallback.modelSource, 'fallback');
+  assert.deepEqual(fallback.modelFallback, {
+    from: 'gpt-6-luna', retryAt: unavailable.retryAt, reason: 'overloaded',
+  });
+});
+
+test('a cooldown for a shared model name does not apply to another kind', (t) => {
+  const shared = 'shared-fixture-model';
+  const kitModels = structuredClone(models);
+  for (const kind of ['opencode', 'pi']) {
+    kitModels.kinds[kind].allowedModels.push(shared);
+    kitModels.kinds[kind].defaultModel = shared;
+  }
+  const unavailable = {
+    model: shared, kind: 'opencode', provider: null, lane: 'unmetered',
+    retryAt: Date.now() + 30 * 60 * 1000, reason: 'Free usage exceeded', label: 'Free usage exceeded',
+  };
+  const f = fixture(t, { kitModels, rules: { unavailableModels: { [shared]: unavailable } } });
+  const plan = f.start('wmshared-kind', { kind: 'pi', dryRun: true });
+  assert.equal(plan.model, shared);
+  assert.equal(plan.modelSource, 'default');
+});
+
+test('the models command shows active model cooldowns', (t) => {
+  const retryAt = Date.now() + 60 * 60 * 1000;
+  const f = fixture(t, { rules: { unavailableModels: {
+    'gpt-6-luna': { model: 'gpt-6-luna', kind: 'codex', provider: 'codex', lane: 'codex', retryAt, reason: 'Free usage exceeded', label: 'Free usage exceeded' },
+  } } });
+  const output = [];
+  const result = runKitCommand('models', [], { rulesFile: path.join(f.root, 'rules.json'), output: (line) => output.push(line) });
+  assert.deepEqual(result.codex.unavailableModels, [
+    { model: 'gpt-6-luna', kind: 'codex', provider: 'codex', lane: 'codex', retryAt, reason: 'Free usage exceeded', label: 'Free usage exceeded' },
+  ]);
+  assert.match(output[0], /"unavailableModels"/);
+});
+
+test('the models command scopes a shared model cooldown to its recorded kind', (t) => {
+  const shared = 'opencode-go/deepseek-v4.1-flash';
+  const retryAt = Date.now() + 30 * 60 * 1000;
+  const f = fixture(t, { rules: { unavailableModels: {
+    [shared]: { model: shared, kind: 'opencode', provider: 'opencodego', lane: 'opencodego', retryAt, reason: 'overloaded', label: 'overloaded' },
+  } } });
+  const result = runKitCommand('models', [], { rulesFile: path.join(f.root, 'rules.json'), output: () => {} });
+  assert.equal(result.opencode.unavailableModels[0].model, shared);
+  assert.equal(result.pi.unavailableModels, undefined, 'the same model string under Pi stays available');
 });
 
 test('a fallback that would pick Opus fails with the force message and starts with --force', (t) => {
@@ -194,7 +272,7 @@ test('a real start saves the model, its source and force in the run record; a re
     if (args[0] === 'pane' && args[1] === 'split') { paneCwd = args[args.indexOf('--cwd') + 1]; return { pane: { pane_id: 'ws:p2' } }; }
     if (args[0] === 'pane' && args[1] === 'close') return {};
     if (args[0] === 'agent' && args[1] === 'get') return { agent: { agent_status: 'idle' } };
-    if (args[0] === 'agent' && args[1] === 'read') return { text: READY };
+    if (args[0] === 'agent' && args[1] === 'read') return { text: `${READY}\n› code\n? for shortcuts` };
     if (args[0] === 'agent' && (args[1] === 'start' || args[1] === 'prompt')) return {};
     throw new Error(`Unexpected Herdr call: ${args.join(' ')}`);
   };
@@ -216,4 +294,15 @@ test('a real start saves the model, its source and force in the run record; a re
   assert.equal(plainRecord.model, 'claude-sonnet-5-5');
   assert.equal(plainRecord.modelSource, 'default');
   assert.equal('force' in plainRecord, false);
+
+  fs.writeFileSync(rulesFile, JSON.stringify({ updatedAt: new Date().toISOString(), avoidKinds: [], unavailableModels: {
+    'gpt-6-luna': { model: 'gpt-6-luna', kind: 'codex', provider: 'codex', lane: 'codex', retryAt: Date.now() + 1800000, reason: 'overloaded', label: 'overloaded' },
+  } }));
+  const fallback = run('wmrecord', { kind: 'codex' });
+  const fallbackRecord = JSON.parse(fs.readFileSync(fallback.recordFile, 'utf8'));
+  assert.equal(fallbackRecord.model, 'gpt-6.1-sol');
+  assert.equal(fallbackRecord.modelSource, 'fallback');
+  assert.deepEqual(fallbackRecord.modelFallback, {
+    from: 'gpt-6-luna', retryAt: JSON.parse(fs.readFileSync(rulesFile, 'utf8')).unavailableModels['gpt-6-luna'].retryAt, reason: 'overloaded',
+  });
 });

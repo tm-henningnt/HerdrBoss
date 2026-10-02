@@ -206,7 +206,7 @@ console.log(JSON.stringify({ calls, scans: scans.map(({ worktreeCounts, orphaned
   assert.ok(result.scans[5].errors.some((error) => /herdr: snapshot unavailable/.test(error)));
 });
 
-test('Engine exhausts a free model from its orchestrator run record across the project until retry', (t) => {
+test('Engine exhausts only the free model from its orchestrator run record until retry', (t) => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-engine-free-exhaustion-'));
   t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
   const engineUrl = new URL('../src/engine.js', import.meta.url).href;
@@ -258,8 +258,6 @@ console.log(JSON.stringify({
   failed: first.herdr.panes.find((pane) => pane.id === 'w1:p2').status,
   exhausted: first.lanes.unmetered.exhausted,
   availableBeforeRetry: first.lanes.unmetered.byProject.sample.opencode,
-  exhaustedLanes: first.lanes.unmetered.exhaustedLanes,
-  rememberedLanes: firstMemory.exhaustedFreeLanes,
   rememberedModels: firstMemory.exhaustedFreeModels,
   availableAtRetry: second.lanes.unmetered.byProject.sample.opencode,
   exhaustedAtRetry: second.lanes.unmetered.exhausted,
@@ -270,10 +268,11 @@ console.log(JSON.stringify({
     encoding: 'utf8',
   }));
   assert.equal(result.failed, 'failed');
-  assert.deepEqual(result.exhausted, [], 'the exhausted opencode lane covers its only harness, so no per-model line remains');
-  assert.equal(result.availableBeforeRetry, undefined, 'the free-usage limit closes every unmetered opencode model');
-  assert.deepEqual(result.exhaustedLanes, [{ kind: 'opencode', retryAt: Date.parse('2026-09-26T15:48:00.000Z'), retryKnown: true, reason: 'free usage exceeded', projects: ['sample'] }]);
-  assert.deepEqual(result.rememberedLanes, { opencode: { kind: 'opencode', retryAt: Date.parse('2026-09-26T15:48:00.000Z'), retryKnown: true, at: Date.parse('2026-09-26T10:00:00.000Z') } });
+  assert.deepEqual(result.exhausted, [{
+    model: 'opencode/big-pickle', retryAt: Date.parse('2026-09-26T15:48:00.000Z'), projects: ['sample'], kinds: ['opencode'],
+  }]);
+  assert.ok(result.availableBeforeRetry.length > 0, 'other OpenCode models remain available');
+  assert.equal(result.availableBeforeRetry.includes('opencode/big-pickle'), false);
   assert.equal(result.rememberedModels['opencode/big-pickle'].retryAt, Date.parse('2026-09-26T15:48:00.000Z'));
   assert.ok(result.availableAtRetry.includes('opencode/big-pickle'));
   assert.deepEqual(result.exhaustedAtRetry, []);
@@ -854,23 +853,23 @@ const ladderSnapshot = () => {
 const ladderTargets = (result) => [result.handoffs.find((item) => item.pane === 'w1:p1').target, result.bossHandoff.target]
   .map((target) => target && `${target.kind}:${target.model}`);
 
-test('successor ladder skips unmetered rungs of an exhausted free lane until retryAt', () => {
+test('successor ladder skips only the exhausted free model, not its whole harness', () => {
   const now = Date.parse('2026-09-24T17:00:00Z');
   const p = policy({ orchestratorLadder: [
     { kind: 'opencode', model: 'opencode/big-pickle', effort: null },
     { kind: 'codex', model: 'gpt-6-luna', effort: 'xhigh' },
   ] });
-  const lanes = { opencode: { kind: 'opencode', retryAt: now + 60000, retryKnown: true, at: now - 60000 } };
-  const closed = deriveControl(ladderSnapshot(), p, models, {}, now, {}, { exhaustedFreeLanes: lanes });
+  const exhaustedModels = { 'opencode/big-pickle': { model: 'opencode/big-pickle', retryAt: now + 60000 } };
+  const closed = deriveControl(ladderSnapshot(), p, models, {}, now, exhaustedModels);
   assert.deepEqual(ladderTargets(closed), ['codex:gpt-6-luna', 'codex:gpt-6-luna']);
-  const reopened = deriveControl(ladderSnapshot(), p, models, {}, now + 60000, {}, { exhaustedFreeLanes: lanes });
+  const reopened = deriveControl(ladderSnapshot(), p, models, {}, now + 60000, exhaustedModels);
   assert.deepEqual(ladderTargets(reopened), ['opencode:opencode/big-pickle', 'opencode:opencode/big-pickle']);
-  // A metered model of the same harness uses its provider quota, not the free lane.
+  // A separate metered model in the same harness remains eligible.
   const metered = policy({ orchestratorLadder: [
     { kind: 'opencode', model: 'opencode-go/deepseek-v4.1-flash', effort: null },
     { kind: 'codex', model: 'gpt-6-luna', effort: 'xhigh' },
   ] });
-  const stillOpen = deriveControl(ladderSnapshot(), metered, models, {}, now, {}, { exhaustedFreeLanes: lanes });
+  const stillOpen = deriveControl(ladderSnapshot(), metered, models, {}, now, exhaustedModels);
   assert.deepEqual(ladderTargets(stillOpen), ['opencode:opencode-go/deepseek-v4.1-flash', 'opencode:opencode-go/deepseek-v4.1-flash']);
 });
 

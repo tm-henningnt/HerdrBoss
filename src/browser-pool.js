@@ -245,6 +245,7 @@ export async function browserStatus(session, options) {
   const responsive = profileVerified && await cdpResponds(session.port, d);
   const { restoreTabs, ...publicSession } = session;
   return { ...publicSession, windowSize: session.windowSize || DEFAULT_SIZE, reachable, profileVerified, responsive, processPresent: !!owner,
+    closed: !!session.closedAt && !owner && !reachable,
     headless: owner ? /--headless(?:=|\s|$)/.test(owner.cmd) : !!session.headless, pid: owner?.pid ?? session.pid };
 }
 
@@ -395,13 +396,14 @@ export function setStartPage(project, url) {
   return bookmarkState(record);
 }
 
-function clearClone(project) {
+function clearClone(project, now = Date.now()) {
   const sessions = listBrowserSessions();
-  if (sessions[project]?.codeSignClone) {
+  if (sessions[project]) {
     sessions[project].codeSignClone = null;
+    sessions[project].closedAt = new Date(now).toISOString();
     save(sessions);
   }
-  return { codeSignClone: null };
+  return { codeSignClone: null, ...(sessions[project]?.closedAt ? { closedAt: sessions[project].closedAt } : {}) };
 }
 
 export async function closeBrowser(project, options = {}) {
@@ -411,7 +413,7 @@ export async function closeBrowser(project, options = {}) {
   if (!session) throw new Error('No project browser is registered.');
   let status = await browserStatus(session, d);
   if (status.reachable && !status.profileVerified) throw new Error(`Port ${session.port} belongs to another process. It was not touched.`);
-  if (!status.processPresent && !status.reachable) return { ...status, ...clearClone(project), closed: true };
+  if (!status.processPresent && !status.reachable) return { ...status, ...clearClone(project, options.now), closed: true };
   if (!status.profileVerified) throw new Error('Could not verify Chrome’s browser control endpoint. Close the browser manually; it was not touched.');
   if (typeof options.beforeClose === 'function' && !(await options.beforeClose(session))) return { ...status, closed: false, skipped: true };
   let closeFailed = !status.responsive;
@@ -434,7 +436,7 @@ export async function closeBrowser(project, options = {}) {
       if (signaled && session.codeSignClone) {
         try { await removeCodeSignClone({ dir: d.cloneDir(), name: session.codeSignClone, processes: d.readProcesses }); } catch {}
       }
-      return { ...status, ...clearClone(project), closed: true };
+      return { ...status, ...clearClone(project, options.now), closed: true };
     }
   }
   throw new Error('Chrome did not exit after its close command or SIGTERM. Inspect it before relaunching; it was not force-killed.');
@@ -512,6 +514,10 @@ export async function requestBrowser(project, options = {}) {
   if (headless !== null && typeof headless !== 'boolean') throw new Error('headless must be boolean when supplied.');
   const sessions = listBrowserSessions();
   const existing = sessions[project];
+  if (existing?.closedAt) {
+    delete existing.closedAt;
+    save(sessions);
+  }
   const useHeadless = headless ?? !!existing?.headless;
   if (existing) {
     const status = await browserStatus(existing, d);

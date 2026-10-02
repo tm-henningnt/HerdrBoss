@@ -144,7 +144,10 @@ export function listProjects() {
     try {
       const data = JSON.parse(fs.readFileSync(file, 'utf8'));
       const errors = validateProject(data);
-      const publishedAt = data.updated || fs.statSync(file).mtime.toISOString();
+      const fileMtime = fs.statSync(file).mtimeMs;
+      const recordedPublish = Date.parse(data.updated || '');
+      const publishedMs = Math.max(Number.isFinite(recordedPublish) ? recordedPublish : -Infinity, fileMtime);
+      const publishedAt = new Date(publishedMs).toISOString();
       return { slug, ...data, currentKitRevision, installedKitRevision: installedKit, repo, updated: publishedAt, publishedAt, errors: errors.length ? errors : undefined };
     } catch (e) {
       return { slug, project: slug, currentKitRevision, installedKitRevision: installedKit, repo, errors: [`invalid JSON: ${e.message}`] };
