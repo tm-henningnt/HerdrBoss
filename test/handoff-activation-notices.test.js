@@ -115,6 +115,7 @@ test('handoff notices wait for goal verification and read the saved warning', (t
     successorKind: 'claude', goalScreen: '',
     record: { toKind: 'claude', goal, goalSource: 'status' },
   });
+  fs.writeFileSync(path.join(f.root, 'policy.json'), JSON.stringify({ goals: { autoCommand: true } }));
   const handoffUrl = new URL('../src/handoff.js', import.meta.url).href;
   const out = runHandoffModule(f.root, `import { activateHandoff, handoffNotices, listHandoffs } from ${JSON.stringify(handoffUrl)};
 const panes = [{ id: 'ws:p3', workspace: 'ws', agent: 'pi' }, { id: 'other:p1', workspace: 'other', label: 'boss', agent: 'claude' }];
