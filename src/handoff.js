@@ -8,7 +8,8 @@ import { alertBossForOpus, deliverPrompt, isAgentPaneBusy, isOpus, normalizeMode
 import { contextTokensFor, loadModels, loadProjectConfig } from './kit/config.js';
 import { loadPolicy, mergeModels, modelEnabled, providerFor } from './control.js';
 import { codexBrowserArgs, codexShellEnvArgs } from './harness.js';
-import { cleanGoal, goalDelivery, goalFromTranscript } from './goal.js';
+import { cleanGoal, goalDelivery, goalFromTranscript, goalOnScreen } from './goal.js';
+import { EXIT_CODES as GOAL_EXIT_CODES, setGoal } from './goal-set.js';
 import { reownProjectLocks } from './kit/locks.js';
 import { reownLeases } from './leases.js';
 
@@ -578,7 +579,18 @@ export function successorPrompt(item) {
 
 // Notices that the engine delivers after activation. A prompt needs a current agent pane; the Owner gets a Herdr notification.
 export function handoffNotices(item, panes = []) {
+  try {
+    const latest = listHandoffs().find((record) => record.id === item.id);
+    if (latest) item = { ...item, ...latest };
+  } catch { /* Use the caller's current record when the store is unavailable. */ }
+  const activatedAt = Date.parse(item.activatedAt);
+  const activationWaitExpired = Number.isFinite(activatedAt) && Date.now() - activatedAt >= 5 * 60 * 1000;
+  if (item.goalDelivery === 'command' && item.goal && !item.goalVerifiedAt && !item.goalWarning && !item.goalVerifyFailedAt && !activationWaitExpired) return [];
   const boss = handoffRole(item) === 'boss';
+  const goalWarningMessage = !item.goalVerifiedAt
+    ? item.goalWarning?.message || (item.goalVerifyFailedAt ? `The Owner goal is not confirmed in pane ${item.newPane}.` : '')
+    : '';
+  const goalWarning = goalWarningMessage ? ` Goal warning: ${goalWarningMessage}` : '';
   const skip = new Set([item.newPane, item.sourcePane]);
   for (const pane of panes) if (PREVIOUS_LABELS.has(pane.label)) skip.add(pane.id);
   const peers = Array.isArray(item.peerPanes) ? item.peerPanes
@@ -587,13 +599,13 @@ export function handoffNotices(item, panes = []) {
     key: `${item.id}@${pane}`, pane,
     text: boss
       ? `[herdr-boss] The Herdr Boss is now pane ${item.newPane} (${item.toKind}). The previous Boss pane ${item.sourcePane} is labeled boss previous. Send Boss messages and reports to ${item.newPane}.`
-      : `[herdr-boss] ${item.project} has a new orchestrator in pane ${item.newPane} (${item.toKind}). Continue your assigned task. Send WORKER REPORT and WORKER QUESTION messages to ${item.newPane}, not to ${item.sourcePane}. The previous pane is labeled orch previous.`,
+      : `[herdr-boss] ${item.project} has a new orchestrator in pane ${item.newPane} (${item.toKind}). Continue your assigned task. Send WORKER REPORT and WORKER QUESTION messages to ${item.newPane}, not to ${item.sourcePane}. The previous pane is labeled orch previous.${goalWarning}`,
   }));
   if (boss) notices.push({ key: `${item.id}@owner`, owner: true, title: 'Herdr Boss: Boss handover',
     text: `The Boss is now pane ${item.newPane} (${item.toKind}). The previous Boss pane ${item.sourcePane} is labeled boss previous.` });
   else for (const pane of panes.filter((p) => p.label === 'boss' && p.agent && !skip.has(p.id))) notices.push({
     key: `${item.id}@boss`, pane: pane.id,
-    text: `[herdr-boss] ${item.displayLabel || item.project} has a new orchestrator in pane ${item.newPane} (${item.toKind}). The previous pane ${item.sourcePane} is labeled orch previous. Send ${item.project} messages to ${item.newPane}.`,
+    text: `[herdr-boss] ${item.displayLabel || item.project} has a new orchestrator in pane ${item.newPane} (${item.toKind}). The previous pane ${item.sourcePane} is labeled orch previous. Send ${item.project} messages to ${item.newPane}.${goalWarning}`,
   });
   if (item.previousPromptError) notices.push({ key: `${item.id}@${item.sourcePane}`, pane: item.sourcePane, text: previousAgentPrompt(item) });
   return notices;
@@ -661,7 +673,7 @@ function reownHandoverResources(item) {
   catch (error) { console.warn(`Warning: could not re-own the leases of pane ${item.sourcePane}: ${String(error.message).slice(0, 200)}`); }
 }
 
-export function activateHandoff(id, { confirmed = false } = {}) {
+export async function activateHandoff(id, { confirmed = false, goalSetter = setGoal } = {}) {
   if (!confirmed) throw new Error('Review the successor output, then pass --confirmed.');
   const records = listHandoffs();
   const item = records.find((x) => x.id === id && x.status === 'prepared');
@@ -715,5 +727,88 @@ export function activateHandoff(id, { confirmed = false } = {}) {
   }
   catch (e) { item.activationPromptError = String(e.stderr || e.message).slice(0, 500); save(records); }
   promptRunningWorkers(item, records);
+  await verifyActivationGoal(item, { goalSetter });
   return item;
+}
+
+// Verify the visible goal after activation. Use the shared goal-set flow when the prepared prompt did not leave it on screen.
+function patchActivationGoalFields(item, fields) {
+  const current = listHandoffs();
+  const target = current.find((record) => record.id === item.id);
+  if (!target) return null;
+  const apply = (record) => {
+    for (const [key, value] of Object.entries(fields)) {
+      if (value === undefined) delete record[key];
+      else record[key] = value;
+    }
+  };
+  apply(target);
+  apply(item);
+  save(current);
+  return target;
+}
+
+async function verifyActivationGoal(item, { goalSetter = setGoal } = {}) {
+  if (handoffRole(item) === 'boss' || item.goalDelivery !== 'command' || !item.goal) return;
+  const current = () => listHandoffs().find((record) => record.id === item.id) || null;
+  let latest = current();
+  if (!latest || latest.goalVerifiedAt) return;
+
+  const visible = await goalOnScreen({ run: herdr, pane: latest.newPane, goal: latest.goal });
+  latest = current();
+  if (!latest || latest.goalVerifiedAt || !latest.goal || latest.goalDelivery !== 'command') return;
+
+  if (visible) {
+    patchActivationGoalFields(item, { goalVerifiedAt: new Date().toISOString(), goalWarning: undefined });
+    return;
+  }
+
+  if (latest.goalSentAt) {
+    const at = new Date().toISOString();
+    const warning = {
+      at,
+      message: `The goal was already sent to pane ${latest.newPane}, but it is not visible. Activation did not send it again.`,
+    };
+    patchActivationGoalFields(item, { goalWarning: warning });
+    console.warn(`Warning: ${warning.message}`);
+    return;
+  }
+
+  const sentAt = new Date().toISOString();
+  patchActivationGoalFields(item, { goalSendingAt: sentAt });
+  try {
+    const result = await goalSetter({ pane: latest.newPane, kind: latest.toKind, goal: latest.goal, run: herdr, attempts: 2, waitMs: 90_000 });
+    latest = current();
+    if (!latest || latest.goalVerifiedAt) return;
+    if (result.outcome === 'active') {
+      patchActivationGoalFields(item, {
+        goalSentAt: latest.goalSentAt || sentAt,
+        goalVerifiedAt: new Date().toISOString(),
+        goalWarning: undefined,
+      });
+      return;
+    }
+
+    const exitCode = GOAL_EXIT_CODES[result.outcome];
+    const at = new Date().toISOString();
+    const warning = {
+      ...(exitCode === undefined ? {} : { exitCode }),
+      at,
+      message: exitCode === undefined
+        ? `Goal set did not complete; the Owner goal is not confirmed in pane ${latest.newPane}.`
+        : `Goal set exited with code ${exitCode}; the Owner goal is not confirmed in pane ${latest.newPane}.`,
+    };
+    patchActivationGoalFields(item, { goalWarning: warning });
+    console.warn(`Warning: ${warning.message}`);
+  } catch {
+    latest = current();
+    if (!latest || latest.goalVerifiedAt) return;
+    const at = new Date().toISOString();
+    const warning = {
+      at,
+      message: `Goal set did not complete; the Owner goal is not confirmed in pane ${latest.newPane}.`,
+    };
+    patchActivationGoalFields(item, { goalWarning: warning });
+    console.warn(`Warning: ${warning.message}`);
+  }
 }

@@ -2452,6 +2452,8 @@ export class Engine extends EventEmitter {
   async deliverGoal(item, successor, now, at, scope) {
     const herdr = (args, options) => this.herdrRunner('herdr', args, options);
     if (!item.goal || item.goalDelivery !== 'command' || item.goalVerifiedAt || item.goalVerifyFailedAt) return true;
+    const goalSendingAt = Date.parse(item.goalSendingAt);
+    if (Number.isFinite(goalSendingAt) && now >= goalSendingAt && now - goalSendingAt < 3 * 60 * 1000) return false;
     const fail = (message) => {
       this.log('error', `Goal for handoff ${item.id}: ${message}`, scope);
       this.patchGoalFields(item, { goalVerifyFailedAt: at });
@@ -2467,7 +2469,7 @@ export class Engine extends EventEmitter {
       catch (error) { return fail(`the /goal prompt failed: ${String(error.stderr || error.message).slice(0, 200)}`); }
     }
     if (await goalOnScreen({ run: herdr, pane: item.newPane, goal: item.goal })) {
-      this.patchGoalFields(item, { goalVerifiedAt: at });
+      this.patchGoalFields(item, { goalVerifiedAt: at, goalWarning: undefined });
       this.log('handoff', `The successor pane ${item.newPane} shows the /goal of handoff ${item.id}`, scope);
       return true;
     }
