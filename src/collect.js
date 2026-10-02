@@ -260,6 +260,20 @@ function quotaProbeOutcome(row, error = null) {
   return 'success';
 }
 
+// Name the step that ended the probe: our own timer, codexbar (its own timeout, an error row, or its exit), or a missing row.
+function quotaProbeEndedStep(row, error) {
+  if (error) {
+    if (error.killed || error.signal) return 'our-timer';
+    if (Number.isInteger(error.code)) return 'codexbar-exit';
+    return /row is missing/.test(error.message || '') ? 'row-missing' : 'spawn-error';
+  }
+  if (row?.error) {
+    const message = typeof row.error === 'string' ? row.error : row.error.message || '';
+    return /timed out/i.test(message) ? 'codexbar-timeout' : 'codexbar-error';
+  }
+  return 'completed';
+}
+
 function writeQuotaProbeHistory(row, file = QUOTA_PROBE_HISTORY_FILE) {
   let rows = [];
   try {
@@ -276,35 +290,28 @@ function writeQuotaProbeHistory(row, file = QUOTA_PROBE_HISTORY_FILE) {
   } catch {}
 }
 
-export async function collectQuotas({ runner = runQuotaCommand, timeouts = DEFAULT_QUOTA_TIMEOUTS_MS, now = () => Date.now(), historyFile = QUOTA_PROBE_HISTORY_FILE } = {}) {
+export async function collectQuotas({ runner = runQuotaCommand, timeouts = DEFAULT_QUOTA_TIMEOUTS_MS, now = () => Date.now(), historyFile = QUOTA_PROBE_HISTORY_FILE, providers = QUOTA_PROVIDERS } = {}) {
   const result = [];
   for (const provider of QUOTA_PROVIDERS) {
-    let timeoutMs = Number.isFinite(timeouts?.[provider]) ? timeouts[provider] : DEFAULT_QUOTA_TIMEOUTS_MS[provider];
-    let row = null, failure = null, finishedAt;
-    for (let attempt = 0; attempt < (provider === 'claude' ? 2 : 1); attempt += 1) {
-      const startedAt = Number(now());
-      row = null;
-      failure = null;
-      try {
-        const rows = await codexbarRows(runner, ['--provider', provider], timeoutMs);
-        row = rows.find((item) => item.provider === provider) || null;
-        if (!row) failure = new Error(`${provider} quota row is missing`);
-      } catch (error) { failure = error; }
-      finishedAt = Number(now());
-      const outcome = quotaProbeOutcome(row, failure);
-      const killedPid = Number.isInteger(failure?.killedPid) && failure.killedPid > 0 ? failure.killedPid : null;
-      const killedPidState = ['exited', 'alive', 'unknown'].includes(failure?.killedPidState) ? failure.killedPidState : null;
-      writeQuotaProbeHistory({
-        at: new Date(finishedAt).toISOString(), provider,
-        durationMs: Math.max(0, finishedAt - startedAt), timeoutMs, outcome,
-        killedPid, killedPidState,
-        killSignal: ['SIGTERM', 'SIGKILL'].includes(failure?.signal) ? failure.signal : null,
-        retry: attempt > 0,
-      }, historyFile);
-      // Do not overlap a retry with an owned process whose exit is unconfirmed.
-      if (provider !== 'claude' || attempt > 0 || outcome !== 'timeout' || (killedPid && killedPidState !== 'exited')) break;
-      timeoutMs = QUOTA_TIMEOUT_BACKOFF_BY_PROVIDER_MS.claude.at(-1);
-    }
+    if (!providers.includes(provider)) continue;
+    const timeoutMs = Number.isFinite(timeouts?.[provider]) ? timeouts[provider] : DEFAULT_QUOTA_TIMEOUTS_MS[provider];
+    let row = null, failure = null;
+    const startedAt = Number(now());
+    try {
+      const rows = await codexbarRows(runner, ['--provider', provider], timeoutMs);
+      row = rows.find((item) => item.provider === provider) || null;
+      if (!row) failure = new Error(`${provider} quota row is missing`);
+    } catch (error) { failure = error; }
+    const finishedAt = Number(now());
+    const killedPid = Number.isInteger(failure?.killedPid) && failure.killedPid > 0 ? failure.killedPid : null;
+    const killedPidState = ['exited', 'alive', 'unknown'].includes(failure?.killedPidState) ? failure.killedPidState : null;
+    writeQuotaProbeHistory({
+      at: new Date(finishedAt).toISOString(), provider,
+      durationMs: Math.max(0, finishedAt - startedAt), timeoutMs, outcome: quotaProbeOutcome(row, failure),
+      endedStep: quotaProbeEndedStep(row, failure),
+      killedPid, killedPidState,
+      killSignal: ['SIGTERM', 'SIGKILL'].includes(failure?.signal) ? failure.signal : null,
+    }, historyFile);
     if (failure) {
       result.push({ provider, error: codexbarError(failure, timeoutMs, provider) });
       continue;

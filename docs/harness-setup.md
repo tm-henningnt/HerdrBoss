@@ -251,3 +251,13 @@ Claude Code keeps one memory folder per working folder. Start the Boss agent in 
 
 
 Codex cannot launch Chromium in its sandbox. The seatbelt sandbox refuses the Chromium Mach port (`MachPortRendezvousServer`, permission denied, error 1100). Herdr Boss does not loosen the sandbox for this. Give tasks that launch a browser to a `claude`, `opencode`, or `pi` worker. `worker start --kind codex` prints a warning when the brief mentions browser work.
+
+## CodexBar Claude source
+
+Herdr Boss reads the Claude quota through `codexbar usage --provider claude`.
+
+Set the Claude usage source in CodexBar to **Auto**. Do not set it to **CLI**. The CLI source is slow.
+
+A Claude quota probe that times out at about 30 seconds points to the **CLI** source. With **Auto**, the probe takes about 2 seconds.
+
+Read `endedStep` in `quota-probe-history.jsonl` to see which step ended the probe. The value `codexbar-timeout` means that CodexBar gave up by itself.

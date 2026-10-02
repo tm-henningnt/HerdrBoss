@@ -11,7 +11,7 @@ import { listProjects } from './projects.js';
 import { checkHarness, readProjectRepos } from './harness.js';
 import { loadModels, loadProjectConfig, KIT_ROOT, workerConfigView } from './kit/config.js';
 import { isOpus, normalizeModel } from './kit/workers.js';
-import { loadPolicy, clearExpiredOneOffGoals, deriveControl, migrateWorkspacePolicy, providerFor, selectModel, pickSuccessor, laneStatus, leastOverProvider, machineLimits, unmeteredLane, unavailablePiModels, mergeModels } from './control.js';
+import { POLICY_DEFAULTS, loadPolicy, clearExpiredOneOffGoals, deriveControl, migrateWorkspacePolicy, providerFor, selectModel, pickSuccessor, laneStatus, leastOverProvider, machineLimits, unmeteredLane, unavailablePiModels, mergeModels } from './control.js';
 import { scanSpend, SPEND_SCAN_INTERVAL_MS } from './spend.js';
 import { activeLaunchRecords, TRIAL_RESULT_TARGET } from './kit/model-unavailable.js';
 import { quotaUsageToday, recordQuotaSnapshot, readUsage } from './usage.js';
@@ -598,6 +598,8 @@ export class Engine extends EventEmitter {
     this.quotaResult = null;
     this.quotaError = null;
     this.quotaNextAt = 0;
+    // Claude probe back-off: consecutive timeouts, and the earliest next probe.
+    this.claudeProbe = { timeouts: 0, nextAt: 0 };
     this.quotaTimeoutIndexes = Object.fromEntries(QUOTA_PROVIDERS.map((provider) => [provider, 0]));
     this.worktreeCounts = {};
     this.worktreeCountsAt = 0;
@@ -1659,10 +1661,18 @@ export class Engine extends EventEmitter {
       provider, QUOTA_TIMEOUT_BACKOFF_BY_PROVIDER_MS[provider][timeoutIndexes[provider] || 0],
     ]));
     this.quotaNextAt = startedAt + this.cfg.quotaSeconds * 1000;
+    const probePolicy = this.quotaProbePolicy();
+    const skipped = this.claudeProbeSkip(startedAt) ? ['claude'] : [];
+    const providers = QUOTA_PROVIDERS.filter((provider) => !skipped.includes(provider));
     let read;
-    try { read = Promise.resolve(this.collectors.collectQuotas({ timeouts, now: this.clock })); } catch (error) { read = Promise.reject(error); }
+    try { read = Promise.resolve(this.collectors.collectQuotas({ timeouts, now: this.clock, providers })); } catch (error) { read = Promise.reject(error); }
     this.quotaRead = read.then(
-      (quotas) => { this.quotaResult = { quotas, at: this.clock() }; },
+      (quotas) => {
+        // A skipped provider keeps its last row, with its age.
+        const kept = (this.quotas || []).filter((row) => skipped.includes(row.provider));
+        const merged = !Array.isArray(quotas) ? quotas : [...quotas, ...kept].sort((a, b) => QUOTA_PROVIDERS.indexOf(a.provider) - QUOTA_PROVIDERS.indexOf(b.provider));
+        this.quotaResult = { quotas: merged, at: this.clock(), skipped, probePolicy };
+      },
       (error) => {
         const message = String(error?.message || error);
         this.quotaResult = { error: /^codexbar\b/.test(message) ? message : `codexbar: ${message}`, at: this.clock() };
@@ -1673,6 +1683,16 @@ export class Engine extends EventEmitter {
       if (completedAt >= this.quotaNextAt) this.quotaNextAt = completedAt + this.cfg.quotaSeconds * 1000;
     });
     return this.quotaRead;
+  }
+
+  quotaProbePolicy() {
+    try { return { ...POLICY_DEFAULTS.quotaProbe, ...loadPolicy().quotaProbe }; }
+    catch { return { ...POLICY_DEFAULTS.quotaProbe }; }
+  }
+
+  // Skip the Claude probe while it is in back-off. The last good reading stays.
+  claudeProbeSkip(now) {
+    return now < this.claudeProbe.nextAt ? 'backoff' : null;
   }
 
   applyQuotaResult() {
@@ -1694,12 +1714,20 @@ export class Engine extends EventEmitter {
     this.quotasAt = result.at;
     this.quotasCached = false;
     this.quotaError = null;
+    const skipped = result.skipped || [];
     for (const provider of QUOTA_PROVIDERS) {
+      if (skipped.includes(provider)) continue;
       const row = result.quotas.find((quota) => quota.provider === provider);
       if (row && !row.error) this.quotaTimeoutIndexes[provider] = 0;
       else this.quotaTimeoutIndexes[provider] = Math.min((this.quotaTimeoutIndexes[provider] || 0) + 1, QUOTA_TIMEOUT_BACKOFF_BY_PROVIDER_MS[provider].length - 1);
     }
     const claude = result.quotas.find((quota) => quota.provider === 'claude');
+    if (!skipped.includes('claude')) {
+      const timedOut = typeof claude?.error === 'string' && /timed out/i.test(claude.error);
+      this.claudeProbe.timeouts = timedOut ? this.claudeProbe.timeouts + 1 : 0;
+      const policy = result.probePolicy || POLICY_DEFAULTS.quotaProbe;
+      this.claudeProbe.nextAt = this.claudeProbe.timeouts >= policy.backoffAfterTimeouts ? result.at + policy.backoffMinutes * 60000 : 0;
+    }
     if (claude && !claude.error) delete this.memory.claudeQuotaProbeFailure;
     else this.memory.claudeQuotaProbeFailure ||= { startedAt: new Date(result.at).toISOString() };
     recordQuotaSnapshot(this.quotas, new Date(result.at).toISOString());

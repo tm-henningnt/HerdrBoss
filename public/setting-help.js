@@ -177,6 +177,20 @@ export const SETTING_HELP = Object.fromEntries([
     lower: 'A lane can be ahead of pace at a lower use. A value of 0 uses no minimum.',
     apply: 'policy',
   }),
+  S('quotas', 'quotaProbe.backoffAfterTimeouts', 'Claude timeouts before back-off', {
+    what: 'The number of Claude quota probe timeouts in a row after which Herdr Boss probes Claude at the back-off interval. A good reading resets the count. A timed-out probe is not retried at once.',
+    default: '2', unit: 'Timeouts', range: '1 to 10',
+    raise: 'A higher value keeps the normal probe interval for more timeouts.',
+    lower: 'A lower value starts the back-off sooner.',
+    apply: 'policy',
+  }),
+  S('quotas', 'quotaProbe.backoffMinutes', 'Claude back-off minutes', {
+    what: 'The time between Claude quota probes after the timeouts in a row reach the limit. Codex and OpenCode Go keep the normal interval. The last good Claude reading stays on screen with its age.',
+    default: '20', unit: 'Minutes', range: '1 to 1440',
+    raise: 'A higher value probes Claude less often during a failure.',
+    lower: 'A lower value probes Claude more often during a failure and adds load.',
+    apply: 'policy',
+  }),
   S('quotas', 'quota.warnPercent', 'Quota warning level', {
     what: 'The used percent of a quota window at which the quota shows a warning.',
     default: '90', unit: 'Percent used', range: '50 to 99, below the critical level',

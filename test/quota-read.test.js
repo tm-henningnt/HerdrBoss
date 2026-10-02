@@ -119,14 +119,13 @@ test('provider probe timeouts back off and reset after a successful read', { tim
   const out = runScenario(t, { steps: [
     { tick: true }, { advance: 10000, resolve: CLAUDE_FAILED },
     { advance: 290001, tick: true }, { advance: 1000, resolve: CLAUDE_FAILED },
-    { advance: 300001, tick: true }, { advance: 1000, resolve: CLAUDE_FAILED },
-    { advance: 300001, tick: true }, { advance: 1000, resolve: BOTH },
+    { advance: 1200001, tick: true }, { advance: 1000, resolve: BOTH },
     { advance: 300001, tick: true },
   ] });
-  assert.deepEqual(out.steps.map((step) => step.probeTimeouts.at(-1)?.claude), [60000, 90000, 90000, 90000, 60000]);
-  assert.deepEqual(out.steps.map((step) => step.probeTimeouts.at(-1)?.opencodego), [20000, 45000, 90000, 90000, 90000]);
-  assert.deepEqual(out.steps.map((step) => step.probeTimeouts.at(-1)?.codex), [20000, 20000, 20000, 20000, 20000]);
-  assert.equal(out.steps.at(-1).reads, 5);
+  assert.deepEqual(out.steps.map((step) => step.probeTimeouts.at(-1)?.claude), [60000, 90000, 90000, 60000]);
+  assert.deepEqual(out.steps.map((step) => step.probeTimeouts.at(-1)?.opencodego), [20000, 45000, 90000, 90000]);
+  assert.deepEqual(out.steps.map((step) => step.probeTimeouts.at(-1)?.codex), [20000, 20000, 20000, 20000]);
+  assert.equal(out.steps.at(-1).reads, 4);
 });
 
 test('a Claude probe failure warns the Boss once after an hour and clears on success', { timeout: 30000 }, (t) => {

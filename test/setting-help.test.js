@@ -20,6 +20,7 @@ const POLICY_KEYS_WITHOUT_CONTROL = new Set([
   'excludedModels', 'disabledModels', 'extraModels', 'preferredModels', 'modelProviders', 'harnessRoutes', // the harness model rows: harness.model, harness.provider, harness.preferredModel, harness.addModel
   'providerModes', // quota.mode
   'pacingGoals', // quota.goalPercent (goal and goal end)
+  'quotaProbe', // the quotaProbe.* controls on Quotas have their own explanations
   'goals', // the goals.autoCommand switch on Allocation
   'excludedWorkspaces', 'projects', // the workspace switches and project shares on Allocation
 ]);
