@@ -175,7 +175,10 @@ export function parseCodexLine(line, ctx = {}) {
     }
     return [];
   }
-  if (payload.type === 'function_call' || payload.type === 'custom_tool_call') {
+  // Count a function_call row, and a custom_tool_call row only when it is not an apply_patch. An apply_patch body
+  // can quote the escalation text, for example a patch to test/denials.test.js. A code-mode exec body with
+  // sandbox_permissions: require_escalated is a real escalation.
+  if (payload.type === 'function_call' || (payload.type === 'custom_tool_call' && payload.name !== 'apply_patch')) {
     const args = payload.arguments ?? payload.input;
     const text = typeof args === 'string' ? args : JSON.stringify(args ?? '');
     return ESCALATION.test(text) ? [event('escalation:request')] : [];
