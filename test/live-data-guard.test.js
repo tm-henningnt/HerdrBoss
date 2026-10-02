@@ -137,3 +137,24 @@ test('writes a temporary directory', () => {
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.doesNotMatch(result.stderr, /Live data guard:/);
 });
+
+test('the preload keeps promisified execFile and exec resolving stdout and stderr', (t) => {
+  const safe = tempDir(t, 'live-guard-promisify');
+  const script = path.join(safe, 'promisify.mjs');
+  fs.writeFileSync(script, `
+    import { execFile, exec } from 'node:child_process';
+    import { promisify } from 'node:util';
+    const a = await promisify(execFile)(process.execPath, ['-e', 'process.stdout.write("one")']);
+    const b = await promisify(exec)('echo two');
+    console.log(JSON.stringify([a.stdout, b.stdout.trim()]));
+  `);
+  const env = {
+    ...process.env,
+    HERDR_BOSS_TEST_GUARD_DIR: tempDir(t, 'live-guard-promisify-live'),
+    HERDR_BOSS_TEST_GUARD_REPORT: path.join(safe, 'report.jsonl'),
+  };
+  delete env.NODE_OPTIONS;
+  const result = spawnSync(process.execPath, ['--import', GUARD, script], { encoding: 'utf8', env });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout.trim()), ['one', 'two']);
+});

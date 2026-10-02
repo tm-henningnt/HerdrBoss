@@ -109,6 +109,8 @@ if (liveDir && reportFile) {
       if (detect(args[0])) report('launch Chrome', args[0]);
       return original.apply(this, args);
     };
+    // Keep util.promisify.custom (execFile and exec): promisify of the wrapper must still resolve { stdout, stderr }.
+    for (const symbol of Object.getOwnPropertySymbols(original)) childProcess[name][symbol] = original[symbol];
   };
   for (const name of ['spawn', 'spawnSync', 'execFile', 'execFileSync', 'fork']) guardSpawn(name, chromeCommand);
   for (const name of ['exec', 'execSync']) guardSpawn(name, chromeShellCommand);
