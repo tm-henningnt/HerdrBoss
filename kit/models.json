@@ -21,7 +21,9 @@
       "defaultModel": "opencode/big-pickle",
       "allowedModels": [
         "opencode/big-pickle",
+        "opencode/fledge-alpha-free",
         "opencode/ling-3.0-flash-fin-free",
+        "opencode/ling-3.1-flash-free",
         "opencode/mimo-v2.6-flash-free",
         "opencode/muse-spark-1.2-contributor-free",
         "opencode/nemotron-3-ultra-free",
@@ -29,6 +31,7 @@
         "opencode/space-bunny-free",
         "opencode-go/deepseek-v4.1-flash"
       ],
+      "trialModels": ["opencode/ling-3.1-flash-free", "opencode/fledge-alpha-free"],
       "allowedEfforts": [],
       "defaultEffort": null,
       "launchArgs": ["-m", "{{model}}", "--agent", "worker"]

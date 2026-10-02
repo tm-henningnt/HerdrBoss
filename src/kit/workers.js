@@ -18,6 +18,7 @@ import { scheduleWorkerPaneClose } from '../maintenance.js';
 import { agentPromptTimeoutMs } from '../agent-prompt.js';
 import { PLANNER_LABEL, activeSessionForPane, endSession, startSession } from '../planner-sessions.js';
 import { closeFailedWorkerPane, retryOpenCodeStart, withOpenCodeStartLock } from './opencode-start.js';
+import { activeLaunchRecords, detectLaunchBlock, launchBlockedError, markModelUnavailable, untilText } from './model-unavailable.js';
 import { archiveWorkerReports } from './worker-archive.js';
 
 const NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
@@ -626,6 +627,8 @@ export function normalizeModel(model) {
 
 export const isOpus = (model) => /(^|[-/])opus($|[-.\d])/i.test(model);
 
+const retryText = (record) => untilText(record.retryAt);
+
 function activeUnavailableModel(unavailableModels, kind, model, now) {
   const records = Array.isArray(unavailableModels) ? unavailableModels : Object.values(unavailableModels || {});
   return records.find((item) => item?.kind === kind && item?.model === model
@@ -638,6 +641,8 @@ function validateSelection(kind, options, models, config, resourcePolicy = null,
   const startable = (candidate) => policy.allowedModels.includes(candidate) && modelEnabled(kind, candidate, resourcePolicy) &&
     (config.allowedModels === null || config.allowedModels.includes(candidate));
   const explicit = normalizeModel(options.model);
+  const heldBack = explicit == null ? null : activeUnavailableModel(unavailableModels, kind, explicit, now);
+  if (heldBack?.untilReenabled) throw new Error(`Model ${explicit} of ${kind} is unavailable until the Owner re-enables it (${heldBack.reason || heldBack.label || 'launch blocked'}). Run herdr-boss models enable ${kind}/${explicit} to re-enable it.`);
   let model = explicit;
   let modelSource = 'flag';
   let modelFallback;
@@ -660,7 +665,7 @@ function validateSelection(kind, options, models, config, resourcePolicy = null,
         && !projectPolicy?.excludedKinds?.includes(kind) && !projectPolicy?.excludedModels?.includes(item)
         && !activeUnavailableModel(unavailableModels, kind, item, now)
         && (!isOpus(item) || options.force));
-      if (!candidate) throw new Error(`The default model ${kitDefault} of ${kind} is unavailable until ${new Date(unavailable.retryAt).toISOString()} and no available model in the same lane can start.`);
+      if (!candidate) throw new Error(`The default model ${kitDefault} of ${kind} is unavailable until ${retryText(unavailable)} and no available model in the same lane can start.`);
       model = candidate;
       modelSource = 'fallback';
       modelFallback = { from: kitDefault, retryAt: unavailable.retryAt, reason: unavailable.reason || unavailable.label || 'provider cooldown' };
@@ -892,6 +897,13 @@ export function waitForWorkerPane(paneId, workspaceId, worktree, herdr, wait = p
             ? screenResponse
             : screenResponse?.text ?? screenResponse?.output ?? '';
           const lines = String(screen).replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '').split(/\r?\n/).map((line) => line.trimEnd());
+          const block = detectLaunchBlock(lines.join('\n'));
+          if (block) {
+            const error = new Error(`Worker pane ${paneId} shows "${block.phrase}" at launch.`);
+            error.code = 'model_launch_blocked';
+            error.launchBlock = block;
+            throw error;
+          }
           const question = interactiveShellQuestion(lines);
           if (question) {
             const error = new Error(`Worker pane ${paneId} is waiting at an interactive question: ${question}. Answer it in a shell once, then retry ${retryCommand}.`);
@@ -916,7 +928,7 @@ export function waitForWorkerPane(paneId, workspaceId, worktree, herdr, wait = p
         stableScreenMs = 0;
       }
     } catch (error) {
-      if (error?.code === 'worker_pane_interactive_question') throw error;
+      if (error?.code === 'worker_pane_interactive_question' || error?.code === 'model_launch_blocked') throw error;
       previousScreen = null;
       stableScreenMs = 0;
     }
@@ -954,7 +966,7 @@ function renderStartPlan(plan) {
     `   $ herdr agent list`,
     `2. Read resource rules: ${plan.rulesFile}${plan.rulesStale ? ' (stale or missing; warn)' : ''}`,
     `3. Validate kind/model/effort: ${plan.kind} / ${plan.model} / ${plan.effort ?? '(none)'} (model source: ${plan.modelSource}${plan.effortSource ? `, effort source: ${plan.effortSource}` : ''}${plan.force ? ', --force: Opus approved by the Owner' : ''})`,
-    ...(plan.modelFallback ? [`   Fallback: ${plan.modelFallback.from} unavailable until ${new Date(plan.modelFallback.retryAt).toISOString()} (${plan.modelFallback.reason})`] : []),
+    ...(plan.modelFallback ? [`   Fallback: ${plan.modelFallback.from} unavailable until ${retryText(plan.modelFallback)} (${plan.modelFallback.reason})`] : []),
     `4. Create worktree: ${plan.noWorktree ? '(disabled; use current worktree)' : plan.worktree}`,
     ...(plan.noWorktree ? [] : [`   $ git worktree add -b ${displayArg(plan.branch)} ${displayArg(plan.worktree)} ${displayArg(plan.base)}`]),
     `   Append /.worker/ and /.orchestration/local/ to ${plan.excludeFile}`,
@@ -1165,7 +1177,18 @@ function copyLocalOrchestration(mainRoot, worktree) {
   return { copied, oversized, unreadable };
 }
 
-export function startWorker(name, options, {
+// A model that shows a launch block is marked unavailable. A start without --model then picks the next model of the lane.
+export function startWorker(name, options, deps = {}) {
+  for (let attempt = 1; ; attempt++) {
+    try { return startWorkerOnce(name, options, deps); }
+    catch (error) {
+      if (error?.code !== 'model_launch_blocked' || options.model != null || attempt >= 4) throw error;
+      (deps.output ?? console.log)(`Model ${error.blockedModel} cannot start (${error.launchBlock.phrase}). Trying the next model of the same lane.`);
+    }
+  }
+}
+
+function startWorkerOnce(name, options, {
   config,
   models,
   herdr = createHerdrRunner(),
@@ -1221,7 +1244,9 @@ export function startWorker(name, options, {
   const onOpusRefused = options.kind === 'claude' && !options.dryRun
     ? (model) => recordOpusRefusal(name, model, options, config, env, now)
     : null;
-  const { model, modelSource, modelFallback, effort, effortSource, launchArgs, force: opusForce } = validateSelection(options.kind, options, mergeModels(modelConfig, policy), config, policy, onOpusRefused, rules.unavailableModels, now);
+  const bossDir = env.HERDR_BOSS_DIR || path.join(os.homedir(), '.herdr-boss');
+  const knownUnavailable = [...Object.values(rules.unavailableModels || {}), ...activeLaunchRecords(bossDir, now)];
+  const { model, modelSource, modelFallback, effort, effortSource, launchArgs, force: opusForce } = validateSelection(options.kind, options, mergeModels(modelConfig, policy), config, policy, onOpusRefused, knownUnavailable, now);
   const agentsWarning = agentsDrift(config.root, rulesPath);
   if (agentsWarning) output(agentsWarning);
   const projectPolicy = policy?.projects?.[config.slug];
@@ -1467,9 +1492,37 @@ export function startWorker(name, options, {
     placement = chooseWorkerPane(workspaceId, worktree, options.kind, herdr, plan.tmpDir, paneCap, [...leases, ...leaseExtraEnv.map((entry) => ({ env: entry.env, item: entry.value }))]);
     paneId = placement.paneId;
     for (const lease of leases) setLeasePane(lease.pool, lease.item, paneId, { dataDir: leaseContext.dataDir });
+    // Answer nothing at a launch block. Mark the model, close the TUI, and stop this model.
+    const stopForLaunchBlock = (block) => {
+      markModelUnavailable(bossDir, {
+        kind: options.kind, model, provider: providerFor(options.kind, model, policy), untilReenabled: block.untilReenabled,
+        label: block.phrase, reason: block.phrase, now,
+      });
+      try { herdr(['agent', 'close', name]); } catch { /* The pane cleanup below closes what remains. */ }
+      const error = launchBlockedError(model, block, { fallback: modelSource !== 'flag' });
+      error.blockedModel = model;
+      throw error;
+    };
+    const checkLaunchBlock = () => {
+      if (options.kind !== 'opencode') return;
+      let text = '';
+      try {
+        const response = herdr(['pane', 'read', paneId, '--source', 'recent-unwrapped', '--lines', '40', '--format', 'text']);
+        text = typeof response === 'string' ? response : response?.text ?? response?.output ?? '';
+      } catch { return; }
+      const block = detectLaunchBlock(text);
+      if (block) stopForLaunchBlock(block);
+    };
+    const waitForShell = () => {
+      try { waitForWorkerPane(paneId, workspaceId, worktree, herdr, wait); }
+      catch (error) {
+        if (error?.code === 'model_launch_blocked' && options.kind === 'opencode') stopForLaunchBlock(error.launchBlock);
+        throw error;
+      }
+    };
     const startAndDeliver = (attempt = 1) => {
       startAttempts = attempt;
-      waitForWorkerPane(paneId, workspaceId, worktree, herdr, wait);
+      waitForShell();
       const shellPid = workerPaneShellPid(paneId, herdr);
       const paneAgentArgs = [...workerAgentArgs(options.kind, launchArgs, { paneId, tabId: placement.tabId, workspaceId, env, tmpDir: plan.tmpDir, worktree }), ...browserArgs];
       try {
@@ -1477,8 +1530,9 @@ export function startWorker(name, options, {
       } catch (startError) {
         // Herdr can report agent_not_ready while leaving a blocked agent in the pane.
         try { agentStarted ||= listFrom(herdr(['agent', 'list']), 'agents').some((agent) => getName(agent) === name); } catch {}
+        checkLaunchBlock();
         if (options.kind !== 'opencode' && !agentStarted && isAgentPaneBusy(startError)) {
-          waitForWorkerPane(paneId, workspaceId, worktree, herdr, wait);
+          waitForShell();
           try {
             herdr(['agent', 'start', name, '--kind', options.kind, '--pane', paneId, '--timeout', String(plan.agentStartTimeoutMs), '--', ...paneAgentArgs]);
           } catch (retryError) {
@@ -1488,6 +1542,7 @@ export function startWorker(name, options, {
         } else throw startError;
       }
       agentStarted = true;
+      checkLaunchBlock();
       const record = {
         name,
         kind: options.kind,
@@ -1522,7 +1577,9 @@ export function startWorker(name, options, {
         output(`Started planner session ${session.id} for ${config.slug} on pane ${paneId}.`);
       }
       if (options.kind === 'claude' && opusForce) alertBossForOpus(name, model, options, config, env, herdr, now, output);
-      const delivery = deliverBrief(name, options.kind, herdr, readWorkerText, wait, output, plan.workerDir);
+      let delivery;
+      try { delivery = deliverBrief(name, options.kind, herdr, readWorkerText, wait, output, plan.workerDir); }
+      catch (deliverError) { checkLaunchBlock(); throw deliverError; }
       if (delivery === 'resent') output(`Resent the brief prompt to ${name}: the first prompt did not reach the agent.`);
       if (delivery === 'stalled-retry') output(`Resent the brief prompt to ${name} after agent_prompt_stalled.`);
       if (delivery === 'submitted') output(`Sent Enter to ${name}: the brief prompt was typed but not submitted.`);

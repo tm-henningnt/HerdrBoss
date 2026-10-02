@@ -306,3 +306,28 @@ test('a real start saves the model, its source and force in the run record; a re
     from: 'gpt-6-luna', retryAt: JSON.parse(fs.readFileSync(rulesFile, 'utf8')).unavailableModels['gpt-6-luna'].retryAt, reason: 'overloaded',
   });
 });
+
+test('models disable and enable keep a launch record that the models command shows', (t) => {
+  const f = fixture(t);
+  const env = { HERDR_BOSS_DIR: path.join(f.root, 'data') };
+  const run = (args) => runKitCommand('models', args, { rulesFile: f.rulesFile, env, output: () => {} });
+  const disabled = run(['disable', 'opencode/opencode/fledge-alpha-free', '--reason', 'not available in your country']);
+  assert.equal(disabled.untilReenabled, true);
+  assert.equal(disabled.provider, null);
+  const listed = run([]).opencode.unavailableModels;
+  assert.deepEqual(listed.map((item) => item.model), ['opencode/fledge-alpha-free']);
+  assert.equal(run(['enable', 'opencode/opencode/fledge-alpha-free']).enabled, true);
+  assert.equal(run([]).opencode.unavailableModels, undefined);
+  assert.equal(run(['enable', 'opencode/opencode/fledge-alpha-free']).enabled, false);
+  assert.throws(() => run(['enable', 'opencode/not-a-model']), /not allowed for opencode/);
+  assert.throws(() => run(['enable']), /Usage: models enable/);
+});
+
+test('the kit lists both trial models for the opencode harness only', () => {
+  const trial = ['opencode/ling-3.1-flash-free', 'opencode/fledge-alpha-free'];
+  assert.deepEqual(models.kinds.opencode.trialModels, trial);
+  for (const model of trial) {
+    assert.ok(models.kinds.opencode.allowedModels.includes(model));
+    assert.equal(models.kinds.pi.allowedModels.includes(model), false);
+  }
+});

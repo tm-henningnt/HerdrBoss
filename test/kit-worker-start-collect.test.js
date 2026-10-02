@@ -11,6 +11,7 @@ import { appendDelegatedRun, compareChangedPaths, gitChangedPaths, readDelegated
 import { buildGhArgs } from '../src/kit/gh.js';
 import { formatKitDigest, runKitCommand } from '../src/kit/cli.js';
 import { allowWorkerScope, collectWorker, createHerdrRunner, filterCollectProcesses, listWorkers, parseWorktreeCwdProcesses, renderBrief, startWorker, waitForAgentReady, waitForWorkerPane } from '../src/kit/workers.js';
+import { enableModel, markModelUnavailable } from '../src/kit/model-unavailable.js';
 import { classifyWorktrees, pruneWorktrees } from '../src/kit/worktrees.js';
 import { usageProvider, validateUsage } from '../src/usage.js';
 import { DATA_DIR } from '../src/config.js';
@@ -2366,5 +2367,103 @@ test('an Opus refusal logs silently, and other worker models do not alert the Bo
     assert.deepEqual(prompts, []);
     assert.equal(output.some((line) => line.startsWith('Opus worker:')), false);
     t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
+  }
+});
+
+// A fake pane whose TUI shows `phrase` after a launch of `blockedModel`. Other models launch normally.
+function blockedLaunchFixture(t, name, blockedModel, phrase) {
+  const fixture = openCodeFixture(t, name);
+  const launched = [];
+  const closedPanes = [];
+  let showing = false;
+  const modelOfStart = (args) => args[args.indexOf('-m') + 1];
+  const herdr = (args) => {
+    if (args[0] === 'agent' && args[1] === 'start') {
+      const model = modelOfStart(args);
+      launched.push(model);
+      showing = model === blockedModel;
+    }
+    if (args[0] === 'pane' && args[1] === 'read' && showing) return { text: `opencode\n${phrase}\n` };
+    if (args[0] === 'pane' && args[1] === 'close') { closedPanes.push(args[2]); showing = false; }
+    return fixture.herdr(args);
+  };
+  const dataDir = fixture.f.env.HERDR_BOSS_DIR;
+  const records = () => {
+    try { return Object.values(JSON.parse(fs.readFileSync(path.join(dataDir, 'unavailable-models.json'), 'utf8'))); }
+    catch { return []; }
+  };
+  return { ...fixture, herdr, launched, closedPanes, records, startWith: (options = {}) => fixture.start(herdr, options) };
+}
+
+const LAUNCH_BLOCK_CASES = [
+  ['Did you mean this?', 'Did you mean this?', true],
+  ['not available in your country', 'This model is not available in your country', true],
+  ['Rate limit exceeded', 'Error: rate limit exceeded', false],
+];
+
+for (const [phrase, paneText, untilReenabled] of LAUNCH_BLOCK_CASES) {
+  test(`OpenCode start with --model fails once on "${phrase}", closes the pane, and marks the model`, (t) => {
+    const model = 'opencode/mimo-v2.6-flash-free';
+    const f = blockedLaunchFixture(t, `opencode-block-${untilReenabled ? 'hold' : 'rate'}-${phrase.length}`, model, paneText);
+    assert.throws(() => f.startWith({ model }), (error) => {
+      assert.match(error.message, new RegExp(phrase.replace('?', '\\?'), 'i'));
+      assert.doesNotMatch(error.message, /failed after 3 launch attempts/);
+      return true;
+    });
+    assert.deepEqual(f.launched, [model], 'the same model is not launched again');
+    assert.equal(f.closedPanes.length, 1);
+    const [record] = f.records();
+    assert.equal(record.model, model);
+    assert.equal(record.kind, 'opencode');
+    assert.equal(record.provider, null);
+    if (untilReenabled) assert.equal(record.untilReenabled, true);
+    else {
+      assert.equal(record.untilReenabled, undefined);
+      assert.ok(record.retryAt - Date.now() > 29 * 60 * 1000 && record.retryAt - Date.now() <= 30 * 60 * 1000);
+    }
+  });
+
+  test(`OpenCode start without --model falls back after "${phrase}" and does not launch the default again`, (t) => {
+    const blocked = loadModels().kinds.opencode.defaultModel;
+    const f = blockedLaunchFixture(t, `opencode-fallback-${untilReenabled ? 'hold' : 'rate'}-${phrase.length}`, blocked, paneText);
+    const run = f.startWith();
+    assert.equal(f.launched.length, 2);
+    assert.equal(f.launched[0], blocked);
+    assert.notEqual(f.launched[1], blocked);
+    assert.equal(run.model, f.launched[1]);
+    assert.equal(run.modelSource, 'fallback');
+    assert.equal(f.closedPanes.length, 1, 'the blocked pane is closed');
+    assert.equal(f.records().length, 1);
+    assert.equal(f.records()[0].model, blocked);
+  });
+}
+
+test('A model marked until re-enabled is refused with --model and skipped without it', (t) => {
+  const f = blockedLaunchFixture(t, 'opencode-marked-before', 'none', '');
+  const blocked = loadModels().kinds.opencode.defaultModel;
+  markModelUnavailable(f.f.env.HERDR_BOSS_DIR, { kind: 'opencode', model: blocked, untilReenabled: true, label: 'test', reason: 'test' });
+  assert.throws(() => f.startWith({ model: blocked, dryRun: true }), /unavailable until the Owner re-enables it.*models enable opencode\/opencode\/big-pickle/s);
+  const plan = f.startWith({ dryRun: true });
+  assert.equal(plan.modelSource, 'fallback');
+  assert.notEqual(plan.model, blocked);
+  assert.deepEqual(f.launched, []);
+  enableModel(f.f.env.HERDR_BOSS_DIR, 'opencode', blocked);
+  assert.equal(f.startWith({ dryRun: true }).model, blocked);
+});
+
+test('waitForWorkerPane raises model_launch_blocked for each launch phrase before the interactive question check', () => {
+  for (const text of ['Did you mean this?', 'This model is not available in your country', 'Rate limit exceeded']) {
+    const herdr = (args) => {
+      if (args[1] === 'get') return { pane: { pane_id: 'ws:p2', workspace_id: 'ws', foreground_cwd: '/work' } };
+      if (args[0] === 'agent' && args[1] === 'list') return { agents: [] };
+      if (args[1] === 'process-info') return { process_info: { shell_pid: 10, foreground_process_group_id: 10 } };
+      if (args[1] === 'read') return { text: `% opencode\n${text}\n` };
+      throw new Error(`Unexpected Herdr call: ${args.join(' ')}`);
+    };
+    assert.throws(() => waitForWorkerPane('ws:p2', 'ws', '/work', herdr, () => {}), (error) => {
+      assert.equal(error.code, 'model_launch_blocked');
+      assert.doesNotMatch(error.message, /interactive question/);
+      return true;
+    });
   }
 });
