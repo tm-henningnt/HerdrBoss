@@ -18,8 +18,12 @@ _Avoid_: native factory, the Mac factory, local Boss
 A factory that runs in one container made from the factory image.
 _Avoid_: docker factory, managed factory
 
+**Personal factory**:
+A factory that does only the Owner's own, non-commercial work. It uses the Owner's subscriptions.
+_Avoid_: experiments factory, private factory, own factory
+
 **Client factory**:
-A factory that does work for one client. It can run on the Owner's host or on the client's own compute.
+A factory that does commercial work for one client. It can run on the Owner's host or on the client's own compute. It uses accounts that are separate from the Owner's subscriptions.
 _Avoid_: customer factory, tenant factory
 
 **Client-premises factory**:
@@ -37,6 +41,16 @@ _Avoid_: connector, driver
 **Fleet**:
 All factories that one Owner manages.
 _Avoid_: cluster, estate
+
+### Accounts
+
+**Shared account**:
+A harness account or subscription that two or more factories use. Its quota is one pool for all of them.
+_Avoid_: common login, pooled account
+
+**Factory account**:
+A harness account or subscription that exactly one factory uses.
+_Avoid_: dedicated login, own subscription
 
 ### Tools and artifacts
 

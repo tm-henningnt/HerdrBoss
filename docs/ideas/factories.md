@@ -1,6 +1,6 @@
 # Herdr Boss factories: research summary, specification and design proposal
 
-Status: proposal for the Owner. Nothing is built.
+Status: proposal for the Owner, under interview. Nothing is built. Decided points link to ADRs in `docs/adr/` (0002 and later). The glossary is `docs/CONTEXT.md`.
 Author: the Boss, with five research advisors (notes A to E in the same folder) and one independent review (`review-fable.md`). Version 2 adds head office succession, users and access, Windows and client-premises hosts, and project transfer (sections 16 to 20). Version 1 text is kept where it still holds. Where sections 16 to 20 differ from sections 1 to 15, sections 16 to 20 win.
 Scope: run several Herdr Boss "software factories" from Docker images, manage them from one place, and connect to them with Herdr.
 
@@ -33,7 +33,7 @@ Non-goals for the first phases:
 - Moving a running project between factories without a freeze (a planned transfer is in section 19).
 - A fleet-wide Boss agent.
 - Controlling workers of another factory from the hub.
-- Running on a public cloud service.
+- Running on a public cloud service with a public IP address. A cloud VM that is reachable only over the tailnet is allowed as a host (ADR 0009).
 
 ## 3. Terms
 
@@ -83,7 +83,7 @@ Rules:
 
 ### 5.1 Runtime
 
-Use Docker. On the Mac use Colima by default, or OrbStack if the Owner buys a licence (OrbStack is free for personal use only, so client work needs a paid licence). On Linux use Docker Engine. Colima and OrbStack use the same Docker API, so the image does not change. Podman and Apple's `container` tool are not recommended now.
+Use Docker. On the Mac use OrbStack without a paid licence. The Mac runs only personal factories, because OrbStack is free for personal use only. Client and commercial factories run on the Owner's Windows host (ADR 0006). Colima is the fallback on the Mac. On Linux use Docker Engine. Colima and OrbStack use the same Docker API, so the image does not change. Podman and Apple's `container` tool are not recommended now.
 
 Keep repositories and worktrees on a named volume inside the Docker VM. A bind mount from macOS is slow for many small files.
 
@@ -100,7 +100,7 @@ Pin OrbStack or Colima updates, and keep the Mac awake on power. A sleep, a rebo
 - Herdr Boss at a pinned commit, as a git checkout (see section 9), with its `.git` directory.
 - A non-root user `factory` (UID 1000). s6-overlay is PID 1 with one supervised service each for sshd, `herdr server` and `herdr-boss serve`. Set `TZ` in the image, because the analytics day uses the process time zone. Set a `max-size` on the Docker log driver.
 - Git identity, `gh auth setup-git`, GitHub `known_hosts` and the Herdr integration install are part of the image or the wizard.
-- First image set: Debian, Node, git, gh, Herdr, sshd, Claude Code, Codex CLI, Herdr Boss. Add Chrome, OpenCode, Pi and `qlik-cli` in the next phase. The browser features need a way to sign in to a web app in a headless Chrome (a VNC or CDP screencast route). Until that exists, factories have no browser features.
+- First image set: Debian, Node, git, gh, Herdr, sshd, Claude Code, Codex CLI, OpenCode, Chrome, Herdr Boss. Add Pi and `qlik-cli` in the next phase. OpenCode is in the first set because each factory has its own OpenCode subscription (ADR 0007). Chrome is in the first set because a browser sign-in route comes before the first container factory (ADR 0010).
 - Code location: the image holds a seed checkout. The run-time checkout is on the `code` volume (section 9.4). A kit update inside a factory changes the volume, not the image.
 - Pi must not use a Claude subscription (the vendor terms forbid it). The image defaults enforce this.
 
@@ -246,7 +246,7 @@ Host files: `~/.herdr-factories/registry.json` (no secrets); per factory `factor
 
 ### 9.3 The wizard
 
-The full wizard has 17 steps. The first release implements 8: container, volumes, herdr, service, harness-claude, harness-codex, github, project. Steps 5 (kit), 8 to 9, 11 to 13 and 15 to 17 follow later. A resumable state machine like `project new`. A finished step is skipped when its check still passes. Exit code 3 means waiting for the Owner, either for a Mailbox decision item or for an interactive login at a host terminal. No secret enters the Mailbox.
+The full wizard has 17 steps. The first release implements 9: container, volumes, herdr, service, harness-claude, harness-codex, harness-other (OpenCode), github, project. Steps 5 (kit), 8 to 9, 11 to 13 and 15 to 17 follow later. A resumable state machine like `project new`. A finished step is skipped when its check still passes. Exit code 3 means waiting for the Owner, either for a Mailbox decision item or for an interactive login at a host terminal. No secret enters the Mailbox.
 
 | # | Step | Check |
 |---|---|---|
@@ -282,7 +282,7 @@ Migration safety: take `store.backup` before each update. The migration guard ne
 
 ### 9.5 Profiles
 
-A profile is a folder with `factory.json`, a `policy.json` seed, a `config.json` seed and the required wizard steps. Examples: `client` (approved models, one project, a client org and tenant, updates after canary) and `experiments` (all models, free first, higher worker cap, updates first). Container name `hf-<name>`, volumes `hf-<name>-data|home|work|code`.
+A profile is a folder with `factory.json`, a `policy.json` seed, a `config.json` seed and the required wizard steps. Examples: `client` (approved models, one project, a client org and tenant, separate accounts, updates after canary) and `personal` (all models, free first, higher worker cap, the Owner's subscriptions, updates first). The first container factory uses `personal` (ADR 0005). The host tool refuses a `client` profile on a host whose runtime is personal-use only (ADR 0006). Container name `hf-<name>`, volumes `hf-<name>-data|home|work|code`.
 
 ### 9.6 Operations
 
@@ -307,7 +307,7 @@ Logs go to stdout and to `server.log` with rotation. Health uses `/api/health` a
 
 | Phase | Work | Size |
 |---|---|---|
-| 0 | Spike: run Herdr and a worker in a minimal container, test the Codex seccomp profile and CodexBar on Linux (section 12). Then the Owner decides question 1. | half a day |
+| 0 | Spike on the Mac with OrbStack (ADR 0006): run Herdr and a worker in a minimal container, test the Codex seccomp profile and CodexBar on Linux (section 12). Codex in containers needs the narrow profile (ADR 0008). | half a day |
 | 1 | Portability: Linux paths and readers, `allowedHosts`, `/api/health`, stdout log and rotation. | 2 medium, 2 small |
 | 2 | Image: Dockerfile, pins, supervisor, `.git` checkout, start-and-migrate smoke test. | 1 large, 1 medium |
 | 3 | Tool core: registry, `new build start stop status list`. | 1 large, 1 medium |
@@ -350,15 +350,15 @@ Result: a short report with measured numbers and the changes that the code needs
 
 | # | Question | Recommendation |
 |---|---|---|
-| 1 | Codex in a container: relax the seccomp profile, or let the container be the sandbox (`--dangerously-bypass-approvals-and-sandbox`)? The bypass conflicts with `docs/harness-setup.md:253` and removes the guard that keeps a worker away from the login files on the `home` volume. | Decide after the spike. Test a narrow seccomp profile first. Prefer it to the bypass. |
-| 2 | Accounts: may client factories use your subscription, or do they need separate API keys or accounts? | Separate accounts or keys for any client factory. Subscription only for your own factories, a few at a time. |
-| 3 | Where does the hub (head office) run? | Superseded by section 16: it is a role. Start on an always-on box at home, with a cold standby. |
-| 4 | Runtime: client work is commercial, so OrbStack needs a paid licence. | Colima by default, OrbStack if you buy a licence. |
+| 1 | Codex in a container: relax the seccomp profile, or let the container be the sandbox (`--dangerously-bypass-approvals-and-sandbox`)? The bypass conflicts with `docs/harness-setup.md:253` and removes the guard that keeps a worker away from the login files on the `home` volume. | Decide after the spike. Test a narrow seccomp profile first. Prefer it to the bypass. **Decided: ADR 0008.** |
+| 2 | Accounts: may client factories use your subscription, or do they need separate API keys or accounts? | Separate accounts or keys for any client factory. Subscription only for your own factories, a few at a time. **Decided: ADR 0007.** |
+| 3 | Where does the hub (head office) run? | Superseded by section 16: it is a role. Start on an always-on box at home, with a cold standby. **Decided: factory zero first, ADR 0009.** |
+| 4 | Runtime: client work is commercial, so OrbStack needs a paid licence. | Colima by default, OrbStack if you buy a licence. **Decided: OrbStack, personal use on the Mac; client work on the Windows host, ADR 0006.** |
 | 5 | May item titles reach the hub, or counts only? | Counts only in phase 1. Titles as a setting. |
 | 6 | Registry: private GHCR or local images only? | Private GHCR once there is a second host. Local images first. |
-| 7 | May `PRODUCT.md` widen from "all Herdr projects on this machine" to "all factories"? | Yes. |
-| 8 | Tool form: `herdr-boss factory` or a separate binary? | `herdr-boss factory`. |
-| 9 | `qlik-cli` on arm64 Linux. | Build it from source in a Go build stage. |
+| 7 | May `PRODUCT.md` widen from "all Herdr projects on this machine" to "all factories"? | Yes. **Decided: ADR 0004.** |
+| 8 | Tool form: `herdr-boss factory` or a separate binary? | `herdr-boss factory`. **Decided: ADR 0002.** |
+| 9 | `qlik-cli` on arm64 Linux. | Build it from source in a Go build stage. **Decided: ADR 0003.** |
 | 10 | Network: one tailnet for all factories? | Yes. |
 
 
@@ -557,7 +557,7 @@ Requirement: move a project from one factory to another, through GitHub and a ha
 
 | # | Question | Recommendation |
 |---|---|---|
-| 11 | Head office: where does it live first? | An always-on box at home, with the Mac as the cold standby if the Mac is awake. A host that sleeps cannot be a standby. |
+| 11 | Head office: where does it live first? | An always-on box at home, with the Mac as the cold standby if the Mac is awake. A host that sleeps cannot be a standby. **Decided: factory zero until a second host exists, ADR 0009.** |
 | 12 | Succession: who is on the ranked list, and may a temporary head office read item titles? | The home box, then one cloud or Windows factory. Counts only until you confirm. |
 | 13 | Roles and the first users: owner, operator, reviewer, viewer. Who is the first colleague and which factories? | Fixed roles. Decide the first user set when G1 starts. |
 | 14 | Client sites: Tailscale, reverse SSH or only the client's VPN? | Reverse SSH over 443 plus the client's own VPN if required. Ask the client IT early. |
