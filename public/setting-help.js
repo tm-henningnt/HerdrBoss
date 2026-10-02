@@ -675,6 +675,13 @@ export const SETTING_HELP = Object.fromEntries([
     lower: 'A lower value closes an unused browser sooner. Zero turns this rule off.',
     apply: 'service',
   }),
+  S('service', 'chromePath', 'Chrome path', {
+    what: 'The Chrome executable that Herdr Boss starts for a project browser. A running browser keeps its executable until it restarts.',
+    default: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', unit: 'Path', range: 'An absolute path or a path that starts with ~. No .. segment, not /',
+    raise: 'Set the path of another Chrome or Chromium, for example the Linux path of a container.',
+    lower: 'The profile folder of each project stays the same. A saved login stays in the profile.',
+    apply: 'service',
+  }),
   S('service', 'browsers.sweepCodeSignClones', 'Sweep code-sign clones', {
     what: 'Lets Herdr Boss delete old code-sign clones of Chrome that no running Chrome process owns.',
     default: 'On', unit: 'Switch', range: 'On or off',

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import net from 'node:net';
 import { spawn as spawnProcess } from 'node:child_process';
-import { DATA_DIR } from './config.js';
+import { DATA_DIR, readRootSettings, resolveRootPath } from './config.js';
 import { collectProcesses, collectBrowserClients } from './collect.js';
 import { codeSignCloneDir, listCloneNames, readProcesses, removeCodeSignClone } from './clone-sweep.js';
 import { PROJECT_BROWSER_POOL_NAME, acquireLeaseFor, dropLeases, projectBrowserPool, readLeases } from './leases.js';
@@ -307,7 +307,7 @@ export function listBrowserTabViewports(project, openTabIds) {
 }
 
 // A bookmark URL must be http or https and must not hold a user name or a password.
-function bookmarkUrl(value) {
+export function bookmarkUrl(value) {
   let parsed;
   try { parsed = new URL(String(value ?? '').trim()); } catch { throw new Error('A bookmark URL must use http or https.'); }
   if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('A bookmark URL must use http or https.');
@@ -508,7 +508,9 @@ async function restoreBrowser(project, headless, options, restartId, externalCli
 }
 
 export async function requestBrowser(project, options = {}) {
-  const { launch = true, headless = null, chromePath = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' } = options;
+  const { launch = true, headless = null } = options;
+  // The chromePath setting names the Chrome executable. A caller can override it.
+  const chromePath = options.chromePath ?? resolveRootPath(readRootSettings().chromePath);
   if (!SLUG.test(project)) throw new Error('project must be a slug.');
   const d = deps(options);
   if (headless !== null && typeof headless !== 'boolean') throw new Error('headless must be boolean when supplied.');

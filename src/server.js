@@ -22,7 +22,7 @@ import { buildWatchRecord, clearNight, readNight, readStandDown, writeNight, wri
 import { effectiveRoutines, rememberChoice, resetRoutine, saveRoutine } from './watch-routines.js';
 import { withProbeState } from './browser-probe.js';
 import { maskDeep, maskBrowserState, maskBrowserText } from './browser-url-mask.js';
-import { requestBrowser, listBrowserSessions, browserStatus, setBrowserWindowSize, closeBrowser, restartBrowser, listBookmarks, addBookmark, renameBookmark, moveBookmark, removeBookmark, setStartPage } from './browser-pool.js';
+import { requestBrowser, listBrowserSessions, browserStatus, setBrowserWindowSize, closeBrowser, restartBrowser, listBookmarks, addBookmark, renameBookmark, moveBookmark, removeBookmark, setStartPage, bookmarkUrl } from './browser-pool.js';
 import { listBrowserTabs, browserScreenshot, browserNavigate, browserNavigationState, browserHistoryAction, browserClick, browserInsertText, browserKey, browserNewTab, browserCloseTab, tabAttached } from './browser-preview.js';
 import { listHandoffs } from './handoff.js';
 import { roamgateAvailable, roamgateUrl } from './roamgate.js';
@@ -203,7 +203,7 @@ export function assertPreviewHost(host) {
 }
 
 export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, createEngine = (config, options) => new Engine(config, options), rawTokens, closeTab = browserCloseTab, browserActions = {}, projectNew = {}, goalSet = {}, machineTools = {}, health = createHealth() } = {}) {
-  const browser = { browserStatus, listBrowserTabs, browserScreenshot, browserNavigate, browserNavigationState, browserHistoryAction, browserClick, browserInsertText, browserKey, browserNewTab, tabAttached, ...browserActions };
+  const browser = { browserStatus, listBrowserTabs, browserScreenshot, browserNavigate, browserNavigationState, browserHistoryAction, browserClick, browserInsertText, browserKey, browserNewTab, requestBrowser, tabAttached, ...browserActions };
   let uploads = [];
   const machineHoursCache = new Map();
   let analyticsCache = null;
@@ -895,17 +895,37 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
         try { return send(res, 200, await browser.browserHistoryAction(body.project, body.tab, body.action)); }
         catch (e) { return send(res, 409, { error: e.message }); }
       }
+      // The sign-in task types a password and a one-time code into a signed-in browser. Only the owner may use it.
+      const signInDenied = () => !readOnlyPreview && !access.owner(req);
+      if (p === '/api/browser-sessions/sign-in' && req.method === 'POST') {
+        const body = await jsonBody(req);
+        if (signInDenied()) return send(res, 403, { error: 'Only the owner can use browser sign-in.' });
+        if (!engine.state?.control?.projects?.[body.project]) return send(res, 404, { error: 'Unknown open project.' });
+        // The bookmark validator allows http and https only and refuses a user name or a password in the address.
+        let target;
+        try { target = bookmarkUrl(body.url); } catch { return send(res, 400, { error: 'Enter an http or https address without a user name or a password.' }); }
+        try {
+          await browser.requestBrowser(body.project, { headless: true });
+          const tab = await browser.browserNewTab(body.project, target);
+          return send(res, 200, { ok: true, tab: tab.id });
+        } catch (e) { return send(res, 409, { error: e.message }); }
+      }
       if (p === '/api/browser-sessions/input' && req.method === 'POST') {
         const body = await jsonBody(req);
+        if (body.signIn === true && signInDenied()) return send(res, 403, { error: 'Only the owner can use browser sign-in.' });
         if (!engine.state?.control?.projects?.[body.project]) return send(res, 404, { error: 'Unknown open project.' });
         const guard = await attachedGuard(body, browser.tabAttached);
         if (guard) return send(res, 409, guard);
         try {
           if (body.type === 'click') return send(res, 200, await browser.browserClick(body.project, body.tab, body.x, body.y));
           if (body.type === 'text') return send(res, 200, await browser.browserInsertText(body.project, body.tab, body.text));
-          if (body.type === 'key') return send(res, 200, await browser.browserKey(body.project, body.tab, body.key));
+          if (body.type === 'key') return send(res, 200, await browser.browserKey(body.project, body.tab, body.key, {}, body.modifiers ?? []));
           return send(res, 400, { error: 'Unknown browser input type.' });
-        } catch (e) { return send(res, 409, { error: e.message }); }
+        } catch (e) {
+          // A protocol error can repeat the typed text. Remove it before the error leaves the server.
+          const message = typeof body.text === 'string' && body.text ? e.message.split(body.text).join('<redacted>') : e.message;
+          return send(res, 409, { error: message });
+        }
       }
       if (p === '/api/browser-sessions/new-tab' && req.method === 'POST') {
         const body = await jsonBody(req);

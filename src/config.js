@@ -41,7 +41,8 @@ export function assertLiveDataDir(liveDataDir = DEFAULT_DATA_DIR) {
   return DATA_DIR;
 }
 
-export const ROOT_DEFAULTS = Object.freeze({ worktreeRoot: '~/Projects/.herdr-wt', projectRoot: '~/Projects' });
+// chromePath follows the root rules: an absolute path or ~ path with no .. segment. The default is the macOS path.
+export const ROOT_DEFAULTS = Object.freeze({ worktreeRoot: '~/Projects/.herdr-wt', projectRoot: '~/Projects', chromePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' });
 
 export function resolveRootPath(value, home = os.homedir()) {
   if (typeof value !== 'string' || !value.trim() || /[\u0000-\u001f\u007f]/.test(value)
@@ -188,6 +189,7 @@ const SERVICE_SETTINGS = [
   ['Browsers', 'browsers.staleOwnedMinutes'],
   ['Browsers', 'browsers.sweepCodeSignClones'],
   ['Browsers', 'browser.idleCloseMinutes'],
+  ['Browsers', 'chromePath'],
   ['Service', 'tickSeconds'],
   ['Service', 'quotaSeconds'],
   ['Service', 'push'],
