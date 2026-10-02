@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 
 test('saved worktree root reaches workers, leases, harness roots, and log attribution with project overrides', (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-config-roots-'));
@@ -47,4 +47,62 @@ test('saved worktree root reaches workers, leases, harness roots, and log attrib
   assert.equal(answer.attribution, 'shop');
   assert.equal(answer.pi, 'shop');
   assert.equal(answer.own, path.join(home, 'project trees', 'Shop', 'fix'));
+});
+
+function probe(source, { config, home } = {}) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-config-roots-'));
+  const data = path.join(root, 'data');
+  fs.mkdirSync(data);
+  if (config !== undefined) fs.writeFileSync(path.join(data, 'config.json'), config);
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', source], {
+    cwd: new URL('..', import.meta.url), encoding: 'utf8',
+    env: { ...process.env, HOME: home ?? root, HERDR_BOSS_DIR: data, HERDR_BOSS_LIVE_DIR: data },
+  });
+  fs.rmSync(root, { recursive: true, force: true });
+  return result;
+}
+
+test('a malformed config.json gives the default roots and one warning on standard error', () => {
+  const secret = 'sk-unrelated-secret-value';
+  const source = `
+    import { sharedWorktreeRoot, loadProjectConfig } from './src/kit/config.js';
+    import { readRootSettings, ROOT_DEFAULTS } from './src/config.js';
+    console.log(JSON.stringify({ roots: readRootSettings(), defaults: ROOT_DEFAULTS, shared: sharedWorktreeRoot(process.env.HOME) }));
+  `;
+  const bad = [
+    `{ "apiKey": "${secret}", `,
+    JSON.stringify({ apiKey: secret, worktreeRoot: 'relative/path' }),
+  ];
+  for (const config of bad) {
+    const result = probe(source, { config });
+    assert.equal(result.status, 0, result.stderr);
+    const answer = JSON.parse(result.stdout);
+    assert.deepEqual(answer.roots, answer.defaults);
+    assert.match(answer.shared, /Projects[/]\.herdr-wt$/);
+    const lines = result.stderr.trim().split('\n').filter(Boolean);
+    assert.ok(lines.length >= 1 && lines.every((line) => line.includes('config.json')), result.stderr);
+    assert.equal(result.stderr.includes(secret), false);
+  }
+  const named = probe(source, { config: JSON.stringify({ worktreeRoot: 'relative/path' }) });
+  assert.match(named.stderr, /worktreeRoot/);
+  assert.equal(named.stderr.includes('relative/path'), false, 'the warning never prints the value');
+});
+
+test('a valid or missing config.json prints no warning', () => {
+  const source = "import { readRootSettings } from './src/config.js'; console.log(JSON.stringify(readRootSettings()));";
+  assert.equal(probe(source).stderr, '');
+  assert.equal(probe(source, { config: JSON.stringify({ worktreeRoot: '~/trees' }) }).stderr, '');
+});
+
+test('a root with a .. segment or the path / is refused and a saved root is normalized', async () => {
+  const { resolveRootPath, validateServiceSettings } = await import('../src/config.js');
+  for (const value of ['~/../x', '/a/../../b', '/a/..', '/', '~/..', '//']) {
+    assert.throws(() => resolveRootPath(value, '/home/tester'), /root/, value);
+    assert.throws(() => validateServiceSettings({ worktreeRoot: value }), /worktreeRoot/, value);
+    assert.throws(() => validateServiceSettings({ projectRoot: value }), /projectRoot/, value);
+  }
+  assert.equal(resolveRootPath('~/a//b/./c/', '/home/tester'), '/home/tester/a/b/c');
+  assert.deepEqual(validateServiceSettings({ worktreeRoot: '/srv//trees/./x/' }), { worktreeRoot: '/srv/trees/x' });
+  const home = os.homedir();
+  assert.deepEqual(validateServiceSettings({ projectRoot: '~/work//p' }), { projectRoot: path.join(home, 'work', 'p') });
 });

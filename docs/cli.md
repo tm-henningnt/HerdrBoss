@@ -6,9 +6,9 @@ Run project commands (`worker`, `worktree`, `ledger`, `check`, `gh`) from inside
 
 ## Service
 
-`serve` stops before it writes a file when the data directory and the live data directory differ. The default for both is `~/.herdr-boss`. `HERDR_BOSS_DIR` selects the data directory. `HERDR_BOSS_LIVE_DIR` selects the live data directory. The configured paths must match after path normalization. Two different paths to the same directory do not pass the check. This is the same rule that enables engine actions. Use `--read-only-preview` with a separate temporary data directory for a preview.
+`serve` stops before it writes a file when the data directory and the live data directory differ. The live data directory is always `~/.herdr-boss`. `HERDR_BOSS_DIR` selects the data directory. The two paths must match after path normalization. Two different paths to the same directory do not pass the check. This is the same rule that enables engine actions. Use `--read-only-preview` with a separate temporary data directory for a preview.
 
-Set `worktreeRoot` and `projectRoot` in `config.json`, or in **Settings → Advanced → Service settings → Paths**. Select **Save**. Use an absolute path or a path that starts with `~`. The defaults are `~/Projects/.herdr-wt` and `~/Projects`. A project `worktreeRoot` in `.herdr-boss.json` takes precedence for its workers. The new root applies to new workers, leases, harness checks, and log attribution. Run `herdr-boss harness sync` after a worktree root change. Existing worktrees stay in place.
+Set `worktreeRoot` and `projectRoot` in `config.json`, or in **Settings → Advanced → Service settings → Paths**. Select **Save**. Use an absolute path or a path that starts with `~`. A root must not contain a `..` segment and must not be `/`. Herdr Boss saves the normalized absolute path. The defaults are `~/Projects/.herdr-wt` and `~/Projects`. A project `worktreeRoot` in `.herdr-boss.json` takes precedence for its workers. The new root applies to new workers, leases, harness checks, and log attribution. Run `herdr-boss harness sync` after a worktree root change. Existing worktrees stay in place.
 
 `projectRoot` supplies the suggested group folder for **New project** in the dashboard. An entered group or exact path takes precedence. The CLI still requires `--group` or `--path`.
 
@@ -44,9 +44,9 @@ The script refuses the live data directory, a directory inside it, and a symlink
 
 Choose an unused local port if 4478 is busy.
 
-`HERDR_BOSS_DIR` selects the data directory. The live data directory defaults to `~/.herdr-boss`. Set `HERDR_BOSS_LIVE_DIR` when the service uses another live directory.
+`HERDR_BOSS_DIR` selects the data directory. The live data directory is always `~/.herdr-boss`.
 
-A preview collects and evaluates, so it writes `state.json`, `rules.json`, `bulletin.md`, and quota history into its data directory. A preview therefore requires `HERDR_BOSS_DIR` to name a separate directory that the service does not use. The directory does not have to be empty. A directory that holds files from an earlier preview is valid. The command refuses to start when `HERDR_BOSS_DIR` is unset. It also refuses when the path resolves to the live data directory or to `~/.herdr-boss`. A symlink in the path gives the same refusal. The refusal happens before the command creates or migrates a data directory. Use a separate `HERDR_BOSS_LIVE_DIR` value in the preview process to point the check at another live directory.
+A preview collects and evaluates, so it writes `state.json`, `rules.json`, `bulletin.md`, and quota history into its data directory. A preview therefore requires `HERDR_BOSS_DIR` to name a separate directory that the service does not use. The directory does not have to be empty. A directory that holds files from an earlier preview is valid. The command refuses to start when `HERDR_BOSS_DIR` is unset. It also refuses when the path resolves to the live data directory or to `~/.herdr-boss`. A symlink in the path gives the same refusal. The refusal happens before the command creates or migrates a data directory.
 
 When `NODE_TEST_CONTEXT` is set, or the data directory differs from the configured live directory, the Engine disables prompts, notifications, process reaping, handovers, and push prompts. Set `HERDR_BOSS_ALLOW_ACTIONS=1` only when you intentionally need these actions outside the live service.
 
@@ -802,10 +802,12 @@ Do not edit this block. It comes from `public/setting-help.js`.
 - Controls: The values that the service uses: collection intervals, worker clean-up, browser clean-up, and the network address. Each row shows its source.
 - Effect: Workers, notices, browsers, and the machine. A value here changes when a worker pane closes, a done worker is reported, or an idle browser closes.
 - Safe to change: A row with an input is safe to change. A row without an input is read-only. Change it in config.json.
-- Restart: A row with an input needs no restart. A read-only row needs a service restart.
+- Restart: The push row needs a service restart. Other rows with inputs apply after Save. A read-only row needs a service restart.
 
 | Setting | Key | What it does | Default | Unit | Range | Raise it | Lower it | Apply |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Worktree root | `worktreeRoot` | The parent folder for new worker worktrees. A project worktreeRoot in .herdr-boss.json takes precedence. Existing worktrees stay in place. | ~/Projects/.herdr-wt | Path | An absolute path or a path that starts with ~. No .. segment, not / | Set another folder for new worker worktrees. Run herdr-boss harness sync to check harness access. | The value does not move or delete existing worktrees. | Select Save in the group. The change takes effect at once. |
+| Project root | `projectRoot` | The suggested group folder for New project in the dashboard. An entered group or exact path takes precedence. | ~/Projects | Path | An absolute path or a path that starts with ~. No .. segment, not / | Set another suggested group folder. The CLI still requires --group or --path. | The value does not move or delete existing projects. | Select Save in the group. The change takes effect at once. |
 | Stale status minutes | `staleStatusMinutes` | The age after which a published project status is stale while workers run or new commits land. | 120 | Minutes | 5 to 1440 | A higher value gives the stale notice later. | A lower value gives the stale notice sooner. | Select Save in the group. The change takes effect at once. |
 | Stale idle worker minutes | `workers.staleIdleMinutes` | The idle time after which Herdr Boss reports a worker as stale. The wait command uses it as its stall time. | 120 | Minutes | 5 to 1440 | A higher value waits longer before it reports an idle worker. | A lower value reports an idle worker sooner. | Select Save in the group. The change takes effect at once. |
 | Worker pane close delay | `workers.paneCloseDelayMinutes` | The time after collection before Herdr Boss closes the worker pane. The service closes it after the command exits. | 2 | Minutes | 0 to 60 | A higher value leaves the pane open longer. | A lower value closes the pane sooner. Zero closes it on the next service tick. | Select Save in the group. The change takes effect at once. |

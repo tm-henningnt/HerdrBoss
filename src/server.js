@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { Engine, standDownPlan } from './engine.js';
 import { ownerReleaseLease, withResourcePoolMutation, readLeases, leasePools, publicPool, hasIdleRule, tcpListeningAsync } from './leases.js';
-import { PROJECTS_DIR, DATA_DIR, LIVE_DATA_DIR, DEFAULT_SESSION_FILE, PRIVATE_ACCESS_DIR, assertPreviewDataDir, assertLiveDataDir, writeServiceSettings, applyServiceSettings, serviceSettingsView, validateResourcePools, writeResourcePools } from './config.js';
+import { PROJECTS_DIR, DATA_DIR, DEFAULT_SESSION_FILE, PRIVATE_ACCESS_DIR, assertPreviewDataDir, assertLiveDataDir, writeServiceSettings, applyServiceSettings, serviceSettingsView, validateResourcePools, writeResourcePools } from './config.js';
 import { writeProject, listProjects, SLUG } from './projects.js';
 import { loadModels } from './kit/config.js';
 import { loadPolicy, savePolicy, policyShareGuard } from './control.js';
@@ -198,7 +198,7 @@ export function assertPreviewHost(host) {
   return value;
 }
 
-export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir = LIVE_DATA_DIR, createEngine = (config, options) => new Engine(config, options), rawTokens, closeTab = browserCloseTab, browserActions = {}, projectNew = {}, goalSet = {} } = {}) {
+export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, createEngine = (config, options) => new Engine(config, options), rawTokens, closeTab = browserCloseTab, browserActions = {}, projectNew = {}, goalSet = {} } = {}) {
   const browser = { browserStatus, listBrowserTabs, browserScreenshot, browserNavigate, browserNavigationState, browserHistoryAction, browserClick, browserInsertText, browserKey, browserNewTab, tabAttached, ...browserActions };
   let uploads = [];
   const machineHoursCache = new Map();

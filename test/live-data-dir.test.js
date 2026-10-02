@@ -43,7 +43,8 @@ test('direct service startup refuses a different data directory before any write
   assert.equal(answer.created, false, answer.message);
   assert.match(answer.message, /data directory.*live data directory/);
   assert.ok(answer.message.includes(data));
-  assert.ok(answer.message.includes(live));
+  assert.ok(answer.message.includes(path.join(home, '.herdr-boss')), 'the message names the fixed live directory');
+  assert.equal(answer.message.includes(live), false, 'HERDR_BOSS_LIVE_DIR does not name the live directory');
   assert.equal(fs.existsSync(data), false);
   assert.equal(fs.existsSync(path.join(home, 'unused-token')), false);
 });
@@ -119,4 +120,17 @@ test('argv and a serve-option environment variable cannot bypass the CLI live di
     assert.match(result.stderr, /data directory.*live data directory/);
     assert.equal(fs.existsSync(data), false);
   }
+});
+
+test('CLI serve refuses a data directory that HERDR_BOSS_LIVE_DIR also names', (t) => {
+  const { root, home } = fixture(t);
+  const data = path.join(root, 'same');
+  const result = spawnSync(process.execPath, ['src/cli.js', 'serve'], {
+    cwd: new URL('..', import.meta.url), encoding: 'utf8', timeout: 10000,
+    env: { ...process.env, HOME: home, HERDR_BOSS_DIR: data, HERDR_BOSS_LIVE_DIR: data, HERDR_BOSS_PORT: '0' },
+  });
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /data directory.*live data directory/);
+  assert.ok(result.stderr.includes(path.join(home, '.herdr-boss')));
+  assert.equal(fs.existsSync(data), false);
 });

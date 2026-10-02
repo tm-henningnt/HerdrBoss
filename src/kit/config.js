@@ -232,6 +232,11 @@ function sameValue(a, b) {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
+function sameRoot(a, b, home) {
+  if (typeof a !== 'string' || typeof b !== 'string') return sameValue(a, b);
+  return path.resolve(expandHome(a, home)) === path.resolve(expandHome(b, home));
+}
+
 // Show the home folder as ~, and keep one ~ form when the value already uses it.
 function homeRelative(value, home = os.homedir()) {
   if (typeof value !== 'string' || !home) return value;
@@ -245,7 +250,7 @@ function homeRelative(value, home = os.homedir()) {
 export function workerConfigView(config, { home = os.homedir() } = {}) {
   const fields = WORKER_CONFIG_FIELDS.map((key) => {
     const raw = config?.[key];
-    const source = sameValue(raw, PROJECT_DEFAULTS[key]) ? 'default' : 'config';
+    const source = (key === 'worktreeRoot' ? sameRoot(raw, PROJECT_DEFAULTS[key], home) : sameValue(raw, PROJECT_DEFAULTS[key])) ? 'default' : 'config';
     let value = raw;
     if (key === 'setup') value = raw ? 'set' : 'not set';
     else if (key === 'worktreeRoot') value = homeRelative(raw, home);

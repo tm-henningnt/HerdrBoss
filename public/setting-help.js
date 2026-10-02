@@ -588,13 +588,13 @@ export const SETTING_HELP = Object.fromEntries([
   // Service settings
   S('service', 'worktreeRoot', 'Worktree root', {
     what: 'The parent folder for new worker worktrees. A project worktreeRoot in .herdr-boss.json takes precedence. Existing worktrees stay in place.',
-    default: '~/Projects/.herdr-wt', unit: 'Path', range: 'An absolute path or a path that starts with ~',
+    default: '~/Projects/.herdr-wt', unit: 'Path', range: 'An absolute path or a path that starts with ~. No .. segment, not /',
     raise: 'Set another folder for new worker worktrees. Run herdr-boss harness sync to check harness access.',
     lower: 'The value does not move or delete existing worktrees.', apply: 'service',
   }),
   S('service', 'projectRoot', 'Project root', {
     what: 'The suggested group folder for New project in the dashboard. An entered group or exact path takes precedence.',
-    default: '~/Projects', unit: 'Path', range: 'An absolute path or a path that starts with ~',
+    default: '~/Projects', unit: 'Path', range: 'An absolute path or a path that starts with ~. No .. segment, not /',
     raise: 'Set another suggested group folder. The CLI still requires --group or --path.',
     lower: 'The value does not move or delete existing projects.', apply: 'service',
   }),

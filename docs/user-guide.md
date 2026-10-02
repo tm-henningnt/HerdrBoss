@@ -52,9 +52,9 @@ Put seed data only into a temporary data directory. Never write seed data or tes
 
 ## Data directory and roots
 
-The service starts only when the configured data directory and live data directory match after path normalization. Both default to `~/.herdr-boss`. `HERDR_BOSS_DIR` selects the data directory. `HERDR_BOSS_LIVE_DIR` selects the live data directory. A mismatch stops the service before it writes a file or creates the engine. Two different paths to the same directory do not pass the check. This is the same rule that enables engine actions. Use `--read-only-preview` and a separate temporary directory for a preview.
+The service starts only when the configured data directory and live data directory match after path normalization. The live data directory is always `~/.herdr-boss`. `HERDR_BOSS_DIR` selects the data directory. A mismatch stops the service before it writes a file or creates the engine. Two different paths to the same directory do not pass the check. This is the same rule that enables engine actions. Use `--read-only-preview` and a separate temporary directory for a preview.
 
-Open **Settings → Advanced → Service settings**. Find the **Paths** group. Set `worktreeRoot` and `projectRoot`, then select **Save**. Use an absolute path or a path that starts with `~`. The defaults are `~/Projects/.herdr-wt` and `~/Projects`.
+Open **Settings → Advanced → Service settings**. Find the **Paths** group. Set `worktreeRoot` and `projectRoot`, then select **Save**. Use an absolute path or a path that starts with `~`. A root must not contain a `..` segment and must not be `/`. The defaults are `~/Projects/.herdr-wt` and `~/Projects`.
 
 `worktreeRoot` is the parent folder for new worker worktrees. A project `worktreeRoot` in `.herdr-boss.json` takes precedence for its workers. Leases, harness checks, and log attribution use the service root. Run `herdr-boss harness sync` after a worktree root change. Existing worktrees stay in place.
 

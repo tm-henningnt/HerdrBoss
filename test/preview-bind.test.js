@@ -31,7 +31,7 @@ const probe = `
   engine.state = { ok: true };
   engine.tick = async () => engine.state;
   engine.log = () => {};
-  const { server, close } = serve(cfg, { readOnlyPreview: options.preview, previewHost: options.previewHost, createEngine: () => engine });
+  const { server, close } = serve(cfg, { readOnlyPreview: options.preview, previewHost: options.previewHost, liveDataDir: process.env.HERDR_BOSS_DIR, createEngine: () => engine });
   await new Promise((resolve, reject) => { server.once('listening', resolve); server.once('error', reject); });
   const { address, port } = server.address();
   const status = await new Promise((resolve, reject) => {

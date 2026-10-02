@@ -388,7 +388,7 @@ async function main() {
   // Check the startup data directory before loadConfig() creates it.
   if (cmd === 'serve') {
     if (args.includes('--read-only-preview')) assertPreviewDataDir();
-    else assertLiveDataDir();
+    else if (!args.includes('--host')) assertLiveDataDir(); // --host without a preview is a usage error below
   }
   const cfg = loadConfig();
   switch (cmd) {
