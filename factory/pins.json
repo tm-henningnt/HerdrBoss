@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "base": {
+    "image": "debian",
+    "tag": "trixie-slim",
+    "digest": "sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a"
+  },
+  "s6Overlay": "3.2.3.2",
+  "node": "26.10.0",
+  "herdr": "0.9.3",
+  "gh": "2.102.0",
+  "claudeCode": "2.1.288",
+  "codex": "0.160.0",
+  "opencode": "1.18.34",
+  "chromium": "154.0.8037.92-1~deb13u1",
+  "sha256": {
+    "s6-overlay-noarch.tar.xz": "5379750ed30a84bbd2e2dd74847ba6b5bd29cd0b2e3ea2ec58049b57eb2eda12",
+    "s6-overlay-aarch64.tar.xz": "b17f17a82e7a515c682a91edaf2ffdabb73f891981b6c1fd712115693a2f8b4c",
+    "s6-overlay-x86_64.tar.xz": "e6befcc96a437a3831386ecfc51808c5d3e939dc5fe3c02ae9284599e8aa2408",
+    "node-v26.10.0-linux-arm64.tar.xz": "7a6353f63eb3d04765004b4adf172616243e4522434635cb1d26288658b04ab5",
+    "node-v26.10.0-linux-x64.tar.xz": "ca70e9e349de048b9522abb3adc05b3bd6f43c5ffd3ec57916c7da292f59f022",
+    "gh_2.102.0_linux_arm64.tar.gz": "7862c86c72f43df3a2d93ddde6f473285b4e2af61b494849846827e513ef6484",
+    "gh_2.102.0_linux_amd64.tar.gz": "bb766f710eef8ede859c18578c72c327597cd4c8a85b06001b1f3843c6019386",
+    "herdr-linux-aarch64": "4de7aa3e25678812e92960de64f7c2aaa1bca1f0f80a3c5e559837e231e1f5c0",
+    "herdr-linux-x86_64": "18a8dc65f1c2fa485884344356dea1cfd911c6f06cf46fa78e193f4087f4dba7"
+  }
+}
