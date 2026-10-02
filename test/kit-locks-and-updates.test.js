@@ -159,6 +159,7 @@ test('the worker brief template uses absolute worker paths and the kit names no 
   assert.match(template, /"\$TMPDIR"/);
   assert.match(template, /"\$HERDR_WORKTREE\/\.worker\//);
   assert.match(template, /Never use `\.\.\/`/);
+  assert.match(template, /For a shared catalogue, do not append to it\. Write your findings to `catalogue\/<worker>\.md`\. Let the orchestrator merge worker files at collect time\./);
   const gates = template.slice(template.indexOf('## Gates on a shared machine'), template.indexOf('## Reports'));
   assert.doesNotMatch(gates, /herdr-boss lock acquire full-suite/);
   const processSafety = template.slice(template.indexOf('## Process safety'), template.indexOf('## Edit scope'));
@@ -166,15 +167,19 @@ test('the worker brief template uses absolute worker paths and the kit names no 
   assert.match(processSafety, /List processes only with `pgrep -l NAME` or `ps -o pid,ppid,etime,comm`\./);
   assert.match(processSafety, /Never use `ps e`, `ps -E`, `ps eww`, `ps aux`, `ps -ef`, or `pgrep -fl`\./);
   assert.match(processSafety, /Run each `herdr-boss browser` command and each `ps` or `pgrep` command alone\. Do not join it to other commands with `&&`, `;`, or a pipe\./);
-  assert.match(processSafety, /Run `herdr-boss suite -- npm test` as a background command, then wait for it and read its exit code\. The tool timeout is 600 seconds\./);
+  const longSuiteRule = /Run a long gate in the foreground with `herdr-boss suite --wait 3600 -- <command>`\. Set the command tool timeout to at least 3,600,000 ms\. Do not run a long gate in a background shell with its default timeout\./;
+  assert.match(processSafety, longSuiteRule);
   assert.match(gates, /Run only the scoped acceptance commands named in this brief or task contract\./);
   const grep = spawnSync('grep', ['-rn', 'load average is under 30', 'kit', 'docs'], { encoding: 'utf8' });
   assert.equal(grep.stdout, '');
-  const backgroundSuiteRule = /Run `herdr-boss suite -- npm test` as a background command, then wait for it and read its exit code\. The tool timeout is 600 seconds\./;
   const fullSuiteLockRule = /Never take the full-suite lock with a bare lock acquire for a suite\./;
+  for (const file of ['kit/templates/project-kit.md', 'kit/templates/worker-brief.md', 'kit/skills/herdr-orchestrator/reference/git-and-worktrees.md']) {
+    const text = fs.readFileSync(path.resolve(file), 'utf8');
+    assert.match(text, longSuiteRule, file);
+    assert.doesNotMatch(text, /as a background command, then wait for it and read its exit code/);
+  }
   for (const file of ['kit/templates/project-kit.md', 'kit/skills/herdr-orchestrator/SKILL.md', 'kit/templates/worker-brief.md']) {
     const text = fs.readFileSync(path.resolve(file), 'utf8');
-    assert.match(text, backgroundSuiteRule, file);
     assert.match(text, fullSuiteLockRule, file);
     assert.doesNotMatch(text, /herdr-boss lock acquire full-suite/, file);
   }
@@ -234,7 +239,7 @@ test('the orchestrator skill stays short and links each reference file', () => {
   assert.ok(words >= 2300 && words <= 3000, `SKILL.md has ${words} words`);
   assert.match(skill, /^---\nname: herdr-orchestrator\ndescription: Use when /);
   assert.match(skill, /Use `--read-only` for a task that changes no repository file\./);
-  const references = ['herdr-control.md', 'machine-and-quota.md', 'handover.md', 'ledger-and-evidence.md'];
+  const references = ['herdr-control.md', 'machine-and-quota.md', 'handover.md', 'ledger-and-evidence.md', 'git-and-worktrees.md'];
   for (const name of references) assert.match(skill, new RegExp(`^- \\[reference/${name.replace('.', '\\.')}\\]\\(reference/${name.replace('.', '\\.')}\\): read `, 'm'), name);
   assert.match(skill, /\]\(\.\.\/\.\.\/models\.md\)/);
   assert.match(skill, /\]\(\.\.\/\.\.\/browser-service\.md\)/);
@@ -253,6 +258,8 @@ test('the orchestrator skill stays short and links each reference file', () => {
     'Review its output before `handoff activate <id> --confirmed`.',
     'Treat the ledger as operational telemetry, not acceptance evidence.',
     'Do not promote local tests to hosted, visual, accessibility, performance, commercial, hardware, or Owner proof.',
+    'Set the command tool timeout to at least 3,600,000 ms.',
+    'The `--wait` value is the maximum time to wait for the full-suite lock.',
   ]) assert.ok(all.includes(rule), rule);
 });
 
