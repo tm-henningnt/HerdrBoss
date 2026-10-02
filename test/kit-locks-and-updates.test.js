@@ -19,6 +19,7 @@ import { renderBulletin } from '../src/rules.js';
 import { readWorkerFacts, gitIsMerged } from '../src/task-state.js';
 import { kitRevision, parseKitImpact, projectKit, readKitChanges, kitChangesSince } from '../src/kit/agents-check.js';
 import { ALL_READY_SCREENS, CLAUDE_READY_SCREEN, CODEX_READY_SCREEN, git, setupFixture, temporaryRepo, TEST_HOME, tiers, validReport, validRun } from './helpers/kit-fixture.js';
+import { readyAgent } from './helpers/ready-agent.js';
 
 test('manual full-suite locks expire after an hour and the engine warns the holder at takeover', async (t) => {
   const root = temporaryRepo('herdr-manual-suite-lock-');
@@ -128,7 +129,7 @@ test('worker start gives the pane absolute TMPDIR and HERDR_WORKTREE paths and c
       paneCwd = args[args.indexOf('--cwd') + 1];
       return { pane: { pane_id: 'ws:p2' } };
     }
-    if (args[0] === 'agent' && args[1] === 'get') return { agent: { agent_status: 'idle' } };
+    if (args[0] === 'agent' && args[1] === 'get') return readyAgent();
     if (args[0] === 'agent' && args[1] === 'read') return { text: ALL_READY_SCREENS };
     if (args[0] === 'agent' && (args[1] === 'start' || args[1] === 'prompt')) return {};
     throw new Error(`Unexpected Herdr call: ${args.join(' ')}`);
