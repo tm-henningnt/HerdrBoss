@@ -154,8 +154,11 @@ test('Engine.tick expires stale handoffs only with actions and a fresh successfu
   assert.deepEqual(failedCollection.paneIds, ['ws:p1'], 'Engine.tick must use the cached snapshot after collection fails');
   assert.equal(failedCollection.errors.some((error) => error.startsWith('herdr:')), true);
   assert.equal(failedCollection.handoff.status, 'needs-inspection', 'cached state must not be used to infer pane absence');
+  const expectedProcessCalls = process.platform === 'linux'
+    ? ['codexbar', 'ps']
+    : ['codexbar', 'ioreg', 'memory_pressure', 'ps', 'sysctl'];
   for (const result of [activeFresh, actionsDisabled, failedCollection]) {
     assert.ok(result.herdrCalls.some((args) => args[0] === 'pane' && args[1] === 'list'), 'all Herdr calls must use the fake runner');
-    assert.deepEqual(new Set(result.processCalls), new Set(['codexbar', 'ioreg', 'memory_pressure', 'ps', 'sysctl']));
+    assert.deepEqual(new Set(result.processCalls), new Set(expectedProcessCalls));
   }
 });

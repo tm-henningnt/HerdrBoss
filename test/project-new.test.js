@@ -1,4 +1,4 @@
-import './helpers/test-env.js';
+import { TEST_GIT_IDENTITY } from './helpers/test-env.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -12,15 +12,13 @@ import { loadModels } from '../src/kit/config.js';
 import { validateProject } from '../src/projects.js';
 import { scanText } from '../src/secret-scan.js';
 
-// Git reads its identity from a temporary global file, never from the machine.
+// Git uses the fixed test identity and an isolated config.
 const GIT_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-project-new-git-'));
-const WITH_IDENTITY = path.join(GIT_HOME, 'with');
-const WITHOUT_IDENTITY = path.join(GIT_HOME, 'without');
-fs.writeFileSync(WITH_IDENTITY, '[user]\n\tname = Test User\n\temail = test@example.invalid\n');
-fs.writeFileSync(WITHOUT_IDENTITY, '[user]\n\tuseConfigOnly = true\n');
-process.env.GIT_CONFIG_GLOBAL = WITH_IDENTITY;
+const GIT_CONFIG = path.join(GIT_HOME, 'isolated');
+fs.writeFileSync(GIT_CONFIG, '[user]\n\tuseConfigOnly = true\n');
+process.env.GIT_CONFIG_GLOBAL = GIT_CONFIG;
 process.env.GIT_CONFIG_NOSYSTEM = '1';
-for (const key of ['GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL', 'GIT_COMMITTER_NAME', 'GIT_COMMITTER_EMAIL', 'EMAIL']) delete process.env[key];
+delete process.env.EMAIL;
 test.after(() => fs.rmSync(GIT_HOME, { recursive: true, force: true }));
 const gitOut = (dir, ...args) => execFileSync('git', args, { cwd: dir, encoding: 'utf8' }).trim();
 
@@ -340,7 +338,8 @@ test('a token in a file stops the commit, names the file and class, and leaves t
 
 test('a missing Git identity fails the commit step and sets no identity', () => {
   const f = fixture();
-  process.env.GIT_CONFIG_GLOBAL = WITHOUT_IDENTITY;
+  const previousIdentity = Object.fromEntries(Object.keys(TEST_GIT_IDENTITY).map((key) => [key, process.env[key]]));
+  for (const key of Object.keys(TEST_GIT_IDENTITY)) delete process.env[key];
   try {
     const dir = path.join(f.group, 'demo');
     const failed = runProjectNew(base(f));
@@ -349,10 +348,10 @@ test('a missing Git identity fails the commit step and sets no identity', () => 
     assert.equal(status(failed, 'commit'), 'failed');
     assert.match(failed.error, /user\.name|user\.email/);
     assert.throws(() => gitOut(dir, 'rev-parse', '--verify', '-q', 'HEAD'));
-    assert.equal(fs.readFileSync(WITHOUT_IDENTITY, 'utf8'), '[user]\n\tuseConfigOnly = true\n');
-    process.env.GIT_CONFIG_GLOBAL = WITH_IDENTITY;
+    assert.equal(fs.readFileSync(GIT_CONFIG, 'utf8'), '[user]\n\tuseConfigOnly = true\n');
+    Object.assign(process.env, previousIdentity);
     assert.equal(runProjectNew(base(f, { resume: true })).ok, true);
-  } finally { process.env.GIT_CONFIG_GLOBAL = WITH_IDENTITY; f.cleanup(); }
+  } finally { Object.assign(process.env, previousIdentity); f.cleanup(); }
 });
 
 test('dry run describes the kit and commit steps and runs neither', () => {

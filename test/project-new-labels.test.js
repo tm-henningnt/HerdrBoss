@@ -135,10 +135,20 @@ test('without a gh login the labels step is skipped and gh auth login never runs
 test('without gh installed the labels step is skipped', () => {
   const f = fixture();
   try {
-    const env = { ...f.env, PATH: path.dirname(process.execPath) + path.delimiter + '/usr/bin' + path.delimiter + '/bin' };
-    const result = runProjectNew(base(f, { remote: GITHUB_URL, env }));
+    const probeCalls = [];
+    const ghProbe = (command, args) => {
+      probeCalls.push([command, args]);
+      return { status: null, error: { code: 'ENOENT' }, stdout: '', stderr: '' };
+    };
+    const result = runProjectNew(base(f, {
+      remote: GITHUB_URL,
+      stepRunners: { labels: (inputs, context) => labelsStep(inputs, { ...context, ghProbe }) },
+    }));
+    assert.equal(result.ok, true, result.error);
     assert.equal(step(result, 'labels').status, 'skipped');
     assert.match(step(result, 'labels').detail, /not installed/);
+    assert.deepEqual(probeCalls, [['gh', ['auth', 'status']]]);
+    assert.deepEqual(f.fake.calls(), []);
   } finally { f.cleanup(); }
 });
 

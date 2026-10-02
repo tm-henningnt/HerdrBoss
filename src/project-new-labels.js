@@ -17,14 +17,14 @@ export function describeLabels(_inputs, context) {
 // The gh state of a project: { skip } with a plain reason, { fail }, or { run, repo }.
 // url is the raw origin URL. created is the name of a repository that the remote step created with gh.
 // decided is the visibility that the wizard chose. It counts only when created names the repository of origin.
-function inspect({ dir, url, created, decided, env }) {
+function inspect({ dir, url, created, decided, env, ghProbe = run }) {
   if (!url) return { skip: 'no remote' };
   const repo = parseGithubRepo(url);
   if (!repo) return { skip: 'the origin is not a GitHub repository' };
   const trusted = decided && created && String(created).toLowerCase() === repo.toLowerCase() ? decided : undefined;
   if (trusted && trusted !== 'private') return { skip: `the repository is ${trusted}, not private` };
   const clean = cleanGhEnv(env);
-  const auth = run('gh', ['auth', 'status'], { cwd: dir, env: clean });
+  const auth = ghProbe('gh', ['auth', 'status'], { cwd: dir, env: clean });
   if (auth.error?.code === 'ENOENT') return { skip: 'gh is not installed' };
   if (auth.status !== 0) return { skip: 'gh is not logged in' };
   const runGh = ghRunner({ cwd: dir, env: clean });
@@ -40,7 +40,7 @@ function inspect({ dir, url, created, decided, env }) {
 
 export function labelsStep(inputs, context) {
   const url = originUrl(inputs, context);
-  const found = inspect({ dir: inputs.path, url, created: context.ids?.remoteCreated, decided: context.ids?.remoteDecision?.visibility, env: ghEnv(context) });
+  const found = inspect({ dir: inputs.path, url, created: context.ids?.remoteCreated, decided: context.ids?.remoteDecision?.visibility, env: ghEnv(context), ghProbe: context.ghProbe });
   if (found.skip) return { status: 'skipped', detail: `skipped: ${found.skip}` };
   if (found.fail) throw new Error(found.fail);
   const result = syncLabels(loadLabelPreset(PRESET), found.run, { repo: found.repo });

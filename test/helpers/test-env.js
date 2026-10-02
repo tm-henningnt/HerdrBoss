@@ -2,6 +2,19 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+export const TEST_GIT_IDENTITY = Object.freeze({
+  GIT_AUTHOR_NAME: 'Test User',
+  GIT_AUTHOR_EMAIL: 'test@example.invalid',
+  GIT_COMMITTER_NAME: 'Test User',
+  GIT_COMMITTER_EMAIL: 'test@example.invalid',
+});
+
+Object.assign(process.env, TEST_GIT_IDENTITY);
+
+export function withTestGitIdentity(env) {
+  return { ...env, ...TEST_GIT_IDENTITY };
+}
+
 const realHome = path.resolve(os.userInfo().homedir || os.homedir());
 const realDataDir = path.resolve(path.join(realHome, '.herdr-boss'));
 
