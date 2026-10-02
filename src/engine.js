@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
 import { agentPromptTimeoutMs } from './agent-prompt.js';
 import { DATA_DIR, LIVE_DATA_DIR, dashboardUrl, serviceSettingsView } from './config.js';
-import { collectHerdr, collectQuotas, collectMachine, collectProcesses, collectCwdProcesses, collectMissingWorktreeProcesses, collectWorktreeCounts, collectPiModels, collectBrowserClients, findBrowsers, cpuUse, keepStaleRows, run, QUOTA_PROVIDERS, QUOTA_TIMEOUT_BACKOFF_MS } from './collect.js';
+import { collectHerdr, collectQuotas, collectMachine, collectProcesses, collectCwdProcesses, collectMissingWorktreeProcesses, collectWorktreeCounts, collectPiModels, collectBrowserClients, findBrowsers, cpuUse, keepStaleRows, run, QUOTA_PROVIDERS, QUOTA_TIMEOUT_BACKOFF_BY_PROVIDER_MS } from './collect.js';
 import { evaluate, swapWarnStep, renderBulletin, fmtDuration, providerName, broadcastTargets, staleStatuses } from './rules.js';
 import { listProjects } from './projects.js';
 import { checkHarness, readProjectRepos } from './harness.js';
@@ -1621,7 +1621,7 @@ export class Engine extends EventEmitter {
     const startedAt = this.clock();
     const timeoutIndexes = this.quotaTimeoutIndexes;
     const timeouts = Object.fromEntries(QUOTA_PROVIDERS.map((provider) => [
-      provider, QUOTA_TIMEOUT_BACKOFF_MS[timeoutIndexes[provider] || 0],
+      provider, QUOTA_TIMEOUT_BACKOFF_BY_PROVIDER_MS[provider][timeoutIndexes[provider] || 0],
     ]));
     this.quotaNextAt = startedAt + this.cfg.quotaSeconds * 1000;
     let read;
@@ -1651,7 +1651,7 @@ export class Engine extends EventEmitter {
         const failed = this.quotas.map((quota) => ({ provider: quota.provider, error: this.quotaError }));
         this.quotas = keepStaleRows(failed, this.quotas, this.quotasAt, result.at);
       }
-      for (const provider of QUOTA_PROVIDERS) this.quotaTimeoutIndexes[provider] = Math.min((this.quotaTimeoutIndexes[provider] || 0) + 1, QUOTA_TIMEOUT_BACKOFF_MS.length - 1);
+      for (const provider of QUOTA_PROVIDERS) this.quotaTimeoutIndexes[provider] = Math.min((this.quotaTimeoutIndexes[provider] || 0) + 1, QUOTA_TIMEOUT_BACKOFF_BY_PROVIDER_MS[provider].length - 1);
       this.memory.claudeQuotaProbeFailure ||= { startedAt: new Date(result.at).toISOString() };
       return;
     }
@@ -1662,7 +1662,7 @@ export class Engine extends EventEmitter {
     for (const provider of QUOTA_PROVIDERS) {
       const row = result.quotas.find((quota) => quota.provider === provider);
       if (row && !row.error) this.quotaTimeoutIndexes[provider] = 0;
-      else this.quotaTimeoutIndexes[provider] = Math.min((this.quotaTimeoutIndexes[provider] || 0) + 1, QUOTA_TIMEOUT_BACKOFF_MS.length - 1);
+      else this.quotaTimeoutIndexes[provider] = Math.min((this.quotaTimeoutIndexes[provider] || 0) + 1, QUOTA_TIMEOUT_BACKOFF_BY_PROVIDER_MS[provider].length - 1);
     }
     const claude = result.quotas.find((quota) => quota.provider === 'claude');
     if (claude && !claude.error) delete this.memory.claudeQuotaProbeFailure;

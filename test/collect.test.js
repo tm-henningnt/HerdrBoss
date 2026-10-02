@@ -61,8 +61,14 @@ test('a timed-out quota probe reports the provider and uses the first back-off t
     throw Object.assign(new Error('Command failed: codexbar usage --format json'), { killed: true, signal: 'SIGTERM', code: null, stderr: '' });
   };
   const rows = await collectQuotas({ runner });
-  assert.deepEqual(calls, ['codex', 'claude', 'opencodego'].map((provider) => ({ provider, timeout: 20000 })));
-  assert.match(rows.find((row) => row.provider === 'claude').error, /Claude usage probe timed out after 20 s/);
+  assert.deepEqual(calls, [
+    { provider: 'codex', timeout: 20000 },
+    { provider: 'claude', timeout: 60000 },
+    { provider: 'claude', timeout: 90000 },
+    { provider: 'opencodego', timeout: 20000 },
+  ]);
+  assert.match(rows.find((row) => row.provider === 'claude').error, /Claude usage probe timed out after 90 s/);
+  assert.match(rows.find((row) => row.provider === 'codex').error, /codex quota probe timed out after 20 s/);
   assert.ok(rows.every((row) => row.error));
 });
 
