@@ -87,6 +87,16 @@ export function createAccessControl(tokenFile, { sessionFile = path.join(path.di
     return true;
   }
 
+  // The owner is the dashboard page on this machine or a page with a live login session. A bearer token is not an owner:
+  // a script or a worker pane can hold it. The check does not renew a session.
+  function owner(req) {
+    if (req.headers['x-herdr-boss-caller'] !== 'page') return false;
+    if (loopback(req)) return true;
+    const cookie = (req.headers.cookie || '').split(';').map((part) => part.trim()).find((part) => part.startsWith(`${COOKIE}=`));
+    const expires = cookie ? sessions.get(hash(cookie.slice(COOKIE.length + 1))) : null;
+    return !!expires && expires > Date.now();
+  }
+
   function login(req, supplied) {
     const remote = req.socket.remoteAddress || 'unknown';
     const now = Date.now();
@@ -105,7 +115,7 @@ export function createAccessControl(tokenFile, { sessionFile = path.join(path.di
     return { ok: true, cookie: sessionCookie(id, sessionMs) };
   }
 
-  return { authorized, login };
+  return { authorized, owner, login };
 }
 
 export function loginPage(error = '') {

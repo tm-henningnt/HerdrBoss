@@ -505,8 +505,9 @@ function policyWithoutShares(policy, defaults) {
   for (const entry of Object.values(copy.projects || {})) delete entry.share;
   return JSON.stringify(copy);
 }
-// The caller header is a label for the change log of policy writes. It is not authentication.
+// The caller header labels a policy write in the change log. The browser sign-in route also reads it, but it is not authentication: on loopback, any local process can send it.
 const POLICY_PUT_HEADERS = { 'content-type': 'application/json', 'x-herdr-boss-caller': 'page' };
+const OWNER_PAGE_HEADERS = { 'x-herdr-boss-caller': 'page' };
 
 function allocationSaveCheck() {
   if (!policyDraft || !allocationMeta || !state?.policy) return { action: 'save' };
@@ -1042,7 +1043,7 @@ function settingsView(s) {
   const lockSettings = `<section class="panel"><h2>Locks</h2>${lockNumber('slots', 'Machine lock slots', 1, 4)}${lockNumber('shortLimitMinutes', 'Short job limit minutes', 1, 60)}${settingRow('locks.guard.enabled', 'Guard for short jobs', `<input id="${helpFid('locks.guard.enabled')}" type="checkbox" role="switch" aria-label="Guard for short jobs" data-policy-lock-guard="enabled" ${lockGuard.enabled !== false ? 'checked' : ''}>`)}${lockGuardNumber('maxLoadPercent', 'Maximum load % of cores', 0, 1000)}${lockGuardNumber('maxSwapPercent', 'Maximum swap % used', 0, 100)}${lockGuardNumber('minFreeMemPercent', 'Minimum free memory %', 0, 100)}</section>`;
   const attachmentSettings = `<section class="panel"><h2>Pictures and agent messages</h2>${lockInput('attachments.retentionDays', 'Picture retention days', Object.hasOwn(d.attachments || {}, 'retentionDays') ? d.attachments.retentionDays : 30, 1, 365, 'data-policy-attachment="retentionDays"')}${lockInput('agentMessages.retentionDays', 'Agent message text retention days', Object.hasOwn(d.agentMessages || {}, 'retentionDays') ? d.agentMessages.retentionDays : 14, 1, 90, 'data-policy-agent-message="retentionDays"')}${lockInput('agentMessages.metaRetentionDays', 'Agent message metadata retention days', Object.hasOwn(d.agentMessages || {}, 'metaRetentionDays') ? d.agentMessages.metaRetentionDays : 180, 7, 730, 'data-policy-agent-message="metaRetentionDays"')}${lockInput('agentMessages.promptTimeoutSeconds', 'Agent prompt timeout', Object.hasOwn(d.agentMessages || {}, 'promptTimeoutSeconds') ? d.agentMessages.promptTimeoutSeconds : 25, 1, 120, 'data-policy-agent-message="promptTimeoutSeconds"')}</section>`;
   const settingsGroups = ['Paths', 'Machine', 'Quota', 'Status', 'Workers', 'Watch', 'Browsers', 'Service', 'Analytics'];
-  const serviceSettingPaths = new Set(['worktreeRoot', 'projectRoot']);
+  const serviceSettingPaths = new Set(['worktreeRoot', 'projectRoot', 'chromePath']);
   const serviceSettingLists = new Set(['allowedHosts']);
   const serviceSettingRanges = {
     'machine.memFreeWarnPercent': [1, 50],
@@ -6137,6 +6138,7 @@ const HELP = {
     <h3>Board</h3><p>The board has five columns in the order of the flow. <b>Blocked</b> holds a task that waits on another task, the Owner, the Boss, or an external item. <b>Ready</b> holds a task whose dependencies are all done. <b>Doing</b> holds a task with a live worker. <b>Review</b> holds a task whose worker finished or was collected and whose branch is not merged. The card source says <b>finished, not collected</b> when the worker wrote its report and no collect is recorded. A task whose branch is merged shows in Done with the source <b>merged</b>. <b>Done</b> shows the last 10 done tasks. Select <b>Show all N done</b> to see the rest.</p>
     <p>Each card shows the task ID, the title, what the task waits on, and its worker. A Doing card shows the worker, the model, the elapsed time, and the source, for example <b>live from worker NAME</b>. The state comes from the worker records, so it does not wait for a publish. Ready sorts by priority: the critical path first, then the group order, then the published order. A Blocked card always shows a reason. When the status names no blocker, the card says so. The <b>Board</b> page shows the tasks of all projects, and its card links open this page with the task selected.</p>
     <p><b>Unplanned work</b> cards in Doing show live workers that have no task in the published status. A <b>No worker</b> badge marks a Doing task with no live worker for 30 minutes.</p>
+    <p>The service computes the state of each card from facts: a commit on the base branch that names the task ID, then the worker records, then the issue tracker. The API fields are <code>computedState</code>, <code>publishedState</code>, and <code>source</code>. A card diverges when its computed state differs from its published state. <code>boardDiverged</code> counts the diverged cards of the project. A Doing card with no live worker and no commit for 3 hours is stuck. <code>stuck</code> holds the reason and the age. The service never writes the status file.</p>
     <p>A <b>stale</b> mark with its reason shows when the published status does not match the workers or is too old. The orchestrator clears it with a new publish.</p>
     <h3>Live status</h3><p><b>status published N min ago</b> shows the age of the project status. It is amber when the server gives <code>statusStale.level</code> the value <code>warn</code>. The phase and summary lines show the age of their data. The sync line compares working agents with Doing cards. It is amber when <code>sync.inSync</code> is false. The page refreshes from live state events. It keeps the scroll position, focus, and open Board column.</p>
     <h3>Select a task</h3><p>Select a card title to select the task. The card gets a ring, and the graph shows the task and its dependency chain; the other tasks fade. Select a graph box to select its task and go to its card. On a Blocked card, select a blocker ID to go to that task. Select the selected task again to clear the selection. A refresh keeps the selection and the scroll position.</p>
@@ -6303,7 +6305,7 @@ const HELP = {
     <h3>Tabs</h3><p><b>Agent</b> marks a tab an agent uses. Screenshots never change a page. Navigation and input on an agent tab ask for confirmation first. <b>Hidden</b> marks a tab that is not visible; some web apps do not draw there. <b>New tab</b> opens a page of your own. Each tab row has a <b>Close tab</b> control. Before it closes a tab that an agent holds, the page asks you to confirm. It also warns you before it closes the last tab. A close never stops the browser.</p>
     <h3>Address box</h3><p>The first focus of the address box selects all its text. A second click places a cursor where you select it.</p>
     <h3>Bookmarks</h3><p>A project keeps at most 30 bookmarks. A bookmark name has at most 60 characters. A bookmark URL must use http or https and must not hold a user name or a password. <b>Add current page</b> saves the selected tab. <b>Open</b> loads a bookmark in the current tab; <b>New tab</b> opens it in a new tab. <b>Rename</b>, the arrows, and <b>Delete</b> change the list; Delete asks you to confirm. <b>Start page</b> opens in the first tab of the next launch. <b>Save</b> stores the start page; a blank value clears it.</p>
-    <h3>Control</h3><p>Select the screenshot to open the large view. The large view shows a still image of the last capture. Turn on <b>Control browser</b> or <b>Live</b> to refresh it at the chosen interval. Turn on <b>Control browser</b>, then click the image and type. Paste long text or a password into the masked field. On a phone the large view is full screen and the image fills the height. The text field and key controls appear only while <b>Control browser</b> is on.</p>`],
+    <h3>Control</h3><p>Select the screenshot to open the large view. The large view shows a still image of the last capture. Turn on <b>Control browser</b> or <b>Live</b> to refresh it at the chosen interval. Turn on <b>Control browser</b>, then click the image and type. Paste long text or a password into the masked field. To sign in to a web app, enter its address in the sign-in field and select <b>Open sign-in tab</b>. Click the image, then type or paste the password and the one-time code. The sign-in route accepts the dashboard page on this computer or a page with a login session. On this computer, any local process counts as the owner for this route. Input without the sign-in flag stays open to project agents. The login stays in the project browser profile. On a phone the large view is full screen and the image fills the height. The text field and key controls appear only while <b>Control browser</b> is on.</p>`],
   analytics: ['Analytics', `
     <p>The page shows cost, quota use, model quality, denied work, machine use, lock waits, GitHub Actions minutes, agent messages, notices, and policy changes.</p>
     <h3>Headline strip</h3><p>Each tile shows one figure and its change. <b>Claude spend a day</b> is the mean of the last 7 days, with the change on the 7 days before. <b>Quota against pace</b> shows the lane with the most use above its pace line. <b>Denials this week</b> compares the last 24 hours with the 6-day mean. <b>Notices per pane a day</b> is the 7-day mean and today. <b>Lock wait and hold</b> shows the median wait and the median hold. <b>First-time success</b> counts the judged runs of the last 30 days.</p>
@@ -7639,8 +7641,12 @@ document.addEventListener('keydown', (e) => {
       viewerTextTimer = setTimeout(flushViewerText, 80);
       return;
     }
+    const modifiers = [e.altKey && 'Alt', e.ctrlKey && 'Control', e.metaKey && 'Meta', e.shiftKey && 'Shift'].filter(Boolean);
+    if (e.key.length === 1 && /^[a-zA-Z0-9]$/.test(e.key) && modifiers.some((name) => name !== 'Shift')) {
+      e.preventDefault(); flushViewerText(); queueViewerInput({ type: 'key', key: e.key.toLowerCase(), modifiers }); return;
+    }
     if (['Tab', 'Enter', 'Backspace', 'Delete', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(e.key)) {
-      e.preventDefault(); flushViewerText(); queueViewerInput({ type: 'key', key: e.key }); return;
+      e.preventDefault(); flushViewerText(); queueViewerInput({ type: 'key', key: e.key, modifiers: modifiers.filter((name) => name !== 'Shift' || e.key === 'Tab') }); return;
     }
   }
   const handle = e.target.closest?.('[data-boundary]');
@@ -7964,8 +7970,8 @@ function removeExtraModel(kind, model) {
   settingsRerender(kind, `[data-add-model-input="${kind}"]`);
 }
 
-async function postJson(url, body) {
-  const response = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+async function postJson(url, body, headers = {}) {
+  const response = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) });
   const result = await response.json();
   if (!response.ok) throw Object.assign(new Error(result.error || (result.errors || []).join(' ') || 'The request failed.'), { attached: result.attached === true });
   return result;
@@ -8091,14 +8097,14 @@ async function postBookmark(slug, body) {
 }
 
 // Navigation and input on a tab that an agent holds need one confirmation per tab.
-async function postBrowserAction(url, body) {
+async function postBrowserAction(url, body, headers = {}) {
   const key = `${body.project}:${body.tab}`;
-  try { return await postJson(url, { ...body, confirmAttached: browserConfirmedTabs.has(key) }); }
+  try { return await postJson(url, { ...body, confirmAttached: browserConfirmedTabs.has(key) }, headers); }
   catch (error) {
     if (!error.attached) throw error;
     if (!confirm('An agent is using this tab. Navigation or input can disturb its work.\n\nControl this tab anyway? Choose Cancel and use New tab for a page of your own.')) throw new Error('Cancelled: an agent is using this tab.');
     browserConfirmedTabs.add(key);
-    return postJson(url, { ...body, confirmAttached: true });
+    return postJson(url, { ...body, confirmAttached: true }, headers);
   }
 }
 
@@ -8155,7 +8161,8 @@ function queueViewerInput(input) {
   const tab = viewer.dataset.tab;
   viewerInputQueue = viewerInputQueue.catch(() => {}).then(async () => {
     try {
-      await postBrowserAction('/api/browser-sessions/input', { project, tab, ...input });
+      // The viewer is the sign-in task: the service accepts its input only from the owner page.
+      await postBrowserAction('/api/browser-sessions/input', { project, tab, ...input, signIn: true }, OWNER_PAGE_HEADERS);
       scheduleViewerRefresh(project);
     } catch (error) { previewMessage(project, error.message); }
   });
@@ -8174,6 +8181,24 @@ document.addEventListener('submit', async (e) => {
   if (e.target.dataset.addModel) {
     e.preventDefault();
     addExtraModel(e.target.dataset.addModel, e.target.elements.model.value.trim());
+    return;
+  }
+  if (e.target.id === 'browser-viewer-signin') {
+    e.preventDefault();
+    const viewer = document.getElementById('browser-viewer');
+    const project = viewer.dataset.project;
+    const button = e.target.querySelector('button');
+    button.disabled = true;
+    try {
+      const result = await postJson('/api/browser-sessions/sign-in', { project, url: e.target.elements.url.value.trim() }, OWNER_PAGE_HEADERS);
+      e.target.elements.url.value = '';
+      browserSelectedTab[project] = result.tab;
+      viewer.dataset.tab = result.tab;
+      viewer.querySelector('#browser-viewer-control').checked = true;
+      for (const control of viewer.querySelectorAll('.browser-viewer-controls input, .browser-viewer-controls button')) control.disabled = false;
+      await refreshBrowserPreview(project, true);
+    } catch (error) { previewMessage(project, error.message); }
+    finally { button.disabled = false; }
     return;
   }
   if (e.target.id === 'browser-viewer-text-form') {

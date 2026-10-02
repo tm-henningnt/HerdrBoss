@@ -12,6 +12,8 @@ Set `worktreeRoot` and `projectRoot` in `config.json`, or in **Settings → Adva
 
 `projectRoot` supplies the suggested group folder for **New project** in the dashboard. An entered group or exact path takes precedence. The CLI still requires `--group` or `--path`.
 
+`chromePath` is the Chrome executable that `herdr-boss browser request` and the dashboard start for a project browser. Set it in `config.json` or in **Settings → Advanced → Service settings → Browsers**. The default is `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`. The path follows the root rules: absolute or starting with `~`, and no `..` segment. A running browser keeps its executable until it restarts. The profile folder `browser-profiles/SLUG` does not depend on `chromePath`.
+
 | Command | Action |
 |---|---|
 | `herdr-boss install` | Install and start the macOS launchd agent `no.tallmaker.herdr-boss`. Run it again after you move the repository. |
@@ -110,6 +112,22 @@ The orchestrator keeps its own file unchanged. Publishing the same file again le
 `publish` also checks `AGENTS.md` at the Git top level of the current directory, when that file exists. It prints each finding to standard error as a warning. It publishes the status in all cases. The published record gets `agentsCheck: { checkedAt, errors, warnings, file }`. The record holds only the counts and the repository-relative file name. The project page shows a warning line when `errors` or `warnings` is more than 0. `publish` refreshes a behind kit and sets `kitRevision` in the stored status from the kit file on disk. The project page compares `kitRevision` with the kit revision on disk and with the current kit revision.
 
 The first `publish` of a slug registers the project. It records `{ slug, repo, remote }` in `project-repos.json` in the data folder, with mode 0600, when the Git top level exists. `repo` is the Git top level. `remote` is the `origin` URL without a user name and a password. A later publish keeps the first record. For a new slug, `publish` runs `harness sync --codex-only` and prints its result as `warning: harness sync:` lines.
+
+### Board state routes
+
+`GET /api/projects/SLUG` returns the status of one project with the live overlay. It answers 404 when no project has the slug. `GET /api/projects` and `GET /api/state` return the same fields for each project.
+
+Each task has these fields. The fields `state`, `stateSource`, `publishedStatus` and `worker` stay.
+
+- `computedState`: `todo`, `doing`, `review`, `done` or `stuck`. The service computes it from git, worker records and the issue tracker.
+- `publishedState`: the `status` that the orchestrator published.
+- `source`: `{ kind, ref, at }`, or `null` when no fact applies. `kind` is `commit`, `worker`, `issue` or `review`. `ref` is the short commit id, the worker name or the issue number.
+- `diverges`: `true` when `computedState` differs from `publishedState`.
+- `stuck`: `{ reason, ageMin }` when `computedState` is `stuck`, otherwise `null`.
+
+`state` is the board column. It uses the computed result. A stuck card keeps `state` `doing`.
+
+Each project has `boardDiverged` (the number of cards that diverge), `boardDivergedIds` and `boardStuck`. The project list row has the same counts. The overlay never writes the status file. See [board.md](board.md).
 
 ## New project flow
 
@@ -840,6 +858,7 @@ Do not edit this block. It comes from `public/setting-help.js`.
 | Orphan daemon minimum age | `browsers.orphanDaemonMinAgeSeconds` | The age that an orphan browser daemon must reach before Herdr Boss stops it. | 7200 | Seconds | 60 to 86400 | A higher value spares a young daemon for longer. | A lower value stops orphans sooner and risks a daemon that is between two uses. | Select Save in the group. The change takes effect at once. |
 | Stale owned browser minutes | `browsers.staleOwnedMinutes` | The idle time of the agent after which Herdr Boss reports its browser as stale. | 30 | Minutes | 5 to 1440 | A higher value reports a stale browser later. | A lower value reports a stale browser sooner. | Select Save in the group. The change takes effect at once. |
 | Project browser idle close minutes | `browser.idleCloseMinutes` | The time with no other CDP client or open agent tab before Herdr Boss closes a project browser that it started. | 20 | Minutes | 0 to 1440 | A higher value leaves an unused browser open longer. | A lower value closes an unused browser sooner. Zero turns this rule off. | Select Save in the group. The change takes effect at once. |
+| Chrome path | `chromePath` | The Chrome executable that Herdr Boss starts for a project browser. A running browser keeps its executable until it restarts. | /Applications/Google Chrome.app/Contents/MacOS/Google Chrome | Path | An absolute path or a path that starts with ~. No .. segment, not / | Set the path of another Chrome or Chromium, for example the Linux path of a container. | The profile folder of each project stays the same. A saved login stays in the profile. | Select Save in the group. The change takes effect at once. |
 | Sweep code-sign clones | `browsers.sweepCodeSignClones` | Lets Herdr Boss delete old code-sign clones of Chrome that no running Chrome process owns. | On | Switch | On or off | Turning it on frees disk space. | Turning it off leaves the clones on disk. | Select Save in the group. The change takes effect at once. |
 | Tick seconds | `tickSeconds` | The time between two collection passes of the engine. | 30 | Seconds | A whole number of 5 to 300 | A higher value gives slower updates and less load. | A lower value gives faster updates and more load. | Select Save in the group. The change takes effect at once. |
 | Quota seconds | `quotaSeconds` | The time between two reads of the provider quotas. | 300 | Seconds | A whole number of 30 to 3600 | A higher value reads quotas less often. | A lower value reads quotas more often and calls the providers more. | Select Save in the group. The change takes effect at once. |

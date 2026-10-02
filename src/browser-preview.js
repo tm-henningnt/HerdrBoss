@@ -447,11 +447,26 @@ const KEYS = { Tab: ['Tab', 9], Enter: ['Enter', 13], Backspace: ['Backspace', 8
   ArrowLeft: ['ArrowLeft', 37], ArrowUp: ['ArrowUp', 38], ArrowRight: ['ArrowRight', 39], ArrowDown: ['ArrowDown', 40],
   Home: ['Home', 36], End: ['End', 35], Escape: ['Escape', 27] };
 
-async function browserKeyImpl(project, tabId, key, adapters = {}) {
-  const selected = key === 'SelectAll' ? ['KeyA', 65] : KEYS[key];
+const MODIFIER_BITS = { Alt: 1, Control: 2, Meta: 4, Shift: 8 };
+
+function modifierMask(modifiers) {
+  if (!Array.isArray(modifiers) || modifiers.length > 4) throw new Error('Unsupported browser key modifier.');
+  let mask = 0;
+  for (const name of modifiers) {
+    if (!Object.hasOwn(MODIFIER_BITS, name)) throw new Error('Unsupported browser key modifier.');
+    mask |= MODIFIER_BITS[name];
+  }
+  return mask;
+}
+
+async function browserKeyImpl(project, tabId, key, adapters = {}, modifiers = []) {
+  const mask = modifierMask(modifiers);
+  const single = typeof key === 'string' && /^[a-zA-Z0-9]$/.test(key);
+  const selected = key === 'SelectAll' ? ['KeyA', 65] : single ? [/\d/.test(key) ? `Digit${key}` : `Key${key.toUpperCase()}`, key.toUpperCase().charCodeAt(0)] : KEYS[key];
   if (!selected) throw new Error('Unsupported browser key.');
+  const selectAll = key === 'SelectAll' ? (process.platform === 'darwin' ? 4 : 2) : 0;
   const params = { key: key === 'SelectAll' ? 'a' : key, code: selected[0], windowsVirtualKeyCode: selected[1],
-    nativeVirtualKeyCode: selected[1], modifiers: key === 'SelectAll' ? (process.platform === 'darwin' ? 4 : 2) : 0,
+    nativeVirtualKeyCode: selected[1], modifiers: mask | selectAll,
     ...(key === 'Enter' ? { text: '\r', unmodifiedText: '\r' } : {}) };
   const context = await pageContext(project, tabId, adapters);
   await pageCommands(context.endpoint, context.viewport, [
@@ -504,6 +519,6 @@ export function browserViewport(project, tabId, viewport, adapters = {}) {
 export function browserInsertText(project, tabId, text, adapters = {}) {
   return withBrowserCommand(project, () => browserInsertTextImpl(project, tabId, text, adapters), adapters.activity);
 }
-export function browserKey(project, tabId, key, adapters = {}) {
-  return withBrowserCommand(project, () => browserKeyImpl(project, tabId, key, adapters), adapters.activity);
+export function browserKey(project, tabId, key, adapters = {}, modifiers = []) {
+  return withBrowserCommand(project, () => browserKeyImpl(project, tabId, key, adapters, modifiers), adapters.activity);
 }

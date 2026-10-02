@@ -60,6 +60,8 @@ The service starts only when the configured data directory and live data directo
 
 Open **Settings → Advanced → Service settings**. Find the **Paths** group. Set `worktreeRoot` and `projectRoot`, then select **Save**. Use an absolute path or a path that starts with `~`. A root must not contain a `..` segment and must not be `/`. The defaults are `~/Projects/.herdr-wt` and `~/Projects`.
 
+Set `chromePath` in **Settings → Advanced → Service settings → Browsers**. It is the Chrome executable that Herdr Boss starts for a project browser. The default is the macOS path `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`. The rules are the same as for the roots: an absolute path or a path that starts with `~`, and no `..` segment. A running browser uses the new path after its next restart.
+
 `worktreeRoot` is the parent folder for new worker worktrees. A project `worktreeRoot` in `.herdr-boss.json` takes precedence for its workers. Leases, harness checks, and log attribution use the service root. Run `herdr-boss harness sync` after a worktree root change. Existing worktrees stay in place.
 
 `projectRoot` supplies the suggested group folder for **New project** in the dashboard. An entered group or exact path takes precedence. The CLI still requires `--group` or `--path`. Existing projects stay in place.
@@ -982,7 +984,7 @@ The Allocation page shows a dialog before it saves 3 or more changed shares, and
 
 Every write that changes a value adds one line to `policy-changes.jsonl` in the data directory. A line holds the time (`at`), the caller kind (`caller`), and the changed keys (`changes`). A key is the dotted path of a changed value, for example `projects.herdrboss.share` or `machine.swapWarnPercent`. Each change holds the old and the new value. A list or an object shows `changed`. A string has at most 80 characters. The log shows `changed` for a key that has a token, secret, password, credential, API key, or authorization part anywhere in its dotted path. A key has at most 120 characters. A write that changes nothing adds no line.
 
-The caller kind is `page`, `cli`, `project-new`, or `unknown`. The Allocation page and the other pages send the header `x-herdr-boss-caller: page`. The CLI sets `cli`. The `project new` policy step sets `project-new`. A write without a marker, and any other value, has the kind `unknown`. The engine writes the policy when it migrates workspace labels or clears an expired one-off pacing goal. These writes have the kind `unknown`. A client sets the header, so the caller kind is a label and not authentication. It does not prove who wrote.
+The caller kind is `page`, `cli`, `project-new`, or `unknown`. The Allocation page and the other pages send the header `x-herdr-boss-caller: page`. The CLI sets `cli`. The `project new` policy step sets `project-new`. A write without a marker, and any other value, has the kind `unknown`. The engine writes the policy when it migrates workspace labels or clears an expired one-off pacing goal. These writes have the kind `unknown`. A client sets the header, so the caller kind is a label and not authentication. The browser sign-in route also reads the header (see the sign-in section of the Browsers page). It does not prove who wrote.
 
 The file keeps the last 500 lines and at most 256 KB. Herdr Boss trims it on each write and creates it with mode `0600`. A reader skips a line that is not valid and never fails. A line that is appended during a trim can be lost. The log is for diagnosis, not for audit. The Analytics page shows the last 100 entries in the section **Policy changes**.
 
@@ -1307,6 +1309,18 @@ On the Browsers page, **Show preview** captures a screenshot of the selected tab
 
 Select the screenshot to open the large view. The large view shows the last capture as a still image. Turn on **Control browser** to refresh the large view at the selected interval and to send clicks and keys. Turn off **Control browser** to stop that refresh. **Live** continues to refresh while it is on. The status shows **Live** while a refresh repeats and **Captured** at other times. In **All tabs** mode, **Control browser** is not available.
 
+#### Sign in to a web app
+
+1. Open the large view of the project browser.
+2. Enter the address of the sign-in page in the sign-in field. The address must use http or https. It must not hold a user name or a password.
+3. Select **Open sign-in tab**. Herdr Boss starts the project browser if it is not running, opens the address in a new tab, and turns on **Control browser**.
+4. Click the image and type. Use **Tab**, **Enter**, and **Select all**. A key with Control, Meta, or Alt goes to the page.
+5. Paste the password and the one-time code into the masked text field. Select **Send text**.
+
+The sign-in route and each input with `signIn: true` accept only the owner. The owner is the dashboard page with the header `x-herdr-boss-caller: page` on loopback, or a page with a login session. The access token alone is not enough. On loopback, any local process can send the header, so any local process counts as the owner for this route. Input without `signIn` is open to project agents, because `herdr-boss browser` uses it. Herdr Boss does not log, store, or echo the typed text.
+
+The login stays in the project browser profile in `browser-profiles/SLUG`. A restart of the browser does not change the profile folder.
+
 ### Address box and tab close
 
 The first focus of the address box selects all its text. The first click and the first tap also select all its text. A second click places a normal cursor. The box uses one flag for each focus, so it does not select all again while it keeps the focus.
@@ -1500,6 +1514,10 @@ Publish at task boundaries: a task starts, a task ends, a blocker appears, or a 
 The published status file holds the plan. The worker run records hold what happens. Herdr Boss overlays the run records on the published tasks, so the state of a task does not wait for a publish. The service reads the run records of each registered project every 15 seconds. A worker links to a task through `taskId` in its run record. Start each worker with `worker start --task-id ID`. `--issue N` works as an alias for a numeric task ID. A live worker without a task ID, or with an ID missing from the status, appears in `unplanned`. Without either flag, `worker start` prints `No --task-id: the project board shows this worker as Unplanned work.` and continues. It suggests one task when at least two lower-case words match its ID or title, or when the task text contains an exact ID. With `--task-file`, it matches the file name. A dry run prints the same warning and suggestion.
 
 The project data shows the current status, task states, and agents. `GET /api/projects` refreshes the project data from the latest engine snapshot. It rereads worker run records at least every 15 seconds. The request does not start a process to collect agents. `GET /api/state` returns the same project fields.
+
+Herdr Boss also computes the state of each task from facts, so the board is correct when the orchestrator does not publish. Git is the strongest fact. A commit on the base branch that names the task ID in an explicit form makes the task done. The card shows the short commit ID. The forms are a merge commit with the ID in the merged branch name, the ID in parentheses such as `(#68)`, `Closes`, `Fixes` or `Resolves` before the ID, and for an ID that is not only digits the prefix `BD2a:`. `refs #12` and `WIP for #12` do not count. A commit that names a worker name or a worker branch of the task counts too. The ID of a task with only digits needs a `#`. The next facts are the worker records, then the issue tracker through `gh issue list` (read-only, cached for 10 minutes), where a closed issue makes the task done. The service reads `git log` of each project every minute. A project without a repository path uses the published state.
+
+`GET /api/projects/SLUG` returns `computedState`, `publishedState` and `source` for each task. A task diverges when its computed state differs from its published state. The project has `boardDiverged` for the number of diverged tasks. A Doing task with no live worker and no commit for 3 hours is stuck. `stuck` holds the reason and the age. A stuck task stays in the Doing column. The overlay never writes the status file of the orchestrator. See [board.md](board.md) for the rules and the cache.
 
 The project data has `publishedAt` and age in minutes. `publishedAt` uses the newer of the status file modification time and its recorded publish time. `publishedAgeMin` is the age of that time. `phaseAgeMin` uses `phaseUpdated` or the newest `tasks[].updated` time. `summaryAgeMin` uses `summaryUpdated`. When a status has no time for one field, that age equals `publishedAgeMin`.
 
@@ -2364,10 +2382,10 @@ The dashboard uses these routes. A request from another host needs the access to
 | `GET /api/spend?days=N` | The token use and cost per day, role, and harness for the last N days (1 to 90, default 7), the cost label `API-price equivalent`, the models with `unconfirmed` prices, the harness log status, and the unread log bytes. |
 | `GET`, `PUT /api/settings/prices` | Read the price table and the override, or replace the override. See Token use and spend by role. |
 | `GET /api/denials` | The denial counts of the last 7 days by harness, model, and cause, the harness totals, and the trend of each cause. |
-| `GET /api/projects`, `PUT`, `DELETE /api/projects/SLUG` | Read, write, or delete project status. The GET route returns current task state, `unplanned`, `sync`, and status age fields. `GET /api/state` returns the same project fields. |
+| `GET /api/projects`, `PUT`, `DELETE /api/projects/SLUG` | Read, write, or delete project status. The GET route returns current task state, `computedState`, `publishedState`, `source`, `boardDiverged`, `unplanned`, `sync`, and status age fields. `GET /api/projects/SLUG` returns one project. `GET /api/state` returns the same project fields. |
 | `GET /api/handoffs`, `GET /api/handoffs/output?id=ID` | Handover records, and a successor's pane output. |
 | `POST /api/handoffs/plan`, `/prepare`, `/activate` | The handover steps. Activation needs `confirmed: true`. |
-| `GET`, `POST /api/browser-sessions...` | Browser list, request, tabs, screenshot, navigation, input, new tab, tab close, close, restart, and bookmarks. Input to an agent tab returns 409 unless the body has `confirmAttached: true`. Tab close returns 409 for a tab that an agent holds unless the body has `force: true`. `GET /api/browser-sessions/bookmarks?project=SLUG` reads the bookmarks and the start page. `POST /api/browser-sessions/bookmarks` changes them with `{ project, action }`. |
+| `GET`, `POST /api/browser-sessions...` | Browser list, request, tabs, screenshot, navigation, input, sign-in, new tab, tab close, close, restart, and bookmarks. Input to an agent tab returns 409 unless the body has `confirmAttached: true`. Tab close returns 409 for a tab that an agent holds unless the body has `force: true`. `POST /api/browser-sessions/sign-in` with `{ project, url }` starts the project browser, opens the URL in a new tab, and returns the tab ID. It and each input with `signIn: true` return 403 unless the request is from the owner page: the header `x-herdr-boss-caller: page` on loopback, or a login session. `GET /api/browser-sessions/bookmarks?project=SLUG` reads the bookmarks and the start page. `POST /api/browser-sessions/bookmarks` changes them with `{ project, action }`. |
 | `POST /api/leases/release` | Release a lease: `{ pool, item, project }`. Returns 409 when the lease changed. |
 | `GET /api/pools` | List the pools. A `portEnv` entry shows `set`, never the value. |
 | `PUT /api/pools` | Create, update, or remove a config pool: `{ action, pool }`. A `portEnv` value of `null` keeps the stored value. An empty string clears it. The answer shows `set` flags only. Returns 409 when a holder uses a port that the change drops. |

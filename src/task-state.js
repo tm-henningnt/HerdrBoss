@@ -3,6 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { applyBoardFacts, boardCounts } from './board-facts.js';
 
 // A worker that started less than this long ago gets time for the orchestrator to publish.
 export const MISMATCH_GRACE_MS = 5 * 60000;
@@ -67,7 +68,7 @@ export function workerFactFromRun(record, { isLive = () => true, isMerged = () =
     if (Number.isFinite(newest) && now - newest > HISTORY_MS) return null;
   }
   if (mergeable && isMerged(record)) phase = 'merged';
-  const fact = { name: record.name, taskId, phase, kind: record.kind ?? null, model: record.model ?? null, startedAt: record.startedAt ?? null, pane: record.pane ?? null };
+  const fact = { name: record.name, taskId, phase, kind: record.kind ?? null, model: record.model ?? null, startedAt: record.startedAt ?? null, pane: record.pane ?? null, branch: record.branch ?? null, collectedAt: record.collectedAt ?? null, finishedAt: record.finishedAt ?? null };
   if (phase === 'live') fact.active = !record.parked && !hasReport(record) && ACTIVE_AGENT_STATUSES.has(agentStatus(record));
   return fact;
 }
@@ -284,7 +285,8 @@ export function publishConflicts(data, workers = []) {
 // Decorate published projects with the derived task state and the board stale flag.
 // stale is the result of staleStatuses().
 // counts holds { slug: { ahead, unmerged } } and joins the git state of the project.
-export function applyTaskState(projects, taskWorkers = {}, { stale = {}, gitCounts: counts = {}, herdr = null, control = {}, now = Date.now() } = {}) {
+// boardFacts holds { slug: { commits, issues } }. The facts decide the computed state of each card (src/board-facts.js).
+export function applyTaskState(projects, taskWorkers = {}, { stale = {}, gitCounts: counts = {}, boardFacts = {}, herdr = null, control = {}, now = Date.now() } = {}) {
   return (projects || []).map((project) => {
     if (!project?.slug) return project;
     const entry = stale[project.slug];
@@ -315,7 +317,7 @@ export function applyTaskState(projects, taskWorkers = {}, { stale = {}, gitCoun
       ageMin: ageMinutes(worker.startedAt, now),
       pane: worker.pane ?? null,
     }));
-    const tasks = Array.isArray(project.tasks) ? overlayTasks(project.tasks, workers).map((task) => {
+    const tasks = Array.isArray(project.tasks) ? applyBoardFacts(overlayTasks(project.tasks, workers), workers, boardFacts[project.slug] || {}, { now, publishedAt }).map((task) => {
       if (task?.publishedStatus !== 'doing' || task?.state !== 'doing' || task.id == null || liveWorkers.some((worker) => String(worker.taskId) === String(task.id)) || publishedAgeMin == null || publishedAgeMin < NO_WORKER_MINUTES) return task;
       return { ...task, noWorker: true, noWorkerSinceMin: publishedAgeMin };
     }) : [];
@@ -327,7 +329,7 @@ export function applyTaskState(projects, taskWorkers = {}, { stale = {}, gitCoun
     const statusStale = entry?.statusStale || { ageMin: statusFreshness.ageMin, level: statusFreshness.level };
     return {
       ...project,
-      ...(Array.isArray(project.tasks) ? { tasks } : {}),
+      ...(Array.isArray(project.tasks) ? { tasks, ...boardCounts(tasks) } : {}),
       publishedAt,
       publishedAgeMin,
       phaseAgeMin,
